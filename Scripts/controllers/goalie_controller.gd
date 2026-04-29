@@ -922,26 +922,26 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 	var impact_local_x: float = (_shot_impact_x - _current_x) * -_direction_sign
 	var target_y: float = clampf(_shot_impact_y, react_hand_y_min, react_hand_y_max)
 	if impact_local_x <= 0.0:
+		var rest_x: float = c.glove_pos.x
+		var rest_z: float = c.glove_pos.z
 		var glove_x: float = clampf(impact_local_x, glove_max_x_outward, glove_max_x_inward)
 		# Reach factor: how far from rest the glove has travelled, normalised
 		# by max outward reach. Drives forward Z so the glove extends out
 		# toward the puck, not just sideways.
-		var rest_x: float = c.glove_pos.x
 		var reach: float = absf(glove_x - rest_x) / maxf(absf(glove_max_x_outward - rest_x), 0.001)
 		var glove_z: float = react_hand_z - glove_max_z_reach * clampf(reach, 0.0, 1.0)
 		c.glove_pos = Vector3(glove_x, target_y, glove_z)
-		# Yaw the glove so the catching face points at the puck. Body-local
-		# frame: convert puck world position to local via -direction_sign,
-		# then atan2 the in-plane delta from the glove to the puck. Forward
-		# axis is -Z, so atan2(dx, -dz) gives 0 for puck-straight-ahead and
-		# positive for puck on goalie's right. Capped so the wrist doesn't
-		# twist past natural range.
-		var puck_local_x: float = (puck.global_position.x - _current_x) * -_direction_sign
-		var puck_local_z: float = (puck.global_position.z - goalie.global_position.z) * -_direction_sign
-		var dx_to_puck: float = puck_local_x - glove_x
-		var dz_to_puck: float = puck_local_z - glove_z
-		var yaw_deg: float = clampf(rad_to_deg(atan2(dx_to_puck, -dz_to_puck)),
-				-glove_max_yaw_deg, glove_max_yaw_deg)
+		# Yaw toward the direction the glove is reaching, not toward the puck.
+		# Reads as a deliberate reach-and-snag motion — wrist points along the
+		# reach trajectory rather than tracking the puck visually. Movement
+		# vector is rest→target in the body-local plane; atan2(dx, -dz) puts
+		# 0° = forward, positive = right. Capped at `glove_max_yaw_deg`.
+		var move_dx: float = glove_x - rest_x
+		var move_dz: float = glove_z - rest_z
+		var yaw_deg: float = 0.0
+		if absf(move_dx) > 0.001 or absf(move_dz) > 0.001:
+			yaw_deg = clampf(rad_to_deg(atan2(move_dx, -move_dz)),
+					-glove_max_yaw_deg, glove_max_yaw_deg)
 		c.glove_rot = Vector3(-25.0, yaw_deg, 0.0)
 	else:
 		c.blocker_pos = Vector3(c.blocker_pos.x, target_y, react_hand_z)
