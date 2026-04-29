@@ -76,6 +76,39 @@ func test_shot_classifies_elevated() -> void:
 	assert_false(result.is_low)
 	assert_true(result.is_elevated)
 
+func test_long_range_elevated_arcs_to_low() -> void:
+	# Puck at z=0 with vy=6 m/s, vz=20 m/s. t_to_goal = 26.6/20 = 1.33s.
+	# Linear impact_y = 0.05 + 6*1.33 ≈ 8m (would classify elevated).
+	# Ballistic impact_y = 0.05 + 6*1.33 - 0.5*9.8*1.33² ≈ -0.63 → clamped 0.
+	# Long-range arcing shots should arrive low and trigger butterfly drop.
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+		Vector3(0, 0.05, 0), Vector3(0, 6.0, 20),
+		26.6, 0.0, _shot_cfg())
+	assert_true(result.is_shot)
+	assert_true(result.is_low, "long-range elevated should land low after gravity arc")
+	assert_false(result.is_elevated)
+
+func test_short_range_elevated_stays_elevated() -> void:
+	# Same vy=6 but starting much closer (z=22, t_to_goal=0.23s): puck hasn't
+	# had time to arc back down. Should still classify as elevated.
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+		Vector3(0, 0.05, 22), Vector3(0, 6.0, 20),
+		26.6, 0.0, _shot_cfg())
+	assert_true(result.is_shot)
+	assert_true(result.is_elevated, "short-range elevated should still arrive elevated")
+
+func test_legacy_zero_gravity_matches_linear_behavior() -> void:
+	# With gravity=0 the prediction reverts to the previous linear extrapolation.
+	# Useful for callers that don't want ballistic correction.
+	var cfg: GoalieBehaviorRules.ShotDetectionConfig = _shot_cfg()
+	cfg.gravity = 0.0
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+		Vector3(0, 0.05, 0), Vector3(0, 6.0, 20),
+		26.6, 0.0, cfg)
+	assert_true(result.is_shot)
+	# Linear impact_y ≈ 8m — classified elevated under legacy math.
+	assert_true(result.is_elevated)
+
 func test_shot_impact_x_projects_correctly() -> void:
 	# Puck at x=0, z=10; velocity (5, 0, 20) — drifting right.
 	# t_to_goal = (26.6 - 10) / 20 = 0.83s; impact_x = 0 + 5 * 0.83 = 4.15 → wide, not a shot

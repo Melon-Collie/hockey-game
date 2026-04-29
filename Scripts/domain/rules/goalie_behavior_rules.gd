@@ -25,6 +25,12 @@ class ShotDetectionConfig:
 	var reaction_delay: float = 0.0
 	var low_shot_threshold: float = 0.0
 	var elevated_threshold: float = 0.0
+	# Gravity used for ballistic impact_y prediction. Linear extrapolation
+	# (`y + vy * t`) overestimates landing height for long-range elevated
+	# shots — they arc down to ice level before reaching the net but get
+	# misclassified as elevated, so the goalie never drops butterfly.
+	# Standard project gravity is 9.8 m/s²; pass 0 for legacy linear math.
+	var gravity: float = 9.8
 
 class DefensiveZoneConfig:
 	var zone_post_z: float = 0.0
@@ -60,7 +66,15 @@ static func detect_shot(
 	if t_to_goal <= 0.0:
 		return result
 	var impact_x: float = puck_position.x + puck_velocity.x * t_to_goal
-	var impact_y: float = puck_position.y + puck_velocity.y * t_to_goal
+	# Ballistic impact_y: include gravity so long-range elevated shots that
+	# arc down to ice are correctly predicted as low. Without this, a shot
+	# released with positive vy stays "elevated" in the goalie's read all
+	# the way to the net even though physics has it landing at floor level.
+	# Floor-clamped at 0 — once the puck would have hit the ice, it can't
+	# arrive lower than that.
+	var impact_y: float = puck_position.y + puck_velocity.y * t_to_goal \
+			- 0.5 * cfg.gravity * t_to_goal * t_to_goal
+	impact_y = maxf(impact_y, 0.0)
 	if abs(impact_x - goal_center_x) > cfg.net_half_width + cfg.net_margin:
 		return result
 	result.is_shot = true
