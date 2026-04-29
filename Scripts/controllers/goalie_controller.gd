@@ -95,10 +95,15 @@ extends Node
 # locking butterfly during routine post-save puck-settling.
 @export var recovery_proximity_threshold: float = 1.8
 
-# Hard cap on `_reacting_to_shot` duration. The flag normally clears when
-# `detect_shot` re-projection fails (puck off-target, hit boards/posts/saved),
-# but pathological cases (e.g. puck bouncing around still on net) could hold
-# it indefinitely and freeze the goalie's lateral movement forever. Safety net.
+# Reaction freeze ends only on a discrete resolving event: puck hits this
+# goalie, hits the boards, hits a post, hits the net, or is picked up by
+# any skater. After the event there's a short delay before the freeze
+# clears — `reaction_clear_delay`. The goalie isn't simultaneously
+# processing the resolution AND deciding the next move; gives them a beat.
+@export var reaction_clear_delay: float = 0.10
+# Hard cap on `_reacting_to_shot` duration as a safety net only. The freeze
+# is supposed to end via a resolving event; this catches edge cases where
+# none of the expected events fire (puck stuck somewhere, signal missed).
 @export var max_reaction_duration: float = 1.5
 
 # ── Ready stance ──────────────────────────────────────────────────────────────
@@ -175,6 +180,7 @@ var _recovery_timer: float = 0.0            # counts up while in RECOVERING
 var _slide_cooldown_timer: float = 0.0      # counts up between slides
 var _slide_event_lockout: float = 0.0      # counts down after puck contact
 var _reaction_age: float = 0.0             # counts up while _reacting_to_shot
+var _reaction_clear_timer: float = -1.0    # >= 0 = counting down to clear reaction
 var _reading_slapper_tell: bool = false
 
 # ── Client Simulation ─────────────────────────────────────────────────────────
@@ -207,6 +213,11 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	if is_server:
 		puck.puck_released.connect(_on_puck_released)
 		puck.puck_touched_goalie.connect(_on_puck_contact)
+		# Resolving events that end the reaction freeze. Each fires only on
+		# a loose puck (already gated inside Puck) and starts the clear timer.
+		puck.puck_hit_boards.connect(_on_reaction_resolved)
+		puck.puck_touched_post.connect(_on_reaction_resolved)
+		puck.puck_hit_goal_body.connect(_on_reaction_resolved)
 
 func is_butterfly() -> bool:
 	return _state == State.BUTTERFLY
@@ -229,6 +240,7 @@ func reset_to_crease() -> void:
 	_slide_cooldown_timer = 0.0
 	_slide_event_lockout = 0.0
 	_reaction_age = 0.0
+	_reaction_clear_timer = -1.0
 	_reading_slapper_tell = false
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
@@ -283,37 +295,45 @@ func _update_tracking(delta: float) -> void:
 		_tracked_threat_position = target_threat
 	if not _reacting_to_shot or not is_server:
 		return
-	# Pickup clears the reaction immediately. If a carrier is set, the puck
-	# was a pass that landed (or a teammate cleared a rebound) — there's no
-	# shot on goal anymore. Resume normal tracking right away.
-	if puck.get_carrier() != null:
-		_reacting_to_shot = false
-		_shot_is_elevated = false
-		return
-	# Hard cap on reaction duration so the lateral-movement freeze can't
-	# stick forever if `detect_shot` keeps returning true on a chaotic puck.
+	# Pickup clears the freeze (after the standard delay). If a carrier is set,
+	# the puck was a pass that landed (or a teammate cleared the rebound) —
+	# there's no shot on goal anymore.
+	if puck.get_carrier() != null and _reaction_clear_timer < 0.0:
+		_reaction_clear_timer = reaction_clear_delay
+	# Tick the post-event clear timer if armed.
+	if _reaction_clear_timer >= 0.0:
+		_reaction_clear_timer -= delta
+		if _reaction_clear_timer <= 0.0:
+			_reacting_to_shot = false
+			_shot_is_elevated = false
+			_reaction_clear_timer = -1.0
+			return
+	# Hard cap on reaction duration as a safety net for cases where no
+	# resolving event fires (puck stuck off-screen, missed signal, etc.).
 	_reaction_age += delta
 	if _reaction_age >= max_reaction_duration:
 		_reacting_to_shot = false
 		_shot_is_elevated = false
+		_reaction_clear_timer = -1.0
 		return
-	# Re-project each frame so impact position stays accurate (handles bounces, deflections).
-	# detect_shot returns is_shot=false if puck slowed or moved away from net — clears reaction.
-	# Client skips this: linear_velocity is unreliable during interpolation; impact
-	# position comes from the shot_reaction RPC and clears via _client_reaction_timer.
+	# Re-project impact position each frame so the elevated-shot reach stays
+	# accurate as the puck travels (handles bounces, deflections affecting
+	# trajectory). Does NOT clear `_reacting_to_shot` if the re-projection
+	# fails — that would release the freeze mid-flight on shots that arc
+	# over the net or drift wide before any resolving event has fired.
+	# Client skips: linear_velocity is unreliable during interpolation.
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
 			puck.global_position, puck.linear_velocity,
 			_goal_line_z, _goal_center_x, _shot_detection_config())
-	if not result.is_shot:
-		_reacting_to_shot = false
-		_shot_is_elevated = false
-		return
-	_shot_impact_x = result.impact_x
-	_shot_impact_y = result.impact_y
-	# If an elevated shot has since hit the ice and is now tracking low, drop butterfly.
-	if _shot_is_elevated and result.is_low and _shot_timer <= 0.0:
-		_shot_is_elevated = false
-		_shot_timer = reaction_delay
+	if result.is_shot:
+		_shot_impact_x = result.impact_x
+		_shot_impact_y = result.impact_y
+		# Elevated shot that's tipped low and tracking low — start the
+		# butterfly drop timer (still allowed during freeze; arms-and-drop
+		# are the body reactions the freeze permits).
+		if _shot_is_elevated and result.is_low and _shot_timer <= 0.0:
+			_shot_is_elevated = false
+			_shot_timer = reaction_delay
 
 # Threat = blend of carrier body and puck. While reacting to a shot in flight
 # the puck IS the threat (no chest to chase — react to trajectory). RVH and
@@ -869,6 +889,7 @@ func _on_puck_released() -> void:
 	_shot_is_elevated = result.is_elevated
 	_reacting_to_shot = true
 	_reaction_age = 0.0
+	_reaction_clear_timer = -1.0
 	# Goalies track up until release, then commit to their read — they need a
 	# beat to process the shot before they can react to a new lateral threat.
 	# Suppresses slide triggers during that window. Same mechanism as the
@@ -880,17 +901,28 @@ func _on_puck_released() -> void:
 	# Elevated shot: stay standing, _get_config raises the glove or blocker
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
-# don't trigger spurious slides, and clears the reaction freeze — the goalie
-# has physically engaged with the shot, so they're no longer "reading" it.
-# Subsequent rebounds are tracked normally (with the slide lockout still
-# active, so no spam slide-reactions). Filters by identity since
-# `Puck.puck_touched_goalie` fires on either net's goalie.
+# don't trigger spurious slides, and starts the reaction clear delay — the
+# goalie has physically engaged with the shot, so the read is over. Filters
+# by identity since `Puck.puck_touched_goalie` fires on either net's goalie.
 func _on_puck_contact(contacted: Goalie) -> void:
 	if contacted != goalie:
 		return
 	_slide_event_lockout = maxf(_slide_event_lockout, post_event_slide_lockout)
-	_reacting_to_shot = false
-	_shot_is_elevated = false
+	_arm_reaction_clear()
+
+# Resolving events (boards / post / net) that aren't goalie-specific. Any of
+# these means the shot has resolved — no longer a threat the goalie is
+# reading. Starts the clear delay if currently reacting.
+func _on_reaction_resolved() -> void:
+	_arm_reaction_clear()
+
+# Arm the post-event clear timer if reacting. `maxf` so a later, faster
+# event can't shorten an in-progress clear; first event wins.
+func _arm_reaction_clear() -> void:
+	if not _reacting_to_shot:
+		return
+	if _reaction_clear_timer < 0.0:
+		_reaction_clear_timer = reaction_clear_delay
 
 # ── State Serialization ───────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
