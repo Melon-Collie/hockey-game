@@ -905,8 +905,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.right_pad_pos = Vector3( 0.42 + _five_hole_openness, 0.14, -0.20)
 			c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY,  90.0)
 			c.body_pos      = Vector3(0.0,  0.46,  0.0)
-			c.body_rot      = Vector3.ZERO
-			c.head_pos      = Vector3(0.0,  0.99,  0.08)
+			c.body_rot      = Vector3(-10.0, 0.0, 0.0)
+			c.head_pos      = Vector3(0.0,  0.99, -0.06)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.46, 0.49, -0.18)
 			c.blocker_rot   = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
