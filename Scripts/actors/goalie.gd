@@ -36,14 +36,22 @@ func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Colo
 	_glove_mesh.material_override = pads_mat.duplicate()
 	_blocker_mesh.material_override = pads_mat.duplicate()
 
-func apply_body_config(config: GoalieBodyConfig, t: float, glove_t: float = -1.0) -> void:
+# `glove_max_step`: optional cap on the glove's linear movement this frame,
+# in metres. Caller passes `glove_react_max_speed * delta` to throw a hard
+# arm-speed cap on the catch reach so the glove can't perfectly beat the
+# puck to the spot. -1 disables the cap (glove uses the shared lerp). The
+# rotation still uses the shared lerp regardless — wrist orientation
+# tracks position closely enough not to need its own cap.
+func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float = -1.0) -> void:
 	_lerp_part(_left_pad,  config.left_pad_pos,  config.left_pad_rot,  t)
 	_lerp_part(_right_pad, config.right_pad_pos, config.right_pad_rot, t)
 	_lerp_part(_body,      config.body_pos,      config.body_rot,      t)
 	_lerp_part(_head,      config.head_pos,      config.head_rot,      t)
-	# Glove can opt into a slower lerp during shot reactions so the catch
-	# isn't perfectly timed — real goalies don't snap the glove to the spot.
-	_lerp_part(_glove,     config.glove_pos,     config.glove_rot,     t if glove_t < 0.0 else glove_t)
+	if glove_max_step < 0.0:
+		_lerp_part(_glove, config.glove_pos, config.glove_rot, t)
+	else:
+		_glove.position = _glove.position.move_toward(config.glove_pos, glove_max_step)
+		_glove.rotation_degrees = _glove.rotation_degrees.lerp(config.glove_rot, t)
 	_lerp_part(_blocker,   config.blocker_pos,   config.blocker_rot,   t)
 	_lerp_part(_stick,     config.stick_pos,     config.stick_rot,     t)
 

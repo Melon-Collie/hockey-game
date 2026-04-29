@@ -18,7 +18,7 @@ extends Node
 @export var t_push_speed: float = 3.8
 @export var lateral_threshold: float = 0.3
 @export var max_facing_angle: float = 70.0
-@export var rotation_speed: float = 8.0
+@export var rotation_speed: float = 5.0
 @export var rvh_transition_speed: float = 6.0
 
 @export var reaction_delay: float = 0.13
@@ -135,12 +135,14 @@ extends Node
 @export var glove_max_x_inward: float = -0.10    # max cross-body reach
 @export var glove_max_z_reach: float = 0.10      # extra forward Z at full extension
 @export var glove_max_yaw_deg: float = 60.0      # cap on glove Y rotation toward puck
-# Glove movement speed during shot reactions. Slower than `reaction_lerp_speed`
-# so the goalie's hand doesn't perfectly beat the puck to the spot — limited
-# by realistic arm travel time. Big reaches partially miss; small reaches
-# still close in time. ~6 means the glove is ≈45% of the way to target after
-# 100 ms (vs ~85% at the full reaction lerp speed).
-@export var glove_react_lerp_speed: float = 6.0
+# Hard cap on glove linear speed during shot reactions, in m/s. Lerp-based
+# tracking made the math vague (asymptotic convergence); a velocity cap is
+# exact: max per-frame travel = speed * delta. Real glove speeds are
+# 2-3 m/s for a full extension. At 2.0 m/s with a typical 250 ms flight
+# time on a close-range wrister, the glove can travel 0.5 m — enough for
+# body / mid-net shots but not the 0.6-0.7 m needed for a top-corner pull.
+# Big reaches don't make it; small reaches still close in time.
+@export var glove_react_max_speed: float = 2.0
 
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
@@ -751,14 +753,14 @@ func _update_body_parts(delta: float) -> void:
 		lerp_t = recovery_lerp_speed * delta
 	else:
 		lerp_t = part_lerp_speed * delta
-	# Glove uses a slower lerp during elevated shot reactions so the catch
-	# doesn't perfectly beat the puck to the spot — long reaches partially
-	# miss because the arm physically can't get there in time. -1.0 = use the
-	# shared lerp_t for the glove (no override).
-	var glove_lerp_t: float = -1.0
+	# Hard velocity cap on the glove during elevated shot reactions: the arm
+	# physically can't beat the puck to the spot on long reaches. Per-frame
+	# step = speed * delta, applied via move_toward in apply_body_config.
+	# -1 disables the cap (uses the shared lerp).
+	var glove_max_step: float = -1.0
 	if _reacting_to_shot and _shot_is_elevated:
-		glove_lerp_t = glove_react_lerp_speed * delta
-	goalie.apply_body_config(config, lerp_t, glove_lerp_t)
+		glove_max_step = glove_react_max_speed * delta
+	goalie.apply_body_config(config, lerp_t, glove_max_step)
 
 func _get_config(state: State) -> GoalieBodyConfig:
 	var c := GoalieBodyConfig.new()
