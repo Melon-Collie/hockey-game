@@ -14,7 +14,6 @@ var _free_play_popup: Control = null
 var _online_popup: Control = null
 var _offline_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
 var _career_screen: CareerStatsScreen = null
-var _replay_browser: ReplayBrowserScreen = null
 var _offline_away_color_id: String  = TeamColorRegistry.DEFAULT_AWAY_ID
 var _offline_home_btn: OptionButton = null
 var _offline_away_btn: OptionButton = null
@@ -102,10 +101,6 @@ func _build_ui() -> void:
 	career_btn.pressed.connect(func() -> void: _career_screen.open())
 	vbox.add_child(career_btn)
 
-	var replays_btn := _make_button("Replays")
-	replays_btn.pressed.connect(func() -> void: _replay_browser.open())
-	vbox.add_child(replays_btn)
-
 	var options_btn := _make_button("Options")
 	options_btn.pressed.connect(_on_options_pressed)
 	vbox.add_child(options_btn)
@@ -141,8 +136,6 @@ func _build_ui() -> void:
 
 	_career_screen = CareerStatsScreen.new()
 	add_child(_career_screen)
-	_replay_browser = ReplayBrowserScreen.new()
-	add_child(_replay_browser)
 	_build_player_popup()
 	_build_options_popup()
 	_build_exit_popup()
