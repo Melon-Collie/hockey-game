@@ -4,6 +4,15 @@ extends RefCounted
 # Reads a .mreplay file produced by ReplayFileWriter into a flat dict for the
 # viewer / GUT tests. Format constants live on ReplayFileWriter; this class
 # only knows how to parse them.
+
+# Hard caps on untrusted lengths from the file. A malformed or malicious file
+# can claim header_size = 0xFFFFFFFF and trigger a multi-gigabyte allocation
+# inside file.get_buffer(); these limits are well above any legitimate value
+# (a 6-player header is &lt; 4 KB; broadcast frames are &lt; 1 KB; a 30-min game
+# at 40 Hz is ~30 MB on disk).
+const _MAX_FILE_BYTES: int = 200 * 1024 * 1024  # 200 MB
+const _MAX_HEADER_BYTES: int = 64 * 1024        # 64 KB
+const _MAX_FRAME_BYTES: int = 64 * 1024         # 64 KB
 #
 # Returns:
 #   {
@@ -29,12 +38,19 @@ static func read(path: String) -> Dictionary:
 	if file == null:
 		return failure.call("failed to open: %s (err %d)" % [path, FileAccess.get_open_error()])
 
+	if file.get_length() > _MAX_FILE_BYTES:
+		file.close()
+		return failure.call("file too large: %d bytes (cap %d)" % [file.get_length(), _MAX_FILE_BYTES])
+
 	var magic: PackedByteArray = file.get_buffer(ReplayFileWriter.MAGIC.size())
 	if magic != ReplayFileWriter.MAGIC:
 		file.close()
 		return failure.call("magic mismatch (not a .mreplay file?)")
 
 	var header_size: int = file.get_32()
+	if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
+		file.close()
+		return failure.call("header size out of range: %d" % header_size)
 	var header_bytes: PackedByteArray = file.get_buffer(header_size)
 	if header_bytes.size() != header_size:
 		file.close()
@@ -54,6 +70,8 @@ static func read(path: String) -> Dictionary:
 			break
 		if frame_len < ReplayFileWriter.FRAME_INNER_HEADER_SIZE:
 			break  # corrupt or unexpected; treat as EOF
+		if frame_len > _MAX_FRAME_BYTES:
+			break  # malformed length claim; refuse to allocate
 		if file.get_position() + frame_len > file_len:
 			break  # partial trailing record (writer crashed)
 		var host_ts: float = file.get_float()
@@ -97,11 +115,17 @@ static func read_header_only(path: String) -> Dictionary:
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		return {"ok": false, "header": {}, "error": "open failed"}
+	if file.get_length() > _MAX_FILE_BYTES:
+		file.close()
+		return {"ok": false, "header": {}, "error": "file too large"}
 	var magic: PackedByteArray = file.get_buffer(ReplayFileWriter.MAGIC.size())
 	if magic != ReplayFileWriter.MAGIC:
 		file.close()
 		return {"ok": false, "header": {}, "error": "magic mismatch"}
 	var header_size: int = file.get_32()
+	if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
+		file.close()
+		return {"ok": false, "header": {}, "error": "header size out of range"}
 	var header_bytes: PackedByteArray = file.get_buffer(header_size)
 	file.close()
 	if header_bytes.size() != header_size:
