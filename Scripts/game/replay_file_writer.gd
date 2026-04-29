@@ -7,8 +7,10 @@ extends RefCounted
 # enqueue_event push completed records onto a queue and post the semaphore;
 # the worker drains the queue on each wake.
 #
-# File format (.mreplay v1):
-#   [ MAGIC "MREPLAY1"  : 8 bytes      ]
+# File format (.mreplay v1, magic "MREPLAY2"):
+#   [ MAGIC "MREPLAY2"  : 8 bytes      ]    -- bumped from MREPLAY1 when the
+#                                              version byte was added
+#   [ FORMAT_VERSION    : u8           ]    -- currently 1; reader rejects others
 #   [ HEADER LENGTH     : u32 LE       ]
 #   [ HEADER JSON       : N bytes      ]    -- game_id, build_version, roster, …
 #   ([ FRAME LENGTH     : u32 LE       ]
@@ -19,6 +21,12 @@ extends RefCounted
 #   [ FOOTER LENGTH     : u32 LE       ]
 #   [ FOOTER JSON       : N bytes      ]
 #
+# Versioning: the magic distinguishes incompatible-format generations (a v1
+# reader must reject a v2 file outright). The u8 version byte distinguishes
+# additive evolutions within a magic family — a future v2 reader can fast-path
+# skip-forward when the version is older. Bump the magic for breaking changes;
+# bump the version byte for additive changes.
+#
 # Crash-safety: a process kill mid-write leaves the file without
 # END_OF_RECORDS; the reader walks records until it can't read a full frame
 # and reports `truncated = true`. Only the in-flight frame is lost.
@@ -26,7 +34,8 @@ extends RefCounted
 # PackedByteArray() can't be a const expression in GDScript, so this is a
 # `static var` initialized once at class load. Same access pattern
 # (ReplayFileWriter.MAGIC) for callers.
-static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89, 49])  # "MREPLAY1"
+static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89, 50])  # "MREPLAY2"
+const FORMAT_VERSION: int = 1
 const KIND_WORLD_STATE: int = 0
 const KIND_EVENT: int = 1
 const FRAME_INNER_HEADER_SIZE: int = 5  # host_ts (4) + kind (1)
@@ -57,6 +66,7 @@ func open(path: String, header: Dictionary) -> bool:
 		push_error("ReplayFileWriter: failed to open %s (err %d)" % [path, FileAccess.get_open_error()])
 		return false
 	_file.store_buffer(MAGIC)
+	_file.store_8(FORMAT_VERSION)
 	var header_bytes: PackedByteArray = JSON.stringify(header).to_utf8_buffer()
 	_file.store_32(header_bytes.size())
 	_file.store_buffer(header_bytes)

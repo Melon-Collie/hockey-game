@@ -47,6 +47,11 @@ static func read(path: String) -> Dictionary:
 		file.close()
 		return failure.call("magic mismatch (not a .mreplay file?)")
 
+	var version: int = file.get_8()
+	if version != ReplayFileWriter.FORMAT_VERSION:
+		file.close()
+		return failure.call("unsupported format version %d (expected %d)" % [version, ReplayFileWriter.FORMAT_VERSION])
+
 	var header_size: int = file.get_32()
 	if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
 		file.close()
@@ -122,6 +127,10 @@ static func read_header_only(path: String) -> Dictionary:
 	if magic != ReplayFileWriter.MAGIC:
 		file.close()
 		return {"ok": false, "header": {}, "error": "magic mismatch"}
+	var version: int = file.get_8()
+	if version != ReplayFileWriter.FORMAT_VERSION:
+		file.close()
+		return {"ok": false, "header": {}, "error": "unsupported format version %d" % version}
 	var header_size: int = file.get_32()
 	if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
 		file.close()

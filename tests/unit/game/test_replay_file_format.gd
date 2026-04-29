@@ -84,8 +84,9 @@ func test_partial_trailing_record_is_skipped() -> void:
 	# Strip the file at the END_OF_RECORDS position and append a malformed
 	# length prefix claiming 9999 more bytes.
 	var read_file: FileAccess = FileAccess.open(TEST_PATH, FileAccess.READ)
-	var head_len: int = ReplayFileWriter.MAGIC.size() + 4
-	read_file.seek(ReplayFileWriter.MAGIC.size())
+	# Layout: MAGIC(8) + VERSION(1) + HEADER_SIZE(4) + HEADER_BYTES
+	var head_len: int = ReplayFileWriter.MAGIC.size() + 1 + 4
+	read_file.seek(ReplayFileWriter.MAGIC.size() + 1)  # skip magic + version
 	var header_size: int = read_file.get_32()
 	var pre_records_offset: int = head_len + header_size
 	# Walk both records to find the offset of END_OF_RECORDS.
