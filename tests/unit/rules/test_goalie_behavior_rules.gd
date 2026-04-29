@@ -169,3 +169,115 @@ func test_lateral_x_puck_at_goal_line_clamps_to_post() -> void:
 	var x: float = GoalieBehaviorRules.target_lateral_x(
 		Vector3(5, 0, 26.6), 26.6, 0.0, 1.0, 0.915, -1)
 	assert_almost_eq(x, 0.915, 0.01)
+
+# ── compute_threat_position ──────────────────────────────────────────────────
+
+func test_threat_no_carrier_returns_puck() -> void:
+	var t: Vector3 = GoalieBehaviorRules.compute_threat_position(
+		Vector3(2.0, 0.1, 10.0), Vector3(5.0, 0.0, 8.0),
+		false, 0.75)
+	assert_almost_eq(t.x, 2.0, 0.001)
+	assert_almost_eq(t.z, 10.0, 0.001)
+
+func test_threat_with_carrier_blends_toward_body() -> void:
+	# weight 0.75 → 75% body, 25% puck.
+	var t: Vector3 = GoalieBehaviorRules.compute_threat_position(
+		Vector3(2.0, 0.1, 10.0), Vector3(0.0, 0.0, 12.0),
+		true, 0.75)
+	assert_almost_eq(t.x, 0.5, 0.001)   # 0.25*2 + 0.75*0 = 0.5
+	assert_almost_eq(t.z, 11.5, 0.001)  # 0.25*10 + 0.75*12 = 11.5
+
+func test_threat_weight_clamps() -> void:
+	# Weight > 1 should clamp to pure body.
+	var t: Vector3 = GoalieBehaviorRules.compute_threat_position(
+		Vector3(2.0, 0.0, 10.0), Vector3(0.0, 0.0, 12.0),
+		true, 5.0)
+	assert_almost_eq(t.x, 0.0, 0.001)
+	assert_almost_eq(t.z, 12.0, 0.001)
+
+func test_threat_weight_zero_returns_puck_even_with_carrier() -> void:
+	# Pure puck mode (e.g. shot in flight).
+	var t: Vector3 = GoalieBehaviorRules.compute_threat_position(
+		Vector3(2.0, 0.1, 10.0), Vector3(0.0, 0.0, 12.0),
+		true, 0.0)
+	assert_almost_eq(t.x, 2.0, 0.001)
+	assert_almost_eq(t.z, 10.0, 0.001)
+
+# ── target_arc_position ──────────────────────────────────────────────────────
+# Conventions: goal at +Z (goal_line_z=26.6), direction_sign=-1 means goalie
+# stands on the negative-Z side of the goal line (in front of the net).
+
+func test_arc_centered_threat_places_goalie_dead_center() -> void:
+	# Threat directly in front of net at z=20. Arc puts goalie at depth=radius
+	# perpendicular to goal line, centered.
+	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
+		Vector3(0, 0, 20), 26.6, 0.0, -1, 0.6, 0.915)
+	assert_almost_eq(p.x, 0.0, 0.001)
+	assert_almost_eq(p.y, 26.0, 0.001)  # 26.6 - 0.6
+
+func test_arc_wide_threat_pulls_goalie_off_center_and_back() -> void:
+	# Threat to the right and in front. Goalie should end up on the right
+	# side and at a perpendicular depth shallower than the radius (because
+	# the radius is consumed by lateral motion).
+	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
+		Vector3(5, 0, 21.6), 26.6, 0.0, -1, 1.2, 0.915)
+	assert_true(p.x > 0.0, "goalie should be on right side, got x=%f" % p.x)
+	# perp depth = 26.6 - p.y; should be < radius (1.2) because the arc
+	# spends some of the radius on lateral position.
+	var perp_depth: float = 26.6 - p.y
+	assert_true(perp_depth < 1.2, "perp depth=%f should be shallower than radius 1.2" % perp_depth)
+	assert_true(perp_depth > 0.0, "perp depth=%f should still be in front of goal" % perp_depth)
+
+func test_arc_clamps_x_to_post_on_extreme_angle() -> void:
+	# Threat at the goal line, way to the right. Direction is purely lateral,
+	# arc would put goalie at x=radius which exceeds net half-width — clamp.
+	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
+		Vector3(20, 0, 26.6), 26.6, 0.0, -1, 1.5, 0.915)
+	assert_almost_eq(p.x, 0.915, 0.001)  # clamped to right post
+
+func test_arc_threat_behind_goal_flattens_to_goal_line() -> void:
+	# Threat behind the net at z > goal_line_z. The arc would put the goalie
+	# behind the goal line; flatten z to the goal line itself.
+	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
+		Vector3(0, 0, 28.0), 26.6, 0.0, -1, 0.5, 0.915)
+	assert_almost_eq(p.y, 26.6, 0.001)
+
+func test_arc_negative_z_goal_orientation() -> void:
+	# Opposite-side goalie: defends -Z, direction_sign = +1. Threat at z=-20.
+	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
+		Vector3(0, 0, -20), -26.6, 0.0, 1, 0.6, 0.915)
+	assert_almost_eq(p.x, 0.0, 0.001)
+	assert_almost_eq(p.y, -26.0, 0.001)  # -26.6 + 0.6
+
+# ── compute_slide_destination ────────────────────────────────────────────────
+
+func test_slide_destination_matches_arc_at_butterfly_depth() -> void:
+	# Slide destination should equal target_arc_position at the butterfly
+	# radius (currently a thin alias).
+	var threat := Vector3(2, 0, 22)
+	var slide: Vector2 = GoalieBehaviorRules.compute_slide_destination(
+		threat, 26.6, 0.0, -1, 0.4, 0.915)
+	var arc: Vector2 = GoalieBehaviorRules.target_arc_position(
+		threat, 26.6, 0.0, -1, 0.4, 0.915)
+	assert_almost_eq(slide.x, arc.x, 0.001)
+	assert_almost_eq(slide.y, arc.y, 0.001)
+
+# ── should_commit_slide ──────────────────────────────────────────────────────
+
+func test_slide_trigger_below_threshold_does_not_commit() -> void:
+	assert_false(GoalieBehaviorRules.should_commit_slide(0.0, 0.3, 0.5))
+
+func test_slide_trigger_above_threshold_commits() -> void:
+	assert_true(GoalieBehaviorRules.should_commit_slide(0.0, 0.6, 0.5))
+
+func test_slide_trigger_negative_delta_uses_absolute_value() -> void:
+	# Threat moved hard to the left — still triggers a slide.
+	assert_true(GoalieBehaviorRules.should_commit_slide(0.0, -0.7, 0.5))
+
+# ── threat_distance_to_goal ──────────────────────────────────────────────────
+
+func test_threat_distance_euclidean() -> void:
+	var d: float = GoalieBehaviorRules.threat_distance_to_goal(
+		Vector3(3, 0, 22.6), 26.6, 0.0)
+	# dx=3, dz=-4 → sqrt(9+16) = 5
+	assert_almost_eq(d, 5.0, 0.001)

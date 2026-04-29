@@ -204,6 +204,7 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	skater.set_top_hand_position(state.top_hand_position)
 	skater.set_blade_position(state.blade_position)
 	skater.set_ghost(state.is_ghost)
+	skater.current_shot_state = state.shot_state
 	# Arms are derived from shoulder + hand each frame; update after both are set.
 	skater.update_arm_mesh()
 	# Bottom hand is purely reactive to top_hand + blade (both already set

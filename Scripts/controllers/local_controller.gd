@@ -121,6 +121,7 @@ func _physics_process(delta: float) -> void:
 	if _input_history.size() > rtt_cap:
 		_input_history.pop_front()
 	_process_input(_current_input, _current_input.delta)
+	skater.current_shot_state = _sm.get_state() as int
 	_update_one_timer_indicator()
 	var blade_pos: Vector3 = skater.get_blade_contact_global()
 	if not _last_blade_pos.is_zero_approx():

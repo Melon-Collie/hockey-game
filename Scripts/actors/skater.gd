@@ -102,6 +102,10 @@ var _bot_cuff_mesh: MeshInstance3D = null
 signal body_checked_player(victim: Skater, impact_force: float, hit_direction: Vector3)
 signal body_check_impulse_applied(impulse: Vector3)
 signal body_block_hit(body: Node3D)
+# Mirrors SkaterStateMachine.State for the current carrier. Updated each tick
+# by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
+# SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
+var current_shot_state: int = 0
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _ring_mesh: MeshInstance3D = null
 var _charge_ring_mesh: MeshInstance3D = null
