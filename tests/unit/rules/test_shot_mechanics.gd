@@ -71,25 +71,45 @@ func test_wrister_full_charge_maxes_power() -> void:
 
 func test_wrister_backhand_penalty() -> void:
 	var cfg := _wrister_cfg()
-	# Right-handed forehand: blade on +X side of shoulder → sign matches hand_sign (+1)
-	var forehand: Dictionary = ShotMechanics.release_wrister(
+	# Right-handed: shoulder lives on -X (left side), blade naturally on +X (right side).
+	# shoulder_offset = 0.22 m; top_hand_side_sign = -1.0 for right-handed → shoulder at -0.22.
+	var rh_forehand: Dictionary = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),          # blade_world
-		Vector3(0.5, 0, 0),          # blade_local
-		Vector3(0.35, 0, 0),         # shoulder_local
+		Vector3(0.5, 0, 0),          # blade_local: on +X = natural blade side
+		Vector3(-0.22, 0, 0),        # shoulder_local: at -0.22 (opposite side from blade)
 		false, false,                # left-handed, elevated
 		3.0,                         # full charge
 		cfg)
-	# Right-handed backhand: blade on -X side of shoulder → sign mismatches hand_sign
-	var backhand: Dictionary = ShotMechanics.release_wrister(
+	var rh_backhand: Dictionary = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(-0.5, 0, 0),
-		Vector3(-0.5, 0, 0),
-		Vector3(0.35, 0, 0),
+		Vector3(-0.5, 0, 0),         # blade_local: on -X = past the shoulder on cross-body side
+		Vector3(-0.22, 0, 0),
 		false, false,
 		3.0,
 		cfg)
-	assert_lt(backhand.power, forehand.power, "backhand penalised by backhand_power_coefficient")
+	assert_lt(rh_backhand.power, rh_forehand.power, "right-handed backhand penalised")
+
+	# Left-handed: shoulder lives on +X (right side), blade naturally on -X (left side).
+	# top_hand_side_sign = 1.0 for left-handed → shoulder at +0.22.
+	var lh_forehand: Dictionary = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0),
+		Vector3(-0.5, 0, 0),
+		Vector3(-0.5, 0, 0),         # blade_local: on -X = natural blade side for lefty
+		Vector3(0.22, 0, 0),         # shoulder_local: at +0.22 (opposite side from blade)
+		true, false,                 # left-handed = true
+		3.0,
+		cfg)
+	var lh_backhand: Dictionary = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0),
+		Vector3(0.5, 0, 0),
+		Vector3(0.5, 0, 0),          # blade_local: on +X = past the shoulder on cross-body side
+		Vector3(0.22, 0, 0),
+		true, false,
+		3.0,
+		cfg)
+	assert_lt(lh_backhand.power, lh_forehand.power, "left-handed backhand penalised")
 
 func test_wrister_elevation_adds_y_component() -> void:
 	var cfg := _wrister_cfg()
