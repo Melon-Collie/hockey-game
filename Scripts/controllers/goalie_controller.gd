@@ -138,6 +138,14 @@ extends Node
 @export var glove_max_x_inward: float = -0.10    # max cross-body reach
 @export var glove_max_z_reach: float = 0.10      # extra forward Z at full extension
 @export var glove_max_yaw_deg: float = 60.0      # cap on glove Y rotation toward puck
+# Blocker reach mirrors the glove. Pad+stick are rigid so we only translate
+# the assembly toward the intercept; yaw is around Y so the per-state X tilt
+# (which keeps the blade on the ice) stays intact. Sign-mirrored from glove
+# values since the blocker is on the +X side for `catches_left = true`.
+@export var blocker_max_x_outward: float = 0.85
+@export var blocker_max_x_inward: float = 0.10
+@export var blocker_max_z_reach: float = 0.10
+@export var blocker_max_yaw_deg: float = 60.0
 # Hard cap on glove linear speed during shot reactions, in m/s. Lerp-based
 # tracking made the math vague (asymptotic convergence); a velocity cap is
 # exact: max per-frame travel = speed * delta. Real glove speeds are
@@ -146,6 +154,10 @@ extends Node
 # body / mid-net shots but not the 0.6-0.7 m needed for a top-corner pull.
 # Big reaches don't make it; small reaches still close in time.
 @export var glove_react_max_speed: float = 2.0
+# Blocker (entire BlockArm assembly) reach speed cap, mirroring the glove.
+# Same magnitude — both arms have similar reach speed; if blocker should be
+# faster (some real goalies' dominant hand), bump this up.
+@export var blocker_react_max_speed: float = 2.0
 
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
@@ -802,14 +814,16 @@ func _update_body_parts(delta: float) -> void:
 		lerp_t = recovery_lerp_speed * delta
 	else:
 		lerp_t = part_lerp_speed * delta
-	# Hard velocity cap on the glove during elevated shot reactions: the arm
-	# physically can't beat the puck to the spot on long reaches. Per-frame
-	# step = speed * delta, applied via move_toward in apply_body_config.
-	# -1 disables the cap (uses the shared lerp).
+	# Hard velocity cap on the glove and blocker during elevated shot
+	# reactions: the arm physically can't beat the puck to the spot on long
+	# reaches. Per-frame step = speed * delta, applied via move_toward in
+	# apply_body_config. -1 disables the cap (uses the shared lerp).
 	var glove_max_step: float = -1.0
+	var blocker_max_step: float = -1.0
 	if _reacting_to_shot and _shot_is_elevated:
 		glove_max_step = glove_react_max_speed * delta
-	goalie.apply_body_config(config, lerp_t, glove_max_step)
+		blocker_max_step = blocker_react_max_speed * delta
+	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
 
 func _get_config(state: State) -> GoalieBodyConfig:
 	var c := GoalieBodyConfig.new()
@@ -994,12 +1008,30 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 					-glove_max_yaw_deg, glove_max_yaw_deg)
 		c.glove_rot = Vector3(-25.0, yaw_deg, 0.0)
 	else:
-		# Blocker reach: just raise the hand to the impact height. We don't
-		# rotate the pad separately — pad and stick are coupled, so a
-		# blocker_rot tweak here would also tilt the stick off the ice. The
-		# blocker save proper treatment (velocity cap, yaw, etc, mirroring
-		# the glove) lands alongside the active poke check pass.
-		c.blocker_pos = Vector3(c.blocker_pos.x, target_y, react_hand_z)
+		# Blocker reach: project the entire BlockArm toward the intercept,
+		# clamped to arm reach. Mirrors the glove logic — different sign
+		# convention because blocker sits on +X side. We DO NOT touch
+		# blocker_rot.x (per-state stick tilt that keeps blade on ice);
+		# instead we add yaw on Y so the assembly rotates around the wrist
+		# to face the puck without lifting the blade. Velocity cap is
+		# applied in apply_body_config via blocker_max_step.
+		var rest_x: float = c.blocker_pos.x
+		var rest_z: float = c.blocker_pos.z
+		var blocker_x: float = clampf(impact_local_x, blocker_max_x_inward, blocker_max_x_outward)
+		var reach: float = absf(blocker_x - rest_x) / maxf(absf(blocker_max_x_outward - rest_x), 0.001)
+		var blocker_z: float = react_hand_z - blocker_max_z_reach * clampf(reach, 0.0, 1.0)
+		c.blocker_pos = Vector3(blocker_x, target_y, blocker_z)
+		# Yaw toward reach direction. Same atan2(-dx, -dz) formula as the
+		# glove — for rightward reach (move_dx > 0) this yields negative
+		# yaw, which rotates -Z → +X (palm faces right). Stick swings with
+		# the assembly via the shared transform.
+		var move_dx: float = blocker_x - rest_x
+		var move_dz: float = blocker_z - rest_z
+		var blocker_yaw: float = 0.0
+		if absf(move_dx) > 0.001 or absf(move_dz) > 0.001:
+			blocker_yaw = clampf(rad_to_deg(atan2(-move_dx, -move_dz)),
+					-blocker_max_yaw_deg, blocker_max_yaw_deg)
+		c.blocker_rot = Vector3(c.blocker_rot.x, blocker_yaw, c.blocker_rot.z)
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
 func _on_puck_released() -> void:

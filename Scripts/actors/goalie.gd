@@ -37,13 +37,14 @@ func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Colo
 	_glove_mesh.material_override = pads_mat.duplicate()
 	_blocker_mesh.material_override = pads_mat.duplicate()
 
-# `glove_max_step`: optional cap on the glove's linear movement this frame,
-# in metres. Caller passes `glove_react_max_speed * delta` to throw a hard
-# arm-speed cap on the catch reach so the glove can't perfectly beat the
-# puck to the spot. -1 disables the cap (glove uses the shared lerp). The
-# rotation still uses the shared lerp regardless — wrist orientation
-# tracks position closely enough not to need its own cap.
-func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float = -1.0) -> void:
+# `glove_max_step` / `blocker_max_step`: optional caps on linear movement
+# this frame (metres). Callers pass `*_react_max_speed * delta` to enforce a
+# realistic arm-speed limit so the catch / block reach can't perfectly beat
+# the puck to the spot. -1 disables the cap (target uses the shared lerp).
+# Rotations still lerp at the shared `t` regardless — wrist orientation
+# tracks position closely enough not to need its own cap. The blocker step
+# applies to the entire BlockArm (pad + stick rigid assembly).
+func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float = -1.0, blocker_max_step: float = -1.0) -> void:
 	_lerp_part(_left_pad,  config.left_pad_pos,  config.left_pad_rot,  t)
 	_lerp_part(_right_pad, config.right_pad_pos, config.right_pad_rot, t)
 	_lerp_part(_body,      config.body_pos,      config.body_rot,      t)
@@ -56,8 +57,15 @@ func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float
 	# Blocker assembly = blocker pad + stick (shaft, paddle, blade) as one
 	# rigid unit. Single transform via `blocker_pos` / `blocker_rot` drives
 	# the whole BlockArm; pad and stick are children that rotate together
-	# (real-world they're physically attached at the wrist).
-	_lerp_part(_block_arm, config.blocker_pos, config.blocker_rot, t)
+	# (real-world they're physically attached at the wrist). When reaching
+	# for a blocker save the position is rate-limited via `blocker_max_step`
+	# the same way the glove is, so the assembly can't teleport to the
+	# impact point.
+	if blocker_max_step < 0.0:
+		_lerp_part(_block_arm, config.blocker_pos, config.blocker_rot, t)
+	else:
+		_block_arm.position = _block_arm.position.move_toward(config.blocker_pos, blocker_max_step)
+		_block_arm.rotation_degrees = _block_arm.rotation_degrees.lerp(config.blocker_rot, t)
 
 func set_goalie_position(x: float, z: float) -> void:
 	global_position = Vector3(x, 0.0, z)
