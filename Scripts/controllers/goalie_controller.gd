@@ -134,6 +134,7 @@ extends Node
 @export var glove_max_x_outward: float = -0.85   # max extension to the glove side
 @export var glove_max_x_inward: float = -0.10    # max cross-body reach
 @export var glove_max_z_reach: float = 0.10      # extra forward Z at full extension
+@export var glove_max_yaw_deg: float = 60.0      # cap on glove Y rotation toward puck
 
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
@@ -890,7 +891,19 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 		var reach: float = absf(glove_x - rest_x) / maxf(absf(glove_max_x_outward - rest_x), 0.001)
 		var glove_z: float = react_hand_z - glove_max_z_reach * clampf(reach, 0.0, 1.0)
 		c.glove_pos = Vector3(glove_x, target_y, glove_z)
-		c.glove_rot = Vector3(-25.0, 0.0, 0.0)
+		# Yaw the glove so the catching face points at the puck. Body-local
+		# frame: convert puck world position to local via -direction_sign,
+		# then atan2 the in-plane delta from the glove to the puck. Forward
+		# axis is -Z, so atan2(dx, -dz) gives 0 for puck-straight-ahead and
+		# positive for puck on goalie's right. Capped so the wrist doesn't
+		# twist past natural range.
+		var puck_local_x: float = (puck.global_position.x - _current_x) * -_direction_sign
+		var puck_local_z: float = (puck.global_position.z - goalie.global_position.z) * -_direction_sign
+		var dx_to_puck: float = puck_local_x - glove_x
+		var dz_to_puck: float = puck_local_z - glove_z
+		var yaw_deg: float = clampf(rad_to_deg(atan2(dx_to_puck, -dz_to_puck)),
+				-glove_max_yaw_deg, glove_max_yaw_deg)
+		c.glove_rot = Vector3(-25.0, yaw_deg, 0.0)
 	else:
 		c.blocker_pos = Vector3(c.blocker_pos.x, target_y, react_hand_z)
 		c.blocker_rot = Vector3(-25.0, 0.0, 0.0)
