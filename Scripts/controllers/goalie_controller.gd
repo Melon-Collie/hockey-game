@@ -883,9 +883,9 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			# body lerps the rest of the way up; if it persists the body is
 			# already at READY and just stays there — single smooth rising
 			# motion, no up-then-back-down overshoot.
-			c.left_pad_pos  = Vector3(-0.22 - _five_hole_openness, 0.34, -0.16)
+			c.left_pad_pos  = Vector3(-0.22 - _five_hole_openness, 0.44, -0.16)
 			c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_STANDING, -10.0)
-			c.right_pad_pos = Vector3( 0.22 + _five_hole_openness, 0.34, -0.16)
+			c.right_pad_pos = Vector3( 0.22 + _five_hole_openness, 0.44, -0.16)
 			c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING,  10.0)
 			c.body_pos      = Vector3(0.0,  0.92, -0.05)
 			c.body_rot      = Vector3(-14.0, 0.0, 0.0)
