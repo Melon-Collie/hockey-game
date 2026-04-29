@@ -503,6 +503,16 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 		State.STANDING:
 			_butterfly_drop_progress = 0.0
 			_slide_velocity_x = 0.0
+		State.RVH_LEFT, State.RVH_RIGHT:
+			# `_current_depth` carries different units per state — radius from
+			# goal center in STANDING/READY/RECOVERING, perpendicular depth
+			# from goal line in RVH/BUTTERFLY. Coming in from STANDING with
+			# the goalie on the goal line (sharp-angle arc flatten), the
+			# carried-over radius value (e.g. 1.2 m) gets re-interpreted as
+			# perp depth and the next tick teleports the goalie 1.2 m forward.
+			# Snap to the actual current perp depth so the position holds, then
+			# `_update_depth` lerps gently to `rvh_depth` from there.
+			_current_depth = (goalie.global_position.z - _goal_line_z) * _direction_sign
 
 # Should the goalie keep holding butterfly because the puck is still a threat?
 # Hold conditions, in priority:
