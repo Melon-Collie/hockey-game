@@ -407,7 +407,11 @@ func _spawn_world() -> void:
 		var cfg: Dictionary = NetworkManager.pending_game_config
 		_state_machine.apply_config(cfg.num_periods, cfg.period_duration, cfg.ot_enabled, cfg.ot_duration,
 				cfg.get("rule_set", GameRules.DEFAULT_RULE_SET))
-		_game_id = cfg.get("game_id", "")
+		var cfg_id: String = cfg.get("game_id", "")
+		if cfg_id.is_empty() or _is_valid_game_id(cfg_id):
+			_game_id = cfg_id
+		else:
+			push_warning("rejected game_id from config: %s" % cfg_id)
 		NetworkManager.pending_game_config = {}
 	# Offline / tutorial sessions intentionally leave _game_id empty — they
 	# don't broadcast (no other peer would see the id) and downstream consumers
@@ -797,10 +801,32 @@ func _close_replay_file_writer() -> void:
 func _rollover_replay_file_to(new_game_id: String) -> void:
 	if new_game_id.is_empty():
 		return
+	if not _is_valid_game_id(new_game_id):
+		push_warning("rejected new_game_id: %s" % new_game_id)
+		return
 	_close_replay_file_writer()
 	_last_recorded_phase = -1
 	_game_id = new_game_id
 	_open_replay_file_writer()
+
+
+# Game IDs are UUIDs minted by PlayerPrefs.generate_uuid (hex + dashes). This
+# guard runs on the path concatenation surface so a malicious host can't ship
+# `../etc/passwd` via notify_game_reset and have a client write outside the
+# replays folder. Belt-and-braces: the only legitimate source is already
+# UUIDs, but the wire format permits arbitrary strings.
+const _MAX_GAME_ID_LEN: int = 64
+static func _is_valid_game_id(s: String) -> bool:
+	if s.is_empty() or s.length() > _MAX_GAME_ID_LEN:
+		return false
+	for i: int in s.length():
+		var c: String = s.substr(i, 1)
+		if not (c >= "a" and c <= "z") \
+				and not (c >= "A" and c <= "Z") \
+				and not (c >= "0" and c <= "9") \
+				and c != "-" and c != "_":
+			return false
+	return true
 
 
 # Roster captured at game-start; mid-game joiners aren't in here but the viewer

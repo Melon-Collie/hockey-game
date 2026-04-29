@@ -287,6 +287,7 @@ func reset() -> void:
 	_session_start_ms = 0
 	_last_ws_seq_received = -1
 	_replay_mode = false
+	_replay_clock = 0.0
 	_ws_drop_window = 0
 	_ws_recv_window = 0
 	_ws_loss_window_timer = 0.0
@@ -531,6 +532,7 @@ func start_replay_mode(initial_ts: float) -> void:
 
 func stop_replay_mode() -> void:
 	_replay_mode = false
+	_replay_clock = 0.0
 	if is_host:
 		for peer_id: int in connected_peer_ids():
 			notify_replay_mode.rpc_id(peer_id, false)
@@ -539,6 +541,8 @@ func stop_replay_mode() -> void:
 @rpc("authority", "reliable")
 func notify_replay_mode(active: bool) -> void:
 	_replay_mode = active
+	if not active:
+		_replay_clock = 0.0
 
 
 func set_replay_clock(t: float) -> void:

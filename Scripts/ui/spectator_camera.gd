@@ -22,6 +22,11 @@ func setup(target_getter: Callable) -> void:
 
 
 func activate() -> void:
+	# Guard against double-activation: a second call would overwrite _prev_camera
+	# with our own current reference, breaking deactivate() restore. Goal-replay
+	# overlapping with a stale spectator camera is the realistic trigger.
+	if current:
+		return
 	_prev_camera = get_viewport().get_camera_3d()
 	# Snap to the correct rail position before going current so there is no
 	# opening sweep across the rink on the first frame.
