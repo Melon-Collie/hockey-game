@@ -106,6 +106,10 @@ signal body_block_hit(body: Node3D)
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
 var current_shot_state: int = 0
+# Team affiliation set by PlayerRegistry on spawn. -1 = unknown (e.g. tutorial
+# dummy). Used by goalie AI to distinguish opposing-team carriers (threat) from
+# own-team carriers (own offense / regroup) without going through the registry.
+var team_id: int = -1
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _ring_mesh: MeshInstance3D = null
 var _charge_ring_mesh: MeshInstance3D = null
