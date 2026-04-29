@@ -674,6 +674,12 @@ func _update_facing(delta: float) -> void:
 		var target_y: float = PI if _direction_sign == 1 else 0.0
 		goalie.set_goalie_rotation_y(lerp_angle(goalie.get_goalie_rotation_y(), target_y, rotation_speed * delta))
 		return
+	# Same freeze as `_move_along_arc` — once the shot's been released the
+	# goalie commits and reads, no body rotation tracking the puck. Especially
+	# visible on elevated shots where `_shot_timer` is never set (no butterfly
+	# drop) and the rotation is otherwise the only thing the player sees move.
+	if _reacting_to_shot:
+		return
 	if _shot_timer > 0.0:
 		return
 	if _state == State.BUTTERFLY or _state == State.RECOVERING:
@@ -874,11 +880,17 @@ func _on_puck_released() -> void:
 	# Elevated shot: stay standing, _get_config raises the glove or blocker
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
-# don't trigger spurious slides. Filters by identity since `Puck.puck_touched_goalie`
-# fires on either net's goalie.
+# don't trigger spurious slides, and clears the reaction freeze — the goalie
+# has physically engaged with the shot, so they're no longer "reading" it.
+# Subsequent rebounds are tracked normally (with the slide lockout still
+# active, so no spam slide-reactions). Filters by identity since
+# `Puck.puck_touched_goalie` fires on either net's goalie.
 func _on_puck_contact(contacted: Goalie) -> void:
-	if contacted == goalie:
-		_slide_event_lockout = maxf(_slide_event_lockout, post_event_slide_lockout)
+	if contacted != goalie:
+		return
+	_slide_event_lockout = maxf(_slide_event_lockout, post_event_slide_lockout)
+	_reacting_to_shot = false
+	_shot_is_elevated = false
 
 # ── State Serialization ───────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
