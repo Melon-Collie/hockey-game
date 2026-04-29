@@ -90,6 +90,12 @@ extends Node
 # locking butterfly during routine post-save puck-settling.
 @export var recovery_proximity_threshold: float = 1.8
 
+# Hard cap on `_reacting_to_shot` duration. The flag normally clears when
+# `detect_shot` re-projection fails (puck off-target, hit boards/posts/saved),
+# but pathological cases (e.g. puck bouncing around still on net) could hold
+# it indefinitely and freeze the goalie's lateral movement forever. Safety net.
+@export var max_reaction_duration: float = 1.5
+
 # ── Ready stance ──────────────────────────────────────────────────────────────
 # Distinct half-down stance triggered when the play is in the goalie's
 # defensive half AND the puck is loose or carried by an opponent. Crouched,
@@ -163,6 +169,7 @@ var _butterfly_hold_timer: float = 0.0      # counts up while in BUTTERFLY
 var _recovery_timer: float = 0.0            # counts up while in RECOVERING
 var _slide_cooldown_timer: float = 0.0      # counts up between slides
 var _slide_event_lockout: float = 0.0      # counts down after puck contact
+var _reaction_age: float = 0.0             # counts up while _reacting_to_shot
 var _reading_slapper_tell: bool = false
 
 # ── Client Simulation ─────────────────────────────────────────────────────────
@@ -216,6 +223,7 @@ func reset_to_crease() -> void:
 	_butterfly_hold_timer = 0.0
 	_slide_cooldown_timer = 0.0
 	_slide_event_lockout = 0.0
+	_reaction_age = 0.0
 	_reading_slapper_tell = false
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
@@ -269,6 +277,13 @@ func _update_tracking(delta: float) -> void:
 	else:
 		_tracked_threat_position = target_threat
 	if not _reacting_to_shot or not is_server:
+		return
+	# Hard cap on reaction duration so the lateral-movement freeze can't
+	# stick forever if `detect_shot` keeps returning true on a chaotic puck.
+	_reaction_age += delta
+	if _reaction_age >= max_reaction_duration:
+		_reacting_to_shot = false
+		_shot_is_elevated = false
 		return
 	# Re-project each frame so impact position stays accurate (handles bounces, deflections).
 	# detect_shot returns is_shot=false if puck slowed or moved away from net — clears reaction.
@@ -523,16 +538,21 @@ func _update_position(delta: float) -> void:
 # current radius; choose lateral speed by 2D distance so X and Z move at the
 # same rate (no asymmetric snap on Z when threat angle shifts). Five-hole
 # openness scales with motion category exactly as before.
+#
+# While `_reacting_to_shot`, lateral movement freezes entirely — the goalie
+# committed to their pre-release position and is now reading the shot. They
+# react with body parts (butterfly drop / glove raise) but don't slide or
+# shuffle. The freeze releases when `_reacting_to_shot` clears (`detect_shot`
+# re-projection in `_update_tracking` returns false on board / post / wide /
+# saved pucks) or via the safety timeout in `_update_tracking`.
 func _move_along_arc(delta: float) -> Vector2:
 	var current := Vector2(_current_x, goalie.global_position.z)
-	var target_xz: Vector2
 	if _reacting_to_shot:
-		# Hold the previous target while reacting to a released shot — chasing
-		# a re-projected impact mid-flight twitches the body off the angle.
-		target_xz = Vector2(_target_x, _goal_line_z + _direction_sign * _current_depth)
-	else:
-		target_xz = _arc_target_xz()
-		_target_x = target_xz.x
+		if is_server:
+			_five_hole_openness = lerpf(_five_hole_openness, five_hole_base, part_lerp_speed * delta)
+		return current
+	var target_xz: Vector2 = _arc_target_xz()
+	_target_x = target_xz.x
 	var delta_2d: float = current.distance_to(target_xz)
 	var move_speed: float
 	var five_hole_target: float
@@ -830,6 +850,7 @@ func _on_puck_released() -> void:
 	_shot_impact_y = result.impact_y
 	_shot_is_elevated = result.is_elevated
 	_reacting_to_shot = true
+	_reaction_age = 0.0
 	# Goalies track up until release, then commit to their read — they need a
 	# beat to process the shot before they can react to a new lateral threat.
 	# Suppresses slide triggers during that window. Same mechanism as the
