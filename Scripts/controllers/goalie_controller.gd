@@ -677,7 +677,7 @@ func _get_config(state: State) -> GoalieBodyConfig:
 	const PAD_TOE_OUT_DEG_STANDING: float = 8.0
 	const PAD_TOE_OUT_DEG_BUTTERFLY: float = 12.0
 	match state:
-		State.STANDING, State.RECOVERING:
+		State.STANDING:
 			c.left_pad_pos  = Vector3(-0.22 - _five_hole_openness, 0.44, -0.20)
 			c.left_pad_rot  = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING, -12.0)
 			c.right_pad_pos = Vector3( 0.22 + _five_hole_openness, 0.44, -0.20)
@@ -699,11 +699,17 @@ func _get_config(state: State) -> GoalieBodyConfig:
 				c.glove_pos.y += 0.06
 				c.blocker_pos.y += 0.06
 			_apply_elevated_shot_reaction(c)
-		State.READY:
+		State.READY, State.RECOVERING:
 			# Half-down active stance: knees bent, weight forward, gloves more
 			# forward and slightly lower. Pads stay upright but lower body sits
 			# closer to the ice — closer to butterfly so the drop is a shorter
 			# travel. Player-readable: distinct silhouette from standing.
+			# RECOVERING shares this pose: real goalies push up FROM butterfly
+			# INTO a ready stance, not all the way to fully standing. If the
+			# threat eases after recovery, the state becomes STANDING and the
+			# body lerps the rest of the way up; if it persists the body is
+			# already at READY and just stays there — single smooth rising
+			# motion, no up-then-back-down overshoot.
 			c.left_pad_pos  = Vector3(-0.22 - _five_hole_openness, 0.40, -0.18)
 			c.left_pad_rot  = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING, -10.0)
 			c.right_pad_pos = Vector3( 0.22 + _five_hole_openness, 0.40, -0.18)
