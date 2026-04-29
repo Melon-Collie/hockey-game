@@ -1,26 +1,25 @@
 class_name Goalie
 extends Node3D
 
-@export var stick_enabled: bool = false
-
+# `_blocker` is the root of the blocker-hand assembly: blocker pad + stick
+# (shaft, paddle, blade) all rigidly attached. Driven by a single transform
+# (`blocker_pos` + `blocker_rot` from the body config). The stick geometry
+# is baked into the mesh — different states get the blade in the right place
+# via different blocker rotations, not by tracking the blade independently.
+# Collision lives on a child StaticBody3D inside the assembly.
 @onready var _left_pad: StaticBody3D = $LeftPad
 @onready var _right_pad: StaticBody3D = $RightPad
 @onready var _body: StaticBody3D = $Body
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
-@onready var _blocker: StaticBody3D = $Blocker
-@onready var _stick: StaticBody3D = $Stick
+@onready var _blocker: Node3D = $Blocker
 
 @onready var _left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var _right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
 @onready var _body_mesh: MeshInstance3D = $Body/MeshInstance3D
 @onready var _head_mesh: MeshInstance3D = $Head/MeshInstance3D
 @onready var _glove_mesh: MeshInstance3D = $Glove/MeshInstance3D
-@onready var _blocker_mesh: MeshInstance3D = $Blocker/MeshInstance3D
-
-func _ready() -> void:
-	_stick.collision_layer = Constants.LAYER_WALLS if stick_enabled else 0
-	_stick.visible = stick_enabled
+@onready var _blocker_mesh: MeshInstance3D = $Blocker/BlockerPadMesh
 
 func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Color) -> void:
 	var jersey_mat := StandardMaterial3D.new()
@@ -52,8 +51,11 @@ func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float
 	else:
 		_glove.position = _glove.position.move_toward(config.glove_pos, glove_max_step)
 		_glove.rotation_degrees = _glove.rotation_degrees.lerp(config.glove_rot, t)
+	# Blocker assembly = blocker pad + stick (shaft, paddle, blade) as one rigid
+	# unit. Position/rotation drive the whole thing; stick angle is baked into
+	# the child mesh layout. Per-state `blocker_rot` controls the stick's lean
+	# (forward tilt for blade-on-ice in standing, flatter for butterfly, etc).
 	_lerp_part(_blocker,   config.blocker_pos,   config.blocker_rot,   t)
-	_lerp_part(_stick,     config.stick_pos,     config.stick_rot,     t)
 
 func set_goalie_position(x: float, z: float) -> void:
 	global_position = Vector3(x, 0.0, z)
@@ -64,6 +66,6 @@ func set_goalie_rotation_y(y: float) -> void:
 func get_goalie_rotation_y() -> float:
 	return rotation.y
 
-func _lerp_part(part: StaticBody3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
+func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
 	part.position = part.position.lerp(target_pos, t)
 	part.rotation_degrees = part.rotation_degrees.lerp(target_rot_deg, t)

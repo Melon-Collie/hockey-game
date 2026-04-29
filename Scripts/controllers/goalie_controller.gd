@@ -820,6 +820,16 @@ func _get_config(state: State) -> GoalieBodyConfig:
 	# active pad-angling behaviour.
 	const PAD_TOE_OUT_DEG_STANDING: float = 8.0
 	const PAD_TOE_OUT_DEG_BUTTERFLY: float = 12.0
+	# Blocker assembly forward tilt per state. The stick mesh is authored
+	# extending along the assembly's local -Y (down) at rest; rotating around
+	# +X tilts the entire stick (paddle + blade) forward toward the goalie's
+	# front, putting the blade on the ice in front of the pads. Larger tilt =
+	# blade further forward. Initial guesses based on hand height vs blade-on-
+	# ice (acos(hand_y / stick_length)); tune in playtest once the mesh is in.
+	const STICK_TILT_STANDING: float = 36.0    # hand y=1.24, stick ~1.5m → ~36°
+	const STICK_TILT_READY: float = 52.0       # hand y=0.94 → ~52°
+	const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
+	const STICK_TILT_RVH: float = 65.0
 	match state:
 		State.STANDING:
 			c.left_pad_pos  = Vector3(-0.22 - _five_hole_openness, 0.44, -0.20)
@@ -831,11 +841,9 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.head_pos      = Vector3(0.0,  1.69,  0.08)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.38, 1.24, -0.18)
-			c.blocker_rot   = Vector3.ZERO
+			c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, 0.0)
 			c.glove_pos     = Vector3(-0.35, 1.19, -0.18)
 			c.glove_rot     = Vector3.ZERO
-			c.stick_pos     = Vector3(0.0,  0.02,  -0.25)
-			c.stick_rot     = Vector3.ZERO
 			# Slapper tell: hands raised slightly to a half-ready position.
 			# Pose-only — does not commit butterfly. Runs before elevated-shot
 			# reach so a real elevated shot can still override hand position.
@@ -862,11 +870,9 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.head_pos      = Vector3(0.0,  1.40, -0.22)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.44, 0.94, -0.32)
-			c.blocker_rot   = Vector3.ZERO
+			c.blocker_rot   = Vector3(STICK_TILT_READY, 0.0, 0.0)
 			c.glove_pos     = Vector3(-0.42, 0.90, -0.32)
 			c.glove_rot     = Vector3.ZERO
-			c.stick_pos     = Vector3(0.0,  0.02, -0.28)
-			c.stick_rot     = Vector3.ZERO
 			if _reading_slapper_tell:
 				c.glove_pos.y += 0.06
 				c.blocker_pos.y += 0.06
@@ -881,13 +887,14 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.head_pos      = Vector3(0.0,  0.99,  0.08)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.46, 0.49, -0.18)
-			c.blocker_rot   = Vector3.ZERO
+			c.blocker_rot   = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
 			c.glove_pos     = Vector3(-0.42, 0.44, -0.18)
 			c.glove_rot     = Vector3.ZERO
-			c.stick_pos     = Vector3(0.0,  0.02,  -0.30)
-			c.stick_rot     = Vector3.ZERO
 			_apply_elevated_shot_reaction(c)
 		State.RVH_LEFT:
+			# RVH stick swings toward the post (negative-X side for catches_left
+			# goalie). Z rotation rolls the stick laterally so the blade points
+			# along the goal line toward the post rather than straight forward.
 			c.left_pad_pos  = Vector3( 0.04, 0.14, 0.0)
 			c.left_pad_rot  = Vector3(0.0, rvh_post_pad_angle, -90.0)
 			c.right_pad_pos = Vector3( 0.45, 0.33, 0.0)
@@ -899,9 +906,7 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.glove_pos     = Vector3(-0.12, 0.69, -0.18)
 			c.glove_rot     = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.40, 0.64, -0.18)
-			c.blocker_rot   = Vector3.ZERO
-			c.stick_pos     = Vector3( 0.20, 0.02, -0.20)
-			c.stick_rot     = Vector3.ZERO
+			c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0, -25.0)
 		State.RVH_RIGHT:
 			c.right_pad_pos = Vector3(-0.04, 0.14, 0.0)
 			c.right_pad_rot = Vector3(0.0, -rvh_post_pad_angle,  90.0)
@@ -912,11 +917,9 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.head_pos      = Vector3( 0.02, 1.19,  0.08)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.12, 0.69, -0.18)
-			c.blocker_rot   = Vector3.ZERO
+			c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0,  25.0)
 			c.glove_pos     = Vector3(-0.40, 0.64, -0.18)
 			c.glove_rot     = Vector3.ZERO
-			c.stick_pos     = Vector3(-0.20, 0.02, -0.20)
-			c.stick_rot     = Vector3.ZERO
 	if not catches_left:
 		var tmp_pos: Vector3 = c.glove_pos
 		var tmp_rot: Vector3 = c.glove_rot
