@@ -12,7 +12,7 @@ extends Node3D
 @onready var _body: StaticBody3D = $Body
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
-@onready var _blocker: Node3D = $Blocker
+@onready var _blocker: StaticBody3D = $Blocker
 
 @onready var _left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var _right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
