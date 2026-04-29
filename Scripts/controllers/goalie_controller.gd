@@ -135,6 +135,12 @@ extends Node
 @export var glove_max_x_inward: float = -0.10    # max cross-body reach
 @export var glove_max_z_reach: float = 0.10      # extra forward Z at full extension
 @export var glove_max_yaw_deg: float = 60.0      # cap on glove Y rotation toward puck
+# Glove movement speed during shot reactions. Slower than `reaction_lerp_speed`
+# so the goalie's hand doesn't perfectly beat the puck to the spot — limited
+# by realistic arm travel time. Big reaches partially miss; small reaches
+# still close in time. ~6 means the glove is ≈45% of the way to target after
+# 100 ms (vs ~85% at the full reaction lerp speed).
+@export var glove_react_lerp_speed: float = 6.0
 
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
@@ -745,7 +751,14 @@ func _update_body_parts(delta: float) -> void:
 		lerp_t = recovery_lerp_speed * delta
 	else:
 		lerp_t = part_lerp_speed * delta
-	goalie.apply_body_config(config, lerp_t)
+	# Glove uses a slower lerp during elevated shot reactions so the catch
+	# doesn't perfectly beat the puck to the spot — long reaches partially
+	# miss because the arm physically can't get there in time. -1.0 = use the
+	# shared lerp_t for the glove (no override).
+	var glove_lerp_t: float = -1.0
+	if _reacting_to_shot and _shot_is_elevated:
+		glove_lerp_t = glove_react_lerp_speed * delta
+	goalie.apply_body_config(config, lerp_t, glove_lerp_t)
 
 func _get_config(state: State) -> GoalieBodyConfig:
 	var c := GoalieBodyConfig.new()

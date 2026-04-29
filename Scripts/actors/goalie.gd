@@ -36,12 +36,14 @@ func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Colo
 	_glove_mesh.material_override = pads_mat.duplicate()
 	_blocker_mesh.material_override = pads_mat.duplicate()
 
-func apply_body_config(config: GoalieBodyConfig, t: float) -> void:
+func apply_body_config(config: GoalieBodyConfig, t: float, glove_t: float = -1.0) -> void:
 	_lerp_part(_left_pad,  config.left_pad_pos,  config.left_pad_rot,  t)
 	_lerp_part(_right_pad, config.right_pad_pos, config.right_pad_rot, t)
 	_lerp_part(_body,      config.body_pos,      config.body_rot,      t)
 	_lerp_part(_head,      config.head_pos,      config.head_rot,      t)
-	_lerp_part(_glove,     config.glove_pos,     config.glove_rot,     t)
+	# Glove can opt into a slower lerp during shot reactions so the catch
+	# isn't perfectly timed — real goalies don't snap the glove to the spot.
+	_lerp_part(_glove,     config.glove_pos,     config.glove_rot,     t if glove_t < 0.0 else glove_t)
 	_lerp_part(_blocker,   config.blocker_pos,   config.blocker_rot,   t)
 	_lerp_part(_stick,     config.stick_pos,     config.stick_rot,     t)
 
