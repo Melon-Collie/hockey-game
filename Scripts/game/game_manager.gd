@@ -7,7 +7,7 @@ extends Node
 #   WorldStateCodec      — RPC-wire serialization for world state + stats
 #   ShotOnGoalTracker    — pending-shot state machine + assist crediting
 #   HitTracker           — cross-team hit validation + stat crediting
-#   PhaseCoordinator     — phase-entry side effects, goal pipeline
+#   PhaseCoordinator     — phase-entry side effects, goal pipeline, replay cinematic
 #   SlotSwapCoordinator  — mid-game slot swap request/confirm
 #
 # The public signals below are re-exposed from collaborators so HUD / Camera /
@@ -501,20 +501,14 @@ func _wire_subsystems() -> void:
 	_state_buffer_manager = StateBufferManager.new()
 	_state_buffer_manager.setup(_registry, goalie_controllers)
 
-	# Goal-replay cinematic now runs on every peer against its own broadcast
-	# buffer, so host and clients all see the same 8-second instant-replay
-	# (clients used to see actors freeze in place because broadcasts were
-	# gated). The host's _on_goal_replay_stopped advances the state machine
-	# back to FACEOFF_PREP; clients let the next world-state broadcast
-	# drive that transition naturally, so that handler stays host-only.
+	# Goal-replay cinematic: every peer has its own recorder ring-buffer and
+	# driver so host and clients all see the same 8-second instant-replay.
+	# Driver is a Node so GameManager owns add_child / queue_free; cinematic
+	# logic (start/stop, signal wiring) lives in PhaseCoordinator.
 	_recorder = ReplayRecorder.new()
 	_recorder.setup()
 	_goal_replay_driver = GoalReplayDriver.new()
 	add_child(_goal_replay_driver)
-	_goal_replay_driver.replay_started.connect(replay_started.emit)
-	_goal_replay_driver.replay_stopped.connect(replay_stopped.emit)
-	if NetworkManager.is_host:
-		_goal_replay_driver.replay_stopped.connect(_on_goal_replay_stopped)
 
 	_codec = WorldStateCodec.new()
 	_codec.setup(_registry, _state_machine,
@@ -535,17 +529,22 @@ func _wire_subsystems() -> void:
 	_hit_tracker.hit_credited.connect(_sync_stats_to_clients)
 
 	_phase_coord = PhaseCoordinator.new()
+	var force_record: Callable = Callable()
+	if NetworkManager.is_host:
+		force_record = func() -> void:
+			var goal_frame: PackedByteArray = _codec.encode_world_state()
+			if not goal_frame.is_empty():
+				_recorder.record_frame(goal_frame, NetworkManager.local_time())
 	_phase_coord.setup(_state_machine, _registry, teams,
-			get_puck, _get_goalie_controllers, _shot_tracker, _drop_puck_if_carried)
+			get_puck, _get_goalie_controllers, _shot_tracker, _drop_puck_if_carried,
+			_recorder, _goal_replay_driver, _codec,
+			get_tree(), NetworkManager.is_host, force_record)
 	_phase_coord.goal_scored.connect(goal_scored.emit)
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
-	# Per-peer cinematic kickoff + teardown: every peer starts its own
-	# GoalReplayDriver on observed goal_scored, and stops on FACEOFF_PREP
-	# entry (which clients also reach via the next post-cinematic broadcast).
-	_phase_coord.goal_scored.connect(_on_goal_for_replay)
-	_phase_coord.phase_changed.connect(_on_phase_changed_for_replay)
+	_phase_coord.replay_started.connect(replay_started.emit)
+	_phase_coord.replay_stopped.connect(replay_stopped.emit)
 	_phase_coord.period_changed.connect(period_changed.emit)
 	_phase_coord.clock_updated.connect(_on_clock_updated_externally)
 	_phase_coord.game_over.connect(game_over.emit)
@@ -1531,6 +1530,12 @@ func on_scene_exit() -> void:
 	_registry = null
 	_codec = null
 	_state_buffer_manager = null
+	# Null PhaseCoordinator's _state_machine before stopping the driver so
+	# any replay_stopped signal that fires during teardown returns early from
+	# _on_goal_replay_stopped's guard rather than calling handle_phase_entered
+	# against partially-torn-down state.
+	if _phase_coord != null:
+		_phase_coord.cleanup()
 	if _goal_replay_driver != null:
 		_goal_replay_driver.stop()
 		_goal_replay_driver.queue_free()
@@ -1741,55 +1746,6 @@ func _should_record_to_file() -> bool:
 		# state and add nothing.
 		return phase != _last_recorded_phase
 	return true
-
-
-# ── Goal replay (host only) ──────────────────────────────────────────────────
-
-# Seconds to keep recording after the goal fires so the clip includes the puck
-# entering the net and the shooter's follow-through.  Must be well under
-# GameStateMachine.GOAL_PAUSE_DURATION (2.0 s) so the phase timer doesn't
-# expire before replay mode freezes it.
-const POST_GOAL_CAPTURE_WINDOW: float = 0.5
-
-func _on_goal_for_replay(_scoring_team: Team, _scorer: String, _a1: String, _a2: String) -> void:
-	if _recorder == null or _goal_replay_driver == null or _codec == null:
-		return
-	# Host-only: force-record the goal-moment frame in case the last broadcast
-	# was up to 25 ms ago, ensuring the exact detection instant is in the
-	# in-memory buffer. Clients can't encode_world_state (no authoritative
-	# state) — their buffer's most-recent frame is whatever just arrived,
-	# which is good enough for the cinematic.
-	if NetworkManager.is_host:
-		var goal_frame: PackedByteArray = _codec.encode_world_state()
-		if not goal_frame.is_empty():
-			_recorder.record_frame(goal_frame, NetworkManager.local_time())
-	# Let the recorder keep feeding for POST_GOAL_CAPTURE_WINDOW seconds so
-	# the clip naturally ends with the puck in the net. Each peer schedules
-	# its own — RTT-driven offsets between peers are in the tens of ms,
-	# imperceptible against an 8-second clip.
-	get_tree().create_timer(POST_GOAL_CAPTURE_WINDOW).timeout.connect(_start_goal_replay)
-
-
-func _start_goal_replay() -> void:
-	if _recorder == null or _goal_replay_driver == null or _codec == null:
-		return
-	_goal_replay_driver.start(_recorder, _codec, _registry, puck, goalie_controllers)
-
-
-func _on_phase_changed_for_replay(new_phase: GamePhase.Phase) -> void:
-	if new_phase == GamePhase.Phase.FACEOFF_PREP and _goal_replay_driver != null:
-		_goal_replay_driver.stop()
-
-
-func _on_goal_replay_stopped() -> void:
-	if _state_machine == null or _state_machine.current_phase != GamePhase.Phase.GOAL_SCORED:
-		return
-	# Replay ended naturally — drive forward via the same OT-aware branch the
-	# timer path uses (FACEOFF_PREP for regulation, GAME_OVER in sudden-death
-	# OT). Without this, every OT goal cycled back to faceoff and the game
-	# couldn't end.
-	_state_machine.advance_post_goal()
-	_phase_coord.handle_phase_entered()
 
 
 # ── Public API consumed by controllers, HUD, camera, scoreboard ──────────────
