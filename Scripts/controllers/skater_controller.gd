@@ -20,13 +20,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
-# Shift freezes facing entirely (see _apply_facing). Good range: 1.0 (very lazy) – 3.0 (snappy).
+# Shift freezes facing entirely (see SkaterPoseCoordinator.apply_facing). Good range: 1.0 (very lazy) – 3.0 (snappy).
 @export var facing_drag_speed: float = 3.0
 @export var facing_drag_speed_braking: float = 8.0
 
 # ── Blade / Stick / Top-Hand IK Tuning ────────────────────────────────────────
 # Blade world-space Y. 0.0 = ice surface. Converted to upper-body-local via
-# _blade_y_local() before any IK or pose call, so the blade always sits at a
+# SkaterIKCoordinator.blade_y_local() before any IK or pose call, so the blade always sits at a
 # fixed world height regardless of where the upper body anchor is placed in the
 # scene. This also means crouching (block stance) doesn't pull the blade
 # through the ice — the local Y compensates automatically.
@@ -171,24 +171,15 @@ var _game_state: Node = null
 var _is_host: bool = false
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
-var _facing: Vector2 = Vector2.DOWN
 var _blade_relative_angle: float = 0.0
-var _upper_body_angle: float = 0.0
-var _upper_body_lean: float = 0.0
-var _velocity_lean_x: float = 0.0
-var _velocity_lean_z: float = 0.0
-var _lower_body_lag: float = 0.0
-var _head_angle: float = 0.0
 var _is_elevated: bool = false
 var _aiming: SkaterAimingBehavior = SkaterAimingBehavior.new()
+var _pose: SkaterPoseCoordinator = SkaterPoseCoordinator.new()
+var _shot_pose: SkaterShotPoseCoordinator = SkaterShotPoseCoordinator.new()
+var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
 var has_puck: bool = false
-var _ik_locked_side: int = 0  # +1 = exited right, -1 = exited left, 0 = unlocked
 var is_replaying: bool = false
-var _prev_facing_angle: float = 0.0
-var _prev_upper_body_angle_for_vel: float = 0.0
-var _facing_angular_velocity: float = 0.0
-var _upper_body_angular_velocity: float = 0.0
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
@@ -199,11 +190,13 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	process_physics_priority = -1  # Run before Skater.move_and_slide
 	skater.body_checked_player.connect(_on_body_checked_player)
 	skater.body_block_hit.connect(_on_body_block_hit)
+	_ik.setup(skater, self)
+	_shot_pose.setup(skater, _sm, _aiming, _ik, self)
 	var _cb := SkaterStateMachine.Callbacks.new()
-	_cb.apply_blade_from_mouse = _apply_blade_from_mouse
-	_cb.apply_slapper_blade_position = _apply_slapper_blade_position
-	_cb.apply_wrister_follow_through = _apply_wrister_follow_through
-	_cb.apply_slapper_follow_through = _apply_slapper_follow_through
+	_cb.apply_blade_from_mouse = _ik.apply_blade_from_mouse
+	_cb.apply_slapper_blade_position = _shot_pose.apply_slapper_blade_position
+	_cb.apply_wrister_follow_through = _shot_pose.apply_wrister_follow_through
+	_cb.apply_slapper_follow_through = _shot_pose.apply_slapper_follow_through
 	_cb.enter_shot_block = _enter_shot_block
 	_cb.enter_slapper_charge = _enter_slapper_charge
 	_cb.transition_to_skating = _transition_to_skating
@@ -215,8 +208,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.apply_slapper_velocity_drag = _apply_slapper_velocity_drag
 	_cb.apply_block_movement = _apply_block_movement
 	_sm.setup(_cb, _aiming)
-	_prev_facing_angle = atan2(_facing.x, _facing.y)
-	_prev_upper_body_angle_for_vel = _upper_body_angle
+	_pose.setup(skater, _sm, self)
 
 func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction: Vector3) -> void:
 	if not _is_host:
@@ -240,8 +232,8 @@ func _process_input(input: InputState, delta: float) -> void:
 	skater.is_elevated = _is_elevated
 
 	_apply_movement(input, delta)
-	_apply_velocity_lean(delta)
-	_apply_facing(input, delta)
+	_pose.apply_velocity_lean(delta)
+	_pose.apply_facing(input, delta)
 	_apply_state(input, delta)
 	# Save blade/hand world positions before upper body rotation. After the body
 	# rotates toward the blade, re-expressing these in the new local frame gives
@@ -249,22 +241,18 @@ func _process_input(input: InputState, delta: float) -> void:
 	# as if the body has fully caught up, independent of lerp speed.
 	var blade_world_pre: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
 	var hand_world_pre: Vector3 = skater.upper_body_to_global(skater.get_top_hand_position())
-	_apply_upper_body(delta)
-	_apply_head_tracking(input, delta)
+	_pose.apply_upper_body(delta)
+	_pose.apply_head_tracking(input, delta)
 	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
-	_update_bottom_hand()
+	_ik.update_bottom_hand()
 	# All mesh updates happen after upper body rotation is finalised so look_at
 	# orientations are computed against the correct parent transform this frame.
 	skater.update_stick_mesh()
 	skater.update_arm_mesh()
 	skater.update_bottom_arm_mesh()
-	if delta > 0.0 and not is_replaying:
-		var cur_fa: float = atan2(_facing.x, _facing.y)
-		_facing_angular_velocity = angle_difference(_prev_facing_angle, cur_fa) / delta
-		_upper_body_angular_velocity = angle_difference(_prev_upper_body_angle_for_vel, _upper_body_angle) / delta
-		_prev_facing_angle = cur_fa
-		_prev_upper_body_angle_for_vel = _upper_body_angle
+	if not is_replaying:
+		_pose.update_angular_velocities(delta)
 
 # ── Network State ─────────────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
@@ -278,8 +266,8 @@ func get_network_state() -> SkaterNetworkState:
 	state.top_hand_position = skater.get_top_hand_position()
 	state.upper_body_rotation_y = skater.get_upper_body_rotation()
 	state.facing = skater.get_facing()
-	state.facing_angular_velocity = _facing_angular_velocity
-	state.upper_body_angular_velocity = _upper_body_angular_velocity
+	state.facing_angular_velocity = _pose.facing_angular_velocity
+	state.upper_body_angular_velocity = _pose.upper_body_angular_velocity
 	state.last_processed_host_timestamp = last_processed_host_timestamp
 	state.is_ghost = skater.is_ghost
 	state.shot_state = _sm.get_state() as int
@@ -302,7 +290,7 @@ func apply_replay_state(state: SkaterNetworkState) -> void:
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
 	skater.set_blade_position(state.blade_position)
-	_update_bottom_hand()
+	_ik.update_bottom_hand()
 	skater.update_stick_mesh()
 	skater.update_arm_mesh()
 	skater.update_bottom_arm_mesh()
@@ -352,49 +340,6 @@ func teleport_to(pos: Vector3) -> void:
 func _apply_state(input: InputState, delta: float) -> void:
 	_sm.dispatch(skater, input, delta, has_puck, _game_state.is_movement_locked())
 
-# ── Follow-Through Callbacks ──────────────────────────────────────────────────
-func _apply_wrister_follow_through() -> void:
-	var t: float = 1.0 - (_sm.follow_through_timer / follow_through_duration)
-	var arc: float = sin(t * PI)
-	var stick_horiz: float = _stick_horiz()
-	var local_dir := Vector3(sin(_blade_relative_angle), 0.0, -cos(_blade_relative_angle))
-	var hand_pos := skater.shoulder.position
-	hand_pos.y = hand_rest_y + arc * wrister_follow_through_hand_y
-	var intended_target: Vector3 = hand_pos + local_dir * stick_horiz
-	intended_target.y = _blade_y_local() + arc * wrister_follow_through_blade_lift
-	var local_target: Vector3 = skater.clamp_blade_to_walls(intended_target)
-	var clamp_delta_xz := Vector3(
-		local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
-	if clamp_delta_xz.length_squared() > 0.0:
-		hand_pos.x += clamp_delta_xz.x
-		hand_pos.z += clamp_delta_xz.z
-	var net_world: Vector3 = _clamp_blade_from_net(skater.upper_body_to_global(local_target))
-	var net_local: Vector3 = skater.upper_body_to_local(net_world)
-	hand_pos.x += net_local.x - local_target.x
-	hand_pos.z += net_local.z - local_target.z
-	local_target = net_local
-	skater.set_top_hand_position(hand_pos)
-	skater.set_blade_position(local_target)
-
-func _apply_slapper_follow_through() -> void:
-	var t: float = 1.0 - (_sm.follow_through_timer / follow_through_duration)
-	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
-	var shot_xz := Vector2(_sm.shot_dir.x, _sm.shot_dir.z)
-	if shot_xz.length() > 0.001:
-		shot_xz = shot_xz.normalized()
-	var blade_pos := Vector3(
-		skater.shoulder.position.x + blade_side_sign * slapper_blade_x + shot_xz.x * t * slapper_follow_through_arc_dist,
-		lerpf(slapper_wind_up_height, _blade_y_local(), smoothstep(0.0, 1.0, t)),
-		skater.shoulder.position.z + slapper_blade_z + shot_xz.y * t * slapper_follow_through_arc_dist)
-	blade_pos = skater.clamp_blade_to_walls(blade_pos)
-	blade_pos = skater.upper_body_to_local(_clamp_blade_from_net(skater.upper_body_to_global(blade_pos)))
-	var hand_pos := Vector3(
-		skater.shoulder.position.x,
-		hand_rest_y + t * wrister_follow_through_hand_y,
-		skater.shoulder.position.z)
-	skater.set_top_hand_position(hand_pos)
-	skater.set_blade_position(blade_pos)
-
 # ── State Helpers ─────────────────────────────────────────────────────────────
 func _transition_to_skating() -> void:
 	# Lost-charge feedback: if we're leaving an active charge state without
@@ -411,11 +356,7 @@ func _transition_to_skating() -> void:
 	else:
 		_sm.set_state(State.SKATING_WITHOUT_PUCK)
 	_sm.shot_dir = Vector3.ZERO
-	_upper_body_angle = 0.0
-	_upper_body_lean = 0.0
-	_velocity_lean_x = 0.0
-	_velocity_lean_z = 0.0
-	_lower_body_lag = 0.0
+	_pose.reset_lean_and_lag()
 	skater.set_lower_body_lag(0.0)
 	skater.set_slapper_mode(false)
 	skater.set_slapper_zone(false)
@@ -433,8 +374,8 @@ func _enter_shot_block() -> void:
 	var to_puck: Vector3 = puck.global_position - skater.global_position
 	to_puck.y = 0.0
 	if to_puck.length() > 0.01:
-		_facing = Vector2(to_puck.x, to_puck.z).normalized()
-		skater.set_facing(_facing)
+		_pose.facing = Vector2(to_puck.x, to_puck.z).normalized()
+		skater.set_facing(_pose.facing)
 
 func _enter_slapper_charge(input: InputState) -> void:
 	_aiming.reset_slapper()
@@ -443,25 +384,21 @@ func _enter_slapper_charge(input: InputState) -> void:
 	var to_mouse := Vector2(
 		input.mouse_world_pos.x - skater.global_position.x,
 		input.mouse_world_pos.z - skater.global_position.z)
-	_facing = to_mouse.normalized() if to_mouse.length() > move_deadzone else _facing
-	skater.set_facing(_facing)
+	_pose.facing = to_mouse.normalized() if to_mouse.length() > move_deadzone else _pose.facing
+	skater.set_facing(_pose.facing)
 	# Lock aim direction from the actual blade-side release point → mouse.
 	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
 	var blade_local := Vector3(
 		skater.shoulder.position.x + blade_side_sign * slapper_blade_x,
-		_blade_y_local(),
+		_ik.blade_y_local(),
 		skater.shoulder.position.z + slapper_blade_z)
 	var blade_world: Vector3 = skater.upper_body_to_global(blade_local)
 	var to_mouse_from_blade := Vector2(
 		input.mouse_world_pos.x - blade_world.x,
 		input.mouse_world_pos.z - blade_world.z)
-	_sm.locked_slapper_dir = to_mouse_from_blade.normalized() if to_mouse_from_blade.length() > move_deadzone else _facing
+	_sm.locked_slapper_dir = to_mouse_from_blade.normalized() if to_mouse_from_blade.length() > move_deadzone else _pose.facing
 	skater.slapper_aim_dir = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
-	_upper_body_angle = 0.0
-	_upper_body_lean = 0.0
-	_velocity_lean_x = 0.0
-	_velocity_lean_z = 0.0
-	_lower_body_lag = 0.0
+	_pose.reset_lean_and_lag()
 	skater.set_upper_body_rotation(0.0)
 	skater.set_upper_body_lean(0.0)
 	skater.set_lower_body_lean(0.0, 0.0)
@@ -528,42 +465,6 @@ func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
 
-func _apply_slapper_blade_position() -> void:
-	# Slapper has a fixed blade pose offset from the shoulder — separate from
-	# the IK flow (this is a charged pre-shot pose, not player-aimed). Hand
-	# sits at the shoulder XZ at `hand_rest_y`; blade XZ is offset from the
-	# shoulder by slapper_blade_x/z; Y lerps from _blade_y_local() (ice) up to
-	# slapper_wind_up_height during the wind-up charge.
-	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
-	var wind_up_t: float = clampf(_aiming.slapper_charge_timer / slapper_wind_up_time, 0.0, 1.0)
-	var current_blade_y: float = lerpf(_blade_y_local(), slapper_wind_up_height, wind_up_t)
-	var pos := Vector3(
-			skater.shoulder.position.x + blade_side_sign * slapper_blade_x,
-			current_blade_y,
-			skater.shoulder.position.z + slapper_blade_z)
-	pos = skater.clamp_blade_to_walls(pos)
-	var blade_world: Vector3 = skater.upper_body_to_global(pos)
-	var clamped_heel: Vector3 = blade_world
-	if has_puck:
-		clamped_heel = _clamp_blade_from_goalies(clamped_heel)
-	var hand_pos := Vector3(skater.shoulder.position.x, hand_rest_y, skater.shoulder.position.z)
-	var hand_world: Vector3 = skater.upper_body_to_global(hand_pos)
-	var shaft: Vector3 = clamped_heel - hand_world
-	shaft.y = 0.0
-	var contact_world: Vector3 = clamped_heel
-	if shaft.length() > 0.001:
-		contact_world = clamped_heel + shaft.normalized() * skater.blade_length * 0.5
-	var clamped_contact: Vector3 = _clamp_blade_from_net(contact_world)
-	if clamped_contact != contact_world:
-		var delta: Vector3 = clamped_contact - contact_world
-		clamped_heel += delta
-		if has_puck:
-			_do_release(delta.normalized(), goalie_strip_power)
-	if clamped_heel != blade_world:
-		pos = skater.upper_body_to_local(clamped_heel)
-	skater.set_top_hand_position(hand_pos)
-	skater.set_blade_position(pos)
-
 func _update_wrister_charge(input: InputState) -> void:
 	if not has_puck:
 		return
@@ -619,301 +520,6 @@ func _effective_one_timer_leniency() -> float:
 
 func _is_in_slapper_state() -> bool:
 	return _sm.get_state() in [State.SLAPPER_CHARGE_WITH_PUCK, State.SLAPPER_CHARGE_WITHOUT_PUCK]
-
-# Clamps `point` (either the puck contact point or the blade heel during
-# follow-through) out of the net exclusion zone. The zone is NET_HALF_WIDTH +
-# NET_PUCK_BUFFER wide on each side and NET_DEPTH + NET_PUCK_BUFFER deep from
-# the goal line. The buffer applies uniformly to both the side posts and the
-# back board. The point always escapes through the nearest face — never the
-# front mouth.
-func _clamp_blade_from_net(point: Vector3) -> Vector3:
-	if point.y > GameRules.NET_HEIGHT:
-		return point
-	var result: Vector3 = point
-	var gl: float           = GameRules.GOAL_LINE_Z
-	var eff_depth: float    = GameRules.NET_DEPTH + GameRules.NET_PUCK_BUFFER
-	var hw: float           = GameRules.NET_HALF_WIDTH + GameRules.NET_PUCK_BUFFER
-	# +Z net
-	if result.z >= gl and result.z < gl + eff_depth:
-		var local_depth: float = result.z - gl
-		if abs(result.x) < hw:
-			var d_back: float  = eff_depth - local_depth
-			var d_left: float  = result.x + hw
-			var d_right: float = hw - result.x
-			if d_back <= d_left and d_back <= d_right:
-				result.z = gl + eff_depth
-			elif d_left <= d_right:
-				result.x = -hw
-			else:
-				result.x = hw
-	# -Z net
-	elif result.z <= -gl and result.z > -gl - eff_depth:
-		var local_depth: float = -gl - result.z
-		if abs(result.x) < hw:
-			var d_back: float  = eff_depth - local_depth
-			var d_left: float  = result.x + hw
-			var d_right: float = hw - result.x
-			if d_back <= d_left and d_back <= d_right:
-				result.z = -gl - eff_depth
-			elif d_left <= d_right:
-				result.x = -hw
-			else:
-				result.x = hw
-	return result
-
-# Pushes blade_world out of every goalie's collision zone and strips the puck
-# on contact. Standing/RVH use an XZ cylinder; butterfly uses an oriented box
-# around the leg pads. Returns the adjusted world position.
-func _clamp_blade_from_goalies(blade_world: Vector3) -> Vector3:
-	if not _game_state.has_method("get_goalie_data"):
-		return blade_world
-	var goalie_data: Array[Dictionary] = _game_state.get_goalie_data()
-	var result: Vector3 = blade_world
-	for data: Dictionary in goalie_data:
-		var gpos: Vector3 = data["position"]
-		if data["is_butterfly"]:
-			var prev: Vector3 = result
-			result = _clamp_blade_butterfly_box(result, gpos, data["rotation_y"])
-			if result != prev and has_puck:
-				break
-		else:
-			var to_blade := Vector2(result.x - gpos.x, result.z - gpos.z)
-			var dist: float = to_blade.length()
-			if dist < goalie_block_radius:
-				var push_dir: Vector2 = to_blade.normalized() if dist > 0.001 else Vector2(0.0, -sign(gpos.z) if gpos.z != 0.0 else 1.0)
-				result.x = gpos.x + push_dir.x * goalie_block_radius
-				result.z = gpos.z + push_dir.y * goalie_block_radius
-				if has_puck:
-					_do_release(Vector3(push_dir.x, 0.0, push_dir.y), goalie_strip_power)
-					break
-	return result
-
-# Pushes blade_world out of the goalie's butterfly leg-pad box in goalie local XZ.
-# Strips the puck on contact. Returns the adjusted world position (unchanged if outside).
-func _clamp_blade_butterfly_box(blade_world: Vector3, gpos: Vector3, rot_y: float) -> Vector3:
-	var dx: float = blade_world.x - gpos.x
-	var dz: float = blade_world.z - gpos.z
-	var local_x: float = dx * cos(rot_y) + dz * sin(rot_y)
-	var local_z: float = -dx * sin(rot_y) + dz * cos(rot_y)
-	if abs(local_x) >= butterfly_pad_half_x or abs(local_z) >= butterfly_pad_half_z:
-		return blade_world
-	# Inside box — escape along shortest axis.
-	var ox: float = butterfly_pad_half_x - abs(local_x)
-	var oz: float = butterfly_pad_half_z - abs(local_z)
-	var escaped_local_x: float
-	var escaped_local_z: float
-	if ox < oz:
-		escaped_local_x = butterfly_pad_half_x * signf(local_x) if local_x != 0.0 else butterfly_pad_half_x
-		escaped_local_z = local_z
-	else:
-		escaped_local_x = local_x
-		escaped_local_z = butterfly_pad_half_z * signf(local_z) if local_z != 0.0 else butterfly_pad_half_z
-	var world_dx: float = escaped_local_x * cos(rot_y) - escaped_local_z * sin(rot_y)
-	var world_dz: float = escaped_local_x * sin(rot_y) + escaped_local_z * cos(rot_y)
-	var result: Vector3 = blade_world
-	result.x = gpos.x + world_dx
-	result.z = gpos.z + world_dz
-	if has_puck:
-		var escape := Vector2(world_dx - dx, world_dz - dz)
-		var push_dir: Vector2 = escape.normalized() if escape.length_squared() > 0.0001 else Vector2(world_dx, world_dz).normalized()
-		_do_release(Vector3(push_dir.x, 0.0, push_dir.y), goalie_strip_power)
-	return result
-
-# ── Blade: From Mouse (Top-Hand IK) ───────────────────────────────────────────
-# Input is treated as a desired blade position. The top hand is solved as a
-# consequence, clamped to an asymmetric ROM. See domain/rules/top_hand_ik.gd.
-func _apply_blade_from_mouse(input: InputState, _delta: float) -> void:
-	var mouse_world: Vector3 = input.mouse_world_pos
-	mouse_world.y = 0.0
-
-	var shoulder_world: Vector3 = skater.upper_body_to_global(skater.shoulder.position)
-	shoulder_world.y = 0.0
-	var to_mouse: Vector3 = mouse_world - shoulder_world
-
-	if to_mouse.length() < 0.01:
-		return
-
-	# Convert mouse world position into upper-body-local XZ for the solver.
-	var mouse_local: Vector3 = skater.upper_body_to_local(mouse_world)
-	var desired_blade_xz := Vector2(mouse_local.x, mouse_local.z)
-
-	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
-
-	# Solve IK — returns (hand, blade) in upper-body-local space.
-	var ik: Dictionary = TopHandIK.solve(
-			skater.shoulder.position,
-			desired_blade_xz,
-			blade_side_sign,
-			_ik_config())
-	var hand_local: Vector3 = ik.hand
-	var blade_local: Vector3 = ik.blade
-	# Apply pitch correction to blade Y after IK so the IK geometry (hand-to-blade
-	# vertical drop) stays consistent, but the blade's world Y stays at blade_height.
-	blade_local.y = _blade_y_pitch_corrected(blade_local.z)
-
-	# Wall clamp on the solved blade. Wall-pin auto-release (when carrying).
-	var intended_blade: Vector3 = blade_local
-	var wall_clamped: Vector3 = skater.clamp_blade_to_walls(blade_local)
-
-	if has_puck:
-		var squeeze: float = skater.get_wall_squeeze(intended_blade, wall_clamped)
-		if ShotMechanics.should_release_on_wall_pin(squeeze, skater.wall_squeeze_threshold):
-			var wall_normal: Vector3 = skater.get_blade_wall_normal()
-			if wall_normal.length() > 0.0:
-				_do_release(wall_normal.normalized(), 3.0)
-			else:
-				var nudge: Vector3 = skater.global_transform.basis * (-wall_clamped.normalized())
-				_do_release(nudge.normalized(), 3.0)
-
-	# When the blade got pulled back by the wall clamp, slide the hand by the
-	# same horizontal offset so |hand − blade| stays at stick_horiz. Prevents
-	# the stick mesh from compressing; reads as "pulling the stick back".
-	var clamp_delta_xz := Vector3(
-			wall_clamped.x - intended_blade.x, 0.0, wall_clamped.z - intended_blade.z)
-	if clamp_delta_xz.length_squared() > 0.0:
-		hand_local.x += clamp_delta_xz.x
-		hand_local.z += clamp_delta_xz.z
-
-	# Goalie body clamp (strips puck on contact) + net exclusion zone.
-	# All work in world space; convert back once at the end.
-	var heel_world: Vector3 = skater.upper_body_to_global(wall_clamped)
-	var clamped_heel: Vector3 = heel_world
-	if has_puck:
-		clamped_heel = _clamp_blade_from_goalies(clamped_heel)
-	# Compute the puck contact point (mid-blade) and clamp that against the net,
-	# not the heel. This is geometrically correct regardless of blade angle.
-	var hand_world: Vector3 = skater.upper_body_to_global(hand_local)
-	var shaft: Vector3 = clamped_heel - hand_world
-	shaft.y = 0.0
-	var contact_world: Vector3 = clamped_heel
-	if shaft.length() > 0.001:
-		contact_world = clamped_heel + shaft.normalized() * skater.blade_length * 0.5
-	var clamped_contact: Vector3 = _clamp_blade_from_net(contact_world)
-	if clamped_contact != contact_world:
-		var delta: Vector3 = clamped_contact - contact_world
-		clamped_heel += delta
-		if has_puck:
-			_do_release(delta.normalized(), goalie_strip_power)
-	if clamped_heel != heel_world:
-		var clamped_local: Vector3 = skater.upper_body_to_local(clamped_heel)
-		hand_local.x += clamped_local.x - wall_clamped.x
-		hand_local.z += clamped_local.z - wall_clamped.z
-		wall_clamped = clamped_local
-
-	skater.set_top_hand_position(hand_local)
-	skater.set_blade_position(wall_clamped)
-
-	# Store the blade's bearing from the shoulder for follow-through.
-	var bearing: Vector3 = wall_clamped - skater.shoulder.position
-	if Vector2(bearing.x, bearing.z).length() > 0.001:
-		_blade_relative_angle = atan2(bearing.x, -bearing.z)
-
-# ── Upper Body ────────────────────────────────────────────────────────────────
-func _apply_upper_body(delta: float) -> void:
-	if _sm.get_state() == State.SHOT_BLOCKING:
-		return
-
-	if _sm.get_state() in [State.SLAPPER_CHARGE_WITH_PUCK, State.SLAPPER_CHARGE_WITHOUT_PUCK]:
-		# Hold upper body facing the locked shot direction throughout the wind-up.
-		# Re-computed from world space each frame so the torso stays on target
-		# even if the feet pivot while skating.
-		if _sm.locked_slapper_dir.length_squared() > 0.0001:
-			var locked_world := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
-			var local_dir := skater.global_transform.basis.inverse() * locked_world
-			var locked_angle := atan2(local_dir.x, -local_dir.z)
-			var max_twist := deg_to_rad(upper_body_max_twist_deg)
-			var target: float = clampf(-locked_angle * upper_body_twist_ratio, -max_twist, max_twist)
-			_upper_body_angle = lerp_angle(_upper_body_angle, target, upper_body_return_speed * delta)
-			skater.set_upper_body_rotation(_upper_body_angle)
-		return
-
-	var target_angle: float = 0.0
-	var target_lean: float = 0.0
-	var hand_vec := Vector2(
-		skater.top_hand.position.x - skater.shoulder.position.x,
-		skater.top_hand.position.z - skater.shoulder.position.z)
-	var hand_reach: float = hand_vec.length()
-
-	if hand_reach > 0.01:
-		var reach_factor: float = clampf(hand_reach / rom_backhand_reach_max, 0.0, 1.0)
-		# Drive twist from the blade's world direction in the skater body frame.
-		# Using skater-local (not upper-body-local) gives a stable target that
-		# doesn't shrink as the body rotates — the old hand-angle approach had a
-		# dampening feedback loop that capped steady-state rotation at ~43% of the
-		# world angle. Now the body tracks 1:1 up to upper_body_max_twist_deg.
-		var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
-		var to_blade: Vector3 = blade_world - skater.global_position
-		to_blade.y = 0.0
-		if to_blade.length() > 0.01:
-			var local_dir: Vector3 = skater.global_transform.basis.inverse() * to_blade.normalized()
-			var blade_angle: float = atan2(local_dir.x, -local_dir.z)
-			var max_twist: float = deg_to_rad(upper_body_max_twist_deg)
-			target_angle = clampf(-blade_angle * upper_body_twist_ratio, -max_twist, max_twist)
-			target_lean = -reach_factor * deg_to_rad(upper_body_lean_max_deg)
-
-	_upper_body_angle = lerp_angle(_upper_body_angle, target_angle, upper_body_return_speed * delta)
-	_upper_body_lean = lerpf(_upper_body_lean, target_lean, upper_body_lean_return_speed * delta)
-	skater.set_upper_body_rotation(_upper_body_angle)
-	skater.set_upper_body_lean(_upper_body_lean + _velocity_lean_x, _velocity_lean_z)
-	skater.set_lower_body_lean(_velocity_lean_x, _velocity_lean_z)
-
-# ── Facing ────────────────────────────────────────────────────────────────────
-func _apply_facing(input: InputState, delta: float) -> void:
-	if not _sm.get_state() in [State.WRISTER_AIM, State.SLAPPER_CHARGE_WITH_PUCK,
-			State.SLAPPER_CHARGE_WITHOUT_PUCK, State.SHOT_BLOCKING]:
-		var prev_angle: float = skater.rotation.y
-		var mouse_world: Vector3 = input.mouse_world_pos
-		var to_mouse: Vector2 = Vector2(
-			mouse_world.x - skater.global_position.x,
-			mouse_world.z - skater.global_position.z
-		)
-		if to_mouse.length() > move_deadzone:
-			# Gate: prevent the body from rotating until the mouse crosses 180° and
-			# snaps the arm to the other side. When the mouse exits the reachable IK
-			# zone (rom_backhand_angle_max_deg + upper_body_max_twist_deg from forward),
-			# record which side it left from and freeze. Re-entry only from the same
-			# side unlocks — entering from the opposite side stays frozen.
-			var mouse_body_angle: float = _facing.angle_to(to_mouse.normalized())
-			var ik_gate: float = deg_to_rad(rom_backhand_angle_max_deg + upper_body_max_twist_deg)
-			if abs(mouse_body_angle) >= ik_gate:
-				_ik_locked_side = int(sign(mouse_body_angle))
-			elif _ik_locked_side == 0 or _ik_locked_side * mouse_body_angle >= 0.0:
-				_ik_locked_side = 0
-				var drag: float = facing_drag_speed_braking if input.brake else facing_drag_speed
-				_facing = _facing.lerp(to_mouse.normalized(), drag * delta).normalized()
-		skater.set_facing(_facing)
-		var turn_delta: float = angle_difference(prev_angle, skater.rotation.y)
-		_lower_body_lag = clampf(
-			_lower_body_lag - turn_delta,
-			-deg_to_rad(lower_body_lag_max_deg),
-			deg_to_rad(lower_body_lag_max_deg))
-
-	# Always decay and apply — even during locked states.
-	_lower_body_lag = lerpf(_lower_body_lag, 0.0, lower_body_lag_speed * delta)
-	skater.set_lower_body_lag(_lower_body_lag)
-
-# ── Head Tracking ─────────────────────────────────────────────────────────────
-func _apply_head_tracking(input: InputState, delta: float) -> void:
-	var mouse_local: Vector3 = skater.upper_body_to_local(input.mouse_world_pos)
-	mouse_local.y = 0.0
-	var target_angle: float = 0.0
-	if mouse_local.length() > 0.01:
-		target_angle = clampf(
-			atan2(mouse_local.x, -mouse_local.z),
-			-deg_to_rad(head_track_max_deg),
-			deg_to_rad(head_track_max_deg))
-	_head_angle = lerpf(_head_angle, target_angle, head_track_speed * delta)
-	skater.set_head_angle(_head_angle)
-
-# ── Velocity Lean ─────────────────────────────────────────────────────────────
-func _apply_velocity_lean(delta: float) -> void:
-	var cfg_max_speed: float = _movement_config().max_speed
-	var local_vel: Vector3 = skater.global_transform.basis.inverse() * skater.velocity
-	var lean_max: float = deg_to_rad(velocity_lean_max_deg)
-	var target_x: float = -clampf(local_vel.z / cfg_max_speed, -1.0, 1.0) * lean_max
-	var target_z: float =  clampf(local_vel.x / cfg_max_speed, -1.0, 1.0) * lean_max
-	_velocity_lean_x = lerpf(_velocity_lean_x, target_x, velocity_lean_speed * delta)
-	_velocity_lean_z = lerpf(_velocity_lean_z, target_z, velocity_lean_speed * delta)
 
 # ── Movement ──────────────────────────────────────────────────────────────────
 func _apply_movement(input: InputState, delta: float) -> void:
@@ -988,83 +594,3 @@ func _slapper_config() -> ShotMechanics.SlapperConfig:
 func get_attacking_goal_z() -> float:
 	return 0.0
 
-# Converts the world-space blade_height to upper-body-local Y.
-# Uses the upper body's world Y so the result is correct regardless of where
-# the skater's CharacterBody3D origin sits above the ice.
-func _blade_y_local() -> float:
-	return blade_height - skater.upper_body.global_position.y
-
-# Pitch-corrected blade Y for a given blade local Z. Used AFTER IK so the
-# IK geometry stays internally consistent (correct hand-to-blade vertical drop),
-# while the blade's final world Y is kept at blade_height despite upper-body pitch.
-# When upper_body.rotation.x = pitch, a point at local Z offset z shifts world Y
-# by -z * sin(pitch). Adding z * sin(pitch) to the local Y target cancels that out.
-func _blade_y_pitch_corrected(blade_local_z: float) -> float:
-	var base: float = _blade_y_local()
-	var pitch: float = skater.upper_body.rotation.x
-	if abs(pitch) > 0.001:
-		base += blade_local_z * sin(pitch)
-	return base
-
-func _ik_config() -> TopHandIK.Config:
-	var cfg := TopHandIK.Config.new()
-	cfg.stick_length = stick_length
-	cfg.blade_y = _blade_y_local()
-	cfg.hand_rest_y = hand_rest_y
-	cfg.hand_y_max = hand_y_max
-	cfg.rom_forehand_angle_max = deg_to_rad(rom_forehand_angle_max_deg)
-	cfg.rom_backhand_angle_max = deg_to_rad(rom_backhand_angle_max_deg)
-	cfg.rom_forehand_reach_max = rom_forehand_reach_max
-	cfg.rom_backhand_reach_max = rom_backhand_reach_max
-	return cfg
-
-func _bottom_hand_ik_config() -> BottomHandIK.Config:
-	var cfg := BottomHandIK.Config.new()
-	cfg.hand_y = bh_hand_y
-	cfg.backhand_angle = _bh_backhand_angle()
-	cfg.release_angle_max = deg_to_rad(bh_release_angle_deg)
-	cfg.release_angle_band = deg_to_rad(bh_release_angle_band_deg)
-	return cfg
-
-# Blade world angle toward the backhand side, in the skater's body frame.
-# Returns a positive value when the blade is on the backhand side; 0 on forehand.
-func _bh_backhand_angle() -> float:
-	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
-	var to_blade: Vector3 = blade_world - skater.global_position
-	to_blade.y = 0.0
-	if to_blade.length() < 0.01:
-		return 0.0
-	var skater_dir: Vector3 = skater.global_transform.basis.inverse() * to_blade.normalized()
-	var blade_angle: float = atan2(skater_dir.x, -skater_dir.z)
-	# For a lefty the backhand side is +X (positive angle); negate blade_side_sign
-	# so the result is always positive toward backhand regardless of handedness.
-	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
-	return blade_angle * -blade_side_sign
-
-# Recompute the bottom hand pose from the current top_hand + blade positions.
-# Purely reactive — does not affect blade or top-hand placement. Caller must
-# have already written the top hand and blade for this tick before calling.
-func _update_bottom_hand() -> void:
-	var blade_local: Vector3 = skater.get_blade_position()
-	var hand_local: Vector3 = skater.get_top_hand_position()
-	var grip_target_xz := Vector2(
-			lerpf(hand_local.x, blade_local.x, bottom_hand_grip_fraction),
-			lerpf(hand_local.z, blade_local.z, bottom_hand_grip_fraction))
-	# Derive grip Y from the stick shaft so the hand stays on the stick regardless
-	# of pitch lean or reach. bh_hand_y offsets for fine-tuning.
-	var grip_y: float = lerpf(hand_local.y, blade_local.y, bottom_hand_grip_fraction) + bh_hand_y
-	var cfg: BottomHandIK.Config = _bottom_hand_ik_config()
-	cfg.hand_y = grip_y
-	var bh: Vector3 = BottomHandIK.solve(
-			skater.bottom_shoulder.position,
-			grip_target_xz,
-			cfg)
-	skater.set_bottom_hand_position(bh)
-
-# Horizontal projection of the stick onto the XZ plane, given the fixed
-# vertical drop from hand to blade. Used by follow-through to keep stick
-# length consistent with the IK solver.
-func _stick_horiz() -> float:
-	var drop: float = hand_rest_y - _blade_y_local()
-	var sq: float = stick_length * stick_length - drop * drop
-	return sqrt(maxf(sq, 0.0001))

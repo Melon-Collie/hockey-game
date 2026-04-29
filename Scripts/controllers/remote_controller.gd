@@ -208,5 +208,5 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	skater.update_arm_mesh()
 	# Bottom hand is purely reactive to top_hand + blade (both already set
 	# above) and needs no network state of its own.
-	_update_bottom_hand()
+	_ik.update_bottom_hand()
 	skater.update_bottom_arm_mesh()
