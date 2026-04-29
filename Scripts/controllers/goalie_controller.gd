@@ -820,12 +820,11 @@ func _get_config(state: State) -> GoalieBodyConfig:
 	# active pad-angling behaviour.
 	const PAD_TOE_OUT_DEG_STANDING: float = 8.0
 	const PAD_TOE_OUT_DEG_BUTTERFLY: float = 12.0
-	# Blocker assembly forward tilt per state. The stick mesh is authored
-	# extending along the assembly's local -Y (down) at rest; rotating around
-	# +X tilts the entire stick (paddle + blade) forward toward the goalie's
-	# front, putting the blade on the ice in front of the pads. Larger tilt =
-	# blade further forward. Initial guesses based on hand height vs blade-on-
-	# ice (acos(hand_y / stick_length)); tune in playtest once the mesh is in.
+	# Stick assembly forward tilt per state. Authored along local -Y at rest;
+	# rotating around +X tilts the stick (paddle + blade) forward to plant
+	# the blade on the ice. Applied to the Stick child of BlockArm (NOT the
+	# pad — pad face stays forward via separate `blocker_rot`). Initial
+	# guesses based on hand height vs blade-on-ice (acos(hand_y / stick_length)).
 	const STICK_TILT_STANDING: float = 36.0    # hand y=1.24, stick ~1.5m → ~36°
 	const STICK_TILT_READY: float = 52.0       # hand y=0.94 → ~52°
 	const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
@@ -841,7 +840,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.head_pos      = Vector3(0.0,  1.69,  0.08)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.38, 1.24, -0.18)
-			c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, 0.0)
+			c.blocker_rot   = Vector3.ZERO
+			c.stick_rot     = Vector3(STICK_TILT_STANDING, 0.0, 0.0)
 			c.glove_pos     = Vector3(-0.35, 1.19, -0.18)
 			c.glove_rot     = Vector3.ZERO
 			# Slapper tell: hands raised slightly to a half-ready position.
@@ -870,7 +870,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.head_pos      = Vector3(0.0,  1.40, -0.22)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.44, 0.94, -0.32)
-			c.blocker_rot   = Vector3(STICK_TILT_READY, 0.0, 0.0)
+			c.blocker_rot   = Vector3.ZERO
+			c.stick_rot     = Vector3(STICK_TILT_READY, 0.0, 0.0)
 			c.glove_pos     = Vector3(-0.42, 0.90, -0.32)
 			c.glove_rot     = Vector3.ZERO
 			if _reading_slapper_tell:
@@ -887,7 +888,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.head_pos      = Vector3(0.0,  0.99,  0.08)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.46, 0.49, -0.18)
-			c.blocker_rot   = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
+			c.blocker_rot   = Vector3.ZERO
+			c.stick_rot     = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
 			c.glove_pos     = Vector3(-0.42, 0.44, -0.18)
 			c.glove_rot     = Vector3.ZERO
 			_apply_elevated_shot_reaction(c)
@@ -906,7 +908,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.glove_pos     = Vector3(-0.12, 0.69, -0.18)
 			c.glove_rot     = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.40, 0.64, -0.18)
-			c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0, -25.0)
+			c.blocker_rot   = Vector3.ZERO
+			c.stick_rot     = Vector3(STICK_TILT_RVH, 0.0, -25.0)
 		State.RVH_RIGHT:
 			c.right_pad_pos = Vector3(-0.04, 0.14, 0.0)
 			c.right_pad_rot = Vector3(0.0, -rvh_post_pad_angle,  90.0)
@@ -917,7 +920,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.head_pos      = Vector3( 0.02, 1.19,  0.08)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.12, 0.69, -0.18)
-			c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0,  25.0)
+			c.blocker_rot   = Vector3.ZERO
+			c.stick_rot     = Vector3(STICK_TILT_RVH, 0.0,  25.0)
 			c.glove_pos     = Vector3(-0.40, 0.64, -0.18)
 			c.glove_rot     = Vector3.ZERO
 	if not catches_left:

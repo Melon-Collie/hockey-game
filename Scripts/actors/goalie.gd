@@ -15,6 +15,8 @@ extends Node3D
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
 @onready var _block_arm: Node3D = $BlockArm
+@onready var _stick: StaticBody3D = $BlockArm/Stick
+@onready var _blocker_pad: StaticBody3D = $BlockArm/Blocker
 
 @onready var _left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var _right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
@@ -53,11 +55,16 @@ func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float
 	else:
 		_glove.position = _glove.position.move_toward(config.glove_pos, glove_max_step)
 		_glove.rotation_degrees = _glove.rotation_degrees.lerp(config.glove_rot, t)
-	# Blocker assembly = blocker pad + stick (shaft, paddle, blade) as one rigid
-	# unit. Position/rotation drive the whole thing; stick angle is baked into
-	# the child mesh layout. Per-state `blocker_rot` controls the stick's lean
-	# (forward tilt for blade-on-ice in standing, flatter for butterfly, etc).
-	_lerp_part(_block_arm, config.blocker_pos,   config.blocker_rot,   t)
+	# Blocker assembly: BlockArm carries the hand POSITION only. The pad and
+	# stick are separate child bodies with INDEPENDENT rotations:
+	#   - Stick gets `stick_rot` (forward tilt to plant blade on ice)
+	#   - Blocker (pad) gets `blocker_rot` (face stays forward toward puck —
+	#     wrist articulation; doesn't rotate down with the stick)
+	# Without this split, tilting the stick forward dragged the pad face
+	# down with it, looking unnatural.
+	_block_arm.position = _block_arm.position.lerp(config.blocker_pos, t)
+	_stick.rotation_degrees = _stick.rotation_degrees.lerp(config.stick_rot, t)
+	_blocker_pad.rotation_degrees = _blocker_pad.rotation_degrees.lerp(config.blocker_rot, t)
 
 func set_goalie_position(x: float, z: float) -> void:
 	global_position = Vector3(x, 0.0, z)
