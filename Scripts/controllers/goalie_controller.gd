@@ -26,10 +26,13 @@ extends Node
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
 # Margin past the net edges for "is this a shot on goal" classification.
-# Wide enough that a goalie reads any shot in their general direction —
-# real goalies react first and re-evaluate later. Pickup / boards / post
-# / net signals clear the freeze if it turns out to be a pass.
-@export var net_margin: float = 1.0
+# Generous on purpose — real goalies track anything heading at their general
+# area, even shots clearly going wide (could deflect, tip, rebound). Cross-
+# crease passes self-filter through `detect_shot`'s velocity-direction check
+# (low z-velocity → huge t_to_goal → impact_x lands way off-net), so a wide
+# margin doesn't pull passes in. Pickup / boards / post / net signals clear
+# the reaction freeze if it does turn out to be a pass.
+@export var net_margin: float = 3.0
 
 @export var rvh_depth: float = 0.1
 @export var rvh_early_angle: float = 80.0
@@ -412,8 +415,15 @@ func _update_state(delta: float) -> void:
 	var puck_local_x: float = (_tracked_threat_position.x - _goal_center_x) * -_direction_sign
 	match _state:
 		State.STANDING, State.READY:
-			if _is_puck_in_defensive_zone():
-				_reacting_to_shot = false
+			# RVH is for puck POSSESSED at sharp angles / behind net (post-hug
+			# coverage), not puck IN FLIGHT from one. Gating on `not
+			# _reacting_to_shot` prevents the case where a sharp-angle shot
+			# triggers reaction → next tick the puck is still in the
+			# defensive zone → state flips to RVH and clears the reaction
+			# before the goalie can do anything. Once the shot resolves
+			# normally (boards / post / net / save / pickup), the freeze
+			# clears and the next tick can transition to RVH if appropriate.
+			if _is_puck_in_defensive_zone() and not _reacting_to_shot:
 				_state = State.RVH_LEFT if puck_local_x < 0.0 else State.RVH_RIGHT
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
