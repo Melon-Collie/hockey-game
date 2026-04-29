@@ -66,6 +66,15 @@ extends Node
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
 @export var slide_trigger_distance: float = 0.40    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
+# Real goalies commit to ONE butterfly slide per drop; if they need another
+# they recover and re-drop. Allowing multiple slides per cycle creates a
+# back-and-forth oscillation as each slide leaves the goalie off-center and
+# the next deflection re-triggers a correcting slide.
+@export var max_slides_per_butterfly: int = 1
+# Suppress slide triggers for this long after the puck contacts the goalie.
+# Deflection trajectories are unpredictable in this window; the position the
+# puck "is moving toward" changes faster than the goalie can usefully react.
+@export var post_contact_slide_lockout: float = 0.30
 
 # ── Slapper tell ──────────────────────────────────────────────────────────────
 # Slapshots have a visible windup (SLAPPER_CHARGE_WITH_PUCK on the carrier).
@@ -91,8 +100,6 @@ extends Node
 @export var react_hand_y_max: float = 1.55
 @export var react_hand_z: float = -0.28
 
-@export var butterfly_rotation_speed: float = 4.0
-@export var butterfly_max_facing_angle: float = 25.0
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
 # ── References ────────────────────────────────────────────────────────────────
@@ -142,6 +149,8 @@ var _butterfly_drop_progress: float = 0.0   # 0..1, lerps pads from standing→d
 var _butterfly_hold_timer: float = 0.0      # counts up while in BUTTERFLY
 var _recovery_timer: float = 0.0            # counts up while in RECOVERING
 var _slide_cooldown_timer: float = 0.0      # counts up between slides
+var _slides_this_butterfly: int = 0         # caps committed slides per drop
+var _post_contact_lockout: float = 0.0      # counts down after puck contact
 var _reading_slapper_tell: bool = false
 
 # ── Client Simulation ─────────────────────────────────────────────────────────
@@ -173,6 +182,7 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 	if is_server:
 		puck.puck_released.connect(_on_puck_released)
+		puck.puck_touched_goalie.connect(_on_puck_contact)
 
 func is_butterfly() -> bool:
 	return _state == State.BUTTERFLY
@@ -193,6 +203,8 @@ func reset_to_crease() -> void:
 	_butterfly_drop_progress = 0.0
 	_butterfly_hold_timer = 0.0
 	_slide_cooldown_timer = 0.0
+	_slides_this_butterfly = 0
+	_post_contact_lockout = 0.0
 	_reading_slapper_tell = false
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
@@ -234,9 +246,17 @@ func _update_tracking(delta: float) -> void:
 	_reading_slapper_tell = carrier != null \
 			and carrier.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
 			and _state == State.STANDING
-	# Compute desired threat target and lerp toward it.
+	# Compute desired threat target. With a carrier we lerp toward the
+	# blended (chest+puck) target so stickhandling jitter is smoothed. With
+	# no carrier (loose puck, rebound, shot in flight) the threat is the
+	# puck position directly — lerping here makes the goalie chase stale
+	# positions and commit slides to where the rebound *was*, sliding away
+	# from where it actually is.
 	var target_threat: Vector3 = _compute_threat_position()
-	_tracked_threat_position = _tracked_threat_position.lerp(target_threat, tracking_speed * delta)
+	if puck.get_carrier() != null and not _reacting_to_shot:
+		_tracked_threat_position = _tracked_threat_position.lerp(target_threat, tracking_speed * delta)
+	else:
+		_tracked_threat_position = target_threat
 	if not _reacting_to_shot or not is_server:
 		return
 	# Re-project each frame so impact position stays accurate (handles bounces, deflections).
@@ -353,11 +373,14 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 			_butterfly_hold_timer = 0.0
 			_slide_velocity_x = 0.0
 			_slide_cooldown_timer = 0.0
+			_slides_this_butterfly = 0
+			_post_contact_lockout = 0.0
 		State.RECOVERING:
 			_slide_velocity_x = 0.0
 		State.STANDING:
 			_butterfly_drop_progress = 0.0
 			_slide_velocity_x = 0.0
+			_slides_this_butterfly = 0
 
 # Should the goalie keep holding butterfly because the puck is still a threat?
 # Two paths to "yes": (a) puck is fast or approaching (active shot/play in
@@ -494,6 +517,8 @@ func _arc_target_xz() -> Vector2:
 # host-only; clients receive position/velocity through the world-state
 # broadcast and forward-predict via `apply_state`.
 func _update_butterfly_motion(delta: float) -> void:
+	if _post_contact_lockout > 0.0:
+		_post_contact_lockout -= delta
 	# Pads-to-floor snap: while the drop is animating, force five-hole closed.
 	# This is the explicit fix for "shuffle-then-drop leaves a perfect 5-hole":
 	# during the drop window, openness goes to zero regardless of motion.
@@ -540,6 +565,16 @@ func _update_butterfly_motion(delta: float) -> void:
 	# closing pads. Only commit slides once the goalie is fully down.
 	if _butterfly_drop_progress < 1.0:
 		return
+	# Cap slides per butterfly cycle. Real goalies commit ONE slide; if they
+	# need to relocate again they recover and re-drop. Without this cap, every
+	# puck deflection retriggers a corrective slide and the goalie oscillates.
+	if _slides_this_butterfly >= max_slides_per_butterfly:
+		return
+	# Suppress slides for a brief window after the puck contacts the goalie —
+	# deflection trajectories are unpredictable and re-snapping threat to a
+	# bouncing puck causes spurious slide commits.
+	if _post_contact_lockout > 0.0:
+		return
 	var slide_target: Vector2 = GoalieBehaviorRules.compute_slide_destination(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
 			_direction_sign, butterfly_radius, net_half_width)
@@ -549,11 +584,14 @@ func _update_butterfly_motion(delta: float) -> void:
 	var dir: float = signf(slide_target.x - _current_x)
 	_slide_velocity_x = dir * slide_initial_speed
 	_slide_cooldown_timer = 0.0
+	_slides_this_butterfly += 1
 
 # ── Facing ────────────────────────────────────────────────────────────────────
 # Threat-based facing: rotate toward where the goalie is tracking, not raw
-# puck position. Stickhandling jitter no longer twists the body. Recovering
-# goalie holds the previous facing — they're standing up, not turning.
+# puck position. Stickhandling jitter no longer twists the body. Real goalies
+# keep the body square once down — only the head/upper body track the puck
+# (which we don't model), so BUTTERFLY/RECOVERING hold the body squared to
+# centre. Rotating the entire rotation_y in butterfly looks unrealistic.
 func _update_facing(delta: float) -> void:
 	if _state == State.RVH_LEFT or _state == State.RVH_RIGHT:
 		var target_y: float = PI if _direction_sign == 1 else 0.0
@@ -561,24 +599,22 @@ func _update_facing(delta: float) -> void:
 		return
 	if _shot_timer > 0.0:
 		return
-	if _state == State.RECOVERING:
-		# Gentle return to centre as the goalie stands up — they're not
-		# tracking the threat with rotation during the recovery window.
+	if _state == State.BUTTERFLY or _state == State.RECOVERING:
+		# Body stays square in butterfly; gentle return to centre during recovery.
 		var center_angle: float = PI if _direction_sign == 1 else 0.0
+		var return_speed: float = rotation_speed * 0.5 if _state == State.RECOVERING else rotation_speed * 0.25
 		goalie.set_goalie_rotation_y(lerp_angle(
-				goalie.get_goalie_rotation_y(), center_angle, rotation_speed * 0.5 * delta))
+				goalie.get_goalie_rotation_y(), center_angle, return_speed * delta))
 		return
 	var dx: float = _tracked_threat_position.x - goalie.global_position.x
 	var dz: float = _tracked_threat_position.z - goalie.global_position.z
 	if Vector2(dx, dz).length() > 0.1:
 		var base_angle: float = PI if _direction_sign == 1 else 0.0
 		var target_y: float = atan2(-dx, -dz)
-		var angle_cap: float = butterfly_max_facing_angle if _state == State.BUTTERFLY else max_facing_angle
-		var max_rad: float = deg_to_rad(angle_cap)
+		var max_rad: float = deg_to_rad(max_facing_angle)
 		var deviation: float = clampf(angle_difference(base_angle, target_y), -max_rad, max_rad)
 		target_y = base_angle + deviation
-		var spd: float = butterfly_rotation_speed if _state == State.BUTTERFLY else rotation_speed
-		var new_y: float = lerp_angle(goalie.get_goalie_rotation_y(), target_y, spd * delta)
+		var new_y: float = lerp_angle(goalie.get_goalie_rotation_y(), target_y, rotation_speed * delta)
 		goalie.set_goalie_rotation_y(new_y)
 
 # ── Body Parts ────────────────────────────────────────────────────────────────
@@ -718,6 +754,15 @@ func _on_puck_released() -> void:
 	if result.is_low:
 		_shot_timer = result.reaction_delay
 	# Elevated shot: stay standing, _get_config raises the glove or blocker
+
+# Puck just hit a goalie body part. Suppresses slide triggers for a short
+# window — deflections are unpredictable in the immediate aftermath, and
+# re-snapping the threat to a bouncing puck spuriously triggers slides.
+# Only matters if the contact was on this goalie (signal from `Puck` fires
+# on either net's goalie; filter by identity).
+func _on_puck_contact(contacted: Goalie) -> void:
+	if contacted == goalie:
+		_post_contact_lockout = post_contact_slide_lockout
 
 # ── State Serialization ───────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
