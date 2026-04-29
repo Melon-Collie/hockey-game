@@ -195,6 +195,10 @@ var _reacting_to_shot: bool = false
 var _shot_impact_x: float = 0.0
 var _shot_impact_y: float = 0.0
 var _shot_is_elevated: bool = false
+# Position-derived puck velocity, for intercept math during elevated shots.
+# Works on both host and client (linear_velocity is unreliable on the client
+# during interpolation). Updated each tick from the puck position delta.
+var _puck_velocity_est: Vector3 = Vector3.ZERO
 var _prev_puck_position: Vector3 = Vector3.ZERO
 var _puck_approach_velocity: float = 0.0
 # Butterfly sub-state: while in BUTTERFLY, _slide_velocity_x being non-zero
@@ -299,10 +303,13 @@ func _physics_process(delta: float) -> void:
 # carrier the puck IS the threat. Shot in flight (post-release) drops to
 # pure-puck via _reacting_to_shot — see compute_threat below.
 func _update_tracking(delta: float) -> void:
-	# Approach velocity from raw position delta — works for carried puck too
-	# (linear_velocity is ~0 while carried since the body is frozen).
-	var dz: float = (puck.global_position.z - _prev_puck_position.z) * -_direction_sign
-	_puck_approach_velocity = dz / maxf(delta, 0.0001)
+	# Position-derived puck velocity. Works on both host and client (the
+	# client's `linear_velocity` is unreliable during interpolation). Used
+	# for both the approach-velocity threat-pressing check and the
+	# intercept-at-goalie-plane glove targeting.
+	var inv_dt: float = 1.0 / maxf(delta, 0.0001)
+	_puck_velocity_est = (puck.global_position - _prev_puck_position) * inv_dt
+	_puck_approach_velocity = -_puck_velocity_est.z * _direction_sign
 	_prev_puck_position = puck.global_position
 	# Detect slapper windup on the carrier — stance tell, not a butterfly drop.
 	var carrier: Skater = puck.get_carrier()
@@ -942,8 +949,22 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 	# delay that gates the butterfly drop on low shots.
 	if _shot_timer > 0.0:
 		return
-	var impact_local_x: float = (_shot_impact_x - _current_x) * -_direction_sign
-	var target_y: float = clampf(_shot_impact_y, react_hand_y_min, react_hand_y_max)
+	# Intercept at the goalie's actual z plane, not at the goal line. The
+	# goalie sits forward of the goal line (~0.4-1.2 m), so the puck passes
+	# through the glove's plane BEFORE reaching the goal — using the goal-line
+	# impact (`_shot_impact_x`) puts the glove past where the puck actually is
+	# when it arrives at the body. Falls back to the goal-line value if the
+	# intercept can't be computed (vz too small or puck already past).
+	var intercept_x: float = _shot_impact_x
+	var intercept_y: float = _shot_impact_y
+	if absf(_puck_velocity_est.z) > 0.001:
+		var dt_to_plane: float = (goalie.global_position.z - puck.global_position.z) / _puck_velocity_est.z
+		if dt_to_plane > 0.0:
+			intercept_x = puck.global_position.x + _puck_velocity_est.x * dt_to_plane
+			intercept_y = maxf(puck.global_position.y + _puck_velocity_est.y * dt_to_plane \
+					- 0.5 * 9.8 * dt_to_plane * dt_to_plane, 0.0)
+	var impact_local_x: float = (intercept_x - _current_x) * -_direction_sign
+	var target_y: float = clampf(intercept_y, react_hand_y_min, react_hand_y_max)
 	if impact_local_x <= 0.0:
 		var rest_x: float = c.glove_pos.x
 		var rest_z: float = c.glove_pos.z
