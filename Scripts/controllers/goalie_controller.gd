@@ -166,6 +166,10 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	_current_depth = depth_defensive
 	_tracked_threat_position = puck.global_position
 	_prev_puck_position = puck.global_position
+	# Place the goalie in the crease BEFORE the first physics tick — otherwise
+	# the actor sits at scene-default (0,0,0) and the AI skates it to position
+	# on tick 1, which players see as "spawning at center ice then moving."
+	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 	if is_server:
 		puck.puck_released.connect(_on_puck_released)
@@ -694,9 +698,13 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 func _on_puck_released() -> void:
 	if _state != State.STANDING:
 		return
+	# `get_release_velocity` returns the impending velocity even when
+	# `linear_velocity` is still zero (Jolt's frozen→dynamic transition queues
+	# the velocity in `_pending_elevation_vel` for the next physics step).
+	# Reading raw `linear_velocity` here misses the shot every time.
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
 			puck.global_position,
-			puck.linear_velocity,
+			puck.get_release_velocity(),
 			_goal_line_z,
 			_goal_center_x,
 			_shot_detection_config())
