@@ -80,7 +80,7 @@ extends Node
 # simultaneously read a shot AND react to a new lateral threat. After a save,
 # deflection trajectories are also unpredictable in this window. One timer
 # covers both cases.
-@export var post_event_slide_lockout: float = 0.30
+@export var post_event_slide_lockout: float = 0.25
 
 # ── Slapper tell ──────────────────────────────────────────────────────────────
 # Slapshots have a visible windup (SLAPPER_CHARGE_WITH_PUCK on the carrier).
@@ -99,7 +99,7 @@ extends Node
 # any skater. After the event there's a short delay before the freeze
 # clears — `reaction_clear_delay`. The goalie isn't simultaneously
 # processing the resolution AND deciding the next move; gives them a beat.
-@export var reaction_clear_delay: float = 0.10
+@export var reaction_clear_delay: float = 0.25
 # Hard cap on `_reacting_to_shot` duration as a safety net only. The freeze
 # is supposed to end via a resolving event; this catches edge cases where
 # none of the expected events fire (puck stuck somewhere, signal missed).
