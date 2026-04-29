@@ -146,6 +146,13 @@ extends Node
 @export var blocker_max_x_inward: float = 0.10
 @export var blocker_max_z_reach: float = 0.10
 @export var blocker_max_yaw_deg: float = 60.0
+# Body lean toward the reach side during elevated saves. Real goalies shift
+# weight into the save — torso tilts toward the side the arm is extending.
+# Without it, only the arms move and the save reads as a wrist twist.
+# Scaled by the absolute lateral reach distance (small lean for body shots,
+# full lean for corner pulls).
+@export var body_lean_max_deg: float = 14.0
+@export var body_lean_reach_norm: float = 0.7   # reach distance that maps to full lean
 # Hard cap on glove linear speed during shot reactions, in m/s. Lerp-based
 # tracking made the math vague (asymptotic convergence); a velocity cap is
 # exact: max per-frame travel = speed * delta. Real glove speeds are
@@ -983,6 +990,15 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 					- 0.5 * 9.8 * dt_to_plane * dt_to_plane, 0.0)
 	var impact_local_x: float = (intercept_x - _current_x) * -_direction_sign
 	var target_y: float = clampf(intercept_y, react_hand_y_min, react_hand_y_max)
+	# Body lean toward the reach direction. Z rotation tilts the torso so
+	# the goalie shifts weight into the save instead of only moving the arm.
+	# +Z rotation tilts top toward -X (lean left for glove side reach);
+	# -Z rotation tilts top toward +X (lean right for blocker side reach).
+	# Magnitude scales with reach distance, capped at `body_lean_max_deg`.
+	var lean_factor: float = clampf(absf(impact_local_x) / maxf(body_lean_reach_norm, 0.001), 0.0, 1.0)
+	var lean_sign: float = signf(-impact_local_x)   # impact_local_x < 0 → +lean (toward glove)
+	var lean_deg: float = lean_sign * lean_factor * body_lean_max_deg
+	c.body_rot = Vector3(c.body_rot.x, c.body_rot.y, lean_deg)
 	if impact_local_x <= 0.0:
 		var rest_x: float = c.glove_pos.x
 		var rest_z: float = c.glove_pos.z
