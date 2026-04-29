@@ -57,6 +57,23 @@ extends Node
 # tracking causes the goalie to shuffle perfectly into 5-hole shots.
 @export var shooter_weight_standing: float = 0.75
 @export var shooter_weight_butterfly: float = 0.90  # more committed when down
+# Lead-the-target time. Threat position projects forward by
+# `carrier.velocity * carrier_velocity_lead_time` so the goalie pre-positions
+# toward where the carrier WILL be — the realistic answer to "skater is
+# faster than the goalie laterally." Sustained lateral skates (8 m/s) lead
+# 1.4 m at 0.18s, meaningful for sweeps and wraparounds. Stickhandling
+# jitter has small velocities (~1-2 m/s) so the lead barely moves
+# (0.2-0.4 m), and the existing tracking-speed lerp smooths brief deke
+# velocity spikes so quick fakes don't drag the goalie out of position.
+@export var carrier_velocity_lead_time: float = 0.18
+
+# Close-crease auto-butterfly. When an opposing carrier is at the doorstep
+# the goalie can't track laterally fast enough; better to commit butterfly
+# and slide-react. Different from the old `is_under_pressure` (2.5 m + 1 m/s)
+# which fired far enough out to be exploitable — this only fires inside the
+# crease where dropping is the correct read regardless of follow-up play.
+@export var close_crease_butterfly_distance: float = 2.0
+@export var close_crease_butterfly_speed: float = 1.5  # carrier must show intent
 
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
@@ -396,8 +413,15 @@ func _compute_threat_position() -> Vector3:
 			or _state == State.RECOVERING:
 		return puck.global_position
 	var w: float = shooter_weight_butterfly if _state == State.BUTTERFLY else shooter_weight_standing
-	return GoalieBehaviorRules.compute_threat_position(
+	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
+	# Lead by carrier velocity. Sustained lateral motion projects ahead;
+	# transient deke spikes are smoothed by the tracking-speed lerp. Y is
+	# zeroed because skaters don't move vertically — leading height noise
+	# would drift the threat off the ice.
+	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time
+	lead.y = 0.0
+	return blended + lead
 
 # ── Shot Timer ────────────────────────────────────────────────────────────────
 # `_shot_timer` is the goalie's processing delay after shot release — the
@@ -455,6 +479,11 @@ func _update_state(delta: float) -> void:
 			# clears and the next tick can transition to RVH if appropriate.
 			if _is_puck_in_defensive_zone() and not _reacting_to_shot:
 				_state = State.RVH_LEFT if puck_local_x < 0.0 else State.RVH_RIGHT
+			elif _is_carrier_at_doorstep() and not _reacting_to_shot:
+				# Carrier is at point-blank range with intent — drop butterfly.
+				# At this distance we can't track laterally fast enough; better
+				# to commit the seal and slide-react to wraparounds.
+				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
 				var should_be_ready: bool = _is_ready_situation()
@@ -513,6 +542,21 @@ func _is_ready_situation() -> bool:
 	if carrier != null and carrier.team_id == team_id and team_id != -1:
 		return false
 	return true
+
+# True when an opposing carrier is at point-blank range with intent
+# (moving). Used to commit butterfly proactively — at this range the
+# goalie can't track laterally fast enough, so dropping is the correct
+# read regardless of follow-up play. Stationary teammates / opposing
+# regroup don't trigger.
+func _is_carrier_at_doorstep() -> bool:
+	var carrier: Skater = puck.get_carrier()
+	if carrier == null:
+		return false
+	if carrier.team_id == team_id and team_id != -1:
+		return false
+	if carrier.velocity.length() < close_crease_butterfly_speed:
+		return false
+	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
 func _enter_butterfly() -> void:
 	if _state == State.BUTTERFLY:
