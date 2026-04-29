@@ -593,4 +593,3 @@ func _slapper_config() -> ShotMechanics.SlapperConfig:
 # sign. LocalController overrides this once team_id is set.
 func get_attacking_goal_z() -> float:
 	return 0.0
-
