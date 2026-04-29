@@ -746,10 +746,15 @@ func _update_body_parts(delta: float) -> void:
 	var config: GoalieBodyConfig = _get_config(_state)
 	var lerp_t: float
 	if _state == State.BUTTERFLY:
-		# Drop snap: scale lerp speed inversely with butterfly_drop_speed so the
-		# pads close fast (shorter butterfly_drop_speed → faster lerp). Once the
-		# drop is complete, fall back to reaction speed for any remaining tweaks.
-		var drop_lerp: float = 1.0 / maxf(butterfly_drop_speed, 0.001)
+		# Drop snap: scale lerp speed so pads converge ~95% within
+		# `butterfly_drop_speed`. Lerp is asymptotic — for time-to-95%
+		# convergence we need `speed * time ≈ 3`, so the factor is 3/x not 1/x.
+		# (The previous 1/x only got 63% there; pads continued lerping for
+		# another ~120ms after `_butterfly_drop_progress` hit 1.0, leaving
+		# the 5-hole open well past the design window. A 24 m/s wrister
+		# from the slot arrived before the pads sealed.) Once the drop is
+		# complete, fall back to reaction speed for any remaining tweaks.
+		var drop_lerp: float = 3.0 / maxf(butterfly_drop_speed, 0.001)
 		lerp_t = drop_lerp * delta if _butterfly_drop_progress < 1.0 else reaction_lerp_speed * delta
 	elif _reacting_to_shot:
 		lerp_t = reaction_lerp_speed * delta
