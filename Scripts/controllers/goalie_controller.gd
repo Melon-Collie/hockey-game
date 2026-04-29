@@ -38,7 +38,11 @@ extends Node
 @export var tracking_speed: float = 6.0
 @export var part_lerp_speed: float = 6.0
 @export var reaction_lerp_speed: float = 18.0
-@export var recovery_lerp_speed: float = 3.0
+# Recovery rises body parts from butterfly pose → READY pose. Default tuned
+# so the rise is ~95% complete by `recovery_duration = 0.35 s` (lerp speed
+# ≈ 3 / duration). Was 3.0 which only converged ~65% — body still looked
+# half-butterfly when recovery ended.
+@export var recovery_lerp_speed: float = 9.0
 
 # ── Threat tracking ───────────────────────────────────────────────────────────
 # "Play the chest, not the puck": carrier body is steady while the puck swings
@@ -78,11 +82,11 @@ extends Node
 # Wrist shots have no comparable tell — react on release only.
 @export var slapper_tell_depth_pull: float = 0.10   # m deeper while reading windup
 
-# Recovery proximity: while in BUTTERFLY, the goalie won't recover if any
-# threat (carried or loose puck) is within this Euclidean distance — even if
-# the puck is slow / not moving toward net. Keeps butterfly held during
-# close-range jam plays where the puck rolls slowly at the goalie's feet.
-@export var recovery_proximity_threshold: float = 3.0
+# Recovery proximity: while in BUTTERFLY, the goalie won't recover if the
+# puck is slow / stationary AND within this Euclidean distance. Crease
+# radius is 1.83m; this gate covers genuine jam plays at the feet without
+# locking butterfly during routine post-save puck-settling.
+@export var recovery_proximity_threshold: float = 1.8
 
 # ── Ready stance ──────────────────────────────────────────────────────────────
 # Distinct half-down stance triggered when the play is in the goalie's
@@ -421,11 +425,12 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 			_slide_velocity_x = 0.0
 
 # Should the goalie keep holding butterfly because the puck is still a threat?
-# Two paths to "yes": (a) puck is fast or approaching (active shot/play in
-# motion); (b) puck is close to the net regardless of motion (close-range
-# jam play / loose puck at the goalie's feet — recovering here gets the
-# goalie stuffed). Pressure detection is one-way: it only HOLDS butterfly,
-# never triggers entry.
+# Hold conditions, in priority:
+#   1. Puck is fast AND approaching      → hold (active shot/play)
+#   2. Puck is moving away (any speed)   → release (rebound clearing)
+#   3. Puck is slow / stationary AND close to net  → hold (jam at the feet)
+#   4. Otherwise                         → release
+# Pressure detection is one-way: it only HOLDS butterfly, never triggers entry.
 func _is_threat_pressing() -> bool:
 	var speed_low: bool
 	var moving_away: bool
@@ -435,9 +440,15 @@ func _is_threat_pressing() -> bool:
 	else:
 		speed_low = absf(_puck_approach_velocity) < shot_speed_threshold
 		moving_away = _puck_approach_velocity < 0.0
-	if not (speed_low or moving_away):
+	# Moving away is always recover — that's the rebound clearing the slot.
+	if moving_away:
+		return false
+	# Fast and approaching = active shot/play in motion.
+	if not speed_low:
 		return true
-	# Slow puck — but proximity still holds butterfly when puck is on top of net.
+	# Puck is slow and not moving away — only hold if it's right on top of us.
+	# Crease radius is 1.83m, so a 1.5–2m gate covers genuine jam plays at the
+	# feet without forcing butterfly during routine post-save settling.
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
 			puck.global_position, _goal_line_z, _goal_center_x)
 	return threat_dist < recovery_proximity_threshold
@@ -679,9 +690,9 @@ func _get_config(state: State) -> GoalieBodyConfig:
 	match state:
 		State.STANDING:
 			c.left_pad_pos  = Vector3(-0.22 - _five_hole_openness, 0.44, -0.20)
-			c.left_pad_rot  = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING, -12.0)
+			c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_STANDING, -12.0)
 			c.right_pad_pos = Vector3( 0.22 + _five_hole_openness, 0.44, -0.20)
-			c.right_pad_rot = Vector3(0.0,  PAD_TOE_OUT_DEG_STANDING,  12.0)
+			c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING,  12.0)
 			c.body_pos      = Vector3(0.0,  1.16,  0.0)
 			c.body_rot      = Vector3.ZERO
 			c.head_pos      = Vector3(0.0,  1.69,  0.08)
@@ -700,27 +711,26 @@ func _get_config(state: State) -> GoalieBodyConfig:
 				c.blocker_pos.y += 0.06
 			_apply_elevated_shot_reaction(c)
 		State.READY, State.RECOVERING:
-			# Half-down active stance: knees bent, weight forward, gloves more
-			# forward and slightly lower. Pads stay upright but lower body sits
-			# closer to the ice — closer to butterfly so the drop is a shorter
-			# travel. Player-readable: distinct silhouette from standing.
+			# Half-down active stance: deep knee bend, weight well forward,
+			# gloves dropped and reaching forward. Distinct silhouette from
+			# STANDING — players should be able to read intent at a glance.
 			# RECOVERING shares this pose: real goalies push up FROM butterfly
 			# INTO a ready stance, not all the way to fully standing. If the
 			# threat eases after recovery, the state becomes STANDING and the
 			# body lerps the rest of the way up; if it persists the body is
 			# already at READY and just stays there — single smooth rising
 			# motion, no up-then-back-down overshoot.
-			c.left_pad_pos  = Vector3(-0.22 - _five_hole_openness, 0.40, -0.18)
-			c.left_pad_rot  = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING, -10.0)
-			c.right_pad_pos = Vector3( 0.22 + _five_hole_openness, 0.40, -0.18)
-			c.right_pad_rot = Vector3(0.0,  PAD_TOE_OUT_DEG_STANDING,  10.0)
-			c.body_pos      = Vector3(0.0,  1.00,  0.06)
-			c.body_rot      = Vector3(8.0, 0.0, 0.0)
-			c.head_pos      = Vector3(0.0,  1.50,  0.14)
+			c.left_pad_pos  = Vector3(-0.22 - _five_hole_openness, 0.34, -0.16)
+			c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_STANDING, -10.0)
+			c.right_pad_pos = Vector3( 0.22 + _five_hole_openness, 0.34, -0.16)
+			c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING,  10.0)
+			c.body_pos      = Vector3(0.0,  0.92,  0.10)
+			c.body_rot      = Vector3(14.0, 0.0, 0.0)
+			c.head_pos      = Vector3(0.0,  1.40,  0.18)
 			c.head_rot      = Vector3.ZERO
-			c.blocker_pos   = Vector3( 0.42, 1.04, -0.24)
+			c.blocker_pos   = Vector3( 0.44, 0.94, -0.32)
 			c.blocker_rot   = Vector3.ZERO
-			c.glove_pos     = Vector3(-0.40, 0.99, -0.24)
+			c.glove_pos     = Vector3(-0.42, 0.90, -0.32)
 			c.glove_rot     = Vector3.ZERO
 			c.stick_pos     = Vector3(0.0,  0.02, -0.28)
 			c.stick_rot     = Vector3.ZERO
@@ -730,9 +740,9 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			_apply_elevated_shot_reaction(c)
 		State.BUTTERFLY:
 			c.left_pad_pos  = Vector3(-0.42 - _five_hole_openness, 0.14, -0.20)
-			c.left_pad_rot  = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY, -90.0)
+			c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY, -90.0)
 			c.right_pad_pos = Vector3( 0.42 + _five_hole_openness, 0.14, -0.20)
-			c.right_pad_rot = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY,  90.0)
+			c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY,  90.0)
 			c.body_pos      = Vector3(0.0,  0.46,  0.0)
 			c.body_rot      = Vector3.ZERO
 			c.head_pos      = Vector3(0.0,  0.99,  0.08)
