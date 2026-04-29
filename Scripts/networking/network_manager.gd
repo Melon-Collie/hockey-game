@@ -45,6 +45,7 @@ signal pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float,
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float)
 signal goalie_state_transition_received(team_id: int, new_state: int)
 signal goalie_shot_reaction_received(team_id: int, impact_x: float, impact_y: float, is_elevated: bool)
+signal goalie_reaction_cleared_received(team_id: int)
 signal board_hit_received(position: Vector3)
 signal goal_body_hit_received(position: Vector3)
 signal deflection_received(position: Vector3)
@@ -669,6 +670,16 @@ func notify_goalie_state_transition(team_id: int, new_state: int) -> void:
 	NetworkSimManager.send(
 		func(tid: int, ns: int) -> void: goalie_state_transition_received.emit(tid, ns),
 		[team_id, new_state], true)
+
+func send_goalie_reaction_cleared_to_all(team_id: int) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_goalie_reaction_cleared.rpc_id(peer_id, team_id)
+
+@rpc("authority", "reliable")
+func notify_goalie_reaction_cleared(team_id: int) -> void:
+	NetworkSimManager.send(
+		func(tid: int) -> void: goalie_reaction_cleared_received.emit(tid),
+		[team_id], true)
 
 func send_carrier_changed_to_all(new_carrier_peer_id: int) -> void:
 	for peer_id: int in connected_peer_ids():

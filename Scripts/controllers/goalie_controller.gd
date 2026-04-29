@@ -152,6 +152,13 @@ extends Node
 # ── References ────────────────────────────────────────────────────────────────
 signal state_transitioned(team_id: int, new_state: int)
 signal shot_reaction_started(team_id: int, impact_x: float, impact_y: float, is_elevated: bool)
+# Fired host-side whenever the reaction freeze clears via any path (resolving
+# event + delay, safety timeout, BUTTERFLY entry). Wired through NetworkManager
+# so clients drop their own freeze on the same beat — without this, the client's
+# `_client_reaction_timer` (1.5 s safety) was the only escape for elevated
+# shots that don't trigger any state change, leaving clients visibly frozen
+# long after the host had moved on.
+signal reaction_cleared(team_id: int)
 
 var goalie: Goalie = null
 var puck: Puck = null
@@ -324,17 +331,13 @@ func _update_tracking(delta: float) -> void:
 	if _reaction_clear_timer >= 0.0:
 		_reaction_clear_timer -= delta
 		if _reaction_clear_timer <= 0.0:
-			_reacting_to_shot = false
-			_shot_is_elevated = false
-			_reaction_clear_timer = -1.0
+			_finish_reaction()
 			return
 	# Hard cap on reaction duration as a safety net for cases where no
 	# resolving event fires (puck stuck off-screen, missed signal, etc.).
 	_reaction_age += delta
 	if _reaction_age >= max_reaction_duration:
-		_reacting_to_shot = false
-		_shot_is_elevated = false
-		_reaction_clear_timer = -1.0
+		_finish_reaction()
 		return
 	# Re-project impact position each frame so the elevated-shot reach stays
 	# accurate as the puck travels (handles bounces, deflections affecting
@@ -447,7 +450,9 @@ func _update_state(delta: float) -> void:
 					and not _is_threat_pressing():
 				_state = State.RECOVERING
 				_recovery_timer = 0.0
-				_reacting_to_shot = false
+				# State change RPC will fire from the post-match block; reaction
+				# clear RPC also fires here for clients that miss the state change.
+				_finish_reaction()
 		State.RECOVERING:
 			_recovery_timer += delta
 			if _recovery_timer >= recovery_duration:
@@ -1019,6 +1024,20 @@ func _arm_reaction_clear() -> void:
 	if _reaction_clear_timer < 0.0:
 		_reaction_clear_timer = reaction_clear_delay
 
+# Centralised reaction-clear: any host-side path that ends the freeze goes
+# through here so we can also fire the `reaction_cleared` RPC. Without that
+# RPC, clients receive no signal that the host's freeze ended for elevated
+# shots (no state change to drop butterfly), and they stay frozen until the
+# `_client_reaction_timer` 1.5 s safety timer expires.
+func _finish_reaction() -> void:
+	if not _reacting_to_shot:
+		return
+	_reacting_to_shot = false
+	_shot_is_elevated = false
+	_reaction_clear_timer = -1.0
+	if is_server:
+		reaction_cleared.emit(team_id)
+
 # ── State Serialization ───────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
 # RPC boundary (GameManager.get_world_state), not here.
@@ -1107,6 +1126,15 @@ func apply_shot_reaction(impact_x: float, impact_y: float, is_elevated: bool) ->
 	if _is_upright():
 		var rtt_s: float = NetworkManager.get_latest_rtt_ms() / 1000.0
 		_shot_timer = maxf(reaction_delay - rtt_s, 0.0)
+
+# Host fired the reaction-cleared signal — drop the freeze on this client.
+# Idempotent: if state-change RPC already cleared us, this is a no-op.
+func apply_reaction_cleared() -> void:
+	if is_server:
+		return
+	_reacting_to_shot = false
+	_shot_is_elevated = false
+	_client_reaction_timer = 0.0
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 # Defensive-zone test uses raw puck position, not threat — the goalie reacts
