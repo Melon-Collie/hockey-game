@@ -719,6 +719,14 @@ func _update_butterfly_motion(delta: float) -> void:
 	# bouncing puck causes spurious slide commits.
 	if _slide_event_lockout > 0.0:
 		return
+	# Don't slide-track a puck in the defensive zone (behind net or sharp
+	# angle). The goalie should be recovering and transitioning to RVH for
+	# those plays — sliding back-and-forth chasing a puck that's bouncing
+	# around behind the net keeps `_slide_velocity_x` non-zero, which keeps
+	# the recovery gate's `sliding` flag true and blocks BUTTERFLY →
+	# RECOVERING indefinitely.
+	if _is_puck_in_defensive_zone():
+		return
 	var slide_target: Vector2 = GoalieBehaviorRules.compute_slide_destination(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
 			_direction_sign, butterfly_radius, net_half_width)
