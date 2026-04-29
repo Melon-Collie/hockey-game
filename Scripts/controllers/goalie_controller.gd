@@ -66,14 +66,10 @@ extends Node
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
 @export var slide_trigger_distance: float = 0.40    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
-# Real goalies commit to ONE butterfly slide per drop; if they need another
-# they recover and re-drop. Allowing multiple slides per cycle creates a
-# back-and-forth oscillation as each slide leaves the goalie off-center and
-# the next deflection re-triggers a correcting slide.
-@export var max_slides_per_butterfly: int = 1
 # Suppress slide triggers for this long after the puck contacts the goalie.
 # Deflection trajectories are unpredictable in this window; the position the
-# puck "is moving toward" changes faster than the goalie can usefully react.
+# puck "is moving toward" changes faster than the goalie can usefully react,
+# and re-snapping threat to a bouncing puck spuriously fires slides.
 @export var post_contact_slide_lockout: float = 0.30
 
 # ── Slapper tell ──────────────────────────────────────────────────────────────
@@ -149,7 +145,6 @@ var _butterfly_drop_progress: float = 0.0   # 0..1, lerps pads from standing→d
 var _butterfly_hold_timer: float = 0.0      # counts up while in BUTTERFLY
 var _recovery_timer: float = 0.0            # counts up while in RECOVERING
 var _slide_cooldown_timer: float = 0.0      # counts up between slides
-var _slides_this_butterfly: int = 0         # caps committed slides per drop
 var _post_contact_lockout: float = 0.0      # counts down after puck contact
 var _reading_slapper_tell: bool = false
 
@@ -203,7 +198,6 @@ func reset_to_crease() -> void:
 	_butterfly_drop_progress = 0.0
 	_butterfly_hold_timer = 0.0
 	_slide_cooldown_timer = 0.0
-	_slides_this_butterfly = 0
 	_post_contact_lockout = 0.0
 	_reading_slapper_tell = false
 	_puck_approach_velocity = 0.0
@@ -373,14 +367,12 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 			_butterfly_hold_timer = 0.0
 			_slide_velocity_x = 0.0
 			_slide_cooldown_timer = 0.0
-			_slides_this_butterfly = 0
 			_post_contact_lockout = 0.0
 		State.RECOVERING:
 			_slide_velocity_x = 0.0
 		State.STANDING:
 			_butterfly_drop_progress = 0.0
 			_slide_velocity_x = 0.0
-			_slides_this_butterfly = 0
 
 # Should the goalie keep holding butterfly because the puck is still a threat?
 # Two paths to "yes": (a) puck is fast or approaching (active shot/play in
@@ -565,11 +557,6 @@ func _update_butterfly_motion(delta: float) -> void:
 	# closing pads. Only commit slides once the goalie is fully down.
 	if _butterfly_drop_progress < 1.0:
 		return
-	# Cap slides per butterfly cycle. Real goalies commit ONE slide; if they
-	# need to relocate again they recover and re-drop. Without this cap, every
-	# puck deflection retriggers a corrective slide and the goalie oscillates.
-	if _slides_this_butterfly >= max_slides_per_butterfly:
-		return
 	# Suppress slides for a brief window after the puck contacts the goalie —
 	# deflection trajectories are unpredictable and re-snapping threat to a
 	# bouncing puck causes spurious slide commits.
@@ -584,7 +571,6 @@ func _update_butterfly_motion(delta: float) -> void:
 	var dir: float = signf(slide_target.x - _current_x)
 	_slide_velocity_x = dir * slide_initial_speed
 	_slide_cooldown_timer = 0.0
-	_slides_this_butterfly += 1
 
 # ── Facing ────────────────────────────────────────────────────────────────────
 # Threat-based facing: rotate toward where the goalie is tracking, not raw
