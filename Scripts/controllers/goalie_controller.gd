@@ -862,20 +862,27 @@ func _get_config(state: State) -> GoalieBodyConfig:
 	return c
 
 # Move glove or blocker toward projected impact height when reacting to an
-# elevated shot. shot_local_x > 0 = goalie's right = blocker side (for
-# catches_left=true). Called from STANDING/BUTTERFLY branches of _get_config.
-# The glove actively tracks the shot's lateral impact point (clamped to arm
-# reach) and extends slightly forward as the reach distance grows — real
-# goalies thrust the glove out to meet the puck, not just rotate the wrist.
-# Blocker is left as a static raise for now; will be refined alongside the
+# elevated shot. The lateral target is GOALIE-relative, not goal-relative —
+# `_shot_impact_x - _current_x` gives the impact point in the goalie's own
+# body-local frame, which is where the glove/blocker meshes live. Using the
+# goal centre instead causes the hand to land at world `goalie_x + glove_x`,
+# offset from the actual puck path (the goalie can literally swat the glove
+# out of the puck's way on an off-centre body position). The `-direction_sign`
+# multiplier converts world X into goalie-local X for the +Z-defending goalie
+# (rotated PI in world).
+#
+# The glove actively tracks the shot's lateral impact (clamped to arm reach)
+# and extends slightly forward as the reach distance grows — real goalies
+# thrust the glove out to meet the puck, not just rotate the wrist. Blocker
+# is left as a static raise for now; will be refined alongside the
 # stick/poke-check pass.
 func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 	if not _reacting_to_shot or not _shot_is_elevated:
 		return
-	var shot_local_x: float = (_shot_impact_x - _goal_center_x) * -_direction_sign
+	var impact_local_x: float = (_shot_impact_x - _current_x) * -_direction_sign
 	var target_y: float = clampf(_shot_impact_y, react_hand_y_min, react_hand_y_max)
-	if shot_local_x <= 0.0:
-		var glove_x: float = clampf(shot_local_x, glove_max_x_outward, glove_max_x_inward)
+	if impact_local_x <= 0.0:
+		var glove_x: float = clampf(impact_local_x, glove_max_x_outward, glove_max_x_inward)
 		# Reach factor: how far from rest the glove has travelled, normalised
 		# by max outward reach. Drives forward Z so the glove extends out
 		# toward the puck, not just sideways.
