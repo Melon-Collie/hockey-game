@@ -25,12 +25,11 @@ extends Node
 
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
-# Margin past the net edges for "is this a shot on goal" classification. Real
-# goalies react to shots heading at their body even if technically wide of
-# the post (a goalie is ~0.5m wide). Larger values misclassify passes through
-# the slot as shots — was 1.0, dropped to 0.5 to roughly match a body-width
-# reaction range.
-@export var net_margin: float = 0.5
+# Margin past the net edges for "is this a shot on goal" classification.
+# Wide enough that a goalie reads any shot in their general direction —
+# real goalies react first and re-evaluate later. Pickup / boards / post
+# / net signals clear the freeze if it turns out to be a pass.
+@export var net_margin: float = 1.0
 
 @export var rvh_depth: float = 0.1
 @export var rvh_early_angle: float = 80.0
