@@ -70,11 +70,13 @@ extends Node
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
 @export var slide_trigger_distance: float = 0.40    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
-# Suppress slide triggers for this long after the puck contacts the goalie.
-# Deflection trajectories are unpredictable in this window; the position the
-# puck "is moving toward" changes faster than the goalie can usefully react,
-# and re-snapping threat to a bouncing puck spuriously fires slides.
-@export var post_contact_slide_lockout: float = 0.30
+# Suppress slide triggers for this long after a "shot event" — either a shot
+# being released OR the puck contacting the goalie. Real goalies track up to
+# release, then commit to their read and process the outcome; they can't
+# simultaneously read a shot AND react to a new lateral threat. After a save,
+# deflection trajectories are also unpredictable in this window. One timer
+# covers both cases.
+@export var post_event_slide_lockout: float = 0.30
 
 # ── Slapper tell ──────────────────────────────────────────────────────────────
 # Slapshots have a visible windup (SLAPPER_CHARGE_WITH_PUCK on the carrier).
@@ -160,7 +162,7 @@ var _butterfly_drop_progress: float = 0.0   # 0..1, lerps pads from standing→d
 var _butterfly_hold_timer: float = 0.0      # counts up while in BUTTERFLY
 var _recovery_timer: float = 0.0            # counts up while in RECOVERING
 var _slide_cooldown_timer: float = 0.0      # counts up between slides
-var _post_contact_lockout: float = 0.0      # counts down after puck contact
+var _slide_event_lockout: float = 0.0      # counts down after puck contact
 var _reading_slapper_tell: bool = false
 
 # ── Client Simulation ─────────────────────────────────────────────────────────
@@ -213,7 +215,7 @@ func reset_to_crease() -> void:
 	_butterfly_drop_progress = 0.0
 	_butterfly_hold_timer = 0.0
 	_slide_cooldown_timer = 0.0
-	_post_contact_lockout = 0.0
+	_slide_event_lockout = 0.0
 	_reading_slapper_tell = false
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
@@ -417,7 +419,7 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 			_butterfly_hold_timer = 0.0
 			_slide_velocity_x = 0.0
 			_slide_cooldown_timer = 0.0
-			_post_contact_lockout = 0.0
+			_slide_event_lockout = 0.0
 		State.RECOVERING:
 			_slide_velocity_x = 0.0
 		State.STANDING:
@@ -566,8 +568,8 @@ func _arc_target_xz() -> Vector2:
 # host-only; clients receive position/velocity through the world-state
 # broadcast and forward-predict via `apply_state`.
 func _update_butterfly_motion(delta: float) -> void:
-	if _post_contact_lockout > 0.0:
-		_post_contact_lockout -= delta
+	if _slide_event_lockout > 0.0:
+		_slide_event_lockout -= delta
 	# Pads-to-floor snap: while the drop is animating, force five-hole closed.
 	# This is the explicit fix for "shuffle-then-drop leaves a perfect 5-hole":
 	# during the drop window, openness goes to zero regardless of motion.
@@ -617,7 +619,7 @@ func _update_butterfly_motion(delta: float) -> void:
 	# Suppress slides for a brief window after the puck contacts the goalie —
 	# deflection trajectories are unpredictable and re-snapping threat to a
 	# bouncing puck causes spurious slide commits.
-	if _post_contact_lockout > 0.0:
+	if _slide_event_lockout > 0.0:
 		return
 	var slide_target: Vector2 = GoalieBehaviorRules.compute_slide_destination(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
@@ -726,7 +728,7 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING,  10.0)
 			c.body_pos      = Vector3(0.0,  0.92, -0.05)
 			c.body_rot      = Vector3(-14.0, 0.0, 0.0)
-			c.head_pos      = Vector3(0.0,  1.40, -0.30)
+			c.head_pos      = Vector3(0.0,  1.40, -0.22)
 			c.head_rot      = Vector3.ZERO
 			c.blocker_pos   = Vector3( 0.44, 0.94, -0.32)
 			c.blocker_rot   = Vector3.ZERO
@@ -828,19 +830,22 @@ func _on_puck_released() -> void:
 	_shot_impact_y = result.impact_y
 	_shot_is_elevated = result.is_elevated
 	_reacting_to_shot = true
+	# Goalies track up until release, then commit to their read — they need a
+	# beat to process the shot before they can react to a new lateral threat.
+	# Suppresses slide triggers during that window. Same mechanism as the
+	# post-contact lockout; one runtime timer covers both events (max wins).
+	_slide_event_lockout = maxf(_slide_event_lockout, post_event_slide_lockout)
 	shot_reaction_started.emit(team_id, _shot_impact_x, _shot_impact_y, _shot_is_elevated)
 	if result.is_low:
 		_shot_timer = result.reaction_delay
 	# Elevated shot: stay standing, _get_config raises the glove or blocker
 
-# Puck just hit a goalie body part. Suppresses slide triggers for a short
-# window — deflections are unpredictable in the immediate aftermath, and
-# re-snapping the threat to a bouncing puck spuriously triggers slides.
-# Only matters if the contact was on this goalie (signal from `Puck` fires
-# on either net's goalie; filter by identity).
+# Puck just hit a goalie body part. Re-arms the slide lockout so deflections
+# don't trigger spurious slides. Filters by identity since `Puck.puck_touched_goalie`
+# fires on either net's goalie.
 func _on_puck_contact(contacted: Goalie) -> void:
 	if contacted == goalie:
-		_post_contact_lockout = post_contact_slide_lockout
+		_slide_event_lockout = maxf(_slide_event_lockout, post_event_slide_lockout)
 
 # ── State Serialization ───────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
