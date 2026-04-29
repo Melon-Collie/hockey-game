@@ -125,6 +125,15 @@ extends Node
 @export var react_hand_y_min: float = 0.50
 @export var react_hand_y_max: float = 1.55
 @export var react_hand_z: float = -0.28
+# Glove arm reach. The glove (in `_apply_elevated_shot_reaction`) moves
+# toward the shot's lateral impact point clamped within these bounds, so
+# the goalie actively extends the arm to make catch saves rather than
+# just rotating the wrist in place. Inward bound stops cross-body reach
+# from looking goofy. Forward Z increases with reach distance — extending
+# the arm naturally moves the glove forward of the body line.
+@export var glove_max_x_outward: float = -0.85   # max extension to the glove side
+@export var glove_max_x_inward: float = -0.10    # max cross-body reach
+@export var glove_max_z_reach: float = 0.10      # extra forward Z at full extension
 
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
@@ -855,13 +864,25 @@ func _get_config(state: State) -> GoalieBodyConfig:
 # Move glove or blocker toward projected impact height when reacting to an
 # elevated shot. shot_local_x > 0 = goalie's right = blocker side (for
 # catches_left=true). Called from STANDING/BUTTERFLY branches of _get_config.
+# The glove actively tracks the shot's lateral impact point (clamped to arm
+# reach) and extends slightly forward as the reach distance grows — real
+# goalies thrust the glove out to meet the puck, not just rotate the wrist.
+# Blocker is left as a static raise for now; will be refined alongside the
+# stick/poke-check pass.
 func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 	if not _reacting_to_shot or not _shot_is_elevated:
 		return
 	var shot_local_x: float = (_shot_impact_x - _goal_center_x) * -_direction_sign
 	var target_y: float = clampf(_shot_impact_y, react_hand_y_min, react_hand_y_max)
 	if shot_local_x <= 0.0:
-		c.glove_pos = Vector3(c.glove_pos.x, target_y, react_hand_z)
+		var glove_x: float = clampf(shot_local_x, glove_max_x_outward, glove_max_x_inward)
+		# Reach factor: how far from rest the glove has travelled, normalised
+		# by max outward reach. Drives forward Z so the glove extends out
+		# toward the puck, not just sideways.
+		var rest_x: float = c.glove_pos.x
+		var reach: float = absf(glove_x - rest_x) / maxf(absf(glove_max_x_outward - rest_x), 0.001)
+		var glove_z: float = react_hand_z - glove_max_z_reach * clampf(reach, 0.0, 1.0)
+		c.glove_pos = Vector3(glove_x, target_y, glove_z)
 		c.glove_rot = Vector3(-25.0, 0.0, 0.0)
 	else:
 		c.blocker_pos = Vector3(c.blocker_pos.x, target_y, react_hand_z)
