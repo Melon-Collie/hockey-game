@@ -25,7 +25,12 @@ extends Node
 
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
-@export var net_margin: float = 1.0
+# Margin past the net edges for "is this a shot on goal" classification. Real
+# goalies react to shots heading at their body even if technically wide of
+# the post (a goalie is ~0.5m wide). Larger values misclassify passes through
+# the slot as shots — was 1.0, dropped to 0.5 to roughly match a body-width
+# reaction range.
+@export var net_margin: float = 0.5
 
 @export var rvh_depth: float = 0.1
 @export var rvh_early_angle: float = 80.0
@@ -277,6 +282,13 @@ func _update_tracking(delta: float) -> void:
 	else:
 		_tracked_threat_position = target_threat
 	if not _reacting_to_shot or not is_server:
+		return
+	# Pickup clears the reaction immediately. If a carrier is set, the puck
+	# was a pass that landed (or a teammate cleared a rebound) — there's no
+	# shot on goal anymore. Resume normal tracking right away.
+	if puck.get_carrier() != null:
+		_reacting_to_shot = false
+		_shot_is_elevated = false
 		return
 	# Hard cap on reaction duration so the lateral-movement freeze can't
 	# stick forever if `detect_shot` keeps returning true on a chaotic puck.
