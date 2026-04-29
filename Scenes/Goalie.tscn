@@ -147,15 +147,15 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.33, 0)
 shape = SubResource("BoxShape3D_g4lw1")
 
 [node name="StickBladeMesh" type="MeshInstance3D" parent="BlockArm/Stick" unique_id=1935308300]
-transform = Transform3D(0.97437006, 0.22495104, 0, -0.22495104, 0.97437006, 0, 0, 0, 1, 0.15, -0.67, 0)
+transform = Transform3D(0.97437006, -0.22495104, 0, 0.22495104, 0.97437006, 0, 0, 0, 1, -0.15, -0.67, 0)
 mesh = SubResource("BoxMesh_fpcta")
 
 [node name="StickBladeCollider" type="CollisionShape3D" parent="BlockArm/Stick" unique_id=1065441235]
-transform = Transform3D(0.97437006, 0.22495104, 0, -0.22495104, 0.97437006, 0, 0, 0, 1, 0.15, -0.67, 0)
+transform = Transform3D(0.97437006, -0.22495104, 0, 0.22495104, 0.97437006, 0, 0, 0, 1, -0.15, -0.67, 0)
 shape = SubResource("BoxShape3D_cwmwh")
 
 [node name="Blocker" type="StaticBody3D" parent="BlockArm" unique_id=415853721]
-transform = Transform3D(0.8660254, 0.5, 0, -0.5, 0.8660254, 0, 0, 0, 1, 0.06, 0.03, 0)
+transform = Transform3D(0.8660254, -0.5, 0, 0.5, 0.8660254, 0, 0, 0, 1, -0.06, 0.03, 0)
 physics_material_override = ExtResource("2_168ps")
 
 [node name="BlockerPadCollider" type="CollisionShape3D" parent="BlockArm/Blocker" unique_id=1315615311]
