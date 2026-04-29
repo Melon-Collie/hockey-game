@@ -431,7 +431,6 @@ func _release_wrister(input: InputState) -> void:
 				input.mouse_world_pos,
 				blade_world,
 				skater.get_blade_position(),
-				skater.shoulder.position,
 				skater.is_left_handed,
 				_is_elevated,
 				_aiming.charge_distance,
