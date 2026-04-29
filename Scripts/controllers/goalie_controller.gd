@@ -12,7 +12,12 @@ extends Node
 @export var zone_aggressive_z: float = 8.0
 @export var zone_base_z: float = 12.0
 @export var zone_conservative_z: float = 20.0
-@export var depth_speed: float = 2.0
+# How fast `_current_depth` lerps toward the depth-chart target. Higher =
+# faster retreat when the skater closes. At 2.0 the lerp couldn't catch a
+# fast-closing skater inside 2m (depth chart's retreat zone); bumped to
+# 4.0 so a 0.25s approach (8 m/s closing 2m) converges ~63% — goalie
+# meaningfully retreats before contact instead of being stuck out front.
+@export var depth_speed: float = 4.0
 
 @export var shuffle_speed: float = 2.0
 @export var t_push_speed: float = 3.8
@@ -74,12 +79,6 @@ extends Node
 # crease where dropping is the correct read regardless of follow-up play.
 @export var close_crease_butterfly_distance: float = 2.0
 @export var close_crease_butterfly_speed: float = 1.5  # carrier must show intent
-# When butterfly is entered via the doorstep trigger, the goalie is sealing
-# against an attacker who's already past tracking range. They should sit
-# DEEPER than a normal butterfly (closer to the goal line) to lock the post
-# against a wraparound — same idea as RVH but in butterfly stance, since
-# they need to slide-react if the attacker cuts the other way.
-@export var close_crease_butterfly_radius: float = 0.20
 
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
@@ -249,11 +248,6 @@ var _puck_approach_velocity: float = 0.0
 # zero means IDLE (committed pose, no lateral movement).
 var _slide_velocity_x: float = 0.0
 var _butterfly_drop_progress: float = 0.0   # 0..1, lerps pads from standing→down
-# Set true when butterfly was entered via the close-crease doorstep trigger
-# (vs. shot detection). Causes depth + slide destination to use the deeper
-# `close_crease_butterfly_radius` so the goalie locks tight to the post.
-# Cleared on state changes out of BUTTERFLY.
-var _close_crease_commit: bool = false
 var _butterfly_hold_timer: float = 0.0      # counts up while in BUTTERFLY
 var _recovery_timer: float = 0.0            # counts up while in RECOVERING
 var _slide_cooldown_timer: float = 0.0      # counts up between slides
@@ -318,7 +312,6 @@ func reset_to_crease() -> void:
 	_butterfly_hold_timer = 0.0
 	_slide_cooldown_timer = 0.0
 	_slide_event_lockout = 0.0
-	_close_crease_commit = false
 	_reaction_age = 0.0
 	_reaction_clear_timer = -1.0
 	_reading_slapper_tell = false
@@ -494,9 +487,8 @@ func _update_state(delta: float) -> void:
 			elif _is_carrier_at_doorstep() and not _reacting_to_shot:
 				# Carrier is at point-blank range with intent — drop butterfly.
 				# At this distance we can't track laterally fast enough; better
-				# to commit the seal and slide-react to wraparounds. Flag so
-				# depth + slide destination use the deeper post-tight value.
-				_close_crease_commit = true
+				# to commit the seal and slide-react to wraparounds. Goalie
+				# commits at whatever depth they had — slide handles direction.
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -588,13 +580,17 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 			_slide_velocity_x = 0.0
 			_slide_cooldown_timer = 0.0
 			_slide_event_lockout = 0.0
+			# Commit at the depth the goalie was already at — same units fix
+			# as RVH entry. Standing/Ready stored radius; butterfly holds
+			# perpendicular depth, so snap to the actual perp depth of the
+			# goalie's current world position. Goalie freezes at this depth
+			# for the entire butterfly cycle; slides only move laterally.
+			_current_depth = (goalie.global_position.z - _goal_line_z) * _direction_sign
 		State.RECOVERING:
 			_slide_velocity_x = 0.0
-			_close_crease_commit = false
 		State.STANDING:
 			_butterfly_drop_progress = 0.0
 			_slide_velocity_x = 0.0
-			_close_crease_commit = false
 		State.RVH_LEFT, State.RVH_RIGHT:
 			# `_current_depth` carries different units per state — radius from
 			# goal center in STANDING/READY/RECOVERING, perpendicular depth
@@ -645,11 +641,10 @@ func _update_depth(delta: float) -> void:
 		_current_depth = lerpf(_current_depth, rvh_depth, depth_speed * delta)
 		return
 	if _state == State.BUTTERFLY:
-		# Doorstep commit pulls deeper toward the goal line so the goalie
-		# locks the post against a wraparound. Normal butterfly (from a
-		# detected shot) sits at standard depth.
-		var target_radius: float = close_crease_butterfly_radius if _close_crease_commit else butterfly_radius
-		_current_depth = lerpf(_current_depth, target_radius, depth_speed * delta)
+		# Goalie commits butterfly at whatever depth they had on entry
+		# (set in `_on_state_changed`) and HOLDS that depth throughout —
+		# real goalies don't bob forward/back during a butterfly. Slides
+		# move only laterally. No depth lerp here.
 		return
 	if _state == State.RECOVERING:
 		# Gentle fade back toward defensive crease while standing up.
@@ -816,16 +811,19 @@ func _update_butterfly_motion(delta: float) -> void:
 	# RECOVERING indefinitely.
 	if _is_puck_in_defensive_zone():
 		return
-	# Doorstep commit slides deeper (post-tight) to seal a wraparound;
-	# regular butterfly slides at standard radius.
-	var slide_radius: float = close_crease_butterfly_radius if _close_crease_commit else butterfly_radius
-	var slide_target: Vector2 = GoalieBehaviorRules.compute_slide_destination(
-			_tracked_threat_position, _goal_line_z, _goal_center_x,
-			_direction_sign, slide_radius, net_half_width)
-	if not GoalieBehaviorRules.should_commit_slide(_current_x, slide_target.x, slide_trigger_distance):
+	# Slide destination is purely lateral — pick where the threat is going
+	# (in body-local X), clamped within the post width. The goalie holds
+	# their current depth (set on butterfly entry), only X moves. This
+	# matches real butterfly slides: pick a spot, push off, ride out the
+	# motion. No arc projection — depth doesn't change during a slide.
+	var slide_target_x: float = clampf(
+			_tracked_threat_position.x,
+			_goal_center_x - net_half_width,
+			_goal_center_x + net_half_width)
+	if not GoalieBehaviorRules.should_commit_slide(_current_x, slide_target_x, slide_trigger_distance):
 		return
 	# Commit. Direction picked once; magnitude rides out via friction.
-	var dir: float = signf(slide_target.x - _current_x)
+	var dir: float = signf(slide_target_x - _current_x)
 	_slide_velocity_x = dir * slide_initial_speed
 	_slide_cooldown_timer = 0.0
 
