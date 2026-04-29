@@ -367,11 +367,15 @@ func _compute_threat_position() -> Vector3:
 			puck.global_position, carrier.global_position, true, w)
 
 # ── Shot Timer ────────────────────────────────────────────────────────────────
+# `_shot_timer` is the goalie's processing delay after shot release — the
+# beat between "I see the shot" and "I act on the prediction". Gates the
+# butterfly drop (low shots) AND the arm reach (elevated shots, see
+# `_apply_elevated_shot_reaction`).
 func _update_shot_timer(delta: float) -> void:
 	if _shot_timer <= 0.0:
 		return
 	_shot_timer -= delta
-	if _shot_timer <= 0.0 and _is_upright():
+	if _shot_timer <= 0.0 and _is_upright() and not _shot_is_elevated:
 		_enter_butterfly()
 
 # Upright = goalie can drop to butterfly / engage RVH from this state. Both
@@ -895,6 +899,11 @@ func _get_config(state: State) -> GoalieBodyConfig:
 func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 	if not _reacting_to_shot or not _shot_is_elevated:
 		return
+	# Honour the processing delay — goalie hasn't finished reading the puck
+	# yet, so the arm stays at rest pose until `_shot_timer` expires. Same
+	# delay that gates the butterfly drop on low shots.
+	if _shot_timer > 0.0:
+		return
 	var impact_local_x: float = (_shot_impact_x - _current_x) * -_direction_sign
 	var target_y: float = clampf(_shot_impact_y, react_hand_y_min, react_hand_y_max)
 	if impact_local_x <= 0.0:
@@ -951,9 +960,13 @@ func _on_puck_released() -> void:
 	# post-contact lockout; one runtime timer covers both events (max wins).
 	_slide_event_lockout = maxf(_slide_event_lockout, post_event_slide_lockout)
 	shot_reaction_started.emit(team_id, _shot_impact_x, _shot_impact_y, _shot_is_elevated)
-	if result.is_low:
-		_shot_timer = result.reaction_delay
-	# Elevated shot: stay standing, _get_config raises the glove or blocker
+	# `_shot_timer` runs for ALL shot types now — the same processing delay
+	# that gates the butterfly drop on low shots also gates the arm reach on
+	# elevated shots. Real goalies can't act on the prediction instantly;
+	# they need time to read the puck's vector before deciding where to put
+	# the hand or whether to drop. Without this, elevated reaches were
+	# kicking off at frame 0 with zero processing time.
+	_shot_timer = result.reaction_delay
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
 # don't trigger spurious slides, and starts the reaction clear delay — the
@@ -1059,13 +1072,12 @@ func apply_shot_reaction(impact_x: float, impact_y: float, is_elevated: bool) ->
 	_shot_impact_y = impact_y
 	_shot_is_elevated = is_elevated
 	_client_reaction_timer = _CLIENT_REACTION_DURATION_S
-	# Mirror the host: low shots start the butterfly-drop countdown so the
-	# client drops butterfly on the same frame cadence as the server.
-	# Subtract the RPC transit time (≈ full RTT: shooter→server + server→client)
-	# so the client butterfly lands at the same wall-clock offset as the host.
-	# At RTT < reaction_delay the timer fires early enough to match T+reaction_delay.
-	# At RTT >= reaction_delay the timer is clamped to 0 — butterfly drops on arrival.
-	if not is_elevated and _is_upright():
+	# Mirror the host: ALL shot types start the processing-delay countdown so
+	# the client and server arm reach (elevated) and butterfly drop (low)
+	# happen on the same wall-clock offset. Subtract RPC transit time
+	# (≈ full RTT) so the client lands at the same T+reaction_delay as the
+	# host. At RTT >= reaction_delay the timer clamps to 0 — react on arrival.
+	if _is_upright():
 		var rtt_s: float = NetworkManager.get_latest_rtt_ms() / 1000.0
 		_shot_timer = maxf(reaction_delay - rtt_s, 0.0)
 
