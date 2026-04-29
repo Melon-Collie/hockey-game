@@ -931,16 +931,18 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 		var reach: float = absf(glove_x - rest_x) / maxf(absf(glove_max_x_outward - rest_x), 0.001)
 		var glove_z: float = react_hand_z - glove_max_z_reach * clampf(reach, 0.0, 1.0)
 		c.glove_pos = Vector3(glove_x, target_y, glove_z)
-		# Yaw toward the direction the glove is reaching, not toward the puck.
-		# Reads as a deliberate reach-and-snag motion — wrist points along the
-		# reach trajectory rather than tracking the puck visually. Movement
-		# vector is rest→target in the body-local plane; atan2(dx, -dz) puts
-		# 0° = forward, positive = right. Capped at `glove_max_yaw_deg`.
+		# Yaw toward the direction the glove is reaching. Reads as a deliberate
+		# reach-and-snag motion — wrist points along the reach trajectory.
+		# Godot Y-rotation convention: +Y is counter-clockwise looking down
+		# from +Y, so +Y rotation takes local -Z (forward face) → -X (goalie's
+		# left). For a leftward reach (move_dx < 0) we therefore want POSITIVE
+		# yaw, hence the sign flip on move_dx in atan2. Capped at
+		# `glove_max_yaw_deg`.
 		var move_dx: float = glove_x - rest_x
 		var move_dz: float = glove_z - rest_z
 		var yaw_deg: float = 0.0
 		if absf(move_dx) > 0.001 or absf(move_dz) > 0.001:
-			yaw_deg = clampf(rad_to_deg(atan2(move_dx, -move_dz)),
+			yaw_deg = clampf(rad_to_deg(atan2(-move_dx, -move_dz)),
 					-glove_max_yaw_deg, glove_max_yaw_deg)
 		c.glove_rot = Vector3(-25.0, yaw_deg, 0.0)
 	else:
