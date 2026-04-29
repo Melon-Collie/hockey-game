@@ -91,11 +91,12 @@ extends Node
 # Wrist shots have no comparable tell — react on release only.
 @export var slapper_tell_depth_pull: float = 0.10   # m deeper while reading windup
 
-# Recovery proximity: while in BUTTERFLY, the goalie won't recover if the
-# puck is slow / stationary AND within this Euclidean distance. Crease
-# radius is 1.83m; this gate covers genuine jam plays at the feet without
-# locking butterfly during routine post-save puck-settling.
-@export var recovery_proximity_threshold: float = 1.8
+# Recovery proximity: while in BUTTERFLY, the goalie holds whenever the puck
+# is within this Euclidean distance — covers genuine jam plays, post-save
+# rebounds bouncing in front, and slow follow-ups. Only when the puck has
+# clearly cleared this zone does speed/direction-based recovery apply. ~2.4m
+# is a couple of stick-lengths from the goalie, ~half-slot.
+@export var recovery_proximity_threshold: float = 2.4
 
 # Reaction freeze ends only on a discrete resolving event: puck hits this
 # goalie, hits the boards, hits a post, hits the net, or is picked up by
@@ -547,12 +548,19 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 
 # Should the goalie keep holding butterfly because the puck is still a threat?
 # Hold conditions, in priority:
-#   1. Puck is fast AND approaching      → hold (active shot/play)
-#   2. Puck is moving away (any speed)   → release (rebound clearing)
-#   3. Puck is slow / stationary AND close to net  → hold (jam at the feet)
-#   4. Otherwise                         → release
+#   1. Puck is CLOSE (within recovery_proximity_threshold)  → hold
+#      Catches the rebound-stays-in-front case: a deflection bouncing back
+#      toward the shooter (any speed, any direction) is still a threat
+#      because the goalie can't usefully recover before a follow-up shot
+#      or a teammate's pickup.
+#   2. Puck is fast AND approaching                         → hold (active shot)
+#   3. Otherwise                                            → release (cleared)
 # Pressure detection is one-way: it only HOLDS butterfly, never triggers entry.
 func _is_threat_pressing() -> bool:
+	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
+			puck.global_position, _goal_line_z, _goal_center_x)
+	if threat_dist < recovery_proximity_threshold:
+		return true
 	var speed_low: bool
 	var moving_away: bool
 	if is_server:
@@ -561,18 +569,9 @@ func _is_threat_pressing() -> bool:
 	else:
 		speed_low = absf(_puck_approach_velocity) < shot_speed_threshold
 		moving_away = _puck_approach_velocity < 0.0
-	# Moving away is always recover — that's the rebound clearing the slot.
 	if moving_away:
 		return false
-	# Fast and approaching = active shot/play in motion.
-	if not speed_low:
-		return true
-	# Puck is slow and not moving away — only hold if it's right on top of us.
-	# Crease radius is 1.83m, so a 1.5–2m gate covers genuine jam plays at the
-	# feet without forcing butterfly during routine post-save settling.
-	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
-			puck.global_position, _goal_line_z, _goal_center_x)
-	return threat_dist < recovery_proximity_threshold
+	return not speed_low
 
 # ── Depth ─────────────────────────────────────────────────────────────────────
 # Standing depth is the "challenge angle" arc radius from goal center. The
