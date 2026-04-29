@@ -3,6 +3,7 @@ extends RefCounted
 
 # ── Wrister charge state ──────────────────────────────────────────────────────
 var charge_distance: float = 0.0
+var wrister_start_blade_local_x: float = 0.0
 # prev_mouse_screen_pos is intentionally public (no underscore): LocalController
 # seeds it from _input_history at the start and end of reconcile() replay.
 var prev_mouse_screen_pos: Vector2 = Vector2.ZERO

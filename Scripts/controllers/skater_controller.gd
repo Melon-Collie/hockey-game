@@ -338,7 +338,10 @@ func teleport_to(pos: Vector3) -> void:
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 func _apply_state(input: InputState, delta: float) -> void:
+	var prev_state: int = _sm.get_state()
 	_sm.dispatch(skater, input, delta, has_puck, _game_state.is_movement_locked())
+	if prev_state != State.WRISTER_AIM and _sm.get_state() == State.WRISTER_AIM:
+		_aiming.wrister_start_blade_local_x = skater.get_blade_position().x
 
 # ── State Helpers ─────────────────────────────────────────────────────────────
 func _transition_to_skating() -> void:
@@ -426,12 +429,13 @@ func _release_wrister(input: InputState) -> void:
 		var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
 		# _prev_blade_dir is the world-space direction the cursor was dragged
 		# (relative to the player, so skating velocity is already removed).
+		var is_backhand: bool = \
+				_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
 				blade_world,
-				skater.get_blade_position(),
-				skater.is_left_handed,
+				is_backhand,
 				_is_elevated,
 				_aiming.charge_distance,
 				_wrister_config(),

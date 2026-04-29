@@ -47,8 +47,7 @@ static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,
 		blade_world_pos: Vector3,
-		blade_local_pos: Vector3,
-		is_left_handed: bool,
+		is_backhand: bool,
 		is_elevated: bool,
 		charge_distance: float,
 		cfg: WristerConfig,
@@ -82,10 +81,6 @@ static func release_wrister(
 		shot_dir = (target - player_xz).normalized()
 	var power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, charge_t)
 
-	# Blade X in upper-body-local space: lefty forehand lives at negative X,
-	# backhand at positive X; mirror for right-handed. Body center is the
-	# threshold — any cross-body blade position is a backhand.
-	var is_backhand: bool = blade_local_pos.x * (-1.0 if is_left_handed else 1.0) > 0.0
 	if is_backhand:
 		power *= cfg.backhand_power_coefficient
 
