@@ -69,6 +69,8 @@ func _ready() -> void:
 	NetworkManager.game_started.connect(_on_game_started)
 	NetworkManager.color_vote_changed.connect(_on_color_vote_changed)
 	NetworkManager.color_votes_synced.connect(_on_color_votes_synced)
+	NetworkManager.bot_slot_changed.connect(_on_bot_slot_changed)
+	NetworkManager.bot_slots_synced.connect(_on_bot_slots_synced)
 	NetworkManager.lobby_settings_synced.connect(_on_lobby_settings_synced)
 	NetworkManager.player_ready_changed.connect(_on_player_ready_changed)
 
@@ -138,6 +140,7 @@ func _build_ui() -> void:
 	_slot_grid = SlotGridPanel.new()
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_grid.slot_selected.connect(_on_slot_selected)
+	_slot_grid.bot_toggled.connect(_on_bot_toggled)
 	vbox.add_child(_slot_grid)
 
 	vbox.add_child(_build_spectator_panel())
@@ -529,7 +532,8 @@ func _refresh_grid() -> void:
 	if _slot_grid == null:
 		return
 	_recompute_resolved_colors()
-	_slot_grid.refresh(_build_slot_grid_roster(), NetworkManager.local_peer_id(), _get_team_colors())
+	_slot_grid.refresh(_build_slot_grid_roster(), NetworkManager.local_peer_id(), _get_team_colors(),
+			NetworkManager.pending_bot_slots, NetworkManager.is_host)
 	_refresh_spectator_panel()
 
 # Live vote resolution. Walks the current roster, buckets each player's vote
@@ -638,6 +642,7 @@ func _on_peer_joined(peer_id: int) -> void:
 		NetworkManager.send_lobby_roster(existing_peer, roster)
 	NetworkManager.send_color_votes_to(peer_id, _color_votes)
 	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled, _rule_set)
+	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots)
 	_broadcast_confirm(peer_id, target[0], target[1])
 	_update_start_btn()
 	_refresh_grid()
@@ -742,6 +747,19 @@ func _on_color_votes_synced(votes: Dictionary) -> void:
 	_color_votes = votes.duplicate()
 	# Make sure our own vote is still recorded after a full sync.
 	_color_votes[NetworkManager.local_peer_id()] = _my_color_id
+	_refresh_grid()
+
+func _on_bot_toggled(team_id: int, slot: int, is_bot: bool) -> void:
+	# Host-only by gating: SlotGridPanel hides the CheckButton on non-hosts so
+	# this only fires from the host. send_bot_slot is a no-op on clients.
+	if not NetworkManager.is_host:
+		return
+	NetworkManager.send_bot_slot(team_id * 3 + slot, is_bot)
+
+func _on_bot_slot_changed(_slot_key: int, _is_bot: bool) -> void:
+	_refresh_grid()
+
+func _on_bot_slots_synced(_bot_slots: Dictionary) -> void:
 	_refresh_grid()
 
 func _on_lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:

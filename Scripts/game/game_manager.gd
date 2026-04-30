@@ -269,6 +269,7 @@ func on_host_started() -> void:
 	else:
 		var assignment: Dictionary = _state_machine.register_host(1)
 		_spawn_local(1, assignment.team_slot, teams[assignment.team_id])
+	_spawn_bots_from_lobby()
 	# Registry is fully populated by this point — capture roster + open file.
 	_open_replay_file_writer()
 
@@ -1724,6 +1725,53 @@ func _push_lobby_assignments_to_clients() -> void:
 		existing.append([peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number])
 	NetworkManager.pending_lobby_slots = {}
+
+
+func _spawn_bots_from_lobby() -> void:
+	# Host-only. Iterates pending_bot_slots (set by lobby toggles), spawns an
+	# AIController-driven skater per marked slot, and broadcasts a remote-skater
+	# spawn so clients render each bot through their existing RemoteController
+	# pipeline. Synthetic peer_ids in [-6, -1] avoid colliding with real ENet
+	# peers (always positive); send_slot_assignment is skipped because it
+	# targets peer_ids and bots have no peer connection.
+	if not NetworkManager.is_host:
+		return
+	if NetworkManager.pending_bot_slots.is_empty():
+		return
+	var bot_id: int = 0
+	for slot_key: int in NetworkManager.pending_bot_slots:
+		if not NetworkManager.pending_bot_slots[slot_key]:
+			continue
+		# Slot keys for non-spectator slots: team*3+slot. Spectator keys are
+		# >= 100 and bots can't occupy them; skip defensively.
+		if slot_key < 0 or slot_key >= 6:
+			continue
+		var team_id: int = 0 if slot_key < 3 else 1
+		var team_slot: int = slot_key % 3
+		# Refuse to overwrite a slot that a human already claimed.
+		if _slot_already_taken(team_id, team_slot):
+			continue
+		var team: Team = teams[team_id]
+		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
+		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team)
+		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
+		# Bot visible to clients: same RPC humans use. Clients spawn it as a
+		# RemoteController-driven skater because peer_id is not their own.
+		NetworkManager.send_spawn_remote_skater(record.peer_id, team_slot, team_id,
+				colors.jersey, colors.helmet, colors.pants,
+				record.is_left_handed, record.player_name, record.jersey_number)
+		bot_id += 1
+	# Clear after spawning so a return-to-lobby + restart starts fresh; the
+	# host will re-toggle bot slots in the next lobby session if desired.
+	NetworkManager.pending_bot_slots = {}
+
+
+func _slot_already_taken(team_id: int, team_slot: int) -> bool:
+	for peer_id: int in _registry.all():
+		var r: PlayerRecord = _registry.get_record(peer_id)
+		if r.team.team_id == team_id and r.team_slot == team_slot:
+			return true
+	return false
 
 
 func _collect_existing_player_data() -> Array[Array]:
