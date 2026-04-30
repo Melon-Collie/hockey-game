@@ -39,6 +39,10 @@ signal color_votes_synced(votes: Dictionary)
 signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int)
 signal return_to_lobby_received(roster: Array)
 signal player_ready_changed(peer_id: int, is_ready: bool)
+# Lobby per-slot bot toggle. Slot keys follow LobbyManager._slot_key (team*3+slot).
+# Host authoritative; clients mirror. Phase 1 only emits on host-driven changes.
+signal bot_slot_changed(slot_key: int, is_bot: bool)
+signal bot_slots_synced(bot_slots: Dictionary)
 signal rematch_vote_changed(peer_id: int, vote: bool)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
@@ -76,6 +80,13 @@ var is_tutorial_mode: bool = false
 var pending_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
 var pending_away_color_id: String  = TeamColorRegistry.DEFAULT_AWAY_ID
 var pending_color_votes: Dictionary = {}  # peer_id → color_id (host authoritative; all peers mirror)
+# slot_key (team*3+slot, matching LobbyManager._slot_key) → bool. Empty slots
+# marked true get an AI bot at game start. Host authoritative; clients mirror.
+var pending_bot_slots: Dictionary[int, bool] = {}
+# Integer physics-tick counter on the host. Used by AI/perception code as a
+# deterministic salt for per-tick RNG (see docs/specs/AI_PLAN.md §11). Clients
+# do not maintain or consume this — they read estimated_host_time() instead.
+var host_tick: int = 0
 var pending_num_periods: int = GameRules.NUM_PERIODS
 var pending_period_duration: float = GameRules.PERIOD_DURATION
 var pending_ot_enabled: bool = GameRules.OT_ENABLED
@@ -312,6 +323,15 @@ func _notification(what: int) -> void:
 		else:
 			# Reset the input timer so we don't burst-send stale inputs.
 			_input_timer = 0.0
+
+func _physics_process(_delta: float) -> void:
+	# Single source of truth for the host-side integer tick counter. Increments
+	# at the engine's physics rate (240 Hz). AI agents salt their per-tick RNG
+	# with this value; consumers must tolerate the counter being zero before
+	# the host starts ticking and must not assume monotonicity across host
+	# transfers (Phase 1 has no host transfer support anyway).
+	if is_host:
+		host_tick += 1
 
 func _process(delta: float) -> void:
 	# Cap delta to avoid timer bursting on the first frame after an OS freeze
@@ -943,6 +963,44 @@ func send_color_vote(color_id: String) -> void:
 
 func send_color_votes_to(peer_id: int, votes: Dictionary) -> void:
 	sync_color_votes.rpc_id(peer_id, votes)
+
+# ── Bot slot toggles ─────────────────────────────────────────────────────────
+# Phase 1 keeps authoring host-only: only the host UI calls send_bot_slot. The
+# RPC plumbing mirrors color votes so clients stay in sync and a future phase
+# can let clients request toggles (request_bot_slot) without redesigning.
+
+@rpc("authority", "reliable")
+func notify_bot_slot(slot_key: int, is_bot: bool) -> void:
+	if is_bot:
+		pending_bot_slots[slot_key] = true
+	else:
+		pending_bot_slots.erase(slot_key)
+	bot_slot_changed.emit(slot_key, is_bot)
+
+@rpc("authority", "reliable")
+func sync_bot_slots(bot_slots: Dictionary) -> void:
+	pending_bot_slots = {}
+	for k: int in bot_slots:
+		if bot_slots[k]:
+			pending_bot_slots[k] = true
+	bot_slots_synced.emit(pending_bot_slots)
+
+func send_bot_slot(slot_key: int, is_bot: bool) -> void:
+	# Host-authored. Client-side calls are silently dropped in Phase 1 to
+	# match the host-only design; the surrounding UI gates the button on
+	# is_host so this branch shouldn't fire under normal flow.
+	if not is_host:
+		return
+	if is_bot:
+		pending_bot_slots[slot_key] = true
+	else:
+		pending_bot_slots.erase(slot_key)
+	for remote_id: int in connected_peer_ids():
+		notify_bot_slot.rpc_id(remote_id, slot_key, is_bot)
+	bot_slot_changed.emit(slot_key, is_bot)
+
+func send_bot_slots_to(peer_id: int, bot_slots: Dictionary) -> void:
+	sync_bot_slots.rpc_id(peer_id, bot_slots)
 
 @rpc("authority", "reliable")
 func notify_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool,

@@ -118,6 +118,61 @@ func spawn(
 	return record
 
 
+# Spawns an AI bot into a team slot. Host-only. Bots get a synthetic peer_id
+# in the range [-6, -1] so dictionary keying stays int while never colliding
+# with real ENet peer ids (always positive). Any RPC call that iterates
+# _players must gate its rpc_id() on `peer_id > 0`.
+#
+# Mirrors spawn() above but skips the human-player surface (handedness pref,
+# jersey number from preferences, ready state). Bots get deterministic
+# defaults: alternating handedness by slot, jersey numbers 80+slot, name
+# "Bot N". Stripe / glove / sock palette is generated the same way as for
+# humans via TeamColorRegistry so the visual matches.
+func spawn_bot(
+		bot_id: int,
+		team_slot: int,
+		team: Team) -> PlayerRecord:
+	assert(bot_id >= 0 and bot_id < 6, "bot_id must be 0..5 (one per team slot)")
+	var peer_id: int = -1 - bot_id
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team.team_id)
+	var record := PlayerRecord.new(peer_id, team_slot, false, team)
+	record.jersey_color        = colors.jersey
+	record.helmet_color        = colors.helmet
+	record.pants_color         = colors.pants
+	record.jersey_stripe_color = colors.get("jersey_stripe", colors.jersey)
+	record.gloves_color        = colors.get("gloves", colors.pants)
+	record.pants_stripe_color  = colors.get("pants_stripe", colors.pants)
+	record.socks_color         = colors.get("socks", colors.jersey)
+	record.socks_stripe_color  = colors.get("socks_stripe", colors.jersey)
+	record.secondary_color     = colors.get("secondary", colors.pants)
+	record.text_color          = colors.text
+	record.text_outline_color  = colors.text_outline
+	record.is_left_handed = (team_slot % 2 == 1)
+	record.player_name = "Bot %d" % (bot_id + 1)
+	record.jersey_number = 80 + bot_id
+	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
+	record.faceoff_position = faceoff_pos
+
+	var puck: Puck = _puck_getter.call() as Puck
+	var blade_color: Color = colors.primary
+	var spawned: Dictionary = _spawner.spawn_ai_player(
+			faceoff_pos, record.jersey_color, record.helmet_color, record.pants_color,
+			record.socks_color, blade_color, record.is_left_handed, puck, _game_state_node)
+	record.skater = spawned.skater
+	record.controller = spawned.controller
+	spawned.skater.team_id = team.team_id
+	spawned.skater.set_player_name(record.player_name)
+	spawned.skater.set_jersey_info(record.player_name, record.jersey_number, record.text_color)
+	spawned.skater.set_jersey_stripes(record.jersey_stripe_color, record.pants_stripe_color, record.socks_stripe_color)
+	_players[peer_id] = record
+
+	if _spawn_wireup.is_valid():
+		_spawn_wireup.call(record)
+	player_added.emit(record)
+	player_joined.emit(record.display_name(), colors.primary)
+	return record
+
+
 # Removes a player from the registry and queues their nodes for deletion.
 # Returns the removed record (for caller-side cleanup like puck cooldown / RPC),
 # or null if the peer wasn't registered.

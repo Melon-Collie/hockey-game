@@ -13,6 +13,7 @@ const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 const GOALIE_SCENE: PackedScene = preload("res://Scenes/Goalie.tscn")
 const LOCAL_CONTROLLER_SCENE: PackedScene = preload("res://Scenes/LocalController.tscn")
 const REMOTE_CONTROLLER_SCENE: PackedScene = preload("res://Scenes/RemoteController.tscn")
+const AI_CONTROLLER_SCENE: PackedScene = preload("res://Scenes/AIController.tscn")
 
 var _scene_root: Node = null
 
@@ -88,6 +89,32 @@ func spawn_local_player(
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
 	controller.set_local_team_id(team_id)
+	return {"skater": skater, "controller": controller}
+
+# ── AI player (skater + AIController) ────────────────────────────────────────
+# Host-only. Same skater spawn as a remote player; only the controller class
+# differs. Clients render this skater through their own RemoteController
+# instance (spawned via the existing remote-skater RPC), so this method has
+# no client-side counterpart.
+# Returns { "skater": Skater, "controller": AIController }.
+func spawn_ai_player(
+		position: Vector3,
+		jersey_color: Color,
+		helmet_color: Color,
+		pants_color: Color,
+		socks_color: Color,
+		blade_color: Color,
+		is_left_handed: bool,
+		puck: Puck,
+		game_state: Node) -> Dictionary:
+	var skater: Skater = SKATER_SCENE.instantiate()
+	skater.is_left_handed = is_left_handed
+	skater.position = position
+	_scene_root.add_child(skater)
+	skater.set_player_color(jersey_color, helmet_color, pants_color, socks_color, blade_color)
+	var controller: AIController = AI_CONTROLLER_SCENE.instantiate()
+	_scene_root.add_child(controller)
+	controller.setup(skater, puck, game_state)
 	return {"skater": skater, "controller": controller}
 
 # ── Remote player (skater + RemoteController) ────────────────────────────────
