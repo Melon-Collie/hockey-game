@@ -46,13 +46,10 @@ var _puck_oob_timer: float = 0.0
 var _spawner: ActorSpawner = null
 var teams: Array[Team] = []
 var puck: Puck = null
-# Perception ring buffer written once per host physics tick. AIControllers
-# read with a per-skill delay (Phase 2+ — currently the buffer is populated
-# but only consumed by debug surface). Created lazily in _spawn_world so a
-# pre-game scene with no _registry doesn't allocate.
-var perception: PerceptionBuffer = null
 # One TeamBrain per team, host-only. Allocated in _spawn_world. Bots read
 # their role from here via SkaterAgent. Indexed by team_id (0=home, 1=away).
+# AI consumes WorldSnapshots via get_state_at() rather than a separate
+# perception buffer — the lag-comp ring already captures the same data.
 var team_brains: Array[TeamBrain] = []
 var goals: Array[HockeyGoal] = []
 var goalies: Array[Goalie] = []
@@ -193,12 +190,12 @@ func _physics_process(delta: float) -> void:
 		return
 	if _state_buffer_manager != null and puck_controller != null:
 		_state_buffer_manager.capture(_registry, puck_controller, goalie_controllers)
-	if perception != null:
-		_capture_perception_snapshot()
-		# Brains tick AFTER capture so they see the freshest snapshot at
-		# delay=0. Each brain self-rate-limits to its TICK_PERIOD (~6 Hz);
-		# calling each frame just feeds the accumulator.
-		var fresh: WorldSnapshot = perception.read(0)
+	# Tick TeamBrains with the freshest world state. Each brain self-rate-
+	# limits to its TICK_PERIOD (~6 Hz); calling each frame just feeds the
+	# accumulator. The state-buffer manager has already captured this tick
+	# above so passing a state-at-now is a fresh read.
+	if not team_brains.is_empty() and _state_buffer_manager != null:
+		var fresh: WorldSnapshot = _state_buffer_manager.get_state_at(NetworkManager.local_time())
 		for brain: TeamBrain in team_brains:
 			brain.tick(delta, fresh)
 	_update_host_puck_tracking()
@@ -443,8 +440,9 @@ func _spawn_world() -> void:
 	_spawn_goalies()
 	_wire_subsystems()
 	if NetworkManager.is_host:
-		perception = PerceptionBuffer.new()
-		team_brains = [TeamBrain.new(0), TeamBrain.new(1)]
+		var team_id_resolver := func(peer_id: int) -> int:
+			return _registry.resolve_team_id_for_peer(peer_id)
+		team_brains = [TeamBrain.new(0, team_id_resolver), TeamBrain.new(1, team_id_resolver)]
 		_connect_goal_signals()
 
 
@@ -1792,42 +1790,12 @@ func _slot_already_taken(team_id: int, team_slot: int) -> bool:
 	return false
 
 
-func _capture_perception_snapshot() -> void:
-	# Host-only. Fills the perception buffer's next slot in-place from live
-	# registry, puck, and goalie state, then commits with the current
-	# host_tick. Skater slots are densely packed (no gaps for empty roster
-	# slots) so consumers iterate num_skaters; find_skater(peer_id) resolves
-	# back to an index. Bots and humans are treated identically here — both
-	# show up in _registry.all() with valid peer_ids (negative for bots).
-	var snap: WorldSnapshot = perception.acquire()
-	var idx: int = 0
-	for peer_id: int in _registry.all():
-		if idx >= WorldSnapshot.MAX_SKATERS:
-			break
-		var record: PlayerRecord = _registry.all()[peer_id]
-		if record == null or record.skater == null:
-			continue
-		snap.skater_peer_id[idx] = peer_id
-		snap.skater_pos[idx] = record.skater.global_position
-		snap.skater_vel[idx] = record.skater.velocity
-		snap.skater_team[idx] = record.team.team_id
-		idx += 1
-	snap.num_skaters = idx
-	snap.num_goalies = mini(goalies.size(), WorldSnapshot.MAX_GOALIES)
-	for g: int in snap.num_goalies:
-		snap.goalie_pos[g] = goalies[g].global_position
-		# goalies[0] defends -GOAL_LINE_Z (Team 1's end), goalies[1] defends +GOAL_LINE_Z (Team 0's end).
-		# See ActorSpawner.spawn_goalie_pair for the ordering.
-		snap.goalie_team[g] = 1 if g == 0 else 0
-	snap.puck_pos = puck.global_position
-	snap.puck_vel = puck.get_puck_velocity()
-	var carrier: Skater = puck.get_carrier()
-	snap.puck_possessor_idx = -1
-	if carrier != null:
-		var carrier_peer_id: int = _registry.resolve_peer_id(carrier)
-		if carrier_peer_id != -1:
-			snap.puck_possessor_idx = snap.find_skater(carrier_peer_id)
-	perception.commit(NetworkManager.host_tick, NetworkManager.local_time())
+# Public forwarder for AIController so AI doesn't reach into _state_buffer_manager
+# directly. Returns an interpolated WorldSnapshot at the requested host time.
+func get_state_at(host_timestamp: float) -> WorldSnapshot:
+	if _state_buffer_manager == null:
+		return null
+	return _state_buffer_manager.get_state_at(host_timestamp)
 
 
 func _collect_existing_player_data() -> Array[Array]:

@@ -8,6 +8,10 @@ class_name AIRoleAssignment
 # in this phase — pick whoever is closest, even if they're behind it. The
 # Phase 3 anchor for OFF bots already pulls them above; chasing from below
 # happens, but it's a known cost of MVP simplicity.
+#
+# Consumes the existing WorldSnapshot (Scripts/networking/world_snapshot.gd)
+# captured by StateBufferManager. team_id is not on SkaterNetworkState, so
+# callers pass a Callable resolver: `func(peer_id: int) -> int`.
 
 const ROLE_F1: StringName = &"F1"
 const ROLE_OFF: StringName = &"OFF"
@@ -17,27 +21,28 @@ const ROLE_OFF: StringName = &"OFF"
 # the given team_id present in the snapshot. Always assigns exactly one F1
 # (the closest teammate to the puck); the rest get OFF. If the team has no
 # skaters in the snapshot, returns an empty dictionary.
-static func compute(snapshot: WorldSnapshot, team_id: int) -> Dictionary:
+static func compute(snapshot: WorldSnapshot, team_id: int, team_id_resolver: Callable) -> Dictionary:
 	var roles: Dictionary = {}
-	if snapshot == null or snapshot.num_skaters == 0:
+	if snapshot == null or snapshot.puck_state == null or snapshot.skater_states.is_empty():
 		return roles
-	var puck_xz := Vector2(snapshot.puck_pos.x, snapshot.puck_pos.z)
-	var closest_idx: int = -1
+	var puck_x: float = snapshot.puck_state.position.x
+	var puck_z: float = snapshot.puck_state.position.z
+	var closest_peer: int = -1
 	var closest_d2: float = INF
-	for i: int in snapshot.num_skaters:
-		if snapshot.skater_team[i] != team_id:
+	for peer_id: int in snapshot.skater_states:
+		if int(team_id_resolver.call(peer_id)) != team_id:
 			continue
-		var p: Vector3 = snapshot.skater_pos[i]
-		var dx: float = p.x - puck_xz.x
-		var dz: float = p.z - puck_xz.y
+		var s: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var dx: float = s.position.x - puck_x
+		var dz: float = s.position.z - puck_z
 		var d2: float = dx * dx + dz * dz
 		if d2 < closest_d2:
 			closest_d2 = d2
-			closest_idx = i
-	if closest_idx < 0:
+			closest_peer = peer_id
+	if closest_peer < 0:
 		return roles
-	for i: int in snapshot.num_skaters:
-		if snapshot.skater_team[i] != team_id:
+	for peer_id: int in snapshot.skater_states:
+		if int(team_id_resolver.call(peer_id)) != team_id:
 			continue
-		roles[snapshot.skater_peer_id[i]] = ROLE_F1 if i == closest_idx else ROLE_OFF
+		roles[peer_id] = ROLE_F1 if peer_id == closest_peer else ROLE_OFF
 	return roles

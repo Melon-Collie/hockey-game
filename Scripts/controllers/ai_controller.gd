@@ -6,14 +6,14 @@ extends SkaterController
 # bot through the existing SkaterNetworkState broadcast (no input
 # replication path — LocalController.get_input_batch is the human path).
 #
-# Phase 1 emitted a frozen zero input. Phase 2 added perception buffer
-# wiring. Phase 3 (this file's current state) routes through SkaterAgent
-# for anchor-following steering.
+# Reads a tick-delayed WorldSnapshot from GameManager.get_state_at, which
+# forwards to StateBufferManager. We don't keep a separate AI perception
+# buffer — the lag-comp ring is already capturing the same data.
 
-# Single global reaction delay, ≈100 ms at 240 Hz. Tunable in playtest;
-# not derived from a per-bot skill (we deliberately don't ship scaling
-# difficulties — see CLAUDE.md / AI_PLAN.md §13 callout).
-const REACTION_DELAY_TICKS: int = 24
+# Single global reaction delay, ~100 ms. Tunable in playtest; not derived
+# from a per-bot skill (we deliberately don't ship scaling difficulties —
+# see CLAUDE.md / AI_PLAN.md §13 callout).
+const REACTION_DELAY_S: float = 0.1
 
 var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
@@ -29,9 +29,9 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 # peer_id and team_id but not the controller — so the registry calls this
 # after spawn to wire the agent. Separate from setup() because setup() is
 # called by ActorSpawner before the registry knows which slot it belongs to.
-func setup_agent(peer_id: int, team_id: int, brain: TeamBrain) -> void:
+func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable) -> void:
 	if _agent != null:
-		_agent.setup(peer_id, team_id, brain)
+		_agent.setup(peer_id, team_id, brain, resolver)
 
 
 func _physics_process(delta: float) -> void:
@@ -46,10 +46,11 @@ func _physics_process(delta: float) -> void:
 		return
 	if _game_state.is_input_blocked():
 		return
-	# Read tick-delayed snapshot. Buffer is only allocated on the host; guard
-	# anyway so a stripped-down test scene doesn't crash.
-	if GameManager.perception != null:
-		perceived_snapshot = GameManager.perception.read(REACTION_DELAY_TICKS)
+	# Read tick-delayed snapshot. StateBufferManager interpolates between
+	# captured frames so the result is stable even if no entry exists at
+	# exactly target_time.
+	var target_time: float = NetworkManager.local_time() - REACTION_DELAY_S
+	perceived_snapshot = GameManager.get_state_at(target_time)
 	var input: InputState = _agent.tick(perceived_snapshot, delta, NetworkManager.estimated_host_time())
 	_process_input(input, delta)
 	skater.current_shot_state = _sm.get_state() as int
