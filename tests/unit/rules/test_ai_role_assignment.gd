@@ -54,6 +54,20 @@ func test_closest_teammate_is_f1() -> void:
 	assert_eq(roles[300], AIRoleAssignment.ROLE_OFF)
 
 
+func test_negative_peer_ids_can_be_f1() -> void:
+	# Bot peer_ids are synthetic negatives (-1..-6). The sentinel that detects
+	# "no peer matched the team filter" must NOT use `< 0` because that would
+	# false-positive whenever a bot wins F1.
+	var made: Array = _make([
+			[-1, 0, Vector3(0.5, 0, 0)],   # bot, on top of the puck
+			[-2, 0, Vector3(8, 0, 0)],     # bot, far
+	], Vector3(0, 0, 0))
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1])
+	assert_eq(roles.size(), 2, "all-bot team should still get role assignments")
+	assert_eq(roles[-1], AIRoleAssignment.ROLE_F1, "closest bot (peer -1) should be F1")
+	assert_eq(roles[-2], AIRoleAssignment.ROLE_OFF)
+
+
 func test_ignores_opposing_team() -> void:
 	var made: Array = _make([
 			[100, 0, Vector3(10, 0, 0)],   # team 0, far from puck

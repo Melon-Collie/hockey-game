@@ -27,7 +27,10 @@ static func compute(snapshot: WorldSnapshot, team_id: int, team_id_resolver: Cal
 		return roles
 	var puck_x: float = snapshot.puck_state.position.x
 	var puck_z: float = snapshot.puck_state.position.z
-	var closest_peer: int = -1
+	# closest_peer starts at 0 as a placeholder. We use closest_d2 == INF as
+	# the "found nothing" sentinel because bot peer_ids are negative (-1..-6),
+	# so a < 0 check would false-positive whenever a bot wins F1.
+	var closest_peer: int = 0
 	var closest_d2: float = INF
 	for peer_id: int in snapshot.skater_states:
 		if int(team_id_resolver.call(peer_id)) != team_id:
@@ -39,7 +42,7 @@ static func compute(snapshot: WorldSnapshot, team_id: int, team_id_resolver: Cal
 		if d2 < closest_d2:
 			closest_d2 = d2
 			closest_peer = peer_id
-	if closest_peer < 0:
+	if closest_d2 == INF:
 		return roles
 	for peer_id: int in snapshot.skater_states:
 		if int(team_id_resolver.call(peer_id)) != team_id:

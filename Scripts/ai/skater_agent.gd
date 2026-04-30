@@ -57,13 +57,6 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 	var self_pos: Vector3 = self_state.position
 	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
 	var have_puck: bool = (snapshot.puck_state.carrier_peer_id == _peer_id)
-	# DEBUG: log once per second per bot to confirm role assignment is firing.
-	if Engine.get_physics_frames() % 240 == 0:
-		var brain_size: int = _team_brain.roles.size() if _team_brain != null else -1
-		var snap_size: int = snapshot.skater_states.size()
-		print("[AI bot %d team %d] role=%s have_puck=%s | brain_roles=%d snap_skaters=%d puck_carrier=%d" % [
-				_peer_id, _team_id, role, str(have_puck),
-				brain_size, snap_size, snapshot.puck_state.carrier_peer_id])
 
 	var anchor: Vector3 = _compute_anchor(role, self_pos, snapshot, have_puck)
 
