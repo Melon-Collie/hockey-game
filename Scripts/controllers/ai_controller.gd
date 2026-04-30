@@ -36,7 +36,7 @@ func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callabl
 
 
 func _physics_process(delta: float) -> void:
-	if skater == null or puck == null:
+	if skater == null or puck == null or _agent == null:
 		return
 	if NetworkManager.is_replay_mode():
 		return
@@ -47,10 +47,10 @@ func _physics_process(delta: float) -> void:
 		return
 	if _game_state.is_input_blocked():
 		return
-	# Read freshest captured state. delay=0 → buffer returns the latest
-	# entry without searching past timestamps, so no "predates oldest"
-	# warnings even when the buffer is just-initialized.
-	perceived_snapshot = GameManager.get_state_delayed(0.0)
+	# Read the frame's shared snapshot. GameManager publishes it once per
+	# host physics frame after StateBufferManager.capture; reading it here
+	# avoids 6 bots × redundant interpolation passes per frame.
+	perceived_snapshot = GameManager.current_snapshot
 	var input: InputState = _agent.tick(perceived_snapshot, delta, NetworkManager.estimated_host_time())
 	_process_input(input, delta)
 	skater.current_shot_state = _sm.get_state() as int

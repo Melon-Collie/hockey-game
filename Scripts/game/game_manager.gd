@@ -51,6 +51,11 @@ var puck: Puck = null
 # AI consumes WorldSnapshots via get_state_at() rather than a separate
 # perception buffer — the lag-comp ring already captures the same data.
 var team_brains: Array[TeamBrain] = []
+# Shared "current frame" world snapshot, refreshed once per host physics
+# frame after StateBufferManager.capture. AIControllers and TeamBrains
+# read from here instead of each fetching their own — saves redundant
+# interpolation work and per-tick allocations.
+var current_snapshot: WorldSnapshot = null
 var goals: Array[HockeyGoal] = []
 var goalies: Array[Goalie] = []
 var goalie_controllers: Array[GoalieController] = []
@@ -190,17 +195,16 @@ func _physics_process(delta: float) -> void:
 		return
 	if _state_buffer_manager != null and puck_controller != null:
 		_state_buffer_manager.capture(_registry, puck_controller, goalie_controllers)
-	# Tick TeamBrains with the freshest world state. Each brain self-rate-
-	# limits to its TICK_PERIOD (~6 Hz); calling each frame just feeds the
-	# accumulator. The state-buffer manager has already captured this tick
-	# above so passing a state-at-now is a fresh read.
-	if not team_brains.is_empty() and _state_buffer_manager != null:
-		# StateBufferManager.capture timestamps via Time.get_ticks_usec()/1e6
-		# (OS time), not local_time() (session-relative, resets on rehost).
-		# Pass 0 to get_state_delayed so the helper applies the matching clock.
-		var fresh: WorldSnapshot = get_state_delayed(0.0)
+	# Build the shared "current frame" snapshot once after capture. AI
+	# controllers and team brains both read from current_snapshot rather
+	# than each calling get_state_delayed independently — at 6 bots + 2
+	# brains that's 8 redundant interpolation passes per frame, each
+	# allocating ~10 RefCounted state objects.
+	if _state_buffer_manager != null:
+		current_snapshot = get_state_delayed(0.0)
+	if not team_brains.is_empty() and current_snapshot != null:
 		for brain: TeamBrain in team_brains:
-			brain.tick(delta, fresh)
+			brain.tick(delta, current_snapshot)
 	_update_host_puck_tracking()
 	_check_puck_out_of_bounds(delta)
 	_apply_ghost_state()
@@ -1585,6 +1589,8 @@ func on_scene_exit() -> void:
 	_registry = null
 	_codec = null
 	_state_buffer_manager = null
+	current_snapshot = null
+	team_brains = []
 	# Null PhaseCoordinator's _state_machine before stopping the driver so
 	# any replay_stopped signal that fires during teardown returns early from
 	# _on_goal_replay_stopped's guard rather than calling handle_phase_entered
