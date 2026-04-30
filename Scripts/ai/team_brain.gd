@@ -36,6 +36,12 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 		return
 	_accumulator -= TICK_PERIOD
 	roles = AIRoleAssignment.compute(snapshot, team_id, _team_id_resolver)
+	# DEBUG: dump per-tick role map. Includes resolver output for every peer
+	# so we can see where the team_id filter is rejecting members.
+	var dump: Array = []
+	for pid: int in snapshot.skater_states:
+		dump.append("p%d→t%d" % [pid, int(_team_id_resolver.call(pid))])
+	print("[TeamBrain %d] tick: roles=%s | resolver=%s" % [team_id, str(roles), str(dump)])
 
 
 func get_role(peer_id: int) -> StringName:
