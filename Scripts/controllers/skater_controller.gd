@@ -280,6 +280,12 @@ func get_shot_state() -> int:
 func apply_network_state(_net_state: SkaterNetworkState, _host_ts: float) -> void:
 	pass  # overridden by RemoteController on client
 
+# Default 0 for controllers that don't queue inputs (LocalController, AIController).
+# RemoteController overrides this with its actual input-queue depth, which is
+# encoded into world state for client-side adaptive interpolation tuning.
+func get_queue_depth() -> int:
+	return 0
+
 func apply_replay_state(state: SkaterNetworkState) -> void:
 	if skater == null:
 		return

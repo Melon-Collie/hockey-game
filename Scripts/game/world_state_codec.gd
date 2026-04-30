@@ -96,9 +96,12 @@ func encode_world_state() -> PackedByteArray:
 		var record: PlayerRecord = _registry.get_record(peer_id)
 		var depth: int = 0
 		if record != null and not record.is_local:
-			depth = (record.controller as RemoteController).get_queue_depth()
+			depth = record.controller.get_queue_depth()
 		var id_bytes := PackedByteArray(); id_bytes.resize(4)
-		id_bytes.encode_u32(0, peer_id)
+		# encode_s32 (not u32) so negative AI bot peer_ids round-trip correctly.
+		# For real ENet peer ids (always positive) the encoded bytes are
+		# identical to u32, so this is wire-compatible with existing builds.
+		id_bytes.encode_s32(0, peer_id)
 		b.append_array(id_bytes)
 		b.append_array(_encode_skater_quantized(_state_buffer.latest_skater_state(peer_id)))
 		b.append(clampi(depth, 0, 255))
@@ -150,7 +153,8 @@ func decode_world_state(data: PackedByteArray) -> void:
 	# Skaters — collect peer_ids in packet order so we can resolve the puck carrier index below.
 	var decoded_peers: Array[int] = []
 	for _i: int in num_skaters:
-		var peer_id: int = data.decode_u32(o); o += 4
+		# decode_s32 to match the encoder; negative ids are AI bots.
+		var peer_id: int = data.decode_s32(o); o += 4
 		decoded_peers.append(peer_id)
 		var skater_bytes: PackedByteArray = data.slice(o, o + 37); o += 37
 		var depth: int = data.decode_u8(o); o += 1
@@ -242,7 +246,7 @@ func decode_for_replay(data: PackedByteArray) -> Dictionary:
 	var skaters: Dictionary = {}
 	var decoded_peers: Array[int] = []
 	for _i: int in num_skaters:
-		var peer_id: int = data.decode_u32(o); o += 4
+		var peer_id: int = data.decode_s32(o); o += 4
 		decoded_peers.append(peer_id)
 		var skater_bytes: PackedByteArray = data.slice(o, o + 37); o += 37
 		o += 1  # queue_depth (not needed for replay)
