@@ -1,8 +1,8 @@
 [gd_scene format=3 uid="uid://bu5a1k2dpj8ot"]
 
 [ext_resource type="Script" uid="uid://dhrq0fb8ehjmm" path="res://Scripts/actors/goalie.gd" id="1_fbmg1"]
-[ext_resource type="PhysicsMaterial" path="res://Physics/goalie_pad.tres" id="2_168ps"]
-[ext_resource type="PhysicsMaterial" path="res://Physics/goalie_stick.tres" id="3_jpvxq"]
+[ext_resource type="PhysicsMaterial" uid="uid://7yjnea4uow2s" path="res://Physics/goalie_pad.tres" id="2_168ps"]
+[ext_resource type="PhysicsMaterial" uid="uid://dsxtpnvcngajr" path="res://Physics/goalie_stick.tres" id="3_jpvxq"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_fbmg1"]
 size = Vector3(0.28, 0.84, 0.2)
@@ -55,10 +55,10 @@ material = SubResource("StandardMaterial3D_mlftn")
 size = Vector3(0.25, 0.25, 0.2)
 
 [sub_resource type="BoxMesh" id="BoxMesh_g4lw1"]
-size = Vector3(0.03, 0.25, 0.03)
+size = Vector3(0.03, 0.5, 0.03)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_168ps"]
-size = Vector3(0.03, 0.25, 0.03)
+size = Vector3(0.03, 0.5, 0.03)
 
 [sub_resource type="BoxMesh" id="BoxMesh_e8rcv"]
 size = Vector3(0.1, 0.66, 0.03)
@@ -133,14 +133,15 @@ mesh = SubResource("BoxMesh_f2adc")
 [node name="BlockArm" type="Node3D" parent="." unique_id=296162046]
 
 [node name="Stick" type="StaticBody3D" parent="BlockArm" unique_id=359484771]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
 physics_material_override = ExtResource("3_jpvxq")
 
 [node name="StickShaftMesh" type="MeshInstance3D" parent="BlockArm/Stick" unique_id=1070572832]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.125, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.25, 0)
 mesh = SubResource("BoxMesh_g4lw1")
 
 [node name="StickShaftCollider" type="CollisionShape3D" parent="BlockArm/Stick" unique_id=1086143135]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.125, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.25, 0)
 shape = SubResource("BoxShape3D_168ps")
 
 [node name="StickPaddleMesh" type="MeshInstance3D" parent="BlockArm/Stick" unique_id=191696388]

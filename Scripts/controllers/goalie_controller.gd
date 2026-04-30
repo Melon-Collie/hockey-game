@@ -96,32 +96,49 @@ extends Node
 @export var butterfly_drop_speed: float = 0.08      # s for pads to close to floor
 @export var butterfly_radius: float = 0.40          # arc radius from goal center while down
 
-# ── Butterfly slide (commit-and-ride) ────────────────────────────────────────
-# Real goalies plant the outside leg, push off, and slide on the inside pad in
-# a STRAIGHT LINE. Destination is committed at slide-start; mid-slide can't
-# correct. That's the realism win — fast cross-passes can beat the slide
-# because the goalie picked the wrong destination.
+# ── Butterfly slide (pivot-and-ride) ─────────────────────────────────────────
+# Real goalies plant the outside (non-post) leg, pivot off it, and swing the
+# sealing leg through to the post. The body rotates around the push-off foot
+# rather than translating laterally — the path is an arc, not a straight line.
+# Destination is committed at slide-start; mid-slide can't correct. That's the
+# realism win — fast cross-passes can beat the slide because the goalie already
+# committed the read.
 @export var slide_initial_speed: float = 4.5        # m/s push-off speed
 @export var slide_friction: float = 6.0             # m/s² decay
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
 @export var slide_trigger_distance: float = 0.40    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
 # When a slide commits toward a post (extreme lateral target), the goalie
-# also pulls deep so the trailing pad seals against the post — backdoor /
+# also pulls deep so the sealing pad presses the post — backdoor /
 # wraparound coverage. Depth target = lerp(current_depth, post_seal_depth)
 # scaled by how extreme the lateral slide endpoint is. Slides toward
 # centre hold depth; slides to ±net_half_width go fully deep.
 @export var post_seal_depth: float = 0.10
 # How parallel the body becomes with the slide direction (degrees of Y
 # rotation toward slide). 90° = body fully facing slide direction —
-# matches real goalie wide-slide mechanics where the body rotates so
-# the diving leg leads. Animation hooks can use the SLIDING state directly.
+# matches real goalie pivot mechanics where the body swings so the sealing
+# leg leads. Animation hooks can use the SLIDING state directly.
 @export var slide_facing_max_deg: float = 90.0
 # Lateral offset from goalie center to the pad center in butterfly. Used to
-# compute the slide target so the diving pad ends up even with the post:
+# compute the slide target so the sealing pad ends up even with the post:
 # goalie center sits at ±(net_half_width - pad_local_offset). Matches the
 # `left_pad_pos.x = -0.42` value baked into the BUTTERFLY body config.
 @export var pad_local_offset: float = 0.42
+# Forward bow of the pivot arc at mid-slide, in metres. The goalie's center
+# traces a slight arc toward the shooter as the body pivots around the
+# push-off foot — depth peaks at mid-slide then settles at the seal target.
+# Purely visual; 0.0 = straight lateral line.
+@export var slide_pivot_arc_depth: float = 0.04
+# How much the push-off pad lifts off the ice at the start of the push (metres,
+# Y offset). Returns to zero as the slide decays so it settles flat.
+@export var slide_pushoff_lift: float = 0.05
+# Rotation (degrees) the push-off pad kicks toward vertical at push-off.
+# 0° = stays flat like sealing pad; 35° = partial kick — enough to read as
+# a plant-and-push. Returns to flat as the slide decays.
+@export var slide_pushoff_rot_deg: float = 35.0
+# Body lean into the slide direction (degrees Z rotation). Shifts weight into
+# the push — without it, only the yaw moves and the pivot read is lost.
+@export var slide_body_lean_deg: float = 6.0
 # Suppress slide triggers for this long after a "shot event" — either a shot
 # being released OR the puck contacting the goalie. Real goalies track up to
 # release, then commit to their read and process the outcome; they can't
@@ -270,6 +287,13 @@ var _puck_approach_velocity: float = 0.0
 # zero means IDLE (committed pose, no lateral movement).
 var _slide_velocity_x: float = 0.0
 var _slide_depth_target: float = 0.0  # depth to pull toward during SLIDING (post-seal scaling)
+# Pivot arc state — committed at slide-start, drives the arc path.
+var _slide_dir: float = 0.0           # ±1, direction of slide (persists after velocity hits 0)
+var _slide_arc_t: float = 0.0         # 0→1 arc progress
+var _slide_start_x: float = 0.0
+var _slide_start_depth: float = 0.0
+var _slide_end_x: float = 0.0
+var _slide_end_depth: float = 0.0
 var _butterfly_drop_progress: float = 0.0   # 0..1, lerps pads from standing→down
 var _butterfly_hold_timer: float = 0.0      # counts up while in BUTTERFLY
 var _recovery_timer: float = 0.0            # counts up while in RECOVERING
@@ -333,6 +357,12 @@ func reset_to_crease() -> void:
 	_shot_is_elevated = false
 	_slide_velocity_x = 0.0
 	_slide_depth_target = 0.0
+	_slide_dir = 0.0
+	_slide_arc_t = 0.0
+	_slide_start_x = 0.0
+	_slide_start_depth = 0.0
+	_slide_end_x = 0.0
+	_slide_end_depth = 0.0
 	_butterfly_drop_progress = 0.0
 	_butterfly_hold_timer = 0.0
 	_slide_cooldown_timer = 0.0
@@ -612,6 +642,8 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 				_butterfly_hold_timer = 0.0
 				_slide_cooldown_timer = 0.0
 				_slide_event_lockout = 0.0
+				_slide_dir = 0.0
+				_slide_arc_t = 0.0
 				# Same units fix as RVH entry. Standing/Ready stored radius;
 				# butterfly holds perpendicular depth, so snap to the goalie's
 				# actual world perp depth.
@@ -809,25 +841,43 @@ func _update_butterfly_motion(delta: float) -> void:
 			# IDLE BUTTERFLY: pads on the ice, touching at the knees.
 			_five_hole_openness = lerpf(_five_hole_openness, 0.0, part_lerp_speed * delta)
 
-# Active slide motion: apply velocity, decay via friction, transition back
-# to BUTTERFLY when velocity bleeds out.
+# Active slide motion: pivot arc path driven by velocity decay.
+# The goalie body pivots around the push-off (non-post) foot — the center
+# traces a slight forward arc rather than a straight lateral line.
+# Velocity decays via friction and drives arc progress (0→1); position is
+# computed from arc progress, not accumulated from velocity directly.
 func _handle_slide(delta: float) -> void:
-	_current_x += _slide_velocity_x * delta
-	_current_x = clampf(
-			_current_x,
-			_goal_center_x - net_half_width,
-			_goal_center_x + net_half_width)
-	# Pull depth toward the slide-commit target (post-seal for extreme
-	# lateral slides, hold depth for centre slides).
-	_current_depth = lerpf(_current_depth, _slide_depth_target, depth_speed * delta)
+	# Decay velocity via friction.
 	var decay: float = slide_friction * delta
 	if _slide_velocity_x > 0.0:
 		_slide_velocity_x = maxf(_slide_velocity_x - decay, 0.0)
 	else:
 		_slide_velocity_x = minf(_slide_velocity_x + decay, 0.0)
+	# Advance arc progress. Velocity (m/s in X) drives progress relative to
+	# the total X span so the slide takes the same time regardless of distance.
+	var x_span: float = absf(_slide_end_x - _slide_start_x)
+	if x_span > 0.001:
+		_slide_arc_t = clampf(
+				_slide_arc_t + absf(_slide_velocity_x) * delta / x_span, 0.0, 1.0)
+	else:
+		_slide_arc_t = 1.0
+	# Arc position: X interpolates linearly (committed destination);
+	# depth bows forward (toward shooter) at mid-slide — the pivot swing.
+	# sin(π * t) peaks at t=0.5 and returns to 0 at t=1, matching the
+	# "push out and settle" shape of a real butterfly pivot.
+	_current_x = lerpf(_slide_start_x, _slide_end_x, _slide_arc_t)
+	_current_depth = lerpf(_slide_start_depth, _slide_end_depth, _slide_arc_t) \
+			+ slide_pivot_arc_depth * sin(PI * _slide_arc_t)
+	_current_x = clampf(
+			_current_x,
+			_goal_center_x - net_half_width,
+			_goal_center_x + net_half_width)
 	if absf(_slide_velocity_x) <= slide_min_speed:
 		_slide_velocity_x = 0.0
-		_slide_cooldown_timer = 0.0  # gate the next slide
+		_slide_arc_t = 1.0
+		_current_x = _slide_end_x
+		_current_depth = _slide_end_depth
+		_slide_cooldown_timer = 0.0
 		# Slide complete — back to idle butterfly.
 		var prev: State = _state
 		_state = State.BUTTERFLY
@@ -866,10 +916,17 @@ func _handle_butterfly_idle(_delta: float) -> void:
 	_slide_velocity_x = dir * slide_initial_speed
 	_slide_cooldown_timer = 0.0
 	# Backdoor / post-seal depth: the more extreme the lateral target, the
-	# deeper the goalie pulls so the trailing pad seals the post. Slides
-	# toward centre hold depth; slides to a post go to `post_seal_depth`.
+	# deeper the goalie pulls so the sealing pad presses the post.
 	var x_extremity: float = clampf(absf(slide_target_x) / maxf(net_half_width, 0.001), 0.0, 1.0)
 	_slide_depth_target = lerpf(_current_depth, post_seal_depth, x_extremity)
+	# Record arc state: pivot is the push-off foot (opposite side from slide
+	# direction). Arc progress (0→1) drives position; velocity drives progress.
+	_slide_dir = dir
+	_slide_arc_t = 0.0
+	_slide_start_x = _current_x
+	_slide_start_depth = _current_depth
+	_slide_end_x = slide_target_x
+	_slide_end_depth = _slide_depth_target
 	# Transition into SLIDING state so animation hooks / facing rotation can
 	# key off the explicit value rather than checking velocity.
 	var prev: State = _state
@@ -975,8 +1032,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 	# the pad and stick are rigidly attached at the wrist, so they rotate
 	# together. Initial guesses based on hand height vs blade-on-ice
 	# (acos(hand_y / stick_length)); tune in playtest.
-	const STICK_TILT_STANDING: float = 36.0    # hand y=1.24, stick ~1.5m → ~36°
-	const STICK_TILT_READY: float = 52.0       # hand y=0.94 → ~52°
+	const STICK_TILT_STANDING: float = 18.0
+	const STICK_TILT_READY: float = 18.0
 	const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
 	const STICK_TILT_RVH: float = 65.0
 	match state:
@@ -989,8 +1046,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.body_rot      = Vector3.ZERO
 			c.head_pos      = Vector3(0.0,  1.69,  0.08)
 			c.head_rot      = Vector3.ZERO
-			c.blocker_pos   = Vector3( 0.38, 1.24, -0.18)
-			c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, 0.0)
+			c.blocker_pos   = Vector3( 0.38, 0.85, -0.18)
+			c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, -20.0)
 			c.glove_pos     = Vector3(-0.35, 1.19, -0.18)
 			c.glove_rot     = Vector3.ZERO
 			# Slapper tell: hands raised slightly to a half-ready position.
@@ -1018,18 +1075,15 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.body_rot      = Vector3(-14.0, 0.0, 0.0)
 			c.head_pos      = Vector3(0.0,  1.48, -0.22)
 			c.head_rot      = Vector3.ZERO
-			c.blocker_pos   = Vector3( 0.44, 0.94, -0.32)
-			c.blocker_rot   = Vector3(STICK_TILT_READY, 0.0, 0.0)
+			c.blocker_pos   = Vector3( 0.44, 0.86, -0.32)
+			c.blocker_rot   = Vector3(STICK_TILT_READY, 0.0, -20.0)
 			c.glove_pos     = Vector3(-0.42, 0.90, -0.32)
 			c.glove_rot     = Vector3.ZERO
 			if _reading_slapper_tell:
 				c.glove_pos.y += 0.06
 				c.blocker_pos.y += 0.06
 			_apply_elevated_shot_reaction(c)
-		State.BUTTERFLY, State.SLIDING:
-			# SLIDING shares BUTTERFLY's body config — the slide is positional
-			# motion, the pose is the same. Animation can differentiate via
-			# the explicit state value (or via `_slide_velocity_x` magnitude).
+		State.BUTTERFLY:
 			c.left_pad_pos  = Vector3(-0.42 - _five_hole_openness, 0.14, -0.20)
 			c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY, -90.0)
 			c.right_pad_pos = Vector3( 0.42 + _five_hole_openness, 0.14, -0.20)
@@ -1042,6 +1096,37 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.blocker_rot   = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
 			c.glove_pos     = Vector3(-0.42, 0.44, -0.18)
 			c.glove_rot     = Vector3.ZERO
+			_apply_elevated_shot_reaction(c)
+		State.SLIDING:
+			# Pivot slide: sealing pad (toward post) stays flat; push-off pad
+			# (opposite side) kicks toward vertical at push-off and returns to
+			# flat as the slide decays. Body leans into the slide direction.
+			# speed_ratio = 1.0 at push, 0.0 when settled.
+			var speed_ratio: float = clampf(
+					absf(_slide_velocity_x) / maxf(slide_initial_speed, 0.01), 0.0, 1.0)
+			var push_lift: float = slide_pushoff_lift * speed_ratio
+			var push_rot: float  = slide_pushoff_rot_deg * speed_ratio
+			# Base butterfly pose shared with idle butterfly.
+			c.body_pos    = Vector3(0.0,  0.46,  0.0)
+			c.body_rot    = Vector3(-10.0, 0.0, _slide_dir * -_direction_sign * slide_body_lean_deg * speed_ratio)
+			c.head_pos    = Vector3(0.0,  0.99, -0.06)
+			c.head_rot    = Vector3.ZERO
+			c.blocker_pos = Vector3( 0.46, 0.49, -0.18)
+			c.blocker_rot = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
+			c.glove_pos   = Vector3(-0.42, 0.44, -0.18)
+			c.glove_rot   = Vector3.ZERO
+			if _slide_dir * -_direction_sign > 0.0:
+				# Sliding right: right pad seals the post, left pad pushes off.
+				c.right_pad_pos = Vector3( 0.42 + _five_hole_openness, 0.14, -0.20)
+				c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY,  90.0)
+				c.left_pad_pos  = Vector3(-0.42, 0.14 + push_lift, -0.20)
+				c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY, -(90.0 - push_rot))
+			else:
+				# Sliding left: left pad seals the post, right pad pushes off.
+				c.left_pad_pos  = Vector3(-0.42 - _five_hole_openness, 0.14, -0.20)
+				c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY, -90.0)
+				c.right_pad_pos = Vector3( 0.42, 0.14 + push_lift, -0.20)
+				c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY,  90.0 - push_rot)
 			_apply_elevated_shot_reaction(c)
 		State.RVH_LEFT:
 			# RVH stick swings toward the post (negative-X side for catches_left
