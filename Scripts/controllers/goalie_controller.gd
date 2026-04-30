@@ -1032,8 +1032,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 	# the pad and stick are rigidly attached at the wrist, so they rotate
 	# together. Initial guesses based on hand height vs blade-on-ice
 	# (acos(hand_y / stick_length)); tune in playtest.
-	const STICK_TILT_STANDING: float = 36.0    # hand y=1.24, stick ~1.5m → ~36°
-	const STICK_TILT_READY: float = 52.0       # hand y=0.94 → ~52°
+	const STICK_TILT_STANDING: float = 18.0
+	const STICK_TILT_READY: float = 18.0
 	const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
 	const STICK_TILT_RVH: float = 65.0
 	match state:
@@ -1046,8 +1046,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.body_rot      = Vector3.ZERO
 			c.head_pos      = Vector3(0.0,  1.69,  0.08)
 			c.head_rot      = Vector3.ZERO
-			c.blocker_pos   = Vector3( 0.38, 1.24, -0.18)
-			c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, 0.0)
+			c.blocker_pos   = Vector3( 0.38, 0.85, -0.18)
+			c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, -20.0)
 			c.glove_pos     = Vector3(-0.35, 1.19, -0.18)
 			c.glove_rot     = Vector3.ZERO
 			# Slapper tell: hands raised slightly to a half-ready position.
@@ -1075,8 +1075,8 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			c.body_rot      = Vector3(-14.0, 0.0, 0.0)
 			c.head_pos      = Vector3(0.0,  1.48, -0.22)
 			c.head_rot      = Vector3.ZERO
-			c.blocker_pos   = Vector3( 0.44, 0.94, -0.32)
-			c.blocker_rot   = Vector3(STICK_TILT_READY, 0.0, 0.0)
+			c.blocker_pos   = Vector3( 0.44, 0.86, -0.32)
+			c.blocker_rot   = Vector3(STICK_TILT_READY, 0.0, -20.0)
 			c.glove_pos     = Vector3(-0.42, 0.90, -0.32)
 			c.glove_rot     = Vector3.ZERO
 			if _reading_slapper_tell:
@@ -1108,14 +1108,14 @@ func _get_config(state: State) -> GoalieBodyConfig:
 			var push_rot: float  = slide_pushoff_rot_deg * speed_ratio
 			# Base butterfly pose shared with idle butterfly.
 			c.body_pos    = Vector3(0.0,  0.46,  0.0)
-			c.body_rot    = Vector3(-10.0, 0.0, _slide_dir * slide_body_lean_deg * speed_ratio)
+			c.body_rot    = Vector3(-10.0, 0.0, _slide_dir * -_direction_sign * slide_body_lean_deg * speed_ratio)
 			c.head_pos    = Vector3(0.0,  0.99, -0.06)
 			c.head_rot    = Vector3.ZERO
 			c.blocker_pos = Vector3( 0.46, 0.49, -0.18)
 			c.blocker_rot = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
 			c.glove_pos   = Vector3(-0.42, 0.44, -0.18)
 			c.glove_rot   = Vector3.ZERO
-			if _slide_dir > 0.0:
+			if _slide_dir * -_direction_sign > 0.0:
 				# Sliding right: right pad seals the post, left pad pushes off.
 				c.right_pad_pos = Vector3( 0.42 + _five_hole_openness, 0.14, -0.20)
 				c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY,  90.0)
