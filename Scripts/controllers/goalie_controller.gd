@@ -27,6 +27,13 @@ extends Node
 @export var rvh_transition_speed: float = 6.0
 
 @export var reaction_delay: float = 0.13
+# Arms specifically take longer to react than legs. Legs are reflexive (drop
+# instantly when the brain reads "low shot"); arms require "where in the
+# upper net" computation which adds processing time. Setting this longer
+# than `reaction_delay` makes close-range top-corner shots score because
+# the arm doesn't even start moving in time. Long shots still allow full
+# extension once the arm clears the delay.
+@export var arm_reaction_delay: float = 0.18
 
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
@@ -99,6 +106,18 @@ extends Node
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
 @export var slide_trigger_distance: float = 0.40    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
+# When a slide commits toward a post (extreme lateral target), the goalie
+# also pulls deep so the trailing pad seals against the post — backdoor /
+# wraparound coverage. Depth target = lerp(current_depth, post_seal_depth)
+# scaled by how extreme the lateral slide endpoint is. Slides toward
+# centre hold depth; slides to ±net_half_width go fully deep.
+@export var post_seal_depth: float = 0.10
+# How parallel the body becomes with the slide direction (degrees of Y
+# rotation toward slide). 90° = body fully facing slide direction.
+# Real goalies don't go full perpendicular; ~45° reads as "leaning into
+# the slide" without losing facing-puck visual. Animation hooks can use
+# the SLIDING state directly.
+@export var slide_facing_max_deg: float = 45.0
 # Suppress slide triggers for this long after a "shot event" — either a shot
 # being released OR the puck contacting the goalie. Real goalies track up to
 # release, then commit to their read and process the outcome; they can't
@@ -213,15 +232,13 @@ var _goal_center_x: float = 0.0
 var _direction_sign: int = 1
 
 # ── State Machine ─────────────────────────────────────────────────────────────
-# RECOVERING is the standing-back-up window after butterfly. Goalie is upright
-# but can't react / drop / engage RVH during this brief vulnerable period —
-# this is what makes wraparounds and quick cross-creasers work, exactly as
-# real coaches drill against. Sub-states for butterfly (IDLE vs SLIDING) are
-# derived from `_slide_velocity_x` magnitude, not encoded as separate enum
-# values — the broadcast velocity field carries it implicitly.
-# READY appended at the end so existing enum values stay stable — replay
-# files recorded under previous goalie code keep decoding correctly.
-enum State { STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY }
+# RECOVERING is the standing-back-up window after butterfly — goalie is upright
+# but can't react / drop / engage RVH during this brief vulnerable period.
+# SLIDING is the committed butterfly slide (plant outside leg, push off, ride
+# laterally with friction). Pulled out from "implicit substate via slide
+# velocity" so we have a proper enum value to hang animation triggers on.
+# READY and SLIDING appended at the end of the enum.
+enum State { STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING }
 var _state: State = State.STANDING
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
@@ -233,6 +250,7 @@ var _velocity_z: float = 0.0
 var _five_hole_openness: float = 0.0
 var _tracked_threat_position: Vector3 = Vector3.ZERO
 var _shot_timer: float = 0.0
+var _arm_reaction_timer: float = 0.0  # gates `_apply_elevated_shot_reaction` separately
 var _reacting_to_shot: bool = false
 var _shot_impact_x: float = 0.0
 var _shot_impact_y: float = 0.0
@@ -247,6 +265,7 @@ var _puck_approach_velocity: float = 0.0
 # means the goalie is currently sliding (committed motion, no corrections);
 # zero means IDLE (committed pose, no lateral movement).
 var _slide_velocity_x: float = 0.0
+var _slide_depth_target: float = 0.0  # depth to pull toward during SLIDING (post-seal scaling)
 var _butterfly_drop_progress: float = 0.0   # 0..1, lerps pads from standing→down
 var _butterfly_hold_timer: float = 0.0      # counts up while in BUTTERFLY
 var _recovery_timer: float = 0.0            # counts up while in RECOVERING
@@ -302,12 +321,14 @@ func reset_to_crease() -> void:
 	_target_x = _goal_center_x
 	_five_hole_openness = 0.0
 	_shot_timer = 0.0
+	_arm_reaction_timer = 0.0
 	_recovery_timer = 0.0
 	_reacting_to_shot = false
 	_shot_impact_x = 0.0
 	_shot_impact_y = 0.0
 	_shot_is_elevated = false
 	_slide_velocity_x = 0.0
+	_slide_depth_target = 0.0
 	_butterfly_drop_progress = 0.0
 	_butterfly_hold_timer = 0.0
 	_slide_cooldown_timer = 0.0
@@ -434,6 +455,8 @@ func _compute_threat_position() -> Vector3:
 # butterfly drop (low shots) AND the arm reach (elevated shots, see
 # `_apply_elevated_shot_reaction`).
 func _update_shot_timer(delta: float) -> void:
+	if _arm_reaction_timer > 0.0:
+		_arm_reaction_timer -= delta
 	if _shot_timer <= 0.0:
 		return
 	_shot_timer -= delta
@@ -468,6 +491,7 @@ func _update_state(delta: float) -> void:
 	# a returning RECOVERING/RVH transition doesn't immediately re-fire butterfly.
 	if not _is_upright():
 		_shot_timer = 0.0
+		_arm_reaction_timer = 0.0
 	_slide_cooldown_timer += delta
 	# Convert puck global X into goalie local X. The -Z goal goalie is rotated PI
 	# so its local +X is global -X; multiplying by -_direction_sign corrects for that.
@@ -497,22 +521,22 @@ func _update_state(delta: float) -> void:
 					_state = State.READY
 				elif _state == State.READY and not should_be_ready:
 					_state = State.STANDING
-		State.BUTTERFLY:
+		State.BUTTERFLY, State.SLIDING:
 			_butterfly_hold_timer += delta
 			_butterfly_drop_progress = minf(
 					_butterfly_drop_progress + delta / maxf(butterfly_drop_speed, 0.001),
 					1.0)
-			# Recovery is gated on min-hold elapsed AND puck no longer pressing
-			# AND not currently sliding. Pressure detection is one-way (entry
-			# only, via shot_timer) — once committed, only these conditions
-			# release the goalie. RVH from butterfly is forbidden: must stand
-			# first so the goalie eats a recovery window on wraparound plays.
-			var sliding: bool = absf(_slide_velocity_x) > slide_min_speed
-			if _butterfly_hold_timer >= butterfly_min_hold_time and not sliding \
+			# Recovery only fires from idle BUTTERFLY (not mid-slide). Slide
+			# completion transitions back to BUTTERFLY first — recovery
+			# can fire on the next tick if conditions hold. RVH from butterfly
+			# is forbidden: must stand first so the goalie eats a recovery
+			# window on wraparound plays.
+			if _state == State.BUTTERFLY \
+					and _butterfly_hold_timer >= butterfly_min_hold_time \
 					and not _is_threat_pressing():
 				_state = State.RECOVERING
 				_recovery_timer = 0.0
-				# State change RPC will fire from the post-match block; reaction
+				# State change RPC fires from the post-match block; reaction
 				# clear RPC also fires here for clients that miss the state change.
 				_finish_reaction()
 		State.RECOVERING:
@@ -575,17 +599,20 @@ func _enter_butterfly() -> void:
 func _on_state_changed(_prev: State, new_state: State) -> void:
 	match new_state:
 		State.BUTTERFLY:
-			_butterfly_drop_progress = 0.0
-			_butterfly_hold_timer = 0.0
+			# Fresh butterfly entry resets timers + snaps depth. Returning
+			# from a slide (SLIDING → BUTTERFLY) preserves accumulated hold
+			# time, drop progress, and the depth the slide ended at — the
+			# slide is part of the same butterfly cycle.
+			if _prev != State.SLIDING:
+				_butterfly_drop_progress = 0.0
+				_butterfly_hold_timer = 0.0
+				_slide_cooldown_timer = 0.0
+				_slide_event_lockout = 0.0
+				# Same units fix as RVH entry. Standing/Ready stored radius;
+				# butterfly holds perpendicular depth, so snap to the goalie's
+				# actual world perp depth.
+				_current_depth = (goalie.global_position.z - _goal_line_z) * _direction_sign
 			_slide_velocity_x = 0.0
-			_slide_cooldown_timer = 0.0
-			_slide_event_lockout = 0.0
-			# Commit at the depth the goalie was already at — same units fix
-			# as RVH entry. Standing/Ready stored radius; butterfly holds
-			# perpendicular depth, so snap to the actual perp depth of the
-			# goalie's current world position. Goalie freezes at this depth
-			# for the entire butterfly cycle; slides only move laterally.
-			_current_depth = (goalie.global_position.z - _goal_line_z) * _direction_sign
 		State.RECOVERING:
 			_slide_velocity_x = 0.0
 		State.STANDING:
@@ -641,10 +668,11 @@ func _update_depth(delta: float) -> void:
 		_current_depth = lerpf(_current_depth, rvh_depth, depth_speed * delta)
 		return
 	if _state == State.BUTTERFLY:
-		# Goalie commits butterfly at whatever depth they had on entry
-		# (set in `_on_state_changed`) and HOLDS that depth throughout —
-		# real goalies don't bob forward/back during a butterfly. Slides
-		# move only laterally. No depth lerp here.
+		# Idle butterfly: commit at the depth set on entry, hold it.
+		return
+	if _state == State.SLIDING:
+		# Depth is managed by `_handle_slide` (lerps toward the post-seal
+		# target during slide). Don't touch from here.
 		return
 	if _state == State.RECOVERING:
 		# Gentle fade back toward defensive crease while standing up.
@@ -681,6 +709,11 @@ func _update_position(delta: float) -> void:
 			new_z = pair.y
 		State.BUTTERFLY:
 			_update_butterfly_motion(delta)
+			_handle_butterfly_idle(delta)
+			new_z = _goal_line_z + _direction_sign * _current_depth
+		State.SLIDING:
+			_update_butterfly_motion(delta)
+			_handle_slide(delta)
 			new_z = _goal_line_z + _direction_sign * _current_depth
 		State.RVH_LEFT:
 			# 0.38 = outer pad reach (0.88) - 0.50 body inset toward post.
@@ -750,72 +783,72 @@ func _arc_target_xz() -> Vector2:
 # host-only; clients receive position/velocity through the world-state
 # broadcast and forward-predict via `apply_state`.
 func _update_butterfly_motion(delta: float) -> void:
+	# Common butterfly tick: lockout countdown, five-hole openness during
+	# the pads-to-floor drop animation. Slide trigger and active motion are
+	# split into BUTTERFLY (idle, may trigger slide) vs SLIDING (riding
+	# active velocity) handled by `_handle_butterfly_idle` / `_handle_slide`
+	# called from `_update_position`.
 	if _slide_event_lockout > 0.0:
 		_slide_event_lockout -= delta
-	# Pads-to-floor snap: while the drop is animating, force five-hole closed.
-	# This is the explicit fix for "shuffle-then-drop leaves a perfect 5-hole":
-	# during the drop window, openness goes to zero regardless of motion.
 	if is_server:
-		var sliding: bool = absf(_slide_velocity_x) > slide_min_speed
 		if _butterfly_drop_progress < 1.0:
 			# Snap closed during the active drop animation.
 			_five_hole_openness = lerpf(_five_hole_openness, 0.0, part_lerp_speed * delta * 2.0)
-		elif sliding:
-			# IDLE-to-SLIDING transition opens the trail-leg gap; scale with speed.
+		elif _state == State.SLIDING:
+			# Trail-leg gap opens with slide velocity ratio.
 			var speed_ratio: float = clampf(absf(_slide_velocity_x) / maxf(slide_initial_speed, 0.01), 0.0, 1.0)
 			_five_hole_openness = lerpf(
 					_five_hole_openness,
 					five_hole_butterfly_move_max * speed_ratio,
 					part_lerp_speed * delta)
 		else:
-			# IDLE: pads on the ice, touching at the knees.
+			# IDLE BUTTERFLY: pads on the ice, touching at the knees.
 			_five_hole_openness = lerpf(_five_hole_openness, 0.0, part_lerp_speed * delta)
-	# Apply slide motion if we're already sliding.
-	if absf(_slide_velocity_x) > slide_min_speed:
-		_current_x += _slide_velocity_x * delta
-		_current_x = clampf(
-				_current_x,
-				_goal_center_x - net_half_width,
-				_goal_center_x + net_half_width)
-		# Friction decay toward zero — slide ends naturally when speed bleeds out.
-		var decay: float = slide_friction * delta
-		if _slide_velocity_x > 0.0:
-			_slide_velocity_x = maxf(_slide_velocity_x - decay, 0.0)
-		else:
-			_slide_velocity_x = minf(_slide_velocity_x + decay, 0.0)
-		if absf(_slide_velocity_x) <= slide_min_speed:
-			_slide_velocity_x = 0.0
-			_slide_cooldown_timer = 0.0  # gate the next slide
-		return
-	# IDLE: only host triggers a new slide. Clients passively receive the host's
-	# position/velocity via apply_state and don't attempt to commit on their own
-	# (the host's threat data is canonical; client-local commits would diverge).
+
+# Active slide motion: apply velocity, decay via friction, transition back
+# to BUTTERFLY when velocity bleeds out.
+func _handle_slide(delta: float) -> void:
+	_current_x += _slide_velocity_x * delta
+	_current_x = clampf(
+			_current_x,
+			_goal_center_x - net_half_width,
+			_goal_center_x + net_half_width)
+	# Pull depth toward the slide-commit target (post-seal for extreme
+	# lateral slides, hold depth for centre slides).
+	_current_depth = lerpf(_current_depth, _slide_depth_target, depth_speed * delta)
+	var decay: float = slide_friction * delta
+	if _slide_velocity_x > 0.0:
+		_slide_velocity_x = maxf(_slide_velocity_x - decay, 0.0)
+	else:
+		_slide_velocity_x = minf(_slide_velocity_x + decay, 0.0)
+	if absf(_slide_velocity_x) <= slide_min_speed:
+		_slide_velocity_x = 0.0
+		_slide_cooldown_timer = 0.0  # gate the next slide
+		# Slide complete — back to idle butterfly.
+		var prev: State = _state
+		_state = State.BUTTERFLY
+		_on_state_changed(prev, _state)
+		state_transitioned.emit(team_id, _state as int)
+
+# Idle butterfly: evaluate trigger conditions for committing a new slide.
+# Host-only (clients receive the slide via velocity broadcast + state RPC).
+func _handle_butterfly_idle(_delta: float) -> void:
 	if not is_server:
 		return
 	if _slide_cooldown_timer < slide_cooldown:
 		return
-	# Don't trigger slides during the drop animation — the goalie is still
-	# closing pads. Only commit slides once the goalie is fully down.
+	# Don't trigger slides during the drop animation — pads still closing.
 	if _butterfly_drop_progress < 1.0:
 		return
-	# Suppress slides for a brief window after the puck contacts the goalie —
-	# deflection trajectories are unpredictable and re-snapping threat to a
-	# bouncing puck causes spurious slide commits.
+	# Suppress slides briefly after a shot release / puck contact event;
+	# deflection trajectories are unpredictable in this window.
 	if _slide_event_lockout > 0.0:
 		return
-	# Don't slide-track a puck in the defensive zone (behind net or sharp
-	# angle). The goalie should be recovering and transitioning to RVH for
-	# those plays — sliding back-and-forth chasing a puck that's bouncing
-	# around behind the net keeps `_slide_velocity_x` non-zero, which keeps
-	# the recovery gate's `sliding` flag true and blocks BUTTERFLY →
-	# RECOVERING indefinitely.
+	# Don't slide-track a puck in the defensive zone — RVH path handles it.
 	if _is_puck_in_defensive_zone():
 		return
-	# Slide destination is purely lateral — pick where the threat is going
-	# (in body-local X), clamped within the post width. The goalie holds
-	# their current depth (set on butterfly entry), only X moves. This
-	# matches real butterfly slides: pick a spot, push off, ride out the
-	# motion. No arc projection — depth doesn't change during a slide.
+	# Slide destination = clamp threat.x within post width. Goalie holds
+	# current depth (set on butterfly entry), only X moves.
 	var slide_target_x: float = clampf(
 			_tracked_threat_position.x,
 			_goal_center_x - net_half_width,
@@ -826,6 +859,17 @@ func _update_butterfly_motion(delta: float) -> void:
 	var dir: float = signf(slide_target_x - _current_x)
 	_slide_velocity_x = dir * slide_initial_speed
 	_slide_cooldown_timer = 0.0
+	# Backdoor / post-seal depth: the more extreme the lateral target, the
+	# deeper the goalie pulls so the trailing pad seals the post. Slides
+	# toward centre hold depth; slides to a post go to `post_seal_depth`.
+	var x_extremity: float = clampf(absf(slide_target_x) / maxf(net_half_width, 0.001), 0.0, 1.0)
+	_slide_depth_target = lerpf(_current_depth, post_seal_depth, x_extremity)
+	# Transition into SLIDING state so animation hooks / facing rotation can
+	# key off the explicit value rather than checking velocity.
+	var prev: State = _state
+	_state = State.SLIDING
+	_on_state_changed(prev, _state)
+	state_transitioned.emit(team_id, _state as int)
 
 # ── Facing ────────────────────────────────────────────────────────────────────
 # Threat-based facing: rotate toward where the goalie is tracking, not raw
@@ -853,6 +897,21 @@ func _update_facing(delta: float) -> void:
 		goalie.set_goalie_rotation_y(lerp_angle(
 				goalie.get_goalie_rotation_y(), center_angle, return_speed * delta))
 		return
+	if _state == State.SLIDING:
+		# Body rotates toward the slide direction so the goalie reads as
+		# leaning into the motion. Uses `_velocity_x` (position-derived) so
+		# the rotation works on both host (where slide velocity matches)
+		# AND client (where the slide is reflected via apply_state position
+		# corrections). +Y rotates -Z → -X, so leftward motion gets positive
+		# yaw — same convention as glove reach yaw.
+		var base_angle: float = PI if _direction_sign == 1 else 0.0
+		var speed_ratio: float = clampf(absf(_velocity_x) / maxf(slide_initial_speed, 0.01), 0.0, 1.0)
+		var slide_dir: float = -signf(_velocity_x)
+		var slide_yaw: float = slide_dir * deg_to_rad(slide_facing_max_deg) * speed_ratio
+		var target_y: float = base_angle + slide_yaw
+		goalie.set_goalie_rotation_y(lerp_angle(
+				goalie.get_goalie_rotation_y(), target_y, rotation_speed * delta))
+		return
 	var dx: float = _tracked_threat_position.x - goalie.global_position.x
 	var dz: float = _tracked_threat_position.z - goalie.global_position.z
 	if Vector2(dx, dz).length() > 0.1:
@@ -868,15 +927,13 @@ func _update_facing(delta: float) -> void:
 func _update_body_parts(delta: float) -> void:
 	var config: GoalieBodyConfig = _get_config(_state)
 	var lerp_t: float
-	if _state == State.BUTTERFLY:
+	if _state == State.BUTTERFLY or _state == State.SLIDING:
 		# Drop snap: scale lerp speed so pads converge ~95% within
 		# `butterfly_drop_speed`. Lerp is asymptotic — for time-to-95%
 		# convergence we need `speed * time ≈ 3`, so the factor is 3/x not 1/x.
-		# (The previous 1/x only got 63% there; pads continued lerping for
-		# another ~120ms after `_butterfly_drop_progress` hit 1.0, leaving
-		# the 5-hole open well past the design window. A 24 m/s wrister
-		# from the slot arrived before the pads sealed.) Once the drop is
-		# complete, fall back to reaction speed for any remaining tweaks.
+		# Once the drop is complete, fall back to reaction speed for any
+		# remaining tweaks. SLIDING shares the same logic — it's still
+		# butterfly form, just with active lateral motion.
 		var drop_lerp: float = 3.0 / maxf(butterfly_drop_speed, 0.001)
 		lerp_t = drop_lerp * delta if _butterfly_drop_progress < 1.0 else reaction_lerp_speed * delta
 	elif _reacting_to_shot:
@@ -963,7 +1020,10 @@ func _get_config(state: State) -> GoalieBodyConfig:
 				c.glove_pos.y += 0.06
 				c.blocker_pos.y += 0.06
 			_apply_elevated_shot_reaction(c)
-		State.BUTTERFLY:
+		State.BUTTERFLY, State.SLIDING:
+			# SLIDING shares BUTTERFLY's body config — the slide is positional
+			# motion, the pose is the same. Animation can differentiate via
+			# the explicit state value (or via `_slide_velocity_x` magnitude).
 			c.left_pad_pos  = Vector3(-0.42 - _five_hole_openness, 0.14, -0.20)
 			c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY, -90.0)
 			c.right_pad_pos = Vector3( 0.42 + _five_hole_openness, 0.14, -0.20)
@@ -1033,10 +1093,12 @@ func _get_config(state: State) -> GoalieBodyConfig:
 func _apply_elevated_shot_reaction(c: GoalieBodyConfig) -> void:
 	if not _reacting_to_shot or not _shot_is_elevated:
 		return
-	# Honour the processing delay — goalie hasn't finished reading the puck
-	# yet, so the arm stays at rest pose until `_shot_timer` expires. Same
-	# delay that gates the butterfly drop on low shots.
-	if _shot_timer > 0.0:
+	# Arms have their OWN reaction delay, longer than the leg-drop delay.
+	# Reading where in the upper net the puck is going takes more processing
+	# than the reflexive low-shot drop. While `_arm_reaction_timer` is active
+	# the arm stays at rest — close-range top-corner shots score because the
+	# arm doesn't even start moving in time.
+	if _arm_reaction_timer > 0.0:
 		return
 	# Intercept at the goalie's actual z plane, not at the goal line. The
 	# goalie sits forward of the goal line (~0.4-1.2 m), so the puck passes
@@ -1141,13 +1203,13 @@ func _on_puck_released() -> void:
 	# post-contact lockout; one runtime timer covers both events (max wins).
 	_slide_event_lockout = maxf(_slide_event_lockout, post_event_slide_lockout)
 	shot_reaction_started.emit(team_id, _shot_impact_x, _shot_impact_y, _shot_is_elevated)
-	# `_shot_timer` runs for ALL shot types now — the same processing delay
-	# that gates the butterfly drop on low shots also gates the arm reach on
-	# elevated shots. Real goalies can't act on the prediction instantly;
-	# they need time to read the puck's vector before deciding where to put
-	# the hand or whether to drop. Without this, elevated reaches were
-	# kicking off at frame 0 with zero processing time.
+	# Two separate processing delays. `_shot_timer` (= reaction_delay, ~130ms)
+	# gates the butterfly drop on low shots — leg drop is reflexive.
+	# `_arm_reaction_timer` (= arm_reaction_delay, ~180ms) gates the
+	# glove/blocker reach on elevated shots — arms need extra processing
+	# time to decide WHERE in the upper net to reach. Both run in parallel.
 	_shot_timer = result.reaction_delay
+	_arm_reaction_timer = arm_reaction_delay
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
 # don't trigger spurious slides, and starts the reaction clear delay — the
@@ -1267,14 +1329,15 @@ func apply_shot_reaction(impact_x: float, impact_y: float, is_elevated: bool) ->
 	_shot_impact_y = impact_y
 	_shot_is_elevated = is_elevated
 	_client_reaction_timer = _CLIENT_REACTION_DURATION_S
-	# Mirror the host: ALL shot types start the processing-delay countdown so
-	# the client and server arm reach (elevated) and butterfly drop (low)
+	# Mirror the host: ALL shot types start the processing-delay countdowns
+	# so the client and server arm reach (elevated) and butterfly drop (low)
 	# happen on the same wall-clock offset. Subtract RPC transit time
-	# (≈ full RTT) so the client lands at the same T+reaction_delay as the
-	# host. At RTT >= reaction_delay the timer clamps to 0 — react on arrival.
+	# (≈ full RTT) so the client lands at the same T+delay as the host.
+	# At RTT >= delay the timer clamps to 0 — react on arrival.
 	if _is_upright():
 		var rtt_s: float = NetworkManager.get_latest_rtt_ms() / 1000.0
 		_shot_timer = maxf(reaction_delay - rtt_s, 0.0)
+		_arm_reaction_timer = maxf(arm_reaction_delay - rtt_s, 0.0)
 
 # Host fired the reaction-cleared signal — drop the freeze on this client.
 # Idempotent: if state-change RPC already cleared us, this is a no-op.
