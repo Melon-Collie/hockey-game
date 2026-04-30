@@ -10,14 +10,15 @@ extends SkaterController
 # forwards to StateBufferManager. We don't keep a separate AI perception
 # buffer — the lag-comp ring is already capturing the same data.
 
-# Single global reaction delay, ~100 ms. Tunable in playtest; not derived
-# from a per-bot skill (we deliberately don't ship scaling difficulties —
-# see CLAUDE.md / AI_PLAN.md §13 callout).
-const REACTION_DELAY_S: float = 0.1
-
 var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
+
+# Reaction delay was 0.1s in the original design but reading delayed-past
+# from StateBufferManager logged "ts predates oldest" warnings whenever the
+# buffer hadn't filled (post-rehost, post-faceoff, etc.) — for Phase 4 we
+# read the freshest captured state. A future phase can re-introduce delay
+# via clamping the requested ts to the buffer's oldest entry.
 
 
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
@@ -46,10 +47,10 @@ func _physics_process(delta: float) -> void:
 		return
 	if _game_state.is_input_blocked():
 		return
-	# Read delayed snapshot. GameManager.get_state_delayed handles the
-	# clock-source detail (StateBufferManager uses OS time, not session-
-	# relative time — they diverge after a rehost).
-	perceived_snapshot = GameManager.get_state_delayed(REACTION_DELAY_S)
+	# Read freshest captured state. delay=0 → buffer returns the latest
+	# entry without searching past timestamps, so no "predates oldest"
+	# warnings even when the buffer is just-initialized.
+	perceived_snapshot = GameManager.get_state_delayed(0.0)
 	var input: InputState = _agent.tick(perceived_snapshot, delta, NetworkManager.estimated_host_time())
 	_process_input(input, delta)
 	skater.current_shot_state = _sm.get_state() as int
