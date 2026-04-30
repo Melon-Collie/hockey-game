@@ -1,27 +1,37 @@
 class_name AIController
 extends SkaterController
 
-# Phase 1: emits a frozen InputState every physics tick. Lives on the host;
-# clients see this skater through the existing SkaterNetworkState broadcast,
-# same as a RemoteController-driven skater. No input replication path —
-# LocalController.get_input_batch() is what NetworkManager polls for human
-# clients, and we deliberately don't extend that.
+# Host-only controller for AI bots. Owns one SkaterAgent and forwards its
+# per-tick InputState to SkaterController._process_input. Clients see the
+# bot through the existing SkaterNetworkState broadcast (no input
+# replication path — LocalController.get_input_batch is the human path).
 #
-# Future phases will replace _zero_input population with real perception +
-# decision logic (see docs/specs/AI_PLAN.md). The contract with
-# SkaterController is unchanged: hand it an InputState each tick.
+# Phase 1 emitted a frozen zero input. Phase 2 added perception buffer
+# wiring. Phase 3 (this file's current state) routes through SkaterAgent
+# for anchor-following steering.
 
-var _zero_input: InputState = InputState.new()
-
-# Single global reaction delay (Phase 2: arbitrary 24 ticks ≈ 100 ms; tunable
-# in playtest). We deliberately do not derive this from a per-bot skill —
-# all bots share one profile.
+# Single global reaction delay, ≈100 ms at 240 Hz. Tunable in playtest;
+# not derived from a per-bot skill (we deliberately don't ship scaling
+# difficulties — see CLAUDE.md / AI_PLAN.md §13 callout).
 const REACTION_DELAY_TICKS: int = 24
 
-# Cached most-recent snapshot read this tick. Public for debugging /
-# inspection and for upcoming phases that may want to read the same
-# snapshot from outside the controller without re-fetching.
+var _agent: SkaterAgent = null
+# Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
+
+
+func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
+	super.setup(assigned_skater, assigned_puck, game_state)
+	_agent = SkaterAgent.new()
+
+
+# Bots are spawned by PlayerRegistry.spawn_bot, which knows the bot's
+# peer_id and team_id but not the controller — so the registry calls this
+# after spawn to wire the agent. Separate from setup() because setup() is
+# called by ActorSpawner before the registry knows which slot it belongs to.
+func setup_agent(peer_id: int, team_id: int) -> void:
+	if _agent != null:
+		_agent.setup(peer_id, team_id)
 
 
 func _physics_process(delta: float) -> void:
@@ -36,13 +46,10 @@ func _physics_process(delta: float) -> void:
 		return
 	if _game_state.is_input_blocked():
 		return
-	# Phase 2: read a tick-delayed snapshot. Currently consumed only as a
-	# debug surface; the agent layer in Phase 3 will turn this into anchor
-	# tracking. Buffer is only allocated on the host (where bots run), but
-	# guard anyway so a stripped-down test scene doesn't crash.
+	# Read tick-delayed snapshot. Buffer is only allocated on the host; guard
+	# anyway so a stripped-down test scene doesn't crash.
 	if GameManager.perception != null:
 		perceived_snapshot = GameManager.perception.read(REACTION_DELAY_TICKS)
-	_zero_input.delta = delta
-	_zero_input.host_timestamp = NetworkManager.estimated_host_time()
-	_process_input(_zero_input, delta)
+	var input: InputState = _agent.tick(perceived_snapshot, delta, NetworkManager.estimated_host_time())
+	_process_input(input, delta)
 	skater.current_shot_state = _sm.get_state() as int
