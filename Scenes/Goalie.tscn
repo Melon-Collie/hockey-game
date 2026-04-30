@@ -25,14 +25,14 @@ material = SubResource("StandardMaterial3D_g4lw1")
 size = Vector3(0.28, 0.84, 0.2)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_e8rcv"]
-size = Vector3(0.4, 0.6, 0.25)
+size = Vector3(0.48, 0.6, 0.28)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fpcta"]
 albedo_color = Color(0.276417, 0.60769, 0.408357, 1)
 
 [sub_resource type="BoxMesh" id="BoxMesh_cwmwh"]
 material = SubResource("StandardMaterial3D_fpcta")
-size = Vector3(0.4, 0.6, 0.25)
+size = Vector3(0.48, 0.6, 0.28)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_cdb6r"]
 size = Vector3(0.22, 0.22, 0.2)
@@ -86,6 +86,7 @@ size = Vector3(0.2, 0.3, 0.05)
 script = ExtResource("1_fbmg1")
 
 [node name="LeftPad" type="StaticBody3D" parent="." unique_id=1190163544]
+physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="LeftPad" unique_id=1872238537]
 shape = SubResource("BoxShape3D_fbmg1")
@@ -94,6 +95,7 @@ shape = SubResource("BoxShape3D_fbmg1")
 mesh = SubResource("BoxMesh_168ps")
 
 [node name="RightPad" type="StaticBody3D" parent="." unique_id=1435961568]
+physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="RightPad" unique_id=1459539296]
 shape = SubResource("BoxShape3D_jpvxq")
@@ -102,6 +104,7 @@ shape = SubResource("BoxShape3D_jpvxq")
 mesh = SubResource("BoxMesh_0fnhx")
 
 [node name="Body" type="StaticBody3D" parent="." unique_id=1962591082]
+physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Body" unique_id=981675903]
 shape = SubResource("BoxShape3D_e8rcv")
@@ -110,6 +113,7 @@ shape = SubResource("BoxShape3D_e8rcv")
 mesh = SubResource("BoxMesh_cwmwh")
 
 [node name="Head" type="StaticBody3D" parent="." unique_id=1016498205]
+physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Head" unique_id=245778333]
 shape = SubResource("BoxShape3D_cdb6r")
@@ -118,6 +122,7 @@ shape = SubResource("BoxShape3D_cdb6r")
 mesh = SubResource("BoxMesh_jpvxq")
 
 [node name="Glove" type="StaticBody3D" parent="." unique_id=304258065]
+physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Glove" unique_id=1294887346]
 shape = SubResource("BoxShape3D_8k2b8")
