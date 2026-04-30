@@ -195,7 +195,10 @@ func _physics_process(delta: float) -> void:
 	# accumulator. The state-buffer manager has already captured this tick
 	# above so passing a state-at-now is a fresh read.
 	if not team_brains.is_empty() and _state_buffer_manager != null:
-		var fresh: WorldSnapshot = _state_buffer_manager.get_state_at(NetworkManager.local_time())
+		# StateBufferManager.capture timestamps via Time.get_ticks_usec()/1e6
+		# (OS time), not local_time() (session-relative, resets on rehost).
+		# Pass 0 to get_state_delayed so the helper applies the matching clock.
+		var fresh: WorldSnapshot = get_state_delayed(0.0)
 		for brain: TeamBrain in team_brains:
 			brain.tick(delta, fresh)
 	_update_host_puck_tracking()
@@ -1790,12 +1793,15 @@ func _slot_already_taken(team_id: int, team_slot: int) -> bool:
 	return false
 
 
-# Public forwarder for AIController so AI doesn't reach into _state_buffer_manager
-# directly. Returns an interpolated WorldSnapshot at the requested host time.
-func get_state_at(host_timestamp: float) -> WorldSnapshot:
+# Public AI-facing snapshot accessor. Hides the clock detail
+# (StateBufferManager uses Time.get_ticks_usec()/1e6, NOT local_time()) so
+# callers don't accidentally cross timelines after a rehost. Pass 0 for the
+# freshest captured state.
+func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
 	if _state_buffer_manager == null:
 		return null
-	return _state_buffer_manager.get_state_at(host_timestamp)
+	var ts: float = Time.get_ticks_usec() / 1_000_000.0 - delay_seconds
+	return _state_buffer_manager.get_state_at(ts)
 
 
 func _collect_existing_player_data() -> Array[Array]:

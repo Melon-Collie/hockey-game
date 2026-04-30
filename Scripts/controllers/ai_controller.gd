@@ -46,11 +46,10 @@ func _physics_process(delta: float) -> void:
 		return
 	if _game_state.is_input_blocked():
 		return
-	# Read tick-delayed snapshot. StateBufferManager interpolates between
-	# captured frames so the result is stable even if no entry exists at
-	# exactly target_time.
-	var target_time: float = NetworkManager.local_time() - REACTION_DELAY_S
-	perceived_snapshot = GameManager.get_state_at(target_time)
+	# Read delayed snapshot. GameManager.get_state_delayed handles the
+	# clock-source detail (StateBufferManager uses OS time, not session-
+	# relative time — they diverge after a rehost).
+	perceived_snapshot = GameManager.get_state_delayed(REACTION_DELAY_S)
 	var input: InputState = _agent.tick(perceived_snapshot, delta, NetworkManager.estimated_host_time())
 	_process_input(input, delta)
 	skater.current_shot_state = _sm.get_state() as int
