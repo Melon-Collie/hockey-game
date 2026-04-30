@@ -654,6 +654,11 @@ func sync_existing_players(player_data: Array) -> void:
 	existing_players_synced.emit(player_data)
 	
 func send_puck_picked_up(peer_id: int) -> void:
+	# AI bots use synthetic negative peer_ids; they have no ENet connection
+	# so rpc_id would fail. Bots are driven directly by the host's
+	# AIController, so no client-side notification is needed.
+	if peer_id <= 0:
+		return
 	notify_puck_picked_up.rpc_id(peer_id)
 
 @rpc("authority", "reliable")
@@ -711,6 +716,8 @@ func notify_carrier_changed(new_carrier_peer_id: int) -> void:
 	NetworkSimManager.send(func(id: int) -> void: remote_carrier_changed.emit(id), [new_carrier_peer_id], true)
 
 func send_puck_stolen(victim_peer_id: int) -> void:
+	if victim_peer_id <= 0:
+		return  # AI bot — see send_puck_picked_up rationale.
 	notify_puck_stolen.rpc_id(victim_peer_id)
 
 @rpc("authority", "reliable")
@@ -744,6 +751,8 @@ func notify_goal_to_all(scoring_team_id: int, score0: int, score1: int, scorer_n
 		notify_goal.rpc_id(peer_id, scoring_team_id, score0, score1, scorer_name, assist1_name, assist2_name)
 
 func notify_puck_dropped_to_carrier(carrier_peer_id: int) -> void:
+	if carrier_peer_id <= 0:
+		return  # AI bot — see send_puck_picked_up rationale.
 	notify_puck_dropped.rpc_id(carrier_peer_id)
 
 @rpc("authority", "reliable")
