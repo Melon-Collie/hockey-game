@@ -74,6 +74,10 @@ func spawn(
 		is_local: bool,
 		jersey_number: int = 10) -> PlayerRecord:
 	var record := PlayerRecord.new(peer_id, team_slot, is_local, team)
+	# Derive is_bot from the peer_id so client-side records (where bots come
+	# in via spawn_remote_skater RPC) match host-side records. The flag
+	# never crosses the wire — peer_id range is the source of truth.
+	record.is_bot = NetworkManager.is_bot_peer(peer_id)
 	record.jersey_color        = jersey_color
 	record.helmet_color        = helmet_color
 	record.pants_color         = pants_color
