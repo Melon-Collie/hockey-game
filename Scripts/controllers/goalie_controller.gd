@@ -113,11 +113,15 @@ extends Node
 # centre hold depth; slides to ±net_half_width go fully deep.
 @export var post_seal_depth: float = 0.10
 # How parallel the body becomes with the slide direction (degrees of Y
-# rotation toward slide). 90° = body fully facing slide direction.
-# Real goalies don't go full perpendicular; ~45° reads as "leaning into
-# the slide" without losing facing-puck visual. Animation hooks can use
-# the SLIDING state directly.
-@export var slide_facing_max_deg: float = 45.0
+# rotation toward slide). 90° = body fully facing slide direction —
+# matches real goalie wide-slide mechanics where the body rotates so
+# the diving leg leads. Animation hooks can use the SLIDING state directly.
+@export var slide_facing_max_deg: float = 90.0
+# Lateral offset from goalie center to the pad center in butterfly. Used to
+# compute the slide target so the diving pad ends up even with the post:
+# goalie center sits at ±(net_half_width - pad_local_offset). Matches the
+# `left_pad_pos.x = -0.42` value baked into the BUTTERFLY body config.
+@export var pad_local_offset: float = 0.42
 # Suppress slide triggers for this long after a "shot event" — either a shot
 # being released OR the puck contacting the goalie. Real goalies track up to
 # release, then commit to their read and process the outcome; they can't
@@ -847,12 +851,14 @@ func _handle_butterfly_idle(_delta: float) -> void:
 	# Don't slide-track a puck in the defensive zone — RVH path handles it.
 	if _is_puck_in_defensive_zone():
 		return
-	# Slide destination = clamp threat.x within post width. Goalie holds
-	# current depth (set on butterfly entry), only X moves.
-	var slide_target_x: float = clampf(
-			_tracked_threat_position.x,
-			_goal_center_x - net_half_width,
-			_goal_center_x + net_half_width)
+	# Slide destination clamps to "diving pad even with post" — the goalie
+	# can't slide past the spot where the lead pad's center sits at the
+	# post line. Naturally seals backdoor plays: threats heading wide
+	# clamp the slide to ±(net_half_width - pad_local_offset), parking the
+	# diving pad at the post. Threats mid-net just track threat.x directly.
+	var max_slide_x: float = _goal_center_x + (net_half_width - pad_local_offset)
+	var min_slide_x: float = _goal_center_x - (net_half_width - pad_local_offset)
+	var slide_target_x: float = clampf(_tracked_threat_position.x, min_slide_x, max_slide_x)
 	if not GoalieBehaviorRules.should_commit_slide(_current_x, slide_target_x, slide_trigger_distance):
 		return
 	# Commit. Direction picked once; magnitude rides out via friction.
