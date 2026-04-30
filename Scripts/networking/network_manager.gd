@@ -6,6 +6,27 @@ extends Node
 # and renders via SpectatorCamera.
 const SPECTATOR_TEAM_ID: int = -1
 
+# AI bots are tracked in PlayerRegistry alongside human peers but never
+# correspond to an ENet connection — synthesizing a peer_id from a high
+# range keeps PlayerRecord keys unique without colliding with either real
+# ENet ids (1..MAX_CONNECTIONS, well under 1000) or domain "no peer / not
+# found" sentinels (commonly -1, 0). Code that dispatches per-peer RPCs
+# must use is_bot_peer / is_real_peer to gate routing — peer_id sign is
+# NOT a bot indicator and must not be assumed.
+const BOT_ID_BASE: int = 10_000
+const BOT_ID_MAX: int = BOT_ID_BASE + 5  # 6 bots max (3 per team)
+
+
+static func is_bot_peer(peer_id: int) -> bool:
+	return peer_id >= BOT_ID_BASE and peer_id <= BOT_ID_MAX
+
+
+# True iff peer_id is a real ENet connection (positive, not a bot, not the
+# -1/0 "no peer" sentinel). Use this when iterating PlayerRegistry to
+# decide whether rpc_id can target the peer.
+static func is_real_peer(peer_id: int) -> bool:
+	return peer_id > 0 and peer_id < BOT_ID_BASE
+
 # ── Outbound signals (application layer listens) ─────────────────────────────
 # NetworkManager observes ENet + RPC traffic; GameManager connects to these in
 # _ready and executes the corresponding orchestration work. Keeps the upward
@@ -654,10 +675,10 @@ func sync_existing_players(player_data: Array) -> void:
 	existing_players_synced.emit(player_data)
 	
 func send_puck_picked_up(peer_id: int) -> void:
-	# AI bots use synthetic negative peer_ids; they have no ENet connection
-	# so rpc_id would fail. Bots are driven directly by the host's
-	# AIController, so no client-side notification is needed.
-	if peer_id <= 0:
+	# AI bots have no ENet connection — rpc_id would fail. Bots are driven
+	# directly by the host's AIController, so no client-side notification
+	# is needed.
+	if not is_real_peer(peer_id):
 		return
 	notify_puck_picked_up.rpc_id(peer_id)
 
@@ -716,8 +737,8 @@ func notify_carrier_changed(new_carrier_peer_id: int) -> void:
 	NetworkSimManager.send(func(id: int) -> void: remote_carrier_changed.emit(id), [new_carrier_peer_id], true)
 
 func send_puck_stolen(victim_peer_id: int) -> void:
-	if victim_peer_id <= 0:
-		return  # AI bot — see send_puck_picked_up rationale.
+	if not is_real_peer(victim_peer_id):
+		return  # AI bot or sentinel — see send_puck_picked_up rationale.
 	notify_puck_stolen.rpc_id(victim_peer_id)
 
 @rpc("authority", "reliable")
@@ -751,8 +772,8 @@ func notify_goal_to_all(scoring_team_id: int, score0: int, score1: int, scorer_n
 		notify_goal.rpc_id(peer_id, scoring_team_id, score0, score1, scorer_name, assist1_name, assist2_name)
 
 func notify_puck_dropped_to_carrier(carrier_peer_id: int) -> void:
-	if carrier_peer_id <= 0:
-		return  # AI bot — see send_puck_picked_up rationale.
+	if not is_real_peer(carrier_peer_id):
+		return  # AI bot or sentinel — see send_puck_picked_up rationale.
 	notify_puck_dropped.rpc_id(carrier_peer_id)
 
 @rpc("authority", "reliable")

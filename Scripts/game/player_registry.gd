@@ -119,9 +119,10 @@ func spawn(
 
 
 # Spawns an AI bot into a team slot. Host-only. Bots get a synthetic peer_id
-# in the range [-6, -1] so dictionary keying stays int while never colliding
-# with real ENet peer ids (always positive). Any RPC call that iterates
-# _players must gate its rpc_id() on `peer_id > 0`.
+# in the BOT_ID_BASE range (10000+) so dictionary keying stays int and the
+# id is unambiguously non-routable for ENet. Any RPC dispatch must gate on
+# NetworkManager.is_real_peer / record.is_bot — peer_id sign is no longer
+# a reliable bot indicator (real peers and bots are both positive).
 #
 # Mirrors spawn() above but skips the human-player surface (handedness pref,
 # jersey number from preferences, ready state). Bots get deterministic
@@ -133,9 +134,10 @@ func spawn_bot(
 		team_slot: int,
 		team: Team) -> PlayerRecord:
 	assert(bot_id >= 0 and bot_id < 6, "bot_id must be 0..5 (one per team slot)")
-	var peer_id: int = -1 - bot_id
+	var peer_id: int = NetworkManager.BOT_ID_BASE + bot_id
 	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team.team_id)
 	var record := PlayerRecord.new(peer_id, team_slot, false, team)
+	record.is_bot = true
 	record.jersey_color        = colors.jersey
 	record.helmet_color        = colors.helmet
 	record.pants_color         = colors.pants

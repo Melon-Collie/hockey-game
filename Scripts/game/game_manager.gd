@@ -1280,7 +1280,7 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 				skater_vel.y = 0.0
 		var saved_goalie_positions: Array[Vector3] = []
 		var saved_goalie_rotations: Array[float] = []
-		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and shooter_peer_id > 0 and rtt_ms > 0.0:
+		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0:
 			var rewind_time: float = host_timestamp - rtt_half
 			var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 			for gc: GoalieController in goalie_controllers:
