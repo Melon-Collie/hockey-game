@@ -41,15 +41,13 @@ class SlapperConfig:
 # the blade tracks the cursor via IK but ROM constraints prevent it going
 # behind the player, so this direction is always valid. Full wristers aim
 # from the drag direction with power scaling over the charge distance.
-# Backhand is detected by comparing blade position to shoulder position in
-# local space and penalised by a coefficient.
+# Backhand is detected by blade X sign in upper-body-local space: positive X
+# is a backhand for a left-handed player, negative X for a right-handed player.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,
 		blade_world_pos: Vector3,
-		blade_local_pos: Vector3,
-		shoulder_local_pos: Vector3,
-		is_left_handed: bool,
+		is_backhand: bool,
 		is_elevated: bool,
 		charge_distance: float,
 		cfg: WristerConfig,
@@ -83,8 +81,6 @@ static func release_wrister(
 		shot_dir = (target - player_xz).normalized()
 	var power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, charge_t)
 
-	var hand_sign: float = -1.0 if is_left_handed else 1.0
-	var is_backhand: bool = sign(blade_local_pos.x - shoulder_local_pos.x) != sign(hand_sign)
 	if is_backhand:
 		power *= cfg.backhand_power_coefficient
 

@@ -191,6 +191,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# save/restore each reconcile re-ticks the unconfirmed inputs and the timer
 	# inflates O(N) per broadcast, popping the blade above slapper_wind_up_height.
 	var pre_slapper_charge_timer: float = _aiming.slapper_charge_timer
+	var pre_wrister_start_blade_x: float = _aiming.wrister_start_blade_local_x
 	skater.global_position = server_state.position
 	skater.velocity = server_state.velocity
 	# Snap facing for replay accuracy — facing drives move_and_slide direction,
@@ -237,6 +238,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_sm.follow_through_is_slapper = pre_follow_through_is_slapper
 	_aiming.one_timer_window_timer = pre_one_timer_window_timer
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
+	_aiming.wrister_start_blade_local_x = pre_wrister_start_blade_x
 	# Set mouse pos baseline to the end of the replay window so the next real
 	# frame's direction-variance delta is correct.
 	if not _input_history.is_empty():
