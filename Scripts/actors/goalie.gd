@@ -1,26 +1,27 @@
 class_name Goalie
 extends Node3D
 
-@export var stick_enabled: bool = false
-
+# `_block_arm` is the root of the blocker-hand assembly: blocker pad + stick
+# (shaft, paddle, blade) all rigidly attached. Driven by a single transform
+# (`blocker_pos` + `blocker_rot` from the body config). The stick geometry
+# is baked into the mesh layout — different states get the blade in the right
+# place via different blocker rotations, not by tracking the blade
+# independently. The Blocker pad and Stick are SEPARATE child StaticBody3Ds
+# under BlockArm so they can carry different physics materials (pad absorbs,
+# stick rebounds), but they share the BlockArm transform.
 @onready var _left_pad: StaticBody3D = $LeftPad
 @onready var _right_pad: StaticBody3D = $RightPad
 @onready var _body: StaticBody3D = $Body
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
-@onready var _blocker: StaticBody3D = $Blocker
-@onready var _stick: StaticBody3D = $Stick
+@onready var _block_arm: Node3D = $BlockArm
 
 @onready var _left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var _right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
 @onready var _body_mesh: MeshInstance3D = $Body/MeshInstance3D
 @onready var _head_mesh: MeshInstance3D = $Head/MeshInstance3D
 @onready var _glove_mesh: MeshInstance3D = $Glove/MeshInstance3D
-@onready var _blocker_mesh: MeshInstance3D = $Blocker/MeshInstance3D
-
-func _ready() -> void:
-	_stick.collision_layer = Constants.LAYER_WALLS if stick_enabled else 0
-	_stick.visible = stick_enabled
+@onready var _blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
 
 func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Color) -> void:
 	var jersey_mat := StandardMaterial3D.new()
@@ -36,14 +37,35 @@ func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Colo
 	_glove_mesh.material_override = pads_mat.duplicate()
 	_blocker_mesh.material_override = pads_mat.duplicate()
 
-func apply_body_config(config: GoalieBodyConfig, t: float) -> void:
+# `glove_max_step` / `blocker_max_step`: optional caps on linear movement
+# this frame (metres). Callers pass `*_react_max_speed * delta` to enforce a
+# realistic arm-speed limit so the catch / block reach can't perfectly beat
+# the puck to the spot. -1 disables the cap (target uses the shared lerp).
+# Rotations still lerp at the shared `t` regardless — wrist orientation
+# tracks position closely enough not to need its own cap. The blocker step
+# applies to the entire BlockArm (pad + stick rigid assembly).
+func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float = -1.0, blocker_max_step: float = -1.0) -> void:
 	_lerp_part(_left_pad,  config.left_pad_pos,  config.left_pad_rot,  t)
 	_lerp_part(_right_pad, config.right_pad_pos, config.right_pad_rot, t)
 	_lerp_part(_body,      config.body_pos,      config.body_rot,      t)
 	_lerp_part(_head,      config.head_pos,      config.head_rot,      t)
-	_lerp_part(_glove,     config.glove_pos,     config.glove_rot,     t)
-	_lerp_part(_blocker,   config.blocker_pos,   config.blocker_rot,   t)
-	_lerp_part(_stick,     config.stick_pos,     config.stick_rot,     t)
+	if glove_max_step < 0.0:
+		_lerp_part(_glove, config.glove_pos, config.glove_rot, t)
+	else:
+		_glove.position = _glove.position.move_toward(config.glove_pos, glove_max_step)
+		_glove.rotation_degrees = _glove.rotation_degrees.lerp(config.glove_rot, t)
+	# Blocker assembly = blocker pad + stick (shaft, paddle, blade) as one
+	# rigid unit. Single transform via `blocker_pos` / `blocker_rot` drives
+	# the whole BlockArm; pad and stick are children that rotate together
+	# (real-world they're physically attached at the wrist). When reaching
+	# for a blocker save the position is rate-limited via `blocker_max_step`
+	# the same way the glove is, so the assembly can't teleport to the
+	# impact point.
+	if blocker_max_step < 0.0:
+		_lerp_part(_block_arm, config.blocker_pos, config.blocker_rot, t)
+	else:
+		_block_arm.position = _block_arm.position.move_toward(config.blocker_pos, blocker_max_step)
+		_block_arm.rotation_degrees = _block_arm.rotation_degrees.lerp(config.blocker_rot, t)
 
 func set_goalie_position(x: float, z: float) -> void:
 	global_position = Vector3(x, 0.0, z)
@@ -54,6 +76,6 @@ func set_goalie_rotation_y(y: float) -> void:
 func get_goalie_rotation_y() -> float:
 	return rotation.y
 
-func _lerp_part(part: StaticBody3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
+func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
 	part.position = part.position.lerp(target_pos, t)
 	part.rotation_degrees = part.rotation_degrees.lerp(target_rot_deg, t)

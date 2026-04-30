@@ -148,6 +148,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
 	NetworkManager.goalie_state_transition_received.connect(_on_goalie_state_transition_received)
 	NetworkManager.goalie_shot_reaction_received.connect(_on_goalie_shot_reaction_received)
+	NetworkManager.goalie_reaction_cleared_received.connect(_on_goalie_reaction_cleared_received)
 	NetworkManager.input_batch_received.connect(_on_input_batch_received)
 	NetworkManager.spectator_demoted_received.connect(_on_spectator_demoted_received)
 
@@ -565,6 +566,7 @@ func _wire_subsystems() -> void:
 		for gc: GoalieController in goalie_controllers:
 			gc.state_transitioned.connect(NetworkManager.send_goalie_state_transition_to_all)
 			gc.shot_reaction_started.connect(NetworkManager.send_goalie_shot_reaction_to_all)
+			gc.reaction_cleared.connect(NetworkManager.send_goalie_reaction_cleared_to_all)
 		_phase_coord.phase_changed.connect(_on_phase_for_broadcast_rate)
 
 	_telemetry = NetworkTelemetry.new()
@@ -1144,6 +1146,13 @@ func _on_goalie_shot_reaction_received(team_id: int, impact_x: float, impact_y: 
 	for gc: GoalieController in goalie_controllers:
 		if gc.team_id == team_id:
 			gc.apply_shot_reaction(impact_x, impact_y, is_elevated)
+			return
+
+
+func _on_goalie_reaction_cleared_received(team_id: int) -> void:
+	for gc: GoalieController in goalie_controllers:
+		if gc.team_id == team_id:
+			gc.apply_reaction_cleared()
 			return
 
 

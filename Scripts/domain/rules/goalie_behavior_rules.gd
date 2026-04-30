@@ -25,6 +25,12 @@ class ShotDetectionConfig:
 	var reaction_delay: float = 0.0
 	var low_shot_threshold: float = 0.0
 	var elevated_threshold: float = 0.0
+	# Gravity used for ballistic impact_y prediction. Linear extrapolation
+	# (`y + vy * t`) overestimates landing height for long-range elevated
+	# shots — they arc down to ice level before reaching the net but get
+	# misclassified as elevated, so the goalie never drops butterfly.
+	# Standard project gravity is 9.8 m/s²; pass 0 for legacy linear math.
+	var gravity: float = 9.8
 
 class DefensiveZoneConfig:
 	var zone_post_z: float = 0.0
@@ -40,11 +46,8 @@ class DepthConfig:
 	var depth_conservative: float = 0.0
 	var depth_defensive: float = 0.0
 
-class PressureConfig:
-	var pressure_butterfly_distance: float = 0.0
-	var pressure_velocity_threshold: float = 0.0
-	var pressure_lateral_margin: float = 0.0
-	var net_half_width: float = 0.0
+class ThreatConfig:
+	var shooter_weight: float = 0.0   # 0 = pure puck, 1 = pure carrier body
 
 # Is a released puck on course to hit this goalie's net? Returns a ShotResult.
 # is_shot == false means not on net or below fake_threshold.
@@ -63,7 +66,15 @@ static func detect_shot(
 	if t_to_goal <= 0.0:
 		return result
 	var impact_x: float = puck_position.x + puck_velocity.x * t_to_goal
-	var impact_y: float = puck_position.y + puck_velocity.y * t_to_goal
+	# Ballistic impact_y: include gravity so long-range elevated shots that
+	# arc down to ice are correctly predicted as low. Without this, a shot
+	# released with positive vy stays "elevated" in the goalie's read all
+	# the way to the net even though physics has it landing at floor level.
+	# Floor-clamped at 0 — once the puck would have hit the ice, it can't
+	# arrive lower than that.
+	var impact_y: float = puck_position.y + puck_velocity.y * t_to_goal \
+			- 0.5 * cfg.gravity * t_to_goal * t_to_goal
+	impact_y = maxf(impact_y, 0.0)
 	if abs(impact_x - goal_center_x) > cfg.net_half_width + cfg.net_margin:
 		return result
 	result.is_shot = true
@@ -109,21 +120,6 @@ static func target_depth_for_puck_distance(puck_z_dist: float, cfg: DepthConfig)
 		return lerpf(cfg.depth_base, cfg.depth_conservative, t)
 	t = clampf((puck_z_dist - cfg.zone_conservative_z) / cfg.zone_conservative_z, 0.0, 1.0)
 	return lerpf(cfg.depth_conservative, cfg.depth_defensive, t)
-
-# Should the goalie drop to butterfly preemptively? True when puck is close to
-# the net and approaching with enough forward velocity (catches skaters charging
-# in regardless of whether a shot has been released).
-static func is_under_pressure(
-		puck_position: Vector3,
-		puck_approach_velocity: float,
-		goal_line_z: float,
-		goal_center_x: float,
-		cfg: PressureConfig) -> bool:
-	if abs(puck_position.z - goal_line_z) > cfg.pressure_butterfly_distance:
-		return false
-	if abs(puck_position.x - goal_center_x) > cfg.net_half_width + cfg.pressure_lateral_margin:
-		return false
-	return puck_approach_velocity >= cfg.pressure_velocity_threshold
 
 # Lateral X target using angle bisector: find the line from the puck that
 # bisects the shooting angle between the two posts, then intersect it with
@@ -173,3 +169,106 @@ static func target_lateral_x(
 		return clampf(px, left_x, right_x)
 
 	return clampf(px + bx * t, left_x, right_x)
+
+
+# ── Threat position ──────────────────────────────────────────────────────────
+# Goalies "play the chest, not the puck": carrier body is steady while the
+# puck swings ±1.5 m during stickhandling. Blend the two so the goalie tracks
+# a stable target. With no carrier (loose puck or shot in flight) the puck
+# itself is the threat.
+#
+# carrier_present == false: returns puck_position regardless of weight.
+# carrier_present == true:  threat = lerp(puck, carrier_body, shooter_weight).
+static func compute_threat_position(
+		puck_position: Vector3,
+		carrier_body_position: Vector3,
+		carrier_present: bool,
+		shooter_weight: float) -> Vector3:
+	if not carrier_present:
+		return puck_position
+	var w: float = clampf(shooter_weight, 0.0, 1.0)
+	return puck_position.lerp(carrier_body_position, w)
+
+
+# ── Arc-based positioning ────────────────────────────────────────────────────
+# Real goalies skate the "challenge angle" arc — a constant-radius path
+# around the goal center. This naturally pulls them back on sharp angles
+# (they sit shallower in perpendicular depth as the puck moves wide), while
+# the previous angle-bisector-on-fixed-depth math traced a near-straight line.
+#
+# `radius` is the distance from goal center; callers compute it with the
+# existing depth chart against `threat_distance_to_goal`.
+# Returns (x, z) world position. Clamps x to within the posts so the goalie
+# never strays outside the net width on extreme angles.
+static func target_arc_position(
+		threat_position: Vector3,
+		goal_line_z: float,
+		goal_center_x: float,
+		direction_sign: int,
+		radius: float,
+		net_half_width: float) -> Vector2:
+	var dx: float = threat_position.x - goal_center_x
+	var dz: float = threat_position.z - goal_line_z
+	var d: float = sqrt(dx * dx + dz * dz)
+	if d < 0.001:
+		return Vector2(goal_center_x, goal_line_z + direction_sign * radius)
+	var ux: float = dx / d
+	var uz: float = dz / d
+	var goalie_x: float = goal_center_x + ux * radius
+	var goalie_z: float = goal_line_z + uz * radius
+	# Threat behind goal line: arc would pull goalie behind the net. Flatten
+	# to the goal line so the goalie hugs the post-line rather than skating
+	# behind it. RVH transitions handle the actual post-hug.
+	var perp_depth: float = (goalie_z - goal_line_z) * direction_sign
+	if perp_depth < 0.0:
+		goalie_z = goal_line_z
+	goalie_x = clampf(goalie_x, goal_center_x - net_half_width, goal_center_x + net_half_width)
+	return Vector2(goalie_x, goalie_z)
+
+
+# Euclidean distance from threat to goal center (XZ plane). Drives the depth
+# chart for the arc — replaces the old "abs(puck.z - goal_line_z)" input
+# which ignored lateral distance.
+static func threat_distance_to_goal(
+		threat_position: Vector3,
+		goal_line_z: float,
+		goal_center_x: float) -> float:
+	var dx: float = threat_position.x - goal_center_x
+	var dz: float = threat_position.z - goal_line_z
+	return sqrt(dx * dx + dz * dz)
+
+
+# ── Butterfly slide commit ───────────────────────────────────────────────────
+# Once a goalie drops to butterfly they cannot stand-skate — lateral movement
+# is exclusively via butterfly slide: plant outside leg, push off, slide on
+# the inside pad in a STRAIGHT LINE until friction stops them. The destination
+# is picked once at slide-start and committed.
+#
+# Destination = arc position at butterfly_depth for the current threat. This
+# is what the goalie "thinks" the shot threat is, and where they push off
+# toward. If the threat moves mid-slide the goalie cannot correct — that's
+# the realism win (cross-passes beat committed slides).
+static func compute_slide_destination(
+		threat_position: Vector3,
+		goal_line_z: float,
+		goal_center_x: float,
+		direction_sign: int,
+		butterfly_radius: float,
+		net_half_width: float) -> Vector2:
+	return target_arc_position(
+			threat_position, goal_line_z, goal_center_x,
+			direction_sign, butterfly_radius, net_half_width)
+
+
+# Trigger threshold for committing a butterfly slide: the threat has moved
+# enough laterally that staying put leaves the net exposed. Compare the
+# current goalie X to where the threat says they should be; if the gap
+# exceeds `slide_trigger_distance`, commit a slide.
+#
+# Caller is responsible for the cooldown gate (`time_since_last_slide >=
+# slide_cooldown`) — that's stateful and lives on the controller.
+static func should_commit_slide(
+		current_x: float,
+		target_x: float,
+		slide_trigger_distance: float) -> bool:
+	return absf(target_x - current_x) >= slide_trigger_distance

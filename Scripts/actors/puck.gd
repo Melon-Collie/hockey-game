@@ -109,6 +109,16 @@ func apply_release_velocity(vel: Vector3) -> void:
 func get_carrier() -> Skater:
 	return carrier
 
+# Returns linear_velocity, OR _pending_elevation_vel when release() has just
+# fired and Jolt hasn't yet applied it (Jolt zeroes velocity on the first
+# dynamic step after unfreeze, so release() stores the full vector here for
+# _integrate_forces to write next tick). Use this from same-frame consumers
+# of the puck_released signal — `linear_velocity` reads zero in that window.
+func get_release_velocity() -> Vector3:
+	if not _pending_elevation_vel.is_zero_approx():
+		return _pending_elevation_vel
+	return linear_velocity
+
 func set_carrier(skater: Skater) -> void:
 	carrier = skater
 	freeze = true
