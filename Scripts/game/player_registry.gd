@@ -160,7 +160,11 @@ func spawn_bot(
 			record.socks_color, blade_color, record.is_left_handed, puck, _game_state_node)
 	record.skater = spawned.skater
 	record.controller = spawned.controller
-	(spawned.controller as AIController).setup_agent(peer_id, team.team_id)
+	# Brain lookup: GameManager owns the per-team brains (host-only, indexed
+	# by team_id). We're host here (only host runs spawn_bot), so the array
+	# is populated by the time this fires.
+	var brain: TeamBrain = GameManager.team_brains[team.team_id] if team.team_id < GameManager.team_brains.size() else null
+	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain)
 	spawned.skater.team_id = team.team_id
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number, record.text_color)

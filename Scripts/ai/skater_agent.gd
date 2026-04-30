@@ -1,15 +1,15 @@
 class_name SkaterAgent
 extends RefCounted
 
-# Per-bot decision loop. Owned by AIController, not a scene node. Stateless
-# in Phase 3 — no quiet-eye commits, no role hysteresis. The controller
-# hands us a snapshot and we return an InputState.
+# Per-bot decision loop. Owned by AIController. Phase 4 splits behavior by
+# role read from the TeamBrain blackboard:
+#   F1  — chase the puck (or carry it toward the opposing goal if we have it)
+#   OFF — Phase 3 anchor (4 m above the puck on own-net side)
 #
-# Phase 3 cut: every bot plays one role ("above the puck on own-goal side").
-# Phases 4+ will replace this with the F1/F2/F3 enumeration from AI_PLAN.md
-# §8 and add on-puck utility (SHOOT/PASS/CARRY/etc).
+# Future phases will add F2/F3 differentiation, on-puck SHOOT/PASS/CARRY
+# scoring, hysteresis (quiet-eye commits), and teammate-polite rules.
 
-# How far above the puck (toward own goal, in meters) the anchor sits.
+# How far above the puck OFF bots sit (toward own goal, in meters).
 const ANCHOR_DEPTH: float = 4.0
 
 # Reused buffers — avoids per-tick allocations.
@@ -21,12 +21,19 @@ var _team_id: int = 0
 # +1 if own goal is at +GOAL_LINE_Z (Team 0), -1 for Team 1.
 # See LocalController.get_attacking_goal_z for the source of truth.
 var _own_goal_dir: float = 1.0
+var _attacking_goal_pos: Vector3 = Vector3.ZERO
+var _team_brain: TeamBrain = null
 
 
-func setup(peer_id: int, team_id: int) -> void:
+func setup(peer_id: int, team_id: int, brain: TeamBrain) -> void:
 	_peer_id = peer_id
 	_team_id = team_id
 	_own_goal_dir = 1.0 if team_id == 0 else -1.0
+	# Aim point at the opposing goal mouth. Used as mouse_world_pos so blade
+	# IK points toward goal whether or not we're carrying. y=0 — blade IK
+	# lives in 2D for now.
+	_attacking_goal_pos = Vector3(0.0, 0.0, -_own_goal_dir * GameRules.GOAL_LINE_Z)
+	_team_brain = brain
 
 
 # Returns the InputState for this physics tick. Caller must not retain a
@@ -42,13 +49,10 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 		# Snapshot pre-dates this bot's spawn; freeze for one tick.
 		return input
 	var self_pos: Vector3 = snapshot.skater_pos[self_idx]
+	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
+	var have_puck: bool = (snapshot.puck_possessor_idx == self_idx)
 
-	# Anchor: hold current X, sit ANCHOR_DEPTH meters above the puck on the
-	# own-goal side. Clamped to keep the anchor inside the playable rink so
-	# the bot doesn't try to skate through the boards behind its own net.
-	var anchor_z: float = snapshot.puck_pos.z + _own_goal_dir * ANCHOR_DEPTH
-	anchor_z = clampf(anchor_z, -GameRules.GOAL_LINE_Z + 1.0, GameRules.GOAL_LINE_Z - 1.0)
-	var anchor := Vector3(self_pos.x, 0.0, anchor_z)
+	var anchor: Vector3 = _compute_anchor(role, self_pos, snapshot, have_puck)
 
 	_scratch_teammates.clear()
 	for i: int in snapshot.num_skaters:
@@ -61,7 +65,30 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 	input.move_vector = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH)
+
+	# Aim point: when carrying, point the blade toward the opposing goal so
+	# the IK doesn't pull the stick toward (0,0,0). Off-puck bots get the
+	# same aim — harmless for IK and avoids a useless branch.
+	input.mouse_world_pos = _attacking_goal_pos
 	return input
+
+
+# Anchor selection by role.
+#   F1 + has_puck: high-slot in opposing zone (5 m off the goal line) so the
+#                  carrier stops in front of the net rather than skating into
+#                  the cage. Phase 5's shooting will happen from here.
+#   F1 + no puck: chase puck position
+#   OFF: Phase 3 "above the puck on own-net side"
+func _compute_anchor(role: StringName, self_pos: Vector3, snapshot: WorldSnapshot, have_puck: bool) -> Vector3:
+	if role == AIRoleAssignment.ROLE_F1:
+		if have_puck:
+			var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - 5.0)
+			return Vector3(0.0, 0.0, slot_z)
+		return Vector3(snapshot.puck_pos.x, 0.0, snapshot.puck_pos.z)
+	# OFF
+	var anchor_z: float = snapshot.puck_pos.z + _own_goal_dir * ANCHOR_DEPTH
+	anchor_z = clampf(anchor_z, -GameRules.GOAL_LINE_Z + 1.0, GameRules.GOAL_LINE_Z - 1.0)
+	return Vector3(self_pos.x, 0.0, anchor_z)
 
 
 func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void:

@@ -51,6 +51,9 @@ var puck: Puck = null
 # but only consumed by debug surface). Created lazily in _spawn_world so a
 # pre-game scene with no _registry doesn't allocate.
 var perception: PerceptionBuffer = null
+# One TeamBrain per team, host-only. Allocated in _spawn_world. Bots read
+# their role from here via SkaterAgent. Indexed by team_id (0=home, 1=away).
+var team_brains: Array[TeamBrain] = []
 var goals: Array[HockeyGoal] = []
 var goalies: Array[Goalie] = []
 var goalie_controllers: Array[GoalieController] = []
@@ -192,6 +195,12 @@ func _physics_process(delta: float) -> void:
 		_state_buffer_manager.capture(_registry, puck_controller, goalie_controllers)
 	if perception != null:
 		_capture_perception_snapshot()
+		# Brains tick AFTER capture so they see the freshest snapshot at
+		# delay=0. Each brain self-rate-limits to its TICK_PERIOD (~6 Hz);
+		# calling each frame just feeds the accumulator.
+		var fresh: WorldSnapshot = perception.read(0)
+		for brain: TeamBrain in team_brains:
+			brain.tick(delta, fresh)
 	_update_host_puck_tracking()
 	_check_puck_out_of_bounds(delta)
 	_apply_ghost_state()
@@ -435,6 +444,7 @@ func _spawn_world() -> void:
 	_wire_subsystems()
 	if NetworkManager.is_host:
 		perception = PerceptionBuffer.new()
+		team_brains = [TeamBrain.new(0), TeamBrain.new(1)]
 		_connect_goal_signals()
 
 
