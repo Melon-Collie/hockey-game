@@ -756,7 +756,7 @@ func _on_bot_toggled(team_id: int, slot: int, is_bot: bool) -> void:
 		return
 	NetworkManager.send_bot_slot(team_id * 3 + slot, is_bot)
 
-func _on_bot_slot_changed(_slot_key: int, _is_bot: bool) -> void:
+func _on_bot_slot_changed(_key: int, _is_bot: bool) -> void:
 	_refresh_grid()
 
 func _on_bot_slots_synced(_bot_slots: Dictionary) -> void:

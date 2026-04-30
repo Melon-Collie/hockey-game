@@ -204,7 +204,7 @@ func _load() -> void:
 	call_deferred(&"apply_video")
 
 
-static func generate_uuid() -> String:
+func generate_uuid() -> String:
 	const HEX: String = "0123456789abcdef"
 	var result: String = ""
 	for i: int in 32:

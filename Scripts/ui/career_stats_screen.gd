@@ -337,7 +337,7 @@ func _build_period_breakdown(game: Dictionary) -> Control:
 
 
 func _grid_cell(text: String, min_size: Vector2, is_header: bool,
-		align: int = HORIZONTAL_ALIGNMENT_CENTER) -> Label:
+		align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_CENTER) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", 12 if is_header else 13)
@@ -433,4 +433,6 @@ func _format_date(ended_at_iso: String) -> String:
 
 static func _format_toi(seconds: Variant) -> String:
 	var s: int = _safe_int(seconds)
-	return "%d:%02d" % [s / 60, s % 60]
+	@warning_ignore("integer_division")
+	var minutes: int = s / 60
+	return "%d:%02d" % [minutes, s % 60]

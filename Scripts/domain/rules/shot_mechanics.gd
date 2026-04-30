@@ -64,9 +64,9 @@ static func release_wrister(
 		var dir: Vector3 = (blade_xz - player_xz).normalized()
 		if dir.length_squared() < 0.0001:
 			dir = (target - player_xz).normalized()
-		var y: float = cfg.quick_shot_elevation if is_elevated else 0.0
+		var quick_y: float = cfg.quick_shot_elevation if is_elevated else 0.0
 		return {
-			"direction": Vector3(dir.x, y, dir.z).normalized(),
+			"direction": Vector3(dir.x, quick_y, dir.z).normalized(),
 			"power": cfg.quick_shot_power,
 		}
 

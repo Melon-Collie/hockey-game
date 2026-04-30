@@ -520,8 +520,8 @@ func set_player_name(p_name: String) -> void:
 	_hud.set_player_name(p_name)
 
 
-func set_charge_ring_visible(visible: bool) -> void:
-	_hud.set_charge_ring_visible(visible)
+func set_charge_ring_visible(is_visible: bool) -> void:
+	_hud.set_charge_ring_visible(is_visible)
 
 
 func trigger_charge_lost_flash() -> void:

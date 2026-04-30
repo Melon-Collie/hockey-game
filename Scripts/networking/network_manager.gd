@@ -17,14 +17,14 @@ const BOT_ID_BASE: int = 10_000
 const BOT_ID_MAX: int = BOT_ID_BASE + 5  # 6 bots max (3 per team)
 
 
-static func is_bot_peer(peer_id: int) -> bool:
+func is_bot_peer(peer_id: int) -> bool:
 	return peer_id >= BOT_ID_BASE and peer_id <= BOT_ID_MAX
 
 
 # True iff peer_id is a real ENet connection (positive, not a bot, not the
 # -1/0 "no peer" sentinel). Use this when iterating PlayerRegistry to
 # decide whether rpc_id can target the peer.
-static func is_real_peer(peer_id: int) -> bool:
+func is_real_peer(peer_id: int) -> bool:
 	return peer_id > 0 and peer_id < BOT_ID_BASE
 
 # ── Outbound signals (application layer listens) ─────────────────────────────
