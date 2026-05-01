@@ -48,12 +48,23 @@ const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
 const PASS_LEAD_TIME_S: float = 0.3
 # After a puck-engagement event (we got stripped, or we just stripped
 # someone — both detected as "puck became loose while we were close"),
-# pull the blade back to our body for this many ticks. Without this
-# the bot's blade auto-aims at the puck again the next frame and
-# either re-grabs or interferes with physics during the pickup
-# cooldown window.
-const ENGAGEMENT_COOLDOWN_TICKS: int = 72   # ~300 ms at 240 Hz
-const ENGAGEMENT_PROXIMITY_M: float = 2.0   # blade-on-puck range
+# pull the blade back to our body for this many ticks. Speed-scaled:
+# a bot at full skating speed was committed harder and takes longer
+# to reset; a slow bot recovers quickly. The variance breaks lockstep
+# between two bots involved in the same engagement (their speeds are
+# almost never identical).
+const ENGAGEMENT_COOLDOWN_MIN_TICKS: int = 24    # ~100 ms at 240 Hz
+const ENGAGEMENT_COOLDOWN_MAX_TICKS: int = 96    # ~400 ms at 240 Hz
+const ENGAGEMENT_SPEED_REF_M_S: float = 10.5     # SkaterController.max_speed default
+const ENGAGEMENT_PROXIMITY_M: float = 2.0        # blade-on-puck range
+
+# Reference top skating speed used for chase intercept lookahead. Doesn't
+# need to match SkaterController exactly — small over/under shifts where
+# the intercept point lands but doesn't break behavior.
+const CHASE_SPEED_REF_M_S: float = 10.5
+# Cap on lead lookahead so a barely-moving puck doesn't project an
+# intercept point a million seconds away.
+const CHASE_MAX_LOOKAHEAD_S: float = 1.5
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
@@ -124,7 +135,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	var self_pos: Vector3 = self_state.position
 	var have_puck: bool = (snapshot.puck_state.carrier_peer_id == _peer_id)
 	_ticks_in_state += 1
-	_update_engagement_cooldown(snapshot, self_pos)
+	_update_engagement_cooldown(snapshot, self_state)
 
 	match _state:
 		State.OFF_PUCK:
@@ -155,12 +166,16 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 
 
 func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	var puck_pos: Vector3 = snapshot.puck_state.position
-	var target := Vector3(puck_pos.x, 0.0, puck_pos.z)
+	# Lead intercept: aim at where the puck WILL be when we'd actually
+	# arrive, not at where it is now. Per-bot t_arrival (distance / max
+	# speed) means two bots converging on the same loose puck compute
+	# different intercept points, breaking the "both glued to the same
+	# puck position" pattern.
+	var target: Vector3 = _lead_intercept(self_pos, snapshot.puck_state.position, snapshot.puck_state.velocity)
 	_apply_steering(input, snapshot, self_pos, target)
-	# Aim: normally blade-on-puck for intercept, but during the engagement
-	# cooldown (just got stripped or just stick-checked someone) pull the
-	# blade back to our body so the puck can settle without auto-magnetting
+	# Aim: normally blade-on-intercept, but during the engagement cooldown
+	# (just got stripped or just stick-checked someone) pull the blade
+	# back to our body so the puck can settle without auto-magnetting
 	# back to us.
 	if _engagement_cooldown > 0:
 		input.mouse_world_pos = Vector3(self_pos.x, 0.0, self_pos.z)
@@ -334,6 +349,20 @@ func _is_f1() -> bool:
 	return _team_brain != null and _team_brain.get_role(_peer_id) == AIRoleAssignment.ROLE_F1
 
 
+# Where the puck will be when we'd reach its current position at top
+# speed. For a stationary puck this is just the puck position; for a
+# moving puck the bot turns toward an intercept ahead of the puck's
+# current spot. Not a physically perfect intercept (we can't always
+# reach top speed from rest), but close enough that the bot stops
+# trailing behind a sliding puck.
+func _lead_intercept(self_pos: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
+	var dx: float = puck_pos.x - self_pos.x
+	var dz: float = puck_pos.z - self_pos.z
+	var dist: float = sqrt(dx * dx + dz * dz)
+	var t: float = clampf(dist / CHASE_SPEED_REF_M_S, 0.0, CHASE_MAX_LOOKAHEAD_S)
+	return Vector3(puck_pos.x + puck_vel.x * t, 0.0, puck_pos.z + puck_vel.z * t)
+
+
 # True iff a TEAMMATE (not me, not opp) currently has the puck. Used to
 # suppress CHASE_PUCK so non-carrier bots don't sprint at their own
 # teammate carrier with their blade out.
@@ -357,14 +386,27 @@ func _post_puck_lost_state() -> State:
 # The carrier-just-changed-to-someone-else case (a teammate or opp picked
 # up cleanly without us being close) doesn't fire — prev was set, now
 # is the new carrier, not -1.
-func _update_engagement_cooldown(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+#
+# Cooldown duration scales with our skating speed at the moment of
+# engagement: a bot moving at full speed was committed harder and takes
+# longer to reset; a near-stationary bot recovers fast. Two bots in the
+# same engagement almost never have identical speeds, so this also
+# breaks the lockstep that made bots re-engage in unison.
+func _update_engagement_cooldown(snapshot: WorldSnapshot, self_state: SkaterNetworkState) -> void:
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 	if _prev_carrier_peer_id != -1 and carrier == -1:
+		var self_pos: Vector3 = self_state.position
 		var puck_pos: Vector3 = snapshot.puck_state.position
 		var dx: float = puck_pos.x - self_pos.x
 		var dz: float = puck_pos.z - self_pos.z
 		if dx * dx + dz * dz < ENGAGEMENT_PROXIMITY_M * ENGAGEMENT_PROXIMITY_M:
-			_engagement_cooldown = ENGAGEMENT_COOLDOWN_TICKS
+			var v: Vector3 = self_state.velocity
+			var speed: float = sqrt(v.x * v.x + v.z * v.z)
+			var ratio: float = clampf(speed / ENGAGEMENT_SPEED_REF_M_S, 0.0, 1.0)
+			_engagement_cooldown = int(round(lerpf(
+					float(ENGAGEMENT_COOLDOWN_MIN_TICKS),
+					float(ENGAGEMENT_COOLDOWN_MAX_TICKS),
+					ratio)))
 	_prev_carrier_peer_id = carrier
 	if _engagement_cooldown > 0:
 		_engagement_cooldown -= 1
