@@ -1,51 +1,74 @@
 class_name AIRoleAssignment
 
 # Pure-function role picker. Stateless — TeamBrain owns hysteresis and tick
-# cadence. Phase 4 ships only F1 (puck pressure) vs OFF (above-puck anchor);
-# the F2/F3 split lands in a later phase.
+# cadence.
 #
-# F1 = teammate with smallest 2D distance to puck. No "above the puck" gate
-# in this phase — pick whoever is closest, even if they're behind it. The
-# Phase 3 anchor for OFF bots already pulls them above; chasing from below
-# happens, but it's a known cost of MVP simplicity.
+# Roles, in priority order:
+#   F1 — puck pressure. Closest teammate to puck (predicted position).
+#        Chases loose pucks, carries when held, applies pressure to opp
+#        carrier.
+#   F2 — triangle apex on the strong side. Second-closest teammate.
+#        Offers a strong-side support presence near the puck.
+#   F3 — weak-side support. Third-closest. Trails on weak side, safety
+#        valve.
+#   OFF — fallback for any extra teammates beyond three (4v4 etc).
 #
-# Consumes the existing WorldSnapshot (Scripts/networking/world_snapshot.gd)
-# captured by StateBufferManager. team_id is not on SkaterNetworkState, so
-# callers pass a Callable resolver: `func(peer_id: int) -> int`.
+# Distance is computed on PREDICTED positions at F1_LOOKAHEAD_S so a
+# bot already turning toward the puck wins F1 over a stationary closer
+# bot. Stable sort with peer_id tiebreak keeps role assignment from
+# flickering when distances tie.
 
 const ROLE_F1: StringName = &"F1"
+const ROLE_F2: StringName = &"F2"
+const ROLE_F3: StringName = &"F3"
 const ROLE_OFF: StringName = &"OFF"
+
+# How far ahead to project skaters and the puck when ranking. Short
+# enough that ordinary play doesn't mis-pick (skater velocities aren't
+# wildly different at < 0.5 s lookahead) and long enough that intent
+# matters (a bot accelerating toward the puck beats a coasting one).
+const F1_LOOKAHEAD_S: float = 0.5
 
 
 # Returns Dictionary[int, StringName] keyed by peer_id for every skater on
-# the given team_id present in the snapshot. Always assigns exactly one F1
-# (the closest teammate to the puck); the rest get OFF. If the team has no
-# skaters in the snapshot, returns an empty dictionary.
+# the given team_id present in the snapshot. Assigns F1 / F2 / F3 in
+# rank order; extra teammates (rare — 4+ on a team) get OFF.
 static func compute(snapshot: WorldSnapshot, team_id: int, team_id_resolver: Callable) -> Dictionary:
 	var roles: Dictionary = {}
 	if snapshot == null or snapshot.puck_state == null or snapshot.skater_states.is_empty():
 		return roles
-	var puck_x: float = snapshot.puck_state.position.x
-	var puck_z: float = snapshot.puck_state.position.z
-	# closest_peer starts at 0 as a placeholder. We use closest_d2 == INF as
-	# the "found nothing" sentinel because bot peer_ids are negative (-1..-6),
-	# so a < 0 check would false-positive whenever a bot wins F1.
-	var closest_peer: int = 0
-	var closest_d2: float = INF
+	# Predicted puck position (where we expect it to be in F1_LOOKAHEAD_S).
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var puck_vel: Vector3 = snapshot.puck_state.velocity
+	var future_puck_x: float = puck_pos.x + puck_vel.x * F1_LOOKAHEAD_S
+	var future_puck_z: float = puck_pos.z + puck_vel.z * F1_LOOKAHEAD_S
+
+	# Collect teammates with predicted-distance scores.
+	var ranked: Array = []  # [peer_id, d2] pairs
 	for peer_id: int in snapshot.skater_states:
 		if int(team_id_resolver.call(peer_id)) != team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[peer_id]
-		var dx: float = s.position.x - puck_x
-		var dz: float = s.position.z - puck_z
-		var d2: float = dx * dx + dz * dz
-		if d2 < closest_d2:
-			closest_d2 = d2
-			closest_peer = peer_id
-	if closest_d2 == INF:
+		var fx: float = s.position.x + s.velocity.x * F1_LOOKAHEAD_S
+		var fz: float = s.position.z + s.velocity.z * F1_LOOKAHEAD_S
+		var dx: float = fx - future_puck_x
+		var dz: float = fz - future_puck_z
+		ranked.append([peer_id, dx * dx + dz * dz])
+
+	if ranked.is_empty():
 		return roles
-	for peer_id: int in snapshot.skater_states:
-		if int(team_id_resolver.call(peer_id)) != team_id:
-			continue
-		roles[peer_id] = ROLE_F1 if peer_id == closest_peer else ROLE_OFF
+	# Sort by predicted d² ascending; stable peer_id tiebreak so ties don't
+	# flicker between bots.
+	ranked.sort_custom(func(a: Array, b: Array) -> bool:
+		if a[1] != b[1]:
+			return a[1] < b[1]
+		return a[0] < b[0])
+
+	const ROLE_BY_RANK: Array[StringName] = [ROLE_F1, ROLE_F2, ROLE_F3]
+	for i: int in ranked.size():
+		var pid: int = ranked[i][0]
+		if i < ROLE_BY_RANK.size():
+			roles[pid] = ROLE_BY_RANK[i]
+		else:
+			roles[pid] = ROLE_OFF
 	return roles

@@ -50,8 +50,9 @@ func test_closest_teammate_is_f1() -> void:
 	], Vector3(0, 0, 0))
 	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1])
 	assert_eq(roles[200], AIRoleAssignment.ROLE_F1, "closest to puck (peer 200) should be F1")
-	assert_eq(roles[100], AIRoleAssignment.ROLE_OFF)
-	assert_eq(roles[300], AIRoleAssignment.ROLE_OFF)
+	# 5k: rank 2 → F2, rank 3 → F3 (peers 100 and 300 sorted by distance).
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F2)
+	assert_eq(roles[300], AIRoleAssignment.ROLE_F3)
 
 
 func test_negative_peer_ids_can_be_f1() -> void:
@@ -65,7 +66,48 @@ func test_negative_peer_ids_can_be_f1() -> void:
 	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1])
 	assert_eq(roles.size(), 2, "all-bot team should still get role assignments")
 	assert_eq(roles[-1], AIRoleAssignment.ROLE_F1, "closest bot (peer -1) should be F1")
-	assert_eq(roles[-2], AIRoleAssignment.ROLE_OFF)
+	# 5k: rank 2 → F2 (only two teammates means no F3).
+	assert_eq(roles[-2], AIRoleAssignment.ROLE_F2)
+
+
+func test_three_teammates_get_f1_f2_f3_in_rank_order() -> void:
+	var made: Array = _make([
+			[100, 0, Vector3(2, 0, 0)],   # closest
+			[200, 0, Vector3(5, 0, 0)],   # second
+			[300, 0, Vector3(10, 0, 0)],  # third
+	], Vector3(0, 0, 0))
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1])
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F1)
+	assert_eq(roles[200], AIRoleAssignment.ROLE_F2)
+	assert_eq(roles[300], AIRoleAssignment.ROLE_F3)
+
+
+func test_velocity_weighting_picks_intercepting_bot() -> void:
+	# Bot A is slightly closer NOW but stationary. Bot B is a bit further
+	# but skating directly toward the puck. The lookahead-weighted
+	# distance should pick Bot B as F1.
+	var snap := WorldSnapshot.new()
+	var team_map: Dictionary = {}
+	# Bot A: at (3, 0, 0), velocity 0 — closest to puck at origin right now.
+	var sa := SkaterNetworkState.new()
+	sa.position = Vector3(3.0, 0.0, 0.0)
+	sa.velocity = Vector3.ZERO
+	snap.skater_states[100] = sa
+	team_map[100] = 0
+	# Bot B: at (5, 0, 0) but skating toward puck at 8 m/s — predicted
+	# position 0.5 s out is much closer to the puck.
+	var sb := SkaterNetworkState.new()
+	sb.position = Vector3(5.0, 0.0, 0.0)
+	sb.velocity = Vector3(-8.0, 0.0, 0.0)
+	snap.skater_states[200] = sb
+	team_map[200] = 0
+	var puck := PuckNetworkState.new()
+	puck.position = Vector3(0.0, 0.0, 0.0)
+	puck.velocity = Vector3.ZERO
+	snap.puck_state = puck
+	var resolver := func(pid: int) -> int: return int(team_map.get(pid, -1))
+	var roles: Dictionary = AIRoleAssignment.compute(snap, 0, resolver)
+	assert_eq(roles[200], AIRoleAssignment.ROLE_F1, "bot moving toward puck wins F1 over a slightly-closer stationary bot")
 
 
 func test_ignores_opposing_team() -> void:

@@ -1007,6 +1007,13 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
+	# AI bots release shots through the same signal as humans, but they live
+	# only on the host (record.is_local is false). Without this connection
+	# the wrister state machine transitions to FOLLOW_THROUGH but the puck
+	# never leaves the blade — _do_release emits puck_release_requested
+	# into the void.
+	if record.is_bot:
+		record.controller.puck_release_requested.connect(_on_puck_release_requested)
 	record.controller.one_timer_release_requested.connect(
 			_on_one_timer_release_requested.bind(record.skater))
 	var pid: int = record.peer_id
