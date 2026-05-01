@@ -46,8 +46,12 @@ const F3_OFFSET_X_WEAK: float = 5.0
 const F3_OFFSET_Z_BACK: float = 8.0
 const LEGACY_OFF_DEPTH: float = 4.0
 # Man-to-man gap: defender anchors this far on the goal-side of their
-# mark, so their body is between the mark and our net.
+# mark, on the line from mark → our net.
 const MAN_GAP_DEPTH_M: float = 1.0
+# Lead time for predicting mark position. Defender anchors against where
+# the mark WILL BE, not where they are right now — without this, the
+# defender is always trailing a step behind a moving forward.
+const MAN_LEAD_TIME_S: float = 0.5
 # Strong-side X is sign(puck.x), but only when the puck is meaningfully
 # off-center; below this we default to the +X side so we don't flip
 # F2/F3 sides every time the puck wiggles through center.
@@ -450,7 +454,7 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 		if mark_pid != 0:
 			var mark: SkaterNetworkState = snapshot.skater_states.get(mark_pid)
 			if mark != null:
-				return _man_anchor(mark.position)
+				return _man_anchor(mark)
 
 	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
 	match role:
@@ -493,23 +497,27 @@ func _should_play_man_to_man(snapshot: WorldSnapshot) -> bool:
 
 
 # Man-to-man anchor: MAN_GAP_DEPTH_M off the mark along the line from
-# mark to our own net. Body shades the actual lane to net regardless
-# of where the mark is on the ice (a mark out by the boards still
-# gets shaded toward center, not just behind on Z). Clamped inside
-# the rink so we don't get pushed into boards.
-func _man_anchor(mark_pos: Vector3) -> Vector3:
+# the mark's PREDICTED position to our own net. Body shades the actual
+# lane to net regardless of where the mark is on the ice (a mark out
+# by the boards still gets shaded toward center, not just behind on
+# Z). Predicting MAN_LEAD_TIME_S ahead means a moving forward doesn't
+# slip past the defender — the defender anchors against where the
+# mark will be by the time they arrive.
+func _man_anchor(mark: SkaterNetworkState) -> Vector3:
+	var lead_pos: Vector3 = AITrajectory.predict_at(
+			mark.position, mark.velocity, MAN_LEAD_TIME_S)
 	var our_net := Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
-	var dx: float = our_net.x - mark_pos.x
-	var dz: float = our_net.z - mark_pos.z
+	var dx: float = our_net.x - lead_pos.x
+	var dz: float = our_net.z - lead_pos.z
 	var dist: float = sqrt(dx * dx + dz * dz)
 	if dist < 0.001:
 		# Mark sitting on top of our net — degenerate case; just anchor
-		# at the mark and let the goalie + steering sort it out.
-		return _clamp_anchor(mark_pos)
+		# at the lead pos and let the goalie + steering sort it out.
+		return _clamp_anchor(lead_pos)
 	var step: float = MAN_GAP_DEPTH_M / dist
 	return _clamp_anchor(Vector3(
-			mark_pos.x + dx * step, 0.0,
-			mark_pos.z + dz * step))
+			lead_pos.x + dx * step, 0.0,
+			lead_pos.z + dz * step))
 
 
 # F3 anchor — weak-side trailer, mirrored across the puck X and 8 m
