@@ -50,8 +50,9 @@ func test_closest_teammate_is_f1() -> void:
 	], Vector3(0, 0, 0))
 	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1])
 	assert_eq(roles[200], AIRoleAssignment.ROLE_F1, "closest to puck (peer 200) should be F1")
-	assert_eq(roles[100], AIRoleAssignment.ROLE_OFF)
-	assert_eq(roles[300], AIRoleAssignment.ROLE_OFF)
+	# 5k: rank 2 → F2, rank 3 → F3 (peers 100 and 300 sorted by distance).
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F2)
+	assert_eq(roles[300], AIRoleAssignment.ROLE_F3)
 
 
 func test_negative_peer_ids_can_be_f1() -> void:
@@ -65,7 +66,8 @@ func test_negative_peer_ids_can_be_f1() -> void:
 	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1])
 	assert_eq(roles.size(), 2, "all-bot team should still get role assignments")
 	assert_eq(roles[-1], AIRoleAssignment.ROLE_F1, "closest bot (peer -1) should be F1")
-	assert_eq(roles[-2], AIRoleAssignment.ROLE_OFF)
+	# 5k: rank 2 → F2 (only two teammates means no F3).
+	assert_eq(roles[-2], AIRoleAssignment.ROLE_F2)
 
 
 func test_three_teammates_get_f1_f2_f3_in_rank_order() -> void:

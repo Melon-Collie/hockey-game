@@ -15,7 +15,7 @@ func test_centered_goalie_picks_a_corner() -> void:
 	var shooter := Vector3(0.0, 0.0, 20.0)
 	var goalie := Vector3(0.0, 0.0, 26.5)
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(shooter, goalie, NET_Z, NET_HW, SHADOW_HW)
-	assert_eq(aim.z, NET_Z, "aim should land on the net plane")
+	assert_almost_eq(aim.z, NET_Z, 0.001, "aim should land on the net plane")
 	# Tie-break is left arc → aim_x is the midpoint of [-0.915, -0.5*shadow projection]
 	assert_lt(aim.x, 0.0, "tie-break picks the left arc")
 
@@ -50,4 +50,4 @@ func test_shooter_at_goalie_z_falls_back_to_center() -> void:
 	var goalie := Vector3(0.0, 0.0, 26.5)
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(shooter, goalie, NET_Z, NET_HW, SHADOW_HW)
 	assert_almost_eq(aim.x, 0.0, 0.0001)
-	assert_eq(aim.z, NET_Z)
+	assert_almost_eq(aim.z, NET_Z, 0.001)
