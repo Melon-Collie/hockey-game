@@ -382,15 +382,35 @@ func _pass_aim_point(snapshot: WorldSnapshot) -> Vector3:
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
+	# Single-pass split into teammate vs opponent buckets — both feed
+	# AISteering's repel forces.
 	_scratch_teammates.clear()
+	_scratch_opponents.clear()
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
-		if int(_team_id_resolver.call(peer_id)) != _team_id:
-			continue
-		_scratch_teammates.append(snapshot.skater_states[peer_id].position)
+		if int(_team_id_resolver.call(peer_id)) == _team_id:
+			_scratch_teammates.append(snapshot.skater_states[peer_id].position)
+		else:
+			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+
+	# Shot-lane endpoints: only set when a teammate (not us, not opp) is
+	# the carrier — keeps off-puck bots out of the carrier's lane to the
+	# attacking goal. Carrier-side bots pass zero (they aren't repelled
+	# from their own lane).
+	var lane_start: Vector3 = Vector3.ZERO
+	var lane_end: Vector3 = Vector3.ZERO
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier != -1 and carrier != _peer_id:
+		if int(_team_id_resolver.call(carrier)) == _team_id:
+			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
+			if carrier_state != null:
+				lane_start = carrier_state.position
+				lane_end = _attacking_goal_pos
+
 	input.move_vector = AISteering.compute_move_vector(
-			self_pos, anchor, _scratch_teammates,
+			self_pos, anchor, _scratch_teammates, _scratch_opponents,
+			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH)
 
 
