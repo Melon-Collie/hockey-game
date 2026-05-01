@@ -763,15 +763,7 @@ priority order:
 
 ### Active queue (next up)
 
-1. **Decision-making smoothing (6k).** Replace the instant `_pick_action`
-   threshold with EMA-smoothed action scores. Bot polls every tick,
-   but a fresh-perfect option takes ~150ms to ramp the smoothed score
-   above threshold (α≈0.02 at 240Hz, ~35-tick half-life). Brief
-   flashes of openness get filtered out; sustained looks fire. Reset
-   the EMAs on entering CARRY so stale shoot-confidence doesn't carry
-   across possessions.
-
-2. **Smarter shot selection.** Bots currently only fire ground wristers
+1. **Smarter shot selection.** Bots currently only fire ground wristers
    away from the goalie shadow. Add intelligence around the rest of
    the toolset:
    - Elevated when the goalie is butterfly / down (use
@@ -781,7 +773,7 @@ priority order:
 
    Each option gets its own utility score; SM picks max.
 
-3. **Offsides — three sub-tasks.**
+2. **Offsides — three sub-tasks.**
    - **Awareness.** Bot reads each teammate's offside state from
      existing `Skater.is_ghost` / `OffsideRules` infra. Add a query
      to `TeamBrain` so the SM can ask "is anyone on my team offside?"
@@ -794,6 +786,29 @@ priority order:
    Pre-work: quick map of where offsides state actually lives today
    so the AI doesn't duplicate the detector. Don't write a parallel
    offside check on the AI side.
+
+### Parked (revisit after design settles)
+
+3. **Decision-making smoothing.** Tried as Phase 6k (EMA per action
+   with α=0.01); reverted because it was premature — would have
+   masked latent issues in the score functions while we're still
+   iterating. Two candidate models when the bot's behavior is
+   stable enough that smoothing is solving a real flicker problem
+   rather than hiding one:
+   - **EMA per action.** What 6k tried. Cleanest math. Plateau
+     issue: thin scores (raw≈0.26) take ~480ms to cross the 0.25
+     threshold, which is too slow for legitimate marginal options.
+   - **Persistence count.** Each option must be the current winner
+     for K consecutive ticks before firing. Hot scores commit
+     immediately; flickering between options resets the counter.
+     Probably the better fit, but only worth implementing once
+     debug visuals make it obvious whether the underlying scores
+     are flickering for legitimate reasons (real world change) or
+     buggy ones (math noise).
+
+   Pre-req: debug visuals (per the original spec) so we can SEE
+   what scores look like in flight. Without that, smoothing is
+   guessing.
 
 ### Trajectory module extensions
 
