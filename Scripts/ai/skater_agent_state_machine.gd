@@ -508,11 +508,12 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 	# back to the NZ side of the blue line. Anchor preserves our X so
 	# the steering doesn't pull us laterally — fastest tag is straight
 	# back. Host's InfractionRules.has_tagged_up clears is_ghost the
-	# moment we cross.
+	# moment we cross. Already on the NZ side, so no further cap needed.
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	if self_state != null and self_state.is_ghost:
 		return _tag_up_anchor(self_pos)
 
+	var anchor: Vector3
 	# Man-to-man takes priority in our defensive zone when the opp has
 	# the puck (or it's loose in our zone). The brain publishes the
 	# coverage map at 6 Hz; we just look up our mark.
@@ -521,18 +522,20 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 		if mark_pid != 0:
 			var mark: SkaterNetworkState = snapshot.skater_states.get(mark_pid)
 			if mark != null:
-				return _man_anchor(mark)
+				return _cap_offside(_man_anchor(mark), snapshot)
 
 	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
 	match role:
 		AIRoleAssignment.ROLE_F2:
-			return _f2_anchor(puck_pos)
+			anchor = _f2_anchor(puck_pos)
 		AIRoleAssignment.ROLE_F3:
-			return _f3_anchor(puck_pos)
-	# Legacy / fallback — Phase 3 anchor (above puck on own-net side, X
-	# tracking the bot's current X to avoid sliding sideways).
-	var anchor_z: float = puck_pos.z + _own_goal_dir * LEGACY_OFF_DEPTH
-	return _clamp_anchor(Vector3(self_pos.x, 0.0, anchor_z))
+			anchor = _f3_anchor(puck_pos)
+		_:
+			# Legacy / fallback — Phase 3 anchor (above puck on own-net
+			# side, X tracking the bot's current X to avoid sliding sideways).
+			var anchor_z: float = puck_pos.z + _own_goal_dir * LEGACY_OFF_DEPTH
+			anchor = _clamp_anchor(Vector3(self_pos.x, 0.0, anchor_z))
+	return _cap_offside(anchor, snapshot)
 
 
 # F2 anchor — triangle apex on the strong side (the side of the rink
@@ -546,24 +549,26 @@ func _f2_anchor(puck_pos: Vector3) -> Vector3:
 	return _clamp_anchor(Vector3(x, 0.0, z))
 
 
-# True iff we're in our own zone defending — opp has the puck (or it's
-# loose in our zone). Man-to-man only fires here; everywhere else (NZ,
-# OZ, own possession) we keep the zone triangle.
-# True if any teammate (not us) is currently in our attacking zone with
-# the puck still on our side of the line — an offside-imminent state.
-# Calls InfractionRules directly rather than reading is_ghost so the
-# decision is based on the current frame, not the host's lagged broadcast.
-func _any_teammate_offside(snapshot: WorldSnapshot) -> bool:
+# Cap an off-puck anchor so we don't ask the bot to skate ahead of the
+# puck across the OZ blue line. While the puck is in NZ or our DZ, any
+# anchor that lands in our attacking zone gets pulled back to the NZ
+# side of the line. Once the puck enters the OZ, the cap lifts and
+# off-puck teammates are free to flow in for support.
+#
+# Carriers go through _carry_anchor, not here, so the puck is brought
+# in normally — the cap only pins the support skaters.
+func _cap_offside(anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	var puck_z: float = snapshot.puck_state.position.z
-	for peer_id: int in snapshot.skater_states:
-		if peer_id == _peer_id:
-			continue
-		if int(_team_id_resolver.call(peer_id)) != _team_id:
-			continue
-		var s: SkaterNetworkState = snapshot.skater_states[peer_id]
-		if InfractionRules.is_offside(s.position.z, _team_id, puck_z, false):
-			return true
-	return false
+	# Puck already in OZ? No cap.
+	if -_own_goal_dir * puck_z > GameRules.BLUE_LINE_Z:
+		return anchor
+	# Puck not in OZ. Anchor allowed only on NZ/DZ side of the blue line.
+	if -_own_goal_dir * anchor.z <= GameRules.BLUE_LINE_Z:
+		return anchor
+	# Anchor sits in OZ — pull it back to the NZ side, X unchanged so
+	# steering doesn't drag the bot laterally.
+	var hold_z: float = -_own_goal_dir * (GameRules.BLUE_LINE_Z - OFFSIDE_HOLD_BUFFER_M)
+	return _clamp_anchor(Vector3(anchor.x, 0.0, hold_z))
 
 
 # Tag-up anchor: just on the NZ side of the OZ blue line, preserving X
@@ -574,6 +579,9 @@ func _tag_up_anchor(self_pos: Vector3) -> Vector3:
 	return _clamp_anchor(Vector3(self_pos.x, 0.0, tag_z))
 
 
+# True iff we're in our own zone defending — opp has the puck (or it's
+# loose in our zone). Man-to-man only fires here; everywhere else (NZ,
+# OZ, own possession) we keep the zone triangle.
 func _should_play_man_to_man(snapshot: WorldSnapshot) -> bool:
 	var puck_pos: Vector3 = snapshot.puck_state.position
 	# In our DZ? oriented_z > BLUE_LINE_Z means past our own blue line.
@@ -650,13 +658,11 @@ func _clamp_anchor(p: Vector3) -> Vector3:
 # search nearby for the position with the best shoot-or-pass option
 # (8 cardinal directions × CARRY_SEARCH_STEP_M plus stay-here).
 func _carry_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	# Hold up: if any teammate is currently offside, don't enter the OZ —
-	# pull the carrier anchor to just shy of the OZ blue line and wait.
-	# Real hockey "hold the line" — beat would be hideous if the carrier
-	# kept skating in and triggered a whistle.
-	if _any_teammate_offside(snapshot):
-		var hold_z: float = -_own_goal_dir * (GameRules.BLUE_LINE_Z - OFFSIDE_HOLD_BUFFER_M)
-		return _clamp_anchor(Vector3(self_pos.x, 0.0, hold_z))
+	# No hold-up for the carrier — current arcade rules don't whistle on
+	# offside, just ghost the trailing player. The off-puck teammates
+	# clamp themselves on the NZ side of the line via _cap_offside, so
+	# the carrier brings the puck in normally and they release across
+	# behind it.
 	if -_own_goal_dir * self_pos.z <= GameRules.BLUE_LINE_Z:
 		var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
 		return Vector3(0.0, 0.0, slot_z)
