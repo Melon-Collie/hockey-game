@@ -87,6 +87,33 @@ func test_pass_lane_only_counts_opponents_between_endpoints() -> void:
 	assert_gt(s, 0.0, "opponent behind the shooter shouldn't block the lane")
 
 
+func test_pass_outlet_to_advanced_teammate_fires() -> void:
+	# Phase 5h: bot deep in DZ, teammate at center ice. Receiver can't
+	# shoot from there (too far for SHOT_RANGE_FALLOFF) but the pass
+	# still scores via the advancement bonus.
+	var shooter := Vector3(0.0, 0.0, -25.0)  # own zone, ~52 m from attacking goal at +Z
+	var receiver := Vector3(0.0, 0.0, 0.0)   # center ice, ~27 m from goal
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	assert_gt(s, AIActionScoring.ACTION_THRESHOLD, "outlet pass to a meaningfully advanced receiver should score above threshold")
+
+
+func test_shoot_score_zero_from_behind_goal_line() -> void:
+	# GOAL.z = +26.65; shooter past it (z=27) is behind the net.
+	var shooter := Vector3(0.0, 0.0, 27.0)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	assert_eq(s, 0.0, "shot from behind goal line should score 0")
+
+
+func test_pass_score_zero_to_receiver_behind_goal_line() -> void:
+	var shooter := Vector3(0.0, 0.0, 20.0)
+	var receiver := Vector3(0.0, 0.0, 28.0)  # past attacking goal line
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	assert_eq(s, 0.0, "pass to receiver behind goal line should score 0")
+
+
 func test_pass_score_falls_off_with_receiver_pressure() -> void:
 	var shooter := Vector3(0.0, 0.0, 10.0)
 	var receiver := Vector3(0.0, 0.0, 22.0)

@@ -25,6 +25,13 @@ const SHOT_RANGE_FALLOFF_M: float = 18.0
 # with distance up to LANE_CLEAR_RADIUS_M (clear).
 const LANE_CLEAR_RADIUS_M: float = 1.5
 
+# Outlet pass scoring — when a receiver is "more advanced" toward the
+# attacking goal but too far to shoot themselves. Receiver must be at
+# least PASS_MIN_ADVANCE_M closer to goal to score above 0; saturates
+# at PASS_MAX_ADVANCE_M.
+const PASS_MIN_ADVANCE_M: float = 3.0
+const PASS_MAX_ADVANCE_M: float = 12.0
+
 # Score threshold below which the SM stays in CARRY rather than committing
 # to a SHOOT or PASS. Tunes how aggressive bots are.
 const ACTION_THRESHOLD: float = 0.25
@@ -45,6 +52,10 @@ static func score_shoot(
 		net_half_width: float,
 		shadow_half: float,
 		opponents: Array[Vector3]) -> float:
+	# Hard gate: shooter past the attacking goal line can't shoot in —
+	# wraparound territory, doesn't make sense as a SHOOT score.
+	if _is_past_goal_line(shooter, attacking_goal):
+		return 0.0
 	var geom: float = _shot_geometry(shooter, attacking_goal, goalie_pos, net_half_width, shadow_half)
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			shooter, goalie_pos, attacking_goal.z, net_half_width, shadow_half)
@@ -54,16 +65,12 @@ static func score_shoot(
 
 
 # Returns PASS score in [0, 1] for a specific receiver. Multiplicative:
-#   - lane_clear:           1.0 if no opponent in the bot→receiver line,
-#                           degrades smoothly as opponents approach the line
-#   - receiver_geometry:    the receiver's potential shot score (openness ×
-#                           distance) — i.e. "how good is the shot we're
-#                           setting up?"
-#   - 1 - receiver_pressure: how open the receiver is to receive
-#
-# Replaces the Phase 5d advancement-based scoring. Lateral passes that
-# move the puck to a teammate with a wider-open net now score correctly
-# (advancement was zero in those cases).
+#   - lane_clear:           1.0 if no opponent in the bot→receiver line
+#   - receiver_quality:     max of (a) receiver's potential shot score
+#                           and (b) advancement bonus — covers both
+#                           "tape-to-tape into the slot" and "outlet
+#                           pass to a teammate up-ice"
+#   - 1 - receiver_pressure: how open the receiver is to catch
 static func score_pass(
 		shooter: Vector3,
 		receiver: Vector3,
@@ -72,12 +79,25 @@ static func score_pass(
 		net_half_width: float,
 		shadow_half: float,
 		opponents: Array[Vector3]) -> float:
+	# A receiver past the attacking goal line is degenerate (can't shoot,
+	# wraparound passes are weird). Skip.
+	if _is_past_goal_line(receiver, attacking_goal):
+		return 0.0
 	var lane: float = _lane_clear(shooter, receiver, opponents)
 	if lane <= 0.0:
 		return 0.0
+	# Receiver quality: take the max of "they have a shot from there" and
+	# "this pass moves the puck meaningfully closer to the attacking
+	# goal." The shot-quality term handles cross-slot / lateral passes
+	# (a teammate at the same depth with a wider-open net beats a
+	# covered shooter); the advancement term handles outlet passes
+	# (DZ → NZ teammate that's too far to shoot but is nicely positioned
+	# to skate up-ice).
 	var receiver_geom: float = _shot_geometry(receiver, attacking_goal, goalie_pos, net_half_width, shadow_half)
+	var advance: float = _advancement_score(shooter, receiver, attacking_goal)
+	var receiver_quality: float = maxf(receiver_geom, advance)
 	var pressure_factor: float = 1.0 - _pressure(receiver, opponents)
-	return lane * receiver_geom * pressure_factor
+	return lane * receiver_quality * pressure_factor
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -116,6 +136,27 @@ static func _net_openness(
 	var covered: float = maxf(0.0, sr - sl)
 	var net_width: float = net_half_width * 2.0
 	return clampf((net_width - covered) / net_width, 0.0, 1.0)
+
+
+# Advancement bonus in [0, 1] for outlet-style passes. Receiver must be
+# at least PASS_MIN_ADVANCE_M closer to the attacking goal than the
+# shooter; saturates at PASS_MAX_ADVANCE_M.
+static func _advancement_score(shooter: Vector3, receiver: Vector3, attacking_goal: Vector3) -> float:
+	var my_dist: float = shooter.distance_to(attacking_goal)
+	var their_dist: float = receiver.distance_to(attacking_goal)
+	var advance: float = my_dist - their_dist
+	if advance < PASS_MIN_ADVANCE_M:
+		return 0.0
+	var span: float = PASS_MAX_ADVANCE_M - PASS_MIN_ADVANCE_M
+	return clampf((advance - PASS_MIN_ADVANCE_M) / span, 0.0, 1.0)
+
+
+# True if `pos` is past the attacking goal line in the direction the
+# attacking team is going (i.e. "behind the net" relative to the
+# shooter). For Team 0 attacking -Z (attacking_goal.z = -26.65),
+# "past" means z < -26.65; for Team 1 attacking +Z, z > +26.65.
+static func _is_past_goal_line(pos: Vector3, attacking_goal: Vector3) -> bool:
+	return (pos.z - attacking_goal.z) * signf(attacking_goal.z) > 0.0
 
 
 # Pressure score in [0, 1] — fraction of PRESSURE_MAX_COUNT opponents
