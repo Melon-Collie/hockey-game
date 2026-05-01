@@ -61,6 +61,15 @@ const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
 
 const QUIET_EYE_TICKS: int = 8
+# Per-tick blend rate for action-score smoothing. The bot polls scores
+# every physics tick (240Hz) but commits on the SMOOTHED score, not the
+# raw one — so a one-frame flash of openness doesn't fire a shot. With
+# α=0.01 a perfect (raw=1.0) opportunity crosses ACTION_THRESHOLD after
+# ~120ms and saturates near 1.0 after ~700ms. A mediocre raw=0.4 score
+# plateaus around 0.4 and never crosses threshold, which is what we
+# want. EMAs reset on entering CARRY so confidence doesn't bleed
+# across possessions.
+const SCORE_EMA_ALPHA: float = 0.01
 # How wide the goalie's shadow on the net plane should be considered
 # (meters, half-width). Tuneable in playtest.
 const GOALIE_SHADOW_HALF: float = 0.3
@@ -163,6 +172,19 @@ var _pass_target_peer_id: int = 0
 # transition into "loose".
 var _engagement_cooldown: int = 0
 var _prev_carrier_peer_id: int = -1
+
+# Smoothed action scores. Updated each _pick_action tick by lerping
+# toward the raw score at SCORE_EMA_ALPHA. Decision threshold + argmax
+# run on these, not the raw scores. Reset on CARRY entry so a fresh
+# possession doesn't inherit confidence from the previous one.
+var _shoot_ema: float = 0.0
+var _dump_ema: float = 0.0
+# peer_id -> smoothed pass score. One entry per teammate; we update
+# every observed teammate each tick and pick the peer with the highest
+# smoothed score. Per-peer (not "best pass overall") so leader changes
+# don't poison the EMA — switching from receiver A to receiver B
+# starts B's confidence at 0, not at A's plateau.
+var _pass_ema: Dictionary = {}
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -368,38 +390,46 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 			_scratch_opponents)
 
-	# PASS score — one per teammate. Track the best.
+	# PASS scores — one per teammate, EMA per peer. Track best smoothed.
 	var best_pass_peer: int = 0
-	var best_pass_score: float = 0.0
+	var best_pass_smoothed: float = 0.0
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
 		if int(_team_id_resolver.call(peer_id)) != _team_id:
 			continue
 		var receiver: Vector3 = snapshot.skater_states[peer_id].position
-		var s: float = AIActionScoring.score_pass(
+		var raw: float = AIActionScoring.score_pass(
 				self_pos, receiver, _attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents)
-		if s > best_pass_score:
-			best_pass_score = s
+		var prev: float = _pass_ema.get(peer_id, 0.0)
+		var smoothed: float = lerpf(prev, raw, SCORE_EMA_ALPHA)
+		_pass_ema[peer_id] = smoothed
+		if smoothed > best_pass_smoothed:
+			best_pass_smoothed = smoothed
 			best_pass_peer = peer_id
 
 	# DUMP score — fires when pressured + far from attacking goal. Pure
 	# function of pressure and zone, doesn't compete on shot/pass quality.
-	var dump_score: float = AIActionScoring.score_dump(
+	var dump_raw: float = AIActionScoring.score_dump(
 			self_pos, _attacking_goal_pos, _own_goal_dir,
 			GameRules.BLUE_LINE_Z, _scratch_opponents)
 
-	# Pick the winner. Threshold gates "do nothing" — when all scores
-	# are weak (e.g., bot in own zone with no pressure or teammate
-	# ahead), CARRY wins implicitly.
-	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
+	# Smooth the binary action scores. Pass EMAs were updated inline
+	# above to keep the per-peer dictionary mutation in one place.
+	_shoot_ema = lerpf(_shoot_ema, shoot_score, SCORE_EMA_ALPHA)
+	_dump_ema = lerpf(_dump_ema, dump_raw, SCORE_EMA_ALPHA)
+
+	# Pick the winner from SMOOTHED scores. Threshold gates "do nothing" —
+	# a one-tick flash of openness can't accumulate enough EMA to fire,
+	# which is the whole point of smoothing.
+	var max_score: float = maxf(maxf(_shoot_ema, best_pass_smoothed), _dump_ema)
 	if max_score < AIActionScoring.ACTION_THRESHOLD:
 		return
-	if shoot_score >= best_pass_score and shoot_score >= dump_score:
+	if _shoot_ema >= best_pass_smoothed and _shoot_ema >= _dump_ema:
 		_set_state(State.SHOOT_PRESSED)
-	elif best_pass_score >= dump_score:
+	elif best_pass_smoothed >= _dump_ema:
 		_pass_target_peer_id = best_pass_peer
 		_set_state(State.PASS_PRESSED)
 	else:
@@ -744,6 +774,15 @@ func _update_engagement_cooldown(snapshot: WorldSnapshot, self_state: SkaterNetw
 
 func _set_state(s: State) -> void:
 	if s != _state:
+		# Entering CARRY = start of a new look at the world. Wipe smoothed
+		# scores so the bot has to re-confirm any option from scratch.
+		# (Re-entering CARRY from SHOOT_PRESSED / PASS_PRESSED also resets,
+		# which is fine — those exits already mean we just released the
+		# puck or are about to.)
+		if s == State.CARRY:
+			_shoot_ema = 0.0
+			_dump_ema = 0.0
+			_pass_ema.clear()
 		_state = s
 		_ticks_in_state = 0
 
