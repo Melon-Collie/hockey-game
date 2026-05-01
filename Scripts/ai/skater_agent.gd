@@ -1,25 +1,32 @@
 class_name SkaterAgent
 extends RefCounted
 
-# Per-bot decision loop. Owned by AIController. Phase 4 splits behavior by
-# role read from the TeamBrain blackboard:
-#   F1  — chase the puck (or carry it toward the opposing goal if we have it)
-#   OFF — Phase 3 anchor (4 m above the puck on own-net side)
+# Per-bot decision loop. Owned by AIController.
 #
-# Consumes the existing WorldSnapshot (Scripts/networking/world_snapshot.gd)
-# from StateBufferManager. team_id is not on SkaterNetworkState, so the
-# agent uses a Callable resolver bound at setup time.
+# Phase 4 split behavior by role read from the TeamBrain blackboard (F1
+# chases / carries, OFF holds the above-the-puck anchor). Phase 5a layers
+# on the first on-puck behavior: F1 with the puck in the offensive zone
+# fires a quick wrister at the goal mouth instead of holding forever.
 #
-# Future phases: F2/F3 differentiation, on-puck SHOOT/PASS/CARRY scoring,
-# quiet-eye hysteresis, teammate-polite rules.
+# Consumes the existing WorldSnapshot from StateBufferManager. team_id
+# is not on SkaterNetworkState, so the agent uses a Callable resolver
+# bound at setup time.
 
 # How far above the puck OFF bots sit (toward own goal, in meters).
 const ANCHOR_DEPTH: float = 4.0
+
+# Once an on-puck action commits, hold it for this many ticks before
+# re-deciding. Prevents per-tick flip-flop between SHOOT and CARRY when
+# the bot crosses the offensive blue line. ~33 ms at 240 Hz.
+const QUIET_EYE_TICKS: int = 8
+
+enum Action { CARRY, SHOOT }
 
 # Reused buffers — avoids per-tick allocations.
 var _scratch_input: InputState = InputState.new()
 var _scratch_teammates: Array[Vector3] = []
 
+# Identity / orientation
 var _peer_id: int = 0
 var _team_id: int = 0
 # +1 if own goal is at +GOAL_LINE_Z (Team 0), -1 for Team 1.
@@ -28,6 +35,13 @@ var _own_goal_dir: float = 1.0
 var _attacking_goal_pos: Vector3 = Vector3.ZERO
 var _team_brain: TeamBrain = null
 var _team_id_resolver: Callable = Callable()
+
+# On-puck commit + shot phase. _shoot_phase: 0=idle, 1=press fired (wait for
+# release), 2=release fired (shot done). Reset whenever the bot loses the
+# puck or the commit window expires.
+var _committed_action: Action = Action.CARRY
+var _commit_remaining: int = 0
+var _shoot_phase: int = 0
 
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable) -> void:
@@ -49,10 +63,12 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 	_zero_input(input, delta, host_timestamp)
 
 	if snapshot == null or snapshot.puck_state == null or snapshot.skater_states.is_empty():
+		_reset_on_puck_state()
 		return input
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	if self_state == null:
 		# Snapshot pre-dates this bot's spawn; freeze for one tick.
+		_reset_on_puck_state()
 		return input
 	var self_pos: Vector3 = self_state.position
 	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
@@ -76,13 +92,22 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 	# the IK doesn't pull the stick toward (0,0,0). Off-puck bots get the
 	# same aim — harmless for IK and avoids a useless branch.
 	input.mouse_world_pos = _attacking_goal_pos
+
+	# On-puck branch. Drives the press/release sequence for SHOOT and the
+	# quiet-eye commit. Off-puck bots do nothing here; their behavior is
+	# fully determined by anchor steering above.
+	if have_puck:
+		_on_puck_tick(input, self_pos)
+	else:
+		_reset_on_puck_state()
+
 	return input
 
 
 # Anchor selection by role.
 #   F1 + has_puck: high-slot in opposing zone (5 m off the goal line) so the
 #                  carrier stops in front of the net rather than skating into
-#                  the cage. Phase 5's shooting will happen from here.
+#                  the cage. Phase 5a's shoot trigger fires from here.
 #   F1 + no puck: chase puck position
 #   OFF: Phase 3 "above the puck on own-net side"
 func _compute_anchor(role: StringName, self_pos: Vector3, snapshot: WorldSnapshot, have_puck: bool) -> Vector3:
@@ -96,6 +121,64 @@ func _compute_anchor(role: StringName, self_pos: Vector3, snapshot: WorldSnapsho
 	var anchor_z: float = snapshot.puck_state.position.z + _own_goal_dir * ANCHOR_DEPTH
 	anchor_z = clampf(anchor_z, -GameRules.GOAL_LINE_Z + 1.0, GameRules.GOAL_LINE_Z - 1.0)
 	return Vector3(self_pos.x, 0.0, anchor_z)
+
+
+# Per-tick on-puck decision + execution. Decides which action to commit to
+# (within the quiet-eye window) and fills the input flags accordingly.
+func _on_puck_tick(input: InputState, self_pos: Vector3) -> void:
+	if _commit_remaining <= 0:
+		_committed_action = _pick_action(self_pos)
+		_commit_remaining = QUIET_EYE_TICKS
+		_shoot_phase = 0
+	_commit_remaining -= 1
+
+	match _committed_action:
+		Action.SHOOT:
+			_execute_shoot(input)
+		Action.CARRY:
+			pass  # default carry — input.move_vector already aims at the slot.
+
+
+# Phase 5a action heuristic: SHOOT iff we're past our attacking blue line.
+# Distance and angle gating come in 5b along with goalie-shadow aim.
+func _pick_action(self_pos: Vector3) -> Action:
+	# Blue lines sit at ±BLUE_LINE_Z. The bot is in the offensive zone when
+	# its z is past the blue line on the attacking side; with own_goal_dir
+	# = +1 for Team 0 (attacks -Z) and -1 for Team 1 (attacks +Z), the
+	# expression is symmetric.
+	var in_offensive_zone: bool = -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
+	if in_offensive_zone:
+		return Action.SHOOT
+	return Action.CARRY
+
+
+# Two-tick press/release sequence for a quick wrister. The first tick sets
+# shoot_pressed (state machine transitions SKATING_WITH_PUCK → WRISTER_AIM)
+# and shoot_held (so the released-while-aimed gate in WRISTER_AIM doesn't
+# fire prematurely on the same tick). The second tick drops shoot_held,
+# triggering release_wrister. Bots don't sweep the cursor, so charge
+# stays near zero and ShotMechanics.release_wrister always picks the
+# quick-shot path — direction = blade-from-player. mouse_world_pos was
+# already set to _attacking_goal_pos earlier in tick(), so the blade is
+# already aimed at the net.
+func _execute_shoot(input: InputState) -> void:
+	if _shoot_phase == 0:
+		input.shoot_pressed = true
+		input.shoot_held = true
+		_shoot_phase = 1
+	elif _shoot_phase == 1:
+		# shoot_held is already false from _zero_input — leave it that way
+		# so WRISTER_AIM transitions to release this tick.
+		_shoot_phase = 2
+	# _shoot_phase >= 2: shot already fired. Hold idle until commit expires
+	# or puck-loss resets the state. The puck has left our blade by now so
+	# the next tick will branch into the off-puck path anyway.
+
+
+func _reset_on_puck_state() -> void:
+	_commit_remaining = 0
+	_shoot_phase = 0
+	_committed_action = Action.CARRY
 
 
 func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void:
