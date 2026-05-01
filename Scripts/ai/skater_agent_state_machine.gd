@@ -159,6 +159,13 @@ const BOT_WRISTER_SCREEN_DELTA_PER_TICK: float = (
 # slot mid-windup is worse than not shooting. The carry state can re-
 # evaluate next tick (probably picks DUMP or PASS).
 const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
+# Lookahead used to score a wrister at COMMIT time. The shot fires
+# ~250 ms after we decide to take it; defenders can move 1.0–1.5 m in
+# that window. Score against predicted opponent positions so a
+# defender about to step into the lane reads as a blocked lane now,
+# instead of us committing and bailing later.
+const BOT_WRISTER_LOOKAHEAD_S: float = (
+		float(BOT_WRISTER_CHARGE_TICKS) / 240.0)
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
@@ -180,6 +187,12 @@ var _scratch_teammates: Array[Vector3] = []
 # Reused buffer for action scoring's opponent-position list. Cleared at
 # the top of _pick_action.
 var _scratch_opponents: Array[Vector3] = []
+# Parallel buffer of opponent positions PREDICTED forward by the wrister
+# charge window. Used only by score_shoot — a wrister is a 250 ms time
+# commitment, so we score it against where defenders will be at release
+# time, not where they are at decision time. Pass / dump are one-tick
+# and use _scratch_opponents (current positions) as before.
+var _scratch_opponents_shoot: Array[Vector3] = []
 
 # Set when CARRY commits to PASS_PRESSED; consumed by _state_pass_pressed
 # the next tick. 0 means "no current pass target" (real peer_ids are
@@ -447,11 +460,18 @@ func _apply_slot_steering(input: InputState, snapshot: WorldSnapshot, self_pos: 
 #
 # Mutates _pass_target_peer_id when PASS wins.
 func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
-	# Build opponents list once for shoot scoring + receiver pressure.
+	# Build opponents lists. Current positions for pass/dump/receiver
+	# pressure (one-tick decisions); predicted-forward positions for
+	# wrister scoring (250 ms time commitment — defender 4 m away at
+	# 5 m/s closing covers half that gap before the shot fires).
 	_scratch_opponents.clear()
+	_scratch_opponents_shoot.clear()
 	for peer_id: int in snapshot.skater_states:
 		if int(_team_id_resolver.call(peer_id)) != _team_id and peer_id != _peer_id:
-			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+			var s: SkaterNetworkState = snapshot.skater_states[peer_id]
+			_scratch_opponents.append(s.position)
+			_scratch_opponents_shoot.append(AITrajectory.predict_at(
+					s.position, s.velocity, BOT_WRISTER_LOOKAHEAD_S))
 
 	# SHOOT score — at most one. Falls back to attacking_goal_pos if no
 	# opposing goalie is buffered (e.g., first-frame edge case).
@@ -463,7 +483,7 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	var shoot_score: float = AIActionScoring.score_shoot(
 			self_pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-			_scratch_opponents)
+			_scratch_opponents_shoot)
 
 	# PASS score — one per teammate. Track the best. Ghosted teammates
 	# (currently offside) can't legally receive — their collision masks
