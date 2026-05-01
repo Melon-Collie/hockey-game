@@ -773,19 +773,11 @@ priority order:
 
    Each option gets its own utility score; SM picks max.
 
-2. **Offsides — three sub-tasks.**
-   - **Awareness.** Bot reads each teammate's offside state from
-     existing `Skater.is_ghost` / `OffsideRules` infra. Add a query
-     to `TeamBrain` so the SM can ask "is anyone on my team offside?"
-   - **Hold-up.** Carrier decelerates approaching the OZ blue line
-     if any teammate is across — pull the carry anchor back to the
-     NZ side of the line until teammates tag.
-   - **Tag-up.** Offside teammate's anchor pulls them back to their
-     own side of the blue line before re-engaging the offense.
-
-   Pre-work: quick map of where offsides state actually lives today
-   so the AI doesn't duplicate the detector. Don't write a parallel
-   offside check on the AI side.
+2. ~~**Offsides — three sub-tasks.**~~ Shipped as Phase 6l. All three
+   pieces (awareness in pass scoring, carrier hold-up at the blue
+   line, tag-up anchor when ghosted) live on the SM and call
+   `InfractionRules.is_offside` / read `is_ghost` directly. No
+   parallel detector — bot reads what the host already publishes.
 
 ### Parked (revisit after design settles)
 
