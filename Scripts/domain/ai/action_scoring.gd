@@ -131,6 +131,33 @@ static func score_dump(
 	return zone_factor * pressure_factor
 
 
+# Returns the best of (SHOOT score from `pos`, max PASS score from `pos`
+# to any teammate). Used by the carrier's anchor search — the carrier
+# tries candidate positions around themselves and picks the one where
+# they'd have the best option (a shot or a feed). Drives "patient"
+# behavior: bot doesn't park at a fixed high slot, it moves toward
+# wherever the open option is.
+#
+# Note this differs from each individual score function only in that
+# we delegate to score_shoot / score_pass — the inputs are the same.
+# The wrapper exists so the SM doesn't have to duplicate the for-loop
+# over teammates inside its own search code.
+static func carry_position_score(
+		pos: Vector3,
+		attacking_goal: Vector3,
+		goalie_pos: Vector3,
+		net_half_width: float,
+		shadow_half: float,
+		teammate_positions: Array[Vector3],
+		opponents: Array[Vector3]) -> float:
+	var best: float = score_shoot(pos, attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
+	for t: Vector3 in teammate_positions:
+		var s: float = score_pass(pos, t, attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
+		if s > best:
+			best = s
+	return best
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 

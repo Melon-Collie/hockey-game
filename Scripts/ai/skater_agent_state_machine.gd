@@ -91,6 +91,16 @@ const CHASE_SPEED_REF_M_S: float = 10.5
 # intercept point a million seconds away.
 const CHASE_MAX_LOOKAHEAD_S: float = 1.5
 
+# Carrier anchor search step. The carrier samples candidate positions
+# this far from their current spot in 8 cardinal directions and picks
+# the one with the best shoot-or-pass score. Bot drifts toward the
+# best-option spot tick by tick — no teleporting, just gradient
+# follow.
+const CARRY_SEARCH_STEP_M: float = 3.0
+# Margin from the attacking goal line we won't drift past while
+# searching (carrier shouldn't anchor behind the net).
+const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
+
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
@@ -219,7 +229,11 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 
 
 func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	_apply_slot_steering(input, snapshot, self_pos)
+	# In NZ/DZ, drive toward the high slot to enter the offensive zone.
+	# Once in OZ, search for the position with the best shot/pass option
+	# and drift toward it — patient cycling.
+	var anchor: Vector3 = _carry_anchor(snapshot, self_pos)
+	_apply_steering(input, snapshot, self_pos, anchor)
 	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
 	# Transitions
 	if not have_puck:
@@ -443,6 +457,74 @@ func _clamp_anchor(p: Vector3) -> Vector3:
 			clampf(p.x, -GameRules.RINK_HALF_WIDTH + RINK_X_INSET, GameRules.RINK_HALF_WIDTH - RINK_X_INSET),
 			0.0,
 			clampf(p.z, -GameRules.GOAL_LINE_Z + RINK_Z_INSET, GameRules.GOAL_LINE_Z - RINK_Z_INSET))
+
+
+# Carrier anchor. In NZ/DZ, drive toward the high slot. Once in OZ,
+# search nearby for the position with the best shoot-or-pass option
+# (8 cardinal directions × CARRY_SEARCH_STEP_M plus stay-here).
+func _carry_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	if -_own_goal_dir * self_pos.z <= GameRules.BLUE_LINE_Z:
+		var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
+		return Vector3(0.0, 0.0, slot_z)
+	return _find_best_carry_position(snapshot, self_pos)
+
+
+func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	var goalie_pos: Vector3 = _attacking_goal_pos
+	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(1 - _team_id)
+	if opp_goalie != null:
+		goalie_pos = Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
+
+	# Refresh the scratch lists. _pick_action would also populate
+	# _scratch_opponents but it runs later in the same tick (after
+	# QUIET_EYE_TICKS) so we can't rely on its state. Rebuild here.
+	_scratch_opponents.clear()
+	var teammates: Array[Vector3] = []
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if int(_team_id_resolver.call(peer_id)) == _team_id:
+			teammates.append(snapshot.skater_states[peer_id].position)
+		else:
+			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+
+	# Score current position as the baseline; only move if a candidate
+	# beats it.
+	var best_pos: Vector3 = self_pos
+	var best_score: float = AIActionScoring.carry_position_score(
+			self_pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+			teammates, _scratch_opponents)
+
+	# 8 cardinal/diagonal directions. Pre-baked so we don't recompute
+	# trig each tick.
+	const SQRT2_INV: float = 0.70710678
+	const DIRS: Array[Vector2] = [
+			Vector2(1, 0), Vector2(SQRT2_INV, SQRT2_INV),
+			Vector2(0, 1), Vector2(-SQRT2_INV, SQRT2_INV),
+			Vector2(-1, 0), Vector2(-SQRT2_INV, -SQRT2_INV),
+			Vector2(0, -1), Vector2(SQRT2_INV, -SQRT2_INV),
+	]
+	for d: Vector2 in DIRS:
+		var candidate := Vector3(
+				self_pos.x + d.x * CARRY_SEARCH_STEP_M, 0.0,
+				self_pos.z + d.y * CARRY_SEARCH_STEP_M)
+		# Don't drift back into the neutral zone or past the attacking
+		# goal line. RINK_X_INSET keeps us off the boards.
+		if -_own_goal_dir * candidate.z <= GameRules.BLUE_LINE_Z:
+			continue
+		if absf(candidate.z) > absf(_attacking_goal_pos.z) - CARRY_GOAL_LINE_BUFFER_M:
+			continue
+		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
+			continue
+		var s: float = AIActionScoring.carry_position_score(
+				candidate, _attacking_goal_pos, goalie_pos,
+				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+				teammates, _scratch_opponents)
+		if s > best_score:
+			best_score = s
+			best_pos = candidate
+	return best_pos
 
 
 # Dump target — deep corner of the attacking zone on the bot's strong
