@@ -42,10 +42,6 @@ const GOALIE_SHADOW_HALF: float = 0.3
 # How far in front of the goal line the carrier sits when they reach the
 # offensive zone — high slot, not in the cage.
 const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
-# Pass to a teammate only if they're at least this much closer to the
-# opposing goal than us. Prevents marginal "0.2 m better" passes that
-# would just be churn.
-const PASS_DISTANCE_ADVANTAGE_M: float = 3.0
 # Lead time when aiming a pass — extrapolate the receiver's position by
 # this many seconds along their current velocity. Ballpark for a quick
 # wrister at typical pass distances; tune in playtest.
@@ -68,6 +64,9 @@ var _team_id_resolver: Callable = Callable()
 # Reused buffer for steering's teammate-position list. Cleared at the top
 # of each _apply_steering call.
 var _scratch_teammates: Array[Vector3] = []
+# Reused buffer for action scoring's opponent-position list. Cleared at
+# the top of _pick_action.
+var _scratch_opponents: Array[Vector3] = []
 
 # Set when CARRY commits to PASS_PRESSED; consumed by _state_pass_pressed
 # the next tick. 0 means "no current pass target" (real peer_ids are
@@ -159,13 +158,13 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# Transitions
 	if not have_puck:
 		_set_state(_post_puck_lost_state())
-	elif _ticks_in_state >= QUIET_EYE_TICKS and _in_offensive_zone(self_pos):
-		var pass_target: int = _pick_pass_target(snapshot, self_pos)
-		if pass_target != 0:
-			_pass_target_peer_id = pass_target
-			_set_state(State.PASS_PRESSED)
-		else:
-			_set_state(State.SHOOT_PRESSED)
+		return
+	if _ticks_in_state < QUIET_EYE_TICKS:
+		return
+	# Quiet-eye expired — pick the highest-scoring action. CARRY is the
+	# implicit default if nothing clears the threshold (set elsewhere as
+	# AIActionScoring.ACTION_THRESHOLD).
+	_pick_action(snapshot, self_pos)
 
 
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -212,30 +211,58 @@ func _apply_slot_steering(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	_apply_steering(input, snapshot, self_pos, Vector3(0.0, 0.0, slot_z))
 
 
-# Pick the best teammate to pass to. Returns the receiver's peer_id, or
-# 0 if no teammate is meaningfully better positioned than us.
+# Score every applicable action and transition into the highest-scoring
+# state. CARRY is the implicit default — if neither SHOOT nor any PASS
+# clears AIActionScoring.ACTION_THRESHOLD we stay in CARRY without
+# transitioning (next tick re-evaluates).
 #
-# Phase 5c heuristic: distance-to-opposing-goal only. Teammate must be
-# in our offensive zone AND at least PASS_DISTANCE_ADVANTAGE_M closer
-# to the goal than we are. No lane-clear check yet (that lands when
-# the utility-scoring framework arrives in 5d).
-func _pick_pass_target(snapshot: WorldSnapshot, self_pos: Vector3) -> int:
-	var my_dist: float = self_pos.distance_to(_attacking_goal_pos)
-	var best_peer: int = 0
-	var best_dist: float = my_dist - PASS_DISTANCE_ADVANTAGE_M
+# Mutates _pass_target_peer_id when PASS wins.
+func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	# Build opponents list once for shoot scoring + receiver pressure.
+	_scratch_opponents.clear()
+	for peer_id: int in snapshot.skater_states:
+		if int(_team_id_resolver.call(peer_id)) != _team_id and peer_id != _peer_id:
+			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+
+	# SHOOT score — at most one. Falls back to attacking_goal_pos if no
+	# opposing goalie is buffered (e.g., first-frame edge case).
+	var goalie_pos: Vector3 = _attacking_goal_pos
+	var opp_team_id: int = 1 - _team_id
+	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
+	if opp_goalie != null:
+		goalie_pos = Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
+	var shoot_score: float = AIActionScoring.score_shoot(
+			self_pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+			_scratch_opponents)
+
+	# PASS score — one per teammate. Track the best.
+	var best_pass_peer: int = 0
+	var best_pass_score: float = 0.0
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
 		if int(_team_id_resolver.call(peer_id)) != _team_id:
 			continue
-		var their_pos: Vector3 = snapshot.skater_states[peer_id].position
-		if not _in_offensive_zone(their_pos):
-			continue
-		var their_dist: float = their_pos.distance_to(_attacking_goal_pos)
-		if their_dist < best_dist:
-			best_dist = their_dist
-			best_peer = peer_id
-	return best_peer
+		var receiver: Vector3 = snapshot.skater_states[peer_id].position
+		var s: float = AIActionScoring.score_pass(
+				self_pos, receiver, _attacking_goal_pos,
+				_scratch_opponents)
+		if s > best_pass_score:
+			best_pass_score = s
+			best_pass_peer = peer_id
+
+	# Pick the winner. Threshold gates "do nothing" — when both scores
+	# are weak (e.g., bot in own zone, no teammate ahead), CARRY wins
+	# implicitly.
+	var max_score: float = maxf(shoot_score, best_pass_score)
+	if max_score < AIActionScoring.ACTION_THRESHOLD:
+		return
+	if shoot_score >= best_pass_score:
+		_set_state(State.SHOOT_PRESSED)
+	else:
+		_pass_target_peer_id = best_pass_peer
+		_set_state(State.PASS_PRESSED)
 
 
 # Lead the receiver by PASS_LEAD_TIME_S along their current velocity.
@@ -286,12 +313,6 @@ func _is_f1() -> bool:
 # everyone else holds the above-puck anchor.
 func _post_puck_lost_state() -> State:
 	return State.CHASE_PUCK if _is_f1() else State.OFF_PUCK
-
-
-func _in_offensive_zone(self_pos: Vector3) -> bool:
-	# own_goal_dir = +1 for Team 0 (attacks -Z, OZ at z < -BLUE_LINE_Z),
-	# -1 for Team 1 (attacks +Z, OZ at z > +BLUE_LINE_Z). Symmetric form:
-	return -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
 
 
 func _set_state(s: State) -> void:
