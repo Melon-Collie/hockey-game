@@ -388,7 +388,8 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	# DUMP score — fires when pressured + far from attacking goal. Pure
 	# function of pressure and zone, doesn't compete on shot/pass quality.
 	var dump_score: float = AIActionScoring.score_dump(
-			self_pos, _own_goal_dir, GameRules.BLUE_LINE_Z, _scratch_opponents)
+			self_pos, _attacking_goal_pos, _own_goal_dir,
+			GameRules.BLUE_LINE_Z, _scratch_opponents)
 
 	# Pick the winner. Threshold gates "do nothing" — when all scores
 	# are weak (e.g., bot in own zone with no pressure or teammate

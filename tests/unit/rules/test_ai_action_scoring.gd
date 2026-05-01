@@ -118,26 +118,44 @@ func test_dump_score_zero_in_offensive_zone() -> void:
 	# Team 1 (own_goal_dir = -1) in OZ: own_goal_dir * z < -BLUE_LINE_Z
 	# means z > BLUE_LINE_Z. Bot at z=10 with attacking goal at +Z.
 	var bot := Vector3(0.0, 0.0, 10.0)
+	var attacking_goal := Vector3(0.0, 0.0, 26.65)
 	var pressuring: Array[Vector3] = [Vector3(0.5, 0.0, 10.0), Vector3(-0.5, 0.0, 10.0)]
-	var s: float = AIActionScoring.score_dump(bot, -1.0, 7.29, pressuring)
+	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, pressuring)
 	assert_eq(s, 0.0, "no dumping from the offensive zone")
 
 
-func test_dump_score_high_in_own_zone_under_pressure() -> void:
-	# Team 1 in own zone: z < -BLUE_LINE_Z. Bot at z=-15 swarmed.
+func test_dump_score_high_in_own_zone_under_forward_pressure() -> void:
+	# Team 1 in own zone (attacks +Z): opponents in FRONT of the bot
+	# (between bot and attacking goal) read as real pressure.
 	var bot := Vector3(0.0, 0.0, -15.0)
+	var attacking_goal := Vector3(0.0, 0.0, 26.65)
 	var pressure: Array[Vector3] = [
-			Vector3(0.5, 0.0, -15.0),
-			Vector3(-0.5, 0.0, -15.0),
-			Vector3(0.0, 0.0, -16.0),
+			Vector3(0.5, 0.0, -13.0),   # ahead and slightly +X
+			Vector3(-0.5, 0.0, -13.0),  # ahead and slightly -X
+			Vector3(0.0, 0.0, -12.0),   # directly ahead
 	]
-	var s: float = AIActionScoring.score_dump(bot, -1.0, 7.29, pressure)
-	assert_gt(s, 0.5, "swarmed in own zone should fire dump strongly")
+	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, pressure)
+	assert_gt(s, 0.5, "blocked forward path in own zone should fire dump strongly")
+
+
+func test_dump_score_low_when_pressure_is_only_behind() -> void:
+	# Team 1 in own zone, opponents trailing behind (further from
+	# attacking goal). Bot has open ice ahead — should NOT dump.
+	var bot := Vector3(0.0, 0.0, -15.0)
+	var attacking_goal := Vector3(0.0, 0.0, 26.65)
+	var trailing: Array[Vector3] = [
+			Vector3(0.5, 0.0, -17.0),
+			Vector3(-0.5, 0.0, -17.0),
+			Vector3(0.0, 0.0, -18.0),
+	]
+	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, trailing)
+	assert_lt(s, 0.1, "trailing chasers shouldn't trigger a dump — open ice ahead")
 
 
 func test_dump_score_zero_with_no_pressure() -> void:
 	var bot := Vector3(0.0, 0.0, -15.0)
-	var s: float = AIActionScoring.score_dump(bot, -1.0, 7.29, [])
+	var attacking_goal := Vector3(0.0, 0.0, 26.65)
+	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, [])
 	assert_eq(s, 0.0, "no pressure → no need to dump even from own zone")
 
 

@@ -121,13 +121,19 @@ static func score_pass(
 # distance response (high in slot) while DUMP zone_factor is 0 there.
 static func score_dump(
 		shooter: Vector3,
+		attacking_goal: Vector3,
 		own_goal_dir: float,
 		blue_line_z: float,
 		opponents: Array[Vector3]) -> float:
 	var zone_factor: float = _dump_zone_factor(shooter.z, own_goal_dir, blue_line_z)
 	if zone_factor <= 0.0:
 		return 0.0
-	var pressure_factor: float = _pressure(shooter, opponents)
+	# Directional pressure — a chaser 3m behind the carrier doesn't
+	# justify a dump if the ice ahead is open. We're trying to score
+	# "can I get forward" not "is anyone close." Forward = toward the
+	# attacking goal.
+	var forward: Vector3 = attacking_goal - shooter
+	var pressure_factor: float = _pressure(shooter, opponents, forward)
 	return zone_factor * pressure_factor
 
 
@@ -231,16 +237,43 @@ static func _is_past_goal_line(pos: Vector3, attacking_goal: Vector3) -> bool:
 
 
 # Pressure score in [0, 1] — fraction of PRESSURE_MAX_COUNT opponents
-# within PRESSURE_RADIUS_M of `target`.
-static func _pressure(target: Vector3, opponents: Array[Vector3]) -> float:
-	var n: int = 0
+# within PRESSURE_RADIUS_M of `target`. When `forward` is non-zero,
+# each opponent's contribution is weighted by how much they sit in
+# the target's forward half-plane: directly ahead = full weight,
+# perpendicular = 0.5, directly behind = 0. Use a non-zero `forward`
+# whenever "is my forward path blocked" is the right question (dump,
+# carry decisions). Pass Vector3.ZERO for omnidirectional pressure
+# (e.g. receiver pressure on a pass — interceptors can come from
+# anywhere).
+static func _pressure(target: Vector3, opponents: Array[Vector3],
+		forward: Vector3 = Vector3.ZERO) -> float:
+	var directional: bool = forward.length_squared() > 0.0001
+	var fwd_x: float = 0.0
+	var fwd_z: float = 0.0
+	if directional:
+		var fl: float = sqrt(forward.x * forward.x + forward.z * forward.z)
+		if fl > 0.0001:
+			fwd_x = forward.x / fl
+			fwd_z = forward.z / fl
+		else:
+			directional = false
+	var weighted: float = 0.0
 	var r2: float = PRESSURE_RADIUS_M * PRESSURE_RADIUS_M
 	for p: Vector3 in opponents:
 		var dx: float = p.x - target.x
 		var dz: float = p.z - target.z
-		if dx * dx + dz * dz < r2:
-			n += 1
-	return clampf(float(n) / float(PRESSURE_MAX_COUNT), 0.0, 1.0)
+		var d2: float = dx * dx + dz * dz
+		if d2 >= r2:
+			continue
+		if directional:
+			var d: float = sqrt(d2)
+			# Map dot ∈ [-1, +1] to weight ∈ [0, 1]: behind = 0,
+			# perpendicular = 0.5, ahead = 1. Smooth, single-segment.
+			var dot: float = 0.0 if d < 0.0001 else (dx * fwd_x + dz * fwd_z) / d
+			weighted += 0.5 + 0.5 * dot
+		else:
+			weighted += 1.0
+	return clampf(weighted / float(PRESSURE_MAX_COUNT), 0.0, 1.0)
 
 
 # Lane-clear factor in [0, 1]. 1.0 = no opponent within
