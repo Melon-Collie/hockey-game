@@ -20,6 +20,12 @@ const ANCHOR_DEPTH: float = 4.0
 # the bot crosses the offensive blue line. ~33 ms at 240 Hz.
 const QUIET_EYE_TICKS: int = 8
 
+# How wide the goalie's shadow on the net plane should be considered
+# (meters, half-width). The goalie's pad+body+glove projects roughly
+# 0.5 m on each side of their position from the shooter's vantage —
+# tuneable in playtest.
+const GOALIE_SHADOW_HALF: float = 0.5
+
 enum Action { CARRY, SHOOT }
 
 # Reused buffers — avoids per-tick allocations.
@@ -88,10 +94,13 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 			self_pos, anchor, _scratch_teammates,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH)
 
-	# Aim point: when carrying, point the blade toward the opposing goal so
-	# the IK doesn't pull the stick toward (0,0,0). Off-puck bots get the
-	# same aim — harmless for IK and avoids a useless branch.
-	input.mouse_world_pos = _attacking_goal_pos
+	# Aim point: context-aware so the blade IK does the right thing.
+	#  - F1 with puck → goalie-shadow shot aim (open arc past the goalie)
+	#  - F1 chasing a loose puck → puck position, so the blade is on the
+	#    puck when the bot arrives instead of swung at the far goal
+	#  - Other roles / fallback → goal mouth (harmless default; off-puck
+	#    bots' blades still need to point somewhere reasonable)
+	input.mouse_world_pos = _compute_aim_point(role, snapshot, self_pos, have_puck)
 
 	# On-puck branch. Drives the press/release sequence for SHOOT and the
 	# quiet-eye commit. Off-puck bots do nothing here; their behavior is
@@ -102,6 +111,32 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 		_reset_on_puck_state()
 
 	return input
+
+
+# Pick a world-space target for blade IK / shot direction based on what
+# the bot is currently doing.
+func _compute_aim_point(role: StringName, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> Vector3:
+	if have_puck:
+		# Shooting → past the goalie's shadow at the goal-line plane.
+		# Falls back to the goal center if no goalie state is buffered yet.
+		var opp_team_id: int = 1 - _team_id
+		var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
+		if opp_goalie == null:
+			return _attacking_goal_pos
+		var goalie_pos := Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
+		return AIShotAim.compute_open_net_aim(
+				self_pos, goalie_pos,
+				_attacking_goal_pos.z,
+				GameRules.NET_HALF_WIDTH,
+				GOALIE_SHADOW_HALF)
+	if role == AIRoleAssignment.ROLE_F1:
+		# Chasing a loose puck — aim the blade at the puck so the bot
+		# intercepts cleanly instead of kicking it. y=0; blade IK lives
+		# in 2D for now.
+		return Vector3(snapshot.puck_state.position.x, 0.0, snapshot.puck_state.position.z)
+	# OFF / fallback — keep aiming at the goal so the blade points
+	# somewhere sensible.
+	return _attacking_goal_pos
 
 
 # Anchor selection by role.
