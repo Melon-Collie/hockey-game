@@ -755,4 +755,78 @@ Each deferred item, with a one-line note on where it plugs in without refactorin
 
 ---
 
+## 22. Phase 6 backlog
+
+Items raised in passing during Phase 6 work but deferred — not blocking
+anything, but worth picking up between bigger features. In rough
+priority order:
+
+### Active queue (next up)
+
+1. **Decision-making smoothing (6k).** Replace the instant `_pick_action`
+   threshold with EMA-smoothed action scores. Bot polls every tick,
+   but a fresh-perfect option takes ~150ms to ramp the smoothed score
+   above threshold (α≈0.02 at 240Hz, ~35-tick half-life). Brief
+   flashes of openness get filtered out; sustained looks fire. Reset
+   the EMAs on entering CARRY so stale shoot-confidence doesn't carry
+   across possessions.
+
+2. **Smarter shot selection.** Bots currently only fire ground wristers
+   away from the goalie shadow. Add intelligence around the rest of
+   the toolset:
+   - Elevated when the goalie is butterfly / down (use
+     `GoalieNetworkState.state` to detect).
+   - Slapper when there's time + lane and the bot is in the high slot.
+   - Wrister stays the default.
+
+   Each option gets its own utility score; SM picks max.
+
+3. **Offsides — three sub-tasks.**
+   - **Awareness.** Bot reads each teammate's offside state from
+     existing `Skater.is_ghost` / `OffsideRules` infra. Add a query
+     to `TeamBrain` so the SM can ask "is anyone on my team offside?"
+   - **Hold-up.** Carrier decelerates approaching the OZ blue line
+     if any teammate is across — pull the carry anchor back to the
+     NZ side of the line until teammates tag.
+   - **Tag-up.** Offside teammate's anchor pulls them back to their
+     own side of the blue line before re-engaging the offense.
+
+   Pre-work: quick map of where offsides state actually lives today
+   so the AI doesn't duplicate the detector. Don't write a parallel
+   offside check on the AI side.
+
+### Trajectory module extensions
+
+These are extensions to `AITrajectory.predict` that slot into the
+existing for-loop without touching call sites:
+
+4. **Puck friction.** `AITrajectory` is constant-velocity today. The
+   puck-chase intercept (`_lead_intercept`) would benefit from
+   modeling `ICE_FRICTION` so we don't aim ahead of a sliding puck
+   that's about to stop.
+5. **Skater acceleration.** Skaters don't reach top speed instantly.
+   Modeling acceleration in the trajectory (clamped to max-speed)
+   gives more realistic mark-lead and chase predictions, especially
+   for slow-starting carriers.
+6. **Reaction-delay floor.** First N steps of the trajectory keep
+   current velocity (the target hasn't reacted yet), then steering
+   pull kicks in. Tightens predictions of intent — a defender mid-turn
+   isn't yet pursuing.
+
+### Tuning constants
+
+Pure number tweaks; do these in playtest sessions, not standalone:
+
+7. **Adaptive pass-speed estimate.** `PASS_PUCK_SPEED_REF_M_S` is a
+   fixed 22 m/s. Real puck speed depends on shooter angle, charge,
+   and shot type. A two-tier estimate (slap vs wrister) or a
+   distance-dependent table would tighten pass leads.
+8. **Crease repel weight playtest.** `CREASE_REPEL_WEIGHT = 0.9`
+   shipped untested. Tune up if bots still spam the crease, down if
+   they refuse to shoot from the high slot.
+9. **Engagement cooldown range.** 100–400ms speed-scaled. Validate
+   against post-strip recovery feel.
+
+---
+
 *End of AI_SKATER_SPEC.md. Companion to GOALIE_AI_SPEC.md. Comments welcome in code review, not in docs.*
