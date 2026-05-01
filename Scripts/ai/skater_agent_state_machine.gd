@@ -75,6 +75,13 @@ const ENGAGEMENT_COOLDOWN_MAX_TICKS: int = 96    # ~400 ms at 240 Hz
 const ENGAGEMENT_SPEED_REF_M_S: float = 10.5     # SkaterController.max_speed default
 const ENGAGEMENT_PROXIMITY_M: float = 2.0        # blade-on-puck range
 
+# Pass-receive detection. When a loose puck is moving fast and heading
+# roughly at us, switch the aim to "soft hands" (point at our own body)
+# so the blade moves WITH the puck's direction at contact instead of
+# bouncing off a rigid blade. PASS_RECEIVE_CONE_DOT = 0.5 ⇒ 60° cone.
+const PASS_RECEIVE_MIN_SPEED_M_S: float = 5.0
+const PASS_RECEIVE_CONE_DOT: float = 0.5
+
 # Reference top skating speed used for chase intercept lookahead. Doesn't
 # need to match SkaterController exactly — small over/under shifts where
 # the intercept point lands but doesn't break behavior.
@@ -174,7 +181,13 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# or legacy "above puck" for any unassigned role (4+ teammate case).
 	var anchor: Vector3 = _off_puck_anchor(snapshot.puck_state.position, self_pos)
 	_apply_steering(input, snapshot, self_pos, anchor)
-	input.mouse_world_pos = _attacking_goal_pos
+	# Aim: soft hands if a loose pass is incoming, otherwise the
+	# attacking goal (default off-puck aim — blade points somewhere
+	# meaningful for IK).
+	if _is_receiving_pass(snapshot, self_pos):
+		input.mouse_world_pos = Vector3(self_pos.x, 0.0, self_pos.z)
+	else:
+		input.mouse_world_pos = _attacking_goal_pos
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
@@ -190,11 +203,15 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# puck position" pattern.
 	var target: Vector3 = _lead_intercept(self_pos, snapshot.puck_state.position, snapshot.puck_state.velocity)
 	_apply_steering(input, snapshot, self_pos, target)
-	# Aim: normally blade-on-intercept, but during the engagement cooldown
-	# (just got stripped or just stick-checked someone) pull the blade
-	# back to our body so the puck can settle without auto-magnetting
-	# back to us.
-	if _engagement_cooldown > 0:
+	# Aim: blade-on-intercept by default, but pull blade back to our body
+	# when:
+	#   - engagement cooldown is active (just got stripped or just
+	#     stick-checked) — let the puck settle without auto-magnetting
+	#   - a fast loose pass is heading at us — soft-hands the puck so it
+	#     doesn't deflect off a rigid blade
+	# Both cases want the blade moving WITH the puck at contact rather
+	# than against it; aiming at our own body achieves that via blade IK.
+	if _engagement_cooldown > 0 or _is_receiving_pass(snapshot, self_pos):
 		input.mouse_world_pos = Vector3(self_pos.x, 0.0, self_pos.z)
 	else:
 		input.mouse_world_pos = target
@@ -410,6 +427,35 @@ func _clamp_anchor(p: Vector3) -> Vector3:
 			clampf(p.x, -GameRules.RINK_HALF_WIDTH + RINK_X_INSET, GameRules.RINK_HALF_WIDTH - RINK_X_INSET),
 			0.0,
 			clampf(p.z, -GameRules.GOAL_LINE_Z + RINK_Z_INSET, GameRules.GOAL_LINE_Z - RINK_Z_INSET))
+
+
+# True when a loose puck is moving fast and heading roughly at us — a
+# pass arriving, or a fast rebound. Triggers the soft-hands aim
+# override so the puck doesn't deflect off a rigid blade.
+#
+# Three conditions all required:
+#   1. Puck is loose (carrier_peer_id == -1) — passes are loose pucks
+#      between release and pickup; carried pucks aren't relevant.
+#   2. Puck speed > PASS_RECEIVE_MIN_SPEED_M_S — slow pucks don't
+#      deflect anyway, so receiving logic is unnecessary.
+#   3. Puck velocity is heading toward us — i.e. dot(puck_dir,
+#      from_puck_to_us) > PASS_RECEIVE_CONE_DOT (60° cone).
+func _is_receiving_pass(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var puck_state: PuckNetworkState = snapshot.puck_state
+	if puck_state == null or puck_state.carrier_peer_id != -1:
+		return false
+	var v: Vector3 = puck_state.velocity
+	var speed_sq: float = v.x * v.x + v.z * v.z
+	if speed_sq < PASS_RECEIVE_MIN_SPEED_M_S * PASS_RECEIVE_MIN_SPEED_M_S:
+		return false
+	var to_me_x: float = self_pos.x - puck_state.position.x
+	var to_me_z: float = self_pos.z - puck_state.position.z
+	var to_me_len_sq: float = to_me_x * to_me_x + to_me_z * to_me_z
+	if to_me_len_sq < 0.25:  # < 0.5 m, basically on top of the puck — chase logic handles
+		return false
+	var inv: float = 1.0 / sqrt(speed_sq * to_me_len_sq)
+	var dot: float = (v.x * to_me_x + v.z * to_me_z) * inv
+	return dot > PASS_RECEIVE_CONE_DOT
 
 
 # Where the puck will be when we'd reach its current position at top
