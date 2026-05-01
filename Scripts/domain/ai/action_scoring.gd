@@ -36,6 +36,13 @@ const PASS_MAX_ADVANCE_M: float = 12.0
 # to a SHOOT or PASS. Tunes how aggressive bots are.
 const ACTION_THRESHOLD: float = 0.25
 
+# DUMP zone factors. Bots dump readily from their own zone (clearing
+# under pressure), more reluctantly from neutral, and not at all from
+# the offensive zone (try to keep possession instead).
+const DUMP_OWN_ZONE_FACTOR: float = 1.0
+const DUMP_NEUTRAL_ZONE_FACTOR: float = 0.7
+const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
+
 
 # Returns SHOOT score in [0, 1]. Multiplicative product of:
 #   - shot_geometry: net openness × distance response (see _shot_geometry)
@@ -100,7 +107,44 @@ static func score_pass(
 	return lane * receiver_quality * pressure_factor
 
 
+# Returns DUMP score in [0, 1]. Bots dump when pressured and far from
+# the attacking goal — clear the zone, force the opponent to chase.
+# Multiplicative:
+#   - zone_factor: 1.0 in own zone, 0.7 in neutral zone, 0.0 in OZ
+#                  (no dumping from offensive zone — try to keep possession)
+#   - pressure:    fraction of PRESSURE_MAX_COUNT opponents around us
+#
+# Note that score_dump deliberately does NOT subtract score_shoot or
+# score_pass; the SM picks the max and CARRY is the fallback. If the
+# bot has both a high shot and high dump score in the slot under
+# pressure, the shot wins because SHOOT score multiplies in the
+# distance response (high in slot) while DUMP zone_factor is 0 there.
+static func score_dump(
+		shooter: Vector3,
+		own_goal_dir: float,
+		blue_line_z: float,
+		opponents: Array[Vector3]) -> float:
+	var zone_factor: float = _dump_zone_factor(shooter.z, own_goal_dir, blue_line_z)
+	if zone_factor <= 0.0:
+		return 0.0
+	var pressure_factor: float = _pressure(shooter, opponents)
+	return zone_factor * pressure_factor
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+# Maps the shooter's z to a zone-specific dump factor.
+#   own zone:      own_goal_dir * z >  +blue_line_z
+#   offensive zone:own_goal_dir * z <  -blue_line_z
+#   neutral zone:  in between
+static func _dump_zone_factor(self_z: float, own_goal_dir: float, blue_line_z: float) -> float:
+	var oriented_z: float = own_goal_dir * self_z
+	if oriented_z > blue_line_z:
+		return DUMP_OWN_ZONE_FACTOR
+	if oriented_z < -blue_line_z:
+		return DUMP_OFFENSIVE_ZONE_FACTOR
+	return DUMP_NEUTRAL_ZONE_FACTOR
 
 # Geometric shot quality from a position: openness × distance response.
 # Used by both SHOOT (shooter geometry) and PASS (receiver geometry).

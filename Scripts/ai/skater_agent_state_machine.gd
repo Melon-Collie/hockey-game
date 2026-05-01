@@ -32,6 +32,7 @@ enum State {
 	CARRY,           # with puck, no committed action — aim at goal
 	SHOOT_PRESSED,   # one-tick press window aimed at goalie shadow
 	PASS_PRESSED,    # one-tick press window aimed at a teammate's lead position
+	DUMP_PRESSED,    # one-tick press window aimed at a deep-zone clear
 }
 
 # Off-puck anchor offsets. F2 is the triangle apex on the strong side
@@ -63,6 +64,13 @@ const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
 # this many seconds along their current velocity. Ballpark for a quick
 # wrister at typical pass distances; tune in playtest.
 const PASS_LEAD_TIME_S: float = 0.3
+# DUMP aim — deep into the attacking zone, on the bot's strong side.
+# DUMP_CORNER_X is the absolute X of the dump target (corner area).
+# DUMP_DEPTH_FROM_GOAL_M is how far in front of the attacking goal line
+# the dump lands (deep-zone corner, far from the net so the goalie
+# can't easily glove it).
+const DUMP_CORNER_X: float = 8.0
+const DUMP_DEPTH_FROM_GOAL_M: float = 6.0
 # After a puck-engagement event (we got stripped, or we just stripped
 # someone — both detected as "puck became loose while we were close"),
 # pull the blade back to our body for this many ticks. Speed-scaled:
@@ -165,6 +173,8 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_shoot_pressed(input, snapshot, self_pos, have_puck)
 		State.PASS_PRESSED:
 			_state_pass_pressed(input, snapshot, self_pos, have_puck)
+		State.DUMP_PRESSED:
+			_state_dump_pressed(input, snapshot, self_pos, have_puck)
 
 
 # ── State handlers ───────────────────────────────────────────────────────────
@@ -257,6 +267,22 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_set_state(State.CARRY)
 
 
+func _state_dump_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	_apply_slot_steering(input, snapshot, self_pos)
+	# Aim at a deep corner of the attacking zone on our strong side —
+	# typical hockey "dump it deep, chase it down." Quick-shot direction
+	# is blade-from-player so the puck flies along the bot→corner
+	# vector; even at fixed quick_shot_power the dump usually clears
+	# the bot's zone, which is what matters.
+	input.mouse_world_pos = _dump_aim_point(self_pos)
+	input.shoot_pressed = true
+	input.shoot_held = true
+	if not have_puck:
+		_set_state(_post_puck_lost_state())
+	else:
+		_set_state(State.CARRY)
+
+
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
 # Anchor + steering shared by CARRY / SHOOT_PRESSED / PASS_PRESSED. Each
@@ -309,17 +335,24 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			best_pass_score = s
 			best_pass_peer = peer_id
 
-	# Pick the winner. Threshold gates "do nothing" — when both scores
-	# are weak (e.g., bot in own zone, no teammate ahead), CARRY wins
-	# implicitly.
-	var max_score: float = maxf(shoot_score, best_pass_score)
+	# DUMP score — fires when pressured + far from attacking goal. Pure
+	# function of pressure and zone, doesn't compete on shot/pass quality.
+	var dump_score: float = AIActionScoring.score_dump(
+			self_pos, _own_goal_dir, GameRules.BLUE_LINE_Z, _scratch_opponents)
+
+	# Pick the winner. Threshold gates "do nothing" — when all scores
+	# are weak (e.g., bot in own zone with no pressure or teammate
+	# ahead), CARRY wins implicitly.
+	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
 	if max_score < AIActionScoring.ACTION_THRESHOLD:
 		return
-	if shoot_score >= best_pass_score:
+	if shoot_score >= best_pass_score and shoot_score >= dump_score:
 		_set_state(State.SHOOT_PRESSED)
-	else:
+	elif best_pass_score >= dump_score:
 		_pass_target_peer_id = best_pass_peer
 		_set_state(State.PASS_PRESSED)
+	else:
+		_set_state(State.DUMP_PRESSED)
 
 
 # Lead the receiver by PASS_LEAD_TIME_S along their current velocity.
@@ -410,6 +443,16 @@ func _clamp_anchor(p: Vector3) -> Vector3:
 			clampf(p.x, -GameRules.RINK_HALF_WIDTH + RINK_X_INSET, GameRules.RINK_HALF_WIDTH - RINK_X_INSET),
 			0.0,
 			clampf(p.z, -GameRules.GOAL_LINE_Z + RINK_Z_INSET, GameRules.GOAL_LINE_Z - RINK_Z_INSET))
+
+
+# Dump target — deep corner of the attacking zone on the bot's strong
+# side. Quick-shot direction is blade-from-player so the puck fires
+# along the bot→corner vector, sliding into the deep zone where a
+# forechecker can chase it down.
+func _dump_aim_point(self_pos: Vector3) -> Vector3:
+	var strong_x: float = signf(self_pos.x) if absf(self_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
+	var deep_z: float = _attacking_goal_pos.z + _own_goal_dir * DUMP_DEPTH_FROM_GOAL_M
+	return Vector3(strong_x * DUMP_CORNER_X, 0.0, deep_z)
 
 
 # Where the puck will be when we'd reach its current position at top

@@ -114,6 +114,33 @@ func test_pass_score_zero_to_receiver_behind_goal_line() -> void:
 	assert_eq(s, 0.0, "pass to receiver behind goal line should score 0")
 
 
+func test_dump_score_zero_in_offensive_zone() -> void:
+	# Team 1 (own_goal_dir = -1) in OZ: own_goal_dir * z < -BLUE_LINE_Z
+	# means z > BLUE_LINE_Z. Bot at z=10 with attacking goal at +Z.
+	var bot := Vector3(0.0, 0.0, 10.0)
+	var pressuring: Array[Vector3] = [Vector3(0.5, 0.0, 10.0), Vector3(-0.5, 0.0, 10.0)]
+	var s: float = AIActionScoring.score_dump(bot, -1.0, 7.29, pressuring)
+	assert_eq(s, 0.0, "no dumping from the offensive zone")
+
+
+func test_dump_score_high_in_own_zone_under_pressure() -> void:
+	# Team 1 in own zone: z < -BLUE_LINE_Z. Bot at z=-15 swarmed.
+	var bot := Vector3(0.0, 0.0, -15.0)
+	var pressure: Array[Vector3] = [
+			Vector3(0.5, 0.0, -15.0),
+			Vector3(-0.5, 0.0, -15.0),
+			Vector3(0.0, 0.0, -16.0),
+	]
+	var s: float = AIActionScoring.score_dump(bot, -1.0, 7.29, pressure)
+	assert_gt(s, 0.5, "swarmed in own zone should fire dump strongly")
+
+
+func test_dump_score_zero_with_no_pressure() -> void:
+	var bot := Vector3(0.0, 0.0, -15.0)
+	var s: float = AIActionScoring.score_dump(bot, -1.0, 7.29, [])
+	assert_eq(s, 0.0, "no pressure → no need to dump even from own zone")
+
+
 func test_pass_score_falls_off_with_receiver_pressure() -> void:
 	var shooter := Vector3(0.0, 0.0, 10.0)
 	var receiver := Vector3(0.0, 0.0, 22.0)
