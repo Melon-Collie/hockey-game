@@ -138,6 +138,28 @@ const SHOT_LANE_LEAD_TIME_S: float = 0.25
 # kicks in slightly before the blade actually arrives.
 const BLADE_REACH_M: float = 1.8
 
+# ── Wrister charge ───────────────────────────────────────────────────────────
+# SHOOT_PRESSED runs a real wrister now: hold shoot_held for this many
+# ticks while sweeping the mouse, then release. ~250 ms gives a solid
+# wrister (charge_distance ≈ 1.0 of max 2.0, well past quick_shot_threshold).
+const BOT_WRISTER_CHARGE_TICKS: int = 60
+# Target accumulated charge_distance at release. SkaterController.
+# max_wrister_charge_distance defaults to 2.0; we aim for half — past
+# the quick-shot threshold (0.2), comfortable power (lerp ≈ 50%).
+const BOT_WRISTER_TARGET_CHARGE: float = 1.0
+# Per-tick mouse_screen_pos delta along the sweep direction.
+# tick_wrister_charge multiplies screen delta by 0.01 * mouse_sensitivity
+# to get world-space accumulation, so this works out at sens=1.0; hosts
+# with non-default sens see a 2x range, which the target charge headroom
+# absorbs.
+const BOT_WRISTER_SCREEN_DELTA_PER_TICK: float = (
+		BOT_WRISTER_TARGET_CHARGE / BOT_WRISTER_CHARGE_TICKS / 0.01)
+# Mid-charge bail radius. If an opponent gets inside this distance
+# while we're charging, cancel via block_held — getting blasted in the
+# slot mid-windup is worse than not shooting. The carry state can re-
+# evaluate next tick (probably picks DUMP or PASS).
+const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
+
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
@@ -175,6 +197,17 @@ var _prev_carrier_peer_id: int = -1
 # time — a butterfly/sliding goalie has top corners exposed, an upright
 # goalie blocks elevated with the glove/blocker.
 var _shot_is_elevated: bool = false
+
+# Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
+# one-tick quick-shot — the bot holds shoot_held for BOT_WRISTER_CHARGE_TICKS
+# while sweeping mouse_screen_pos, so SkaterAimingBehavior accumulates
+# charge_distance and SkaterStateMachine fires a real wrister at release
+# (direction = sweep direction, power = lerp(min, max, charge_t)).
+var _shoot_charge_tick: int = 0
+# Sweep direction in screen XY = world XZ (charge tracker does no camera
+# transform). Captured at SHOOT_PRESSED entry; mouse_screen_pos walks
+# along this each tick.
+var _shoot_sweep_dir_xy: Vector2 = Vector2.ZERO
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -304,26 +337,62 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 
 
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	# Lost the puck mid-charge — bail. SkaterStateMachine's release path
+	# is a no-op without the puck, so we don't need to force a release.
+	if not have_puck:
+		_set_state(_post_puck_lost_state())
+		return
+
+	# Mid-charge bail: opponent closing in. block_held cancels WRISTER_AIM
+	# back to SKATING_WITH_PUCK without a release. Skipped on tick 0 — we
+	# just made the decision, give it at least one frame to commit.
+	if _shoot_charge_tick > 0 and _opponent_within(snapshot, self_pos, BOT_WRISTER_BAIL_RADIUS_M):
+		input.block_held = true
+		_set_state(State.CARRY)
+		return
+
 	_apply_slot_steering(input, snapshot, self_pos)
-	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
-	# Drive the elevation flag based on the decision made at SHOOT_PRESSED
-	# entry. SkaterController._is_elevated is a sticky bool toggled by
-	# elevation_up / elevation_down edges — setting one explicitly each
-	# tick keeps us in the right state regardless of the previous shot.
+	var aim: Vector3 = _shot_aim_point(snapshot, self_pos)
+	input.mouse_world_pos = aim
+	# Elevation flag based on decision at entry. Sticky in
+	# SkaterController, so setting one direction explicitly each tick
+	# normalizes it regardless of the last shot.
 	if _shot_is_elevated:
 		input.elevation_up = true
 	else:
 		input.elevation_down = true
-	# Press flags. SkaterStateMachine handles SKATING_WITH_PUCK +
-	# shoot_pressed → WRISTER_AIM, then next tick (back in CARRY here)
-	# shoot_held=false fires release_wrister.
-	input.shoot_pressed = true
-	input.shoot_held = true
-	# Transitions: always exits next tick. Losing the puck mid-sequence
-	# (e.g., body-checked) drops us to chase/off straight away.
-	if not have_puck:
-		_set_state(_post_puck_lost_state())
+
+	# First tick: capture sweep direction + fire shoot_pressed edge so
+	# SkaterStateMachine enters WRISTER_AIM and seeds prev_mouse_screen_pos
+	# from input.mouse_screen_pos (which is Vector2.ZERO this tick — the
+	# sweep starts from the origin so subsequent ticks accumulate cleanly).
+	if _shoot_charge_tick == 0:
+		var dir_xz: Vector3 = Vector3(aim.x - self_pos.x, 0.0, aim.z - self_pos.z)
+		if dir_xz.length_squared() > 0.0001:
+			var n: Vector3 = dir_xz.normalized()
+			# Screen XY maps directly to world XZ (no camera transform in
+			# tick_wrister_charge); sweep along the shot direction so
+			# charge_direction at release == aim direction.
+			_shoot_sweep_dir_xy = Vector2(n.x, n.z)
+		else:
+			_shoot_sweep_dir_xy = Vector2(0.0, 1.0)
+		input.shoot_pressed = true
+
+	# Walk mouse_screen_pos along the sweep direction. Per-tick delta is
+	# BOT_WRISTER_SCREEN_DELTA_PER_TICK; SkaterAimingBehavior scales by
+	# 0.01 * mouse_sensitivity to convert to world-space charge accrual.
+	input.mouse_screen_pos = (
+			_shoot_sweep_dir_xy * (BOT_WRISTER_SCREEN_DELTA_PER_TICK * float(_shoot_charge_tick)))
+
+	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS:
+		# Still charging — keep shoot_held high.
+		input.shoot_held = true
+		_shoot_charge_tick += 1
 	else:
+		# Release this tick: shoot_held drops, SkaterStateMachine's
+		# _state_wrister_aim sees not shoot_held → release_wrister fires
+		# with accumulated charge_distance and sweep direction.
+		input.shoot_held = false
 		_set_state(State.CARRY)
 
 
@@ -607,6 +676,24 @@ func _cap_offside(anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	return _clamp_anchor(Vector3(anchor.x, 0.0, hold_z))
 
 
+# True iff any opponent is within `radius` of `pos` in XZ. Used by
+# the wrister-charge bail; cheap at 6 opponents max so we recompute
+# rather than caching.
+func _opponent_within(snapshot: WorldSnapshot, pos: Vector3, radius: float) -> bool:
+	var r2: float = radius * radius
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if int(_team_id_resolver.call(peer_id)) == _team_id:
+			continue
+		var op: Vector3 = snapshot.skater_states[peer_id].position
+		var dx: float = op.x - pos.x
+		var dz: float = op.z - pos.z
+		if dx * dx + dz * dz < r2:
+			return true
+	return false
+
+
 # Tag-up anchor: just on the NZ side of the OZ blue line, preserving X
 # so steering pulls us straight back. Buffer past the line so the
 # host's has_tagged_up doesn't toggle on/off at the boundary.
@@ -846,6 +933,13 @@ func _update_engagement_cooldown(snapshot: WorldSnapshot, self_state: SkaterNetw
 
 func _set_state(s: State) -> void:
 	if s != _state:
+		# Wrister charge resets on every SHOOT_PRESSED entry — fresh
+		# sweep direction, fresh tick count, fresh prev_mouse_screen_pos
+		# (the SkaterStateMachine seeds that from input.mouse_screen_pos
+		# at the entry edge).
+		if s == State.SHOOT_PRESSED:
+			_shoot_charge_tick = 0
+			_shoot_sweep_dir_xy = Vector2.ZERO
 		_state = s
 		_ticks_in_state = 0
 
