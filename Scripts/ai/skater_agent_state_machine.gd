@@ -123,6 +123,15 @@ const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
 # wrong zone entirely.
 const SHOT_LANE_LEAD_TIME_S: float = 0.25
 
+# Blade-reach radius. Inside this distance the bot's stick can already
+# reach the puck where it actually is, so the blade IK should aim at
+# the puck's CURRENT position instead of the lead intercept — otherwise
+# the blade rides 0.5 m past a puck that's right at our feet and we
+# fan on it. Steering still uses the lead so the body keeps closing.
+# A bit larger than blade_length + stick_length (≈1.6 m) so the snap
+# kicks in slightly before the blade actually arrives.
+const BLADE_REACH_M: float = 1.8
+
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
@@ -230,14 +239,19 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# speed) means two bots converging on the same loose puck compute
 	# different intercept points, breaking the "both glued to the same
 	# puck position" pattern.
-	var target: Vector3 = _lead_intercept(self_pos, snapshot.puck_state.position, snapshot.puck_state.velocity)
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var target: Vector3 = _lead_intercept(self_pos, puck_pos, snapshot.puck_state.velocity)
 	_apply_steering(input, snapshot, self_pos, target)
 	# Aim: normally blade-on-intercept, but during the engagement cooldown
 	# (just got stripped or just stick-checked someone) pull the blade
 	# back to our body so the puck can settle without auto-magnetting
-	# back to us.
+	# back to us. Once the puck is inside our blade reach, snap the aim
+	# to the puck's ACTUAL position — leading at this range puts the
+	# blade past a puck that's already on our stick.
 	if _engagement_cooldown > 0:
 		input.mouse_world_pos = Vector3(self_pos.x, 0.0, self_pos.z)
+	elif self_pos.distance_to(puck_pos) <= BLADE_REACH_M:
+		input.mouse_world_pos = puck_pos
 	else:
 		input.mouse_world_pos = target
 	# Transitions
