@@ -22,9 +22,18 @@ const TEAMMATE_REPEL_RADIUS: float = 3.0
 const OPPONENT_REPEL_WEIGHT: float = 0.6
 const OPPONENT_REPEL_RADIUS: float = 4.0
 const BOARD_REPEL_WEIGHT: float = 0.5
-const BOARD_REPEL_DISTANCE: float = 1.5
+const BOARD_REPEL_DISTANCE: float = 2.0
 const SHOT_LANE_REPEL_WEIGHT: float = 0.3
 const SHOT_LANE_REPEL_RADIUS: float = 2.0
+# Crease repel — pushes bots out of either goalie's crease + a small
+# extension radius. Strong weight: bots crashing the crease was the
+# main "score-by-spamming" exploit. Falloff reaches zero outside the
+# arc + CREASE_REPEL_EXTENSION; inside the arc the falloff is full
+# strength so the bot is pushed firmly out. Outward direction from
+# CreaseRules so the push is geometrically correct (rounds the arc
+# rather than snapping to an axis).
+const CREASE_REPEL_WEIGHT: float = 0.9
+const CREASE_REPEL_EXTENSION: float = 0.5
 # Below this distance to anchor we stop attracting and let friction settle
 # the bot — prevents jittering across the anchor at high speed.
 const ANCHOR_DEADBAND: float = 0.5
@@ -101,6 +110,12 @@ static func compute_move_vector(
 		force_x += lane.x
 		force_z += lane.y
 
+	# Repel from either crease — universal, no team check. Bots crashing
+	# the crease and spamming was the main score-by-stacking exploit.
+	var crease: Vector2 = _crease_repel(self_pos)
+	force_x += crease.x
+	force_z += crease.y
+
 	# Clamp to unit length so move_vector behaves like a joystick.
 	var v := Vector2(force_x, force_z)
 	if v.length() > 1.0:
@@ -135,3 +150,29 @@ static func _shot_lane_repel(self_pos: Vector3, lane_start: Vector3, lane_end: V
 	return Vector2(
 			perp_x * inv_d * falloff * SHOT_LANE_REPEL_WEIGHT,
 			perp_z * inv_d * falloff * SHOT_LANE_REPEL_WEIGHT)
+
+
+# Repel out of either crease + a small extension. Outward direction comes
+# from CreaseRules so the force rounds the arc correctly (no axis snap
+# at the corners). Returns zero outside the extended crease.
+static func _crease_repel(self_pos: Vector3) -> Vector2:
+	var xz := Vector2(self_pos.x, self_pos.z)
+	# Quick rough cull — only check the half closest to the bot.
+	var goal_z_sign: float = signf(xz.y)
+	if goal_z_sign == 0.0:
+		return Vector2.ZERO
+	var goal_z: float = goal_z_sign * GameRules.GOAL_LINE_Z
+	# Distance from goal center on this half.
+	var dy_inward: float = (xz.y - goal_z) * -goal_z_sign
+	if dy_inward < -CREASE_REPEL_EXTENSION:
+		# Behind the goal line by more than the extension — leave alone.
+		return Vector2.ZERO
+	var d_to_center: float = sqrt(xz.x * xz.x + dy_inward * dy_inward)
+	var threshold: float = CreaseRules.ARC_RADIUS + CREASE_REPEL_EXTENSION
+	if d_to_center >= threshold:
+		return Vector2.ZERO
+	# Inside the threshold. Push along outward direction with falloff
+	# scaled by how deep we are (0 at threshold, full at goal center).
+	var dir: Vector2 = CreaseRules.outward_direction(xz)
+	var falloff: float = 1.0 - (d_to_center / threshold)
+	return dir * (CREASE_REPEL_WEIGHT * falloff)

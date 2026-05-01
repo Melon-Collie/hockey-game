@@ -79,6 +79,30 @@ func test_output_magnitude_clamped_to_unit() -> void:
 	assert_lte(v.length(), 1.0001, "move_vector must not exceed unit length")
 
 
+func test_crease_repel_pushes_outward_inside_arc() -> void:
+	# Bot inside the +Z crease, slightly off-center toward +X. Should be
+	# pushed outward (–Z back toward center ice, +X is fine — it's already
+	# off-axis but the dominant push is away from the goal center).
+	var crease_pos := Vector3(0.5, 0, GameRules.GOAL_LINE_Z - 0.5)
+	var anchor := crease_pos  # anchor at self → no attract pull
+	var v := _move(crease_pos, anchor)
+	assert_lt(v.y, 0.0, "should be pushed in -Z away from +Z goal")
+
+
+func test_no_crease_force_at_center_ice() -> void:
+	# Origin straddles the half-space split (signf(0)=0). No crease force.
+	var v := _move(Vector3.ZERO, Vector3(0, 0, 5))
+	# v should match the no-crease behavior — the +Z anchor pulls along +y.
+	assert_gt(v.y, 0.5, "no crease repel at center ice; only anchor pull remains")
+
+
+func test_no_crease_force_at_neutral_zone() -> void:
+	# Bot in the neutral zone (z=0). No crease force.
+	var pos := Vector3(2.0, 0, 0.0)
+	var v := _move(pos, pos)  # anchor at self
+	assert_almost_eq(v.length(), 0.0, 0.01, "no force at neutral zone")
+
+
 func test_ignores_teammates_outside_repel_radius() -> void:
 	var pos := Vector3(0, 0, 0)
 	var anchor := Vector3(0, 0, 5)

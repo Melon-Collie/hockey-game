@@ -571,10 +571,25 @@ func _f3_anchor(puck_pos: Vector3) -> Vector3:
 # Clamp an anchor to the playable rink with a small margin so steering
 # doesn't pull the bot into the boards or behind the goal line.
 func _clamp_anchor(p: Vector3) -> Vector3:
-	return Vector3(
-			clampf(p.x, -GameRules.RINK_HALF_WIDTH + RINK_X_INSET, GameRules.RINK_HALF_WIDTH - RINK_X_INSET),
-			0.0,
-			clampf(p.z, -GameRules.GOAL_LINE_Z + RINK_Z_INSET, GameRules.GOAL_LINE_Z - RINK_Z_INSET))
+	var x: float = clampf(p.x,
+			-GameRules.RINK_HALF_WIDTH + RINK_X_INSET,
+			GameRules.RINK_HALF_WIDTH - RINK_X_INSET)
+	var z: float = clampf(p.z,
+			-GameRules.GOAL_LINE_Z + RINK_Z_INSET,
+			GameRules.GOAL_LINE_Z - RINK_Z_INSET)
+	# Push out of either crease — bots shouldn't anchor inside a goalie's
+	# space. Steering's crease repel is the runtime force; this is the
+	# destination-side guard so the anchor doesn't actively PULL the bot
+	# into the crease in the first place.
+	var xz := Vector2(x, z)
+	if CreaseRules.is_in_crease(xz):
+		var dir: Vector2 = CreaseRules.outward_direction(xz)
+		var goal_z: float = signf(xz.y) * GameRules.GOAL_LINE_Z
+		var center := Vector2(0.0, goal_z)
+		var pushed: Vector2 = center + dir * (CreaseRules.ARC_RADIUS + RINK_Z_INSET)
+		x = pushed.x
+		z = pushed.y
+	return Vector3(x, 0.0, z)
 
 
 # Carrier anchor. In NZ/DZ, drive toward the high slot. Once in OZ,
