@@ -29,8 +29,9 @@ extends RefCounted
 enum State {
 	OFF_PUCK,        # default off-puck — anchor above puck, aim at goal
 	CHASE_PUCK,      # F1 without puck — pursue, blade on the puck
-	CARRY,           # with puck, no committed shot — anchor at slot
-	SHOOT_PRESSED,   # one-tick press window; release fires next tick
+	CARRY,           # with puck, no committed action — aim at goal
+	SHOOT_PRESSED,   # one-tick press window aimed at goalie shadow
+	PASS_PRESSED,    # one-tick press window aimed at a teammate's lead position
 }
 
 const ANCHOR_DEPTH: float = 4.0
@@ -41,6 +42,14 @@ const GOALIE_SHADOW_HALF: float = 0.5
 # How far in front of the goal line the carrier sits when they reach the
 # offensive zone — high slot, not in the cage.
 const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
+# Pass to a teammate only if they're at least this much closer to the
+# opposing goal than us. Prevents marginal "0.2 m better" passes that
+# would just be churn.
+const PASS_DISTANCE_ADVANTAGE_M: float = 3.0
+# Lead time when aiming a pass — extrapolate the receiver's position by
+# this many seconds along their current velocity. Ballpark for a quick
+# wrister at typical pass distances; tune in playtest.
+const PASS_LEAD_TIME_S: float = 0.3
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
@@ -59,6 +68,11 @@ var _team_id_resolver: Callable = Callable()
 # Reused buffer for steering's teammate-position list. Cleared at the top
 # of each _apply_steering call.
 var _scratch_teammates: Array[Vector3] = []
+
+# Set when CARRY commits to PASS_PRESSED; consumed by _state_pass_pressed
+# the next tick. 0 means "no current pass target" (real peer_ids are
+# either 1+ for humans or 10000+ for bots, so 0 is safe as sentinel).
+var _pass_target_peer_id: int = 0
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -107,6 +121,8 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_carry(input, snapshot, self_pos, have_puck)
 		State.SHOOT_PRESSED:
 			_state_shoot_pressed(input, snapshot, self_pos, have_puck)
+		State.PASS_PRESSED:
+			_state_pass_pressed(input, snapshot, self_pos, have_puck)
 
 
 # ── State handlers ───────────────────────────────────────────────────────────
@@ -138,16 +154,23 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 
 
 func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	_apply_slot_geometry(input, snapshot, self_pos)
+	_apply_slot_steering(input, snapshot, self_pos)
+	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
 	# Transitions
 	if not have_puck:
 		_set_state(_post_puck_lost_state())
 	elif _ticks_in_state >= QUIET_EYE_TICKS and _in_offensive_zone(self_pos):
-		_set_state(State.SHOOT_PRESSED)
+		var pass_target: int = _pick_pass_target(snapshot, self_pos)
+		if pass_target != 0:
+			_pass_target_peer_id = pass_target
+			_set_state(State.PASS_PRESSED)
+		else:
+			_set_state(State.SHOOT_PRESSED)
 
 
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	_apply_slot_geometry(input, snapshot, self_pos)
+	_apply_slot_steering(input, snapshot, self_pos)
+	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
 	# Press flags. SkaterStateMachine handles SKATING_WITH_PUCK +
 	# shoot_pressed → WRISTER_AIM, then next tick (back in CARRY here)
 	# shoot_held=false fires release_wrister.
@@ -161,16 +184,70 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 
 
+func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	_apply_slot_steering(input, snapshot, self_pos)
+	# Aim at the receiver's lead position. Quick-shot direction is
+	# blade-from-player at release, and the blade IK swings toward
+	# mouse_world_pos — so this fires the puck along the bot→receiver
+	# vector.
+	input.mouse_world_pos = _pass_aim_point(snapshot)
+	input.shoot_pressed = true
+	input.shoot_held = true
+	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
+	# either way so a future PASS picks a fresh one.
+	_pass_target_peer_id = 0
+	if not have_puck:
+		_set_state(_post_puck_lost_state())
+	else:
+		_set_state(State.CARRY)
+
+
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
-# Anchor + aim shared by CARRY and SHOOT_PRESSED. PASS_PRESSED in Phase 5c
-# will share most of this too — only the aim point differs (receiver
-# instead of net), so the helper will get a small `aim` parameter or we
-# inline the override in PASS_PRESSED.
-func _apply_slot_geometry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+# Anchor + steering shared by CARRY / SHOOT_PRESSED / PASS_PRESSED. Each
+# state sets `input.mouse_world_pos` itself because the aim differs
+# (goal-shadow vs receiver lead).
+func _apply_slot_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
 	_apply_steering(input, snapshot, self_pos, Vector3(0.0, 0.0, slot_z))
-	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
+
+
+# Pick the best teammate to pass to. Returns the receiver's peer_id, or
+# 0 if no teammate is meaningfully better positioned than us.
+#
+# Phase 5c heuristic: distance-to-opposing-goal only. Teammate must be
+# in our offensive zone AND at least PASS_DISTANCE_ADVANTAGE_M closer
+# to the goal than we are. No lane-clear check yet (that lands when
+# the utility-scoring framework arrives in 5d).
+func _pick_pass_target(snapshot: WorldSnapshot, self_pos: Vector3) -> int:
+	var my_dist: float = self_pos.distance_to(_attacking_goal_pos)
+	var best_peer: int = 0
+	var best_dist: float = my_dist - PASS_DISTANCE_ADVANTAGE_M
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if int(_team_id_resolver.call(peer_id)) != _team_id:
+			continue
+		var their_pos: Vector3 = snapshot.skater_states[peer_id].position
+		if not _in_offensive_zone(their_pos):
+			continue
+		var their_dist: float = their_pos.distance_to(_attacking_goal_pos)
+		if their_dist < best_dist:
+			best_dist = their_dist
+			best_peer = peer_id
+	return best_peer
+
+
+# Lead the receiver by PASS_LEAD_TIME_S along their current velocity.
+# Falls back to the goal if the target slot disappeared between picking
+# and pressing (rare — bot demoted, peer disconnected, etc.).
+func _pass_aim_point(snapshot: WorldSnapshot) -> Vector3:
+	var receiver: SkaterNetworkState = snapshot.skater_states.get(_pass_target_peer_id)
+	if receiver == null:
+		return _attacking_goal_pos
+	var lead_x: float = receiver.position.x + receiver.velocity.x * PASS_LEAD_TIME_S
+	var lead_z: float = receiver.position.z + receiver.velocity.z * PASS_LEAD_TIME_S
+	return Vector3(lead_x, 0.0, lead_z)
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
@@ -226,3 +303,4 @@ func _set_state(s: State) -> void:
 func _reset_to_off_puck() -> void:
 	_state = State.OFF_PUCK
 	_ticks_in_state = 0
+	_pass_target_peer_id = 0
