@@ -492,12 +492,24 @@ func _should_play_man_to_man(snapshot: WorldSnapshot) -> bool:
 	return true
 
 
-# Man-to-man anchor: 1 m goal-side of the marked opponent, X aligned
-# with theirs. Body sits between mark and our net — denies the lane
-# to net. Clamped inside the rink so we don't get pushed into boards.
+# Man-to-man anchor: MAN_GAP_DEPTH_M off the mark along the line from
+# mark to our own net. Body shades the actual lane to net regardless
+# of where the mark is on the ice (a mark out by the boards still
+# gets shaded toward center, not just behind on Z). Clamped inside
+# the rink so we don't get pushed into boards.
 func _man_anchor(mark_pos: Vector3) -> Vector3:
-	var z: float = mark_pos.z + _own_goal_dir * MAN_GAP_DEPTH_M
-	return _clamp_anchor(Vector3(mark_pos.x, 0.0, z))
+	var our_net := Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
+	var dx: float = our_net.x - mark_pos.x
+	var dz: float = our_net.z - mark_pos.z
+	var dist: float = sqrt(dx * dx + dz * dz)
+	if dist < 0.001:
+		# Mark sitting on top of our net — degenerate case; just anchor
+		# at the mark and let the goalie + steering sort it out.
+		return _clamp_anchor(mark_pos)
+	var step: float = MAN_GAP_DEPTH_M / dist
+	return _clamp_anchor(Vector3(
+			mark_pos.x + dx * step, 0.0,
+			mark_pos.z + dz * step))
 
 
 # F3 anchor — weak-side trailer, mirrored across the puck X and 8 m
