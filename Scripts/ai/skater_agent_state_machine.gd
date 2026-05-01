@@ -45,6 +45,9 @@ const F2_OFFSET_Z_BACK: float = 2.0
 const F3_OFFSET_X_WEAK: float = 5.0
 const F3_OFFSET_Z_BACK: float = 8.0
 const LEGACY_OFF_DEPTH: float = 4.0
+# Man-to-man gap: defender anchors this far on the goal-side of their
+# mark, so their body is between the mark and our net.
+const MAN_GAP_DEPTH_M: float = 1.0
 # Strong-side X is sign(puck.x), but only when the puck is meaningfully
 # off-center; below this we default to the +X side so we don't flip
 # F2/F3 sides every time the puck wiggles through center.
@@ -192,7 +195,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	# Anchor depends on role: F2 strong-side support, F3 weak-side trailer,
 	# or legacy "above puck" for any unassigned role (4+ teammate case).
-	var anchor: Vector3 = _off_puck_anchor(snapshot.puck_state.position, self_pos)
+	var anchor: Vector3 = _off_puck_anchor(snapshot.puck_state.position, self_pos, snapshot)
 	_apply_steering(input, snapshot, self_pos, anchor)
 	input.mouse_world_pos = _attacking_goal_pos
 	# Transitions
@@ -433,10 +436,22 @@ func _is_f1() -> bool:
 	return _team_brain != null and _team_brain.get_role(_peer_id) == AIRoleAssignment.ROLE_F1
 
 
-# Off-puck anchor selection. F2 is the strong-side support apex;
-# F3 trails on the weak side. Anything else (no role / OFF for a 4th
-# teammate) gets the legacy above-puck anchor.
-func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3) -> Vector3:
+# Off-puck anchor selection.
+#   - DZ + opp possession (or loose puck in DZ): switch to man-to-man.
+#     F2/F3 anchor on their assigned mark, 1 m goal-side.
+#   - Otherwise: zone-ish triangle. F2 strong-side support, F3 weak-side
+#     trailer, OFF (4+ teammate fallback) plays legacy above-puck.
+func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
+	# Man-to-man takes priority in our defensive zone when the opp has
+	# the puck (or it's loose in our zone). The brain publishes the
+	# coverage map at 6 Hz; we just look up our mark.
+	if _should_play_man_to_man(snapshot):
+		var mark_pid: int = _team_brain.get_coverage_target(_peer_id) if _team_brain != null else 0
+		if mark_pid != 0:
+			var mark: SkaterNetworkState = snapshot.skater_states.get(mark_pid)
+			if mark != null:
+				return _man_anchor(mark.position)
+
 	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
 	match role:
 		AIRoleAssignment.ROLE_F2:
@@ -458,6 +473,31 @@ func _f2_anchor(puck_pos: Vector3) -> Vector3:
 	var x: float = puck_pos.x + strong_x * F2_OFFSET_X
 	var z: float = puck_pos.z + _own_goal_dir * F2_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
+
+
+# True iff we're in our own zone defending — opp has the puck (or it's
+# loose in our zone). Man-to-man only fires here; everywhere else (NZ,
+# OZ, own possession) we keep the zone triangle.
+func _should_play_man_to_man(snapshot: WorldSnapshot) -> bool:
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	# In our DZ? oriented_z > BLUE_LINE_Z means past our own blue line.
+	if _own_goal_dir * puck_pos.z <= GameRules.BLUE_LINE_Z:
+		return false
+	# Don't play man if our team has possession — that's a breakout, not
+	# a defensive coverage situation. Loose pucks in our zone DO trigger
+	# man (forwards are crashing, mark them).
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier != -1 and int(_team_id_resolver.call(carrier)) == _team_id:
+		return false
+	return true
+
+
+# Man-to-man anchor: 1 m goal-side of the marked opponent, X aligned
+# with theirs. Body sits between mark and our net — denies the lane
+# to net. Clamped inside the rink so we don't get pushed into boards.
+func _man_anchor(mark_pos: Vector3) -> Vector3:
+	var z: float = mark_pos.z + _own_goal_dir * MAN_GAP_DEPTH_M
+	return _clamp_anchor(Vector3(mark_pos.x, 0.0, z))
 
 
 # F3 anchor — weak-side trailer, mirrored across the puck X and 8 m
