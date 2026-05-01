@@ -32,6 +32,31 @@ func test_shoot_score_falls_off_with_pressure() -> void:
 	assert_lt(pressured, clear, "opponent within pressure radius should reduce shoot score")
 
 
+func test_shoot_score_zero_when_defender_in_lane() -> void:
+	# Phase 5g: a defender between the bot and the aim point should
+	# block the shot, even if pressure (4 m radius) doesn't catch them.
+	var shooter := Vector3(0.0, 0.0, 21.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	# Defender at z=24, between shooter (z=21) and net plane (z=26.65),
+	# right on the bot→aim line and 5 m from the shooter — well past
+	# pressure radius so they wouldn't otherwise count.
+	var blocker: Array[Vector3] = [Vector3(-0.4, 0.0, 24.0)]
+	var blocked: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, blocker)
+	assert_gt(clear, 0.0)
+	assert_lt(blocked, clear, "defender in shot lane should reduce shoot score")
+
+
+func test_shoot_score_unaffected_by_defender_off_lane() -> void:
+	var shooter := Vector3(0.0, 0.0, 21.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	# Defender to the far side, outside both pressure radius and shot lane.
+	var off_lane: Array[Vector3] = [Vector3(8.0, 0.0, 24.0)]
+	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, off_lane)
+	assert_almost_eq(s, clear, 0.001)
+
+
 func test_pass_lateral_with_open_net_scores_high() -> void:
 	# Phase 5e fix for "bots never pass side to side". Both shooter and
 	# receiver are at the same depth (z=21), but the goalie covers the

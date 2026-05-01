@@ -32,7 +32,12 @@ const ACTION_THRESHOLD: float = 0.25
 
 # Returns SHOOT score in [0, 1]. Multiplicative product of:
 #   - shot_geometry: net openness × distance response (see _shot_geometry)
+#   - lane_clear:    no opponent in the shooter→aim line segment
 #   - 1 - pressure:  inverse of opponent proximity around the shooter
+#
+# The lane check uses the same aim point ShotAim picks for the actual
+# shot, so the score reflects the shot the bot would actually fire —
+# not just the goalie's shadow.
 static func score_shoot(
 		shooter: Vector3,
 		attacking_goal: Vector3,
@@ -41,8 +46,11 @@ static func score_shoot(
 		shadow_half: float,
 		opponents: Array[Vector3]) -> float:
 	var geom: float = _shot_geometry(shooter, attacking_goal, goalie_pos, net_half_width, shadow_half)
+	var aim: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie_pos, attacking_goal.z, net_half_width, shadow_half)
+	var lane: float = _lane_clear(shooter, aim, opponents)
 	var pressure_factor: float = 1.0 - _pressure(shooter, opponents)
-	return geom * pressure_factor
+	return geom * lane * pressure_factor
 
 
 # Returns PASS score in [0, 1] for a specific receiver. Multiplicative:
