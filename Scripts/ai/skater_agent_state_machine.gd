@@ -38,7 +38,7 @@ const ANCHOR_DEPTH: float = 4.0
 const QUIET_EYE_TICKS: int = 8
 # How wide the goalie's shadow on the net plane should be considered
 # (meters, half-width). Tuneable in playtest.
-const GOALIE_SHADOW_HALF: float = 0.5
+const GOALIE_SHADOW_HALF: float = 0.3
 # How far in front of the goal line the carrier sits when they reach the
 # offensive zone — high slot, not in the cage.
 const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
