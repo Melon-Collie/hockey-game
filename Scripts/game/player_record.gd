@@ -7,6 +7,10 @@ var jersey_number: int = 10
 var skater: Skater = null
 var controller: SkaterController = null
 var is_local: bool = false
+# True for AI-controlled actors (bot peer_ids in [BOT_ID_BASE, BOT_ID_BASE+5]).
+# Use this to gate per-peer RPC dispatch — peer_id sign is NOT a reliable
+# bot indicator and shouldn't be checked directly.
+var is_bot: bool = false
 var team: Team = null
 var faceoff_position: Vector3 = Vector3.ZERO
 var jersey_color: Color        = Color.WHITE

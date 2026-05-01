@@ -6,18 +6,19 @@ extends SkaterController
 # bot through the existing SkaterNetworkState broadcast (no input
 # replication path — LocalController.get_input_batch is the human path).
 #
-# Phase 1 emitted a frozen zero input. Phase 2 added perception buffer
-# wiring. Phase 3 (this file's current state) routes through SkaterAgent
-# for anchor-following steering.
-
-# Single global reaction delay, ≈100 ms at 240 Hz. Tunable in playtest;
-# not derived from a per-bot skill (we deliberately don't ship scaling
-# difficulties — see CLAUDE.md / AI_PLAN.md §13 callout).
-const REACTION_DELAY_TICKS: int = 24
+# Reads a tick-delayed WorldSnapshot from GameManager.get_state_at, which
+# forwards to StateBufferManager. We don't keep a separate AI perception
+# buffer — the lag-comp ring is already capturing the same data.
 
 var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
+
+# Reaction delay was 0.1s in the original design but reading delayed-past
+# from StateBufferManager logged "ts predates oldest" warnings whenever the
+# buffer hadn't filled (post-rehost, post-faceoff, etc.) — for Phase 4 we
+# read the freshest captured state. A future phase can re-introduce delay
+# via clamping the requested ts to the buffer's oldest entry.
 
 
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
@@ -29,13 +30,13 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 # peer_id and team_id but not the controller — so the registry calls this
 # after spawn to wire the agent. Separate from setup() because setup() is
 # called by ActorSpawner before the registry knows which slot it belongs to.
-func setup_agent(peer_id: int, team_id: int) -> void:
+func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable) -> void:
 	if _agent != null:
-		_agent.setup(peer_id, team_id)
+		_agent.setup(peer_id, team_id, brain, resolver)
 
 
 func _physics_process(delta: float) -> void:
-	if skater == null or puck == null:
+	if skater == null or puck == null or _agent == null:
 		return
 	if NetworkManager.is_replay_mode():
 		return
@@ -46,10 +47,10 @@ func _physics_process(delta: float) -> void:
 		return
 	if _game_state.is_input_blocked():
 		return
-	# Read tick-delayed snapshot. Buffer is only allocated on the host; guard
-	# anyway so a stripped-down test scene doesn't crash.
-	if GameManager.perception != null:
-		perceived_snapshot = GameManager.perception.read(REACTION_DELAY_TICKS)
+	# Read the frame's shared snapshot. GameManager publishes it once per
+	# host physics frame after StateBufferManager.capture; reading it here
+	# avoids 6 bots × redundant interpolation passes per frame.
+	perceived_snapshot = GameManager.current_snapshot
 	var input: InputState = _agent.tick(perceived_snapshot, delta, NetworkManager.estimated_host_time())
 	_process_input(input, delta)
 	skater.current_shot_state = _sm.get_state() as int

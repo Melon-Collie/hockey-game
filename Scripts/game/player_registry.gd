@@ -74,6 +74,10 @@ func spawn(
 		is_local: bool,
 		jersey_number: int = 10) -> PlayerRecord:
 	var record := PlayerRecord.new(peer_id, team_slot, is_local, team)
+	# Derive is_bot from the peer_id so client-side records (where bots come
+	# in via spawn_remote_skater RPC) match host-side records. The flag
+	# never crosses the wire — peer_id range is the source of truth.
+	record.is_bot = NetworkManager.is_bot_peer(peer_id)
 	record.jersey_color        = jersey_color
 	record.helmet_color        = helmet_color
 	record.pants_color         = pants_color
@@ -119,9 +123,10 @@ func spawn(
 
 
 # Spawns an AI bot into a team slot. Host-only. Bots get a synthetic peer_id
-# in the range [-6, -1] so dictionary keying stays int while never colliding
-# with real ENet peer ids (always positive). Any RPC call that iterates
-# _players must gate its rpc_id() on `peer_id > 0`.
+# in the BOT_ID_BASE range (10000+) so dictionary keying stays int and the
+# id is unambiguously non-routable for ENet. Any RPC dispatch must gate on
+# NetworkManager.is_real_peer / record.is_bot — peer_id sign is no longer
+# a reliable bot indicator (real peers and bots are both positive).
 #
 # Mirrors spawn() above but skips the human-player surface (handedness pref,
 # jersey number from preferences, ready state). Bots get deterministic
@@ -133,9 +138,10 @@ func spawn_bot(
 		team_slot: int,
 		team: Team) -> PlayerRecord:
 	assert(bot_id >= 0 and bot_id < 6, "bot_id must be 0..5 (one per team slot)")
-	var peer_id: int = -1 - bot_id
+	var peer_id: int = NetworkManager.BOT_ID_BASE + bot_id
 	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team.team_id)
 	var record := PlayerRecord.new(peer_id, team_slot, false, team)
+	record.is_bot = true
 	record.jersey_color        = colors.jersey
 	record.helmet_color        = colors.helmet
 	record.pants_color         = colors.pants
@@ -160,7 +166,13 @@ func spawn_bot(
 			record.socks_color, blade_color, record.is_left_handed, puck, _game_state_node)
 	record.skater = spawned.skater
 	record.controller = spawned.controller
-	(spawned.controller as AIController).setup_agent(peer_id, team.team_id)
+	# Brain lookup: GameManager owns the per-team brains (host-only, indexed
+	# by team_id). We're host here (only host runs spawn_bot), so the array
+	# is populated by the time this fires.
+	var brain: TeamBrain = GameManager.team_brains[team.team_id] if team.team_id < GameManager.team_brains.size() else null
+	var resolver := func(pid: int) -> int:
+		return resolve_team_id_for_peer(pid)
+	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, resolver)
 	spawned.skater.team_id = team.team_id
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number, record.text_color)

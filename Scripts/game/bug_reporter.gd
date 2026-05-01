@@ -29,7 +29,7 @@ func _post(url: String, body: Dictionary) -> void:
 	var root: Window = (Engine.get_main_loop() as SceneTree).root
 	var req := HTTPRequest.new()
 	root.add_child(req)
-	req.request_completed.connect(func(_result: int, code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	req.request_completed.connect(func(_result: int, code: int, _response_headers: PackedStringArray, _body: PackedByteArray) -> void:
 		if code < 200 or code >= 300:
 			push_warning("BugReporter: HTTP %d" % code)
 		req.queue_free()
