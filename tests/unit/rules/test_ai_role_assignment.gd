@@ -68,6 +68,18 @@ func test_negative_peer_ids_can_be_f1() -> void:
 	assert_eq(roles[-2], AIRoleAssignment.ROLE_OFF)
 
 
+func test_three_teammates_get_f1_f2_f3_in_rank_order() -> void:
+	var made: Array = _make([
+			[100, 0, Vector3(2, 0, 0)],   # closest
+			[200, 0, Vector3(5, 0, 0)],   # second
+			[300, 0, Vector3(10, 0, 0)],  # third
+	], Vector3(0, 0, 0))
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1])
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F1)
+	assert_eq(roles[200], AIRoleAssignment.ROLE_F2)
+	assert_eq(roles[300], AIRoleAssignment.ROLE_F3)
+
+
 func test_velocity_weighting_picks_intercepting_bot() -> void:
 	# Bot A is slightly closer NOW but stationary. Bot B is a bit further
 	# but skating directly toward the puck. The lookahead-weighted

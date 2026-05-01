@@ -34,7 +34,24 @@ enum State {
 	PASS_PRESSED,    # one-tick press window aimed at a teammate's lead position
 }
 
-const ANCHOR_DEPTH: float = 4.0
+# Off-puck anchor offsets. F2 is the triangle apex on the strong side
+# (puck's X side), 3 m off the puck X-wise and 2 m back toward our own
+# goal Z-wise. F3 is the weak-side trailer, 5 m mirrored across the
+# puck X and 8 m back. The legacy OFF anchor (no F2/F3 role assigned —
+# 4+ teammates case) keeps the original above-puck behavior.
+const F2_OFFSET_X: float = 3.0
+const F2_OFFSET_Z_BACK: float = 2.0
+const F3_OFFSET_X_WEAK: float = 5.0
+const F3_OFFSET_Z_BACK: float = 8.0
+const LEGACY_OFF_DEPTH: float = 4.0
+# Strong-side X is sign(puck.x), but only when the puck is meaningfully
+# off-center; below this we default to the +X side so we don't flip
+# F2/F3 sides every time the puck wiggles through center.
+const STRONG_SIDE_X_DEADBAND: float = 0.5
+# Margins from the rink edge / goal line that anchors are clamped inside of.
+const RINK_X_INSET: float = 0.5
+const RINK_Z_INSET: float = 1.0
+
 const QUIET_EYE_TICKS: int = 8
 # How wide the goalie's shadow on the net plane should be considered
 # (meters, half-width). Tuneable in playtest.
@@ -153,10 +170,10 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 # ── State handlers ───────────────────────────────────────────────────────────
 
 func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	# Anchor: ANCHOR_DEPTH above the puck on own-net side.
-	var anchor_z: float = snapshot.puck_state.position.z + _own_goal_dir * ANCHOR_DEPTH
-	anchor_z = clampf(anchor_z, -GameRules.GOAL_LINE_Z + 1.0, GameRules.GOAL_LINE_Z - 1.0)
-	_apply_steering(input, snapshot, self_pos, Vector3(self_pos.x, 0.0, anchor_z))
+	# Anchor depends on role: F2 strong-side support, F3 weak-side trailer,
+	# or legacy "above puck" for any unassigned role (4+ teammate case).
+	var anchor: Vector3 = _off_puck_anchor(snapshot.puck_state.position, self_pos)
+	_apply_steering(input, snapshot, self_pos, anchor)
 	input.mouse_world_pos = _attacking_goal_pos
 	# Transitions
 	if have_puck:
@@ -347,6 +364,52 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 func _is_f1() -> bool:
 	return _team_brain != null and _team_brain.get_role(_peer_id) == AIRoleAssignment.ROLE_F1
+
+
+# Off-puck anchor selection. F2 is the strong-side support apex;
+# F3 trails on the weak side. Anything else (no role / OFF for a 4th
+# teammate) gets the legacy above-puck anchor.
+func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3) -> Vector3:
+	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
+	match role:
+		AIRoleAssignment.ROLE_F2:
+			return _f2_anchor(puck_pos)
+		AIRoleAssignment.ROLE_F3:
+			return _f3_anchor(puck_pos)
+	# Legacy / fallback — Phase 3 anchor (above puck on own-net side, X
+	# tracking the bot's current X to avoid sliding sideways).
+	var anchor_z: float = puck_pos.z + _own_goal_dir * LEGACY_OFF_DEPTH
+	return _clamp_anchor(Vector3(self_pos.x, 0.0, anchor_z))
+
+
+# F2 anchor — triangle apex on the strong side (the side of the rink
+# the puck is on), 3 m off the puck X and 2 m back toward our own
+# goal Z. With STRONG_SIDE_X_DEADBAND we don't flip strong/weak when
+# the puck wiggles through the center.
+func _f2_anchor(puck_pos: Vector3) -> Vector3:
+	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
+	var x: float = puck_pos.x + strong_x * F2_OFFSET_X
+	var z: float = puck_pos.z + _own_goal_dir * F2_OFFSET_Z_BACK
+	return _clamp_anchor(Vector3(x, 0.0, z))
+
+
+# F3 anchor — weak-side trailer, mirrored across the puck X and 8 m
+# back toward our own goal. Safety-valve role.
+func _f3_anchor(puck_pos: Vector3) -> Vector3:
+	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
+	var weak_x: float = -strong_x
+	var x: float = puck_pos.x + weak_x * F3_OFFSET_X_WEAK
+	var z: float = puck_pos.z + _own_goal_dir * F3_OFFSET_Z_BACK
+	return _clamp_anchor(Vector3(x, 0.0, z))
+
+
+# Clamp an anchor to the playable rink with a small margin so steering
+# doesn't pull the bot into the boards or behind the goal line.
+func _clamp_anchor(p: Vector3) -> Vector3:
+	return Vector3(
+			clampf(p.x, -GameRules.RINK_HALF_WIDTH + RINK_X_INSET, GameRules.RINK_HALF_WIDTH - RINK_X_INSET),
+			0.0,
+			clampf(p.z, -GameRules.GOAL_LINE_Z + RINK_Z_INSET, GameRules.GOAL_LINE_Z - RINK_Z_INSET))
 
 
 # Where the puck will be when we'd reach its current position at top
