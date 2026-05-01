@@ -46,6 +46,14 @@ const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
 # this many seconds along their current velocity. Ballpark for a quick
 # wrister at typical pass distances; tune in playtest.
 const PASS_LEAD_TIME_S: float = 0.3
+# After a puck-engagement event (we got stripped, or we just stripped
+# someone — both detected as "puck became loose while we were close"),
+# pull the blade back to our body for this many ticks. Without this
+# the bot's blade auto-aims at the puck again the next frame and
+# either re-grabs or interferes with physics during the pickup
+# cooldown window.
+const ENGAGEMENT_COOLDOWN_TICKS: int = 72   # ~300 ms at 240 Hz
+const ENGAGEMENT_PROXIMITY_M: float = 2.0   # blade-on-puck range
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
@@ -72,6 +80,12 @@ var _scratch_opponents: Array[Vector3] = []
 # the next tick. 0 means "no current pass target" (real peer_ids are
 # either 1+ for humans or 10000+ for bots, so 0 is safe as sentinel).
 var _pass_target_peer_id: int = 0
+
+# Engagement cooldown — see ENGAGEMENT_COOLDOWN_TICKS. _prev_carrier
+# tracks last tick's puck.carrier_peer_id so we can detect the
+# transition into "loose".
+var _engagement_cooldown: int = 0
+var _prev_carrier_peer_id: int = -1
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -110,6 +124,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	var self_pos: Vector3 = self_state.position
 	var have_puck: bool = (snapshot.puck_state.carrier_peer_id == _peer_id)
 	_ticks_in_state += 1
+	_update_engagement_cooldown(snapshot, self_pos)
 
 	match _state:
 		State.OFF_PUCK:
@@ -143,8 +158,14 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	var puck_pos: Vector3 = snapshot.puck_state.position
 	var target := Vector3(puck_pos.x, 0.0, puck_pos.z)
 	_apply_steering(input, snapshot, self_pos, target)
-	# Aim at the puck so the blade is on it at intercept time.
-	input.mouse_world_pos = target
+	# Aim: normally blade-on-puck for intercept, but during the engagement
+	# cooldown (just got stripped or just stick-checked someone) pull the
+	# blade back to our body so the puck can settle without auto-magnetting
+	# back to us.
+	if _engagement_cooldown > 0:
+		input.mouse_world_pos = Vector3(self_pos.x, 0.0, self_pos.z)
+	else:
+		input.mouse_world_pos = target
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
@@ -314,6 +335,26 @@ func _is_f1() -> bool:
 # everyone else holds the above-puck anchor.
 func _post_puck_lost_state() -> State:
 	return State.CHASE_PUCK if _is_f1() else State.OFF_PUCK
+
+
+# Detects "puck just became loose" and arms the engagement cooldown if
+# we were close enough to be involved. Single rule covers both sides:
+#   - We had the puck and got stripped: prev=us, now=-1, distance≈0
+#   - We stick-checked someone: prev=opp, now=-1, we were near to do it
+# The carrier-just-changed-to-someone-else case (a teammate or opp picked
+# up cleanly without us being close) doesn't fire — prev was set, now
+# is the new carrier, not -1.
+func _update_engagement_cooldown(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if _prev_carrier_peer_id != -1 and carrier == -1:
+		var puck_pos: Vector3 = snapshot.puck_state.position
+		var dx: float = puck_pos.x - self_pos.x
+		var dz: float = puck_pos.z - self_pos.z
+		if dx * dx + dz * dz < ENGAGEMENT_PROXIMITY_M * ENGAGEMENT_PROXIMITY_M:
+			_engagement_cooldown = ENGAGEMENT_COOLDOWN_TICKS
+	_prev_carrier_peer_id = carrier
+	if _engagement_cooldown > 0:
+		_engagement_cooldown -= 1
 
 
 func _set_state(s: State) -> void:
