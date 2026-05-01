@@ -1,7 +1,7 @@
 extends GutTest
 
 # AIActionScoring is pure-function. Tests cover the obvious geometric
-# cases and the boundary conditions on advancement / pressure.
+# cases and the boundary conditions on shot geometry / pressure / lane.
 
 const NET_HW: float = 0.915
 const SHADOW_HW: float = 0.3
@@ -32,25 +32,43 @@ func test_shoot_score_falls_off_with_pressure() -> void:
 	assert_lt(pressured, clear, "opponent within pressure radius should reduce shoot score")
 
 
-func test_pass_score_zero_for_marginal_advancement() -> void:
-	# Receiver only 2m closer to goal — under PASS_MIN_ADVANTAGE_M
-	var shooter := Vector3(0.0, 0.0, 10.0)
-	var receiver := Vector3(0.0, 0.0, 12.0)
-	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, [])
-	assert_eq(s, 0.0)
+func test_pass_lateral_with_open_net_scores_high() -> void:
+	# Phase 5e fix for "bots never pass side to side". Both shooter and
+	# receiver are at the same depth (z=21), but the goalie covers the
+	# shooter's angle. Receiver has wide-open net.
+	var shooter := Vector3(3.0, 0.0, 21.0)   # angled shot — goalie can see them
+	var receiver := Vector3(-3.0, 0.0, 21.0) # cross-slot — wide open
+	var goalie := Vector3(2.5, 0.0, 26.0)    # shading the shooter's side
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	assert_gt(s, 0.3, "lateral pass to a teammate with an open net should score well")
 
 
-func test_pass_score_positive_for_clear_advancement() -> void:
+func test_pass_score_zero_when_lane_blocked() -> void:
 	var shooter := Vector3(0.0, 0.0, 10.0)
-	var receiver := Vector3(0.0, 0.0, 18.0)  # 8 m closer to goal
-	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, [])
-	assert_gt(s, 0.0, "8 m advancement should score above zero")
+	var receiver := Vector3(0.0, 0.0, 22.0)  # close to goal, would normally score
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var blocker: Array[Vector3] = [Vector3(0.0, 0.0, 16.0)]  # right on the line
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, blocker)
+	assert_eq(s, 0.0, "opponent on the pass line should zero the score")
+
+
+func test_pass_lane_only_counts_opponents_between_endpoints() -> void:
+	var shooter := Vector3(0.0, 0.0, 10.0)
+	var receiver := Vector3(0.0, 0.0, 22.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	# Opponent BEHIND the shooter (z=5, before z=10) — shouldn't block
+	var behind: Array[Vector3] = [Vector3(0.0, 0.0, 5.0)]
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, behind)
+	assert_gt(s, 0.0, "opponent behind the shooter shouldn't block the lane")
 
 
 func test_pass_score_falls_off_with_receiver_pressure() -> void:
 	var shooter := Vector3(0.0, 0.0, 10.0)
-	var receiver := Vector3(0.0, 0.0, 18.0)
-	var clear: float = AIActionScoring.score_pass(shooter, receiver, GOAL, [])
-	var checked: Array[Vector3] = [Vector3(0.5, 0.0, 18.0)]  # opponent on the receiver
-	var pressured: float = AIActionScoring.score_pass(shooter, receiver, GOAL, checked)
+	var receiver := Vector3(0.0, 0.0, 22.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var clear: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	# Opponent right on the receiver — pressure (not lane block, since
+	# they're at the receiver's position not between).
+	var checker: Array[Vector3] = [Vector3(0.5, 0.0, 22.0)]
+	var pressured: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, checker)
 	assert_lt(pressured, clear)

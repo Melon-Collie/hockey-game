@@ -246,7 +246,8 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			continue
 		var receiver: Vector3 = snapshot.skater_states[peer_id].position
 		var s: float = AIActionScoring.score_pass(
-				self_pos, receiver, _attacking_goal_pos,
+				self_pos, receiver, _attacking_goal_pos, goalie_pos,
+				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents)
 		if s > best_pass_score:
 			best_pass_score = s

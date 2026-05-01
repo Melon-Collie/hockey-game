@@ -5,11 +5,11 @@ class_name AIActionScoring
 # highest-scoring action and falls back to CARRY when none clears the
 # action threshold.
 #
-# Phase 5d ships SHOOT and PASS scoring. CARRY is the implicit default
-# (no score). DUMP and PROTECT will land later as new score functions.
-#
-# Factors are deliberately simple — no raycasts (lane-clear), no human
-# pass-bias, no curve resources. Tunable via the constants below.
+# Phase 5d shipped baseline SHOOT and PASS scoring. Phase 5e refactors
+# PASS to value the receiver's potential shot quality (so a teammate
+# at the same depth but with a wider-open net is a valid pass target —
+# fixes the "bots never pass side-to-side" problem) and gates passes
+# on a clear lane between shooter and receiver.
 
 # An opponent within this distance counts toward "pressure" on a target.
 const PRESSURE_RADIUS_M: float = 4.0
@@ -20,11 +20,10 @@ const PRESSURE_MAX_COUNT: int = 3
 # launching pucks at the goalie from the blue line.
 const SHOT_RANGE_FALLOFF_M: float = 18.0
 
-# Pass scoring needs a meaningful advancement; under PASS_MIN_ADVANTAGE_M
-# the score is 0 (we don't pass for marginal gains). Saturates above
-# PASS_MAX_ADVANTAGE_M.
-const PASS_MIN_ADVANTAGE_M: float = 3.0
-const PASS_MAX_ADVANTAGE_M: float = 12.0
+# Lane-clear: an opponent within this perpendicular distance from the
+# bot→receiver line segment fully blocks the pass. Score scales linearly
+# with distance up to LANE_CLEAR_RADIUS_M (clear).
+const LANE_CLEAR_RADIUS_M: float = 1.5
 
 # Score threshold below which the SM stays in CARRY rather than committing
 # to a SHOOT or PASS. Tunes how aggressive bots are.
@@ -32,8 +31,7 @@ const ACTION_THRESHOLD: float = 0.25
 
 
 # Returns SHOOT score in [0, 1]. Multiplicative product of:
-#   - openness:      fraction of net not blocked by goalie's shadow
-#   - dist_response: 1.0 close, → 0 at SHOT_RANGE_FALLOFF_M
+#   - shot_geometry: net openness × distance response (see _shot_geometry)
 #   - 1 - pressure:  inverse of opponent proximity around the shooter
 static func score_shoot(
 		shooter: Vector3,
@@ -42,31 +40,52 @@ static func score_shoot(
 		net_half_width: float,
 		shadow_half: float,
 		opponents: Array[Vector3]) -> float:
-	var openness: float = _net_openness(shooter, attacking_goal.z, goalie_pos, net_half_width, shadow_half)
-	var dist: float = shooter.distance_to(attacking_goal)
-	var dist_response: float = clampf(1.0 - dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
+	var geom: float = _shot_geometry(shooter, attacking_goal, goalie_pos, net_half_width, shadow_half)
 	var pressure_factor: float = 1.0 - _pressure(shooter, opponents)
-	return openness * dist_response * pressure_factor
+	return geom * pressure_factor
 
 
 # Returns PASS score in [0, 1] for a specific receiver. Multiplicative:
-#   - advancement: how much closer to goal the receiver is than us (above
-#                  PASS_MIN_ADVANTAGE_M, saturating at PASS_MAX_ADVANTAGE_M)
-#   - 1 - pressure: how open the receiver is
+#   - lane_clear:           1.0 if no opponent in the bot→receiver line,
+#                           degrades smoothly as opponents approach the line
+#   - receiver_geometry:    the receiver's potential shot score (openness ×
+#                           distance) — i.e. "how good is the shot we're
+#                           setting up?"
+#   - 1 - receiver_pressure: how open the receiver is to receive
+#
+# Replaces the Phase 5d advancement-based scoring. Lateral passes that
+# move the puck to a teammate with a wider-open net now score correctly
+# (advancement was zero in those cases).
 static func score_pass(
 		shooter: Vector3,
 		receiver: Vector3,
 		attacking_goal: Vector3,
+		goalie_pos: Vector3,
+		net_half_width: float,
+		shadow_half: float,
 		opponents: Array[Vector3]) -> float:
-	var my_dist: float = shooter.distance_to(attacking_goal)
-	var their_dist: float = receiver.distance_to(attacking_goal)
-	var advantage: float = my_dist - their_dist
-	if advantage < PASS_MIN_ADVANTAGE_M:
+	var lane: float = _lane_clear(shooter, receiver, opponents)
+	if lane <= 0.0:
 		return 0.0
-	var span: float = PASS_MAX_ADVANTAGE_M - PASS_MIN_ADVANTAGE_M
-	var advance_score: float = clampf((advantage - PASS_MIN_ADVANTAGE_M) / span, 0.0, 1.0)
+	var receiver_geom: float = _shot_geometry(receiver, attacking_goal, goalie_pos, net_half_width, shadow_half)
 	var pressure_factor: float = 1.0 - _pressure(receiver, opponents)
-	return advance_score * pressure_factor
+	return lane * receiver_geom * pressure_factor
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+# Geometric shot quality from a position: openness × distance response.
+# Used by both SHOOT (shooter geometry) and PASS (receiver geometry).
+static func _shot_geometry(
+		from: Vector3,
+		attacking_goal: Vector3,
+		goalie_pos: Vector3,
+		net_half_width: float,
+		shadow_half: float) -> float:
+	var openness: float = _net_openness(from, attacking_goal.z, goalie_pos, net_half_width, shadow_half)
+	var dist: float = from.distance_to(attacking_goal)
+	var dist_response: float = clampf(1.0 - dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
+	return openness * dist_response
 
 
 # Fraction of the net not covered by the goalie's projected shadow. 1.0
@@ -102,3 +121,36 @@ static func _pressure(target: Vector3, opponents: Array[Vector3]) -> float:
 		if dx * dx + dz * dz < r2:
 			n += 1
 	return clampf(float(n) / float(PRESSURE_MAX_COUNT), 0.0, 1.0)
+
+
+# Lane-clear factor in [0, 1]. 1.0 = no opponent within
+# LANE_CLEAR_RADIUS_M of the bot→receiver segment; 0.0 = opponent right
+# on the line. Smooth linear ramp between.
+#
+# Only counts opponents whose projection onto the segment falls between
+# the endpoints (t ∈ [0, 1]) — opponents behind the shooter or past the
+# receiver don't block the lane.
+static func _lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3]) -> float:
+	var dx: float = to.x - from.x
+	var dz: float = to.z - from.z
+	var line_len_sq: float = dx * dx + dz * dz
+	if line_len_sq < 0.01:
+		return 1.0  # degenerate (overlapping endpoints)
+	var min_perp_sq: float = INF
+	for p: Vector3 in opponents:
+		var pdx: float = p.x - from.x
+		var pdz: float = p.z - from.z
+		var t: float = (pdx * dx + pdz * dz) / line_len_sq
+		if t <= 0.0 or t >= 1.0:
+			continue
+		var closest_x: float = from.x + t * dx
+		var closest_z: float = from.z + t * dz
+		var perp_x: float = p.x - closest_x
+		var perp_z: float = p.z - closest_z
+		var perp_sq: float = perp_x * perp_x + perp_z * perp_z
+		if perp_sq < min_perp_sq:
+			min_perp_sq = perp_sq
+	if min_perp_sq == INF:
+		return 1.0
+	var perp: float = sqrt(min_perp_sq)
+	return clampf(perp / LANE_CLEAR_RADIUS_M, 0.0, 1.0)
