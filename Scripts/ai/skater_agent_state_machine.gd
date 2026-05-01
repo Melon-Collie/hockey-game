@@ -150,7 +150,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
-	elif _is_f1():
+	elif _is_f1() and not _teammate_has_puck(snapshot):
 		_set_state(State.CHASE_PUCK)
 
 
@@ -169,7 +169,10 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
-	elif not _is_f1():
+	elif not _is_f1() or _teammate_has_puck(snapshot):
+		# Either we're not F1 anymore, or a teammate just picked up the
+		# puck — in both cases, drop back to off-puck support instead of
+		# pinning our blade to the puck on our own teammate's stick.
 		_set_state(State.OFF_PUCK)
 
 
@@ -329,6 +332,16 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 func _is_f1() -> bool:
 	return _team_brain != null and _team_brain.get_role(_peer_id) == AIRoleAssignment.ROLE_F1
+
+
+# True iff a TEAMMATE (not me, not opp) currently has the puck. Used to
+# suppress CHASE_PUCK so non-carrier bots don't sprint at their own
+# teammate carrier with their blade out.
+func _teammate_has_puck(snapshot: WorldSnapshot) -> bool:
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier == -1 or carrier == _peer_id:
+		return false
+	return int(_team_id_resolver.call(carrier)) == _team_id
 
 
 # Where to drop into when the puck is lost mid-on-puck-state. F1s chase,
