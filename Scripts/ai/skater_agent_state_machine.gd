@@ -67,10 +67,14 @@ const GOALIE_SHADOW_HALF: float = 0.3
 # How far in front of the goal line the carrier sits when they reach the
 # offensive zone — high slot, not in the cage.
 const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
-# Lead time when aiming a pass — extrapolate the receiver's position by
-# this many seconds along their current velocity. Ballpark for a quick
-# wrister at typical pass distances; tune in playtest.
-const PASS_LEAD_TIME_S: float = 0.3
+# Reference puck speed for pass leading. Lead time = distance to receiver
+# / this constant — a longer pass leads further because it takes longer
+# to arrive. Approximate quick-wrister puck speed; doesn't have to be
+# perfect, small over/under just shifts the aim point a few cm.
+const PASS_PUCK_SPEED_REF_M_S: float = 22.0
+# Cap on pass lead so a degenerate state (zero pass speed estimate, or a
+# long bomb across the rink) doesn't project the receiver into next week.
+const PASS_LEAD_MAX_S: float = 0.6
 # DUMP aim — deep into the attacking zone, on the bot's strong side.
 # DUMP_CORNER_X is the absolute X of the dump target (corner area).
 # DUMP_DEPTH_FROM_GOAL_M is how far in front of the attacking goal line
@@ -97,6 +101,10 @@ const CHASE_SPEED_REF_M_S: float = 10.5
 # Cap on lead lookahead so a barely-moving puck doesn't project an
 # intercept point a million seconds away.
 const CHASE_MAX_LOOKAHEAD_S: float = 1.5
+# Steps per chase trajectory walk. Granular enough that the rink clamp
+# catches a sliding puck hitting the boards mid-flight (so we don't aim
+# at a point inside the wall), cheap enough at 6 Hz brain tick.
+const CHASE_TRAJECTORY_STEPS: int = 12
 
 # Carrier anchor search step. The carrier samples candidate positions
 # this far from their current spot in 8 cardinal directions and picks
@@ -107,6 +115,13 @@ const CARRY_SEARCH_STEP_M: float = 3.0
 # Margin from the attacking goal line we won't drift past while
 # searching (carrier shouldn't anchor behind the net).
 const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
+
+# Lead time for the carrier endpoint of the shot-lane repel. Off-puck
+# bots step out of the FUTURE shooting lane, not the current one — by
+# the time our steering moves us, the carrier has skated forward and
+# the lane has rotated. Short window; long leads put the lane in the
+# wrong zone entirely.
+const SHOT_LANE_LEAD_TIME_S: float = 0.25
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
@@ -276,7 +291,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# blade-from-player at release, and the blade IK swings toward
 	# mouse_world_pos — so this fires the puck along the bot→receiver
 	# vector.
-	input.mouse_world_pos = _pass_aim_point(snapshot)
+	input.mouse_world_pos = _pass_aim_point(snapshot, self_pos)
 	input.shoot_pressed = true
 	input.shoot_held = true
 	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
@@ -376,16 +391,21 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 		_set_state(State.DUMP_PRESSED)
 
 
-# Lead the receiver by PASS_LEAD_TIME_S along their current velocity.
-# Falls back to the goal if the target slot disappeared between picking
-# and pressing (rare — bot demoted, peer disconnected, etc.).
-func _pass_aim_point(snapshot: WorldSnapshot) -> Vector3:
+# Lead the receiver by their flight-time along their current velocity.
+# Long passes lead further than short ones — the puck takes longer to
+# arrive, so the receiver moves further during transit. Falls back to
+# the goal if the target slot disappeared between picking and pressing
+# (rare — bot demoted, peer disconnected, etc.).
+func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var receiver: SkaterNetworkState = snapshot.skater_states.get(_pass_target_peer_id)
 	if receiver == null:
 		return _attacking_goal_pos
-	var lead_x: float = receiver.position.x + receiver.velocity.x * PASS_LEAD_TIME_S
-	var lead_z: float = receiver.position.z + receiver.velocity.z * PASS_LEAD_TIME_S
-	return Vector3(lead_x, 0.0, lead_z)
+	# Flight time estimate — distance to receiver / pass speed. Capped so
+	# a degenerate near-zero-speed estimate can't blow up the lead.
+	var dist: float = self_pos.distance_to(receiver.position)
+	var flight_t: float = clampf(
+			dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
+	return AITrajectory.predict_at(receiver.position, receiver.velocity, flight_t)
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
@@ -412,7 +432,11 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		if int(_team_id_resolver.call(carrier)) == _team_id:
 			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
 			if carrier_state != null:
-				lane_start = carrier_state.position
+				# Lead the carrier — the lane we want to clear is where
+				# they'll shoot from, not where they are right now.
+				lane_start = AITrajectory.predict_at(
+						carrier_state.position, carrier_state.velocity,
+						SHOT_LANE_LEAD_TIME_S)
 				lane_end = _attacking_goal_pos
 
 	input.move_vector = AISteering.compute_move_vector(
@@ -617,18 +641,26 @@ func _dump_aim_point(self_pos: Vector3) -> Vector3:
 	return Vector3(strong_x * DUMP_CORNER_X, 0.0, deep_z)
 
 
-# Where the puck will be when we'd reach its current position at top
-# speed. For a stationary puck this is just the puck position; for a
-# moving puck the bot turns toward an intercept ahead of the puck's
-# current spot. Not a physically perfect intercept (we can't always
-# reach top speed from rest), but close enough that the bot stops
-# trailing behind a sliding puck.
+# Walk the puck's predicted trajectory and pick the earliest step where
+# we could actually reach the puck. The earliest reachable step is the
+# best intercept — any later step the puck has slid further past us, any
+# earlier step we wouldn't have arrived yet. Trajectory walk also gives
+# us free rink-clamping (a sliding puck heading into corner boards no
+# longer projects an intercept inside the wall) and a single seam to
+# add puck friction later. Falls back to the puck's current position
+# when no step is reachable in the lookahead window.
 func _lead_intercept(self_pos: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
-	var dx: float = puck_pos.x - self_pos.x
-	var dz: float = puck_pos.z - self_pos.z
-	var dist: float = sqrt(dx * dx + dz * dz)
-	var t: float = clampf(dist / CHASE_SPEED_REF_M_S, 0.0, CHASE_MAX_LOOKAHEAD_S)
-	return Vector3(puck_pos.x + puck_vel.x * t, 0.0, puck_pos.z + puck_vel.z * t)
+	var dt: float = CHASE_MAX_LOOKAHEAD_S / float(CHASE_TRAJECTORY_STEPS)
+	var traj: Array[Vector3] = AITrajectory.predict(
+			puck_pos, puck_vel, CHASE_TRAJECTORY_STEPS, dt)
+	for i: int in traj.size():
+		var t_step: float = (i + 1) * dt
+		var reach: float = self_pos.distance_to(traj[i])
+		if reach <= CHASE_SPEED_REF_M_S * t_step:
+			return traj[i]
+	# Puck is moving away faster than we can chase — aim at the last
+	# projected position so we at least head in the right direction.
+	return traj[traj.size() - 1] if traj.size() > 0 else puck_pos
 
 
 # True iff a TEAMMATE (not me, not opp) currently has the puck. Used to
