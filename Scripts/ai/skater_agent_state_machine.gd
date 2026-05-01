@@ -170,6 +170,12 @@ var _pass_target_peer_id: int = 0
 var _engagement_cooldown: int = 0
 var _prev_carrier_peer_id: int = -1
 
+# Set when CARRY commits to SHOOT_PRESSED; consumed by _state_shoot_pressed
+# to drive the elevation flag. Picked from the goalie state at decision
+# time — a butterfly/sliding goalie has top corners exposed, an upright
+# goalie blocks elevated with the glove/blocker.
+var _shot_is_elevated: bool = false
+
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -300,6 +306,14 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	_apply_slot_steering(input, snapshot, self_pos)
 	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
+	# Drive the elevation flag based on the decision made at SHOOT_PRESSED
+	# entry. SkaterController._is_elevated is a sticky bool toggled by
+	# elevation_up / elevation_down edges — setting one explicitly each
+	# tick keeps us in the right state regardless of the previous shot.
+	if _shot_is_elevated:
+		input.elevation_up = true
+	else:
+		input.elevation_down = true
 	# Press flags. SkaterStateMachine handles SKATING_WITH_PUCK +
 	# shoot_pressed → WRISTER_AIM, then next tick (back in CARRY here)
 	# shoot_held=false fires release_wrister.
@@ -417,6 +431,7 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	if max_score < AIActionScoring.ACTION_THRESHOLD:
 		return
 	if shoot_score >= best_pass_score and shoot_score >= dump_score:
+		_shot_is_elevated = _should_elevate_shot(snapshot)
 		_set_state(State.SHOOT_PRESSED)
 	elif best_pass_score >= dump_score:
 		_pass_target_peer_id = best_pass_peer
@@ -477,6 +492,27 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH)
+
+
+# True if the opposing goalie is "down" — butterfly, sliding, or
+# recovering. Top corners are exposed in all three poses; an elevated
+# wrister beats a glove that's still 0.6 m off the ice. Standing /
+# ready / RVH stay upright, so a ground shot past the shadow is the
+# higher-EV pick. Match the int values in GoalieController.State so
+# we don't depend on the controller class being available here.
+const _GOALIE_STATE_BUTTERFLY: int = 1   # GoalieController.State.BUTTERFLY
+const _GOALIE_STATE_RECOVERING: int = 2  # GoalieController.State.RECOVERING
+const _GOALIE_STATE_SLIDING: int = 6     # GoalieController.State.SLIDING
+
+func _should_elevate_shot(snapshot: WorldSnapshot) -> bool:
+	var opp_team_id: int = 1 - _team_id
+	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
+	if opp_goalie == null:
+		return false
+	var s: int = opp_goalie.state_enum
+	return s == _GOALIE_STATE_BUTTERFLY \
+			or s == _GOALIE_STATE_RECOVERING \
+			or s == _GOALIE_STATE_SLIDING
 
 
 # Shot aim past the goalie's projected shadow. Falls back to goal center
