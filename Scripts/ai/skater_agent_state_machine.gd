@@ -44,6 +44,11 @@ const F2_OFFSET_X: float = 3.0
 const F2_OFFSET_Z_BACK: float = 2.0
 const F3_OFFSET_X_WEAK: float = 5.0
 const F3_OFFSET_Z_BACK: float = 8.0
+# When the puck is in our offensive zone, F3 plays "high man" — anchors
+# just inside the OZ blue line (BLUE_LINE_Z + this offset, on the OZ
+# side) instead of trailing the puck. Real-hockey safety valve: high
+# man can backcheck if the play turns over and skates the other way.
+const F3_HIGH_MAN_OZ_DEPTH_M: float = 1.0
 const LEGACY_OFF_DEPTH: float = 4.0
 # Man-to-man gap: defender anchors this far on the goal-side of their
 # mark, on the line from mark → our net.
@@ -837,7 +842,15 @@ func _f3_anchor(puck_pos: Vector3) -> Vector3:
 	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
 	var weak_x: float = -strong_x
 	var x: float = puck_pos.x + weak_x * F3_OFFSET_X_WEAK
-	var z: float = puck_pos.z + _own_goal_dir * F3_OFFSET_Z_BACK
+	# High man: when the puck is in our OZ, F3 anchors near the OZ blue
+	# line ready to backcheck on a turnover — instead of trailing the
+	# puck deeper. When the puck is in NZ or our DZ, fall back to the
+	# legacy "above-puck" trailer position.
+	var z: float
+	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
+		z = -_own_goal_dir * (GameRules.BLUE_LINE_Z + F3_HIGH_MAN_OZ_DEPTH_M)
+	else:
+		z = puck_pos.z + _own_goal_dir * F3_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
 
 
