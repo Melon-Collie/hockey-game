@@ -244,6 +244,16 @@ var _shoot_sweep_dir_xy: Vector2 = Vector2.ZERO
 var _shoot_wind_up_start: Vector3 = Vector3.ZERO
 var _shoot_aim_target: Vector3 = Vector3.ZERO
 
+# Debug: live scores from the most recent _pick_action tick. Read by
+# AIController at ~10 Hz to drive the floating per-bot label. Updated
+# every CARRY tick; stale when the bot isn't carrying (label shows
+# the last available snapshot in that case).
+var debug_scores: Array[String] = []
+# Last non-skating decision the bot committed to (e.g. "SHOOT" /
+# "PASS→3" / "DUMP"). Set when _pick_action transitions into one of
+# the press states; persists until the next decision.
+var debug_last_decision: String = ""
+
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -555,6 +565,18 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			self_pos, _attacking_goal_pos, _own_goal_dir,
 			GameRules.BLUE_LINE_Z, _scratch_opponents)
 
+	# Debug: snapshot the per-tick scores for the on-ice label. Sorted
+	# desc, top 3, peer id mod 1000 for compactness.
+	var rows: Array = [
+			["shoot", shoot_score],
+			["pass→%d" % (best_pass_peer % 1000) if best_pass_peer != 0 else "pass", best_pass_score],
+			["dump", dump_score],
+	]
+	rows.sort_custom(func(a, b): return a[1] > b[1])
+	debug_scores.clear()
+	for r: Array in rows:
+		debug_scores.append("%s:%.2f" % [r[0], r[1]])
+
 	# Pick the winner. Threshold gates "do nothing" — when all scores
 	# are weak (e.g., bot in own zone with no pressure or teammate
 	# ahead), CARRY wins implicitly.
@@ -563,11 +585,14 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 		return
 	if shoot_score >= best_pass_score and shoot_score >= dump_score:
 		_shot_is_elevated = _should_elevate_shot(snapshot)
+		debug_last_decision = "SHOOT"
 		_set_state(State.SHOOT_PRESSED)
 	elif best_pass_score >= dump_score:
 		_pass_target_peer_id = best_pass_peer
+		debug_last_decision = "PASS→%d" % (best_pass_peer % 1000)
 		_set_state(State.PASS_PRESSED)
 	else:
+		debug_last_decision = "DUMP"
 		_set_state(State.DUMP_PRESSED)
 
 
