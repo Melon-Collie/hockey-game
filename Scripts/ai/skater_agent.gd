@@ -11,8 +11,9 @@ var _scratch_input: InputState = InputState.new()
 var _sm: SkaterAgentStateMachine = SkaterAgentStateMachine.new()
 
 
-func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable) -> void:
-	_sm.setup(peer_id, team_id, brain, resolver)
+func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
+		is_left_handed: bool) -> void:
+	_sm.setup(peer_id, team_id, brain, resolver, is_left_handed)
 
 
 # Returns the InputState for this physics tick. Caller must not retain a

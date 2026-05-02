@@ -166,6 +166,17 @@ const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
 # instead of us committing and bailing later.
 const BOT_WRISTER_LOOKAHEAD_S: float = (
 		float(BOT_WRISTER_CHARGE_TICKS) / 240.0)
+# Forehand wind-up offset for the visible blade sweep. mouse_world_pos
+# at tick 0 sits BOT_WRISTER_WIND_UP_BACK_M behind the bot along
+# (-aim_dir) and BOT_WRISTER_WIND_UP_SIDE_M to the forehand side
+# perpendicular to aim_dir. Across the charge it lerps to the aim
+# point, so the blade IK draws the stick back-and-to-the-handed-side
+# then sweeps through the puck. Also forces the entry blade pose to
+# the forehand side (wrister_start_blade_local_x captured at WRISTER_AIM
+# entry), so SkaterController doesn't classify the shot as backhand
+# and apply the backhand_power_coefficient penalty.
+const BOT_WRISTER_WIND_UP_BACK_M: float = 0.6
+const BOT_WRISTER_WIND_UP_SIDE_M: float = 0.4
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
@@ -180,6 +191,11 @@ var _own_goal_dir: float = 1.0
 var _attacking_goal_pos: Vector3 = Vector3.ZERO
 var _team_brain: TeamBrain = null
 var _team_id_resolver: Callable = Callable()
+# Handedness drives the wrister wind-up side: RH winds up on the +X
+# (player-local) side of the aim line, LH on -X. Without this, every
+# bot wrister would register as a backhand half the time and lose
+# power via the backhand_power_coefficient.
+var _is_left_handed: bool = false
 
 # Reused buffer for steering's teammate-position list. Cleared at the top
 # of each _apply_steering call.
@@ -221,11 +237,18 @@ var _shoot_charge_tick: int = 0
 # transform). Captured at SHOOT_PRESSED entry; mouse_screen_pos walks
 # along this each tick.
 var _shoot_sweep_dir_xy: Vector2 = Vector2.ZERO
+# Wind-up start position in WORLD space — captured at SHOOT_PRESSED
+# entry. mouse_world_pos lerps from this to the aim point across the
+# charge, so the blade IK visibly sweeps from forehand wind-up through
+# to the puck.
+var _shoot_wind_up_start: Vector3 = Vector3.ZERO
+var _shoot_aim_target: Vector3 = Vector3.ZERO
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
-func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable) -> void:
+func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
+		is_left_handed: bool) -> void:
 	_peer_id = peer_id
 	_team_id = team_id
 	_own_goal_dir = 1.0 if team_id == 0 else -1.0
@@ -234,6 +257,7 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable) -> 
 	_attacking_goal_pos = Vector3(0.0, 0.0, -_own_goal_dir * GameRules.GOAL_LINE_Z)
 	_team_brain = brain
 	_team_id_resolver = resolver
+	_is_left_handed = is_left_handed
 
 
 # ── State accessors ──────────────────────────────────────────────────────────
@@ -365,8 +389,6 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		return
 
 	_apply_slot_steering(input, snapshot, self_pos)
-	var aim: Vector3 = _shot_aim_point(snapshot, self_pos)
-	input.mouse_world_pos = aim
 	# Elevation flag based on decision at entry. Sticky in
 	# SkaterController, so setting one direction explicitly each tick
 	# normalizes it regardless of the last shot.
@@ -375,21 +397,41 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	else:
 		input.elevation_down = true
 
-	# First tick: capture sweep direction + fire shoot_pressed edge so
-	# SkaterStateMachine enters WRISTER_AIM and seeds prev_mouse_screen_pos
-	# from input.mouse_screen_pos (which is Vector2.ZERO this tick — the
-	# sweep starts from the origin so subsequent ticks accumulate cleanly).
+	# First tick: capture aim, compute wind-up start (forehand side,
+	# behind bot), fire shoot_pressed edge so SkaterStateMachine enters
+	# WRISTER_AIM. wrister_start_blade_local_x is captured by
+	# SkaterController at the moment of WRISTER_AIM entry from the
+	# blade's CURRENT pose — which means we need mouse_world_pos to be
+	# at the wind-up position THIS tick so apply_blade_from_mouse (still
+	# running in SKATING_WITH_PUCK before the transition) puts the blade
+	# on the forehand side.
 	if _shoot_charge_tick == 0:
-		var dir_xz: Vector3 = Vector3(aim.x - self_pos.x, 0.0, aim.z - self_pos.z)
+		_shoot_aim_target = _shot_aim_point(snapshot, self_pos)
+		var dir_xz: Vector3 = Vector3(
+				_shoot_aim_target.x - self_pos.x, 0.0, _shoot_aim_target.z - self_pos.z)
+		var aim_dir: Vector3
 		if dir_xz.length_squared() > 0.0001:
-			var n: Vector3 = dir_xz.normalized()
-			# Screen XY maps directly to world XZ (no camera transform in
-			# tick_wrister_charge); sweep along the shot direction so
-			# charge_direction at release == aim direction.
-			_shoot_sweep_dir_xy = Vector2(n.x, n.z)
+			aim_dir = dir_xz.normalized()
 		else:
-			_shoot_sweep_dir_xy = Vector2(0.0, 1.0)
+			aim_dir = Vector3(0.0, 0.0, 1.0)
+		# Forehand-side perpendicular: 90° rotation of aim_dir in XZ.
+		# RH winds up on the +X-player-local side (= aim_dir rotated 90°
+		# CW); LH on the -X side (90° CCW).
+		var perp_sign: float = -1.0 if _is_left_handed else 1.0
+		var forehand_perp: Vector3 = Vector3(
+				aim_dir.z * perp_sign, 0.0, -aim_dir.x * perp_sign)
+		_shoot_wind_up_start = (
+				self_pos
+				- aim_dir * BOT_WRISTER_WIND_UP_BACK_M
+				+ forehand_perp * BOT_WRISTER_WIND_UP_SIDE_M)
+		_shoot_sweep_dir_xy = Vector2(aim_dir.x, aim_dir.z)
 		input.shoot_pressed = true
+
+	# Lerp mouse_world_pos from wind-up start to aim across the charge.
+	# Blade IK chases this, so the player visibly draws the stick back
+	# on the forehand and sweeps through to the aim point.
+	var t: float = float(_shoot_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
+	input.mouse_world_pos = _shoot_wind_up_start.lerp(_shoot_aim_target, t)
 
 	# Walk mouse_screen_pos along the sweep direction. Per-tick delta is
 	# BOT_WRISTER_SCREEN_DELTA_PER_TICK; SkaterAimingBehavior scales by

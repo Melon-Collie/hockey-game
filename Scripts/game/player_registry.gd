@@ -172,7 +172,7 @@ func spawn_bot(
 	var brain: TeamBrain = GameManager.team_brains[team.team_id] if team.team_id < GameManager.team_brains.size() else null
 	var resolver := func(pid: int) -> int:
 		return resolve_team_id_for_peer(pid)
-	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, resolver)
+	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, resolver, record.is_left_handed)
 	spawned.skater.team_id = team.team_id
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number, record.text_color)
