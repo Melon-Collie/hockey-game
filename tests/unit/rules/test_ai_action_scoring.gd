@@ -106,6 +106,33 @@ func test_shoot_score_zero_from_behind_goal_line() -> void:
 	assert_eq(s, 0.0, "shot from behind goal line should score 0")
 
 
+func test_shoot_score_zero_at_extreme_angle() -> void:
+	# Shooter way out on the boards, very close to goal-line z. From this
+	# angle the visible net is a sliver — angle factor zeros it.
+	# Forward = (22 - 26.65) * -signf(+26.65) = +4.65; lateral = 12.0;
+	# angle = atan2(12, 4.65) ≈ 68.8° → in the soft ramp.
+	# Push further out to clear SHOT_ANGLE_ZERO_DEG (80°):
+	# lateral 12, forward 2 → angle ≈ 80.5°.
+	var shooter := Vector3(12.0, 0.0, 24.65)  # 2 m in front of goal line, 12 m wide
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	assert_eq(s, 0.0, "shot from past 80° off-axis should score 0")
+
+
+func test_shoot_score_partial_at_moderate_angle() -> void:
+	# Shooter at 65° off-axis — inside the soft-ramp window between 50°
+	# (full) and 80° (zero). Score should be > 0 but < a center shot.
+	# lateral 8, forward ~5 → angle = atan2(8, 5) ≈ 58° → ramp factor
+	# (80 - 58) / (80 - 50) ≈ 0.73.
+	var shooter := Vector3(8.0, 0.0, 21.65)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var center := Vector3(0.0, 0.0, 21.0)
+	var s_angle: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	var s_center: float = AIActionScoring.score_shoot(center, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	assert_gt(s_angle, 0.0, "shot from 58° should still score above zero")
+	assert_lt(s_angle, s_center, "shot from 58° should score lower than a center shot")
+
+
 func test_pass_score_zero_to_receiver_behind_goal_line() -> void:
 	var shooter := Vector3(0.0, 0.0, 20.0)
 	var receiver := Vector3(0.0, 0.0, 28.0)  # past attacking goal line

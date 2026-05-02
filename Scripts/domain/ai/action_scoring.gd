@@ -20,6 +20,20 @@ const PRESSURE_MAX_COUNT: int = 3
 # launching pucks at the goalie from the blue line.
 const SHOT_RANGE_FALLOFF_M: float = 18.0
 
+# Shooting-angle cone, measured from the net's outward normal (the
+# direction the net opens toward center ice). Inside SHOT_ANGLE_FULL_DEG
+# the score is unaffected; at SHOT_ANGLE_ZERO_DEG and beyond it's
+# completely zeroed. Two purposes:
+#   1. Block shots from BEHIND the goal line — past 90° the math
+#      automatically zeroes, so we don't need a separate hard gate.
+#   2. Penalize extreme-angle shots where the visible net is a sliver.
+#      _net_openness measures goalie shadow coverage in 2D and treats
+#      a shadow projecting off the net plane as fully open net — but
+#      from a 75° angle the actual visible net is narrow regardless
+#      of where the shadow lands.
+const SHOT_ANGLE_FULL_DEG: float = 50.0
+const SHOT_ANGLE_ZERO_DEG: float = 80.0
+
 # Lane-clear: an opponent within this perpendicular distance from the
 # bot→receiver line segment fully blocks the pass. Score scales linearly
 # with distance up to LANE_CLEAR_RADIUS_M (clear).
@@ -190,7 +204,29 @@ static func _shot_geometry(
 	var openness: float = _net_openness(from, attacking_goal.z, goalie_pos, net_half_width, shadow_half)
 	var dist: float = from.distance_to(attacking_goal)
 	var dist_response: float = clampf(1.0 - dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
-	return openness * dist_response
+	var angle: float = _shooting_angle_factor(from, attacking_goal)
+	return openness * dist_response * angle
+
+
+# Returns [0, 1] based on the angle from the net's outward normal to
+# the shooter. 0 = directly in front, 90+ = beside or behind the net.
+# Linearly ramps from 1.0 at SHOT_ANGLE_FULL_DEG to 0 at
+# SHOT_ANGLE_ZERO_DEG; zero past that. Behind-the-goal-line shots
+# automatically zero (forward distance is negative → angle > 90°).
+static func _shooting_angle_factor(shooter: Vector3, attacking_goal: Vector3) -> float:
+	# Net normal points from the goal toward center ice. attacking_goal.z
+	# is signed (Team 0 attacks -Z so attacking_goal.z = -GOAL_LINE_Z;
+	# net opens toward +Z). The net normal Z-component is the negation
+	# of the attacking_goal.z sign.
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
+	var lateral: float = absf(shooter.x - attacking_goal.x)
+	var angle_deg: float = rad_to_deg(atan2(lateral, forward))
+	if angle_deg <= SHOT_ANGLE_FULL_DEG:
+		return 1.0
+	if angle_deg >= SHOT_ANGLE_ZERO_DEG:
+		return 0.0
+	return (SHOT_ANGLE_ZERO_DEG - angle_deg) / (SHOT_ANGLE_ZERO_DEG - SHOT_ANGLE_FULL_DEG)
 
 
 # Fraction of the net not covered by the goalie's projected shadow. 1.0
