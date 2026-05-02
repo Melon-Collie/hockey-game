@@ -820,6 +820,21 @@ existing for-loop without touching call sites:
    pull kicks in. Tightens predictions of intent — a defender mid-turn
    isn't yet pursuing.
 
+### Goalie strip feel (shared physics, not bot-specific)
+
+When a bot's blade contacts the goalie the strip path fires the same
+as a human (`_do_release` → `puck.release` → `_set_cooldown(ex_carrier,
+reattach_cooldown=0.5s)`). But `goalie_strip_power = 1.5` is gentle —
+puck travels ~0.5m in the cooldown window, then the bot's blade
+re-acquires it. Looks like "no strip" from outside; actually a
+re-grab loop.
+
+Not bot-specific (humans hit the same behavior if they camp the
+crease). Tune later in a playtest session focused on goalie feel.
+Levers: `reattach_cooldown` (0.5s, shared with all releases),
+`goalie_strip_power` (1.5 m/s), or a strip-specific cooldown that's
+longer than the generic one.
+
 ### Tuning constants
 
 Pure number tweaks; do these in playtest sessions, not standalone:
