@@ -48,8 +48,9 @@ func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callabl
 		_debug_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		_debug_label.no_depth_test = true
 		_debug_label.fixed_size = true
-		_debug_label.pixel_size = 0.005
-		_debug_label.outline_size = 4
+		_debug_label.pixel_size = 0.001
+		_debug_label.outline_size = 2
+		_debug_label.font_size = 24
 		_debug_label.modulate = Color(1, 1, 1, 1)
 		_debug_label.outline_modulate = Color(0, 0, 0, 1)
 		_debug_label.position = Vector3(0, DEBUG_LABEL_HEIGHT_M, 0)
