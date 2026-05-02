@@ -552,7 +552,8 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			continue
 		var receiver: Vector3 = receiver_state.position
 		var s: float = AIActionScoring.score_pass(
-				self_pos, receiver, _attacking_goal_pos, goalie_pos,
+				self_pos, receiver, receiver_state.facing,
+				_attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents)
 		if s > best_pass_score:
@@ -890,13 +891,16 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 	# QUIET_EYE_TICKS) so we can't rely on its state. Rebuild here.
 	_scratch_opponents.clear()
 	var teammates: Array[Vector3] = []
+	var teammate_facings: Array[Vector2] = []
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
+		var s_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		if int(_team_id_resolver.call(peer_id)) == _team_id:
-			teammates.append(snapshot.skater_states[peer_id].position)
+			teammates.append(s_state.position)
+			teammate_facings.append(s_state.facing)
 		else:
-			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+			_scratch_opponents.append(s_state.position)
 
 	# Score current position as the baseline; only move if a candidate
 	# beats it.
@@ -904,7 +908,7 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 	var best_score: float = AIActionScoring.carry_position_score(
 			self_pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-			teammates, _scratch_opponents)
+			teammates, teammate_facings, _scratch_opponents)
 
 	# 8 cardinal/diagonal directions. Pre-baked so we don't recompute
 	# trig each tick.
@@ -930,7 +934,7 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 		var s: float = AIActionScoring.carry_position_score(
 				candidate, _attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-				teammates, _scratch_opponents)
+				teammates, teammate_facings, _scratch_opponents)
 		if s > best_score:
 			best_score = s
 			best_pos = candidate

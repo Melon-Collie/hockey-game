@@ -46,6 +46,19 @@ const LANE_CLEAR_RADIUS_M: float = 1.5
 const PASS_MIN_ADVANCE_M: float = 3.0
 const PASS_MAX_ADVANCE_M: float = 12.0
 
+# Open-man pass: a teammate with no defender close in front of them is
+# a valid pass target even if they don't have a shot or aren't more
+# advanced. Possession-keeping pass.
+#
+# OPEN_MAN_RADIUS_M is the threat radius — opponents past this don't
+# count regardless of direction. OPEN_MAN_MAX_SCORE caps the receiver-
+# quality contribution so a wide-open teammate doesn't drown out a
+# shot or genuine outlet pass when those are available; it does clear
+# ACTION_THRESHOLD (0.25) on its own when the lane and pressure terms
+# cooperate.
+const OPEN_MAN_RADIUS_M: float = 3.0
+const OPEN_MAN_MAX_SCORE: float = 0.4
+
 # Score threshold below which the SM stays in CARRY rather than committing
 # to a SHOOT or PASS. Tunes how aggressive bots are.
 const ACTION_THRESHOLD: float = 0.25
@@ -95,6 +108,7 @@ static func score_shoot(
 static func score_pass(
 		shooter: Vector3,
 		receiver: Vector3,
+		receiver_facing: Vector2,
 		attacking_goal: Vector3,
 		goalie_pos: Vector3,
 		net_half_width: float,
@@ -107,16 +121,17 @@ static func score_pass(
 	var lane: float = _lane_clear(shooter, receiver, opponents)
 	if lane <= 0.0:
 		return 0.0
-	# Receiver quality: take the max of "they have a shot from there" and
-	# "this pass moves the puck meaningfully closer to the attacking
-	# goal." The shot-quality term handles cross-slot / lateral passes
-	# (a teammate at the same depth with a wider-open net beats a
-	# covered shooter); the advancement term handles outlet passes
-	# (DZ → NZ teammate that's too far to shoot but is nicely positioned
-	# to skate up-ice).
+	# Receiver quality: take the max of three terms.
+	# - shot quality: receiver has a real shot from where they are.
+	# - advancement: outlet to a teammate further up-ice.
+	# - open-man: receiver isn't being pressured from in front, so
+	#   this is a possession-keeping pass even with no shot or outlet
+	#   advantage. Capped low so it loses to genuine shot/outlet
+	#   targets when they exist.
 	var receiver_geom: float = _shot_geometry(receiver, attacking_goal, goalie_pos, net_half_width, shadow_half)
 	var advance: float = _advancement_score(shooter, receiver, attacking_goal)
-	var receiver_quality: float = maxf(receiver_geom, advance)
+	var open: float = _receiver_open_score(receiver, receiver_facing, opponents)
+	var receiver_quality: float = maxf(maxf(receiver_geom, advance), open)
 	var pressure_factor: float = 1.0 - _pressure(receiver, opponents)
 	return lane * receiver_quality * pressure_factor
 
@@ -169,10 +184,13 @@ static func carry_position_score(
 		net_half_width: float,
 		shadow_half: float,
 		teammate_positions: Array[Vector3],
+		teammate_facings: Array[Vector2],
 		opponents: Array[Vector3]) -> float:
 	var best: float = score_shoot(pos, attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
-	for t: Vector3 in teammate_positions:
-		var s: float = score_pass(pos, t, attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
+	for i: int in teammate_positions.size():
+		var facing: Vector2 = teammate_facings[i] if i < teammate_facings.size() else Vector2.ZERO
+		var s: float = score_pass(pos, teammate_positions[i], facing,
+				attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
 		if s > best:
 			best = s
 	return best
@@ -272,17 +290,45 @@ static func _is_past_goal_line(pos: Vector3, attacking_goal: Vector3) -> bool:
 	return (pos.z - attacking_goal.z) * signf(attacking_goal.z) > 0.0
 
 
-# Pressure score in [0, 1] — fraction of PRESSURE_MAX_COUNT opponents
-# within PRESSURE_RADIUS_M of `target`. When `forward` is non-zero,
-# each opponent's contribution is weighted by how much they sit in
-# the target's forward half-plane: directly ahead = full weight,
-# perpendicular = 0.5, directly behind = 0. Use a non-zero `forward`
-# whenever "is my forward path blocked" is the right question (dump,
-# carry decisions). Pass Vector3.ZERO for omnidirectional pressure
-# (e.g. receiver pressure on a pass — interceptors can come from
-# anywhere).
+# Open-man receiver score. Wraps the same opponent-density helper as
+# _pressure but with a tighter radius (3 m, "in your kitchen") and a
+# directional weighting against the receiver's facing — a forechecker
+# in front is a real threat; a backchecker behind can't disrupt the
+# reception. Capped at OPEN_MAN_MAX_SCORE so a wide-open teammate
+# competes with shot/outlet quality but doesn't drown them out.
+#
+# receiver_facing is Vector2 packing world XZ (matches
+# SkaterNetworkState.facing). Zero-magnitude facing falls through to
+# max score (no orientation data → assume open).
+static func _receiver_open_score(
+		receiver: Vector3,
+		receiver_facing: Vector2,
+		opponents: Array[Vector3]) -> float:
+	var forward: Vector3 = Vector3(receiver_facing.x, 0.0, receiver_facing.y)
+	if forward.length_squared() < 0.0001:
+		return OPEN_MAN_MAX_SCORE
+	var density: float = _opponent_density(receiver, opponents, forward, OPEN_MAN_RADIUS_M, 1)
+	return OPEN_MAN_MAX_SCORE * (1.0 - density)
+
+
+# Pressure score in [0, 1] for "do nearby opponents threaten this
+# target." Wraps _opponent_density with the standard PRESSURE_*
+# radii. `forward` is optional: when non-zero, opponents are weighted
+# by their position in the target's forward half-plane (use for "is
+# my forward path blocked" — dump, carry, shoot). Vector3.ZERO means
+# omnidirectional (interceptors can come from anywhere — receiver
+# pressure on a pass).
 static func _pressure(target: Vector3, opponents: Array[Vector3],
 		forward: Vector3 = Vector3.ZERO) -> float:
+	return _opponent_density(target, opponents, forward, PRESSURE_RADIUS_M, PRESSURE_MAX_COUNT)
+
+
+# Generic weighted opponent density. Counts opponents within `radius`
+# of `target`, normalizing the count by `max_count` so the result
+# lives in [0, 1]. Direction-weighted when `forward` is non-zero
+# (front = 1.0, perpendicular = 0.5, behind = 0.0).
+static func _opponent_density(target: Vector3, opponents: Array[Vector3],
+		forward: Vector3, radius: float, max_count: int) -> float:
 	var directional: bool = forward.length_squared() > 0.0001
 	var fwd_x: float = 0.0
 	var fwd_z: float = 0.0
@@ -294,7 +340,7 @@ static func _pressure(target: Vector3, opponents: Array[Vector3],
 		else:
 			directional = false
 	var weighted: float = 0.0
-	var r2: float = PRESSURE_RADIUS_M * PRESSURE_RADIUS_M
+	var r2: float = radius * radius
 	for p: Vector3 in opponents:
 		var dx: float = p.x - target.x
 		var dz: float = p.z - target.z
@@ -303,13 +349,11 @@ static func _pressure(target: Vector3, opponents: Array[Vector3],
 			continue
 		if directional:
 			var d: float = sqrt(d2)
-			# Map dot ∈ [-1, +1] to weight ∈ [0, 1]: behind = 0,
-			# perpendicular = 0.5, ahead = 1. Smooth, single-segment.
 			var dot: float = 0.0 if d < 0.0001 else (dx * fwd_x + dz * fwd_z) / d
 			weighted += 0.5 + 0.5 * dot
 		else:
 			weighted += 1.0
-	return clampf(weighted / float(PRESSURE_MAX_COUNT), 0.0, 1.0)
+	return clampf(weighted / float(max_count), 0.0, 1.0)
 
 
 # Lane-clear factor in [0, 1]. 1.0 = no opponent within
