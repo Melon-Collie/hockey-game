@@ -42,6 +42,15 @@ enum State {
 # 4+ teammates case) keeps the original above-puck behavior.
 const F2_OFFSET_X: float = 3.0
 const F2_OFFSET_Z_BACK: float = 2.0
+# F1 pressure read: when F1 has 2+ defenders within F1_PRESSURE_RADIUS_M,
+# F2 collapses from the wide triangle apex to a tight close-support
+# position — assist the carrier directly instead of holding apex space.
+# When F1 has space, F2 stays at the apex looking like a passing
+# option.
+const F1_PRESSURE_RADIUS_M: float = 3.5
+const F1_HEAVY_PRESSURE_COUNT: int = 2
+const F2_SUPPORT_OFFSET_X: float = 1.5
+const F2_SUPPORT_OFFSET_Z_BACK: float = 1.5
 const F3_OFFSET_X_WEAK: float = 5.0
 const F3_OFFSET_Z_BACK: float = 8.0
 # When the puck is in our offensive zone, F3 plays "high man" — anchors
@@ -725,7 +734,7 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
 	match role:
 		AIRoleAssignment.ROLE_F2:
-			anchor = _f2_anchor(puck_pos)
+			anchor = _f2_anchor(puck_pos, snapshot)
 		AIRoleAssignment.ROLE_F3:
 			anchor = _f3_anchor(puck_pos)
 		_:
@@ -736,15 +745,64 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 	return _cap_offside(anchor, snapshot)
 
 
-# F2 anchor — triangle apex on the strong side (the side of the rink
-# the puck is on), 3 m off the puck X and 2 m back toward our own
-# goal Z. With STRONG_SIDE_X_DEADBAND we don't flip strong/weak when
-# the puck wiggles through the center.
-func _f2_anchor(puck_pos: Vector3) -> Vector3:
+# F2 anchor — strong-side support. Two modes based on F1's pressure:
+#   - F1 heavily pressured (2+ defenders within F1_PRESSURE_RADIUS_M):
+#     collapse to close-support, ~1.5 m off F1 to give a quick outlet.
+#   - F1 has space: triangle apex 3 m off puck.x, 2 m back. Spread out
+#     and look like a passing option.
+# STRONG_SIDE_X_DEADBAND prevents the strong/weak flip when the puck
+# (or F1) wiggles through the center.
+func _f2_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
+	var f1_pid: int = _f1_peer_id()
+	if f1_pid != 0:
+		var f1_state: SkaterNetworkState = snapshot.skater_states.get(f1_pid)
+		if f1_state != null:
+			var pressure: int = _opp_count_within(
+					f1_state.position, F1_PRESSURE_RADIUS_M, snapshot)
+			if pressure >= F1_HEAVY_PRESSURE_COUNT:
+				return _f2_support_anchor(f1_state.position, puck_pos)
+	# Default: triangle apex (F1 has space, F2 looks for an open lane).
 	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
 	var x: float = puck_pos.x + strong_x * F2_OFFSET_X
 	var z: float = puck_pos.z + _own_goal_dir * F2_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
+
+
+# Close-support anchor relative to F1, on the strong side. Used when
+# F1 is heavily pressured and needs an immediate outlet target.
+func _f2_support_anchor(f1_pos: Vector3, puck_pos: Vector3) -> Vector3:
+	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
+	var x: float = f1_pos.x + strong_x * F2_SUPPORT_OFFSET_X
+	var z: float = f1_pos.z + _own_goal_dir * F2_SUPPORT_OFFSET_Z_BACK
+	return _clamp_anchor(Vector3(x, 0.0, z))
+
+
+# Returns the F1 teammate's peer_id, or 0 if no F1 is currently
+# assigned (TeamBrain hasn't run yet, or only one teammate on team).
+func _f1_peer_id() -> int:
+	if _team_brain == null:
+		return 0
+	for peer_id: int in _team_brain.roles:
+		if _team_brain.roles[peer_id] == AIRoleAssignment.ROLE_F1:
+			return peer_id
+	return 0
+
+
+# Counts opponents within `radius` of `pos` in XZ. Used by F2 to read
+# F1's pressure level — separate from _opponent_within (bool) because
+# the threshold is count-based.
+func _opp_count_within(pos: Vector3, radius: float, snapshot: WorldSnapshot) -> int:
+	var n: int = 0
+	var r2: float = radius * radius
+	for peer_id: int in snapshot.skater_states:
+		if int(_team_id_resolver.call(peer_id)) == _team_id:
+			continue
+		var p: Vector3 = snapshot.skater_states[peer_id].position
+		var dx: float = p.x - pos.x
+		var dz: float = p.z - pos.z
+		if dx * dx + dz * dz < r2:
+			n += 1
+	return n
 
 
 # Cap an off-puck anchor so we don't ask the bot to skate ahead of the
