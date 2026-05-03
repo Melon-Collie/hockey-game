@@ -76,7 +76,10 @@ func _ready() -> void:
 
 	# Submit our own vote into the shared map so the host (and other peers)
 	# count it. send_color_vote handles both host-local and client-RPC paths.
-	NetworkManager.send_color_vote(_my_color_id)
+	# Offline mode skips this — the color vote pool stays empty, the picks
+	# made in the main menu (pending_home/away_color_id) are kept verbatim.
+	if not NetworkManager.is_offline_mode:
+		NetworkManager.send_color_vote(_my_color_id)
 
 	if not NetworkManager.pending_lobby_roster.is_empty():
 		_on_lobby_roster_synced(NetworkManager.pending_lobby_roster)
@@ -135,6 +138,9 @@ func _build_ui() -> void:
 	vbox.add_child(title)
 
 	_color_vote_row = _build_color_vote_row()
+	# Hide the per-player color vote in offline mode — colors come from
+	# the "With Bots" popup directly, no votes to cast.
+	_color_vote_row.visible = not NetworkManager.is_offline_mode
 	vbox.add_child(_color_vote_row)
 
 	_slot_grid = SlotGridPanel.new()
@@ -223,8 +229,9 @@ func _refresh_spectator_panel() -> void:
 	# Spectators don't belong to a team, so their color vote can't affect any
 	# team's resolution (`_recompute_resolved_colors` skips spectator entries).
 	# Hide the row entirely so the UI doesn't suggest the dropdown does anything.
+	# In offline mode it's always hidden — colors come from the With Bots popup.
 	if _color_vote_row != null:
-		_color_vote_row.visible = not local_is_spectator
+		_color_vote_row.visible = not local_is_spectator and not NetworkManager.is_offline_mode
 
 func _on_spectate_pressed() -> void:
 	var open: int = _find_open_spectator_slot()
@@ -541,6 +548,12 @@ func _refresh_grid() -> void:
 # (home, away) pair — passing the previous winners as sticky hints so an
 # already-tied lead doesn't re-roll on every unrelated vote change.
 func _recompute_resolved_colors() -> void:
+	# Offline mode: no per-player vote pool to resolve. Keep
+	# _home_color_id / _away_color_id at their init values (seeded from
+	# NetworkManager.pending_home/away_color_id, which the main menu
+	# "With Bots" popup wrote).
+	if NetworkManager.is_offline_mode:
+		return
 	var home_votes: Array[String] = []
 	var away_votes: Array[String] = []
 	for k: int in _lobby_slots:
