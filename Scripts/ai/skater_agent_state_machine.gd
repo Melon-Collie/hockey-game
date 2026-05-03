@@ -51,7 +51,12 @@ const F1_PRESSURE_RADIUS_M: float = 3.5
 const F1_HEAVY_PRESSURE_COUNT: int = 2
 const F2_SUPPORT_OFFSET_X: float = 1.5
 const F2_SUPPORT_OFFSET_Z_BACK: float = 1.5
-const F3_OFFSET_X_WEAK: float = 5.0
+# F3 shades to the STRONG side (puck side) by this much. Real-hockey
+# high man / trailer typically pinches with the play rather than
+# camping the weak side — a strong-side F3 closes off the
+# puck-supporting passing lane and is in position to pinch on a loose
+# puck. Small magnitude so they don't bunch with F2 (3 m strong-side).
+const F3_OFFSET_X_STRONG: float = 2.0
 const F3_OFFSET_Z_BACK: float = 8.0
 # When the puck is in our offensive zone, F3 plays "high man" — anchors
 # just inside the OZ blue line (BLUE_LINE_Z + this offset, on the OZ
@@ -894,12 +899,12 @@ func _man_anchor(mark: SkaterNetworkState) -> Vector3:
 			lead_pos.z + dz * step))
 
 
-# F3 anchor — weak-side trailer, mirrored across the puck X and 8 m
-# back toward our own goal. Safety-valve role.
+# F3 anchor — strong-side trailer / high man. Shades to the puck side
+# (smaller magnitude than F2's apex offset so they don't stack) and
+# sits 8 m back toward our own goal as a safety valve.
 func _f3_anchor(puck_pos: Vector3) -> Vector3:
 	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
-	var weak_x: float = -strong_x
-	var x: float = puck_pos.x + weak_x * F3_OFFSET_X_WEAK
+	var x: float = puck_pos.x + strong_x * F3_OFFSET_X_STRONG
 	# High man: when the puck is in our OZ, F3 anchors near the OZ blue
 	# line ready to backcheck on a turnover — instead of trailing the
 	# puck deeper. When the puck is in NZ or our DZ, fall back to the
