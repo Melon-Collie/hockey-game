@@ -318,6 +318,14 @@ func get_state() -> State:
 	return _state
 
 
+# Read by AIController for the debug label. Returns "F1"/"F2"/"F3"/"OFF",
+# or "?" when the brain hasn't yet assigned a role (first ticks after spawn).
+func debug_role() -> String:
+	if _team_brain == null:
+		return "?"
+	return String(_team_brain.get_role(_peer_id))
+
+
 # ── Dispatch ─────────────────────────────────────────────────────────────────
 
 # Caller (SkaterAgent) is responsible for zeroing `input` before this call.
