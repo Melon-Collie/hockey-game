@@ -28,15 +28,17 @@ func _resolver(skaters: Array) -> Callable:
 	return func(pid: int) -> int: return int(team_map.get(pid, -1))
 
 
-func test_f2_takes_most_dangerous_f3_takes_other() -> void:
-	# Team 0 defending. Two opps: 200 closer to our net (+Z), 300 further.
-	# F2 should mark 200, F3 should mark 300.
+func test_f2_takes_carrier_when_f1_caught_up_ice() -> void:
+	# Team 0 defending (own_net at +Z). F1 (peer 100) at z=20 is FURTHER
+	# from own net than the carrier (200) at z=24 — F1 caught up-ice on
+	# a rush. Carrier becomes a valid mark; F2 takes the most-dangerous
+	# (the carrier), F3 takes the off-puck opp.
 	var skaters: Array = [
-			[100, 0, Vector3(0, 0, 20)],   # our F1 (chasing)
-			[110, 0, Vector3(2, 0, 22)],   # our F2
-			[120, 0, Vector3(-2, 0, 22)],  # our F3
-			[200, 1, Vector3(0, 0, 24)],   # opp closer to our net (z=24)
-			[300, 1, Vector3(3, 0, 18)],   # opp further from our net
+			[100, 0, Vector3(0, 0, 20)],   # F1 — z=20, dist-to-net 6.65
+			[110, 0, Vector3(2, 0, 22)],   # F2
+			[120, 0, Vector3(-2, 0, 22)],  # F3
+			[200, 1, Vector3(0, 0, 24)],   # carrier — dist-to-net 2.65 (closer than F1)
+			[300, 1, Vector3(3, 0, 18)],   # off-puck opp — dist-to-net 8.65
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var roles: Dictionary = {
@@ -45,10 +47,30 @@ func test_f2_takes_most_dangerous_f3_takes_other() -> void:
 			120: AIRoleAssignment.ROLE_F3,
 	}
 	var coverage: Dictionary = AICoverageAssignment.compute(snap, 0, OUR_NET_Z, _resolver(skaters), roles)
-	# Carrier (200) is excluded; only non-carrier opp here is 300.
-	# So F2 marks 300; F3 has nothing.
-	assert_eq(coverage.get(110), 300)
-	assert_false(coverage.has(120), "F3 has no mark when only one non-carrier opp on the ice")
+	assert_eq(coverage.get(110), 200, "F2 takes the carrier when F1 is out of position")
+	assert_eq(coverage.get(120), 300, "F3 takes the off-puck opp")
+
+
+func test_f2_skips_carrier_when_f1_in_position() -> void:
+	# F1 (peer 100) at z=25 — between carrier (z=24) and own net (z=26.65).
+	# F1 is in position to pressure the carrier through chase, so the
+	# carrier is excluded from the mark pool. F2 takes the off-puck opp.
+	var skaters: Array = [
+			[100, 0, Vector3(0, 0, 25)],   # F1 — closer to net than carrier
+			[110, 0, Vector3(2, 0, 22)],   # F2
+			[120, 0, Vector3(-2, 0, 22)],  # F3
+			[200, 1, Vector3(0, 0, 24)],   # carrier
+			[300, 1, Vector3(3, 0, 18)],   # off-puck opp
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var roles: Dictionary = {
+			100: AIRoleAssignment.ROLE_F1,
+			110: AIRoleAssignment.ROLE_F2,
+			120: AIRoleAssignment.ROLE_F3,
+	}
+	var coverage: Dictionary = AICoverageAssignment.compute(snap, 0, OUR_NET_Z, _resolver(skaters), roles)
+	assert_eq(coverage.get(110), 300, "F2 marks the off-puck opp; carrier is F1's responsibility")
+	assert_false(coverage.has(120), "F3 has no mark — only one non-carrier opp")
 
 
 func test_two_non_carrier_opps_both_marked() -> void:
