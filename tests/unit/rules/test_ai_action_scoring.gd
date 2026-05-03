@@ -242,3 +242,36 @@ func test_pass_score_falls_off_with_receiver_pressure() -> void:
 	var checker: Array[Vector3] = [Vector3(0.5, 0.0, 22.0)]
 	var pressured: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, checker)
 	assert_lt(pressured, clear)
+
+
+# Behavior pass A #5 — NZ-specific clear-path suppression.
+
+func test_dump_score_suppressed_in_nz_with_clear_forward_path() -> void:
+	# Team 1 (own_goal_dir=-1, attacks +Z) carrying through the NZ at z=0
+	# with side-and-behind pressure but nothing in front. Controlled
+	# entry beats dump in 3v3 — score must drop below ACTION_THRESHOLD.
+	var bot := Vector3(0.0, 0.0, 0.0)
+	var attacking_goal := Vector3(0.0, 0.0, 26.65)
+	var side_and_behind: Array[Vector3] = [
+			Vector3(2.0, 0.0, 0.0),    # right beside (perpendicular)
+			Vector3(-2.0, 0.0, 0.0),   # left beside
+			Vector3(0.0, 0.0, -2.0),   # directly behind (toward own goal)
+	]
+	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, side_and_behind)
+	assert_lt(s, AIActionScoring.ACTION_THRESHOLD,
+			"NZ dump with open ice ahead should not clear ACTION_THRESHOLD")
+
+
+func test_dump_score_fires_in_nz_when_forward_path_blocked() -> void:
+	# Same NZ position as above, but now with a wall of defenders ahead
+	# inside the clear-path radius. Suppression should NOT trigger.
+	var bot := Vector3(0.0, 0.0, 0.0)
+	var attacking_goal := Vector3(0.0, 0.0, 26.65)
+	var wall_ahead: Array[Vector3] = [
+			Vector3(0.0, 0.0, 2.0),    # directly ahead (toward attacking goal)
+			Vector3(1.5, 0.0, 1.5),    # forward-right
+			Vector3(-1.5, 0.0, 1.5),   # forward-left
+	]
+	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, wall_ahead)
+	assert_gt(s, AIActionScoring.ACTION_THRESHOLD,
+			"NZ dump with a wall of defenders ahead should still clear threshold")

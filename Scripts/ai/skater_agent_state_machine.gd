@@ -68,6 +68,14 @@ const F3_OZ_TRAIL_DEPTH_M: float = 5.0
 # OZ faceoff circle (toward NZ) is the deepest F3 will go — past that
 # point, a turnover means we're gone before we can recover.
 const F3_OZ_DOT_BACK_OFFSET_M: float = 4.5
+# F3 high-man depth when our team has possession in the OZ. Sit just
+# inside the OZ blue line as a free safety so a turnover doesn't leak
+# a 2-on-1 the other way. The back-of-dots clamp is the right depth
+# when defending or chasing a loose puck in OZ; during own possession
+# the higher position prevents breakaway/odd-man rushes the moment we
+# cough it up. 3v3-specific: with no D pair behind us, F3 is the only
+# thing standing between a turnover and a clean breakaway.
+const F3_OZ_OWN_POSSESSION_DEPTH_M: float = 2.0
 const LEGACY_OFF_DEPTH: float = 4.0
 # Man-to-man gap: defender anchors this far on the goal-side of their
 # mark, on the line from mark → our net.
@@ -147,6 +155,14 @@ const CHASE_MAX_LOOKAHEAD_S: float = 1.5
 # catches a sliding puck hitting the boards mid-flight (so we don't aim
 # at a point inside the wall), cheap enough at 6 Hz brain tick.
 const CHASE_TRAJECTORY_STEPS: int = 12
+# Angling: when chasing an opposing CARRIER (not a loose puck), shift
+# the intercept point this far toward center-ice so the bot approaches
+# from the inside and forces the carrier toward the boards. Real
+# defenders don't chase straight-line at the puck — that lets the
+# carrier cut to the middle. Skipped when the carrier is already near
+# center (no inside to take away). The bias is capped at the carrier's
+# own X magnitude so we never overshoot to the wrong side.
+const CHASE_ANGLE_BIAS_M: float = 1.5
 
 # Carrier anchor search step. The carrier samples candidate positions
 # this far from their current spot in 8 cardinal directions and picks
@@ -220,6 +236,27 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 const BOT_WRISTER_WIND_UP_BACK_M: float = 0.6
 const BOT_WRISTER_WIND_UP_SIDE_M: float = 0.4
 
+# ── Give-and-go ─────────────────────────────────────────────────────────────
+# After releasing a pass, the passer cuts to open ice up-ice from the
+# release point and holds that position for a short window — looking
+# for a return pass. This is the most common 3v3 build pattern and it
+# never emerged from the role-anchor logic, which snapped the passer
+# straight back into their F2/F3 anchor the next tick.
+#
+# Implemented as an anchor override in OFF_PUCK: when the give-and-go
+# timer is active, _off_puck_anchor returns _give_and_go_anchor (capped
+# by _cap_offside) instead of the role anchor. The timer decrements
+# every dispatch tick. CARRY clears it on entry — once we're back on
+# the puck the cut is over.
+#
+# 1.5 s gives the receiver time to control the puck and either look
+# back at us (return pass) or commit forward themselves (we revert to
+# role anchor and play it as normal off-puck). The 10 m lead lands us
+# just inside or right at the OZ blue line from a typical NZ pass —
+# perfect spot for a return feed into the rush.
+const GIVE_AND_GO_DURATION_TICKS: int = 360   # 1.5 s at 240 Hz
+const GIVE_AND_GO_LEAD_M: float = 10.0
+
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
@@ -286,6 +323,12 @@ var _shoot_sweep_dir_xy: Vector2 = Vector2.ZERO
 var _shoot_wind_up_start: Vector3 = Vector3.ZERO
 var _shoot_aim_target: Vector3 = Vector3.ZERO
 
+# Give-and-go bookkeeping — see GIVE_AND_GO_*. Set when PASS_PRESSED
+# fires; consumed by _off_puck_anchor while the timer is active. 0
+# means "no active give-and-go cut."
+var _give_and_go_anchor: Vector3 = Vector3.ZERO
+var _give_and_go_remaining_ticks: int = 0
+
 # Debug: live scores from the most recent _pick_action tick. Read by
 # AIController at ~10 Hz to drive the floating per-bot label. Updated
 # every CARRY tick; stale when the bot isn't carrying (label shows
@@ -344,6 +387,8 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	var have_puck: bool = (snapshot.puck_state.carrier_peer_id == _peer_id)
 	_ticks_in_state += 1
 	_update_engagement_cooldown(snapshot, self_state)
+	if _give_and_go_remaining_ticks > 0:
+		_give_and_go_remaining_ticks -= 1
 
 	# When we're ghosted (offside, can't interact with the puck), chase
 	# behavior is degenerate — we'd skate at a puck we can't pick up. Drop
@@ -391,6 +436,17 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# puck position" pattern.
 	var puck_pos: Vector3 = snapshot.puck_state.position
 	var target: Vector3 = _lead_intercept(self_pos, puck_pos, snapshot.puck_state.velocity)
+	# Angling: when an OPPONENT carries the puck, shift the intercept
+	# toward center-ice so we approach from the inside and force them to
+	# the boards. Loose pucks get the raw intercept — there's no carrier
+	# to angle off of. Teammate-carried case is filtered upstream by the
+	# F1→OFF_PUCK transition, so by the time we reach here a non-(-1)
+	# carrier is necessarily an opponent.
+	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
+	if carrier_pid != -1 and carrier_pid != _peer_id:
+		var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier_pid)
+		if carrier_state != null:
+			target = _angle_intercept_inside(target, carrier_state.position)
 	_apply_steering(input, snapshot, self_pos, target)
 	# Aim: normally blade-on-intercept, but during the engagement cooldown
 	# (just got stripped or just stick-checked someone) pull the blade
@@ -523,6 +579,10 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 			self_pos, clean_pass_aim, PASS_AIM_WOBBLE_CONE_DEG)
 	input.shoot_pressed = true
 	input.shoot_held = true
+	# Arm the give-and-go cut from the release position. _off_puck_anchor
+	# honors this for GIVE_AND_GO_DURATION_TICKS; CARRY entry clears it.
+	_give_and_go_anchor = _compute_give_and_go_anchor(self_pos)
+	_give_and_go_remaining_ticks = GIVE_AND_GO_DURATION_TICKS
 	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
 	# either way so a future PASS picks a fresh one.
 	_pass_target_peer_id = 0
@@ -790,6 +850,14 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 	if self_state != null and self_state.is_ghost:
 		return _tag_up_anchor(self_pos)
 
+	# Give-and-go cut takes priority over role anchors while active. The
+	# pre-computed anchor sits up-ice from the pass release; _cap_offside
+	# pulls it back to the NZ side of the blue line until the puck enters
+	# OZ, so the cut respects the same offside discipline as a normal
+	# off-puck breakout.
+	if _give_and_go_remaining_ticks > 0:
+		return _cap_offside(_give_and_go_anchor, snapshot)
+
 	var anchor: Vector3
 	# Man-to-man takes priority in our defensive zone when the opp has
 	# the puck (or it's loose in our zone). The brain publishes the
@@ -806,7 +874,7 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 		AIRoleAssignment.ROLE_F2:
 			anchor = _f2_anchor(puck_pos, snapshot)
 		AIRoleAssignment.ROLE_F3:
-			anchor = _f3_anchor(puck_pos)
+			anchor = _f3_anchor(puck_pos, snapshot)
 		_:
 			# Legacy / fallback — Phase 3 anchor (above puck on own-net
 			# side, X tracking the bot's current X to avoid sliding sideways).
@@ -923,6 +991,15 @@ func _tag_up_anchor(self_pos: Vector3) -> Vector3:
 	return _clamp_anchor(Vector3(self_pos.x, 0.0, tag_z))
 
 
+# Give-and-go anchor: straight up-ice from the release point by
+# GIVE_AND_GO_LEAD_M. Same X so the cut feels like a continuation of
+# the bot's existing skating line rather than a teleport sideways.
+# _clamp_anchor pulls it inside the rink and out of the crease.
+func _compute_give_and_go_anchor(release_pos: Vector3) -> Vector3:
+	var anchor_z: float = release_pos.z + (-_own_goal_dir) * GIVE_AND_GO_LEAD_M
+	return _clamp_anchor(Vector3(release_pos.x, 0.0, anchor_z))
+
+
 # True iff we're in our own zone defending — opp has the puck (or it's
 # loose in our zone). Man-to-man only fires here; everywhere else (NZ,
 # OZ, own possession) we keep the zone triangle.
@@ -967,27 +1044,43 @@ func _man_anchor(mark: SkaterNetworkState) -> Vector3:
 # F3 anchor — strong-side trailer / high man. Shades to the puck side
 # (smaller magnitude than F2's apex offset so they don't stack) and
 # sits 8 m back toward our own goal as a safety valve.
-func _f3_anchor(puck_pos: Vector3) -> Vector3:
+func _f3_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
 	var x: float = puck_pos.x + strong_x * F3_OFFSET_X_STRONG
-	# In OZ: trail the puck back toward NZ by F3_OZ_TRAIL_DEPTH_M, but
-	# clamp into the high-zone band [OZ blue line, back of OZ faceoff
-	# circles]. F3 has Z-flexibility within that band so they're not
-	# rigidly camped at the blue line on every play, but they never
-	# crash deeper than the back of the dots — gets us beat on a
-	# turnover. In NZ / DZ: legacy above-puck trailer position.
+	# In OZ: free-safety position. When OUR team has possession, plant
+	# just inside the OZ blue line — the textbook 3v3 "F3 high" rule.
+	# The whole point of F3 high is that a turnover at this depth doesn't
+	# leak a clean breakaway. Anywhere deeper and we're gone before we
+	# can recover. When the puck is loose or the opp has it, fall back
+	# to the trail-with-clamp behavior: chasing a loose OZ puck is a
+	# legit forecheck role and the "back of the dots" cap still applies.
+	# In NZ / DZ: legacy above-puck trailer position.
 	var z: float
 	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
-		var trail_z: float = puck_pos.z + _own_goal_dir * F3_OZ_TRAIL_DEPTH_M
-		var oz_blue_line_z: float = -_own_goal_dir * GameRules.BLUE_LINE_Z
-		var oz_dot_back_z: float = -_own_goal_dir * (
-				GameRules.ICING_FACEOFF_DOT_Z - F3_OZ_DOT_BACK_OFFSET_M)
-		var lo: float = minf(oz_blue_line_z, oz_dot_back_z)
-		var hi: float = maxf(oz_blue_line_z, oz_dot_back_z)
-		z = clampf(trail_z, lo, hi)
+		if _own_team_has_possession(snapshot):
+			z = -_own_goal_dir * (GameRules.BLUE_LINE_Z + F3_OZ_OWN_POSSESSION_DEPTH_M)
+		else:
+			var trail_z: float = puck_pos.z + _own_goal_dir * F3_OZ_TRAIL_DEPTH_M
+			var oz_blue_line_z: float = -_own_goal_dir * GameRules.BLUE_LINE_Z
+			var oz_dot_back_z: float = -_own_goal_dir * (
+					GameRules.ICING_FACEOFF_DOT_Z - F3_OZ_DOT_BACK_OFFSET_M)
+			var lo: float = minf(oz_blue_line_z, oz_dot_back_z)
+			var hi: float = maxf(oz_blue_line_z, oz_dot_back_z)
+			z = clampf(trail_z, lo, hi)
 	else:
 		z = puck_pos.z + _own_goal_dir * F3_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
+
+
+# True iff the puck currently has a carrier on our team. Used by the F3
+# "high man" branch to know whether to plant near the blue line (own
+# possession → guard against the breakaway on a turnover) or fall back
+# to the trail-and-chase clamp (loose puck or opp possession).
+func _own_team_has_possession(snapshot: WorldSnapshot) -> bool:
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier == -1:
+		return false
+	return int(_team_id_resolver.call(carrier)) == _team_id
 
 
 # Clamp an anchor to the playable rink with a small margin so steering
@@ -1108,6 +1201,22 @@ func _dump_aim_point(self_pos: Vector3) -> Vector3:
 # longer projects an intercept inside the wall) and a single seam to
 # add puck friction later. Falls back to the puck's current position
 # when no step is reachable in the lookahead window.
+# Shifts an intercept point toward the center-ice X axis by
+# CHASE_ANGLE_BIAS_M relative to the carrier's CURRENT X. The shift
+# magnitude is capped at the carrier's |X| so we never overshoot to
+# the opposite side of center — that would put the bot on the carrier's
+# OUTSIDE and open the middle, the exact pattern we're trying to avoid.
+# Carriers within CHASE_ANGLE_BIAS_M of center are left alone (no
+# inside to take away).
+#
+# Static + private so it's unit-testable without standing up a full SM.
+static func _angle_intercept_inside(target: Vector3, carrier_pos: Vector3) -> Vector3:
+	if absf(carrier_pos.x) <= CHASE_ANGLE_BIAS_M:
+		return target
+	var bias: float = -signf(carrier_pos.x) * CHASE_ANGLE_BIAS_M
+	return Vector3(target.x + bias, target.y, target.z)
+
+
 func _lead_intercept(self_pos: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
 	var dt: float = CHASE_MAX_LOOKAHEAD_S / float(CHASE_TRAJECTORY_STEPS)
 	var traj: Array[Vector3] = AITrajectory.predict(
@@ -1180,6 +1289,13 @@ func _set_state(s: State) -> void:
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
 			_shoot_sweep_dir_xy = Vector2.ZERO
+		# Give-and-go ends the moment we have the puck again — return
+		# pass succeeded (or we picked up our own dump). The CARRY state
+		# uses _carry_anchor, not the off-puck override, so leaving the
+		# timer set wouldn't actively misbehave, but clearing here keeps
+		# the next OFF_PUCK transition (post-shot, e.g.) clean.
+		if s == State.CARRY:
+			_give_and_go_remaining_ticks = 0
 		_state = s
 		_ticks_in_state = 0
 

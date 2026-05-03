@@ -72,6 +72,16 @@ const DUMP_OWN_ZONE_FACTOR: float = 0.4
 const DUMP_NEUTRAL_ZONE_FACTOR: float = 0.7
 const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
 
+# NZ-specific clear-path suppression. In 3v3 the carrier should drive
+# into the OZ rather than dump whenever there's open ice ahead —
+# controlled entries beat dumps in this format. When _has_clear_forward_path
+# returns true, the NZ dump score is multiplied by this factor, dropping
+# 0.7 × 1.0 (full pressure) to 0.21 — below ACTION_THRESHOLD (0.25), so
+# DUMP loses to CARRY. Only triggers in NZ — DZ and OZ already handle
+# correctly without this branch.
+const NZ_DUMP_CLEAR_PATH_RADIUS_M: float = 3.0
+const NZ_DUMP_CLEAR_PATH_SUPPRESSION: float = 0.3
+
 
 # Returns SHOOT score in [0, 1]. Multiplicative product of:
 #   - shot_geometry: net openness × distance response (see _shot_geometry)
@@ -165,6 +175,15 @@ static func score_dump(
 	# attacking goal.
 	var forward: Vector3 = attacking_goal - shooter
 	var pressure_factor: float = _pressure(shooter, opponents, forward)
+	# NZ clear-path override: in the neutral zone with open ice ahead,
+	# the carrier should drive in rather than dump. The pressure term
+	# alone isn't enough — its 4 m omnidirectional radius can still tag
+	# off-axis defenders and lift NZ dump score above threshold even
+	# when the forward lane is wide open.
+	if zone_factor == DUMP_NEUTRAL_ZONE_FACTOR \
+			and _has_clear_forward_path(shooter, attacking_goal, opponents,
+					NZ_DUMP_CLEAR_PATH_RADIUS_M):
+		return zone_factor * NZ_DUMP_CLEAR_PATH_SUPPRESSION * pressure_factor
 	return zone_factor * pressure_factor
 
 
@@ -356,6 +375,35 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 		else:
 			weighted += 1.0
 	return clampf(weighted / float(max_count), 0.0, 1.0)
+
+
+# True iff there is no opponent within `radius` of `from` whose
+# position projects forward of `from` along the from→toward axis.
+# Used by score_dump's NZ override to detect "open ice ahead." Tighter
+# than the omnidirectional pressure check — we only care about
+# defenders we'd have to skate through, not ones to the sides or
+# behind.
+static func _has_clear_forward_path(from: Vector3, toward: Vector3,
+		opponents: Array[Vector3], radius: float) -> bool:
+	var fwd_x: float = toward.x - from.x
+	var fwd_z: float = toward.z - from.z
+	var fl: float = sqrt(fwd_x * fwd_x + fwd_z * fwd_z)
+	if fl < 0.001:
+		return true
+	var inv_fl: float = 1.0 / fl
+	fwd_x *= inv_fl
+	fwd_z *= inv_fl
+	var r2: float = radius * radius
+	for op: Vector3 in opponents:
+		var dx: float = op.x - from.x
+		var dz: float = op.z - from.z
+		var d2: float = dx * dx + dz * dz
+		if d2 >= r2:
+			continue
+		# Anything strictly forward of the carrier counts as in the way.
+		if dx * fwd_x + dz * fwd_z > 0.0:
+			return false
+	return true
 
 
 # Lane-clear factor in [0, 1]. 1.0 = no opponent within
