@@ -180,6 +180,13 @@ extends Node
 # threat persists, so they aren't bouncing all the way upright between drops.
 @export var ready_zone_distance: float = 25.0  # m — puck perp distance threshold to enter READY
 
+# Lateral deadband for the RVH_LEFT ↔ RVH_RIGHT swap. The puck has to
+# cross the goalie's centerline by at least this much before the post
+# being hugged switches sides. Without this, a puck hovering at
+# ~x=0 (e.g., directly behind the net) flickers the state every tick
+# from float jitter, spamming state-change RPCs.
+@export var rvh_swap_deadband_m: float = 0.25
+
 # ── Client Correction Tuning ──────────────────────────────────────────────────
 # Server broadcasts (40 Hz) soft-correct the client-side goalie simulation.
 @export var correction_blend: float = 0.40      # per-broadcast blend strength toward server
@@ -581,12 +588,12 @@ func _update_state(delta: float) -> void:
 		State.RVH_LEFT:
 			if not _is_puck_in_defensive_zone():
 				_state = State.READY if _is_ready_situation() else State.STANDING
-			elif puck_local_x >= 0.0:
+			elif puck_local_x >= rvh_swap_deadband_m:
 				_state = State.RVH_RIGHT
 		State.RVH_RIGHT:
 			if not _is_puck_in_defensive_zone():
 				_state = State.READY if _is_ready_situation() else State.STANDING
-			elif puck_local_x < 0.0:
+			elif puck_local_x < -rvh_swap_deadband_m:
 				_state = State.RVH_LEFT
 	if _state != prev_state:
 		_on_state_changed(prev_state, _state)
