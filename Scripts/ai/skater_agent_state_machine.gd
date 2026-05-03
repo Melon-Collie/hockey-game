@@ -496,10 +496,17 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(_post_puck_lost_state())
 		return
 
-	# Mid-charge bail: opponent closing in. block_held cancels WRISTER_AIM
-	# back to SKATING_WITH_PUCK without a release. Skipped on tick 0 — we
-	# just made the decision, give it at least one frame to commit.
-	if _shoot_charge_tick > 0 and _opponent_within(snapshot, self_pos, BOT_WRISTER_BAIL_RADIUS_M):
+	# Mid-charge bail: opponent closing in from the front. block_held
+	# cancels WRISTER_AIM back to SKATING_WITH_PUCK without a release.
+	# Skipped on tick 0 — we just made the decision, give it at least
+	# one frame to commit. Forward-only check: a defender behind the
+	# shooter (between us and our own net) can't realistically disrupt a
+	# wrister windup, and bailing on them was throwing away clean shots
+	# any time a backchecker happened to be within 2 m. Matches the
+	# pressure cube falloff intuition (behind/sideways = not a threat).
+	if _shoot_charge_tick > 0 and _opponent_within_forward(
+			snapshot, self_pos, _attacking_goal_pos - self_pos,
+			BOT_WRISTER_BAIL_RADIUS_M):
 		input.block_held = true
 		_set_state(State.CARRY)
 		return
@@ -638,13 +645,11 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, BOT_WRISTER_LOOKAHEAD_S))
 
-	# SHOOT score — at most one. Falls back to attacking_goal_pos if no
-	# opposing goalie is buffered (e.g., first-frame edge case).
-	var goalie_pos: Vector3 = _attacking_goal_pos
-	var opp_team_id: int = 1 - _team_id
-	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
-	if opp_goalie != null:
-		goalie_pos = Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
+	# SHOOT score — at most one. goalie_pos is predicted forward by the
+	# wrister lookahead so a sliding goalie's read at decision time
+	# matches where they'll be at release. Falls back to
+	# _attacking_goal_pos if the goalie state isn't buffered yet.
+	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
 	var shoot_score: float = AIActionScoring.score_shoot(
 			self_pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
@@ -816,16 +821,28 @@ func _aim_wobble(from: Vector3, to: Vector3, cone_deg: float) -> Vector3:
 	return Vector3(-dir.z, 0.0, dir.x) * lateral
 
 
-# Shot aim past the goalie's projected shadow. Falls back to goal center
-# if the opposing goalie state isn't buffered yet.
-func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	var opp_team_id: int = 1 - _team_id
-	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
+# Returns the opposing goalie's position predicted forward by
+# BOT_WRISTER_LOOKAHEAD_S along their current velocity. Goalies actively
+# slide at 4-5 m/s on shots; aiming at where the goalie IS rather than
+# where they WILL BE hands them the save by the time our wrister
+# releases (250 ms after decision). Falls back to _attacking_goal_pos
+# when the goalie state isn't buffered yet (first-frame edge case);
+# downstream geometry handles that input gracefully (degenerates to a
+# corner aim past a "goalie at the goal center").
+func _predicted_goalie_pos(snapshot: WorldSnapshot) -> Vector3:
+	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(1 - _team_id)
 	if opp_goalie == null:
 		return _attacking_goal_pos
-	var goalie_pos := Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
+	return AITrajectory.predict_at(
+			Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z),
+			Vector3(opp_goalie.velocity_x, 0.0, opp_goalie.velocity_z),
+			BOT_WRISTER_LOOKAHEAD_S)
+
+
+# Shot aim past the goalie's projected shadow.
+func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	return AIShotAim.compute_open_net_aim(
-			self_pos, goalie_pos,
+			self_pos, _predicted_goalie_pos(snapshot),
 			_attacking_goal_pos.z,
 			GameRules.NET_HALF_WIDTH,
 			GOALIE_SHADOW_HALF)
@@ -983,6 +1000,35 @@ func _opponent_within(snapshot: WorldSnapshot, pos: Vector3, radius: float) -> b
 	return false
 
 
+# Like _opponent_within but only counts opponents in the forward
+# half-plane relative to `forward_dir`. Used by the wrister bail —
+# defenders behind or beside the shooter aren't realistic threats to
+# a wrister windup; matches the pressure cube falloff convention. A
+# zero-length forward_dir falls through to the omnidirectional check
+# so degenerate inputs don't silently skip the bail entirely.
+func _opponent_within_forward(snapshot: WorldSnapshot, pos: Vector3,
+		forward_dir: Vector3, radius: float) -> bool:
+	var fwd_len: float = sqrt(forward_dir.x * forward_dir.x + forward_dir.z * forward_dir.z)
+	if fwd_len < 0.001:
+		return _opponent_within(snapshot, pos, radius)
+	var fwd_x: float = forward_dir.x / fwd_len
+	var fwd_z: float = forward_dir.z / fwd_len
+	var r2: float = radius * radius
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if int(_team_id_resolver.call(peer_id)) == _team_id:
+			continue
+		var op: Vector3 = snapshot.skater_states[peer_id].position
+		var dx: float = op.x - pos.x
+		var dz: float = op.z - pos.z
+		if dx * dx + dz * dz >= r2:
+			continue
+		if dx * fwd_x + dz * fwd_z > 0.0:
+			return true
+	return false
+
+
 # Tag-up anchor: just on the NZ side of the OZ blue line, preserving X
 # so steering pulls us straight back. Buffer past the line so the
 # host's has_tagged_up doesn't toggle on/off at the boundary.
@@ -1123,10 +1169,7 @@ func _carry_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 
 func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	var goalie_pos: Vector3 = _attacking_goal_pos
-	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(1 - _team_id)
-	if opp_goalie != null:
-		goalie_pos = Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
+	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
 
 	# Refresh the scratch lists. _pick_action would also populate
 	# _scratch_opponents but it runs later in the same tick (after
