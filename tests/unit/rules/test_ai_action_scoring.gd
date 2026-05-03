@@ -27,9 +27,13 @@ func test_shoot_score_falls_off_with_pressure() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.0)
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, [])
-	var nearby_opp: Array[Vector3] = [Vector3(1.0, 0.0, 21.0)]  # 1m away
+	# Defender 2 m sideways AND 2 m forward (toward goal): inside the
+	# forward cone (≈45° offset, dot ≈ 0.71) and inside the pressure
+	# radius. Far enough off the shot lane that lane_clear stays at 1.0,
+	# so we're testing pressure in isolation.
+	var nearby_opp: Array[Vector3] = [Vector3(2.0, 0.0, 23.0)]
 	var pressured: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, nearby_opp)
-	assert_lt(pressured, clear, "opponent within pressure radius should reduce shoot score")
+	assert_lt(pressured, clear, "opponent in the forward pressure cone should reduce shoot score")
 
 
 func test_shoot_score_zero_when_defender_in_lane() -> void:
@@ -112,10 +116,10 @@ func test_pass_open_man_fires_to_isolated_teammate() -> void:
 
 
 func test_pass_open_man_fires_with_defender_only_behind_receiver() -> void:
-	# Receiver facing +Z. Defender 2 m BEHIND them (at z=-2). The
-	# open-man directional weighting zeroes the behind defender, so the
-	# pass still clears threshold even though omni receiver-pressure
-	# trims it slightly. Bot should still pass.
+	# Receiver facing +Z. Defender 2 m BEHIND them (at z=-2). Both the
+	# open-man directional weighting AND the receiver-pressure cube
+	# falloff zero a behind-receiver defender — the pass clears
+	# threshold cleanly.
 	var shooter := Vector3(0.0, 0.0, 5.0)
 	var receiver := Vector3(0.0, 0.0, 0.0)
 	var receiver_facing := Vector2(0, 1)
@@ -237,9 +241,10 @@ func test_pass_score_falls_off_with_receiver_pressure() -> void:
 	var receiver := Vector3(0.0, 0.0, 22.0)
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var clear: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, [])
-	# Opponent right on the receiver — pressure (not lane block, since
-	# they're at the receiver's position not between).
-	var checker: Array[Vector3] = [Vector3(0.5, 0.0, 22.0)]
+	# Defender 2 m past the receiver (toward the attacking goal) and
+	# 0.5 m off-axis — inside the receiver's forward pressure cone but
+	# past the shooter→receiver segment so lane_clear isn't triggered.
+	var checker: Array[Vector3] = [Vector3(0.5, 0.0, 24.0)]
 	var pressured: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, checker)
 	assert_lt(pressured, clear)
 
@@ -275,3 +280,46 @@ func test_dump_score_fires_in_nz_when_forward_path_blocked() -> void:
 	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, wall_ahead)
 	assert_gt(s, AIActionScoring.ACTION_THRESHOLD,
 			"NZ dump with a wall of defenders ahead should still clear threshold")
+
+
+# Pressure cube-falloff sanity checks. The directional formula zeros
+# opponents behind and beside the play, so shoot/pass scoring no
+# longer counts defenders who can't realistically disrupt the action.
+
+func test_shoot_pressure_ignores_defender_behind_shooter() -> void:
+	var shooter := Vector3(0.0, 0.0, 21.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var clean: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	# Defender 2 m behind shooter (between shooter and own net).
+	var behind: Array[Vector3] = [Vector3(0.5, 0.0, 19.0)]
+	var pressured: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, behind)
+	assert_almost_eq(pressured, clean, 0.001,
+			"defender behind the shooter should not pressure the shot")
+
+
+func test_shoot_pressure_ignores_perpendicular_defender() -> void:
+	var shooter := Vector3(0.0, 0.0, 21.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var clean: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	# Defender 2 m sideways at the same depth — directly perpendicular
+	# to the shooter→goal axis. Cube weight = 0 (dot = 0).
+	var perp: Array[Vector3] = [Vector3(2.0, 0.0, 21.0)]
+	var pressured: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, SHADOW_HW, perp)
+	assert_almost_eq(pressured, clean, 0.001,
+			"perpendicular defender should not pressure the shot")
+
+
+func test_pass_receiver_pressure_ignores_defender_behind_receiver() -> void:
+	var shooter := Vector3(0.0, 0.0, 10.0)
+	var receiver := Vector3(0.0, 0.0, 18.0)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var clean: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	# Defender 2 m lateral and 1.5 m behind the receiver (toward the
+	# shooter side). Within PRESSURE_RADIUS_M (2.5 m), but the cube
+	# falloff sees a negative dot relative to receiver→goal forward
+	# axis and weights it 0. Lane perp distance is also outside
+	# LANE_CLEAR_RADIUS_M, so neither pressure nor lane block fires.
+	var lateral_behind: Array[Vector3] = [Vector3(2.0, 0.0, 16.5)]
+	var pressured: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, lateral_behind)
+	assert_almost_eq(pressured, clean, 0.001,
+			"defender behind the receiver should not pressure the pass (cube falloff zeros it)")

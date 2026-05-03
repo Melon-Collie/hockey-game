@@ -106,7 +106,11 @@ static func score_shoot(
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			shooter, goalie_pos, attacking_goal.z, net_half_width, shadow_half)
 	var lane: float = _lane_clear(shooter, aim, opponents)
-	var pressure_factor: float = 1.0 - _pressure(shooter, opponents)
+	# Directional pressure: only opponents in the forward cone toward
+	# the attacking goal disrupt the shot. A defender behind the
+	# shooter or directly beside them can't really stop the release —
+	# the threat is bodies between us and the net.
+	var pressure_factor: float = 1.0 - _pressure(shooter, opponents, attacking_goal - shooter)
 	return geom * lane * pressure_factor
 
 
@@ -144,7 +148,13 @@ static func score_pass(
 	var advance: float = _advancement_score(shooter, receiver, attacking_goal)
 	var open: float = _receiver_open_score(receiver, receiver_facing, opponents)
 	var receiver_quality: float = maxf(maxf(receiver_geom, advance), open)
-	var pressure_factor: float = 1.0 - _pressure(receiver, opponents)
+	# Directional pressure on the receiver — opponents in the receiver's
+	# forward cone toward the attacking goal are the ones who'll
+	# pressure them on reception. Defenders behind the receiver (between
+	# them and our own net) aren't realistic interception threats; the
+	# shooter→receiver lane block is already handled separately by
+	# `_lane_clear`.
+	var pressure_factor: float = 1.0 - _pressure(receiver, opponents, attacking_goal - receiver)
 	return lane * receiver_quality * pressure_factor
 
 
@@ -333,12 +343,11 @@ static func _receiver_open_score(
 
 
 # Pressure score in [0, 1] for "do nearby opponents threaten this
-# target." Wraps _opponent_density with the standard PRESSURE_*
-# radii. `forward` is optional: when non-zero, opponents are weighted
-# by their position in the target's forward half-plane (use for "is
-# my forward path blocked" — dump, carry, shoot). Vector3.ZERO means
-# omnidirectional (interceptors can come from anywhere — receiver
-# pressure on a pass).
+# target." Wraps _opponent_density with the standard PRESSURE_* radii.
+# All current callers (score_shoot, score_pass receiver, score_dump)
+# pass a forward direction so the cube falloff applies; the
+# Vector3.ZERO default is kept as a safety fallback (omnidirectional,
+# every opponent in radius weighted 1.0) but isn't currently used.
 static func _pressure(target: Vector3, opponents: Array[Vector3],
 		forward: Vector3 = Vector3.ZERO) -> float:
 	return _opponent_density(target, opponents, forward, PRESSURE_RADIUS_M, PRESSURE_MAX_COUNT)
@@ -346,8 +355,12 @@ static func _pressure(target: Vector3, opponents: Array[Vector3],
 
 # Generic weighted opponent density. Counts opponents within `radius`
 # of `target`, normalizing the count by `max_count` so the result
-# lives in [0, 1]. Direction-weighted when `forward` is non-zero
-# (front = 1.0, perpendicular = 0.5, behind = 0.0).
+# lives in [0, 1]. Direction-weighted when `forward` is non-zero with
+# a steep cube falloff: weight = max(0, dot)^3 where dot is the cosine
+# of the angle from forward. Behind = 0, perpendicular = 0, 45° forward
+# ≈ 0.35, 30° forward ≈ 0.65, dead front = 1.0. The cube falloff
+# matches the hockey intuition that defenders behind or beside the play
+# don't pressure the carrier — only opponents in the forward path do.
 static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 		forward: Vector3, radius: float, max_count: int) -> float:
 	var directional: bool = forward.length_squared() > 0.0001
@@ -371,7 +384,8 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 		if directional:
 			var d: float = sqrt(d2)
 			var dot: float = 0.0 if d < 0.0001 else (dx * fwd_x + dz * fwd_z) / d
-			weighted += 0.5 + 0.5 * dot
+			var clamped: float = maxf(0.0, dot)
+			weighted += clamped * clamped * clamped
 		else:
 			weighted += 1.0
 	return clampf(weighted / float(max_count), 0.0, 1.0)
