@@ -92,6 +92,17 @@ const QUIET_EYE_TICKS: int = 8
 # affects close-call decisions. Clamped to 1.0 max so a human-boosted
 # score doesn't exceed the natural scoring range.
 const HUMAN_PASS_BIAS: float = 1.25
+# Aim wobble cones (half-angle). Bots fire perfectly past the goalie
+# shadow without these — robotic, every shot to the same spot.
+# Wobble is rolled once at shot/pass commit so the aim is consistent
+# through the wind-up; the actual offset is a lateral perpendicular
+# nudge whose magnitude scales with distance × tan(angle). 3° at a
+# 5 m slot shot ≈ 26 cm of lateral drift, enough to push some shots
+# wide and produce different results from the same setup tick.
+# Passes get a tighter cone — a missed pass is more visible than a
+# missed shot.
+const SHOT_AIM_WOBBLE_CONE_DEG: float = 3.0
+const PASS_AIM_WOBBLE_CONE_DEG: float = 1.5
 # How wide the goalie's shadow on the net plane should be considered
 # (meters, half-width). Tuneable in playtest.
 const GOALIE_SHADOW_HALF: float = 0.3
@@ -447,7 +458,8 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# running in SKATING_WITH_PUCK before the transition) puts the blade
 	# on the forehand side.
 	if _shoot_charge_tick == 0:
-		_shoot_aim_target = _shot_aim_point(snapshot, self_pos)
+		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
+		_shoot_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
 		var dir_xz: Vector3 = Vector3(
 				_shoot_aim_target.x - self_pos.x, 0.0, _shoot_aim_target.z - self_pos.z)
 		var aim_dir: Vector3
@@ -498,7 +510,9 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# blade-from-player at release, and the blade IK swings toward
 	# mouse_world_pos — so this fires the puck along the bot→receiver
 	# vector.
-	input.mouse_world_pos = _pass_aim_point(snapshot, self_pos)
+	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
+	input.mouse_world_pos = clean_pass_aim + _aim_wobble(
+			self_pos, clean_pass_aim, PASS_AIM_WOBBLE_CONE_DEG)
 	input.shoot_pressed = true
 	input.shoot_held = true
 	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
@@ -707,6 +721,31 @@ func _should_elevate_shot(snapshot: WorldSnapshot) -> bool:
 	return s == _GOALIE_STATE_BUTTERFLY \
 			or s == _GOALIE_STATE_RECOVERING \
 			or s == _GOALIE_STATE_SLIDING
+
+
+# Adds a small lateral perpendicular nudge to an aim point —
+# magnitude is `dist × tan(cone_deg)` with a uniformly random sign in
+# [-1, +1]. Returns Vector3.ZERO when the aim is degenerate (target
+# coincident with self) or cone is zero. Each call is rolled fresh,
+# so callers should cache the offset across a multi-tick state (e.g.
+# SHOOT_PRESSED captures it once at tick 0).
+func _aim_wobble(from: Vector3, to: Vector3, cone_deg: float) -> Vector3:
+	if cone_deg <= 0.0:
+		return Vector3.ZERO
+	var to_target := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	var dist: float = to_target.length()
+	if dist < 0.01:
+		return Vector3.ZERO
+	# Uniform [-1, +1] × cone, then convert angle to lateral offset.
+	# tan() at small angles ≈ angle in rad, but use tan() exactly so
+	# the wobble scales correctly even for atypical (large) cones.
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var theta_rad: float = deg_to_rad(cone_deg) * rng.randf_range(-1.0, 1.0)
+	var lateral: float = dist * tan(theta_rad)
+	# Perpendicular to aim direction in XZ — 90° rotation: (x,z) → (-z,x).
+	var dir: Vector3 = to_target / dist
+	return Vector3(-dir.z, 0.0, dir.x) * lateral
 
 
 # Shot aim past the goalie's projected shadow. Falls back to goal center
