@@ -58,11 +58,16 @@ const F2_SUPPORT_OFFSET_Z_BACK: float = 1.5
 # puck. Small magnitude so they don't bunch with F2 (3 m strong-side).
 const F3_OFFSET_X_STRONG: float = 2.0
 const F3_OFFSET_Z_BACK: float = 8.0
-# When the puck is in our offensive zone, F3 plays "high man" — anchors
-# just inside the OZ blue line (BLUE_LINE_Z + this offset, on the OZ
-# side) instead of trailing the puck. Real-hockey safety valve: high
-# man can backcheck if the play turns over and skates the other way.
-const F3_HIGH_MAN_OZ_DEPTH_M: float = 1.0
+# In OZ, F3 trails the puck by this far toward our own goal — but
+# clamped between the OZ blue line and the back of the OZ faceoff
+# circles (see F3_OZ_DOT_BACK_OFFSET_M). 3v3 doesn't need a strict
+# "glued to the blue line" high man like 5v5; F3 just shouldn't crash
+# the net and let opponents get behind them on a turnover.
+const F3_OZ_TRAIL_DEPTH_M: float = 5.0
+# Faceoff circle radius (NHL standard ≈ 15 ft). The back edge of the
+# OZ faceoff circle (toward NZ) is the deepest F3 will go — past that
+# point, a turnover means we're gone before we can recover.
+const F3_OZ_DOT_BACK_OFFSET_M: float = 4.5
 const LEGACY_OFF_DEPTH: float = 4.0
 # Man-to-man gap: defender anchors this far on the goal-side of their
 # mark, on the line from mark → our net.
@@ -905,13 +910,21 @@ func _man_anchor(mark: SkaterNetworkState) -> Vector3:
 func _f3_anchor(puck_pos: Vector3) -> Vector3:
 	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
 	var x: float = puck_pos.x + strong_x * F3_OFFSET_X_STRONG
-	# High man: when the puck is in our OZ, F3 anchors near the OZ blue
-	# line ready to backcheck on a turnover — instead of trailing the
-	# puck deeper. When the puck is in NZ or our DZ, fall back to the
-	# legacy "above-puck" trailer position.
+	# In OZ: trail the puck back toward NZ by F3_OZ_TRAIL_DEPTH_M, but
+	# clamp into the high-zone band [OZ blue line, back of OZ faceoff
+	# circles]. F3 has Z-flexibility within that band so they're not
+	# rigidly camped at the blue line on every play, but they never
+	# crash deeper than the back of the dots — gets us beat on a
+	# turnover. In NZ / DZ: legacy above-puck trailer position.
 	var z: float
 	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
-		z = -_own_goal_dir * (GameRules.BLUE_LINE_Z + F3_HIGH_MAN_OZ_DEPTH_M)
+		var trail_z: float = puck_pos.z + _own_goal_dir * F3_OZ_TRAIL_DEPTH_M
+		var oz_blue_line_z: float = -_own_goal_dir * GameRules.BLUE_LINE_Z
+		var oz_dot_back_z: float = -_own_goal_dir * (
+				GameRules.ICING_FACEOFF_DOT_Z - F3_OZ_DOT_BACK_OFFSET_M)
+		var lo: float = minf(oz_blue_line_z, oz_dot_back_z)
+		var hi: float = maxf(oz_blue_line_z, oz_dot_back_z)
+		z = clampf(trail_z, lo, hi)
 	else:
 		z = puck_pos.z + _own_goal_dir * F3_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
