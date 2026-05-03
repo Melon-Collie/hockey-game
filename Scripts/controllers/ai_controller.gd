@@ -17,7 +17,7 @@ var perceived_snapshot: WorldSnapshot = null
 # Debug: floating label above each bot showing current state, top-3
 # scores, and last committed decision. Refreshed at ~10 Hz so text
 # stays readable. Toggle to false to disable for shipping.
-const SHOW_DEBUG_LABEL: bool = true
+const SHOW_DEBUG_LABEL: bool = false
 const DEBUG_LABEL_REFRESH_TICKS: int = 24  # 240 / 24 = 10 Hz
 const DEBUG_LABEL_HEIGHT_M: float = 2.4    # above the head
 var _debug_label: Label3D = null
