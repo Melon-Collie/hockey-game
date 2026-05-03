@@ -85,6 +85,13 @@ const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
 
 const QUIET_EYE_TICKS: int = 8
+# Bias applied to score_pass when the receiver is human. Bots pass to
+# the player about 25% more often than to another bot for the same
+# raw scoring conditions — the human is the actor, the bots are
+# support. Multiplicative so a bad pass to a human stays bad; only
+# affects close-call decisions. Clamped to 1.0 max so a human-boosted
+# score doesn't exceed the natural scoring range.
+const HUMAN_PASS_BIAS: float = 1.25
 # How wide the goalie's shadow on the net plane should be considered
 # (meters, half-width). Tuneable in playtest.
 const GOALIE_SHADOW_HALF: float = 0.3
@@ -580,6 +587,12 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 				_attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents)
+		# Human teammates get a small score multiplier so the bot prefers
+		# feeding the player on close-call passes. peer_ids in
+		# [1, BOT_ID_BASE) are real ENet peers (humans); >= BOT_ID_BASE
+		# are synthetic bot ids.
+		if NetworkManager.is_real_peer(peer_id):
+			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
