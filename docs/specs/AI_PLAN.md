@@ -755,4 +755,100 @@ Each deferred item, with a one-line note on where it plugs in without refactorin
 
 ---
 
+## 22. Phase 6 backlog
+
+Items raised in passing during Phase 6 work but deferred — not blocking
+anything, but worth picking up between bigger features. In rough
+priority order:
+
+### Active queue (next up)
+
+1. **Smarter shot selection.** Bots currently only fire ground wristers
+   away from the goalie shadow. Add intelligence around the rest of
+   the toolset:
+   - Elevated when the goalie is butterfly / down (use
+     `GoalieNetworkState.state` to detect).
+   - Slapper when there's time + lane and the bot is in the high slot.
+   - Wrister stays the default.
+
+   Each option gets its own utility score; SM picks max.
+
+2. ~~**Offsides — three sub-tasks.**~~ Shipped as Phase 6l. All three
+   pieces (awareness in pass scoring, carrier hold-up at the blue
+   line, tag-up anchor when ghosted) live on the SM and call
+   `InfractionRules.is_offside` / read `is_ghost` directly. No
+   parallel detector — bot reads what the host already publishes.
+
+### Parked (revisit after design settles)
+
+3. **Decision-making smoothing.** Tried as Phase 6k (EMA per action
+   with α=0.01); reverted because it was premature — would have
+   masked latent issues in the score functions while we're still
+   iterating. Two candidate models when the bot's behavior is
+   stable enough that smoothing is solving a real flicker problem
+   rather than hiding one:
+   - **EMA per action.** What 6k tried. Cleanest math. Plateau
+     issue: thin scores (raw≈0.26) take ~480ms to cross the 0.25
+     threshold, which is too slow for legitimate marginal options.
+   - **Persistence count.** Each option must be the current winner
+     for K consecutive ticks before firing. Hot scores commit
+     immediately; flickering between options resets the counter.
+     Probably the better fit, but only worth implementing once
+     debug visuals make it obvious whether the underlying scores
+     are flickering for legitimate reasons (real world change) or
+     buggy ones (math noise).
+
+   Pre-req: debug visuals (per the original spec) so we can SEE
+   what scores look like in flight. Without that, smoothing is
+   guessing.
+
+### Trajectory module extensions
+
+These are extensions to `AITrajectory.predict` that slot into the
+existing for-loop without touching call sites:
+
+4. **Puck friction.** `AITrajectory` is constant-velocity today. The
+   puck-chase intercept (`_lead_intercept`) would benefit from
+   modeling `ICE_FRICTION` so we don't aim ahead of a sliding puck
+   that's about to stop.
+5. **Skater acceleration.** Skaters don't reach top speed instantly.
+   Modeling acceleration in the trajectory (clamped to max-speed)
+   gives more realistic mark-lead and chase predictions, especially
+   for slow-starting carriers.
+6. **Reaction-delay floor.** First N steps of the trajectory keep
+   current velocity (the target hasn't reacted yet), then steering
+   pull kicks in. Tightens predictions of intent — a defender mid-turn
+   isn't yet pursuing.
+
+### Goalie strip feel (shared physics, not bot-specific)
+
+When a bot's blade contacts the goalie the strip path fires the same
+as a human (`_do_release` → `puck.release` → `_set_cooldown(ex_carrier,
+reattach_cooldown=0.5s)`). But `goalie_strip_power = 1.5` is gentle —
+puck travels ~0.5m in the cooldown window, then the bot's blade
+re-acquires it. Looks like "no strip" from outside; actually a
+re-grab loop.
+
+Not bot-specific (humans hit the same behavior if they camp the
+crease). Tune later in a playtest session focused on goalie feel.
+Levers: `reattach_cooldown` (0.5s, shared with all releases),
+`goalie_strip_power` (1.5 m/s), or a strip-specific cooldown that's
+longer than the generic one.
+
+### Tuning constants
+
+Pure number tweaks; do these in playtest sessions, not standalone:
+
+7. **Adaptive pass-speed estimate.** `PASS_PUCK_SPEED_REF_M_S` is a
+   fixed 22 m/s. Real puck speed depends on shooter angle, charge,
+   and shot type. A two-tier estimate (slap vs wrister) or a
+   distance-dependent table would tighten pass leads.
+8. **Crease repel weight playtest.** `CREASE_REPEL_WEIGHT = 0.9`
+   shipped untested. Tune up if bots still spam the crease, down if
+   they refuse to shoot from the high slot.
+9. **Engagement cooldown range.** 100–400ms speed-scaled. Validate
+   against post-strip recovery feel.
+
+---
+
 *End of AI_SKATER_SPEC.md. Companion to GOALIE_AI_SPEC.md. Comments welcome in code review, not in docs.*

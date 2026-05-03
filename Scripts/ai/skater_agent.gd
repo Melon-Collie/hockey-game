@@ -10,9 +10,20 @@ extends RefCounted
 var _scratch_input: InputState = InputState.new()
 var _sm: SkaterAgentStateMachine = SkaterAgentStateMachine.new()
 
+# Mouse-world lerp factor — closes 75% of the gap toward the SM's
+# desired mouse_world_pos each tick. At 240 Hz that's a ~14 ms
+# half-life: bot blade always lags slightly behind its target so
+# tracking isn't perfectly instant, dekes don't immediately get
+# matched, and aim transitions (state change, carrier change) read
+# as a smooth swing rather than a snap.
+const MOUSE_LERP_FACTOR: float = 0.75
+var _prev_mouse_world_pos: Vector3 = Vector3.ZERO
+var _has_prev_mouse: bool = false
 
-func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable) -> void:
-	_sm.setup(peer_id, team_id, brain, resolver)
+
+func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
+		is_left_handed: bool) -> void:
+	_sm.setup(peer_id, team_id, brain, resolver, is_left_handed)
 
 
 # Returns the InputState for this physics tick. Caller must not retain a
@@ -20,11 +31,36 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable) -> 
 func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> InputState:
 	_zero_input(_scratch_input, delta, host_timestamp)
 	_sm.dispatch(_scratch_input, snapshot)
+	# Lerp the SM's desired mouse_world_pos so the blade always lags a
+	# bit behind. Skipped on the first ever tick (no prev to lerp from)
+	# and after any tick where the SM left mouse at ZERO (state didn't
+	# explicitly aim — don't drag a stale lag value into a subsequent
+	# real aim).
+	if _has_prev_mouse and _scratch_input.mouse_world_pos != Vector3.ZERO:
+		_scratch_input.mouse_world_pos = _prev_mouse_world_pos.lerp(
+				_scratch_input.mouse_world_pos, MOUSE_LERP_FACTOR)
+	_prev_mouse_world_pos = _scratch_input.mouse_world_pos
+	_has_prev_mouse = _scratch_input.mouse_world_pos != Vector3.ZERO
 	return _scratch_input
 
 
 func get_state() -> SkaterAgentStateMachine.State:
 	return _sm.get_state()
+
+
+# ── Debug accessors ───────────────────────────────────────────────────────────
+# Read by AIController to populate the floating per-bot debug label.
+
+func debug_state_name() -> String:
+	return SkaterAgentStateMachine.State.keys()[_sm.get_state()]
+
+
+func debug_scores() -> Array[String]:
+	return _sm.debug_scores
+
+
+func debug_last_decision() -> String:
+	return _sm.debug_last_decision
 
 
 func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void:

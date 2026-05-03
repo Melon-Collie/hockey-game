@@ -38,10 +38,9 @@ static func compute(snapshot: WorldSnapshot, team_id: int, team_id_resolver: Cal
 	if snapshot == null or snapshot.puck_state == null or snapshot.skater_states.is_empty():
 		return roles
 	# Predicted puck position (where we expect it to be in F1_LOOKAHEAD_S).
-	var puck_pos: Vector3 = snapshot.puck_state.position
-	var puck_vel: Vector3 = snapshot.puck_state.velocity
-	var future_puck_x: float = puck_pos.x + puck_vel.x * F1_LOOKAHEAD_S
-	var future_puck_z: float = puck_pos.z + puck_vel.z * F1_LOOKAHEAD_S
+	var future_puck: Vector3 = AITrajectory.predict_at(
+			snapshot.puck_state.position, snapshot.puck_state.velocity,
+			F1_LOOKAHEAD_S)
 
 	# Collect teammates with predicted-distance scores.
 	var ranked: Array = []  # [peer_id, d2] pairs
@@ -49,10 +48,10 @@ static func compute(snapshot: WorldSnapshot, team_id: int, team_id_resolver: Cal
 		if int(team_id_resolver.call(peer_id)) != team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[peer_id]
-		var fx: float = s.position.x + s.velocity.x * F1_LOOKAHEAD_S
-		var fz: float = s.position.z + s.velocity.z * F1_LOOKAHEAD_S
-		var dx: float = fx - future_puck_x
-		var dz: float = fz - future_puck_z
+		var future_skater: Vector3 = AITrajectory.predict_at(
+				s.position, s.velocity, F1_LOOKAHEAD_S)
+		var dx: float = future_skater.x - future_puck.x
+		var dz: float = future_skater.z - future_puck.z
 		ranked.append([peer_id, dx * dx + dz * dz])
 
 	if ranked.is_empty():
