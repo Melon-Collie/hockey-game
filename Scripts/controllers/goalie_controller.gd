@@ -678,8 +678,15 @@ func _on_state_changed(_prev: State, new_state: State) -> void:
 func _is_threat_pressing() -> bool:
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
 			puck.global_position, _goal_line_z, _goal_center_x)
+	# Proximity-stay only applies when a hostile carrier is in the
+	# butterfly zone — they could shoot at any moment, hold the seal.
+	# Loose pucks (no carrier) skip this and fall through to the
+	# speed/direction check; a slow rebound sitting in the crease
+	# doesn't keep the goalie pinned in butterfly forever.
 	if threat_dist < recovery_proximity_threshold:
-		return true
+		var carrier: Skater = puck.get_carrier()
+		if carrier != null and (team_id == -1 or carrier.team_id != team_id):
+			return true
 	var speed_low: bool
 	var moving_away: bool
 	if is_server:
