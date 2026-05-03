@@ -29,16 +29,38 @@ static func compute(
 	if snapshot == null or snapshot.puck_state == null or roles.is_empty():
 		return result
 
-	# Collect non-carrier opponents with their threat level (closer to
-	# our net = more dangerous). Sorted ascending — opponents[0] is
-	# the most dangerous.
 	var carrier: int = snapshot.puck_state.carrier_peer_id
+
+	# Whether F1 can actually pressure the carrier — i.e. F1 is on the
+	# own-net side of the carrier ("in front of" them defensively). On
+	# a rush where F1 was forechecking and got caught up-ice, F1's
+	# chase reduces to a backcheck that won't arrive in time. In that
+	# case the back defender needs to step up and take the carrier as
+	# their mark, so we include the carrier in the mark pool.
+	var f1_in_position: bool = true
+	if carrier != -1:
+		var f1_pid: int = 0
+		for pid: int in roles:
+			if roles[pid] == AIRoleAssignment.ROLE_F1:
+				f1_pid = pid
+				break
+		if f1_pid != 0:
+			var f1_state: SkaterNetworkState = snapshot.skater_states.get(f1_pid)
+			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
+			if f1_state != null and carrier_state != null:
+				var f1_dist_net: float = absf(f1_state.position.z - own_goal_z)
+				var carrier_dist_net: float = absf(carrier_state.position.z - own_goal_z)
+				f1_in_position = f1_dist_net <= carrier_dist_net
+
+	# Collect opponents with their threat level (closer to our net =
+	# more dangerous). Carrier excluded only if F1 is in position to
+	# pressure them; otherwise the carrier is fair game for a mark.
+	# Sorted ascending — opponents[0] is the most dangerous.
 	var opponents: Array = []  # [peer_id, distance_to_our_net]
 	for peer_id: int in snapshot.skater_states:
 		if int(team_id_resolver.call(peer_id)) == team_id:
 			continue
-		if peer_id == carrier:
-			# F1 covers the carrier through chase, not man marking.
+		if peer_id == carrier and f1_in_position:
 			continue
 		var pos: Vector3 = snapshot.skater_states[peer_id].position
 		var d: float = absf(pos.z - own_goal_z)

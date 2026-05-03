@@ -63,10 +63,12 @@ const OPEN_MAN_MAX_SCORE: float = 0.4
 # to a SHOOT or PASS. Tunes how aggressive bots are.
 const ACTION_THRESHOLD: float = 0.25
 
-# DUMP zone factors. Bots dump readily from their own zone (clearing
-# under pressure), more reluctantly from neutral, and not at all from
-# the offensive zone (try to keep possession instead).
-const DUMP_OWN_ZONE_FACTOR: float = 1.0
+# DUMP zone factors. Lower in own zone than you might expect — 3v3
+# arcade hockey rewards breakouts more than safe clears, so bots try
+# pass/carry out first and only dump under heavy directional pressure.
+# Neutral-zone dump (e.g. carrying into a wall of defenders past the
+# red line) is the most natural use case. Never from OZ.
+const DUMP_OWN_ZONE_FACTOR: float = 0.4
 const DUMP_NEUTRAL_ZONE_FACTOR: float = 0.7
 const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
 

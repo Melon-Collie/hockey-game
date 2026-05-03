@@ -449,7 +449,12 @@ func _spawn_world() -> void:
 	if NetworkManager.is_host:
 		var team_id_resolver := func(peer_id: int) -> int:
 			return _registry.resolve_team_id_for_peer(peer_id)
-		team_brains = [TeamBrain.new(0, team_id_resolver), TeamBrain.new(1, team_id_resolver)]
+		var is_human_resolver := func(peer_id: int) -> bool:
+			return NetworkManager.is_real_peer(peer_id)
+		team_brains = [
+				TeamBrain.new(0, team_id_resolver, is_human_resolver),
+				TeamBrain.new(1, team_id_resolver, is_human_resolver),
+		]
 		_connect_goal_signals()
 
 

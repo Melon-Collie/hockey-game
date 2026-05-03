@@ -55,6 +55,10 @@ func debug_state_name() -> String:
 	return SkaterAgentStateMachine.State.keys()[_sm.get_state()]
 
 
+func debug_role() -> String:
+	return _sm.debug_role()
+
+
 func debug_scores() -> Array[String]:
 	return _sm.debug_scores
 

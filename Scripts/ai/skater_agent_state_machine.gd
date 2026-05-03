@@ -51,13 +51,23 @@ const F1_PRESSURE_RADIUS_M: float = 3.5
 const F1_HEAVY_PRESSURE_COUNT: int = 2
 const F2_SUPPORT_OFFSET_X: float = 1.5
 const F2_SUPPORT_OFFSET_Z_BACK: float = 1.5
-const F3_OFFSET_X_WEAK: float = 5.0
+# F3 shades to the STRONG side (puck side) by this much. Real-hockey
+# high man / trailer typically pinches with the play rather than
+# camping the weak side — a strong-side F3 closes off the
+# puck-supporting passing lane and is in position to pinch on a loose
+# puck. Small magnitude so they don't bunch with F2 (3 m strong-side).
+const F3_OFFSET_X_STRONG: float = 2.0
 const F3_OFFSET_Z_BACK: float = 8.0
-# When the puck is in our offensive zone, F3 plays "high man" — anchors
-# just inside the OZ blue line (BLUE_LINE_Z + this offset, on the OZ
-# side) instead of trailing the puck. Real-hockey safety valve: high
-# man can backcheck if the play turns over and skates the other way.
-const F3_HIGH_MAN_OZ_DEPTH_M: float = 1.0
+# In OZ, F3 trails the puck by this far toward our own goal — but
+# clamped between the OZ blue line and the back of the OZ faceoff
+# circles (see F3_OZ_DOT_BACK_OFFSET_M). 3v3 doesn't need a strict
+# "glued to the blue line" high man like 5v5; F3 just shouldn't crash
+# the net and let opponents get behind them on a turnover.
+const F3_OZ_TRAIL_DEPTH_M: float = 5.0
+# Faceoff circle radius (NHL standard ≈ 15 ft). The back edge of the
+# OZ faceoff circle (toward NZ) is the deepest F3 will go — past that
+# point, a turnover means we're gone before we can recover.
+const F3_OZ_DOT_BACK_OFFSET_M: float = 4.5
 const LEGACY_OFF_DEPTH: float = 4.0
 # Man-to-man gap: defender anchors this far on the goal-side of their
 # mark, on the line from mark → our net.
@@ -75,6 +85,24 @@ const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
 
 const QUIET_EYE_TICKS: int = 8
+# Bias applied to score_pass when the receiver is human. Bots pass to
+# the player about 25% more often than to another bot for the same
+# raw scoring conditions — the human is the actor, the bots are
+# support. Multiplicative so a bad pass to a human stays bad; only
+# affects close-call decisions. Clamped to 1.0 max so a human-boosted
+# score doesn't exceed the natural scoring range.
+const HUMAN_PASS_BIAS: float = 1.25
+# Aim wobble cones (half-angle). Bots fire perfectly past the goalie
+# shadow without these — robotic, every shot to the same spot.
+# Wobble is rolled once at shot/pass commit so the aim is consistent
+# through the wind-up; the actual offset is a lateral perpendicular
+# nudge whose magnitude scales with distance × tan(angle). 3° at a
+# 5 m slot shot ≈ 26 cm of lateral drift, enough to push some shots
+# wide and produce different results from the same setup tick.
+# Passes get a tighter cone — a missed pass is more visible than a
+# missed shot.
+const SHOT_AIM_WOBBLE_CONE_DEG: float = 3.0
+const PASS_AIM_WOBBLE_CONE_DEG: float = 1.5
 # How wide the goalie's shadow on the net plane should be considered
 # (meters, half-width). Tuneable in playtest.
 const GOALIE_SHADOW_HALF: float = 0.3
@@ -290,6 +318,14 @@ func get_state() -> State:
 	return _state
 
 
+# Read by AIController for the debug label. Returns "F1"/"F2"/"F3"/"OFF",
+# or "?" when the brain hasn't yet assigned a role (first ticks after spawn).
+func debug_role() -> String:
+	if _team_brain == null:
+		return "?"
+	return String(_team_brain.get_role(_peer_id))
+
+
 # ── Dispatch ─────────────────────────────────────────────────────────────────
 
 # Caller (SkaterAgent) is responsible for zeroing `input` before this call.
@@ -430,7 +466,8 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# running in SKATING_WITH_PUCK before the transition) puts the blade
 	# on the forehand side.
 	if _shoot_charge_tick == 0:
-		_shoot_aim_target = _shot_aim_point(snapshot, self_pos)
+		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
+		_shoot_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
 		var dir_xz: Vector3 = Vector3(
 				_shoot_aim_target.x - self_pos.x, 0.0, _shoot_aim_target.z - self_pos.z)
 		var aim_dir: Vector3
@@ -481,7 +518,9 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# blade-from-player at release, and the blade IK swings toward
 	# mouse_world_pos — so this fires the puck along the bot→receiver
 	# vector.
-	input.mouse_world_pos = _pass_aim_point(snapshot, self_pos)
+	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
+	input.mouse_world_pos = clean_pass_aim + _aim_wobble(
+			self_pos, clean_pass_aim, PASS_AIM_WOBBLE_CONE_DEG)
 	input.shoot_pressed = true
 	input.shoot_held = true
 	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
@@ -570,6 +609,12 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 				_attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents)
+		# Human teammates get a small score multiplier so the bot prefers
+		# feeding the player on close-call passes. peer_ids in
+		# [1, BOT_ID_BASE) are real ENet peers (humans); >= BOT_ID_BASE
+		# are synthetic bot ids.
+		if NetworkManager.is_real_peer(peer_id):
+			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
@@ -684,6 +729,31 @@ func _should_elevate_shot(snapshot: WorldSnapshot) -> bool:
 	return s == _GOALIE_STATE_BUTTERFLY \
 			or s == _GOALIE_STATE_RECOVERING \
 			or s == _GOALIE_STATE_SLIDING
+
+
+# Adds a small lateral perpendicular nudge to an aim point —
+# magnitude is `dist × tan(cone_deg)` with a uniformly random sign in
+# [-1, +1]. Returns Vector3.ZERO when the aim is degenerate (target
+# coincident with self) or cone is zero. Each call is rolled fresh,
+# so callers should cache the offset across a multi-tick state (e.g.
+# SHOOT_PRESSED captures it once at tick 0).
+func _aim_wobble(from: Vector3, to: Vector3, cone_deg: float) -> Vector3:
+	if cone_deg <= 0.0:
+		return Vector3.ZERO
+	var to_target := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	var dist: float = to_target.length()
+	if dist < 0.01:
+		return Vector3.ZERO
+	# Uniform [-1, +1] × cone, then convert angle to lateral offset.
+	# tan() at small angles ≈ angle in rad, but use tan() exactly so
+	# the wobble scales correctly even for atypical (large) cones.
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var theta_rad: float = deg_to_rad(cone_deg) * rng.randf_range(-1.0, 1.0)
+	var lateral: float = dist * tan(theta_rad)
+	# Perpendicular to aim direction in XZ — 90° rotation: (x,z) → (-z,x).
+	var dir: Vector3 = to_target / dist
+	return Vector3(-dir.z, 0.0, dir.x) * lateral
 
 
 # Shot aim past the goalie's projected shadow. Falls back to goal center
@@ -894,19 +964,27 @@ func _man_anchor(mark: SkaterNetworkState) -> Vector3:
 			lead_pos.z + dz * step))
 
 
-# F3 anchor — weak-side trailer, mirrored across the puck X and 8 m
-# back toward our own goal. Safety-valve role.
+# F3 anchor — strong-side trailer / high man. Shades to the puck side
+# (smaller magnitude than F2's apex offset so they don't stack) and
+# sits 8 m back toward our own goal as a safety valve.
 func _f3_anchor(puck_pos: Vector3) -> Vector3:
 	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
-	var weak_x: float = -strong_x
-	var x: float = puck_pos.x + weak_x * F3_OFFSET_X_WEAK
-	# High man: when the puck is in our OZ, F3 anchors near the OZ blue
-	# line ready to backcheck on a turnover — instead of trailing the
-	# puck deeper. When the puck is in NZ or our DZ, fall back to the
-	# legacy "above-puck" trailer position.
+	var x: float = puck_pos.x + strong_x * F3_OFFSET_X_STRONG
+	# In OZ: trail the puck back toward NZ by F3_OZ_TRAIL_DEPTH_M, but
+	# clamp into the high-zone band [OZ blue line, back of OZ faceoff
+	# circles]. F3 has Z-flexibility within that band so they're not
+	# rigidly camped at the blue line on every play, but they never
+	# crash deeper than the back of the dots — gets us beat on a
+	# turnover. In NZ / DZ: legacy above-puck trailer position.
 	var z: float
 	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
-		z = -_own_goal_dir * (GameRules.BLUE_LINE_Z + F3_HIGH_MAN_OZ_DEPTH_M)
+		var trail_z: float = puck_pos.z + _own_goal_dir * F3_OZ_TRAIL_DEPTH_M
+		var oz_blue_line_z: float = -_own_goal_dir * GameRules.BLUE_LINE_Z
+		var oz_dot_back_z: float = -_own_goal_dir * (
+				GameRules.ICING_FACEOFF_DOT_Z - F3_OZ_DOT_BACK_OFFSET_M)
+		var lo: float = minf(oz_blue_line_z, oz_dot_back_z)
+		var hi: float = maxf(oz_blue_line_z, oz_dot_back_z)
+		z = clampf(trail_z, lo, hi)
 	else:
 		z = puck_pos.z + _own_goal_dir * F3_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))

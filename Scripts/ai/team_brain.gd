@@ -25,14 +25,16 @@ var coverage_targets: Dictionary = {}   # peer_id -> opposing peer_id
 
 var _accumulator: float = 0.0
 var _team_id_resolver: Callable = Callable()
+var _is_human_resolver: Callable = Callable()
 # Cached own-goal Z derived from team_id at construction. Team 0
 # defends +GOAL_LINE_Z, Team 1 defends -GOAL_LINE_Z.
 var _own_goal_z: float = 0.0
 
 
-func _init(t: int, resolver: Callable) -> void:
+func _init(t: int, resolver: Callable, human_resolver: Callable) -> void:
 	team_id = t
 	_team_id_resolver = resolver
+	_is_human_resolver = human_resolver
 	_own_goal_z = GameRules.GOAL_LINE_Z if t == 0 else -GameRules.GOAL_LINE_Z
 
 
@@ -43,7 +45,7 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	if _accumulator < TICK_PERIOD:
 		return
 	_accumulator -= TICK_PERIOD
-	roles = AIRoleAssignment.compute(snapshot, team_id, _team_id_resolver)
+	roles = AIRoleAssignment.compute(snapshot, team_id, _team_id_resolver, _is_human_resolver)
 	coverage_targets = AICoverageAssignment.compute(
 			snapshot, team_id, _own_goal_z, _team_id_resolver, roles)
 

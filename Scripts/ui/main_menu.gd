@@ -523,6 +523,13 @@ func _build_offline_popup() -> void:
 	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
 	vbox.add_child(title)
 
+	var tutorial_btn := _make_button("Tutorial")
+	tutorial_btn.pressed.connect(func() -> void:
+		_offline_popup.visible = false
+		_do_start_tutorial())
+	SoundManager.wire_button(tutorial_btn)
+	vbox.add_child(tutorial_btn)
+
 	var free_play_btn := _make_button("Free Play")
 	free_play_btn.pressed.connect(func() -> void:
 		_offline_popup.visible = false
@@ -535,13 +542,6 @@ func _build_offline_popup() -> void:
 		_with_bots_popup.visible = true)
 	SoundManager.wire_button(with_bots_btn)
 	vbox.add_child(with_bots_btn)
-
-	var tutorial_btn := _make_button("Tutorial")
-	tutorial_btn.pressed.connect(func() -> void:
-		_offline_popup.visible = false
-		_do_start_tutorial())
-	SoundManager.wire_button(tutorial_btn)
-	vbox.add_child(tutorial_btn)
 
 
 	_offline_popup = Control.new()
