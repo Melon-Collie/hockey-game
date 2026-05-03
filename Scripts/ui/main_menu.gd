@@ -11,12 +11,15 @@ var _player_card_panel: PanelContainer = null
 var _options_popup: Control = null
 var _offline_popup: Control = null
 var _free_play_popup: Control = null
+var _with_bots_popup: Control = null
 var _online_popup: Control = null
 var _offline_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
 var _career_screen: CareerStatsScreen = null
 var _offline_away_color_id: String  = TeamColorRegistry.DEFAULT_AWAY_ID
 var _offline_home_btn: OptionButton = null
 var _offline_away_btn: OptionButton = null
+var _with_bots_home_btn: OptionButton = null
+var _with_bots_away_btn: OptionButton = null
 var _loading_screen: LoadingScreen = null
 var _exit_popup: Control = null
 var _card_name_label: Label = null
@@ -141,6 +144,7 @@ func _build_ui() -> void:
 	_build_exit_popup()
 	_build_offline_popup()
 	_build_free_play_popup()
+	_build_with_bots_popup()
 	_build_online_popup()
 	_build_player_card()
 	_loading_screen = LoadingScreen.new()
@@ -525,6 +529,13 @@ func _build_offline_popup() -> void:
 		_free_play_popup.visible = true)
 	vbox.add_child(free_play_btn)
 
+	var with_bots_btn := _make_button("With Bots")
+	with_bots_btn.pressed.connect(func() -> void:
+		_offline_popup.visible = false
+		_with_bots_popup.visible = true)
+	SoundManager.wire_button(with_bots_btn)
+	vbox.add_child(with_bots_btn)
+
 	var tutorial_btn := _make_button("Tutorial")
 	tutorial_btn.pressed.connect(func() -> void:
 		_offline_popup.visible = false
@@ -625,6 +636,98 @@ func _build_free_play_popup() -> void:
 	_free_play_popup.add_child(overlay)
 	_free_play_popup.add_child(panel)
 	add_child(_free_play_popup)
+
+
+# Mirror of _build_free_play_popup, but the start button routes through
+# the lobby — host configures bot slots / rules, then starts. Colors
+# are still picked here (same UI as Free Play) since the lobby's
+# color UI is per-player vote and we're alone in offline mode.
+func _build_with_bots_popup() -> void:
+	var overlay := ColorRect.new()
+	overlay.color = Color(0.0, 0.0, 0.0, 0.6)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.pressed:
+			_with_bots_popup.visible = false)
+
+	var panel_style := MenuStyle.panel()
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", panel_style)
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+
+	var vbox := VBoxContainer.new()
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 20)
+	panel.add_child(vbox)
+
+	var close_row := HBoxContainer.new()
+	var close_spacer := Control.new()
+	close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close_row.add_child(close_spacer)
+	var close_btn := MenuStyle.close_button()
+	close_btn.pressed.connect(func() -> void:
+		_with_bots_popup.visible = false
+		_offline_popup.visible = true)
+	SoundManager.wire_button(close_btn)
+	close_row.add_child(close_btn)
+	vbox.add_child(close_row)
+
+	var title := Label.new()
+	title.text = "With Bots"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	vbox.add_child(title)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 12)
+	vbox.add_child(grid)
+
+	var home_lbl := Label.new()
+	home_lbl.text = "Home:"
+	home_lbl.add_theme_font_size_override("font_size", 20)
+	home_lbl.add_theme_color_override("font_color", Color.WHITE)
+	home_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(home_lbl)
+
+	_with_bots_home_btn = _color_option_btn(_offline_home_color_id)
+	_with_bots_home_btn.item_selected.connect(func(idx: int) -> void:
+		_offline_home_color_id = TeamColorRegistry.get_all_ids()[idx]
+		_update_offline_color_exclusion())
+	grid.add_child(_with_bots_home_btn)
+
+	var away_lbl := Label.new()
+	away_lbl.text = "Away:"
+	away_lbl.add_theme_font_size_override("font_size", 20)
+	away_lbl.add_theme_color_override("font_color", Color.WHITE)
+	away_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(away_lbl)
+
+	_with_bots_away_btn = _color_option_btn(_offline_away_color_id)
+	_with_bots_away_btn.item_selected.connect(func(idx: int) -> void:
+		_offline_away_color_id = TeamColorRegistry.get_all_ids()[idx]
+		_update_offline_color_exclusion())
+	grid.add_child(_with_bots_away_btn)
+
+	_update_offline_color_exclusion()
+
+	var go_btn := _make_button("Continue to Lobby")
+	go_btn.pressed.connect(_do_start_offline_with_bots)
+	vbox.add_child(go_btn)
+
+	_with_bots_popup = Control.new()
+	_with_bots_popup.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_with_bots_popup.visible = false
+	_with_bots_popup.add_child(overlay)
+	_with_bots_popup.add_child(panel)
+	add_child(_with_bots_popup)
+
 
 func _build_online_popup() -> void:
 	var overlay := ColorRect.new()
@@ -783,18 +886,40 @@ func _color_option_btn(selected_id: String) -> OptionButton:
 
 func _update_offline_color_exclusion() -> void:
 	var ids: Array[String] = TeamColorRegistry.get_all_ids()
-	if _offline_home_btn != null:
+	# Sync both popups' home buttons (selection + away-color exclusion)
+	# so a pick made in one popup shows in the other when reopened.
+	for btn: OptionButton in [_offline_home_btn, _with_bots_home_btn]:
+		if btn == null:
+			continue
 		for i: int in ids.size():
-			_offline_home_btn.set_item_disabled(i, ids[i] == _offline_away_color_id)
-	if _offline_away_btn != null:
+			btn.set_item_disabled(i, ids[i] == _offline_away_color_id)
+			if ids[i] == _offline_home_color_id:
+				btn.select(i)
+	for btn: OptionButton in [_offline_away_btn, _with_bots_away_btn]:
+		if btn == null:
+			continue
 		for i: int in ids.size():
-			_offline_away_btn.set_item_disabled(i, ids[i] == _offline_home_color_id)
+			btn.set_item_disabled(i, ids[i] == _offline_home_color_id)
+			if ids[i] == _offline_away_color_id:
+				btn.select(i)
 
 func _do_start_offline() -> void:
 	NetworkManager.pending_home_color_id = _offline_home_color_id
 	NetworkManager.pending_away_color_id = _offline_away_color_id
 	NetworkManager.start_offline()
 	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
+
+
+# Same setup as _do_start_offline but routes through the lobby so the
+# host can mark bot slots before starting. NetworkManager.start_offline()
+# bypasses ENet entirely; the lobby's RPC dispatchers iterate
+# connected_peer_ids() which is empty in offline mode, so all the
+# notify_* broadcasts harmlessly no-op while local signals still fire.
+func _do_start_offline_with_bots() -> void:
+	NetworkManager.pending_home_color_id = _offline_home_color_id
+	NetworkManager.pending_away_color_id = _offline_away_color_id
+	NetworkManager.start_offline()
+	get_tree().change_scene_to_file(Constants.SCENE_LOBBY)
 
 
 func _do_start_tutorial() -> void:
