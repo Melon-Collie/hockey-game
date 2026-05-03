@@ -205,7 +205,10 @@ func test_dump_score_high_in_own_zone_under_forward_pressure() -> void:
 			Vector3(0.0, 0.0, -12.0),   # directly ahead
 	]
 	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, pressure)
-	assert_gt(s, 0.5, "blocked forward path in own zone should fire dump strongly")
+	# DZ dump caps at DUMP_OWN_ZONE_FACTOR (0.4) — heavy forward pressure
+	# clears ACTION_THRESHOLD (0.25) so the bot will commit to a dump.
+	assert_gt(s, AIActionScoring.ACTION_THRESHOLD,
+			"blocked forward path in own zone should clear the action threshold")
 
 
 func test_dump_score_low_when_pressure_is_only_behind() -> void:
