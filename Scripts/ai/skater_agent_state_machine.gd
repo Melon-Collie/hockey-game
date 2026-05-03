@@ -285,9 +285,16 @@ var _scratch_opponents: Array[Vector3] = []
 # Parallel buffer of opponent positions PREDICTED forward by the wrister
 # charge window. Used only by score_shoot — a wrister is a 250 ms time
 # commitment, so we score it against where defenders will be at release
-# time, not where they are at decision time. Pass / dump are one-tick
-# and use _scratch_opponents (current positions) as before.
+# time, not where they are at decision time. Dump is one-tick and uses
+# _scratch_opponents (current positions).
 var _scratch_opponents_shoot: Array[Vector3] = []
+# Per-receiver buffer of opponent positions PREDICTED forward by the
+# pass's flight time (distance / PASS_PUCK_SPEED_REF_M_S). Pass flight
+# is much longer than a wrister charge (0.5–1.1 s typical), so a
+# defender clearly about to step into the lane reads as clear under
+# current-position scoring. Rebuilt inside the score_pass loop in
+# _pick_action because flight time depends on shooter→receiver distance.
+var _scratch_opponents_pass: Array[Vector3] = []
 
 # Set when CARRY commits to PASS_PRESSED; consumed by _state_pass_pressed
 # the next tick. 0 means "no current pass target" (real peer_ids are
@@ -658,6 +665,14 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	# PASS score — one per teammate. Track the best. Ghosted teammates
 	# (currently offside) can't legally receive — their collision masks
 	# are off, so the puck would pass through them. Skip outright.
+	#
+	# Per-receiver flight-time prediction: a pass takes 0.5–1.1 s in the
+	# air and during that time both the receiver and any defenders
+	# move. Score against the FUTURE state (where the puck actually
+	# arrives), not the snapshot state — otherwise a defender about to
+	# step into the lane reads as clear and we feed them the puck.
+	# This matches what `_pass_aim_point` does at press time, so the
+	# scoring decision and the actual aim are now consistent.
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
 	for peer_id: int in snapshot.skater_states:
@@ -668,12 +683,25 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		if receiver_state.is_ghost:
 			continue
-		var receiver: Vector3 = receiver_state.position
+		var dist: float = self_pos.distance_to(receiver_state.position)
+		var flight_t: float = clampf(
+				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
+		var receiver: Vector3 = AITrajectory.predict_at(
+				receiver_state.position, receiver_state.velocity, flight_t)
+		_scratch_opponents_pass.clear()
+		for opp_pid: int in snapshot.skater_states:
+			if opp_pid == _peer_id:
+				continue
+			if int(_team_id_resolver.call(opp_pid)) == _team_id:
+				continue
+			var opp_state: SkaterNetworkState = snapshot.skater_states[opp_pid]
+			_scratch_opponents_pass.append(AITrajectory.predict_at(
+					opp_state.position, opp_state.velocity, flight_t))
 		var s: float = AIActionScoring.score_pass(
 				self_pos, receiver, receiver_state.facing,
 				_attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-				_scratch_opponents)
+				_scratch_opponents_pass)
 		# Human teammates get a small score multiplier so the bot prefers
 		# feeding the player on close-call passes. peer_ids in
 		# [1, BOT_ID_BASE) are real ENet peers (humans); >= BOT_ID_BASE
