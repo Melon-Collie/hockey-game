@@ -103,6 +103,28 @@ const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
 
 const QUIET_EYE_TICKS: int = 8
+
+# After CARRY's `_pick_action` chooses an action (PASS/DUMP/SHOOT/
+# SLAPPER), the bot doesn't transition immediately — it pre-aims by
+# setting the mouse target to the action's aim direction and waits
+# for the motion-limited mouse to converge before firing. Without
+# this, the action state's first tick fires with the mouse still
+# mid-traversal from CARRY's previous target, so quick-shot
+# direction (PASS/DUMP) and slapper locked-direction (SLAPPER) end
+# up at whatever angle the mouse happened to be at.
+#
+# AIM_CONVERGED_DIST_M is the distance threshold treated as
+# "converged" — must be larger than the per-tick step
+# (MOUSE_MAX_SPEED_M_S * MOUSE_TICK_DELTA = 0.0625 m at 240 Hz)
+# plus mouse noise (MOUSE_NOISE_STD_M = 0.02 m) so the bot doesn't
+# get stuck oscillating just inside the threshold.
+#
+# INTENT_MAX_WAIT_TICKS is a safety timeout: after this many ticks
+# of waiting, fire anyway. A receiver who keeps moving might never
+# let the mouse "fully" converge; the timeout keeps the bot from
+# pre-aiming forever.
+const AIM_CONVERGED_DIST_M: float = 0.15
+const INTENT_MAX_WAIT_TICKS: int = 60   # ~250 ms at 240 Hz
 # Bias applied to score_pass when the receiver is human. Bots pass to
 # the player about 25% more often than to another bot for the same
 # raw scoring conditions — the human is the actor, the bots are
@@ -472,6 +494,20 @@ var _scratch_opponents_pass: Array[Vector3] = []
 # either 1+ for humans or 10000+ for bots, so 0 is safe as sentinel).
 var _pass_target_peer_id: int = 0
 
+# CARRY pre-aim state: when `_pick_action` chooses an action, it
+# stores the action here instead of transitioning immediately. CARRY
+# then pre-aims the mouse toward the action's direction and waits
+# for convergence before transitioning. State.CARRY = "no intent."
+var _intended_action: State = State.CARRY
+var _intent_wait_ticks: int = 0
+
+# Has the slapper-without-puck slap_pressed fired yet inside
+# ONE_TIMER_CHARGE? Reset on state entry. While false the bot is
+# still pre-aiming (mouse converging to slap aim direction); once
+# true the slapper is charging, locked direction is captured, and
+# mouse position no longer affects the shot direction.
+var _one_timer_slap_fired: bool = false
+
 # Engagement cooldown — see ENGAGEMENT_COOLDOWN_TICKS. _prev_carrier
 # tracks last tick's puck.carrier_peer_id so we can detect the
 # transition into "loose".
@@ -713,17 +749,74 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# and drift toward it — patient cycling.
 	var anchor: Vector3 = _carry_anchor(snapshot, self_pos)
 	_apply_steering(input, snapshot, self_pos, anchor)
-	input.mouse_world_pos = _step_mouse_toward(_carry_mouse_aim(snapshot, self_pos))
-	# Transitions
+
 	if not have_puck:
+		_intended_action = State.CARRY
 		_set_state(_post_puck_lost_state())
 		return
-	if _ticks_in_state < QUIET_EYE_TICKS:
-		return
-	# Quiet-eye expired — pick the highest-scoring action. CARRY is the
-	# implicit default if nothing clears the threshold (set elsewhere as
-	# AIActionScoring.ACTION_THRESHOLD).
-	_pick_action(snapshot, self_pos)
+
+	# Decide on an action when quiet-eye expires AND we don't already
+	# have a pending intent. Once an intent is set we hold it until
+	# the mouse converges to its aim or the wait timeout fires —
+	# re-picking each tick would let the intent oscillate between
+	# two close-scoring actions and the mouse would never converge
+	# to either.
+	if _ticks_in_state >= QUIET_EYE_TICKS and _intended_action == State.CARRY:
+		_pick_action(snapshot, self_pos)
+
+	# Mouse target depends on whether we're carrying or pre-aiming
+	# for an action.
+	var mouse_target: Vector3
+	if _intended_action == State.CARRY:
+		mouse_target = _carry_mouse_aim(snapshot, self_pos)
+	else:
+		mouse_target = _aim_target_for_intent(snapshot, self_pos)
+	input.mouse_world_pos = _step_mouse_toward(mouse_target)
+
+	# If we're pre-aiming, wait for mouse convergence (or timeout)
+	# before transitioning to the action state. The action state
+	# fires immediately on entry, so the mouse direction at that
+	# moment is what gets locked in (PASS/DUMP quick-shot direction,
+	# SLAPPER locked_dir).
+	if _intended_action != State.CARRY:
+		var aim_dist: float = _mouse_pos.distance_to(mouse_target)
+		if aim_dist < AIM_CONVERGED_DIST_M or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
+			_set_state(_intended_action)
+			_intended_action = State.CARRY
+			_intent_wait_ticks = 0
+		else:
+			_intent_wait_ticks += 1
+
+
+# Returns the mouse target (in world XZ) the bot should be aiming at
+# while pre-aiming for `_intended_action`. Always 2 m forward in the
+# action's aim direction — direction is what matters for shot fire,
+# not distance, so we keep the target close to the bot for fast
+# convergence under the motion-limited model.
+func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	match _intended_action:
+		State.PASS_PRESSED:
+			return _aim_2m_toward(self_pos, _pass_aim_point(snapshot, self_pos))
+		State.DUMP_PRESSED:
+			return _aim_2m_toward(self_pos, _dump_aim_point(self_pos))
+		State.SHOOT_PRESSED, State.SLAPPER_PRESSED:
+			return _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
+		_:
+			return _carry_mouse_aim(snapshot, self_pos)
+
+
+# Returns a point 2 m from `self_pos` in the direction toward
+# `aim_world`. Used to put the mouse close to the bot in the
+# correct DIRECTION for an upcoming shot/pass, so it converges
+# quickly under the motion model. Distance to the actual aim point
+# doesn't matter — the shot direction at fire time depends on
+# (mouse - shoulder) or (mouse - blade), which is a unit direction.
+func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
+	var to_aim: Vector3 = aim_world - self_pos
+	to_aim.y = 0.0
+	if to_aim.length_squared() < 0.0001:
+		return self_pos + Vector3.FORWARD * CARRY_BLADE_AIM_FORWARD_M
+	return self_pos + to_aim.normalized() * CARRY_BLADE_AIM_FORWARD_M
 
 
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -945,13 +1038,29 @@ func _state_one_timer_charge(input: InputState, snapshot: WorldSnapshot, self_po
 		_set_state(State.OFF_PUCK)
 		return
 
-	# mouse_world_pos at slap_pressed time locks the slapper aim
-	# direction. Aim at the goal-shadow open net so the one-timer
-	# fires there.
-	input.mouse_world_pos = _step_mouse_toward(_shot_aim_point(snapshot, self_pos))
+	# Aim phase: wait for the motion-limited mouse to converge to the
+	# slap-aim direction before firing slap_pressed. The locked
+	# slapper direction is captured at slap_pressed time from
+	# (mouse - blade), so firing before convergence locks a wrong
+	# direction (mouse mid-traversal from OFF_PUCK's ready-stance
+	# target). After slap_pressed fires we just hold mouse on the
+	# shot aim — the locked direction is set, mouse position no
+	# longer affects the shot direction.
+	if not _one_timer_slap_fired:
+		var aim_target: Vector3 = _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
+		input.mouse_world_pos = _step_mouse_toward(aim_target)
+		var converged: bool = _mouse_pos.distance_to(aim_target) < AIM_CONVERGED_DIST_M
+		if converged or _ticks_in_state >= INTENT_MAX_WAIT_TICKS:
+			input.slap_pressed = true
+			_one_timer_slap_fired = true
+		else:
+			# Still aiming — hold slap_held off until we fire.
+			input.slap_held = false
+			return
 
-	if _ticks_in_state == 0:
-		input.slap_pressed = true
+	# Charge phase: slap_pressed already fired; locked direction is
+	# set. Hold slap_held and wait for the puck.
+	input.mouse_world_pos = _step_mouse_toward(_shot_aim_point(snapshot, self_pos))
 
 	# Release window: drop slap_held when the puck nears the actual
 	# slapper zone (offset forward + blade-side from us), NOT just the
@@ -1017,21 +1126,26 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
 	if max_score < AIActionScoring.ACTION_THRESHOLD:
 		return
+	# Set intent instead of transitioning immediately. CARRY's per-tick
+	# logic pre-aims toward this action's direction and transitions
+	# only when the motion-limited mouse converges (or the wait
+	# timeout fires) — see _state_carry.
 	if shoot_score >= best_pass_score and shoot_score >= dump_score:
 		_shot_is_elevated = _should_elevate_shot(snapshot)
 		if shoot_use_slapper:
 			debug_last_decision = "SLAP"
-			_set_state(State.SLAPPER_PRESSED)
+			_intended_action = State.SLAPPER_PRESSED
 		else:
 			debug_last_decision = "SHOOT"
-			_set_state(State.SHOOT_PRESSED)
+			_intended_action = State.SHOOT_PRESSED
 	elif best_pass_score >= dump_score:
 		_pass_target_peer_id = best_pass_peer
 		debug_last_decision = "PASS→%d" % (best_pass_peer % 1000)
-		_set_state(State.PASS_PRESSED)
+		_intended_action = State.PASS_PRESSED
 	else:
 		debug_last_decision = "DUMP"
-		_set_state(State.DUMP_PRESSED)
+		_intended_action = State.DUMP_PRESSED
+	_intent_wait_ticks = 0
 
 
 # Populates the three scratch lists used by _pick_action's scoring:
@@ -2170,13 +2284,22 @@ func _set_state(s: State) -> void:
 		if s == State.SLAPPER_PRESSED:
 			_slapper_charge_tick = 0
 			_slapper_aim_target = Vector3.ZERO
+		# ONE_TIMER_CHARGE has its own aim-then-fire flow — reset the
+		# "slap fired" flag so the next entry re-runs the aim wait.
+		if s == State.ONE_TIMER_CHARGE:
+			_one_timer_slap_fired = false
 		# Give-and-go ends the moment we have the puck again — return
 		# pass succeeded (or we picked up our own dump). The CARRY state
 		# uses _carry_anchor, not the off-puck override, so leaving the
 		# timer set wouldn't actively misbehave, but clearing here keeps
 		# the next OFF_PUCK transition (post-shot, e.g.) clean.
+		# Intent + wait counter reset on CARRY entry so a new puck
+		# pickup gets a fresh _pick_action evaluation rather than
+		# inheriting stale state from a previous CARRY.
 		if s == State.CARRY:
 			_give_and_go_remaining_ticks = 0
+			_intended_action = State.CARRY
+			_intent_wait_ticks = 0
 		_state = s
 		_ticks_in_state = 0
 
