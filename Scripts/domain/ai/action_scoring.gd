@@ -12,12 +12,19 @@ class_name AIActionScoring
 # on a clear lane between shooter and receiver.
 
 # An opponent within this distance counts toward "pressure" on a target.
+# Tuning: raise toward 5 if bots feel oblivious to nearby defenders;
+# lower toward 3 if pressure trips on too-distant marks.
 const PRESSURE_RADIUS_M: float = 4.0
 # How many opponents within radius == fully pressured (score multiplier 0).
+# At 3 (default), three forward-cone opponents at full weight saturate
+# pressure. Raise toward 4 to make pressure harder to saturate (less
+# trigger-happy); lower toward 2 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 3
 
 # Beyond this range, shots score 0 from distance alone — keeps bots from
-# launching pucks at the goalie from the blue line.
+# launching pucks at the goalie from the blue line. Raise toward 22 if
+# bots refuse to take long shots even when wide open; lower toward 14
+# if blue-line shots are too common.
 const SHOT_RANGE_FALLOFF_M: float = 18.0
 
 # Shooting-angle cone, measured from the net's outward normal (the
@@ -31,18 +38,25 @@ const SHOT_RANGE_FALLOFF_M: float = 18.0
 #      a shadow projecting off the net plane as fully open net — but
 #      from a 75° angle the actual visible net is narrow regardless
 #      of where the shadow lands.
+# Tuning: widen FULL→60° / ZERO→90° if bots over-pass on legitimate
+# off-angle shots; tighten FULL→40° / ZERO→70° if bad-angle shots are
+# too common.
 const SHOT_ANGLE_FULL_DEG: float = 50.0
 const SHOT_ANGLE_ZERO_DEG: float = 80.0
 
 # Lane-clear: an opponent within this perpendicular distance from the
 # bot→receiver line segment fully blocks the pass. Score scales linearly
-# with distance up to LANE_CLEAR_RADIUS_M (clear).
+# with distance up to LANE_CLEAR_RADIUS_M (clear). Roughly the
+# stick-blade reach of a lane defender. Raise toward 2.0 if passes
+# still get picked off mid-lane; lower toward 1.0 if bots over-reject
+# legitimate threading passes.
 const LANE_CLEAR_RADIUS_M: float = 1.5
 
 # Outlet pass scoring — when a receiver is "more advanced" toward the
 # attacking goal but too far to shoot themselves. Receiver must be at
 # least PASS_MIN_ADVANCE_M closer to goal to score above 0; saturates
-# at PASS_MAX_ADVANCE_M.
+# at PASS_MAX_ADVANCE_M. Tuning: raise MIN if bots over-pass for tiny
+# advancement gains; raise MAX if long stretch passes feel under-valued.
 const PASS_MIN_ADVANCE_M: float = 3.0
 const PASS_MAX_ADVANCE_M: float = 12.0
 
@@ -55,12 +69,16 @@ const PASS_MAX_ADVANCE_M: float = 12.0
 # quality contribution so a wide-open teammate doesn't drown out a
 # shot or genuine outlet pass when those are available; it does clear
 # ACTION_THRESHOLD (0.25) on its own when the lane and pressure terms
-# cooperate.
+# cooperate. Tuning: raise OPEN_MAN_MAX_SCORE toward 0.5 to make bots
+# pass-happy on possession; lower toward 0.3 if they pass too often
+# instead of carrying.
 const OPEN_MAN_RADIUS_M: float = 3.0
 const OPEN_MAN_MAX_SCORE: float = 0.4
 
-# Score threshold below which the SM stays in CARRY rather than committing
-# to a SHOOT or PASS. Tunes how aggressive bots are.
+# Score threshold below which the SM stays in CARRY rather than
+# committing to a SHOOT or PASS. Tunes how aggressive bots are.
+# Raise toward 0.35 to make bots more patient (carry more); lower
+# toward 0.15 to make them committal (shoot/pass on weaker reads).
 const ACTION_THRESHOLD: float = 0.25
 
 # DUMP zone factors. Lower in own zone than you might expect — 3v3
@@ -68,9 +86,24 @@ const ACTION_THRESHOLD: float = 0.25
 # pass/carry out first and only dump under heavy directional pressure.
 # Neutral-zone dump (e.g. carrying into a wall of defenders past the
 # red line) is the most natural use case. Never from OZ.
+# Tuning: raise DUMP_OWN_ZONE_FACTOR toward 0.6 if bots refuse to
+# clear under heavy DZ pressure; raise DUMP_NEUTRAL_ZONE_FACTOR toward
+# 0.85 if they should be more willing to dump in (less common in 3v3).
 const DUMP_OWN_ZONE_FACTOR: float = 0.4
 const DUMP_NEUTRAL_ZONE_FACTOR: float = 0.7
 const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
+
+# NZ-specific clear-path suppression. In 3v3 the carrier should drive
+# into the OZ rather than dump whenever there's open ice ahead —
+# controlled entries beat dumps in this format. When _has_clear_forward_path
+# returns true, the NZ dump score is multiplied by this factor, dropping
+# 0.7 × 1.0 (full pressure) to 0.21 — below ACTION_THRESHOLD (0.25), so
+# DUMP loses to CARRY. Only triggers in NZ — DZ and OZ already handle
+# correctly without this branch. Tuning: raise RADIUS toward 5 for a
+# stricter "must have a real wall" rule; lower SUPPRESSION toward 0.1
+# to harder-suppress NZ dumps with any open ice.
+const NZ_DUMP_CLEAR_PATH_RADIUS_M: float = 3.0
+const NZ_DUMP_CLEAR_PATH_SUPPRESSION: float = 0.3
 
 
 # Returns SHOOT score in [0, 1]. Multiplicative product of:
@@ -96,7 +129,11 @@ static func score_shoot(
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			shooter, goalie_pos, attacking_goal.z, net_half_width, shadow_half)
 	var lane: float = _lane_clear(shooter, aim, opponents)
-	var pressure_factor: float = 1.0 - _pressure(shooter, opponents)
+	# Directional pressure: only opponents in the forward cone toward
+	# the attacking goal disrupt the shot. A defender behind the
+	# shooter or directly beside them can't really stop the release —
+	# the threat is bodies between us and the net.
+	var pressure_factor: float = 1.0 - _pressure(shooter, opponents, attacking_goal - shooter)
 	return geom * lane * pressure_factor
 
 
@@ -107,6 +144,12 @@ static func score_shoot(
 #                           "tape-to-tape into the slot" and "outlet
 #                           pass to a teammate up-ice"
 #   - 1 - receiver_pressure: how open the receiver is to catch
+#
+# `receiver_quality_bonus` (default 1.0) multiplies receiver_quality
+# BEFORE the [0, 1] clamp. Used by the carrier to value a slapper-
+# charging teammate's shot opportunity higher without short-circuiting
+# the lane / pressure terms — a slapper-charging receiver behind a
+# blocked lane is still a 0-score pass.
 static func score_pass(
 		shooter: Vector3,
 		receiver: Vector3,
@@ -115,7 +158,8 @@ static func score_pass(
 		goalie_pos: Vector3,
 		net_half_width: float,
 		shadow_half: float,
-		opponents: Array[Vector3]) -> float:
+		opponents: Array[Vector3],
+		receiver_quality_bonus: float = 1.0) -> float:
 	# A receiver past the attacking goal line is degenerate (can't shoot,
 	# wraparound passes are weird). Skip.
 	if _is_past_goal_line(receiver, attacking_goal):
@@ -133,8 +177,16 @@ static func score_pass(
 	var receiver_geom: float = _shot_geometry(receiver, attacking_goal, goalie_pos, net_half_width, shadow_half)
 	var advance: float = _advancement_score(shooter, receiver, attacking_goal)
 	var open: float = _receiver_open_score(receiver, receiver_facing, opponents)
-	var receiver_quality: float = maxf(maxf(receiver_geom, advance), open)
-	var pressure_factor: float = 1.0 - _pressure(receiver, opponents)
+	var receiver_quality: float = clampf(
+			maxf(maxf(receiver_geom, advance), open) * receiver_quality_bonus,
+			0.0, 1.0)
+	# Directional pressure on the receiver — opponents in the receiver's
+	# forward cone toward the attacking goal are the ones who'll
+	# pressure them on reception. Defenders behind the receiver (between
+	# them and our own net) aren't realistic interception threats; the
+	# shooter→receiver lane block is already handled separately by
+	# `_lane_clear`.
+	var pressure_factor: float = 1.0 - _pressure(receiver, opponents, attacking_goal - receiver)
 	return lane * receiver_quality * pressure_factor
 
 
@@ -165,6 +217,15 @@ static func score_dump(
 	# attacking goal.
 	var forward: Vector3 = attacking_goal - shooter
 	var pressure_factor: float = _pressure(shooter, opponents, forward)
+	# NZ clear-path override: in the neutral zone with open ice ahead,
+	# the carrier should drive in rather than dump. The pressure term
+	# alone isn't enough — its 4 m omnidirectional radius can still tag
+	# off-axis defenders and lift NZ dump score above threshold even
+	# when the forward lane is wide open.
+	if zone_factor == DUMP_NEUTRAL_ZONE_FACTOR \
+			and _has_clear_forward_path(shooter, attacking_goal, opponents,
+					NZ_DUMP_CLEAR_PATH_RADIUS_M):
+		return zone_factor * NZ_DUMP_CLEAR_PATH_SUPPRESSION * pressure_factor
 	return zone_factor * pressure_factor
 
 
@@ -314,12 +375,11 @@ static func _receiver_open_score(
 
 
 # Pressure score in [0, 1] for "do nearby opponents threaten this
-# target." Wraps _opponent_density with the standard PRESSURE_*
-# radii. `forward` is optional: when non-zero, opponents are weighted
-# by their position in the target's forward half-plane (use for "is
-# my forward path blocked" — dump, carry, shoot). Vector3.ZERO means
-# omnidirectional (interceptors can come from anywhere — receiver
-# pressure on a pass).
+# target." Wraps _opponent_density with the standard PRESSURE_* radii.
+# All current callers (score_shoot, score_pass receiver, score_dump)
+# pass a forward direction so the cube falloff applies; the
+# Vector3.ZERO default is kept as a safety fallback (omnidirectional,
+# every opponent in radius weighted 1.0) but isn't currently used.
 static func _pressure(target: Vector3, opponents: Array[Vector3],
 		forward: Vector3 = Vector3.ZERO) -> float:
 	return _opponent_density(target, opponents, forward, PRESSURE_RADIUS_M, PRESSURE_MAX_COUNT)
@@ -327,8 +387,12 @@ static func _pressure(target: Vector3, opponents: Array[Vector3],
 
 # Generic weighted opponent density. Counts opponents within `radius`
 # of `target`, normalizing the count by `max_count` so the result
-# lives in [0, 1]. Direction-weighted when `forward` is non-zero
-# (front = 1.0, perpendicular = 0.5, behind = 0.0).
+# lives in [0, 1]. Direction-weighted when `forward` is non-zero with
+# a steep cube falloff: weight = max(0, dot)^3 where dot is the cosine
+# of the angle from forward. Behind = 0, perpendicular = 0, 45° forward
+# ≈ 0.35, 30° forward ≈ 0.65, dead front = 1.0. The cube falloff
+# matches the hockey intuition that defenders behind or beside the play
+# don't pressure the carrier — only opponents in the forward path do.
 static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 		forward: Vector3, radius: float, max_count: int) -> float:
 	var directional: bool = forward.length_squared() > 0.0001
@@ -352,10 +416,40 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 		if directional:
 			var d: float = sqrt(d2)
 			var dot: float = 0.0 if d < 0.0001 else (dx * fwd_x + dz * fwd_z) / d
-			weighted += 0.5 + 0.5 * dot
+			var clamped: float = maxf(0.0, dot)
+			weighted += clamped * clamped * clamped
 		else:
 			weighted += 1.0
 	return clampf(weighted / float(max_count), 0.0, 1.0)
+
+
+# True iff there is no opponent within `radius` of `from` whose
+# position projects forward of `from` along the from→toward axis.
+# Used by score_dump's NZ override to detect "open ice ahead." Tighter
+# than the omnidirectional pressure check — we only care about
+# defenders we'd have to skate through, not ones to the sides or
+# behind.
+static func _has_clear_forward_path(from: Vector3, toward: Vector3,
+		opponents: Array[Vector3], radius: float) -> bool:
+	var fwd_x: float = toward.x - from.x
+	var fwd_z: float = toward.z - from.z
+	var fl: float = sqrt(fwd_x * fwd_x + fwd_z * fwd_z)
+	if fl < 0.001:
+		return true
+	var inv_fl: float = 1.0 / fl
+	fwd_x *= inv_fl
+	fwd_z *= inv_fl
+	var r2: float = radius * radius
+	for op: Vector3 in opponents:
+		var dx: float = op.x - from.x
+		var dz: float = op.z - from.z
+		var d2: float = dx * dx + dz * dz
+		if d2 >= r2:
+			continue
+		# Anything strictly forward of the carrier counts as in the way.
+		if dx * fwd_x + dz * fwd_z > 0.0:
+			return false
+	return true
 
 
 # Lane-clear factor in [0, 1]. 1.0 = no opponent within

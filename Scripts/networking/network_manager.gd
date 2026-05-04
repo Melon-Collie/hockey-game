@@ -830,6 +830,12 @@ func send_slot_assignment(peer_id: int, team_slot: int, team_id: int, jersey_col
 	assign_player_slot.rpc_id(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color)
 
 func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10) -> void:
+	# Offline mode: no peers to broadcast to, and rpc() with no
+	# multiplayer peer pushes an error. Bot spawn still happens locally
+	# via _registry.spawn_bot in the caller; this RPC is purely the
+	# fan-out so connected clients see the bot.
+	if is_offline_mode:
+		return
 	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number)
 
 func send_sync_existing_players(peer_id: int, player_data: Array) -> void:

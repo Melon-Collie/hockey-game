@@ -22,6 +22,14 @@ const TICK_PERIOD: float = 1.0 / 6.0
 var team_id: int = 0
 var roles: Dictionary = {}              # peer_id -> StringName (F1 / F2 / F3 / OFF)
 var coverage_targets: Dictionary = {}   # peer_id -> opposing peer_id
+# Each off-puck bot publishes the world-space anchor it's currently
+# steering toward each tick. Carrier bots read this to lead passes
+# more accurately — a receiver who is currently moving away from the
+# puck but steering toward an anchor will end up at the anchor, not
+# at the velocity-extrapolated position. Cleared per-tick by writers;
+# stale entries are harmless because pass aim falls back to velocity-
+# only prediction when no anchor is published.
+var published_anchors: Dictionary = {}  # peer_id -> Vector3
 
 var _accumulator: float = 0.0
 var _team_id_resolver: Callable = Callable()
@@ -57,3 +65,15 @@ func get_role(peer_id: int) -> StringName:
 func get_coverage_target(peer_id: int) -> int:
 	# Returns 0 (sentinel — no real peer_id is 0) when no mark assigned.
 	return coverage_targets.get(peer_id, 0)
+
+
+# Called by each off-puck bot per physics tick to publish where they're
+# steering. Read by the carrier in `_pass_aim_point` for receiver lead.
+func publish_anchor(peer_id: int, anchor: Vector3) -> void:
+	published_anchors[peer_id] = anchor
+
+
+# Returns the receiver's published steering anchor, or Vector3.ZERO if
+# none has been published yet (carrier should fall back to velocity-only).
+func get_published_anchor(peer_id: int) -> Vector3:
+	return published_anchors.get(peer_id, Vector3.ZERO)
