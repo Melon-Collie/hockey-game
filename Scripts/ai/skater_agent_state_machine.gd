@@ -162,7 +162,14 @@ const HUMAN_PASS_BIAS: float = 1.25
 # Passes get a tighter cone — a missed pass is more visible than a
 # missed shot.
 const SHOT_AIM_WOBBLE_CONE_DEG: float = 3.0
-const PASS_AIM_WOBBLE_CONE_DEG: float = 1.5
+# Passes get a much tighter cone than shots. A missed pass is more
+# visible (puck goes past the receiver into open space) and humans
+# don't randomly mis-aim a pass to a teammate within stick reach the
+# way they might mis-aim a contested shot. Set near zero so pass
+# accuracy is essentially perfect; the only natural pass error
+# remaining comes from the bot firing before the mouse fully
+# converges to the aim, plus receiver-lead inaccuracy.
+const PASS_AIM_WOBBLE_CONE_DEG: float = 0.3
 # How wide the goalie's shadow on the net plane should be considered
 # (meters, half-width). Tuneable in playtest.
 const GOALIE_SHADOW_HALF: float = 0.3
@@ -177,6 +184,16 @@ const PASS_PUCK_SPEED_REF_M_S: float = 22.0
 # Cap on pass lead so a degenerate state (zero pass speed estimate, or a
 # long bomb across the rink) doesn't project the receiver into next week.
 const PASS_LEAD_MAX_S: float = 0.6
+# Blend factor between pure-velocity and anchor-based receiver
+# prediction. 0.0 = velocity only (the old behavior); 1.0 = assume the
+# receiver heads dead at their anchor at their current speed. The
+# receiver in reality follows a curved path between the two — they
+# can't change direction instantly but they aren't ballistic either.
+# 0.5 splits the difference and visibly tightens passes to receivers
+# who are mid-turn toward an anchor (e.g., F3 cutting across to the
+# weak side, give-and-go cuts) without overshooting receivers who are
+# already lined up.
+const PASS_RECEIVER_ANCHOR_BLEND: float = 0.5
 # DUMP aim — deep into the attacking zone, on the bot's strong side.
 # DUMP_CORNER_X is the absolute X of the dump target (corner area).
 # DUMP_DEPTH_FROM_GOAL_M is how far in front of the attacking goal line
@@ -695,6 +712,10 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Anchor depends on role: F2 strong-side support, F3 weak-side trailer,
 	# or legacy "above puck" for any unassigned role (4+ teammate case).
 	var anchor: Vector3 = _off_puck_anchor(snapshot.puck_state.position, self_pos, snapshot)
+	# Publish for the carrier's pass aim — they'll lead the receiver
+	# toward where we're steering instead of just our current velocity.
+	if _team_brain != null:
+		_team_brain.publish_anchor(_peer_id, anchor)
 	# Exempt the mark from opponent repel during man-to-man: defenders
 	# are supposed to stand shoulder-to-shoulder with their mark, not
 	# be pushed off by them. Without this, a defender marking a crease-
@@ -1236,8 +1257,7 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 		var dist: float = self_pos.distance_to(receiver_state.position)
 		var flight_t: float = clampf(
 				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
-		var receiver: Vector3 = AITrajectory.predict_at(
-				receiver_state.position, receiver_state.velocity, flight_t)
+		var receiver: Vector3 = _predict_receiver(peer_id, receiver_state, flight_t)
 		if not _is_pass_target_reachable(self_pos, self_facing_xz, receiver):
 			continue
 		_scratch_opponents_pass.clear()
@@ -1292,21 +1312,54 @@ func _update_debug_scores(shoot_score: float, shoot_use_slapper: bool,
 		debug_scores.append("%s:%.2f" % [r[0], r[1]])
 
 
-# Lead the receiver by their flight-time along their current velocity.
-# Long passes lead further than short ones — the puck takes longer to
-# arrive, so the receiver moves further during transit. Falls back to
-# the goal if the target slot disappeared between picking and pressing
-# (rare — bot demoted, peer disconnected, etc.).
+# Lead the receiver by their flight-time along their current velocity
+# blended with their published steering anchor. Long passes lead
+# further than short ones — the puck takes longer to arrive, so the
+# receiver moves further during transit. Falls back to the goal if
+# the target slot disappeared between picking and pressing (rare —
+# bot demoted, peer disconnected, etc.).
 func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var receiver: SkaterNetworkState = snapshot.skater_states.get(_pass_target_peer_id)
 	if receiver == null:
 		return _attacking_goal_pos
-	# Flight time estimate — distance to receiver / pass speed. Capped so
-	# a degenerate near-zero-speed estimate can't blow up the lead.
 	var dist: float = self_pos.distance_to(receiver.position)
 	var flight_t: float = clampf(
 			dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
-	return AITrajectory.predict_at(receiver.position, receiver.velocity, flight_t)
+	return _predict_receiver(_pass_target_peer_id, receiver, flight_t)
+
+
+# Receiver position prediction blending pure-velocity extrapolation with
+# the receiver's published steering anchor. A receiver currently
+# moving away from the puck but steering toward an anchor will end up
+# closer to the anchor than to the velocity-extrapolated point — the
+# blend captures that without overshooting receivers who are already
+# moving along their intended direction. Falls back to velocity-only
+# when no anchor is published (human teammate, brain not yet ticked,
+# or the receiver is the carrier and never published).
+func _predict_receiver(receiver_pid: int, receiver: SkaterNetworkState, flight_t: float) -> Vector3:
+	var velocity_pos: Vector3 = AITrajectory.predict_at(
+			receiver.position, receiver.velocity, flight_t)
+	if _team_brain == null:
+		return velocity_pos
+	var anchor: Vector3 = _team_brain.get_published_anchor(receiver_pid)
+	if anchor == Vector3.ZERO:
+		return velocity_pos
+	# Anchor-based prediction: receiver heads toward their anchor at
+	# their current speed. Speed is preserved (rather than assuming
+	# top speed) so a stationary receiver stays put — predicted = pos.
+	var to_anchor: Vector3 = anchor - receiver.position
+	var to_anchor_len: float = sqrt(to_anchor.x * to_anchor.x + to_anchor.z * to_anchor.z)
+	if to_anchor_len < 0.01:
+		return velocity_pos
+	var speed: float = sqrt(receiver.velocity.x * receiver.velocity.x
+			+ receiver.velocity.z * receiver.velocity.z)
+	var inv: float = 1.0 / to_anchor_len
+	var anchor_step: Vector3 = Vector3(to_anchor.x * inv, 0.0, to_anchor.z * inv) * (speed * flight_t)
+	# Cap the anchor-step so we don't overshoot the anchor itself.
+	if anchor_step.length() > to_anchor_len:
+		anchor_step = to_anchor
+	var anchor_pos: Vector3 = receiver.position + anchor_step
+	return velocity_pos.lerp(anchor_pos, PASS_RECEIVER_ANCHOR_BLEND)
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3,
