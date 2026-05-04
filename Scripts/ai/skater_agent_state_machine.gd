@@ -572,8 +572,25 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Anchor depends on role: F2 strong-side support, F3 weak-side trailer,
 	# or legacy "above puck" for any unassigned role (4+ teammate case).
 	var anchor: Vector3 = _off_puck_anchor(snapshot.puck_state.position, self_pos, snapshot)
-	_apply_steering(input, snapshot, self_pos, anchor)
-	input.mouse_world_pos = _attacking_goal_pos
+	# Exempt the mark from opponent repel during man-to-man: defenders
+	# are supposed to stand shoulder-to-shoulder with their mark, not
+	# be pushed off by them. Without this, a defender marking a crease-
+	# crashing opp drifts 2-3 m back from their anchor under repel.
+	_apply_steering(input, snapshot, self_pos, anchor, _current_mark_pid(snapshot))
+	# Aim mouse 2 m in our direction of motion (toward anchor), or
+	# along current facing if we're already at the anchor. Previously
+	# we aimed at `_attacking_goal_pos` (constant 25+ m away), which
+	# put the blade IK at the ROM extreme every tick — tiny body
+	# motion / rotation moved the clamped extreme around in world
+	# space and the blade visibly jittered. A 2 m target sits well
+	# inside the forehand reach window (`rom_forehand_reach_max = 0.45 m`
+	# at the shoulder, so 2 m world is the natural far end), so the
+	# blade settles into a relaxed "ready" position. Body facing
+	# also tracks the anchor direction now, which is more natural —
+	# defenders face their mark, F2 faces the strong-side support
+	# spot, etc. — instead of facing the attacking goal regardless
+	# of where they're going.
+	input.mouse_world_pos = _ready_stance_aim(self_pos, anchor, snapshot)
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
@@ -1079,9 +1096,13 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	return AITrajectory.predict_at(receiver.position, receiver.velocity, flight_t)
 
 
-func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
+func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3,
+		exempt_opp_pid: int = -1) -> void:
 	# Single-pass split into teammate vs opponent buckets — both feed
-	# AISteering's repel forces.
+	# AISteering's repel forces. `exempt_opp_pid` skips one specific
+	# opponent from the opponent-repel list — used by man-to-man so
+	# the defender can stand shoulder-to-shoulder with their mark
+	# instead of being pushed away by them.
 	_scratch_teammates.clear()
 	_scratch_opponents.clear()
 	for peer_id: int in snapshot.skater_states:
@@ -1089,7 +1110,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			continue
 		if int(_team_id_resolver.call(peer_id)) == _team_id:
 			_scratch_teammates.append(snapshot.skater_states[peer_id].position)
-		else:
+		elif peer_id != exempt_opp_pid:
 			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 
 	# Shot-lane endpoints: only set when a teammate (not us, not opp) is
@@ -1186,6 +1207,33 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 			_attacking_goal_pos.z,
 			GameRules.NET_HALF_WIDTH,
 			GOALIE_SHADOW_HALF)
+
+
+# OFF_PUCK ready-stance aim: 2 m in front of the bot along their
+# direction of motion. Used by `_state_off_puck` to put the blade IK
+# at a comfortable in-reach position rather than chasing a 25 m+
+# distant target. See call site for the full rationale.
+const READY_STANCE_AIM_FORWARD_M: float = 2.0
+func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
+	var to_anchor: Vector3 = anchor - self_pos
+	var aim_dir: Vector3
+	if to_anchor.length() > ANCHOR_NEAR_THRESHOLD:
+		aim_dir = to_anchor.normalized()
+	else:
+		# At anchor — stick stays in front of current facing. Keeps
+		# the bot looking the way they last looked (smooth, no
+		# 180° body snap when arriving at anchor).
+		var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+		if self_state == null:
+			aim_dir = Vector3.FORWARD
+		else:
+			aim_dir = Vector3(self_state.facing.x, 0.0, self_state.facing.y)
+			if aim_dir.length_squared() < 0.0001:
+				aim_dir = Vector3.FORWARD
+	return self_pos + aim_dir * READY_STANCE_AIM_FORWARD_M
+
+
+const ANCHOR_NEAR_THRESHOLD: float = 0.5
 
 
 func _is_f1() -> bool:
@@ -1511,9 +1559,32 @@ func _should_play_man_to_man(snapshot: WorldSnapshot) -> bool:
 # Z). Predicting MAN_LEAD_TIME_S ahead means a moving forward doesn't
 # slip past the defender — the defender anchors against where the
 # mark will be by the time they arrive.
+# Returns the peer_id of our current man-to-man mark (the opponent we
+# should be guarding), or 0 if not playing man (or no mark assigned).
+# Used by `_state_off_puck` to exempt the mark from opponent repel —
+# defenders are supposed to stand on top of their mark, not get
+# pushed away. Reads `_team_brain.coverage_targets` which is
+# populated at 6 Hz; keeps cadence consistent with role assignment.
+func _current_mark_pid(snapshot: WorldSnapshot) -> int:
+	if not _should_play_man_to_man(snapshot):
+		return 0
+	if _team_brain == null:
+		return 0
+	return _team_brain.get_coverage_target(_peer_id)
+
+
 func _man_anchor(mark: SkaterNetworkState) -> Vector3:
 	var lead_pos: Vector3 = AITrajectory.predict_at(
 			mark.position, mark.velocity, MAN_LEAD_TIME_S)
+	# Mark in/near our crease: don't try to step goal-side of them.
+	# The anchor would land past the goal line and get clamped to the
+	# crease arc, which (combined with opponent repel from the mark
+	# itself) drifts the defender 4-5 m off the crease. Better to
+	# stand shoulder-to-shoulder with the mark — see
+	# `_apply_steering`'s exempt-opp logic so the mark doesn't repel
+	# us.
+	if CreaseRules.is_in_crease(Vector2(lead_pos.x, lead_pos.z)):
+		return _clamp_anchor(lead_pos)
 	var our_net := Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
 	var dx: float = our_net.x - lead_pos.x
 	var dz: float = our_net.z - lead_pos.z
