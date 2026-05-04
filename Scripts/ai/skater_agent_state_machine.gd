@@ -1871,6 +1871,14 @@ func _net_front_screen_anchor_or_zero(snapshot: WorldSnapshot, self_pos: Vector3
 #   - Puck on our defensive half (NZ or DZ). In our OZ a "caught"
 #     bot is forechecking, not backchecking — let normal anchors
 #     handle that.
+#   - NO teammate is already back of the puck. If we have defensive
+#     cover behind the puck, this bot should pick up their man-to-man
+#     mark instead of routing to the centered slot — the bot already
+#     back is the last line; F3 stacking on the slot just collides
+#     with them. This is the gate that lets man-to-man fire in DZ:
+#     when the puck is deep in our zone and F2 is already marking the
+#     slot, F3 (shallower than puck) picks up their wing/board mark
+#     instead of also collapsing to the centered slot.
 func _is_caught_up_ice(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	var puck_pos: Vector3 = snapshot.puck_state.position
 	if _own_goal_dir * (self_pos.z - puck_pos.z) >= 0.0:
@@ -1880,7 +1888,25 @@ func _is_caught_up_ice(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 		return false
 	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
 		return false
+	if _teammate_back_of_puck(snapshot, puck_pos):
+		return false
 	return true
+
+
+# True iff any teammate (excluding this bot) is back of the puck —
+# i.e. between the puck and our own net. Used as a defensive-cover
+# gate for the emergency-backcheck override: if someone's already
+# home, this bot doesn't need to abandon their mark.
+func _teammate_back_of_puck(snapshot: WorldSnapshot, puck_pos: Vector3) -> bool:
+	for pid: int in snapshot.skater_states:
+		if pid == _peer_id:
+			continue
+		if int(_team_id_resolver.call(pid)) != _team_id:
+			continue
+		var pos: Vector3 = snapshot.skater_states[pid].position
+		if _own_goal_dir * (pos.z - puck_pos.z) > 0.0:
+			return true
+	return false
 
 
 # Backcheck destination: BACKCHECK_BACK_OF_PUCK_M behind the puck
