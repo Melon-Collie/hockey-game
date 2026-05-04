@@ -38,6 +38,18 @@ const CREASE_REPEL_EXTENSION: float = 0.5
 # the bot — prevents jittering across the anchor at high speed.
 const ANCHOR_DEADBAND: float = 0.5
 
+# Brake-pivot threshold. When the bot wants to head one direction but is
+# carrying meaningful speed in roughly the opposite direction (angle
+# between velocity and desired direction exceeds BRAKE_PIVOT_ANGLE_DEG),
+# the steering output flips to push opposite the velocity — i.e. brake
+# first, then accelerate toward the new direction once speed has dropped
+# below BRAKE_PIVOT_MIN_SPEED. Cuts the wide arcs bots used to trace on
+# near-180° transitions (puck flip, opp turnover) down to a tight pivot.
+# Threshold is well past 90° so normal course corrections (a defender
+# stepping to angle, anchor drifting cross-ice) don't trigger it.
+const BRAKE_PIVOT_ANGLE_DEG: float = 120.0
+const BRAKE_PIVOT_MIN_SPEED: float = 3.0
+
 
 # Returns a unit-or-shorter Vector2 in world XZ.
 #
@@ -176,3 +188,28 @@ static func _crease_repel(self_pos: Vector3) -> Vector2:
 	var dir: Vector2 = CreaseRules.outward_direction(xz)
 	var falloff: float = 1.0 - (d_to_center / threshold)
 	return dir * (CREASE_REPEL_WEIGHT * falloff)
+
+
+# Decides between obeying the steering output or braking against current
+# velocity. When the desired direction is roughly opposite (>=
+# BRAKE_PIVOT_ANGLE_DEG) the current heading and we're carrying speed
+# (>= BRAKE_PIVOT_MIN_SPEED), it's faster to plant and reverse than to
+# carve a wide arc. Returns the original desired vector when no brake is
+# needed; otherwise returns a vector opposite to velocity at the same
+# magnitude as desired so the controller treats it like a normal joystick
+# input. Once the brake drops speed below BRAKE_PIVOT_MIN_SPEED on a
+# subsequent tick, this returns desired again and the bot accelerates
+# normally toward the new direction.
+static func brake_pivot(desired: Vector2, velocity_xz: Vector2) -> Vector2:
+	var speed: float = velocity_xz.length()
+	if speed < BRAKE_PIVOT_MIN_SPEED:
+		return desired
+	var desired_len: float = desired.length()
+	if desired_len < 0.01:
+		return desired
+	var vel_dir: Vector2 = velocity_xz / speed
+	var desired_dir: Vector2 = desired / desired_len
+	var threshold_dot: float = cos(deg_to_rad(BRAKE_PIVOT_ANGLE_DEG))
+	if vel_dir.dot(desired_dir) >= threshold_dot:
+		return desired
+	return -vel_dir * desired_len

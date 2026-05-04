@@ -1344,10 +1344,20 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 						SHOT_LANE_LEAD_TIME_S)
 				lane_end = _attacking_goal_pos
 
-	input.move_vector = AISteering.compute_move_vector(
+	var desired: Vector2 = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH)
+
+	# Brake-pivot: if our current velocity is roughly opposite the desired
+	# direction (~180° transition), it's faster to brake and reverse than
+	# to carve a wide arc. AISteering.brake_pivot returns the original
+	# desired vector when no brake is needed.
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state != null:
+		var v: Vector3 = self_state.velocity
+		desired = AISteering.brake_pivot(desired, Vector2(v.x, v.z))
+	input.move_vector = desired
 
 
 # True if the opposing goalie is "down" — butterfly, sliding, or
