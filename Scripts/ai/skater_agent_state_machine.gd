@@ -1254,12 +1254,24 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 			_scratch_opponents.append(s_state.position)
 
 	# Score current position as the baseline; only move if a candidate
-	# beats it.
+	# beats it. EXCEPT: when the carrier is at or past the goal-line
+	# buffer (the dead zone right at and behind the net), don't let
+	# "stay here" win — force the search to pick a forward candidate.
+	# Without this gate the bot would happily park behind the net if
+	# pass score from there happened to be decent, even though shot
+	# score is zeroed by `_is_past_goal_line`. Real hockey: behind the
+	# net is a setup spot, not a destination.
+	var current_past_goal_buffer: bool = (
+			absf(self_pos.z) > absf(_attacking_goal_pos.z) - CARRY_GOAL_LINE_BUFFER_M)
 	var best_pos: Vector3 = self_pos
-	var best_score: float = AIActionScoring.carry_position_score(
-			self_pos, _attacking_goal_pos, goalie_pos,
-			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-			teammates, teammate_facings, _scratch_opponents)
+	var best_score: float
+	if current_past_goal_buffer:
+		best_score = -INF
+	else:
+		best_score = AIActionScoring.carry_position_score(
+				self_pos, _attacking_goal_pos, goalie_pos,
+				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+				teammates, teammate_facings, _scratch_opponents)
 
 	# 8 cardinal/diagonal directions. Pre-baked so we don't recompute
 	# trig each tick.

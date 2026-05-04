@@ -165,3 +165,92 @@ func test_human_already_closest_keeps_f1() -> void:
 	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1], humans)
 	assert_eq(roles[200], AIRoleAssignment.ROLE_F1)
 	assert_eq(roles[100], AIRoleAssignment.ROLE_F2)
+
+
+# ── F3 high-man pin ──────────────────────────────────────────────────────────
+# Outside our own DZ, the deepest non-carrier teammate (closest to
+# own net AND back of the puck) holds the F3 role regardless of
+# distance to puck. Without this rule a loose puck near the high man
+# rotated them to F1 → CHASE_PUCK and gave up easy odd-man rushes.
+
+func test_oz_pins_deepest_back_of_puck_as_f3() -> void:
+	# Team 0 attacks -Z. Puck loose at z=-10 in OZ. Peer 100 is the high
+	# man (back of puck near OZ blue line) AND happens to be closest to
+	# the puck — without pin they'd be F1 and chase forward. Pin keeps
+	# them as F3; the next-closest non-deepest teammate becomes F1.
+	var made: Array = _make([
+			[100, 0, Vector3(0.0, 0, -8.0)],   # high man, back of puck, closest to puck
+			[200, 0, Vector3(0.0, 0, -18.0)],  # mid OZ
+			[300, 0, Vector3(0.0, 0, -22.0)],  # deep OZ
+	], Vector3(0.0, 0.0, -10.0))
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1], _no_humans)
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F3, "high man pinned as F3 even though closest to puck")
+	assert_eq(roles[200], AIRoleAssignment.ROLE_F1, "next-closest non-deepest takes F1")
+	assert_eq(roles[300], AIRoleAssignment.ROLE_F2)
+
+
+func test_nz_pins_deepest_back_of_puck_as_f3() -> void:
+	# Same rule applies in NZ (transition scenarios).
+	var made: Array = _make([
+			[100, 0, Vector3(0.0, 0, 5.0)],    # back of puck, closest to puck
+			[200, 0, Vector3(0.0, 0, -5.0)],   # forward of puck
+			[300, 0, Vector3(0.0, 0, -10.0)],  # further forward
+	], Vector3(0.0, 0.0, 3.0))
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1], _no_humans)
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F3)
+	assert_eq(roles[200], AIRoleAssignment.ROLE_F1)
+	assert_eq(roles[300], AIRoleAssignment.ROLE_F2)
+
+
+func test_dz_does_not_pin_deepest_as_f3() -> void:
+	# Pin should NOT fire in DZ — coverage_assignment owns DZ shape.
+	# Closest-to-puck wins F1 even if they're the deepest defender.
+	var made: Array = _make([
+			[100, 0, Vector3(0.0, 0, 25.0)],   # deepest AND closest to puck
+			[200, 0, Vector3(0.0, 0, 10.0)],
+			[300, 0, Vector3(0.0, 0, 18.0)],
+	], Vector3(0.0, 0.0, 22.0))
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1], _no_humans)
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F1, "deepest in DZ not pinned (closest to puck wins F1)")
+
+
+func test_pin_skipped_when_no_teammate_is_back_of_puck() -> void:
+	# All teammates are forward of the puck (full rush, no high man back).
+	# Pin doesn't fire — natural rank by distance-to-puck applies.
+	var made: Array = _make([
+			[100, 0, Vector3(0.0, 0, -5.0)],
+			[200, 0, Vector3(0.0, 0, -8.0)],
+			[300, 0, Vector3(0.0, 0, -10.0)],
+	], Vector3(0.0, 0.0, 0.0))
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1], _no_humans)
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F1)
+	assert_eq(roles[200], AIRoleAssignment.ROLE_F2)
+	assert_eq(roles[300], AIRoleAssignment.ROLE_F3)
+
+
+func test_pin_skipped_with_only_two_teammates() -> void:
+	# 2 teammates — only F1 and F2 to assign, no F3 to pin.
+	var made: Array = _make([
+			[100, 0, Vector3(0.0, 0, 5.0)],   # back of puck, closest
+			[200, 0, Vector3(0.0, 0, -5.0)],
+	], Vector3(0.0, 0.0, 3.0))
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1], _no_humans)
+	# Without pin: 100 closest to puck → F1. 200 → F2.
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F1)
+	assert_eq(roles[200], AIRoleAssignment.ROLE_F2)
+
+
+func test_pin_excludes_carrier() -> void:
+	# Carrier (100) at puck position. Teammate 200 is back of the puck
+	# (between puck and own net) and is the deepest non-carrier — pin
+	# them as F3. Teammate 300 is forward → F2 by elimination.
+	var made: Array = _make([
+			[100, 0, Vector3(0.0, 0, 3.0)],    # carrier
+			[200, 0, Vector3(0.0, 0, 5.0)],    # deepest non-carrier, back of puck
+			[300, 0, Vector3(0.0, 0, -5.0)],   # forward of puck
+	], Vector3(0.0, 0.0, 3.0))
+	made[0].puck_state.carrier_peer_id = 100
+	var roles: Dictionary = AIRoleAssignment.compute(made[0], 0, made[1], _no_humans)
+	assert_eq(roles[100], AIRoleAssignment.ROLE_F1, "carrier stays F1")
+	assert_eq(roles[200], AIRoleAssignment.ROLE_F3, "deepest non-carrier pinned as F3")
+	assert_eq(roles[300], AIRoleAssignment.ROLE_F2)
