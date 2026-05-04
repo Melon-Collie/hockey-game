@@ -78,6 +78,16 @@ const F3_OZ_DOT_BACK_OFFSET_M: float = 4.5
 # cough it up. 3v3-specific: with no D pair behind us, F3 is the only
 # thing standing between a turnover and a clean breakaway.
 const F3_OZ_OWN_POSSESSION_DEPTH_M: float = 2.0
+# F3 weak-side X offset from rink center during own OZ possession.
+# Combined with F2's strong-side apex this forms the 3v3 attacking
+# triangle: carrier (F1) somewhere with the puck, F2 short-support on
+# the strong side, F3 wide on the weak side at the blue line. The
+# wide spacing gives the carrier a real cross-ice outlet rather than
+# two stacked strong-side support options. Magnitude tuned so F3
+# sits roughly above the weak-side faceoff dot — far enough across
+# the rink to open a true cross-pass lane, not so far they lose the
+# blue-line safety angle.
+const F3_OZ_WEAK_SIDE_OFFSET_M: float = 6.0
 const LEGACY_OFF_DEPTH: float = 4.0
 # Man-to-man gap: defender anchors this far on the goal-side of their
 # mark, on the line from mark → our net.
@@ -205,6 +215,16 @@ const CARRY_SEARCH_STEP_M: float = 3.0
 # Margin from the attacking goal line we won't drift past while
 # searching (carrier shouldn't anchor behind the net).
 const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
+# Tiebreak boost added to candidate carry-position scores based on
+# proximity to the attacking goal. When all candidates score low
+# (no shot, no pass, defenders in front), this nudges the bot
+# toward the closest-to-net candidate so they drive the net
+# instead of freezing in place. A real shot or pass score (0.3+)
+# easily beats the bias (max 0.05 at goal line), so it only
+# matters when nothing else differentiates the candidates. Tuning:
+# raise toward 0.1 if bots still freeze; lower toward 0.02 for a
+# subtler nudge.
+const CARRY_DRIVE_NET_BIAS: float = 0.05
 
 # CARRY blade aim distance (m forward in goal direction). Mouse on the
 # goal plane (25+ m away) was useless for stickhandling: a 0.3 m
@@ -1966,20 +1986,26 @@ func _clamp_man_anchor_to_dz(anchor: Vector3, snapshot: WorldSnapshot) -> Vector
 # sits 8 m back toward our own goal as a safety valve.
 func _f3_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
+	# Default X (used in OZ-loose / opp-possession and in NZ/DZ): shade
+	# slightly to the strong side as a trailer.
 	var x: float = puck_pos.x + strong_x * F3_OFFSET_X_STRONG
-	# In OZ: free-safety position. When OUR team has possession, plant
-	# just inside the OZ blue line — the textbook 3v3 "F3 high" rule.
-	# The whole point of F3 high is that a turnover at this depth doesn't
-	# leak a clean breakaway. Anywhere deeper and we're gone before we
-	# can recover. When the puck is loose or the opp has it, fall back
-	# to the trail-with-clamp behavior: chasing a loose OZ puck is a
-	# legit forecheck role and the "back of the dots" cap still applies.
-	# In NZ / DZ: legacy above-puck trailer position.
 	var z: float
 	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
 		if _own_team_has_possession(snapshot):
+			# Triangle support during own OZ possession: F3 plants
+			# weak-side at the OZ blue line. Combined with F2's
+			# strong-side support, this gives the carrier two
+			# distinct outlets at different angles — the textbook
+			# 3v3 triangle. The weak-side X also doubles as the
+			# free-safety position: a turnover from the strong side
+			# leaves F3 already on the opposite side of the rink,
+			# in a great spot to backcheck through the slot.
+			x = -strong_x * F3_OZ_WEAK_SIDE_OFFSET_M
 			z = -_own_goal_dir * (GameRules.BLUE_LINE_Z + F3_OZ_OWN_POSSESSION_DEPTH_M)
 		else:
+			# Loose puck or opp possession in OZ: trail the puck back
+			# toward NZ. Strong-side X (default), within the high-zone
+			# band [OZ blue line, back of OZ faceoff circles].
 			var trail_z: float = puck_pos.z + _own_goal_dir * F3_OZ_TRAIL_DEPTH_M
 			var oz_blue_line_z: float = -_own_goal_dir * GameRules.BLUE_LINE_Z
 			var oz_dot_back_z: float = -_own_goal_dir * (
@@ -2151,10 +2177,7 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 	if current_past_goal_buffer:
 		best_score = -INF
 	else:
-		best_score = AIActionScoring.carry_position_score(
-				self_pos, _attacking_goal_pos, goalie_pos,
-				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-				teammates, teammate_facings, _scratch_opponents)
+		best_score = _carry_score_with_drive_bias(self_pos, goalie_pos, teammates, teammate_facings)
 
 	# 8 cardinal/diagonal directions. Pre-baked so we don't recompute
 	# trig each tick.
@@ -2177,14 +2200,30 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
 			continue
-		var s: float = AIActionScoring.carry_position_score(
-				candidate, _attacking_goal_pos, goalie_pos,
-				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-				teammates, teammate_facings, _scratch_opponents)
+		var s: float = _carry_score_with_drive_bias(candidate, goalie_pos, teammates, teammate_facings)
 		if s > best_score:
 			best_score = s
 			best_pos = candidate
 	return best_pos
+
+
+# Carry-position score plus a small drive-net tiebreak — closer to
+# the attacking goal scores marginally higher. When all candidates
+# score similarly low (no clear shot or pass available), the bias
+# tips the search toward the candidate closest to net, so the bot
+# DRIVES the net by default instead of freezing in place. A real
+# shot/pass score (0.3+) easily beats the bias (max 0.05), so this
+# only matters as a tiebreak among low-scoring positions.
+func _carry_score_with_drive_bias(pos: Vector3, goalie_pos: Vector3,
+		teammates: Array[Vector3], teammate_facings: Array[Vector2]) -> float:
+	var base: float = AIActionScoring.carry_position_score(
+			pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+			teammates, teammate_facings, _scratch_opponents)
+	var dist_to_goal: float = pos.distance_to(_attacking_goal_pos)
+	var drive_factor: float = 1.0 - clampf(
+			dist_to_goal / AIActionScoring.SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
+	return base + drive_factor * CARRY_DRIVE_NET_BIAS
 
 
 # Dump target — deep corner of the attacking zone on the bot's strong
