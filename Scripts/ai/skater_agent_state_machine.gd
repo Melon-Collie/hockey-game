@@ -90,6 +90,14 @@ const MAN_LEAD_TIME_S: float = 0.5
 # off-center; below this we default to the +X side so we don't flip
 # F2/F3 sides every time the puck wiggles through center.
 const STRONG_SIDE_X_DEADBAND: float = 0.5
+# Hysteresis on the strong-side sign: once we've picked +1, only flip
+# to -1 when puck.x crosses below -STRONG_SIDE_HYSTERESIS_M (and vice
+# versa). The static `STRONG_SIDE_X_DEADBAND` alone wasn't enough —
+# puck oscillating around x = -0.5 would flip strong_x, jumping the
+# F2/F3 anchor 6 m laterally each tick. The 1.5 m hysteresis band
+# means the puck has to commit to the other side before the bot
+# flips. Bigger band = more sticky; smaller = more responsive.
+const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 # Margins from the rink edge / goal line that anchors are clamped inside of.
 const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
@@ -1368,6 +1376,26 @@ var _smoothed_aim_dir: Vector3 = Vector3.ZERO
 # assignment changes side.
 var _smoothed_stickhandle_offset: Vector3 = Vector3.ZERO
 
+# Strong-side sign with hysteresis. See STRONG_SIDE_HYSTERESIS_M.
+# Initialized to +1 (strong side defaults to +X); flips to -1 only
+# when puck.x falls below -1.5, and back to +1 only when puck.x
+# rises above +1.5. Per-bot so each bot tracks its own state.
+var _last_strong_x: float = 1.0
+
+
+# Returns the strong-side sign for a puck/self position with
+# per-bot hysteresis. Replaces the inline
+# `signf(x) if absf(x) > DEADBAND else 1.0` pattern that was
+# vulnerable to per-tick flipping near the deadband boundary.
+func _hysteretic_strong_x(x: float) -> float:
+	if _last_strong_x > 0.0:
+		if x < -STRONG_SIDE_HYSTERESIS_M:
+			_last_strong_x = -1.0
+	else:
+		if x > STRONG_SIDE_HYSTERESIS_M:
+			_last_strong_x = 1.0
+	return _last_strong_x
+
 func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	var desired_dir: Vector3 = _compute_desired_aim_dir(self_pos, anchor, snapshot)
 	var facing_3d: Vector3 = _read_facing_3d(snapshot)
@@ -1520,7 +1548,7 @@ func _f2_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 			if pressure >= F1_HEAVY_PRESSURE_COUNT:
 				return _f2_support_anchor(f1_state.position, puck_pos)
 	# Default: triangle apex (F1 has space, F2 looks for an open lane).
-	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
+	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
 	var x: float = puck_pos.x + strong_x * F2_OFFSET_X
 	var z: float = puck_pos.z + _own_goal_dir * F2_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
@@ -1529,7 +1557,7 @@ func _f2_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 # Close-support anchor relative to F1, on the strong side. Used when
 # F1 is heavily pressured and needs an immediate outlet target.
 func _f2_support_anchor(f1_pos: Vector3, puck_pos: Vector3) -> Vector3:
-	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
+	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
 	var x: float = f1_pos.x + strong_x * F2_SUPPORT_OFFSET_X
 	var z: float = f1_pos.z + _own_goal_dir * F2_SUPPORT_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
@@ -1801,7 +1829,7 @@ func _man_anchor(mark: SkaterNetworkState) -> Vector3:
 # (smaller magnitude than F2's apex offset so they don't stack) and
 # sits 8 m back toward our own goal as a safety valve.
 func _f3_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
-	var strong_x: float = signf(puck_pos.x) if absf(puck_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
+	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
 	var x: float = puck_pos.x + strong_x * F3_OFFSET_X_STRONG
 	# In OZ: free-safety position. When OUR team has possession, plant
 	# just inside the OZ blue line — the textbook 3v3 "F3 high" rule.
