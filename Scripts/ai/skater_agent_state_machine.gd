@@ -200,24 +200,12 @@ const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 # STICKHANDLE_THREAT_RADIUS_M or moving slower than
 # STICKHANDLE_CLOSING_VEL_MIN_M_S don't trigger an offset (they're
 # not really threats). Magnitude scales linearly with proximity —
-# closer threat → larger evade. Tuning: raise OFFSET_MAX toward 0.7
-# for more aggressive dekes; lower toward 0.3 if puck visibly
-# wobbles too much. Raise THREAT_RADIUS toward 5 if bots react too
-# late; lower toward 3 if they twitch on incidental opponents.
-#
-# STICKHANDLE_LERP_PER_TICK smooths the offset across ticks so the
-# blade doesn't flip-flop when the closest-threat assignment
-# changes — e.g. two defenders converging from opposite sides
-# alternate "closest" each tick, raw offset flips ±left/right, blade
-# jitters between the two. With the lerp the smoothed offset
-# converges between them (if they're balanced, smoothed → zero;
-# clear winner → smoothed pulls toward that side). 0.05 per tick
-# at 240 Hz reaches 70% of a new target in ~100 ms — fast enough to
-# look like reactive stickhandling, slow enough to not jitter.
+# closer threat → larger evade. Per-tick smoothing happens
+# automatically via `_step_mouse_toward` (the unified motion model);
+# no need for offset-specific lerping.
 const STICKHANDLE_THREAT_RADIUS_M: float = 4.0
 const STICKHANDLE_CLOSING_VEL_MIN_M_S: float = 1.0
 const STICKHANDLE_OFFSET_MAX_M: float = 0.5
-const STICKHANDLE_LERP_PER_TICK: float = 0.05
 
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
@@ -280,6 +268,32 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 # and apply the backhand_power_coefficient penalty.
 const BOT_WRISTER_WIND_UP_BACK_M: float = 0.6
 const BOT_WRISTER_WIND_UP_SIDE_M: float = 0.4
+
+# ── Unified mouse motion ─────────────────────────────────────────────────────
+# Every state's `input.mouse_world_pos` goes through `_step_mouse_toward`,
+# which simulates a real player's mouse motion with a max speed and
+# small per-tick noise. This replaces a pile of per-state smoothing
+# (smoothed aim direction, ik_gate clamp, smoothed stickhandle
+# offset, etc.) with one consistent model:
+#
+#   target → "where the mouse would be if you moved toward it for
+#             one frame, capped at MOUSE_MAX_SPEED_M_S, with noise"
+#
+# Real human mice move at 5-20 m/s in world terms (depending on
+# sensitivity / situation). 15 m/s lets a 6 m anchor flip resolve in
+# 0.4 s — fast enough to look responsive, slow enough that per-tick
+# target oscillations average out (mouse never reaches either
+# extreme, settles in the middle).
+#
+# Per-tick noise of 0.02 m std (uniform [-0.02, +0.02]) on each of x
+# and z gives small organic wiggle. Doesn't accumulate (applied to
+# the OUTPUT only — the underlying _mouse_pos stays smooth).
+const MOUSE_MAX_SPEED_M_S: float = 15.0
+const MOUSE_NOISE_STD_M: float = 0.02
+# Bots run at the host physics rate (240 Hz) so we can use a fixed
+# delta. Using a constant keeps the mouse motion deterministic and
+# avoids threading delta through every state handler call.
+const MOUSE_TICK_DELTA: float = 1.0 / 240.0
 
 # ── Slapper ──────────────────────────────────────────────────────────────────
 # Bots take slappers when they have meaningful clean space to wind up.
@@ -633,7 +647,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# defenders face their mark, F2 faces the strong-side support
 	# spot, etc. — instead of facing the attacking goal regardless
 	# of where they're going.
-	input.mouse_world_pos = _ready_stance_aim(self_pos, anchor, snapshot)
+	input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, anchor, snapshot))
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
@@ -674,11 +688,11 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# to the puck's ACTUAL position — leading at this range puts the
 	# blade past a puck that's already on our stick.
 	if _engagement_cooldown > 0:
-		input.mouse_world_pos = Vector3(self_pos.x, 0.0, self_pos.z)
+		input.mouse_world_pos = _step_mouse_toward(Vector3(self_pos.x, 0.0, self_pos.z))
 	elif self_pos.distance_to(puck_pos) <= BLADE_REACH_M:
-		input.mouse_world_pos = puck_pos
+		input.mouse_world_pos = _step_mouse_toward(puck_pos)
 	else:
-		input.mouse_world_pos = target
+		input.mouse_world_pos = _step_mouse_toward(target)
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
@@ -699,7 +713,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# and drift toward it — patient cycling.
 	var anchor: Vector3 = _carry_anchor(snapshot, self_pos)
 	_apply_steering(input, snapshot, self_pos, anchor)
-	input.mouse_world_pos = _carry_mouse_aim(snapshot, self_pos)
+	input.mouse_world_pos = _step_mouse_toward(_carry_mouse_aim(snapshot, self_pos))
 	# Transitions
 	if not have_puck:
 		_set_state(_post_puck_lost_state())
@@ -778,7 +792,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# Blade IK chases this, so the player visibly draws the stick back
 	# on the forehand and sweeps through to the aim point.
 	var t: float = float(_shoot_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
-	input.mouse_world_pos = _shoot_wind_up_start.lerp(_shoot_aim_target, t)
+	input.mouse_world_pos = _step_mouse_toward(_shoot_wind_up_start.lerp(_shoot_aim_target, t))
 
 	# Walk mouse_screen_pos along the sweep direction. Per-tick delta is
 	# BOT_WRISTER_SCREEN_DELTA_PER_TICK; SkaterAimingBehavior scales by
@@ -839,7 +853,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 		_slapper_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
 		input.slap_pressed = true
 
-	input.mouse_world_pos = _slapper_aim_target
+	input.mouse_world_pos = _step_mouse_toward(_slapper_aim_target)
 
 	if _slapper_charge_tick < BOT_SLAPPER_CHARGE_TICKS:
 		input.slap_held = true
@@ -858,8 +872,8 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# mouse_world_pos — so this fires the puck along the bot→receiver
 	# vector.
 	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
-	input.mouse_world_pos = clean_pass_aim + _aim_wobble(
-			self_pos, clean_pass_aim, PASS_AIM_WOBBLE_CONE_DEG)
+	input.mouse_world_pos = _step_mouse_toward(clean_pass_aim + _aim_wobble(
+			self_pos, clean_pass_aim, PASS_AIM_WOBBLE_CONE_DEG))
 	input.shoot_pressed = true
 	input.shoot_held = true
 	# Arm the give-and-go cut from the release position. _off_puck_anchor
@@ -882,7 +896,7 @@ func _state_dump_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# is blade-from-player so the puck flies along the bot→corner
 	# vector; even at fixed quick_shot_power the dump usually clears
 	# the bot's zone, which is what matters.
-	input.mouse_world_pos = _dump_aim_point(self_pos)
+	input.mouse_world_pos = _step_mouse_toward(_dump_aim_point(self_pos))
 	input.shoot_pressed = true
 	input.shoot_held = true
 	if not have_puck:
@@ -934,7 +948,7 @@ func _state_one_timer_charge(input: InputState, snapshot: WorldSnapshot, self_po
 	# mouse_world_pos at slap_pressed time locks the slapper aim
 	# direction. Aim at the goal-shadow open net so the one-timer
 	# fires there.
-	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
+	input.mouse_world_pos = _step_mouse_toward(_shot_aim_point(snapshot, self_pos))
 
 	if _ticks_in_state == 0:
 		input.slap_pressed = true
@@ -1259,15 +1273,12 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	else:
 		forward_dir = Vector3.FORWARD
 	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
-	var raw_offset: Vector3 = _stickhandle_offset(snapshot, self_pos, forward_dir)
-	# Smooth across ticks: when two defenders converge from opposite
-	# sides, the "closest threat" assignment alternates per tick and
-	# the raw offset flips ±right. Lerping kills the flip-flop —
-	# balanced threats average to ~zero offset; a clear single threat
-	# pulls the smoothed offset to its evade side.
-	_smoothed_stickhandle_offset = _smoothed_stickhandle_offset.lerp(
-			raw_offset, STICKHANDLE_LERP_PER_TICK)
-	return base + _smoothed_stickhandle_offset
+	# Stickhandling offset is raw — `_step_mouse_toward` provides the
+	# motion smoothing across ticks. When two defenders converge from
+	# opposite sides and the raw target alternates per tick, the
+	# motion model averages them out (mouse oscillates within a small
+	# range bounded by the per-tick step).
+	return base + _stickhandle_offset(snapshot, self_pos, forward_dir)
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
@@ -1322,65 +1333,61 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 			GOALIE_SHADOW_HALF)
 
 
-# OFF_PUCK ready-stance aim: puts the blade IK at a comfortable in-reach
-# position (2 m forward). The aim direction comes from
-# `_compute_desired_aim_dir`:
+# OFF_PUCK ready-stance aim: returns a target 2 m in front of the bot
+# in the direction of motion. The actual mouse position is then
+# stepped toward this target by `_step_mouse_toward` (motion-limited
+# + noisy), which gives realistic rotation behaviour without per-
+# state smoothing logic.
 #
-#   - FAR from anchor (> FACE_THREAT_NEAR_ANCHOR_M): face anchor
-#     direction. SkaterMovementRules.apply_movement scales thrust by
-#     facing-vs-input alignment (forward = full thrust, perpendicular
-#     and backward are penalized via crossover_thrust_multiplier and
-#     backward_thrust_multiplier), so facing toward where we're going
-#     gets us there fastest. Critical for backcheck speed.
-#
-#   - NEAR anchor: rotate to face the defensive threat — the
-#     man-to-man mark if assigned, else the puck. Real defenders
-#     rotate into a stance facing the threat as they arrive in
-#     coverage; before that they're sprinting and look forward.
-#
-# The desired direction is then SMOOTHED over time toward the target
-# (`_smoothed_aim_dir` lerps each tick) so the blade rotates
-# realistically rather than snapping. A snap to a 180°-away target
-# would push the mouse past `SkaterPoseCoordinator.ik_gate` and lock
-# body rotation entirely; smoothing keeps the gap small. There's
-# also a defensive clamp to `IK_GATE_DEG - IK_GATE_MARGIN_DEG` of
-# current facing in case the smoothed value somehow lands past it.
-#
-# Chase is handled separately (`_state_chase_puck` sets mouse to
-# puck/lead — facing tracks the puck for stick reach).
+#   - FAR from anchor (> FACE_THREAT_NEAR_ANCHOR_M): aim direction =
+#     toward anchor. SkaterMovementRules scales thrust by facing
+#     alignment, so facing toward our destination = max skating
+#     speed. Critical for backcheck.
+#   - NEAR anchor: aim toward the defensive threat (man-to-man mark
+#     if assigned, else the puck). Real defenders watch the threat as
+#     they settle into coverage.
 const READY_STANCE_AIM_FORWARD_M: float = 2.0
 const FACE_THREAT_NEAR_ANCHOR_M: float = 2.0
-# How fast the aim direction lerps toward a new target. 0.02 per tick
-# at 240 Hz ≈ 99% converged in 0.7 s. Slightly faster than
-# facing_drag_speed (3.0 / s = 0.0125 per tick) so the mouse stays
-# slightly ahead of body facing — body rotation needs a non-zero
-# mouse-body angle to fire (see `apply_facing`). Tuning: lower toward
-# 0.01 if blade movement feels too snappy; raise toward 0.03 if bots
-# feel sluggish to react.
-const AIM_LERP_PER_TICK: float = 0.02
-# Mirror of SkaterPoseCoordinator's `ik_gate` =
-# rom_backhand_angle_max_deg (90) + upper_body_max_twist_deg (67).
-# Beyond this angle from facing, body rotation is locked. We clamp
-# our aim direction to a hair inside it so body always has room to
-# rotate.
-const IK_GATE_DEG: float = 157.0
-const IK_GATE_MARGIN_DEG: float = 15.0
 
-# Smoothed aim direction, persisted across OFF_PUCK ticks. Updated by
-# `_ready_stance_aim`; uninitialized (zero) until first call.
-var _smoothed_aim_dir: Vector3 = Vector3.ZERO
-
-# Smoothed stickhandling offset, persisted across CARRY ticks. See
-# STICKHANDLE_LERP_PER_TICK. Lerped each tick toward the raw evade
-# offset so the blade doesn't snap when the closest-threat
-# assignment changes side.
-var _smoothed_stickhandle_offset: Vector3 = Vector3.ZERO
+# Persistent mouse position across all ticks. Every `input.mouse_world_pos`
+# assignment goes through `_step_mouse_toward(target)` which moves
+# `_mouse_pos` toward the target at MOUSE_MAX_SPEED_M_S, capped by the
+# tick budget. Initialized to ZERO; first call snaps it to the
+# target. See MOUSE_MAX_SPEED_M_S comment block for rationale.
+var _mouse_pos: Vector3 = Vector3.ZERO
 
 # Strong-side sign with hysteresis. See STRONG_SIDE_HYSTERESIS_M.
 # Initialized to +1 (strong side defaults to +X); flips to -1 only
 # when puck.x falls below -1.5, and back to +1 only when puck.x
 # rises above +1.5. Per-bot so each bot tracks its own state.
 var _last_strong_x: float = 1.0
+
+
+# Steps `_mouse_pos` toward `target` at MOUSE_MAX_SPEED_M_S, capped by
+# the tick budget. First call (when _mouse_pos is ZERO) snaps to the
+# target. Returns the result with small per-tick noise for organic
+# feel. Replaces the various per-state smoothing methods we used to
+# have — single consistent model for every aim target.
+func _step_mouse_toward(target: Vector3) -> Vector3:
+	if _mouse_pos == Vector3.ZERO:
+		_mouse_pos = Vector3(target.x, 0.0, target.z)
+	var to_target_x: float = target.x - _mouse_pos.x
+	var to_target_z: float = target.z - _mouse_pos.z
+	var dist: float = sqrt(to_target_x * to_target_x + to_target_z * to_target_z)
+	var max_step: float = MOUSE_MAX_SPEED_M_S * MOUSE_TICK_DELTA
+	if dist > max_step:
+		var inv: float = 1.0 / dist
+		_mouse_pos.x += to_target_x * inv * max_step
+		_mouse_pos.z += to_target_z * inv * max_step
+	else:
+		_mouse_pos.x = target.x
+		_mouse_pos.z = target.z
+	# Apply noise to OUTPUT only — _mouse_pos stays smooth, output
+	# adds organic per-tick wiggle (uniform [-NOISE, +NOISE] on each
+	# axis). Wiggle doesn't accumulate.
+	var nx: float = _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M
+	var nz: float = _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M
+	return Vector3(_mouse_pos.x + nx, 0.0, _mouse_pos.z + nz)
 
 
 # Returns the strong-side sign for a puck/self position with
@@ -1396,25 +1403,17 @@ func _hysteretic_strong_x(x: float) -> float:
 			_last_strong_x = 1.0
 	return _last_strong_x
 
+# Returns a target position 2 m in front of the bot. Direction is
+# anchor when far, threat when near. The actual mouse position is
+# stepped toward this target by `_step_mouse_toward` (the unified
+# motion model), which gives the smoothing for free.
 func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	var desired_dir: Vector3 = _compute_desired_aim_dir(self_pos, anchor, snapshot)
-	var facing_3d: Vector3 = _read_facing_3d(snapshot)
-	# Initialize smoothed aim from current facing so we don't snap to
-	# a 180°-away target on first call (which would lock body
-	# rotation).
-	if _smoothed_aim_dir.length_squared() < 0.0001:
-		_smoothed_aim_dir = facing_3d
-	_smoothed_aim_dir = _smoothed_aim_dir.lerp(desired_dir, AIM_LERP_PER_TICK).normalized()
-	# Defensive clamp: if external state changes (other states setting
-	# mouse, body rotated by physics, etc.) leave smoothed past the
-	# ik_gate from facing, pull it back to within the gate so body
-	# rotation can keep tracking us.
-	_smoothed_aim_dir = _clamp_aim_to_facing_arc(facing_3d, _smoothed_aim_dir)
-	return self_pos + _smoothed_aim_dir * READY_STANCE_AIM_FORWARD_M
+	return self_pos + desired_dir * READY_STANCE_AIM_FORWARD_M
 
 
-# Picks the desired raw aim direction (pre-smoothing): anchor
-# direction when far, threat direction when near anchor.
+# Picks the desired raw aim direction: anchor direction when far,
+# threat direction when near anchor.
 func _compute_desired_aim_dir(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	var to_anchor: Vector3 = anchor - self_pos
 	if to_anchor.length() > FACE_THREAT_NEAR_ANCHOR_M:
@@ -1428,21 +1427,6 @@ func _read_facing_3d(snapshot: WorldSnapshot) -> Vector3:
 	if self_state == null or self_state.facing.length_squared() < 0.0001:
 		return Vector3.FORWARD
 	return Vector3(self_state.facing.x, 0.0, self_state.facing.y)
-
-
-# Clamps `target_dir` to within (IK_GATE_DEG - IK_GATE_MARGIN_DEG) of
-# `facing_dir` around the world Y axis. Both inputs are XZ unit
-# vectors. Returns the clamped unit direction. Used so the bot's mouse
-# never points past the ik_gate from current facing — past the gate,
-# body rotation locks (`SkaterPoseCoordinator.apply_facing`'s
-# ik_locked_side branch).
-func _clamp_aim_to_facing_arc(facing_dir: Vector3, target_dir: Vector3) -> Vector3:
-	var angle: float = facing_dir.signed_angle_to(target_dir, Vector3.UP)
-	var max_angle_rad: float = deg_to_rad(IK_GATE_DEG - IK_GATE_MARGIN_DEG)
-	if absf(angle) <= max_angle_rad:
-		return target_dir
-	angle = signf(angle) * max_angle_rad
-	return facing_dir.rotated(Vector3.UP, angle)
 
 
 # Unit direction toward the defensive threat — the man-to-man mark
