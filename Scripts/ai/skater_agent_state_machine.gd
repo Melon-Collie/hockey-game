@@ -1183,6 +1183,14 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 		self_facing_xz: Vector2, goalie_pos: Vector3) -> Array:
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
+	# When the carrier is in our OZ, exclude receivers that aren't
+	# also in OZ. Passing the puck out of OZ to a NZ teammate sends
+	# the puck back across the blue line; if our carrier was in OZ
+	# when the puck left and the new carrier brings it back in, the
+	# original carrier is offside. Filtering here prevents that
+	# whole sequence — bots only pass back-pass-out when they
+	# themselves are in NZ.
+	var carrier_in_oz: bool = -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
@@ -1191,6 +1199,10 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		if receiver_state.is_ghost:
 			continue
+		if carrier_in_oz:
+			var receiver_in_oz: bool = -_own_goal_dir * receiver_state.position.z > GameRules.BLUE_LINE_Z
+			if not receiver_in_oz:
+				continue
 		var dist: float = self_pos.distance_to(receiver_state.position)
 		var flight_t: float = clampf(
 				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
@@ -1613,7 +1625,7 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 		if mark_pid != 0:
 			var mark: SkaterNetworkState = snapshot.skater_states.get(mark_pid)
 			if mark != null:
-				return _cap_offside(_man_anchor(mark), snapshot)
+				return _cap_offside(_clamp_man_anchor_to_dz(_man_anchor(mark), snapshot), snapshot)
 
 	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
 	match role:
@@ -1921,6 +1933,24 @@ func _man_anchor(mark: SkaterNetworkState) -> Vector3:
 	return _clamp_anchor(Vector3(
 			lead_pos.x + dx * step, 0.0,
 			lead_pos.z + dz * step))
+
+
+# Clamp a man-to-man anchor to stay on our DZ side of the blue line
+# WHEN the puck is in our DZ. Without this, a defender's mark
+# drifting toward the OZ blue line for a regroup setup pulled the
+# defender out of the zone with them — gives up easy keep-ins and
+# the bot has to backtrack on regroups. Real-hockey rule: defenders
+# hold the zone during DZ defense, even if their mark wanders out.
+# Clamp only fires when puck is in DZ; in NZ defense (e.g.
+# transition coverage) the bot can mark across the line normally.
+func _clamp_man_anchor_to_dz(anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
+	var puck_depth: float = _own_goal_dir * snapshot.puck_state.position.z
+	if puck_depth <= GameRules.BLUE_LINE_Z:
+		return anchor   # puck not in our DZ — no clamp
+	var anchor_depth: float = _own_goal_dir * anchor.z
+	if anchor_depth >= GameRules.BLUE_LINE_Z:
+		return anchor   # already on our DZ side
+	return Vector3(anchor.x, anchor.y, _own_goal_dir * GameRules.BLUE_LINE_Z)
 
 
 # F3 anchor — strong-side trailer / high man. Shades to the puck side
