@@ -1209,31 +1209,118 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 			GOALIE_SHADOW_HALF)
 
 
-# OFF_PUCK ready-stance aim: 2 m in front of the bot along their
-# direction of motion. Used by `_state_off_puck` to put the blade IK
-# at a comfortable in-reach position rather than chasing a 25 m+
-# distant target. See call site for the full rationale.
+# OFF_PUCK ready-stance aim: puts the blade IK at a comfortable in-reach
+# position (2 m forward). The aim direction comes from
+# `_compute_desired_aim_dir`:
+#
+#   - FAR from anchor (> FACE_THREAT_NEAR_ANCHOR_M): face anchor
+#     direction. SkaterMovementRules.apply_movement scales thrust by
+#     facing-vs-input alignment (forward = full thrust, perpendicular
+#     and backward are penalized via crossover_thrust_multiplier and
+#     backward_thrust_multiplier), so facing toward where we're going
+#     gets us there fastest. Critical for backcheck speed.
+#
+#   - NEAR anchor: rotate to face the defensive threat — the
+#     man-to-man mark if assigned, else the puck. Real defenders
+#     rotate into a stance facing the threat as they arrive in
+#     coverage; before that they're sprinting and look forward.
+#
+# The desired direction is then SMOOTHED over time toward the target
+# (`_smoothed_aim_dir` lerps each tick) so the blade rotates
+# realistically rather than snapping. A snap to a 180°-away target
+# would push the mouse past `SkaterPoseCoordinator.ik_gate` and lock
+# body rotation entirely; smoothing keeps the gap small. There's
+# also a defensive clamp to `IK_GATE_DEG - IK_GATE_MARGIN_DEG` of
+# current facing in case the smoothed value somehow lands past it.
+#
+# Chase is handled separately (`_state_chase_puck` sets mouse to
+# puck/lead — facing tracks the puck for stick reach).
 const READY_STANCE_AIM_FORWARD_M: float = 2.0
+const FACE_THREAT_NEAR_ANCHOR_M: float = 2.0
+# How fast the aim direction lerps toward a new target. 0.02 per tick
+# at 240 Hz ≈ 99% converged in 0.7 s. Slightly faster than
+# facing_drag_speed (3.0 / s = 0.0125 per tick) so the mouse stays
+# slightly ahead of body facing — body rotation needs a non-zero
+# mouse-body angle to fire (see `apply_facing`). Tuning: lower toward
+# 0.01 if blade movement feels too snappy; raise toward 0.03 if bots
+# feel sluggish to react.
+const AIM_LERP_PER_TICK: float = 0.02
+# Mirror of SkaterPoseCoordinator's `ik_gate` =
+# rom_backhand_angle_max_deg (90) + upper_body_max_twist_deg (67).
+# Beyond this angle from facing, body rotation is locked. We clamp
+# our aim direction to a hair inside it so body always has room to
+# rotate.
+const IK_GATE_DEG: float = 157.0
+const IK_GATE_MARGIN_DEG: float = 15.0
+
+# Smoothed aim direction, persisted across OFF_PUCK ticks. Updated by
+# `_ready_stance_aim`; uninitialized (zero) until first call.
+var _smoothed_aim_dir: Vector3 = Vector3.ZERO
+
 func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
+	var desired_dir: Vector3 = _compute_desired_aim_dir(self_pos, anchor, snapshot)
+	var facing_3d: Vector3 = _read_facing_3d(snapshot)
+	# Initialize smoothed aim from current facing so we don't snap to
+	# a 180°-away target on first call (which would lock body
+	# rotation).
+	if _smoothed_aim_dir.length_squared() < 0.0001:
+		_smoothed_aim_dir = facing_3d
+	_smoothed_aim_dir = _smoothed_aim_dir.lerp(desired_dir, AIM_LERP_PER_TICK).normalized()
+	# Defensive clamp: if external state changes (other states setting
+	# mouse, body rotated by physics, etc.) leave smoothed past the
+	# ik_gate from facing, pull it back to within the gate so body
+	# rotation can keep tracking us.
+	_smoothed_aim_dir = _clamp_aim_to_facing_arc(facing_3d, _smoothed_aim_dir)
+	return self_pos + _smoothed_aim_dir * READY_STANCE_AIM_FORWARD_M
+
+
+# Picks the desired raw aim direction (pre-smoothing): anchor
+# direction when far, threat direction when near anchor.
+func _compute_desired_aim_dir(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	var to_anchor: Vector3 = anchor - self_pos
-	var aim_dir: Vector3
-	if to_anchor.length() > ANCHOR_NEAR_THRESHOLD:
-		aim_dir = to_anchor.normalized()
-	else:
-		# At anchor — stick stays in front of current facing. Keeps
-		# the bot looking the way they last looked (smooth, no
-		# 180° body snap when arriving at anchor).
-		var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-		if self_state == null:
-			aim_dir = Vector3.FORWARD
-		else:
-			aim_dir = Vector3(self_state.facing.x, 0.0, self_state.facing.y)
-			if aim_dir.length_squared() < 0.0001:
-				aim_dir = Vector3.FORWARD
-	return self_pos + aim_dir * READY_STANCE_AIM_FORWARD_M
+	if to_anchor.length() > FACE_THREAT_NEAR_ANCHOR_M:
+		return to_anchor.normalized()
+	return _face_threat_or_current(snapshot, self_pos)
 
 
-const ANCHOR_NEAR_THRESHOLD: float = 0.5
+# Reads the bot's facing as a unit XZ Vector3, with safe fallback.
+func _read_facing_3d(snapshot: WorldSnapshot) -> Vector3:
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null or self_state.facing.length_squared() < 0.0001:
+		return Vector3.FORWARD
+	return Vector3(self_state.facing.x, 0.0, self_state.facing.y)
+
+
+# Clamps `target_dir` to within (IK_GATE_DEG - IK_GATE_MARGIN_DEG) of
+# `facing_dir` around the world Y axis. Both inputs are XZ unit
+# vectors. Returns the clamped unit direction. Used so the bot's mouse
+# never points past the ik_gate from current facing — past the gate,
+# body rotation locks (`SkaterPoseCoordinator.apply_facing`'s
+# ik_locked_side branch).
+func _clamp_aim_to_facing_arc(facing_dir: Vector3, target_dir: Vector3) -> Vector3:
+	var angle: float = facing_dir.signed_angle_to(target_dir, Vector3.UP)
+	var max_angle_rad: float = deg_to_rad(IK_GATE_DEG - IK_GATE_MARGIN_DEG)
+	if absf(angle) <= max_angle_rad:
+		return target_dir
+	angle = signf(angle) * max_angle_rad
+	return facing_dir.rotated(Vector3.UP, angle)
+
+
+# Unit direction toward the defensive threat — the man-to-man mark
+# if assigned, else the puck. Falls back to current facing if the
+# threat is essentially on top of us (avoids a degenerate aim
+# direction).
+func _face_threat_or_current(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	var threat_pos: Vector3 = snapshot.puck_state.position
+	var mark_pid: int = _current_mark_pid(snapshot)
+	if mark_pid != 0:
+		var mark_state: SkaterNetworkState = snapshot.skater_states.get(mark_pid)
+		if mark_state != null:
+			threat_pos = mark_state.position
+	var to_threat: Vector3 = threat_pos - self_pos
+	if to_threat.length() > 0.3:
+		return to_threat.normalized()
+	return _read_facing_3d(snapshot)
 
 
 func _is_f1() -> bool:
