@@ -289,14 +289,21 @@ const _SHOT_STATE_SLAPPER_CHARGE_WITH_PUCK: int = 3
 # When the puck turns over in the NZ (or DZ) and a bot is caught
 # up-ice — between attacker and own net — they need to skate STRAIGHT
 # home, not via their man-to-man anchor (which might sit wide if the
-# mark is at the boards). Override anchors the bot at the defensive
-# slot until they're back of the puck; man-to-man then picks them up
-# and routes them onto an actual mark.
+# mark is at the boards). Override anchors the bot at puck depth +
+# BACKCHECK_BACK_OF_PUCK_M (toward own net), centred X — i.e. "be
+# back of the puck by a few metres." The override releases the moment
+# the bot's z crosses the puck's z (own_goal_dir-signed), and
+# man-to-man takes over with whatever mark coverage_assignment gave
+# them.
 #
-# BACKCHECK_SLOT_DEPTH_M is the distance in front of own goal where
-# the slot anchor sits — same depth used elsewhere as "good
-# defensive position." Centred X (slot is the highest-danger zone).
-const BACKCHECK_SLOT_DEPTH_M: float = 5.0
+# BACKCHECK_BACK_OF_PUCK_M is the cushion past puck depth — large
+# enough that the bot keeps full speed through the override-release
+# transition (well past the steering deadband). Anchor depth is
+# clamped to BACKCHECK_MAX_DEPTH_FROM_GOAL_M past own goal so we
+# never anchor into our own crease when the puck is already deep in
+# our DZ; "the slot" is the deepest defensive position we want.
+const BACKCHECK_BACK_OF_PUCK_M: float = 5.0
+const BACKCHECK_MAX_DEPTH_FROM_GOAL_M: float = 5.0
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
@@ -981,14 +988,13 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 		return screen_anchor
 
 	# Emergency backcheck: caught up-ice with opp possession on our
-	# defensive half. Sprint to the defensive slot before picking up
-	# a mark — man-to-man's anchor might route to the boards, adding
-	# distance to a rotation we're already losing to the rush. Once
-	# we're back of the puck, _is_caught_up_ice returns false and
-	# man-to-man takes over with whatever mark coverage_assignment
-	# gave us.
+	# defensive half. Sprint to a position back of the puck — man-to-
+	# man's anchor might route to the boards, adding distance to a
+	# rotation we're already losing to the rush. Once we're back of
+	# the puck, _is_caught_up_ice returns false and man-to-man takes
+	# over with whatever mark coverage_assignment gave us.
 	if _is_caught_up_ice(snapshot, self_pos):
-		return _emergency_backcheck_anchor()
+		return _emergency_backcheck_anchor(snapshot)
 
 	var anchor: Vector3
 	# Man-to-man takes priority on our defensive half when the opp has
@@ -1229,14 +1235,18 @@ func _is_caught_up_ice(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	return true
 
 
-# Defensive slot anchor: centred X, BACKCHECK_SLOT_DEPTH_M in front of
-# own goal. Used as the emergency-backcheck destination so caught
-# bots take a straight-line route home instead of skating wide to
-# their assigned mark. Once they're back of the puck, the override
-# releases and normal coverage takes over.
-func _emergency_backcheck_anchor() -> Vector3:
-	var anchor_z: float = _own_goal_dir * (GameRules.GOAL_LINE_Z - BACKCHECK_SLOT_DEPTH_M)
-	return Vector3(0.0, 0.0, anchor_z)
+# Backcheck destination: BACKCHECK_BACK_OF_PUCK_M behind the puck
+# (toward own net), centred X, capped at the defensive slot depth so
+# we never overshoot into our own crease. Working in signed depth
+# (own_goal_dir × z) so the same expression handles both teams —
+# larger depth = closer to own net.
+func _emergency_backcheck_anchor(snapshot: WorldSnapshot) -> Vector3:
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var puck_depth: float = _own_goal_dir * puck_pos.z
+	var anchor_depth: float = puck_depth + BACKCHECK_BACK_OF_PUCK_M
+	var max_depth: float = GameRules.GOAL_LINE_Z - BACKCHECK_MAX_DEPTH_FROM_GOAL_M
+	var clamped: float = minf(anchor_depth, max_depth)
+	return Vector3(0.0, 0.0, _own_goal_dir * clamped)
 
 
 # True iff we're defending — opp has the puck (or it's loose) and the
