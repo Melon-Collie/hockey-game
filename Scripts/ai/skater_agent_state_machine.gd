@@ -233,6 +233,23 @@ const CHASE_TRAJECTORY_STEPS: int = 12
 # own X magnitude so we never overshoot to the wrong side.
 const CHASE_ANGLE_BIAS_M: float = 1.5
 
+# Soft-hands reception. When closing on a loose puck moving faster
+# than SOFT_HANDS_PUCK_SPEED_MIN_M_S (i.e. an incoming pass / stripped
+# puck), AND we're within SOFT_HANDS_DISTANCE_M of the intercept
+# point, the chase input is scaled by SOFT_HANDS_MOVE_SCALE. The bot
+# arrives at the intercept at a fraction of normal speed instead of
+# plowing into the puck at top speed — gives the blade time to be
+# steady when the puck arrives so it catches rather than deflects.
+# Tuning: raise SOFT_HANDS_PUCK_SPEED_MIN_M_S toward 12 if soft-
+# hands fires on slow loose pucks the bot should just collect at
+# speed; lower toward 5 if it's failing to soften on slow passes.
+# Lower SOFT_HANDS_MOVE_SCALE toward 0.2 for an even stronger catch
+# (risk: opp swoops in); raise toward 0.6 if reception still feels
+# clattery.
+const SOFT_HANDS_PUCK_SPEED_MIN_M_S: float = 8.0
+const SOFT_HANDS_DISTANCE_M: float = 1.5
+const SOFT_HANDS_MOVE_SCALE: float = 0.4
+
 # Carrier anchor search step. The carrier samples candidate positions
 # this far from their current spot in 8 cardinal directions and picks
 # the one with the best shoot-or-pass score. Bot drifts toward the
@@ -768,15 +785,41 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		if carrier_state != null:
 			target = _angle_intercept_inside(target, carrier_state.position)
 	_apply_steering(input, snapshot, self_pos, target)
+
+	# Soft-hands: when receiving a fast loose puck (incoming pass) and
+	# we're within SOFT_HANDS_DISTANCE_M of the intercept, scale the
+	# move input down so the bot arrives at low speed instead of
+	# plowing into a 22 m/s puck. A ~10 m/s body collision against a
+	# fast puck deflects it off the blade rather than catching it;
+	# reducing closing speed lets the puck "roll onto" the stick.
+	# Carrier check ensures we're not soft-handing during a stripped-
+	# puck scrum (where opp possession is also -1 in the brief moment
+	# after stripping but the puck is slow). Bot-velocity check
+	# avoids the case where we're not actually moving toward the puck.
+	var puck_velocity: Vector3 = snapshot.puck_state.velocity
+	var puck_speed_xz: float = sqrt(puck_velocity.x * puck_velocity.x
+			+ puck_velocity.z * puck_velocity.z)
+	if carrier_pid == -1 and puck_speed_xz > SOFT_HANDS_PUCK_SPEED_MIN_M_S:
+		var dist_to_intercept: float = self_pos.distance_to(target)
+		if dist_to_intercept < SOFT_HANDS_DISTANCE_M:
+			input.move_vector *= SOFT_HANDS_MOVE_SCALE
+
 	# Aim: normally blade-on-intercept, but during the engagement cooldown
 	# (just got stripped or just stick-checked someone) pull the blade
 	# back to our body so the puck can settle without auto-magnetting
 	# back to us. Once the puck is inside our blade reach, snap the aim
 	# to the puck's ACTUAL position — leading at this range puts the
-	# blade past a puck that's already on our stick.
+	# blade past a puck that's already on our stick. For fast loose
+	# pucks (incoming passes), aim at the puck's CURRENT position even
+	# from far out — the blade tracks the puck along its flight line so
+	# it's always on the path the puck is travelling, instead of pointing
+	# at the destination point and snapping onto the puck only at the
+	# end of the approach.
 	if _engagement_cooldown > 0:
 		input.mouse_world_pos = _step_mouse_toward(Vector3(self_pos.x, 0.0, self_pos.z))
 	elif self_pos.distance_to(puck_pos) <= BLADE_REACH_M:
+		input.mouse_world_pos = _step_mouse_toward(puck_pos)
+	elif carrier_pid == -1 and puck_speed_xz > SOFT_HANDS_PUCK_SPEED_MIN_M_S:
 		input.mouse_world_pos = _step_mouse_toward(puck_pos)
 	else:
 		input.mouse_world_pos = _step_mouse_toward(target)
