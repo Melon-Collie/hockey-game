@@ -144,6 +144,12 @@ static func score_shoot(
 #                           "tape-to-tape into the slot" and "outlet
 #                           pass to a teammate up-ice"
 #   - 1 - receiver_pressure: how open the receiver is to catch
+#
+# `receiver_quality_bonus` (default 1.0) multiplies receiver_quality
+# BEFORE the [0, 1] clamp. Used by the carrier to value a slapper-
+# charging teammate's shot opportunity higher without short-circuiting
+# the lane / pressure terms — a slapper-charging receiver behind a
+# blocked lane is still a 0-score pass.
 static func score_pass(
 		shooter: Vector3,
 		receiver: Vector3,
@@ -152,7 +158,8 @@ static func score_pass(
 		goalie_pos: Vector3,
 		net_half_width: float,
 		shadow_half: float,
-		opponents: Array[Vector3]) -> float:
+		opponents: Array[Vector3],
+		receiver_quality_bonus: float = 1.0) -> float:
 	# A receiver past the attacking goal line is degenerate (can't shoot,
 	# wraparound passes are weird). Skip.
 	if _is_past_goal_line(receiver, attacking_goal):
@@ -170,7 +177,9 @@ static func score_pass(
 	var receiver_geom: float = _shot_geometry(receiver, attacking_goal, goalie_pos, net_half_width, shadow_half)
 	var advance: float = _advancement_score(shooter, receiver, attacking_goal)
 	var open: float = _receiver_open_score(receiver, receiver_facing, opponents)
-	var receiver_quality: float = maxf(maxf(receiver_geom, advance), open)
+	var receiver_quality: float = clampf(
+			maxf(maxf(receiver_geom, advance), open) * receiver_quality_bonus,
+			0.0, 1.0)
 	# Directional pressure on the receiver — opponents in the receiver's
 	# forward cone toward the attacking goal are the ones who'll
 	# pressure them on reception. Defenders behind the receiver (between

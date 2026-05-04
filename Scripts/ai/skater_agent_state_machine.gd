@@ -1002,19 +1002,23 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 			var opp_state: SkaterNetworkState = snapshot.skater_states[opp_pid]
 			_scratch_opponents_pass.append(AITrajectory.predict_at(
 					opp_state.position, opp_state.velocity, flight_t))
+		# One-timer demand: receiver pre-charging a slapper without the
+		# puck (`shot_state == SLAPPER_CHARGE_WITHOUT_PUCK`) is asking
+		# for the puck. Boost their RECEIVER_QUALITY (shot opportunity
+		# from where they are), not the final score — this leaves the
+		# lane and pressure terms intact, so a slapper-charging
+		# receiver behind a blocked lane still scores 0, and one
+		# under heavy pressure still gets the pressure penalty.
+		var receiver_q_bonus: float = (
+				ONE_TIMER_TARGET_BONUS
+				if receiver_state.shot_state == _SHOT_STATE_SLAPPER_CHARGE_WITHOUT_PUCK
+				else 1.0)
 		var s: float = AIActionScoring.score_pass(
 				self_pos, receiver, receiver_state.facing,
 				_attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-				_scratch_opponents_pass)
-		# One-timer demand: receiver is pre-charging a slapper without
-		# the puck (broadcasting `shot_state == SLAPPER_CHARGE_WITHOUT_PUCK`).
-		# That's an explicit "feed me" signal — heavily prefer this
-		# pass. Receiver_open / advancement / shot quality terms in
-		# score_pass already capture the underlying value; this just
-		# breaks ties toward the explicit one-timer setup.
-		if receiver_state.shot_state == _SHOT_STATE_SLAPPER_CHARGE_WITHOUT_PUCK:
-			s = minf(s * ONE_TIMER_TARGET_BONUS, 1.0)
+				_scratch_opponents_pass,
+				receiver_q_bonus)
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:
