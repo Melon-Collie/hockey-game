@@ -176,6 +176,30 @@ const CARRY_SEARCH_STEP_M: float = 3.0
 # searching (carrier shouldn't anchor behind the net).
 const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
 
+# CARRY blade aim distance (m forward in goal direction). Mouse on the
+# goal plane (25+ m away) was useless for stickhandling: a 0.3 m
+# lateral blade shift would need a ~22 m mouse offset. Putting mouse
+# at 2 m forward keeps the blade IK at a comfortable position
+# (within ROM, not at the clamp extreme) where small mouse shifts
+# translate directly to blade movement. Body facing still tracks
+# toward the attacking goal because the forward direction IS the
+# goal direction.
+const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
+
+# Stickhandling: shift the carrier's mouse perpendicular to facing,
+# AWAY from the closest incoming defender. Pulls the puck off-side
+# from where the defender is reaching. Defenders beyond
+# STICKHANDLE_THREAT_RADIUS_M or moving slower than
+# STICKHANDLE_CLOSING_VEL_MIN_M_S don't trigger an offset (they're
+# not really threats). Magnitude scales linearly with proximity —
+# closer threat → larger evade. Tuning: raise OFFSET_MAX toward 0.7
+# for more aggressive dekes; lower toward 0.3 if puck visibly
+# wobbles too much. Raise THREAT_RADIUS toward 5 if bots react too
+# late; lower toward 3 if they twitch on incidental opponents.
+const STICKHANDLE_THREAT_RADIUS_M: float = 4.0
+const STICKHANDLE_CLOSING_VEL_MIN_M_S: float = 1.0
+const STICKHANDLE_OFFSET_MAX_M: float = 0.5
+
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
 # tag-up target sits. Slightly past the line so the host's
@@ -656,7 +680,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# and drift toward it — patient cycling.
 	var anchor: Vector3 = _carry_anchor(snapshot, self_pos)
 	_apply_steering(input, snapshot, self_pos, anchor)
-	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
+	input.mouse_world_pos = _carry_mouse_aim(snapshot, self_pos)
 	# Transitions
 	if not have_puck:
 		_set_state(_post_puck_lost_state())
@@ -1198,6 +1222,68 @@ func _predicted_goalie_pos(snapshot: WorldSnapshot) -> Vector3:
 			Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z),
 			Vector3(opp_goalie.velocity_x, 0.0, opp_goalie.velocity_z),
 			BOT_WRISTER_LOOKAHEAD_S)
+
+
+# CARRY-state mouse target: 2 m forward in the attacking-goal
+# direction, plus a stickhandling offset perpendicular to that
+# direction to evade the closest incoming defender. Body facing
+# tracks the forward axis (toward the goal); blade IK lands
+# comfortably in front of the body where small mouse shifts produce
+# real blade motion (instead of clamping to ROM extreme as it would
+# at goal-plane distance).
+func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	var to_goal: Vector3 = _attacking_goal_pos - self_pos
+	to_goal.y = 0.0
+	var forward_dir: Vector3
+	if to_goal.length_squared() > 0.0001:
+		forward_dir = to_goal.normalized()
+	else:
+		forward_dir = Vector3.FORWARD
+	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
+	return base + _stickhandle_offset(snapshot, self_pos, forward_dir)
+
+
+# Computes the perpendicular puck-evade offset for stickhandling.
+# Finds the closest opponent that's both within STICKHANDLE_THREAT_RADIUS_M
+# AND closing on us at STICKHANDLE_CLOSING_VEL_MIN_M_S+. Returns an XZ
+# offset perpendicular to `forward_dir`, in the direction OPPOSITE
+# the threat's lateral side, with magnitude scaling linearly with
+# proximity (closer threat → larger offset, capped at
+# STICKHANDLE_OFFSET_MAX_M). Returns Vector3.ZERO if no qualifying
+# threat is in range.
+func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir: Vector3) -> Vector3:
+	# Right-axis (XZ): forward rotated 90° CW around Y.
+	var right_axis: Vector3 = Vector3(forward_dir.z, 0.0, -forward_dir.x)
+	var best_lateral: float = 0.0
+	var best_dist: float = INF
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if int(_team_id_resolver.call(peer_id)) == _team_id:
+			continue
+		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var to_opp: Vector3 = opp_state.position - self_pos
+		to_opp.y = 0.0
+		var dist: float = to_opp.length()
+		if dist > STICKHANDLE_THREAT_RADIUS_M or dist < 0.001:
+			continue
+		# Closing velocity: component of opponent's velocity in the
+		# TOWARD-ME direction. Static or fleeing opponents don't
+		# trigger evasion.
+		var to_opp_norm: Vector3 = to_opp / dist
+		var closing_vel: float = -opp_state.velocity.dot(to_opp_norm)
+		if closing_vel < STICKHANDLE_CLOSING_VEL_MIN_M_S:
+			continue
+		if dist < best_dist:
+			best_dist = dist
+			best_lateral = right_axis.dot(to_opp)
+	if best_dist == INF or absf(best_lateral) < 0.01:
+		return Vector3.ZERO
+	var magnitude: float = STICKHANDLE_OFFSET_MAX_M * (1.0 - clampf(
+			best_dist / STICKHANDLE_THREAT_RADIUS_M, 0.0, 1.0))
+	# Pull AWAY from threat's lateral side. If threat is on right
+	# (positive lateral dot), offset is -right (pulls puck left).
+	return -right_axis * signf(best_lateral) * magnitude
 
 
 # Shot aim past the goalie's projected shadow.
