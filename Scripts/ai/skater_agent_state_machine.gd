@@ -271,6 +271,20 @@ const PASS_REACHABLE_DOT_MIN: float = 0.1
 const GIVE_AND_GO_DURATION_TICKS: int = 360   # 1.5 s at 240 Hz
 const GIVE_AND_GO_LEAD_M: float = 10.0
 
+# ── Net-front screen ────────────────────────────────────────────────────────
+# When a teammate winds up a slapper, the closest non-shooter teammate
+# parks in front of the crease to screen the goalie. Bots don't fire
+# slappers themselves (only wristers), so this fires on HUMAN
+# teammates. Anchor sits SCREEN_OFFSET_FROM_GOAL_LINE_M past the goal
+# line on the puck-side, centred on the net mouth — just outside the
+# crease arc (radius 1.83 m), so steering's crease repel doesn't kick
+# the screener back out.
+const SCREEN_OFFSET_FROM_GOAL_LINE_M: float = 2.5
+# Mirror of SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK. Hard-
+# coded as int rather than typed enum so we don't introduce a domain →
+# controller dependency from this AI module.
+const _SHOT_STATE_SLAPPER_CHARGE_WITH_PUCK: int = 3
+
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
@@ -941,10 +955,18 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 	if _give_and_go_remaining_ticks > 0:
 		return _cap_offside(_give_and_go_anchor, snapshot)
 
+	# Net-front screen: if a teammate is winding up a slapper and I'm
+	# the closest non-shooter teammate to the opposing net, park 1.5 m
+	# in front of the crease to screen. Bots don't slap themselves
+	# (only wristers), so this fires when a HUMAN teammate winds up.
+	var screen_anchor: Vector3 = _net_front_screen_anchor_or_zero(snapshot, self_pos)
+	if screen_anchor != Vector3.ZERO:
+		return screen_anchor
+
 	var anchor: Vector3
-	# Man-to-man takes priority in our defensive zone when the opp has
-	# the puck (or it's loose in our zone). The brain publishes the
-	# coverage map at 6 Hz; we just look up our mark.
+	# Man-to-man takes priority on our defensive half when the opp has
+	# the puck (or it's loose). The brain publishes the coverage map at
+	# 6 Hz; we just look up our mark.
 	if _should_play_man_to_man(snapshot):
 		var mark_pid: int = _team_brain.get_coverage_target(_peer_id) if _team_brain != null else 0
 		if mark_pid != 0:
@@ -1112,17 +1134,62 @@ func _compute_give_and_go_anchor(release_pos: Vector3) -> Vector3:
 	return _clamp_anchor(Vector3(release_pos.x, 0.0, anchor_z))
 
 
-# True iff we're in our own zone defending — opp has the puck (or it's
-# loose in our zone). Man-to-man only fires here; everywhere else (NZ,
-# OZ, own possession) we keep the zone triangle.
+# Net-front screen check. Returns the screen anchor (centred X, ~1.5 m
+# in front of the crease arc, on the puck-side of the goal line) when
+# a teammate is currently in SLAPPER_CHARGE_WITH_PUCK AND I'm the
+# closest non-shooter teammate to that anchor. Otherwise returns
+# Vector3.ZERO meaning "no screen, fall through to role anchor."
+#
+# Bots only fire wristers themselves, so this fires when a HUMAN
+# teammate is winding up a slapper from the point — the bot picks up
+# the screen role automatically. The screen is dropped the moment the
+# slapper releases (state moves to FOLLOW_THROUGH) or bails (back to
+# SKATING_WITH_PUCK).
+func _net_front_screen_anchor_or_zero(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	var slapper_pid: int = 0
+	for pid: int in snapshot.skater_states:
+		if pid == _peer_id:
+			continue
+		if int(_team_id_resolver.call(pid)) != _team_id:
+			continue
+		var s: SkaterNetworkState = snapshot.skater_states[pid]
+		if s.shot_state == _SHOT_STATE_SLAPPER_CHARGE_WITH_PUCK:
+			slapper_pid = pid
+			break
+	if slapper_pid == 0:
+		return Vector3.ZERO
+	# Anchor: ~1.5 m past the crease arc edge on the puck-side of the
+	# attacking goal line. Centred in X (in front of the net mouth).
+	var screen_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SCREEN_OFFSET_FROM_GOAL_LINE_M)
+	var screen_anchor := Vector3(0.0, 0.0, screen_z)
+	# Closest non-shooter teammate (including me) wins the screen role.
+	# Tie-break: peer_id ascending so the choice is stable.
+	var my_dist: float = self_pos.distance_to(screen_anchor)
+	for pid: int in snapshot.skater_states:
+		if pid == _peer_id or pid == slapper_pid:
+			continue
+		if int(_team_id_resolver.call(pid)) != _team_id:
+			continue
+		var pos: Vector3 = snapshot.skater_states[pid].position
+		var their_dist: float = pos.distance_to(screen_anchor)
+		if their_dist < my_dist or (their_dist == my_dist and pid < _peer_id):
+			return Vector3.ZERO
+	return _clamp_anchor(screen_anchor)
+
+
+# True iff we're defending — opp has the puck (or it's loose) and the
+# puck is on our defensive half (NZ or DZ). Man-to-man fires here so
+# bots pick up assignments during the 1-2 s transition window when an
+# opp rush is forming, not just after the puck crosses our blue line.
+# Skipped in our OZ (forecheck zone — F2/F3 zone anchors handle it)
+# and skipped under own possession (breakout, not defensive coverage).
 func _should_play_man_to_man(snapshot: WorldSnapshot) -> bool:
 	var puck_pos: Vector3 = snapshot.puck_state.position
-	# In our DZ? oriented_z > BLUE_LINE_Z means past our own blue line.
-	if _own_goal_dir * puck_pos.z <= GameRules.BLUE_LINE_Z:
+	# Puck in OZ? (our attacking zone — opp's defensive zone). Skip man.
+	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
 		return false
-	# Don't play man if our team has possession — that's a breakout, not
-	# a defensive coverage situation. Loose pucks in our zone DO trigger
-	# man (forwards are crashing, mark them).
+	# Don't play man if our team has possession — breakout, not defense.
+	# Loose pucks DO trigger man (opp forwards are crashing, mark them).
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 	if carrier != -1 and int(_team_id_resolver.call(carrier)) == _team_id:
 		return false
