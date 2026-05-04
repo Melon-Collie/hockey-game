@@ -27,13 +27,14 @@ extends RefCounted
 #                  (next tick, release fires)
 
 enum State {
-	OFF_PUCK,        # default off-puck — anchor above puck, aim at goal
-	CHASE_PUCK,      # F1 without puck — pursue, blade on the puck
-	CARRY,           # with puck, no committed action — aim at goal
-	SHOOT_PRESSED,   # multi-tick wrister charge aimed at goalie shadow
-	SLAPPER_PRESSED, # multi-tick slapper charge — bigger commit, more power
-	PASS_PRESSED,    # one-tick press window aimed at a teammate's lead position
-	DUMP_PRESSED,    # one-tick press window aimed at a deep-zone clear
+	OFF_PUCK,         # default off-puck — anchor above puck, aim at goal
+	CHASE_PUCK,       # F1 without puck — pursue, blade on the puck
+	CARRY,            # with puck, no committed action — aim at goal
+	SHOOT_PRESSED,    # multi-tick wrister charge aimed at goalie shadow
+	SLAPPER_PRESSED,  # multi-tick slapper charge — bigger commit, more power
+	PASS_PRESSED,     # one-tick press window aimed at a teammate's lead position
+	DUMP_PRESSED,     # one-tick press window aimed at a deep-zone clear
+	ONE_TIMER_CHARGE, # off-puck slapper pre-charge — demanding the puck
 }
 
 # Off-puck anchor offsets. F2 is the triangle apex on the strong side
@@ -258,6 +259,39 @@ const BOT_SLAPPER_LOOKAHEAD_S: float = (
 # under-committed to slappers when clean; lower toward 1.0 if they
 # slap too often.
 const SLAPPER_POWER_BONUS: float = 1.15
+
+# ── One-timer pre-charge ─────────────────────────────────────────────────────
+# Off-puck bot in good shot position pre-charges a slapper, broadcasting
+# `shot_state == SLAPPER_CHARGE_WITHOUT_PUCK` to the rest of the team.
+# The carrier reads this from the snapshot and boosts pass score
+# heavily for the slapper-charging teammate — no telegraphed pass, no
+# shared blackboard, the receiver "demands" the puck just by visibly
+# winding up. SkaterController's existing without-puck slapper
+# mechanic handles the rest: bot fires `slap_pressed` once, holds
+# `slap_held`, and on release `try_one_timer_release` fires the
+# one-timer if the puck is in the slapper zone.
+#
+# Trigger threshold is the same as ACTION_THRESHOLD-ish — score_shoot
+# from the bot's current position must clear ONE_TIMER_TRIGGER_THRESHOLD
+# (lower than ACTION_THRESHOLD so charges happen more readily; the
+# cost of a wasted charge is just velocity drag).
+const ONE_TIMER_TRIGGER_THRESHOLD: float = 0.4
+# Release distance: drop slap_held when the puck is within this much
+# of the bot. SkaterController's `try_one_timer_release` does the
+# actual proximity check with velocity-scaled leniency, so a hair
+# early/late on the release usually still fires.
+const ONE_TIMER_RELEASE_DISTANCE_M: float = 1.5
+# Max charge duration. After this many ticks with no pass, abort the
+# charge — the puck isn't coming, holding longer just keeps the bot
+# stuck in slapper drag.
+const ONE_TIMER_MAX_CHARGE_TICKS: int = 240   # 1 s
+# Pass score multiplier for a teammate currently in
+# SLAPPER_CHARGE_WITHOUT_PUCK. They're explicitly asking for the
+# puck; reward the carrier for feeding them. 2.0 is enough to win
+# over most other passes when the lane is reasonably clean.
+const ONE_TIMER_TARGET_BONUS: float = 2.0
+# Mirror of SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK (=4).
+const _SHOT_STATE_SLAPPER_CHARGE_WITHOUT_PUCK: int = 4
 
 # Quick-shot pass reachability cone. A pass commits via shoot_pressed
 # the same tick it transitions out of CARRY → quick-shot direction is
@@ -519,6 +553,8 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_pass_pressed(input, snapshot, self_pos, have_puck)
 		State.DUMP_PRESSED:
 			_state_dump_pressed(input, snapshot, self_pos, have_puck)
+		State.ONE_TIMER_CHARGE:
+			_state_one_timer_charge(input, snapshot, self_pos, have_puck)
 
 
 # ── State handlers ───────────────────────────────────────────────────────────
@@ -534,6 +570,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		_set_state(State.CARRY)
 	elif _is_f1() and not _teammate_has_puck(snapshot):
 		_set_state(State.CHASE_PUCK)
+	elif _should_pre_charge_slapper(snapshot, self_pos):
+		# Own team has the puck and we have a real shot from here —
+		# pre-charge a slapper to broadcast the one-timer threat. The
+		# carrier reads our shot_state from the snapshot and biases
+		# pass scoring heavily toward us.
+		_set_state(State.ONE_TIMER_CHARGE)
 
 
 func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -780,6 +822,63 @@ func _state_dump_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_set_state(State.CARRY)
 
 
+# Off-puck slapper pre-charge. The bot is in a good shot position
+# while a teammate carries — we wind up a slapper without the puck so
+# that (1) the carrier sees `shot_state == SLAPPER_CHARGE_WITHOUT_PUCK`
+# and biases pass scoring toward us, and (2) when the puck arrives
+# we release on the beat for a one-timer (SkaterController's
+# `try_one_timer_release` does the proximity check).
+#
+# Exit conditions:
+#   - have_puck: the puck arrived (deflection / pickup zone / slapper
+#     zone). Drop slap_held; if the puck is in the slapper zone the
+#     SM fires the one-timer, otherwise it cancels and we're back to
+#     normal CARRY.
+#   - Conditions invalid: own team lost possession, our shot score
+#     dropped below threshold, etc. Drop slap_held to abort.
+#   - Puck close (within ONE_TIMER_RELEASE_DISTANCE_M): release for
+#     the one-timer. Try_one_timer_release does the actual fire/cancel
+#     decision based on its own zone + leniency.
+#   - Max ticks: timeout, abort the charge.
+func _state_one_timer_charge(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	if have_puck:
+		input.slap_held = false
+		_set_state(State.CARRY)
+		return
+	if _ticks_in_state >= ONE_TIMER_MAX_CHARGE_TICKS:
+		input.slap_held = false
+		_set_state(State.OFF_PUCK)
+		return
+
+	# Hold position so we don't drift out of the shot lane while
+	# charging. Slapper drag in SkaterController slows us anyway, but
+	# anchoring at self_pos keeps the steering aligned. Must run BEFORE
+	# _should_pre_charge_slapper since that helper reads
+	# _scratch_opponents populated here.
+	_apply_steering(input, snapshot, self_pos, self_pos)
+
+	if not _should_pre_charge_slapper(snapshot, self_pos):
+		input.slap_held = false
+		_set_state(State.OFF_PUCK)
+		return
+
+	# mouse_world_pos at slap_pressed time locks the slapper aim
+	# direction. Aim at the goal-shadow open net so the one-timer
+	# fires there.
+	input.mouse_world_pos = _shot_aim_point(snapshot, self_pos)
+
+	if _ticks_in_state == 0:
+		input.slap_pressed = true
+
+	# Release window: drop slap_held when the incoming puck is close.
+	if self_pos.distance_to(snapshot.puck_state.position) <= ONE_TIMER_RELEASE_DISTANCE_M:
+		input.slap_held = false
+		_set_state(State.OFF_PUCK)
+		return
+
+	input.slap_held = true
+
+
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
 # Anchor + steering shared by CARRY / SHOOT_PRESSED / PASS_PRESSED. Each
@@ -908,6 +1007,14 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 				_attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents_pass)
+		# One-timer demand: receiver is pre-charging a slapper without
+		# the puck (broadcasting `shot_state == SLAPPER_CHARGE_WITHOUT_PUCK`).
+		# That's an explicit "feed me" signal — heavily prefer this
+		# pass. Receiver_open / advancement / shot quality terms in
+		# score_pass already capture the underlying value; this just
+		# breaks ties toward the explicit one-timer setup.
+		if receiver_state.shot_state == _SHOT_STATE_SLAPPER_CHARGE_WITHOUT_PUCK:
+			s = minf(s * ONE_TIMER_TARGET_BONUS, 1.0)
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:
@@ -1440,6 +1547,28 @@ func _own_team_has_possession(snapshot: WorldSnapshot) -> bool:
 	if carrier == -1:
 		return false
 	return int(_team_id_resolver.call(carrier)) == _team_id
+
+
+# True iff conditions favour pre-charging a slapper to demand the puck.
+# Requires (1) a teammate carries the puck (own possession, not me),
+# and (2) score_shoot from my current position clears the trigger
+# threshold — i.e. I have a real one-timer threat from here, not just
+# wandering the OZ.
+#
+# Uses _scratch_opponents which is populated by `_apply_steering`
+# earlier in the OFF_PUCK tick, so callers must run after that.
+func _should_pre_charge_slapper(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier == -1 or carrier == _peer_id:
+		return false
+	if int(_team_id_resolver.call(carrier)) != _team_id:
+		return false
+	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
+	var score: float = AIActionScoring.score_shoot(
+			self_pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+			_scratch_opponents)
+	return score >= ONE_TIMER_TRIGGER_THRESHOLD
 
 
 # Clamp an anchor to the playable rink with a small margin so steering
