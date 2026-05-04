@@ -1571,12 +1571,18 @@ func _own_team_has_possession(snapshot: WorldSnapshot) -> bool:
 
 
 # True iff conditions favour pre-charging a slapper to demand the puck.
-# Three gates, all must pass:
-#   (1) A teammate carries the puck (own possession, not me).
-#   (2) score_shoot from my current position clears the trigger
+# Four gates, all must pass:
+#   (1) Not ghosted. Ghosted (offside) bots can't legally receive a
+#       pass — their collision masks are off — so the puck would
+#       pass through them and the slapper would never fire. Tag up
+#       first; `_off_puck_anchor` already routes ghosted bots to the
+#       tag-up anchor, this gate keeps them there instead of letting
+#       them transition into ONE_TIMER_CHARGE.
+#   (2) A teammate carries the puck (own possession, not me).
+#   (3) score_shoot from my current position clears the trigger
 #       threshold — i.e. I have a real one-timer threat from here,
 #       not just wandering the OZ.
-#   (3) The carrier is on my NON-blade side. The slapper zone is
+#   (4) The carrier is on my NON-blade side. The slapper zone is
 #       offset to the blade side; for the puck to enter the zone on
 #       a pass, the puck path (carrier → me → continuation) must
 #       cross the zone — which only happens if the carrier is on
@@ -1589,6 +1595,9 @@ func _own_team_has_possession(snapshot: WorldSnapshot) -> bool:
 # Uses _scratch_opponents which is populated by `_apply_steering`
 # earlier in the OFF_PUCK tick, so callers must run after that.
 func _should_pre_charge_slapper(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null or self_state.is_ghost:
+		return false
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 	if carrier == -1 or carrier == _peer_id:
 		return false
@@ -1597,15 +1606,13 @@ func _should_pre_charge_slapper(snapshot: WorldSnapshot, self_pos: Vector3) -> b
 	# Geometry gate: carrier on non-blade side.
 	var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
 	if carrier_state != null:
-		var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-		if self_state != null:
-			var blade_dir: Vector2 = _blade_side_dir(self_state.facing)
-			var to_carrier: Vector2 = Vector2(
-					carrier_state.position.x - self_pos.x,
-					carrier_state.position.z - self_pos.z)
-			# Carrier on blade side → puck path won't cross the zone.
-			if blade_dir.dot(to_carrier) >= 0.0:
-				return false
+		var blade_dir: Vector2 = _blade_side_dir(self_state.facing)
+		var to_carrier: Vector2 = Vector2(
+				carrier_state.position.x - self_pos.x,
+				carrier_state.position.z - self_pos.z)
+		# Carrier on blade side → puck path won't cross the zone.
+		if blade_dir.dot(to_carrier) >= 0.0:
+			return false
 	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
 	var score: float = AIActionScoring.score_shoot(
 			self_pos, _attacking_goal_pos, goalie_pos,
