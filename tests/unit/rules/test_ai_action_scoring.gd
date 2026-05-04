@@ -323,3 +323,56 @@ func test_pass_receiver_pressure_ignores_defender_behind_receiver() -> void:
 	var pressured: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, lateral_behind)
 	assert_almost_eq(pressured, clean, 0.001,
 			"defender behind the receiver should not pressure the pass (cube falloff zeros it)")
+
+
+# pass_lane_blocked_by_net coverage. Nets are at z = ±GameRules.GOAL_LINE_Z
+# extending out by GameRules.NET_DEPTH; opening half-width NET_HW.
+
+func test_net_blocker_oz_corner_to_corner_through_back_of_net() -> void:
+	# Bot in attacking-zone right corner just inside the net depth,
+	# teammate mirrored on the left. Pass goes through the net rect.
+	var from := Vector3(5.0, 0.0, 27.0)   # inside net z-range
+	var to := Vector3(-5.0, 0.0, 27.0)
+	assert_true(AIActionScoring.pass_lane_blocked_by_net(from, to),
+			"corner-to-corner pass through the back of the net should be blocked")
+
+
+func test_net_blocker_dz_pass_across_goal_mouth() -> void:
+	# Pass crossing in front of the goal at the goal-line z. Just clipping
+	# the front face of the net rect.
+	var from := Vector3(3.0, 0.0, 28.0)   # behind own net
+	var to := Vector3(-3.0, 0.0, 25.0)    # front of own net
+	assert_true(AIActionScoring.pass_lane_blocked_by_net(from, to),
+			"pass crossing the goal mouth at goal-line z should be blocked by the net")
+
+
+func test_net_blocker_clean_slot_pass_not_blocked() -> void:
+	# Pass through the slot (well in front of the goal line). Both
+	# endpoints in front of GOAL_LINE_Z, segment never enters either rect.
+	var from := Vector3(5.0, 0.0, 18.0)
+	var to := Vector3(-5.0, 0.0, 18.0)
+	assert_false(AIActionScoring.pass_lane_blocked_by_net(from, to),
+			"slot-line pass nowhere near the net should not be blocked")
+
+
+func test_net_blocker_low_to_high_pass_not_blocked() -> void:
+	# OZ low-to-high: from near the goal line up to the blue line.
+	# Segment never enters the rect because x stays inside one corner
+	# but z exits the rect cleanly toward NZ.
+	var from := Vector3(5.0, 0.0, 25.5)   # in front of goal line, off to side
+	var to := Vector3(0.0, 0.0, 12.0)
+	assert_false(AIActionScoring.pass_lane_blocked_by_net(from, to),
+			"low-to-high OZ pass should not be blocked by the attacking net")
+
+
+func test_score_pass_zero_when_segment_crosses_net() -> void:
+	var shooter := Vector3(5.0, 0.0, 27.0)
+	var receiver := Vector3(-5.0, 0.0, 27.0)
+	var goalie := Vector3(0.0, 0.0, -25.0)
+	# Far-side goal so receiver isn't past attacking goal line.
+	var attacking_goal := Vector3(0.0, 0.0, -26.65)
+	var s: float = AIActionScoring.score_pass(
+			shooter, receiver, Vector2.ZERO, attacking_goal, goalie,
+			NET_HW, SHADOW_HW, [])
+	assert_almost_eq(s, 0.0, 0.001,
+			"score_pass returns zero when the segment crosses a net rect")

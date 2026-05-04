@@ -1285,6 +1285,19 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 	# whole sequence — bots only pass back-pass-out when they
 	# themselves are in NZ.
 	var carrier_in_oz: bool = -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
+	# Backward-pass gate: precomputed once for the carrier. When we
+	# have a clear forward path toward the attacking goal, backward
+	# passes (receiver behind us relative to attacking goal) get
+	# suppressed below — keeps the bot from immediately bouncing the
+	# puck back to a defender when there's open ice to skate into.
+	# Forward path occluded → no suppression so backward passes remain
+	# a legitimate cycle / regroup outlet. _scratch_opponents was
+	# populated by _build_action_opponents_lists at the top of
+	# _pick_action with current opponent positions.
+	var forward_path_clear: bool = AIActionScoring.has_clear_forward_path(
+			self_pos, _attacking_goal_pos, _scratch_opponents,
+			AIActionScoring.BACKWARD_PASS_FORWARD_PATH_RADIUS_M)
+	var carrier_to_goal: Vector3 = _attacking_goal_pos - self_pos
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
@@ -1301,6 +1314,11 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 		var flight_t: float = clampf(
 				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
 		var receiver: Vector3 = _predict_receiver(peer_id, receiver_state, flight_t)
+		# Skip receivers predicted to be past our own goal line — pass
+		# crosses the goal mouth and the puck deflects in. Real defenders
+		# don't pass to a teammate already standing in their own crease.
+		if _own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
+			continue
 		if not _is_pass_target_reachable(self_pos, self_facing_xz, receiver):
 			continue
 		_scratch_opponents_pass.clear()
@@ -1329,6 +1347,14 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents_pass,
 				receiver_q_bonus)
+		# Backward-pass suppression: if we have open ice to skate into,
+		# don't bail out by passing back to a defender. Backward = pass
+		# direction has a meaningful component AWAY from the attacking
+		# goal (dot < 0).
+		if s > 0.0 and forward_path_clear:
+			var to_receiver: Vector3 = receiver - self_pos
+			if to_receiver.x * carrier_to_goal.x + to_receiver.z * carrier_to_goal.z < 0.0:
+				s *= AIActionScoring.BACKWARD_PASS_SUPPRESSION
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:
