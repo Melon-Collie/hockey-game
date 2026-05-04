@@ -44,6 +44,15 @@ enum State {
 # 4+ teammates case) keeps the original above-puck behavior.
 const F2_OFFSET_X: float = 3.0
 const F2_OFFSET_Z_BACK: float = 2.0
+# Wider F2 strong-side X during own possession on the defensive half
+# (NZ or DZ). Stretches the breakout triangle: the carrier (F1) is
+# typically already strong-side, F2 backs off into more space rather
+# than crowding F1, and F3 is far weak-side at depth (see
+# F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M). The absolute
+# offset puts F2 ~4-5 m off the puck X regardless of where on the
+# rink the carrier is, which gives the carrier a real outlet lane
+# instead of a teammate one stick-length away.
+const F2_OWN_POSSESSION_DEF_HALF_OFFSET_X: float = 5.0
 # F1 pressure read: when F1 has 2+ defenders within F1_PRESSURE_RADIUS_M,
 # F2 collapses from the wide triangle apex to a tight close-support
 # position — assist the carrier directly instead of holding apex space.
@@ -70,6 +79,14 @@ const F3_OFFSET_Z_BACK: float = 8.0
 # too high during NZ regroups; lower toward 10 if cross-rink support
 # feels too distant.
 const F3_OWN_POSSESSION_DEF_HALF_OFFSET_Z_BACK: float = 14.0
+# F3 weak-side absolute X during own possession on the defensive
+# half (NZ or DZ). Mirrors the OZ triangle pattern: F1 carries, F2
+# offers short strong-side support, F3 is the long cross-rink
+# outlet at depth. The wide spacing opens a real breakout pass
+# lane and stretches the team across the rink so we're not
+# clustered. Absolute X (sign flipped from strong_x) so F3 sits
+# weak-side regardless of where the puck currently is.
+const F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M: float = 6.0
 # In OZ, F3 trails the puck by this far toward our own goal — but
 # clamped between the OZ blue line and the back of the OZ faceoff
 # circles (see F3_OZ_DOT_BACK_OFFSET_M). 3v3 doesn't need a strict
@@ -1828,8 +1845,14 @@ func _f2_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 			if pressure >= F1_HEAVY_PRESSURE_COUNT:
 				return _f2_support_anchor(f1_state.position, puck_pos)
 	# Default: triangle apex (F1 has space, F2 looks for an open lane).
+	# On the defensive half during own possession (breakout / regroup)
+	# we use a wider X offset — see F2_OWN_POSSESSION_DEF_HALF_OFFSET_X.
 	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
-	var x: float = puck_pos.x + strong_x * F2_OFFSET_X
+	var x_offset: float = F2_OFFSET_X
+	var puck_in_oz: bool = -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z
+	if not puck_in_oz and _own_team_has_possession(snapshot):
+		x_offset = F2_OWN_POSSESSION_DEF_HALF_OFFSET_X
+	var x: float = puck_pos.x + strong_x * x_offset
 	var z: float = puck_pos.z + _own_goal_dir * F2_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
 
@@ -2183,11 +2206,14 @@ func _f3_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 			z = clampf(trail_z, lo, hi)
 	else:
 		# NZ or DZ. On own possession (breakout / regroup) F3 stays
-		# deep — the safety valve until the puck enters OZ. On loose
-		# puck or opp possession the legacy above-puck trailer applies.
+		# deep — the safety valve until the puck enters OZ — AND swings
+		# weak-side to open a cross-rink breakout pass lane. On loose
+		# puck or opp possession the legacy above-puck strong-side
+		# trailer applies (active forechecking, not breakout support).
 		var back_offset: float = F3_OFFSET_Z_BACK
 		if _own_team_has_possession(snapshot):
 			back_offset = F3_OWN_POSSESSION_DEF_HALF_OFFSET_Z_BACK
+			x = -strong_x * F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M
 		z = puck_pos.z + _own_goal_dir * back_offset
 	return _clamp_anchor(Vector3(x, 0.0, z))
 
