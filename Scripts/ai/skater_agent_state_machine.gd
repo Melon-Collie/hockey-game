@@ -1576,6 +1576,10 @@ func _is_f1() -> bool:
 	return _team_brain != null and _team_brain.get_role(_peer_id) == AIRoleAssignment.ROLE_F1
 
 
+func _is_f3() -> bool:
+	return _team_brain != null and _team_brain.get_role(_peer_id) == AIRoleAssignment.ROLE_F3
+
+
 # Off-puck anchor selection.
 #   - DZ + opp possession (or loose puck in DZ): switch to man-to-man.
 #     F2/F3 anchor on their assigned mark, 1 m goal-side.
@@ -1608,12 +1612,16 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 		return screen_anchor
 
 	# Emergency backcheck: caught up-ice with opp possession on our
-	# defensive half. Sprint to a position back of the puck — man-to-
-	# man's anchor might route to the boards, adding distance to a
-	# rotation we're already losing to the rush. Once we're back of
-	# the puck, _is_caught_up_ice returns false and man-to-man takes
-	# over with whatever mark coverage_assignment gave us.
-	if _is_caught_up_ice(snapshot, self_pos):
+	# defensive half. The deepest non-carrier (F3 per the high-man
+	# pin) sprints to the centred defensive slot — they're the
+	# "safety" position. F1 and F2 caught up-ice fall through to
+	# man-to-man instead of also routing to the centred slot, so
+	# multiple backcheckers don't all converge on the same point
+	# (which produced visible stacking / bots ramming each other in
+	# the slot). F1/F2 marks are different opps so their anchors
+	# spread naturally; the small route inefficiency is worth the
+	# avoided collisions.
+	if _is_caught_up_ice(snapshot, self_pos) and _is_f3():
 		return _emergency_backcheck_anchor(snapshot)
 
 	var anchor: Vector3
