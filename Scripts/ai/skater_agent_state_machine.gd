@@ -336,6 +336,13 @@ var _shoot_aim_target: Vector3 = Vector3.ZERO
 var _give_and_go_anchor: Vector3 = Vector3.ZERO
 var _give_and_go_remaining_ticks: int = 0
 
+# Per-bot RNG for aim wobble. Seeded once in setup() from peer_id and
+# the host tick at spawn so each bot has its own deterministic but
+# distinct stream. The previous implementation allocated a fresh
+# RandomNumberGenerator and called randomize() on every shot/pass —
+# per-call heap allocation plus replay-breaking non-determinism.
+var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
+
 # Debug: live scores from the most recent _pick_action tick. Read by
 # AIController at ~10 Hz to drive the floating per-bot label. Updated
 # every CARRY tick; stale when the bot isn't carrying (label shows
@@ -360,6 +367,12 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
 	_team_brain = brain
 	_team_id_resolver = resolver
 	_is_left_handed = is_left_handed
+	# Seed the per-bot RNG. peer_id × prime spreads the bot id range
+	# (10000+) across the seed space; XOR with NetworkManager.host_tick
+	# at spawn salts the seed per-session so every match isn't an
+	# identical wobble pattern (still deterministic within a session,
+	# which is what replay needs).
+	_rng.seed = (peer_id * 1000003) ^ NetworkManager.host_tick
 
 
 # ── State accessors ──────────────────────────────────────────────────────────
@@ -840,9 +853,8 @@ func _aim_wobble(from: Vector3, to: Vector3, cone_deg: float) -> Vector3:
 	# Uniform [-1, +1] × cone, then convert angle to lateral offset.
 	# tan() at small angles ≈ angle in rad, but use tan() exactly so
 	# the wobble scales correctly even for atypical (large) cones.
-	var rng := RandomNumberGenerator.new()
-	rng.randomize()
-	var theta_rad: float = deg_to_rad(cone_deg) * rng.randf_range(-1.0, 1.0)
+	# RNG is per-bot, seeded once in setup() — see _rng declaration.
+	var theta_rad: float = deg_to_rad(cone_deg) * _rng.randf_range(-1.0, 1.0)
 	var lateral: float = dist * tan(theta_rad)
 	# Perpendicular to aim direction in XZ — 90° rotation: (x,z) → (-z,x).
 	var dir: Vector3 = to_target / dist
