@@ -236,6 +236,20 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 const BOT_WRISTER_WIND_UP_BACK_M: float = 0.6
 const BOT_WRISTER_WIND_UP_SIDE_M: float = 0.4
 
+# Quick-shot pass reachability cone. A pass commits via shoot_pressed
+# the same tick it transitions out of CARRY → quick-shot direction is
+# `(blade - player)` in `ShotMechanics.release_wrister`. The blade IK
+# clamps to the bot's blade ROM (≈90° each side of facing), and the
+# body can't rotate to face a backward target in one tick (it's
+# `ik_locked_side`-frozen above 157° from current facing per
+# SkaterPoseCoordinator). Receivers outside this dot threshold from
+# the bot's current facing therefore fire at the ROM edge, not at the
+# receiver — the puck goes sideways and "looks like a dump."
+# 0.1 ≈ 84°; receivers near-perpendicular get filtered before
+# scoring. Set to 0.0 for full forward 180° if the filter feels too
+# strict during playtest.
+const PASS_REACHABLE_DOT_MIN: float = 0.1
+
 # ── Give-and-go ─────────────────────────────────────────────────────────────
 # After releasing a pass, the passer cuts to open ice up-ice from the
 # release point and holds that position for a short window — looking
@@ -686,6 +700,13 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	# step into the lane reads as clear and we feed them the puck.
 	# This matches what `_pass_aim_point` does at press time, so the
 	# scoring decision and the actual aim are now consistent.
+	#
+	# Reachability filter: receivers outside the bot's blade ROM
+	# (PASS_REACHABLE_DOT_MIN forward of facing) are dropped before
+	# scoring — the quick-shot would fire at the ROM edge instead of
+	# the receiver. See PASS_REACHABLE_DOT_MIN comment.
+	var self_state: SkaterNetworkState = snapshot.skater_states[_peer_id]
+	var self_facing_xz: Vector2 = self_state.facing
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
 	for peer_id: int in snapshot.skater_states:
@@ -701,6 +722,11 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
 		var receiver: Vector3 = AITrajectory.predict_at(
 				receiver_state.position, receiver_state.velocity, flight_t)
+		# Skip targets the quick-shot can't actually reach. Use the
+		# AIM point (predicted receiver), not the current pos, since
+		# that's where the blade IK will resolve toward.
+		if not _is_pass_target_reachable(self_pos, self_facing_xz, receiver):
+			continue
 		_scratch_opponents_pass.clear()
 		for opp_pid: int in snapshot.skater_states:
 			if opp_pid == _peer_id:
@@ -1298,6 +1324,29 @@ static func _angle_intercept_inside(target: Vector3, carrier_pos: Vector3) -> Ve
 		return target
 	var bias: float = -signf(carrier_pos.x) * CHASE_ANGLE_BIAS_M
 	return Vector3(target.x + bias, target.y, target.z)
+
+
+# True iff `aim_pos` sits inside the quick-shot blade ROM cone from
+# `self_pos` given `facing_xz`. See PASS_REACHABLE_DOT_MIN comment for
+# the underlying mechanic. Used by `_pick_action` to drop unreachable
+# pass targets before scoring; receivers behind the bot's facing
+# would otherwise be picked as "open" and the actual quick-shot would
+# fire at the ROM edge instead. Static + private so it's
+# unit-testable without standing up a full SM.
+#
+# `facing_xz` follows the SkaterNetworkState convention (Vector2 of
+# unit-length world XZ). Degenerate aims (aim coincident with self)
+# return true since there's no direction to constrain.
+static func _is_pass_target_reachable(self_pos: Vector3, facing_xz: Vector2,
+		aim_pos: Vector3) -> bool:
+	var dx: float = aim_pos.x - self_pos.x
+	var dz: float = aim_pos.z - self_pos.z
+	var len_sq: float = dx * dx + dz * dz
+	if len_sq < 0.0001:
+		return true
+	var inv: float = 1.0 / sqrt(len_sq)
+	var dot: float = facing_xz.x * dx * inv + facing_xz.y * dz * inv
+	return dot >= PASS_REACHABLE_DOT_MIN
 
 
 func _lead_intercept(self_pos: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
