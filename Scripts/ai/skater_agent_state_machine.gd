@@ -196,9 +196,20 @@ const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 # for more aggressive dekes; lower toward 0.3 if puck visibly
 # wobbles too much. Raise THREAT_RADIUS toward 5 if bots react too
 # late; lower toward 3 if they twitch on incidental opponents.
+#
+# STICKHANDLE_LERP_PER_TICK smooths the offset across ticks so the
+# blade doesn't flip-flop when the closest-threat assignment
+# changes — e.g. two defenders converging from opposite sides
+# alternate "closest" each tick, raw offset flips ±left/right, blade
+# jitters between the two. With the lerp the smoothed offset
+# converges between them (if they're balanced, smoothed → zero;
+# clear winner → smoothed pulls toward that side). 0.05 per tick
+# at 240 Hz reaches 70% of a new target in ~100 ms — fast enough to
+# look like reactive stickhandling, slow enough to not jitter.
 const STICKHANDLE_THREAT_RADIUS_M: float = 4.0
 const STICKHANDLE_CLOSING_VEL_MIN_M_S: float = 1.0
 const STICKHANDLE_OFFSET_MAX_M: float = 0.5
+const STICKHANDLE_LERP_PER_TICK: float = 0.05
 
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
@@ -1240,7 +1251,15 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	else:
 		forward_dir = Vector3.FORWARD
 	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
-	return base + _stickhandle_offset(snapshot, self_pos, forward_dir)
+	var raw_offset: Vector3 = _stickhandle_offset(snapshot, self_pos, forward_dir)
+	# Smooth across ticks: when two defenders converge from opposite
+	# sides, the "closest threat" assignment alternates per tick and
+	# the raw offset flips ±right. Lerping kills the flip-flop —
+	# balanced threats average to ~zero offset; a clear single threat
+	# pulls the smoothed offset to its evade side.
+	_smoothed_stickhandle_offset = _smoothed_stickhandle_offset.lerp(
+			raw_offset, STICKHANDLE_LERP_PER_TICK)
+	return base + _smoothed_stickhandle_offset
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
@@ -1342,6 +1361,12 @@ const IK_GATE_MARGIN_DEG: float = 15.0
 # Smoothed aim direction, persisted across OFF_PUCK ticks. Updated by
 # `_ready_stance_aim`; uninitialized (zero) until first call.
 var _smoothed_aim_dir: Vector3 = Vector3.ZERO
+
+# Smoothed stickhandling offset, persisted across CARRY ticks. See
+# STICKHANDLE_LERP_PER_TICK. Lerped each tick toward the raw evade
+# offset so the blade doesn't snap when the closest-threat
+# assignment changes side.
+var _smoothed_stickhandle_offset: Vector3 = Vector3.ZERO
 
 func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	var desired_dir: Vector3 = _compute_desired_aim_dir(self_pos, anchor, snapshot)
