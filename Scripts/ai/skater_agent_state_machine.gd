@@ -277,10 +277,12 @@ const SLAPPER_POWER_BONUS: float = 1.15
 # cost of a wasted charge is just velocity drag).
 const ONE_TIMER_TRIGGER_THRESHOLD: float = 0.4
 # Release distance: drop slap_held when the puck is within this much
-# of the bot. SkaterController's `try_one_timer_release` does the
-# actual proximity check with velocity-scaled leniency, so a hair
-# early/late on the release usually still fires.
-const ONE_TIMER_RELEASE_DISTANCE_M: float = 1.5
+# of the bot's slapper zone center (NOT the bot's body). Zone radius
+# is 0.5 m; SkaterController's `try_one_timer_release` adds velocity-
+# scaled leniency on top (puck speed × 0.05 s), so 1.0 m at the
+# zone-center sits well inside the effective release window for
+# typical pass speeds (~22 m/s → leniency ≈ 1.6 m).
+const ONE_TIMER_RELEASE_DISTANCE_M: float = 1.0
 # Max charge duration. After this many ticks with no pass, abort the
 # charge — the puck isn't coming, holding longer just keeps the bot
 # stuck in slapper drag.
@@ -292,6 +294,13 @@ const ONE_TIMER_MAX_CHARGE_TICKS: int = 240   # 1 s
 const ONE_TIMER_TARGET_BONUS: float = 2.0
 # Mirror of SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK (=4).
 const _SHOT_STATE_SLAPPER_CHARGE_WITHOUT_PUCK: int = 4
+# Slapper zone offsets in player-local space. Mirror SkaterController's
+# `slapper_zone_offset_z` (forward, magnitude) and `slapper_zone_offset_x`
+# (lateral toward blade side). Used to compute the bot's zone position
+# in world space for both the pre-charge geometry gate (receiver-side)
+# and the release-distance check.
+const SLAPPER_ZONE_FORWARD_M: float = 1.0
+const SLAPPER_ZONE_LATERAL_M: float = 0.8
 
 # Quick-shot pass reachability cone. A pass commits via shoot_pressed
 # the same tick it transitions out of CARRY → quick-shot direction is
@@ -870,11 +879,19 @@ func _state_one_timer_charge(input: InputState, snapshot: WorldSnapshot, self_po
 	if _ticks_in_state == 0:
 		input.slap_pressed = true
 
-	# Release window: drop slap_held when the incoming puck is close.
-	if self_pos.distance_to(snapshot.puck_state.position) <= ONE_TIMER_RELEASE_DISTANCE_M:
-		input.slap_held = false
-		_set_state(State.OFF_PUCK)
-		return
+	# Release window: drop slap_held when the puck nears the actual
+	# slapper zone (offset forward + blade-side from us), NOT just the
+	# player body. SkaterController's `try_one_timer_release` checks
+	# `puck.distance_to(zone_pos)` against zone_radius + velocity-scaled
+	# leniency, so we want our release threshold matched to that zone
+	# center for accurate timing.
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state != null:
+		var zone_pos: Vector3 = _compute_slapper_zone_pos(self_pos, self_state.facing)
+		if zone_pos.distance_to(snapshot.puck_state.position) <= ONE_TIMER_RELEASE_DISTANCE_M:
+			input.slap_held = false
+			_set_state(State.OFF_PUCK)
+			return
 
 	input.slap_held = true
 
@@ -1554,10 +1571,20 @@ func _own_team_has_possession(snapshot: WorldSnapshot) -> bool:
 
 
 # True iff conditions favour pre-charging a slapper to demand the puck.
-# Requires (1) a teammate carries the puck (own possession, not me),
-# and (2) score_shoot from my current position clears the trigger
-# threshold — i.e. I have a real one-timer threat from here, not just
-# wandering the OZ.
+# Three gates, all must pass:
+#   (1) A teammate carries the puck (own possession, not me).
+#   (2) score_shoot from my current position clears the trigger
+#       threshold — i.e. I have a real one-timer threat from here,
+#       not just wandering the OZ.
+#   (3) The carrier is on my NON-blade side. The slapper zone is
+#       offset to the blade side; for the puck to enter the zone on
+#       a pass, the puck path (carrier → me → continuation) must
+#       cross the zone — which only happens if the carrier is on
+#       the opposite side of my body from the blade. RH receiver
+#       wants carrier on their LEFT; LH wants carrier on their
+#       RIGHT. Without this gate, RH bots would pre-charge for
+#       cross-passes coming from the wrong side and the puck would
+#       miss the zone entirely.
 #
 # Uses _scratch_opponents which is populated by `_apply_steering`
 # earlier in the OFF_PUCK tick, so callers must run after that.
@@ -1567,12 +1594,48 @@ func _should_pre_charge_slapper(snapshot: WorldSnapshot, self_pos: Vector3) -> b
 		return false
 	if int(_team_id_resolver.call(carrier)) != _team_id:
 		return false
+	# Geometry gate: carrier on non-blade side.
+	var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
+	if carrier_state != null:
+		var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+		if self_state != null:
+			var blade_dir: Vector2 = _blade_side_dir(self_state.facing)
+			var to_carrier: Vector2 = Vector2(
+					carrier_state.position.x - self_pos.x,
+					carrier_state.position.z - self_pos.z)
+			# Carrier on blade side → puck path won't cross the zone.
+			if blade_dir.dot(to_carrier) >= 0.0:
+				return false
 	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
 	var score: float = AIActionScoring.score_shoot(
 			self_pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 			_scratch_opponents)
 	return score >= ONE_TIMER_TRIGGER_THRESHOLD
+
+
+# Slapper zone position in world XZ. Mirrors SkaterController's
+# `get_slapper_zone_global_position` based on facing + handedness.
+# Zone is forward + lateral-blade-side from the player; for RH
+# blade-side is "right of facing" (facing.y, -facing.x), for LH the
+# opposite. Used by the release-distance check so we drop slap_held
+# when the puck nears the actual zone, not just the player body.
+func _compute_slapper_zone_pos(self_pos: Vector3, facing: Vector2) -> Vector3:
+	var blade_dir: Vector2 = _blade_side_dir(facing)
+	# Forward direction in world XZ is (facing.x, facing.y).
+	return Vector3(
+			self_pos.x + facing.x * SLAPPER_ZONE_FORWARD_M + blade_dir.x * SLAPPER_ZONE_LATERAL_M,
+			0.0,
+			self_pos.z + facing.y * SLAPPER_ZONE_FORWARD_M + blade_dir.y * SLAPPER_ZONE_LATERAL_M)
+
+
+# Unit direction from player toward their blade side, in world XZ.
+# RH player: blade on the right of their facing. LH: opposite.
+# Right-of-facing in our (sin, cos)-of-bearing convention is
+# (facing.y, -facing.x); LH negates.
+func _blade_side_dir(facing: Vector2) -> Vector2:
+	var sign: float = -1.0 if _is_left_handed else 1.0
+	return Vector2(facing.y * sign, -facing.x * sign)
 
 
 # Clamp an anchor to the playable rink with a small margin so steering
