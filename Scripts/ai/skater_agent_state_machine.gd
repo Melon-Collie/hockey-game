@@ -698,16 +698,52 @@ func _apply_slot_steering(input: InputState, snapshot: WorldSnapshot, self_pos: 
 
 
 # Score every applicable action and transition into the highest-scoring
-# state. CARRY is the implicit default — if neither SHOOT nor any PASS
-# clears AIActionScoring.ACTION_THRESHOLD we stay in CARRY without
+# state. CARRY is the implicit default — if no action clears
+# AIActionScoring.ACTION_THRESHOLD we stay in CARRY without
 # transitioning (next tick re-evaluates).
 #
 # Mutates _pass_target_peer_id when PASS wins.
 func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
-	# Build opponents lists. Current positions for pass/dump/receiver
-	# pressure (one-tick decisions); predicted-forward positions for
-	# wrister scoring (250 ms time commitment — defender 4 m away at
-	# 5 m/s closing covers half that gap before the shot fires).
+	_build_action_opponents_lists(snapshot)
+	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
+	var shoot_score: float = AIActionScoring.score_shoot(
+			self_pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+			_scratch_opponents_shoot)
+	var self_state: SkaterNetworkState = snapshot.skater_states[_peer_id]
+	var best_pass: Array = _compute_best_pass(
+			snapshot, self_pos, self_state.facing, goalie_pos)
+	var best_pass_peer: int = best_pass[0]
+	var best_pass_score: float = best_pass[1]
+	var dump_score: float = AIActionScoring.score_dump(
+			self_pos, _attacking_goal_pos, _own_goal_dir,
+			GameRules.BLUE_LINE_Z, _scratch_opponents)
+	_update_debug_scores(shoot_score, best_pass_peer, best_pass_score, dump_score)
+
+	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
+	if max_score < AIActionScoring.ACTION_THRESHOLD:
+		return
+	if shoot_score >= best_pass_score and shoot_score >= dump_score:
+		_shot_is_elevated = _should_elevate_shot(snapshot)
+		debug_last_decision = "SHOOT"
+		_set_state(State.SHOOT_PRESSED)
+	elif best_pass_score >= dump_score:
+		_pass_target_peer_id = best_pass_peer
+		debug_last_decision = "PASS→%d" % (best_pass_peer % 1000)
+		_set_state(State.PASS_PRESSED)
+	else:
+		debug_last_decision = "DUMP"
+		_set_state(State.DUMP_PRESSED)
+
+
+# Populates the two scratch lists used by _pick_action's scoring:
+# - _scratch_opponents: current opponent positions, for dump scoring.
+# - _scratch_opponents_shoot: positions predicted forward by the
+#   wrister-charge window, for shoot scoring.
+# Pass scoring uses a third per-receiver list (_scratch_opponents_pass)
+# rebuilt inside `_compute_best_pass` because the lookahead varies per
+# teammate.
+func _build_action_opponents_lists(snapshot: WorldSnapshot) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponents_shoot.clear()
 	for peer_id: int in snapshot.skater_states:
@@ -717,34 +753,17 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, BOT_WRISTER_LOOKAHEAD_S))
 
-	# SHOOT score — at most one. goalie_pos is predicted forward by the
-	# wrister lookahead so a sliding goalie's read at decision time
-	# matches where they'll be at release. Falls back to
-	# _attacking_goal_pos if the goalie state isn't buffered yet.
-	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
-	var shoot_score: float = AIActionScoring.score_shoot(
-			self_pos, _attacking_goal_pos, goalie_pos,
-			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-			_scratch_opponents_shoot)
 
-	# PASS score — one per teammate. Track the best. Ghosted teammates
-	# (currently offside) can't legally receive — their collision masks
-	# are off, so the puck would pass through them. Skip outright.
-	#
-	# Per-receiver flight-time prediction: a pass takes 0.5–1.1 s in the
-	# air and during that time both the receiver and any defenders
-	# move. Score against the FUTURE state (where the puck actually
-	# arrives), not the snapshot state — otherwise a defender about to
-	# step into the lane reads as clear and we feed them the puck.
-	# This matches what `_pass_aim_point` does at press time, so the
-	# scoring decision and the actual aim are now consistent.
-	#
-	# Reachability filter: receivers outside the bot's blade ROM
-	# (PASS_REACHABLE_DOT_MIN forward of facing) are dropped before
-	# scoring — the quick-shot would fire at the ROM edge instead of
-	# the receiver. See PASS_REACHABLE_DOT_MIN comment.
-	var self_state: SkaterNetworkState = snapshot.skater_states[_peer_id]
-	var self_facing_xz: Vector2 = self_state.facing
+# Loops every legal pass target and returns [best_pid, best_score]. A
+# pass takes 0.5–1.1 s of flight time, so the receiver and every
+# defender are projected forward by that flight time before scoring —
+# decision matches what `_pass_aim_point` actually fires at press time.
+# Skips ghosted teammates (collision masks off → puck would pass
+# through them) and unreachable receivers (outside the bot's blade
+# ROM cone — quick-shot would fire at the ROM edge instead of the
+# receiver). Human teammates get HUMAN_PASS_BIAS on close-call passes.
+func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
+		self_facing_xz: Vector2, goalie_pos: Vector3) -> Array:
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
 	for peer_id: int in snapshot.skater_states:
@@ -760,9 +779,6 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
 		var receiver: Vector3 = AITrajectory.predict_at(
 				receiver_state.position, receiver_state.velocity, flight_t)
-		# Skip targets the quick-shot can't actually reach. Use the
-		# AIM point (predicted receiver), not the current pos, since
-		# that's where the blade IK will resolve toward.
 		if not _is_pass_target_reachable(self_pos, self_facing_xz, receiver):
 			continue
 		_scratch_opponents_pass.clear()
@@ -779,51 +795,27 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 				_attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents_pass)
-		# Human teammates get a small score multiplier so the bot prefers
-		# feeding the player on close-call passes. peer_ids in
-		# [1, BOT_ID_BASE) are real ENet peers (humans); >= BOT_ID_BASE
-		# are synthetic bot ids.
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
+	return [best_pass_peer, best_pass_score]
 
-	# DUMP score — fires when pressured + far from attacking goal. Pure
-	# function of pressure and zone, doesn't compete on shot/pass quality.
-	var dump_score: float = AIActionScoring.score_dump(
-			self_pos, _attacking_goal_pos, _own_goal_dir,
-			GameRules.BLUE_LINE_Z, _scratch_opponents)
 
-	# Debug: snapshot the per-tick scores for the on-ice label. Sorted
-	# desc, top 3, peer id mod 1000 for compactness.
+# Updates `debug_scores` for the on-ice debug label. Top 3 sorted desc.
+func _update_debug_scores(shoot_score: float, best_pass_peer: int,
+		best_pass_score: float, dump_score: float) -> void:
+	var pass_label: String = "pass→%d" % (best_pass_peer % 1000) if best_pass_peer != 0 else "pass"
 	var rows: Array = [
 			["shoot", shoot_score],
-			["pass→%d" % (best_pass_peer % 1000) if best_pass_peer != 0 else "pass", best_pass_score],
+			[pass_label, best_pass_score],
 			["dump", dump_score],
 	]
 	rows.sort_custom(func(a, b): return a[1] > b[1])
 	debug_scores.clear()
 	for r: Array in rows:
 		debug_scores.append("%s:%.2f" % [r[0], r[1]])
-
-	# Pick the winner. Threshold gates "do nothing" — when all scores
-	# are weak (e.g., bot in own zone with no pressure or teammate
-	# ahead), CARRY wins implicitly.
-	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
-	if max_score < AIActionScoring.ACTION_THRESHOLD:
-		return
-	if shoot_score >= best_pass_score and shoot_score >= dump_score:
-		_shot_is_elevated = _should_elevate_shot(snapshot)
-		debug_last_decision = "SHOOT"
-		_set_state(State.SHOOT_PRESSED)
-	elif best_pass_score >= dump_score:
-		_pass_target_peer_id = best_pass_peer
-		debug_last_decision = "PASS→%d" % (best_pass_peer % 1000)
-		_set_state(State.PASS_PRESSED)
-	else:
-		debug_last_decision = "DUMP"
-		_set_state(State.DUMP_PRESSED)
 
 
 # Lead the receiver by their flight-time along their current velocity.

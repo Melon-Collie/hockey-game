@@ -12,12 +12,19 @@ class_name AIActionScoring
 # on a clear lane between shooter and receiver.
 
 # An opponent within this distance counts toward "pressure" on a target.
+# Tuning: raise toward 5 if bots feel oblivious to nearby defenders;
+# lower toward 3 if pressure trips on too-distant marks.
 const PRESSURE_RADIUS_M: float = 4.0
 # How many opponents within radius == fully pressured (score multiplier 0).
+# At 3 (default), three forward-cone opponents at full weight saturate
+# pressure. Raise toward 4 to make pressure harder to saturate (less
+# trigger-happy); lower toward 2 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 3
 
 # Beyond this range, shots score 0 from distance alone — keeps bots from
-# launching pucks at the goalie from the blue line.
+# launching pucks at the goalie from the blue line. Raise toward 22 if
+# bots refuse to take long shots even when wide open; lower toward 14
+# if blue-line shots are too common.
 const SHOT_RANGE_FALLOFF_M: float = 18.0
 
 # Shooting-angle cone, measured from the net's outward normal (the
@@ -31,18 +38,25 @@ const SHOT_RANGE_FALLOFF_M: float = 18.0
 #      a shadow projecting off the net plane as fully open net — but
 #      from a 75° angle the actual visible net is narrow regardless
 #      of where the shadow lands.
+# Tuning: widen FULL→60° / ZERO→90° if bots over-pass on legitimate
+# off-angle shots; tighten FULL→40° / ZERO→70° if bad-angle shots are
+# too common.
 const SHOT_ANGLE_FULL_DEG: float = 50.0
 const SHOT_ANGLE_ZERO_DEG: float = 80.0
 
 # Lane-clear: an opponent within this perpendicular distance from the
 # bot→receiver line segment fully blocks the pass. Score scales linearly
-# with distance up to LANE_CLEAR_RADIUS_M (clear).
+# with distance up to LANE_CLEAR_RADIUS_M (clear). Roughly the
+# stick-blade reach of a lane defender. Raise toward 2.0 if passes
+# still get picked off mid-lane; lower toward 1.0 if bots over-reject
+# legitimate threading passes.
 const LANE_CLEAR_RADIUS_M: float = 1.5
 
 # Outlet pass scoring — when a receiver is "more advanced" toward the
 # attacking goal but too far to shoot themselves. Receiver must be at
 # least PASS_MIN_ADVANCE_M closer to goal to score above 0; saturates
-# at PASS_MAX_ADVANCE_M.
+# at PASS_MAX_ADVANCE_M. Tuning: raise MIN if bots over-pass for tiny
+# advancement gains; raise MAX if long stretch passes feel under-valued.
 const PASS_MIN_ADVANCE_M: float = 3.0
 const PASS_MAX_ADVANCE_M: float = 12.0
 
@@ -55,12 +69,16 @@ const PASS_MAX_ADVANCE_M: float = 12.0
 # quality contribution so a wide-open teammate doesn't drown out a
 # shot or genuine outlet pass when those are available; it does clear
 # ACTION_THRESHOLD (0.25) on its own when the lane and pressure terms
-# cooperate.
+# cooperate. Tuning: raise OPEN_MAN_MAX_SCORE toward 0.5 to make bots
+# pass-happy on possession; lower toward 0.3 if they pass too often
+# instead of carrying.
 const OPEN_MAN_RADIUS_M: float = 3.0
 const OPEN_MAN_MAX_SCORE: float = 0.4
 
-# Score threshold below which the SM stays in CARRY rather than committing
-# to a SHOOT or PASS. Tunes how aggressive bots are.
+# Score threshold below which the SM stays in CARRY rather than
+# committing to a SHOOT or PASS. Tunes how aggressive bots are.
+# Raise toward 0.35 to make bots more patient (carry more); lower
+# toward 0.15 to make them committal (shoot/pass on weaker reads).
 const ACTION_THRESHOLD: float = 0.25
 
 # DUMP zone factors. Lower in own zone than you might expect — 3v3
@@ -68,6 +86,9 @@ const ACTION_THRESHOLD: float = 0.25
 # pass/carry out first and only dump under heavy directional pressure.
 # Neutral-zone dump (e.g. carrying into a wall of defenders past the
 # red line) is the most natural use case. Never from OZ.
+# Tuning: raise DUMP_OWN_ZONE_FACTOR toward 0.6 if bots refuse to
+# clear under heavy DZ pressure; raise DUMP_NEUTRAL_ZONE_FACTOR toward
+# 0.85 if they should be more willing to dump in (less common in 3v3).
 const DUMP_OWN_ZONE_FACTOR: float = 0.4
 const DUMP_NEUTRAL_ZONE_FACTOR: float = 0.7
 const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
@@ -78,7 +99,9 @@ const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
 # returns true, the NZ dump score is multiplied by this factor, dropping
 # 0.7 × 1.0 (full pressure) to 0.21 — below ACTION_THRESHOLD (0.25), so
 # DUMP loses to CARRY. Only triggers in NZ — DZ and OZ already handle
-# correctly without this branch.
+# correctly without this branch. Tuning: raise RADIUS toward 5 for a
+# stricter "must have a real wall" rule; lower SUPPRESSION toward 0.1
+# to harder-suppress NZ dumps with any open ice.
 const NZ_DUMP_CLEAR_PATH_RADIUS_M: float = 3.0
 const NZ_DUMP_CLEAR_PATH_SUPPRESSION: float = 0.3
 
