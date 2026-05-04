@@ -285,6 +285,19 @@ const SCREEN_OFFSET_FROM_GOAL_LINE_M: float = 2.5
 # controller dependency from this AI module.
 const _SHOT_STATE_SLAPPER_CHARGE_WITH_PUCK: int = 3
 
+# ── Emergency backcheck ─────────────────────────────────────────────────────
+# When the puck turns over in the NZ (or DZ) and a bot is caught
+# up-ice — between attacker and own net — they need to skate STRAIGHT
+# home, not via their man-to-man anchor (which might sit wide if the
+# mark is at the boards). Override anchors the bot at the defensive
+# slot until they're back of the puck; man-to-man then picks them up
+# and routes them onto an actual mark.
+#
+# BACKCHECK_SLOT_DEPTH_M is the distance in front of own goal where
+# the slot anchor sits — same depth used elsewhere as "good
+# defensive position." Centred X (slot is the highest-danger zone).
+const BACKCHECK_SLOT_DEPTH_M: float = 5.0
+
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
@@ -511,10 +524,14 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
-	elif not _is_f1() or _teammate_has_puck(snapshot):
-		# Either we're not F1 anymore, or a teammate just picked up the
-		# puck — in both cases, drop back to off-puck support instead of
-		# pinning our blade to the puck on our own teammate's stick.
+	elif not _is_f1() or _teammate_has_puck(snapshot) or _is_caught_up_ice(snapshot, self_pos):
+		# Drop back to off-puck support if any of:
+		#   - We're not F1 anymore (role rotation).
+		#   - Teammate just picked up the puck (we shouldn't chase our
+		#     own carrier).
+		#   - We're caught up-ice on opp possession in our defensive
+		#     half — chasing forward can't catch the puck heading the
+		#     other way; OFF_PUCK's backcheck override gets us home.
 		_set_state(State.OFF_PUCK)
 
 
@@ -963,6 +980,16 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 	if screen_anchor != Vector3.ZERO:
 		return screen_anchor
 
+	# Emergency backcheck: caught up-ice with opp possession on our
+	# defensive half. Sprint to the defensive slot before picking up
+	# a mark — man-to-man's anchor might route to the boards, adding
+	# distance to a rotation we're already losing to the rush. Once
+	# we're back of the puck, _is_caught_up_ice returns false and
+	# man-to-man takes over with whatever mark coverage_assignment
+	# gave us.
+	if _is_caught_up_ice(snapshot, self_pos):
+		return _emergency_backcheck_anchor()
+
 	var anchor: Vector3
 	# Man-to-man takes priority on our defensive half when the opp has
 	# the puck (or it's loose). The brain publishes the coverage map at
@@ -1175,6 +1202,41 @@ func _net_front_screen_anchor_or_zero(snapshot: WorldSnapshot, self_pos: Vector3
 		if their_dist < my_dist or (their_dist == my_dist and pid < _peer_id):
 			return Vector3.ZERO
 	return _clamp_anchor(screen_anchor)
+
+
+# True iff this bot is caught up-ice during opp possession on our
+# defensive half — i.e. the puck is BETWEEN us and our own net, and
+# the opp (or a loose puck) is heading toward us. Triggers the
+# emergency backcheck override that anchors us to the defensive slot
+# instead of routing through man-to-man's mark anchor.
+#
+# Gates:
+#   - Bot forward of puck (puck closer to own net than bot).
+#   - Opp possession or loose puck (own possession is a breakout, not
+#     a defensive scenario).
+#   - Puck on our defensive half (NZ or DZ). In our OZ a "caught"
+#     bot is forechecking, not backchecking — let normal anchors
+#     handle that.
+func _is_caught_up_ice(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	if _own_goal_dir * (self_pos.z - puck_pos.z) >= 0.0:
+		return false
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier != -1 and int(_team_id_resolver.call(carrier)) == _team_id:
+		return false
+	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
+		return false
+	return true
+
+
+# Defensive slot anchor: centred X, BACKCHECK_SLOT_DEPTH_M in front of
+# own goal. Used as the emergency-backcheck destination so caught
+# bots take a straight-line route home instead of skating wide to
+# their assigned mark. Once they're back of the puck, the override
+# releases and normal coverage takes over.
+func _emergency_backcheck_anchor() -> Vector3:
+	var anchor_z: float = _own_goal_dir * (GameRules.GOAL_LINE_Z - BACKCHECK_SLOT_DEPTH_M)
+	return Vector3(0.0, 0.0, anchor_z)
 
 
 # True iff we're defending — opp has the puck (or it's loose) and the
