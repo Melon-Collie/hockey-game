@@ -30,7 +30,8 @@ enum State {
 	OFF_PUCK,        # default off-puck — anchor above puck, aim at goal
 	CHASE_PUCK,      # F1 without puck — pursue, blade on the puck
 	CARRY,           # with puck, no committed action — aim at goal
-	SHOOT_PRESSED,   # one-tick press window aimed at goalie shadow
+	SHOOT_PRESSED,   # multi-tick wrister charge aimed at goalie shadow
+	SLAPPER_PRESSED, # multi-tick slapper charge — bigger commit, more power
 	PASS_PRESSED,    # one-tick press window aimed at a teammate's lead position
 	DUMP_PRESSED,    # one-tick press window aimed at a deep-zone clear
 }
@@ -236,6 +237,28 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 const BOT_WRISTER_WIND_UP_BACK_M: float = 0.6
 const BOT_WRISTER_WIND_UP_SIDE_M: float = 0.4
 
+# ── Slapper ──────────────────────────────────────────────────────────────────
+# Bots take slappers when they have meaningful clean space to wind up.
+# SkaterController.slapper_wind_up_time = 0.3 s and max_slapper_charge_time
+# = 0.7 s, so 0.55 s is past wind-up + ~62% into the charge window — a
+# solid mid-power slapper. Total commit is ~530 ms vs 250 ms wrister,
+# so the bot is exposed for longer; mid-charge bail uses a wider radius
+# to bail before a closing defender disrupts the windup.
+const BOT_SLAPPER_CHARGE_TICKS: int = 132   # 0.55 s at 240 Hz
+const BOT_SLAPPER_BAIL_RADIUS_M: float = 2.5
+const BOT_SLAPPER_LOOKAHEAD_S: float = (
+		float(BOT_SLAPPER_CHARGE_TICKS) / 240.0)
+# Slapper score multiplier vs wrister at the same geometry: a slapper
+# is harder to stop because of raw puck speed, but the bot also pulls
+# the goalie deeper via the slapper-tell stance pull (see
+# `slapper_tell_depth_pull` in goalie_controller.gd). 1.15 captures
+# both effects without making slapper strictly better than wrister —
+# the longer charge time exposes the bot to forward defenders, so
+# wrister wins under pressure. Tuning: raise toward 1.3 if bots feel
+# under-committed to slappers when clean; lower toward 1.0 if they
+# slap too often.
+const SLAPPER_POWER_BONUS: float = 1.15
+
 # Quick-shot pass reachability cone. A pass commits via shoot_pressed
 # the same tick it transitions out of CARRY → quick-shot direction is
 # `(blade - player)` in `ShotMechanics.release_wrister`. The blade IK
@@ -378,6 +401,21 @@ var _shoot_sweep_dir_xy: Vector2 = Vector2.ZERO
 var _shoot_wind_up_start: Vector3 = Vector3.ZERO
 var _shoot_aim_target: Vector3 = Vector3.ZERO
 
+# Slapper bookkeeping. Symmetric to the wrister fields above.
+# `slap_pressed` fires once at tick 0 (transitions SkaterStateMachine
+# into SLAPPER_CHARGE_WITH_PUCK). `slap_held` stays high through the
+# charge ticks, then drops to release. Aim direction is captured at
+# slapper entry by SkaterController._enter_slapper_charge.
+var _slapper_charge_tick: int = 0
+var _slapper_aim_target: Vector3 = Vector3.ZERO
+
+# Per-tick slapper-predicted opponent positions, used by score_slapper
+# in `_pick_action`. Slapper has a longer commit (~0.55 s vs 0.25 s for
+# wrister), so opponents are projected further forward — a defender
+# stepping into the lane during the charge reads as a blocked lane at
+# decision time, not as we bail mid-charge.
+var _scratch_opponents_slapper: Array[Vector3] = []
+
 # Give-and-go bookkeeping — see GIVE_AND_GO_*. Set when PASS_PRESSED
 # fires; consumed by _off_puck_anchor while the timer is active. 0
 # means "no active give-and-go cut."
@@ -475,6 +513,8 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_carry(input, snapshot, self_pos, have_puck)
 		State.SHOOT_PRESSED:
 			_state_shoot_pressed(input, snapshot, self_pos, have_puck)
+		State.SLAPPER_PRESSED:
+			_state_slapper_pressed(input, snapshot, self_pos, have_puck)
 		State.PASS_PRESSED:
 			_state_pass_pressed(input, snapshot, self_pos, have_puck)
 		State.DUMP_PRESSED:
@@ -647,6 +687,59 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 
 
+# Slapper charge: hold slap_held for BOT_SLAPPER_CHARGE_TICKS, then
+# release. Mirrors _state_shoot_pressed except (a) longer commit, (b)
+# uses slap_pressed/slap_held instead of shoot_*, (c) aim direction
+# is captured ONCE at tick 0 by SkaterController._enter_slapper_charge
+# from input.mouse_world_pos at that moment, so we set the target on
+# first tick and the SM doesn't need to lerp the mouse during charge.
+# Bail behaviour matches the wrister: forward-cone opponent within
+# BOT_SLAPPER_BAIL_RADIUS_M cancels the charge via block_held.
+func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	# Lost the puck mid-charge — bail. SkaterStateMachine cancels the
+	# slapper internally when has_puck flips false and we're not
+	# already in a release window, so no need to force block_held here.
+	if not have_puck:
+		_set_state(_post_puck_lost_state())
+		return
+
+	# Mid-charge bail: forward defender closing in. block_held cancels
+	# SLAPPER_CHARGE_WITH_PUCK back to SKATING_WITH_PUCK without
+	# release. Skipped on tick 0 so we don't bail before the press
+	# even registers.
+	if _slapper_charge_tick > 0 and _opponent_within_forward(
+			snapshot, self_pos, _attacking_goal_pos - self_pos,
+			BOT_SLAPPER_BAIL_RADIUS_M):
+		input.block_held = true
+		_set_state(State.CARRY)
+		return
+
+	_apply_slot_steering(input, snapshot, self_pos)
+	if _shot_is_elevated:
+		input.elevation_up = true
+	else:
+		input.elevation_down = true
+
+	# First tick: capture aim, fire slap_pressed. SkaterController's
+	# _enter_slapper_charge reads input.mouse_world_pos and locks the
+	# slapper aim direction from there for the rest of the charge.
+	if _slapper_charge_tick == 0:
+		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
+		_slapper_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
+		input.slap_pressed = true
+
+	input.mouse_world_pos = _slapper_aim_target
+
+	if _slapper_charge_tick < BOT_SLAPPER_CHARGE_TICKS:
+		input.slap_held = true
+		_slapper_charge_tick += 1
+	else:
+		# Release: SkaterStateMachine sees not slap_held → release_slapper
+		# fires with the locked direction and elapsed-time-derived power.
+		input.slap_held = false
+		_set_state(State.CARRY)
+
+
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	_apply_slot_steering(input, snapshot, self_pos)
 	# Aim at the receiver's lead position. Quick-shot direction is
@@ -706,10 +799,21 @@ func _apply_slot_steering(input: InputState, snapshot: WorldSnapshot, self_pos: 
 func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	_build_action_opponents_lists(snapshot)
 	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
-	var shoot_score: float = AIActionScoring.score_shoot(
+	var wrister_score: float = AIActionScoring.score_shoot(
 			self_pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 			_scratch_opponents_shoot)
+	# Slapper: same geometry but with opponents predicted at the longer
+	# slapper-charge lookahead (more chance a defender steps into the
+	# lane during the windup), then scaled by SLAPPER_POWER_BONUS for
+	# the harder-to-stop release. Take whichever of wrister/slapper
+	# scores higher as the "shoot" option.
+	var slapper_score: float = AIActionScoring.score_shoot(
+			self_pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+			_scratch_opponents_slapper) * SLAPPER_POWER_BONUS
+	var shoot_use_slapper: bool = slapper_score > wrister_score
+	var shoot_score: float = slapper_score if shoot_use_slapper else wrister_score
 	var self_state: SkaterNetworkState = snapshot.skater_states[_peer_id]
 	var best_pass: Array = _compute_best_pass(
 			snapshot, self_pos, self_state.facing, goalie_pos)
@@ -718,15 +822,19 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	var dump_score: float = AIActionScoring.score_dump(
 			self_pos, _attacking_goal_pos, _own_goal_dir,
 			GameRules.BLUE_LINE_Z, _scratch_opponents)
-	_update_debug_scores(shoot_score, best_pass_peer, best_pass_score, dump_score)
+	_update_debug_scores(shoot_score, shoot_use_slapper, best_pass_peer, best_pass_score, dump_score)
 
 	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
 	if max_score < AIActionScoring.ACTION_THRESHOLD:
 		return
 	if shoot_score >= best_pass_score and shoot_score >= dump_score:
 		_shot_is_elevated = _should_elevate_shot(snapshot)
-		debug_last_decision = "SHOOT"
-		_set_state(State.SHOOT_PRESSED)
+		if shoot_use_slapper:
+			debug_last_decision = "SLAP"
+			_set_state(State.SLAPPER_PRESSED)
+		else:
+			debug_last_decision = "SHOOT"
+			_set_state(State.SHOOT_PRESSED)
 	elif best_pass_score >= dump_score:
 		_pass_target_peer_id = best_pass_peer
 		debug_last_decision = "PASS→%d" % (best_pass_peer % 1000)
@@ -736,22 +844,27 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 		_set_state(State.DUMP_PRESSED)
 
 
-# Populates the two scratch lists used by _pick_action's scoring:
+# Populates the three scratch lists used by _pick_action's scoring:
 # - _scratch_opponents: current opponent positions, for dump scoring.
 # - _scratch_opponents_shoot: positions predicted forward by the
-#   wrister-charge window, for shoot scoring.
-# Pass scoring uses a third per-receiver list (_scratch_opponents_pass)
+#   wrister-charge window, for wrister scoring.
+# - _scratch_opponents_slapper: positions predicted forward by the
+#   slapper-charge window (longer than wrister), for slapper scoring.
+# Pass scoring uses a fourth per-receiver list (_scratch_opponents_pass)
 # rebuilt inside `_compute_best_pass` because the lookahead varies per
 # teammate.
 func _build_action_opponents_lists(snapshot: WorldSnapshot) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponents_shoot.clear()
+	_scratch_opponents_slapper.clear()
 	for peer_id: int in snapshot.skater_states:
 		if int(_team_id_resolver.call(peer_id)) != _team_id and peer_id != _peer_id:
 			var s: SkaterNetworkState = snapshot.skater_states[peer_id]
 			_scratch_opponents.append(s.position)
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, BOT_WRISTER_LOOKAHEAD_S))
+			_scratch_opponents_slapper.append(AITrajectory.predict_at(
+					s.position, s.velocity, BOT_SLAPPER_LOOKAHEAD_S))
 
 
 # Loops every legal pass target and returns [best_pid, best_score]. A
@@ -804,11 +917,14 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 
 
 # Updates `debug_scores` for the on-ice debug label. Top 3 sorted desc.
-func _update_debug_scores(shoot_score: float, best_pass_peer: int,
-		best_pass_score: float, dump_score: float) -> void:
+# `shoot_use_slapper` swaps the shot label so the on-ice readout
+# shows whether the bot would slap or wrister at this tick.
+func _update_debug_scores(shoot_score: float, shoot_use_slapper: bool,
+		best_pass_peer: int, best_pass_score: float, dump_score: float) -> void:
 	var pass_label: String = "pass→%d" % (best_pass_peer % 1000) if best_pass_peer != 0 else "pass"
+	var shoot_label: String = "slap" if shoot_use_slapper else "shoot"
 	var rows: Array = [
-			["shoot", shoot_score],
+			[shoot_label, shoot_score],
 			[pass_label, best_pass_score],
 			["dump", dump_score],
 	]
@@ -1564,6 +1680,12 @@ func _set_state(s: State) -> void:
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
 			_shoot_sweep_dir_xy = Vector2.ZERO
+		# Slapper charge resets on entry: tick counter to zero and aim
+		# target cleared so we don't fire with a stale target if we
+		# bail before tick 0 finishes.
+		if s == State.SLAPPER_PRESSED:
+			_slapper_charge_tick = 0
+			_slapper_aim_target = Vector3.ZERO
 		# Give-and-go ends the moment we have the puck again — return
 		# pass succeeded (or we picked up our own dump). The CARRY state
 		# uses _carry_anchor, not the off-puck override, so leaving the
