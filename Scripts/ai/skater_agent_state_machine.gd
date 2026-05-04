@@ -60,6 +60,16 @@ const F2_SUPPORT_OFFSET_Z_BACK: float = 1.5
 # puck. Small magnitude so they don't bunch with F2 (3 m strong-side).
 const F3_OFFSET_X_STRONG: float = 2.0
 const F3_OFFSET_Z_BACK: float = 8.0
+# F3 z-back offset when our team has possession in NZ or DZ
+# (breakout / regroup scenarios). Larger than the loose / opp-
+# possession default so F3 stays well behind the puck and doesn't
+# push high while the carrier is still in our defensive half — they
+# remain the safety against a turnover all the way through the
+# breakout, only releasing high once the puck enters OZ (where the
+# OZ branch takes over). Tuning: raise toward 18 if F3 still pushes
+# too high during NZ regroups; lower toward 10 if cross-rink support
+# feels too distant.
+const F3_OWN_POSSESSION_DEF_HALF_OFFSET_Z_BACK: float = 14.0
 # In OZ, F3 trails the puck by this far toward our own goal — but
 # clamped between the OZ blue line and the back of the OZ faceoff
 # circles (see F3_OZ_DOT_BACK_OFFSET_M). 3v3 doesn't need a strict
@@ -2040,7 +2050,13 @@ func _f3_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 			var hi: float = maxf(oz_blue_line_z, oz_dot_back_z)
 			z = clampf(trail_z, lo, hi)
 	else:
-		z = puck_pos.z + _own_goal_dir * F3_OFFSET_Z_BACK
+		# NZ or DZ. On own possession (breakout / regroup) F3 stays
+		# deep — the safety valve until the puck enters OZ. On loose
+		# puck or opp possession the legacy above-puck trailer applies.
+		var back_offset: float = F3_OFFSET_Z_BACK
+		if _own_team_has_possession(snapshot):
+			back_offset = F3_OWN_POSSESSION_DEF_HALF_OFFSET_Z_BACK
+		z = puck_pos.z + _own_goal_dir * back_offset
 	return _clamp_anchor(Vector3(x, 0.0, z))
 
 
