@@ -772,7 +772,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
-	elif _is_f1() and not _teammate_has_puck(snapshot):
+	elif _is_f1() and not _teammate_has_puck(snapshot) and not _is_caught_up_ice(snapshot, self_pos):
+		# F1 returns to CHASE_PUCK only when not caught up-ice. Without
+		# this guard, an F1 caught up-ice during a rush would flicker
+		# every tick: CHASE → exit on caught → OFF_PUCK → re-enter on
+		# is_f1 → CHASE → exit again, etc. Stays in OFF_PUCK while
+		# caught so the man-to-man / shadow / role anchor is stable.
 		_set_state(State.CHASE_PUCK)
 	elif _should_pre_charge_slapper(snapshot, self_pos):
 		# Own team has the puck and we have a real shot from here —
@@ -1803,6 +1808,19 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 	if _is_caught_up_ice(snapshot, self_pos) and _is_f3():
 		return _emergency_backcheck_anchor(snapshot)
 
+	# Shadow-back: I'm the only teammate behind the puck, so I'm the
+	# last line of defense. Don't pinch up to the role anchor (which
+	# might pull me back toward the puck in OZ/NZ); instead, shadow
+	# the puck from behind at a controlled depth. Same destination
+	# as the emergency backcheck anchor — centered, back-of-puck,
+	# capped at slot depth — so the override is a simple swap. Skip
+	# when the puck is in our DZ; standard defensive coverage
+	# handles that situation.
+	if _is_alone_back_of_puck(snapshot, self_pos):
+		var puck_in_dz: bool = _own_goal_dir * snapshot.puck_state.position.z > GameRules.BLUE_LINE_Z
+		if not puck_in_dz:
+			return _emergency_backcheck_anchor(snapshot)
+
 	var anchor: Vector3
 	# Man-to-man takes priority on our defensive half when the opp has
 	# the puck (or it's loose). The brain publishes the coverage map at
@@ -2072,6 +2090,21 @@ func _teammate_back_of_puck(snapshot: WorldSnapshot, puck_pos: Vector3) -> bool:
 		if _own_goal_dir * (pos.z - puck_pos.z) > 0.0:
 			return true
 	return false
+
+
+# True iff I'm back of the puck (between puck and our net) AND no
+# other teammate is also back. Used by the shadow-back override:
+# the last line of defense should NOT pinch up to a role anchor, it
+# should hold position behind the puck and wait for support. Caller
+# is responsible for the "not in our DZ" gate (standard defensive
+# coverage handles that situation).
+func _is_alone_back_of_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	# Self must be back of puck.
+	if _own_goal_dir * (self_pos.z - puck_pos.z) <= 0.0:
+		return false
+	# No other teammate may also be back.
+	return not _teammate_back_of_puck(snapshot, puck_pos)
 
 
 # Backcheck destination: BACKCHECK_BACK_OF_PUCK_M behind the puck

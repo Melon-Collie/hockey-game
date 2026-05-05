@@ -31,31 +31,56 @@ static func compute(
 
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 
-	# Whether F1 can actually pressure the carrier — i.e. F1 is on the
-	# own-net side of the carrier ("in front of" them defensively). On
-	# a rush where F1 was forechecking and got caught up-ice, F1's
-	# chase reduces to a backcheck that won't arrive in time. In that
-	# case the back defender needs to step up and take the carrier as
-	# their mark, so we include the carrier in the mark pool.
-	var f1_in_position: bool = true
-	if carrier != -1:
-		var f1_pid: int = 0
-		for pid: int in roles:
-			if roles[pid] == AIRoleAssignment.ROLE_F1:
-				f1_pid = pid
-				break
-		if f1_pid != 0:
-			var f1_state: SkaterNetworkState = snapshot.skater_states.get(f1_pid)
-			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
-			if f1_state != null and carrier_state != null:
-				var f1_dist_net: float = absf(f1_state.position.z - own_goal_z)
-				var carrier_dist_net: float = absf(carrier_state.position.z - own_goal_z)
-				f1_in_position = f1_dist_net <= carrier_dist_net
+	# Find F1's peer_id once.
+	var f1_pid: int = 0
+	for pid: int in roles:
+		if roles[pid] == AIRoleAssignment.ROLE_F1:
+			f1_pid = pid
+			break
+
+	# Alone-back state: nobody on our team is between the puck and our
+	# net. F1 is the closest-to-puck role and thus the natural one to
+	# chase the carrier from behind during the backcheck — assign F1
+	# the carrier as a man-to-man mark so OFF_PUCK uses a stable
+	# defensive anchor (between carrier and our net at 1 m gap depth)
+	# instead of the legacy "trail puck by 4 m" anchor.
+	#
+	# Skipped when puck is in our OZ (forecheck, not backcheck) and
+	# when our team has the carrier (breakout, not coverage).
+	var alone_back: bool = false
+	if carrier != -1 and int(team_id_resolver.call(carrier)) != team_id:
+		var puck_z: float = snapshot.puck_state.position.z
+		var puck_in_our_oz: bool = -signf(own_goal_z) * puck_z > GameRules.BLUE_LINE_Z
+		if not puck_in_our_oz:
+			var puck_dist_net: float = absf(puck_z - own_goal_z)
+			alone_back = true
+			for pid: int in snapshot.skater_states:
+				if int(team_id_resolver.call(pid)) != team_id:
+					continue
+				var tpos: Vector3 = snapshot.skater_states[pid].position
+				if absf(tpos.z - own_goal_z) < puck_dist_net:
+					alone_back = false
+					break
+	if alone_back and f1_pid != 0:
+		result[f1_pid] = carrier
+
+	# Whether the carrier should appear in the F2/F3 pool. The carrier
+	# is excluded when F1 has them — either by being in position to
+	# chase (forward of carrier, can pressure naturally) OR by the
+	# alone-back assignment above. Otherwise (rare: F1 caught up-ice
+	# but a teammate is back of puck) F2 picks up the carrier.
+	var f1_in_position: bool = alone_back
+	if not f1_in_position and carrier != -1 and f1_pid != 0:
+		var f1_state: SkaterNetworkState = snapshot.skater_states.get(f1_pid)
+		var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
+		if f1_state != null and carrier_state != null:
+			var f1_dist_net: float = absf(f1_state.position.z - own_goal_z)
+			var carrier_dist_net: float = absf(carrier_state.position.z - own_goal_z)
+			f1_in_position = f1_dist_net <= carrier_dist_net
 
 	# Collect opponents with their threat level (closer to our net =
-	# more dangerous). Carrier excluded only if F1 is in position to
-	# pressure them; otherwise the carrier is fair game for a mark.
-	# Sorted ascending — opponents[0] is the most dangerous.
+	# more dangerous). Carrier excluded when F1 has them. Sorted
+	# ascending — opponents[0] is the most dangerous.
 	var opponents: Array = []  # [peer_id, distance_to_our_net]
 	for peer_id: int in snapshot.skater_states:
 		if int(team_id_resolver.call(peer_id)) == team_id:
@@ -82,4 +107,5 @@ static func compute(
 			result[peer_id] = opponents[0][0]
 		elif role == AIRoleAssignment.ROLE_F3 and opponents.size() >= 2:
 			result[peer_id] = opponents[1][0]
+
 	return result

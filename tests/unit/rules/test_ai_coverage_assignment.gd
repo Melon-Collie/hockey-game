@@ -28,16 +28,16 @@ func _resolver(skaters: Array) -> Callable:
 	return func(pid: int) -> int: return int(team_map.get(pid, -1))
 
 
-func test_f2_takes_carrier_when_f1_caught_up_ice() -> void:
-	# Team 0 defending (own_net at +Z). F1 (peer 100) at z=20 is FURTHER
-	# from own net than the carrier (200) at z=24 — F1 caught up-ice on
-	# a rush. Carrier becomes a valid mark; F2 takes the most-dangerous
-	# (the carrier), F3 takes the off-puck opp.
+func test_f1_takes_carrier_in_alone_back_state() -> void:
+	# Team 0 defending (own_net at +Z). All three teammates are FURTHER
+	# from own net than the puck — alone-back rush, nobody home. F1
+	# takes the carrier as a man-to-man mark (backcheck destination
+	# between carrier and net), F2 takes the off-puck opp.
 	var skaters: Array = [
 			[100, 0, Vector3(0, 0, 20)],   # F1 — z=20, dist-to-net 6.65
-			[110, 0, Vector3(2, 0, 22)],   # F2
-			[120, 0, Vector3(-2, 0, 22)],  # F3
-			[200, 1, Vector3(0, 0, 24)],   # carrier — dist-to-net 2.65 (closer than F1)
+			[110, 0, Vector3(2, 0, 22)],   # F2 — dist-to-net 4.65
+			[120, 0, Vector3(-2, 0, 22)],  # F3 — dist-to-net 4.65
+			[200, 1, Vector3(0, 0, 24)],   # carrier — dist-to-net 2.65
 			[300, 1, Vector3(3, 0, 18)],   # off-puck opp — dist-to-net 8.65
 	]
 	var snap := _make_snapshot(skaters, 200)
@@ -47,8 +47,53 @@ func test_f2_takes_carrier_when_f1_caught_up_ice() -> void:
 			120: AIRoleAssignment.ROLE_F3,
 	}
 	var coverage: Dictionary = AICoverageAssignment.compute(snap, 0, OUR_NET_Z, _resolver(skaters), roles)
-	assert_eq(coverage.get(110), 200, "F2 takes the carrier when F1 is out of position")
+	assert_eq(coverage.get(100), 200, "F1 takes the carrier when alone-back")
+	assert_eq(coverage.get(110), 300, "F2 takes the only off-puck opp")
+	assert_false(coverage.has(120), "F3 has no mark — only one off-puck opp")
+
+
+func test_f2_takes_carrier_when_teammate_back_but_f1_caught() -> void:
+	# F1 (100) at z=20 caught up-ice. F2 (110) at z=25 is BACK of the
+	# puck (z=24) — defensive cover present, so this is NOT alone-back.
+	# F1 keeps chasing in CHASE_PUCK; F2 picks up the carrier as the
+	# back defender. F3 takes the off-puck opp.
+	var skaters: Array = [
+			[100, 0, Vector3(0, 0, 20)],   # F1 — z=20, dist-to-net 6.65
+			[110, 0, Vector3(2, 0, 25)],   # F2 — z=25, dist-to-net 1.65 (back of puck)
+			[120, 0, Vector3(-2, 0, 22)],  # F3
+			[200, 1, Vector3(0, 0, 24)],   # carrier
+			[300, 1, Vector3(3, 0, 18)],   # off-puck opp
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var roles: Dictionary = {
+			100: AIRoleAssignment.ROLE_F1,
+			110: AIRoleAssignment.ROLE_F2,
+			120: AIRoleAssignment.ROLE_F3,
+	}
+	var coverage: Dictionary = AICoverageAssignment.compute(snap, 0, OUR_NET_Z, _resolver(skaters), roles)
+	assert_false(coverage.has(100), "F1 has no mark when cover is present")
+	assert_eq(coverage.get(110), 200, "F2 takes the carrier when F1 is out and cover is present")
 	assert_eq(coverage.get(120), 300, "F3 takes the off-puck opp")
+
+
+func test_f1_no_mark_when_puck_in_our_oz() -> void:
+	# Even when nobody is back of the puck, F1 doesn't get a defensive
+	# mark in our OZ — that's a forecheck, not a backcheck.
+	var skaters: Array = [
+			[100, 0, Vector3(0, 0, -22)],   # F1 deep in OZ
+			[110, 0, Vector3(2, 0, -20)],
+			[120, 0, Vector3(-2, 0, -18)],
+			[200, 1, Vector3(0, 0, -24)],   # opp carrier deep in OZ
+			[300, 1, Vector3(3, 0, -18)],
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var roles: Dictionary = {
+			100: AIRoleAssignment.ROLE_F1,
+			110: AIRoleAssignment.ROLE_F2,
+			120: AIRoleAssignment.ROLE_F3,
+	}
+	var coverage: Dictionary = AICoverageAssignment.compute(snap, 0, OUR_NET_Z, _resolver(skaters), roles)
+	assert_false(coverage.has(100), "F1 no-mark in our OZ — that's a forecheck")
 
 
 func test_f2_skips_carrier_when_f1_in_position() -> void:
