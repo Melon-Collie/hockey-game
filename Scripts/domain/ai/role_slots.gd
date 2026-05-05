@@ -56,7 +56,11 @@ const DZONE_INSIDE_Z_FROM_GOAL: float = 4.0        # m in front of goal line (mi
 
 # OZONE anchor constants.
 const OZONE_BACKDOOR_X_FROM_POST: float = 0.5      # m inside the far post (toward center)
-const OZONE_BACKDOOR_Z_FROM_GOAL: float = 1.0      # m in front of opp goal line
+# Pulled back from 1m to 3m to keep BACKDOOR off the goal line — the
+# bot is at slot depth instead of crease depth, less likely to body-
+# block teammate shots. Tip / step-out / hold decision in
+# `_backdoor_decision` (SM) handles incoming-puck reactions on top.
+const OZONE_BACKDOOR_Z_FROM_GOAL: float = 3.0      # m in front of opp goal line
 const OZONE_OUTLET_Z_PAST_BLUE: float = 2.0        # m past opp blue line into OZ
 
 # TRANS_DO anchor constants.
