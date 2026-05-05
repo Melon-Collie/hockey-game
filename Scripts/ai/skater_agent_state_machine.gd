@@ -44,6 +44,15 @@ enum State {
 # 4+ teammates case) keeps the original above-puck behavior.
 const F2_OFFSET_X: float = 3.0
 const F2_OFFSET_Z_BACK: float = 2.0
+# Wider F2 strong-side X during own possession on the defensive half
+# (NZ or DZ). Stretches the breakout triangle: the carrier (F1) is
+# typically already strong-side, F2 backs off into more space rather
+# than crowding F1, and F3 is far weak-side at depth (see
+# F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M). The absolute
+# offset puts F2 ~4-5 m off the puck X regardless of where on the
+# rink the carrier is, which gives the carrier a real outlet lane
+# instead of a teammate one stick-length away.
+const F2_OWN_POSSESSION_DEF_HALF_OFFSET_X: float = 5.0
 # F1 pressure read: when F1 has 2+ defenders within F1_PRESSURE_RADIUS_M,
 # F2 collapses from the wide triangle apex to a tight close-support
 # position — assist the carrier directly instead of holding apex space.
@@ -70,6 +79,14 @@ const F3_OFFSET_Z_BACK: float = 8.0
 # too high during NZ regroups; lower toward 10 if cross-rink support
 # feels too distant.
 const F3_OWN_POSSESSION_DEF_HALF_OFFSET_Z_BACK: float = 14.0
+# F3 weak-side absolute X during own possession on the defensive
+# half (NZ or DZ). Mirrors the OZ triangle pattern: F1 carries, F2
+# offers short strong-side support, F3 is the long cross-rink
+# outlet at depth. The wide spacing opens a real breakout pass
+# lane and stretches the team across the rink so we're not
+# clustered. Absolute X (sign flipped from strong_x) so F3 sits
+# weak-side regardless of where the puck currently is.
+const F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M: float = 6.0
 # In OZ, F3 trails the puck by this far toward our own goal — but
 # clamped between the OZ blue line and the back of the OZ faceoff
 # circles (see F3_OZ_DOT_BACK_OFFSET_M). 3v3 doesn't need a strict
@@ -755,7 +772,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
-	elif _is_f1() and not _teammate_has_puck(snapshot):
+	elif _is_f1() and not _teammate_has_puck(snapshot) and not _is_caught_up_ice(snapshot, self_pos):
+		# F1 returns to CHASE_PUCK only when not caught up-ice. Without
+		# this guard, an F1 caught up-ice during a rush would flicker
+		# every tick: CHASE → exit on caught → OFF_PUCK → re-enter on
+		# is_f1 → CHASE → exit again, etc. Stays in OFF_PUCK while
+		# caught so the man-to-man / shadow / role anchor is stable.
 		_set_state(State.CHASE_PUCK)
 	elif _should_pre_charge_slapper(snapshot, self_pos):
 		# Own team has the puck and we have a real shot from here —
@@ -1225,7 +1247,7 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	# only when the motion-limited mouse converges (or the wait
 	# timeout fires) — see _state_carry.
 	if shoot_score >= best_pass_score and shoot_score >= dump_score:
-		_shot_is_elevated = _should_elevate_shot(snapshot)
+		_shot_is_elevated = _should_elevate_shot(snapshot, self_pos, shoot_score)
 		if shoot_use_slapper:
 			debug_last_decision = "SLAP"
 			_intended_action = State.SLAPPER_PRESSED
@@ -1285,6 +1307,19 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 	# whole sequence — bots only pass back-pass-out when they
 	# themselves are in NZ.
 	var carrier_in_oz: bool = -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
+	# Backward-pass gate: precomputed once for the carrier. When we
+	# have a clear forward path toward the attacking goal, backward
+	# passes (receiver behind us relative to attacking goal) get
+	# suppressed below — keeps the bot from immediately bouncing the
+	# puck back to a defender when there's open ice to skate into.
+	# Forward path occluded → no suppression so backward passes remain
+	# a legitimate cycle / regroup outlet. _scratch_opponents was
+	# populated by _build_action_opponents_lists at the top of
+	# _pick_action with current opponent positions.
+	var forward_path_clear: bool = AIActionScoring.has_clear_forward_path(
+			self_pos, _attacking_goal_pos, _scratch_opponents,
+			AIActionScoring.BACKWARD_PASS_FORWARD_PATH_RADIUS_M)
+	var carrier_to_goal: Vector3 = _attacking_goal_pos - self_pos
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
@@ -1301,6 +1336,11 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 		var flight_t: float = clampf(
 				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
 		var receiver: Vector3 = _predict_receiver(peer_id, receiver_state, flight_t)
+		# Skip receivers predicted to be past our own goal line — pass
+		# crosses the goal mouth and the puck deflects in. Real defenders
+		# don't pass to a teammate already standing in their own crease.
+		if _own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
+			continue
 		if not _is_pass_target_reachable(self_pos, self_facing_xz, receiver):
 			continue
 		_scratch_opponents_pass.clear()
@@ -1329,6 +1369,14 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents_pass,
 				receiver_q_bonus)
+		# Backward-pass suppression: if we have open ice to skate into,
+		# don't bail out by passing back to a defender. Backward = pass
+		# direction has a meaningful component AWAY from the attacking
+		# goal (dot < 0).
+		if s > 0.0 and forward_path_clear:
+			var to_receiver: Vector3 = receiver - self_pos
+			if to_receiver.x * carrier_to_goal.x + to_receiver.z * carrier_to_goal.z < 0.0:
+				s *= AIActionScoring.BACKWARD_PASS_SUPPRESSION
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:
@@ -1466,15 +1514,31 @@ const _GOALIE_STATE_BUTTERFLY: int = 1   # GoalieController.State.BUTTERFLY
 const _GOALIE_STATE_RECOVERING: int = 2  # GoalieController.State.RECOVERING
 const _GOALIE_STATE_SLIDING: int = 6     # GoalieController.State.SLIDING
 
-func _should_elevate_shot(snapshot: WorldSnapshot) -> bool:
+# Proactive-elevate gates. When the goalie is upright (standing /
+# ready / RVH), a low shot has to beat the pads — five-hole or off
+# a deflection. An elevated shot picks the corner over the glove /
+# blocker. Real-hockey rule of thumb: shoot top-corner inside the
+# dots, low-and-hard from the points. Bots elevate proactively
+# inside CLOSE_SHOT_RANGE_M when the lane is clean enough that the
+# shot scoring agreed to fire (shoot_score >= ELEVATE_SCORE_GATE).
+const ELEVATE_CLOSE_SHOT_RANGE_M: float = 12.0
+const ELEVATE_SCORE_GATE: float = 0.4
+
+func _should_elevate_shot(snapshot: WorldSnapshot, self_pos: Vector3, shoot_score: float) -> bool:
 	var opp_team_id: int = 1 - _team_id
 	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
 	if opp_goalie == null:
 		return false
 	var s: int = opp_goalie.state_enum
-	return s == _GOALIE_STATE_BUTTERFLY \
+	# Reactive: goalie already down — top corners are exposed.
+	if s == _GOALIE_STATE_BUTTERFLY \
 			or s == _GOALIE_STATE_RECOVERING \
-			or s == _GOALIE_STATE_SLIDING
+			or s == _GOALIE_STATE_SLIDING:
+		return true
+	# Proactive: close shot with a clean lane → pick the corner over
+	# the goalie's glove/blocker rather than dribbling along the ice.
+	var range_to_goal: float = self_pos.distance_to(_attacking_goal_pos)
+	return range_to_goal <= ELEVATE_CLOSE_SHOT_RANGE_M and shoot_score >= ELEVATE_SCORE_GATE
 
 
 # Adds a small lateral perpendicular nudge to an aim point —
@@ -1760,6 +1824,19 @@ func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnaps
 	if _is_caught_up_ice(snapshot, self_pos) and _is_f3():
 		return _emergency_backcheck_anchor(snapshot)
 
+	# Shadow-back: I'm the only teammate behind the puck, so I'm the
+	# last line of defense. Don't pinch up to the role anchor (which
+	# might pull me back toward the puck in OZ/NZ); instead, shadow
+	# the puck from behind at a controlled depth. Same destination
+	# as the emergency backcheck anchor — centered, back-of-puck,
+	# capped at slot depth — so the override is a simple swap. Skip
+	# when the puck is in our DZ; standard defensive coverage
+	# handles that situation.
+	if _is_alone_back_of_puck(snapshot, self_pos):
+		var puck_in_dz: bool = _own_goal_dir * snapshot.puck_state.position.z > GameRules.BLUE_LINE_Z
+		if not puck_in_dz:
+			return _emergency_backcheck_anchor(snapshot)
+
 	var anchor: Vector3
 	# Man-to-man takes priority on our defensive half when the opp has
 	# the puck (or it's loose). The brain publishes the coverage map at
@@ -1802,8 +1879,14 @@ func _f2_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 			if pressure >= F1_HEAVY_PRESSURE_COUNT:
 				return _f2_support_anchor(f1_state.position, puck_pos)
 	# Default: triangle apex (F1 has space, F2 looks for an open lane).
+	# On the defensive half during own possession (breakout / regroup)
+	# we use a wider X offset — see F2_OWN_POSSESSION_DEF_HALF_OFFSET_X.
 	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
-	var x: float = puck_pos.x + strong_x * F2_OFFSET_X
+	var x_offset: float = F2_OFFSET_X
+	var puck_in_oz: bool = -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z
+	if not puck_in_oz and _own_team_has_possession(snapshot):
+		x_offset = F2_OWN_POSSESSION_DEF_HALF_OFFSET_X
+	var x: float = puck_pos.x + strong_x * x_offset
 	var z: float = puck_pos.z + _own_goal_dir * F2_OFFSET_Z_BACK
 	return _clamp_anchor(Vector3(x, 0.0, z))
 
@@ -2025,6 +2108,21 @@ func _teammate_back_of_puck(snapshot: WorldSnapshot, puck_pos: Vector3) -> bool:
 	return false
 
 
+# True iff I'm back of the puck (between puck and our net) AND no
+# other teammate is also back. Used by the shadow-back override:
+# the last line of defense should NOT pinch up to a role anchor, it
+# should hold position behind the puck and wait for support. Caller
+# is responsible for the "not in our DZ" gate (standard defensive
+# coverage handles that situation).
+func _is_alone_back_of_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	# Self must be back of puck.
+	if _own_goal_dir * (self_pos.z - puck_pos.z) <= 0.0:
+		return false
+	# No other teammate may also be back.
+	return not _teammate_back_of_puck(snapshot, puck_pos)
+
+
 # Backcheck destination: BACKCHECK_BACK_OF_PUCK_M behind the puck
 # (toward own net), centred X, capped at the defensive slot depth so
 # we never overshoot into our own crease. Working in signed depth
@@ -2157,11 +2255,14 @@ func _f3_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
 			z = clampf(trail_z, lo, hi)
 	else:
 		# NZ or DZ. On own possession (breakout / regroup) F3 stays
-		# deep — the safety valve until the puck enters OZ. On loose
-		# puck or opp possession the legacy above-puck trailer applies.
+		# deep — the safety valve until the puck enters OZ — AND swings
+		# weak-side to open a cross-rink breakout pass lane. On loose
+		# puck or opp possession the legacy above-puck strong-side
+		# trailer applies (active forechecking, not breakout support).
 		var back_offset: float = F3_OFFSET_Z_BACK
 		if _own_team_has_possession(snapshot):
 			back_offset = F3_OWN_POSSESSION_DEF_HALF_OFFSET_Z_BACK
+			x = -strong_x * F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M
 		z = puck_pos.z + _own_goal_dir * back_offset
 	return _clamp_anchor(Vector3(x, 0.0, z))
 

@@ -95,7 +95,7 @@ const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
 
 # NZ-specific clear-path suppression. In 3v3 the carrier should drive
 # into the OZ rather than dump whenever there's open ice ahead —
-# controlled entries beat dumps in this format. When _has_clear_forward_path
+# controlled entries beat dumps in this format. When has_clear_forward_path
 # returns true, the NZ dump score is multiplied by this factor, dropping
 # 0.7 × 1.0 (full pressure) to 0.21 — below ACTION_THRESHOLD (0.25), so
 # DUMP loses to CARRY. Only triggers in NZ — DZ and OZ already handle
@@ -104,6 +104,17 @@ const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
 # to harder-suppress NZ dumps with any open ice.
 const NZ_DUMP_CLEAR_PATH_RADIUS_M: float = 3.0
 const NZ_DUMP_CLEAR_PATH_SUPPRESSION: float = 0.3
+
+# Backward-pass suppression. When the carrier has a clear forward
+# path toward the attacking goal (no opponents within
+# BACKWARD_PASS_FORWARD_PATH_RADIUS_M in the forward half-plane), a
+# pass whose receiver lies BEHIND the carrier (relative to the
+# attacking goal) is multiplied by BACKWARD_PASS_SUPPRESSION. Stops
+# bots from immediately passing back to a defender when there's
+# open ice to skate into. Forward path occluded → backward passes
+# remain a legitimate outlet (cycle / regroup).
+const BACKWARD_PASS_FORWARD_PATH_RADIUS_M: float = 6.0
+const BACKWARD_PASS_SUPPRESSION: float = 0.3
 
 
 # Returns SHOOT score in [0, 1]. Multiplicative product of:
@@ -164,6 +175,12 @@ static func score_pass(
 	# wraparound passes are weird). Skip.
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
+	# Either net counts as a pass-lane obstruction. Catches the OZ
+	# corner-to-corner pass that sails through the back of the net
+	# (puck deflects off the netting and the bots loop), and any
+	# DZ pass that crosses the goal mouth.
+	if pass_lane_blocked_by_net(shooter, receiver):
+		return 0.0
 	var lane: float = _lane_clear(shooter, receiver, opponents)
 	if lane <= 0.0:
 		return 0.0
@@ -223,7 +240,7 @@ static func score_dump(
 	# off-axis defenders and lift NZ dump score above threshold even
 	# when the forward lane is wide open.
 	if zone_factor == DUMP_NEUTRAL_ZONE_FACTOR \
-			and _has_clear_forward_path(shooter, attacking_goal, opponents,
+			and has_clear_forward_path(shooter, attacking_goal, opponents,
 					NZ_DUMP_CLEAR_PATH_RADIUS_M):
 		return zone_factor * NZ_DUMP_CLEAR_PATH_SUPPRESSION * pressure_factor
 	return zone_factor * pressure_factor
@@ -429,7 +446,7 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 # than the omnidirectional pressure check — we only care about
 # defenders we'd have to skate through, not ones to the sides or
 # behind.
-static func _has_clear_forward_path(from: Vector3, toward: Vector3,
+static func has_clear_forward_path(from: Vector3, toward: Vector3,
 		opponents: Array[Vector3], radius: float) -> bool:
 	var fwd_x: float = toward.x - from.x
 	var fwd_z: float = toward.z - from.z
@@ -483,3 +500,73 @@ static func _lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3]) -
 		return 1.0
 	var perp: float = sqrt(min_perp_sq)
 	return clampf(perp / LANE_CLEAR_RADIUS_M, 0.0, 1.0)
+
+
+# True iff the segment from `from` to `to` (in world XZ) intersects
+# either net's footprint. Each net is the rectangle x ∈ ±NET_HALF_WIDTH,
+# z ∈ [GOAL_LINE_Z, GOAL_LINE_Z + NET_DEPTH] — the goal mouth out to
+# the back frame, mirrored for the other team. Used by score_pass to
+# treat the net as a hard pass-lane obstruction so corner-to-corner
+# OZ passes don't sail through the back of the cage and DZ passes
+# don't cross the goal mouth.
+static func pass_lane_blocked_by_net(from: Vector3, to: Vector3) -> bool:
+	var goal_line_z: float = GameRules.GOAL_LINE_Z
+	var net_half_w: float = GameRules.NET_HALF_WIDTH
+	var net_depth: float = GameRules.NET_DEPTH
+	# Team 0's net (positive z) spans z ∈ [goal_line_z, goal_line_z + net_depth].
+	if _segment_crosses_aabb_xz(
+			from.x, from.z, to.x, to.z,
+			-net_half_w, net_half_w,
+			goal_line_z, goal_line_z + net_depth):
+		return true
+	# Team 1's net (negative z) spans z ∈ [-(goal_line_z + net_depth), -goal_line_z].
+	if _segment_crosses_aabb_xz(
+			from.x, from.z, to.x, to.z,
+			-net_half_w, net_half_w,
+			-(goal_line_z + net_depth), -goal_line_z):
+		return true
+	return false
+
+
+# Liang-Barsky parametric clipping: returns true iff the segment from
+# (fx, fz) to (tx, tz) intersects the axis-aligned rectangle bounded
+# by [x_min, x_max] × [z_min, z_max]. Endpoint inside the rect counts
+# as intersection.
+static func _segment_crosses_aabb_xz(
+		fx: float, fz: float, tx: float, tz: float,
+		x_min: float, x_max: float, z_min: float, z_max: float) -> bool:
+	var dx: float = tx - fx
+	var dz: float = tz - fz
+	var t_min: float = 0.0
+	var t_max: float = 1.0
+	# X slab.
+	if absf(dx) < 0.0001:
+		if fx < x_min or fx > x_max:
+			return false
+	else:
+		var t1: float = (x_min - fx) / dx
+		var t2: float = (x_max - fx) / dx
+		if t1 > t2:
+			var tmp: float = t1
+			t1 = t2
+			t2 = tmp
+		t_min = maxf(t_min, t1)
+		t_max = minf(t_max, t2)
+		if t_min > t_max:
+			return false
+	# Z slab.
+	if absf(dz) < 0.0001:
+		if fz < z_min or fz > z_max:
+			return false
+	else:
+		var t1: float = (z_min - fz) / dz
+		var t2: float = (z_max - fz) / dz
+		if t1 > t2:
+			var tmp: float = t1
+			t1 = t2
+			t2 = tmp
+		t_min = maxf(t_min, t1)
+		t_max = minf(t_max, t2)
+		if t_min > t_max:
+			return false
+	return true
