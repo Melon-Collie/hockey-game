@@ -87,7 +87,7 @@ func _refresh_debug_label() -> void:
 		return
 	_debug_refresh_counter = 0
 	var lines: Array[String] = []
-	lines.append("[%s] %s" % [_agent.debug_role(), _agent.debug_state_name()])
+	lines.append("%s [%s]" % [_agent.debug_role(), _agent.debug_state_name()])
 	var scores: Array[String] = _agent.debug_scores()
 	if not scores.is_empty():
 		lines.append("  ".join(scores))

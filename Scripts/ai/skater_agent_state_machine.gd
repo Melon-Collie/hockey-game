@@ -488,14 +488,53 @@ func get_state() -> State:
 	return _state
 
 
-# Read by AIController for the debug label. Returns the current slot
-# name (e.g., "PRESSURE", "BACKDOOR", "SPRINT_BY"), or "?" when the
-# brain hasn't yet assigned a slot (first ticks after spawn).
+# Read by AIController for the debug label. Returns "TEAM_STATE: Slot"
+# (e.g., "DtoO: SprintBy", "DZ: Pressure"), or "?" when the brain
+# hasn't yet assigned a slot (first ticks after spawn).
 func debug_role() -> String:
 	if _team_brain == null:
 		return "?"
-	var slot: int = _team_brain.get_slot(_peer_id)
-	return AIRoleSlots.Slot.keys()[slot] if slot >= 0 and slot < AIRoleSlots.Slot.size() else "?"
+	return "%s: %s" % [_team_state_label(_team_brain.state), _slot_label(_team_brain.get_slot(_peer_id))]
+
+
+func _team_state_label(state: int) -> String:
+	match state:
+		AIPossessionState.State.DZONE:
+			return "DZ"
+		AIPossessionState.State.OZONE:
+			return "OZ"
+		AIPossessionState.State.TRANS_DO:
+			return "DtoO"
+		AIPossessionState.State.TRANS_OD:
+			return "OtoD"
+		_:
+			return "?"
+
+
+func _slot_label(slot: int) -> String:
+	match slot:
+		AIRoleSlots.Slot.CARRIER:
+			return "Carrier"
+		AIRoleSlots.Slot.SPRINT_BY:
+			return "SprintBy"
+		AIRoleSlots.Slot.PRESSURE:
+			return "Pressure"
+		AIRoleSlots.Slot.NET:
+			return "Net"
+		AIRoleSlots.Slot.INSIDE:
+			return "Inside"
+		AIRoleSlots.Slot.BACKDOOR:
+			return "Backdoor"
+		AIRoleSlots.Slot.OUTLET:
+			return "Outlet"
+		AIRoleSlots.Slot.SUPPORT:
+			return "Support"
+		AIRoleSlots.Slot.F1:
+			return "F1"
+		AIRoleSlots.Slot.F2:
+			return "F2"
+		_:
+			return "-"
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────────────
