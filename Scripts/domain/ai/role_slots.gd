@@ -31,12 +31,12 @@ enum Slot {
 	OUTLET,     # OZONE: high in OZ. TRANS_DO: weak-side at opp blue line.
 	# TRANS_DO — geometric assignment, no locking.
 	SUPPORT,    # closest-to-own-net non-carrier; behind carrier weak-side.
-	# TRANS_OD — geometric assignment, no locking.
-	HOME,       # closest to own net; defensive slot.
-	F1,         # closest to puck (excluding HOME).
+	# TRANS_OD — geometric assignment with HOME pre-pick.
+	HOME,       # highest player (closest to opp net); backchecks to slot.
 	COVER,      # remaining; back-of-puck weak-side, second-wave defense.
+	# NEUTRAL + TRANS_OD — chases puck (anchor differs by state).
+	CHASE,      # NEUTRAL: at puck. TRANS_OD: 1.5m goal-side of puck.
 	# NEUTRAL — faceoff / fresh loose puck. Simple 1-2 shape.
-	CHASE,      # closest to puck, pursues
 	FLANK_L,    # left flank, slightly defensive of puck
 	FLANK_R,    # right flank, slightly defensive of puck
 }
@@ -67,7 +67,7 @@ const TRANS_DO_SUPPORT_Z: float = 3.0              # m back of carrier toward ou
 
 # TRANS_OD anchor constants.
 const TRANS_OD_HOME_Z_FROM_GOAL: float = 5.0       # m in front of own goal line (defensive slot)
-const TRANS_OD_F1_GAP_M: float = 1.5               # m goal-side of puck (same as DZONE PRESSURE)
+const TRANS_OD_CHASE_GAP_M: float = 1.5            # m goal-side of puck (same as DZONE PRESSURE)
 const TRANS_OD_COVER_X: float = 2.0                # m weak-side of puck
 const TRANS_OD_COVER_Z: float = 3.0                # m back of puck toward our net
 
@@ -89,7 +89,7 @@ static func slots_for_state(state: int) -> Array:
 		AIPossessionState.State.TRANS_DO:
 			return [Slot.CARRIER, Slot.OUTLET, Slot.SUPPORT]
 		AIPossessionState.State.TRANS_OD:
-			return [Slot.HOME, Slot.F1, Slot.COVER]
+			return [Slot.HOME, Slot.CHASE, Slot.COVER]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
@@ -172,31 +172,31 @@ static func slot_anchor(
 					0.0, 0.0,
 					own_goal_dir * (GameRules.GOAL_LINE_Z - TRANS_OD_HOME_Z_FROM_GOAL))
 
-		Slot.F1:
-			# Same formula as DZONE PRESSURE — 1.5 m goal-side of puck.
-			var to_net2: Vector3 = our_net - puck_pos
-			var l2: float = sqrt(to_net2.x * to_net2.x + to_net2.z * to_net2.z)
-			if l2 < 0.001:
-				return puck_pos
-			var step2: float = TRANS_OD_F1_GAP_M / l2
-			return Vector3(
-					puck_pos.x + to_net2.x * step2,
-					0.0,
-					puck_pos.z + to_net2.z * step2)
-
 		Slot.COVER:
-			# Back of puck, weak-side. The "trail" role for the bot
-			# caught up-ice — they backcheck through the slot as the
-			# play moves toward our DZ.
+			# Back of puck, weak-side. Second-wave defender for the bot
+			# whose role isn't HOME or CHASE — typically the deep
+			# defender, who gets pulled forward by this anchor to
+			# engage the play.
 			return Vector3(
 					puck_pos.x - strong_x * TRANS_OD_COVER_X,
 					0.0,
 					puck_pos.z + own_goal_dir * TRANS_OD_COVER_Z)
 
 		Slot.CHASE:
-			# NEUTRAL chaser: anchor at puck. The bot's SM transitions
+			if state == AIPossessionState.State.TRANS_OD:
+				# 1.5m goal-side of puck (same formula as DZONE PRESSURE).
+				var to_net2: Vector3 = our_net - puck_pos
+				var l2: float = sqrt(to_net2.x * to_net2.x + to_net2.z * to_net2.z)
+				if l2 < 0.001:
+					return puck_pos
+				var step2: float = TRANS_OD_CHASE_GAP_M / l2
+				return Vector3(
+						puck_pos.x + to_net2.x * step2,
+						0.0,
+						puck_pos.z + to_net2.z * step2)
+			# NEUTRAL: anchor at puck position. The bot's SM transitions
 			# to CHASE_PUCK naturally via _should_chase_loose_puck once
-			# they're closest, so this anchor is mostly a marker.
+			# they're closest.
 			return puck_pos
 
 		Slot.FLANK_L:
@@ -257,6 +257,31 @@ static func assign(
 				fixed_peers[carrier] = true
 		else:
 			remaining_slots.append(slot)
+
+	# TRANS_OD HOME pre-pick: assign HOME to the highest-up-ice
+	# teammate (closest to opp net = furthest from our net). Without
+	# this, the closest-to-net peer would naturally be assigned HOME
+	# by permutation cost — leaving the deep bot stuck at the slot
+	# with nothing to do during NZ play. Pre-picking flips it so the
+	# up-ice bot becomes the active backchecker; the deep bot drops
+	# into COVER (back-of-puck) and engages the play.
+	if state == AIPossessionState.State.TRANS_OD:
+		var opp_goal_z: float = -own_goal_z
+		var home_pid: int = 0
+		var home_dist: float = INF
+		for pid: int in snapshot.skater_states:
+			if int(team_id_resolver.call(pid)) != team_id:
+				continue
+			if fixed_peers.has(pid):
+				continue
+			var d: float = absf(snapshot.skater_states[pid].position.z - opp_goal_z)
+			if d < home_dist or (d == home_dist and pid < home_pid):
+				home_dist = d
+				home_pid = pid
+		if home_pid != 0 and Slot.HOME in remaining_slots:
+			result[home_pid] = Slot.HOME
+			fixed_peers[home_pid] = true
+			remaining_slots.erase(Slot.HOME)
 
 	# Filter peers down to those not already fixed.
 	var remaining_peers: Array = []

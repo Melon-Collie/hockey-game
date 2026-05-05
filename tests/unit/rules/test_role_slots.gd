@@ -64,7 +64,7 @@ func test_slots_for_trans_do() -> void:
 func test_slots_for_trans_od() -> void:
 	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.TRANS_OD)
 	assert_true(slots.has(AIRoleSlots.Slot.HOME))
-	assert_true(slots.has(AIRoleSlots.Slot.F1))
+	assert_true(slots.has(AIRoleSlots.Slot.CHASE))
 	assert_true(slots.has(AIRoleSlots.Slot.COVER))
 
 
@@ -183,21 +183,27 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 	assert_eq(assignments[120], AIRoleSlots.Slot.SUPPORT, "deep bot becomes SUPPORT")
 
 
-func test_assign_trans_od_geometry_drives_home_f1_cover() -> void:
-	# Opp carrier in NZ. Bots: deep in DZ → HOME. Mid → F1. Up-ice → COVER.
+func test_assign_trans_od_home_goes_to_highest_player() -> void:
+	# Opp carrier in NZ. Bots: up-ice → HOME (sprints back to slot).
+	# Near-puck of remaining → CHASE. Deep → COVER (gets pulled forward
+	# by back-of-puck anchor to engage the play instead of camping the
+	# slot).
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -10.0)], # up-ice (caught) → COVER
-			[110, 0, Vector3(0.0, 0.0, 1.5)],   # near puck/F1 anchor
-			[120, 0, Vector3(0.0, 0.0, 21.0)],  # deep → HOME
+			[100, 0, Vector3(0.0, 0.0, -10.0)], # up-ice (caught) → HOME
+			[110, 0, Vector3(0.0, 0.0, 1.5)],   # near puck → CHASE
+			[120, 0, Vector3(0.0, 0.0, 21.0)],  # deep → COVER
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	assert_eq(assignments[120], AIRoleSlots.Slot.HOME, "deep bot becomes HOME")
-	assert_eq(assignments[110], AIRoleSlots.Slot.F1, "near-puck bot becomes F1")
-	assert_eq(assignments[100], AIRoleSlots.Slot.COVER, "up-ice bot becomes COVER")
+	assert_eq(assignments[100], AIRoleSlots.Slot.HOME,
+			"highest-up-ice bot becomes HOME (constantly backchecking)")
+	assert_eq(assignments[110], AIRoleSlots.Slot.CHASE,
+			"closer-to-puck of remaining becomes CHASE")
+	assert_eq(assignments[120], AIRoleSlots.Slot.COVER,
+			"deep bot becomes COVER (engages play via back-of-puck anchor)")
 
 
 func test_assign_hysteresis_keeps_prev_when_close() -> void:

@@ -531,8 +531,6 @@ func _slot_label(slot: int) -> String:
 			return "Support"
 		AIRoleSlots.Slot.HOME:
 			return "Home"
-		AIRoleSlots.Slot.F1:
-			return "F1"
 		AIRoleSlots.Slot.COVER:
 			return "Cover"
 		AIRoleSlots.Slot.CHASE:
