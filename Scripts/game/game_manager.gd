@@ -1412,31 +1412,6 @@ func _on_input_batch_received(peer_id: int, inputs: Array[InputState]) -> void:
 func _on_world_state_received(data: PackedByteArray) -> void:
 	if _codec != null:
 		_codec.decode_world_state(data)  # updates _state_machine.current_phase
-	# Recovery for a missed notify_puck_picked_up: if the world state's carrier
-	# is the local peer but we never wired up local prediction (has_puck = false,
-	# no _local_carrier_skater), the pickup-confirmation RPC was either not
-	# delivered or processed before _registry.get_local() was populated. The
-	# puck then renders via interpolation lag (~100ms ≈ 1 m at full skating
-	# speed) and the controller's has_puck stays false, so _release_wrister no-ops
-	# and the player can't shoot. Synthesize the confirmation here from the
-	# authoritative world-state carrier. Skip on the host (carrier wiring runs
-	# directly through PuckController._on_puck_picked_up) and during a local
-	# trajectory prediction window so we don't fight a same-tick release.
-	if not NetworkManager.is_host and not _is_local_spectator \
-			and _registry != null and puck_controller != null:
-		var local_record: PlayerRecord = _registry.get_local()
-		if local_record != null:
-			var ws_carrier: int = puck_controller.get_world_state_carrier_peer_id()
-			# Skip the recovery if we're locally predicting a release: the
-			# world state may still report us as carrier for a tick or two
-			# until the host processes the release RPC, and re-pinning the
-			# puck mid-prediction would yank it back to the blade.
-			if ws_carrier == local_record.peer_id \
-					and puck_controller.get_local_carrier() == null \
-					and not local_record.controller.has_puck \
-					and not puck_controller.is_predicting_trajectory() \
-					and not puck_controller.is_pending_local_release():
-				on_local_player_picked_up_puck()
 	if data.size() < 6:
 		return
 	var host_ts: float = data.decode_float(2)

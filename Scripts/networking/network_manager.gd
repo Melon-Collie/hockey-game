@@ -24,8 +24,15 @@ func is_bot_peer(peer_id: int) -> bool:
 # True iff peer_id is a real ENet connection (positive, not a bot, not the
 # -1/0 "no peer" sentinel). Use this when iterating PlayerRegistry to
 # decide whether rpc_id can target the peer.
+#
+# IMPORTANT: ENet peer ids in Godot 4 come from MultiplayerPeer.generate_unique_id(),
+# which returns a random 31-bit int — typically in the billions, almost never
+# below 10_000. So a "peer_id < BOT_ID_BASE" check excludes nearly every real
+# human client. Excluding only the tight bot window is what makes this correct.
+# (Probability of an ENet-assigned id colliding with one of the six bot slots
+# is 6 / 2^31, i.e. negligible.)
 func is_real_peer(peer_id: int) -> bool:
-	return peer_id > 0 and peer_id < BOT_ID_BASE
+	return peer_id > 0 and not is_bot_peer(peer_id)
 
 # ── Outbound signals (application layer listens) ─────────────────────────────
 # NetworkManager observes ENet + RPC traffic; GameManager connects to these in
