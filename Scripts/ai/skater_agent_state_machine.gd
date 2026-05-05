@@ -1479,6 +1479,49 @@ func _face_threat_or_current(snapshot: WorldSnapshot, self_pos: Vector3) -> Vect
 
 # Clamp an anchor to the playable rink with a small margin so steering
 # doesn't pull the bot into the boards or behind the goal line.
+# True iff any opponent is within `radius` of `self_pos` AND in the
+# forward half-plane defined by `forward_dir`. Used by the wrister /
+# slapper mid-charge bail check — defenders behind or perpendicular
+# to the shooter can't realistically disrupt the windup, so only
+# forward-cone threats count. Falls through to omnidirectional check
+# when forward_dir is degenerate.
+func _opponent_within_forward(snapshot: WorldSnapshot, self_pos: Vector3,
+		forward_dir: Vector3, radius: float) -> bool:
+	var fl: float = sqrt(forward_dir.x * forward_dir.x + forward_dir.z * forward_dir.z)
+	var fwd_x: float = 0.0
+	var fwd_z: float = 0.0
+	var have_dir: bool = fl > 0.001
+	if have_dir:
+		fwd_x = forward_dir.x / fl
+		fwd_z = forward_dir.z / fl
+	var r2: float = radius * radius
+	for peer_id: int in snapshot.skater_states:
+		if int(_team_id_resolver.call(peer_id)) == _team_id:
+			continue
+		var pos: Vector3 = snapshot.skater_states[peer_id].position
+		var dx: float = pos.x - self_pos.x
+		var dz: float = pos.z - self_pos.z
+		if dx * dx + dz * dz >= r2:
+			continue
+		if not have_dir:
+			return true   # degenerate forward — fall through to omni
+		if dx * fwd_x + dz * fwd_z > 0.0:
+			return true
+	return false
+
+
+# Tag-up anchor: when ghosted (offside), anchor at the NZ side of our
+# own blue line, preserving current X. Bot skates straight back; the
+# host clears `is_ghost` via `InfractionRules.has_tagged_up` once the
+# bot crosses the blue line. OFFSIDE_HOLD_BUFFER_M makes the destination
+# meaningfully past the line so we don't oscillate at the boundary.
+func _tag_up_anchor(self_pos: Vector3) -> Vector3:
+	# Our own blue line is at +z for team 0, -z for team 1. NZ side of
+	# it means slightly less depth (toward midrink, away from own goal).
+	var z: float = _own_goal_dir * (GameRules.BLUE_LINE_Z - OFFSIDE_HOLD_BUFFER_M)
+	return Vector3(self_pos.x, 0.0, z)
+
+
 func _clamp_anchor(p: Vector3) -> Vector3:
 	var x: float = clampf(p.x,
 			-GameRules.RINK_HALF_WIDTH + RINK_X_INSET,
