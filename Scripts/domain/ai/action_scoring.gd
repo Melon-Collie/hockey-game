@@ -85,29 +85,31 @@ const OPEN_MAN_MAX_SCORE: float = 0.4
 # refuse legitimate close-range shots.
 const ACTION_THRESHOLD: float = 0.35
 
-# Utility-AI knobs (commits/carry/hysteresis). _pick_action re-runs
-# every physics tick and treats CARRY as a fourth competing option.
+# Utility-AI knobs. _pick_action re-runs every physics tick and treats
+# CARRY as a fourth competing option scored as
 #
-# CARRY_DELAY_DISCOUNT — in OZ, carry's "score" is the best
-# drift-candidate's future-action score multiplied by this factor.
-# Below 1.0 represents the time-cost of waiting (defender closes,
-# goalie sets up, etc). Higher = more patient (carry until clearly
-# beaten); lower = more committed (fire on weaker reads).
+#   carry_score = score_at(destination) × discount(time_to_destination)
 #
-# CARRY_NZ_DZ_BASELINE — in NZ/DZ the carrier is heading toward the
-# OZ slot where real actions await; they shouldn't bail to a
-# marginal shot/pass from outside the OZ. Treats carry as a fixed
-# baseline that competing actions must clearly beat. Raise toward
-# 0.6 if bots fire too eagerly from NZ; lower toward 0.4 if they
-# refuse legitimate breakouts.
+# where the destination is the best drift candidate (in OZ) or the
+# OZ slot anchor (in NZ/DZ), and time_to_destination = distance /
+# CHASE_SPEED_REF_M_S. Same formula in both zones — long carries
+# (NZ / DZ → slot) self-discount more than short drifts (OZ).
+#
+# CARRY_DELAY_DISCOUNT_PER_SEC — per-second decay applied to the
+# destination's future action quality. 0.7 / sec gives a ~2-second
+# half-life: a carry that takes 2 s loses ~half its value, a 0.15 s
+# OZ drift barely loses anything (0.95×). Reflects compounding
+# uncertainty over time — defenders move, lanes close, predictions
+# drift. Raise toward 0.85 to make bots more patient on long
+# carries; lower toward 0.55 to make them commit to immediate
+# actions over long-distance carries more aggressively.
 #
 # ACTION_HYSTERESIS_MARGIN — once intent is set, the current intent
 # gets this bonus when re-scored. Prevents flicker between two
 # close-scoring options during pre-aim. Raise toward 0.10 if intent
 # flickers visibly; lower toward 0.02 if intent feels too sticky
 # (bot commits to stale read after the situation changes).
-const CARRY_DELAY_DISCOUNT: float = 0.85
-const CARRY_NZ_DZ_BASELINE: float = 0.50
+const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
 const ACTION_HYSTERESIS_MARGIN: float = 0.05
 
 # DUMP zone factors. Lower in own zone than you might expect — 3v3
