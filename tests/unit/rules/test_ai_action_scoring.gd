@@ -188,54 +188,6 @@ func test_pass_score_zero_to_receiver_behind_goal_line() -> void:
 	assert_eq(s, 0.0, "pass to receiver behind goal line should score 0")
 
 
-func test_dump_score_zero_in_offensive_zone() -> void:
-	# Team 1 (own_goal_dir = -1) in OZ: own_goal_dir * z < -BLUE_LINE_Z
-	# means z > BLUE_LINE_Z. Bot at z=10 with attacking goal at +Z.
-	var bot := Vector3(0.0, 0.0, 10.0)
-	var attacking_goal := Vector3(0.0, 0.0, 26.65)
-	var pressuring: Array[Vector3] = [Vector3(0.5, 0.0, 10.0), Vector3(-0.5, 0.0, 10.0)]
-	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, pressuring)
-	assert_eq(s, 0.0, "no dumping from the offensive zone")
-
-
-func test_dump_score_high_in_own_zone_under_forward_pressure() -> void:
-	# Team 1 in own zone (attacks +Z): opponents in FRONT of the bot
-	# (between bot and attacking goal) read as real pressure.
-	var bot := Vector3(0.0, 0.0, -15.0)
-	var attacking_goal := Vector3(0.0, 0.0, 26.65)
-	var pressure: Array[Vector3] = [
-			Vector3(0.5, 0.0, -13.0),   # ahead and slightly +X
-			Vector3(-0.5, 0.0, -13.0),  # ahead and slightly -X
-			Vector3(0.0, 0.0, -12.0),   # directly ahead
-	]
-	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, pressure)
-	# DZ dump caps at DUMP_OWN_ZONE_FACTOR (0.4) — heavy forward pressure
-	# clears ACTION_THRESHOLD (0.25) so the bot will commit to a dump.
-	assert_gt(s, AIActionScoring.ACTION_THRESHOLD,
-			"blocked forward path in own zone should clear the action threshold")
-
-
-func test_dump_score_low_when_pressure_is_only_behind() -> void:
-	# Team 1 in own zone, opponents trailing behind (further from
-	# attacking goal). Bot has open ice ahead — should NOT dump.
-	var bot := Vector3(0.0, 0.0, -15.0)
-	var attacking_goal := Vector3(0.0, 0.0, 26.65)
-	var trailing: Array[Vector3] = [
-			Vector3(0.5, 0.0, -17.0),
-			Vector3(-0.5, 0.0, -17.0),
-			Vector3(0.0, 0.0, -18.0),
-	]
-	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, trailing)
-	assert_lt(s, 0.1, "trailing chasers shouldn't trigger a dump — open ice ahead")
-
-
-func test_dump_score_zero_with_no_pressure() -> void:
-	var bot := Vector3(0.0, 0.0, -15.0)
-	var attacking_goal := Vector3(0.0, 0.0, 26.65)
-	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, [])
-	assert_eq(s, 0.0, "no pressure → no need to dump even from own zone")
-
-
 func test_pass_score_falls_off_with_receiver_pressure() -> void:
 	var shooter := Vector3(0.0, 0.0, 10.0)
 	var receiver := Vector3(0.0, 0.0, 22.0)
@@ -249,37 +201,6 @@ func test_pass_score_falls_off_with_receiver_pressure() -> void:
 	assert_lt(pressured, clear)
 
 
-# Behavior pass A #5 — NZ-specific clear-path suppression.
-
-func test_dump_score_suppressed_in_nz_with_clear_forward_path() -> void:
-	# Team 1 (own_goal_dir=-1, attacks +Z) carrying through the NZ at z=0
-	# with side-and-behind pressure but nothing in front. Controlled
-	# entry beats dump in 3v3 — score must drop below ACTION_THRESHOLD.
-	var bot := Vector3(0.0, 0.0, 0.0)
-	var attacking_goal := Vector3(0.0, 0.0, 26.65)
-	var side_and_behind: Array[Vector3] = [
-			Vector3(2.0, 0.0, 0.0),    # right beside (perpendicular)
-			Vector3(-2.0, 0.0, 0.0),   # left beside
-			Vector3(0.0, 0.0, -2.0),   # directly behind (toward own goal)
-	]
-	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, side_and_behind)
-	assert_lt(s, AIActionScoring.ACTION_THRESHOLD,
-			"NZ dump with open ice ahead should not clear ACTION_THRESHOLD")
-
-
-func test_dump_score_fires_in_nz_when_forward_path_blocked() -> void:
-	# Same NZ position as above, but now with a wall of defenders ahead
-	# inside the clear-path radius. Suppression should NOT trigger.
-	var bot := Vector3(0.0, 0.0, 0.0)
-	var attacking_goal := Vector3(0.0, 0.0, 26.65)
-	var wall_ahead: Array[Vector3] = [
-			Vector3(0.0, 0.0, 2.0),    # directly ahead (toward attacking goal)
-			Vector3(1.5, 0.0, 1.5),    # forward-right
-			Vector3(-1.5, 0.0, 1.5),   # forward-left
-	]
-	var s: float = AIActionScoring.score_dump(bot, attacking_goal, -1.0, 7.29, wall_ahead)
-	assert_gt(s, AIActionScoring.ACTION_THRESHOLD,
-			"NZ dump with a wall of defenders ahead should still clear threshold")
 
 
 # Pressure cube-falloff sanity checks. The directional formula zeros

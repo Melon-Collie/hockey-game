@@ -15,7 +15,7 @@ var _agent: SkaterAgent = null
 var perceived_snapshot: WorldSnapshot = null
 
 # Debug: floating label above each bot showing current state and last
-# fired action (PASS→<Slot> / SHOOT / SLAP / DUMP). Action is set when
+# fired action (PASS→<Slot> / SHOOT / SLAP). Action is set when
 # the press actually fires, not when intent is picked, so the label
 # reflects what the bot did rather than what it considered. Refreshed
 # at ~10 Hz so text stays readable. Toggle to false to disable for
