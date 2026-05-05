@@ -1247,7 +1247,7 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	# only when the motion-limited mouse converges (or the wait
 	# timeout fires) — see _state_carry.
 	if shoot_score >= best_pass_score and shoot_score >= dump_score:
-		_shot_is_elevated = _should_elevate_shot(snapshot)
+		_shot_is_elevated = _should_elevate_shot(snapshot, self_pos, shoot_score)
 		if shoot_use_slapper:
 			debug_last_decision = "SLAP"
 			_intended_action = State.SLAPPER_PRESSED
@@ -1514,15 +1514,31 @@ const _GOALIE_STATE_BUTTERFLY: int = 1   # GoalieController.State.BUTTERFLY
 const _GOALIE_STATE_RECOVERING: int = 2  # GoalieController.State.RECOVERING
 const _GOALIE_STATE_SLIDING: int = 6     # GoalieController.State.SLIDING
 
-func _should_elevate_shot(snapshot: WorldSnapshot) -> bool:
+# Proactive-elevate gates. When the goalie is upright (standing /
+# ready / RVH), a low shot has to beat the pads — five-hole or off
+# a deflection. An elevated shot picks the corner over the glove /
+# blocker. Real-hockey rule of thumb: shoot top-corner inside the
+# dots, low-and-hard from the points. Bots elevate proactively
+# inside CLOSE_SHOT_RANGE_M when the lane is clean enough that the
+# shot scoring agreed to fire (shoot_score >= ELEVATE_SCORE_GATE).
+const ELEVATE_CLOSE_SHOT_RANGE_M: float = 12.0
+const ELEVATE_SCORE_GATE: float = 0.4
+
+func _should_elevate_shot(snapshot: WorldSnapshot, self_pos: Vector3, shoot_score: float) -> bool:
 	var opp_team_id: int = 1 - _team_id
 	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
 	if opp_goalie == null:
 		return false
 	var s: int = opp_goalie.state_enum
-	return s == _GOALIE_STATE_BUTTERFLY \
+	# Reactive: goalie already down — top corners are exposed.
+	if s == _GOALIE_STATE_BUTTERFLY \
 			or s == _GOALIE_STATE_RECOVERING \
-			or s == _GOALIE_STATE_SLIDING
+			or s == _GOALIE_STATE_SLIDING:
+		return true
+	# Proactive: close shot with a clean lane → pick the corner over
+	# the goalie's glove/blocker rather than dribbling along the ice.
+	var range_to_goal: float = self_pos.distance_to(_attacking_goal_pos)
+	return range_to_goal <= ELEVATE_CLOSE_SHOT_RANGE_M and shoot_score >= ELEVATE_SCORE_GATE
 
 
 # Adds a small lateral perpendicular nudge to an aim point —

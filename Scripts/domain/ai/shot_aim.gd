@@ -9,8 +9,12 @@ class_name AIShotAim
 # The point of intersection is the goalie's "shadow" — the spot the
 # goalie blocks. Treat the goalie as a circle of half-width `shadow_half`
 # along the net plane; the two open arcs are [left_post, shadow_left]
-# and [shadow_right, right_post]. Aim at the midpoint of the larger
-# arc.
+# and [shadow_right, right_post]. Aim along the larger arc, biased
+# toward the open POST (corner) by `corner_bias` so the shot pulls
+# away from the goalie's lateral coverage rather than landing at the
+# arc midpoint. corner_bias = 0 → midpoint of arc; corner_bias = 1 →
+# right at the post (high risk of going wide); typical ~0.7 puts the
+# aim near the post while keeping margin from going off-net.
 #
 # Edge cases:
 #  - Shooter and goalie at the same Z (no sightline crossing the net):
@@ -24,12 +28,17 @@ class_name AIShotAim
 #    less-covered post).
 
 
+# Default corner bias — caller can override per shot type if desired.
+const DEFAULT_CORNER_BIAS: float = 0.7
+
+
 static func compute_open_net_aim(
 		shooter: Vector3,
 		goalie: Vector3,
 		net_z: float,
 		net_half_width: float,
-		shadow_half: float) -> Vector3:
+		shadow_half: float,
+		corner_bias: float = DEFAULT_CORNER_BIAS) -> Vector3:
 	var dz: float = goalie.z - shooter.z
 	var to_net_z: float = net_z - shooter.z
 	# If the shooter is at goalie z OR on the wrong side, the sightline
@@ -46,7 +55,10 @@ static func compute_open_net_aim(
 	var right_arc_size: float = net_half_width - shadow_right
 	var aim_x: float
 	if left_arc_size >= right_arc_size:
-		aim_x = (-net_half_width + shadow_left) * 0.5
+		# Left arc: shadow_left is goalie-side, -net_half_width is post.
+		# Bias toward the post.
+		aim_x = lerpf(shadow_left, -net_half_width, corner_bias)
 	else:
-		aim_x = (shadow_right + net_half_width) * 0.5
+		# Right arc: shadow_right is goalie-side, +net_half_width is post.
+		aim_x = lerpf(shadow_right, net_half_width, corner_bias)
 	return Vector3(aim_x, 0.0, net_z)

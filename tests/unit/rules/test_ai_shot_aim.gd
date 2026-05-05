@@ -51,3 +51,37 @@ func test_shooter_at_goalie_z_falls_back_to_center() -> void:
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(shooter, goalie, NET_Z, NET_HW, SHADOW_HW)
 	assert_almost_eq(aim.x, 0.0, 0.0001)
 	assert_almost_eq(aim.z, NET_Z, 0.001)
+
+
+func test_corner_bias_pulls_aim_toward_post() -> void:
+	# Goalie shifted -X — right arc is wider, aim goes right. With
+	# default corner_bias = 0.7, aim should sit closer to the right
+	# post than to the open arc midpoint.
+	var shooter := Vector3(0.0, 0.0, 20.0)
+	var goalie := Vector3(-0.4, 0.0, 26.0)
+	var aim: Vector3 = AIShotAim.compute_open_net_aim(shooter, goalie, NET_Z, NET_HW, SHADOW_HW)
+	# Compute the arc midpoint manually for comparison.
+	var dz: float = goalie.z - shooter.z
+	var to_net_z: float = NET_Z - shooter.z
+	var t: float = to_net_z / dz
+	var shadow_x: float = shooter.x + t * (goalie.x - shooter.x)
+	var shadow_right: float = clampf(shadow_x + SHADOW_HW, -NET_HW, NET_HW)
+	var midpoint: float = (shadow_right + NET_HW) * 0.5
+	assert_gt(aim.x, midpoint, "default corner_bias should pull aim past the arc midpoint toward the post")
+	assert_lte(aim.x, NET_HW, "aim still inside the net")
+
+
+func test_corner_bias_zero_matches_arc_midpoint() -> void:
+	# corner_bias = 0 reproduces the legacy "midpoint of open arc" behavior.
+	var shooter := Vector3(0.0, 0.0, 20.0)
+	var goalie := Vector3(-0.4, 0.0, 26.0)
+	var aim: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie, NET_Z, NET_HW, SHADOW_HW, 0.0)
+	var dz: float = goalie.z - shooter.z
+	var to_net_z: float = NET_Z - shooter.z
+	var t: float = to_net_z / dz
+	var shadow_x: float = shooter.x + t * (goalie.x - shooter.x)
+	var shadow_right: float = clampf(shadow_x + SHADOW_HW, -NET_HW, NET_HW)
+	var midpoint: float = (shadow_right + NET_HW) * 0.5
+	assert_almost_eq(aim.x, midpoint, 0.001,
+			"corner_bias=0 lands aim at the arc midpoint exactly")
