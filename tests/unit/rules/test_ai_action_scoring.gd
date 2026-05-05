@@ -376,3 +376,35 @@ func test_score_pass_zero_when_segment_crosses_net() -> void:
 			NET_HW, SHADOW_HW, [])
 	assert_almost_eq(s, 0.0, 0.001,
 			"score_pass returns zero when the segment crosses a net rect")
+
+
+# pass_crosses_own_slot — own-DZ slot danger filter.
+
+func test_own_slot_pass_blocked_team0() -> void:
+	# Cross-crease slot pass for team 0 (own goal at +z=26.65). Segment
+	# at z=22 (slot depth) crossing x=0 → blocked.
+	var from := Vector3(3.0, 0.0, 22.0)
+	var to := Vector3(-3.0, 0.0, 22.0)
+	assert_true(AIActionScoring.pass_crosses_own_slot(from, to, GOAL.z))
+
+
+func test_own_slot_pass_blocked_team1() -> void:
+	# Mirror — team 1 (own goal at -z).
+	var from := Vector3(3.0, 0.0, -22.0)
+	var to := Vector3(-3.0, 0.0, -22.0)
+	assert_true(AIActionScoring.pass_crosses_own_slot(from, to, -GOAL.z))
+
+
+func test_pass_outside_own_slot_not_blocked() -> void:
+	# Pass in NZ — well in front of slot rect. Not blocked.
+	var from := Vector3(3.0, 0.0, 5.0)
+	var to := Vector3(-3.0, 0.0, 5.0)
+	assert_false(AIActionScoring.pass_crosses_own_slot(from, to, GOAL.z))
+
+
+func test_breakout_pass_not_blocked() -> void:
+	# Pass from corner up-ice (DZ → NZ). Segment doesn't cross the
+	# slot rect because z exits the slot range before x enters.
+	var from := Vector3(8.0, 0.0, 24.0)   # corner near boards
+	var to := Vector3(0.0, 0.0, 5.0)      # mid-NZ
+	assert_false(AIActionScoring.pass_crosses_own_slot(from, to, GOAL.z))

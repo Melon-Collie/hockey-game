@@ -36,6 +36,10 @@ enum Slot {
 	# TRANS_OD — sprint-by defend.
 	F1,
 	F2,
+	# NEUTRAL — faceoff / fresh loose puck. Simple 1-2 shape.
+	CHASE,      # closest to puck, pursues
+	FLANK_L,    # left flank, slightly defensive of puck
+	FLANK_R,    # right flank, slightly defensive of puck
 }
 
 # Hysteresis: a (peer, slot) pairing that doesn't match the previous
@@ -62,13 +66,18 @@ const OZONE_OUTLET_Z_PAST_BLUE: float = 2.0        # m past opp blue line into O
 const TRANS_DO_SPRINT_BY_X: float = 4.0            # m off rink center, weak-side
 const TRANS_DO_SPRINT_BY_Z_FROM_BLUE: float = 1.0  # m on NZ side of opp blue line (offside-safe)
 const TRANS_DO_SUPPORT_X: float = 3.0              # m weak-side of carrier
-const TRANS_DO_SUPPORT_Z: float = 5.0              # m back of carrier toward our net
+const TRANS_DO_SUPPORT_Z: float = 3.0              # m back of carrier toward our net
 
 # TRANS_OD anchor constants.
 const TRANS_OD_SPRINT_BY_Z_FROM_GOAL: float = 5.0  # m in front of own goal line (defensive slot)
 const TRANS_OD_F1_GAP_M: float = 1.5               # m goal-side of puck (same as DZONE PRESSURE)
 const TRANS_OD_F2_X: float = 2.0                   # m weak-side of puck
 const TRANS_OD_F2_Z: float = 3.0                   # m back of puck toward our net
+
+# NEUTRAL anchor constants. Simple 1-2 shape: CHASE pursues puck, two
+# flankers stand off to either side slightly defensive of puck.
+const NEUTRAL_FLANK_X: float = 3.0                 # m to either side of puck
+const NEUTRAL_FLANK_Z_DEFENSIVE: float = 2.0       # m back of puck toward own net
 
 
 # Returns the list of slots for a given state, in canonical order.
@@ -84,6 +93,8 @@ static func slots_for_state(state: int) -> Array:
 			return [Slot.CARRIER, Slot.SPRINT_BY, Slot.SUPPORT]
 		AIPossessionState.State.TRANS_OD:
 			return [Slot.SPRINT_BY, Slot.F1, Slot.F2]
+		AIPossessionState.State.NEUTRAL:
+			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
 			return []
 
@@ -176,6 +187,24 @@ static func slot_anchor(
 					puck_pos.x - strong_x * TRANS_OD_F2_X,
 					0.0,
 					puck_pos.z + own_goal_dir * TRANS_OD_F2_Z)
+
+		Slot.CHASE:
+			# NEUTRAL chaser: anchor at puck. The bot's SM transitions
+			# to CHASE_PUCK naturally via _should_chase_loose_puck once
+			# they're closest, so this anchor is mostly a marker.
+			return puck_pos
+
+		Slot.FLANK_L:
+			# Left flank, slightly defensive of puck so they're already
+			# in position if F1 loses the draw.
+			return Vector3(
+					puck_pos.x - NEUTRAL_FLANK_X, 0.0,
+					puck_pos.z + own_goal_dir * NEUTRAL_FLANK_Z_DEFENSIVE)
+
+		Slot.FLANK_R:
+			return Vector3(
+					puck_pos.x + NEUTRAL_FLANK_X, 0.0,
+					puck_pos.z + own_goal_dir * NEUTRAL_FLANK_Z_DEFENSIVE)
 
 		_:
 			return Vector3.ZERO

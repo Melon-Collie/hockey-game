@@ -528,6 +528,34 @@ static func pass_lane_blocked_by_net(from: Vector3, to: Vector3) -> bool:
 	return false
 
 
+# Own-DZ slot danger zone. True iff the pass segment crosses the
+# rectangle in front of OUR net — the high-danger area where a
+# deflected/intercepted pass becomes a goal against. Asymmetric to
+# `pass_lane_blocked_by_net` because passes through OPP slot are
+# legitimate (backdoor / cross-crease feeds); only OWN slot is risky.
+#
+# Slot rect: x ∈ ±OWN_DZ_SLOT_HALF_WIDTH_M, z ∈ [own_goal_line - depth,
+# own_goal_line] for own_goal_z > 0; mirrored for own_goal_z < 0.
+const OWN_DZ_SLOT_HALF_WIDTH_M: float = 2.0
+const OWN_DZ_SLOT_DEPTH_M: float = 5.0
+static func pass_crosses_own_slot(from: Vector3, to: Vector3, own_goal_z: float) -> bool:
+	var depth: float = OWN_DZ_SLOT_DEPTH_M
+	var half_w: float = OWN_DZ_SLOT_HALF_WIDTH_M
+	if own_goal_z > 0.0:
+		# Team 0: own net at +z. Slot is in front of goal line,
+		# z ∈ [own_goal_z - depth, own_goal_z].
+		return _segment_crosses_aabb_xz(
+				from.x, from.z, to.x, to.z,
+				-half_w, half_w,
+				own_goal_z - depth, own_goal_z)
+	else:
+		# Team 1: own net at -z. Slot z ∈ [own_goal_z, own_goal_z + depth].
+		return _segment_crosses_aabb_xz(
+				from.x, from.z, to.x, to.z,
+				-half_w, half_w,
+				own_goal_z, own_goal_z + depth)
+
+
 # Liang-Barsky parametric clipping: returns true iff the segment from
 # (fx, fz) to (tx, tz) intersects the axis-aligned rectangle bounded
 # by [x_min, x_max] × [z_min, z_max]. Endpoint inside the rect counts

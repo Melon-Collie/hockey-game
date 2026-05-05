@@ -507,6 +507,8 @@ func _team_state_label(state: int) -> String:
 			return "DtoO"
 		AIPossessionState.State.TRANS_OD:
 			return "OtoD"
+		AIPossessionState.State.NEUTRAL:
+			return "Neutral"
 		_:
 			return "?"
 
@@ -533,6 +535,12 @@ func _slot_label(slot: int) -> String:
 			return "F1"
 		AIRoleSlots.Slot.F2:
 			return "F2"
+		AIRoleSlots.Slot.CHASE:
+			return "Chase"
+		AIRoleSlots.Slot.FLANK_L:
+			return "FlankL"
+		AIRoleSlots.Slot.FLANK_R:
+			return "FlankR"
 		_:
 			return "-"
 
@@ -1117,6 +1125,12 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 				_attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 				_scratch_opponents_pass)
+		# Own-DZ slot danger filter: passes whose segment crosses the
+		# rectangle in front of our net are high-danger if intercepted.
+		# Reject outright (score = 0) — there's always a safer outlet.
+		var own_goal_z: float = _own_goal_dir * GameRules.GOAL_LINE_Z
+		if s > 0.0 and AIActionScoring.pass_crosses_own_slot(self_pos, receiver, own_goal_z):
+			s = 0.0
 		# Backward-pass suppression: if we have open ice to skate into,
 		# don't bail out by passing back to a defender. Backward = pass
 		# direction has a meaningful component AWAY from the attacking

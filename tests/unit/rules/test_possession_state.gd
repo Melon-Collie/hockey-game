@@ -99,3 +99,26 @@ func test_is_transition_helper() -> void:
 	assert_true(AIPossessionState.is_transition(AIPossessionState.State.TRANS_OD))
 	assert_false(AIPossessionState.is_transition(AIPossessionState.State.DZONE))
 	assert_false(AIPossessionState.is_transition(AIPossessionState.State.OZONE))
+	assert_false(AIPossessionState.is_transition(AIPossessionState.State.NEUTRAL))
+
+
+func test_neutral_when_loose_puck_stationary() -> void:
+	# Faceoff drop scenario — puck loose at center, near-zero velocity.
+	var snap := _make_snapshot(-1, 0.0)
+	snap.puck_state.velocity = Vector3.ZERO
+	var result: Array = AIPossessionState.compute(
+			snap, TEAM_ID, OUR_NET_Z,
+			_resolver([[100, 0], [200, 1]]), 1)
+	assert_eq(result[0], AIPossessionState.State.NEUTRAL,
+			"loose stationary puck should be NEUTRAL regardless of prev possession")
+
+
+func test_not_neutral_when_loose_puck_moving_fast() -> void:
+	# Pass in flight — puck loose but moving fast. Should keep TRANS state.
+	var snap := _make_snapshot(-1, 0.0)
+	snap.puck_state.velocity = Vector3(20.0, 0.0, 0.0)  # 20 m/s pass
+	var result: Array = AIPossessionState.compute(
+			snap, TEAM_ID, OUR_NET_Z,
+			_resolver([[100, 0], [200, 1]]), 0)  # we passed it
+	assert_eq(result[0], AIPossessionState.State.TRANS_DO,
+			"in-flight pass keeps TRANS state via sticky possession")

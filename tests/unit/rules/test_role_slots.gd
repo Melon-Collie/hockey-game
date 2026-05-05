@@ -67,6 +67,13 @@ func test_slots_for_trans_od() -> void:
 	assert_true(slots.has(AIRoleSlots.Slot.F2))
 
 
+func test_slots_for_neutral() -> void:
+	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.NEUTRAL)
+	assert_true(slots.has(AIRoleSlots.Slot.CHASE))
+	assert_true(slots.has(AIRoleSlots.Slot.FLANK_L))
+	assert_true(slots.has(AIRoleSlots.Slot.FLANK_R))
+
+
 # ─── Slot anchors ───────────────────────────────────────────────────────────
 
 func test_dzone_pressure_anchor_is_goal_side_of_puck() -> void:

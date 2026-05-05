@@ -17,7 +17,12 @@ class_name AIPossessionState
 # oscillation (e.g., stick-on-stick contact during a strip) naturally —
 # we sample at the brain tick, not every physics tick.
 
-enum State { DZONE, OZONE, TRANS_DO, TRANS_OD }
+enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL }
+
+# Below this puck speed, carrier-less puck is treated as NEUTRAL (a
+# fresh faceoff drop, basically). High-speed loose pucks (passes in
+# flight, stripped-puck contact) keep the prior possession state.
+const NEUTRAL_PUCK_SPEED_M_S: float = 1.0
 
 
 # Returns [new_state, new_carrier_team]. `new_carrier_team` is -1 if no
@@ -37,15 +42,25 @@ static func compute(
 		team_id_resolver: Callable,
 		prev_carrier_team: int) -> Array:
 	if snapshot == null or snapshot.puck_state == null:
-		# Degenerate — no puck info. Default to defensive scenario based
-		# on prev possession (or DZONE if unknown).
-		return [State.DZONE, prev_carrier_team]
+		# Degenerate — no puck info. Default to NEUTRAL.
+		return [State.NEUTRAL, prev_carrier_team]
 
 	# Possession: current carrier's team if any, else sticky to prev.
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 	var carrier_team: int = prev_carrier_team
 	if carrier != -1:
 		carrier_team = int(team_id_resolver.call(carrier))
+
+	# NEUTRAL override: puck is loose AND essentially stationary.
+	# Covers faceoff drops cleanly without requiring phase awareness.
+	# In-flight passes (velocity high) keep their TRANS_DO/OD state
+	# via the sticky possession; stripped-puck contact pushes velocity
+	# above the threshold so it doesn't false-positive either.
+	if carrier == -1:
+		var v: Vector3 = snapshot.puck_state.velocity
+		var speed: float = sqrt(v.x * v.x + v.z * v.z)
+		if speed < NEUTRAL_PUCK_SPEED_M_S:
+			return [State.NEUTRAL, carrier_team]
 
 	var our_possession: bool = (carrier_team == team_id)
 
