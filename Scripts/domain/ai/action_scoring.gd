@@ -85,6 +85,31 @@ const OPEN_MAN_MAX_SCORE: float = 0.4
 # refuse legitimate close-range shots.
 const ACTION_THRESHOLD: float = 0.35
 
+# Utility-AI knobs (commits/carry/hysteresis). _pick_action re-runs
+# every physics tick and treats CARRY as a fourth competing option.
+#
+# CARRY_DELAY_DISCOUNT — in OZ, carry's "score" is the best
+# drift-candidate's future-action score multiplied by this factor.
+# Below 1.0 represents the time-cost of waiting (defender closes,
+# goalie sets up, etc). Higher = more patient (carry until clearly
+# beaten); lower = more committed (fire on weaker reads).
+#
+# CARRY_NZ_DZ_BASELINE — in NZ/DZ the carrier is heading toward the
+# OZ slot where real actions await; they shouldn't bail to a
+# marginal shot/pass from outside the OZ. Treats carry as a fixed
+# baseline that competing actions must clearly beat. Raise toward
+# 0.6 if bots fire too eagerly from NZ; lower toward 0.4 if they
+# refuse legitimate breakouts.
+#
+# ACTION_HYSTERESIS_MARGIN — once intent is set, the current intent
+# gets this bonus when re-scored. Prevents flicker between two
+# close-scoring options during pre-aim. Raise toward 0.10 if intent
+# flickers visibly; lower toward 0.02 if intent feels too sticky
+# (bot commits to stale read after the situation changes).
+const CARRY_DELAY_DISCOUNT: float = 0.85
+const CARRY_NZ_DZ_BASELINE: float = 0.50
+const ACTION_HYSTERESIS_MARGIN: float = 0.05
+
 # DUMP zone factors. Lower in own zone than you might expect — 3v3
 # arcade hockey rewards breakouts more than safe clears, so bots try
 # pass/carry out first and only dump under heavy directional pressure.

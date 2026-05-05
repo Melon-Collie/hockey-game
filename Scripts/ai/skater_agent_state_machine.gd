@@ -61,8 +61,6 @@ const PASS_REACHABLE_DOT_MIN: float = 0.5
 const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
 
-const QUIET_EYE_TICKS: int = 8
-
 # After CARRY's `_pick_action` chooses an action (PASS/DUMP/SHOOT/
 # SLAPPER), the bot doesn't transition immediately — it pre-aims by
 # setting the mouse target to the action's aim direction and waits
@@ -414,8 +412,19 @@ var _pass_target_peer_id: int = 0
 # stores the action here instead of transitioning immediately. CARRY
 # then pre-aims the mouse toward the action's direction and waits
 # for convergence before transitioning. State.CARRY = "no intent."
+# _pick_action re-runs every tick — hysteresis on the current intent
+# (ACTION_HYSTERESIS_MARGIN) prevents flicker between close-scoring
+# options during pre-aim.
 var _intended_action: State = State.CARRY
 var _intent_wait_ticks: int = 0
+
+# Cached score of the best carry-drift candidate from the most recent
+# `_find_best_carry_position` call. Read by `_pick_action` as CARRY's
+# competing score (multiplied by CARRY_DELAY_DISCOUNT). Only meaningful
+# in OZ — _find_best_carry_position skips the search in NZ/DZ where
+# the carry anchor is the fixed slot target. _pick_action uses
+# CARRY_NZ_DZ_BASELINE outside OZ so this stale value isn't read.
+var _last_best_drift_score: float = 0.0
 
 # Engagement cooldown — see ENGAGEMENT_COOLDOWN_TICKS. _prev_carrier
 # tracks last tick's puck.carrier_peer_id so we can detect the
@@ -730,14 +739,13 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
-	# Decide on an action when quiet-eye expires AND we don't already
-	# have a pending intent. Once an intent is set we hold it until
-	# the mouse converges to its aim or the wait timeout fires —
-	# re-picking each tick would let the intent oscillate between
-	# two close-scoring actions and the mouse would never converge
-	# to either.
-	if _ticks_in_state >= QUIET_EYE_TICKS and _intended_action == State.CARRY:
-		_pick_action(snapshot, self_pos)
+	# Re-evaluate action choice every tick. CARRY competes as a fourth
+	# option (its drift-discounted future score, see _pick_action), and
+	# the current intent gets a hysteresis bonus to prevent flicker
+	# between two close-scoring options during pre-aim. Frequent
+	# re-evaluation catches windows that close fast (defender shifts,
+	# goalie commits, lane opens).
+	_pick_action(snapshot, self_pos)
 
 	# Mouse target depends on whether we're carrying or pre-aiming
 	# for an action.
@@ -990,10 +998,19 @@ func _apply_slot_steering(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	_apply_steering(input, snapshot, self_pos, Vector3(0.0, 0.0, slot_z))
 
 
-# Score every applicable action and transition into the highest-scoring
-# state. CARRY is the implicit default — if no action clears
-# AIActionScoring.ACTION_THRESHOLD we stay in CARRY without
-# transitioning (next tick re-evaluates).
+# Score every applicable action plus CARRY (drift-discounted future
+# action quality) and pick the winner. Standard utility-AI pattern:
+# all options scored on [0, 1], best wins. CARRY competes as a fourth
+# option so "carry forever" only happens when no action beats the
+# discounted carry score.
+#
+# Hysteresis: the current intent gets ACTION_HYSTERESIS_MARGIN added
+# to its score during re-evaluation. Prevents flicker between two
+# close-scoring options during pre-aim — _pick_action runs every
+# physics tick (no QUIET_EYE wait), so without hysteresis intent
+# could oscillate between SHOOT and PASS and the mouse would never
+# converge to either aim. Wrister vs slapper is treated as one
+# "shoot" intent class — both pre-aim to the same target.
 #
 # Mutates _pass_target_peer_id when PASS wins.
 func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
@@ -1030,27 +1047,60 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			self_pos, _attacking_goal_pos, _own_goal_dir,
 			GameRules.BLUE_LINE_Z, _scratch_opponents)
 
-	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
-	if max_score < AIActionScoring.ACTION_THRESHOLD:
-		return
-	# Set intent instead of transitioning immediately. CARRY's per-tick
-	# logic pre-aims toward this action's direction and transitions
-	# only when the motion-limited mouse converges (or the wait
-	# timeout fires) — see _state_carry. debug_last_decision is set
-	# inside the press-state handlers (fire time), not here, so the
-	# debug label only shows actions the bot actually committed to.
-	if shoot_score >= best_pass_score and shoot_score >= dump_score:
-		_shot_is_elevated = _should_elevate_shot(snapshot, self_pos, shoot_score)
-		if shoot_use_slapper:
-			_intended_action = State.SLAPPER_PRESSED
-		else:
-			_intended_action = State.SHOOT_PRESSED
-	elif best_pass_score >= dump_score:
-		_pass_target_peer_id = best_pass_peer
-		_intended_action = State.PASS_PRESSED
+	# CARRY competing score. In OZ use the cached best-drift candidate
+	# from _find_best_carry_position (which ran earlier this tick via
+	# _carry_anchor) discounted for the time-cost of waiting. In NZ/DZ
+	# the carrier is heading for the OZ slot — use a fixed baseline
+	# representing "real actions await up-ice, don't bail to a marginal
+	# NZ shot."
+	var in_oz: bool = -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
+	var carry_score: float
+	if in_oz:
+		carry_score = _last_best_drift_score * AIActionScoring.CARRY_DELAY_DISCOUNT
 	else:
-		_intended_action = State.DUMP_PRESSED
-	_intent_wait_ticks = 0
+		carry_score = AIActionScoring.CARRY_NZ_DZ_BASELINE
+
+	# Apply hysteresis to the current intent so it doesn't flip on
+	# tiny per-tick fluctuations. Treats SHOOT/SLAPPER as one shoot
+	# intent class — flipping wrister↔slapper inside the shoot
+	# category is fine (same pre-aim target).
+	if _intended_action == State.SHOOT_PRESSED or _intended_action == State.SLAPPER_PRESSED:
+		shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	elif _intended_action == State.PASS_PRESSED:
+		best_pass_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	elif _intended_action == State.DUMP_PRESSED:
+		dump_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+
+	# Find the best action that clears ACTION_THRESHOLD (noise floor —
+	# anything below this is just noise, not a real opportunity).
+	var best_action_score: float = -INF
+	var best_action: State = State.CARRY
+	if shoot_score >= AIActionScoring.ACTION_THRESHOLD and shoot_score > best_action_score:
+		best_action_score = shoot_score
+		best_action = State.SLAPPER_PRESSED if shoot_use_slapper else State.SHOOT_PRESSED
+	if best_pass_score >= AIActionScoring.ACTION_THRESHOLD and best_pass_score > best_action_score:
+		best_action_score = best_pass_score
+		best_action = State.PASS_PRESSED
+	if dump_score >= AIActionScoring.ACTION_THRESHOLD and dump_score > best_action_score:
+		best_action_score = dump_score
+		best_action = State.DUMP_PRESSED
+
+	# Carry beats action → stay in CARRY. Else commit to action.
+	var new_intent: State
+	if best_action_score > carry_score:
+		new_intent = best_action
+		if new_intent == State.PASS_PRESSED:
+			_pass_target_peer_id = best_pass_peer
+		elif new_intent == State.SHOOT_PRESSED or new_intent == State.SLAPPER_PRESSED:
+			_shot_is_elevated = _should_elevate_shot(snapshot, self_pos, shoot_score)
+	else:
+		new_intent = State.CARRY
+
+	# Reset pre-aim wait when intent changes — mouse needs to converge
+	# to the new direction from scratch.
+	if new_intent != _intended_action:
+		_intent_wait_ticks = 0
+	_intended_action = new_intent
 
 
 # Populates the three scratch lists used by _pick_action's scoring:
@@ -1712,9 +1762,9 @@ func _carry_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
 
-	# Refresh the scratch lists. _pick_action would also populate
-	# _scratch_opponents but it runs later in the same tick (after
-	# QUIET_EYE_TICKS) so we can't rely on its state. Rebuild here.
+	# Refresh the scratch lists. _pick_action runs later in the same
+	# tick and rebuilds them too, but this function is called first
+	# from _carry_anchor — so populate here for _candidate_action_score.
 	_scratch_opponents.clear()
 	var teammate_ids: Array[int] = []
 	for peer_id: int in snapshot.skater_states:
@@ -1763,6 +1813,12 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 		if s > best_score:
 			best_score = s
 			best_pos = candidate
+	# Cache for _pick_action: this is CARRY's competing score (after
+	# CARRY_DELAY_DISCOUNT). best_score may be -INF when current pos is
+	# past the goal-line buffer AND no candidate qualified — in that
+	# case carry is genuinely worthless from here so 0 is the right
+	# floor (any real action wins).
+	_last_best_drift_score = maxf(best_score, 0.0)
 	return best_pos
 
 
