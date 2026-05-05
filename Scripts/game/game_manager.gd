@@ -41,6 +41,12 @@ var _last_emitted_clock_secs: int = -1
 var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
+# Holds an existing-players sync that arrived before _spawn_world ran. The
+# host sends sync_existing_players just before assign_player_slot; if the
+# RPCs land after the scene has changed but before on_slot_assigned has
+# created _state_machine, the sync would otherwise be dropped and the host
+# (only delivered through this path) would never spawn on the client.
+var _pending_existing_players: Array = []
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
 var _spawner: ActorSpawner = null
@@ -318,6 +324,19 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 			colors.secondary, colors.text, colors.text_outline,
 			NetworkManager.local_is_left_handed, NetworkManager.local_player_name, true,
 			NetworkManager.local_jersey_number)
+	# Flush any sync_existing_players payload that landed before _spawn_world
+	# ran. Both the GameManager queue (RPC arrived after scene load, while
+	# _state_machine was null) and NetworkManager.pending_join_players (RPC
+	# arrived during scene transition but pending_join_slot was empty when
+	# game_scene._ready ran) are drained here so the host record always lands.
+	if not _pending_existing_players.is_empty():
+		var queued: Array = _pending_existing_players
+		_pending_existing_players = []
+		sync_existing_players(queued)
+	if not NetworkManager.pending_join_players.is_empty():
+		var deferred: Array = NetworkManager.pending_join_players
+		NetworkManager.pending_join_players = []
+		sync_existing_players(deferred)
 
 
 func on_player_connected(peer_id: int) -> void:
@@ -383,6 +402,11 @@ func _despawn_skater_for_peer(peer_id: int) -> void:
 
 func sync_existing_players(player_data: Array) -> void:
 	if _state_machine == null:
+		# RPC arrived between scene-load and on_slot_assigned (which builds
+		# _state_machine via _spawn_world). Stash; on_slot_assigned will flush
+		# once the world is up. Without this the host record (only delivered
+		# through this path) is silently dropped on clients.
+		_pending_existing_players = player_data
 		return
 	for entry: Array in player_data:
 		var peer_id: int = entry[0]
