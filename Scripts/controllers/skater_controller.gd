@@ -270,6 +270,7 @@ func get_network_state() -> SkaterNetworkState:
 	state.upper_body_angular_velocity = _pose.upper_body_angular_velocity
 	state.last_processed_host_timestamp = last_processed_host_timestamp
 	state.is_ghost = skater.is_ghost
+	state.is_elevated = skater.is_elevated
 	state.shot_state = _sm.get_state() as int
 	state.shot_charge = _aiming.charge_distance
 	return state

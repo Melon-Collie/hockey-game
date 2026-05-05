@@ -352,15 +352,12 @@ const SLAPPER_MOTION_PENALTY: float = 0.3
 # of the opp net reacts to incoming pucks heading at our offensive
 # goal. Decision tree:
 #   - Speed below INCOMING_SHOT_SPEED → treat as a pass; HOLD anchor.
-#   - Impact y above ELEVATED_THRESHOLD → leave alone; HOLD.
-#   - Off-target (impact x outside net width + margin) → TIP: shift
-#     anchor laterally to be on the puck path at our z plane, aim
-#     mouse at goal so the blade angles toward net for a deflection.
-#   - On-target → STEP OUT: shift anchor laterally away from path
-#     so we don't body-block our own teammate's shot.
+#   - Impact y above ELEVATED_THRESHOLD → STEP OUT (body-block risk,
+#     blade can't reach). Shift anchor laterally away from path.
+#   - Fast ground shot (on or off target) → TIP. Shift anchor onto
+#     the puck path at our z plane, aim mouse at goal so the blade
+#     angles toward net for a deflection / redirect.
 const BACKDOOR_INCOMING_SHOT_SPEED_M_S: float = 12.0
-const BACKDOOR_ELEVATED_THRESHOLD_M: float = 0.4
-const BACKDOOR_OFF_TARGET_MARGIN_M: float = 0.3
 const BACKDOOR_STEP_OUT_M: float = 1.5
 
 # ── Owned state ──────────────────────────────────────────────────────────────
@@ -1589,7 +1586,15 @@ func _tag_up_anchor(self_pos: Vector3) -> Vector3:
 
 # Decides what the BACKDOOR bot should do when an incoming puck is
 # detected. Returns [adjusted_anchor, aim_override] — aim_override is
-# Vector3.ZERO when no mouse override is needed (HOLD or STEP_OUT).
+# Vector3.ZERO when no mouse override is needed (HOLD).
+#
+# Decision tree:
+#   - HOLD if no incoming shot (slow puck, not heading at goal).
+#   - STEP OUT if our teammate's shooting state is_elevated (the
+#     puck will be in the air, our body could block it but the
+#     blade can't reach).
+#   - TIP otherwise (fast ground shot, on or off target — both are
+#     deflection candidates).
 func _backdoor_decision(snapshot: WorldSnapshot, self_pos: Vector3, base_anchor: Vector3) -> Array:
 	var puck_state: PuckNetworkState = snapshot.puck_state
 	if puck_state == null:
@@ -1602,55 +1607,73 @@ func _backdoor_decision(snapshot: WorldSnapshot, self_pos: Vector3, base_anchor:
 	if puck_speed < BACKDOOR_INCOMING_SHOT_SPEED_M_S:
 		return [base_anchor, Vector3.ZERO]
 
-	# Direction gate: must be heading at our offensive goal. opp_goal_z
-	# is on the opposite side of own_goal_z. The puck is heading at it
-	# if puck_vel.z has the same sign as (opp_goal_z - puck_z).
+	# Direction gate: must be heading at our offensive goal.
 	var opp_goal_z: float = -_own_goal_dir * GameRules.GOAL_LINE_Z
 	var to_goal_z: float = opp_goal_z - puck_pos.z
 	if puck_vel.z * to_goal_z <= 0.0:
 		return [base_anchor, Vector3.ZERO]
 
-	# Predict impact at goal plane (with gravity for y).
-	var t_to_goal: float = to_goal_z / puck_vel.z
-	if t_to_goal <= 0.0 or t_to_goal > 2.0:
+	# Predict where puck path crosses our z plane (lateral anchor pos).
+	var t_to_my_z: float = (self_pos.z - puck_pos.z) / puck_vel.z
+	if t_to_my_z <= 0.0 or t_to_my_z > 2.0:
 		return [base_anchor, Vector3.ZERO]
-	var impact_x: float = puck_pos.x + puck_vel.x * t_to_goal
-	var impact_y: float = maxf(0.0, puck_pos.y + puck_vel.y * t_to_goal - 0.5 * 9.8 * t_to_goal * t_to_goal)
+	var path_x_at_my_z: float = puck_pos.x + puck_vel.x * t_to_my_z
 
-	# Elevated → leave alone (puck flies over blade reach).
-	if impact_y > BACKDOOR_ELEVATED_THRESHOLD_M:
-		return [base_anchor, Vector3.ZERO]
+	# Elevated check: read the most-recent shooter's `is_elevated` flag
+	# directly from their network state. Cleaner than projecting puck
+	# y velocity through gravity math. We use the closest teammate to
+	# the puck as the proxy for "shooter" since once the puck is in
+	# flight there's no carrier — but the bot that just released will
+	# typically be the closest teammate.
+	var shooter_is_elevated: bool = _last_shooter_is_elevated(snapshot)
 
-	var net_hw: float = GameRules.NET_HALF_WIDTH
-	var on_target: bool = absf(impact_x) <= net_hw + BACKDOOR_OFF_TARGET_MARGIN_M
-
-	if on_target:
-		# STEP OUT — move laterally so we're not in our teammate's shot lane.
-		# Predict where puck is at our z plane and shift anchor away.
-		var t_to_my_z: float = (self_pos.z - puck_pos.z) / puck_vel.z
-		if t_to_my_z <= 0.0 or t_to_my_z > 2.0:
-			return [base_anchor, Vector3.ZERO]
-		var path_x_at_my_z: float = puck_pos.x + puck_vel.x * t_to_my_z
+	if shooter_is_elevated:
+		# STEP OUT — move laterally so our body isn't in the path of
+		# the elevated shot. Blade can't reach an elevated puck so
+		# tipping isn't an option here.
 		var step_dir: float = signf(path_x_at_my_z - base_anchor.x)
 		if step_dir == 0.0:
 			step_dir = 1.0
-		# Move opposite of where the path is — lateral step-out.
 		var step_anchor := Vector3(
 				base_anchor.x - step_dir * BACKDOOR_STEP_OUT_M,
 				0.0,
 				base_anchor.z)
 		return [step_anchor, Vector3.ZERO]
 
-	# OFF-TARGET fast ground shot — TIP attempt. Shift anchor to be on
-	# the puck path at our z, and aim mouse at the goal so the blade
-	# angles toward net for a deflection.
-	var t_to_my_z2: float = (self_pos.z - puck_pos.z) / puck_vel.z
-	if t_to_my_z2 <= 0.0 or t_to_my_z2 > 2.0:
-		return [base_anchor, Vector3.ZERO]
-	var path_x_at_my_z2: float = puck_pos.x + puck_vel.x * t_to_my_z2
-	var tip_anchor := Vector3(path_x_at_my_z2, 0.0, base_anchor.z)
+	# Fast ground shot — TIP. Shift anchor onto the puck path at our
+	# z plane, aim mouse at goal so the blade angles toward net for
+	# a deflection / redirect. Works for both on-target shots
+	# (steers the puck through a different angle past the goalie)
+	# and off-target shots (redirects toward net).
+	var tip_anchor := Vector3(path_x_at_my_z, 0.0, base_anchor.z)
 	var tip_aim := Vector3(0.0, 0.0, opp_goal_z)
 	return [tip_anchor, tip_aim]
+
+
+# Returns the is_elevated flag of the most recent likely shooter on
+# our team. Used by BACKDOOR to detect elevated shots without doing
+# gravity math on the puck. We pick the closest teammate to the puck
+# as the proxy — once the puck is in flight there's no carrier, but
+# the bot that just released is typically still nearby.
+func _last_shooter_is_elevated(snapshot: WorldSnapshot) -> bool:
+	if snapshot.puck_state == null:
+		return false
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var best_pid: int = 0
+	var best_d2: float = INF
+	for pid: int in snapshot.skater_states:
+		if int(_team_id_resolver.call(pid)) != _team_id:
+			continue
+		var pos: Vector3 = snapshot.skater_states[pid].position
+		var dx: float = pos.x - puck_pos.x
+		var dz: float = pos.z - puck_pos.z
+		var d2: float = dx * dx + dz * dz
+		if d2 < best_d2:
+			best_d2 = d2
+			best_pid = pid
+	if best_pid == 0:
+		return false
+	return snapshot.skater_states[best_pid].is_elevated
 
 
 func _clamp_anchor(p: Vector3) -> Vector3:
