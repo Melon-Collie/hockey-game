@@ -40,6 +40,17 @@ enum State {
 # we don't flip the dump corner side when the puck wiggles through
 # center.
 const STRONG_SIDE_X_DEADBAND: float = 0.5
+# Hysteresis on the strong-side sign: once we've picked +1, only flip
+# to -1 when puck.x crosses below -STRONG_SIDE_HYSTERESIS_M (and vice
+# versa). Prevents puck-near-center oscillation from flipping
+# strong_x every tick.
+const STRONG_SIDE_HYSTERESIS_M: float = 1.5
+# Quick-shot pass reachability cone. A pass commits via shoot_pressed
+# the same tick it transitions out of CARRY → quick-shot direction is
+# `(blade - player)` clamped by blade ROM. Receivers outside this dot
+# threshold from the bot's facing fire at the ROM edge instead of at
+# the receiver. 0.1 ≈ 84°.
+const PASS_REACHABLE_DOT_MIN: float = 0.1
 # Margins from the rink edge / goal line that anchors are clamped inside of.
 const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
