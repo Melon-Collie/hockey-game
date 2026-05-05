@@ -630,7 +630,11 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# different intercept points, breaking the "both glued to the same
 	# puck position" pattern.
 	var puck_pos: Vector3 = snapshot.puck_state.position
-	var target: Vector3 = _lead_intercept(self_pos, puck_pos, snapshot.puck_state.velocity)
+	var self_vel_3d: Vector3 = Vector3.ZERO
+	var self_state2: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state2 != null:
+		self_vel_3d = self_state2.velocity
+	var target: Vector3 = _lead_intercept(self_pos, self_vel_3d, puck_pos, snapshot.puck_state.velocity)
 	# Angling: when an OPPONENT carries the puck, shift the intercept
 	# toward center-ice so we approach from the inside and force them to
 	# the boards. Loose pucks get the raw intercept — there's no carrier
@@ -1735,14 +1739,31 @@ static func _is_pass_target_reachable(self_pos: Vector3, facing_xz: Vector2,
 	return dot >= PASS_REACHABLE_DOT_MIN
 
 
-func _lead_intercept(self_pos: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
+func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
 	var dt: float = CHASE_MAX_LOOKAHEAD_S / float(CHASE_TRAJECTORY_STEPS)
 	var traj: Array[Vector3] = AITrajectory.predict(
 			puck_pos, puck_vel, CHASE_TRAJECTORY_STEPS, dt)
+	# Closing-rate-aware reach: bot's velocity component toward the
+	# candidate intercept boosts the effective chase speed (bot already
+	# committed in that direction has a head start). Component AWAY
+	# from the target subtracts (bot has to redirect, slower reach).
+	# Capped at ±50% of CHASE_SPEED so extreme velocities don't blow
+	# up the estimate. Without this, the formula assumes bot starts
+	# at rest and picks intercepts that bots currently moving the
+	# wrong way can't actually reach — produces visible bad angles
+	# on slow-moving pucks.
+	var v_cap: float = CHASE_SPEED_REF_M_S * 0.5
 	for i: int in traj.size():
 		var t_step: float = (i + 1) * dt
-		var reach: float = self_pos.distance_to(traj[i])
-		if reach <= CHASE_SPEED_REF_M_S * t_step:
+		var dx: float = traj[i].x - self_pos.x
+		var dz: float = traj[i].z - self_pos.z
+		var dist: float = sqrt(dx * dx + dz * dz)
+		var v_along: float = 0.0
+		if dist > 0.001:
+			var inv_d: float = 1.0 / dist
+			v_along = self_vel.x * dx * inv_d + self_vel.z * dz * inv_d
+		var effective_speed: float = CHASE_SPEED_REF_M_S + clampf(v_along, -v_cap, v_cap)
+		if dist <= effective_speed * t_step:
 			return traj[i]
 	# Puck is moving away faster than we can chase — aim at the last
 	# projected position so we at least head in the right direction.
