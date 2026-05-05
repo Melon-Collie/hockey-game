@@ -77,9 +77,13 @@ const OPEN_MAN_MAX_SCORE: float = 0.4
 
 # Score threshold below which the SM stays in CARRY rather than
 # committing to a SHOOT or PASS. Tunes how aggressive bots are.
-# Raise toward 0.35 to make bots more patient (carry more); lower
-# toward 0.15 to make them committal (shoot/pass on weaker reads).
-const ACTION_THRESHOLD: float = 0.25
+# Bumped from 0.25 → 0.35 once carrier drift was scoring candidates
+# by future action quality (commit 9036a00) — the carrier is now
+# strong enough at finding open ice that low-confidence shots and
+# pass-to-support outlets shouldn't preempt it. Raise toward 0.45
+# if bots still commit to bad reads; lower toward 0.25 if they
+# refuse legitimate close-range shots.
+const ACTION_THRESHOLD: float = 0.35
 
 # DUMP zone factors. Lower in own zone than you might expect — 3v3
 # arcade hockey rewards breakouts more than safe clears, so bots try

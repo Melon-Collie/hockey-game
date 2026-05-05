@@ -49,8 +49,14 @@ const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 # the same tick it transitions out of CARRY → quick-shot direction is
 # `(blade - player)` clamped by blade ROM. Receivers outside this dot
 # threshold from the bot's facing fire at the ROM edge instead of at
-# the receiver. 0.1 ≈ 84°.
-const PASS_REACHABLE_DOT_MIN: float = 0.1
+# the receiver. 0.5 ≈ 60° each side. Was 0.1 (~84°) — too lenient: a
+# receiver squeaking over the threshold during a momentary facing
+# wobble could lock in as intent, then by AIM_CONVERGED the carrier
+# had rotated forward and the puck fired at the ROM edge instead of
+# at the receiver. Symptom was the TRANS_DO carrier picking
+# PASS→Support and then dribbling the puck forward. Lower toward 0.3
+# if bots refuse legitimate cross-rink passes.
+const PASS_REACHABLE_DOT_MIN: float = 0.5
 # Margins from the rink edge / goal line that anchors are clamped inside of.
 const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
