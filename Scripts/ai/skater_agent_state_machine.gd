@@ -1724,26 +1724,19 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 	# _scratch_opponents but it runs later in the same tick (after
 	# QUIET_EYE_TICKS) so we can't rely on its state. Rebuild here.
 	_scratch_opponents.clear()
-	var teammates: Array[Vector3] = []
-	var teammate_facings: Array[Vector2] = []
+	var teammate_ids: Array[int] = []
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
-		var s_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		if int(_team_id_resolver.call(peer_id)) == _team_id:
-			teammates.append(s_state.position)
-			teammate_facings.append(s_state.facing)
+			teammate_ids.append(peer_id)
 		else:
-			_scratch_opponents.append(s_state.position)
+			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 
 	# Score current position as the baseline; only move if a candidate
 	# beats it. EXCEPT: when the carrier is at or past the goal-line
 	# buffer (the dead zone right at and behind the net), don't let
 	# "stay here" win — force the search to pick a forward candidate.
-	# Without this gate the bot would happily park behind the net if
-	# pass score from there happened to be decent, even though shot
-	# score is zeroed by `_is_past_goal_line`. Real hockey: behind the
-	# net is a setup spot, not a destination.
 	var current_past_goal_buffer: bool = (
 			absf(self_pos.z) > absf(_attacking_goal_pos.z) - CARRY_GOAL_LINE_BUFFER_M)
 	var best_pos: Vector3 = self_pos
@@ -1751,7 +1744,7 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 	if current_past_goal_buffer:
 		best_score = -INF
 	else:
-		best_score = _carry_score_with_drive_bias(self_pos, goalie_pos, teammates, teammate_facings)
+		best_score = _candidate_action_score(self_pos, goalie_pos, snapshot, teammate_ids)
 
 	# 8 cardinal/diagonal directions. Pre-baked so we don't recompute
 	# trig each tick.
@@ -1774,20 +1767,54 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
 			continue
-		var s: float = _carry_score_with_drive_bias(candidate, goalie_pos, teammates, teammate_facings)
+		var s: float = _candidate_action_score(candidate, goalie_pos, snapshot, teammate_ids)
 		if s > best_score:
 			best_score = s
 			best_pos = candidate
 	return best_pos
 
 
-# Carry-position score plus a small drive-net tiebreak — closer to
-# the attacking goal scores marginally higher. When all candidates
-# score similarly low (no clear shot or pass available), the bias
-# tips the search toward the candidate closest to net, so the bot
-# DRIVES the net by default instead of freezing in place. A real
-# shot/pass score (0.3+) easily beats the bias (max 0.05), so this
-# only matters as a tiebreak among low-scoring positions.
+# Scores a candidate carry position by what action could be taken
+# from there: max(score_shoot from candidate, best_pass from candidate).
+# Plus a small drive-net bias as a tiebreaker when actions all score
+# similarly low. The carrier drifts toward whichever candidate has
+# the best future action — encourages aggressive movement to better
+# spots instead of bailing on a marginal back-pass when slightly
+# moving would yield a real shot or forward pass.
+func _candidate_action_score(pos: Vector3, goalie_pos: Vector3,
+		snapshot: WorldSnapshot, teammate_ids: Array[int]) -> float:
+	var shoot_s: float = AIActionScoring.score_shoot(
+			pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+			_scratch_opponents)
+	var best_pass: float = 0.0
+	for peer_id: int in teammate_ids:
+		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		if receiver_state.is_ghost:
+			continue
+		var dist: float = pos.distance_to(receiver_state.position)
+		var flight_t: float = clampf(
+				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
+		var receiver: Vector3 = _predict_receiver(peer_id, receiver_state, flight_t)
+		var s: float = AIActionScoring.score_pass(
+				pos, receiver, receiver_state.facing,
+				_attacking_goal_pos, goalie_pos,
+				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+				_scratch_opponents)
+		if s > best_pass:
+			best_pass = s
+	# Drive-net tiebreak: small bonus for proximity to attacking goal.
+	# Only matters when shoot/pass scores are similarly low; a real
+	# action (0.3+) easily beats the bias (max 0.05).
+	var dist_to_goal: float = pos.distance_to(_attacking_goal_pos)
+	var drive_factor: float = 1.0 - clampf(
+			dist_to_goal / AIActionScoring.SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
+	return maxf(shoot_s, best_pass) + drive_factor * CARRY_DRIVE_NET_BIAS
+
+
+# Legacy helper kept for tests / future re-use; no longer called by
+# _find_best_carry_position. The carry-position search now uses real
+# action scoring (see _candidate_action_score).
 func _carry_score_with_drive_bias(pos: Vector3, goalie_pos: Vector3,
 		teammates: Array[Vector3], teammate_facings: Array[Vector2]) -> float:
 	var base: float = AIActionScoring.carry_position_score(
