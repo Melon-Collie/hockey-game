@@ -34,6 +34,12 @@ var is_server: bool = false
 # ── State ─────────────────────────────────────────────────────────────────────
 var _carrier_peer_id: int = -1            # server-side authoritative carrier
 var _local_carrier_skater: Skater = null  # client-side: local skater while carrying
+# Client-side mirror of who the latest decoded world state says is carrying.
+# Used for missed-RPC recovery in GameManager: if the world state shows the
+# local peer as carrier but on_local_player_picked_up_puck never fired (lost
+# notify_puck_picked_up RPC), GameManager triggers it synthetically. -1 = no
+# carrier in the latest world state.
+var _world_state_carrier_peer_id: int = -1
 var _prev_puck_pos: Vector3 = Vector3.ZERO
 var _state_buffer: Array[BufferedPuckState] = []
 var _predicting_trajectory: bool = false
@@ -51,6 +57,18 @@ func get_buffer_depth() -> int:
 
 func get_local_carrier() -> Skater:
 	return _local_carrier_skater
+
+
+func get_world_state_carrier_peer_id() -> int:
+	return _world_state_carrier_peer_id
+
+
+func is_predicting_trajectory() -> bool:
+	return _predicting_trajectory
+
+
+func is_pending_local_release() -> bool:
+	return _pending_local_release
 
 # Callable (Skater) -> int peer_id, or -1 if not registered.
 var _peer_id_resolver: Callable = Callable()
@@ -336,6 +354,10 @@ func get_state() -> PuckNetworkState:
 func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 	if is_server:
 		return
+	# Mirror the latest decoded carrier so GameManager can recover from a
+	# missed notify_puck_picked_up RPC by checking after every world-state
+	# decode whether the local peer should be carrying.
+	_world_state_carrier_peer_id = state.carrier_peer_id
 	if _local_carrier_skater != null:
 		return  # Puck is pinned to local blade; interpolation isn't running
 	if _predicting_trajectory:
