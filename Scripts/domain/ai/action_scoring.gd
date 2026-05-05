@@ -533,6 +533,20 @@ static func _lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3]) -
 	return clampf(perp / LANE_CLEAR_RADIUS_M, 0.0, 1.0)
 
 
+# Public lane-clearance check — returns 1.0 if the path from `from`
+# to `to` is clear, 0.0 if an opponent is sitting on the line, and a
+# linear ramp between based on perpendicular distance up to
+# LANE_CLEAR_RADIUS_M. Used by carry-candidate scoring to penalize
+# destinations the bot can't reach without going around a defender.
+# Caller should project opponents forward by the candidate's expected
+# arrival time so the check reflects where defenders WILL BE when
+# the bot gets there, not where they are now (same approach as
+# pass-lane scoring with flight-time projection).
+static func path_clearance(from: Vector3, to: Vector3,
+		projected_opponents: Array[Vector3]) -> float:
+	return _lane_clear(from, to, projected_opponents)
+
+
 # True iff the segment from `from` to `to` (in world XZ) intersects
 # either net's footprint. Each net is the rectangle x ∈ ±NET_HALF_WIDTH,
 # z ∈ [GOAL_LINE_Z, GOAL_LINE_Z + NET_DEPTH] — the goal mouth out to

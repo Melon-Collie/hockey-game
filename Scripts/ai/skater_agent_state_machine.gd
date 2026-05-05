@@ -402,6 +402,11 @@ var _scratch_opponents_shoot: Array[Vector3] = []
 # current-position scoring. Rebuilt inside the score_pass loop in
 # _pick_action because flight time depends on shooter→receiver distance.
 var _scratch_opponents_pass: Array[Vector3] = []
+# Scratch buffer for carry-candidate path-clearance checks. Filled
+# once per arrival-time bucket inside _find_best_carry_position
+# (local 1.5 m candidates share a bucket; the slot anchor uses its
+# own longer projection).
+var _scratch_opponents_path: Array[Vector3] = []
 
 # Set when CARRY commits to PASS_PRESSED; consumed by _state_pass_pressed
 # the next tick. 0 means "no current pass target" (real peer_ids are
@@ -1124,6 +1129,20 @@ func _build_action_opponents_lists(snapshot: WorldSnapshot) -> void:
 					s.position, s.velocity, BOT_SLAPPER_LOOKAHEAD_S))
 
 
+# Refills `out_buf` with each opponent's position projected forward
+# by `time_s`. Used by the carry-candidate path-clearance check
+# inside `_find_best_carry_position` — local candidates and the
+# slot anchor have different arrival times so the buffer is
+# repopulated per arrival-time bucket.
+func _project_opponents_to(snapshot: WorldSnapshot, time_s: float,
+		out_buf: Array[Vector3]) -> void:
+	out_buf.clear()
+	for peer_id: int in snapshot.skater_states:
+		if int(_team_id_resolver.call(peer_id)) != _team_id and peer_id != _peer_id:
+			var s: SkaterNetworkState = snapshot.skater_states[peer_id]
+			out_buf.append(AITrajectory.predict_at(s.position, s.velocity, time_s))
+
+
 # Loops every legal pass target and returns [best_pid, best_score]. A
 # pass takes 0.5–1.1 s of flight time, so the receiver and every
 # defender are projected forward by that flight time before scoring —
@@ -1799,6 +1818,13 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 	]
 	var local_time: float = CARRY_SEARCH_STEP_M / CHASE_SPEED_REF_M_S
 	var local_decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
+	# Project opponents to local-candidate arrival time for path
+	# clearance — defenders projected to be in the bot's path
+	# (within LANE_CLEAR_RADIUS_M = 1.5 m of the segment) reduce the
+	# candidate's score, same way pass scoring penalizes blocked
+	# pass lanes. Same buffer reused for all 8 local candidates
+	# since they all have the same arrival time.
+	_project_opponents_to(snapshot, local_time, _scratch_opponents_path)
 	for d: Vector2 in DIRS:
 		var candidate := Vector3(
 				self_pos.x + d.x * CARRY_SEARCH_STEP_M, 0.0,
@@ -1812,7 +1838,9 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
 			continue
 		var raw: float = _candidate_action_score(candidate, goalie_pos, snapshot, teammate_ids)
-		var s: float = raw * local_decay
+		var clearance: float = AIActionScoring.path_clearance(
+				self_pos, candidate, _scratch_opponents_path)
+		var s: float = raw * clearance * local_decay
 		if s > best_score:
 			best_score = s
 			best_pos = candidate
@@ -1828,7 +1856,13 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 	var slot_raw: float = _candidate_action_score(
 			slot_anchor, goalie_pos, snapshot, teammate_ids)
 	var slot_time: float = self_pos.distance_to(slot_anchor) / CHASE_SPEED_REF_M_S
-	var slot_score: float = slot_raw * pow(
+	# Project opponents to slot arrival time for path clearance —
+	# important here because slot is far (~2 s travel) and defenders
+	# can rotate into the lane during that window.
+	_project_opponents_to(snapshot, slot_time, _scratch_opponents_path)
+	var slot_clearance: float = AIActionScoring.path_clearance(
+			self_pos, slot_anchor, _scratch_opponents_path)
+	var slot_score: float = slot_raw * slot_clearance * pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
 	if slot_score > best_score:
 		best_score = slot_score
