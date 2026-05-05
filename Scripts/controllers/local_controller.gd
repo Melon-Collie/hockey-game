@@ -3,7 +3,7 @@ extends SkaterController
 
 signal hit_received(magnitude: float)
 
-@export var reconcile_position_threshold: float = 0.05
+@export var reconcile_position_threshold: float = 0.10
 @export var reconcile_velocity_threshold: float = 0.4
 
 @onready var camera: GameCamera = null
@@ -19,7 +19,7 @@ var _body_check_impulse_timestamp: float = 0.0
 const _BLADE_JUMP_THRESHOLD: float = 0.05
 const _CLAIM_COOLDOWN_S: float = 0.3  # gap between speculative pickup claims to the host
 
-const _RECONCILE_VISUAL_ALPHA: float = 0.12  # exponential decay per physics frame
+const _RECONCILE_VISUAL_ALPHA: float = 0.20  # exponential decay per physics frame
 
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
 	camera = $Camera3D
