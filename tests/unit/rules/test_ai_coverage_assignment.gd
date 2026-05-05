@@ -17,6 +17,13 @@ func _make_snapshot(skaters: Array, carrier_peer_id: int = -1) -> WorldSnapshot:
 		snap.skater_states[entry[0]] = s
 	var puck := PuckNetworkState.new()
 	puck.carrier_peer_id = carrier_peer_id
+	# Puck physically tracks the carrier — keep test snapshots consistent
+	# so coverage logic that reads puck.position sees the carrier's spot.
+	if carrier_peer_id != -1:
+		for entry: Array in skaters:
+			if entry[0] == carrier_peer_id:
+				puck.position = entry[2]
+				break
 	snap.puck_state = puck
 	return snap
 
@@ -182,12 +189,14 @@ func test_sticky_marks_kept_when_role_labels_swap() -> void:
 
 func test_sticky_marks_drop_when_mark_no_longer_in_pool() -> void:
 	# F2 was marking 200, but 200 is no longer on the ice (e.g. swapped
-	# off in mid-game). F2 falls back to greedy assignment.
+	# off in mid-game). F3 had no prior sticky. F2 falls back to greedy
+	# assignment; F3 takes whatever's left after F2.
 	var skaters: Array = [
 			[100, 0, Vector3(0, 0, 22)],
 			[110, 0, Vector3(2, 0, 22)],
 			[120, 0, Vector3(-2, 0, 22)],
-			[300, 1, Vector3(0, 0, 25)],   # 200 is gone; 300 is the only opp
+			[300, 1, Vector3(0, 0, 25)],   # most-dangerous remaining
+			[400, 1, Vector3(0, 0, 18)],   # less dangerous
 	]
 	var snap := _make_snapshot(skaters, -1)
 	var roles: Dictionary = {
@@ -195,11 +204,12 @@ func test_sticky_marks_drop_when_mark_no_longer_in_pool() -> void:
 			110: AIRoleAssignment.ROLE_F2,
 			120: AIRoleAssignment.ROLE_F3,
 	}
-	var prev: Dictionary = {110: 200, 120: 300}
+	# F2 had a sticky on a now-departed opp; F3 had no sticky.
+	var prev: Dictionary = {110: 200}
 	var coverage: Dictionary = AICoverageAssignment.compute(
 			snap, 0, OUR_NET_Z, _resolver(skaters), roles, prev)
 	assert_eq(coverage.get(110), 300, "F2 falls back to greedy when sticky mark is gone")
-	assert_false(coverage.has(120), "F3 has no mark — only one opp and F2 took them")
+	assert_eq(coverage.get(120), 400, "F3 takes the next-most-dangerous remaining")
 
 
 func test_no_prev_coverage_uses_greedy() -> void:
