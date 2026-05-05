@@ -1,19 +1,18 @@
 class_name AIRoleSlots
 
 # Pure-function role slot assignment for the v2 possession-state model.
-# Replaces `role_assignment.gd` (closest-to-puck F1/F2/F3) and
-# `coverage_assignment.gd` (man-to-man marks) with a single positional-
-# slot system driven by `AIPossessionState`.
+# Roles are assigned per brain tick by current geometry — closest peer
+# to each slot anchor wins via permutation enumeration with distance
+# hysteresis. No locking, no sticky state — the bot whose body is
+# already in the right place gets the role, which means roles tend
+# to "stick" naturally as long as nothing geometric reshuffles.
 #
-# Each team-level state has 3 slots. Some slots are FIXED (CARRIER is
-# whoever holds the puck; SPRINT_BY is locked at state entry). Remaining
-# slots are assigned via permutation enumeration with distance-threshold
-# hysteresis — at most 3! = 6 permutations per brain tick (6 Hz), so
-# the cost is trivial.
-#
-# Slot anchors are positional and rotate with the puck. The 1-2 zone
-# defense (DZONE) shifts strong/weak side as the puck moves; OZONE's
-# triangle rotates similarly.
+# In TRANS states the assignment encodes "lean into what you're
+# already doing": the deepest forward bot becomes OUTLET (TRANS_DO)
+# or COVER (TRANS_OD), the deepest defender becomes SUPPORT (TRANS_DO)
+# or HOME (TRANS_OD). No sprint-by lock needed because the up-ice
+# bot is naturally closest to the up-ice anchor and the deep bot is
+# naturally closest to the deep anchor.
 #
 # Mixed teams: humans are teammates and get slot assignments same as
 # bots. The brain doesn't distinguish — humans drive the structure,
@@ -23,19 +22,19 @@ enum Slot {
 	NONE,
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
-	SPRINT_BY,  # TRANS_OD + TRANS_DO: locked at state entry, sprints to target.
 	# DZONE — rotating 1-2 zone defense.
 	PRESSURE,
 	NET,
 	INSIDE,
 	# OZONE — extended OZ rotation.
 	BACKDOOR,
-	OUTLET,
-	# TRANS_DO — sprint-by attack.
-	SUPPORT,
-	# TRANS_OD — sprint-by defend.
-	F1,
-	F2,
+	OUTLET,     # OZONE: high in OZ. TRANS_DO: weak-side at opp blue line.
+	# TRANS_DO — geometric assignment, no locking.
+	SUPPORT,    # closest-to-own-net non-carrier; behind carrier weak-side.
+	# TRANS_OD — geometric assignment, no locking.
+	HOME,       # closest to own net; defensive slot.
+	F1,         # closest to puck (excluding HOME).
+	COVER,      # remaining; back-of-puck weak-side, second-wave defense.
 	# NEUTRAL — faceoff / fresh loose puck. Simple 1-2 shape.
 	CHASE,      # closest to puck, pursues
 	FLANK_L,    # left flank, slightly defensive of puck
@@ -47,8 +46,6 @@ enum Slot {
 # in the cost function. Swaps only fire when the geometric improvement
 # exceeds this threshold.
 const HYSTERESIS_PENALTY_M: float = 1.5
-# SPRINT_BY graduates off the role when within this distance of target.
-const SPRINT_BY_GRADUATE_DIST_M: float = 2.0
 
 # DZONE anchor constants.
 const DZONE_PRESSURE_GAP_M: float = 1.5            # m goal-side of puck along puck→net line
@@ -63,16 +60,16 @@ const OZONE_BACKDOOR_Z_FROM_GOAL: float = 1.0      # m in front of opp goal line
 const OZONE_OUTLET_Z_PAST_BLUE: float = 2.0        # m past opp blue line into OZ
 
 # TRANS_DO anchor constants.
-const TRANS_DO_SPRINT_BY_X: float = 4.0            # m off rink center, weak-side
-const TRANS_DO_SPRINT_BY_Z_FROM_BLUE: float = 1.0  # m on NZ side of opp blue line (offside-safe)
+const TRANS_DO_OUTLET_X: float = 4.0               # m off rink center, weak-side
+const TRANS_DO_OUTLET_Z_FROM_BLUE: float = 1.0     # m on NZ side of opp blue line (offside-safe)
 const TRANS_DO_SUPPORT_X: float = 3.0              # m weak-side of carrier
 const TRANS_DO_SUPPORT_Z: float = 3.0              # m back of carrier toward our net
 
 # TRANS_OD anchor constants.
-const TRANS_OD_SPRINT_BY_Z_FROM_GOAL: float = 5.0  # m in front of own goal line (defensive slot)
+const TRANS_OD_HOME_Z_FROM_GOAL: float = 5.0       # m in front of own goal line (defensive slot)
 const TRANS_OD_F1_GAP_M: float = 1.5               # m goal-side of puck (same as DZONE PRESSURE)
-const TRANS_OD_F2_X: float = 2.0                   # m weak-side of puck
-const TRANS_OD_F2_Z: float = 3.0                   # m back of puck toward our net
+const TRANS_OD_COVER_X: float = 2.0                # m weak-side of puck
+const TRANS_OD_COVER_Z: float = 3.0                # m back of puck toward our net
 
 # NEUTRAL anchor constants. Simple 1-2 shape: CHASE pursues puck, two
 # flankers stand off to either side slightly defensive of puck.
@@ -81,8 +78,8 @@ const NEUTRAL_FLANK_Z_DEFENSIVE: float = 2.0       # m back of puck toward own n
 
 
 # Returns the list of slots for a given state, in canonical order.
-# CARRIER and SPRINT_BY (if applicable) come first since they're
-# fixed-resolution slots — the assign() loop handles them first.
+# CARRIER (if applicable) is the only fixed-resolution slot — all
+# others are filled by the permutation enumeration.
 static func slots_for_state(state: int) -> Array:
 	match state:
 		AIPossessionState.State.DZONE:
@@ -90,9 +87,9 @@ static func slots_for_state(state: int) -> Array:
 		AIPossessionState.State.OZONE:
 			return [Slot.CARRIER, Slot.BACKDOOR, Slot.OUTLET]
 		AIPossessionState.State.TRANS_DO:
-			return [Slot.CARRIER, Slot.SPRINT_BY, Slot.SUPPORT]
+			return [Slot.CARRIER, Slot.OUTLET, Slot.SUPPORT]
 		AIPossessionState.State.TRANS_OD:
-			return [Slot.SPRINT_BY, Slot.F1, Slot.F2]
+			return [Slot.HOME, Slot.F1, Slot.COVER]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
@@ -101,14 +98,11 @@ static func slots_for_state(state: int) -> Array:
 
 # Computes the world-space anchor for a slot in a given state.
 # `carrier_pos` is needed by TRANS_DO SUPPORT (relative to carrier).
-# `sprint_by_target` is the locked target for SPRINT_BY in TRANS states
-# — caller passes Vector3.ZERO if not applicable.
 static func slot_anchor(
 		slot: Slot,
 		state: int,
 		puck_pos: Vector3,
 		carrier_pos: Vector3,
-		sprint_by_target: Vector3,
 		own_goal_z: float,
 		strong_x: float) -> Vector3:
 	var own_goal_dir: float = signf(own_goal_z)
@@ -120,10 +114,6 @@ static func slot_anchor(
 			# the carrier utility AI in `_state_carry`. Return their
 			# current position so the slot's "distance" is zero.
 			return carrier_pos
-
-		Slot.SPRINT_BY:
-			# Target was locked at state entry. Caller threads it through.
-			return sprint_by_target
 
 		Slot.PRESSURE:
 			# 1.5 m goal-side of puck along the puck→our-net line.
@@ -157,21 +147,33 @@ static func slot_anchor(
 					-own_goal_dir * (GameRules.GOAL_LINE_Z - OZONE_BACKDOOR_Z_FROM_GOAL))
 
 		Slot.OUTLET:
-			# High in OZ, shadows puck X.
+			if state == AIPossessionState.State.TRANS_DO:
+				# Weak-side at opp blue line, NZ-safe (offside buffer).
+				return Vector3(
+						-strong_x * TRANS_DO_OUTLET_X, 0.0,
+						-own_goal_dir * (GameRules.BLUE_LINE_Z - TRANS_DO_OUTLET_Z_FROM_BLUE))
+			# OZONE OUTLET: high in OZ, shadows puck X.
 			return Vector3(
 					puck_pos.x,
 					0.0,
 					-own_goal_dir * (GameRules.BLUE_LINE_Z + OZONE_OUTLET_Z_PAST_BLUE))
 
 		Slot.SUPPORT:
-			# Behind carrier, weak-side.
+			# Behind carrier, weak-side. Closest-to-own-net non-carrier
+			# wins this naturally via the permutation cost.
 			return Vector3(
 					carrier_pos.x - strong_x * TRANS_DO_SUPPORT_X,
 					0.0,
 					carrier_pos.z + own_goal_dir * TRANS_DO_SUPPORT_Z)
 
+		Slot.HOME:
+			# Defensive slot center. Closest-to-own-net peer wins.
+			return Vector3(
+					0.0, 0.0,
+					own_goal_dir * (GameRules.GOAL_LINE_Z - TRANS_OD_HOME_Z_FROM_GOAL))
+
 		Slot.F1:
-			# Same formula as DZONE PRESSURE.
+			# Same formula as DZONE PRESSURE — 1.5 m goal-side of puck.
 			var to_net2: Vector3 = our_net - puck_pos
 			var l2: float = sqrt(to_net2.x * to_net2.x + to_net2.z * to_net2.z)
 			if l2 < 0.001:
@@ -182,11 +184,14 @@ static func slot_anchor(
 					0.0,
 					puck_pos.z + to_net2.z * step2)
 
-		Slot.F2:
+		Slot.COVER:
+			# Back of puck, weak-side. The "trail" role for the bot
+			# caught up-ice — they backcheck through the slot as the
+			# play moves toward our DZ.
 			return Vector3(
-					puck_pos.x - strong_x * TRANS_OD_F2_X,
+					puck_pos.x - strong_x * TRANS_OD_COVER_X,
 					0.0,
-					puck_pos.z + own_goal_dir * TRANS_OD_F2_Z)
+					puck_pos.z + own_goal_dir * TRANS_OD_COVER_Z)
 
 		Slot.CHASE:
 			# NEUTRAL chaser: anchor at puck. The bot's SM transitions
@@ -210,86 +215,21 @@ static func slot_anchor(
 			return Vector3.ZERO
 
 
-# Computes the locked SPRINT_BY target at TRANS state entry. Caller
-# captures this once when entering a TRANS state and stores it.
-static func compute_sprint_by_target(
-		state: int,
-		puck_pos: Vector3,
-		own_goal_z: float,
-		strong_x: float) -> Vector3:
-	var own_goal_dir: float = signf(own_goal_z)
-	match state:
-		AIPossessionState.State.TRANS_OD:
-			# Defensive slot center.
-			return Vector3(
-					0.0, 0.0,
-					own_goal_dir * (GameRules.GOAL_LINE_Z - TRANS_OD_SPRINT_BY_Z_FROM_GOAL))
-		AIPossessionState.State.TRANS_DO:
-			# Weak-side at opp blue line, NZ-safe.
-			return Vector3(
-					-strong_x * TRANS_DO_SPRINT_BY_X, 0.0,
-					-own_goal_dir * (GameRules.BLUE_LINE_Z - TRANS_DO_SPRINT_BY_Z_FROM_BLUE))
-		_:
-			return Vector3.ZERO
-
-
-# Picks which peer is the SPRINT_BY at TRANS state entry. Returns
-# peer_id, or 0 if no eligible peer found.
-#
-# TRANS_OD: furthest from own net (deepest forward, has the longest
-# route home).
-# TRANS_DO: furthest from opp net (deepest defender, has the longest
-# route up-ice for the 2v1 / mismatch).
-static func pick_sprint_by_peer(
-		state: int,
-		snapshot: WorldSnapshot,
-		team_id: int,
-		own_goal_z: float,
-		team_id_resolver: Callable) -> int:
-	if snapshot == null or snapshot.skater_states == null:
-		return 0
-	var reference_z: float = own_goal_z
-	if state == AIPossessionState.State.TRANS_DO:
-		reference_z = -own_goal_z
-	var best_pid: int = 0
-	var best_dist: float = -1.0
-	for peer_id: int in snapshot.skater_states:
-		if int(team_id_resolver.call(peer_id)) != team_id:
-			continue
-		# Skip the carrier in TRANS_DO — carrier is a separate slot.
-		if state == AIPossessionState.State.TRANS_DO \
-				and peer_id == snapshot.puck_state.carrier_peer_id:
-			continue
-		var pos: Vector3 = snapshot.skater_states[peer_id].position
-		var d: float = absf(pos.z - reference_z)
-		# Tiebreak by stable peer_id ordering so we don't flicker on
-		# exactly-equal distances (rare but cheap to handle).
-		if d > best_dist or (d == best_dist and peer_id < best_pid):
-			best_dist = d
-			best_pid = peer_id
-	return best_pid
-
-
 # Assigns each teammate to a slot. Returns Dictionary[peer_id, Slot].
 #
-# Fixed slots (CARRIER, SPRINT_BY) are resolved first. CARRIER goes to
-# the puck holder if applicable. SPRINT_BY goes to the locked peer if
-# applicable. Remaining slots are filled by permutation enumeration
-# minimizing total distance + hysteresis penalty.
+# CARRIER is the only fixed slot — goes to the puck holder if they're
+# on our team. Remaining slots are filled by permutation enumeration
+# minimizing total distance + hysteresis penalty (1.5 m).
 #
 # `prev_assignments` is the previous tick's `Dictionary[peer_id, Slot]`.
 # Pass an empty dict on the first tick or after a state change.
-# `sprint_by_peer_id` is the peer locked into SPRINT_BY (0 if none).
-# `sprint_by_target` is the locked target (only used by `slot_anchor`).
 static func assign(
 		snapshot: WorldSnapshot,
 		team_id: int,
 		own_goal_z: float,
 		state: int,
 		team_id_resolver: Callable,
-		prev_assignments: Dictionary,
-		sprint_by_peer_id: int,
-		sprint_by_target: Vector3) -> Dictionary:
+		prev_assignments: Dictionary) -> Dictionary:
 	var result: Dictionary = {}
 	if snapshot == null:
 		return result
@@ -306,29 +246,17 @@ static func assign(
 	if teammates.is_empty():
 		return result
 
-	# Resolve fixed slots first.
+	# Resolve fixed CARRIER first if applicable.
 	var fixed_peers: Dictionary = {}  # peer_id -> true
 	var remaining_slots: Array = []
 	for slot: Slot in slots:
-		match slot:
-			Slot.CARRIER:
-				var carrier: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
-				if carrier != -1 and int(team_id_resolver.call(carrier)) == team_id:
-					result[carrier] = Slot.CARRIER
-					fixed_peers[carrier] = true
-				else:
-					# No own carrier — slot stays unassigned, drop it.
-					pass
-			Slot.SPRINT_BY:
-				if sprint_by_peer_id != 0 and not fixed_peers.has(sprint_by_peer_id):
-					result[sprint_by_peer_id] = Slot.SPRINT_BY
-					fixed_peers[sprint_by_peer_id] = true
-				else:
-					# No active sprint_by — drop the slot, the remaining
-					# peers compete for the other slots only.
-					pass
-			_:
-				remaining_slots.append(slot)
+		if slot == Slot.CARRIER:
+			var carrier: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
+			if carrier != -1 and int(team_id_resolver.call(carrier)) == team_id:
+				result[carrier] = Slot.CARRIER
+				fixed_peers[carrier] = true
+		else:
+			remaining_slots.append(slot)
 
 	# Filter peers down to those not already fixed.
 	var remaining_peers: Array = []
@@ -351,15 +279,12 @@ static func assign(
 		carrier_pos = snapshot.skater_states[carrier_pid].position
 	var strong_x: float = signf(puck_pos.x)
 	if absf(puck_pos.x) < 0.5:
-		# Center-puck: arbitrarily pick +1 to avoid 0.0. Hysteresis on
-		# strong_x is upstream (`_hysteretic_strong_x` in SM); brain-side
-		# computation is just the raw sign.
 		strong_x = 1.0
 
 	var anchors: Dictionary = {}  # slot -> Vector3
 	for slot: Slot in remaining_slots:
 		anchors[slot] = slot_anchor(
-				slot, state, puck_pos, carrier_pos, sprint_by_target,
+				slot, state, puck_pos, carrier_pos,
 				own_goal_z, strong_x)
 
 	var best_perm: Array = []
@@ -385,9 +310,7 @@ static func assign(
 	return result
 
 
-# All permutations of an array. Used internally by assign() — for n=2
-# returns 2 perms, for n=3 returns 6. Inputs > 3 are theoretically
-# possible but unused at 3v3 (max 3 teammates in remaining_peers).
+# All permutations of an array. n=2 returns 2 perms; n=3 returns 6.
 static func _permutations(arr: Array) -> Array:
 	if arr.size() <= 1:
 		return [arr.duplicate()]
@@ -400,19 +323,3 @@ static func _permutations(arr: Array) -> Array:
 			p.append_array(sub)
 			result.append(p)
 	return result
-
-
-# Helper for the brain: returns true if the peer assigned SPRINT_BY has
-# reached their target and should "graduate" off the role.
-static func sprint_by_should_graduate(
-		sprint_by_peer_id: int,
-		sprint_by_target: Vector3,
-		snapshot: WorldSnapshot) -> bool:
-	if sprint_by_peer_id == 0 or snapshot == null:
-		return false
-	if not snapshot.skater_states.has(sprint_by_peer_id):
-		return false
-	var pos: Vector3 = snapshot.skater_states[sprint_by_peer_id].position
-	var dx: float = pos.x - sprint_by_target.x
-	var dz: float = pos.z - sprint_by_target.z
-	return sqrt(dx * dx + dz * dz) <= SPRINT_BY_GRADUATE_DIST_M

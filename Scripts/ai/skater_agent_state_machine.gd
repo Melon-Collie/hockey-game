@@ -517,8 +517,6 @@ func _slot_label(slot: int) -> String:
 	match slot:
 		AIRoleSlots.Slot.CARRIER:
 			return "Carrier"
-		AIRoleSlots.Slot.SPRINT_BY:
-			return "SprintBy"
 		AIRoleSlots.Slot.PRESSURE:
 			return "Pressure"
 		AIRoleSlots.Slot.NET:
@@ -531,10 +529,12 @@ func _slot_label(slot: int) -> String:
 			return "Outlet"
 		AIRoleSlots.Slot.SUPPORT:
 			return "Support"
+		AIRoleSlots.Slot.HOME:
+			return "Home"
 		AIRoleSlots.Slot.F1:
 			return "F1"
-		AIRoleSlots.Slot.F2:
-			return "F2"
+		AIRoleSlots.Slot.COVER:
+			return "Cover"
 		AIRoleSlots.Slot.CHASE:
 			return "Chase"
 		AIRoleSlots.Slot.FLANK_L:
@@ -596,16 +596,10 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 
 	# Tag-up override: when ghosted (offside), bot must clear back across
 	# the blue line before doing anything else. Highest-priority override
-	# above all role/slot logic, including SPRINT_BY.
+	# above all slot logic.
 	var anchor: Vector3
-	var sprint_through: bool = false
 	if self_state != null and self_state.is_ghost:
 		anchor = _tag_up_anchor(self_pos)
-	elif _team_brain != null and _team_brain.is_sprint_by(_peer_id):
-		# SPRINT_BY: full-thrust commit toward the locked target. Skip
-		# brake-pivot and opponent repel — we run through.
-		anchor = _team_brain.sprint_by_target
-		sprint_through = true
 	else:
 		# Default: brain provides the slot anchor for our current role
 		# in the current possession state. May be Vector3.ZERO if we
@@ -620,14 +614,9 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	if _team_brain != null:
 		_team_brain.publish_anchor(_peer_id, anchor)
 
-	_apply_steering(input, snapshot, self_pos, anchor, sprint_through)
-	# Aim 2 m toward the anchor for a relaxed ready stance during normal
-	# play, or directly at the target during SPRINT_BY so the blade IK
-	# aligns with motion (skating with intent).
-	if sprint_through:
-		input.mouse_world_pos = _step_mouse_toward(anchor)
-	else:
-		input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, anchor, snapshot))
+	_apply_steering(input, snapshot, self_pos, anchor)
+	# Aim 2 m toward the anchor for a relaxed ready stance.
+	input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, anchor, snapshot))
 
 	# Transitions
 	if have_puck:
@@ -1215,23 +1204,8 @@ func _predict_receiver(receiver_pid: int, receiver: SkaterNetworkState, flight_t
 	return velocity_pos.lerp(anchor_pos, PASS_RECEIVER_ANCHOR_BLEND)
 
 
-func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3,
-		sprint_through: bool = false) -> void:
-	# Sprint-through mode (SPRINT_BY in TRANS states): full-thrust commit
-	# directly toward the anchor, skip brake-pivot, skip opponent repel.
-	# Keep teammate / board / crease repel via the steering field for
-	# physics safety, but at reduced weight via the dedicated path.
-	if sprint_through:
-		var dx: float = anchor.x - self_pos.x
-		var dz: float = anchor.z - self_pos.z
-		var l: float = sqrt(dx * dx + dz * dz)
-		if l > 0.001:
-			input.move_vector = Vector2(dx / l, dz / l)
-		else:
-			input.move_vector = Vector2.ZERO
-		return
-
-	# Standard steering: potential-field with brake-pivot.
+func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
+	# Standard potential-field steering with brake-pivot.
 	_scratch_teammates.clear()
 	_scratch_opponents.clear()
 	for peer_id: int in snapshot.skater_states:
