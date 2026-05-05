@@ -418,15 +418,14 @@ var _pass_target_peer_id: int = 0
 var _intended_action: State = State.CARRY
 var _intent_wait_ticks: int = 0
 
-# Cached carry destination + its score, set by `_carry_anchor` /
-# `_find_best_carry_position`. Read by `_pick_action` to compute
-# CARRY's competing score: dest_score × pow(decay, time_to_dest).
-# In OZ the destination is the best drift candidate (within
-# CARRY_SEARCH_STEP_M); in NZ/DZ it's the OZ slot anchor (potentially
-# 20-30 m away → heavy time discount). `_last_best_drift_score` is
-# only populated in OZ — `_pick_action` rescoring the slot anchor on
-# demand handles the NZ/DZ branch.
-var _last_carry_anchor: Vector3 = Vector3.ZERO
+# Cached score of the best carry candidate from the most recent
+# `_find_best_carry_position` call. Already includes the time
+# discount — `_pick_action` reads this directly as CARRY's competing
+# score. Same formula uniformly applied to every candidate (hold,
+# local 1.5m drifts, OZ slot anchor): raw_score × pow(decay, time)
+# where time = distance / CHASE_SPEED_REF_M_S. No zone branching —
+# scoring is universal, the bot just picks the best discounted
+# destination from a diverse candidate set.
 var _last_best_drift_score: float = 0.0
 
 # Engagement cooldown — see ENGAGEMENT_COOLDOWN_TICKS. _prev_carrier
@@ -1050,28 +1049,14 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 			self_pos, _attacking_goal_pos, _own_goal_dir,
 			GameRules.BLUE_LINE_Z, _scratch_opponents)
 
-	# CARRY competing score: score the destination the bot is driving
-	# to, then discount by time-to-arrive. Same formula in both zones.
-	# `_last_carry_anchor` was set by `_carry_anchor` earlier this
-	# tick (drift candidate in OZ, slot anchor in NZ/DZ — different
-	# destinations because the bot's actual behavior differs by zone).
-	# In OZ the destination's score was already cached via
-	# `_find_best_carry_position`; in NZ/DZ score it on demand.
-	# Time discount: pow(per_sec_decay, distance/skating_speed) — long
-	# carries (NZ → slot) self-discount more than short OZ drifts.
-	var carry_dest_score: float
-	if -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z:
-		carry_dest_score = _last_best_drift_score
-	else:
-		var teammate_ids: Array[int] = []
-		for peer_id: int in snapshot.skater_states:
-			if peer_id != _peer_id and int(_team_id_resolver.call(peer_id)) == _team_id:
-				teammate_ids.append(peer_id)
-		carry_dest_score = _candidate_action_score(
-				_last_carry_anchor, goalie_pos, snapshot, teammate_ids)
-	var time_to_dest: float = self_pos.distance_to(_last_carry_anchor) / CHASE_SPEED_REF_M_S
-	var carry_score: float = carry_dest_score * pow(
-			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, time_to_dest)
+	# CARRY competing score: best candidate from _find_best_carry_position
+	# (which ran earlier this tick from _carry_anchor). Already
+	# time-discounted internally — every candidate is scored the same
+	# way: raw_score × pow(decay, distance / speed). No zone branching,
+	# no current-position option (hockey is always moving), no magic
+	# baseline — the bot picks whichever movement candidate scores
+	# best after discount.
+	var carry_score: float = _last_best_drift_score
 
 	# Apply hysteresis to the current intent so it doesn't flip on
 	# tiny per-tick fluctuations. Treats SHOOT/SLAPPER as one shoot
@@ -1761,20 +1746,19 @@ func _clamp_anchor(p: Vector3) -> Vector3:
 # search nearby for the position with the best shoot-or-pass option
 # (8 cardinal directions × CARRY_SEARCH_STEP_M plus stay-here).
 func _carry_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	# No hold-up for the carrier — current arcade rules don't whistle on
-	# offside, just ghost the trailing player. The off-puck teammates
-	# clamp themselves on the NZ side of the line via _cap_offside, so
-	# the carrier brings the puck in normally and they release across
-	# behind it.
+	# Universal carry-destination search: every candidate (hold, local
+	# 1.5m drifts, OZ slot anchor) is scored the same way and the best
+	# wins. The OZ slot is always a candidate, so a NZ bot drives at
+	# it naturally (slot's discounted score beats nearby NZ candidates
+	# whose raw scores are weak). The 8 local cardinal candidates
+	# handle OZ cycling. No zone branching needed.
 	#
-	# Caches `_last_carry_anchor` so `_pick_action` can score the
-	# destination + apply time discount for CARRY's competing score.
-	if -_own_goal_dir * self_pos.z <= GameRules.BLUE_LINE_Z:
-		var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
-		_last_carry_anchor = Vector3(0.0, 0.0, slot_z)
-		return _last_carry_anchor
-	_last_carry_anchor = _find_best_carry_position(snapshot, self_pos)
-	return _last_carry_anchor
+	# No hold-up for the carrier — current arcade rules don't whistle
+	# on offside, just ghost the trailing player. The off-puck
+	# teammates clamp themselves on the NZ side of the line via
+	# _cap_offside, so the carrier brings the puck in normally and
+	# they release across behind it.
+	return _find_best_carry_position(snapshot, self_pos)
 
 
 func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
@@ -1793,21 +1777,19 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 		else:
 			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 
-	# Score current position as the baseline; only move if a candidate
-	# beats it. EXCEPT: when the carrier is at or past the goal-line
-	# buffer (the dead zone right at and behind the net), don't let
-	# "stay here" win — force the search to pick a forward candidate.
-	var current_past_goal_buffer: bool = (
-			absf(self_pos.z) > absf(_attacking_goal_pos.z) - CARRY_GOAL_LINE_BUFFER_M)
+	# Hockey is always moving — current position is NOT a candidate.
+	# Force the bot to pick a movement destination from the candidate
+	# set: 8 local cardinal/diagonal drifts (cycle), plus the OZ slot
+	# anchor (long-range "drive at the slot" option valid from
+	# anywhere on the rink). Time discount applied uniformly:
+	#     score = raw × pow(decay, distance / skating_speed)
+	# so short drifts barely lose value while long carries (NZ → slot)
+	# self-discount more.
 	var best_pos: Vector3 = self_pos
-	var best_score: float
-	if current_past_goal_buffer:
-		best_score = -INF
-	else:
-		best_score = _candidate_action_score(self_pos, goalie_pos, snapshot, teammate_ids)
+	var best_score: float = -INF
 
-	# 8 cardinal/diagonal directions. Pre-baked so we don't recompute
-	# trig each tick.
+	# 8 cardinal/diagonal directions at CARRY_SEARCH_STEP_M. Pre-baked
+	# so we don't recompute trig each tick.
 	const SQRT2_INV: float = 0.70710678
 	const DIRS: Array[Vector2] = [
 			Vector2(1, 0), Vector2(SQRT2_INV, SQRT2_INV),
@@ -1815,6 +1797,8 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 			Vector2(-1, 0), Vector2(-SQRT2_INV, -SQRT2_INV),
 			Vector2(0, -1), Vector2(SQRT2_INV, -SQRT2_INV),
 	]
+	var local_time: float = CARRY_SEARCH_STEP_M / CHASE_SPEED_REF_M_S
+	var local_decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 	for d: Vector2 in DIRS:
 		var candidate := Vector3(
 				self_pos.x + d.x * CARRY_SEARCH_STEP_M, 0.0,
@@ -1827,15 +1811,30 @@ func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Ve
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
 			continue
-		var s: float = _candidate_action_score(candidate, goalie_pos, snapshot, teammate_ids)
+		var raw: float = _candidate_action_score(candidate, goalie_pos, snapshot, teammate_ids)
+		var s: float = raw * local_decay
 		if s > best_score:
 			best_score = s
 			best_pos = candidate
-	# Cache for _pick_action: raw destination score (no discount; the
-	# time discount is applied in _pick_action via distance / speed).
-	# best_score may be -INF when current pos is past the goal-line
-	# buffer AND no candidate qualified — carry is genuinely worthless
-	# there, so 0 floors it (any real action wins).
+
+	# OZ slot anchor: long-range candidate, valid from anywhere. In NZ
+	# / DZ this is essentially the only viable option (local 1.5 m
+	# candidates are filtered out as NZ-side). In OZ it competes with
+	# the local drifts — for a bot far from the slot, the discount
+	# eats most of the slot's score and a local cycle wins; for a bot
+	# near the slot, it's already covered by the local search.
+	var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
+	var slot_anchor: Vector3 = Vector3(0.0, 0.0, slot_z)
+	var slot_raw: float = _candidate_action_score(
+			slot_anchor, goalie_pos, snapshot, teammate_ids)
+	var slot_time: float = self_pos.distance_to(slot_anchor) / CHASE_SPEED_REF_M_S
+	var slot_score: float = slot_raw * pow(
+			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
+	if slot_score > best_score:
+		best_score = slot_score
+		best_pos = slot_anchor
+
+	# Cache for _pick_action — already time-discounted.
 	_last_best_drift_score = maxf(best_score, 0.0)
 	return best_pos
 
