@@ -1195,37 +1195,41 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 
 # Receiver position prediction blending pure-velocity extrapolation with
-# the receiver's published steering anchor. A receiver currently
-# moving away from the puck but steering toward an anchor will end up
-# closer to the anchor than to the velocity-extrapolated point — the
-# blend captures that without overshooting receivers who are already
-# moving along their intended direction. Falls back to velocity-only
-# when no anchor is published (human teammate, brain not yet ticked,
-# or the receiver is the carrier and never published).
+# the receiver's published steering anchor, then offset to the
+# receiver's BLADE rather than body center. The blade offset (current
+# blade position minus body position) is applied after prediction so
+# the puck arrives where the stick is — short / medium passes land
+# tape-to-tape instead of at the receiver's feet. Falls back to
+# velocity-only when no anchor is published.
 func _predict_receiver(receiver_pid: int, receiver: SkaterNetworkState, flight_t: float) -> Vector3:
 	var velocity_pos: Vector3 = AITrajectory.predict_at(
 			receiver.position, receiver.velocity, flight_t)
-	if _team_brain == null:
-		return velocity_pos
-	var anchor: Vector3 = _team_brain.get_published_anchor(receiver_pid)
-	if anchor == Vector3.ZERO:
-		return velocity_pos
-	# Anchor-based prediction: receiver heads toward their anchor at
-	# their current speed. Speed is preserved (rather than assuming
-	# top speed) so a stationary receiver stays put — predicted = pos.
-	var to_anchor: Vector3 = anchor - receiver.position
-	var to_anchor_len: float = sqrt(to_anchor.x * to_anchor.x + to_anchor.z * to_anchor.z)
-	if to_anchor_len < 0.01:
-		return velocity_pos
-	var speed: float = sqrt(receiver.velocity.x * receiver.velocity.x
-			+ receiver.velocity.z * receiver.velocity.z)
-	var inv: float = 1.0 / to_anchor_len
-	var anchor_step: Vector3 = Vector3(to_anchor.x * inv, 0.0, to_anchor.z * inv) * (speed * flight_t)
-	# Cap the anchor-step so we don't overshoot the anchor itself.
-	if anchor_step.length() > to_anchor_len:
-		anchor_step = to_anchor
-	var anchor_pos: Vector3 = receiver.position + anchor_step
-	return velocity_pos.lerp(anchor_pos, PASS_RECEIVER_ANCHOR_BLEND)
+	var predicted_body: Vector3 = velocity_pos
+	if _team_brain != null:
+		var anchor: Vector3 = _team_brain.get_published_anchor(receiver_pid)
+		if anchor != Vector3.ZERO:
+			# Anchor-based prediction: receiver heads toward their anchor at
+			# their current speed. Speed is preserved (rather than assuming
+			# top speed) so a stationary receiver stays put — predicted = pos.
+			var to_anchor: Vector3 = anchor - receiver.position
+			var to_anchor_len: float = sqrt(to_anchor.x * to_anchor.x + to_anchor.z * to_anchor.z)
+			if to_anchor_len >= 0.01:
+				var speed: float = sqrt(receiver.velocity.x * receiver.velocity.x
+						+ receiver.velocity.z * receiver.velocity.z)
+				var inv: float = 1.0 / to_anchor_len
+				var anchor_step: Vector3 = Vector3(to_anchor.x * inv, 0.0, to_anchor.z * inv) * (speed * flight_t)
+				if anchor_step.length() > to_anchor_len:
+					anchor_step = to_anchor
+				var anchor_pos: Vector3 = receiver.position + anchor_step
+				predicted_body = velocity_pos.lerp(anchor_pos, PASS_RECEIVER_ANCHOR_BLEND)
+	# Blade offset: shift the predicted aim from body center to where
+	# the receiver's stick is. Assumes the blade moves with the body
+	# (offset stays roughly constant during the pass flight). Replicated
+	# `blade_position` is set per SM tick so it's fresh.
+	var blade_offset: Vector3 = receiver.blade_position - receiver.position
+	# Zero-out y so the aim stays in the world XZ plane.
+	blade_offset.y = 0.0
+	return predicted_body + blade_offset
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:

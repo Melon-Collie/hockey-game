@@ -28,6 +28,13 @@ extends RefCounted
 # GameManager's existing call site.
 
 const TICK_PERIOD: float = 1.0 / 6.0
+# Strong-side X is sign(puck.x) but with a hysteresis band so the
+# strong/weak side doesn't flip every tick when the puck cycles
+# through center. Once we've picked +1, only flip to -1 when puck.x
+# crosses below -STRONG_SIDE_HYSTERESIS_M, and vice versa. Without
+# this, NET / BACKDOOR / etc. anchors flip strong-side rapidly on a
+# corner-to-corner cycle and bots try to switch sides every brain tick.
+const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
 var state: int = AIPossessionState.State.DZONE
@@ -36,6 +43,8 @@ var published_anchors: Dictionary = {}     # peer_id -> Vector3
 
 # Internal — sticky possession for loose-puck handling.
 var _last_carrier_team: int = -1
+# Hysteretic strong-side X. Updated per brain tick from puck.x.
+var _strong_x: float = 1.0
 
 var _accumulator: float = 0.0
 var _team_id_resolver: Callable = Callable()
@@ -67,13 +76,21 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	_last_carrier_team = new_state_pair[1]
 	state = new_state
 
-	# 2. Slot assignment by current geometry. CARRIER is fixed to the
+	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
+	if snapshot != null and snapshot.puck_state != null:
+		var puck_x: float = snapshot.puck_state.position.x
+		if _strong_x > 0.0 and puck_x < -STRONG_SIDE_HYSTERESIS_M:
+			_strong_x = -1.0
+		elif _strong_x < 0.0 and puck_x > STRONG_SIDE_HYSTERESIS_M:
+			_strong_x = 1.0
+
+	# 3. Slot assignment by current geometry. CARRIER is fixed to the
 	#    puck holder; everything else falls out of the permutation
 	#    enumeration with hysteresis. No locking needed.
 	var prev_assignments: Dictionary = slot_assignments
 	slot_assignments = AIRoleSlots.assign(
 			snapshot, team_id, _own_goal_z, state, _team_id_resolver,
-			prev_assignments)
+			prev_assignments, _strong_x)
 
 
 # Returns the slot a peer is currently assigned to, or NONE if not
@@ -96,12 +113,9 @@ func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
 	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
 		carrier_pos = snapshot.skater_states[carrier_pid].position
-	var strong_x: float = signf(puck_pos.x)
-	if absf(puck_pos.x) < 0.5:
-		strong_x = 1.0
 	return AIRoleSlots.slot_anchor(
 			slot, state, puck_pos, carrier_pos,
-			_own_goal_z, strong_x)
+			_own_goal_z, _strong_x)
 
 
 # Called by each off-puck bot per physics tick to publish where they're

@@ -65,7 +65,11 @@ const OZONE_OUTLET_Z_PAST_BLUE: float = 2.0        # m past opp blue line into O
 
 # TRANS_DO anchor constants.
 const TRANS_DO_OUTLET_X: float = 4.0               # m off rink center, weak-side
-const TRANS_DO_OUTLET_Z_FROM_BLUE: float = 1.0     # m on NZ side of opp blue line (offside-safe)
+const TRANS_DO_OUTLET_Z_FROM_BLUE: float = 2.5     # m on NZ side of opp blue line (offside-safe; bumped from 1m for offside slack)
+# OUTLET shouldn't get more than this far up-ice from the puck.
+# Without the cap, OUTLET sprints to the blue line even when the
+# puck is still in our DZ — they're 30+ m ahead of the play.
+const TRANS_DO_OUTLET_MAX_LEAD_M: float = 10.0
 const TRANS_DO_SUPPORT_X: float = 3.0              # m weak-side of carrier
 const TRANS_DO_SUPPORT_Z: float = 3.0              # m back of carrier toward our net
 
@@ -153,9 +157,22 @@ static func slot_anchor(
 		Slot.OUTLET:
 			if state == AIPossessionState.State.TRANS_DO:
 				# Weak-side at opp blue line, NZ-safe (offside buffer).
+				# Capped: OUTLET shouldn't be more than
+				# TRANS_DO_OUTLET_MAX_LEAD_M up-ice of the puck (the
+				# play). Without the cap, OUTLET parks at the blue
+				# line even when the carrier is still deep in our DZ.
+				#
+				# Signed depth: own_goal_dir * z grows toward own
+				# goal. Smaller depth = further up-ice. OUTLET's
+				# minimum depth = puck_depth − MAX_LEAD_M.
+				var base_z: float = -own_goal_dir * (GameRules.BLUE_LINE_Z - TRANS_DO_OUTLET_Z_FROM_BLUE)
+				var puck_depth: float = own_goal_dir * puck_pos.z
+				var min_depth: float = puck_depth - TRANS_DO_OUTLET_MAX_LEAD_M
+				var base_depth: float = own_goal_dir * base_z
+				var capped_depth: float = maxf(base_depth, min_depth)
 				return Vector3(
 						-strong_x * TRANS_DO_OUTLET_X, 0.0,
-						-own_goal_dir * (GameRules.BLUE_LINE_Z - TRANS_DO_OUTLET_Z_FROM_BLUE))
+						own_goal_dir * capped_depth)
 			# OZONE OUTLET: high in OZ, shadows puck X.
 			return Vector3(
 					puck_pos.x,
@@ -233,7 +250,8 @@ static func assign(
 		own_goal_z: float,
 		state: int,
 		team_id_resolver: Callable,
-		prev_assignments: Dictionary) -> Dictionary:
+		prev_assignments: Dictionary,
+		strong_x: float = 1.0) -> Dictionary:
 	var result: Dictionary = {}
 	if snapshot == null:
 		return result
@@ -306,9 +324,6 @@ static func assign(
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
 	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
 		carrier_pos = snapshot.skater_states[carrier_pid].position
-	var strong_x: float = signf(puck_pos.x)
-	if absf(puck_pos.x) < 0.5:
-		strong_x = 1.0
 
 	var anchors: Dictionary = {}  # slot -> Vector3
 	for slot: Slot in remaining_slots:

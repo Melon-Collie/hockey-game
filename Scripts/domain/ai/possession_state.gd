@@ -72,6 +72,16 @@ static func compute(
 	var in_our_dz: bool = own_goal_dir * puck_z > GameRules.BLUE_LINE_Z
 	var in_their_dz: bool = -own_goal_dir * puck_z > GameRules.BLUE_LINE_Z
 
+	# Loose-puck-in-own-DZ override: when the puck is loose AND in our
+	# DZ, force DZONE behavior regardless of sticky possession. Without
+	# this, a strip in our zone keeps state at TRANS_DO (sticky to us)
+	# and OUTLET sprints up-ice while the puck is at our feet — bots
+	# act offensively when they should defend. Sticky possession is
+	# the right default in NZ/OZ; in our DZ a loose puck is always
+	# defensive priority.
+	if carrier == -1 and in_our_dz:
+		return [State.DZONE, carrier_team]
+
 	var state: State
 	if our_possession:
 		state = State.OZONE if in_their_dz else State.TRANS_DO
