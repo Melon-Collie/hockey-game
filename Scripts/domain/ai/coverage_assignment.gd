@@ -5,10 +5,18 @@ class_name AICoverageAssignment
 #   Dictionary[peer_id, opposing_peer_id]
 # mapping each non-F1 defender to a specific opposing skater to mark.
 #
-# F1 is excluded — they pressure the puck, not a man. F2 takes the
-# most dangerous off-puck opponent (closest to our net); F3 takes the
-# next. Greedy nearest-mark is sufficient at 3v3 — at most 2 defenders
-# vs 2 marks, no permutation conflicts.
+# F1 is excluded (they pressure the puck) except in alone-back rush
+# scenarios where F1 takes the carrier as a man-to-man mark — see
+# the alone_back branch below. F2 takes the most dangerous off-puck
+# opponent (closest to our net); F3 takes the next.
+#
+# Mark stickiness: if `prev_coverage` is provided and a defender's
+# previous mark is still in the opponents pool, the defender keeps
+# that mark instead of reshuffling to whoever is closest to net
+# right now. Without stickiness, F1/F2/F3 role labels flicker every
+# brain tick as the opp passes around the DZ — bots swap mark
+# pairings even when the position-based assignment hasn't really
+# changed. Stickiness eliminates that flicker.
 #
 # When to USE the result is a separate decision the SM owns: man-to-man
 # fires when in DZ + not in own possession, otherwise the SM ignores
@@ -24,7 +32,8 @@ static func compute(
 		team_id: int,
 		own_goal_z: float,
 		team_id_resolver: Callable,
-		roles: Dictionary) -> Dictionary:
+		roles: Dictionary,
+		prev_coverage: Dictionary = {}) -> Dictionary:
 	var result: Dictionary = {}
 	if snapshot == null or snapshot.puck_state == null or roles.is_empty():
 		return result
@@ -97,15 +106,55 @@ static func compute(
 			return a[1] < b[1]
 		return a[0] < b[0])
 
-	# F2 takes the most dangerous opp; F3 takes the next. Assignment is
-	# explicit by role rather than positional — F2 is whoever the
-	# AIRoleAssignment says is F2 (it ranks by predicted distance to
-	# puck, which is independent of our net distance).
+	# F2/F3 mark assignment with stickiness. First pass keeps any
+	# previous mark that's still in the opponents pool; second pass
+	# fills remaining roles greedily by danger (most-dangerous to F2,
+	# next to F3). Stickiness is per-PEER (not per-role) so a bot
+	# whose label flipped from F2 to F3 between ticks keeps their
+	# defensive responsibility. The role label still drives WHICH
+	# bots are eligible for marks (only F2 and F3) and the greedy
+	# fallback ordering (F2 gets the most-dangerous available).
+	var f2_pid: int = 0
+	var f3_pid: int = 0
 	for peer_id: int in roles:
-		var role: StringName = roles[peer_id]
-		if role == AIRoleAssignment.ROLE_F2 and opponents.size() >= 1:
-			result[peer_id] = opponents[0][0]
-		elif role == AIRoleAssignment.ROLE_F3 and opponents.size() >= 2:
-			result[peer_id] = opponents[1][0]
+		match roles[peer_id]:
+			AIRoleAssignment.ROLE_F2:
+				f2_pid = peer_id
+			AIRoleAssignment.ROLE_F3:
+				f3_pid = peer_id
+	# Build a quick set of available opp pids for sticky-membership lookup.
+	var available_set: Dictionary = {}
+	for entry: Array in opponents:
+		available_set[entry[0]] = true
+	var f2_sticky: int = 0
+	var f3_sticky: int = 0
+	if f2_pid != 0:
+		var prev_mark: int = prev_coverage.get(f2_pid, 0)
+		if prev_mark != 0 and available_set.has(prev_mark):
+			f2_sticky = prev_mark
+	if f3_pid != 0:
+		var prev_mark: int = prev_coverage.get(f3_pid, 0)
+		if prev_mark != 0 and available_set.has(prev_mark) and prev_mark != f2_sticky:
+			f3_sticky = prev_mark
+	# Remaining opp pool for greedy fallback — exclude any sticky marks.
+	var remaining: Array = []
+	for entry: Array in opponents:
+		if entry[0] == f2_sticky or entry[0] == f3_sticky:
+			continue
+		remaining.append(entry)
+	# Assign F2 (sticky first, then most-dangerous remaining).
+	if f2_pid != 0:
+		if f2_sticky != 0:
+			result[f2_pid] = f2_sticky
+		elif remaining.size() >= 1:
+			result[f2_pid] = remaining[0][0]
+			remaining.pop_front()
+	# Assign F3 (sticky first, then most-dangerous remaining).
+	if f3_pid != 0:
+		if f3_sticky != 0:
+			result[f3_pid] = f3_sticky
+		elif remaining.size() >= 1:
+			result[f3_pid] = remaining[0][0]
+			remaining.pop_front()
 
 	return result

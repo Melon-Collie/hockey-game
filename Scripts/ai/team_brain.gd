@@ -54,8 +54,12 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 		return
 	_accumulator -= TICK_PERIOD
 	roles = AIRoleAssignment.compute(snapshot, team_id, _team_id_resolver, _is_human_resolver)
+	# Pass the previous tick's coverage_targets so AICoverageAssignment
+	# can keep marks sticky — eliminates DZ flicker when F1/F2/F3 role
+	# labels swap between ticks as the opp passes around.
+	var prev_coverage: Dictionary = coverage_targets
 	coverage_targets = AICoverageAssignment.compute(
-			snapshot, team_id, _own_goal_z, _team_id_resolver, roles)
+			snapshot, team_id, _own_goal_z, _team_id_resolver, roles, prev_coverage)
 
 
 func get_role(peer_id: int) -> StringName:
