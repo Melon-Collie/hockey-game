@@ -59,10 +59,6 @@ func debug_role() -> String:
 	return _sm.debug_role()
 
 
-func debug_scores() -> Array[String]:
-	return _sm.debug_scores
-
-
 func debug_last_decision() -> String:
 	return _sm.debug_last_decision
 

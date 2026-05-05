@@ -462,14 +462,11 @@ var _scratch_opponents_slapper: Array[Vector3] = []
 # per-call heap allocation plus replay-breaking non-determinism.
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
-# Debug: live scores from the most recent _pick_action tick. Read by
-# AIController at ~10 Hz to drive the floating per-bot label. Updated
-# every CARRY tick; stale when the bot isn't carrying (label shows
-# the last available snapshot in that case).
-var debug_scores: Array[String] = []
-# Last non-skating decision the bot committed to (e.g. "SHOOT" /
-# "PASS→3" / "DUMP"). Set when _pick_action transitions into one of
-# the press states; persists until the next decision.
+# Last action the bot actually fired (e.g. "SHOOT" / "PASS→Backdoor"
+# / "DUMP"). Set inside the press-state handlers at the moment the
+# press is dispatched, not when intent is picked — so the label
+# reflects what the bot did rather than what it considered. Persists
+# until the next press fires.
 var debug_last_decision: String = ""
 
 
@@ -831,6 +828,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# running in SKATING_WITH_PUCK before the transition) puts the blade
 	# on the forehand side.
 	if _shoot_charge_tick == 0:
+		debug_last_decision = "SHOOT"
 		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
 		_shoot_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
 		var dir_xz: Vector3 = Vector3(
@@ -914,6 +912,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 	# _enter_slapper_charge reads input.mouse_world_pos and locks the
 	# slapper aim direction from there for the rest of the charge.
 	if _slapper_charge_tick == 0:
+		debug_last_decision = "SLAP"
 		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
 		_slapper_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
 		input.slap_pressed = true
@@ -932,6 +931,13 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	_apply_slot_steering(input, snapshot, self_pos)
+	# Resolve the receiver's slot label NOW for the debug readout —
+	# `_pass_target_peer_id` gets cleared below, and the slot is what
+	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
+	var target_slot_label: String = "?"
+	if _team_brain != null and _pass_target_peer_id != 0:
+		target_slot_label = _slot_label(_team_brain.get_slot(_pass_target_peer_id))
+	debug_last_decision = "PASS→%s" % target_slot_label
 	# Aim at the receiver's lead position. Quick-shot direction is
 	# blade-from-player at release, and the blade IK swings toward
 	# mouse_world_pos — so this fires the puck along the bot→receiver
@@ -954,6 +960,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 
 
 func _state_dump_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	debug_last_decision = "DUMP"
 	_apply_slot_steering(input, snapshot, self_pos)
 	# Aim at a deep corner of the attacking zone on our strong side —
 	# typical hockey "dump it deep, chase it down." Quick-shot direction
@@ -1016,7 +1023,6 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	var dump_score: float = AIActionScoring.score_dump(
 			self_pos, _attacking_goal_pos, _own_goal_dir,
 			GameRules.BLUE_LINE_Z, _scratch_opponents)
-	_update_debug_scores(shoot_score, shoot_use_slapper, best_pass_peer, best_pass_score, dump_score)
 
 	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
 	if max_score < AIActionScoring.ACTION_THRESHOLD:
@@ -1024,21 +1030,19 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	# Set intent instead of transitioning immediately. CARRY's per-tick
 	# logic pre-aims toward this action's direction and transitions
 	# only when the motion-limited mouse converges (or the wait
-	# timeout fires) — see _state_carry.
+	# timeout fires) — see _state_carry. debug_last_decision is set
+	# inside the press-state handlers (fire time), not here, so the
+	# debug label only shows actions the bot actually committed to.
 	if shoot_score >= best_pass_score and shoot_score >= dump_score:
 		_shot_is_elevated = _should_elevate_shot(snapshot, self_pos, shoot_score)
 		if shoot_use_slapper:
-			debug_last_decision = "SLAP"
 			_intended_action = State.SLAPPER_PRESSED
 		else:
-			debug_last_decision = "SHOOT"
 			_intended_action = State.SHOOT_PRESSED
 	elif best_pass_score >= dump_score:
 		_pass_target_peer_id = best_pass_peer
-		debug_last_decision = "PASS→%d" % (best_pass_peer % 1000)
 		_intended_action = State.PASS_PRESSED
 	else:
-		debug_last_decision = "DUMP"
 		_intended_action = State.DUMP_PRESSED
 	_intent_wait_ticks = 0
 
@@ -1158,24 +1162,6 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 			best_pass_score = s
 			best_pass_peer = peer_id
 	return [best_pass_peer, best_pass_score]
-
-
-# Updates `debug_scores` for the on-ice debug label. Top 3 sorted desc.
-# `shoot_use_slapper` swaps the shot label so the on-ice readout
-# shows whether the bot would slap or wrister at this tick.
-func _update_debug_scores(shoot_score: float, shoot_use_slapper: bool,
-		best_pass_peer: int, best_pass_score: float, dump_score: float) -> void:
-	var pass_label: String = "pass→%d" % (best_pass_peer % 1000) if best_pass_peer != 0 else "pass"
-	var shoot_label: String = "slap" if shoot_use_slapper else "shoot"
-	var rows: Array = [
-			[shoot_label, shoot_score],
-			[pass_label, best_pass_score],
-			["dump", dump_score],
-	]
-	rows.sort_custom(func(a, b): return a[1] > b[1])
-	debug_scores.clear()
-	for r: Array in rows:
-		debug_scores.append("%s:%.2f" % [r[0], r[1]])
 
 
 # Lead the receiver by their flight-time along their current velocity
