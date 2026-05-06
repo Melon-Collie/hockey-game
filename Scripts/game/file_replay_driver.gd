@@ -71,6 +71,12 @@ var _cached_to_idx: int = -1
 # normally; reset on backward seek.
 var _frame_idx_hint: int = 0
 
+# Set by any backward seek; cleared by commit_drag (or by a same-call seek
+# when allow_rebuild=true). The viewer's roster rebuild queue_frees and
+# respawns every actor, so doing it per-pixel during a slider drag produces
+# a visible strobe. seek_drag() defers the rebuild until drag_ended.
+var _has_pending_rebuild: bool = false
+
 
 func setup(codec: WorldStateCodec,
 		records: Dictionary,
@@ -101,6 +107,11 @@ func setup(codec: WorldStateCodec,
 	_start_ts = _timestamps[0]
 	_end_ts = _timestamps[_timestamps.size() - 1]
 	_virtual_clock = _start_ts
+	# Mirror the virtual clock into NetworkManager._replay_clock so any code
+	# path that consults estimated_host_time() during file replay (debug
+	# overlays, draw callbacks, future ghost handling) sees the playback
+	# timeline rather than 0. Sync the same way GoalReplayDriver does.
+	NetworkManager.set_replay_clock(_virtual_clock)
 	_paused = true
 
 
@@ -110,7 +121,8 @@ func play() -> void:
 	if _frames.is_empty():
 		return
 	if _virtual_clock >= _end_ts:
-		_seek_internal(_start_ts)
+		# End-of-replay restart — full backward seek with immediate rebuild.
+		_seek_internal(_start_ts, true)
 	_paused = false
 
 
@@ -130,22 +142,52 @@ func is_paused() -> bool:
 
 
 func seek(t: float) -> void:
-	_seek_internal(clampf(t, _start_ts, _end_ts))
+	_seek_internal(clampf(t, _start_ts, _end_ts), true)
 
 
-func _seek_internal(t: float) -> void:
+# Lightweight seek used while the user is dragging the seek slider. Walks
+# the clock and refreshes the visible frame, but defers the roster rebuild
+# (queue_free + respawn of every actor — visible strobe at slider step
+# granularity). drag_ended must call commit_drag() to flush the pending
+# rebuild once at the final drag position.
+func seek_drag(t: float) -> void:
+	_seek_internal(clampf(t, _start_ts, _end_ts), false)
+
+
+# Flush a pending roster rebuild queued by seek_drag. Idempotent — no-op if
+# nothing is pending (e.g. the drag never went backward, or commit was
+# already called).
+func commit_drag() -> void:
+	_maybe_emit_pending_rebuild()
+
+
+func _seek_internal(t: float, allow_rebuild: bool) -> void:
 	var was_backward: bool = t < _virtual_clock
 	if was_backward:
 		_frame_idx_hint = 0  # backward seek invalidates forward scan hint
+		_has_pending_rebuild = true
 	_virtual_clock = t
 	_cached_from_idx = -1
 	_cached_to_idx = -1
 	_next_event_idx = _find_next_event_idx(_virtual_clock)
-	if was_backward:
-		var snapshot: Array = []
-		for i: int in _next_event_idx:
-			snapshot.append(_events[i].data)
-		roster_rebuild_requested.emit(snapshot)
+	# Refresh the visible frame immediately when paused so the world snaps
+	# to the new clock instead of waiting for the next play. _process is
+	# early-returning while paused, so the apply has to be inline here.
+	if _paused:
+		_apply_current_frame(0.0)
+		_emit_due_events()
+	if allow_rebuild:
+		_maybe_emit_pending_rebuild()
+
+
+func _maybe_emit_pending_rebuild() -> void:
+	if not _has_pending_rebuild:
+		return
+	_has_pending_rebuild = false
+	var snapshot: Array = []
+	for i: int in _next_event_idx:
+		snapshot.append(_events[i].data)
+	roster_rebuild_requested.emit(snapshot)
 
 
 # ── Read accessors for the viewer HUD ────────────────────────────────────────
@@ -216,6 +258,11 @@ func _skip_recording_gaps() -> void:
 
 
 func _apply_current_frame(delta: float) -> void:
+	# Keep NetworkManager._replay_clock in lockstep with the virtual clock
+	# so estimated_host_time() reflects playback position rather than 0.
+	# Mirrors GoalReplayDriver._process. Set every apply (rather than once
+	# per _process tick) so seek-while-paused keeps the clock fresh too.
+	NetworkManager.set_replay_clock(_virtual_clock)
 	var idx: int = _find_frame_idx(_virtual_clock)
 	if idx < 0:
 		return

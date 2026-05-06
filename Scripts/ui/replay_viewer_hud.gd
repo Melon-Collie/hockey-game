@@ -179,7 +179,12 @@ func _build_bottom_bar(root: Control) -> void:
 	_seek_bar_root.add_child(_seek_slider)
 	_seek_slider.value_changed.connect(_on_seek_changed)
 	_seek_slider.drag_started.connect(func() -> void: _seeking_user = true)
-	_seek_slider.drag_ended.connect(func(_changed: bool) -> void: _seeking_user = false)
+	# drag_ended flushes the rebuild that seek_drag deferred — a single
+	# queue_free + respawn cycle at the final drag position instead of one
+	# per slider step.
+	_seek_slider.drag_ended.connect(func(_changed: bool) -> void:
+		_seeking_user = false
+		_driver.commit_drag())
 
 	_time_label = _label("0:00 / 0:00", 12, _DIM)
 	_time_label.custom_minimum_size = Vector2(96, 0)
@@ -209,7 +214,10 @@ func _on_seek_changed(value: float) -> void:
 	if not _seeking_user:
 		return  # programmatic update from _process
 	var target_ts: float = _driver.get_start_ts() + value * _driver.get_duration()
-	_driver.seek(target_ts)
+	# seek_drag walks the clock and refreshes the visible frame without
+	# emitting roster_rebuild_requested. The drag_ended handler calls
+	# _driver.commit_drag() once the user releases the slider.
+	_driver.seek_drag(target_ts)
 
 
 func _on_speed_changed(idx: int) -> void:
