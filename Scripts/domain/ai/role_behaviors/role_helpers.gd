@@ -123,6 +123,50 @@ static func resolve_opp_goalie_pos(ctx: RoleContext) -> Vector3:
 	return Vector3(goalie.position_x, 0.0, goalie.position_z)
 
 
+# Returns OUR goalie's current position. Defensive roles use this
+# as the predicted_goalie_pos when scoring the carrier's shot
+# threat against our net.
+static func resolve_our_goalie_pos(ctx: RoleContext) -> Vector3:
+	var goalie: GoalieNetworkState = ctx.snapshot.goalie_states.get(ctx.team_id)
+	if goalie == null:
+		return ctx.defending_goal_pos
+	return Vector3(goalie.position_x, 0.0, goalie.position_z)
+
+
+# Returns the position of whichever peer carries the puck (regardless
+# of team), or Vector3.ZERO when the puck is loose / null. Defensive
+# roles use this since they're scoring against the opp carrier; the
+# offensive `resolve_teammate_carrier_pos` filters to our team and
+# returns ZERO when an opp carries.
+static func resolve_any_carrier_pos(ctx: RoleContext) -> Vector3:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return Vector3.ZERO
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	if carrier_pid == -1:
+		return Vector3.ZERO
+	if not ctx.snapshot.skater_states.has(carrier_pid):
+		return Vector3.ZERO
+	return ctx.snapshot.skater_states[carrier_pid].position
+
+
+# Returns positions of opp peers other than the puck carrier — i.e.,
+# the carrier's potential pass receivers. Defensive roles use this
+# to score "carrier's best pass" when evaluating how much a candidate
+# defender position deflates the carrier's options.
+static func collect_opp_team_excluding_carrier(ctx: RoleContext) -> Array[Vector3]:
+	var carrier_pid: int = -1
+	if ctx.snapshot != null and ctx.snapshot.puck_state != null:
+		carrier_pid = ctx.snapshot.puck_state.carrier_peer_id
+	var result: Array[Vector3] = []
+	for pid: int in ctx.snapshot.skater_states:
+		if int(ctx.team_id_resolver.call(pid)) == ctx.team_id:
+			continue  # our team
+		if pid == carrier_pid:
+			continue
+		result.append(ctx.snapshot.skater_states[pid].position)
+	return result
+
+
 # Returns the positions of teammates excluding self. Used as the
 # anti-crowd filter input.
 static func collect_teammates_excluding_self(ctx: RoleContext) -> Array[Vector3]:

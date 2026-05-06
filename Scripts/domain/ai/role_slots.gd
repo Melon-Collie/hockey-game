@@ -52,8 +52,9 @@ enum Slot {
 # in tight space, suppressing the role flex that good 3v3 demands.
 const HYSTERESIS_PENALTY_M: float = 1.0
 
-# DZONE anchor constants.
-const DZONE_PRESSURE_GAP_M: float = 1.5            # m goal-side of puck along puck→net line
+# DZONE anchor constants. PRESSURE is no longer here — the role
+# behavior owns its own positional decision. ANCHOR + COVER stay
+# until they get utility AI.
 const DZONE_ANCHOR_X_FROM_POST: float = 0.3        # m inside the strong-side post (toward center)
 const DZONE_ANCHOR_Z_FROM_GOAL: float = 1.0        # m in front of goal line
 const DZONE_COVER_X: float = 2.0                   # m weak-side of rink center
@@ -67,9 +68,9 @@ const DZONE_COVER_Z_FROM_GOAL: float = 4.0         # m in front of goal line (mi
 # TRANS_DO: OUTLET + SUPPORT also own their own targets — anchor
 # formulas deleted.
 
-# TRANS_OD anchor constants.
+# TRANS_OD anchor constants. PRESSURE removed (role owns its
+# target). ANCHOR + COVER stay until they get utility AI.
 const TRANS_OD_ANCHOR_Z_FROM_GOAL: float = 5.0     # m in front of own goal line (defensive slot)
-const TRANS_OD_PRESSURE_GAP_M: float = 1.5         # m goal-side of puck (same as DZONE PRESSURE)
 const TRANS_OD_COVER_X: float = 2.0                # m weak-side of puck
 const TRANS_OD_COVER_Z: float = 3.0                # m back of puck toward our net
 
@@ -119,23 +120,8 @@ static func slot_anchor(
 			# current position so the slot's "distance" is zero.
 			return carrier_pos
 
-		Slot.PRESSURE:
-			# Both DZONE and TRANS_OD: 1.5 m goal-side of puck along
-			# the puck→our-net line. Same formula in both states; left
-			# state-branched in case Phase 4 wants to differ aggression
-			# (TRANS_OD might gap-control further, e.g.).
-			var to_net: Vector3 = our_net - puck_pos
-			var l: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
-			if l < 0.001:
-				return puck_pos
-			var gap_m: float = DZONE_PRESSURE_GAP_M
-			if state == AIPossessionState.State.TRANS_OD:
-				gap_m = TRANS_OD_PRESSURE_GAP_M
-			var step: float = gap_m / l
-			return Vector3(
-					puck_pos.x + to_net.x * step,
-					0.0,
-					puck_pos.z + to_net.z * step)
+		# PRESSURE — role owns its own positional target; no
+		# slot_anchor formula. See AIRolePressure.decide.
 
 		Slot.ANCHOR:
 			if state == AIPossessionState.State.TRANS_OD:
