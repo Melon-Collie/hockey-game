@@ -43,11 +43,14 @@ enum Slot {
 	FLANK_R,    # right flank, slightly defensive of puck
 }
 
-# Hysteresis: a (peer, slot) pairing that doesn't match the previous
-# tick's assignment costs an extra HYSTERESIS_PENALTY_M of "distance"
-# in the cost function. Swaps only fire when the geometric improvement
-# exceeds this threshold.
-const HYSTERESIS_PENALTY_M: float = 1.5
+# Hysteresis: when running closest-to-X assignment queries, a peer
+# that didn't have the slot last tick pays this many meters of
+# effective distance to take it. Sticky enough to prevent flicker
+# between geometrically-similar peers, loose enough that natural
+# play movement triggers role swaps. Lowered from the original
+# 1.5 m to 1.0 m for 3v3 — the higher value made roles too sticky
+# in tight space, suppressing the role flex that good 3v3 demands.
+const HYSTERESIS_PENALTY_M: float = 1.0
 
 # DZONE anchor constants.
 const DZONE_PRESSURE_GAP_M: float = 1.5            # m goal-side of puck along puck→net line
@@ -244,12 +247,26 @@ static func slot_anchor(
 
 # Assigns each teammate to a slot. Returns Dictionary[peer_id, Slot].
 #
-# CARRIER is the only fixed slot — goes to the puck holder if they're
-# on our team. Remaining slots are filled by permutation enumeration
-# minimizing total distance + hysteresis penalty (1.5 m).
+# Per-state semantic-query assignment:
+#   DZONE     PRESSURE = closest to puck;  ANCHOR = closest to our net;  COVER = remaining
+#   OZONE     CARRIER fixed;  FINISHER = closest to opp net;  SUPPORT = remaining
+#   TRANS_DO  CARRIER fixed;  OUTLET = closest to opp net;  SUPPORT = remaining
+#   TRANS_OD  PRESSURE = closest to puck;  ANCHOR = closest to OPP net (Sprinting Through);
+#             COVER = remaining (the deep peer engages forward)
+#   NEUTRAL   CHASE = closest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
-# `prev_assignments` is the previous tick's `Dictionary[peer_id, Slot]`.
-# Pass an empty dict on the first tick or after a state change.
+# Sprinting Through is the 3v3 backcheck technique encoded in
+# TRANS_OD's ANCHOR criterion: the up-ice peer (closest to opp net)
+# is the one with the longest backcheck, so they get ANCHOR — their
+# positional target (near our net, set by the role behavior) pulls
+# them home. The deeper peer becomes COVER and engages the play
+# forward instead of camping the slot.
+#
+# Hysteresis: each closest-to-X query adds HYSTERESIS_PENALTY_M to
+# the effective distance for peers who didn't hold the slot last
+# tick, so a sticky peer keeps the role unless another is meaningfully
+# closer. `prev_assignments` is last tick's Dictionary[peer_id, Slot];
+# pass {} on the first tick or after a state change.
 static func assign(
 		snapshot: WorldSnapshot,
 		team_id: int,
@@ -257,157 +274,198 @@ static func assign(
 		state: int,
 		team_id_resolver: Callable,
 		prev_assignments: Dictionary,
-		strong_x: float = 1.0) -> Dictionary:
+		_strong_x: float = 1.0) -> Dictionary:
 	var result: Dictionary = {}
 	if snapshot == null:
 		return result
 
-	var slots: Array = slots_for_state(state)
-	if slots.is_empty():
-		return result
-
 	# Collect our team's peers.
-	var teammates: Array = []  # peer_ids
+	var teammates: Array = []
 	for peer_id: int in snapshot.skater_states:
 		if int(team_id_resolver.call(peer_id)) == team_id:
 			teammates.append(peer_id)
 	if teammates.is_empty():
 		return result
 
-	# Resolve fixed CARRIER first if applicable.
-	var fixed_peers: Dictionary = {}  # peer_id -> true
-	var remaining_slots: Array = []
-	for slot: Slot in slots:
-		if slot == Slot.CARRIER:
-			var carrier: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
-			if carrier != -1 and int(team_id_resolver.call(carrier)) == team_id:
-				result[carrier] = Slot.CARRIER
-				fixed_peers[carrier] = true
-		else:
-			remaining_slots.append(slot)
+	var fixed_peers: Dictionary = {}
 
-	# TRANS_OD ANCHOR pre-pick: assign ANCHOR to the highest-up-ice
-	# teammate (closest to opp net = furthest from our net). Without
-	# this, the closest-to-net peer would naturally be assigned ANCHOR
-	# by permutation cost — leaving the deep bot stuck at the slot
-	# with nothing to do during NZ play. Pre-picking flips it so the
-	# up-ice bot becomes the active backchecker; the deep bot drops
-	# into COVER (back-of-puck) and engages the play.
-	if state == AIPossessionState.State.TRANS_OD:
-		var opp_goal_z: float = -own_goal_z
-		var anchor_pid: int = 0
-		var anchor_dist: float = INF
-		for pid: int in snapshot.skater_states:
-			if int(team_id_resolver.call(pid)) != team_id:
-				continue
-			if fixed_peers.has(pid):
-				continue
-			var d: float = absf(snapshot.skater_states[pid].position.z - opp_goal_z)
-			if d < anchor_dist or (d == anchor_dist and pid < anchor_pid):
-				anchor_dist = d
-				anchor_pid = pid
-		if anchor_pid != 0 and Slot.ANCHOR in remaining_slots:
-			result[anchor_pid] = Slot.ANCHOR
-			fixed_peers[anchor_pid] = true
-			remaining_slots.erase(Slot.ANCHOR)
+	# Fixed CARRIER for OZONE / TRANS_DO.
+	if state == AIPossessionState.State.OZONE \
+			or state == AIPossessionState.State.TRANS_DO:
+		var carrier_pid: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
+		if carrier_pid != -1 and int(team_id_resolver.call(carrier_pid)) == team_id:
+			result[carrier_pid] = Slot.CARRIER
+			fixed_peers[carrier_pid] = true
 
-	# Filter peers down to those not already fixed.
-	var remaining_peers: Array = []
+	var puck_pos: Vector3 = snapshot.puck_state.position if snapshot.puck_state else Vector3.ZERO
+	var our_net := Vector3(0.0, 0.0, own_goal_z)
+	var opp_net := Vector3(0.0, 0.0, -own_goal_z)
+
+	match state:
+		AIPossessionState.State.DZONE:
+			_assign_pair_then_remainder(
+					snapshot, teammates, fixed_peers, prev_assignments, result,
+					Slot.PRESSURE, puck_pos,
+					Slot.ANCHOR, our_net,
+					Slot.COVER)
+
+		AIPossessionState.State.TRANS_OD:
+			# Sprinting Through: ANCHOR criterion = closest to OPP
+			# net, so the up-ice peer gets the deep-defender role
+			# and sprints home. The remaining peer (deeper toward
+			# our net) becomes COVER and engages the play forward.
+			_assign_pair_then_remainder(
+					snapshot, teammates, fixed_peers, prev_assignments, result,
+					Slot.PRESSURE, puck_pos,
+					Slot.ANCHOR, opp_net,
+					Slot.COVER)
+
+		AIPossessionState.State.OZONE:
+			_assign_one_then_remainder(
+					snapshot, teammates, fixed_peers, prev_assignments, result,
+					Slot.FINISHER, opp_net,
+					Slot.SUPPORT)
+
+		AIPossessionState.State.TRANS_DO:
+			_assign_one_then_remainder(
+					snapshot, teammates, fixed_peers, prev_assignments, result,
+					Slot.OUTLET, opp_net,
+					Slot.SUPPORT)
+
+		AIPossessionState.State.NEUTRAL:
+			_assign_chase_and_flanks(
+					snapshot, teammates, fixed_peers, prev_assignments, result,
+					puck_pos)
+
+	return result
+
+
+# ── Assignment helpers ──────────────────────────────────────────────────────
+
+# Picks the peer closest to `target_pos` from `teammates`, excluding
+# already-fixed peers, with hysteresis. Returns -1 if no eligible peer.
+static func _pick_closest_with_hysteresis(
+		snapshot: WorldSnapshot,
+		teammates: Array,
+		fixed_peers: Dictionary,
+		prev_assignments: Dictionary,
+		target_pos: Vector3,
+		slot: Slot) -> int:
+	var best_pid: int = -1
+	var best_score: float = INF
+	for pid: int in teammates:
+		if fixed_peers.has(pid):
+			continue
+		var pos: Vector3 = snapshot.skater_states[pid].position
+		var dx: float = pos.x - target_pos.x
+		var dz: float = pos.z - target_pos.z
+		var d: float = sqrt(dx * dx + dz * dz)
+		# Hysteresis: peers who didn't hold this slot last tick pay
+		# HYSTERESIS_PENALTY_M to take it. Sticky peer keeps the
+		# slot unless another is meaningfully closer.
+		if prev_assignments.get(pid, Slot.NONE) != slot:
+			d += HYSTERESIS_PENALTY_M
+		if d < best_score or (d == best_score and (best_pid == -1 or pid < best_pid)):
+			best_score = d
+			best_pid = pid
+	return best_pid
+
+
+# Assigns slot1 to closest-to-target1 peer, slot2 to closest-to-target2
+# peer, then dumps any remainder into slot_remainder. Used by DZONE
+# and TRANS_OD.
+static func _assign_pair_then_remainder(
+		snapshot: WorldSnapshot,
+		teammates: Array,
+		fixed_peers: Dictionary,
+		prev_assignments: Dictionary,
+		result: Dictionary,
+		slot1: Slot, target1: Vector3,
+		slot2: Slot, target2: Vector3,
+		slot_remainder: Slot) -> void:
+	var pid1: int = _pick_closest_with_hysteresis(
+			snapshot, teammates, fixed_peers, prev_assignments,
+			target1, slot1)
+	if pid1 != -1:
+		result[pid1] = slot1
+		fixed_peers[pid1] = true
+
+	var pid2: int = _pick_closest_with_hysteresis(
+			snapshot, teammates, fixed_peers, prev_assignments,
+			target2, slot2)
+	if pid2 != -1:
+		result[pid2] = slot2
+		fixed_peers[pid2] = true
+
 	for pid: int in teammates:
 		if not fixed_peers.has(pid):
-			remaining_peers.append(pid)
-
-	# Anchors are needed for the 1-peer geometric pick AND for permutation
-	# enumeration below — compute once.
-	var puck_pos: Vector3 = snapshot.puck_state.position if snapshot.puck_state else Vector3.ZERO
-	var carrier_pos: Vector3 = puck_pos
-	var carrier_pid: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
-	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
-		carrier_pos = snapshot.skater_states[carrier_pid].position
-
-	var anchors: Dictionary = {}  # slot -> Vector3
-	for slot: Slot in remaining_slots:
-		anchors[slot] = slot_anchor(
-				slot, state, puck_pos, carrier_pos,
-				own_goal_z, strong_x)
-
-	# Empty cases — nothing to assign.
-	if remaining_peers.is_empty() or remaining_slots.is_empty():
-		return result
-
-	# Single-peer case (e.g. 2-bot team with carrier teammate, leaving 1
-	# remaining peer for 2 slots): pick the geometrically-best slot
-	# rather than slots[0]. Permutation enumeration below assumes matched
-	# peer/slot counts, so this case has its own pick.
-	if remaining_peers.size() == 1:
-		var pid: int = remaining_peers[0]
-		var pos: Vector3 = snapshot.skater_states[pid].position
-		var best_slot: Slot = remaining_slots[0]
-		var best_d: float = INF
-		for slot: Slot in remaining_slots:
-			var anchor: Vector3 = anchors[slot]
-			var dx: float = pos.x - anchor.x
-			var dz: float = pos.z - anchor.z
-			var d: float = dx * dx + dz * dz
-			if d < best_d:
-				best_d = d
-				best_slot = slot
-		result[pid] = best_slot
-		return result
-
-	# Single-slot case: same shape, pick the closest peer.
-	if remaining_slots.size() == 1:
-		var slot: Slot = remaining_slots[0]
-		var anchor: Vector3 = anchors[slot]
-		var best_pid: int = remaining_peers[0]
-		var best_d2: float = INF
-		for pid_c: int in remaining_peers:
-			var pos_c: Vector3 = snapshot.skater_states[pid_c].position
-			var dx_c: float = pos_c.x - anchor.x
-			var dz_c: float = pos_c.z - anchor.z
-			var d_c: float = dx_c * dx_c + dz_c * dz_c
-			if d_c < best_d2:
-				best_d2 = d_c
-				best_pid = pid_c
-		result[best_pid] = slot
-		return result
-
-	# Permutation enumeration. n=2 or n=3, at most 6 perms.
-	# (puck_pos / carrier_pos / anchors were computed above for the
-	# single-peer / single-slot fast paths.)
-	var best_perm: Array = []
-	var best_cost: float = INF
-	for perm: Array in _permutations(remaining_peers):
-		var cost: float = 0.0
-		for i: int in remaining_slots.size():
-			var slot_p: Slot = remaining_slots[i]
-			var pid_p: int = perm[i]
-			var pos_p: Vector3 = snapshot.skater_states[pid_p].position
-			var anchor_p: Vector3 = anchors[slot_p]
-			var dx_p: float = pos_p.x - anchor_p.x
-			var dz_p: float = pos_p.z - anchor_p.z
-			cost += sqrt(dx_p * dx_p + dz_p * dz_p)
-			if prev_assignments.get(pid_p, Slot.NONE) != slot_p:
-				cost += HYSTERESIS_PENALTY_M
-		if cost < best_cost:
-			best_cost = cost
-			best_perm = perm.duplicate()
-
-	for i: int in remaining_slots.size():
-		result[best_perm[i]] = remaining_slots[i]
-	return result
+			result[pid] = slot_remainder
 
 
-# All permutations of an array. n=2 returns 2 perms; n=3 returns 6.
-static func _permutations(arr: Array) -> Array:
-	if arr.size() <= 1:
-		return [arr.duplicate()]
-	var result: Array = []
-	for i: int in arr.size():
-		var rest: Array = arr.duplicate()
-		var pivot = rest.pop_at(i)
-		for sub: Array in _permutations(rest):
-			var p: Array = [pivot]
-			p.append_array(sub)
-			result.append(p)
-	return result
+# Assigns slot1 to closest-to-target1 peer, then dumps any remainder
+# into slot_remainder. Used by OZONE and TRANS_DO (after CARRIER fix).
+static func _assign_one_then_remainder(
+		snapshot: WorldSnapshot,
+		teammates: Array,
+		fixed_peers: Dictionary,
+		prev_assignments: Dictionary,
+		result: Dictionary,
+		slot: Slot, target: Vector3,
+		slot_remainder: Slot) -> void:
+	var pid: int = _pick_closest_with_hysteresis(
+			snapshot, teammates, fixed_peers, prev_assignments,
+			target, slot)
+	if pid != -1:
+		result[pid] = slot
+		fixed_peers[pid] = true
+
+	for pid_r: int in teammates:
+		if not fixed_peers.has(pid_r):
+			result[pid_r] = slot_remainder
+
+
+# NEUTRAL: CHASE goes to closest-to-puck. Remaining peers split on
+# X axis with hysteresis — lowest effective X = FLANK_L, rest = FLANK_R.
+# Hysteresis here is also HYSTERESIS_PENALTY_M but applied as an
+# X-axis bias toward the previous slot's side, so a peer wobbling
+# near center doesn't flip L/R every tick.
+static func _assign_chase_and_flanks(
+		snapshot: WorldSnapshot,
+		teammates: Array,
+		fixed_peers: Dictionary,
+		prev_assignments: Dictionary,
+		result: Dictionary,
+		puck_pos: Vector3) -> void:
+	var chase_pid: int = _pick_closest_with_hysteresis(
+			snapshot, teammates, fixed_peers, prev_assignments,
+			puck_pos, Slot.CHASE)
+	if chase_pid != -1:
+		result[chase_pid] = Slot.CHASE
+		fixed_peers[chase_pid] = true
+
+	var remaining: Array = []
+	for pid: int in teammates:
+		if not fixed_peers.has(pid):
+			remaining.append(pid)
+	if remaining.is_empty():
+		return
+
+	# Effective X for sorting: peer who held FLANK_L last tick gets
+	# pulled left by the hysteresis margin; FLANK_R pulled right.
+	# Net effect: a wobble at center keeps its previous side.
+	var effective_x: Dictionary = {}
+	for pid_r: int in remaining:
+		var x: float = snapshot.skater_states[pid_r].position.x
+		var prev_slot: int = prev_assignments.get(pid_r, Slot.NONE)
+		if prev_slot == Slot.FLANK_L:
+			x -= HYSTERESIS_PENALTY_M
+		elif prev_slot == Slot.FLANK_R:
+			x += HYSTERESIS_PENALTY_M
+		effective_x[pid_r] = x
+
+	remaining.sort_custom(func(a: int, b: int) -> bool:
+			return effective_x[a] < effective_x[b])
+
+	result[remaining[0]] = Slot.FLANK_L
+	for i: int in range(1, remaining.size()):
+		result[remaining[i]] = Slot.FLANK_R
