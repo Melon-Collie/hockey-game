@@ -39,12 +39,21 @@ enum State {
 # fires shoot_pressed the same tick it transitions out of CARRY →
 # quick-shot direction is `(blade - player)` clamped by blade ROM.
 # A receiver outside this dot threshold from the bot's facing causes
-# the blade IK to clamp to the ROM edge, so the puck fires forward
-# (or backhand-edge) instead of at the receiver. This is a mechanical
-# constraint, not a magic multiplier — without it the bot would score
-# a behind-me pass highly and then physically dribble the puck
-# forward when firing.  0.5 ≈ ±60° each side of facing.
-const PASS_REACHABLE_DOT_MIN: float = 0.5
+# the blade IK to clamp to the ROM edge, so the puck fires at the
+# ROM limit direction instead of at the receiver. Mechanical
+# constraint, not a magic multiplier.
+#
+# 0.0 ≈ ±90° each side (forward hemisphere). Loosened from 0.5
+# (±60°) so receivers off to the side or slightly behind become
+# reachable — passes to SUPPORT-style positions and lateral cycles
+# now score and fire. Forward-of-perpendicular receivers are within
+# the ~90° forehand ROM and the 120° backhand ROM, so the actual
+# fire direction lines up reasonably with the receiver. Tighter
+# values (back toward 0.5) re-introduce the "won't pass anywhere
+# but straight ahead" problem; looser (negative) values let the bot
+# score behind-me passes that the blade physically clamps to the
+# ROM edge.
+const PASS_REACHABLE_DOT_MIN: float = 0.0
 
 # Margins from the rink edge / goal line that anchors are clamped inside of.
 const RINK_X_INSET: float = 0.5

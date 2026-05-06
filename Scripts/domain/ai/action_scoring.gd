@@ -277,7 +277,13 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 
 # Lane-clear factor in [0, 1]. 1.0 = no opponent within
 # LANE_CLEAR_RADIUS_M of the bot→receiver segment; 0.0 = opponent right
-# on the line. Smooth linear ramp between.
+# on the line. Concave (sqrt) ramp between — defenders within reach
+# of the line still hurt the score, but moderate-distance defenders
+# don't crush it. Linear was too harsh: a defender 0.5 m off the
+# 1.5 m radius dropped lane to 0.33 (× shot/pass score), killing
+# otherwise-good shots through partial traffic. Sqrt: same defender
+# yields lane = 0.58. Real shots through traffic find the net more
+# often than a third of the time.
 #
 # Only counts opponents whose projection onto the segment falls between
 # the endpoints (t ∈ [0, 1]) — opponents behind the shooter or past the
@@ -305,7 +311,7 @@ static func _lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3]) -
 	if min_perp_sq == INF:
 		return 1.0
 	var perp: float = sqrt(min_perp_sq)
-	return clampf(perp / LANE_CLEAR_RADIUS_M, 0.0, 1.0)
+	return clampf(sqrt(perp / LANE_CLEAR_RADIUS_M), 0.0, 1.0)
 
 
 # Public lane-clearance check — returns 1.0 if the path from `from`
