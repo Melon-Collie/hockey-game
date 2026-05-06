@@ -413,3 +413,51 @@ func test_potential_drops_with_pressure() -> void:
 	var pressured_opps: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]
 	var pressured: float = AIActionScoring.position_potential(pos, GOAL, pressured_opps)
 	assert_lt(pressured, clean, "forward-cone defender drops position potential")
+
+
+# ── time_to_arrive ───────────────────────────────────────────────────────────
+
+func test_time_to_arrive_zero_at_destination() -> void:
+	var p := Vector3(5.0, 0.0, 5.0)
+	assert_almost_eq(
+			AIActionScoring.time_to_arrive(p, p, Vector3.ZERO),
+			0.0, 0.0001)
+
+
+func test_time_to_arrive_uses_ref_speed_when_stationary() -> void:
+	# Stationary skater 10 m from dest. effective_speed = SKATER_REF.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var dest := Vector3(10.0, 0.0, 0.0)
+	var t: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
+	assert_almost_eq(t, 10.0 / AIActionScoring.SKATER_REF_SPEED_M_S, 0.001)
+
+
+func test_time_to_arrive_faster_with_momentum_toward_dest() -> void:
+	var from := Vector3(0.0, 0.0, 0.0)
+	var dest := Vector3(10.0, 0.0, 0.0)
+	var stationary: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
+	var with_momentum: float = AIActionScoring.time_to_arrive(
+			from, dest, Vector3(AIActionScoring.SKATER_REF_SPEED_M_S, 0.0, 0.0))
+	assert_lt(with_momentum, stationary,
+			"velocity component toward dest reduces arrival time")
+
+
+func test_time_to_arrive_slower_with_momentum_away() -> void:
+	var from := Vector3(0.0, 0.0, 0.0)
+	var dest := Vector3(10.0, 0.0, 0.0)
+	var stationary: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
+	var with_momentum: float = AIActionScoring.time_to_arrive(
+			from, dest, Vector3(-5.0, 0.0, 0.0))
+	assert_gt(with_momentum, stationary,
+			"velocity component away from dest increases arrival time")
+
+
+func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
+	# Skater moving so fast away from dest that effective_speed would
+	# be non-positive without the floor. The clamp at MIN_TRAVEL_SPEED_M_S
+	# ensures finite (large) ETA — 10 m / 1 m/s = 10 s.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var dest := Vector3(10.0, 0.0, 0.0)
+	var t: float = AIActionScoring.time_to_arrive(
+			from, dest, Vector3(-50.0, 0.0, 0.0))
+	assert_almost_eq(t, 10.0 / AIActionScoring.MIN_TRAVEL_SPEED_M_S, 0.001)

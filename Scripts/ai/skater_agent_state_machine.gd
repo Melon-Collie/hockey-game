@@ -97,10 +97,11 @@ const ENGAGEMENT_COOLDOWN_MAX_TICKS: int = 96    # ~400 ms at 240 Hz
 const ENGAGEMENT_SPEED_REF_M_S: float = 10.5     # SkaterController.max_speed default
 const ENGAGEMENT_PROXIMITY_M: float = 2.0        # blade-on-puck range
 
-# Reference top skating speed used for chase intercept lookahead. Doesn't
-# need to match SkaterController exactly — small over/under shifts where
-# the intercept point lands but doesn't break behavior.
-const CHASE_SPEED_REF_M_S: float = 10.5
+# Reference top skating speed for chase intercept lookahead lives in
+# AIActionScoring (`SKATER_REF_SPEED_M_S`) so it's a single source of
+# truth across role behaviors + chase logic. Reference it directly
+# below where needed.
+
 # Cap on lead lookahead so a barely-moving puck doesn't project an
 # intercept point a million seconds away.
 const CHASE_MAX_LOOKAHEAD_S: float = 1.5
@@ -1453,7 +1454,7 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 	# at rest and picks intercepts that bots currently moving the
 	# wrong way can't actually reach — produces visible bad angles
 	# on slow-moving pucks.
-	var v_cap: float = CHASE_SPEED_REF_M_S * 0.5
+	var v_cap: float = AIActionScoring.SKATER_REF_SPEED_M_S * 0.5
 	for i: int in traj.size():
 		var t_step: float = (i + 1) * dt
 		var dx: float = traj[i].x - self_pos.x
@@ -1463,7 +1464,7 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 		if dist > 0.001:
 			var inv_d: float = 1.0 / dist
 			v_along = self_vel.x * dx * inv_d + self_vel.z * dz * inv_d
-		var effective_speed: float = CHASE_SPEED_REF_M_S + clampf(v_along, -v_cap, v_cap)
+		var effective_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S + clampf(v_along, -v_cap, v_cap)
 		if dist <= effective_speed * t_step:
 			return traj[i]
 	# Puck is moving away faster than we can chase — aim at the last

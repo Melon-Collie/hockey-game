@@ -81,10 +81,6 @@ const CARRY_SEARCH_STEP_M: float = 3.0
 # attacking goal line — beyond there is behind the net.
 const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
 
-# Momentum-aware time-to-arrive: effective_speed is clamped at this
-# floor so reverse candidates have finite arrival time.
-const MIN_TRAVEL_SPEED_M_S: float = 1.0
-
 # OZ slot depth from the attacking goal line.
 const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
 
@@ -544,7 +540,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int]) -> Array:
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
 			continue
-		var local_time: float = _momentum_time_to(self_pos, candidate, self_velocity)
+		var local_time: float = AIActionScoring.time_to_arrive(self_pos, candidate, self_velocity)
 		_project_opponents_to(ctx, local_time, _scratch_opponents_path)
 		var lane: float = AIActionScoring.path_clearance(
 				self_pos, candidate, _scratch_opponents_path)
@@ -564,7 +560,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int]) -> Array:
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
 	# already cover it via local polar candidates.
-	var slot_time: float = _momentum_time_to(self_pos, slot_pos, self_velocity)
+	var slot_time: float = AIActionScoring.time_to_arrive(self_pos, slot_pos, self_velocity)
 	_project_opponents_to(ctx, slot_time, _scratch_opponents_path)
 	var slot_lane: float = AIActionScoring.path_clearance(
 			self_pos, slot_pos, _scratch_opponents_path)
@@ -625,28 +621,6 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
 	return maxf(shoot_s, potential_s)
-
-
-# Momentum-aware time-to-arrive. effective_speed = CHASE_SPEED_REF +
-# component of bot velocity along (self → dest). Bot already moving
-# toward dest gets there faster; bot moving away takes longer.
-# Clamped at MIN_TRAVEL_SPEED_M_S so reverse candidates have finite
-# arrival time. No magic forward bias — backward candidates
-# self-penalize via longer time.
-func _momentum_time_to(self_pos: Vector3, dest: Vector3,
-		self_velocity: Vector3) -> float:
-	var dx: float = dest.x - self_pos.x
-	var dz: float = dest.z - self_pos.z
-	var dist: float = sqrt(dx * dx + dz * dz)
-	if dist < 0.001:
-		return 0.0
-	var inv: float = 1.0 / dist
-	var dir_x: float = dx * inv
-	var dir_z: float = dz * inv
-	var speed_along: float = self_velocity.x * dir_x + self_velocity.z * dir_z
-	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
-			SkaterAgentStateMachine.CHASE_SPEED_REF_M_S + speed_along)
-	return dist / effective
 
 
 # OZ slot anchor — recursion terminator and a permanent carry

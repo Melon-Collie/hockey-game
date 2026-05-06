@@ -115,6 +115,20 @@ const LANE_REACTION_RAMP_S: float = 0.10
 const SHOT_SPEED_M_S: float = 30.0
 const PASS_SPEED_M_S: float = 22.0
 
+# Reference top skating speed. Matches SkaterController.max_speed
+# default. Used by time_to_arrive() for momentum-aware ETAs across
+# every role behavior + chase intercept lookahead. Single source of
+# truth so retunes propagate everywhere.
+const SKATER_REF_SPEED_M_S: float = 10.5
+
+# Floor for momentum-adverse `time_to_arrive` returns. When the
+# velocity component along the destination is so negative that
+# effective_speed would go non-positive, clamp at this minimum so
+# reverse candidates have finite (large) ETAs rather than infinite
+# decay. 1.0 m/s ≈ "I have to brake and reverse, but I'll get there
+# eventually."
+const MIN_TRAVEL_SPEED_M_S: float = 1.0
+
 # Utility-AI knobs. AIRoleCarrier._pick_action re-runs every
 # PICK_ACTION_PERIOD_TICKS physics ticks and treats
 # CARRY as a fourth competing option scored as
@@ -507,6 +521,33 @@ static func path_clearance(from: Vector3, to: Vector3,
 		return 1.0
 	var perp: float = sqrt(min_perp_sq)
 	return clampf(perp / LANE_CLEAR_RADIUS_M, 0.0, 1.0)
+
+
+# Momentum-aware time to arrive at `dest` from `from_pos` carrying
+# `from_velocity`. effective_speed = SKATER_REF_SPEED + component of
+# velocity along (from→dest); a skater already moving toward dest gets
+# there faster, a skater moving away takes longer. Clamped at
+# MIN_TRAVEL_SPEED_M_S so reverse-direction candidates have finite
+# arrival time (slower, but not infinite).
+#
+# Used by AIRoleCarrier._best_carry to discount candidates the bot is
+# currently moving away from, by AIController chase-intercept lookahead
+# for opponent ETA estimation, and by off-puck role behaviors that
+# need a momentum-aware ETA without inventing their own constants
+# (e.g., SUPPORT's foot-race-home exposure check uses this for the
+# threat opp's ETA back to our net).
+static func time_to_arrive(from_pos: Vector3, dest: Vector3,
+		from_velocity: Vector3) -> float:
+	var dx: float = dest.x - from_pos.x
+	var dz: float = dest.z - from_pos.z
+	var dist: float = sqrt(dx * dx + dz * dz)
+	if dist < 0.001:
+		return 0.0
+	var inv: float = 1.0 / dist
+	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
+	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
+			SKATER_REF_SPEED_M_S + speed_along)
+	return dist / effective
 
 
 # True iff the segment from `from` to `to` (in world XZ) intersects
