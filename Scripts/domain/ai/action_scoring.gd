@@ -31,11 +31,17 @@ const PRESSURE_RADIUS_M: float = 4.0
 # trigger-happy); lower toward 2 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 3
 
-# Beyond this range, shots score 0 from distance alone — keeps bots from
-# launching pucks at the goalie from the blue line. Raise toward 22 if
-# bots refuse to take long shots even when wide open; lower toward 14
-# if blue-line shots are too common.
-const SHOT_RANGE_FALLOFF_M: float = 18.0
+# Beyond this range, shots score 0 from distance alone — keeps bots
+# from launching pucks at the goalie from the blue line. Linear falloff:
+# `1 - dist / SHOT_RANGE_FALLOFF_M`. Bumped from 18 → 22 to lift
+# mid-range scores: the response at 10 m is 0.55 instead of 0.44, so
+# clean mid-range shots score meaningfully and pass-to-receiver scores
+# (which transitively include `score_shoot(receiver)`) are pulled up
+# in the same band — passes to a teammate with a clear path to the
+# net are now competitive with self-carry-to-slot. Raise toward 26
+# if bots still refuse meaningful shots; lower toward 18 if blue-line
+# shots are too common.
+const SHOT_RANGE_FALLOFF_M: float = 22.0
 
 # Shooting-angle cone, measured from the net's outward normal (the
 # direction the net opens toward center ice). Inside SHOT_ANGLE_FULL_DEG
