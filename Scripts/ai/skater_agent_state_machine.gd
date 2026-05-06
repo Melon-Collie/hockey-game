@@ -1284,31 +1284,34 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	return _predict_receiver(_pass_target_peer_id, receiver, flight_t)
 
 
-# Receiver position prediction — pure velocity extrapolation from
-# their current position + velocity, plus a blade offset so the puck
-# aims at where the stick will be (not body center).
+# Receiver position prediction — velocity extrapolation of the blade
+# contact (in world space), plus the blade-to-body world offset so
+# the puck aims at where the stick will be (not body center).
 #
 # An earlier version blended in the receiver's published steering
 # anchor, intending to lead bots cutting toward their slot. That
-# overshot dramatically: a TRANS_DO OUTLET teammate's anchor is at
-# the opp blue line (~25 m up-ice), and even at 50% blend the
-# predicted lead landed forward of the carrier when the actual
-# teammate was behind. Reachability passed (lead was forward),
-# pass committed, puck fired at empty ice where the anchor said
-# the receiver "should be." Velocity-only is conservative and
-# correct: project only as far as the receiver actually moves,
-# no aspirational pull.
+# overshot dramatically (TRANS_DO OUTLET anchor is ~25 m up-ice).
+# Velocity-only is conservative and correct: project only as far as
+# the receiver actually moves, no aspirational pull.
+#
+# IMPORTANT: `receiver.blade_position` is in upper-body-LOCAL space —
+# subtracting `receiver.position` (world) was nonsense and produced
+# offsets up to 25 m, leading to passes fired at empty ice on the far
+# side of the rink during D→O transition. Use `blade_contact_world`
+# (host-only field, populated by SkaterController.get_network_state)
+# which is the blade in world coordinates already.
 func _predict_receiver(receiver_pid: int, receiver: SkaterNetworkState, flight_t: float) -> Vector3:
-	var velocity_pos: Vector3 = AITrajectory.predict_at(
-			receiver.position, receiver.velocity, flight_t)
-	# Blade offset: shift the predicted aim from body center to where
-	# the receiver's stick is. Assumes the blade moves with the body
-	# (offset stays roughly constant during the pass flight). Replicated
-	# `blade_position` is set per SM tick so it's fresh.
-	var blade_offset: Vector3 = receiver.blade_position - receiver.position
-	# Zero-out y so the aim stays in the world XZ plane.
-	blade_offset.y = 0.0
-	return velocity_pos + blade_offset
+	# Predict the blade position forward by flight_t along body
+	# velocity (assumes blade moves with body — fine over a 0.6 s
+	# pass window).
+	var blade_world: Vector3 = receiver.blade_contact_world
+	# Defensive fallback: if blade_contact_world isn't populated
+	# (zero — shouldn't happen on host but guard anyway), fall back
+	# to body position. Aim at body center is worse than aim at
+	# blade, but vastly better than aim at center ice.
+	if blade_world == Vector3.ZERO:
+		blade_world = receiver.position
+	return AITrajectory.predict_at(blade_world, receiver.velocity, flight_t)
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
