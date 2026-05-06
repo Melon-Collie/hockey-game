@@ -146,52 +146,9 @@ func test_trans_od_cover_back_of_puck_weak_side() -> void:
 	assert_gt(anchor.z, 0.0, "back of puck toward our net")
 
 
-func test_ozone_finisher_weak_side_post() -> void:
-	# Renamed from BACKDOOR. Anchor is unchanged: weak-side post in
-	# front of opp goal.
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.FINISHER, AIPossessionState.State.OZONE,
-			Vector3(5.0, 0.0, -22.0), Vector3(5.0, 0.0, -22.0),
-			OUR_NET_Z, 1.0)
-	# strong=+1, FINISHER is on the OPPOSITE side (-X).
-	assert_lt(anchor.x, 0.0, "weak-side post (negative X with strong=+1)")
-	assert_lt(anchor.z, -GameRules.GOAL_LINE_Z + 5.0,
-			"in front of opp goal line")
-
-
-func test_ozone_support_phase3_placeholder_shadows_puck_x() -> void:
-	# Phase 3 placeholder: OZONE SUPPORT preserves the previous
-	# OUTLET formula (high in OZ, shadows puck X). Phase 4 will
-	# replace this with utility-AI driven positioning.
-	var puck := Vector3(5.0, 0.0, -22.0)
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.SUPPORT, AIPossessionState.State.OZONE,
-			puck, puck, OUR_NET_Z, 1.0)
-	assert_almost_eq(anchor.x, puck.x, 0.01, "shadows puck x")
-	assert_lt(anchor.z, -GameRules.BLUE_LINE_Z, "in OZ past blue line")
-
-
-func test_trans_do_outlet_weak_side_blue_line() -> void:
-	# In TRANS_DO, OUTLET sits at the weak-side opp blue line on the
-	# NZ side. Distance from blue line is TRANS_DO_OUTLET_Z_FROM_BLUE
-	# (currently 2.5 m — bumped from 1 m for offside slack).
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.OUTLET, AIPossessionState.State.TRANS_DO,
-			Vector3(5.0, 0.0, 0.0), Vector3.ZERO, OUR_NET_Z, 1.0)
-	assert_lt(anchor.x, 0.0, "weak-side")
-	assert_almost_eq(anchor.z,
-			-GameRules.BLUE_LINE_Z + AIRoleSlots.TRANS_DO_OUTLET_Z_FROM_BLUE, 0.01,
-			"NZ side of opp blue line by TRANS_DO_OUTLET_Z_FROM_BLUE")
-
-
-func test_trans_do_support_weak_side_behind_carrier() -> void:
-	# TRANS_DO SUPPORT is relative to the carrier, not the puck.
-	var carrier_pos := Vector3(2.0, 0.0, -5.0)
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.SUPPORT, AIPossessionState.State.TRANS_DO,
-			carrier_pos, carrier_pos, OUR_NET_Z, 1.0)
-	assert_lt(anchor.x, carrier_pos.x, "weak-side of carrier")
-	assert_gt(anchor.z, carrier_pos.z, "behind carrier toward our net")
+# FINISHER, SUPPORT, OUTLET no longer have slot_anchor formulas —
+# their positional targets live in their role-behavior modules
+# (test_role_finisher.gd, test_role_support.gd, test_role_outlet.gd).
 
 
 # ─── assign() ───────────────────────────────────────────────────────────────

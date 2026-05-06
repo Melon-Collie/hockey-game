@@ -59,27 +59,13 @@ const DZONE_ANCHOR_Z_FROM_GOAL: float = 1.0        # m in front of goal line
 const DZONE_COVER_X: float = 2.0                   # m weak-side of rink center
 const DZONE_COVER_Z_FROM_GOAL: float = 4.0         # m in front of goal line (mid-slot depth)
 
-# OZONE anchor constants.
-const OZONE_FINISHER_X_FROM_POST: float = 0.5      # m inside the far post (toward center)
-# Pulled back from 1m to 3m to keep FINISHER off the goal line — the
-# bot is at slot depth instead of crease depth, less likely to body-
-# block teammate shots. AIRoleFinisher.decide handles incoming-puck
-# reactions on top.
-const OZONE_FINISHER_Z_FROM_GOAL: float = 3.0      # m in front of opp goal line
-# OZONE SUPPORT (Phase 3 placeholder). Shadows puck X at high-OZ
-# depth, matching the previous OUTLET formula. Phase 4 will replace
-# this with a utility-AI position search around the anchor.
-const OZONE_SUPPORT_Z_PAST_BLUE: float = 2.0       # m past opp blue line into OZ
+# OZONE: FINISHER + SUPPORT now compute their own targets in their
+# role modules (Step 2 of the no-anchors refactor). Anchor formulas
+# deleted; the brain assigns slots semantically without consulting
+# slot_anchor for these roles.
 
-# TRANS_DO anchor constants.
-const TRANS_DO_OUTLET_X: float = 4.0               # m off rink center, weak-side
-const TRANS_DO_OUTLET_Z_FROM_BLUE: float = 2.5     # m on NZ side of opp blue line (offside-safe; bumped from 1m for offside slack)
-# OUTLET shouldn't get more than this far up-ice from the puck.
-# Without the cap, OUTLET sprints to the blue line even when the
-# puck is still in our DZ — they're 30+ m ahead of the play.
-const TRANS_DO_OUTLET_MAX_LEAD_M: float = 10.0
-const TRANS_DO_SUPPORT_X: float = 3.0              # m weak-side of carrier
-const TRANS_DO_SUPPORT_Z: float = 3.0              # m back of carrier toward our net
+# TRANS_DO: OUTLET + SUPPORT also own their own targets — anchor
+# formulas deleted.
 
 # TRANS_OD anchor constants.
 const TRANS_OD_ANCHOR_Z_FROM_GOAL: float = 5.0     # m in front of own goal line (defensive slot)
@@ -181,47 +167,10 @@ static func slot_anchor(
 					0.0,
 					own_goal_dir * (GameRules.GOAL_LINE_Z - DZONE_COVER_Z_FROM_GOAL))
 
-		Slot.FINISHER:
-			# OZONE only: weak-side post in front of opp goal.
-			return Vector3(
-					-strong_x * (GameRules.NET_HALF_WIDTH - OZONE_FINISHER_X_FROM_POST),
-					0.0,
-					-own_goal_dir * (GameRules.GOAL_LINE_Z - OZONE_FINISHER_Z_FROM_GOAL))
-
-		Slot.OUTLET:
-			# TRANS_DO only. Weak-side at opp blue line, NZ-safe (offside
-			# buffer). Capped: OUTLET shouldn't be more than
-			# TRANS_DO_OUTLET_MAX_LEAD_M up-ice of the puck (the play).
-			# Without the cap, OUTLET parks at the blue line even when
-			# the carrier is still deep in our DZ.
-			#
-			# Signed depth: own_goal_dir * z grows toward own goal.
-			# Smaller depth = further up-ice. OUTLET's minimum depth =
-			# puck_depth − MAX_LEAD_M.
-			var base_z: float = -own_goal_dir * (GameRules.BLUE_LINE_Z - TRANS_DO_OUTLET_Z_FROM_BLUE)
-			var puck_depth: float = own_goal_dir * puck_pos.z
-			var min_depth: float = puck_depth - TRANS_DO_OUTLET_MAX_LEAD_M
-			var base_depth: float = own_goal_dir * base_z
-			var capped_depth: float = maxf(base_depth, min_depth)
-			return Vector3(
-					-strong_x * TRANS_DO_OUTLET_X, 0.0,
-					own_goal_dir * capped_depth)
-
-		Slot.SUPPORT:
-			if state == AIPossessionState.State.OZONE:
-				# Phase 3 placeholder — preserves the previous OZONE
-				# OUTLET formula (high in OZ, shadows puck X). Phase 4
-				# replaces this with a utility-AI position search.
-				return Vector3(
-						puck_pos.x,
-						0.0,
-						-own_goal_dir * (GameRules.BLUE_LINE_Z + OZONE_SUPPORT_Z_PAST_BLUE))
-			# TRANS_DO: behind carrier, weak-side. Closest-to-own-net
-			# non-carrier wins this naturally via the permutation cost.
-			return Vector3(
-					carrier_pos.x - strong_x * TRANS_DO_SUPPORT_X,
-					0.0,
-					carrier_pos.z + own_goal_dir * TRANS_DO_SUPPORT_Z)
+		# FINISHER, SUPPORT, OUTLET — these roles own their own
+		# positional targets in their role-behavior modules. The
+		# brain assigns them via semantic queries that don't read
+		# slot_anchor.
 
 		Slot.CHASE:
 			# NEUTRAL only: anchor at puck position. The bot's SM
