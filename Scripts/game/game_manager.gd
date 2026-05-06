@@ -602,8 +602,21 @@ func _wire_subsystems() -> void:
 	if NetworkManager.is_host:
 		force_record = func() -> void:
 			var goal_frame: PackedByteArray = _codec.encode_world_state()
-			if not goal_frame.is_empty():
-				_recorder.record_frame(goal_frame, NetworkManager.local_time())
+			if goal_frame.is_empty():
+				return
+			var ts: float = NetworkManager.local_time()
+			_recorder.record_frame(goal_frame, ts)
+			# Also enqueue to the .mreplay file so the puck-in-net moment
+			# lands in the recording deterministically. Without this, the
+			# next 5 Hz dead-puck broadcast (the only frame `_should_record_to_file`
+			# admits while movement-locked) is what represents "goal" in the
+			# file — up to 200 ms after the actual entry. Update
+			# `_last_recorded_phase` so the natural broadcast pipeline doesn't
+			# duplicate this frame on its next tick.
+			if _replay_file_writer != null and _should_record_to_file():
+				_replay_file_writer.enqueue_frame(ts, goal_frame)
+				if _state_machine != null:
+					_last_recorded_phase = _state_machine.current_phase
 	_phase_coord.setup(_state_machine, _registry, teams,
 			get_puck, _get_goalie_controllers, _shot_tracker, _drop_puck_if_carried,
 			_recorder, _goal_replay_driver, _codec,
@@ -1612,6 +1625,19 @@ func _on_game_over() -> void:
 		outcome = "loss"
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
+
+
+# Window-close hook — closes the replay file cleanly when the user clicks
+# the OS window's X. Without this, a quit mid-game leaves the .mreplay
+# without END_OF_RECORDS or the footer, and the OS may signal mid-write
+# leaving the last record torn. NOTIFICATION_WM_CLOSE_REQUEST fires before
+# Godot's auto-quit cascade so we have time to drain the worker thread
+# synchronously via close_async (which blocks on wait_to_finish). The
+# in-game scene-transition path (back to main menu, rematch) already
+# closes via on_scene_exit; this only catches the OS-level close case.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_close_replay_file_writer()
 
 
 func on_scene_exit() -> void:
