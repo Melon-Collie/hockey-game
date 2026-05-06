@@ -378,10 +378,10 @@ var _scratch_opponents: Array[Vector3] = []
 var _scratch_opponents_shoot: Array[Vector3] = []
 # Per-receiver buffer of opponent positions PREDICTED forward by the
 # pass's flight time (distance / PASS_PUCK_SPEED_REF_M_S). Pass flight
-# is much longer than a wrister charge (0.5–1.1 s typical), so a
-# defender clearly about to step into the lane reads as clear under
-# current-position scoring. Rebuilt inside the score_pass loop in
-# _pick_action because flight time depends on shooter→receiver distance.
+# is long enough (0.5–1.1 s typical) that defenders projected forward
+# read very differently from current-position. Rebuilt inside
+# _compute_best_pass per receiver since flight time depends on
+# shooter→receiver distance.
 var _scratch_opponents_pass: Array[Vector3] = []
 # Scratch buffer for carry-candidate path-clearance checks. Refilled
 # per candidate inside `_best_carry` (each candidate has its own
@@ -1041,30 +1041,40 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	var carry_score: float = carry_result[0]
 	_last_carry_anchor = carry_result[1]
 
-	# Hysteresis on intent class so it doesn't flip on tiny per-tick
-	# fluctuations. SHOOT/SLAPPER are one class.
+	# Hysteresis on FIRE intents only — prevents flicker between two
+	# close-scoring fire options during pre-aim. CARRY does NOT get a
+	# hysteresis bonus: stand-still always ties with the best fire
+	# option from the same position by construction (score_at(self) >=
+	# score_shoot(self)), and we want fire to win those ties (see
+	# tiebreak below). A CARRY hysteresis bonus would push stand-still
+	# above fire on every re-eval and the bot would never fire.
 	if _intended_action == State.SHOOT_PRESSED or _intended_action == State.SLAPPER_PRESSED:
 		shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
 	elif _intended_action == State.PASS_PRESSED:
 		best_pass_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
-	elif _intended_action == State.CARRY:
-		carry_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
 
-	# Filter SHOOT/PASS by ACTION_THRESHOLD noise floor; CARRY has no
-	# floor (always a valid default).
+	# Best fire option. No noise-floor threshold — CARRY competes
+	# directly, so a weak fire naturally loses to any stronger carry
+	# candidate (and stand-still in particular bounds fire from below
+	# at score_at(self) >= score_shoot(self)).
 	var fire_score: float = -INF
 	var fire_intent: State = State.CARRY
-	if shoot_score >= AIActionScoring.ACTION_THRESHOLD and shoot_score > fire_score:
+	if shoot_score > fire_score:
 		fire_score = shoot_score
 		fire_intent = State.SLAPPER_PRESSED if shoot_use_slapper else State.SHOOT_PRESSED
-	if best_pass_score >= AIActionScoring.ACTION_THRESHOLD and best_pass_score > fire_score:
+	if best_pass_score > fire_score:
 		fire_score = best_pass_score
 		fire_intent = State.PASS_PRESSED
 
-	# Compete fire vs carry. Carry wins ties (default to wait when
-	# scores equal — hysteresis breaks any persistent tie).
+	# Compete fire vs carry. FIRE WINS TIES — when a fire option scores
+	# the same as the best carry candidate (typically stand-still,
+	# which equals the best fire option by construction at the same
+	# position), we want to fire. The only case where carry should
+	# beat fire is when a movement candidate has a STRICTLY better
+	# future-action value, which means there's a real reason to keep
+	# moving instead of firing now.
 	var new_intent: State
-	if fire_score > carry_score:
+	if fire_score >= carry_score:
 		new_intent = fire_intent
 		if new_intent == State.PASS_PRESSED:
 			_pass_target_peer_id = best_pass_peer
@@ -1727,35 +1737,21 @@ func _momentum_time_to(self_pos: Vector3, dest: Vector3,
 # Recursive depth-2 scorer: best terminal action from `pos`.
 #   max(score_shoot(pos), best leaf-pass from pos, carry-to-slot from pos)
 #
-# The carry-to-slot branch is the depth-2 recursion: it multiplies the
-# pre-cached `_last_score_at_slot` (computed once per `_pick_action`
-# tick by `_compute_score_at_slot`) by lane clearance + time decay
-# from `pos` to the slot. So evaluating any position can "see through"
-# to a future shot at the slot, but recursion stops there.
+# Two branches only — shoot from pos, or carry-to-slot from pos.
+# No leaf-pass at this depth: evaluating "what could the receiver do"
+# stops at "they could shoot or drive to slot." Including their pass
+# options would (a) enable infinite mutual-pass loops where two bots
+# value each other recursively, and (b) blow up the recursion depth
+# without much added accuracy.
 #
 # `opps` should already be projected to the time the actor will be at
-# `pos` (e.g., pass flight time for receiver evaluation, candidate
-# arrival time for carry candidate). At the inner level we don't know
-# the actor's velocity, so the carry-to-slot uses 0-momentum time.
+# `pos`. At the inner level we don't know the actor's velocity, so
+# the carry-to-slot uses 0-momentum time.
 func _score_at(pos: Vector3, opps: Array[Vector3], snapshot: WorldSnapshot,
 		teammate_ids: Array[int], goalie_pos: Vector3) -> float:
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF, opps)
-	var best_pass: float = 0.0
-	for peer_id: int in teammate_ids:
-		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
-		if receiver_state.is_ghost:
-			continue
-		# Inner pass uses receiver CURRENT position — the recursion is
-		# approximate at depth 1; receiver-lead projection only matters
-		# at the top level.
-		var s: float = AIActionScoring.score_pass(
-				pos, receiver_state.position, receiver_state.facing,
-				_attacking_goal_pos, goalie_pos,
-				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF, opps)
-		if s > best_pass:
-			best_pass = s
 	# Carry-to-slot: depth-2 terminator. 0-momentum time at inner level.
 	var slot_pos: Vector3 = _slot_anchor()
 	var slot_dist: float = pos.distance_to(slot_pos)
@@ -1763,32 +1759,21 @@ func _score_at(pos: Vector3, opps: Array[Vector3], snapshot: WorldSnapshot,
 	var slot_decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
 	var slot_lane: float = AIActionScoring.path_clearance(pos, slot_pos, opps)
 	var carry_to_slot_score: float = _last_score_at_slot * slot_lane * slot_decay
-	return maxf(maxf(shoot_s, best_pass), carry_to_slot_score)
+	return maxf(shoot_s, carry_to_slot_score)
 
 
-# Recursion terminator. Same as _score_at but without the carry-to-slot
-# branch (slot's "carry to slot" would be 0 distance × 0 time = self-
-# reference — meaningless). Computed once per _pick_action tick and
-# cached in `_last_score_at_slot` before any candidate / pass scoring
-# runs, so every `_score_at` call gets a constant-time slot lookup.
+# Recursion terminator. Pure shoot value at the slot — score_at(slot)
+# is the recursion floor (slot's "carry to slot" would be 0 distance
+# × 0 time = self-reference) and we don't recurse into pass at any
+# depth. Computed once per _pick_action tick and cached in
+# `_last_score_at_slot` so every _score_at call gets a constant-time
+# slot lookup.
 func _compute_score_at_slot(opps: Array[Vector3], snapshot: WorldSnapshot,
 		teammate_ids: Array[int], goalie_pos: Vector3) -> float:
 	var slot_pos: Vector3 = _slot_anchor()
-	var shoot_s: float = AIActionScoring.score_shoot(
+	return AIActionScoring.score_shoot(
 			slot_pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF, opps)
-	var best_pass: float = 0.0
-	for peer_id: int in teammate_ids:
-		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
-		if receiver_state.is_ghost:
-			continue
-		var s: float = AIActionScoring.score_pass(
-				slot_pos, receiver_state.position, receiver_state.facing,
-				_attacking_goal_pos, goalie_pos,
-				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF, opps)
-		if s > best_pass:
-			best_pass = s
-	return maxf(shoot_s, best_pass)
 
 
 # Pre-baked rotations for the 8 polar cardinal candidates.
@@ -1827,17 +1812,17 @@ func _best_carry(self_pos: Vector3, self_velocity: Vector3,
 		fwd_x = to_slot_x * inv
 		fwd_z = to_slot_z * inv
 
+	# Score the 8 polar cardinals + slot anchor first; stand-still is
+	# scored last and only wins if STRICTLY greater than the best
+	# movement candidate. By construction stand-still ties with the
+	# best fire option from the same position (score_at(self) is a
+	# max that includes shoot/carry-to-slot from self), and the slot
+	# anchor's score equals stand-still's carry-to-slot branch when
+	# that branch dominates — so stand-still ties with carry candidates
+	# almost as often as it ties with fire. Resolving carry ties toward
+	# movement keeps the bot from dawdling when slot-drive is the play.
 	var best_pos: Vector3 = self_pos
 	var best_score: float = -INF
-
-	# Stand-still: no path, no time. Uses current opponents (projection
-	# to time=0 = current). Encodes patience — sometimes the right
-	# play is to hold position waiting for a lane to open.
-	var stand_score: float = _score_at(self_pos, _scratch_opponents,
-			snapshot, teammate_ids, goalie_pos)
-	if stand_score > best_score:
-		best_score = stand_score
-		best_pos = self_pos
 
 	# 8 polar cardinals at CARRY_SEARCH_STEP_M. Forward = toward slot;
 	# rotate by 0°, 45°, ..., 315° to span all directions.
@@ -1883,6 +1868,15 @@ func _best_carry(self_pos: Vector3, self_velocity: Vector3,
 		if slot_total > best_score:
 			best_score = slot_total
 			best_pos = slot_pos
+
+	# Stand-still last. Only wins on STRICTLY greater than the best
+	# movement candidate — patience must be earned. Score uses
+	# current opponents (time = 0 → no projection).
+	var stand_score: float = _score_at(self_pos, _scratch_opponents,
+			snapshot, teammate_ids, goalie_pos)
+	if stand_score > best_score:
+		best_score = stand_score
+		best_pos = self_pos
 
 	return [maxf(best_score, 0.0), best_pos]
 

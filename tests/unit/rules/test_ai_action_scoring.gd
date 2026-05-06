@@ -68,7 +68,7 @@ func test_pass_lateral_with_open_net_scores_high() -> void:
 	var shooter := Vector3(3.0, 0.0, 21.0)   # angled shot — goalie can see them
 	var receiver := Vector3(-3.0, 0.0, 21.0) # cross-slot — wide open
 	var goalie := Vector3(2.5, 0.0, 26.0)    # shading the shooter's side
-	var s: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, [])
 	assert_gt(s, 0.3, "lateral pass to a teammate with an open net should score well")
 
 
@@ -77,7 +77,7 @@ func test_pass_score_zero_when_lane_blocked() -> void:
 	var receiver := Vector3(0.0, 0.0, 22.0)  # close to goal, would normally score
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var blocker: Array[Vector3] = [Vector3(0.0, 0.0, 16.0)]  # right on the line
-	var s: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, blocker)
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, blocker)
 	assert_eq(s, 0.0, "opponent on the pass line should zero the score")
 
 
@@ -87,62 +87,8 @@ func test_pass_lane_only_counts_opponents_between_endpoints() -> void:
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	# Opponent BEHIND the shooter (z=5, before z=10) — shouldn't block
 	var behind: Array[Vector3] = [Vector3(0.0, 0.0, 5.0)]
-	var s: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, behind)
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, behind)
 	assert_gt(s, 0.0, "opponent behind the shooter shouldn't block the lane")
-
-
-func test_pass_outlet_to_advanced_teammate_fires() -> void:
-	# Phase 5h: bot deep in DZ, teammate at center ice. Receiver can't
-	# shoot from there (too far for SHOT_RANGE_FALLOFF) but the pass
-	# still scores via the advancement bonus.
-	var shooter := Vector3(0.0, 0.0, -25.0)  # own zone, ~52 m from attacking goal at +Z
-	var receiver := Vector3(0.0, 0.0, 0.0)   # center ice, ~27 m from goal
-	var goalie := Vector3(0.0, 0.0, 26.0)
-	var s: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, [])
-	assert_gt(s, AIActionScoring.ACTION_THRESHOLD, "outlet pass to a meaningfully advanced receiver should score above threshold")
-
-
-func test_pass_open_man_fires_to_isolated_teammate() -> void:
-	# Receiver is back near our own zone — no shot, no advancement
-	# (carrier is FURTHER up-ice). Should still score via the open-man
-	# term: receiver is wide open.
-	var shooter := Vector3(0.0, 0.0, 5.0)    # carrier in NZ
-	var receiver := Vector3(-4.0, 0.0, 0.0)  # back into NZ, ~5 m away laterally
-	var receiver_facing := Vector2(0, 1)     # facing toward attacking goal (+Z)
-	var goalie := Vector3(0.0, 0.0, 26.0)
-	var s: float = AIActionScoring.score_pass(shooter, receiver, receiver_facing, GOAL, goalie, NET_HW, SHADOW_HW, [])
-	assert_gt(s, AIActionScoring.ACTION_THRESHOLD,
-			"open teammate should score above threshold on the open-man term alone")
-
-
-func test_pass_open_man_fires_with_defender_only_behind_receiver() -> void:
-	# Receiver facing +Z. Defender 2 m BEHIND them (at z=-2). Both the
-	# open-man directional weighting AND the receiver-pressure cube
-	# falloff zero a behind-receiver defender — the pass clears
-	# threshold cleanly.
-	var shooter := Vector3(0.0, 0.0, 5.0)
-	var receiver := Vector3(0.0, 0.0, 0.0)
-	var receiver_facing := Vector2(0, 1)
-	var goalie := Vector3(0.0, 0.0, 26.0)
-	var defender_behind: Array[Vector3] = [Vector3(0.0, 0.0, -2.0)]
-	var s: float = AIActionScoring.score_pass(shooter, receiver, receiver_facing, GOAL, goalie, NET_HW, SHADOW_HW, defender_behind)
-	assert_gt(s, AIActionScoring.ACTION_THRESHOLD,
-			"defender only behind the receiver shouldn't kill the open-man pass")
-
-
-func test_pass_open_man_drops_with_defender_in_front() -> void:
-	# Defender 2 m in FRONT of the receiver, off-axis so the lane stays
-	# partially open. Open-man collapses (defender is in the receiver's
-	# forward cone), so the pass score should drop well below threshold
-	# even though the lane is mostly clear.
-	var shooter := Vector3(0.0, 0.0, 5.0)
-	var receiver := Vector3(0.0, 0.0, 0.0)
-	var receiver_facing := Vector2(0, 1)
-	var goalie := Vector3(0.0, 0.0, 26.0)
-	var defender_front: Array[Vector3] = [Vector3(0.5, 0.0, 2.0)]
-	var s_pressured: float = AIActionScoring.score_pass(shooter, receiver, receiver_facing, GOAL, goalie, NET_HW, SHADOW_HW, defender_front)
-	assert_lt(s_pressured, AIActionScoring.ACTION_THRESHOLD,
-			"defender in front of receiver should drop open-man score below threshold")
 
 
 func test_shoot_score_zero_from_behind_goal_line() -> void:
@@ -184,7 +130,7 @@ func test_pass_score_zero_to_receiver_behind_goal_line() -> void:
 	var shooter := Vector3(0.0, 0.0, 20.0)
 	var receiver := Vector3(0.0, 0.0, 28.0)  # past attacking goal line
 	var goalie := Vector3(0.0, 0.0, 26.0)
-	var s: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	var s: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, [])
 	assert_eq(s, 0.0, "pass to receiver behind goal line should score 0")
 
 
@@ -192,12 +138,12 @@ func test_pass_score_falls_off_with_receiver_pressure() -> void:
 	var shooter := Vector3(0.0, 0.0, 10.0)
 	var receiver := Vector3(0.0, 0.0, 22.0)
 	var goalie := Vector3(0.5, 0.0, 26.0)
-	var clear: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	var clear: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, [])
 	# Defender 2 m past the receiver (toward the attacking goal) and
 	# 0.5 m off-axis — inside the receiver's forward pressure cone but
 	# past the shooter→receiver segment so lane_clear isn't triggered.
 	var checker: Array[Vector3] = [Vector3(0.5, 0.0, 24.0)]
-	var pressured: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, checker)
+	var pressured: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, checker)
 	assert_lt(pressured, clear)
 
 
@@ -234,14 +180,14 @@ func test_pass_receiver_pressure_ignores_defender_behind_receiver() -> void:
 	var shooter := Vector3(0.0, 0.0, 10.0)
 	var receiver := Vector3(0.0, 0.0, 18.0)
 	var goalie := Vector3(0.0, 0.0, 26.0)
-	var clean: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, [])
+	var clean: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, [])
 	# Defender 2 m lateral and 1.5 m behind the receiver (toward the
 	# shooter side). Within PRESSURE_RADIUS_M (2.5 m), but the cube
 	# falloff sees a negative dot relative to receiver→goal forward
 	# axis and weights it 0. Lane perp distance is also outside
 	# LANE_CLEAR_RADIUS_M, so neither pressure nor lane block fires.
 	var lateral_behind: Array[Vector3] = [Vector3(2.0, 0.0, 16.5)]
-	var pressured: float = AIActionScoring.score_pass(shooter, receiver, Vector2.ZERO, GOAL, goalie, NET_HW, SHADOW_HW, lateral_behind)
+	var pressured: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW, SHADOW_HW, lateral_behind)
 	assert_almost_eq(pressured, clean, 0.001,
 			"defender behind the receiver should not pressure the pass (cube falloff zeros it)")
 
@@ -293,7 +239,7 @@ func test_score_pass_zero_when_segment_crosses_net() -> void:
 	# Far-side goal so receiver isn't past attacking goal line.
 	var attacking_goal := Vector3(0.0, 0.0, -26.65)
 	var s: float = AIActionScoring.score_pass(
-			shooter, receiver, Vector2.ZERO, attacking_goal, goalie,
+			shooter, receiver, attacking_goal, goalie,
 			NET_HW, SHADOW_HW, [])
 	assert_almost_eq(s, 0.0, 0.001,
 			"score_pass returns zero when the segment crosses a net rect")
