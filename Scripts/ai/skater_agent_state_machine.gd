@@ -390,19 +390,35 @@ var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
 
 # Set when CARRY commits to PASS_PRESSED; consumed by _state_pass_pressed
-# the next tick. 0 means "no current pass target" (real peer_ids are
-# either 1+ for humans or 10000+ for bots, so 0 is safe as sentinel).
-var _pass_target_peer_id: int = 0
+# the next tick. -1 means "no current pass target", matching the
+# carrier_peer_id convention used elsewhere.
+var _pass_target_peer_id: int = -1
 
 # CARRY pre-aim state: when `_pick_action` chooses an action, it
 # stores the action here instead of transitioning immediately. CARRY
 # then pre-aims the mouse toward the action's direction and waits
 # for convergence before transitioning. State.CARRY = "no intent."
-# _pick_action re-runs every tick — hysteresis on the current intent
-# (ACTION_HYSTERESIS_MARGIN) prevents flicker between close-scoring
-# options during pre-aim.
+# Hysteresis on the current intent (ACTION_HYSTERESIS_MARGIN) prevents
+# flicker between close-scoring options during pre-aim.
 var _intended_action: State = State.CARRY
 var _intent_wait_ticks: int = 0
+
+# Rate limit for `_pick_action` re-evaluation. The CARRY state runs at
+# the physics tick rate (240 Hz); without this the score computation
+# (10 carry candidates × per-teammate pass scoring × opponent projections)
+# fires 240 times/sec per bot. Re-evaluating every PICK_ACTION_PERIOD_TICKS
+# physics ticks (~30 Hz at 240 Hz) is plenty — the pre-aim mouse
+# convergence is what gates the actual transition, and humans react in
+# 250 ms+ anyway. _intended_action persists between evaluations so the
+# pre-aim machinery keeps driving toward the chosen action.
+const PICK_ACTION_PERIOD_TICKS: int = 8
+var _pick_action_cooldown: int = 0
+
+# Reused across `_pick_action` calls. Filled with peers on this bot's
+# team (excluding self) at the top of every evaluation. Receivers
+# (`_compute_best_pass`, `_best_carry`) only read from it; mutating it
+# inside `_pick_action` is safe.
+var _scratch_teammate_ids: Array[int] = []
 
 # Cached carry destination from the most recent `_pick_action` tick.
 # Winning carry candidate's world-space position — read by
@@ -485,6 +501,8 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
 		is_left_handed: bool) -> void:
+	if brain == null:
+		push_error("SkaterAgentStateMachine.setup: null TeamBrain for peer_id=%d team_id=%d — bot was spawned before GameManager.team_brains was populated. Bot will run without role assignments." % [peer_id, team_id])
 	_peer_id = peer_id
 	_team_id = team_id
 	_own_goal_dir = 1.0 if team_id == 0 else -1.0
@@ -783,12 +801,18 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
-	# Re-evaluate every tick. _pick_action scores SHOOT, PASS (per
-	# teammate), and CARRY (best of 10 candidates) on equal footing;
-	# applies hysteresis to current intent class; commits to fire when
-	# fire score beats carry. Caches the winning carry destination in
-	# `_last_carry_anchor` so steering can read it below.
-	_pick_action(snapshot, self_pos)
+	# Re-evaluate at PICK_ACTION_PERIOD_TICKS cadence (~30 Hz). _pick_action
+	# scores SHOOT, PASS (per teammate), and CARRY (best of 10 candidates)
+	# on equal footing; applies hysteresis to current intent class; commits
+	# to fire when fire score beats carry. Caches the winning carry
+	# destination in `_last_carry_anchor` so steering can read it below.
+	# Between evaluations `_intended_action` persists and pre-aim drives
+	# toward whatever was last chosen.
+	if _pick_action_cooldown <= 0:
+		_pick_action(snapshot, self_pos)
+		_pick_action_cooldown = PICK_ACTION_PERIOD_TICKS
+	else:
+		_pick_action_cooldown -= 1
 
 	# Steering: drift toward the carry destination when actually
 	# carrying; HOLD POSITION when pre-aiming a fire action. The
@@ -1033,7 +1057,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
 	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
 	var target_slot_label: String = "?"
-	if _team_brain != null and _pass_target_peer_id != 0:
+	if _team_brain != null and _pass_target_peer_id != -1:
 		target_slot_label = _slot_label(_team_brain.get_slot(_pass_target_peer_id))
 	debug_last_decision = "PASS→%s" % target_slot_label
 	# Aim at the receiver's lead position. Quick-shot direction is
@@ -1050,7 +1074,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# or SPRINT_BY in TRANS_DO).
 	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
 	# either way so a future PASS picks a fresh one.
-	_pass_target_peer_id = 0
+	_pass_target_peer_id = -1
 	if not have_puck:
 		_set_state(_post_puck_lost_state(snapshot))
 	else:
@@ -1090,12 +1114,13 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	_build_action_opponents_lists(snapshot)
 
 	# Teammate ids — used by every score_at evaluation (top + inner).
-	var teammate_ids: Array[int] = []
+	# Reused scratch buffer; receivers only read from it.
+	_scratch_teammate_ids.clear()
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
 		if int(_team_id_resolver.call(peer_id)) == _team_id:
-			teammate_ids.append(peer_id)
+			_scratch_teammate_ids.append(peer_id)
 
 	# Goalie predictions per release time. Wrister and slapper differ
 	# only in charge length; pass-receiver and carry-candidate cases
@@ -1127,7 +1152,7 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var best_pass: Array = _compute_best_pass(
-			snapshot, self_pos, self_state.facing, teammate_ids)
+			snapshot, self_pos, self_state.facing, _scratch_teammate_ids)
 	var best_pass_peer: int = best_pass[0]
 	var best_pass_score: float = best_pass[1]
 
@@ -1137,7 +1162,7 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	# Time uses momentum-aware effective speed so reverse candidates
 	# self-discount via longer arrival time.
 	var carry_result: Array = _best_carry(self_pos, self_velocity,
-			snapshot, teammate_ids)
+			snapshot, _scratch_teammate_ids)
 	var carry_score: float = carry_result[0]
 	_last_carry_anchor = carry_result[1]
 
@@ -1608,19 +1633,23 @@ const FACE_THREAT_NEAR_ANCHOR_M: float = 2.0
 # Persistent mouse position across all ticks. Every `input.mouse_world_pos`
 # assignment goes through `_step_mouse_toward(target)` which moves
 # `_mouse_pos` toward the target at MOUSE_MAX_SPEED_M_S, capped by the
-# tick budget. Initialized to ZERO; first call snaps it to the
-# target. See MOUSE_MAX_SPEED_M_S comment block for rationale.
+# tick budget. The first call snaps to the target; the bool flag (rather
+# than `_mouse_pos == Vector3.ZERO`) is what gates the snap, since
+# legitimate XZ targets at world origin would otherwise re-trigger it.
+# See MOUSE_MAX_SPEED_M_S comment block for rationale.
 var _mouse_pos: Vector3 = Vector3.ZERO
+var _mouse_pos_initialized: bool = false
 
 
 # Steps `_mouse_pos` toward `target` at MOUSE_MAX_SPEED_M_S, capped by
-# the tick budget. First call (when _mouse_pos is ZERO) snaps to the
-# target. Returns the result with small per-tick noise for organic
-# feel. Replaces the various per-state smoothing methods we used to
-# have — single consistent model for every aim target.
+# the tick budget. First call snaps to the target. Returns the result
+# with small per-tick noise for organic feel. Replaces the various
+# per-state smoothing methods we used to have — single consistent
+# model for every aim target.
 func _step_mouse_toward(target: Vector3) -> Vector3:
-	if _mouse_pos == Vector3.ZERO:
+	if not _mouse_pos_initialized:
 		_mouse_pos = Vector3(target.x, 0.0, target.z)
+		_mouse_pos_initialized = true
 	var to_target_x: float = target.x - _mouse_pos.x
 	var to_target_z: float = target.z - _mouse_pos.z
 	var dist: float = sqrt(to_target_x * to_target_x + to_target_z * to_target_z)
@@ -2163,10 +2192,12 @@ func _set_state(s: State) -> void:
 			_slapper_aim_target = Vector3.ZERO
 		# Intent + wait counter reset on CARRY entry so a new puck
 		# pickup gets a fresh _pick_action evaluation rather than
-		# inheriting stale state from a previous CARRY.
+		# inheriting stale state from a previous CARRY. Also clear the
+		# rate-limit cooldown so the first CARRY tick always re-evaluates.
 		if s == State.CARRY:
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
+			_pick_action_cooldown = 0
 		_state = s
 		_ticks_in_state = 0
 
@@ -2174,4 +2205,4 @@ func _set_state(s: State) -> void:
 func _reset_to_off_puck() -> void:
 	_state = State.OFF_PUCK
 	_ticks_in_state = 0
-	_pass_target_peer_id = 0
+	_pass_target_peer_id = -1

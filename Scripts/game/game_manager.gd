@@ -67,6 +67,13 @@ var goalies: Array[Goalie] = []
 var goalie_controllers: Array[GoalieController] = []
 var puck_controller: PuckController = null
 
+# Cached snapshot of goalie pose for skater IK clamping. Refreshed once per
+# physics tick from `goalies` / `goalie_controllers`. Without the cache,
+# `get_goalie_data()` allocates a fresh `Array[Dictionary]` of two dict
+# literals on every call — `SkaterIKCoordinator.clamp_blade_from_goalies`
+# calls it on every skater per tick (~12 calls × 240 Hz = ~5760 dict allocs/s).
+var _cached_goalie_data: Array[Dictionary] = []
+
 # ── Subsystems ────────────────────────────────────────────────────────────────
 var _registry: PlayerRegistry = null
 var _codec: WorldStateCodec = null
@@ -192,6 +199,10 @@ func _physics_process(delta: float) -> void:
 		var local: PlayerRecord = _registry.get_local()
 		if local != null and not PhaseRules.is_dead_puck_phase(_state_machine.current_phase):
 			local.stats.toi_seconds += delta
+	# Refresh goalie pose cache once per tick — read by skater IK on every
+	# blade-from-mouse call. Runs on host AND clients before the host gate
+	# below since IK clamping happens everywhere.
+	_refresh_goalie_data_cache()
 	if not NetworkManager.is_host or puck == null or _state_machine == null:
 		return
 	# Goal replay temporarily owns actor positions on the host. Skip the live
@@ -1947,14 +1958,23 @@ func trigger_tutorial_icing() -> void:
 
 
 func get_goalie_data() -> Array[Dictionary]:
-	var data: Array[Dictionary] = []
-	for i: int in range(goalies.size()):
-		data.append({
-			"position": goalies[i].global_position,
-			"rotation_y": goalies[i].get_goalie_rotation_y(),
-			"is_butterfly": goalie_controllers[i].is_butterfly(),
-		})
-	return data
+	return _cached_goalie_data
+
+
+# Rebuilds `_cached_goalie_data` from the live goalies array. Reuses each
+# Dictionary in place so the steady-state per-tick cost is three key
+# writes per goalie rather than a full Array+Dictionary allocation.
+func _refresh_goalie_data_cache() -> void:
+	var n: int = goalies.size()
+	while _cached_goalie_data.size() < n:
+		_cached_goalie_data.append({})
+	while _cached_goalie_data.size() > n:
+		_cached_goalie_data.pop_back()
+	for i: int in range(n):
+		var entry: Dictionary = _cached_goalie_data[i]
+		entry["position"] = goalies[i].global_position
+		entry["rotation_y"] = goalies[i].get_goalie_rotation_y()
+		entry["is_butterfly"] = goalie_controllers[i].is_butterfly()
 
 
 func get_slot_roster() -> Array[Dictionary]:

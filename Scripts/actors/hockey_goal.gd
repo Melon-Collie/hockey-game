@@ -87,7 +87,7 @@ func _rebuild() -> void:
 		child.queue_free()
 
 	_net_body = StaticBody3D.new()
-	_net_body.collision_layer = 1  # LAYER_WALLS — puck must still bounce off net panels
+	_net_body.collision_layer = Constants.LAYER_WALLS  # puck must still bounce off net panels
 	add_child(_net_body)
 
 	var goal_z: float = facing * (rink_length / 2.0 - distance_from_end)
@@ -585,7 +585,7 @@ func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 func _build_goal_sensor(goal_z: float) -> void:
 	var area := Area3D.new()
 	area.collision_layer = 0
-	area.collision_mask = 8
+	area.collision_mask = Constants.LAYER_PUCK
 	area.monitoring = true
 
 	var shape := CollisionShape3D.new()

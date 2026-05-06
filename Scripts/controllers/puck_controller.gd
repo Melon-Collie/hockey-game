@@ -367,9 +367,16 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 			if _pending_local_release:
 				_pending_local_release = false
 			var rtt_s: float = _shot_rtt_ms / 1000.0
+			# Apply ice friction to the latency-corrected target so it matches
+			# Jolt's deceleration over the rtt advance (same shape as
+			# `_interpolate()` extrapolation at line ~416). Without this the
+			# target overshoots the actual host position by ~0.5 * a * rtt²,
+			# visible as a slight forward bias on long shots at high RTT before
+			# the soft blend pulls it back.
+			var friction_vel: Vector3 = state.velocity * maxf(0.0, 1.0 - extrapolation_friction * rtt_s)
 			var latency_corrected := PuckNetworkState.new()
-			latency_corrected.position = state.position + state.velocity * rtt_s
-			latency_corrected.velocity = state.velocity
+			latency_corrected.position = state.position + friction_vel * rtt_s
+			latency_corrected.velocity = friction_vel
 			# Both client and host Jolt start from the same position (same rtt_ms
 			# used for both advances), so they run identically. Small errors are
 			# RTT jitter — blending toward a noisy target creates visible snapback.
