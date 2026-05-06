@@ -35,25 +35,15 @@ enum State {
 	PASS_PRESSED,     # one-tick press window aimed at a teammate's lead position
 }
 
-# Quick-shot pass blade-ROM reachability cone. The PASS_PRESSED state
-# fires shoot_pressed the same tick it transitions out of CARRY →
-# quick-shot direction is `(blade - player)` clamped by blade ROM.
-# A receiver outside this dot threshold from the bot's facing causes
-# the blade IK to clamp to the ROM edge, so the puck fires at the
-# ROM limit direction instead of at the receiver. Mechanical
-# constraint, not a magic multiplier.
-#
-# 0.0 ≈ ±90° each side (forward hemisphere). Loosened from 0.5
-# (±60°) so receivers off to the side or slightly behind become
-# reachable — passes to SUPPORT-style positions and lateral cycles
-# now score and fire. Forward-of-perpendicular receivers are within
-# the ~90° forehand ROM and the 120° backhand ROM, so the actual
-# fire direction lines up reasonably with the receiver. Tighter
-# values (back toward 0.5) re-introduce the "won't pass anywhere
-# but straight ahead" problem; looser (negative) values let the bot
-# score behind-me passes that the blade physically clamps to the
-# ROM edge.
-const PASS_REACHABLE_DOT_MIN: float = 0.0
+# Effective rotation rate for facing in rad/s. SkaterController's
+# `facing_drag_speed` is 3.0 used as a lerp factor — the actual
+# convergence is exponential and faster than 3.0 rad/s linear early
+# on. ~6 rad/s linear is a reasonable approximation: 90° rotation
+# in ~0.26 s, 180° in ~0.52 s. Used by `_compute_best_pass` to add
+# rotation time to the pass time-decay so back-passes self-discount
+# (they take longer because the bot has to rotate to face the
+# receiver before the blade can fire there).
+const BOT_FACING_ROTATION_RATE_RAD_S: float = 6.0
 
 # Margins from the rink edge / goal line that anchors are clamped inside of.
 const RINK_X_INSET: float = 0.5
@@ -77,9 +67,13 @@ const RINK_Z_INSET: float = 1.0
 # INTENT_MAX_WAIT_TICKS is a safety timeout: after this many ticks
 # of waiting, fire anyway. A receiver who keeps moving might never
 # let the mouse "fully" converge; the timeout keeps the bot from
-# pre-aiming forever.
+# pre-aiming forever. Bumped from 60 → 180 (250 ms → 750 ms) to
+# accommodate facing rotation: a 180° back-pass needs ~520 ms for
+# the body to rotate (per BOT_FACING_ROTATION_RATE_RAD_S), so the
+# old 250 ms cap fired the press before the body finished rotating
+# and the puck went out the ROM edge instead of at the receiver.
 const AIM_CONVERGED_DIST_M: float = 0.15
-const INTENT_MAX_WAIT_TICKS: int = 60   # ~250 ms at 240 Hz
+const INTENT_MAX_WAIT_TICKS: int = 180   # ~750 ms at 240 Hz
 # Bias applied to score_pass when the receiver is human. Bots pass to
 # the player about 25% more often than to another bot for the same
 # raw scoring conditions — the human is the actor, the bots are
@@ -748,12 +742,20 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
 	input.mouse_world_pos = _step_mouse_toward(mouse_target)
 
-	# If pre-aiming, wait for mouse convergence (or timeout) before
-	# transitioning to the action state. Action state fires on entry,
-	# so mouse direction at that moment locks in the shot direction.
+	# If pre-aiming, wait for mouse convergence AND facing alignment
+	# (or timeout) before transitioning to the action state. Mouse
+	# converges fast (~130 ms for a 90° pivot at MOUSE_MAX_SPEED);
+	# facing rotation is mouse-driven but lerp-based and slower
+	# (~250 ms+ for the same pivot). Without the facing check the
+	# bot fires while still rotated wrong and the puck goes out the
+	# ROM edge. Action state fires on entry, so both must be aligned
+	# at that moment. Timeout still fires after INTENT_MAX_WAIT_TICKS
+	# as a safety so the bot can't pre-aim forever.
 	if _intended_action != State.CARRY:
 		var aim_dist: float = _mouse_pos.distance_to(mouse_target)
-		if aim_dist < AIM_CONVERGED_DIST_M or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
+		var aim_converged: bool = aim_dist < AIM_CONVERGED_DIST_M
+		var facing_aligned: bool = _is_facing_aligned_for_aim(snapshot, self_pos, mouse_target)
+		if (aim_converged and facing_aligned) or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
 			_set_state(_intended_action)
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
@@ -788,6 +790,30 @@ func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
 	if to_aim.length_squared() < 0.0001:
 		return self_pos + Vector3.FORWARD * CARRY_BLADE_AIM_FORWARD_M
 	return self_pos + to_aim.normalized() * CARRY_BLADE_AIM_FORWARD_M
+
+
+# True when the bot's facing has rotated close enough to the
+# action-aim direction that the blade ROM can fire there cleanly.
+# Threshold is 80° each side: well within the 90° forehand /
+# 120° backhand ROM, leaves slack so the actual fire direction
+# isn't at the ROM edge. Used in the pre-aim convergence check
+# to wait for body rotation, not just mouse rotation — facing
+# is mouse-driven via the pose coordinator's lerp but lags mouse
+# convergence significantly.
+func _is_facing_aligned_for_aim(snapshot: WorldSnapshot, self_pos: Vector3,
+		aim_target: Vector3) -> bool:
+	var dx: float = aim_target.x - self_pos.x
+	var dz: float = aim_target.z - self_pos.z
+	var len_sq: float = dx * dx + dz * dz
+	if len_sq < 0.0001:
+		return true
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return true
+	var inv: float = 1.0 / sqrt(len_sq)
+	var cos_angle: float = self_state.facing.x * dx * inv + self_state.facing.y * dz * inv
+	# 80° each side: cos(80°) ≈ 0.174.
+	return cos_angle >= 0.174
 
 
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -1181,8 +1207,6 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 		var receiver: Vector3 = _predict_receiver(peer_id, receiver_state, flight_t)
 		if _own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
 			continue
-		if not _is_pass_target_reachable(self_pos, self_facing_xz, receiver):
-			continue
 		if AIActionScoring.pass_lane_blocked_by_net(self_pos, receiver):
 			continue
 		if AIActionScoring.pass_crosses_own_slot(self_pos, receiver, own_goal_z):
@@ -1197,8 +1221,26 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 			continue
 		var receiver_value: float = _score_at(receiver, _scratch_opponents_pass,
 				snapshot, teammate_ids, goalie_pos)
+		# Rotation time: how long does the bot need to rotate facing to
+		# point at the receiver before the blade ROM can fire there?
+		# Mouse-driven facing rotation takes time; back-passes pay this
+		# cost in the score. Replaces the old hard PASS_REACHABLE_DOT_MIN
+		# gate — passes at any angle are scored, with rotation time
+		# folded into the time-decay so they self-discount.
+		var to_receiver_x: float = receiver.x - self_pos.x
+		var to_receiver_z: float = receiver.z - self_pos.z
+		var to_receiver_len: float = sqrt(to_receiver_x * to_receiver_x + to_receiver_z * to_receiver_z)
+		var rotation_time: float = 0.0
+		if to_receiver_len > 0.001:
+			var inv_len: float = 1.0 / to_receiver_len
+			var cos_angle: float = clampf(
+					self_facing_xz.x * to_receiver_x * inv_len
+					+ self_facing_xz.y * to_receiver_z * inv_len, -1.0, 1.0)
+			var angular_distance: float = acos(cos_angle)
+			rotation_time = angular_distance / BOT_FACING_ROTATION_RATE_RAD_S
 		var time_decay: float = pow(
-				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, flight_t)
+				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+				flight_t + rotation_time)
 		var s: float = receiver_value * lane * time_decay
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
@@ -1889,29 +1931,6 @@ static func _angle_intercept_inside(target: Vector3, carrier_pos: Vector3) -> Ve
 		return target
 	var bias: float = -signf(carrier_pos.x) * CHASE_ANGLE_BIAS_M
 	return Vector3(target.x + bias, target.y, target.z)
-
-
-# True iff `aim_pos` sits inside the quick-shot blade ROM cone from
-# `self_pos` given `facing_xz`. See PASS_REACHABLE_DOT_MIN comment for
-# the underlying mechanic. Used by `_pick_action` to drop unreachable
-# pass targets before scoring; receivers behind the bot's facing
-# would otherwise be picked as "open" and the actual quick-shot would
-# fire at the ROM edge instead. Static + private so it's
-# unit-testable without standing up a full SM.
-#
-# `facing_xz` follows the SkaterNetworkState convention (Vector2 of
-# unit-length world XZ). Degenerate aims (aim coincident with self)
-# return true since there's no direction to constrain.
-static func _is_pass_target_reachable(self_pos: Vector3, facing_xz: Vector2,
-		aim_pos: Vector3) -> bool:
-	var dx: float = aim_pos.x - self_pos.x
-	var dz: float = aim_pos.z - self_pos.z
-	var len_sq: float = dx * dx + dz * dz
-	if len_sq < 0.0001:
-		return true
-	var inv: float = 1.0 / sqrt(len_sq)
-	var dot: float = facing_xz.x * dx * inv + facing_xz.y * dz * inv
-	return dot >= PASS_REACHABLE_DOT_MIN
 
 
 func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
