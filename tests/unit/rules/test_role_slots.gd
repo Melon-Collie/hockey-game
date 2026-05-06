@@ -107,13 +107,16 @@ func test_ozone_outlet_high_shadowing_puck_x() -> void:
 
 
 func test_trans_do_outlet_weak_side_blue_line() -> void:
-	# In TRANS_DO, OUTLET sits at the weak-side opp blue line.
+	# In TRANS_DO, OUTLET sits at the weak-side opp blue line on the
+	# NZ side. Distance from blue line is TRANS_DO_OUTLET_Z_FROM_BLUE
+	# (currently 2.5 m — bumped from 1 m for offside slack).
 	var anchor: Vector3 = AIRoleSlots.slot_anchor(
 			AIRoleSlots.Slot.OUTLET, AIPossessionState.State.TRANS_DO,
 			Vector3(5.0, 0.0, 0.0), Vector3.ZERO, OUR_NET_Z, 1.0)
 	assert_lt(anchor.x, 0.0, "weak-side")
-	assert_almost_eq(anchor.z, -GameRules.BLUE_LINE_Z + 1.0, 0.01,
-			"1m on NZ side of opp blue line")
+	assert_almost_eq(anchor.z,
+			-GameRules.BLUE_LINE_Z + AIRoleSlots.TRANS_DO_OUTLET_Z_FROM_BLUE, 0.01,
+			"NZ side of opp blue line by TRANS_DO_OUTLET_Z_FROM_BLUE")
 
 
 func test_trans_od_home_anchor_defensive_slot() -> void:

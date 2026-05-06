@@ -9,7 +9,8 @@ const TEAM_ID: int = 0
 
 
 func _make_snapshot(carrier_pid: int, puck_z: float,
-		skaters: Array = [[100, 0], [200, 1]]) -> WorldSnapshot:
+		skaters: Array = [[100, 0], [200, 1]],
+		puck_velocity: Vector3 = Vector3.ZERO) -> WorldSnapshot:
 	# skaters: Array of [peer_id, team_id]. Position is unused by
 	# possession_state — it only reads puck_state.position.z.
 	var snap := WorldSnapshot.new()
@@ -20,6 +21,7 @@ func _make_snapshot(carrier_pid: int, puck_z: float,
 	var puck := PuckNetworkState.new()
 	puck.carrier_peer_id = carrier_pid
 	puck.position = Vector3(0.0, 0.0, puck_z)
+	puck.velocity = puck_velocity
 	snap.puck_state = puck
 	return snap
 
@@ -67,8 +69,12 @@ func test_trans_od_when_opp_carries_outside_our_dz() -> void:
 
 
 func test_loose_puck_keeps_last_carrier_team() -> void:
-	# Puck was held by team 1, now loose. State driven by sticky possession.
-	var snap := _make_snapshot(-1, 5.0)  # NZ, no carrier
+	# Puck was held by team 1, now loose at speed (just stripped or in
+	# flight). State driven by sticky possession. Velocity above
+	# NEUTRAL_PUCK_SPEED_M_S so the slow-puck NEUTRAL override doesn't
+	# fire — fresh strips and in-flight passes have meaningful speed.
+	var snap := _make_snapshot(-1, 5.0, [[100, 0], [200, 1]],
+			Vector3(0.0, 0.0, -8.0))  # 8 m/s, well above 1 m/s threshold
 	var result: Array = AIPossessionState.compute(
 			snap, TEAM_ID, OUR_NET_Z,
 			_resolver([[100, 0], [200, 1]]), 1)  # prev was team 1

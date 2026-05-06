@@ -37,11 +37,15 @@ func test_round_trip_preserves_all_wire_fields() -> void:
 	assert_almost_eq(r.shot_charge, s.shot_charge, 0.00001)
 
 
-func test_array_length_is_twelve() -> void:
+func test_array_length_is_thirteen() -> void:
 	# Field-count sentinel — if a field is added without updating to_array /
 	# from_array, this catches the mismatch before it becomes a silent bug.
+	# 13: position, velocity, blade_position, top_hand_position,
+	# upper_body_rotation_y, facing, last_processed_host_timestamp,
+	# is_ghost, shot_state, shot_charge, facing_angular_velocity,
+	# upper_body_angular_velocity, is_elevated.
 	var s := SkaterNetworkState.new()
-	assert_eq(s.to_array().size(), 12)
+	assert_eq(s.to_array().size(), 13)
 
 
 func test_host_only_fields_not_serialized() -> void:

@@ -51,19 +51,6 @@ static func compute(
 	if carrier != -1:
 		carrier_team = int(team_id_resolver.call(carrier))
 
-	# NEUTRAL override: puck is loose AND essentially stationary.
-	# Covers faceoff drops cleanly without requiring phase awareness.
-	# In-flight passes (velocity high) keep their TRANS_DO/OD state
-	# via the sticky possession; stripped-puck contact pushes velocity
-	# above the threshold so it doesn't false-positive either.
-	if carrier == -1:
-		var v: Vector3 = snapshot.puck_state.velocity
-		var speed: float = sqrt(v.x * v.x + v.z * v.z)
-		if speed < NEUTRAL_PUCK_SPEED_M_S:
-			return [State.NEUTRAL, carrier_team]
-
-	var our_possession: bool = (carrier_team == team_id)
-
 	# Zones: own_goal_dir * z > BLUE_LINE_Z means puck is in our DZ
 	# (deep on our side). The opposite sign with the same magnitude
 	# means puck is in their DZ.
@@ -72,15 +59,26 @@ static func compute(
 	var in_our_dz: bool = own_goal_dir * puck_z > GameRules.BLUE_LINE_Z
 	var in_their_dz: bool = -own_goal_dir * puck_z > GameRules.BLUE_LINE_Z
 
-	# Loose-puck-in-own-DZ override: when the puck is loose AND in our
-	# DZ, force DZONE behavior regardless of sticky possession. Without
-	# this, a strip in our zone keeps state at TRANS_DO (sticky to us)
-	# and OUTLET sprints up-ice while the puck is at our feet — bots
-	# act offensively when they should defend. Sticky possession is
-	# the right default in NZ/OZ; in our DZ a loose puck is always
-	# defensive priority.
+	# Loose-puck-in-own-DZ override: a loose puck in our DZ is ALWAYS
+	# defensive priority — strips, dump-ins, faceoff drops in our zone
+	# all need the team in DZONE shape (1-2 zone defense), not
+	# offensive transition. Fires BEFORE the NEUTRAL slow-puck check
+	# so that low-velocity loose pucks in our DZ (e.g., faceoff drops,
+	# puck wedged near the goalie) still resolve as DZONE.
 	if carrier == -1 and in_our_dz:
 		return [State.DZONE, carrier_team]
+
+	# NEUTRAL override: outside our DZ, a slow loose puck is treated
+	# as NEUTRAL (e.g., faceoff drop in NZ / opp DZ). High-speed loose
+	# pucks (passes in flight, stripped-puck contact) keep the prior
+	# possession state via sticky resolution below.
+	if carrier == -1:
+		var v: Vector3 = snapshot.puck_state.velocity
+		var speed: float = sqrt(v.x * v.x + v.z * v.z)
+		if speed < NEUTRAL_PUCK_SPEED_M_S:
+			return [State.NEUTRAL, carrier_team]
+
+	var our_possession: bool = (carrier_team == team_id)
 
 	var state: State
 	if our_possession:
