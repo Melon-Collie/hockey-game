@@ -54,19 +54,26 @@ func test_shoot_score_reduced_by_mid_lane_defender() -> void:
 	assert_lt(blocked, clear, "defender in shot lane with reaction time should reduce shoot score")
 
 
-func test_shoot_score_unaffected_by_close_defender_no_reaction_time() -> void:
-	# New lane physics: a defender ~1 m in front of the shooter is on
-	# the puck path but has no time to position before the puck flies
-	# past at 30 m/s. Shot score should be essentially unaffected.
-	var shooter := Vector3(0.0, 0.0, 21.0)
+func test_shoot_score_unaffected_by_low_t_defender() -> void:
+	# New lane physics: a defender on the segment but at low t (close
+	# to shooter, far from receiver) has no reaction time to position
+	# their stick before a 30 m/s puck blows past them. Shot score
+	# should be essentially unaffected.
+	#
+	# Use a longer shot (12 m) so the low-t defender can sit outside
+	# PRESSURE_RADIUS_M = 4 m too — otherwise pressure would catch
+	# them even if lane doesn't.
+	var shooter := Vector3(0.0, 0.0, 15.0)  # ~12 m from goal
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
-	# Defender at z=22 — 1 m past shooter on the line. t ≈ 0.18, time
-	# to defender ≈ 0.03 s — well below LANE_REACTION_DELAY_S = 0.15 s.
-	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 22.0)]
+	# Defender at z=19.5 — 4.5 m past shooter on the line. Outside
+	# pressure radius (>4 m). Lane t ≈ 0.39, time_to_defender
+	# ≈ 0.15 s = right at LANE_REACTION_DELAY_S threshold so
+	# reaction_factor = 0. No block.
+	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 19.5)]
 	var blocked: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,close_blocker)
-	assert_almost_eq(blocked, clear, 0.05,
-			"close defender (low reaction time) shouldn't block a 30 m/s shot")
+	assert_almost_eq(blocked, clear, 0.02,
+			"low-t defender with no reaction time shouldn't block a 30 m/s shot")
 
 
 func test_shoot_score_unaffected_by_defender_off_lane() -> void:
