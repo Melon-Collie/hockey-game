@@ -717,11 +717,18 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# `_last_carry_anchor` so steering can read it below.
 	_pick_action(snapshot, self_pos)
 
-	# Steer toward the chosen carry destination — same anchor whether
-	# we're committing to carry (drift to candidate) or pre-aiming a
-	# fire action (the bot keeps moving toward the best carry spot
-	# while the mouse converges to its action aim).
-	_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+	# Steering: drift toward the carry destination when actually
+	# carrying; HOLD POSITION when pre-aiming a fire action. The
+	# previous behavior kept skating forward during pre-aim, which
+	# combined with the wrister/slapper charge windows could drift
+	# the bot 2–4 m closer to the net before the press fired —
+	# they'd commit to a shot from one spot and release from
+	# another. Hold lets the press happen from the spot the bot
+	# decided on.
+	if _intended_action == State.CARRY:
+		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+	else:
+		_apply_hold_steering(input, snapshot, self_pos)
 
 	# Mouse target depends on intent: carry uses normal goal-aim, fire
 	# states pre-aim toward action direction.
@@ -796,7 +803,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 		return
 
-	_apply_slot_steering(input, snapshot, self_pos)
+	_apply_hold_steering(input, snapshot, self_pos)
 	# Elevation flag based on decision at entry. Sticky in
 	# SkaterController, so setting one direction explicitly each tick
 	# normalizes it regardless of the last shot.
@@ -888,7 +895,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 		_set_state(State.CARRY)
 		return
 
-	_apply_slot_steering(input, snapshot, self_pos)
+	_apply_hold_steering(input, snapshot, self_pos)
 	if _shot_is_elevated:
 		input.elevation_up = true
 	else:
@@ -916,7 +923,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 
 
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	_apply_slot_steering(input, snapshot, self_pos)
+	_apply_hold_steering(input, snapshot, self_pos)
 	# Resolve the receiver's slot label NOW for the debug readout —
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
 	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
@@ -945,12 +952,18 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_set_state(State.CARRY)
 
 
-# Anchor + steering shared by CARRY / SHOOT_PRESSED / PASS_PRESSED.
-# Each state sets `input.mouse_world_pos` itself because the aim
-# differs (goal-shadow vs receiver lead).
-func _apply_slot_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
-	var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
-	_apply_steering(input, snapshot, self_pos, Vector3(0.0, 0.0, slot_z))
+# Hold-position steering during fire-state commits (SHOOT_PRESSED,
+# SLAPPER_PRESSED, PASS_PRESSED) and CARRY pre-aim. The bot has
+# decided where to fire from — they shouldn't keep skating forward
+# during the wrister charge (60 ticks ≈ 250 ms) or slapper charge
+# (132 ticks ≈ 550 ms), which would otherwise drift them up to ~4 m
+# closer to the net before the puck releases. Anchor = self_pos
+# zeroes the seek force so ice friction bleeds momentum naturally;
+# repel forces (defenders, boards, crease) still apply via
+# `_apply_steering`. Each fire state sets `input.mouse_world_pos`
+# itself because the aim differs (goal-shadow vs receiver lead).
+func _apply_hold_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	_apply_steering(input, snapshot, self_pos, self_pos)
 
 
 # Score every applicable action plus CARRY (drift-discounted future
