@@ -35,19 +35,38 @@ func test_shoot_score_falls_off_with_pressure() -> void:
 	assert_lt(pressured, clear, "opponent in the forward pressure cone should reduce shoot score")
 
 
-func test_shoot_score_zero_when_defender_in_lane() -> void:
-	# Phase 5g: a defender between the bot and the aim point should
-	# block the shot, even if pressure (4 m radius) doesn't catch them.
+func test_shoot_score_reduced_by_mid_lane_defender() -> void:
+	# Defender mid-segment with reaction time blocks the shot. New
+	# lane physics: defender's t along the segment matters — a
+	# defender right next to the shooter (low t) doesn't have time
+	# to position their stick into a 30 m/s puck path. Use a longer
+	# shot so the mid-lane defender lands well past the reaction
+	# threshold.
+	var shooter := Vector3(0.0, 0.0, 15.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
+	# Defender at z=20, 5 m from shooter along an ~11 m segment —
+	# t ≈ 0.43, time_to_defender ≈ 0.16 s > LANE_REACTION_DELAY_S,
+	# so they have time to position their stick.
+	var blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 20.0)]
+	var blocked: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,blocker)
+	assert_gt(clear, 0.0)
+	assert_lt(blocked, clear, "defender in shot lane with reaction time should reduce shoot score")
+
+
+func test_shoot_score_unaffected_by_close_defender_no_reaction_time() -> void:
+	# New lane physics: a defender ~1 m in front of the shooter is on
+	# the puck path but has no time to position before the puck flies
+	# past at 30 m/s. Shot score should be essentially unaffected.
 	var shooter := Vector3(0.0, 0.0, 21.0)
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
-	# Defender at z=24, between shooter (z=21) and net plane (z=26.65),
-	# right on the bot→aim line and 5 m from the shooter — well past
-	# pressure radius so they wouldn't otherwise count.
-	var blocker: Array[Vector3] = [Vector3(-0.4, 0.0, 24.0)]
-	var blocked: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,blocker)
-	assert_gt(clear, 0.0)
-	assert_lt(blocked, clear, "defender in shot lane should reduce shoot score")
+	# Defender at z=22 — 1 m past shooter on the line. t ≈ 0.18, time
+	# to defender ≈ 0.03 s — well below LANE_REACTION_DELAY_S = 0.15 s.
+	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 22.0)]
+	var blocked: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,close_blocker)
+	assert_almost_eq(blocked, clear, 0.05,
+			"close defender (low reaction time) shouldn't block a 30 m/s shot")
 
 
 func test_shoot_score_unaffected_by_defender_off_lane() -> void:
@@ -325,3 +344,65 @@ func test_shot_quality_60deg_goalie_squared() -> void:
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
 	# arc_offset ≈ 0, squareness ≈ 1, coverage = 0.35. Score ≈ 0.27 × 0.65 ≈ 0.18.
 	assert_almost_eq(s, 0.18, 0.05, "half-wall 60° vs squared goalie ≈ 0.18")
+
+
+# ── position_potential ───────────────────────────────────────────────────────
+# position_potential models "value of being at this position" — used
+# only when the evaluator is OUTSIDE shooting range (the regime rule
+# in SM._score_at). Closeness peaks at the slot and ramps to 0 at the
+# goal mouth (inside) and at the goal-to-goal rink length (outside).
+
+func test_potential_zero_behind_goal_line() -> void:
+	# Past the attacking goal line — no shooting potential.
+	var pos := Vector3(0.0, 0.0, 27.5)
+	assert_eq(AIActionScoring.position_potential(pos, GOAL, []), 0.0)
+
+
+func test_potential_zero_at_90_degrees_off_axis() -> void:
+	# Pure perpendicular — angle factor zeros.
+	var pos := Vector3(8.0, 0.0, 26.65)  # same z as goal
+	assert_almost_eq(AIActionScoring.position_potential(pos, GOAL, []), 0.0, 0.01)
+
+
+func test_potential_peaks_at_slot() -> void:
+	# Slot position should score above any nearby non-slot position.
+	var slot := Vector3(0.0, 0.0, 20.65)  # 6 m from goal — slot radius
+	var deeper := Vector3(0.0, 0.0, 24.65)  # 2 m from goal — past slot
+	var farther := Vector3(0.0, 0.0, 14.65)  # 12 m from goal — past slot outward
+	var slot_v: float = AIActionScoring.position_potential(slot, GOAL, [])
+	var deeper_v: float = AIActionScoring.position_potential(deeper, GOAL, [])
+	var farther_v: float = AIActionScoring.position_potential(farther, GOAL, [])
+	assert_gt(slot_v, deeper_v, "slot scores higher than past-slot toward goal")
+	assert_gt(slot_v, farther_v, "slot scores higher than past-slot away from goal")
+
+
+func test_potential_drops_inside_slot_toward_goal() -> void:
+	# Closeness ramps DOWN inside slot — getting closer to the goal
+	# than the slot doesn't keep increasing the position value.
+	var slot := Vector3(0.0, 0.0, 20.65)   # 6 m from goal
+	var crease := Vector3(0.0, 0.0, 25.65)  # 1 m from goal — in the crease
+	assert_gt(
+			AIActionScoring.position_potential(slot, GOAL, []),
+			AIActionScoring.position_potential(crease, GOAL, []),
+			"slot has higher potential than the crease (no carry-into-net pull)")
+
+
+func test_potential_drops_with_far_distance() -> void:
+	# Linear ramp on the outside — further from goal = lower potential.
+	# Near OZ blue line vs deep DZ — both have full angle, no defenders.
+	var oz_high := Vector3(0.0, 0.0, 5.0)    # ~22 m from goal
+	var deep_dz := Vector3(0.0, 0.0, -20.0)  # ~46 m from goal
+	assert_gt(
+			AIActionScoring.position_potential(oz_high, GOAL, []),
+			AIActionScoring.position_potential(deep_dz, GOAL, []),
+			"closer to goal scores higher")
+
+
+func test_potential_drops_with_pressure() -> void:
+	# Forward-cone pressure cuts openness, dropping potential.
+	var pos := Vector3(0.0, 0.0, 5.0)  # ~22 m from goal — outside shoot range
+	var clean: float = AIActionScoring.position_potential(pos, GOAL, [])
+	# Defender 2 m forward toward goal, on-axis.
+	var pressured_opps: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]
+	var pressured: float = AIActionScoring.position_potential(pos, GOAL, pressured_opps)
+	assert_lt(pressured, clean, "forward-cone defender drops position potential")
