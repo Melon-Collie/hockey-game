@@ -18,20 +18,31 @@ class_name AIRoleSupport
 # at 0; the (1 - exposure) factor goes negative when opps clearly
 # beat me home, naturally rejecting unrecoverable candidates.
 #
-# State-agnostic: OZONE and TRANS_DO use the same scoring; only the
-# anchor differs (set by AIRoleSlots.slot_anchor based on possession
-# state). Candidate generation, legality filters, anti-crowding,
-# and context-resolution helpers live in AIRoleHelpers.
+# Step 2 of the no-anchors refactor: search center is derived from
+# in-game references (the carrier's position) rather than read from
+# ctx.anchor. Polar samples around the carrier let the score
+# function find the right "trail" position — exposure penalizes
+# candidates ahead of the carrier (toward opp net), so argmax
+# converges on positions behind/beside the carrier toward our net.
+# The "trail" direction emerges from the math, not from a hand-coded
+# weak-side bias.
+
+# Polar sampling radius around the search center. Same scale as
+# AIRoleCarrier.CARRY_SEARCH_STEP_M (3.0 m) — sampling parameter,
+# not a behavioral knob. The carrier itself is excluded by the
+# anti-crowding filter; samples at the rim of the circle remain.
+const SEARCH_RADIUS_M: float = 5.0
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
 	# Bail-out: no teammate carrier means there's no offensive
 	# context to score against. Brain re-tick will re-route this peer
-	# on the next physics frame; in the meantime fall back to anchor.
+	# on the next physics frame; in the meantime hold position.
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_teammate_carrier_pos(ctx)
 	if carrier_pos == Vector3.ZERO:
-		d.target_position = ctx.anchor
+		d.target_position = ctx.self_pos
 		return d
 
 	var our_net: Vector3 = ctx.defending_goal_pos
@@ -44,9 +55,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var teammate_positions: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
 	var min_opp_time_home: float = _min_opp_time_home(opp_states, our_net)
 
-	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates(ctx)
+	# Search around the carrier. Polar samples cover the cycle space;
+	# anti-crowd filter rejects the carrier-overlap candidate.
+	var candidates: Array[Vector3] = _generate_candidates(ctx, carrier_pos)
 
-	var best_pos: Vector3 = ctx.anchor
+	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):
@@ -67,6 +80,25 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
+# ── Candidate generation (in-game-ref) ──────────────────────────────────────
+
+# 8 polar samples at SEARCH_RADIUS_M around the carrier, plus self
+# (stand-still) and the carrier's own position (which the anti-crowd
+# filter rejects but is included for symmetry with other roles).
+# No "search center" or "trail depth" formulas — the carrier is the
+# ref, and the score function picks the best direction.
+static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Array[Vector3]:
+	var result: Array[Vector3] = []
+	result.append(carrier_pos)
+	result.append(ctx.self_pos)
+	for angle: float in AIRoleHelpers.POLAR_ANGLES:
+		result.append(Vector3(
+				carrier_pos.x + SEARCH_RADIUS_M * cos(angle),
+				0.0,
+				carrier_pos.z + SEARCH_RADIUS_M * sin(angle)))
+	return result
+
+
 # ── Role-specific scoring ────────────────────────────────────────────────────
 
 # Min over opponents of momentum-aware ETA back to our net. INF
@@ -85,15 +117,8 @@ static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
 # scales upward as my ETA exceeds the fastest opp's. Floored at 0,
 # unbounded above — letting the (1 - exposure) factor go negative
 # naturally rejects candidates I can't recover from.
-#
-# `min_opp_time_home` is precomputed once per decide() since it's
-# candidate-independent.
 static func _exposure(candidate: Vector3, our_net: Vector3,
 		min_opp_time_home: float) -> float:
-	# Tiny epsilon prevents division-by-zero in the (rare) case
-	# where an opp is sitting on top of our goal — at that point
-	# any positive my_time produces enormous exposure, candidate
-	# rejected. Behaves correctly without a magic upper cap.
 	var safe_time: float = maxf(min_opp_time_home, 0.001)
 	var dist: float = candidate.distance_to(our_net)
 	var my_time: float = dist / AIActionScoring.SKATER_REF_SPEED_M_S

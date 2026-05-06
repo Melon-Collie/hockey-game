@@ -37,15 +37,30 @@ const POLAR_ANGLES: Array[float] = [
 # (stand-still) + 8 polar samples around the anchor at SEARCH_STEP_M.
 # Polar pattern is fixed-cardinal (0°, 45°, ..., 315°) — roles that
 # need slot-oriented search (like CARRIER) roll their own.
+#
+# Phase 4d / Step 2 of the no-anchors refactor: roles increasingly
+# compute their own search center from in-game refs (carrier pos,
+# nets, etc.) instead of leaning on ctx.anchor. New code should
+# call `generate_candidates_around(self_pos, center)` directly.
 static func generate_candidates(ctx: RoleContext) -> Array[Vector3]:
+	return generate_candidates_around(ctx.self_pos, ctx.anchor)
+
+
+# Returns the standard 10-candidate set centered on `center`:
+# `center` itself + `self_pos` (stand-still) + 8 polar samples
+# around `center` at SEARCH_STEP_M. Use this when a role wants to
+# pick its own search center from in-game references rather than
+# inheriting whatever ctx.anchor happens to be.
+static func generate_candidates_around(self_pos: Vector3,
+		center: Vector3) -> Array[Vector3]:
 	var result: Array[Vector3] = []
-	result.append(ctx.anchor)
-	result.append(ctx.self_pos)
+	result.append(center)
+	result.append(self_pos)
 	for angle: float in POLAR_ANGLES:
 		result.append(Vector3(
-				ctx.anchor.x + SEARCH_STEP_M * cos(angle),
+				center.x + SEARCH_STEP_M * cos(angle),
 				0.0,
-				ctx.anchor.z + SEARCH_STEP_M * sin(angle)))
+				center.z + SEARCH_STEP_M * sin(angle)))
 	return result
 
 
