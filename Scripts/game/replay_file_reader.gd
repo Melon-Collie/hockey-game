@@ -68,6 +68,10 @@ static func read(path: String) -> Dictionary:
 	var frames: Array[Dictionary] = []
 	var truncated: bool = true
 	var file_len: int = file.get_length()
+	# Issue at most one push_warning per file even if many frames are out
+	# of order, so a corrupted file doesn't flood the log.
+	var warned_non_monotone: bool = false
+	var prev_host_ts: float = -INF
 	while file.get_position() + 4 <= file_len:
 		var frame_len: int = file.get_32()
 		if frame_len == ReplayFileWriter.END_OF_RECORDS:
@@ -87,6 +91,14 @@ static func read(path: String) -> Dictionary:
 			payload = file.get_buffer(payload_size)
 		else:
 			payload = PackedByteArray()
+		# Defensive monotone check: FileReplayDriver._find_frame_idx assumes
+		# timestamps increase. A maliciously-crafted or corrupted file with
+		# out-of-order frames would silently break seek behavior. Warn once
+		# so the issue surfaces in the log.
+		if host_ts < prev_host_ts and not warned_non_monotone:
+			push_warning("ReplayFileReader: non-monotone host_ts in %s (frame %d: %f < prev %f)" % [path, frames.size(), host_ts, prev_host_ts])
+			warned_non_monotone = true
+		prev_host_ts = host_ts
 		frames.append({
 			"host_ts": host_ts,
 			"kind": kind,

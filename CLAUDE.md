@@ -41,7 +41,7 @@ Lower layers never reach up: actors take their collaborators via `setup()` (e.g.
 
 ## Autoloads
 
-Initialized in this order: `PlayerPrefs` → `Constants` → `BuildInfo` → `SoundManager` (`sound_manager.gd`, no class_name) → `NetworkManager` → `NetworkSimManager` (`network_sim.gd`, no class_name) → `GameManager`. `NetworkManager._ready()` is a no-op; the menu drives initialization. `SoundManager` exposes `play_ui(sound: SoundManager.Sound, volume_db: float)` and `play_world(sound: SoundManager.Sound, pos: Vector3, volume_db: float)`; sound constants live in its `Sound` enum.
+Initialized in this order: `PlayerPrefs` → `Constants` → `BuildInfo` → `SoundManager` (`sound_manager.gd`, no class_name) → `NetworkManager` → `NetworkSimManager` (`network_sim.gd`, no class_name) → `GameManager`. `NetworkManager._ready()` is a no-op; the menu drives initialization. `SoundManager` exposes `play_ui(sound: SoundManager.Sound, volume_db := 0.0, pitch_variance := 0.0)` and `play_world(sound: SoundManager.Sound, pos: Vector3, volume_db := 0.0, pitch_variance := 0.0)`; sound constants live in its `Sound` enum.
 
 ## Confusing Boundaries
 
@@ -153,6 +153,17 @@ Playtester builds ship via GitHub Releases (`latest` tag). `deploy.yml` computes
 **Supabase backend:** `Scripts/game/supabase_config.gd` holds the project URL and publishable (anon) key — safe to commit, RLS restricts it to INSERT/SELECT/UPDATE. `CareerStatsReporter` (`Scripts/game/career_stats_reporter.gd`) POSTs one row to `career_stats` at game-over and GETs from the `career_totals` view for the career screen. `BugReporter` (`Scripts/game/bug_reporter.gd`) POSTs to `bug_reports` with a telemetry snapshot. Both use fire-and-forget `HTTPRequest` nodes added to the scene tree root and fail silently. The secret key must never be committed — use only the publishable key in `SupabaseConfig`.
 
 ## Known Issues / Planned Work
+
+**Performance, deferred until profiling shows them mattering:**
+- **`GoalieController._get_config(_state)`** rebuilds a fresh `GoalieBodyConfig` (~150 LOC of branching + `Vector3` literals) every physics tick per goalie. Memoize per `(state, _five_hole_openness, reaction_state)` tuple; this is the largest known hot-path allocation.
+- **`PlayerRegistry.resolve_peer_id` / `_resolve_skater_team_id`** are O(N) per call, hit on hot paths (per-tick body-check / pickup / `_team_resolver` callable). Reverse-map `Dictionary[Skater, int]` would make them O(1). Fine at 6 players; revisit if rosters grow.
+- **AI snapshot-level caching.** Today every bot's `_pick_action` rebuilds its own teammate-id list and runs its own closest-teammate-to-puck scan. Once per-bot off-puck utility AI lands (every bot, not just the carrier), publish a per-frame teammate roster + closest-teammate map on `GameManager.current_snapshot` so all bots read it without recomputing.
+
+**Maintainability, address opportunistically (don't refactor for its own sake):**
+- **God classes.** `Scripts/game/game_manager.gd` (~2000 LOC), `Scripts/controllers/goalie_controller.gd` (~1500), `Scripts/ui/hud.gd` (~1100), `Scripts/ui/main_menu.gd` (~1000), `Scripts/ui/options_panel.gd` (~800). Extraction candidates flagged: a `PickupClaimResolver` from GameManager, a `GoalieBodyConfigBuilder` from GoalieController, per-popup splits from HUD/MainMenu. Refactor only when a concrete need arises (e.g. unit-testing the lag-comp pickup logic).
+- **Test coverage gaps.** No GUT tests for `team_brain`, `skater_agent_state_machine`, `possession_state` (recently-added stateful AI), `PhaseCoordinator`, `SlotSwapCoordinator` host paths, `FileReplayDriver`, `GoalReplayDriver`, `decode_for_replay`. Domain rules are well-covered; the stateful collaborators are not.
+- **Type-safety drift.** Bare `Array` / `Dictionary` returns in AI domain modules (`role_slots`, `possession_state`, action-pair returns from `_compute_best_pass` / `_best_carry`), shot/charge rules (`ShotMechanics.release_wrister` returns Dict), and the replay engine path. Project rule says "strong typing everywhere"; fix when touching the file.
+- **Dead code.** `AIActionScoring.score_pass` is only called from tests; the runtime PASS scoring lives in `_compute_best_pass`. `TeamBrain._is_human_resolver` is stored on the constructor signature but never used. Either wire in or delete.
 
 ## Planned Features
 

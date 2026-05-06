@@ -169,10 +169,12 @@ func decode_world_state(data: PackedByteArray) -> void:
 			queue_depth_feedback.emit(depth)
 		else:
 			record.controller.apply_network_state(skater_state, host_ts)
-	# Puck: 11B pos+vel + 1B carrier index
+	# Puck: 11B pos+vel + 1B carrier index. 0xFF is the "no carrier"
+	# sentinel — checked explicitly so a future bump of MAX_CONNECTIONS
+	# past 255 doesn't silently alias the sentinel onto a real index.
 	var puck_state := _decode_puck_quantized(data.slice(o, o + 11)); o += 11
 	var carrier_idx: int = data.decode_u8(o); o += 1
-	puck_state.carrier_peer_id = decoded_peers[carrier_idx] if carrier_idx < decoded_peers.size() else -1
+	puck_state.carrier_peer_id = -1 if carrier_idx == 0xFF or carrier_idx >= decoded_peers.size() else decoded_peers[carrier_idx]
 	if not skip_actors:
 		var puck_controller: PuckController = _puck_controller_getter.call() as PuckController
 		if puck_controller != null:
@@ -254,28 +256,31 @@ func decode_for_replay(data: PackedByteArray) -> Dictionary:
 
 	var puck_state := _decode_puck_quantized(data.slice(o, o + 11)); o += 11
 	var carrier_idx: int = data.decode_u8(o); o += 1
-	var carrier_peer_id: int = decoded_peers[carrier_idx] if carrier_idx < decoded_peers.size() else -1
+	# 0xFF is the encoder's "no carrier" sentinel — see decode_world_state.
+	var carrier_peer_id: int = -1 if carrier_idx == 0xFF or carrier_idx >= decoded_peers.size() else decoded_peers[carrier_idx]
 
 	var num_goalies: int = data.decode_u8(o); o += 1
+	# Validate up-front so a maliciously-crafted file with num_goalies = 255
+	# and a short payload doesn't partially decode goalies and then read the
+	# game-state block from a stale offset past EOF. Refuse the whole packet
+	# if the claimed goalie count overruns the buffer.
+	if o + num_goalies * GOALIE_BLOCK_SIZE + GAME_STATE_BLOCK_SIZE > data.size():
+		return {}
 	var goalies: Array[GoalieNetworkState] = []
 	for _gi: int in num_goalies:
-		if o + GOALIE_BLOCK_SIZE > data.size():
-			break
 		goalies.append(_decode_goalie_quantized(data.slice(o, o + GOALIE_BLOCK_SIZE)))
 		o += GOALIE_BLOCK_SIZE
 
 	# Game state block follows the goalies. The viewer needs score / phase /
 	# period / clock to render the HUD; live decode_world_state side-effects
 	# game state into the live state machine, so that path can't be reused.
-	var game_state: Dictionary = {}
-	if o + GAME_STATE_BLOCK_SIZE <= data.size():
-		game_state = {
-			"score0": data.decode_u8(o),
-			"score1": data.decode_u8(o + 1),
-			"phase": data.decode_u8(o + 2),
-			"period": data.decode_u8(o + 3),
-			"time_remaining": float(data.decode_u16(o + 4)),
-		}
+	var game_state: Dictionary = {
+		"score0": data.decode_u8(o),
+		"score1": data.decode_u8(o + 1),
+		"phase": data.decode_u8(o + 2),
+		"period": data.decode_u8(o + 3),
+		"time_remaining": float(data.decode_u16(o + 4)),
+	}
 
 	return {
 		host_ts = host_ts,
