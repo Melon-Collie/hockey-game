@@ -698,38 +698,78 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 
 	# Tag-up override: when ghosted (offside), bot must clear back across
 	# the blue line before doing anything else. Highest-priority override
-	# above all slot logic.
-	var anchor: Vector3
-	var aim_override: Vector3 = Vector3.ZERO   # if non-zero, used as mouse_world_pos
+	# above all slot logic — bypasses role dispatch entirely.
 	if self_state != null and self_state.is_ghost:
-		anchor = _tag_up_anchor(self_pos)
+		var tag_up: Vector3 = _tag_up_anchor(self_pos)
+		_apply_steering(input, snapshot, self_pos, tag_up)
+		input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, tag_up, snapshot))
 	else:
-		# Default: brain provides the slot anchor for our current role
-		# in the current possession state. May be Vector3.ZERO if we
-		# haven't been assigned yet (first ticks); fall back to current
-		# position so we don't try to skate to (0, 0, 0).
-		anchor = _team_brain.get_anchor(_peer_id, snapshot) if _team_brain != null else Vector3.ZERO
-		if anchor == Vector3.ZERO:
-			anchor = self_pos
-		# BACKDOOR-specific: tip / step-out / hold decision when an
-		# incoming puck heading at our offensive net is detected.
-		if _team_brain != null and _team_brain.get_slot(_peer_id) == AIRoleSlots.Slot.BACKDOOR:
-			var decision: Array = _backdoor_decision(snapshot, self_pos, anchor)
-			anchor = decision[0]
-			aim_override = decision[1]
-
-	_apply_steering(input, snapshot, self_pos, anchor)
-	# Aim 2 m toward the anchor for a relaxed ready stance.
-	if aim_override != Vector3.ZERO:
-		input.mouse_world_pos = _step_mouse_toward(aim_override)
-	else:
-		input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, anchor, snapshot))
+		# Role dispatch: each TeamBrain-assigned slot maps to a behavior
+		# module that produces a RoleDecision (target_position +
+		# optional aim override + optional fire intents). The default
+		# fallback (AIRoleAnchorFollow) just steers to the brain anchor.
+		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
+		var decision: RoleDecision = _dispatch_role_decision(ctx)
+		_apply_steering(input, snapshot, self_pos, decision.target_position)
+		if decision.has_aim_override:
+			input.mouse_world_pos = _step_mouse_toward(decision.aim_world_pos)
+		else:
+			input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, decision.target_position, snapshot))
 
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
 	elif _should_chase_loose_puck(snapshot, self_pos):
 		_set_state(State.CHASE_PUCK)
+
+
+# Builds the read-only inputs every role-behavior decide() needs.
+# Allocates a fresh RoleContext per call; cheap RefCounted, profile if
+# this ever shows up in flame graphs.
+func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
+		self_state: SkaterNetworkState) -> RoleContext:
+	var ctx := RoleContext.new()
+	ctx.snapshot = snapshot
+	ctx.self_pos = self_pos
+	ctx.self_velocity = self_state.velocity if self_state != null else Vector3.ZERO
+	ctx.team_id = _team_id
+	ctx.peer_id = _peer_id
+	ctx.attacking_goal_pos = _attacking_goal_pos
+	ctx.defending_goal_pos = Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
+	ctx.own_goal_dir = _own_goal_dir
+	ctx.team_brain = _team_brain
+	ctx.team_id_resolver = _team_id_resolver
+	if _team_brain != null:
+		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
+		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
+	else:
+		ctx.anchor = self_pos
+	return ctx
+
+
+# Routes the bot's current slot to its role-behavior module. Returns a
+# RoleDecision the state machine consumes to drive steering / aim /
+# fire-intent transitions.
+#
+# Phase 1: only BACKDOOR has a real behavior wired (preserved by
+# wrapping the existing _backdoor_decision); every other slot falls
+# back to AIRoleAnchorFollow. Phase 2 will move CARRIER and BACKDOOR
+# into their own modules; later phases add SUPPORT / OUTLET /
+# defensive utilities.
+func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
+	var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null else AIRoleSlots.Slot.NONE
+	match slot:
+		AIRoleSlots.Slot.BACKDOOR:
+			var arr: Array = _backdoor_decision(ctx.snapshot, ctx.self_pos, ctx.anchor)
+			var d := RoleDecision.new()
+			d.target_position = arr[0]
+			var aim_override: Vector3 = arr[1]
+			if aim_override != Vector3.ZERO:
+				d.aim_world_pos = aim_override
+				d.has_aim_override = true
+			return d
+		_:
+			return AIRoleAnchorFollow.decide(ctx)
 
 
 func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
