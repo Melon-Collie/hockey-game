@@ -60,37 +60,38 @@ func _make_ctx(self_pos: Vector3, anchor: Vector3, carrier_pid: int = -1,
 
 # ── Bail-outs ───────────────────────────────────────────────────────────────
 
-func test_falls_back_to_anchor_when_no_carrier() -> void:
-	var anchor := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
-	var ctx: RoleContext = _make_ctx(Vector3(-4, 0, -10), anchor)
+func test_falls_back_to_self_pos_when_no_carrier() -> void:
+	# Step 2 of the no-anchors refactor: bail-out holds at self_pos
+	# instead of an anchor.
+	var self_pos := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
-	assert_eq(d.target_position, anchor,
-			"no carrier → fall back to anchor")
+	assert_eq(d.target_position, self_pos,
+			"no carrier → fall back to self_pos")
 
 
-func test_falls_back_to_anchor_when_opp_has_puck() -> void:
-	var anchor := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
+func test_falls_back_to_self_pos_when_opp_has_puck() -> void:
+	var self_pos := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
 	var skaters: Array = [
-		[1, TEAM_ID, anchor, Vector3.ZERO],
+		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[200, 1 - TEAM_ID, Vector3(0, 0, 0), Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(anchor, anchor, 200, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 200, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
-	assert_eq(d.target_position, anchor,
-			"opp carrier → no offensive context, fall back to anchor")
+	assert_eq(d.target_position, self_pos,
+			"opp carrier → no offensive context, fall back to self_pos")
 
 
 # ── Argmax pick is legal and NZ-side ────────────────────────────────────────
 
 func test_returns_legal_position_with_teammate_carrier() -> void:
-	# TRANS_DO setup: carrier in NZ, OUTLET at weak-side blue line.
-	var anchor := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
+	var self_pos := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
 	var carrier_pos := Vector3(0, 0, 0)
 	var skaters: Array = [
-		[1, TEAM_ID, anchor, Vector3.ZERO],
+		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(anchor, anchor, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	assert_true(absf(d.target_position.x) <= GameRules.RINK_HALF_WIDTH,
 			"x within rink bounds")
@@ -101,20 +102,18 @@ func test_returns_legal_position_with_teammate_carrier() -> void:
 # ── Offside filter ──────────────────────────────────────────────────────────
 
 func test_offside_filter_rejects_oz_candidates() -> void:
-	# Team 0: opp blue line at z = -BLUE_LINE_Z. NZ-side requires
-	# z > -BLUE_LINE_Z. OUTLET anchor sits 2.5m NZ-side of the line
-	# (z = -BLUE_LINE_Z + 2.5). Polar samples at SEARCH_STEP_M = 3m
-	# in the -Z direction would be at z = -BLUE_LINE_Z - 0.5 — past
-	# the line, in OZ. Those must be filtered.
-	#
-	# Verify the chosen target.z is NZ-side (z > -BLUE_LINE_Z).
-	var anchor := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
+	# Team 0: opp blue line at z = -BLUE_LINE_Z. The OUTLET search
+	# center sits BLUE_LINE_BUFFER_M NZ-side of that line (z = -BLUE
+	# + buffer). Polar samples at SEARCH_STEP_M (3 m) toward -Z would
+	# be at z = -BLUE - (3 - buffer), in OZ. Those must be filtered.
+	# Verify the chosen target.z is NZ-side.
+	var self_pos := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
 	var carrier_pos := Vector3(0, 0, 0)
 	var skaters: Array = [
-		[1, TEAM_ID, anchor, Vector3.ZERO],
+		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(anchor, anchor, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	assert_gt(d.target_position.z, -GameRules.BLUE_LINE_Z,
 			"OUTLET stays NZ-side of opp blue line; got %s" % d.target_position)
@@ -123,19 +122,19 @@ func test_offside_filter_rejects_oz_candidates() -> void:
 # ── Anti-crowding ───────────────────────────────────────────────────────────
 
 func test_anti_crowding_avoids_candidates_near_teammates() -> void:
-	# Anchor and a teammate sitting on top of each other. SUPPORT
-	# polar samples around the anchor get filtered by anti-crowd;
-	# the chosen position must be at least ANTI_CROWD_RADIUS_M from
-	# the squatting teammate.
-	var anchor := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
-	var teammate_at_anchor := anchor
+	# Place a teammate at OUTLET's computed search center (weak-side
+	# of carrier on X, NZ-side of opp blue line on Z). The center
+	# itself is a candidate; the anti-crowd filter rejects it.
+	# Carrier at +5 → weak side X = -5; Z = -BLUE + 2.5.
+	var carrier_pos := Vector3(5, 0, 0)
+	var search_center := Vector3(-5, 0, -GameRules.BLUE_LINE_Z + 2.5)
 	var skaters: Array = [
-		[1, TEAM_ID, Vector3(8, 0, -5), Vector3.ZERO],     # us, off to the side
-		[100, TEAM_ID, Vector3(0, 0, 0), Vector3.ZERO],    # carrier
-		[110, TEAM_ID, teammate_at_anchor, Vector3.ZERO],  # blocking the anchor
+		[1, TEAM_ID, Vector3(8, 0, 5), Vector3.ZERO],     # us, off to the side
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],        # carrier
+		[110, TEAM_ID, search_center, Vector3.ZERO],      # squatting on the center
 	]
-	var ctx: RoleContext = _make_ctx(Vector3(8, 0, -5), anchor, 100, skaters)
+	var ctx: RoleContext = _make_ctx(Vector3(8, 0, 5), Vector3.ZERO, 100, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
-	var dist_to_teammate: float = d.target_position.distance_to(teammate_at_anchor)
+	var dist_to_teammate: float = d.target_position.distance_to(search_center)
 	assert_gt(dist_to_teammate, AIRoleHelpers.ANTI_CROWD_RADIUS_M - 0.01,
 			"chosen target must clear the anti-crowd radius around the teammate")
