@@ -115,7 +115,8 @@ const LANE_REACTION_RAMP_S: float = 0.10
 const SHOT_SPEED_M_S: float = 30.0
 const PASS_SPEED_M_S: float = 22.0
 
-# Utility-AI knobs. _pick_action re-runs every physics tick and treats
+# Utility-AI knobs. AIRoleCarrier._pick_action re-runs every
+# PICK_ACTION_PERIOD_TICKS physics ticks and treats
 # CARRY as a fourth competing option scored as
 #
 #   carry_score = score_at(destination) × discount(time_to_destination)
