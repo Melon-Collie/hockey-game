@@ -1027,24 +1027,36 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 		if int(_team_id_resolver.call(peer_id)) == _team_id:
 			teammate_ids.append(peer_id)
 
-	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
+	# Goalie predictions per release time. Wrister and slapper differ
+	# only in charge length; pass-receiver and carry-candidate cases
+	# get their own predictions inside _compute_best_pass / _best_carry.
+	# Slot terminator uses the wrister window (approximation — see
+	# _compute_score_at_slot doc).
+	var wrister_goalie: Vector3 = _predict_goalie_at(
+			snapshot, BOT_WRISTER_LOOKAHEAD_S, self_pos)
+	var slapper_goalie: Vector3 = _predict_goalie_at(
+			snapshot, BOT_SLAPPER_LOOKAHEAD_S, self_pos)
 
 	# Cache score_at_slot once. The slot is the recursion terminator:
 	# any score_at(pos) evaluation includes a "carry to slot" branch
 	# that multiplies this cached value by lane × time-decay from pos.
 	# Uses current opponent positions (approximation — projecting per
 	# caller's arrival time would be more accurate but caching breaks).
+	# Goalie prediction here uses just the wrister window: actor at slot
+	# already, fires from there. The carry-to-slot path adds time-decay
+	# upstream which captures the travel cost separately.
+	var slot_goalie: Vector3 = _predict_goalie_at(
+			snapshot, BOT_WRISTER_LOOKAHEAD_S, _slot_anchor())
 	_last_score_at_slot = _compute_score_at_slot(_scratch_opponents,
-			snapshot, teammate_ids, goalie_pos)
+			snapshot, teammate_ids, slot_goalie)
 
 	# Top-level SHOOT — leaf score_shoot at current position. Wrister
 	# uses wrister-charge-projected opponents; slapper uses longer
 	# slapper-charge projection × power bonus × motion penalty. Pick
 	# whichever shot type scores higher.
 	var wrister_score: float = AIActionScoring.score_shoot(
-			self_pos, _attacking_goal_pos, goalie_pos,
-			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-			_scratch_opponents_shoot)
+			self_pos, _attacking_goal_pos, wrister_goalie,
+			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot)
 	var self_state: SkaterNetworkState = snapshot.skater_states[_peer_id]
 	var self_velocity: Vector3 = self_state.velocity
 	var self_speed: float = sqrt(self_velocity.x * self_velocity.x
@@ -1052,15 +1064,15 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	var slapper_motion_factor: float = (
 			SLAPPER_MOTION_PENALTY if self_speed > SLAPPER_MAX_SPEED_M_S else 1.0)
 	var slapper_score: float = AIActionScoring.score_shoot(
-			self_pos, _attacking_goal_pos, goalie_pos,
-			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
+			self_pos, _attacking_goal_pos, slapper_goalie,
+			GameRules.NET_HALF_WIDTH,
 			_scratch_opponents_slapper) * SLAPPER_POWER_BONUS * slapper_motion_factor
 	var shoot_use_slapper: bool = slapper_score > wrister_score
 	var shoot_score: float = slapper_score if shoot_use_slapper else wrister_score
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var best_pass: Array = _compute_best_pass(
-			snapshot, self_pos, self_state.facing, goalie_pos, teammate_ids)
+			snapshot, self_pos, self_state.facing, teammate_ids)
 	var best_pass_peer: int = best_pass[0]
 	var best_pass_score: float = best_pass[1]
 
@@ -1070,7 +1082,7 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	# Time uses momentum-aware effective speed so reverse candidates
 	# self-discount via longer arrival time.
 	var carry_result: Array = _best_carry(self_pos, self_velocity,
-			snapshot, teammate_ids, goalie_pos)
+			snapshot, teammate_ids)
 	var carry_score: float = carry_result[0]
 	_last_carry_anchor = carry_result[1]
 
@@ -1187,8 +1199,7 @@ func _project_opponents_to(snapshot: WorldSnapshot, time_s: float,
 # HUMAN_PASS_BIAS is a UX nudge — bots prefer feeding humans on
 # close-call passes.
 func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
-		self_facing_xz: Vector2, goalie_pos: Vector3,
-		teammate_ids: Array[int]) -> Array:
+		self_facing_xz: Vector2, teammate_ids: Array[int]) -> Array:
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
 	var carrier_in_oz: bool = -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
@@ -1219,8 +1230,15 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 				self_pos, receiver, _scratch_opponents_pass)
 		if lane <= 0.0:
 			continue
+		# Predict goalie at the time the receiver fires: pass flight time
+		# plus their wrister charge. The squareness term in score_shoot
+		# rewards passes that catch the goalie sliding cross-seam — this
+		# is where most of that benefit lands.
+		var receiver_release_t: float = flight_t + BOT_WRISTER_LOOKAHEAD_S
+		var receiver_goalie: Vector3 = _predict_goalie_at(
+				snapshot, receiver_release_t, receiver)
 		var receiver_value: float = _score_at(receiver, _scratch_opponents_pass,
-				snapshot, teammate_ids, goalie_pos)
+				snapshot, teammate_ids, receiver_goalie)
 		# Rotation time: how long does the bot need to rotate facing to
 		# point at the receiver before the blade ROM can fire there?
 		# Mouse-driven facing rotation takes time; back-passes pay this
@@ -1400,22 +1418,26 @@ func _aim_wobble(from: Vector3, to: Vector3, cone_deg: float) -> Vector3:
 	return Vector3(-dir.z, 0.0, dir.x) * lateral
 
 
-# Returns the opposing goalie's position predicted forward by
-# BOT_WRISTER_LOOKAHEAD_S along their current velocity. Goalies actively
-# slide at 4-5 m/s on shots; aiming at where the goalie IS rather than
-# where they WILL BE hands them the save by the time our wrister
-# releases (250 ms after decision). Falls back to _attacking_goal_pos
-# when the goalie state isn't buffered yet (first-frame edge case);
-# downstream geometry handles that input gracefully (degenerates to a
-# corner aim past a "goalie at the goal center").
-func _predicted_goalie_pos(snapshot: WorldSnapshot) -> Vector3:
+# Returns the opposing goalie's CURRENT world position. Used as input
+# to AIActionScoring.predict_goalie_pos, which models the goalie's
+# react-then-slide forward along the puck's lateral target. Falls back
+# to _attacking_goal_pos when goalie state isn't buffered yet (first-
+# frame edge case); downstream geometry handles that gracefully.
+func _goalie_now(snapshot: WorldSnapshot) -> Vector3:
 	var opp_goalie: GoalieNetworkState = snapshot.goalie_states.get(1 - _team_id)
 	if opp_goalie == null:
 		return _attacking_goal_pos
-	return AITrajectory.predict_at(
-			Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z),
-			Vector3(opp_goalie.velocity_x, 0.0, opp_goalie.velocity_z),
-			BOT_WRISTER_LOOKAHEAD_S)
+	return Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
+
+
+# Wraps AIActionScoring.predict_goalie_pos for the common case where
+# the puck-at-release is the position we're scoring a shot from.
+# `release_time_s` is the time from now until the bot fires (e.g.,
+# wrister/slapper charge time + any path/flight time before the fire).
+func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
+		puck_pos_at_release: Vector3) -> Vector3:
+	return AIActionScoring.predict_goalie_pos(
+			_goalie_now(snapshot), release_time_s, puck_pos_at_release)
 
 
 # CARRY-state mouse target: 2 m forward in the attacking-goal
@@ -1485,10 +1507,14 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 	return -right_axis * signf(best_lateral) * magnitude
 
 
-# Shot aim past the goalie's projected shadow.
+# Shot aim past the goalie's projected shadow. Uses the goalie's
+# predicted position at the wrister window, matching how score_shoot
+# sees the goalie when scoring from self_pos.
 func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	var goalie: Vector3 = _predict_goalie_at(
+			snapshot, BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	return AIShotAim.compute_open_net_aim(
-			self_pos, _predicted_goalie_pos(snapshot),
+			self_pos, goalie,
 			_attacking_goal_pos.z,
 			GameRules.NET_HALF_WIDTH,
 			GOALIE_SHADOW_HALF)
@@ -1786,10 +1812,10 @@ func _momentum_time_to(self_pos: Vector3, dest: Vector3,
 # `pos`. At the inner level we don't know the actor's velocity, so
 # the carry-to-slot uses 0-momentum time.
 func _score_at(pos: Vector3, opps: Array[Vector3], snapshot: WorldSnapshot,
-		teammate_ids: Array[int], goalie_pos: Vector3) -> float:
+		teammate_ids: Array[int], predicted_goalie_pos: Vector3) -> float:
 	var shoot_s: float = AIActionScoring.score_shoot(
-			pos, _attacking_goal_pos, goalie_pos,
-			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF, opps)
+			pos, _attacking_goal_pos, predicted_goalie_pos,
+			GameRules.NET_HALF_WIDTH, opps)
 	# Carry-to-slot: depth-2 terminator. 0-momentum time at inner level.
 	var slot_pos: Vector3 = _slot_anchor()
 	var slot_dist: float = pos.distance_to(slot_pos)
@@ -1807,11 +1833,11 @@ func _score_at(pos: Vector3, opps: Array[Vector3], snapshot: WorldSnapshot,
 # `_last_score_at_slot` so every _score_at call gets a constant-time
 # slot lookup.
 func _compute_score_at_slot(opps: Array[Vector3], snapshot: WorldSnapshot,
-		teammate_ids: Array[int], goalie_pos: Vector3) -> float:
+		teammate_ids: Array[int], predicted_goalie_pos: Vector3) -> float:
 	var slot_pos: Vector3 = _slot_anchor()
 	return AIActionScoring.score_shoot(
-			slot_pos, _attacking_goal_pos, goalie_pos,
-			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF, opps)
+			slot_pos, _attacking_goal_pos, predicted_goalie_pos,
+			GameRules.NET_HALF_WIDTH, opps)
 
 
 # Pre-baked rotations for the 8 polar cardinal candidates.
@@ -1832,8 +1858,7 @@ const _POLAR_ANGLES: Array[float] = [
 # where time uses momentum-aware effective speed (backward candidates
 # self-discount via longer arrival).
 func _best_carry(self_pos: Vector3, self_velocity: Vector3,
-		snapshot: WorldSnapshot, teammate_ids: Array[int],
-		goalie_pos: Vector3) -> Array:
+		snapshot: WorldSnapshot, teammate_ids: Array[int]) -> Array:
 	var slot_pos: Vector3 = _slot_anchor()
 	# Polar forward direction: toward slot. Fallback to attacking-goal
 	# axis when degenerate (bot exactly at slot).
@@ -1882,8 +1907,11 @@ func _best_carry(self_pos: Vector3, self_velocity: Vector3,
 				self_pos, candidate, _scratch_opponents_path)
 		if lane <= 0.0:
 			continue
+		# Predict goalie at candidate-arrival + wrister charge.
+		var cand_release_t: float = local_time + BOT_WRISTER_LOOKAHEAD_S
+		var cand_goalie: Vector3 = _predict_goalie_at(snapshot, cand_release_t, candidate)
 		var dest_score: float = _score_at(candidate, _scratch_opponents_path,
-				snapshot, teammate_ids, goalie_pos)
+				snapshot, teammate_ids, cand_goalie)
 		var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 		var s_total: float = dest_score * lane * decay
 		if s_total > best_score:
@@ -1898,8 +1926,11 @@ func _best_carry(self_pos: Vector3, self_velocity: Vector3,
 	var slot_lane: float = AIActionScoring.path_clearance(
 			self_pos, slot_pos, _scratch_opponents_path)
 	if slot_lane > 0.0:
+		var slot_release_t: float = slot_time + BOT_WRISTER_LOOKAHEAD_S
+		var slot_dest_goalie: Vector3 = _predict_goalie_at(
+				snapshot, slot_release_t, slot_pos)
 		var slot_dest_score: float = _score_at(slot_pos, _scratch_opponents_path,
-				snapshot, teammate_ids, goalie_pos)
+				snapshot, teammate_ids, slot_dest_goalie)
 		var slot_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
 		var slot_total: float = slot_dest_score * slot_lane * slot_decay
@@ -1909,9 +1940,12 @@ func _best_carry(self_pos: Vector3, self_velocity: Vector3,
 
 	# Stand-still last. Only wins on STRICTLY greater than the best
 	# movement candidate — patience must be earned. Score uses
-	# current opponents (time = 0 → no projection).
+	# current opponents (time = 0 → no projection). Goalie predicted
+	# at the wrister window from current position.
+	var stand_goalie: Vector3 = _predict_goalie_at(
+			snapshot, BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(self_pos, _scratch_opponents,
-			snapshot, teammate_ids, goalie_pos)
+			snapshot, teammate_ids, stand_goalie)
 	if stand_score > best_score:
 		best_score = stand_score
 		best_pos = self_pos

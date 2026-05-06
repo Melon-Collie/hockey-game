@@ -43,22 +43,34 @@ const PRESSURE_MAX_COUNT: int = 3
 # shots are too common.
 const SHOT_RANGE_FALLOFF_M: float = 22.0
 
-# Shooting-angle cone, measured from the net's outward normal (the
-# direction the net opens toward center ice). Inside SHOT_ANGLE_FULL_DEG
-# the score is unaffected; at SHOT_ANGLE_ZERO_DEG and beyond it's
-# completely zeroed. Two purposes:
-#   1. Block shots from BEHIND the goal line — past 90° the math
-#      automatically zeroes, so we don't need a separate hard gate.
-#   2. Penalize extreme-angle shots where the visible net is a sliver.
-#      _net_openness measures goalie shadow coverage in 2D and treats
-#      a shadow projecting off the net plane as fully open net — but
-#      from a 75° angle the actual visible net is narrow regardless
-#      of where the shadow lands.
-# Tuning: widen FULL→60° / ZERO→90° if bots over-pass on legitimate
-# off-angle shots; tighten FULL→40° / ZERO→70° if bad-angle shots are
-# too common.
-const SHOT_ANGLE_FULL_DEG: float = 50.0
-const SHOT_ANGLE_ZERO_DEG: float = 80.0
+# Shot-quality coverage knobs. The two-angle model:
+#   coverage   = BASE_COVERAGE × squareness
+#   squareness = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
+# where arc_offset is |puck_arc_angle - goalie_arc_angle| at shot
+# release. A squared goalie blocks BASE_COVERAGE of the visible net;
+# arc_offset >= SQUARENESS_OFFSET_RAD = goalie fully exposed (open
+# net). Replaces the legacy shadow-projection openness + linear
+# angle-ramp pair.
+#
+# Tuning: BASE_COVERAGE down (e.g., 0.30) → bots take more shots vs
+# squared goalies; up (0.45) → bots pass/cycle more. SQUARENESS_OFFSET
+# down (e.g., 25°) → cross-seam plays score higher (goalie reads as
+# "exposed" sooner); up (40°) → only severe slides expose the goalie.
+const BASE_COVERAGE: float = 0.35
+const SQUARENESS_OFFSET_RAD: float = 0.5235988  # deg_to_rad(30)
+
+# Goalie position prediction. Replaces velocity-extrapolation with a
+# react-then-slide model: react delay first, then move toward the
+# puck-at-release X at max lateral speed. Calibrate to match the
+# goalie controller's actual movement (currently
+# `goalie_controller.gd` STANDING/READY tracking).
+const GOALIE_REACTION_DELAY_S: float = 0.15
+const GOALIE_MAX_LATERAL_SPEED_MPS: float = 5.0
+
+# Shadow half-width used by AIShotAim.compute_open_net_aim for the
+# lane-check aim point. Independent of the new coverage model — it
+# just picks an aim point past the goalie for the segment check.
+const GOALIE_SHADOW_HALF_M: float = 0.3
 
 # Lane-clear: an opponent within this perpendicular distance from the
 # bot→receiver line segment fully blocks the pass. Score scales linearly
@@ -90,35 +102,112 @@ const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
 const ACTION_HYSTERESIS_MARGIN: float = 0.05
 
 
-# Returns SHOOT score in [0, 1]. Multiplicative product of:
-#   - shot_geometry: net openness × distance response (see _shot_geometry)
-#   - lane_clear:    no opponent in the shooter→aim line segment
-#   - 1 - pressure:  inverse of opponent proximity around the shooter
+# Returns SHOOT score in [0, 1] using the two-angle coverage model:
 #
-# The lane check uses the same aim point ShotAim picks for the actual
-# shot, so the score reflects the shot the bot would actually fire —
-# not just the goalie's shadow.
+#   shot_quality = dist_response × shot_angle_factor × (1 - coverage)
+#   coverage     = BASE_COVERAGE × squareness
+#   squareness   = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
+#
+#   dist_response     = 1 - (dist / SHOT_RANGE_FALLOFF_M)²            (quadratic)
+#   shot_angle_factor = 1 - shot_angle / (PI / 2)                      (linear)
+#   puck_arc_angle    = atan2(shooter.x - goal.x, abs(shooter.z - goal.z))
+#   goalie_arc_angle  = atan2(goalie_at_release.x - goal.x, ...)
+#   arc_offset        = |puck_arc_angle - goalie_arc_angle|
+#
+# `predicted_goalie_pos` is the goalie's predicted position at shot
+# release (use `predict_goalie_pos` to compute). The squareness term
+# makes shots that catch the goalie sliding (cross-seam, late
+# rotation) score above the BASE_COVERAGE penalty — automatic
+# discount for "open net" plays without a separate heuristic.
+#
+# Final score also multiplies by lane clearance and inverse pressure
+# (unchanged from prior implementation).
 static func score_shoot(
 		shooter: Vector3,
 		attacking_goal: Vector3,
-		goalie_pos: Vector3,
+		predicted_goalie_pos: Vector3,
 		net_half_width: float,
-		shadow_half: float,
 		opponents: Array[Vector3]) -> float:
-	# Hard gate: shooter past the attacking goal line can't shoot in —
-	# wraparound territory, doesn't make sense as a SHOOT score.
-	if _is_past_goal_line(shooter, attacking_goal):
+	# Hard gate: shooter past (or on) the attacking goal line can't
+	# shoot in — wraparound territory, returns 0 immediately.
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
+	if forward < 0.001:
 		return 0.0
-	var geom: float = _shot_geometry(shooter, attacking_goal, goalie_pos, net_half_width, shadow_half)
+
+	# Distance response — quadratic. Saturates near the net, so going
+	# from 4 m → 2 m gains less than 12 m → 10 m. Combined with the
+	# carry time-decay this naturally prevents the bot from driving
+	# into the goalie at close range; fire wins the comparison once
+	# the bot is in shooting range.
+	var dist: float = shooter.distance_to(attacking_goal)
+	var dist_norm: float = clampf(dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
+	var dist_response: float = 1.0 - dist_norm * dist_norm
+
+	# Puck arc angle: atan2 of lateral offset over forward distance.
+	# Range [-PI/2, +PI/2] given the forward gate above.
+	var puck_arc_angle: float = atan2(shooter.x - attacking_goal.x, forward)
+	var shot_angle: float = absf(puck_arc_angle)
+	var shot_angle_factor: float = clampf(1.0 - shot_angle / (PI * 0.5), 0.0, 1.0)
+
+	# Goalie arc angle at release. If the goalie ended up behind their
+	# own goal line (degenerate edge — shouldn't happen in normal play),
+	# treat as squared at center.
+	var goalie_forward: float = (predicted_goalie_pos.z - attacking_goal.z) * net_normal_z
+	var goalie_arc_angle: float
+	if goalie_forward < 0.001:
+		goalie_arc_angle = 0.0
+	else:
+		goalie_arc_angle = atan2(predicted_goalie_pos.x - attacking_goal.x, goalie_forward)
+
+	var arc_offset: float = absf(puck_arc_angle - goalie_arc_angle)
+	var squareness: float = maxf(0.0, 1.0 - arc_offset / SQUARENESS_OFFSET_RAD)
+	var coverage: float = BASE_COVERAGE * squareness
+	var shot_quality: float = dist_response * shot_angle_factor * (1.0 - coverage)
+
+	# Lane clear vs the actual aim point ShotAim would pick (past the
+	# goalie's shadow). Identical to old code — the new coverage model
+	# changes shot-quality, not aim direction.
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
-			shooter, goalie_pos, attacking_goal.z, net_half_width, shadow_half)
+			shooter, predicted_goalie_pos, attacking_goal.z,
+			net_half_width, GOALIE_SHADOW_HALF_M)
 	var lane: float = _lane_clear(shooter, aim, opponents)
+
 	# Directional pressure: only opponents in the forward cone toward
-	# the attacking goal disrupt the shot. A defender behind the
-	# shooter or directly beside them can't really stop the release —
-	# the threat is bodies between us and the net.
+	# the attacking goal disrupt the shot. Behind/beside ones don't
+	# really stop the release — the threat is bodies between us and
+	# the net.
 	var pressure_factor: float = 1.0 - _pressure(shooter, opponents, attacking_goal - shooter)
-	return geom * lane * pressure_factor
+
+	return shot_quality * lane * pressure_factor
+
+
+# Predicts the goalie's position at a future moment (shot release).
+# React-then-slide model: a fixed reaction delay, then movement toward
+# the puck-at-release X at max lateral speed. Approximates lateral
+# tracking only — close enough for shot scoring without depending on
+# the goalie controller's full state machine.
+#
+# `goalie_now` is the goalie's current world position.
+# `release_time_s` is seconds from now until the shot fires.
+# `puck_pos_at_release` is where the puck will be when fired (= the
+# shooter's position for direct shots; receiver lead for passes;
+# carry candidate for carry-then-shoot).
+static func predict_goalie_pos(
+		goalie_now: Vector3,
+		release_time_s: float,
+		puck_pos_at_release: Vector3) -> Vector3:
+	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
+	var max_move: float = move_time * GOALIE_MAX_LATERAL_SPEED_MPS
+	# Goalie shuffles laterally at their current depth toward the puck-x.
+	var target := Vector3(puck_pos_at_release.x, goalie_now.y, goalie_now.z)
+	var to_target: Vector3 = target - goalie_now
+	var dist_to_target: float = to_target.length()
+	if dist_to_target < 0.001 or max_move <= 0.0:
+		return goalie_now
+	if dist_to_target <= max_move:
+		return target
+	return goalie_now + to_target * (max_move / dist_to_target)
 
 
 # Returns PASS score in [0, 1] for a specific receiver. Multiplicative:
@@ -137,9 +226,8 @@ static func score_pass(
 		shooter: Vector3,
 		receiver: Vector3,
 		attacking_goal: Vector3,
-		goalie_pos: Vector3,
+		predicted_goalie_pos: Vector3,
 		net_half_width: float,
-		shadow_half: float,
 		opponents: Array[Vector3]) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
@@ -148,74 +236,15 @@ static func score_pass(
 	var lane: float = _lane_clear(shooter, receiver, opponents)
 	if lane <= 0.0:
 		return 0.0
-	# Receiver's value as a shooter from where they are. score_shoot
-	# already bakes in shot geometry, shot-lane clearance, and pressure
-	# on the shooter (= receiver here) — no separate receiver_pressure
-	# term needed.
+	# Receiver's value as a shooter from where they are. Caller is
+	# responsible for predicting the goalie at the receiver's release
+	# time (flight + receiver wrister charge) — see predict_goalie_pos.
 	var receiver_shot: float = score_shoot(
-			receiver, attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
+			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents)
 	return lane * receiver_shot
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-# Geometric shot quality from a position: openness × distance response.
-# Used by both SHOOT (shooter geometry) and PASS (receiver geometry).
-static func _shot_geometry(
-		from: Vector3,
-		attacking_goal: Vector3,
-		goalie_pos: Vector3,
-		net_half_width: float,
-		shadow_half: float) -> float:
-	var openness: float = _net_openness(from, attacking_goal.z, goalie_pos, net_half_width, shadow_half)
-	var dist: float = from.distance_to(attacking_goal)
-	var dist_response: float = clampf(1.0 - dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
-	var angle: float = _shooting_angle_factor(from, attacking_goal)
-	return openness * dist_response * angle
-
-
-# Returns [0, 1] based on the angle from the net's outward normal to
-# the shooter. 0 = directly in front, 90+ = beside or behind the net.
-# Linearly ramps from 1.0 at SHOT_ANGLE_FULL_DEG to 0 at
-# SHOT_ANGLE_ZERO_DEG; zero past that. Behind-the-goal-line shots
-# automatically zero (forward distance is negative → angle > 90°).
-static func _shooting_angle_factor(shooter: Vector3, attacking_goal: Vector3) -> float:
-	# Net normal points from the goal toward center ice. attacking_goal.z
-	# is signed (Team 0 attacks -Z so attacking_goal.z = -GOAL_LINE_Z;
-	# net opens toward +Z). The net normal Z-component is the negation
-	# of the attacking_goal.z sign.
-	var net_normal_z: float = -signf(attacking_goal.z)
-	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
-	var lateral: float = absf(shooter.x - attacking_goal.x)
-	var angle_deg: float = rad_to_deg(atan2(lateral, forward))
-	if angle_deg <= SHOT_ANGLE_FULL_DEG:
-		return 1.0
-	if angle_deg >= SHOT_ANGLE_ZERO_DEG:
-		return 0.0
-	return (SHOT_ANGLE_ZERO_DEG - angle_deg) / (SHOT_ANGLE_ZERO_DEG - SHOT_ANGLE_FULL_DEG)
-
-
-# Fraction of the net not covered by the goalie's projected shadow. 1.0
-# = fully open net. Mirrors the geometry in AIShotAim but returns area
-# coverage instead of an aim point.
-static func _net_openness(
-		shooter: Vector3,
-		net_z: float,
-		goalie: Vector3,
-		net_half_width: float,
-		shadow_half: float) -> float:
-	var dz: float = goalie.z - shooter.z
-	var to_net_z: float = net_z - shooter.z
-	if absf(dz) < 0.001 or signf(dz) != signf(to_net_z):
-		return 1.0
-	var t: float = to_net_z / dz
-	var shadow_x: float = shooter.x + t * (goalie.x - shooter.x)
-	var sl: float = clampf(shadow_x - shadow_half, -net_half_width, net_half_width)
-	var sr: float = clampf(shadow_x + shadow_half, -net_half_width, net_half_width)
-	var covered: float = maxf(0.0, sr - sl)
-	var net_width: float = net_half_width * 2.0
-	return clampf((net_width - covered) / net_width, 0.0, 1.0)
 
 
 # True if `pos` is past the attacking goal line in the direction the
