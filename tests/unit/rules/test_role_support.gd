@@ -118,7 +118,7 @@ func test_anti_crowding_avoids_candidates_near_teammates() -> void:
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	var dist_to_teammate: float = d.target_position.distance_to(teammate_at_anchor)
 	# Allow a tiny float-rounding margin below the radius.
-	assert_gt(dist_to_teammate, AIRoleSupport.ANTI_CROWD_RADIUS_M - 0.01,
+	assert_gt(dist_to_teammate, AIRoleHelpers.ANTI_CROWD_RADIUS_M - 0.01,
 			"chosen target must clear the anti-crowd radius around the teammate")
 
 

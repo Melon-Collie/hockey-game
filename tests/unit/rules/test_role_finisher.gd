@@ -1,8 +1,11 @@
 extends GutTest
 
-# AIRoleFinisher is stateless; tests cover the four arms of its
-# decision tree (HOLD, STEP_OUT, TIP, null puck) by constructing
-# minimal WorldSnapshots.
+# AIRoleFinisher has a two-mode decision tree:
+#   1. REACTIVE — incoming shot detected → tip / step-out.
+#   2. POSITIONING — no shot threat → argmax score_pass over
+#      candidate set.
+# Tests cover both modes plus the bail-out cases (null puck,
+# no carrier).
 
 # Team 0 defends +Z; opp goal at -Z.
 const OUR_NET_Z: float = 26.65
@@ -159,3 +162,66 @@ func test_hold_when_puck_path_crossing_is_in_past() -> void:
 			Vector3(0.0, 0.0, -15.0))  # heading further toward opp goal
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
 	assert_eq(d.target_position, anchor)
+
+
+# ─── POSITIONING (no incoming shot) ───────────────────────────────────────
+
+func test_positioning_falls_back_to_anchor_when_no_carrier() -> void:
+	# No teammate carrier means no offensive context — positioning
+	# falls back to anchor.
+	var anchor := Vector3(-2.0, 0.0, -22.0)
+	var ctx: RoleContext = _make_ctx(
+			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(0.0, 0.0, -10.0), Vector3.ZERO)  # slow puck → reactive returns null
+	var d: RoleDecision = AIRoleFinisher.decide(ctx)
+	assert_eq(d.target_position, anchor,
+			"slow puck + no carrier → positioning falls back to anchor")
+	assert_false(d.has_aim_override)
+
+
+func test_positioning_picks_legal_position_when_carrier_present() -> void:
+	# Teammate carrier in OZ corner. Slow puck so reactive doesn't
+	# fire (puck speed 0). FINISHER should run positioning argmax
+	# and pick a legal back-door / slot candidate.
+	var anchor := Vector3(-2.0, 0.0, -22.0)
+	var carrier_pos := Vector3(5.0, 0.0, -22.0)  # OZ corner, strong-side
+	var ctx: RoleContext = _make_ctx(
+			Vector3(-2.0, 0.0, -22.0), anchor,
+			carrier_pos, Vector3.ZERO,  # carrier holds puck, no shot in flight
+			[
+				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),
+				_make_skater(100, TEAM_ID, carrier_pos, false),
+			])
+	# Wire the puck carrier_peer_id to the teammate.
+	ctx.snapshot.puck_state.carrier_peer_id = 100
+	var d: RoleDecision = AIRoleFinisher.decide(ctx)
+	# Position is legal: in-rink, not in crease, not past goal line.
+	assert_true(absf(d.target_position.x) <= GameRules.RINK_HALF_WIDTH,
+			"x within rink bounds")
+	assert_true(absf(d.target_position.z) <= GameRules.GOAL_LINE_Z,
+			"z within goal-line bounds")
+	# No aim override — positioning doesn't tip.
+	assert_false(d.has_aim_override)
+
+
+func test_reactive_overrides_positioning_when_shot_incoming() -> void:
+	# Even with a teammate carrier (positioning would normally run),
+	# a fast incoming shot should trigger reactive TIP instead.
+	var anchor := Vector3(-2.0, 0.0, -22.0)
+	var teammate_pos := Vector3(4.0, 0.0, -15.0)
+	var ctx: RoleContext = _make_ctx(
+			Vector3(-2.0, 0.0, -22.0), anchor,
+			teammate_pos, Vector3(-3.0, 0.0, -15.0),  # fast ground shot
+			[
+				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),
+				_make_skater(2, TEAM_ID, teammate_pos, false),
+			])
+	# Carrier is set on puck even though the puck is in flight (this
+	# is just to test the reactive priority — in practice the puck
+	# wouldn't have a carrier mid-shot).
+	ctx.snapshot.puck_state.carrier_peer_id = 2
+	var d: RoleDecision = AIRoleFinisher.decide(ctx)
+	# Reactive should fire: aim override toward opp net.
+	assert_true(d.has_aim_override,
+			"reactive TIP should win over positioning when shot is incoming")
+	assert_almost_eq(d.aim_world_pos.z, OPP_NET_Z, 0.001)

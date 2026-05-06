@@ -137,5 +137,5 @@ func test_anti_crowding_avoids_candidates_near_teammates() -> void:
 	var ctx: RoleContext = _make_ctx(Vector3(8, 0, -5), anchor, 100, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	var dist_to_teammate: float = d.target_position.distance_to(teammate_at_anchor)
-	assert_gt(dist_to_teammate, AIRoleOutlet.ANTI_CROWD_RADIUS_M - 0.01,
+	assert_gt(dist_to_teammate, AIRoleHelpers.ANTI_CROWD_RADIUS_M - 0.01,
 			"chosen target must clear the anti-crowd radius around the teammate")
