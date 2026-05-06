@@ -1,15 +1,25 @@
 class_name AIActionScoring
 
 # Pure-function utility scoring for on-puck actions. Each score is a
-# multiplicative composition of factors in [0, 1]; the SM picks the
-# highest-scoring action and falls back to CARRY when none clears the
-# action threshold.
+# multiplicative composition of factors in [0, 1].
 #
-# Phase 5d shipped baseline SHOOT and PASS scoring. Phase 5e refactors
-# PASS to value the receiver's potential shot quality (so a teammate
-# at the same depth but with a wider-open net is a valid pass target —
-# fixes the "bots never pass side-to-side" problem) and gates passes
-# on a clear lane between shooter and receiver.
+# Two leaf scorers (score_shoot, score_pass) plus a recursive depth-2
+# score_at(pos) defined in the SM. Top-level options compete uniformly:
+#
+#   shoot:  score_shoot(self_pos)
+#   pass:   score_at(receiver_lead) × path_clearance × time_factor
+#   carry:  score_at(candidate)     × path_clearance × time_factor
+#
+# score_at(pos) = max(score_shoot(pos), carry_to_slot_from_pos)
+#
+# No leaf-pass term inside score_at — at depth 2 we only consider the
+# receiver's shot and their carry-to-slot. Stops the bot from
+# evaluating chains of passes (which can run away into mutual
+# back-and-forth pass loops) and bounds the recursion cleanly.
+#
+# No dump scoring — 3v3 doesn't reward dumps. No open-man / advance /
+# receiver_pressure heuristics — the recursive score_at captures
+# "what could the receiver do" with their actual options.
 
 # An opponent within this distance counts toward "pressure" on a target.
 # Tuning: raise toward 5 if bots feel oblivious to nearby defenders;
@@ -21,11 +31,17 @@ const PRESSURE_RADIUS_M: float = 4.0
 # trigger-happy); lower toward 2 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 3
 
-# Beyond this range, shots score 0 from distance alone — keeps bots from
-# launching pucks at the goalie from the blue line. Raise toward 22 if
-# bots refuse to take long shots even when wide open; lower toward 14
-# if blue-line shots are too common.
-const SHOT_RANGE_FALLOFF_M: float = 18.0
+# Beyond this range, shots score 0 from distance alone — keeps bots
+# from launching pucks at the goalie from the blue line. Linear falloff:
+# `1 - dist / SHOT_RANGE_FALLOFF_M`. Bumped from 18 → 22 to lift
+# mid-range scores: the response at 10 m is 0.55 instead of 0.44, so
+# clean mid-range shots score meaningfully and pass-to-receiver scores
+# (which transitively include `score_shoot(receiver)`) are pulled up
+# in the same band — passes to a teammate with a clear path to the
+# net are now competitive with self-carry-to-slot. Raise toward 26
+# if bots still refuse meaningful shots; lower toward 18 if blue-line
+# shots are too common.
+const SHOT_RANGE_FALLOFF_M: float = 22.0
 
 # Shooting-angle cone, measured from the net's outward normal (the
 # direction the net opens toward center ice). Inside SHOT_ANGLE_FULL_DEG
@@ -52,69 +68,26 @@ const SHOT_ANGLE_ZERO_DEG: float = 80.0
 # legitimate threading passes.
 const LANE_CLEAR_RADIUS_M: float = 1.5
 
-# Outlet pass scoring — when a receiver is "more advanced" toward the
-# attacking goal but too far to shoot themselves. Receiver must be at
-# least PASS_MIN_ADVANCE_M closer to goal to score above 0; saturates
-# at PASS_MAX_ADVANCE_M. Tuning: raise MIN if bots over-pass for tiny
-# advancement gains; raise MAX if long stretch passes feel under-valued.
-const PASS_MIN_ADVANCE_M: float = 3.0
-const PASS_MAX_ADVANCE_M: float = 12.0
-
-# Open-man pass: a teammate with no defender close in front of them is
-# a valid pass target even if they don't have a shot or aren't more
-# advanced. Possession-keeping pass.
+# Utility-AI knobs. _pick_action re-runs every physics tick and treats
+# CARRY as a fourth competing option scored as
 #
-# OPEN_MAN_RADIUS_M is the threat radius — opponents past this don't
-# count regardless of direction. OPEN_MAN_MAX_SCORE caps the receiver-
-# quality contribution so a wide-open teammate doesn't drown out a
-# shot or genuine outlet pass when those are available; it does clear
-# ACTION_THRESHOLD (0.25) on its own when the lane and pressure terms
-# cooperate. Tuning: raise OPEN_MAN_MAX_SCORE toward 0.5 to make bots
-# pass-happy on possession; lower toward 0.3 if they pass too often
-# instead of carrying.
-const OPEN_MAN_RADIUS_M: float = 3.0
-const OPEN_MAN_MAX_SCORE: float = 0.4
-
-# Score threshold below which the SM stays in CARRY rather than
-# committing to a SHOOT or PASS. Tunes how aggressive bots are.
-# Raise toward 0.35 to make bots more patient (carry more); lower
-# toward 0.15 to make them committal (shoot/pass on weaker reads).
-const ACTION_THRESHOLD: float = 0.25
-
-# DUMP zone factors. Lower in own zone than you might expect — 3v3
-# arcade hockey rewards breakouts more than safe clears, so bots try
-# pass/carry out first and only dump under heavy directional pressure.
-# Neutral-zone dump (e.g. carrying into a wall of defenders past the
-# red line) is the most natural use case. Never from OZ.
-# Tuning: raise DUMP_OWN_ZONE_FACTOR toward 0.6 if bots refuse to
-# clear under heavy DZ pressure; raise DUMP_NEUTRAL_ZONE_FACTOR toward
-# 0.85 if they should be more willing to dump in (less common in 3v3).
-const DUMP_OWN_ZONE_FACTOR: float = 0.4
-const DUMP_NEUTRAL_ZONE_FACTOR: float = 0.7
-const DUMP_OFFENSIVE_ZONE_FACTOR: float = 0.0
-
-# NZ-specific clear-path suppression. In 3v3 the carrier should drive
-# into the OZ rather than dump whenever there's open ice ahead —
-# controlled entries beat dumps in this format. When has_clear_forward_path
-# returns true, the NZ dump score is multiplied by this factor, dropping
-# 0.7 × 1.0 (full pressure) to 0.21 — below ACTION_THRESHOLD (0.25), so
-# DUMP loses to CARRY. Only triggers in NZ — DZ and OZ already handle
-# correctly without this branch. Tuning: raise RADIUS toward 5 for a
-# stricter "must have a real wall" rule; lower SUPPRESSION toward 0.1
-# to harder-suppress NZ dumps with any open ice.
-const NZ_DUMP_CLEAR_PATH_RADIUS_M: float = 3.0
-const NZ_DUMP_CLEAR_PATH_SUPPRESSION: float = 0.3
-
-# Backward-pass suppression. When the carrier has a clear forward
-# path toward the attacking goal (no opponents within
-# BACKWARD_PASS_FORWARD_PATH_RADIUS_M in the forward half-plane), a
-# pass whose receiver lies BEHIND the carrier (relative to the
-# attacking goal) is multiplied by BACKWARD_PASS_SUPPRESSION. Stops
-# bots from immediately passing back to a defender when there's
-# open ice to skate into. Forward path occluded → backward passes
-# remain a legitimate outlet (cycle / regroup).
-const BACKWARD_PASS_FORWARD_PATH_RADIUS_M: float = 6.0
-const BACKWARD_PASS_SUPPRESSION: float = 0.3
+#   carry_score = score_at(destination) × discount(time_to_destination)
+#
+# CARRY_DELAY_DISCOUNT_PER_SEC — per-second decay applied to a future
+# action's value. 0.7 / sec gives a ~2-second half-life. Reflects
+# compounding uncertainty over time. Raise toward 0.85 to make bots
+# more patient on long carries; lower toward 0.55 to commit to
+# immediate actions over long-distance carries more aggressively.
+#
+# ACTION_HYSTERESIS_MARGIN — once a fire intent is set, that intent
+# gets this bonus when re-scored. Prevents flicker between two
+# close-scoring fire options during pre-aim. Only applies to fire
+# intents (SHOOT, SLAPPER, PASS) — CARRY doesn't get a bonus, so the
+# bot is free to switch to fire as soon as fire scores higher.
+# Raise toward 0.10 if intent flickers visibly; lower toward 0.02 if
+# intent feels too sticky.
+const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
+const ACTION_HYSTERESIS_MARGIN: float = 0.05
 
 
 # Returns SHOOT score in [0, 1]. Multiplicative product of:
@@ -149,147 +122,43 @@ static func score_shoot(
 
 
 # Returns PASS score in [0, 1] for a specific receiver. Multiplicative:
-#   - lane_clear:           1.0 if no opponent in the bot→receiver line
-#   - receiver_quality:     max of (a) receiver's potential shot score
-#                           and (b) advancement bonus — covers both
-#                           "tape-to-tape into the slot" and "outlet
-#                           pass to a teammate up-ice"
-#   - 1 - receiver_pressure: how open the receiver is to catch
+#   - pass_lane:             1.0 if no opponent in the shooter→receiver line
+#   - score_shoot(receiver): receiver's value as a shooter from where
+#                            they are (geometry × shot lane × pressure).
 #
-# `receiver_quality_bonus` (default 1.0) multiplies receiver_quality
-# BEFORE the [0, 1] clamp. Used by the carrier to value a slapper-
-# charging teammate's shot opportunity higher without short-circuiting
-# the lane / pressure terms — a slapper-charging receiver behind a
-# blocked lane is still a 0-score pass.
+# Receiver-quality terms (open-man, advancement) are gone — at top
+# level the carrier evaluates each teammate via a recursive
+# score_at(receiver) that captures "they could shoot or drive to
+# slot." This leaf score_pass is what score_at falls back to for the
+# shoot branch from a receiver position; it doesn't recurse further
+# (no leaf-pass at depth 2) so the bot can't get into infinite
+# pass-back-and-forth evaluation loops.
 static func score_pass(
 		shooter: Vector3,
 		receiver: Vector3,
-		receiver_facing: Vector2,
 		attacking_goal: Vector3,
 		goalie_pos: Vector3,
 		net_half_width: float,
 		shadow_half: float,
-		opponents: Array[Vector3],
-		receiver_quality_bonus: float = 1.0) -> float:
-	# A receiver past the attacking goal line is degenerate (can't shoot,
-	# wraparound passes are weird). Skip.
+		opponents: Array[Vector3]) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
-	# Either net counts as a pass-lane obstruction. Catches the OZ
-	# corner-to-corner pass that sails through the back of the net
-	# (puck deflects off the netting and the bots loop), and any
-	# DZ pass that crosses the goal mouth.
 	if pass_lane_blocked_by_net(shooter, receiver):
 		return 0.0
 	var lane: float = _lane_clear(shooter, receiver, opponents)
 	if lane <= 0.0:
 		return 0.0
-	# Receiver quality: take the max of three terms.
-	# - shot quality: receiver has a real shot from where they are.
-	# - advancement: outlet to a teammate further up-ice.
-	# - open-man: receiver isn't being pressured from in front, so
-	#   this is a possession-keeping pass even with no shot or outlet
-	#   advantage. Capped low so it loses to genuine shot/outlet
-	#   targets when they exist.
-	var receiver_geom: float = _shot_geometry(receiver, attacking_goal, goalie_pos, net_half_width, shadow_half)
-	var advance: float = _advancement_score(shooter, receiver, attacking_goal)
-	var open: float = _receiver_open_score(receiver, receiver_facing, opponents)
-	var receiver_quality: float = clampf(
-			maxf(maxf(receiver_geom, advance), open) * receiver_quality_bonus,
-			0.0, 1.0)
-	# Directional pressure on the receiver — opponents in the receiver's
-	# forward cone toward the attacking goal are the ones who'll
-	# pressure them on reception. Defenders behind the receiver (between
-	# them and our own net) aren't realistic interception threats; the
-	# shooter→receiver lane block is already handled separately by
-	# `_lane_clear`.
-	var pressure_factor: float = 1.0 - _pressure(receiver, opponents, attacking_goal - receiver)
-	return lane * receiver_quality * pressure_factor
-
-
-# Returns DUMP score in [0, 1]. Bots dump when pressured and far from
-# the attacking goal — clear the zone, force the opponent to chase.
-# Multiplicative:
-#   - zone_factor: 1.0 in own zone, 0.7 in neutral zone, 0.0 in OZ
-#                  (no dumping from offensive zone — try to keep possession)
-#   - pressure:    fraction of PRESSURE_MAX_COUNT opponents around us
-#
-# Note that score_dump deliberately does NOT subtract score_shoot or
-# score_pass; the SM picks the max and CARRY is the fallback. If the
-# bot has both a high shot and high dump score in the slot under
-# pressure, the shot wins because SHOOT score multiplies in the
-# distance response (high in slot) while DUMP zone_factor is 0 there.
-static func score_dump(
-		shooter: Vector3,
-		attacking_goal: Vector3,
-		own_goal_dir: float,
-		blue_line_z: float,
-		opponents: Array[Vector3]) -> float:
-	var zone_factor: float = _dump_zone_factor(shooter.z, own_goal_dir, blue_line_z)
-	if zone_factor <= 0.0:
-		return 0.0
-	# Directional pressure — a chaser 3m behind the carrier doesn't
-	# justify a dump if the ice ahead is open. We're trying to score
-	# "can I get forward" not "is anyone close." Forward = toward the
-	# attacking goal.
-	var forward: Vector3 = attacking_goal - shooter
-	var pressure_factor: float = _pressure(shooter, opponents, forward)
-	# NZ clear-path override: in the neutral zone with open ice ahead,
-	# the carrier should drive in rather than dump. The pressure term
-	# alone isn't enough — its 4 m omnidirectional radius can still tag
-	# off-axis defenders and lift NZ dump score above threshold even
-	# when the forward lane is wide open.
-	if zone_factor == DUMP_NEUTRAL_ZONE_FACTOR \
-			and has_clear_forward_path(shooter, attacking_goal, opponents,
-					NZ_DUMP_CLEAR_PATH_RADIUS_M):
-		return zone_factor * NZ_DUMP_CLEAR_PATH_SUPPRESSION * pressure_factor
-	return zone_factor * pressure_factor
-
-
-# Returns the best of (SHOOT score from `pos`, max PASS score from `pos`
-# to any teammate). Used by the carrier's anchor search — the carrier
-# tries candidate positions around themselves and picks the one where
-# they'd have the best option (a shot or a feed). Drives "patient"
-# behavior: bot doesn't park at a fixed high slot, it moves toward
-# wherever the open option is.
-#
-# Note this differs from each individual score function only in that
-# we delegate to score_shoot / score_pass — the inputs are the same.
-# The wrapper exists so the SM doesn't have to duplicate the for-loop
-# over teammates inside its own search code.
-static func carry_position_score(
-		pos: Vector3,
-		attacking_goal: Vector3,
-		goalie_pos: Vector3,
-		net_half_width: float,
-		shadow_half: float,
-		teammate_positions: Array[Vector3],
-		teammate_facings: Array[Vector2],
-		opponents: Array[Vector3]) -> float:
-	var best: float = score_shoot(pos, attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
-	for i: int in teammate_positions.size():
-		var facing: Vector2 = teammate_facings[i] if i < teammate_facings.size() else Vector2.ZERO
-		var s: float = score_pass(pos, teammate_positions[i], facing,
-				attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
-		if s > best:
-			best = s
-	return best
+	# Receiver's value as a shooter from where they are. score_shoot
+	# already bakes in shot geometry, shot-lane clearance, and pressure
+	# on the shooter (= receiver here) — no separate receiver_pressure
+	# term needed.
+	var receiver_shot: float = score_shoot(
+			receiver, attacking_goal, goalie_pos, net_half_width, shadow_half, opponents)
+	return lane * receiver_shot
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-
-# Maps the shooter's z to a zone-specific dump factor.
-#   own zone:      own_goal_dir * z >  +blue_line_z
-#   offensive zone:own_goal_dir * z <  -blue_line_z
-#   neutral zone:  in between
-static func _dump_zone_factor(self_z: float, own_goal_dir: float, blue_line_z: float) -> float:
-	var oriented_z: float = own_goal_dir * self_z
-	if oriented_z > blue_line_z:
-		return DUMP_OWN_ZONE_FACTOR
-	if oriented_z < -blue_line_z:
-		return DUMP_OFFENSIVE_ZONE_FACTOR
-	return DUMP_NEUTRAL_ZONE_FACTOR
 
 # Geometric shot quality from a position: openness × distance response.
 # Used by both SHOOT (shooter geometry) and PASS (receiver geometry).
@@ -349,19 +218,6 @@ static func _net_openness(
 	return clampf((net_width - covered) / net_width, 0.0, 1.0)
 
 
-# Advancement bonus in [0, 1] for outlet-style passes. Receiver must be
-# at least PASS_MIN_ADVANCE_M closer to the attacking goal than the
-# shooter; saturates at PASS_MAX_ADVANCE_M.
-static func _advancement_score(shooter: Vector3, receiver: Vector3, attacking_goal: Vector3) -> float:
-	var my_dist: float = shooter.distance_to(attacking_goal)
-	var their_dist: float = receiver.distance_to(attacking_goal)
-	var advance: float = my_dist - their_dist
-	if advance < PASS_MIN_ADVANCE_M:
-		return 0.0
-	var span: float = PASS_MAX_ADVANCE_M - PASS_MIN_ADVANCE_M
-	return clampf((advance - PASS_MIN_ADVANCE_M) / span, 0.0, 1.0)
-
-
 # True if `pos` is past the attacking goal line in the direction the
 # attacking team is going (i.e. "behind the net" relative to the
 # shooter). For Team 0 attacking -Z (attacking_goal.z = -26.65),
@@ -370,33 +226,12 @@ static func _is_past_goal_line(pos: Vector3, attacking_goal: Vector3) -> bool:
 	return (pos.z - attacking_goal.z) * signf(attacking_goal.z) > 0.0
 
 
-# Open-man receiver score. Wraps the same opponent-density helper as
-# _pressure but with a tighter radius (3 m, "in your kitchen") and a
-# directional weighting against the receiver's facing — a forechecker
-# in front is a real threat; a backchecker behind can't disrupt the
-# reception. Capped at OPEN_MAN_MAX_SCORE so a wide-open teammate
-# competes with shot/outlet quality but doesn't drown them out.
-#
-# receiver_facing is Vector2 packing world XZ (matches
-# SkaterNetworkState.facing). Zero-magnitude facing falls through to
-# max score (no orientation data → assume open).
-static func _receiver_open_score(
-		receiver: Vector3,
-		receiver_facing: Vector2,
-		opponents: Array[Vector3]) -> float:
-	var forward: Vector3 = Vector3(receiver_facing.x, 0.0, receiver_facing.y)
-	if forward.length_squared() < 0.0001:
-		return OPEN_MAN_MAX_SCORE
-	var density: float = _opponent_density(receiver, opponents, forward, OPEN_MAN_RADIUS_M, 1)
-	return OPEN_MAN_MAX_SCORE * (1.0 - density)
-
-
 # Pressure score in [0, 1] for "do nearby opponents threaten this
 # target." Wraps _opponent_density with the standard PRESSURE_* radii.
-# All current callers (score_shoot, score_pass receiver, score_dump)
-# pass a forward direction so the cube falloff applies; the
-# Vector3.ZERO default is kept as a safety fallback (omnidirectional,
-# every opponent in radius weighted 1.0) but isn't currently used.
+# All current callers (score_shoot, score_pass receiver) pass a
+# forward direction so the cube falloff applies; the Vector3.ZERO
+# default is kept as a safety fallback (omnidirectional, every
+# opponent in radius weighted 1.0) but isn't currently used.
 static func _pressure(target: Vector3, opponents: Array[Vector3],
 		forward: Vector3 = Vector3.ZERO) -> float:
 	return _opponent_density(target, opponents, forward, PRESSURE_RADIUS_M, PRESSURE_MAX_COUNT)
@@ -440,38 +275,15 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 	return clampf(weighted / float(max_count), 0.0, 1.0)
 
 
-# True iff there is no opponent within `radius` of `from` whose
-# position projects forward of `from` along the from→toward axis.
-# Used by score_dump's NZ override to detect "open ice ahead." Tighter
-# than the omnidirectional pressure check — we only care about
-# defenders we'd have to skate through, not ones to the sides or
-# behind.
-static func has_clear_forward_path(from: Vector3, toward: Vector3,
-		opponents: Array[Vector3], radius: float) -> bool:
-	var fwd_x: float = toward.x - from.x
-	var fwd_z: float = toward.z - from.z
-	var fl: float = sqrt(fwd_x * fwd_x + fwd_z * fwd_z)
-	if fl < 0.001:
-		return true
-	var inv_fl: float = 1.0 / fl
-	fwd_x *= inv_fl
-	fwd_z *= inv_fl
-	var r2: float = radius * radius
-	for op: Vector3 in opponents:
-		var dx: float = op.x - from.x
-		var dz: float = op.z - from.z
-		var d2: float = dx * dx + dz * dz
-		if d2 >= r2:
-			continue
-		# Anything strictly forward of the carrier counts as in the way.
-		if dx * fwd_x + dz * fwd_z > 0.0:
-			return false
-	return true
-
-
 # Lane-clear factor in [0, 1]. 1.0 = no opponent within
 # LANE_CLEAR_RADIUS_M of the bot→receiver segment; 0.0 = opponent right
-# on the line. Smooth linear ramp between.
+# on the line. Concave (sqrt) ramp between — defenders within reach
+# of the line still hurt the score, but moderate-distance defenders
+# don't crush it. Linear was too harsh: a defender 0.5 m off the
+# 1.5 m radius dropped lane to 0.33 (× shot/pass score), killing
+# otherwise-good shots through partial traffic. Sqrt: same defender
+# yields lane = 0.58. Real shots through traffic find the net more
+# often than a third of the time.
 #
 # Only counts opponents whose projection onto the segment falls between
 # the endpoints (t ∈ [0, 1]) — opponents behind the shooter or past the
@@ -499,7 +311,21 @@ static func _lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3]) -
 	if min_perp_sq == INF:
 		return 1.0
 	var perp: float = sqrt(min_perp_sq)
-	return clampf(perp / LANE_CLEAR_RADIUS_M, 0.0, 1.0)
+	return clampf(sqrt(perp / LANE_CLEAR_RADIUS_M), 0.0, 1.0)
+
+
+# Public lane-clearance check — returns 1.0 if the path from `from`
+# to `to` is clear, 0.0 if an opponent is sitting on the line, and a
+# linear ramp between based on perpendicular distance up to
+# LANE_CLEAR_RADIUS_M. Used by carry-candidate scoring to penalize
+# destinations the bot can't reach without going around a defender.
+# Caller should project opponents forward by the candidate's expected
+# arrival time so the check reflects where defenders WILL BE when
+# the bot gets there, not where they are now (same approach as
+# pass-lane scoring with flight-time projection).
+static func path_clearance(from: Vector3, to: Vector3,
+		projected_opponents: Array[Vector3]) -> float:
+	return _lane_clear(from, to, projected_opponents)
 
 
 # True iff the segment from `from` to `to` (in world XZ) intersects
@@ -526,6 +352,34 @@ static func pass_lane_blocked_by_net(from: Vector3, to: Vector3) -> bool:
 			-(goal_line_z + net_depth), -goal_line_z):
 		return true
 	return false
+
+
+# Own-DZ slot danger zone. True iff the pass segment crosses the
+# rectangle in front of OUR net — the high-danger area where a
+# deflected/intercepted pass becomes a goal against. Asymmetric to
+# `pass_lane_blocked_by_net` because passes through OPP slot are
+# legitimate (backdoor / cross-crease feeds); only OWN slot is risky.
+#
+# Slot rect: x ∈ ±OWN_DZ_SLOT_HALF_WIDTH_M, z ∈ [own_goal_line - depth,
+# own_goal_line] for own_goal_z > 0; mirrored for own_goal_z < 0.
+const OWN_DZ_SLOT_HALF_WIDTH_M: float = 2.0
+const OWN_DZ_SLOT_DEPTH_M: float = 5.0
+static func pass_crosses_own_slot(from: Vector3, to: Vector3, own_goal_z: float) -> bool:
+	var depth: float = OWN_DZ_SLOT_DEPTH_M
+	var half_w: float = OWN_DZ_SLOT_HALF_WIDTH_M
+	if own_goal_z > 0.0:
+		# Team 0: own net at +z. Slot is in front of goal line,
+		# z ∈ [own_goal_z - depth, own_goal_z].
+		return _segment_crosses_aabb_xz(
+				from.x, from.z, to.x, to.z,
+				-half_w, half_w,
+				own_goal_z - depth, own_goal_z)
+	else:
+		# Team 1: own net at -z. Slot z ∈ [own_goal_z, own_goal_z + depth].
+		return _segment_crosses_aabb_xz(
+				from.x, from.z, to.x, to.z,
+				-half_w, half_w,
+				own_goal_z, own_goal_z + depth)
 
 
 # Liang-Barsky parametric clipping: returns true iff the segment from

@@ -1,35 +1,46 @@
 class_name TeamBrain
 extends RefCounted
 
-# Per-team strategy node. Owns role assignments + man coverage targets.
-# Driven by GameManager._physics_process (host only) — ticks once every
-# TICK_PERIOD seconds rather than every physics frame so role decisions
-# don't churn at 240 Hz. Spec called for a 6 Hz Timer Node; we use a
-# RefCounted with an accumulator to keep ownership/lifecycle simpler.
+# Per-team strategy node, v2 (possession-state model). Replaces the
+# F1/F2/F3 closest-to-puck role assignment + man-to-man coverage
+# assignment with a single positional-slot system driven by team
+# possession state. See `docs/specs/AI_PLAN.md` (v2 model).
+#
+# Driven by GameManager._physics_process (host only) — ticks once
+# every TICK_PERIOD seconds (~6 Hz).
 #
 # Blackboard:
-#   roles: peer_id → StringName (F1 / F2 / F3 / OFF)
-#   coverage_targets: peer_id → opposing peer_id  (man-marking)
-# The SM uses coverage_targets only when in DZ + not in own possession;
-# in other situations it falls back to zone-style F2/F3 anchors.
+#   state              — AIPossessionState.State enum (DZONE / OZONE /
+#                        TRANS_DO / TRANS_OD / NEUTRAL).
+#   slot_assignments   — Dictionary[peer_id, AIRoleSlots.Slot].
 #
-# Consumes the existing WorldSnapshot captured by StateBufferManager.
-# team_id_resolver is `func(peer_id: int) -> int` — bound by GameManager
-# at construction (see _registry.resolve_team_id_for_peer).
+# Roles assigned by current geometry per brain tick — no SPRINT_BY
+# locking; the bot whose body is in the right place gets the role.
+# Hysteresis (1.5 m) prevents flicker from small position changes.
+#
+# `team_id_resolver` is `func(peer_id: int) -> int` — bound by
+# GameManager at construction (see `_registry.resolve_team_id_for_peer`).
+# `is_human_resolver` is no longer used in v2 (no role-yield logic),
+# kept on the constructor signature for backwards compatibility with
+# GameManager's existing call site.
 
 const TICK_PERIOD: float = 1.0 / 6.0
+# Strong-side X is sign(puck.x) but with a hysteresis band so the
+# strong/weak side doesn't flip every tick when the puck cycles
+# through center. Once we've picked +1, only flip to -1 when puck.x
+# crosses below -STRONG_SIDE_HYSTERESIS_M, and vice versa. Without
+# this, NET / BACKDOOR / etc. anchors flip strong-side rapidly on a
+# corner-to-corner cycle and bots try to switch sides every brain tick.
+const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
-var roles: Dictionary = {}              # peer_id -> StringName (F1 / F2 / F3 / OFF)
-var coverage_targets: Dictionary = {}   # peer_id -> opposing peer_id
-# Each off-puck bot publishes the world-space anchor it's currently
-# steering toward each tick. Carrier bots read this to lead passes
-# more accurately — a receiver who is currently moving away from the
-# puck but steering toward an anchor will end up at the anchor, not
-# at the velocity-extrapolated position. Cleared per-tick by writers;
-# stale entries are harmless because pass aim falls back to velocity-
-# only prediction when no anchor is published.
-var published_anchors: Dictionary = {}  # peer_id -> Vector3
+var state: int = AIPossessionState.State.DZONE
+var slot_assignments: Dictionary = {}      # peer_id -> AIRoleSlots.Slot
+
+# Internal — sticky possession for loose-puck handling.
+var _last_carrier_team: int = -1
+# Hysteretic strong-side X. Updated per brain tick from puck.x.
+var _strong_x: float = 1.0
 
 var _accumulator: float = 0.0
 var _team_id_resolver: Callable = Callable()
@@ -53,31 +64,51 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	if _accumulator < TICK_PERIOD:
 		return
 	_accumulator -= TICK_PERIOD
-	roles = AIRoleAssignment.compute(snapshot, team_id, _team_id_resolver, _is_human_resolver)
-	# Pass the previous tick's coverage_targets so AICoverageAssignment
-	# can keep marks sticky — eliminates DZ flicker when F1/F2/F3 role
-	# labels swap between ticks as the opp passes around.
-	var prev_coverage: Dictionary = coverage_targets
-	coverage_targets = AICoverageAssignment.compute(
-			snapshot, team_id, _own_goal_z, _team_id_resolver, roles, prev_coverage)
+
+	# 1. Possession state.
+	var new_state_pair: Array = AIPossessionState.compute(
+			snapshot, team_id, _own_goal_z, _team_id_resolver, _last_carrier_team)
+	var new_state: int = new_state_pair[0]
+	_last_carrier_team = new_state_pair[1]
+	state = new_state
+
+	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
+	if snapshot != null and snapshot.puck_state != null:
+		var puck_x: float = snapshot.puck_state.position.x
+		if _strong_x > 0.0 and puck_x < -STRONG_SIDE_HYSTERESIS_M:
+			_strong_x = -1.0
+		elif _strong_x < 0.0 and puck_x > STRONG_SIDE_HYSTERESIS_M:
+			_strong_x = 1.0
+
+	# 3. Slot assignment by current geometry. CARRIER is fixed to the
+	#    puck holder; everything else falls out of the permutation
+	#    enumeration with hysteresis. No locking needed.
+	var prev_assignments: Dictionary = slot_assignments
+	slot_assignments = AIRoleSlots.assign(
+			snapshot, team_id, _own_goal_z, state, _team_id_resolver,
+			prev_assignments, _strong_x)
 
 
-func get_role(peer_id: int) -> StringName:
-	return roles.get(peer_id, AIRoleAssignment.ROLE_OFF)
+# Returns the slot a peer is currently assigned to, or NONE if not
+# assigned (e.g., peer_id isn't on this team, or the brain hasn't
+# ticked yet).
+func get_slot(peer_id: int) -> int:
+	return slot_assignments.get(peer_id, AIRoleSlots.Slot.NONE)
 
 
-func get_coverage_target(peer_id: int) -> int:
-	# Returns 0 (sentinel — no real peer_id is 0) when no mark assigned.
-	return coverage_targets.get(peer_id, 0)
-
-
-# Called by each off-puck bot per physics tick to publish where they're
-# steering. Read by the carrier in `_pass_aim_point` for receiver lead.
-func publish_anchor(peer_id: int, anchor: Vector3) -> void:
-	published_anchors[peer_id] = anchor
-
-
-# Returns the receiver's published steering anchor, or Vector3.ZERO if
-# none has been published yet (carrier should fall back to velocity-only).
-func get_published_anchor(peer_id: int) -> Vector3:
-	return published_anchors.get(peer_id, Vector3.ZERO)
+# Computes the world-space anchor for a given peer's current slot.
+# Returns Vector3.ZERO if the peer isn't assigned a slot.
+func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
+	var slot: int = slot_assignments.get(peer_id, AIRoleSlots.Slot.NONE)
+	if slot == AIRoleSlots.Slot.NONE:
+		return Vector3.ZERO
+	if snapshot == null or snapshot.puck_state == null:
+		return Vector3.ZERO
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var carrier_pos: Vector3 = puck_pos
+	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
+	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
+		carrier_pos = snapshot.skater_states[carrier_pid].position
+	return AIRoleSlots.slot_anchor(
+			slot, state, puck_pos, carrier_pos,
+			_own_goal_z, _strong_x)

@@ -14,9 +14,12 @@ var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
 
-# Debug: floating label above each bot showing current state, top-3
-# scores, and last committed decision. Refreshed at ~10 Hz so text
-# stays readable. Toggle to false to disable for shipping.
+# Debug: floating label above each bot showing current state and last
+# fired action (PASS→<Slot> / SHOOT / SLAP). Action is set when
+# the press actually fires, not when intent is picked, so the label
+# reflects what the bot did rather than what it considered. Refreshed
+# at ~10 Hz so text stays readable. Toggle to false to disable for
+# shipping.
 const SHOW_DEBUG_LABEL: bool = false
 const DEBUG_LABEL_REFRESH_TICKS: int = 24  # 240 / 24 = 10 Hz
 const DEBUG_LABEL_HEIGHT_M: float = 2.4    # above the head
@@ -87,10 +90,7 @@ func _refresh_debug_label() -> void:
 		return
 	_debug_refresh_counter = 0
 	var lines: Array[String] = []
-	lines.append("[%s] %s" % [_agent.debug_role(), _agent.debug_state_name()])
-	var scores: Array[String] = _agent.debug_scores()
-	if not scores.is_empty():
-		lines.append("  ".join(scores))
+	lines.append("%s [%s]" % [_agent.debug_role(), _agent.debug_state_name()])
 	var last: String = _agent.debug_last_decision()
 	if last != "":
 		lines.append("last: " + last)

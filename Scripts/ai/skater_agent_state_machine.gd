@@ -7,7 +7,7 @@ extends RefCounted
 # AIController glue, the SM owns identity + state transitions + per-state
 # behavior.
 #
-# Adding a new behavior (PASS, DUMP, PROTECT) is a clean four-step recipe:
+# Adding a new behavior (PASS, PROTECT, etc.) is a clean four-step recipe:
 #   1. Append a State enum value
 #   2. Add a match arm in dispatch()
 #   3. Write the _state_<name> handler
@@ -27,128 +27,36 @@ extends RefCounted
 #                  (next tick, release fires)
 
 enum State {
-	OFF_PUCK,         # default off-puck — anchor above puck, aim at goal
-	CHASE_PUCK,       # F1 without puck — pursue, blade on the puck
+	OFF_PUCK,         # default off-puck — anchor from brain slot
+	CHASE_PUCK,       # loose-puck chase — pursue, blade on the puck
 	CARRY,            # with puck, no committed action — aim at goal
 	SHOOT_PRESSED,    # multi-tick wrister charge aimed at goalie shadow
 	SLAPPER_PRESSED,  # multi-tick slapper charge — bigger commit, more power
 	PASS_PRESSED,     # one-tick press window aimed at a teammate's lead position
-	DUMP_PRESSED,     # one-tick press window aimed at a deep-zone clear
-	ONE_TIMER_CHARGE, # off-puck slapper pre-charge — demanding the puck
 }
 
-# Off-puck anchor offsets. F2 is the triangle apex on the strong side
-# (puck's X side), 3 m off the puck X-wise and 2 m back toward our own
-# goal Z-wise. F3 is the weak-side trailer, 5 m mirrored across the
-# puck X and 8 m back. The legacy OFF anchor (no F2/F3 role assigned —
-# 4+ teammates case) keeps the original above-puck behavior.
-const F2_OFFSET_X: float = 3.0
-const F2_OFFSET_Z_BACK: float = 2.0
-# Wider F2 strong-side X during own possession on the defensive half
-# (NZ or DZ). Stretches the breakout triangle: the carrier (F1) is
-# typically already strong-side, F2 backs off into more space rather
-# than crowding F1, and F3 is far weak-side at depth (see
-# F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M). The absolute
-# offset puts F2 ~4-5 m off the puck X regardless of where on the
-# rink the carrier is, which gives the carrier a real outlet lane
-# instead of a teammate one stick-length away.
-const F2_OWN_POSSESSION_DEF_HALF_OFFSET_X: float = 5.0
-# F1 pressure read: when F1 has 2+ defenders within F1_PRESSURE_RADIUS_M,
-# F2 collapses from the wide triangle apex to a tight close-support
-# position — assist the carrier directly instead of holding apex space.
-# When F1 has space, F2 stays at the apex looking like a passing
-# option.
-const F1_PRESSURE_RADIUS_M: float = 3.5
-const F1_HEAVY_PRESSURE_COUNT: int = 2
-const F2_SUPPORT_OFFSET_X: float = 1.5
-const F2_SUPPORT_OFFSET_Z_BACK: float = 1.5
-# F3 shades to the STRONG side (puck side) by this much. Real-hockey
-# high man / trailer typically pinches with the play rather than
-# camping the weak side — a strong-side F3 closes off the
-# puck-supporting passing lane and is in position to pinch on a loose
-# puck. Small magnitude so they don't bunch with F2 (3 m strong-side).
-const F3_OFFSET_X_STRONG: float = 2.0
-const F3_OFFSET_Z_BACK: float = 8.0
-# F3 z-back offset when our team has possession in NZ or DZ
-# (breakout / regroup scenarios). Larger than the loose / opp-
-# possession default so F3 stays well behind the puck and doesn't
-# push high while the carrier is still in our defensive half — they
-# remain the safety against a turnover all the way through the
-# breakout, only releasing high once the puck enters OZ (where the
-# OZ branch takes over). Tuning: raise toward 18 if F3 still pushes
-# too high during NZ regroups; lower toward 10 if cross-rink support
-# feels too distant.
-const F3_OWN_POSSESSION_DEF_HALF_OFFSET_Z_BACK: float = 14.0
-# F3 weak-side absolute X during own possession on the defensive
-# half (NZ or DZ). Mirrors the OZ triangle pattern: F1 carries, F2
-# offers short strong-side support, F3 is the long cross-rink
-# outlet at depth. The wide spacing opens a real breakout pass
-# lane and stretches the team across the rink so we're not
-# clustered. Absolute X (sign flipped from strong_x) so F3 sits
-# weak-side regardless of where the puck currently is.
-const F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M: float = 6.0
-# In OZ, F3 trails the puck by this far toward our own goal — but
-# clamped between the OZ blue line and the back of the OZ faceoff
-# circles (see F3_OZ_DOT_BACK_OFFSET_M). 3v3 doesn't need a strict
-# "glued to the blue line" high man like 5v5; F3 just shouldn't crash
-# the net and let opponents get behind them on a turnover.
-const F3_OZ_TRAIL_DEPTH_M: float = 5.0
-# Faceoff circle radius (NHL standard ≈ 15 ft). The back edge of the
-# OZ faceoff circle (toward NZ) is the deepest F3 will go — past that
-# point, a turnover means we're gone before we can recover.
-const F3_OZ_DOT_BACK_OFFSET_M: float = 4.5
-# F3 high-man depth when our team has possession in the OZ. Sit just
-# inside the OZ blue line as a free safety so a turnover doesn't leak
-# a 2-on-1 the other way. The back-of-dots clamp is the right depth
-# when defending or chasing a loose puck in OZ; during own possession
-# the higher position prevents breakaway/odd-man rushes the moment we
-# cough it up. 3v3-specific: with no D pair behind us, F3 is the only
-# thing standing between a turnover and a clean breakaway.
-const F3_OZ_OWN_POSSESSION_DEPTH_M: float = 2.0
-# F3 weak-side X offset from rink center during own OZ possession.
-# Combined with F2's strong-side apex this forms the 3v3 attacking
-# triangle: carrier (F1) somewhere with the puck, F2 short-support on
-# the strong side, F3 wide on the weak side at the blue line. The
-# wide spacing gives the carrier a real cross-ice outlet rather than
-# two stacked strong-side support options. Magnitude tuned so F3
-# sits roughly above the weak-side faceoff dot — far enough across
-# the rink to open a true cross-pass lane, not so far they lose the
-# blue-line safety angle.
-const F3_OZ_WEAK_SIDE_OFFSET_M: float = 6.0
-const LEGACY_OFF_DEPTH: float = 4.0
-# Man-to-man gap: defender anchors this far on the goal-side of their
-# mark, on the line from mark → our net.
-const MAN_GAP_DEPTH_M: float = 1.0
-# Lead time for predicting mark position. Defender anchors against where
-# the mark WILL BE, not where they are right now — without this, the
-# defender is always trailing a step behind a moving forward.
-const MAN_LEAD_TIME_S: float = 0.5
-# Strong-side X is sign(puck.x), but only when the puck is meaningfully
-# off-center; below this we default to the +X side so we don't flip
-# F2/F3 sides every time the puck wiggles through center.
-const STRONG_SIDE_X_DEADBAND: float = 0.5
-# Hysteresis on the strong-side sign: once we've picked +1, only flip
-# to -1 when puck.x crosses below -STRONG_SIDE_HYSTERESIS_M (and vice
-# versa). The static `STRONG_SIDE_X_DEADBAND` alone wasn't enough —
-# puck oscillating around x = -0.5 would flip strong_x, jumping the
-# F2/F3 anchor 6 m laterally each tick. The 1.5 m hysteresis band
-# means the puck has to commit to the other side before the bot
-# flips. Bigger band = more sticky; smaller = more responsive.
-const STRONG_SIDE_HYSTERESIS_M: float = 1.5
+# Effective rotation rate for facing in rad/s. SkaterController's
+# `facing_drag_speed` is 3.0 used as a lerp factor — the actual
+# convergence is exponential and faster than 3.0 rad/s linear early
+# on. ~6 rad/s linear is a reasonable approximation: 90° rotation
+# in ~0.26 s, 180° in ~0.52 s. Used by `_compute_best_pass` to add
+# rotation time to the pass time-decay so back-passes self-discount
+# (they take longer because the bot has to rotate to face the
+# receiver before the blade can fire there).
+const BOT_FACING_ROTATION_RATE_RAD_S: float = 6.0
+
 # Margins from the rink edge / goal line that anchors are clamped inside of.
 const RINK_X_INSET: float = 0.5
 const RINK_Z_INSET: float = 1.0
 
-const QUIET_EYE_TICKS: int = 8
-
-# After CARRY's `_pick_action` chooses an action (PASS/DUMP/SHOOT/
+# After CARRY's `_pick_action` chooses an action (PASS / SHOOT /
 # SLAPPER), the bot doesn't transition immediately — it pre-aims by
 # setting the mouse target to the action's aim direction and waits
 # for the motion-limited mouse to converge before firing. Without
 # this, the action state's first tick fires with the mouse still
 # mid-traversal from CARRY's previous target, so quick-shot
-# direction (PASS/DUMP) and slapper locked-direction (SLAPPER) end
-# up at whatever angle the mouse happened to be at.
+# direction (PASS) and slapper locked-direction end up at whatever
+# angle the mouse happened to be at.
 #
 # AIM_CONVERGED_DIST_M is the distance threshold treated as
 # "converged" — must be larger than the per-tick step
@@ -159,9 +67,13 @@ const QUIET_EYE_TICKS: int = 8
 # INTENT_MAX_WAIT_TICKS is a safety timeout: after this many ticks
 # of waiting, fire anyway. A receiver who keeps moving might never
 # let the mouse "fully" converge; the timeout keeps the bot from
-# pre-aiming forever.
+# pre-aiming forever. Bumped from 60 → 180 (250 ms → 750 ms) to
+# accommodate facing rotation: a 180° back-pass needs ~520 ms for
+# the body to rotate (per BOT_FACING_ROTATION_RATE_RAD_S), so the
+# old 250 ms cap fired the press before the body finished rotating
+# and the puck went out the ROM edge instead of at the receiver.
 const AIM_CONVERGED_DIST_M: float = 0.15
-const INTENT_MAX_WAIT_TICKS: int = 60   # ~250 ms at 240 Hz
+const INTENT_MAX_WAIT_TICKS: int = 180   # ~750 ms at 240 Hz
 # Bias applied to score_pass when the receiver is human. Bots pass to
 # the player about 25% more often than to another bot for the same
 # raw scoring conditions — the human is the actor, the bots are
@@ -201,23 +113,6 @@ const PASS_PUCK_SPEED_REF_M_S: float = 22.0
 # Cap on pass lead so a degenerate state (zero pass speed estimate, or a
 # long bomb across the rink) doesn't project the receiver into next week.
 const PASS_LEAD_MAX_S: float = 0.6
-# Blend factor between pure-velocity and anchor-based receiver
-# prediction. 0.0 = velocity only (the old behavior); 1.0 = assume the
-# receiver heads dead at their anchor at their current speed. The
-# receiver in reality follows a curved path between the two — they
-# can't change direction instantly but they aren't ballistic either.
-# 0.5 splits the difference and visibly tightens passes to receivers
-# who are mid-turn toward an anchor (e.g., F3 cutting across to the
-# weak side, give-and-go cuts) without overshooting receivers who are
-# already lined up.
-const PASS_RECEIVER_ANCHOR_BLEND: float = 0.5
-# DUMP aim — deep into the attacking zone, on the bot's strong side.
-# DUMP_CORNER_X is the absolute X of the dump target (corner area).
-# DUMP_DEPTH_FROM_GOAL_M is how far in front of the attacking goal line
-# the dump lands (deep-zone corner, far from the net so the goalie
-# can't easily glove it).
-const DUMP_CORNER_X: float = 8.0
-const DUMP_DEPTH_FROM_GOAL_M: float = 6.0
 # After a puck-engagement event (we got stripped, or we just stripped
 # someone — both detected as "puck became loose while we were close"),
 # pull the blade back to our body for this many ticks. Speed-scaled:
@@ -276,16 +171,15 @@ const CARRY_SEARCH_STEP_M: float = 3.0
 # Margin from the attacking goal line we won't drift past while
 # searching (carrier shouldn't anchor behind the net).
 const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
-# Tiebreak boost added to candidate carry-position scores based on
-# proximity to the attacking goal. When all candidates score low
-# (no shot, no pass, defenders in front), this nudges the bot
-# toward the closest-to-net candidate so they drive the net
-# instead of freezing in place. A real shot or pass score (0.3+)
-# easily beats the bias (max 0.05 at goal line), so it only
-# matters when nothing else differentiates the candidates. Tuning:
-# raise toward 0.1 if bots still freeze; lower toward 0.02 for a
-# subtler nudge.
-const CARRY_DRIVE_NET_BIAS: float = 0.05
+# Minimum effective travel speed for momentum-aware time-to-arrive.
+# When the bot is moving away from a destination, momentum subtracts
+# from CHASE_SPEED_REF_M_S; this floor keeps the implied time finite
+# (otherwise reverse-direction candidates would have infinite decay
+# and never get picked even when they're the right move). 1.0 m/s
+# represents "I have to brake and reverse, but I'll get there
+# eventually." Raise toward 2 if bots feel sluggish about reversing;
+# lower toward 0.5 if they reverse too eagerly.
+const MIN_TRAVEL_SPEED_M_S: float = 1.0
 
 # CARRY blade aim distance (m forward in goal direction). Mouse on the
 # goal plane (25+ m away) was useless for stickhandling: a 0.3 m
@@ -351,7 +245,7 @@ const BOT_WRISTER_SCREEN_DELTA_PER_TICK: float = (
 # Mid-charge bail radius. If an opponent gets inside this distance
 # while we're charging, cancel via block_held — getting blasted in the
 # slot mid-windup is worse than not shooting. The carry state can re-
-# evaluate next tick (probably picks DUMP or PASS).
+# evaluate next tick (probably picks PASS or stays in CARRY).
 const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
 # Lookahead used to score a wrister at COMMIT time. The shot fires
 # ~250 ms after we decide to take it; defenders can move 1.0–1.5 m in
@@ -419,117 +313,30 @@ const BOT_SLAPPER_LOOKAHEAD_S: float = (
 # under-committed to slappers when clean; lower toward 1.0 if they
 # slap too often.
 const SLAPPER_POWER_BONUS: float = 1.15
+# Slapper velocity penalty: SkaterController locks the slapper aim at
+# the moment of charge start. If the bot is moving when they begin
+# the charge, the body has translated several metres by the 0.55 s
+# release time and `(blade − player)` no longer points where the bot
+# intended. Multiplying slapper_score by this factor when bot speed
+# exceeds SLAPPER_MAX_SPEED_M_S pushes the bot to wrister instead
+# (wrister can update aim during the 0.25 s wind, so it tolerates
+# motion). Tuning: lower SLAPPER_MAX_SPEED_M_S toward 3 if slappers
+# still misfire while moving; raise toward 7 if bots refuse slappers
+# during normal carry speed.
+const SLAPPER_MAX_SPEED_M_S: float = 5.0
+const SLAPPER_MOTION_PENALTY: float = 0.3
 
-# ── One-timer pre-charge ─────────────────────────────────────────────────────
-# Off-puck bot in good shot position pre-charges a slapper, broadcasting
-# `shot_state == SLAPPER_CHARGE_WITHOUT_PUCK` to the rest of the team.
-# The carrier reads this from the snapshot and boosts pass score
-# heavily for the slapper-charging teammate — no telegraphed pass, no
-# shared blackboard, the receiver "demands" the puck just by visibly
-# winding up. SkaterController's existing without-puck slapper
-# mechanic handles the rest: bot fires `slap_pressed` once, holds
-# `slap_held`, and on release `try_one_timer_release` fires the
-# one-timer if the puck is in the slapper zone.
-#
-# Trigger threshold is the same as ACTION_THRESHOLD-ish — score_shoot
-# from the bot's current position must clear ONE_TIMER_TRIGGER_THRESHOLD
-# (lower than ACTION_THRESHOLD so charges happen more readily; the
-# cost of a wasted charge is just velocity drag).
-const ONE_TIMER_TRIGGER_THRESHOLD: float = 0.4
-# Release distance: drop slap_held when the puck is within this much
-# of the bot's slapper zone center (NOT the bot's body). Zone radius
-# is 0.5 m; SkaterController's `try_one_timer_release` adds velocity-
-# scaled leniency on top (puck speed × 0.05 s), so 1.0 m at the
-# zone-center sits well inside the effective release window for
-# typical pass speeds (~22 m/s → leniency ≈ 1.6 m).
-const ONE_TIMER_RELEASE_DISTANCE_M: float = 1.0
-# Max charge duration. After this many ticks with no pass, abort the
-# charge — the puck isn't coming, holding longer just keeps the bot
-# stuck in slapper drag.
-const ONE_TIMER_MAX_CHARGE_TICKS: int = 240   # 1 s
-# Pass score multiplier for a teammate currently in
-# SLAPPER_CHARGE_WITHOUT_PUCK. They're explicitly asking for the
-# puck; reward the carrier for feeding them. 2.0 is enough to win
-# over most other passes when the lane is reasonably clean.
-const ONE_TIMER_TARGET_BONUS: float = 2.0
-# Mirror of SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK (=4).
-const _SHOT_STATE_SLAPPER_CHARGE_WITHOUT_PUCK: int = 4
-# Slapper zone offsets in player-local space. Mirror SkaterController's
-# `slapper_zone_offset_z` (forward, magnitude) and `slapper_zone_offset_x`
-# (lateral toward blade side). Used to compute the bot's zone position
-# in world space for both the pre-charge geometry gate (receiver-side)
-# and the release-distance check.
-const SLAPPER_ZONE_FORWARD_M: float = 1.0
-const SLAPPER_ZONE_LATERAL_M: float = 0.8
-
-# Quick-shot pass reachability cone. A pass commits via shoot_pressed
-# the same tick it transitions out of CARRY → quick-shot direction is
-# `(blade - player)` in `ShotMechanics.release_wrister`. The blade IK
-# clamps to the bot's blade ROM (≈90° each side of facing), and the
-# body can't rotate to face a backward target in one tick (it's
-# `ik_locked_side`-frozen above 157° from current facing per
-# SkaterPoseCoordinator). Receivers outside this dot threshold from
-# the bot's current facing therefore fire at the ROM edge, not at the
-# receiver — the puck goes sideways and "looks like a dump."
-# 0.1 ≈ 84°; receivers near-perpendicular get filtered before
-# scoring. Set to 0.0 for full forward 180° if the filter feels too
-# strict during playtest.
-const PASS_REACHABLE_DOT_MIN: float = 0.1
-
-# ── Give-and-go ─────────────────────────────────────────────────────────────
-# After releasing a pass, the passer cuts to open ice up-ice from the
-# release point and holds that position for a short window — looking
-# for a return pass. This is the most common 3v3 build pattern and it
-# never emerged from the role-anchor logic, which snapped the passer
-# straight back into their F2/F3 anchor the next tick.
-#
-# Implemented as an anchor override in OFF_PUCK: when the give-and-go
-# timer is active, _off_puck_anchor returns _give_and_go_anchor (capped
-# by _cap_offside) instead of the role anchor. The timer decrements
-# every dispatch tick. CARRY clears it on entry — once we're back on
-# the puck the cut is over.
-#
-# 1.5 s gives the receiver time to control the puck and either look
-# back at us (return pass) or commit forward themselves (we revert to
-# role anchor and play it as normal off-puck). The 10 m lead lands us
-# just inside or right at the OZ blue line from a typical NZ pass —
-# perfect spot for a return feed into the rush.
-const GIVE_AND_GO_DURATION_TICKS: int = 360   # 1.5 s at 240 Hz
-const GIVE_AND_GO_LEAD_M: float = 10.0
-
-# ── Net-front screen ────────────────────────────────────────────────────────
-# When a teammate winds up a slapper, the closest non-shooter teammate
-# parks in front of the crease to screen the goalie. Bots don't fire
-# slappers themselves (only wristers), so this fires on HUMAN
-# teammates. Anchor sits SCREEN_OFFSET_FROM_GOAL_LINE_M past the goal
-# line on the puck-side, centred on the net mouth — just outside the
-# crease arc (radius 1.83 m), so steering's crease repel doesn't kick
-# the screener back out.
-const SCREEN_OFFSET_FROM_GOAL_LINE_M: float = 2.5
-# Mirror of SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK. Hard-
-# coded as int rather than typed enum so we don't introduce a domain →
-# controller dependency from this AI module.
-const _SHOT_STATE_SLAPPER_CHARGE_WITH_PUCK: int = 3
-
-# ── Emergency backcheck ─────────────────────────────────────────────────────
-# When the puck turns over in the NZ (or DZ) and a bot is caught
-# up-ice — between attacker and own net — they need to skate STRAIGHT
-# home, not via their man-to-man anchor (which might sit wide if the
-# mark is at the boards). Override anchors the bot at puck depth +
-# BACKCHECK_BACK_OF_PUCK_M (toward own net), centred X — i.e. "be
-# back of the puck by a few metres." The override releases the moment
-# the bot's z crosses the puck's z (own_goal_dir-signed), and
-# man-to-man takes over with whatever mark coverage_assignment gave
-# them.
-#
-# BACKCHECK_BACK_OF_PUCK_M is the cushion past puck depth — large
-# enough that the bot keeps full speed through the override-release
-# transition (well past the steering deadband). Anchor depth is
-# clamped to BACKCHECK_MAX_DEPTH_FROM_GOAL_M past own goal so we
-# never anchor into our own crease when the puck is already deep in
-# our DZ; "the slot" is the deepest defensive position we want.
-const BACKCHECK_BACK_OF_PUCK_M: float = 5.0
-const BACKCHECK_MAX_DEPTH_FROM_GOAL_M: float = 5.0
+# BACKDOOR tip / step-out / hold decision constants. The bot in front
+# of the opp net reacts to incoming pucks heading at our offensive
+# goal. Decision tree:
+#   - Speed below INCOMING_SHOT_SPEED → treat as a pass; HOLD anchor.
+#   - Impact y above ELEVATED_THRESHOLD → STEP OUT (body-block risk,
+#     blade can't reach). Shift anchor laterally away from path.
+#   - Fast ground shot (on or off target) → TIP. Shift anchor onto
+#     the puck path at our z plane, aim mouse at goal so the blade
+#     angles toward net for a deflection / redirect.
+const BACKDOOR_INCOMING_SHOT_SPEED_M_S: float = 12.0
+const BACKDOOR_STEP_OUT_M: float = 1.5
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
@@ -564,11 +371,16 @@ var _scratch_opponents: Array[Vector3] = []
 var _scratch_opponents_shoot: Array[Vector3] = []
 # Per-receiver buffer of opponent positions PREDICTED forward by the
 # pass's flight time (distance / PASS_PUCK_SPEED_REF_M_S). Pass flight
-# is much longer than a wrister charge (0.5–1.1 s typical), so a
-# defender clearly about to step into the lane reads as clear under
-# current-position scoring. Rebuilt inside the score_pass loop in
-# _pick_action because flight time depends on shooter→receiver distance.
+# is long enough (0.5–1.1 s typical) that defenders projected forward
+# read very differently from current-position. Rebuilt inside
+# _compute_best_pass per receiver since flight time depends on
+# shooter→receiver distance.
 var _scratch_opponents_pass: Array[Vector3] = []
+# Scratch buffer for carry-candidate path-clearance checks. Refilled
+# per candidate inside `_best_carry` (each candidate has its own
+# arrival time so opponents project differently). Also reused for
+# inner score_at evaluations in _compute_best_pass.
+var _scratch_opponents_path: Array[Vector3] = []
 
 # Set when CARRY commits to PASS_PRESSED; consumed by _state_pass_pressed
 # the next tick. 0 means "no current pass target" (real peer_ids are
@@ -579,15 +391,27 @@ var _pass_target_peer_id: int = 0
 # stores the action here instead of transitioning immediately. CARRY
 # then pre-aims the mouse toward the action's direction and waits
 # for convergence before transitioning. State.CARRY = "no intent."
+# _pick_action re-runs every tick — hysteresis on the current intent
+# (ACTION_HYSTERESIS_MARGIN) prevents flicker between close-scoring
+# options during pre-aim.
 var _intended_action: State = State.CARRY
 var _intent_wait_ticks: int = 0
 
-# Has the slapper-without-puck slap_pressed fired yet inside
-# ONE_TIMER_CHARGE? Reset on state entry. While false the bot is
-# still pre-aiming (mouse converging to slap aim direction); once
-# true the slapper is charging, locked direction is captured, and
-# mouse position no longer affects the shot direction.
-var _one_timer_slap_fired: bool = false
+# Cached carry destination + score-at-slot value from the most recent
+# `_pick_action` tick.
+#
+# `_last_carry_anchor` is the winning carry candidate's world-space
+# position — read by `_state_carry` to drive steering. Set by
+# `_best_carry` inside `_pick_action`.
+#
+# `_last_score_at_slot` is the OZ slot's terminal-action value —
+# max(score_shoot(slot), best leaf-pass from slot). Recursion
+# terminator: every `_score_at(pos)` evaluation includes a
+# "carry to slot" branch that multiplies this cached value by
+# lane-clearance × time-decay from pos to slot. Caching saves
+# N+1 leaf evaluations per candidate.
+var _last_carry_anchor: Vector3 = Vector3.ZERO
+var _last_score_at_slot: float = 0.0
 
 # Engagement cooldown — see ENGAGEMENT_COOLDOWN_TICKS. _prev_carrier
 # tracks last tick's puck.carrier_peer_id so we can detect the
@@ -633,12 +457,6 @@ var _slapper_aim_target: Vector3 = Vector3.ZERO
 # decision time, not as we bail mid-charge.
 var _scratch_opponents_slapper: Array[Vector3] = []
 
-# Give-and-go bookkeeping — see GIVE_AND_GO_*. Set when PASS_PRESSED
-# fires; consumed by _off_puck_anchor while the timer is active. 0
-# means "no active give-and-go cut."
-var _give_and_go_anchor: Vector3 = Vector3.ZERO
-var _give_and_go_remaining_ticks: int = 0
-
 # Per-bot RNG for aim wobble. Seeded once in setup() from peer_id and
 # the host tick at spawn so each bot has its own deterministic but
 # distinct stream. The previous implementation allocated a fresh
@@ -646,14 +464,11 @@ var _give_and_go_remaining_ticks: int = 0
 # per-call heap allocation plus replay-breaking non-determinism.
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
-# Debug: live scores from the most recent _pick_action tick. Read by
-# AIController at ~10 Hz to drive the floating per-bot label. Updated
-# every CARRY tick; stale when the bot isn't carrying (label shows
-# the last available snapshot in that case).
-var debug_scores: Array[String] = []
-# Last non-skating decision the bot committed to (e.g. "SHOOT" /
-# "PASS→3" / "DUMP"). Set when _pick_action transitions into one of
-# the press states; persists until the next decision.
+# Last action the bot actually fired (e.g. "SHOOT" / "PASS→Backdoor"
+# / "SLAP"). Set inside the press-state handlers at the moment the
+# press is dispatched, not when intent is picked — so the label
+# reflects what the bot did rather than what it considered. Persists
+# until the next press fires.
 var debug_last_decision: String = ""
 
 
@@ -684,12 +499,59 @@ func get_state() -> State:
 	return _state
 
 
-# Read by AIController for the debug label. Returns "F1"/"F2"/"F3"/"OFF",
-# or "?" when the brain hasn't yet assigned a role (first ticks after spawn).
+# Read by AIController for the debug label. Returns "TEAM_STATE: Slot"
+# (e.g., "DtoO: SprintBy", "DZ: Pressure"), or "?" when the brain
+# hasn't yet assigned a slot (first ticks after spawn).
 func debug_role() -> String:
 	if _team_brain == null:
 		return "?"
-	return String(_team_brain.get_role(_peer_id))
+	return "%s: %s" % [_team_state_label(_team_brain.state), _slot_label(_team_brain.get_slot(_peer_id))]
+
+
+func _team_state_label(state: int) -> String:
+	match state:
+		AIPossessionState.State.DZONE:
+			return "DZ"
+		AIPossessionState.State.OZONE:
+			return "OZ"
+		AIPossessionState.State.TRANS_DO:
+			return "DtoO"
+		AIPossessionState.State.TRANS_OD:
+			return "OtoD"
+		AIPossessionState.State.NEUTRAL:
+			return "Neutral"
+		_:
+			return "?"
+
+
+func _slot_label(slot: int) -> String:
+	match slot:
+		AIRoleSlots.Slot.CARRIER:
+			return "Carrier"
+		AIRoleSlots.Slot.PRESSURE:
+			return "Pressure"
+		AIRoleSlots.Slot.NET:
+			return "Net"
+		AIRoleSlots.Slot.INSIDE:
+			return "Inside"
+		AIRoleSlots.Slot.BACKDOOR:
+			return "Backdoor"
+		AIRoleSlots.Slot.OUTLET:
+			return "Outlet"
+		AIRoleSlots.Slot.SUPPORT:
+			return "Support"
+		AIRoleSlots.Slot.HOME:
+			return "Home"
+		AIRoleSlots.Slot.COVER:
+			return "Cover"
+		AIRoleSlots.Slot.CHASE:
+			return "Chase"
+		AIRoleSlots.Slot.FLANK_L:
+			return "FlankL"
+		AIRoleSlots.Slot.FLANK_R:
+			return "FlankR"
+		_:
+			return "-"
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────────────
@@ -710,13 +572,11 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	var have_puck: bool = (snapshot.puck_state.carrier_peer_id == _peer_id)
 	_ticks_in_state += 1
 	_update_engagement_cooldown(snapshot, self_state)
-	if _give_and_go_remaining_ticks > 0:
-		_give_and_go_remaining_ticks -= 1
 
 	# When we're ghosted (offside, can't interact with the puck), chase
 	# behavior is degenerate — we'd skate at a puck we can't pick up. Drop
-	# to OFF_PUCK so _off_puck_anchor's tag-up branch routes us back to
-	# the blue line. The host clears is_ghost via has_tagged_up once we
+	# to OFF_PUCK so the tag-up override in _state_off_puck routes us back
+	# to the blue line. The host clears is_ghost via has_tagged_up once we
 	# cross over.
 	if self_state.is_ghost and _state == State.CHASE_PUCK:
 		_set_state(State.OFF_PUCK)
@@ -734,57 +594,47 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_slapper_pressed(input, snapshot, self_pos, have_puck)
 		State.PASS_PRESSED:
 			_state_pass_pressed(input, snapshot, self_pos, have_puck)
-		State.DUMP_PRESSED:
-			_state_dump_pressed(input, snapshot, self_pos, have_puck)
-		State.ONE_TIMER_CHARGE:
-			_state_one_timer_charge(input, snapshot, self_pos, have_puck)
 
 
 # ── State handlers ───────────────────────────────────────────────────────────
 
 func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	# Anchor depends on role: F2 strong-side support, F3 weak-side trailer,
-	# or legacy "above puck" for any unassigned role (4+ teammate case).
-	var anchor: Vector3 = _off_puck_anchor(snapshot.puck_state.position, self_pos, snapshot)
-	# Publish for the carrier's pass aim — they'll lead the receiver
-	# toward where we're steering instead of just our current velocity.
-	if _team_brain != null:
-		_team_brain.publish_anchor(_peer_id, anchor)
-	# Exempt the mark from opponent repel during man-to-man: defenders
-	# are supposed to stand shoulder-to-shoulder with their mark, not
-	# be pushed off by them. Without this, a defender marking a crease-
-	# crashing opp drifts 2-3 m back from their anchor under repel.
-	_apply_steering(input, snapshot, self_pos, anchor, _current_mark_pid(snapshot))
-	# Aim mouse 2 m in our direction of motion (toward anchor), or
-	# along current facing if we're already at the anchor. Previously
-	# we aimed at `_attacking_goal_pos` (constant 25+ m away), which
-	# put the blade IK at the ROM extreme every tick — tiny body
-	# motion / rotation moved the clamped extreme around in world
-	# space and the blade visibly jittered. A 2 m target sits well
-	# inside the forehand reach window (`rom_forehand_reach_max = 0.45 m`
-	# at the shoulder, so 2 m world is the natural far end), so the
-	# blade settles into a relaxed "ready" position. Body facing
-	# also tracks the anchor direction now, which is more natural —
-	# defenders face their mark, F2 faces the strong-side support
-	# spot, etc. — instead of facing the attacking goal regardless
-	# of where they're going.
-	input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, anchor, snapshot))
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+
+	# Tag-up override: when ghosted (offside), bot must clear back across
+	# the blue line before doing anything else. Highest-priority override
+	# above all slot logic.
+	var anchor: Vector3
+	var aim_override: Vector3 = Vector3.ZERO   # if non-zero, used as mouse_world_pos
+	if self_state != null and self_state.is_ghost:
+		anchor = _tag_up_anchor(self_pos)
+	else:
+		# Default: brain provides the slot anchor for our current role
+		# in the current possession state. May be Vector3.ZERO if we
+		# haven't been assigned yet (first ticks); fall back to current
+		# position so we don't try to skate to (0, 0, 0).
+		anchor = _team_brain.get_anchor(_peer_id, snapshot) if _team_brain != null else Vector3.ZERO
+		if anchor == Vector3.ZERO:
+			anchor = self_pos
+		# BACKDOOR-specific: tip / step-out / hold decision when an
+		# incoming puck heading at our offensive net is detected.
+		if _team_brain != null and _team_brain.get_slot(_peer_id) == AIRoleSlots.Slot.BACKDOOR:
+			var decision: Array = _backdoor_decision(snapshot, self_pos, anchor)
+			anchor = decision[0]
+			aim_override = decision[1]
+
+	_apply_steering(input, snapshot, self_pos, anchor)
+	# Aim 2 m toward the anchor for a relaxed ready stance.
+	if aim_override != Vector3.ZERO:
+		input.mouse_world_pos = _step_mouse_toward(aim_override)
+	else:
+		input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, anchor, snapshot))
+
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
-	elif _is_f1() and not _teammate_has_puck(snapshot) and not _is_caught_up_ice(snapshot, self_pos):
-		# F1 returns to CHASE_PUCK only when not caught up-ice. Without
-		# this guard, an F1 caught up-ice during a rush would flicker
-		# every tick: CHASE → exit on caught → OFF_PUCK → re-enter on
-		# is_f1 → CHASE → exit again, etc. Stays in OFF_PUCK while
-		# caught so the man-to-man / shadow / role anchor is stable.
+	elif _should_chase_loose_puck(snapshot, self_pos):
 		_set_state(State.CHASE_PUCK)
-	elif _should_pre_charge_slapper(snapshot, self_pos):
-		# Own team has the puck and we have a real shot from here —
-		# pre-charge a slapper to broadcast the one-timer threat. The
-		# carrier reads our shot_state from the snapshot and biases
-		# pass scoring heavily toward us.
-		_set_state(State.ONE_TIMER_CHARGE)
 
 
 func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -794,7 +644,11 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# different intercept points, breaking the "both glued to the same
 	# puck position" pattern.
 	var puck_pos: Vector3 = snapshot.puck_state.position
-	var target: Vector3 = _lead_intercept(self_pos, puck_pos, snapshot.puck_state.velocity)
+	var self_vel_3d: Vector3 = Vector3.ZERO
+	var self_state2: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state2 != null:
+		self_vel_3d = self_state2.velocity
+	var target: Vector3 = _lead_intercept(self_pos, self_vel_3d, puck_pos, snapshot.puck_state.velocity)
 	# Angling: when an OPPONENT carries the puck, shift the intercept
 	# toward center-ice so we approach from the inside and force them to
 	# the boards. Loose pucks get the raw intercept — there's no carrier
@@ -845,43 +699,42 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		input.mouse_world_pos = _step_mouse_toward(puck_pos)
 	else:
 		input.mouse_world_pos = _step_mouse_toward(target)
-	# Transitions
+	# Transitions: chase ends as soon as someone has the puck, OR we're
+	# no longer the closest teammate (let the new closest take over).
 	if have_puck:
 		_set_state(State.CARRY)
-	elif not _is_f1() or _teammate_has_puck(snapshot) or _is_caught_up_ice(snapshot, self_pos):
-		# Drop back to off-puck support if any of:
-		#   - We're not F1 anymore (role rotation).
-		#   - Teammate just picked up the puck (we shouldn't chase our
-		#     own carrier).
-		#   - We're caught up-ice on opp possession in our defensive
-		#     half — chasing forward can't catch the puck heading the
-		#     other way; OFF_PUCK's backcheck override gets us home.
+	elif not _should_chase_loose_puck(snapshot, self_pos):
 		_set_state(State.OFF_PUCK)
 
 
 func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	# In NZ/DZ, drive toward the high slot to enter the offensive zone.
-	# Once in OZ, search for the position with the best shot/pass option
-	# and drift toward it — patient cycling.
-	var anchor: Vector3 = _carry_anchor(snapshot, self_pos)
-	_apply_steering(input, snapshot, self_pos, anchor)
-
 	if not have_puck:
 		_intended_action = State.CARRY
-		_set_state(_post_puck_lost_state())
+		_set_state(_post_puck_lost_state(snapshot))
 		return
 
-	# Decide on an action when quiet-eye expires AND we don't already
-	# have a pending intent. Once an intent is set we hold it until
-	# the mouse converges to its aim or the wait timeout fires —
-	# re-picking each tick would let the intent oscillate between
-	# two close-scoring actions and the mouse would never converge
-	# to either.
-	if _ticks_in_state >= QUIET_EYE_TICKS and _intended_action == State.CARRY:
-		_pick_action(snapshot, self_pos)
+	# Re-evaluate every tick. _pick_action scores SHOOT, PASS (per
+	# teammate), and CARRY (best of 10 candidates) on equal footing;
+	# applies hysteresis to current intent class; commits to fire when
+	# fire score beats carry. Caches the winning carry destination in
+	# `_last_carry_anchor` so steering can read it below.
+	_pick_action(snapshot, self_pos)
 
-	# Mouse target depends on whether we're carrying or pre-aiming
-	# for an action.
+	# Steering: drift toward the carry destination when actually
+	# carrying; HOLD POSITION when pre-aiming a fire action. The
+	# previous behavior kept skating forward during pre-aim, which
+	# combined with the wrister/slapper charge windows could drift
+	# the bot 2–4 m closer to the net before the press fired —
+	# they'd commit to a shot from one spot and release from
+	# another. Hold lets the press happen from the spot the bot
+	# decided on.
+	if _intended_action == State.CARRY:
+		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+	else:
+		_apply_hold_steering(input, snapshot, self_pos)
+
+	# Mouse target depends on intent: carry uses normal goal-aim, fire
+	# states pre-aim toward action direction.
 	var mouse_target: Vector3
 	if _intended_action == State.CARRY:
 		mouse_target = _carry_mouse_aim(snapshot, self_pos)
@@ -889,14 +742,20 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
 	input.mouse_world_pos = _step_mouse_toward(mouse_target)
 
-	# If we're pre-aiming, wait for mouse convergence (or timeout)
-	# before transitioning to the action state. The action state
-	# fires immediately on entry, so the mouse direction at that
-	# moment is what gets locked in (PASS/DUMP quick-shot direction,
-	# SLAPPER locked_dir).
+	# If pre-aiming, wait for mouse convergence AND facing alignment
+	# (or timeout) before transitioning to the action state. Mouse
+	# converges fast (~130 ms for a 90° pivot at MOUSE_MAX_SPEED);
+	# facing rotation is mouse-driven but lerp-based and slower
+	# (~250 ms+ for the same pivot). Without the facing check the
+	# bot fires while still rotated wrong and the puck goes out the
+	# ROM edge. Action state fires on entry, so both must be aligned
+	# at that moment. Timeout still fires after INTENT_MAX_WAIT_TICKS
+	# as a safety so the bot can't pre-aim forever.
 	if _intended_action != State.CARRY:
 		var aim_dist: float = _mouse_pos.distance_to(mouse_target)
-		if aim_dist < AIM_CONVERGED_DIST_M or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
+		var aim_converged: bool = aim_dist < AIM_CONVERGED_DIST_M
+		var facing_aligned: bool = _is_facing_aligned_for_aim(snapshot, self_pos, mouse_target)
+		if (aim_converged and facing_aligned) or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
 			_set_state(_intended_action)
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
@@ -913,8 +772,6 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 	match _intended_action:
 		State.PASS_PRESSED:
 			return _aim_2m_toward(self_pos, _pass_aim_point(snapshot, self_pos))
-		State.DUMP_PRESSED:
-			return _aim_2m_toward(self_pos, _dump_aim_point(self_pos))
 		State.SHOOT_PRESSED, State.SLAPPER_PRESSED:
 			return _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
 		_:
@@ -935,11 +792,35 @@ func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
 	return self_pos + to_aim.normalized() * CARRY_BLADE_AIM_FORWARD_M
 
 
+# True when the bot's facing has rotated close enough to the
+# action-aim direction that the blade ROM can fire there cleanly.
+# Threshold is 80° each side: well within the 90° forehand /
+# 120° backhand ROM, leaves slack so the actual fire direction
+# isn't at the ROM edge. Used in the pre-aim convergence check
+# to wait for body rotation, not just mouse rotation — facing
+# is mouse-driven via the pose coordinator's lerp but lags mouse
+# convergence significantly.
+func _is_facing_aligned_for_aim(snapshot: WorldSnapshot, self_pos: Vector3,
+		aim_target: Vector3) -> bool:
+	var dx: float = aim_target.x - self_pos.x
+	var dz: float = aim_target.z - self_pos.z
+	var len_sq: float = dx * dx + dz * dz
+	if len_sq < 0.0001:
+		return true
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return true
+	var inv: float = 1.0 / sqrt(len_sq)
+	var cos_angle: float = self_state.facing.x * dx * inv + self_state.facing.y * dz * inv
+	# 80° each side: cos(80°) ≈ 0.174.
+	return cos_angle >= 0.174
+
+
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	# Lost the puck mid-charge — bail. SkaterStateMachine's release path
 	# is a no-op without the puck, so we don't need to force a release.
 	if not have_puck:
-		_set_state(_post_puck_lost_state())
+		_set_state(_post_puck_lost_state(snapshot))
 		return
 
 	# Mid-charge bail: opponent closing in from the front. block_held
@@ -957,7 +838,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 		return
 
-	_apply_slot_steering(input, snapshot, self_pos)
+	_apply_hold_steering(input, snapshot, self_pos)
 	# Elevation flag based on decision at entry. Sticky in
 	# SkaterController, so setting one direction explicitly each tick
 	# normalizes it regardless of the last shot.
@@ -975,6 +856,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# running in SKATING_WITH_PUCK before the transition) puts the blade
 	# on the forehand side.
 	if _shoot_charge_tick == 0:
+		debug_last_decision = "SHOOT"
 		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
 		_shoot_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
 		var dir_xz: Vector3 = Vector3(
@@ -1034,7 +916,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 	# slapper internally when has_puck flips false and we're not
 	# already in a release window, so no need to force block_held here.
 	if not have_puck:
-		_set_state(_post_puck_lost_state())
+		_set_state(_post_puck_lost_state(snapshot))
 		return
 
 	# Mid-charge bail: forward defender closing in. block_held cancels
@@ -1048,7 +930,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 		_set_state(State.CARRY)
 		return
 
-	_apply_slot_steering(input, snapshot, self_pos)
+	_apply_hold_steering(input, snapshot, self_pos)
 	if _shot_is_elevated:
 		input.elevation_up = true
 	else:
@@ -1058,6 +940,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 	# _enter_slapper_charge reads input.mouse_world_pos and locks the
 	# slapper aim direction from there for the rest of the charge.
 	if _slapper_charge_tick == 0:
+		debug_last_decision = "SLAP"
 		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
 		_slapper_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
 		input.slap_pressed = true
@@ -1075,7 +958,14 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 
 
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	_apply_slot_steering(input, snapshot, self_pos)
+	_apply_hold_steering(input, snapshot, self_pos)
+	# Resolve the receiver's slot label NOW for the debug readout —
+	# `_pass_target_peer_id` gets cleared below, and the slot is what
+	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
+	var target_slot_label: String = "?"
+	if _team_brain != null and _pass_target_peer_id != 0:
+		target_slot_label = _slot_label(_team_brain.get_slot(_pass_target_peer_id))
+	debug_last_decision = "PASS→%s" % target_slot_label
 	# Aim at the receiver's lead position. Quick-shot direction is
 	# blade-from-player at release, and the blade IK swings toward
 	# mouse_world_pos — so this fires the puck along the bot→receiver
@@ -1085,183 +975,152 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 			self_pos, clean_pass_aim, PASS_AIM_WOBBLE_CONE_DEG))
 	input.shoot_pressed = true
 	input.shoot_held = true
-	# Arm the give-and-go cut from the release position. _off_puck_anchor
-	# honors this for GIVE_AND_GO_DURATION_TICKS; CARRY entry clears it.
-	_give_and_go_anchor = _compute_give_and_go_anchor(self_pos)
-	_give_and_go_remaining_ticks = GIVE_AND_GO_DURATION_TICKS
+	# v2: give-and-go cut sub-mode is removed. After the pass, the bot
+	# falls back to its slot anchor for the new state (likely SUPPORT
+	# or SPRINT_BY in TRANS_DO).
 	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
 	# either way so a future PASS picks a fresh one.
 	_pass_target_peer_id = 0
 	if not have_puck:
-		_set_state(_post_puck_lost_state())
+		_set_state(_post_puck_lost_state(snapshot))
 	else:
 		_set_state(State.CARRY)
 
 
-func _state_dump_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	_apply_slot_steering(input, snapshot, self_pos)
-	# Aim at a deep corner of the attacking zone on our strong side —
-	# typical hockey "dump it deep, chase it down." Quick-shot direction
-	# is blade-from-player so the puck flies along the bot→corner
-	# vector; even at fixed quick_shot_power the dump usually clears
-	# the bot's zone, which is what matters.
-	input.mouse_world_pos = _step_mouse_toward(_dump_aim_point(self_pos))
-	input.shoot_pressed = true
-	input.shoot_held = true
-	if not have_puck:
-		_set_state(_post_puck_lost_state())
-	else:
-		_set_state(State.CARRY)
-
-
-# Off-puck slapper pre-charge. The bot is in a good shot position
-# while a teammate carries — we wind up a slapper without the puck so
-# that (1) the carrier sees `shot_state == SLAPPER_CHARGE_WITHOUT_PUCK`
-# and biases pass scoring toward us, and (2) when the puck arrives
-# we release on the beat for a one-timer (SkaterController's
-# `try_one_timer_release` does the proximity check).
-#
-# Exit conditions:
-#   - have_puck: the puck arrived (deflection / pickup zone / slapper
-#     zone). Drop slap_held; if the puck is in the slapper zone the
-#     SM fires the one-timer, otherwise it cancels and we're back to
-#     normal CARRY.
-#   - Conditions invalid: own team lost possession, our shot score
-#     dropped below threshold, etc. Drop slap_held to abort.
-#   - Puck close (within ONE_TIMER_RELEASE_DISTANCE_M): release for
-#     the one-timer. Try_one_timer_release does the actual fire/cancel
-#     decision based on its own zone + leniency.
-#   - Max ticks: timeout, abort the charge.
-func _state_one_timer_charge(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	if have_puck:
-		input.slap_held = false
-		_set_state(State.CARRY)
-		return
-	if _ticks_in_state >= ONE_TIMER_MAX_CHARGE_TICKS:
-		input.slap_held = false
-		_set_state(State.OFF_PUCK)
-		return
-
-	# Hold position so we don't drift out of the shot lane while
-	# charging. Slapper drag in SkaterController slows us anyway, but
-	# anchoring at self_pos keeps the steering aligned. Must run BEFORE
-	# _should_pre_charge_slapper since that helper reads
-	# _scratch_opponents populated here.
+# Hold-position steering during fire-state commits (SHOOT_PRESSED,
+# SLAPPER_PRESSED, PASS_PRESSED) and CARRY pre-aim. The bot has
+# decided where to fire from — they shouldn't keep skating forward
+# during the wrister charge (60 ticks ≈ 250 ms) or slapper charge
+# (132 ticks ≈ 550 ms), which would otherwise drift them up to ~4 m
+# closer to the net before the puck releases. Anchor = self_pos
+# zeroes the seek force so ice friction bleeds momentum naturally;
+# repel forces (defenders, boards, crease) still apply via
+# `_apply_steering`. Each fire state sets `input.mouse_world_pos`
+# itself because the aim differs (goal-shadow vs receiver lead).
+func _apply_hold_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	_apply_steering(input, snapshot, self_pos, self_pos)
 
-	if not _should_pre_charge_slapper(snapshot, self_pos):
-		input.slap_held = false
-		_set_state(State.OFF_PUCK)
-		return
 
-	# Aim phase: wait for the motion-limited mouse to converge to the
-	# slap-aim direction before firing slap_pressed. The locked
-	# slapper direction is captured at slap_pressed time from
-	# (mouse - blade), so firing before convergence locks a wrong
-	# direction (mouse mid-traversal from OFF_PUCK's ready-stance
-	# target). After slap_pressed fires we just hold mouse on the
-	# shot aim — the locked direction is set, mouse position no
-	# longer affects the shot direction.
-	if not _one_timer_slap_fired:
-		var aim_target: Vector3 = _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
-		input.mouse_world_pos = _step_mouse_toward(aim_target)
-		var converged: bool = _mouse_pos.distance_to(aim_target) < AIM_CONVERGED_DIST_M
-		if converged or _ticks_in_state >= INTENT_MAX_WAIT_TICKS:
-			input.slap_pressed = true
-			_one_timer_slap_fired = true
-		else:
-			# Still aiming — hold slap_held off until we fire.
-			input.slap_held = false
-			return
-
-	# Charge phase: slap_pressed already fired; locked direction is
-	# set. Hold slap_held and wait for the puck.
-	input.mouse_world_pos = _step_mouse_toward(_shot_aim_point(snapshot, self_pos))
-
-	# Release window: drop slap_held when the puck nears the actual
-	# slapper zone (offset forward + blade-side from us), NOT just the
-	# player body. SkaterController's `try_one_timer_release` checks
-	# `puck.distance_to(zone_pos)` against zone_radius + velocity-scaled
-	# leniency, so we want our release threshold matched to that zone
-	# center for accurate timing.
-	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if self_state != null:
-		var zone_pos: Vector3 = _compute_slapper_zone_pos(self_pos, self_state.facing)
-		if zone_pos.distance_to(snapshot.puck_state.position) <= ONE_TIMER_RELEASE_DISTANCE_M:
-			input.slap_held = false
-			_set_state(State.OFF_PUCK)
-			return
-
-	input.slap_held = true
-
-
-# ── Internal helpers ─────────────────────────────────────────────────────────
-
-# Anchor + steering shared by CARRY / SHOOT_PRESSED / PASS_PRESSED. Each
-# state sets `input.mouse_world_pos` itself because the aim differs
-# (goal-shadow vs receiver lead).
-func _apply_slot_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
-	var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
-	_apply_steering(input, snapshot, self_pos, Vector3(0.0, 0.0, slot_z))
-
-
-# Score every applicable action and transition into the highest-scoring
-# state. CARRY is the implicit default — if no action clears
-# AIActionScoring.ACTION_THRESHOLD we stay in CARRY without
-# transitioning (next tick re-evaluates).
+# Score every applicable action plus CARRY (drift-discounted future
+# action quality) and pick the winner. Standard utility-AI pattern:
+# all options scored on [0, 1], best wins. CARRY competes as a fourth
+# option so "carry forever" only happens when no action beats the
+# discounted carry score.
+#
+# Hysteresis: the current intent gets ACTION_HYSTERESIS_MARGIN added
+# to its score during re-evaluation. Prevents flicker between two
+# close-scoring options during pre-aim — _pick_action runs every
+# physics tick (no QUIET_EYE wait), so without hysteresis intent
+# could oscillate between SHOOT and PASS and the mouse would never
+# converge to either aim. Wrister vs slapper is treated as one
+# "shoot" intent class — both pre-aim to the same target.
 #
 # Mutates _pass_target_peer_id when PASS wins.
 func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	_build_action_opponents_lists(snapshot)
+
+	# Teammate ids — used by every score_at evaluation (top + inner).
+	var teammate_ids: Array[int] = []
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if int(_team_id_resolver.call(peer_id)) == _team_id:
+			teammate_ids.append(peer_id)
+
 	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
+
+	# Cache score_at_slot once. The slot is the recursion terminator:
+	# any score_at(pos) evaluation includes a "carry to slot" branch
+	# that multiplies this cached value by lane × time-decay from pos.
+	# Uses current opponent positions (approximation — projecting per
+	# caller's arrival time would be more accurate but caching breaks).
+	_last_score_at_slot = _compute_score_at_slot(_scratch_opponents,
+			snapshot, teammate_ids, goalie_pos)
+
+	# Top-level SHOOT — leaf score_shoot at current position. Wrister
+	# uses wrister-charge-projected opponents; slapper uses longer
+	# slapper-charge projection × power bonus × motion penalty. Pick
+	# whichever shot type scores higher.
 	var wrister_score: float = AIActionScoring.score_shoot(
 			self_pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
 			_scratch_opponents_shoot)
-	# Slapper: same geometry but with opponents predicted at the longer
-	# slapper-charge lookahead (more chance a defender steps into the
-	# lane during the windup), then scaled by SLAPPER_POWER_BONUS for
-	# the harder-to-stop release. Take whichever of wrister/slapper
-	# scores higher as the "shoot" option.
+	var self_state: SkaterNetworkState = snapshot.skater_states[_peer_id]
+	var self_velocity: Vector3 = self_state.velocity
+	var self_speed: float = sqrt(self_velocity.x * self_velocity.x
+			+ self_velocity.z * self_velocity.z)
+	var slapper_motion_factor: float = (
+			SLAPPER_MOTION_PENALTY if self_speed > SLAPPER_MAX_SPEED_M_S else 1.0)
 	var slapper_score: float = AIActionScoring.score_shoot(
 			self_pos, _attacking_goal_pos, goalie_pos,
 			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-			_scratch_opponents_slapper) * SLAPPER_POWER_BONUS
+			_scratch_opponents_slapper) * SLAPPER_POWER_BONUS * slapper_motion_factor
 	var shoot_use_slapper: bool = slapper_score > wrister_score
 	var shoot_score: float = slapper_score if shoot_use_slapper else wrister_score
-	var self_state: SkaterNetworkState = snapshot.skater_states[_peer_id]
+
+	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var best_pass: Array = _compute_best_pass(
-			snapshot, self_pos, self_state.facing, goalie_pos)
+			snapshot, self_pos, self_state.facing, goalie_pos, teammate_ids)
 	var best_pass_peer: int = best_pass[0]
 	var best_pass_score: float = best_pass[1]
-	var dump_score: float = AIActionScoring.score_dump(
-			self_pos, _attacking_goal_pos, _own_goal_dir,
-			GameRules.BLUE_LINE_Z, _scratch_opponents)
-	_update_debug_scores(shoot_score, shoot_use_slapper, best_pass_peer, best_pass_score, dump_score)
 
-	var max_score: float = maxf(maxf(shoot_score, best_pass_score), dump_score)
-	if max_score < AIActionScoring.ACTION_THRESHOLD:
-		return
-	# Set intent instead of transitioning immediately. CARRY's per-tick
-	# logic pre-aims toward this action's direction and transitions
-	# only when the motion-limited mouse converges (or the wait
-	# timeout fires) — see _state_carry.
-	if shoot_score >= best_pass_score and shoot_score >= dump_score:
-		_shot_is_elevated = _should_elevate_shot(snapshot, self_pos, shoot_score)
-		if shoot_use_slapper:
-			debug_last_decision = "SLAP"
-			_intended_action = State.SLAPPER_PRESSED
-		else:
-			debug_last_decision = "SHOOT"
-			_intended_action = State.SHOOT_PRESSED
-	elif best_pass_score >= dump_score:
-		_pass_target_peer_id = best_pass_peer
-		debug_last_decision = "PASS→%d" % (best_pass_peer % 1000)
-		_intended_action = State.PASS_PRESSED
+	# Top-level CARRY — best of 10 candidates (8 polar around the slot
+	# direction + slot anchor + stand-still). Each scored uniformly:
+	# score_at(candidate, projected_opps) × path_clear × time_decay.
+	# Time uses momentum-aware effective speed so reverse candidates
+	# self-discount via longer arrival time.
+	var carry_result: Array = _best_carry(self_pos, self_velocity,
+			snapshot, teammate_ids, goalie_pos)
+	var carry_score: float = carry_result[0]
+	_last_carry_anchor = carry_result[1]
+
+	# Hysteresis on FIRE intents only — prevents flicker between two
+	# close-scoring fire options during pre-aim. CARRY does NOT get a
+	# hysteresis bonus: stand-still always ties with the best fire
+	# option from the same position by construction (score_at(self) >=
+	# score_shoot(self)), and we want fire to win those ties (see
+	# tiebreak below). A CARRY hysteresis bonus would push stand-still
+	# above fire on every re-eval and the bot would never fire.
+	if _intended_action == State.SHOOT_PRESSED or _intended_action == State.SLAPPER_PRESSED:
+		shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	elif _intended_action == State.PASS_PRESSED:
+		best_pass_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+
+	# Best fire option. No noise-floor threshold — CARRY competes
+	# directly, so a weak fire naturally loses to any stronger carry
+	# candidate (and stand-still in particular bounds fire from below
+	# at score_at(self) >= score_shoot(self)).
+	var fire_score: float = -INF
+	var fire_intent: State = State.CARRY
+	if shoot_score > fire_score:
+		fire_score = shoot_score
+		fire_intent = State.SLAPPER_PRESSED if shoot_use_slapper else State.SHOOT_PRESSED
+	if best_pass_score > fire_score:
+		fire_score = best_pass_score
+		fire_intent = State.PASS_PRESSED
+
+	# Compete fire vs carry. FIRE WINS TIES — when a fire option scores
+	# the same as the best carry candidate (typically stand-still,
+	# which equals the best fire option by construction at the same
+	# position), we want to fire. The only case where carry should
+	# beat fire is when a movement candidate has a STRICTLY better
+	# future-action value, which means there's a real reason to keep
+	# moving instead of firing now.
+	var new_intent: State
+	if fire_score >= carry_score:
+		new_intent = fire_intent
+		if new_intent == State.PASS_PRESSED:
+			_pass_target_peer_id = best_pass_peer
+		elif new_intent == State.SHOOT_PRESSED or new_intent == State.SLAPPER_PRESSED:
+			_shot_is_elevated = _should_elevate_shot(snapshot, self_pos, shoot_score)
 	else:
-		debug_last_decision = "DUMP"
-		_intended_action = State.DUMP_PRESSED
-	_intent_wait_ticks = 0
+		new_intent = State.CARRY
+
+	# Reset pre-aim wait on intent change — mouse needs to converge
+	# to the new direction from scratch.
+	if new_intent != _intended_action:
+		_intent_wait_ticks = 0
+	_intended_action = new_intent
 
 
 # Populates the three scratch lists used by _pick_action's scoring:
@@ -1287,44 +1146,54 @@ func _build_action_opponents_lists(snapshot: WorldSnapshot) -> void:
 					s.position, s.velocity, BOT_SLAPPER_LOOKAHEAD_S))
 
 
+# Refills `out_buf` with each opponent's position projected forward
+# by `time_s`. Used by carry-candidate scoring (per-candidate arrival
+# time) and pass scoring (per-receiver flight time) — same buffer is
+# reused, refilled before each scoring call.
+func _project_opponents_to(snapshot: WorldSnapshot, time_s: float,
+		out_buf: Array[Vector3]) -> void:
+	out_buf.clear()
+	for peer_id: int in snapshot.skater_states:
+		if int(_team_id_resolver.call(peer_id)) != _team_id and peer_id != _peer_id:
+			var s: SkaterNetworkState = snapshot.skater_states[peer_id]
+			out_buf.append(AITrajectory.predict_at(s.position, s.velocity, time_s))
+
+
 # Loops every legal pass target and returns [best_pid, best_score]. A
 # pass takes 0.5–1.1 s of flight time, so the receiver and every
 # defender are projected forward by that flight time before scoring —
 # decision matches what `_pass_aim_point` actually fires at press time.
-# Skips ghosted teammates (collision masks off → puck would pass
-# through them) and unreachable receivers (outside the bot's blade
-# ROM cone — quick-shot would fire at the ROM edge instead of the
-# receiver). Human teammates get HUMAN_PASS_BIAS on close-call passes.
+# Top-level pass scoring under the universal model:
+#
+#   pass_score(receiver) = score_at(receiver_lead, projected_opps)
+#                          × path_clearance(self → receiver_lead)
+#                          × pow(decay, pass_flight_time)
+#
+# score_at recursively considers what the receiver could do (shoot,
+# pass to others, carry to slot) — replaces the old receiver_quality
+# bundle (geom + advance + open-man) with a real future-action eval.
+#
+# Filters:
+#   - Skip ghosted teammates (puck passes through them).
+#   - Skip receivers predicted past our own goal line (own-goal risk).
+#   - Carrier in OZ → receiver must also be in OZ (offside protection).
+#   - Skip blade-ROM-unreachable receivers (quick-shot can't fire
+#     backward; without this filter the bot would pick a behind-me
+#     pass and the blade would clamp to ROM edge — puck dribbles
+#     forward into nothing).
+#   - Hard zero for net-blocker (segment crosses net body) and
+#     own-DZ slot crossing (intercepted = goal-against).
+#
+# HUMAN_PASS_BIAS is a UX nudge — bots prefer feeding humans on
+# close-call passes.
 func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
-		self_facing_xz: Vector2, goalie_pos: Vector3) -> Array:
+		self_facing_xz: Vector2, goalie_pos: Vector3,
+		teammate_ids: Array[int]) -> Array:
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
-	# When the carrier is in our OZ, exclude receivers that aren't
-	# also in OZ. Passing the puck out of OZ to a NZ teammate sends
-	# the puck back across the blue line; if our carrier was in OZ
-	# when the puck left and the new carrier brings it back in, the
-	# original carrier is offside. Filtering here prevents that
-	# whole sequence — bots only pass back-pass-out when they
-	# themselves are in NZ.
 	var carrier_in_oz: bool = -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
-	# Backward-pass gate: precomputed once for the carrier. When we
-	# have a clear forward path toward the attacking goal, backward
-	# passes (receiver behind us relative to attacking goal) get
-	# suppressed below — keeps the bot from immediately bouncing the
-	# puck back to a defender when there's open ice to skate into.
-	# Forward path occluded → no suppression so backward passes remain
-	# a legitimate cycle / regroup outlet. _scratch_opponents was
-	# populated by _build_action_opponents_lists at the top of
-	# _pick_action with current opponent positions.
-	var forward_path_clear: bool = AIActionScoring.has_clear_forward_path(
-			self_pos, _attacking_goal_pos, _scratch_opponents,
-			AIActionScoring.BACKWARD_PASS_FORWARD_PATH_RADIUS_M)
-	var carrier_to_goal: Vector3 = _attacking_goal_pos - self_pos
-	for peer_id: int in snapshot.skater_states:
-		if peer_id == _peer_id:
-			continue
-		if int(_team_id_resolver.call(peer_id)) != _team_id:
-			continue
+	var own_goal_z: float = _own_goal_dir * GameRules.GOAL_LINE_Z
+	for peer_id: int in teammate_ids:
 		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		if receiver_state.is_ghost:
 			continue
@@ -1336,71 +1205,49 @@ func _compute_best_pass(snapshot: WorldSnapshot, self_pos: Vector3,
 		var flight_t: float = clampf(
 				dist / PASS_PUCK_SPEED_REF_M_S, 0.0, PASS_LEAD_MAX_S)
 		var receiver: Vector3 = _predict_receiver(peer_id, receiver_state, flight_t)
-		# Skip receivers predicted to be past our own goal line — pass
-		# crosses the goal mouth and the puck deflects in. Real defenders
-		# don't pass to a teammate already standing in their own crease.
 		if _own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
 			continue
-		if not _is_pass_target_reachable(self_pos, self_facing_xz, receiver):
+		if AIActionScoring.pass_lane_blocked_by_net(self_pos, receiver):
 			continue
-		_scratch_opponents_pass.clear()
-		for opp_pid: int in snapshot.skater_states:
-			if opp_pid == _peer_id:
-				continue
-			if int(_team_id_resolver.call(opp_pid)) == _team_id:
-				continue
-			var opp_state: SkaterNetworkState = snapshot.skater_states[opp_pid]
-			_scratch_opponents_pass.append(AITrajectory.predict_at(
-					opp_state.position, opp_state.velocity, flight_t))
-		# One-timer demand: receiver pre-charging a slapper without the
-		# puck (`shot_state == SLAPPER_CHARGE_WITHOUT_PUCK`) is asking
-		# for the puck. Boost their RECEIVER_QUALITY (shot opportunity
-		# from where they are), not the final score — this leaves the
-		# lane and pressure terms intact, so a slapper-charging
-		# receiver behind a blocked lane still scores 0, and one
-		# under heavy pressure still gets the pressure penalty.
-		var receiver_q_bonus: float = (
-				ONE_TIMER_TARGET_BONUS
-				if receiver_state.shot_state == _SHOT_STATE_SLAPPER_CHARGE_WITHOUT_PUCK
-				else 1.0)
-		var s: float = AIActionScoring.score_pass(
-				self_pos, receiver, receiver_state.facing,
-				_attacking_goal_pos, goalie_pos,
-				GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-				_scratch_opponents_pass,
-				receiver_q_bonus)
-		# Backward-pass suppression: if we have open ice to skate into,
-		# don't bail out by passing back to a defender. Backward = pass
-		# direction has a meaningful component AWAY from the attacking
-		# goal (dot < 0).
-		if s > 0.0 and forward_path_clear:
-			var to_receiver: Vector3 = receiver - self_pos
-			if to_receiver.x * carrier_to_goal.x + to_receiver.z * carrier_to_goal.z < 0.0:
-				s *= AIActionScoring.BACKWARD_PASS_SUPPRESSION
+		if AIActionScoring.pass_crosses_own_slot(self_pos, receiver, own_goal_z):
+			continue
+		# Project opponents to flight time for both the puck-lane check
+		# and the receiver's inner score_at (lanes/pressure on receiver
+		# at the time they receive the puck).
+		_project_opponents_to(snapshot, flight_t, _scratch_opponents_pass)
+		var lane: float = AIActionScoring.path_clearance(
+				self_pos, receiver, _scratch_opponents_pass)
+		if lane <= 0.0:
+			continue
+		var receiver_value: float = _score_at(receiver, _scratch_opponents_pass,
+				snapshot, teammate_ids, goalie_pos)
+		# Rotation time: how long does the bot need to rotate facing to
+		# point at the receiver before the blade ROM can fire there?
+		# Mouse-driven facing rotation takes time; back-passes pay this
+		# cost in the score. Replaces the old hard PASS_REACHABLE_DOT_MIN
+		# gate — passes at any angle are scored, with rotation time
+		# folded into the time-decay so they self-discount.
+		var to_receiver_x: float = receiver.x - self_pos.x
+		var to_receiver_z: float = receiver.z - self_pos.z
+		var to_receiver_len: float = sqrt(to_receiver_x * to_receiver_x + to_receiver_z * to_receiver_z)
+		var rotation_time: float = 0.0
+		if to_receiver_len > 0.001:
+			var inv_len: float = 1.0 / to_receiver_len
+			var cos_angle: float = clampf(
+					self_facing_xz.x * to_receiver_x * inv_len
+					+ self_facing_xz.y * to_receiver_z * inv_len, -1.0, 1.0)
+			var angular_distance: float = acos(cos_angle)
+			rotation_time = angular_distance / BOT_FACING_ROTATION_RATE_RAD_S
+		var time_decay: float = pow(
+				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+				flight_t + rotation_time)
+		var s: float = receiver_value * lane * time_decay
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
 	return [best_pass_peer, best_pass_score]
-
-
-# Updates `debug_scores` for the on-ice debug label. Top 3 sorted desc.
-# `shoot_use_slapper` swaps the shot label so the on-ice readout
-# shows whether the bot would slap or wrister at this tick.
-func _update_debug_scores(shoot_score: float, shoot_use_slapper: bool,
-		best_pass_peer: int, best_pass_score: float, dump_score: float) -> void:
-	var pass_label: String = "pass→%d" % (best_pass_peer % 1000) if best_pass_peer != 0 else "pass"
-	var shoot_label: String = "slap" if shoot_use_slapper else "shoot"
-	var rows: Array = [
-			[shoot_label, shoot_score],
-			[pass_label, best_pass_score],
-			["dump", dump_score],
-	]
-	rows.sort_custom(func(a, b): return a[1] > b[1])
-	debug_scores.clear()
-	for r: Array in rows:
-		debug_scores.append("%s:%.2f" % [r[0], r[1]])
 
 
 # Lead the receiver by their flight-time along their current velocity
@@ -1419,47 +1266,35 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	return _predict_receiver(_pass_target_peer_id, receiver, flight_t)
 
 
-# Receiver position prediction blending pure-velocity extrapolation with
-# the receiver's published steering anchor. A receiver currently
-# moving away from the puck but steering toward an anchor will end up
-# closer to the anchor than to the velocity-extrapolated point — the
-# blend captures that without overshooting receivers who are already
-# moving along their intended direction. Falls back to velocity-only
-# when no anchor is published (human teammate, brain not yet ticked,
-# or the receiver is the carrier and never published).
+# Receiver position prediction — pure velocity extrapolation from
+# their current position + velocity, plus a blade offset so the puck
+# aims at where the stick will be (not body center).
+#
+# An earlier version blended in the receiver's published steering
+# anchor, intending to lead bots cutting toward their slot. That
+# overshot dramatically: a TRANS_DO OUTLET teammate's anchor is at
+# the opp blue line (~25 m up-ice), and even at 50% blend the
+# predicted lead landed forward of the carrier when the actual
+# teammate was behind. Reachability passed (lead was forward),
+# pass committed, puck fired at empty ice where the anchor said
+# the receiver "should be." Velocity-only is conservative and
+# correct: project only as far as the receiver actually moves,
+# no aspirational pull.
 func _predict_receiver(receiver_pid: int, receiver: SkaterNetworkState, flight_t: float) -> Vector3:
 	var velocity_pos: Vector3 = AITrajectory.predict_at(
 			receiver.position, receiver.velocity, flight_t)
-	if _team_brain == null:
-		return velocity_pos
-	var anchor: Vector3 = _team_brain.get_published_anchor(receiver_pid)
-	if anchor == Vector3.ZERO:
-		return velocity_pos
-	# Anchor-based prediction: receiver heads toward their anchor at
-	# their current speed. Speed is preserved (rather than assuming
-	# top speed) so a stationary receiver stays put — predicted = pos.
-	var to_anchor: Vector3 = anchor - receiver.position
-	var to_anchor_len: float = sqrt(to_anchor.x * to_anchor.x + to_anchor.z * to_anchor.z)
-	if to_anchor_len < 0.01:
-		return velocity_pos
-	var speed: float = sqrt(receiver.velocity.x * receiver.velocity.x
-			+ receiver.velocity.z * receiver.velocity.z)
-	var inv: float = 1.0 / to_anchor_len
-	var anchor_step: Vector3 = Vector3(to_anchor.x * inv, 0.0, to_anchor.z * inv) * (speed * flight_t)
-	# Cap the anchor-step so we don't overshoot the anchor itself.
-	if anchor_step.length() > to_anchor_len:
-		anchor_step = to_anchor
-	var anchor_pos: Vector3 = receiver.position + anchor_step
-	return velocity_pos.lerp(anchor_pos, PASS_RECEIVER_ANCHOR_BLEND)
+	# Blade offset: shift the predicted aim from body center to where
+	# the receiver's stick is. Assumes the blade moves with the body
+	# (offset stays roughly constant during the pass flight). Replicated
+	# `blade_position` is set per SM tick so it's fresh.
+	var blade_offset: Vector3 = receiver.blade_position - receiver.position
+	# Zero-out y so the aim stays in the world XZ plane.
+	blade_offset.y = 0.0
+	return velocity_pos + blade_offset
 
 
-func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3,
-		exempt_opp_pid: int = -1) -> void:
-	# Single-pass split into teammate vs opponent buckets — both feed
-	# AISteering's repel forces. `exempt_opp_pid` skips one specific
-	# opponent from the opponent-repel list — used by man-to-man so
-	# the defender can stand shoulder-to-shoulder with their mark
-	# instead of being pushed away by them.
+func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
+	# Standard potential-field steering with brake-pivot.
 	_scratch_teammates.clear()
 	_scratch_opponents.clear()
 	for peer_id: int in snapshot.skater_states:
@@ -1467,7 +1302,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			continue
 		if int(_team_id_resolver.call(peer_id)) == _team_id:
 			_scratch_teammates.append(snapshot.skater_states[peer_id].position)
-		elif peer_id != exempt_opp_pid:
+		else:
 			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 
 	# Shot-lane endpoints: only set when a teammate (not us, not opp) is
@@ -1682,12 +1517,6 @@ const FACE_THREAT_NEAR_ANCHOR_M: float = 2.0
 # target. See MOUSE_MAX_SPEED_M_S comment block for rationale.
 var _mouse_pos: Vector3 = Vector3.ZERO
 
-# Strong-side sign with hysteresis. See STRONG_SIDE_HYSTERESIS_M.
-# Initialized to +1 (strong side defaults to +X); flips to -1 only
-# when puck.x falls below -1.5, and back to +1 only when puck.x
-# rises above +1.5. Per-bot so each bot tracks its own state.
-var _last_strong_x: float = 1.0
-
 
 # Steps `_mouse_pos` toward `target` at MOUSE_MAX_SPEED_M_S, capped by
 # the tick budget. First call (when _mouse_pos is ZERO) snaps to the
@@ -1715,19 +1544,6 @@ func _step_mouse_toward(target: Vector3) -> Vector3:
 	var nz: float = _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M
 	return Vector3(_mouse_pos.x + nx, 0.0, _mouse_pos.z + nz)
 
-
-# Returns the strong-side sign for a puck/self position with
-# per-bot hysteresis. Replaces the inline
-# `signf(x) if absf(x) > DEADBAND else 1.0` pattern that was
-# vulnerable to per-tick flipping near the deadband boundary.
-func _hysteretic_strong_x(x: float) -> float:
-	if _last_strong_x > 0.0:
-		if x < -STRONG_SIDE_HYSTERESIS_M:
-			_last_strong_x = -1.0
-	else:
-		if x > STRONG_SIDE_HYSTERESIS_M:
-			_last_strong_x = 1.0
-	return _last_strong_x
 
 # Returns a target position 2 m in front of the bot. Direction is
 # anchor when far, threat when near. The actual mouse position is
@@ -1760,601 +1576,152 @@ func _read_facing_3d(snapshot: WorldSnapshot) -> Vector3:
 # threat is essentially on top of us (avoids a degenerate aim
 # direction).
 func _face_threat_or_current(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	var threat_pos: Vector3 = snapshot.puck_state.position
-	var mark_pid: int = _current_mark_pid(snapshot)
-	if mark_pid != 0:
-		var mark_state: SkaterNetworkState = snapshot.skater_states.get(mark_pid)
-		if mark_state != null:
-			threat_pos = mark_state.position
-	var to_threat: Vector3 = threat_pos - self_pos
-	if to_threat.length() > 0.3:
-		return to_threat.normalized()
+	# v2: no man-to-man marks, so threat is just the puck. Falls back
+	# to current facing when puck is essentially on top of us.
+	var to_puck: Vector3 = snapshot.puck_state.position - self_pos
+	if to_puck.length() > 0.3:
+		return to_puck.normalized()
 	return _read_facing_3d(snapshot)
 
 
-func _is_f1() -> bool:
-	return _team_brain != null and _team_brain.get_role(_peer_id) == AIRoleAssignment.ROLE_F1
 
-
-func _is_f3() -> bool:
-	return _team_brain != null and _team_brain.get_role(_peer_id) == AIRoleAssignment.ROLE_F3
-
-
-# Off-puck anchor selection.
-#   - DZ + opp possession (or loose puck in DZ): switch to man-to-man.
-#     F2/F3 anchor on their assigned mark, 1 m goal-side.
-#   - Otherwise: zone-ish triangle. F2 strong-side support, F3 weak-side
-#     trailer, OFF (4+ teammate fallback) plays legacy above-puck.
-func _off_puck_anchor(puck_pos: Vector3, self_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
-	# Tag up: if WE are ghosted, ignore role/coverage entirely and head
-	# back to the NZ side of the blue line. Anchor preserves our X so
-	# the steering doesn't pull us laterally — fastest tag is straight
-	# back. Host's InfractionRules.has_tagged_up clears is_ghost the
-	# moment we cross. Already on the NZ side, so no further cap needed.
-	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if self_state != null and self_state.is_ghost:
-		return _tag_up_anchor(self_pos)
-
-	# Give-and-go cut takes priority over role anchors while active. The
-	# pre-computed anchor sits up-ice from the pass release; _cap_offside
-	# pulls it back to the NZ side of the blue line until the puck enters
-	# OZ, so the cut respects the same offside discipline as a normal
-	# off-puck breakout.
-	if _give_and_go_remaining_ticks > 0:
-		return _cap_offside(_give_and_go_anchor, snapshot)
-
-	# Net-front screen: if a teammate is winding up a slapper and I'm
-	# the closest non-shooter teammate to the opposing net, park 1.5 m
-	# in front of the crease to screen. Bots don't slap themselves
-	# (only wristers), so this fires when a HUMAN teammate winds up.
-	var screen_anchor: Vector3 = _net_front_screen_anchor_or_zero(snapshot, self_pos)
-	if screen_anchor != Vector3.ZERO:
-		return screen_anchor
-
-	# Emergency backcheck: caught up-ice with opp possession on our
-	# defensive half. The deepest non-carrier (F3 per the high-man
-	# pin) sprints to the centred defensive slot — they're the
-	# "safety" position. F1 and F2 caught up-ice fall through to
-	# man-to-man instead of also routing to the centred slot, so
-	# multiple backcheckers don't all converge on the same point
-	# (which produced visible stacking / bots ramming each other in
-	# the slot). F1/F2 marks are different opps so their anchors
-	# spread naturally; the small route inefficiency is worth the
-	# avoided collisions.
-	if _is_caught_up_ice(snapshot, self_pos) and _is_f3():
-		return _emergency_backcheck_anchor(snapshot)
-
-	# Shadow-back: I'm the only teammate behind the puck, so I'm the
-	# last line of defense. Don't pinch up to the role anchor (which
-	# might pull me back toward the puck in OZ/NZ); instead, shadow
-	# the puck from behind at a controlled depth. Same destination
-	# as the emergency backcheck anchor — centered, back-of-puck,
-	# capped at slot depth — so the override is a simple swap. Skip
-	# when the puck is in our DZ; standard defensive coverage
-	# handles that situation.
-	if _is_alone_back_of_puck(snapshot, self_pos):
-		var puck_in_dz: bool = _own_goal_dir * snapshot.puck_state.position.z > GameRules.BLUE_LINE_Z
-		if not puck_in_dz:
-			return _emergency_backcheck_anchor(snapshot)
-
-	var anchor: Vector3
-	# Man-to-man takes priority on our defensive half when the opp has
-	# the puck (or it's loose). The brain publishes the coverage map at
-	# 6 Hz; we just look up our mark.
-	if _should_play_man_to_man(snapshot):
-		var mark_pid: int = _team_brain.get_coverage_target(_peer_id) if _team_brain != null else 0
-		if mark_pid != 0:
-			var mark: SkaterNetworkState = snapshot.skater_states.get(mark_pid)
-			if mark != null:
-				return _cap_offside(_clamp_man_anchor_to_dz(_man_anchor(mark), snapshot), snapshot)
-
-	var role: StringName = _team_brain.get_role(_peer_id) if _team_brain != null else AIRoleAssignment.ROLE_OFF
-	match role:
-		AIRoleAssignment.ROLE_F2:
-			anchor = _f2_anchor(puck_pos, snapshot)
-		AIRoleAssignment.ROLE_F3:
-			anchor = _f3_anchor(puck_pos, snapshot)
-		_:
-			# Legacy / fallback — Phase 3 anchor (above puck on own-net
-			# side, X tracking the bot's current X to avoid sliding sideways).
-			var anchor_z: float = puck_pos.z + _own_goal_dir * LEGACY_OFF_DEPTH
-			anchor = _clamp_anchor(Vector3(self_pos.x, 0.0, anchor_z))
-	return _cap_offside(anchor, snapshot)
-
-
-# F2 anchor — strong-side support. Two modes based on F1's pressure:
-#   - F1 heavily pressured (2+ defenders within F1_PRESSURE_RADIUS_M):
-#     collapse to close-support, ~1.5 m off F1 to give a quick outlet.
-#   - F1 has space: triangle apex 3 m off puck.x, 2 m back. Spread out
-#     and look like a passing option.
-# STRONG_SIDE_X_DEADBAND prevents the strong/weak flip when the puck
-# (or F1) wiggles through the center.
-func _f2_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
-	var f1_pid: int = _f1_peer_id()
-	if f1_pid != 0:
-		var f1_state: SkaterNetworkState = snapshot.skater_states.get(f1_pid)
-		if f1_state != null:
-			var pressure: int = _opp_count_within(
-					f1_state.position, F1_PRESSURE_RADIUS_M, snapshot)
-			if pressure >= F1_HEAVY_PRESSURE_COUNT:
-				return _f2_support_anchor(f1_state.position, puck_pos)
-	# Default: triangle apex (F1 has space, F2 looks for an open lane).
-	# On the defensive half during own possession (breakout / regroup)
-	# we use a wider X offset — see F2_OWN_POSSESSION_DEF_HALF_OFFSET_X.
-	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
-	var x_offset: float = F2_OFFSET_X
-	var puck_in_oz: bool = -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z
-	if not puck_in_oz and _own_team_has_possession(snapshot):
-		x_offset = F2_OWN_POSSESSION_DEF_HALF_OFFSET_X
-	var x: float = puck_pos.x + strong_x * x_offset
-	var z: float = puck_pos.z + _own_goal_dir * F2_OFFSET_Z_BACK
-	return _clamp_anchor(Vector3(x, 0.0, z))
-
-
-# Close-support anchor relative to F1, on the strong side. Used when
-# F1 is heavily pressured and needs an immediate outlet target.
-func _f2_support_anchor(f1_pos: Vector3, puck_pos: Vector3) -> Vector3:
-	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
-	var x: float = f1_pos.x + strong_x * F2_SUPPORT_OFFSET_X
-	var z: float = f1_pos.z + _own_goal_dir * F2_SUPPORT_OFFSET_Z_BACK
-	return _clamp_anchor(Vector3(x, 0.0, z))
-
-
-# Returns the F1 teammate's peer_id, or 0 if no F1 is currently
-# assigned (TeamBrain hasn't run yet, or only one teammate on team).
-func _f1_peer_id() -> int:
-	if _team_brain == null:
-		return 0
-	for peer_id: int in _team_brain.roles:
-		if _team_brain.roles[peer_id] == AIRoleAssignment.ROLE_F1:
-			return peer_id
-	return 0
-
-
-# Counts opponents within `radius` of `pos` in XZ. Used by F2 to read
-# F1's pressure level — separate from _opponent_within (bool) because
-# the threshold is count-based.
-func _opp_count_within(pos: Vector3, radius: float, snapshot: WorldSnapshot) -> int:
-	var n: int = 0
-	var r2: float = radius * radius
-	for peer_id: int in snapshot.skater_states:
-		if int(_team_id_resolver.call(peer_id)) == _team_id:
-			continue
-		var p: Vector3 = snapshot.skater_states[peer_id].position
-		var dx: float = p.x - pos.x
-		var dz: float = p.z - pos.z
-		if dx * dx + dz * dz < r2:
-			n += 1
-	return n
-
-
-# Cap an off-puck anchor so we don't ask the bot to skate ahead of the
-# puck across the OZ blue line. While the puck is in NZ or our DZ, any
-# anchor that lands in our attacking zone gets pulled back to the NZ
-# side of the line. Once the puck enters the OZ, the cap lifts and
-# off-puck teammates are free to flow in for support.
-#
-# Carriers go through _carry_anchor, not here, so the puck is brought
-# in normally — the cap only pins the support skaters.
-func _cap_offside(anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
-	var puck_z: float = snapshot.puck_state.position.z
-	# Puck already in OZ? No cap.
-	if -_own_goal_dir * puck_z > GameRules.BLUE_LINE_Z:
-		return anchor
-	# Puck not in OZ. Anchor allowed only on NZ/DZ side of the blue line.
-	if -_own_goal_dir * anchor.z <= GameRules.BLUE_LINE_Z:
-		return anchor
-	# Anchor sits in OZ — pull it back to the NZ side, X unchanged so
-	# steering doesn't drag the bot laterally.
-	var hold_z: float = -_own_goal_dir * (GameRules.BLUE_LINE_Z - OFFSIDE_HOLD_BUFFER_M)
-	return _clamp_anchor(Vector3(anchor.x, 0.0, hold_z))
-
-
-# True iff any opponent is within `radius` of `pos` in XZ. Used by
-# the wrister-charge bail; cheap at 6 opponents max so we recompute
-# rather than caching.
-func _opponent_within(snapshot: WorldSnapshot, pos: Vector3, radius: float) -> bool:
-	var r2: float = radius * radius
-	for peer_id: int in snapshot.skater_states:
-		if peer_id == _peer_id:
-			continue
-		if int(_team_id_resolver.call(peer_id)) == _team_id:
-			continue
-		var op: Vector3 = snapshot.skater_states[peer_id].position
-		var dx: float = op.x - pos.x
-		var dz: float = op.z - pos.z
-		if dx * dx + dz * dz < r2:
-			return true
-	return false
-
-
-# Like _opponent_within but only counts opponents in the forward
-# half-plane relative to `forward_dir`. Used by the wrister bail —
-# defenders behind or beside the shooter aren't realistic threats to
-# a wrister windup; matches the pressure cube falloff convention. A
-# zero-length forward_dir falls through to the omnidirectional check
-# so degenerate inputs don't silently skip the bail entirely.
-func _opponent_within_forward(snapshot: WorldSnapshot, pos: Vector3,
+# Clamp an anchor to the playable rink with a small margin so steering
+# doesn't pull the bot into the boards or behind the goal line.
+# True iff any opponent is within `radius` of `self_pos` AND in the
+# forward half-plane defined by `forward_dir`. Used by the wrister /
+# slapper mid-charge bail check — defenders behind or perpendicular
+# to the shooter can't realistically disrupt the windup, so only
+# forward-cone threats count. Falls through to omnidirectional check
+# when forward_dir is degenerate.
+func _opponent_within_forward(snapshot: WorldSnapshot, self_pos: Vector3,
 		forward_dir: Vector3, radius: float) -> bool:
-	var fwd_len: float = sqrt(forward_dir.x * forward_dir.x + forward_dir.z * forward_dir.z)
-	if fwd_len < 0.001:
-		return _opponent_within(snapshot, pos, radius)
-	var fwd_x: float = forward_dir.x / fwd_len
-	var fwd_z: float = forward_dir.z / fwd_len
+	var fl: float = sqrt(forward_dir.x * forward_dir.x + forward_dir.z * forward_dir.z)
+	var fwd_x: float = 0.0
+	var fwd_z: float = 0.0
+	var have_dir: bool = fl > 0.001
+	if have_dir:
+		fwd_x = forward_dir.x / fl
+		fwd_z = forward_dir.z / fl
 	var r2: float = radius * radius
 	for peer_id: int in snapshot.skater_states:
-		if peer_id == _peer_id:
-			continue
 		if int(_team_id_resolver.call(peer_id)) == _team_id:
 			continue
-		var op: Vector3 = snapshot.skater_states[peer_id].position
-		var dx: float = op.x - pos.x
-		var dz: float = op.z - pos.z
+		var pos: Vector3 = snapshot.skater_states[peer_id].position
+		var dx: float = pos.x - self_pos.x
+		var dz: float = pos.z - self_pos.z
 		if dx * dx + dz * dz >= r2:
 			continue
+		if not have_dir:
+			return true   # degenerate forward — fall through to omni
 		if dx * fwd_x + dz * fwd_z > 0.0:
 			return true
 	return false
 
 
-# Tag-up anchor: just on the NZ side of the OZ blue line, preserving X
-# so steering pulls us straight back. Buffer past the line so the
-# host's has_tagged_up doesn't toggle on/off at the boundary.
+# Tag-up anchor: when ghosted (offside), anchor at the NZ side of our
+# own blue line, preserving current X. Bot skates straight back; the
+# host clears `is_ghost` via `InfractionRules.has_tagged_up` once the
+# bot crosses the blue line. OFFSIDE_HOLD_BUFFER_M makes the destination
+# meaningfully past the line so we don't oscillate at the boundary.
 func _tag_up_anchor(self_pos: Vector3) -> Vector3:
-	var tag_z: float = -_own_goal_dir * (GameRules.BLUE_LINE_Z - OFFSIDE_HOLD_BUFFER_M)
-	return _clamp_anchor(Vector3(self_pos.x, 0.0, tag_z))
+	# Our own blue line is at +z for team 0, -z for team 1. NZ side of
+	# it means slightly less depth (toward midrink, away from own goal).
+	var z: float = _own_goal_dir * (GameRules.BLUE_LINE_Z - OFFSIDE_HOLD_BUFFER_M)
+	return Vector3(self_pos.x, 0.0, z)
 
 
-# Give-and-go anchor: straight up-ice from the release point by
-# GIVE_AND_GO_LEAD_M. Same X so the cut feels like a continuation of
-# the bot's existing skating line rather than a teleport sideways.
-# _clamp_anchor pulls it inside the rink and out of the crease.
-func _compute_give_and_go_anchor(release_pos: Vector3) -> Vector3:
-	var anchor_z: float = release_pos.z + (-_own_goal_dir) * GIVE_AND_GO_LEAD_M
-	return _clamp_anchor(Vector3(release_pos.x, 0.0, anchor_z))
-
-
-# Net-front screen check. Returns the screen anchor (centred X, ~1.5 m
-# in front of the crease arc, on the puck-side of the goal line) when
-# a teammate is currently in SLAPPER_CHARGE_WITH_PUCK AND I'm the
-# closest non-shooter teammate to that anchor. Otherwise returns
-# Vector3.ZERO meaning "no screen, fall through to role anchor."
+# Decides what the BACKDOOR bot should do when an incoming puck is
+# detected. Returns [adjusted_anchor, aim_override] — aim_override is
+# Vector3.ZERO when no mouse override is needed (HOLD).
 #
-# Bots only fire wristers themselves, so this fires when a HUMAN
-# teammate is winding up a slapper from the point — the bot picks up
-# the screen role automatically. The screen is dropped the moment the
-# slapper releases (state moves to FOLLOW_THROUGH) or bails (back to
-# SKATING_WITH_PUCK).
-func _net_front_screen_anchor_or_zero(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	var slapper_pid: int = 0
-	for pid: int in snapshot.skater_states:
-		if pid == _peer_id:
-			continue
-		if int(_team_id_resolver.call(pid)) != _team_id:
-			continue
-		var s: SkaterNetworkState = snapshot.skater_states[pid]
-		if s.shot_state == _SHOT_STATE_SLAPPER_CHARGE_WITH_PUCK:
-			slapper_pid = pid
-			break
-	if slapper_pid == 0:
-		return Vector3.ZERO
-	# Anchor: ~1.5 m past the crease arc edge on the puck-side of the
-	# attacking goal line. Centred in X (in front of the net mouth).
-	var screen_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SCREEN_OFFSET_FROM_GOAL_LINE_M)
-	var screen_anchor := Vector3(0.0, 0.0, screen_z)
-	# Closest non-shooter teammate (including me) wins the screen role.
-	# Tie-break: peer_id ascending so the choice is stable.
-	var my_dist: float = self_pos.distance_to(screen_anchor)
-	for pid: int in snapshot.skater_states:
-		if pid == _peer_id or pid == slapper_pid:
-			continue
-		if int(_team_id_resolver.call(pid)) != _team_id:
-			continue
-		var pos: Vector3 = snapshot.skater_states[pid].position
-		var their_dist: float = pos.distance_to(screen_anchor)
-		if their_dist < my_dist or (their_dist == my_dist and pid < _peer_id):
-			return Vector3.ZERO
-	return _clamp_anchor(screen_anchor)
+# Decision tree:
+#   - HOLD if no incoming shot (slow puck, not heading at goal).
+#   - STEP OUT if our teammate's shooting state is_elevated (the
+#     puck will be in the air, our body could block it but the
+#     blade can't reach).
+#   - TIP otherwise (fast ground shot, on or off target — both are
+#     deflection candidates).
+func _backdoor_decision(snapshot: WorldSnapshot, self_pos: Vector3, base_anchor: Vector3) -> Array:
+	var puck_state: PuckNetworkState = snapshot.puck_state
+	if puck_state == null:
+		return [base_anchor, Vector3.ZERO]
+	var puck_pos: Vector3 = puck_state.position
+	var puck_vel: Vector3 = puck_state.velocity
+	var puck_speed: float = sqrt(puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z)
+
+	# Speed gate: too slow → pass / rolling, hold anchor.
+	if puck_speed < BACKDOOR_INCOMING_SHOT_SPEED_M_S:
+		return [base_anchor, Vector3.ZERO]
+
+	# Direction gate: must be heading at our offensive goal.
+	var opp_goal_z: float = -_own_goal_dir * GameRules.GOAL_LINE_Z
+	var to_goal_z: float = opp_goal_z - puck_pos.z
+	if puck_vel.z * to_goal_z <= 0.0:
+		return [base_anchor, Vector3.ZERO]
+
+	# Predict where puck path crosses our z plane (lateral anchor pos).
+	var t_to_my_z: float = (self_pos.z - puck_pos.z) / puck_vel.z
+	if t_to_my_z <= 0.0 or t_to_my_z > 2.0:
+		return [base_anchor, Vector3.ZERO]
+	var path_x_at_my_z: float = puck_pos.x + puck_vel.x * t_to_my_z
+
+	# Elevated check: read the most-recent shooter's `is_elevated` flag
+	# directly from their network state. Cleaner than projecting puck
+	# y velocity through gravity math. We use the closest teammate to
+	# the puck as the proxy for "shooter" since once the puck is in
+	# flight there's no carrier — but the bot that just released will
+	# typically be the closest teammate.
+	var shooter_is_elevated: bool = _last_shooter_is_elevated(snapshot)
+
+	if shooter_is_elevated:
+		# STEP OUT — move laterally so our body isn't in the path of
+		# the elevated shot. Blade can't reach an elevated puck so
+		# tipping isn't an option here.
+		var step_dir: float = signf(path_x_at_my_z - base_anchor.x)
+		if step_dir == 0.0:
+			step_dir = 1.0
+		var step_anchor := Vector3(
+				base_anchor.x - step_dir * BACKDOOR_STEP_OUT_M,
+				0.0,
+				base_anchor.z)
+		return [step_anchor, Vector3.ZERO]
+
+	# Fast ground shot — TIP. Shift anchor onto the puck path at our
+	# z plane, aim mouse at goal so the blade angles toward net for
+	# a deflection / redirect. Works for both on-target shots
+	# (steers the puck through a different angle past the goalie)
+	# and off-target shots (redirects toward net).
+	var tip_anchor := Vector3(path_x_at_my_z, 0.0, base_anchor.z)
+	var tip_aim := Vector3(0.0, 0.0, opp_goal_z)
+	return [tip_anchor, tip_aim]
 
 
-# True iff this bot is caught up-ice during opp possession on our
-# defensive half — i.e. the puck is BETWEEN us and our own net, and
-# the opp (or a loose puck) is heading toward us. Triggers the
-# emergency backcheck override that anchors us to the defensive slot
-# instead of routing through man-to-man's mark anchor.
-#
-# Gates:
-#   - Bot forward of puck (puck closer to own net than bot).
-#   - Opp possession or loose puck (own possession is a breakout, not
-#     a defensive scenario).
-#   - Puck on our defensive half (NZ or DZ). In our OZ a "caught"
-#     bot is forechecking, not backchecking — let normal anchors
-#     handle that.
-#   - NO teammate is already back of the puck. If we have defensive
-#     cover behind the puck, this bot should pick up their man-to-man
-#     mark instead of routing to the centered slot — the bot already
-#     back is the last line; F3 stacking on the slot just collides
-#     with them. This is the gate that lets man-to-man fire in DZ:
-#     when the puck is deep in our zone and F2 is already marking the
-#     slot, F3 (shallower than puck) picks up their wing/board mark
-#     instead of also collapsing to the centered slot.
-func _is_caught_up_ice(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+# Returns the is_elevated flag of the most recent likely shooter on
+# our team. Used by BACKDOOR to detect elevated shots without doing
+# gravity math on the puck. We pick the closest teammate to the puck
+# as the proxy — once the puck is in flight there's no carrier, but
+# the bot that just released is typically still nearby.
+func _last_shooter_is_elevated(snapshot: WorldSnapshot) -> bool:
+	if snapshot.puck_state == null:
+		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
-	if _own_goal_dir * (self_pos.z - puck_pos.z) >= 0.0:
-		return false
-	var carrier: int = snapshot.puck_state.carrier_peer_id
-	if carrier != -1 and int(_team_id_resolver.call(carrier)) == _team_id:
-		return false
-	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
-		return false
-	if _teammate_back_of_puck(snapshot, puck_pos):
-		return false
-	return true
-
-
-# True iff any teammate (excluding this bot) is back of the puck —
-# i.e. between the puck and our own net. Used as a defensive-cover
-# gate for the emergency-backcheck override: if someone's already
-# home, this bot doesn't need to abandon their mark.
-func _teammate_back_of_puck(snapshot: WorldSnapshot, puck_pos: Vector3) -> bool:
+	var best_pid: int = 0
+	var best_d2: float = INF
 	for pid: int in snapshot.skater_states:
-		if pid == _peer_id:
-			continue
 		if int(_team_id_resolver.call(pid)) != _team_id:
 			continue
 		var pos: Vector3 = snapshot.skater_states[pid].position
-		if _own_goal_dir * (pos.z - puck_pos.z) > 0.0:
-			return true
-	return false
-
-
-# True iff I'm back of the puck (between puck and our net) AND no
-# other teammate is also back. Used by the shadow-back override:
-# the last line of defense should NOT pinch up to a role anchor, it
-# should hold position behind the puck and wait for support. Caller
-# is responsible for the "not in our DZ" gate (standard defensive
-# coverage handles that situation).
-func _is_alone_back_of_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
-	var puck_pos: Vector3 = snapshot.puck_state.position
-	# Self must be back of puck.
-	if _own_goal_dir * (self_pos.z - puck_pos.z) <= 0.0:
+		var dx: float = pos.x - puck_pos.x
+		var dz: float = pos.z - puck_pos.z
+		var d2: float = dx * dx + dz * dz
+		if d2 < best_d2:
+			best_d2 = d2
+			best_pid = pid
+	if best_pid == 0:
 		return false
-	# No other teammate may also be back.
-	return not _teammate_back_of_puck(snapshot, puck_pos)
+	return snapshot.skater_states[best_pid].is_elevated
 
 
-# Backcheck destination: BACKCHECK_BACK_OF_PUCK_M behind the puck
-# (toward own net), centred X, capped at the defensive slot depth so
-# we never overshoot into our own crease. Working in signed depth
-# (own_goal_dir × z) so the same expression handles both teams —
-# larger depth = closer to own net.
-func _emergency_backcheck_anchor(snapshot: WorldSnapshot) -> Vector3:
-	var puck_pos: Vector3 = snapshot.puck_state.position
-	var puck_depth: float = _own_goal_dir * puck_pos.z
-	var anchor_depth: float = puck_depth + BACKCHECK_BACK_OF_PUCK_M
-	var max_depth: float = GameRules.GOAL_LINE_Z - BACKCHECK_MAX_DEPTH_FROM_GOAL_M
-	var clamped: float = minf(anchor_depth, max_depth)
-	return Vector3(0.0, 0.0, _own_goal_dir * clamped)
-
-
-# True iff we're defending — opp has the puck (or it's loose) and the
-# puck is on our defensive half (NZ or DZ). Man-to-man fires here so
-# bots pick up assignments during the 1-2 s transition window when an
-# opp rush is forming, not just after the puck crosses our blue line.
-# Skipped in our OZ (forecheck zone — F2/F3 zone anchors handle it)
-# and skipped under own possession (breakout, not defensive coverage).
-func _should_play_man_to_man(snapshot: WorldSnapshot) -> bool:
-	var puck_pos: Vector3 = snapshot.puck_state.position
-	# Puck in OZ? (our attacking zone — opp's defensive zone). Skip man.
-	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
-		return false
-	# Don't play man if our team has possession — breakout, not defense.
-	# Loose pucks DO trigger man (opp forwards are crashing, mark them).
-	var carrier: int = snapshot.puck_state.carrier_peer_id
-	if carrier != -1 and int(_team_id_resolver.call(carrier)) == _team_id:
-		return false
-	return true
-
-
-# Man-to-man anchor: MAN_GAP_DEPTH_M off the mark along the line from
-# the mark's PREDICTED position to our own net. Body shades the actual
-# lane to net regardless of where the mark is on the ice (a mark out
-# by the boards still gets shaded toward center, not just behind on
-# Z). Predicting MAN_LEAD_TIME_S ahead means a moving forward doesn't
-# slip past the defender — the defender anchors against where the
-# mark will be by the time they arrive.
-# Returns the peer_id of our current man-to-man mark (the opponent we
-# should be guarding), or 0 if not playing man (or no mark assigned).
-# Used by `_state_off_puck` to exempt the mark from opponent repel —
-# defenders are supposed to stand on top of their mark, not get
-# pushed away. Reads `_team_brain.coverage_targets` which is
-# populated at 6 Hz; keeps cadence consistent with role assignment.
-func _current_mark_pid(snapshot: WorldSnapshot) -> int:
-	if not _should_play_man_to_man(snapshot):
-		return 0
-	if _team_brain == null:
-		return 0
-	return _team_brain.get_coverage_target(_peer_id)
-
-
-func _man_anchor(mark: SkaterNetworkState) -> Vector3:
-	var lead_pos: Vector3 = AITrajectory.predict_at(
-			mark.position, mark.velocity, MAN_LEAD_TIME_S)
-	# Mark in/near our crease: don't try to step goal-side of them.
-	# The anchor would land past the goal line and get clamped to the
-	# crease arc, which (combined with opponent repel from the mark
-	# itself) drifts the defender 4-5 m off the crease. Better to
-	# stand shoulder-to-shoulder with the mark — see
-	# `_apply_steering`'s exempt-opp logic so the mark doesn't repel
-	# us.
-	if CreaseRules.is_in_crease(Vector2(lead_pos.x, lead_pos.z)):
-		return _clamp_anchor(lead_pos)
-	var our_net := Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
-	var dx: float = our_net.x - lead_pos.x
-	var dz: float = our_net.z - lead_pos.z
-	var dist: float = sqrt(dx * dx + dz * dz)
-	if dist < 0.001:
-		# Mark sitting on top of our net — degenerate case; just anchor
-		# at the lead pos and let the goalie + steering sort it out.
-		return _clamp_anchor(lead_pos)
-	var step: float = MAN_GAP_DEPTH_M / dist
-	return _clamp_anchor(Vector3(
-			lead_pos.x + dx * step, 0.0,
-			lead_pos.z + dz * step))
-
-
-# Clamp a man-to-man anchor to stay on our DZ side of the blue line
-# WHEN the puck is in our DZ. Without this, a defender's mark
-# drifting toward the OZ blue line for a regroup setup pulled the
-# defender out of the zone with them — gives up easy keep-ins and
-# the bot has to backtrack on regroups. Real-hockey rule: defenders
-# hold the zone during DZ defense, even if their mark wanders out.
-# Clamp only fires when puck is in DZ; in NZ defense (e.g.
-# transition coverage) the bot can mark across the line normally.
-func _clamp_man_anchor_to_dz(anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
-	var puck_depth: float = _own_goal_dir * snapshot.puck_state.position.z
-	if puck_depth <= GameRules.BLUE_LINE_Z:
-		return anchor   # puck not in our DZ — no clamp
-	var anchor_depth: float = _own_goal_dir * anchor.z
-	if anchor_depth >= GameRules.BLUE_LINE_Z:
-		return anchor   # already on our DZ side
-	return Vector3(anchor.x, anchor.y, _own_goal_dir * GameRules.BLUE_LINE_Z)
-
-
-# F3 anchor — strong-side trailer / high man. Shades to the puck side
-# (smaller magnitude than F2's apex offset so they don't stack) and
-# sits 8 m back toward our own goal as a safety valve.
-func _f3_anchor(puck_pos: Vector3, snapshot: WorldSnapshot) -> Vector3:
-	var strong_x: float = _hysteretic_strong_x(puck_pos.x)
-	# Default X (used in OZ-loose / opp-possession and in NZ/DZ): shade
-	# slightly to the strong side as a trailer.
-	var x: float = puck_pos.x + strong_x * F3_OFFSET_X_STRONG
-	var z: float
-	if -_own_goal_dir * puck_pos.z > GameRules.BLUE_LINE_Z:
-		if _own_team_has_possession(snapshot):
-			# Triangle support during own OZ possession: F3 plants
-			# weak-side at the OZ blue line. Combined with F2's
-			# strong-side support, this gives the carrier two
-			# distinct outlets at different angles — the textbook
-			# 3v3 triangle. The weak-side X also doubles as the
-			# free-safety position: a turnover from the strong side
-			# leaves F3 already on the opposite side of the rink,
-			# in a great spot to backcheck through the slot.
-			x = -strong_x * F3_OZ_WEAK_SIDE_OFFSET_M
-			z = -_own_goal_dir * (GameRules.BLUE_LINE_Z + F3_OZ_OWN_POSSESSION_DEPTH_M)
-		else:
-			# Loose puck or opp possession in OZ: trail the puck back
-			# toward NZ. Strong-side X (default), within the high-zone
-			# band [OZ blue line, back of OZ faceoff circles].
-			var trail_z: float = puck_pos.z + _own_goal_dir * F3_OZ_TRAIL_DEPTH_M
-			var oz_blue_line_z: float = -_own_goal_dir * GameRules.BLUE_LINE_Z
-			var oz_dot_back_z: float = -_own_goal_dir * (
-					GameRules.ICING_FACEOFF_DOT_Z - F3_OZ_DOT_BACK_OFFSET_M)
-			var lo: float = minf(oz_blue_line_z, oz_dot_back_z)
-			var hi: float = maxf(oz_blue_line_z, oz_dot_back_z)
-			z = clampf(trail_z, lo, hi)
-	else:
-		# NZ or DZ. On own possession (breakout / regroup) F3 stays
-		# deep — the safety valve until the puck enters OZ — AND swings
-		# weak-side to open a cross-rink breakout pass lane. On loose
-		# puck or opp possession the legacy above-puck strong-side
-		# trailer applies (active forechecking, not breakout support).
-		var back_offset: float = F3_OFFSET_Z_BACK
-		if _own_team_has_possession(snapshot):
-			back_offset = F3_OWN_POSSESSION_DEF_HALF_OFFSET_Z_BACK
-			x = -strong_x * F3_OWN_POSSESSION_DEF_HALF_WEAK_SIDE_OFFSET_M
-		z = puck_pos.z + _own_goal_dir * back_offset
-	return _clamp_anchor(Vector3(x, 0.0, z))
-
-
-# True iff the puck currently has a carrier on our team. Used by the F3
-# "high man" branch to know whether to plant near the blue line (own
-# possession → guard against the breakaway on a turnover) or fall back
-# to the trail-and-chase clamp (loose puck or opp possession).
-func _own_team_has_possession(snapshot: WorldSnapshot) -> bool:
-	var carrier: int = snapshot.puck_state.carrier_peer_id
-	if carrier == -1:
-		return false
-	return int(_team_id_resolver.call(carrier)) == _team_id
-
-
-# True iff conditions favour pre-charging a slapper to demand the puck.
-# Four gates, all must pass:
-#   (1) Not ghosted. Ghosted (offside) bots can't legally receive a
-#       pass — their collision masks are off — so the puck would
-#       pass through them and the slapper would never fire. Tag up
-#       first; `_off_puck_anchor` already routes ghosted bots to the
-#       tag-up anchor, this gate keeps them there instead of letting
-#       them transition into ONE_TIMER_CHARGE.
-#   (2) A teammate carries the puck (own possession, not me).
-#   (3) score_shoot from my current position clears the trigger
-#       threshold — i.e. I have a real one-timer threat from here,
-#       not just wandering the OZ.
-#   (4) The carrier is on my NON-blade side. The slapper zone is
-#       offset to the blade side; for the puck to enter the zone on
-#       a pass, the puck path (carrier → me → continuation) must
-#       cross the zone — which only happens if the carrier is on
-#       the opposite side of my body from the blade. RH receiver
-#       wants carrier on their LEFT; LH wants carrier on their
-#       RIGHT. Without this gate, RH bots would pre-charge for
-#       cross-passes coming from the wrong side and the puck would
-#       miss the zone entirely.
-#
-# Uses _scratch_opponents which is populated by `_apply_steering`
-# earlier in the OFF_PUCK tick, so callers must run after that.
-func _should_pre_charge_slapper(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
-	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if self_state == null or self_state.is_ghost:
-		return false
-	var carrier: int = snapshot.puck_state.carrier_peer_id
-	if carrier == -1 or carrier == _peer_id:
-		return false
-	if int(_team_id_resolver.call(carrier)) != _team_id:
-		return false
-	# Geometry gate: carrier on non-blade side.
-	var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
-	if carrier_state != null:
-		var blade_dir: Vector2 = _blade_side_dir(self_state.facing)
-		var to_carrier: Vector2 = Vector2(
-				carrier_state.position.x - self_pos.x,
-				carrier_state.position.z - self_pos.z)
-		# Carrier on blade side → puck path won't cross the zone.
-		if blade_dir.dot(to_carrier) >= 0.0:
-			return false
-	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
-	var score: float = AIActionScoring.score_shoot(
-			self_pos, _attacking_goal_pos, goalie_pos,
-			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-			_scratch_opponents)
-	return score >= ONE_TIMER_TRIGGER_THRESHOLD
-
-
-# Slapper zone position in world XZ. Mirrors SkaterController's
-# `get_slapper_zone_global_position` based on facing + handedness.
-# Zone is forward + lateral-blade-side from the player; for RH
-# blade-side is "right of facing" (facing.y, -facing.x), for LH the
-# opposite. Used by the release-distance check so we drop slap_held
-# when the puck nears the actual zone, not just the player body.
-func _compute_slapper_zone_pos(self_pos: Vector3, facing: Vector2) -> Vector3:
-	var blade_dir: Vector2 = _blade_side_dir(facing)
-	# Forward direction in world XZ is (facing.x, facing.y).
-	return Vector3(
-			self_pos.x + facing.x * SLAPPER_ZONE_FORWARD_M + blade_dir.x * SLAPPER_ZONE_LATERAL_M,
-			0.0,
-			self_pos.z + facing.y * SLAPPER_ZONE_FORWARD_M + blade_dir.y * SLAPPER_ZONE_LATERAL_M)
-
-
-# Unit direction from player toward their blade side, in world XZ.
-# RH player: blade on the right of their facing. LH: opposite.
-# Right-of-facing in our (sin, cos)-of-bearing convention is
-# (facing.y, -facing.x); LH negates.
-func _blade_side_dir(facing: Vector2) -> Vector2:
-	var sign: float = -1.0 if _is_left_handed else 1.0
-	return Vector2(facing.y * sign, -facing.x * sign)
-
-
-# Clamp an anchor to the playable rink with a small margin so steering
-# doesn't pull the bot into the boards or behind the goal line.
 func _clamp_anchor(p: Vector3) -> Vector3:
 	var x: float = clampf(p.x,
 			-GameRules.RINK_HALF_WIDTH + RINK_X_INSET,
@@ -2377,131 +1744,188 @@ func _clamp_anchor(p: Vector3) -> Vector3:
 	return Vector3(x, 0.0, z)
 
 
-# Carrier anchor. In NZ/DZ, drive toward the high slot. Once in OZ,
-# search nearby for the position with the best shoot-or-pass option
-# (8 cardinal directions × CARRY_SEARCH_STEP_M plus stay-here).
-func _carry_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	# No hold-up for the carrier — current arcade rules don't whistle on
-	# offside, just ghost the trailing player. The off-puck teammates
-	# clamp themselves on the NZ side of the line via _cap_offside, so
-	# the carrier brings the puck in normally and they release across
-	# behind it.
-	if -_own_goal_dir * self_pos.z <= GameRules.BLUE_LINE_Z:
-		var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
-		return Vector3(0.0, 0.0, slot_z)
-	return _find_best_carry_position(snapshot, self_pos)
+# OZ slot anchor — the recursion terminator and a permanent carry
+# candidate. Slot depth from goal line is fixed at SLOT_DEPTH_FROM_GOAL_LINE.
+func _slot_anchor() -> Vector3:
+	var slot_z: float = -_own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
+	return Vector3(0.0, 0.0, slot_z)
 
 
-func _find_best_carry_position(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	var goalie_pos: Vector3 = _predicted_goalie_pos(snapshot)
+# Momentum-aware time-to-arrive. effective_speed = CHASE_SPEED_REF +
+# component of bot velocity along (self → dest). Bot already moving
+# toward dest gets there faster; bot moving away takes longer.
+# Clamped at MIN_TRAVEL_SPEED_M_S so reverse candidates have finite
+# arrival time (they're slower, but not infinite). No magic forward
+# bias — backward candidates self-penalize via longer time.
+func _momentum_time_to(self_pos: Vector3, dest: Vector3,
+		self_velocity: Vector3) -> float:
+	var dx: float = dest.x - self_pos.x
+	var dz: float = dest.z - self_pos.z
+	var dist: float = sqrt(dx * dx + dz * dz)
+	if dist < 0.001:
+		return 0.0
+	var inv: float = 1.0 / dist
+	var dir_x: float = dx * inv
+	var dir_z: float = dz * inv
+	var speed_along: float = self_velocity.x * dir_x + self_velocity.z * dir_z
+	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S, CHASE_SPEED_REF_M_S + speed_along)
+	return dist / effective
 
-	# Refresh the scratch lists. _pick_action would also populate
-	# _scratch_opponents but it runs later in the same tick (after
-	# QUIET_EYE_TICKS) so we can't rely on its state. Rebuild here.
-	_scratch_opponents.clear()
-	var teammates: Array[Vector3] = []
-	var teammate_facings: Array[Vector2] = []
-	for peer_id: int in snapshot.skater_states:
-		if peer_id == _peer_id:
-			continue
-		var s_state: SkaterNetworkState = snapshot.skater_states[peer_id]
-		if int(_team_id_resolver.call(peer_id)) == _team_id:
-			teammates.append(s_state.position)
-			teammate_facings.append(s_state.facing)
-		else:
-			_scratch_opponents.append(s_state.position)
 
-	# Score current position as the baseline; only move if a candidate
-	# beats it. EXCEPT: when the carrier is at or past the goal-line
-	# buffer (the dead zone right at and behind the net), don't let
-	# "stay here" win — force the search to pick a forward candidate.
-	# Without this gate the bot would happily park behind the net if
-	# pass score from there happened to be decent, even though shot
-	# score is zeroed by `_is_past_goal_line`. Real hockey: behind the
-	# net is a setup spot, not a destination.
-	var current_past_goal_buffer: bool = (
-			absf(self_pos.z) > absf(_attacking_goal_pos.z) - CARRY_GOAL_LINE_BUFFER_M)
-	var best_pos: Vector3 = self_pos
-	var best_score: float
-	if current_past_goal_buffer:
-		best_score = -INF
+# Recursive depth-2 scorer: best terminal action from `pos`.
+#   max(score_shoot(pos), best leaf-pass from pos, carry-to-slot from pos)
+#
+# Two branches only — shoot from pos, or carry-to-slot from pos.
+# No leaf-pass at this depth: evaluating "what could the receiver do"
+# stops at "they could shoot or drive to slot." Including their pass
+# options would (a) enable infinite mutual-pass loops where two bots
+# value each other recursively, and (b) blow up the recursion depth
+# without much added accuracy.
+#
+# `opps` should already be projected to the time the actor will be at
+# `pos`. At the inner level we don't know the actor's velocity, so
+# the carry-to-slot uses 0-momentum time.
+func _score_at(pos: Vector3, opps: Array[Vector3], snapshot: WorldSnapshot,
+		teammate_ids: Array[int], goalie_pos: Vector3) -> float:
+	var shoot_s: float = AIActionScoring.score_shoot(
+			pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF, opps)
+	# Carry-to-slot: depth-2 terminator. 0-momentum time at inner level.
+	var slot_pos: Vector3 = _slot_anchor()
+	var slot_dist: float = pos.distance_to(slot_pos)
+	var slot_time: float = slot_dist / CHASE_SPEED_REF_M_S
+	var slot_decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
+	var slot_lane: float = AIActionScoring.path_clearance(pos, slot_pos, opps)
+	var carry_to_slot_score: float = _last_score_at_slot * slot_lane * slot_decay
+	return maxf(shoot_s, carry_to_slot_score)
+
+
+# Recursion terminator. Pure shoot value at the slot — score_at(slot)
+# is the recursion floor (slot's "carry to slot" would be 0 distance
+# × 0 time = self-reference) and we don't recurse into pass at any
+# depth. Computed once per _pick_action tick and cached in
+# `_last_score_at_slot` so every _score_at call gets a constant-time
+# slot lookup.
+func _compute_score_at_slot(opps: Array[Vector3], snapshot: WorldSnapshot,
+		teammate_ids: Array[int], goalie_pos: Vector3) -> float:
+	var slot_pos: Vector3 = _slot_anchor()
+	return AIActionScoring.score_shoot(
+			slot_pos, _attacking_goal_pos, goalie_pos,
+			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF, opps)
+
+
+# Pre-baked rotations for the 8 polar cardinal candidates.
+const _POLAR_ANGLES: Array[float] = [
+		0.0, PI * 0.25, PI * 0.5, PI * 0.75,
+		PI, -PI * 0.75, -PI * 0.5, -PI * 0.25,
+]
+
+
+# Returns [best_score, best_pos] across all 10 carry candidates:
+#   - Stand-still (current position, encodes patience)
+#   - 8 polar cardinals at CARRY_SEARCH_STEP_M, oriented so "forward"
+#     = direction toward slot
+#   - The OZ slot anchor (long-range "drive at slot")
+#
+# Each candidate scored uniformly:
+#   score = score_at(candidate, projected_opps) × path_clear × time_decay
+# where time uses momentum-aware effective speed (backward candidates
+# self-discount via longer arrival).
+func _best_carry(self_pos: Vector3, self_velocity: Vector3,
+		snapshot: WorldSnapshot, teammate_ids: Array[int],
+		goalie_pos: Vector3) -> Array:
+	var slot_pos: Vector3 = _slot_anchor()
+	# Polar forward direction: toward slot. Fallback to attacking-goal
+	# axis when degenerate (bot exactly at slot).
+	var to_slot_x: float = slot_pos.x - self_pos.x
+	var to_slot_z: float = slot_pos.z - self_pos.z
+	var to_slot_len_sq: float = to_slot_x * to_slot_x + to_slot_z * to_slot_z
+	var fwd_x: float
+	var fwd_z: float
+	if to_slot_len_sq < 0.001:
+		fwd_x = 0.0
+		fwd_z = -_own_goal_dir
 	else:
-		best_score = _carry_score_with_drive_bias(self_pos, goalie_pos, teammates, teammate_facings)
+		var inv: float = 1.0 / sqrt(to_slot_len_sq)
+		fwd_x = to_slot_x * inv
+		fwd_z = to_slot_z * inv
 
-	# 8 cardinal/diagonal directions. Pre-baked so we don't recompute
-	# trig each tick.
-	const SQRT2_INV: float = 0.70710678
-	const DIRS: Array[Vector2] = [
-			Vector2(1, 0), Vector2(SQRT2_INV, SQRT2_INV),
-			Vector2(0, 1), Vector2(-SQRT2_INV, SQRT2_INV),
-			Vector2(-1, 0), Vector2(-SQRT2_INV, -SQRT2_INV),
-			Vector2(0, -1), Vector2(SQRT2_INV, -SQRT2_INV),
-	]
-	for d: Vector2 in DIRS:
+	# Score the 8 polar cardinals + slot anchor first; stand-still is
+	# scored last and only wins if STRICTLY greater than the best
+	# movement candidate. By construction stand-still ties with the
+	# best fire option from the same position (score_at(self) is a
+	# max that includes shoot/carry-to-slot from self), and the slot
+	# anchor's score equals stand-still's carry-to-slot branch when
+	# that branch dominates — so stand-still ties with carry candidates
+	# almost as often as it ties with fire. Resolving carry ties toward
+	# movement keeps the bot from dawdling when slot-drive is the play.
+	var best_pos: Vector3 = self_pos
+	var best_score: float = -INF
+
+	# 8 polar cardinals at CARRY_SEARCH_STEP_M. Forward = toward slot;
+	# rotate by 0°, 45°, ..., 315° to span all directions.
+	for angle: float in _POLAR_ANGLES:
+		var c: float = cos(angle)
+		var s_a: float = sin(angle)
+		var dir_x: float = fwd_x * c - fwd_z * s_a
+		var dir_z: float = fwd_x * s_a + fwd_z * c
 		var candidate := Vector3(
-				self_pos.x + d.x * CARRY_SEARCH_STEP_M, 0.0,
-				self_pos.z + d.y * CARRY_SEARCH_STEP_M)
-		# Don't drift back into the neutral zone or past the attacking
-		# goal line. RINK_X_INSET keeps us off the boards.
-		if -_own_goal_dir * candidate.z <= GameRules.BLUE_LINE_Z:
-			continue
+				self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
+				self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
 		if absf(candidate.z) > absf(_attacking_goal_pos.z) - CARRY_GOAL_LINE_BUFFER_M:
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
 			continue
-		var s: float = _carry_score_with_drive_bias(candidate, goalie_pos, teammates, teammate_facings)
-		if s > best_score:
-			best_score = s
+		var local_time: float = _momentum_time_to(self_pos, candidate, self_velocity)
+		_project_opponents_to(snapshot, local_time, _scratch_opponents_path)
+		var lane: float = AIActionScoring.path_clearance(
+				self_pos, candidate, _scratch_opponents_path)
+		if lane <= 0.0:
+			continue
+		var dest_score: float = _score_at(candidate, _scratch_opponents_path,
+				snapshot, teammate_ids, goalie_pos)
+		var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
+		var s_total: float = dest_score * lane * decay
+		if s_total > best_score:
+			best_score = s_total
 			best_pos = candidate
-	return best_pos
+
+	# Slot anchor — long-range candidate, valid from anywhere on the
+	# rink. NZ bots reach the slot via this; OZ bots near the slot
+	# already cover it via local polar candidates.
+	var slot_time: float = _momentum_time_to(self_pos, slot_pos, self_velocity)
+	_project_opponents_to(snapshot, slot_time, _scratch_opponents_path)
+	var slot_lane: float = AIActionScoring.path_clearance(
+			self_pos, slot_pos, _scratch_opponents_path)
+	if slot_lane > 0.0:
+		var slot_dest_score: float = _score_at(slot_pos, _scratch_opponents_path,
+				snapshot, teammate_ids, goalie_pos)
+		var slot_decay: float = pow(
+				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
+		var slot_total: float = slot_dest_score * slot_lane * slot_decay
+		if slot_total > best_score:
+			best_score = slot_total
+			best_pos = slot_pos
+
+	# Stand-still last. Only wins on STRICTLY greater than the best
+	# movement candidate — patience must be earned. Score uses
+	# current opponents (time = 0 → no projection).
+	var stand_score: float = _score_at(self_pos, _scratch_opponents,
+			snapshot, teammate_ids, goalie_pos)
+	if stand_score > best_score:
+		best_score = stand_score
+		best_pos = self_pos
+
+	return [maxf(best_score, 0.0), best_pos]
 
 
-# Carry-position score plus a small drive-net tiebreak — closer to
-# the attacking goal scores marginally higher. When all candidates
-# score similarly low (no clear shot or pass available), the bias
-# tips the search toward the candidate closest to net, so the bot
-# DRIVES the net by default instead of freezing in place. A real
-# shot/pass score (0.3+) easily beats the bias (max 0.05), so this
-# only matters as a tiebreak among low-scoring positions.
-func _carry_score_with_drive_bias(pos: Vector3, goalie_pos: Vector3,
-		teammates: Array[Vector3], teammate_facings: Array[Vector2]) -> float:
-	var base: float = AIActionScoring.carry_position_score(
-			pos, _attacking_goal_pos, goalie_pos,
-			GameRules.NET_HALF_WIDTH, GOALIE_SHADOW_HALF,
-			teammates, teammate_facings, _scratch_opponents)
-	var dist_to_goal: float = pos.distance_to(_attacking_goal_pos)
-	var drive_factor: float = 1.0 - clampf(
-			dist_to_goal / AIActionScoring.SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
-	return base + drive_factor * CARRY_DRIVE_NET_BIAS
-
-
-# Dump target — deep corner of the attacking zone on the bot's strong
-# side. Quick-shot direction is blade-from-player so the puck fires
-# along the bot→corner vector, sliding into the deep zone where a
-# forechecker can chase it down.
-func _dump_aim_point(self_pos: Vector3) -> Vector3:
-	var strong_x: float = signf(self_pos.x) if absf(self_pos.x) > STRONG_SIDE_X_DEADBAND else 1.0
-	var deep_z: float = _attacking_goal_pos.z + _own_goal_dir * DUMP_DEPTH_FROM_GOAL_M
-	return Vector3(strong_x * DUMP_CORNER_X, 0.0, deep_z)
-
-
-# Walk the puck's predicted trajectory and pick the earliest step where
-# we could actually reach the puck. The earliest reachable step is the
-# best intercept — any later step the puck has slid further past us, any
-# earlier step we wouldn't have arrived yet. Trajectory walk also gives
-# us free rink-clamping (a sliding puck heading into corner boards no
-# longer projects an intercept inside the wall) and a single seam to
-# add puck friction later. Falls back to the puck's current position
-# when no step is reachable in the lookahead window.
 # Shifts an intercept point toward the center-ice X axis by
 # CHASE_ANGLE_BIAS_M relative to the carrier's CURRENT X. The shift
 # magnitude is capped at the carrier's |X| so we never overshoot to
 # the opposite side of center — that would put the bot on the carrier's
 # OUTSIDE and open the middle, the exact pattern we're trying to avoid.
 # Carriers within CHASE_ANGLE_BIAS_M of center are left alone (no
-# inside to take away).
-#
-# Static + private so it's unit-testable without standing up a full SM.
+# inside to take away). Static + private so it's unit-testable.
 static func _angle_intercept_inside(target: Vector3, carrier_pos: Vector3) -> Vector3:
 	if absf(carrier_pos.x) <= CHASE_ANGLE_BIAS_M:
 		return target
@@ -2509,37 +1933,31 @@ static func _angle_intercept_inside(target: Vector3, carrier_pos: Vector3) -> Ve
 	return Vector3(target.x + bias, target.y, target.z)
 
 
-# True iff `aim_pos` sits inside the quick-shot blade ROM cone from
-# `self_pos` given `facing_xz`. See PASS_REACHABLE_DOT_MIN comment for
-# the underlying mechanic. Used by `_pick_action` to drop unreachable
-# pass targets before scoring; receivers behind the bot's facing
-# would otherwise be picked as "open" and the actual quick-shot would
-# fire at the ROM edge instead. Static + private so it's
-# unit-testable without standing up a full SM.
-#
-# `facing_xz` follows the SkaterNetworkState convention (Vector2 of
-# unit-length world XZ). Degenerate aims (aim coincident with self)
-# return true since there's no direction to constrain.
-static func _is_pass_target_reachable(self_pos: Vector3, facing_xz: Vector2,
-		aim_pos: Vector3) -> bool:
-	var dx: float = aim_pos.x - self_pos.x
-	var dz: float = aim_pos.z - self_pos.z
-	var len_sq: float = dx * dx + dz * dz
-	if len_sq < 0.0001:
-		return true
-	var inv: float = 1.0 / sqrt(len_sq)
-	var dot: float = facing_xz.x * dx * inv + facing_xz.y * dz * inv
-	return dot >= PASS_REACHABLE_DOT_MIN
-
-
-func _lead_intercept(self_pos: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
+func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
 	var dt: float = CHASE_MAX_LOOKAHEAD_S / float(CHASE_TRAJECTORY_STEPS)
 	var traj: Array[Vector3] = AITrajectory.predict(
 			puck_pos, puck_vel, CHASE_TRAJECTORY_STEPS, dt)
+	# Closing-rate-aware reach: bot's velocity component toward the
+	# candidate intercept boosts the effective chase speed (bot already
+	# committed in that direction has a head start). Component AWAY
+	# from the target subtracts (bot has to redirect, slower reach).
+	# Capped at ±50% of CHASE_SPEED so extreme velocities don't blow
+	# up the estimate. Without this, the formula assumes bot starts
+	# at rest and picks intercepts that bots currently moving the
+	# wrong way can't actually reach — produces visible bad angles
+	# on slow-moving pucks.
+	var v_cap: float = CHASE_SPEED_REF_M_S * 0.5
 	for i: int in traj.size():
 		var t_step: float = (i + 1) * dt
-		var reach: float = self_pos.distance_to(traj[i])
-		if reach <= CHASE_SPEED_REF_M_S * t_step:
+		var dx: float = traj[i].x - self_pos.x
+		var dz: float = traj[i].z - self_pos.z
+		var dist: float = sqrt(dx * dx + dz * dz)
+		var v_along: float = 0.0
+		if dist > 0.001:
+			var inv_d: float = 1.0 / dist
+			v_along = self_vel.x * dx * inv_d + self_vel.z * dz * inv_d
+		var effective_speed: float = CHASE_SPEED_REF_M_S + clampf(v_along, -v_cap, v_cap)
+		if dist <= effective_speed * t_step:
 			return traj[i]
 	# Puck is moving away faster than we can chase — aim at the last
 	# projected position so we at least head in the right direction.
@@ -2556,10 +1974,51 @@ func _teammate_has_puck(snapshot: WorldSnapshot) -> bool:
 	return int(_team_id_resolver.call(carrier)) == _team_id
 
 
-# Where to drop into when the puck is lost mid-on-puck-state. F1s chase,
-# everyone else holds the above-puck anchor.
-func _post_puck_lost_state() -> State:
-	return State.CHASE_PUCK if _is_f1() else State.OFF_PUCK
+# Where to drop into when the puck is lost mid-on-puck-state. The
+# closest teammate to the puck chases; everyone else falls into
+# normal off-puck slot positioning.
+func _post_puck_lost_state(snapshot: WorldSnapshot) -> State:
+	if snapshot == null or snapshot.puck_state == null:
+		return State.OFF_PUCK
+	# If someone has the puck (likely a teammate snagged it), no chase.
+	if snapshot.puck_state.carrier_peer_id != -1:
+		return State.OFF_PUCK
+	var s: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if s == null:
+		return State.OFF_PUCK
+	return State.CHASE_PUCK if _is_closest_teammate_to_puck_at(snapshot, s.position) else State.OFF_PUCK
+
+
+# True iff the puck is loose (no carrier) AND we are the closest
+# teammate to it. Used by OFF_PUCK→CHASE_PUCK and CHASE_PUCK exit.
+# Replaces the v1 "is F1?" gate — slot labels don't directly drive
+# chase decisions in v2.
+func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	if snapshot == null or snapshot.puck_state == null:
+		return false
+	if snapshot.puck_state.carrier_peer_id != -1:
+		return false  # someone has the puck
+	return _is_closest_teammate_to_puck_at(snapshot, self_pos)
+
+
+# Returns true if this bot is the closest teammate to the current
+# puck position. Used as the loose-puck-chase trigger.
+func _is_closest_teammate_to_puck_at(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var dx: float = self_pos.x - puck_pos.x
+	var dz: float = self_pos.z - puck_pos.z
+	var my_d2: float = dx * dx + dz * dz
+	for pid: int in snapshot.skater_states:
+		if pid == _peer_id:
+			continue
+		if int(_team_id_resolver.call(pid)) != _team_id:
+			continue
+		var pos: Vector3 = snapshot.skater_states[pid].position
+		var ox: float = pos.x - puck_pos.x
+		var oz: float = pos.z - puck_pos.z
+		if ox * ox + oz * oz < my_d2:
+			return false
+	return true
 
 
 # Detects "puck just became loose" and arms the engagement cooldown if
@@ -2610,20 +2069,10 @@ func _set_state(s: State) -> void:
 		if s == State.SLAPPER_PRESSED:
 			_slapper_charge_tick = 0
 			_slapper_aim_target = Vector3.ZERO
-		# ONE_TIMER_CHARGE has its own aim-then-fire flow — reset the
-		# "slap fired" flag so the next entry re-runs the aim wait.
-		if s == State.ONE_TIMER_CHARGE:
-			_one_timer_slap_fired = false
-		# Give-and-go ends the moment we have the puck again — return
-		# pass succeeded (or we picked up our own dump). The CARRY state
-		# uses _carry_anchor, not the off-puck override, so leaving the
-		# timer set wouldn't actively misbehave, but clearing here keeps
-		# the next OFF_PUCK transition (post-shot, e.g.) clean.
 		# Intent + wait counter reset on CARRY entry so a new puck
 		# pickup gets a fresh _pick_action evaluation rather than
 		# inheriting stale state from a previous CARRY.
 		if s == State.CARRY:
-			_give_and_go_remaining_ticks = 0
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
 		_state = s
