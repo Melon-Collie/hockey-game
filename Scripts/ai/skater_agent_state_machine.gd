@@ -632,6 +632,8 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			return AIRoleFinisher.decide(ctx)
 		AIRoleSlots.Slot.SUPPORT:
 			return AIRoleSupport.decide(ctx)
+		AIRoleSlots.Slot.OUTLET:
+			return AIRoleOutlet.decide(ctx)
 		_:
 			return AIRoleAnchorFollow.decide(ctx)
 
