@@ -75,6 +75,11 @@ func _ready() -> void:
 	_submit_button.pressed.connect(_on_submit_pressed)
 	btn_row.add_child(_submit_button)
 
+	# Connect once — the BugReporter instance is reused across dialog opens.
+	# CONNECT_DEFERRED isn't needed since the request_completed lambda already
+	# runs on the main thread.
+	_bug_reporter.submit_completed.connect(_on_submit_completed)
+
 	hide()
 
 
@@ -93,16 +98,35 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _on_submit_pressed() -> void:
+	if _submit_button.disabled:
+		return  # already submitting; defense in depth against double-press
 	var text: String = _description.text.strip_edges()
 	if text.is_empty():
 		return
 	_submit_button.disabled = true
 	_status_label.text = "Submitting..."
 	_bug_reporter.submit(text, NetworkTelemetry.instance)
-	await get_tree().create_timer(1.5).timeout
-	_status_label.text = "Submitted — thank you!"
-	await get_tree().create_timer(1.5).timeout
-	hide()
+
+
+func _on_submit_completed(result: BugReporter.Result, _http_code: int) -> void:
+	# is_inside_tree guard: dialog could have been freed (scene change) between
+	# request_completed firing and this handler running. The HTTPRequest is
+	# parented to the scene root so it survives across scene changes; the
+	# dialog usually doesn't.
+	if not is_inside_tree():
+		return
+	match result:
+		BugReporter.Result.SUCCESS:
+			_status_label.text = "Submitted — thank you!"
+			await get_tree().create_timer(1.5).timeout
+			if is_inside_tree():
+				hide()
+		BugReporter.Result.RATE_LIMITED:
+			_status_label.text = "Please wait a minute before submitting again."
+			_submit_button.disabled = false
+		BugReporter.Result.FAILED:
+			_status_label.text = "Submission failed. Please try again later."
+			_submit_button.disabled = false
 
 
 func _on_cancel_pressed() -> void:
