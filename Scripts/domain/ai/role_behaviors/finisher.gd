@@ -39,6 +39,13 @@ const INCOMING_SHOT_SPEED_M_S: float = 12.0
 # Lateral step magnitude used to clear the puck path on STEP_OUT.
 const STEP_OUT_M: float = 1.5
 
+# How far in front of the opp goal the positioning search center
+# sits. 5 m matches the conventional "slot" depth and keeps every
+# polar sample (radius SEARCH_STEP_M = 3) on the legal side of the
+# goal line (GOAL_LINE_BUFFER_M = 1). Pure geometric — derived
+# from rink layout, not a behavioral knob.
+const SLOT_DEPTH_FROM_GOAL_M: float = 5.0
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	# Reactive mode wins when a shot is incoming. _try_reactive
@@ -89,26 +96,31 @@ static func _try_reactive_decision(ctx: RoleContext) -> RoleDecision:
 	# puck is the proxy for "shooter" since once the puck is in
 	# flight there's no carrier — but the bot that just released
 	# will typically be the closest teammate.
+	#
+	# Reactive references the FINISHER's CURRENT position (self_pos)
+	# rather than a static anchor — under the no-anchors refactor
+	# FINISHER roams, so reactive responses are anchored to where
+	# the bot actually is when the puck arrives.
 	var d := RoleDecision.new()
 	if _last_shooter_is_elevated(ctx):
 		# STEP OUT — move laterally so our body isn't in the path of
 		# the elevated shot. Blade can't reach an elevated puck so
 		# tipping isn't an option here.
-		var step_dir: float = signf(path_x_at_my_z - ctx.anchor.x)
+		var step_dir: float = signf(path_x_at_my_z - ctx.self_pos.x)
 		if step_dir == 0.0:
 			step_dir = 1.0
 		d.target_position = Vector3(
-				ctx.anchor.x - step_dir * STEP_OUT_M,
+				ctx.self_pos.x - step_dir * STEP_OUT_M,
 				0.0,
-				ctx.anchor.z)
+				ctx.self_pos.z)
 		return d
 
 	# Fast ground shot — TIP. Shift target onto the puck path at our
-	# z plane, aim mouse at goal so the blade angles toward net for a
-	# deflection / redirect. Works for both on-target shots (steers
-	# the puck through a different angle past the goalie) and
+	# current z plane, aim mouse at goal so the blade angles toward
+	# net for a deflection / redirect. Works for both on-target shots
+	# (steers the puck through a different angle past the goalie) and
 	# off-target shots (redirects toward net).
-	d.target_position = Vector3(path_x_at_my_z, 0.0, ctx.anchor.z)
+	d.target_position = Vector3(path_x_at_my_z, 0.0, ctx.self_pos.z)
 	d.aim_world_pos = Vector3(0.0, 0.0, opp_goal_z)
 	d.has_aim_override = true
 	return d
@@ -142,16 +154,18 @@ static func _last_shooter_is_elevated(ctx: RoleContext) -> bool:
 
 # ── Positioning (no incoming shot) ──────────────────────────────────────────
 
-# Argmax over the standard off-puck candidate set scored with
-# score_pass(carrier, candidate). Falls back to anchor when no
-# teammate carrier (FINISHER is OZONE-only — no carrier means the
-# brain is about to re-route this peer).
+# Argmax over the candidate set scored with score_pass(carrier,
+# candidate). Search center sits SLOT_DEPTH_FROM_GOAL_M in front of
+# the opp goal at center ice — the slot. Polar samples around this
+# center cover the high-slot, low-slot, and weak/strong-side post
+# regions. Falls back to self_pos when no teammate carrier (brain
+# re-tick will re-route this peer within a frame).
 static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_teammate_carrier_pos(ctx)
 	if carrier_pos == Vector3.ZERO:
-		d.target_position = ctx.anchor
+		d.target_position = ctx.self_pos
 		return d
 
 	var goalie_pos: Vector3 = AIRoleHelpers.resolve_opp_goalie_pos(ctx)
@@ -161,9 +175,17 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 
 	var teammate_positions: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
-	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates(ctx)
 
-	var best_pos: Vector3 = ctx.anchor
+	# Search center: the slot, SLOT_DEPTH_FROM_GOAL_M in front of
+	# opp goal at center ice. Pure in-game ref (opp net + slot depth).
+	var search_center := Vector3(
+			0.0,
+			0.0,
+			ctx.attacking_goal_pos.z + ctx.own_goal_dir * SLOT_DEPTH_FROM_GOAL_M)
+	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
+			ctx.self_pos, search_center)
+
+	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):

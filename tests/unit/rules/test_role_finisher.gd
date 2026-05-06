@@ -166,16 +166,17 @@ func test_hold_when_puck_path_crossing_is_in_past() -> void:
 
 # ─── POSITIONING (no incoming shot) ───────────────────────────────────────
 
-func test_positioning_falls_back_to_anchor_when_no_carrier() -> void:
+func test_positioning_falls_back_to_self_pos_when_no_carrier() -> void:
 	# No teammate carrier means no offensive context — positioning
-	# falls back to anchor.
-	var anchor := Vector3(-2.0, 0.0, -22.0)
+	# falls back to self_pos (hold position; brain re-tick will
+	# reassign within a frame).
+	var self_pos := Vector3(-2.0, 0.0, -22.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			self_pos, Vector3.ZERO,
 			Vector3(0.0, 0.0, -10.0), Vector3.ZERO)  # slow puck → reactive returns null
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
-	assert_eq(d.target_position, anchor,
-			"slow puck + no carrier → positioning falls back to anchor")
+	assert_eq(d.target_position, self_pos,
+			"slow puck + no carrier → positioning falls back to self_pos")
 	assert_false(d.has_aim_override)
 
 
