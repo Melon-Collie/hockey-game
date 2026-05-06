@@ -52,11 +52,8 @@ enum Slot {
 # in tight space, suppressing the role flex that good 3v3 demands.
 const HYSTERESIS_PENALTY_M: float = 1.0
 
-# DZONE anchor constants. PRESSURE + ANCHOR are no longer here —
-# their role behaviors own their positional decisions. COVER
-# stays until it gets utility AI.
-const DZONE_COVER_X: float = 2.0                   # m weak-side of rink center
-const DZONE_COVER_Z_FROM_GOAL: float = 4.0         # m in front of goal line (mid-slot depth)
+# DZONE: PRESSURE, ANCHOR, COVER all own their positional targets
+# in their role behaviors. No DZONE-specific anchor constants left.
 
 # OZONE: FINISHER + SUPPORT now compute their own targets in their
 # role modules (Step 2 of the no-anchors refactor). Anchor formulas
@@ -66,10 +63,9 @@ const DZONE_COVER_Z_FROM_GOAL: float = 4.0         # m in front of goal line (mi
 # TRANS_DO: OUTLET + SUPPORT also own their own targets — anchor
 # formulas deleted.
 
-# TRANS_OD anchor constants. PRESSURE + ANCHOR removed (roles
-# own their targets). COVER stays until it gets utility AI.
-const TRANS_OD_COVER_X: float = 2.0                # m weak-side of puck
-const TRANS_OD_COVER_Z: float = 3.0                # m back of puck toward our net
+# TRANS_OD: PRESSURE, ANCHOR, COVER all own their positional
+# targets in their role behaviors. No TRANS_OD-specific anchor
+# constants left.
 
 # NEUTRAL anchor constants. Simple 1-2 shape: CHASE pursues puck, two
 # flankers stand off to either side slightly defensive of puck.
@@ -117,32 +113,10 @@ static func slot_anchor(
 			# current position so the slot's "distance" is zero.
 			return carrier_pos
 
-		# PRESSURE — role owns its own positional target; no
-		# slot_anchor formula. See AIRolePressure.decide.
-
-		# ANCHOR — role owns its own positional target; no
-		# slot_anchor formula. See AIRoleAnchor.decide.
-
-		Slot.COVER:
-			if state == AIPossessionState.State.TRANS_OD:
-				# Back of puck, weak-side. Second-wave defender for the
-				# bot whose role isn't ANCHOR or PRESSURE — typically the
-				# deep defender, who gets pulled forward by this anchor
-				# to engage the play instead of camping the slot.
-				return Vector3(
-						puck_pos.x - strong_x * TRANS_OD_COVER_X,
-						0.0,
-						puck_pos.z + own_goal_dir * TRANS_OD_COVER_Z)
-			# DZONE: weak-side of rink center, mid-slot depth.
-			return Vector3(
-					-strong_x * DZONE_COVER_X,
-					0.0,
-					own_goal_dir * (GameRules.GOAL_LINE_Z - DZONE_COVER_Z_FROM_GOAL))
-
-		# FINISHER, SUPPORT, OUTLET — these roles own their own
-		# positional targets in their role-behavior modules. The
-		# brain assigns them via semantic queries that don't read
-		# slot_anchor.
+		# PRESSURE / ANCHOR / COVER / FINISHER / SUPPORT / OUTLET —
+		# these roles own their positional targets in their
+		# role-behavior modules. slot_anchor only handles the
+		# NEUTRAL roles below.
 
 		Slot.CHASE:
 			# NEUTRAL only: anchor at puck position. The bot's SM

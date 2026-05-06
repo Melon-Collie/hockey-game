@@ -638,6 +638,8 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			return AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.ANCHOR:
 			return AIRoleAnchor.decide(ctx)
+		AIRoleSlots.Slot.COVER:
+			return AIRoleCover.decide(ctx)
 		_:
 			return AIRoleAnchorFollow.decide(ctx)
 

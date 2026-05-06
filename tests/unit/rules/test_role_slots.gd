@@ -87,28 +87,10 @@ func test_slots_for_neutral() -> void:
 # targets in their role behaviors (tested in test_role_*.gd).
 
 
-# ANCHOR no longer has slot_anchor formulas — its positional
-# target lives in AIRoleAnchor.decide (see test_role_anchor.gd).
-
-
-func test_dzone_cover_is_weak_side_mid_slot() -> void:
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.COVER, AIPossessionState.State.DZONE,
-			Vector3(5.0, 0.0, 22.0), Vector3.ZERO,
-			OUR_NET_Z, 1.0)
-	assert_lt(anchor.x, 0.0, "weak-side X (negative with strong=+1)")
-	assert_almost_eq(anchor.z, OUR_NET_Z - 4.0, 0.01,
-			"4 m in front of own goal (mid-slot depth)")
-
-
-func test_trans_od_cover_back_of_puck_weak_side() -> void:
-	# Different formula from DZONE COVER: relative to puck position
-	# rather than to own goal.
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.COVER, AIPossessionState.State.TRANS_OD,
-			Vector3(5.0, 0.0, 0.0), Vector3.ZERO, OUR_NET_Z, 1.0)
-	assert_lt(anchor.x, 5.0, "weak-side of puck")
-	assert_gt(anchor.z, 0.0, "back of puck toward our net")
+# ANCHOR + COVER no longer have slot_anchor formulas — their
+# positional targets live in AIRoleAnchor.decide / AIRoleCover.decide
+# (see test_role_anchor.gd / test_role_cover.gd). slot_anchor now
+# only handles NEUTRAL roles.
 
 
 # FINISHER, SUPPORT, OUTLET no longer have slot_anchor formulas —
