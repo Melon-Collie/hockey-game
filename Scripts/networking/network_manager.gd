@@ -589,6 +589,12 @@ func stop_replay_mode() -> void:
 
 @rpc("authority", "reliable")
 func notify_replay_mode(active: bool) -> void:
+	# Mirror other authority RPCs (receive_world_state, receive_pong, …)
+	# that early-return on the host. Authority RPCs are only delivered to
+	# remote peers, so the host wouldn't receive this in normal flow, but
+	# the guard is defense-in-depth and matches the file's existing pattern.
+	if is_host:
+		return
 	_replay_mode = active
 	if not active:
 		_replay_clock = 0.0

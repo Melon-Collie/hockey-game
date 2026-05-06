@@ -43,6 +43,13 @@ enum State {
 # rotation time to the pass time-decay BUT ONLY when the receiver
 # is past the blade ROM cone — within the cone the bot can quick-fire
 # without rotating, so forehand-side passes don't pay rotation cost.
+#
+# WARNING: this constant is hand-calibrated against
+# SkaterController.facing_drag_speed = 3.0. If facing_drag_speed
+# changes, retune this — there's no automated check, and the only
+# symptom is that pass time-decay scoring silently misweights
+# rotation cost on backward passes (bots fire passes that arrive
+# late or wide because the body finishes rotating after release).
 const BOT_FACING_ROTATION_RATE_RAD_S: float = 6.0
 # Half-angle of the blade ROM cone the bot can fire to without rotating
 # its body. Inside this cone (forehand or backhand side), passes
@@ -882,7 +889,9 @@ func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
 	var to_aim: Vector3 = aim_world - self_pos
 	to_aim.y = 0.0
 	if to_aim.length_squared() < 0.0001:
-		return self_pos + Vector3.FORWARD * CARRY_BLADE_AIM_FORWARD_M
+		# Fall back to the attacking direction (team-aware). Vector3.FORWARD
+		# is (0, 0, -1), which is correct for team 0 but inverts for team 1.
+		return self_pos + Vector3(0.0, 0.0, -_own_goal_dir) * CARRY_BLADE_AIM_FORWARD_M
 	return self_pos + to_aim.normalized() * CARRY_BLADE_AIM_FORWARD_M
 
 
@@ -1545,10 +1554,16 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var to_goal: Vector3 = _attacking_goal_pos - self_pos
 	to_goal.y = 0.0
 	var forward_dir: Vector3
-	if to_goal.length_squared() > 0.0001:
+	# Attacking direction is -_own_goal_dir along z (team 0 attacks -z,
+	# team 1 attacks +z). Fall back to it when the bot has drifted past
+	# the attacking goal line — without the sign check, `to_goal` would
+	# point back through the rink and the bot would aim into its own
+	# defensive zone.
+	var attacking_z: float = -_own_goal_dir
+	if to_goal.length_squared() > 0.0001 and to_goal.z * attacking_z > 0.0:
 		forward_dir = to_goal.normalized()
 	else:
-		forward_dir = Vector3.FORWARD
+		forward_dir = Vector3(0.0, 0.0, attacking_z)
 	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
 	# Stickhandling offset is raw — `_step_mouse_toward` provides the
 	# motion smoothing across ticks. When two defenders converge from

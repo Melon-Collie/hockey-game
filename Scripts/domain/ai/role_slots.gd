@@ -311,14 +311,8 @@ static func assign(
 		if not fixed_peers.has(pid):
 			remaining_peers.append(pid)
 
-	# If counts don't match, just zip in order (rare — only if team has
-	# fewer peers than slots, e.g., 2-bot team).
-	if remaining_peers.size() <= 1 or remaining_slots.size() <= 1:
-		for i: int in min(remaining_peers.size(), remaining_slots.size()):
-			result[remaining_peers[i]] = remaining_slots[i]
-		return result
-
-	# Permutation enumeration. n=2 or n=3, at most 6 perms.
+	# Anchors are needed for the 1-peer geometric pick AND for permutation
+	# enumeration below — compute once.
 	var puck_pos: Vector3 = snapshot.puck_state.position if snapshot.puck_state else Vector3.ZERO
 	var carrier_pos: Vector3 = puck_pos
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
@@ -331,19 +325,63 @@ static func assign(
 				slot, state, puck_pos, carrier_pos,
 				own_goal_z, strong_x)
 
+	# Empty cases — nothing to assign.
+	if remaining_peers.is_empty() or remaining_slots.is_empty():
+		return result
+
+	# Single-peer case (e.g. 2-bot team with carrier teammate, leaving 1
+	# remaining peer for 2 slots): pick the geometrically-best slot
+	# rather than slots[0]. Permutation enumeration below assumes matched
+	# peer/slot counts, so this case has its own pick.
+	if remaining_peers.size() == 1:
+		var pid: int = remaining_peers[0]
+		var pos: Vector3 = snapshot.skater_states[pid].position
+		var best_slot: Slot = remaining_slots[0]
+		var best_d: float = INF
+		for slot: Slot in remaining_slots:
+			var anchor: Vector3 = anchors[slot]
+			var dx: float = pos.x - anchor.x
+			var dz: float = pos.z - anchor.z
+			var d: float = dx * dx + dz * dz
+			if d < best_d:
+				best_d = d
+				best_slot = slot
+		result[pid] = best_slot
+		return result
+
+	# Single-slot case: same shape, pick the closest peer.
+	if remaining_slots.size() == 1:
+		var slot: Slot = remaining_slots[0]
+		var anchor: Vector3 = anchors[slot]
+		var best_pid: int = remaining_peers[0]
+		var best_d2: float = INF
+		for pid_c: int in remaining_peers:
+			var pos_c: Vector3 = snapshot.skater_states[pid_c].position
+			var dx_c: float = pos_c.x - anchor.x
+			var dz_c: float = pos_c.z - anchor.z
+			var d_c: float = dx_c * dx_c + dz_c * dz_c
+			if d_c < best_d2:
+				best_d2 = d_c
+				best_pid = pid_c
+		result[best_pid] = slot
+		return result
+
+	# Permutation enumeration. n=2 or n=3, at most 6 perms.
+	# (puck_pos / carrier_pos / anchors were computed above for the
+	# single-peer / single-slot fast paths.)
 	var best_perm: Array = []
 	var best_cost: float = INF
 	for perm: Array in _permutations(remaining_peers):
 		var cost: float = 0.0
 		for i: int in remaining_slots.size():
-			var slot: Slot = remaining_slots[i]
-			var pid: int = perm[i]
-			var pos: Vector3 = snapshot.skater_states[pid].position
-			var anchor: Vector3 = anchors[slot]
-			var dx: float = pos.x - anchor.x
-			var dz: float = pos.z - anchor.z
-			cost += sqrt(dx * dx + dz * dz)
-			if prev_assignments.get(pid, Slot.NONE) != slot:
+			var slot_p: Slot = remaining_slots[i]
+			var pid_p: int = perm[i]
+			var pos_p: Vector3 = snapshot.skater_states[pid_p].position
+			var anchor_p: Vector3 = anchors[slot_p]
+			var dx_p: float = pos_p.x - anchor_p.x
+			var dz_p: float = pos_p.z - anchor_p.z
+			cost += sqrt(dx_p * dx_p + dz_p * dz_p)
+			if prev_assignments.get(pid_p, Slot.NONE) != slot_p:
 				cost += HYSTERESIS_PENALTY_M
 		if cost < best_cost:
 			best_cost = cost

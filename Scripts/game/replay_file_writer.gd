@@ -71,8 +71,13 @@ func open(path: String, header: Dictionary) -> bool:
 	_file.store_32(header_bytes.size())
 	_file.store_buffer(header_bytes)
 	_file.flush()
-	# If the very first writes failed (e.g. disk already full), refuse to start
-	# the worker thread so the caller can react to the failed open.
+	# Best-effort sanity check: if FileAccess immediately surfaces an error
+	# (path permission, exotic FS state), refuse to start the worker thread.
+	# NOTE: this does NOT verify disk capacity — Godot's FileAccess.store_buffer
+	# does not reliably surface ENOSPC on all platforms, and partial writes
+	# can silently succeed at this layer. A truly full disk may still pass
+	# `open()` here and only fail on the first frame batch via the worker's
+	# get_error() check.
 	if _file.get_error() != OK:
 		push_error("ReplayFileWriter: header write failed for %s (err %d)" % [path, _file.get_error()])
 		_file.close()
