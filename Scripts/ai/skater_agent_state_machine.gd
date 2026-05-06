@@ -110,16 +110,6 @@ const PASS_PUCK_SPEED_REF_M_S: float = 22.0
 # Cap on pass lead so a degenerate state (zero pass speed estimate, or a
 # long bomb across the rink) doesn't project the receiver into next week.
 const PASS_LEAD_MAX_S: float = 0.6
-# Blend factor between pure-velocity and anchor-based receiver
-# prediction. 0.0 = velocity only (the old behavior); 1.0 = assume the
-# receiver heads dead at their anchor at their current speed. The
-# receiver in reality follows a curved path between the two — they
-# can't change direction instantly but they aren't ballistic either.
-# 0.5 splits the difference and visibly tightens passes to receivers
-# who are mid-turn toward an anchor (e.g., F3 cutting across to the
-# weak side, give-and-go cuts) without overshooting receivers who are
-# already lined up.
-const PASS_RECEIVER_ANCHOR_BLEND: float = 0.5
 # After a puck-engagement event (we got stripped, or we just stripped
 # someone — both detected as "puck became loose while we were close"),
 # pull the blade back to our body for this many ticks. Speed-scaled:
@@ -629,11 +619,6 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			var decision: Array = _backdoor_decision(snapshot, self_pos, anchor)
 			anchor = decision[0]
 			aim_override = decision[1]
-
-	# Publish for the carrier's pass aim — they'll lead the receiver
-	# toward where we're steering instead of just our current velocity.
-	if _team_brain != null:
-		_team_brain.publish_anchor(_peer_id, anchor)
 
 	_apply_steering(input, snapshot, self_pos, anchor)
 	# Aim 2 m toward the anchor for a relaxed ready stance.
@@ -1217,34 +1202,23 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	return _predict_receiver(_pass_target_peer_id, receiver, flight_t)
 
 
-# Receiver position prediction blending pure-velocity extrapolation with
-# the receiver's published steering anchor, then offset to the
-# receiver's BLADE rather than body center. The blade offset (current
-# blade position minus body position) is applied after prediction so
-# the puck arrives where the stick is — short / medium passes land
-# tape-to-tape instead of at the receiver's feet. Falls back to
-# velocity-only when no anchor is published.
+# Receiver position prediction — pure velocity extrapolation from
+# their current position + velocity, plus a blade offset so the puck
+# aims at where the stick will be (not body center).
+#
+# An earlier version blended in the receiver's published steering
+# anchor, intending to lead bots cutting toward their slot. That
+# overshot dramatically: a TRANS_DO OUTLET teammate's anchor is at
+# the opp blue line (~25 m up-ice), and even at 50% blend the
+# predicted lead landed forward of the carrier when the actual
+# teammate was behind. Reachability passed (lead was forward),
+# pass committed, puck fired at empty ice where the anchor said
+# the receiver "should be." Velocity-only is conservative and
+# correct: project only as far as the receiver actually moves,
+# no aspirational pull.
 func _predict_receiver(receiver_pid: int, receiver: SkaterNetworkState, flight_t: float) -> Vector3:
 	var velocity_pos: Vector3 = AITrajectory.predict_at(
 			receiver.position, receiver.velocity, flight_t)
-	var predicted_body: Vector3 = velocity_pos
-	if _team_brain != null:
-		var anchor: Vector3 = _team_brain.get_published_anchor(receiver_pid)
-		if anchor != Vector3.ZERO:
-			# Anchor-based prediction: receiver heads toward their anchor at
-			# their current speed. Speed is preserved (rather than assuming
-			# top speed) so a stationary receiver stays put — predicted = pos.
-			var to_anchor: Vector3 = anchor - receiver.position
-			var to_anchor_len: float = sqrt(to_anchor.x * to_anchor.x + to_anchor.z * to_anchor.z)
-			if to_anchor_len >= 0.01:
-				var speed: float = sqrt(receiver.velocity.x * receiver.velocity.x
-						+ receiver.velocity.z * receiver.velocity.z)
-				var inv: float = 1.0 / to_anchor_len
-				var anchor_step: Vector3 = Vector3(to_anchor.x * inv, 0.0, to_anchor.z * inv) * (speed * flight_t)
-				if anchor_step.length() > to_anchor_len:
-					anchor_step = to_anchor
-				var anchor_pos: Vector3 = receiver.position + anchor_step
-				predicted_body = velocity_pos.lerp(anchor_pos, PASS_RECEIVER_ANCHOR_BLEND)
 	# Blade offset: shift the predicted aim from body center to where
 	# the receiver's stick is. Assumes the blade moves with the body
 	# (offset stays roughly constant during the pass flight). Replicated
@@ -1252,7 +1226,7 @@ func _predict_receiver(receiver_pid: int, receiver: SkaterNetworkState, flight_t
 	var blade_offset: Vector3 = receiver.blade_position - receiver.position
 	# Zero-out y so the aim stays in the world XZ plane.
 	blade_offset.y = 0.0
-	return predicted_body + blade_offset
+	return velocity_pos + blade_offset
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:

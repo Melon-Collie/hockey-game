@@ -13,9 +13,6 @@ extends RefCounted
 #   state              — AIPossessionState.State enum (DZONE / OZONE /
 #                        TRANS_DO / TRANS_OD / NEUTRAL).
 #   slot_assignments   — Dictionary[peer_id, AIRoleSlots.Slot].
-#   published_anchors  — Dictionary[peer_id, Vector3] of off-puck bot
-#                        steering anchors, kept from v1 for the
-#                        carrier's pass-aim receiver lead.
 #
 # Roles assigned by current geometry per brain tick — no SPRINT_BY
 # locking; the bot whose body is in the right place gets the role.
@@ -39,7 +36,6 @@ const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 var team_id: int = 0
 var state: int = AIPossessionState.State.DZONE
 var slot_assignments: Dictionary = {}      # peer_id -> AIRoleSlots.Slot
-var published_anchors: Dictionary = {}     # peer_id -> Vector3
 
 # Internal — sticky possession for loose-puck handling.
 var _last_carrier_team: int = -1
@@ -116,15 +112,3 @@ func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
 	return AIRoleSlots.slot_anchor(
 			slot, state, puck_pos, carrier_pos,
 			_own_goal_z, _strong_x)
-
-
-# Called by each off-puck bot per physics tick to publish where they're
-# steering. Read by the carrier in `_pass_aim_point` for receiver lead.
-func publish_anchor(peer_id: int, anchor: Vector3) -> void:
-	published_anchors[peer_id] = anchor
-
-
-# Returns the receiver's published steering anchor, or Vector3.ZERO if
-# none has been published yet (carrier should fall back to velocity-only).
-func get_published_anchor(peer_id: int) -> Vector3:
-	return published_anchors.get(peer_id, Vector3.ZERO)
