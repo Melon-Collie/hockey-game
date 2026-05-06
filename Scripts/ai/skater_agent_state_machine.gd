@@ -496,20 +496,16 @@ func _slot_label(slot: int) -> String:
 			return "Carrier"
 		AIRoleSlots.Slot.PRESSURE:
 			return "Pressure"
-		AIRoleSlots.Slot.NET:
-			return "Net"
-		AIRoleSlots.Slot.INSIDE:
-			return "Inside"
-		AIRoleSlots.Slot.BACKDOOR:
-			return "Backdoor"
+		AIRoleSlots.Slot.ANCHOR:
+			return "Anchor"
+		AIRoleSlots.Slot.COVER:
+			return "Cover"
+		AIRoleSlots.Slot.FINISHER:
+			return "Finisher"
 		AIRoleSlots.Slot.OUTLET:
 			return "Outlet"
 		AIRoleSlots.Slot.SUPPORT:
 			return "Support"
-		AIRoleSlots.Slot.HOME:
-			return "Home"
-		AIRoleSlots.Slot.COVER:
-			return "Cover"
 		AIRoleSlots.Slot.CHASE:
 			return "Chase"
 		AIRoleSlots.Slot.FLANK_L:
@@ -631,7 +627,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null else AIRoleSlots.Slot.NONE
 	match slot:
-		AIRoleSlots.Slot.BACKDOOR:
+		AIRoleSlots.Slot.FINISHER:
 			return AIRoleFinisher.decide(ctx)
 		_:
 			return AIRoleAnchorFollow.decide(ctx)

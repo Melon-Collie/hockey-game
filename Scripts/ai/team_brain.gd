@@ -29,8 +29,8 @@ const TICK_PERIOD: float = 1.0 / 6.0
 # strong/weak side doesn't flip every tick when the puck cycles
 # through center. Once we've picked +1, only flip to -1 when puck.x
 # crosses below -STRONG_SIDE_HYSTERESIS_M, and vice versa. Without
-# this, NET / BACKDOOR / etc. anchors flip strong-side rapidly on a
-# corner-to-corner cycle and bots try to switch sides every brain tick.
+# this, ANCHOR / FINISHER / etc. anchors flip strong-side rapidly on
+# a corner-to-corner cycle and bots try to switch sides every brain tick.
 const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
@@ -43,6 +43,10 @@ var _last_carrier_team: int = -1
 var _strong_x: float = 1.0
 
 var _accumulator: float = 0.0
+# Set by force_retick(); next tick() call bypasses the rate-limit and
+# computes immediately. Used for event-driven re-evaluation when a
+# puck-carrier change makes the current slot assignment stale.
+var _force_tick_pending: bool = false
 var _team_id_resolver: Callable = Callable()
 var _is_human_resolver: Callable = Callable()
 # Cached own-goal Z derived from team_id at construction. Team 0
@@ -58,13 +62,40 @@ func _init(t: int, resolver: Callable, human_resolver: Callable) -> void:
 
 
 # Called every host physics frame from GameManager. Snapshot is the freshest
-# captured world state (delay 0). Internally rate-limited to TICK_PERIOD.
+# captured world state (delay 0). Internally rate-limited to TICK_PERIOD,
+# unless `_force_tick_pending` was set by force_retick() — then this tick
+# computes regardless of the accumulator.
 func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	_accumulator += delta
-	if _accumulator < TICK_PERIOD:
+	if _accumulator < TICK_PERIOD and not _force_tick_pending:
 		return
-	_accumulator -= TICK_PERIOD
+	# Natural cadence: drain one tick's worth of accumulator. Forced
+	# tick: reset accumulator to zero so the next natural tick fires
+	# TICK_PERIOD seconds from now (avoids back-to-back forced+natural
+	# ticks compounding into a double-rate burst).
+	if _force_tick_pending:
+		_accumulator = 0.0
+		_force_tick_pending = false
+	else:
+		_accumulator -= TICK_PERIOD
+	_compute_tick(snapshot)
 
+
+# Schedules an immediate re-tick on the next physics frame, bypassing
+# the TICK_PERIOD rate-limit. Called from GameManager when an event
+# (puck-carrier change) makes the role assignment immediately stale —
+# the natural 6 Hz cadence would leave it stale for up to ~166 ms,
+# during which the new carrier still has the previous assignment.
+# Both team brains should be force-reticked together since a carrier
+# change affects both possession states symmetrically.
+func force_retick() -> void:
+	_force_tick_pending = true
+
+
+# Body of the per-tick computation. Extracted from tick() so
+# force_retick() can drive it without going through the accumulator
+# rate-limit.
+func _compute_tick(snapshot: WorldSnapshot) -> void:
 	# 1. Possession state.
 	var new_state_pair: Array = AIPossessionState.compute(
 			snapshot, team_id, _own_goal_z, _team_id_resolver, _last_carrier_team)

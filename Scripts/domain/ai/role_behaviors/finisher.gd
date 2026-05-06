@@ -1,7 +1,6 @@
 class_name AIRoleFinisher
 
-# FINISHER role behavior (assigned to the BACKDOOR slot in the
-# current possession-state shape — Phase 3 will rename the enum).
+# FINISHER role behavior (OZONE — `AIRoleSlots.Slot.FINISHER`).
 # The bot in front of the opp net reacts to incoming pucks heading
 # at our offensive goal:
 #

@@ -7,12 +7,12 @@ class_name AIRoleSlots
 # already in the right place gets the role, which means roles tend
 # to "stick" naturally as long as nothing geometric reshuffles.
 #
-# In TRANS states the assignment encodes "lean into what you're
-# already doing": the deepest forward bot becomes OUTLET (TRANS_DO)
-# or COVER (TRANS_OD), the deepest defender becomes SUPPORT (TRANS_DO)
-# or HOME (TRANS_OD). No sprint-by lock needed because the up-ice
-# bot is naturally closest to the up-ice anchor and the deep bot is
-# naturally closest to the deep anchor.
+# Phase 3 collapses the defensive role enums so DZONE and TRANS_OD
+# share {PRESSURE, ANCHOR, COVER}. The slot anchor for each branches
+# on the active possession state — same role name, position relative
+# to the threat geometry of the state. OZONE replaces OUTLET with
+# SUPPORT; OUTLET stays a TRANS_DO-only role. BACKDOOR was renamed
+# to FINISHER (more descriptive of the scoring-threat semantics).
 #
 # Mixed teams: humans are teammates and get slot assignments same as
 # bots. The brain doesn't distinguish — humans drive the structure,
@@ -22,21 +22,23 @@ enum Slot {
 	NONE,
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
-	# DZONE — rotating 1-2 zone defense.
-	PRESSURE,
-	NET,
-	INSIDE,
+	# Shared between DZONE and TRANS_OD. Anchors branch on state.
+	PRESSURE,   # puck pressurer — closes the carrier.
+	ANCHOR,     # deep defender / net-front. DZONE: strong-side post.
+	            # TRANS_OD: defensive slot center.
+	COVER,      # weak-side support. DZONE: mid-slot weak-side.
+	            # TRANS_OD: back-of-puck weak-side.
 	# OZONE — extended OZ rotation.
-	BACKDOOR,
-	OUTLET,     # OZONE: high in OZ. TRANS_DO: weak-side at opp blue line.
+	FINISHER,   # scoring threat at the back-door / weak-side post.
+	            # AIRoleFinisher.decide adds tip / step-out / hold on top.
 	# TRANS_DO — geometric assignment, no locking.
-	SUPPORT,    # closest-to-own-net non-carrier; behind carrier weak-side.
-	# TRANS_OD — geometric assignment with HOME pre-pick.
-	HOME,       # highest player (closest to opp net); backchecks to slot.
-	COVER,      # remaining; back-of-puck weak-side, second-wave defense.
-	# NEUTRAL + TRANS_OD — chases puck (anchor differs by state).
-	CHASE,      # NEUTRAL: at puck. TRANS_OD: 1.5m goal-side of puck.
+	OUTLET,     # weak-side at opp blue line, NZ-side (offside-safe).
+	SUPPORT,    # OZONE + TRANS_DO: weak-side trail. OZONE: high in OZ
+	            # shadowing puck X (Phase 3 placeholder; Phase 4 utility
+	            # AI replaces this with a passing-lane-availability search).
+	            # TRANS_DO: weak-side of carrier, behind toward our net.
 	# NEUTRAL — faceoff / fresh loose puck. Simple 1-2 shape.
+	CHASE,      # at puck — closest peer transitions to CHASE_PUCK.
 	FLANK_L,    # left flank, slightly defensive of puck
 	FLANK_R,    # right flank, slightly defensive of puck
 }
@@ -49,19 +51,22 @@ const HYSTERESIS_PENALTY_M: float = 1.5
 
 # DZONE anchor constants.
 const DZONE_PRESSURE_GAP_M: float = 1.5            # m goal-side of puck along puck→net line
-const DZONE_NET_X_FROM_POST: float = 0.3           # m inside the strong-side post (toward center)
-const DZONE_NET_Z_FROM_GOAL: float = 1.0           # m in front of goal line
-const DZONE_INSIDE_X: float = 2.0                  # m weak-side of rink center
-const DZONE_INSIDE_Z_FROM_GOAL: float = 4.0        # m in front of goal line (mid-slot depth)
+const DZONE_ANCHOR_X_FROM_POST: float = 0.3        # m inside the strong-side post (toward center)
+const DZONE_ANCHOR_Z_FROM_GOAL: float = 1.0        # m in front of goal line
+const DZONE_COVER_X: float = 2.0                   # m weak-side of rink center
+const DZONE_COVER_Z_FROM_GOAL: float = 4.0         # m in front of goal line (mid-slot depth)
 
 # OZONE anchor constants.
-const OZONE_BACKDOOR_X_FROM_POST: float = 0.5      # m inside the far post (toward center)
-# Pulled back from 1m to 3m to keep BACKDOOR off the goal line — the
+const OZONE_FINISHER_X_FROM_POST: float = 0.5      # m inside the far post (toward center)
+# Pulled back from 1m to 3m to keep FINISHER off the goal line — the
 # bot is at slot depth instead of crease depth, less likely to body-
-# block teammate shots. Tip / step-out / hold decision in
-# `AIRoleFinisher.decide` handles incoming-puck reactions on top.
-const OZONE_BACKDOOR_Z_FROM_GOAL: float = 3.0      # m in front of opp goal line
-const OZONE_OUTLET_Z_PAST_BLUE: float = 2.0        # m past opp blue line into OZ
+# block teammate shots. AIRoleFinisher.decide handles incoming-puck
+# reactions on top.
+const OZONE_FINISHER_Z_FROM_GOAL: float = 3.0      # m in front of opp goal line
+# OZONE SUPPORT (Phase 3 placeholder). Shadows puck X at high-OZ
+# depth, matching the previous OUTLET formula. Phase 4 will replace
+# this with a utility-AI position search around the anchor.
+const OZONE_SUPPORT_Z_PAST_BLUE: float = 2.0       # m past opp blue line into OZ
 
 # TRANS_DO anchor constants.
 const TRANS_DO_OUTLET_X: float = 4.0               # m off rink center, weak-side
@@ -74,8 +79,8 @@ const TRANS_DO_SUPPORT_X: float = 3.0              # m weak-side of carrier
 const TRANS_DO_SUPPORT_Z: float = 3.0              # m back of carrier toward our net
 
 # TRANS_OD anchor constants.
-const TRANS_OD_HOME_Z_FROM_GOAL: float = 5.0       # m in front of own goal line (defensive slot)
-const TRANS_OD_CHASE_GAP_M: float = 1.5            # m goal-side of puck (same as DZONE PRESSURE)
+const TRANS_OD_ANCHOR_Z_FROM_GOAL: float = 5.0     # m in front of own goal line (defensive slot)
+const TRANS_OD_PRESSURE_GAP_M: float = 1.5         # m goal-side of puck (same as DZONE PRESSURE)
 const TRANS_OD_COVER_X: float = 2.0                # m weak-side of puck
 const TRANS_OD_COVER_Z: float = 3.0                # m back of puck toward our net
 
@@ -91,13 +96,13 @@ const NEUTRAL_FLANK_Z_DEFENSIVE: float = 2.0       # m back of puck toward own n
 static func slots_for_state(state: int) -> Array:
 	match state:
 		AIPossessionState.State.DZONE:
-			return [Slot.PRESSURE, Slot.NET, Slot.INSIDE]
+			return [Slot.PRESSURE, Slot.ANCHOR, Slot.COVER]
 		AIPossessionState.State.OZONE:
-			return [Slot.CARRIER, Slot.BACKDOOR, Slot.OUTLET]
+			return [Slot.CARRIER, Slot.FINISHER, Slot.SUPPORT]
 		AIPossessionState.State.TRANS_DO:
 			return [Slot.CARRIER, Slot.OUTLET, Slot.SUPPORT]
 		AIPossessionState.State.TRANS_OD:
-			return [Slot.HOME, Slot.CHASE, Slot.COVER]
+			return [Slot.PRESSURE, Slot.ANCHOR, Slot.COVER]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
@@ -105,7 +110,9 @@ static func slots_for_state(state: int) -> Array:
 
 
 # Computes the world-space anchor for a slot in a given state.
-# `carrier_pos` is needed by TRANS_DO SUPPORT (relative to carrier).
+# `carrier_pos` is needed by SUPPORT (relative to carrier).
+# State-branched roles (PRESSURE / ANCHOR / COVER / SUPPORT) read
+# `state` to pick the formula matching the current possession context.
 static func slot_anchor(
 		slot: Slot,
 		state: int,
@@ -124,100 +131,99 @@ static func slot_anchor(
 			return carrier_pos
 
 		Slot.PRESSURE:
-			# 1.5 m goal-side of puck along the puck→our-net line.
+			# Both DZONE and TRANS_OD: 1.5 m goal-side of puck along
+			# the puck→our-net line. Same formula in both states; left
+			# state-branched in case Phase 4 wants to differ aggression
+			# (TRANS_OD might gap-control further, e.g.).
 			var to_net: Vector3 = our_net - puck_pos
 			var l: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
 			if l < 0.001:
 				return puck_pos
-			var step: float = DZONE_PRESSURE_GAP_M / l
+			var gap_m: float = DZONE_PRESSURE_GAP_M
+			if state == AIPossessionState.State.TRANS_OD:
+				gap_m = TRANS_OD_PRESSURE_GAP_M
+			var step: float = gap_m / l
 			return Vector3(
 					puck_pos.x + to_net.x * step,
 					0.0,
 					puck_pos.z + to_net.z * step)
 
-		Slot.NET:
+		Slot.ANCHOR:
+			if state == AIPossessionState.State.TRANS_OD:
+				# Defensive slot center. Closest-to-own-net peer wins
+				# via the assign() pre-pick (highest-up-ice teammate is
+				# the active backchecker; deep bot drops into COVER).
+				return Vector3(
+						0.0, 0.0,
+						own_goal_dir * (GameRules.GOAL_LINE_Z - TRANS_OD_ANCHOR_Z_FROM_GOAL))
+			# DZONE: strong-side post in front of own goal.
 			return Vector3(
-					strong_x * (GameRules.NET_HALF_WIDTH - DZONE_NET_X_FROM_POST),
+					strong_x * (GameRules.NET_HALF_WIDTH - DZONE_ANCHOR_X_FROM_POST),
 					0.0,
-					own_goal_dir * (GameRules.GOAL_LINE_Z - DZONE_NET_Z_FROM_GOAL))
+					own_goal_dir * (GameRules.GOAL_LINE_Z - DZONE_ANCHOR_Z_FROM_GOAL))
 
-		Slot.INSIDE:
+		Slot.COVER:
+			if state == AIPossessionState.State.TRANS_OD:
+				# Back of puck, weak-side. Second-wave defender for the
+				# bot whose role isn't ANCHOR or PRESSURE — typically the
+				# deep defender, who gets pulled forward by this anchor
+				# to engage the play instead of camping the slot.
+				return Vector3(
+						puck_pos.x - strong_x * TRANS_OD_COVER_X,
+						0.0,
+						puck_pos.z + own_goal_dir * TRANS_OD_COVER_Z)
+			# DZONE: weak-side of rink center, mid-slot depth.
 			return Vector3(
-					-strong_x * DZONE_INSIDE_X,
+					-strong_x * DZONE_COVER_X,
 					0.0,
-					own_goal_dir * (GameRules.GOAL_LINE_Z - DZONE_INSIDE_Z_FROM_GOAL))
+					own_goal_dir * (GameRules.GOAL_LINE_Z - DZONE_COVER_Z_FROM_GOAL))
 
-		Slot.BACKDOOR:
-			# Weak-side post in front of opp goal.
+		Slot.FINISHER:
+			# OZONE only: weak-side post in front of opp goal.
 			return Vector3(
-					-strong_x * (GameRules.NET_HALF_WIDTH - OZONE_BACKDOOR_X_FROM_POST),
+					-strong_x * (GameRules.NET_HALF_WIDTH - OZONE_FINISHER_X_FROM_POST),
 					0.0,
-					-own_goal_dir * (GameRules.GOAL_LINE_Z - OZONE_BACKDOOR_Z_FROM_GOAL))
+					-own_goal_dir * (GameRules.GOAL_LINE_Z - OZONE_FINISHER_Z_FROM_GOAL))
 
 		Slot.OUTLET:
-			if state == AIPossessionState.State.TRANS_DO:
-				# Weak-side at opp blue line, NZ-safe (offside buffer).
-				# Capped: OUTLET shouldn't be more than
-				# TRANS_DO_OUTLET_MAX_LEAD_M up-ice of the puck (the
-				# play). Without the cap, OUTLET parks at the blue
-				# line even when the carrier is still deep in our DZ.
-				#
-				# Signed depth: own_goal_dir * z grows toward own
-				# goal. Smaller depth = further up-ice. OUTLET's
-				# minimum depth = puck_depth − MAX_LEAD_M.
-				var base_z: float = -own_goal_dir * (GameRules.BLUE_LINE_Z - TRANS_DO_OUTLET_Z_FROM_BLUE)
-				var puck_depth: float = own_goal_dir * puck_pos.z
-				var min_depth: float = puck_depth - TRANS_DO_OUTLET_MAX_LEAD_M
-				var base_depth: float = own_goal_dir * base_z
-				var capped_depth: float = maxf(base_depth, min_depth)
-				return Vector3(
-						-strong_x * TRANS_DO_OUTLET_X, 0.0,
-						own_goal_dir * capped_depth)
-			# OZONE OUTLET: high in OZ, shadows puck X.
+			# TRANS_DO only. Weak-side at opp blue line, NZ-safe (offside
+			# buffer). Capped: OUTLET shouldn't be more than
+			# TRANS_DO_OUTLET_MAX_LEAD_M up-ice of the puck (the play).
+			# Without the cap, OUTLET parks at the blue line even when
+			# the carrier is still deep in our DZ.
+			#
+			# Signed depth: own_goal_dir * z grows toward own goal.
+			# Smaller depth = further up-ice. OUTLET's minimum depth =
+			# puck_depth − MAX_LEAD_M.
+			var base_z: float = -own_goal_dir * (GameRules.BLUE_LINE_Z - TRANS_DO_OUTLET_Z_FROM_BLUE)
+			var puck_depth: float = own_goal_dir * puck_pos.z
+			var min_depth: float = puck_depth - TRANS_DO_OUTLET_MAX_LEAD_M
+			var base_depth: float = own_goal_dir * base_z
+			var capped_depth: float = maxf(base_depth, min_depth)
 			return Vector3(
-					puck_pos.x,
-					0.0,
-					-own_goal_dir * (GameRules.BLUE_LINE_Z + OZONE_OUTLET_Z_PAST_BLUE))
+					-strong_x * TRANS_DO_OUTLET_X, 0.0,
+					own_goal_dir * capped_depth)
 
 		Slot.SUPPORT:
-			# Behind carrier, weak-side. Closest-to-own-net non-carrier
-			# wins this naturally via the permutation cost.
+			if state == AIPossessionState.State.OZONE:
+				# Phase 3 placeholder — preserves the previous OZONE
+				# OUTLET formula (high in OZ, shadows puck X). Phase 4
+				# replaces this with a utility-AI position search.
+				return Vector3(
+						puck_pos.x,
+						0.0,
+						-own_goal_dir * (GameRules.BLUE_LINE_Z + OZONE_SUPPORT_Z_PAST_BLUE))
+			# TRANS_DO: behind carrier, weak-side. Closest-to-own-net
+			# non-carrier wins this naturally via the permutation cost.
 			return Vector3(
 					carrier_pos.x - strong_x * TRANS_DO_SUPPORT_X,
 					0.0,
 					carrier_pos.z + own_goal_dir * TRANS_DO_SUPPORT_Z)
 
-		Slot.HOME:
-			# Defensive slot center. Closest-to-own-net peer wins.
-			return Vector3(
-					0.0, 0.0,
-					own_goal_dir * (GameRules.GOAL_LINE_Z - TRANS_OD_HOME_Z_FROM_GOAL))
-
-		Slot.COVER:
-			# Back of puck, weak-side. Second-wave defender for the bot
-			# whose role isn't HOME or CHASE — typically the deep
-			# defender, who gets pulled forward by this anchor to
-			# engage the play.
-			return Vector3(
-					puck_pos.x - strong_x * TRANS_OD_COVER_X,
-					0.0,
-					puck_pos.z + own_goal_dir * TRANS_OD_COVER_Z)
-
 		Slot.CHASE:
-			if state == AIPossessionState.State.TRANS_OD:
-				# 1.5m goal-side of puck (same formula as DZONE PRESSURE).
-				var to_net2: Vector3 = our_net - puck_pos
-				var l2: float = sqrt(to_net2.x * to_net2.x + to_net2.z * to_net2.z)
-				if l2 < 0.001:
-					return puck_pos
-				var step2: float = TRANS_OD_CHASE_GAP_M / l2
-				return Vector3(
-						puck_pos.x + to_net2.x * step2,
-						0.0,
-						puck_pos.z + to_net2.z * step2)
-			# NEUTRAL: anchor at puck position. The bot's SM transitions
-			# to CHASE_PUCK naturally via _should_chase_loose_puck once
-			# they're closest.
+			# NEUTRAL only: anchor at puck position. The bot's SM
+			# transitions to CHASE_PUCK naturally via _should_chase_loose_puck
+			# once they're closest.
 			return puck_pos
 
 		Slot.FLANK_L:
@@ -280,30 +286,30 @@ static func assign(
 		else:
 			remaining_slots.append(slot)
 
-	# TRANS_OD HOME pre-pick: assign HOME to the highest-up-ice
+	# TRANS_OD ANCHOR pre-pick: assign ANCHOR to the highest-up-ice
 	# teammate (closest to opp net = furthest from our net). Without
-	# this, the closest-to-net peer would naturally be assigned HOME
+	# this, the closest-to-net peer would naturally be assigned ANCHOR
 	# by permutation cost — leaving the deep bot stuck at the slot
 	# with nothing to do during NZ play. Pre-picking flips it so the
 	# up-ice bot becomes the active backchecker; the deep bot drops
 	# into COVER (back-of-puck) and engages the play.
 	if state == AIPossessionState.State.TRANS_OD:
 		var opp_goal_z: float = -own_goal_z
-		var home_pid: int = 0
-		var home_dist: float = INF
+		var anchor_pid: int = 0
+		var anchor_dist: float = INF
 		for pid: int in snapshot.skater_states:
 			if int(team_id_resolver.call(pid)) != team_id:
 				continue
 			if fixed_peers.has(pid):
 				continue
 			var d: float = absf(snapshot.skater_states[pid].position.z - opp_goal_z)
-			if d < home_dist or (d == home_dist and pid < home_pid):
-				home_dist = d
-				home_pid = pid
-		if home_pid != 0 and Slot.HOME in remaining_slots:
-			result[home_pid] = Slot.HOME
-			fixed_peers[home_pid] = true
-			remaining_slots.erase(Slot.HOME)
+			if d < anchor_dist or (d == anchor_dist and pid < anchor_pid):
+				anchor_dist = d
+				anchor_pid = pid
+		if anchor_pid != 0 and Slot.ANCHOR in remaining_slots:
+			result[anchor_pid] = Slot.ANCHOR
+			fixed_peers[anchor_pid] = true
+			remaining_slots.erase(Slot.ANCHOR)
 
 	# Filter peers down to those not already fixed.
 	var remaining_peers: Array = []
