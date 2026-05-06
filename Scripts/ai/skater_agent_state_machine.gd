@@ -1440,7 +1440,8 @@ func _goalie_now(snapshot: WorldSnapshot) -> Vector3:
 func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 		puck_pos_at_release: Vector3) -> Vector3:
 	return AIActionScoring.predict_goalie_pos(
-			_goalie_now(snapshot), release_time_s, puck_pos_at_release)
+			_goalie_now(snapshot), _attacking_goal_pos,
+			release_time_s, puck_pos_at_release)
 
 
 # CARRY-state mouse target: 2 m forward in the attacking-goal

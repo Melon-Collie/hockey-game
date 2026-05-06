@@ -98,7 +98,7 @@ const LANE_CLEAR_RADIUS_M: float = 1.5
 # bot is free to switch to fire as soon as fire scores higher.
 # Raise toward 0.10 if intent flickers visibly; lower toward 0.02 if
 # intent feels too sticky.
-const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
+const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.55
 const ACTION_HYSTERESIS_MARGIN: float = 0.05
 
 
@@ -184,30 +184,48 @@ static func score_shoot(
 
 # Predicts the goalie's position at a future moment (shot release).
 # React-then-slide model: a fixed reaction delay, then movement toward
-# the puck-at-release X at max lateral speed. Approximates lateral
-# tracking only — close enough for shot scoring without depending on
-# the goalie controller's full state machine.
+# the ARC-MATCHING x at max lateral speed.
+#
+# Arc-matching: a properly squared goalie sits at the position whose
+# arc angle from the goal matches the shooter's. Since the goalie sits
+# much closer to the goal than the shooter, that's
+#   arc_x = goalie_depth × (puck.x - goal.x) / puck_forward_from_goal
+# An earlier version used puck.x directly as the slide target —
+# geometrically wrong for off-axis shooters, and a source of bot-
+# carry exploits because diagonal carry candidates appeared as "open
+# net" plays even when a perfectly-tracking goalie would cover them.
 #
 # `goalie_now` is the goalie's current world position.
+# `attacking_goal` is the goal the puck is aimed at; provides goal
+# center and the sign for "forward."
 # `release_time_s` is seconds from now until the shot fires.
 # `puck_pos_at_release` is where the puck will be when fired (= the
 # shooter's position for direct shots; receiver lead for passes;
 # carry candidate for carry-then-shoot).
 static func predict_goalie_pos(
 		goalie_now: Vector3,
+		attacking_goal: Vector3,
 		release_time_s: float,
 		puck_pos_at_release: Vector3) -> Vector3:
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var puck_forward: float = (puck_pos_at_release.z - attacking_goal.z) * net_normal_z
+	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
+	var target_x: float
+	if puck_forward < 0.001 or goalie_depth < 0.001:
+		# Degenerate: puck on/behind goal line, or goalie there. Slide
+		# toward puck.x as a best-effort fallback.
+		target_x = puck_pos_at_release.x
+	else:
+		target_x = attacking_goal.x + goalie_depth * (puck_pos_at_release.x - attacking_goal.x) / puck_forward
 	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
 	var max_move: float = move_time * GOALIE_MAX_LATERAL_SPEED_MPS
-	# Goalie shuffles laterally at their current depth toward the puck-x.
-	var target := Vector3(puck_pos_at_release.x, goalie_now.y, goalie_now.z)
-	var to_target: Vector3 = target - goalie_now
-	var dist_to_target: float = to_target.length()
+	var dx: float = target_x - goalie_now.x
+	var dist_to_target: float = absf(dx)
 	if dist_to_target < 0.001 or max_move <= 0.0:
 		return goalie_now
 	if dist_to_target <= max_move:
-		return target
-	return goalie_now + to_target * (max_move / dist_to_target)
+		return Vector3(target_x, goalie_now.y, goalie_now.z)
+	return Vector3(goalie_now.x + signf(dx) * max_move, goalie_now.y, goalie_now.z)
 
 
 # Returns PASS score in [0, 1] for a specific receiver. Multiplicative:
