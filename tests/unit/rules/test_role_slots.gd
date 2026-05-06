@@ -82,48 +82,13 @@ func test_slots_for_neutral() -> void:
 
 
 # ─── Slot anchors ───────────────────────────────────────────────────────────
-
-func test_dzone_pressure_anchor_is_goal_side_of_puck() -> void:
-	var puck := Vector3(5.0, 0.0, 22.0)
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.PRESSURE, AIPossessionState.State.DZONE,
-			puck, puck, OUR_NET_Z, 1.0)
-	assert_lt(anchor.x, puck.x, "anchor X moves toward 0 (net center)")
-	assert_gt(anchor.z, puck.z, "anchor Z moves toward our net (+Z)")
-	assert_almost_eq(puck.distance_to(anchor), 1.5, 0.01)
+# Only COVER, CHASE, and FLANK_L/R still have slot_anchor formulas.
+# PRESSURE / ANCHOR / FINISHER / SUPPORT / OUTLET own their positional
+# targets in their role behaviors (tested in test_role_*.gd).
 
 
-func test_trans_od_pressure_anchor_is_goal_side_of_puck() -> void:
-	# Same geometry as DZONE PRESSURE — TRANS_OD shares the formula.
-	var puck := Vector3(5.0, 0.0, 0.0)
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.PRESSURE, AIPossessionState.State.TRANS_OD,
-			puck, puck, OUR_NET_Z, 1.0)
-	assert_lt(anchor.x, puck.x, "anchor X moves toward 0 (net center)")
-	assert_gt(anchor.z, puck.z, "anchor Z moves toward our net (+Z)")
-	assert_almost_eq(puck.distance_to(anchor), 1.5, 0.01)
-
-
-func test_dzone_anchor_is_strong_side_post() -> void:
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.ANCHOR, AIPossessionState.State.DZONE,
-			Vector3(5.0, 0.0, 22.0), Vector3.ZERO,
-			OUR_NET_Z, 1.0)
-	assert_gt(anchor.x, 0.0, "strong-side post (positive X with strong=+1)")
-	assert_lt(anchor.x, GameRules.NET_HALF_WIDTH)
-	assert_almost_eq(anchor.z, OUR_NET_Z - 1.0, 0.01,
-			"1 m in front of own goal line")
-
-
-func test_trans_od_anchor_is_defensive_slot_center() -> void:
-	# Different formula from DZONE ANCHOR: defensive slot center,
-	# X=0, 5 m in front of own goal.
-	var anchor: Vector3 = AIRoleSlots.slot_anchor(
-			AIRoleSlots.Slot.ANCHOR, AIPossessionState.State.TRANS_OD,
-			Vector3(5.0, 0.0, 0.0), Vector3.ZERO, OUR_NET_Z, 1.0)
-	assert_almost_eq(anchor.x, 0.0, 0.01, "X centered")
-	assert_almost_eq(anchor.z, OUR_NET_Z - 5.0, 0.01,
-			"5 m in front of own goal line")
+# ANCHOR no longer has slot_anchor formulas — its positional
+# target lives in AIRoleAnchor.decide (see test_role_anchor.gd).
 
 
 func test_dzone_cover_is_weak_side_mid_slot() -> void:

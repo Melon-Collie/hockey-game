@@ -52,11 +52,9 @@ enum Slot {
 # in tight space, suppressing the role flex that good 3v3 demands.
 const HYSTERESIS_PENALTY_M: float = 1.0
 
-# DZONE anchor constants. PRESSURE is no longer here — the role
-# behavior owns its own positional decision. ANCHOR + COVER stay
-# until they get utility AI.
-const DZONE_ANCHOR_X_FROM_POST: float = 0.3        # m inside the strong-side post (toward center)
-const DZONE_ANCHOR_Z_FROM_GOAL: float = 1.0        # m in front of goal line
+# DZONE anchor constants. PRESSURE + ANCHOR are no longer here —
+# their role behaviors own their positional decisions. COVER
+# stays until it gets utility AI.
 const DZONE_COVER_X: float = 2.0                   # m weak-side of rink center
 const DZONE_COVER_Z_FROM_GOAL: float = 4.0         # m in front of goal line (mid-slot depth)
 
@@ -68,9 +66,8 @@ const DZONE_COVER_Z_FROM_GOAL: float = 4.0         # m in front of goal line (mi
 # TRANS_DO: OUTLET + SUPPORT also own their own targets — anchor
 # formulas deleted.
 
-# TRANS_OD anchor constants. PRESSURE removed (role owns its
-# target). ANCHOR + COVER stay until they get utility AI.
-const TRANS_OD_ANCHOR_Z_FROM_GOAL: float = 5.0     # m in front of own goal line (defensive slot)
+# TRANS_OD anchor constants. PRESSURE + ANCHOR removed (roles
+# own their targets). COVER stays until it gets utility AI.
 const TRANS_OD_COVER_X: float = 2.0                # m weak-side of puck
 const TRANS_OD_COVER_Z: float = 3.0                # m back of puck toward our net
 
@@ -123,19 +120,8 @@ static func slot_anchor(
 		# PRESSURE — role owns its own positional target; no
 		# slot_anchor formula. See AIRolePressure.decide.
 
-		Slot.ANCHOR:
-			if state == AIPossessionState.State.TRANS_OD:
-				# Defensive slot center. Closest-to-own-net peer wins
-				# via the assign() pre-pick (highest-up-ice teammate is
-				# the active backchecker; deep bot drops into COVER).
-				return Vector3(
-						0.0, 0.0,
-						own_goal_dir * (GameRules.GOAL_LINE_Z - TRANS_OD_ANCHOR_Z_FROM_GOAL))
-			# DZONE: strong-side post in front of own goal.
-			return Vector3(
-					strong_x * (GameRules.NET_HALF_WIDTH - DZONE_ANCHOR_X_FROM_POST),
-					0.0,
-					own_goal_dir * (GameRules.GOAL_LINE_Z - DZONE_ANCHOR_Z_FROM_GOAL))
+		# ANCHOR — role owns its own positional target; no
+		# slot_anchor formula. See AIRoleAnchor.decide.
 
 		Slot.COVER:
 			if state == AIPossessionState.State.TRANS_OD:
