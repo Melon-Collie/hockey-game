@@ -1328,12 +1328,27 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 
 
 func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
+	# Sender must be the current carrier on the host. Without this check, any
+	# peer can send release_puck with arbitrary direction/power and the host
+	# obediently triggers puck.release on whoever is actually carrying — the
+	# parameters control the trajectory but puck.carrier picks the releaser.
+	# A `puck.carrier == null` here means a different code path already
+	# released the puck (raced RPCs); ignore the duplicate. The shot sound
+	# moves below the validation so a malicious peer can't spam phantom
+	# shot sounds on the host either. Only the host runs this function
+	# (release_puck.rpc_id(1, ...)), so the early return is benign for the
+	# (currently nonexistent) client path.
+	if NetworkManager.is_host:
+		if puck == null or _registry == null:
+			return
+		if puck.carrier == null:
+			return
+		if _registry.resolve_peer_id(puck.carrier) != shooter_peer_id:
+			return
 	var sound: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
 	var shot_pos: Vector3 = puck.get_puck_position() if puck != null else Vector3.ZERO
 	SoundManager.play_world(sound, shot_pos, 0.0, 0.04)
 	if NetworkManager.is_host:
-		if puck == null or _registry == null:
-			return
 		_start_pending_shot_from_carrier()
 		var rtt_half: float = rtt_ms / 2000.0
 		var skater_vel := Vector3.ZERO
