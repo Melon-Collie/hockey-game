@@ -14,17 +14,15 @@ var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
 
-# Debug: floating label above each bot showing current state and last
-# fired action (PASS→<Slot> / SHOOT / SLAP). Action is set when
-# the press actually fires, not when intent is picked, so the label
-# reflects what the bot did rather than what it considered. Refreshed
-# at ~10 Hz so text stays readable. Toggle to false to disable for
-# shipping.
+# Debug: floating label above each bot showing the bot's per-tick
+# decision breakdown. Refreshes only when the rendered text actually
+# changes (commit flip, winner flip, score moves enough to re-format)
+# so it doesn't flicker on every wobble. Toggle to false to disable
+# for shipping.
 const SHOW_DEBUG_LABEL: bool = false
-const DEBUG_LABEL_REFRESH_TICKS: int = 24  # 240 / 24 = 10 Hz
 const DEBUG_LABEL_HEIGHT_M: float = 2.4    # above the head
 var _debug_label: Label3D = null
-var _debug_refresh_counter: int = 0
+var _debug_last_text: String = ""
 
 # Reaction delay was 0.1s in the original design but reading delayed-past
 # from StateBufferManager logged "ts predates oldest" warnings whenever the
@@ -85,13 +83,35 @@ func _physics_process(delta: float) -> void:
 func _refresh_debug_label() -> void:
 	if _debug_label == null:
 		return
-	_debug_refresh_counter += 1
-	if _debug_refresh_counter < DEBUG_LABEL_REFRESH_TICKS:
-		return
-	_debug_refresh_counter = 0
+	# Build the label text from the SM's per-tick scores. ► marks the
+	# current winning option (independent of commit). intent: shows
+	# what the bot is currently committed to (CARRY default; pre-aim
+	# / charge states show the fire intent). last: persists the most
+	# recent fired action.
+	var winner: String = _agent.debug_winner()
+	var intent: String = _agent.debug_intent()
 	var lines: Array[String] = []
-	lines.append("%s [%s]" % [_agent.debug_role(), _agent.debug_state_name()])
+	lines.append("[%s] intent:%s" % [_agent.debug_role(), intent])
+
+	var shoot_label: String = _agent.debug_shoot_label()
+	var pass_slot: String = _agent.debug_pass_slot()
+	var carry_dir: String = _agent.debug_carry_dir(perceived_snapshot)
+
+	# Score lines, with ► on the winner. Round to 2 decimals — finer
+	# precision changes the text every tick and defeats the change
+	# detection.
+	lines.append("%s %s %.2f" % [
+			"►" if winner == shoot_label else " ", shoot_label, _agent.debug_shoot_score()])
+	lines.append("%s PASS  %.2f →%s" % [
+			"►" if winner == "PASS" else " ", _agent.debug_pass_score(), pass_slot])
+	lines.append("%s CARRY %.2f %s" % [
+			"►" if winner == "CARRY" else " ", _agent.debug_carry_score(), carry_dir])
+
 	var last: String = _agent.debug_last_decision()
 	if last != "":
 		lines.append("last: " + last)
-	_debug_label.text = "\n".join(lines)
+
+	var text: String = "\n".join(lines)
+	if text != _debug_last_text:
+		_debug_label.text = text
+		_debug_last_text = text

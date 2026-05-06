@@ -471,6 +471,18 @@ var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 # until the next press fires.
 var debug_last_decision: String = ""
 
+# Per-tick decision-scoring readout for the floating debug label.
+# Populated by `_pick_action` every tick; AIController polls and
+# refreshes the label only when content changes (so it doesn't
+# flicker every frame). Slot label and carry direction are computed
+# from the chosen peer / position at the same time.
+var debug_shoot_score: float = 0.0
+var debug_shoot_use_slapper: bool = false
+var debug_pass_score: float = 0.0
+var debug_pass_peer_id: int = 0
+var debug_carry_score: float = 0.0
+var debug_carry_pos: Vector3 = Vector3.ZERO
+
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -506,6 +518,67 @@ func debug_role() -> String:
 	if _team_brain == null:
 		return "?"
 	return "%s: %s" % [_team_state_label(_team_brain.state), _slot_label(_team_brain.get_slot(_peer_id))]
+
+
+# Returns "SHOOT" / "SLAP" / "PASS" / "CARRY" / "—" identifying which
+# option scored highest on the most recent _pick_action tick.
+# Independent of commit (intent) — purely the live winner.
+func debug_winner() -> String:
+	var fire_score: float = debug_shoot_score if debug_shoot_score >= debug_pass_score else debug_pass_score
+	var fire_label: String = ("SLAP" if debug_shoot_use_slapper else "SHOOT") if debug_shoot_score >= debug_pass_score else "PASS"
+	if fire_score == 0.0 and debug_carry_score == 0.0:
+		return "—"
+	if fire_score >= debug_carry_score:
+		return fire_label
+	return "CARRY"
+
+
+# String form of the bot's currently-committed intent ("SHOOT" /
+# "SLAP" / "PASS" / "CARRY"). Differs from debug_winner when the bot
+# is mid-pre-aim or mid-charge.
+func debug_intent() -> String:
+	match _intended_action:
+		State.SHOOT_PRESSED: return "SHOOT"
+		State.SLAPPER_PRESSED: return "SLAP"
+		State.PASS_PRESSED: return "PASS"
+		_: return "CARRY"
+
+
+# Receiver slot label for the best pass this tick ("Outlet" / "Backdoor"
+# / etc.), or "—" when no pass target.
+func debug_pass_slot() -> String:
+	if debug_pass_peer_id == 0 or _team_brain == null:
+		return "—"
+	return _slot_label(_team_brain.get_slot(debug_pass_peer_id))
+
+
+# Compass direction string for the best carry destination relative
+# to the bot's current position. "stand" when destination ≈ self,
+# otherwise one of fwd/back/L/R/fwd-L/fwd-R/back-L/back-R using world
+# attacking direction as forward.
+func debug_carry_dir(self_pos: Vector3) -> String:
+	if debug_carry_pos == Vector3.ZERO:
+		return "—"
+	var dx: float = debug_carry_pos.x - self_pos.x
+	var dz: float = debug_carry_pos.z - self_pos.z
+	if dx * dx + dz * dz < 0.25:  # within 0.5 m → stand-still
+		return "stand"
+	# "Forward" = toward attacking goal. own_goal_dir = +1 means own
+	# net at +Z, attacking -Z. So forward sign on z = -own_goal_dir.
+	var fwd_z_sign: float = -_own_goal_dir
+	var dz_signed: float = dz * fwd_z_sign  # positive = forward
+	# Lateral and longitudinal magnitudes — pick a compass bucket.
+	var ax: float = absf(dx)
+	var az: float = absf(dz_signed)
+	var lon: String = ("fwd" if dz_signed > 0.0 else "back") if az > 0.5 else ""
+	var lat: String = ("L" if dx < 0.0 else "R") if ax > 0.5 else ""
+	if lon != "" and lat != "":
+		return "%s-%s" % [lon, lat]
+	if lon != "":
+		return lon
+	if lat != "":
+		return lat
+	return "stand"
 
 
 func _team_state_label(state: int) -> String:
@@ -1097,6 +1170,15 @@ func _pick_action(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 		shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
 	elif _intended_action == State.PASS_PRESSED:
 		best_pass_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+
+	# Debug snapshot of the per-tick scores for the floating label.
+	# AIController reads these and refreshes only when content changes.
+	debug_shoot_score = shoot_score
+	debug_shoot_use_slapper = shoot_use_slapper
+	debug_pass_score = best_pass_score
+	debug_pass_peer_id = best_pass_peer
+	debug_carry_score = carry_score
+	debug_carry_pos = _last_carry_anchor
 
 	# Best fire option. No noise-floor threshold — CARRY competes
 	# directly, so a weak fire naturally loses to any stronger carry

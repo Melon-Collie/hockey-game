@@ -63,6 +63,40 @@ func debug_last_decision() -> String:
 	return _sm.debug_last_decision
 
 
+func debug_shoot_score() -> float:
+	return _sm.debug_shoot_score
+
+
+func debug_shoot_label() -> String:
+	return "SLAP" if _sm.debug_shoot_use_slapper else "SHOOT"
+
+
+func debug_pass_score() -> float:
+	return _sm.debug_pass_score
+
+
+func debug_pass_slot() -> String:
+	return _sm.debug_pass_slot()
+
+
+func debug_carry_score() -> float:
+	return _sm.debug_carry_score
+
+
+func debug_carry_dir(snapshot: WorldSnapshot) -> String:
+	if snapshot == null or not snapshot.skater_states.has(_sm._peer_id):
+		return "—"
+	return _sm.debug_carry_dir(snapshot.skater_states[_sm._peer_id].position)
+
+
+func debug_winner() -> String:
+	return _sm.debug_winner()
+
+
+func debug_intent() -> String:
+	return _sm.debug_intent()
+
+
 func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void:
 	input.delta = delta
 	input.host_timestamp = host_timestamp
