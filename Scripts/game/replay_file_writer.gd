@@ -145,11 +145,16 @@ func _enqueue(host_ts: float, kind: int, payload: PackedByteArray) -> void:
 
 
 # Runs on the worker thread. Wakes on every semaphore.post(), drains whatever
-# the producer has queued in one batch, and goes back to sleep. Exits after
-# the next drain once `_shutdown` is set. On the first store_buffer error
-# (disk full, permission yanked, etc) sets _write_failed and stops writing —
-# the partial file is left as-is for the reader to detect via missing
-# END_OF_RECORDS.
+# the producer has queued in one batch, flushes the FileAccess buffer, and
+# goes back to sleep. Exits after the next drain once `_shutdown` is set.
+# On the first store_buffer error (disk full, permission yanked, etc) sets
+# _write_failed and stops writing — the partial file is left as-is for the
+# reader to detect via missing END_OF_RECORDS.
+#
+# Flushing after every drain (rather than only on shutdown) bounds the
+# crash-recovery loss to a single batch (~25 ms of frames at the broadcast
+# rate) instead of whatever the OS happened to buffer. Cost is ~40 syscalls/
+# sec at 25 ms broadcast cadence; negligible vs. the data-recovery benefit.
 func _worker_loop() -> void:
 	while true:
 		_semaphore.wait()
@@ -168,6 +173,6 @@ func _worker_loop() -> void:
 					_write_failed = true
 					_mutex.unlock()
 					break
-		if should_exit:
 			_file.flush()
+		if should_exit:
 			return
