@@ -22,16 +22,22 @@ enum Slot {
 	NONE,
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
-	# Defensive triumvirate — used in DZONE, TRANS_OD, and NEUTRAL.
-	# Each role's behavior handles the no-carrier case (NEUTRAL) by
-	# treating the puck position itself as the threat origin.
-	PRESSURE,   # puck pressurer — closes the carrier (or puck-as-threat).
-	ANCHOR,     # deep defender / net-front. DZONE + TRANS_OD only.
+	# Defensive triumvirate — used in DZONE and TRANS_OD where an
+	# opp carries the puck. NEUTRAL has no carrier and uses CHASE
+	# / FLANK_L / FLANK_R below instead, since the role semantics
+	# differ (race to puck + hold support vs. pressure carrier +
+	# defend net + read pass).
+	PRESSURE,   # puck pressurer — closes the carrier.
+	ANCHOR,     # deep defender / net-front.
 	COVER,      # weak-side support / pass-interception read.
 	# Offensive roles.
 	FINISHER,   # OZONE: scoring threat near opp net. Roams the slot.
 	OUTLET,     # TRANS_DO: stretch-pass option at opp blue line.
 	SUPPORT,    # OZONE + TRANS_DO: weak-side trail / cycle support.
+	# NEUTRAL — loose puck, no clear possession. Race + hold shape.
+	CHASE,      # closest peer races to the puck for retrieval.
+	FLANK_L,    # left flank, defensive support behind puck.
+	FLANK_R,    # right flank, defensive support behind puck.
 }
 
 # Hysteresis: when running closest-to-X assignment queries, a peer
@@ -76,10 +82,7 @@ static func slots_for_state(state: int) -> Array:
 		AIPossessionState.State.TRANS_OD:
 			return [Slot.PRESSURE, Slot.ANCHOR, Slot.COVER]
 		AIPossessionState.State.NEUTRAL:
-			# 1 PRESSURE (closest to puck) + N COVERs (remaining).
-			# Slot list shows unique slot types; multiple peers can
-			# share the COVER slot.
-			return [Slot.PRESSURE, Slot.COVER]
+			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
 			return []
 
@@ -201,13 +204,9 @@ static func assign(
 					Slot.SUPPORT)
 
 		AIPossessionState.State.NEUTRAL:
-			# Same shape as DZONE/TRANS_OD: closest-to-puck pressures,
-			# remaining bots cover. Multiple COVERs spread out via
-			# anti-crowding inside the role behavior.
-			_assign_one_then_remainder(
+			_assign_chase_and_flanks(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
-					Slot.PRESSURE, puck_pos,
-					Slot.COVER)
+					puck_pos)
 
 	return result
 
@@ -294,3 +293,46 @@ static func _assign_one_then_remainder(
 	for pid_r: int in teammates:
 		if not fixed_peers.has(pid_r):
 			result[pid_r] = slot_remainder
+
+
+# NEUTRAL: CHASE goes to closest-to-puck. Remaining peers split on
+# X axis with hysteresis — lowest effective X = FLANK_L, rest = FLANK_R.
+# Hysteresis applied as an X-axis bias toward the previous slot's
+# side, so a peer wobbling near center doesn't flip L/R every tick.
+static func _assign_chase_and_flanks(
+		snapshot: WorldSnapshot,
+		teammates: Array,
+		fixed_peers: Dictionary,
+		prev_assignments: Dictionary,
+		result: Dictionary,
+		puck_pos: Vector3) -> void:
+	var chase_pid: int = _pick_closest_with_hysteresis(
+			snapshot, teammates, fixed_peers, prev_assignments,
+			puck_pos, Slot.CHASE)
+	if chase_pid != -1:
+		result[chase_pid] = Slot.CHASE
+		fixed_peers[chase_pid] = true
+
+	var remaining: Array = []
+	for pid: int in teammates:
+		if not fixed_peers.has(pid):
+			remaining.append(pid)
+	if remaining.is_empty():
+		return
+
+	var effective_x: Dictionary = {}
+	for pid_r: int in remaining:
+		var x: float = snapshot.skater_states[pid_r].position.x
+		var prev_slot: int = prev_assignments.get(pid_r, Slot.NONE)
+		if prev_slot == Slot.FLANK_L:
+			x -= HYSTERESIS_PENALTY_M
+		elif prev_slot == Slot.FLANK_R:
+			x += HYSTERESIS_PENALTY_M
+		effective_x[pid_r] = x
+
+	remaining.sort_custom(func(a: int, b: int) -> bool:
+			return effective_x[a] < effective_x[b])
+
+	result[remaining[0]] = Slot.FLANK_L
+	for i: int in range(1, remaining.size()):
+		result[remaining[i]] = Slot.FLANK_R

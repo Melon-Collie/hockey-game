@@ -55,33 +55,15 @@ func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 
 # ── Bail-outs ───────────────────────────────────────────────────────────────
 
-func test_falls_back_to_self_pos_when_no_threat_origin() -> void:
-	# Snapshot has no usable puck data — safe fallback.
+func test_falls_back_to_self_pos_when_no_carrier() -> void:
+	# Loose puck — COVER has no carrier to read. NEUTRAL play uses
+	# CHASE/FLANK; an in-flight pass moment in DZONE/TRANS_OD
+	# resolves within a frame via the brain's event-driven re-tick.
 	var self_pos := Vector3(-3, 0, 18)
 	var ctx: RoleContext = _make_ctx(self_pos)
 	var d: RoleDecision = AIRoleCover.decide(ctx)
 	assert_eq(d.target_position, self_pos,
-			"no threat origin → fall back to self_pos")
-
-
-func test_uses_puck_pos_as_threat_when_no_carrier() -> void:
-	# NEUTRAL — loose puck, no carrier. With multiple opps (= pass
-	# receivers in the threat model), COVER should run argmax with
-	# puck as the threat origin instead of bailing.
-	var self_pos := Vector3(0, 0, 10)
-	var skaters: Array = [
-		[1, TEAM_ID, self_pos, Vector3.ZERO],
-		[200, 1 - TEAM_ID, Vector3(-3, 0, 5), Vector3.ZERO],
-		[210, 1 - TEAM_ID, Vector3(3, 0, 5), Vector3.ZERO],
-	]
-	var ctx: RoleContext = _make_ctx(self_pos, -1, skaters)
-	ctx.snapshot.puck_state.position = Vector3(0, 0, 0)
-	var d: RoleDecision = AIRoleCover.decide(ctx)
-	# Search center is midpoint between puck (0,0,0) and our_net
-	# (0,0,26.65) shifted weak-side. Target should land on our-net
-	# side of the puck (z > 0).
-	assert_gt(d.target_position.z, 0.0 - 0.01,
-			"with no carrier, COVER uses puck as threat; target on our-net side; got %s" % d.target_position)
+			"loose puck → fall back to self_pos")
 
 
 func test_falls_back_to_self_pos_when_only_carrier_no_pass_receivers() -> void:

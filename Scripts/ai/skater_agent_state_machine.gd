@@ -507,6 +507,12 @@ func _slot_label(slot: int) -> String:
 			return "Outlet"
 		AIRoleSlots.Slot.SUPPORT:
 			return "Support"
+		AIRoleSlots.Slot.CHASE:
+			return "Chase"
+		AIRoleSlots.Slot.FLANK_L:
+			return "FlankL"
+		AIRoleSlots.Slot.FLANK_R:
+			return "FlankR"
 		_:
 			return "-"
 
@@ -634,6 +640,12 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			return AIRoleAnchor.decide(ctx)
 		AIRoleSlots.Slot.COVER:
 			return AIRoleCover.decide(ctx)
+		AIRoleSlots.Slot.CHASE:
+			return AIRoleChase.decide(ctx)
+		AIRoleSlots.Slot.FLANK_L:
+			return AIRoleFlank.decide(ctx, -1.0)
+		AIRoleSlots.Slot.FLANK_R:
+			return AIRoleFlank.decide(ctx, 1.0)
 		_:
 			return AIRoleAnchorFollow.decide(ctx)
 

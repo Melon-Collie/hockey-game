@@ -75,12 +75,15 @@ func test_slots_for_trans_od() -> void:
 
 
 func test_slots_for_neutral() -> void:
-	# NEUTRAL reuses defensive roles: 1 PRESSURE (closest to puck) +
-	# remaining peers as COVERs. PRESSURE/COVER fall back to puck
-	# position as the threat origin when no carrier exists.
+	# NEUTRAL has its own role behaviors (CHASE, FLANK_L, FLANK_R)
+	# since the no-carrier scenario calls for "race to puck + hold
+	# support" semantics rather than the inverse-scoring defensive
+	# roles. See test_role_chase.gd / test_role_flank.gd for the
+	# behavior tests.
 	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.NEUTRAL)
-	assert_true(slots.has(AIRoleSlots.Slot.PRESSURE))
-	assert_true(slots.has(AIRoleSlots.Slot.COVER))
+	assert_true(slots.has(AIRoleSlots.Slot.CHASE))
+	assert_true(slots.has(AIRoleSlots.Slot.FLANK_L))
+	assert_true(slots.has(AIRoleSlots.Slot.FLANK_R))
 
 
 # ─── Slot anchors ───────────────────────────────────────────────────────────
@@ -221,23 +224,50 @@ func test_assign_hysteresis_swaps_when_contender_meaningfully_closer() -> void:
 
 # ─── NEUTRAL assignment ─────────────────────────────────────────────────────
 
-func test_assign_neutral_pressure_and_covers() -> void:
-	# Loose puck at center ice. Closest peer becomes PRESSURE; the
-	# remaining two share the COVER slot. Multiple COVERs spread out
-	# at run time via anti-crowding inside the role behavior — the
-	# brain doesn't need to split them L/R.
+func test_assign_neutral_chase_and_flanks() -> void:
+	# Loose puck at center ice. CHASE goes to closest peer; the other
+	# two split lateral L/R based on X position.
 	var skaters: Array = [
 			[100, 0, Vector3(1.0, 0.0, 0.0)],    # closest to puck
-			[110, 0, Vector3(-5.0, 0.0, -3.0)],
-			[120, 0, Vector3(5.0, 0.0, -3.0)],
+			[110, 0, Vector3(-5.0, 0.0, -3.0)],  # left side
+			[120, 0, Vector3(5.0, 0.0, -3.0)],   # right side
 	]
 	var snap := _make_snapshot(skaters, -1, 0.0, 0.0)
 	var assignments: Dictionary = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.NEUTRAL,
 			_resolver(skaters), {})
-	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE)
-	assert_eq(assignments[110], AIRoleSlots.Slot.COVER)
-	assert_eq(assignments[120], AIRoleSlots.Slot.COVER)
+	assert_eq(assignments[100], AIRoleSlots.Slot.CHASE)
+	assert_eq(assignments[110], AIRoleSlots.Slot.FLANK_L)
+	assert_eq(assignments[120], AIRoleSlots.Slot.FLANK_R)
+
+
+func test_assign_neutral_flank_hysteresis_holds_through_center() -> void:
+	# Two peers near center — without hysteresis they'd flip L/R any
+	# time their X order swaps. With prev assignments preserving
+	# their sides, the 1.0 m penalty keeps them stable.
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, 5.0)],    # closest to puck → CHASE
+			[110, 0, Vector3(0.3, 0.0, -3.0)],   # nominally right of center
+			[120, 0, Vector3(-0.3, 0.0, -3.0)],  # nominally left of center
+	]
+	var snap := _make_snapshot(skaters, -1, 0.0, 0.0)
+	# Prev: 110 was FLANK_L, 120 was FLANK_R. Their X positions
+	# now swap by 0.6 m; hysteresis (1.0 m on each side) keeps
+	# them in their previous slots.
+	var prev: Dictionary = {
+			100: AIRoleSlots.Slot.CHASE,
+			110: AIRoleSlots.Slot.FLANK_L,
+			120: AIRoleSlots.Slot.FLANK_R,
+	}
+	var assignments: Dictionary = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.NEUTRAL,
+			_resolver(skaters), prev)
+	# Effective X: 110 = 0.3 - 1.0 = -0.7. 120 = -0.3 + 1.0 = 0.7.
+	# 110 still has lower effective X → keeps FLANK_L.
+	assert_eq(assignments[110], AIRoleSlots.Slot.FLANK_L,
+			"FLANK_L sticks across a small center crossing")
+	assert_eq(assignments[120], AIRoleSlots.Slot.FLANK_R,
+			"FLANK_R sticks across a small center crossing")
 
 
 # ─── Mixed-team behavior ────────────────────────────────────────────────────

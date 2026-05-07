@@ -58,33 +58,16 @@ func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 
 # ── Bail-outs ───────────────────────────────────────────────────────────────
 
-func test_falls_back_to_self_pos_when_no_threat_origin() -> void:
-	# Snapshot has no usable puck data (default ctx has puck at
-	# Vector3.ZERO with no carrier — resolve_threat_pos returns
-	# ZERO). Safe fallback to self_pos.
+func test_falls_back_to_self_pos_when_no_carrier() -> void:
+	# Loose puck — PRESSURE has no target to pressure. NEUTRAL play
+	# is handled by CHASE/FLANK roles; if PRESSURE somehow runs
+	# without a carrier (in-flight pass moment), bail to self_pos
+	# until the brain re-tick reassigns.
 	var self_pos := Vector3(0, 0, 18)
 	var ctx: RoleContext = _make_ctx(self_pos)
 	var d: RoleDecision = AIRolePressure.decide(ctx)
 	assert_eq(d.target_position, self_pos,
-			"no threat origin → fall back to self_pos")
-
-
-func test_uses_puck_pos_as_threat_when_no_carrier() -> void:
-	# NEUTRAL — loose puck at meaningful position, no carrier.
-	# PRESSURE should treat puck_pos as the threat origin and run
-	# its argmax instead of bailing.
-	var self_pos := Vector3(8, 0, 0)
-	var skaters: Array = [
-		[1, TEAM_ID, self_pos, Vector3.ZERO],
-		[200, 1 - TEAM_ID, Vector3(-3, 0, 5), Vector3.ZERO],
-	]
-	var ctx: RoleContext = _make_ctx(self_pos, -1, skaters)
-	# Puck loose at (0, 0, 5) — Z>0 so on our-net side of NZ center.
-	ctx.snapshot.puck_state.position = Vector3(0, 0, 5)
-	var d: RoleDecision = AIRolePressure.decide(ctx)
-	# Argmax should pick a goal-side candidate (z >= puck.z).
-	assert_true(d.target_position.z >= 5.0 - 0.01,
-			"with no carrier, PRESSURE uses puck as threat; target stays goal-side; got %s" % d.target_position)
+			"loose puck → fall back to self_pos")
 
 
 # ── Goal-side filter ────────────────────────────────────────────────────────
