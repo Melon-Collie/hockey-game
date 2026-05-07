@@ -10,11 +10,8 @@ var _phase_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
-var _game_menu: CanvasLayer = null
+var _pause_menu: PauseMenu = null
 var _bug_dialog: BugReportDialog = null
-var _slot_grid: SlotGridPanel = null
-var _slot_grid_container: Control = null
-var _options_container: Control = null
 var _toast_stack: ToastStack = null
 var _flash_overlay: FlashOverlay = null
 var _home_sog_label: Label = null
@@ -28,13 +25,10 @@ var _away_badge_label: Label = null
 var _last_clock_pulse_second: int = -1
 var _confirm_dialog: ConfirmDialog = null
 var _confirm_callback: Callable = Callable()
-var _leave_container: Control = null
 var _rematch_votes: Dictionary[int, bool] = {}
 var _local_voted: bool = false
 var _replay_label: Label = null
 var _spectator_banner: PanelContainer = null
-var _change_position_btn: Button = null
-var _spectate_btn: Button = null
 
 const _DARK_BG    := Color(0.07, 0.07, 0.09, 0.92)
 const _WHITE      := Color(1.00, 1.00, 1.00, 1.00)
@@ -57,7 +51,10 @@ func _ready() -> void:
 	_game_over_popup.disconnect_pressed.connect(_on_game_over_disconnect)
 	_game_over_popup.exit_pressed.connect(_on_game_over_exit)
 	add_child(_game_over_popup)
-	_build_game_menu()
+	_pause_menu = PauseMenu.new()
+	_pause_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
+	_pause_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
+	add_child(_pause_menu)
 	_confirm_dialog = ConfirmDialog.new()
 	_confirm_dialog.confirmed.connect(_on_confirm_dialog_confirmed)
 	_confirm_dialog.cancelled.connect(_on_confirm_dialog_cancelled)
@@ -88,36 +85,16 @@ func _ready() -> void:
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.local_spectator_state_changed.connect(func(_is_spec: bool) -> void: _apply_spectator_chrome())
 	_apply_spectator_chrome()
-	GameManager.stats_updated.connect(func() -> void:
-		if _game_menu != null and _game_menu.visible and _slot_grid != null:
-			_slot_grid.refresh(GameManager.get_slot_roster(), NetworkManager.local_peer_id(), _get_team_colors()))
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("ui_cancel"):
-		if _game_over_popup.visible:
-			return
-		if _confirm_dialog != null and _confirm_dialog.visible:
-			return
-		if _game_menu.visible and _options_container != null and _options_container.visible:
-			_options_container.visible = false
-		elif _game_menu.visible and _slot_grid_container != null and _slot_grid_container.visible:
-			_slot_grid_container.visible = false
-		elif _game_menu.visible and _leave_container != null and _leave_container.visible:
-			_leave_container.visible = false
-		else:
-			_set_menu_open(not _game_menu.visible)
-		get_viewport().set_input_as_handled()
-
-func _set_menu_open(open: bool) -> void:
-	_game_menu.visible = open
-	GameManager.set_input_blocked(open)
-	if not open:
-		if _slot_grid_container != null:
-			_slot_grid_container.visible = false
-		if _options_container != null:
-			_options_container.visible = false
-		if _leave_container != null:
-			_leave_container.visible = false
+	if not event.is_action_pressed(&"ui_cancel"):
+		return
+	if _game_over_popup.visible:
+		return
+	if _confirm_dialog.visible or _pause_menu.visible:
+		return
+	_pause_menu.open()
+	get_viewport().set_input_as_handled()
 
 # ---------------------------------------------------------------------------
 # Build helpers
@@ -307,213 +284,12 @@ func _apply_spectator_chrome() -> void:
 		_spectator_banner.visible = is_spec
 	if _game_over_popup != null:
 		_game_over_popup.set_spectator(is_spec)
-	# Spectator clicks the slot grid to come back; the dedicated demote button
-	# only makes sense while playing.
-	if _spectate_btn != null:
-		_spectate_btn.visible = not is_spec
-	# Change Position is enabled both ways now: players use it to swap teams /
-	# slots, spectators use it to claim an open player slot.
-	if _change_position_btn != null:
-		_change_position_btn.disabled = false
-		_change_position_btn.tooltip_text = ""
+	if _pause_menu != null:
+		_pause_menu.apply_spectator_chrome(is_spec)
 
 func _build_offscreen_indicators() -> void:
 	var indicators := OffScreenPlayerIndicators.new()
 	add_child(indicators)
-
-func _build_game_menu() -> void:
-	var overlay := ColorRect.new()
-	overlay.color = Color(0.0, 0.0, 0.0, 0.55)
-	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-
-	var panel_style := MenuStyle.panel()
-
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-
-	var vbox := VBoxContainer.new()
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 16)
-	panel.add_child(vbox)
-
-	var resume_btn := MenuStyle.popup_button("Resume")
-	resume_btn.pressed.connect(func() -> void: _set_menu_open(false))
-	vbox.add_child(resume_btn)
-
-	_add_host_button(vbox, "Rematch", func() -> void:
-		_set_menu_open(false)
-		GameManager.reset_game())
-
-	_change_position_btn = MenuStyle.popup_button("Change Position")
-	_change_position_btn.pressed.connect(_on_change_position_pressed)
-	vbox.add_child(_change_position_btn)
-
-	# Players can demote themselves mid-game; spectators come back via the slot
-	# grid in Change Position. Hidden for spectators (handled in
-	# _apply_spectator_chrome).
-	_spectate_btn = MenuStyle.popup_button("Spectate")
-	_spectate_btn.pressed.connect(_on_spectate_pressed)
-	vbox.add_child(_spectate_btn)
-
-	var options_btn := MenuStyle.popup_button("Options")
-	options_btn.pressed.connect(_on_options_pressed)
-	vbox.add_child(options_btn)
-
-	var leave_btn := MenuStyle.popup_button("Leave Game")
-	leave_btn.pressed.connect(func() -> void: _leave_container.visible = true)
-	vbox.add_child(leave_btn)
-
-	var root := Control.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(overlay)
-	root.add_child(panel)
-
-	_game_menu = CanvasLayer.new()
-	_game_menu.layer = 20
-	_game_menu.visible = false
-	_game_menu.add_child(root)
-	add_child(_game_menu)
-
-	var slot_grid_panel_style := MenuStyle.panel()
-
-	var slot_panel := PanelContainer.new()
-	slot_panel.add_theme_stylebox_override("panel", slot_grid_panel_style)
-	slot_panel.set_anchors_preset(Control.PRESET_CENTER)
-	slot_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	slot_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	slot_panel.custom_minimum_size = Vector2(960, 0)
-
-	var slot_vbox := VBoxContainer.new()
-	slot_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	slot_vbox.add_theme_constant_override("separation", 16)
-	slot_panel.add_child(slot_vbox)
-
-	var slot_close_row := HBoxContainer.new()
-	var slot_close_spacer := Control.new()
-	slot_close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slot_close_row.add_child(slot_close_spacer)
-	var slot_close_btn := MenuStyle.close_button()
-	slot_close_btn.pressed.connect(func() -> void: _slot_grid_container.visible = false)
-	SoundManager.wire_button(slot_close_btn)
-	slot_close_row.add_child(slot_close_btn)
-	slot_vbox.add_child(slot_close_row)
-	var slot_title := Label.new()
-	slot_title.text = "Change Position"
-	slot_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	slot_title.add_theme_font_size_override("font_size", 24)
-	slot_title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
-	slot_vbox.add_child(slot_title)
-
-	_slot_grid = SlotGridPanel.new()
-	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_slot_grid.slot_selected.connect(_on_pause_slot_selected)
-	slot_vbox.add_child(_slot_grid)
-
-	var slot_grid_root := Control.new()
-	slot_grid_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	slot_grid_root.add_child(slot_panel)
-
-	_slot_grid_container = slot_grid_root
-	_slot_grid_container.visible = false
-
-	var slot_grid_layer := CanvasLayer.new()
-	slot_grid_layer.layer = 21
-	slot_grid_layer.add_child(slot_grid_root)
-	add_child(slot_grid_layer)
-
-	_build_options_overlay()
-	_build_leave_overlay()
-
-func _build_options_overlay() -> void:
-	var panel_style := MenuStyle.panel()
-
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-
-	var options := OptionsPanel.new()
-	options.close_requested.connect(func() -> void: _options_container.visible = false)
-	panel.add_child(options)
-
-	var root := Control.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(panel)
-
-	_options_container = root
-	_options_container.visible = false
-
-	var options_layer := CanvasLayer.new()
-	options_layer.layer = 21
-	options_layer.add_child(root)
-	add_child(options_layer)
-
-func _build_leave_overlay() -> void:
-	var panel_style := MenuStyle.panel()
-
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-
-	var vbox := VBoxContainer.new()
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 16)
-	panel.add_child(vbox)
-
-	var close_row := HBoxContainer.new()
-	var close_spacer := Control.new()
-	close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	close_row.add_child(close_spacer)
-	var close_btn := MenuStyle.close_button()
-	close_btn.pressed.connect(func() -> void: _leave_container.visible = false)
-	SoundManager.wire_button(close_btn)
-	close_row.add_child(close_btn)
-	vbox.add_child(close_row)
-	var title := Label.new()
-	title.text = "Leave Game"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
-	vbox.add_child(title)
-
-	if NetworkManager.is_offline_mode:
-		_add_host_button(vbox, "Return to Menu", func() -> void: GameManager.exit_to_main_menu())
-	else:
-		_add_host_button(vbox, "Return to Lobby", func() -> void: GameManager.return_to_lobby())
-
-	if not NetworkManager.is_offline_mode:
-		var disconnect_btn := MenuStyle.popup_button("Disconnect")
-		disconnect_btn.pressed.connect(func() -> void:
-			_show_confirm("Return to main menu?", GameManager.exit_to_main_menu))
-		vbox.add_child(disconnect_btn)
-
-	var exit_btn := MenuStyle.popup_button("Exit Game")
-	exit_btn.pressed.connect(func() -> void:
-		_show_confirm("Exit game?", func() -> void:
-			GameManager.on_scene_exit()
-			NetworkManager.reset()
-			get_tree().quit()))
-	vbox.add_child(exit_btn)
-
-
-	var root := Control.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(panel)
-
-	_leave_container = root
-	_leave_container.visible = false
-
-	var leave_layer := CanvasLayer.new()
-	leave_layer.layer = 21
-	leave_layer.add_child(root)
-	add_child(leave_layer)
 
 func _build_bug_icon() -> void:
 	var icon_tex := load("res://Assets/Icons/bug_report.svg") as Texture2D
@@ -563,13 +339,6 @@ func _on_confirm_dialog_confirmed() -> void:
 
 func _on_confirm_dialog_cancelled() -> void:
 	_confirm_callback = Callable()
-
-func _add_host_button(vbox: VBoxContainer, text: String, handler: Callable) -> void:
-	if not NetworkManager.is_host:
-		return
-	var b := MenuStyle.popup_button(text)
-	b.pressed.connect(handler)
-	vbox.add_child(b)
 
 func _build_version_tag() -> void:
 	var label := _lbl("v%s" % BuildInfo.VERSION, 11, _DIM)
@@ -713,8 +482,8 @@ func _on_game_over() -> void:
 
 func _on_game_reset() -> void:
 	_game_over_popup.hide_popup()
-	if _slot_grid_container != null:
-		_slot_grid_container.visible = false
+	if _pause_menu != null:
+		_pause_menu.close()
 
 func _on_rematch_vote_pressed() -> void:
 	_local_voted = not _local_voted
@@ -763,33 +532,6 @@ func _check_rematch_unanimous() -> void:
 			count += 1
 	if total > 0 and count >= total:
 		GameManager.reset_game()
-
-func _get_team_colors() -> Array[Dictionary]:
-	if GameManager.teams.size() < 2:
-		return []
-	return [
-		TeamColorRegistry.get_colors(GameManager.teams[0].color_id, 0),
-		TeamColorRegistry.get_colors(GameManager.teams[1].color_id, 1),
-	]
-
-func _on_options_pressed() -> void:
-	_options_container.visible = true
-
-func _on_change_position_pressed() -> void:
-	_slot_grid_container.visible = not _slot_grid_container.visible
-	if _slot_grid_container.visible:
-		_slot_grid.refresh(GameManager.get_slot_roster(), NetworkManager.local_peer_id(), _get_team_colors())
-
-func _on_pause_slot_selected(team_id: int, slot: int) -> void:
-	NetworkManager.send_request_slot_swap(team_id, slot)
-	_set_menu_open(false)
-
-func _on_spectate_pressed() -> void:
-	# Spectator slot index doesn't matter mid-game — the host doesn't track
-	# in-game spectator slots (the lobby reassigns them on return-to-lobby
-	# anyway). Send slot 0 and let the host's demote helper run.
-	NetworkManager.send_request_slot_swap(NetworkManager.SPECTATOR_TEAM_ID, 0)
-	_set_menu_open(false)
 
 func _on_bug_report_pressed() -> void:
 	_bug_dialog.open()
