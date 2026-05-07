@@ -507,12 +507,6 @@ func _slot_label(slot: int) -> String:
 			return "Outlet"
 		AIRoleSlots.Slot.SUPPORT:
 			return "Support"
-		AIRoleSlots.Slot.CHASE:
-			return "Chase"
-		AIRoleSlots.Slot.FLANK_L:
-			return "FlankL"
-		AIRoleSlots.Slot.FLANK_R:
-			return "FlankR"
 		_:
 			return "-"
 

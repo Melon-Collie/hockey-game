@@ -22,25 +22,16 @@ enum Slot {
 	NONE,
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
-	# Shared between DZONE and TRANS_OD. Anchors branch on state.
-	PRESSURE,   # puck pressurer — closes the carrier.
-	ANCHOR,     # deep defender / net-front. DZONE: strong-side post.
-	            # TRANS_OD: defensive slot center.
-	COVER,      # weak-side support. DZONE: mid-slot weak-side.
-	            # TRANS_OD: back-of-puck weak-side.
-	# OZONE — extended OZ rotation.
-	FINISHER,   # scoring threat at the back-door / weak-side post.
-	            # AIRoleFinisher.decide adds tip / step-out / hold on top.
-	# TRANS_DO — geometric assignment, no locking.
-	OUTLET,     # weak-side at opp blue line, NZ-side (offside-safe).
-	SUPPORT,    # OZONE + TRANS_DO: weak-side trail. OZONE: high in OZ
-	            # shadowing puck X (Phase 3 placeholder; Phase 4 utility
-	            # AI replaces this with a passing-lane-availability search).
-	            # TRANS_DO: weak-side of carrier, behind toward our net.
-	# NEUTRAL — faceoff / fresh loose puck. Simple 1-2 shape.
-	CHASE,      # at puck — closest peer transitions to CHASE_PUCK.
-	FLANK_L,    # left flank, slightly defensive of puck
-	FLANK_R,    # right flank, slightly defensive of puck
+	# Defensive triumvirate — used in DZONE, TRANS_OD, and NEUTRAL.
+	# Each role's behavior handles the no-carrier case (NEUTRAL) by
+	# treating the puck position itself as the threat origin.
+	PRESSURE,   # puck pressurer — closes the carrier (or puck-as-threat).
+	ANCHOR,     # deep defender / net-front. DZONE + TRANS_OD only.
+	COVER,      # weak-side support / pass-interception read.
+	# Offensive roles.
+	FINISHER,   # OZONE: scoring threat near opp net. Roams the slot.
+	OUTLET,     # TRANS_DO: stretch-pass option at opp blue line.
+	SUPPORT,    # OZONE + TRANS_DO: weak-side trail / cycle support.
 }
 
 # Hysteresis: when running closest-to-X assignment queries, a peer
@@ -67,10 +58,8 @@ const HYSTERESIS_PENALTY_M: float = 1.0
 # targets in their role behaviors. No TRANS_OD-specific anchor
 # constants left.
 
-# NEUTRAL anchor constants. Simple 1-2 shape: CHASE pursues puck, two
-# flankers stand off to either side slightly defensive of puck.
-const NEUTRAL_FLANK_X: float = 3.0                 # m to either side of puck
-const NEUTRAL_FLANK_Z_DEFENSIVE: float = 2.0       # m back of puck toward own net
+# NEUTRAL: 1 PRESSURE + N COVERs. Roles own their positional
+# targets — no NEUTRAL-specific anchor constants.
 
 
 # Returns the list of slots for a given state, in canonical order.
@@ -87,7 +76,10 @@ static func slots_for_state(state: int) -> Array:
 		AIPossessionState.State.TRANS_OD:
 			return [Slot.PRESSURE, Slot.ANCHOR, Slot.COVER]
 		AIPossessionState.State.NEUTRAL:
-			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
+			# 1 PRESSURE (closest to puck) + N COVERs (remaining).
+			# Slot list shows unique slot types; multiple peers can
+			# share the COVER slot.
+			return [Slot.PRESSURE, Slot.COVER]
 		_:
 			return []
 
@@ -113,28 +105,9 @@ static func slot_anchor(
 			# current position so the slot's "distance" is zero.
 			return carrier_pos
 
-		# PRESSURE / ANCHOR / COVER / FINISHER / SUPPORT / OUTLET —
-		# these roles own their positional targets in their
-		# role-behavior modules. slot_anchor only handles the
-		# NEUTRAL roles below.
-
-		Slot.CHASE:
-			# NEUTRAL only: anchor at puck position. The bot's SM
-			# transitions to CHASE_PUCK naturally via _should_chase_loose_puck
-			# once they're closest.
-			return puck_pos
-
-		Slot.FLANK_L:
-			# Left flank, slightly defensive of puck so they're already
-			# in position if F1 loses the draw.
-			return Vector3(
-					puck_pos.x - NEUTRAL_FLANK_X, 0.0,
-					puck_pos.z + own_goal_dir * NEUTRAL_FLANK_Z_DEFENSIVE)
-
-		Slot.FLANK_R:
-			return Vector3(
-					puck_pos.x + NEUTRAL_FLANK_X, 0.0,
-					puck_pos.z + own_goal_dir * NEUTRAL_FLANK_Z_DEFENSIVE)
+		# Every role owns its positional target in its role-behavior
+		# module. slot_anchor is dead surface — Step 3 of the
+		# no-anchors refactor will delete this function entirely.
 
 		_:
 			return Vector3.ZERO
@@ -228,9 +201,13 @@ static func assign(
 					Slot.SUPPORT)
 
 		AIPossessionState.State.NEUTRAL:
-			_assign_chase_and_flanks(
+			# Same shape as DZONE/TRANS_OD: closest-to-puck pressures,
+			# remaining bots cover. Multiple COVERs spread out via
+			# anti-crowding inside the role behavior.
+			_assign_one_then_remainder(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
-					puck_pos)
+					Slot.PRESSURE, puck_pos,
+					Slot.COVER)
 
 	return result
 
@@ -317,50 +294,3 @@ static func _assign_one_then_remainder(
 	for pid_r: int in teammates:
 		if not fixed_peers.has(pid_r):
 			result[pid_r] = slot_remainder
-
-
-# NEUTRAL: CHASE goes to closest-to-puck. Remaining peers split on
-# X axis with hysteresis — lowest effective X = FLANK_L, rest = FLANK_R.
-# Hysteresis here is also HYSTERESIS_PENALTY_M but applied as an
-# X-axis bias toward the previous slot's side, so a peer wobbling
-# near center doesn't flip L/R every tick.
-static func _assign_chase_and_flanks(
-		snapshot: WorldSnapshot,
-		teammates: Array,
-		fixed_peers: Dictionary,
-		prev_assignments: Dictionary,
-		result: Dictionary,
-		puck_pos: Vector3) -> void:
-	var chase_pid: int = _pick_closest_with_hysteresis(
-			snapshot, teammates, fixed_peers, prev_assignments,
-			puck_pos, Slot.CHASE)
-	if chase_pid != -1:
-		result[chase_pid] = Slot.CHASE
-		fixed_peers[chase_pid] = true
-
-	var remaining: Array = []
-	for pid: int in teammates:
-		if not fixed_peers.has(pid):
-			remaining.append(pid)
-	if remaining.is_empty():
-		return
-
-	# Effective X for sorting: peer who held FLANK_L last tick gets
-	# pulled left by the hysteresis margin; FLANK_R pulled right.
-	# Net effect: a wobble at center keeps its previous side.
-	var effective_x: Dictionary = {}
-	for pid_r: int in remaining:
-		var x: float = snapshot.skater_states[pid_r].position.x
-		var prev_slot: int = prev_assignments.get(pid_r, Slot.NONE)
-		if prev_slot == Slot.FLANK_L:
-			x -= HYSTERESIS_PENALTY_M
-		elif prev_slot == Slot.FLANK_R:
-			x += HYSTERESIS_PENALTY_M
-		effective_x[pid_r] = x
-
-	remaining.sort_custom(func(a: int, b: int) -> bool:
-			return effective_x[a] < effective_x[b])
-
-	result[remaining[0]] = Slot.FLANK_L
-	for i: int in range(1, remaining.size()):
-		result[remaining[i]] = Slot.FLANK_R

@@ -42,16 +42,18 @@ const WEAK_SIDE_OFFSET_M: float = 3.0
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	# Bail-out: no carrier means no pass threat to cover.
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_any_carrier_pos(ctx)
+	# Threat origin: carrier's position if one exists, else the puck
+	# itself. Lets COVER keep working in NEUTRAL (no carrier) or
+	# in-flight loose-puck windows.
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_threat_pos(ctx)
 	if carrier_pos == Vector3.ZERO:
+		# Snapshot null — nothing to score against.
 		d.target_position = ctx.self_pos
 		return d
 
 	var opp_teammates: Array[Vector3] = AIRoleHelpers.collect_opp_team_excluding_carrier(ctx)
 	if opp_teammates.is_empty():
-		# No pass receivers — no pass threat. PRESSURE/ANCHOR cover
-		# the carrier's direct options.
+		# No pass receivers — no pass threat to read.
 		d.target_position = ctx.self_pos
 		return d
 

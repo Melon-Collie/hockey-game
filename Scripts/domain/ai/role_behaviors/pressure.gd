@@ -38,12 +38,13 @@ class_name AIRolePressure
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	# Bail-out: no carrier means no pressure target. PRESSURE is a
-	# DZONE/TRANS_OD role and an opp carries the puck by definition
-	# in those states; an absent carrier means a transition is in
-	# flight and the brain re-tick will reassign within a frame.
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_any_carrier_pos(ctx)
+	# Threat origin: the carrier's position if one exists, else the
+	# puck position itself. Lets PRESSURE keep working in NEUTRAL
+	# (no carrier) or brief in-flight loose-puck windows — the puck
+	# IS the threat we're pressuring regardless of holder.
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_threat_pos(ctx)
 	if carrier_pos == Vector3.ZERO:
+		# Snapshot null — nothing to score against.
 		d.target_position = ctx.self_pos
 		return d
 

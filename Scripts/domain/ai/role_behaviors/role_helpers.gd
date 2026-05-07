@@ -149,6 +149,21 @@ static func resolve_any_carrier_pos(ctx: RoleContext) -> Vector3:
 	return ctx.snapshot.skater_states[carrier_pid].position
 
 
+# Returns the current "threat origin": carrier's position if a
+# carrier exists, else the puck position itself. Defensive roles
+# (PRESSURE, COVER) use this so they keep working in NEUTRAL or
+# brief in-flight loose-puck windows — the puck IS the threat
+# regardless of who's holding it. Falls back to Vector3.ZERO only
+# when snapshot is null.
+static func resolve_threat_pos(ctx: RoleContext) -> Vector3:
+	var carrier: Vector3 = resolve_any_carrier_pos(ctx)
+	if carrier != Vector3.ZERO:
+		return carrier
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return Vector3.ZERO
+	return ctx.snapshot.puck_state.position
+
+
 # Returns positions of opp peers other than the puck carrier — i.e.,
 # the carrier's potential pass receivers. Defensive roles use this
 # to score "carrier's best pass" when evaluating how much a candidate

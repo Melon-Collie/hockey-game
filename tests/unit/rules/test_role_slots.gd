@@ -75,27 +75,18 @@ func test_slots_for_trans_od() -> void:
 
 
 func test_slots_for_neutral() -> void:
+	# NEUTRAL reuses defensive roles: 1 PRESSURE (closest to puck) +
+	# remaining peers as COVERs. PRESSURE/COVER fall back to puck
+	# position as the threat origin when no carrier exists.
 	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.NEUTRAL)
-	assert_true(slots.has(AIRoleSlots.Slot.CHASE))
-	assert_true(slots.has(AIRoleSlots.Slot.FLANK_L))
-	assert_true(slots.has(AIRoleSlots.Slot.FLANK_R))
+	assert_true(slots.has(AIRoleSlots.Slot.PRESSURE))
+	assert_true(slots.has(AIRoleSlots.Slot.COVER))
 
 
 # ─── Slot anchors ───────────────────────────────────────────────────────────
-# Only COVER, CHASE, and FLANK_L/R still have slot_anchor formulas.
-# PRESSURE / ANCHOR / FINISHER / SUPPORT / OUTLET own their positional
-# targets in their role behaviors (tested in test_role_*.gd).
-
-
-# ANCHOR + COVER no longer have slot_anchor formulas — their
-# positional targets live in AIRoleAnchor.decide / AIRoleCover.decide
-# (see test_role_anchor.gd / test_role_cover.gd). slot_anchor now
-# only handles NEUTRAL roles.
-
-
-# FINISHER, SUPPORT, OUTLET no longer have slot_anchor formulas —
-# their positional targets live in their role-behavior modules
-# (test_role_finisher.gd, test_role_support.gd, test_role_outlet.gd).
+# slot_anchor() is now dead surface. Every role owns its positional
+# target in its role-behavior module. Step 3 (final cleanup) deletes
+# the function entirely.
 
 
 # ─── assign() ───────────────────────────────────────────────────────────────
@@ -230,51 +221,23 @@ func test_assign_hysteresis_swaps_when_contender_meaningfully_closer() -> void:
 
 # ─── NEUTRAL assignment ─────────────────────────────────────────────────────
 
-func test_assign_neutral_chase_and_flanks() -> void:
-	# Loose puck at center ice. CHASE goes to closest peer; the other
-	# two split lateral L/R.
+func test_assign_neutral_pressure_and_covers() -> void:
+	# Loose puck at center ice. Closest peer becomes PRESSURE; the
+	# remaining two share the COVER slot. Multiple COVERs spread out
+	# at run time via anti-crowding inside the role behavior — the
+	# brain doesn't need to split them L/R.
 	var skaters: Array = [
 			[100, 0, Vector3(1.0, 0.0, 0.0)],    # closest to puck
-			[110, 0, Vector3(-5.0, 0.0, -3.0)],  # left side
-			[120, 0, Vector3(5.0, 0.0, -3.0)],   # right side
+			[110, 0, Vector3(-5.0, 0.0, -3.0)],
+			[120, 0, Vector3(5.0, 0.0, -3.0)],
 	]
 	var snap := _make_snapshot(skaters, -1, 0.0, 0.0)
 	var assignments: Dictionary = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.NEUTRAL,
 			_resolver(skaters), {})
-	assert_eq(assignments[100], AIRoleSlots.Slot.CHASE)
-	assert_eq(assignments[110], AIRoleSlots.Slot.FLANK_L)
-	assert_eq(assignments[120], AIRoleSlots.Slot.FLANK_R)
-
-
-func test_assign_neutral_flank_hysteresis_holds_through_center() -> void:
-	# Two peers near center — without hysteresis they'd flip L/R any
-	# time their X order swaps. With prev assignments preserving
-	# their sides, the 1.0 m penalty keeps them stable.
-	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, 5.0)],    # closest to puck → CHASE
-			[110, 0, Vector3(0.3, 0.0, -3.0)],   # nominally right of center
-			[120, 0, Vector3(-0.3, 0.0, -3.0)],  # nominally left of center
-	]
-	var snap := _make_snapshot(skaters, -1, 0.0, 0.0)
-	# Previous tick: 110 was FLANK_L (was on the left then), 120 was FLANK_R.
-	# Now they've swapped sides by 0.6m. Hysteresis (1.0m each side)
-	# keeps them in their previous slots.
-	var prev: Dictionary = {
-			100: AIRoleSlots.Slot.CHASE,
-			110: AIRoleSlots.Slot.FLANK_L,
-			120: AIRoleSlots.Slot.FLANK_R,
-	}
-	var assignments: Dictionary = AIRoleSlots.assign(
-			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.NEUTRAL,
-			_resolver(skaters), prev)
-	# Effective X: 110 = 0.3 - 1.0 = -0.7 (was FLANK_L → leftward bias).
-	#              120 = -0.3 + 1.0 = 0.7 (was FLANK_R → rightward bias).
-	# 110 still has lower effective X → keeps FLANK_L.
-	assert_eq(assignments[110], AIRoleSlots.Slot.FLANK_L,
-			"FLANK_L sticks across a small center crossing")
-	assert_eq(assignments[120], AIRoleSlots.Slot.FLANK_R,
-			"FLANK_R sticks across a small center crossing")
+	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE)
+	assert_eq(assignments[110], AIRoleSlots.Slot.COVER)
+	assert_eq(assignments[120], AIRoleSlots.Slot.COVER)
 
 
 # ─── Mixed-team behavior ────────────────────────────────────────────────────
