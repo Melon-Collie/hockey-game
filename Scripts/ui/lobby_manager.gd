@@ -4,7 +4,6 @@ extends Node
 const _WHITE     := MenuStyle.TEXT_BODY
 const _DIM       := MenuStyle.TEXT_DIM
 
-const _SETTING_LABEL_WIDTH: int = 140
 const _SETTING_CONTROL_WIDTH: int = 220
 
 # key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
@@ -14,12 +13,7 @@ var _lobby_slots: Dictionary = {}
 var _slot_grid: SlotGridPanel = null
 var _start_btn: Button = null
 var _ready_btn: Button = null
-var _periods_slider: HSlider = null
-var _periods_value_label: Label = null
-var _dur_slider: HSlider = null
-var _dur_value_label: Label = null
-var _ot_check: CheckButton = null
-var _rules_btn: OptionButton = null
+var _settings_panel: LobbySettingsPanel = null
 var _spectator_list_label: Label = null
 var _spectator_join_btn: Button = null
 
@@ -146,7 +140,9 @@ func _build_ui() -> void:
 
 	vbox.add_child(_build_spectator_panel())
 
-	vbox.add_child(_build_settings_panel())
+	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host)
+	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
+	vbox.add_child(_settings_panel)
 
 	var btn_box := HBoxContainer.new()
 	btn_box.add_theme_constant_override("separation", 12)
@@ -234,95 +230,6 @@ func _on_spectate_pressed() -> void:
 		return
 	NetworkManager.send_request_slot_swap(NetworkManager.SPECTATOR_TEAM_ID, open)
 
-func _build_settings_panel() -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 10)
-
-	var sep_style := StyleBoxFlat.new()
-	sep_style.bg_color = MenuStyle.TEXT_SEP
-	var sep := HSeparator.new()
-	sep.add_theme_stylebox_override("separator", sep_style)
-	box.add_child(sep)
-
-	var center := CenterContainer.new()
-	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_child(center)
-
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 20)
-	grid.add_theme_constant_override("v_separation", 12)
-	center.add_child(grid)
-
-	var is_interactive: bool = NetworkManager.is_host
-
-	# Game rules first (Periods → Period Length → Overtime → Rules), then team
-	# colors. Right column is held to a uniform 220 px so dropdowns, sliders,
-	# and the toggle line up vertically.
-
-	grid.add_child(_setting_label("Periods"))
-	var periods_row := _stepper_row()
-	_periods_slider = _stepper_slider(1, 3, _num_periods, is_interactive)
-	_periods_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if is_interactive:
-		_periods_slider.value_changed.connect(func(v: float) -> void:
-			_num_periods = int(v)
-			_periods_value_label.text = str(_num_periods)
-			NetworkManager.send_lobby_settings(_num_periods, _period_duration, _ot_enabled, _rule_set))
-	periods_row.add_child(_periods_slider)
-	_periods_value_label = _stepper_value_label(str(_num_periods))
-	periods_row.add_child(_periods_value_label)
-	grid.add_child(periods_row)
-
-	grid.add_child(_setting_label("Period Length"))
-	var dur_row := _stepper_row()
-	var dur_min: int = int(_period_duration / 60.0)
-	_dur_slider = _stepper_slider(1, 10, dur_min, is_interactive)
-	_dur_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if is_interactive:
-		_dur_slider.value_changed.connect(func(v: float) -> void:
-			_period_duration = v * 60.0
-			_dur_value_label.text = "%d min" % int(v)
-			NetworkManager.send_lobby_settings(_num_periods, _period_duration, _ot_enabled, _rule_set))
-	dur_row.add_child(_dur_slider)
-	_dur_value_label = _stepper_value_label("%d min" % dur_min)
-	dur_row.add_child(_dur_value_label)
-	grid.add_child(dur_row)
-
-	grid.add_child(_setting_label("Overtime"))
-	_ot_check = CheckButton.new()
-	_ot_check.set_pressed_no_signal(_ot_enabled)
-	_ot_check.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	SoundManager.wire_button(_ot_check)
-	_ot_check.disabled = not is_interactive
-	if is_interactive:
-		_ot_check.toggled.connect(func(pressed: bool) -> void:
-			_ot_enabled = pressed
-			NetworkManager.send_lobby_settings(_num_periods, _period_duration, _ot_enabled, _rule_set))
-	else:
-		_ot_check.modulate = Color(1, 1, 1, 0.5)
-	grid.add_child(_ot_check)
-
-	grid.add_child(_setting_label("Rules"))
-	_rules_btn = OptionButton.new()
-	_rules_btn.custom_minimum_size = Vector2(_SETTING_CONTROL_WIDTH, 40)
-	_rules_btn.add_theme_font_size_override("font_size", 16)
-	for i: int in range(GameRules.RULE_SET_NAMES.size()):
-		_rules_btn.add_item(GameRules.RULE_SET_NAMES[i], i)
-	_rules_btn.select(_rule_set)
-	SoundManager.wire_button(_rules_btn)
-	_rules_btn.disabled = not is_interactive
-	if is_interactive:
-		_rules_btn.item_selected.connect(func(idx: int) -> void:
-			_rule_set = idx
-			NetworkManager.send_lobby_settings(_num_periods, _period_duration, _ot_enabled, _rule_set))
-	else:
-		_rules_btn.modulate = Color(1, 1, 1, 0.5)
-	grid.add_child(_rules_btn)
-
-	return box
-
-
 # Builds the live color-vote row that sits above the slot grid. Every player
 # votes for their own team's color; both teams' resolved colors are recomputed
 # on every vote change and reflected in the slot-grid preview below.
@@ -351,50 +258,6 @@ func _build_color_vote_row() -> Control:
 
 	return row
 
-
-func _stepper_row() -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-	row.custom_minimum_size = Vector2(_SETTING_CONTROL_WIDTH, 0)
-	return row
-
-func _setting_label(text: String) -> Label:
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", 14)
-	lbl.add_theme_color_override("font_color", _DIM)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.custom_minimum_size = Vector2(_SETTING_LABEL_WIDTH, 0)
-	return lbl
-
-
-# Discrete-integer slider for small ranges (periods, period length). Tick marks
-# on every integer make the granularity obvious. Width comes from the parent
-# row so the slider stretches to fill whatever space the readout label leaves.
-func _stepper_slider(low: int, high: int, value: int, interactive: bool) -> HSlider:
-	var slider := HSlider.new()
-	slider.min_value = low
-	slider.max_value = high
-	slider.step = 1
-	slider.value = value
-	slider.tick_count = high - low + 1
-	slider.ticks_on_borders = true
-	slider.custom_minimum_size = Vector2(0, 32)
-	slider.editable = interactive
-	if not interactive:
-		slider.modulate = Color(1, 1, 1, 0.5)
-	return slider
-
-
-func _stepper_value_label(text: String) -> Label:
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", 16)
-	lbl.add_theme_color_override("font_color", _WHITE)
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.custom_minimum_size = Vector2(56, 0)
-	return lbl
 
 func _btn(text: String) -> Button:
 	var b := Button.new()
@@ -736,19 +599,15 @@ func _on_lobby_settings_synced(num_periods: int, period_duration: float, ot_enab
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
-	if _periods_slider != null:
-		_periods_slider.set_value_no_signal(_num_periods)
-		if _periods_value_label != null:
-			_periods_value_label.text = str(_num_periods)
-	if _dur_slider != null:
-		var dur_min: int = int(_period_duration / 60.0)
-		_dur_slider.set_value_no_signal(dur_min)
-		if _dur_value_label != null:
-			_dur_value_label.text = "%d min" % dur_min
-	if _ot_check != null:
-		_ot_check.set_pressed_no_signal(_ot_enabled)
-	if _rules_btn != null:
-		_rules_btn.select(_rule_set)
+	if _settings_panel != null:
+		_settings_panel.apply_settings(num_periods, period_duration, ot_enabled, rule_set)
+
+func _on_settings_panel_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+	_num_periods = num_periods
+	_period_duration = period_duration
+	_ot_enabled = ot_enabled
+	_rule_set = rule_set
+	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set)
 
 func _on_game_started(config: Dictionary) -> void:
 	NetworkManager.pending_game_config = config
