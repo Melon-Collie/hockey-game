@@ -9,13 +9,14 @@ var _phase_panel: PanelContainer
 var _phase_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
-var _game_over_popup: CanvasLayer = null
+var _game_over_popup: GameOverPopup = null
 var _game_menu: CanvasLayer = null
 var _bug_dialog: BugReportDialog = null
 var _slot_grid: SlotGridPanel = null
 var _slot_grid_container: Control = null
 var _options_container: Control = null
-var _toast_container: VBoxContainer = null
+var _toast_stack: ToastStack = null
+var _flash_overlay: FlashOverlay = null
 var _home_sog_label: Label = null
 var _away_sog_label: Label = null
 var _score_0: int = 0
@@ -24,15 +25,11 @@ var _home_badge_style: StyleBoxFlat = null
 var _away_badge_style: StyleBoxFlat = null
 var _home_badge_label: Label = null
 var _away_badge_label: Label = null
-var _flash_rect: ColorRect = null
-var _vignette_rect: ColorRect = null
 var _last_clock_pulse_second: int = -1
 var _confirm_dialog: ConfirmDialog = null
 var _confirm_callback: Callable = Callable()
 var _leave_container: Control = null
-var _rematch_btn: Button = null
-var _vote_label: Label = null
-var _rematch_votes: Dictionary = {}
+var _rematch_votes: Dictionary[int, bool] = {}
 var _local_voted: bool = false
 var _replay_label: Label = null
 var _spectator_banner: PanelContainer = null
@@ -54,15 +51,21 @@ func _ready() -> void:
 	_build_bug_icon()
 	_bug_dialog = BugReportDialog.new()
 	add_child(_bug_dialog)
-	_build_game_over_popup()
+	_game_over_popup = GameOverPopup.new()
+	_game_over_popup.rematch_toggled.connect(_on_rematch_vote_pressed)
+	_game_over_popup.host_action_pressed.connect(_on_game_over_host_action)
+	_game_over_popup.disconnect_pressed.connect(_on_game_over_disconnect)
+	_game_over_popup.exit_pressed.connect(_on_game_over_exit)
+	add_child(_game_over_popup)
 	_build_game_menu()
 	_confirm_dialog = ConfirmDialog.new()
 	_confirm_dialog.confirmed.connect(_on_confirm_dialog_confirmed)
 	_confirm_dialog.cancelled.connect(_on_confirm_dialog_cancelled)
 	add_child(_confirm_dialog)
-	_build_toast_area()
-	_build_flash_overlay()
-	_build_vignette_overlay()
+	_toast_stack = ToastStack.new()
+	add_child(_toast_stack)
+	_flash_overlay = FlashOverlay.new()
+	add_child(_flash_overlay)
 	_period_label.text = _period_ordinal(1)
 	_clock_label.text = _format_clock(GameManager.get_period_duration())
 	_home_score_label.text = "0"
@@ -78,8 +81,8 @@ func _ready() -> void:
 	NetworkManager.rematch_vote_changed.connect(_on_rematch_vote_changed)
 	NetworkManager.peer_disconnected.connect(_on_rematch_peer_disconnected)
 	GameManager.shots_on_goal_changed.connect(_on_shots_on_goal_changed)
-	GameManager.player_joined.connect(func(n: String, c: Color) -> void: _show_toast(n + " joined", c))
-	GameManager.player_left.connect(func(n: String, c: Color) -> void: _show_toast(n + " left", c))
+	GameManager.player_joined.connect(func(n: String, c: Color) -> void: _toast_stack.push(n + " joined", c))
+	GameManager.player_left.connect(func(n: String, c: Color) -> void: _toast_stack.push(n + " left", c))
 	GameManager.local_player_hit.connect(_on_local_player_hit)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
@@ -302,10 +305,8 @@ func _apply_spectator_chrome() -> void:
 		_build_spectator_banner()
 	if _spectator_banner != null:
 		_spectator_banner.visible = is_spec
-	if _rematch_btn != null:
-		_rematch_btn.visible = not is_spec
-	if _vote_label != null:
-		_vote_label.visible = not is_spec
+	if _game_over_popup != null:
+		_game_over_popup.set_spectator(is_spec)
 	# Spectator clicks the slot grid to come back; the dedicated demote button
 	# only makes sense while playing.
 	if _spectate_btn != null:
@@ -319,74 +320,6 @@ func _apply_spectator_chrome() -> void:
 func _build_offscreen_indicators() -> void:
 	var indicators := OffScreenPlayerIndicators.new()
 	add_child(indicators)
-
-func _build_game_over_popup() -> void:
-	var panel_style := MenuStyle.panel()
-
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 1.0
-	panel.anchor_bottom = 1.0
-	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	panel.offset_bottom = -20
-
-	var vbox := VBoxContainer.new()
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 16)
-	panel.add_child(vbox)
-
-	var title := Label.new()
-	title.text = "GAME OVER"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", _GOLD)
-	vbox.add_child(title)
-
-	var rematch_box := VBoxContainer.new()
-	rematch_box.add_theme_constant_override("separation", 4)
-	vbox.add_child(rematch_box)
-
-	_rematch_btn = MenuStyle.popup_button("Rematch")
-	_rematch_btn.pressed.connect(_on_rematch_vote_pressed)
-	rematch_box.add_child(_rematch_btn)
-
-	_vote_label = Label.new()
-	_vote_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_vote_label.add_theme_font_size_override("font_size", 13)
-	_vote_label.add_theme_color_override("font_color", _DIM)
-	rematch_box.add_child(_vote_label)
-
-	if NetworkManager.is_offline_mode:
-		_add_host_button(vbox, "Return to Menu", func() -> void: GameManager.exit_to_main_menu())
-	else:
-		_add_host_button(vbox, "Return to Lobby", func() -> void: GameManager.return_to_lobby())
-
-	var menu_btn := MenuStyle.popup_button("Disconnect")
-	menu_btn.pressed.connect(func() -> void:
-		_show_confirm("Return to main menu?", GameManager.exit_to_main_menu))
-	vbox.add_child(menu_btn)
-
-	var exit_btn := MenuStyle.popup_button("Exit Game")
-	exit_btn.pressed.connect(func() -> void:
-		_show_confirm("Exit game?", func() -> void:
-			GameManager.on_scene_exit()
-			NetworkManager.reset()
-			get_tree().quit()))
-	vbox.add_child(exit_btn)
-
-	var root := Control.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(panel)
-
-	# Layer 5 — below scoreboard (layer 10); no overlap since panel sits at bottom.
-	_game_over_popup = CanvasLayer.new()
-	_game_over_popup.layer = 5
-	_game_over_popup.visible = false
-	_game_over_popup.add_child(root)
-	add_child(_game_over_popup)
 
 func _build_game_menu() -> void:
 	var overlay := ColorRect.new()
@@ -631,88 +564,6 @@ func _on_confirm_dialog_confirmed() -> void:
 func _on_confirm_dialog_cancelled() -> void:
 	_confirm_callback = Callable()
 
-func _build_flash_overlay() -> void:
-	_flash_rect = ColorRect.new()
-	_flash_rect.color = Color(1.0, 1.0, 1.0, 0.0)
-	_flash_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_flash_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var flash_root := Control.new()
-	flash_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	flash_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	flash_root.add_child(_flash_rect)
-	var flash_layer := CanvasLayer.new()
-	flash_layer.layer = 25
-	flash_layer.add_child(flash_root)
-	add_child(flash_layer)
-
-func _build_vignette_overlay() -> void:
-	_vignette_rect = ColorRect.new()
-	_vignette_rect.color = Color(0.85, 0.05, 0.05, 0.0)
-	_vignette_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_vignette_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var vig_root := Control.new()
-	vig_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	vig_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vig_root.add_child(_vignette_rect)
-	var vig_layer := CanvasLayer.new()
-	vig_layer.layer = 24
-	vig_layer.add_child(vig_root)
-	add_child(vig_layer)
-
-func _build_toast_area() -> void:
-	_toast_container = VBoxContainer.new()
-	_toast_container.anchor_left = 1.0
-	_toast_container.anchor_right = 1.0
-	_toast_container.offset_left = -220.0
-	_toast_container.offset_top = 8.0
-	_toast_container.add_theme_constant_override("separation", 4)
-	_toast_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_toast_container)
-
-func _show_toast(text: String, name_color: Color = _WHITE) -> void:
-	var style := StyleBoxFlat.new()
-	style.bg_color = _DARK_BG
-	style.set_corner_radius_all(3)
-	style.set_content_margin(SIDE_LEFT, 12)
-	style.set_content_margin(SIDE_RIGHT, 12)
-	style.set_content_margin(SIDE_TOP, 6)
-	style.set_content_margin(SIDE_BOTTOM, 6)
-
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", style)
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_toast_container.add_child(panel)
-
-	var parts := text.split(" ", false, 1)
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 5)
-	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var name_lbl := _lbl(parts[0], 14, name_color)
-	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_child(name_lbl)
-	if parts.size() > 1:
-		var action_lbl := _lbl(parts[1], 14, _DIM)
-		action_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hbox.add_child(action_lbl)
-	panel.add_child(hbox)
-
-	# Slide in from right after layout settles
-	_slide_toast_in(panel)
-
-	var tween := create_tween()
-	tween.tween_interval(2.5)
-	tween.tween_method(func(a: float) -> void: panel.modulate.a = a, 1.0, 0.0, 0.5)
-	tween.tween_callback(panel.queue_free)
-
-func _slide_toast_in(panel: PanelContainer) -> void:
-	await get_tree().process_frame
-	if not is_instance_valid(panel):
-		return
-	panel.position.x += 240.0
-	var st := create_tween()
-	st.tween_property(panel, "position:x", panel.position.x - 240.0, 0.18) \
-		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-
 func _add_host_button(vbox: VBoxContainer, text: String, handler: Callable) -> void:
 	if not NetworkManager.is_host:
 		return
@@ -773,11 +624,7 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	else:
 		_assist_label.visible = false
 
-	# Full-screen team-color flash
-	_flash_rect.color = Color(team_color.r, team_color.g, team_color.b, 0.45)
-	_flash_rect.modulate.a = 1.0
-	var ft := create_tween()
-	ft.tween_property(_flash_rect, "modulate:a", 0.0, 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_flash_overlay.flash(team_color)
 
 func _initial_team_primary(team_id: int) -> Color:
 	if GameManager.teams.size() > team_id:
@@ -862,10 +709,10 @@ func _on_game_over() -> void:
 	_rematch_votes.clear()
 	_local_voted = false
 	_update_rematch_ui()
-	_game_over_popup.visible = true
+	_game_over_popup.show_popup()
 
 func _on_game_reset() -> void:
-	_game_over_popup.visible = false
+	_game_over_popup.hide_popup()
 	if _slot_grid_container != null:
 		_slot_grid_container.visible = false
 
@@ -886,15 +733,23 @@ func _on_rematch_peer_disconnected(peer_id: int) -> void:
 		_check_rematch_unanimous()
 
 func _update_rematch_ui() -> void:
-	if _rematch_btn == null:
-		return
-	_rematch_btn.text = "Unvote" if _local_voted else "Rematch"
 	var total: int = NetworkManager.connected_peer_ids().size() + 1
-	var count: int = 0
-	for v: bool in _rematch_votes.values():
-		if v:
-			count += 1
-	_vote_label.text = "%d / %d voted" % [count, total]
+	_game_over_popup.update_votes(_rematch_votes, total, _local_voted)
+
+func _on_game_over_host_action() -> void:
+	if NetworkManager.is_offline_mode:
+		GameManager.exit_to_main_menu()
+	else:
+		GameManager.return_to_lobby()
+
+func _on_game_over_disconnect() -> void:
+	_show_confirm("Return to main menu?", GameManager.exit_to_main_menu)
+
+func _on_game_over_exit() -> void:
+	_show_confirm("Exit game?", func() -> void:
+		GameManager.on_scene_exit()
+		NetworkManager.reset()
+		get_tree().quit())
 
 func _check_rematch_unanimous() -> void:
 	# Host-side: spectators don't have a vote button. spectator_peer_count
@@ -943,10 +798,7 @@ func _on_local_player_hit(magnitude: float) -> void:
 	if magnitude < 3.0:
 		return
 	var strength := clampf(magnitude / 12.0, 0.2, 0.55)
-	_vignette_rect.modulate.a = strength
-	var vt := create_tween()
-	vt.tween_property(_vignette_rect, "modulate:a", 0.0, 0.5) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_flash_overlay.vignette_pulse(strength)
 
 func _on_shots_on_goal_changed(sog_0: int, sog_1: int) -> void:
 	if _home_sog_label != null:
