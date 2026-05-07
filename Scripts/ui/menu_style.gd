@@ -118,6 +118,17 @@ static func _scale_btn(btn: Button, target: Vector2) -> void:
 	t.tween_property(btn, "scale", target, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
+# Standard popup-row button: 220×48, font 20, hover-scale tween, click sound.
+static func popup_button(label: String) -> Button:
+	var btn := Button.new()
+	btn.text = label
+	btn.custom_minimum_size = Vector2(220, 48)
+	btn.add_theme_font_size_override("font_size", 20)
+	wire_hover_scale(btn)
+	SoundManager.wire_button(btn)
+	return btn
+
+
 # Build an OptionButton populated with every team color preset, with one
 # selected by id. Caller wires SoundManager if desired.
 static func color_option_btn(selected_id: String, min_size: Vector2, font_size: int) -> OptionButton:

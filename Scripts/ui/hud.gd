@@ -27,8 +27,7 @@ var _away_badge_label: Label = null
 var _flash_rect: ColorRect = null
 var _vignette_rect: ColorRect = null
 var _last_clock_pulse_second: int = -1
-var _confirm_popup: CanvasLayer = null
-var _confirm_label: Label = null
+var _confirm_dialog: ConfirmDialog = null
 var _confirm_callback: Callable = Callable()
 var _leave_container: Control = null
 var _rematch_btn: Button = null
@@ -57,7 +56,10 @@ func _ready() -> void:
 	add_child(_bug_dialog)
 	_build_game_over_popup()
 	_build_game_menu()
-	_build_confirm_popup()
+	_confirm_dialog = ConfirmDialog.new()
+	_confirm_dialog.confirmed.connect(_on_confirm_dialog_confirmed)
+	_confirm_dialog.cancelled.connect(_on_confirm_dialog_cancelled)
+	add_child(_confirm_dialog)
 	_build_toast_area()
 	_build_flash_overlay()
 	_build_vignette_overlay()
@@ -91,9 +93,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		if _game_over_popup.visible:
 			return
-		if _confirm_popup != null and _confirm_popup.visible:
-			_confirm_popup.visible = false
-			get_viewport().set_input_as_handled()
+		if _confirm_dialog != null and _confirm_dialog.visible:
 			return
 		if _game_menu.visible and _options_container != null and _options_container.visible:
 			_options_container.visible = false
@@ -349,7 +349,7 @@ func _build_game_over_popup() -> void:
 	rematch_box.add_theme_constant_override("separation", 4)
 	vbox.add_child(rematch_box)
 
-	_rematch_btn = _popup_button("Rematch")
+	_rematch_btn = MenuStyle.popup_button("Rematch")
 	_rematch_btn.pressed.connect(_on_rematch_vote_pressed)
 	rematch_box.add_child(_rematch_btn)
 
@@ -364,12 +364,12 @@ func _build_game_over_popup() -> void:
 	else:
 		_add_host_button(vbox, "Return to Lobby", func() -> void: GameManager.return_to_lobby())
 
-	var menu_btn := _popup_button("Disconnect")
+	var menu_btn := MenuStyle.popup_button("Disconnect")
 	menu_btn.pressed.connect(func() -> void:
 		_show_confirm("Return to main menu?", GameManager.exit_to_main_menu))
 	vbox.add_child(menu_btn)
 
-	var exit_btn := _popup_button("Exit Game")
+	var exit_btn := MenuStyle.popup_button("Exit Game")
 	exit_btn.pressed.connect(func() -> void:
 		_show_confirm("Exit game?", func() -> void:
 			GameManager.on_scene_exit()
@@ -407,7 +407,7 @@ func _build_game_menu() -> void:
 	vbox.add_theme_constant_override("separation", 16)
 	panel.add_child(vbox)
 
-	var resume_btn := _popup_button("Resume")
+	var resume_btn := MenuStyle.popup_button("Resume")
 	resume_btn.pressed.connect(func() -> void: _set_menu_open(false))
 	vbox.add_child(resume_btn)
 
@@ -415,22 +415,22 @@ func _build_game_menu() -> void:
 		_set_menu_open(false)
 		GameManager.reset_game())
 
-	_change_position_btn = _popup_button("Change Position")
+	_change_position_btn = MenuStyle.popup_button("Change Position")
 	_change_position_btn.pressed.connect(_on_change_position_pressed)
 	vbox.add_child(_change_position_btn)
 
 	# Players can demote themselves mid-game; spectators come back via the slot
 	# grid in Change Position. Hidden for spectators (handled in
 	# _apply_spectator_chrome).
-	_spectate_btn = _popup_button("Spectate")
+	_spectate_btn = MenuStyle.popup_button("Spectate")
 	_spectate_btn.pressed.connect(_on_spectate_pressed)
 	vbox.add_child(_spectate_btn)
 
-	var options_btn := _popup_button("Options")
+	var options_btn := MenuStyle.popup_button("Options")
 	options_btn.pressed.connect(_on_options_pressed)
 	vbox.add_child(options_btn)
 
-	var leave_btn := _popup_button("Leave Game")
+	var leave_btn := MenuStyle.popup_button("Leave Game")
 	leave_btn.pressed.connect(func() -> void: _leave_container.visible = true)
 	vbox.add_child(leave_btn)
 
@@ -556,12 +556,12 @@ func _build_leave_overlay() -> void:
 		_add_host_button(vbox, "Return to Lobby", func() -> void: GameManager.return_to_lobby())
 
 	if not NetworkManager.is_offline_mode:
-		var disconnect_btn := _popup_button("Disconnect")
+		var disconnect_btn := MenuStyle.popup_button("Disconnect")
 		disconnect_btn.pressed.connect(func() -> void:
 			_show_confirm("Return to main menu?", GameManager.exit_to_main_menu))
 		vbox.add_child(disconnect_btn)
 
-	var exit_btn := _popup_button("Exit Game")
+	var exit_btn := MenuStyle.popup_button("Exit Game")
 	exit_btn.pressed.connect(func() -> void:
 		_show_confirm("Exit game?", func() -> void:
 			GameManager.on_scene_exit()
@@ -618,74 +618,18 @@ func _build_bug_icon() -> void:
 	btn.pressed.connect(_on_bug_report_pressed)
 	add_child(btn)
 
-func _build_confirm_popup() -> void:
-	var overlay := ColorRect.new()
-	overlay.color = Color(0.0, 0.0, 0.0, 0.6)
-	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-
-	var panel_style := MenuStyle.panel(6, 36)
-
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-
-	var vbox := VBoxContainer.new()
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 20)
-	panel.add_child(vbox)
-
-	var confirm_header := HBoxContainer.new()
-	vbox.add_child(confirm_header)
-	var confirm_spacer := Control.new()
-	confirm_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	confirm_header.add_child(confirm_spacer)
-	var confirm_close_btn := MenuStyle.close_button()
-	confirm_close_btn.pressed.connect(func() -> void: _confirm_popup.visible = false)
-	SoundManager.wire_button(confirm_close_btn)
-	confirm_header.add_child(confirm_close_btn)
-
-	_confirm_label = Label.new()
-	_confirm_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_confirm_label.add_theme_font_size_override("font_size", 26)
-	_confirm_label.add_theme_color_override("font_color", _WHITE)
-	vbox.add_child(_confirm_label)
-
-	var btn_row := HBoxContainer.new()
-	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	btn_row.add_theme_constant_override("separation", 16)
-	vbox.add_child(btn_row)
-
-	var confirm_btn := _popup_button("Confirm")
-	confirm_btn.custom_minimum_size = Vector2(140, 48)
-	confirm_btn.pressed.connect(func() -> void:
-		_confirm_popup.visible = false
-		if _confirm_callback.is_valid():
-			_confirm_callback.call())
-	btn_row.add_child(confirm_btn)
-
-	var cancel_btn := _popup_button("Cancel")
-	cancel_btn.custom_minimum_size = Vector2(140, 48)
-	cancel_btn.pressed.connect(func() -> void: _confirm_popup.visible = false)
-	btn_row.add_child(cancel_btn)
-
-	var root := Control.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(overlay)
-	root.add_child(panel)
-
-	_confirm_popup = CanvasLayer.new()
-	_confirm_popup.layer = 22
-	_confirm_popup.visible = false
-	_confirm_popup.add_child(root)
-	add_child(_confirm_popup)
-
 func _show_confirm(message: String, callback: Callable) -> void:
-	_confirm_label.text = message
 	_confirm_callback = callback
-	_confirm_popup.visible = true
+	_confirm_dialog.open(message)
+
+func _on_confirm_dialog_confirmed() -> void:
+	var cb := _confirm_callback
+	_confirm_callback = Callable()
+	if cb.is_valid():
+		cb.call()
+
+func _on_confirm_dialog_cancelled() -> void:
+	_confirm_callback = Callable()
 
 func _build_flash_overlay() -> void:
 	_flash_rect = ColorRect.new()
@@ -769,19 +713,10 @@ func _slide_toast_in(panel: PanelContainer) -> void:
 	st.tween_property(panel, "position:x", panel.position.x - 240.0, 0.18) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
-func _popup_button(label: String) -> Button:
-	var btn := Button.new()
-	btn.text = label
-	btn.custom_minimum_size = Vector2(220, 48)
-	btn.add_theme_font_size_override("font_size", 20)
-	MenuStyle.wire_hover_scale(btn)
-	SoundManager.wire_button(btn)
-	return btn
-
 func _add_host_button(vbox: VBoxContainer, text: String, handler: Callable) -> void:
 	if not NetworkManager.is_host:
 		return
-	var b := _popup_button(text)
+	var b := MenuStyle.popup_button(text)
 	b.pressed.connect(handler)
 	vbox.add_child(b)
 
