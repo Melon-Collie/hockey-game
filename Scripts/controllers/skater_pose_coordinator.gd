@@ -61,16 +61,19 @@ func apply_facing(input: InputState, delta: float) -> void:
 			mouse_world.z - _skater.global_position.z
 		)
 		if to_mouse.length() > _controller.move_deadzone:
-			# Gate: prevent the body from rotating until the mouse crosses 180° and
-			# snaps the arm to the other side. When the mouse exits the reachable IK
-			# zone (rom_backhand_angle_max_deg + upper_body_max_twist_deg from forward),
-			# record which side it left from and freeze. Re-entry only from the same
-			# side unlocks — entering from the opposite side stays frozen.
+			# Gate: while the mouse is in the unreachable wedge behind the skater
+			# (beyond rom_backhand_angle_max_deg + upper_body_max_twist_deg from
+			# forward), freeze facing so the body doesn't chase a target it can't
+			# reach. Resume tracking as soon as the mouse returns to the reachable
+			# cone, regardless of side. Snap-prevention on wraps lives in the
+			# blade speed cap (SkaterIKCoordinator), not in this lock — earlier
+			# versions tied unlock to "same side it left from", which could
+			# permanently strand facing when the mouse wrapped around.
 			var mouse_body_angle: float = facing.angle_to(to_mouse.normalized())
 			var ik_gate: float = deg_to_rad(_controller.rom_backhand_angle_max_deg + _controller.upper_body_max_twist_deg)
 			if abs(mouse_body_angle) >= ik_gate:
 				ik_locked_side = int(sign(mouse_body_angle))
-			elif ik_locked_side == 0 or ik_locked_side * mouse_body_angle >= 0.0:
+			else:
 				ik_locked_side = 0
 				var drag: float = _controller.facing_drag_speed_braking if input.brake else _controller.facing_drag_speed
 				facing = facing.lerp(to_mouse.normalized(), drag * delta).normalized()

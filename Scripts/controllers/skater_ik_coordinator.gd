@@ -5,7 +5,7 @@ extends RefCounted
 # - Mouse → top-hand IK + blade placement (asymmetric ROM, wall/goalie/net clamps).
 # - Bottom-hand IK from the placed top hand + blade.
 # - Geometry helpers shared with SkaterShotPoseCoordinator: blade_y_local,
-#   blade_y_pitch_corrected, stick_horiz.
+#   blade_y_lean_corrected, stick_horiz.
 # - Net exclusion zone and goalie body / butterfly box clamps. Both clamps
 #   strip the puck on contact via _controller._do_release.
 #
@@ -17,16 +17,47 @@ extends RefCounted
 var _skater: Skater = null
 var _controller: SkaterController = null  # tunables, _do_release, _game_state, has_puck
 
+# ── Aim Smoothing State ───────────────────────────────────────────────────────
+# World-XZ aim target after applying the per-tick speed cap. The IK consumes
+# this smoothed target instead of the raw mouse, so wraps across the back and
+# ROM-boundary pops swing at most max_blade_speed * delta per tick.
+var _smoothed_aim_world: Vector3 = Vector3.ZERO
+var _smoothed_aim_initialized: bool = false
+
 func setup(skater: Skater, controller: SkaterController) -> void:
 	_skater = skater
 	_controller = controller
 
+# Snap the smoothed aim to a known world-space target. Called by LocalController
+# at reconcile entry so replay starts deterministically from the first replayed
+# input rather than carrying the live smoothed value across the snap.
+func reset_aim_smoothing(target_world: Vector3) -> void:
+	target_world.y = 0.0
+	_smoothed_aim_world = target_world
+	_smoothed_aim_initialized = true
+
 # ── Blade From Mouse (Top-Hand IK) ────────────────────────────────────────────
 # Input is treated as a desired blade position. The top hand is solved as a
 # consequence, clamped to an asymmetric ROM. See domain/rules/top_hand_ik.gd.
-func apply_blade_from_mouse(input: InputState, _delta: float) -> void:
+func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	var mouse_world: Vector3 = input.mouse_world_pos
 	mouse_world.y = 0.0
+
+	# Speed-cap the aim target: slew the smoothed target toward the raw mouse
+	# by at most max_blade_speed * delta. The IK consumes the smoothed target,
+	# so the blade can't traverse more than the cap distance per tick.
+	if not _smoothed_aim_initialized:
+		_smoothed_aim_world = mouse_world
+		_smoothed_aim_initialized = true
+	var step: Vector3 = mouse_world - _smoothed_aim_world
+	step.y = 0.0
+	var max_step: float = _controller.max_blade_speed * delta
+	var step_len: float = step.length()
+	if max_step > 0.0 and step_len > max_step:
+		_smoothed_aim_world += step * (max_step / step_len)
+	else:
+		_smoothed_aim_world = mouse_world
+	mouse_world = _smoothed_aim_world
 
 	var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
 	shoulder_world.y = 0.0
@@ -49,9 +80,9 @@ func apply_blade_from_mouse(input: InputState, _delta: float) -> void:
 			_ik_config())
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
-	# Apply pitch correction to blade Y after IK so the IK geometry (hand-to-blade
+	# Apply lean correction to blade Y after IK so the IK geometry (hand-to-blade
 	# vertical drop) stays consistent, but the blade's world Y stays at blade_height.
-	blade_local.y = blade_y_pitch_corrected(blade_local.z)
+	blade_local.y = blade_y_lean_corrected(blade_local.x, blade_local.z)
 
 	# Wall clamp on the solved blade. Wall-pin auto-release (when carrying).
 	var intended_blade: Vector3 = blade_local
@@ -239,16 +270,22 @@ func _clamp_blade_butterfly_box(blade_world: Vector3, gpos: Vector3, rot_y: floa
 func blade_y_local() -> float:
 	return _controller.blade_height - _skater.upper_body.global_position.y
 
-# Pitch-corrected blade Y for a given blade local Z. Used AFTER IK so the
+# Lean-corrected blade Y for a given blade local (X, Z). Used AFTER IK so the
 # IK geometry stays internally consistent (correct hand-to-blade vertical drop),
-# while the blade's final world Y is kept at blade_height despite upper-body pitch.
-# When upper_body.rotation.x = pitch, a point at local Z offset z shifts world Y
-# by -z * sin(pitch). Adding z * sin(pitch) to the local Y target cancels that out.
-func blade_y_pitch_corrected(blade_local_z: float) -> float:
+# while the blade's final world Y is kept at blade_height despite upper-body lean.
+# Under YXZ Euler order, world Y of a local point (x, y, z) is approximately
+# ub.y + (x*sin(roll) + y*cos(roll))*cos(pitch) - z*sin(pitch). For small angles
+# the correction needed to land at world Y = blade_height is
+# y ≈ blade_y_local() + z*sin(pitch) - x*sin(roll). Without the roll term the
+# blade dips on one side and lifts on the other during turn / acceleration lean.
+func blade_y_lean_corrected(blade_local_x: float, blade_local_z: float) -> float:
 	var base: float = blade_y_local()
 	var pitch: float = _skater.upper_body.rotation.x
+	var roll: float = _skater.upper_body.rotation.z
 	if abs(pitch) > 0.001:
 		base += blade_local_z * sin(pitch)
+	if abs(roll) > 0.001:
+		base -= blade_local_x * sin(roll)
 	return base
 
 # Horizontal projection of the stick onto the XZ plane, given the fixed

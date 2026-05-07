@@ -207,6 +207,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# direction-variance delta is zero rather than a large garbage value.
 	if not _input_history.is_empty():
 		_aiming.prev_mouse_screen_pos = _input_history[0].mouse_screen_pos
+	# Seed the IK aim smoother from the first replayed input so the blade speed
+	# cap operates against a deterministic baseline across reconcile — the live
+	# smoothed value would otherwise bias the replay's first tick.
+	var seed_aim: Vector3 = _input_history[0].mouse_world_pos if not _input_history.is_empty() else _current_input.mouse_world_pos
+	_ik.reset_aim_smoothing(seed_aim)
 	is_replaying = true
 	var _impulse_applied: bool = false
 	for input in _input_history:

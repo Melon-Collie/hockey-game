@@ -60,6 +60,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var rom_backhand_angle_max_deg: float = 90.0
 @export var rom_forehand_reach_max: float = 0.45
 @export var rom_backhand_reach_max: float = 0.70
+# Cap on how fast the aim target can move in world XZ per second. Smooths fast
+# mouse wraps across the back of the player (avoiding the blade snap that
+# crossing the IK ROM boundary used to produce) and ROM-clamp pops near the
+# reach limit. The IK consumes the smoothed target, so the blade visibly
+# inherits the cap. Tune up if normal aim feels laggy; tune down if wraps still
+# feel snappy.
+@export var max_blade_speed: float = 12.0
 
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
