@@ -7,12 +7,7 @@ const _DIM       := MenuStyle.TEXT_DIM
 const _SETTING_LABEL_WIDTH: int = 140
 const _SETTING_CONTROL_WIDTH: int = 220
 
-# Spectator slot encoding: team_id == NetworkManager.SPECTATOR_TEAM_ID (-1) and
-# slot is the spectator index. Stored under keys _SPECTATOR_KEY_BASE..base+MAX-1
-# so they never collide with the 0..5 home/away keys.
-const _SPECTATOR_KEY_BASE: int = 100
-
-# key = _slot_key(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
+# key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
 # Players: team_id ∈ {0, 1}, slot ∈ {0,1,2}. Spectators: team_id = -1, slot = spectator_idx.
 var _lobby_slots: Dictionary = {}
 
@@ -412,31 +407,13 @@ func _btn(text: String) -> Button:
 
 # ── Slot management ───────────────────────────────────────────────────────────
 
-func _slot_key(team_id: int, slot: int) -> int:
-	if team_id == NetworkManager.SPECTATOR_TEAM_ID:
-		return _SPECTATOR_KEY_BASE + slot
-	return team_id * 3 + slot
-
-func _team_id_from_key(k: int) -> int:
-	if k >= _SPECTATOR_KEY_BASE:
-		return NetworkManager.SPECTATOR_TEAM_ID
-	return 1 if k >= PlayerRules.MAX_PER_TEAM else 0
-
-func _slot_from_key(k: int) -> int:
-	if k >= _SPECTATOR_KEY_BASE:
-		return k - _SPECTATOR_KEY_BASE
-	return k % 3
-
-func _is_spectator_key(k: int) -> bool:
-	return k >= _SPECTATOR_KEY_BASE
-
 func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is_left_handed: bool, jersey_number: int = 10) -> void:
 	# Clear any existing slot for this peer first.
 	for k: int in _lobby_slots.keys():
 		if _lobby_slots[k].peer_id == peer_id:
 			_lobby_slots.erase(k)
 			break
-	_lobby_slots[_slot_key(team_id, slot)] = {
+	_lobby_slots[LobbySlotKey.encode(team_id, slot)] = {
 		"peer_id": peer_id,
 		"player_name": player_name,
 		"is_left_handed": is_left_handed,
@@ -447,28 +424,28 @@ func _find_balanced_slot(_peer_id: int) -> Array:
 	var team0: int = 0
 	var team1: int = 0
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k):
+		if LobbySlotKey.is_spectator(k):
 			continue
-		if _team_id_from_key(k) == 0: team0 += 1
+		if LobbySlotKey.team_id(k) == 0: team0 += 1
 		else: team1 += 1
 	var preferred_team: int = 0 if team0 <= team1 else 1
 	for attempt_team: int in [preferred_team, 1 - preferred_team]:
 		for s: int in PlayerRules.MAX_PER_TEAM:
-			if not _lobby_slots.has(_slot_key(attempt_team, s)):
+			if not _lobby_slots.has(LobbySlotKey.encode(attempt_team, s)):
 				return [attempt_team, s]
 	return []
 
 func _find_open_spectator_slot() -> int:
 	for s: int in GameRules.MAX_SPECTATORS:
-		if not _lobby_slots.has(_slot_key(NetworkManager.SPECTATOR_TEAM_ID, s)):
+		if not _lobby_slots.has(LobbySlotKey.encode(NetworkManager.SPECTATOR_TEAM_ID, s)):
 			return s
 	return -1
 
 func _build_roster_array() -> Array:
 	var result: Array = []
 	for k: int in _lobby_slots:
-		var team_id: int = _team_id_from_key(k)
-		var slot: int = _slot_from_key(k)
+		var team_id: int = LobbySlotKey.team_id(k)
+		var slot: int = LobbySlotKey.slot(k)
 		var entry: Dictionary = _lobby_slots[k]
 		var is_ready: bool = _ready_states.get(entry.peer_id, false)
 		result.append([entry.peer_id, team_id, slot, entry.player_name, entry.is_left_handed, entry.get("jersey_number", 10), is_ready])
@@ -477,10 +454,10 @@ func _build_roster_array() -> Array:
 func _build_slot_grid_roster() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k):
+		if LobbySlotKey.is_spectator(k):
 			continue
-		var team_id: int = _team_id_from_key(k)
-		var slot: int = _slot_from_key(k)
+		var team_id: int = LobbySlotKey.team_id(k)
+		var slot: int = LobbySlotKey.slot(k)
 		var entry: Dictionary = _lobby_slots[k]
 		result.append({
 			"peer_id":        entry.peer_id,
@@ -496,12 +473,12 @@ func _build_slot_grid_roster() -> Array[Dictionary]:
 func _build_spectator_roster() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for k: int in _lobby_slots:
-		if not _is_spectator_key(k):
+		if not LobbySlotKey.is_spectator(k):
 			continue
 		var entry: Dictionary = _lobby_slots[k]
 		result.append({
 			"peer_id":        entry.peer_id,
-			"slot":           _slot_from_key(k),
+			"slot":           LobbySlotKey.slot(k),
 			"player_name":    entry.player_name,
 			"is_ready":       _ready_states.get(entry.peer_id, false),
 		})
@@ -536,13 +513,13 @@ func _recompute_resolved_colors() -> void:
 	var home_votes: Array[String] = []
 	var away_votes: Array[String] = []
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k):
+		if LobbySlotKey.is_spectator(k):
 			continue
 		var entry: Dictionary = _lobby_slots[k]
 		var peer_id: int = entry.peer_id
 		if not _color_votes.has(peer_id):
 			continue
-		var team_id: int = _team_id_from_key(k)
+		var team_id: int = LobbySlotKey.team_id(k)
 		var vote: String = _color_votes[peer_id]
 		if team_id == 0:
 			home_votes.append(vote)
@@ -562,7 +539,7 @@ func _recompute_resolved_colors() -> void:
 	_away_color_id = resolved[1]
 
 func _broadcast_confirm(peer_id: int, team_id: int, slot: int) -> void:
-	var entry: Dictionary = _lobby_slots.get(_slot_key(team_id, slot), {})
+	var entry: Dictionary = _lobby_slots.get(LobbySlotKey.encode(team_id, slot), {})
 	if entry.is_empty():
 		return
 	if team_id == NetworkManager.SPECTATOR_TEAM_ID:
@@ -584,7 +561,7 @@ func _update_start_btn() -> void:
 	# non-host player peers) can also start — useful for solo testing.
 	var spectator_peers: Dictionary = {}
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k):
+		if LobbySlotKey.is_spectator(k):
 			spectator_peers[_lobby_slots[k].peer_id] = true
 	var all_ready: bool = true
 	for pid: int in _ready_states:
@@ -605,7 +582,7 @@ func _update_ready_btn() -> void:
 	var local_peer: int = NetworkManager.local_peer_id()
 	var local_is_spectator: bool = false
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k) and _lobby_slots[k].peer_id == local_peer:
+		if LobbySlotKey.is_spectator(k) and _lobby_slots[k].peer_id == local_peer:
 			local_is_spectator = true
 			break
 	_ready_btn.visible = not local_is_spectator
@@ -666,7 +643,7 @@ func _find_peer_identity(peer_id: int) -> Dictionary:
 func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> void:
 	if not NetworkManager.is_host:
 		return
-	if _lobby_slots.has(_slot_key(new_team_id, new_slot)):
+	if _lobby_slots.has(LobbySlotKey.encode(new_team_id, new_slot)):
 		return
 	if new_team_id == NetworkManager.SPECTATOR_TEAM_ID:
 		if new_slot < 0 or new_slot >= GameRules.MAX_SPECTATORS:
@@ -674,9 +651,9 @@ func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> v
 	else:
 		var count: int = 0
 		for k: int in _lobby_slots:
-			if _is_spectator_key(k):
+			if LobbySlotKey.is_spectator(k):
 				continue
-			if _team_id_from_key(k) == new_team_id:
+			if LobbySlotKey.team_id(k) == new_team_id:
 				count += 1
 		if count >= PlayerRules.MAX_PER_TEAM:
 			return
@@ -707,7 +684,7 @@ func _on_lobby_roster_synced(roster: Array) -> void:
 		var is_left: bool = entry[4] if entry.size() > 4 else true
 		var p_number: int = entry[5] if entry.size() > 5 else 10
 		var is_ready: bool = entry[6] if entry.size() > 6 else false
-		_lobby_slots[_slot_key(team_id, slot)] = {
+		_lobby_slots[LobbySlotKey.encode(team_id, slot)] = {
 			"peer_id": peer_id,
 			"player_name": p_name,
 			"is_left_handed": is_left,
@@ -781,8 +758,8 @@ func _on_game_started(config: Dictionary) -> void:
 func _build_pending_slots() -> Dictionary:
 	var result: Dictionary = {}
 	for k: int in _lobby_slots:
-		var team_id: int = _team_id_from_key(k)
-		var slot: int = _slot_from_key(k)
+		var team_id: int = LobbySlotKey.team_id(k)
+		var slot: int = LobbySlotKey.slot(k)
 		var entry: Dictionary = _lobby_slots[k]
 		result[entry.peer_id] = {
 			"team_id": team_id,
