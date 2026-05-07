@@ -133,6 +133,17 @@ const PASS_SPEED_M_S: float = 22.0
 # truth so retunes propagate everywhere.
 const SKATER_REF_SPEED_M_S: float = 10.5
 
+# Approximate kinematic stopping time for a skater steering against
+# their own velocity. Derived from the friction model in
+# SkaterController (drag = friction + friction_drag × |v| ≈ 3.6 m/s²
+# at top speed) plus reverse-thrust steering. Used by OUTLET's
+# offside filter to project a candidate forward by current velocity:
+# if "where I'd be in BRAKE_TIME_S given current momentum" is past
+# the blue line, the candidate is rejected as effectively offside.
+# Pure kinematic — the constant is "how long does momentum dominate
+# steering," not a behavioral knob.
+const SKATER_BRAKE_TIME_S: float = 0.3
+
 # Floor for momentum-adverse `time_to_arrive` returns. When the
 # velocity component along the destination is so negative that
 # effective_speed would go non-positive, clamp at this minimum so
@@ -508,6 +519,54 @@ static func position_potential(
 	var angle_factor: float = clampf(1.0 - shot_angle / (PI * 0.5), 0.0, 1.0)
 	var openness: float = 1.0 - _pressure(pos, opponents, attacking_goal - pos)
 	return closeness * angle_factor * openness
+
+
+# "Threat surface" — the value an opp can extract from their current
+# position from a defender's perspective. score_shoot returns 0 when
+# the opp is outside SHOT_RANGE_FALLOFF_M; that's correct for a
+# carrier choosing whether to release, but useless for a defender
+# trying to position relative to a far-but-still-dangerous opp.
+# Falling back to position_potential gives a non-zero gradient over
+# any legal opp position, so ANCHOR/COVER pull toward the opp's
+# pressure cone (reducing position_potential.openness) instead of
+# sitting flat at slot when no immediate shot threat exists.
+#
+# Used by ANCHOR for inverse shot-threat scoring across all opps.
+static func threat_surface_shoot(
+		opp_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		defenders: Array[Vector3]) -> float:
+	var shoot: float = score_shoot(
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
+	var positional: float = position_potential(opp_pos, our_net, defenders)
+	return maxf(shoot, positional)
+
+
+# Pass-threat surface — score_pass with a positional fallback for
+# the same reason as threat_surface_shoot. score_pass folds in
+# lane_clear × score_shoot(receiver); when receiver_shot collapses
+# to 0, the lane has no value to defend. Fallback rewards defenders
+# for being in the lane (lane_clear ↓) AND for closing on the
+# receiver (position_potential.openness ↓).
+#
+# Used by COVER for inverse pass-threat scoring across opp teammates.
+static func threat_surface_pass(
+		carrier_pos: Vector3,
+		receiver_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		defenders: Array[Vector3]) -> float:
+	if pass_lane_blocked_by_net(carrier_pos, receiver_pos):
+		return 0.0
+	var pass_score: float = score_pass(
+			carrier_pos, receiver_pos, our_net, our_goalie_pos,
+			net_half_width, defenders)
+	var lane: float = _lane_clear(carrier_pos, receiver_pos, defenders, PASS_SPEED_M_S)
+	var positional: float = position_potential(receiver_pos, our_net, defenders)
+	return maxf(pass_score, lane * positional)
 
 
 # Public lane-clearance check for CARRY candidates — the bot is

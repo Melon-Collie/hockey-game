@@ -94,6 +94,14 @@ static func _compute_search_center(ctx: RoleContext,
 # by definition. A candidate past that line would put OUTLET in OZ
 # and trigger ghosting. Reject so the bot doesn't drift offside
 # while waiting for the breakout to develop.
+#
+# Velocity-corrected: a candidate is "effectively offside" if the
+# bot's projected position in SKATER_BRAKE_TIME_S given current
+# velocity would already be past the line. This is what the user
+# wants — target the line "RIGHT after the puck does." Bot moving
+# fast toward opp net needs more buffer; bot at rest can sit right
+# at the line. Pure kinematic — no behavioral knob.
 static func _is_offside(c: Vector3, ctx: RoleContext) -> bool:
 	var opp_blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
-	return -ctx.own_goal_dir * c.z > -ctx.own_goal_dir * opp_blue_z
+	var future_z: float = c.z + ctx.self_velocity.z * AIActionScoring.SKATER_BRAKE_TIME_S
+	return -ctx.own_goal_dir * future_z > -ctx.own_goal_dir * opp_blue_z

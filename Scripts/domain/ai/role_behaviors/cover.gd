@@ -13,14 +13,16 @@ class_name AIRoleCover
 #
 # Algorithm: argmax over a back-of-play candidate set of
 #
-#     -max over opp_teammates of score_pass(
+#     -max over opp_teammates of threat_surface_pass(
 #         carrier, opp_teammate, our_net, our_goalie,
 #         our_team_with_us_at_c)
 #
-# Same score_pass primitive used everywhere. score_pass's
-# receiver-value term internally scores the receiver's potential
-# shot at our net, so the post-pass shot threat is implicitly
-# captured — COVER doesn't need to score it separately.
+# threat_surface_pass = max(score_pass, lane_clear × position_potential).
+# score_pass folds in lane_clear × score_shoot(receiver); when the
+# receiver is too far for an immediate shot threat that collapses to
+# 0. The position_potential fallback keeps the gradient alive over
+# any legal receiver position, so COVER still pulls into pass lanes
+# and onto receivers when no direct scoring pass exists.
 #
 # Search center: midpoint between puck and our net, shifted
 # weak-side (opposite the puck's X). Pure in-game refs —
@@ -92,9 +94,14 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
-# Returns the highest score_pass the carrier could make to any
-# teammate, with our hypothetical defender position included in
-# the carrier's "opponents" list. COVER wants to minimize this.
+# Returns the highest pass-threat surface the carrier could exploit
+# to any teammate, with our hypothetical defender at `candidate` in
+# the carrier's "opponents" list. Uses threat_surface_pass which
+# falls back to lane_clear × position_potential(receiver) when
+# score_pass collapses to 0 — gives COVER a non-zero gradient over
+# defender position even when no immediate scoring pass exists. So
+# COVER pulls into the lane between carrier and the dominant
+# positional receiver instead of sitting flat at the bail-out.
 static func _max_pass_threat(
 		candidate: Vector3,
 		carrier_pos: Vector3,
@@ -108,7 +115,7 @@ static func _max_pass_threat(
 
 	var max_threat: float = 0.0
 	for opp_pos: Vector3 in opp_teammates:
-		var threat: float = AIActionScoring.score_pass(
+		var threat: float = AIActionScoring.threat_surface_pass(
 				carrier_pos, opp_pos, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, carrier_view_defenders)
 		if threat > max_threat:

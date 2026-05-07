@@ -119,6 +119,39 @@ func test_offside_filter_rejects_oz_candidates() -> void:
 			"OUTLET stays NZ-side of opp blue line; got %s" % d.target_position)
 
 
+# ── Velocity-corrected offside filter ──────────────────────────────────────
+
+func test_velocity_buffer_pushes_target_back_at_speed() -> void:
+	# A bot moving fast toward the opp net needs to slow down before
+	# the blue line — the velocity-corrected offside filter rejects
+	# candidates that the bot would overshoot in SKATER_BRAKE_TIME_S.
+	# Compared with a stationary bot, the moving bot's chosen target
+	# should sit further NZ-side (further from the opp blue line).
+	var carrier_pos := Vector3(0, 0, 0)
+	var self_pos := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 5.0)
+
+	# Stationary baseline.
+	var stationary_skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
+	]
+	var ctx_static: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, stationary_skaters)
+	ctx_static.self_velocity = Vector3.ZERO
+	var stationary_target: Vector3 = AIRoleOutlet.decide(ctx_static).target_position
+
+	# Same setup but bot is moving at near top speed toward opp net
+	# (own_goal_dir = +1, so attacking is -Z; velocity.z negative).
+	var ctx_moving: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, stationary_skaters)
+	ctx_moving.self_velocity = Vector3(0.0, 0.0, -10.0)
+	var moving_target: Vector3 = AIRoleOutlet.decide(ctx_moving).target_position
+
+	# Moving target should be NZ-side of the stationary one (higher z
+	# for Team 0). Brake time × velocity ≈ 3 m of forward overshoot
+	# the filter accounts for.
+	assert_gt(moving_target.z, stationary_target.z - 0.01,
+			"moving bot's target should be at least as far NZ-side; got moving=%s stationary=%s" % [moving_target, stationary_target])
+
+
 # ── Anti-crowding ───────────────────────────────────────────────────────────
 
 func test_anti_crowding_avoids_candidates_near_teammates() -> void:
