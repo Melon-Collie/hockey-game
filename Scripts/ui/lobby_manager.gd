@@ -228,7 +228,7 @@ func _on_spectate_pressed() -> void:
 	var open: int = _find_open_spectator_slot()
 	if open < 0:
 		return
-	NetworkManager.send_request_slot_swap(NetworkManager.SPECTATOR_TEAM_ID, open)
+	NetworkManager.send_request_slot_swap(GameRules.SPECTATOR_TEAM_ID, open)
 
 # Builds the live color-vote row that sits above the slot grid. Every player
 # votes for their own team's color; both teams' resolved colors are recomputed
@@ -300,7 +300,7 @@ func _find_balanced_slot(_peer_id: int) -> Array:
 
 func _find_open_spectator_slot() -> int:
 	for s: int in GameRules.MAX_SPECTATORS:
-		if not _lobby_slots.has(LobbySlotKey.encode(NetworkManager.SPECTATOR_TEAM_ID, s)):
+		if not _lobby_slots.has(LobbySlotKey.encode(GameRules.SPECTATOR_TEAM_ID, s)):
 			return s
 	return -1
 
@@ -405,7 +405,7 @@ func _broadcast_confirm(peer_id: int, team_id: int, slot: int) -> void:
 	var entry: Dictionary = _lobby_slots.get(LobbySlotKey.encode(team_id, slot), {})
 	if entry.is_empty():
 		return
-	if team_id == NetworkManager.SPECTATOR_TEAM_ID:
+	if team_id == GameRules.SPECTATOR_TEAM_ID:
 		# Spectators don't carry a jersey palette; pass zero colors so the receiving
 		# side knows to take the spectator path rather than spawn a skater.
 		NetworkManager.send_confirm_slot_swap(peer_id, -1, -1, team_id, slot,
@@ -463,7 +463,7 @@ func _on_peer_joined(peer_id: int) -> void:
 		var spec_slot: int = _find_open_spectator_slot()
 		if spec_slot < 0:
 			return
-		target = [NetworkManager.SPECTATOR_TEAM_ID, spec_slot]
+		target = [GameRules.SPECTATOR_TEAM_ID, spec_slot]
 	var name_val: String = NetworkManager.get_peer_name(peer_id)
 	var is_left: bool = NetworkManager.get_peer_handedness(peer_id)
 	var num: int = NetworkManager.get_peer_number(peer_id)
@@ -508,7 +508,7 @@ func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> v
 		return
 	if _lobby_slots.has(LobbySlotKey.encode(new_team_id, new_slot)):
 		return
-	if new_team_id == NetworkManager.SPECTATOR_TEAM_ID:
+	if new_team_id == GameRules.SPECTATOR_TEAM_ID:
 		if new_slot < 0 or new_slot >= GameRules.MAX_SPECTATORS:
 			return
 	else:

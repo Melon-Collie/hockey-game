@@ -17,8 +17,8 @@ func test_away_slots_offset_by_max_per_team() -> void:
 	assert_eq(LobbySlotKey.encode(1, 2), PlayerRules.MAX_PER_TEAM + 2)
 
 func test_spectator_keys_offset_by_base() -> void:
-	assert_eq(LobbySlotKey.encode(LobbySlotKey.SPECTATOR_TEAM_ID, 0), LobbySlotKey.SPECTATOR_KEY_BASE)
-	assert_eq(LobbySlotKey.encode(LobbySlotKey.SPECTATOR_TEAM_ID, 5), LobbySlotKey.SPECTATOR_KEY_BASE + 5)
+	assert_eq(LobbySlotKey.encode(GameRules.SPECTATOR_TEAM_ID, 0), LobbySlotKey.SPECTATOR_KEY_BASE)
+	assert_eq(LobbySlotKey.encode(GameRules.SPECTATOR_TEAM_ID, 5), LobbySlotKey.SPECTATOR_KEY_BASE + 5)
 
 func test_spectator_base_is_above_player_range() -> void:
 	# Without this gap the decoders ambiguate spectator vs. player keys.
@@ -30,8 +30,8 @@ func test_team_id_from_player_keys() -> void:
 		assert_eq(LobbySlotKey.team_id(LobbySlotKey.encode(1, slot)), 1)
 
 func test_team_id_from_spectator_key() -> void:
-	assert_eq(LobbySlotKey.team_id(LobbySlotKey.SPECTATOR_KEY_BASE), LobbySlotKey.SPECTATOR_TEAM_ID)
-	assert_eq(LobbySlotKey.team_id(LobbySlotKey.SPECTATOR_KEY_BASE + 3), LobbySlotKey.SPECTATOR_TEAM_ID)
+	assert_eq(LobbySlotKey.team_id(LobbySlotKey.SPECTATOR_KEY_BASE), GameRules.SPECTATOR_TEAM_ID)
+	assert_eq(LobbySlotKey.team_id(LobbySlotKey.SPECTATOR_KEY_BASE + 3), GameRules.SPECTATOR_TEAM_ID)
 
 func test_slot_from_player_keys() -> void:
 	for team_id: int in [0, 1]:
@@ -46,8 +46,8 @@ func test_slot_from_spectator_key() -> void:
 func test_is_spectator_predicate() -> void:
 	assert_false(LobbySlotKey.is_spectator(LobbySlotKey.encode(0, 0)))
 	assert_false(LobbySlotKey.is_spectator(LobbySlotKey.encode(1, 2)))
-	assert_true(LobbySlotKey.is_spectator(LobbySlotKey.encode(LobbySlotKey.SPECTATOR_TEAM_ID, 0)))
-	assert_true(LobbySlotKey.is_spectator(LobbySlotKey.encode(LobbySlotKey.SPECTATOR_TEAM_ID, 9)))
+	assert_true(LobbySlotKey.is_spectator(LobbySlotKey.encode(GameRules.SPECTATOR_TEAM_ID, 0)))
+	assert_true(LobbySlotKey.is_spectator(LobbySlotKey.encode(GameRules.SPECTATOR_TEAM_ID, 9)))
 
 func test_round_trip_player_keys() -> void:
 	for team_id: int in [0, 1]:
@@ -58,6 +58,6 @@ func test_round_trip_player_keys() -> void:
 
 func test_round_trip_spectator_keys() -> void:
 	for slot: int in 6:
-		var k: int = LobbySlotKey.encode(LobbySlotKey.SPECTATOR_TEAM_ID, slot)
-		assert_eq(LobbySlotKey.team_id(k), LobbySlotKey.SPECTATOR_TEAM_ID)
+		var k: int = LobbySlotKey.encode(GameRules.SPECTATOR_TEAM_ID, slot)
+		assert_eq(LobbySlotKey.team_id(k), GameRules.SPECTATOR_TEAM_ID)
 		assert_eq(LobbySlotKey.slot(k), slot)

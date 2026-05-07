@@ -273,7 +273,7 @@ func _on_change_position_pressed() -> void:
 func _on_spectate_pressed() -> void:
 	# Spectator slot index is irrelevant mid-game — host's demote helper picks
 	# one. Slot 0 is just a placeholder.
-	NetworkManager.send_request_slot_swap(NetworkManager.SPECTATOR_TEAM_ID, 0)
+	NetworkManager.send_request_slot_swap(GameRules.SPECTATOR_TEAM_ID, 0)
 	close()
 
 

@@ -80,6 +80,7 @@ func _build() -> void:
 	grid.add_child(home_lbl)
 
 	_home_btn = MenuStyle.color_option_btn(_home_color_id, Vector2(160, 40), 18)
+	SoundManager.wire_button(_home_btn)
 	_home_btn.item_selected.connect(_on_home_selected)
 	grid.add_child(_home_btn)
 
@@ -91,6 +92,7 @@ func _build() -> void:
 	grid.add_child(away_lbl)
 
 	_away_btn = MenuStyle.color_option_btn(_away_color_id, Vector2(160, 40), 18)
+	SoundManager.wire_button(_away_btn)
 	_away_btn.item_selected.connect(_on_away_selected)
 	grid.add_child(_away_btn)
 

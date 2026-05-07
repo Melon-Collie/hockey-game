@@ -84,6 +84,11 @@ const RULE_SET_NAMES: Array[String] = ["Off", "Arcade", "NHL"]
 # ── Players ───────────────────────────────────────────────────────────────────
 const MAX_PLAYERS: int = 6  # 3v3
 const MAX_SPECTATORS: int = 4
+# Sentinel team_id for spectators; players use 0 (home) or 1 (away). The lobby
+# slot encoding, assign_player_slot RPC, and GameManager spectator branches all
+# compare against this. -1 because it falls cleanly outside the 0..1 player
+# team range and is naturally invalid for any team-indexed array.
+const SPECTATOR_TEAM_ID: int = -1
 # ENet connection cap = playable roster + spectator slots. Player count
 # (3v3 roster) is still gated separately by PlayerRules.MAX_PER_TEAM.
 const MAX_CONNECTIONS: int = MAX_PLAYERS + MAX_SPECTATORS
