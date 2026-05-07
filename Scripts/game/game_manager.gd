@@ -79,6 +79,8 @@ var _registry: PlayerRegistry = null
 var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
+var _pickup_claim: PickupClaimResolver = null
+var _hit_claim: HitClaimResolver = null
 var _phase_coord: PhaseCoordinator = null
 var _swap_coord: SlotSwapCoordinator = null
 var _telemetry: NetworkTelemetry = null
@@ -120,13 +122,6 @@ var _spectator_camera: SpectatorCamera = null
 # **Empty in offline / tutorial mode** — those sessions don't write replays
 # or career stats. Downstream consumers must treat empty as "skip recording".
 var _game_id: String = ""
-
-# ── Lag compensation ──────────────────────────────────────────────────────────
-const _MAX_CLAIM_AGE_S: float = 0.2
-const _CONTEST_WINDOW_S: float = 0.05
-var _pending_pickup_claim_peer_id: int = -1
-var _pending_claim_timer: float = 0.0
-var _last_hit_claim_sent: Dictionary = {}  # "hitter:victim" -> float, client only
 
 # Sound wiring is split between persistent (NetworkManager autoload, GameManager
 # self-signals — wire once for the lifetime of the process) and per-game (puck /
@@ -226,17 +221,7 @@ func _physics_process(delta: float) -> void:
 	_check_puck_out_of_bounds(delta)
 	_apply_ghost_state()
 	_shot_tracker.tick(delta)
-	if _pending_pickup_claim_peer_id != -1:
-		_pending_claim_timer += delta
-		if _pending_claim_timer >= _CONTEST_WINDOW_S:
-			# Resolve at use time so a peer that disconnected / demoted during
-			# the contest window doesn't dereference a freed skater. Registry
-			# lookup returns null → apply_lag_comp_pickup is skipped.
-			var claim_record: PlayerRecord = _registry.get_record(_pending_pickup_claim_peer_id)
-			if claim_record != null and claim_record.skater != null:
-				puck_controller.apply_lag_comp_pickup(claim_record.skater)
-			_pending_pickup_claim_peer_id = -1
-			_pending_claim_timer = 0.0
+	_pickup_claim.tick(delta)
 
 
 func _check_puck_out_of_bounds(delta: float) -> void:
@@ -596,6 +581,12 @@ func _wire_subsystems() -> void:
 	_hit_tracker = HitTracker.new()
 	_hit_tracker.setup(_registry)
 	_hit_tracker.hit_credited.connect(_sync_stats_to_clients)
+
+	_pickup_claim = PickupClaimResolver.new()
+	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
+
+	_hit_claim = HitClaimResolver.new()
+	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker)
 
 	_phase_coord = PhaseCoordinator.new()
 	var force_record: Callable = Callable()
@@ -1112,8 +1103,7 @@ func _resolve_skater_peer_id(skater: Skater) -> int:
 
 
 func _on_server_puck_picked_up_by(peer_id: int) -> void:
-	_pending_pickup_claim_peer_id = -1
-	_pending_claim_timer = 0.0
+	_pickup_claim.clear()
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
@@ -1135,63 +1125,9 @@ func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
 
 
 func _on_pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
-	if not NetworkManager.is_host or puck == null or puck_controller == null:
+	if not NetworkManager.is_host:
 		return
-	if puck.carrier != null or puck.pickup_locked:
-		return
-	# Use session-relative game time so the age check matches the time base of
-	# host_timestamp (which came from the client stamping with estimated_host_time).
-	# Time.get_ticks_msec() is OS uptime and would diverge by however long the
-	# host was alive before the game started.
-	var now: float = NetworkManager.local_time()
-	if now - host_timestamp > _MAX_CLAIM_AGE_S:
-		return
-	var record: PlayerRecord = _registry.get_record(peer_id)
-	if record == null or record.skater == null or record.skater.is_ghost:
-		return
-	if puck.is_on_cooldown(record.skater):
-		return
-	if _state_buffer_manager == null or not _state_buffer_manager.is_ready():
-		return
-	var rewind_rtt: float = clampf(rtt_ms, 10.0, 200.0)
-	# Blade: the client's blade state from T_client = claim send time arrives in the
-	# state buffer at host time = host_timestamp + rtt/2 (one-way transit). Use that
-	# time so the blade check reflects where the blade actually was at pickup.
-	var blade_rewind_time: float = host_timestamp + rewind_rtt / 2000.0
-	# Puck: the client's interpolated puck is delayed by interp_delay behind host time.
-	# Rewind the puck to the host timestamp the client was actually looking at.
-	var puck_rewind_time: float = host_timestamp - clampf(interp_delay_ms, 0.0, 200.0) / 1000.0
-	var puck_snap: WorldSnapshot = _state_buffer_manager.get_state_at(puck_rewind_time)
-	if puck_snap.puck_state == null or puck_snap.puck_state.carrier_peer_id != -1:
-		return
-	var puck_pos: Vector3 = puck_snap.puck_state.position
-	var puck_prev_snap: WorldSnapshot = _state_buffer_manager.get_state_at(puck_rewind_time - 1.0 / 240.0)
-	var puck_prev: Vector3 = puck_prev_snap.puck_state.position if puck_prev_snap.puck_state != null else puck_pos
-	var blade_snap: WorldSnapshot = _state_buffer_manager.get_state_at(blade_rewind_time)
-	var blade_prev_snap: WorldSnapshot = _state_buffer_manager.get_state_at(blade_rewind_time - 1.0 / 240.0)
-	var skater_snap: SkaterNetworkState = blade_snap.get_skater_state(peer_id)
-	var skater_prev_snap: SkaterNetworkState = blade_prev_snap.get_skater_state(peer_id)
-	if skater_snap == null or skater_prev_snap == null:
-		return
-	var blade_curr: Vector3 = skater_snap.blade_contact_world
-	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world
-	if not PuckInteractionRules.check_pickup(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.PICKUP_RADIUS):
-		return
-	if _pending_pickup_claim_peer_id != -1:
-		# Resolve the prior claimant at contest time. If they've disconnected
-		# or demoted in the contest window, treat the new claim as uncontested
-		# and let it stand.
-		var prior_record: PlayerRecord = _registry.get_record(_pending_pickup_claim_peer_id)
-		if prior_record != null and prior_record.skater != null:
-			puck_controller.apply_contested_pickup(record.skater, prior_record.skater)
-			_pending_pickup_claim_peer_id = -1
-			_pending_claim_timer = 0.0
-		else:
-			_pending_pickup_claim_peer_id = peer_id
-			_pending_claim_timer = 0.0
-	else:
-		_pending_claim_timer = 0.0
-		_pending_pickup_claim_peer_id = peer_id
+	_pickup_claim.receive_claim(peer_id, host_timestamp, rtt_ms, interp_delay_ms)
 
 
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
@@ -1568,53 +1504,14 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 				local_ctrl.set_local_team_id(new_team_id)
 
 
-# ── Hit tracking ─────────────────────────────────────────────────────────────
-const _HIT_CLAIM_MAX_RANGE: float = 2.0
-
 func _on_hit_landed(hitter_peer_id: int, victim: Skater) -> void:
-	if NetworkManager.is_host:
-		_hit_tracker.on_hit(hitter_peer_id, _registry.resolve_peer_id(victim), _registry.resolve_team_id(victim))
-		return
-	# Client: local skater is the only one whose physics fires body_checked_player.
-	# Send a lag-compensated claim to the host for crediting.
-	# Throttle to once per HIT_COOLDOWN_S — body_checked_player fires every physics
-	# tick during sustained contact (240 Hz), and flooding the host with RPCs causes jitter.
-	var victim_peer_id: int = _registry.resolve_peer_id(victim)
-	if victim_peer_id == -1:
-		return
-	var key: String = "%d:%d" % [hitter_peer_id, victim_peer_id]
-	var now: float = Time.get_ticks_msec() / 1000.0
-	if _last_hit_claim_sent.get(key, 0.0) + HitTracker.HIT_COOLDOWN_S > now:
-		return
-	_last_hit_claim_sent[key] = now
-	NetworkManager.send_hit_claim(
-			victim_peer_id,
-			NetworkManager.estimated_host_time(),
-			NetworkManager.get_latest_rtt_ms())
+	_hit_claim.notify_local_hit(hitter_peer_id, victim)
 
 
 func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
 	if not NetworkManager.is_host:
 		return
-	if _state_buffer_manager == null or not _state_buffer_manager.is_ready():
-		return
-	var now: float = Time.get_ticks_msec() / 1000.0
-	if now - host_timestamp > _MAX_CLAIM_AGE_S:
-		return
-	var hitter_rec: PlayerRecord = _registry.get_record(hitter_peer_id)
-	var victim_rec: PlayerRecord = _registry.get_record(victim_peer_id)
-	if hitter_rec == null or victim_rec == null:
-		return
-	var rewind_rtt: float = clampf(rtt_ms, 10.0, 200.0)
-	var rewind_time: float = host_timestamp - rewind_rtt / 2000.0
-	var snapshot: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
-	var hitter_snap: SkaterNetworkState = snapshot.get_skater_state(hitter_peer_id)
-	var victim_snap: SkaterNetworkState = snapshot.get_skater_state(victim_peer_id)
-	if hitter_snap == null or victim_snap == null:
-		return
-	if hitter_snap.position.distance_to(victim_snap.position) > _HIT_CLAIM_MAX_RANGE:
-		return
-	_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, victim_rec.team.team_id)
+	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, rtt_ms)
 
 
 # ── Scene exit & reset ───────────────────────────────────────────────────────
@@ -1691,6 +1588,8 @@ func on_scene_exit() -> void:
 		_goal_replay_driver = null
 	_recorder = null
 	_shot_tracker = null
+	_pickup_claim = null
+	_hit_claim = null
 	_phase_coord = null
 	_swap_coord = null
 	if _debug_overlay:
@@ -1738,7 +1637,7 @@ func _apply_reset() -> void:
 	_state_machine.reset_all()
 	_last_emitted_clock_secs = -1
 	_last_ghost_state.clear()
-	_last_hit_claim_sent.clear()
+	_hit_claim.reset_throttle()
 	_puck_oob_timer = 0.0
 	score_changed.emit(0, 0)
 	period_changed.emit(1)
