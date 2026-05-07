@@ -345,7 +345,8 @@ func _build_color_vote_row() -> Control:
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(lbl)
 
-	_my_color_btn = _color_option_btn(_my_color_id)
+	_my_color_btn = MenuStyle.color_option_btn(_my_color_id, Vector2(_SETTING_CONTROL_WIDTH, 40), 16)
+	SoundManager.wire_button(_my_color_btn)
 	_my_color_btn.item_selected.connect(func(idx: int) -> void:
 		_my_color_id = TeamColorRegistry.get_all_ids()[idx]
 		PlayerPrefs.preferred_color_id = _my_color_id
@@ -404,32 +405,10 @@ func _btn(text: String) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.custom_minimum_size = Vector2(140, 40)
-	_wire_hover_scale(b)
+	MenuStyle.wire_hover_scale(b)
 	SoundManager.wire_button(b)
 	return b
 
-func _wire_hover_scale(btn: Button) -> void:
-	btn.item_rect_changed.connect(func() -> void: btn.pivot_offset = btn.size / 2.0)
-	btn.mouse_entered.connect(func() -> void: _scale_btn(btn, Vector2(1.04, 1.04)))
-	btn.mouse_exited.connect(func() -> void: _scale_btn(btn, Vector2.ONE))
-	btn.button_down.connect(func() -> void: _scale_btn(btn, Vector2(0.97, 0.97)))
-	btn.button_up.connect(func() -> void: _scale_btn(btn, Vector2(1.04, 1.04)))
-
-func _scale_btn(btn: Button, target: Vector2) -> void:
-	var t := btn.create_tween()
-	t.tween_property(btn, "scale", target, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-
-func _color_option_btn(selected_id: String) -> OptionButton:
-	var btn := OptionButton.new()
-	btn.custom_minimum_size = Vector2(_SETTING_CONTROL_WIDTH, 40)
-	btn.add_theme_font_size_override("font_size", 16)
-	var ids: Array[String] = TeamColorRegistry.get_all_ids()
-	for i: int in ids.size():
-		btn.add_item(TeamColorRegistry.get_preset_name(ids[i]), i)
-		if ids[i] == selected_id:
-			btn.select(i)
-	SoundManager.wire_button(btn)
-	return btn
 
 # ── Slot management ───────────────────────────────────────────────────────────
 
