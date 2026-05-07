@@ -32,9 +32,9 @@ const PRESSURE_RADIUS_M: float = 4.0
 const PRESSURE_MAX_COUNT: int = 2
 
 # Beyond this range, shots score 0 from distance alone — keeps bots
-# from launching pucks at the goalie from the blue line. Linear falloff:
-# `1 - dist / SHOT_RANGE_FALLOFF_M`. Bumped from 18 → 22 to lift
-# mid-range scores: the response at 10 m is 0.55 instead of 0.44, so
+# from launching pucks at the goalie from the blue line. Quadratic
+# falloff outside IDEAL_SHOT_DIST_M. Bumped from 18 → 22 to lift
+# mid-range scores: the response at 10 m is 0.91 instead of 0.83, so
 # clean mid-range shots score meaningfully and pass-to-receiver scores
 # (which transitively include `score_shoot(receiver)`) are pulled up
 # in the same band — passes to a teammate with a clear path to the
@@ -42,6 +42,18 @@ const PRESSURE_MAX_COUNT: int = 2
 # if bots still refuse meaningful shots; lower toward 18 if blue-line
 # shots are too common.
 const SHOT_RANGE_FALLOFF_M: float = 22.0
+
+# The slot — the spot where dist_response peaks (= 1.0). Distances
+# closer to the goal score below 1.0 because driving past the slot
+# means skating into the goalie's coverage; distances further away
+# score below 1.0 because the shot is too long. 5 m matches the
+# face-off circle hash / hard slot in real-rink geometry. Without this
+# peak the dist_response is monotone in 1/dist and the carrier always
+# scores a 1-m drive to the net higher than a slot stand-still shot,
+# so it never actually fires — it just keeps closing distance until
+# the goalie eats the puck. Raise toward 7 if bots release too far
+# out; lower toward 4 if they keep crashing into the goalie.
+const IDEAL_SHOT_DIST_M: float = 5.0
 
 # Position-potential closeness ramp. position_potential is only used
 # by `_score_at` when the EVALUATOR is outside SHOT_RANGE_FALLOFF_M —
@@ -161,7 +173,7 @@ const ACTION_HYSTERESIS_MARGIN: float = 0.05
 #   coverage     = BASE_COVERAGE × squareness
 #   squareness   = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
 #
-#   dist_response     = 1 - (dist / SHOT_RANGE_FALLOFF_M)²            (quadratic)
+#   dist_response     = peak-at-slot curve (1.0 at IDEAL_SHOT_DIST_M)
 #   shot_angle_factor = 1 - shot_angle / (PI / 2)                      (linear)
 #   puck_arc_angle    = atan2(shooter.x - goal.x, abs(shooter.z - goal.z))
 #   goalie_arc_angle  = atan2(goalie_at_release.x - goal.x, ...)
@@ -188,14 +200,25 @@ static func score_shoot(
 	if forward < 0.001:
 		return 0.0
 
-	# Distance response — quadratic. Saturates near the net, so going
-	# from 4 m → 2 m gains less than 12 m → 10 m. Combined with the
-	# carry time-decay this naturally prevents the bot from driving
-	# into the goalie at close range; fire wins the comparison once
-	# the bot is in shooting range.
+	# Distance response — bidirectional quadratic. Peaks at 1.0 at the
+	# slot (IDEAL_SHOT_DIST_M) and falls off in both directions:
+	# quadratic toward the goal mouth (penalises crashing into the
+	# goalie's coverage) and quadratic out to SHOT_RANGE_FALLOFF_M
+	# (penalises long bombs). Without the close-range falloff the
+	# carrier keeps preferring "drive 1 m closer" over "shoot now," so
+	# bots never release in the slot — they grind into the goalie.
 	var dist: float = shooter.distance_to(attacking_goal)
-	var dist_norm: float = clampf(dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
-	var dist_response: float = 1.0 - dist_norm * dist_norm
+	var dist_response: float
+	if dist >= IDEAL_SHOT_DIST_M:
+		var far_norm: float = clampf(
+				(dist - IDEAL_SHOT_DIST_M) / (SHOT_RANGE_FALLOFF_M - IDEAL_SHOT_DIST_M),
+				0.0, 1.0)
+		dist_response = 1.0 - far_norm * far_norm
+	else:
+		var close_norm: float = clampf(
+				(IDEAL_SHOT_DIST_M - dist) / IDEAL_SHOT_DIST_M,
+				0.0, 1.0)
+		dist_response = 1.0 - close_norm * close_norm
 
 	# Puck arc angle: atan2 of lateral offset over forward distance.
 	# Range [-PI/2, +PI/2] given the forward gate above.

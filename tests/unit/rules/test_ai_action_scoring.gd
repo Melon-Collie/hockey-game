@@ -306,12 +306,13 @@ func test_breakout_pass_not_blocked() -> void:
 # (within rounding) the formula is correct. Any drift here means a tuning
 # constant moved.
 
-# Slot, centered, goalie squared. From spec: target ≈ 0.616.
+# Slot, centered, goalie squared. dist_response peaks at 1.0 at the
+# slot, × shot_angle_factor 1.0 × (1 - BASE_COVERAGE 0.35) = 0.65.
 func test_shot_quality_slot_5m_squared() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.65)  # 5 m from goal line
 	var goalie := Vector3(0.0, 0.0, 26.0)    # squared (matches puck arc)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.616, 0.05, "slot 5m centered, goalie squared")
+	assert_almost_eq(s, 0.65, 0.02, "slot 5m centered, goalie squared")
 
 
 # Same shot but goalie has slid out of position (~30° arc offset).
@@ -323,8 +324,9 @@ func test_shot_quality_slot_5m_goalie_delayed() -> void:
 	# which is well past the SQUARENESS_OFFSET (30°), so squareness = 0.
 	var goalie := Vector3(0.45, 0.0, 26.15)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	# At 5m centered with full open net: dist_response × 1.0 × 1.0 ≈ 0.948
-	assert_almost_eq(s, 0.948, 0.05, "slot 5m centered, goalie misaligned → open net")
+	# At 5m centered with full open net: dist_response peaks at 1.0 at
+	# IDEAL_SHOT_DIST_M, × 1.0 × 1.0 = 1.0.
+	assert_almost_eq(s, 1.0, 0.02, "slot 5m centered, goalie misaligned → open net")
 
 
 # 60° half-wall vs goalie at center (delayed/non-square). Spec target

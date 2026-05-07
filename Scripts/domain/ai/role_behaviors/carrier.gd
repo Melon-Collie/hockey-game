@@ -81,9 +81,6 @@ const CARRY_SEARCH_STEP_M: float = 3.0
 # attacking goal line — beyond there is behind the net.
 const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
 
-# OZ slot depth from the attacking goal line.
-const SLOT_DEPTH_FROM_GOAL_LINE: float = 5.0
-
 # Rink half-width inset for carry-candidate clamping.
 const RINK_X_INSET: float = 0.5
 
@@ -626,7 +623,7 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 # OZ slot anchor — recursion terminator and a permanent carry
 # candidate. Slot depth from goal line is fixed.
 func _slot_anchor(own_goal_dir: float) -> Vector3:
-	var slot_z: float = -own_goal_dir * (GameRules.GOAL_LINE_Z - SLOT_DEPTH_FROM_GOAL_LINE)
+	var slot_z: float = -own_goal_dir * (GameRules.GOAL_LINE_Z - AIActionScoring.IDEAL_SHOT_DIST_M)
 	return Vector3(0.0, 0.0, slot_z)
 
 

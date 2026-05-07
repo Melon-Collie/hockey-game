@@ -20,7 +20,7 @@ class_name AIRoleAnchor
 # defender position included in their "opponents" list. The minimax
 # over the threat set gives ANCHOR's best block position.
 #
-# Search center: the slot — SLOT_DEPTH_M (5 m) in front of our goal
+# Search center: the slot — IDEAL_SHOT_DIST_M in front of our goal
 # at center ice. Polar samples cover the strong-side post, weak-side
 # post, and high-slot regions. The argmax shifts laterally toward
 # whichever opp is the dominant threat (e.g., the carrier's shot
@@ -31,12 +31,6 @@ class_name AIRoleAnchor
 # becomes the dominant threat. Add a reactive mode (square-up +
 # hold) if playtest shows ANCHOR is too slow to block in-flight
 # shots.
-
-# Search center depth in front of own goal. Mirrors FINISHER's
-# SLOT_DEPTH_FROM_GOAL_M — keeps every polar sample (radius
-# SEARCH_STEP_M = 3) on the legal side of the goal line
-# (GOAL_LINE_BUFFER_M = 1). Pure geometric.
-const SLOT_DEPTH_M: float = 5.0
 
 
 static func decide(ctx: RoleContext) -> RoleDecision:
@@ -54,15 +48,15 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 	var our_team_excluding_self: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
 
-	# Search center: the slot, SLOT_DEPTH_M in front of our goal at
-	# center ice. Pure in-game ref (our net + slot depth toward
+	# Search center: the slot, IDEAL_SHOT_DIST_M in front of our goal
+	# at center ice. Pure in-game ref (our net + slot depth toward
 	# neutral). own_goal_dir is +1 for Team 0 (our net at +Z, slot
 	# is in -Z direction); -1 for Team 1 (our net at -Z, slot is
-	# in +Z direction). Hence subtract own_goal_dir * SLOT_DEPTH_M.
+	# in +Z direction). Hence subtract own_goal_dir * IDEAL_SHOT_DIST_M.
 	var search_center := Vector3(
 			0.0,
 			0.0,
-			our_net.z - ctx.own_goal_dir * SLOT_DEPTH_M)
+			our_net.z - ctx.own_goal_dir * AIActionScoring.IDEAL_SHOT_DIST_M)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
 

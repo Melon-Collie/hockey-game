@@ -40,11 +40,10 @@ const INCOMING_SHOT_SPEED_M_S: float = 12.0
 const STEP_OUT_M: float = 1.5
 
 # How far in front of the opp goal the positioning search center
-# sits. 5 m matches the conventional "slot" depth and keeps every
-# polar sample (radius SEARCH_STEP_M = 3) on the legal side of the
-# goal line (GOAL_LINE_BUFFER_M = 1). Pure geometric — derived
-# from rink layout, not a behavioral knob.
-const SLOT_DEPTH_FROM_GOAL_M: float = 5.0
+# sits. Sourced from AIActionScoring.IDEAL_SHOT_DIST_M — the slot,
+# where score_shoot peaks. Keeps every polar sample (radius
+# SEARCH_STEP_M = 3) on the legal side of the goal line
+# (GOAL_LINE_BUFFER_M = 1).
 
 
 static func decide(ctx: RoleContext) -> RoleDecision:
@@ -155,7 +154,7 @@ static func _last_shooter_is_elevated(ctx: RoleContext) -> bool:
 # ── Positioning (no incoming shot) ──────────────────────────────────────────
 
 # Argmax over the candidate set scored with score_pass(carrier,
-# candidate). Search center sits SLOT_DEPTH_FROM_GOAL_M in front of
+# candidate). Search center sits IDEAL_SHOT_DIST_M in front of
 # the opp goal at center ice — the slot. Polar samples around this
 # center cover the high-slot, low-slot, and weak/strong-side post
 # regions. Falls back to self_pos when no teammate carrier (brain
@@ -176,12 +175,12 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 
 	var teammate_positions: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
 
-	# Search center: the slot, SLOT_DEPTH_FROM_GOAL_M in front of
-	# opp goal at center ice. Pure in-game ref (opp net + slot depth).
+	# Search center: the slot, IDEAL_SHOT_DIST_M in front of opp goal
+	# at center ice. Pure in-game ref (opp net + slot depth).
 	var search_center := Vector3(
 			0.0,
 			0.0,
-			ctx.attacking_goal_pos.z + ctx.own_goal_dir * SLOT_DEPTH_FROM_GOAL_M)
+			ctx.attacking_goal_pos.z + ctx.own_goal_dir * AIActionScoring.IDEAL_SHOT_DIST_M)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
 

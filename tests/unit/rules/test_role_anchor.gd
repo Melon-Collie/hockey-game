@@ -70,9 +70,9 @@ func test_chosen_target_is_near_our_net() -> void:
 	]
 	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 18), skaters)
 	var d: RoleDecision = AIRoleAnchor.decide(ctx)
-	# ANCHOR's search center is SLOT_DEPTH_M (5 m) in front of our
-	# net. Polar samples extend out to SEARCH_STEP_M (3 m) from the
-	# center. Target.z should be roughly in [our_net.z - 8, our_net.z].
+	# ANCHOR's search center is IDEAL_SHOT_DIST_M (5 m) in front of
+	# our net. Polar samples extend out to SEARCH_STEP_M (3 m) from
+	# the center. Target.z should be roughly in [our_net.z - 8, our_net.z].
 	assert_lt(absf(OUR_NET_Z - d.target_position.z), 9.0,
 			"target stays in slot area near our net; got z=%f" % d.target_position.z)
 
