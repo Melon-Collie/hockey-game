@@ -123,10 +123,10 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 		contact_world = clamped_heel + shaft.normalized() * _skater.blade_length * 0.5
 	var clamped_contact: Vector3 = clamp_blade_from_net(contact_world)
 	if clamped_contact != contact_world:
-		var delta: Vector3 = clamped_contact - contact_world
-		clamped_heel += delta
+		var net_offset: Vector3 = clamped_contact - contact_world
+		clamped_heel += net_offset
 		if _controller.has_puck:
-			_controller._do_release(delta.normalized(), _controller.goalie_strip_power)
+			_controller._do_release(net_offset.normalized(), _controller.goalie_strip_power)
 	if clamped_heel != heel_world:
 		var clamped_local: Vector3 = _skater.upper_body_to_local(clamped_heel)
 		hand_local.x += clamped_local.x - wall_clamped.x
