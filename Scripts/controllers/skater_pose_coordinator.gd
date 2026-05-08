@@ -54,6 +54,9 @@ func apply_velocity_lean(delta: float) -> void:
 	var target_z: float =  clampf(local_vel.x / cfg_max_speed, -1.0, 1.0) * lean_max
 	velocity_lean_x = lerpf(velocity_lean_x, target_x, _controller.velocity_lean_speed * delta)
 	velocity_lean_z = lerpf(velocity_lean_z, target_z, _controller.velocity_lean_speed * delta)
+	# Decay the shot-release lean here so it persists across the FOLLOW_THROUGH
+	# → SKATING transition. Standard apply_upper_body branch picks it up too.
+	shot_lean_pitch = lerpf(shot_lean_pitch, 0.0, _controller.wrister_shot_lean_return_speed * delta)
 
 func apply_facing(input: InputState, delta: float) -> void:
 	if not _sm.get_state() in [State.WRISTER_AIM, State.SLAPPER_CHARGE_WITH_PUCK,
@@ -111,26 +114,28 @@ func apply_upper_body(delta: float) -> void:
 		return
 
 	if _sm.get_state() == State.FOLLOW_THROUGH and not _sm.follow_through_is_slapper:
-		# Torso leads the wrister swing — open chest toward shot_dir before the
-		# blade finishes its sweep. Reads as the body driving the shot rather
-		# than the stick swinging on its own.
+		# Torso leads the wrister swing — open chest PAST shot_dir for visible
+		# swing-through. The over-rotation extra pushes the target beyond the
+		# wind-up position so there's actual angular travel during follow-through.
+		# Forward shots still won't rotate (no angular delta to travel) but
+		# angled shots show clear chest commitment toward the target side.
 		if _sm.shot_dir.length_squared() > 0.0001:
 			var shot_world := Vector3(_sm.shot_dir.x, 0.0, _sm.shot_dir.z)
 			var local_dir: Vector3 = _skater.global_transform.basis.inverse() * shot_world.normalized()
 			var shot_local_angle: float = atan2(local_dir.x, -local_dir.z)
 			var max_twist: float = deg_to_rad(_controller.upper_body_max_twist_deg)
+			var twist_ratio: float = _controller.upper_body_twist_ratio \
+					+ _controller.wrister_torso_over_rotate_extra * _sm.release_charge_frac
 			var target_twist: float = clampf(
-					-shot_local_angle * _controller.upper_body_twist_ratio,
+					-shot_local_angle * twist_ratio,
 					-max_twist, max_twist)
 			upper_body_angle = lerp_angle(
 					upper_body_angle, target_twist,
 					_controller.wrister_torso_lead_speed * delta)
 			_skater.set_upper_body_rotation(upper_body_angle)
-		# Decay forward-pitch impulse over the follow-through at the same speed
-		# as the standard upper-body lean return. Also fade the previous
-		# reach-factor lean so the only forward pitch is the shot impulse.
-		shot_lean_pitch = lerpf(shot_lean_pitch, 0.0, _controller.upper_body_lean_return_speed * delta)
-		upper_body_lean = lerpf(upper_body_lean, 0.0, _controller.upper_body_lean_return_speed * delta)
+		# Hold upper_body_lean at its wind-up value through the follow-through;
+		# shot_lean_pitch is the additive forward-pitch impulse and decays in
+		# apply_velocity_lean so it persists past the state transition.
 		_skater.set_upper_body_lean(
 				upper_body_lean + velocity_lean_x + shot_lean_pitch,
 				velocity_lean_z)
@@ -164,7 +169,7 @@ func apply_upper_body(delta: float) -> void:
 	upper_body_angle = lerp_angle(upper_body_angle, target_angle, _controller.upper_body_return_speed * delta)
 	upper_body_lean = lerpf(upper_body_lean, target_lean, _controller.upper_body_lean_return_speed * delta)
 	_skater.set_upper_body_rotation(upper_body_angle)
-	_skater.set_upper_body_lean(upper_body_lean + velocity_lean_x, velocity_lean_z)
+	_skater.set_upper_body_lean(upper_body_lean + velocity_lean_x + shot_lean_pitch, velocity_lean_z)
 	_skater.set_lower_body_lean(velocity_lean_x, velocity_lean_z)
 
 func apply_head_tracking(input: InputState, delta: float) -> void:
@@ -195,9 +200,11 @@ func update_angular_velocities(delta: float) -> void:
 # Used by SkaterController._transition_to_skating and _enter_slapper_charge.
 # Clears smoothed pose state so the next tick starts from a neutral torso/lean.
 func reset_lean_and_lag() -> void:
-	upper_body_angle = 0.0
+	# Note: upper_body_angle and shot_lean_pitch are intentionally NOT reset.
+	# Letting them lerp/decay naturally avoids the visible snap-to-neutral
+	# when transitioning out of FOLLOW_THROUGH (where the follow-through pose
+	# would otherwise be wiped exactly when the shot lean wants to persist).
 	upper_body_lean = 0.0
 	velocity_lean_x = 0.0
 	velocity_lean_z = 0.0
 	lower_body_lag = 0.0
-	shot_lean_pitch = 0.0

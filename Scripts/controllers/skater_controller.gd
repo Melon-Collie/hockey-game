@@ -156,14 +156,22 @@ var show_one_timer_indicator: bool = false
 @export var slapper_follow_through_arc_dist: float = 0.4  # blade XZ travel along shot_dir during follow-through
 # Wrister follow-through duration scales linearly with charge_frac. Modest
 # spread — amplitude does most of the visual differentiation.
-@export var wrister_follow_through_time_min: float = 0.20
-@export var wrister_follow_through_time_max: float = 0.30
+@export var wrister_follow_through_time_min: float = 0.30
+@export var wrister_follow_through_time_max: float = 0.50
 # Torso-lead speed during wrister follow-through. ≈3× upper_body_return_speed
 # so the chest opens toward shot_dir before the blade finishes its sweep —
 # reads as "the body shot the puck" rather than the stick swinging on its own.
 @export var wrister_torso_lead_speed: float = 18.0
-# Peak forward pitch on release at full charge. Decays via upper_body_lean_return_speed.
-@export var wrister_shot_lean_max_deg: float = 12.0
+# Extra twist multiplier applied to upper_body_twist_ratio during follow-through,
+# scaled by charge_frac. The torso rotates PAST the wind-up position so there's
+# visible swing-through — without this, the wind-up and follow-through targets
+# are equal and the torso never actually rotates.
+@export var wrister_torso_over_rotate_extra: float = 0.6
+# Peak forward pitch on release at full charge.
+@export var wrister_shot_lean_max_deg: float = 25.0
+# Decay rate of shot_lean_pitch (per second). Slow — the lean should persist
+# through follow-through and ease out over the next ~1s rather than snap off.
+@export var wrister_shot_lean_return_speed: float = 2.0
 # Fraction of the way `facing` snaps toward shot_dir at full charge on release.
 # 0.15 = ~15% step at max power; reads as planting the front foot toward target.
 @export var wrister_step_into_shot_amount: float = 0.15
