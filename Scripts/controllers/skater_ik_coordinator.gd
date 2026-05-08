@@ -72,17 +72,16 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 
-	# Solve IK — returns (hand, blade) in upper-body-local space.
+	# Solve IK — returns (hand, blade) in upper-body-local space. The IK config
+	# already carries the lean-corrected blade Y, so blade.y comes out of the
+	# solver consistent with stick_length (no post-override / stick stretching).
 	var ik: Dictionary = TopHandIK.solve(
 			_skater.shoulder.position,
 			desired_blade_xz,
 			blade_side_sign,
-			_ik_config())
+			_ik_config(desired_blade_xz))
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
-	# Apply lean correction to blade Y after IK so the IK geometry (hand-to-blade
-	# vertical drop) stays consistent, but the blade's world Y stays at blade_height.
-	blade_local.y = blade_y_lean_corrected(blade_local.x, blade_local.z)
 
 	# Wall clamp on the solved blade. Wall-pin auto-release (when carrying).
 	var intended_blade: Vector3 = blade_local
@@ -270,23 +269,29 @@ func _clamp_blade_butterfly_box(blade_world: Vector3, gpos: Vector3, rot_y: floa
 func blade_y_local() -> float:
 	return _controller.blade_height - _skater.upper_body.global_position.y
 
-# Lean-corrected blade Y for a given blade local (X, Z). Used AFTER IK so the
-# IK geometry stays internally consistent (correct hand-to-blade vertical drop),
-# while the blade's final world Y is kept at blade_height despite upper-body lean.
-# Under YXZ Euler order, world Y of a local point (x, y, z) is approximately
-# ub.y + (x*sin(roll) + y*cos(roll))*cos(pitch) - z*sin(pitch). For small angles
-# the correction needed to land at world Y = blade_height is
-# y ≈ blade_y_local() + z*sin(pitch) - x*sin(roll). Without the roll term the
-# blade dips on one side and lifts on the other during turn / acceleration lean.
+# Lean-corrected blade Y for a given blade local (X, Z). Computes the local Y
+# that — after the upper body's pitch (X) and roll (Z) rotations under Godot's
+# default YXZ Euler order — lands the blade at world Y = blade_height.
+# Solving world_y = ub.y + (x*sin(r) + y*cos(r))*cos(p) - z*sin(p) for y gives:
+#   y = (blade_y_local() + z*sin(p) - x*sin(r)*cos(p)) / (cos(p)*cos(r))
+# A small-angle approximation (drop the cos divisors) drifts ~2cm at max reach
+# with full reach lean (15° forward pitch); the exact form is used here so the
+# IK can consume the correct blade_y up front and produce a hand consistent
+# with stick_length, instead of post-IK overriding blade.y and stretching the
+# visible stick mesh.
 func blade_y_lean_corrected(blade_local_x: float, blade_local_z: float) -> float:
-	var base: float = blade_y_local()
 	var pitch: float = _skater.upper_body.rotation.x
 	var roll: float = _skater.upper_body.rotation.z
-	if abs(pitch) > 0.001:
-		base += blade_local_z * sin(pitch)
-	if abs(roll) > 0.001:
-		base -= blade_local_x * sin(roll)
-	return base
+	var cp: float = cos(pitch)
+	var cr: float = cos(roll)
+	# Guard against the degenerate near-90° case so the solver never divides
+	# by zero. In practice the upper body never approaches 90° lean.
+	if cp < 0.001:
+		cp = 0.001
+	if cr < 0.001:
+		cr = 0.001
+	var numerator: float = blade_y_local() + blade_local_z * sin(pitch) - blade_local_x * sin(roll) * cp
+	return numerator / (cp * cr)
 
 # Horizontal projection of the stick onto the XZ plane, given the fixed
 # vertical drop from hand to blade. Used by follow-through to keep stick
@@ -297,10 +302,15 @@ func stick_horiz() -> float:
 	return sqrt(maxf(sq, 0.0001))
 
 # ── Config Builders ───────────────────────────────────────────────────────────
-func _ik_config() -> TopHandIK.Config:
+func _ik_config(desired_blade_xz: Vector2) -> TopHandIK.Config:
 	var cfg := TopHandIK.Config.new()
 	cfg.stick_length = _controller.stick_length
-	cfg.blade_y = blade_y_local()
+	# Feed the lean-corrected blade Y so the IK solves the hand consistent with
+	# blade-on-ice in world space. Uses the desired XZ (mouse target before ROM
+	# clamp) — the lean correction is dominated by local_z (forward extension),
+	# which matches the desired position closely enough that residual error is
+	# millimeters even when the IK clamps the actual blade XZ to ROM.
+	cfg.blade_y = blade_y_lean_corrected(desired_blade_xz.x, desired_blade_xz.y)
 	cfg.hand_rest_y = _controller.hand_rest_y
 	cfg.hand_y_max = _controller.hand_y_max
 	cfg.rom_forehand_angle_max = deg_to_rad(_controller.rom_forehand_angle_max_deg)
