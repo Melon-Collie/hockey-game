@@ -43,6 +43,13 @@ var follow_through_timer: float = 0.0
 var follow_through_is_slapper: bool = false
 var shot_dir: Vector3 = Vector3.ZERO
 var locked_slapper_dir: Vector2 = Vector2.ZERO
+# Captured at wrister release so the follow-through pose can scale amplitude
+# with power, transition the blade direction from release-time pose toward
+# shot_dir, and compute t against the release-time duration (which itself
+# scales with charge).
+var release_charge_frac: float = 0.0
+var release_blade_local_angle: float = 0.0
+var release_follow_through_time: float = 0.0
 
 var _cb: Callbacks
 var _aiming: SkaterAimingBehavior

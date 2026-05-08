@@ -22,6 +22,10 @@ var velocity_lean_z: float = 0.0
 var lower_body_lag: float = 0.0
 var head_angle: float = 0.0
 var ik_locked_side: int = 0  # +1 = exited right, -1 = exited left, 0 = unlocked
+# Forward-pitch impulse seeded on wrister release (in radians, negative = forward
+# per the upper_body_lean sign convention). Decays via upper_body_lean_return_speed
+# during follow-through and beyond. Applied additively to the X-axis upper-body lean.
+var shot_lean_pitch: float = 0.0
 
 # ── Angular-Velocity Tracking ─────────────────────────────────────────────────
 var facing_angular_velocity: float = 0.0
@@ -106,6 +110,33 @@ func apply_upper_body(delta: float) -> void:
 			_skater.set_upper_body_rotation(upper_body_angle)
 		return
 
+	if _sm.get_state() == State.FOLLOW_THROUGH and not _sm.follow_through_is_slapper:
+		# Torso leads the wrister swing — open chest toward shot_dir before the
+		# blade finishes its sweep. Reads as the body driving the shot rather
+		# than the stick swinging on its own.
+		if _sm.shot_dir.length_squared() > 0.0001:
+			var shot_world := Vector3(_sm.shot_dir.x, 0.0, _sm.shot_dir.z)
+			var local_dir: Vector3 = _skater.global_transform.basis.inverse() * shot_world.normalized()
+			var shot_local_angle: float = atan2(local_dir.x, -local_dir.z)
+			var max_twist: float = deg_to_rad(_controller.upper_body_max_twist_deg)
+			var target_twist: float = clampf(
+					-shot_local_angle * _controller.upper_body_twist_ratio,
+					-max_twist, max_twist)
+			upper_body_angle = lerp_angle(
+					upper_body_angle, target_twist,
+					_controller.wrister_torso_lead_speed * delta)
+			_skater.set_upper_body_rotation(upper_body_angle)
+		# Decay forward-pitch impulse over the follow-through at the same speed
+		# as the standard upper-body lean return. Also fade the previous
+		# reach-factor lean so the only forward pitch is the shot impulse.
+		shot_lean_pitch = lerpf(shot_lean_pitch, 0.0, _controller.upper_body_lean_return_speed * delta)
+		upper_body_lean = lerpf(upper_body_lean, 0.0, _controller.upper_body_lean_return_speed * delta)
+		_skater.set_upper_body_lean(
+				upper_body_lean + velocity_lean_x + shot_lean_pitch,
+				velocity_lean_z)
+		_skater.set_lower_body_lean(velocity_lean_x, velocity_lean_z)
+		return
+
 	var target_angle: float = 0.0
 	var target_lean: float = 0.0
 	var hand_vec := Vector2(
@@ -169,3 +200,4 @@ func reset_lean_and_lag() -> void:
 	velocity_lean_x = 0.0
 	velocity_lean_z = 0.0
 	lower_body_lag = 0.0
+	shot_lean_pitch = 0.0

@@ -148,10 +148,25 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 var show_one_timer_indicator: bool = false
 
 # ── Follow Through Tuning ─────────────────────────────────────────────────────
+# follow_through_duration is currently slapper-only; wrister duration scales
+# with charge between the two _wrister_ time bounds below.
 @export var follow_through_duration: float = 0.25
 @export var wrister_follow_through_hand_y: float = 0.35
 @export var wrister_follow_through_blade_lift: float = 0.20
 @export var slapper_follow_through_arc_dist: float = 0.4  # blade XZ travel along shot_dir during follow-through
+# Wrister follow-through duration scales linearly with charge_frac. Modest
+# spread — amplitude does most of the visual differentiation.
+@export var wrister_follow_through_time_min: float = 0.20
+@export var wrister_follow_through_time_max: float = 0.30
+# Torso-lead speed during wrister follow-through. ≈3× upper_body_return_speed
+# so the chest opens toward shot_dir before the blade finishes its sweep —
+# reads as "the body shot the puck" rather than the stick swinging on its own.
+@export var wrister_torso_lead_speed: float = 18.0
+# Peak forward pitch on release at full charge. Decays via upper_body_lean_return_speed.
+@export var wrister_shot_lean_max_deg: float = 12.0
+# Fraction of the way `facing` snaps toward shot_dir at full charge on release.
+# 0.15 = ~15% step at max power; reads as planting the front foot toward target.
+@export var wrister_step_into_shot_amount: float = 0.15
 
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
 @export var block_speed_multiplier: float = 0.45   # movement speed while blocking
@@ -373,6 +388,9 @@ func _transition_to_skating() -> void:
 	else:
 		_sm.set_state(State.SKATING_WITHOUT_PUCK)
 	_sm.shot_dir = Vector3.ZERO
+	_sm.release_charge_frac = 0.0
+	_sm.release_blade_local_angle = 0.0
+	_sm.release_follow_through_time = 0.0
 	_pose.reset_lean_and_lag()
 	skater.set_lower_body_lag(0.0)
 	skater.set_slapper_mode(false)
@@ -457,9 +475,33 @@ func _release_wrister(input: InputState) -> void:
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
+	# Capture release-time pose inputs so the follow-through can scale visuals
+	# with power, sweep the blade from its release pose toward shot_dir, and
+	# compute t against the same duration the timer was seeded with.
+	var charge_frac: float = clampf(_aiming.charge_distance / max_wrister_charge_distance, 0.0, 1.0)
+	_sm.release_charge_frac = charge_frac
+	_sm.release_blade_local_angle = _blade_relative_angle
+	_sm.release_follow_through_time = lerpf(
+			wrister_follow_through_time_min, wrister_follow_through_time_max, charge_frac)
+
+	# One-shot pose nudges on entry (only meaningful at meaningful charge —
+	# weak snap shots barely move the body).
+	if _sm.shot_dir.length_squared() > 0.0001:
+		var shot_xz := Vector2(_sm.shot_dir.x, _sm.shot_dir.z)
+		if shot_xz.length() > 0.001:
+			var shot_xz_norm: Vector2 = shot_xz.normalized()
+			# Step into the shot — lower body pulses partway toward target.
+			_pose.facing = _pose.facing.lerp(
+					shot_xz_norm,
+					wrister_step_into_shot_amount * charge_frac).normalized()
+			skater.set_facing(_pose.facing)
+	# Forward pitch impulse — chest leans toward target. Negative matches the
+	# existing upper_body_lean sign convention (rotation.x < 0 = forward pitch).
+	_pose.shot_lean_pitch = -deg_to_rad(wrister_shot_lean_max_deg) * charge_frac
+
 	_sm.follow_through_is_slapper = false
 	_sm.set_state(State.FOLLOW_THROUGH)
-	_sm.follow_through_timer = follow_through_duration
+	_sm.follow_through_timer = _sm.release_follow_through_time
 
 func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 	if has_puck:

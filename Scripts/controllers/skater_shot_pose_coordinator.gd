@@ -68,15 +68,32 @@ func apply_slapper_blade_position() -> void:
 
 # ── Wrister Follow-Through ────────────────────────────────────────────────────
 func apply_wrister_follow_through() -> void:
-	var t: float = 1.0 - (_sm.follow_through_timer / _controller.follow_through_duration)
-	var arc: float = sin(t * PI)
+	# Use the release-captured duration (which scales with charge) rather than
+	# the slapper-only follow_through_duration export. Falls back if zero so
+	# replays / edge-cases don't divide by zero.
+	var dur: float = _sm.release_follow_through_time if _sm.release_follow_through_time > 0.0 else _controller.follow_through_duration
+	var t: float = 1.0 - (_sm.follow_through_timer / dur)
+	# Symmetric arc keeps the blade ending at ice level so the handoff back to
+	# the IK in skating doesn't pop. Amplitude scales 50%→100% with charge so
+	# weak shots are subdued and full-power shots commit visibly.
+	var arc_scaled: float = sin(t * PI) * (0.5 + 0.5 * _sm.release_charge_frac)
 	var stick_horiz: float = _ik.stick_horiz()
-	var local_dir := Vector3(sin(_controller._blade_relative_angle), 0.0, -cos(_controller._blade_relative_angle))
+
+	# Sweep blade direction from release-time pose toward body-local shot_dir.
+	# Smoothstep eases the transition; at t=1 the blade points at the target.
+	var shot_local_angle: float = _sm.release_blade_local_angle
+	if _sm.shot_dir.length_squared() > 0.0001:
+		var local_shot: Vector3 = _skater.global_transform.basis.inverse() * _sm.shot_dir.normalized()
+		shot_local_angle = atan2(local_shot.x, -local_shot.z)
+	var sweep_t: float = smoothstep(0.0, 1.0, t)
+	var local_angle: float = lerp_angle(_sm.release_blade_local_angle, shot_local_angle, sweep_t)
+	var local_dir := Vector3(sin(local_angle), 0.0, -cos(local_angle))
+
 	var hand_pos := _skater.shoulder.position
-	hand_pos.y = _controller.hand_rest_y + arc * _controller.wrister_follow_through_hand_y
+	hand_pos.y = _controller.hand_rest_y + arc_scaled * _controller.wrister_follow_through_hand_y
 	var intended_target: Vector3 = hand_pos + local_dir * stick_horiz
 	intended_target.y = _ik.blade_y_lean_corrected(intended_target.x, intended_target.z) \
-			+ arc * _controller.wrister_follow_through_blade_lift
+			+ arc_scaled * _controller.wrister_follow_through_blade_lift
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
 	var clamp_delta_xz := Vector3(
 		local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
