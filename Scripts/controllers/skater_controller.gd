@@ -66,7 +66,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # reach limit. The IK consumes the smoothed target, so the blade visibly
 # inherits the cap. Tune up if normal aim feels laggy; tune down if wraps still
 # feel snappy.
-@export var max_blade_speed: float = 12.0
+@export var max_blade_speed: float = 60.0
 
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
