@@ -158,15 +158,19 @@ var show_one_timer_indicator: bool = false
 # spread — amplitude does most of the visual differentiation.
 @export var wrister_follow_through_time_min: float = 0.30
 @export var wrister_follow_through_time_max: float = 0.50
-# Torso-lead speed during wrister follow-through. ≈3× upper_body_return_speed
-# so the chest opens toward shot_dir before the blade finishes its sweep —
-# reads as "the body shot the puck" rather than the stick swinging on its own.
+# Torso lerp speed during wrister follow-through. Drives the un-coil through
+# to the over-rotation pose during the brief follow-through window.
 @export var wrister_torso_lead_speed: float = 18.0
-# Extra twist multiplier applied to upper_body_twist_ratio during follow-through,
-# scaled by charge_frac. The torso rotates PAST the wind-up position so there's
-# visible swing-through — without this, the wind-up and follow-through targets
-# are equal and the torso never actually rotates.
-@export var wrister_torso_over_rotate_extra: float = 0.6
+# Peak coil amount during WRISTER_AIM at zero charge. The torso targets full
+# coil at button press and un-coils toward square as charge accumulates —
+# drag direction = un-coil direction = the visible swing.
+@export var wrister_coil_max_deg: float = 35.0
+# Lerp speed for the WRISTER_AIM coil pose. ~120ms to reach 95% — fast enough
+# to feel like weight loading, slow enough to not snap on press.
+@export var wrister_aim_torso_speed: float = 25.0
+# Peak follow-through over-rotation past square at full charge. Pivot direction
+# is determined by which side the blade was on at press (forehand vs backhand).
+@export var wrister_follow_through_pivot_deg: float = 30.0
 # Peak forward pitch on release at full charge.
 @export var wrister_shot_lean_max_deg: float = 25.0
 # Decay rate of shot_lean_pitch (per second). Slow — the lean should persist
@@ -238,7 +242,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.apply_slapper_velocity_drag = _apply_slapper_velocity_drag
 	_cb.apply_block_movement = _apply_block_movement
 	_sm.setup(_cb, _aiming)
-	_pose.setup(skater, _sm, self)
+	_pose.setup(skater, _sm, self, _aiming)
 
 func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction: Vector3) -> void:
 	if not _is_host:
