@@ -72,14 +72,27 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 
-	# Solve IK — returns (hand, blade) in upper-body-local space. The IK config
-	# already carries the lean-corrected blade Y, so blade.y comes out of the
-	# solver consistent with stick_length (no post-override / stick stretching).
-	var ik: Dictionary = TopHandIK.solve(
-			_skater.shoulder.position,
-			desired_blade_xz,
-			blade_side_sign,
-			_ik_config(desired_blade_xz))
+	# Iterative IK to land the blade on world-space ice while preserving stick
+	# length. The lean correction depends on blade_local_z (forward extension),
+	# which depends on stick_horiz_at_rest, which depends on blade_y, which is
+	# what we're solving for — a fixed-point in two variables. Three passes
+	# bring the residual world-Y error below ~3mm at max reach + max lean.
+	#
+	# Naive approach (use desired_blade_xz from raw mouse) overshoots wildly
+	# when the mouse is past ROM: lean correction is computed for a Z the blade
+	# never actually reaches, blade ends up far above the ice. Using the SOLVED
+	# blade XZ from each pass converges to the right answer. The final IK pass
+	# returns hand+blade consistent with stick_length, so no post-override is
+	# needed (the converged blade_y already produces blade-on-ice in world).
+	var blade_y: float = blade_y_local()
+	var ik: Dictionary = {}
+	for i in 3:
+		ik = TopHandIK.solve(
+				_skater.shoulder.position,
+				desired_blade_xz,
+				blade_side_sign,
+				_ik_config(blade_y))
+		blade_y = blade_y_lean_corrected(ik.blade.x, ik.blade.z)
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
 
@@ -302,15 +315,10 @@ func stick_horiz() -> float:
 	return sqrt(maxf(sq, 0.0001))
 
 # ── Config Builders ───────────────────────────────────────────────────────────
-func _ik_config(desired_blade_xz: Vector2) -> TopHandIK.Config:
+func _ik_config(blade_y: float) -> TopHandIK.Config:
 	var cfg := TopHandIK.Config.new()
 	cfg.stick_length = _controller.stick_length
-	# Feed the lean-corrected blade Y so the IK solves the hand consistent with
-	# blade-on-ice in world space. Uses the desired XZ (mouse target before ROM
-	# clamp) — the lean correction is dominated by local_z (forward extension),
-	# which matches the desired position closely enough that residual error is
-	# millimeters even when the IK clamps the actual blade XZ to ROM.
-	cfg.blade_y = blade_y_lean_corrected(desired_blade_xz.x, desired_blade_xz.y)
+	cfg.blade_y = blade_y
 	cfg.hand_rest_y = _controller.hand_rest_y
 	cfg.hand_y_max = _controller.hand_y_max
 	cfg.rom_forehand_angle_max = deg_to_rad(_controller.rom_forehand_angle_max_deg)
