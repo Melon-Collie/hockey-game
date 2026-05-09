@@ -165,6 +165,9 @@ Playtester builds ship via GitHub Releases (`latest` tag). `deploy.yml` computes
 - **Type-safety drift.** Bare `Array` / `Dictionary` returns in AI domain modules (`role_slots`, `possession_state`, action-pair returns from `_compute_best_pass` / `_best_carry`), shot/charge rules (`ShotMechanics.release_wrister` returns Dict), and the replay engine path. Project rule says "strong typing everywhere"; fix when touching the file.
 - **Dead code.** `AIActionScoring.score_pass` is only called from tests; the runtime PASS scoring lives in `_compute_best_pass`. `TeamBrain._is_human_resolver` is stored on the constructor signature but never used. Either wire in or delete.
 
+**Visual bugs, fix when convenient:**
+- **Blade hovers above ice in replays.** Live gameplay runs the iterative IK in `SkaterIKCoordinator.apply_blade_from_mouse` which converges blade-Y to within ~3 mm of `blade_height` even at max reach + max lean. Replays / remote skaters set the blade position directly from network state (`RemoteController` line 204-205: `skater.set_blade_position(state.blade_position)`) — that local-Y was computed on the host and should reproduce the same world-Y when applied with the same upper-body rotation, but in practice the blade visibly hovers at max reach during replays. Likely a divergence between the host's upper-body rotation at capture time and the client/replay's interpolated rotation at apply time, or extrapolation drift in `BufferedStateInterpolator`.
+
 ## Planned Features
 
 **Tier 3 — larger scope:**
