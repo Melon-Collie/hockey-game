@@ -25,6 +25,11 @@ extends CharacterBody3D
 # mesh Z size in Scenes/Skater.tscn.
 @export var blade_length: float = 0.30
 @export var wall_squeeze_threshold: float = 0.3
+# How far the puck slides toward the forehand or backhand face of the blade
+# during carry, perpendicular to the stick shaft in the world horizontal
+# plane. Visual only — the blade contact point used for pickup, body checks,
+# and shot release is still the centered get_blade_contact_global().
+@export var carry_face_offset: float = 0.04
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. Sum must exceed
@@ -290,6 +295,35 @@ func get_blade_contact_global() -> Vector3:
 	if forward.length() < 0.001:
 		return heel_world
 	return heel_world + forward.normalized() * (blade_length * 0.5)
+
+
+# −1 (full backhand) … 0 (centered) … +1 (full forehand). Smooth function of
+# the blade's body-local X, normalized so ±0.5 m saturates. Public so future
+# work (e.g. replacing the wrister_start_blade_local_x heuristic for shot
+# bias) can consume it directly.
+func get_carry_forehand_factor() -> float:
+	var blade_side_sign: float = -1.0 if is_left_handed else 1.0
+	return clampf(blade.position.x / 0.5, -1.0, 1.0) * blade_side_sign
+
+
+# Carry-only contact point: get_blade_contact_global() shifted along the
+# blade's face normal toward the forehand or backhand face. Used by both the
+# host-authoritative carrier pin (puck.gd) and the local-carrier smoothing
+# (puck_controller.gd) so server and client agree on the offset.
+func get_blade_carry_position() -> Vector3:
+	var contact: Vector3 = get_blade_contact_global()
+	if top_hand == null:
+		return contact
+	var stick: Vector3 = contact - top_hand.global_position
+	stick.y = 0.0
+	if stick.length() < 0.001:
+		return contact
+	stick = stick.normalized()
+	# Face normal: 90° rotation around Y of the stick direction. Sign of the
+	# rotation is arbitrary — flip blade_side_sign in get_carry_forehand_factor
+	# if the offset reads on the wrong side visually.
+	var face_normal := Vector3(-stick.z, 0.0, stick.x)
+	return contact + face_normal * get_carry_forehand_factor() * carry_face_offset
 
 
 func get_prev_blade_contact_global() -> Vector3:
