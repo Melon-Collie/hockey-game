@@ -59,7 +59,6 @@ extends CharacterBody3D
 @onready var lower_body: Node3D = $MeshRoot/LowerBody
 @onready var upper_body: Node3D = $MeshRoot/UpperBody
 @onready var blade: Marker3D = $MeshRoot/UpperBody/Blade
-@onready var _blade_mesh: MeshInstance3D = $MeshRoot/UpperBody/Blade/MeshInstance3D
 @onready var shoulder: Marker3D = $MeshRoot/UpperBody/Shoulder
 @onready var stick_mesh: MeshInstance3D = $MeshRoot/UpperBody/StickMesh
 # Made public so SkaterUniformCoordinator can colour the head mesh.
@@ -308,16 +307,27 @@ func get_carry_forehand_factor() -> float:
 	return clampf(blade.position.x / 0.5, -1.0, 1.0) * blade_side_sign
 
 
-# Lateral offset applied to the blade mesh while carrying so the visible
-# blade renders next to the puck rather than centered on it. Cursor still
-# sits at the blade-contact point (= puck position); only the mesh moves.
-# `lateral` is in the marker's local X axis — after the per-tick look_at,
-# that's perpendicular to the stick in world horizontal (the face axis).
-func set_blade_visual_offset(lateral: float) -> void:
-	if _blade_mesh == null:
-		return
-	# Preserve the heel → mid-blade Z offset baked into the scene.
-	_blade_mesh.position = Vector3(lateral, 0.0, -blade_length * 0.5)
+# Where the puck pins while carrying. The blade marker is shifted to the
+# forehand/backhand side via the IK target (so the stick visibly attaches to
+# the offset blade). The puck sits at the un-offset position — adjacent to
+# the blade on the opposite face, where the cursor effectively is.
+# Pure derivation: contact − face_normal × forehand_factor × carry_blade_offset.
+# Returns get_blade_contact_global() (centered) when not carrying or when
+# the geometry is degenerate, so existing non-carry consumers are unaffected.
+func get_carry_target_global() -> Vector3:
+	var contact: Vector3 = get_blade_contact_global()
+	if top_hand == null:
+		return contact
+	var stick: Vector3 = contact - top_hand.global_position
+	stick.y = 0.0
+	if stick.length() < 0.001:
+		return contact
+	stick = stick.normalized()
+	# Face normal: 90° rotation around Y of the stick direction. Sign mirrors
+	# the IK-target offset applied in SkaterIKCoordinator.apply_blade_from_mouse,
+	# so subtraction here lands on the un-offset puck position.
+	var face_normal := Vector3(-stick.z, 0.0, stick.x)
+	return contact - face_normal * get_carry_forehand_factor() * carry_blade_offset
 
 
 func get_prev_blade_contact_global() -> Vector3:

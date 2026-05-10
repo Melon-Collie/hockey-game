@@ -269,10 +269,12 @@ func notify_local_puck_dropped() -> void:
 	_state_buffer.clear()
 
 func _apply_local_carrier_position(delta: float) -> void:
-	# Smooth puck toward the blade contact point each tick. The lerp damps rapid
-	# blade movements so the puck feels weighty during stickhandling rather than
-	# teleporting instantly to the blade tip.
-	var contact: Vector3 = _local_carrier_skater.get_blade_contact_global()
+	# Smooth puck toward the carry target each tick. The lerp damps rapid blade
+	# movements so the puck feels weighty during stickhandling rather than
+	# teleporting instantly to the blade tip. Carry target is the un-offset
+	# contact (= cursor position) so the puck stays under the cursor while the
+	# blade renders to the forehand or backhand side.
+	var contact: Vector3 = _local_carrier_skater.get_carry_target_global()
 	contact.y = puck.ice_height
 	puck.set_puck_position(puck.get_puck_position().lerp(contact, carry_smoothing_speed * delta))
 

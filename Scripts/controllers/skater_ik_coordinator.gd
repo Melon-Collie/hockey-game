@@ -72,6 +72,22 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 
+	# While carrying, offset the IK target perpendicular to the shoulder→target
+	# direction so the blade marker (and therefore the visible blade + stick
+	# attachment) sits on the forehand or backhand side of the cursor. The
+	# puck pins to Skater.get_carry_target_global() (contact − same offset),
+	# which lands at the cursor — visually: cursor = puck, blade beside it.
+	if _controller.has_puck:
+		var to_target: Vector2 = desired_blade_xz - Vector2(
+				_skater.shoulder.position.x, _skater.shoulder.position.z)
+		if to_target.length() > 0.001:
+			var stick_dir: Vector2 = to_target.normalized()
+			# 90° rotation in XZ: (X, Z) → (−Z, X). Sign matched in
+			# Skater.get_carry_target_global so subtraction inverts cleanly.
+			var face_normal_xz := Vector2(-stick_dir.y, stick_dir.x)
+			desired_blade_xz += face_normal_xz \
+					* _skater.get_carry_forehand_factor() * _skater.carry_blade_offset
+
 	# Iterative IK to land the blade on world-space ice while preserving stick
 	# length. The lean correction depends on blade_local_z (forward extension),
 	# which depends on stick_horiz_at_rest, which depends on blade_y, which is
@@ -147,15 +163,6 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 
 	_skater.set_top_hand_position(hand_local)
 	_skater.set_blade_position(wall_clamped)
-
-	# Carry-only blade-mesh offset: while carrying, shift the visible blade
-	# laterally so it renders next to the puck (which stays pinned to the
-	# centered blade contact) rather than centered on it. Reset to 0 when not
-	# carrying so the blade snaps back to its default centered visual.
-	var visual_offset: float = 0.0
-	if _controller.has_puck:
-		visual_offset = _skater.get_carry_forehand_factor() * _skater.carry_blade_offset
-	_skater.set_blade_visual_offset(visual_offset)
 
 	# Store the blade's bearing from the shoulder for follow-through.
 	var bearing: Vector3 = wall_clamped - _skater.shoulder.position

@@ -65,7 +65,6 @@ func apply_slapper_blade_position() -> void:
 		pos = _skater.upper_body_to_local(clamped_heel)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(pos)
-	_skater.set_blade_visual_offset(0.0)
 
 # ── Wrister Follow-Through ────────────────────────────────────────────────────
 func apply_wrister_follow_through() -> void:
@@ -91,7 +90,6 @@ func apply_wrister_follow_through() -> void:
 	local_target = net_local
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(local_target)
-	_skater.set_blade_visual_offset(0.0)
 
 # ── Slapper Follow-Through ────────────────────────────────────────────────────
 func apply_slapper_follow_through() -> void:
@@ -114,4 +112,3 @@ func apply_slapper_follow_through() -> void:
 		_skater.shoulder.position.z)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_pos)
-	_skater.set_blade_visual_offset(0.0)
