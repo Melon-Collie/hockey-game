@@ -148,6 +148,15 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	_skater.set_top_hand_position(hand_local)
 	_skater.set_blade_position(wall_clamped)
 
+	# Carry-only blade-mesh offset: while carrying, shift the visible blade
+	# laterally so it renders next to the puck (which stays pinned to the
+	# centered blade contact) rather than centered on it. Reset to 0 when not
+	# carrying so the blade snaps back to its default centered visual.
+	var visual_offset: float = 0.0
+	if _controller.has_puck:
+		visual_offset = _skater.get_carry_forehand_factor() * _skater.carry_blade_offset
+	_skater.set_blade_visual_offset(visual_offset)
+
 	# Store the blade's bearing from the shoulder for follow-through.
 	var bearing: Vector3 = wall_clamped - _skater.shoulder.position
 	if Vector2(bearing.x, bearing.z).length() > 0.001:

@@ -336,9 +336,8 @@ func _physics_process(delta: float) -> void:
 		_pending_elevation = false
 		_pending_elevation_vel = Vector3.ZERO
 		freeze = true
-		# Pin at the carry contact point — mid-blade plus the forehand/backhand
-		# face offset so the puck visibly slides between faces during stickhandling.
-		global_position = carrier.get_blade_carry_position()
+		# Pin at the blade contact point (mid-blade), not the heel (Marker3D).
+		global_position = carrier.get_blade_contact_global()
 		global_position.y = ice_height
 	elif _pending_elevation:
 		# Elevated release this frame: skip is_airborne() so linear_velocity.y
