@@ -303,6 +303,10 @@ func apply_replay_state(state: SkaterNetworkState) -> void:
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
+	# Re-derive lean from velocity + hand reach so the upper body leans before
+	# the blade marker is placed (host's lean-compensated blade_y needs the
+	# matching upper-body rotation to land at the ice in world space).
+	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
 	_ik.update_bottom_hand()
 	skater.update_stick_mesh()

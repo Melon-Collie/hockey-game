@@ -74,6 +74,9 @@ func apply_network_state(state: SkaterNetworkState, _host_ts: float) -> void:
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
+	# Re-derive lean from velocity + hand reach so the upper body leans before
+	# the blade is placed (lean isn't transmitted; receivers re-derive).
+	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
 	skater.update_arm_mesh()
 	skater.update_bottom_arm_mesh()
