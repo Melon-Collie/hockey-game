@@ -31,6 +31,11 @@ extends CharacterBody3D
 # face. Pure cosmetic — IK math, pickup distance, shot release all use the
 # centered blade contact.
 @export var carry_blade_offset: float = 0.05
+# Hysteresis distance (in upper-body-local X) the blade must travel past
+# center to flip carry side. Larger = more deliberate switches; smaller =
+# more responsive but jitters near center. While carrying, the side is
+# always ±1 — never centered.
+@export var carry_side_switch_threshold: float = 0.10
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. Sum must exceed
@@ -115,6 +120,9 @@ var _blade_area: Area3D = null
 var _slapper_zone_area: Area3D = null
 var _slapper_zone_sphere: SphereShape3D = null
 var _default_upper_body_y: float = 0.0
+# Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
+# Advanced by update_carry_side() each tick from the IK pipeline.
+var _carry_side: int = 0
 # Visual-only offset applied to MeshRoot each frame. Set by LocalController
 # during reconcile blending to ease the visible correction over a few ticks.
 # Physics body (CharacterBody3D) is always at the authoritative position.
@@ -298,13 +306,32 @@ func get_blade_contact_global() -> Vector3:
 	return heel_world + forward.normalized() * (blade_length * 0.5)
 
 
-# −1 (full backhand) … 0 (centered) … +1 (full forehand). Smooth function of
-# the blade's body-local X, normalized so ±0.5 m saturates. Public so future
-# work (e.g. replacing the wrister_start_blade_local_x heuristic for shot
-# bias) can consume it directly.
+# −1 (backhand) … +1 (forehand). Sticky: once the blade is on a side it
+# stays there until the blade crosses past `carry_side_switch_threshold` on
+# the opposite side. Returns 0 only when not currently carrying. Public so
+# future work (e.g. replacing the wrister_start_blade_local_x heuristic for
+# shot bias) can consume it directly.
 func get_carry_forehand_factor() -> float:
-	var blade_side_sign: float = -1.0 if is_left_handed else 1.0
-	return clampf(blade.position.x / 0.5, -1.0, 1.0) * blade_side_sign
+	return float(_carry_side)
+
+
+# Called once per tick from SkaterIKCoordinator.apply_blade_from_mouse —
+# advances the sticky carry-side state. Hysteresis prevents flip-flopping
+# near center; on first carry frame the side initializes from current blade
+# position (defaults to forehand if exactly centered).
+func update_carry_side(has_puck: bool) -> void:
+	if not has_puck:
+		_carry_side = 0
+		return
+	var handedness_sign: float = -1.0 if is_left_handed else 1.0
+	var blade_x_norm: float = blade.position.x * handedness_sign
+	if _carry_side == 0:
+		_carry_side = -1 if blade_x_norm < 0.0 else 1
+		return
+	if _carry_side > 0 and blade_x_norm < -carry_side_switch_threshold:
+		_carry_side = -1
+	elif _carry_side < 0 and blade_x_norm > carry_side_switch_threshold:
+		_carry_side = 1
 
 
 # Where the puck pins while carrying. The blade marker is shifted to the
