@@ -1,11 +1,5 @@
 extends Node
 
-# Sentinel team_id used to mark spectator slots end-to-end (lobby roster, slot
-# assignment RPCs, GameManager bookkeeping). A peer with team_id == this value
-# never spawns a local/remote skater — it just receives world-state broadcasts
-# and renders via SpectatorCamera.
-const SPECTATOR_TEAM_ID: int = -1
-
 # AI bots are tracked in PlayerRegistry alongside human peers but never
 # correspond to an ENet connection — synthesizing a peer_id from a high
 # range keeps PlayerRecord keys unique without colliding with either real
