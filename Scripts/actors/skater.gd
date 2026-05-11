@@ -40,6 +40,11 @@ extends CharacterBody3D
 # Higher = snappier flip, lower = visible swing through center. ~12/s ≈ 80 ms
 # to traverse 95% of the transition.
 @export var carry_side_lerp_speed: float = 12.0
+# Peak Y lift (world meters) applied to the blade during a forehand/backhand
+# flip — peaks when the smoothed factor is at 0 (mid-flip), falls to 0 when
+# fully on either side. Reads as the blade rising over the puck as it
+# switches sides, like a real stickhandle. Set to 0 to disable.
+@export var carry_transit_lift: float = 0.10
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. Sum must exceed

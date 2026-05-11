@@ -120,6 +120,20 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
 
+	# Carry transit lift: while carrying, raise the blade over the puck during
+	# a forehand/backhand flip. (1 − |smoothed|) peaks at 1 when the smoothed
+	# factor is mid-flip and falls to 0 when fully on either side. cos(p)*cos(r)
+	# divisor converts world-Y target into upper-body-local Y so the lift lands
+	# at the intended height in world space (matches the lean-correction math).
+	if _controller.has_puck and _skater.carry_transit_lift > 0.0:
+		var transit: float = 1.0 - absf(_skater.get_carry_forehand_factor())
+		if transit > 0.0001:
+			var lift_world: float = transit * _skater.carry_transit_lift
+			var cpcr: float = maxf(
+					cos(_skater.upper_body.rotation.x) * cos(_skater.upper_body.rotation.z),
+					0.01)
+			blade_local.y += lift_world / cpcr
+
 	# Wall clamp on the solved blade. Wall-pin auto-release (when carrying).
 	var intended_blade: Vector3 = blade_local
 	var wall_clamped: Vector3 = _skater.clamp_blade_to_walls(blade_local)
