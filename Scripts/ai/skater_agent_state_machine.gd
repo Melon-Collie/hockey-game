@@ -1459,7 +1459,10 @@ static func _angle_intercept_inside(target: Vector3, carrier_pos: Vector3) -> Ve
 
 func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
 	var dt: float = CHASE_MAX_LOOKAHEAD_S / float(CHASE_TRAJECTORY_STEPS)
-	var traj: Array[Vector3] = AITrajectory.predict(
+	# Use puck-physics-aware prediction (ice friction + board bounces).
+	# Constant-velocity over 1.5 s consistently overshot where a sliding
+	# puck actually ends up; the new model matches Jolt's resolution.
+	var traj: Array[Vector3] = AITrajectory.predict_puck(
 			puck_pos, puck_vel, CHASE_TRAJECTORY_STEPS, dt)
 	# Closing-rate-aware reach: bot's velocity component toward the
 	# candidate intercept boosts the effective chase speed (bot already
@@ -1471,6 +1474,12 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 	# wrong way can't actually reach — produces visible bad angles
 	# on slow-moving pucks.
 	var v_cap: float = AIActionScoring.SKATER_REF_SPEED_M_S * 0.5
+	# Track the previous step's "reach surplus" (eff_speed × t − dist).
+	# When it crosses zero between step i-1 and step i we have a
+	# bracket; linear-interp the actual intercept fraction within that
+	# step rather than always returning traj[i] (over-runs by up to dt).
+	var prev_surplus: float = -INF
+	var prev_pos: Vector3 = self_pos
 	for i: int in traj.size():
 		var t_step: float = (i + 1) * dt
 		var dx: float = traj[i].x - self_pos.x
@@ -1481,8 +1490,16 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 			var inv_d: float = 1.0 / dist
 			v_along = self_vel.x * dx * inv_d + self_vel.z * dz * inv_d
 		var effective_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S + clampf(v_along, -v_cap, v_cap)
-		if dist <= effective_speed * t_step:
+		var surplus: float = effective_speed * t_step - dist
+		if surplus >= 0.0:
+			if prev_surplus > -INF and prev_surplus < 0.0:
+				# Bracket found: surplus crossed zero between (i-1, i).
+				# Linear-interp the puck position for sub-step accuracy.
+				var frac: float = -prev_surplus / (surplus - prev_surplus)
+				return prev_pos.lerp(traj[i], frac)
 			return traj[i]
+		prev_surplus = surplus
+		prev_pos = traj[i]
 	# Puck is moving away faster than we can chase — aim at the last
 	# projected position so we at least head in the right direction.
 	return traj[traj.size() - 1] if traj.size() > 0 else puck_pos
