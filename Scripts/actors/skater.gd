@@ -30,12 +30,16 @@ extends CharacterBody3D
 # the visible blade renders just to one side of the puck on the appropriate
 # face. Pure cosmetic — IK math, pickup distance, shot release all use the
 # centered blade contact.
-@export var carry_blade_offset: float = 0.05
+@export var carry_blade_offset: float = 0.07
 # Hysteresis distance (in upper-body-local X) the blade must travel past
 # center to flip carry side. Larger = more deliberate switches; smaller =
 # more responsive but jitters near center. While carrying, the side is
 # always ±1 — never centered.
 @export var carry_side_switch_threshold: float = 0.10
+# How fast the rendered carry factor lerps toward the discrete ±1 side.
+# Higher = snappier flip, lower = visible swing through center. ~12/s ≈ 80 ms
+# to traverse 95% of the transition.
+@export var carry_side_lerp_speed: float = 12.0
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. Sum must exceed
@@ -123,6 +127,10 @@ var _default_upper_body_y: float = 0.0
 # Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
 # Advanced by update_carry_side() each tick from the IK pipeline.
 var _carry_side: int = 0
+# Smoothed rendered carry factor — lerps toward _carry_side at
+# carry_side_lerp_speed. This is what get_carry_forehand_factor() returns so
+# the visible flip animates through center instead of teleporting.
+var _carry_side_smoothed: float = 0.0
 # Visual-only offset applied to MeshRoot each frame. Set by LocalController
 # during reconcile blending to ease the visible correction over a few ticks.
 # Physics body (CharacterBody3D) is always at the authoritative position.
@@ -306,32 +314,35 @@ func get_blade_contact_global() -> Vector3:
 	return heel_world + forward.normalized() * (blade_length * 0.5)
 
 
-# −1 (backhand) … +1 (forehand). Sticky: once the blade is on a side it
-# stays there until the blade crosses past `carry_side_switch_threshold` on
-# the opposite side. Returns 0 only when not currently carrying. Public so
-# future work (e.g. replacing the wrister_start_blade_local_x heuristic for
-# shot bias) can consume it directly.
+# Smoothed rendered factor in [−1, +1]. Discrete _carry_side is sticky
+# (forehand/backhand never centered while carrying); this lerps toward it
+# so flips animate through center over carry_side_lerp_speed instead of
+# teleporting. Public so future work (e.g. replacing the
+# wrister_start_blade_local_x heuristic for shot bias) can consume it directly.
 func get_carry_forehand_factor() -> float:
-	return float(_carry_side)
+	return _carry_side_smoothed
 
 
 # Called once per tick from SkaterIKCoordinator.apply_blade_from_mouse —
-# advances the sticky carry-side state. Hysteresis prevents flip-flopping
-# near center; on first carry frame the side initializes from current blade
-# position (defaults to forehand if exactly centered).
-func update_carry_side(has_puck: bool) -> void:
+# advances the sticky carry-side state and lerps the rendered factor.
+# Hysteresis prevents flip-flopping near center; on first carry frame the
+# side initializes from current blade position (defaults to forehand if
+# exactly centered). On release the discrete target falls to 0, so the
+# smoothed factor eases the visible offset back to center over the lerp.
+func update_carry_side(has_puck: bool, delta: float) -> void:
 	if not has_puck:
 		_carry_side = 0
-		return
-	var handedness_sign: float = -1.0 if is_left_handed else 1.0
-	var blade_x_norm: float = blade.position.x * handedness_sign
-	if _carry_side == 0:
-		_carry_side = -1 if blade_x_norm < 0.0 else 1
-		return
-	if _carry_side > 0 and blade_x_norm < -carry_side_switch_threshold:
-		_carry_side = -1
-	elif _carry_side < 0 and blade_x_norm > carry_side_switch_threshold:
-		_carry_side = 1
+	else:
+		var handedness_sign: float = -1.0 if is_left_handed else 1.0
+		var blade_x_norm: float = blade.position.x * handedness_sign
+		if _carry_side == 0:
+			_carry_side = -1 if blade_x_norm < 0.0 else 1
+		elif _carry_side > 0 and blade_x_norm < -carry_side_switch_threshold:
+			_carry_side = -1
+		elif _carry_side < 0 and blade_x_norm > carry_side_switch_threshold:
+			_carry_side = 1
+	_carry_side_smoothed = lerpf(
+			_carry_side_smoothed, float(_carry_side), carry_side_lerp_speed * delta)
 
 
 # Where the puck pins while carrying. The blade marker is shifted to the

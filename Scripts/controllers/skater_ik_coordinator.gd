@@ -72,11 +72,13 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 
-	# Advance the sticky carry-side state before reading the forehand factor.
-	# When not carrying this resets to 0; when carrying it holds the current
-	# side and only flips when the blade crosses past carry_side_switch_threshold
-	# on the opposite side. Hysteresis prevents jitter near center; never centered.
-	_skater.update_carry_side(_controller.has_puck)
+	# Advance the sticky carry-side state and its smoothed factor before
+	# reading the forehand factor. When not carrying the discrete side resets
+	# to 0 and the smoothed factor lerps back to center; when carrying it
+	# holds the current side until the blade crosses past
+	# carry_side_switch_threshold on the opposite side, then flips and lerps
+	# through center over carry_side_lerp_speed.
+	_skater.update_carry_side(_controller.has_puck, delta)
 
 	# While carrying, offset the IK target perpendicular to the shoulder→target
 	# direction so the blade marker (and therefore the visible blade + stick
