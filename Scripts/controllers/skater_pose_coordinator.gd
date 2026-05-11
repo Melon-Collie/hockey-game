@@ -93,7 +93,7 @@ func snap_lean_to_state() -> void:
 			Vector2(_skater.top_hand.position.x, _skater.top_hand.position.z),
 			Vector2(_skater.shoulder.position.x, _skater.shoulder.position.z),
 			_controller.rom_backhand_reach_max, _controller.upper_body_lean_max_deg)
-	_skater.set_upper_body_lean(upper_body_lean + velocity_lean_x + shot_lean_pitch, velocity_lean_z)
+	_skater.set_upper_body_lean(upper_body_lean + velocity_lean_x, velocity_lean_z)
 	_skater.set_lower_body_lean(velocity_lean_x, velocity_lean_z)
 
 func apply_facing(input: InputState, delta: float) -> void:
