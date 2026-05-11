@@ -202,6 +202,10 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	# Top hand before blade so set_blade_position has the correct hand pivot.
 	skater.set_top_hand_position(state.top_hand_position)
+	# Re-derive lean from velocity + hand reach (not in network state) so the
+	# upper body is leaning correctly when the blade marker is placed —
+	# otherwise the host's lean-compensated blade_y lands above the ice.
+	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
 	skater.set_ghost(state.is_ghost)
 	skater.current_shot_state = state.shot_state

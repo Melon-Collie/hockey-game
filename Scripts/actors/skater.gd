@@ -25,6 +25,26 @@ extends CharacterBody3D
 # mesh Z size in Scenes/Skater.tscn.
 @export var blade_length: float = 0.30
 @export var wall_squeeze_threshold: float = 0.3
+# How far the blade mesh visually shifts perpendicular to the stick toward the
+# forehand or backhand face during carry. Player's cursor stays at the puck;
+# the visible blade renders just to one side of the puck on the appropriate
+# face. Pure cosmetic — IK math, pickup distance, shot release all use the
+# centered blade contact.
+@export var carry_blade_offset: float = 0.07
+# Hysteresis distance (in upper-body-local X) the blade must travel past
+# center to flip carry side. Larger = more deliberate switches; smaller =
+# more responsive but jitters near center. While carrying, the side is
+# always ±1 — never centered.
+@export var carry_side_switch_threshold: float = 0.10
+# How fast the rendered carry factor lerps toward the discrete ±1 side.
+# Higher = snappier flip, lower = visible swing through center. ~12/s ≈ 80 ms
+# to traverse 95% of the transition.
+@export var carry_side_lerp_speed: float = 12.0
+# Peak Y lift (world meters) applied to the blade during a forehand/backhand
+# flip — peaks when the smoothed factor is at 0 (mid-flip), falls to 0 when
+# fully on either side. Reads as the blade rising over the puck as it
+# switches sides, like a real stickhandle. Set to 0 to disable.
+@export var carry_transit_lift: float = 0.10
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. Sum must exceed
@@ -109,6 +129,13 @@ var _blade_area: Area3D = null
 var _slapper_zone_area: Area3D = null
 var _slapper_zone_sphere: SphereShape3D = null
 var _default_upper_body_y: float = 0.0
+# Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
+# Advanced by update_carry_side() each tick from the IK pipeline.
+var _carry_side: int = 0
+# Smoothed rendered carry factor — lerps toward _carry_side at
+# carry_side_lerp_speed. This is what get_carry_forehand_factor() returns so
+# the visible flip animates through center instead of teleporting.
+var _carry_side_smoothed: float = 0.0
 # Visual-only offset applied to MeshRoot each frame. Set by LocalController
 # during reconcile blending to ease the visible correction over a few ticks.
 # Physics body (CharacterBody3D) is always at the authoritative position.
@@ -290,6 +317,60 @@ func get_blade_contact_global() -> Vector3:
 	if forward.length() < 0.001:
 		return heel_world
 	return heel_world + forward.normalized() * (blade_length * 0.5)
+
+
+# Smoothed rendered factor in [−1, +1]. Discrete _carry_side is sticky
+# (forehand/backhand never centered while carrying); this lerps toward it
+# so flips animate through center over carry_side_lerp_speed instead of
+# teleporting. Public so future work (e.g. replacing the
+# wrister_start_blade_local_x heuristic for shot bias) can consume it directly.
+func get_carry_forehand_factor() -> float:
+	return _carry_side_smoothed
+
+
+# Called once per tick from SkaterIKCoordinator.apply_blade_from_mouse —
+# advances the sticky carry-side state and lerps the rendered factor.
+# Hysteresis prevents flip-flopping near center; on first carry frame the
+# side initializes from current blade position (defaults to forehand if
+# exactly centered). On release the discrete target falls to 0, so the
+# smoothed factor eases the visible offset back to center over the lerp.
+func update_carry_side(has_puck: bool, delta: float) -> void:
+	if not has_puck:
+		_carry_side = 0
+	else:
+		var handedness_sign: float = -1.0 if is_left_handed else 1.0
+		var blade_x_norm: float = blade.position.x * handedness_sign
+		if _carry_side == 0:
+			_carry_side = -1 if blade_x_norm < 0.0 else 1
+		elif _carry_side > 0 and blade_x_norm < -carry_side_switch_threshold:
+			_carry_side = -1
+		elif _carry_side < 0 and blade_x_norm > carry_side_switch_threshold:
+			_carry_side = 1
+	_carry_side_smoothed = lerpf(
+			_carry_side_smoothed, float(_carry_side), carry_side_lerp_speed * delta)
+
+
+# Where the puck pins while carrying. The blade marker is shifted to the
+# forehand/backhand side via the IK target (so the stick visibly attaches to
+# the offset blade). The puck sits at the un-offset position — adjacent to
+# the blade on the opposite face, where the cursor effectively is.
+# Pure derivation: contact − face_normal × forehand_factor × carry_blade_offset.
+# Returns get_blade_contact_global() (centered) when not carrying or when
+# the geometry is degenerate, so existing non-carry consumers are unaffected.
+func get_carry_target_global() -> Vector3:
+	var contact: Vector3 = get_blade_contact_global()
+	if top_hand == null:
+		return contact
+	var stick: Vector3 = contact - top_hand.global_position
+	stick.y = 0.0
+	if stick.length() < 0.001:
+		return contact
+	stick = stick.normalized()
+	# Face normal: 90° rotation around Y of the stick direction. Sign mirrors
+	# the IK-target offset applied in SkaterIKCoordinator.apply_blade_from_mouse,
+	# so subtraction here lands on the un-offset puck position.
+	var face_normal := Vector3(-stick.z, 0.0, stick.x)
+	return contact - face_normal * get_carry_forehand_factor() * carry_blade_offset
 
 
 func get_prev_blade_contact_global() -> Vector3:

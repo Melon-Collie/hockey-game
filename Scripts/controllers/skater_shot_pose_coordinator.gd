@@ -36,11 +36,13 @@ func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
 func apply_slapper_blade_position() -> void:
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 	var wind_up_t: float = clampf(_aiming.slapper_charge_timer / _controller.slapper_wind_up_time, 0.0, 1.0)
-	var current_blade_y: float = lerpf(_ik.blade_y_local(), _controller.slapper_wind_up_height, wind_up_t)
-	var pos := Vector3(
-			_skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x,
-			current_blade_y,
-			_skater.shoulder.position.z + _controller.slapper_blade_z)
+	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x
+	var blade_z: float = _skater.shoulder.position.z + _controller.slapper_blade_z
+	var current_blade_y: float = lerpf(
+			_ik.blade_y_lean_corrected(blade_x, blade_z),
+			_controller.slapper_wind_up_height,
+			wind_up_t)
+	var pos := Vector3(blade_x, current_blade_y, blade_z)
 	pos = _skater.clamp_blade_to_walls(pos)
 	var blade_world: Vector3 = _skater.upper_body_to_global(pos)
 	var clamped_heel: Vector3 = blade_world
@@ -73,7 +75,8 @@ func apply_wrister_follow_through() -> void:
 	var hand_pos := _skater.shoulder.position
 	hand_pos.y = _controller.hand_rest_y + arc * _controller.wrister_follow_through_hand_y
 	var intended_target: Vector3 = hand_pos + local_dir * stick_horiz
-	intended_target.y = _ik.blade_y_local() + arc * _controller.wrister_follow_through_blade_lift
+	intended_target.y = _ik.blade_y_lean_corrected(intended_target.x, intended_target.z) \
+			+ arc * _controller.wrister_follow_through_blade_lift
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
 	var clamp_delta_xz := Vector3(
 		local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
@@ -95,10 +98,12 @@ func apply_slapper_follow_through() -> void:
 	var shot_xz := Vector2(_sm.shot_dir.x, _sm.shot_dir.z)
 	if shot_xz.length() > 0.001:
 		shot_xz = shot_xz.normalized()
+	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x + shot_xz.x * t * _controller.slapper_follow_through_arc_dist
+	var blade_z: float = _skater.shoulder.position.z + _controller.slapper_blade_z + shot_xz.y * t * _controller.slapper_follow_through_arc_dist
 	var blade_pos := Vector3(
-		_skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x + shot_xz.x * t * _controller.slapper_follow_through_arc_dist,
-		lerpf(_controller.slapper_wind_up_height, _ik.blade_y_local(), smoothstep(0.0, 1.0, t)),
-		_skater.shoulder.position.z + _controller.slapper_blade_z + shot_xz.y * t * _controller.slapper_follow_through_arc_dist)
+		blade_x,
+		lerpf(_controller.slapper_wind_up_height, _ik.blade_y_lean_corrected(blade_x, blade_z), smoothstep(0.0, 1.0, t)),
+		blade_z)
 	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
 	blade_pos = _skater.upper_body_to_local(_ik.clamp_blade_from_net(_skater.upper_body_to_global(blade_pos)))
 	var hand_pos := Vector3(

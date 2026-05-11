@@ -336,8 +336,11 @@ func _physics_process(delta: float) -> void:
 		_pending_elevation = false
 		_pending_elevation_vel = Vector3.ZERO
 		freeze = true
-		# Pin at the blade contact point (mid-blade), not the heel (Marker3D).
-		global_position = carrier.get_blade_contact_global()
+		# Pin at the carry target — same as blade contact when blade is
+		# centered, but inverse-offset from the blade's actual position when
+		# the IK shifted the marker for forehand/backhand carry. Result: puck
+		# stays at the cursor while the blade renders to one side.
+		global_position = carrier.get_carry_target_global()
 		global_position.y = ice_height
 	elif _pending_elevation:
 		# Elevated release this frame: skip is_airborne() so linear_velocity.y
