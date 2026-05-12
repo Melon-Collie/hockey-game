@@ -3,6 +3,27 @@ class_name AIActionScoring
 # Pure-function utility scoring for on-puck actions. Each score is a
 # multiplicative composition of factors in [0, 1].
 #
+# ── Design intent: heuristic xG ──────────────────────────────────────────────
+# `score_shoot` is a hand-coded approximation of expected goals (xG) — the
+# probability that a given shot becomes a goal given its geometry and the
+# defensive context. It is xG-SHAPED (peak in the slot, drops with
+# distance / angle / coverage / pressure / lane traffic) but NOT magnitude-
+# calibrated against real-world data: a clean slot wrister scores ~0.7
+# here; the real-world xG would be closer to 0.30. Treat the outputs as
+# RELATIVE shot quality, not actual goal probability.
+#
+# Everything else cascades from xG-shape:
+#   - `score_pass` = lane-clear × `score_shoot(receiver)` — a pass is
+#     only valuable if the receiver has a higher-quality shot than us.
+#   - `score_at(pos)` = max(`score_shoot(pos)`, carry-to-slot) — used by
+#     the carrier's CARRY candidates: a position is good if it offers a
+#     better future shot, OR it brings us toward a position that does.
+#
+# When tuning constants, ask "would this change make the shot quality
+# rank ordering match a human's read of those scenarios?", not "does
+# this number feel right in isolation". A learned xG model (baked grid
+# from playtest data) is a future replacement for `score_shoot`.
+#
 # Two leaf scorers (score_shoot, score_pass) plus a recursive depth-2
 # score_at(pos) defined in the SM. Top-level options compete uniformly:
 #
