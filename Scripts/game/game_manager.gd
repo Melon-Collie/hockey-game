@@ -1071,7 +1071,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 			_on_one_timer_release_requested.bind(record.skater))
 	var pid: int = record.peer_id
 	record.skater.body_checked_player.connect(
-		func(v: Skater, _f: float, _d: Vector3) -> void: _on_hit_landed(pid, v)
+		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
 	)
 	record.skater.body_checked_player.connect(
 		func(_v: Skater, _f: float, _d: Vector3) -> void:
@@ -1571,17 +1571,29 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 # ── Hit tracking ─────────────────────────────────────────────────────────────
 const _HIT_CLAIM_MAX_RANGE: float = 2.0
 
-func _on_hit_landed(hitter_peer_id: int, victim: Skater) -> void:
-	if NetworkManager.is_host:
-		_hit_tracker.on_hit(hitter_peer_id, _registry.resolve_peer_id(victim), _registry.resolve_team_id(victim))
-		return
-	# Client: local skater is the only one whose physics fires body_checked_player.
-	# Send a lag-compensated claim to the host for crediting.
-	# Throttle to once per HIT_COOLDOWN_S — body_checked_player fires every physics
-	# tick during sustained contact (240 Hz), and flooding the host with RPCs causes jitter.
+func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
 	var victim_peer_id: int = _registry.resolve_peer_id(victim)
 	if victim_peer_id == -1:
 		return
+	if NetworkManager.is_host:
+		var puck_carrier: int = puck_controller.get_carrier_peer_id()
+		var attacker_has_puck: bool = (puck_carrier == hitter_peer_id)
+		var victim_relevant: bool = HitRules.is_victim_puck_relevant(
+				victim_peer_id, puck_carrier, victim.global_position, puck.global_position)
+		if not HitRules.is_valid_hit(impulse_magnitude, attacker_has_puck, victim_relevant):
+			return
+		_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, _registry.resolve_team_id(victim))
+		return
+	# Client: local skater is the only one whose physics fires body_checked_player.
+	# Pre-filter on impulse and local puck state so we don't spam the host with
+	# claims for trivial bumps or while the local player is carrying the puck.
+	# The host re-validates all gates from rewound snapshots on receipt.
+	if impulse_magnitude < HitRules.MIN_HIT_IMPULSE:
+		return
+	if puck_controller.get_carrier_peer_id() == hitter_peer_id:
+		return
+	# Throttle to once per HIT_COOLDOWN_S — body_checked_player fires every physics
+	# tick during sustained contact (240 Hz), and flooding the host with RPCs causes jitter.
 	var key: String = "%d:%d" % [hitter_peer_id, victim_peer_id]
 	var now: float = Time.get_ticks_msec() / 1000.0
 	if _last_hit_claim_sent.get(key, 0.0) + HitTracker.HIT_COOLDOWN_S > now:
@@ -1613,6 +1625,26 @@ func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_times
 	if hitter_snap == null or victim_snap == null:
 		return
 	if hitter_snap.position.distance_to(victim_snap.position) > _HIT_CLAIM_MAX_RANGE:
+		return
+	var puck_snap: PuckNetworkState = snapshot.puck_state
+	if puck_snap == null:
+		return
+	# Re-derive impulse from rewound velocities along the hitter→victim normal.
+	# This both validates the closing speed and avoids trusting a client-supplied
+	# impulse over the wire. Skater weight is uniform (1.0) so impulse == approach.
+	var to_victim: Vector3 = victim_snap.position - hitter_snap.position
+	to_victim.y = 0.0
+	if to_victim.length_squared() < 0.0001:
+		return
+	var normal: Vector3 = to_victim.normalized()
+	var rel_vel: Vector3 = hitter_snap.velocity - victim_snap.velocity
+	rel_vel.y = 0.0
+	var impulse: float = rel_vel.dot(normal)
+	var attacker_has_puck: bool = (puck_snap.carrier_peer_id == hitter_peer_id)
+	var victim_relevant: bool = HitRules.is_victim_puck_relevant(
+			victim_peer_id, puck_snap.carrier_peer_id,
+			victim_snap.position, puck_snap.position)
+	if not HitRules.is_valid_hit(impulse, attacker_has_puck, victim_relevant):
 		return
 	_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, victim_rec.team.team_id)
 
