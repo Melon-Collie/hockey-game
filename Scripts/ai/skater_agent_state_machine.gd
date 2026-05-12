@@ -828,15 +828,20 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
 		_intended_action = new_intent
 
-	# Steering: drift toward the carry destination when actually
-	# carrying; HOLD POSITION when pre-aiming a fire action. The
-	# previous behavior kept skating forward during pre-aim, which
-	# combined with the wrister/slapper charge windows could drift
-	# the bot 2–4 m closer to the net before the press fired —
-	# they'd commit to a shot from one spot and release from
-	# another. Hold lets the press happen from the spot the bot
-	# decided on.
-	if _intended_action == State.CARRY:
+	# Steering depends on which action is locked.
+	#
+	# CARRY: drift toward the carry destination.
+	#
+	# SHOOT_PRESSED (wrister): KEEP DRIVING toward the carry
+	# destination. Rush wristers are taken on the move; the carrier
+	# scorer's release-pos projection assumes constant velocity, so
+	# the bot must actually keep moving for the release to land at
+	# the scored spot. Otherwise the projection over-predicts forward
+	# motion vs. a braking bot and shots release ~1 m too far out.
+	#
+	# SLAPPER_PRESSED / PASS_PRESSED: brake. Slappers need stability
+	# for the wind-up; pass leads aim from a held spot.
+	if _intended_action == State.CARRY or _intended_action == State.SHOOT_PRESSED:
 		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
 	else:
 		# Fire intent locked, pre-aiming. Brake actively so the bot
@@ -983,7 +988,12 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 		return
 
-	_apply_brake_steering(input, snapshot, self_pos)
+	# Keep driving toward the carry destination during the wrister
+	# charge — rush wristers are taken on the move. The carrier
+	# scorer's release-pos projection uses constant velocity, so
+	# braking here would land the puck ~1 m further out than the
+	# scored spot.
+	_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
 	# Elevation flag based on decision at entry. Sticky in
 	# SkaterController, so setting one direction explicitly each tick
 	# normalizes it regardless of the last shot.
