@@ -102,6 +102,27 @@ const GOALIE_MAX_LATERAL_SPEED_MPS: float = 5.0
 # just picks an aim point past the goalie for the segment check.
 const GOALIE_SHADOW_HALF_M: float = 0.3
 
+# Goalie pressure zone — narrow rectangle in front of the goalie's
+# CURRENT (squared-to-puck) position. Penalizes score_shoot when the
+# shooter sits inside it. Models the hockey intuition that shooting
+# from where the goalie is currently set up is hard; extending the
+# goalie laterally with a pass, or backing off the line, creates a
+# better chance.
+#
+# Anchored on the goalie's CURRENT position (not the predicted-at-
+# release one) so a back-door receiver — off-axis from the carrier's
+# lane, which is what the goalie is currently squared to — sits
+# outside the zone and isn't penalized. A carrier driving on-axis
+# toward net is in the same goalie's pressure line → inside zone.
+#
+# Half-width 1 m × depth 3.5 m: covers roughly stick-reach laterally
+# and the close-shot range in depth. Slot (5 m from goal ≈ 4.35 m
+# from goalie) sits just outside the depth, so slot shots aren't
+# penalized; only "drove past slot" carries land in the zone.
+const GOALIE_ZONE_HALF_WIDTH_M: float = 1.0
+const GOALIE_ZONE_DEPTH_M: float = 3.5
+const GOALIE_ZONE_MAX_PENALTY: float = 0.8
+
 # Lane-clear: an opponent within this perpendicular distance of the
 # puck-flight segment can intercept. Roughly stick-blade reach of a
 # lane defender. Raise toward 2.0 if passes still get picked off
@@ -203,7 +224,8 @@ static func score_shoot(
 		attacking_goal: Vector3,
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
-		opponents: Array[Vector3]) -> float:
+		opponents: Array[Vector3],
+		goalie_current_pos: Vector3 = Vector3.INF) -> float:
 	# Hard gate: shooter past (or on) the attacking goal line can't
 	# shoot in — wraparound territory, returns 0 immediately.
 	var net_normal_z: float = -signf(attacking_goal.z)
@@ -269,7 +291,36 @@ static func score_shoot(
 	# the net.
 	var pressure_factor: float = 1.0 - _pressure(shooter, opponents, attacking_goal - shooter)
 
-	return shot_quality * lane * pressure_factor
+	# Goalie pressure zone — when the caller provides the goalie's
+	# CURRENT position (squared to the puck holder), penalize shots
+	# from inside the goalie's narrow forward zone. Default sentinel
+	# (Vector3.INF) skips this for backward compat.
+	var goalie_zone_factor: float = 1.0
+	if goalie_current_pos.is_finite():
+		goalie_zone_factor = 1.0 - goalie_zone_penalty(shooter, goalie_current_pos)
+
+	return shot_quality * lane * pressure_factor * goalie_zone_factor
+
+
+# Penalty in [0, GOALIE_ZONE_MAX_PENALTY] for a shooter sitting
+# inside the goalie's pressure zone — narrow rectangle anchored on
+# the goalie's CURRENT position, extending toward mid-ice. 0 outside
+# the zone; peaks at the goalie's own position; ramps to 0 at the
+# zone edges. Callers multiply (1 - this) into score_shoot.
+static func goalie_zone_penalty(shooter: Vector3,
+		goalie_current_pos: Vector3) -> float:
+	# Forward direction from goalie toward mid-ice (away from goal
+	# line). For Team 0 defending +Z, goalie at +z, forward is -Z.
+	var forward_sign: float = -signf(goalie_current_pos.z)
+	var forward_component: float = (shooter.z - goalie_current_pos.z) * forward_sign
+	if forward_component <= 0.0 or forward_component >= GOALIE_ZONE_DEPTH_M:
+		return 0.0
+	var lateral: float = absf(shooter.x - goalie_current_pos.x)
+	if lateral >= GOALIE_ZONE_HALF_WIDTH_M:
+		return 0.0
+	var depth_factor: float = 1.0 - forward_component / GOALIE_ZONE_DEPTH_M
+	var lateral_factor: float = 1.0 - lateral / GOALIE_ZONE_HALF_WIDTH_M
+	return GOALIE_ZONE_MAX_PENALTY * depth_factor * lateral_factor
 
 
 # Predicts the goalie's position at a future moment (shot release).
@@ -336,7 +387,8 @@ static func score_pass(
 		attacking_goal: Vector3,
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
-		opponents: Array[Vector3]) -> float:
+		opponents: Array[Vector3],
+		goalie_current_pos: Vector3 = Vector3.INF) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
@@ -347,8 +399,14 @@ static func score_pass(
 	# Receiver's value as a shooter from where they are. Caller is
 	# responsible for predicting the goalie at the receiver's release
 	# time (flight + receiver wrister charge) — see predict_goalie_pos.
+	# goalie_current_pos threads through so the goalie pressure zone
+	# (anchored on the goalie's CURRENT position, squared to the
+	# carrier/puck holder) applies correctly for back-door receivers:
+	# they're off-axis from the carrier's lane → outside zone → no
+	# penalty, preserving back-door as a strong pass option.
 	var receiver_shot: float = score_shoot(
-			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents)
+			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
+			goalie_current_pos)
 	return lane * receiver_shot
 
 

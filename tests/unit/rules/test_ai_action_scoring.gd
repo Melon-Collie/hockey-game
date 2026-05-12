@@ -355,6 +355,81 @@ func test_shot_quality_60deg_goalie_squared() -> void:
 	assert_almost_eq(s, 0.18, 0.05, "half-wall 60° vs squared goalie ≈ 0.18")
 
 
+# ── Goalie pressure zone ────────────────────────────────────────────────────
+# Optional goalie_current_pos parameter on score_shoot / score_pass.
+# When supplied, shots from inside a narrow rectangle in front of the
+# goalie's CURRENT position are penalised. Default (Vector3.INF)
+# bypasses — every test above relies on that default.
+
+func test_goalie_zone_penalises_carrier_drive_in() -> void:
+	# Carrier driving on-axis to z=24 (2m from goalie at z=26, well
+	# inside zone depth 3.5m). Same scenario without the zone scores
+	# higher; with the zone the shot is significantly penalised.
+	var shooter := Vector3(0.0, 0.0, 24.0)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var no_zone: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+	var with_zone: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], goalie)
+	assert_lt(with_zone, no_zone * 0.75,
+			"on-axis 2m-from-goalie shot should be heavily penalised; got %f vs %f" % [with_zone, no_zone])
+
+
+func test_goalie_zone_preserves_slot_shot() -> void:
+	# Slot shot — 5m from goal = 4.35m from goalie at z=26. That
+	# distance is past the zone depth (3.5m), so the slot shot is
+	# NOT penalised by the goalie zone.
+	var shooter := Vector3(0.0, 0.0, 21.65)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var no_zone: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+	var with_zone: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], goalie)
+	assert_almost_eq(with_zone, no_zone, 0.001,
+			"slot shot sits outside goalie zone depth; should be unaffected")
+
+
+func test_goalie_zone_preserves_backdoor_receiver() -> void:
+	# Back-door receiver close to net but laterally offset from the
+	# goalie's current position. Goalie is squared to the CARRIER (at
+	# +X), so back-door (-X side) is off-axis. score_pass(carrier,
+	# back-door) with goalie_current passed should NOT penalise the
+	# receiver — back-door remains a strong pass option.
+	var carrier := Vector3(3.0, 0.0, 21.0)
+	var receiver := Vector3(-3.0, 0.0, 25.0)  # 1.65m from net, 3m off-axis
+	var goalie_current := Vector3(2.5, 0.0, 26.0)  # squared to carrier side
+	# Predicted goalie at receiver's release (goalie tried to slide
+	# but only made it partway).
+	var goalie_predicted := Vector3(-0.5, 0.0, 26.0)
+	var no_zone: float = AIActionScoring.score_pass(
+			carrier, receiver, GOAL, goalie_predicted, NET_HW, [])
+	var with_zone: float = AIActionScoring.score_pass(
+			carrier, receiver, GOAL, goalie_predicted, NET_HW, [], goalie_current)
+	# Receiver at lateral offset 3m relative to goalie_current.x = 2.5
+	# means receiver-goalie lateral dx = 5.5m, well past the 1m zone
+	# half-width. No penalty.
+	assert_almost_eq(with_zone, no_zone, 0.001,
+			"back-door receiver off-axis from current goalie should not be penalised")
+
+
+func test_goalie_zone_default_is_no_op() -> void:
+	# Shooter sits inside the zone (on-axis, 3m forward of goalie).
+	# Without explicitly passing goalie_current_pos, the default
+	# sentinel (Vector3.INF) bypasses the zone calc and produces the
+	# same score as a call with the sentinel passed explicitly.
+	var shooter := Vector3(0.0, 0.0, 23.0)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var default_call: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+	var explicit_inf: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], Vector3.INF)
+	assert_eq(default_call, explicit_inf,
+			"default param must be Vector3.INF and bypass the zone calc")
+	# And confirm the zone actually penalises when the same shooter
+	# IS supplied as goalie_current — sanity that the new path lights up.
+	var with_zone: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], goalie)
+	assert_lt(with_zone, default_call,
+			"shooter inside zone with goalie supplied should score lower")
+
+
 # ── position_potential ───────────────────────────────────────────────────────
 # position_potential models "value of being at this position" — used
 # only when the evaluator is OUTSIDE shooting range (the regime rule
