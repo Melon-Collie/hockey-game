@@ -222,7 +222,7 @@ const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
 # Including pre-aim in the projection means the scored release-
 # pos matches reality even when the bot is moving — no brake-
 # during-pre-aim workaround needed to keep projection honest.
-const BOT_PRE_AIM_BUFFER_S: float = 0.05
+const BOT_PRE_AIM_BUFFER_S: float = 0.01
 const BOT_WRISTER_LOOKAHEAD_S: float = (
 		float(BOT_WRISTER_CHARGE_TICKS) / 240.0 + BOT_PRE_AIM_BUFFER_S)
 # Forehand wind-up offset for the visible blade sweep. mouse_world_pos
@@ -362,7 +362,7 @@ var _shot_is_elevated: bool = false
 # Debug: print one line at SHOOT commit and one line at wrister
 # release so the user can compare what the projection promised vs.
 # where the puck actually fired from. Toggle off for shipping.
-const SHOW_COMMIT_DEBUG: bool = true
+const SHOW_COMMIT_DEBUG: bool = false
 var _commit_pos: Vector3 = Vector3.ZERO
 var _commit_vel: Vector3 = Vector3.ZERO
 var _commit_projected_release: Vector3 = Vector3.ZERO
