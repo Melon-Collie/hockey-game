@@ -921,6 +921,25 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		var aim_dist: float = _mouse_pos.distance_to(mouse_target)
 		var aim_converged: bool = aim_dist < AIM_CONVERGED_DIST_M
 		var facing_aligned: bool = _is_facing_aligned_for_aim(snapshot, self_pos, mouse_target)
+		# Debug: print convergence status on first tick after commit
+		# so we can see why pre-aim is or isn't converging.
+		if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED \
+				and _intent_wait_ticks == 0:
+			var fdx: float = mouse_target.x - self_pos.x
+			var fdz: float = mouse_target.z - self_pos.z
+			var flen: float = sqrt(fdx * fdx + fdz * fdz)
+			var fcos: float = 0.0
+			if flen > 0.0001 and self_state != null:
+				var inv: float = 1.0 / flen
+				fcos = self_state.facing.x * fdx * inv + self_state.facing.y * fdz * inv
+			print("[bot %d] PRE-AIM tick0 mouse_pos=(%.2f,%.2f) target=(%.2f,%.2f) aim_dist=%.3f converged=%s facing=(%.2f,%.2f) cos=%.3f aligned=%s" % [
+					_peer_id,
+					_mouse_pos.x, _mouse_pos.z,
+					mouse_target.x, mouse_target.z,
+					aim_dist, str(aim_converged),
+					self_state.facing.x if self_state != null else 0.0,
+					self_state.facing.y if self_state != null else 0.0,
+					fcos, str(facing_aligned)])
 		if (aim_converged and facing_aligned) or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
 			# Capture pre-aim duration for the upcoming wrister release log.
 			if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED:
