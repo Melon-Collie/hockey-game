@@ -220,6 +220,24 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 const BOT_WRISTER_WIND_UP_BACK_M: float = 0.6
 const BOT_WRISTER_WIND_UP_SIDE_M: float = 0.4
 
+# Release-point forward distance for the wrister swing. The lerp's
+# FORWARD endpoint sits this far ahead of the bot — not at the actual
+# far aim point — so the lateral wind-up offset stays geometrically
+# meaningful at release (a 0.4 m side offset at 30 m is 0.76°,
+# invisible; at 1.5 m it's 15°, a clear forehand pose). Aim direction
+# is geometrically compensated below so the resulting shot still
+# lands on clean_aim despite the lateral offset.
+const BOT_WRISTER_RELEASE_FORWARD_M: float = 1.5
+
+# Side-selection for wrister wind-up — defender within this radius
+# AND clearly on the forehand side flips the wind-up to backhand. The
+# 1.5 m radius matches stick-reach for a poke check. The lateral
+# threshold ensures we only flip when the defender is laterally on
+# the forehand side, not directly in front (where the forehand still
+# clears their stick).
+const BOT_FOREHAND_STICK_REACH_M: float = 1.5
+const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
+
 # ── Unified mouse motion ─────────────────────────────────────────────────────
 # Every state's `input.mouse_world_pos` goes through `_step_mouse_toward`,
 # which simulates a real player's mouse motion with a max speed and
@@ -913,9 +931,9 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	if _shoot_charge_tick == 0:
 		debug_last_decision = "SHOOT"
 		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
-		_shoot_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
+		var wobbled_aim: Vector3 = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
 		var dir_xz: Vector3 = Vector3(
-				_shoot_aim_target.x - self_pos.x, 0.0, _shoot_aim_target.z - self_pos.z)
+				wobbled_aim.x - self_pos.x, 0.0, wobbled_aim.z - self_pos.z)
 		var aim_dir: Vector3
 		if dir_xz.length_squared() > 0.0001:
 			aim_dir = dir_xz.normalized()
@@ -927,11 +945,55 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		var perp_sign: float = -1.0 if _is_left_handed else 1.0
 		var forehand_perp: Vector3 = Vector3(
 				aim_dir.z * perp_sign, 0.0, -aim_dir.x * perp_sign)
+
+		# Pick wind-up side: forehand by default. Flip to backhand if a
+		# defender is within stick reach AND clearly on the forehand
+		# side — they'd poke the puck off a forehand wind-up. Locked
+		# for the charge so no mid-swing oscillation.
+		var shoot_side_sign: float = 1.0
+		for opp_pos: Vector3 in _scratch_opponents_shoot:
+			var rel_x: float = opp_pos.x - self_pos.x
+			var rel_z: float = opp_pos.z - self_pos.z
+			var rel_len_sq: float = rel_x * rel_x + rel_z * rel_z
+			if rel_len_sq > BOT_FOREHAND_STICK_REACH_M * BOT_FOREHAND_STICK_REACH_M:
+				continue
+			var forehand_dot: float = rel_x * forehand_perp.x + rel_z * forehand_perp.z
+			if forehand_dot > BOT_FOREHAND_LATERAL_THRESHOLD_M:
+				shoot_side_sign = -1.0
+				break
+		var shoot_perp: Vector3 = forehand_perp * shoot_side_sign
+
+		# Geometric forehand bias the lateral offset introduces at
+		# release: shot direction is shifted toward shoot_perp by
+		# atan2(SIDE, FORWARD). Compensate by rotating the aim
+		# direction the OPPOSITE way by the same angle so the
+		# resulting (mouse − blade) at release still points at the
+		# original clean_aim. Sign convention: my 2D rotation matrix
+		# in XZ uses positive r = clockwise from a top-down view (the
+		# opposite of Godot's +Y axis rotation). Combined with the
+		# perp_sign convention from forehand_perp, the rotation
+		# direction that pulls aim AWAY from shoot_perp is:
+		var bias_rad: float = atan2(BOT_WRISTER_WIND_UP_SIDE_M, BOT_WRISTER_RELEASE_FORWARD_M)
+		var rot: float = bias_rad * shoot_side_sign * perp_sign
+		var cos_r: float = cos(rot)
+		var sin_r: float = sin(rot)
+		var comp_aim_dir: Vector3 = Vector3(
+				aim_dir.x * cos_r - aim_dir.z * sin_r,
+				0.0,
+				aim_dir.x * sin_r + aim_dir.z * cos_r)
+		# Aim target sits at the RELEASE point: forward + chosen-side
+		# offset, not the far clean_aim. Mouse stays on the chosen side
+		# throughout the lerp so the blade IK visibly draws the swing
+		# on that side.
+		_shoot_aim_target = (
+				self_pos
+				+ comp_aim_dir * BOT_WRISTER_RELEASE_FORWARD_M
+				+ shoot_perp * BOT_WRISTER_WIND_UP_SIDE_M)
 		_shoot_wind_up_start = (
 				self_pos
-				- aim_dir * BOT_WRISTER_WIND_UP_BACK_M
-				+ forehand_perp * BOT_WRISTER_WIND_UP_SIDE_M)
-		_shoot_sweep_dir_xy = Vector2(aim_dir.x, aim_dir.z)
+				- comp_aim_dir * BOT_WRISTER_WIND_UP_BACK_M
+				+ shoot_perp * BOT_WRISTER_WIND_UP_SIDE_M)
+		_shoot_sweep_dir_xy = Vector2(comp_aim_dir.x, comp_aim_dir.z)
 		input.shoot_pressed = true
 
 	# Lerp mouse_world_pos from wind-up start to aim across the charge.
