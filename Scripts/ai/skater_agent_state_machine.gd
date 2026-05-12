@@ -832,17 +832,24 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	#
 	# CARRY: drift toward the carry destination.
 	#
-	# SHOOT_PRESSED (wrister): KEEP DRIVING toward the carry
-	# destination. Rush wristers are taken on the move; the carrier
-	# scorer's release-pos projection assumes constant velocity, so
-	# the bot must actually keep moving for the release to land at
-	# the scored spot. Otherwise the projection over-predicts forward
-	# motion vs. a braking bot and shots release ~1 m too far out.
+	# SHOOT_PRESSED (wrister) pre-aim: steer toward the projected
+	# release position (current + velocity × wrister_lookahead). The
+	# carrier scorer chose SHOOT based on score at that release-pos,
+	# so the bot's actual motion needs to land there for the chosen
+	# shot to be the shot taken. Steering to _last_carry_anchor
+	# (often stand-still = self_pos) would brake the bot back to
+	# commit position, releasing ~1-2 m short of the scored spot.
 	#
 	# SLAPPER_PRESSED / PASS_PRESSED: brake. Slappers need stability
 	# for the wind-up; pass leads aim from a held spot.
-	if _intended_action == State.CARRY or _intended_action == State.SHOOT_PRESSED:
+	if _intended_action == State.CARRY:
 		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+	elif _intended_action == State.SHOOT_PRESSED:
+		var hv: Vector3 = Vector3.ZERO
+		if self_state != null:
+			hv = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+		_apply_steering(input, snapshot, self_pos,
+				self_pos + hv * BOT_WRISTER_LOOKAHEAD_S)
 	else:
 		# Fire intent locked, pre-aiming. Brake actively so the bot
 		# doesn't coast past the spot they decided to fire from.
@@ -988,12 +995,20 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 		return
 
-	# Keep driving toward the carry destination during the wrister
-	# charge — rush wristers are taken on the move. The carrier
-	# scorer's release-pos projection uses constant velocity, so
-	# braking here would land the puck ~1 m further out than the
-	# scored spot.
-	_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+	# Steer toward the projected release position so the bot actually
+	# arrives at the spot the carrier scorer assumed. The projection
+	# (current + velocity × wrister_lookahead) is what won SHOOT over
+	# CARRY; if we steered toward _last_carry_anchor instead (often
+	# stand-still = self_pos), the steering would brake the bot back
+	# to current pos and the puck would release ~1-2 m short of the
+	# scored spot. Rush wristers should fire from the projected spot,
+	# not be braked back to commit position.
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	var release_target: Vector3 = self_pos
+	if self_state != null:
+		var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+		release_target = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
+	_apply_steering(input, snapshot, self_pos, release_target)
 	# Elevation flag based on decision at entry. Sticky in
 	# SkaterController, so setting one direction explicitly each tick
 	# normalizes it regardless of the last shot.
