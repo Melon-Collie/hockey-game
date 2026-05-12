@@ -21,8 +21,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
 # Shift freezes facing entirely (see SkaterPoseCoordinator.apply_facing). Good range: 1.0 (very lazy) – 3.0 (snappy).
-@export var facing_drag_speed: float = 3.0
-@export var facing_drag_speed_braking: float = 8.0
+@export var facing_drag_speed: float = 5.0
+@export var facing_drag_speed_braking: float = 10.0
 
 # ── Blade / Stick / Top-Hand IK Tuning ────────────────────────────────────────
 # Blade world-space Y. 0.0 = ice surface. Converted to upper-body-local via

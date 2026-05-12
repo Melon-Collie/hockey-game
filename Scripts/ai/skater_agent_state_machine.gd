@@ -877,7 +877,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# states pre-aim toward action direction.
 	var mouse_target: Vector3
 	if _intended_action == State.CARRY:
-		mouse_target = _carry_mouse_aim(snapshot, self_pos)
+		mouse_target = _carry_aim_track_fire(snapshot, self_pos)
 	else:
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
 	input.mouse_world_pos = _step_mouse_toward(mouse_target)
@@ -1442,6 +1442,32 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 # comfortably in front of the body where small mouse shifts produce
 # real blade motion (instead of clamping to ROM extreme as it would
 # at goal-plane distance).
+# Continuously aim toward the best non-carry option (SHOOT or PASS,
+# whichever scored higher) during CARRY. Rotates the bot's facing
+# toward the likely fire target so when the carrier eventually
+# commits to SHOOT/PASS, the facing is already aligned and pre-aim
+# convergence collapses to ~0 ms (instead of the 250-700 ms wait
+# while facing rotates from "forward at goal" to the actual aim).
+#
+# Falls back to the generic forward _carry_mouse_aim when no fire
+# option is meaningful (both shoot and pass score below threshold)
+# or when the best pass target isn't resolvable in the snapshot.
+func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	const FIRE_AIM_THRESHOLD: float = 0.05
+	var best_fire: float = maxf(debug_shoot_score, debug_pass_score)
+	if best_fire < FIRE_AIM_THRESHOLD:
+		return _carry_mouse_aim(snapshot, self_pos)
+	if debug_shoot_score >= debug_pass_score:
+		return _shot_aim_point(snapshot, self_pos)
+	var receiver: SkaterNetworkState = snapshot.skater_states.get(debug_pass_peer_id)
+	if receiver == null:
+		return _carry_mouse_aim(snapshot, self_pos)
+	var dist: float = self_pos.distance_to(receiver.position)
+	var flight_t: float = clampf(
+			dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
+	return _predict_receiver(debug_pass_peer_id, receiver, flight_t)
+
+
 func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var to_goal: Vector3 = _attacking_goal_pos - self_pos
 	to_goal.y = 0.0
