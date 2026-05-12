@@ -1472,26 +1472,15 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 
 # Shot aim past the goalie's projected shadow. Uses the goalie's
 # predicted position at the wrister window, matching how score_shoot
-# sees the goalie when scoring from self_pos. Threads the goalie's
-# CURRENT lateral velocity into the aim — a goalie sliding right
-# will drift further right by the time the puck arrives, so the
-# aim biases LEFT (the recovery side). Captures the "shoot back
-# across the grain" pattern.
+# sees the goalie when scoring from self_pos.
 func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var goalie: Vector3 = _predict_goalie_at(
 			snapshot, BOT_WRISTER_LOOKAHEAD_S, self_pos)
-	var goalie_vx: float = 0.0
-	var opp_team_id: int = 1 - _team_id
-	var opp_goalie_state: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
-	if opp_goalie_state != null:
-		goalie_vx = opp_goalie_state.velocity_x
 	return AIShotAim.compute_open_net_aim(
 			self_pos, goalie,
 			_attacking_goal_pos.z,
 			GameRules.NET_HALF_WIDTH,
-			AIActionScoring.GOALIE_SHADOW_HALF_M,
-			AIShotAim.DEFAULT_CORNER_BIAS,
-			goalie_vx)
+			AIActionScoring.GOALIE_SHADOW_HALF_M)
 
 
 # OFF_PUCK ready-stance aim: returns a target 2 m in front of the bot

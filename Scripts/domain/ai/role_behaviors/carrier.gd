@@ -571,64 +571,6 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 			best_score = s_total
 			best_pos = candidate
 
-	# Arc-tangent candidates — strafe at constant radius from the
-	# attacking goal. The 8 polar candidates above are body-relative,
-	# which means a lateral move from a slot position increases
-	# distance-from-goal and pays the dist_response penalty. These
-	# arc candidates project back onto the bot's current radius from
-	# the goal, capturing the hockey "work side-to-side at the same
-	# shot distance" pattern. Combined with goalie prediction, lateral
-	# strafing displaces the goalie laterally without sacrificing
-	# shot distance — the setup half of "shoot back across the grain".
-	#
-	# Skipped when the bot is outside shooting range entirely (R >
-	# SHOT_RANGE_FALLOFF_M means dist_response = 0, so arc candidates
-	# would score 0 regardless of goalie state).
-	var to_goal: Vector3 = attacking_goal - self_pos
-	var radius: float = sqrt(to_goal.x * to_goal.x + to_goal.z * to_goal.z)
-	if radius > 0.001 and radius <= AIActionScoring.SHOT_RANGE_FALLOFF_M:
-		var to_goal_dir_x: float = to_goal.x / radius
-		var to_goal_dir_z: float = to_goal.z / radius
-		# Tangent is perpendicular to to_goal in the rink plane.
-		var tangent_x: float = -to_goal_dir_z
-		var tangent_z: float = to_goal_dir_x
-		for s_dir: float in [-1.0, 1.0]:
-			var raw_x: float = self_pos.x + tangent_x * s_dir * CARRY_SEARCH_STEP_M
-			var raw_z: float = self_pos.z + tangent_z * s_dir * CARRY_SEARCH_STEP_M
-			# Project the raw lateral step back onto the constant-radius
-			# circle around the attacking goal.
-			var raw_to_goal_x: float = raw_x - attacking_goal.x
-			var raw_to_goal_z: float = raw_z - attacking_goal.z
-			var raw_len: float = sqrt(raw_to_goal_x * raw_to_goal_x
-					+ raw_to_goal_z * raw_to_goal_z)
-			if raw_len < 0.001:
-				continue
-			var scale: float = radius / raw_len
-			var arc_candidate := Vector3(
-					attacking_goal.x + raw_to_goal_x * scale, 0.0,
-					attacking_goal.z + raw_to_goal_z * scale)
-			if absf(arc_candidate.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
-				continue
-			if absf(arc_candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
-				continue
-			var arc_time: float = AIActionScoring.time_to_arrive(
-					self_pos, arc_candidate, self_velocity)
-			_project_opponents_to(ctx, arc_time, _scratch_opponents_path)
-			var arc_lane: float = AIActionScoring.path_clearance(
-					self_pos, arc_candidate, _scratch_opponents_path)
-			if arc_lane <= 0.0:
-				continue
-			var arc_release_t: float = arc_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
-			var arc_goalie: Vector3 = _predict_goalie_at(ctx, arc_release_t, arc_candidate)
-			var arc_dest_score: float = _score_at(ctx, arc_candidate, self_pos,
-					_scratch_opponents_path, teammate_ids, arc_goalie, goalie_now)
-			var arc_decay: float = pow(
-					AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, arc_time)
-			var arc_total: float = arc_dest_score * arc_lane * arc_decay
-			if arc_total > best_score:
-				best_score = arc_total
-				best_pos = arc_candidate
-
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
 	# already cover it via local polar candidates.
