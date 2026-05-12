@@ -43,13 +43,58 @@ func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController)
 
 # ── Per-Tick Application ──────────────────────────────────────────────────────
 func apply_velocity_lean(delta: float) -> void:
-	var cfg_max_speed: float = _controller.max_speed
-	var local_vel: Vector3 = _skater.global_transform.basis.inverse() * _skater.velocity
-	var lean_max: float = deg_to_rad(_controller.velocity_lean_max_deg)
-	var target_x: float = -clampf(local_vel.z / cfg_max_speed, -1.0, 1.0) * lean_max
-	var target_z: float =  clampf(local_vel.x / cfg_max_speed, -1.0, 1.0) * lean_max
-	velocity_lean_x = lerpf(velocity_lean_x, target_x, _controller.velocity_lean_speed * delta)
-	velocity_lean_z = lerpf(velocity_lean_z, target_z, _controller.velocity_lean_speed * delta)
+	var target: Vector2 = compute_velocity_lean_target(
+			_skater.velocity, _skater.global_transform.basis,
+			_controller.max_speed, _controller.velocity_lean_max_deg)
+	velocity_lean_x = lerpf(velocity_lean_x, target.x, _controller.velocity_lean_speed * delta)
+	velocity_lean_z = lerpf(velocity_lean_z, target.y, _controller.velocity_lean_speed * delta)
+
+
+# Pure helpers — derive lean targets from state. Used both by the live pose
+# pipeline (apply_velocity_lean / apply_upper_body lerp toward these targets)
+# and by snap_lean_to_state below (remote / replay path snaps directly). Means
+# lean isn't transmitted over the wire — receivers re-derive it from the
+# velocity and hand position they already have.
+static func compute_velocity_lean_target(
+		world_velocity: Vector3, body_basis: Basis,
+		max_speed: float, lean_max_deg: float) -> Vector2:
+	if max_speed <= 0.0:
+		return Vector2.ZERO
+	var local_vel: Vector3 = body_basis.inverse() * world_velocity
+	var lean_max: float = deg_to_rad(lean_max_deg)
+	var target_x: float = -clampf(local_vel.z / max_speed, -1.0, 1.0) * lean_max
+	var target_z: float =  clampf(local_vel.x / max_speed, -1.0, 1.0) * lean_max
+	return Vector2(target_x, target_z)
+
+
+static func compute_upper_body_lean_target(
+		hand_local_xz: Vector2, shoulder_local_xz: Vector2,
+		rom_max_reach: float, lean_max_deg: float) -> float:
+	var hand_vec: Vector2 = hand_local_xz - shoulder_local_xz
+	var hand_reach: float = hand_vec.length()
+	if hand_reach <= 0.01 or rom_max_reach <= 0.0:
+		return 0.0
+	var reach_factor: float = clampf(hand_reach / rom_max_reach, 0.0, 1.0)
+	return -reach_factor * deg_to_rad(lean_max_deg)
+
+
+# Snap lean to the targets implied by current velocity + hand position. Used
+# by remote / replay state application — lean isn't in the network state, so
+# receivers re-derive it the same way the host computed it. Must be called
+# AFTER set_top_hand_position and BEFORE set_blade_position so the blade
+# marker lands at the correct world Y under the leaning upper body.
+func snap_lean_to_state() -> void:
+	var v_target: Vector2 = compute_velocity_lean_target(
+			_skater.velocity, _skater.global_transform.basis,
+			_controller.max_speed, _controller.velocity_lean_max_deg)
+	velocity_lean_x = v_target.x
+	velocity_lean_z = v_target.y
+	upper_body_lean = compute_upper_body_lean_target(
+			Vector2(_skater.top_hand.position.x, _skater.top_hand.position.z),
+			Vector2(_skater.shoulder.position.x, _skater.shoulder.position.z),
+			_controller.rom_backhand_reach_max, _controller.upper_body_lean_max_deg)
+	_skater.set_upper_body_lean(upper_body_lean + velocity_lean_x, velocity_lean_z)
+	_skater.set_lower_body_lean(velocity_lean_x, velocity_lean_z)
 
 func apply_facing(input: InputState, delta: float) -> void:
 	if not _sm.get_state() in [State.WRISTER_AIM, State.SLAPPER_CHARGE_WITH_PUCK,
@@ -61,16 +106,19 @@ func apply_facing(input: InputState, delta: float) -> void:
 			mouse_world.z - _skater.global_position.z
 		)
 		if to_mouse.length() > _controller.move_deadzone:
-			# Gate: prevent the body from rotating until the mouse crosses 180° and
-			# snaps the arm to the other side. When the mouse exits the reachable IK
-			# zone (rom_backhand_angle_max_deg + upper_body_max_twist_deg from forward),
-			# record which side it left from and freeze. Re-entry only from the same
-			# side unlocks — entering from the opposite side stays frozen.
+			# Gate: while the mouse is in the unreachable wedge behind the skater
+			# (beyond rom_backhand_angle_max_deg + upper_body_max_twist_deg from
+			# forward), freeze facing so the body doesn't chase a target it can't
+			# reach. Resume tracking as soon as the mouse returns to the reachable
+			# cone, regardless of side. Snap-prevention on wraps lives in the
+			# blade speed cap (SkaterIKCoordinator), not in this lock — earlier
+			# versions tied unlock to "same side it left from", which could
+			# permanently strand facing when the mouse wrapped around.
 			var mouse_body_angle: float = facing.angle_to(to_mouse.normalized())
 			var ik_gate: float = deg_to_rad(_controller.rom_backhand_angle_max_deg + _controller.upper_body_max_twist_deg)
 			if abs(mouse_body_angle) >= ik_gate:
 				ik_locked_side = int(sign(mouse_body_angle))
-			elif ik_locked_side == 0 or ik_locked_side * mouse_body_angle >= 0.0:
+			else:
 				ik_locked_side = 0
 				var drag: float = _controller.facing_drag_speed_braking if input.brake else _controller.facing_drag_speed
 				facing = facing.lerp(to_mouse.normalized(), drag * delta).normalized()
@@ -111,7 +159,6 @@ func apply_upper_body(delta: float) -> void:
 	var hand_reach: float = hand_vec.length()
 
 	if hand_reach > 0.01:
-		var reach_factor: float = clampf(hand_reach / _controller.rom_backhand_reach_max, 0.0, 1.0)
 		# Drive twist from the blade's world direction in the skater body frame.
 		# Using skater-local (not upper-body-local) gives a stable target that
 		# doesn't shrink as the body rotates — the old hand-angle approach had a
@@ -125,7 +172,11 @@ func apply_upper_body(delta: float) -> void:
 			var blade_angle: float = atan2(local_dir.x, -local_dir.z)
 			var max_twist: float = deg_to_rad(_controller.upper_body_max_twist_deg)
 			target_angle = clampf(-blade_angle * _controller.upper_body_twist_ratio, -max_twist, max_twist)
-			target_lean = -reach_factor * deg_to_rad(_controller.upper_body_lean_max_deg)
+		target_lean = compute_upper_body_lean_target(
+				Vector2(_skater.top_hand.position.x, _skater.top_hand.position.z),
+				Vector2(_skater.shoulder.position.x, _skater.shoulder.position.z),
+				_controller.rom_backhand_reach_max,
+				_controller.upper_body_lean_max_deg)
 
 	upper_body_angle = lerp_angle(upper_body_angle, target_angle, _controller.upper_body_return_speed * delta)
 	upper_body_lean = lerpf(upper_body_lean, target_lean, _controller.upper_body_lean_return_speed * delta)

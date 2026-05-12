@@ -4,27 +4,16 @@ extends Node
 const _WHITE     := MenuStyle.TEXT_BODY
 const _DIM       := MenuStyle.TEXT_DIM
 
-const _SETTING_LABEL_WIDTH: int = 140
 const _SETTING_CONTROL_WIDTH: int = 220
 
-# Spectator slot encoding: team_id == NetworkManager.SPECTATOR_TEAM_ID (-1) and
-# slot is the spectator index. Stored under keys _SPECTATOR_KEY_BASE..base+MAX-1
-# so they never collide with the 0..5 home/away keys.
-const _SPECTATOR_KEY_BASE: int = 100
-
-# key = _slot_key(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
+# key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
 # Players: team_id ∈ {0, 1}, slot ∈ {0,1,2}. Spectators: team_id = -1, slot = spectator_idx.
 var _lobby_slots: Dictionary = {}
 
 var _slot_grid: SlotGridPanel = null
 var _start_btn: Button = null
 var _ready_btn: Button = null
-var _periods_slider: HSlider = null
-var _periods_value_label: Label = null
-var _dur_slider: HSlider = null
-var _dur_value_label: Label = null
-var _ot_check: CheckButton = null
-var _rules_btn: OptionButton = null
+var _settings_panel: LobbySettingsPanel = null
 var _spectator_list_label: Label = null
 var _spectator_join_btn: Button = null
 
@@ -151,7 +140,9 @@ func _build_ui() -> void:
 
 	vbox.add_child(_build_spectator_panel())
 
-	vbox.add_child(_build_settings_panel())
+	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host)
+	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
+	vbox.add_child(_settings_panel)
 
 	var btn_box := HBoxContainer.new()
 	btn_box.add_theme_constant_override("separation", 12)
@@ -237,96 +228,7 @@ func _on_spectate_pressed() -> void:
 	var open: int = _find_open_spectator_slot()
 	if open < 0:
 		return
-	NetworkManager.send_request_slot_swap(NetworkManager.SPECTATOR_TEAM_ID, open)
-
-func _build_settings_panel() -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 10)
-
-	var sep_style := StyleBoxFlat.new()
-	sep_style.bg_color = MenuStyle.TEXT_SEP
-	var sep := HSeparator.new()
-	sep.add_theme_stylebox_override("separator", sep_style)
-	box.add_child(sep)
-
-	var center := CenterContainer.new()
-	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_child(center)
-
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 20)
-	grid.add_theme_constant_override("v_separation", 12)
-	center.add_child(grid)
-
-	var is_interactive: bool = NetworkManager.is_host
-
-	# Game rules first (Periods → Period Length → Overtime → Rules), then team
-	# colors. Right column is held to a uniform 220 px so dropdowns, sliders,
-	# and the toggle line up vertically.
-
-	grid.add_child(_setting_label("Periods"))
-	var periods_row := _stepper_row()
-	_periods_slider = _stepper_slider(1, 3, _num_periods, is_interactive)
-	_periods_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if is_interactive:
-		_periods_slider.value_changed.connect(func(v: float) -> void:
-			_num_periods = int(v)
-			_periods_value_label.text = str(_num_periods)
-			NetworkManager.send_lobby_settings(_num_periods, _period_duration, _ot_enabled, _rule_set))
-	periods_row.add_child(_periods_slider)
-	_periods_value_label = _stepper_value_label(str(_num_periods))
-	periods_row.add_child(_periods_value_label)
-	grid.add_child(periods_row)
-
-	grid.add_child(_setting_label("Period Length"))
-	var dur_row := _stepper_row()
-	var dur_min: int = int(_period_duration / 60.0)
-	_dur_slider = _stepper_slider(1, 10, dur_min, is_interactive)
-	_dur_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if is_interactive:
-		_dur_slider.value_changed.connect(func(v: float) -> void:
-			_period_duration = v * 60.0
-			_dur_value_label.text = "%d min" % int(v)
-			NetworkManager.send_lobby_settings(_num_periods, _period_duration, _ot_enabled, _rule_set))
-	dur_row.add_child(_dur_slider)
-	_dur_value_label = _stepper_value_label("%d min" % dur_min)
-	dur_row.add_child(_dur_value_label)
-	grid.add_child(dur_row)
-
-	grid.add_child(_setting_label("Overtime"))
-	_ot_check = CheckButton.new()
-	_ot_check.set_pressed_no_signal(_ot_enabled)
-	_ot_check.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	SoundManager.wire_button(_ot_check)
-	_ot_check.disabled = not is_interactive
-	if is_interactive:
-		_ot_check.toggled.connect(func(pressed: bool) -> void:
-			_ot_enabled = pressed
-			NetworkManager.send_lobby_settings(_num_periods, _period_duration, _ot_enabled, _rule_set))
-	else:
-		_ot_check.modulate = Color(1, 1, 1, 0.5)
-	grid.add_child(_ot_check)
-
-	grid.add_child(_setting_label("Rules"))
-	_rules_btn = OptionButton.new()
-	_rules_btn.custom_minimum_size = Vector2(_SETTING_CONTROL_WIDTH, 40)
-	_rules_btn.add_theme_font_size_override("font_size", 16)
-	for i: int in range(GameRules.RULE_SET_NAMES.size()):
-		_rules_btn.add_item(GameRules.RULE_SET_NAMES[i], i)
-	_rules_btn.select(_rule_set)
-	SoundManager.wire_button(_rules_btn)
-	_rules_btn.disabled = not is_interactive
-	if is_interactive:
-		_rules_btn.item_selected.connect(func(idx: int) -> void:
-			_rule_set = idx
-			NetworkManager.send_lobby_settings(_num_periods, _period_duration, _ot_enabled, _rule_set))
-	else:
-		_rules_btn.modulate = Color(1, 1, 1, 0.5)
-	grid.add_child(_rules_btn)
-
-	return box
-
+	NetworkManager.send_request_slot_swap(GameRules.SPECTATOR_TEAM_ID, open)
 
 # Builds the live color-vote row that sits above the slot grid. Every player
 # votes for their own team's color; both teams' resolved colors are recomputed
@@ -345,7 +247,8 @@ func _build_color_vote_row() -> Control:
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(lbl)
 
-	_my_color_btn = _color_option_btn(_my_color_id)
+	_my_color_btn = MenuStyle.color_option_btn(_my_color_id, Vector2(_SETTING_CONTROL_WIDTH, 40), 16)
+	SoundManager.wire_button(_my_color_btn)
 	_my_color_btn.item_selected.connect(func(idx: int) -> void:
 		_my_color_id = TeamColorRegistry.get_all_ids()[idx]
 		PlayerPrefs.preferred_color_id = _my_color_id
@@ -356,100 +259,16 @@ func _build_color_vote_row() -> Control:
 	return row
 
 
-func _stepper_row() -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-	row.custom_minimum_size = Vector2(_SETTING_CONTROL_WIDTH, 0)
-	return row
-
-func _setting_label(text: String) -> Label:
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", 14)
-	lbl.add_theme_color_override("font_color", _DIM)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.custom_minimum_size = Vector2(_SETTING_LABEL_WIDTH, 0)
-	return lbl
-
-
-# Discrete-integer slider for small ranges (periods, period length). Tick marks
-# on every integer make the granularity obvious. Width comes from the parent
-# row so the slider stretches to fill whatever space the readout label leaves.
-func _stepper_slider(low: int, high: int, value: int, interactive: bool) -> HSlider:
-	var slider := HSlider.new()
-	slider.min_value = low
-	slider.max_value = high
-	slider.step = 1
-	slider.value = value
-	slider.tick_count = high - low + 1
-	slider.ticks_on_borders = true
-	slider.custom_minimum_size = Vector2(0, 32)
-	slider.editable = interactive
-	if not interactive:
-		slider.modulate = Color(1, 1, 1, 0.5)
-	return slider
-
-
-func _stepper_value_label(text: String) -> Label:
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", 16)
-	lbl.add_theme_color_override("font_color", _WHITE)
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.custom_minimum_size = Vector2(56, 0)
-	return lbl
-
 func _btn(text: String) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.custom_minimum_size = Vector2(140, 40)
-	_wire_hover_scale(b)
+	MenuStyle.wire_hover_scale(b)
 	SoundManager.wire_button(b)
 	return b
 
-func _wire_hover_scale(btn: Button) -> void:
-	btn.item_rect_changed.connect(func() -> void: btn.pivot_offset = btn.size / 2.0)
-	btn.mouse_entered.connect(func() -> void: _scale_btn(btn, Vector2(1.04, 1.04)))
-	btn.mouse_exited.connect(func() -> void: _scale_btn(btn, Vector2.ONE))
-	btn.button_down.connect(func() -> void: _scale_btn(btn, Vector2(0.97, 0.97)))
-	btn.button_up.connect(func() -> void: _scale_btn(btn, Vector2(1.04, 1.04)))
-
-func _scale_btn(btn: Button, target: Vector2) -> void:
-	var t := btn.create_tween()
-	t.tween_property(btn, "scale", target, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-
-func _color_option_btn(selected_id: String) -> OptionButton:
-	var btn := OptionButton.new()
-	btn.custom_minimum_size = Vector2(_SETTING_CONTROL_WIDTH, 40)
-	btn.add_theme_font_size_override("font_size", 16)
-	var ids: Array[String] = TeamColorRegistry.get_all_ids()
-	for i: int in ids.size():
-		btn.add_item(TeamColorRegistry.get_preset_name(ids[i]), i)
-		if ids[i] == selected_id:
-			btn.select(i)
-	SoundManager.wire_button(btn)
-	return btn
 
 # ── Slot management ───────────────────────────────────────────────────────────
-
-func _slot_key(team_id: int, slot: int) -> int:
-	if team_id == NetworkManager.SPECTATOR_TEAM_ID:
-		return _SPECTATOR_KEY_BASE + slot
-	return team_id * 3 + slot
-
-func _team_id_from_key(k: int) -> int:
-	if k >= _SPECTATOR_KEY_BASE:
-		return NetworkManager.SPECTATOR_TEAM_ID
-	return 1 if k >= PlayerRules.MAX_PER_TEAM else 0
-
-func _slot_from_key(k: int) -> int:
-	if k >= _SPECTATOR_KEY_BASE:
-		return k - _SPECTATOR_KEY_BASE
-	return k % 3
-
-func _is_spectator_key(k: int) -> bool:
-	return k >= _SPECTATOR_KEY_BASE
 
 func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is_left_handed: bool, jersey_number: int = 10) -> void:
 	# Clear any existing slot for this peer first.
@@ -457,7 +276,7 @@ func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is
 		if _lobby_slots[k].peer_id == peer_id:
 			_lobby_slots.erase(k)
 			break
-	_lobby_slots[_slot_key(team_id, slot)] = {
+	_lobby_slots[LobbySlotKey.encode(team_id, slot)] = {
 		"peer_id": peer_id,
 		"player_name": player_name,
 		"is_left_handed": is_left_handed,
@@ -468,28 +287,28 @@ func _find_balanced_slot(_peer_id: int) -> Array:
 	var team0: int = 0
 	var team1: int = 0
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k):
+		if LobbySlotKey.is_spectator(k):
 			continue
-		if _team_id_from_key(k) == 0: team0 += 1
+		if LobbySlotKey.team_id(k) == 0: team0 += 1
 		else: team1 += 1
 	var preferred_team: int = 0 if team0 <= team1 else 1
 	for attempt_team: int in [preferred_team, 1 - preferred_team]:
 		for s: int in PlayerRules.MAX_PER_TEAM:
-			if not _lobby_slots.has(_slot_key(attempt_team, s)):
+			if not _lobby_slots.has(LobbySlotKey.encode(attempt_team, s)):
 				return [attempt_team, s]
 	return []
 
 func _find_open_spectator_slot() -> int:
 	for s: int in GameRules.MAX_SPECTATORS:
-		if not _lobby_slots.has(_slot_key(NetworkManager.SPECTATOR_TEAM_ID, s)):
+		if not _lobby_slots.has(LobbySlotKey.encode(GameRules.SPECTATOR_TEAM_ID, s)):
 			return s
 	return -1
 
 func _build_roster_array() -> Array:
 	var result: Array = []
 	for k: int in _lobby_slots:
-		var team_id: int = _team_id_from_key(k)
-		var slot: int = _slot_from_key(k)
+		var team_id: int = LobbySlotKey.team_id(k)
+		var slot: int = LobbySlotKey.slot(k)
 		var entry: Dictionary = _lobby_slots[k]
 		var is_ready: bool = _ready_states.get(entry.peer_id, false)
 		result.append([entry.peer_id, team_id, slot, entry.player_name, entry.is_left_handed, entry.get("jersey_number", 10), is_ready])
@@ -498,10 +317,10 @@ func _build_roster_array() -> Array:
 func _build_slot_grid_roster() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k):
+		if LobbySlotKey.is_spectator(k):
 			continue
-		var team_id: int = _team_id_from_key(k)
-		var slot: int = _slot_from_key(k)
+		var team_id: int = LobbySlotKey.team_id(k)
+		var slot: int = LobbySlotKey.slot(k)
 		var entry: Dictionary = _lobby_slots[k]
 		result.append({
 			"peer_id":        entry.peer_id,
@@ -517,12 +336,12 @@ func _build_slot_grid_roster() -> Array[Dictionary]:
 func _build_spectator_roster() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for k: int in _lobby_slots:
-		if not _is_spectator_key(k):
+		if not LobbySlotKey.is_spectator(k):
 			continue
 		var entry: Dictionary = _lobby_slots[k]
 		result.append({
 			"peer_id":        entry.peer_id,
-			"slot":           _slot_from_key(k),
+			"slot":           LobbySlotKey.slot(k),
 			"player_name":    entry.player_name,
 			"is_ready":       _ready_states.get(entry.peer_id, false),
 		})
@@ -557,13 +376,13 @@ func _recompute_resolved_colors() -> void:
 	var home_votes: Array[String] = []
 	var away_votes: Array[String] = []
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k):
+		if LobbySlotKey.is_spectator(k):
 			continue
 		var entry: Dictionary = _lobby_slots[k]
 		var peer_id: int = entry.peer_id
 		if not _color_votes.has(peer_id):
 			continue
-		var team_id: int = _team_id_from_key(k)
+		var team_id: int = LobbySlotKey.team_id(k)
 		var vote: String = _color_votes[peer_id]
 		if team_id == 0:
 			home_votes.append(vote)
@@ -583,10 +402,10 @@ func _recompute_resolved_colors() -> void:
 	_away_color_id = resolved[1]
 
 func _broadcast_confirm(peer_id: int, team_id: int, slot: int) -> void:
-	var entry: Dictionary = _lobby_slots.get(_slot_key(team_id, slot), {})
+	var entry: Dictionary = _lobby_slots.get(LobbySlotKey.encode(team_id, slot), {})
 	if entry.is_empty():
 		return
-	if team_id == NetworkManager.SPECTATOR_TEAM_ID:
+	if team_id == GameRules.SPECTATOR_TEAM_ID:
 		# Spectators don't carry a jersey palette; pass zero colors so the receiving
 		# side knows to take the spectator path rather than spawn a skater.
 		NetworkManager.send_confirm_slot_swap(peer_id, -1, -1, team_id, slot,
@@ -605,7 +424,7 @@ func _update_start_btn() -> void:
 	# non-host player peers) can also start — useful for solo testing.
 	var spectator_peers: Dictionary = {}
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k):
+		if LobbySlotKey.is_spectator(k):
 			spectator_peers[_lobby_slots[k].peer_id] = true
 	var all_ready: bool = true
 	for pid: int in _ready_states:
@@ -626,7 +445,7 @@ func _update_ready_btn() -> void:
 	var local_peer: int = NetworkManager.local_peer_id()
 	var local_is_spectator: bool = false
 	for k: int in _lobby_slots:
-		if _is_spectator_key(k) and _lobby_slots[k].peer_id == local_peer:
+		if LobbySlotKey.is_spectator(k) and _lobby_slots[k].peer_id == local_peer:
 			local_is_spectator = true
 			break
 	_ready_btn.visible = not local_is_spectator
@@ -644,7 +463,7 @@ func _on_peer_joined(peer_id: int) -> void:
 		var spec_slot: int = _find_open_spectator_slot()
 		if spec_slot < 0:
 			return
-		target = [NetworkManager.SPECTATOR_TEAM_ID, spec_slot]
+		target = [GameRules.SPECTATOR_TEAM_ID, spec_slot]
 	var name_val: String = NetworkManager.get_peer_name(peer_id)
 	var is_left: bool = NetworkManager.get_peer_handedness(peer_id)
 	var num: int = NetworkManager.get_peer_number(peer_id)
@@ -687,17 +506,17 @@ func _find_peer_identity(peer_id: int) -> Dictionary:
 func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> void:
 	if not NetworkManager.is_host:
 		return
-	if _lobby_slots.has(_slot_key(new_team_id, new_slot)):
+	if _lobby_slots.has(LobbySlotKey.encode(new_team_id, new_slot)):
 		return
-	if new_team_id == NetworkManager.SPECTATOR_TEAM_ID:
+	if new_team_id == GameRules.SPECTATOR_TEAM_ID:
 		if new_slot < 0 or new_slot >= GameRules.MAX_SPECTATORS:
 			return
 	else:
 		var count: int = 0
 		for k: int in _lobby_slots:
-			if _is_spectator_key(k):
+			if LobbySlotKey.is_spectator(k):
 				continue
-			if _team_id_from_key(k) == new_team_id:
+			if LobbySlotKey.team_id(k) == new_team_id:
 				count += 1
 		if count >= PlayerRules.MAX_PER_TEAM:
 			return
@@ -728,7 +547,7 @@ func _on_lobby_roster_synced(roster: Array) -> void:
 		var is_left: bool = entry[4] if entry.size() > 4 else true
 		var p_number: int = entry[5] if entry.size() > 5 else 10
 		var is_ready: bool = entry[6] if entry.size() > 6 else false
-		_lobby_slots[_slot_key(team_id, slot)] = {
+		_lobby_slots[LobbySlotKey.encode(team_id, slot)] = {
 			"peer_id": peer_id,
 			"player_name": p_name,
 			"is_left_handed": is_left,
@@ -780,19 +599,15 @@ func _on_lobby_settings_synced(num_periods: int, period_duration: float, ot_enab
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
-	if _periods_slider != null:
-		_periods_slider.set_value_no_signal(_num_periods)
-		if _periods_value_label != null:
-			_periods_value_label.text = str(_num_periods)
-	if _dur_slider != null:
-		var dur_min: int = int(_period_duration / 60.0)
-		_dur_slider.set_value_no_signal(dur_min)
-		if _dur_value_label != null:
-			_dur_value_label.text = "%d min" % dur_min
-	if _ot_check != null:
-		_ot_check.set_pressed_no_signal(_ot_enabled)
-	if _rules_btn != null:
-		_rules_btn.select(_rule_set)
+	if _settings_panel != null:
+		_settings_panel.apply_settings(num_periods, period_duration, ot_enabled, rule_set)
+
+func _on_settings_panel_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+	_num_periods = num_periods
+	_period_duration = period_duration
+	_ot_enabled = ot_enabled
+	_rule_set = rule_set
+	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set)
 
 func _on_game_started(config: Dictionary) -> void:
 	NetworkManager.pending_game_config = config
@@ -802,8 +617,8 @@ func _on_game_started(config: Dictionary) -> void:
 func _build_pending_slots() -> Dictionary:
 	var result: Dictionary = {}
 	for k: int in _lobby_slots:
-		var team_id: int = _team_id_from_key(k)
-		var slot: int = _slot_from_key(k)
+		var team_id: int = LobbySlotKey.team_id(k)
+		var slot: int = LobbySlotKey.slot(k)
 		var entry: Dictionary = _lobby_slots[k]
 		result[entry.peer_id] = {
 			"team_id": team_id,

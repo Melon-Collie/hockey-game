@@ -74,6 +74,9 @@ func apply_network_state(state: SkaterNetworkState, _host_ts: float) -> void:
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
+	# Re-derive lean from velocity + hand reach so the upper body leans before
+	# the blade is placed (lean isn't transmitted; receivers re-derive).
+	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
 	skater.update_arm_mesh()
 	skater.update_bottom_arm_mesh()
@@ -207,6 +210,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# direction-variance delta is zero rather than a large garbage value.
 	if not _input_history.is_empty():
 		_aiming.prev_mouse_screen_pos = _input_history[0].mouse_screen_pos
+	# Seed the IK aim smoother from the first replayed input so the blade speed
+	# cap operates against a deterministic baseline across reconcile — the live
+	# smoothed value would otherwise bias the replay's first tick.
+	var seed_aim: Vector3 = _input_history[0].mouse_world_pos if not _input_history.is_empty() else _current_input.mouse_world_pos
+	_ik.reset_aim_smoothing(seed_aim)
 	is_replaying = true
 	var _impulse_applied: bool = false
 	for input in _input_history:

@@ -281,7 +281,7 @@ func on_host_started() -> void:
 		var my_slot: Dictionary = NetworkManager.pending_lobby_slots.get(1, {})
 		var team_id: int = my_slot.get("team_id", 0)
 		var team_slot: int = my_slot.get("team_slot", 0)
-		if team_id == NetworkManager.SPECTATOR_TEAM_ID:
+		if team_id == GameRules.SPECTATOR_TEAM_ID:
 			_spectator_peers[1] = true
 			_become_local_spectator()
 		else:
@@ -307,7 +307,7 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 	if not is_mid_game_promote:
 		_spawn_world()
 	var peer_id: int = NetworkManager.local_peer_id()
-	if team_id == NetworkManager.SPECTATOR_TEAM_ID:
+	if team_id == GameRules.SPECTATOR_TEAM_ID:
 		_become_local_spectator()
 		return
 	if _is_local_spectator:
@@ -351,11 +351,11 @@ func on_player_connected(peer_id: int) -> void:
 	# Mid-game joiners always come in as players (existing auto-balance flow);
 	# joining-as-spectator is a lobby-only choice for v1.
 	var pending_slot: Dictionary = NetworkManager.pending_lobby_slots.get(peer_id, {})
-	if pending_slot.get("team_id", 0) == NetworkManager.SPECTATOR_TEAM_ID:
+	if pending_slot.get("team_id", 0) == GameRules.SPECTATOR_TEAM_ID:
 		_spectator_peers[peer_id] = true
 		NetworkManager.send_join_in_progress(peer_id, config)
 		NetworkManager.send_slot_assignment(peer_id,
-				pending_slot.get("team_slot", 0), NetworkManager.SPECTATOR_TEAM_ID,
+				pending_slot.get("team_slot", 0), GameRules.SPECTATOR_TEAM_ID,
 				Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
 		NetworkManager.send_sync_existing_players(peer_id, _collect_existing_player_data())
 		return
@@ -586,7 +586,7 @@ func _wire_subsystems() -> void:
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
 	_hit_claim = HitClaimResolver.new()
-	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker)
+	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
 
 	_phase_coord = PhaseCoordinator.new()
 	var force_record: Callable = Callable()
@@ -1062,7 +1062,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 			_on_one_timer_release_requested.bind(record.skater))
 	var pid: int = record.peer_id
 	record.skater.body_checked_player.connect(
-		func(v: Skater, _f: float, _d: Vector3) -> void: _on_hit_landed(pid, v)
+		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
 	)
 	record.skater.body_checked_player.connect(
 		func(_v: Skater, _f: float, _d: Vector3) -> void:
@@ -1113,6 +1113,13 @@ func _on_server_puck_picked_up_by(peer_id: int) -> void:
 	if not record.is_local:
 		NetworkManager.send_puck_picked_up(peer_id)
 	NetworkManager.send_carrier_changed_to_all(peer_id)
+	# Carrier just changed — force both team brains to recompute
+	# possession state + role assignments on the next physics frame
+	# instead of waiting up to TeamBrain.TICK_PERIOD (~166 ms). The
+	# natural cadence is fine for steady-state, but a pickup flips
+	# both teams' possession state and the previous-carrier-team's
+	# CARRIER slot is now stale.
+	_force_retick_team_brains()
 
 
 func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
@@ -1136,6 +1143,21 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 		return
 	record.controller.on_puck_released_network()
 	NetworkManager.send_carrier_changed_to_all(-1)
+	# Carrier released — possession state likely flips (TRANS_DO →
+	# NEUTRAL or TRANS_DO → TRANS_OD on a steal). See pickup hook
+	# for rationale.
+	_force_retick_team_brains()
+
+
+# Forces both team brains to re-evaluate possession state + role
+# assignments on the next physics frame, bypassing the natural
+# TeamBrain.TICK_PERIOD rate-limit. Called from the puck pickup /
+# release hooks where the carrier change makes the current role
+# assignment immediately stale. Both teams re-tick because a carrier
+# change affects both possession states symmetrically.
+func _force_retick_team_brains() -> void:
+	for brain: TeamBrain in team_brains:
+		brain.force_retick()
 
 
 func _on_server_puck_stripped_from(peer_id: int) -> void:
@@ -1469,7 +1491,7 @@ func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> v
 	if not NetworkManager.is_host or _swap_coord == null:
 		return
 	# Player → spectator: any peer requesting a spectator slot.
-	if new_team_id == NetworkManager.SPECTATOR_TEAM_ID:
+	if new_team_id == GameRules.SPECTATOR_TEAM_ID:
 		_demote_player_to_spectator(peer_id)
 		return
 	# Spectator → player: peer is in the spectator set, requesting a player slot.
@@ -1504,8 +1526,8 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 				local_ctrl.set_local_team_id(new_team_id)
 
 
-func _on_hit_landed(hitter_peer_id: int, victim: Skater) -> void:
-	_hit_claim.notify_local_hit(hitter_peer_id, victim)
+func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
+	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
 
 
 func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
@@ -1678,7 +1700,7 @@ func _build_lobby_roster_array() -> Array:
 	# since the original index isn't preserved across the game session.
 	var spec_idx: int = 0
 	for peer_id: int in _spectator_peers:
-		result.append([peer_id, NetworkManager.SPECTATOR_TEAM_ID, spec_idx,
+		result.append([peer_id, GameRules.SPECTATOR_TEAM_ID, spec_idx,
 				NetworkManager.get_peer_name(peer_id),
 				NetworkManager.get_peer_handedness(peer_id),
 				NetworkManager.get_peer_number(peer_id)])
@@ -1719,7 +1741,7 @@ func _push_lobby_assignments_to_clients() -> void:
 		var entry: Dictionary = slots[peer_id]
 		var team_id: int = entry.team_id
 		var team_slot: int = entry.team_slot
-		if team_id == NetworkManager.SPECTATOR_TEAM_ID:
+		if team_id == GameRules.SPECTATOR_TEAM_ID:
 			# Spectators get the slot-assignment RPC so they take the SpectatorCamera
 			# path on the client, plus existing-players sync for actor render. No
 			# state-machine slot is reserved and no skater is spawned.

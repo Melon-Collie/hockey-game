@@ -60,6 +60,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var rom_backhand_angle_max_deg: float = 90.0
 @export var rom_forehand_reach_max: float = 0.45
 @export var rom_backhand_reach_max: float = 0.70
+# Cap on how fast the aim target can move in world XZ per second. Smooths fast
+# mouse wraps across the back of the player (avoiding the blade snap that
+# crossing the IK ROM boundary used to produce) and ROM-clamp pops near the
+# reach limit. The IK consumes the smoothed target, so the blade visibly
+# inherits the cap. Tune up if normal aim feels laggy; tune down if wraps still
+# feel snappy.
+@export var max_blade_speed: float = 60.0
 
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
@@ -296,6 +303,10 @@ func apply_replay_state(state: SkaterNetworkState) -> void:
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
+	# Re-derive lean from velocity + hand reach so the upper body leans before
+	# the blade marker is placed (host's lean-compensated blade_y needs the
+	# matching upper-body rotation to land at the ice in world space).
+	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
 	_ik.update_bottom_hand()
 	skater.update_stick_mesh()

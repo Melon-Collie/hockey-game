@@ -5,14 +5,19 @@ extends RefCounted
 # host (receive) sides because body-check physics is local-authoritative — only
 # the local skater's body fires `body_checked_player`. The host can't directly
 # observe the contact, so it accepts a claim from the client and rewinds state
-# to validate range before crediting via HitTracker.
+# to validate the gates (impulse threshold, attacker-doesn't-have-puck,
+# victim-is-puck-relevant) before crediting via HitTracker.
 #
 # Flow:
-#   notify_local_hit(hitter_peer_id, victim)
-#     host  : credits HitTracker.on_hit directly
-#     client: throttles per (hitter,victim) and sends NetworkManager.send_hit_claim
+#   notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
+#     host  : runs HitRules.is_valid_hit against live state, credits directly
+#     client: pre-filters (impulse, local-carry), throttles per (hitter,victim),
+#             sends NetworkManager.send_hit_claim. The host re-validates the
+#             rule gates from rewound snapshots on receipt.
 #   receive_claim(hitter, victim, host_ts, rtt) [host]
 #     → reject if claim stale, peers unknown, or rewound positions out of range
+#     → re-derive impulse from rewound velocities along hitter→victim normal
+#     → reject if HitRules.is_valid_hit fails
 #     → otherwise credit via HitTracker.on_hit
 #
 # Throttle: body_checked_player fires every 240Hz tick during sustained contact;
@@ -29,6 +34,8 @@ const MAX_RANGE_M: float = 2.0
 var _registry: PlayerRegistry = null
 var _state_buffer: StateBufferManager = null
 var _hit_tracker: HitTracker = null
+var _puck_getter: Callable = Callable()             # () -> Puck
+var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 
 var _last_claim_sent: Dictionary[String, float] = {}  # client only: "hitter:victim" -> time
 
@@ -36,10 +43,14 @@ var _last_claim_sent: Dictionary[String, float] = {}  # client only: "hitter:vic
 func setup(
 		registry: PlayerRegistry,
 		state_buffer: StateBufferManager,
-		hit_tracker: HitTracker) -> void:
+		hit_tracker: HitTracker,
+		puck_getter: Callable,
+		puck_controller_getter: Callable) -> void:
 	_registry = registry
 	_state_buffer = state_buffer
 	_hit_tracker = hit_tracker
+	_puck_getter = puck_getter
+	_puck_controller_getter = puck_controller_getter
 
 
 # Drops the throttle dict on rematch so the first body-check after reset
@@ -48,12 +59,30 @@ func reset_throttle() -> void:
 	_last_claim_sent.clear()
 
 
-func notify_local_hit(hitter_peer_id: int, victim: Skater) -> void:
-	if NetworkManager.is_host:
-		_hit_tracker.on_hit(hitter_peer_id, _registry.resolve_peer_id(victim), _registry.resolve_team_id(victim))
-		return
+func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
 	var victim_peer_id: int = _registry.resolve_peer_id(victim)
 	if victim_peer_id == -1:
+		return
+	if NetworkManager.is_host:
+		var puck: Puck = _puck_getter.call() as Puck
+		var pc: PuckController = _puck_controller_getter.call() as PuckController
+		if puck == null or pc == null:
+			return
+		var puck_carrier: int = pc.get_carrier_peer_id()
+		var attacker_has_puck: bool = (puck_carrier == hitter_peer_id)
+		var victim_relevant: bool = HitRules.is_victim_puck_relevant(
+				victim_peer_id, puck_carrier, victim.global_position, puck.global_position)
+		if not HitRules.is_valid_hit(impulse_magnitude, attacker_has_puck, victim_relevant):
+			return
+		_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, _registry.resolve_team_id(victim))
+		return
+	# Client: pre-filter on impulse and local puck state so we don't spam the
+	# host with claims for trivial bumps or while the local player is carrying
+	# the puck. The host re-validates all gates from rewound snapshots.
+	if impulse_magnitude < HitRules.MIN_HIT_IMPULSE:
+		return
+	var pc: PuckController = _puck_controller_getter.call() as PuckController
+	if pc == null or pc.get_carrier_peer_id() == hitter_peer_id:
 		return
 	var key: String = "%d:%d" % [hitter_peer_id, victim_peer_id]
 	var now: float = Time.get_ticks_msec() / 1000.0
@@ -84,5 +113,25 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	if hitter_snap == null or victim_snap == null:
 		return
 	if hitter_snap.position.distance_to(victim_snap.position) > MAX_RANGE_M:
+		return
+	var puck_snap: PuckNetworkState = snapshot.puck_state
+	if puck_snap == null:
+		return
+	# Re-derive impulse from rewound velocities along the hitter→victim normal.
+	# This both validates closing speed and avoids trusting a client-supplied
+	# impulse over the wire. Skater weight is uniform (1.0) so impulse ≈ approach.
+	var to_victim: Vector3 = victim_snap.position - hitter_snap.position
+	to_victim.y = 0.0
+	if to_victim.length_squared() < 0.0001:
+		return
+	var normal: Vector3 = to_victim.normalized()
+	var rel_vel: Vector3 = hitter_snap.velocity - victim_snap.velocity
+	rel_vel.y = 0.0
+	var impulse: float = rel_vel.dot(normal)
+	var attacker_has_puck: bool = (puck_snap.carrier_peer_id == hitter_peer_id)
+	var victim_relevant: bool = HitRules.is_victim_puck_relevant(
+			victim_peer_id, puck_snap.carrier_peer_id,
+			victim_snap.position, puck_snap.position)
+	if not HitRules.is_valid_hit(impulse, attacker_has_puck, victim_relevant):
 		return
 	_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, victim_rec.team.team_id)

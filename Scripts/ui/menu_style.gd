@@ -101,3 +101,43 @@ static func close_button() -> Button:
 # Flip a tab button between active and inactive theme variations.
 static func apply_tab_button(btn: Button, active: bool) -> void:
 	btn.theme_type_variation = &"TabButtonActive" if active else &"TabButton"
+
+
+# Wire hover/press scale animation on a button. The pivot tracks the button's
+# size so the scale stays centered when the layout resizes after _ready.
+static func wire_hover_scale(btn: Button) -> void:
+	btn.item_rect_changed.connect(func() -> void: btn.pivot_offset = btn.size / 2.0)
+	btn.mouse_entered.connect(func() -> void: _scale_btn(btn, Vector2(1.04, 1.04)))
+	btn.mouse_exited.connect(func() -> void: _scale_btn(btn, Vector2.ONE))
+	btn.button_down.connect(func() -> void: _scale_btn(btn, Vector2(0.97, 0.97)))
+	btn.button_up.connect(func() -> void: _scale_btn(btn, Vector2(1.04, 1.04)))
+
+
+static func _scale_btn(btn: Button, target: Vector2) -> void:
+	var t := btn.create_tween()
+	t.tween_property(btn, "scale", target, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+# Standard popup-row button: 220×48, font 20, hover-scale tween, click sound.
+static func popup_button(label: String) -> Button:
+	var btn := Button.new()
+	btn.text = label
+	btn.custom_minimum_size = Vector2(220, 48)
+	btn.add_theme_font_size_override("font_size", 20)
+	wire_hover_scale(btn)
+	SoundManager.wire_button(btn)
+	return btn
+
+
+# Build an OptionButton populated with every team color preset, with one
+# selected by id. Caller wires SoundManager if desired.
+static func color_option_btn(selected_id: String, min_size: Vector2, font_size: int) -> OptionButton:
+	var btn := OptionButton.new()
+	btn.custom_minimum_size = min_size
+	btn.add_theme_font_size_override("font_size", font_size)
+	var ids: Array[String] = TeamColorRegistry.get_all_ids()
+	for i: int in ids.size():
+		btn.add_item(TeamColorRegistry.get_preset_name(ids[i]), i)
+		if ids[i] == selected_id:
+			btn.select(i)
+	return btn

@@ -16,7 +16,8 @@ func before_each() -> void:
 	hit_tracker = HitTracker.new()
 	hit_tracker.setup(registry)
 	resolver = HitClaimResolver.new()
-	resolver.setup(registry, null, hit_tracker)
+	# puck / puck_controller getters aren't needed for the state-only branches.
+	resolver.setup(registry, null, hit_tracker, Callable(), Callable())
 
 
 # ── Throttle state ────────────────────────────────────────────────────────────

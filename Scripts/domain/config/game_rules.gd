@@ -63,6 +63,19 @@ static func clamp_to_rink_inner(world_xz: Vector2) -> Vector2:
 # ── Puck ──────────────────────────────────────────────────────────────────────
 const PUCK_START_POS: Vector3 = Vector3(0, 0.05, 0)
 const ICE_FRICTION: float = 0.01
+# Standard gravity. Used by AI trajectory prediction to convert the
+# dimensionless ICE_FRICTION coefficient into a deceleration: a puck
+# on ice decelerates at roughly μ × g via Coulomb friction.
+const GRAVITY_M_S2: float = 9.81
+# Puck deceleration on ice — Coulomb model. Matches the physics
+# material's friction × gravity. Single source of truth so AI
+# trajectory math and any future analytic puck simulation stay in
+# sync with the actual rink physics.
+const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
+# Board restitution coefficient. Mirrors Physics/boards.tres bounce
+# value so AI prediction models post-bounce trajectories the same
+# way Jolt resolves them.
+const PUCK_BOARD_BOUNCE: float = 0.4
 # Seconds puck must remain fully outside the rink boundary before a faceoff is forced.
 const PUCK_OOB_FACEOFF_TIMEOUT: float = 3.0
 
@@ -84,6 +97,11 @@ const RULE_SET_NAMES: Array[String] = ["Off", "Arcade", "NHL"]
 # ── Players ───────────────────────────────────────────────────────────────────
 const MAX_PLAYERS: int = 6  # 3v3
 const MAX_SPECTATORS: int = 4
+# Sentinel team_id for spectators; players use 0 (home) or 1 (away). The lobby
+# slot encoding, assign_player_slot RPC, and GameManager spectator branches all
+# compare against this. -1 because it falls cleanly outside the 0..1 player
+# team range and is naturally invalid for any team-indexed array.
+const SPECTATOR_TEAM_ID: int = -1
 # ENet connection cap = playable roster + spectator slots. Player count
 # (3v3 roster) is still gated separately by PlayerRules.MAX_PER_TEAM.
 const MAX_CONNECTIONS: int = MAX_PLAYERS + MAX_SPECTATORS
