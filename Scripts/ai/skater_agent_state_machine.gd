@@ -145,6 +145,15 @@ const SOFT_HANDS_MOVE_SCALE: float = 0.4
 # goal direction.
 const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 
+# Minimum rink-side margin for the carry mouse target relative to the
+# attacking goal line. Without this clamp, a carrier within 2 m of
+# the goal line gets a mouse target that sits PAST the goal line —
+# the blade IK extends through the net, the puck attached to the
+# blade gets pushed into the goalie, rebound, repeat. Clamping the
+# mouse to stay at least this far on the rink side stops the blade
+# from punching through.
+const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
+
 # Stickhandling: shift the carrier's mouse perpendicular to facing,
 # AWAY from the closest incoming defender. Pulls the puck off-side
 # from where the defender is reaching. Defenders beyond
@@ -358,6 +367,17 @@ var _shoot_sweep_dir_xy: Vector2 = Vector2.ZERO
 # to the puck.
 var _shoot_wind_up_start: Vector3 = Vector3.ZERO
 var _shoot_aim_target: Vector3 = Vector3.ZERO
+
+# Pre-aim target locked at the moment intent flips from CARRY to a
+# fire action. Without this, `_aim_target_for_intent` recomputes
+# `compute_open_net_aim` every tick — and when the goalie is roughly
+# centered the larger-arc selection can flip side-to-side per tick,
+# making the mouse target jump from one corner to the other. Mouse
+# never converges; bot's stick visibly wiggles. Locking the aim once
+# at intent commit holds the convergence target stable. Reset to
+# Vector3.INF when entering CARRY or after pre-aim hands off to the
+# press state (which computes its own fresh aim with wobble).
+var _locked_pre_aim_point: Vector3 = Vector3.INF
 
 # Slapper bookkeeping. Symmetric to the wrister fields above.
 # `slap_pressed` fires once at tick 0 (transitions SkaterStateMachine
@@ -745,6 +765,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_intent_wait_ticks = 0
 		_pass_target_peer_id = -1
 		_shot_is_elevated = false
+		_locked_pre_aim_point = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
@@ -784,6 +805,15 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		var new_intent: State = _state_from_carrier_intent(_carrier.intended_action)
 		if new_intent != _intended_action:
 			_intent_wait_ticks = 0
+			# Capture the aim point ONCE so pre-aim convergence has a
+			# stable target. Open-net arc selection can flip sides
+			# per tick when the goalie is centered, which makes the
+			# mouse target jump and the bot's stick wiggle.
+			match new_intent:
+				State.SHOOT_PRESSED, State.SLAPPER_PRESSED:
+					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos)
+				State.PASS_PRESSED:
+					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
 		_intended_action = new_intent
 
 	# Steering: drift toward the carry destination when actually
@@ -825,6 +855,10 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			_set_state(_intended_action)
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
+			# Press state computes its own fresh aim with wobble on
+			# tick 0; release the pre-aim lock so the next CARRY →
+			# fire transition captures a new one.
+			_locked_pre_aim_point = Vector3.INF
 			# Force a fresh re-eval the next time CARRY is entered —
 			# without this the carrier keeps its committed intent
 			# across the press cycle and re-fires the same action
@@ -854,11 +888,21 @@ func _state_from_carrier_intent(intent: int) -> State:
 # not distance, so we keep the target close to the bot for fast
 # convergence under the motion-limited model.
 func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	# Pre-aim convergence uses the LOCKED aim point captured at intent
+	# transition (stable across ticks) rather than recomputing per tick.
+	# Falls back to a fresh compute if the lock is missing — keeps the
+	# old behavior if some code path skipped the capture.
 	match _intended_action:
 		State.PASS_PRESSED:
-			return _aim_2m_toward(self_pos, _pass_aim_point(snapshot, self_pos))
+			var target: Vector3 = (_locked_pre_aim_point
+					if _locked_pre_aim_point.is_finite()
+					else _pass_aim_point(snapshot, self_pos))
+			return _aim_2m_toward(self_pos, target)
 		State.SHOOT_PRESSED, State.SLAPPER_PRESSED:
-			return _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
+			var target: Vector3 = (_locked_pre_aim_point
+					if _locked_pre_aim_point.is_finite()
+					else _shot_aim_point(snapshot, self_pos))
+			return _aim_2m_toward(self_pos, target)
 		_:
 			return _carry_mouse_aim(snapshot, self_pos)
 
@@ -1299,6 +1343,13 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	else:
 		forward_dir = Vector3(0.0, 0.0, attacking_z)
 	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
+	# Clamp the carry mouse so it stays on the rink side of the
+	# attacking goal line — the blade IK chases the mouse, and a mouse
+	# target past the goal line punches the blade through the net.
+	var goal_line_z: float = _attacking_goal_pos.z
+	var max_forward_z: float = goal_line_z + CARRY_GOAL_LINE_BUFFER_M * _own_goal_dir
+	if (base.z - max_forward_z) * _own_goal_dir < 0.0:
+		base.z = max_forward_z
 	# Stickhandling offset is raw — `_step_mouse_toward` provides the
 	# motion smoothing across ticks. When two defenders converge from
 	# opposite sides and the raw target alternates per tick, the
