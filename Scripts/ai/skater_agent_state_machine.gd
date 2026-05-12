@@ -758,10 +758,9 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 	_carrier.decide(ctx)
 
-	var new_intent: State = _state_from_carrier_intent(_carrier.intended_action)
-	if new_intent != _intended_action:
-		_intent_wait_ticks = 0
-	_intended_action = new_intent
+	# Support state from the carrier propagates every tick — press
+	# states (SHOOT / SLAPPER / PASS) and pre-aim convergence read
+	# these and they need to stay fresh.
 	_last_carry_anchor = _carrier.last_carry_anchor
 	_pass_target_peer_id = _carrier.pass_target_peer_id
 	_shot_is_elevated = _carrier.shot_is_elevated
@@ -771,6 +770,21 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	debug_pass_peer_id = _carrier.debug_pass_peer_id
 	debug_carry_score = _carrier.debug_carry_score
 	debug_carry_pos = _carrier.debug_carry_pos
+
+	# Intent transitions are gated on "currently in CARRY." Once a
+	# fire intent (SHOOT / SLAPPER / PASS) is selected we hold it
+	# through pre-aim convergence (or the INTENT_MAX_WAIT_TICKS safety
+	# timeout). Without this gate, carrier score oscillations between
+	# re-eval ticks can flip the intent back to CARRY before the
+	# mouse + facing finish converging — the bot wants to shoot, never
+	# quite finishes aiming, never fires. Press states still own their
+	# own bail conditions (defender closing, puck loss) and the
+	# unconditional `if not have_puck` early-return above still works.
+	if _intended_action == State.CARRY:
+		var new_intent: State = _state_from_carrier_intent(_carrier.intended_action)
+		if new_intent != _intended_action:
+			_intent_wait_ticks = 0
+		_intended_action = new_intent
 
 	# Steering: drift toward the carry destination when actually
 	# carrying; HOLD POSITION when pre-aiming a fire action. The
