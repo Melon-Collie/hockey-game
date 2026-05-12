@@ -71,6 +71,43 @@ func test_corner_bias_pulls_aim_toward_post() -> void:
 	assert_lte(aim.x, NET_HW, "aim still inside the net")
 
 
+func test_goalie_velocity_biases_aim_to_recovery_side() -> void:
+	# Centered goalie + centered shooter — without velocity, tie-break
+	# picks left arc. With goalie sliding RIGHT (positive velocity_x),
+	# the shadow projects further right and the LEFT arc grows. Both
+	# cases aim to the left half (negative x), confirming the recovery-
+	# side selection is preserved/strengthened.
+	var shooter := Vector3(0.0, 0.0, 20.0)
+	var goalie := Vector3(0.0, 0.0, 26.5)
+	var no_vel: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie, NET_Z, NET_HW, SHADOW_HW)
+	var goalie_sliding_right: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie, NET_Z, NET_HW, SHADOW_HW,
+			AIShotAim.DEFAULT_CORNER_BIAS, 4.0)  # 4 m/s slide right
+	assert_lt(no_vel.x, 0.0, "sanity: tie-break picks left arc")
+	assert_lt(goalie_sliding_right.x, 0.0,
+			"goalie sliding right keeps aim on the recovery (left) side")
+
+
+func test_goalie_velocity_can_flip_arc_choice() -> void:
+	# Goalie slightly LEFT (-0.2 m) — without velocity, right arc is
+	# wider so aim goes right. Strong RIGHTWARD goalie velocity shifts
+	# the shadow far enough right that the LEFT arc becomes wider, and
+	# the aim flips to the left (the recovery side the goalie is
+	# moving away from).
+	var shooter := Vector3(0.0, 0.0, 20.0)
+	var goalie := Vector3(-0.2, 0.0, 26.5)
+	var aim_no_vel: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie, NET_Z, NET_HW, SHADOW_HW)
+	assert_gt(aim_no_vel.x, 0.0,
+			"sanity: goalie offset left → aim right without velocity")
+	var aim_strong_right: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie, NET_Z, NET_HW, SHADOW_HW,
+			AIShotAim.DEFAULT_CORNER_BIAS, 6.0)
+	assert_lt(aim_strong_right.x, 0.0,
+			"strong goalie velocity flips arc choice to the recovery side")
+
+
 func test_corner_bias_zero_matches_arc_midpoint() -> void:
 	# corner_bias = 0 reproduces the legacy "midpoint of open arc" behavior.
 	var shooter := Vector3(0.0, 0.0, 20.0)
