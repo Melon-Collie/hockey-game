@@ -55,6 +55,17 @@ const SHOT_RANGE_FALLOFF_M: float = 22.0
 # out; lower toward 4 if they keep crashing into the goalie.
 const IDEAL_SHOT_DIST_M: float = 5.0
 
+# Close-side falloff width. The dist_response drops symmetrically on
+# both sides of IDEAL_SHOT_DIST_M, but driving inside the slot is
+# only mildly worse than the slot itself (the GOALIE_ZONE penalty
+# below already covers the "crashed into the goalie" case). Using a
+# wider close-side width than IDEAL_SHOT_DIST_M softens the inside
+# falloff so a 3 m point-blank shot loses only ~6% from distance
+# instead of the ~16% the symmetric formula gave. Raise toward 12
+# if point-blank shots feel under-valued; lower toward 5 (symmetric)
+# if bots crash into the crease too often.
+const CLOSE_FALLOFF_M: float = 8.0
+
 # Position-potential closeness ramp. position_potential is only used
 # by `_score_at` when the EVALUATOR is outside SHOT_RANGE_FALLOFF_M —
 # inside that range the bot is committed to a shot and uses score_shoot
@@ -86,7 +97,7 @@ const SLOT_RADIUS_M: float = 6.0
 # squared goalies; up (0.45) → bots pass/cycle more. SQUARENESS_OFFSET
 # down (e.g., 25°) → cross-seam plays score higher (goalie reads as
 # "exposed" sooner); up (40°) → only severe slides expose the goalie.
-const BASE_COVERAGE: float = 0.35
+const BASE_COVERAGE: float = 0.28
 const SQUARENESS_OFFSET_RAD: float = 0.5235988  # deg_to_rad(30)
 
 # Goalie position prediction. Replaces velocity-extrapolation with a
@@ -249,15 +260,23 @@ static func score_shoot(
 		dist_response = 1.0 - far_norm * far_norm
 	else:
 		var close_norm: float = clampf(
-				(IDEAL_SHOT_DIST_M - dist) / IDEAL_SHOT_DIST_M,
+				(IDEAL_SHOT_DIST_M - dist) / CLOSE_FALLOFF_M,
 				0.0, 1.0)
 		dist_response = 1.0 - close_norm * close_norm
 
 	# Puck arc angle: atan2 of lateral offset over forward distance.
 	# Range [-PI/2, +PI/2] given the forward gate above.
+	#
+	# Quadratic-soften (1 - x²) instead of linear (1 - x): a human reads
+	# slightly off-center as still a great shot — at 30° off-center the
+	# linear curve gave 0.67, quadratic gives 0.89. Truly bad-angle
+	# shots (>= 75°) still fall to ≤ 0.31 so the bot doesn't shoot
+	# from the corners. Ease the curve toward `1 - 0.7 × x²` if bots
+	# start firing wide-angle pucks from distance.
 	var puck_arc_angle: float = atan2(shooter.x - attacking_goal.x, forward)
 	var shot_angle: float = absf(puck_arc_angle)
-	var shot_angle_factor: float = clampf(1.0 - shot_angle / (PI * 0.5), 0.0, 1.0)
+	var arc_norm: float = clampf(shot_angle / (PI * 0.5), 0.0, 1.0)
+	var shot_angle_factor: float = 1.0 - arc_norm * arc_norm
 
 	# Goalie arc angle at release. If the goalie ended up behind their
 	# own goal line (degenerate edge — shouldn't happen in normal play),

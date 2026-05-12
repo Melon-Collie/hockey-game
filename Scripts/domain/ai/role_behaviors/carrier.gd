@@ -222,34 +222,48 @@ func _pick_action(ctx: RoleContext) -> void:
 		if int(ctx.team_id_resolver.call(peer_id)) == ctx.team_id:
 			_scratch_teammate_ids.append(peer_id)
 
+	# Projected RELEASE position for SHOOT scoring. The wrister/slapper
+	# charge windows mean the puck actually leaves the blade ~0.25s /
+	# ~0.55s after the SHOOT intent commits; a bot rushing into the
+	# slot should be scoring the spot they'll release from, not the
+	# spot they're at now. This also lets the bot start the wind-up
+	# early — the score that wins is for the future spot, and by the
+	# time the charge completes, the bot has skated into it.
+	var self_velocity: Vector3 = ctx.self_velocity
+	var horizontal_velocity: Vector3 = Vector3(self_velocity.x, 0.0, self_velocity.z)
+	var wrister_release_pos: Vector3 = (
+			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)
+	var slapper_release_pos: Vector3 = (
+			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S)
+
 	# Goalie predictions per release time. Wrister and slapper differ
 	# only in charge length; pass-receiver and carry-candidate cases
 	# get their own predictions inside _compute_best_pass / _best_carry.
+	# Predicted with the release-pos puck X so the goalie's slide target
+	# matches where the shot actually leaves the blade.
 	var wrister_goalie: Vector3 = _predict_goalie_at(
-			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
+			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
 	var slapper_goalie: Vector3 = _predict_goalie_at(
-			ctx, SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S, self_pos)
+			ctx, SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S, slapper_release_pos)
 	# Goalie's CURRENT position (squared to whoever currently holds the
 	# puck — that's us as the carrier). Threaded into score_shoot /
 	# score_pass so the goalie pressure zone penalises shots from
 	# inside the goalie's current set-up line. Back-door receivers
-	# (off-axis from this position) pass through unpenalised.
+	# (off-axis from this position) pass through unpenalised. Anchored
+	# on current self_pos rather than release_pos because that's the
+	# goalie's actual current setup line.
 	var goalie_now: Vector3 = _goalie_now(ctx)
 
-	# Top-level SHOOT — leaf score_shoot at current position. Wrister
-	# uses wrister-charge-projected opponents; slapper uses longer
-	# slapper-charge projection × power bonus × motion penalty. Pick
-	# whichever shot type scores higher.
+	# Top-level SHOOT.
 	var wrister_score: float = AIActionScoring.score_shoot(
-			self_pos, attacking_goal, wrister_goalie,
+			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot, goalie_now)
-	var self_velocity: Vector3 = ctx.self_velocity
 	var self_speed: float = sqrt(self_velocity.x * self_velocity.x
 			+ self_velocity.z * self_velocity.z)
 	var slapper_motion_factor: float = (
 			SLAPPER_MOTION_PENALTY if self_speed > SLAPPER_MAX_SPEED_M_S else 1.0)
 	var slapper_score: float = AIActionScoring.score_shoot(
-			self_pos, attacking_goal, slapper_goalie,
+			slapper_release_pos, attacking_goal, slapper_goalie,
 			GameRules.NET_HALF_WIDTH,
 			_scratch_opponents_slapper, goalie_now) * SLAPPER_POWER_BONUS * slapper_motion_factor
 	var shoot_use_slapper: bool = slapper_score > wrister_score
