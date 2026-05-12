@@ -32,9 +32,9 @@ const PRESSURE_RADIUS_M: float = 4.0
 const PRESSURE_MAX_COUNT: int = 2
 
 # Beyond this range, shots score 0 from distance alone — keeps bots
-# from launching pucks at the goalie from the blue line. Linear falloff:
-# `1 - dist / SHOT_RANGE_FALLOFF_M`. Bumped from 18 → 22 to lift
-# mid-range scores: the response at 10 m is 0.55 instead of 0.44, so
+# from launching pucks at the goalie from the blue line. Quadratic
+# falloff outside IDEAL_SHOT_DIST_M. Bumped from 18 → 22 to lift
+# mid-range scores: the response at 10 m is 0.91 instead of 0.83, so
 # clean mid-range shots score meaningfully and pass-to-receiver scores
 # (which transitively include `score_shoot(receiver)`) are pulled up
 # in the same band — passes to a teammate with a clear path to the
@@ -42,6 +42,18 @@ const PRESSURE_MAX_COUNT: int = 2
 # if bots still refuse meaningful shots; lower toward 18 if blue-line
 # shots are too common.
 const SHOT_RANGE_FALLOFF_M: float = 22.0
+
+# The slot — the spot where dist_response peaks (= 1.0). Distances
+# closer to the goal score below 1.0 because driving past the slot
+# means skating into the goalie's coverage; distances further away
+# score below 1.0 because the shot is too long. 5 m matches the
+# face-off circle hash / hard slot in real-rink geometry. Without this
+# peak the dist_response is monotone in 1/dist and the carrier always
+# scores a 1-m drive to the net higher than a slot stand-still shot,
+# so it never actually fires — it just keeps closing distance until
+# the goalie eats the puck. Raise toward 7 if bots release too far
+# out; lower toward 4 if they keep crashing into the goalie.
+const IDEAL_SHOT_DIST_M: float = 5.0
 
 # Position-potential closeness ramp. position_potential is only used
 # by `_score_at` when the EVALUATOR is outside SHOT_RANGE_FALLOFF_M —
@@ -90,6 +102,27 @@ const GOALIE_MAX_LATERAL_SPEED_MPS: float = 5.0
 # just picks an aim point past the goalie for the segment check.
 const GOALIE_SHADOW_HALF_M: float = 0.3
 
+# Goalie pressure zone — narrow rectangle in front of the goalie's
+# CURRENT (squared-to-puck) position. Penalizes score_shoot when the
+# shooter sits inside it. Models the hockey intuition that shooting
+# from where the goalie is currently set up is hard; extending the
+# goalie laterally with a pass, or backing off the line, creates a
+# better chance.
+#
+# Anchored on the goalie's CURRENT position (not the predicted-at-
+# release one) so a back-door receiver — off-axis from the carrier's
+# lane, which is what the goalie is currently squared to — sits
+# outside the zone and isn't penalized. A carrier driving on-axis
+# toward net is in the same goalie's pressure line → inside zone.
+#
+# Half-width 1 m × depth 3.5 m: covers roughly stick-reach laterally
+# and the close-shot range in depth. Slot (5 m from goal ≈ 4.35 m
+# from goalie) sits just outside the depth, so slot shots aren't
+# penalized; only "drove past slot" carries land in the zone.
+const GOALIE_ZONE_HALF_WIDTH_M: float = 1.0
+const GOALIE_ZONE_DEPTH_M: float = 3.5
+const GOALIE_ZONE_MAX_PENALTY: float = 0.8
+
 # Lane-clear: an opponent within this perpendicular distance of the
 # puck-flight segment can intercept. Roughly stick-blade reach of a
 # lane defender. Raise toward 2.0 if passes still get picked off
@@ -115,7 +148,33 @@ const LANE_REACTION_RAMP_S: float = 0.10
 const SHOT_SPEED_M_S: float = 30.0
 const PASS_SPEED_M_S: float = 22.0
 
-# Utility-AI knobs. _pick_action re-runs every physics tick and treats
+# Reference top skating speed. Matches SkaterController.max_speed
+# default. Used by time_to_arrive() for momentum-aware ETAs across
+# every role behavior + chase intercept lookahead. Single source of
+# truth so retunes propagate everywhere.
+const SKATER_REF_SPEED_M_S: float = 10.5
+
+# Approximate kinematic stopping time for a skater steering against
+# their own velocity. Derived from the friction model in
+# SkaterController (drag = friction + friction_drag × |v| ≈ 3.6 m/s²
+# at top speed) plus reverse-thrust steering. Used by OUTLET's
+# offside filter to project a candidate forward by current velocity:
+# if "where I'd be in BRAKE_TIME_S given current momentum" is past
+# the blue line, the candidate is rejected as effectively offside.
+# Pure kinematic — the constant is "how long does momentum dominate
+# steering," not a behavioral knob.
+const SKATER_BRAKE_TIME_S: float = 0.3
+
+# Floor for momentum-adverse `time_to_arrive` returns. When the
+# velocity component along the destination is so negative that
+# effective_speed would go non-positive, clamp at this minimum so
+# reverse candidates have finite (large) ETAs rather than infinite
+# decay. 1.0 m/s ≈ "I have to brake and reverse, but I'll get there
+# eventually."
+const MIN_TRAVEL_SPEED_M_S: float = 1.0
+
+# Utility-AI knobs. AIRoleCarrier._pick_action re-runs every
+# PICK_ACTION_PERIOD_TICKS physics ticks and treats
 # CARRY as a fourth competing option scored as
 #
 #   carry_score = score_at(destination) × discount(time_to_destination)
@@ -146,7 +205,7 @@ const ACTION_HYSTERESIS_MARGIN: float = 0.05
 #   coverage     = BASE_COVERAGE × squareness
 #   squareness   = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
 #
-#   dist_response     = 1 - (dist / SHOT_RANGE_FALLOFF_M)²            (quadratic)
+#   dist_response     = peak-at-slot curve (1.0 at IDEAL_SHOT_DIST_M)
 #   shot_angle_factor = 1 - shot_angle / (PI / 2)                      (linear)
 #   puck_arc_angle    = atan2(shooter.x - goal.x, abs(shooter.z - goal.z))
 #   goalie_arc_angle  = atan2(goalie_at_release.x - goal.x, ...)
@@ -165,7 +224,8 @@ static func score_shoot(
 		attacking_goal: Vector3,
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
-		opponents: Array[Vector3]) -> float:
+		opponents: Array[Vector3],
+		goalie_current_pos: Vector3 = Vector3.INF) -> float:
 	# Hard gate: shooter past (or on) the attacking goal line can't
 	# shoot in — wraparound territory, returns 0 immediately.
 	var net_normal_z: float = -signf(attacking_goal.z)
@@ -173,14 +233,25 @@ static func score_shoot(
 	if forward < 0.001:
 		return 0.0
 
-	# Distance response — quadratic. Saturates near the net, so going
-	# from 4 m → 2 m gains less than 12 m → 10 m. Combined with the
-	# carry time-decay this naturally prevents the bot from driving
-	# into the goalie at close range; fire wins the comparison once
-	# the bot is in shooting range.
+	# Distance response — bidirectional quadratic. Peaks at 1.0 at the
+	# slot (IDEAL_SHOT_DIST_M) and falls off in both directions:
+	# quadratic toward the goal mouth (penalises crashing into the
+	# goalie's coverage) and quadratic out to SHOT_RANGE_FALLOFF_M
+	# (penalises long bombs). Without the close-range falloff the
+	# carrier keeps preferring "drive 1 m closer" over "shoot now," so
+	# bots never release in the slot — they grind into the goalie.
 	var dist: float = shooter.distance_to(attacking_goal)
-	var dist_norm: float = clampf(dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
-	var dist_response: float = 1.0 - dist_norm * dist_norm
+	var dist_response: float
+	if dist >= IDEAL_SHOT_DIST_M:
+		var far_norm: float = clampf(
+				(dist - IDEAL_SHOT_DIST_M) / (SHOT_RANGE_FALLOFF_M - IDEAL_SHOT_DIST_M),
+				0.0, 1.0)
+		dist_response = 1.0 - far_norm * far_norm
+	else:
+		var close_norm: float = clampf(
+				(IDEAL_SHOT_DIST_M - dist) / IDEAL_SHOT_DIST_M,
+				0.0, 1.0)
+		dist_response = 1.0 - close_norm * close_norm
 
 	# Puck arc angle: atan2 of lateral offset over forward distance.
 	# Range [-PI/2, +PI/2] given the forward gate above.
@@ -220,7 +291,36 @@ static func score_shoot(
 	# the net.
 	var pressure_factor: float = 1.0 - _pressure(shooter, opponents, attacking_goal - shooter)
 
-	return shot_quality * lane * pressure_factor
+	# Goalie pressure zone — when the caller provides the goalie's
+	# CURRENT position (squared to the puck holder), penalize shots
+	# from inside the goalie's narrow forward zone. Default sentinel
+	# (Vector3.INF) skips this for backward compat.
+	var goalie_zone_factor: float = 1.0
+	if goalie_current_pos.is_finite():
+		goalie_zone_factor = 1.0 - goalie_zone_penalty(shooter, goalie_current_pos)
+
+	return shot_quality * lane * pressure_factor * goalie_zone_factor
+
+
+# Penalty in [0, GOALIE_ZONE_MAX_PENALTY] for a shooter sitting
+# inside the goalie's pressure zone — narrow rectangle anchored on
+# the goalie's CURRENT position, extending toward mid-ice. 0 outside
+# the zone; peaks at the goalie's own position; ramps to 0 at the
+# zone edges. Callers multiply (1 - this) into score_shoot.
+static func goalie_zone_penalty(shooter: Vector3,
+		goalie_current_pos: Vector3) -> float:
+	# Forward direction from goalie toward mid-ice (away from goal
+	# line). For Team 0 defending +Z, goalie at +z, forward is -Z.
+	var forward_sign: float = -signf(goalie_current_pos.z)
+	var forward_component: float = (shooter.z - goalie_current_pos.z) * forward_sign
+	if forward_component <= 0.0 or forward_component >= GOALIE_ZONE_DEPTH_M:
+		return 0.0
+	var lateral: float = absf(shooter.x - goalie_current_pos.x)
+	if lateral >= GOALIE_ZONE_HALF_WIDTH_M:
+		return 0.0
+	var depth_factor: float = 1.0 - forward_component / GOALIE_ZONE_DEPTH_M
+	var lateral_factor: float = 1.0 - lateral / GOALIE_ZONE_HALF_WIDTH_M
+	return GOALIE_ZONE_MAX_PENALTY * depth_factor * lateral_factor
 
 
 # Predicts the goalie's position at a future moment (shot release).
@@ -287,7 +387,8 @@ static func score_pass(
 		attacking_goal: Vector3,
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
-		opponents: Array[Vector3]) -> float:
+		opponents: Array[Vector3],
+		goalie_current_pos: Vector3 = Vector3.INF) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
@@ -298,8 +399,14 @@ static func score_pass(
 	# Receiver's value as a shooter from where they are. Caller is
 	# responsible for predicting the goalie at the receiver's release
 	# time (flight + receiver wrister charge) — see predict_goalie_pos.
+	# goalie_current_pos threads through so the goalie pressure zone
+	# (anchored on the goalie's CURRENT position, squared to the
+	# carrier/puck holder) applies correctly for back-door receivers:
+	# they're off-axis from the carrier's lane → outside zone → no
+	# penalty, preserving back-door as a strong pass option.
 	var receiver_shot: float = score_shoot(
-			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents)
+			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
+			goalie_current_pos)
 	return lane * receiver_shot
 
 
@@ -472,6 +579,54 @@ static func position_potential(
 	return closeness * angle_factor * openness
 
 
+# "Threat surface" — the value an opp can extract from their current
+# position from a defender's perspective. score_shoot returns 0 when
+# the opp is outside SHOT_RANGE_FALLOFF_M; that's correct for a
+# carrier choosing whether to release, but useless for a defender
+# trying to position relative to a far-but-still-dangerous opp.
+# Falling back to position_potential gives a non-zero gradient over
+# any legal opp position, so ANCHOR/COVER pull toward the opp's
+# pressure cone (reducing position_potential.openness) instead of
+# sitting flat at slot when no immediate shot threat exists.
+#
+# Used by ANCHOR for inverse shot-threat scoring across all opps.
+static func threat_surface_shoot(
+		opp_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		defenders: Array[Vector3]) -> float:
+	var shoot: float = score_shoot(
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
+	var positional: float = position_potential(opp_pos, our_net, defenders)
+	return maxf(shoot, positional)
+
+
+# Pass-threat surface — score_pass with a positional fallback for
+# the same reason as threat_surface_shoot. score_pass folds in
+# lane_clear × score_shoot(receiver); when receiver_shot collapses
+# to 0, the lane has no value to defend. Fallback rewards defenders
+# for being in the lane (lane_clear ↓) AND for closing on the
+# receiver (position_potential.openness ↓).
+#
+# Used by COVER for inverse pass-threat scoring across opp teammates.
+static func threat_surface_pass(
+		carrier_pos: Vector3,
+		receiver_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		defenders: Array[Vector3]) -> float:
+	if pass_lane_blocked_by_net(carrier_pos, receiver_pos):
+		return 0.0
+	var pass_score: float = score_pass(
+			carrier_pos, receiver_pos, our_net, our_goalie_pos,
+			net_half_width, defenders)
+	var lane: float = _lane_clear(carrier_pos, receiver_pos, defenders, PASS_SPEED_M_S)
+	var positional: float = position_potential(receiver_pos, our_net, defenders)
+	return maxf(pass_score, lane * positional)
+
+
 # Public lane-clearance check for CARRY candidates — the bot is
 # physically traveling along this segment, not firing a puck through
 # it, so the reaction-window math from `_lane_clear` doesn't apply.
@@ -506,6 +661,33 @@ static func path_clearance(from: Vector3, to: Vector3,
 		return 1.0
 	var perp: float = sqrt(min_perp_sq)
 	return clampf(perp / LANE_CLEAR_RADIUS_M, 0.0, 1.0)
+
+
+# Momentum-aware time to arrive at `dest` from `from_pos` carrying
+# `from_velocity`. effective_speed = SKATER_REF_SPEED + component of
+# velocity along (from→dest); a skater already moving toward dest gets
+# there faster, a skater moving away takes longer. Clamped at
+# MIN_TRAVEL_SPEED_M_S so reverse-direction candidates have finite
+# arrival time (slower, but not infinite).
+#
+# Used by AIRoleCarrier._best_carry to discount candidates the bot is
+# currently moving away from, by AIController chase-intercept lookahead
+# for opponent ETA estimation, and by off-puck role behaviors that
+# need a momentum-aware ETA without inventing their own constants
+# (e.g., SUPPORT's foot-race-home exposure check uses this for the
+# threat opp's ETA back to our net).
+static func time_to_arrive(from_pos: Vector3, dest: Vector3,
+		from_velocity: Vector3) -> float:
+	var dx: float = dest.x - from_pos.x
+	var dz: float = dest.z - from_pos.z
+	var dist: float = sqrt(dx * dx + dz * dz)
+	if dist < 0.001:
+		return 0.0
+	var inv: float = 1.0 / dist
+	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
+	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
+			SKATER_REF_SPEED_M_S + speed_along)
+	return dist / effective
 
 
 # True iff the segment from `from` to `to` (in world XZ) intersects

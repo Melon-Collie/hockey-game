@@ -13,7 +13,7 @@ var shot_charge: float = 0.0
 var last_processed_host_timestamp: float = 0.0
 var is_ghost: bool = false
 # True when the skater is in elevated-shot mode (PlayerInput
-# elevation_up held). Replicated so AI off-puck bots (e.g., BACKDOOR)
+# elevation_up held). Replicated so AI off-puck bots (e.g., FINISHER)
 # can read teammate flags directly instead of inferring from puck
 # physics.
 var is_elevated: bool = false

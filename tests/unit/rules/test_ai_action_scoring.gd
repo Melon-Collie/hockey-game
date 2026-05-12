@@ -306,12 +306,13 @@ func test_breakout_pass_not_blocked() -> void:
 # (within rounding) the formula is correct. Any drift here means a tuning
 # constant moved.
 
-# Slot, centered, goalie squared. From spec: target ≈ 0.616.
+# Slot, centered, goalie squared. dist_response peaks at 1.0 at the
+# slot, × shot_angle_factor 1.0 × (1 - BASE_COVERAGE 0.35) = 0.65.
 func test_shot_quality_slot_5m_squared() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.65)  # 5 m from goal line
 	var goalie := Vector3(0.0, 0.0, 26.0)    # squared (matches puck arc)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.616, 0.05, "slot 5m centered, goalie squared")
+	assert_almost_eq(s, 0.65, 0.02, "slot 5m centered, goalie squared")
 
 
 # Same shot but goalie has slid out of position (~30° arc offset).
@@ -323,8 +324,9 @@ func test_shot_quality_slot_5m_goalie_delayed() -> void:
 	# which is well past the SQUARENESS_OFFSET (30°), so squareness = 0.
 	var goalie := Vector3(0.45, 0.0, 26.15)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	# At 5m centered with full open net: dist_response × 1.0 × 1.0 ≈ 0.948
-	assert_almost_eq(s, 0.948, 0.05, "slot 5m centered, goalie misaligned → open net")
+	# At 5m centered with full open net: dist_response peaks at 1.0 at
+	# IDEAL_SHOT_DIST_M, × 1.0 × 1.0 = 1.0.
+	assert_almost_eq(s, 1.0, 0.02, "slot 5m centered, goalie misaligned → open net")
 
 
 # 60° half-wall vs goalie at center (delayed/non-square). Spec target
@@ -351,6 +353,81 @@ func test_shot_quality_60deg_goalie_squared() -> void:
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
 	# arc_offset ≈ 0, squareness ≈ 1, coverage = 0.35. Score ≈ 0.27 × 0.65 ≈ 0.18.
 	assert_almost_eq(s, 0.18, 0.05, "half-wall 60° vs squared goalie ≈ 0.18")
+
+
+# ── Goalie pressure zone ────────────────────────────────────────────────────
+# Optional goalie_current_pos parameter on score_shoot / score_pass.
+# When supplied, shots from inside a narrow rectangle in front of the
+# goalie's CURRENT position are penalised. Default (Vector3.INF)
+# bypasses — every test above relies on that default.
+
+func test_goalie_zone_penalises_carrier_drive_in() -> void:
+	# Carrier driving on-axis to z=24 (2m from goalie at z=26, well
+	# inside zone depth 3.5m). Same scenario without the zone scores
+	# higher; with the zone the shot is significantly penalised.
+	var shooter := Vector3(0.0, 0.0, 24.0)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var no_zone: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+	var with_zone: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], goalie)
+	assert_lt(with_zone, no_zone * 0.75,
+			"on-axis 2m-from-goalie shot should be heavily penalised; got %f vs %f" % [with_zone, no_zone])
+
+
+func test_goalie_zone_preserves_slot_shot() -> void:
+	# Slot shot — 5m from goal = 4.35m from goalie at z=26. That
+	# distance is past the zone depth (3.5m), so the slot shot is
+	# NOT penalised by the goalie zone.
+	var shooter := Vector3(0.0, 0.0, 21.65)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var no_zone: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+	var with_zone: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], goalie)
+	assert_almost_eq(with_zone, no_zone, 0.001,
+			"slot shot sits outside goalie zone depth; should be unaffected")
+
+
+func test_goalie_zone_preserves_backdoor_receiver() -> void:
+	# Back-door receiver close to net but laterally offset from the
+	# goalie's current position. Goalie is squared to the CARRIER (at
+	# +X), so back-door (-X side) is off-axis. score_pass(carrier,
+	# back-door) with goalie_current passed should NOT penalise the
+	# receiver — back-door remains a strong pass option.
+	var carrier := Vector3(3.0, 0.0, 21.0)
+	var receiver := Vector3(-3.0, 0.0, 25.0)  # 1.65m from net, 3m off-axis
+	var goalie_current := Vector3(2.5, 0.0, 26.0)  # squared to carrier side
+	# Predicted goalie at receiver's release (goalie tried to slide
+	# but only made it partway).
+	var goalie_predicted := Vector3(-0.5, 0.0, 26.0)
+	var no_zone: float = AIActionScoring.score_pass(
+			carrier, receiver, GOAL, goalie_predicted, NET_HW, [])
+	var with_zone: float = AIActionScoring.score_pass(
+			carrier, receiver, GOAL, goalie_predicted, NET_HW, [], goalie_current)
+	# Receiver at lateral offset 3m relative to goalie_current.x = 2.5
+	# means receiver-goalie lateral dx = 5.5m, well past the 1m zone
+	# half-width. No penalty.
+	assert_almost_eq(with_zone, no_zone, 0.001,
+			"back-door receiver off-axis from current goalie should not be penalised")
+
+
+func test_goalie_zone_default_is_no_op() -> void:
+	# Shooter sits inside the zone (on-axis, 3m forward of goalie).
+	# Without explicitly passing goalie_current_pos, the default
+	# sentinel (Vector3.INF) bypasses the zone calc and produces the
+	# same score as a call with the sentinel passed explicitly.
+	var shooter := Vector3(0.0, 0.0, 23.0)
+	var goalie := Vector3(0.0, 0.0, 26.0)
+	var default_call: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+	var explicit_inf: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], Vector3.INF)
+	assert_eq(default_call, explicit_inf,
+			"default param must be Vector3.INF and bypass the zone calc")
+	# And confirm the zone actually penalises when the same shooter
+	# IS supplied as goalie_current — sanity that the new path lights up.
+	var with_zone: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], goalie)
+	assert_lt(with_zone, default_call,
+			"shooter inside zone with goalie supplied should score lower")
 
 
 # ── position_potential ───────────────────────────────────────────────────────
@@ -413,3 +490,51 @@ func test_potential_drops_with_pressure() -> void:
 	var pressured_opps: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]
 	var pressured: float = AIActionScoring.position_potential(pos, GOAL, pressured_opps)
 	assert_lt(pressured, clean, "forward-cone defender drops position potential")
+
+
+# ── time_to_arrive ───────────────────────────────────────────────────────────
+
+func test_time_to_arrive_zero_at_destination() -> void:
+	var p := Vector3(5.0, 0.0, 5.0)
+	assert_almost_eq(
+			AIActionScoring.time_to_arrive(p, p, Vector3.ZERO),
+			0.0, 0.0001)
+
+
+func test_time_to_arrive_uses_ref_speed_when_stationary() -> void:
+	# Stationary skater 10 m from dest. effective_speed = SKATER_REF.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var dest := Vector3(10.0, 0.0, 0.0)
+	var t: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
+	assert_almost_eq(t, 10.0 / AIActionScoring.SKATER_REF_SPEED_M_S, 0.001)
+
+
+func test_time_to_arrive_faster_with_momentum_toward_dest() -> void:
+	var from := Vector3(0.0, 0.0, 0.0)
+	var dest := Vector3(10.0, 0.0, 0.0)
+	var stationary: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
+	var with_momentum: float = AIActionScoring.time_to_arrive(
+			from, dest, Vector3(AIActionScoring.SKATER_REF_SPEED_M_S, 0.0, 0.0))
+	assert_lt(with_momentum, stationary,
+			"velocity component toward dest reduces arrival time")
+
+
+func test_time_to_arrive_slower_with_momentum_away() -> void:
+	var from := Vector3(0.0, 0.0, 0.0)
+	var dest := Vector3(10.0, 0.0, 0.0)
+	var stationary: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
+	var with_momentum: float = AIActionScoring.time_to_arrive(
+			from, dest, Vector3(-5.0, 0.0, 0.0))
+	assert_gt(with_momentum, stationary,
+			"velocity component away from dest increases arrival time")
+
+
+func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
+	# Skater moving so fast away from dest that effective_speed would
+	# be non-positive without the floor. The clamp at MIN_TRAVEL_SPEED_M_S
+	# ensures finite (large) ETA — 10 m / 1 m/s = 10 s.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var dest := Vector3(10.0, 0.0, 0.0)
+	var t: float = AIActionScoring.time_to_arrive(
+			from, dest, Vector3(-50.0, 0.0, 0.0))
+	assert_almost_eq(t, 10.0 / AIActionScoring.MIN_TRAVEL_SPEED_M_S, 0.001)

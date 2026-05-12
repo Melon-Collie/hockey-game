@@ -63,6 +63,19 @@ static func clamp_to_rink_inner(world_xz: Vector2) -> Vector2:
 # ── Puck ──────────────────────────────────────────────────────────────────────
 const PUCK_START_POS: Vector3 = Vector3(0, 0.05, 0)
 const ICE_FRICTION: float = 0.01
+# Standard gravity. Used by AI trajectory prediction to convert the
+# dimensionless ICE_FRICTION coefficient into a deceleration: a puck
+# on ice decelerates at roughly μ × g via Coulomb friction.
+const GRAVITY_M_S2: float = 9.81
+# Puck deceleration on ice — Coulomb model. Matches the physics
+# material's friction × gravity. Single source of truth so AI
+# trajectory math and any future analytic puck simulation stay in
+# sync with the actual rink physics.
+const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
+# Board restitution coefficient. Mirrors Physics/boards.tres bounce
+# value so AI prediction models post-bounce trajectories the same
+# way Jolt resolves them.
+const PUCK_BOARD_BOUNCE: float = 0.4
 # Seconds puck must remain fully outside the rink boundary before a faceoff is forced.
 const PUCK_OOB_FACEOFF_TIMEOUT: float = 3.0
 

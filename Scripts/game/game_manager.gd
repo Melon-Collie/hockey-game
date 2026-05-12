@@ -1123,6 +1123,13 @@ func _on_server_puck_picked_up_by(peer_id: int) -> void:
 	if not record.is_local:
 		NetworkManager.send_puck_picked_up(peer_id)
 	NetworkManager.send_carrier_changed_to_all(peer_id)
+	# Carrier just changed — force both team brains to recompute
+	# possession state + role assignments on the next physics frame
+	# instead of waiting up to TeamBrain.TICK_PERIOD (~166 ms). The
+	# natural cadence is fine for steady-state, but a pickup flips
+	# both teams' possession state and the previous-carrier-team's
+	# CARRIER slot is now stale.
+	_force_retick_team_brains()
 
 
 func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
@@ -1200,6 +1207,21 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 		return
 	record.controller.on_puck_released_network()
 	NetworkManager.send_carrier_changed_to_all(-1)
+	# Carrier released — possession state likely flips (TRANS_DO →
+	# NEUTRAL or TRANS_DO → TRANS_OD on a steal). See pickup hook
+	# for rationale.
+	_force_retick_team_brains()
+
+
+# Forces both team brains to re-evaluate possession state + role
+# assignments on the next physics frame, bypassing the natural
+# TeamBrain.TICK_PERIOD rate-limit. Called from the puck pickup /
+# release hooks where the carrier change makes the current role
+# assignment immediately stale. Both teams re-tick because a carrier
+# change affects both possession states symmetrically.
+func _force_retick_team_brains() -> void:
+	for brain: TeamBrain in team_brains:
+		brain.force_retick()
 
 
 func _on_server_puck_stripped_from(peer_id: int) -> void:
