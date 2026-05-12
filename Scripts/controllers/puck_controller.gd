@@ -52,6 +52,9 @@ func get_buffer_depth() -> int:
 func get_local_carrier() -> Skater:
 	return _local_carrier_skater
 
+func get_carrier_peer_id() -> int:
+	return _carrier_peer_id
+
 # Callable (Skater) -> int peer_id, or -1 if not registered.
 var _peer_id_resolver: Callable = Callable()
 # Callable () -> Array[Skater] of all active skaters. Host-only interaction detection.

@@ -12,7 +12,7 @@ extends RefCounted
 
 signal hit_credited
 
-const HIT_COOLDOWN_S: float = 0.5
+const HIT_COOLDOWN_S: float = 1.5
 
 var _registry: PlayerRegistry = null
 var _last_hit_time: Dictionary = {}  # "hitter:victim" -> float host_time
