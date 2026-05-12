@@ -404,8 +404,8 @@ func test_shoot_score_zero_at_attacking_blue_line() -> void:
 # Monotone close-shot value. With dist_response monotone-falling
 # from goal (no IDEAL peak), a 3 m point-blank shot retains nearly
 # full dist value. The "drove past slot is bad" guardrail comes
-# from the goalie pressure zone (verified in the second assertion),
-# NOT from the dist curve.
+# from the goalie pressure zone, which ramps linearly from
+# GOALIE_ZONE_MAX_PENALTY at the goalie to 0 at the zone depth edge.
 func test_shot_quality_3m_close_shot_retains_value() -> void:
 	# Centered shot at 3 m, squared goalie at center. Without the
 	# goalie zone penalty applied, dist_response ≈ 0.98 × angle 1.0
@@ -415,13 +415,16 @@ func test_shot_quality_3m_close_shot_retains_value() -> void:
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
 	assert_gt(s, 0.6,
 			"3 m point-blank shot (no zone applied) should retain dist value > 0.6")
-	# Sanity: same shot WITH goalie_current passed activates the
-	# goalie pressure zone and knocks it down significantly. That's
-	# the path live carrier scoring takes for "drove past slot".
-	var with_zone: float = AIActionScoring.score_shoot(
-			shooter, GOAL, goalie, NET_HW, [], goalie)
-	assert_lt(with_zone, s * 0.5,
-			"3 m point-blank with goalie zone applied should drop > 50%")
+	# Sanity: a shooter DEEP in the zone (1 m from goalie, on-axis)
+	# triggers heavy penalty. depth_factor = 1 - 1/3.5 = 0.71;
+	# penalty = 0.8 × 0.71 ≈ 0.57; multiplier ≈ 0.43.
+	var deep_shooter := Vector3(0.0, 0.0, 25.0)  # 1 m from goalie
+	var deep_no_zone: float = AIActionScoring.score_shoot(
+			deep_shooter, GOAL, goalie, NET_HW, [])
+	var deep_with_zone: float = AIActionScoring.score_shoot(
+			deep_shooter, GOAL, goalie, NET_HW, [], goalie)
+	assert_lt(deep_with_zone, deep_no_zone * 0.5,
+			"shot deep inside goalie zone should drop > 50%")
 
 
 # ── Goalie pressure zone ────────────────────────────────────────────────────
