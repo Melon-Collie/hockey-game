@@ -918,7 +918,15 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# at that moment. Timeout still fires after INTENT_MAX_WAIT_TICKS
 	# as a safety so the bot can't pre-aim forever.
 	if _intended_action != State.CARRY:
-		var aim_dist: float = _mouse_pos.distance_to(mouse_target)
+		# Distance in XZ only — mouse_pos is forced to y=0 in
+		# _step_mouse_toward but _aim_target_for_intent inherits
+		# self_pos.y (~1.0). A 3D distance would carry that constant
+		# y-mismatch and never reach AIM_CONVERGED_DIST_M = 0.15,
+		# so pre-aim would silently time out every time. Rink is
+		# flat, only XZ matters.
+		var dx: float = _mouse_pos.x - mouse_target.x
+		var dz: float = _mouse_pos.z - mouse_target.z
+		var aim_dist: float = sqrt(dx * dx + dz * dz)
 		var aim_converged: bool = aim_dist < AIM_CONVERGED_DIST_M
 		var facing_aligned: bool = _is_facing_aligned_for_aim(snapshot, self_pos, mouse_target)
 		# Debug: print convergence status on first tick after commit
