@@ -951,11 +951,17 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# side — they'd poke the puck off a forehand wind-up. Locked
 		# for the charge so no mid-swing oscillation.
 		var shoot_side_sign: float = 1.0
-		for opp_pos: Vector3 in _scratch_opponents_shoot:
+		var reach_sq: float = BOT_FOREHAND_STICK_REACH_M * BOT_FOREHAND_STICK_REACH_M
+		for peer_id: int in snapshot.skater_states:
+			if peer_id == _peer_id:
+				continue
+			if int(_team_id_resolver.call(peer_id)) == _team_id:
+				continue
+			var opp_pos: Vector3 = snapshot.skater_states[peer_id].position
 			var rel_x: float = opp_pos.x - self_pos.x
 			var rel_z: float = opp_pos.z - self_pos.z
 			var rel_len_sq: float = rel_x * rel_x + rel_z * rel_z
-			if rel_len_sq > BOT_FOREHAND_STICK_REACH_M * BOT_FOREHAND_STICK_REACH_M:
+			if rel_len_sq > reach_sq:
 				continue
 			var forehand_dot: float = rel_x * forehand_perp.x + rel_z * forehand_perp.z
 			if forehand_dot > BOT_FOREHAND_LATERAL_THRESHOLD_M:
