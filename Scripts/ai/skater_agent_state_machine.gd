@@ -207,13 +207,24 @@ const BOT_WRISTER_SCREEN_DELTA_PER_TICK: float = (
 # slot mid-windup is worse than not shooting. The carry state can re-
 # evaluate next tick (probably picks PASS or stays in CARRY).
 const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
-# Lookahead used to score a wrister at COMMIT time. The shot fires
-# ~250 ms after we decide to take it; defenders can move 1.0–1.5 m in
-# that window. Score against predicted opponent positions so a
-# defender about to step into the lane reads as a blocked lane now,
-# instead of us committing and bailing later.
+# Lookahead used to score a wrister at COMMIT time — total time
+# from the carrier picking SHOOT to the puck actually leaving the
+# blade. Two phases:
+#   1. Pre-aim: mouse + facing converge to the locked aim point
+#      before the actual charge starts. With continuous-aim
+#      (_carry_aim_track_fire keeps facing pre-tracked toward the
+#      best fire option during CARRY), this is typically 0-50 ms.
+#      The buffer accounts for typical mouse residual convergence.
+#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / 240 = 250 ms.
+#
+# Used both for projecting the shooter's release-pos AND for
+# predicting where the goalie / opponents will be at release.
+# Including pre-aim in the projection means the scored release-
+# pos matches reality even when the bot is moving — no brake-
+# during-pre-aim workaround needed to keep projection honest.
+const BOT_PRE_AIM_BUFFER_S: float = 0.05
 const BOT_WRISTER_LOOKAHEAD_S: float = (
-		float(BOT_WRISTER_CHARGE_TICKS) / 240.0)
+		float(BOT_WRISTER_CHARGE_TICKS) / 240.0 + BOT_PRE_AIM_BUFFER_S)
 # Forehand wind-up offset for the visible blade sweep. mouse_world_pos
 # at tick 0 sits BOT_WRISTER_WIND_UP_BACK_M behind the bot along
 # (-aim_dir) and BOT_WRISTER_WIND_UP_SIDE_M to the forehand side
