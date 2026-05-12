@@ -1489,6 +1489,13 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 # convergence collapses to ~0 ms (instead of the 250-700 ms wait
 # while facing rotates from "forward at goal" to the actual aim).
 #
+# CRITICAL: project the aim DIRECTION to a point CARRY_BLADE_AIM_FORWARD_M
+# from the bot, matching what _aim_target_for_intent does during
+# pre-aim. The mouse target distance must match across CARRY and
+# pre-aim — otherwise the mouse target jumps ~8 m at commit and
+# the motion-limited mouse takes 100+ ticks to traverse, blowing
+# past INTENT_MAX_WAIT_TICKS and timing out pre-aim entirely.
+#
 # Falls back to the generic forward _carry_mouse_aim when no fire
 # option is meaningful (both shoot and pass score below threshold)
 # or when the best pass target isn't resolvable in the snapshot.
@@ -1497,15 +1504,18 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 	var best_fire: float = maxf(debug_shoot_score, debug_pass_score)
 	if best_fire < FIRE_AIM_THRESHOLD:
 		return _carry_mouse_aim(snapshot, self_pos)
+	var aim_target: Vector3
 	if debug_shoot_score >= debug_pass_score:
-		return _shot_aim_point(snapshot, self_pos)
-	var receiver: SkaterNetworkState = snapshot.skater_states.get(debug_pass_peer_id)
-	if receiver == null:
-		return _carry_mouse_aim(snapshot, self_pos)
-	var dist: float = self_pos.distance_to(receiver.position)
-	var flight_t: float = clampf(
-			dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
-	return _predict_receiver(debug_pass_peer_id, receiver, flight_t)
+		aim_target = _shot_aim_point(snapshot, self_pos)
+	else:
+		var receiver: SkaterNetworkState = snapshot.skater_states.get(debug_pass_peer_id)
+		if receiver == null:
+			return _carry_mouse_aim(snapshot, self_pos)
+		var dist: float = self_pos.distance_to(receiver.position)
+		var flight_t: float = clampf(
+				dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
+		aim_target = _predict_receiver(debug_pass_peer_id, receiver, flight_t)
+	return _aim_2m_toward(self_pos, aim_target)
 
 
 func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
