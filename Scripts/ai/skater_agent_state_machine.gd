@@ -858,27 +858,19 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	#
 	# CARRY: drift toward the carry destination.
 	#
-	# SHOOT_PRESSED (wrister) pre-aim: steer toward the projected
-	# release position (current + velocity × wrister_lookahead). The
-	# carrier scorer chose SHOOT based on score at that release-pos,
-	# so the bot's actual motion needs to land there for the chosen
-	# shot to be the shot taken. Steering to _last_carry_anchor
-	# (often stand-still = self_pos) would brake the bot back to
-	# commit position, releasing ~1-2 m short of the scored spot.
-	#
-	# SLAPPER_PRESSED / PASS_PRESSED: brake. Slappers need stability
-	# for the wind-up; pass leads aim from a held spot.
+	# Fire intents in pre-aim (SHOOT_PRESSED, SLAPPER_PRESSED,
+	# PASS_PRESSED): BRAKE. Pre-aim is variable in duration (up to
+	# 750 ms via INTENT_MAX_WAIT_TICKS) — long enough that any
+	# forward steering at full velocity would carry the bot 4+ m
+	# into the goalie's reach before the actual charge even starts,
+	# costing the puck and aborting the shot. Braking caps the
+	# distance the bot covers during the unpredictable pre-aim
+	# window. The actual 0.25 s wrister charge in
+	# _state_shoot_pressed steers toward release_pos so wristers
+	# from already-aligned rush positions still fire on the move.
 	if _intended_action == State.CARRY:
 		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
-	elif _intended_action == State.SHOOT_PRESSED:
-		var hv: Vector3 = Vector3.ZERO
-		if self_state != null:
-			hv = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
-		_apply_steering(input, snapshot, self_pos,
-				self_pos + hv * BOT_WRISTER_LOOKAHEAD_S)
 	else:
-		# Fire intent locked, pre-aiming. Brake actively so the bot
-		# doesn't coast past the spot they decided to fire from.
 		_apply_brake_steering(input, snapshot, self_pos)
 
 	# Mouse target depends on intent: carry uses normal goal-aim, fire
