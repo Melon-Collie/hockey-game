@@ -348,6 +348,16 @@ var _prev_carrier_peer_id: int = -1
 # to drive the elevation flag. Mirrored from `_carrier.shot_is_elevated`.
 var _shot_is_elevated: bool = false
 
+# Debug: print one line at SHOOT commit and one line at wrister
+# release so the user can compare what the projection promised vs.
+# where the puck actually fired from. Toggle off for shipping.
+const SHOW_COMMIT_DEBUG: bool = true
+var _commit_pos: Vector3 = Vector3.ZERO
+var _commit_vel: Vector3 = Vector3.ZERO
+var _commit_projected_release: Vector3 = Vector3.ZERO
+var _commit_shoot_score: float = 0.0
+var _commit_carry_score: float = 0.0
+
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
 # one-tick quick-shot — the bot holds shoot_held for BOT_WRISTER_CHARGE_TICKS
 # while sweeping mouse_screen_pos, so SkaterAimingBehavior accumulates
@@ -826,6 +836,22 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos)
 				State.PASS_PRESSED:
 					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
+			# Debug: capture commit snapshot for SHOOT to compare against
+			# actual release pos later.
+			if SHOW_COMMIT_DEBUG and new_intent == State.SHOOT_PRESSED:
+				var hv: Vector3 = Vector3.ZERO
+				if self_state != null:
+					hv = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+				_commit_pos = self_pos
+				_commit_vel = hv
+				_commit_projected_release = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
+				_commit_shoot_score = _carrier.debug_shoot_score
+				_commit_carry_score = _carrier.debug_carry_score
+				print("[bot %d] SHOOT COMMIT pos=(%.2f, %.2f) vel=(%.2f, %.2f) speed=%.2f projected_release=(%.2f, %.2f) shoot=%.3f carry=%.3f" % [
+						_peer_id, _commit_pos.x, _commit_pos.z,
+						_commit_vel.x, _commit_vel.z, hv.length(),
+						_commit_projected_release.x, _commit_projected_release.z,
+						_commit_shoot_score, _commit_carry_score])
 		_intended_action = new_intent
 
 	# Steering depends on which action is locked.
@@ -1109,6 +1135,18 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# _state_wrister_aim sees not shoot_held → release_wrister fires
 		# with accumulated charge_distance and sweep direction.
 		input.shoot_held = false
+		# Debug: print release vs projection so we can see if the puck
+		# fired from where the projection promised.
+		if SHOW_COMMIT_DEBUG:
+			var drift: Vector3 = self_pos - _commit_projected_release
+			var actual_travel: Vector3 = self_pos - _commit_pos
+			print("[bot %d] WRISTER RELEASE actual=(%.2f, %.2f) projected=(%.2f, %.2f) drift=(%+.2f, %+.2f) traveled=%.2fm of projected=%.2fm" % [
+					_peer_id,
+					self_pos.x, self_pos.z,
+					_commit_projected_release.x, _commit_projected_release.z,
+					drift.x, drift.z,
+					actual_travel.length(),
+					(_commit_projected_release - _commit_pos).length()])
 		_set_state(State.CARRY)
 
 
