@@ -35,8 +35,8 @@ enum State {
 	PASS_PRESSED,     # one-tick press window aimed at a teammate's lead position
 }
 
-# Margins from the rink edge / goal line that anchors are clamped inside of.
-const RINK_X_INSET: float = 0.5
+# Margin from the goal line that anchors are clamped inside of. The
+# matching X-inset lives on AIRoleHelpers.RINK_INSET_M (single source).
 const RINK_Z_INSET: float = 1.0
 
 # After CARRY's `_pick_action` chooses an action (PASS / SHOOT /
@@ -82,19 +82,18 @@ const SHOT_AIM_WOBBLE_CONE_DEG: float = 3.0
 # remaining comes from the bot firing before the mouse fully
 # converges to the aim, plus receiver-lead inaccuracy.
 const PASS_AIM_WOBBLE_CONE_DEG: float = 0.3
-# How wide the goalie's shadow on the net plane should be considered
-# (meters, half-width). Tuneable in playtest.
-const GOALIE_SHADOW_HALF: float = 0.3
+# Goalie shadow half-width on the net plane lives on
+# AIActionScoring.GOALIE_SHADOW_HALF_M (single source).
 # After a puck-engagement event (we got stripped, or we just stripped
 # someone — both detected as "puck became loose while we were close"),
 # pull the blade back to our body for this many ticks. Speed-scaled:
 # a bot at full skating speed was committed harder and takes longer
 # to reset; a slow bot recovers quickly. The variance breaks lockstep
 # between two bots involved in the same engagement (their speeds are
-# almost never identical).
+# almost never identical). Speed reference comes from
+# AIActionScoring.SKATER_REF_SPEED_M_S (single source).
 const ENGAGEMENT_COOLDOWN_MIN_TICKS: int = 24    # ~100 ms at 240 Hz
 const ENGAGEMENT_COOLDOWN_MAX_TICKS: int = 96    # ~400 ms at 240 Hz
-const ENGAGEMENT_SPEED_REF_M_S: float = 10.5     # SkaterController.max_speed default
 const ENGAGEMENT_PROXIMITY_M: float = 2.0        # blade-on-puck range
 
 # Reference top skating speed for chase intercept lookahead lives in
@@ -149,10 +148,8 @@ const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 # attacking goal line. Without this clamp, a carrier within 2 m of
 # the goal line gets a mouse target that sits PAST the goal line —
 # the blade IK extends through the net, the puck attached to the
-# blade gets pushed into the goalie, rebound, repeat. Clamping the
-# mouse to stay at least this far on the rink side stops the blade
-# from punching through.
-const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
+# blade gets pushed into the goalie, rebound, repeat. The buffer
+# distance lives on AIRoleHelpers.GOAL_LINE_BUFFER_M (single source).
 
 # Stickhandling: shift the carrier's mouse perpendicular to facing,
 # AWAY from the closest incoming defender. Pulls the puck off-side
@@ -210,13 +207,24 @@ const BOT_WRISTER_SCREEN_DELTA_PER_TICK: float = (
 # slot mid-windup is worse than not shooting. The carry state can re-
 # evaluate next tick (probably picks PASS or stays in CARRY).
 const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
-# Lookahead used to score a wrister at COMMIT time. The shot fires
-# ~250 ms after we decide to take it; defenders can move 1.0–1.5 m in
-# that window. Score against predicted opponent positions so a
-# defender about to step into the lane reads as a blocked lane now,
-# instead of us committing and bailing later.
+# Lookahead used to score a wrister at COMMIT time — total time
+# from the carrier picking SHOOT to the puck actually leaving the
+# blade. Two phases:
+#   1. Pre-aim: mouse + facing converge to the locked aim point
+#      before the actual charge starts. With continuous-aim
+#      (_carry_aim_track_fire keeps facing pre-tracked toward the
+#      best fire option during CARRY), this is typically 0-50 ms.
+#      The buffer accounts for typical mouse residual convergence.
+#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / 240 = 250 ms.
+#
+# Used both for projecting the shooter's release-pos AND for
+# predicting where the goalie / opponents will be at release.
+# Including pre-aim in the projection means the scored release-
+# pos matches reality even when the bot is moving — no brake-
+# during-pre-aim workaround needed to keep projection honest.
+const BOT_PRE_AIM_BUFFER_S: float = 0.01
 const BOT_WRISTER_LOOKAHEAD_S: float = (
-		float(BOT_WRISTER_CHARGE_TICKS) / 240.0)
+		float(BOT_WRISTER_CHARGE_TICKS) / 240.0 + BOT_PRE_AIM_BUFFER_S)
 # Forehand wind-up offset for the visible blade sweep. mouse_world_pos
 # at tick 0 sits BOT_WRISTER_WIND_UP_BACK_M behind the bot along
 # (-aim_dir) and BOT_WRISTER_WIND_UP_SIDE_M to the forehand side
@@ -350,6 +358,22 @@ var _prev_carrier_peer_id: int = -1
 # Set when CARRY commits to SHOOT_PRESSED; consumed by _state_shoot_pressed
 # to drive the elevation flag. Mirrored from `_carrier.shot_is_elevated`.
 var _shot_is_elevated: bool = false
+
+# Debug: print one line at SHOOT commit and one line at wrister
+# release so the user can compare what the projection promised vs.
+# where the puck actually fired from. Toggle off for shipping.
+const SHOW_COMMIT_DEBUG: bool = false
+var _commit_pos: Vector3 = Vector3.ZERO
+var _commit_vel: Vector3 = Vector3.ZERO
+var _commit_projected_release: Vector3 = Vector3.ZERO
+var _commit_shoot_score: float = 0.0
+var _commit_carry_score: float = 0.0
+# Tick stamp to compute pre-aim duration (commit -> SHOOT_PRESSED entry).
+var _commit_tick_stamp: int = 0
+var _pre_aim_ticks_observed: int = 0
+# Increments every physics tick the agent runs; doesn't have to be a
+# perfect clock — only used for relative deltas in the debug print.
+var _agent_tick: int = 0
 
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
 # one-tick quick-shot — the bot holds shoot_held for BOT_WRISTER_CHARGE_TICKS
@@ -587,6 +611,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	var self_pos: Vector3 = self_state.position
 	var have_puck: bool = (snapshot.puck_state.carrier_peer_id == _peer_id)
 	_ticks_in_state += 1
+	_agent_tick += 1
 	_update_engagement_cooldown(snapshot, self_state)
 
 	# When we're ghosted (offside, can't interact with the puck), chase
@@ -829,28 +854,56 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos)
 				State.PASS_PRESSED:
 					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
+			# Debug: capture commit snapshot for SHOOT to compare against
+			# actual release pos later.
+			if SHOW_COMMIT_DEBUG and new_intent == State.SHOOT_PRESSED:
+				var hv: Vector3 = Vector3.ZERO
+				if self_state != null:
+					hv = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+				_commit_pos = self_pos
+				_commit_vel = hv
+				_commit_projected_release = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
+				_commit_shoot_score = _carrier.debug_shoot_score
+				_commit_carry_score = _carrier.debug_carry_score
+				_commit_tick_stamp = _agent_tick
+				_pre_aim_ticks_observed = 0
+				print("[bot %d] SHOOT COMMIT pos=(%.2f, %.2f) vel=(%.2f, %.2f) speed=%.2f projected_release=(%.2f, %.2f) shoot=%.3f carry=%.3f" % [
+						_peer_id, _commit_pos.x, _commit_pos.z,
+						_commit_vel.x, _commit_vel.z, hv.length(),
+						_commit_projected_release.x, _commit_projected_release.z,
+						_commit_shoot_score, _commit_carry_score])
 		_intended_action = new_intent
 
-	# Steering: drift toward the carry destination when actually
-	# carrying; HOLD POSITION when pre-aiming a fire action. The
-	# previous behavior kept skating forward during pre-aim, which
-	# combined with the wrister/slapper charge windows could drift
-	# the bot 2–4 m closer to the net before the press fired —
-	# they'd commit to a shot from one spot and release from
-	# another. Hold lets the press happen from the spot the bot
-	# decided on.
+	# Steering depends on which action is locked.
+	#
+	# CARRY: drift toward the carry destination.
+	#
+	# SHOOT_PRESSED pre-aim: steer toward the projected release
+	# position so the bot keeps moving on the rush. Continuous-aim
+	# (_carry_aim_track_fire) keeps pre-aim near 0 ms in normal
+	# play — the goalie-pickup-mid-pre-aim risk only existed when
+	# pre-aim was long, and continuous-aim is the proper fix for
+	# that. Brake-during-pre-aim was the workaround we no longer
+	# need.
+	#
+	# SLAPPER_PRESSED / PASS_PRESSED: brake. Slappers need stability
+	# for the wind-up; pass leads aim from a held spot.
 	if _intended_action == State.CARRY:
 		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+	elif _intended_action == State.SHOOT_PRESSED:
+		var hv: Vector3 = Vector3.ZERO
+		if self_state != null:
+			hv = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+		_apply_steering(input, snapshot, self_pos,
+				self_pos + hv * BOT_WRISTER_LOOKAHEAD_S)
 	else:
-		# Fire intent locked, pre-aiming. Brake actively so the bot
-		# doesn't coast past the spot they decided to fire from.
 		_apply_brake_steering(input, snapshot, self_pos)
 
 	# Mouse target depends on intent: carry uses normal goal-aim, fire
 	# states pre-aim toward action direction.
 	var mouse_target: Vector3
 	if _intended_action == State.CARRY:
-		mouse_target = _carry_mouse_aim(snapshot, self_pos)
+		mouse_target = _carry_aim_track_fire(snapshot, self_pos)
 	else:
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
 	input.mouse_world_pos = _step_mouse_toward(mouse_target)
@@ -865,10 +918,40 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# at that moment. Timeout still fires after INTENT_MAX_WAIT_TICKS
 	# as a safety so the bot can't pre-aim forever.
 	if _intended_action != State.CARRY:
-		var aim_dist: float = _mouse_pos.distance_to(mouse_target)
+		# Distance in XZ only — mouse_pos is forced to y=0 in
+		# _step_mouse_toward but _aim_target_for_intent inherits
+		# self_pos.y (~1.0). A 3D distance would carry that constant
+		# y-mismatch and never reach AIM_CONVERGED_DIST_M = 0.15,
+		# so pre-aim would silently time out every time. Rink is
+		# flat, only XZ matters.
+		var dx: float = _mouse_pos.x - mouse_target.x
+		var dz: float = _mouse_pos.z - mouse_target.z
+		var aim_dist: float = sqrt(dx * dx + dz * dz)
 		var aim_converged: bool = aim_dist < AIM_CONVERGED_DIST_M
 		var facing_aligned: bool = _is_facing_aligned_for_aim(snapshot, self_pos, mouse_target)
+		# Debug: print convergence status on first tick after commit
+		# so we can see why pre-aim is or isn't converging.
+		if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED \
+				and _intent_wait_ticks == 0:
+			var fdx: float = mouse_target.x - self_pos.x
+			var fdz: float = mouse_target.z - self_pos.z
+			var flen: float = sqrt(fdx * fdx + fdz * fdz)
+			var fcos: float = 0.0
+			if flen > 0.0001 and self_state != null:
+				var inv: float = 1.0 / flen
+				fcos = self_state.facing.x * fdx * inv + self_state.facing.y * fdz * inv
+			print("[bot %d] PRE-AIM tick0 mouse_pos=(%.2f,%.2f) target=(%.2f,%.2f) aim_dist=%.3f converged=%s facing=(%.2f,%.2f) cos=%.3f aligned=%s" % [
+					_peer_id,
+					_mouse_pos.x, _mouse_pos.z,
+					mouse_target.x, mouse_target.z,
+					aim_dist, str(aim_converged),
+					self_state.facing.x if self_state != null else 0.0,
+					self_state.facing.y if self_state != null else 0.0,
+					fcos, str(facing_aligned)])
 		if (aim_converged and facing_aligned) or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
+			# Capture pre-aim duration for the upcoming wrister release log.
+			if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED:
+				_pre_aim_ticks_observed = _agent_tick - _commit_tick_stamp
 			_set_state(_intended_action)
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
@@ -968,6 +1051,15 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# Lost the puck mid-charge — bail. SkaterStateMachine's release path
 	# is a no-op without the puck, so we don't need to force a release.
 	if not have_puck:
+		if SHOW_COMMIT_DEBUG:
+			var actual_travel: Vector3 = self_pos - _commit_pos
+			var total_ticks: int = _agent_tick - _commit_tick_stamp
+			print("[bot %d] WRISTER LOST PUCK at=(%.2f, %.2f) projected=(%.2f, %.2f) traveled=%.2fm pre_aim_ticks=%d charge_ticks=%d total=%d" % [
+					_peer_id,
+					self_pos.x, self_pos.z,
+					_commit_projected_release.x, _commit_projected_release.z,
+					actual_travel.length(),
+					_pre_aim_ticks_observed, _shoot_charge_tick, total_ticks])
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
@@ -986,7 +1078,20 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 		return
 
-	_apply_brake_steering(input, snapshot, self_pos)
+	# Steer toward the projected release position so the bot actually
+	# arrives at the spot the carrier scorer assumed. The projection
+	# (current + velocity × wrister_lookahead) is what won SHOOT over
+	# CARRY; if we steered toward _last_carry_anchor instead (often
+	# stand-still = self_pos), the steering would brake the bot back
+	# to current pos and the puck would release ~1-2 m short of the
+	# scored spot. Rush wristers should fire from the projected spot,
+	# not be braked back to commit position.
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	var release_target: Vector3 = self_pos
+	if self_state != null:
+		var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+		release_target = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
+	_apply_steering(input, snapshot, self_pos, release_target)
 	# Elevation flag based on decision at entry. Sticky in
 	# SkaterController, so setting one direction explicitly each tick
 	# normalizes it regardless of the last shot.
@@ -1087,6 +1192,20 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# _state_wrister_aim sees not shoot_held → release_wrister fires
 		# with accumulated charge_distance and sweep direction.
 		input.shoot_held = false
+		# Debug: print release vs projection so we can see if the puck
+		# fired from where the projection promised.
+		if SHOW_COMMIT_DEBUG:
+			var drift: Vector3 = self_pos - _commit_projected_release
+			var actual_travel: Vector3 = self_pos - _commit_pos
+			var total_ticks: int = _agent_tick - _commit_tick_stamp
+			print("[bot %d] WRISTER RELEASE actual=(%.2f, %.2f) projected=(%.2f, %.2f) drift=(%+.2f, %+.2f) traveled=%.2fm of projected=%.2fm pre_aim_ticks=%d charge_ticks=%d total=%d" % [
+					_peer_id,
+					self_pos.x, self_pos.z,
+					_commit_projected_release.x, _commit_projected_release.z,
+					drift.x, drift.z,
+					actual_travel.length(),
+					(_commit_projected_release - _commit_pos).length(),
+					_pre_aim_ticks_observed, _shoot_charge_tick, total_ticks])
 		_set_state(State.CARRY)
 
 
@@ -1390,6 +1509,42 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 # comfortably in front of the body where small mouse shifts produce
 # real blade motion (instead of clamping to ROM extreme as it would
 # at goal-plane distance).
+# Continuously aim toward the best non-carry option (SHOOT or PASS,
+# whichever scored higher) during CARRY. Rotates the bot's facing
+# toward the likely fire target so when the carrier eventually
+# commits to SHOOT/PASS, the facing is already aligned and pre-aim
+# convergence collapses to ~0 ms (instead of the 250-700 ms wait
+# while facing rotates from "forward at goal" to the actual aim).
+#
+# CRITICAL: project the aim DIRECTION to a point CARRY_BLADE_AIM_FORWARD_M
+# from the bot, matching what _aim_target_for_intent does during
+# pre-aim. The mouse target distance must match across CARRY and
+# pre-aim — otherwise the mouse target jumps ~8 m at commit and
+# the motion-limited mouse takes 100+ ticks to traverse, blowing
+# past INTENT_MAX_WAIT_TICKS and timing out pre-aim entirely.
+#
+# Falls back to the generic forward _carry_mouse_aim when no fire
+# option is meaningful (both shoot and pass score below threshold)
+# or when the best pass target isn't resolvable in the snapshot.
+func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	const FIRE_AIM_THRESHOLD: float = 0.05
+	var best_fire: float = maxf(debug_shoot_score, debug_pass_score)
+	if best_fire < FIRE_AIM_THRESHOLD:
+		return _carry_mouse_aim(snapshot, self_pos)
+	var aim_target: Vector3
+	if debug_shoot_score >= debug_pass_score:
+		aim_target = _shot_aim_point(snapshot, self_pos)
+	else:
+		var receiver: SkaterNetworkState = snapshot.skater_states.get(debug_pass_peer_id)
+		if receiver == null:
+			return _carry_mouse_aim(snapshot, self_pos)
+		var dist: float = self_pos.distance_to(receiver.position)
+		var flight_t: float = clampf(
+				dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
+		aim_target = _predict_receiver(debug_pass_peer_id, receiver, flight_t)
+	return _aim_2m_toward(self_pos, aim_target)
+
+
 func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var to_goal: Vector3 = _attacking_goal_pos - self_pos
 	to_goal.y = 0.0
@@ -1409,7 +1564,7 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# attacking goal line — the blade IK chases the mouse, and a mouse
 	# target past the goal line punches the blade through the net.
 	var goal_line_z: float = _attacking_goal_pos.z
-	var max_forward_z: float = goal_line_z + CARRY_GOAL_LINE_BUFFER_M * _own_goal_dir
+	var max_forward_z: float = goal_line_z + AIRoleHelpers.GOAL_LINE_BUFFER_M * _own_goal_dir
 	if (base.z - max_forward_z) * _own_goal_dir < 0.0:
 		base.z = max_forward_z
 	# Stickhandling offset is raw — `_step_mouse_toward` provides the
@@ -1465,15 +1620,26 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 
 # Shot aim past the goalie's projected shadow. Uses the goalie's
 # predicted position at the wrister window, matching how score_shoot
-# sees the goalie when scoring from self_pos.
+# sees the goalie when scoring from self_pos. Threads the goalie's
+# CURRENT lateral velocity into the aim — a goalie sliding right
+# will drift further right by the time the puck arrives, so the
+# aim biases LEFT (the recovery side). Captures the "shoot back
+# across the grain" pattern.
 func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var goalie: Vector3 = _predict_goalie_at(
 			snapshot, BOT_WRISTER_LOOKAHEAD_S, self_pos)
+	var goalie_vx: float = 0.0
+	var opp_team_id: int = 1 - _team_id
+	var opp_goalie_state: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
+	if opp_goalie_state != null:
+		goalie_vx = opp_goalie_state.velocity_x
 	return AIShotAim.compute_open_net_aim(
 			self_pos, goalie,
 			_attacking_goal_pos.z,
 			GameRules.NET_HALF_WIDTH,
-			GOALIE_SHADOW_HALF)
+			AIActionScoring.GOALIE_SHADOW_HALF_M,
+			AIShotAim.DEFAULT_CORNER_BIAS,
+			goalie_vx)
 
 
 # OFF_PUCK ready-stance aim: returns a target 2 m in front of the bot
@@ -1618,8 +1784,8 @@ func _tag_up_anchor(self_pos: Vector3) -> Vector3:
 
 func _clamp_anchor(p: Vector3) -> Vector3:
 	var x: float = clampf(p.x,
-			-GameRules.RINK_HALF_WIDTH + RINK_X_INSET,
-			GameRules.RINK_HALF_WIDTH - RINK_X_INSET)
+			-GameRules.RINK_HALF_WIDTH + AIRoleHelpers.RINK_INSET_M,
+			GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M)
 	var z: float = clampf(p.z,
 			-GameRules.GOAL_LINE_Z + RINK_Z_INSET,
 			GameRules.GOAL_LINE_Z - RINK_Z_INSET)
@@ -1780,7 +1946,7 @@ func _update_engagement_cooldown(snapshot: WorldSnapshot, self_state: SkaterNetw
 		if dx * dx + dz * dz < ENGAGEMENT_PROXIMITY_M * ENGAGEMENT_PROXIMITY_M:
 			var v: Vector3 = self_state.velocity
 			var speed: float = sqrt(v.x * v.x + v.z * v.z)
-			var ratio: float = clampf(speed / ENGAGEMENT_SPEED_REF_M_S, 0.0, 1.0)
+			var ratio: float = clampf(speed / AIActionScoring.SKATER_REF_SPEED_M_S, 0.0, 1.0)
 			_engagement_cooldown = int(round(lerpf(
 					float(ENGAGEMENT_COOLDOWN_MIN_TICKS),
 					float(ENGAGEMENT_COOLDOWN_MAX_TICKS),

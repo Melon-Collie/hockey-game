@@ -151,6 +151,33 @@ func test_decide_returns_role_decision_with_target_position() -> void:
 	assert_eq(d.target_position, c.last_carry_anchor)
 
 
+func test_in_motion_toward_slot_scores_higher_than_stationary() -> void:
+	# Anticipation: score_shoot is evaluated at the projected RELEASE
+	# position (current pos + horizontal_velocity × charge_lookahead).
+	# A bot rushing into the slot should score the spot they'll release
+	# from — meaning a moving bot OUT of slot range should outscore a
+	# stationary bot at the same current pos.
+	#
+	# Both bots stand at z = -15 (~12 m from opp goal at z = -26.65 —
+	# outside ideal but inside SHOT_RANGE_FALLOFF_M). The moving bot
+	# travels toward the goal at 8 m/s. With BOT_WRISTER_LOOKAHEAD_S
+	# = 0.25, the projected release pos is z ≈ -17 → ~10 m from goal,
+	# noticeably better dist_response than 12 m.
+	var pos := Vector3(0.0, 0.0, -15.0)
+	var stationary_ctx: RoleContext = _make_ctx(pos)
+	stationary_ctx.self_velocity = Vector3.ZERO
+	var moving_ctx: RoleContext = _make_ctx(pos)
+	moving_ctx.self_velocity = Vector3(0.0, 0.0, -8.0)
+
+	var stationary := AIRoleCarrier.new()
+	stationary.decide(stationary_ctx)
+	var moving := AIRoleCarrier.new()
+	moving.decide(moving_ctx)
+
+	assert_gt(moving.debug_shoot_score, stationary.debug_shoot_score,
+			"in-motion bot rushing into slot should score the release-pos spot, beating the stationary same-pos shot")
+
+
 func test_decide_carry_intent_clears_fire_flags() -> void:
 	# Force CARRY intent, verify decide() returns a RoleDecision with
 	# all fire flags false.

@@ -94,6 +94,29 @@ enum RuleSet { OFF, ARCADE, NHL }
 const DEFAULT_RULE_SET: int = RuleSet.ARCADE
 const RULE_SET_NAMES: Array[String] = ["Off", "Arcade", "NHL"]
 
+# Slot depth — distance from goal line to the faceoff-hash "hard slot"
+# in front of the net. Real-rink geometry; matches the spot a hockey
+# player reads as the prime scoring area. Used by AI role behaviors
+# (anchor, carrier, finisher) as the "where the slot is" reference.
+const SLOT_DIST_M: float = 5.0
+
+# ── Skater Defaults ───────────────────────────────────────────────────────────
+# Defaults shared between the live SkaterController @export and AI scoring /
+# state-machine references. Single source of truth so the AI never reasons
+# about a different "league average" than the controllers actually run.
+#
+# TODO(per-player attrs): when SkaterAttributes lands, the AI should query
+# `attribute_resolver.call(peer_id).max_speed` instead of this default. This
+# const becomes the "league average" only used when an attribute isn't
+# resolvable.
+const DEFAULT_SKATER_MAX_SPEED_M_S: float = 10.5
+
+# ── Goalie Defaults ───────────────────────────────────────────────────────────
+# Shared between GoalieController @export and AIActionScoring's goalie
+# react-then-slide model. Calibrate together — the AI's prediction must
+# match the live goalie's reflex.
+const DEFAULT_GOALIE_REACTION_DELAY_S: float = 0.13
+
 # ── Players ───────────────────────────────────────────────────────────────────
 const MAX_PLAYERS: int = 6  # 3v3
 const MAX_SPECTATORS: int = 4

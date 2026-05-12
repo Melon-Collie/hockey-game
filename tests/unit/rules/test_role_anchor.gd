@@ -173,5 +173,5 @@ func test_search_center_pushes_up_in_trans_od() -> void:
 	# NZ target sits further from our net (lower z).
 	assert_lt(nz_target.z, dz_target.z,
 			"NZ-puck ANCHOR pushes up; DZ-puck ANCHOR sits back. Got NZ=%s DZ=%s" % [nz_target, dz_target])
-	assert_lt(nz_target.z, OUR_NET_Z - AIActionScoring.IDEAL_SHOT_DIST_M,
+	assert_lt(nz_target.z, OUR_NET_Z - GameRules.SLOT_DIST_M,
 			"NZ-puck ANCHOR target is past slot, toward NZ; got z=%f" % nz_target.z)

@@ -77,12 +77,8 @@ const SLAPPER_MOTION_PENALTY: float = 0.3
 # Carry candidate generation: 8 polar cardinals at this radius +
 # slot anchor + stand-still.
 const CARRY_SEARCH_STEP_M: float = 3.0
-# Don't generate carry candidates past this distance from the
-# attacking goal line — beyond there is behind the net.
-const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
-
-# Rink half-width inset for carry-candidate clamping.
-const RINK_X_INSET: float = 0.5
+# Carry candidates are clamped inside the goal-line buffer and the
+# rink-X inset — both defined on AIRoleHelpers (single source).
 
 # Elevation gate constants. Reactive: goalie already down → top
 # corners exposed. Proactive: close shot with a clean lane → pick
@@ -222,34 +218,48 @@ func _pick_action(ctx: RoleContext) -> void:
 		if int(ctx.team_id_resolver.call(peer_id)) == ctx.team_id:
 			_scratch_teammate_ids.append(peer_id)
 
+	# Projected RELEASE position for SHOOT scoring. The wrister/slapper
+	# charge windows mean the puck actually leaves the blade ~0.25s /
+	# ~0.55s after the SHOOT intent commits; a bot rushing into the
+	# slot should be scoring the spot they'll release from, not the
+	# spot they're at now. This also lets the bot start the wind-up
+	# early — the score that wins is for the future spot, and by the
+	# time the charge completes, the bot has skated into it.
+	var self_velocity: Vector3 = ctx.self_velocity
+	var horizontal_velocity: Vector3 = Vector3(self_velocity.x, 0.0, self_velocity.z)
+	var wrister_release_pos: Vector3 = (
+			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)
+	var slapper_release_pos: Vector3 = (
+			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S)
+
 	# Goalie predictions per release time. Wrister and slapper differ
 	# only in charge length; pass-receiver and carry-candidate cases
 	# get their own predictions inside _compute_best_pass / _best_carry.
+	# Predicted with the release-pos puck X so the goalie's slide target
+	# matches where the shot actually leaves the blade.
 	var wrister_goalie: Vector3 = _predict_goalie_at(
-			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
+			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
 	var slapper_goalie: Vector3 = _predict_goalie_at(
-			ctx, SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S, self_pos)
+			ctx, SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S, slapper_release_pos)
 	# Goalie's CURRENT position (squared to whoever currently holds the
 	# puck — that's us as the carrier). Threaded into score_shoot /
 	# score_pass so the goalie pressure zone penalises shots from
 	# inside the goalie's current set-up line. Back-door receivers
-	# (off-axis from this position) pass through unpenalised.
+	# (off-axis from this position) pass through unpenalised. Anchored
+	# on current self_pos rather than release_pos because that's the
+	# goalie's actual current setup line.
 	var goalie_now: Vector3 = _goalie_now(ctx)
 
-	# Top-level SHOOT — leaf score_shoot at current position. Wrister
-	# uses wrister-charge-projected opponents; slapper uses longer
-	# slapper-charge projection × power bonus × motion penalty. Pick
-	# whichever shot type scores higher.
+	# Top-level SHOOT.
 	var wrister_score: float = AIActionScoring.score_shoot(
-			self_pos, attacking_goal, wrister_goalie,
+			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot, goalie_now)
-	var self_velocity: Vector3 = ctx.self_velocity
 	var self_speed: float = sqrt(self_velocity.x * self_velocity.x
 			+ self_velocity.z * self_velocity.z)
 	var slapper_motion_factor: float = (
 			SLAPPER_MOTION_PENALTY if self_speed > SLAPPER_MAX_SPEED_M_S else 1.0)
 	var slapper_score: float = AIActionScoring.score_shoot(
-			self_pos, attacking_goal, slapper_goalie,
+			slapper_release_pos, attacking_goal, slapper_goalie,
 			GameRules.NET_HALF_WIDTH,
 			_scratch_opponents_slapper, goalie_now) * SLAPPER_POWER_BONUS * slapper_motion_factor
 	var shoot_use_slapper: bool = slapper_score > wrister_score
@@ -540,9 +550,9 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 		var candidate := Vector3(
 				self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
 				self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
-		if absf(candidate.z) > absf(attacking_goal.z) - CARRY_GOAL_LINE_BUFFER_M:
+		if absf(candidate.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
 			continue
-		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
+		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 			continue
 		var local_time: float = AIActionScoring.time_to_arrive(self_pos, candidate, self_velocity)
 		_project_opponents_to(ctx, local_time, _scratch_opponents_path)
@@ -630,7 +640,7 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 # OZ slot anchor — recursion terminator and a permanent carry
 # candidate. Slot depth from goal line is fixed.
 func _slot_anchor(own_goal_dir: float) -> Vector3:
-	var slot_z: float = -own_goal_dir * (GameRules.GOAL_LINE_Z - AIActionScoring.IDEAL_SHOT_DIST_M)
+	var slot_z: float = -own_goal_dir * (GameRules.GOAL_LINE_Z - GameRules.SLOT_DIST_M)
 	return Vector3(0.0, 0.0, slot_z)
 
 

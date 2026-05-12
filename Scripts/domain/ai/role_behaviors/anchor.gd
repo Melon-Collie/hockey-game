@@ -69,7 +69,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		search_center = Vector3(
 				0.0,
 				0.0,
-				our_net.z - ctx.own_goal_dir * AIActionScoring.IDEAL_SHOT_DIST_M)
+				our_net.z - ctx.own_goal_dir * GameRules.SLOT_DIST_M)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
 

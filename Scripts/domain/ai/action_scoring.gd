@@ -3,6 +3,27 @@ class_name AIActionScoring
 # Pure-function utility scoring for on-puck actions. Each score is a
 # multiplicative composition of factors in [0, 1].
 #
+# ── Design intent: heuristic xG ──────────────────────────────────────────────
+# `score_shoot` is a hand-coded approximation of expected goals (xG) — the
+# probability that a given shot becomes a goal given its geometry and the
+# defensive context. It is xG-SHAPED (peak in the slot, drops with
+# distance / angle / coverage / pressure / lane traffic) but NOT magnitude-
+# calibrated against real-world data: a clean slot wrister scores ~0.7
+# here; the real-world xG would be closer to 0.30. Treat the outputs as
+# RELATIVE shot quality, not actual goal probability.
+#
+# Everything else cascades from xG-shape:
+#   - `score_pass` = lane-clear × `score_shoot(receiver)` — a pass is
+#     only valuable if the receiver has a higher-quality shot than us.
+#   - `score_at(pos)` = max(`score_shoot(pos)`, carry-to-slot) — used by
+#     the carrier's CARRY candidates: a position is good if it offers a
+#     better future shot, OR it brings us toward a position that does.
+#
+# When tuning constants, ask "would this change make the shot quality
+# rank ordering match a human's read of those scenarios?", not "does
+# this number feel right in isolation". A learned xG model (baked grid
+# from playtest data) is a future replacement for `score_shoot`.
+#
 # Two leaf scorers (score_shoot, score_pass) plus a recursive depth-2
 # score_at(pos) defined in the SM. Top-level options compete uniformly:
 #
@@ -31,29 +52,22 @@ const PRESSURE_RADIUS_M: float = 4.0
 # lower toward 1 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 2
 
-# Beyond this range, shots score 0 from distance alone — keeps bots
-# from launching pucks at the goalie from the blue line. Quadratic
-# falloff outside IDEAL_SHOT_DIST_M. Bumped from 18 → 22 to lift
-# mid-range scores: the response at 10 m is 0.91 instead of 0.83, so
-# clean mid-range shots score meaningfully and pass-to-receiver scores
-# (which transitively include `score_shoot(receiver)`) are pulled up
-# in the same band — passes to a teammate with a clear path to the
-# net are now competitive with self-carry-to-slot. Raise toward 26
-# if bots still refuse meaningful shots; lower toward 18 if blue-line
-# shots are too common.
-const SHOT_RANGE_FALLOFF_M: float = 22.0
-
-# The slot — the spot where dist_response peaks (= 1.0). Distances
-# closer to the goal score below 1.0 because driving past the slot
-# means skating into the goalie's coverage; distances further away
-# score below 1.0 because the shot is too long. 5 m matches the
-# face-off circle hash / hard slot in real-rink geometry. Without this
-# peak the dist_response is monotone in 1/dist and the carrier always
-# scores a 1-m drive to the net higher than a slot stand-still shot,
-# so it never actually fires — it just keeps closing distance until
-# the goalie eats the puck. Raise toward 7 if bots release too far
-# out; lower toward 4 if they keep crashing into the goalie.
-const IDEAL_SHOT_DIST_M: float = 5.0
+# Distance scaler for the dist_response curve. Beyond this distance,
+# shot quality from distance alone is 0 — geometrically rooted at the
+# attacking-zone span (blue line to opposing goal line). A shot from
+# the attacking blue line is the longest realistic in-possession shot
+# in hockey; anything from the neutral zone is a dump-in, not a shot.
+# Tracks rink resizes automatically.
+#
+# The dist_response is monotone (closer = always better) and quadratic
+# from goal: 1.0 at the goal mouth, 0.0 at SHOT_RANGE_FALLOFF_M. There
+# is no "ideal distance" peak — the goalie pressure zone (below)
+# penalises shots from inside the goalie's setup line, which is what
+# stops bots from grinding into the crease. The shooter-position
+# projection in carrier.gd (release-pos = current + velocity × charge
+# lookahead) handles the in-motion case. Together those two mechanics
+# replace the bidirectional peak that earlier versions had.
+const SHOT_RANGE_FALLOFF_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z
 
 # Position-potential closeness ramp. position_potential is only used
 # by `_score_at` when the EVALUATOR is outside SHOT_RANGE_FALLOFF_M —
@@ -86,15 +100,21 @@ const SLOT_RADIUS_M: float = 6.0
 # squared goalies; up (0.45) → bots pass/cycle more. SQUARENESS_OFFSET
 # down (e.g., 25°) → cross-seam plays score higher (goalie reads as
 # "exposed" sooner); up (40°) → only severe slides expose the goalie.
-const BASE_COVERAGE: float = 0.35
+const BASE_COVERAGE: float = 0.28
 const SQUARENESS_OFFSET_RAD: float = 0.5235988  # deg_to_rad(30)
 
 # Goalie position prediction. Replaces velocity-extrapolation with a
 # react-then-slide model: react delay first, then move toward the
-# puck-at-release X at max lateral speed. Calibrate to match the
-# goalie controller's actual movement (currently
-# `goalie_controller.gd` STANDING/READY tracking).
-const GOALIE_REACTION_DELAY_S: float = 0.15
+# puck-at-release X at max lateral speed.
+#
+# GOALIE_REACTION_DELAY_S references GameRules so the AI prediction
+# stays in lockstep with the live goalie's `reaction_delay` @export
+# default — they're the same human reflex, single source of truth.
+# GOALIE_MAX_LATERAL_SPEED_MPS is currently a calibration estimate;
+# the live goalie has separate t_push_speed / shuffle_speed /
+# tracking_speed depending on state, so there is no clean single
+# source — leave as a literal feel value for now.
+const GOALIE_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 const GOALIE_MAX_LATERAL_SPEED_MPS: float = 5.0
 
 # Shadow half-width used by AIShotAim.compute_open_net_aim for the
@@ -148,11 +168,16 @@ const LANE_REACTION_RAMP_S: float = 0.10
 const SHOT_SPEED_M_S: float = 30.0
 const PASS_SPEED_M_S: float = 22.0
 
-# Reference top skating speed. Matches SkaterController.max_speed
-# default. Used by time_to_arrive() for momentum-aware ETAs across
-# every role behavior + chase intercept lookahead. Single source of
-# truth so retunes propagate everywhere.
-const SKATER_REF_SPEED_M_S: float = 10.5
+# Reference top skating speed. Single source of truth shared with
+# SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.
+# Used by time_to_arrive() for momentum-aware ETAs across every role
+# behavior + chase intercept lookahead.
+#
+# TODO(per-player attrs): when SkaterAttributes lands, swap call
+# sites for `attribute_resolver.call(peer_id).max_speed` so an
+# evaluator reasoning about a fast/slow opponent uses the right
+# top speed. This const becomes the league-average fallback.
+const SKATER_REF_SPEED_M_S: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
 # Approximate kinematic stopping time for a skater steering against
 # their own velocity. Derived from the friction model in
@@ -205,8 +230,8 @@ const ACTION_HYSTERESIS_MARGIN: float = 0.05
 #   coverage     = BASE_COVERAGE × squareness
 #   squareness   = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
 #
-#   dist_response     = peak-at-slot curve (1.0 at IDEAL_SHOT_DIST_M)
-#   shot_angle_factor = 1 - shot_angle / (PI / 2)                      (linear)
+#   dist_response     = monotone quadratic from goal (1.0 at goal mouth, 0.0 at SHOT_RANGE_FALLOFF_M)
+#   shot_angle_factor = 1 - (shot_angle / (PI / 2))²                   (quadratic)
 #   puck_arc_angle    = atan2(shooter.x - goal.x, abs(shooter.z - goal.z))
 #   goalie_arc_angle  = atan2(goalie_at_release.x - goal.x, ...)
 #   arc_offset        = |puck_arc_angle - goalie_arc_angle|
@@ -233,31 +258,34 @@ static func score_shoot(
 	if forward < 0.001:
 		return 0.0
 
-	# Distance response — bidirectional quadratic. Peaks at 1.0 at the
-	# slot (IDEAL_SHOT_DIST_M) and falls off in both directions:
-	# quadratic toward the goal mouth (penalises crashing into the
-	# goalie's coverage) and quadratic out to SHOT_RANGE_FALLOFF_M
-	# (penalises long bombs). Without the close-range falloff the
-	# carrier keeps preferring "drive 1 m closer" over "shoot now," so
-	# bots never release in the slot — they grind into the goalie.
+	# Distance response — monotone quadratic falloff from goal. 1.0 at
+	# the goal mouth, 0.0 at SHOT_RANGE_FALLOFF_M (= attacking blue
+	# line). The "no peak" model relies on two other mechanics to stop
+	# bots from grinding into the crease:
+	#   1. The goalie pressure zone penalty (further down) discounts
+	#      shots from inside the goalie's setup line — that's the
+	#      authoritative "too close" signal.
+	#   2. The carrier scorer (carrier.gd) projects the shooter forward
+	#      by velocity × charge_lookahead before scoring, so a moving
+	#      bot scores its release-pos rather than current pos. This
+	#      lifts in-motion-toward-slot scores naturally.
 	var dist: float = shooter.distance_to(attacking_goal)
-	var dist_response: float
-	if dist >= IDEAL_SHOT_DIST_M:
-		var far_norm: float = clampf(
-				(dist - IDEAL_SHOT_DIST_M) / (SHOT_RANGE_FALLOFF_M - IDEAL_SHOT_DIST_M),
-				0.0, 1.0)
-		dist_response = 1.0 - far_norm * far_norm
-	else:
-		var close_norm: float = clampf(
-				(IDEAL_SHOT_DIST_M - dist) / IDEAL_SHOT_DIST_M,
-				0.0, 1.0)
-		dist_response = 1.0 - close_norm * close_norm
+	var dist_norm: float = clampf(dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
+	var dist_response: float = 1.0 - dist_norm * dist_norm
 
 	# Puck arc angle: atan2 of lateral offset over forward distance.
 	# Range [-PI/2, +PI/2] given the forward gate above.
+	#
+	# Quadratic-soften (1 - x²) instead of linear (1 - x): a human reads
+	# slightly off-center as still a great shot — at 30° off-center the
+	# linear curve gave 0.67, quadratic gives 0.89. Truly bad-angle
+	# shots (>= 75°) still fall to ≤ 0.31 so the bot doesn't shoot
+	# from the corners. Ease the curve toward `1 - 0.7 × x²` if bots
+	# start firing wide-angle pucks from distance.
 	var puck_arc_angle: float = atan2(shooter.x - attacking_goal.x, forward)
 	var shot_angle: float = absf(puck_arc_angle)
-	var shot_angle_factor: float = clampf(1.0 - shot_angle / (PI * 0.5), 0.0, 1.0)
+	var arc_norm: float = clampf(shot_angle / (PI * 0.5), 0.0, 1.0)
+	var shot_angle_factor: float = 1.0 - arc_norm * arc_norm
 
 	# Goalie arc angle at release. If the goalie ended up behind their
 	# own goal line (degenerate edge — shouldn't happen in normal play),

@@ -26,7 +26,7 @@ extends Node
 @export var rotation_speed: float = 5.0
 @export var rvh_transition_speed: float = 6.0
 
-@export var reaction_delay: float = 0.13
+@export var reaction_delay: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 # Arms specifically take longer to react than legs. Legs are reflexive (drop
 # instantly when the brain reads "low shot"); arms require "where in the
 # upper net" computation which adds processing time. Setting this longer
