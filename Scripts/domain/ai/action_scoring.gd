@@ -102,10 +102,16 @@ const SQUARENESS_OFFSET_RAD: float = 0.5235988  # deg_to_rad(30)
 
 # Goalie position prediction. Replaces velocity-extrapolation with a
 # react-then-slide model: react delay first, then move toward the
-# puck-at-release X at max lateral speed. Calibrate to match the
-# goalie controller's actual movement (currently
-# `goalie_controller.gd` STANDING/READY tracking).
-const GOALIE_REACTION_DELAY_S: float = 0.15
+# puck-at-release X at max lateral speed.
+#
+# GOALIE_REACTION_DELAY_S references GameRules so the AI prediction
+# stays in lockstep with the live goalie's `reaction_delay` @export
+# default — they're the same human reflex, single source of truth.
+# GOALIE_MAX_LATERAL_SPEED_MPS is currently a calibration estimate;
+# the live goalie has separate t_push_speed / shuffle_speed /
+# tracking_speed depending on state, so there is no clean single
+# source — leave as a literal feel value for now.
+const GOALIE_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 const GOALIE_MAX_LATERAL_SPEED_MPS: float = 5.0
 
 # Shadow half-width used by AIShotAim.compute_open_net_aim for the
@@ -159,11 +165,16 @@ const LANE_REACTION_RAMP_S: float = 0.10
 const SHOT_SPEED_M_S: float = 30.0
 const PASS_SPEED_M_S: float = 22.0
 
-# Reference top skating speed. Matches SkaterController.max_speed
-# default. Used by time_to_arrive() for momentum-aware ETAs across
-# every role behavior + chase intercept lookahead. Single source of
-# truth so retunes propagate everywhere.
-const SKATER_REF_SPEED_M_S: float = 10.5
+# Reference top skating speed. Single source of truth shared with
+# SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.
+# Used by time_to_arrive() for momentum-aware ETAs across every role
+# behavior + chase intercept lookahead.
+#
+# TODO(per-player attrs): when SkaterAttributes lands, swap call
+# sites for `attribute_resolver.call(peer_id).max_speed` so an
+# evaluator reasoning about a fast/slow opponent uses the right
+# top speed. This const becomes the league-average fallback.
+const SKATER_REF_SPEED_M_S: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
 # Approximate kinematic stopping time for a skater steering against
 # their own velocity. Derived from the friction model in

@@ -77,12 +77,8 @@ const SLAPPER_MOTION_PENALTY: float = 0.3
 # Carry candidate generation: 8 polar cardinals at this radius +
 # slot anchor + stand-still.
 const CARRY_SEARCH_STEP_M: float = 3.0
-# Don't generate carry candidates past this distance from the
-# attacking goal line — beyond there is behind the net.
-const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
-
-# Rink half-width inset for carry-candidate clamping.
-const RINK_X_INSET: float = 0.5
+# Carry candidates are clamped inside the goal-line buffer and the
+# rink-X inset — both defined on AIRoleHelpers (single source).
 
 # Elevation gate constants. Reactive: goalie already down → top
 # corners exposed. Proactive: close shot with a clean lane → pick
@@ -554,9 +550,9 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 		var candidate := Vector3(
 				self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
 				self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
-		if absf(candidate.z) > absf(attacking_goal.z) - CARRY_GOAL_LINE_BUFFER_M:
+		if absf(candidate.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
 			continue
-		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - RINK_X_INSET:
+		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 			continue
 		var local_time: float = AIActionScoring.time_to_arrive(self_pos, candidate, self_velocity)
 		_project_opponents_to(ctx, local_time, _scratch_opponents_path)

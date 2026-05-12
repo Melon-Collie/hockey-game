@@ -35,8 +35,8 @@ enum State {
 	PASS_PRESSED,     # one-tick press window aimed at a teammate's lead position
 }
 
-# Margins from the rink edge / goal line that anchors are clamped inside of.
-const RINK_X_INSET: float = 0.5
+# Margin from the goal line that anchors are clamped inside of. The
+# matching X-inset lives on AIRoleHelpers.RINK_INSET_M (single source).
 const RINK_Z_INSET: float = 1.0
 
 # After CARRY's `_pick_action` chooses an action (PASS / SHOOT /
@@ -82,19 +82,18 @@ const SHOT_AIM_WOBBLE_CONE_DEG: float = 3.0
 # remaining comes from the bot firing before the mouse fully
 # converges to the aim, plus receiver-lead inaccuracy.
 const PASS_AIM_WOBBLE_CONE_DEG: float = 0.3
-# How wide the goalie's shadow on the net plane should be considered
-# (meters, half-width). Tuneable in playtest.
-const GOALIE_SHADOW_HALF: float = 0.3
+# Goalie shadow half-width on the net plane lives on
+# AIActionScoring.GOALIE_SHADOW_HALF_M (single source).
 # After a puck-engagement event (we got stripped, or we just stripped
 # someone — both detected as "puck became loose while we were close"),
 # pull the blade back to our body for this many ticks. Speed-scaled:
 # a bot at full skating speed was committed harder and takes longer
 # to reset; a slow bot recovers quickly. The variance breaks lockstep
 # between two bots involved in the same engagement (their speeds are
-# almost never identical).
+# almost never identical). Speed reference comes from
+# AIActionScoring.SKATER_REF_SPEED_M_S (single source).
 const ENGAGEMENT_COOLDOWN_MIN_TICKS: int = 24    # ~100 ms at 240 Hz
 const ENGAGEMENT_COOLDOWN_MAX_TICKS: int = 96    # ~400 ms at 240 Hz
-const ENGAGEMENT_SPEED_REF_M_S: float = 10.5     # SkaterController.max_speed default
 const ENGAGEMENT_PROXIMITY_M: float = 2.0        # blade-on-puck range
 
 # Reference top skating speed for chase intercept lookahead lives in
@@ -149,10 +148,8 @@ const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 # attacking goal line. Without this clamp, a carrier within 2 m of
 # the goal line gets a mouse target that sits PAST the goal line —
 # the blade IK extends through the net, the puck attached to the
-# blade gets pushed into the goalie, rebound, repeat. Clamping the
-# mouse to stay at least this far on the rink side stops the blade
-# from punching through.
-const CARRY_GOAL_LINE_BUFFER_M: float = 1.0
+# blade gets pushed into the goalie, rebound, repeat. The buffer
+# distance lives on AIRoleHelpers.GOAL_LINE_BUFFER_M (single source).
 
 # Stickhandling: shift the carrier's mouse perpendicular to facing,
 # AWAY from the closest incoming defender. Pulls the puck off-side
@@ -1409,7 +1406,7 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# attacking goal line — the blade IK chases the mouse, and a mouse
 	# target past the goal line punches the blade through the net.
 	var goal_line_z: float = _attacking_goal_pos.z
-	var max_forward_z: float = goal_line_z + CARRY_GOAL_LINE_BUFFER_M * _own_goal_dir
+	var max_forward_z: float = goal_line_z + AIRoleHelpers.GOAL_LINE_BUFFER_M * _own_goal_dir
 	if (base.z - max_forward_z) * _own_goal_dir < 0.0:
 		base.z = max_forward_z
 	# Stickhandling offset is raw — `_step_mouse_toward` provides the
@@ -1473,7 +1470,7 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 			self_pos, goalie,
 			_attacking_goal_pos.z,
 			GameRules.NET_HALF_WIDTH,
-			GOALIE_SHADOW_HALF)
+			AIActionScoring.GOALIE_SHADOW_HALF_M)
 
 
 # OFF_PUCK ready-stance aim: returns a target 2 m in front of the bot
@@ -1618,8 +1615,8 @@ func _tag_up_anchor(self_pos: Vector3) -> Vector3:
 
 func _clamp_anchor(p: Vector3) -> Vector3:
 	var x: float = clampf(p.x,
-			-GameRules.RINK_HALF_WIDTH + RINK_X_INSET,
-			GameRules.RINK_HALF_WIDTH - RINK_X_INSET)
+			-GameRules.RINK_HALF_WIDTH + AIRoleHelpers.RINK_INSET_M,
+			GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M)
 	var z: float = clampf(p.z,
 			-GameRules.GOAL_LINE_Z + RINK_Z_INSET,
 			GameRules.GOAL_LINE_Z - RINK_Z_INSET)
@@ -1780,7 +1777,7 @@ func _update_engagement_cooldown(snapshot: WorldSnapshot, self_state: SkaterNetw
 		if dx * dx + dz * dz < ENGAGEMENT_PROXIMITY_M * ENGAGEMENT_PROXIMITY_M:
 			var v: Vector3 = self_state.velocity
 			var speed: float = sqrt(v.x * v.x + v.z * v.z)
-			var ratio: float = clampf(speed / ENGAGEMENT_SPEED_REF_M_S, 0.0, 1.0)
+			var ratio: float = clampf(speed / AIActionScoring.SKATER_REF_SPEED_M_S, 0.0, 1.0)
 			_engagement_cooldown = int(round(lerpf(
 					float(ENGAGEMENT_COOLDOWN_MIN_TICKS),
 					float(ENGAGEMENT_COOLDOWN_MAX_TICKS),
