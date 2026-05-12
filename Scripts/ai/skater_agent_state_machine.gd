@@ -361,12 +361,27 @@ var _shoot_charge_tick: int = 0
 # transform). Captured at SHOOT_PRESSED entry; mouse_screen_pos walks
 # along this each tick.
 var _shoot_sweep_dir_xy: Vector2 = Vector2.ZERO
-# Wind-up start position in WORLD space — captured at SHOOT_PRESSED
-# entry. mouse_world_pos lerps from this to the aim point across the
-# charge, so the blade IK visibly sweeps from forehand wind-up through
-# to the puck.
+# Wind-up start position in WORLD space — captured ONCE at SHOOT_PRESSED
+# entry (tick 0). Defines where the visible swing starts (behind the
+# bot on the chosen side). Stays fixed in world space for the duration
+# of the charge so the blade IK draws a clean sweep from this point.
 var _shoot_wind_up_start: Vector3 = Vector3.ZERO
+# Aim target = release position. Recomputed EVERY tick from current
+# self_pos so the shot direction at release reflects where the bot
+# actually IS when the shot fires, not where they were at tick 0. The
+# bot may travel up to ~2 m during the wind-up even with active braking;
+# without per-tick recompute the locked aim_target sits where the bot
+# WAS, and (mouse − blade) at release can point backwards.
 var _shoot_aim_target: Vector3 = Vector3.ZERO
+# Captured once at tick 0 and re-applied to fresh clean_aim each tick
+# so the aim doesn't randomly jitter inside the wobble cone per frame.
+var _shoot_aim_wobble_offset: Vector3 = Vector3.ZERO
+# Wind-up side decision: +1 = forehand, -1 = backhand. Captured at
+# tick 0 (based on forehand-side pressure) and locked for the charge
+# so the swing doesn't flip mid-press if a defender shuffles in and
+# out of stick reach.
+var _shoot_side_sign: float = 1.0
+var _shoot_perp_sign: float = 1.0
 
 # Pre-aim target locked at the moment intent flips from CARRY to a
 # fire action. Without this, `_aim_target_for_intent` recomputes
@@ -990,27 +1005,21 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# on the forehand side.
 	if _shoot_charge_tick == 0:
 		debug_last_decision = "SHOOT"
-		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
-		var wobbled_aim: Vector3 = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
-		var dir_xz: Vector3 = Vector3(
-				wobbled_aim.x - self_pos.x, 0.0, wobbled_aim.z - self_pos.z)
-		var aim_dir: Vector3
-		if dir_xz.length_squared() > 0.0001:
-			aim_dir = dir_xz.normalized()
-		else:
-			aim_dir = Vector3(0.0, 0.0, 1.0)
-		# Forehand-side perpendicular: 90° rotation of aim_dir in XZ.
-		# RH winds up on the +X-player-local side (= aim_dir rotated 90°
-		# CW); LH on the -X side (90° CCW).
-		var perp_sign: float = -1.0 if _is_left_handed else 1.0
-		var forehand_perp: Vector3 = Vector3(
-				aim_dir.z * perp_sign, 0.0, -aim_dir.x * perp_sign)
+		var clean_aim_init: Vector3 = _shot_aim_point(snapshot, self_pos)
+		# Capture wobble as a Vector3 offset. Re-applied each tick to
+		# the FRESH clean_aim so the resulting wobbled aim stays
+		# consistent — recomputing _aim_wobble per tick would jitter.
+		_shoot_aim_wobble_offset = _aim_wobble(self_pos, clean_aim_init, SHOT_AIM_WOBBLE_CONE_DEG)
+		_shoot_perp_sign = -1.0 if _is_left_handed else 1.0
+		var aim_dir_init: Vector3 = _shoot_wobbled_aim_dir(snapshot, self_pos)
+		var forehand_perp_init: Vector3 = Vector3(
+				aim_dir_init.z * _shoot_perp_sign, 0.0, -aim_dir_init.x * _shoot_perp_sign)
 
 		# Pick wind-up side: forehand by default. Flip to backhand if a
 		# defender is within stick reach AND clearly on the forehand
 		# side — they'd poke the puck off a forehand wind-up. Locked
 		# for the charge so no mid-swing oscillation.
-		var shoot_side_sign: float = 1.0
+		_shoot_side_sign = 1.0
 		var reach_sq: float = BOT_FOREHAND_STICK_REACH_M * BOT_FOREHAND_STICK_REACH_M
 		for peer_id: int in snapshot.skater_states:
 			if peer_id == _peer_id:
@@ -1023,48 +1032,43 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 			var rel_len_sq: float = rel_x * rel_x + rel_z * rel_z
 			if rel_len_sq > reach_sq:
 				continue
-			var forehand_dot: float = rel_x * forehand_perp.x + rel_z * forehand_perp.z
+			var forehand_dot: float = rel_x * forehand_perp_init.x + rel_z * forehand_perp_init.z
 			if forehand_dot > BOT_FOREHAND_LATERAL_THRESHOLD_M:
-				shoot_side_sign = -1.0
+				_shoot_side_sign = -1.0
 				break
-		var shoot_perp: Vector3 = forehand_perp * shoot_side_sign
 
-		# Geometric forehand bias the lateral offset introduces at
-		# release: shot direction is shifted toward shoot_perp by
-		# atan2(SIDE, FORWARD). Compensate by rotating the aim
-		# direction the OPPOSITE way by the same angle so the
-		# resulting (mouse − blade) at release still points at the
-		# original clean_aim. Sign convention: my 2D rotation matrix
-		# in XZ uses positive r = clockwise from a top-down view (the
-		# opposite of Godot's +Y axis rotation). Combined with the
-		# perp_sign convention from forehand_perp, the rotation
-		# direction that pulls aim AWAY from shoot_perp is:
-		var bias_rad: float = atan2(BOT_WRISTER_WIND_UP_SIDE_M, BOT_WRISTER_RELEASE_FORWARD_M)
-		var rot: float = bias_rad * shoot_side_sign * perp_sign
-		var cos_r: float = cos(rot)
-		var sin_r: float = sin(rot)
-		var comp_aim_dir: Vector3 = Vector3(
-				aim_dir.x * cos_r - aim_dir.z * sin_r,
-				0.0,
-				aim_dir.x * sin_r + aim_dir.z * cos_r)
-		# Aim target sits at the RELEASE point: forward + chosen-side
-		# offset, not the far clean_aim. Mouse stays on the chosen side
-		# throughout the lerp so the blade IK visibly draws the swing
-		# on that side.
-		_shoot_aim_target = (
-				self_pos
-				+ comp_aim_dir * BOT_WRISTER_RELEASE_FORWARD_M
-				+ shoot_perp * BOT_WRISTER_WIND_UP_SIDE_M)
+		# wind_up_start is FIXED in world space — defines where the
+		# visible swing starts. Compute from initial position with
+		# initial compensated aim_dir.
+		var comp_aim_init: Vector3 = _shoot_compensated_aim_dir(aim_dir_init)
+		var shoot_perp_init: Vector3 = forehand_perp_init * _shoot_side_sign
 		_shoot_wind_up_start = (
 				self_pos
-				- comp_aim_dir * BOT_WRISTER_WIND_UP_BACK_M
-				+ shoot_perp * BOT_WRISTER_WIND_UP_SIDE_M)
-		_shoot_sweep_dir_xy = Vector2(comp_aim_dir.x, comp_aim_dir.z)
+				- comp_aim_init * BOT_WRISTER_WIND_UP_BACK_M
+				+ shoot_perp_init * BOT_WRISTER_WIND_UP_SIDE_M)
+		_shoot_sweep_dir_xy = Vector2(comp_aim_init.x, comp_aim_init.z)
 		input.shoot_pressed = true
 
-	# Lerp mouse_world_pos from wind-up start to aim across the charge.
-	# Blade IK chases this, so the player visibly draws the stick back
-	# on the forehand and sweeps through to the aim point.
+	# Recompute aim_target EVERY tick from current self_pos so the shot
+	# direction at release reflects where the bot ACTUALLY is when the
+	# shot fires, not where they were at tick 0. With active braking
+	# the bot still travels ~2 m during the 250 ms wind-up; a fixed
+	# tick-0 aim_target ends up BEHIND the bot at release and the shot
+	# direction (mouse − blade) points the wrong way.
+	var aim_dir_now: Vector3 = _shoot_wobbled_aim_dir(snapshot, self_pos)
+	var comp_aim_now: Vector3 = _shoot_compensated_aim_dir(aim_dir_now)
+	var forehand_perp_now: Vector3 = Vector3(
+			aim_dir_now.z * _shoot_perp_sign, 0.0, -aim_dir_now.x * _shoot_perp_sign)
+	var shoot_perp_now: Vector3 = forehand_perp_now * _shoot_side_sign
+	_shoot_aim_target = (
+			self_pos
+			+ comp_aim_now * BOT_WRISTER_RELEASE_FORWARD_M
+			+ shoot_perp_now * BOT_WRISTER_WIND_UP_SIDE_M)
+
+	# Lerp mouse_world_pos from wind-up start (fixed) to aim target
+	# (fresh) across the charge. Blade IK chases the lerp; the swing
+	# starts from a fixed point behind the bot and ends at the
+	# release point in front of the bot's CURRENT position.
 	var t: float = float(_shoot_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
 	input.mouse_world_pos = _step_mouse_toward(_shoot_wind_up_start.lerp(_shoot_aim_target, t))
 
@@ -1087,6 +1091,33 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 
 
 # Slapper charge: hold slap_held for BOT_SLAPPER_CHARGE_TICKS, then
+# Returns the normalised wobbled aim direction (clean_aim + cached
+# wobble) from self_pos. Falls back to forward when degenerate.
+func _shoot_wobbled_aim_dir(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
+	var wobbled: Vector3 = clean_aim + _shoot_aim_wobble_offset
+	var dir_xz: Vector3 = Vector3(wobbled.x - self_pos.x, 0.0, wobbled.z - self_pos.z)
+	if dir_xz.length_squared() > 0.0001:
+		return dir_xz.normalized()
+	return Vector3(0.0, 0.0, 1.0)
+
+
+# Compensates aim_dir against the geometric forehand bias introduced
+# by the lateral release offset (atan2(SIDE, FORWARD)). Rotates
+# aim_dir AWAY from shoot_perp so that (mouse − blade) at release
+# still points at the original clean_aim. Sign depends on side +
+# handedness — see the rot derivation comment.
+func _shoot_compensated_aim_dir(aim_dir: Vector3) -> Vector3:
+	var bias_rad: float = atan2(BOT_WRISTER_WIND_UP_SIDE_M, BOT_WRISTER_RELEASE_FORWARD_M)
+	var rot: float = bias_rad * _shoot_side_sign * _shoot_perp_sign
+	var cos_r: float = cos(rot)
+	var sin_r: float = sin(rot)
+	return Vector3(
+			aim_dir.x * cos_r - aim_dir.z * sin_r,
+			0.0,
+			aim_dir.x * sin_r + aim_dir.z * cos_r)
+
+
 # release. Mirrors _state_shoot_pressed except (a) longer commit, (b)
 # uses slap_pressed/slap_held instead of shoot_*, (c) aim direction
 # is captured ONCE at tick 0 by SkaterController._enter_slapper_charge
