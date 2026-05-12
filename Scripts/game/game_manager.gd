@@ -1576,6 +1576,8 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 	if victim_peer_id == -1:
 		return
 	if NetworkManager.is_host:
+		if puck == null or puck_controller == null:
+			return
 		var puck_carrier: int = puck_controller.get_carrier_peer_id()
 		var attacker_has_puck: bool = (puck_carrier == hitter_peer_id)
 		var victim_relevant: bool = HitRules.is_victim_puck_relevant(
@@ -1590,7 +1592,7 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 	# The host re-validates all gates from rewound snapshots on receipt.
 	if impulse_magnitude < HitRules.MIN_HIT_IMPULSE:
 		return
-	if puck_controller.get_carrier_peer_id() == hitter_peer_id:
+	if puck_controller == null or puck_controller.get_carrier_peer_id() == hitter_peer_id:
 		return
 	# Throttle to once per HIT_COOLDOWN_S — body_checked_player fires every physics
 	# tick during sustained contact (240 Hz), and flooding the host with RPCs causes jitter.
