@@ -827,7 +827,9 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	if _intended_action == State.CARRY:
 		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
 	else:
-		_apply_hold_steering(input, snapshot, self_pos)
+		# Fire intent locked, pre-aiming. Brake actively so the bot
+		# doesn't coast past the spot they decided to fire from.
+		_apply_brake_steering(input, snapshot, self_pos)
 
 	# Mouse target depends on intent: carry uses normal goal-aim, fire
 	# states pre-aim toward action direction.
@@ -969,7 +971,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 		return
 
-	_apply_hold_steering(input, snapshot, self_pos)
+	_apply_brake_steering(input, snapshot, self_pos)
 	# Elevation flag based on decision at entry. Sticky in
 	# SkaterController, so setting one direction explicitly each tick
 	# normalizes it regardless of the last shot.
@@ -1111,7 +1113,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 		_set_state(State.CARRY)
 		return
 
-	_apply_hold_steering(input, snapshot, self_pos)
+	_apply_brake_steering(input, snapshot, self_pos)
 	if _shot_is_elevated:
 		input.elevation_up = true
 	else:
@@ -1139,7 +1141,7 @@ func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos
 
 
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	_apply_hold_steering(input, snapshot, self_pos)
+	_apply_brake_steering(input, snapshot, self_pos)
 	# Resolve the receiver's slot label NOW for the debug readout —
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
 	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
@@ -1180,6 +1182,35 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 # itself because the aim differs (goal-shadow vs receiver lead).
 func _apply_hold_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	_apply_steering(input, snapshot, self_pos, self_pos)
+
+
+# Brake steering — actively decelerate by pointing the steering anchor
+# behind the bot's current velocity. The opposed direction triggers
+# `AISteering.brake_pivot` which returns full reverse thrust, much
+# faster deceleration than passive friction during coast (hold).
+# Falls back to hold once velocity drops below BRAKE_MIN_SPEED so the
+# bot doesn't start gliding backward after stopping. Used during
+# fire-action pre-aim convergence and during the wrister / slapper
+# wind-up — without this, a bot rushing at top speed coasts past the
+# slot before the press can release, crashing into the goalie.
+const BRAKE_STEERING_ANCHOR_DIST_M: float = 5.0
+const BRAKE_STEERING_MIN_SPEED_M_S: float = 0.5
+func _apply_brake_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		_apply_hold_steering(input, snapshot, self_pos)
+		return
+	var v: Vector3 = self_state.velocity
+	var v_mag_sq: float = v.x * v.x + v.z * v.z
+	if v_mag_sq < BRAKE_STEERING_MIN_SPEED_M_S * BRAKE_STEERING_MIN_SPEED_M_S:
+		_apply_hold_steering(input, snapshot, self_pos)
+		return
+	var v_mag: float = sqrt(v_mag_sq)
+	var brake_anchor: Vector3 = Vector3(
+			self_pos.x - v.x / v_mag * BRAKE_STEERING_ANCHOR_DIST_M,
+			0.0,
+			self_pos.z - v.z / v_mag * BRAKE_STEERING_ANCHOR_DIST_M)
+	_apply_steering(input, snapshot, self_pos, brake_anchor)
 
 
 # Lead the receiver by their flight-time along their current velocity
