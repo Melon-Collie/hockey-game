@@ -64,6 +64,8 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 	if victim_peer_id == -1:
 		return
 	if NetworkManager.is_host:
+		if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
+			return
 		var puck: Puck = _puck_getter.call() as Puck
 		var pc: PuckController = _puck_controller_getter.call() as PuckController
 		if puck == null or pc == null:
@@ -80,6 +82,8 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 	# host with claims for trivial bumps or while the local player is carrying
 	# the puck. The host re-validates all gates from rewound snapshots.
 	if impulse_magnitude < HitRules.MIN_HIT_IMPULSE:
+		return
+	if not _puck_controller_getter.is_valid():
 		return
 	var pc: PuckController = _puck_controller_getter.call() as PuckController
 	if pc == null or pc.get_carrier_peer_id() == hitter_peer_id:

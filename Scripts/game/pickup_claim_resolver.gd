@@ -52,7 +52,7 @@ func tick(delta: float) -> void:
 	# Resolve at use time so a peer that disconnected / demoted during the
 	# contest window doesn't dereference a freed skater.
 	var record: PlayerRecord = _registry.get_record(_pending_peer_id)
-	if record != null and record.skater != null:
+	if record != null and record.skater != null and _puck_controller_getter.is_valid():
 		var pc: PuckController = _puck_controller_getter.call() as PuckController
 		if pc != null:
 			pc.apply_lag_comp_pickup(record.skater)
@@ -66,6 +66,8 @@ func clear() -> void:
 
 
 func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
+		return
 	var puck: Puck = _puck_getter.call() as Puck
 	var pc: PuckController = _puck_controller_getter.call() as PuckController
 	if puck == null or pc == null:
