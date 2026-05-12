@@ -640,7 +640,7 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 # OZ slot anchor — recursion terminator and a permanent carry
 # candidate. Slot depth from goal line is fixed.
 func _slot_anchor(own_goal_dir: float) -> Vector3:
-	var slot_z: float = -own_goal_dir * (GameRules.GOAL_LINE_Z - AIActionScoring.IDEAL_SHOT_DIST_M)
+	var slot_z: float = -own_goal_dir * (GameRules.GOAL_LINE_Z - GameRules.SLOT_DIST_M)
 	return Vector3(0.0, 0.0, slot_z)
 
 

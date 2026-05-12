@@ -94,6 +94,12 @@ enum RuleSet { OFF, ARCADE, NHL }
 const DEFAULT_RULE_SET: int = RuleSet.ARCADE
 const RULE_SET_NAMES: Array[String] = ["Off", "Arcade", "NHL"]
 
+# Slot depth — distance from goal line to the faceoff-hash "hard slot"
+# in front of the net. Real-rink geometry; matches the spot a hockey
+# player reads as the prime scoring area. Used by AI role behaviors
+# (anchor, carrier, finisher) as the "where the slot is" reference.
+const SLOT_DIST_M: float = 5.0
+
 # ── Skater Defaults ───────────────────────────────────────────────────────────
 # Defaults shared between the live SkaterController @export and AI scoring /
 # state-machine references. Single source of truth so the AI never reasons

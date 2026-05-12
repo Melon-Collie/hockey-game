@@ -306,17 +306,19 @@ func test_breakout_pass_not_blocked() -> void:
 # (within rounding) the formula is correct. Any drift here means a tuning
 # constant moved.
 
-# Slot, centered, goalie squared. dist_response peaks at 1.0 at the
-# slot, × shot_angle_factor 1.0 × (1 - BASE_COVERAGE 0.28) = 0.72.
+# Slot, centered, goalie squared. Monotone dist_response from goal:
+# 5 m / 19.36 m = 0.258, dist_response = 1 - 0.258² = 0.93. Combined
+# with shot_angle_factor 1.0 × (1 - BASE_COVERAGE 0.28) = 0.67.
 func test_shot_quality_slot_5m_squared() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.65)  # 5 m from goal line
 	var goalie := Vector3(0.0, 0.0, 26.0)    # squared (matches puck arc)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.72, 0.02, "slot 5m centered, goalie squared")
+	assert_almost_eq(s, 0.67, 0.02, "slot 5m centered, goalie squared")
 
 
 # Same shot but goalie has slid out of position (~30° arc offset).
 # squareness = 0 at offset >= 30°, coverage = 0, full open net.
+# dist_response 0.93 × angle 1.0 × open net 1.0 = 0.93.
 func test_shot_quality_slot_5m_goalie_delayed() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.65)
 	# Place goalie at ~30° off arc relative to shooter's puck angle (0°).
@@ -324,25 +326,22 @@ func test_shot_quality_slot_5m_goalie_delayed() -> void:
 	# which is well past the SQUARENESS_OFFSET (30°), so squareness = 0.
 	var goalie := Vector3(0.45, 0.0, 26.15)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	# At 5m centered with full open net: dist_response peaks at 1.0 at
-	# IDEAL_SHOT_DIST_M, × 1.0 × 1.0 = 1.0.
-	assert_almost_eq(s, 1.0, 0.02, "slot 5m centered, goalie misaligned → open net")
+	assert_almost_eq(s, 0.93, 0.02, "slot 5m centered, goalie misaligned → open net")
 
 
 # 60° half-wall vs goalie at center (delayed/non-square).
-# Quadratic angle: 1 - (60/90)² = 0.556. Combined with dist_response
-# ≈ 0.94 and full open net (squareness = 0) → ≈ 0.52. Wide-angle
-# shots score meaningfully now but still below the slot-shot ≥ 0.7.
+# dist 9.25 m → dist_response 1 - (9.25/19.36)² ≈ 0.77. Quadratic
+# angle 1 - (60/90)² = 0.556. Open net (squareness = 0) → ~0.43.
 func test_shot_quality_60deg_goalie_delayed() -> void:
 	# 60° angle: lateral / forward = tan(60°). Forward 4.625, lateral 8.0.
 	var shooter := Vector3(8.0, 0.0, 22.025)  # 60° off-axis, dist ~9.25 m
 	var goalie := Vector3(0.0, 0.0, 26.0)     # goalie at center (arc 0°, delayed)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.52, 0.05, "half-wall 60° vs delayed goalie ≈ 0.52")
+	assert_almost_eq(s, 0.43, 0.05, "half-wall 60° vs delayed goalie ≈ 0.43")
 
 
 # 60° half-wall vs squared goalie. Coverage knocks the open-net score
-# down to ≈ 0.52 × (1 - 0.28) ≈ 0.38.
+# down to ≈ 0.43 × (1 - 0.28) ≈ 0.31.
 func test_shot_quality_60deg_goalie_squared() -> void:
 	var shooter := Vector3(8.0, 0.0, 22.025)
 	# Squared goalie: goalie_arc matches puck_arc (60°). Place goalie
@@ -350,22 +349,21 @@ func test_shot_quality_60deg_goalie_squared() -> void:
 	# the goal. tan(60°) × forward(0.65) = 1.126 lateral.
 	var goalie := Vector3(1.126, 0.0, 26.0)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.38, 0.05, "half-wall 60° vs squared goalie ≈ 0.38")
+	assert_almost_eq(s, 0.31, 0.05, "half-wall 60° vs squared goalie ≈ 0.31")
 
 
 # Slightly off-center 5 m shot, squared goalie. The "great chance"
 # scenario the user calls out — should score comfortably above the
-# bar a typical CARRY candidate clears (~0.65). Quadratic angle
-# softens 11° off-center to ~0.95, × 0.99 dist × (1 - 0.28×~1.0
-# squared) = ~0.68.
+# bar a typical CARRY candidate clears. Quadratic angle softens 11°
+# off-center to ~0.98, × 0.93 dist × (1 - 0.28 squared) = ~0.66.
 func test_shot_quality_slightly_off_center_5m_squared() -> void:
 	var shooter := Vector3(1.0, 0.0, 21.65)  # ~11° off-axis, dist ~5.1 m
 	# Goalie squared to the puck: goalie_arc matches puck_arc.
 	# tan(11°) × goalie_forward(0.65) = 0.126 lateral.
 	var goalie := Vector3(0.126, 0.0, 26.0)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_gt(s, 0.65,
-			"slightly off-center 5 m slot shot vs squared goalie should score > 0.65 (great chance)")
+	assert_gt(s, 0.6,
+			"slightly off-center 5 m slot shot vs squared goalie should score > 0.6 (great chance)")
 
 
 # Quadratic angle ordering. Three shots at the same close distance,
@@ -386,17 +384,32 @@ func test_shot_quality_angle_ordering_quadratic() -> void:
 	assert_gt(s60, s89, "60° shot should outscore 89° shot")
 
 
-# Asymmetric close-side falloff. The close-side ramp (CLOSE_FALLOFF_M
-# = 8 m) is wider than the symmetric pre-tune would have given (5 m),
-# so a 3 m point-blank shot loses only ~6% from distance instead of
-# ~16%. Without the goalie_current_pos zone penalty, point-blank
-# stays a high-scoring shot — the zone penalty (live carrier path)
-# is what knocks it down for "drove past slot" cases.
+# Blue-line bomb scores 0. SHOT_RANGE_FALLOFF_M is geometry-derived
+# (GOAL_LINE_Z - BLUE_LINE_Z), so a shot from the attacking blue
+# line is exactly at the falloff distance and dist_response zeros.
+# This is the structural guarantee against bots launching pucks
+# from neutral-zone or blue-line range — no defenders, no coverage
+# math required, the dist curve alone says 0.
+func test_shoot_score_zero_at_attacking_blue_line() -> void:
+	# Attacking blue line for a shooter going +Z is at z = GOAL_LINE_Z
+	# - (GOAL_LINE_Z - BLUE_LINE_Z) = BLUE_LINE_Z. Place shooter there
+	# (centered) firing at GOAL.
+	var shooter := Vector3(0.0, 0.0, GameRules.BLUE_LINE_Z)
+	var goalie := Vector3(0.0, 0.0, 26.0)  # squared, irrelevant
+	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+	assert_eq(s, 0.0,
+			"attacking blue-line shot must score 0 — falloff distance equals attacking-zone span")
+
+
+# Monotone close-shot value. With dist_response monotone-falling
+# from goal (no IDEAL peak), a 3 m point-blank shot retains nearly
+# full dist value. The "drove past slot is bad" guardrail comes
+# from the goalie pressure zone (verified in the second assertion),
+# NOT from the dist curve.
 func test_shot_quality_3m_close_shot_retains_value() -> void:
 	# Centered shot at 3 m, squared goalie at center. Without the
-	# goalie zone penalty applied (no goalie_current_pos arg), the
-	# shot should retain most of its quality: dist_response ≈ 0.94,
-	# coverage 0.28 → score ≈ 0.94 × 0.72 ≈ 0.68.
+	# goalie zone penalty applied, dist_response ≈ 0.98 × angle 1.0
+	# × (1 - 0.28 coverage) ≈ 0.71.
 	var shooter := Vector3(0.0, 0.0, 23.65)  # 3 m from goal
 	var goalie := Vector3(0.0, 0.0, 26.0)    # squared
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
