@@ -57,16 +57,17 @@ func test_predict_puck_decelerates_with_ice_friction() -> void:
 	# constant-velocity equivalent, because Coulomb friction (μ × g)
 	# decelerates it each step. With μ = 0.01 and g = 9.81 the deceleration
 	# is about 0.098 m/s² — small over short times but observable.
+	# Velocity / time chosen to stay well inside the rink (4 m/s × 2 s
+	# = 8 m, INNER_HALF_WIDTH ≈ 12.85 m) so the rink clamp / bounce
+	# doesn't confound the comparison.
 	var pos := Vector3(0, 0, 0)
-	var vel := Vector3(15, 0, 0)
+	var vel := Vector3(4, 0, 0)
 	var no_friction: Vector3 = AITrajectory.predict_at(pos, vel, 2.0)
 	var with_friction: Vector3 = AITrajectory.predict_puck_at(pos, vel, 2.0)
 	assert_lt(with_friction.x, no_friction.x,
 			"puck prediction with friction must trail constant-velocity prediction")
-	# Sanity bound: at μg = 0.098, 2 s travel under v0=15 m/s loses
-	# 0.5 × 0.098 × 4 = 0.196 m. The friction-aware value should sit
-	# within 0.5 m of the no-friction equivalent.
-	assert_almost_eq(with_friction.x, no_friction.x - 0.2, 0.5,
+	# Sanity bound: at μg ≈ 0.098 over 2 s, loss is 0.5 × 0.098 × 4 ≈ 0.2 m.
+	assert_almost_eq(with_friction.x, no_friction.x - 0.2, 0.3,
 			"friction deceleration matches Coulomb model order-of-magnitude")
 
 

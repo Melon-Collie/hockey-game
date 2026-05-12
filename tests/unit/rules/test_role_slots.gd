@@ -245,12 +245,14 @@ func test_assign_neutral_flank_hysteresis_holds_through_center() -> void:
 	# Two peers near center — without hysteresis they'd flip L/R any
 	# time their X order swaps. With prev assignments preserving
 	# their sides, the 1.0 m penalty keeps them stable.
+	# Puck placed on top of 100 so 100 wins CHASE (closest); the
+	# remaining flank pair near center exercises the hysteresis.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, 5.0)],    # closest to puck → CHASE
+			[100, 0, Vector3(0.0, 0.0, 5.0)],    # at puck → CHASE
 			[110, 0, Vector3(0.3, 0.0, -3.0)],   # nominally right of center
 			[120, 0, Vector3(-0.3, 0.0, -3.0)],  # nominally left of center
 	]
-	var snap := _make_snapshot(skaters, -1, 0.0, 0.0)
+	var snap := _make_snapshot(skaters, -1, 5.0, 0.0)
 	# Prev: 110 was FLANK_L, 120 was FLANK_R. Their X positions
 	# now swap by 0.6 m; hysteresis (1.0 m on each side) keeps
 	# them in their previous slots.

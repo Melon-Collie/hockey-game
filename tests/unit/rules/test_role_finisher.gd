@@ -152,14 +152,16 @@ func test_step_out_when_shooter_is_elevated() -> void:
 # ─── HOLD: puck won't reach our z-plane ───────────────────────────────────
 
 func test_hold_when_puck_path_crossing_is_in_past() -> void:
-	# Fast puck heading toward opp goal but the back-door bot is
-	# DEEPER than the puck (further toward -Z than the puck). The
-	# t_to_my_z calculation comes out negative — puck already past us.
-	var anchor := Vector3(-2.0, 0.0, -25.0)
+	# Fast puck heading toward opp goal — but it's ALREADY past the
+	# back-door bot's z plane. The bot is BEHIND the puck-line
+	# (less deep toward opp goal), so t_to_my_z is negative and the
+	# reactive returns null. With no carrier set up, positioning
+	# falls back to self_pos = anchor.
+	var anchor := Vector3(-2.0, 0.0, -21.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -25.0), anchor,
-			Vector3(0.0, 0.0, -23.0),  # puck closer to opp goal than back-door
-			Vector3(0.0, 0.0, -15.0))  # heading further toward opp goal
+			Vector3(-2.0, 0.0, -21.0), anchor,
+			Vector3(0.0, 0.0, -23.0),  # puck DEEPER (more -Z) than back-door
+			Vector3(0.0, 0.0, -15.0))  # heading further toward opp goal — away from us
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
 	assert_eq(d.target_position, anchor)
 

@@ -44,7 +44,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# flight and the brain re-tick will reassign within a frame.
 	# (NEUTRAL has no carrier and uses CHASE/FLANK roles instead.)
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_any_carrier_pos(ctx)
-	if carrier_pos == Vector3.ZERO:
+	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d
 

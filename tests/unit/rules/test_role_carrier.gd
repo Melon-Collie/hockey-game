@@ -176,4 +176,8 @@ func test_decide_carry_intent_clears_fire_flags() -> void:
 	elif d.pass_intent:
 		assert_false(d.shoot_intent)
 		assert_false(d.slapper_intent)
-	# else all three are false (CARRY) — no assertion needed.
+	else:
+		# CARRY case — all three fire flags must be false.
+		assert_false(d.shoot_intent)
+		assert_false(d.slapper_intent)
+		assert_false(d.pass_intent)

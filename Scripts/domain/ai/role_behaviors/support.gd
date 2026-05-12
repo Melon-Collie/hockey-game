@@ -41,7 +41,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# context to score against. Brain re-tick will re-route this peer
 	# on the next physics frame; in the meantime hold position.
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_teammate_carrier_pos(ctx)
-	if carrier_pos == Vector3.ZERO:
+	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d
 
@@ -113,13 +113,18 @@ static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
 	return best
 
 
-# Foot-race-home exposure. 0 when I beat every opp back to our net;
-# scales upward as my ETA exceeds the fastest opp's. Floored at 0,
-# unbounded above — letting the (1 - exposure) factor go negative
-# naturally rejects candidates I can't recover from.
+# Foot-race-home exposure in [0, 1]. 0 when I beat every opp back
+# to our net; ramps to 1 (full unrecoverable) as my ETA exceeds the
+# fastest opp's. CLAMPED to 1 so (1 - exposure) stays non-negative —
+# without the upper clamp, the factor goes negative for deeply-
+# exposed candidates, and multiplying score_pass by a large negative
+# INVERTS the argmax preference (small pass_value × large negative
+# wins over big pass_value × less-negative, picking the most exposed
+# candidate). Clamp pushes all-exposed-equally candidates to score 0
+# so the loop falls back to self_pos.
 static func _exposure(candidate: Vector3, our_net: Vector3,
 		min_opp_time_home: float) -> float:
 	var safe_time: float = maxf(min_opp_time_home, 0.001)
 	var dist: float = candidate.distance_to(our_net)
 	var my_time: float = dist / AIActionScoring.SKATER_REF_SPEED_M_S
-	return maxf(my_time / safe_time - 1.0, 0.0)
+	return clampf(my_time / safe_time - 1.0, 0.0, 1.0)

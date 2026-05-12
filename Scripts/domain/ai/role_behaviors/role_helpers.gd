@@ -98,14 +98,14 @@ static func too_close_to_teammate(c: Vector3,
 # fall back to the anchor when ZERO is returned.
 static func resolve_teammate_carrier_pos(ctx: RoleContext) -> Vector3:
 	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
-		return Vector3.ZERO
+		return Vector3.INF
 	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
 	if carrier_pid == -1:
-		return Vector3.ZERO
+		return Vector3.INF
 	if int(ctx.team_id_resolver.call(carrier_pid)) != ctx.team_id:
-		return Vector3.ZERO
+		return Vector3.INF
 	if not ctx.snapshot.skater_states.has(carrier_pid):
-		return Vector3.ZERO
+		return Vector3.INF
 	return ctx.snapshot.skater_states[carrier_pid].position
 
 
@@ -140,12 +140,12 @@ static func resolve_our_goalie_pos(ctx: RoleContext) -> Vector3:
 # returns ZERO when an opp carries.
 static func resolve_any_carrier_pos(ctx: RoleContext) -> Vector3:
 	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
-		return Vector3.ZERO
+		return Vector3.INF
 	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
 	if carrier_pid == -1:
-		return Vector3.ZERO
+		return Vector3.INF
 	if not ctx.snapshot.skater_states.has(carrier_pid):
-		return Vector3.ZERO
+		return Vector3.INF
 	return ctx.snapshot.skater_states[carrier_pid].position
 
 

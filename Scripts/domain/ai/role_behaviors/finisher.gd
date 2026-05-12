@@ -163,7 +163,7 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_teammate_carrier_pos(ctx)
-	if carrier_pos == Vector3.ZERO:
+	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d
 
