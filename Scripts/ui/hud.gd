@@ -6,6 +6,7 @@ var _clock_label: Label
 var _home_score_label: Label
 var _away_score_label: Label
 var _phase_panel: PanelContainer
+var _phase_wrapper: Control
 var _phase_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
@@ -27,6 +28,7 @@ var _rematch_votes: Dictionary[int, bool] = {}
 var _local_voted: bool = false
 var _replay_label: Label = null
 var _spectator_banner: PanelContainer = null
+var _spectator_wrapper: Control = null
 
 const _DARK_BG    := MenuStyle.BROADCAST_BG
 const _WHITE      := MenuStyle.BROADCAST_CREAM
@@ -65,7 +67,7 @@ func _ready() -> void:
 	_clock_label.text = _format_clock(GameManager.get_period_duration())
 	_home_score_label.text = "0"
 	_away_score_label.text = "0"
-	_phase_panel.visible = false
+	_phase_wrapper.visible = false
 	GameManager.score_changed.connect(_on_score_changed)
 	GameManager.goal_scored.connect(_on_goal_scored)
 	GameManager.phase_changed.connect(_on_phase_changed)
@@ -226,8 +228,11 @@ func _build_phase_banner() -> void:
 	root.add_child(centering)
 
 	_phase_style = StyleBoxFlat.new()
-	_phase_style.bg_color = Color(0.07, 0.07, 0.09, 0.88)
-	_phase_style.set_corner_radius_all(3)
+	_phase_style.bg_color = MenuStyle.BROADCAST_BG
+	_phase_style.set_corner_radius_all(0)
+	_phase_style.border_color = MenuStyle.BROADCAST_BORDER_T
+	_phase_style.border_width_top = 1
+	_phase_style.anti_aliasing = false
 	_phase_style.set_content_margin(SIDE_LEFT, 20)
 	_phase_style.set_content_margin(SIDE_RIGHT, 20)
 	_phase_style.set_content_margin(SIDE_TOP, 8)
@@ -235,7 +240,8 @@ func _build_phase_banner() -> void:
 
 	_phase_panel = PanelContainer.new()
 	_phase_panel.add_theme_stylebox_override("panel", _phase_style)
-	centering.add_child(_phase_panel)
+	_phase_wrapper = MenuStyle.wrap_drop_shadow(_phase_panel, Vector2(4, 4))
+	centering.add_child(_phase_wrapper)
 
 	var vbox := VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -259,8 +265,11 @@ func _build_phase_banner() -> void:
 # of the screen, above the phase banner area. Toggled by _apply_spectator_chrome.
 func _build_spectator_banner() -> void:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.07, 0.07, 0.09, 0.88)
-	style.set_corner_radius_all(3)
+	style.bg_color = MenuStyle.BROADCAST_BG
+	style.set_corner_radius_all(0)
+	style.border_color = MenuStyle.BROADCAST_BORDER_T
+	style.border_width_top = 1
+	style.anti_aliasing = false
 	style.set_content_margin(SIDE_LEFT, 14)
 	style.set_content_margin(SIDE_RIGHT, 14)
 	style.set_content_margin(SIDE_TOP, 4)
@@ -268,7 +277,8 @@ func _build_spectator_banner() -> void:
 
 	_spectator_banner = PanelContainer.new()
 	_spectator_banner.add_theme_stylebox_override("panel", style)
-	_spectator_banner.add_child(_lbl("SPECTATING", 12, _GOLD))
+	_spectator_banner.add_child(_lbl("SPECTATING", 14, _GOLD))
+	_spectator_wrapper = MenuStyle.wrap_drop_shadow(_spectator_banner, Vector2(3, 3))
 
 	# Centered horizontally, anchored to the top.
 	var root := Control.new()
@@ -282,10 +292,10 @@ func _build_spectator_banner() -> void:
 	centering.offset_bottom = 40.0
 	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(centering)
-	centering.add_child(_spectator_banner)
+	centering.add_child(_spectator_wrapper)
 
 	add_child(root)
-	_spectator_banner.visible = false
+	_spectator_wrapper.visible = false
 
 # Hides local-only menu options (Rematch, Change Position) when the local peer
 # is a spectator and shows the spectator banner. Off-screen indicators and the
@@ -294,8 +304,8 @@ func _apply_spectator_chrome() -> void:
 	var is_spec: bool = GameManager.is_local_spectator()
 	if _spectator_banner == null and is_spec:
 		_build_spectator_banner()
-	if _spectator_banner != null:
-		_spectator_banner.visible = is_spec
+	if _spectator_wrapper != null:
+		_spectator_wrapper.visible = is_spec
 	if _game_over_popup != null:
 		_game_over_popup.set_spectator(is_spec)
 	if _pause_menu != null:
@@ -433,26 +443,26 @@ func _on_replay_stopped() -> void:
 func _on_phase_changed(new_phase: int) -> void:
 	match new_phase:
 		GamePhase.Phase.PLAYING:
-			_phase_panel.visible = false
+			_phase_wrapper.visible = false
 			_phase_label.add_theme_color_override("font_color", _GOLD)
-			_phase_style.bg_color = Color(0.07, 0.07, 0.09, 0.88)
+			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_assist_label.visible = false
 			if _replay_label != null:
 				_replay_label.visible = false
 		GamePhase.Phase.GOAL_SCORED:
-			_phase_panel.visible = true  # text + color set by _on_goal_scored
+			_phase_wrapper.visible = true  # text + color set by _on_goal_scored
 		GamePhase.Phase.END_OF_PERIOD:
 			_phase_label.text = "END OF PERIOD"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
-			_phase_panel.visible = true
+			_phase_wrapper.visible = true
 		GamePhase.Phase.GAME_OVER:
-			_phase_panel.visible = true  # text + color set by _on_game_over
+			_phase_wrapper.visible = true  # text + color set by _on_game_over
 		_:
 			_phase_label.text = "FACEOFF"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
-			_phase_style.bg_color = Color(0.07, 0.07, 0.09, 0.88)
+			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_assist_label.visible = false
-			_phase_panel.visible = true
+			_phase_wrapper.visible = true
 
 func _on_period_changed(new_period: int) -> void:
 	_period_label.text = _period_ordinal(new_period)
@@ -486,7 +496,7 @@ func _on_game_over() -> void:
 	else:
 		_phase_label.text = "TIE"
 		_phase_label.add_theme_color_override("font_color", _WHITE)
-	_phase_panel.visible = true
+	_phase_wrapper.visible = true
 	_rematch_votes.clear()
 	_local_voted = false
 	_update_rematch_ui()
