@@ -213,18 +213,20 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 	return row
 
 func _build_phase_banner() -> void:
-	# Centered below the scorebug
+	# Lower-third position. Broadcast goal/event chyrons traditionally sit in
+	# the bottom ~20% of the frame; here we anchor a band to the bottom edge
+	# of the screen and let CenterContainer center the wrapper within it
+	# both horizontally and vertically so different banner heights still feel
+	# centered around the same anchor line.
 	var root := Control.new()
-	root.anchor_right = 1.0
-	root.offset_top = 62.0
-	root.offset_bottom = 112.0
+	root.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	root.offset_top = -220.0
+	root.offset_bottom = -50.0
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	var centering := HBoxContainer.new()
-	centering.alignment = BoxContainer.ALIGNMENT_CENTER
-	centering.anchor_right = 1.0
-	centering.offset_bottom = 50.0
+	var centering := CenterContainer.new()
+	centering.set_anchors_preset(Control.PRESET_FULL_RECT)
 	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(centering)
 
@@ -467,6 +469,7 @@ func _on_phase_changed(new_phase: int) -> void:
 		GamePhase.Phase.END_OF_PERIOD:
 			_phase_label.text = "END OF PERIOD"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
+			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_scorer_label.visible = false
 			_assist_label.visible = false
 			_phase_wrapper.visible = true
@@ -503,6 +506,7 @@ func _on_clock_updated(t: float) -> void:
 		_last_clock_pulse_second = -1
 
 func _on_game_over() -> void:
+	_phase_style.bg_color = MenuStyle.BROADCAST_BG  # clear any residual goal tint
 	if _score_0 > _score_1:
 		_phase_label.text = "HOME WINS"
 		_phase_label.add_theme_color_override("font_color", _GOLD)
