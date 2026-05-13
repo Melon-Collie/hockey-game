@@ -58,7 +58,7 @@ extends StaticBody3D
 	set(v):
 		glass_color = v
 		_rebuild()
-@export var ice_color: Color = Color(0.9, 0.95, 1.0):
+@export var ice_color: Color = Color(0.84, 0.91, 1.0):
 	set(v):
 		ice_color = v
 		_rebuild()
@@ -75,7 +75,7 @@ extends StaticBody3D
 		ice_friction = v
 		_rebuild()
 @export_group("Ice Shader")
-@export var ice_fog_color: Color = Color(0.9, 0.95, 1.0):
+@export var ice_fog_color: Color = Color(0.84, 0.91, 1.0):
 	set(v):
 		ice_fog_color = v
 		_rebuild()
