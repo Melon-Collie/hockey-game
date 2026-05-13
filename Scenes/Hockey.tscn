@@ -17,16 +17,12 @@ tonemap_white = 6.0
 ssao_enabled = true
 ssao_radius = 0.5
 ssao_intensity = 1.0
-ssao_power = 1.5
-ssao_detail = 0.5
-ssao_horizon = 0.06
 glow_enabled = true
 glow_strength = 0.8
 glow_bloom = 0.05
 glow_blend_mode = 2
 glow_hdr_threshold = 1.1
 adjustment_enabled = true
-adjustment_brightness = 1.0
 adjustment_contrast = 1.05
 adjustment_saturation = 1.05
 
@@ -57,7 +53,6 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D2" type="SpotLight3D" parent="." unique_id=860078582]
@@ -68,7 +63,6 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D3" type="SpotLight3D" parent="." unique_id=2045860332]
@@ -79,7 +73,6 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D4" type="SpotLight3D" parent="." unique_id=1502217364]
@@ -90,7 +83,6 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D5" type="SpotLight3D" parent="." unique_id=1560442888]
@@ -101,7 +93,6 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D6" type="SpotLight3D" parent="." unique_id=1194539476]
@@ -112,5 +103,24 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 1.0
+spot_angle = 32.0
+
+[node name="SpotLight3D7" type="SpotLight3D" parent="." unique_id=1139135960]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, 22)
+light_color = Color(1, 0.9731482, 0.9309246, 1)
+light_energy = 3.6
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_angle = 32.0
+
+[node name="SpotLight3D8" type="SpotLight3D" parent="." unique_id=1637942442]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, 22)
+light_color = Color(1, 0.9731482, 0.9309246, 1)
+light_energy = 3.6
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
 spot_angle = 32.0
