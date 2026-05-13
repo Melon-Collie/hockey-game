@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mitts — Scorebug & Scoreboard Mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: Inter, system-ui, sans-serif;
+  background: #1a1d24;
+  color: #e8eef6;
+  padding: 32px;
+}
+
+h1 { font-size: 28px; margin-bottom: 8px; }
+h2 { font-size: 18px; margin: 8px 0 4px; font-weight: 600; }
+.intro { color: #9aa4b4; margin-bottom: 24px; max-width: 720px; line-height: 1.5; }
+
+.variant {
+  margin-bottom: 48px;
+  padding: 20px;
+  background: #232831;
+  border: 1px solid #303744;
+  border-radius: 4px;
+}
+.variant-header { margin-bottom: 16px; }
+.variant-header .tag {
+  display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 700;
+  background: #3c4452; color: #e8eef6; letter-spacing: 0.08em; margin-right: 8px;
+  text-transform: uppercase;
+}
+.variant-header .desc { color: #9aa4b4; font-size: 13px; margin-top: 6px; line-height: 1.5; }
+
+.row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+
+/* Faux ice background for the in-game view */
+.scene {
+  width: 720px;
+  height: 405px;
+  background:
+    radial-gradient(circle at 50% 55%, rgba(255,255,255,0.18), transparent 60%),
+    linear-gradient(180deg, #c9d6e2 0%, #b5c4d3 100%);
+  position: relative;
+  border: 1px solid #303744;
+  overflow: hidden;
+}
+.scene .ice-line-red { position: absolute; left: 0; right: 0; top: 45%; height: 4px; background: rgba(196, 70, 70, 0.55); }
+.scene .ice-line-blue { position: absolute; left: 0; right: 0; top: 80%; height: 4px; background: rgba(60, 100, 180, 0.55); }
+
+/* Generic positioning for the scorebug in the corner of a scene */
+.scene .scorebug { position: absolute; top: 12px; left: 12px; }
+
+/* Scoreboard mockup container — shown on its own next to the scene */
+.scoreboard-wrap {
+  width: 620px;
+  padding: 20px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255,255,255,0.10), transparent 70%),
+    linear-gradient(180deg, #c9d6e2 0%, #b5c4d3 100%);
+  border: 1px solid #303744;
+  display: flex; justify-content: center;
+}
+
+/* ============================================================== */
+/* CURRENT (baseline) */
+/* ============================================================== */
+
+.current-scorebug {
+  display: flex; background: #191924e0; border-radius: 3px;
+  font-family: Inter, sans-serif; color: #fff; align-items: stretch;
+  font-size: 0;
+}
+.current-scorebug .col { padding: 6px 8px; display: flex; flex-direction: column; justify-content: center; gap: 5px; }
+.current-scorebug .sep { width: 1px; background: #4a4a55; }
+.current-scorebug .row-h { display: flex; align-items: center; gap: 8px; font-size: 0; }
+.current-scorebug .badge {
+  padding: 3px 6px; border-radius: 3px; font-size: 11px; font-weight: 700;
+  font-family: Inter, sans-serif;
+}
+.current-scorebug .badge-away { background: #b53a3a; color: #fff; }
+.current-scorebug .badge-home { background: #3a5fb5; color: #fff; }
+.current-scorebug .score { font-size: 20px; min-width: 22px; text-align: right; font-weight: 500; color: #fff; }
+.current-scorebug .shots-num { font-size: 14px; text-align: center; min-width: 28px; color: #fff; font-weight: 500; }
+.current-scorebug .shots-lbl { font-size: 9px; text-align: center; color: #9e9eaa; letter-spacing: 0.05em; }
+.current-scorebug .period { font-size: 12px; text-align: center; color: #9e9eaa; }
+.current-scorebug .clock { font-size: 22px; text-align: center; min-width: 60px; color: #fff; font-weight: 500; }
+
+.current-scoreboard {
+  background: #131420ee; border-radius: 4px; padding: 20px; min-width: 560px;
+  font-family: Inter, sans-serif; color: #fff;
+}
+.current-scoreboard .periods-grid { display: grid; grid-template-columns: auto repeat(4, 32px); gap: 5px 0; justify-content: center; align-items: center; }
+.current-scoreboard .periods-grid .h { font-size: 12px; color: #8c8c9d; text-align: center; }
+.current-scoreboard .periods-grid .v { font-size: 13px; text-align: center; color: #fff; }
+.current-scoreboard hr { border: 0; height: 1px; background: #44464e; margin: 12px 0; }
+.current-scoreboard .col-headers, .current-scoreboard .player-row {
+  display: grid;
+  grid-template-columns: 52px 36px 36px 1fr 38px 38px 48px 48px 56px 48px;
+  align-items: center; gap: 0;
+}
+.current-scoreboard .col-headers div { font-size: 13px; color: #8c8c9d; text-align: center; font-weight: 600; }
+.current-scoreboard .col-headers .player { text-align: left; }
+.current-scoreboard .player-row { padding: 3px 0; font-size: 14px; }
+.current-scoreboard .player-row div { text-align: center; }
+.current-scoreboard .player-row .player { text-align: left; }
+.current-scoreboard .team-header { padding: 4px 8px; border-radius: 3px; text-align: center; font-size: 12px; margin: 4px 0; }
+.current-scoreboard .team-header.away { background: rgba(181, 58, 58, 0.18); }
+.current-scoreboard .team-header.home { background: rgba(58, 95, 181, 0.18); }
+.current-scoreboard .footer { text-align: center; color: #8c8c9d; font-size: 11px; margin-top: 12px; }
+
+/* ============================================================== */
+/* VARIANT A — Subtle Retro */
+/* Same architecture as today, but: hard corners, condensed chunky font, */
+/* drop shadow, slightly bigger overall, no rounded-modern softness. */
+/* ============================================================== */
+
+.va-scorebug {
+  display: flex; background: #11111c; box-shadow: 2px 3px 0 rgba(0,0,0,0.35);
+  color: #fff; align-items: stretch; border-top: 1px solid #2a2a3a;
+}
+.va-scorebug .col { padding: 7px 10px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.va-scorebug .sep { width: 1px; background: #2c2c38; }
+.va-scorebug .row-h { display: flex; align-items: center; gap: 8px; }
+.va-scorebug .badge {
+  padding: 4px 8px; font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 0.06em;
+}
+.va-scorebug .badge-away { background: #b53a3a; color: #fff; }
+.va-scorebug .badge-home { background: #3a5fb5; color: #fff; }
+.va-scorebug .score { font-family: 'Oswald', sans-serif; font-weight: 600; font-size: 22px; min-width: 24px; text-align: right; }
+.va-scorebug .shots-num { font-family: 'Oswald', sans-serif; font-weight: 600; font-size: 15px; text-align: center; min-width: 28px; }
+.va-scorebug .shots-lbl { font-family: 'Oswald', sans-serif; font-size: 10px; text-align: center; color: #9e9eaa; letter-spacing: 0.12em; }
+.va-scorebug .period { font-family: 'Oswald', sans-serif; font-size: 12px; text-align: center; color: #9e9eaa; letter-spacing: 0.1em; }
+.va-scorebug .clock { font-family: 'Oswald', sans-serif; font-weight: 600; font-size: 24px; text-align: center; min-width: 62px; }
+
+.va-scoreboard {
+  background: #11111c; box-shadow: 3px 4px 0 rgba(0,0,0,0.35); padding: 22px; min-width: 580px;
+  color: #fff; border-top: 1px solid #2a2a3a;
+}
+.va-scoreboard .periods-grid { display: grid; grid-template-columns: auto repeat(4, 34px); gap: 6px 0; justify-content: center; align-items: center; }
+.va-scoreboard .periods-grid .h { font-family: 'Oswald', sans-serif; font-size: 13px; color: #8c8c9d; text-align: center; letter-spacing: 0.06em; }
+.va-scoreboard .periods-grid .v { font-family: 'Oswald', sans-serif; font-weight: 600; font-size: 15px; text-align: center; }
+.va-scoreboard .badge {
+  padding: 3px 8px; font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 0.06em;
+}
+.va-scoreboard .badge-away { background: #b53a3a; color: #fff; }
+.va-scoreboard .badge-home { background: #3a5fb5; color: #fff; }
+.va-scoreboard hr { border: 0; height: 1px; background: #2c2c38; margin: 14px 0; }
+.va-scoreboard .col-headers, .va-scoreboard .player-row {
+  display: grid;
+  grid-template-columns: 52px 36px 36px 1fr 38px 38px 48px 48px 56px 48px;
+  align-items: center;
+}
+.va-scoreboard .col-headers div { font-family: 'Oswald', sans-serif; font-size: 13px; color: #8c8c9d; text-align: center; letter-spacing: 0.08em; }
+.va-scoreboard .col-headers .player { text-align: left; }
+.va-scoreboard .player-row { padding: 4px 0; font-size: 14px; }
+.va-scoreboard .player-row div { text-align: center; font-family: 'Oswald', sans-serif; font-weight: 500; }
+.va-scoreboard .player-row .player { text-align: left; }
+.va-scoreboard .team-header { padding: 5px 8px; text-align: center; font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 0.1em; margin: 4px 0; }
+.va-scoreboard .team-header.away { background: rgba(181, 58, 58, 0.28); border-left: 3px solid #b53a3a; }
+.va-scoreboard .team-header.home { background: rgba(58, 95, 181, 0.28); border-left: 3px solid #3a5fb5; }
+.va-scoreboard .footer { text-align: center; color: #8c8c9d; font-size: 11px; margin-top: 14px; font-family: 'Oswald', sans-serif; letter-spacing: 0.08em; }
+
+/* ============================================================== */
+/* VARIANT B — Mid Retro / Chyron Lower-Third */
+/* Boxy chyron-style. Team-color stripes drive the visual instead of */
+/* badges. Bebas Neue display type. Bevel via paired borders. */
+/* Period + clock split into their own strip. */
+/* ============================================================== */
+
+.vb-scorebug {
+  background: #0a0a14; box-shadow: 3px 4px 0 rgba(0,0,0,0.5);
+  border-top: 1px solid #3a3a4e; border-bottom: 1px solid #00000080;
+  color: #f6efe2; /* cream-tinted whites */
+  font-family: 'Bebas Neue', sans-serif;
+  display: flex; align-items: stretch;
+  min-width: 260px;
+}
+.vb-scorebug .teams { display: flex; flex-direction: column; }
+.vb-scorebug .team-row {
+  display: grid; grid-template-columns: 7px 56px 1fr 36px 28px;
+  align-items: center; padding: 0;
+  border-bottom: 1px solid #1a1a26;
+}
+.vb-scorebug .teams .team-row:last-child { border-bottom: 0; }
+.vb-scorebug .stripe { height: 100%; min-height: 28px; }
+.vb-scorebug .team-row .stripe-away { background: #b53a3a; }
+.vb-scorebug .team-row .stripe-home { background: #3a5fb5; }
+.vb-scorebug .team-row .abbr { font-size: 18px; letter-spacing: 0.06em; padding-left: 8px; }
+.vb-scorebug .team-row .sog { font-size: 14px; color: #b8b0a0; letter-spacing: 0.06em; text-align: center; }
+.vb-scorebug .team-row .score { font-size: 26px; text-align: center; padding-right: 8px; line-height: 1; }
+.vb-scorebug .vsep { width: 1px; background: #2a2a3a; }
+.vb-scorebug .right {
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  padding: 4px 14px; gap: 2px;
+}
+.vb-scorebug .right .period { font-size: 13px; color: #b8b0a0; letter-spacing: 0.16em; }
+.vb-scorebug .right .clock { font-size: 26px; letter-spacing: 0.04em; line-height: 1; }
+.vb-scorebug .shots-header { font-size: 9px; color: #b8b0a0; letter-spacing: 0.16em; padding: 1px 8px; text-align: center; background: #1a1a26; }
+.vb-scorebug .shots-cell { display: contents; }
+
+.vb-scoreboard {
+  background: #0a0a14; box-shadow: 4px 5px 0 rgba(0,0,0,0.5);
+  border-top: 1px solid #3a3a4e; border-bottom: 1px solid #00000080;
+  color: #f6efe2; font-family: 'Bebas Neue', sans-serif;
+  padding: 0; min-width: 600px;
+}
+.vb-scoreboard .title-strip {
+  padding: 8px 18px; font-size: 16px; letter-spacing: 0.18em;
+  background: #1a1a26; color: #f6efe2; text-align: center;
+  border-bottom: 1px solid #00000080;
+}
+.vb-scoreboard .periods {
+  display: grid; grid-template-columns: auto repeat(4, 40px);
+  padding: 12px 22px 4px; column-gap: 4px; row-gap: 6px; align-items: center;
+  justify-content: center;
+}
+.vb-scoreboard .periods .h { font-size: 14px; color: #b8b0a0; letter-spacing: 0.12em; text-align: center; }
+.vb-scoreboard .periods .v { font-size: 20px; text-align: center; }
+.vb-scoreboard .periods .badge { font-size: 14px; padding: 4px 10px 2px; letter-spacing: 0.12em; }
+.vb-scoreboard .periods .badge-away { background: #b53a3a; color: #fff; }
+.vb-scoreboard .periods .badge-home { background: #3a5fb5; color: #fff; }
+.vb-scoreboard .table-strip {
+  border-top: 1px solid #2a2a3a; border-bottom: 1px solid #2a2a3a;
+  padding: 10px 18px 14px; margin-top: 12px;
+}
+.vb-scoreboard .col-headers, .vb-scoreboard .player-row {
+  display: grid;
+  grid-template-columns: 52px 36px 36px 1fr 38px 38px 48px 48px 56px 48px;
+  align-items: center;
+}
+.vb-scoreboard .col-headers div { font-size: 14px; color: #b8b0a0; text-align: center; letter-spacing: 0.12em; }
+.vb-scoreboard .col-headers .player { text-align: left; }
+.vb-scoreboard .player-row div { text-align: center; font-size: 18px; padding: 2px 0; letter-spacing: 0.03em; }
+.vb-scoreboard .player-row .player { text-align: left; }
+.vb-scoreboard .team-header {
+  display: grid; grid-template-columns: 7px 1fr; align-items: center; margin: 8px 0 4px;
+}
+.vb-scoreboard .team-header .stripe { height: 22px; }
+.vb-scoreboard .team-header.away .stripe { background: #b53a3a; }
+.vb-scoreboard .team-header.home .stripe { background: #3a5fb5; }
+.vb-scoreboard .team-header .lbl { padding-left: 10px; font-size: 18px; letter-spacing: 0.16em; }
+.vb-scoreboard .footer { text-align: center; color: #b8b0a0; font-size: 13px; padding: 8px 0 10px; letter-spacing: 0.12em; }
+
+/* ============================================================== */
+/* VARIANT C — Full 1991 SportsChannel */
+/* Beveled "raised" panel, multi-strip chyron, Anton extra-bold, */
+/* cream whites, classic broadcast feel. */
+/* ============================================================== */
+
+.vc-scorebug {
+  font-family: 'Anton', sans-serif; color: #f0e7d2; /* aged cream */
+  border: 2px solid #000;
+  box-shadow: 4px 5px 0 rgba(0,0,0,0.55);
+  background: #0d0f1a;
+  display: flex; flex-direction: column;
+  min-width: 280px;
+}
+.vc-scorebug .strip {
+  padding: 0; display: grid; grid-template-columns: 10px 60px 1fr 32px;
+  align-items: stretch; border-top: 1px solid rgba(255,255,255,0.06); border-bottom: 1px solid #000;
+}
+.vc-scorebug .strip:first-of-type { border-top: 0; }
+.vc-scorebug .strip:last-of-type { border-bottom: 0; }
+.vc-scorebug .strip .stripe { min-height: 30px; }
+.vc-scorebug .strip-away .stripe { background: #b53a3a; box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -1px 0 rgba(0,0,0,0.5); }
+.vc-scorebug .strip-home .stripe { background: #3a5fb5; box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -1px 0 rgba(0,0,0,0.5); }
+.vc-scorebug .strip .abbr { font-size: 22px; padding: 4px 10px 0; letter-spacing: 0.04em; align-self: center; }
+.vc-scorebug .strip .sog { font-size: 14px; color: #b8af96; align-self: center; text-align: right; padding-right: 8px; letter-spacing: 0.05em; font-family: 'Bebas Neue', sans-serif; }
+.vc-scorebug .strip .score { font-size: 28px; text-align: center; padding-right: 8px; line-height: 1; align-self: center; }
+.vc-scorebug .time-strip {
+  display: grid; grid-template-columns: 1fr auto; align-items: center;
+  background: #1a1c2a; padding: 6px 12px; border-top: 1px solid rgba(255,255,255,0.08);
+}
+.vc-scorebug .time-strip .period { font-size: 15px; color: #b8af96; letter-spacing: 0.2em; }
+.vc-scorebug .time-strip .clock { font-size: 24px; letter-spacing: 0.04em; }
+.vc-scorebug .sog-header { background: #1a1c2a; font-size: 9px; color: #b8af96; letter-spacing: 0.18em; padding: 2px 0; text-align: center; font-family: 'Bebas Neue', sans-serif; }
+
+.vc-scoreboard {
+  font-family: 'Anton', sans-serif; color: #f0e7d2;
+  border: 2px solid #000; box-shadow: 5px 6px 0 rgba(0,0,0,0.55);
+  background: #0d0f1a; min-width: 600px;
+}
+.vc-scoreboard .title-bar {
+  background: linear-gradient(180deg, #2a2e44 0%, #14172a 100%);
+  padding: 10px 0; text-align: center; font-size: 20px; letter-spacing: 0.24em;
+  color: #f0e7d2; border-bottom: 2px solid #000;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+}
+.vc-scoreboard .periods {
+  display: grid; grid-template-columns: auto repeat(4, 42px);
+  padding: 14px 26px 8px; column-gap: 4px; row-gap: 6px; align-items: center;
+  justify-content: center;
+}
+.vc-scoreboard .periods .h { font-size: 15px; color: #b8af96; letter-spacing: 0.14em; text-align: center; font-family: 'Bebas Neue', sans-serif; }
+.vc-scoreboard .periods .v { font-size: 22px; text-align: center; }
+.vc-scoreboard .periods .badge { font-size: 16px; padding: 5px 10px 3px; letter-spacing: 0.1em; box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.4); }
+.vc-scoreboard .periods .badge-away { background: #b53a3a; color: #fff; }
+.vc-scoreboard .periods .badge-home { background: #3a5fb5; color: #fff; }
+.vc-scoreboard .table-strip {
+  border-top: 2px solid #000; border-bottom: 2px solid #000;
+  padding: 12px 22px 14px; margin-top: 14px;
+  background: #1a1c2a;
+}
+.vc-scoreboard .col-headers, .vc-scoreboard .player-row {
+  display: grid;
+  grid-template-columns: 52px 36px 36px 1fr 38px 38px 48px 48px 56px 48px;
+  align-items: center;
+}
+.vc-scoreboard .col-headers div { font-size: 14px; color: #b8af96; text-align: center; letter-spacing: 0.16em; font-family: 'Bebas Neue', sans-serif; }
+.vc-scoreboard .col-headers .player { text-align: left; }
+.vc-scoreboard .player-row div { text-align: center; font-size: 20px; padding: 2px 0; }
+.vc-scoreboard .player-row .player { text-align: left; }
+.vc-scoreboard .team-header {
+  display: grid; grid-template-columns: 8px 1fr; align-items: center; margin: 10px 0 4px;
+  border-top: 1px solid #000;
+}
+.vc-scoreboard .team-header .stripe { height: 26px; }
+.vc-scoreboard .team-header.away .stripe { background: #b53a3a; box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.4); }
+.vc-scoreboard .team-header.home .stripe { background: #3a5fb5; box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.4); }
+.vc-scoreboard .team-header .lbl { padding-left: 12px; font-size: 20px; letter-spacing: 0.18em; background: linear-gradient(180deg, #2a2e44 0%, #14172a 100%); height: 26px; display: flex; align-items: center; padding-right: 10px; }
+.vc-scoreboard .footer { text-align: center; color: #b8af96; font-size: 14px; padding: 10px 0 12px; letter-spacing: 0.16em; font-family: 'Bebas Neue', sans-serif; background: #14172a; border-top: 1px solid #000; }
+</style>
+</head>
+<body>
+
+<h1>Scorebug & Scoreboard — Retro Direction Variants</h1>
+<p class="intro">
+  Three points along the "lean retro broadcast" spectrum. Each variant shows the in-game scorebug
+  (positioned in the corner of a faux-ice scene) and the Tab-popup scoreboard. The current design
+  is at the top for reference. All variants use only effects that translate cleanly to Godot's
+  <code>StyleBoxFlat</code> (solid fills, borders, drop shadows, corner radius). The Variant C bevels
+  use linear gradients on title bars — those would need <code>StyleBoxTexture</code> or be approximated
+  with multiple stacked solid fills.
+</p>
+
+<!-- ================================================================ -->
+<!-- CURRENT -->
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Current</span>
+    <span style="font-weight: 600;">As shipped today</span>
+    <div class="desc">Rounded modern indie aesthetic. Inter sans-serif, small corner radius, calm.</div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug current-scorebug">
+        <div class="col">
+          <div class="row-h"><span class="badge badge-away">AWAY</span><span class="score">0</span></div>
+          <div class="row-h"><span class="badge badge-home">HOME</span><span class="score">0</span></div>
+        </div>
+        <div class="sep"></div>
+        <div class="col">
+          <div class="shots-num">0</div>
+          <div class="shots-lbl">SHOTS</div>
+          <div class="shots-num">0</div>
+        </div>
+        <div class="sep"></div>
+        <div class="col">
+          <div class="period">1ST</div>
+          <div class="clock">3:54</div>
+        </div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="current-scoreboard">
+        <div class="periods-grid">
+          <div></div>
+          <div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away" style="padding:3px 6px; background:#b53a3a; color:#fff; font-size:11px; font-weight:700;">AWAY</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home" style="padding:3px 6px; background:#3a5fb5; color:#fff; font-size:11px; font-weight:700;">HOME</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <hr>
+        <div class="col-headers">
+          <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+          <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+        </div>
+        <hr>
+        <div class="team-header away">AWAY</div>
+        <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <div class="player-row"><div>—</div><div>84</div><div>R</div><div class="player">Bot 5</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <div class="team-header home">HOME</div>
+        <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+        <div class="player-row"><div>—</div><div>83</div><div>R</div><div class="player">Bot 4</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <hr>
+        <div class="footer">TAB to toggle</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- VARIANT A -->
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant A</span>
+    <span style="font-weight: 600;">Subtle Retro</span>
+    <div class="desc">
+      One step away from current. Hard corners (0px), Oswald condensed bold, drop shadow,
+      same architecture. Reads as "intentional and chunkier" without committing to chyron.
+      Safest swing; closest to a drop-in replacement.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug va-scorebug">
+        <div class="col">
+          <div class="row-h"><span class="badge badge-away">AWAY</span><span class="score">0</span></div>
+          <div class="row-h"><span class="badge badge-home">HOME</span><span class="score">0</span></div>
+        </div>
+        <div class="sep"></div>
+        <div class="col">
+          <div class="shots-num">0</div>
+          <div class="shots-lbl">SHOTS</div>
+          <div class="shots-num">0</div>
+        </div>
+        <div class="sep"></div>
+        <div class="col">
+          <div class="period">1ST</div>
+          <div class="clock">3:54</div>
+        </div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="va-scoreboard">
+        <div class="periods-grid">
+          <div></div>
+          <div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away">AWAY</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home">HOME</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <hr>
+        <div class="col-headers">
+          <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+          <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+        </div>
+        <hr>
+        <div class="team-header away">AWAY</div>
+        <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <div class="player-row"><div>—</div><div>84</div><div>R</div><div class="player">Bot 5</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <div class="team-header home">HOME</div>
+        <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+        <div class="player-row"><div>—</div><div>83</div><div>R</div><div class="player">Bot 4</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        <hr>
+        <div class="footer">TAB TO TOGGLE</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- VARIANT B -->
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant B</span>
+    <span style="font-weight: 600;">Mid Retro / Chyron Lower-Third</span>
+    <div class="desc">
+      Commits to a chyron lower-third aesthetic. Team-color stripes replace badges as the visual
+      anchor. Bebas Neue display type. Period/clock split into its own right-hand strip. Cream-tinted
+      whites instead of pure white. Reads "this is broadcast graphics" at a glance.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug vb-scorebug">
+        <div class="teams">
+          <div class="team-row">
+            <div class="stripe stripe-away"></div>
+            <div class="abbr">AWAY</div>
+            <div class="sog">0</div>
+            <div></div>
+            <div class="score">0</div>
+          </div>
+          <div class="shots-header">SHOTS</div>
+          <div class="team-row">
+            <div class="stripe stripe-home"></div>
+            <div class="abbr">HOME</div>
+            <div class="sog">0</div>
+            <div></div>
+            <div class="score">0</div>
+          </div>
+        </div>
+        <div class="vsep"></div>
+        <div class="right">
+          <div class="period">1ST</div>
+          <div class="clock">3:54</div>
+        </div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="vb-scoreboard">
+        <div class="title-strip">GAME SUMMARY</div>
+        <div class="periods">
+          <div></div>
+          <div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away">AWAY</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home">HOME</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <div class="table-strip">
+          <div class="col-headers">
+            <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+            <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+          </div>
+          <div class="team-header away"><div class="stripe"></div><div class="lbl">AWAY</div></div>
+          <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>84</div><div>R</div><div class="player">Bot 5</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="team-header home"><div class="stripe"></div><div class="lbl">HOME</div></div>
+          <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>83</div><div>R</div><div class="player">Bot 4</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        </div>
+        <div class="footer">PRESS TAB TO TOGGLE</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- VARIANT C -->
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant C</span>
+    <span style="font-weight: 600;">Full 1991 SportsChannel</span>
+    <div class="desc">
+      Committed retro. Multi-strip chyron, beveled "raised" panels (inner highlight + outer shadow),
+      Anton extra-bold condensed display type, aged-cream off-whites, hard 2px black borders.
+      Strongest identity but biggest design swing — and the bevels + gradients require small extra
+      work to translate to Godot (StyleBoxTexture or layered StyleBoxFlats).
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug vc-scorebug">
+        <div class="strip strip-away">
+          <div class="stripe"></div>
+          <div class="abbr">AWAY</div>
+          <div class="sog">SOG 0</div>
+          <div class="score">0</div>
+        </div>
+        <div class="strip strip-home">
+          <div class="stripe"></div>
+          <div class="abbr">HOME</div>
+          <div class="sog">SOG 0</div>
+          <div class="score">0</div>
+        </div>
+        <div class="time-strip">
+          <div class="period">1ST PERIOD</div>
+          <div class="clock">3:54</div>
+        </div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="vc-scoreboard">
+        <div class="title-bar">MITTS HOCKEY</div>
+        <div class="periods">
+          <div></div>
+          <div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away">AWAY</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home">HOME</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <div class="table-strip">
+          <div class="col-headers">
+            <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+            <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+          </div>
+          <div class="team-header away"><div class="stripe"></div><div class="lbl">AWAY</div></div>
+          <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>84</div><div>R</div><div class="player">Bot 5</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="team-header home"><div class="stripe"></div><div class="lbl">HOME</div></div>
+          <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>83</div><div>R</div><div class="player">Bot 4</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        </div>
+        <div class="footer">PRESS TAB TO TOGGLE</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="intro" style="margin-top: 12px;">
+  <strong>Pick & mix:</strong> these aren't meant to be one-or-the-other. Tell me which pieces from
+  each you like — e.g. "Variant B's team-color stripes + Variant A's shots column + Variant C's
+  multi-strip layout" — and I'll roll the chosen pieces into a single agreed-on direction before
+  porting to GDScript.
+</p>
+
+</body>
+</html>
