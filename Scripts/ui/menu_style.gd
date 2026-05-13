@@ -61,6 +61,20 @@ const GOLD        := Color(1.00, 0.85, 0.20, 1.00)
 const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 
 
+# ── Broadcast HUD (in-game scorebug + popup scoreboard) ──────────────────────
+# Retro-chyron palette evoking 1991 broadcast graphics without literal mimicry.
+# Tune here to shift the whole HUD warmer/cooler/punchier. The cream-vs-white
+# decision lives in BROADCAST_CREAM — push toward (1, 1, 1) for pure white,
+# toward (0.95, 0.93, 0.88) and beyond for more aged-broadcast warmth.
+const BROADCAST_BG       := Color(0.039, 0.039, 0.078, 0.94)  # #0A0A14 dark navy panel
+const BROADCAST_BORDER_T := Color(0.227, 0.227, 0.306, 1.00)  # #3A3A4E top-edge highlight
+const BROADCAST_SHADOW   := Color(0.0,   0.0,   0.0,   0.50)  # offset drop shadow
+const BROADCAST_CREAM    := Color(0.965, 0.937, 0.886, 1.00)  # #F6EFE2 primary chyron text
+const BROADCAST_DIM      := Color(0.722, 0.690, 0.627, 1.00)  # #B8B0A0 SHOTS/period labels
+const BROADCAST_SEP      := Color(0.165, 0.165, 0.220, 1.00)  # #2A2A38 column separator
+const BROADCAST_TITLE_BG := Color(0.102, 0.102, 0.149, 1.00)  # #1A1A26 scoreboard title strip
+
+
 # ── HUD ice-overlay (3D-on-ice elements: rings, glyphs, reticles) ─────────────
 # Shared by every element drawn flat on the ice under a skater. All three
 # values are referenced by Skater for procedural mesh construction; tweak here
