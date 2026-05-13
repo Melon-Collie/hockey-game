@@ -19,6 +19,17 @@ const CAMERA_MODE_LABELS: Array[String] = [
 	"Top-Down (Perspective)",
 	"Tilted (Perspective)",
 ]
+
+# Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
+# Index matches OptionButton ordering in OptionsPanel.
+const COLOR_GRADE_NEUTRAL: int = 0
+const COLOR_GRADE_WARM: int = 1     # warm shift + lifted shadows + saturation bump
+const COLOR_GRADE_COOL: int = 2     # cool shift + S-curve contrast + slight desat
+const COLOR_GRADE_LABELS: Array[String] = [
+	"Neutral",
+	"Warm Broadcast",
+	"Cool Clinical",
+]
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
 	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
@@ -41,6 +52,7 @@ var resolution_index: int = 1
 var vsync_enabled: bool = true
 var fps_cap_index: int = 5
 var gamma: float = 1.0
+var color_grade_preset: int = COLOR_GRADE_NEUTRAL
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
@@ -91,6 +103,7 @@ func save() -> void:
 	cfg.set_value("video", "vsync_enabled", vsync_enabled)
 	cfg.set_value("video", "fps_cap_index", fps_cap_index)
 	cfg.set_value("video", "gamma", gamma)
+	cfg.set_value("video", "color_grade_preset", color_grade_preset)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "camera_mode", camera_mode)
@@ -159,31 +172,69 @@ func apply_video() -> void:
 		"WorldEnvironment", true, false) as WorldEnvironment
 	if we != null:
 		we.environment.adjustment_enabled = true
-		we.environment.adjustment_color_correction = _build_gamma_lut(gamma)
+		we.environment.adjustment_color_correction = _build_color_correction_lut(gamma, color_grade_preset)
 
-# Encodes y = x^(1/gamma) as a 1D LUT so the post-process color-correction pass
-# applies a true gamma curve (lifts midtones without clipping highlights),
-# matching how console/PC games expose "brightness/gamma" calibration.
-func _build_gamma_lut(g: float) -> GradientTexture1D:
-	var grad := Gradient.new()
-	grad.interpolation_mode = Gradient.GRADIENT_INTERPOLATE_LINEAR
-	const N: int = 32
-	var offsets := PackedFloat32Array()
-	var colors := PackedColorArray()
-	offsets.resize(N)
-	colors.resize(N)
+# Builds a 16³ 3D LUT that applies the selected color-grade preset then the
+# gamma curve (output = input^(1/gamma)). Both bake into a single texture so
+# they share Environment.adjustment_color_correction — Godot only exposes one
+# slot. Rebuild cost is ~4K voxels * a few ops; only runs at apply time.
+func _build_color_correction_lut(g: float, preset: int) -> Texture3D:
+	const N: int = 16
+	var images: Array[Image] = []
 	var inv_g: float = 1.0 / maxf(g, 0.01)
-	for i: int in N:
-		var t: float = float(i) / float(N - 1)
-		var v: float = pow(t, inv_g)
-		offsets[i] = t
-		colors[i] = Color(v, v, v)
-	grad.offsets = offsets
-	grad.colors = colors
-	var tex := GradientTexture1D.new()
-	tex.gradient = grad
-	tex.width = 256
+	for b: int in N:
+		var img := Image.create(N, N, false, Image.FORMAT_RGBA8)
+		var bb: float = float(b) / float(N - 1)
+		for y: int in N:
+			var gg: float = float(y) / float(N - 1)
+			for x: int in N:
+				var r: float = float(x) / float(N - 1)
+				var c := Color(r, gg, bb)
+				match preset:
+					COLOR_GRADE_WARM:
+						c = _apply_grade_warm(c)
+					COLOR_GRADE_COOL:
+						c = _apply_grade_cool(c)
+				c.r = pow(maxf(c.r, 0.0), inv_g)
+				c.g = pow(maxf(c.g, 0.0), inv_g)
+				c.b = pow(maxf(c.b, 0.0), inv_g)
+				img.set_pixel(x, y, c)
+		images.append(img)
+	var tex := ImageTexture3D.new()
+	tex.create(Image.FORMAT_RGBA8, N, N, N, false, images)
 	return tex
+
+# Lift shadows toward gray, warm channel shift, saturation bump in midtones.
+# Approximates the "NHL broadcast print" look that real telecasts use.
+func _apply_grade_warm(c: Color) -> Color:
+	const LIFT: float = 0.025
+	c.r = c.r * (1.0 - LIFT) + LIFT
+	c.g = c.g * (1.0 - LIFT * 0.7) + LIFT * 0.7
+	c.b = c.b * (1.0 - LIFT * 0.4) + LIFT * 0.4
+	c.r = clampf(c.r * 1.04, 0.0, 1.0)
+	c.b = clampf(c.b * 0.93, 0.0, 1.0)
+	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
+	const SAT: float = 1.08
+	c.r = clampf(luma + (c.r - luma) * SAT, 0.0, 1.0)
+	c.g = clampf(luma + (c.g - luma) * SAT, 0.0, 1.0)
+	c.b = clampf(luma + (c.b - luma) * SAT, 0.0, 1.0)
+	return c
+
+# Cool channel shift, S-curve contrast via smoothstep, slight desaturation.
+# Reads as a clean modern broadcast / "cinema" arena look.
+func _apply_grade_cool(c: Color) -> Color:
+	c.r = clampf(c.r * 0.96, 0.0, 1.0)
+	c.g = clampf(c.g * 0.98, 0.0, 1.0)
+	c.b = clampf(c.b * 1.05, 0.0, 1.0)
+	c.r = smoothstep(0.0, 1.0, c.r)
+	c.g = smoothstep(0.0, 1.0, c.g)
+	c.b = smoothstep(0.0, 1.0, c.b)
+	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
+	const SAT: float = 0.93
+	c.r = clampf(luma + (c.r - luma) * SAT, 0.0, 1.0)
+	c.g = clampf(luma + (c.g - luma) * SAT, 0.0, 1.0)
+	c.b = clampf(luma + (c.b - luma) * SAT, 0.0, 1.0)
+	return c
 
 func _load() -> void:
 	var cfg := ConfigFile.new()
@@ -204,6 +255,7 @@ func _load() -> void:
 		vsync_enabled = cfg.get_value("video", "vsync_enabled", true)
 		fps_cap_index = clamp(cfg.get_value("video", "fps_cap_index", 5), 0, FPS_CAP_VALUES.size() - 1)
 		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
+		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_NEUTRAL), 0, COLOR_GRADE_LABELS.size() - 1)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
