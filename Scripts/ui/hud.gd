@@ -312,7 +312,7 @@ func _build_top_goal_banner() -> void:
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.custom_minimum_size = Vector2(520, 80)
+	panel.custom_minimum_size = Vector2(260, 0)  # match scorebug width; height grows to content
 
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 0)
@@ -325,16 +325,18 @@ func _build_top_goal_banner() -> void:
 	_top_goal_stripe_style = stripe_style
 	var stripe := PanelContainer.new()
 	stripe.add_theme_stylebox_override("panel", stripe_style)
-	stripe.custom_minimum_size = Vector2(60, 80)
+	stripe.custom_minimum_size = Vector2(24, 0)
 	hbox.add_child(stripe)
 
 	# "G O A L" text — spaced caps in the broadcast wash style.
 	var text_margin := MarginContainer.new()
-	text_margin.add_theme_constant_override("margin_left", 32)
-	text_margin.add_theme_constant_override("margin_right", 32)
+	text_margin.add_theme_constant_override("margin_left", 14)
+	text_margin.add_theme_constant_override("margin_right", 14)
+	text_margin.add_theme_constant_override("margin_top", 8)
+	text_margin.add_theme_constant_override("margin_bottom", 8)
 	text_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(text_margin)
-	var goal_label := _lbl("G  O  A  L", 56, _WHITE)
+	var goal_label := _lbl("G  O  A  L", 32, _WHITE)
 	goal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	goal_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	text_margin.add_child(goal_label)
@@ -350,13 +352,13 @@ func _play_top_goal_banner(team_color: Color) -> void:
 	_top_goal_stripe_style.bg_color = team_color
 	# Off-screen left of the screen edge so the slide-in feels like it enters
 	# the frame from outside the viewport, not from a halfway position.
-	_top_goal_banner.position = Vector2(-540, 8)
+	_top_goal_banner.position = Vector2(-300, 8)
 	_top_goal_banner.visible = true
 	_top_goal_tween = create_tween()
 	_top_goal_tween.tween_property(_top_goal_banner, "position:x", 8.0, 0.4) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	_top_goal_tween.tween_interval(2.0)
-	_top_goal_tween.tween_property(_top_goal_banner, "position:x", -540.0, 0.4) \
+	_top_goal_tween.tween_property(_top_goal_banner, "position:x", -300.0, 0.4) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	_top_goal_tween.tween_callback(func() -> void: _top_goal_banner.visible = false)
 
