@@ -77,7 +77,7 @@ func _build_panel() -> void:
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
 	panel.custom_minimum_size = Vector2(610, 0)
-	h_centering.add_child(MenuStyle.wrap_drop_shadow(panel, Vector2(4, 5)))
+	h_centering.add_child(MenuStyle.wrap_drop_shadow(panel, Vector2(5, 5)))
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 0)

@@ -108,7 +108,7 @@ func _build_scorebug() -> void:
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
-	var shadow_wrap := MenuStyle.wrap_drop_shadow(panel, Vector2(3, 4))
+	var shadow_wrap := MenuStyle.wrap_drop_shadow(panel, Vector2(4, 4))
 	shadow_wrap.position = Vector2(8, 8)
 	add_child(shadow_wrap)
 
