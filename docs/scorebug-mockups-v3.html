@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mitts — Scorebug v3 (Logo-anchored, fresh take)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: Inter, system-ui, sans-serif;
+  background: #1a1d24;
+  color: #e8eef6;
+  padding: 32px;
+}
+
+h1 { font-size: 28px; margin-bottom: 8px; }
+.intro { color: #9aa4b4; margin-bottom: 24px; max-width: 760px; line-height: 1.55; }
+.intro strong { color: #c8d0dc; }
+.intro code { background: #2a2d36; padding: 1px 6px; border-radius: 3px; font-size: 13px; }
+
+.logo-reference {
+  display: flex; gap: 24px; align-items: center;
+  padding: 16px 24px; margin-bottom: 32px;
+  background: #fff; border-radius: 6px;
+}
+.logo-reference img { height: 96px; }
+.logo-reference .notes { color: #1a1d24; max-width: 480px; line-height: 1.55; font-size: 14px; }
+.logo-reference .notes strong { display: block; margin-bottom: 8px; font-size: 15px; }
+
+.variant {
+  margin-bottom: 48px;
+  padding: 20px;
+  background: #232831;
+  border: 1px solid #303744;
+  border-radius: 4px;
+}
+.variant-header { margin-bottom: 16px; }
+.variant-header .tag {
+  display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 700;
+  background: #3c4452; color: #e8eef6; letter-spacing: 0.08em; margin-right: 8px;
+  text-transform: uppercase;
+}
+.variant-header .desc { color: #9aa4b4; font-size: 13px; margin-top: 6px; line-height: 1.55; max-width: 740px; }
+.variant-header .desc strong { color: #c8d0dc; }
+
+.row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+
+.scene {
+  width: 720px;
+  height: 405px;
+  background:
+    radial-gradient(circle at 50% 55%, rgba(255,255,255,0.18), transparent 60%),
+    linear-gradient(180deg, #c3d2e0 0%, #afc0d0 100%);
+  position: relative;
+  border: 1px solid #303744;
+  overflow: hidden;
+}
+.scene .ice-line-red { position: absolute; left: 0; right: 0; top: 45%; height: 4px; background: rgba(196, 70, 70, 0.55); }
+.scene .ice-line-blue { position: absolute; left: 0; right: 0; top: 80%; height: 4px; background: rgba(60, 100, 180, 0.55); }
+.scene .scorebug { position: absolute; top: 16px; left: 16px; }
+
+.scoreboard-wrap {
+  width: 620px;
+  padding: 20px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255,255,255,0.10), transparent 70%),
+    linear-gradient(180deg, #c3d2e0 0%, #afc0d0 100%);
+  border: 1px solid #303744;
+  display: flex; justify-content: center;
+}
+
+/* ============================================================== */
+/* Logo-anchored palette tokens */
+/* Brand panel: dark navy with subtle cool cast — softer than pure black, */
+/* but darker than the navy we had. Logo's "black" silhouette could shift */
+/* this direction. */
+/* ============================================================== */
+:root {
+  --logo-panel:     #0c1620;    /* deep navy near-black */
+  --logo-panel-2:   #16232f;    /* slightly elevated panel for strips */
+  --logo-ice:       #94c4d8;    /* logo's ice-blue */
+  --logo-ice-soft:  #6f99ad;    /* dim ice-blue for sub labels */
+  --logo-white:     #ffffff;
+  --team-away:      #b53a3a;
+  --team-home:      #3a5fb5;
+}
+
+/* ============================================================== */
+/* VARIANT G — STICKER DECAL */
+/* Heavy outline on the panel itself (1.5px ice-blue) replaces the */
+/* drop shadow. Reads like a vinyl sticker stuck on the screen. */
+/* High contrast white text. */
+/* ============================================================== */
+
+.vg-scorebug {
+  background: var(--logo-panel);
+  border: 1.5px solid var(--logo-ice);
+  color: var(--logo-white);
+  font-family: 'Bebas Neue', sans-serif;
+  display: flex; align-items: stretch;
+  box-shadow: 0 0 0 1.5px var(--logo-panel), 4px 4px 0 rgba(0,0,0,0.4);
+}
+.vg-scorebug .col { display: flex; flex-direction: column; justify-content: center; }
+.vg-scorebug .vsep { width: 1px; background: var(--logo-ice); opacity: 0.4; }
+.vg-scorebug .teams { display: flex; flex-direction: column; padding: 4px 0; gap: 4px; }
+.vg-scorebug .team-row { display: grid; grid-template-columns: 6px 56px 30px; align-items: center; min-height: 28px; }
+.vg-scorebug .team-row .stripe { height: 100%; min-height: 28px; }
+.vg-scorebug .stripe-away { background: var(--team-away); }
+.vg-scorebug .stripe-home { background: var(--team-home); }
+.vg-scorebug .abbr { font-size: 18px; letter-spacing: 0.06em; padding-left: 10px; }
+.vg-scorebug .score { font-size: 26px; text-align: right; padding-right: 12px; line-height: 1; }
+.vg-scorebug .shots { padding: 4px 10px; gap: 2px; }
+.vg-scorebug .shots .num { font-size: 18px; text-align: center; min-width: 28px; line-height: 1; }
+.vg-scorebug .shots .lbl { font-size: 10px; text-align: center; color: var(--logo-ice); letter-spacing: 0.20em; }
+.vg-scorebug .time { padding: 4px 14px; gap: 2px; }
+.vg-scorebug .time .period { font-size: 13px; color: var(--logo-ice); letter-spacing: 0.18em; text-align: center; }
+.vg-scorebug .time .clock { font-size: 26px; letter-spacing: 0.04em; line-height: 1; text-align: center; }
+
+/* ============================================================== */
+/* VARIANT H — SPEED LEAN */
+/* Slight italic skew (3deg) gives the whole HUD the same forward */
+/* motion as the logo wordmark. Ice-blue diagonal accent strip at the */
+/* top-left mimics the logo's speed-stripe shape. */
+/* ============================================================== */
+
+.vh-scorebug {
+  background: var(--logo-panel);
+  color: var(--logo-white);
+  font-family: 'Bebas Neue', sans-serif;
+  display: flex; align-items: stretch;
+  box-shadow: 4px 4px 0 rgba(0,0,0,0.5);
+  transform: skewX(-3deg);
+  border-top: 1px solid var(--logo-ice);
+}
+.vh-scorebug > * { transform: skewX(3deg); }  /* counter-skew content to keep type legible */
+.vh-scorebug .col { display: flex; flex-direction: column; justify-content: center; }
+.vh-scorebug .vsep { width: 1px; background: var(--logo-ice); opacity: 0.35; transform: skewX(-3deg); }
+.vh-scorebug .teams { display: flex; flex-direction: column; padding: 4px 6px 4px 0; gap: 4px; }
+.vh-scorebug .team-row { display: grid; grid-template-columns: 6px 56px 30px; align-items: center; min-height: 28px; }
+.vh-scorebug .team-row .stripe { height: 100%; min-height: 28px; }
+.vh-scorebug .stripe-away { background: var(--team-away); }
+.vh-scorebug .stripe-home { background: var(--team-home); }
+.vh-scorebug .abbr { font-size: 18px; letter-spacing: 0.06em; padding-left: 12px; }
+.vh-scorebug .score { font-size: 26px; text-align: right; padding-right: 10px; line-height: 1; }
+.vh-scorebug .shots { padding: 4px 10px; gap: 2px; }
+.vh-scorebug .shots .num { font-size: 18px; text-align: center; min-width: 28px; line-height: 1; }
+.vh-scorebug .shots .lbl { font-size: 10px; text-align: center; color: var(--logo-ice); letter-spacing: 0.20em; }
+.vh-scorebug .time { padding: 4px 16px 4px 14px; gap: 2px; }
+.vh-scorebug .time .period { font-size: 13px; color: var(--logo-ice); letter-spacing: 0.18em; text-align: center; }
+.vh-scorebug .time .clock { font-size: 26px; letter-spacing: 0.04em; line-height: 1; text-align: center; }
+
+/* ============================================================== */
+/* VARIANT I — OUTLINED TYPOGRAPHY */
+/* Borrows the logo wordmark's signature trick — heavy text outline. */
+/* AWAY / HOME / score / clock all get a 1.5px dark stroke around */
+/* white fill. Panel itself is minimal so the type carries the */
+/* "decal" energy. The whole thing reads like the MITTS wordmark. */
+/* ============================================================== */
+
+.vi-scorebug {
+  background: var(--logo-panel);
+  color: var(--logo-white);
+  font-family: 'Bebas Neue', sans-serif;
+  display: flex; align-items: stretch;
+  box-shadow: 4px 4px 0 rgba(0,0,0,0.5);
+  border-top: 1px solid var(--logo-ice);
+}
+.vi-scorebug .col { display: flex; flex-direction: column; justify-content: center; }
+.vi-scorebug .vsep { width: 1px; background: var(--logo-ice); opacity: 0.4; }
+.vi-scorebug .teams { display: flex; flex-direction: column; padding: 4px 0; gap: 4px; }
+.vi-scorebug .team-row { display: grid; grid-template-columns: 6px 56px 30px; align-items: center; min-height: 28px; }
+.vi-scorebug .team-row .stripe { height: 100%; min-height: 28px; }
+.vi-scorebug .stripe-away { background: var(--team-away); }
+.vi-scorebug .stripe-home { background: var(--team-home); }
+.vi-scorebug .abbr {
+  font-size: 18px; letter-spacing: 0.06em; padding-left: 10px;
+  -webkit-text-stroke: 0.8px #000; text-shadow: 1px 1px 0 #000;
+}
+.vi-scorebug .score {
+  font-size: 30px; text-align: right; padding-right: 12px; line-height: 1;
+  -webkit-text-stroke: 1px #000; text-shadow: 2px 2px 0 #000;
+}
+.vi-scorebug .shots { padding: 4px 10px; gap: 2px; }
+.vi-scorebug .shots .num {
+  font-size: 20px; text-align: center; min-width: 28px; line-height: 1;
+  -webkit-text-stroke: 0.8px #000; text-shadow: 1px 1px 0 #000;
+}
+.vi-scorebug .shots .lbl { font-size: 10px; text-align: center; color: var(--logo-ice); letter-spacing: 0.20em; }
+.vi-scorebug .time { padding: 4px 14px; gap: 2px; }
+.vi-scorebug .time .period { font-size: 13px; color: var(--logo-ice); letter-spacing: 0.18em; text-align: center; }
+.vi-scorebug .time .clock {
+  font-size: 30px; letter-spacing: 0.04em; line-height: 1; text-align: center;
+  -webkit-text-stroke: 1px #000; text-shadow: 2px 2px 0 #000;
+}
+
+/* ============================================================== */
+/* Scoreboard variants (shared shell) */
+/* ============================================================== */
+.sb {
+  font-family: 'Bebas Neue', sans-serif;
+  background: var(--logo-panel);
+  color: var(--logo-white);
+  min-width: 600px;
+  box-shadow: 4px 4px 0 rgba(0,0,0,0.5);
+}
+.sb .title-strip {
+  padding: 8px 18px; font-size: 16px; letter-spacing: 0.22em;
+  background: var(--logo-panel-2); color: var(--logo-ice); text-align: center;
+}
+.sb .periods { display: grid; grid-template-columns: auto repeat(4, 40px); padding: 12px 22px 4px; column-gap: 4px; row-gap: 6px; align-items: center; justify-content: center; }
+.sb .periods .h { font-size: 14px; color: var(--logo-ice-soft); letter-spacing: 0.14em; text-align: center; }
+.sb .periods .v { font-size: 20px; text-align: center; }
+.sb .periods .badge { font-size: 14px; padding: 4px 10px 2px; letter-spacing: 0.12em; color: #fff; }
+.sb .periods .badge-away { background: var(--team-away); }
+.sb .periods .badge-home { background: var(--team-home); }
+.sb .table-strip { border-top: 1px solid #1f2d3a; border-bottom: 1px solid #1f2d3a; padding: 10px 18px 14px; margin-top: 12px; }
+.sb .col-headers, .sb .player-row { display: grid; grid-template-columns: 52px 36px 36px 1fr 38px 38px 48px 48px 56px 48px; align-items: center; }
+.sb .col-headers div { font-size: 14px; color: var(--logo-ice-soft); text-align: center; letter-spacing: 0.14em; }
+.sb .col-headers .player { text-align: left; }
+.sb .player-row div { text-align: center; font-size: 18px; padding: 2px 0; letter-spacing: 0.02em; }
+.sb .player-row .player { text-align: left; }
+.sb .team-header { padding: 5px 14px; font-size: 18px; letter-spacing: 0.16em; margin: 8px 0 4px; border-left: 6px solid; }
+.sb .team-header.away { background: rgba(181, 58, 58, 0.32); border-left-color: var(--team-away); }
+.sb .team-header.home { background: rgba(58, 95, 181, 0.32); border-left-color: var(--team-home); }
+.sb .footer { text-align: center; color: var(--logo-ice-soft); font-size: 13px; padding: 8px 0 10px; letter-spacing: 0.14em; background: var(--logo-panel-2); }
+
+/* Per-variant scoreboard tweaks */
+.sb-vg { border: 1.5px solid var(--logo-ice); box-shadow: 0 0 0 1.5px var(--logo-panel), 4px 4px 0 rgba(0,0,0,0.4); }
+.sb-vi .team-header { color: #fff; -webkit-text-stroke: 0.8px #000; text-shadow: 1px 1px 0 #000; }
+
+</style>
+</head>
+<body>
+
+<h1>Scorebug v3 — Logo-anchored</h1>
+
+<div class="logo-reference">
+  <img src="Mitts_logo_full.png" alt="Mitts logo">
+  <div class="notes">
+    <strong>Design language we're pulling from:</strong>
+    Chunky outlined wordmark, three-color discipline (dark + ice-blue + white),
+    sticker/decal energy, slight forward motion, sports-brand decal vibe (CCM/K2-era),
+    vector-clean — no gradients. Each variant below tries to embody one specific
+    aspect of this language. We can shift the "dark" from black toward a dark navy
+    or even teal if the panel needs softening.
+  </div>
+</div>
+
+<p class="intro">
+  Forgetting the previous chyron-broadcast direction. Anchoring instead on the logo's design
+  language: <strong>bold confident type, heavy edges, layered/sticker quality, slight motion,
+  high contrast.</strong> All three variants here use the logo palette (dark navy + ice-blue +
+  white) but cash in different aspects of the language. Team-color stripes still carry team
+  identification — that's not negotiable for fast gameplay reading. The ice background
+  matches the new in-game cool blue-gray tint.
+</p>
+
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant G</span>
+    <span style="font-weight: 600;">Sticker Decal — outlined panel</span>
+    <div class="desc">
+      <strong>What it borrows from the logo:</strong> the heavy outline. The whole panel
+      is wrapped in a 1.5px ice-blue stroke (with a thin dark inset to give it depth), so
+      it reads like a vinyl sticker stuck onto the screen. Drop shadow stays for offset
+      separation from the ice. Most directly cashes in the logo's "decal" energy.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug vg-scorebug">
+        <div class="col teams">
+          <div class="team-row"><div class="stripe stripe-away"></div><div class="abbr">AWAY</div><div class="score">0</div></div>
+          <div class="team-row"><div class="stripe stripe-home"></div><div class="abbr">HOME</div><div class="score">0</div></div>
+        </div>
+        <div class="vsep"></div>
+        <div class="col shots"><div class="num">0</div><div class="lbl">SHOTS</div><div class="num">0</div></div>
+        <div class="vsep"></div>
+        <div class="col time"><div class="period">1ST</div><div class="clock">3:54</div></div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="sb sb-vg">
+        <div class="title-strip">BOX SCORE</div>
+        <div class="periods">
+          <div></div><div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away">AWAY</div><div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home">HOME</div><div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <div class="table-strip">
+          <div class="col-headers">
+            <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+            <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+          </div>
+          <div class="team-header away">AWAY</div>
+          <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="team-header home">HOME</div>
+          <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+        </div>
+        <div class="footer">PRESS TAB TO TOGGLE</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant H</span>
+    <span style="font-weight: 600;">Speed Lean — slight forward italic skew</span>
+    <div class="desc">
+      <strong>What it borrows from the logo:</strong> the motion/lean. The whole panel
+      skews -3deg, with content counter-skewed back to keep text legible. Net result:
+      the panel's box itself leans forward in the direction of play, like the logo
+      wordmark's tilt. Subtler than it sounds — it reads as "this UI has momentum"
+      not "this UI is broken." Most distinct silhouette of the three.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug vh-scorebug">
+        <div class="col teams">
+          <div class="team-row"><div class="stripe stripe-away"></div><div class="abbr">AWAY</div><div class="score">0</div></div>
+          <div class="team-row"><div class="stripe stripe-home"></div><div class="abbr">HOME</div><div class="score">0</div></div>
+        </div>
+        <div class="vsep"></div>
+        <div class="col shots"><div class="num">0</div><div class="lbl">SHOTS</div><div class="num">0</div></div>
+        <div class="vsep"></div>
+        <div class="col time"><div class="period">1ST</div><div class="clock">3:54</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant I</span>
+    <span style="font-weight: 600;">Outlined Type — every word is a sticker</span>
+    <div class="desc">
+      <strong>What it borrows from the logo:</strong> the signature wordmark trick — heavy
+      dark stroke around white type. AWAY / HOME / scores / clock all get a 1px black
+      outline plus a 1-2px offset stroke shadow. Every text element reads like a mini-MITTS
+      wordmark. Most direct typographic tie to the logo. Riskier because outlined text in HUDs
+      can fight legibility if overdone; here it's only on the high-emphasis labels and numbers.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug vi-scorebug">
+        <div class="col teams">
+          <div class="team-row"><div class="stripe stripe-away"></div><div class="abbr">AWAY</div><div class="score">0</div></div>
+          <div class="team-row"><div class="stripe stripe-home"></div><div class="abbr">HOME</div><div class="score">0</div></div>
+        </div>
+        <div class="vsep"></div>
+        <div class="col shots"><div class="num">0</div><div class="lbl">SHOTS</div><div class="num">0</div></div>
+        <div class="vsep"></div>
+        <div class="col time"><div class="period">1ST</div><div class="clock">3:54</div></div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="sb sb-vi">
+        <div class="title-strip">BOX SCORE</div>
+        <div class="periods">
+          <div></div><div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away">AWAY</div><div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home">HOME</div><div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <div class="table-strip">
+          <div class="col-headers">
+            <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+            <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+          </div>
+          <div class="team-header away">AWAY</div>
+          <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="team-header home">HOME</div>
+          <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+        </div>
+        <div class="footer">PRESS TAB TO TOGGLE</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="intro" style="margin-top: 12px;">
+  <strong>Honest read:</strong> the logo's three strongest design moves are (1) the heavy
+  outline, (2) the slight motion/lean, and (3) the outlined wordmark trick. Each variant
+  cashes in exactly one of those.
+  <br><br>
+  <strong>Variant G</strong> is probably the cleanest tie — the panel literally becomes a
+  sticker. Lives well at 1000 hours of play because nothing is moving or distorted; it just
+  looks confidently designed. Lowest risk.<br>
+  <strong>Variant H</strong> is the boldest identity move — the lean is a strong silhouette
+  signature. Could feel like "the game has personality" or could feel like "the HUD is broken"
+  depending on tuning. Higher risk, higher reward.<br>
+  <strong>Variant I</strong> is the most direct typographic homage to the logo, but outlined
+  text can fight readability at small sizes (player names in scoreboard, etc.). Use sparingly.
+  <br><br>
+  My instinct: <strong>G</strong>, optionally combined with the slight italic on just the
+  hero numerals (score / clock) from H so we get the sticker energy + a subtle motion accent
+  without making the whole HUD lean. That's the design-language sweet spot.<br><br>
+  Pick & mix is welcome — e.g., "G's outlined panel + I's outlined score numbers" is a real
+  option.
+</p>
+
+</body>
+</html>
