@@ -8,6 +8,7 @@ var _away_score_label: Label
 var _phase_panel: PanelContainer
 var _phase_wrapper: Control
 var _phase_label: Label
+var _scorer_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
@@ -233,30 +234,39 @@ func _build_phase_banner() -> void:
 	_phase_style.border_color = MenuStyle.BROADCAST_BORDER_T
 	_phase_style.border_width_top = 1
 	_phase_style.anti_aliasing = false
-	_phase_style.set_content_margin(SIDE_LEFT, 20)
-	_phase_style.set_content_margin(SIDE_RIGHT, 20)
-	_phase_style.set_content_margin(SIDE_TOP, 8)
-	_phase_style.set_content_margin(SIDE_BOTTOM, 8)
+	_phase_style.set_content_margin(SIDE_LEFT, 36)
+	_phase_style.set_content_margin(SIDE_RIGHT, 36)
+	_phase_style.set_content_margin(SIDE_TOP, 14)
+	_phase_style.set_content_margin(SIDE_BOTTOM, 14)
 
 	_phase_panel = PanelContainer.new()
 	_phase_panel.add_theme_stylebox_override("panel", _phase_style)
-	_phase_wrapper = MenuStyle.wrap_drop_shadow(_phase_panel, Vector2(4, 4))
+	_phase_wrapper = MenuStyle.wrap_drop_shadow(_phase_panel, Vector2(5, 5))
 	centering.add_child(_phase_wrapper)
 
 	var vbox := VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 2)
 	_phase_panel.add_child(vbox)
 
-	_phase_label = _lbl("", 18, _GOLD)
+	# "GOAL!" / "FACEOFF" / "END OF PERIOD" / "HOME WINS" — chyron hero text
+	_phase_label = _lbl("", 44, _GOLD)
 	_phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_phase_label)
 
-	_assist_label = _lbl("", 13, _DIM)
+	# Scorer name on its own line under "GOAL!" so the visual hierarchy reads
+	# like a broadcast goal graphic: hero / who / how
+	_scorer_label = _lbl("", 26, _WHITE)
+	_scorer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_scorer_label.visible = false
+	vbox.add_child(_scorer_label)
+
+	_assist_label = _lbl("", 16, _DIM)
 	_assist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_assist_label.visible = false
 	vbox.add_child(_assist_label)
 
-	_replay_label = _lbl("◀  REPLAY  ▶", 11, _DIM)
+	_replay_label = _lbl("◀  REPLAY  ▶", 16, _DIM)
 	_replay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_replay_label.visible = false
 	vbox.add_child(_replay_label)
@@ -277,7 +287,7 @@ func _build_spectator_banner() -> void:
 
 	_spectator_banner = PanelContainer.new()
 	_spectator_banner.add_theme_stylebox_override("panel", style)
-	_spectator_banner.add_child(_lbl("SPECTATING", 14, _GOLD))
+	_spectator_banner.add_child(_lbl("SPECTATING", 20, _GOLD))
 	_spectator_wrapper = MenuStyle.wrap_drop_shadow(_spectator_banner, Vector2(3, 3))
 
 	# Centered horizontally, anchored to the top.
@@ -404,15 +414,17 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	pop.tween_property(score_label, "scale", Vector2.ONE, 0.5) \
 		.set_trans(Tween.TRANS_SPRING).set_ease(Tween.EASE_OUT)
 
-	_phase_label.text = ("GOAL!  %s" % scorer_name) if not scorer_name.is_empty() else "GOAL!"
+	_phase_label.text = "GOAL!"
 	_phase_label.add_theme_color_override("font_color", _GOLD)
+	_scorer_label.text = scorer_name
+	_scorer_label.visible = not scorer_name.is_empty()
 	var team_color: Color = TeamColorRegistry.get_colors(GameManager.teams[scoring_team.team_id].color_id, scoring_team.team_id).primary
 	_phase_style.bg_color = Color(team_color.r * 0.25, team_color.g * 0.25, team_color.b * 0.25, 0.92)
 	if not assist1_name.is_empty():
 		var assist_text: String = assist1_name
 		if not assist2_name.is_empty():
 			assist_text += "  /  " + assist2_name
-		_assist_label.text = "Assisted by  " + assist_text
+		_assist_label.text = "ASSISTED BY  " + assist_text
 		_assist_label.visible = true
 	else:
 		_assist_label.visible = false
@@ -446,6 +458,7 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_wrapper.visible = false
 			_phase_label.add_theme_color_override("font_color", _GOLD)
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
+			_scorer_label.visible = false
 			_assist_label.visible = false
 			if _replay_label != null:
 				_replay_label.visible = false
@@ -454,6 +467,8 @@ func _on_phase_changed(new_phase: int) -> void:
 		GamePhase.Phase.END_OF_PERIOD:
 			_phase_label.text = "END OF PERIOD"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
+			_scorer_label.visible = false
+			_assist_label.visible = false
 			_phase_wrapper.visible = true
 		GamePhase.Phase.GAME_OVER:
 			_phase_wrapper.visible = true  # text + color set by _on_game_over
@@ -461,6 +476,7 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_label.text = "FACEOFF"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
+			_scorer_label.visible = false
 			_assist_label.visible = false
 			_phase_wrapper.visible = true
 
@@ -496,6 +512,8 @@ func _on_game_over() -> void:
 	else:
 		_phase_label.text = "TIE"
 		_phase_label.add_theme_color_override("font_color", _WHITE)
+	_scorer_label.visible = false
+	_assist_label.visible = false
 	_phase_wrapper.visible = true
 	_rematch_votes.clear()
 	_local_voted = false
