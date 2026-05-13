@@ -7,6 +7,10 @@ var _home_score_label: Label
 var _away_score_label: Label
 var _phase_panel: PanelContainer
 var _phase_wrapper: Control
+var _top_goal_banner: Control = null
+var _top_goal_panel_style: StyleBoxFlat = null
+var _top_goal_stripe_style: StyleBoxFlat = null
+var _top_goal_tween: Tween = null
 var _phase_label: Label
 var _tagline_label: Label
 var _scorer_label: Label
@@ -44,6 +48,7 @@ func _ready() -> void:
 	_build_offscreen_indicators()
 	_build_scorebug()
 	_build_phase_banner()
+	_build_top_goal_banner()
 	_build_version_tag()
 	_build_bug_icon()
 	_bug_dialog = BugReportDialog.new()
@@ -291,6 +296,70 @@ func _build_phase_banner() -> void:
 	_replay_label.visible = false
 	vbox.add_child(_replay_label)
 
+# "GOAL" wash banner — slides in from the left and overlays the scorebug for
+# the dramatic moment of a goal. Lower-third phase chyron with scorer/assist
+# info appears separately during the replay phase. Built once at _ready and
+# kept hidden; _play_top_goal_banner drives the slide-in/hold/slide-out
+# animation when a goal fires.
+func _build_top_goal_banner() -> void:
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = MenuStyle.BROADCAST_BG
+	panel_style.set_corner_radius_all(0)
+	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
+	panel_style.border_width_top = 1
+	panel_style.anti_aliasing = false
+	_top_goal_panel_style = panel_style
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", panel_style)
+	panel.custom_minimum_size = Vector2(520, 80)
+
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 0)
+	panel.add_child(hbox)
+
+	# Team-color block on the left, where a broadcast would put the team logo.
+	var stripe_style := StyleBoxFlat.new()
+	stripe_style.bg_color = Color(0.5, 0.5, 0.5)  # placeholder; set per-goal
+	stripe_style.anti_aliasing = false
+	_top_goal_stripe_style = stripe_style
+	var stripe := PanelContainer.new()
+	stripe.add_theme_stylebox_override("panel", stripe_style)
+	stripe.custom_minimum_size = Vector2(60, 80)
+	hbox.add_child(stripe)
+
+	# "G O A L" text — spaced caps in the broadcast wash style.
+	var text_margin := MarginContainer.new()
+	text_margin.add_theme_constant_override("margin_left", 32)
+	text_margin.add_theme_constant_override("margin_right", 32)
+	text_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(text_margin)
+	var goal_label := _lbl("G  O  A  L", 56, _WHITE)
+	goal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	goal_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	text_margin.add_child(goal_label)
+
+	_top_goal_banner = MenuStyle.wrap_drop_shadow(panel, Vector2(4, 4))
+	_top_goal_banner.position = Vector2(8, 8)
+	_top_goal_banner.visible = false
+	add_child(_top_goal_banner)
+
+func _play_top_goal_banner(team_color: Color) -> void:
+	if _top_goal_tween != null and _top_goal_tween.is_running():
+		_top_goal_tween.kill()
+	_top_goal_stripe_style.bg_color = team_color
+	# Off-screen left of the screen edge so the slide-in feels like it enters
+	# the frame from outside the viewport, not from a halfway position.
+	_top_goal_banner.position = Vector2(-540, 8)
+	_top_goal_banner.visible = true
+	_top_goal_tween = create_tween()
+	_top_goal_tween.tween_property(_top_goal_banner, "position:x", 8.0, 0.4) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_top_goal_tween.tween_interval(2.0)
+	_top_goal_tween.tween_property(_top_goal_banner, "position:x", -540.0, 0.4) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	_top_goal_tween.tween_callback(func() -> void: _top_goal_banner.visible = false)
+
 # Persistent banner shown on spectator clients only. Sits centered at the top
 # of the screen, above the phase banner area. Toggled by _apply_spectator_chrome.
 func _build_spectator_banner() -> void:
@@ -434,27 +503,27 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	pop.tween_property(score_label, "scale", Vector2.ONE, 0.5) \
 		.set_trans(Tween.TRANS_SPRING).set_ease(Tween.EASE_OUT)
 
-	# Goal banner: GOAL SCORED BY / <scorer> / ASSISTED BY / <assist names>.
-	# Hero is the scorer, not the word "GOAL!" — modeled on the 1994-era
-	# broadcast goal chyron the user wants to evoke.
+	# Two-beat goal moment, broadcast-style:
+	#   1. Top wash slides in over the scorebug ("G O A L"), then dismisses.
+	#   2. During the replay phase, the lower-third chyron appears with the
+	#      data (GOAL SCORED BY / <scorer> / ASSISTED BY / <assists>).
+	# Here we (a) play the top wash and (b) preload the chyron labels with the
+	# goal data so the replay handler can just toggle visibility.
+	var team_color: Color = TeamColorRegistry.get_colors(GameManager.teams[scoring_team.team_id].color_id, scoring_team.team_id).primary
+	_play_top_goal_banner(team_color)
+
 	_tagline_label.text = "GOAL SCORED BY"
-	_tagline_label.visible = true
 	_phase_label.visible = false
 	_scorer_label.text = scorer_name
 	_scorer_label.add_theme_color_override("font_color", _GOLD)
-	_scorer_label.visible = not scorer_name.is_empty()
-	var team_color: Color = TeamColorRegistry.get_colors(GameManager.teams[scoring_team.team_id].color_id, scoring_team.team_id).primary
 	_phase_style.bg_color = Color(team_color.r * 0.25, team_color.g * 0.25, team_color.b * 0.25, 0.92)
 	if not assist1_name.is_empty():
 		var assist_text: String = assist1_name
 		if not assist2_name.is_empty():
 			assist_text += "  /  " + assist2_name
-		_assist_tag_label.visible = true
 		_assist_label.text = assist_text
-		_assist_label.visible = true
 	else:
-		_assist_tag_label.visible = false
-		_assist_label.visible = false
+		_assist_label.text = ""
 
 	_flash_overlay.flash(team_color)
 
@@ -472,10 +541,19 @@ func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_pri
 		_away_badge_style.bg_color = away_primary
 
 func _on_replay_started() -> void:
+	# Lower-third chyron with goal data appears during replay. The labels were
+	# preloaded by _on_goal_scored; we just toggle visibility here so the chyron
+	# rolls in once the replay starts (after the top wash dismisses).
+	_tagline_label.visible = true
+	_scorer_label.visible = not _scorer_label.text.is_empty()
+	_assist_tag_label.visible = not _assist_label.text.is_empty()
+	_assist_label.visible = not _assist_label.text.is_empty()
+	_phase_wrapper.visible = true
 	if _replay_label != null:
 		_replay_label.visible = true
 
 func _on_replay_stopped() -> void:
+	_phase_wrapper.visible = false
 	if _replay_label != null:
 		_replay_label.visible = false
 
@@ -489,7 +567,9 @@ func _on_phase_changed(new_phase: int) -> void:
 			if _replay_label != null:
 				_replay_label.visible = false
 		GamePhase.Phase.GOAL_SCORED:
-			_phase_wrapper.visible = true  # text + color set by _on_goal_scored
+			# Top wash plays via _on_goal_scored. Lower-third chyron holds
+			# until the replay phase fires (_on_replay_started).
+			pass
 		GamePhase.Phase.END_OF_PERIOD:
 			_clear_goal_template()
 			_phase_label.text = "END OF PERIOD"
