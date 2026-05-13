@@ -30,7 +30,10 @@ func on_hit(hitter_peer_id: int, victim_peer_id: int, victim_team_id: int) -> vo
 		return  # no credit for hitting a teammate
 	var key: String = "%d:%d" % [hitter_peer_id, victim_peer_id]
 	var now: float = Time.get_ticks_msec() / 1000.0
-	if _last_hit_time.get(key, 0.0) + HIT_COOLDOWN_S > now:
+	# -INF so a never-seen pair's first hit never trips the cooldown — defaulting
+	# to 0.0 would gate every hit in the first HIT_COOLDOWN_S seconds after
+	# engine boot (caught as flaky CI on test_hit_tracker).
+	if _last_hit_time.get(key, -INF) + HIT_COOLDOWN_S > now:
 		return  # already credited this contact
 	_last_hit_time[key] = now
 	record.stats.hits += 1
