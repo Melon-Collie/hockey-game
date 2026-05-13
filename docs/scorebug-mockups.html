@@ -324,6 +324,89 @@ h2 { font-size: 18px; margin: 8px 0 4px; font-weight: 600; }
 .vc-scoreboard .team-header.home .stripe { background: #3a5fb5; box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.4); }
 .vc-scoreboard .team-header .lbl { padding-left: 12px; font-size: 20px; letter-spacing: 0.18em; background: linear-gradient(180deg, #2a2e44 0%, #14172a 100%); height: 26px; display: flex; align-items: center; padding-right: 10px; }
 .vc-scoreboard .footer { text-align: center; color: #b8af96; font-size: 14px; padding: 10px 0 12px; letter-spacing: 0.16em; font-family: 'Bebas Neue', sans-serif; background: #14172a; border-top: 1px solid #000; }
+
+/* ============================================================== */
+/* VARIANT B+ — B's style, A's scorebug arrangement, beefier team rows */
+/* Three-column scorebug (teams / shots / time) keeping B's chyron */
+/* aesthetic. Scoreboard team-header gets a tinted full-row body with */
+/* the stripe accent kept as a left border. */
+/* ============================================================== */
+
+.bp-scorebug {
+  background: #0a0a14; box-shadow: 3px 4px 0 rgba(0,0,0,0.5);
+  border-top: 1px solid #3a3a4e; border-bottom: 1px solid #00000080;
+  color: #f6efe2;
+  font-family: 'Bebas Neue', sans-serif;
+  display: flex; align-items: stretch;
+}
+.bp-scorebug .col { display: flex; flex-direction: column; justify-content: center; }
+.bp-scorebug .vsep { width: 1px; background: #2a2a3a; }
+
+/* Teams column: each row gets a left stripe + abbr + score */
+.bp-scorebug .teams { padding: 0; }
+.bp-scorebug .team-row {
+  display: grid; grid-template-columns: 6px 56px 30px;
+  align-items: center; min-height: 28px;
+}
+.bp-scorebug .teams .team-row:first-child { border-bottom: 1px solid #1a1a26; }
+.bp-scorebug .team-row .stripe { height: 100%; min-height: 28px; }
+.bp-scorebug .team-row .stripe-away { background: #b53a3a; }
+.bp-scorebug .team-row .stripe-home { background: #3a5fb5; }
+.bp-scorebug .team-row .abbr { font-size: 18px; letter-spacing: 0.06em; padding-left: 8px; }
+.bp-scorebug .team-row .score { font-size: 26px; text-align: right; padding-right: 10px; line-height: 1; }
+
+/* Shots column: number / SHOTS label / number, like current scorebug */
+.bp-scorebug .shots { padding: 4px 10px; gap: 2px; }
+.bp-scorebug .shots .num { font-size: 18px; text-align: center; min-width: 28px; line-height: 1; }
+.bp-scorebug .shots .lbl { font-size: 10px; text-align: center; color: #b8b0a0; letter-spacing: 0.18em; }
+
+/* Time column: period + clock */
+.bp-scorebug .time { padding: 4px 14px; gap: 2px; }
+.bp-scorebug .time .period { font-size: 13px; color: #b8b0a0; letter-spacing: 0.16em; text-align: center; }
+.bp-scorebug .time .clock { font-size: 26px; letter-spacing: 0.04em; line-height: 1; text-align: center; }
+
+/* Scoreboard: same as B, but team-header has a body */
+.bp-scoreboard {
+  background: #0a0a14; box-shadow: 4px 5px 0 rgba(0,0,0,0.5);
+  border-top: 1px solid #3a3a4e; border-bottom: 1px solid #00000080;
+  color: #f6efe2; font-family: 'Bebas Neue', sans-serif;
+  padding: 0; min-width: 600px;
+}
+.bp-scoreboard .title-strip {
+  padding: 8px 18px; font-size: 16px; letter-spacing: 0.18em;
+  background: #1a1a26; color: #f6efe2; text-align: center;
+  border-bottom: 1px solid #00000080;
+}
+.bp-scoreboard .periods {
+  display: grid; grid-template-columns: auto repeat(4, 40px);
+  padding: 12px 22px 4px; column-gap: 4px; row-gap: 6px; align-items: center;
+  justify-content: center;
+}
+.bp-scoreboard .periods .h { font-size: 14px; color: #b8b0a0; letter-spacing: 0.12em; text-align: center; }
+.bp-scoreboard .periods .v { font-size: 20px; text-align: center; }
+.bp-scoreboard .periods .badge { font-size: 14px; padding: 4px 10px 2px; letter-spacing: 0.12em; }
+.bp-scoreboard .periods .badge-away { background: #b53a3a; color: #fff; }
+.bp-scoreboard .periods .badge-home { background: #3a5fb5; color: #fff; }
+.bp-scoreboard .table-strip {
+  border-top: 1px solid #2a2a3a; border-bottom: 1px solid #2a2a3a;
+  padding: 10px 18px 14px; margin-top: 12px;
+}
+.bp-scoreboard .col-headers, .bp-scoreboard .player-row {
+  display: grid;
+  grid-template-columns: 52px 36px 36px 1fr 38px 38px 48px 48px 56px 48px;
+  align-items: center;
+}
+.bp-scoreboard .col-headers div { font-size: 14px; color: #b8b0a0; text-align: center; letter-spacing: 0.12em; }
+.bp-scoreboard .col-headers .player { text-align: left; }
+.bp-scoreboard .player-row div { text-align: center; font-size: 18px; padding: 2px 0; letter-spacing: 0.03em; }
+.bp-scoreboard .player-row .player { text-align: left; }
+.bp-scoreboard .team-header {
+  padding: 5px 14px; font-size: 18px; letter-spacing: 0.16em; margin: 8px 0 4px;
+  border-left: 6px solid;
+}
+.bp-scoreboard .team-header.away { background: rgba(181, 58, 58, 0.32); border-left-color: #b53a3a; }
+.bp-scoreboard .team-header.home { background: rgba(58, 95, 181, 0.32); border-left-color: #3a5fb5; }
+.bp-scoreboard .footer { text-align: center; color: #b8b0a0; font-size: 13px; padding: 8px 0 10px; letter-spacing: 0.12em; }
 </style>
 </head>
 <body>
@@ -597,6 +680,81 @@ h2 { font-size: 18px; margin: 8px 0 4px; font-weight: 600; }
           <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
           <div class="player-row"><div>—</div><div>84</div><div>R</div><div class="player">Bot 5</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
           <div class="team-header home"><div class="stripe"></div><div class="lbl">HOME</div></div>
+          <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>83</div><div>R</div><div class="player">Bot 4</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+        </div>
+        <div class="footer">PRESS TAB TO TOGGLE</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- VARIANT B+ -->
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant B+</span>
+    <span style="font-weight: 600;">Refined — chyron style, three-column scorebug, beefed-up scoreboard team headers</span>
+    <div class="desc">
+      Keeps Variant B's chyron aesthetic (Bebas Neue, cream whites, team-color stripes, hard corners,
+      drop shadow), but: scorebug is now three columns (teams / shots / time) matching the current
+      arrangement so shots doesn't dominate a whole vertical strip; scoreboard team-header rows now
+      have body — full-width tinted fill with the stripe kept as a 6px left border accent.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug bp-scorebug">
+        <div class="col teams">
+          <div class="team-row">
+            <div class="stripe stripe-away"></div>
+            <div class="abbr">AWAY</div>
+            <div class="score">0</div>
+          </div>
+          <div class="team-row">
+            <div class="stripe stripe-home"></div>
+            <div class="abbr">HOME</div>
+            <div class="score">0</div>
+          </div>
+        </div>
+        <div class="vsep"></div>
+        <div class="col shots">
+          <div class="num">0</div>
+          <div class="lbl">SHOTS</div>
+          <div class="num">0</div>
+        </div>
+        <div class="vsep"></div>
+        <div class="col time">
+          <div class="period">1ST</div>
+          <div class="clock">3:54</div>
+        </div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="bp-scoreboard">
+        <div class="title-strip">GAME SUMMARY</div>
+        <div class="periods">
+          <div></div>
+          <div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away">AWAY</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home">HOME</div>
+          <div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <div class="table-strip">
+          <div class="col-headers">
+            <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+            <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+          </div>
+          <div class="team-header away">AWAY</div>
+          <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>84</div><div>R</div><div class="player">Bot 5</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="team-header home">HOME</div>
           <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
           <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
           <div class="player-row"><div>—</div><div>83</div><div>R</div><div class="player">Bot 4</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
