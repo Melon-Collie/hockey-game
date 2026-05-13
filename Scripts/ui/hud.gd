@@ -8,7 +8,9 @@ var _away_score_label: Label
 var _phase_panel: PanelContainer
 var _phase_wrapper: Control
 var _phase_label: Label
+var _tagline_label: Label
 var _scorer_label: Label
+var _assist_tag_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
@@ -251,19 +253,35 @@ func _build_phase_banner() -> void:
 	vbox.add_theme_constant_override("separation", 2)
 	_phase_panel.add_child(vbox)
 
-	# "GOAL!" / "FACEOFF" / "END OF PERIOD" / "HOME WINS" — chyron hero text
+	# Tagline (e.g. "GOAL SCORED BY" / "FINAL") — small label above the hero
+	# row, only visible for events that have a hero subject (goal scorer,
+	# game-over winner). Hidden for FACEOFF / END OF PERIOD where the phase
+	# label itself is the hero.
+	_tagline_label = _lbl("", 16, _DIM)
+	_tagline_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_tagline_label.visible = false
+	vbox.add_child(_tagline_label)
+
+	# Hero row for non-goal phases: "FACEOFF" / "END OF PERIOD" / "HOME WINS"
 	_phase_label = _lbl("", 44, _GOLD)
 	_phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_phase_label)
 
-	# Scorer name on its own line under "GOAL!" so the visual hierarchy reads
-	# like a broadcast goal graphic: hero / who / how
-	_scorer_label = _lbl("", 26, _WHITE)
+	# Hero row for goal phase: the scorer's name in big gold, broadcast-style
+	_scorer_label = _lbl("", 52, _GOLD)
 	_scorer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_scorer_label.visible = false
 	vbox.add_child(_scorer_label)
 
-	_assist_label = _lbl("", 16, _DIM)
+	# "ASSISTED BY" tag — secondary tagline between the hero and the assist
+	# names. Hidden when there are no assists.
+	_assist_tag_label = _lbl("ASSISTED BY", 16, _DIM)
+	_assist_tag_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_assist_tag_label.visible = false
+	vbox.add_child(_assist_tag_label)
+
+	# Assist player names (e.g. "PLAYER1  /  PLAYER2") — sub-hero row
+	_assist_label = _lbl("", 24, _WHITE)
 	_assist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_assist_label.visible = false
 	vbox.add_child(_assist_label)
@@ -416,9 +434,14 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	pop.tween_property(score_label, "scale", Vector2.ONE, 0.5) \
 		.set_trans(Tween.TRANS_SPRING).set_ease(Tween.EASE_OUT)
 
-	_phase_label.text = "GOAL!"
-	_phase_label.add_theme_color_override("font_color", _GOLD)
+	# Goal banner: GOAL SCORED BY / <scorer> / ASSISTED BY / <assist names>.
+	# Hero is the scorer, not the word "GOAL!" — modeled on the 1994-era
+	# broadcast goal chyron the user wants to evoke.
+	_tagline_label.text = "GOAL SCORED BY"
+	_tagline_label.visible = true
+	_phase_label.visible = false
 	_scorer_label.text = scorer_name
+	_scorer_label.add_theme_color_override("font_color", _GOLD)
 	_scorer_label.visible = not scorer_name.is_empty()
 	var team_color: Color = TeamColorRegistry.get_colors(GameManager.teams[scoring_team.team_id].color_id, scoring_team.team_id).primary
 	_phase_style.bg_color = Color(team_color.r * 0.25, team_color.g * 0.25, team_color.b * 0.25, 0.92)
@@ -426,9 +449,11 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 		var assist_text: String = assist1_name
 		if not assist2_name.is_empty():
 			assist_text += "  /  " + assist2_name
-		_assist_label.text = "ASSISTED BY  " + assist_text
+		_assist_tag_label.visible = true
+		_assist_label.text = assist_text
 		_assist_label.visible = true
 	else:
+		_assist_tag_label.visible = false
 		_assist_label.visible = false
 
 	_flash_overlay.flash(team_color)
@@ -460,28 +485,35 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_wrapper.visible = false
 			_phase_label.add_theme_color_override("font_color", _GOLD)
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
-			_scorer_label.visible = false
-			_assist_label.visible = false
+			_clear_goal_template()
 			if _replay_label != null:
 				_replay_label.visible = false
 		GamePhase.Phase.GOAL_SCORED:
 			_phase_wrapper.visible = true  # text + color set by _on_goal_scored
 		GamePhase.Phase.END_OF_PERIOD:
+			_clear_goal_template()
 			_phase_label.text = "END OF PERIOD"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
+			_phase_label.visible = true
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
-			_scorer_label.visible = false
-			_assist_label.visible = false
 			_phase_wrapper.visible = true
 		GamePhase.Phase.GAME_OVER:
 			_phase_wrapper.visible = true  # text + color set by _on_game_over
 		_:
+			_clear_goal_template()
 			_phase_label.text = "FACEOFF"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
+			_phase_label.visible = true
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
-			_scorer_label.visible = false
-			_assist_label.visible = false
 			_phase_wrapper.visible = true
+
+# Reset the four goal-template rows (tagline, scorer, ASSISTED BY, assist
+# names) to hidden so non-goal phases show only the phase_label hero.
+func _clear_goal_template() -> void:
+	_tagline_label.visible = false
+	_scorer_label.visible = false
+	_assist_tag_label.visible = false
+	_assist_label.visible = false
 
 func _on_period_changed(new_period: int) -> void:
 	_period_label.text = _period_ordinal(new_period)
@@ -507,6 +539,12 @@ func _on_clock_updated(t: float) -> void:
 
 func _on_game_over() -> void:
 	_phase_style.bg_color = MenuStyle.BROADCAST_BG  # clear any residual goal tint
+	_tagline_label.text = "FINAL"
+	_tagline_label.visible = true
+	_phase_label.visible = true
+	_scorer_label.visible = false
+	_assist_tag_label.visible = false
+	_assist_label.visible = false
 	if _score_0 > _score_1:
 		_phase_label.text = "HOME WINS"
 		_phase_label.add_theme_color_override("font_color", _GOLD)
@@ -516,8 +554,6 @@ func _on_game_over() -> void:
 	else:
 		_phase_label.text = "TIE"
 		_phase_label.add_theme_color_override("font_color", _WHITE)
-	_scorer_label.visible = false
-	_assist_label.visible = false
 	_phase_wrapper.visible = true
 	_rematch_votes.clear()
 	_local_voted = false
