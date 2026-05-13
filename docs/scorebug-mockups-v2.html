@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mitts — Scorebug v2 (Precision-Sport Direction)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: Inter, system-ui, sans-serif;
+  background: #1a1d24;
+  color: #e8eef6;
+  padding: 32px;
+}
+
+h1 { font-size: 28px; margin-bottom: 8px; }
+h2 { font-size: 18px; margin: 8px 0 4px; font-weight: 600; }
+.intro { color: #9aa4b4; margin-bottom: 24px; max-width: 760px; line-height: 1.55; }
+.intro code { background: #2a2d36; padding: 1px 6px; border-radius: 3px; font-size: 13px; }
+
+.variant {
+  margin-bottom: 48px;
+  padding: 20px;
+  background: #232831;
+  border: 1px solid #303744;
+  border-radius: 4px;
+}
+.variant-header { margin-bottom: 16px; }
+.variant-header .tag {
+  display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 700;
+  background: #3c4452; color: #e8eef6; letter-spacing: 0.08em; margin-right: 8px;
+  text-transform: uppercase;
+}
+.variant-header .desc { color: #9aa4b4; font-size: 13px; margin-top: 6px; line-height: 1.55; max-width: 740px; }
+.variant-header .desc strong { color: #c8d0dc; }
+
+.row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+
+/* Faux blue-gray ice background matching the new in-game tint */
+.scene {
+  width: 720px;
+  height: 405px;
+  background:
+    radial-gradient(circle at 50% 55%, rgba(255,255,255,0.18), transparent 60%),
+    linear-gradient(180deg, #c3d2e0 0%, #afc0d0 100%);
+  position: relative;
+  border: 1px solid #303744;
+  overflow: hidden;
+}
+.scene .ice-line-red { position: absolute; left: 0; right: 0; top: 45%; height: 4px; background: rgba(196, 70, 70, 0.55); }
+.scene .ice-line-blue { position: absolute; left: 0; right: 0; top: 80%; height: 4px; background: rgba(60, 100, 180, 0.55); }
+.scene .scorebug { position: absolute; top: 12px; left: 12px; }
+
+.scoreboard-wrap {
+  width: 620px;
+  padding: 20px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255,255,255,0.10), transparent 70%),
+    linear-gradient(180deg, #c3d2e0 0%, #afc0d0 100%);
+  border: 1px solid #303744;
+  display: flex; justify-content: center;
+}
+
+/* Shared shadow utility */
+.hard-shadow { box-shadow: 4px 4px 0 rgba(0,0,0,0.45); }
+
+/* ============================================================== */
+/* CURRENT B+ (baseline for comparison) */
+/* ============================================================== */
+
+.cur-scorebug {
+  background: #0a0a14ee; box-shadow: 4px 4px 0 rgba(0,0,0,0.5);
+  border-top: 1px solid #3a3a4e;
+  color: #f6efe2; font-family: 'Bebas Neue', sans-serif;
+  display: flex; align-items: stretch;
+}
+.cur-scorebug .col { display: flex; flex-direction: column; justify-content: center; }
+.cur-scorebug .vsep { width: 1px; background: #2a2a3a; }
+.cur-scorebug .teams { display: flex; flex-direction: column; padding: 4px 0; gap: 4px; }
+.cur-scorebug .team-row { display: grid; grid-template-columns: 6px 56px 30px; align-items: center; min-height: 28px; }
+.cur-scorebug .team-row .stripe { height: 100%; min-height: 28px; }
+.cur-scorebug .stripe-away { background: #b53a3a; }
+.cur-scorebug .stripe-home { background: #3a5fb5; }
+.cur-scorebug .abbr { font-size: 18px; letter-spacing: 0.06em; padding-left: 8px; }
+.cur-scorebug .score { font-size: 26px; text-align: right; padding-right: 10px; line-height: 1; }
+.cur-scorebug .shots { padding: 4px 10px; gap: 2px; }
+.cur-scorebug .shots .num { font-size: 18px; text-align: center; min-width: 28px; line-height: 1; }
+.cur-scorebug .shots .lbl { font-size: 10px; text-align: center; color: #b8b0a0; letter-spacing: 0.18em; }
+.cur-scorebug .time { padding: 4px 14px; gap: 2px; }
+.cur-scorebug .time .period { font-size: 13px; color: #b8b0a0; letter-spacing: 0.16em; text-align: center; }
+.cur-scorebug .time .clock { font-size: 26px; letter-spacing: 0.04em; line-height: 1; text-align: center; }
+
+/* ============================================================== */
+/* VARIANT D — Modernized B+ (least change) */
+/* Same structure, but: pure white instead of cream, tighter, drops the */
+/* aged-broadcast affectations. Keeps team-color stripes. */
+/* ============================================================== */
+
+.vd-scorebug {
+  background: #0a0a14f0; box-shadow: 3px 3px 0 rgba(0,0,0,0.55);
+  border-top: 1px solid #3a3a4e;
+  color: #ffffff; font-family: 'Bebas Neue', sans-serif;
+  display: flex; align-items: stretch;
+}
+.vd-scorebug .col { display: flex; flex-direction: column; justify-content: center; }
+.vd-scorebug .vsep { width: 1px; background: #1f1f2a; }
+.vd-scorebug .teams { display: flex; flex-direction: column; padding: 4px 0; gap: 4px; }
+.vd-scorebug .team-row { display: grid; grid-template-columns: 6px 56px 30px; align-items: center; min-height: 28px; }
+.vd-scorebug .team-row .stripe { height: 100%; min-height: 28px; }
+.vd-scorebug .stripe-away { background: #b53a3a; }
+.vd-scorebug .stripe-home { background: #3a5fb5; }
+.vd-scorebug .abbr { font-size: 18px; letter-spacing: 0.06em; padding-left: 8px; }
+.vd-scorebug .score { font-size: 26px; text-align: right; padding-right: 10px; line-height: 1; }
+.vd-scorebug .shots { padding: 4px 10px; gap: 2px; }
+.vd-scorebug .shots .num { font-size: 18px; text-align: center; min-width: 28px; line-height: 1; }
+.vd-scorebug .shots .lbl { font-size: 10px; text-align: center; color: #9ba0ac; letter-spacing: 0.18em; }
+.vd-scorebug .time { padding: 4px 14px; gap: 2px; }
+.vd-scorebug .time .period { font-size: 13px; color: #9ba0ac; letter-spacing: 0.16em; text-align: center; }
+.vd-scorebug .time .clock { font-size: 26px; letter-spacing: 0.04em; line-height: 1; text-align: center; }
+
+/* ============================================================== */
+/* VARIANT E — Modern Sport Broadcast (NHL 26 / Tape to Tape inspired) */
+/* Larger team-color BLOCKS instead of thin stripes — the team is the */
+/* primary visual element, not a side accent. White text. Compact and */
+/* confident. Single horizontal strip layout. */
+/* ============================================================== */
+
+.ve-scorebug {
+  background: #0a0a14f5; box-shadow: 3px 3px 0 rgba(0,0,0,0.55);
+  color: #ffffff; font-family: 'Bebas Neue', sans-serif;
+  display: flex; align-items: stretch;
+}
+.ve-scorebug .team-block {
+  display: flex; align-items: center; padding: 6px 12px; gap: 10px;
+}
+.ve-scorebug .team-away { background: #b53a3a; }
+.ve-scorebug .team-home { background: #3a5fb5; }
+.ve-scorebug .team-block .abbr { font-size: 18px; letter-spacing: 0.10em; color: #fff; }
+.ve-scorebug .team-block .score { font-size: 26px; letter-spacing: 0.02em; line-height: 1; color: #fff; }
+.ve-scorebug .meta {
+  display: grid; grid-template-rows: auto auto auto; padding: 6px 16px;
+  align-items: center; gap: 1px; min-width: 96px;
+}
+.ve-scorebug .meta .period {
+  font-size: 11px; color: #9ba0ac; letter-spacing: 0.20em; text-align: center;
+}
+.ve-scorebug .meta .clock {
+  font-size: 24px; letter-spacing: 0.04em; line-height: 1.0; text-align: center;
+}
+.ve-scorebug .meta .shots {
+  font-size: 10px; color: #9ba0ac; letter-spacing: 0.16em; text-align: center;
+}
+
+/* ============================================================== */
+/* VARIANT F — Floating minimal */
+/* No panel. Just floating elements with text shadows. Highest gameplay */
+/* legibility because the HUD truly stays out of the way. Identity */
+/* comes from typography + saturation, not chrome. */
+/* ============================================================== */
+
+.vf-scorebug {
+  display: flex; align-items: center; gap: 18px;
+  font-family: 'Bebas Neue', sans-serif; color: #fff;
+  text-shadow: 2px 2px 0 rgba(0,0,0,0.6), 0 0 8px rgba(0,0,0,0.4);
+  padding: 6px 4px;
+}
+.vf-scorebug .team {
+  display: flex; align-items: center; gap: 8px;
+}
+.vf-scorebug .team .dot {
+  width: 18px; height: 18px; box-shadow: 1px 1px 0 rgba(0,0,0,0.5);
+}
+.vf-scorebug .team-away .dot { background: #b53a3a; }
+.vf-scorebug .team-home .dot { background: #3a5fb5; }
+.vf-scorebug .team .abbr { font-size: 20px; letter-spacing: 0.05em; }
+.vf-scorebug .team .score { font-size: 28px; letter-spacing: 0.04em; line-height: 1; }
+.vf-scorebug .clock-block {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  border-left: 1px solid rgba(255,255,255,0.4); border-right: 1px solid rgba(255,255,255,0.4);
+  padding: 0 16px;
+}
+.vf-scorebug .clock-block .period { font-size: 13px; letter-spacing: 0.18em; opacity: 0.85; }
+.vf-scorebug .clock-block .clock { font-size: 26px; letter-spacing: 0.04em; line-height: 1; }
+
+/* ============================================================== */
+/* Scoreboard variants — shared shell, varying treatments */
+/* ============================================================== */
+
+.sb {
+  font-family: 'Bebas Neue', sans-serif; padding: 0;
+  background: #0a0a14ee; box-shadow: 4px 4px 0 rgba(0,0,0,0.5);
+  border-top: 1px solid #3a3a4e; min-width: 600px;
+}
+.sb-modern { color: #ffffff; }
+.sb-modern .title-strip { padding: 8px 18px; font-size: 16px; letter-spacing: 0.20em; background: #1a1a26; color: #fff; text-align: center; border-bottom: 1px solid #00000080; }
+.sb-modern .periods { display: grid; grid-template-columns: auto repeat(4, 40px); padding: 12px 22px 4px; column-gap: 4px; row-gap: 6px; align-items: center; justify-content: center; }
+.sb-modern .periods .h { font-size: 14px; color: #9ba0ac; letter-spacing: 0.14em; text-align: center; }
+.sb-modern .periods .v { font-size: 20px; text-align: center; }
+.sb-modern .periods .badge { font-size: 14px; padding: 4px 10px 2px; letter-spacing: 0.12em; }
+.sb-modern .periods .badge-away { background: #b53a3a; color: #fff; }
+.sb-modern .periods .badge-home { background: #3a5fb5; color: #fff; }
+.sb-modern .table-strip { border-top: 1px solid #2a2a3a; border-bottom: 1px solid #2a2a3a; padding: 10px 18px 14px; margin-top: 12px; }
+.sb-modern .col-headers, .sb-modern .player-row { display: grid; grid-template-columns: 52px 36px 36px 1fr 38px 38px 48px 48px 56px 48px; align-items: center; }
+.sb-modern .col-headers div { font-size: 14px; color: #9ba0ac; text-align: center; letter-spacing: 0.14em; }
+.sb-modern .col-headers .player { text-align: left; }
+.sb-modern .player-row div { text-align: center; font-size: 18px; padding: 2px 0; letter-spacing: 0.02em; }
+.sb-modern .player-row .player { text-align: left; }
+.sb-modern .team-header { padding: 5px 14px; font-size: 18px; letter-spacing: 0.16em; margin: 8px 0 4px; border-left: 6px solid; }
+.sb-modern .team-header.away { background: rgba(181, 58, 58, 0.32); border-left-color: #b53a3a; }
+.sb-modern .team-header.home { background: rgba(58, 95, 181, 0.32); border-left-color: #3a5fb5; }
+.sb-modern .footer { text-align: center; color: #9ba0ac; font-size: 13px; padding: 8px 0 10px; letter-spacing: 0.12em; }
+
+/* Sport broadcast variant — bigger team blocks in header */
+.sb-broadcast .periods { padding: 14px 22px 4px; }
+.sb-broadcast .periods .badge {
+  font-size: 14px; padding: 5px 14px 3px; letter-spacing: 0.14em; min-width: 64px;
+}
+.sb-broadcast .periods .badge-away { background: #b53a3a; }
+.sb-broadcast .periods .badge-home { background: #3a5fb5; }
+.sb-broadcast .team-header { padding: 7px 14px; font-size: 20px; letter-spacing: 0.18em; border-left: 0; color: #fff; }
+.sb-broadcast .team-header.away { background: #b53a3a; }
+.sb-broadcast .team-header.home { background: #3a5fb5; }
+
+/* Minimal/floating variant — no background */
+.sb-min { background: transparent !important; box-shadow: none !important; border-top: 0 !important; color: #fff; text-shadow: 1px 1px 0 rgba(0,0,0,0.5); min-width: 580px; }
+.sb-min .title-strip { background: transparent; border-bottom: 1px solid rgba(255,255,255,0.2); padding: 6px 0; text-align: center; letter-spacing: 0.22em; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<h1>Scorebug v2 — Precision-Sport Direction</h1>
+<p class="intro">
+  Revisiting the scorebug/scoreboard with the clarified gameplay direction: <strong>mouse-driven
+  skill expression, not exaggerated arcade, not realism simulation.</strong> The HUD has to support
+  fast at-a-glance reading and stay out of the way of precise input. The chyron-as-personality
+  architecture still holds, but the chyron itself may want to feel more "modern indie precision sport"
+  than "1991 broadcast nostalgia." All three variants here drop the cream tint (which encoded
+  vintage) for crisp white, and stay on Bebas Neue. The ice background matches the new in-game
+  cool blue-gray tint so cross-temperature pairing is honest.
+</p>
+
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Current B+</span>
+    <span style="font-weight: 600;">Vintage broadcast chyron (what we shipped)</span>
+    <div class="desc">
+      <strong>Identity:</strong> 1991 SportsChannel broadcast. Cream whites, gold accent, hard
+      offset shadow. Strongest retro personality. Pairs cohesively with itself but creates a
+      temperature war with the new cool ice underneath.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug cur-scorebug">
+        <div class="col teams">
+          <div class="team-row"><div class="stripe stripe-away"></div><div class="abbr">AWAY</div><div class="score">0</div></div>
+          <div class="team-row"><div class="stripe stripe-home"></div><div class="abbr">HOME</div><div class="score">0</div></div>
+        </div>
+        <div class="vsep"></div>
+        <div class="col shots"><div class="num">0</div><div class="lbl">SHOTS</div><div class="num">0</div></div>
+        <div class="vsep"></div>
+        <div class="col time"><div class="period">1ST</div><div class="clock">3:54</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant D</span>
+    <span style="font-weight: 600;">Modernized B+ — same shape, drops the vintage</span>
+    <div class="desc">
+      <strong>Identity:</strong> Same architecture as current, but: <strong>pure white</strong>
+      instead of cream, dim text shifts from cream-dim to neutral-cool-gray, shadow tighter
+      (3×3 vs 4×4). Stops trying to look "1991" and just looks like a clean modern indie sport
+      HUD. Lowest-risk direction; the conversion is mostly a palette swap. The structure proved
+      itself — this just modernizes the tone.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug vd-scorebug">
+        <div class="col teams">
+          <div class="team-row"><div class="stripe stripe-away"></div><div class="abbr">AWAY</div><div class="score">0</div></div>
+          <div class="team-row"><div class="stripe stripe-home"></div><div class="abbr">HOME</div><div class="score">0</div></div>
+        </div>
+        <div class="vsep"></div>
+        <div class="col shots"><div class="num">0</div><div class="lbl">SHOTS</div><div class="num">0</div></div>
+        <div class="vsep"></div>
+        <div class="col time"><div class="period">1ST</div><div class="clock">3:54</div></div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="sb sb-modern">
+        <div class="title-strip">BOX SCORE</div>
+        <div class="periods">
+          <div></div><div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away">AWAY</div><div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home">HOME</div><div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <div class="table-strip">
+          <div class="col-headers">
+            <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+            <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+          </div>
+          <div class="team-header away">AWAY</div>
+          <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="team-header home">HOME</div>
+          <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+        </div>
+        <div class="footer">PRESS TAB TO TOGGLE</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant E</span>
+    <span style="font-weight: 600;">Modern Sport Broadcast — team color blocks dominate</span>
+    <div class="desc">
+      <strong>Identity:</strong> Inspired by NHL 26 / Tape to Tape / NBA 2K-style scorebugs.
+      The team is no longer a thin accent stripe — the team color becomes the panel for that team's
+      cell. Reads instantly: "this red block is AWAY, this blue block is HOME." More committed to
+      team identity, less subtle. Single compact horizontal row. Most "confidently modern" of the
+      three. Scoreboard mirrors: full team-color header rows.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug ve-scorebug">
+        <div class="team-block team-away">
+          <span class="abbr">AWAY</span>
+          <span class="score">0</span>
+        </div>
+        <div class="team-block team-home">
+          <span class="abbr">HOME</span>
+          <span class="score">0</span>
+        </div>
+        <div class="meta">
+          <div class="period">1ST</div>
+          <div class="clock">3:54</div>
+          <div class="shots">SHOTS 0 — 0</div>
+        </div>
+      </div>
+    </div>
+    <div class="scoreboard-wrap">
+      <div class="sb sb-modern sb-broadcast">
+        <div class="title-strip">BOX SCORE</div>
+        <div class="periods">
+          <div></div><div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">T</div>
+          <div class="badge badge-away">AWAY</div><div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+          <div class="badge badge-home">HOME</div><div class="v">0</div><div class="v">0</div><div class="v">0</div><div class="v">0</div>
+        </div>
+        <div class="table-strip">
+          <div class="col-headers">
+            <div>PING</div><div>#</div><div>POS</div><div class="player">PLAYER</div>
+            <div>G</div><div>A</div><div>PTS</div><div>SOG</div><div>HITS</div><div>BLK</div>
+          </div>
+          <div class="team-header away">AWAY</div>
+          <div class="player-row"><div>—</div><div>80</div><div>C</div><div class="player">Bot 1</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>81</div><div>L</div><div class="player">Bot 2</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="team-header home">HOME</div>
+          <div class="player-row"><div>—</div><div>10</div><div>C</div><div class="player">Player</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div><div>0</div></div>
+          <div class="player-row"><div>—</div><div>82</div><div>L</div><div class="player">Bot 3</div><div>0</div><div>0</div><div>0</div><div>0</div><div>1</div><div>0</div></div>
+        </div>
+        <div class="footer">PRESS TAB TO TOGGLE</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<div class="variant">
+  <div class="variant-header">
+    <span class="tag">Variant F</span>
+    <span style="font-weight: 600;">Floating minimal — no panel, pure information</span>
+    <div class="desc">
+      <strong>Identity:</strong> Closest to Rocket League / OlliOlli / precision esports HUDs.
+      <strong>No panel chrome at all</strong> — just floating elements with crisp text shadows.
+      Team identity carried by a colored dot, score is a big white number. Maximum gameplay
+      legibility because nothing competes with the ice. Identity comes purely from typography
+      and saturated team color cues, not from chyron decoration. The boldest "we are a modern
+      precision sport game" statement.
+    </div>
+  </div>
+  <div class="row">
+    <div class="scene">
+      <div class="ice-line-red"></div>
+      <div class="ice-line-blue"></div>
+      <div class="scorebug vf-scorebug">
+        <div class="team team-away"><span class="dot"></span><span class="abbr">AWAY</span><span class="score">0</span></div>
+        <div class="clock-block">
+          <span class="period">1ST</span>
+          <span class="clock">3:54</span>
+        </div>
+        <div class="team team-home"><span class="abbr">HOME</span><span class="score">0</span><span class="dot"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="intro" style="margin-top: 12px;">
+  <strong>My read:</strong> Variant D is the safest swing — keeps everything that works about the
+  current scorebug and just modernizes the palette. Variant E commits hardest to "modern sport
+  broadcast" and would feel most cohesive with the gameplay character; the team-color blocks are
+  also great for fast reading. Variant F is the bold move — it pulls the chrome out of the way
+  entirely, but it gives up the chyron-as-identity-layer architecture we just agreed on. If you
+  want the HUD to be a personality element, F is too minimal; if you want the HUD to maximally
+  serve precision gameplay, F is exactly right.<br><br>
+  My gut: <strong>Variant E.</strong> It modernizes the tone, reads instantly as a sport
+  HUD, the team-color blocks are functional, and it shares the "confident modern" vibe of
+  Tape to Tape (which is the only direct comparison in the indie hockey space).
+</p>
+
+</body>
+</html>
