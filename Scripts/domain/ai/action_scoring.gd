@@ -107,15 +107,15 @@ const SQUARENESS_OFFSET_RAD: float = 0.5235988  # deg_to_rad(30)
 # react-then-slide model: react delay first, then move toward the
 # puck-at-release X at max lateral speed.
 #
-# GOALIE_REACTION_DELAY_S references GameRules so the AI prediction
-# stays in lockstep with the live goalie's `reaction_delay` @export
-# default — they're the same human reflex, single source of truth.
-# GOALIE_MAX_LATERAL_SPEED_MPS is currently a calibration estimate;
-# the live goalie has separate t_push_speed / shuffle_speed /
-# tracking_speed depending on state, so there is no clean single
-# source — leave as a literal feel value for now.
+# GOALIE_REACTION_DELAY_S and GOALIE_MAX_LATERAL_SPEED_MPS both
+# reference GameRules so the AI prediction stays in lockstep with
+# the live goalie. Lateral speed mirrors GoalieController.t_push_speed
+# specifically — that's the goalie's real translation speed when
+# committing to a slide (lateral_threshold = 0.3 m). NOT
+# tracking_speed (the mental-target lerp speed, not body movement)
+# and NOT shuffle_speed (small adjustments, not a recovery slide).
 const GOALIE_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
-const GOALIE_MAX_LATERAL_SPEED_MPS: float = 5.0
+const GOALIE_MAX_LATERAL_SPEED_MPS: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
 
 # Shadow half-width used by AIShotAim.compute_open_net_aim for the
 # lane-check aim point. Independent of the new coverage model — it
@@ -157,16 +157,23 @@ const LANE_CLEAR_RADIUS_M: float = 1.5
 # play). LANE_REACTION_RAMP_S is the additional time over which the
 # block strength ramps from 0 to full. Defenders right at the shooter
 # (low t) get little weight; defenders mid-segment carry full weight.
-# Shots (~30 m/s) and passes (~22 m/s) use this same model with
-# different speeds → defenders close to shooter contribute more for
-# slow passes than for fast shots.
+# Wristers (~24 m/s), slappers (~34 m/s), and passes / quick shots
+# (~14 m/s) use this same model with different speeds → defenders
+# close to shooter contribute more for slow passes than for fast
+# slappers.
 const LANE_REACTION_DELAY_S: float = 0.15
 const LANE_REACTION_RAMP_S: float = 0.10
 
-# Speed assumptions for lane-clear reaction-window math. Approximate
-# values used by score_shoot / score_pass when calling _lane_clear.
-const SHOT_SPEED_M_S: float = 30.0
-const PASS_SPEED_M_S: float = 22.0
+# Puck release speed assumptions for lane-clear reaction-window math.
+# `puck.release(direction, power)` consumes `direction × power` as
+# linear velocity directly (see Puck.release), so "power" IS m/s.
+# Sourced from GameRules so the AI's lane reaction window matches
+# the live shot mechanics. score_shoot defaults to wrister speed;
+# score_pass uses pass speed (which is quick_shot_power — passes
+# in this codebase are mechanically quick-shots).
+const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
+const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 
 # Reference top skating speed. Single source of truth shared with
 # SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.
@@ -250,7 +257,8 @@ static func score_shoot(
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
 		opponents: Array[Vector3],
-		goalie_current_pos: Vector3 = Vector3.INF) -> float:
+		goalie_current_pos: Vector3 = Vector3.INF,
+		shot_speed_m_s: float = WRISTER_SHOT_SPEED_M_S) -> float:
 	# Hard gate: shooter past (or on) the attacking goal line can't
 	# shoot in — wraparound territory, returns 0 immediately.
 	var net_normal_z: float = -signf(attacking_goal.z)
@@ -311,7 +319,7 @@ static func score_shoot(
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			shooter, predicted_goalie_pos, attacking_goal.z,
 			net_half_width, GOALIE_SHADOW_HALF_M)
-	var lane: float = _lane_clear(shooter, aim, opponents, SHOT_SPEED_M_S)
+	var lane: float = _lane_clear(shooter, aim, opponents, shot_speed_m_s)
 
 	# Directional pressure: only opponents in the forward cone toward
 	# the attacking goal disrupt the shot. Behind/beside ones don't
