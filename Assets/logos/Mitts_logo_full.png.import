@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c4c8aulpv7hyv"
-path="res://.godot/imported/menu_bg.png-37635d157aedea9fb65cb5b2f7254a5c.ctex"
+uid="uid://dtx7kdlh12vow"
+path="res://.godot/imported/Mitts_logo_full.png-bc2cf58232ebcb967be023a3bd3b446e.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://docs/menu_bg.png"
-dest_files=["res://.godot/imported/menu_bg.png-37635d157aedea9fb65cb5b2f7254a5c.ctex"]
+source_file="res://Assets/logos/Mitts_logo_full.png"
+dest_files=["res://.godot/imported/Mitts_logo_full.png-bc2cf58232ebcb967be023a3bd3b446e.ctex"]
 
 [params]
 

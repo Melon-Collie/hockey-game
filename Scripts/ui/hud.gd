@@ -30,10 +30,10 @@ var _local_voted: bool = false
 var _replay_label: Label = null
 var _spectator_banner: PanelContainer = null
 
-const _DARK_BG    := Color(0.07, 0.07, 0.09, 0.92)
+const _DARK_BG    := MenuStyle.HUD_BG
 const _WHITE      := Color(1.00, 1.00, 1.00, 1.00)
 const _DIM        := Color(0.62, 0.62, 0.68, 1.00)
-const _GOLD       := Color(1.00, 0.85, 0.20, 1.00)
+const _GOLD       := MenuStyle.GOLD
 const _SEP_COLOR  := Color(0.28, 0.28, 0.33, 1.00)
 
 func _ready() -> void:

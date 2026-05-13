@@ -1,9 +1,31 @@
 class_name PlayerSettingsPopup
 extends Control
 
+# Snapshot-and-commit pattern: edits buffer in _pending_* until Apply is
+# pressed. Cancel / ESC / overlay-click revert. Mirrors OptionsPanel.
+
 signal name_changed(new_name: String)
 signal jersey_number_changed(new_number: int)
 signal handedness_changed(is_left: bool)
+
+# Controls — kept as refs so Cancel can restore them from the snapshot.
+var _name_field: LineEdit = null
+var _name_warning: Label = null
+var _number_field: LineEdit = null
+var _number_warning: Label = null
+var _left_btn: Button = null
+var _right_btn: Button = null
+var _apply_btn: Button = null
+
+# Pending state — what Apply will commit.
+var _pending_name: String = ""
+var _pending_number: int = 0
+var _pending_is_left: bool = false
+var _name_valid: bool = true
+var _number_valid: bool = true
+
+# Snapshot taken on open(). Cancel restores from this.
+var _snapshot: Dictionary = {}
 
 
 func _ready() -> void:
@@ -14,7 +36,7 @@ func _ready() -> void:
 
 func _build() -> void:
 	var overlay := ColorRect.new()
-	overlay.color = Color(0.0, 0.0, 0.0, 0.6)
+	overlay.color = MenuStyle.SCRIM
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.gui_input.connect(_on_overlay_clicked)
@@ -44,6 +66,7 @@ func _build() -> void:
 	_build_name_section(vbox)
 	_build_number_section(vbox)
 	_build_handedness_section(vbox)
+	_build_action_row(vbox)
 
 
 func _add_close_row(vbox: VBoxContainer) -> void:
@@ -52,7 +75,7 @@ func _add_close_row(vbox: VBoxContainer) -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
 	var close_btn := MenuStyle.close_button()
-	close_btn.pressed.connect(func() -> void: visible = false)
+	close_btn.pressed.connect(_cancel)
 	SoundManager.wire_button(close_btn)
 	row.add_child(close_btn)
 	vbox.add_child(row)
@@ -67,45 +90,52 @@ func _build_name_section(vbox: VBoxContainer) -> void:
 	var name_label := Label.new()
 	name_label.text = "Name:"
 	name_label.add_theme_font_size_override("font_size", 20)
-	name_label.add_theme_color_override("font_color", Color.WHITE)
+	name_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(name_label)
 
-	var field := LineEdit.new()
-	field.placeholder_text = "Player"
-	field.max_length = 10
-	field.custom_minimum_size = Vector2(200, 48)
-	field.add_theme_font_size_override("font_size", 18)
-	field.text = PlayerPrefs.player_name
-	NetworkManager.local_player_name = PlayerPrefs.player_name
-	row.add_child(field)
+	_name_field = LineEdit.new()
+	_name_field.placeholder_text = "Player"
+	_name_field.max_length = 10
+	_name_field.custom_minimum_size = Vector2(200, 48)
+	_name_field.add_theme_font_size_override("font_size", 18)
+	row.add_child(_name_field)
 
-	var warning := Label.new()
-	warning.text = "Name not allowed"
-	warning.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	warning.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
-	warning.add_theme_font_size_override("font_size", 14)
-	warning.visible = false
-	vbox.add_child(warning)
+	_name_warning = Label.new()
+	_name_warning.text = "Name not allowed"
+	_name_warning.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_name_warning.add_theme_color_override("font_color", MenuStyle.DANGER)
+	_name_warning.add_theme_font_size_override("font_size", 14)
+	_name_warning.visible = false
+	vbox.add_child(_name_warning)
 
-	field.text_changed.connect(func(t: String) -> void:
-		if t.strip_edges().is_empty():
-			warning.visible = false
-			return
-		var trimmed: String = t.strip_edges()
-		if not NameFilter.is_alphanumeric(trimmed):
-			warning.text = "Letters and numbers only"
-			warning.visible = true
-			return
-		if not NameFilter.is_clean(trimmed):
-			warning.text = "Name not allowed"
-			warning.visible = true
-			return
-		warning.visible = false
-		NetworkManager.local_player_name = trimmed
-		PlayerPrefs.player_name = trimmed
-		PlayerPrefs.save()
-		name_changed.emit(trimmed))
+	_name_field.text_changed.connect(_on_name_text_changed)
+
+
+func _on_name_text_changed(t: String) -> void:
+	var trimmed: String = t.strip_edges()
+	if trimmed.is_empty():
+		_name_warning.visible = false
+		_name_valid = false
+		_pending_name = ""
+		_update_apply_state()
+		return
+	if not NameFilter.is_alphanumeric(trimmed):
+		_name_warning.text = "Letters and numbers only"
+		_name_warning.visible = true
+		_name_valid = false
+		_update_apply_state()
+		return
+	if not NameFilter.is_clean(trimmed):
+		_name_warning.text = "Name not allowed"
+		_name_warning.visible = true
+		_name_valid = false
+		_update_apply_state()
+		return
+	_name_warning.visible = false
+	_name_valid = true
+	_pending_name = trimmed
+	_update_apply_state()
 
 
 func _build_number_section(vbox: VBoxContainer) -> void:
@@ -117,38 +147,43 @@ func _build_number_section(vbox: VBoxContainer) -> void:
 	var label := Label.new()
 	label.text = "Number:"
 	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", Color.WHITE)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(label)
 
-	var field := LineEdit.new()
-	field.placeholder_text = "10"
-	field.max_length = 2
-	field.custom_minimum_size = Vector2(80, 48)
-	field.add_theme_font_size_override("font_size", 18)
-	field.text = str(PlayerPrefs.jersey_number)
-	NetworkManager.local_jersey_number = PlayerPrefs.jersey_number
-	row.add_child(field)
+	_number_field = LineEdit.new()
+	_number_field.placeholder_text = "10"
+	_number_field.max_length = 2
+	_number_field.custom_minimum_size = Vector2(80, 48)
+	_number_field.add_theme_font_size_override("font_size", 18)
+	row.add_child(_number_field)
 
-	var warning := Label.new()
-	warning.text = "Numbers only"
-	warning.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	warning.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
-	warning.add_theme_font_size_override("font_size", 14)
-	warning.visible = false
-	vbox.add_child(warning)
+	_number_warning = Label.new()
+	_number_warning.text = "Numbers only"
+	_number_warning.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_number_warning.add_theme_color_override("font_color", MenuStyle.DANGER)
+	_number_warning.add_theme_font_size_override("font_size", 14)
+	_number_warning.visible = false
+	vbox.add_child(_number_warning)
 
-	field.text_changed.connect(func(t: String) -> void:
-		if not t.is_empty() and not t.is_valid_int():
-			warning.visible = true
-			return
-		warning.visible = false
-		var n: int = t.to_int() if t.is_valid_int() else PlayerPrefs.jersey_number
-		n = clamp(n, 0, 99)
-		NetworkManager.local_jersey_number = n
-		PlayerPrefs.jersey_number = n
-		PlayerPrefs.save()
-		jersey_number_changed.emit(n))
+	_number_field.text_changed.connect(_on_number_text_changed)
+
+
+func _on_number_text_changed(t: String) -> void:
+	if t.is_empty():
+		_number_warning.visible = false
+		_number_valid = false
+		_update_apply_state()
+		return
+	if not t.is_valid_int():
+		_number_warning.visible = true
+		_number_valid = false
+		_update_apply_state()
+		return
+	_number_warning.visible = false
+	_number_valid = true
+	_pending_number = clamp(t.to_int(), 0, 99)
+	_update_apply_state()
 
 
 func _build_handedness_section(vbox: VBoxContainer) -> void:
@@ -160,63 +195,135 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 	var label := Label.new()
 	label.text = "Shoots:"
 	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", Color.WHITE)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(label)
 
-	var left_btn := Button.new()
-	left_btn.text = "Left"
-	left_btn.toggle_mode = true
-	left_btn.button_pressed = PlayerPrefs.is_left_handed
-	left_btn.custom_minimum_size = Vector2(90, 48)
-	left_btn.add_theme_font_size_override("font_size", 18)
-	MenuStyle.wire_hover_scale(left_btn)
-	SoundManager.wire_button(left_btn)
-	row.add_child(left_btn)
+	_left_btn = Button.new()
+	_left_btn.text = "Left"
+	_left_btn.toggle_mode = true
+	_left_btn.custom_minimum_size = Vector2(90, 48)
+	_left_btn.add_theme_font_size_override("font_size", 18)
+	MenuStyle.wire_hover_scale(_left_btn)
+	SoundManager.wire_button(_left_btn)
+	row.add_child(_left_btn)
 
-	var right_btn := Button.new()
-	right_btn.text = "Right"
-	right_btn.toggle_mode = true
-	right_btn.button_pressed = not PlayerPrefs.is_left_handed
-	right_btn.custom_minimum_size = Vector2(90, 48)
-	right_btn.add_theme_font_size_override("font_size", 18)
-	MenuStyle.wire_hover_scale(right_btn)
-	SoundManager.wire_button(right_btn)
-	row.add_child(right_btn)
+	_right_btn = Button.new()
+	_right_btn.text = "Right"
+	_right_btn.toggle_mode = true
+	_right_btn.custom_minimum_size = Vector2(90, 48)
+	_right_btn.add_theme_font_size_override("font_size", 18)
+	MenuStyle.wire_hover_scale(_right_btn)
+	SoundManager.wire_button(_right_btn)
+	row.add_child(_right_btn)
 
-	NetworkManager.local_is_left_handed = PlayerPrefs.is_left_handed
-
-	left_btn.toggled.connect(func(pressed: bool) -> void:
-		if not pressed and not right_btn.button_pressed:
-			left_btn.button_pressed = true
+	_left_btn.toggled.connect(func(pressed: bool) -> void:
+		if not pressed and not _right_btn.button_pressed:
+			_left_btn.button_pressed = true
 			return
-		right_btn.button_pressed = not pressed
-		_apply_handedness(pressed))
-	right_btn.toggled.connect(func(pressed: bool) -> void:
-		if not pressed and not left_btn.button_pressed:
-			right_btn.button_pressed = true
+		_right_btn.button_pressed = not pressed
+		_pending_is_left = pressed
+		_update_apply_state())
+	_right_btn.toggled.connect(func(pressed: bool) -> void:
+		if not pressed and not _left_btn.button_pressed:
+			_right_btn.button_pressed = true
 			return
-		left_btn.button_pressed = not pressed
-		_apply_handedness(not pressed))
+		_left_btn.button_pressed = not pressed
+		_pending_is_left = not pressed
+		_update_apply_state())
 
 
-func _apply_handedness(is_left: bool) -> void:
-	NetworkManager.local_is_left_handed = is_left
-	PlayerPrefs.is_left_handed = is_left
+func _build_action_row(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	_apply_btn = Button.new()
+	_apply_btn.text = "Apply"
+	_apply_btn.theme_type_variation = &"ButtonPrimary"
+	_apply_btn.custom_minimum_size = Vector2(140, 44)
+	_apply_btn.add_theme_font_size_override("font_size", 18)
+	_apply_btn.pressed.connect(_apply)
+	SoundManager.wire_button(_apply_btn)
+	row.add_child(_apply_btn)
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.custom_minimum_size = Vector2(140, 44)
+	cancel_btn.add_theme_font_size_override("font_size", 18)
+	cancel_btn.pressed.connect(_cancel)
+	SoundManager.wire_button(cancel_btn)
+	row.add_child(cancel_btn)
+
+
+# Apply is disabled when (a) nothing changed, or (b) any field is invalid.
+func _update_apply_state() -> void:
+	if _apply_btn == null:
+		return
+	var changed: bool = (_pending_name != _snapshot.get("name", "")
+		or _pending_number != _snapshot.get("number", 0)
+		or _pending_is_left != _snapshot.get("is_left", false))
+	_apply_btn.disabled = not changed or not _name_valid or not _number_valid
+
+
+func _apply() -> void:
+	if not _name_valid or not _number_valid:
+		return
+	if _pending_name != _snapshot.get("name", ""):
+		PlayerPrefs.player_name = _pending_name
+		NetworkManager.local_player_name = _pending_name
+		name_changed.emit(_pending_name)
+	if _pending_number != _snapshot.get("number", 0):
+		PlayerPrefs.jersey_number = _pending_number
+		NetworkManager.local_jersey_number = _pending_number
+		jersey_number_changed.emit(_pending_number)
+	if _pending_is_left != _snapshot.get("is_left", false):
+		PlayerPrefs.is_left_handed = _pending_is_left
+		NetworkManager.local_is_left_handed = _pending_is_left
+		handedness_changed.emit(_pending_is_left)
 	PlayerPrefs.save()
-	handedness_changed.emit(is_left)
+	visible = false
+
+
+# Cancel restores form controls to snapshot values so re-opening shows the
+# saved state, not the abandoned edits.
+func _cancel() -> void:
+	_restore_from_snapshot()
+	visible = false
+
+
+func _restore_from_snapshot() -> void:
+	_pending_name = _snapshot.get("name", "")
+	_pending_number = _snapshot.get("number", 0)
+	_pending_is_left = _snapshot.get("is_left", false)
+	_name_field.text = _pending_name
+	_number_field.text = str(_pending_number)
+	_left_btn.button_pressed = _pending_is_left
+	_right_btn.button_pressed = not _pending_is_left
+	_name_warning.visible = false
+	_number_warning.visible = false
+	_name_valid = true
+	_number_valid = true
+	_update_apply_state()
 
 
 func _on_overlay_clicked(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
-		visible = false
+		_cancel()
 
 
 func open() -> void:
+	_snapshot = {
+		"name": PlayerPrefs.player_name,
+		"number": PlayerPrefs.jersey_number,
+		"is_left": PlayerPrefs.is_left_handed,
+	}
+	_restore_from_snapshot()
 	visible = true
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if visible and event.is_action_pressed(&"ui_cancel"):
-		visible = false
+		_cancel()
 		get_viewport().set_input_as_handled()

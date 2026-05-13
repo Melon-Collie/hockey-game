@@ -12,7 +12,7 @@ func _ready() -> void:
 
 	var overlay := ColorRect.new()
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	overlay.color = Color(0.0, 0.0, 0.0, 0.6)
+	overlay.color = MenuStyle.SCRIM
 	add_child(overlay)
 
 	var panel := PanelContainer.new()

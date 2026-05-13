@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d21bdmwb7pdxh"
-path="res://.godot/imported/menu_bg.png-3906063022fa3c81090e3c663f8866b0.ctex"
+uid="uid://cek7pndq7vuje"
+path="res://.godot/imported/Mitts_ice_background.png-58ca951cd91fc450ca0a4dad04556c72.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://Assets/menu_bg.png"
-dest_files=["res://.godot/imported/menu_bg.png-3906063022fa3c81090e3c663f8866b0.ctex"]
+source_file="res://docs/Mitts_ice_background.png"
+dest_files=["res://.godot/imported/Mitts_ice_background.png-58ca951cd91fc450ca0a4dad04556c72.ctex"]
 
 [params]
 

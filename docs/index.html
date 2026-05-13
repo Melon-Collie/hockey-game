@@ -32,16 +32,7 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: var(--text-body);
 
-      background: #0a0a10 url('menu_bg.png') center / cover no-repeat fixed;
-    }
-
-    /* dark overlay so text stays readable over the image */
-    body::before {
-      content: '';
-      position: fixed;
-      inset: 0;
-      background: rgba(8, 8, 16, 0.58);
-      pointer-events: none;
+      background: #0a0a10;
     }
 
     .card {
@@ -57,11 +48,19 @@
     }
 
     h1 {
-      font-size: clamp(2.8rem, 9vw, 5.5rem);
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      color: var(--text-title);
-      text-shadow: 0 0 40px rgba(153, 209, 255, 0.35);
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+
+    .logo {
+      display: block;
+      width: clamp(280px, 70%, 440px);
+      height: auto;
+      margin: 0 auto;
+      filter: drop-shadow(0 0 30px rgba(153, 209, 255, 0.25));
     }
 
     .subtitle {
@@ -128,6 +127,7 @@
 <body>
   <div class="card">
     <h1>Mitts</h1>
+    <img class="logo" src="Mitts_logo_full.png" alt="Mitts" />
     <p class="subtitle">3v3 arcade hockey &nbsp;·&nbsp; Online multiplayer</p>
     <p class="version" id="version">dev</p>
 

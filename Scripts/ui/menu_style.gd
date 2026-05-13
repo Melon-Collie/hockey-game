@@ -17,29 +17,48 @@ class_name MenuStyle
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 
-# Ice-blue accent family
-const ICE         := Color(0.60, 0.82, 1.00, 1.00)
-const ICE_MID     := Color(0.40, 0.62, 0.85, 0.80)
-const ICE_DIM     := Color(0.35, 0.55, 0.78, 0.55)
-const ICE_HOVER   := Color(0.62, 0.84, 1.00, 0.95)
+# Primary brand accent — sampled from the Mitts logo's skater silhouette
+# highlights (#C0D8E0). Used as the primary CTA fill and key accents.
+const TEAL        := Color(0.753, 0.847, 0.878, 1.00)
+# Brighter highlight-tip variant (#DCEEF2) — primary-button hover, accent text.
+const TEAL_HOVER  := Color(0.863, 0.933, 0.949, 1.00)
+# Low-alpha brand teal — borders, focus rings, separators. Replaces the
+# previous grey-teal so borders are on-brand instead of just "dark cool."
+const TEAL_DIM    := Color(0.753, 0.847, 0.878, 0.28)
+# Very low-alpha brand teal — ghost-button hover fill, hover-glow surfaces.
+const TEAL_GLOW   := Color(0.753, 0.847, 0.878, 0.14)
 
-# Text
-const TEXT_TITLE  := Color(0.88, 0.95, 1.00, 1.00)
-const TEXT_BODY   := Color(1.00, 1.00, 1.00, 1.00)
-const TEXT_DIM    := Color(0.55, 0.62, 0.72, 1.00)
-const TEXT_SEP    := Color(0.28, 0.32, 0.45, 1.00)
+# Text — three weights, all on dark surfaces
+const TEXT_TITLE  := Color(0.941, 0.965, 0.984, 1.00)  # near-white, for h1/titles
+const TEXT_BODY   := Color(0.941, 0.965, 0.984, 1.00)
+const TEXT_DIM    := Color(0.659, 0.710, 0.780, 1.00)  # cool grey, secondary
+const TEXT_MUTED  := Color(0.369, 0.420, 0.490, 1.00)  # quiet, tertiary
+const TEXT_SEP    := Color(0.18, 0.22, 0.28, 1.00)     # 1px divider lines
 
-# Surfaces
-const PANEL_BG    := Color(0.10, 0.10, 0.14, 0.88)
-const HUD_BG      := Color(0.07, 0.07, 0.09, 0.92)
+# Dark text used *on* teal fill — primary button label.
+const ON_TEAL     := Color(0.055, 0.086, 0.125, 1.00)
 
-# Button fill states (referenced by ad-hoc styleboxes outside the theme system)
-const BTN_FILL    := Color(0.10, 0.14, 0.22, 0.80)
-const BTN_HOVER   := Color(0.14, 0.20, 0.34, 0.92)
-const BTN_PRESS   := Color(0.07, 0.10, 0.18, 1.00)
+# Surfaces — solid (alpha 1.0). Same value renders consistently against the
+# ice background and against the popup scrim, which is the point.
+const PANEL_BG    := Color(0.067, 0.094, 0.141, 1.00)  # #111824 — true dark navy
+const SURFACE_ELEV := Color(0.102, 0.137, 0.192, 1.00) # #1A2331 — hover/nested
+const SURFACE_INPUT := Color(0.039, 0.063, 0.102, 1.00) # #0A101A — input wells
+const HUD_BG      := Color(0.07, 0.07, 0.09, 0.92)     # in-game scorebug (unchanged)
 
-# Non-blue accents
+# Modal scrim alpha — single source of truth so every popup uses the same dim.
+const SCRIM       := Color(0.024, 0.039, 0.071, 0.55)
+
+# Legacy button-state fills — referenced by ad-hoc styleboxes in main_menu.gd's
+# player-card hover and a few places that don't go through the theme system.
+# The themed Button (= ghost) uses transparent + teal-glow on hover instead.
+const BTN_FILL    := Color(0.067, 0.094, 0.141, 0.00)  # ghost: transparent at rest
+const BTN_HOVER   := SURFACE_ELEV
+const BTN_PRESS   := Color(0.039, 0.063, 0.102, 1.00)
+
+# Warm accent — goals, low-clock, game-over title (never on the main menu).
 const GOLD        := Color(1.00, 0.85, 0.20, 1.00)
+# Destructive hover — Exit Game tertiary button, etc.
+const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 
 
 # ── HUD ice-overlay (3D-on-ice elements: rings, glyphs, reticles) ─────────────
@@ -72,7 +91,7 @@ static func panel(corner: int = 6, margin: int = 32) -> StyleBoxFlat:
 	s.bg_color = PANEL_BG
 	s.set_corner_radius_all(corner)
 	s.set_content_margin_all(margin)
-	s.border_color = ICE_DIM
+	s.border_color = TEAL_DIM
 	s.set_border_width_all(1)
 	return s
 
@@ -86,7 +105,7 @@ static func close_button() -> Button:
 	btn.add_theme_font_size_override("font_size", 22)
 	btn.add_theme_color_override("font_color",         TEXT_DIM)
 	btn.add_theme_color_override("font_hover_color",   TEXT_BODY)
-	btn.add_theme_color_override("font_pressed_color", ICE)
+	btn.add_theme_color_override("font_pressed_color", TEAL)
 	var empty := StyleBoxEmpty.new()
 	var hover := StyleBoxFlat.new()
 	hover.bg_color = Color(BTN_HOVER.r, BTN_HOVER.g, BTN_HOVER.b, 0.65)
