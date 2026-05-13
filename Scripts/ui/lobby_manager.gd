@@ -100,9 +100,14 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(root)
 
-	var bg := ColorRect.new()
-	bg.color = Color(0.04, 0.04, 0.06, 1.0)
+	# Same ice texture as the main menu — visually ties the lobby to where the
+	# player just came from. Stretch covers any aspect ratio without warping.
+	var bg := TextureRect.new()
+	bg.texture = load("res://Assets/Mitts_ice_background.png")
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(bg)
 
 	var panel_style := MenuStyle.panel()
@@ -155,12 +160,14 @@ func _build_ui() -> void:
 
 	if NetworkManager.is_host:
 		_start_btn = _btn("Start Game")
+		_start_btn.theme_type_variation = &"ButtonPrimary"
 		_start_btn.pressed.connect(_on_start_pressed)
 		_start_btn.disabled = true
 		_start_btn.modulate = Color(1, 1, 1, 0.5)
 		btn_box.add_child(_start_btn)
 	else:
 		_ready_btn = _btn("Ready")
+		_ready_btn.theme_type_variation = &"ButtonPrimary"
 		_ready_btn.pressed.connect(_on_ready_pressed)
 		btn_box.add_child(_ready_btn)
 

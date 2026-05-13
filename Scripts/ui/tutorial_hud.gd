@@ -95,7 +95,7 @@ func _build() -> void:
 	# Row 4: hint (hidden until hint delay expires)
 	_hint_label = Label.new()
 	_hint_label.add_theme_font_size_override("font_size", 11)
-	_hint_label.add_theme_color_override("font_color", MenuStyle.ICE_MID)
+	_hint_label.add_theme_color_override("font_color", MenuStyle.TEAL_DIM)
 	_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hint_label.visible = false
 	vbox.add_child(_hint_label)
@@ -144,7 +144,7 @@ func _build_complete_panel() -> void:
 	heading.text = "Tutorial Complete!"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.add_theme_font_size_override("font_size", 36)
-	heading.add_theme_color_override("font_color", MenuStyle.ICE)
+	heading.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
 	vbox.add_child(heading)
 
 	var sub := Label.new()

@@ -5,13 +5,17 @@ class_name CareerStatsScreen extends Control
 # and surface their own loading / empty states.
 
 var _reporter := CareerStatsReporter.new()
-var _tabs: TabContainer = null
 
-# Career Totals tab (existing layout, just moved into a tab).
+# Hand-rolled tab switcher (matches OptionsPanel pattern); avoids Godot's
+# native TabContainer which doesn't pick up our themed TabButton variations.
+var _tab_btns: Array[Button] = []
+var _tab_contents: Array[Control] = []
+
+# Career Totals tab.
 var _totals_content: VBoxContainer = null
 var _totals_status: Label = null
 
-# Recent Games tab (new). Each game renders as a card panel with score,
+# Recent Games tab. Each game renders as a card panel with score,
 # period breakdown, team-grouped player rows, and a Watch Replay button.
 var _recent_content: VBoxContainer = null
 var _recent_status: Label = null
@@ -23,7 +27,7 @@ func _ready() -> void:
 
 	var overlay := ColorRect.new()
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	overlay.color = Color(0.0, 0.0, 0.0, 0.72)
+	overlay.color = MenuStyle.SCRIM
 	add_child(overlay)
 
 	var center := CenterContainer.new()
@@ -44,7 +48,7 @@ func _ready() -> void:
 
 	var title := Label.new()
 	title.text = "Career"
-	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
@@ -53,18 +57,59 @@ func _ready() -> void:
 	close_btn.pressed.connect(hide)
 	header.add_child(close_btn)
 
-	var sep := HSeparator.new()
-	sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
-	vbox.add_child(sep)
-
-	_tabs = TabContainer.new()
-	_tabs.custom_minimum_size = Vector2(0, 520)
-	vbox.add_child(_tabs)
-
-	_build_totals_tab()
-	_build_recent_games_tab()
+	vbox.add_child(_build_tab_switcher())
 
 	hide()
+
+
+# Mirrors OptionsPanel._build_tab_switcher: a horizontal Button bar tagged
+# with the TabButton/TabButtonActive theme variations, a separator line, then
+# content panels that swap by visibility.
+func _build_tab_switcher() -> Control:
+	var wrapper := VBoxContainer.new()
+	wrapper.add_theme_constant_override("separation", 0)
+
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 0)
+	wrapper.add_child(bar)
+
+	var sep := ColorRect.new()
+	sep.color = MenuStyle.TEXT_SEP
+	sep.custom_minimum_size = Vector2(0, 1)
+	wrapper.add_child(sep)
+
+	var content_margin := MarginContainer.new()
+	content_margin.add_theme_constant_override("margin_top", 16)
+	content_margin.add_theme_constant_override("margin_bottom", 8)
+	wrapper.add_child(content_margin)
+
+	var totals_tab := _build_totals_tab()
+	var recent_tab := _build_recent_games_tab()
+	_tab_contents = [totals_tab, recent_tab]
+	content_margin.add_child(totals_tab)
+	content_margin.add_child(recent_tab)
+
+	var labels: Array[String] = ["Career Totals", "Recent Games"]
+	for i: int in labels.size():
+		var btn := Button.new()
+		btn.text = labels[i]
+		btn.flat = true
+		btn.custom_minimum_size = Vector2(140, 40)
+		btn.add_theme_font_size_override("font_size", 18)
+		bar.add_child(btn)
+		_tab_btns.append(btn)
+		SoundManager.wire_button(btn)
+		btn.pressed.connect(_activate_tab.bind(i))
+
+	_activate_tab(0)
+	return wrapper
+
+
+func _activate_tab(idx: int) -> void:
+	for i: int in _tab_contents.size():
+		_tab_contents[i].visible = (i == idx)
+	for i: int in _tab_btns.size():
+		MenuStyle.apply_tab_button(_tab_btns[i], i == idx)
 
 
 func open() -> void:
@@ -81,11 +126,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # ── Totals tab ───────────────────────────────────────────────────────────────
 
-func _build_totals_tab() -> void:
+func _build_totals_tab() -> Control:
 	var tab := VBoxContainer.new()
-	tab.name = "Career Totals"
 	tab.add_theme_constant_override("separation", 6)
-	_tabs.add_child(tab)
 
 	_totals_status = Label.new()
 	_totals_status.text = "Loading..."
@@ -96,6 +139,7 @@ func _build_totals_tab() -> void:
 	_totals_content = VBoxContainer.new()
 	_totals_content.add_theme_constant_override("separation", 6)
 	tab.add_child(_totals_content)
+	return tab
 
 
 func _refresh_totals() -> void:
@@ -112,24 +156,24 @@ func _on_totals_received(totals: Dictionary) -> void:
 		_totals_status.visible = true
 		return
 	_clear_totals_content()
-	_add_totals_row("Games Played",  str(totals.get("games_played", 0)))
-	_add_totals_row("Record (W-L)",  "%d-%d" % [totals.get("wins", 0), totals.get("losses", 0)])
+	_add_totals_row("Games Played",  str(_safe_int(totals.get("games_played", 0))))
+	_add_totals_row("Record (W-L)",  "%d-%d" % [_safe_int(totals.get("wins", 0)), _safe_int(totals.get("losses", 0))])
 	_add_totals_separator()
-	_add_totals_row("Goals",         str(totals.get("goals", 0)))
-	_add_totals_row("Assists",       str(totals.get("assists", 0)))
-	_add_totals_row("Points",        str(totals.get("points", 0)))
-	_add_totals_row("Shots on Goal", str(totals.get("shots_on_goal", 0)))
-	_add_totals_row("Hits",          str(totals.get("hits", 0)))
-	_add_totals_row("Shots Blocked", str(totals.get("shots_blocked", 0)))
+	_add_totals_row("Goals",         str(_safe_int(totals.get("goals", 0))))
+	_add_totals_row("Assists",       str(_safe_int(totals.get("assists", 0))))
+	_add_totals_row("Points",        str(_safe_int(totals.get("points", 0))))
+	_add_totals_row("Shots on Goal", str(_safe_int(totals.get("shots_on_goal", 0))))
+	_add_totals_row("Hits",          str(_safe_int(totals.get("hits", 0))))
+	_add_totals_row("Shots Blocked", str(_safe_int(totals.get("shots_blocked", 0))))
 	_add_totals_separator()
-	_add_totals_row("+/-",           "%+d" % [totals.get("plus_minus", 0)])
-	_add_totals_row("Goals For",     str(totals.get("goals_for", 0)))
-	_add_totals_row("Goals Against", str(totals.get("goals_against", 0)))
+	_add_totals_row("+/-",           "%+d" % _safe_int(totals.get("plus_minus", 0)))
+	_add_totals_row("Goals For",     str(_safe_int(totals.get("goals_for", 0))))
+	_add_totals_row("Goals Against", str(_safe_int(totals.get("goals_against", 0))))
 	_add_totals_separator()
 	_add_totals_row("Time on Ice",   _format_toi(totals.get("toi_seconds", 0)))
-	_add_totals_row("G/60",          str(totals.get("goals_per_60", 0.0)))
-	_add_totals_row("A/60",          str(totals.get("assists_per_60", 0.0)))
-	_add_totals_row("P/60",          str(totals.get("points_per_60", 0.0)))
+	_add_totals_row("G/60",          "%.2f" % _safe_float(totals.get("goals_per_60", 0.0)))
+	_add_totals_row("A/60",          "%.2f" % _safe_float(totals.get("assists_per_60", 0.0)))
+	_add_totals_row("P/60",          "%.2f" % _safe_float(totals.get("points_per_60", 0.0)))
 
 
 func _add_totals_row(label_text: String, value_text: String) -> void:
@@ -159,11 +203,10 @@ func _clear_totals_content() -> void:
 
 # ── Recent Games tab ─────────────────────────────────────────────────────────
 
-func _build_recent_games_tab() -> void:
+func _build_recent_games_tab() -> Control:
 	var tab := VBoxContainer.new()
-	tab.name = "Recent Games"
 	tab.add_theme_constant_override("separation", 6)
-	_tabs.add_child(tab)
+	tab.custom_minimum_size = Vector2(0, 520)
 
 	_recent_status = Label.new()
 	_recent_status.text = "Loading..."
@@ -178,8 +221,9 @@ func _build_recent_games_tab() -> void:
 
 	_recent_content = VBoxContainer.new()
 	_recent_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_recent_content.add_theme_constant_override("separation", 10)
+	_recent_content.add_theme_constant_override("separation", 14)
 	scroll.add_child(_recent_content)
+	return tab
 
 
 func _refresh_recent_games() -> void:
@@ -208,13 +252,8 @@ func _clear_recent_content() -> void:
 # Card layout: date · score line | period breakdown | separator |
 # home roster grid | away roster grid | Watch Replay button.
 func _build_game_card(game: Dictionary) -> Control:
-	var card_style := StyleBoxFlat.new()
-	card_style.bg_color = Color(0.10, 0.10, 0.13)
-	card_style.set_corner_radius_all(4)
-	card_style.set_content_margin_all(12)
-
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", card_style)
+	card.add_theme_stylebox_override("panel", MenuStyle.panel(4, 12))
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var vbox := VBoxContainer.new()
@@ -240,8 +279,17 @@ func _build_game_card(game: Dictionary) -> Control:
 			home_players.append(p)
 		else:
 			away_players.append(p)
-	vbox.add_child(_build_player_table(home_players, "HOME"))
-	vbox.add_child(_build_player_table(away_players, "AWAY"))
+	if not home_players.is_empty():
+		vbox.add_child(_build_player_table(home_players, "HOME"))
+	if not away_players.is_empty():
+		vbox.add_child(_build_player_table(away_players, "AWAY"))
+	# Bots don't record stats; mention it so the screen doesn't look broken.
+	if home_players.is_empty() or away_players.is_empty():
+		var note := Label.new()
+		note.text = "Bot opponents — no individual stats recorded."
+		note.add_theme_font_size_override("font_size", 11)
+		note.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+		vbox.add_child(note)
 
 	var bottom := HBoxContainer.new()
 	bottom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -268,7 +316,7 @@ func _build_score_line(game: Dictionary) -> Control:
 	var score_label := Label.new()
 	score_label.text = "%d — %d" % [_safe_int(game.get("home_score", 0)), _safe_int(game.get("away_score", 0))]
 	score_label.add_theme_font_size_override("font_size", 18)
-	score_label.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	score_label.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
 	hbox.add_child(score_label)
 
 	return hbox
@@ -417,6 +465,14 @@ static func _safe_int(v: Variant, default: int = 0) -> int:
 		return v
 	if v is float:
 		return int(v)
+	return default
+
+
+static func _safe_float(v: Variant, default: float = 0.0) -> float:
+	if v is float:
+		return v
+	if v is int:
+		return float(v)
 	return default
 
 

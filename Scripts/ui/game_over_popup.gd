@@ -6,7 +6,7 @@ signal host_action_pressed
 signal disconnect_pressed
 signal exit_pressed
 
-const _GOLD := Color(1.0, 0.85, 0.2, 1.0)
+const _GOLD := MenuStyle.GOLD
 const _DIM := Color(0.62, 0.62, 0.68, 1.0)
 
 var _rematch_btn: Button = null

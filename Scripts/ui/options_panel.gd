@@ -4,6 +4,7 @@ extends VBoxContainer
 signal close_requested
 
 var _res_row: HBoxContainer = null
+var _res_label: Label = null   # dimmed when fullscreen is on (resolution disabled)
 var _fs_check: CheckButton = null
 var _mute_check: CheckButton = null
 var _volume_slider: HSlider = null
@@ -33,7 +34,16 @@ var _export_status_label: Label = null
 
 const _WHITE  := MenuStyle.TEXT_BODY
 const _DIM    := MenuStyle.TEXT_DIM
+const _MUTED  := MenuStyle.TEXT_MUTED
 const _SEP    := MenuStyle.TEXT_SEP
+
+# Two-column row layout: label column left, control(s) right. Every tab uses
+# the same widths so labels and controls line up vertically across rows.
+const _LABEL_COL_WIDTH := 180
+const _LABEL_FONT_SIZE := 17
+const _VALUE_FONT_SIZE := 14
+const _SECTION_FONT_SIZE := 11
+const _VALUE_COL_WIDTH := 56
 const _REBINDABLE_ACTIONS: Array = [
 	{"action": "move_up",        "label": "Move Up"},
 	{"action": "move_down",      "label": "Move Down"},
@@ -77,6 +87,7 @@ func _ready() -> void:
 	add_child(btn_row)
 
 	_apply_btn = _make_small_button("Apply")
+	_apply_btn.theme_type_variation = &"ButtonPrimary"
 	_apply_btn.pressed.connect(_on_apply_pressed)
 	_apply_btn.disabled = true
 	btn_row.add_child(_apply_btn)
@@ -142,7 +153,11 @@ func _build_tab_switcher() -> Control:
 	sep.custom_minimum_size = Vector2(0, 1)
 	wrapper.add_child(sep)
 
+	# Pin the tab-content viewport so the popup doesn't resize when switching
+	# between tabs of different heights. Sized to fit the tallest tab (Input —
+	# 10 rebind rows + sensitivity + sticky). Bump if a tab outgrows it.
 	var content_margin := MarginContainer.new()
+	content_margin.custom_minimum_size = Vector2(500, 520)
 	content_margin.add_theme_constant_override("margin_top", 16)
 	content_margin.add_theme_constant_override("margin_bottom", 8)
 	content_margin.add_theme_constant_override("margin_left", 0)
@@ -163,8 +178,9 @@ func _build_tab_switcher() -> Control:
 		var btn := Button.new()
 		btn.text = ["Game", "Video", "Audio", "Input"][i]
 		btn.flat = true
-		btn.custom_minimum_size = Vector2(100, 40)
-		btn.add_theme_font_size_override("font_size", 18)
+		btn.custom_minimum_size = Vector2(0, 40)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.add_theme_font_size_override("font_size", 17)
 		bar.add_child(btn)
 		_tab_btns.append(btn)
 		SoundManager.wire_button(btn)
@@ -186,405 +202,222 @@ func _apply_tab_style(btn: Button, active: bool) -> void:
 	MenuStyle.apply_tab_button(btn, active)
 
 func _build_video_tab() -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 14)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	var box := _tab_box()
 
-	_res_row = HBoxContainer.new()
-	_res_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	_res_row.add_theme_constant_override("separation", 12)
+	box.add_child(_section_header("Display"))
 
-	var res_label := Label.new()
-	res_label.text = "Resolution:"
-	res_label.add_theme_font_size_override("font_size", 20)
-	res_label.add_theme_color_override("font_color", _WHITE)
-	res_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_res_row.add_child(res_label)
+	_fs_check = CheckButton.new()
+	_fs_check.set_pressed_no_signal(PlayerPrefs.is_fullscreen)
+	SoundManager.wire_button(_fs_check)
+	_fs_check.toggled.connect(_on_fullscreen_toggled)
+	box.add_child(_field_row("Fullscreen", _fs_check))
 
 	_res_btn = OptionButton.new()
-	_res_btn.custom_minimum_size = Vector2(160, 48)
-	_res_btn.add_theme_font_size_override("font_size", 18)
+	_res_btn.custom_minimum_size = Vector2(180, 40)
+	_res_btn.add_theme_font_size_override("font_size", 15)
 	for i: int in PlayerPrefs.RESOLUTIONS.size():
 		var r: Vector2i = PlayerPrefs.RESOLUTIONS[i]
 		_res_btn.add_item("%dx%d" % [r.x, r.y], i)
 	_res_btn.selected = PlayerPrefs.resolution_index
 	_res_btn.item_selected.connect(_on_resolution_selected)
-	_res_row.add_child(_res_btn)
-
-	var fs_row := HBoxContainer.new()
-	fs_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	fs_row.add_theme_constant_override("separation", 12)
-
-	var fs_label := Label.new()
-	fs_label.text = "Fullscreen:"
-	fs_label.add_theme_font_size_override("font_size", 20)
-	fs_label.add_theme_color_override("font_color", _WHITE)
-	fs_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	fs_row.add_child(fs_label)
-
-	_fs_check = CheckButton.new()
-	_fs_check.set_pressed_no_signal(PlayerPrefs.is_fullscreen)
-	_fs_check.add_theme_font_size_override("font_size", 18)
-	SoundManager.wire_button(_fs_check)
-	_fs_check.toggled.connect(_on_fullscreen_toggled)
-	fs_row.add_child(_fs_check)
-
-	box.add_child(fs_row)
-	_res_row.visible = not PlayerPrefs.is_fullscreen
+	_res_row = _field_row("Resolution", _res_btn)
+	# Cache the label so we can dim it when the resolution row is disabled.
+	_res_label = _res_row.get_child(0) as Label
 	box.add_child(_res_row)
+	_apply_res_disabled_state(PlayerPrefs.is_fullscreen)
 
-	var vsync_row := HBoxContainer.new()
-	vsync_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	vsync_row.add_theme_constant_override("separation", 12)
-	var vsync_label := Label.new()
-	vsync_label.text = "VSync:"
-	vsync_label.add_theme_font_size_override("font_size", 20)
-	vsync_label.add_theme_color_override("font_color", _WHITE)
-	vsync_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	vsync_row.add_child(vsync_label)
 	_vsync_check = CheckButton.new()
 	_vsync_check.set_pressed_no_signal(PlayerPrefs.vsync_enabled)
-	_vsync_check.add_theme_font_size_override("font_size", 18)
 	SoundManager.wire_button(_vsync_check)
 	_vsync_check.toggled.connect(_on_vsync_toggled)
-	vsync_row.add_child(_vsync_check)
-	box.add_child(vsync_row)
+	box.add_child(_field_row("VSync", _vsync_check))
 
-	var fps_row := HBoxContainer.new()
-	fps_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	fps_row.add_theme_constant_override("separation", 12)
-	var fps_label := Label.new()
-	fps_label.text = "FPS Cap:"
-	fps_label.add_theme_font_size_override("font_size", 20)
-	fps_label.add_theme_color_override("font_color", _WHITE)
-	fps_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	fps_row.add_child(fps_label)
 	_fps_btn = OptionButton.new()
-	_fps_btn.custom_minimum_size = Vector2(140, 48)
-	_fps_btn.add_theme_font_size_override("font_size", 18)
+	_fps_btn.custom_minimum_size = Vector2(140, 40)
+	_fps_btn.add_theme_font_size_override("font_size", 15)
 	for label: String in ["30", "60", "120", "144", "240", "Unlimited"]:
 		_fps_btn.add_item(label)
 	_fps_btn.selected = PlayerPrefs.fps_cap_index
 	_fps_btn.item_selected.connect(_on_fps_cap_selected)
-	fps_row.add_child(_fps_btn)
-	box.add_child(fps_row)
+	box.add_child(_field_row("FPS Cap", _fps_btn))
 
-	var bright_row := HBoxContainer.new()
-	bright_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	bright_row.add_theme_constant_override("separation", 12)
-	var bright_label := Label.new()
-	bright_label.text = "Brightness:"
-	bright_label.add_theme_font_size_override("font_size", 20)
-	bright_label.add_theme_color_override("font_color", _WHITE)
-	bright_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	bright_row.add_child(bright_label)
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Image"))
+
 	_brightness_slider = HSlider.new()
 	_brightness_slider.min_value = 0.5
 	_brightness_slider.max_value = 1.5
 	_brightness_slider.step = 0.05
 	_brightness_slider.value = PlayerPrefs.brightness
-	_brightness_slider.custom_minimum_size = Vector2(200, 32)
 	_brightness_slider.value_changed.connect(_on_brightness_changed)
-	bright_row.add_child(_brightness_slider)
-	box.add_child(bright_row)
+	var bright_label := _value_label("%d%%" % int(PlayerPrefs.brightness * 100))
+	_brightness_slider.value_changed.connect(func(v: float) -> void: bright_label.text = "%d%%" % int(v * 100))
+	box.add_child(_slider_row("Brightness", _brightness_slider, bright_label))
 
 	return box
 
 func _build_audio_tab() -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 14)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	var box := _tab_box()
 
-	var volume_row := HBoxContainer.new()
-	volume_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	volume_row.add_theme_constant_override("separation", 12)
+	box.add_child(_section_header("Volume"))
 
-	var volume_label := Label.new()
-	volume_label.text = "Master:"
-	volume_label.add_theme_font_size_override("font_size", 20)
-	volume_label.add_theme_color_override("font_color", _WHITE)
-	volume_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	volume_label.custom_minimum_size = Vector2(80, 0)
-	volume_row.add_child(volume_label)
+	_volume_slider = _make_volume_slider(PlayerPrefs.master_volume)
+	var master_val := _value_label("%d%%" % int(PlayerPrefs.master_volume * 100))
+	_volume_slider.value_changed.connect(func(v: float) -> void: master_val.text = "%d%%" % int(v * 100))
+	box.add_child(_slider_row("Master", _volume_slider, master_val))
 
-	_volume_slider = HSlider.new()
-	_volume_slider.min_value = 0.0
-	_volume_slider.max_value = 1.0
-	_volume_slider.step = 0.01
-	_volume_slider.value = PlayerPrefs.master_volume
-	_volume_slider.custom_minimum_size = Vector2(200, 32)
-	_volume_slider.value_changed.connect(_on_volume_changed)
-	volume_row.add_child(_volume_slider)
-	box.add_child(volume_row)
+	_sfx_slider = _make_volume_slider(PlayerPrefs.sfx_volume)
+	var sfx_val := _value_label("%d%%" % int(PlayerPrefs.sfx_volume * 100))
+	_sfx_slider.value_changed.connect(func(v: float) -> void: sfx_val.text = "%d%%" % int(v * 100))
+	box.add_child(_slider_row("SFX", _sfx_slider, sfx_val))
 
-	var sfx_row := HBoxContainer.new()
-	sfx_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	sfx_row.add_theme_constant_override("separation", 12)
-	var sfx_label := Label.new()
-	sfx_label.text = "SFX:"
-	sfx_label.add_theme_font_size_override("font_size", 20)
-	sfx_label.add_theme_color_override("font_color", _WHITE)
-	sfx_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	sfx_label.custom_minimum_size = Vector2(80, 0)
-	sfx_row.add_child(sfx_label)
-	_sfx_slider = HSlider.new()
-	_sfx_slider.min_value = 0.0
-	_sfx_slider.max_value = 1.0
-	_sfx_slider.step = 0.01
-	_sfx_slider.value = PlayerPrefs.sfx_volume
-	_sfx_slider.custom_minimum_size = Vector2(200, 32)
-	_sfx_slider.value_changed.connect(_on_volume_changed)
-	sfx_row.add_child(_sfx_slider)
-	box.add_child(sfx_row)
+	_ui_slider = _make_volume_slider(PlayerPrefs.ui_volume)
+	var ui_val := _value_label("%d%%" % int(PlayerPrefs.ui_volume * 100))
+	_ui_slider.value_changed.connect(func(v: float) -> void: ui_val.text = "%d%%" % int(v * 100))
+	box.add_child(_slider_row("UI", _ui_slider, ui_val))
 
-	var ui_row := HBoxContainer.new()
-	ui_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	ui_row.add_theme_constant_override("separation", 12)
-	var ui_label := Label.new()
-	ui_label.text = "UI:"
-	ui_label.add_theme_font_size_override("font_size", 20)
-	ui_label.add_theme_color_override("font_color", _WHITE)
-	ui_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	ui_label.custom_minimum_size = Vector2(80, 0)
-	ui_row.add_child(ui_label)
-	_ui_slider = HSlider.new()
-	_ui_slider.min_value = 0.0
-	_ui_slider.max_value = 1.0
-	_ui_slider.step = 0.01
-	_ui_slider.value = PlayerPrefs.ui_volume
-	_ui_slider.custom_minimum_size = Vector2(200, 32)
-	_ui_slider.value_changed.connect(_on_volume_changed)
-	ui_row.add_child(_ui_slider)
-	box.add_child(ui_row)
-
-	var mute_row := HBoxContainer.new()
-	mute_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	mute_row.add_theme_constant_override("separation", 12)
-
-	var mute_label := Label.new()
-	mute_label.text = "Mute:"
-	mute_label.add_theme_font_size_override("font_size", 20)
-	mute_label.add_theme_color_override("font_color", _WHITE)
-	mute_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	mute_row.add_child(mute_label)
+	box.add_child(_section_spacer())
 
 	_mute_check = CheckButton.new()
 	_mute_check.set_pressed_no_signal(PlayerPrefs.master_muted)
-	_mute_check.add_theme_font_size_override("font_size", 18)
 	SoundManager.wire_button(_mute_check)
 	_mute_check.toggled.connect(_on_mute_toggled)
-	mute_row.add_child(_mute_check)
-	box.add_child(mute_row)
+	box.add_child(_field_row("Mute All", _mute_check))
 
 	return box
 
-func _build_input_tab() -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 14)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	var sens_row := HBoxContainer.new()
-	sens_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	sens_row.add_theme_constant_override("separation", 12)
-	var sens_label := Label.new()
-	sens_label.text = "Mouse Sensitivity:"
-	sens_label.add_theme_font_size_override("font_size", 20)
-	sens_label.add_theme_color_override("font_color", _WHITE)
-	sens_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	sens_row.add_child(sens_label)
+# All three volume sliders share the same range / step / handler — factory
+# keeps the audio tab tidy.
+func _make_volume_slider(initial: float) -> HSlider:
+	var s := HSlider.new()
+	s.min_value = 0.0
+	s.max_value = 1.0
+	s.step = 0.01
+	s.value = initial
+	s.value_changed.connect(_on_volume_changed)
+	return s
+
+func _build_input_tab() -> Control:
+	var box := _tab_box()
+
+	box.add_child(_section_header("Mouse"))
+
 	_sens_slider = HSlider.new()
 	_sens_slider.min_value = 0.5
 	_sens_slider.max_value = 3.0
 	_sens_slider.step = 0.05
 	_sens_slider.value = PlayerPrefs.mouse_sensitivity
-	_sens_slider.custom_minimum_size = Vector2(160, 32)
 	_sens_slider.value_changed.connect(_on_sensitivity_changed)
-	sens_row.add_child(_sens_slider)
 	_sens_field = LineEdit.new()
 	_sens_field.text = "%.2f" % PlayerPrefs.mouse_sensitivity
-	_sens_field.custom_minimum_size = Vector2(64, 32)
-	_sens_field.add_theme_font_size_override("font_size", 18)
+	_sens_field.custom_minimum_size = Vector2(_VALUE_COL_WIDTH, 32)
+	_sens_field.add_theme_font_size_override("font_size", _VALUE_FONT_SIZE)
+	_sens_field.alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_sens_field.text_submitted.connect(_on_sensitivity_typed)
 	_sens_field.focus_exited.connect(func() -> void: _on_sensitivity_typed(_sens_field.text))
-	sens_row.add_child(_sens_field)
-	box.add_child(sens_row)
+	box.add_child(_slider_row("Sensitivity", _sens_slider, _sens_field))
 
-	var bind_lbl := Label.new()
-	bind_lbl.text = "Key Bindings"
-	bind_lbl.add_theme_font_size_override("font_size", 16)
-	bind_lbl.add_theme_color_override("font_color", _DIM)
-	bind_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(bind_lbl)
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Key Bindings"))
 
 	_pending_bindings = PlayerPrefs.bindings.duplicate(true)
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(320, 240)
+	scroll.custom_minimum_size = Vector2(0, 240)
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(scroll)
+
+	# Right margin keeps the rebind buttons from butting against the scrollbar.
+	var scroll_margin := MarginContainer.new()
+	scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_margin.add_theme_constant_override("margin_right", 12)
+	scroll.add_child(scroll_margin)
 
 	var grid := VBoxContainer.new()
 	grid.add_theme_constant_override("separation", 6)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(grid)
+	scroll_margin.add_child(grid)
 
 	for entry: Dictionary in _REBINDABLE_ACTIONS:
 		var action: String = entry.action
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		grid.add_child(row)
-
-		var lbl := Label.new()
-		lbl.text = entry.label
-		lbl.custom_minimum_size = Vector2(140, 0)
-		lbl.add_theme_font_size_override("font_size", 16)
-		lbl.add_theme_color_override("font_color", _WHITE)
-		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(lbl)
-
 		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(130, 32)
-		btn.add_theme_font_size_override("font_size", 15)
+		btn.custom_minimum_size = Vector2(140, 36)
+		btn.add_theme_font_size_override("font_size", 14)
 		btn.text = _binding_display(_pending_bindings.get(action, {}))
 		btn.pressed.connect(_on_bind_btn_pressed.bind(action))
 		SoundManager.wire_button(btn)
-		row.add_child(btn)
 		_binding_btns[action] = btn
+		grid.add_child(_field_row(entry.label, btn))
 
 	_conflict_label = Label.new()
 	_conflict_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_conflict_label.add_theme_font_size_override("font_size", 14)
-	_conflict_label.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3, 1.0))
+	_conflict_label.add_theme_font_size_override("font_size", 13)
+	_conflict_label.add_theme_color_override("font_color", MenuStyle.DANGER)
 	_conflict_label.text = ""
 	box.add_child(_conflict_label)
 
 	return box
 
 func _build_game_tab() -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 14)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	var box := _tab_box()
 
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
-
-	var lbl := Label.new()
-	lbl.text = "Always Attack Up:"
-	lbl.add_theme_font_size_override("font_size", 20)
-	lbl.add_theme_color_override("font_color", _WHITE)
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(lbl)
+	box.add_child(_section_header("Gameplay"))
 
 	_attack_up_check = CheckButton.new()
 	_attack_up_check.set_pressed_no_signal(PlayerPrefs.attack_up)
-	_attack_up_check.add_theme_font_size_override("font_size", 18)
 	SoundManager.wire_button(_attack_up_check)
 	_attack_up_check.toggled.connect(_on_attack_up_toggled)
-	row.add_child(_attack_up_check)
-	box.add_child(row)
+	box.add_child(_field_row("Always Attack Up", _attack_up_check))
 
-	var cam_row := HBoxContainer.new()
-	cam_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	cam_row.add_theme_constant_override("separation", 12)
-
-	var cam_label := Label.new()
-	cam_label.text = "Camera:"
-	cam_label.add_theme_font_size_override("font_size", 20)
-	cam_label.add_theme_color_override("font_color", _WHITE)
-	cam_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	cam_row.add_child(cam_label)
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Camera"))
 
 	_camera_mode_btn = OptionButton.new()
-	_camera_mode_btn.custom_minimum_size = Vector2(220, 48)
-	_camera_mode_btn.add_theme_font_size_override("font_size", 16)
+	_camera_mode_btn.custom_minimum_size = Vector2(220, 40)
+	_camera_mode_btn.add_theme_font_size_override("font_size", 15)
 	for i: int in PlayerPrefs.CAMERA_MODE_LABELS.size():
 		_camera_mode_btn.add_item(PlayerPrefs.CAMERA_MODE_LABELS[i], i)
 	_camera_mode_btn.selected = PlayerPrefs.camera_mode
 	_camera_mode_btn.item_selected.connect(_on_camera_mode_selected)
-	cam_row.add_child(_camera_mode_btn)
-	box.add_child(cam_row)
-
-	var fov_row := HBoxContainer.new()
-	fov_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	fov_row.add_theme_constant_override("separation", 12)
-
-	var fov_label_static := Label.new()
-	fov_label_static.text = "FOV:"
-	fov_label_static.add_theme_font_size_override("font_size", 20)
-	fov_label_static.add_theme_color_override("font_color", _WHITE)
-	fov_label_static.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	fov_row.add_child(fov_label_static)
+	box.add_child(_field_row("Mode", _camera_mode_btn))
 
 	_fov_slider = HSlider.new()
 	_fov_slider.min_value = PlayerPrefs.FOV_MIN
 	_fov_slider.max_value = PlayerPrefs.FOV_MAX
 	_fov_slider.step = 1.0
 	_fov_slider.value = PlayerPrefs.fov
-	_fov_slider.custom_minimum_size = Vector2(160, 32)
 	_fov_slider.value_changed.connect(_on_fov_changed)
-	fov_row.add_child(_fov_slider)
-
-	_fov_label = Label.new()
-	_fov_label.text = "%d°" % int(PlayerPrefs.fov)
-	_fov_label.add_theme_font_size_override("font_size", 18)
-	_fov_label.add_theme_color_override("font_color", _DIM)
-	_fov_label.custom_minimum_size = Vector2(40, 0)
-	_fov_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	fov_row.add_child(_fov_label)
-	box.add_child(fov_row)
-
-	var dist_row := HBoxContainer.new()
-	dist_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	dist_row.add_theme_constant_override("separation", 12)
-
-	var dist_label_static := Label.new()
-	dist_label_static.text = "Camera Distance:"
-	dist_label_static.add_theme_font_size_override("font_size", 20)
-	dist_label_static.add_theme_color_override("font_color", _WHITE)
-	dist_label_static.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	dist_row.add_child(dist_label_static)
+	_fov_label = _value_label("%d°" % int(PlayerPrefs.fov))
+	_fov_slider.value_changed.connect(func(v: float) -> void: _fov_label.text = "%d°" % int(v))
+	box.add_child(_slider_row("FOV", _fov_slider, _fov_label))
 
 	_cam_dist_slider = HSlider.new()
 	_cam_dist_slider.min_value = PlayerPrefs.CAMERA_DISTANCE_MIN
 	_cam_dist_slider.max_value = PlayerPrefs.CAMERA_DISTANCE_MAX
 	_cam_dist_slider.step = 0.05
 	_cam_dist_slider.value = PlayerPrefs.camera_distance
-	_cam_dist_slider.custom_minimum_size = Vector2(160, 32)
 	_cam_dist_slider.value_changed.connect(_on_cam_dist_changed)
-	dist_row.add_child(_cam_dist_slider)
+	_cam_dist_label = _value_label("%.2fx" % PlayerPrefs.camera_distance)
+	_cam_dist_slider.value_changed.connect(func(v: float) -> void: _cam_dist_label.text = "%.2fx" % v)
+	box.add_child(_slider_row("Distance", _cam_dist_slider, _cam_dist_label))
 
-	_cam_dist_label = Label.new()
-	_cam_dist_label.text = "%.2fx" % PlayerPrefs.camera_distance
-	_cam_dist_label.add_theme_font_size_override("font_size", 18)
-	_cam_dist_label.add_theme_color_override("font_color", _DIM)
-	_cam_dist_label.custom_minimum_size = Vector2(48, 0)
-	_cam_dist_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	dist_row.add_child(_cam_dist_label)
-	box.add_child(dist_row)
-
-	var sep := HSeparator.new()
-	box.add_child(sep)
-
-	var colors_lbl := Label.new()
-	colors_lbl.text = "Team Colors"
-	colors_lbl.add_theme_font_size_override("font_size", 16)
-	colors_lbl.add_theme_color_override("font_color", _DIM)
-	colors_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(colors_lbl)
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Team Colors"))
 
 	var export_btn := _make_button("Export Colors File...")
+	export_btn.custom_minimum_size = Vector2(260, 40)
+	export_btn.add_theme_font_size_override("font_size", 16)
 	export_btn.pressed.connect(_on_export_colors_pressed)
-	box.add_child(export_btn)
+	box.add_child(_field_row("Custom palette", export_btn))
 
 	_export_status_label = Label.new()
-	_export_status_label.add_theme_font_size_override("font_size", 13)
-	_export_status_label.add_theme_color_override("font_color", _DIM)
+	_export_status_label.add_theme_font_size_override("font_size", 12)
+	_export_status_label.add_theme_color_override("font_color", _MUTED)
 	_export_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_export_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_export_status_label.custom_minimum_size = Vector2(308, 0)
+	_export_status_label.custom_minimum_size = Vector2(0, 0)
 	box.add_child(_export_status_label)
 
 	return box
@@ -594,9 +427,18 @@ func _build_game_tab() -> Control:
 # ---------------------------------------------------------------------------
 
 func _on_fullscreen_toggled(_pressed: bool) -> void:
-	if _res_row != null:
-		_res_row.visible = not _fs_check.button_pressed
+	_apply_res_disabled_state(_fs_check.button_pressed)
 	_update_apply_state()
+
+
+# Resolution only matters in windowed mode. We disable rather than hide the
+# row so toggling fullscreen doesn't change the panel's height.
+func _apply_res_disabled_state(fullscreen: bool) -> void:
+	if _res_btn != null:
+		_res_btn.disabled = fullscreen
+	if _res_label != null:
+		_res_label.add_theme_color_override("font_color",
+			MenuStyle.TEXT_MUTED if fullscreen else _WHITE)
 
 func _on_resolution_selected(_idx: int) -> void:
 	_update_apply_state()
@@ -778,8 +620,7 @@ func _on_apply_pressed() -> void:
 
 func _on_cancel_pressed() -> void:
 	_fs_check.set_pressed_no_signal(_original.fullscreen)
-	if _res_row != null:
-		_res_row.visible = not _original.fullscreen
+	_apply_res_disabled_state(_original.fullscreen)
 	_res_btn.selected = _original.resolution_index
 	_vsync_check.set_pressed_no_signal(_original.vsync_enabled)
 	_fps_btn.selected = _original.fps_cap_index
@@ -802,6 +643,81 @@ func _on_cancel_pressed() -> void:
 	if _conflict_label != null:
 		_conflict_label.text = ""
 	close_requested.emit()
+
+# ---------------------------------------------------------------------------
+# Tab-layout helpers — every tab uses the same building blocks so labels and
+# controls line up across rows and between tabs.
+# ---------------------------------------------------------------------------
+
+# Outer VBox for a tab's content. 10px between consecutive rows; section
+# headers add their own extra top padding via _section_spacer().
+func _tab_box() -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return box
+
+
+# Small-caps muted heading used to group rows into named sections.
+func _section_header(text: String) -> Label:
+	var l := Label.new()
+	l.text = text.to_upper()
+	l.add_theme_font_size_override("font_size", _SECTION_FONT_SIZE)
+	l.add_theme_color_override("font_color", _MUTED)
+	return l
+
+
+# Vertical breathing room above a non-first section header.
+func _section_spacer() -> Control:
+	var s := Control.new()
+	s.custom_minimum_size = Vector2(0, 8)
+	return s
+
+
+# Standard label + control row. Label sits in a fixed-width column on the left
+# so controls line up across every row in the tab.
+func _field_row(label_text: String, control: Control) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 14)
+
+	var lbl := Label.new()
+	lbl.text = label_text
+	lbl.custom_minimum_size = Vector2(_LABEL_COL_WIDTH, 0)
+	lbl.add_theme_font_size_override("font_size", _LABEL_FONT_SIZE)
+	lbl.add_theme_color_override("font_color", _WHITE)
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(lbl)
+	row.add_child(control)
+	return row
+
+
+# Label + slider that fills + fixed-width value label on the right. Slider
+# is set to expand horizontally so its width tracks the row width.
+func _slider_row(label_text: String, slider: HSlider, value_control: Control) -> HBoxContainer:
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+	var pair := HBoxContainer.new()
+	pair.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pair.add_theme_constant_override("separation", 12)
+	pair.add_child(slider)
+	pair.add_child(value_control)
+
+	return _field_row(label_text, pair)
+
+
+# Right-aligned dim numeric value label shown to the right of a slider.
+func _value_label(text: String, min_width: int = _VALUE_COL_WIDTH) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.custom_minimum_size = Vector2(min_width, 0)
+	l.add_theme_font_size_override("font_size", _VALUE_FONT_SIZE)
+	l.add_theme_color_override("font_color", _DIM)
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	return l
+
 
 func _make_button(label: String) -> Button:
 	var btn := Button.new()

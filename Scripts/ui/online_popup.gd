@@ -15,7 +15,7 @@ func _ready() -> void:
 
 func _build() -> void:
 	var overlay := ColorRect.new()
-	overlay.color = Color(0.0, 0.0, 0.0, 0.6)
+	overlay.color = MenuStyle.SCRIM
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.gui_input.connect(_on_overlay_clicked)

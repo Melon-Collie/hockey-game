@@ -4,7 +4,7 @@ extends Control
 var _error_label: Label = null
 var _player_popup: PlayerSettingsPopup = null
 var _center_container: CenterContainer = null
-var _title_label: Label = null
+var _title_logo: TextureRect = null
 var _version_label: Label = null
 var _player_card_panel: PanelContainer = null
 var _options_popup: Control = null
@@ -30,26 +30,13 @@ func _ready() -> void:
 		NetworkManager.pending_error = ""
 
 func _build_ui() -> void:
-	const BG_PATH := "res://Assets/menu_bg.png"
-	if ResourceLoader.exists(BG_PATH):
-		var bg := TextureRect.new()
-		bg.texture = load(BG_PATH)
-		bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		bg.stretch_mode = TextureRect.STRETCH_TILE
-		add_child(bg)
-	else:
-		var bg := ColorRect.new()
-		bg.color = Color(0.05, 0.07, 0.10, 1.0)
-		bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		add_child(bg)
-
-	# Dark overlay keeps menu text readable over the busy background
-	var overlay := ColorRect.new()
-	overlay.color = Color(0.0, 0.0, 0.0, 0.65)
-	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(overlay)
+	var bg := TextureRect.new()
+	bg.texture = load("res://Assets/Mitts_ice_background.png")
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(bg)
 
 	# ── Center stack ──────────────────────────────────────────────────────────
 	var center := CenterContainer.new()
@@ -72,27 +59,54 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	menu_panel.add_child(vbox)
 
-	var title := Label.new()
-	title.text = "Mitts"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 64)
-	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
-	vbox.add_child(title)
-	_title_label = title
-	_title_label.item_rect_changed.connect(func() -> void:
-		_title_label.pivot_offset = _title_label.size / 2.0)
+	# Logo is rendered as two stacked TextureRects in the same vbox slot: a
+	# behind-rect that runs the ui_glow shader (soft teal halo), and the real
+	# logo on top. Both share a fixed slot via a Control wrapper so the glow
+	# doesn't push the menu layout around. The slot is sized larger than the
+	# visible logo to give the glow room to fall off — the padded PNG variant
+	# carries ~10% transparent margin so the blur fades naturally instead of
+	# clipping at the texture edge.
+	var logo_slot := Control.new()
+	logo_slot.custom_minimum_size = Vector2(650, 280)
+	vbox.add_child(logo_slot)
+
+	var logo_tex: Texture2D = load("res://Assets/logos/Mitts_logo_full_padded.png")
+
+	var glow := TextureRect.new()
+	glow.texture = logo_tex
+	glow.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	glow.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	glow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var glow_mat := ShaderMaterial.new()
+	glow_mat.shader = load("res://Assets/Shaders/ui_glow.gdshader")
+	glow.material = glow_mat
+	logo_slot.add_child(glow)
+
+	var logo := TextureRect.new()
+	logo.texture = logo_tex
+	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	logo.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	logo_slot.add_child(logo)
+	_title_logo = logo
+	_title_logo.item_rect_changed.connect(func() -> void:
+		_title_logo.pivot_offset = _title_logo.size / 2.0)
 
 	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, 20)
+	spacer.custom_minimum_size = Vector2(0, 8)
 	vbox.add_child(spacer)
+
+	# Primary CTA — online multiplayer is the headline pitch of the project,
+	# so it gets the solid-teal button. Everything else is ghost-style.
+	var online_btn := _make_primary_button("Play Online")
+	online_btn.pressed.connect(func() -> void: _online_popup.open())
+	vbox.add_child(online_btn)
 
 	var offline_btn := _make_button("Offline")
 	offline_btn.pressed.connect(_on_offline_pressed)
 	vbox.add_child(offline_btn)
-
-	var online_btn := _make_button("Online")
-	online_btn.pressed.connect(func() -> void: _online_popup.open())
-	vbox.add_child(online_btn)
 
 	var career_btn := _make_button("Career")
 	career_btn.pressed.connect(func() -> void: _career_screen.open())
@@ -102,7 +116,13 @@ func _build_ui() -> void:
 	options_btn.pressed.connect(_on_options_pressed)
 	vbox.add_child(options_btn)
 
-	var exit_btn := _make_button("Exit Game")
+	# Divider before Exit Game — visually separates "menu options" from
+	# "leave the app." Exit Game itself is a quiet text-only link.
+	var exit_divider := Control.new()
+	exit_divider.custom_minimum_size = Vector2(0, 8)
+	vbox.add_child(exit_divider)
+
+	var exit_btn := _make_tertiary_button("Exit Game")
 	exit_btn.pressed.connect(func() -> void: _exit_popup.visible = true)
 	vbox.add_child(exit_btn)
 
@@ -163,12 +183,21 @@ func _build_ui() -> void:
 	add_child(intro)
 
 func _build_player_card() -> void:
-	var normal_style := MenuStyle.panel(6, 14)
+	# Resting state — solid panel-bg with a visible teal-line border so the
+	# card looks interactive at rest, not just a static info chip.
+	var normal_style := StyleBoxFlat.new()
+	normal_style.bg_color = MenuStyle.PANEL_BG
+	normal_style.set_corner_radius_all(6)
+	normal_style.set_content_margin_all(14)
+	normal_style.border_color = MenuStyle.TEAL_DIM
+	normal_style.set_border_width_all(1)
+
+	# Hover state — surface lifts to SURFACE_ELEV with a brighter teal border.
 	var hover_style := StyleBoxFlat.new()
-	hover_style.bg_color = Color(MenuStyle.BTN_HOVER.r, MenuStyle.BTN_HOVER.g, MenuStyle.BTN_HOVER.b, 0.92)
+	hover_style.bg_color = MenuStyle.SURFACE_ELEV
 	hover_style.set_corner_radius_all(6)
 	hover_style.set_content_margin_all(14)
-	hover_style.border_color = MenuStyle.ICE_HOVER
+	hover_style.border_color = MenuStyle.TEAL
 	hover_style.set_border_width_all(1)
 
 	var panel := PanelContainer.new()
@@ -176,14 +205,22 @@ func _build_player_card() -> void:
 	panel.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 
+	# Two-column layout: identity vbox on the left (name + meta), "Edit"
+	# affordance text on the right. HBox keeps the icon anchored to the right
+	# edge regardless of how long the name is.
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 18)
+	panel.add_child(hbox)
+
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 5)
-	panel.add_child(vbox)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(vbox)
 
 	_card_name_label = Label.new()
 	_card_name_label.text = PlayerPrefs.player_name
 	_card_name_label.add_theme_font_size_override("font_size", 20)
-	_card_name_label.add_theme_color_override("font_color", Color.WHITE)
+	_card_name_label.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
 	vbox.add_child(_card_name_label)
 
 	var detail_row := HBoxContainer.new()
@@ -193,22 +230,36 @@ func _build_player_card() -> void:
 	_card_number_label = Label.new()
 	_card_number_label.text = "#%d" % PlayerPrefs.jersey_number
 	_card_number_label.add_theme_font_size_override("font_size", 15)
-	_card_number_label.add_theme_color_override("font_color", Color(0.70, 0.70, 0.78))
+	_card_number_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	detail_row.add_child(_card_number_label)
 
 	_card_hand_label = Label.new()
 	_card_hand_label.text = "Shoots %s" % ("L" if PlayerPrefs.is_left_handed else "R")
 	_card_hand_label.add_theme_font_size_override("font_size", 15)
-	_card_hand_label.add_theme_color_override("font_color", Color(0.70, 0.70, 0.78))
+	_card_hand_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	detail_row.add_child(_card_hand_label)
+
+	# Material edit-pencil icon (Assets/Icons/edit.svg). Tinted via modulate
+	# so we can switch color on hover the same way as the panel border.
+	var edit_icon := TextureRect.new()
+	edit_icon.texture = load("res://Assets/Icons/edit.svg") as Texture2D
+	edit_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	edit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	edit_icon.custom_minimum_size = Vector2(16, 16)
+	edit_icon.modulate = MenuStyle.TEXT_MUTED
+	edit_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	edit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hbox.add_child(edit_icon)
 
 	panel.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			_player_popup.open())
 	panel.mouse_entered.connect(func() -> void:
-		panel.add_theme_stylebox_override("panel", hover_style))
+		panel.add_theme_stylebox_override("panel", hover_style)
+		edit_icon.modulate = MenuStyle.TEAL_HOVER)
 	panel.mouse_exited.connect(func() -> void:
-		panel.add_theme_stylebox_override("panel", normal_style))
+		panel.add_theme_stylebox_override("panel", normal_style)
+		edit_icon.modulate = MenuStyle.TEXT_MUTED)
 
 	panel.position = Vector2(16.0, 16.0)
 	panel.modulate.a = 0.0
@@ -217,7 +268,7 @@ func _build_player_card() -> void:
 
 func _build_options_popup() -> void:
 	var overlay := ColorRect.new()
-	overlay.color = Color(0.0, 0.0, 0.0, 0.6)
+	overlay.color = MenuStyle.SCRIM
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.gui_input.connect(func(event: InputEvent) -> void:
@@ -245,7 +296,7 @@ func _build_options_popup() -> void:
 
 func _build_exit_popup() -> void:
 	var overlay := ColorRect.new()
-	overlay.color = Color(0.0, 0.0, 0.0, 0.6)
+	overlay.color = MenuStyle.SCRIM
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 
@@ -319,14 +370,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _on_intro_finished() -> void:
-	if _title_label != null:
-		_title_label.scale = Vector2(1.18, 1.18)
+	if _title_logo != null:
+		_title_logo.scale = Vector2(1.18, 1.18)
 	var tw := create_tween()
 	tw.set_parallel(true)
 	tw.tween_property(_center_container, "modulate:a", 1.0, 0.38) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	if _title_label != null:
-		tw.tween_property(_title_label, "scale", Vector2.ONE, 0.32) \
+	if _title_logo != null:
+		tw.tween_property(_title_logo, "scale", Vector2.ONE, 0.32) \
 			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(_player_card_panel, "modulate:a", 1.0, 0.32) \
 		.set_delay(0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -343,6 +394,27 @@ func _make_button(label: String) -> Button:
 	btn.custom_minimum_size = Vector2(308, 48)
 	btn.add_theme_font_size_override("font_size", 20)
 	MenuStyle.wire_hover_scale(btn)
+	SoundManager.wire_button(btn)
+	return btn
+
+
+func _make_primary_button(label: String) -> Button:
+	var btn := Button.new()
+	btn.text = label
+	btn.theme_type_variation = &"ButtonPrimary"
+	btn.custom_minimum_size = Vector2(308, 52)
+	btn.add_theme_font_size_override("font_size", 21)
+	MenuStyle.wire_hover_scale(btn)
+	SoundManager.wire_button(btn)
+	return btn
+
+
+func _make_tertiary_button(label: String) -> Button:
+	var btn := Button.new()
+	btn.text = label
+	btn.theme_type_variation = &"ButtonTertiary"
+	btn.custom_minimum_size = Vector2(308, 32)
+	btn.add_theme_font_size_override("font_size", 13)
 	SoundManager.wire_button(btn)
 	return btn
 
