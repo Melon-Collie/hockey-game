@@ -106,16 +106,35 @@ const SLOT_DIST_M: float = 5.0
 # about a different "league average" than the controllers actually run.
 #
 # TODO(per-player attrs): when SkaterAttributes lands, the AI should query
-# `attribute_resolver.call(peer_id).max_speed` instead of this default. This
-# const becomes the "league average" only used when an attribute isn't
-# resolvable.
+# `attribute_resolver.call(peer_id).max_speed` (or .stick_length, etc.)
+# instead of these defaults. They become "league average" fallbacks only
+# used when an attribute isn't resolvable.
 const DEFAULT_SKATER_MAX_SPEED_M_S: float = 10.5
+const DEFAULT_STICK_LENGTH_M: float = 1.30
+const DEFAULT_BLADE_LENGTH_M: float = 0.30
+
+# Wrister/slapper/quick-shot puck release speeds. The puck consumes
+# `direction × power` directly as linear velocity (see Puck.release),
+# so "power" IS m/s. Min and max bracket the charge curve.
+const DEFAULT_WRISTER_POWER_MIN_M_S: float = 14.0
+const DEFAULT_WRISTER_POWER_MAX_M_S: float = 24.0
+const DEFAULT_SLAPPER_POWER_MIN_M_S: float = 17.0
+const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 34.0
+# Quick-shot is the no-charge release — also used by AI as the typical
+# pass speed (passes are quick-shots in this codebase).
+const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0
 
 # ── Goalie Defaults ───────────────────────────────────────────────────────────
 # Shared between GoalieController @export and AIActionScoring's goalie
 # react-then-slide model. Calibrate together — the AI's prediction must
 # match the live goalie's reflex.
 const DEFAULT_GOALIE_REACTION_DELAY_S: float = 0.13
+# Goalie's max committed lateral movement speed. Mirrors GoalieController
+# .t_push_speed — the actual translation speed when the goalie commits to
+# a slide (lateral_threshold = 0.3 m). NOT tracking_speed (that's the
+# mental-target lerp speed, not body movement) and NOT shuffle_speed
+# (that's small adjustments, not a recovery slide).
+const DEFAULT_GOALIE_T_PUSH_SPEED_M_S: float = 3.8
 
 # ── Players ───────────────────────────────────────────────────────────────────
 const MAX_PLAYERS: int = 6  # 3v3

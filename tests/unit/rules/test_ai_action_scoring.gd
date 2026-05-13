@@ -57,23 +57,27 @@ func test_shoot_score_reduced_by_mid_lane_defender() -> void:
 func test_shoot_score_unaffected_by_low_t_defender() -> void:
 	# New lane physics: a defender on the segment but at low t (close
 	# to shooter, far from receiver) has no reaction time to position
-	# their stick before a 30 m/s puck blows past them. Shot score
+	# their stick before a fast puck blows past them. Shot score
 	# should be essentially unaffected.
 	#
-	# Use a longer shot (12 m) so the low-t defender can sit outside
-	# PRESSURE_RADIUS_M = 4 m too — otherwise pressure would catch
-	# them even if lane doesn't.
+	# Uses slapper speed (34 m/s) — at the original engineered defender
+	# position, t ≈ 0.39 × 11.65 / 34 = 0.13 s, comfortably below
+	# LANE_REACTION_DELAY_S = 0.15 → reaction_factor = 0 → no block.
+	# A 24 m/s wrister at the same position would push past threshold
+	# (0.187 s) and reach into the reaction window — that boundary
+	# case isn't what this test verifies.
 	var shooter := Vector3(0.0, 0.0, 15.0)  # ~12 m from goal
 	var goalie := Vector3(0.5, 0.0, 26.0)
-	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
+	var slapper := AIActionScoring.SLAPPER_SHOT_SPEED_M_S
+	var clear: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], Vector3.INF, slapper)
 	# Defender at z=19.5 — 4.5 m past shooter on the line. Outside
-	# pressure radius (>4 m). Lane t ≈ 0.39, time_to_defender
-	# ≈ 0.15 s = right at LANE_REACTION_DELAY_S threshold so
-	# reaction_factor = 0. No block.
+	# pressure radius (>4 m).
 	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 19.5)]
-	var blocked: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,close_blocker)
+	var blocked: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, close_blocker, Vector3.INF, slapper)
 	assert_almost_eq(blocked, clear, 0.02,
-			"low-t defender with no reaction time shouldn't block a 30 m/s shot")
+			"low-t defender with no reaction time shouldn't block a fast slapper")
 
 
 func test_shoot_score_unaffected_by_defender_off_lane() -> void:

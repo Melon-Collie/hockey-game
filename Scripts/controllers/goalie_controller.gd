@@ -20,7 +20,7 @@ extends Node
 @export var depth_speed: float = 4.0
 
 @export var shuffle_speed: float = 2.0
-@export var t_push_speed: float = 3.8
+@export var t_push_speed: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
 @export var lateral_threshold: float = 0.3
 @export var max_facing_angle: float = 70.0
 @export var rotation_speed: float = 5.0

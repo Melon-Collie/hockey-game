@@ -182,9 +182,17 @@ const SHOT_LANE_LEAD_TIME_S: float = 0.25
 # the puck's CURRENT position instead of the lead intercept — otherwise
 # the blade rides 0.5 m past a puck that's right at our feet and we
 # fan on it. Steering still uses the lead so the body keeps closing.
-# A bit larger than blade_length + stick_length (≈1.6 m) so the snap
-# kicks in slightly before the blade actually arrives.
-const BLADE_REACH_M: float = 1.8
+# Sized as `stick_length + blade_length + 0.2 m buffer` so the snap
+# kicks in slightly before the blade actually arrives — buffer is
+# feel, the geometry is real.
+#
+# TODO(per-player attrs): when SkaterAttributes lands, swap for the
+# bot's own stick + blade reach (a bigger player has a longer reach).
+const BLADE_REACH_BUFFER_M: float = 0.2
+const BLADE_REACH_M: float = (
+		GameRules.DEFAULT_STICK_LENGTH_M
+		+ GameRules.DEFAULT_BLADE_LENGTH_M
+		+ BLADE_REACH_BUFFER_M)
 
 # ── Wrister charge ───────────────────────────────────────────────────────────
 # SHOOT_PRESSED runs a real wrister now: hold shoot_held for this many
@@ -247,12 +255,18 @@ const BOT_WRISTER_WIND_UP_SIDE_M: float = 0.4
 const BOT_WRISTER_RELEASE_FORWARD_M: float = 1.5
 
 # Side-selection for wrister wind-up — defender within this radius
-# AND clearly on the forehand side flips the wind-up to backhand. The
-# 1.5 m radius matches stick-reach for a poke check. The lateral
-# threshold ensures we only flip when the defender is laterally on
-# the forehand side, not directly in front (where the forehand still
-# clears their stick).
-const BOT_FOREHAND_STICK_REACH_M: float = 1.5
+# AND clearly on the forehand side flips the wind-up to backhand.
+# Models the OPPONENT defender's stick-reach for a poke check
+# (stick + small overhang). The lateral threshold ensures we only
+# flip when the defender is laterally on the forehand side, not
+# directly in front (where the forehand still clears their stick).
+#
+# TODO(per-player attrs): when SkaterAttributes lands, this should
+# read the threatening defender's own stick_length, not the league
+# default. Bigger defender = longer reach = wider flip radius.
+const BOT_POKE_REACH_BUFFER_M: float = 0.2
+const BOT_FOREHAND_STICK_REACH_M: float = (
+		GameRules.DEFAULT_STICK_LENGTH_M + BOT_POKE_REACH_BUFFER_M)
 const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 
 # ── Unified mouse motion ─────────────────────────────────────────────────────

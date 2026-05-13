@@ -34,7 +34,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Fixed, rigid shaft length (hand to blade heel). Baseline 1.30 m ≈ adult
 # senior stick shaft (butt-to-heel). The blade mesh extends forward from the
 # heel; see Skater.blade_length. Total hand-to-toe is stick_length + blade_length.
-@export var stick_length: float = 1.30
+@export var stick_length: float = GameRules.DEFAULT_STICK_LENGTH_M
 # Hand Y in upper-body-local space. Baseline resting position (used in the
 # FAR regime). In the CLOSE regime the hand rises toward `hand_y_max` so the
 # stick tilts more vertical and the blade can tuck in close to the body.
@@ -102,12 +102,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var lower_body_lag_speed: float = 5.0
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
-@export var min_wrister_power: float = 14.0
-@export var max_wrister_power: float = 24.0
+@export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
+@export var max_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 @export var max_wrister_charge_distance: float = 2.0
 @export var backhand_power_coefficient: float = 0.75
 @export var max_charge_direction_variance: float = 35.0
-@export var quick_shot_power: float = 14.0
+@export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 @export var quick_shot_threshold: float = 0.1
 @export var quick_shot_elevation: float = 0.10
 @export var wrister_elevation_target_height: float = 0.90
@@ -134,8 +134,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var slapper_zone_radius: float = 0.5
 @export var slapper_zone_offset_x: float = 0.8  # lateral offset toward blade side
 @export var slapper_zone_offset_z: float = -1.0  # forward offset (negative = in front of player)
-@export var min_slapper_power: float = 17.0
-@export var max_slapper_power: float = 34.0
+@export var min_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MIN_M_S
+@export var max_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 @export var max_slapper_charge_time: float = 0.7
 @export var slapper_blade_x: float = 1.0
 @export var slapper_blade_z: float = -0.5

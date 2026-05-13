@@ -23,7 +23,7 @@ extends CharacterBody3D
 # of the Marker3D along its local forward axis (-Z in local, which
 # set_blade_position() orients via look_at each tick). Must match the blade
 # mesh Z size in Scenes/Skater.tscn.
-@export var blade_length: float = 0.30
+@export var blade_length: float = GameRules.DEFAULT_BLADE_LENGTH_M
 @export var wall_squeeze_threshold: float = 0.3
 # How far the blade mesh visually shifts perpendicular to the stick toward the
 # forehand or backhand face during carry. Player's cursor stays at the puck;

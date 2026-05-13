@@ -261,7 +261,9 @@ func _pick_action(ctx: RoleContext) -> void:
 	var slapper_score: float = AIActionScoring.score_shoot(
 			slapper_release_pos, attacking_goal, slapper_goalie,
 			GameRules.NET_HALF_WIDTH,
-			_scratch_opponents_slapper, goalie_now) * SLAPPER_POWER_BONUS * slapper_motion_factor
+			_scratch_opponents_slapper, goalie_now,
+			AIActionScoring.SLAPPER_SHOT_SPEED_M_S
+			) * SLAPPER_POWER_BONUS * slapper_motion_factor
 	var shoot_use_slapper: bool = slapper_score > wrister_score
 	var shoot_score: float = slapper_score if shoot_use_slapper else wrister_score
 
