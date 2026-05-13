@@ -71,8 +71,11 @@ func _build_panel() -> void:
 	panel_style.set_corner_radius_all(0)
 	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
 	panel_style.border_width_top = 1
+	# shadow_size must equal min(offset) so the shadow only protrudes on the
+	# bottom/right edges (no halo on top/left). Godot draws no shadow at all
+	# when shadow_size is 0, regardless of offset.
 	panel_style.shadow_color = MenuStyle.BROADCAST_SHADOW
-	panel_style.shadow_size = 0
+	panel_style.shadow_size = 4
 	panel_style.shadow_offset = Vector2(4, 5)
 	panel_style.set_content_margin_all(0)  # inner sections handle their own padding
 
