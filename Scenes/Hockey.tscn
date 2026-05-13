@@ -11,7 +11,7 @@ background_mode = 1
 background_color = Color(0.1897483, 0.1897483, 0.2716998, 1)
 ambient_light_source = 2
 ambient_light_color = Color(0.95468724, 0.9639762, 0.9822071, 1)
-ambient_light_energy = 0.4
+ambient_light_energy = 0.55
 tonemap_mode = 4
 tonemap_white = 6.0
 ssao_enabled = true
@@ -25,14 +25,6 @@ glow_strength = 0.8
 glow_bloom = 0.05
 glow_blend_mode = 2
 glow_hdr_threshold = 1.1
-volumetric_fog_enabled = true
-volumetric_fog_density = 0.0025
-volumetric_fog_albedo = Color(1, 1, 1, 1)
-volumetric_fog_anisotropy = 0.2
-volumetric_fog_length = 64.0
-volumetric_fog_detail_spread = 2.0
-volumetric_fog_ambient_inject = 0.0
-volumetric_fog_sky_affect = 0.0
 adjustment_enabled = true
 adjustment_brightness = 1.0
 adjustment_contrast = 1.05
@@ -65,7 +57,7 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 0.6
+spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D2" type="SpotLight3D" parent="." unique_id=860078582]
@@ -76,7 +68,7 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 0.6
+spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D3" type="SpotLight3D" parent="." unique_id=2045860332]
@@ -87,7 +79,7 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 0.6
+spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D4" type="SpotLight3D" parent="." unique_id=1502217364]
@@ -98,7 +90,7 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 0.6
+spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D5" type="SpotLight3D" parent="." unique_id=1560442888]
@@ -109,7 +101,7 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 0.6
+spot_attenuation = 1.0
 spot_angle = 32.0
 
 [node name="SpotLight3D6" type="SpotLight3D" parent="." unique_id=1194539476]
@@ -120,5 +112,5 @@ light_indirect_energy = 0.3
 light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
-spot_attenuation = 0.6
+spot_attenuation = 1.0
 spot_angle = 32.0
