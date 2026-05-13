@@ -40,7 +40,7 @@ var is_fullscreen: bool = false
 var resolution_index: int = 1
 var vsync_enabled: bool = true
 var fps_cap_index: int = 5
-var brightness: float = 1.0
+var gamma: float = 1.0
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
@@ -90,7 +90,7 @@ func save() -> void:
 	cfg.set_value("video", "resolution_index", resolution_index)
 	cfg.set_value("video", "vsync_enabled", vsync_enabled)
 	cfg.set_value("video", "fps_cap_index", fps_cap_index)
-	cfg.set_value("video", "brightness", brightness)
+	cfg.set_value("video", "gamma", gamma)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "camera_mode", camera_mode)
@@ -159,7 +159,31 @@ func apply_video() -> void:
 		"WorldEnvironment", true, false) as WorldEnvironment
 	if we != null:
 		we.environment.adjustment_enabled = true
-		we.environment.adjustment_brightness = brightness
+		we.environment.adjustment_color_correction = _build_gamma_lut(gamma)
+
+# Encodes y = x^(1/gamma) as a 1D LUT so the post-process color-correction pass
+# applies a true gamma curve (lifts midtones without clipping highlights),
+# matching how console/PC games expose "brightness/gamma" calibration.
+func _build_gamma_lut(g: float) -> GradientTexture1D:
+	var grad := Gradient.new()
+	grad.interpolation_mode = Gradient.GRADIENT_INTERPOLATE_LINEAR
+	const N: int = 32
+	var offsets := PackedFloat32Array()
+	var colors := PackedColorArray()
+	offsets.resize(N)
+	colors.resize(N)
+	var inv_g: float = 1.0 / maxf(g, 0.01)
+	for i: int in N:
+		var t: float = float(i) / float(N - 1)
+		var v: float = pow(t, inv_g)
+		offsets[i] = t
+		colors[i] = Color(v, v, v)
+	grad.offsets = offsets
+	grad.colors = colors
+	var tex := GradientTexture1D.new()
+	tex.gradient = grad
+	tex.width = 256
+	return tex
 
 func _load() -> void:
 	var cfg := ConfigFile.new()
@@ -179,7 +203,7 @@ func _load() -> void:
 		resolution_index = clamp(cfg.get_value("video", "resolution_index", 1), 0, RESOLUTIONS.size() - 1)
 		vsync_enabled = cfg.get_value("video", "vsync_enabled", true)
 		fps_cap_index = clamp(cfg.get_value("video", "fps_cap_index", 5), 0, FPS_CAP_VALUES.size() - 1)
-		brightness = clampf(cfg.get_value("video", "brightness", 1.0), 0.5, 1.5)
+		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
