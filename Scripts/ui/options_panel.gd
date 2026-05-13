@@ -15,7 +15,7 @@ var _tab_contents: Array[Control] = []
 var _tab_btns: Array[Button] = []
 var _vsync_check: CheckButton = null
 var _fps_btn: OptionButton = null
-var _brightness_slider: HSlider = null
+var _gamma_slider: HSlider = null
 var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
 var _attack_up_check: CheckButton = null
@@ -102,7 +102,7 @@ func _snapshot() -> Dictionary:
 		"resolution_index": PlayerPrefs.resolution_index,
 		"vsync_enabled": PlayerPrefs.vsync_enabled,
 		"fps_cap_index": PlayerPrefs.fps_cap_index,
-		"brightness": PlayerPrefs.brightness,
+		"gamma": PlayerPrefs.gamma,
 		"master_volume": PlayerPrefs.master_volume,
 		"sfx_volume": PlayerPrefs.sfx_volume,
 		"ui_volume": PlayerPrefs.ui_volume,
@@ -121,7 +121,7 @@ func _read_controls() -> Dictionary:
 		"resolution_index": _res_btn.selected,
 		"vsync_enabled": _vsync_check.button_pressed,
 		"fps_cap_index": _fps_btn.selected,
-		"brightness": _brightness_slider.value,
+		"gamma": _gamma_slider.value,
 		"master_volume": _volume_slider.value,
 		"sfx_volume": _sfx_slider.value,
 		"ui_volume": _ui_slider.value,
@@ -244,15 +244,15 @@ func _build_video_tab() -> Control:
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Image"))
 
-	_brightness_slider = HSlider.new()
-	_brightness_slider.min_value = 0.5
-	_brightness_slider.max_value = 1.5
-	_brightness_slider.step = 0.05
-	_brightness_slider.value = PlayerPrefs.brightness
-	_brightness_slider.value_changed.connect(_on_brightness_changed)
-	var bright_label := _value_label("%d%%" % int(PlayerPrefs.brightness * 100))
-	_brightness_slider.value_changed.connect(func(v: float) -> void: bright_label.text = "%d%%" % int(v * 100))
-	box.add_child(_slider_row("Brightness", _brightness_slider, bright_label))
+	_gamma_slider = HSlider.new()
+	_gamma_slider.min_value = 0.5
+	_gamma_slider.max_value = 2.0
+	_gamma_slider.step = 0.05
+	_gamma_slider.value = PlayerPrefs.gamma
+	_gamma_slider.value_changed.connect(_on_gamma_changed)
+	var gamma_val := _value_label("%.2f" % PlayerPrefs.gamma)
+	_gamma_slider.value_changed.connect(func(v: float) -> void: gamma_val.text = "%.2f" % v)
+	box.add_child(_slider_row("Gamma", _gamma_slider, gamma_val))
 
 	return box
 
@@ -455,7 +455,7 @@ func _on_vsync_toggled(_pressed: bool) -> void:
 func _on_fps_cap_selected(_idx: int) -> void:
 	_update_apply_state()
 
-func _on_brightness_changed(_value: float) -> void:
+func _on_gamma_changed(_value: float) -> void:
 	_update_apply_state()
 
 func _on_attack_up_toggled(_pressed: bool) -> void:
@@ -599,7 +599,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.resolution_index = c.resolution_index
 	PlayerPrefs.vsync_enabled = c.vsync_enabled
 	PlayerPrefs.fps_cap_index = c.fps_cap_index
-	PlayerPrefs.brightness = c.brightness
+	PlayerPrefs.gamma = c.gamma
 	PlayerPrefs.master_volume = c.master_volume
 	PlayerPrefs.sfx_volume = c.sfx_volume
 	PlayerPrefs.ui_volume = c.ui_volume
@@ -624,7 +624,7 @@ func _on_cancel_pressed() -> void:
 	_res_btn.selected = _original.resolution_index
 	_vsync_check.set_pressed_no_signal(_original.vsync_enabled)
 	_fps_btn.selected = _original.fps_cap_index
-	_brightness_slider.value = _original.brightness
+	_gamma_slider.value = _original.gamma
 	_volume_slider.value = _original.master_volume
 	_sfx_slider.value = _original.sfx_volume
 	_ui_slider.value = _original.ui_volume
