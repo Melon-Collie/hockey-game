@@ -207,14 +207,14 @@ func _build_color_correction_lut(g: float, preset: int) -> Texture3D:
 # Lift shadows toward gray, warm channel shift, saturation bump in midtones.
 # Approximates the "NHL broadcast print" look that real telecasts use.
 func _apply_grade_warm(c: Color) -> Color:
-	const LIFT: float = 0.025
+	const LIFT: float = 0.015
 	c.r = c.r * (1.0 - LIFT) + LIFT
 	c.g = c.g * (1.0 - LIFT * 0.7) + LIFT * 0.7
 	c.b = c.b * (1.0 - LIFT * 0.4) + LIFT * 0.4
-	c.r = clampf(c.r * 1.04, 0.0, 1.0)
-	c.b = clampf(c.b * 0.93, 0.0, 1.0)
+	c.r = clampf(c.r * 1.02, 0.0, 1.0)
+	c.b = clampf(c.b * 0.96, 0.0, 1.0)
 	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
-	const SAT: float = 1.08
+	const SAT: float = 1.04
 	c.r = clampf(luma + (c.r - luma) * SAT, 0.0, 1.0)
 	c.g = clampf(luma + (c.g - luma) * SAT, 0.0, 1.0)
 	c.b = clampf(luma + (c.b - luma) * SAT, 0.0, 1.0)
