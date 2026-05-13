@@ -99,6 +99,32 @@ const CHARGE_LOST   := Color(1.00, 0.20, 0.20, 1.00)   # red flash on cancel
 
 # ── Factories ─────────────────────────────────────────────────────────────────
 
+# Wrap a PanelContainer in a Control with a hard-edged, CSS-style offset drop
+# shadow. Godot's StyleBoxFlat shadow expands the shadow rect uniformly before
+# applying offset, which produces a soft-edged halo instead of the crisp
+# "spread: 0" behavior we want. This composes two panels: a shadow panel
+# (offset, behind, anti-aliasing off) and the original (at origin), with the
+# shadow size kept in sync with the original via the resized signal. The
+# wrapper reports a custom_minimum_size that accounts for the shadow offset
+# so parent containers (e.g. a centering HBox) lay it out correctly.
+static func wrap_drop_shadow(main_panel: PanelContainer, offset: Vector2) -> Control:
+	var wrapper := Control.new()
+	wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var shadow_style := StyleBoxFlat.new()
+	shadow_style.bg_color = BROADCAST_SHADOW
+	shadow_style.anti_aliasing = false
+	var shadow_panel := PanelContainer.new()
+	shadow_panel.add_theme_stylebox_override("panel", shadow_style)
+	shadow_panel.position = offset
+	shadow_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrapper.add_child(shadow_panel)
+	wrapper.add_child(main_panel)
+	main_panel.resized.connect(func() -> void:
+		shadow_panel.size = main_panel.size
+		wrapper.custom_minimum_size = main_panel.size + offset)
+	return wrapper
+
+
 # Build a panel stylebox at custom dimensions. PanelContainers that don't call
 # this just inherit the default panel from the project theme.
 static func panel(corner: int = 6, margin: int = 32) -> StyleBoxFlat:

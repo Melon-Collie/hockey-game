@@ -104,17 +104,13 @@ func _build_scorebug() -> void:
 	panel_style.set_corner_radius_all(0)
 	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
 	panel_style.border_width_top = 1
-	# shadow_size must equal min(offset) so the shadow only protrudes on the
-	# bottom/right edges (no halo on top/left). Godot draws no shadow at all
-	# when shadow_size is 0, regardless of offset.
-	panel_style.shadow_color = MenuStyle.BROADCAST_SHADOW
-	panel_style.shadow_size = 3
-	panel_style.shadow_offset = Vector2(3, 4)
+	panel_style.anti_aliasing = false  # crisp edges to match the layered shadow
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.position = Vector2(8, 8)
-	add_child(panel)
+	var shadow_wrap := MenuStyle.wrap_drop_shadow(panel, Vector2(3, 4))
+	shadow_wrap.position = Vector2(8, 8)
+	add_child(shadow_wrap)
 
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 0)
