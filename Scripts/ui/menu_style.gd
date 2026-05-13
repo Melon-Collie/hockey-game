@@ -66,6 +66,7 @@ const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 # Tune here to shift the whole HUD warmer/cooler/punchier. The cream-vs-white
 # decision lives in BROADCAST_CREAM — push toward (1, 1, 1) for pure white,
 # toward (0.95, 0.93, 0.88) and beyond for more aged-broadcast warmth.
+const BROADCAST_FONT     := preload("res://Assets/Fonts/BebasNeue-Regular.ttf")  # SIL OFL 1.1 — Assets/Fonts/OFL.txt
 const BROADCAST_BG       := Color(0.039, 0.039, 0.078, 0.94)  # #0A0A14 dark navy panel
 const BROADCAST_BORDER_T := Color(0.227, 0.227, 0.306, 1.00)  # #3A3A4E top-edge highlight
 const BROADCAST_SHADOW   := Color(0.0,   0.0,   0.0,   0.50)  # offset drop shadow
