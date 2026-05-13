@@ -7,7 +7,9 @@ var _home_score_label: Label
 var _away_score_label: Label
 var _phase_panel: PanelContainer
 var _phase_wrapper: Control
+var _scorebug_panel: PanelContainer = null
 var _top_goal_banner: Control = null
+var _top_goal_main_panel: PanelContainer = null
 var _top_goal_panel_style: StyleBoxFlat = null
 var _top_goal_stripe_style: StyleBoxFlat = null
 var _top_goal_tween: Tween = null
@@ -118,6 +120,7 @@ func _build_scorebug() -> void:
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
+	_scorebug_panel = panel
 	var shadow_wrap := MenuStyle.wrap_drop_shadow(panel, Vector2(4, 4))
 	shadow_wrap.position = Vector2(8, 8)
 	add_child(shadow_wrap)
@@ -312,7 +315,7 @@ func _build_top_goal_banner() -> void:
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.custom_minimum_size = Vector2(260, 0)  # match scorebug width; height grows to content
+	_top_goal_main_panel = panel
 
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 0)
@@ -350,6 +353,10 @@ func _play_top_goal_banner(team_color: Color) -> void:
 	if _top_goal_tween != null and _top_goal_tween.is_running():
 		_top_goal_tween.kill()
 	_top_goal_stripe_style.bg_color = team_color
+	# Match the scorebug's current rendered size so the wash overlays it
+	# pixel-exact, regardless of font / margin / scoreboard-content drift.
+	if _scorebug_panel != null and _scorebug_panel.size != Vector2.ZERO:
+		_top_goal_main_panel.custom_minimum_size = _scorebug_panel.size
 	# Off-screen left of the screen edge so the slide-in feels like it enters
 	# the frame from outside the viewport, not from a halfway position.
 	_top_goal_banner.position = Vector2(-300, 8)
