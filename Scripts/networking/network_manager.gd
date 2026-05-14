@@ -401,6 +401,7 @@ func reset() -> void:
 	pending_home_color_id = TeamColorRegistry.DEFAULT_HOME_ID
 	pending_away_color_id = TeamColorRegistry.DEFAULT_AWAY_ID
 	pending_color_votes = {}
+	pending_bot_slots.clear()
 	_input_timer = 0.0
 	_state_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
