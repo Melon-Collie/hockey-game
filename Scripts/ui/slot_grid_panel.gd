@@ -47,7 +47,8 @@ const _COLOR_PING_BAD  := Color(0.92, 0.40, 0.40, 1.0)
 # Per-slot widget caches. Indexed [team_id][slot].
 var _cards:        Array = [[], []]
 var _stylebox:     Array = [[], []]   # StyleBoxFlat — recolored per refresh
-var _stripe:       Array = [[], []]   # ColorRect — inset left edge band
+var _stripe:       Array = [[], []]   # Panel — left edge band, rounded outside / flat inside
+var _stripe_style: Array = [[], []]   # StyleBoxFlat backing each stripe (for recolor)
 var _num_labels:   Array = [[], []]
 var _name_labels:  Array = [[], []]
 var _pos_labels:   Array = [[], []]
@@ -119,6 +120,7 @@ func _build_grid() -> void:
 		_cards[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_stylebox[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_stripe[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_stripe_style[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_num_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_name_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_pos_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
@@ -169,23 +171,31 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(content)
 
-	# Inset jersey-stripe band. Anchored to the left edge of the content
-	# area; negative offsets escape the panel's content margin so the
-	# stripe sits at the card's actual left edge (card_x = 0..STRIPE_WIDTH).
-	# Top and bottom offsets are pulled in by the card's corner radius
-	# so the stripe doesn't poke through the rounded corners. Sharp
-	# rectangle — the corner curves around the stripe; the stripe's own
-	# edges stay flat.
-	var stripe := ColorRect.new()
-	stripe.color = MenuStyle.TEXT_SEP
+	# Jersey-stripe band on the card's left edge. A Panel with a
+	# StyleBoxFlat — corner_radius matches the card's outer curve on
+	# the left side (top-left + bottom-left = 4) and is flat on the
+	# right side (top-right + bottom-right = 0) so the inner edge sits
+	# clean against the card's primary background. Negative offsets
+	# escape the panel's content margin so the stripe extends to the
+	# card's actual top, bottom, and left edges. Rounded outside,
+	# flat inside.
+	var stripe_style := StyleBoxFlat.new()
+	stripe_style.bg_color = MenuStyle.TEXT_SEP
+	stripe_style.corner_radius_top_left = 4
+	stripe_style.corner_radius_bottom_left = 4
+	stripe_style.corner_radius_top_right = 0
+	stripe_style.corner_radius_bottom_right = 0
+	var stripe := Panel.new()
+	stripe.add_theme_stylebox_override("panel", stripe_style)
 	stripe.set_anchors_preset(Control.PRESET_LEFT_WIDE)
 	stripe.offset_left = -18
 	stripe.offset_right = -18 + _STRIPE_WIDTH
-	stripe.offset_top = -8
-	stripe.offset_bottom = 8
+	stripe.offset_top = -12
+	stripe.offset_bottom = 12
 	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(stripe)
 	_stripe[team_id][slot] = stripe
+	_stripe_style[team_id][slot] = stripe_style
 
 	var main_row := HBoxContainer.new()
 	# Number sits in a fixed-width slot and is centered within it, so the
@@ -200,7 +210,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 
 	var num := Label.new()
 	num.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
-	num.add_theme_font_size_override("font_size", 44)
+	num.add_theme_font_size_override("font_size", 50)
 	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	num.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	num.custom_minimum_size = Vector2(56, 0)
@@ -211,7 +221,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	# Name label fills the remaining width to the right of the number.
 	var name_lbl := Label.new()
 	name_lbl.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
-	name_lbl.add_theme_font_size_override("font_size", 22)
+	name_lbl.add_theme_font_size_override("font_size", 24)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -332,8 +342,8 @@ func refresh(roster: Array[Dictionary], local_peer_id: int, team_colors: Array[D
 
 
 func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
-	var style:    StyleBoxFlat = _stylebox[team_id][slot]
-	var stripe:   ColorRect = _stripe[team_id][slot]
+	var style:        StyleBoxFlat = _stylebox[team_id][slot]
+	var stripe_style: StyleBoxFlat = _stripe_style[team_id][slot]
 	var num_lbl:  Label = _num_labels[team_id][slot]
 	var name_lbl: Label = _name_labels[team_id][slot]
 	var pos_lbl:  Label = _pos_labels[team_id][slot]
@@ -361,7 +371,7 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		# Slightly elevated card bg so the empty slot still reads as a
 		# card against the dark lobby panel.
 		style.bg_color = MenuStyle.SURFACE_ELEV
-		stripe.color = MenuStyle.TEXT_SEP
+		stripe_style.bg_color = MenuStyle.TEXT_SEP
 		# Hide the number column and the right column entirely on empty
 		# cards so "OPEN SLOT" centers across the full card width. The
 		# column header above already provides position context (LEFT
@@ -370,7 +380,7 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		num_lbl.visible = false
 		right_col.visible = false
 		name_lbl.text = "OPEN SLOT"
-		name_lbl.add_theme_font_size_override("font_size", 16)
+		name_lbl.add_theme_font_size_override("font_size", 18)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_set_action(action, "+", _is_local_host, MenuStyle.TEXT_DIM)
@@ -380,14 +390,14 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 	# the default left-aligned full-size name.
 	num_lbl.visible = true
 	right_col.visible = true
-	name_lbl.add_theme_font_size_override("font_size", 22)
+	name_lbl.add_theme_font_size_override("font_size", 24)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 
 	if is_bot_slot:
 		# === Bot slot ==============================================
 		_peer_ids[team_id][slot] = -1
 		style.bg_color = jersey_c
-		stripe.color = stripe_c
+		stripe_style.bg_color = stripe_c
 		num_lbl.text = "#"
 		num_lbl.add_theme_color_override("font_color", text_c)
 		name_lbl.text = "BOT"
@@ -404,7 +414,7 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 	var peer_id: int = entry.get("peer_id", -1)
 	_peer_ids[team_id][slot] = peer_id
 	style.bg_color = jersey_c
-	stripe.color = stripe_c
+	stripe_style.bg_color = stripe_c
 
 	num_lbl.text = str(entry.get("jersey_number", 10))
 	num_lbl.add_theme_color_override("font_color", text_c)
