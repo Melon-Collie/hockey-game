@@ -66,10 +66,21 @@ const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 # dropped the vintage cream tones in favor of pure white + cool-neutral
 # gray to match the game's precision-sport character. Tune here to shift
 # the whole HUD warmer/cooler/punchier.
-const BROADCAST_FONT     := preload("res://Assets/Fonts/BebasNeue-Regular.ttf")  # SIL OFL 1.1 — Assets/Fonts/OFL.txt
-const BROADCAST_BG       := Color(0.039, 0.039, 0.078, 0.94)  # #0A0A14 dark navy panel
+#
+# Typography is a two-font system, both OFL-licensed:
+#   - DISPLAY_FONT (Big Shoulders Display Black) — heavy condensed sans,
+#     matches the logo's wordmark. Used for scorebug numbers, headers,
+#     player-card identity labels.
+#   - UI_FONT (Manrope Regular) — humanist sans, neutral body text.
+#     Default font for menu rows, button labels, body copy.
+const DISPLAY_FONT       := preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")  # SIL OFL 1.1
+const UI_FONT            := preload("res://Assets/Fonts/Manrope-Regular.ttf")  # SIL OFL 1.1
+# Dark surface for HUD overlays. Now identical to PANEL_BG so the menu and
+# scorebug share a single dark background — no visible seam between the two
+# surfaces when both are on screen.
+const BROADCAST_BG       := Color(0.067, 0.094, 0.141, 1.00)  # #111824, matches PANEL_BG
 const BROADCAST_BORDER_T := Color(0.227, 0.227, 0.306, 1.00)  # #3A3A4E top-edge highlight
-const BROADCAST_SHADOW   := Color(0.0,   0.0,   0.0,   0.50)  # offset drop shadow
+const BROADCAST_SHADOW   := Color(0.0,   0.0,   0.0,   0.50)  # offset drop shadow (unused; wrap_drop_shadow is now a no-op)
 const BROADCAST_CREAM    := Color(1.000, 1.000, 1.000, 1.00)  # #FFFFFF primary text (was cream #F6EFE2)
 const BROADCAST_DIM      := Color(0.608, 0.627, 0.675, 1.00)  # #9BA0AC cool-neutral gray labels (was cream-dim #B8B0A0)
 const BROADCAST_SEP      := Color(0.165, 0.165, 0.220, 1.00)  # #2A2A38 column separator
@@ -105,24 +116,25 @@ const CHARGE_LOST   := Color(1.00, 0.20, 0.20, 1.00)   # red flash on cancel
 # "spread: 0" behavior we want. This composes two panels: a shadow panel
 # (offset, behind, anti-aliasing off) and the original (at origin), with the
 # shadow size kept in sync with the original via the resized signal. The
-# wrapper reports a custom_minimum_size that accounts for the shadow offset
-# so parent containers (e.g. a centering HBox) lay it out correctly.
-static func wrap_drop_shadow(main_panel: PanelContainer, offset: Vector2) -> Control:
-	var wrapper := Control.new()
-	wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var shadow_style := StyleBoxFlat.new()
-	shadow_style.bg_color = BROADCAST_SHADOW
-	shadow_style.anti_aliasing = false
-	var shadow_panel := PanelContainer.new()
-	shadow_panel.add_theme_stylebox_override("panel", shadow_style)
-	shadow_panel.position = offset
-	shadow_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrapper.add_child(shadow_panel)
-	wrapper.add_child(main_panel)
-	main_panel.resized.connect(func() -> void:
-		shadow_panel.size = main_panel.size
-		wrapper.custom_minimum_size = main_panel.size + offset)
-	return wrapper
+# Drop-shadow helper retained as a pass-through so existing HUD call sites
+# don't have to be rewritten. The drop shadow itself was removed in the
+# visual harmonization pass — the broadcast surfaces now sit flat against
+# the unified dark background, matching the menu's look. If we ever want
+# shadows back, restore the body of this function (wrap + shadow_style +
+# size sync) from git history.
+static func wrap_drop_shadow(main_panel: PanelContainer, _offset: Vector2) -> Control:
+	return main_panel
+
+
+# Cascading theme that sets UI_FONT as the default font for a control and
+# all its descendants. Side menu / Boot title card / future menu surfaces
+# set this on their root Control so every Label/Button under them picks
+# up Manrope without needing per-control font overrides. Per-control size
+# overrides still apply on top.
+static func ui_theme() -> Theme:
+	var t := Theme.new()
+	t.default_font = UI_FONT
+	return t
 
 
 # Build a panel stylebox at custom dimensions. PanelContainers that don't call

@@ -32,7 +32,7 @@ const NETWORK_INTERPOLATION_DELAY: float = 0.075
 const PHYSICS_TICK: int = 240
 
 # ── Scenes ────────────────────────────────────────────────────────────────────
-const SCENE_MAIN_MENU: String     = "res://Scenes/MainMenu.tscn"
+const SCENE_BOOT: String          = "res://Scenes/Boot.tscn"
 const SCENE_HOCKEY: String        = "res://Scenes/Hockey.tscn"
 const SCENE_LOBBY: String         = "res://Scenes/Lobby.tscn"
 const SCENE_REPLAY_VIEWER: String = "res://Scenes/ReplayViewer.tscn"
