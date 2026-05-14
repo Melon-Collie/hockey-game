@@ -182,18 +182,22 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	_stripe[team_id][slot] = stripe
 
 	var main_row := HBoxContainer.new()
-	main_row.add_theme_constant_override("separation", 14)
+	# Tight separation lets the name sit right next to the number, like a
+	# real roster card: "10 Panarin" reads as one unit rather than two
+	# columns. The number takes whatever width its glyphs need, no fixed
+	# 72px reservation, so single-digit and double-digit numbers both
+	# end up flush against the name.
+	main_row.add_theme_constant_override("separation", 10)
 	main_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	main_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(main_row)
 
-	# Large jersey number, anchored at the left of the row.
 	var num := Label.new()
 	num.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	num.add_theme_font_size_override("font_size", 44)
 	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	num.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	num.custom_minimum_size = Vector2(72, 0)
+	num.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	num.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	main_row.add_child(num)
 	_num_labels[team_id][slot] = num
@@ -345,11 +349,9 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		_peer_ids[team_id][slot] = -1
 		style.bg_color = MenuStyle.PANEL_BG
 		stripe.color = MenuStyle.TEXT_SEP
-		# Shrink the number label to 0 width on empty cards so "OPEN SLOT"
-		# at body-text size has room without clipping. The position label
-		# still anchors top-right of the right column.
 		num_lbl.text = ""
-		num_lbl.custom_minimum_size = Vector2(0, 0)
+		# Empty cards use a smaller name font so "OPEN SLOT" fits the
+		# narrower side columns without clipping.
 		name_lbl.text = "OPEN SLOT"
 		name_lbl.add_theme_font_size_override("font_size", 16)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
@@ -360,8 +362,7 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		_set_action(action, "+", _is_local_host, MenuStyle.TEXT_DIM)
 		return
 
-	# Filled cards (bot or human) — restore the reserved number column.
-	num_lbl.custom_minimum_size = Vector2(72, 0)
+	# Filled cards (bot or human) — restore full-size name.
 	name_lbl.add_theme_font_size_override("font_size", 22)
 
 	if is_bot_slot:
