@@ -182,12 +182,12 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	_stripe[team_id][slot] = stripe
 
 	var main_row := HBoxContainer.new()
-	# Tight separation lets the name sit right next to the number, like a
-	# real roster card: "10 Panarin" reads as one unit rather than two
-	# columns. The number takes whatever width its glyphs need, no fixed
-	# 72px reservation, so single-digit and double-digit numbers both
-	# end up flush against the name.
-	main_row.add_theme_constant_override("separation", 10)
+	# Number sits in a fixed-width slot and is centered within it, so the
+	# name's left edge lines up across cards regardless of whether the
+	# number is one or two digits. Separation between number slot and
+	# name is small — the name should feel attached to the number, not
+	# columned away from it.
+	main_row.add_theme_constant_override("separation", 8)
 	main_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	main_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(main_row)
@@ -195,9 +195,9 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	var num := Label.new()
 	num.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	num.add_theme_font_size_override("font_size", 44)
-	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	num.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	num.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	num.custom_minimum_size = Vector2(56, 0)
 	num.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	main_row.add_child(num)
 	_num_labels[team_id][slot] = num
