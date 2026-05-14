@@ -132,6 +132,12 @@ var _persistent_sound_signals_wired: bool = false
 
 func _ready() -> void:
 	randomize()
+	# Make Manrope the engine-wide fallback font so every Control that
+	# doesn't set its own font picks it up automatically — saves us from
+	# touching every popup, dialog, and HUD label by hand. Explicit font
+	# overrides (DISPLAY_FONT on the scorebug, player card, etc.) still
+	# win since they're per-control theme overrides on top of the fallback.
+	ThemeDB.fallback_font = MenuStyle.UI_FONT
 	_career_reporter = CareerStatsReporter.new()
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
