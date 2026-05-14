@@ -162,6 +162,5 @@ func _bootstrap_free_play_and_change(scene: PackedScene) -> void:
 	if _transitioned:
 		return
 	_transitioned = true
-	NetworkManager.start_offline()
-	NetworkManager.is_free_play_mode = true
+	NetworkManager.start_free_play()
 	get_tree().change_scene_to_packed(scene)

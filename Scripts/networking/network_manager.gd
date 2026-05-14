@@ -93,6 +93,12 @@ signal spectator_demoted_received(peer_id: int)
 # without a respawn.
 signal local_identity_changed(player_name: String, jersey_number: int, is_left_handed: bool)
 
+# Local player picked a different favorite team palette. Fired by
+# apply_preferred_color (which writes PlayerPrefs.preferred_color_id).
+# GameManager re-tints the home team's local actors and, if the new home
+# now collides with the current away, re-rolls the away color too.
+signal local_preferred_color_changed(home_color_id: String, away_color_id: String)
+
 # ── State ─────────────────────────────────────────────────────────────────────
 var is_host: bool = false
 var game_initiated: bool = false
@@ -197,6 +203,52 @@ func start_offline() -> void:
 	_peer_numbers[1] = local_jersey_number
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
 			"rule_set": GameRules.DEFAULT_RULE_SET}
+
+
+# Entry point that wraps start_offline with the free-play-specific seeding:
+# home color = the player's saved favorite (or DEFAULT_HOME_ID if none picked
+# yet), away color = a random non-home team from the registry. Used by both
+# Boot (initial launch) and GameManager.return_to_free_play.
+func start_free_play() -> void:
+	pending_home_color_id = _resolve_preferred_home_id()
+	pending_away_color_id = _pick_random_away_id(pending_home_color_id)
+	start_offline()
+	is_free_play_mode = true
+
+
+# Update PlayerPrefs.preferred_color_id and broadcast the change. Re-rolls
+# the away color if the new home matches the current away so the player
+# never faces a team wearing the same palette.
+func apply_preferred_color(color_id: String) -> void:
+	PlayerPrefs.preferred_color_id = color_id
+	PlayerPrefs.save()
+	pending_home_color_id = color_id
+	if pending_away_color_id == color_id:
+		pending_away_color_id = _pick_random_away_id(color_id)
+	local_preferred_color_changed.emit(pending_home_color_id, pending_away_color_id)
+
+
+func _resolve_preferred_home_id() -> String:
+	var saved: String = PlayerPrefs.preferred_color_id
+	if saved.is_empty():
+		return TeamColorRegistry.DEFAULT_HOME_ID
+	# Defensive: if the user's saved id was removed from the registry (e.g.
+	# team list edited between releases), fall back to the default rather
+	# than crashing downstream lookups.
+	if not TeamColorRegistry.get_all_ids().has(saved):
+		return TeamColorRegistry.DEFAULT_HOME_ID
+	return saved
+
+
+func _pick_random_away_id(home_id: String) -> String:
+	var ids: Array[String] = TeamColorRegistry.get_all_ids()
+	var candidates: Array[String] = []
+	for id: String in ids:
+		if id != home_id:
+			candidates.append(id)
+	if candidates.is_empty():
+		return TeamColorRegistry.DEFAULT_AWAY_ID
+	return candidates[randi() % candidates.size()]
 
 
 # Single entry point for in-session identity edits. PlayerSettingsPopup
