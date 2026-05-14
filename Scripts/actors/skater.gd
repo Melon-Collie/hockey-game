@@ -324,8 +324,16 @@ func get_blade_contact_global() -> Vector3:
 # so flips animate through center over carry_side_lerp_speed instead of
 # teleporting. Public so future work (e.g. replacing the
 # wrister_start_blade_local_x heuristic for shot bias) can consume it directly.
+#
+# Sign convention is mirrored between handednesses so the visual offset
+# direction (applied by SkaterIKCoordinator and get_carry_target_global)
+# lands on the same side of the body relative to the player for both
+# lefties and righties — without this flip, a righty's puck rendered on
+# the opposite face of the blade from a lefty's, even though both were
+# "on forehand" per _carry_side.
 func get_carry_forehand_factor() -> float:
-	return _carry_side_smoothed
+	var handedness_sign: float = 1.0 if is_left_handed else -1.0
+	return _carry_side_smoothed * handedness_sign
 
 
 # Called once per tick from SkaterIKCoordinator.apply_blade_from_mouse —
