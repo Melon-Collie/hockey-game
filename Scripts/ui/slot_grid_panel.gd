@@ -34,8 +34,8 @@ const _POSITION_LABEL := ["C", "L", "R"]   # indexed by slot
 const _POSITION_HEADER := ["LEFT WING", "CENTER", "RIGHT WING"]
 
 const _CARD_HEIGHT: int = 96
-const _STRIPE_WIDTH: int = 6
-const _ICON_SIZE: int = 24
+const _STRIPE_WIDTH: int = 4
+const _ICON_SIZE: int = 20
 
 # Ping color bands (ms).
 const _PING_GREEN: int  = 60
@@ -47,6 +47,7 @@ const _COLOR_PING_BAD  := Color(0.92, 0.40, 0.40, 1.0)
 # Per-slot widget caches. Indexed [team_id][slot].
 var _cards:        Array = [[], []]
 var _stylebox:     Array = [[], []]   # StyleBoxFlat — recolored per refresh
+var _stripe:       Array = [[], []]   # ColorRect — inset left edge band
 var _num_labels:   Array = [[], []]
 var _name_labels:  Array = [[], []]
 var _pos_labels:   Array = [[], []]
@@ -116,6 +117,7 @@ func _build_grid() -> void:
 
 		_cards[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_stylebox[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_stripe[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_num_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_name_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_pos_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
@@ -133,16 +135,21 @@ func _build_grid() -> void:
 
 
 # Build a single slot card. The card root is a PanelContainer whose stylebox
-# carries the background color, left-stripe border, and (for the local
-# player) the teal outline border. gui_input on the panel handles the
-# click-to-swap; the X/+ action button is a child with mouse_filter STOP
-# so its clicks don't bubble to the panel's swap handler.
+# carries the background color. The jersey-stripe band is a separate
+# ColorRect child anchored to the left edge and inset a few pixels from
+# the top/bottom so it sits as a hard rectangle inside the rounded card —
+# avoiding the concentric-rounded-corners "designed by AI" tell. gui_input
+# on the panel handles the click-to-swap; the X/+ action button is a child
+# with mouse_filter STOP so its clicks don't bubble to the panel's swap
+# handler.
 func _build_card(team_id: int, slot: int) -> PanelContainer:
 	var style := StyleBoxFlat.new()
 	style.bg_color = MenuStyle.PANEL_BG
 	style.set_corner_radius_all(4)
 	style.set_content_margin_all(12)
-	style.border_width_left = _STRIPE_WIDTH
+	# Pad an extra slice on the left so the inset stripe doesn't collide
+	# with the number label.
+	style.set_content_margin(SIDE_LEFT, 18)
 
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", style)
@@ -155,11 +162,24 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	_stylebox[team_id][slot] = style
 
 	# Card content lives inside a Control so we can absolute-position the
-	# action button on top of the main row. The main row is a regular
-	# HBoxContainer for the number/name/right column.
+	# action button and the inset stripe on top of the main row.
 	var content := Control.new()
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(content)
+
+	# Inset jersey-stripe band — anchored to the left edge of the content
+	# area, sharp rectangle sitting a few pixels off the top/bottom so it
+	# doesn't curl with the card's corner radius.
+	var stripe := ColorRect.new()
+	stripe.color = MenuStyle.TEXT_SEP
+	stripe.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	stripe.offset_left = -6
+	stripe.offset_right = -6 + _STRIPE_WIDTH
+	stripe.offset_top = 4
+	stripe.offset_bottom = -4
+	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(stripe)
+	_stripe[team_id][slot] = stripe
 
 	var main_row := HBoxContainer.new()
 	main_row.add_theme_constant_override("separation", 14)
@@ -190,10 +210,14 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	main_row.add_child(name_lbl)
 	_name_labels[team_id][slot] = name_lbl
 
-	# Right column: position letter on top, status (ping or AI) below.
+	# Right column: position letter pinned to top, status (ping or AI)
+	# pinned to bottom. The middle spacer eats any leftover height so the
+	# two anchors don't shift up/down with the status visibility — empty
+	# slots (status hidden) used to drift the position letter upward
+	# because ALIGNMENT_CENTER recentered it.
 	var right_col := VBoxContainer.new()
-	right_col.alignment = BoxContainer.ALIGNMENT_CENTER
-	right_col.add_theme_constant_override("separation", 4)
+	right_col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	right_col.add_theme_constant_override("separation", 0)
 	right_col.custom_minimum_size = Vector2(72, 0)
 	right_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	main_row.add_child(right_col)
@@ -203,9 +227,17 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	pos_lbl.add_theme_font_size_override("font_size", 13)
 	pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	pos_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	pos_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	pos_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	right_col.add_child(pos_lbl)
 	_pos_labels[team_id][slot] = pos_lbl
+
+	# Spacer pushes the status row to the bottom regardless of whether
+	# the status row's contents are visible.
+	var col_spacer := Control.new()
+	col_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	right_col.add_child(col_spacer)
 
 	# Status row carries either the ping ("32ms ●") or the AI badge.
 	var status_box := HBoxContainer.new()
@@ -287,6 +319,7 @@ func refresh(roster: Array[Dictionary], local_peer_id: int, team_colors: Array[D
 
 func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 	var style:    StyleBoxFlat = _stylebox[team_id][slot]
+	var stripe:   ColorRect = _stripe[team_id][slot]
 	var num_lbl:  Label = _num_labels[team_id][slot]
 	var name_lbl: Label = _name_labels[team_id][slot]
 	var pos_lbl:  Label = _pos_labels[team_id][slot]
@@ -298,17 +331,11 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 	var jersey_c:  Color = MenuStyle.PANEL_BG
 	var stripe_c:  Color = MenuStyle.TEXT_SEP
 	var text_c:    Color = MenuStyle.TEXT_BODY
-	var text_dim:  Color = MenuStyle.TEXT_DIM
 	if _team_colors.size() > team_id:
 		var tc: Dictionary = _team_colors[team_id]
 		jersey_c = tc.get("jersey", jersey_c)
 		stripe_c = tc.get("jersey_stripe", stripe_c)
 		text_c   = tc.get("text", text_c)
-
-	# Reset borders — the "your slot" path below opts back in.
-	style.border_width_top = 0
-	style.border_width_right = 0
-	style.border_width_bottom = 0
 
 	var slot_key: int = team_id * 3 + slot
 	var is_bot_slot: bool = entry == null and _bot_slots.get(slot_key, false)
@@ -317,22 +344,31 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		# === Empty slot ============================================
 		_peer_ids[team_id][slot] = -1
 		style.bg_color = MenuStyle.PANEL_BG
-		style.border_color = MenuStyle.TEXT_SEP
+		stripe.color = MenuStyle.TEXT_SEP
+		# Shrink the number label to 0 width on empty cards so "OPEN SLOT"
+		# at body-text size has room without clipping. The position label
+		# still anchors top-right of the right column.
 		num_lbl.text = ""
+		num_lbl.custom_minimum_size = Vector2(0, 0)
 		name_lbl.text = "OPEN SLOT"
+		name_lbl.add_theme_font_size_override("font_size", 16)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		ping_lbl.visible = false
 		dot.visible = false
 		ai_lbl.visible = false
-		_set_action(action, "+", _is_local_host, true)
+		_set_action(action, "+", _is_local_host, MenuStyle.TEXT_DIM)
 		return
+
+	# Filled cards (bot or human) — restore the reserved number column.
+	num_lbl.custom_minimum_size = Vector2(72, 0)
+	name_lbl.add_theme_font_size_override("font_size", 22)
 
 	if is_bot_slot:
 		# === Bot slot ==============================================
 		_peer_ids[team_id][slot] = -1
 		style.bg_color = jersey_c
-		style.border_color = stripe_c
+		stripe.color = stripe_c
 		num_lbl.text = "##"
 		num_lbl.add_theme_color_override("font_color", text_c)
 		name_lbl.text = "BOT"
@@ -342,14 +378,14 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		dot.visible = false
 		ai_lbl.visible = true
 		ai_lbl.add_theme_color_override("font_color", _muted(text_c, 0.75))
-		_set_action(action, "x", _is_local_host, false)
+		_set_action(action, "x", _is_local_host, text_c)
 		return
 
 	# === Human-filled slot (local or remote) =====================
 	var peer_id: int = entry.get("peer_id", -1)
 	_peer_ids[team_id][slot] = peer_id
 	style.bg_color = jersey_c
-	style.border_color = stripe_c
+	stripe.color = stripe_c
 
 	num_lbl.text = str(entry.get("jersey_number", 10))
 	num_lbl.add_theme_color_override("font_color", text_c)
@@ -363,43 +399,41 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 	ping_lbl.visible = true
 	dot.visible = true
 	_apply_ping(ping_lbl, dot, peer_id, text_c)
-
-	# Your slot — add a 1px TEAL_DIM border around the card so the local
-	# player can spot themselves at a glance. No action button on the
-	# local player's slot (you can't kick yourself).
-	if is_local:
-		style.border_color = MenuStyle.TEAL
-		style.border_width_top = 1
-		style.border_width_right = 1
-		style.border_width_bottom = 1
-		# Override the stripe color too — TEAL_DIM left edge ties the
-		# accent together rather than fighting with the jersey stripe.
-		style.border_width_left = _STRIPE_WIDTH
+	# Local player's own slot — no kick-yourself action.
+	# Remote-human slot — no action either; only host-edited bots get one.
 	action.visible = false
 
 
-func _set_action(action: Button, icon: String, visible: bool, is_add: bool) -> void:
+# Small outline-only square in the top-left corner of a card. `accent` is
+# the team's text color (on a jersey background) or TEXT_DIM (on an empty
+# card) — guaranteed contrast since `text` is the registry's contrast-
+# engineered color. Transparent fill at rest, lightly-tinted on hover.
+func _set_action(action: Button, icon: String, visible: bool, accent: Color) -> void:
 	action.visible = visible
 	if not visible:
 		return
 	action.text = icon
-	var bg_color: Color = MenuStyle.TEAL_DIM if is_add else MenuStyle.DANGER
-	var fg_color: Color = MenuStyle.TEXT_TITLE if is_add else Color(1, 1, 1, 1)
 	var normal_style := StyleBoxFlat.new()
-	normal_style.bg_color = bg_color
+	normal_style.bg_color = Color(0, 0, 0, 0)
+	normal_style.border_color = accent
+	normal_style.set_border_width_all(1)
 	normal_style.set_corner_radius_all(3)
 	var hover_style := StyleBoxFlat.new()
-	hover_style.bg_color = bg_color.lightened(0.18)
+	hover_style.bg_color = Color(accent.r, accent.g, accent.b, 0.18)
+	hover_style.border_color = accent
+	hover_style.set_border_width_all(1)
 	hover_style.set_corner_radius_all(3)
 	var pressed_style := StyleBoxFlat.new()
-	pressed_style.bg_color = bg_color.darkened(0.15)
+	pressed_style.bg_color = Color(accent.r, accent.g, accent.b, 0.30)
+	pressed_style.border_color = accent
+	pressed_style.set_border_width_all(1)
 	pressed_style.set_corner_radius_all(3)
 	action.add_theme_stylebox_override("normal", normal_style)
 	action.add_theme_stylebox_override("hover", hover_style)
 	action.add_theme_stylebox_override("pressed", pressed_style)
-	action.add_theme_color_override("font_color", fg_color)
-	action.add_theme_color_override("font_hover_color", fg_color)
-	action.add_theme_color_override("font_pressed_color", fg_color)
+	action.add_theme_color_override("font_color", accent)
+	action.add_theme_color_override("font_hover_color", accent)
+	action.add_theme_color_override("font_pressed_color", accent)
 
 
 func _apply_ping(ping_lbl: Label, dot: ColorRect, peer_id: int, text_c: Color) -> void:
