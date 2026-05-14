@@ -2,13 +2,13 @@
 
 importer="font_data_dynamic"
 type="FontFile"
-uid="uid://b6stsqcaa4dkc"
-path="res://.godot/imported/BebasNeue-Regular.ttf-e64a684d82d5c0d04c61e665e68d597b.fontdata"
+uid="uid://cr82umbua24yl"
+path="res://.godot/imported/Manrope-Regular.ttf-b545df2b657d9d108e47080f413cd6bd.fontdata"
 
 [deps]
 
-source_file="res://Assets/Fonts/BebasNeue-Regular.ttf"
-dest_files=["res://.godot/imported/BebasNeue-Regular.ttf-e64a684d82d5c0d04c61e665e68d597b.fontdata"]
+source_file="res://Assets/Fonts/Manrope-Regular.ttf"
+dest_files=["res://.godot/imported/Manrope-Regular.ttf-b545df2b657d9d108e47080f413cd6bd.fontdata"]
 
 [params]
 

@@ -106,8 +106,12 @@ func _physics_process(delta: float) -> void:
 		skater.velocity = Vector3.ZERO
 		_input_history.clear()
 		return
-	if _game_state.is_input_blocked():
-		return
+	# When input is blocked (menu open) the gatherer returns a neutral
+	# InputState — zero movement, no held buttons. We still run the full
+	# pipeline below so the skater decelerates naturally, the state machine
+	# transitions cleanly, and host + client process identical inputs to
+	# stay in reconcile sync. No carve-out needed here.
+
 	# Predict offsides locally for instant ghost feedback
 	_predict_offside()
 	var gathered: InputState = _gatherer.gather()
