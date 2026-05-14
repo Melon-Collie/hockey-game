@@ -16,6 +16,10 @@ var _transitioned: bool = false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Pass mouse events through to _unhandled_input so the title card can
+	# be dismissed by clicking, not just by keyboard. The default STOP
+	# filter on a root Control would otherwise swallow the click.
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	TeamColorRegistry.ensure_loaded()
 	PlayerPrefs.apply_video()
 	# Kick off threaded load of the heavy rink scene immediately. By the time
@@ -28,11 +32,12 @@ func _build_ui() -> void:
 	# Cascade Manrope to every Label under the title card.
 	theme = MenuStyle.ui_theme()
 
-	var bg := TextureRect.new()
-	bg.texture = load("res://Assets/Mitts_ice_background.png")
+	# Flat dark navy background — same value as the side menu / scorebug,
+	# so the title card lives in the same visual world the rest of the
+	# UI does. The old ice photo washed out the "Press any key" prompt.
+	var bg := ColorRect.new()
+	bg.color = MenuStyle.PANEL_BG
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
 
@@ -47,10 +52,11 @@ func _build_ui() -> void:
 	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(vbox)
 
-	# Logo with a glow halo behind it — same two-rect treatment as MainMenu so
-	# the visual identity of the title card matches what the player was used to.
+	# Logo with a glow halo behind it — same two-rect treatment as the old
+	# main menu. Bigger on the title card (no other UI competing for space)
+	# so the brand moment lands.
 	var logo_slot := Control.new()
-	logo_slot.custom_minimum_size = Vector2(650, 280)
+	logo_slot.custom_minimum_size = Vector2(820, 360)
 	logo_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(logo_slot)
 
