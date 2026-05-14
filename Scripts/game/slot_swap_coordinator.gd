@@ -100,9 +100,19 @@ func apply_confirmed_swap(
 	record.text_color          = colors.text
 	record.text_outline_color  = colors.text_outline
 	record.faceoff_position    = PlayerRules.faceoff_position(new_team_id, new_slot)
+	# Skater carries team_id for friendly-carrier checks (goalie, etc.); the
+	# skater node is reused across the swap, so we must repaint it on the new
+	# team or the goalie keeps seeing the player as their old colors.
+	record.skater.team_id = new_team_id
 	record.skater.set_player_color(jersey, helmet, pants, colors.socks, colors.primary)
 	record.skater.set_player_name(record.player_name)
 	record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text)
 	record.skater.set_jersey_stripes(colors.jersey_stripe, colors.pants_stripe, colors.socks_stripe)
+	# LocalController caches the local player's team for offside prediction,
+	# camera orientation, and attack-up. Without this the local skater would
+	# be flagged offside in its new zone and the camera would still face the
+	# old direction. RemoteController doesn't store team_id.
+	if record.is_local and record.controller is LocalController:
+		(record.controller as LocalController).set_local_team_id(new_team_id)
 	record.controller.teleport_to(record.faceoff_position)
 	stats_updated.emit()
