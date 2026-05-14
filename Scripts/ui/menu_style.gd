@@ -61,6 +61,21 @@ const GOLD        := Color(1.00, 0.85, 0.20, 1.00)
 const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 
 
+# ── Broadcast HUD (in-game scorebug + popup scoreboard) ──────────────────────
+# Modern indie sport HUD palette. The "broadcast" name is historical — we
+# dropped the vintage cream tones in favor of pure white + cool-neutral
+# gray to match the game's precision-sport character. Tune here to shift
+# the whole HUD warmer/cooler/punchier.
+const BROADCAST_FONT     := preload("res://Assets/Fonts/BebasNeue-Regular.ttf")  # SIL OFL 1.1 — Assets/Fonts/OFL.txt
+const BROADCAST_BG       := Color(0.039, 0.039, 0.078, 0.94)  # #0A0A14 dark navy panel
+const BROADCAST_BORDER_T := Color(0.227, 0.227, 0.306, 1.00)  # #3A3A4E top-edge highlight
+const BROADCAST_SHADOW   := Color(0.0,   0.0,   0.0,   0.50)  # offset drop shadow
+const BROADCAST_CREAM    := Color(1.000, 1.000, 1.000, 1.00)  # #FFFFFF primary text (was cream #F6EFE2)
+const BROADCAST_DIM      := Color(0.608, 0.627, 0.675, 1.00)  # #9BA0AC cool-neutral gray labels (was cream-dim #B8B0A0)
+const BROADCAST_SEP      := Color(0.165, 0.165, 0.220, 1.00)  # #2A2A38 column separator
+const BROADCAST_TITLE_BG := Color(0.102, 0.102, 0.149, 1.00)  # #1A1A26 scoreboard title strip
+
+
 # ── HUD ice-overlay (3D-on-ice elements: rings, glyphs, reticles) ─────────────
 # Shared by every element drawn flat on the ice under a skater. All three
 # values are referenced by Skater for procedural mesh construction; tweak here
@@ -83,6 +98,32 @@ const CHARGE_LOST   := Color(1.00, 0.20, 0.20, 1.00)   # red flash on cancel
 
 
 # ── Factories ─────────────────────────────────────────────────────────────────
+
+# Wrap a PanelContainer in a Control with a hard-edged, CSS-style offset drop
+# shadow. Godot's StyleBoxFlat shadow expands the shadow rect uniformly before
+# applying offset, which produces a soft-edged halo instead of the crisp
+# "spread: 0" behavior we want. This composes two panels: a shadow panel
+# (offset, behind, anti-aliasing off) and the original (at origin), with the
+# shadow size kept in sync with the original via the resized signal. The
+# wrapper reports a custom_minimum_size that accounts for the shadow offset
+# so parent containers (e.g. a centering HBox) lay it out correctly.
+static func wrap_drop_shadow(main_panel: PanelContainer, offset: Vector2) -> Control:
+	var wrapper := Control.new()
+	wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var shadow_style := StyleBoxFlat.new()
+	shadow_style.bg_color = BROADCAST_SHADOW
+	shadow_style.anti_aliasing = false
+	var shadow_panel := PanelContainer.new()
+	shadow_panel.add_theme_stylebox_override("panel", shadow_style)
+	shadow_panel.position = offset
+	shadow_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrapper.add_child(shadow_panel)
+	wrapper.add_child(main_panel)
+	main_panel.resized.connect(func() -> void:
+		shadow_panel.size = main_panel.size
+		wrapper.custom_minimum_size = main_panel.size + offset)
+	return wrapper
+
 
 # Build a panel stylebox at custom dimensions. PanelContainers that don't call
 # this just inherit the default panel from the project theme.

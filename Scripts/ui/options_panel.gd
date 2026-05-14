@@ -16,6 +16,7 @@ var _tab_btns: Array[Button] = []
 var _vsync_check: CheckButton = null
 var _fps_btn: OptionButton = null
 var _gamma_slider: HSlider = null
+var _color_grade_btn: OptionButton = null
 var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
 var _attack_up_check: CheckButton = null
@@ -103,6 +104,7 @@ func _snapshot() -> Dictionary:
 		"vsync_enabled": PlayerPrefs.vsync_enabled,
 		"fps_cap_index": PlayerPrefs.fps_cap_index,
 		"gamma": PlayerPrefs.gamma,
+		"color_grade_preset": PlayerPrefs.color_grade_preset,
 		"master_volume": PlayerPrefs.master_volume,
 		"sfx_volume": PlayerPrefs.sfx_volume,
 		"ui_volume": PlayerPrefs.ui_volume,
@@ -122,6 +124,7 @@ func _read_controls() -> Dictionary:
 		"vsync_enabled": _vsync_check.button_pressed,
 		"fps_cap_index": _fps_btn.selected,
 		"gamma": _gamma_slider.value,
+		"color_grade_preset": _color_grade_btn.selected,
 		"master_volume": _volume_slider.value,
 		"sfx_volume": _sfx_slider.value,
 		"ui_volume": _ui_slider.value,
@@ -253,6 +256,15 @@ func _build_video_tab() -> Control:
 	var gamma_val := _value_label("%.2f" % PlayerPrefs.gamma)
 	_gamma_slider.value_changed.connect(func(v: float) -> void: gamma_val.text = "%.2f" % v)
 	box.add_child(_slider_row("Gamma", _gamma_slider, gamma_val))
+
+	_color_grade_btn = OptionButton.new()
+	_color_grade_btn.custom_minimum_size = Vector2(220, 40)
+	_color_grade_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.COLOR_GRADE_LABELS.size():
+		_color_grade_btn.add_item(PlayerPrefs.COLOR_GRADE_LABELS[i], i)
+	_color_grade_btn.selected = PlayerPrefs.color_grade_preset
+	_color_grade_btn.item_selected.connect(_on_color_grade_selected)
+	box.add_child(_field_row("Color Grade", _color_grade_btn))
 
 	return box
 
@@ -458,6 +470,9 @@ func _on_fps_cap_selected(_idx: int) -> void:
 func _on_gamma_changed(_value: float) -> void:
 	_update_apply_state()
 
+func _on_color_grade_selected(_idx: int) -> void:
+	_update_apply_state()
+
 func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
@@ -600,6 +615,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.vsync_enabled = c.vsync_enabled
 	PlayerPrefs.fps_cap_index = c.fps_cap_index
 	PlayerPrefs.gamma = c.gamma
+	PlayerPrefs.color_grade_preset = c.color_grade_preset
 	PlayerPrefs.master_volume = c.master_volume
 	PlayerPrefs.sfx_volume = c.sfx_volume
 	PlayerPrefs.ui_volume = c.ui_volume
@@ -625,6 +641,8 @@ func _on_cancel_pressed() -> void:
 	_vsync_check.set_pressed_no_signal(_original.vsync_enabled)
 	_fps_btn.selected = _original.fps_cap_index
 	_gamma_slider.value = _original.gamma
+	if _color_grade_btn != null:
+		_color_grade_btn.selected = _original.color_grade_preset
 	_volume_slider.value = _original.master_volume
 	_sfx_slider.value = _original.sfx_volume
 	_ui_slider.value = _original.ui_volume

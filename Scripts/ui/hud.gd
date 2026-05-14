@@ -6,7 +6,17 @@ var _clock_label: Label
 var _home_score_label: Label
 var _away_score_label: Label
 var _phase_panel: PanelContainer
+var _phase_wrapper: Control
+var _scorebug_panel: PanelContainer = null
+var _top_goal_banner: Control = null
+var _top_goal_main_panel: PanelContainer = null
+var _top_goal_panel_style: StyleBoxFlat = null
+var _top_goal_stripe_style: StyleBoxFlat = null
+var _top_goal_tween: Tween = null
 var _phase_label: Label
+var _tagline_label: Label
+var _scorer_label: Label
+var _assist_tag_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
@@ -20,8 +30,6 @@ var _score_0: int = 0
 var _score_1: int = 0
 var _home_badge_style: StyleBoxFlat = null
 var _away_badge_style: StyleBoxFlat = null
-var _home_badge_label: Label = null
-var _away_badge_label: Label = null
 var _last_clock_pulse_second: int = -1
 var _confirm_dialog: ConfirmDialog = null
 var _confirm_callback: Callable = Callable()
@@ -29,18 +37,20 @@ var _rematch_votes: Dictionary[int, bool] = {}
 var _local_voted: bool = false
 var _replay_label: Label = null
 var _spectator_banner: PanelContainer = null
+var _spectator_wrapper: Control = null
 
-const _DARK_BG    := MenuStyle.HUD_BG
-const _WHITE      := Color(1.00, 1.00, 1.00, 1.00)
-const _DIM        := Color(0.62, 0.62, 0.68, 1.00)
+const _DARK_BG    := MenuStyle.BROADCAST_BG
+const _WHITE      := MenuStyle.BROADCAST_CREAM
+const _DIM        := MenuStyle.BROADCAST_DIM
 const _GOLD       := MenuStyle.GOLD
-const _SEP_COLOR  := Color(0.28, 0.28, 0.33, 1.00)
+const _SEP_COLOR  := MenuStyle.BROADCAST_SEP
 
 func _ready() -> void:
 	GameManager.team_colors_ready.connect(_on_team_colors_ready)
 	_build_offscreen_indicators()
 	_build_scorebug()
 	_build_phase_banner()
+	_build_top_goal_banner()
 	_build_version_tag()
 	_build_bug_icon()
 	_bug_dialog = BugReportDialog.new()
@@ -67,7 +77,7 @@ func _ready() -> void:
 	_clock_label.text = _format_clock(GameManager.get_period_duration())
 	_home_score_label.text = "0"
 	_away_score_label.text = "0"
-	_phase_panel.visible = false
+	_phase_wrapper.visible = false
 	GameManager.score_changed.connect(_on_score_changed)
 	GameManager.goal_scored.connect(_on_goal_scored)
 	GameManager.phase_changed.connect(_on_phase_changed)
@@ -103,150 +113,271 @@ func _unhandled_input(event: InputEvent) -> void:
 func _build_scorebug() -> void:
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = _DARK_BG
-	panel_style.set_corner_radius_all(3)
+	panel_style.set_corner_radius_all(0)
+	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
+	panel_style.border_width_top = 1
+	panel_style.anti_aliasing = false  # crisp edges to match the layered shadow
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
-	panel.position = Vector2(8, 8)
-	add_child(panel)
+	_scorebug_panel = panel
+	var shadow_wrap := MenuStyle.wrap_drop_shadow(panel, Vector2(4, 4))
+	shadow_wrap.position = Vector2(8, 8)
+	add_child(shadow_wrap)
 
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 0)
 	panel.add_child(hbox)
 
-	# Teams + Scores column
-	var teams_cell := _cell(8, 6)
-	hbox.add_child(teams_cell)
+	# === Teams column ===
+	# Each team row is [stripe | abbr label | score]. Stripes carry the team
+	# color the way a chyron lower-third does, replacing the old badge.
+	var teams_outer := MarginContainer.new()
+	teams_outer.add_theme_constant_override("margin_top", 4)
+	teams_outer.add_theme_constant_override("margin_bottom", 4)
+	hbox.add_child(teams_outer)
 	var teams_vbox := VBoxContainer.new()
-	teams_vbox.add_theme_constant_override("separation", 5)
-	teams_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	teams_cell.add_child(teams_vbox)
-
-	# Away on top, home on bottom (NHL convention)
-	var away_row := HBoxContainer.new()
-	away_row.add_theme_constant_override("separation", 8)
-	away_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	teams_vbox.add_theme_constant_override("separation", 4)
+	teams_outer.add_child(teams_vbox)
+	var away_row := _build_scorebug_team_row(1, "AWAY")
+	_away_badge_style = away_row.get_meta(&"stripe_style") as StyleBoxFlat
+	_away_score_label = away_row.get_meta(&"score_label") as Label
 	teams_vbox.add_child(away_row)
-	var away_badge := _team_badge("AWAY", _initial_team_primary(1))
-	_away_badge_style = away_badge.get_theme_stylebox("panel") as StyleBoxFlat
-	_away_badge_label = away_badge.get_child(0) as Label
-	away_row.add_child(away_badge)
-	_away_score_label = _lbl("0", 20, _WHITE)
-	_away_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_away_score_label.custom_minimum_size = Vector2(22, 0)
-	_away_score_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	away_row.add_child(_away_score_label)
-
-	var home_row := HBoxContainer.new()
-	home_row.add_theme_constant_override("separation", 8)
-	home_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	var home_row := _build_scorebug_team_row(0, "HOME")
+	_home_badge_style = home_row.get_meta(&"stripe_style") as StyleBoxFlat
+	_home_score_label = home_row.get_meta(&"score_label") as Label
 	teams_vbox.add_child(home_row)
-	var home_badge := _team_badge("HOME", _initial_team_primary(0))
-	_home_badge_style = home_badge.get_theme_stylebox("panel") as StyleBoxFlat
-	_home_badge_label = home_badge.get_child(0) as Label
-	home_row.add_child(home_badge)
-	_home_score_label = _lbl("0", 20, _WHITE)
-	_home_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_home_score_label.custom_minimum_size = Vector2(22, 0)
-	_home_score_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	home_row.add_child(_home_score_label)
 
 	hbox.add_child(_vsep())
 
-	# Shots on Goal column: "SHOTS" header + per-team numbers
-	var shots_cell := _cell(8, 4)
+	# === Shots column ===
+	var shots_cell := _cell(10, 4)
 	hbox.add_child(shots_cell)
 	var shots_vbox := VBoxContainer.new()
 	shots_vbox.add_theme_constant_override("separation", 2)
 	shots_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	shots_cell.add_child(shots_vbox)
-
-	# Away shots top, label middle, home shots bottom — mirrors team row order
-	_away_sog_label = _lbl("0", 14, _WHITE)
+	_away_sog_label = _lbl("0", 18, _WHITE)
 	_away_sog_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_away_sog_label.custom_minimum_size = Vector2(28, 0)
 	shots_vbox.add_child(_away_sog_label)
-
-	var shots_header := _lbl("SHOTS", 9, _DIM)
+	var shots_header := _lbl("SHOTS", 10, _DIM)
 	shots_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shots_vbox.add_child(shots_header)
-
-	_home_sog_label = _lbl("0", 14, _WHITE)
+	_home_sog_label = _lbl("0", 18, _WHITE)
 	_home_sog_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_home_sog_label.custom_minimum_size = Vector2(28, 0)
 	shots_vbox.add_child(_home_sog_label)
 
 	hbox.add_child(_vsep())
 
-	# Period + Clock column
-	var time_cell := _cell(8, 6)
+	# === Period + Clock column ===
+	var time_cell := _cell(14, 4)
 	hbox.add_child(time_cell)
 	var time_vbox := VBoxContainer.new()
 	time_vbox.add_theme_constant_override("separation", 2)
 	time_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	time_cell.add_child(time_vbox)
-
-	_period_label = _lbl("1ST", 12, _DIM)
+	_period_label = _lbl("1ST", 13, _DIM)
 	_period_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	time_vbox.add_child(_period_label)
-
-	_clock_label = _lbl("4:00", 22, _WHITE)
+	_clock_label = _lbl("4:00", 26, _WHITE)
 	_clock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_clock_label.custom_minimum_size = Vector2(60, 0)
+	_clock_label.custom_minimum_size = Vector2(62, 0)
 	time_vbox.add_child(_clock_label)
 
+# One row of the teams column. Returns an HBox whose .get_meta() exposes the
+# stripe StyleBox + abbreviation + score Labels for live updates.
+func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 0)
+
+	var stripe_style := StyleBoxFlat.new()
+	stripe_style.bg_color = _initial_team_primary(team_id)
+	var stripe := PanelContainer.new()
+	stripe.add_theme_stylebox_override("panel", stripe_style)
+	stripe.custom_minimum_size = Vector2(6, 28)
+	row.add_child(stripe)
+
+	var abbr_margin := MarginContainer.new()
+	abbr_margin.add_theme_constant_override("margin_left", 8)
+	abbr_margin.add_theme_constant_override("margin_right", 4)
+	row.add_child(abbr_margin)
+	var abbr_label := _lbl(abbr, 18, _WHITE)
+	abbr_label.custom_minimum_size = Vector2(50, 0)
+	abbr_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	abbr_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	abbr_margin.add_child(abbr_label)
+
+	var score_margin := MarginContainer.new()
+	score_margin.add_theme_constant_override("margin_right", 8)
+	row.add_child(score_margin)
+	var score_label := _lbl("0", 26, _WHITE)
+	score_label.custom_minimum_size = Vector2(28, 0)
+	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	score_margin.add_child(score_label)
+
+	row.set_meta(&"stripe_style", stripe_style)
+	row.set_meta(&"score_label", score_label)
+	return row
+
 func _build_phase_banner() -> void:
-	# Centered below the scorebug
+	# Lower-third position. Broadcast goal/event chyrons traditionally sit in
+	# the bottom ~20% of the frame; here we anchor a band to the bottom edge
+	# of the screen and let CenterContainer center the wrapper within it
+	# both horizontally and vertically so different banner heights still feel
+	# centered around the same anchor line.
 	var root := Control.new()
-	root.anchor_right = 1.0
-	root.offset_top = 62.0
-	root.offset_bottom = 112.0
+	root.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	root.offset_top = -220.0
+	root.offset_bottom = -50.0
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	var centering := HBoxContainer.new()
-	centering.alignment = BoxContainer.ALIGNMENT_CENTER
-	centering.anchor_right = 1.0
-	centering.offset_bottom = 50.0
+	var centering := CenterContainer.new()
+	centering.set_anchors_preset(Control.PRESET_FULL_RECT)
 	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(centering)
 
 	_phase_style = StyleBoxFlat.new()
-	_phase_style.bg_color = Color(0.07, 0.07, 0.09, 0.88)
-	_phase_style.set_corner_radius_all(3)
-	_phase_style.set_content_margin(SIDE_LEFT, 20)
-	_phase_style.set_content_margin(SIDE_RIGHT, 20)
-	_phase_style.set_content_margin(SIDE_TOP, 8)
-	_phase_style.set_content_margin(SIDE_BOTTOM, 8)
+	_phase_style.bg_color = MenuStyle.BROADCAST_BG
+	_phase_style.set_corner_radius_all(0)
+	_phase_style.border_color = MenuStyle.BROADCAST_BORDER_T
+	_phase_style.border_width_top = 1
+	_phase_style.anti_aliasing = false
+	_phase_style.set_content_margin(SIDE_LEFT, 36)
+	_phase_style.set_content_margin(SIDE_RIGHT, 36)
+	_phase_style.set_content_margin(SIDE_TOP, 14)
+	_phase_style.set_content_margin(SIDE_BOTTOM, 14)
 
 	_phase_panel = PanelContainer.new()
 	_phase_panel.add_theme_stylebox_override("panel", _phase_style)
-	centering.add_child(_phase_panel)
+	_phase_wrapper = MenuStyle.wrap_drop_shadow(_phase_panel, Vector2(5, 5))
+	centering.add_child(_phase_wrapper)
 
 	var vbox := VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 2)
 	_phase_panel.add_child(vbox)
 
-	_phase_label = _lbl("", 18, _GOLD)
+	# Tagline (e.g. "GOAL SCORED BY" / "FINAL") — small label above the hero
+	# row, only visible for events that have a hero subject (goal scorer,
+	# game-over winner). Hidden for FACEOFF / END OF PERIOD where the phase
+	# label itself is the hero.
+	_tagline_label = _lbl("", 16, _DIM)
+	_tagline_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_tagline_label.visible = false
+	vbox.add_child(_tagline_label)
+
+	# Hero row for non-goal phases: "FACEOFF" / "END OF PERIOD" / "HOME WINS"
+	_phase_label = _lbl("", 44, _GOLD)
 	_phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_phase_label)
 
-	_assist_label = _lbl("", 13, _DIM)
+	# Hero row for goal phase: the scorer's name in big gold, broadcast-style
+	_scorer_label = _lbl("", 52, _GOLD)
+	_scorer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_scorer_label.visible = false
+	vbox.add_child(_scorer_label)
+
+	# "ASSISTED BY" tag — secondary tagline between the hero and the assist
+	# names. Hidden when there are no assists.
+	_assist_tag_label = _lbl("ASSISTED BY", 16, _DIM)
+	_assist_tag_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_assist_tag_label.visible = false
+	vbox.add_child(_assist_tag_label)
+
+	# Assist player names (e.g. "PLAYER1  /  PLAYER2") — sub-hero row
+	_assist_label = _lbl("", 24, _WHITE)
 	_assist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_assist_label.visible = false
 	vbox.add_child(_assist_label)
 
-	_replay_label = _lbl("◀  REPLAY  ▶", 11, _DIM)
+	_replay_label = _lbl("◀  REPLAY  ▶", 16, _DIM)
 	_replay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_replay_label.visible = false
 	vbox.add_child(_replay_label)
+
+# "GOAL" wash banner — slides in from the left and overlays the scorebug for
+# the dramatic moment of a goal. Lower-third phase chyron with scorer/assist
+# info appears separately during the replay phase. Built once at _ready and
+# kept hidden; _play_top_goal_banner drives the slide-in/hold/slide-out
+# animation when a goal fires.
+func _build_top_goal_banner() -> void:
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = MenuStyle.BROADCAST_BG
+	panel_style.set_corner_radius_all(0)
+	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
+	panel_style.border_width_top = 1
+	panel_style.anti_aliasing = false
+	_top_goal_panel_style = panel_style
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", panel_style)
+	_top_goal_main_panel = panel
+
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 0)
+	panel.add_child(hbox)
+
+	# Team-color block on the left, where a broadcast would put the team logo.
+	var stripe_style := StyleBoxFlat.new()
+	stripe_style.bg_color = Color(0.5, 0.5, 0.5)  # placeholder; set per-goal
+	stripe_style.anti_aliasing = false
+	_top_goal_stripe_style = stripe_style
+	var stripe := PanelContainer.new()
+	stripe.add_theme_stylebox_override("panel", stripe_style)
+	stripe.custom_minimum_size = Vector2(24, 0)
+	hbox.add_child(stripe)
+
+	# "G O A L" text — spaced caps in the broadcast wash style.
+	var text_margin := MarginContainer.new()
+	text_margin.add_theme_constant_override("margin_left", 14)
+	text_margin.add_theme_constant_override("margin_right", 14)
+	text_margin.add_theme_constant_override("margin_top", 8)
+	text_margin.add_theme_constant_override("margin_bottom", 8)
+	text_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(text_margin)
+	var goal_label := _lbl("G  O  A  L", 32, _WHITE)
+	goal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	goal_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	text_margin.add_child(goal_label)
+
+	_top_goal_banner = MenuStyle.wrap_drop_shadow(panel, Vector2(4, 4))
+	_top_goal_banner.position = Vector2(8, 8)
+	_top_goal_banner.visible = false
+	add_child(_top_goal_banner)
+
+func _play_top_goal_banner(team_color: Color) -> void:
+	if _top_goal_tween != null and _top_goal_tween.is_running():
+		_top_goal_tween.kill()
+	_top_goal_stripe_style.bg_color = team_color
+	# Match the scorebug's current rendered size so the wash overlays it
+	# pixel-exact, regardless of font / margin / scoreboard-content drift.
+	if _scorebug_panel != null and _scorebug_panel.size != Vector2.ZERO:
+		_top_goal_main_panel.custom_minimum_size = _scorebug_panel.size
+	# Off-screen left of the screen edge so the slide-in feels like it enters
+	# the frame from outside the viewport, not from a halfway position.
+	_top_goal_banner.position = Vector2(-300, 8)
+	_top_goal_banner.visible = true
+	_top_goal_tween = create_tween()
+	_top_goal_tween.tween_property(_top_goal_banner, "position:x", 8.0, 0.4) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_top_goal_tween.tween_interval(2.0)
+	_top_goal_tween.tween_property(_top_goal_banner, "position:x", -300.0, 0.4) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	_top_goal_tween.tween_callback(func() -> void: _top_goal_banner.visible = false)
 
 # Persistent banner shown on spectator clients only. Sits centered at the top
 # of the screen, above the phase banner area. Toggled by _apply_spectator_chrome.
 func _build_spectator_banner() -> void:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.07, 0.07, 0.09, 0.88)
-	style.set_corner_radius_all(3)
+	style.bg_color = MenuStyle.BROADCAST_BG
+	style.set_corner_radius_all(0)
+	style.border_color = MenuStyle.BROADCAST_BORDER_T
+	style.border_width_top = 1
+	style.anti_aliasing = false
 	style.set_content_margin(SIDE_LEFT, 14)
 	style.set_content_margin(SIDE_RIGHT, 14)
 	style.set_content_margin(SIDE_TOP, 4)
@@ -254,7 +385,8 @@ func _build_spectator_banner() -> void:
 
 	_spectator_banner = PanelContainer.new()
 	_spectator_banner.add_theme_stylebox_override("panel", style)
-	_spectator_banner.add_child(_lbl("SPECTATING", 12, _GOLD))
+	_spectator_banner.add_child(_lbl("SPECTATING", 20, _GOLD))
+	_spectator_wrapper = MenuStyle.wrap_drop_shadow(_spectator_banner, Vector2(3, 3))
 
 	# Centered horizontally, anchored to the top.
 	var root := Control.new()
@@ -268,10 +400,10 @@ func _build_spectator_banner() -> void:
 	centering.offset_bottom = 40.0
 	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(centering)
-	centering.add_child(_spectator_banner)
+	centering.add_child(_spectator_wrapper)
 
 	add_child(root)
-	_spectator_banner.visible = false
+	_spectator_wrapper.visible = false
 
 # Hides local-only menu options (Rematch, Change Position) when the local peer
 # is a spectator and shows the spectator banner. Off-screen indicators and the
@@ -280,8 +412,8 @@ func _apply_spectator_chrome() -> void:
 	var is_spec: bool = GameManager.is_local_spectator()
 	if _spectator_banner == null and is_spec:
 		_build_spectator_banner()
-	if _spectator_banner != null:
-		_spectator_banner.visible = is_spec
+	if _spectator_wrapper != null:
+		_spectator_wrapper.visible = is_spec
 	if _game_over_popup != null:
 		_game_over_popup.set_spectator(is_spec)
 	if _pause_menu != null:
@@ -380,18 +512,27 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	pop.tween_property(score_label, "scale", Vector2.ONE, 0.5) \
 		.set_trans(Tween.TRANS_SPRING).set_ease(Tween.EASE_OUT)
 
-	_phase_label.text = ("GOAL!  %s" % scorer_name) if not scorer_name.is_empty() else "GOAL!"
-	_phase_label.add_theme_color_override("font_color", _GOLD)
+	# Two-beat goal moment, broadcast-style:
+	#   1. Top wash slides in over the scorebug ("G O A L"), then dismisses.
+	#   2. During the replay phase, the lower-third chyron appears with the
+	#      data (GOAL SCORED BY / <scorer> / ASSISTED BY / <assists>).
+	# Here we (a) play the top wash and (b) preload the chyron labels with the
+	# goal data so the replay handler can just toggle visibility.
 	var team_color: Color = TeamColorRegistry.get_colors(GameManager.teams[scoring_team.team_id].color_id, scoring_team.team_id).primary
+	_play_top_goal_banner(team_color)
+
+	_tagline_label.text = "GOAL SCORED BY"
+	_phase_label.visible = false
+	_scorer_label.text = scorer_name
+	_scorer_label.add_theme_color_override("font_color", _GOLD)
 	_phase_style.bg_color = Color(team_color.r * 0.25, team_color.g * 0.25, team_color.b * 0.25, 0.92)
 	if not assist1_name.is_empty():
 		var assist_text: String = assist1_name
 		if not assist2_name.is_empty():
 			assist_text += "  /  " + assist2_name
-		_assist_label.text = "Assisted by  " + assist_text
-		_assist_label.visible = true
+		_assist_label.text = assist_text
 	else:
-		_assist_label.visible = false
+		_assist_label.text = ""
 
 	_flash_overlay.flash(team_color)
 
@@ -400,47 +541,68 @@ func _initial_team_primary(team_id: int) -> Color:
 		return TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
 	return Color(0.5, 0.5, 0.5)  # placeholder; team_colors_ready overwrites
 
-func _on_team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color) -> void:
+func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
+	# In the chyron layout the AWAY/HOME labels sit on the dark panel, not on
+	# the team color, so their text stays cream regardless of team palette.
 	if _home_badge_style != null:
 		_home_badge_style.bg_color = home_primary
-	if _home_badge_label != null:
-		_home_badge_label.add_theme_color_override("font_color", home_secondary)
 	if _away_badge_style != null:
 		_away_badge_style.bg_color = away_primary
-	if _away_badge_label != null:
-		_away_badge_label.add_theme_color_override("font_color", away_secondary)
 
 func _on_replay_started() -> void:
+	# Lower-third chyron with goal data appears during replay. The labels were
+	# preloaded by _on_goal_scored; we just toggle visibility here so the chyron
+	# rolls in once the replay starts (after the top wash dismisses).
+	_tagline_label.visible = true
+	_scorer_label.visible = not _scorer_label.text.is_empty()
+	_assist_tag_label.visible = not _assist_label.text.is_empty()
+	_assist_label.visible = not _assist_label.text.is_empty()
+	_phase_wrapper.visible = true
 	if _replay_label != null:
 		_replay_label.visible = true
 
 func _on_replay_stopped() -> void:
+	_phase_wrapper.visible = false
 	if _replay_label != null:
 		_replay_label.visible = false
 
 func _on_phase_changed(new_phase: int) -> void:
 	match new_phase:
 		GamePhase.Phase.PLAYING:
-			_phase_panel.visible = false
+			_phase_wrapper.visible = false
 			_phase_label.add_theme_color_override("font_color", _GOLD)
-			_phase_style.bg_color = Color(0.07, 0.07, 0.09, 0.88)
-			_assist_label.visible = false
+			_phase_style.bg_color = MenuStyle.BROADCAST_BG
+			_clear_goal_template()
 			if _replay_label != null:
 				_replay_label.visible = false
 		GamePhase.Phase.GOAL_SCORED:
-			_phase_panel.visible = true  # text + color set by _on_goal_scored
+			# Top wash plays via _on_goal_scored. Lower-third chyron holds
+			# until the replay phase fires (_on_replay_started).
+			pass
 		GamePhase.Phase.END_OF_PERIOD:
+			_clear_goal_template()
 			_phase_label.text = "END OF PERIOD"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
-			_phase_panel.visible = true
+			_phase_label.visible = true
+			_phase_style.bg_color = MenuStyle.BROADCAST_BG
+			_phase_wrapper.visible = true
 		GamePhase.Phase.GAME_OVER:
-			_phase_panel.visible = true  # text + color set by _on_game_over
+			_phase_wrapper.visible = true  # text + color set by _on_game_over
 		_:
+			_clear_goal_template()
 			_phase_label.text = "FACEOFF"
 			_phase_label.add_theme_color_override("font_color", _GOLD)
-			_phase_style.bg_color = Color(0.07, 0.07, 0.09, 0.88)
-			_assist_label.visible = false
-			_phase_panel.visible = true
+			_phase_label.visible = true
+			_phase_style.bg_color = MenuStyle.BROADCAST_BG
+			_phase_wrapper.visible = true
+
+# Reset the four goal-template rows (tagline, scorer, ASSISTED BY, assist
+# names) to hidden so non-goal phases show only the phase_label hero.
+func _clear_goal_template() -> void:
+	_tagline_label.visible = false
+	_scorer_label.visible = false
+	_assist_tag_label.visible = false
+	_assist_label.visible = false
 
 func _on_period_changed(new_period: int) -> void:
 	_period_label.text = _period_ordinal(new_period)
@@ -465,6 +627,13 @@ func _on_clock_updated(t: float) -> void:
 		_last_clock_pulse_second = -1
 
 func _on_game_over() -> void:
+	_phase_style.bg_color = MenuStyle.BROADCAST_BG  # clear any residual goal tint
+	_tagline_label.text = "FINAL"
+	_tagline_label.visible = true
+	_phase_label.visible = true
+	_scorer_label.visible = false
+	_assist_tag_label.visible = false
+	_assist_label.visible = false
 	if _score_0 > _score_1:
 		_phase_label.text = "HOME WINS"
 		_phase_label.add_theme_color_override("font_color", _GOLD)
@@ -474,7 +643,7 @@ func _on_game_over() -> void:
 	else:
 		_phase_label.text = "TIE"
 		_phase_label.add_theme_color_override("font_color", _WHITE)
-	_phase_panel.visible = true
+	_phase_wrapper.visible = true
 	_rematch_votes.clear()
 	_local_voted = false
 	_update_rematch_ui()
@@ -560,23 +729,6 @@ func _cell(h_margin: int, v_margin: int) -> MarginContainer:
 	c.add_theme_constant_override("margin_bottom", v_margin)
 	return c
 
-func _team_badge(text: String, bg_color: Color) -> PanelContainer:
-	var style := StyleBoxFlat.new()
-	style.bg_color = bg_color
-	style.set_corner_radius_all(3)
-	style.set_content_margin(SIDE_LEFT, 6)
-	style.set_content_margin(SIDE_RIGHT, 6)
-	style.set_content_margin(SIDE_TOP, 3)
-	style.set_content_margin(SIDE_BOTTOM, 3)
-	var badge := PanelContainer.new()
-	badge.add_theme_stylebox_override("panel", style)
-	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	# Pick text color by background luminance: dark text on light fills, white on dark.
-	var lum: float = 0.299 * bg_color.r + 0.587 * bg_color.g + 0.114 * bg_color.b
-	var text_color: Color = Color(0.06, 0.06, 0.06) if lum > 0.4 else _WHITE
-	badge.add_child(_lbl(text, 11, text_color))
-	return badge
-
 func _vsep() -> VSeparator:
 	var sep := VSeparator.new()
 	var style := StyleBoxFlat.new()
@@ -589,6 +741,7 @@ func _vsep() -> VSeparator:
 func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
+	l.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l

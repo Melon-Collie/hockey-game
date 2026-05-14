@@ -1,11 +1,11 @@
 class_name Scoreboard
 extends CanvasLayer
 
-const _DARK_BG := Color(0.07, 0.07, 0.09, 0.94)
-const _WHITE   := Color(1.00, 1.00, 1.00, 1.00)
-const _DIM     := Color(0.62, 0.62, 0.68, 1.00)
-const _HEADER  := Color(0.55, 0.55, 0.62, 1.00)
-const _SEP     := Color(0.28, 0.28, 0.33, 1.00)
+const _DARK_BG := MenuStyle.BROADCAST_BG
+const _WHITE   := MenuStyle.BROADCAST_CREAM
+const _DIM     := MenuStyle.BROADCAST_DIM
+const _HEADER  := MenuStyle.BROADCAST_DIM
+const _SEP     := MenuStyle.BROADCAST_SEP
 
 const _POSITION_LABEL := ["C", "L", "R"]   # indexed by team_slot
 
@@ -68,37 +68,76 @@ func _build_panel() -> void:
 
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = _DARK_BG
-	panel_style.set_corner_radius_all(4)
-	panel_style.set_content_margin_all(20)
+	panel_style.set_corner_radius_all(0)
+	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
+	panel_style.border_width_top = 1
+	panel_style.anti_aliasing = false  # crisp edges to match the layered shadow
+	panel_style.set_content_margin_all(0)  # inner sections handle their own padding
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
 	panel.custom_minimum_size = Vector2(610, 0)
-	h_centering.add_child(panel)
+	h_centering.add_child(MenuStyle.wrap_drop_shadow(panel, Vector2(5, 5)))
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
+	vbox.add_theme_constant_override("separation", 0)
 	panel.add_child(vbox)
 
-	vbox.add_child(_hsep())
-	_build_period_summary(vbox)
-	vbox.add_child(_hsep())
+	# === Title strip ===
+	var title_style := StyleBoxFlat.new()
+	title_style.bg_color = MenuStyle.BROADCAST_TITLE_BG
+	title_style.set_content_margin(SIDE_TOP, 8)
+	title_style.set_content_margin(SIDE_BOTTOM, 8)
+	title_style.set_content_margin(SIDE_LEFT, 18)
+	title_style.set_content_margin(SIDE_RIGHT, 18)
+	var title_panel := PanelContainer.new()
+	title_panel.add_theme_stylebox_override("panel", title_style)
+	var title_label := _lbl("BOX SCORE", 16, _WHITE)
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_panel.add_child(title_label)
+	vbox.add_child(title_panel)
+
+	# === Period summary ===
+	var periods_outer := MarginContainer.new()
+	periods_outer.add_theme_constant_override("margin_top", 12)
+	periods_outer.add_theme_constant_override("margin_bottom", 4)
+	periods_outer.add_theme_constant_override("margin_left", 22)
+	periods_outer.add_theme_constant_override("margin_right", 22)
+	vbox.add_child(periods_outer)
+	var periods_vbox := VBoxContainer.new()
+	periods_outer.add_child(periods_vbox)
+	_build_period_summary(periods_vbox)
+
+	# === Stats table strip ===
+	var table_outer := MarginContainer.new()
+	table_outer.add_theme_constant_override("margin_top", 12)
+	table_outer.add_theme_constant_override("margin_bottom", 14)
+	table_outer.add_theme_constant_override("margin_left", 18)
+	table_outer.add_theme_constant_override("margin_right", 18)
+	vbox.add_child(table_outer)
+	var table_vbox := VBoxContainer.new()
+	table_vbox.add_theme_constant_override("separation", 6)
+	table_outer.add_child(table_vbox)
 
 	var header_row := _make_row()
 	_fill_row(header_row, ["PING", "#", "POS", "PLAYER", "G", "A", "PTS", "SOG", "HITS", "BLK"], _HEADER, true)
-	vbox.add_child(header_row)
-
-	vbox.add_child(_hsep())
+	table_vbox.add_child(header_row)
 
 	_rows_container = VBoxContainer.new()
 	_rows_container.add_theme_constant_override("separation", 3)
-	vbox.add_child(_rows_container)
+	table_vbox.add_child(_rows_container)
 
-	vbox.add_child(_hsep())
-
-	var footer := _lbl("TAB to toggle", 11, _DIM)
+	# === Footer strip ===
+	var footer_style := StyleBoxFlat.new()
+	footer_style.bg_color = MenuStyle.BROADCAST_TITLE_BG
+	footer_style.set_content_margin(SIDE_TOP, 6)
+	footer_style.set_content_margin(SIDE_BOTTOM, 6)
+	var footer_panel := PanelContainer.new()
+	footer_panel.add_theme_stylebox_override("panel", footer_style)
+	var footer := _lbl("PRESS TAB TO TOGGLE", 11, _DIM)
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(footer)
+	footer_panel.add_child(footer)
+	vbox.add_child(footer_panel)
 
 func _build_period_summary(vbox: VBoxContainer) -> void:
 	var h_wrap := HBoxContainer.new()
@@ -213,17 +252,19 @@ func _make_team_header(team_id: int) -> PanelContainer:
 	var label: String = "AWAY" if team_id == 1 else "HOME"
 	var color: Color = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(color.r, color.g, color.b, 0.18)
-	style.set_corner_radius_all(3)
-	style.set_content_margin(SIDE_LEFT, 8)
-	style.set_content_margin(SIDE_RIGHT, 8)
-	style.set_content_margin(SIDE_TOP, 4)
-	style.set_content_margin(SIDE_BOTTOM, 4)
+	style.bg_color = Color(color.r, color.g, color.b, 0.32)
+	style.set_corner_radius_all(0)
+	style.set_content_margin(SIDE_LEFT, 14)
+	style.set_content_margin(SIDE_RIGHT, 14)
+	style.set_content_margin(SIDE_TOP, 5)
+	style.set_content_margin(SIDE_BOTTOM, 5)
+	style.border_color = color
+	style.border_width_left = 6
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", style)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var lbl := _lbl(label, 12, _WHITE)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var lbl := _lbl(label, 16, _WHITE)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	panel.add_child(lbl)
 	return panel
 
@@ -246,6 +287,7 @@ func _fill_row(row: HBoxContainer, texts: Array, name_color: Color, is_header: b
 		var cell := Label.new()
 		cell.text = texts[i]
 		cell.custom_minimum_size = Vector2(widths[i], 0)
+		cell.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
 		cell.add_theme_font_size_override("font_size", font_size)
 		var col := name_color if (i > 0 and i < 4 or is_header) else _WHITE
 		cell.add_theme_color_override("font_color", col)
@@ -281,6 +323,7 @@ func _hsep() -> HSeparator:
 func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
+	l.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l
