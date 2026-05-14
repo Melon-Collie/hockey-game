@@ -257,20 +257,26 @@ func _refresh() -> void:
 
 func _make_team_header(team_id: int) -> PanelContainer:
 	var label: String = "AWAY" if team_id == 1 else "HOME"
-	var color: Color = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
+	# Key the row-group header to the team's actual jersey palette so it
+	# reads as a uniform across the table: jersey color fills the strip,
+	# the secondary jersey_stripe color forms the left edge band, and the
+	# team's designated text color provides the readable label color.
+	# Mirrors how the skater's jersey decals are painted, so a player can
+	# recognize their team in the box score by eye.
+	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id)
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(color.r, color.g, color.b, 0.32)
+	style.bg_color = colors.jersey
 	style.set_corner_radius_all(4)
 	style.set_content_margin(SIDE_LEFT, 14)
 	style.set_content_margin(SIDE_RIGHT, 14)
 	style.set_content_margin(SIDE_TOP, 5)
 	style.set_content_margin(SIDE_BOTTOM, 5)
-	style.border_color = color
+	style.border_color = colors.jersey_stripe
 	style.border_width_left = 6
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", style)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var lbl := _lbl(label, 16, _WHITE)
+	var lbl := _lbl(label, 16, colors.text)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	panel.add_child(lbl)
 	return panel
