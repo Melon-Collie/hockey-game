@@ -51,6 +51,13 @@ var _saved_goalie_processing: Array[bool] = []
 var _outro_elapsed: float = -1.0  # >= 0 while holding the final frame
 var _spectator_cam: SpectatorCamera = null
 
+# Audio + body-check VFX events extracted from the recorder, ordered by
+# host_ts. We walk these in lockstep with the virtual clock so the cinematic
+# re-fires the sounds and burst VFX that played live — see
+# ReplayEventReplayer for the actual dispatch.
+var _events: Array[Dictionary] = []
+var _next_event_idx: int = 0
+
 
 func start(recorder: ReplayRecorder,
 		codec: WorldStateCodec,
@@ -84,6 +91,10 @@ func start(recorder: ReplayRecorder,
 	_cached_to_idx = -1
 	_outro_elapsed = -1.0
 	_active = true
+	# Pull recorded events for the clip window and reset the walker so the
+	# first _process tick fires anything queued at the start of the clip.
+	_events = recorder.extract_events(_clip_start_ts, _clip_end_ts)
+	_next_event_idx = 0
 
 	_freeze_live_simulation()
 
@@ -115,6 +126,8 @@ func stop() -> void:
 	_cached_to_snap = {}
 	_cached_from_idx = -1
 	_cached_to_idx = -1
+	_events = []
+	_next_event_idx = 0
 	_codec = null
 	_registry = null
 	_puck = null
@@ -161,6 +174,17 @@ func _process(delta: float) -> void:
 	var t: float = clampf((_virtual_clock - _timestamps[idx]) / bracket_dt, 0.0, 1.0) \
 			if bracket_dt > 0.0 else 0.0
 	_apply_interpolated_snapshot(t, bracket_dt, delta)
+	_dispatch_due_events()
+
+
+# Walk events whose timestamps have passed the virtual clock and fire each
+# one through ReplayEventReplayer so puck-collision sounds, pickup sounds,
+# shot sounds, and body-check sound+VFX play in time with the cinematic.
+func _dispatch_due_events() -> void:
+	while _next_event_idx < _events.size() \
+			and _events[_next_event_idx].host_ts <= _virtual_clock:
+		ReplayEventReplayer.dispatch(_events[_next_event_idx].event, _registry)
+		_next_event_idx += 1
 
 
 func _find_frame_idx(t: float) -> int:

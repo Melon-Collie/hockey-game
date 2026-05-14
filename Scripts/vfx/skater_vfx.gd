@@ -113,7 +113,17 @@ func _process(_delta: float) -> void:
 
 
 
-func _on_body_check(victim: Skater, _force: float, hit_dir: Vector3) -> void:
+func _on_body_check(victim: Skater, force: float, hit_dir: Vector3) -> void:
+	fire_body_check_burst(victim, force, hit_dir)
+
+
+# Public so ReplayEventReplayer can fire the burst during replay without
+# routing through body_checked_player — re-emitting the signal would also
+# re-trigger GameManager's hit-landed / sound / replay-record closures,
+# which is wrong during playback (and recursive for the recorder).
+func fire_body_check_burst(victim: Skater, _force: float, hit_dir: Vector3) -> void:
+	if victim == null:
+		return
 	# Burst at the victim's position, emitting outward along the hit direction.
 	# direction must be in the emitter's local space — convert the world-space
 	# hit vector using the emitter's inverse basis (inherited from the skater's facing).

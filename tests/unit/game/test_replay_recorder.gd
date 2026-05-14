@@ -86,3 +86,45 @@ func test_frame_payload_is_preserved() -> void:
 	assert_eq(clip.frames.size(), 1)
 	var recovered: PackedByteArray = clip.frames[0]
 	assert_eq(recovered, original)
+
+
+# ── Events ────────────────────────────────────────────────────────────────────
+
+func test_extract_events_returns_empty_when_none_recorded() -> void:
+	var events: Array[Dictionary] = _recorder.extract_events(0.0, 100.0)
+	assert_eq(events.size(), 0)
+
+
+func test_extract_events_chronological_within_window() -> void:
+	_recorder.record_event(0.5, {"kind": "puck_boards"})
+	_recorder.record_event(1.0, {"kind": "puck_post"})
+	_recorder.record_event(1.5, {"kind": "puck_pickup"})
+	_recorder.record_event(2.0, {"kind": "shot"})
+	var events: Array[Dictionary] = _recorder.extract_events(1.0, 1.75)
+	assert_eq(events.size(), 2)
+	assert_eq(events[0].event.kind, "puck_post")
+	assert_eq(events[0].host_ts, 1.0)
+	assert_eq(events[1].event.kind, "puck_pickup")
+	assert_eq(events[1].host_ts, 1.5)
+
+
+func test_extract_events_full_range_returns_all_in_order() -> void:
+	for i: int in 5:
+		_recorder.record_event(float(i), {"idx": i})
+	var events: Array[Dictionary] = _recorder.extract_events(-10.0, 100.0)
+	assert_eq(events.size(), 5)
+	for i: int in 5:
+		assert_eq(events[i].event.idx, i, "event order preserved")
+
+
+func test_event_buffer_wraps_and_returns_newest() -> void:
+	# Overfill the event ring (EVENT_MEMORY_SIZE = 720). Oldest entries get
+	# overwritten; extract within a late window still returns the newest.
+	var n: int = ReplayRecorder.EVENT_MEMORY_SIZE + 50
+	for i: int in n:
+		_recorder.record_event(float(i) * 0.01, {"idx": i})
+	# Window covering the last ~20 events.
+	var events: Array[Dictionary] = _recorder.extract_events(
+			float(n - 20) * 0.01, float(n) * 0.01)
+	assert_eq(events.size(), 20)
+	assert_eq(events[events.size() - 1].event.idx, n - 1)
