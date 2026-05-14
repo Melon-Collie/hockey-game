@@ -68,7 +68,7 @@ func _build_panel() -> void:
 
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = _DARK_BG
-	panel_style.set_corner_radius_all(0)
+	panel_style.set_corner_radius_all(4)
 	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
 	panel_style.border_width_top = 1
 	panel_style.anti_aliasing = false  # crisp edges to match the layered shadow
@@ -253,7 +253,7 @@ func _make_team_header(team_id: int) -> PanelContainer:
 	var color: Color = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(color.r, color.g, color.b, 0.32)
-	style.set_corner_radius_all(0)
+	style.set_corner_radius_all(4)
 	style.set_content_margin(SIDE_LEFT, 14)
 	style.set_content_margin(SIDE_RIGHT, 14)
 	style.set_content_margin(SIDE_TOP, 5)
@@ -287,7 +287,7 @@ func _fill_row(row: HBoxContainer, texts: Array, name_color: Color, is_header: b
 		var cell := Label.new()
 		cell.text = texts[i]
 		cell.custom_minimum_size = Vector2(widths[i], 0)
-		cell.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
+		cell.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 		cell.add_theme_font_size_override("font_size", font_size)
 		var col := name_color if (i > 0 and i < 4 or is_header) else _WHITE
 		cell.add_theme_color_override("font_color", col)
@@ -323,7 +323,7 @@ func _hsep() -> HSeparator:
 func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
+	l.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l

@@ -93,6 +93,10 @@ func _build_panel() -> void:
 	_root = Control.new()
 	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Cascade UI_FONT (Manrope) to every Label/Button under the side menu.
+	# DISPLAY_FONT is applied per-control where we want the heavy condensed
+	# look (player name, jersey number).
+	_root.theme = MenuStyle.ui_theme()
 	add_child(_root)
 
 	var panel_style := StyleBoxFlat.new()
@@ -167,7 +171,8 @@ func _build_player_card(parent: VBoxContainer) -> void:
 
 	_player_card_name = Label.new()
 	_player_card_name.text = PlayerPrefs.player_name
-	_player_card_name.add_theme_font_size_override("font_size", 19)
+	_player_card_name.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	_player_card_name.add_theme_font_size_override("font_size", 28)
 	_player_card_name.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
 	vbox.add_child(_player_card_name)
 
@@ -177,7 +182,8 @@ func _build_player_card(parent: VBoxContainer) -> void:
 
 	_player_card_number = Label.new()
 	_player_card_number.text = "#%d" % PlayerPrefs.jersey_number
-	_player_card_number.add_theme_font_size_override("font_size", 14)
+	_player_card_number.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	_player_card_number.add_theme_font_size_override("font_size", 18)
 	_player_card_number.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	detail_row.add_child(_player_card_number)
 

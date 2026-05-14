@@ -25,6 +25,9 @@ func _ready() -> void:
 
 
 func _build_ui() -> void:
+	# Cascade Manrope to every Label under the title card.
+	theme = MenuStyle.ui_theme()
+
 	var bg := TextureRect.new()
 	bg.texture = load("res://Assets/Mitts_ice_background.png")
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

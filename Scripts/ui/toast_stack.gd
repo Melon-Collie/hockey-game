@@ -14,7 +14,7 @@ func _init() -> void:
 func push(text: String, name_color: Color) -> void:
 	var style := StyleBoxFlat.new()
 	style.bg_color = MenuStyle.BROADCAST_BG
-	style.set_corner_radius_all(0)
+	style.set_corner_radius_all(4)
 	style.border_color = MenuStyle.BROADCAST_BORDER_T
 	style.border_width_top = 1
 	style.anti_aliasing = false
@@ -52,7 +52,7 @@ func push(text: String, name_color: Color) -> void:
 func _make_label(text: String, size: int, color: Color) -> Label:
 	var lbl := Label.new()
 	lbl.text = text
-	lbl.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
+	lbl.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	lbl.add_theme_font_size_override("font_size", size)
 	lbl.add_theme_color_override("font_color", color)
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
