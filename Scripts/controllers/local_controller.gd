@@ -107,6 +107,13 @@ func _physics_process(delta: float) -> void:
 		_input_history.clear()
 		return
 	if _game_state.is_input_blocked():
+		# Menu open / paused — stop the skater rather than coasting on the
+		# velocity from the last frame's gathered input. Without this the
+		# player slides across the rink while picking menu items. We don't
+		# clear _input_history (unlike the movement-locked branch above) so
+		# the reconcile pipeline still has the pre-block input window when
+		# the menu closes.
+		skater.velocity = Vector3.ZERO
 		return
 	# Predict offsides locally for instant ghost feedback
 	_predict_offside()
