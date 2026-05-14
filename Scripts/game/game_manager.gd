@@ -161,6 +161,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.slot_swap_requested.connect(_on_slot_swap_requested)
 	NetworkManager.slot_swap_confirmed.connect(_on_slot_swap_confirmed)
 	NetworkManager.return_to_lobby_received.connect(_on_return_to_lobby)
+	NetworkManager.local_identity_changed.connect(_on_local_identity_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
@@ -1681,6 +1682,25 @@ func _on_return_to_lobby(_roster: Array) -> void:
 	on_scene_exit()
 	NetworkSimManager.clear_pending()
 	get_tree().change_scene_to_file(Constants.SCENE_LOBBY)
+
+
+# Live-update the local skater + record when the player edits their identity
+# via the SideMenu's player card. Only safe in offline contexts (free play);
+# online identity changes would also need an RPC for peers to mirror, which
+# is out of scope for the current free-play work.
+func _on_local_identity_changed(p_name: String, p_number: int, p_is_left: bool) -> void:
+	if _registry == null:
+		return
+	var record: PlayerRecord = _registry.get_local()
+	if record == null:
+		return
+	record.player_name = p_name
+	record.jersey_number = p_number
+	record.is_left_handed = p_is_left
+	if record.skater != null:
+		record.skater.set_player_name(p_name)
+		record.skater.set_jersey_info(p_name, p_number, record.text_color)
+		record.skater.is_left_handed = p_is_left
 
 
 func _build_lobby_roster_array() -> Array:

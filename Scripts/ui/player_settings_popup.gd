@@ -270,18 +270,23 @@ func _update_apply_state() -> void:
 func _apply() -> void:
 	if not _name_valid or not _number_valid:
 		return
-	if _pending_name != _snapshot.get("name", ""):
+	var name_changed_b: bool = _pending_name != _snapshot.get("name", "")
+	var number_changed_b: bool = _pending_number != _snapshot.get("number", 0)
+	var hand_changed_b: bool = _pending_is_left != _snapshot.get("is_left", false)
+	if name_changed_b:
 		PlayerPrefs.player_name = _pending_name
-		NetworkManager.local_player_name = _pending_name
 		name_changed.emit(_pending_name)
-	if _pending_number != _snapshot.get("number", 0):
+	if number_changed_b:
 		PlayerPrefs.jersey_number = _pending_number
-		NetworkManager.local_jersey_number = _pending_number
 		jersey_number_changed.emit(_pending_number)
-	if _pending_is_left != _snapshot.get("is_left", false):
+	if hand_changed_b:
 		PlayerPrefs.is_left_handed = _pending_is_left
-		NetworkManager.local_is_left_handed = _pending_is_left
 		handedness_changed.emit(_pending_is_left)
+	if name_changed_b or number_changed_b or hand_changed_b:
+		# Single call writes NetworkManager.local_* and emits the
+		# local_identity_changed signal that GameManager listens to so the
+		# live skater updates without a respawn.
+		NetworkManager.apply_local_identity(_pending_name, _pending_number, _pending_is_left)
 	PlayerPrefs.save()
 	visible = false
 

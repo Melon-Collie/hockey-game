@@ -87,6 +87,12 @@ signal input_batch_received(peer_id: int, inputs: Array[InputState])
 # broadcast.
 signal spectator_demoted_received(peer_id: int)
 
+# Local player edited their identity (name / jersey number / handedness)
+# while a session is live (e.g. from the SideMenu's player card during free
+# play). GameManager listens and pushes the change to the local skater
+# without a respawn.
+signal local_identity_changed(player_name: String, jersey_number: int, is_left_handed: bool)
+
 # ── State ─────────────────────────────────────────────────────────────────────
 var is_host: bool = false
 var game_initiated: bool = false
@@ -191,6 +197,20 @@ func start_offline() -> void:
 	_peer_numbers[1] = local_jersey_number
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
 			"rule_set": GameRules.DEFAULT_RULE_SET}
+
+
+# Single entry point for in-session identity edits. PlayerSettingsPopup
+# writes both PlayerPrefs and these fields on Apply; routing through here
+# lets GameManager (and any future peer-broadcast) react to the change
+# without each call site having to know about every listener.
+func apply_local_identity(p_name: String, p_number: int, p_is_left: bool) -> void:
+	local_player_name = p_name
+	local_jersey_number = p_number
+	local_is_left_handed = p_is_left
+	_peer_names[1] = p_name
+	_peer_numbers[1] = p_number
+	_peer_handedness[1] = p_is_left
+	local_identity_changed.emit(p_name, p_number, p_is_left)
 
 
 func start_tutorial() -> void:
