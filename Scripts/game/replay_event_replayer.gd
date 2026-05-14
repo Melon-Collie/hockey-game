@@ -82,6 +82,15 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 					var hit_dir: Vector3 = _pos_from_array(event.get("hit_dir", []))
 					vfx.fire_body_check_burst(
 							victim_rec.skater, float(event.get("speed", 0.0)), hit_dir)
+		"goal":
+			# Goal horn fires only via the file-replay path. The in-game goal
+			# cinematic relies on the live goal_scored closure that already
+			# played the horn before the replay started — we deliberately
+			# don't record "goal" into the in-memory ring buffer, so this
+			# case never fires from GoalReplayDriver. File replay does have
+			# goal entries in the .mreplay event stream (GameManager.
+			# _on_goal_for_replay_event), so they wake the horn here.
+			SoundManager.play_sfx(SoundManager.Sound.GOAL_HORN, -6.0)
 		_:
 			pass  # unknown kind — silently skip so future schema additions don't crash old viewers
 
