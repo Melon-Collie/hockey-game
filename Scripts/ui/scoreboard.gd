@@ -69,9 +69,11 @@ func _build_panel() -> void:
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = _DARK_BG
 	panel_style.set_corner_radius_all(4)
-	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
-	panel_style.border_width_top = 1
-	panel_style.anti_aliasing = false  # crisp edges to match the layered shadow
+	# Single thin TEAL_DIM border around the whole popup, matching the
+	# side menu's player card treatment. Replaces the old top-edge
+	# highlight + contrasted header/footer strip segmentation.
+	panel_style.border_color = MenuStyle.TEAL_DIM
+	panel_style.set_border_width_all(1)
 	panel_style.set_content_margin_all(0)  # inner sections handle their own padding
 
 	var panel := PanelContainer.new()
@@ -84,8 +86,11 @@ func _build_panel() -> void:
 	panel.add_child(vbox)
 
 	# === Title strip ===
+	# No contrasted background — the outer TEAL_DIM border handles the
+	# panel framing, the title is just a label with margins so it reads
+	# as a heading without becoming a separate visual block.
 	var title_style := StyleBoxFlat.new()
-	title_style.bg_color = MenuStyle.BROADCAST_TITLE_BG
+	title_style.bg_color = Color(0, 0, 0, 0)
 	title_style.set_content_margin(SIDE_TOP, 8)
 	title_style.set_content_margin(SIDE_BOTTOM, 8)
 	title_style.set_content_margin(SIDE_LEFT, 18)
@@ -128,8 +133,10 @@ func _build_panel() -> void:
 	table_vbox.add_child(_rows_container)
 
 	# === Footer strip ===
+	# Transparent — same reasoning as the title strip. The "PRESS TAB TO
+	# TOGGLE" hint sits inside the panel border, not on its own block.
 	var footer_style := StyleBoxFlat.new()
-	footer_style.bg_color = MenuStyle.BROADCAST_TITLE_BG
+	footer_style.bg_color = Color(0, 0, 0, 0)
 	footer_style.set_content_margin(SIDE_TOP, 6)
 	footer_style.set_content_margin(SIDE_BOTTOM, 6)
 	var footer_panel := PanelContainer.new()
