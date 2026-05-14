@@ -4,7 +4,7 @@ extends RefCounted
 # Pure-domain state owned by the FSM:
 #   - current phase + timer
 #   - scores
-#   - player slot registry (peer_id → {slot, team_id, faceoff_position})
+#   - player slot registry (peer_id → {team_slot, team_id})
 #   - icing state + last carrier tracking
 #   - ghost computation (uses InfractionRules + dead-puck check)
 #
@@ -39,7 +39,8 @@ var team_shots: Array[int] = [0, 0]
 var period_scores: Array[Array] = []  # [team_id][period_index 0-based]; grows dynamically in OT; set in _init
 
 # ── Player registry (domain view) ────────────────────────────────────────────
-# peer_id → { slot: int, team_id: int, faceoff_position: Vector3 }
+# peer_id → { team_slot: int, team_id: int }. faceoff_position is derived
+# on demand via PlayerRules.faceoff_position(team_id, team_slot).
 var players: Dictionary[int, Dictionary] = {}
 
 # ── Icing ────────────────────────────────────────────────────────────────────
@@ -222,7 +223,6 @@ func register_host(peer_id: int) -> Dictionary:
 	players[peer_id] = {
 		"team_slot": team_slot,
 		"team_id": team_id,
-		"faceoff_position": PlayerRules.faceoff_position(team_id, team_slot),
 	}
 	return {"team_slot": team_slot, "team_id": team_id}
 
@@ -234,7 +234,6 @@ func on_player_connected(peer_id: int) -> Dictionary:
 	players[peer_id] = {
 		"team_slot": team_slot,
 		"team_id": team_id,
-		"faceoff_position": PlayerRules.faceoff_position(team_id, team_slot),
 	}
 	return {"team_slot": team_slot, "team_id": team_id}
 
@@ -243,7 +242,6 @@ func register_remote_assigned_player(peer_id: int, team_slot: int, team_id: int)
 	players[peer_id] = {
 		"team_slot": team_slot,
 		"team_id": team_id,
-		"faceoff_position": PlayerRules.faceoff_position(team_id, team_slot),
 	}
 
 func on_player_disconnected(peer_id: int) -> void:
@@ -285,7 +283,6 @@ func try_swap_slot(peer_id: int, new_team_id: int, new_slot: int) -> Dictionary:
 	var old_slot: int   = current.team_slot
 	players[peer_id].team_id       = new_team_id
 	players[peer_id].team_slot     = new_slot
-	players[peer_id].faceoff_position = PlayerRules.faceoff_position(new_team_id, new_slot)
 	return { "old_team_id": old_team_id, "old_slot": old_slot,
 			 "new_team_id": new_team_id, "new_slot": new_slot }
 
@@ -363,11 +360,14 @@ func apply_remote_goal(scoring_team_id: int, score0: int, score1: int) -> void:
 func is_movement_locked() -> bool:
 	return PhaseRules.is_movement_locked(current_phase)
 
-# Returns { peer_id: Vector3 } — each player's faceoff position for their slot.
+# Returns { peer_id: Vector3 } — each player's faceoff position derived from
+# their slot/team. No cached field: PlayerRules.faceoff_position is the
+# single source of truth.
 func get_faceoff_positions() -> Dictionary:
 	var result: Dictionary = {}
 	for peer_id in players:
-		result[peer_id] = players[peer_id].faceoff_position
+		var p: Dictionary = players[peer_id]
+		result[peer_id] = PlayerRules.faceoff_position(p.team_id, p.team_slot)
 	return result
 
 

@@ -93,7 +93,6 @@ func spawn(
 	record.player_name = player_name
 	record.jersey_number = jersey_number
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
-	record.faceoff_position = faceoff_pos
 
 	var puck: Puck = _puck_getter.call() as Puck
 	var blade_color: Color = TeamColorRegistry.get_colors(team.color_id, team.team_id).primary
@@ -115,6 +114,9 @@ func spawn(
 	spawned.skater.set_player_name(player_name)
 	spawned.skater.set_jersey_info(player_name, jersey_number, text_color)
 	spawned.skater.set_jersey_stripes(jersey_stripe_color, pants_stripe_color, socks_stripe_color)
+	# Square the skater up to the puck on initial spawn — without this they
+	# default to Vector2.DOWN (+Z) which leaves team 0 spawning backwards.
+	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 
 	if _spawn_wireup.is_valid():
@@ -160,7 +162,6 @@ func spawn_bot(
 	record.player_name = "Bot %d" % (bot_id + 1)
 	record.jersey_number = 80 + bot_id
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
-	record.faceoff_position = faceoff_pos
 
 	var puck: Puck = _puck_getter.call() as Puck
 	var blade_color: Color = colors.primary
@@ -181,6 +182,8 @@ func spawn_bot(
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number, record.text_color)
 	spawned.skater.set_jersey_stripes(record.jersey_stripe_color, record.pants_stripe_color, record.socks_stripe_color)
+	# Same initial-facing fix as spawn() — see comment there.
+	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 
 	if _spawn_wireup.is_valid():

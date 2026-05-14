@@ -18,3 +18,17 @@ static func assign_team(team0_count: int, team1_count: int) -> int:
 # Looks up the faceoff start position for a team and within-team slot.
 static func faceoff_position(team_id: int, team_slot: int) -> Vector3:
 	return GameRules.CENTER_FACEOFF_POSITIONS[team_id][team_slot]
+
+
+# Facing each team should adopt on a faceoff teleport. Team 0 starts on the
+# +Z half and attacks -Z; team 1 mirrors. Without this, a teleport carries
+# whatever facing the skater had last frame, which is why players sometimes
+# spawn backwards after a faceoff or a slot swap. (-1) team_id returns
+# Vector2.ZERO so callers that don't want to flip facing (tutorial / tests)
+# can pass it through unchanged.
+static func faceoff_facing(team_id: int) -> Vector2:
+	if team_id == 0:
+		return Vector2(0.0, -1.0)
+	if team_id == 1:
+		return Vector2(0.0, 1.0)
+	return Vector2.ZERO

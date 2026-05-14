@@ -12,7 +12,10 @@ var is_local: bool = false
 # bot indicator and shouldn't be checked directly.
 var is_bot: bool = false
 var team: Team = null
-var faceoff_position: Vector3 = Vector3.ZERO
+# faceoff_position used to live here but it's pure-derived from team_id +
+# team_slot. Compute it via PlayerRules.faceoff_position(record.team.team_id,
+# record.team_slot) at the call site; the registry stays the only place that
+# knows the team/slot mapping.
 var jersey_color: Color        = Color.WHITE
 var helmet_color: Color        = Color.BLACK
 var pants_color: Color         = Color.BLACK

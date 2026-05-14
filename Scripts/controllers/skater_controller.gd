@@ -350,9 +350,16 @@ func on_puck_released_network() -> void:
 	has_puck = false
 	_transition_to_skating()
 
-func teleport_to(pos: Vector3) -> void:
+func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	skater.global_position = pos
 	skater.velocity = Vector3.ZERO
+	# Faceoff / slot swap teleports pass a non-zero facing so the skater
+	# squares up to the puck instead of carrying their last-frame heading
+	# (which routinely left players spawned backwards). Tutorial / test
+	# call sites that don't want to override facing pass Vector2.ZERO.
+	if facing != Vector2.ZERO:
+		skater.set_facing(facing)
+		_pose.facing = facing
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 func _apply_state(input: InputState, delta: float) -> void:

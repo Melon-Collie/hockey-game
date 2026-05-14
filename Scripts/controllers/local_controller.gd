@@ -82,8 +82,8 @@ func apply_network_state(state: SkaterNetworkState, _host_ts: float) -> void:
 	skater.update_bottom_arm_mesh()
 
 
-func teleport_to(pos: Vector3) -> void:
-	super.teleport_to(pos)
+func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
+	super.teleport_to(pos, facing)
 	_input_history.clear()
 	_last_blade_pos = Vector3.ZERO
 	_body_check_impulse = Vector3.ZERO
