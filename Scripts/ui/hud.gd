@@ -21,6 +21,7 @@ var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
 var _pause_menu: PauseMenu = null
+var _side_menu: SideMenu = null
 var _bug_dialog: BugReportDialog = null
 var _toast_stack: ToastStack = null
 var _flash_overlay: FlashOverlay = null
@@ -65,6 +66,10 @@ func _ready() -> void:
 	_pause_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
 	_pause_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
 	add_child(_pause_menu)
+	_side_menu = SideMenu.new()
+	_side_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
+	_side_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
+	add_child(_side_menu)
 	_confirm_dialog = ConfirmDialog.new()
 	_confirm_dialog.confirmed.connect(_on_confirm_dialog_confirmed)
 	_confirm_dialog.cancelled.connect(_on_confirm_dialog_cancelled)
@@ -101,9 +106,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if _game_over_popup.visible:
 		return
-	if _confirm_dialog.visible or _pause_menu.visible:
+	if _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible:
 		return
-	_pause_menu.open()
+	if NetworkManager.is_free_play_mode:
+		_side_menu.open()
+	else:
+		_pause_menu.open()
 	get_viewport().set_input_as_handled()
 
 # ---------------------------------------------------------------------------
@@ -653,6 +661,8 @@ func _on_game_reset() -> void:
 	_game_over_popup.hide_popup()
 	if _pause_menu != null:
 		_pause_menu.close()
+	if _side_menu != null:
+		_side_menu.close()
 
 func _on_rematch_vote_pressed() -> void:
 	_local_voted = not _local_voted
@@ -676,12 +686,12 @@ func _update_rematch_ui() -> void:
 
 func _on_game_over_host_action() -> void:
 	if NetworkManager.is_offline_mode:
-		GameManager.exit_to_main_menu()
+		GameManager.return_to_free_play()
 	else:
 		GameManager.return_to_lobby()
 
 func _on_game_over_disconnect() -> void:
-	_show_confirm("Return to main menu?", GameManager.exit_to_main_menu)
+	_show_confirm("Return to free play?", GameManager.return_to_free_play)
 
 func _on_game_over_exit() -> void:
 	_show_confirm("Exit game?", func() -> void:

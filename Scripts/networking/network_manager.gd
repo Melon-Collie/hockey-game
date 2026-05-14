@@ -99,6 +99,11 @@ var pending_lobby_roster: Array = []
 var pending_join_slot: Dictionary = {}   # { team_slot, team_id, jersey_color, helmet_color, pants_color }
 var is_offline_mode: bool = false
 var is_tutorial_mode: bool = false
+# Free play is the boot mode: offline, no bots, direct entry to Hockey.tscn,
+# Escape opens the SideMenu instead of the in-match PauseMenu. Set true by
+# Boot and by return-to-free-play; cleared by reset() and whenever any other
+# activity (host, client, lobby-with-bots, tutorial) is started.
+var is_free_play_mode: bool = false
 var pending_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
 var pending_away_color_id: String  = TeamColorRegistry.DEFAULT_AWAY_ID
 var pending_color_votes: Dictionary = {}  # peer_id → color_id (host authoritative; all peers mirror)
@@ -260,15 +265,13 @@ func _on_connected_to_server() -> void:
 func _on_connection_failed() -> void:
 	push_error("Connection failed")
 	pending_error = "Connection failed."
-	reset()
-	get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+	GameManager.return_to_free_play()
 
 func _on_server_disconnected() -> void:
 	push_error("Server disconnected")
 	pending_error = "Lost connection to server."
 	disconnected_from_server.emit()
-	reset()
-	get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+	GameManager.return_to_free_play()
 
 func _exit_tree() -> void:
 	_close()
@@ -301,6 +304,8 @@ func reset() -> void:
 	is_host = false
 	game_initiated = false
 	is_offline_mode = false
+	is_free_play_mode = false
+	is_tutorial_mode = false
 	_input_batch_provider = Callable()
 	_peer_handedness.clear()
 	_peer_names.clear()
@@ -364,8 +369,7 @@ func _process(delta: float) -> void:
 		if _connect_timer >= CONNECT_TIMEOUT:
 			push_error("Connection timed out after %ds" % CONNECT_TIMEOUT)
 			pending_error = "Connection timed out."
-			reset()
-			get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+			GameManager.return_to_free_play()
 
 	if not is_host and _clock_sync != null:
 		if _clock_sync.tick(capped_delta):

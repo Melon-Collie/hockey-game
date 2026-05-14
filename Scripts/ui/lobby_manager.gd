@@ -661,4 +661,4 @@ func _on_start_pressed() -> void:
 	NetworkManager.send_game_start(config)
 
 func _on_back_pressed() -> void:
-	GameManager.exit_to_main_menu()
+	GameManager.return_to_free_play()

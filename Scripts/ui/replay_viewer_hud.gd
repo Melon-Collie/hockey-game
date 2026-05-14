@@ -127,7 +127,7 @@ func _build_back_button(root: Control) -> void:
 	btn.offset_top = 12
 	btn.offset_right = -12
 	btn.offset_bottom = 52
-	btn.pressed.connect(_exit_to_main_menu)
+	btn.pressed.connect(_exit_to_free_play)
 	root.add_child(btn)
 
 
@@ -274,15 +274,15 @@ func _update_play_pause_text() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
-		_exit_to_main_menu()
+		_exit_to_free_play()
 		get_viewport().set_input_as_handled()
 	elif event is InputEventKey and event.pressed and (event as InputEventKey).keycode == KEY_SPACE:
 		_on_play_pause_pressed()
 		get_viewport().set_input_as_handled()
 
 
-func _exit_to_main_menu() -> void:
-	get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+func _exit_to_free_play() -> void:
+	GameManager.return_to_free_play()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

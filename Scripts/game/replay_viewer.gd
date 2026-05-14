@@ -7,7 +7,7 @@ extends Node
 # header and drives them via FileReplayDriver.
 #
 # File path is provided by the launching screen via
-# NetworkManager.pending_replay_path. Empty path = bail back to main menu.
+# NetworkManager.pending_replay_path. Empty path = bail back to free play.
 #
 # Required scene nodes (the user wires these in the editor):
 #   - This script on the root Node
@@ -43,13 +43,13 @@ func _ready() -> void:
 	NetworkManager.pending_replay_path = ""
 	if path.is_empty():
 		push_error("ReplayViewer: no replay path; returning to main menu")
-		get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+		GameManager.return_to_free_play()
 		return
 
 	var read_result: Dictionary = ReplayFileReader.read(path)
 	if not read_result.ok:
 		push_error("ReplayViewer: failed to read %s — %s" % [path, read_result.error])
-		get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+		GameManager.return_to_free_play()
 		return
 
 	# Replay mode silences RemoteController._physics_process (no buffer to

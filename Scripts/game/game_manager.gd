@@ -1708,11 +1708,17 @@ func _build_lobby_roster_array() -> Array:
 	return result
 
 
-func exit_to_main_menu() -> void:
+func return_to_free_play() -> void:
+	# Free play is the new "home" — there is no main menu screen to land on.
+	# Tear down whatever activity the player was in (lobby, match, tutorial,
+	# replay), re-arm offline mode, and drop them back on the ice. The
+	# SideMenu (opened with Escape) is where they pick a new activity.
 	on_scene_exit()
 	NetworkSimManager.clear_pending()
 	NetworkManager.reset()
-	get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+	NetworkManager.start_offline()
+	NetworkManager.is_free_play_mode = true
+	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
