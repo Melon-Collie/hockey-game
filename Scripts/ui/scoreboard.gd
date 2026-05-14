@@ -257,16 +257,15 @@ func _refresh() -> void:
 
 func _make_team_header(team_id: int) -> PanelContainer:
 	var label: String = "AWAY" if team_id == 1 else "HOME"
-	# Key the row-group header to the team's actual jersey palette so it
-	# reads as a uniform across the table: jersey color fills the strip,
-	# the secondary jersey_stripe color forms the left edge band, and the
-	# team's designated text color provides the readable label color.
-	# Mirrors how the skater's jersey decals are painted, so a player can
-	# recognize their team in the box score by eye.
+	# Sharp-cornered horizontal stripe in the team's jersey palette —
+	# matches the scorebug's "flat color band" language and avoids the
+	# rounded-rect-inside-rounded-rect tell. jersey color fills the
+	# strip, jersey_stripe forms the left edge band, text color carries
+	# the label. Same palette the skater actually wears on the ice.
 	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id)
 	var style := StyleBoxFlat.new()
 	style.bg_color = colors.jersey
-	style.set_corner_radius_all(4)
+	style.set_corner_radius_all(0)
 	style.set_content_margin(SIDE_LEFT, 14)
 	style.set_content_margin(SIDE_RIGHT, 14)
 	style.set_content_margin(SIDE_TOP, 5)
