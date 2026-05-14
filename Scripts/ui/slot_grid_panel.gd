@@ -51,6 +51,7 @@ var _stripe:       Array = [[], []]   # ColorRect — inset left edge band
 var _num_labels:   Array = [[], []]
 var _name_labels:  Array = [[], []]
 var _pos_labels:   Array = [[], []]
+var _right_cols:   Array = [[], []]   # VBoxContainer holding pos + status
 var _status_box:   Array = [[], []]   # HBoxContainer holding ping/AI
 var _ping_label:   Array = [[], []]
 var _ping_dot:     Array = [[], []]
@@ -121,6 +122,7 @@ func _build_grid() -> void:
 		_num_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_name_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_pos_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_right_cols[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_status_box[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_ping_label[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_ping_dot[team_id].resize(PlayerRules.MAX_PER_TEAM)
@@ -168,18 +170,19 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	card.add_child(content)
 
 	# Inset jersey-stripe band. Anchored to the left edge of the content
-	# area, extends with negative offsets all the way to the card's top
-	# and bottom edges (and left edge) so it sits flush against the card
-	# silhouette instead of floating inside the content margin. Sharp
-	# rectangle — the card's rounded corner curves around it on the right
-	# side; the stripe itself stays flat.
+	# area; negative offsets escape the panel's content margin so the
+	# stripe sits at the card's actual left edge (card_x = 0..STRIPE_WIDTH).
+	# Top and bottom offsets are pulled in by the card's corner radius
+	# so the stripe doesn't poke through the rounded corners. Sharp
+	# rectangle — the corner curves around the stripe; the stripe's own
+	# edges stay flat.
 	var stripe := ColorRect.new()
 	stripe.color = MenuStyle.TEXT_SEP
 	stripe.set_anchors_preset(Control.PRESET_LEFT_WIDE)
 	stripe.offset_left = -18
 	stripe.offset_right = -18 + _STRIPE_WIDTH
-	stripe.offset_top = -12
-	stripe.offset_bottom = 12
+	stripe.offset_top = -8
+	stripe.offset_bottom = 8
 	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(stripe)
 	_stripe[team_id][slot] = stripe
@@ -228,6 +231,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	right_col.custom_minimum_size = Vector2(72, 0)
 	right_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	main_row.add_child(right_col)
+	_right_cols[team_id][slot] = right_col
 
 	var pos_lbl := Label.new()
 	pos_lbl.text = _POSITION_LABEL[slot]
@@ -281,14 +285,14 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 
 	# Action button: small outline square in the top-left corner of the
 	# CARD itself (not the content area). Negative offsets escape the
-	# panel's content_margin so the icon sits at card-position (4, 4)
-	# instead of overlapping the centered jersey number at content (6, 6).
+	# panel's content_margin so the icon sits at card-position (10, 6),
+	# clear of both the centered jersey number AND the left stripe band.
 	# Default-hidden; refresh() shows it for empty (+) and bot (X) slots
 	# when the local peer is the host.
 	var action := Button.new()
 	action.custom_minimum_size = Vector2(_ICON_SIZE, _ICON_SIZE)
 	action.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	action.position = Vector2(-14, -8)
+	action.position = Vector2(-8, -6)
 	action.size = Vector2(_ICON_SIZE, _ICON_SIZE)
 	action.add_theme_font_size_override("font_size", 14)
 	action.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -333,6 +337,7 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 	var num_lbl:  Label = _num_labels[team_id][slot]
 	var name_lbl: Label = _name_labels[team_id][slot]
 	var pos_lbl:  Label = _pos_labels[team_id][slot]
+	var right_col: VBoxContainer = _right_cols[team_id][slot]
 	var ping_lbl: Label = _ping_label[team_id][slot]
 	var dot:      ColorRect = _ping_dot[team_id][slot]
 	var ai_lbl:   Label = _ai_label[team_id][slot]
@@ -357,23 +362,24 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		# card against the dark lobby panel.
 		style.bg_color = MenuStyle.SURFACE_ELEV
 		stripe.color = MenuStyle.TEXT_SEP
-		# Hide the number column entirely on empty cards so "OPEN SLOT"
-		# can center across the freed width.
+		# Hide the number column and the right column entirely on empty
+		# cards so "OPEN SLOT" centers across the full card width. The
+		# column header above already provides position context (LEFT
+		# WING / CENTER / RIGHT WING) — no info loss from dropping the
+		# per-card L/C/R indicator.
 		num_lbl.visible = false
+		right_col.visible = false
 		name_lbl.text = "OPEN SLOT"
 		name_lbl.add_theme_font_size_override("font_size", 16)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-		ping_lbl.visible = false
-		dot.visible = false
-		ai_lbl.visible = false
 		_set_action(action, "+", _is_local_host, MenuStyle.TEXT_DIM)
 		return
 
-	# Filled cards (bot or human) — restore the number column and the
-	# default left-aligned full-size name.
+	# Filled cards (bot or human) — restore the number + right columns and
+	# the default left-aligned full-size name.
 	num_lbl.visible = true
+	right_col.visible = true
 	name_lbl.add_theme_font_size_override("font_size", 22)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 
