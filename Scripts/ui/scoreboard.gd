@@ -14,8 +14,6 @@ var _period_score_labels: Array = []  # [team_id][period_index, then total]
 var _period_summary_grid: GridContainer = null
 var _away_badge_style: StyleBoxFlat = null
 var _home_badge_style: StyleBoxFlat = null
-var _away_badge_label: Label = null
-var _home_badge_label: Label = null
 
 func _ready() -> void:
 	layer = 10
@@ -39,15 +37,14 @@ func _on_game_over() -> void:
 	visible = true
 	_refresh()
 
-func _on_team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color) -> void:
+func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
+	# Period-summary team identifiers now use the scorebug's stripe+label
+	# treatment (white text next to a vertical color band), so only the
+	# stripe needs to follow team colors. Labels stay white.
 	if _home_badge_style != null:
 		_home_badge_style.bg_color = home_primary
-	if _home_badge_label != null:
-		_home_badge_label.add_theme_color_override("font_color", home_secondary)
 	if _away_badge_style != null:
 		_away_badge_style.bg_color = away_primary
-	if _away_badge_label != null:
-		_away_badge_label.add_theme_color_override("font_color", away_secondary)
 
 func _build_panel() -> void:
 	var root := Control.new()
@@ -186,14 +183,11 @@ func _rebuild_period_grid(num_periods: int) -> void:
 		if GameManager.teams.size() > team_id:
 			primary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
 		var badge := _team_badge(label, primary)
-		var badge_style := badge.get_theme_stylebox("panel") as StyleBoxFlat
-		var badge_label := badge.get_child(0) as Label
+		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
 			_away_badge_style = badge_style
-			_away_badge_label = badge_label
 		else:
 			_home_badge_style = badge_style
-			_home_badge_label = badge_label
 		_period_summary_grid.add_child(badge)
 		var row_labels: Array[Label] = []
 		for _i: int in num_periods + 1:  # periods + total
@@ -306,23 +300,31 @@ func _fill_row(row: HBoxContainer, texts: Array, name_color: Color, is_header: b
 		cell.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if i == 3 else HORIZONTAL_ALIGNMENT_CENTER
 		row.add_child(cell)
 
-func _team_badge(text: String, color: Color) -> PanelContainer:
-	var style := StyleBoxFlat.new()
-	style.bg_color = color
-	style.set_corner_radius_all(3)
-	style.set_content_margin(SIDE_LEFT, 6)
-	style.set_content_margin(SIDE_RIGHT, 6)
-	style.set_content_margin(SIDE_TOP, 3)
-	style.set_content_margin(SIDE_BOTTOM, 3)
-	var badge := PanelContainer.new()
-	badge.add_theme_stylebox_override("panel", style)
-	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var lum: float = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b
-	var text_color: Color = Color(0.06, 0.06, 0.06) if lum > 0.4 else _WHITE
-	var lbl := _lbl(text, 11, text_color)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	badge.add_child(lbl)
-	return badge
+func _team_badge(text: String, color: Color) -> Control:
+	# Scorebug-style team identifier: a thin vertical color stripe next
+	# to a white label. Replaces the older filled pill so the period
+	# summary speaks the same visual language as the scorebug. Returns
+	# an HBoxContainer; the stripe's StyleBoxFlat is stashed as meta so
+	# _on_team_colors_ready can recolor it when team palettes change.
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 8)
+	hbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+	var stripe_style := StyleBoxFlat.new()
+	stripe_style.bg_color = color
+	var stripe := PanelContainer.new()
+	stripe.add_theme_stylebox_override("panel", stripe_style)
+	stripe.custom_minimum_size = Vector2(4, 18)
+	stripe.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hbox.add_child(stripe)
+
+	var lbl := _lbl(text, 12, _WHITE)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hbox.add_child(lbl)
+
+	hbox.set_meta(&"stripe_style", stripe_style)
+	return hbox
 
 func _hsep() -> HSeparator:
 	var sep := HSeparator.new()
