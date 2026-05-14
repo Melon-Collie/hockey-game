@@ -207,11 +207,15 @@ func start_offline() -> void:
 
 # Entry point that wraps start_offline with the free-play-specific seeding:
 # home color = the player's saved favorite (or DEFAULT_HOME_ID if none picked
-# yet), away color = a random non-home team from the registry. Used by both
-# Boot (initial launch) and GameManager.return_to_free_play.
+# yet), away color = a random non-home team from the registry, and the
+# player is always pinned to team 0 / slot 0 so they spawn as the home team
+# instead of whichever side the state machine's host-registration happens
+# to pick. Used by both Boot (initial launch) and
+# GameManager.return_to_free_play.
 func start_free_play() -> void:
 	pending_home_color_id = _resolve_preferred_home_id()
 	pending_away_color_id = _pick_random_away_id(pending_home_color_id)
+	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
 	start_offline()
 	is_free_play_mode = true
 

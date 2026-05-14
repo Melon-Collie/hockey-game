@@ -1729,8 +1729,14 @@ func _on_local_preferred_color_changed(home_color_id: String, away_color_id: Str
 
 func _apply_team_colors_to_actors(team_id: int) -> void:
 	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
-	if team_id < goalies.size() and goalies[team_id] != null:
-		goalies[team_id].set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads)
+	# `goalies` is stored positionally ([top, bottom]) while team_id is
+	# semantic (0 = home = bottom net, 1 = away = top net) — indexing the
+	# array directly by team_id flips the two. Route through the team's
+	# goalie_controller, which is the authoritative team-to-goalie binding
+	# set up in _spawn_goalies.
+	var gc: GoalieController = teams[team_id].goalie_controller
+	if gc != null and gc.goalie != null:
+		gc.goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads)
 	if _registry == null:
 		return
 	for peer_id: int in _registry.all():
