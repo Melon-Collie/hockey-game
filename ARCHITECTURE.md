@@ -355,13 +355,14 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 - **AI snapshot-level caching.** Today every bot's `_pick_action` rebuilds its own teammate-id list and runs its own closest-teammate-to-puck scan. Once per-bot off-puck utility AI lands (every bot, not just the carrier), publish a per-frame teammate roster + closest-teammate map on `GameManager.current_snapshot` so all bots read it without recomputing.
 
 **Maintainability, address opportunistically (don't refactor for its own sake):**
-- **God classes.** `Scripts/game/game_manager.gd` (~2000 LOC), `Scripts/controllers/goalie_controller.gd` (~1500), `Scripts/ui/hud.gd` (~1100), `Scripts/ui/main_menu.gd` (~1000), `Scripts/ui/options_panel.gd` (~800). Extraction candidates flagged: a `PickupClaimResolver` from GameManager, a `GoalieBodyConfigBuilder` from GoalieController, per-popup splits from HUD/MainMenu. Refactor only when a concrete need arises (e.g. unit-testing the lag-comp pickup logic).
+- **God classes.** `Scripts/game/game_manager.gd` (~2000 LOC), `Scripts/controllers/goalie_controller.gd` (~1500), `Scripts/ui/hud.gd` (~1100), `Scripts/ui/options_panel.gd` (~800). Extraction candidates flagged: a `PickupClaimResolver` from GameManager, a `GoalieBodyConfigBuilder` from GoalieController, per-popup splits from HUD. Refactor only when a concrete need arises (e.g. unit-testing the lag-comp pickup logic).
 - **Test coverage gaps.** No GUT tests for `team_brain`, `skater_agent_state_machine`, `possession_state` (recently-added stateful AI), `PhaseCoordinator`, `SlotSwapCoordinator` host paths, `FileReplayDriver`, `GoalReplayDriver`, `decode_for_replay`. Domain rules are well-covered; the stateful collaborators are not.
 - **Type-safety drift.** Bare `Array` / `Dictionary` returns in AI domain modules (`role_slots`, `possession_state`, action-pair returns from `_compute_best_pass` / `_best_carry`), shot/charge rules (`ShotMechanics.release_wrister` returns Dict), and the replay engine path. Project rule says "strong typing everywhere"; fix when touching the file.
 - **Dead code.** `AIActionScoring.score_pass` is only called from tests; the runtime PASS scoring lives in `_compute_best_pass`. `TeamBrain._is_human_resolver` is stored on the constructor signature but never used. Either wire in or delete.
 
 **Planned features, Tier 3 — larger scope:**
 - **Reconnect / slot reservation:** When a peer drops, host marks the slot "reserved" for ~60 s. If the same player (matched by name) reconnects within the window, they reclaim their slot, stats, and team without restarting the game. Requires a pending-reconnect state in `GameManager` and a rejoin handshake in `NetworkManager`.
+- **First-launch → tutorial:** Boot currently always drops the player into free play. First-time players should be routed to the tutorial instead. Wait on the in-flight tutorial rewrite before wiring; once the tutorial is in good shape, add a `PlayerPrefs.has_completed_tutorial` flag, have `Boot._bootstrap_free_play_and_change` consult it, and consider a "Skip Tutorial" affordance in the tutorial intro so impatient players don't get re-offered it every launch.
 
 ---
 
