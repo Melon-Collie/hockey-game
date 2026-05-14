@@ -1,9 +1,6 @@
 class_name LobbyManager
 extends Node
 
-const _WHITE     := MenuStyle.TEXT_BODY
-const _DIM       := MenuStyle.TEXT_DIM
-
 const _SETTING_CONTROL_WIDTH: int = 220
 
 # key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
@@ -16,6 +13,13 @@ var _ready_btn: Button = null
 var _settings_panel: LobbySettingsPanel = null
 var _spectator_list_label: Label = null
 var _spectator_join_btn: Button = null
+# Team color picker widgets — populated by whichever variant of
+# _build_teams_column ran (offline gets both, online gets _my_color_btn only).
+var _offline_home_color_btn: OptionButton = null
+var _offline_home_swatch: ColorRect = null
+var _offline_away_color_btn: OptionButton = null
+var _offline_away_swatch: ColorRect = null
+var _my_color_swatch: ColorRect = null
 
 # key = peer_id → bool; tracks non-host peers only (host uses Start instead)
 var _ready_states: Dictionary = {}
@@ -38,7 +42,6 @@ var _away_color_id: String = TeamColorRegistry.DEFAULT_AWAY_ID
 var _my_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
 var _color_votes: Dictionary = {}  # peer_id → color_id
 var _my_color_btn: OptionButton = null
-var _color_vote_row: Control = null
 
 func _ready() -> void:
 	_home_color_id = NetworkManager.pending_home_color_id
@@ -100,8 +103,9 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(root)
 
-	# Same ice texture as the main menu — visually ties the lobby to where the
-	# player just came from. Stretch covers any aspect ratio without warping.
+	# Same ice texture as the rest of the UI. Stretch covers any aspect ratio
+	# without warping. A future pass will replace this with a live hockey
+	# scene running the rink + bench in 3D behind the lobby panel.
 	var bg := TextureRect.new()
 	bg.texture = load("res://Assets/Mitts_ice_background.png")
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -124,30 +128,16 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 20)
 	panel.add_child(vbox)
 
-	var title := Label.new()
-	title.text = "LOBBY"
-	title.add_theme_font_size_override("font_size", 20)
-	title.add_theme_color_override("font_color", _WHITE)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(title)
-
-	_color_vote_row = _build_color_vote_row()
-	# Hide the per-player color vote in offline mode — colors come from
-	# the "With Bots" popup directly, no votes to cast.
-	_color_vote_row.visible = not NetworkManager.is_offline_mode
-	vbox.add_child(_color_vote_row)
-
 	_slot_grid = SlotGridPanel.new()
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_grid.slot_selected.connect(_on_slot_selected)
 	_slot_grid.bot_toggled.connect(_on_bot_toggled)
 	vbox.add_child(_slot_grid)
 
-	vbox.add_child(_build_spectator_panel())
-
-	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host)
-	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
-	vbox.add_child(_settings_panel)
+	# Three-column section below the slot grid: TEAMS / MATCH / SPECTATORS.
+	# Columns line up with the slot columns above thanks to the same 56px
+	# left offset that SlotGridPanel uses for its AWAY/HOME labels.
+	vbox.add_child(_build_columns_row())
 
 	var btn_box := HBoxContainer.new()
 	btn_box.add_theme_constant_override("separation", 12)
@@ -174,31 +164,150 @@ func _build_ui() -> void:
 	_refresh_grid()
 	_refresh_spectator_panel()
 
-# Spectator slots sit below the 3v3 slot grid. The list shows everyone currently
-# spectating; the button toggles the local peer between "playing slot" and
-# "spectator slot" — the host's slot-swap path validates and broadcasts.
-func _build_spectator_panel() -> VBoxContainer:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 6)
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
+# Lay out the bottom of the lobby as three vertical columns aligned with the
+# slot-grid columns above. Left offset of 56px matches SlotGridPanel's
+# AWAY/HOME team-label column so the headers below line up under LW/C/RW.
+func _build_columns_row() -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_child(row)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var left_offset := Control.new()
+	left_offset.custom_minimum_size = Vector2(56, 0)
+	row.add_child(left_offset)
+
+	row.add_child(_build_teams_column())
+	row.add_child(_build_match_column())
+	row.add_child(_build_spectators_column())
+
+	return row
+
+
+# Small uppercase tracking-y header used at the top of each column to
+# echo the slot-grid's LW/C/RW headers.
+func _column_header(text: String) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	return lbl
+
+
+# Teams column. Two variants depending on connection mode:
+#   - Offline / with bots: the local player is the host and owns both
+#     team palettes directly. Show two dropdowns (AWAY + HOME) with
+#     swatches, plus a "Host selects teams" hint.
+#   - Online: every player votes for their own preferred palette and
+#     the host's resolution mixes those into the actual team colors.
+#     Show a single dropdown labelled "Your Vote".
+func _build_teams_column() -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(_column_header("TEAMS"))
+
+	if NetworkManager.is_offline_mode:
+		var away_row := _color_picker_row("AWAY", _away_color_id, true)
+		_offline_away_swatch = away_row.get_meta(&"swatch") as ColorRect
+		_offline_away_color_btn = away_row.get_meta(&"option") as OptionButton
+		_offline_away_color_btn.item_selected.connect(_on_offline_away_color_selected)
+		col.add_child(away_row)
+
+		var home_row := _color_picker_row("HOME", _home_color_id, false)
+		_offline_home_swatch = home_row.get_meta(&"swatch") as ColorRect
+		_offline_home_color_btn = home_row.get_meta(&"option") as OptionButton
+		_offline_home_color_btn.item_selected.connect(_on_offline_home_color_selected)
+		col.add_child(home_row)
+
+		var hint := Label.new()
+		hint.text = "Host selects teams"
+		hint.add_theme_font_size_override("font_size", 11)
+		hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+		col.add_child(hint)
+	else:
+		var vote_row := _color_picker_row("YOUR VOTE", _my_color_id, false)
+		_my_color_swatch = vote_row.get_meta(&"swatch") as ColorRect
+		_my_color_btn = vote_row.get_meta(&"option") as OptionButton
+		_my_color_btn.item_selected.connect(_on_my_color_vote_selected)
+		col.add_child(vote_row)
+
+		var hint := Label.new()
+		hint.text = "Most votes wins"
+		hint.add_theme_font_size_override("font_size", 11)
+		hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+		col.add_child(hint)
+
+	return col
+
+
+# Build one [LABEL] [swatch] [dropdown] row. The swatch is a small
+# ColorRect previewing the currently-selected palette's primary color so
+# the user can scan picks at a glance without opening the dropdown. The
+# `is_away` flag is used only to seed the initial team_id for the colors
+# lookup; the dropdown's item_selected signal is wired by the caller.
+func _color_picker_row(label_text: String, initial_color_id: String, is_away: bool) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var lbl := Label.new()
+	lbl.text = label_text
+	lbl.add_theme_font_size_override("font_size", 12)
+	lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.custom_minimum_size = Vector2(56, 0)
+	row.add_child(lbl)
+
+	var swatch := ColorRect.new()
+	swatch.custom_minimum_size = Vector2(20, 20)
+	swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	swatch.color = TeamColorRegistry.get_colors(initial_color_id, 1 if is_away else 0).get("primary", Color.WHITE)
+	row.add_child(swatch)
+
+	var dropdown := MenuStyle.color_option_btn(initial_color_id, Vector2(_SETTING_CONTROL_WIDTH - 36, 28), 12)
+	dropdown.disabled = NetworkManager.is_offline_mode and not NetworkManager.is_host
+	SoundManager.wire_button(dropdown)
+	row.add_child(dropdown)
+
+	row.set_meta(&"swatch", swatch)
+	row.set_meta(&"option", dropdown)
+	return row
+
+
+func _build_match_column() -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(_column_header("MATCH"))
+
+	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host)
+	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
+	col.add_child(_settings_panel)
+
+	return col
+
+
+func _build_spectators_column() -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(_column_header("SPECTATORS"))
 
 	_spectator_list_label = Label.new()
-	_spectator_list_label.add_theme_font_size_override("font_size", 13)
-	_spectator_list_label.add_theme_color_override("font_color", _DIM)
+	_spectator_list_label.add_theme_font_size_override("font_size", 12)
+	_spectator_list_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	_spectator_list_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_spectator_list_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	row.add_child(_spectator_list_label)
+	_spectator_list_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(_spectator_list_label)
 
 	_spectator_join_btn = _btn("Spectate")
+	_spectator_join_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_spectator_join_btn.pressed.connect(_on_spectate_pressed)
-	row.add_child(_spectator_join_btn)
+	col.add_child(_spectator_join_btn)
 
-	return box
+	return col
 
 func _refresh_spectator_panel() -> void:
 	_update_ready_btn()
@@ -226,10 +335,11 @@ func _refresh_spectator_panel() -> void:
 		_spectator_join_btn.disabled = _find_open_spectator_slot() < 0
 	# Spectators don't belong to a team, so their color vote can't affect any
 	# team's resolution (`_recompute_resolved_colors` skips spectator entries).
-	# Hide the row entirely so the UI doesn't suggest the dropdown does anything.
-	# In offline mode it's always hidden — colors come from the With Bots popup.
-	if _color_vote_row != null:
-		_color_vote_row.visible = not local_is_spectator and not NetworkManager.is_offline_mode
+	# Disable the dropdown so the UI doesn't suggest it does anything.
+	if _my_color_btn != null:
+		_my_color_btn.disabled = local_is_spectator
+		_my_color_btn.modulate = Color(1, 1, 1, 0.5) if local_is_spectator else Color(1, 1, 1, 1)
+
 
 func _on_spectate_pressed() -> void:
 	var open: int = _find_open_spectator_slot()
@@ -237,33 +347,39 @@ func _on_spectate_pressed() -> void:
 		return
 	NetworkManager.send_request_slot_swap(GameRules.SPECTATOR_TEAM_ID, open)
 
-# Builds the live color-vote row that sits above the slot grid. Every player
-# votes for their own team's color; both teams' resolved colors are recomputed
-# on every vote change and reflected in the slot-grid preview below.
-# Resolution is sticky — a previous winner that's still tied for the lead
-# stays put, so the displayed colors don't flicker when unrelated votes shift.
-func _build_color_vote_row() -> Control:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
 
-	var lbl := Label.new()
-	lbl.text = "Team Color"
-	lbl.add_theme_font_size_override("font_size", 14)
-	lbl.add_theme_color_override("font_color", _DIM)
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(lbl)
+# ── Color-picker change handlers ────────────────────────────────────────────
 
-	_my_color_btn = MenuStyle.color_option_btn(_my_color_id, Vector2(_SETTING_CONTROL_WIDTH, 40), 16)
-	SoundManager.wire_button(_my_color_btn)
-	_my_color_btn.item_selected.connect(func(idx: int) -> void:
-		_my_color_id = TeamColorRegistry.get_all_ids()[idx]
-		PlayerPrefs.preferred_color_id = _my_color_id
-		PlayerPrefs.save()
-		NetworkManager.send_color_vote(_my_color_id))
-	row.add_child(_my_color_btn)
+# Online lobby: writes the player's vote into the shared pool. Host receives
+# the vote, updates pending_color_votes, recomputes resolved team colors,
+# and broadcasts. PlayerPrefs is updated so the next session remembers.
+func _on_my_color_vote_selected(idx: int) -> void:
+	_my_color_id = TeamColorRegistry.get_all_ids()[idx]
+	PlayerPrefs.preferred_color_id = _my_color_id
+	PlayerPrefs.save()
+	if _my_color_swatch != null:
+		_my_color_swatch.color = TeamColorRegistry.get_colors(_my_color_id, 0).get("primary", Color.WHITE)
+	NetworkManager.send_color_vote(_my_color_id)
 
-	return row
+
+# Offline / with-bots lobby: host writes both team colors directly into
+# NetworkManager.pending_*_color_id. No vote pool to update; the lobby's
+# own _home_color_id / _away_color_id mirror the pending values and feed
+# the slot-grid preview.
+func _on_offline_away_color_selected(idx: int) -> void:
+	_away_color_id = TeamColorRegistry.get_all_ids()[idx]
+	NetworkManager.pending_away_color_id = _away_color_id
+	if _offline_away_swatch != null:
+		_offline_away_swatch.color = TeamColorRegistry.get_colors(_away_color_id, 1).get("primary", Color.WHITE)
+	_refresh_grid()
+
+
+func _on_offline_home_color_selected(idx: int) -> void:
+	_home_color_id = TeamColorRegistry.get_all_ids()[idx]
+	NetworkManager.pending_home_color_id = _home_color_id
+	if _offline_home_swatch != null:
+		_offline_home_swatch.color = TeamColorRegistry.get_colors(_home_color_id, 0).get("primary", Color.WHITE)
+	_refresh_grid()
 
 
 func _btn(text: String) -> Button:
