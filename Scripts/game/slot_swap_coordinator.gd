@@ -100,10 +100,9 @@ func apply_confirmed_swap(
 	record.text_color          = colors.text
 	record.text_outline_color  = colors.text_outline
 	record.faceoff_position    = PlayerRules.faceoff_position(new_team_id, new_slot)
-	# Skater carries team_id for friendly-carrier checks (goalie, etc.); the
-	# skater node is reused across the swap, so we must repaint it on the new
-	# team or the goalie keeps seeing the player as their old colors.
-	record.skater.team_id = new_team_id
+	# Skater.get_team_id() resolves through the registry (record.team.team_id),
+	# so the team write above is the single source of truth — no node-level
+	# field needs re-syncing here.
 	record.skater.set_player_color(jersey, helmet, pants, colors.socks, colors.primary)
 	record.skater.set_player_name(record.player_name)
 	record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text)

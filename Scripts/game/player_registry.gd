@@ -108,7 +108,10 @@ func spawn(
 				is_left_handed, puck, _game_state_node)
 	record.skater = spawned.skater
 	record.controller = spawned.controller
-	spawned.skater.team_id = team.team_id
+	# Resolver-based team lookup so a mid-game slot swap only has to update
+	# record.team — the goalie's `carrier.get_team_id()` reads the live value
+	# from the registry rather than a cached field that drifts.
+	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(player_name)
 	spawned.skater.set_jersey_info(player_name, jersey_number, text_color)
 	spawned.skater.set_jersey_stripes(jersey_stripe_color, pants_stripe_color, socks_stripe_color)
@@ -173,7 +176,8 @@ func spawn_bot(
 	var resolver := func(pid: int) -> int:
 		return resolve_team_id_for_peer(pid)
 	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, resolver, record.is_left_handed)
-	spawned.skater.team_id = team.team_id
+	# Same resolver-based team lookup as spawn() — see comment there.
+	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number, record.text_color)
 	spawned.skater.set_jersey_stripes(record.jersey_stripe_color, record.pants_stripe_color, record.socks_stripe_color)
