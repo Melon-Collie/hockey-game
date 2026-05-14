@@ -34,7 +34,7 @@ const _POSITION_LABEL := ["C", "L", "R"]   # indexed by slot
 const _POSITION_HEADER := ["LEFT WING", "CENTER", "RIGHT WING"]
 
 const _CARD_HEIGHT: int = 96
-const _STRIPE_WIDTH: int = 4
+const _STRIPE_WIDTH: int = 6
 const _ICON_SIZE: int = 20
 
 # Ping color bands (ms).
@@ -167,16 +167,19 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(content)
 
-	# Inset jersey-stripe band — anchored to the left edge of the content
-	# area, sharp rectangle sitting a few pixels off the top/bottom so it
-	# doesn't curl with the card's corner radius.
+	# Inset jersey-stripe band. Anchored to the left edge of the content
+	# area, extends with negative offsets all the way to the card's top
+	# and bottom edges (and left edge) so it sits flush against the card
+	# silhouette instead of floating inside the content margin. Sharp
+	# rectangle — the card's rounded corner curves around it on the right
+	# side; the stripe itself stays flat.
 	var stripe := ColorRect.new()
 	stripe.color = MenuStyle.TEXT_SEP
 	stripe.set_anchors_preset(Control.PRESET_LEFT_WIDE)
-	stripe.offset_left = -6
-	stripe.offset_right = -6 + _STRIPE_WIDTH
-	stripe.offset_top = 4
-	stripe.offset_bottom = -4
+	stripe.offset_left = -18
+	stripe.offset_right = -18 + _STRIPE_WIDTH
+	stripe.offset_top = -12
+	stripe.offset_bottom = 12
 	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(stripe)
 	_stripe[team_id][slot] = stripe
@@ -276,13 +279,16 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	status_box.add_child(ai_lbl)
 	_ai_label[team_id][slot] = ai_lbl
 
-	# Action button: small filled square in the top-left corner of the card.
-	# Used by the host to add/remove bots. Default-hidden; refresh() shows
-	# it for empty (+) and bot (X) slots when the local peer is the host.
+	# Action button: small outline square in the top-left corner of the
+	# CARD itself (not the content area). Negative offsets escape the
+	# panel's content_margin so the icon sits at card-position (4, 4)
+	# instead of overlapping the centered jersey number at content (6, 6).
+	# Default-hidden; refresh() shows it for empty (+) and bot (X) slots
+	# when the local peer is the host.
 	var action := Button.new()
 	action.custom_minimum_size = Vector2(_ICON_SIZE, _ICON_SIZE)
 	action.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	action.position = Vector2(6, 6)
+	action.position = Vector2(-14, -8)
 	action.size = Vector2(_ICON_SIZE, _ICON_SIZE)
 	action.add_theme_font_size_override("font_size", 14)
 	action.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -347,14 +353,17 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 	if entry == null and not is_bot_slot:
 		# === Empty slot ============================================
 		_peer_ids[team_id][slot] = -1
-		style.bg_color = MenuStyle.PANEL_BG
+		# Slightly elevated card bg so the empty slot still reads as a
+		# card against the dark lobby panel.
+		style.bg_color = MenuStyle.SURFACE_ELEV
 		stripe.color = MenuStyle.TEXT_SEP
-		num_lbl.text = ""
-		# Empty cards use a smaller name font so "OPEN SLOT" fits the
-		# narrower side columns without clipping.
+		# Hide the number column entirely on empty cards so "OPEN SLOT"
+		# can center across the freed width.
+		num_lbl.visible = false
 		name_lbl.text = "OPEN SLOT"
 		name_lbl.add_theme_font_size_override("font_size", 16)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		ping_lbl.visible = false
 		dot.visible = false
@@ -362,15 +371,18 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		_set_action(action, "+", _is_local_host, MenuStyle.TEXT_DIM)
 		return
 
-	# Filled cards (bot or human) — restore full-size name.
+	# Filled cards (bot or human) — restore the number column and the
+	# default left-aligned full-size name.
+	num_lbl.visible = true
 	name_lbl.add_theme_font_size_override("font_size", 22)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 
 	if is_bot_slot:
 		# === Bot slot ==============================================
 		_peer_ids[team_id][slot] = -1
 		style.bg_color = jersey_c
 		stripe.color = stripe_c
-		num_lbl.text = "##"
+		num_lbl.text = "#"
 		num_lbl.add_theme_color_override("font_color", text_c)
 		name_lbl.text = "BOT"
 		name_lbl.add_theme_color_override("font_color", text_c)
