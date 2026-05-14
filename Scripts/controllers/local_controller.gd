@@ -106,27 +106,12 @@ func _physics_process(delta: float) -> void:
 		skater.velocity = Vector3.ZERO
 		_input_history.clear()
 		return
-	if _game_state.is_input_blocked():
-		# Menu open — feed a zero-movement input through the normal pipeline
-		# so the skater decelerates via its natural friction instead of
-		# either coasting forever (no fix) or snapping dead (hard zero).
-		# Held buttons (shoot/slap/block) are preserved so the shot state
-		# machine doesn't interpret the menu opening as a sudden button
-		# release and auto-fire whatever was charged. One-shot edge presses
-		# are dropped — we'd ignore them anyway since the player can't see
-		# the game while picking menu items.
-		var coast := InputState.new()
-		coast.host_timestamp = _current_input.host_timestamp
-		coast.delta = delta
-		coast.move_vector = Vector2.ZERO
-		coast.mouse_world_pos = _current_input.mouse_world_pos
-		coast.mouse_screen_pos = _current_input.mouse_screen_pos
-		coast.shoot_held = _current_input.shoot_held
-		coast.slap_held = _current_input.slap_held
-		coast.block_held = _current_input.block_held
-		_process_input(coast, delta)
-		skater.current_shot_state = _sm.get_state() as int
-		return
+	# When input is blocked (menu open) the gatherer returns a neutral
+	# InputState — zero movement, no held buttons. We still run the full
+	# pipeline below so the skater decelerates naturally, the state machine
+	# transitions cleanly, and host + client process identical inputs to
+	# stay in reconcile sync. No carve-out needed here.
+
 	# Predict offsides locally for instant ghost feedback
 	_predict_offside()
 	var gathered: InputState = _gatherer.gather()
