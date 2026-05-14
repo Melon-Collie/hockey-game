@@ -1,38 +1,70 @@
 class_name SlotGridPanel
 extends VBoxContainer
 
+# Lobby slot grid. Six cards in a 2x3 layout (AWAY/HOME rows × LW/C/RW
+# columns), each card showing:
+#
+#   ┌──────────────────────────────────┐
+#   │ ▶  88  PLAYERNAME              L │   ← action icon (X / +) top-left;
+#   │ │                       ●  32ms  │     position letter top-right;
+#   └──────────────────────────────────┘     name in middle; ping or AI label
+#                                            bottom-right; left stripe in
+#                                            jersey_stripe color.
+#
+# Card visual semantics:
+#   - Empty slot      → dark neutral bg, no stripe color, "+" icon (host).
+#   - Bot slot        → jersey color bg, stripe, "AI" badge bottom-right, "X" icon (host).
+#   - Remote human    → jersey color bg, stripe, "##ms ●" ping with status dot.
+#   - Your slot       → jersey color bg, stripe, ping, plus a 1px TEAL_DIM
+#                       border around the whole card so the local player can
+#                       recognize their own slot at a glance.
+#
+# Clicking the card body emits slot_selected (used by LobbyManager to swap
+# into the slot). Clicking the action icon emits bot_toggled (add/remove a
+# bot, host-only). The two click targets are siblings under the card root
+# and use mouse_filter STOP, so clicking the icon does NOT propagate to the
+# card's swap handler.
+
 signal slot_selected(team_id: int, slot: int)
-# Emitted when the host clicks the "Bot" CheckButton on an empty slot. Wired
-# by LobbyManager to NetworkManager.send_bot_slot. Other peers don't see the
-# checkbox (host-only authoring in Phase 1).
 signal bot_toggled(team_id: int, slot: int, is_bot: bool)
 
-const _WHITE    := Color(1.00, 1.00, 1.00, 1.00)
-const _DIM      := Color(0.62, 0.62, 0.68, 1.00)
-const _FALLBACK := Color(0.12, 0.12, 0.15, 1.00)
-
 # Column display order: Left Wing (slot 1), Center (slot 0), Right Wing (slot 2)
-const _DISPLAY_ORDER   := [1, 0, 2]
-const _POSITION_LABEL  := ["C", "L", "R"]   # indexed by slot
-const _POSITION_HEADER := ["L", "C", "R"]   # matches _DISPLAY_ORDER
+const _DISPLAY_ORDER  := [1, 0, 2]
+const _POSITION_LABEL := ["C", "L", "R"]   # indexed by slot
+const _POSITION_HEADER := ["LEFT WING", "CENTER", "RIGHT WING"]
 
-# _buttons[team_id][slot] -> Button
-var _buttons: Array = [[], []]
-# parallel label arrays, same [team_id][slot] key structure
+const _CARD_HEIGHT: int = 96
+const _STRIPE_WIDTH: int = 6
+const _ICON_SIZE: int = 24
+
+# Ping color bands (ms).
+const _PING_GREEN: int  = 60
+const _PING_YELLOW: int = 120
+const _COLOR_PING_GOOD := Color(0.36, 0.85, 0.45, 1.0)
+const _COLOR_PING_OKAY := Color(0.95, 0.78, 0.22, 1.0)
+const _COLOR_PING_BAD  := Color(0.92, 0.40, 0.40, 1.0)
+
+# Per-slot widget caches. Indexed [team_id][slot].
+var _cards:        Array = [[], []]
+var _stylebox:     Array = [[], []]   # StyleBoxFlat — recolored per refresh
 var _num_labels:   Array = [[], []]
 var _name_labels:  Array = [[], []]
-var _hand_labels:  Array = [[], []]
-var _ping_labels:  Array = [[], []]
-var _ready_labels: Array = [[], []]
-var _bot_checks:   Array = [[], []]   # CheckButton overlay; visible only on empty slots when host
-var _peer_ids:     Array = [[], []]   # stores peer_id per slot for timer refresh
+var _pos_labels:   Array = [[], []]
+var _status_box:   Array = [[], []]   # HBoxContainer holding ping/AI
+var _ping_label:   Array = [[], []]
+var _ping_dot:     Array = [[], []]
+var _ai_label:     Array = [[], []]
+var _action_btn:   Array = [[], []]   # X / + button (host only, hidden on remote-human)
+var _peer_ids:     Array = [[], []]
 
 var _team_colors: Array[Dictionary] = []
-var _bot_slots: Dictionary = {}        # slot_key (team*3+slot) → bool
+var _bot_slots: Dictionary = {}
 var _is_local_host: bool = false
+
 
 func _init() -> void:
 	_build_grid()
+
 
 func _ready() -> void:
 	var t := Timer.new()
@@ -41,25 +73,28 @@ func _ready() -> void:
 	t.timeout.connect(_refresh_pings)
 	add_child(t)
 
+
+# ── Build ────────────────────────────────────────────────────────────────────
+
 func _build_grid() -> void:
-	add_theme_constant_override("separation", 6)
+	add_theme_constant_override("separation", 8)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	# Header row: blank spacer + L / C / R column labels
+	# Column header row: AWAY/HOME spacer + LW / C / RW labels.
 	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 9)
+	header.add_theme_constant_override("separation", 12)
 	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_child(header)
 
-	var spacer := Label.new()
-	spacer.custom_minimum_size = Vector2(88, 0)
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(56, 0)
 	header.add_child(spacer)
 
 	for col: int in _DISPLAY_ORDER.size():
 		var lbl := Label.new()
 		lbl.text = _POSITION_HEADER[col]
-		lbl.add_theme_font_size_override("font_size", 16)
-		lbl.add_theme_color_override("font_color", _DIM)
+		lbl.add_theme_font_size_override("font_size", 11)
+		lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		header.add_child(lbl)
@@ -67,121 +102,177 @@ func _build_grid() -> void:
 	# Away on top (team 1), Home on bottom (team 0) — matches rink perspective.
 	for team_id: int in [1, 0]:
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 9)
+		row.add_theme_constant_override("separation", 12)
 		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		add_child(row)
 
-		var label := Label.new()
-		label.text = "AWAY" if team_id == 1 else "HOME"
-		label.add_theme_font_size_override("font_size", 16)
-		label.add_theme_color_override("font_color", _DIM)
-		label.custom_minimum_size = Vector2(88, 0)
-		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		row.add_child(label)
+		var team_label := Label.new()
+		team_label.text = "AWAY" if team_id == 1 else "HOME"
+		team_label.add_theme_font_size_override("font_size", 13)
+		team_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+		team_label.custom_minimum_size = Vector2(56, 0)
+		team_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(team_label)
 
-		# Pad button arrays to slot count so index assignment works by slot.
-		_buttons[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_cards[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_stylebox[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_num_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_name_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
-		_hand_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
-		_ping_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
-		_ready_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
-		_bot_checks[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_pos_labels[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_status_box[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_ping_label[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_ping_dot[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_ai_label[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_action_btn[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_peer_ids[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_peer_ids[team_id].fill(-1)
 
 		for col: int in _DISPLAY_ORDER.size():
 			var s: int = _DISPLAY_ORDER[col]
+			row.add_child(_build_card(team_id, s))
 
-			var btn := Button.new()
-			btn.custom_minimum_size = Vector2(0, 66)
-			btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			btn.clip_contents = true
-			btn.text = ""
-			btn.pressed.connect(_on_button_pressed.bind(team_id, s))
-			row.add_child(btn)
-			_buttons[team_id][s] = btn
 
-			var hbox := HBoxContainer.new()
-			hbox.add_theme_constant_override("separation", 9)
-			hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-			hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			hbox.size_flags_vertical   = Control.SIZE_EXPAND_FILL
-			hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-			btn.add_child(hbox)
+# Build a single slot card. The card root is a PanelContainer whose stylebox
+# carries the background color, left-stripe border, and (for the local
+# player) the teal outline border. gui_input on the panel handles the
+# click-to-swap; the X/+ action button is a child with mouse_filter STOP
+# so its clicks don't bubble to the panel's swap handler.
+func _build_card(team_id: int, slot: int) -> PanelContainer:
+	var style := StyleBoxFlat.new()
+	style.bg_color = MenuStyle.PANEL_BG
+	style.set_corner_radius_all(4)
+	style.set_content_margin_all(12)
+	style.border_width_left = _STRIPE_WIDTH
 
-			var num_lbl := Label.new()
-			num_lbl.add_theme_font_size_override("font_size", 33)
-			num_lbl.add_theme_constant_override("outline_size", 4)
-			num_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-			num_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-			num_lbl.custom_minimum_size = Vector2(76, 0)
-			hbox.add_child(num_lbl)
-			_num_labels[team_id][s] = num_lbl
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", style)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.custom_minimum_size = Vector2(0, _CARD_HEIGHT)
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	card.gui_input.connect(_on_card_input.bind(team_id, slot))
+	_cards[team_id][slot] = card
+	_stylebox[team_id][slot] = style
 
-			var name_lbl := Label.new()
-			name_lbl.add_theme_font_size_override("font_size", 19)
-			name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			name_lbl.horizontal_alignment  = HORIZONTAL_ALIGNMENT_CENTER
-			name_lbl.vertical_alignment    = VERTICAL_ALIGNMENT_CENTER
-			name_lbl.clip_text = true
-			hbox.add_child(name_lbl)
-			_name_labels[team_id][s] = name_lbl
+	# Card content lives inside a Control so we can absolute-position the
+	# action button on top of the main row. The main row is a regular
+	# HBoxContainer for the number/name/right column.
+	var content := Control.new()
+	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(content)
 
-			var right_vbox := VBoxContainer.new()
-			right_vbox.add_theme_constant_override("separation", 1)
-			right_vbox.custom_minimum_size = Vector2(68, 0)
-			right_vbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			hbox.add_child(right_vbox)
+	var main_row := HBoxContainer.new()
+	main_row.add_theme_constant_override("separation", 14)
+	main_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	main_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(main_row)
 
-			var hand_lbl := Label.new()
-			hand_lbl.add_theme_font_size_override("font_size", 18)
-			hand_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-			hand_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-			right_vbox.add_child(hand_lbl)
-			_hand_labels[team_id][s] = hand_lbl
+	# Large jersey number, anchored at the left of the row.
+	var num := Label.new()
+	num.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	num.add_theme_font_size_override("font_size", 44)
+	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	num.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	num.custom_minimum_size = Vector2(72, 0)
+	num.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	main_row.add_child(num)
+	_num_labels[team_id][slot] = num
 
-			var ping_lbl := Label.new()
-			ping_lbl.add_theme_font_size_override("font_size", 11)
-			ping_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-			right_vbox.add_child(ping_lbl)
-			_ping_labels[team_id][s] = ping_lbl
+	# Name label fills the remaining width to the right of the number.
+	var name_lbl := Label.new()
+	name_lbl.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	name_lbl.add_theme_font_size_override("font_size", 22)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.clip_text = true
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	main_row.add_child(name_lbl)
+	_name_labels[team_id][slot] = name_lbl
 
-			var ready_lbl := Label.new()
-			ready_lbl.add_theme_font_size_override("font_size", 11)
-			ready_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-			right_vbox.add_child(ready_lbl)
-			_ready_labels[team_id][s] = ready_lbl
+	# Right column: position letter on top, status (ping or AI) below.
+	var right_col := VBoxContainer.new()
+	right_col.alignment = BoxContainer.ALIGNMENT_CENTER
+	right_col.add_theme_constant_override("separation", 4)
+	right_col.custom_minimum_size = Vector2(72, 0)
+	right_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	main_row.add_child(right_col)
 
-			# Bot CheckButton overlay. Anchored to the slot button's
-			# top-right corner, visible only on empty slots when the local
-			# peer is the host. Toggling emits bot_toggled - LobbyManager
-			# wires that to NetworkManager.send_bot_slot. Default-hidden;
-			# refresh() updates per-slot state each call.
-			var bot_check := CheckButton.new()
-			bot_check.text = "Bot"
-			bot_check.add_theme_font_size_override("font_size", 12)
-			bot_check.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-			bot_check.position = Vector2(-78, 4)
-			bot_check.visible = false
-			bot_check.toggled.connect(_on_bot_check_toggled.bind(team_id, s))
-			btn.add_child(bot_check)
-			_bot_checks[team_id][s] = bot_check
+	var pos_lbl := Label.new()
+	pos_lbl.text = _POSITION_LABEL[slot]
+	pos_lbl.add_theme_font_size_override("font_size", 13)
+	pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	pos_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	pos_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	right_col.add_child(pos_lbl)
+	_pos_labels[team_id][slot] = pos_lbl
 
-# roster: Array of { team_id, slot, peer_id, player_name, jersey_number, is_left_handed }
+	# Status row carries either the ping ("32ms ●") or the AI badge.
+	var status_box := HBoxContainer.new()
+	status_box.alignment = BoxContainer.ALIGNMENT_END
+	status_box.add_theme_constant_override("separation", 6)
+	status_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	right_col.add_child(status_box)
+	_status_box[team_id][slot] = status_box
+
+	var ping_lbl := Label.new()
+	ping_lbl.add_theme_font_size_override("font_size", 11)
+	ping_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	ping_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	ping_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_box.add_child(ping_lbl)
+	_ping_label[team_id][slot] = ping_lbl
+
+	var dot := ColorRect.new()
+	dot.custom_minimum_size = Vector2(6, 6)
+	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_box.add_child(dot)
+	_ping_dot[team_id][slot] = dot
+
+	var ai_lbl := Label.new()
+	ai_lbl.text = "AI"
+	ai_lbl.add_theme_font_size_override("font_size", 11)
+	ai_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	ai_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	ai_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ai_lbl.visible = false
+	status_box.add_child(ai_lbl)
+	_ai_label[team_id][slot] = ai_lbl
+
+	# Action button: small filled square in the top-left corner of the card.
+	# Used by the host to add/remove bots. Default-hidden; refresh() shows
+	# it for empty (+) and bot (X) slots when the local peer is the host.
+	var action := Button.new()
+	action.custom_minimum_size = Vector2(_ICON_SIZE, _ICON_SIZE)
+	action.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	action.position = Vector2(6, 6)
+	action.size = Vector2(_ICON_SIZE, _ICON_SIZE)
+	action.add_theme_font_size_override("font_size", 14)
+	action.mouse_filter = Control.MOUSE_FILTER_STOP
+	action.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	action.visible = false
+	action.pressed.connect(_on_action_pressed.bind(team_id, slot))
+	content.add_child(action)
+	_action_btn[team_id][slot] = action
+
+	return card
+
+
+# ── Refresh ──────────────────────────────────────────────────────────────────
+
+# roster: Array of { team_id, slot, peer_id, player_name, jersey_number, is_left_handed, is_ready }
 # local_peer_id: this client's peer ID
 # team_colors: Array[Dictionary] indexed by team_id, each with jersey/text/text_outline fields
-# bot_slots: slot_key (team*3+slot) -> bool. Empty slots marked true render
-#   as bot placeholders and (host-only) show a "Bot" CheckButton.
-# is_local_host: whether the local peer is the host. Drives bot CheckButton
-#   visibility — only hosts can author bot toggles in Phase 1.
+# bot_slots: slot_key (team*3+slot) -> bool. Marks empty slots that should
+#   render as bots and (host-only) show the X action.
+# is_local_host: whether the local peer is the host. Drives X/+ visibility.
 func refresh(roster: Array[Dictionary], local_peer_id: int, team_colors: Array[Dictionary] = [],
 		bot_slots: Dictionary = {}, is_local_host: bool = false) -> void:
 	_team_colors = team_colors
 	_bot_slots = bot_slots
 	_is_local_host = is_local_host
 
-	# Build lookup: (team_id * 3 + slot) -> entry
 	var by_slot: Dictionary = {}
 	for entry: Dictionary in roster:
 		by_slot[entry.team_id * 3 + entry.slot] = entry
@@ -193,170 +284,180 @@ func refresh(roster: Array[Dictionary], local_peer_id: int, team_colors: Array[D
 			var is_local: bool = entry != null and entry.peer_id == local_peer_id
 			_update_card(team_id, s, entry, is_local)
 
+
 func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
-	var btn:        Button = _buttons[team_id][slot]
-	var num_lbl:    Label  = _num_labels[team_id][slot]
-	var name_lbl:   Label  = _name_labels[team_id][slot]
-	var hand_lbl:   Label  = _hand_labels[team_id][slot]
-	var ping_lbl:   Label  = _ping_labels[team_id][slot]
-	var ready_lbl:  Label  = _ready_labels[team_id][slot]
+	var style:    StyleBoxFlat = _stylebox[team_id][slot]
+	var num_lbl:  Label = _num_labels[team_id][slot]
+	var name_lbl: Label = _name_labels[team_id][slot]
+	var pos_lbl:  Label = _pos_labels[team_id][slot]
+	var ping_lbl: Label = _ping_label[team_id][slot]
+	var dot:      ColorRect = _ping_dot[team_id][slot]
+	var ai_lbl:   Label = _ai_label[team_id][slot]
+	var action:   Button = _action_btn[team_id][slot]
 
-	var jersey_c:  Color = _FALLBACK
-	var text_c:    Color = _WHITE
-	var outline_c: Color = Color(0, 0, 0, 1)
-
+	var jersey_c:  Color = MenuStyle.PANEL_BG
+	var stripe_c:  Color = MenuStyle.TEXT_SEP
+	var text_c:    Color = MenuStyle.TEXT_BODY
+	var text_dim:  Color = MenuStyle.TEXT_DIM
 	if _team_colors.size() > team_id:
 		var tc: Dictionary = _team_colors[team_id]
-		jersey_c  = tc.get("jersey",       _FALLBACK)
-		text_c    = tc.get("text",         _WHITE)
-		outline_c = tc.get("text_outline", Color(0, 0, 0, 1))
+		jersey_c = tc.get("jersey", jersey_c)
+		stripe_c = tc.get("jersey_stripe", stripe_c)
+		text_c   = tc.get("text", text_c)
 
-	var pos_str: String = _POSITION_LABEL[slot]
+	# Reset borders — the "your slot" path below opts back in.
+	style.border_width_top = 0
+	style.border_width_right = 0
+	style.border_width_bottom = 0
 
-	# Empty-slot path is shared between truly empty and bot-marked-empty;
-	# bot mode just paints the slot with a "Bot" placeholder and a full-alpha
-	# jersey color so the player can see the team is at strength.
 	var slot_key: int = team_id * 3 + slot
 	var is_bot_slot: bool = entry == null and _bot_slots.get(slot_key, false)
-	# Bot CheckButton visibility: host-only, and only on empty slots (a slot
-	# occupied by a human can't be marked as a bot — would clobber the human).
-	var bot_chk: CheckButton = _bot_checks[team_id][slot]
-	if bot_chk != null:
-		var should_show: bool = _is_local_host and entry == null
-		bot_chk.visible = should_show
-		if should_show:
-			# set_pressed_no_signal so we don't re-emit toggled when refresh
-			# pulls the latest state from the network mirror.
-			bot_chk.set_pressed_no_signal(is_bot_slot)
-	if entry == null:
+
+	if entry == null and not is_bot_slot:
+		# === Empty slot ============================================
 		_peer_ids[team_id][slot] = -1
-		if is_bot_slot:
-			# Bot placeholder: render with full team color and "Bot" label so
-			# the slot reads as filled. Stays clickable so the host can swap
-			# into it (toggling Bot off first makes the click unambiguous).
-			_apply_style(btn, Color(jersey_c.r, jersey_c.g, jersey_c.b, 1.0),
-					Color(jersey_c.r, jersey_c.g, jersey_c.b, 1.0), false)
-			btn.disabled = false
-			btn.modulate = _WHITE
-			_set_num(num_lbl, "--", Color(text_c.r, text_c.g, text_c.b, 0.85), outline_c, 4)
-			name_lbl.text = "Bot"
-			name_lbl.add_theme_color_override("font_color", text_c)
-			hand_lbl.text = " " + pos_str + " "
-			hand_lbl.add_theme_color_override("font_color", text_c)
-			ping_lbl.text = ""
-			ready_lbl.text = ""
-			return
-		# Empty slot — clickable, dimmed jersey background.
-		_apply_style(btn, Color(jersey_c.r, jersey_c.g, jersey_c.b, 0.35),
-				Color(jersey_c.r, jersey_c.g, jersey_c.b, 0.50), false)
-		btn.disabled = false
-		btn.modulate = _WHITE
-		_set_num(num_lbl, "--", Color(text_c.r, text_c.g, text_c.b, 0.45), Color(0, 0, 0, 0), 0)
-		name_lbl.text = ""
-		name_lbl.add_theme_color_override("font_color", Color(text_c.r, text_c.g, text_c.b, 0.45))
-		hand_lbl.text = " " + pos_str + " "
-		hand_lbl.add_theme_color_override("font_color", Color(text_c.r, text_c.g, text_c.b, 0.45))
+		style.bg_color = MenuStyle.PANEL_BG
+		style.border_color = MenuStyle.TEXT_SEP
+		num_lbl.text = ""
+		name_lbl.text = "OPEN SLOT"
+		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+		pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+		ping_lbl.visible = false
+		dot.visible = false
+		ai_lbl.visible = false
+		_set_action(action, "+", _is_local_host, true)
+		return
+
+	if is_bot_slot:
+		# === Bot slot ==============================================
+		_peer_ids[team_id][slot] = -1
+		style.bg_color = jersey_c
+		style.border_color = stripe_c
+		num_lbl.text = "##"
+		num_lbl.add_theme_color_override("font_color", text_c)
+		name_lbl.text = "BOT"
+		name_lbl.add_theme_color_override("font_color", text_c)
+		pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
+		ping_lbl.visible = false
+		dot.visible = false
+		ai_lbl.visible = true
+		ai_lbl.add_theme_color_override("font_color", _muted(text_c, 0.75))
+		_set_action(action, "x", _is_local_host, false)
+		return
+
+	# === Human-filled slot (local or remote) =====================
+	var peer_id: int = entry.get("peer_id", -1)
+	_peer_ids[team_id][slot] = peer_id
+	style.bg_color = jersey_c
+	style.border_color = stripe_c
+
+	num_lbl.text = str(entry.get("jersey_number", 10))
+	num_lbl.add_theme_color_override("font_color", text_c)
+
+	var p_name: String = entry.get("player_name", "")
+	name_lbl.text = p_name.to_upper() if not p_name.is_empty() else "PLAYER"
+	name_lbl.add_theme_color_override("font_color", text_c)
+	pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
+
+	ai_lbl.visible = false
+	ping_lbl.visible = true
+	dot.visible = true
+	_apply_ping(ping_lbl, dot, peer_id, text_c)
+
+	# Your slot — add a 1px TEAL_DIM border around the card so the local
+	# player can spot themselves at a glance. No action button on the
+	# local player's slot (you can't kick yourself).
+	if is_local:
+		style.border_color = MenuStyle.TEAL
+		style.border_width_top = 1
+		style.border_width_right = 1
+		style.border_width_bottom = 1
+		# Override the stripe color too — TEAL_DIM left edge ties the
+		# accent together rather than fighting with the jersey stripe.
+		style.border_width_left = _STRIPE_WIDTH
+	action.visible = false
+
+
+func _set_action(action: Button, icon: String, visible: bool, is_add: bool) -> void:
+	action.visible = visible
+	if not visible:
+		return
+	action.text = icon
+	var bg_color: Color = MenuStyle.TEAL_DIM if is_add else MenuStyle.DANGER
+	var fg_color: Color = MenuStyle.TEXT_TITLE if is_add else Color(1, 1, 1, 1)
+	var normal_style := StyleBoxFlat.new()
+	normal_style.bg_color = bg_color
+	normal_style.set_corner_radius_all(3)
+	var hover_style := StyleBoxFlat.new()
+	hover_style.bg_color = bg_color.lightened(0.18)
+	hover_style.set_corner_radius_all(3)
+	var pressed_style := StyleBoxFlat.new()
+	pressed_style.bg_color = bg_color.darkened(0.15)
+	pressed_style.set_corner_radius_all(3)
+	action.add_theme_stylebox_override("normal", normal_style)
+	action.add_theme_stylebox_override("hover", hover_style)
+	action.add_theme_stylebox_override("pressed", pressed_style)
+	action.add_theme_color_override("font_color", fg_color)
+	action.add_theme_color_override("font_hover_color", fg_color)
+	action.add_theme_color_override("font_pressed_color", fg_color)
+
+
+func _apply_ping(ping_lbl: Label, dot: ColorRect, peer_id: int, text_c: Color) -> void:
+	var ms: int = _peer_ping(peer_id)
+	if ms <= 0:
 		ping_lbl.text = ""
-		ready_lbl.text = ""
-	elif is_local:
-		var peer_id: int = entry.get("peer_id", -1)
-		_peer_ids[team_id][slot] = peer_id
-		# Local player's slot — full color, disabled (can't switch to own slot).
-		_apply_style(btn, Color(jersey_c.r, jersey_c.g, jersey_c.b, 0.80),
-				Color(jersey_c.r, jersey_c.g, jersey_c.b, 0.80), true)
-		btn.disabled = true
-		btn.modulate = Color(1, 1, 1, 0.85)
-		_set_num(num_lbl, _fmt_num(entry.get("jersey_number", 10)), text_c, outline_c, 4)
-		name_lbl.text = "You"
-		name_lbl.add_theme_color_override("font_color", text_c)
-		hand_lbl.text = _hand_str(slot, entry.get("is_left_handed", true))
-		hand_lbl.add_theme_color_override("font_color", text_c)
-		ping_lbl.text = _ping_str(peer_id)
-		ping_lbl.add_theme_color_override("font_color", Color(text_c.r, text_c.g, text_c.b, 0.65))
-		_set_ready(ready_lbl, entry.get("is_ready", false))
+		dot.visible = false
+		return
+	ping_lbl.text = "%dms" % ms
+	ping_lbl.add_theme_color_override("font_color", _muted(text_c, 0.75))
+	dot.visible = true
+	if ms <= _PING_GREEN:
+		dot.color = _COLOR_PING_GOOD
+	elif ms <= _PING_YELLOW:
+		dot.color = _COLOR_PING_OKAY
 	else:
-		var peer_id: int = entry.get("peer_id", -1)
-		_peer_ids[team_id][slot] = peer_id
-		# Another player's slot — full color, disabled.
-		_apply_style(btn, Color(jersey_c.r, jersey_c.g, jersey_c.b, 1.0),
-				Color(jersey_c.r, jersey_c.g, jersey_c.b, 1.0), true)
-		btn.disabled = true
-		btn.modulate = Color(1, 1, 1, 0.70)
-		_set_num(num_lbl, _fmt_num(entry.get("jersey_number", 10)), text_c, outline_c, 4)
-		name_lbl.text = entry.get("player_name", "Player") if not entry.get("player_name", "").is_empty() else "Player"
-		name_lbl.add_theme_color_override("font_color", text_c)
-		hand_lbl.text = _hand_str(slot, entry.get("is_left_handed", true))
-		hand_lbl.add_theme_color_override("font_color", text_c)
-		ping_lbl.text = _ping_str(peer_id)
-		ping_lbl.add_theme_color_override("font_color", Color(text_c.r, text_c.g, text_c.b, 0.65))
-		_set_ready(ready_lbl, entry.get("is_ready", false))
+		dot.color = _COLOR_PING_BAD
 
-func _fmt_num(n: int) -> String:
-	return str(n)
 
-func _set_num(lbl: Label, text: String, color: Color, outline_color: Color, outline_size: int) -> void:
-	lbl.text = text
-	lbl.add_theme_color_override("font_color", color)
-	lbl.add_theme_color_override("font_outline_color", outline_color)
-	lbl.add_theme_constant_override("outline_size", outline_size)
-
-func _apply_style(btn: Button, normal_color: Color, disabled_color: Color, is_occupied: bool) -> void:
-	var style_normal := StyleBoxFlat.new()
-	style_normal.bg_color = normal_color
-	style_normal.set_corner_radius_all(4)
-	style_normal.set_content_margin_all(4)
-	btn.add_theme_stylebox_override("normal", style_normal)
-
-	var style_hover := StyleBoxFlat.new()
-	style_hover.bg_color = normal_color.lightened(0.12)
-	style_hover.set_corner_radius_all(4)
-	style_hover.set_content_margin_all(4)
-	btn.add_theme_stylebox_override("hover", style_hover)
-
-	var style_pressed := StyleBoxFlat.new()
-	style_pressed.bg_color = normal_color.darkened(0.10)
-	style_pressed.set_corner_radius_all(4)
-	style_pressed.set_content_margin_all(4)
-	btn.add_theme_stylebox_override("pressed", style_pressed)
-
-	var style_disabled := StyleBoxFlat.new()
-	style_disabled.bg_color = disabled_color
-	style_disabled.set_corner_radius_all(4)
-	style_disabled.set_content_margin_all(4)
-	btn.add_theme_stylebox_override("disabled", style_disabled)
-
-	if is_occupied:
-		btn.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 1))
-
-func _set_ready(lbl: Label, is_ready: bool) -> void:
-	if is_ready:
-		lbl.text = "✓ ready"
-		lbl.add_theme_color_override("font_color", Color(0.35, 0.90, 0.45, 1.0))
-	else:
-		lbl.text = ""
-
-func _ping_str(peer_id: int) -> String:
+func _peer_ping(peer_id: int) -> int:
+	if peer_id < 0:
+		return -1
 	var local_id: int = NetworkManager.local_peer_id()
 	if peer_id == local_id:
-		return "" if NetworkManager.is_host else "ping: %d" % int(NetworkManager.get_rtt_ms())
-	var p: int = NetworkManager.get_peer_ping_ms(peer_id)
-	return "ping: %d" % p if p > 0 else ""
+		if NetworkManager.is_host:
+			return -1
+		return int(NetworkManager.get_rtt_ms())
+	return NetworkManager.get_peer_ping_ms(peer_id)
 
+
+func _muted(c: Color, alpha: float) -> Color:
+	return Color(c.r, c.g, c.b, alpha)
+
+
+# Refresh ping displays without rebuilding the whole grid.
 func _refresh_pings() -> void:
 	for team_id: int in 2:
 		for s: int in PlayerRules.MAX_PER_TEAM:
 			var peer_id: int = _peer_ids[team_id][s]
 			if peer_id < 0:
 				continue
-			_ping_labels[team_id][s].text = _ping_str(peer_id)
-
-func _hand_str(slot: int, is_left_handed: bool) -> String:
-	var pos: String = _POSITION_LABEL[slot]
-	return ("<" + pos + " ") if is_left_handed else (" " + pos + ">")
-
-func _on_button_pressed(team_id: int, slot: int) -> void:
-	slot_selected.emit(team_id, slot)
+			var ping_lbl: Label = _ping_label[team_id][s]
+			var dot: ColorRect = _ping_dot[team_id][s]
+			var text_c: Color = MenuStyle.TEXT_BODY
+			if _team_colors.size() > team_id:
+				text_c = _team_colors[team_id].get("text", text_c)
+			_apply_ping(ping_lbl, dot, peer_id, text_c)
 
 
-func _on_bot_check_toggled(is_bot: bool, team_id: int, slot: int) -> void:
-	bot_toggled.emit(team_id, slot, is_bot)
+# ── Input ────────────────────────────────────────────────────────────────────
+
+func _on_card_input(event: InputEvent, team_id: int, slot: int) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		slot_selected.emit(team_id, slot)
+
+
+func _on_action_pressed(team_id: int, slot: int) -> void:
+	# is_bot=true when slot was empty (+ icon → add), false when bot (X icon → remove).
+	var slot_key: int = team_id * 3 + slot
+	var was_bot: bool = _bot_slots.get(slot_key, false)
+	bot_toggled.emit(team_id, slot, not was_bot)
