@@ -132,6 +132,12 @@ var _persistent_sound_signals_wired: bool = false
 
 func _ready() -> void:
 	randomize()
+	# Make Manrope the engine-wide fallback font so every Control that
+	# doesn't set its own font picks it up automatically — saves us from
+	# touching every popup, dialog, and HUD label by hand. Explicit font
+	# overrides (DISPLAY_FONT on the scorebug, player card, etc.) still
+	# win since they're per-control theme overrides on top of the fallback.
+	ThemeDB.fallback_font = MenuStyle.UI_FONT
 	_career_reporter = CareerStatsReporter.new()
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
@@ -161,6 +167,8 @@ func _wire_network_signals() -> void:
 	NetworkManager.slot_swap_requested.connect(_on_slot_swap_requested)
 	NetworkManager.slot_swap_confirmed.connect(_on_slot_swap_confirmed)
 	NetworkManager.return_to_lobby_received.connect(_on_return_to_lobby)
+	NetworkManager.local_identity_changed.connect(_on_local_identity_changed)
+	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
@@ -1683,6 +1691,83 @@ func _on_return_to_lobby(_roster: Array) -> void:
 	get_tree().change_scene_to_file(Constants.SCENE_LOBBY)
 
 
+# Live-update the local skater + record when the player edits their identity
+# via the SideMenu's player card. Only safe in offline contexts (free play);
+# online identity changes would also need an RPC for peers to mirror, which
+# is out of scope for the current free-play work.
+func _on_local_identity_changed(p_name: String, p_number: int, p_is_left: bool) -> void:
+	if _registry == null:
+		return
+	var record: PlayerRecord = _registry.get_local()
+	if record == null:
+		return
+	record.player_name = p_name
+	record.jersey_number = p_number
+	record.is_left_handed = p_is_left
+	if record.skater != null:
+		record.skater.set_player_name(p_name)
+		record.skater.set_jersey_info(p_name, p_number, record.text_color)
+		record.skater.is_left_handed = p_is_left
+
+
+# Re-tint home (and possibly away) when the local player picks a new
+# favorite team palette from the SideMenu's player card. The local skater
+# is always on the home team in free play, so we re-skin its uniform and
+# the home goalie. If apply_preferred_color also re-rolled the away color
+# to avoid a collision, the away goalie gets re-tinted too.
+func _on_local_preferred_color_changed(home_color_id: String, away_color_id: String) -> void:
+	if teams.size() < 2:
+		return
+	var home_changed: bool = teams[0].color_id != home_color_id
+	var away_changed: bool = teams[1].color_id != away_color_id
+	if not home_changed and not away_changed:
+		return
+	teams[0].color_id = home_color_id
+	teams[1].color_id = away_color_id
+	if home_changed:
+		_apply_team_colors_to_actors(0)
+	if away_changed:
+		_apply_team_colors_to_actors(1)
+	var home_c: Dictionary = TeamColorRegistry.get_colors(teams[0].color_id, 0)
+	var away_c: Dictionary = TeamColorRegistry.get_colors(teams[1].color_id, 1)
+	team_colors_ready.emit(home_c.primary, home_c.secondary, away_c.primary, away_c.secondary)
+
+
+func _apply_team_colors_to_actors(team_id: int) -> void:
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	# `goalies` is stored positionally ([top, bottom]) while team_id is
+	# semantic (0 = home = bottom net, 1 = away = top net) — indexing the
+	# array directly by team_id flips the two. Route through the team's
+	# goalie_controller, which is the authoritative team-to-goalie binding
+	# set up in _spawn_goalies.
+	var gc: GoalieController = teams[team_id].goalie_controller
+	if gc != null and gc.goalie != null:
+		gc.goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads)
+	if _registry == null:
+		return
+	for peer_id: int in _registry.all():
+		var record: PlayerRecord = _registry.get_record(peer_id)
+		if record == null or record.skater == null or record.team == null:
+			continue
+		if record.team.team_id != team_id:
+			continue
+		record.jersey_color = colors.jersey
+		record.helmet_color = colors.helmet
+		record.pants_color = colors.pants
+		record.socks_color = colors.socks
+		record.jersey_stripe_color = colors.jersey_stripe
+		record.pants_stripe_color = colors.pants_stripe
+		record.socks_stripe_color = colors.socks_stripe
+		record.text_color = colors.text
+		record.text_outline_color = colors.text_outline
+		record.secondary_color = colors.secondary
+		record.skater.set_player_color(colors.jersey, colors.helmet,
+				colors.pants, colors.socks, colors.primary)
+		record.skater.set_jersey_stripes(colors.jersey_stripe,
+				colors.pants_stripe, colors.socks_stripe)
+		record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text)
+
+
 func _build_lobby_roster_array() -> Array:
 	var result: Array = []
 	if _registry == null:
@@ -1708,11 +1793,17 @@ func _build_lobby_roster_array() -> Array:
 	return result
 
 
-func exit_to_main_menu() -> void:
+func return_to_free_play() -> void:
+	# Free play is the new "home" — there is no main menu screen to land on.
+	# Tear down whatever activity the player was in (lobby, match, tutorial,
+	# replay), re-arm offline mode with the player's favorite home palette
+	# and a random away, and drop them back on the ice. The SideMenu
+	# (opened with Escape) is where they pick a new activity.
 	on_scene_exit()
 	NetworkSimManager.clear_pending()
 	NetworkManager.reset()
-	get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+	NetworkManager.start_free_play()
+	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

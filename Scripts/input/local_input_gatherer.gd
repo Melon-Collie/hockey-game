@@ -7,6 +7,12 @@ var _pending_shoot_pressed: bool = false
 var _pending_slap_pressed: bool = false
 var _pending_elevation_up: bool = false
 var _pending_elevation_down: bool = false
+# Last mouse world position. Returned in place of a fresh sample when input
+# is blocked so the stick IK doesn't swing to the rink origin every frame
+# the menu is open. Both client and host see the same value (it goes out in
+# the input batch), so this does not desync.
+var _last_mouse_world_pos: Vector3 = Vector3.ZERO
+var _last_mouse_screen_pos: Vector2 = Vector2.ZERO
 
 func _init(camera: Camera3D) -> void:
 	_camera = camera
@@ -15,7 +21,11 @@ func set_local_team_id(team_id: int) -> void:
 	_local_team_id = team_id
 
 func _process(_delta: float) -> void:
-	# Accumulate just_pressed events every frame
+	# Accumulate just_pressed events every frame — unless input is blocked,
+	# in which case presses made over menu UI shouldn't queue up and fire
+	# the moment the menu closes.
+	if GameManager.is_input_blocked():
+		return
 	if Input.is_action_just_pressed("shoot"):
 		_pending_shoot_pressed = true
 	if Input.is_action_just_pressed("slapshot"):
@@ -26,6 +36,17 @@ func _process(_delta: float) -> void:
 		_pending_elevation_down = true
 
 func gather() -> InputState:
+	# Input blocked → return a neutral state so the skater decelerates
+	# naturally and any held action releases as if the player let go. Doing
+	# this at the gatherer (rather than in LocalController) keeps host and
+	# client in sync: both run the same neutral input through the same
+	# physics, so there's no reconcile snap when the menu closes.
+	if GameManager.is_input_blocked():
+		var blocked := InputState.new()
+		blocked.host_timestamp = NetworkManager.estimated_host_time()
+		blocked.mouse_world_pos = _last_mouse_world_pos
+		blocked.mouse_screen_pos = _last_mouse_screen_pos
+		return blocked
 	var state := InputState.new()
 	state.move_vector = Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	state.mouse_screen_pos = get_viewport().get_mouse_position()
@@ -41,6 +62,8 @@ func gather() -> InputState:
 	state.block_held = Input.is_action_pressed("block")
 	state.mouse_world_pos = _get_mouse_world_pos(_camera)
 	state.host_timestamp = NetworkManager.estimated_host_time()
+	_last_mouse_world_pos = state.mouse_world_pos
+	_last_mouse_screen_pos = state.mouse_screen_pos
 	# Clear pending flags after gather
 	_pending_shoot_pressed = false
 	_pending_slap_pressed = false

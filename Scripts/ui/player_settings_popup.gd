@@ -7,6 +7,7 @@ extends Control
 signal name_changed(new_name: String)
 signal jersey_number_changed(new_number: int)
 signal handedness_changed(is_left: bool)
+signal preferred_color_changed(color_id: String)
 
 # Controls — kept as refs so Cancel can restore them from the snapshot.
 var _name_field: LineEdit = null
@@ -15,12 +16,14 @@ var _number_field: LineEdit = null
 var _number_warning: Label = null
 var _left_btn: Button = null
 var _right_btn: Button = null
+var _color_btn: OptionButton = null
 var _apply_btn: Button = null
 
 # Pending state — what Apply will commit.
 var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
+var _pending_color_id: String = ""
 var _name_valid: bool = true
 var _number_valid: bool = true
 
@@ -66,6 +69,7 @@ func _build() -> void:
 	_build_name_section(vbox)
 	_build_number_section(vbox)
 	_build_handedness_section(vbox)
+	_build_team_section(vbox)
 	_build_action_row(vbox)
 
 
@@ -233,6 +237,31 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 		_update_apply_state())
 
 
+func _build_team_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	var label := Label.new()
+	label.text = "Team:"
+	label.add_theme_font_size_override("font_size", 20)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(label)
+
+	var initial_id: String = PlayerPrefs.preferred_color_id
+	if initial_id.is_empty():
+		initial_id = TeamColorRegistry.DEFAULT_HOME_ID
+	_color_btn = MenuStyle.color_option_btn(initial_id, Vector2(200, 48), 18)
+	SoundManager.wire_button(_color_btn)
+	row.add_child(_color_btn)
+
+	_color_btn.item_selected.connect(func(idx: int) -> void:
+		_pending_color_id = TeamColorRegistry.get_all_ids()[idx]
+		_update_apply_state())
+
+
 func _build_action_row(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -263,25 +292,38 @@ func _update_apply_state() -> void:
 		return
 	var changed: bool = (_pending_name != _snapshot.get("name", "")
 		or _pending_number != _snapshot.get("number", 0)
-		or _pending_is_left != _snapshot.get("is_left", false))
+		or _pending_is_left != _snapshot.get("is_left", false)
+		or _pending_color_id != _snapshot.get("color_id", ""))
 	_apply_btn.disabled = not changed or not _name_valid or not _number_valid
 
 
 func _apply() -> void:
 	if not _name_valid or not _number_valid:
 		return
-	if _pending_name != _snapshot.get("name", ""):
+	var name_changed_b: bool = _pending_name != _snapshot.get("name", "")
+	var number_changed_b: bool = _pending_number != _snapshot.get("number", 0)
+	var hand_changed_b: bool = _pending_is_left != _snapshot.get("is_left", false)
+	var color_changed_b: bool = _pending_color_id != _snapshot.get("color_id", "")
+	if name_changed_b:
 		PlayerPrefs.player_name = _pending_name
-		NetworkManager.local_player_name = _pending_name
 		name_changed.emit(_pending_name)
-	if _pending_number != _snapshot.get("number", 0):
+	if number_changed_b:
 		PlayerPrefs.jersey_number = _pending_number
-		NetworkManager.local_jersey_number = _pending_number
 		jersey_number_changed.emit(_pending_number)
-	if _pending_is_left != _snapshot.get("is_left", false):
+	if hand_changed_b:
 		PlayerPrefs.is_left_handed = _pending_is_left
-		NetworkManager.local_is_left_handed = _pending_is_left
 		handedness_changed.emit(_pending_is_left)
+	if name_changed_b or number_changed_b or hand_changed_b:
+		# Single call writes NetworkManager.local_* and emits the
+		# local_identity_changed signal that GameManager listens to so the
+		# live skater updates without a respawn.
+		NetworkManager.apply_local_identity(_pending_name, _pending_number, _pending_is_left)
+	if color_changed_b:
+		# apply_preferred_color writes PlayerPrefs.preferred_color_id and
+		# emits local_preferred_color_changed so GameManager can re-tint
+		# the home team's actors and re-roll away if the new home collides.
+		NetworkManager.apply_preferred_color(_pending_color_id)
+		preferred_color_changed.emit(_pending_color_id)
 	PlayerPrefs.save()
 	visible = false
 
@@ -297,10 +339,16 @@ func _restore_from_snapshot() -> void:
 	_pending_name = _snapshot.get("name", "")
 	_pending_number = _snapshot.get("number", 0)
 	_pending_is_left = _snapshot.get("is_left", false)
+	_pending_color_id = _snapshot.get("color_id", "")
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
 	_right_btn.button_pressed = not _pending_is_left
+	if _color_btn != null:
+		var ids: Array[String] = TeamColorRegistry.get_all_ids()
+		var idx: int = ids.find(_pending_color_id)
+		if idx >= 0:
+			_color_btn.select(idx)
 	_name_warning.visible = false
 	_number_warning.visible = false
 	_name_valid = true
@@ -314,10 +362,14 @@ func _on_overlay_clicked(event: InputEvent) -> void:
 
 
 func open() -> void:
+	var saved_color: String = PlayerPrefs.preferred_color_id
+	if saved_color.is_empty():
+		saved_color = TeamColorRegistry.DEFAULT_HOME_ID
 	_snapshot = {
 		"name": PlayerPrefs.player_name,
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
+		"color_id": saved_color,
 	}
 	_restore_from_snapshot()
 	visible = true

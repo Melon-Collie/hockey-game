@@ -221,7 +221,7 @@ func _on_free_play_after_tutorial() -> void:
 
 func _on_main_menu_after_tutorial() -> void:
 	NetworkManager.is_tutorial_mode = false
-	GameManager.exit_to_main_menu()
+	GameManager.return_to_free_play()
 
 
 func _unhandled_input(event: InputEvent) -> void:

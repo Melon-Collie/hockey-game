@@ -87,6 +87,18 @@ signal input_batch_received(peer_id: int, inputs: Array[InputState])
 # broadcast.
 signal spectator_demoted_received(peer_id: int)
 
+# Local player edited their identity (name / jersey number / handedness)
+# while a session is live (e.g. from the SideMenu's player card during free
+# play). GameManager listens and pushes the change to the local skater
+# without a respawn.
+signal local_identity_changed(player_name: String, jersey_number: int, is_left_handed: bool)
+
+# Local player picked a different favorite team palette. Fired by
+# apply_preferred_color (which writes PlayerPrefs.preferred_color_id).
+# GameManager re-tints the home team's local actors and, if the new home
+# now collides with the current away, re-rolls the away color too.
+signal local_preferred_color_changed(home_color_id: String, away_color_id: String)
+
 # ── State ─────────────────────────────────────────────────────────────────────
 var is_host: bool = false
 var game_initiated: bool = false
@@ -99,6 +111,11 @@ var pending_lobby_roster: Array = []
 var pending_join_slot: Dictionary = {}   # { team_slot, team_id, jersey_color, helmet_color, pants_color }
 var is_offline_mode: bool = false
 var is_tutorial_mode: bool = false
+# Free play is the boot mode: offline, no bots, direct entry to Hockey.tscn,
+# Escape opens the SideMenu instead of the in-match PauseMenu. Set true by
+# Boot and by return-to-free-play; cleared by reset() and whenever any other
+# activity (host, client, lobby-with-bots, tutorial) is started.
+var is_free_play_mode: bool = false
 var pending_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
 var pending_away_color_id: String  = TeamColorRegistry.DEFAULT_AWAY_ID
 var pending_color_votes: Dictionary = {}  # peer_id → color_id (host authoritative; all peers mirror)
@@ -188,6 +205,70 @@ func start_offline() -> void:
 			"rule_set": GameRules.DEFAULT_RULE_SET}
 
 
+# Entry point that wraps start_offline with the free-play-specific seeding:
+# home color = the player's saved favorite (or DEFAULT_HOME_ID if none picked
+# yet), away color = a random non-home team from the registry, and the
+# player is always pinned to team 0 / slot 0 so they spawn as the home team
+# instead of whichever side the state machine's host-registration happens
+# to pick. Used by both Boot (initial launch) and
+# GameManager.return_to_free_play.
+func start_free_play() -> void:
+	pending_home_color_id = _resolve_preferred_home_id()
+	pending_away_color_id = _pick_random_away_id(pending_home_color_id)
+	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
+	start_offline()
+	is_free_play_mode = true
+
+
+# Update PlayerPrefs.preferred_color_id and broadcast the change. Re-rolls
+# the away color if the new home matches the current away so the player
+# never faces a team wearing the same palette.
+func apply_preferred_color(color_id: String) -> void:
+	PlayerPrefs.preferred_color_id = color_id
+	PlayerPrefs.save()
+	pending_home_color_id = color_id
+	if pending_away_color_id == color_id:
+		pending_away_color_id = _pick_random_away_id(color_id)
+	local_preferred_color_changed.emit(pending_home_color_id, pending_away_color_id)
+
+
+func _resolve_preferred_home_id() -> String:
+	var saved: String = PlayerPrefs.preferred_color_id
+	if saved.is_empty():
+		return TeamColorRegistry.DEFAULT_HOME_ID
+	# Defensive: if the user's saved id was removed from the registry (e.g.
+	# team list edited between releases), fall back to the default rather
+	# than crashing downstream lookups.
+	if not TeamColorRegistry.get_all_ids().has(saved):
+		return TeamColorRegistry.DEFAULT_HOME_ID
+	return saved
+
+
+func _pick_random_away_id(home_id: String) -> String:
+	var ids: Array[String] = TeamColorRegistry.get_all_ids()
+	var candidates: Array[String] = []
+	for id: String in ids:
+		if id != home_id:
+			candidates.append(id)
+	if candidates.is_empty():
+		return TeamColorRegistry.DEFAULT_AWAY_ID
+	return candidates[randi() % candidates.size()]
+
+
+# Single entry point for in-session identity edits. PlayerSettingsPopup
+# writes both PlayerPrefs and these fields on Apply; routing through here
+# lets GameManager (and any future peer-broadcast) react to the change
+# without each call site having to know about every listener.
+func apply_local_identity(p_name: String, p_number: int, p_is_left: bool) -> void:
+	local_player_name = p_name
+	local_jersey_number = p_number
+	local_is_left_handed = p_is_left
+	_peer_names[1] = p_name
+	_peer_numbers[1] = p_number
+	_peer_handedness[1] = p_is_left
+	local_identity_changed.emit(p_name, p_number, p_is_left)
+
+
 func start_tutorial() -> void:
 	is_tutorial_mode = true
 	# Pre-assign team 0, slot 0 so the player always spawns as the home team.
@@ -267,15 +348,13 @@ func _on_connected_to_server() -> void:
 func _on_connection_failed() -> void:
 	push_error("Connection failed")
 	pending_error = "Connection failed."
-	reset()
-	get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+	GameManager.return_to_free_play()
 
 func _on_server_disconnected() -> void:
 	push_error("Server disconnected")
 	pending_error = "Lost connection to server."
 	disconnected_from_server.emit()
-	reset()
-	get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+	GameManager.return_to_free_play()
 
 func _exit_tree() -> void:
 	_close()
@@ -308,6 +387,8 @@ func reset() -> void:
 	is_host = false
 	game_initiated = false
 	is_offline_mode = false
+	is_free_play_mode = false
+	is_tutorial_mode = false
 	_input_batch_provider = Callable()
 	_peer_handedness.clear()
 	_peer_names.clear()
@@ -371,8 +452,7 @@ func _process(delta: float) -> void:
 		if _connect_timer >= CONNECT_TIMEOUT:
 			push_error("Connection timed out after %ds" % CONNECT_TIMEOUT)
 			pending_error = "Connection timed out."
-			reset()
-			get_tree().change_scene_to_file(Constants.SCENE_MAIN_MENU)
+			GameManager.return_to_free_play()
 
 	if not is_host and _clock_sync != null:
 		if _clock_sync.tick(capped_delta):

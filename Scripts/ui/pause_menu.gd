@@ -226,14 +226,14 @@ func _build_leave_overlay() -> void:
 	vbox.add_child(title)
 
 	if NetworkManager.is_offline_mode:
-		_add_host_button(vbox, "Return to Menu", func() -> void: GameManager.exit_to_main_menu())
+		_add_host_button(vbox, "Return to Free Play", func() -> void: GameManager.return_to_free_play())
 	else:
 		_add_host_button(vbox, "Return to Lobby", func() -> void: GameManager.return_to_lobby())
 
 	if not NetworkManager.is_offline_mode:
 		var disconnect_btn := MenuStyle.popup_button("Disconnect")
 		disconnect_btn.pressed.connect(func() -> void:
-			_show_confirm("Return to main menu?", GameManager.exit_to_main_menu))
+			_show_confirm("Return to free play?", GameManager.return_to_free_play))
 		vbox.add_child(disconnect_btn)
 
 	var exit_btn := MenuStyle.popup_button("Exit Game")

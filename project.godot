@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Mitts"
-run/main_scene="uid://cb0kdk6pwaxyx"
+run/main_scene="uid://dmfu1ghyuqn67"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 run/pause_on_focus_loss=false

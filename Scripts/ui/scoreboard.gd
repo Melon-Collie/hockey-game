@@ -14,8 +14,6 @@ var _period_score_labels: Array = []  # [team_id][period_index, then total]
 var _period_summary_grid: GridContainer = null
 var _away_badge_style: StyleBoxFlat = null
 var _home_badge_style: StyleBoxFlat = null
-var _away_badge_label: Label = null
-var _home_badge_label: Label = null
 
 func _ready() -> void:
 	layer = 10
@@ -39,15 +37,14 @@ func _on_game_over() -> void:
 	visible = true
 	_refresh()
 
-func _on_team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color) -> void:
+func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
+	# Period-summary team identifiers now use the scorebug's stripe+label
+	# treatment (white text next to a vertical color band), so only the
+	# stripe needs to follow team colors. Labels stay white.
 	if _home_badge_style != null:
 		_home_badge_style.bg_color = home_primary
-	if _home_badge_label != null:
-		_home_badge_label.add_theme_color_override("font_color", home_secondary)
 	if _away_badge_style != null:
 		_away_badge_style.bg_color = away_primary
-	if _away_badge_label != null:
-		_away_badge_label.add_theme_color_override("font_color", away_secondary)
 
 func _build_panel() -> void:
 	var root := Control.new()
@@ -68,10 +65,12 @@ func _build_panel() -> void:
 
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = _DARK_BG
-	panel_style.set_corner_radius_all(0)
-	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
-	panel_style.border_width_top = 1
-	panel_style.anti_aliasing = false  # crisp edges to match the layered shadow
+	panel_style.set_corner_radius_all(4)
+	# Single thin TEAL_DIM border around the whole popup, matching the
+	# side menu's player card treatment. Replaces the old top-edge
+	# highlight + contrasted header/footer strip segmentation.
+	panel_style.border_color = MenuStyle.TEAL_DIM
+	panel_style.set_border_width_all(1)
 	panel_style.set_content_margin_all(0)  # inner sections handle their own padding
 
 	var panel := PanelContainer.new()
@@ -84,8 +83,11 @@ func _build_panel() -> void:
 	panel.add_child(vbox)
 
 	# === Title strip ===
+	# No contrasted background — the outer TEAL_DIM border handles the
+	# panel framing, the title is just a label with margins so it reads
+	# as a heading without becoming a separate visual block.
 	var title_style := StyleBoxFlat.new()
-	title_style.bg_color = MenuStyle.BROADCAST_TITLE_BG
+	title_style.bg_color = Color(0, 0, 0, 0)
 	title_style.set_content_margin(SIDE_TOP, 8)
 	title_style.set_content_margin(SIDE_BOTTOM, 8)
 	title_style.set_content_margin(SIDE_LEFT, 18)
@@ -128,8 +130,10 @@ func _build_panel() -> void:
 	table_vbox.add_child(_rows_container)
 
 	# === Footer strip ===
+	# Transparent — same reasoning as the title strip. The "PRESS TAB TO
+	# TOGGLE" hint sits inside the panel border, not on its own block.
 	var footer_style := StyleBoxFlat.new()
-	footer_style.bg_color = MenuStyle.BROADCAST_TITLE_BG
+	footer_style.bg_color = Color(0, 0, 0, 0)
 	footer_style.set_content_margin(SIDE_TOP, 6)
 	footer_style.set_content_margin(SIDE_BOTTOM, 6)
 	var footer_panel := PanelContainer.new()
@@ -179,14 +183,11 @@ func _rebuild_period_grid(num_periods: int) -> void:
 		if GameManager.teams.size() > team_id:
 			primary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
 		var badge := _team_badge(label, primary)
-		var badge_style := badge.get_theme_stylebox("panel") as StyleBoxFlat
-		var badge_label := badge.get_child(0) as Label
+		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
 			_away_badge_style = badge_style
-			_away_badge_label = badge_label
 		else:
 			_home_badge_style = badge_style
-			_home_badge_label = badge_label
 		_period_summary_grid.add_child(badge)
 		var row_labels: Array[Label] = []
 		for _i: int in num_periods + 1:  # periods + total
@@ -250,20 +251,25 @@ func _refresh() -> void:
 
 func _make_team_header(team_id: int) -> PanelContainer:
 	var label: String = "AWAY" if team_id == 1 else "HOME"
-	var color: Color = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
+	# Sharp-cornered horizontal stripe in the team's jersey palette —
+	# matches the scorebug's "flat color band" language and avoids the
+	# rounded-rect-inside-rounded-rect tell. jersey color fills the
+	# strip, jersey_stripe forms the left edge band, text color carries
+	# the label. Same palette the skater actually wears on the ice.
+	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id)
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(color.r, color.g, color.b, 0.32)
+	style.bg_color = colors.jersey
 	style.set_corner_radius_all(0)
 	style.set_content_margin(SIDE_LEFT, 14)
 	style.set_content_margin(SIDE_RIGHT, 14)
 	style.set_content_margin(SIDE_TOP, 5)
 	style.set_content_margin(SIDE_BOTTOM, 5)
-	style.border_color = color
+	style.border_color = colors.jersey_stripe
 	style.border_width_left = 6
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", style)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var lbl := _lbl(label, 16, _WHITE)
+	var lbl := _lbl(label, 16, colors.text)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	panel.add_child(lbl)
 	return panel
@@ -287,30 +293,38 @@ func _fill_row(row: HBoxContainer, texts: Array, name_color: Color, is_header: b
 		var cell := Label.new()
 		cell.text = texts[i]
 		cell.custom_minimum_size = Vector2(widths[i], 0)
-		cell.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
+		cell.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 		cell.add_theme_font_size_override("font_size", font_size)
 		var col := name_color if (i > 0 and i < 4 or is_header) else _WHITE
 		cell.add_theme_color_override("font_color", col)
 		cell.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if i == 3 else HORIZONTAL_ALIGNMENT_CENTER
 		row.add_child(cell)
 
-func _team_badge(text: String, color: Color) -> PanelContainer:
-	var style := StyleBoxFlat.new()
-	style.bg_color = color
-	style.set_corner_radius_all(3)
-	style.set_content_margin(SIDE_LEFT, 6)
-	style.set_content_margin(SIDE_RIGHT, 6)
-	style.set_content_margin(SIDE_TOP, 3)
-	style.set_content_margin(SIDE_BOTTOM, 3)
-	var badge := PanelContainer.new()
-	badge.add_theme_stylebox_override("panel", style)
-	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var lum: float = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b
-	var text_color: Color = Color(0.06, 0.06, 0.06) if lum > 0.4 else _WHITE
-	var lbl := _lbl(text, 11, text_color)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	badge.add_child(lbl)
-	return badge
+func _team_badge(text: String, color: Color) -> Control:
+	# Scorebug-style team identifier: a thin vertical color stripe next
+	# to a white label. Replaces the older filled pill so the period
+	# summary speaks the same visual language as the scorebug. Returns
+	# an HBoxContainer; the stripe's StyleBoxFlat is stashed as meta so
+	# _on_team_colors_ready can recolor it when team palettes change.
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 8)
+	hbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+	var stripe_style := StyleBoxFlat.new()
+	stripe_style.bg_color = color
+	var stripe := PanelContainer.new()
+	stripe.add_theme_stylebox_override("panel", stripe_style)
+	stripe.custom_minimum_size = Vector2(4, 18)
+	stripe.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hbox.add_child(stripe)
+
+	var lbl := _lbl(text, 12, _WHITE)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hbox.add_child(lbl)
+
+	hbox.set_meta(&"stripe_style", stripe_style)
+	return hbox
 
 func _hsep() -> HSeparator:
 	var sep := HSeparator.new()
@@ -323,7 +337,7 @@ func _hsep() -> HSeparator:
 func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
+	l.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l

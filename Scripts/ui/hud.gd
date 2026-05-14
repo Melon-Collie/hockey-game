@@ -21,6 +21,7 @@ var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
 var _pause_menu: PauseMenu = null
+var _side_menu: SideMenu = null
 var _bug_dialog: BugReportDialog = null
 var _toast_stack: ToastStack = null
 var _flash_overlay: FlashOverlay = null
@@ -65,6 +66,10 @@ func _ready() -> void:
 	_pause_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
 	_pause_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
 	add_child(_pause_menu)
+	_side_menu = SideMenu.new()
+	_side_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
+	_side_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
+	add_child(_side_menu)
 	_confirm_dialog = ConfirmDialog.new()
 	_confirm_dialog.confirmed.connect(_on_confirm_dialog_confirmed)
 	_confirm_dialog.cancelled.connect(_on_confirm_dialog_cancelled)
@@ -101,9 +106,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if _game_over_popup.visible:
 		return
-	if _confirm_dialog.visible or _pause_menu.visible:
+	if _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible:
 		return
-	_pause_menu.open()
+	if NetworkManager.is_free_play_mode:
+		_side_menu.open()
+	else:
+		_pause_menu.open()
 	get_viewport().set_input_as_handled()
 
 # ---------------------------------------------------------------------------
@@ -113,10 +121,9 @@ func _unhandled_input(event: InputEvent) -> void:
 func _build_scorebug() -> void:
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = _DARK_BG
-	panel_style.set_corner_radius_all(0)
+	panel_style.set_corner_radius_all(4)
 	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
 	panel_style.border_width_top = 1
-	panel_style.anti_aliasing = false  # crisp edges to match the layered shadow
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
@@ -242,7 +249,7 @@ func _build_phase_banner() -> void:
 
 	_phase_style = StyleBoxFlat.new()
 	_phase_style.bg_color = MenuStyle.BROADCAST_BG
-	_phase_style.set_corner_radius_all(0)
+	_phase_style.set_corner_radius_all(4)
 	_phase_style.border_color = MenuStyle.BROADCAST_BORDER_T
 	_phase_style.border_width_top = 1
 	_phase_style.anti_aliasing = false
@@ -307,7 +314,7 @@ func _build_phase_banner() -> void:
 func _build_top_goal_banner() -> void:
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = MenuStyle.BROADCAST_BG
-	panel_style.set_corner_radius_all(0)
+	panel_style.set_corner_radius_all(4)
 	panel_style.border_color = MenuStyle.BROADCAST_BORDER_T
 	panel_style.border_width_top = 1
 	panel_style.anti_aliasing = false
@@ -374,7 +381,7 @@ func _play_top_goal_banner(team_color: Color) -> void:
 func _build_spectator_banner() -> void:
 	var style := StyleBoxFlat.new()
 	style.bg_color = MenuStyle.BROADCAST_BG
-	style.set_corner_radius_all(0)
+	style.set_corner_radius_all(4)
 	style.border_color = MenuStyle.BROADCAST_BORDER_T
 	style.border_width_top = 1
 	style.anti_aliasing = false
@@ -653,6 +660,8 @@ func _on_game_reset() -> void:
 	_game_over_popup.hide_popup()
 	if _pause_menu != null:
 		_pause_menu.close()
+	if _side_menu != null:
+		_side_menu.close()
 
 func _on_rematch_vote_pressed() -> void:
 	_local_voted = not _local_voted
@@ -676,12 +685,12 @@ func _update_rematch_ui() -> void:
 
 func _on_game_over_host_action() -> void:
 	if NetworkManager.is_offline_mode:
-		GameManager.exit_to_main_menu()
+		GameManager.return_to_free_play()
 	else:
 		GameManager.return_to_lobby()
 
 func _on_game_over_disconnect() -> void:
-	_show_confirm("Return to main menu?", GameManager.exit_to_main_menu)
+	_show_confirm("Return to free play?", GameManager.return_to_free_play)
 
 func _on_game_over_exit() -> void:
 	_show_confirm("Exit game?", func() -> void:
@@ -741,7 +750,7 @@ func _vsep() -> VSeparator:
 func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_override("font", MenuStyle.BROADCAST_FONT)
+	l.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l
