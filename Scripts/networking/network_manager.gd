@@ -173,6 +173,13 @@ func _ready() -> void:
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
+	# Seed local identity from saved prefs. PlayerSettingsPopup writes both
+	# PlayerPrefs and these fields on Apply, but on a fresh launch nothing
+	# else copies the saved values across, so without this the menu shows
+	# the user's name/number while spawn falls back to "Player"/10/true.
+	local_player_name = PlayerPrefs.player_name
+	local_jersey_number = PlayerPrefs.jersey_number
+	local_is_left_handed = PlayerPrefs.is_left_handed
 
 # ── Connection ────────────────────────────────────────────────────────────────
 func start_offline() -> void:
