@@ -15,6 +15,7 @@ var _tab_contents: Array[Control] = []
 var _tab_btns: Array[Button] = []
 var _vsync_check: CheckButton = null
 var _fps_btn: OptionButton = null
+var _show_fps_check: CheckButton = null
 var _gamma_slider: HSlider = null
 var _color_grade_btn: OptionButton = null
 var _sens_slider: HSlider = null
@@ -103,6 +104,7 @@ func _snapshot() -> Dictionary:
 		"resolution_index": PlayerPrefs.resolution_index,
 		"vsync_enabled": PlayerPrefs.vsync_enabled,
 		"fps_cap_index": PlayerPrefs.fps_cap_index,
+		"show_fps": PlayerPrefs.show_fps,
 		"gamma": PlayerPrefs.gamma,
 		"color_grade_preset": PlayerPrefs.color_grade_preset,
 		"master_volume": PlayerPrefs.master_volume,
@@ -123,6 +125,7 @@ func _read_controls() -> Dictionary:
 		"resolution_index": _res_btn.selected,
 		"vsync_enabled": _vsync_check.button_pressed,
 		"fps_cap_index": _fps_btn.selected,
+		"show_fps": _show_fps_check.button_pressed,
 		"gamma": _gamma_slider.value,
 		"color_grade_preset": _color_grade_btn.selected,
 		"master_volume": _volume_slider.value,
@@ -243,6 +246,12 @@ func _build_video_tab() -> Control:
 	_fps_btn.selected = PlayerPrefs.fps_cap_index
 	_fps_btn.item_selected.connect(_on_fps_cap_selected)
 	box.add_child(_field_row("FPS Cap", _fps_btn))
+
+	_show_fps_check = CheckButton.new()
+	_show_fps_check.set_pressed_no_signal(PlayerPrefs.show_fps)
+	SoundManager.wire_button(_show_fps_check)
+	_show_fps_check.toggled.connect(_on_show_fps_toggled)
+	box.add_child(_field_row("Show FPS", _show_fps_check))
 
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Image"))
@@ -467,6 +476,9 @@ func _on_vsync_toggled(_pressed: bool) -> void:
 func _on_fps_cap_selected(_idx: int) -> void:
 	_update_apply_state()
 
+func _on_show_fps_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
 func _on_gamma_changed(_value: float) -> void:
 	_update_apply_state()
 
@@ -614,6 +626,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.resolution_index = c.resolution_index
 	PlayerPrefs.vsync_enabled = c.vsync_enabled
 	PlayerPrefs.fps_cap_index = c.fps_cap_index
+	PlayerPrefs.show_fps = c.show_fps
 	PlayerPrefs.gamma = c.gamma
 	PlayerPrefs.color_grade_preset = c.color_grade_preset
 	PlayerPrefs.master_volume = c.master_volume
@@ -640,6 +653,8 @@ func _on_cancel_pressed() -> void:
 	_res_btn.selected = _original.resolution_index
 	_vsync_check.set_pressed_no_signal(_original.vsync_enabled)
 	_fps_btn.selected = _original.fps_cap_index
+	if _show_fps_check != null:
+		_show_fps_check.set_pressed_no_signal(_original.show_fps)
 	_gamma_slider.value = _original.gamma
 	if _color_grade_btn != null:
 		_color_grade_btn.selected = _original.color_grade_preset

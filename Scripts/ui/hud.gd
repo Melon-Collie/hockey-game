@@ -45,6 +45,7 @@ var _skip_vote_current: int = 0
 var _skip_vote_total: int = 0
 var _spectator_banner: PanelContainer = null
 var _spectator_wrapper: Control = null
+var _fps_label: Label = null
 
 const _DARK_BG    := MenuStyle.BROADCAST_BG
 const _WHITE      := MenuStyle.BROADCAST_CREAM
@@ -59,6 +60,7 @@ func _ready() -> void:
 	_build_phase_banner()
 	_build_top_goal_banner()
 	_build_version_tag()
+	_build_fps_label()
 	_build_bug_icon()
 	_build_skip_replay_prompt()
 	_bug_dialog = BugReportDialog.new()
@@ -552,6 +554,28 @@ func _build_version_tag() -> void:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(label)
+
+func _build_fps_label() -> void:
+	_fps_label = _lbl("", 14, _WHITE)
+	_fps_label.anchor_left = 1.0
+	_fps_label.anchor_right = 1.0
+	_fps_label.anchor_top = 0.0
+	_fps_label.anchor_bottom = 0.0
+	_fps_label.offset_left = -88.0
+	_fps_label.offset_right = -8.0
+	_fps_label.offset_top = 8.0
+	_fps_label.offset_bottom = 28.0
+	_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fps_label.visible = PlayerPrefs.show_fps
+	add_child(_fps_label)
+
+func _process(_delta: float) -> void:
+	var enabled: bool = PlayerPrefs.show_fps
+	if _fps_label.visible != enabled:
+		_fps_label.visible = enabled
+	if enabled:
+		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
 
 
 # ---------------------------------------------------------------------------
