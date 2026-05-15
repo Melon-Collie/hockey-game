@@ -314,16 +314,25 @@ func _draw_crease_fill(img: Image, cx: float, goal_y: float, toward_center: int,
 	# Straight sides run 4.5 ft (1.37m) from the goal line; arc connects their tops.
 	var arc_r: float = 1.83 * _px_per_meter
 	var half_w: float = 1.22 * _px_per_meter
-	var r_sq: float = arc_r * arc_r
-	var search: int = int(arc_r) + 2
+	var aa: float = 1.0
+	var search: int = int(arc_r + aa) + 2
 	for py in range(int(goal_y) - search, int(goal_y) + search + 1):
 		for px in range(int(cx) - search, int(cx) + search + 1):
 			if px < 0 or px >= img.get_width() or py < 0 or py >= img.get_height():
 				continue
 			var dx: float = px - cx
 			var dy: float = (py - goal_y) * toward_center
-			if dy >= 0.0 and abs(dx) <= half_w and dx * dx + dy * dy <= r_sq:
-				img.set_pixel(px, py, color)
+			if dy < -aa:
+				continue
+			# Signed distance inward from each boundary (positive = inside).
+			var dist: float = sqrt(dx * dx + dy * dy)
+			var inside_arc: float = arc_r - dist
+			var inside_side: float = half_w - abs(dx)
+			var inside_goal: float = dy
+			var inside: float = minf(minf(inside_arc, inside_side), inside_goal)
+			var alpha: float = clampf(inside / aa + 0.5, 0.0, 1.0)
+			if alpha > 0.0:
+				img.set_pixel(px, py, img.get_pixel(px, py).lerp(color, alpha))
 
 func _draw_crease_arc(img: Image, cx: float, goal_y: float, toward_center: int, thickness: int, color: Color) -> void:
 	# Curved arc (capped at crease half-width) + two straight side lines
@@ -331,25 +340,33 @@ func _draw_crease_arc(img: Image, cx: float, goal_y: float, toward_center: int, 
 	var half_w: float = 1.22 * _px_per_meter
 	var straight_depth: float = 1.37 * _px_per_meter  # where sides meet the arc
 	var half_t: float = thickness / 2.0
+	var aa: float = 1.0
 	var r_outer: float = arc_r + half_t
-	var r_inner: float = arc_r - half_t
-	var search: int = int(r_outer) + 2
+	var search: int = int(r_outer + aa) + 2
 	for py in range(int(goal_y) - search, int(goal_y) + search + 1):
 		for px in range(int(cx) - search, int(cx) + search + 1):
 			if px < 0 or px >= img.get_width() or py < 0 or py >= img.get_height():
 				continue
 			var dx: float = px - cx
 			var dy: float = (py - goal_y) * toward_center
-			if dy < 0.0:
+			if dy < -aa:
 				continue
-			var dist: float = sqrt(dx * dx + dy * dy)
-			# Curved portion of the D
-			if abs(dx) <= half_w and dist >= r_inner and dist <= r_outer:
-				img.set_pixel(px, py, color)
-				continue
-			# Straight side lines at x = ±half_w, from goal line to where they meet the arc
-			if dy <= straight_depth and abs(abs(dx) - half_w) <= half_t:
-				img.set_pixel(px, py, color)
+			var alpha: float = 0.0
+			# Curved band of width `thickness` around arc_r, clipped to |dx| <= half_w.
+			if abs(dx) <= half_w + aa:
+				var dist: float = sqrt(dx * dx + dy * dy)
+				var band: float = half_t - abs(dist - arc_r)
+				var cap: float = half_w - abs(dx)
+				var arc_inside: float = minf(minf(band, cap), dy)
+				alpha = maxf(alpha, clampf(arc_inside / aa + 0.5, 0.0, 1.0))
+			# Straight side strokes at x = ±half_w, between goal line and the arc.
+			if dy <= straight_depth + aa:
+				var stroke: float = half_t - abs(abs(dx) - half_w)
+				var top: float = straight_depth - dy
+				var side_inside: float = minf(minf(stroke, top), dy)
+				alpha = maxf(alpha, clampf(side_inside / aa + 0.5, 0.0, 1.0))
+			if alpha > 0.0:
+				img.set_pixel(px, py, img.get_pixel(px, py).lerp(color, alpha))
 
 func _kickplate_z_segments(z_start: float, z_end: float) -> Array:
 	# Returns [[z0,z1], ...] covering [z_start, z_end] with gaps cut at stripe positions.
