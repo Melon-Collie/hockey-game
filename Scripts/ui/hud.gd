@@ -675,9 +675,13 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_label.add_theme_color_override("font_color", _WHITE)
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_clear_goal_template()
+		GamePhase.Phase.GOAL_CELEBRATION:
+			# Live celebration beat — top wash already playing via _on_goal_scored,
+			# lower-third stays hidden until the replay phase fires.
+			pass
 		GamePhase.Phase.GOAL_SCORED:
-			# Top wash plays via _on_goal_scored. Lower-third chyron holds
-			# until the replay phase fires (_on_replay_started).
+			# Replay phase. Chyron is driven by _on_replay_started, not by this
+			# signal — wait for that.
 			pass
 		GamePhase.Phase.END_OF_PERIOD:
 			_clear_goal_template()

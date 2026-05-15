@@ -207,7 +207,7 @@ func _apply_game_state(score0: int, score1: int, new_phase: GamePhase.Phase,
 	if phase_changed_this_tick:
 		var puck: Puck = _puck_getter.call() as Puck
 		if puck != null:
-			puck.pickup_locked = PhaseRules.is_dead_puck_phase(new_phase)
+			puck.pickup_locked = PhaseRules.is_puck_pickup_locked_phase(new_phase)
 		if new_phase == GamePhase.Phase.GAME_OVER:
 			game_over_triggered.emit()
 		phase_changed.emit(new_phase)

@@ -768,7 +768,9 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 		return
 	# Don't shadow live events into the replay buffer while a replay is
 	# actively playing — the cinematic is the consumer, not the producer.
-	if NetworkManager.is_replay_mode():
+	# Same gate for GOAL_CELEBRATION: those events belong to live gameplay,
+	# not the clip (which ends at the goal-moment frame).
+	if NetworkManager.is_replay_mode() or _is_celebration_phase():
 		return
 	var ts: float = NetworkManager.local_time()
 	var event: Dictionary = {
@@ -795,9 +797,19 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 func _on_replay_event_received(host_ts: float, event: Dictionary) -> void:
 	if _recorder == null:
 		return
-	if NetworkManager.is_replay_mode():
+	if NetworkManager.is_replay_mode() or _is_celebration_phase():
 		return
 	_recorder.record_event(host_ts, event)
+
+
+# Recorder-recording gate. During GOAL_CELEBRATION we skip writing to the
+# recorder (both frames and events) so the clip ends cleanly at the puck-
+# in-net moment captured via PhaseCoordinator._capture_goal_moment_frame.
+# The celebration itself is live gameplay; its frames don't belong in the
+# replay clip.
+func _is_celebration_phase() -> bool:
+	return _state_machine != null \
+			and _state_machine.current_phase == GamePhase.Phase.GOAL_CELEBRATION
 
 
 func _record_body_check_replay_event(checker_peer_id: int, victim: Skater,
@@ -1597,7 +1609,8 @@ func _on_world_state_received(data: PackedByteArray) -> void:
 	# clip to extract when a goal fires. Skipped during the cinematic itself
 	# (NetworkManager.is_replay_mode is mirrored to clients) so we don't
 	# overwrite the live pre-goal frames with frozen mid-replay state.
-	if _recorder != null and not NetworkManager.is_replay_mode():
+	if _recorder != null and not NetworkManager.is_replay_mode() \
+			and not _is_celebration_phase():
 		_recorder.record_frame(data, host_ts)
 	# Tee the broadcast into the local .mreplay file. Use the host_ts encoded
 	# in the packet so timestamps align across host + client recordings —
@@ -1625,6 +1638,12 @@ func _on_phase_for_broadcast_rate(new_phase: GamePhase.Phase) -> void:
 func _on_remote_phase_changed(new_phase: GamePhase.Phase) -> void:
 	_last_emitted_clock_secs = -1
 	phase_changed.emit(new_phase)
+	# Client mirror of the host's handle_phase_entered(GOAL_SCORED) trigger.
+	# Host advances GOAL_CELEBRATION → GOAL_SCORED via state-machine tick;
+	# clients learn about it via WS, and the replay cinematic kicks in here.
+	if new_phase == GamePhase.Phase.GOAL_SCORED and _phase_coord != null \
+			and not NetworkManager.is_host:
+		_phase_coord.start_goal_replay()
 
 
 func _on_clock_updated_externally(t: float) -> void:
@@ -2108,10 +2127,13 @@ func get_world_state() -> PackedByteArray:
 	if state.is_empty():
 		return state
 	var ts: float = NetworkManager.local_time()
-	# In-memory recorder feeds GoalReplayDriver — only the goal-replay-window
-	# gate applies (we still need dead-puck frames in the buffer to bracket
-	# the goal moment cleanly).
-	if _recorder != null and not NetworkManager.is_replay_mode():
+	# In-memory recorder feeds GoalReplayDriver. Gated by is_replay_mode (the
+	# cinematic is the consumer, not the producer) AND by GOAL_CELEBRATION
+	# (the celebration beat is live gameplay; we don't want its frames in the
+	# replay clip, which should end at the puck-in-net moment captured via
+	# _capture_goal_moment_frame).
+	if _recorder != null and not NetworkManager.is_replay_mode() \
+			and not _is_celebration_phase():
 		_recorder.record_frame(state, ts)
 	# File writer skips dead-puck phase ticks past the first one — see
 	# _should_record_to_file. The first frame on each phase transition
