@@ -31,6 +31,16 @@ class_name AIRolePressure
 # argmax picks the point on that half-disc that worst-cases the
 # carrier's options.
 #
+# Search center is offset from the carrier rather than centred on
+# them so the candidate set lives in cut-off territory instead of
+# chase territory:
+#   center = carrier + carrier_velocity * BOT_WRISTER_LOOKAHEAD_S
+#                    + (our_net - lead).normalized() * BLADE_REACH_M
+# Both offsets are real in-game quantities (the action horizon the
+# carrier uses for its own scoring, and one stick-length of poke
+# range), so the cut-off geometry scales with the carrier's actual
+# motion and our actual reach.
+#
 # No exposure factor — PRESSURE is by definition the bot pressuring
 # the puck; "getting caught up-ice" isn't applicable. ANCHOR / COVER
 # own defensive recovery for this team.
@@ -61,10 +71,30 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# deflates those pass options.
 	var opp_teammates: Array[Vector3] = AIRoleHelpers.collect_opp_team_excluding_carrier(ctx)
 
-	# Search around the carrier; goal-side filter rejects the half-
-	# disc on the wrong side of carrier (toward opp net).
+	# Search center = "where the carrier will be at the next action
+	# horizon, shifted one stick-length back toward our net". Both
+	# offsets are real game quantities:
+	#   - BOT_WRISTER_LOOKAHEAD_S is the same action horizon the
+	#     carrier uses to score its own shots, so leading by it
+	#     positions us at the carrier's next decision point rather
+	#     than chasing their current footprint.
+	#   - BLADE_REACH_M shifts toward our net by exactly the distance
+	#     our stick can poke-check, putting candidates inside contest
+	#     range on the defensive side — the cut-off line — instead of
+	#     on top of the carrier.
+	# Goal-side filter below still trims wrong-side polar samples.
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	var carrier_velocity: Vector3 = ctx.snapshot.skater_states[carrier_pid].velocity
+	var lead: Vector3 = carrier_pos + carrier_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+	var to_net: Vector3 = our_net - lead
+	var search_center: Vector3 = lead
+	if to_net.length_squared() > 0.0001:
+		search_center += to_net.normalized() * SkaterAgentStateMachine.BLADE_REACH_M
+
+	# Search around the cut-off point; goal-side filter rejects the
+	# half-disc on the wrong side of the carrier (toward opp net).
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
-			ctx.self_pos, carrier_pos)
+			ctx.self_pos, search_center)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF

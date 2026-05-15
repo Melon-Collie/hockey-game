@@ -31,7 +31,6 @@ enum State {
 	CHASE_PUCK,       # loose-puck chase — pursue, blade on the puck
 	CARRY,            # with puck, no committed action — aim at goal
 	SHOOT_PRESSED,    # multi-tick wrister charge aimed at goalie shadow
-	SLAPPER_PRESSED,  # multi-tick slapper charge — bigger commit, more power
 	PASS_PRESSED,     # one-tick press window aimed at a teammate's lead position
 }
 
@@ -39,14 +38,13 @@ enum State {
 # matching X-inset lives on AIRoleHelpers.RINK_INSET_M (single source).
 const RINK_Z_INSET: float = 1.0
 
-# After CARRY's `_pick_action` chooses an action (PASS / SHOOT /
-# SLAPPER), the bot doesn't transition immediately — it pre-aims by
-# setting the mouse target to the action's aim direction and waits
-# for the motion-limited mouse to converge before firing. Without
-# this, the action state's first tick fires with the mouse still
-# mid-traversal from CARRY's previous target, so quick-shot
-# direction (PASS) and slapper locked-direction end up at whatever
-# angle the mouse happened to be at.
+# After CARRY's `_pick_action` chooses an action (PASS / SHOOT),
+# the bot doesn't transition immediately — it pre-aims by setting
+# the mouse target to the action's aim direction and waits for the
+# motion-limited mouse to converge before firing. Without this, the
+# action state's first tick fires with the mouse still mid-traversal
+# from CARRY's previous target, so the quick-shot pass direction
+# ends up at whatever angle the mouse happened to be at.
 #
 # AIM_CONVERGED_DIST_M is the distance threshold treated as
 # "converged" — must be larger than the per-tick step
@@ -64,24 +62,11 @@ const RINK_Z_INSET: float = 1.0
 # and the puck went out the ROM edge instead of at the receiver.
 const AIM_CONVERGED_DIST_M: float = 0.15
 const INTENT_MAX_WAIT_TICKS: int = 180   # ~750 ms at 240 Hz
-# Aim wobble cones (half-angle). Bots fire perfectly past the goalie
-# shadow without these — robotic, every shot to the same spot.
-# Wobble is rolled once at shot/pass commit so the aim is consistent
-# through the wind-up; the actual offset is a lateral perpendicular
-# nudge whose magnitude scales with distance × tan(angle). 3° at a
-# 5 m slot shot ≈ 26 cm of lateral drift, enough to push some shots
-# wide and produce different results from the same setup tick.
-# Passes get a tighter cone — a missed pass is more visible than a
-# missed shot.
-const SHOT_AIM_WOBBLE_CONE_DEG: float = 3.0
-# Passes get a much tighter cone than shots. A missed pass is more
-# visible (puck goes past the receiver into open space) and humans
-# don't randomly mis-aim a pass to a teammate within stick reach the
-# way they might mis-aim a contested shot. Set near zero so pass
-# accuracy is essentially perfect; the only natural pass error
-# remaining comes from the bot firing before the mouse fully
-# converges to the aim, plus receiver-lead inaccuracy.
-const PASS_AIM_WOBBLE_CONE_DEG: float = 0.3
+# Aim wobble is disabled for now — bots fire perfectly past the
+# goalie shadow without it (robotic, every shot to the same spot),
+# but it was masking deeper issues during tuning. The wobble system
+# can be reintroduced later; it was a lateral perpendicular nudge
+# rolled once per shot/pass commit, scaling with distance × tan(angle).
 # Goalie shadow half-width on the net plane lives on
 # AIActionScoring.GOALIE_SHADOW_HALF_M (single source).
 # After a puck-engagement event (we got stripped, or we just stripped
@@ -295,18 +280,6 @@ const MOUSE_NOISE_STD_M: float = 0.02
 # avoids threading delta through every state handler call.
 const MOUSE_TICK_DELTA: float = 1.0 / 240.0
 
-# ── Slapper ──────────────────────────────────────────────────────────────────
-# Bots take slappers when they have meaningful clean space to wind up.
-# SkaterController.slapper_wind_up_time = 0.3 s and max_slapper_charge_time
-# = 0.7 s, so 0.55 s is past wind-up + ~62% into the charge window — a
-# solid mid-power slapper. Total commit is ~530 ms vs 250 ms wrister,
-# so the bot is exposed for longer; mid-charge bail uses a wider radius
-# to bail before a closing defender disrupts the windup.
-const BOT_SLAPPER_CHARGE_TICKS: int = 132   # 0.55 s at 240 Hz
-const BOT_SLAPPER_BAIL_RADIUS_M: float = 2.5
-const BOT_SLAPPER_LOOKAHEAD_S: float = (
-		float(BOT_SLAPPER_CHARGE_TICKS) / 240.0)
-
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
@@ -411,9 +384,6 @@ var _shoot_wind_up_start: Vector3 = Vector3.ZERO
 # without per-tick recompute the locked aim_target sits where the bot
 # WAS, and (mouse − blade) at release can point backwards.
 var _shoot_aim_target: Vector3 = Vector3.ZERO
-# Captured once at tick 0 and re-applied to fresh clean_aim each tick
-# so the aim doesn't randomly jitter inside the wobble cone per frame.
-var _shoot_aim_wobble_offset: Vector3 = Vector3.ZERO
 # Wind-up side decision: +1 = forehand, -1 = backhand. Captured at
 # tick 0 (based on forehand-side pressure) and locked for the charge
 # so the swing doesn't flip mid-press if a defender shuffles in and
@@ -432,26 +402,16 @@ var _shoot_perp_sign: float = 1.0
 # press state (which computes its own fresh aim with wobble).
 var _locked_pre_aim_point: Vector3 = Vector3.INF
 
-# Slapper bookkeeping. Symmetric to the wrister fields above.
-# `slap_pressed` fires once at tick 0 (transitions SkaterStateMachine
-# into SLAPPER_CHARGE_WITH_PUCK). `slap_held` stays high through the
-# charge ticks, then drops to release. Aim direction is captured at
-# slapper entry by SkaterController._enter_slapper_charge.
-var _slapper_charge_tick: int = 0
-var _slapper_aim_target: Vector3 = Vector3.ZERO
-
-# Per-bot RNG for aim wobble. Seeded once in setup() from peer_id and
-# the host tick at spawn so each bot has its own deterministic but
-# distinct stream. The previous implementation allocated a fresh
-# RandomNumberGenerator and called randomize() on every shot/pass —
-# per-call heap allocation plus replay-breaking non-determinism.
+# Per-bot RNG for mouse-motion noise. Seeded once in setup() from
+# peer_id and the host tick at spawn so each bot has its own
+# deterministic but distinct stream (replay-safe).
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
-# Last action the bot actually fired (e.g. "SHOOT" / "PASS→Backdoor"
-# / "SLAP"). Set inside the press-state handlers at the moment the
-# press is dispatched, not when intent is picked — so the label
-# reflects what the bot did rather than what it considered. Persists
-# until the next press fires.
+# Last action the bot actually fired (e.g. "SHOOT" /
+# "PASS→Backdoor"). Set inside the press-state handlers at the
+# moment the press is dispatched, not when intent is picked — so
+# the label reflects what the bot did rather than what it
+# considered. Persists until the next press fires.
 var debug_last_decision: String = ""
 
 # Per-tick decision-scoring readout for the floating debug label.
@@ -460,7 +420,6 @@ var debug_last_decision: String = ""
 # flicker every frame). Slot label and carry direction are computed
 # from the chosen peer / position at the same time.
 var debug_shoot_score: float = 0.0
-var debug_shoot_use_slapper: bool = false
 var debug_pass_score: float = 0.0
 var debug_pass_peer_id: int = 0
 var debug_carry_score: float = 0.0
@@ -484,9 +443,8 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
 	_is_left_handed = is_left_handed
 	# Seed the per-bot RNG. peer_id × prime spreads the bot id range
 	# (10000+) across the seed space; XOR with NetworkManager.host_tick
-	# at spawn salts the seed per-session so every match isn't an
-	# identical wobble pattern (still deterministic within a session,
-	# which is what replay needs).
+	# at spawn salts the seed per-session, still deterministic for
+	# replay within a session.
 	_rng.seed = (peer_id * 1000003) ^ NetworkManager.host_tick
 
 
@@ -505,12 +463,12 @@ func debug_role() -> String:
 	return "%s: %s" % [_team_state_label(_team_brain.state), _slot_label(_team_brain.get_slot(_peer_id))]
 
 
-# Returns "SHOOT" / "SLAP" / "PASS" / "CARRY" / "—" identifying which
-# option scored highest on the most recent _pick_action tick.
-# Independent of commit (intent) — purely the live winner.
+# Returns "SHOOT" / "PASS" / "CARRY" / "—" identifying which option
+# scored highest on the most recent _pick_action tick. Independent
+# of commit (intent) — purely the live winner.
 func debug_winner() -> String:
 	var fire_score: float = debug_shoot_score if debug_shoot_score >= debug_pass_score else debug_pass_score
-	var fire_label: String = ("SLAP" if debug_shoot_use_slapper else "SHOOT") if debug_shoot_score >= debug_pass_score else "PASS"
+	var fire_label: String = "SHOOT" if debug_shoot_score >= debug_pass_score else "PASS"
 	if fire_score == 0.0 and debug_carry_score == 0.0:
 		return "—"
 	if fire_score >= debug_carry_score:
@@ -519,12 +477,11 @@ func debug_winner() -> String:
 
 
 # String form of the bot's currently-committed intent ("SHOOT" /
-# "SLAP" / "PASS" / "CARRY"). Differs from debug_winner when the bot
-# is mid-pre-aim or mid-charge.
+# "PASS" / "CARRY"). Differs from debug_winner when the bot is
+# mid-pre-aim or mid-charge.
 func debug_intent() -> String:
 	match _intended_action:
 		State.SHOOT_PRESSED: return "SHOOT"
-		State.SLAPPER_PRESSED: return "SLAP"
 		State.PASS_PRESSED: return "PASS"
 		_: return "CARRY"
 
@@ -592,6 +549,10 @@ func _slot_label(slot: int) -> String:
 			return "Anchor"
 		AIRoleSlots.Slot.COVER:
 			return "Cover"
+		AIRoleSlots.Slot.BACKCHECK:
+			return "Backcheck"
+		AIRoleSlots.Slot.CONTAIN:
+			return "Contain"
 		AIRoleSlots.Slot.FINISHER:
 			return "Finisher"
 		AIRoleSlots.Slot.OUTLET:
@@ -645,8 +606,6 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_carry(input, snapshot, self_pos, have_puck)
 		State.SHOOT_PRESSED:
 			_state_shoot_pressed(input, snapshot, self_pos, have_puck)
-		State.SLAPPER_PRESSED:
-			_state_slapper_pressed(input, snapshot, self_pos, have_puck)
 		State.PASS_PRESSED:
 			_state_pass_pressed(input, snapshot, self_pos, have_puck)
 
@@ -714,9 +673,9 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 # CARRIER does not appear here — the state machine's _state_carry
 # state owns carrier dispatch directly because the carrier needs
 # its own steering rules (HOLD vs DRIFT during pre-aim) and press
-# transitions (SHOOT_PRESSED / SLAPPER_PRESSED / PASS_PRESSED).
-# Phase 3 adds CARRIER here for the puck-in-flight case where the
-# brain still has us slotted CARRIER but we don't have the puck.
+# transitions (SHOOT_PRESSED / PASS_PRESSED). Phase 3 adds CARRIER
+# here for the puck-in-flight case where the brain still has us
+# slotted CARRIER but we don't have the puck.
 func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null else AIRoleSlots.Slot.NONE
 	match slot:
@@ -732,6 +691,10 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			return AIRoleAnchor.decide(ctx)
 		AIRoleSlots.Slot.COVER:
 			return AIRoleCover.decide(ctx)
+		AIRoleSlots.Slot.BACKCHECK:
+			return AIRoleBackcheck.decide(ctx)
+		AIRoleSlots.Slot.CONTAIN:
+			return AIRoleContain.decide(ctx)
 		AIRoleSlots.Slot.CHASE:
 			return AIRoleChase.decide(ctx)
 		AIRoleSlots.Slot.FLANK_L:
@@ -827,27 +790,26 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# PICK_ACTION_PERIOD_TICKS — between re-evals it returns the
 	# cached intent + last_carry_anchor unchanged. Mirror its public
 	# fields back into the state machine so press states (SHOOT /
-	# SLAPPER / PASS) and pre-aim convergence keep their existing
-	# reading patterns.
+	# PASS) and pre-aim convergence keep their existing reading
+	# patterns.
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 	_carrier.decide(ctx)
 
 	# Support state from the carrier propagates every tick — press
-	# states (SHOOT / SLAPPER / PASS) and pre-aim convergence read
-	# these and they need to stay fresh.
+	# states (SHOOT / PASS) and pre-aim convergence read these and
+	# they need to stay fresh.
 	_last_carry_anchor = _carrier.last_carry_anchor
 	_pass_target_peer_id = _carrier.pass_target_peer_id
 	_shot_is_elevated = _carrier.shot_is_elevated
 	debug_shoot_score = _carrier.debug_shoot_score
-	debug_shoot_use_slapper = _carrier.debug_shoot_use_slapper
 	debug_pass_score = _carrier.debug_pass_score
 	debug_pass_peer_id = _carrier.debug_pass_peer_id
 	debug_carry_score = _carrier.debug_carry_score
 	debug_carry_pos = _carrier.debug_carry_pos
 
 	# Intent transitions are gated on "currently in CARRY." Once a
-	# fire intent (SHOOT / SLAPPER / PASS) is selected we hold it
+	# fire intent (SHOOT / PASS) is selected we hold it
 	# through pre-aim convergence (or the INTENT_MAX_WAIT_TICKS safety
 	# timeout). Without this gate, carrier score oscillations between
 	# re-eval ticks can flip the intent back to CARRY before the
@@ -864,7 +826,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			# per tick when the goalie is centered, which makes the
 			# mouse target jump and the bot's stick wiggle.
 			match new_intent:
-				State.SHOOT_PRESSED, State.SLAPPER_PRESSED:
+				State.SHOOT_PRESSED:
 					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos)
 				State.PASS_PRESSED:
 					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
@@ -900,8 +862,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# that. Brake-during-pre-aim was the workaround we no longer
 	# need.
 	#
-	# SLAPPER_PRESSED / PASS_PRESSED: brake. Slappers need stability
-	# for the wind-up; pass leads aim from a held spot.
+	# PASS_PRESSED: brake. Pass leads aim from a held spot.
 	if _intended_action == State.CARRY:
 		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
 	elif _intended_action == State.SHOOT_PRESSED:
@@ -988,8 +949,6 @@ func _state_from_carrier_intent(intent: int) -> State:
 	match intent:
 		AIRoleCarrier.INTENT_SHOOT:
 			return State.SHOOT_PRESSED
-		AIRoleCarrier.INTENT_SLAPPER:
-			return State.SLAPPER_PRESSED
 		AIRoleCarrier.INTENT_PASS:
 			return State.PASS_PRESSED
 		_:
@@ -1012,7 +971,7 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 					if _locked_pre_aim_point.is_finite()
 					else _pass_aim_point(snapshot, self_pos))
 			return _aim_2m_toward(self_pos, target)
-		State.SHOOT_PRESSED, State.SLAPPER_PRESSED:
+		State.SHOOT_PRESSED:
 			var target: Vector3 = (_locked_pre_aim_point
 					if _locked_pre_aim_point.is_finite()
 					else _shot_aim_point(snapshot, self_pos))
@@ -1106,13 +1065,16 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
 		release_target = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
 	_apply_steering(input, snapshot, self_pos, release_target)
-	# Elevation flag based on decision at entry. Sticky in
-	# SkaterController, so setting one direction explicitly each tick
-	# normalizes it regardless of the last shot.
+	# Elevation: only RAISE the controller's sticky `_is_elevated`
+	# flag during an actively elevated shot. The default
+	# elevation_down=true in _zero_input keeps the flag low at all
+	# other times, so a previous elevated shot doesn't leak into the
+	# next pass / shot. Both up + down in the same input frame would
+	# end up DOWN (controller's two if-blocks run in order), so clear
+	# elevation_down on the elevated tick.
 	if _shot_is_elevated:
 		input.elevation_up = true
-	else:
-		input.elevation_down = true
+		input.elevation_down = false
 
 	# First tick: capture aim, compute wind-up start (forehand side,
 	# behind bot), fire shoot_pressed edge so SkaterStateMachine enters
@@ -1124,13 +1086,8 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# on the forehand side.
 	if _shoot_charge_tick == 0:
 		debug_last_decision = "SHOOT"
-		var clean_aim_init: Vector3 = _shot_aim_point(snapshot, self_pos)
-		# Capture wobble as a Vector3 offset. Re-applied each tick to
-		# the FRESH clean_aim so the resulting wobbled aim stays
-		# consistent — recomputing _aim_wobble per tick would jitter.
-		_shoot_aim_wobble_offset = _aim_wobble(self_pos, clean_aim_init, SHOT_AIM_WOBBLE_CONE_DEG)
 		_shoot_perp_sign = -1.0 if _is_left_handed else 1.0
-		var aim_dir_init: Vector3 = _shoot_wobbled_aim_dir(snapshot, self_pos)
+		var aim_dir_init: Vector3 = _shoot_aim_dir(snapshot, self_pos)
 		var forehand_perp_init: Vector3 = Vector3(
 				aim_dir_init.z * _shoot_perp_sign, 0.0, -aim_dir_init.x * _shoot_perp_sign)
 
@@ -1174,7 +1131,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# the bot still travels ~2 m during the 250 ms wind-up; a fixed
 	# tick-0 aim_target ends up BEHIND the bot at release and the shot
 	# direction (mouse − blade) points the wrong way.
-	var aim_dir_now: Vector3 = _shoot_wobbled_aim_dir(snapshot, self_pos)
+	var aim_dir_now: Vector3 = _shoot_aim_dir(snapshot, self_pos)
 	var comp_aim_now: Vector3 = _shoot_compensated_aim_dir(aim_dir_now)
 	var forehand_perp_now: Vector3 = Vector3(
 			aim_dir_now.z * _shoot_perp_sign, 0.0, -aim_dir_now.x * _shoot_perp_sign)
@@ -1223,13 +1180,11 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 
 
-# Slapper charge: hold slap_held for BOT_SLAPPER_CHARGE_TICKS, then
-# Returns the normalised wobbled aim direction (clean_aim + cached
-# wobble) from self_pos. Falls back to forward when degenerate.
-func _shoot_wobbled_aim_dir(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+# Returns the normalised aim direction from self_pos toward the
+# shot's open-net aim point. Falls back to forward when degenerate.
+func _shoot_aim_dir(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
-	var wobbled: Vector3 = clean_aim + _shoot_aim_wobble_offset
-	var dir_xz: Vector3 = Vector3(wobbled.x - self_pos.x, 0.0, wobbled.z - self_pos.z)
+	var dir_xz: Vector3 = Vector3(clean_aim.x - self_pos.x, 0.0, clean_aim.z - self_pos.z)
 	if dir_xz.length_squared() > 0.0001:
 		return dir_xz.normalized()
 	return Vector3(0.0, 0.0, 1.0)
@@ -1251,59 +1206,6 @@ func _shoot_compensated_aim_dir(aim_dir: Vector3) -> Vector3:
 			aim_dir.x * sin_r + aim_dir.z * cos_r)
 
 
-# release. Mirrors _state_shoot_pressed except (a) longer commit, (b)
-# uses slap_pressed/slap_held instead of shoot_*, (c) aim direction
-# is captured ONCE at tick 0 by SkaterController._enter_slapper_charge
-# from input.mouse_world_pos at that moment, so we set the target on
-# first tick and the SM doesn't need to lerp the mouse during charge.
-# Bail behaviour matches the wrister: forward-cone opponent within
-# BOT_SLAPPER_BAIL_RADIUS_M cancels the charge via block_held.
-func _state_slapper_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	# Lost the puck mid-charge — bail. SkaterStateMachine cancels the
-	# slapper internally when has_puck flips false and we're not
-	# already in a release window, so no need to force block_held here.
-	if not have_puck:
-		_set_state(_post_puck_lost_state(snapshot))
-		return
-
-	# Mid-charge bail: forward defender closing in. block_held cancels
-	# SLAPPER_CHARGE_WITH_PUCK back to SKATING_WITH_PUCK without
-	# release. Skipped on tick 0 so we don't bail before the press
-	# even registers.
-	if _slapper_charge_tick > 0 and _opponent_within_forward(
-			snapshot, self_pos, _attacking_goal_pos - self_pos,
-			BOT_SLAPPER_BAIL_RADIUS_M):
-		input.block_held = true
-		_set_state(State.CARRY)
-		return
-
-	_apply_brake_steering(input, snapshot, self_pos)
-	if _shot_is_elevated:
-		input.elevation_up = true
-	else:
-		input.elevation_down = true
-
-	# First tick: capture aim, fire slap_pressed. SkaterController's
-	# _enter_slapper_charge reads input.mouse_world_pos and locks the
-	# slapper aim direction from there for the rest of the charge.
-	if _slapper_charge_tick == 0:
-		debug_last_decision = "SLAP"
-		var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
-		_slapper_aim_target = clean_aim + _aim_wobble(self_pos, clean_aim, SHOT_AIM_WOBBLE_CONE_DEG)
-		input.slap_pressed = true
-
-	input.mouse_world_pos = _step_mouse_toward(_slapper_aim_target)
-
-	if _slapper_charge_tick < BOT_SLAPPER_CHARGE_TICKS:
-		input.slap_held = true
-		_slapper_charge_tick += 1
-	else:
-		# Release: SkaterStateMachine sees not slap_held → release_slapper
-		# fires with the locked direction and elapsed-time-derived power.
-		input.slap_held = false
-		_set_state(State.CARRY)
-
-
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	_apply_brake_steering(input, snapshot, self_pos)
 	# Resolve the receiver's slot label NOW for the debug readout —
@@ -1318,8 +1220,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# mouse_world_pos — so this fires the puck along the bot→receiver
 	# vector.
 	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
-	input.mouse_world_pos = _step_mouse_toward(clean_pass_aim + _aim_wobble(
-			self_pos, clean_pass_aim, PASS_AIM_WOBBLE_CONE_DEG))
+	input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 	input.shoot_pressed = true
 	input.shoot_held = true
 	# v2: give-and-go cut sub-mode is removed. After the pass, the bot
@@ -1335,11 +1236,11 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 
 
 # Hold-position steering during fire-state commits (SHOOT_PRESSED,
-# SLAPPER_PRESSED, PASS_PRESSED) and CARRY pre-aim. The bot has
-# decided where to fire from — they shouldn't keep skating forward
-# during the wrister charge (60 ticks ≈ 250 ms) or slapper charge
-# (132 ticks ≈ 550 ms), which would otherwise drift them up to ~4 m
-# closer to the net before the puck releases. Anchor = self_pos
+# PASS_PRESSED) and CARRY pre-aim. The bot has decided where to
+# fire from — they shouldn't keep skating forward during the
+# wrister charge (60 ticks ≈ 250 ms), which would otherwise drift
+# them up to ~4 m closer to the net before the puck releases.
+# Anchor = self_pos
 # zeroes the seek force so ice friction bleeds momentum naturally;
 # repel forces (defenders, boards, crease) still apply via
 # `_apply_steering`. Each fire state sets `input.mouse_world_pos`
@@ -1354,8 +1255,8 @@ func _apply_hold_steering(input: InputState, snapshot: WorldSnapshot, self_pos: 
 # faster deceleration than passive friction during coast (hold).
 # Falls back to hold once velocity drops below BRAKE_MIN_SPEED so the
 # bot doesn't start gliding backward after stopping. Used during
-# fire-action pre-aim convergence and during the wrister / slapper
-# wind-up — without this, a bot rushing at top speed coasts past the
+# fire-action pre-aim convergence and during the wrister wind-up
+# — without this, a bot rushing at top speed coasts past the
 # slot before the press can release, crashing into the goalie.
 const BRAKE_STEERING_ANCHOR_DIST_M: float = 5.0
 const BRAKE_STEERING_MIN_SPEED_M_S: float = 0.5
@@ -1469,30 +1370,6 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	input.move_vector = desired
 
 
-# Adds a small lateral perpendicular nudge to an aim point —
-# magnitude is `dist × tan(cone_deg)` with a uniformly random sign in
-# [-1, +1]. Returns Vector3.ZERO when the aim is degenerate (target
-# coincident with self) or cone is zero. Each call is rolled fresh,
-# so callers should cache the offset across a multi-tick state (e.g.
-# SHOOT_PRESSED captures it once at tick 0).
-func _aim_wobble(from: Vector3, to: Vector3, cone_deg: float) -> Vector3:
-	if cone_deg <= 0.0:
-		return Vector3.ZERO
-	var to_target := Vector3(to.x - from.x, 0.0, to.z - from.z)
-	var dist: float = to_target.length()
-	if dist < 0.01:
-		return Vector3.ZERO
-	# Uniform [-1, +1] × cone, then convert angle to lateral offset.
-	# tan() at small angles ≈ angle in rad, but use tan() exactly so
-	# the wobble scales correctly even for atypical (large) cones.
-	# RNG is per-bot, seeded once in setup() — see _rng declaration.
-	var theta_rad: float = deg_to_rad(cone_deg) * _rng.randf_range(-1.0, 1.0)
-	var lateral: float = dist * tan(theta_rad)
-	# Perpendicular to aim direction in XZ — 90° rotation: (x,z) → (-z,x).
-	var dir: Vector3 = to_target / dist
-	return Vector3(-dir.z, 0.0, dir.x) * lateral
-
-
 # Returns the opposing goalie's CURRENT world position. Used as input
 # to AIActionScoring.predict_goalie_pos, which models the goalie's
 # react-then-slide forward along the puck's lateral target. Falls back
@@ -1508,7 +1385,7 @@ func _goalie_now(snapshot: WorldSnapshot) -> Vector3:
 # Wraps AIActionScoring.predict_goalie_pos for the common case where
 # the puck-at-release is the position we're scoring a shot from.
 # `release_time_s` is the time from now until the bot fires (e.g.,
-# wrister/slapper charge time + any path/flight time before the fire).
+# wrister charge time + any path/flight time before the fire).
 func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 		puck_pos_at_release: Vector3) -> Vector3:
 	return AIActionScoring.predict_goalie_pos(
@@ -1523,12 +1400,14 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 # comfortably in front of the body where small mouse shifts produce
 # real blade motion (instead of clamping to ROM extreme as it would
 # at goal-plane distance).
-# Continuously aim toward the best non-carry option (SHOOT or PASS,
-# whichever scored higher) during CARRY. Rotates the bot's facing
-# toward the likely fire target so when the carrier eventually
-# commits to SHOOT/PASS, the facing is already aligned and pre-aim
-# convergence collapses to ~0 ms (instead of the 250-700 ms wait
-# while facing rotates from "forward at goal" to the actual aim).
+# Continuously aim toward the likely SHOT target during CARRY so when
+# the carrier eventually commits to SHOOT, the facing is already
+# aligned and pre-aim convergence is near-instant. Pass-favored ticks
+# fall through to the default carry aim — predictively rotating
+# toward a pass receiver caused weird neutral-zone behavior (the
+# best pass can flip per tick to teammates spread across the rink,
+# and the body would twist back and forth chasing transient leads).
+# Passes still pre-aim correctly inside the press-state handler.
 #
 # CRITICAL: project the aim DIRECTION to a point CARRY_BLADE_AIM_FORWARD_M
 # from the bot, matching what _aim_target_for_intent does during
@@ -1536,30 +1415,36 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 # pre-aim — otherwise the mouse target jumps ~8 m at commit and
 # the motion-limited mouse takes 100+ ticks to traverse, blowing
 # past INTENT_MAX_WAIT_TICKS and timing out pre-aim entirely.
-#
-# Falls back to the generic forward _carry_mouse_aim when no fire
-# option is meaningful (both shoot and pass score below threshold)
-# or when the best pass target isn't resolvable in the snapshot.
 func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	const FIRE_AIM_THRESHOLD: float = 0.05
-	var best_fire: float = maxf(debug_shoot_score, debug_pass_score)
-	if best_fire < FIRE_AIM_THRESHOLD:
+	if debug_shoot_score < FIRE_AIM_THRESHOLD or debug_shoot_score < debug_pass_score:
 		return _carry_mouse_aim(snapshot, self_pos)
-	var aim_target: Vector3
-	if debug_shoot_score >= debug_pass_score:
-		aim_target = _shot_aim_point(snapshot, self_pos)
-	else:
-		var receiver: SkaterNetworkState = snapshot.skater_states.get(debug_pass_peer_id)
-		if receiver == null:
-			return _carry_mouse_aim(snapshot, self_pos)
-		var dist: float = self_pos.distance_to(receiver.position)
-		var flight_t: float = clampf(
-				dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
-		aim_target = _predict_receiver(debug_pass_peer_id, receiver, flight_t)
-	return _aim_2m_toward(self_pos, aim_target)
+	return _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
 
 
 func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	# Danger zone: when the bot's body is within BLADE_REACH_M of the
+	# goalie, the default forward aim drives the blade through the
+	# goalie. Stick-on-goalie contact dislodges the puck (a game
+	# mechanic), the bot reacquires the loose puck a tick later
+	# without the engagement cooldown firing, the mouse points forward
+	# again, and the cycle repeats — a physical feedback loop, not a
+	# decision. Crease itself is fine; the goalie's body is the
+	# specific thing the stick has to stay off of, so the threshold
+	# is distance to the goalie, not distance to the goal line.
+	#
+	# Pulling the mouse to the bot's own position parks the blade in
+	# a tight cradle: zero forward extension, no goalie contact
+	# possible. Body facing isn't driven (zero direction vector → pose
+	# coordinator holds last facing), so the bot keeps facing however
+	# they were facing on entry. Body steering still does whatever
+	# _best_carry wants — including skating backward toward the carry
+	# anchor via brake-pivot. The hockey-real "back out facing the
+	# play" behavior emerges from facing being held rather than reset.
+	var goalie_pos: Vector3 = _goalie_now(snapshot)
+	if self_pos.distance_to(goalie_pos) < BLADE_REACH_M:
+		return self_pos
+
 	var to_goal: Vector3 = _attacking_goal_pos - self_pos
 	to_goal.y = 0.0
 	var forward_dir: Vector3
@@ -1754,8 +1639,8 @@ func _face_threat_or_current(snapshot: WorldSnapshot, self_pos: Vector3) -> Vect
 # Clamp an anchor to the playable rink with a small margin so steering
 # doesn't pull the bot into the boards or behind the goal line.
 # True iff any opponent is within `radius` of `self_pos` AND in the
-# forward half-plane defined by `forward_dir`. Used by the wrister /
-# slapper mid-charge bail check — defenders behind or perpendicular
+# forward half-plane defined by `forward_dir`. Used by the wrister
+# mid-charge bail check — defenders behind or perpendicular
 # to the shooter can't realistically disrupt the windup, so only
 # forward-cone threats count. Falls through to omnidirectional check
 # when forward_dir is degenerate.
@@ -1979,12 +1864,6 @@ func _set_state(s: State) -> void:
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
 			_shoot_sweep_dir_xy = Vector2.ZERO
-		# Slapper charge resets on entry: tick counter to zero and aim
-		# target cleared so we don't fire with a stale target if we
-		# bail before tick 0 finishes.
-		if s == State.SLAPPER_PRESSED:
-			_slapper_charge_tick = 0
-			_slapper_aim_target = Vector3.ZERO
 		# Intent + wait counter reset on CARRY entry so a new puck
 		# pickup gets a fresh re-evaluation rather than inheriting
 		# stale state from a previous CARRY. _carrier.clear_intent()

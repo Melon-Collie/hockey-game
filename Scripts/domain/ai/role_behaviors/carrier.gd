@@ -2,8 +2,8 @@ class_name AIRoleCarrier
 extends RefCounted
 
 # CARRIER role behavior: the puck-carrying utility AI. Scores SHOOT
-# (wrister + slapper), PASS (per teammate), and CARRY (8 polar
-# candidates + slot anchor + stand-still) on equal footing every
+# (wrister), PASS (per teammate), and CARRY (8 polar candidates +
+# slot anchor + stand-still) on equal footing every
 # PICK_ACTION_PERIOD_TICKS ticks. Hysteresis on the current intent
 # prevents flicker between close-scoring fire options during pre-aim;
 # CARRY does NOT get a hysteresis bonus (stand-still ties with the
@@ -30,7 +30,6 @@ extends RefCounted
 # file decoupled from the state machine for unit testing.
 const INTENT_CARRY: int = 0
 const INTENT_SHOOT: int = 1
-const INTENT_SLAPPER: int = 2
 const INTENT_PASS: int = 3
 
 # ── Scoring constants ────────────────────────────────────────────────────────
@@ -58,21 +57,6 @@ const BOT_BLADE_ROM_HALF_ANGLE_RAD: float = PI * 0.5
 # Facing rotation rate used to convert overshoot angle into rotation
 # time during pass scoring.
 const BOT_FACING_ROTATION_RATE_RAD_S: float = 6.0
-
-# Slapper score multiplier vs wrister at the same geometry. Captures
-# higher puck speed + goalie-tell stance pull. 1.15 keeps slappers
-# competitive without making them strictly better — the longer
-# charge time exposes the bot to forward defenders.
-const SLAPPER_POWER_BONUS: float = 1.15
-
-# Slapper velocity penalty: SkaterController locks slapper aim at
-# charge start. If the bot is moving when they begin, the body
-# translates several metres by release and (blade − player) no
-# longer points where intended. Above this speed, slapper score
-# multiplied by SLAPPER_MOTION_PENALTY pushes the bot to wrister
-# instead.
-const SLAPPER_MAX_SPEED_M_S: float = 5.0
-const SLAPPER_MOTION_PENALTY: float = 0.3
 
 # Carry candidate generation: 8 polar cardinals at this radius +
 # slot anchor + stand-still.
@@ -110,8 +94,8 @@ var intended_action: int = INTENT_CARRY
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
 var pass_target_peer_id: int = -1
 
-# Set when intent commits to SHOOT/SLAPPER. Consumed by the state
-# machine's press-state handlers to drive elevation.
+# Set when intent commits to SHOOT. Consumed by the state machine's
+# press-state handlers to drive elevation.
 var shot_is_elevated: bool = false
 
 # Cached carry destination from the most recent re-eval. Read by the
@@ -124,7 +108,6 @@ var _pick_action_cooldown: int = 0
 # ── Scratch buffers (reused across ticks, refilled per call) ────────────────
 var _scratch_opponents: Array[Vector3] = []
 var _scratch_opponents_shoot: Array[Vector3] = []
-var _scratch_opponents_slapper: Array[Vector3] = []
 var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
 var _scratch_teammate_ids: Array[int] = []
@@ -133,7 +116,6 @@ var _scratch_teammate_ids: Array[int] = []
 # Populated every re-eval; the state machine forwards these to its
 # own debug_* fields for AIController / floating label.
 var debug_shoot_score: float = 0.0
-var debug_shoot_use_slapper: bool = false
 var debug_pass_score: float = 0.0
 var debug_pass_peer_id: int = 0
 var debug_carry_score: float = 0.0
@@ -149,7 +131,7 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 #
 # Returns a RoleDecision shaped like the off-puck role behaviors:
 #   - target_position = last_carry_anchor (winning carry candidate)
-#   - shoot_intent / slapper_intent / pass_intent flags reflect the
+#   - shoot_intent / pass_intent flags reflect the
 #     current persistent intent (so the state machine can read these
 #     uniformly across roles in future phases).
 func decide(ctx: RoleContext) -> RoleDecision:
@@ -164,8 +146,6 @@ func decide(ctx: RoleContext) -> RoleDecision:
 	match intended_action:
 		INTENT_SHOOT:
 			d.shoot_intent = true
-		INTENT_SLAPPER:
-			d.slapper_intent = true
 		INTENT_PASS:
 			d.pass_intent = true
 			d.pass_target_peer_id = pass_target_peer_id
@@ -195,13 +175,13 @@ func clear_intent() -> void:
 
 # ── Implementation ──────────────────────────────────────────────────────────
 
-# Scores SHOOT (wrister vs slapper), PASS (per teammate), and CARRY
-# (10 candidates) on equal footing. Hysteresis on fire intents only —
+# Scores SHOOT (wrister), PASS (per teammate), and CARRY (10
+# candidates) on equal footing. Hysteresis on fire intents only —
 # carry does not get a hysteresis bonus (stand-still ties with the
 # best fire from the same position by construction). FIRE WINS TIES;
 # CARRY only beats fire on STRICTLY better future-action value.
 # Mutates pass_target_peer_id when PASS wins, shot_is_elevated when
-# SHOOT/SLAPPER wins, last_carry_anchor + intended_action always.
+# SHOOT wins, last_carry_anchor + intended_action always.
 func _pick_action(ctx: RoleContext) -> void:
 	var snapshot: WorldSnapshot = ctx.snapshot
 	var self_pos: Vector3 = ctx.self_pos
@@ -218,29 +198,25 @@ func _pick_action(ctx: RoleContext) -> void:
 		if int(ctx.team_id_resolver.call(peer_id)) == ctx.team_id:
 			_scratch_teammate_ids.append(peer_id)
 
-	# Projected RELEASE position for SHOOT scoring. The wrister/slapper
-	# charge windows mean the puck actually leaves the blade ~0.25s /
-	# ~0.55s after the SHOOT intent commits; a bot rushing into the
-	# slot should be scoring the spot they'll release from, not the
-	# spot they're at now. This also lets the bot start the wind-up
-	# early — the score that wins is for the future spot, and by the
-	# time the charge completes, the bot has skated into it.
+	# Projected RELEASE position for SHOOT scoring. The wrister charge
+	# window means the puck actually leaves the blade ~0.25s after
+	# the SHOOT intent commits; a bot rushing into the slot should
+	# be scoring the spot they'll release from, not the spot they're
+	# at now. This also lets the bot start the wind-up early — the
+	# score that wins is for the future spot, and by the time the
+	# charge completes, the bot has skated into it.
 	var self_velocity: Vector3 = ctx.self_velocity
 	var horizontal_velocity: Vector3 = Vector3(self_velocity.x, 0.0, self_velocity.z)
 	var wrister_release_pos: Vector3 = (
 			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)
-	var slapper_release_pos: Vector3 = (
-			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S)
 
-	# Goalie predictions per release time. Wrister and slapper differ
-	# only in charge length; pass-receiver and carry-candidate cases
-	# get their own predictions inside _compute_best_pass / _best_carry.
-	# Predicted with the release-pos puck X so the goalie's slide target
-	# matches where the shot actually leaves the blade.
+	# Goalie prediction at the wrister release time. Pass-receiver and
+	# carry-candidate cases get their own predictions inside
+	# _compute_best_pass / _best_carry. Predicted with the release-pos
+	# puck X so the goalie's slide target matches where the shot
+	# actually leaves the blade.
 	var wrister_goalie: Vector3 = _predict_goalie_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
-	var slapper_goalie: Vector3 = _predict_goalie_at(
-			ctx, SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S, slapper_release_pos)
 	# Goalie's CURRENT position (squared to whoever currently holds the
 	# puck — that's us as the carrier). Threaded into score_shoot /
 	# score_pass so the goalie pressure zone penalises shots from
@@ -251,21 +227,9 @@ func _pick_action(ctx: RoleContext) -> void:
 	var goalie_now: Vector3 = _goalie_now(ctx)
 
 	# Top-level SHOOT.
-	var wrister_score: float = AIActionScoring.score_shoot(
+	var shoot_score: float = AIActionScoring.score_shoot(
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot, goalie_now)
-	var self_speed: float = sqrt(self_velocity.x * self_velocity.x
-			+ self_velocity.z * self_velocity.z)
-	var slapper_motion_factor: float = (
-			SLAPPER_MOTION_PENALTY if self_speed > SLAPPER_MAX_SPEED_M_S else 1.0)
-	var slapper_score: float = AIActionScoring.score_shoot(
-			slapper_release_pos, attacking_goal, slapper_goalie,
-			GameRules.NET_HALF_WIDTH,
-			_scratch_opponents_slapper, goalie_now,
-			AIActionScoring.SLAPPER_SHOT_SPEED_M_S
-			) * SLAPPER_POWER_BONUS * slapper_motion_factor
-	var shoot_use_slapper: bool = slapper_score > wrister_score
-	var shoot_score: float = slapper_score if shoot_use_slapper else wrister_score
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -290,7 +254,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# score_shoot(self)), and we want fire to win those ties (see
 	# tiebreak below). A CARRY hysteresis bonus would push stand-still
 	# above fire on every re-eval and the bot would never fire.
-	if intended_action == INTENT_SHOOT or intended_action == INTENT_SLAPPER:
+	if intended_action == INTENT_SHOOT:
 		shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
 	elif intended_action == INTENT_PASS:
 		best_pass_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
@@ -299,7 +263,6 @@ func _pick_action(ctx: RoleContext) -> void:
 	# State machine forwards these to its own debug_* fields; AIController
 	# polls and refreshes only when content changes.
 	debug_shoot_score = shoot_score
-	debug_shoot_use_slapper = shoot_use_slapper
 	debug_pass_score = best_pass_score
 	debug_pass_peer_id = best_pass_peer
 	debug_carry_score = carry_score
@@ -313,7 +276,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	var fire_intent: int = INTENT_CARRY
 	if shoot_score > fire_score:
 		fire_score = shoot_score
-		fire_intent = INTENT_SLAPPER if shoot_use_slapper else INTENT_SHOOT
+		fire_intent = INTENT_SHOOT
 	if best_pass_score > fire_score:
 		fire_score = best_pass_score
 		fire_intent = INTENT_PASS
@@ -330,7 +293,7 @@ func _pick_action(ctx: RoleContext) -> void:
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer
-		elif new_intent == INTENT_SHOOT or new_intent == INTENT_SLAPPER:
+		elif new_intent == INTENT_SHOOT:
 			shot_is_elevated = _should_elevate_shot(ctx, shoot_score)
 	else:
 		new_intent = INTENT_CARRY
@@ -338,27 +301,22 @@ func _pick_action(ctx: RoleContext) -> void:
 	intended_action = new_intent
 
 
-# Populates the three scratch lists used by _pick_action's scoring:
+# Populates the scratch lists used by _pick_action's scoring:
 # - _scratch_opponents: current opponent positions, for dump scoring.
 # - _scratch_opponents_shoot: positions predicted forward by the
 #   wrister-charge window, for wrister scoring.
-# - _scratch_opponents_slapper: positions predicted forward by the
-#   slapper-charge window (longer than wrister), for slapper scoring.
-# Pass scoring uses a fourth per-receiver list (_scratch_opponents_pass)
+# Pass scoring uses a third per-receiver list (_scratch_opponents_pass)
 # rebuilt inside `_compute_best_pass` because the lookahead varies per
 # teammate.
 func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponents_shoot.clear()
-	_scratch_opponents_slapper.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
 		if int(ctx.team_id_resolver.call(peer_id)) != ctx.team_id and peer_id != ctx.peer_id:
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
 			_scratch_opponents.append(s.position)
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
-			_scratch_opponents_slapper.append(AITrajectory.predict_at(
-					s.position, s.velocity, SkaterAgentStateMachine.BOT_SLAPPER_LOOKAHEAD_S))
 
 
 # Refills `out_buf` with each opponent's position projected forward
@@ -659,7 +617,7 @@ func _goalie_now(ctx: RoleContext) -> Vector3:
 # Wraps AIActionScoring.predict_goalie_pos for the common case where
 # the puck-at-release is the position we're scoring a shot from.
 # `release_time_s` is the time from now until the bot fires (e.g.,
-# wrister/slapper charge time + any path/flight time before the fire).
+# wrister charge time + any path/flight time before the fire).
 func _predict_goalie_at(ctx: RoleContext, release_time_s: float,
 		puck_pos_at_release: Vector3) -> Vector3:
 	return AIActionScoring.predict_goalie_pos(

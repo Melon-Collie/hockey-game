@@ -68,7 +68,7 @@ func debug_shoot_score() -> float:
 
 
 func debug_shoot_label() -> String:
-	return "SLAP" if _sm.debug_shoot_use_slapper else "SHOOT"
+	return "SHOOT"
 
 
 func debug_pass_score() -> float:
@@ -108,6 +108,11 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	input.slap_pressed = false
 	input.slap_held = false
 	input.brake = false
+	# Default elevation_down high so the SkaterController's sticky
+	# _is_elevated flag is reset every tick the bot isn't actively
+	# firing an elevated shot. Press states override with
+	# elevation_up=true / elevation_down=false on the tick they want
+	# the controller to raise the flag.
 	input.elevation_up = false
-	input.elevation_down = false
+	input.elevation_down = true
 	input.block_held = false

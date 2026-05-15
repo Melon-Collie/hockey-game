@@ -195,16 +195,10 @@ func test_decide_carry_intent_clears_fire_flags() -> void:
 	# Whichever intent wins, the corresponding flag must be set
 	# correctly and the other flags must be false.
 	if d.shoot_intent:
-		assert_false(d.slapper_intent)
-		assert_false(d.pass_intent)
-	elif d.slapper_intent:
-		assert_false(d.shoot_intent)
 		assert_false(d.pass_intent)
 	elif d.pass_intent:
 		assert_false(d.shoot_intent)
-		assert_false(d.slapper_intent)
 	else:
-		# CARRY case — all three fire flags must be false.
+		# CARRY case — both fire flags must be false.
 		assert_false(d.shoot_intent)
-		assert_false(d.slapper_intent)
 		assert_false(d.pass_intent)
