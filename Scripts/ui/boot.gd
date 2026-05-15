@@ -113,12 +113,7 @@ func _build_ui() -> void:
 	add_child(version_label)
 
 	# Gentle pulse on the prompt so it reads as "waiting for input."
-	var tw := create_tween()
-	tw.set_loops()
-	tw.tween_property(_prompt_label, "modulate:a", 0.45, 0.9) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(_prompt_label, "modulate:a", 1.0, 0.9) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	MenuStyle.pulse(_prompt_label)
 
 
 func _unhandled_input(event: InputEvent) -> void:

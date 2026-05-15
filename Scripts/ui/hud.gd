@@ -489,12 +489,7 @@ func _build_skip_replay_prompt() -> void:
 func _start_skip_prompt_pulse() -> void:
 	if _skip_prompt_tween != null and _skip_prompt_tween.is_running():
 		_skip_prompt_tween.kill()
-	_skip_prompt_label.modulate.a = 1.0
-	_skip_prompt_tween = create_tween().set_loops()
-	_skip_prompt_tween.tween_property(_skip_prompt_label, "modulate:a", 0.45, 0.7) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	_skip_prompt_tween.tween_property(_skip_prompt_label, "modulate:a", 1.0, 0.7) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	_skip_prompt_tween = MenuStyle.pulse(_skip_prompt_label)
 
 func _stop_skip_prompt_pulse() -> void:
 	if _skip_prompt_tween != null and _skip_prompt_tween.is_running():
