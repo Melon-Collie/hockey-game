@@ -326,9 +326,10 @@ func on_host_started() -> void:
 	# Registry is fully populated by this point — capture roster + open file.
 	_open_replay_file_writer()
 	# Open the match with a faceoff countdown rather than dropping straight
-	# into PLAYING. Tutorial is exempt — it scripts its own intro and would
-	# fight a forced FACEOFF_PREP.
-	if not NetworkManager.is_tutorial_mode:
+	# into PLAYING. Tutorial scripts its own intro; free play is a casual
+	# warmup that shouldn't gate the player behind a countdown — both stay
+	# in PLAYING from the start.
+	if not NetworkManager.is_tutorial_mode and not NetworkManager.is_free_play_mode:
 		_state_machine.begin_faceoff_prep()
 		_phase_coord.handle_phase_entered()
 
