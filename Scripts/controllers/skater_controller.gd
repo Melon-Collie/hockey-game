@@ -263,11 +263,22 @@ func _process_input(input: InputState, delta: float) -> void:
 
 
 # Aim-only blade update for FACEOFF_PREP: drives the blade target from the
-# mouse and refreshes the dependent IK + visual meshes, but skips body
-# rotation, movement, and state-machine dispatch. Callers must already have
-# confirmed the phase allows blade aim during a locked phase.
+# mouse, twists the upper body and head to follow it, and refreshes the
+# dependent IK + visual meshes. Skips movement, lower-body facing rotation
+# (the skater stays squared up to the dot), and state-machine dispatch.
+# Callers must already have confirmed the phase allows blade aim during a
+# locked phase.
 func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	_ik.apply_blade_from_mouse(input, delta)
+	# Preserve blade/hand world positions across the upper-body rotation —
+	# same dance as _process_input. Without it the blade slides sideways as
+	# the torso twists, decoupling the stick from where the player aimed it.
+	var blade_world_pre: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
+	var hand_world_pre: Vector3 = skater.upper_body_to_global(skater.get_top_hand_position())
+	_pose.apply_upper_body(delta)
+	_pose.apply_head_tracking(input, delta)
+	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
+	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
 	_ik.update_bottom_hand()
 	skater.update_stick_mesh()
 	skater.update_arm_mesh()
