@@ -55,9 +55,15 @@ func activate() -> void:
 	if current:
 		return
 	_prev_camera = get_viewport().get_camera_3d()
+	snap_to_position()
+	make_current()
+
+
+# Park the camera at booth_{x,y,z} and snap rotation to the current target,
+# without touching `current`. Used by GoalReplayDriver to drive multi-cam cuts
+# (it owns make_current() decisions for both cams); activate() also calls this.
+func snap_to_position() -> void:
 	global_position = Vector3(booth_x, booth_y, booth_z)
-	# Snap rotation to the initial target before going current so the first
-	# frame doesn't sweep the camera across the rink.
 	if _target_getter.is_valid():
 		var target: Vector3 = _target_getter.call()
 		_smoothed_target = target
@@ -65,7 +71,18 @@ func activate() -> void:
 		_smoothing_initialized = true
 		if global_position.distance_to(target) > 0.1:
 			look_at(target, Vector3.UP)
-	make_current()
+
+
+# Re-aim this camera at a different preset (position, FOV, lead time). Caller
+# is responsible for snap_to_position() + make_current() afterward to actually
+# execute the cut.
+func set_booth(pos: Vector3, new_fov: float, new_lead_time: float) -> void:
+	booth_x = pos.x
+	booth_y = pos.y
+	booth_z = pos.z
+	fov = new_fov
+	replay_fov = new_fov
+	lead_time = new_lead_time
 
 
 func deactivate() -> void:

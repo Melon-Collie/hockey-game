@@ -49,7 +49,19 @@ var _cached_to_idx: int = -1
 var _saved_goalie_processing: Array[bool] = []
 
 var _outro_elapsed: float = -1.0  # >= 0 while holding the final frame
-var _spectator_cam: SpectatorCamera = null
+# Two replay cameras: hard cam (broadcast main, current at clip start) and
+# inside-net cam (parked behind the defending goal). At slow-mo entry the
+# driver cuts to the inside-net cam for the climactic frame. The driver
+# tracks _saved_prev_camera itself so we can drive make_current() on either
+# cam directly without fighting SpectatorCamera's single-cam activate flow.
+var _hard_cam: SpectatorCamera = null
+var _inside_net_cam: SpectatorCamera = null
+var _saved_prev_camera: Camera3D = null
+var _has_cut_to_inside_net: bool = false
+# Z position of the defending goal — drives the inside-net cam placement.
+# Defaults to 0 (no cut) so the replay still works if the caller didn't supply
+# a defending goal (e.g. a future debug-trigger path).
+var _defending_goal_z: float = 0.0
 
 # Vote-to-skip tally for the current clip, keyed by peer_id. Cleared on every
 # start() so a previous goal's votes don't carry over. Driven by
@@ -68,7 +80,8 @@ func start(recorder: ReplayRecorder,
 		codec: WorldStateCodec,
 		registry: PlayerRegistry,
 		puck: Puck,
-		goalie_controllers: Array) -> void:
+		goalie_controllers: Array,
+		defending_goal_z: float = 0.0) -> void:
 	if _active:
 		stop()
 
@@ -104,10 +117,29 @@ func start(recorder: ReplayRecorder,
 
 	_freeze_live_simulation()
 
-	_spectator_cam = SpectatorCamera.new()
-	add_child(_spectator_cam)
-	_spectator_cam.setup(func() -> Vector3: return _puck.global_position)
-	_spectator_cam.activate()
+	_defending_goal_z = defending_goal_z
+	_has_cut_to_inside_net = false
+	_saved_prev_camera = get_viewport().get_camera_3d()
+
+	var puck_pos_getter: Callable = func() -> Vector3: return _puck.global_position
+	_hard_cam = SpectatorCamera.new()
+	add_child(_hard_cam)
+	_hard_cam.setup(puck_pos_getter)
+	_hard_cam.snap_to_position()
+	_hard_cam.make_current()
+
+	# Inside-net cam parked behind the defending goal at goalie-shoulder height,
+	# peering back at the play. Wider FOV + lower lead than the hard cam because
+	# it's close to the action and only used during slow-mo. Skipped entirely
+	# if no defending goal was provided.
+	if _defending_goal_z != 0.0:
+		_inside_net_cam = SpectatorCamera.new()
+		add_child(_inside_net_cam)
+		_inside_net_cam.setup(puck_pos_getter)
+		var z_sign: float = signf(_defending_goal_z)
+		var booth: Vector3 = Vector3(0.0, 1.3, _defending_goal_z + z_sign * 1.5)
+		_inside_net_cam.set_booth(booth, 52.0, 0.15)
+		_inside_net_cam.snap_to_position()
 
 	NetworkManager.start_replay_mode(_clip_start_ts)
 	replay_started.emit()
@@ -119,10 +151,16 @@ func stop() -> void:
 	_active = false
 	_outro_elapsed = -1.0
 
-	if _spectator_cam != null:
-		_spectator_cam.deactivate()
-		_spectator_cam.queue_free()
-		_spectator_cam = null
+	if _saved_prev_camera != null and is_instance_valid(_saved_prev_camera):
+		_saved_prev_camera.make_current()
+	_saved_prev_camera = null
+	if _hard_cam != null:
+		_hard_cam.queue_free()
+		_hard_cam = null
+	if _inside_net_cam != null:
+		_inside_net_cam.queue_free()
+		_inside_net_cam = null
+	_has_cut_to_inside_net = false
 
 	NetworkManager.stop_replay_mode()
 	_unfreeze_live_simulation()
@@ -176,11 +214,20 @@ func _process(delta: float) -> void:
 			stop()
 		return
 
-	var speed: float = slowmo_speed if (_clip_end_ts - _virtual_clock) < slowmo_window else playback_speed
+	var in_slowmo: bool = (_clip_end_ts - _virtual_clock) < slowmo_window
+	var speed: float = slowmo_speed if in_slowmo else playback_speed
 	_virtual_clock += delta * speed
 	if _virtual_clock >= _clip_end_ts:
 		_virtual_clock = _clip_end_ts
 		_outro_elapsed = 0.0
+
+	# Cut to the inside-net cam at slow-mo entry — the broadcast money shot.
+	# Single one-way cut per clip; we don't cut back to the hard cam during
+	# the outro hold (the climax frame stays on screen until stop()).
+	if in_slowmo and not _has_cut_to_inside_net and _inside_net_cam != null:
+		_inside_net_cam.snap_to_position()
+		_inside_net_cam.make_current()
+		_has_cut_to_inside_net = true
 
 	NetworkManager.set_replay_clock(_virtual_clock)
 
