@@ -39,6 +39,15 @@ const NET_TEXTURE_TILE_SIZE: float = 0.164  # 4 diamonds × 41mm each
 var defending_team_id: int = -1  # set by GameManager when goals are assigned to teams
 var _net_body: StaticBody3D = null  # holds net-panel collision shapes; kept separate so puck can distinguish pipe vs net contact
 
+
+# The actual world-Z of this goal's goal line. The HockeyGoal *node* sits at
+# scene origin — geometry is built procedurally around `goal_z = facing *
+# (rink_length / 2.0 - distance_from_end)` inside _rebuild(). Callers that
+# need the goal-line position (replay camera placement, on-ice VFX, etc.)
+# read this instead of `global_position.z`, which is always 0.
+func goal_line_z() -> float:
+	return facing * (rink_length / 2.0 - distance_from_end)
+
 # +1 for positive-Z end (Team 0 defends), -1 for negative-Z end (Team 1 defends)
 @export var facing: int = 1:
 	set(v):
