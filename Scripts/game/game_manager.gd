@@ -29,6 +29,10 @@ signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primar
 signal local_player_hit(magnitude: float)
 signal replay_started
 signal replay_stopped
+# Live tally of unanimous skip-replay votes (emitted on every accepted vote and
+# at replay start with current=0). HUD listens to keep the "[SPACE] TO SKIP
+# (X/Y)" prompt current.
+signal skip_replay_vote_updated(current: int, total: int)
 # Emitted on the local peer when a spectator-slot assignment lands. HUD / camera /
 # input subsystems listen so they can flip spectator chrome on/off without
 # polling. Only ever fires once per session right now (lobby → game transition);
@@ -41,6 +45,9 @@ var _last_emitted_clock_secs: int = -1
 var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
+# Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
+# we don't fire stray vote RPCs outside of the cinematic window.
+var _in_replay_locally: bool = false
 # Holds an existing-players sync that arrived before _spawn_world ran. The
 # host sends sync_existing_players just before assign_player_slot; if the
 # RPCs land after the scene has changed but before on_slot_assigned has
@@ -177,6 +184,11 @@ func _wire_network_signals() -> void:
 	NetworkManager.goalie_reaction_cleared_received.connect(_on_goalie_reaction_cleared_received)
 	NetworkManager.input_batch_received.connect(_on_input_batch_received)
 	NetworkManager.spectator_demoted_received.connect(_on_spectator_demoted_received)
+	NetworkManager.skip_replay_request_received.connect(_on_remote_skip_replay_request)
+	NetworkManager.skip_replay_vote_updated.connect(_on_remote_skip_replay_vote)
+	NetworkManager.replay_event_received.connect(_on_replay_event_received)
+	replay_started.connect(_on_local_replay_started)
+	replay_stopped.connect(_on_local_replay_stopped)
 
 
 # ── Process ───────────────────────────────────────────────────────────────────
@@ -770,6 +782,22 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 		_recorder.record_event(ts, event)
 	if _replay_file_writer != null and _should_record_to_file():
 		_replay_file_writer.enqueue_event(ts, JSON.stringify(event).to_utf8_buffer())
+	# Mirror the event onto every client / spectator so their recorders see
+	# the same timeline. Required for the goal-replay cinematic to use the
+	# same shot anchor + adaptive clip start everywhere.
+	NetworkManager.notify_replay_event_to_all(ts, event)
+
+
+# Client / spectator side: host broadcast each event it recorded; we mirror
+# it into our local recorder so our goal-replay clip carries the same
+# timeline (shot anchor, pickup chain, audio cues). Same gates the host
+# applies to its own recording — skip while a cinematic is already playing.
+func _on_replay_event_received(host_ts: float, event: Dictionary) -> void:
+	if _recorder == null:
+		return
+	if NetworkManager.is_replay_mode():
+		return
+	_recorder.record_event(host_ts, event)
 
 
 func _record_body_check_replay_event(checker_peer_id: int, victim: Skater,
@@ -892,6 +920,82 @@ func _teardown_spectator_camera() -> void:
 	if _is_local_spectator:
 		_is_local_spectator = false
 		local_spectator_state_changed.emit(false)
+
+
+# ── Goal-replay vote-to-skip ──────────────────────────────────────────────────
+# Rocket-League-style unanimous skip. On the local skip_replay press, route the
+# vote to the host (or register it locally if we are the host / offline). The
+# host counts, broadcasts the tally, and the driver auto-stops on unanimity —
+# clients mirror by stopping their own driver when they receive (N, N). In
+# offline / free-play the local player is the only voter, so a single press
+# instantly resolves to (1, 1) → stop.
+
+func _on_local_replay_started() -> void:
+	_in_replay_locally = true
+	# Reset HUD prompt immediately. On the host this is also the first
+	# authoritative broadcast of the voter total so clients see (0/N) right
+	# when their own driver starts.
+	if NetworkManager.is_host:
+		var total: int = _total_skip_voters()
+		NetworkManager.notify_skip_replay_vote_to_all(0, total)
+		skip_replay_vote_updated.emit(0, total)
+
+
+func _on_local_replay_stopped() -> void:
+	_in_replay_locally = false
+
+
+func is_in_replay_locally() -> bool:
+	return _in_replay_locally
+
+
+# HUD entry point. Called from _unhandled_input when the player presses
+# skip_replay during the cinematic.
+func request_local_skip_vote() -> void:
+	if not _in_replay_locally:
+		return
+	if NetworkManager.is_host:
+		_register_skip_vote(NetworkManager.local_peer_id())
+	else:
+		NetworkManager.send_skip_replay_request()
+
+
+func _on_remote_skip_replay_request(peer_id: int) -> void:
+	_register_skip_vote(peer_id)
+
+
+# Host-only: hands the vote to the driver, broadcasts the new tally so
+# clients can update their prompt and (on unanimity) tear down their own
+# driver. Bots aren't in connected_peer_ids() so they never count toward the
+# total; spectators do (they have an ENet connection).
+func _register_skip_vote(peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	# Late votes (driver stopped naturally before the RPC landed) are dropped
+	# silently — broadcasting (0, total) here would reset client HUDs that
+	# are already transitioning to FACEOFF.
+	if _goal_replay_driver == null or not _goal_replay_driver.is_active():
+		return
+	var total: int = _total_skip_voters()
+	_goal_replay_driver.register_skip_vote(peer_id, total)
+	var current: int = _goal_replay_driver.get_skip_vote_count()
+	NetworkManager.notify_skip_replay_vote_to_all(current, total)
+	skip_replay_vote_updated.emit(current, total)
+
+
+# Client-side handler for the host's tally broadcast. Forwards to HUD via the
+# local signal; on unanimity, also stops the local driver so every peer leaves
+# the cinematic at the same wall-clock moment.
+func _on_remote_skip_replay_vote(current: int, total: int) -> void:
+	if NetworkManager.is_host:
+		return  # host emits locally in _register_skip_vote
+	skip_replay_vote_updated.emit(current, total)
+	if total > 0 and current >= total and _goal_replay_driver != null:
+		_goal_replay_driver.stop()
+
+
+func _total_skip_voters() -> int:
+	return 1 + NetworkManager.connected_peer_ids().size()
 
 
 # ── Replay file recording ────────────────────────────────────────────────────

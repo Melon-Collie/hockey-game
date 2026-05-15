@@ -56,10 +56,19 @@ var _scene_tree: SceneTree = null
 # gap since the last broadcast. Clients leave this as Callable() (invalid).
 var _force_record_goal_frame: Callable = Callable()
 
-# Seconds to keep recording after goal fires so the clip includes puck-in-net
-# and the shooter's follow-through. Must stay well under
-# GameStateMachine.GOAL_PAUSE_DURATION (2.0 s).
-const POST_GOAL_CAPTURE_WINDOW: float = 0.5
+# Wall-time delay between goal detection and replay start. Two jobs:
+# (1) clip captures the puck-in-net + shooter follow-through frames,
+# (2) the live goal VFX (HockeyGoal.celebrate(): 1.8 s light fade + 1.5 s
+#     particle lifetime) plays out before the replay cuts in — otherwise
+#     the cinematic overlays with a flashing goal light from the present.
+# Must stay well under GameStateMachine.GOAL_PAUSE_DURATION (2.0 s) so the
+# state-machine timer doesn't auto-advance the phase before the replay starts.
+const POST_GOAL_CAPTURE_WINDOW: float = 1.5
+
+# Captured at goal time on every peer (host via on_goal_scored_into, client via
+# on_goal_received) so the driver knows which end to park the inside-net cam
+# behind when the replay starts ~0.5 s later.
+var _pending_defending_goal_z: float = 0.0
 
 
 func setup(
@@ -188,8 +197,10 @@ func on_goal_scored_into(defending_team: Team) -> void:
 	var puck: Puck = _get_puck()
 	if puck != null:
 		puck.pickup_locked = true
-	if defending_team.defended_goal != null and defending_team.defended_goal.vfx != null:
-		defending_team.defended_goal.vfx.celebrate()
+	if defending_team.defended_goal != null:
+		_pending_defending_goal_z = defending_team.defended_goal.goal_line_z()
+		if defending_team.defended_goal.vfx != null:
+			defending_team.defended_goal.vfx.celebrate()
 	goal_scored.emit(_teams[scoring_team_id], scorer_name, assist1_name, assist2_name)
 	score_changed.emit(_state_machine.scores[0], _state_machine.scores[1])
 	phase_changed.emit(_state_machine.current_phase)
@@ -218,8 +229,10 @@ func on_goal_received(
 		puck.pickup_locked = true
 	goal_scored.emit(_teams[scoring_team_id], scorer_name, assist1_name, assist2_name)
 	var defended_goal: HockeyGoal = _teams[1 - scoring_team_id].defended_goal
-	if defended_goal != null and defended_goal.vfx != null:
-		defended_goal.vfx.celebrate()
+	if defended_goal != null:
+		_pending_defending_goal_z = defended_goal.goal_line_z()
+		if defended_goal.vfx != null:
+			defended_goal.vfx.celebrate()
 	score_changed.emit(_state_machine.scores[0], _state_machine.scores[1])
 	phase_changed.emit(_state_machine.current_phase)
 	_on_goal_for_replay()
@@ -271,7 +284,8 @@ func _start_goal_replay() -> void:
 	if _recorder == null or _goal_replay_driver == null or _codec == null:
 		return
 	_goal_replay_driver.start(_recorder, _codec, _registry,
-			_puck_getter.call() as Puck, _goalie_controllers_getter.call())
+			_puck_getter.call() as Puck, _goalie_controllers_getter.call(),
+			_pending_defending_goal_z)
 
 
 # Host-only: advance state machine once the cinematic finishes naturally.
