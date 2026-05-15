@@ -1423,6 +1423,33 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 
 
 func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	# Danger zone: when the blade can physically reach the attacking
+	# goal line, the default "2 m toward goal" aim extends the blade
+	# straight into the goalie. The puck on the blade collides with
+	# the goalie, gets deflected, rebounds back into the bot's blade
+	# range, and the bot reacquires possession without a carrier
+	# change (so the engagement cooldown never fires). The mouse keeps
+	# pointing at the goal, the blade keeps extending into the goalie
+	# — a physical feedback loop, not a decision.
+	#
+	# Fix by aiming the mouse at the carry destination instead. The
+	# carrier scorer already biases _last_carry_anchor away from
+	# point-blank via goalie_zone_penalty inside score_shoot; the
+	# blade just needs to follow the body's plan instead of
+	# independently reaching for the net. Threshold is BLADE_REACH_M
+	# — the exact distance at which the blade can touch the goal
+	# line, i.e. the geometric definition of "too close."
+	if self_pos.distance_to(_attacking_goal_pos) < BLADE_REACH_M:
+		var to_anchor: Vector3 = _last_carry_anchor - self_pos
+		to_anchor.y = 0.0
+		if to_anchor.length_squared() < 0.0001:
+			# Stand-still anchor (rare at point-blank since back-out
+			# candidates outscore it, but possible). Pull blade to body
+			# rather than fall back to forward-at-goal — anything is
+			# better than reaching into the goalie again.
+			return self_pos
+		return self_pos + to_anchor.normalized() * CARRY_BLADE_AIM_FORWARD_M
+
 	var to_goal: Vector3 = _attacking_goal_pos - self_pos
 	to_goal.y = 0.0
 	var forward_dir: Vector3
