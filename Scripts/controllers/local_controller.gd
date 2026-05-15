@@ -126,7 +126,7 @@ func _physics_process(delta: float) -> void:
 			var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
 			if _input_history.size() > rtt_cap:
 				_input_history.pop_front()
-			_ik.apply_blade_from_mouse(_current_input, delta)
+			apply_blade_aim_only(_current_input, delta)
 		else:
 			# Dead-puck phase with sticks frozen too — drain history so reconcile
 			# can't replay stale inputs once the phase lifts.

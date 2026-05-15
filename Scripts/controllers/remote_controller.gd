@@ -96,7 +96,7 @@ func _drive_from_input(delta: float) -> void:
 			# position for everyone else to see. _process_input still doesn't
 			# run, so body/shot inputs stay suppressed.
 			if _game_state.allows_blade_aim_during_lock():
-				_ik.apply_blade_from_mouse(input, delta)
+				apply_blade_aim_only(input, delta)
 		# Clear just_pressed flags before saving as fallback so they don't
 		# re-fire on subsequent ticks while the queue is empty.
 		input.shoot_pressed = false
@@ -110,7 +110,7 @@ func _drive_from_input(delta: float) -> void:
 			if _game_state.allows_blade_aim_during_lock():
 				# Keep the stick on the most recent mouse aim we have — stale
 				# but better than freezing mid-swing while the input queue gaps.
-				_ik.apply_blade_from_mouse(_fallback_input, delta)
+				apply_blade_aim_only(_fallback_input, delta)
 			return
 		if _input_queue.is_empty():
 			NetworkTelemetry.record_input_starvation()

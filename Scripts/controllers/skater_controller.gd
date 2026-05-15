@@ -261,6 +261,19 @@ func _process_input(input: InputState, delta: float) -> void:
 	if not is_replaying:
 		_pose.update_angular_velocities(delta)
 
+
+# Aim-only blade update for FACEOFF_PREP: drives the blade target from the
+# mouse and refreshes the dependent IK + visual meshes, but skips body
+# rotation, movement, and state-machine dispatch. Callers must already have
+# confirmed the phase allows blade aim during a locked phase.
+func apply_blade_aim_only(input: InputState, delta: float) -> void:
+	_ik.apply_blade_from_mouse(input, delta)
+	_ik.update_bottom_hand()
+	skater.update_stick_mesh()
+	skater.update_arm_mesh()
+	skater.update_bottom_arm_mesh()
+
+
 # ── Network State ─────────────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
 # RPC boundary (GameManager.get_world_state), not here.
