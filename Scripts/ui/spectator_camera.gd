@@ -24,16 +24,23 @@ extends Camera3D
 @export var noise_pos_amp: float = 0.06  # meters
 @export var noise_freq: float = 0.45     # Hz
 
+# Low-pass filter on the target position. Real broadcast cameras don't react
+# to puck wiggle during stickhandling — the operator follows the play, not
+# the puck. With smooth_rate ≈ 2.5 (~0.4s time constant), stickhandle wiggle
+# at ~5 Hz gets >80% attenuated, while a 1-second puck travel passes through
+# nearly intact. Velocity for the broadcast lead is derived from the SMOOTHED
+# target, so the lead vector itself stays wiggle-free too.
+@export var target_smooth_rate: float = 2.5
+
 var _target_getter: Callable = Callable()
 var _prev_camera: Camera3D = null
 
-# Position-difference velocity, smoothed via EMA. Works the same way for both
-# call sites: live spectator reads the puck node (true velocity), goal-replay
-# reads the puck node while ReplayPlaybackEngine drives its position from
-# interpolated snapshots (so the difference matches the replayed motion).
-var _last_target_pos: Vector3 = Vector3.ZERO
+# Smoothed target + its derived velocity. Same call sites work as before
+# (live spectator reads the puck node, goal-replay also reads the puck node
+# while ReplayPlaybackEngine drives its position from interpolated snapshots).
+var _smoothed_target: Vector3 = Vector3.ZERO
 var _target_velocity: Vector3 = Vector3.ZERO
-var _velocity_initialized: bool = false
+var _smoothing_initialized: bool = false
 
 
 func setup(target_getter: Callable) -> void:
@@ -53,8 +60,9 @@ func activate() -> void:
 	# frame doesn't sweep the camera across the rink.
 	if _target_getter.is_valid():
 		var target: Vector3 = _target_getter.call()
-		_last_target_pos = target
-		_velocity_initialized = true
+		_smoothed_target = target
+		_target_velocity = Vector3.ZERO
+		_smoothing_initialized = true
 		if global_position.distance_to(target) > 0.1:
 			look_at(target, Vector3.UP)
 	make_current()
@@ -70,14 +78,15 @@ func _process(delta: float) -> void:
 	if not current or not _target_getter.is_valid():
 		return
 	var target: Vector3 = _target_getter.call()
-	_update_target_velocity(target, delta)
+	_smooth_target_and_velocity(target, delta)
 
 	# Velocity-lead so the rotation anticipates the puck path. Capped so a
-	# slapshot doesn't fling the look-target past the play.
+	# slapshot doesn't fling the look-target past the play. The velocity is
+	# derived from the smoothed target, so this is wiggle-free.
 	var lead: Vector3 = _target_velocity * lead_time
 	if lead.length() > max_lead:
 		lead = lead.normalized() * max_lead
-	var look_target: Vector3 = target + lead
+	var look_target: Vector3 = _smoothed_target + lead
 
 	# Wire-rig drift: subtle perlin-style noise on the booth position + look
 	# target. Two harmonics per axis so the motion doesn't look like a pure sine.
@@ -101,16 +110,23 @@ func _process(delta: float) -> void:
 		global_transform = global_transform.interpolate_with(look_xform, look_speed * delta)
 
 
-func _update_target_velocity(target_pos: Vector3, delta: float) -> void:
-	if not _velocity_initialized:
-		_last_target_pos = target_pos
-		_velocity_initialized = true
+func _smooth_target_and_velocity(target_pos: Vector3, delta: float) -> void:
+	if not _smoothing_initialized:
+		_smoothed_target = target_pos
+		_smoothing_initialized = true
 		return
 	if delta <= 0.0:
 		return
-	var raw_v: Vector3 = (target_pos - _last_target_pos) / delta
-	# EMA over ~200 ms smooths out per-frame jitter (especially during replay
-	# bracket transitions when the interpolated position can step).
-	var alpha: float = clampf(delta * 5.0, 0.0, 1.0)
-	_target_velocity = _target_velocity.lerp(raw_v, alpha)
-	_last_target_pos = target_pos
+	# Low-pass the target. Stickhandle wiggle has a short period and a tiny
+	# net displacement, so it gets attenuated. Sustained motion (skating,
+	# passes, shots) carries through with a small lag that the velocity lead
+	# below substantially cancels out.
+	var prev_smoothed: Vector3 = _smoothed_target
+	var pos_alpha: float = clampf(delta * target_smooth_rate, 0.0, 1.0)
+	_smoothed_target = _smoothed_target.lerp(target_pos, pos_alpha)
+	# Velocity from the SMOOTHED target so the broadcast lead vector inherits
+	# the same wiggle filtering. EMA on top keeps the velocity itself from
+	# stepping per-frame.
+	var raw_v: Vector3 = (_smoothed_target - prev_smoothed) / delta
+	var v_alpha: float = clampf(delta * 5.0, 0.0, 1.0)
+	_target_velocity = _target_velocity.lerp(raw_v, v_alpha)
