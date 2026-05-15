@@ -38,6 +38,7 @@ var _rematch_votes: Dictionary[int, bool] = {}
 var _local_voted: bool = false
 var _phase_banner_root: Control = null
 var _phase_slide_tween: Tween = null
+var _faceoff_countdown_tween: Tween = null
 var _skip_prompt_label: Label = null
 var _skip_prompt_tween: Tween = null
 var _skip_vote_current: int = 0
@@ -101,6 +102,7 @@ func _ready() -> void:
 	GameManager.shots_on_goal_changed.connect(_on_shots_on_goal_changed)
 	GameManager.player_joined.connect(func(n: String, c: Color) -> void: _toast_stack.push(n + " joined", c))
 	GameManager.player_left.connect(func(n: String, c: Color) -> void: _toast_stack.push(n + " left", c))
+	GameManager.puck_out_of_play.connect(_on_puck_out_of_play)
 	GameManager.local_player_hit.connect(_on_local_player_hit)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
@@ -671,6 +673,7 @@ func _refresh_skip_prompt_text() -> void:
 func _on_phase_changed(new_phase: int) -> void:
 	match new_phase:
 		GamePhase.Phase.PLAYING:
+			_stop_faceoff_countdown()
 			_phase_wrapper.visible = false
 			_phase_label.add_theme_color_override("font_color", _WHITE)
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
@@ -683,7 +686,24 @@ func _on_phase_changed(new_phase: int) -> void:
 			# Replay phase. Chyron is driven by _on_replay_started, not by this
 			# signal — wait for that.
 			pass
+		GamePhase.Phase.FACEOFF_PREP:
+			_clear_goal_template()
+			_phase_label.add_theme_color_override("font_color", _WHITE)
+			_phase_label.visible = true
+			_phase_style.bg_color = MenuStyle.BROADCAST_BG
+			_show_phase_banner_at_rest()
+			_start_faceoff_countdown()
+		GamePhase.Phase.FACEOFF:
+			# Drop instant: hold "DROP!" briefly, then dismiss on PLAYING.
+			# No whistle here — refs whistle to stop play, not to start it.
+			_stop_faceoff_countdown()
+			_phase_label.text = "DROP!"
+			_phase_label.add_theme_color_override("font_color", _WHITE)
+			_phase_label.visible = true
+			_phase_style.bg_color = MenuStyle.BROADCAST_BG
+			_show_phase_banner_at_rest()
 		GamePhase.Phase.END_OF_PERIOD:
+			_stop_faceoff_countdown()
 			_clear_goal_template()
 			_phase_label.text = "END OF PERIOD"
 			_phase_label.add_theme_color_override("font_color", _WHITE)
@@ -691,6 +711,7 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_show_phase_banner_at_rest()
 		GamePhase.Phase.GAME_OVER:
+			_stop_faceoff_countdown()
 			_show_phase_banner_at_rest()  # text + color set by _on_game_over
 		_:
 			_clear_goal_template()
@@ -699,6 +720,34 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_label.visible = true
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_show_phase_banner_at_rest()
+
+
+# Drives a "2 → 1 → DROP!" countdown on the phase banner during FACEOFF_PREP.
+# Pure cosmetic: the puck unlock is gated by the authoritative phase change to
+# FACEOFF, so a client running a frame or two behind still sees the right beat.
+func _start_faceoff_countdown() -> void:
+	_stop_faceoff_countdown()
+	_phase_label.text = "FACEOFF IN 2"
+	var prep: float = GameRules.FACEOFF_PREP_DURATION
+	var t := create_tween()
+	# Half-second tween to "1" mid-window if prep >= 2s; final "DROP!" sits in
+	# the FACEOFF phase entry. Steps are evenly split so 2.0s → ~1.0s per beat.
+	t.tween_interval(prep * 0.5)
+	t.tween_callback(func() -> void:
+		if _phase_label != null:
+			_phase_label.text = "FACEOFF IN 1")
+	_faceoff_countdown_tween = t
+
+
+func _stop_faceoff_countdown() -> void:
+	if _faceoff_countdown_tween != null and _faceoff_countdown_tween.is_valid():
+		_faceoff_countdown_tween.kill()
+	_faceoff_countdown_tween = null
+
+
+func _on_puck_out_of_play() -> void:
+	if _toast_stack != null:
+		_toast_stack.push("PUCK OUT OF PLAY", _WHITE)
 
 # Reset the four goal-template rows (tagline, scorer, ASSISTED BY, assist
 # names) to hidden so non-goal phases show only the phase_label hero.

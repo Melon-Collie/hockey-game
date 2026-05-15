@@ -23,3 +23,10 @@ static func is_movement_locked(phase: GamePhase.Phase) -> bool:
 # puck sits in the net with pickup_locked = true until the replay starts).
 static func is_puck_pickup_locked_phase(phase: GamePhase.Phase) -> bool:
 	return is_dead_puck_phase(phase) or phase == GamePhase.Phase.GOAL_CELEBRATION
+
+# True for phases where body translation is locked but the player should still
+# be able to angle their stick via mouse — today that's FACEOFF_PREP, so
+# centers can pre-aim the draw during the countdown. Goal celebration and
+# end-of-period keep stick frozen for stillness.
+static func allows_blade_aim_during_lock(phase: GamePhase.Phase) -> bool:
+	return phase == GamePhase.Phase.FACEOFF_PREP

@@ -28,6 +28,27 @@ func test_team_1_faceoff_positions_are_on_negative_z_side() -> void:
 	assert_lt(PlayerRules.faceoff_position(1, 1).z, 0.0)
 	assert_lt(PlayerRules.faceoff_position(1, 2).z, 0.0)
 
+func test_faceoff_position_defaults_to_center_ice() -> void:
+	var p: Vector3 = PlayerRules.faceoff_position(0, 0)
+	# Center ice + team-0 center offset (0, 1.5) + spawn height.
+	assert_eq(p, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 1.5))
+
+func test_faceoff_position_translates_with_dot() -> void:
+	var dot := Vector2(6.5, 22.1)
+	var p: Vector3 = PlayerRules.faceoff_position(0, 0, dot)
+	# Same team-0 center offset, but anchored at the end-zone dot.
+	assert_eq(p, Vector3(6.5, GameRules.FACEOFF_SPAWN_HEIGHT, 22.1 + 1.5))
+
+func test_faceoff_offsets_preserve_team_split_around_dot() -> void:
+	var dot := Vector2(-6.5, -22.1)
+	# Team 0 always sits on the +Z side of whatever dot is active, team 1 on -Z.
+	# This holds even at end-zone dots regardless of the dot's own Z sign.
+	for slot: int in range(PlayerRules.MAX_PER_TEAM):
+		var p0: Vector3 = PlayerRules.faceoff_position(0, slot, dot)
+		var p1: Vector3 = PlayerRules.faceoff_position(1, slot, dot)
+		assert_gt(p0.z, dot.y, "team 0 slot %d should be on +Z side of dot" % slot)
+		assert_lt(p1.z, dot.y, "team 1 slot %d should be on -Z side of dot" % slot)
+
 # ── faceoff_facing ───────────────────────────────────────────────────────────
 # Team 0 spawns on the +Z side and attacks -Z; team 1 mirrors. The teleport
 # helper relies on this so swapped/spawning players don't keep last frame's

@@ -20,6 +20,10 @@ extends RefCounted
 var current_phase: int = GamePhase.Phase.PLAYING
 var _phase_timer: float = 0.0
 
+# XZ dot where the next/current faceoff is held. Set by begin_faceoff_prep
+# (default center ice); read by PhaseCoordinator to position puck + players.
+var active_faceoff_dot: Vector2 = GameRules.CENTER_ICE_DOT
+
 # ── Period + clock ───────────────────────────────────────────────────────────
 var current_period: int   = 1
 var time_remaining: float = GameRules.PERIOD_DURATION
@@ -40,7 +44,7 @@ var period_scores: Array[Array] = []  # [team_id][period_index 0-based]; grows d
 
 # ── Player registry (domain view) ────────────────────────────────────────────
 # peer_id → { team_slot: int, team_id: int }. faceoff_position is derived
-# on demand via PlayerRules.faceoff_position(team_id, team_slot).
+# on demand via PlayerRules.faceoff_position(team_id, team_slot, active_dot).
 var players: Dictionary[int, Dictionary] = {}
 
 # ── Icing ────────────────────────────────────────────────────────────────────
@@ -101,6 +105,7 @@ func advance_post_goal() -> void:
 	if _is_ot_period():
 		_set_phase(GamePhase.Phase.GAME_OVER)
 	else:
+		active_faceoff_dot = GameRules.CENTER_ICE_DOT
 		_set_phase(GamePhase.Phase.FACEOFF_PREP)
 
 
@@ -320,13 +325,15 @@ func apply_config(p_num_periods: int, p_period_duration: float, p_ot_enabled: bo
 	time_remaining   = 0.0 if infinite_time else p_period_duration
 	period_scores    = _make_period_scores(num_periods)
 
-# Transitions to FACEOFF_PREP and clears icing state. Used by manual reset and
-# after goals (the goal path is driven automatically by tick timer).
-func begin_faceoff_prep() -> void:
+# Transitions to FACEOFF_PREP at the given dot and clears icing state. Used by
+# manual reset (default center) and the OOB path (passes the nearest dot). The
+# goal pipeline is driven automatically by the tick timer in advance_post_goal.
+func begin_faceoff_prep(dot_xz: Vector2 = GameRules.CENTER_ICE_DOT) -> void:
 	icing_team_id = -1
 	_icing_timer = 0.0
 	last_carrier_team_id = -1
 	_offside_peer_ids.clear()
+	active_faceoff_dot = dot_xz
 	_set_phase(GamePhase.Phase.FACEOFF_PREP)
 
 
@@ -366,14 +373,17 @@ func apply_remote_goal(scoring_team_id: int, score0: int, score1: int) -> void:
 func is_movement_locked() -> bool:
 	return PhaseRules.is_movement_locked(current_phase)
 
+func allows_blade_aim_during_lock() -> bool:
+	return PhaseRules.allows_blade_aim_during_lock(current_phase)
+
 # Returns { peer_id: Vector3 } — each player's faceoff position derived from
-# their slot/team. No cached field: PlayerRules.faceoff_position is the
-# single source of truth.
+# their slot/team around the active dot. PlayerRules.faceoff_position is the
+# single source of truth; we hold no cached positions ourselves.
 func get_faceoff_positions() -> Dictionary:
 	var result: Dictionary = {}
 	for peer_id in players:
 		var p: Dictionary = players[peer_id]
-		result[peer_id] = PlayerRules.faceoff_position(p.team_id, p.team_slot)
+		result[peer_id] = PlayerRules.faceoff_position(p.team_id, p.team_slot, active_faceoff_dot)
 	return result
 
 
@@ -442,6 +452,7 @@ func _advance_period() -> void:
 	icing_team_id = -1
 	_icing_timer = 0.0
 	last_carrier_team_id = -1
+	active_faceoff_dot = GameRules.CENTER_ICE_DOT
 	_set_phase(GamePhase.Phase.FACEOFF_PREP)
 
 func _tick_icing(delta: float) -> void:
