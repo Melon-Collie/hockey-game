@@ -23,7 +23,7 @@ const CLIP_DURATION: float = 8.0  # seconds of history to replay
 @export var slowmo_window: float = 0.75  # fallback offset before clip end (used when no shot event present)
 @export var slowmo_speed: float = 0.4    # playback multiplier during slow-motion window
 @export var outro_duration: float = 0.25 # extra hold at clip end before stopping
-@export var pre_shot_lead: float = 0.15  # seconds of pre-release slow-mo so the wind-up reads
+@export var pre_shot_lead: float = 0.0   # offset before shot release where slow-mo + cut fire. 0 = on release.
 
 # Adaptive clip-start tuning. Walks "puck_pickup" events backward from the shot
 # to find the scoring possession's start. Within a tight gap, chained pickups
