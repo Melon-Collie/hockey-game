@@ -25,6 +25,17 @@ const CLIP_DURATION: float = 8.0  # seconds of history to replay
 @export var outro_duration: float = 0.25 # extra hold at clip end before stopping
 @export var pre_shot_lead: float = 0.15  # seconds of pre-release slow-mo so the wind-up reads
 
+# Adaptive clip-start tuning. Walks "puck_pickup" events backward from the shot
+# to find the scoring possession's start. Within a tight gap, chained pickups
+# (assists / tic-tac-toe) extend the clip naturally. When the only pickup is a
+# single long carry, we use a fixed pre-shot floor instead of showing the whole
+# carry. See _compute_trimmed_clip_start_ts() for the algorithm.
+@export var pickup_chain_gap: float = 2.0    # max gap between consecutive pickups still in the chain
+@export var pre_pickup_buffer: float = 0.5   # extra time shown before the earliest chained pickup
+@export var min_pre_shot: float = 1.5        # floor when chain captures pickups (or no pickup found)
+@export var min_pre_shot_long_carry: float = 3.0  # floor when a pickup exists but the chain didn't capture it
+@export var max_pre_shot: float = 6.5        # ceiling on how far before the shot we'll trim back to
+
 signal replay_started
 signal replay_stopped
 
@@ -136,6 +147,17 @@ func start(recorder: ReplayRecorder,
 			_shot_event_ts = entry.host_ts
 			var p: Array = ev.pos
 			_shot_release_pos = Vector3(p[0], p[1], p[2])
+
+	# Trim the clip start to "the play that scored." Walks puck_pickup events
+	# backward from the shot, extending through consecutive pickups within
+	# pickup_chain_gap (assist chain), and falls back to a fixed long-carry
+	# floor when there's only one pickup well before the shot.
+	var trimmed_start: float = _compute_trimmed_clip_start_ts()
+	if trimmed_start > _clip_start_ts:
+		_clip_start_ts = trimmed_start
+		_virtual_clock = trimmed_start
+		while _next_event_idx < _events.size() and _events[_next_event_idx].host_ts < trimmed_start:
+			_next_event_idx += 1
 
 	_freeze_live_simulation()
 
@@ -303,6 +325,45 @@ func _find_frame_idx(t: float) -> int:
 		else:
 			break
 	return best
+
+
+# Walks "puck_pickup" events backward from the shot to find where the scoring
+# play started. Three cases:
+#   - Chain of pickups within pickup_chain_gap: extends through them (assists,
+#     tic-tac-toe). Clip starts pre_pickup_buffer before the earliest chain pickup.
+#   - Single pickup well before the shot (long single carry): floor to
+#     min_pre_shot_long_carry — show only the last few seconds, not the whole carry.
+#   - No pickups at all (faceoff scramble, weird scenarios): use the standard
+#     min_pre_shot floor.
+# Result is clamped to (shot_ts - max_pre_shot, shot_ts - min_pre_shot).
+func _compute_trimmed_clip_start_ts() -> float:
+	if _shot_event_ts < 0.0:
+		return _clip_start_ts  # no shot event — keep the full clip
+	var play_start: float = _shot_event_ts
+	var prev_ts: float = _shot_event_ts
+	var has_any_pickup: bool = false
+	# _events is sorted ascending by host_ts — walk back from the end.
+	for i: int in range(_events.size() - 1, -1, -1):
+		var entry: Dictionary = _events[i]
+		var ev: Dictionary = entry.event
+		if not (ev.has("kind") and ev.kind == "puck_pickup"):
+			continue
+		var ts: float = entry.host_ts
+		if ts >= _shot_event_ts:
+			continue
+		has_any_pickup = true
+		if prev_ts - ts > pickup_chain_gap:
+			break
+		play_start = ts
+		prev_ts = ts
+	if play_start == _shot_event_ts:
+		# No chain captured. Long-carry floor if a pickup exists somewhere
+		# earlier in the clip; otherwise standard floor. Clamped to max so
+		# mis-tuned exports can't extend past the cap.
+		var floor_seconds: float = min_pre_shot_long_carry if has_any_pickup else min_pre_shot
+		return _shot_event_ts - clampf(floor_seconds, min_pre_shot, max_pre_shot)
+	play_start -= pre_pickup_buffer
+	return clampf(play_start, _shot_event_ts - max_pre_shot, _shot_event_ts - min_pre_shot)
 
 
 func _apply_interpolated_snapshot(t: float, dt: float, delta: float) -> void:
