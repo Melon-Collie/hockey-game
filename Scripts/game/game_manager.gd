@@ -325,6 +325,12 @@ func on_host_started() -> void:
 	_spawn_bots_from_lobby()
 	# Registry is fully populated by this point — capture roster + open file.
 	_open_replay_file_writer()
+	# Open the match with a faceoff countdown rather than dropping straight
+	# into PLAYING. Tutorial is exempt — it scripts its own intro and would
+	# fight a forced FACEOFF_PREP.
+	if not NetworkManager.is_tutorial_mode:
+		_state_machine.begin_faceoff_prep()
+		_phase_coord.handle_phase_entered()
 
 
 func on_connected_to_server() -> void:
