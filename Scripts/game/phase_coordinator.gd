@@ -193,6 +193,9 @@ func on_goal_scored_into(defending_team: Team) -> void:
 	var puck: Puck = _get_puck()
 	if puck != null:
 		puck.pickup_locked = true
+	print("[ReplayDBG] on_goal_scored_into: defending_team=", defending_team,
+			" defended_goal=", defending_team.defended_goal,
+			" goal.global_position=", (defending_team.defended_goal.global_position if defending_team.defended_goal != null else Vector3.ZERO))
 	if defending_team.defended_goal != null:
 		_pending_defending_goal_z = defending_team.defended_goal.global_position.z
 		if defending_team.defended_goal.vfx != null:
@@ -225,6 +228,8 @@ func on_goal_received(
 		puck.pickup_locked = true
 	goal_scored.emit(_teams[scoring_team_id], scorer_name, assist1_name, assist2_name)
 	var defended_goal: HockeyGoal = _teams[1 - scoring_team_id].defended_goal
+	print("[ReplayDBG] on_goal_received: defended_goal=", defended_goal,
+			" goal.global_position=", (defended_goal.global_position if defended_goal != null else Vector3.ZERO))
 	if defended_goal != null:
 		_pending_defending_goal_z = defended_goal.global_position.z
 		if defended_goal.vfx != null:
