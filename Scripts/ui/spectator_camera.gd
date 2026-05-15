@@ -13,7 +13,7 @@ extends Camera3D
 # the play better than the wider game-cam framing.
 
 @export var booth_x: float = 20.0        # outside the long boards (rink is ±13 wide)
-@export var booth_y: float = 12.0        # press-box elevation
+@export var booth_y: float = 18.0        # press-box elevation (~50° down to center ice)
 @export var booth_z: float = 0.0         # center-ice along the long axis
 @export var replay_fov: float = 36.0
 @export var look_speed: float = 6.0      # rotation slerp speed
