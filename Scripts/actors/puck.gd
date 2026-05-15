@@ -35,6 +35,7 @@ var pickup_locked: bool = false
 var _cooldown_timers: Dictionary[Skater, float] = {}
 var _is_server: bool = false
 var _pending_reset: bool = false
+var _pending_reset_xz: Vector2 = Vector2.ZERO
 var _clamp_at_goal_line: bool = false
 # Full velocity stored by release() for every shot, applied by _integrate_forces.
 # Jolt does not preserve linear_velocity set on a frozen body when it activates
@@ -262,13 +263,14 @@ func drop() -> void:
 		_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_released.emit()
 
-func reset() -> void:
+func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 	carrier = null
 	freeze = false  # ensure _integrate_forces is called on the next step
 	_cooldown_timers.clear()
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
 	_pending_reset = true
+	_pending_reset_xz = at_xz
 	puck_released.emit()
 
 func is_airborne() -> bool:
@@ -290,9 +292,11 @@ func _on_body_entered(body: Node3D) -> void:
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if _pending_reset:
 		_pending_reset = false
-		state.transform = Transform3D(Basis(), Vector3(0, ice_height, 0))
+		state.transform = Transform3D(Basis(),
+				Vector3(_pending_reset_xz.x, ice_height, _pending_reset_xz.y))
 		state.linear_velocity = Vector3.ZERO
 		state.angular_velocity = Vector3.ZERO
+		_pending_reset_xz = Vector2.ZERO
 		return
 	if not _pending_elevation_vel.is_zero_approx():
 		# Write the full velocity vector directly into Jolt's physics state.

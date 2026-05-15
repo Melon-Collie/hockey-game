@@ -91,6 +91,12 @@ func _drive_from_input(delta: float) -> void:
 			_process_input(input, delta)
 		else:
 			skater.velocity = Vector3.ZERO
+			# FACEOFF_PREP: keep the host's view of this remote peer's stick in
+			# sync with their mouse so world state broadcasts the right blade
+			# position for everyone else to see. _process_input still doesn't
+			# run, so body/shot inputs stay suppressed.
+			if _game_state.allows_blade_aim_during_lock():
+				apply_blade_aim_only(input, delta)
 		# Clear just_pressed flags before saving as fallback so they don't
 		# re-fire on subsequent ticks while the queue is empty.
 		input.shoot_pressed = false
@@ -101,6 +107,10 @@ func _drive_from_input(delta: float) -> void:
 	else:
 		if _game_state.is_movement_locked():
 			skater.velocity = Vector3.ZERO
+			if _game_state.allows_blade_aim_during_lock():
+				# Keep the stick on the most recent mouse aim we have — stale
+				# but better than freezing mid-swing while the input queue gaps.
+				apply_blade_aim_only(_fallback_input, delta)
 			return
 		if _input_queue.is_empty():
 			NetworkTelemetry.record_input_starvation()

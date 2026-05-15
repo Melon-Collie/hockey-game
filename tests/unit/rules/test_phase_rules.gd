@@ -34,3 +34,19 @@ func test_movement_locked_matches_dead_puck() -> void:
 			PhaseRules.is_movement_locked(phase),
 			PhaseRules.is_dead_puck_phase(phase),
 			"is_movement_locked should match is_dead_puck_phase for phase %d" % phase)
+
+# ── allows_blade_aim_during_lock ────────────────────────────────────────────
+# Stick aim stays live only during FACEOFF_PREP so centers can pre-angle the
+# draw during the countdown. Every other locked phase keeps sticks frozen.
+
+func test_faceoff_prep_allows_blade_aim() -> void:
+	assert_true(PhaseRules.allows_blade_aim_during_lock(GamePhase.Phase.FACEOFF_PREP))
+
+func test_goal_scored_does_not_allow_blade_aim() -> void:
+	assert_false(PhaseRules.allows_blade_aim_during_lock(GamePhase.Phase.GOAL_SCORED))
+
+func test_end_of_period_does_not_allow_blade_aim() -> void:
+	assert_false(PhaseRules.allows_blade_aim_during_lock(GamePhase.Phase.END_OF_PERIOD))
+
+func test_game_over_does_not_allow_blade_aim() -> void:
+	assert_false(PhaseRules.allows_blade_aim_during_lock(GamePhase.Phase.GAME_OVER))

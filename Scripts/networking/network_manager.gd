@@ -49,6 +49,7 @@ signal carrier_puck_dropped
 signal remote_carrier_changed(new_carrier_peer_id: int)
 signal ghost_state_received(peer_id: int, is_ghost: bool)
 signal goal_received(scoring_team_id: int, score0: int, score1: int, scorer_name: String, assist1_name: String, assist2_name: String)
+signal puck_out_of_play_received
 signal faceoff_positions_received(positions: Array)
 signal game_reset_received(new_game_id: String)
 signal stats_received(data: Array)
@@ -950,6 +951,14 @@ func notify_goal(scoring_team_id: int, score0: int, score1: int, scorer_name: St
 		func(tid: int, s0: int, s1: int, sn: String, a1: String, a2: String) -> void:
 			goal_received.emit(tid, s0, s1, sn, a1, a2),
 		[scoring_team_id, score0, score1, scorer_name, assist1_name, assist2_name], true)
+
+func notify_puck_out_of_play_to_all() -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_puck_out_of_play.rpc_id(peer_id)
+
+@rpc("authority", "reliable")
+func notify_puck_out_of_play() -> void:
+	NetworkSimManager.send(func() -> void: puck_out_of_play_received.emit(), [], true)
 
 func send_faceoff_positions(positions: Array) -> void:
 	for peer_id in connected_peer_ids():

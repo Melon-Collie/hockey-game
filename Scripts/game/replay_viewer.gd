@@ -227,6 +227,11 @@ func is_movement_locked() -> bool:
 	return true
 
 
+# Replay never wants stick wiggle — the recorded skater poses own the blade.
+func allows_blade_aim_during_lock() -> bool:
+	return false
+
+
 func is_input_blocked() -> bool:
 	return true
 

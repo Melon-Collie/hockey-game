@@ -8,7 +8,7 @@ class_name GameRules
 
 # ── Game Flow Timings ─────────────────────────────────────────────────────────
 const GOAL_PAUSE_DURATION: float   = 2.0
-const FACEOFF_PREP_DURATION: float = 0.5
+const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdown before puck unlocks
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
@@ -76,8 +76,10 @@ const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
 # value so AI prediction models post-bounce trajectories the same
 # way Jolt resolves them.
 const PUCK_BOARD_BOUNCE: float = 0.4
-# Seconds puck must remain fully outside the rink boundary before a faceoff is forced.
-const PUCK_OOB_FACEOFF_TIMEOUT: float = 3.0
+# Silent grace before an out-of-play puck is whistled dead. Short enough that
+# the stoppage feels responsive, long enough that pucks bouncing back in off
+# the boards don't get false-flagged.
+const PUCK_OOB_GRACE_DURATION: float = 1.0
 
 # ── Infractions ───────────────────────────────────────────────────────────────
 const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icing
@@ -149,8 +151,37 @@ const SPECTATOR_TEAM_ID: int = -1
 const MAX_CONNECTIONS: int = MAX_PLAYERS + MAX_SPECTATORS
 
 # ── Faceoff Positions ─────────────────────────────────────────────────────────
-# Indexed by [team_id][team_slot]. Team 0 occupies the +Z half; Team 1 the -Z half.
-const CENTER_FACEOFF_POSITIONS: Array = [
-	[Vector3( 0.0, 1.0,  1.5), Vector3(-5.0, 1.0,  3.0), Vector3( 5.0, 1.0,  3.0)],  # team 0
-	[Vector3( 0.0, 1.0, -1.5), Vector3(-5.0, 1.0, -3.0), Vector3( 5.0, 1.0, -3.0)],  # team 1
+# Spawn height for skaters at a faceoff. The dot itself sits on the ice (Y=0);
+# this is added at teleport time so dots and per-team offsets stay 2D.
+const FACEOFF_SPAWN_HEIGHT: float = 1.0
+
+# 2D dot positions (XZ). Center ice plus four end-zone dots — one to each side
+# of each goal, reusing the existing icing-race Z so the dots line up with the
+# hybrid-icing geometry.
+const CENTER_ICE_DOT: Vector2 = Vector2.ZERO
+const END_ZONE_FACEOFF_DOTS: Array[Vector2] = [
+	Vector2(-6.5,  ICING_FACEOFF_DOT_Z),  # team 0 defensive zone, left
+	Vector2( 6.5,  ICING_FACEOFF_DOT_Z),  # team 0 defensive zone, right
+	Vector2(-6.5, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, left
+	Vector2( 6.5, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, right
 ]
+
+# Per-team, per-slot XZ offsets from whichever dot is active. Team 0 stands on
+# the +Z side of the dot, team 1 on -Z (preserves team 0 = +Z half convention).
+# Indexed by [team_id][team_slot].
+const FACEOFF_OFFSETS: Array = [
+	[Vector2( 0.0,  1.5), Vector2(-5.0,  3.0), Vector2( 5.0,  3.0)],  # team 0
+	[Vector2( 0.0, -1.5), Vector2(-5.0, -3.0), Vector2( 5.0, -3.0)],  # team 1
+]
+
+# Returns the faceoff dot (center ice or end-zone) closest to the given XZ
+# point. Used to pick the spot where an out-of-play puck reconvenes.
+static func nearest_faceoff_dot(world_xz: Vector2) -> Vector2:
+	var best: Vector2 = CENTER_ICE_DOT
+	var best_d2: float = world_xz.distance_squared_to(CENTER_ICE_DOT)
+	for dot: Vector2 in END_ZONE_FACEOFF_DOTS:
+		var d2: float = world_xz.distance_squared_to(dot)
+		if d2 < best_d2:
+			best_d2 = d2
+			best = dot
+	return best
