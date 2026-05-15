@@ -352,10 +352,11 @@ func _draw_crease_arc(img: Image, cx: float, goal_y: float, toward_center: int, 
 			if dy < -aa:
 				continue
 			var alpha: float = 0.0
-			# Curved band of width `thickness` around arc_r. Hard-clip at the side
-			# cap (|dx| = half_w); the side stroke covers that interior boundary,
-			# so AA-fading it just produces a notch at the corner where curve meets line.
-			if abs(dx) <= half_w:
+			# Curved band of width `thickness` around arc_r. Extend the side cap by
+			# half_t so the band's outer edge reaches the stroke's outer edge at the
+			# corner (without the extension, those two outer terminations leave a
+			# diagonal gap and the corner shows a notch).
+			if abs(dx) <= half_w + half_t:
 				var dist: float = sqrt(dx * dx + dy * dy)
 				var band: float = half_t - abs(dist - arc_r)
 				var arc_inside: float = minf(band, dy)
