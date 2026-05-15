@@ -808,6 +808,14 @@ func _on_replay_event_received(host_ts: float, event: Dictionary) -> void:
 # The celebration itself is live gameplay; its frames don't belong in the
 # replay clip.
 func _is_celebration_phase() -> bool:
+	return is_in_goal_celebration()
+
+
+# Public phase query for controllers (the AIController uses this to drop
+# bot input during the celebration beat — bots coast on residual velocity
+# instead of trying to play during a stopped puck). Same value as the
+# internal _is_celebration_phase recorder gate.
+func is_in_goal_celebration() -> bool:
 	return _state_machine != null \
 			and _state_machine.current_phase == GamePhase.Phase.GOAL_CELEBRATION
 
