@@ -133,8 +133,8 @@ static func slot_anchor(
 #   DZONE     PRESSURE = closest to puck;  ANCHOR = closest to our net;  COVER = remaining
 #   OZONE     CARRIER fixed;  FINISHER = closest to opp net;  SUPPORT = remaining
 #   TRANS_DO  CARRIER fixed;  OUTLET = closest to opp net;  SUPPORT = remaining
-#   TRANS_OD  PRESSURE = closest to puck;  BACKCHECK = closest to OPP net (Sprinting Through);
-#             CONTAIN = remaining (the deep peer engages forward)
+#   TRANS_OD  BACKCHECK = closest to OPP net (Sprinting Through, gets first claim);
+#             PRESSURE = closest to puck of remaining;  CONTAIN = leftover
 #   NEUTRAL   CHASE = closest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
 # Sprinting Through is the 3v3 backcheck technique encoded in
@@ -192,14 +192,18 @@ static func assign(
 					Slot.COVER)
 
 		AIPossessionState.State.TRANS_OD:
-			# Sprinting Through: BACKCHECK criterion = closest to
-			# OPP net, so the up-ice peer gets the sprint-home role.
-			# The remaining peer (deeper toward our net) becomes
-			# CONTAIN and engages the play forward.
+			# Sprinting Through: BACKCHECK is the longest-sprint-home
+			# role, so it gets first claim on the up-ice peer even when
+			# that peer also happens to be closest to the puck (caught
+			# F1 in a turnover). Assigning BACKCHECK before PRESSURE
+			# guarantees the up-ice peer commits to the sprint home;
+			# PRESSURE then goes to whichever of the two remaining
+			# peers is closest to the puck, and CONTAIN takes the
+			# leftover deep peer who engages the play forward.
 			_assign_pair_then_remainder(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
-					Slot.PRESSURE, puck_pos,
 					Slot.BACKCHECK, opp_net,
+					Slot.PRESSURE, puck_pos,
 					Slot.CONTAIN)
 
 		AIPossessionState.State.OZONE:

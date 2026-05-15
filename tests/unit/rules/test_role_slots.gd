@@ -171,6 +171,31 @@ func test_assign_trans_od_backcheck_goes_to_highest_player() -> void:
 			"deep bot becomes CONTAIN (engages the play forward)")
 
 
+func test_assign_trans_od_backcheck_wins_when_caught_peer_is_also_closest_to_puck() -> void:
+	# The caught-F1 case: the up-ice peer happens to also be the
+	# closest to the puck (a forechecker who lost it right where they
+	# were pressing). BACKCHECK is assigned BEFORE PRESSURE so the
+	# caught peer commits to the sprint home — without the priority
+	# order, PRESSURE would grab them first and the actual longest-
+	# sprint role would fall to whichever remaining peer is least-deep.
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, -15.0)], # up-ice AND closest to puck → BACKCHECK
+			[110, 0, Vector3(0.0, 0.0, -5.0)],  # mid-ice
+			[120, 0, Vector3(0.0, 0.0, 10.0)],  # deep
+			[200, 1, Vector3(0.0, 0.0, -15.0)], # opp carrier at peer 100
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var assignments: Dictionary = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
+			_resolver(skaters), {})
+	assert_eq(assignments[100], AIRoleSlots.Slot.BACKCHECK,
+			"up-ice peer wins BACKCHECK even though they're also closest to puck")
+	assert_eq(assignments[110], AIRoleSlots.Slot.PRESSURE,
+			"PRESSURE picks from remaining peers — mid-ice is closer to puck than deep")
+	assert_eq(assignments[120], AIRoleSlots.Slot.CONTAIN,
+			"deep peer takes CONTAIN as the leftover")
+
+
 func test_assign_hysteresis_keeps_prev_when_close() -> void:
 	# Semantic assignment: PRESSURE = closest to puck, with
 	# HYSTERESIS_PENALTY_M (1.0 m) added to a contender's effective
