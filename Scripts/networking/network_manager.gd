@@ -94,6 +94,14 @@ signal spectator_demoted_received(peer_id: int)
 signal skip_replay_request_received(peer_id: int)
 signal skip_replay_vote_updated(current: int, total: int)
 
+# Replay-recorder events (shot, puck_pickup, puck_boards, body_check, etc.).
+# Host records each event into its own ring buffer AND broadcasts it so every
+# client / spectator mirrors the same event timeline. Without this clients'
+# in-memory clip would have only frames (no events), so their goal replays
+# would miss the adaptive clip-start logic, the shot-anchored slow-mo cut, the
+# behind-net cam's lateral offset, and the audio cue dispatch during playback.
+signal replay_event_received(host_ts: float, event: Dictionary)
+
 # Local player edited their identity (name / jersey number / handedness)
 # while a session is live (e.g. from the SideMenu's player card during free
 # play). GameManager listens and pushes the change to the local skater
@@ -725,6 +733,26 @@ func notify_skip_replay_vote_to_all(current: int, total: int) -> void:
 @rpc("authority", "reliable")
 func notify_skip_replay_vote(current: int, total: int) -> void:
 	skip_replay_vote_updated.emit(current, total)
+
+
+# Mirror a recorded replay event to every connected peer so client / spectator
+# recorders carry the same event timeline as the host (shot release, puck
+# pickups, body checks, audio cues). Called once per event from
+# GameManager._record_replay_audio_event right after the host's local
+# record_event(). Reliable because event timestamps drive replay-trim logic
+# and we'd rather a dropped event delay slightly than be lost.
+func notify_replay_event_to_all(host_ts: float, event: Dictionary) -> void:
+	if not is_host:
+		return
+	for peer_id in connected_peer_ids():
+		notify_replay_event.rpc_id(peer_id, host_ts, event)
+
+
+@rpc("authority", "reliable")
+func notify_replay_event(host_ts: float, event: Dictionary) -> void:
+	if is_host:
+		return  # authority RPCs are delivered only to remote peers; defense-in-depth
+	replay_event_received.emit(host_ts, event)
 
 
 func estimated_host_time() -> float:

@@ -186,6 +186,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.spectator_demoted_received.connect(_on_spectator_demoted_received)
 	NetworkManager.skip_replay_request_received.connect(_on_remote_skip_replay_request)
 	NetworkManager.skip_replay_vote_updated.connect(_on_remote_skip_replay_vote)
+	NetworkManager.replay_event_received.connect(_on_replay_event_received)
 	replay_started.connect(_on_local_replay_started)
 	replay_stopped.connect(_on_local_replay_stopped)
 
@@ -781,6 +782,22 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 		_recorder.record_event(ts, event)
 	if _replay_file_writer != null and _should_record_to_file():
 		_replay_file_writer.enqueue_event(ts, JSON.stringify(event).to_utf8_buffer())
+	# Mirror the event onto every client / spectator so their recorders see
+	# the same timeline. Required for the goal-replay cinematic to use the
+	# same shot anchor + adaptive clip start everywhere.
+	NetworkManager.notify_replay_event_to_all(ts, event)
+
+
+# Client / spectator side: host broadcast each event it recorded; we mirror
+# it into our local recorder so our goal-replay clip carries the same
+# timeline (shot anchor, pickup chain, audio cues). Same gates the host
+# applies to its own recording — skip while a cinematic is already playing.
+func _on_replay_event_received(host_ts: float, event: Dictionary) -> void:
+	if _recorder == null:
+		return
+	if NetworkManager.is_replay_mode():
+		return
+	_recorder.record_event(host_ts, event)
 
 
 func _record_body_check_replay_event(checker_peer_id: int, victim: Skater,
