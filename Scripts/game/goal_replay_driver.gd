@@ -128,16 +128,18 @@ func start(recorder: ReplayRecorder,
 	_hard_cam.snap_to_position()
 	_hard_cam.make_current()
 
-	# Inside-net cam parked behind the defending goal at goalie-shoulder height,
-	# peering back at the play. Wider FOV + lower lead than the hard cam because
-	# it's close to the action and only used during slow-mo. Skipped entirely
-	# if no defending goal was provided.
+	# Behind-the-net cam parked at the end boards, ~2.5 m up — looking back into
+	# the offensive zone with the goal frame as a foreground element. Wider FOV
+	# + lower lead than the hard cam because it's a close-quarters cinematic
+	# shot only used during slow-mo. Skipped entirely if no defending goal was
+	# provided. The 3.35 offset is `HockeyGoal.distance_from_end`, so the cam
+	# sits exactly at the end boards.
 	if _defending_goal_z != 0.0:
 		_inside_net_cam = SpectatorCamera.new()
 		add_child(_inside_net_cam)
 		_inside_net_cam.setup(puck_pos_getter)
 		var z_sign: float = signf(_defending_goal_z)
-		var booth: Vector3 = Vector3(0.0, 1.3, _defending_goal_z + z_sign * 1.5)
+		var booth: Vector3 = Vector3(0.0, 2.5, _defending_goal_z + z_sign * 3.35)
 		_inside_net_cam.set_booth(booth, 52.0, 0.15)
 		_inside_net_cam.snap_to_position()
 
