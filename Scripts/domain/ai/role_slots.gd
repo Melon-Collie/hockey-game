@@ -7,12 +7,21 @@ class_name AIRoleSlots
 # already in the right place gets the role, which means roles tend
 # to "stick" naturally as long as nothing geometric reshuffles.
 #
-# Phase 3 collapses the defensive role enums so DZONE and TRANS_OD
-# share {PRESSURE, ANCHOR, COVER}. The slot anchor for each branches
-# on the active possession state — same role name, position relative
-# to the threat geometry of the state. OZONE replaces OUTLET with
-# SUPPORT; OUTLET stays a TRANS_DO-only role. BACKDOOR was renamed
-# to FINISHER (more descriptive of the scoring-threat semantics).
+# DZONE uses {PRESSURE, ANCHOR, COVER}: classic in-zone defensive
+# triumvirate — pressurer on the carrier, net-front anchor, weak-
+# side cover. TRANS_OD uses {PRESSURE, BACKCHECK, CONTAIN}: the
+# same primary pressurer plus a Sprinting-Through pair — BACKCHECK
+# is the up-ice peer with the longest sprint home, CONTAIN is the
+# deeper peer who engages the puck forward instead of camping the
+# slot. The split is per-state because the two backline jobs are
+# genuinely different roles even though they sometimes look similar
+# from the outside; collapsing them onto ANCHOR/COVER made TRANS_OD
+# behavior misfire (deep peer camped the slot when they should have
+# been engaging forward).
+#
+# OZONE replaces OUTLET with SUPPORT; OUTLET stays a TRANS_DO-only
+# role. BACKDOOR was renamed to FINISHER (more descriptive of the
+# scoring-threat semantics).
 #
 # Mixed teams: humans are teammates and get slot assignments same as
 # bots. The brain doesn't distinguish — humans drive the structure,
@@ -22,14 +31,16 @@ enum Slot {
 	NONE,
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
-	# Defensive triumvirate — used in DZONE and TRANS_OD where an
-	# opp carries the puck. NEUTRAL has no carrier and uses CHASE
-	# / FLANK_L / FLANK_R below instead, since the role semantics
-	# differ (race to puck + hold support vs. pressure carrier +
-	# defend net + read pass).
-	PRESSURE,   # puck pressurer — closes the carrier.
-	ANCHOR,     # deep defender / net-front.
-	COVER,      # weak-side support / pass-interception read.
+	# Defensive: PRESSURE is shared across DZONE and TRANS_OD (close
+	# the carrier). ANCHOR + COVER are DZONE-only (net-front + weak-
+	# side cover). BACKCHECK + CONTAIN are TRANS_OD-only (sprint home
+	# + engage forward). NEUTRAL has no carrier and uses CHASE +
+	# FLANK_L + FLANK_R below.
+	PRESSURE,   # DZONE + TRANS_OD: puck pressurer, closes the carrier.
+	ANCHOR,     # DZONE: deep defender / net-front.
+	COVER,      # DZONE: weak-side support / pass-interception read.
+	BACKCHECK,  # TRANS_OD: up-ice peer sprinting home to the slot.
+	CONTAIN,    # TRANS_OD: deeper peer engaging the puck forward.
 	# Offensive roles.
 	FINISHER,   # OZONE: scoring threat near opp net. Roams the slot.
 	OUTLET,     # TRANS_DO: stretch-pass option at opp blue line.
@@ -80,7 +91,7 @@ static func slots_for_state(state: int) -> Array:
 		AIPossessionState.State.TRANS_DO:
 			return [Slot.CARRIER, Slot.OUTLET, Slot.SUPPORT]
 		AIPossessionState.State.TRANS_OD:
-			return [Slot.PRESSURE, Slot.ANCHOR, Slot.COVER]
+			return [Slot.PRESSURE, Slot.BACKCHECK, Slot.CONTAIN]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
@@ -122,16 +133,16 @@ static func slot_anchor(
 #   DZONE     PRESSURE = closest to puck;  ANCHOR = closest to our net;  COVER = remaining
 #   OZONE     CARRIER fixed;  FINISHER = closest to opp net;  SUPPORT = remaining
 #   TRANS_DO  CARRIER fixed;  OUTLET = closest to opp net;  SUPPORT = remaining
-#   TRANS_OD  PRESSURE = closest to puck;  ANCHOR = closest to OPP net (Sprinting Through);
-#             COVER = remaining (the deep peer engages forward)
+#   TRANS_OD  PRESSURE = closest to puck;  BACKCHECK = closest to OPP net (Sprinting Through);
+#             CONTAIN = remaining (the deep peer engages forward)
 #   NEUTRAL   CHASE = closest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
 # Sprinting Through is the 3v3 backcheck technique encoded in
-# TRANS_OD's ANCHOR criterion: the up-ice peer (closest to opp net)
-# is the one with the longest backcheck, so they get ANCHOR — their
-# positional target (near our net, set by the role behavior) pulls
-# them home. The deeper peer becomes COVER and engages the play
-# forward instead of camping the slot.
+# TRANS_OD's BACKCHECK criterion: the up-ice peer (closest to opp
+# net) has the longest sprint home so they get BACKCHECK — their
+# role behavior (search center at our slot) pulls them home. The
+# deeper peer becomes CONTAIN and engages the play forward instead
+# of camping the slot.
 #
 # Hysteresis: each closest-to-X query adds HYSTERESIS_PENALTY_M to
 # the effective distance for peers who didn't hold the slot last
@@ -181,15 +192,15 @@ static func assign(
 					Slot.COVER)
 
 		AIPossessionState.State.TRANS_OD:
-			# Sprinting Through: ANCHOR criterion = closest to OPP
-			# net, so the up-ice peer gets the deep-defender role
-			# and sprints home. The remaining peer (deeper toward
-			# our net) becomes COVER and engages the play forward.
+			# Sprinting Through: BACKCHECK criterion = closest to
+			# OPP net, so the up-ice peer gets the sprint-home role.
+			# The remaining peer (deeper toward our net) becomes
+			# CONTAIN and engages the play forward.
 			_assign_pair_then_remainder(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
 					Slot.PRESSURE, puck_pos,
-					Slot.ANCHOR, opp_net,
-					Slot.COVER)
+					Slot.BACKCHECK, opp_net,
+					Slot.CONTAIN)
 
 		AIPossessionState.State.OZONE:
 			_assign_one_then_remainder(

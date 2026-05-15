@@ -66,12 +66,14 @@ func test_slots_for_trans_do() -> void:
 
 
 func test_slots_for_trans_od() -> void:
-	# Phase 3: TRANS_OD now uses the same {PRESSURE, ANCHOR, COVER}
-	# triple as DZONE. Anchor formulas branch on state.
+	# TRANS_OD uses {PRESSURE, BACKCHECK, CONTAIN}: the same primary
+	# pressurer as DZONE plus a Sprinting-Through pair (up-ice peer
+	# backchecks, deeper peer engages forward) instead of the
+	# DZONE-only ANCHOR/COVER pair.
 	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.TRANS_OD)
 	assert_true(slots.has(AIRoleSlots.Slot.PRESSURE))
-	assert_true(slots.has(AIRoleSlots.Slot.ANCHOR))
-	assert_true(slots.has(AIRoleSlots.Slot.COVER))
+	assert_true(slots.has(AIRoleSlots.Slot.BACKCHECK))
+	assert_true(slots.has(AIRoleSlots.Slot.CONTAIN))
 
 
 func test_slots_for_neutral() -> void:
@@ -146,27 +148,27 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 	assert_eq(assignments[120], AIRoleSlots.Slot.SUPPORT, "deep bot becomes SUPPORT")
 
 
-func test_assign_trans_od_anchor_goes_to_highest_player() -> void:
-	# Sprinting Through (3v3 backcheck technique): TRANS_OD's ANCHOR
-	# criterion is closest-to-opp-net, so the up-ice peer gets the
-	# deep-defender role and sprints home. The peer who was "stuck
-	# at the slot doing nothing" becomes COVER and engages forward.
+func test_assign_trans_od_backcheck_goes_to_highest_player() -> void:
+	# Sprinting Through (3v3 backcheck technique): TRANS_OD's
+	# BACKCHECK criterion is closest-to-opp-net, so the up-ice peer
+	# gets the sprint-home role. The deeper peer becomes CONTAIN
+	# and engages the play forward.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -10.0)], # up-ice (caught) → ANCHOR
+			[100, 0, Vector3(0.0, 0.0, -10.0)], # up-ice (caught) → BACKCHECK
 			[110, 0, Vector3(0.0, 0.0, 1.5)],   # near puck → PRESSURE
-			[120, 0, Vector3(0.0, 0.0, 21.0)],  # deep → COVER
+			[120, 0, Vector3(0.0, 0.0, 21.0)],  # deep → CONTAIN
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	assert_eq(assignments[100], AIRoleSlots.Slot.ANCHOR,
-			"highest-up-ice bot becomes ANCHOR (constantly backchecking)")
+	assert_eq(assignments[100], AIRoleSlots.Slot.BACKCHECK,
+			"highest-up-ice bot becomes BACKCHECK (longest sprint home)")
 	assert_eq(assignments[110], AIRoleSlots.Slot.PRESSURE,
 			"closer-to-puck of remaining becomes PRESSURE")
-	assert_eq(assignments[120], AIRoleSlots.Slot.COVER,
-			"deep bot becomes COVER (engages play via back-of-puck anchor)")
+	assert_eq(assignments[120], AIRoleSlots.Slot.CONTAIN,
+			"deep bot becomes CONTAIN (engages the play forward)")
 
 
 func test_assign_hysteresis_keeps_prev_when_close() -> void:

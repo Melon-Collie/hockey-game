@@ -1,9 +1,12 @@
 class_name AIRoleCover
 
-# COVER role behavior — DZONE + TRANS_OD weak-side support /
+# COVER role behavior — DZONE only. Weak-side support /
 # pass-interception read. The third defender. Job: position to
 # break the highest-threat pass the carrier could make to a
 # teammate.
+#
+# TRANS_OD uses CONTAIN instead — the deeper TRANS_OD peer
+# engages the puck forward rather than camping the slot weak-side.
 #
 # Inverse scoring on pass threats. PRESSURE evaluates the carrier's
 # shot AND pass options at close range; ANCHOR evaluates every
@@ -25,10 +28,10 @@ class_name AIRoleCover
 # and onto receivers when no direct scoring pass exists.
 #
 # Search center: midpoint between puck and our net, shifted
-# weak-side (opposite the puck's X). Pure in-game refs —
-# midpoint naturally interpolates between DZONE (close to our
-# net) and TRANS_OD (NZ-ish) without a state branch. The weak-
-# side shift puts COVER on the back-side of the play.
+# weak-side (opposite the puck's X). In DZONE the puck is on our
+# side so this midpoint sits in front of the slot, and the weak-
+# side shift puts COVER on the back-side of the play — exactly
+# where the third defender belongs.
 #
 # No goal-side filter — the search center is by construction
 # between puck and our net, so polar samples are mostly in legal
@@ -63,8 +66,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var our_team_excluding_self: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
 
 	# Search center: midpoint between puck and our net, shifted
-	# weak-side. Pure in-game refs — no state branching needed,
-	# the midpoint position naturally varies across DZONE / TRANS_OD.
+	# weak-side. Lives in the slot vicinity in DZONE.
 	var midpoint: Vector3 = (carrier_pos + our_net) * 0.5
 	var weak_x_sign: float = (-signf(carrier_pos.x)
 			if absf(carrier_pos.x) > 0.001 else 1.0)

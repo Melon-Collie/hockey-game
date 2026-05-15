@@ -1,6 +1,6 @@
 extends GutTest
 
-# AIRoleCover — DZONE + TRANS_OD weak-side support /
+# AIRoleCover — DZONE-only weak-side support /
 # pass-interception read. Tests cover:
 #   - Bail-outs (no carrier, no opp teammates).
 #   - Argmax positions between puck and our net (back-of-play).
@@ -57,8 +57,8 @@ func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 
 func test_falls_back_to_self_pos_when_no_carrier() -> void:
 	# Loose puck — COVER has no carrier to read. NEUTRAL play uses
-	# CHASE/FLANK; an in-flight pass moment in DZONE/TRANS_OD
-	# resolves within a frame via the brain's event-driven re-tick.
+	# CHASE/FLANK; an in-flight pass moment in DZONE resolves within
+	# a frame via the brain's event-driven re-tick.
 	var self_pos := Vector3(-3, 0, 18)
 	var ctx: RoleContext = _make_ctx(self_pos)
 	var d: RoleDecision = AIRoleCover.decide(ctx)

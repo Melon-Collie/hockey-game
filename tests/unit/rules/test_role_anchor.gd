@@ -1,7 +1,7 @@
 extends GutTest
 
-# AIRoleAnchor — DZONE + TRANS_OD net-front / deep defender. Tests
-# cover:
+# AIRoleAnchor — DZONE-only net-front / deep defender (TRANS_OD
+# uses BACKCHECK + CONTAIN instead). Tests cover:
 #   - Bail-out (no opps).
 #   - Argmax positions in slot area (close to our net).
 #   - Lane-blocking: with a single opp shooter, ANCHOR positions
@@ -141,37 +141,3 @@ func test_argmax_shades_toward_dominant_threat() -> void:
 			"adding on-axis carrier should shade ANCHOR toward center; got both=%s off-only=%s" % [both_target, off_only_target])
 
 
-# ── Search center moves with the puck (TRANS_OD aggression) ─────────────────
-
-func test_search_center_pushes_up_in_trans_od() -> void:
-	# TRANS_OD: opp carrier in the NZ at (0, 0, 0). ANCHOR's search
-	# center = midpoint(puck, our_net) = (0, 0, 13.3) — at our blue
-	# line, well NZ-side of slot. Compared with a deep DZ scenario
-	# (carrier at z=22, midpoint z=24.3), ANCHOR's chosen target is
-	# meaningfully further from our net.
-	#
-	# Tests the "defenders should push up when the puck is up the
-	# ice" behavior — without this, ANCHOR sits passively at slot
-	# regardless of where the play is.
-	var nz_carrier := Vector3(0, 0, 0)
-	var nz_skaters: Array = [
-		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
-		[200, 1 - TEAM_ID, nz_carrier, Vector3.ZERO],
-	]
-	var nz_ctx: RoleContext = _make_ctx(Vector3(0, 0, 18), nz_skaters, 200)
-	var nz_target: Vector3 = AIRoleAnchor.decide(nz_ctx).target_position
-
-	var dz_carrier := Vector3(0, 0, 22)
-	var dz_skaters: Array = [
-		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
-		[200, 1 - TEAM_ID, dz_carrier, Vector3.ZERO],
-	]
-	var dz_ctx: RoleContext = _make_ctx(Vector3(0, 0, 18), dz_skaters, 200)
-	var dz_target: Vector3 = AIRoleAnchor.decide(dz_ctx).target_position
-
-	# DZ target sits closer to our net (higher z for Team 0 defending +Z);
-	# NZ target sits further from our net (lower z).
-	assert_lt(nz_target.z, dz_target.z,
-			"NZ-puck ANCHOR pushes up; DZ-puck ANCHOR sits back. Got NZ=%s DZ=%s" % [nz_target, dz_target])
-	assert_lt(nz_target.z, OUR_NET_Z - GameRules.SLOT_DIST_M,
-			"NZ-puck ANCHOR target is past slot, toward NZ; got z=%f" % nz_target.z)

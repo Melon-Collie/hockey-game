@@ -1,8 +1,12 @@
 class_name AIRoleAnchor
 
-# ANCHOR role behavior — DZONE + TRANS_OD. Net-front / deep
-# defender. Job: defend the slot area and minimize the highest-
-# threat shot any opp could take at our net.
+# ANCHOR role behavior — DZONE only. Net-front / deep defender.
+# Job: defend the slot area and minimize the highest-threat shot
+# any opp could take at our net.
+#
+# TRANS_OD uses BACKCHECK + CONTAIN instead of ANCHOR + COVER — the
+# Sprinting-Through pair is genuinely different work (sprint home
+# vs. engage forward) and lives in separate role files.
 #
 # Inverse scoring on shot threats. PRESSURE evaluates only the
 # carrier; ANCHOR evaluates every opp (carrier + their teammates)
@@ -21,13 +25,11 @@ class_name AIRoleAnchor
 # opp's pressure cone instead of sitting flat at slot. The minimax
 # over the threat set gives ANCHOR's best block position.
 #
-# Search center: midpoint between the puck and our net. Mirrors
-# COVER's pattern. Pure in-game refs — the search region naturally
-# moves up the ice with the puck so ANCHOR pushes forward in
-# TRANS_OD (puck in NZ → midpoint at our blue line) and tightens to
-# slot in DZONE (puck deep → midpoint near net). This delivers the
-# "defenders should not just sit in front of net" intent without
-# any heuristic blend or behavioral knob.
+# Search center: midpoint between the puck and our net. In DZONE
+# the puck is by definition on our side, so this midpoint lands in
+# the slot area — exactly where a net-front defender belongs. The
+# 3 m polar samples give the argmax lateral range to shade toward
+# the dominant threat (strong-side shot lane vs back-door receiver).
 #
 # Polar samples around this center cover the slot/lane region near
 # the dominant threat. The argmax shifts laterally toward whichever
