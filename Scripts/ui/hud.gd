@@ -37,6 +37,8 @@ var _confirm_callback: Callable = Callable()
 var _rematch_votes: Dictionary[int, bool] = {}
 var _local_voted: bool = false
 var _replay_label: Label = null
+var _skip_vote_current: int = 0
+var _skip_vote_total: int = 0
 var _spectator_banner: PanelContainer = null
 var _spectator_wrapper: Control = null
 
@@ -98,10 +100,18 @@ func _ready() -> void:
 	GameManager.local_player_hit.connect(_on_local_player_hit)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
+	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
 	GameManager.local_spectator_state_changed.connect(func(_is_spec: bool) -> void: _apply_spectator_chrome())
 	_apply_spectator_chrome()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed(&"skip_replay"):
+		# Gate on the replay-label visibility so the (Space-shared) brake key
+		# never accidentally fires a vote outside of the cinematic window.
+		if _replay_label != null and _replay_label.visible:
+			GameManager.request_local_skip_vote()
+			get_viewport().set_input_as_handled()
+		return
 	if not event.is_action_pressed(&"ui_cancel"):
 		return
 	if _game_over_popup.visible:
@@ -301,7 +311,7 @@ func _build_phase_banner() -> void:
 	_assist_label.visible = false
 	vbox.add_child(_assist_label)
 
-	_replay_label = _lbl("◀  REPLAY  ▶", 16, _DIM)
+	_replay_label = _lbl("REPLAY — [SPACE] TO SKIP", 16, _DIM)
 	_replay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_replay_label.visible = false
 	vbox.add_child(_replay_label)
@@ -565,6 +575,10 @@ func _on_replay_started() -> void:
 	_assist_tag_label.visible = not _assist_label.text.is_empty()
 	_assist_label.visible = not _assist_label.text.is_empty()
 	_phase_wrapper.visible = true
+	# Vote counters are reset in _on_replay_stopped from the previous clip;
+	# we don't clear them here because GameManager's host-side broadcast of
+	# (0, total) may run before this listener and we'd clobber the count.
+	_refresh_replay_label_text()
 	if _replay_label != null:
 		_replay_label.visible = true
 
@@ -572,6 +586,22 @@ func _on_replay_stopped() -> void:
 	_phase_wrapper.visible = false
 	if _replay_label != null:
 		_replay_label.visible = false
+	_skip_vote_current = 0
+	_skip_vote_total = 0
+
+func _on_skip_replay_vote_updated(current: int, total: int) -> void:
+	_skip_vote_current = current
+	_skip_vote_total = total
+	_refresh_replay_label_text()
+
+func _refresh_replay_label_text() -> void:
+	if _replay_label == null:
+		return
+	if _skip_vote_total <= 1:
+		# Solo session — no tally, the single press just skips.
+		_replay_label.text = "REPLAY — [SPACE] TO SKIP"
+	else:
+		_replay_label.text = "REPLAY — [SPACE] TO SKIP  (%d/%d)" % [_skip_vote_current, _skip_vote_total]
 
 func _on_phase_changed(new_phase: int) -> void:
 	match new_phase:

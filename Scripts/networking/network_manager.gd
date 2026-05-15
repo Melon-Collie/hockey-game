@@ -87,6 +87,13 @@ signal input_batch_received(peer_id: int, inputs: Array[InputState])
 # broadcast.
 signal spectator_demoted_received(peer_id: int)
 
+# Vote-to-skip goal replay (Rocket-League style). Clients send their vote via
+# request_skip_replay; host counts and broadcasts the running tally back to
+# everyone. Drivers tear down when current == total. Bots never have an ENet
+# connection so they're not in the voter total; spectators are.
+signal skip_replay_request_received(peer_id: int)
+signal skip_replay_vote_updated(current: int, total: int)
+
 # Local player edited their identity (name / jersey number / handedness)
 # while a session is live (e.g. from the SideMenu's player card during free
 # play). GameManager listens and pushes the change to the local skater
@@ -688,6 +695,36 @@ func set_replay_clock(t: float) -> void:
 
 func is_replay_mode() -> bool:
 	return _replay_mode
+
+
+# Client → host: register one vote-to-skip for the current goal replay.
+# Offline / host calls register the vote locally; no RPC needed there.
+func send_skip_replay_request() -> void:
+	if is_host:
+		return
+	receive_skip_replay_request.rpc_id(1)
+
+
+@rpc("any_peer", "reliable")
+func receive_skip_replay_request() -> void:
+	if not is_host:
+		return
+	skip_replay_request_received.emit(multiplayer.get_remote_sender_id())
+
+
+# Host → all clients: latest unanimous-skip tally. Sent on every accepted vote
+# so the HUD prompt can show "(2/3)" → "(3/3)" live; clients also use the
+# final (current == total) update as their cue to stop the local driver.
+func notify_skip_replay_vote_to_all(current: int, total: int) -> void:
+	if not is_host:
+		return
+	for peer_id in connected_peer_ids():
+		notify_skip_replay_vote.rpc_id(peer_id, current, total)
+
+
+@rpc("authority", "reliable")
+func notify_skip_replay_vote(current: int, total: int) -> void:
+	skip_replay_vote_updated.emit(current, total)
 
 
 func estimated_host_time() -> float:
