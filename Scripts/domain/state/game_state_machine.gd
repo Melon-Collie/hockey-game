@@ -367,6 +367,9 @@ func apply_remote_goal(scoring_team_id: int, score0: int, score1: int) -> void:
 func is_movement_locked() -> bool:
 	return PhaseRules.is_movement_locked(current_phase)
 
+func allows_blade_aim_during_lock() -> bool:
+	return PhaseRules.allows_blade_aim_during_lock(current_phase)
+
 # Returns { peer_id: Vector3 } — each player's faceoff position derived from
 # their slot/team around the active dot. PlayerRules.faceoff_position is the
 # single source of truth; we hold no cached positions ourselves.

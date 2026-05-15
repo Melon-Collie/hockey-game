@@ -100,11 +100,37 @@ func _physics_process(delta: float) -> void:
 		var new_offset: Vector3 = skater.visual_offset * (1.0 - _RECONCILE_VISUAL_ALPHA)
 		skater.visual_offset = new_offset if new_offset.length_squared() > 0.000001 else Vector3.ZERO
 	if _game_state.is_movement_locked():
-		# Dead-puck phase: kill velocity and drain history every frame so that
-		# move_and_slide() can't drift the skater, and reconcile can't replay stale
-		# inputs when the phase lifts — regardless of packet timing.
 		skater.velocity = Vector3.ZERO
-		_input_history.clear()
+		if _game_state.allows_blade_aim_during_lock() and _gatherer != null:
+			# FACEOFF_PREP: keep the stick alive so centers can pre-angle the draw
+			# during the countdown. We neutralize move_vector and the shot flags
+			# so the input that flows to the host (and the same frames in our
+			# reconcile history) can't smuggle locomotion or a shot trigger into
+			# the live phase the instant the freeze lifts. Blade IK is the only
+			# side effect — _process_input and the state machine stay skipped.
+			var gathered: InputState = _gatherer.gather()
+			gathered.delta = delta
+			if NetworkManager.is_clock_ready():
+				gathered.host_timestamp = NetworkManager.estimated_input_stamp_time()
+			gathered.move_vector = Vector2.ZERO
+			gathered.shoot_pressed = false
+			gathered.shoot_held = false
+			gathered.slap_pressed = false
+			gathered.slap_held = false
+			gathered.brake = false
+			gathered.elevation_up = false
+			gathered.elevation_down = false
+			gathered.block_held = false
+			_current_input = gathered
+			_input_history.append(_current_input)
+			var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+			if _input_history.size() > rtt_cap:
+				_input_history.pop_front()
+			_ik.apply_blade_from_mouse(_current_input, delta)
+		else:
+			# Dead-puck phase with sticks frozen too — drain history so reconcile
+			# can't replay stale inputs once the phase lifts.
+			_input_history.clear()
 		return
 	# When input is blocked (menu open) the gatherer returns a neutral
 	# InputState — zero movement, no held buttons. We still run the full

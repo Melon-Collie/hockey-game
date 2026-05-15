@@ -2170,6 +2170,12 @@ func is_movement_locked() -> bool:
 	return _state_machine.is_movement_locked()
 
 
+func allows_blade_aim_during_lock() -> bool:
+	if _state_machine == null:
+		return false
+	return _state_machine.allows_blade_aim_during_lock()
+
+
 func is_input_blocked() -> bool:
 	return _input_blocked
 
