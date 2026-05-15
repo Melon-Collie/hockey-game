@@ -15,9 +15,13 @@ static func assign_team(team0_count: int, team1_count: int) -> int:
 		return 1
 	return randi() % 2
 
-# Looks up the faceoff start position for a team and within-team slot.
-static func faceoff_position(team_id: int, team_slot: int) -> Vector3:
-	return GameRules.CENTER_FACEOFF_POSITIONS[team_id][team_slot]
+# Computes the faceoff start position for a team and within-team slot around
+# the given dot. Defaults to center ice when no dot is supplied — covers
+# default-arg callers (tests, tutorial) without forcing them to know the dot.
+static func faceoff_position(team_id: int, team_slot: int,
+		dot_xz: Vector2 = GameRules.CENTER_ICE_DOT) -> Vector3:
+	var off: Vector2 = GameRules.FACEOFF_OFFSETS[team_id][team_slot]
+	return Vector3(dot_xz.x + off.x, GameRules.FACEOFF_SPAWN_HEIGHT, dot_xz.y + off.y)
 
 
 # Facing each team should adopt on a faceoff teleport. Team 0 starts on the

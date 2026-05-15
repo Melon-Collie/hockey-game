@@ -38,6 +38,10 @@ signal skip_replay_vote_updated(current: int, total: int)
 # polling. Only ever fires once per session right now (lobby → game transition);
 # mid-game player ↔ spectator swap is deferred.
 signal local_spectator_state_changed(is_spectator: bool)
+# Emitted on every peer the moment an out-of-play puck is confirmed (after the
+# grace window). HUD listens to flash the "PUCK OUT OF PLAY" toast; the
+# FACEOFF_PREP phase change drives the countdown banner separately.
+signal puck_out_of_play()
 
 # ── Domain state ──────────────────────────────────────────────────────────────
 var _state_machine: GameStateMachine = null
@@ -168,6 +172,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.one_timer_release_received.connect(on_remote_one_timer_release)
 	NetworkManager.carrier_puck_dropped.connect(on_carrier_puck_dropped)
 	NetworkManager.goal_received.connect(_on_goal_received)
+	NetworkManager.puck_out_of_play_received.connect(_on_puck_out_of_play_received)
 	NetworkManager.faceoff_positions_received.connect(_on_faceoff_positions_received)
 	NetworkManager.game_reset_received.connect(on_game_reset)
 	NetworkManager.stats_received.connect(_on_stats_received)
@@ -256,9 +261,15 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	var clamped := GameRules.clamp_to_rink_inner(pos2d)
 	if pos2d.distance_to(clamped) > 0.2:
 		_puck_oob_timer += delta
-		if _puck_oob_timer >= GameRules.PUCK_OOB_FACEOFF_TIMEOUT:
+		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
-			_state_machine.begin_faceoff_prep()
+			# Use the boundary projection — how far past the boards the puck
+			# travelled shouldn't sway dot selection.
+			var dot: Vector2 = GameRules.nearest_faceoff_dot(clamped)
+			puck_out_of_play.emit()
+			NetworkManager.notify_puck_out_of_play_to_all()
+			SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+			_state_machine.begin_faceoff_prep(dot)
 			_phase_coord.handle_phase_entered()
 	else:
 		_puck_oob_timer = 0.0
@@ -1568,6 +1579,14 @@ func _on_goal_received(scoring_team_id: int, score0: int, score1: int,
 func _on_faceoff_positions_received(positions: Array) -> void:
 	if _phase_coord != null:
 		_phase_coord.on_faceoff_positions(positions)
+
+
+func _on_puck_out_of_play_received() -> void:
+	# Client-side mirror of the host's OOB-confirmed moment. The FACEOFF_PREP
+	# phase change still arrives via world state; this just lights up the
+	# whistle + toast for clients at the same beat the host plays them.
+	puck_out_of_play.emit()
+	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
 
 
 # ── Input batches from peers (host only) ─────────────────────────────────────

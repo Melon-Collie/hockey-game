@@ -332,6 +332,35 @@ func test_faceoff_positions_per_player_slot() -> void:
 	assert_eq(positions[100],
 			PlayerRules.faceoff_position(peer_assignment.team_id, peer_assignment.team_slot))
 
+func test_active_faceoff_dot_defaults_to_center() -> void:
+	assert_eq(sm.active_faceoff_dot, GameRules.CENTER_ICE_DOT)
+
+func test_begin_faceoff_prep_stores_dot() -> void:
+	var dot := Vector2(6.5, -22.1)
+	sm.begin_faceoff_prep(dot)
+	assert_eq(sm.active_faceoff_dot, dot)
+
+func test_advance_post_goal_resets_dot_to_center() -> void:
+	sm.active_faceoff_dot = Vector2(6.5, 22.1)
+	sm.on_goal_scored(1)            # → GOAL_SCORED
+	sm.advance_post_goal()          # → FACEOFF_PREP
+	assert_eq(sm.active_faceoff_dot, GameRules.CENTER_ICE_DOT)
+
+func test_period_advance_resets_dot_to_center() -> void:
+	sm.active_faceoff_dot = Vector2(-6.5, 22.1)
+	sm.tick(GameRules.PERIOD_DURATION + 0.01)        # → END_OF_PERIOD
+	sm.tick(GameRules.END_OF_PERIOD_PAUSE + 0.01)    # → FACEOFF_PREP
+	assert_eq(sm.active_faceoff_dot, GameRules.CENTER_ICE_DOT)
+
+func test_get_faceoff_positions_uses_active_dot() -> void:
+	sm.register_host(1)
+	var dot := Vector2(6.5, 22.1)
+	sm.begin_faceoff_prep(dot)
+	var positions: Dictionary = sm.get_faceoff_positions()
+	var slot: Dictionary = sm.players[1]
+	assert_eq(positions[1],
+			PlayerRules.faceoff_position(slot.team_id, slot.team_slot, dot))
+
 # ── Period / clock ───────────────────────────────────────────────────────────
 
 func test_period_clock_expires_to_end_of_period() -> void:

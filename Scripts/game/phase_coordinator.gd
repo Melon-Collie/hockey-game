@@ -137,15 +137,17 @@ func handle_phase_entered() -> void:
 
 
 func _enter_faceoff_prep(puck: Puck) -> void:
+	var dot: Vector2 = _state_machine.active_faceoff_dot
 	if puck != null:
-		puck.reset()
+		puck.reset(dot)
 		puck.pickup_locked = true
 	for gc: GoalieController in _goalie_controllers_getter.call():
 		gc.reset_to_crease()
 	var positions: Array = []
 	for peer_id: int in _registry.all():
 		var record: PlayerRecord = _registry.get_record(peer_id)
-		var pos: Vector3 = PlayerRules.faceoff_position(record.team.team_id, record.team_slot)
+		var pos: Vector3 = PlayerRules.faceoff_position(
+				record.team.team_id, record.team_slot, dot)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
 		record.controller.teleport_to(pos, facing)
 		positions.append_array([peer_id, pos.x, pos.y, pos.z])
