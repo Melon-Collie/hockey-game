@@ -292,7 +292,11 @@ var _team_id: int = 0
 var _own_goal_dir: float = 1.0
 var _attacking_goal_pos: Vector3 = Vector3.ZERO
 var _team_brain: TeamBrain = null
-var _team_id_resolver: Callable = Callable()
+# Live peer -> team_id dict owned by PlayerRegistry. Read via
+# `_team_id_by_peer.get(pid, -1)` in hot loops (lane filters,
+# closest-teammate checks). Used to be a Callable; the
+# Callable.call overhead showed up at the dispatch rate.
+var _team_id_by_peer: Dictionary = {}
 # Handedness drives the wrister wind-up side: RH winds up on the +X
 # (player-local) side of the aim line, LH on -X. Without this, every
 # bot wrister would register as a backhand half the time and lose
@@ -446,7 +450,7 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
-func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
+func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
 		is_left_handed: bool) -> void:
 	if brain == null:
 		push_error("SkaterAgentStateMachine.setup: null TeamBrain for peer_id=%d team_id=%d — bot was spawned before GameManager.team_brains was populated. Bot will run without role assignments." % [peer_id, team_id])
@@ -457,7 +461,7 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
 	# the net plane for shot-aim geometry. y=0 — blade IK is 2D for now.
 	_attacking_goal_pos = Vector3(0.0, 0.0, -_own_goal_dir * GameRules.GOAL_LINE_Z)
 	_team_brain = brain
-	_team_id_resolver = resolver
+	_team_id_by_peer = team_id_by_peer
 	_is_left_handed = is_left_handed
 	# Seed the per-bot RNG. peer_id × prime spreads the bot id range
 	# (10000+) across the seed space; XOR with NetworkManager.host_tick
@@ -692,7 +696,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
 	ctx.own_goal_dir = _own_goal_dir
 	ctx.team_brain = _team_brain
-	ctx.team_id_resolver = _team_id_resolver
+	ctx.team_id_by_peer = _team_id_by_peer
 	if _team_brain != null:
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
@@ -1135,7 +1139,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		for peer_id: int in snapshot.skater_states:
 			if peer_id == _peer_id:
 				continue
-			if int(_team_id_resolver.call(peer_id)) == _team_id:
+			if _team_id_by_peer.get(peer_id, -1) == _team_id:
 				continue
 			var opp_pos: Vector3 = snapshot.skater_states[peer_id].position
 			var rel_x: float = opp_pos.x - self_pos.x
@@ -1366,7 +1370,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
-		if int(_team_id_resolver.call(peer_id)) == _team_id:
+		if _team_id_by_peer.get(peer_id, -1) == _team_id:
 			_scratch_teammates.append(snapshot.skater_states[peer_id].position)
 		else:
 			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
@@ -1379,7 +1383,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	var lane_end: Vector3 = Vector3.ZERO
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 	if carrier != -1 and carrier != _peer_id:
-		if int(_team_id_resolver.call(carrier)) == _team_id:
+		if _team_id_by_peer.get(carrier, -1) == _team_id:
 			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier)
 			if carrier_state != null:
 				# Lead the carrier — the lane we want to clear is where
@@ -1525,7 +1529,7 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
-		if int(_team_id_resolver.call(peer_id)) == _team_id:
+		if _team_id_by_peer.get(peer_id, -1) == _team_id:
 			continue
 		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		var to_opp: Vector3 = opp_state.position - self_pos
@@ -1694,7 +1698,7 @@ func _opponent_within_forward(snapshot: WorldSnapshot, self_pos: Vector3,
 		fwd_z = forward_dir.z / fl
 	var r2: float = radius * radius
 	for peer_id: int in snapshot.skater_states:
-		if int(_team_id_resolver.call(peer_id)) == _team_id:
+		if _team_id_by_peer.get(peer_id, -1) == _team_id:
 			continue
 		var pos: Vector3 = snapshot.skater_states[peer_id].position
 		var dx: float = pos.x - self_pos.x
@@ -1811,7 +1815,7 @@ func _teammate_has_puck(snapshot: WorldSnapshot) -> bool:
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 	if carrier == -1 or carrier == _peer_id:
 		return false
-	return int(_team_id_resolver.call(carrier)) == _team_id
+	return _team_id_by_peer.get(carrier, -1) == _team_id
 
 
 # Where to drop into when the puck is lost mid-on-puck-state. The
@@ -1851,7 +1855,7 @@ func _is_closest_teammate_to_puck_at(snapshot: WorldSnapshot, self_pos: Vector3)
 	for pid: int in snapshot.skater_states:
 		if pid == _peer_id:
 			continue
-		if int(_team_id_resolver.call(pid)) != _team_id:
+		if _team_id_by_peer.get(pid, -1) != _team_id:
 			continue
 		var pos: Vector3 = snapshot.skater_states[pid].position
 		var ox: float = pos.x - puck_pos.x

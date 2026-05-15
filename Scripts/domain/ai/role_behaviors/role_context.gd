@@ -23,5 +23,10 @@ var own_goal_dir: float = 1.0
 var anchor: Vector3 = Vector3.ZERO
 # TeamBrain reference for queries like get_slot(other_peer_id).
 var team_brain: TeamBrain = null
-# Resolves peer_id -> team_id for opponent / teammate filtering.
-var team_id_resolver: Callable = Callable()
+# Peer -> team_id lookup for opponent / teammate filtering. Live dict
+# owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. Used to
+# be a `Callable`; downgraded to a Dictionary because role decide() and
+# its helpers iterate skaters at AI dispatch rate and the Callable.call
+# overhead showed up in profiles. Empty dict = nothing resolves (the
+# decide() helpers all default to -1 unknown).
+var team_id_by_peer: Dictionary = {}

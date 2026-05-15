@@ -25,6 +25,14 @@ signal player_joined(name: String, team_color: Color)
 signal player_left(name: String, team_color: Color)
 
 var _players: Dictionary[int, PlayerRecord] = {}
+# Hot-path lookup tables that mirror `_players[peer_id].team.team_id`,
+# maintained alongside `_players` on every spawn / remove / slot-swap.
+# AI dispatch and PuckController.poke_check both iterate skaters and
+# need O(1) team lookups; the original Callable-resolver pattern paid
+# Callable.call overhead in tight loops. Read live by reference —
+# consumers receive these once at setup and observe mutations directly.
+var team_id_by_peer: Dictionary[int, int] = {}
+var team_id_by_skater: Dictionary = {}    # Skater object -> team_id
 var _spawner: ActorSpawner = null
 var _state_machine: GameStateMachine = null
 var _teams: Array[Team] = []
@@ -118,6 +126,8 @@ func spawn(
 	# default to Vector2.DOWN (+Z) which leaves team 0 spawning backwards.
 	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
+	team_id_by_peer[peer_id] = team.team_id
+	team_id_by_skater[spawned.skater] = team.team_id
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
@@ -174,9 +184,7 @@ func spawn_bot(
 	# by team_id). We're host here (only host runs spawn_bot), so the array
 	# is populated by the time this fires.
 	var brain: TeamBrain = GameManager.team_brains[team.team_id] if team.team_id < GameManager.team_brains.size() else null
-	var resolver := func(pid: int) -> int:
-		return resolve_team_id_for_peer(pid)
-	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, resolver, record.is_left_handed)
+	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, team_id_by_peer, record.is_left_handed)
 	# Same resolver-based team lookup as spawn() — see comment there.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(record.player_name)
@@ -185,6 +193,8 @@ func spawn_bot(
 	# Same initial-facing fix as spawn() — see comment there.
 	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
+	team_id_by_peer[peer_id] = team.team_id
+	team_id_by_skater[spawned.skater] = team.team_id
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
@@ -203,6 +213,9 @@ func remove(peer_id: int) -> PlayerRecord:
 	player_left.emit(record.display_name(), TeamColorRegistry.get_colors(record.team.color_id, record.team.team_id).primary)
 	player_removed.emit(record)
 	_players.erase(peer_id)
+	team_id_by_peer.erase(peer_id)
+	if record.skater != null:
+		team_id_by_skater.erase(record.skater)
 	if _state_machine != null:
 		_state_machine.on_player_disconnected(peer_id)
 	if record.controller:
@@ -303,3 +316,5 @@ func get_slot_roster() -> Array[Dictionary]:
 
 func clear_state() -> void:
 	_players.clear()
+	team_id_by_peer.clear()
+	team_id_by_skater.clear()

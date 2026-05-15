@@ -31,15 +31,15 @@ const NEUTRAL_PUCK_SPEED_M_S: float = 1.0
 # `team_id` is the team this brain represents (0 or 1).
 # `own_goal_z` is the z-coordinate of this team's defended net (+ for
 # team 0, − for team 1).
-# `team_id_resolver` is `func(peer_id: int) -> int` — same callable the
-# brain already holds.
+# `team_id_by_peer` is `Dictionary[int, int]` mapping peer_id -> team_id;
+# unknown peers should resolve to -1 (`dict.get(pid, -1)`).
 # `prev_carrier_team` is the last-known team in possession, used for
 # sticky loose-puck handling. Pass -1 if unknown.
 static func compute(
 		snapshot: WorldSnapshot,
 		team_id: int,
 		own_goal_z: float,
-		team_id_resolver: Callable,
+		team_id_by_peer: Dictionary,
 		prev_carrier_team: int) -> Array:
 	if snapshot == null or snapshot.puck_state == null:
 		# Degenerate — no puck info. Default to NEUTRAL.
@@ -49,7 +49,7 @@ static func compute(
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 	var carrier_team: int = prev_carrier_team
 	if carrier != -1:
-		carrier_team = int(team_id_resolver.call(carrier))
+		carrier_team = team_id_by_peer.get(carrier, -1)
 
 	# Zones: own_goal_dir * z > BLUE_LINE_Z means puck is in our DZ
 	# (deep on our side). The opposite sign with the same magnitude

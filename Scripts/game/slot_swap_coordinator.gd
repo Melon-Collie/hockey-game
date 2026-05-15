@@ -88,6 +88,11 @@ func apply_confirmed_swap(
 	var colors: Dictionary = TeamColorRegistry.get_colors(_teams[new_team_id].color_id, new_team_id)
 	record.team               = _teams[new_team_id]
 	record.team_slot          = new_slot
+	# Keep the hot-path team lookup tables in sync with the new
+	# assignment. AI dispatch + puck poke-check read from these.
+	_registry.team_id_by_peer[peer_id] = new_team_id
+	if record.skater != null:
+		_registry.team_id_by_skater[record.skater] = new_team_id
 	record.jersey_color        = jersey
 	record.helmet_color        = helmet
 	record.pants_color         = pants

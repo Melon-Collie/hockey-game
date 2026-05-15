@@ -45,10 +45,10 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 # peer_id and team_id but not the controller — so the registry calls this
 # after spawn to wire the agent. Separate from setup() because setup() is
 # called by ActorSpawner before the registry knows which slot it belongs to.
-func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
+func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
 		is_left_handed: bool) -> void:
 	if _agent != null:
-		_agent.setup(peer_id, team_id, brain, resolver, is_left_handed)
+		_agent.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
 	if SHOW_DEBUG_LABEL and skater != null:
 		_debug_label = Label3D.new()
 		_debug_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED

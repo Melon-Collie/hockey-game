@@ -505,13 +505,11 @@ func _spawn_world() -> void:
 	_spawn_goalies()
 	_wire_subsystems()
 	if NetworkManager.is_host:
-		var team_id_resolver := func(peer_id: int) -> int:
-			return _registry.resolve_team_id_for_peer(peer_id)
 		var is_human_resolver := func(peer_id: int) -> bool:
 			return NetworkManager.is_real_peer(peer_id)
 		team_brains = [
-				TeamBrain.new(0, team_id_resolver, is_human_resolver),
-				TeamBrain.new(1, team_id_resolver, is_human_resolver),
+				TeamBrain.new(0, _registry.team_id_by_peer, is_human_resolver),
+				TeamBrain.new(1, _registry.team_id_by_peer, is_human_resolver),
 		]
 		_connect_goal_signals()
 
@@ -546,7 +544,8 @@ func _spawn_puck() -> void:
 	puck_controller = result.controller
 	puck.set_team_resolver(_resolve_skater_team_id)
 	puck_controller.set_peer_id_resolver(_resolve_skater_peer_id)
-	puck_controller.set_team_id_resolver(_resolve_skater_team_id)
+	# team_id_by_skater dict is owned by PlayerRegistry, which doesn't
+	# exist yet — wired in `_wire_subsystems` below.
 	puck_controller.set_skater_getter(func() -> Array:
 		if _registry == null:
 			return []
@@ -579,6 +578,11 @@ func _wire_subsystems() -> void:
 	_registry = PlayerRegistry.new()
 	_registry.setup(_spawner, _state_machine, teams,
 			get_puck, self, _on_player_spawned)
+	# Hand the puck controller a live reference to the registry's
+	# Skater -> team_id dict so its poke-check loop can do O(1) lookups
+	# instead of going through a Callable that re-scans `_players`.
+	if puck_controller != null:
+		puck_controller.set_team_id_by_skater(_registry.team_id_by_skater)
 	_registry.player_joined.connect(player_joined.emit)
 	_registry.player_left.connect(player_left.emit)
 	_registry.player_added.connect(_on_registry_player_added)
