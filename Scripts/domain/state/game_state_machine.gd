@@ -80,6 +80,9 @@ func tick(delta: float) -> bool:
 # ── Events from infrastructure ───────────────────────────────────────────────
 
 # Returns the scoring team id (0 or 1), or -1 if the goal is ignored (wrong phase).
+# Enters GOAL_CELEBRATION rather than GOAL_SCORED directly — celebration is the
+# movement-allowed beat with banner + VFX; the state machine auto-advances to
+# GOAL_SCORED (and the replay cinematic) after GOAL_CELEBRATION_DURATION.
 func on_goal_scored(defending_team_id: int) -> int:
 	if current_phase != GamePhase.Phase.PLAYING:
 		return -1
@@ -87,7 +90,7 @@ func on_goal_scored(defending_team_id: int) -> int:
 	scores[scoring_team_id] += 1
 	period_scores[scoring_team_id][current_period - 1] += 1
 	last_scoring_team_id = scoring_team_id
-	_set_phase(GamePhase.Phase.GOAL_SCORED)
+	_set_phase(GamePhase.Phase.GOAL_CELEBRATION)
 	return scoring_team_id
 
 
@@ -352,13 +355,16 @@ func apply_remote_state(
 	return true
 
 # Called on clients when they receive the goal RPC directly (arrives before
-# world state most of the time).
+# world state most of the time). Enters GOAL_CELEBRATION so the client mirrors
+# the host's phase flow — the host's WS will later advance them to GOAL_SCORED
+# when the replay should start.
 func apply_remote_goal(scoring_team_id: int, score0: int, score1: int) -> void:
 	scores[0] = score0
 	scores[1] = score1
 	last_scoring_team_id = scoring_team_id
-	if current_phase != GamePhase.Phase.GOAL_SCORED:
-		current_phase = GamePhase.Phase.GOAL_SCORED
+	if current_phase != GamePhase.Phase.GOAL_CELEBRATION \
+			and current_phase != GamePhase.Phase.GOAL_SCORED:
+		current_phase = GamePhase.Phase.GOAL_CELEBRATION
 		_phase_timer = 0.0
 
 
@@ -402,6 +408,10 @@ func _tick_phase(delta: float) -> bool:
 		return false
 	_phase_timer += delta
 	match current_phase:
+		GamePhase.Phase.GOAL_CELEBRATION:
+			if _phase_timer >= GameRules.GOAL_CELEBRATION_DURATION:
+				_set_phase(GamePhase.Phase.GOAL_SCORED)
+				return true
 		GamePhase.Phase.GOAL_SCORED:
 			if _phase_timer >= GameRules.GOAL_PAUSE_DURATION:
 				advance_post_goal()

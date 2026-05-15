@@ -83,6 +83,12 @@ func _physics_process(delta: float) -> void:
 			_faceoff_input.mouse_world_pos = puck.global_position
 			apply_blade_aim_only(_faceoff_input, delta)
 		return
+	if _game_state.is_in_goal_celebration():
+		# Celebration is movement-allowed live gameplay (humans can react),
+		# but bots shouldn't be playing — they'd try to chase a pickup-locked
+		# puck and bunch around the net. Skip agent input; physics friction
+		# coasts whatever velocity the bot had at the goal moment to a stop.
+		return
 	if _game_state.is_input_blocked():
 		return
 	# Read the frame's shared snapshot. GameManager publishes it once per

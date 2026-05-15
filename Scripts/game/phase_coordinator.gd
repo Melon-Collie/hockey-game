@@ -56,18 +56,9 @@ var _scene_tree: SceneTree = null
 # gap since the last broadcast. Clients leave this as Callable() (invalid).
 var _force_record_goal_frame: Callable = Callable()
 
-# Wall-time delay between goal detection and replay start. Two jobs:
-# (1) clip captures the puck-in-net + shooter follow-through frames,
-# (2) the live goal VFX (HockeyGoal.celebrate(): 1.8 s light fade + 1.5 s
-#     particle lifetime) plays out before the replay cuts in — otherwise
-#     the cinematic overlays with a flashing goal light from the present.
-# Must stay well under GameStateMachine.GOAL_PAUSE_DURATION (2.0 s) so the
-# state-machine timer doesn't auto-advance the phase before the replay starts.
-const POST_GOAL_CAPTURE_WINDOW: float = 1.5
-
 # Captured at goal time on every peer (host via on_goal_scored_into, client via
 # on_goal_received) so the driver knows which end to park the inside-net cam
-# behind when the replay starts ~0.5 s later.
+# behind when GOAL_CELEBRATION transitions to GOAL_SCORED and the replay starts.
 var _pending_defending_goal_z: float = 0.0
 
 
@@ -122,6 +113,11 @@ func handle_phase_entered() -> void:
 			# Transition from FACEOFF timeout — unlock puck.
 			if puck != null:
 				puck.pickup_locked = false
+		GamePhase.Phase.GOAL_SCORED:
+			# State machine has auto-advanced from GOAL_CELEBRATION → GOAL_SCORED
+			# (host-only transition; clients hit start_goal_replay via WS).
+			# This is where the replay cinematic actually kicks in.
+			start_goal_replay()
 		GamePhase.Phase.END_OF_PERIOD:
 			_puck_drop_requester.call()
 			if puck != null:
@@ -209,7 +205,7 @@ func on_goal_scored_into(defending_team: Team) -> void:
 	goal_broadcast_needed.emit(
 			scoring_team_id, _state_machine.scores[0], _state_machine.scores[1],
 			scorer_name, assist1_name, assist2_name)
-	_on_goal_for_replay()
+	_capture_goal_moment_frame()
 
 
 func _is_own_goal(raw_scorer_id: int, defending_team_id: int) -> bool:
@@ -237,7 +233,7 @@ func on_goal_received(
 			defended_goal.vfx.celebrate()
 	score_changed.emit(_state_machine.scores[0], _state_machine.scores[1])
 	phase_changed.emit(_state_machine.current_phase)
-	_on_goal_for_replay()
+	_capture_goal_moment_frame()
 
 
 func on_faceoff_positions(positions: Array) -> void:
@@ -273,16 +269,23 @@ func cleanup() -> void:
 	_state_machine = null
 
 
-func _on_goal_for_replay() -> void:
+# Capture the goal-moment world state directly into the recorder, in addition
+# to whatever the normal broadcast loop captures. Without this, the latest
+# frame in the ring buffer might be up to 25 ms (one WS broadcast period)
+# before the puck crossed the line, so the replay's final frame would miss
+# the actual puck-in-net moment.
+func _capture_goal_moment_frame() -> void:
 	if _recorder == null or _goal_replay_driver == null or _codec == null:
 		return
 	if _force_record_goal_frame.is_valid():
 		_force_record_goal_frame.call()
-	if _scene_tree != null:
-		_scene_tree.create_timer(POST_GOAL_CAPTURE_WINDOW).timeout.connect(_start_goal_replay)
 
 
-func _start_goal_replay() -> void:
+# Kick off the cinematic. Called from handle_phase_entered (host) when the
+# state machine transitions GOAL_CELEBRATION → GOAL_SCORED, and from GameManager.
+# _on_remote_phase_changed (clients) when the same transition arrives via WS.
+# No-op if already running (driver guards against double-start).
+func start_goal_replay() -> void:
 	if _recorder == null or _goal_replay_driver == null or _codec == null:
 		return
 	_goal_replay_driver.start(_recorder, _codec, _registry,

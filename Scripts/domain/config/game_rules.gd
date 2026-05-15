@@ -7,7 +7,9 @@ class_name GameRules
 # Access anywhere as `GameRules.BLUE_LINE_Z`.
 
 # ── Game Flow Timings ─────────────────────────────────────────────────────────
-const GOAL_PAUSE_DURATION: float   = 2.0
+const GOAL_PAUSE_DURATION: float        = 2.0  # fallback for GOAL_SCORED auto-advance if replay never starts
+const GOAL_CELEBRATION_DURATION: float  = 1.5  # post-goal beat: movement allowed, puck pickup-locked,
+                                                # banner + VFX play; auto-advances to GOAL_SCORED (replay)
 const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdown before puck unlocks
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
