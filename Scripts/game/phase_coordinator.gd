@@ -56,10 +56,14 @@ var _scene_tree: SceneTree = null
 # gap since the last broadcast. Clients leave this as Callable() (invalid).
 var _force_record_goal_frame: Callable = Callable()
 
-# Seconds to keep recording after goal fires so the clip includes puck-in-net
-# and the shooter's follow-through. Must stay well under
-# GameStateMachine.GOAL_PAUSE_DURATION (2.0 s).
-const POST_GOAL_CAPTURE_WINDOW: float = 0.5
+# Wall-time delay between goal detection and replay start. Two jobs:
+# (1) clip captures the puck-in-net + shooter follow-through frames,
+# (2) the live goal VFX (HockeyGoal.celebrate(): 1.8 s light fade + 1.5 s
+#     particle lifetime) plays out before the replay cuts in — otherwise
+#     the cinematic overlays with a flashing goal light from the present.
+# Must stay well under GameStateMachine.GOAL_PAUSE_DURATION (2.0 s) so the
+# state-machine timer doesn't auto-advance the phase before the replay starts.
+const POST_GOAL_CAPTURE_WINDOW: float = 1.5
 
 # Captured at goal time on every peer (host via on_goal_scored_into, client via
 # on_goal_received) so the driver knows which end to park the inside-net cam
