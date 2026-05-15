@@ -14,7 +14,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 @export var move_deadzone: float = 0.1
 @export var brake_multiplier: float = 4.0
-@export var puck_carry_speed_multiplier: float = 0.82
+@export var puck_carry_speed_multiplier: float = 0.86
 @export var backward_thrust_multiplier: float = 0.80
 @export var crossover_thrust_multiplier: float = 0.90
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
