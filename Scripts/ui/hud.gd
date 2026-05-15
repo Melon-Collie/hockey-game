@@ -36,7 +36,10 @@ var _confirm_dialog: ConfirmDialog = null
 var _confirm_callback: Callable = Callable()
 var _rematch_votes: Dictionary[int, bool] = {}
 var _local_voted: bool = false
-var _replay_label: Label = null
+var _phase_banner_root: Control = null
+var _phase_slide_tween: Tween = null
+var _skip_prompt_label: Label = null
+var _skip_prompt_tween: Tween = null
 var _skip_vote_current: int = 0
 var _skip_vote_total: int = 0
 var _spectator_banner: PanelContainer = null
@@ -56,6 +59,7 @@ func _ready() -> void:
 	_build_top_goal_banner()
 	_build_version_tag()
 	_build_bug_icon()
+	_build_skip_replay_prompt()
 	_bug_dialog = BugReportDialog.new()
 	add_child(_bug_dialog)
 	_game_over_popup = GameOverPopup.new()
@@ -106,9 +110,9 @@ func _ready() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"skip_replay"):
-		# Gate on the replay-label visibility so the (Space-shared) brake key
+		# Gate on the skip-prompt visibility so the (Space-shared) brake key
 		# never accidentally fires a vote outside of the cinematic window.
-		if _replay_label != null and _replay_label.visible:
+		if _skip_prompt_label != null and _skip_prompt_label.visible:
 			GameManager.request_local_skip_vote()
 			get_viewport().set_input_as_handled()
 		return
@@ -250,6 +254,7 @@ func _build_phase_banner() -> void:
 	root.offset_top = -220.0
 	root.offset_bottom = -50.0
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_phase_banner_root = root
 	add_child(root)
 
 	var centering := CenterContainer.new()
@@ -257,11 +262,12 @@ func _build_phase_banner() -> void:
 	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(centering)
 
+	# Square corners + no border — flat-rectangular lower-third matches the
+	# broadcast look. Earlier 4px rounding produced a "double-curve" top edge
+	# that read as soft / web-UI instead of broadcast chrome.
 	_phase_style = StyleBoxFlat.new()
 	_phase_style.bg_color = MenuStyle.BROADCAST_BG
-	_phase_style.set_corner_radius_all(4)
-	_phase_style.border_color = MenuStyle.BROADCAST_BORDER_T
-	_phase_style.border_width_top = 1
+	_phase_style.set_corner_radius_all(0)
 	_phase_style.anti_aliasing = false
 	_phase_style.set_content_margin(SIDE_LEFT, 36)
 	_phase_style.set_content_margin(SIDE_RIGHT, 36)
@@ -314,11 +320,6 @@ func _build_phase_banner() -> void:
 	_assist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_assist_label.visible = false
 	vbox.add_child(_assist_label)
-
-	_replay_label = _lbl("REPLAY — [SPACE] TO SKIP", 16, _DIM)
-	_replay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_replay_label.visible = false
-	vbox.add_child(_replay_label)
 
 # "GOAL" wash banner — slides in from the left and overlays the scorebug for
 # the dramatic moment of a goal. Lower-third phase chyron with scorer/assist
@@ -466,6 +467,65 @@ func _build_bug_icon() -> void:
 	btn.pressed.connect(_on_bug_report_pressed)
 	add_child(btn)
 
+# Bottom-right "[SPACE] TO SKIP" prompt shown during goal replays. Lives outside
+# the chyron because the skip-UX is a player affordance, not broadcast chrome —
+# the broadcast chyron itself stays focused on the goal info. The pulse draws
+# the eye to the prompt without yelling.
+func _build_skip_replay_prompt() -> void:
+	_skip_prompt_label = _lbl("[SPACE] TO SKIP", 18, _WHITE)
+	_skip_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_skip_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_skip_prompt_label.anchor_left = 1.0
+	_skip_prompt_label.anchor_right = 1.0
+	_skip_prompt_label.anchor_top = 1.0
+	_skip_prompt_label.anchor_bottom = 1.0
+	_skip_prompt_label.offset_left = -300.0
+	_skip_prompt_label.offset_right = -24.0
+	_skip_prompt_label.offset_top = -52.0
+	_skip_prompt_label.offset_bottom = -24.0
+	_skip_prompt_label.visible = false
+	add_child(_skip_prompt_label)
+
+func _start_skip_prompt_pulse() -> void:
+	if _skip_prompt_tween != null and _skip_prompt_tween.is_running():
+		_skip_prompt_tween.kill()
+	_skip_prompt_label.modulate.a = 1.0
+	_skip_prompt_tween = create_tween().set_loops()
+	_skip_prompt_tween.tween_property(_skip_prompt_label, "modulate:a", 0.45, 0.7) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	_skip_prompt_tween.tween_property(_skip_prompt_label, "modulate:a", 1.0, 0.7) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+func _stop_skip_prompt_pulse() -> void:
+	if _skip_prompt_tween != null and _skip_prompt_tween.is_running():
+		_skip_prompt_tween.kill()
+	_skip_prompt_tween = null
+	_skip_prompt_label.modulate.a = 1.0
+
+# Slide the chyron up from below the screen on goal replays. Non-goal phases
+# (FACEOFF / END OF PERIOD / GAME OVER) call _show_phase_banner_at_rest()
+# instead so they appear instantly at the resting position.
+func _slide_in_phase_banner() -> void:
+	if _phase_slide_tween != null and _phase_slide_tween.is_running():
+		_phase_slide_tween.kill()
+	# Park the band below the screen, then animate up. The band height is 170
+	# (offset_top -220 vs offset_bottom -50); 220 of offset moves it fully off.
+	_phase_banner_root.offset_top = 0.0
+	_phase_banner_root.offset_bottom = 170.0
+	_phase_wrapper.visible = true
+	_phase_slide_tween = create_tween().set_parallel(true)
+	_phase_slide_tween.tween_property(_phase_banner_root, "offset_top", -220.0, 0.4) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_phase_slide_tween.tween_property(_phase_banner_root, "offset_bottom", -50.0, 0.4) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+func _show_phase_banner_at_rest() -> void:
+	if _phase_slide_tween != null and _phase_slide_tween.is_running():
+		_phase_slide_tween.kill()
+	_phase_banner_root.offset_top = -220.0
+	_phase_banner_root.offset_bottom = -50.0
+	_phase_wrapper.visible = true
+
 func _show_confirm(message: String, callback: Callable) -> void:
 	_confirm_callback = callback
 	_confirm_dialog.open(message)
@@ -542,8 +602,6 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	_scorer_label.add_theme_color_override("font_color", team_secondary)
 	_assist_tag_label.add_theme_color_override("font_color", team_secondary)
 	_assist_label.add_theme_color_override("font_color", team_secondary)
-	if _replay_label != null:
-		_replay_label.add_theme_color_override("font_color", team_secondary)
 	_phase_style.bg_color = team_primary
 	if not assist1_name.is_empty():
 		var assist_text: String = assist1_name
@@ -570,40 +628,47 @@ func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_pri
 
 func _on_replay_started() -> void:
 	# Lower-third chyron with goal data appears during replay. The labels were
-	# preloaded by _on_goal_scored; we just toggle visibility here so the chyron
-	# rolls in once the replay starts (after the top wash dismisses).
+	# preloaded by _on_goal_scored; we slide the band up from below the screen
+	# so the entry feels like a broadcast lower-third drop-in.
 	_tagline_label.visible = true
 	_scorer_label.visible = not _scorer_label.text.is_empty()
 	_assist_tag_label.visible = not _assist_label.text.is_empty()
 	_assist_label.visible = not _assist_label.text.is_empty()
-	_phase_wrapper.visible = true
+	_slide_in_phase_banner()
 	# Vote counters are reset in _on_replay_stopped from the previous clip;
 	# we don't clear them here because GameManager's host-side broadcast of
 	# (0, total) may run before this listener and we'd clobber the count.
-	_refresh_replay_label_text()
-	if _replay_label != null:
-		_replay_label.visible = true
+	_refresh_skip_prompt_text()
+	_skip_prompt_label.visible = true
+	_start_skip_prompt_pulse()
 
 func _on_replay_stopped() -> void:
+	# Instant hide on the chyron (no slide-out): the natural follow-up is the
+	# FACEOFF banner appearing in the same spot, and a slide-out would just
+	# add a flicker between the two. Reset offsets so any subsequent show
+	# (e.g. FACEOFF) appears at rest.
 	_phase_wrapper.visible = false
-	if _replay_label != null:
-		_replay_label.visible = false
+	if _phase_banner_root != null:
+		_phase_banner_root.offset_top = -220.0
+		_phase_banner_root.offset_bottom = -50.0
+	_stop_skip_prompt_pulse()
+	_skip_prompt_label.visible = false
 	_skip_vote_current = 0
 	_skip_vote_total = 0
 
 func _on_skip_replay_vote_updated(current: int, total: int) -> void:
 	_skip_vote_current = current
 	_skip_vote_total = total
-	_refresh_replay_label_text()
+	_refresh_skip_prompt_text()
 
-func _refresh_replay_label_text() -> void:
-	if _replay_label == null:
+func _refresh_skip_prompt_text() -> void:
+	if _skip_prompt_label == null:
 		return
 	if _skip_vote_total <= 1:
 		# Solo session — no tally, the single press just skips.
-		_replay_label.text = "REPLAY — [SPACE] TO SKIP"
+		_skip_prompt_label.text = "[SPACE] TO SKIP"
 	else:
-		_replay_label.text = "REPLAY — [SPACE] TO SKIP  (%d/%d)" % [_skip_vote_current, _skip_vote_total]
+		_skip_prompt_label.text = "[SPACE] TO SKIP  (%d/%d)" % [_skip_vote_current, _skip_vote_total]
 
 func _on_phase_changed(new_phase: int) -> void:
 	match new_phase:
@@ -612,8 +677,6 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_label.add_theme_color_override("font_color", _WHITE)
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_clear_goal_template()
-			if _replay_label != null:
-				_replay_label.visible = false
 		GamePhase.Phase.GOAL_SCORED:
 			# Top wash plays via _on_goal_scored. Lower-third chyron holds
 			# until the replay phase fires (_on_replay_started).
@@ -624,16 +687,16 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_label.add_theme_color_override("font_color", _WHITE)
 			_phase_label.visible = true
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
-			_phase_wrapper.visible = true
+			_show_phase_banner_at_rest()
 		GamePhase.Phase.GAME_OVER:
-			_phase_wrapper.visible = true  # text + color set by _on_game_over
+			_show_phase_banner_at_rest()  # text + color set by _on_game_over
 		_:
 			_clear_goal_template()
 			_phase_label.text = "FACEOFF"
 			_phase_label.add_theme_color_override("font_color", _WHITE)
 			_phase_label.visible = true
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
-			_phase_wrapper.visible = true
+			_show_phase_banner_at_rest()
 
 # Reset the four goal-template rows (tagline, scorer, ASSISTED BY, assist
 # names) to hidden so non-goal phases show only the phase_label hero.
@@ -682,7 +745,7 @@ func _on_game_over() -> void:
 	else:
 		_phase_label.text = "TIE"
 		_phase_label.add_theme_color_override("font_color", _WHITE)
-	_phase_wrapper.visible = true
+	_show_phase_banner_at_rest()
 	_rematch_votes.clear()
 	_local_voted = false
 	_update_rematch_ui()
