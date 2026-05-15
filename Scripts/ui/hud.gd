@@ -691,10 +691,8 @@ func _on_phase_changed(new_phase: int) -> void:
 			_start_faceoff_countdown()
 		GamePhase.Phase.FACEOFF:
 			# Drop instant: hold "DROP!" briefly, then dismiss on PLAYING.
-			# Whistle on the drop runs here so host AND clients hear it — both
-			# peers re-emit phase_changed when world state lands on FACEOFF.
+			# No whistle here — refs whistle to stop play, not to start it.
 			_stop_faceoff_countdown()
-			SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
 			_phase_label.text = "DROP!"
 			_phase_label.add_theme_color_override("font_color", _WHITE)
 			_phase_label.visible = true
