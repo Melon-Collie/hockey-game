@@ -407,6 +407,24 @@ var _locked_pre_aim_point: Vector3 = Vector3.INF
 # deterministic but distinct stream (replay-safe).
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
+# Decision-rate throttle. The full state-handler dispatch (role
+# decisions, action scoring, steering compute, aim target selection)
+# runs every DISPATCH_PERIOD_TICKS physics ticks during non-press
+# states; skipped ticks reuse the cached move_vector and step the
+# mouse toward the cached aim target so blade motion stays at 240 Hz.
+# Press states (SHOOT_PRESSED / PASS_PRESSED) always run full-rate —
+# wrister charge timing and pre-aim convergence are tick-sensitive.
+# State transitions reset the counter so the next dispatch runs full.
+const DISPATCH_PERIOD_TICKS: int = 4
+var _dispatch_skip_counter: int = 0
+var _cached_move_vector: Vector2 = Vector2.ZERO
+# Updated inside `_step_mouse_toward` so skipped ticks can re-step
+# toward the most recently decided target without re-running the
+# state handler. ZERO sentinel suppresses stepping until the first
+# full dispatch sets a real target.
+var _cached_aim_target: Vector3 = Vector3.ZERO
+var _has_cached_aim_target: bool = false
+
 # Last action the bot actually fired (e.g. "SHOOT" /
 # "PASS→Backdoor"). Set inside the press-state handlers at the
 # moment the press is dispatched, not when intent is picked — so
@@ -597,6 +615,21 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	if self_state.is_ghost and _state == State.CHASE_PUCK:
 		_set_state(State.OFF_PUCK)
 
+	# Decision throttle: outside press states, re-run the full state
+	# handler every DISPATCH_PERIOD_TICKS ticks. On skipped ticks reuse
+	# the last-decided move_vector and re-step the mouse toward the
+	# cached aim target so blade motion stays smooth at 240 Hz. State
+	# transitions zero `_dispatch_skip_counter` (via `_set_state`) so a
+	# fresh state always dispatches full on its first tick.
+	var is_press_state: bool = (_state == State.SHOOT_PRESSED or _state == State.PASS_PRESSED)
+	if not is_press_state and _dispatch_skip_counter > 0:
+		_dispatch_skip_counter -= 1
+		input.move_vector = _cached_move_vector
+		if _has_cached_aim_target:
+			input.mouse_world_pos = _step_mouse_toward(_cached_aim_target)
+		return
+	_dispatch_skip_counter = DISPATCH_PERIOD_TICKS - 1
+
 	match _state:
 		State.OFF_PUCK:
 			_state_off_puck(input, snapshot, self_pos, have_puck)
@@ -608,6 +641,8 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_shoot_pressed(input, snapshot, self_pos, have_puck)
 		State.PASS_PRESSED:
 			_state_pass_pressed(input, snapshot, self_pos, have_puck)
+
+	_cached_move_vector = input.move_vector
 
 
 # ── State handlers ───────────────────────────────────────────────────────────
@@ -1574,6 +1609,10 @@ var _mouse_pos_initialized: bool = false
 # per-state smoothing methods we used to have — single consistent
 # model for every aim target.
 func _step_mouse_toward(target: Vector3) -> Vector3:
+	# Capture the desired target so the decision throttle can re-step
+	# toward it on skipped ticks without re-running the state handler.
+	_cached_aim_target = target
+	_has_cached_aim_target = true
 	if not _mouse_pos_initialized:
 		_mouse_pos = Vector3(target.x, 0.0, target.z)
 		_mouse_pos_initialized = true
@@ -1875,6 +1914,10 @@ func _set_state(s: State) -> void:
 			_carrier.clear_intent()
 		_state = s
 		_ticks_in_state = 0
+		# Force the next dispatch to run the full state handler so the
+		# new state starts from a fresh decision rather than reusing the
+		# previous state's cached move_vector / aim target.
+		_dispatch_skip_counter = 0
 
 
 func _reset_to_off_puck() -> void:
