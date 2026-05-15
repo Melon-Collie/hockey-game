@@ -20,9 +20,10 @@ extends Node
 const CLIP_DURATION: float = 8.0  # seconds of history to replay
 
 @export var playback_speed: float = 1.0
-@export var slowmo_window: float = 0.75  # seconds before clip end that slow-motion kicks in
+@export var slowmo_window: float = 0.75  # fallback offset before clip end (used when no shot event present)
 @export var slowmo_speed: float = 0.4    # playback multiplier during slow-motion window
 @export var outro_duration: float = 0.25 # extra hold at clip end before stopping
+@export var pre_shot_lead: float = 0.15  # seconds of pre-release slow-mo so the wind-up reads
 
 signal replay_started
 signal replay_stopped
@@ -62,6 +63,14 @@ var _has_cut_to_inside_net: bool = false
 # Defaults to 0 (no cut) so the replay still works if the caller didn't supply
 # a defending goal (e.g. a future debug-trigger path).
 var _defending_goal_z: float = 0.0
+# Shot release timestamp + position, pulled from the clip's recorded events on
+# start(). Drives both slow-mo entry timing (so the wind-up + release land in
+# slo-mo regardless of where in the clip the shot happened) and the behind-net
+# cam's lateral offset (mirror the shooter so the trajectory crosses frame
+# diagonally). _shot_event_ts < 0 means no shot event was found — fall back
+# to the slowmo_window-from-clip-end timing.
+var _shot_event_ts: float = -1.0
+var _shot_release_pos: Vector3 = Vector3.ZERO
 
 # Vote-to-skip tally for the current clip, keyed by peer_id. Cleared on every
 # start() so a previous goal's votes don't carry over. Driven by
@@ -115,6 +124,19 @@ func start(recorder: ReplayRecorder,
 	_events = recorder.extract_events(_clip_start_ts, _clip_end_ts)
 	_next_event_idx = 0
 
+	# Scan for the last "shot" event in the clip — that's the goal shot.
+	# Both regular shots and one-timers record under the same kind. We use the
+	# event's recorded puck-position as the shooter's release position; it's
+	# captured at release time in GameManager._record_replay_audio_event.
+	_shot_event_ts = -1.0
+	_shot_release_pos = Vector3.ZERO
+	for entry: Dictionary in _events:
+		var ev: Dictionary = entry.event
+		if ev.has("kind") and ev.kind == "shot":
+			_shot_event_ts = entry.host_ts
+			var p: Array = ev.pos
+			_shot_release_pos = Vector3(p[0], p[1], p[2])
+
 	_freeze_live_simulation()
 
 	_defending_goal_z = defending_goal_z
@@ -128,19 +150,22 @@ func start(recorder: ReplayRecorder,
 	_hard_cam.snap_to_position()
 	_hard_cam.make_current()
 
-	# Behind-the-net cam parked at the end boards, ~2.5 m up — looking back into
-	# the offensive zone with the goal frame as a foreground element. Wider FOV
-	# + lower lead than the hard cam because it's a close-quarters cinematic
-	# shot only used during slow-mo. Skipped entirely if no defending goal was
-	# provided. The 3.35 offset is `HockeyGoal.distance_from_end`, so the cam
-	# sits exactly at the end boards.
+	# Behind-the-net cam parked past the end boards, elevated, with a lateral
+	# offset based on the shot release. The X-mirror places the camera on the
+	# opposite side from the shooter so the trajectory crosses the camera's
+	# line of sight diagonally instead of head-on — angles the look-direction
+	# toward the shooter, per the user's reference. Skipped if no defending
+	# goal was provided.
 	if _defending_goal_z != 0.0:
 		_inside_net_cam = SpectatorCamera.new()
 		add_child(_inside_net_cam)
 		_inside_net_cam.setup(puck_pos_getter)
 		var z_sign: float = signf(_defending_goal_z)
-		var booth: Vector3 = Vector3(0.0, 2.5, _defending_goal_z + z_sign * 3.35)
-		_inside_net_cam.set_booth(booth, 52.0, 0.15)
+		var lateral: float = 0.0
+		if _shot_event_ts >= 0.0:
+			lateral = clampf(-_shot_release_pos.x * 0.5, -3.5, 3.5)
+		var booth: Vector3 = Vector3(lateral, 3.0, _defending_goal_z + z_sign * 4.5)
+		_inside_net_cam.set_booth(booth, 55.0, 0.15)
 		_inside_net_cam.snap_to_position()
 
 	NetworkManager.start_replay_mode(_clip_start_ts)
@@ -216,7 +241,12 @@ func _process(delta: float) -> void:
 			stop()
 		return
 
-	var in_slowmo: bool = (_clip_end_ts - _virtual_clock) < slowmo_window
+	# Anchor slow-mo to shot release if we have one — pre_shot_lead seconds of
+	# wind-up plus the release land in slow-mo. Fall back to clip-end offset
+	# for clips with no shot event (deflection-style goals, etc.).
+	var slowmo_trigger_ts: float = _shot_event_ts - pre_shot_lead \
+			if _shot_event_ts >= 0.0 else _clip_end_ts - slowmo_window
+	var in_slowmo: bool = _virtual_clock >= slowmo_trigger_ts
 	var speed: float = slowmo_speed if in_slowmo else playback_speed
 	_virtual_clock += delta * speed
 	if _virtual_clock >= _clip_end_ts:
