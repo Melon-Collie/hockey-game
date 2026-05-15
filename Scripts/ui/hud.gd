@@ -480,8 +480,10 @@ func _build_skip_replay_prompt() -> void:
 	_skip_prompt_label.anchor_right = 1.0
 	_skip_prompt_label.anchor_top = 1.0
 	_skip_prompt_label.anchor_bottom = 1.0
-	_skip_prompt_label.offset_left = -300.0
-	_skip_prompt_label.offset_right = -24.0
+	# Right edge sits at -52 so the prompt clears the bug-report icon (which
+	# spans -36 to -8 from the right edge) with ~16px of breathing room.
+	_skip_prompt_label.offset_left = -324.0
+	_skip_prompt_label.offset_right = -52.0
 	_skip_prompt_label.offset_top = -52.0
 	_skip_prompt_label.offset_bottom = -24.0
 	_skip_prompt_label.visible = false
