@@ -667,27 +667,40 @@ func _wire_sound_signals() -> void:
 		puck.puck_hit_boards.connect(func() -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_BOARDS, puck.get_puck_position(), _puck_speed_volume(spd), 0.05)
-			NetworkManager.send_board_hit_to_all(puck.get_puck_position()))
+			NetworkManager.send_board_hit_to_all(puck.get_puck_position())
+			_record_replay_audio_event("puck_boards", puck.get_puck_position(), spd))
 		puck.puck_hit_goal_body.connect(func() -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
-			NetworkManager.send_goal_body_hit_to_all(puck.get_puck_position()))
+			NetworkManager.send_goal_body_hit_to_all(puck.get_puck_position())
+			_record_replay_audio_event("puck_goal_body", puck.get_puck_position(), spd))
 		puck.puck_touched_loose.connect(func(_s: Skater) -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
-			NetworkManager.send_deflection_to_all(puck.get_puck_position()))
+			NetworkManager.send_deflection_to_all(puck.get_puck_position())
+			_record_replay_audio_event("puck_deflection", puck.get_puck_position(), spd))
 		puck.puck_body_blocked.connect(func(_s: Skater) -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_BODY_BLOCK, puck.get_puck_position(), _puck_speed_volume(spd), 0.07)
-			NetworkManager.send_body_block_to_all(puck.get_puck_position()))
+			NetworkManager.send_body_block_to_all(puck.get_puck_position())
+			_record_replay_audio_event("puck_body_block", puck.get_puck_position(), spd))
 		puck_controller.puck_stripped_from.connect(func(_pid: int) -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
-			NetworkManager.send_puck_strip_to_all(puck.get_puck_position()))
+			NetworkManager.send_puck_strip_to_all(puck.get_puck_position())
+			_record_replay_audio_event("puck_strip", puck.get_puck_position(), spd))
 	puck.puck_touched_goalie.connect(
-		func(_g: Goalie) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(puck.linear_velocity.length()), 0.05))
+		func(_g: Goalie) -> void:
+			var spd: float = puck.linear_velocity.length()
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd), 0.05)
+			if NetworkManager.is_host:
+				_record_replay_audio_event("puck_goalie", puck.get_puck_position(), spd))
 	puck.puck_touched_post.connect(
-		func() -> void: SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(puck.linear_velocity.length()), 0.04))
+		func() -> void:
+			var spd: float = puck.linear_velocity.length()
+			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd), 0.04)
+			if NetworkManager.is_host:
+				_record_replay_audio_event("puck_post", puck.get_puck_position(), spd))
 
 	# Persistent connections: NetworkManager autoload + GameManager self-signals
 	# survive across rematches; wire once.
@@ -717,6 +730,8 @@ func _on_local_pickup_sound() -> void:
 	var record := _registry.get_local() if _registry != null else null
 	if record != null and record.skater != null:
 		SoundManager.play_world(SoundManager.Sound.PUCK_PICKUP, record.skater.global_position, 0.0, 0.05)
+		if NetworkManager.is_host:
+			_record_replay_audio_event("puck_pickup", record.skater.global_position, 0.0)
 
 
 func _on_remote_carrier_sound(new_carrier_peer_id: int) -> void:
@@ -725,6 +740,51 @@ func _on_remote_carrier_sound(new_carrier_peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(new_carrier_peer_id)
 	if record != null and record.skater != null:
 		SoundManager.play_world(SoundManager.Sound.PUCK_PICKUP, record.skater.global_position, 0.0, 0.05)
+		if NetworkManager.is_host:
+			_record_replay_audio_event("puck_pickup", record.skater.global_position, 0.0)
+
+
+# Host-only: shadow a transient audio/VFX event into the in-memory recorder
+# AND the .mreplay file writer so both replay paths (post-goal cinematic +
+# offline file viewer) can re-fire the sound/VFX at the right virtual time.
+# Audio-only events use kind ∈ { puck_boards, puck_goal_body, puck_deflection,
+# puck_body_block, puck_strip, puck_goalie, puck_post, puck_pickup, shot };
+# body_check carries extra payload via _record_body_check_replay_event.
+func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
+		extra: Dictionary = {}) -> void:
+	if not NetworkManager.is_host:
+		return
+	# Don't shadow live events into the replay buffer while a replay is
+	# actively playing — the cinematic is the consumer, not the producer.
+	if NetworkManager.is_replay_mode():
+		return
+	var ts: float = NetworkManager.local_time()
+	var event: Dictionary = {
+		"kind": kind,
+		"pos": [position.x, position.y, position.z],
+		"speed": speed,
+	}
+	for k: Variant in extra:
+		event[k] = extra[k]
+	if _recorder != null:
+		_recorder.record_event(ts, event)
+	if _replay_file_writer != null and _should_record_to_file():
+		_replay_file_writer.enqueue_event(ts, JSON.stringify(event).to_utf8_buffer())
+
+
+func _record_body_check_replay_event(checker_peer_id: int, victim: Skater,
+		force: float, hit_dir: Vector3) -> void:
+	var victim_peer_id: int = _registry.resolve_peer_id(victim) if _registry != null and victim != null else -1
+	var checker_pos: Vector3 = Vector3.ZERO
+	if _registry != null:
+		var rec: PlayerRecord = _registry.get_record(checker_peer_id)
+		if rec != null and rec.skater != null:
+			checker_pos = rec.skater.global_position
+	_record_replay_audio_event("body_check", checker_pos, force, {
+		"checker_peer_id": checker_peer_id,
+		"victim_peer_id": victim_peer_id,
+		"hit_dir": [hit_dir.x, hit_dir.y, hit_dir.z],
+	})
 
 
 # Local peer is a spectator. Set the flag so HUD chrome can hide local-only
@@ -1076,6 +1136,11 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		func(_v: Skater, _f: float, _d: Vector3) -> void:
 			SoundManager.play_world(SoundManager.Sound.BODY_CHECK, record.skater.global_position, 0.0, 0.08)
 	)
+	if NetworkManager.is_host:
+		record.skater.body_checked_player.connect(
+			func(v: Skater, f: float, d: Vector3) -> void:
+				_record_body_check_replay_event(record.peer_id, v, f, d)
+		)
 	var snd := SkaterSoundController.new()
 	record.skater.add_child(snd)
 	snd.setup(record.skater)
@@ -1226,6 +1291,8 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 	var sound: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
 	SoundManager.play_world(sound, puck.get_puck_position(), 0.0, 0.04)
 	if NetworkManager.is_host:
+		_record_replay_audio_event("shot", puck.get_puck_position(), power, {"is_slapper": is_slapper})
+	if NetworkManager.is_host:
 		_start_pending_shot_from_carrier()
 		puck.release(direction, power)
 	else:
@@ -1314,6 +1381,8 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 	var sound: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
 	var shot_pos: Vector3 = puck.get_puck_position() if puck != null else Vector3.ZERO
 	SoundManager.play_world(sound, shot_pos, 0.0, 0.04)
+	if NetworkManager.is_host:
+		_record_replay_audio_event("shot", shot_pos, power, {"is_slapper": is_slapper})
 	if NetworkManager.is_host:
 		_start_pending_shot_from_carrier()
 		var rtt_half: float = rtt_ms / 2000.0

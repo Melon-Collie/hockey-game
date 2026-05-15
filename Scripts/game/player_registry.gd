@@ -93,7 +93,6 @@ func spawn(
 	record.player_name = player_name
 	record.jersey_number = jersey_number
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
-	record.faceoff_position = faceoff_pos
 
 	var puck: Puck = _puck_getter.call() as Puck
 	var blade_color: Color = TeamColorRegistry.get_colors(team.color_id, team.team_id).primary
@@ -108,10 +107,16 @@ func spawn(
 				is_left_handed, puck, _game_state_node)
 	record.skater = spawned.skater
 	record.controller = spawned.controller
-	spawned.skater.team_id = team.team_id
+	# Resolver-based team lookup so a mid-game slot swap only has to update
+	# record.team — the goalie's `carrier.get_team_id()` reads the live value
+	# from the registry rather than a cached field that drifts.
+	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(player_name)
 	spawned.skater.set_jersey_info(player_name, jersey_number, text_color)
 	spawned.skater.set_jersey_stripes(jersey_stripe_color, pants_stripe_color, socks_stripe_color)
+	# Square the skater up to the puck on initial spawn — without this they
+	# default to Vector2.DOWN (+Z) which leaves team 0 spawning backwards.
+	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 
 	if _spawn_wireup.is_valid():
@@ -157,7 +162,6 @@ func spawn_bot(
 	record.player_name = "Bot %d" % (bot_id + 1)
 	record.jersey_number = 80 + bot_id
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
-	record.faceoff_position = faceoff_pos
 
 	var puck: Puck = _puck_getter.call() as Puck
 	var blade_color: Color = colors.primary
@@ -173,10 +177,13 @@ func spawn_bot(
 	var resolver := func(pid: int) -> int:
 		return resolve_team_id_for_peer(pid)
 	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, resolver, record.is_left_handed)
-	spawned.skater.team_id = team.team_id
+	# Same resolver-based team lookup as spawn() — see comment there.
+	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number, record.text_color)
 	spawned.skater.set_jersey_stripes(record.jersey_stripe_color, record.pants_stripe_color, record.socks_stripe_color)
+	# Same initial-facing fix as spawn() — see comment there.
+	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 
 	if _spawn_wireup.is_valid():

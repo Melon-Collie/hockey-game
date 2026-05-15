@@ -610,7 +610,7 @@ func _is_ready_situation() -> bool:
 	# Puck is in our half. If a teammate carries it, no threat — they're
 	# regrouping or holding possession in own offensive zone behind us.
 	var carrier: Skater = puck.get_carrier()
-	if carrier != null and carrier.team_id == team_id and team_id != -1:
+	if carrier != null and carrier.get_team_id() == team_id and team_id != -1:
 		return false
 	return true
 
@@ -623,7 +623,7 @@ func _is_carrier_at_doorstep() -> bool:
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
 		return false
-	if carrier.team_id == team_id and team_id != -1:
+	if carrier.get_team_id() == team_id and team_id != -1:
 		return false
 	if carrier.velocity.length() < close_crease_butterfly_speed:
 		return false
@@ -692,7 +692,7 @@ func _is_threat_pressing() -> bool:
 	# doesn't keep the goalie pinned in butterfly forever.
 	if threat_dist < recovery_proximity_threshold:
 		var carrier: Skater = puck.get_carrier()
-		if carrier != null and (team_id == -1 or carrier.team_id != team_id):
+		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
 	var speed_low: bool
 	var moving_away: bool

@@ -99,10 +99,22 @@ func apply_confirmed_swap(
 	record.secondary_color     = colors.secondary
 	record.text_color          = colors.text
 	record.text_outline_color  = colors.text_outline
-	record.faceoff_position    = PlayerRules.faceoff_position(new_team_id, new_slot)
+	# Skater.get_team_id() resolves through the registry (record.team.team_id),
+	# so the team write above is the single source of truth — no node-level
+	# field needs re-syncing here.
 	record.skater.set_player_color(jersey, helmet, pants, colors.socks, colors.primary)
 	record.skater.set_player_name(record.player_name)
 	record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text)
 	record.skater.set_jersey_stripes(colors.jersey_stripe, colors.pants_stripe, colors.socks_stripe)
-	record.controller.teleport_to(record.faceoff_position)
+	# LocalController caches the local player's team for offside prediction,
+	# camera orientation, and attack-up. Without this the local skater would
+	# be flagged offside in its new zone and the camera would still face the
+	# old direction. RemoteController doesn't store team_id.
+	if record.is_local and record.controller is LocalController:
+		(record.controller as LocalController).set_local_team_id(new_team_id)
+	# Square up to the new attacking goal — without facing, a cross-team
+	# swap leaves the skater pointing backwards on their first frame.
+	record.controller.teleport_to(
+			PlayerRules.faceoff_position(new_team_id, new_slot),
+			PlayerRules.faceoff_facing(new_team_id))
 	stats_updated.emit()

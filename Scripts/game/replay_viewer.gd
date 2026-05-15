@@ -174,6 +174,13 @@ func _on_replay_event(event: Dictionary) -> void:
 		_spawn_skater_from_roster(event)
 	elif kind == "player_left":
 		_despawn_skater(int(event.get("peer_id", -1)))
+	else:
+		# Audio + body-check VFX events. Goal events flow through too — the
+		# replayer ignores unknown kinds, and goal-horn playback can be
+		# wired by a future HUD listener if desired (live games already
+		# play it on goal_received; offline replays don't have NetworkManager
+		# delivering anything).
+		ReplayEventReplayer.dispatch_with_records(event, _records)
 
 
 func _despawn_skater(peer_id: int) -> void:

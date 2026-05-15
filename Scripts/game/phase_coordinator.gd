@@ -137,8 +137,8 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 	for peer_id: int in _registry.all():
 		var record: PlayerRecord = _registry.get_record(peer_id)
 		var pos: Vector3 = PlayerRules.faceoff_position(record.team.team_id, record.team_slot)
-		record.faceoff_position = pos
-		record.controller.teleport_to(pos)
+		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
+		record.controller.teleport_to(pos, facing)
 		positions.append_array([peer_id, pos.x, pos.y, pos.z])
 	faceoff_positions_ready.emit(positions)
 
@@ -233,7 +233,13 @@ func on_faceoff_positions(positions: Array) -> void:
 		var pos := Vector3(positions[i + 1], positions[i + 2], positions[i + 3])
 		i += 4
 		if peer_id == local_peer_id and _registry.has(peer_id):
-			_registry.get_record(peer_id).controller.teleport_to(pos)
+			# Wire format stays position-only; clients derive facing locally
+			# from the record's current team_id. Slot-swap RPCs land before
+			# the faceoff broadcast, so record.team here is already the new
+			# team after a mid-game switch.
+			var record: PlayerRecord = _registry.get_record(peer_id)
+			var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
+			record.controller.teleport_to(pos, facing)
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────

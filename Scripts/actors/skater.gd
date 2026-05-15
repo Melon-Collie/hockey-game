@@ -107,10 +107,22 @@ signal body_block_hit(body: Node3D)
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
 var current_shot_state: int = 0
-# Team affiliation set by PlayerRegistry on spawn. -1 = unknown (e.g. tutorial
-# dummy). Used by goalie AI to distinguish opposing-team carriers (threat) from
-# own-team carriers (own offense / regroup) without going through the registry.
-var team_id: int = -1
+# Resolves the skater's current team_id by deferring to the registry. Set by
+# PlayerRegistry on spawn so the goalie / VFX / other Skater-holding code can
+# query team affiliation without growing a cached field that has to be
+# manually re-synced whenever a mid-game slot swap happens. -1 (unknown) is
+# returned when no resolver has been installed (e.g. tutorial dummy).
+var _team_id_resolver: Callable = Callable()
+
+
+func set_team_id_resolver(resolver: Callable) -> void:
+	_team_id_resolver = resolver
+
+
+func get_team_id() -> int:
+	if not _team_id_resolver.is_valid():
+		return -1
+	return _team_id_resolver.call() as int
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _facing: Vector2 = Vector2.DOWN
 var is_elevated: bool = false
@@ -324,8 +336,16 @@ func get_blade_contact_global() -> Vector3:
 # so flips animate through center over carry_side_lerp_speed instead of
 # teleporting. Public so future work (e.g. replacing the
 # wrister_start_blade_local_x heuristic for shot bias) can consume it directly.
+#
+# Sign convention is mirrored between handednesses so the visual offset
+# direction (applied by SkaterIKCoordinator and get_carry_target_global)
+# lands on the same side of the body relative to the player for both
+# lefties and righties — without this flip, a righty's puck rendered on
+# the opposite face of the blade from a lefty's, even though both were
+# "on forehand" per _carry_side.
 func get_carry_forehand_factor() -> float:
-	return _carry_side_smoothed
+	var handedness_sign: float = 1.0 if is_left_handed else -1.0
+	return _carry_side_smoothed * handedness_sign
 
 
 # Called once per tick from SkaterIKCoordinator.apply_blade_from_mouse —
