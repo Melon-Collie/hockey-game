@@ -1,19 +1,39 @@
 class_name SpectatorCamera
 extends Camera3D
 
-# Cinematic side-rail camera for goal replays (and future spectator slots).
-# Sits outside the boards on the +X side, tracks a target (puck) along Z, and
-# smoothly looks at it. activate() saves the current camera and takes over;
-# deactivate() restores it.
+# Broadcast main-camera ("hard cam") preset for goal replays and spectator
+# viewing. Sits at the press-box position outside the long-side boards at
+# center-ice, fixed — does not slide along the rail. Pans/tilts to track the
+# puck with a small velocity lead so the rotation anticipates the play instead
+# of chasing it. Subtle perlin-style noise on yaw/pitch + position gives the
+# gentle drift of a wire-rigged broadcast camera.
+#
+# Telephoto FOV (compared to the 70°-ish game cam) flattens depth in the
+# broadcast style — players group up visually as the puck moves, which sells
+# the play better than the wider game-cam framing.
 
-@export var rail_x: float = 18.0       # X offset from rink center (outside the boards)
-@export var rail_height: float = 7.0   # elevation above ice
-@export var follow_speed: float = 4.5  # position lerp speed
-@export var look_speed: float = 7.0    # rotation slerp speed
-@export var replay_fov: float = 52.0   # slightly narrower than game cam; more cinematic
+@export var booth_x: float = 20.0        # outside the long boards (rink is ±13 wide)
+@export var booth_y: float = 12.0        # press-box elevation
+@export var booth_z: float = 0.0         # center-ice along the long axis
+@export var replay_fov: float = 36.0
+@export var look_speed: float = 6.0      # rotation slerp speed
+@export var lead_time: float = 0.35      # seconds of puck-velocity lookahead
+@export var max_lead: float = 5.0        # cap the lead so fast shots don't overshoot
+@export var noise_yaw_deg: float = 0.55
+@export var noise_pitch_deg: float = 0.30
+@export var noise_pos_amp: float = 0.06  # meters
+@export var noise_freq: float = 0.45     # Hz
 
 var _target_getter: Callable = Callable()
 var _prev_camera: Camera3D = null
+
+# Position-difference velocity, smoothed via EMA. Works the same way for both
+# call sites: live spectator reads the puck node (true velocity), goal-replay
+# reads the puck node while ReplayPlaybackEngine drives its position from
+# interpolated snapshots (so the difference matches the replayed motion).
+var _last_target_pos: Vector3 = Vector3.ZERO
+var _target_velocity: Vector3 = Vector3.ZERO
+var _velocity_initialized: bool = false
 
 
 func setup(target_getter: Callable) -> void:
@@ -28,11 +48,13 @@ func activate() -> void:
 	if current:
 		return
 	_prev_camera = get_viewport().get_camera_3d()
-	# Snap to the correct rail position before going current so there is no
-	# opening sweep across the rink on the first frame.
+	global_position = Vector3(booth_x, booth_y, booth_z)
+	# Snap rotation to the initial target before going current so the first
+	# frame doesn't sweep the camera across the rink.
 	if _target_getter.is_valid():
 		var target: Vector3 = _target_getter.call()
-		global_position = Vector3(rail_x, rail_height, target.z)
+		_last_target_pos = target
+		_velocity_initialized = true
 		if global_position.distance_to(target) > 0.1:
 			look_at(target, Vector3.UP)
 	make_current()
@@ -48,12 +70,47 @@ func _process(delta: float) -> void:
 	if not current or not _target_getter.is_valid():
 		return
 	var target: Vector3 = _target_getter.call()
+	_update_target_velocity(target, delta)
 
-	# Slide along the rail, keeping X and Y fixed and tracking the puck's Z.
-	var rail_target: Vector3 = Vector3(rail_x, rail_height, target.z)
-	global_position = global_position.lerp(rail_target, follow_speed * delta)
+	# Velocity-lead so the rotation anticipates the puck path. Capped so a
+	# slapshot doesn't fling the look-target past the play.
+	var lead: Vector3 = _target_velocity * lead_time
+	if lead.length() > max_lead:
+		lead = lead.normalized() * max_lead
+	var look_target: Vector3 = target + lead
 
-	# Smoothly orient toward the puck.
-	if global_position.distance_to(target) > 0.1:
-		var look_xform: Transform3D = global_transform.looking_at(target, Vector3.UP)
+	# Wire-rig drift: subtle perlin-style noise on the booth position + look
+	# target. Two harmonics per axis so the motion doesn't look like a pure sine.
+	var t: float = Time.get_ticks_msec() / 1000.0
+	var w: float = noise_freq * TAU
+	var pos_noise := Vector3(
+			(sin(t * w * 1.10 + 0.31) + sin(t * w * 1.73 + 1.92)) * 0.5,
+			(sin(t * w * 0.83 + 0.92) + sin(t * w * 1.41 + 2.71)) * 0.5,
+			(sin(t * w * 1.27 + 2.14) + sin(t * w * 1.59 + 0.47)) * 0.5)
+	var yaw_noise: float = (sin(t * w + 0.13) + sin(t * w * 1.61 + 1.27)) * 0.5
+	var pitch_noise: float = (sin(t * w * 0.88 + 0.71) + sin(t * w * 1.39 + 2.05)) * 0.5
+
+	global_position = Vector3(booth_x, booth_y, booth_z) + pos_noise * noise_pos_amp
+
+	# Build a look transform pointing at the leaded target, then nudge it by
+	# the rotation noise to add wire drift on top of the slerp.
+	if global_position.distance_to(look_target) > 0.1:
+		var look_xform: Transform3D = global_transform.looking_at(look_target, Vector3.UP)
+		look_xform = look_xform.rotated_local(Vector3.UP, deg_to_rad(yaw_noise * noise_yaw_deg))
+		look_xform = look_xform.rotated_local(Vector3.RIGHT, deg_to_rad(pitch_noise * noise_pitch_deg))
 		global_transform = global_transform.interpolate_with(look_xform, look_speed * delta)
+
+
+func _update_target_velocity(target_pos: Vector3, delta: float) -> void:
+	if not _velocity_initialized:
+		_last_target_pos = target_pos
+		_velocity_initialized = true
+		return
+	if delta <= 0.0:
+		return
+	var raw_v: Vector3 = (target_pos - _last_target_pos) / delta
+	# EMA over ~200 ms smooths out per-frame jitter (especially during replay
+	# bracket transitions when the interpolated position can step).
+	var alpha: float = clampf(delta * 5.0, 0.0, 1.0)
+	_target_velocity = _target_velocity.lerp(raw_v, alpha)
+	_last_target_pos = target_pos
