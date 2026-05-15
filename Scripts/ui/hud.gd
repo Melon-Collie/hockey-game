@@ -262,12 +262,13 @@ func _build_phase_banner() -> void:
 	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(centering)
 
-	# Square corners + no border — flat-rectangular lower-third matches the
-	# broadcast look. Earlier 4px rounding produced a "double-curve" top edge
-	# that read as soft / web-UI instead of broadcast chrome.
+	# 4px rounded corners to match the scorebug — single visual language across
+	# the HUD chrome. No top border line: a thin border that has to follow the
+	# corner curve reads as a competing stripe over the chyron's bold team-color
+	# fill, which is what the "double-curve" complaint was actually pointing at.
 	_phase_style = StyleBoxFlat.new()
 	_phase_style.bg_color = MenuStyle.BROADCAST_BG
-	_phase_style.set_corner_radius_all(0)
+	_phase_style.set_corner_radius_all(4)
 	_phase_style.anti_aliasing = false
 	_phase_style.set_content_margin(SIDE_LEFT, 36)
 	_phase_style.set_content_margin(SIDE_RIGHT, 36)
