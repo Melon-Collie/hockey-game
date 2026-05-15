@@ -120,6 +120,7 @@ func start(recorder: ReplayRecorder,
 	_defending_goal_z = defending_goal_z
 	_has_cut_to_inside_net = false
 	_saved_prev_camera = get_viewport().get_camera_3d()
+	print("[ReplayDBG] start: defending_goal_z=", _defending_goal_z)
 
 	var puck_pos_getter: Callable = func() -> Vector3: return _puck.global_position
 	_hard_cam = SpectatorCamera.new()
@@ -140,6 +141,9 @@ func start(recorder: ReplayRecorder,
 		var booth: Vector3 = Vector3(0.0, 1.3, _defending_goal_z + z_sign * 1.5)
 		_inside_net_cam.set_booth(booth, 52.0, 0.15)
 		_inside_net_cam.snap_to_position()
+		print("[ReplayDBG] inside_net_cam created at ", booth)
+	else:
+		print("[ReplayDBG] inside_net_cam NOT created (defending_goal_z was 0)")
 
 	NetworkManager.start_replay_mode(_clip_start_ts)
 	replay_started.emit()
@@ -228,6 +232,8 @@ func _process(delta: float) -> void:
 		_inside_net_cam.snap_to_position()
 		_inside_net_cam.make_current()
 		_has_cut_to_inside_net = true
+		print("[ReplayDBG] CUT fired, inside_net_cam.current=", _inside_net_cam.current,
+				" at virtual_clock=", _virtual_clock, " clip_end=", _clip_end_ts)
 
 	NetworkManager.set_replay_clock(_virtual_clock)
 
