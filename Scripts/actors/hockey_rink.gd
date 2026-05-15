@@ -352,18 +352,19 @@ func _draw_crease_arc(img: Image, cx: float, goal_y: float, toward_center: int, 
 			if dy < -aa:
 				continue
 			var alpha: float = 0.0
-			# Curved band of width `thickness` around arc_r, clipped to |dx| <= half_w.
-			if abs(dx) <= half_w + aa:
+			# Curved band of width `thickness` around arc_r. Hard-clip at the side
+			# cap (|dx| = half_w); the side stroke covers that interior boundary,
+			# so AA-fading it just produces a notch at the corner where curve meets line.
+			if abs(dx) <= half_w:
 				var dist: float = sqrt(dx * dx + dy * dy)
 				var band: float = half_t - abs(dist - arc_r)
-				var cap: float = half_w - abs(dx)
-				var arc_inside: float = minf(minf(band, cap), dy)
+				var arc_inside: float = minf(band, dy)
 				alpha = maxf(alpha, clampf(arc_inside / aa + 0.5, 0.0, 1.0))
-			# Straight side strokes at x = ±half_w, between goal line and the arc.
-			if dy <= straight_depth + aa:
+			# Straight side strokes at x = ±half_w. Hard-clip at the top (dy = straight_depth);
+			# the arc band covers that interior boundary.
+			if dy <= straight_depth:
 				var stroke: float = half_t - abs(abs(dx) - half_w)
-				var top: float = straight_depth - dy
-				var side_inside: float = minf(minf(stroke, top), dy)
+				var side_inside: float = minf(stroke, dy)
 				alpha = maxf(alpha, clampf(side_inside / aa + 0.5, 0.0, 1.0))
 			if alpha > 0.0:
 				img.set_pixel(px, py, img.get_pixel(px, py).lerp(color, alpha))
