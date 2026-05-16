@@ -378,4 +378,4 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 - Camera goal anchor flip speed on turnovers
 - Rink size tuning (possible 2/3 scale)
 - Extend visual-offset blend to remote skaters if/when remote prediction lands (today the blend is local-only because remotes are interpolated and never snap)
-- Session-relative timestamps for long-session f32 precision (netcode-improvements-plan.md #4)
+- Long-session f32 precision on session-relative timestamps

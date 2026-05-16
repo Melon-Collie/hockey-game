@@ -139,8 +139,8 @@ var pending_color_votes: Dictionary = {}  # peer_id → color_id (host authorita
 # marked true get an AI bot at game start. Host authoritative; clients mirror.
 var pending_bot_slots: Dictionary[int, bool] = {}
 # Integer physics-tick counter on the host. Used by AI/perception code as a
-# deterministic salt for per-tick RNG (see docs/specs/AI_PLAN.md §11). Clients
-# do not maintain or consume this — they read estimated_host_time() instead.
+# deterministic salt for per-tick RNG. Clients do not maintain or consume
+# this — they read estimated_host_time() instead.
 var host_tick: int = 0
 var pending_num_periods: int = GameRules.NUM_PERIODS
 var pending_period_duration: float = GameRules.PERIOD_DURATION

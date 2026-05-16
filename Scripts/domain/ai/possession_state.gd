@@ -2,9 +2,8 @@ class_name AIPossessionState
 
 # Pure-function team possession state. Returns one of four states based on
 # current puck zone + possession. Replaces the F1/F2/F3 closest-to-puck
-# role assignment with a possession-state-driven model — see
-# `docs/specs/AI_PLAN.md` (v2 model) and the article-distilled three
-# principles (sprint-by, play off heels, simple 2v1).
+# role assignment with a possession-state-driven model, following the
+# three principles: sprint-by, play off heels, simple 2v1.
 #
 # State table (per team):
 #   OZONE    — we have the puck AND puck is in their DZ
