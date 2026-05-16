@@ -219,17 +219,3 @@ static func popup_button(label: String) -> Button:
 	wire_hover_scale(btn)
 	SoundManager.wire_button(btn)
 	return btn
-
-
-# Build an OptionButton populated with every team color preset, with one
-# selected by id. Caller wires SoundManager if desired.
-static func color_option_btn(selected_id: String, min_size: Vector2, font_size: int) -> OptionButton:
-	var btn := OptionButton.new()
-	btn.custom_minimum_size = min_size
-	btn.add_theme_font_size_override("font_size", font_size)
-	var ids: Array[String] = TeamColorRegistry.get_all_ids()
-	for i: int in ids.size():
-		btn.add_item(TeamColorRegistry.get_preset_name(ids[i]), i)
-		if ids[i] == selected_id:
-			btn.select(i)
-	return btn

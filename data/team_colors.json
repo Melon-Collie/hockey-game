@@ -1,7 +1,6 @@
 {
   "presets": [
     {
-      "id": "blueberry",
       "name": "Blueberry",
       "primary": "#4A7AD6",
       "secondary": "#6B1E4A",
@@ -33,7 +32,6 @@
       }
     },
     {
-      "id": "pomegranate",
       "name": "Pomegranate",
       "primary": "#6B1822",
       "secondary": "#E8445A",
@@ -65,7 +63,6 @@
       }
     },
     {
-      "id": "lemon",
       "name": "Lemon",
       "primary": "#F5D028",
       "secondary": "#5AB4E0",
@@ -97,7 +94,6 @@
       }
     },
     {
-      "id": "coconut",
       "name": "Coconut",
       "primary": "#5A3A22",
       "secondary": "#3A8AA8",
@@ -129,7 +125,6 @@
       }
     },
     {
-      "id": "papaya",
       "name": "Papaya",
       "primary": "#F46B2A",
       "secondary": "#1AA892",
@@ -161,7 +156,6 @@
       }
     },
     {
-      "id": "dragonfruit",
       "name": "Dragonfruit",
       "primary": "#E31B6D",
       "secondary": "#1A1A1A",
@@ -193,7 +187,6 @@
       }
     },
     {
-      "id": "fig",
       "name": "Fig",
       "primary": "#6B3A5C",
       "secondary": "#D47A4A",
@@ -225,7 +218,6 @@
       }
     },
     {
-      "id": "lime",
       "name": "Lime",
       "primary": "#7FB320",
       "secondary": "#F5E6D3",

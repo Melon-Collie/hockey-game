@@ -7,16 +7,19 @@ class_name TeamColorRegistry
 #
 # Players who want to customize colors place a team_colors.json in their
 # game data directory (user://) — no other setup is required.
-# Unknown preset IDs return a fallback and log a warning; they never crash.
+#
+# Color identity is an integer slot: the preset's index in the loaded array.
+# JSON keeps a "name" field for self-documentation, but nothing in the UI
+# displays it — modders are reassigning slot N, not "the blueberry team".
+# Out-of-range slots return a fallback and log a warning; they never crash.
 
-const DEFAULT_HOME_ID: String = "blueberry"
-const DEFAULT_AWAY_ID: String  = "pomegranate"
+const DEFAULT_HOME_SLOT: int = 0
+const DEFAULT_AWAY_SLOT: int = 1
 
 const _USER_JSON_PATH: String = "user://team_colors.json"
 const _RES_JSON_PATH:  String = "res://data/team_colors.json"
 
-static var _presets: Dictionary = {}
-static var _preset_ids: Array[String] = []
+static var _presets: Array[Dictionary] = []
 static var _loaded: bool = false
 
 
@@ -32,44 +35,51 @@ static func ensure_loaded() -> void:
 	_load_hardcoded_fallback()
 
 
-static func get_preset(id: String) -> Dictionary:
+static func get_preset(slot: int) -> Dictionary:
 	ensure_loaded()
-	if _presets.has(id):
-		return _presets[id]
-	push_warning("TeamColorRegistry: unknown preset '%s', using default" % id)
-	return _presets.get(DEFAULT_HOME_ID, _hardcoded_penguins())
+	if slot >= 0 and slot < _presets.size():
+		return _presets[slot]
+	push_warning("TeamColorRegistry: unknown slot '%d', using default" % slot)
+	if _presets.size() > DEFAULT_HOME_SLOT:
+		return _presets[DEFAULT_HOME_SLOT]
+	return _hardcoded_penguins()
 
 
 # Returns the color set appropriate for the given team slot.
 # team_id == 0 → home (dark jersey), team_id == 1 → away (white jersey).
 # Merges top-level primary/secondary with the slot-specific fields.
-static func get_colors(id: String, team_id: int) -> Dictionary:
-	var preset: Dictionary = get_preset(id)
-	var slot: Dictionary = preset.home if team_id == 0 else preset.away
+static func get_colors(slot: int, team_id: int) -> Dictionary:
+	var preset: Dictionary = get_preset(slot)
+	var jersey_slot: Dictionary = preset.home if team_id == 0 else preset.away
 	return {
 		"primary":        preset.primary,
 		"secondary":      preset.secondary,
-		"helmet":         slot.helmet,
-		"jersey":         slot.jersey,
-		"jersey_stripe":  slot.jersey_stripe,
-		"gloves":         slot.gloves,
-		"pants":          slot.pants,
-		"pants_stripe":   slot.pants_stripe,
-		"socks":          slot.socks,
-		"socks_stripe":   slot.socks_stripe,
-		"goalie_pads":    slot.goalie_pads,
-		"text":           slot.text,
-		"text_outline":   slot.text_outline,
+		"helmet":         jersey_slot.helmet,
+		"jersey":         jersey_slot.jersey,
+		"jersey_stripe":  jersey_slot.jersey_stripe,
+		"gloves":         jersey_slot.gloves,
+		"pants":          jersey_slot.pants,
+		"pants_stripe":   jersey_slot.pants_stripe,
+		"socks":          jersey_slot.socks,
+		"socks_stripe":   jersey_slot.socks_stripe,
+		"goalie_pads":    jersey_slot.goalie_pads,
+		"text":           jersey_slot.text,
+		"text_outline":   jersey_slot.text_outline,
 	}
 
 
-static func get_all_ids() -> Array[String]:
+static func get_all_slots() -> Array[int]:
 	ensure_loaded()
-	return _preset_ids.duplicate()
+	var result: Array[int] = []
+	for i: int in _presets.size():
+		result.append(i)
+	return result
 
 
-static func get_preset_name(id: String) -> String:
-	return get_preset(id).get("name", id)
+# Display label. Kept around for debug/inspector use; the UI no longer
+# renders names anywhere.
+static func get_preset_name(slot: int) -> String:
+	return get_preset(slot).get("name", "Slot %d" % slot)
 
 
 static func _try_load_from(path: String) -> bool:
@@ -82,16 +92,12 @@ static func _try_load_from(path: String) -> bool:
 	if not data is Dictionary or not data.has("presets"):
 		push_error("TeamColorRegistry: malformed JSON in %s" % path)
 		return false
-	var count: int = 0
+	_presets.clear()
 	for entry: Dictionary in data["presets"]:
-		var id: String = entry.get("id", "")
-		if id.is_empty():
-			continue
 		var home: Dictionary = entry.get("home", {})
 		var away: Dictionary = entry.get("away", {})
-		_presets[id] = {
-			"id":        id,
-			"name":      entry.get("name", id),
+		_presets.append({
+			"name":      entry.get("name", "Slot %d" % _presets.size()),
 			"primary":   _parse_color(entry.get("primary",   "#FFFFFF")),
 			"secondary": _parse_color(entry.get("secondary", "#FFFFFF")),
 			"home": {
@@ -120,11 +126,8 @@ static func _try_load_from(path: String) -> bool:
 				"text":          _parse_color(away.get("text",          "#000000")),
 				"text_outline":  _parse_color(away.get("text_outline",  "#FFFFFF")),
 			},
-		}
-		if not _preset_ids.has(id):
-			_preset_ids.append(id)
-		count += 1
-	if count == 0:
+		})
+	if _presets.is_empty():
 		push_warning("TeamColorRegistry: %s contained no valid presets" % path)
 		return false
 	return true
@@ -135,19 +138,13 @@ static func _parse_color(hex: String) -> Color:
 
 
 static func _load_hardcoded_fallback() -> void:
-	var p: Dictionary = _hardcoded_penguins()
-	_presets[p.id] = p
-	if not _preset_ids.has(p.id):
-		_preset_ids.append(p.id)
-	var l: Dictionary = _hardcoded_leafs()
-	_presets[l.id] = l
-	if not _preset_ids.has(l.id):
-		_preset_ids.append(l.id)
+	_presets.clear()
+	_presets.append(_hardcoded_penguins())
+	_presets.append(_hardcoded_leafs())
 
 
 static func _hardcoded_penguins() -> Dictionary:
 	return {
-		"id":        DEFAULT_HOME_ID,
 		"name":      "Pittsburgh Penguins",
 		"primary":   Color(0.988, 0.710, 0.078),
 		"secondary": Color(0.06,  0.06,  0.06),
@@ -182,7 +179,6 @@ static func _hardcoded_penguins() -> Dictionary:
 
 static func _hardcoded_leafs() -> Dictionary:
 	return {
-		"id":        DEFAULT_AWAY_ID,
 		"name":      "Toronto Maple Leafs",
 		"primary":   Color(0.000, 0.125, 0.357),
 		"secondary": Color(1.0,   1.0,   1.0),

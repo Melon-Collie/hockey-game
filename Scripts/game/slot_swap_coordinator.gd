@@ -49,7 +49,7 @@ func request_swap(
 	var helmet: Color
 	var pants: Color
 	if new_team_id != result.old_team_id:
-		var colors: Dictionary = TeamColorRegistry.get_colors(_teams[new_team_id].color_id, new_team_id)
+		var colors: Dictionary = TeamColorRegistry.get_colors(_teams[new_team_id].color_slot, new_team_id)
 		jersey = colors.jersey
 		helmet = colors.helmet
 		pants  = colors.pants
@@ -85,7 +85,7 @@ func apply_confirmed_swap(
 	if _state_machine != null:
 		_state_machine.register_remote_assigned_player(peer_id, new_slot, new_team_id)
 	var record: PlayerRecord = _registry.get_record(peer_id)
-	var colors: Dictionary = TeamColorRegistry.get_colors(_teams[new_team_id].color_id, new_team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(_teams[new_team_id].color_slot, new_team_id)
 	record.team               = _teams[new_team_id]
 	record.team_slot          = new_slot
 	# Keep the hot-path team lookup tables in sync with the new

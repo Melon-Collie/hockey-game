@@ -181,7 +181,7 @@ func _rebuild_period_grid(num_periods: int) -> void:
 		var label: String = "AWAY" if team_id == 1 else "HOME"
 		var primary: Color = _HEADER
 		if GameManager.teams.size() > team_id:
-			primary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
+			primary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id).primary
 		var badge := _team_badge(label, primary)
 		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
@@ -256,7 +256,7 @@ func _make_team_header(team_id: int) -> PanelContainer:
 	# rounded-rect-inside-rounded-rect tell. jersey color fills the
 	# strip, jersey_stripe forms the left edge band, text color carries
 	# the label. Same palette the skater actually wears on the ice.
-	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id)
 	var style := StyleBoxFlat.new()
 	style.bg_color = colors.jersey
 	style.set_corner_radius_all(0)
