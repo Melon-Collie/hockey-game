@@ -195,7 +195,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == ctx.peer_id:
 			continue
-		if int(ctx.team_id_resolver.call(peer_id)) == ctx.team_id:
+		if ctx.team_id_by_peer.get(peer_id, -1) == ctx.team_id:
 			_scratch_teammate_ids.append(peer_id)
 
 	# Projected RELEASE position for SHOOT scoring. The wrister charge
@@ -312,7 +312,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponents_shoot.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
-		if int(ctx.team_id_resolver.call(peer_id)) != ctx.team_id and peer_id != ctx.peer_id:
+		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id and peer_id != ctx.peer_id:
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
 			_scratch_opponents.append(s.position)
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
@@ -327,7 +327,7 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 		out_buf: Array[Vector3]) -> void:
 	out_buf.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
-		if int(ctx.team_id_resolver.call(peer_id)) != ctx.team_id and peer_id != ctx.peer_id:
+		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id and peer_id != ctx.peer_id:
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
 			out_buf.append(AITrajectory.predict_at(s.position, s.velocity, time_s))
 

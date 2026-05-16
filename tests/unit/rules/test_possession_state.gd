@@ -26,11 +26,11 @@ func _make_snapshot(carrier_pid: int, puck_z: float,
 	return snap
 
 
-func _resolver(skaters: Array) -> Callable:
+func _resolver(skaters: Array) -> Dictionary:
 	var team_map: Dictionary = {}
 	for entry: Array in skaters:
 		team_map[entry[0]] = entry[1]
-	return func(pid: int) -> int: return int(team_map.get(pid, -1))
+	return team_map
 
 
 func test_dzone_when_opp_carries_in_our_dz() -> void:

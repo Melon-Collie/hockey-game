@@ -51,6 +51,7 @@ var is_fullscreen: bool = false
 var resolution_index: int = 1
 var vsync_enabled: bool = true
 var fps_cap_index: int = 5
+var show_fps: bool = false
 var gamma: float = 1.0
 var color_grade_preset: int = COLOR_GRADE_NEUTRAL
 var mouse_sensitivity: float = 1.0
@@ -102,6 +103,7 @@ func save() -> void:
 	cfg.set_value("video", "resolution_index", resolution_index)
 	cfg.set_value("video", "vsync_enabled", vsync_enabled)
 	cfg.set_value("video", "fps_cap_index", fps_cap_index)
+	cfg.set_value("video", "show_fps", show_fps)
 	cfg.set_value("video", "gamma", gamma)
 	cfg.set_value("video", "color_grade_preset", color_grade_preset)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
@@ -254,6 +256,7 @@ func _load() -> void:
 		resolution_index = clamp(cfg.get_value("video", "resolution_index", 1), 0, RESOLUTIONS.size() - 1)
 		vsync_enabled = cfg.get_value("video", "vsync_enabled", true)
 		fps_cap_index = clamp(cfg.get_value("video", "fps_cap_index", 5), 0, FPS_CAP_VALUES.size() - 1)
+		show_fps = cfg.get_value("video", "show_fps", false)
 		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
 		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_NEUTRAL), 0, COLOR_GRADE_LABELS.size() - 1)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)

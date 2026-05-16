@@ -154,7 +154,7 @@ static func assign(
 		team_id: int,
 		own_goal_z: float,
 		state: int,
-		team_id_resolver: Callable,
+		team_id_by_peer: Dictionary,
 		prev_assignments: Dictionary,
 		_strong_x: float = 1.0) -> Dictionary:
 	var result: Dictionary = {}
@@ -164,7 +164,7 @@ static func assign(
 	# Collect our team's peers.
 	var teammates: Array = []
 	for peer_id: int in snapshot.skater_states:
-		if int(team_id_resolver.call(peer_id)) == team_id:
+		if team_id_by_peer.get(peer_id, -1) == team_id:
 			teammates.append(peer_id)
 	if teammates.is_empty():
 		return result
@@ -175,7 +175,7 @@ static func assign(
 	if state == AIPossessionState.State.OZONE \
 			or state == AIPossessionState.State.TRANS_DO:
 		var carrier_pid: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
-		if carrier_pid != -1 and int(team_id_resolver.call(carrier_pid)) == team_id:
+		if carrier_pid != -1 and team_id_by_peer.get(carrier_pid, -1) == team_id:
 			result[carrier_pid] = Slot.CARRIER
 			fixed_peers[carrier_pid] = true
 

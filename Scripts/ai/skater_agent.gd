@@ -21,9 +21,9 @@ var _prev_mouse_world_pos: Vector3 = Vector3.ZERO
 var _has_prev_mouse: bool = false
 
 
-func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
+func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
 		is_left_handed: bool) -> void:
-	_sm.setup(peer_id, team_id, brain, resolver, is_left_handed)
+	_sm.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
 
 
 # Returns the InputState for this physics tick. Caller must not retain a

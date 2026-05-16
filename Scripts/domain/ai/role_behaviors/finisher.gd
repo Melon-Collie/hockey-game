@@ -137,7 +137,7 @@ static func _last_shooter_is_elevated(ctx: RoleContext) -> bool:
 	var best_pid: int = 0
 	var best_d2: float = INF
 	for pid: int in ctx.snapshot.skater_states:
-		if int(ctx.team_id_resolver.call(pid)) != ctx.team_id:
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
 			continue
 		var pos: Vector3 = ctx.snapshot.skater_states[pid].position
 		var dx: float = pos.x - puck_pos.x

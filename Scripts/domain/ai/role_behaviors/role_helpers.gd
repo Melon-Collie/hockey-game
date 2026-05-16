@@ -102,7 +102,7 @@ static func resolve_teammate_carrier_pos(ctx: RoleContext) -> Vector3:
 	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
 	if carrier_pid == -1:
 		return Vector3.INF
-	if int(ctx.team_id_resolver.call(carrier_pid)) != ctx.team_id:
+	if ctx.team_id_by_peer.get(carrier_pid, -1) != ctx.team_id:
 		return Vector3.INF
 	if not ctx.snapshot.skater_states.has(carrier_pid):
 		return Vector3.INF
@@ -159,7 +159,7 @@ static func collect_opp_team_excluding_carrier(ctx: RoleContext) -> Array[Vector
 		carrier_pid = ctx.snapshot.puck_state.carrier_peer_id
 	var result: Array[Vector3] = []
 	for pid: int in ctx.snapshot.skater_states:
-		if int(ctx.team_id_resolver.call(pid)) == ctx.team_id:
+		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
 			continue  # our team
 		if pid == carrier_pid:
 			continue
@@ -174,7 +174,7 @@ static func collect_teammates_excluding_self(ctx: RoleContext) -> Array[Vector3]
 	for pid: int in ctx.snapshot.skater_states:
 		if pid == ctx.peer_id:
 			continue
-		if int(ctx.team_id_resolver.call(pid)) == ctx.team_id:
+		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
 			result.append(ctx.snapshot.skater_states[pid].position)
 	return result
 
@@ -189,7 +189,7 @@ static func collect_opponents(ctx: RoleContext,
 	out_positions.clear()
 	out_states.clear()
 	for pid: int in ctx.snapshot.skater_states:
-		if int(ctx.team_id_resolver.call(pid)) != ctx.team_id:
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[pid]
 			out_positions.append(s.position)
 			out_states.append(s)

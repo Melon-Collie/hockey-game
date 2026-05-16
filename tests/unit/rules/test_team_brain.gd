@@ -31,9 +31,8 @@ func _make_snapshot(carrier_pid: int, puck_pos: Vector3) -> WorldSnapshot:
 
 func _make_brain() -> TeamBrain:
 	var team_map: Dictionary = {100: 0, 110: 0, 120: 0, 200: 1}
-	var resolver: Callable = func(pid: int) -> int: return int(team_map.get(pid, -1))
 	var human_resolver: Callable = func(_pid: int) -> bool: return false
-	return TeamBrain.new(TEAM_ID, resolver, human_resolver)
+	return TeamBrain.new(TEAM_ID, team_map, human_resolver)
 
 
 func test_tick_below_period_is_noop() -> void:
