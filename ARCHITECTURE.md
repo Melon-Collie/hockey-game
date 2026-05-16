@@ -21,7 +21,7 @@ The Rocket League freeplay ceiling is a guiding star: the stickhandling-to-shot 
 | Channel | Rate | Transport |
 |---------|------|-----------|
 | Input (client → host) | 60 Hz | Unreliable, last 12 frames per packet |
-| World state (host → clients) | 40 Hz | Unreliable, ~302 bytes at 6 players + 2 goalies (single flat PackedByteArray, well under 1392-byte ENet MTU) |
+| World state (host → clients) | 60 Hz | Unreliable, ~302 bytes at 6 players + 2 goalies (single flat PackedByteArray, well under 1392-byte ENet MTU) |
 | Events (pickup, spawn, goal, goalie transitions) | On event | Reliable |
 | Stats sync | On change | Reliable |
 
@@ -87,7 +87,7 @@ Period clock ticks only during `PLAYING`. On expiry: if periods remain → `END_
 
 ### Goalie Networking
 
-**GoalieController** AI runs on both host and client. Clients do not interpolate server snapshots — they run the full goalie state machine every physics tick using their local puck position. This eliminates interpolation delay and keeps goalie reactions immediate. Server broadcasts (40 Hz) soft-correct position only, keeping client and host in sync despite the client tracking a slightly stale puck.
+**GoalieController** AI runs on both host and client. Clients do not interpolate server snapshots — they run the full goalie state machine every physics tick using their local puck position. This eliminates interpolation delay and keeps goalie reactions immediate. Server broadcasts (60 Hz) soft-correct position only, keeping client and host in sync despite the client tracking a slightly stale puck.
 
 Serialized per goalie: position (x/z), rotation_y, state_enum, five_hole_openness, velocity (x/z) — 7 fields, 8 B quantized. `apply_state` forward-predicts the server position using `velocity * elapsed` (elapsed ≈ RTT/2 at call time), then blends at 40% per broadcast. `five_hole_openness` is computed only on the server; clients adopt it at 80% blend per broadcast so the visual pad gap matches server physics within ~50 ms. The client AI does not recompute `five_hole_openness`, so nothing fights the correction. Body part configs are rebuilt from the running AI state each frame.
 
@@ -311,7 +311,7 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 
 **Reconcile saves and restores only narrow shot-state fields** (`_state`, follow-through timers, one-timer window, `slapper_charge_timer`). Visual and charge fields come from replay output. The `slapper_charge_timer` save/restore is required because `_update_slapper_charge` ticks the timer inside the replay loop — without it each reconcile re-ticks the unconfirmed inputs and the timer inflates O(N) per broadcast, popping the blade above `slapper_wind_up_height`. Server authority on shot state: if `server_state.shot_state` differs after replay, server wins — `_state` and `_charge_distance` are overwritten. **Two symmetric guards protect in-flight shot transitions:**
 - **`FOLLOW_THROUGH` → aim state blocked.** When the client is in `FOLLOW_THROUGH` it has already sent the release RPC; the host is processing-lag behind. Reverting would loop the follow-through animation every broadcast.
-- **`WRISTER_AIM` / `SLAPPER_CHARGE_WITH_PUCK` → skating blocked when `has_puck = true`.** There is a ~23ms window between the client pressing shoot and the host processing that input (60Hz batch window + network transit). World states broadcast at 40Hz have a ~90% chance of arriving during this window carrying `shot_state = SKATING_WITH_PUCK`. Without this guard reconcile resets the state machine on every broadcast; `shoot_pressed` has already fired once and `shoot_held` never re-enters aim, so the shot never releases. Gated on `has_puck` so a puck steal (which clears `has_puck` before the next reconcile) still overrides correctly.
+- **`WRISTER_AIM` / `SLAPPER_CHARGE_WITH_PUCK` → skating blocked when `has_puck = true`.** There is a ~23ms window between the client pressing shoot and the host processing that input (60Hz batch window + network transit). World states broadcast at 60Hz still have a meaningful chance of arriving during this window carrying `shot_state = SKATING_WITH_PUCK`. Without this guard reconcile resets the state machine on every broadcast; `shoot_pressed` has already fired once and `shoot_held` never re-enters aim, so the shot never releases. Gated on `has_puck` so a puck steal (which clears `has_puck` before the next reconcile) still overrides correctly.
 
 **Mouse position is seeded from the first replayed input at replay start and the last at replay end.** Wrister-aim charge accumulation is a function of sweep distance; both endpoints must match for deterministic replay across reconcile.
 
@@ -319,7 +319,7 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 
 **Blade and top-hand positions on remote skaters are extrapolated from the body velocity field**, not from derived position deltas. Dividing position deltas by client receive-time gaps amplifies jitter into visible blade jumps.
 
-**Post-reconcile blade pose dispatches by state on the local controller.** After replay completes, `LocalController.reconcile` re-applies the blade based on the restored `_sm.get_state()`: slapper-charge states call `_apply_slapper_blade_position`, follow-through calls the matching `_apply_*_follow_through`, shot-blocking is a no-op (block stance owns the pose), everything else calls `_apply_blade_from_mouse`. Calling `_apply_blade_from_mouse` unconditionally would IK the blade to the mouse position every reconcile, popping it down from the slapper wind-up pose at the broadcast rate (~40Hz) and producing a visible flicker against the next physics tick's slapper handler.
+**Post-reconcile blade pose dispatches by state on the local controller.** After replay completes, `LocalController.reconcile` re-applies the blade based on the restored `_sm.get_state()`: slapper-charge states call `_apply_slapper_blade_position`, follow-through calls the matching `_apply_*_follow_through`, shot-blocking is a no-op (block stance owns the pose), everything else calls `_apply_blade_from_mouse`. Calling `_apply_blade_from_mouse` unconditionally would IK the blade to the mouse position every reconcile, popping it down from the slapper wind-up pose at the broadcast rate (60Hz) and producing a visible flicker against the next physics tick's slapper handler.
 
 **Body check impulse is injected into the reconcile replay at the matching `host_timestamp`**, so replay reproduces the post-collision trajectory without oscillation.
 
