@@ -187,12 +187,22 @@ var _last_ws_arrival_time: float = -1.0
 var pending_error: String = ""
 
 var _input_timer: float = 0.0
-var _state_timer: float = 0.0
+# Physics-driven broadcast cadence (see _physics_process). Counts physics ticks
+# between broadcasts. `_last_broadcast_us` tracks wall-clock for telemetry.
+var _state_tick_counter: int = 0
+var _last_broadcast_us: int = 0
 var _ping_timer: float = 0.0
 const _PING_INTERVAL: float = 2.0
 var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
+# Number of physics ticks between broadcasts. At 240Hz / 40Hz = 6; at 240Hz /
+# 5Hz (dead-puck phases) = 48. Recomputed by `set_broadcast_rate`. The
+# broadcast loop fires from `_physics_process` (not `_process`) so that on a
+# host stall, Godot's physics catch-up naturally produces back-to-back
+# broadcasts with distinct host_timestamps for the client to interpolate
+# through — instead of one big "missing snapshot" gap followed by a snap.
+var _state_tick_divisor: int = Constants.PHYSICS_TICK / Constants.STATE_RATE
 const CONNECT_TIMEOUT: float = 10.0
 
 func _ready() -> void:
@@ -387,8 +397,10 @@ func prepare_for_new_game() -> void:
 	_peer_loss_rates.clear()
 	_peer_loss_timer = 0.0
 	_input_timer = 0.0
-	_state_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
+	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
+	_state_tick_counter = 0
+	_last_broadcast_us = 0
 	_last_ws_seq_received = -1
 	_ws_drop_window = 0
 	_ws_recv_window = 0
@@ -419,8 +431,10 @@ func reset() -> void:
 	pending_color_votes = {}
 	pending_bot_slots.clear()
 	_input_timer = 0.0
-	_state_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
+	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
+	_state_tick_counter = 0
+	_last_broadcast_us = 0
 	_connect_timer = -1.0
 	_clock_sync = null
 	_session_start_ms = 0
@@ -459,6 +473,20 @@ func _physics_process(_delta: float) -> void:
 	# transfers (Phase 1 has no host transfer support anyway).
 	if is_host:
 		host_tick += 1
+		# World-state broadcast cadence: every Nth physics tick (N=6 at 40Hz).
+		# Lives in _physics_process — not _process — so that Godot's physics
+		# catch-up after a main-thread stall naturally fires multiple
+		# broadcasts in rapid succession, each carrying the snapshot at that
+		# physics tick. Without this, a 60ms stall produces ONE broadcast on
+		# recovery and the client interpolator runs out of bracket.
+		_state_tick_counter += 1
+		if _state_tick_counter >= _state_tick_divisor:
+			_state_tick_counter = 0
+			var now_us: int = Time.get_ticks_usec()
+			if _last_broadcast_us != 0:
+				NetworkTelemetry.record_broadcast_interval_us(now_us - _last_broadcast_us)
+			_last_broadcast_us = now_us
+			_broadcast_state()
 
 func _process(delta: float) -> void:
 	# Cap delta to avoid timer bursting on the first frame after an OS freeze
@@ -512,10 +540,9 @@ func _process(delta: float) -> void:
 			_ws_loss_window_timer = 0.0
 
 	if is_host:
-		_state_timer += capped_delta
-		if _state_timer >= state_delta:
-			_state_timer -= state_delta
-			_broadcast_state()
+		# Broadcast cadence lives in _physics_process so it stays well-paced
+		# across host main-thread stalls. The 1Hz peer-loss aggregation stays
+		# render-frame-paced — it's a slow per-second sample, not latency-critical.
 		_peer_loss_timer += capped_delta
 		if _peer_loss_timer >= 1.0:
 			for pid: int in _peer_echo_recv_window:
@@ -529,6 +556,13 @@ func _process(delta: float) -> void:
 
 func set_broadcast_rate(hz: float) -> void:
 	state_delta = 1.0 / maxf(hz, 1.0)
+	# `_physics_process` fires the broadcast every Nth physics tick. Round to
+	# the nearest integer so any hz that doesn't divide PHYSICS_TICK evenly
+	# (5, 10, 20, 30, 40, 48, 60, 80, 120) still produces the closest cadence.
+	# At 40Hz → 6 ticks; at 5Hz (dead-puck phase) → 48 ticks.
+	_state_tick_divisor = maxi(int(round(float(Constants.PHYSICS_TICK) / maxf(hz, 1.0))), 1)
+	# Reset the counter so the new cadence starts cleanly from the next tick.
+	_state_tick_counter = 0
 
 func _broadcast_state() -> void:
 	if not _world_state_provider.is_valid():
@@ -1260,12 +1294,18 @@ func get_target_interpolation_delay() -> float:
 func adapt_interpolation_delay(current: float) -> float:
 	var target: float = get_target_interpolation_delay()
 	var change: float = lerpf(current, target, 0.15) - current
-	# Up-clamp raised to 10 ms/packet (was 5 ms): a sudden RTT spike can push the
-	# target 150+ ms above current; at 5 ms/packet that takes ~750 ms to converge,
-	# during which extrapolation fires every 50 ms on all remote skaters (visible
-	# micro-stutters). 10 ms/packet halves the recovery window with no oscillation
-	# risk — the down-clamp stays at 1 ms/packet to avoid chasing transient jitter.
-	return current + clampf(change, -0.001, 0.010)
+	# Asymmetric clamp: react fast to sustained jitter, relax fast from one-offs.
+	# +10ms/packet up: a sudden RTT spike can push target 150+ms above current;
+	#   at slower up-rates extrapolation fires every 50ms on all remote skaters
+	#   (visible micro-stutter) until the buffer catches up.
+	# -3ms/packet down: a single host stutter pushes the buffer up by 30-60ms;
+	#   at the old -1ms rate (~40ms/sec relaxation) the buffer stayed inflated
+	#   for many seconds after a one-off hitch, so remote players felt
+	#   persistently laggy long after the hitch passed. -3ms/packet ≈ 120ms/sec
+	#   relaxation, recovering a 60ms over-inflation in ~0.5s. Still slow
+	#   enough not to chase per-packet jitter — the target itself already has
+	#   `jitter_p95 * 1.5` margin baked in (see get_target_interpolation_delay).
+	return current + clampf(change, -0.003, 0.010)
 
 func get_peer_loss_rate(peer_id: int = -1) -> float:
 	if is_host:

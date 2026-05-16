@@ -58,6 +58,9 @@ var _in_replay_locally: bool = false
 # created _state_machine, the sync would otherwise be dropped and the host
 # (only delivered through this path) would never spawn on the client.
 var _pending_existing_players: Array = []
+# Wall-clock timestamp of the previous host physics tick. Used to record the
+# inter-tick gap into NetworkTelemetry so F3 can surface host stalls.
+var _last_phys_tick_us: int = 0
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
 var _spawner: ActorSpawner = null
@@ -215,6 +218,17 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Host-frame health telemetry: wall-clock gap between consecutive physics
+	# ticks. Steady-state at 240Hz is ~4170us. A real-time stall (CPU steal,
+	# heavy Jolt frame, GC pause, OS hitch) produces one large sample followed
+	# by near-zero catch-up ticks as the engine rebases the physics clock to
+	# wall time. Surfaces on F3 as `tick p95/p99/max`. Host only — clients
+	# don't run the host simulation loop and the metric isn't meaningful there.
+	if NetworkManager.is_host:
+		var now_us: int = Time.get_ticks_usec()
+		if _last_phys_tick_us != 0:
+			NetworkTelemetry.record_host_physics_tick_us(now_us - _last_phys_tick_us)
+		_last_phys_tick_us = now_us
 	if _state_machine != null and _registry != null:
 		var local: PlayerRecord = _registry.get_local()
 		if local != null and not PhaseRules.is_dead_puck_phase(_state_machine.current_phase):
@@ -482,6 +496,10 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 
 # ── World Spawn ───────────────────────────────────────────────────────────────
 func _spawn_world() -> void:
+	# Reset host-tick telemetry baseline. Without this, the first tick after a
+	# scene change records a huge gap (whatever wall time elapsed during the
+	# scene transition) and pollutes the p95/p99 for the first second.
+	_last_phys_tick_us = 0
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
