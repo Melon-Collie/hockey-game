@@ -64,10 +64,19 @@ func debug_last_decision() -> String:
 
 
 func debug_shoot_score() -> float:
+	# Show whichever of wrister/quick-shot the carrier is currently
+	# leaning on. Matches the tie-break in AIRoleCarrier._pick_action
+	# (wrister wins ties, quick must beat wrister by margin).
+	if _sm.debug_quick_shot_score > _sm.debug_shoot_score \
+			+ AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+		return _sm.debug_quick_shot_score
 	return _sm.debug_shoot_score
 
 
 func debug_shoot_label() -> String:
+	if _sm.debug_quick_shot_score > _sm.debug_shoot_score \
+			+ AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+		return "QUICK"
 	return "SHOOT"
 
 

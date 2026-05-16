@@ -46,8 +46,8 @@ func test_shoot_score_reduced_by_mid_lane_defender() -> void:
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
 	# Defender at z=20, 5 m from shooter along an ~11 m segment —
-	# t ≈ 0.43, time_to_defender ≈ 0.16 s > LANE_REACTION_DELAY_S,
-	# so they have time to position their stick.
+	# t ≈ 0.43, time_to_defender ≈ 0.16 s > LANE_REACTION_DELAY_S
+	# (0.08), so they have time to position their stick.
 	var blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 20.0)]
 	var blocked: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,blocker)
 	assert_gt(clear, 0.0)
@@ -55,25 +55,25 @@ func test_shoot_score_reduced_by_mid_lane_defender() -> void:
 
 
 func test_shoot_score_unaffected_by_low_t_defender() -> void:
-	# New lane physics: a defender on the segment but at low t (close
+	# Lane physics: a defender on the segment but at low t (close
 	# to shooter, far from receiver) has no reaction time to position
 	# their stick before a fast puck blows past them. Shot score
 	# should be essentially unaffected.
 	#
-	# Uses slapper speed (34 m/s) — at the original engineered defender
-	# position, t ≈ 0.39 × 11.65 / 34 = 0.13 s, comfortably below
-	# LANE_REACTION_DELAY_S = 0.15 → reaction_factor = 0 → no block.
-	# A 24 m/s wrister at the same position would push past threshold
-	# (0.187 s) and reach into the reaction window — that boundary
-	# case isn't what this test verifies.
+	# Uses slapper speed (34 m/s). Shooter z=15, defender z=17.0 →
+	# t ≈ 0.17, time_to_defender ≈ 0.17 × 0.343 ≈ 0.059 s, comfortably
+	# below LANE_REACTION_DELAY_S = 0.08 → reaction_factor = 0 → no
+	# block. A 24 m/s wrister at the same position would push closer
+	# to the threshold; that boundary case isn't what this test
+	# verifies.
 	var shooter := Vector3(0.0, 0.0, 15.0)  # ~12 m from goal
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var slapper := AIActionScoring.SLAPPER_SHOT_SPEED_M_S
 	var clear: float = AIActionScoring.score_shoot(
 			shooter, GOAL, goalie, NET_HW, [], Vector3.INF, slapper)
-	# Defender at z=19.5 — 4.5 m past shooter on the line. Outside
+	# Defender at z=17.0 — 2 m past shooter on the line. Outside
 	# pressure radius (>4 m).
-	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 19.5)]
+	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 17.0)]
 	var blocked: float = AIActionScoring.score_shoot(
 			shooter, GOAL, goalie, NET_HW, close_blocker, Vector3.INF, slapper)
 	assert_almost_eq(blocked, clear, 0.02,

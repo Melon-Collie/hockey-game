@@ -32,6 +32,8 @@ enum State {
 	CARRY,            # with puck, no committed action — aim at goal
 	SHOOT_PRESSED,    # multi-tick wrister charge aimed at goalie shadow
 	PASS_PRESSED,     # one-tick press window aimed at a teammate's lead position
+	QUICK_SHOT_PRESSED,  # one-tick press window aimed at the goalie shadow — no charge
+	ONE_TIMER_PRESSED,   # off-puck FINISHER fire-on-contact when ready + puck in zone
 }
 
 # Margin from the goal line that anchors are clamped inside of. The
@@ -395,6 +397,30 @@ var _shoot_aim_target: Vector3 = Vector3.ZERO
 var _shoot_side_sign: float = 1.0
 var _shoot_perp_sign: float = 1.0
 
+# Aim DIRECTION (unit vector toward goal-shadow aim point) locked at
+# SHOOT_PRESSED entry. Self_pos still recomputes per tick so the
+# release position tracks real motion, but the direction is fixed for
+# the 250 ms charge. Without locking, every per-tick `_shoot_aim_dir`
+# call re-runs `compute_open_net_aim` against the goalie's current
+# position + velocity; a shuffling goalie can flip the larger-arc
+# choice mid-charge and the aim swings wildly, sending shots wide.
+# Locked direction = the bot committed to a target when it picked
+# SHOOT, and follows through.
+var _shoot_aim_dir_locked: Vector3 = Vector3.INF
+
+# One-timer readiness mirrored from the most recent OFF_PUCK role
+# decision. Also published to TeamBrain (so the carrier reads it
+# when scoring passes). Drives the fire-on-zone-entry transition in
+# OFF_PUCK / CHASE_PUCK.
+var _is_one_timer_ready: bool = false
+
+# Tick counter for ONE_TIMER_PRESSED — the bot holds shoot_held until
+# the puck contacts the blade (have_puck flips true), then drops
+# shoot_held to release. Safety bail uses INTENT_MAX_WAIT_TICKS so
+# the bot doesn't get stuck holding charge if the puck is intercepted
+# or the pass misses.
+var _one_timer_press_tick: int = 0
+
 # Pre-aim target locked at the moment intent flips from CARRY to a
 # fire action. Without this, `_aim_target_for_intent` recomputes
 # `compute_open_net_aim` every tick — and when the goalie is roughly
@@ -442,6 +468,7 @@ var debug_last_decision: String = ""
 # flicker every frame). Slot label and carry direction are computed
 # from the chosen peer / position at the same time.
 var debug_shoot_score: float = 0.0
+var debug_quick_shot_score: float = 0.0
 var debug_pass_score: float = 0.0
 var debug_pass_peer_id: int = 0
 var debug_carry_score: float = 0.0
@@ -489,8 +516,16 @@ func debug_role() -> String:
 # scored highest on the most recent _pick_action tick. Independent
 # of commit (intent) — purely the live winner.
 func debug_winner() -> String:
-	var fire_score: float = debug_shoot_score if debug_shoot_score >= debug_pass_score else debug_pass_score
-	var fire_label: String = "SHOOT" if debug_shoot_score >= debug_pass_score else "PASS"
+	# Wrister wins ties over quick-shot (matches the carrier's
+	# tie-break logic: quick must beat wrister by ACTION_HYSTERESIS_MARGIN
+	# to be chosen).
+	var best_shot_score: float = debug_shoot_score
+	var best_shot_label: String = "SHOOT"
+	if debug_quick_shot_score > debug_shoot_score + AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+		best_shot_score = debug_quick_shot_score
+		best_shot_label = "QUICK"
+	var fire_score: float = best_shot_score if best_shot_score >= debug_pass_score else debug_pass_score
+	var fire_label: String = best_shot_label if best_shot_score >= debug_pass_score else "PASS"
 	if fire_score == 0.0 and debug_carry_score == 0.0:
 		return "—"
 	if fire_score >= debug_carry_score:
@@ -505,6 +540,7 @@ func debug_intent() -> String:
 	match _intended_action:
 		State.SHOOT_PRESSED: return "SHOOT"
 		State.PASS_PRESSED: return "PASS"
+		State.QUICK_SHOT_PRESSED: return "QUICK"
 		_: return "CARRY"
 
 
@@ -625,7 +661,10 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	# cached aim target so blade motion stays smooth at 240 Hz. State
 	# transitions zero `_dispatch_skip_counter` (via `_set_state`) so a
 	# fresh state always dispatches full on its first tick.
-	var is_press_state: bool = (_state == State.SHOOT_PRESSED or _state == State.PASS_PRESSED)
+	var is_press_state: bool = (_state == State.SHOOT_PRESSED
+			or _state == State.PASS_PRESSED
+			or _state == State.QUICK_SHOT_PRESSED
+			or _state == State.ONE_TIMER_PRESSED)
 	if not is_press_state and _dispatch_skip_counter > 0:
 		_dispatch_skip_counter -= 1
 		input.move_vector = _cached_move_vector
@@ -645,6 +684,10 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_shoot_pressed(input, snapshot, self_pos, have_puck)
 		State.PASS_PRESSED:
 			_state_pass_pressed(input, snapshot, self_pos, have_puck)
+		State.QUICK_SHOT_PRESSED:
+			_state_quick_shot_pressed(input, snapshot, self_pos, have_puck)
+		State.ONE_TIMER_PRESSED:
+			_state_one_timer_pressed(input, snapshot, self_pos, have_puck)
 
 	_cached_move_vector = input.move_vector
 
@@ -661,6 +704,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var tag_up: Vector3 = _tag_up_anchor(self_pos)
 		_apply_steering(input, snapshot, self_pos, tag_up)
 		input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, tag_up, snapshot))
+		_set_one_timer_ready(false)
 	else:
 		# Role dispatch: each TeamBrain-assigned slot maps to a behavior
 		# module that produces a RoleDecision (target_position +
@@ -669,7 +713,29 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
 		_apply_steering(input, snapshot, self_pos, decision.target_position)
-		if decision.has_aim_override:
+		# One-timer ready overrides the default ready-stance aim: point
+		# mouse + facing at the open net so the bot is pre-aimed when
+		# the puck arrives. Mouse aim is what drives blade IK + body
+		# facing, so this gets the whole stance lined up.
+		#
+		# Preserve ready through pass flights: when the puck has no
+		# carrier (mid-pass / shot in flight), FINISHER's positioning
+		# can't evaluate pass quality (no source carrier to evaluate
+		# `score_pass` from) and falls back to "not ready", but the
+		# bot's physical stance hasn't moved. Keeping the prior flag
+		# alive across the carrier gap is what lets the one-timer
+		# trigger fire when the puck actually arrives — without this
+		# the flag drops the instant the carrier releases the pass,
+		# and the zone-entry transition never sees ready=true.
+		var would_be_ready: bool = decision.is_one_timer_ready
+		if (not would_be_ready) and _is_one_timer_ready \
+				and snapshot.puck_state != null \
+				and snapshot.puck_state.carrier_peer_id == -1:
+			would_be_ready = true
+		_set_one_timer_ready(would_be_ready)
+		if would_be_ready:
+			input.mouse_world_pos = _step_mouse_toward(_shot_aim_point(snapshot, self_pos, 0.0))
+		elif decision.has_aim_override:
 			input.mouse_world_pos = _step_mouse_toward(decision.aim_world_pos)
 		else:
 			input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, decision.target_position, snapshot))
@@ -677,6 +743,18 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
+	elif _is_one_timer_ready and _puck_in_one_timer_zone(snapshot, self_pos):
+		_set_state(State.ONE_TIMER_PRESSED)
+	elif _is_one_timer_ready:
+		# Stay camped + pre-aimed even if the brain says we're closest
+		# to a loose puck. Chasing would re-aim mouse toward the puck
+		# and the FINISHER would lose the goal-aim lock; staying in
+		# OFF_PUCK keeps facing + blade pointed at the net so the
+		# one-tick fire on zone entry releases cleanly. Risk: we
+		# never pick up a loose puck that's drifting nearby. Acceptable
+		# tradeoff — that's another teammate's job and we're committed
+		# to being the trigger.
+		pass
 	elif _should_chase_loose_puck(snapshot, self_pos):
 		_set_state(State.CHASE_PUCK)
 
@@ -808,8 +886,12 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		input.mouse_world_pos = _step_mouse_toward(target)
 	# Transitions: chase ends as soon as someone has the puck, OR we're
 	# no longer the closest teammate (let the new closest take over).
+	# One-timer takes priority — if the FINISHER published ready and the
+	# puck enters our zone while chasing, fire instead of picking up.
 	if have_puck:
 		_set_state(State.CARRY)
+	elif _is_one_timer_ready and _puck_in_one_timer_zone(snapshot, self_pos):
+		_set_state(State.ONE_TIMER_PRESSED)
 	elif not _should_chase_loose_puck(snapshot, self_pos):
 		_set_state(State.OFF_PUCK)
 
@@ -842,6 +924,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	_pass_target_peer_id = _carrier.pass_target_peer_id
 	_shot_is_elevated = _carrier.shot_is_elevated
 	debug_shoot_score = _carrier.debug_shoot_score
+	debug_quick_shot_score = _carrier.debug_quick_shot_score
 	debug_pass_score = _carrier.debug_pass_score
 	debug_pass_peer_id = _carrier.debug_pass_peer_id
 	debug_carry_score = _carrier.debug_carry_score
@@ -867,6 +950,10 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			match new_intent:
 				State.SHOOT_PRESSED:
 					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos)
+				State.QUICK_SHOT_PRESSED:
+					# No-charge release — score the goalie at his current
+					# position, not the wrister-window projection.
+					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos, 0.0)
 				State.PASS_PRESSED:
 					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
 			# Debug: capture commit snapshot for SHOOT to compare against
@@ -990,6 +1077,8 @@ func _state_from_carrier_intent(intent: int) -> State:
 			return State.SHOOT_PRESSED
 		AIRoleCarrier.INTENT_PASS:
 			return State.PASS_PRESSED
+		AIRoleCarrier.INTENT_QUICK_SHOT:
+			return State.QUICK_SHOT_PRESSED
 		_:
 			return State.CARRY
 
@@ -1014,6 +1103,11 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 			var target: Vector3 = (_locked_pre_aim_point
 					if _locked_pre_aim_point.is_finite()
 					else _shot_aim_point(snapshot, self_pos))
+			return _aim_2m_toward(self_pos, target)
+		State.QUICK_SHOT_PRESSED:
+			var target: Vector3 = (_locked_pre_aim_point
+					if _locked_pre_aim_point.is_finite()
+					else _shot_aim_point(snapshot, self_pos, 0.0))
 			return _aim_2m_toward(self_pos, target)
 		_:
 			return _carry_mouse_aim(snapshot, self_pos)
@@ -1127,6 +1221,11 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		debug_last_decision = "SHOOT"
 		_shoot_perp_sign = -1.0 if _is_left_handed else 1.0
 		var aim_dir_init: Vector3 = _shoot_aim_dir(snapshot, self_pos)
+		# Lock the aim direction for the entire charge. Self_pos drift
+		# is fine (release_pos tracks real motion), but the direction
+		# must stay fixed so a shuffling goalie doesn't flip the chosen
+		# arc mid-swing.
+		_shoot_aim_dir_locked = aim_dir_init
 		var forehand_perp_init: Vector3 = Vector3(
 				aim_dir_init.z * _shoot_perp_sign, 0.0, -aim_dir_init.x * _shoot_perp_sign)
 
@@ -1169,8 +1268,11 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# shot fires, not where they were at tick 0. With active braking
 	# the bot still travels ~2 m during the 250 ms wind-up; a fixed
 	# tick-0 aim_target ends up BEHIND the bot at release and the shot
-	# direction (mouse − blade) points the wrong way.
-	var aim_dir_now: Vector3 = _shoot_aim_dir(snapshot, self_pos)
+	# direction (mouse − blade) points the wrong way. The aim DIRECTION
+	# is locked to the tick-0 capture (`_shoot_aim_dir_locked`) so a
+	# mid-charge goalie shuffle can't flip the chosen arc — only the
+	# release position moves per tick.
+	var aim_dir_now: Vector3 = _shoot_aim_dir_locked
 	var comp_aim_now: Vector3 = _shoot_compensated_aim_dir(aim_dir_now)
 	var forehand_perp_now: Vector3 = Vector3(
 			aim_dir_now.z * _shoot_perp_sign, 0.0, -aim_dir_now.x * _shoot_perp_sign)
@@ -1272,6 +1374,130 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_set_state(_post_puck_lost_state(snapshot))
 	else:
 		_set_state(State.CARRY)
+
+
+# Quick-shot release at goal. Mechanically identical to PASS_PRESSED
+# (one-tick shoot_pressed+held, controller picks up the short
+# charge_distance as a quick-shot release at PASS_SPEED_M_S) but
+# aimed past the goalie shadow instead of at a receiver. Used when
+# the carrier's `score_quick_shot` beats `score_shoot` by margin —
+# typically against a still-squared goalie at close range where a
+# wrister charge would give the goalie time to slide.
+func _state_quick_shot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	_apply_brake_steering(input, snapshot, self_pos)
+	debug_last_decision = "QUICK"
+	# No-charge shot — score the goalie at his current position
+	# (release_lookahead_s = 0).
+	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos, 0.0)
+	input.mouse_world_pos = _step_mouse_toward(clean_aim)
+	input.shoot_pressed = true
+	input.shoot_held = true
+	if not have_puck:
+		_set_state(_post_puck_lost_state(snapshot))
+	else:
+		_set_state(State.CARRY)
+
+
+# One-timer fire from off-puck. Entered from OFF_PUCK / CHASE_PUCK
+# when the FINISHER is ready AND the puck enters the one-timer zone.
+# We can't reuse QUICK_SHOT_PRESSED's one-tick pattern because the
+# bot doesn't have the puck at press time — the controller picks up
+# the puck mid-flight, and shoot_held has to stay true through the
+# pickup so WRISTER_AIM is the active controller state when the
+# blade contact happens. Once have_puck flips true, drop shoot_held
+# to fire.
+#
+# Charge accumulates from mouse_screen_pos motion only; mouse stays
+# locked on the goal aim point, so `update_wrister_charge` accrues
+# almost no charge → release fires at quick-shot speed
+# (PASS_SPEED_M_S). The receiver one-time fires a snap.
+func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	_apply_brake_steering(input, snapshot, self_pos)
+	# Mouse + facing stay locked on the open net for the entire
+	# wait — controller's apply_blade_from_mouse drives blade IK from
+	# this each tick.
+	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos, 0.0)
+	input.mouse_world_pos = _step_mouse_toward(clean_aim)
+
+	if _one_timer_press_tick == 0:
+		debug_last_decision = "ONE_TIMER"
+		input.shoot_pressed = true
+
+	if have_puck:
+		# Puck arrived — drop shoot_held this tick. WRISTER_AIM sees
+		# the edge and calls release_wrister, which fires at the
+		# nearly-zero charge accumulated during the wait (quick-shot
+		# release). Bot transitions to CARRY for one tick of cleanup
+		# (the carrier scorer will re-pick CARRY/SHOOT/PASS as normal
+		# on the next decision cycle — likely "puck gone" since
+		# release fired immediately).
+		input.shoot_held = false
+		_set_state(State.CARRY)
+		return
+
+	# Still waiting for puck contact — hold the charge.
+	input.shoot_held = true
+	_one_timer_press_tick += 1
+
+	# Safety bail: if the puck never arrived within the press budget,
+	# release with no puck — controller goes to FOLLOW_THROUGH (no
+	# shot fires), then back to skating-without-puck for the next
+	# tick. Reusing INTENT_MAX_WAIT_TICKS keeps the timeout consistent
+	# with other "fire commits expire" budgets.
+	if _one_timer_press_tick >= INTENT_MAX_WAIT_TICKS:
+		input.shoot_held = false
+		_set_state(_post_puck_lost_state(snapshot))
+
+
+# Helper: writes one-timer-ready to TeamBrain. Off-puck role decision
+# carries the flag; the state machine forwards it so the carrier on
+# the opposite side of the brain (well — same brain) can read it via
+# `_team_brain.is_one_timer_ready(peer_id)`.
+func _set_one_timer_ready(ready: bool) -> void:
+	if _is_one_timer_ready == ready:
+		return
+	_is_one_timer_ready = ready
+	if _team_brain != null:
+		_team_brain.set_one_timer_ready(_peer_id, ready)
+
+
+# Returns true when the puck (projected one tick forward by its
+# velocity to cover input → controller latency) is within blade reach
+# of the bot AND forward of the bot relative to the current aim
+# direction. Forward gate prevents firing when the puck is behind the
+# bot — the swing can't connect cleanly in that case.
+#
+# All three primitives are pre-existing constants:
+#   BLADE_REACH_M       — stick + blade + buffer (radius gate)
+#   aim_dir             — current shot-aim-point direction (forward axis)
+#   MOUSE_TICK_DELTA    — single-tick latency horizon for puck projection
+func _puck_in_one_timer_zone(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	if snapshot.puck_state == null:
+		return false
+	if snapshot.puck_state.carrier_peer_id != -1:
+		# Puck is held — there's nothing to one-time. Carrier should
+		# pass it first; if that pass is in flight, carrier_peer_id is
+		# -1 again by the time the puck enters our zone.
+		return false
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var puck_vel: Vector3 = snapshot.puck_state.velocity
+	var puck_next := Vector3(
+			puck_pos.x + puck_vel.x * MOUSE_TICK_DELTA,
+			puck_pos.y,
+			puck_pos.z + puck_vel.z * MOUSE_TICK_DELTA)
+	var to_puck_x: float = puck_next.x - self_pos.x
+	var to_puck_z: float = puck_next.z - self_pos.z
+	var dist_sq: float = to_puck_x * to_puck_x + to_puck_z * to_puck_z
+	if dist_sq > BLADE_REACH_M * BLADE_REACH_M:
+		return false
+	# Forward-hemisphere gate via dot with aim_dir. Uses the quick-shot
+	# aim (release_lookahead_s = 0) since one-timers fire on contact —
+	# the planned shot direction is the same as the bot's pre-aimed
+	# direction in the ready stance, not the wrister-window aim.
+	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos, 0.0)
+	var aim_x: float = clean_aim.x - self_pos.x
+	var aim_z: float = clean_aim.z - self_pos.z
+	return aim_x * to_puck_x + aim_z * to_puck_z > 0.0
 
 
 # Hold-position steering during fire-state commits (SHOOT_PRESSED,
@@ -1456,7 +1682,13 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 # past INTENT_MAX_WAIT_TICKS and timing out pre-aim entirely.
 func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	const FIRE_AIM_THRESHOLD: float = 0.05
-	if debug_shoot_score < FIRE_AIM_THRESHOLD or debug_shoot_score < debug_pass_score:
+	# Either wrister OR quick-shot dominance triggers the pre-track —
+	# both aim at the goalie shadow, so the aim direction is close
+	# enough that picking the wrister lookahead (default) for the
+	# pre-track is fine; the press state itself uses the right
+	# lookahead per shot type.
+	var best_shot_score: float = maxf(debug_shoot_score, debug_quick_shot_score)
+	if best_shot_score < FIRE_AIM_THRESHOLD or best_shot_score < debug_pass_score:
 		return _carry_mouse_aim(snapshot, self_pos)
 	return _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
 
@@ -1557,15 +1789,17 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 
 
 # Shot aim past the goalie's projected shadow. Uses the goalie's
-# predicted position at the wrister window, matching how score_shoot
-# sees the goalie when scoring from self_pos. Threads the goalie's
-# CURRENT lateral velocity into the aim — a goalie sliding right
-# will drift further right by the time the puck arrives, so the
-# aim biases LEFT (the recovery side). Captures the "shoot back
-# across the grain" pattern.
-func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+# predicted position at `release_lookahead_s` from now — defaults to
+# the wrister window for a charged shot, override to 0.0 for a
+# quick-shot (no charge → goalie hasn't slid by release). Threads
+# the goalie's CURRENT lateral velocity into the aim — a goalie
+# sliding right will drift further right by the time the puck
+# arrives, so the aim biases LEFT (the recovery side). Captures the
+# "shoot back across the grain" pattern.
+func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3,
+		release_lookahead_s: float = BOT_WRISTER_LOOKAHEAD_S) -> Vector3:
 	var goalie: Vector3 = _predict_goalie_at(
-			snapshot, BOT_WRISTER_LOOKAHEAD_S, self_pos)
+			snapshot, release_lookahead_s, self_pos)
 	var goalie_vx: float = 0.0
 	var opp_team_id: int = 1 - _team_id
 	var opp_goalie_state: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
@@ -1907,6 +2141,9 @@ func _set_state(s: State) -> void:
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
 			_shoot_sweep_dir_xy = Vector2.ZERO
+			_shoot_aim_dir_locked = Vector3.INF
+		if s == State.ONE_TIMER_PRESSED:
+			_one_timer_press_tick = 0
 		# Intent + wait counter reset on CARRY entry so a new puck
 		# pickup gets a fresh re-evaluation rather than inheriting
 		# stale state from a previous CARRY. _carrier.clear_intent()
