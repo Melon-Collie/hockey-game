@@ -25,6 +25,12 @@ signal clock_updated(time_remaining: float)
 signal game_over
 signal stats_need_sync
 signal faceoff_positions_ready(positions: Array)  # host → broadcast to clients
+# Fires once per faceoff on the side that actually places skaters at the dot:
+# the host emits it in _enter_faceoff_prep (alongside faceoff_positions_ready);
+# the client emits it from on_faceoff_positions after the reliable RPC lands.
+# HUD listens to this for the countdown so the banner appears together with
+# the teleport, instead of racing the unreliable phase broadcast.
+signal faceoff_prep_announced
 signal goal_broadcast_needed(
 		scoring_team_id: int, score0: int, score1: int,
 		scorer_name: String, assist1_name: String, assist2_name: String)
@@ -148,6 +154,7 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		record.controller.teleport_to(pos, facing)
 		positions.append_array([peer_id, pos.x, pos.y, pos.z])
 	faceoff_positions_ready.emit(positions)
+	faceoff_prep_announced.emit()
 
 
 func _enter_faceoff(puck: Puck) -> void:
@@ -251,6 +258,7 @@ func on_faceoff_positions(positions: Array) -> void:
 			var record: PlayerRecord = _registry.get_record(peer_id)
 			var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
 			record.controller.teleport_to(pos, facing)
+	faceoff_prep_announced.emit()
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────

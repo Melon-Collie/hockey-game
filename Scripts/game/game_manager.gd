@@ -17,6 +17,12 @@ extends Node
 signal goal_scored(scoring_team: Team, scorer_name: String, assist1_name: String, assist2_name: String)
 signal score_changed(score_0: int, score_1: int)
 signal phase_changed(new_phase: GamePhase.Phase)
+# Reliable-channel "faceoff prep begins now" beat: on the host it fires from
+# PhaseCoordinator._enter_faceoff_prep; on the client it fires after the
+# notify_faceoff_positions RPC lands. HUD listens for the countdown banner so
+# it can't race the unreliable phase broadcast and start before the skater
+# teleport.
+signal faceoff_prep_announced
 signal period_changed(new_period: int)
 signal clock_updated(time_remaining: float)
 signal game_over()
@@ -658,6 +664,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
+	_phase_coord.faceoff_prep_announced.connect(faceoff_prep_announced.emit)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
 	_phase_coord.period_changed.connect(period_changed.emit)
