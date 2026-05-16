@@ -251,15 +251,14 @@ func _refresh() -> void:
 
 func _make_team_header(team_id: int) -> PanelContainer:
 	var label: String = "AWAY" if team_id == 1 else "HOME"
-	# Sharp-cornered horizontal stripe in the team's jersey palette —
-	# matches the scorebug's "flat color band" language and avoids the
-	# rounded-rect-inside-rounded-rect tell. jersey color fills the
-	# strip, jersey_stripe forms the left edge band, text color carries
-	# the label. Same palette the skater actually wears on the ice.
+	# Jersey-colored team header with 4px corners matching the scorebug
+	# and the outer popup. The 6px left edge is a StyleBoxFlat border in
+	# jersey_stripe; Godot bends the border around the corner radius so
+	# the stripe stays flush with the rounded outside edge.
 	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id)
 	var style := StyleBoxFlat.new()
 	style.bg_color = colors.jersey
-	style.set_corner_radius_all(0)
+	style.set_corner_radius_all(4)
 	style.set_content_margin(SIDE_LEFT, 14)
 	style.set_content_margin(SIDE_RIGHT, 14)
 	style.set_content_margin(SIDE_TOP, 5)
