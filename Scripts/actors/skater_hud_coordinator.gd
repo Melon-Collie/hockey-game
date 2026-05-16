@@ -81,6 +81,23 @@ var _slapper_current_ring_scale: float = 1.0
 var _charge_ring_visible: bool = false
 var _charge_lost_flash_timer: float = 0.0
 
+# Reusable resources + buffers — _rebuild_slapper_geometry() can fire every
+# physics tick during a slapper charge, so the ArrayMeshes it fills and the
+# PackedArrays it uses are allocated once and refilled in place to keep GC
+# pressure off the hot path. `_last_rebuild_*` short-circuits when nothing
+# has changed since the previous rebuild.
+var _arrow_mesh_resource: ArrayMesh = ArrayMesh.new()
+var _ring_mesh_resource: ArrayMesh = ArrayMesh.new()
+var _arrow_verts: PackedVector3Array = PackedVector3Array()
+var _arrow_normals: PackedVector3Array = PackedVector3Array()
+var _arrow_indices: PackedInt32Array = PackedInt32Array()
+var _ring_verts: PackedVector3Array = PackedVector3Array()
+var _ring_normals: PackedVector3Array = PackedVector3Array()
+var _ring_indices: PackedInt32Array = PackedInt32Array()
+var _last_rebuild_ring_scale: float = -1.0
+var _last_rebuild_radius: float = -1.0
+var _last_rebuild_ring_visible: bool = false
+
 # Per-tick caches. `update()` runs at 240 Hz across every skater, so anything
 # derived from infrequently-changing inputs (camera orientation, skater Y,
 # shader-param values) is recomputed only on change.
@@ -160,11 +177,13 @@ func setup(skater: Skater) -> void:
 	_slapper_arrow_mesh = MeshInstance3D.new()
 	_slapper_arrow_mesh.material_override = _slapper_indicator_mat
 	_slapper_arrow_mesh.visible = false
+	_slapper_arrow_mesh.mesh = _arrow_mesh_resource
 	_slapper_arrow_root.add_child(_slapper_arrow_mesh)
 
 	_slapper_ring_mesh = MeshInstance3D.new()
 	_slapper_ring_mesh.material_override = _slapper_indicator_mat
 	_slapper_ring_mesh.visible = false
+	_slapper_ring_mesh.mesh = _ring_mesh_resource
 	_slapper_arrow_root.add_child(_slapper_ring_mesh)
 
 	update_slapper_indicator_convergence(1.0)
@@ -358,6 +377,18 @@ func _apply_slapshot_zone_transform(offset_x: float, offset_z: float, radius: fl
 func _rebuild_slapper_geometry() -> void:
 	if _slapper_arrow_mesh == null or _slapper_ring_mesh == null:
 		return
+	# Short-circuit when nothing's changed. Convergence ticks where the puck
+	# is momentarily stationary, plus all calls after the charge ends, hit
+	# this path and skip allocating + uploading identical geometry.
+	var ring_visible: bool = _slapper_ring_mesh.visible
+	if (is_equal_approx(_slapper_current_ring_scale, _last_rebuild_ring_scale)
+			and is_equal_approx(_slapper_zone_radius_cached, _last_rebuild_radius)
+			and ring_visible == _last_rebuild_ring_visible):
+		return
+	_last_rebuild_ring_scale = _slapper_current_ring_scale
+	_last_rebuild_radius = _slapper_zone_radius_cached
+	_last_rebuild_ring_visible = ring_visible
+
 	var r: float = _slapper_current_ring_scale
 	var w: float = _ARROW_SHAFT_HALF_W_UNIT
 	# Counter-scale stroke thickness so lines stay at HUD_LINE_THIN world meters.
@@ -368,37 +399,53 @@ func _rebuild_slapper_geometry() -> void:
 	var shoulder_z: float = tip_z - head_len
 
 	# ── Arrow mesh (shaft sides + shoulders + head diagonals) ──
-	var arrow_verts := PackedVector3Array()
-	var arrow_normals := PackedVector3Array()
-	var arrow_indices := PackedInt32Array()
+	_arrow_verts.clear()
+	_arrow_normals.clear()
+	_arrow_indices.clear()
 	var shaft_base_z: float = 0.0
-	if _slapper_ring_mesh.visible and r > w:
+	if ring_visible and r > w:
 		shaft_base_z = sqrt(r * r - w * w)
 	if shaft_base_z < shoulder_z:
 		for sign_x: float in [-1.0, 1.0]:
 			var shaft_tail := Vector2(sign_x * w, shaft_base_z)
 			var shaft_top  := Vector2(sign_x * w, shoulder_z)
-			_append_strip(arrow_verts, arrow_normals, arrow_indices, shaft_tail, shaft_top, t_unit)
+			_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shaft_tail, shaft_top, t_unit)
 	var tip := Vector2(0.0, tip_z)
 	for sign_x_h: float in [-1.0, 1.0]:
 		var shoulder_in  := Vector2(sign_x_h * w, shoulder_z)
 		var shoulder_out := Vector2(sign_x_h * head_half_w, shoulder_z)
-		_append_strip(arrow_verts, arrow_normals, arrow_indices, shoulder_in, shoulder_out, t_unit)
-		_append_strip(arrow_verts, arrow_normals, arrow_indices, shoulder_out, tip, t_unit)
-	_slapper_arrow_mesh.mesh = _build_array_mesh(arrow_verts, arrow_normals, arrow_indices)
+		_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shoulder_in, shoulder_out, t_unit)
+		_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shoulder_out, tip, t_unit)
+	_upload_to_mesh(_arrow_mesh_resource, _arrow_verts, _arrow_normals, _arrow_indices)
 
 	# ── Ring mesh (partial-arc annulus with gap on the arrow tail side) ──
-	var ring_verts := PackedVector3Array()
-	var ring_normals := PackedVector3Array()
-	var ring_indices := PackedInt32Array()
+	_ring_verts.clear()
+	_ring_normals.clear()
+	_ring_indices.clear()
 	if r > w + t_unit:
 		var gap_half: float = asin(clampf(w / r, -1.0, 1.0))
 		var sweep_total: float = TAU - 2.0 * gap_half
 		var seg_count: int = max(8, int(ceil(_RING_SEGMENTS * sweep_total / TAU)))
-		_append_partial_ring(ring_verts, ring_normals, ring_indices,
+		_append_partial_ring(_ring_verts, _ring_normals, _ring_indices,
 				r - t_unit, r,
 				gap_half, TAU - gap_half, seg_count)
-	_slapper_ring_mesh.mesh = _build_array_mesh(ring_verts, ring_normals, ring_indices)
+	_upload_to_mesh(_ring_mesh_resource, _ring_verts, _ring_normals, _ring_indices)
+
+
+func _upload_to_mesh(
+		mesh: ArrayMesh,
+		verts: PackedVector3Array,
+		normals: PackedVector3Array,
+		indices: PackedInt32Array) -> void:
+	mesh.clear_surfaces()
+	if verts.size() == 0:
+		return
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 
 # ── Private: mesh builders ────────────────────────────────────────────────────
@@ -523,22 +570,6 @@ func _create_reticle_mesh(half_len: float) -> MeshInstance3D:
 	var inst := MeshInstance3D.new()
 	inst.mesh = mesh
 	return inst
-
-
-func _build_array_mesh(
-		verts: PackedVector3Array,
-		normals: PackedVector3Array,
-		indices: PackedInt32Array) -> ArrayMesh:
-	var mesh := ArrayMesh.new()
-	if verts.size() == 0:
-		return mesh
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_INDEX] = indices
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
 
 
 func _append_strip(
