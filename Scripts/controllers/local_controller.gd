@@ -163,15 +163,37 @@ func _physics_process(delta: float) -> void:
 			NetworkTelemetry.record_blade_jump(blade_delta)
 	_last_blade_pos = blade_pos
 	_claim_cooldown = maxf(_claim_cooldown - delta, 0.0)
-	if not _is_host and _claim_cooldown <= 0.0 and NetworkManager.is_clock_ready():
-		if puck.carrier == null and not puck.pickup_locked and not skater.is_ghost:
-			var dist: float = puck.global_position.distance_to(skater.get_blade_contact_global())
+	if not _is_host and _claim_cooldown <= 0.0 and NetworkManager.is_clock_ready() and not skater.is_ghost and not puck.pickup_locked:
+		var blade_pos_for_claim: Vector3 = skater.get_blade_contact_global()
+		if puck.carrier == null:
+			# Loose puck — speculative pickup claim. Host validates with rewind.
+			var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
 			if dist <= PuckController.PICKUP_RADIUS:
 				_claim_cooldown = _CLAIM_COOLDOWN_S
 				NetworkManager.send_pickup_claim(
 					NetworkManager.estimated_host_time(),
 					NetworkManager.get_latest_rtt_ms(),
 					NetworkManager.get_target_interpolation_delay() * 1000.0)
+		elif puck.carrier != skater:
+			# Opposing carrier within poke range on our screen — speculative poke
+			# claim. Host validates with rewind against what we were looking at.
+			# Skip same-team carriers locally so we don't burn the cooldown on a
+			# claim the host will just reject. Carrier peer_id comes from
+			# PuckController._carrier_peer_id, which is reliable-RPC-managed
+			# on clients (never updated from world state), so it's safe to use
+			# for the expected-carrier check.
+			var carrier_team: int = puck.carrier.get_team_id()
+			if carrier_team != _team_id and carrier_team != -1:
+				var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
+				if dist <= PuckController.POKE_RADIUS:
+					var carrier_pid: int = GameManager.puck_controller.get_carrier_peer_id() if GameManager.puck_controller != null else -1
+					if carrier_pid != -1:
+						_claim_cooldown = _CLAIM_COOLDOWN_S
+						NetworkManager.send_poke_claim(
+							NetworkManager.estimated_host_time(),
+							NetworkManager.get_latest_rtt_ms(),
+							NetworkManager.get_target_interpolation_delay() * 1000.0,
+							carrier_pid)
 
 func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_reconcile_blade: Vector3 = skater.get_blade_contact_global()

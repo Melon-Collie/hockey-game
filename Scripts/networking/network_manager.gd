@@ -69,6 +69,7 @@ signal bot_slots_synced(bot_slots: Dictionary)
 signal rematch_vote_changed(peer_id: int, vote: bool)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
+signal poke_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int)
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float)
 signal goalie_state_transition_received(team_id: int, new_state: int)
 signal goalie_shot_reaction_received(team_id: int, impact_x: float, impact_y: float, is_elevated: bool)
@@ -685,6 +686,19 @@ func receive_pickup_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	pickup_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms)
+
+func send_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	NetworkSimManager.send(
+		func(ts: float, rtt: float, idms: float, cpid: int) -> void:
+			receive_poke_claim.rpc_id(1, ts, rtt, idms, cpid),
+		[host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id], true)
+
+@rpc("any_peer", "reliable")
+func receive_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not is_host:
+		return
+	var peer_id: int = multiplayer.get_remote_sender_id()
+	poke_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id)
 
 func send_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
 	NetworkSimManager.send(

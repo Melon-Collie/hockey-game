@@ -139,6 +139,26 @@ func apply_lag_comp_pickup(skater: Skater) -> void:
 	_on_puck_picked_up(skater)
 
 
+# Called after PokeClaimResolver validates a client poke claim against the
+# state buffer. Idempotency guards:
+#   - carrier == null: a host-side _check_interactions detection beat us to
+#     the strip, or the carrier released the puck. Skip.
+#   - carrier == checker: claimant became the carrier between send and apply
+#     (shouldn't happen — client gates on `puck.carrier != skater` — but
+#     defend). Skip.
+#   - carrier != expected_ex_carrier: the carrier changed between claim send
+#     and apply (X → Z). The claimant intended to strip X, not Z; the action
+#     isn't valid against Z. Skip.
+func apply_lag_comp_poke(checker: Skater, expected_ex_carrier: Skater) -> void:
+	if not is_instance_valid(checker) or puck.carrier == null:
+		return
+	if puck.carrier == checker:
+		return
+	if puck.carrier != expected_ex_carrier:
+		return
+	puck.apply_poke_check(checker)
+
+
 # Two valid pickup claims arrived within the contest window. Neither player
 # wins — the puck squirts perpendicular to the line between the two blade
 # contact points (both blades pressing inward pinch the puck like a seed
