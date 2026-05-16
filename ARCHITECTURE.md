@@ -69,7 +69,7 @@ Period clock ticks only during `PLAYING`. On expiry: if periods remain → `END_
 
 **`_carrier_peer_id` managed by reliable RPCs, never world state.** Unreliable packets can arrive out of order relative to pickup/release RPCs, causing the puck to flicker between carried and loose. Reliable RPCs guarantee ordering; world state is ignored for carrier identity.
 
-**Immediate reconcile snap, no gradual position correction.** Gradual blending toward the server state introduces a window where the client is in a known-wrong position. Immediate snap + input replay is always convergent within one reconcile cycle. A visual-only offset blend can be layered on top without affecting physics correctness — tracked as a future improvement (see `docs/specs/NETCODE_AUDIT_2026.md` #3).
+**Immediate physics snap, visual offset blend for the local player.** The `CharacterBody3D` always sits at the authoritative position — gradual physics blending would create a window where the client is in a known-wrong position for collision/contact logic. Instead, `LocalController.reconcile` captures `pre_reconcile_visual_pos`, runs the input replay (which snaps the body to truth), then sets `skater.visual_offset = pre_reconcile_visual_pos - skater.global_position`. `Skater.visual_offset` (`skater.gd:154`) writes into `mesh_root.position` only, so the rendered mesh stays where it was on screen while the physics body has moved. Each physics frame `LocalController._physics_process` decays the offset by `_RECONCILE_VISUAL_ALPHA = 0.20` (≈88ms to 99% convergence). The game camera reads `global_position + visual_offset` so it tracks the smoothed visual rather than fighting the physics snap; `teleport_to` clears the offset so faceoff snaps don't carry residue. Remote players don't currently need this — they're interpolated between buffered snapshots, which is inherently smooth. If trajectory-style forward-prediction is ever extended to remote skaters, the same `Skater.visual_offset` mechanism is the natural place to hook in.
 
 **Trajectory prediction exits on physics contact, not only carrier RPCs.** When the predicted puck hits a post or the goalie, host and client diverge immediately — the host's Jolt sees the collision but the client doesn't know to stop predicting. Ending prediction on local post/goalie contact lets the client fall back to interpolation before the divergence compounds.
 
@@ -377,5 +377,5 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 - CharacterStats resource design (universal vs per-character exports)
 - Camera goal anchor flip speed on turnovers
 - Rink size tuning (possible 2/3 scale)
-- Reconcile position blend (NETCODE_AUDIT_2026.md #3) — visual smoothing without physics compromise
+- Extend visual-offset blend to remote skaters if/when remote prediction lands (today the blend is local-only because remotes are interpolated and never snap)
 - Session-relative timestamps for long-session f32 precision (netcode-improvements-plan.md #4)
