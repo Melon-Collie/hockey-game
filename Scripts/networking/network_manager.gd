@@ -197,12 +197,13 @@ const _PING_INTERVAL: float = 2.0
 var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
-# Number of physics ticks between broadcasts. At 240Hz / 40Hz = 6; at 240Hz /
-# 5Hz (dead-puck phases) = 48. Recomputed by `set_broadcast_rate`. The
-# broadcast loop fires from `_physics_process` (not `_process`) so that on a
-# host stall, Godot's physics catch-up naturally produces back-to-back
-# broadcasts with distinct host_timestamps for the client to interpolate
-# through — instead of one big "missing snapshot" gap followed by a snap.
+# Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
+# (240/120 = 2 at the default rate; 240/5 = 48 during dead-puck phases via
+# set_broadcast_rate). Recomputed by `set_broadcast_rate`. The broadcast loop
+# fires from `_physics_process` (not `_process`) so that on a host stall,
+# Godot's physics catch-up naturally produces back-to-back broadcasts with
+# distinct host_timestamps for the client to interpolate through — instead
+# of one big "missing snapshot" gap followed by a snap.
 var _state_tick_divisor: int = Constants.PHYSICS_TICK / Constants.STATE_RATE
 const CONNECT_TIMEOUT: float = 10.0
 
@@ -560,7 +561,7 @@ func set_broadcast_rate(hz: float) -> void:
 	# `_physics_process` fires the broadcast every Nth physics tick. Round to
 	# the nearest integer so any hz that doesn't divide PHYSICS_TICK evenly
 	# (5, 10, 20, 30, 40, 48, 60, 80, 120) still produces the closest cadence.
-	# At 40Hz → 6 ticks; at 5Hz (dead-puck phase) → 48 ticks.
+	# At 120Hz → 2 ticks; at 5Hz (dead-puck phase) → 48 ticks.
 	_state_tick_divisor = maxi(int(round(float(Constants.PHYSICS_TICK) / maxf(hz, 1.0))), 1)
 	# Reset the counter so the new cadence starts cleanly from the next tick.
 	_state_tick_counter = 0
