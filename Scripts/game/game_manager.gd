@@ -2093,6 +2093,10 @@ func _spawn_bots_from_lobby() -> void:
 		return
 	if NetworkManager.pending_bot_slots.is_empty():
 		return
+	# Pre-shuffle a unique identity per bot slot from the configured pool.
+	# Pool can be shorter than 6 (or empty) — spawn_bot falls back to generic
+	# defaults when the dict is empty, so we just pop one per bot.
+	var identity_pool: Array[Dictionary] = BotIdentityRegistry.pick_random(6)
 	var bot_id: int = 0
 	for slot_key: int in NetworkManager.pending_bot_slots:
 		if not NetworkManager.pending_bot_slots[slot_key]:
@@ -2108,7 +2112,8 @@ func _spawn_bots_from_lobby() -> void:
 			continue
 		var team: Team = teams[team_id]
 		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
-		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team)
+		var identity: Dictionary = identity_pool.pop_back() if not identity_pool.is_empty() else {}
+		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team, identity)
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a
 		# RemoteController-driven skater because peer_id is not their own.
