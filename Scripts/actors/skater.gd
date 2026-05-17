@@ -162,6 +162,8 @@ var _hud: SkaterHUDCoordinator
 
 
 func _ready() -> void:
+	add_to_group("skaters")
+
 	var top_hand_side_sign: float = 1.0 if is_left_handed else -1.0
 	shoulder.position = Vector3(top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
 

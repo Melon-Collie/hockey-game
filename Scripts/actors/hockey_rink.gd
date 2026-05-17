@@ -111,8 +111,14 @@ const CAP_RAIL_HEIGHT: float = 0.05
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
 
+# Persistent skate-scratch overlay. Created at runtime only (not in editor)
+# and bound to the ice shader's scratch_tex.
+var _scratch_map: IceScratchMap = null
+
 func _ready() -> void:
 	_rebuild()
+	if not Engine.is_editor_hint() and _scratch_map != null:
+		GameManager.period_changed.connect(_scratch_map.clear)
 
 func _rebuild() -> void:
 	if rink_length <= 0 or rink_width <= 0:
@@ -253,6 +259,17 @@ func _add_ice(half_l: float) -> void:
 	mat.set_shader_parameter("roughness_grazing", ice_roughness_grazing)
 	mesh_instance.material_override = mat
 	add_child(mesh_instance)
+
+	# Persistent skate scratches — runtime only. The SubViewport renders into
+	# a texture that the ice shader samples as a surface overlay.
+	if not Engine.is_editor_hint():
+		var scratch_map: IceScratchMap = IceScratchMap.new()
+		scratch_map.name = "IceScratchMap"
+		scratch_map.rink_width = rink_width
+		scratch_map.rink_length = rink_length
+		add_child(scratch_map)
+		mat.set_shader_parameter("scratch_tex", scratch_map.get_texture())
+		_scratch_map = scratch_map
 	
 	# Ice collision — needs its own StaticBody3D so physics_material_override applies
 	var ice_body := StaticBody3D.new()
