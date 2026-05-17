@@ -217,7 +217,7 @@ func _process(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	if _state_machine != null and _registry != null:
 		var local: PlayerRecord = _registry.get_local()
-		if local != null and not PhaseRules.is_dead_puck_phase(_state_machine.current_phase):
+		if local != null and _state_machine.current_phase == GamePhase.Phase.PLAYING:
 			local.stats.toi_seconds += delta
 	# Refresh goalie pose cache once per tick — read by skater IK on every
 	# blade-from-mouse call. Runs on host AND clients before the host gate
