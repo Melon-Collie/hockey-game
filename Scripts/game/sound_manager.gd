@@ -19,6 +19,7 @@ enum Sound {
 	PERIOD_BUZZER,
 	BODY_CHECK,
 	FACEOFF_WHISTLE,
+	CROWD_CHEER,
 }
 
 const _SOUND_PATHS: Dictionary = {
@@ -40,6 +41,7 @@ const _SOUND_PATHS: Dictionary = {
 	Sound.PERIOD_BUZZER:    "res://Sounds/period_buzzer.wav",
 	Sound.BODY_CHECK:       "res://Sounds/body_check.ogg",
 	Sound.FACEOFF_WHISTLE:  "res://Sounds/faceoff_whistle.ogg",
+	Sound.CROWD_CHEER:      "res://Sounds/crowd_cheer.ogg",
 }
 
 const _UI_POOL_SIZE: int = 4
