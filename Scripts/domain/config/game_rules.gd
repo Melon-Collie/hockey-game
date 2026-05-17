@@ -85,9 +85,13 @@ const PUCK_OOB_GRACE_DURATION: float = 1.0
 
 # ── Infractions ───────────────────────────────────────────────────────────────
 const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icing
-# End-zone faceoff dot Z offset from center (≈ 15 ft inside goal line).
-# Hybrid icing race measures which team's player is closer to this dot.
-const ICING_FACEOFF_DOT_Z: float = 22.1
+# End-zone faceoff dot offsets from centre ice — NHL spec. The rink renderer
+# (hockey_rink.gd) paints the dots at the same positions, so puck reset and
+# player teleport land on the painted dot. Z is 20' (6.096m) inside the goal
+# line; X is 22' (6.7056m) from the centre line. The icing race re-uses the Z
+# value as the dot players sprint toward in hybrid icing.
+const END_ZONE_FACEOFF_DOT_X: float = 6.7056
+const ICING_FACEOFF_DOT_Z: float = GOAL_LINE_Z - 6.096   # 20.554
 
 # Rule preset that gates which infractions are detected and how they're punished.
 #   OFF    — no offsides, no icing (free-for-all).
@@ -162,10 +166,10 @@ const FACEOFF_SPAWN_HEIGHT: float = 1.0
 # hybrid-icing geometry.
 const CENTER_ICE_DOT: Vector2 = Vector2.ZERO
 const END_ZONE_FACEOFF_DOTS: Array[Vector2] = [
-	Vector2(-6.5,  ICING_FACEOFF_DOT_Z),  # team 0 defensive zone, left
-	Vector2( 6.5,  ICING_FACEOFF_DOT_Z),  # team 0 defensive zone, right
-	Vector2(-6.5, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, left
-	Vector2( 6.5, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, right
+	Vector2(-END_ZONE_FACEOFF_DOT_X,  ICING_FACEOFF_DOT_Z),  # team 0 defensive zone, left
+	Vector2( END_ZONE_FACEOFF_DOT_X,  ICING_FACEOFF_DOT_Z),  # team 0 defensive zone, right
+	Vector2(-END_ZONE_FACEOFF_DOT_X, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, left
+	Vector2( END_ZONE_FACEOFF_DOT_X, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, right
 ]
 
 # Per-team, per-slot XZ offsets from whichever dot is active. Team 0 stands on
