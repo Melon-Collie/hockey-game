@@ -50,6 +50,10 @@ extends StaticBody3D
 	set(v):
 		glass_height = v
 		_rebuild()
+@export var glass_thickness: float = 0.05:
+	set(v):
+		glass_thickness = v
+		_rebuild()
 @export var glass_color: Color = Color(0.85, 0.93, 1.0, 0.12):
 	set(v):
 		glass_color = v
@@ -109,6 +113,11 @@ extends StaticBody3D
 const KICKPLATE_PROTRUSION: float = 0.01
 const CAP_RAIL_PROTRUSION: float = 0.01
 const CAP_RAIL_HEIGHT: float = 0.05
+# Lift the glass 1 mm above the cap rail so the glass's bottom face isn't
+# coplanar with the cap rail's top face. Glass material uses cull_disabled
+# (renders both sides), and coplanar opaque-vs-double-sided-transparent
+# z-fights along the seam.
+const GLASS_LIFT: float = 0.001
 # NHL spec for reference (so future tuning has a target):
 #   Board height (kickplate + white + cap): 1.07-1.22 m (42-48 in)
 #   Glass height above boards:              1.52-2.44 m (5-8 ft)
@@ -572,14 +581,17 @@ func _add_wall(pos: Vector3, size: Vector3) -> void:
 	cap_mi.material_override = cap_mat
 	add_child(cap_mi)
 
-	# Glass sits directly on top of the cap rail (which marks the top of the
-	# boards). Same wall_thickness as the board so it's inset from the cap-rail
-	# lip — that inset is exactly the visible top of the cap rail.
+	# Glass sits on top of the cap rail, centered on the wall, narrower than
+	# the boards so the cap rail's top forms a visible shelf framing it. Lifted
+	# by GLASS_LIFT so it isn't coplanar with the cap rail top (see GLASS_LIFT).
 	var glass_mi := MeshInstance3D.new()
 	var glass_box := BoxMesh.new()
-	glass_box.size = Vector3(size.x, glass_height, size.z)
+	if is_side_wall:
+		glass_box.size = Vector3(glass_thickness, glass_height, size.z)
+	else:
+		glass_box.size = Vector3(size.x, glass_height, glass_thickness)
 	glass_mi.mesh = glass_box
-	glass_mi.position = Vector3(pos.x, size.y + glass_height / 2.0, pos.z)
+	glass_mi.position = Vector3(pos.x, size.y + GLASS_LIFT + glass_height / 2.0, pos.z)
 	glass_mi.material_override = _make_glass_material()
 	add_child(glass_mi)
 
@@ -604,9 +616,15 @@ func _add_corner(center: Vector3, angle_start: float, angle_end: float, stripe_z
 	var r_out_kick: float = r_out + KICKPLATE_PROTRUSION
 	var r_in_cap: float  = r_in - CAP_RAIL_PROTRUSION
 	var r_out_cap: float = r_out + CAP_RAIL_PROTRUSION
+	# Glass is narrower than the boards and centered on the corner arc; the
+	# cap rail's top forms a visible shelf around it. Same look as the
+	# straight walls.
+	var r_in_glass: float  = corner_radius - glass_thickness / 2.0
+	var r_out_glass: float = corner_radius + glass_thickness / 2.0
 	var board_top: float = wall_height - CAP_RAIL_HEIGHT
 	var rail_top: float  = wall_height
-	var glass_top: float = wall_height + glass_height
+	var glass_y_bot: float = rail_top + GLASS_LIFT
+	var glass_y_top: float = glass_y_bot + glass_height
 
 	# Kickplate ring (yellow lip)
 	_add_corner_ring(center, angle_start, angle_end, r_in_kick, r_out_kick,
@@ -621,13 +639,13 @@ func _add_corner(center: Vector3, angle_start: float, angle_end: float, stripe_z
 	# Glass — skip bottom cap so it doesn't z-fight the opaque cap-rail top cap
 	# at y=rail_top (glass is double-sided transparent, so both cap faces would
 	# render coplanar at that height).
-	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
-		rail_top, glass_top, _make_glass_material(), true, false)
+	_add_corner_ring(center, angle_start, angle_end, r_in_glass, r_out_glass,
+		glass_y_bot, glass_y_top, _make_glass_material(), true, false)
 
 	for stripe in stripe_zs:
 		_add_corner_stripe(center, angle_start, angle_end, stripe)
 
-	_add_corner_collision(center, angle_start, angle_end, r_in, r_out, 0.0, glass_top)
+	_add_corner_collision(center, angle_start, angle_end, r_in, r_out, 0.0, glass_y_top)
 
 func _make_solid_material(color: Color) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
