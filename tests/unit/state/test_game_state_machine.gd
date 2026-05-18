@@ -193,9 +193,9 @@ func test_icing_waved_off_when_icing_team_closer() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)   # peer 1 → team 0
 	sm.register_remote_assigned_player(100, 0, 1) # peer 100 → team 1
 	sm.notify_puck_carried(0, 5.0)
-	# Dot at z = -22.1 (ICING_FACEOFF_DOT_Z for team 0 icing toward -Z)
-	# Peer 1 (team 0, icing team) at z = -25 → 2.9 from dot
-	# Peer 100 (team 1, defending) at z = 0 → 22.1 from dot
+	# Dot at z = -ICING_FACEOFF_DOT_Z (for team 0 icing toward -Z).
+	# Peer 1 (team 0, icing team) at z = -25 → closer to dot
+	# Peer 100 (team 1, defending) at z = 0 → farther from dot
 	sm.check_icing_for_loose_puck(-30.0, {1: Vector3(0, 1, -25.0), 100: Vector3(0, 1, 0.0)})
 	assert_eq(sm.icing_team_id, -1, "icing team closer → waved off")
 
@@ -204,9 +204,9 @@ func test_icing_confirmed_when_defending_team_closer() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)
 	sm.register_remote_assigned_player(100, 0, 1)
 	sm.notify_puck_carried(0, 5.0)
-	# Dot at z = -22.1 (ICING_FACEOFF_DOT_Z for team 0 icing toward -Z)
-	# Peer 1 (team 0, icing team) at z = 5 → 27.1 from dot
-	# Peer 100 (team 1, defending) at z = -24 → 1.9 from dot
+	# Dot at z = -ICING_FACEOFF_DOT_Z (for team 0 icing toward -Z).
+	# Peer 1 at z = 5 is on the wrong side of centre; peer 100 at z = -24 is
+	# right by the dot.
 	sm.check_icing_for_loose_puck(-30.0, {1: Vector3(0, 1, 5.0), 100: Vector3(0, 1, -24.0)})
 	assert_eq(sm.icing_team_id, 0, "defending team closer → icing confirmed")
 
@@ -215,9 +215,8 @@ func test_icing_confirmed_when_defending_team_slightly_closer() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)
 	sm.register_remote_assigned_player(100, 0, 1)
 	sm.notify_puck_carried(0, 5.0)
-	# Dot at z = -22.1 (ICING_FACEOFF_DOT_Z for team 0 icing toward -Z)
-	# Peer 1 (team 0, icing) at z = 0 → 22.1 from dot
-	# Peer 100 (team 1, defending) at z = -20 → 2.1 from dot → closer
+	# Dot at z = -ICING_FACEOFF_DOT_Z (for team 0 icing toward -Z).
+	# Peer 100 at z = -20 sits a hair past the dot; peer 1 at centre is far.
 	sm.check_icing_for_loose_puck(-30.0, {1: Vector3(0, 1, 0.0), 100: Vector3(0, 1, -20.0)})
 	assert_eq(sm.icing_team_id, 0, "defending team slightly closer → icing confirmed")
 
@@ -227,9 +226,8 @@ func test_icing_waved_off_team1_symmetric() -> void:
 	sm.register_remote_assigned_player(100, 0, 1) # team 1
 	sm.register_remote_assigned_player(200, 1, 0) # team 0
 	sm.notify_puck_carried(1, -5.0)
-	# Dot at z = +22.1 (ICING_FACEOFF_DOT_Z for team 1 icing toward +Z)
-	# Peer 100 (team 1, icing team) at z = 25 → 2.9 from dot
-	# Peer 1 (team 0, defending) at z = 0 → 22.1 from dot
+	# Dot at z = +ICING_FACEOFF_DOT_Z (for team 1 icing toward +Z). Peer 100 is
+	# close to the dot; peer 1 is back at centre.
 	sm.check_icing_for_loose_puck(30.0, {1: Vector3(0, 1, 0.0), 100: Vector3(0, 1, 25.0)})
 	assert_eq(sm.icing_team_id, -1, "team 1 icing, waved off — attacker closer")
 

@@ -212,9 +212,15 @@ func _check_interactions() -> void:
 				if not PuckInteractionRules.check_pickup(_prev_puck_pos, puck_curr,
 						blade_prev, blade_curr, PICKUP_RADIUS):
 					continue
-				var puck_speed: float = puck.get_puck_velocity().length()
-				var rel_speed: float = (puck.get_puck_velocity() - skater.blade_world_velocity).length()
-				if puck_speed <= puck.pickup_max_speed or rel_speed < puck.deflect_min_speed:
+				var puck_vel: Vector3 = puck.get_puck_velocity()
+				var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
+				if PuckReceptionRules.should_receive(
+						puck_vel,
+						skater.blade_world_velocity,
+						blade_face_normal,
+						puck.pickup_max_speed,
+						puck.deflect_min_speed,
+						puck.alignment_receive_bonus):
 					puck.set_carrier(skater)
 					_on_puck_picked_up(skater)
 				else:

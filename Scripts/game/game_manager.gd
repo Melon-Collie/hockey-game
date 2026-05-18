@@ -17,6 +17,12 @@ extends Node
 signal goal_scored(scoring_team: Team, scorer_name: String, assist1_name: String, assist2_name: String)
 signal score_changed(score_0: int, score_1: int)
 signal phase_changed(new_phase: GamePhase.Phase)
+# Reliable-channel "faceoff prep begins now" beat: on the host it fires from
+# PhaseCoordinator._enter_faceoff_prep; on the client it fires after the
+# notify_faceoff_positions RPC lands. HUD listens for the countdown banner so
+# it can't race the unreliable phase broadcast and start before the skater
+# teleport.
+signal faceoff_prep_announced
 signal period_changed(new_period: int)
 signal clock_updated(time_remaining: float)
 signal game_over()
@@ -233,7 +239,7 @@ func _physics_process(delta: float) -> void:
 		_last_phys_tick_us = now_us
 	if _state_machine != null and _registry != null:
 		var local: PlayerRecord = _registry.get_local()
-		if local != null and not PhaseRules.is_dead_puck_phase(_state_machine.current_phase):
+		if local != null and _state_machine.current_phase == GamePhase.Phase.PLAYING:
 			local.stats.toi_seconds += delta
 	# Refresh goalie pose cache once per tick — read by skater IK on every
 	# blade-from-mouse call. Runs on host AND clients before the host gate
@@ -366,7 +372,7 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 		return
 	if _is_local_spectator:
 		_teardown_spectator_camera()
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	_registry.spawn(peer_id, team_slot, teams[team_id],
 			jersey_color, helmet_color, pants_color,
@@ -397,8 +403,8 @@ func on_player_connected(peer_id: int) -> void:
 		"period_duration": _state_machine.period_duration,
 		"ot_enabled": _state_machine.ot_enabled,
 		"ot_duration": _state_machine.ot_duration,
-		"home_color_id": NetworkManager.pending_home_color_id,
-		"away_color_id": NetworkManager.pending_away_color_id,
+		"home_color_slot": NetworkManager.pending_home_color_slot,
+		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"rule_set": _state_machine.rule_set,
 	}
 	# Spectator branch: declared via pending_lobby_slots[peer_id].team_id == -1.
@@ -468,7 +474,7 @@ func sync_existing_players(player_data: Array) -> void:
 		var is_left: bool = entry[6] if entry.size() > 6 else true
 		var p_name: String = entry[7] if entry.size() > 7 else "Player"
 		var p_number: int = entry[8] if entry.size() > 8 else 10
-		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 		_registry.spawn(peer_id, team_slot, teams[team_id],
 				jersey_color, helmet_color, pants_color,
@@ -487,7 +493,7 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		is_left_handed: bool, player_name: String, jersey_number: int = 10) -> void:
 	if peer_id == NetworkManager.local_peer_id() or _state_machine == null:
 		return
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	_registry.spawn(peer_id, team_slot, teams[team_id],
 			jersey_color, helmet_color, pants_color,
@@ -537,10 +543,10 @@ func _spawn_world() -> void:
 func _create_teams() -> void:
 	var t0 := Team.new()
 	t0.team_id = 0
-	t0.color_id = NetworkManager.pending_home_color_id
+	t0.color_slot = NetworkManager.pending_home_color_slot
 	var t1 := Team.new()
 	t1.team_id = 1
-	t1.color_id = NetworkManager.pending_away_color_id
+	t1.color_slot = NetworkManager.pending_away_color_slot
 	teams = [t0, t1]
 
 
@@ -590,7 +596,7 @@ func _spawn_goalies() -> void:
 	teams[0].goalie_controller = result.bottom_controller
 	for team_id: int in [0, 1]:
 		var goalie: Goalie = result.bottom_goalie if team_id == 0 else result.top_goalie
-		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads)
 
 
@@ -681,6 +687,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
+	_phase_coord.faceoff_prep_announced.connect(faceoff_prep_announced.emit)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
 	_phase_coord.period_changed.connect(period_changed.emit)
@@ -707,8 +714,8 @@ func _wire_subsystems() -> void:
 	_debug_overlay = NetworkDebugOverlay.new()
 	add_child(_debug_overlay)
 
-	var _home_c := TeamColorRegistry.get_colors(teams[0].color_id, 0)
-	var _away_c := TeamColorRegistry.get_colors(teams[1].color_id, 1)
+	var _home_c := TeamColorRegistry.get_colors(teams[0].color_slot, 0)
+	var _away_c := TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 	team_colors_ready.emit(_home_c.primary, _home_c.secondary, _away_c.primary, _away_c.secondary)
 
 	_wire_sound_signals()
@@ -1159,8 +1166,8 @@ func _build_replay_header() -> Dictionary:
 		"period_duration": _state_machine.period_duration if _state_machine != null else GameRules.PERIOD_DURATION,
 		"ot_enabled": _state_machine.ot_enabled if _state_machine != null else GameRules.OT_ENABLED,
 		"rule_set": _state_machine.rule_set if _state_machine != null else GameRules.DEFAULT_RULE_SET,
-		"home_color_id": NetworkManager.pending_home_color_id,
-		"away_color_id": NetworkManager.pending_away_color_id,
+		"home_color_slot": NetworkManager.pending_home_color_slot,
+		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"recorded_by_peer_id": NetworkManager.local_peer_id(),
 		"roster": roster,
 	}
@@ -1253,7 +1260,7 @@ func _on_replay_player_left_event(record: PlayerRecord) -> void:
 func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 		is_left: bool, p_name: String, p_number: int, is_local: bool) -> Dictionary:
 	var team: Team = teams[team_id]
-	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	if not is_local:
 		NetworkManager.send_slot_assignment(peer_id, team_slot, team_id,
@@ -1270,7 +1277,7 @@ func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 
 
 func _spawn_local(peer_id: int, team_slot: int, team: Team) -> void:
-	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team.team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team.team_id)
 	_registry.spawn(peer_id, team_slot, team,
 			colors.jersey, colors.helmet, colors.pants,
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe, colors.socks, colors.socks_stripe,
@@ -1480,6 +1487,13 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:
+	# One-timers are always slappers (release_slapper at full charge); record the
+	# shot sound + replay event here so the goal-replay driver can find the last
+	# "shot" event when scanning the clip — otherwise the slo-mo trims back to
+	# the start of the play instead of the moment of release.
+	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, puck.get_puck_position(), 0.0, 0.04)
+	if NetworkManager.is_host:
+		_record_replay_audio_event("shot", puck.get_puck_position(), power, {"is_slapper": true})
 	if not NetworkManager.is_host:
 		# Client path: seed local puck prediction, then tell the host.
 		if puck_controller != null:
@@ -1499,6 +1513,9 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null or record.skater == null:
 		return
+	var shot_pos: Vector3 = puck.get_puck_position()
+	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
+	_record_replay_audio_event("shot", shot_pos, power, {"is_slapper": true})
 	_host_release_one_timer(direction, power, record.skater, host_timestamp, rtt_ms)
 
 
@@ -1587,9 +1604,10 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 		# the client's Jolt prediction (blade + velocity * rtt_half).
 		if rtt_ms > 0.0:
 			puck.set_puck_position(puck.get_puck_position() + (direction * power + skater_vel) * rtt_half)
-		for i: int in goalie_controllers.size():
-			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
-			goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
+		if not saved_goalie_positions.is_empty():
+			for i: int in goalie_controllers.size():
+				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
+				goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
 		return
 	puck.release(direction, power)
 
@@ -1942,6 +1960,31 @@ func return_to_lobby() -> void:
 	if not NetworkManager.is_host:
 		return
 	_drop_puck_if_carried()
+	# Rebuild pending_bot_slots from registry's bot records so the lobby
+	# reloads with the same bot configuration the host took into the game.
+	# Bots are stripped from the roster (they're not real peers) and instead
+	# round-trip as bot-slot markers; this is what restores the "X" action
+	# on the host's slot cards. Identities are reconstructed from the
+	# PlayerRecord so the lobby card shows the same name/number the bot
+	# wore in the previous match instead of falling back to "BOT".
+	var bot_slots: Dictionary[int, bool] = {}
+	var bot_identities: Dictionary[int, Dictionary] = {}
+	if _registry != null:
+		for peer_id: int in _registry.all():
+			var r: PlayerRecord = _registry.get_record(peer_id)
+			if r == null or not r.is_bot or r.team == null:
+				continue
+			var slot_key: int = r.team.team_id * 3 + r.team_slot
+			bot_slots[slot_key] = true
+			bot_identities[slot_key] = {
+				"name":           r.player_name,
+				"number":         r.jersey_number,
+				"is_left_handed": r.is_left_handed,
+			}
+	NetworkManager.pending_bot_slots = bot_slots
+	NetworkManager.pending_bot_identities = bot_identities
+	for peer_id: int in NetworkManager.connected_peer_ids():
+		NetworkManager.send_bot_slots_to(peer_id, bot_slots, bot_identities)
 	NetworkManager.send_return_to_lobby_to_all(_build_lobby_roster_array())
 
 
@@ -1975,26 +2018,26 @@ func _on_local_identity_changed(p_name: String, p_number: int, p_is_left: bool) 
 # is always on the home team in free play, so we re-skin its uniform and
 # the home goalie. If apply_preferred_color also re-rolled the away color
 # to avoid a collision, the away goalie gets re-tinted too.
-func _on_local_preferred_color_changed(home_color_id: String, away_color_id: String) -> void:
+func _on_local_preferred_color_changed(home_color_slot: int, away_color_slot: int) -> void:
 	if teams.size() < 2:
 		return
-	var home_changed: bool = teams[0].color_id != home_color_id
-	var away_changed: bool = teams[1].color_id != away_color_id
+	var home_changed: bool = teams[0].color_slot != home_color_slot
+	var away_changed: bool = teams[1].color_slot != away_color_slot
 	if not home_changed and not away_changed:
 		return
-	teams[0].color_id = home_color_id
-	teams[1].color_id = away_color_id
+	teams[0].color_slot = home_color_slot
+	teams[1].color_slot = away_color_slot
 	if home_changed:
 		_apply_team_colors_to_actors(0)
 	if away_changed:
 		_apply_team_colors_to_actors(1)
-	var home_c: Dictionary = TeamColorRegistry.get_colors(teams[0].color_id, 0)
-	var away_c: Dictionary = TeamColorRegistry.get_colors(teams[1].color_id, 1)
+	var home_c: Dictionary = TeamColorRegistry.get_colors(teams[0].color_slot, 0)
+	var away_c: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 	team_colors_ready.emit(home_c.primary, home_c.secondary, away_c.primary, away_c.secondary)
 
 
 func _apply_team_colors_to_actors(team_id: int) -> void:
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	# `goalies` is stored positionally ([top, bottom]) while team_id is
 	# semantic (0 = home = bottom net, 1 = away = top net) — indexing the
 	# array directly by team_id flips the two. Route through the team's
@@ -2034,6 +2077,11 @@ func _build_lobby_roster_array() -> Array:
 		return result
 	for peer_id: int in _registry.all():
 		var r: PlayerRecord = _registry.get_record(peer_id)
+		# Bots are not real peers — they round-trip through pending_bot_slots,
+		# not the roster. Including them here would render them as human-filled
+		# cards in the lobby with no remove action.
+		if r.is_bot:
+			continue
 		var team_id: int = r.team.team_id if r.team != null else 0
 		result.append([peer_id, team_id, r.team_slot, r.player_name,
 				r.is_left_handed, r.jersey_number])
@@ -2123,6 +2171,8 @@ func _spawn_bots_from_lobby() -> void:
 		return
 	if NetworkManager.pending_bot_slots.is_empty():
 		return
+	# Identities were chosen at lobby-toggle time and synced to clients so
+	# the lobby UI could preview them — just read them back here.
 	var bot_id: int = 0
 	for slot_key: int in NetworkManager.pending_bot_slots:
 		if not NetworkManager.pending_bot_slots[slot_key]:
@@ -2137,8 +2187,9 @@ func _spawn_bots_from_lobby() -> void:
 		if _slot_already_taken(team_id, team_slot):
 			continue
 		var team: Team = teams[team_id]
-		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
-		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team)
+		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
+		var identity: Dictionary = NetworkManager.pending_bot_identities.get(slot_key, {})
+		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team, identity)
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a
 		# RemoteController-driven skater because peer_id is not their own.
@@ -2149,6 +2200,7 @@ func _spawn_bots_from_lobby() -> void:
 	# Clear after spawning so a return-to-lobby + restart starts fresh; the
 	# host will re-toggle bot slots in the next lobby session if desired.
 	NetworkManager.pending_bot_slots = {}
+	NetworkManager.pending_bot_identities = {}
 
 
 func _slot_already_taken(team_id: int, team_slot: int) -> bool:

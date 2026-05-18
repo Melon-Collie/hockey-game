@@ -95,6 +95,7 @@ func _ready() -> void:
 	GameManager.score_changed.connect(_on_score_changed)
 	GameManager.goal_scored.connect(_on_goal_scored)
 	GameManager.phase_changed.connect(_on_phase_changed)
+	GameManager.faceoff_prep_announced.connect(_on_faceoff_prep_announced)
 	GameManager.period_changed.connect(_on_period_changed)
 	GameManager.clock_updated.connect(_on_clock_updated)
 	GameManager.game_over.connect(_on_game_over)
@@ -164,13 +165,25 @@ func _build_scorebug() -> void:
 	var teams_vbox := VBoxContainer.new()
 	teams_vbox.add_theme_constant_override("separation", 4)
 	teams_outer.add_child(teams_vbox)
+	# Stripes are anchored inside the rows but bleed past the row bounds so
+	# they hug the panel's full left edge top-to-bottom. The top stripe gets
+	# the panel's top-left curve, the bottom stripe gets the bottom-left
+	# curve; they meet flush at the midpoint of the inter-row separation.
 	var away_row := _build_scorebug_team_row(1, "AWAY")
 	_away_badge_style = away_row.get_meta(&"stripe_style") as StyleBoxFlat
 	_away_score_label = away_row.get_meta(&"score_label") as Label
+	var away_stripe: Panel = away_row.get_meta(&"stripe") as Panel
+	_away_badge_style.corner_radius_top_left = 4
+	away_stripe.offset_top = -5
+	away_stripe.offset_bottom = 2
 	teams_vbox.add_child(away_row)
 	var home_row := _build_scorebug_team_row(0, "HOME")
 	_home_badge_style = home_row.get_meta(&"stripe_style") as StyleBoxFlat
 	_home_score_label = home_row.get_meta(&"score_label") as Label
+	var home_stripe: Panel = home_row.get_meta(&"stripe") as Panel
+	_home_badge_style.corner_radius_bottom_left = 4
+	home_stripe.offset_top = -2
+	home_stripe.offset_bottom = 4
 	teams_vbox.add_child(home_row)
 
 	hbox.add_child(_vsep())
@@ -219,10 +232,20 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 
 	var stripe_style := StyleBoxFlat.new()
 	stripe_style.bg_color = _initial_team_primary(team_id)
-	var stripe := PanelContainer.new()
+	# Placeholder reserves the 6px column in the HBox; the visible stripe
+	# is anchored inside it so the caller can bleed it past the row bounds
+	# (offset_top / offset_bottom) to hug the scorebug panel's true edges
+	# — same pattern slot_grid_panel.gd uses for the lobby card stripes.
+	var stripe_slot := Control.new()
+	stripe_slot.custom_minimum_size = Vector2(6, 28)
+	stripe_slot.size_flags_vertical = Control.SIZE_FILL
+	stripe_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(stripe_slot)
+	var stripe := Panel.new()
 	stripe.add_theme_stylebox_override("panel", stripe_style)
-	stripe.custom_minimum_size = Vector2(6, 28)
-	row.add_child(stripe)
+	stripe.set_anchors_preset(Control.PRESET_FULL_RECT)
+	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stripe_slot.add_child(stripe)
 
 	var abbr_margin := MarginContainer.new()
 	abbr_margin.add_theme_constant_override("margin_left", 8)
@@ -234,16 +257,21 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 	abbr_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	abbr_margin.add_child(abbr_label)
 
+	# Center-aligned in a fixed-width slot so single- vs two-digit scores
+	# don't drift visually (right-alignment made "1" read as offset from
+	# "0" because the glyphs have different widths).
 	var score_margin := MarginContainer.new()
+	score_margin.add_theme_constant_override("margin_left", 4)
 	score_margin.add_theme_constant_override("margin_right", 8)
 	row.add_child(score_margin)
 	var score_label := _lbl("0", 26, _WHITE)
-	score_label.custom_minimum_size = Vector2(28, 0)
-	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	score_label.custom_minimum_size = Vector2(36, 0)
+	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	score_margin.add_child(score_label)
 
 	row.set_meta(&"stripe_style", stripe_style)
+	row.set_meta(&"stripe", stripe)
 	row.set_meta(&"score_label", score_label)
 	return row
 
@@ -593,7 +621,7 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	# secondary tints every piece of text on top so the whole goal moment
 	# reads as that team's broadcast wash.
 	var team_colors: Dictionary = TeamColorRegistry.get_colors(
-			GameManager.teams[scoring_team.team_id].color_id, scoring_team.team_id)
+			GameManager.teams[scoring_team.team_id].color_slot, scoring_team.team_id)
 	var team_primary: Color = team_colors.primary
 	var team_secondary: Color = team_colors.secondary
 
@@ -639,7 +667,7 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 
 func _initial_team_primary(team_id: int) -> Color:
 	if GameManager.teams.size() > team_id:
-		return TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
+		return TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id).primary
 	return Color(0.5, 0.5, 0.5)  # placeholder; team_colors_ready overwrites
 
 func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
@@ -711,12 +739,9 @@ func _on_phase_changed(new_phase: int) -> void:
 			# signal — wait for that.
 			pass
 		GamePhase.Phase.FACEOFF_PREP:
-			_clear_goal_template()
-			_phase_label.add_theme_color_override("font_color", _WHITE)
-			_phase_label.visible = true
-			_phase_style.bg_color = MenuStyle.BROADCAST_BG
-			_show_phase_banner_at_rest()
-			_start_faceoff_countdown()
+			# Banner + countdown are driven by faceoff_prep_announced (reliable
+			# RPC) so they can't appear before the skater teleport on a client.
+			pass
 		GamePhase.Phase.FACEOFF:
 			# Drop instant: hold "DROP!" briefly, then dismiss on PLAYING.
 			# No whistle here — refs whistle to stop play, not to start it.
@@ -744,6 +769,19 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_label.visible = true
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_show_phase_banner_at_rest()
+
+
+# Fires on the same reliable beat that teleports the local skater to the dot,
+# so the countdown banner can't appear before the skater is in position (the
+# pre-fix bug: client sees "FACEOFF IN 2" while their skater is still parked
+# at the post-goal position, then pops onto the dot mid-countdown).
+func _on_faceoff_prep_announced() -> void:
+	_clear_goal_template()
+	_phase_label.add_theme_color_override("font_color", _WHITE)
+	_phase_label.visible = true
+	_phase_style.bg_color = MenuStyle.BROADCAST_BG
+	_show_phase_banner_at_rest()
+	_start_faceoff_countdown()
 
 
 # Drives a "2 → 1 → DROP!" countdown on the phase banner during FACEOFF_PREP.

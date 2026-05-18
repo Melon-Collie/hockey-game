@@ -98,33 +98,14 @@ static func slots_for_state(state: int) -> Array:
 			return []
 
 
-# Computes the world-space anchor for a slot in a given state.
-# `carrier_pos` is needed by SUPPORT (relative to carrier).
-# State-branched roles (PRESSURE / ANCHOR / COVER / SUPPORT) read
-# `state` to pick the formula matching the current possession context.
-static func slot_anchor(
-		slot: Slot,
-		state: int,
-		puck_pos: Vector3,
-		carrier_pos: Vector3,
-		own_goal_z: float,
-		strong_x: float) -> Vector3:
-	var own_goal_dir: float = signf(own_goal_z)
-	var our_net := Vector3(0.0, 0.0, own_goal_z)
-
-	match slot:
-		Slot.CARRIER:
-			# Carrier doesn't have a brain anchor — they're driven by
-			# the carrier utility AI in `_state_carry`. Return their
-			# current position so the slot's "distance" is zero.
-			return carrier_pos
-
-		# Every role owns its positional target in its role-behavior
-		# module. slot_anchor is dead surface — Step 3 of the
-		# no-anchors refactor will delete this function entirely.
-
-		_:
-			return Vector3.ZERO
+# Carrier doesn't have a brain anchor — they're driven by the carrier
+# utility AI in `_state_carry`. Every other role owns its positional
+# target in its role-behavior module; slot_anchor is dead surface that
+# Step 3 of the no-anchors refactor will delete entirely.
+static func slot_anchor(slot: Slot, carrier_pos: Vector3) -> Vector3:
+	if slot == Slot.CARRIER:
+		return carrier_pos
+	return Vector3.ZERO
 
 
 # Assigns each teammate to a slot. Returns Dictionary[peer_id, Slot].

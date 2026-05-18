@@ -129,6 +129,29 @@ func get_slot(peer_id: int) -> int:
 	return slot_assignments.get(peer_id, AIRoleSlots.Slot.NONE)
 
 
+# ── One-timer readiness signaling ───────────────────────────────────────────
+# Off-puck bots in the FINISHER role publish "I'm camped + pre-aimed,
+# fire me a pass and I'll one-time it" via set_one_timer_ready(true).
+# The carrier reads via is_one_timer_ready(peer_id) when scoring
+# passes — a ready receiver gets a no-charge goalie prediction (since
+# they fire on contact, the goalie can't react to a wind-up), which
+# inflates the squareness term and naturally rewards passes to them.
+# Stored host-side on the brain, not in SkaterNetworkState — this is
+# pure AI bookkeeping that the network doesn't need to see.
+var _one_timer_ready_by_peer: Dictionary = {}   # peer_id -> bool
+
+
+func set_one_timer_ready(peer_id: int, ready: bool) -> void:
+	if ready:
+		_one_timer_ready_by_peer[peer_id] = true
+	else:
+		_one_timer_ready_by_peer.erase(peer_id)
+
+
+func is_one_timer_ready(peer_id: int) -> bool:
+	return _one_timer_ready_by_peer.get(peer_id, false)
+
+
 # Computes the world-space anchor for a given peer's current slot.
 # Returns Vector3.ZERO if the peer isn't assigned a slot.
 func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
@@ -142,6 +165,4 @@ func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
 	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
 		carrier_pos = snapshot.skater_states[carrier_pid].position
-	return AIRoleSlots.slot_anchor(
-			slot, state, puck_pos, carrier_pos,
-			_own_goal_z, _strong_x)
+	return AIRoleSlots.slot_anchor(slot, carrier_pos)

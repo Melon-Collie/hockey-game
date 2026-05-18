@@ -107,19 +107,22 @@ func test_corner_projection_preserves_direction() -> void:
 
 
 # ── nearest_faceoff_dot ─────────────────────────────────────────────────────
-# Five dots total: center ice plus four end-zone dots at (±6.5, ±22.1). For
-# any rink-interior point we expect the dot in the same quadrant (or center if
-# the point is closer to it than to any corner dot).
+# Five dots total: center ice plus four end-zone dots at NHL spec positions
+# (END_ZONE_FACEOFF_DOT_X by ±ICING_FACEOFF_DOT_Z). For any rink-interior point
+# we expect the dot in the same quadrant (or center if the point is closer to
+# it than to any corner dot).
 
 func test_nearest_dot_at_center_returns_center() -> void:
 	assert_eq(GameRules.nearest_faceoff_dot(Vector2.ZERO), GameRules.CENTER_ICE_DOT)
 
 func test_nearest_dot_for_each_corner() -> void:
 	# Pick a point inside each end-zone quadrant and assert we get that dot.
-	assert_eq(GameRules.nearest_faceoff_dot(Vector2( 5.0,  25.0)), Vector2( 6.5,  GameRules.ICING_FACEOFF_DOT_Z))
-	assert_eq(GameRules.nearest_faceoff_dot(Vector2(-5.0,  25.0)), Vector2(-6.5,  GameRules.ICING_FACEOFF_DOT_Z))
-	assert_eq(GameRules.nearest_faceoff_dot(Vector2( 5.0, -25.0)), Vector2( 6.5, -GameRules.ICING_FACEOFF_DOT_Z))
-	assert_eq(GameRules.nearest_faceoff_dot(Vector2(-5.0, -25.0)), Vector2(-6.5, -GameRules.ICING_FACEOFF_DOT_Z))
+	var x: float = GameRules.END_ZONE_FACEOFF_DOT_X
+	var z: float = GameRules.ICING_FACEOFF_DOT_Z
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2( 5.0,  25.0)), Vector2( x,  z))
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2(-5.0,  25.0)), Vector2(-x,  z))
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2( 5.0, -25.0)), Vector2( x, -z))
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2(-5.0, -25.0)), Vector2(-x, -z))
 
 func test_nearest_dot_near_center_returns_center() -> void:
 	# A point in the neutral zone is closer to center than to any end-zone dot.

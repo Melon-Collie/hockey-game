@@ -110,6 +110,12 @@ var _last_fill: float = -1.0
 var _last_pulse: float = -1.0
 var _last_lost_flash: float = -1.0
 
+# HUD geometry assumes the gameplay top-down camera (ring decals flat on ice,
+# name/chevron placed via camera screen-down). Replays cut to broadcast cams
+# at arbitrary angles, so we hide the per-skater HUD for the cinematic and
+# restore the always-visible nodes on the first non-replay tick.
+var _hidden_for_replay: bool = false
+
 
 func setup(skater: Skater) -> void:
 	_skater = skater
@@ -190,6 +196,24 @@ func setup(skater: Skater) -> void:
 
 
 func update(delta: float) -> void:
+	if NetworkManager.is_replay_mode():
+		if not _hidden_for_replay:
+			_hidden_for_replay = true
+			if _ring_mesh != null: _ring_mesh.visible = false
+			if _charge_ring_mesh != null: _charge_ring_mesh.visible = false
+			if _chevron_mesh != null: _chevron_mesh.visible = false
+			if _name_label != null: _name_label.visible = false
+			if _slapper_indicator != null: _slapper_indicator.visible = false
+		return
+	if _hidden_for_replay:
+		_hidden_for_replay = false
+		# Restore the always-visible nodes. _charge_ring_mesh, _chevron_mesh,
+		# and _slapper_indicator children are gated by their own show logic
+		# (driven from skater state) and will re-enable themselves as needed.
+		if _ring_mesh != null: _ring_mesh.visible = true
+		if _name_label != null: _name_label.visible = true
+		if _slapper_indicator != null: _slapper_indicator.visible = true
+
 	_refresh_height_anchors_if_skater_moved()
 	_refresh_screen_down_cache_if_camera_changed()
 

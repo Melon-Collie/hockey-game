@@ -57,7 +57,7 @@ signal slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int)
 signal slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int, new_team_id: int, new_slot: int, jersey: Color, helmet: Color, pants: Color)
 signal game_started(config: Dictionary)
 signal lobby_roster_synced(roster: Array)
-signal color_vote_changed(peer_id: int, color_id: String)
+signal color_vote_changed(peer_id: int, color_slot: int)
 signal color_votes_synced(votes: Dictionary)
 signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int)
 signal return_to_lobby_received(roster: Array)
@@ -111,10 +111,10 @@ signal replay_event_received(host_ts: float, event: Dictionary)
 signal local_identity_changed(player_name: String, jersey_number: int, is_left_handed: bool)
 
 # Local player picked a different favorite team palette. Fired by
-# apply_preferred_color (which writes PlayerPrefs.preferred_color_id).
+# apply_preferred_color (which writes PlayerPrefs.preferred_color_slot).
 # GameManager re-tints the home team's local actors and, if the new home
 # now collides with the current away, re-rolls the away color too.
-signal local_preferred_color_changed(home_color_id: String, away_color_id: String)
+signal local_preferred_color_changed(home_color_slot: int, away_color_slot: int)
 
 # ── State ─────────────────────────────────────────────────────────────────────
 var is_host: bool = false
@@ -133,12 +133,17 @@ var is_tutorial_mode: bool = false
 # Boot and by return-to-free-play; cleared by reset() and whenever any other
 # activity (host, client, lobby-with-bots, tutorial) is started.
 var is_free_play_mode: bool = false
-var pending_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
-var pending_away_color_id: String  = TeamColorRegistry.DEFAULT_AWAY_ID
-var pending_color_votes: Dictionary = {}  # peer_id → color_id (host authoritative; all peers mirror)
+var pending_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
+var pending_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT
+var pending_color_votes: Dictionary = {}  # peer_id → color_slot (int; host authoritative; all peers mirror)
 # slot_key (team*3+slot, matching LobbyManager._slot_key) → bool. Empty slots
 # marked true get an AI bot at game start. Host authoritative; clients mirror.
 var pending_bot_slots: Dictionary[int, bool] = {}
+# Parallel to pending_bot_slots: the curated identity (name / number /
+# handedness) chosen for each bot slot at toggle time. Host picks via
+# BotIdentityRegistry and broadcasts so the lobby UI can show the actual
+# bot that will spawn instead of a generic "BOT" placeholder.
+var pending_bot_identities: Dictionary[int, Dictionary] = {}
 # Integer physics-tick counter on the host. Used by AI/perception code as a
 # deterministic salt for per-tick RNG. Clients do not maintain or consume
 # this — they read estimated_host_time() instead.
@@ -234,52 +239,52 @@ func start_offline() -> void:
 
 
 # Entry point that wraps start_offline with the free-play-specific seeding:
-# home color = the player's saved favorite (or DEFAULT_HOME_ID if none picked
-# yet), away color = a random non-home team from the registry, and the
+# home color = the player's saved favorite (or DEFAULT_HOME_SLOT if none picked
+# yet), away color = a random non-home slot from the registry, and the
 # player is always pinned to team 0 / slot 0 so they spawn as the home team
 # instead of whichever side the state machine's host-registration happens
 # to pick. Used by both Boot (initial launch) and
 # GameManager.return_to_free_play.
 func start_free_play() -> void:
-	pending_home_color_id = _resolve_preferred_home_id()
-	pending_away_color_id = _pick_random_away_id(pending_home_color_id)
+	pending_home_color_slot = _resolve_preferred_home_slot()
+	pending_away_color_slot = _pick_random_away_slot(pending_home_color_slot)
 	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
 	start_offline()
 	is_free_play_mode = true
 
 
-# Update PlayerPrefs.preferred_color_id and broadcast the change. Re-rolls
+# Update PlayerPrefs.preferred_color_slot and broadcast the change. Re-rolls
 # the away color if the new home matches the current away so the player
 # never faces a team wearing the same palette.
-func apply_preferred_color(color_id: String) -> void:
-	PlayerPrefs.preferred_color_id = color_id
+func apply_preferred_color(color_slot: int) -> void:
+	PlayerPrefs.preferred_color_slot = color_slot
 	PlayerPrefs.save()
-	pending_home_color_id = color_id
-	if pending_away_color_id == color_id:
-		pending_away_color_id = _pick_random_away_id(color_id)
-	local_preferred_color_changed.emit(pending_home_color_id, pending_away_color_id)
+	pending_home_color_slot = color_slot
+	if pending_away_color_slot == color_slot:
+		pending_away_color_slot = _pick_random_away_slot(color_slot)
+	local_preferred_color_changed.emit(pending_home_color_slot, pending_away_color_slot)
 
 
-func _resolve_preferred_home_id() -> String:
-	var saved: String = PlayerPrefs.preferred_color_id
-	if saved.is_empty():
-		return TeamColorRegistry.DEFAULT_HOME_ID
-	# Defensive: if the user's saved id was removed from the registry (e.g.
+func _resolve_preferred_home_slot() -> int:
+	var saved: int = PlayerPrefs.preferred_color_slot
+	if saved < 0:
+		return TeamColorRegistry.DEFAULT_HOME_SLOT
+	# Defensive: if the user's saved slot was removed from the registry (e.g.
 	# team list edited between releases), fall back to the default rather
 	# than crashing downstream lookups.
-	if not TeamColorRegistry.get_all_ids().has(saved):
-		return TeamColorRegistry.DEFAULT_HOME_ID
+	if not TeamColorRegistry.get_all_slots().has(saved):
+		return TeamColorRegistry.DEFAULT_HOME_SLOT
 	return saved
 
 
-func _pick_random_away_id(home_id: String) -> String:
-	var ids: Array[String] = TeamColorRegistry.get_all_ids()
-	var candidates: Array[String] = []
-	for id: String in ids:
-		if id != home_id:
-			candidates.append(id)
+func _pick_random_away_slot(home_slot: int) -> int:
+	var slots: Array[int] = TeamColorRegistry.get_all_slots()
+	var candidates: Array[int] = []
+	for slot: int in slots:
+		if slot != home_slot:
+			candidates.append(slot)
 	if candidates.is_empty():
-		return TeamColorRegistry.DEFAULT_AWAY_ID
+		return TeamColorRegistry.DEFAULT_AWAY_SLOT
 	return candidates[randi() % candidates.size()]
 
 
@@ -428,10 +433,11 @@ func reset() -> void:
 	pending_lobby_roster = []
 	pending_join_slot = {}
 	pending_join_players = []
-	pending_home_color_id = TeamColorRegistry.DEFAULT_HOME_ID
-	pending_away_color_id = TeamColorRegistry.DEFAULT_AWAY_ID
+	pending_home_color_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
+	pending_away_color_slot = TeamColorRegistry.DEFAULT_AWAY_SLOT
 	pending_color_votes = {}
 	pending_bot_slots.clear()
+	pending_bot_identities.clear()
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -1115,50 +1121,50 @@ signal join_in_progress(config: Dictionary)
 @rpc("authority", "reliable")
 func notify_join_in_progress(p_num_periods: int, p_period_duration: float,
 		p_ot_enabled: bool, p_ot_duration: float,
-		p_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID,
-		p_away_color_id: String = TeamColorRegistry.DEFAULT_AWAY_ID,
+		p_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
+		p_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
 		p_game_id: String = "") -> void:
-	pending_home_color_id = p_home_color_id
-	pending_away_color_id = p_away_color_id
+	pending_home_color_slot = p_home_color_slot
+	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
 	join_in_progress.emit({
 		"num_periods": p_num_periods,
 		"period_duration": p_period_duration,
 		"ot_enabled": p_ot_enabled,
 		"ot_duration": p_ot_duration,
-		"home_color_id": p_home_color_id,
-		"away_color_id": p_away_color_id,
+		"home_color_slot": p_home_color_slot,
+		"away_color_slot": p_away_color_slot,
 		"rule_set": p_rule_set,
 		"game_id": p_game_id,
 	})
 
 func send_join_in_progress(peer_id: int, config: Dictionary) -> void:
-	var hid: String = config.get("home_color_id", pending_home_color_id)
-	var aid: String = config.get("away_color_id", pending_away_color_id)
+	var hslot: int = int(config.get("home_color_slot", pending_home_color_slot))
+	var aslot: int = int(config.get("away_color_slot", pending_away_color_slot))
 	var rs: int = config.get("rule_set", pending_rule_set)
 	var gid: String = config.get("game_id", "")
 	notify_join_in_progress.rpc_id(peer_id,
 		config.num_periods, config.period_duration,
-		config.ot_enabled, config.ot_duration, hid, aid, rs, gid)
+		config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid)
 
 @rpc("authority", "reliable")
 func notify_game_start(p_num_periods: int, p_period_duration: float,
 		p_ot_enabled: bool, p_ot_duration: float,
-		p_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID,
-		p_away_color_id: String = TeamColorRegistry.DEFAULT_AWAY_ID,
+		p_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
+		p_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
 		p_game_id: String = "") -> void:
-	pending_home_color_id = p_home_color_id
-	pending_away_color_id = p_away_color_id
+	pending_home_color_slot = p_home_color_slot
+	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
 	game_started.emit({
 		"num_periods": p_num_periods,
 		"period_duration": p_period_duration,
 		"ot_enabled": p_ot_enabled,
 		"ot_duration": p_ot_duration,
-		"home_color_id": p_home_color_id,
-		"away_color_id": p_away_color_id,
+		"home_color_slot": p_home_color_slot,
+		"away_color_slot": p_away_color_slot,
 		"rule_set": p_rule_set,
 		"game_id": p_game_id,
 	})
@@ -1169,51 +1175,51 @@ func sync_lobby_roster(roster: Array) -> void:
 	lobby_roster_synced.emit(roster)
 
 func send_game_start(config: Dictionary) -> void:
-	var hid: String = config.get("home_color_id", TeamColorRegistry.DEFAULT_HOME_ID)
-	var aid: String = config.get("away_color_id", TeamColorRegistry.DEFAULT_AWAY_ID)
+	var hslot: int = int(config.get("home_color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT))
+	var aslot: int = int(config.get("away_color_slot", TeamColorRegistry.DEFAULT_AWAY_SLOT))
 	var rs: int = config.get("rule_set", GameRules.DEFAULT_RULE_SET)
 	var gid: String = config.get("game_id", "")
-	pending_home_color_id = hid
-	pending_away_color_id = aid
+	pending_home_color_slot = hslot
+	pending_away_color_slot = aslot
 	pending_rule_set = rs
 	for peer_id: int in connected_peer_ids():
 		notify_game_start.rpc_id(peer_id,
 			config.num_periods, config.period_duration,
-			config.ot_enabled, config.ot_duration, hid, aid, rs, gid)
+			config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid)
 	game_started.emit(config)
 
 func send_lobby_roster(peer_id: int, roster: Array) -> void:
 	sync_lobby_roster.rpc_id(peer_id, roster)
 
 @rpc("any_peer", "reliable")
-func request_color_vote(color_id: String) -> void:
+func request_color_vote(color_slot: int) -> void:
 	# Host receives a peer's vote, mirrors it locally, then fans out to all
 	# peers (including the sender) so everyone holds the same vote map.
 	var peer_id: int = multiplayer.get_remote_sender_id()
-	pending_color_votes[peer_id] = color_id
+	pending_color_votes[peer_id] = color_slot
 	for remote_id: int in connected_peer_ids():
-		notify_color_vote.rpc_id(remote_id, peer_id, color_id)
-	color_vote_changed.emit(peer_id, color_id)
+		notify_color_vote.rpc_id(remote_id, peer_id, color_slot)
+	color_vote_changed.emit(peer_id, color_slot)
 
 @rpc("authority", "reliable")
-func notify_color_vote(peer_id: int, color_id: String) -> void:
-	pending_color_votes[peer_id] = color_id
-	color_vote_changed.emit(peer_id, color_id)
+func notify_color_vote(peer_id: int, color_slot: int) -> void:
+	pending_color_votes[peer_id] = color_slot
+	color_vote_changed.emit(peer_id, color_slot)
 
 @rpc("authority", "reliable")
 func sync_color_votes(votes: Dictionary) -> void:
 	pending_color_votes = votes.duplicate()
 	color_votes_synced.emit(pending_color_votes)
 
-func send_color_vote(color_id: String) -> void:
+func send_color_vote(color_slot: int) -> void:
 	if is_host:
 		var pid: int = local_peer_id()
-		pending_color_votes[pid] = color_id
+		pending_color_votes[pid] = color_slot
 		for remote_id: int in connected_peer_ids():
-			notify_color_vote.rpc_id(remote_id, pid, color_id)
-		color_vote_changed.emit(pid, color_id)
+			notify_color_vote.rpc_id(remote_id, pid, color_slot)
+		color_vote_changed.emit(pid, color_slot)
 	else:
-		request_color_vote.rpc_id(1, color_id)
+		request_color_vote.rpc_id(1, color_slot)
 
 func send_color_votes_to(peer_id: int, votes: Dictionary) -> void:
 	sync_color_votes.rpc_id(peer_id, votes)
@@ -1224,19 +1230,24 @@ func send_color_votes_to(peer_id: int, votes: Dictionary) -> void:
 # can let clients request toggles (request_bot_slot) without redesigning.
 
 @rpc("authority", "reliable")
-func notify_bot_slot(slot_key: int, is_bot: bool) -> void:
+func notify_bot_slot(slot_key: int, is_bot: bool, identity: Dictionary = {}) -> void:
 	if is_bot:
 		pending_bot_slots[slot_key] = true
+		pending_bot_identities[slot_key] = identity
 	else:
 		pending_bot_slots.erase(slot_key)
+		pending_bot_identities.erase(slot_key)
 	bot_slot_changed.emit(slot_key, is_bot)
 
 @rpc("authority", "reliable")
-func sync_bot_slots(bot_slots: Dictionary) -> void:
+func sync_bot_slots(bot_slots: Dictionary, identities: Dictionary = {}) -> void:
 	pending_bot_slots = {}
+	pending_bot_identities = {}
 	for k: int in bot_slots:
 		if bot_slots[k]:
 			pending_bot_slots[k] = true
+			if identities.has(k):
+				pending_bot_identities[k] = identities[k]
 	bot_slots_synced.emit(pending_bot_slots)
 
 func send_bot_slot(slot_key: int, is_bot: bool) -> void:
@@ -1245,16 +1256,24 @@ func send_bot_slot(slot_key: int, is_bot: bool) -> void:
 	# is_host so this branch shouldn't fire under normal flow.
 	if not is_host:
 		return
+	var identity: Dictionary = {}
 	if is_bot:
 		pending_bot_slots[slot_key] = true
+		# Pick a fresh identity that isn't already in use in another bot slot.
+		var used_names: Array[String] = []
+		for k: int in pending_bot_identities:
+			used_names.append(pending_bot_identities[k].get("name", ""))
+		identity = BotIdentityRegistry.pick_for_slot(slot_key, used_names)
+		pending_bot_identities[slot_key] = identity
 	else:
 		pending_bot_slots.erase(slot_key)
+		pending_bot_identities.erase(slot_key)
 	for remote_id: int in connected_peer_ids():
-		notify_bot_slot.rpc_id(remote_id, slot_key, is_bot)
+		notify_bot_slot.rpc_id(remote_id, slot_key, is_bot, identity)
 	bot_slot_changed.emit(slot_key, is_bot)
 
-func send_bot_slots_to(peer_id: int, bot_slots: Dictionary) -> void:
-	sync_bot_slots.rpc_id(peer_id, bot_slots)
+func send_bot_slots_to(peer_id: int, bot_slots: Dictionary, identities: Dictionary = {}) -> void:
+	sync_bot_slots.rpc_id(peer_id, bot_slots, identities)
 
 @rpc("authority", "reliable")
 func notify_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool,

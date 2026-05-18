@@ -49,11 +49,11 @@ func push(text: String, name_color: Color) -> void:
 	tween.tween_callback(wrapper.queue_free)
 
 
-func _make_label(text: String, size: int, color: Color) -> Label:
+func _make_label(text: String, font_size: int, color: Color) -> Label:
 	var lbl := Label.new()
 	lbl.text = text
 	lbl.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
-	lbl.add_theme_font_size_override("font_size", size)
+	lbl.add_theme_font_size_override("font_size", font_size)
 	lbl.add_theme_color_override("font_color", color)
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return lbl

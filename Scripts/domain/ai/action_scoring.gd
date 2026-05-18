@@ -145,10 +145,11 @@ const GOALIE_ZONE_MAX_PENALTY: float = 0.8
 
 # Lane-clear: an opponent within this perpendicular distance of the
 # puck-flight segment can intercept. Roughly stick-blade reach of a
-# lane defender. Raise toward 2.0 if passes still get picked off
-# mid-lane; lower toward 1.0 if bots over-reject legitimate threading
+# lane defender, plus a small margin since defenders move during the
+# puck-flight. Raise toward 2.2 if passes still get picked off
+# mid-lane; lower toward 1.4 if bots over-reject legitimate threading
 # passes.
-const LANE_CLEAR_RADIUS_M: float = 1.5
+const LANE_CLEAR_RADIUS_M: float = 1.8
 
 # Lane-clear reaction window. A defender at fractional position `t`
 # along the puck path has time `t × flight_time` to read the release
@@ -161,7 +162,11 @@ const LANE_CLEAR_RADIUS_M: float = 1.5
 # (~14 m/s) use this same model with different speeds → defenders
 # close to shooter contribute more for slow passes than for fast
 # slappers.
-const LANE_REACTION_DELAY_S: float = 0.15
+#
+# 0.08 s is ~two ticks at 30 Hz — trusting defenders to read a
+# release at a competitive human level rather than the 0.15 s
+# "casual reaction" that let too many bot passes through.
+const LANE_REACTION_DELAY_S: float = 0.08
 const LANE_REACTION_RAMP_S: float = 0.10
 
 # Puck release speed assumptions for lane-clear reaction-window math.
@@ -336,6 +341,31 @@ static func score_shoot(
 		goalie_zone_factor = 1.0 - goalie_zone_penalty(shooter, goalie_current_pos)
 
 	return shot_quality * lane * pressure_factor * goalie_zone_factor
+
+
+# Quick-shot variant of score_shoot. Identical scoring shape, two
+# parameter swaps:
+#   - predicted_goalie_pos = goalie_now (no charge window means the
+#     goalie has zero reaction time to slide before the puck is gone)
+#   - shot_speed = PASS_SPEED_M_S (quick-shot release speed)
+#
+# Most of the quick-shot's tactical signature falls out of the speed
+# swap inside _lane_clear: slower puck → more reaction time for
+# defenders → lanes naturally close at longer range. There's no
+# explicit distance cutoff because the lane math already prices it.
+# Reward for catching a still-squared goalie comes from squareness
+# being measured against the current goalie position (no slide), so
+# arc_offset is small and coverage stays high — unless the bot is
+# off-axis, in which case the still-squared goalie is exposed to
+# them and the score goes up.
+static func score_quick_shot(
+		shooter: Vector3,
+		attacking_goal: Vector3,
+		goalie_now: Vector3,
+		net_half_width: float,
+		opponents: Array[Vector3]) -> float:
+	return score_shoot(shooter, attacking_goal, goalie_now,
+			net_half_width, opponents, goalie_now, PASS_SPEED_M_S)
 
 
 # Penalty in [0, GOALIE_ZONE_MAX_PENALTY] for a shooter sitting
