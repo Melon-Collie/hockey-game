@@ -138,6 +138,11 @@ var pending_color_votes: Dictionary = {}  # peer_id → color_slot (int; host au
 # slot_key (team*3+slot, matching LobbyManager._slot_key) → bool. Empty slots
 # marked true get an AI bot at game start. Host authoritative; clients mirror.
 var pending_bot_slots: Dictionary[int, bool] = {}
+# Parallel to pending_bot_slots: the curated identity (name / number /
+# handedness) chosen for each bot slot at toggle time. Host picks via
+# BotIdentityRegistry and broadcasts so the lobby UI can show the actual
+# bot that will spawn instead of a generic "BOT" placeholder.
+var pending_bot_identities: Dictionary[int, Dictionary] = {}
 # Integer physics-tick counter on the host. Used by AI/perception code as a
 # deterministic salt for per-tick RNG (see docs/specs/AI_PLAN.md §11). Clients
 # do not maintain or consume this — they read estimated_host_time() instead.
@@ -418,6 +423,7 @@ func reset() -> void:
 	pending_away_color_slot = TeamColorRegistry.DEFAULT_AWAY_SLOT
 	pending_color_votes = {}
 	pending_bot_slots.clear()
+	pending_bot_identities.clear()
 	_input_timer = 0.0
 	_state_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
@@ -1175,19 +1181,24 @@ func send_color_votes_to(peer_id: int, votes: Dictionary) -> void:
 # can let clients request toggles (request_bot_slot) without redesigning.
 
 @rpc("authority", "reliable")
-func notify_bot_slot(slot_key: int, is_bot: bool) -> void:
+func notify_bot_slot(slot_key: int, is_bot: bool, identity: Dictionary = {}) -> void:
 	if is_bot:
 		pending_bot_slots[slot_key] = true
+		pending_bot_identities[slot_key] = identity
 	else:
 		pending_bot_slots.erase(slot_key)
+		pending_bot_identities.erase(slot_key)
 	bot_slot_changed.emit(slot_key, is_bot)
 
 @rpc("authority", "reliable")
-func sync_bot_slots(bot_slots: Dictionary) -> void:
+func sync_bot_slots(bot_slots: Dictionary, identities: Dictionary = {}) -> void:
 	pending_bot_slots = {}
+	pending_bot_identities = {}
 	for k: int in bot_slots:
 		if bot_slots[k]:
 			pending_bot_slots[k] = true
+			if identities.has(k):
+				pending_bot_identities[k] = identities[k]
 	bot_slots_synced.emit(pending_bot_slots)
 
 func send_bot_slot(slot_key: int, is_bot: bool) -> void:
@@ -1196,16 +1207,24 @@ func send_bot_slot(slot_key: int, is_bot: bool) -> void:
 	# is_host so this branch shouldn't fire under normal flow.
 	if not is_host:
 		return
+	var identity: Dictionary = {}
 	if is_bot:
 		pending_bot_slots[slot_key] = true
+		# Pick a fresh identity that isn't already in use in another bot slot.
+		var used_names: Array[String] = []
+		for k: int in pending_bot_identities:
+			used_names.append(pending_bot_identities[k].get("name", ""))
+		identity = BotIdentityRegistry.pick_for_slot(slot_key, used_names)
+		pending_bot_identities[slot_key] = identity
 	else:
 		pending_bot_slots.erase(slot_key)
+		pending_bot_identities.erase(slot_key)
 	for remote_id: int in connected_peer_ids():
-		notify_bot_slot.rpc_id(remote_id, slot_key, is_bot)
+		notify_bot_slot.rpc_id(remote_id, slot_key, is_bot, identity)
 	bot_slot_changed.emit(slot_key, is_bot)
 
-func send_bot_slots_to(peer_id: int, bot_slots: Dictionary) -> void:
-	sync_bot_slots.rpc_id(peer_id, bot_slots)
+func send_bot_slots_to(peer_id: int, bot_slots: Dictionary, identities: Dictionary = {}) -> void:
+	sync_bot_slots.rpc_id(peer_id, bot_slots, identities)
 
 @rpc("authority", "reliable")
 func notify_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool,

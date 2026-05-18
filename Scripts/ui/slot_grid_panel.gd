@@ -62,6 +62,7 @@ var _peer_ids:     Array = [[], []]
 
 var _team_colors: Array[Dictionary] = []
 var _bot_slots: Dictionary = {}
+var _bot_identities: Dictionary = {}
 var _is_local_host: bool = false
 
 
@@ -323,10 +324,15 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 # bot_slots: slot_key (team*3+slot) -> bool. Marks empty slots that should
 #   render as bots and (host-only) show the X action.
 # is_local_host: whether the local peer is the host. Drives X/+ visibility.
+# bot_identities: slot_key -> { name, number, is_left_handed }. Picked at
+#   lobby-toggle time so the bot card previews the actual name/number that
+#   will spawn instead of a generic "BOT" placeholder.
 func refresh(roster: Array[Dictionary], local_peer_id: int, team_colors: Array[Dictionary] = [],
-		bot_slots: Dictionary = {}, is_local_host: bool = false) -> void:
+		bot_slots: Dictionary = {}, is_local_host: bool = false,
+		bot_identities: Dictionary = {}) -> void:
 	_team_colors = team_colors
 	_bot_slots = bot_slots
+	_bot_identities = bot_identities
 	_is_local_host = is_local_host
 
 	var by_slot: Dictionary = {}
@@ -398,9 +404,12 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		_peer_ids[team_id][slot] = -1
 		style.bg_color = jersey_c
 		stripe_style.bg_color = stripe_c
-		num_lbl.text = "#"
+		var identity: Dictionary = _bot_identities.get(slot_key, {})
+		var bot_name: String = identity.get("name", "BOT")
+		var bot_num: int = identity.get("number", 0)
+		num_lbl.text = str(bot_num) if bot_num > 0 else "#"
 		num_lbl.add_theme_color_override("font_color", text_c)
-		name_lbl.text = "BOT"
+		name_lbl.text = bot_name.to_upper()
 		name_lbl.add_theme_color_override("font_color", text_c)
 		pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 		ping_lbl.visible = false

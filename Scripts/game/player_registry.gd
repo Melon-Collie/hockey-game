@@ -144,14 +144,16 @@ func spawn(
 # a reliable bot indicator (real peers and bots are both positive).
 #
 # Mirrors spawn() above but skips the human-player surface (handedness pref,
-# jersey number from preferences, ready state). Bots get deterministic
-# defaults: alternating handedness by slot, jersey numbers 80+slot, name
-# "Bot N". Stripe / glove / sock palette is generated the same way as for
-# humans via TeamColorRegistry so the visual matches.
+# jersey number from preferences, ready state). When `identity` is non-empty,
+# its name / number / handedness are used; otherwise bots fall back to
+# deterministic defaults: alternating handedness by slot, jersey numbers
+# 80+slot, name "Bot N". Stripe / glove / sock palette is generated the same
+# way as for humans via TeamColorRegistry so the visual matches.
 func spawn_bot(
 		bot_id: int,
 		team_slot: int,
-		team: Team) -> PlayerRecord:
+		team: Team,
+		identity: Dictionary = {}) -> PlayerRecord:
 	assert(bot_id >= 0 and bot_id < 6, "bot_id must be 0..5 (one per team slot)")
 	var peer_id: int = NetworkManager.BOT_ID_BASE + bot_id
 	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team.team_id)
@@ -168,9 +170,14 @@ func spawn_bot(
 	record.secondary_color     = colors.get("secondary", colors.pants)
 	record.text_color          = colors.text
 	record.text_outline_color  = colors.text_outline
-	record.is_left_handed = (team_slot % 2 == 1)
-	record.player_name = "Bot %d" % (bot_id + 1)
-	record.jersey_number = 80 + bot_id
+	if identity.is_empty():
+		record.is_left_handed = (team_slot % 2 == 1)
+		record.player_name = "Bot %d" % (bot_id + 1)
+		record.jersey_number = 80 + bot_id
+	else:
+		record.is_left_handed = identity.get("is_left_handed", team_slot % 2 == 1)
+		record.player_name = identity.get("name", "Bot %d" % (bot_id + 1))
+		record.jersey_number = identity.get("number", 80 + bot_id)
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck

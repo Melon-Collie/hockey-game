@@ -1923,17 +1923,27 @@ func return_to_lobby() -> void:
 	# reloads with the same bot configuration the host took into the game.
 	# Bots are stripped from the roster (they're not real peers) and instead
 	# round-trip as bot-slot markers; this is what restores the "X" action
-	# on the host's slot cards.
+	# on the host's slot cards. Identities are reconstructed from the
+	# PlayerRecord so the lobby card shows the same name/number the bot
+	# wore in the previous match instead of falling back to "BOT".
 	var bot_slots: Dictionary[int, bool] = {}
+	var bot_identities: Dictionary[int, Dictionary] = {}
 	if _registry != null:
 		for peer_id: int in _registry.all():
 			var r: PlayerRecord = _registry.get_record(peer_id)
 			if r == null or not r.is_bot or r.team == null:
 				continue
-			bot_slots[r.team.team_id * 3 + r.team_slot] = true
+			var slot_key: int = r.team.team_id * 3 + r.team_slot
+			bot_slots[slot_key] = true
+			bot_identities[slot_key] = {
+				"name":           r.player_name,
+				"number":         r.jersey_number,
+				"is_left_handed": r.is_left_handed,
+			}
 	NetworkManager.pending_bot_slots = bot_slots
+	NetworkManager.pending_bot_identities = bot_identities
 	for peer_id: int in NetworkManager.connected_peer_ids():
-		NetworkManager.send_bot_slots_to(peer_id, bot_slots)
+		NetworkManager.send_bot_slots_to(peer_id, bot_slots, bot_identities)
 	NetworkManager.send_return_to_lobby_to_all(_build_lobby_roster_array())
 
 
@@ -2120,6 +2130,8 @@ func _spawn_bots_from_lobby() -> void:
 		return
 	if NetworkManager.pending_bot_slots.is_empty():
 		return
+	# Identities were chosen at lobby-toggle time and synced to clients so
+	# the lobby UI could preview them — just read them back here.
 	var bot_id: int = 0
 	for slot_key: int in NetworkManager.pending_bot_slots:
 		if not NetworkManager.pending_bot_slots[slot_key]:
@@ -2135,7 +2147,8 @@ func _spawn_bots_from_lobby() -> void:
 			continue
 		var team: Team = teams[team_id]
 		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
-		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team)
+		var identity: Dictionary = NetworkManager.pending_bot_identities.get(slot_key, {})
+		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team, identity)
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a
 		# RemoteController-driven skater because peer_id is not their own.
@@ -2146,6 +2159,7 @@ func _spawn_bots_from_lobby() -> void:
 	# Clear after spawning so a return-to-lobby + restart starts fresh; the
 	# host will re-toggle bot slots in the next lobby session if desired.
 	NetworkManager.pending_bot_slots = {}
+	NetworkManager.pending_bot_identities = {}
 
 
 func _slot_already_taken(team_id: int, team_slot: int) -> bool:
