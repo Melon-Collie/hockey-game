@@ -1912,6 +1912,21 @@ func return_to_lobby() -> void:
 	if not NetworkManager.is_host:
 		return
 	_drop_puck_if_carried()
+	# Rebuild pending_bot_slots from registry's bot records so the lobby
+	# reloads with the same bot configuration the host took into the game.
+	# Bots are stripped from the roster (they're not real peers) and instead
+	# round-trip as bot-slot markers; this is what restores the "X" action
+	# on the host's slot cards.
+	var bot_slots: Dictionary[int, bool] = {}
+	if _registry != null:
+		for peer_id: int in _registry.all():
+			var r: PlayerRecord = _registry.get_record(peer_id)
+			if r == null or not r.is_bot or r.team == null:
+				continue
+			bot_slots[r.team.team_id * 3 + r.team_slot] = true
+	NetworkManager.pending_bot_slots = bot_slots
+	for peer_id: int in NetworkManager.connected_peer_ids():
+		NetworkManager.send_bot_slots_to(peer_id, bot_slots)
 	NetworkManager.send_return_to_lobby_to_all(_build_lobby_roster_array())
 
 
@@ -2004,6 +2019,11 @@ func _build_lobby_roster_array() -> Array:
 		return result
 	for peer_id: int in _registry.all():
 		var r: PlayerRecord = _registry.get_record(peer_id)
+		# Bots are not real peers — they round-trip through pending_bot_slots,
+		# not the roster. Including them here would render them as human-filled
+		# cards in the lobby with no remove action.
+		if r.is_bot:
+			continue
 		var team_id: int = r.team.team_id if r.team != null else 0
 		result.append([peer_id, team_id, r.team_slot, r.player_name,
 				r.is_left_handed, r.jersey_number])
