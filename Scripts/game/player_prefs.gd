@@ -41,11 +41,12 @@ var steam_id_linked: bool = false
 var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
-var preferred_color_id: String = ""  # team color preset id; "" → use team default at lobby join
+var preferred_color_slot: int = -1  # team color preset slot index; -1 → use team default at lobby join
 var last_ip: String = ""
 var master_volume: float = 1.0
 var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
+var crowd_volume: float = 1.0
 var master_muted: bool = false
 var is_fullscreen: bool = false
 var resolution_index: int = 1
@@ -93,11 +94,12 @@ func save() -> void:
 	cfg.set_value("player", "name", player_name)
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
-	cfg.set_value("player", "preferred_color_id", preferred_color_id)
+	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
 	cfg.set_value("player", "last_ip", last_ip)
 	cfg.set_value("audio", "master_volume", master_volume)
 	cfg.set_value("audio", "sfx_volume", sfx_volume)
 	cfg.set_value("audio", "ui_volume", ui_volume)
+	cfg.set_value("audio", "crowd_volume", crowd_volume)
 	cfg.set_value("audio", "master_muted", master_muted)
 	cfg.set_value("video", "fullscreen", is_fullscreen)
 	cfg.set_value("video", "resolution_index", resolution_index)
@@ -160,6 +162,9 @@ func apply_audio() -> void:
 	var ui_bus := AudioServer.get_bus_index("UI")
 	if ui_bus != -1:
 		AudioServer.set_bus_volume_db(ui_bus, linear_to_db(maxf(ui_volume, 0.0001)))
+	var crowd_bus := AudioServer.get_bus_index("Crowd")
+	if crowd_bus != -1:
+		AudioServer.set_bus_volume_db(crowd_bus, linear_to_db(maxf(crowd_volume, 0.0001)))
 
 func apply_video() -> void:
 	if is_fullscreen:
@@ -246,11 +251,15 @@ func _load() -> void:
 		player_name = cfg.get_value("player", "name", "Player").substr(0, 10)
 		jersey_number = clamp(cfg.get_value("player", "jersey_number", 10), 0, 99)
 		is_left_handed = cfg.get_value("player", "left_handed", true)
-		preferred_color_id = cfg.get_value("player", "preferred_color_id", "")
+		# Reads as int; any legacy fruit-name string under the old "preferred_color_id"
+		# key is ignored — hard break, no migration. -1 falls back to the default at
+		# next lobby join.
+		preferred_color_slot = int(cfg.get_value("player", "preferred_color_slot", -1))
 		last_ip = cfg.get_value("player", "last_ip", "")
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 1.0), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
+		crowd_volume = clampf(cfg.get_value("audio", "crowd_volume", 1.0), 0.0, 1.0)
 		master_muted = cfg.get_value("audio", "master_muted", false)
 		is_fullscreen = cfg.get_value("video", "fullscreen", false)
 		resolution_index = clamp(cfg.get_value("video", "resolution_index", 1), 0, RESOLUTIONS.size() - 1)

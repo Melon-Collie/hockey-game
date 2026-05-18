@@ -27,7 +27,7 @@ func before_each() -> void:
 func _add_player(peer_id: int, team_id: int, team_slot: int) -> PlayerRecord:
 	sm.register_remote_assigned_player(peer_id, team_slot, team_id)
 	var record := PlayerRecord.new(peer_id, team_slot, false, teams[team_id])
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	record.jersey_color = colors.jersey
 	record.helmet_color = colors.helmet
 	record.pants_color  = colors.pants
@@ -45,7 +45,7 @@ func test_request_cross_team_swap_regenerates_colors() -> void:
 	assert_eq(result.new_team_id, 1)
 	assert_eq(result.new_slot, 0)
 	# Cross-team: colors should match team 1's palette from the registry
-	var expected: Dictionary = TeamColorRegistry.get_colors(teams[1].color_id, 1)
+	var expected: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 	assert_eq(result.jersey, expected.jersey)
 	assert_eq(result.helmet, expected.helmet)
 	assert_eq(result.pants,  expected.pants)

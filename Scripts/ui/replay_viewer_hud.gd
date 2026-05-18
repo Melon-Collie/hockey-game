@@ -42,10 +42,14 @@ var _seeking_user: bool = false
 func setup(driver: FileReplayDriver, header: Dictionary) -> void:
 	_driver = driver
 	_header = header
-	var home_id: String = header.get("home_color_id", TeamColorRegistry.DEFAULT_HOME_ID)
-	var away_id: String = header.get("away_color_id", TeamColorRegistry.DEFAULT_AWAY_ID)
-	_home_color = TeamColorRegistry.get_colors(home_id, 0).primary
-	_away_color = TeamColorRegistry.get_colors(away_id, 1).primary
+	# Legacy fruit-name strings in old replay headers won't typecheck — fall back
+	# to defaults rather than crash. Hard break: no string→slot mapping.
+	var raw_home: Variant = header.get("home_color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
+	var raw_away: Variant = header.get("away_color_slot", TeamColorRegistry.DEFAULT_AWAY_SLOT)
+	var home_slot: int = raw_home if raw_home is int else TeamColorRegistry.DEFAULT_HOME_SLOT
+	var away_slot: int = raw_away if raw_away is int else TeamColorRegistry.DEFAULT_AWAY_SLOT
+	_home_color = TeamColorRegistry.get_colors(home_slot, 0).primary
+	_away_color = TeamColorRegistry.get_colors(away_slot, 1).primary
 	_build_ui()
 	_driver.game_state_changed.connect(_on_game_state_changed)
 	_driver.playback_ended.connect(_on_playback_ended)

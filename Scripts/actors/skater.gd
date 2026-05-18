@@ -162,6 +162,8 @@ var _hud: SkaterHUDCoordinator
 
 
 func _ready() -> void:
+	add_to_group("skaters")
+
 	var top_hand_side_sign: float = 1.0 if is_left_handed else -1.0
 	shoulder.position = Vector3(top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
 
@@ -395,6 +397,24 @@ func get_carry_target_global() -> Vector3:
 
 func get_prev_blade_contact_global() -> Vector3:
 	return _prev_blade_contact
+
+
+# Horizontal unit vector perpendicular to the stick shaft, picking the face
+# that opposes reference_velocity (i.e. faces an incoming puck). Used by
+# deflect math and by the receive-vs-deflect decision so both share one
+# definition of "blade face".
+func get_blade_face_normal(reference_velocity: Vector3) -> Vector3:
+	if top_hand == null:
+		return -global_transform.basis.z
+	var stick_horiz: Vector3 = get_blade_contact_global() - top_hand.global_position
+	stick_horiz.y = 0.0
+	if stick_horiz.length() < 0.001:
+		stick_horiz = -global_transform.basis.z
+	stick_horiz = stick_horiz.normalized()
+	var face_normal := Vector3(-stick_horiz.z, 0.0, stick_horiz.x)
+	if face_normal.dot(reference_velocity) > 0.0:
+		face_normal = -face_normal
+	return face_normal
 
 
 # ── Top Hand ──────────────────────────────────────────────────────────────────

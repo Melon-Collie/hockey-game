@@ -296,8 +296,8 @@ func _get_team_colors() -> Array[Dictionary]:
 	if GameManager.teams.size() < 2:
 		return []
 	return [
-		TeamColorRegistry.get_colors(GameManager.teams[0].color_id, 0),
-		TeamColorRegistry.get_colors(GameManager.teams[1].color_id, 1),
+		TeamColorRegistry.get_colors(GameManager.teams[0].color_slot, 0),
+		TeamColorRegistry.get_colors(GameManager.teams[1].color_slot, 1),
 	]
 
 

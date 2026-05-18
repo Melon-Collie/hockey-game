@@ -5,6 +5,8 @@
 [ext_resource type="Script" uid="uid://0m52yshmlqpi" path="res://Scripts/actors/hockey_rink.gd" id="3_7grwi"]
 [ext_resource type="Script" uid="uid://dnmmf3sl24ex4" path="res://Scripts/actors/hockey_goal.gd" id="4_2i1fh"]
 [ext_resource type="PackedScene" uid="uid://cs3u0eyiv7a7r" path="res://Scenes/HUD.tscn" id="5_l2d8q"]
+[ext_resource type="Script" uid="uid://dqofvuyxy7qno" path="res://Scripts/actors/arena_stands.gd" id="6_7grwi"]
+[ext_resource type="Script" uid="uid://cc3mruwbfx5xw" path="res://Scripts/game/crowd_audio_controller.gd" id="7_2i1fh"]
 
 [sub_resource type="Environment" id="Environment_rxg2q"]
 background_mode = 1
@@ -125,3 +127,9 @@ light_specular = 0.35
 shadow_enabled = true
 spot_range = 32.0
 spot_angle = 32.0
+
+[node name="ArenaStands" type="Node3D" parent="." unique_id=2031902441]
+script = ExtResource("6_7grwi")
+
+[node name="CrowdAudio" type="Node" parent="." unique_id=1841790014]
+script = ExtResource("7_2i1fh")

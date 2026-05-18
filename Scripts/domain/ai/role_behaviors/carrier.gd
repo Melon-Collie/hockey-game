@@ -31,6 +31,7 @@ extends RefCounted
 const INTENT_CARRY: int = 0
 const INTENT_SHOOT: int = 1
 const INTENT_PASS: int = 3
+const INTENT_QUICK_SHOT: int = 4
 
 # ── Scoring constants ────────────────────────────────────────────────────────
 # Re-evaluation cadence. CARRY runs at 240 Hz; without throttling the
@@ -116,6 +117,7 @@ var _scratch_teammate_ids: Array[int] = []
 # Populated every re-eval; the state machine forwards these to its
 # own debug_* fields for AIController / floating label.
 var debug_shoot_score: float = 0.0
+var debug_quick_shot_score: float = 0.0
 var debug_pass_score: float = 0.0
 var debug_pass_peer_id: int = 0
 var debug_carry_score: float = 0.0
@@ -149,6 +151,8 @@ func decide(ctx: RoleContext) -> RoleDecision:
 		INTENT_PASS:
 			d.pass_intent = true
 			d.pass_target_peer_id = pass_target_peer_id
+		INTENT_QUICK_SHOT:
+			d.quick_shot_intent = true
 	return d
 
 
@@ -231,6 +235,17 @@ func _pick_action(ctx: RoleContext) -> void:
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot, goalie_now)
 
+	# Top-level QUICK_SHOT — snap release at PASS_SPEED, no charge. The
+	# goalie can't slide during a zero-charge release, so a still-squared
+	# goalie that would otherwise drift wide stays in position. Off-axis
+	# bots benefit (their lateral arc against a still-squared goalie is
+	# open); slower puck speed naturally kills long-range attempts via
+	# the existing _lane_clear math. Release position = current self_pos
+	# (no charge motion). Opponents at current positions (no projection).
+	var quick_shoot_score: float = AIActionScoring.score_quick_shot(
+			self_pos, attacking_goal, goalie_now,
+			GameRules.NET_HALF_WIDTH, _scratch_opponents)
+
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
 	var best_pass: Array = _compute_best_pass(
@@ -256,6 +271,8 @@ func _pick_action(ctx: RoleContext) -> void:
 	# above fire on every re-eval and the bot would never fire.
 	if intended_action == INTENT_SHOOT:
 		shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	elif intended_action == INTENT_QUICK_SHOT:
+		quick_shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
 	elif intended_action == INTENT_PASS:
 		best_pass_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
 
@@ -263,20 +280,30 @@ func _pick_action(ctx: RoleContext) -> void:
 	# State machine forwards these to its own debug_* fields; AIController
 	# polls and refreshes only when content changes.
 	debug_shoot_score = shoot_score
+	debug_quick_shot_score = quick_shoot_score
 	debug_pass_score = best_pass_score
 	debug_pass_peer_id = best_pass_peer
 	debug_carry_score = carry_score
 	debug_carry_pos = last_carry_anchor
 
+	# Pick the better shot type first. Wrister wins ties — the
+	# higher-power option is the default. Quick-shot has to beat
+	# wrister by ACTION_HYSTERESIS_MARGIN to be chosen, which
+	# captures "only snap-shoot when the no-charge release is
+	# distinctly better than charging." Margin reuse keeps the
+	# behaviour consistent with the other fire-intent stickiness.
+	var best_shot_score: float = shoot_score
+	var best_shot_intent: int = INTENT_SHOOT
+	if quick_shoot_score > shoot_score + AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+		best_shot_score = quick_shoot_score
+		best_shot_intent = INTENT_QUICK_SHOT
+
 	# Best fire option. No noise-floor threshold — CARRY competes
 	# directly, so a weak fire naturally loses to any stronger carry
 	# candidate (and stand-still in particular bounds fire from below
 	# at score_at(self) >= score_shoot(self)).
-	var fire_score: float = -INF
-	var fire_intent: int = INTENT_CARRY
-	if shoot_score > fire_score:
-		fire_score = shoot_score
-		fire_intent = INTENT_SHOOT
+	var fire_score: float = best_shot_score
+	var fire_intent: int = best_shot_intent
 	if best_pass_score > fire_score:
 		fire_score = best_pass_score
 		fire_intent = INTENT_PASS
@@ -397,7 +424,18 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# plus their wrister charge. The squareness term in score_shoot
 		# rewards passes that catch the goalie sliding cross-seam — this
 		# is where most of that benefit lands.
-		var receiver_release_t: float = flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+		#
+		# One-timer-ready receivers fire on contact (no wrister windup),
+		# so the goalie can't slide during a charge. Pass `flight_t`
+		# alone for the release time → predicted goalie has only had
+		# the pass flight to react, not the additional wrister charge.
+		# Catching a still-set goalie via a back-door feed becomes a
+		# high-square open-net read.
+		var receiver_is_one_timer: bool = (ctx.team_brain != null
+				and ctx.team_brain.is_one_timer_ready(peer_id))
+		var receiver_release_t: float = flight_t
+		if not receiver_is_one_timer:
+			receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 		var receiver_goalie: Vector3 = _predict_goalie_at(
 				ctx, receiver_release_t, receiver)
 		var receiver_value: float = _score_at(ctx, receiver, self_pos,

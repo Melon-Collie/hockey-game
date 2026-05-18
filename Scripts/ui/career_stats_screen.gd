@@ -453,6 +453,7 @@ func _build_replay_button(game: Dictionary) -> Button:
 
 func _on_watch_pressed(path: String) -> void:
 	NetworkManager.pending_replay_path = path
+	GameManager.on_scene_exit()
 	get_tree().change_scene_to_file(Constants.SCENE_REPLAY_VIEWER)
 
 
