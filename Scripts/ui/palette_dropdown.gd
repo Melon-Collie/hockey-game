@@ -40,7 +40,6 @@ func _build_closed_state(min_size: Vector2) -> void:
 	# live underneath as a stylebox so they re-render alongside the button's
 	# theme styles. Mouse_filter STOP keeps clicks off the underlying row.
 	_closed_btn = Button.new()
-	_closed_btn.flat = true
 	_closed_btn.custom_minimum_size = min_size
 	_closed_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_closed_btn.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -154,7 +153,6 @@ func _build_swatch(slot: int) -> Button:
 	var secondary: Color = preset.get("secondary", MenuStyle.TEXT_SEP)
 
 	var btn := Button.new()
-	btn.flat = true
 	btn.custom_minimum_size = _POPUP_SWATCH_SIZE
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.pressed.connect(_on_swatch_pressed.bind(slot))
