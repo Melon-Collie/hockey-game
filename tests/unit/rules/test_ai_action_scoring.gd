@@ -57,27 +57,28 @@ func test_shoot_score_reduced_by_mid_lane_defender() -> void:
 func test_shoot_score_unaffected_by_low_t_defender() -> void:
 	# Lane physics: a defender on the segment but at low t (close
 	# to shooter, far from receiver) has no reaction time to position
-	# their stick before a fast puck blows past them. Shot score
-	# should be essentially unaffected.
+	# their stick before a fast puck blows past them. Lane clearance
+	# should pass through clean.
 	#
-	# Uses slapper speed (34 m/s). Shooter z=15, defender z=17.0 →
-	# t ≈ 0.17, time_to_defender ≈ 0.17 × 0.343 ≈ 0.059 s, comfortably
-	# below LANE_REACTION_DELAY_S = 0.08 → reaction_factor = 0 → no
-	# block. A 24 m/s wrister at the same position would push closer
-	# to the threshold; that boundary case isn't what this test
-	# verifies.
-	var shooter := Vector3(0.0, 0.0, 15.0)  # ~12 m from goal
-	var goalie := Vector3(0.5, 0.0, 26.0)
+	# Tested against _lane_clear directly. Full-score equivalence is
+	# not possible to assert here: under LANE_REACTION_DELAY_S = 0.08
+	# and a 34 m/s slapper, any defender close enough to be low-t
+	# (within ~2.72 m along the shot path) is also inside the 4 m
+	# PRESSURE_RADIUS_M and drops the score through the separate
+	# pressure term. Pressure is intentional — a defender at your
+	# hip pressures the release even when they can't intercept the
+	# puck. This test isolates the lane reaction-time invariant.
+	var shooter := Vector3(0.0, 0.0, 15.0)
+	var aim := Vector3(0.0, 0.0, 26.65)
 	var slapper := AIActionScoring.SLAPPER_SHOT_SPEED_M_S
-	var clear: float = AIActionScoring.score_shoot(
-			shooter, GOAL, goalie, NET_HW, [], Vector3.INF, slapper)
-	# Defender at z=17.0 — 2 m past shooter on the line. Outside
-	# pressure radius (>4 m).
+	var clear: float = AIActionScoring._lane_clear(shooter, aim, [], slapper)
+	# Defender at z=17.0 — 2 m past shooter on the line.
+	# t ≈ 0.172, time_to_defender ≈ 0.059 s, below the 0.08 s reaction
+	# threshold → reaction_factor = 0 → zero contribution to block.
 	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 17.0)]
-	var blocked: float = AIActionScoring.score_shoot(
-			shooter, GOAL, goalie, NET_HW, close_blocker, Vector3.INF, slapper)
-	assert_almost_eq(blocked, clear, 0.02,
-			"low-t defender with no reaction time shouldn't block a fast slapper")
+	var blocked: float = AIActionScoring._lane_clear(shooter, aim, close_blocker, slapper)
+	assert_almost_eq(blocked, clear, 0.001,
+			"low-t defender with no reaction time shouldn't reduce lane clearance")
 
 
 func test_shoot_score_unaffected_by_defender_off_lane() -> void:
