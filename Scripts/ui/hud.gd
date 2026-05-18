@@ -95,6 +95,7 @@ func _ready() -> void:
 	GameManager.score_changed.connect(_on_score_changed)
 	GameManager.goal_scored.connect(_on_goal_scored)
 	GameManager.phase_changed.connect(_on_phase_changed)
+	GameManager.faceoff_prep_announced.connect(_on_faceoff_prep_announced)
 	GameManager.period_changed.connect(_on_period_changed)
 	GameManager.clock_updated.connect(_on_clock_updated)
 	GameManager.game_over.connect(_on_game_over)
@@ -738,12 +739,9 @@ func _on_phase_changed(new_phase: int) -> void:
 			# signal — wait for that.
 			pass
 		GamePhase.Phase.FACEOFF_PREP:
-			_clear_goal_template()
-			_phase_label.add_theme_color_override("font_color", _WHITE)
-			_phase_label.visible = true
-			_phase_style.bg_color = MenuStyle.BROADCAST_BG
-			_show_phase_banner_at_rest()
-			_start_faceoff_countdown()
+			# Banner + countdown are driven by faceoff_prep_announced (reliable
+			# RPC) so they can't appear before the skater teleport on a client.
+			pass
 		GamePhase.Phase.FACEOFF:
 			# Drop instant: hold "DROP!" briefly, then dismiss on PLAYING.
 			# No whistle here — refs whistle to stop play, not to start it.
@@ -771,6 +769,19 @@ func _on_phase_changed(new_phase: int) -> void:
 			_phase_label.visible = true
 			_phase_style.bg_color = MenuStyle.BROADCAST_BG
 			_show_phase_banner_at_rest()
+
+
+# Fires on the same reliable beat that teleports the local skater to the dot,
+# so the countdown banner can't appear before the skater is in position (the
+# pre-fix bug: client sees "FACEOFF IN 2" while their skater is still parked
+# at the post-goal position, then pops onto the dot mid-countdown).
+func _on_faceoff_prep_announced() -> void:
+	_clear_goal_template()
+	_phase_label.add_theme_color_override("font_color", _WHITE)
+	_phase_label.visible = true
+	_phase_style.bg_color = MenuStyle.BROADCAST_BG
+	_show_phase_banner_at_rest()
+	_start_faceoff_countdown()
 
 
 # Drives a "2 → 1 → DROP!" countdown on the phase banner during FACEOFF_PREP.
