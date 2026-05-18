@@ -25,9 +25,10 @@ const BLADE_X_OFFSET: float = 0.12
 # At 60 px/m this renders as ~1.2 px wide with antialiasing.
 @export var blade_width_m: float = 0.02
 # Alpha per blade pass. Low value so the same pixel can be re-scratched many
-# times before saturating — at 0.18 it takes ~20 overlapping passes to reach
-# near-full white.
-@export var blade_intensity: float = 0.18
+# times before saturating — at 0.10 it takes ~30 overlapping passes to reach
+# near-full white, so a single skate-by leaves a subtle trail and only
+# repeatedly-traveled paths build into visible scratches.
+@export var blade_intensity: float = 0.10
 
 var _viewport: SubViewport
 var _painter: Node2D
