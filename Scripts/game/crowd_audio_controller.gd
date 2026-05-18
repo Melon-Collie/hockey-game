@@ -1,26 +1,33 @@
 extends Node
 
 # Drives crowd audio: a looping ambient murmur plus cheer one-shots on goals
-# and period/game-end buzzers. SoundManager itself stays one-shot-only — the
-# looping ambient player lives here so the manager's pool semantics aren't
-# disturbed.
+# and period/game-end buzzers. Both stream types route through the dedicated
+# "Crowd" audio bus (created by SoundManager) so a single PlayerPrefs slider
+# controls overall crowd volume independently of SFX.
 #
-# Add this node under Hockey.tscn root. It auto-wires to the GameManager
-# autoload's `goal_scored` and `phase_changed` signals in _ready().
+# SoundManager stays one-shot-only — the looping ambient player and the small
+# cheer pool both live here, mirroring how SkaterSoundController owns its own
+# skate-loop AudioStreamPlayer3D.
 
 @export var ambient_stream_path: String = "res://Sounds/crowd_ambient.ogg"
+@export var cheer_stream_path: String = "res://Sounds/crowd_cheer.ogg"
 @export var ambient_volume_db: float = -14.0
 @export var cheer_volume_db: float = 0.0
 @export var duck_volume_db: float = -4.0
 @export var duck_recover_time: float = 4.0
 
+const _CHEER_POOL_SIZE: int = 3
+const _CROWD_BUS: StringName = &"Crowd"
+
 var _ambient_player: AudioStreamPlayer = null
+var _cheer_pool: Array[AudioStreamPlayer] = []
+var _cheer_stream: AudioStream = null
 var _tween: Tween = null
 
 
 func _ready() -> void:
 	_ambient_player = AudioStreamPlayer.new()
-	_ambient_player.bus = "SFX"
+	_ambient_player.bus = _CROWD_BUS
 	_ambient_player.volume_db = ambient_volume_db
 	add_child(_ambient_player)
 
@@ -33,6 +40,14 @@ func _ready() -> void:
 		_ambient_player.stream = stream
 		_ambient_player.finished.connect(_on_ambient_finished)
 		_ambient_player.play()
+
+	if ResourceLoader.exists(cheer_stream_path):
+		_cheer_stream = load(cheer_stream_path)
+	for i: int in _CHEER_POOL_SIZE:
+		var p: AudioStreamPlayer = AudioStreamPlayer.new()
+		p.bus = _CROWD_BUS
+		add_child(p)
+		_cheer_pool.append(p)
 
 	var gm: Node = get_node_or_null("/root/GameManager")
 	if gm != null:
@@ -59,9 +74,14 @@ func _on_phase_changed(new_phase: int) -> void:
 
 
 func _cheer() -> void:
-	var sm: Node = get_node_or_null("/root/SoundManager")
-	if sm != null:
-		sm.play_sfx(sm.Sound.CROWD_CHEER, cheer_volume_db, 0.05)
+	if _cheer_stream != null:
+		for p: AudioStreamPlayer in _cheer_pool:
+			if not p.playing:
+				p.stream = _cheer_stream
+				p.volume_db = cheer_volume_db
+				p.pitch_scale = randf_range(0.95, 1.05)
+				p.play()
+				break
 	_duck_ambient()
 
 

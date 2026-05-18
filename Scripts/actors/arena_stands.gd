@@ -37,9 +37,11 @@ extends Node3D
 	set(v):
 		riser_height = v
 		_request_rebuild()
-# Gap between the outer face of the boards (rink half-width/length) and the
-# first terrace's inner edge. Leaves visual breathing room around the glass.
-@export var base_outward_offset: float = 0.5:
+# Outward offset measured from rink_width/2 (the wall/glass center). Boards
+# and glass have wall_thickness=0.3 centered on this line, so their outer
+# face sits at +0.15. Anything below 0.15 embeds the first riser inside the
+# glass; values just above 0.15 put the first row flush against it.
+@export var base_outward_offset: float = 0.16:
 	set(v):
 		base_outward_offset = v
 		_request_rebuild()
