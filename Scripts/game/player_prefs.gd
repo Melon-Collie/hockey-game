@@ -203,7 +203,7 @@ func apply_video() -> void:
 	DisplayServer.window_set_vsync_mode(
 		DisplayServer.VSYNC_ENABLED if vsync_enabled else DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = FPS_CAP_VALUES[fps_cap_index]
-	var scene := Engine.get_main_loop().current_scene
+	var scene: Node = Engine.get_main_loop().current_scene
 	if scene == null:
 		return
 	var we := scene.find_child("WorldEnvironment", true, false) as WorldEnvironment
