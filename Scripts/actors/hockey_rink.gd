@@ -118,7 +118,10 @@ var _scratch_map: IceScratchMap = null
 func _ready() -> void:
 	_rebuild()
 	if not Engine.is_editor_hint() and _scratch_map != null:
-		GameManager.period_changed.connect(_scratch_map.clear)
+		# period_changed emits `new_period: int`; clear() takes no args, so we
+		# unbind the int — without this, Godot errors silently each emit
+		# ("Expected 0 arguments, got 1") and the ice never resets.
+		GameManager.period_changed.connect(_scratch_map.clear.unbind(1))
 
 func _rebuild() -> void:
 	if rink_length <= 0 or rink_width <= 0:
