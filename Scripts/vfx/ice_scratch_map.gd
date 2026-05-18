@@ -88,15 +88,19 @@ func _process(_delta: float) -> void:
 		var right: Vector3 = t.basis.x
 		var left_world: Vector3 = pos + right * (-BLADE_X_OFFSET)
 		var right_world: Vector3 = pos + right * BLADE_X_OFFSET
-		# World (x, z) -> viewport pixel. +Z maps to small image-Y so it
-		# matches the convention HockeyRink._add_ice uses for line drawing.
+		# World (x, z) -> viewport pixel. Godot's PlaneMesh places UV (0,0) at
+		# world (-size.x/2, -size.y/2), so UV.y (and therefore pixel-Y when
+		# this texture is sampled) increases with world Z. The existing rink
+		# line drawing in HockeyRink looks correct because every feature it
+		# bakes into the albedo is Z-symmetric — skater marks are the first
+		# asymmetric thing, which is why the flip only shows up here.
 		var left_px: Vector2 = Vector2(
 			(left_world.x + half_w) * px_x,
-			(half_l - left_world.z) * px_z
+			(left_world.z + half_l) * px_z
 		)
 		var right_px: Vector2 = Vector2(
 			(right_world.x + half_w) * px_x,
-			(half_l - right_world.z) * px_z
+			(right_world.z + half_l) * px_z
 		)
 
 		var prev: Variant = _prev_state.get(skater, null)
