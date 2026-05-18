@@ -6,7 +6,7 @@ extends Node2D
 # same parallax depth as the painted rink lines — so it reads as paint on
 # the concrete under the ice, with the same Beer-Lambert fade.
 
-const LOGO_TEX: Texture2D = preload("res://Assets/logos/Mitts_logo_skater.png")
+const LOGO_TEX: Texture2D = preload("res://Assets/logos/Mitts_logo_skater.svg")
 const FONT: Font = preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")
 const TEXT_TOP: String = "MITTS"
 const TEXT_BOTTOM: String = "ARENA"
@@ -14,7 +14,7 @@ const TEXT_BOTTOM: String = "ARENA"
 # Center-ice faceoff circle radius is 4.572 m (15 ft). The logo sits inside
 # the dot area; the text rides just inside the circle's outline.
 const FACEOFF_CIRCLE_RADIUS_M: float = 4.572
-const LOGO_DIAMETER_M: float = 3.0
+const LOGO_DIAMETER_M: float = 5.5
 const TEXT_RADIUS_FRACTION: float = 0.84
 const TEXT_HEIGHT_M: float = 0.8
 const TEXT_SPACING_FRACTION: float = 0.12
@@ -34,10 +34,12 @@ func _draw() -> void:
 	var text_radius: float = FACEOFF_CIRCLE_RADIUS_M * px_per_meter * TEXT_RADIUS_FRACTION
 	var font_size: int = int(TEXT_HEIGHT_M * px_per_meter)
 
-	# Top arch: feet toward center, reads L→R from the broadcast side.
-	_draw_arched_text(TEXT_TOP, center, text_radius, -PI * 0.5, font_size, true)
-	# Bottom arch: feet still toward center (so it reads from the same side).
-	_draw_arched_text(TEXT_BOTTOM, center, text_radius, PI * 0.5, font_size, false)
+	# Arches oriented for a long-side broadcast view (camera on +X looking -X):
+	# "top of view" is the -X side of the rink (left side of the albedo image)
+	# and "bottom of view" is +X (right of image). Both texts read L→R from
+	# that perspective.
+	_draw_arched_text(TEXT_TOP, center, text_radius, PI, font_size, true)
+	_draw_arched_text(TEXT_BOTTOM, center, text_radius, 0.0, font_size, false)
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 

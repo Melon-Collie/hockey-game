@@ -2,9 +2,10 @@ class_name IceScratchMap
 extends Node3D
 
 # Persistent skate-mark accumulator. A SubViewport with CLEAR_MODE_NEVER acts
-# as a paint canvas — each frame we draw the blade footprints for every active
-# skater on top of whatever was painted before, so the texture grows scratchier
-# over time. The ice shader samples this texture as a surface overlay.
+# as a paint canvas — each frame we draw a line segment from each blade's
+# previous pixel position to its current one, so the marks form continuous
+# scratches rather than discrete blobs. The ice shader samples this texture
+# as a surface overlay.
 #
 # Wiped at the start of each period via clear(), which flips the viewport's
 # clear mode back to ONCE (clears once, then reverts to NEVER on its own).
@@ -20,16 +21,20 @@ const BLADE_X_OFFSET: float = 0.12
 # Texture pixels per meter of rink. 40 → 1040×2400 (~2.4 MP, ~10 MB at RGBA8).
 # Bigger = crisper scratches at close range; smaller = cheaper memory & fill.
 @export var px_per_meter: float = 40.0
-# Radius of each blade footprint in world meters.
-@export var blade_radius_m: float = 0.04
-# Alpha per blade pass. Compounds across frames as the blade sweeps a pixel;
-# ~0.35 saturates a pixel after ~5 passes (one skate-by).
-@export var blade_intensity: float = 0.35
+# Stroke width in world meters. ~3 cm matches a real skate blade footprint.
+@export var blade_width_m: float = 0.03
+# Alpha per blade pass. Low value so the same pixel can be re-scratched many
+# times before saturating — at 0.12 it takes ~30 overlapping passes to reach
+# near-full white, vs ~5 at 0.35.
+@export var blade_intensity: float = 0.18
 
 var _viewport: SubViewport
 var _painter: Node2D
-var _pending_paints: PackedVector2Array = PackedVector2Array()
-var _prev_positions: Dictionary = {}  # Skater -> Vector3
+# Pending line segments flattened as [from0, to0, from1, to1, ...].
+var _pending_segments: PackedVector2Array = PackedVector2Array()
+# Per-skater previous state: [center_world: Vector3, left_blade_px: Vector2,
+# right_blade_px: Vector2]. Used to draw a continuous stroke between frames.
+var _prev_state: Dictionary = {}
 
 func _ready() -> void:
 	_viewport = SubViewport.new()
@@ -54,7 +59,8 @@ func get_texture() -> ViewportTexture:
 
 func clear() -> void:
 	_viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ONCE
-	_pending_paints.clear()
+	_pending_segments.clear()
+	_prev_state.clear()
 
 func _process(_delta: float) -> void:
 	var skaters: Array = get_tree().get_nodes_in_group("skaters")
@@ -64,43 +70,63 @@ func _process(_delta: float) -> void:
 	var half_l: float = rink_length * 0.5
 
 	# Drop entries for skaters that left the tree.
-	for tracked: Object in _prev_positions.keys():
+	for tracked: Object in _prev_state.keys():
 		if not is_instance_valid(tracked):
-			_prev_positions.erase(tracked)
+			_prev_state.erase(tracked)
 
 	for node: Node in skaters:
 		var skater: Skater = node as Skater
 		if skater == null:
 			continue
 		var pos: Vector3 = skater.global_position
-		var had_prev: bool = _prev_positions.has(skater)
-		var prev: Vector3 = _prev_positions.get(skater, pos)
-		_prev_positions[skater] = pos
-		if skater.is_ghost:
+		var right: Vector3 = skater.global_transform.basis.x
+		var left_world: Vector3 = pos + right * (-BLADE_X_OFFSET)
+		var right_world: Vector3 = pos + right * BLADE_X_OFFSET
+		# World (x, z) -> viewport pixel. +Z maps to small image-Y so it
+		# matches the convention HockeyRink._add_ice uses for line drawing.
+		var left_px: Vector2 = Vector2(
+			(left_world.x + half_w) * px_x,
+			(half_l - left_world.z) * px_z
+		)
+		var right_px: Vector2 = Vector2(
+			(right_world.x + half_w) * px_x,
+			(half_l - right_world.z) * px_z
+		)
+
+		var prev: Variant = _prev_state.get(skater, null)
+		# Always update prev state so next frame has a baseline, even if we
+		# skip painting this frame (ghost / teleport / too-slow).
+		_prev_state[skater] = [pos, left_px, right_px]
+
+		if skater.is_ghost or prev == null:
 			continue
-		# Teleport guard: reconcile snaps and faceoff resets must not draw a
-		# streak between old and new positions. Same threshold as SkaterVFX.
-		if had_prev and (pos - prev).length() > TELEPORT_THRESHOLD:
+		var prev_pos: Vector3 = prev[0]
+		if (pos - prev_pos).length() > TELEPORT_THRESHOLD:
 			continue
 		var flat_vel: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 		if flat_vel.length() < TRAIL_MIN_SPEED:
 			continue
-		var right: Vector3 = skater.global_transform.basis.x
-		for side_x: float in [-BLADE_X_OFFSET, BLADE_X_OFFSET]:
-			var bp: Vector3 = pos + right * side_x
-			# World (x, z) -> viewport pixel. +Z world maps to top of image,
-			# matching the convention HockeyRink._add_ice uses when painting
-			# rink lines into the albedo texture.
-			var px: float = (bp.x + half_w) * px_x
-			var py: float = (half_l - bp.z) * px_z
-			_pending_paints.push_back(Vector2(px, py))
+		var prev_left: Vector2 = prev[1]
+		var prev_right: Vector2 = prev[2]
+		_pending_segments.push_back(prev_left)
+		_pending_segments.push_back(left_px)
+		_pending_segments.push_back(prev_right)
+		_pending_segments.push_back(right_px)
 
-	if _pending_paints.size() > 0:
-		_painter.queue_redraw()
+	# Always queue a redraw — with CLEAR_MODE_NEVER, the SubViewport re-executes
+	# each canvas item's cached command list every frame, which would re-apply
+	# the previous frame's strokes onto the accumulated framebuffer and saturate
+	# pixels almost immediately. Forcing a redraw replaces the cached list (with
+	# an empty one when there are no pending segments), so old strokes don't
+	# re-stamp themselves.
+	_painter.queue_redraw()
 
 func _on_painter_draw() -> void:
-	var radius_px: float = blade_radius_m * (float(_viewport.size.x) / rink_width)
+	var width_px: float = blade_width_m * (float(_viewport.size.x) / rink_width)
 	var col: Color = Color(1.0, 1.0, 1.0, blade_intensity)
-	for p: Vector2 in _pending_paints:
-		_painter.draw_circle(p, radius_px, col)
-	_pending_paints.clear()
+	var i: int = 0
+	while i < _pending_segments.size():
+		_painter.draw_line(_pending_segments[i], _pending_segments[i + 1],
+							col, width_px, true)
+		i += 2
+	_pending_segments.clear()
