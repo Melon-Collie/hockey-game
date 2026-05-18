@@ -418,11 +418,13 @@ func _spectator_bowl_aabb() -> AABB:
 			Vector3(2.0 * half_x, top_y - bot_y, 2.0 * half_z))
 
 
-# Body box, origin at the spectator's base (feet on the tread).
+# Body box, origin at the spectator's base (feet on the tread). The bottom
+# face is omitted: it sits flush on the tread, is never visible, and z-fights
+# with the terrace top otherwise.
 func _build_body_mesh() -> ArrayMesh:
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
-	_emit_box(st, Vector3(0.0, _BODY_SIZE.y * 0.5, 0.0), _BODY_SIZE)
+	_emit_box(st, Vector3(0.0, _BODY_SIZE.y * 0.5, 0.0), _BODY_SIZE, false)
 	st.generate_normals()
 	st.set_material(_spectator_material())
 	return st.commit()
@@ -434,7 +436,7 @@ func _build_head_mesh() -> ArrayMesh:
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
 	var head_center_y: float = _BODY_SIZE.y + _HEAD_SIZE.y * 0.5 + 0.02
-	_emit_box(st, Vector3(0.0, head_center_y, 0.0), _HEAD_SIZE)
+	_emit_box(st, Vector3(0.0, head_center_y, 0.0), _HEAD_SIZE, true)
 	st.generate_normals()
 	st.set_material(_spectator_material())
 	return st.commit()
@@ -450,7 +452,9 @@ func _spectator_material() -> StandardMaterial3D:
 	return mat
 
 
-func _emit_box(st: SurfaceTool, center: Vector3, size: Vector3) -> void:
+# `skip_bottom_face` omits the -Y face for boxes that rest on opaque geometry
+# beneath them — saves two triangles per instance and avoids z-fighting.
+func _emit_box(st: SurfaceTool, center: Vector3, size: Vector3, skip_bottom_face: bool) -> void:
 	var h: Vector3 = size * 0.5
 	# 8 corners
 	var p: Array[Vector3] = [
@@ -463,11 +467,12 @@ func _emit_box(st: SurfaceTool, center: Vector3, size: Vector3) -> void:
 		center + Vector3( h.x,  h.y,  h.z),  # 6
 		center + Vector3(-h.x,  h.y,  h.z),  # 7
 	]
-	# Six faces, each two CCW-wound triangles (Godot front = CCW).
+	# Faces, each two CCW-wound triangles (Godot front = CCW).
 	# +Y (top)
 	_emit_quad(st, p[4], p[7], p[6], p[5])
-	# -Y (bottom)
-	_emit_quad(st, p[0], p[1], p[2], p[3])
+	if not skip_bottom_face:
+		# -Y (bottom)
+		_emit_quad(st, p[0], p[1], p[2], p[3])
 	# +Z (front)
 	_emit_quad(st, p[3], p[2], p[6], p[7])
 	# -Z (back)
