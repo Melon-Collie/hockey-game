@@ -249,29 +249,49 @@ func _refresh() -> void:
 			_WHITE, false
 		)
 
-func _make_team_header(team_id: int) -> PanelContainer:
-	var label: String = "AWAY" if team_id == 1 else "HOME"
-	# Jersey-colored team header with 4px corners matching the scorebug
-	# and the outer popup. The 6px left edge is a StyleBoxFlat border in
-	# jersey_stripe; Godot bends the border around the corner radius so
-	# the stripe stays flush with the rounded outside edge.
+func _make_team_header(team_id: int) -> HBoxContainer:
+	var label_text: String = "AWAY" if team_id == 1 else "HOME"
+	# Two panels stitched together so the outside reads as one 4px-rounded
+	# shape with a hard vertical seam between the stripe and the jersey
+	# body — same "rounded outside, flat inside" pattern the lobby cards
+	# use (slot_grid_panel.gd:174-198). A single rounded panel with a
+	# border-as-stripe instead bends the stripe around the corner, which
+	# is the "curve on curve" tell we're avoiding.
 	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id)
-	var style := StyleBoxFlat.new()
-	style.bg_color = colors.jersey
-	style.set_corner_radius_all(4)
-	style.set_content_margin(SIDE_LEFT, 14)
-	style.set_content_margin(SIDE_RIGHT, 14)
-	style.set_content_margin(SIDE_TOP, 5)
-	style.set_content_margin(SIDE_BOTTOM, 5)
-	style.border_color = colors.jersey_stripe
-	style.border_width_left = 6
-	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", style)
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var lbl := _lbl(label, 16, colors.text)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 0)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var stripe_style := StyleBoxFlat.new()
+	stripe_style.bg_color = colors.jersey_stripe
+	stripe_style.corner_radius_top_left = 4
+	stripe_style.corner_radius_bottom_left = 4
+	stripe_style.corner_radius_top_right = 0
+	stripe_style.corner_radius_bottom_right = 0
+	var stripe := PanelContainer.new()
+	stripe.add_theme_stylebox_override("panel", stripe_style)
+	stripe.custom_minimum_size = Vector2(6, 0)
+	row.add_child(stripe)
+
+	var body_style := StyleBoxFlat.new()
+	body_style.bg_color = colors.jersey
+	body_style.corner_radius_top_left = 0
+	body_style.corner_radius_bottom_left = 0
+	body_style.corner_radius_top_right = 4
+	body_style.corner_radius_bottom_right = 4
+	body_style.set_content_margin(SIDE_LEFT, 8)
+	body_style.set_content_margin(SIDE_RIGHT, 14)
+	body_style.set_content_margin(SIDE_TOP, 5)
+	body_style.set_content_margin(SIDE_BOTTOM, 5)
+	var body := PanelContainer.new()
+	body.add_theme_stylebox_override("panel", body_style)
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var lbl := _lbl(label_text, 16, colors.text)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	panel.add_child(lbl)
-	return panel
+	body.add_child(lbl)
+	row.add_child(body)
+
+	return row
 
 func _make_row() -> HBoxContainer:
 	var row := HBoxContainer.new()
