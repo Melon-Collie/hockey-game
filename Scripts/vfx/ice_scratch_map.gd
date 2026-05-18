@@ -64,6 +64,17 @@ func clear() -> void:
 	_prev_state.clear()
 
 func _process(_delta: float) -> void:
+	# Freeze accumulation during goal replays. The cinematic rewinds skater
+	# state, and painting their replayed motion onto the live texture would
+	# leave fake marks behind once the replay ends. Clearing _prev_state
+	# also ensures the first post-replay frame doesn't draw a streak from
+	# a pre-replay position to wherever the skater resumes.
+	if NetworkManager.is_replay_mode():
+		_pending_segments.clear()
+		_prev_state.clear()
+		_painter.queue_redraw()
+		return
+
 	var skaters: Array = get_tree().get_nodes_in_group("skaters")
 	var px_x: float = float(_viewport.size.x) / rink_width
 	var px_z: float = float(_viewport.size.y) / rink_length

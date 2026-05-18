@@ -18,10 +18,13 @@ uniform sampler2D albedo_tex : source_color, filter_linear_mipmap;
 // White = scratched, black = clean. hint_default_black keeps the editor
 // preview clean when nothing is bound.
 uniform sampler2D scratch_tex : hint_default_black, filter_linear;
-// Center-ice decals (logo + curved arena text). Sampled at the same
-// parallax UV as albedo_tex so it reads as paint on the concrete under
-// the ice. RGBA — alpha is decal opacity.
-uniform sampler2D decal_tex : source_color, hint_default_black, filter_linear_mipmap;
+// Center-ice decals (logo + curved arena text). The viewport covers a small
+// area at center ice — `decal_uv_min` / `decal_uv_max` map the rink UV into
+// this smaller texture, and `repeat_disable` makes samples outside the area
+// clamp to the transparent border padding instead of repeating.
+uniform sampler2D decal_tex : source_color, hint_default_black, filter_linear_mipmap, repeat_disable;
+uniform vec2 decal_uv_min = vec2(0.0, 0.0);
+uniform vec2 decal_uv_max = vec2(1.0, 1.0);
 // Plane size in world meters — used to convert parallax offset to UV.
 uniform vec2 rink_size = vec2(26.0, 60.0);
 // Color the lines fade toward at grazing. Default to the ice color itself so
@@ -60,7 +63,11 @@ void fragment() {
 	vec3 base = texture(albedo_tex, uv).rgb;
 	// Composite decals BEFORE the Beer-Lambert fade so they get the same
 	// under-ice depth treatment as the lines baked into albedo_tex.
-	vec4 decal = texture(decal_tex, uv);
+	// Remap the parallax UV into the small decal texture's local space.
+	// Samples outside [0,1] clamp to the transparent border thanks to
+	// repeat_disable, so no explicit bounds check is needed.
+	vec2 decal_uv = (uv - decal_uv_min) / (decal_uv_max - decal_uv_min);
+	vec4 decal = texture(decal_tex, decal_uv);
 	base = mix(base, decal.rgb, decal.a);
 
 	// Beer-Lambert fade: light traversing the ice depth loses energy

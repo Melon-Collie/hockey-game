@@ -271,12 +271,18 @@ func _add_ice(half_l: float) -> void:
 		mat.set_shader_parameter("scratch_tex", scratch_map.get_texture())
 		_scratch_map = scratch_map
 
-	# Center-ice decals (logo + curved "MITTS"/"ARENA" text). Rendered into
-	# its own SubViewport, sampled by the ice shader as a parallax-depth
-	# overlay alongside albedo_tex.
+	# Center-ice decals (logo + curved "MITTS"/"ARENA" text). The content
+	# only occupies a small patch at center ice (logo + text ring fit inside
+	# ~5 m of the world origin), so we render into a tiny SubViewport instead
+	# of one sized to the whole rink — ~36 MB GPU memory saved vs the full
+	# albedo-resolution viewport.
+	const DECAL_AREA_SIZE_M: float = 10.0
+	const DECAL_VIEWPORT_SIZE: int = 1024
+	var decal_px_per_m: float = float(DECAL_VIEWPORT_SIZE) / DECAL_AREA_SIZE_M
+
 	var decal_vp: SubViewport = SubViewport.new()
 	decal_vp.name = "CenterIceDecalsViewport"
-	decal_vp.size = Vector2i(img_w, img_h)
+	decal_vp.size = Vector2i(DECAL_VIEWPORT_SIZE, DECAL_VIEWPORT_SIZE)
 	decal_vp.transparent_bg = true
 	decal_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 	decal_vp.disable_3d = true
@@ -285,11 +291,23 @@ func _add_ice(half_l: float) -> void:
 	add_child(decal_vp)
 
 	var decals: CenterIceDecals = CenterIceDecals.new()
-	decals.img_size = Vector2(img_w, img_h)
-	decals.px_per_meter = _px_per_meter
+	decals.img_size = Vector2(DECAL_VIEWPORT_SIZE, DECAL_VIEWPORT_SIZE)
+	decals.px_per_meter = decal_px_per_m
 	decals.text_color = blue_line_color
 	decal_vp.add_child(decals)
 	mat.set_shader_parameter("decal_tex", decal_vp.get_texture())
+
+	# Tell the shader where the decal patch lives in rink-UV space, so it
+	# can remap the parallax UV into the local decal-texture coords.
+	var half_size: float = DECAL_AREA_SIZE_M * 0.5
+	mat.set_shader_parameter("decal_uv_min", Vector2(
+		0.5 - half_size / rink_width,
+		0.5 - half_size / rink_length
+	))
+	mat.set_shader_parameter("decal_uv_max", Vector2(
+		0.5 + half_size / rink_width,
+		0.5 + half_size / rink_length
+	))
 	
 	# Ice collision — needs its own StaticBody3D so physics_material_override applies
 	var ice_body := StaticBody3D.new()
