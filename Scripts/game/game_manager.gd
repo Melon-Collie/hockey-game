@@ -1917,7 +1917,7 @@ func return_to_lobby() -> void:
 	# Bots are stripped from the roster (they're not real peers) and instead
 	# round-trip as bot-slot markers; this is what restores the "X" action
 	# on the host's slot cards.
-	var bot_slots: Dictionary = {}
+	var bot_slots: Dictionary[int, bool] = {}
 	if _registry != null:
 		for peer_id: int in _registry.all():
 			var r: PlayerRecord = _registry.get_record(peer_id)
