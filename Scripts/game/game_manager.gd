@@ -1575,9 +1575,10 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 		# the client's Jolt prediction (blade + velocity * rtt_half).
 		if rtt_ms > 0.0:
 			puck.set_puck_position(puck.get_puck_position() + (direction * power + skater_vel) * rtt_half)
-		for i: int in goalie_controllers.size():
-			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
-			goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
+		if not saved_goalie_positions.is_empty():
+			for i: int in goalie_controllers.size():
+				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
+				goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
 		return
 	puck.release(direction, power)
 
