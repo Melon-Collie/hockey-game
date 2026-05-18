@@ -32,12 +32,18 @@ const RINK_HALF_WIDTH: float     = 13.0   # half of 26 m
 const RINK_HALF_LENGTH: float    = 30.0   # half of 60 m
 const CORNER_RADIUS: float       = 8.53  # 28 ft
 const WALL_THICKNESS: float      = 0.3
-# Inner wall boundary — interior face of the boards
-const INNER_HALF_WIDTH: float    = RINK_HALF_WIDTH  - WALL_THICKNESS * 0.5  # 12.85
-const INNER_HALF_LENGTH: float   = RINK_HALF_LENGTH - WALL_THICKNESS * 0.5  # 29.85
-const INNER_CORNER_RADIUS: float = CORNER_RADIUS    - WALL_THICKNESS * 0.5  # 8.35
-const CORNER_CENTER_X: float     = INNER_HALF_WIDTH  - INNER_CORNER_RADIUS  # 4.5
-const CORNER_CENTER_Z: float     = INNER_HALF_LENGTH - INNER_CORNER_RADIUS  # 21.5
+# Must match HockeyRink.KICKPLATE_PROTRUSION — the kickplate's inward lip
+# sticks 1 cm inside the boards' inner face, so the visible wall surface at
+# ice level (and stick-blade level after a board-level dump) is 1 cm closer
+# to rink center than the boards' face. The blade-clamp uses this innermost
+# surface so the blade can't poke past the visible kickplate.
+const KICKPLATE_INWARD_LIP: float = 0.01
+# Inner wall boundary — the innermost visible wall surface (kickplate lip).
+const INNER_HALF_WIDTH: float    = RINK_HALF_WIDTH  - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 12.84
+const INNER_HALF_LENGTH: float   = RINK_HALF_LENGTH - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 29.84
+const INNER_CORNER_RADIUS: float = CORNER_RADIUS    - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 8.37
+const CORNER_CENTER_X: float     = INNER_HALF_WIDTH  - INNER_CORNER_RADIUS  # 4.47
+const CORNER_CENTER_Z: float     = INNER_HALF_LENGTH - INNER_CORNER_RADIUS  # 21.47
 
 # Returns world_xz projected onto the inner rink boundary (rounded rectangle).
 # If the point is already inside, returns it unchanged.

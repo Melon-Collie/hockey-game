@@ -460,19 +460,39 @@ func get_upper_body_rotation() -> float:
 
 # ── Wall Clamping ─────────────────────────────────────────────────────────────
 # Analytic rink boundary check using the rounded-rectangle inner wall surface.
+# The blade is a segment from heel (local_pos) to toe (heel + forward·blade_length);
+# both endpoints must stay inside the rink so no part of the stick enters the
+# wall. Whichever endpoint pokes deepest determines the inward slide applied to
+# the heel — since the blade is rigid, the toe travels with it. Blade direction
+# is sampled from the blade Marker3D's current world transform; over a single
+# frame the orientation changes slowly enough that this is accurate.
 func clamp_blade_to_walls(local_pos: Vector3) -> Vector3:
 	_last_wall_normal = Vector3.ZERO
-	var blade_world: Vector3 = upper_body.to_global(local_pos)
-	var blade_xz := Vector2(blade_world.x, blade_world.z)
-	var clamped_xz: Vector2 = GameRules.clamp_to_rink_inner(blade_xz)
-	if clamped_xz.distance_squared_to(blade_xz) < 0.0001:
+	var heel_world: Vector3 = upper_body.to_global(local_pos)
+
+	var forward_world: Vector3 = -blade.global_transform.basis.z
+	forward_world.y = 0.0
+	var forward_len_sq: float = forward_world.length_squared()
+
+	var heel_xz := Vector2(heel_world.x, heel_world.z)
+	var heel_clamped: Vector2 = GameRules.clamp_to_rink_inner(heel_xz)
+	var offset: Vector2 = heel_clamped - heel_xz
+
+	# If the blade has a usable horizontal forward direction, also test the toe
+	# and adopt the larger inward correction.
+	if forward_len_sq > 0.0001:
+		forward_world = forward_world.normalized()
+		var toe_world: Vector3 = heel_world + forward_world * blade_length
+		var toe_xz := Vector2(toe_world.x, toe_world.z)
+		var toe_clamped: Vector2 = GameRules.clamp_to_rink_inner(toe_xz)
+		var toe_offset: Vector2 = toe_clamped - toe_xz
+		if toe_offset.length_squared() > offset.length_squared():
+			offset = toe_offset
+
+	if offset.length_squared() < 0.0001:
 		return local_pos
-	_last_wall_normal = Vector3(
-		clamped_xz.x - blade_xz.x,
-		0.0,
-		clamped_xz.y - blade_xz.y
-	).normalized()
-	var clamped_world := Vector3(clamped_xz.x, blade_world.y, clamped_xz.y)
+	_last_wall_normal = Vector3(offset.x, 0.0, offset.y).normalized()
+	var clamped_world := Vector3(heel_world.x + offset.x, heel_world.y, heel_world.z + offset.y)
 	return upper_body.to_local(clamped_world)
 
 

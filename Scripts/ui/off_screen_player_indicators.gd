@@ -21,6 +21,10 @@ func _process(_delta: float) -> void:
 	queue_redraw()
 
 func _draw() -> void:
+	# Replay cuts to broadcast cameras with no "local player" frame of reference,
+	# so the teammate arrows would point from a stale anchor through the wrong cam.
+	if NetworkManager.is_replay_mode():
+		return
 	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera == null:
 		return
