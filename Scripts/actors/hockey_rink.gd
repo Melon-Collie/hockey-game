@@ -111,8 +111,14 @@ const CAP_RAIL_HEIGHT: float = 0.05
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
 
+# Persistent skate-scratch overlay. Created at runtime only (not in editor)
+# and bound to the ice shader's scratch_tex.
+var _scratch_map: IceScratchMap = null
+
 func _ready() -> void:
 	_rebuild()
+	if not Engine.is_editor_hint() and _scratch_map != null:
+		GameManager.period_changed.connect(_scratch_map.clear)
 
 func _rebuild() -> void:
 	if rink_length <= 0 or rink_width <= 0:
@@ -253,6 +259,55 @@ func _add_ice(half_l: float) -> void:
 	mat.set_shader_parameter("roughness_grazing", ice_roughness_grazing)
 	mesh_instance.material_override = mat
 	add_child(mesh_instance)
+
+	# Persistent skate scratches — runtime only. The SubViewport renders into
+	# a texture that the ice shader samples as a surface overlay.
+	if not Engine.is_editor_hint():
+		var scratch_map: IceScratchMap = IceScratchMap.new()
+		scratch_map.name = "IceScratchMap"
+		scratch_map.rink_width = rink_width
+		scratch_map.rink_length = rink_length
+		add_child(scratch_map)
+		mat.set_shader_parameter("scratch_tex", scratch_map.get_texture())
+		_scratch_map = scratch_map
+
+	# Center-ice decals (logo + curved "MITTS"/"ARENA" text). The content
+	# only occupies a small patch at center ice (logo + text ring fit inside
+	# ~5 m of the world origin), so we render into a tiny SubViewport instead
+	# of one sized to the whole rink — ~36 MB GPU memory saved vs the full
+	# albedo-resolution viewport.
+	const DECAL_AREA_SIZE_M: float = 10.0
+	const DECAL_VIEWPORT_SIZE: int = 1024
+	var decal_px_per_m: float = float(DECAL_VIEWPORT_SIZE) / DECAL_AREA_SIZE_M
+
+	var decal_vp: SubViewport = SubViewport.new()
+	decal_vp.name = "CenterIceDecalsViewport"
+	decal_vp.size = Vector2i(DECAL_VIEWPORT_SIZE, DECAL_VIEWPORT_SIZE)
+	decal_vp.transparent_bg = true
+	decal_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	decal_vp.disable_3d = true
+	decal_vp.handle_input_locally = false
+	decal_vp.gui_disable_input = true
+	add_child(decal_vp)
+
+	var decals: CenterIceDecals = CenterIceDecals.new()
+	decals.img_size = Vector2(DECAL_VIEWPORT_SIZE, DECAL_VIEWPORT_SIZE)
+	decals.px_per_meter = decal_px_per_m
+	decals.text_color = blue_line_color
+	decal_vp.add_child(decals)
+	mat.set_shader_parameter("decal_tex", decal_vp.get_texture())
+
+	# Tell the shader where the decal patch lives in rink-UV space, so it
+	# can remap the parallax UV into the local decal-texture coords.
+	var half_size: float = DECAL_AREA_SIZE_M * 0.5
+	mat.set_shader_parameter("decal_uv_min", Vector2(
+		0.5 - half_size / rink_width,
+		0.5 - half_size / rink_length
+	))
+	mat.set_shader_parameter("decal_uv_max", Vector2(
+		0.5 + half_size / rink_width,
+		0.5 + half_size / rink_length
+	))
 	
 	# Ice collision — needs its own StaticBody3D so physics_material_override applies
 	var ice_body := StaticBody3D.new()
@@ -262,11 +317,14 @@ func _add_ice(half_l: float) -> void:
 	ice_body.physics_material_override = phys_mat
 	add_child(ice_body)
 
+	# Ice collision: 0.1 m thick (top at y=0). Thicker than the visible mesh
+	# costs nothing and avoids potential edge cases (CCD / contact normals)
+	# that can happen with very thin collision volumes.
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(rink_width, 0.01, rink_length)
+	shape.size = Vector3(rink_width, 0.1, rink_length)
 	col.shape = shape
-	col.position = Vector3(0, -0.005, 0)
+	col.position = Vector3(0, -0.05, 0)
 	ice_body.add_child(col)
 
 func _draw_v_line(img: Image, x: float, thickness: int, color: Color) -> void:
