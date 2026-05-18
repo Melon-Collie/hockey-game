@@ -571,12 +571,22 @@ func _add_wall(pos: Vector3, size: Vector3) -> void:
 	glass_mi.material_override = _make_glass_material()
 	add_child(glass_mi)
 
-	# Cap rail (kickplate color, sits on top of glass)
+	# Cap rail — small inward-protruding strip sitting in the bottom 5 cm of the
+	# glass volume, radially in front of the glass face to avoid coplanar z-fight
+	# with the double-sided glass material. Same geometry pattern as the corner
+	# cap rail (see CAP_RAIL_PROTRUSION / CAP_RAIL_GLASS_GAP).
 	var cap_mi := MeshInstance3D.new()
 	var cap_box := BoxMesh.new()
-	cap_box.size = Vector3(size.x, CAP_RAIL_HEIGHT, size.z)
+	var cap_y: float = size.y + CAP_RAIL_HEIGHT / 2.0
+	if size.x <= size.z:  # side wall — thickness in X
+		var cap_inset: float = size.x / 2.0 + CAP_RAIL_GLASS_GAP + CAP_RAIL_PROTRUSION / 2.0
+		cap_box.size = Vector3(CAP_RAIL_PROTRUSION, CAP_RAIL_HEIGHT, size.z)
+		cap_mi.position = Vector3(pos.x - sign(pos.x) * cap_inset, cap_y, pos.z)
+	else:  # end wall — thickness in Z
+		var cap_inset_z: float = size.z / 2.0 + CAP_RAIL_GLASS_GAP + CAP_RAIL_PROTRUSION / 2.0
+		cap_box.size = Vector3(size.x, CAP_RAIL_HEIGHT, CAP_RAIL_PROTRUSION)
+		cap_mi.position = Vector3(pos.x, cap_y, pos.z - sign(pos.z) * cap_inset_z)
 	cap_mi.mesh = cap_box
-	cap_mi.position = Vector3(pos.x, size.y + CAP_RAIL_HEIGHT / 2.0, pos.z)
 	var cap_mat := StandardMaterial3D.new()
 	cap_mat.albedo_color = cap_rail_color
 	cap_mi.material_override = cap_mat
