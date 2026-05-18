@@ -626,16 +626,27 @@ func _add_corner(center: Vector3, angle_start: float, angle_end: float, stripe_z
 	var glass_y_bot: float = rail_top + GLASS_LIFT
 	var glass_y_top: float = glass_y_bot + glass_height
 
+	# Render both sides of the corner rings. The ArrayMesh-built rings have
+	# their inner face culled by the default cull_back even though the
+	# winding looks correct on paper — see the rink visual notes for the
+	# investigation. The straight walls (BoxMesh) don't have this problem.
+	# Perf impact is negligible (a few hundred extra triangles per rink).
+	var kp_mat := _make_solid_material(kickplate_color)
+	kp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var board_mat := _make_solid_material(wall_color)
+	board_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var cap_mat := _make_solid_material(cap_rail_color)
+	cap_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	# Kickplate ring (yellow lip)
 	_add_corner_ring(center, angle_start, angle_end, r_in_kick, r_out_kick,
-		0.0, kickplate_height, _make_solid_material(kickplate_color))
+		0.0, kickplate_height, kp_mat)
 	# White board ring — caps hidden by kickplate (below) and cap rail (above),
 	# so skip both to avoid coplanar z-fight against those lips' caps.
 	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
-		kickplate_height, board_top, _make_solid_material(wall_color), false, false)
+		kickplate_height, board_top, board_mat, false, false)
 	# Cap rail ring (blue lip)
 	_add_corner_ring(center, angle_start, angle_end, r_in_cap, r_out_cap,
-		board_top, rail_top, _make_solid_material(cap_rail_color))
+		board_top, rail_top, cap_mat)
 	# Glass — skip bottom cap so it doesn't z-fight the opaque cap-rail top cap
 	# at y=rail_top (glass is double-sided transparent, so both cap faces would
 	# render coplanar at that height).
