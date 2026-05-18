@@ -25,7 +25,7 @@ extends Node3D
 	set(v):
 		stands_base_y = v
 		_request_rebuild()
-@export var num_terraces: int = 6:
+@export var num_terraces: int = 15:
 	set(v):
 		num_terraces = v
 		_request_rebuild()

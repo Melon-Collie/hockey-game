@@ -54,6 +54,10 @@ var _pool_3d: Array[AudioStreamPlayer3D] = []    # SFX bus — all world sounds
 
 func _ready() -> void:
 	_ensure_buses()
+	# PlayerPrefs._ready() runs first (autoload order), so saved volumes were
+	# applied against buses that didn't exist yet. Re-apply now that SFX / UI /
+	# Crowd exist so startup volumes match the slider state.
+	PlayerPrefs.apply_audio()
 	_load_streams()
 	_build_pools()
 
