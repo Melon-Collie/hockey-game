@@ -207,23 +207,19 @@ func _build_color_correction_lut(g: float, preset: int) -> Texture3D:
 	tex.create(Image.FORMAT_RGBA8, N, N, N, false, images)
 	return tex
 
-# Modern sports-broadcast split-tone: teal cast in shadows, warm cast in
-# midtones, neutral highlights (lets AgX whites stay white). Mild S-curve and
-# slight desat finish the Rec.709 "TV pro" feel. Channel shifts are weighted by
-# luma so each tonal region picks up its own tint instead of a uniform cast.
+# Modern sports-broadcast split-tone: teal cast in shadows, neutral midtones
+# and highlights. Real broadcast ice samples cool-neutral at midtone+ luma —
+# warmth in reference frames comes from content (team colors, crowd jerseys),
+# not from the grade. Mild S-curve and slight desat finish the Rec.709 feel.
 func _apply_grade_broadcast(c: Color) -> Color:
 	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
 	var shadow_w: float = 1.0 - smoothstep(0.0, 0.40, luma)
-	var highlight_w: float = smoothstep(0.55, 0.95, luma)
-	var mid_w: float = clampf(1.0 - shadow_w - highlight_w, 0.0, 1.0)
-	# Shadow teal: pull R down, push B up. Midtone warm: nudge R up, B down.
-	# Highlights stay neutral so the ice and rink lights don't pick up a cast.
+	# Shadow teal: pull R down, push B up. Only the shadow band picks up a
+	# tint; mids and highlights are left alone so the ice stays cool-neutral.
 	const SHADOW_R: float = -0.025
 	const SHADOW_B: float =  0.030
-	const MID_R: float    =  0.012
-	const MID_B: float    = -0.012
-	c.r = clampf(c.r + SHADOW_R * shadow_w + MID_R * mid_w, 0.0, 1.0)
-	c.b = clampf(c.b + SHADOW_B * shadow_w + MID_B * mid_w, 0.0, 1.0)
+	c.r = clampf(c.r + SHADOW_R * shadow_w, 0.0, 1.0)
+	c.b = clampf(c.b + SHADOW_B * shadow_w, 0.0, 1.0)
 	# Mild S-curve: half-blend of smoothstep keeps detail in both ends.
 	c.r = lerp(c.r, smoothstep(0.0, 1.0, c.r), 0.5)
 	c.g = lerp(c.g, smoothstep(0.0, 1.0, c.g), 0.5)
