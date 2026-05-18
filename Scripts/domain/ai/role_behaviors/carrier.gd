@@ -258,7 +258,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# score_at(candidate, projected_opps) × path_clear × time_decay.
 	# Time uses momentum-aware effective speed so reverse candidates
 	# self-discount via longer arrival time.
-	var carry_result: Array = _best_carry(ctx, _scratch_teammate_ids, goalie_now)
+	var carry_result: Array = _best_carry(ctx, goalie_now)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 
@@ -439,7 +439,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var receiver_goalie: Vector3 = _predict_goalie_at(
 				ctx, receiver_release_t, receiver)
 		var receiver_value: float = _score_at(ctx, receiver, self_pos,
-				_scratch_opponents_pass, teammate_ids, receiver_goalie, goalie_now)
+				_scratch_opponents_pass, receiver_goalie, goalie_now)
 		# Rotation time: how long does the bot need to rotate facing to
 		# point at the receiver before the blade ROM can fire there?
 		# Within blade ROM cone (BOT_BLADE_ROM_HALF_ANGLE_RAD), the bot
@@ -503,9 +503,7 @@ func _predict_receiver(receiver: SkaterNetworkState, flight_t: float) -> Vector3
 #   score = score_at(candidate, projected_opps) × path_clear × time_decay
 # where time uses momentum-aware effective speed (backward candidates
 # self-discount via longer arrival).
-func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
-		goalie_now: Vector3) -> Array:
-	var snapshot: WorldSnapshot = ctx.snapshot
+func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var self_velocity: Vector3 = ctx.self_velocity
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
@@ -562,7 +560,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 		var cand_release_t: float = local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 		var cand_goalie: Vector3 = _predict_goalie_at(ctx, cand_release_t, candidate)
 		var dest_score: float = _score_at(ctx, candidate, self_pos,
-				_scratch_opponents_path, teammate_ids, cand_goalie, goalie_now)
+				_scratch_opponents_path, cand_goalie, goalie_now)
 		var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 		var s_total: float = dest_score * lane * decay
 		if s_total > best_score:
@@ -581,7 +579,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 		var slot_dest_goalie: Vector3 = _predict_goalie_at(
 				ctx, slot_release_t, slot_pos)
 		var slot_dest_score: float = _score_at(ctx, slot_pos, self_pos,
-				_scratch_opponents_path, teammate_ids, slot_dest_goalie, goalie_now)
+				_scratch_opponents_path, slot_dest_goalie, goalie_now)
 		var slot_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
 		var slot_total: float = slot_dest_score * slot_lane * slot_decay
@@ -596,7 +594,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 	var stand_goalie: Vector3 = _predict_goalie_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
-			_scratch_opponents, teammate_ids, stand_goalie, goalie_now)
+			_scratch_opponents, stand_goalie, goalie_now)
 	if stand_score > best_score:
 		best_score = stand_score
 		best_pos = self_pos
@@ -621,7 +619,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 # at `pos` (caller's responsibility — score_pass does this for
 # receivers, _best_carry does it for carry candidates).
 func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
-		opps: Array[Vector3], teammate_ids: Array[int],
+		opps: Array[Vector3],
 		predicted_goalie_pos: Vector3, goalie_now: Vector3) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var shoot_s: float = AIActionScoring.score_shoot(

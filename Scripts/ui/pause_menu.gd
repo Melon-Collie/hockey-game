@@ -289,7 +289,7 @@ func _on_stats_updated() -> void:
 
 
 func _refresh_slot_grid() -> void:
-	_slot_grid.refresh(GameManager.get_slot_roster(), NetworkManager.local_peer_id(), _get_team_colors())
+	_slot_grid.refresh(GameManager.get_slot_roster(), _get_team_colors())
 
 
 func _get_team_colors() -> Array[Dictionary]:

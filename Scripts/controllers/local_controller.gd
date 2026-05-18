@@ -108,23 +108,23 @@ func _physics_process(delta: float) -> void:
 			# reconcile history) can't smuggle locomotion or a shot trigger into
 			# the live phase the instant the freeze lifts. Blade IK is the only
 			# side effect — _process_input and the state machine stay skipped.
-			var gathered: InputState = _gatherer.gather()
-			gathered.delta = delta
+			var prep_input: InputState = _gatherer.gather()
+			prep_input.delta = delta
 			if NetworkManager.is_clock_ready():
-				gathered.host_timestamp = NetworkManager.estimated_input_stamp_time()
-			gathered.move_vector = Vector2.ZERO
-			gathered.shoot_pressed = false
-			gathered.shoot_held = false
-			gathered.slap_pressed = false
-			gathered.slap_held = false
-			gathered.brake = false
-			gathered.elevation_up = false
-			gathered.elevation_down = false
-			gathered.block_held = false
-			_current_input = gathered
+				prep_input.host_timestamp = NetworkManager.estimated_input_stamp_time()
+			prep_input.move_vector = Vector2.ZERO
+			prep_input.shoot_pressed = false
+			prep_input.shoot_held = false
+			prep_input.slap_pressed = false
+			prep_input.slap_held = false
+			prep_input.brake = false
+			prep_input.elevation_up = false
+			prep_input.elevation_down = false
+			prep_input.block_held = false
+			_current_input = prep_input
 			_input_history.append(_current_input)
-			var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
-			if _input_history.size() > rtt_cap:
+			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+			if _input_history.size() > prep_rtt_cap:
 				_input_history.pop_front()
 			apply_blade_aim_only(_current_input, delta)
 		else:

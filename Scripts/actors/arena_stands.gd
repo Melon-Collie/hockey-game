@@ -366,8 +366,8 @@ func _build_spectators() -> void:
 			# solving for that to equal -p.normalized() yields yaw = atan2(p.x, p.z).
 			var yaw: float = atan2(p.x, p.y) \
 					+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
-			var basis: Basis = Basis(Vector3.UP, yaw)
-			transforms.append(Transform3D(basis, pos))
+			var spectator_basis: Basis = Basis(Vector3.UP, yaw)
+			transforms.append(Transform3D(spectator_basis, pos))
 			var picked: Array[Color] = _pick_spectator_colors(rng)
 			body_colors.append(picked[0])
 			head_colors.append(picked[1])

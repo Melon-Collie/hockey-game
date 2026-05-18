@@ -1556,7 +1556,7 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var dist: float = self_pos.distance_to(receiver.position)
 	var flight_t: float = clampf(
 			dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
-	return _predict_receiver(_pass_target_peer_id, receiver, flight_t)
+	return _predict_receiver(receiver, flight_t)
 
 
 # Receiver position prediction — velocity extrapolation of the blade
@@ -1575,7 +1575,7 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # side of the rink during D→O transition. Use `blade_contact_world`
 # (host-only field, populated by SkaterController.get_network_state)
 # which is the blade in world coordinates already.
-func _predict_receiver(receiver_pid: int, receiver: SkaterNetworkState, flight_t: float) -> Vector3:
+func _predict_receiver(receiver: SkaterNetworkState, flight_t: float) -> Vector3:
 	# Predict the blade position forward by flight_t along body
 	# velocity (assumes blade moves with body — fine over a 0.6 s
 	# pass window).

@@ -67,10 +67,10 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 		if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 			return
 		var puck: Puck = _puck_getter.call() as Puck
-		var pc: PuckController = _puck_controller_getter.call() as PuckController
-		if puck == null or pc == null:
+		var puck_ctrl: PuckController = _puck_controller_getter.call() as PuckController
+		if puck == null or puck_ctrl == null:
 			return
-		var puck_carrier: int = pc.get_carrier_peer_id()
+		var puck_carrier: int = puck_ctrl.get_carrier_peer_id()
 		var attacker_has_puck: bool = (puck_carrier == hitter_peer_id)
 		var victim_relevant: bool = HitRules.is_victim_puck_relevant(
 				victim_peer_id, puck_carrier, victim.global_position, puck.global_position)

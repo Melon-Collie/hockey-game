@@ -165,6 +165,4 @@ func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
 	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
 		carrier_pos = snapshot.skater_states[carrier_pid].position
-	return AIRoleSlots.slot_anchor(
-			slot, state, puck_pos, carrier_pos,
-			_own_goal_z, _strong_x)
+	return AIRoleSlots.slot_anchor(slot, carrier_pos)
