@@ -70,6 +70,20 @@ func clear() -> void:
 	_pending_segments.clear()
 	_prev_state.clear()
 
+# Toggled from PlayerPrefs.apply_video(). When disabled, the viewport stops
+# repainting and existing scratches are wiped so the ice shader samples an
+# empty overlay.
+func set_enabled(enabled: bool) -> void:
+	if _viewport == null:
+		return
+	if enabled:
+		_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		process_mode = Node.PROCESS_MODE_INHERIT
+	else:
+		clear()
+		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		process_mode = Node.PROCESS_MODE_DISABLED
+
 func _process(_delta: float) -> void:
 	# Freeze accumulation during goal replays. The cinematic rewinds skater
 	# state, and painting their replayed motion onto the live texture would

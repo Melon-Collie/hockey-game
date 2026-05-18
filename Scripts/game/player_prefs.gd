@@ -28,6 +28,30 @@ const COLOR_GRADE_LABELS: Array[String] = [
 	"None",
 	"Broadcast",
 ]
+
+# Global illumination quality. SDFGI gives bouncier indirect light at a
+# ~20% perf cost; off matches the cheaper baseline. Index matches the
+# OptionsPanel dropdown.
+const GI_MODE_OFF: int = 0
+const GI_MODE_SDFGI: int = 1
+const GI_MODE_LABELS: Array[String] = [
+	"Off",
+	"SDFGI",
+]
+
+# Spectator bowl density. Off hides the stands entirely; Low / High set the
+# terrace row count on ArenaStands.
+const CROWD_DENSITY_OFF: int = 0
+const CROWD_DENSITY_LOW: int = 1
+const CROWD_DENSITY_HIGH: int = 2
+const CROWD_DENSITY_LABELS: Array[String] = [
+	"Off",
+	"Low",
+	"High",
+]
+const CROWD_DENSITY_LOW_TERRACES: int = 5
+const CROWD_DENSITY_HIGH_TERRACES: int = 15
+
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
 	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
@@ -53,6 +77,9 @@ var fps_cap_index: int = 5
 var show_fps: bool = false
 var gamma: float = 1.0
 var color_grade_preset: int = COLOR_GRADE_BROADCAST
+var gi_mode: int = GI_MODE_OFF
+var crowd_density: int = CROWD_DENSITY_HIGH
+var ice_scratches_enabled: bool = true
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
@@ -106,6 +133,9 @@ func save() -> void:
 	cfg.set_value("video", "show_fps", show_fps)
 	cfg.set_value("video", "gamma", gamma)
 	cfg.set_value("video", "color_grade_preset", color_grade_preset)
+	cfg.set_value("video", "gi_mode", gi_mode)
+	cfg.set_value("video", "crowd_density", crowd_density)
+	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "camera_mode", camera_mode)
@@ -173,11 +203,25 @@ func apply_video() -> void:
 	DisplayServer.window_set_vsync_mode(
 		DisplayServer.VSYNC_ENABLED if vsync_enabled else DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = FPS_CAP_VALUES[fps_cap_index]
-	var we := Engine.get_main_loop().current_scene.find_child(
-		"WorldEnvironment", true, false) as WorldEnvironment
+	var scene := Engine.get_main_loop().current_scene
+	if scene == null:
+		return
+	var we := scene.find_child("WorldEnvironment", true, false) as WorldEnvironment
 	if we != null:
 		we.environment.adjustment_enabled = true
 		we.environment.adjustment_color_correction = _build_color_correction_lut(gamma, color_grade_preset)
+		we.environment.sdfgi_enabled = (gi_mode == GI_MODE_SDFGI)
+	var stands := scene.find_child("ArenaStands", true, false) as Node3D
+	if stands != null:
+		stands.visible = (crowd_density != CROWD_DENSITY_OFF)
+		if crowd_density != CROWD_DENSITY_OFF and "num_terraces" in stands:
+			var terraces: int = CROWD_DENSITY_HIGH_TERRACES \
+				if crowd_density == CROWD_DENSITY_HIGH \
+				else CROWD_DENSITY_LOW_TERRACES
+			stands.set("num_terraces", terraces)
+	var scratch := scene.find_child("IceScratchMap", true, false)
+	if scratch != null and scratch.has_method("set_enabled"):
+		scratch.call("set_enabled", ice_scratches_enabled)
 
 # Builds a 16³ 3D LUT that applies the selected color-grade preset then the
 # gamma curve (output = input^(1/gamma)). Both bake into a single texture so
@@ -256,6 +300,9 @@ func _load() -> void:
 		show_fps = cfg.get_value("video", "show_fps", false)
 		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
 		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_NEUTRAL), 0, COLOR_GRADE_LABELS.size() - 1)
+		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
+		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
+		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)

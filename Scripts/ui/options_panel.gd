@@ -19,6 +19,9 @@ var _fps_btn: OptionButton = null
 var _show_fps_check: CheckButton = null
 var _gamma_slider: HSlider = null
 var _color_grade_btn: OptionButton = null
+var _gi_mode_btn: OptionButton = null
+var _crowd_density_btn: OptionButton = null
+var _ice_scratches_check: CheckButton = null
 var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
 var _attack_up_check: CheckButton = null
@@ -108,6 +111,9 @@ func _snapshot() -> Dictionary:
 		"show_fps": PlayerPrefs.show_fps,
 		"gamma": PlayerPrefs.gamma,
 		"color_grade_preset": PlayerPrefs.color_grade_preset,
+		"gi_mode": PlayerPrefs.gi_mode,
+		"crowd_density": PlayerPrefs.crowd_density,
+		"ice_scratches_enabled": PlayerPrefs.ice_scratches_enabled,
 		"master_volume": PlayerPrefs.master_volume,
 		"sfx_volume": PlayerPrefs.sfx_volume,
 		"ui_volume": PlayerPrefs.ui_volume,
@@ -130,6 +136,9 @@ func _read_controls() -> Dictionary:
 		"show_fps": _show_fps_check.button_pressed,
 		"gamma": _gamma_slider.value,
 		"color_grade_preset": _color_grade_btn.selected,
+		"gi_mode": _gi_mode_btn.selected,
+		"crowd_density": _crowd_density_btn.selected,
+		"ice_scratches_enabled": _ice_scratches_check.button_pressed,
 		"master_volume": _volume_slider.value,
 		"sfx_volume": _sfx_slider.value,
 		"ui_volume": _ui_slider.value,
@@ -277,6 +286,33 @@ func _build_video_tab() -> Control:
 	_color_grade_btn.selected = PlayerPrefs.color_grade_preset
 	_color_grade_btn.item_selected.connect(_on_color_grade_selected)
 	box.add_child(_field_row("Color Grade", _color_grade_btn))
+
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Performance"))
+
+	_gi_mode_btn = OptionButton.new()
+	_gi_mode_btn.custom_minimum_size = Vector2(180, 40)
+	_gi_mode_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.GI_MODE_LABELS.size():
+		_gi_mode_btn.add_item(PlayerPrefs.GI_MODE_LABELS[i], i)
+	_gi_mode_btn.selected = PlayerPrefs.gi_mode
+	_gi_mode_btn.item_selected.connect(_on_gi_mode_selected)
+	box.add_child(_field_row("Global Illumination", _gi_mode_btn))
+
+	_crowd_density_btn = OptionButton.new()
+	_crowd_density_btn.custom_minimum_size = Vector2(180, 40)
+	_crowd_density_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.CROWD_DENSITY_LABELS.size():
+		_crowd_density_btn.add_item(PlayerPrefs.CROWD_DENSITY_LABELS[i], i)
+	_crowd_density_btn.selected = PlayerPrefs.crowd_density
+	_crowd_density_btn.item_selected.connect(_on_crowd_density_selected)
+	box.add_child(_field_row("Crowd Density", _crowd_density_btn))
+
+	_ice_scratches_check = CheckButton.new()
+	_ice_scratches_check.set_pressed_no_signal(PlayerPrefs.ice_scratches_enabled)
+	SoundManager.wire_button(_ice_scratches_check)
+	_ice_scratches_check.toggled.connect(_on_ice_scratches_toggled)
+	box.add_child(_field_row("Ice Scratches", _ice_scratches_check))
 
 	return box
 
@@ -493,6 +529,15 @@ func _on_gamma_changed(_value: float) -> void:
 func _on_color_grade_selected(_idx: int) -> void:
 	_update_apply_state()
 
+func _on_gi_mode_selected(_idx: int) -> void:
+	_update_apply_state()
+
+func _on_crowd_density_selected(_idx: int) -> void:
+	_update_apply_state()
+
+func _on_ice_scratches_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
 func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
@@ -637,6 +682,9 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.show_fps = c.show_fps
 	PlayerPrefs.gamma = c.gamma
 	PlayerPrefs.color_grade_preset = c.color_grade_preset
+	PlayerPrefs.gi_mode = c.gi_mode
+	PlayerPrefs.crowd_density = c.crowd_density
+	PlayerPrefs.ice_scratches_enabled = c.ice_scratches_enabled
 	PlayerPrefs.master_volume = c.master_volume
 	PlayerPrefs.sfx_volume = c.sfx_volume
 	PlayerPrefs.ui_volume = c.ui_volume
@@ -667,6 +715,12 @@ func _on_cancel_pressed() -> void:
 	_gamma_slider.value = _original.gamma
 	if _color_grade_btn != null:
 		_color_grade_btn.selected = _original.color_grade_preset
+	if _gi_mode_btn != null:
+		_gi_mode_btn.selected = _original.gi_mode
+	if _crowd_density_btn != null:
+		_crowd_density_btn.selected = _original.crowd_density
+	if _ice_scratches_check != null:
+		_ice_scratches_check.set_pressed_no_signal(_original.ice_scratches_enabled)
 	_volume_slider.value = _original.master_volume
 	_sfx_slider.value = _original.sfx_volume
 	_ui_slider.value = _original.ui_volume
