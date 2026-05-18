@@ -103,6 +103,12 @@ extends StaticBody3D
 # Kickplate protrudes this much inward from the board face toward the ice
 const KICKPLATE_PROTRUSION: float = 0.01
 const CAP_RAIL_HEIGHT: float = 0.05
+# Cap rail protrudes inward from the board face so its inner-face renders in
+# front of the glass (rather than coplanar, which z-fights against the
+# double-sided transparent glass material). The radial gap before the glass
+# inner face also keeps the cap rail's outer face off the glass surface.
+const CAP_RAIL_PROTRUSION: float = 0.02
+const CAP_RAIL_GLASS_GAP: float = 0.002
 
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
@@ -595,18 +601,27 @@ func _add_corner(center: Vector3, angle_start: float, angle_end: float, stripe_z
 	var r_in_kick: float = corner_radius - wall_thickness / 2.0 - KICKPLATE_PROTRUSION
 	var r_in: float      = corner_radius - wall_thickness / 2.0
 	var r_out: float     = corner_radius + wall_thickness / 2.0
+	var r_out_cap: float = r_in - CAP_RAIL_GLASS_GAP
+	var r_in_cap: float  = r_out_cap - CAP_RAIL_PROTRUSION
 	var board_top: float = wall_height
 	var glass_top: float = wall_height + glass_height
-	var rail_top: float  = glass_top + CAP_RAIL_HEIGHT
+	var rail_top: float  = board_top + CAP_RAIL_HEIGHT
 
 	_add_corner_ring(center, angle_start, angle_end, r_in_kick, r_out,
 		0.0, kickplate_height, _make_solid_material(kickplate_color))
 	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
 		kickplate_height, board_top, _make_solid_material(wall_color))
+	# Cap rail is a small inward-protruding ring sitting in the bottom 5 cm of
+	# the glass volume — visible from inside the rink as a chunky blue trim
+	# between the boards and the glass. Radially offset from the glass to avoid
+	# coplanar z-fighting.
+	_add_corner_ring(center, angle_start, angle_end, r_in_cap, r_out_cap,
+		board_top, rail_top, _make_solid_material(cap_rail_color))
+	# Glass skips its bottom cap so it doesn't z-fight the opaque board top cap
+	# at y = board_top (glass is double-sided transparent, so both cap faces
+	# would render coplanar at that height).
 	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
-		board_top, glass_top, _make_glass_material())
-	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
-		glass_top, rail_top, _make_solid_material(cap_rail_color))
+		board_top, glass_top, _make_glass_material(), false)
 
 	for stripe in stripe_zs:
 		_add_corner_stripe(center, angle_start, angle_end, stripe)
@@ -620,7 +635,7 @@ func _make_solid_material(color: Color) -> StandardMaterial3D:
 
 func _add_corner_ring(center: Vector3, a0: float, a1: float,
 		r_in: float, r_out: float, y_bot: float, y_top: float,
-		material: Material) -> void:
+		material: Material, with_bottom_cap: bool = true) -> void:
 	# Build the four point rows around the arc — inner/outer × bottom/top —
 	# plus per-vertex radial normals for the curved faces.
 	var n: int = corner_segments
@@ -653,7 +668,8 @@ func _add_corner_ring(center: Vector3, a0: float, a1: float,
 	_emit_arc_strip(verts, normals, uvs, indices, it, ib, n_in)              # inner face (toward rink center)
 	_emit_arc_strip(verts, normals, uvs, indices, ob, ot, n_out)             # outer face
 	_emit_arc_strip_flat(verts, normals, uvs, indices, ot, it, Vector3.UP)   # top cap
-	_emit_arc_strip_flat(verts, normals, uvs, indices, ib, ob, Vector3.DOWN) # bottom cap
+	if with_bottom_cap:
+		_emit_arc_strip_flat(verts, normals, uvs, indices, ib, ob, Vector3.DOWN) # bottom cap
 
 	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
@@ -811,6 +827,11 @@ func _add_corner_collision(center: Vector3, a0: float, a1: float,
 
 	var shape := ConcavePolygonShape3D.new()
 	shape.set_faces(tris)
+	# Backface collision makes the mesh act solid from either side. Without
+	# this, a puck that ends up on the back of a triangle (e.g. CCD glance,
+	# reconcile-loop nudge, or numerical penetration) passes through outward
+	# and OOBs instead of being pushed back into the rink.
+	shape.backface_collision = true
 	var col := CollisionShape3D.new()
 	col.shape = shape
 	add_child(col)
