@@ -18,6 +18,10 @@ uniform sampler2D albedo_tex : source_color, filter_linear_mipmap;
 // White = scratched, black = clean. hint_default_black keeps the editor
 // preview clean when nothing is bound.
 uniform sampler2D scratch_tex : hint_default_black, filter_linear;
+// Center-ice decals (logo + curved arena text). Sampled at the same
+// parallax UV as albedo_tex so it reads as paint on the concrete under
+// the ice. RGBA — alpha is decal opacity.
+uniform sampler2D decal_tex : source_color, hint_default_black, filter_linear_mipmap;
 // Plane size in world meters — used to convert parallax offset to UV.
 uniform vec2 rink_size = vec2(26.0, 60.0);
 // Color the lines fade toward at grazing. Default to the ice color itself so
@@ -54,6 +58,10 @@ void fragment() {
 	vec2 uv = UV + xz_offset / rink_size;
 
 	vec3 base = texture(albedo_tex, uv).rgb;
+	// Composite decals BEFORE the Beer-Lambert fade so they get the same
+	// under-ice depth treatment as the lines baked into albedo_tex.
+	vec4 decal = texture(decal_tex, uv);
+	base = mix(base, decal.rgb, decal.a);
 
 	// Beer-Lambert fade: light traversing the ice depth loses energy
 	// proportional to path length, which is depth / cos(view_angle).

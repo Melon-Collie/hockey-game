@@ -270,6 +270,26 @@ func _add_ice(half_l: float) -> void:
 		add_child(scratch_map)
 		mat.set_shader_parameter("scratch_tex", scratch_map.get_texture())
 		_scratch_map = scratch_map
+
+	# Center-ice decals (logo + curved "MITTS"/"ARENA" text). Rendered into
+	# its own SubViewport, sampled by the ice shader as a parallax-depth
+	# overlay alongside albedo_tex.
+	var decal_vp: SubViewport = SubViewport.new()
+	decal_vp.name = "CenterIceDecalsViewport"
+	decal_vp.size = Vector2i(img_w, img_h)
+	decal_vp.transparent_bg = true
+	decal_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	decal_vp.disable_3d = true
+	decal_vp.handle_input_locally = false
+	decal_vp.gui_disable_input = true
+	add_child(decal_vp)
+
+	var decals: CenterIceDecals = CenterIceDecals.new()
+	decals.img_size = Vector2(img_w, img_h)
+	decals.px_per_meter = _px_per_meter
+	decals.text_color = blue_line_color
+	decal_vp.add_child(decals)
+	mat.set_shader_parameter("decal_tex", decal_vp.get_texture())
 	
 	# Ice collision — needs its own StaticBody3D so physics_material_override applies
 	var ice_body := StaticBody3D.new()
@@ -279,11 +299,14 @@ func _add_ice(half_l: float) -> void:
 	ice_body.physics_material_override = phys_mat
 	add_child(ice_body)
 
+	# Ice collision: 0.1 m thick (top at y=0). Thicker than the visible mesh
+	# costs nothing and avoids potential edge cases (CCD / contact normals)
+	# that can happen with very thin collision volumes.
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(rink_width, 0.01, rink_length)
+	shape.size = Vector3(rink_width, 0.1, rink_length)
 	col.shape = shape
-	col.position = Vector3(0, -0.005, 0)
+	col.position = Vector3(0, -0.05, 0)
 	ice_body.add_child(col)
 
 func _draw_v_line(img: Image, x: float, thickness: int, color: Color) -> void:
