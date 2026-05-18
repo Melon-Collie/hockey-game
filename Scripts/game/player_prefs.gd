@@ -23,12 +23,10 @@ const CAMERA_MODE_LABELS: Array[String] = [
 # Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
 # Index matches OptionButton ordering in OptionsPanel.
 const COLOR_GRADE_NEUTRAL: int = 0
-const COLOR_GRADE_WARM: int = 1     # warm shift + lifted shadows + saturation bump
-const COLOR_GRADE_COOL: int = 2     # cool shift + S-curve contrast + slight desat
+const COLOR_GRADE_BROADCAST: int = 1  # teal-shadow / warm-mid / neutral-highlight split + mild S-curve
 const COLOR_GRADE_LABELS: Array[String] = [
-	"Neutral",
-	"Warm Broadcast",
-	"Cool Clinical",
+	"None",
+	"Broadcast",
 ]
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
@@ -54,7 +52,7 @@ var vsync_enabled: bool = true
 var fps_cap_index: int = 5
 var show_fps: bool = false
 var gamma: float = 1.0
-var color_grade_preset: int = COLOR_GRADE_NEUTRAL
+var color_grade_preset: int = COLOR_GRADE_BROADCAST
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
@@ -198,10 +196,8 @@ func _build_color_correction_lut(g: float, preset: int) -> Texture3D:
 				var r: float = float(x) / float(N - 1)
 				var c := Color(r, gg, bb)
 				match preset:
-					COLOR_GRADE_WARM:
-						c = _apply_grade_warm(c)
-					COLOR_GRADE_COOL:
-						c = _apply_grade_cool(c)
+					COLOR_GRADE_BROADCAST:
+						c = _apply_grade_broadcast(c)
 				c.r = pow(maxf(c.r, 0.0), inv_g)
 				c.g = pow(maxf(c.g, 0.0), inv_g)
 				c.b = pow(maxf(c.b, 0.0), inv_g)
@@ -211,33 +207,29 @@ func _build_color_correction_lut(g: float, preset: int) -> Texture3D:
 	tex.create(Image.FORMAT_RGBA8, N, N, N, false, images)
 	return tex
 
-# Lift shadows toward gray, warm channel shift, saturation bump in midtones.
-# Approximates the "NHL broadcast print" look that real telecasts use.
-func _apply_grade_warm(c: Color) -> Color:
-	const LIFT: float = 0.015
-	c.r = c.r * (1.0 - LIFT) + LIFT
-	c.g = c.g * (1.0 - LIFT * 0.7) + LIFT * 0.7
-	c.b = c.b * (1.0 - LIFT * 0.4) + LIFT * 0.4
-	c.r = clampf(c.r * 1.02, 0.0, 1.0)
-	c.b = clampf(c.b * 0.96, 0.0, 1.0)
+# Modern sports-broadcast split-tone: teal cast in shadows, warm cast in
+# midtones, neutral highlights (lets AgX whites stay white). Mild S-curve and
+# slight desat finish the Rec.709 "TV pro" feel. Channel shifts are weighted by
+# luma so each tonal region picks up its own tint instead of a uniform cast.
+func _apply_grade_broadcast(c: Color) -> Color:
 	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
-	const SAT: float = 1.04
-	c.r = clampf(luma + (c.r - luma) * SAT, 0.0, 1.0)
-	c.g = clampf(luma + (c.g - luma) * SAT, 0.0, 1.0)
-	c.b = clampf(luma + (c.b - luma) * SAT, 0.0, 1.0)
-	return c
-
-# Cool channel shift, S-curve contrast via smoothstep, slight desaturation.
-# Reads as a clean modern broadcast / "cinema" arena look.
-func _apply_grade_cool(c: Color) -> Color:
-	c.r = clampf(c.r * 0.96, 0.0, 1.0)
-	c.g = clampf(c.g * 0.98, 0.0, 1.0)
-	c.b = clampf(c.b * 1.05, 0.0, 1.0)
-	c.r = smoothstep(0.0, 1.0, c.r)
-	c.g = smoothstep(0.0, 1.0, c.g)
-	c.b = smoothstep(0.0, 1.0, c.b)
-	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
-	const SAT: float = 0.93
+	var shadow_w: float = 1.0 - smoothstep(0.0, 0.40, luma)
+	var highlight_w: float = smoothstep(0.55, 0.95, luma)
+	var mid_w: float = clampf(1.0 - shadow_w - highlight_w, 0.0, 1.0)
+	# Shadow teal: pull R down, push B up. Midtone warm: nudge R up, B down.
+	# Highlights stay neutral so the ice and rink lights don't pick up a cast.
+	const SHADOW_R: float = -0.025
+	const SHADOW_B: float =  0.030
+	const MID_R: float    =  0.012
+	const MID_B: float    = -0.012
+	c.r = clampf(c.r + SHADOW_R * shadow_w + MID_R * mid_w, 0.0, 1.0)
+	c.b = clampf(c.b + SHADOW_B * shadow_w + MID_B * mid_w, 0.0, 1.0)
+	# Mild S-curve: half-blend of smoothstep keeps detail in both ends.
+	c.r = lerp(c.r, smoothstep(0.0, 1.0, c.r), 0.5)
+	c.g = lerp(c.g, smoothstep(0.0, 1.0, c.g), 0.5)
+	c.b = lerp(c.b, smoothstep(0.0, 1.0, c.b), 0.5)
+	luma = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
+	const SAT: float = 0.96
 	c.r = clampf(luma + (c.r - luma) * SAT, 0.0, 1.0)
 	c.g = clampf(luma + (c.g - luma) * SAT, 0.0, 1.0)
 	c.b = clampf(luma + (c.b - luma) * SAT, 0.0, 1.0)
