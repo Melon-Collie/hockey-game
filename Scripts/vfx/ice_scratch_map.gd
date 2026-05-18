@@ -18,14 +18,15 @@ const BLADE_X_OFFSET: float = 0.12
 
 @export var rink_width: float = 26.0
 @export var rink_length: float = 60.0
-# Texture pixels per meter of rink. 40 → 1040×2400 (~2.4 MP, ~10 MB at RGBA8).
+# Texture pixels per meter of rink. 60 → 1560×3600 (~5.6 MP, ~22 MB at RGBA8).
 # Bigger = crisper scratches at close range; smaller = cheaper memory & fill.
-@export var px_per_meter: float = 40.0
-# Stroke width in world meters. ~3 cm matches a real skate blade footprint.
-@export var blade_width_m: float = 0.03
+@export var px_per_meter: float = 60.0
+# Stroke width in world meters. ~2 cm matches a thin skate-blade scratch.
+# At 60 px/m this renders as ~1.2 px wide with antialiasing.
+@export var blade_width_m: float = 0.02
 # Alpha per blade pass. Low value so the same pixel can be re-scratched many
-# times before saturating — at 0.12 it takes ~30 overlapping passes to reach
-# near-full white, vs ~5 at 0.35.
+# times before saturating — at 0.18 it takes ~20 overlapping passes to reach
+# near-full white.
 @export var blade_intensity: float = 0.18
 
 var _viewport: SubViewport
@@ -78,8 +79,13 @@ func _process(_delta: float) -> void:
 		var skater: Skater = node as Skater
 		if skater == null:
 			continue
-		var pos: Vector3 = skater.global_position
-		var right: Vector3 = skater.global_transform.basis.x
+		# Read the interpolated transform so the marks line up with the
+		# rendered skater. With physics interpolation on, global_position
+		# alone would give the post-tick physics pose, which leads the
+		# visual by up to one physics step and visibly offsets the strokes.
+		var t: Transform3D = skater.get_global_transform_interpolated()
+		var pos: Vector3 = t.origin
+		var right: Vector3 = t.basis.x
 		var left_world: Vector3 = pos + right * (-BLADE_X_OFFSET)
 		var right_world: Vector3 = pos + right * BLADE_X_OFFSET
 		# World (x, z) -> viewport pixel. +Z maps to small image-Y so it
