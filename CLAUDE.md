@@ -68,6 +68,8 @@ Before touching networking code (RPCs, reconcile, prediction, interpolation, lag
 
 **Strong typing everywhere.** Typed arrays (`Array[BufferedPuckState]`), typed function signatures, typed variables. Never leave a type annotation off when it can be provided. Prefer `var state: PuckNetworkState` over `var state`.
 
+**Cast or annotate when chaining through superclass APIs.** GDScript's type inference can't see through methods that return a base class — e.g. `Engine.get_main_loop()` returns `MainLoop`, not `SceneTree`, so `var scene := Engine.get_main_loop().current_scene` fails to infer. Same pattern for `find_child()` (returns `Node`, not the subclass), `get_node()`, `instance_from_id()`, etc. Add an explicit type (`var scene: Node = ...`) or a cast (`as SceneTree`, `as Node3D`) so the analyzer can resolve member access on the next line. The fix is mechanical; don't ship inferred-from-superclass typing.
+
 **Godot naming conventions.** `snake_case` for variables and functions, `PascalCase` for class names, `SCREAMING_SNAKE_CASE` for constants.
 
 **Separation of concerns.** Physics bodies (`Puck`, `Skater`) expose a clean API. Controllers drive them. `GameManager` owns spawning and world state. `NetworkManager` owns RPCs. Don't reach across these boundaries casually.

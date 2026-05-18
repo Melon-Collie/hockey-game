@@ -38,8 +38,14 @@ var _pending_segments: PackedVector2Array = PackedVector2Array()
 # right_blade_px: Vector2]. Used to draw a continuous stroke between frames.
 var _prev_state: Dictionary = {}
 
-func _ready() -> void:
+func _init() -> void:
+	# Instantiate the SubViewport up front so get_texture() is safe to call
+	# immediately after IceScratchMap.new() / add_child() — _ready() doesn't
+	# run synchronously inside add_child() at runtime, which would otherwise
+	# null-deref when HockeyRink rebuilds the ice on a shader-param change.
 	_viewport = SubViewport.new()
+
+func _ready() -> void:
 	_viewport.size = Vector2i(
 		maxi(int(rink_width * px_per_meter), 1),
 		maxi(int(rink_length * px_per_meter), 1)
@@ -63,6 +69,20 @@ func clear() -> void:
 	_viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ONCE
 	_pending_segments.clear()
 	_prev_state.clear()
+
+# Toggled from PlayerPrefs.apply_video(). When disabled, the viewport stops
+# repainting and existing scratches are wiped so the ice shader samples an
+# empty overlay.
+func set_enabled(enabled: bool) -> void:
+	if _viewport == null:
+		return
+	if enabled:
+		_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		process_mode = Node.PROCESS_MODE_INHERIT
+	else:
+		clear()
+		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		process_mode = Node.PROCESS_MODE_DISABLED
 
 func _process(_delta: float) -> void:
 	# Freeze accumulation during goal replays. The cinematic rewinds skater

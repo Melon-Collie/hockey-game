@@ -23,13 +23,35 @@ const CAMERA_MODE_LABELS: Array[String] = [
 # Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
 # Index matches OptionButton ordering in OptionsPanel.
 const COLOR_GRADE_NEUTRAL: int = 0
-const COLOR_GRADE_WARM: int = 1     # warm shift + lifted shadows + saturation bump
-const COLOR_GRADE_COOL: int = 2     # cool shift + S-curve contrast + slight desat
+const COLOR_GRADE_BROADCAST: int = 1  # teal-shadow / warm-mid / neutral-highlight split + mild S-curve
 const COLOR_GRADE_LABELS: Array[String] = [
-	"Neutral",
-	"Warm Broadcast",
-	"Cool Clinical",
+	"None",
+	"Broadcast",
 ]
+
+# Global illumination quality. SDFGI gives bouncier indirect light at a
+# ~20% perf cost; off matches the cheaper baseline. Index matches the
+# OptionsPanel dropdown.
+const GI_MODE_OFF: int = 0
+const GI_MODE_SDFGI: int = 1
+const GI_MODE_LABELS: Array[String] = [
+	"Off",
+	"SDFGI",
+]
+
+# Spectator bowl density. Off hides the stands entirely; Low / High set the
+# terrace row count on ArenaStands.
+const CROWD_DENSITY_OFF: int = 0
+const CROWD_DENSITY_LOW: int = 1
+const CROWD_DENSITY_HIGH: int = 2
+const CROWD_DENSITY_LABELS: Array[String] = [
+	"Off",
+	"Low",
+	"High",
+]
+const CROWD_DENSITY_LOW_TERRACES: int = 5
+const CROWD_DENSITY_HIGH_TERRACES: int = 15
+
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
 	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
@@ -54,7 +76,10 @@ var vsync_enabled: bool = true
 var fps_cap_index: int = 5
 var show_fps: bool = false
 var gamma: float = 1.0
-var color_grade_preset: int = COLOR_GRADE_NEUTRAL
+var color_grade_preset: int = COLOR_GRADE_BROADCAST
+var gi_mode: int = GI_MODE_OFF
+var crowd_density: int = CROWD_DENSITY_HIGH
+var ice_scratches_enabled: bool = true
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
@@ -108,6 +133,9 @@ func save() -> void:
 	cfg.set_value("video", "show_fps", show_fps)
 	cfg.set_value("video", "gamma", gamma)
 	cfg.set_value("video", "color_grade_preset", color_grade_preset)
+	cfg.set_value("video", "gi_mode", gi_mode)
+	cfg.set_value("video", "crowd_density", crowd_density)
+	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "camera_mode", camera_mode)
@@ -175,11 +203,25 @@ func apply_video() -> void:
 	DisplayServer.window_set_vsync_mode(
 		DisplayServer.VSYNC_ENABLED if vsync_enabled else DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = FPS_CAP_VALUES[fps_cap_index]
-	var we := Engine.get_main_loop().current_scene.find_child(
-		"WorldEnvironment", true, false) as WorldEnvironment
+	var scene: Node = Engine.get_main_loop().current_scene
+	if scene == null:
+		return
+	var we := scene.find_child("WorldEnvironment", true, false) as WorldEnvironment
 	if we != null:
 		we.environment.adjustment_enabled = true
 		we.environment.adjustment_color_correction = _build_color_correction_lut(gamma, color_grade_preset)
+		we.environment.sdfgi_enabled = (gi_mode == GI_MODE_SDFGI)
+	var stands := scene.find_child("ArenaStands", true, false) as Node3D
+	if stands != null:
+		stands.visible = (crowd_density != CROWD_DENSITY_OFF)
+		if crowd_density != CROWD_DENSITY_OFF and "num_terraces" in stands:
+			var terraces: int = CROWD_DENSITY_HIGH_TERRACES \
+				if crowd_density == CROWD_DENSITY_HIGH \
+				else CROWD_DENSITY_LOW_TERRACES
+			stands.set("num_terraces", terraces)
+	var scratch := scene.find_child("IceScratchMap", true, false)
+	if scratch != null and scratch.has_method("set_enabled"):
+		scratch.call("set_enabled", ice_scratches_enabled)
 
 # Builds a 16³ 3D LUT that applies the selected color-grade preset then the
 # gamma curve (output = input^(1/gamma)). Both bake into a single texture so
@@ -198,10 +240,8 @@ func _build_color_correction_lut(g: float, preset: int) -> Texture3D:
 				var r: float = float(x) / float(N - 1)
 				var c := Color(r, gg, bb)
 				match preset:
-					COLOR_GRADE_WARM:
-						c = _apply_grade_warm(c)
-					COLOR_GRADE_COOL:
-						c = _apply_grade_cool(c)
+					COLOR_GRADE_BROADCAST:
+						c = _apply_grade_broadcast(c)
 				c.r = pow(maxf(c.r, 0.0), inv_g)
 				c.g = pow(maxf(c.g, 0.0), inv_g)
 				c.b = pow(maxf(c.b, 0.0), inv_g)
@@ -211,33 +251,25 @@ func _build_color_correction_lut(g: float, preset: int) -> Texture3D:
 	tex.create(Image.FORMAT_RGBA8, N, N, N, false, images)
 	return tex
 
-# Lift shadows toward gray, warm channel shift, saturation bump in midtones.
-# Approximates the "NHL broadcast print" look that real telecasts use.
-func _apply_grade_warm(c: Color) -> Color:
-	const LIFT: float = 0.015
-	c.r = c.r * (1.0 - LIFT) + LIFT
-	c.g = c.g * (1.0 - LIFT * 0.7) + LIFT * 0.7
-	c.b = c.b * (1.0 - LIFT * 0.4) + LIFT * 0.4
-	c.r = clampf(c.r * 1.02, 0.0, 1.0)
-	c.b = clampf(c.b * 0.96, 0.0, 1.0)
+# Modern sports-broadcast split-tone: teal cast in shadows, neutral midtones
+# and highlights. Real broadcast ice samples cool-neutral at midtone+ luma —
+# warmth in reference frames comes from content (team colors, crowd jerseys),
+# not from the grade. Mild S-curve and slight desat finish the Rec.709 feel.
+func _apply_grade_broadcast(c: Color) -> Color:
 	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
-	const SAT: float = 1.04
-	c.r = clampf(luma + (c.r - luma) * SAT, 0.0, 1.0)
-	c.g = clampf(luma + (c.g - luma) * SAT, 0.0, 1.0)
-	c.b = clampf(luma + (c.b - luma) * SAT, 0.0, 1.0)
-	return c
-
-# Cool channel shift, S-curve contrast via smoothstep, slight desaturation.
-# Reads as a clean modern broadcast / "cinema" arena look.
-func _apply_grade_cool(c: Color) -> Color:
-	c.r = clampf(c.r * 0.96, 0.0, 1.0)
-	c.g = clampf(c.g * 0.98, 0.0, 1.0)
-	c.b = clampf(c.b * 1.05, 0.0, 1.0)
-	c.r = smoothstep(0.0, 1.0, c.r)
-	c.g = smoothstep(0.0, 1.0, c.g)
-	c.b = smoothstep(0.0, 1.0, c.b)
-	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
-	const SAT: float = 0.93
+	var shadow_w: float = 1.0 - smoothstep(0.0, 0.40, luma)
+	# Shadow teal: pull R down, push B up. Only the shadow band picks up a
+	# tint; mids and highlights are left alone so the ice stays cool-neutral.
+	const SHADOW_R: float = -0.025
+	const SHADOW_B: float =  0.030
+	c.r = clampf(c.r + SHADOW_R * shadow_w, 0.0, 1.0)
+	c.b = clampf(c.b + SHADOW_B * shadow_w, 0.0, 1.0)
+	# Mild S-curve: half-blend of smoothstep keeps detail in both ends.
+	c.r = lerp(c.r, smoothstep(0.0, 1.0, c.r), 0.5)
+	c.g = lerp(c.g, smoothstep(0.0, 1.0, c.g), 0.5)
+	c.b = lerp(c.b, smoothstep(0.0, 1.0, c.b), 0.5)
+	luma = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
+	const SAT: float = 0.96
 	c.r = clampf(luma + (c.r - luma) * SAT, 0.0, 1.0)
 	c.g = clampf(luma + (c.g - luma) * SAT, 0.0, 1.0)
 	c.b = clampf(luma + (c.b - luma) * SAT, 0.0, 1.0)
@@ -268,6 +300,9 @@ func _load() -> void:
 		show_fps = cfg.get_value("video", "show_fps", false)
 		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
 		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_NEUTRAL), 0, COLOR_GRADE_LABELS.size() - 1)
+		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
+		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
+		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)

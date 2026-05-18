@@ -12,22 +12,20 @@
 background_mode = 1
 background_color = Color(0.1897483, 0.1897483, 0.2716998, 1)
 ambient_light_source = 2
-ambient_light_color = Color(0.95468724, 0.9639762, 0.9822071, 1)
-ambient_light_energy = 0.55
+ambient_light_color = Color(0.8784314, 0.8980392, 0.9490196, 1)
+ambient_light_energy = 0.25
 tonemap_mode = 4
 tonemap_exposure = 1.15
 tonemap_white = 6.0
-ssao_enabled = true
 ssao_radius = 0.5
 ssao_intensity = 1.0
+sdfgi_enabled = true
 glow_enabled = true
-glow_strength = 0.8
+glow_strength = 0.4
 glow_bloom = 0.05
 glow_blend_mode = 2
-glow_hdr_threshold = 1.1
+glow_hdr_threshold = 1.3
 adjustment_enabled = true
-adjustment_contrast = 1.05
-adjustment_saturation = 1.05
 
 [node name="Hockey" type="Node3D" unique_id=565254608]
 script = ExtResource("1_nc2c6")
@@ -38,6 +36,9 @@ environment = SubResource("Environment_rxg2q")
 [node name="Rink" type="StaticBody3D" parent="." unique_id=2100473277]
 physics_material_override = ExtResource("2_tdlsr")
 script = ExtResource("3_7grwi")
+ice_color = Color(0.92941177, 0.9490196, 0.972549, 1)
+ice_fog_color = Color(0.7490196, 0.80784315, 0.8862745, 1)
+ice_roughness_head_on = 0.35
 
 [node name="GoalBottom" type="StaticBody3D" parent="." unique_id=1648202477]
 script = ExtResource("4_2i1fh")
@@ -46,90 +47,194 @@ script = ExtResource("4_2i1fh")
 script = ExtResource("4_2i1fh")
 facing = -1
 
-[node name="Hud" parent="." unique_id=2076368830 instance=ExtResource("5_l2d8q")]
-
-[node name="SpotLight3D" type="SpotLight3D" parent="." unique_id=92673213]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, -22)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.6
-light_indirect_energy = 0.3
-light_specular = 0.35
-shadow_enabled = true
-spot_range = 32.0
-spot_angle = 32.0
-
-[node name="SpotLight3D2" type="SpotLight3D" parent="." unique_id=860078582]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, -7)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.6
-light_indirect_energy = 0.3
-light_specular = 0.35
-shadow_enabled = true
-spot_range = 32.0
-spot_angle = 32.0
-
-[node name="SpotLight3D3" type="SpotLight3D" parent="." unique_id=2045860332]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, 7)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.6
-light_indirect_energy = 0.3
-light_specular = 0.35
-shadow_enabled = true
-spot_range = 32.0
-spot_angle = 32.0
-
-[node name="SpotLight3D4" type="SpotLight3D" parent="." unique_id=1502217364]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, -22)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.6
-light_indirect_energy = 0.3
-light_specular = 0.35
-shadow_enabled = true
-spot_range = 32.0
-spot_angle = 32.0
-
-[node name="SpotLight3D5" type="SpotLight3D" parent="." unique_id=1560442888]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, -7)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.6
-light_indirect_energy = 0.3
-light_specular = 0.35
-shadow_enabled = true
-spot_range = 32.0
-spot_angle = 32.0
-
-[node name="SpotLight3D6" type="SpotLight3D" parent="." unique_id=1194539476]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, 7)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.6
-light_indirect_energy = 0.3
-light_specular = 0.35
-shadow_enabled = true
-spot_range = 32.0
-spot_angle = 32.0
-
-[node name="SpotLight3D7" type="SpotLight3D" parent="." unique_id=1139135960]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, 22)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.6
-light_indirect_energy = 0.3
-light_specular = 0.35
-shadow_enabled = true
-spot_range = 32.0
-spot_angle = 32.0
-
-[node name="SpotLight3D8" type="SpotLight3D" parent="." unique_id=1637942442]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, 22)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.6
-light_indirect_energy = 0.3
-light_specular = 0.35
-shadow_enabled = true
-spot_range = 32.0
-spot_angle = 32.0
-
 [node name="ArenaStands" type="Node3D" parent="." unique_id=2031902441]
 script = ExtResource("6_7grwi")
 
 [node name="CrowdAudio" type="Node" parent="." unique_id=1841790014]
 script = ExtResource("7_2i1fh")
+
+[node name="Hud" parent="." unique_id=2076368830 instance=ExtResource("5_l2d8q")]
+
+[node name="SpotLight3D" type="SpotLight3D" parent="." unique_id=92673213]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, -22)
+light_color = Color(0.972549, 0.9882353, 1, 1)
+light_energy = 2.2
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_attenuation = 0.5
+spot_angle = 50.0
+spot_angle_attenuation = 0.5
+
+[node name="SpotLight3D2" type="SpotLight3D" parent="." unique_id=860078582]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, -7)
+light_color = Color(0.972549, 0.9882353, 1, 1)
+light_energy = 2.2
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_attenuation = 0.5
+spot_angle = 50.0
+spot_angle_attenuation = 0.5
+
+[node name="SpotLight3D3" type="SpotLight3D" parent="." unique_id=2045860332]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, 7)
+light_color = Color(0.972549, 0.9882353, 1, 1)
+light_energy = 2.2
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_attenuation = 0.5
+spot_angle = 50.0
+spot_angle_attenuation = 0.5
+
+[node name="SpotLight3D4" type="SpotLight3D" parent="." unique_id=1502217364]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -6, 22, 22)
+light_color = Color(0.972549, 0.9882353, 1, 1)
+light_energy = 2.2
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_attenuation = 0.5
+spot_angle = 50.0
+spot_angle_attenuation = 0.5
+
+[node name="SpotLight3D5" type="SpotLight3D" parent="." unique_id=1560442888]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, -22)
+light_color = Color(0.972549, 0.9882353, 1, 1)
+light_energy = 2.2
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_attenuation = 0.5
+spot_angle = 50.0
+spot_angle_attenuation = 0.5
+
+[node name="SpotLight3D6" type="SpotLight3D" parent="." unique_id=1194539476]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, -7)
+light_color = Color(0.972549, 0.9882353, 1, 1)
+light_energy = 2.2
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_attenuation = 0.5
+spot_angle = 50.0
+spot_angle_attenuation = 0.5
+
+[node name="SpotLight3D7" type="SpotLight3D" parent="." unique_id=1139135960]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, 7)
+light_color = Color(0.972549, 0.9882353, 1, 1)
+light_energy = 2.2
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_attenuation = 0.5
+spot_angle = 50.0
+spot_angle_attenuation = 0.5
+
+[node name="SpotLight3D8" type="SpotLight3D" parent="." unique_id=1637942442]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 6, 22, 22)
+light_color = Color(0.972549, 0.9882353, 1, 1)
+light_energy = 2.2
+light_indirect_energy = 0.3
+light_specular = 0.35
+shadow_enabled = true
+spot_range = 32.0
+spot_attenuation = 0.5
+spot_angle = 50.0
+spot_angle_attenuation = 0.5
+
+[node name="BowlLight_NE" type="OmniLight3D" parent="." unique_id=302698792]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 18, 12, 35)
+light_color = Color(1, 0.92156863, 0.78039217, 1)
+light_energy = 0.25
+omni_range = 28.0
+omni_attenuation = 1.5
+
+[node name="BowlLight_NW" type="OmniLight3D" parent="." unique_id=1060281615]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -18, 12, 35)
+light_color = Color(1, 0.92156863, 0.78039217, 1)
+light_energy = 0.25
+omni_range = 28.0
+omni_attenuation = 1.5
+
+[node name="BowlLight_SE" type="OmniLight3D" parent="." unique_id=1464918595]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 18, 12, -35)
+light_color = Color(1, 0.92156863, 0.78039217, 1)
+light_energy = 0.25
+omni_range = 28.0
+omni_attenuation = 1.5
+
+[node name="BowlLight_SW" type="OmniLight3D" parent="." unique_id=1290731414]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -18, 12, -35)
+light_color = Color(1, 0.92156863, 0.78039217, 1)
+light_energy = 0.25
+omni_range = 28.0
+omni_attenuation = 1.5
+
+[node name="DasherSpotLight" type="SpotLight3D" parent="." unique_id=681815197]
+transform = Transform3D(-4.3711385e-08, 0.37136787, -0.9284858, 0, 0.92848593, 0.37136784, 0.99999994, 1.6233006e-08, -4.0585405e-08, -15, 7, -15)
+light_color = Color(1, 0.9490196, 0.8509804, 1)
+light_energy = 1.4
+light_indirect_energy = 0.0
+light_specular = 0.35
+spot_range = 25.0
+spot_attenuation = 0.7
+spot_angle = 60.0
+
+[node name="DasherSpotLight2" type="SpotLight3D" parent="." unique_id=2077979868]
+transform = Transform3D(-4.3711385e-08, 0.37136787, -0.9284858, 0, 0.92848593, 0.37136784, 0.99999994, 1.6233006e-08, -4.0585405e-08, -15, 7, 15)
+light_color = Color(1, 0.9490196, 0.8509804, 1)
+light_energy = 1.4
+light_indirect_energy = 0.0
+light_specular = 0.35
+spot_range = 25.0
+spot_attenuation = 0.7
+spot_angle = 60.0
+
+[node name="DasherSpotLight3" type="SpotLight3D" parent="." unique_id=2132725874]
+transform = Transform3D(-4.3711385e-08, -0.37136787, 0.92848575, 0, 0.92848593, 0.3713678, -0.99999994, 1.6233006e-08, -4.05854e-08, 15, 7, -15)
+light_color = Color(1, 0.9490196, 0.8509804, 1)
+light_energy = 1.4
+light_indirect_energy = 0.0
+light_specular = 0.35
+spot_range = 25.0
+spot_attenuation = 0.7
+spot_angle = 60.0
+
+[node name="DasherSpotLight4" type="SpotLight3D" parent="." unique_id=1995375052]
+transform = Transform3D(-4.3711385e-08, -0.37136787, 0.92848575, 0, 0.92848593, 0.3713678, -0.99999994, 1.6233006e-08, -4.05854e-08, 15, 7, 15)
+light_color = Color(1, 0.9490196, 0.8509804, 1)
+light_energy = 1.4
+light_indirect_energy = 0.0
+light_specular = 0.35
+spot_range = 25.0
+spot_attenuation = 0.7
+spot_angle = 60.0
+
+[node name="DasherSpotLight5" type="SpotLight3D" parent="." unique_id=179865794]
+transform = Transform3D(-0.99999994, 7.2731744e-08, -4.850604e-08, 0, 0.5548445, 0.83195406, 8.742277e-08, 0.83195424, -0.5548444, 0, 7, -32)
+light_color = Color(1, 0.9490196, 0.8509804, 1)
+light_energy = 1.4
+light_indirect_energy = 0.0
+light_specular = 0.35
+spot_range = 25.0
+spot_attenuation = 0.7
+spot_angle = 60.0
+
+[node name="DasherSpotLight6" type="SpotLight3D" parent="." unique_id=1683622602]
+transform = Transform3D(0.99999994, 0, 0, 0, 0.5548445, 0.83195406, 0, -0.83195424, 0.5548444, 0, 7, 32)
+light_color = Color(1, 0.9490196, 0.8509804, 1)
+light_energy = 1.4
+light_indirect_energy = 0.0
+light_specular = 0.35
+spot_range = 25.0
+spot_attenuation = 0.7
+spot_angle = 60.0

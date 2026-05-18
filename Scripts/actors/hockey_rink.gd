@@ -30,13 +30,25 @@ extends StaticBody3D
 	set(v):
 		wall_color = v
 		_rebuild()
+@export_range(0.0, 2.0) var wall_emission_energy: float = 0.0:
+	set(v):
+		wall_emission_energy = v
+		_rebuild()
 @export var kickplate_color: Color = Color(1.0, 0.824, 0.357):
 	set(v):
 		kickplate_color = v
 		_rebuild()
+@export_range(0.0, 2.0) var kickplate_emission_energy: float = 0.0:
+	set(v):
+		kickplate_emission_energy = v
+		_rebuild()
 @export var cap_rail_color: Color = Color(0.0, 0.220, 0.659):
 	set(v):
 		cap_rail_color = v
+		_rebuild()
+@export_range(0.0, 2.0) var cap_rail_emission_energy: float = 0.0:
+	set(v):
+		cap_rail_emission_energy = v
 		_rebuild()
 @export var board_stripe_z_nudge: float = 0.0:
 	set(v):
@@ -182,11 +194,11 @@ func _rebuild() -> void:
 	# Solid bands use cull_disabled — the ArrayMesh inner face is otherwise
 	# culled by Godot's renderer even though the world-space winding looks
 	# correct on paper. BoxMesh works because its vertex order compensates.
-	var kp_mat: StandardMaterial3D = _make_solid_material(kickplate_color)
+	var kp_mat: StandardMaterial3D = _make_solid_material(kickplate_color, kickplate_emission_energy)
 	kp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var board_mat: StandardMaterial3D = _make_solid_material(wall_color)
+	var board_mat: StandardMaterial3D = _make_solid_material(wall_color, wall_emission_energy)
 	board_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var cap_mat: StandardMaterial3D = _make_solid_material(cap_rail_color)
+	var cap_mat: StandardMaterial3D = _make_solid_material(cap_rail_color, cap_rail_emission_energy)
 	cap_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	# Kickplate (yellow lip with full caps — top cap forms the inward and
@@ -572,9 +584,13 @@ func _make_glass_material() -> StandardMaterial3D:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return mat
 
-func _make_solid_material(color: Color) -> StandardMaterial3D:
+func _make_solid_material(color: Color, emission_energy: float = 0.0) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
+	if emission_energy > 0.0:
+		mat.emission_enabled = true
+		mat.emission = color
+		mat.emission_energy_multiplier = emission_energy
 	return mat
 
 # ── Continuous perimeter walls ────────────────────────────────────────────────
