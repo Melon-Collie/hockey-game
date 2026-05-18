@@ -164,13 +164,25 @@ func _build_scorebug() -> void:
 	var teams_vbox := VBoxContainer.new()
 	teams_vbox.add_theme_constant_override("separation", 4)
 	teams_outer.add_child(teams_vbox)
+	# Stripes are anchored inside the rows but bleed past the row bounds so
+	# they hug the panel's full left edge top-to-bottom. The top stripe gets
+	# the panel's top-left curve, the bottom stripe gets the bottom-left
+	# curve; they meet flush at the midpoint of the inter-row separation.
 	var away_row := _build_scorebug_team_row(1, "AWAY")
 	_away_badge_style = away_row.get_meta(&"stripe_style") as StyleBoxFlat
 	_away_score_label = away_row.get_meta(&"score_label") as Label
+	var away_stripe: Panel = away_row.get_meta(&"stripe") as Panel
+	_away_badge_style.corner_radius_top_left = 4
+	away_stripe.offset_top = -5
+	away_stripe.offset_bottom = 2
 	teams_vbox.add_child(away_row)
 	var home_row := _build_scorebug_team_row(0, "HOME")
 	_home_badge_style = home_row.get_meta(&"stripe_style") as StyleBoxFlat
 	_home_score_label = home_row.get_meta(&"score_label") as Label
+	var home_stripe: Panel = home_row.get_meta(&"stripe") as Panel
+	_home_badge_style.corner_radius_bottom_left = 4
+	home_stripe.offset_top = -2
+	home_stripe.offset_bottom = 4
 	teams_vbox.add_child(home_row)
 
 	hbox.add_child(_vsep())
@@ -219,10 +231,20 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 
 	var stripe_style := StyleBoxFlat.new()
 	stripe_style.bg_color = _initial_team_primary(team_id)
-	var stripe := PanelContainer.new()
+	# Placeholder reserves the 6px column in the HBox; the visible stripe
+	# is anchored inside it so the caller can bleed it past the row bounds
+	# (offset_top / offset_bottom) to hug the scorebug panel's true edges
+	# — same pattern slot_grid_panel.gd uses for the lobby card stripes.
+	var stripe_slot := Control.new()
+	stripe_slot.custom_minimum_size = Vector2(6, 28)
+	stripe_slot.size_flags_vertical = Control.SIZE_FILL
+	stripe_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(stripe_slot)
+	var stripe := Panel.new()
 	stripe.add_theme_stylebox_override("panel", stripe_style)
-	stripe.custom_minimum_size = Vector2(6, 28)
-	row.add_child(stripe)
+	stripe.set_anchors_preset(Control.PRESET_FULL_RECT)
+	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stripe_slot.add_child(stripe)
 
 	var abbr_margin := MarginContainer.new()
 	abbr_margin.add_theme_constant_override("margin_left", 8)
@@ -234,16 +256,21 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 	abbr_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	abbr_margin.add_child(abbr_label)
 
+	# Center-aligned in a fixed-width slot so single- vs two-digit scores
+	# don't drift visually (right-alignment made "1" read as offset from
+	# "0" because the glyphs have different widths).
 	var score_margin := MarginContainer.new()
+	score_margin.add_theme_constant_override("margin_left", 4)
 	score_margin.add_theme_constant_override("margin_right", 8)
 	row.add_child(score_margin)
 	var score_label := _lbl("0", 26, _WHITE)
-	score_label.custom_minimum_size = Vector2(28, 0)
-	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	score_label.custom_minimum_size = Vector2(36, 0)
+	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	score_margin.add_child(score_label)
 
 	row.set_meta(&"stripe_style", stripe_style)
+	row.set_meta(&"stripe", stripe)
 	row.set_meta(&"score_label", score_label)
 	return row
 
