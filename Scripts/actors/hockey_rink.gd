@@ -817,7 +817,14 @@ func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionar
 	# (~0.34° of arc) that flat vs curved is imperceptible.
 	var sz: float = stripe["z"]
 	var color: Color = stripe["color"]
-	var s_arg: float = (sz - center.z) / corner_radius
+	var r_face: float = corner_radius - wall_thickness / 2.0
+	# Use r_face (inner face radius) instead of corner_radius when finding the
+	# crossing angle: the stripe sits ON the inner face, not on the centerline,
+	# so the angle where r_face·sin(a) reaches sz is what we want. With the
+	# previous corner_radius-based formula, the base point ended up at a radius
+	# slightly larger than r_face (i.e. embedded inside the wall) and was
+	# occluded by the inner face from inside the rink.
+	var s_arg: float = (sz - center.z) / r_face
 	if absf(s_arg) >= 1.0:
 		return
 	var lo: float = minf(a0, a1)
@@ -840,18 +847,28 @@ func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionar
 
 	var ca: float = cos(a_cross)
 	var sa: float = sin(a_cross)
-	var r_face: float = corner_radius - wall_thickness / 2.0
 	var inset: float = 0.001
 	# Stripe spans only the white-board band (between the kickplate lip and the
-	# cap-rail lip). The lips protrude inward of r_face, so a stripe drawn at
-	# r_face - 0.001 would be occluded by them — keeping the stripe inside the
-	# board zone keeps it visible without splitting into multiple quads.
+	# cap-rail lip). The base point sits 1 mm inward of the inner face so the
+	# stripe renders in front of the wall instead of z-fighting against it.
 	var base_pt: Vector3 = center + Vector3(
 		(r_face - inset) * ca, 0.0, (r_face - inset) * sa)
-	base_pt.z = sz + board_stripe_z_nudge * signf(sz)
+	base_pt.z += board_stripe_z_nudge * signf(sz)
 	var tangent: Vector3 = Vector3(-sa, 0.0, ca)
 	var inward: Vector3 = Vector3(-ca, 0.0, -sa)
-	var half_sw: float = 0.025
+	# Match the ice goal line's Z extent. The ice line uses `thin_line` = 4 px
+	# at 80 px/m, and _draw_h_line spans `half_t + half_t + 1` = 5 px, which
+	# is 0.0625 m. The arc tangent at a_cross is not aligned with Z, so a
+	# stripe of total tangent width W projects to a Z width of W · |cos(a)|.
+	# Scale the tangent width up by 1/|cos(a)| so the wall stripe's Z extent
+	# matches the ice line's. (Guarded against the tangent-perpendicular-to-Z
+	# extreme at the corner's far end, but a_cross is well inside ±60° here.)
+	# Tuned to match the perceived width of the ice goal line. The ice line
+	# is nominally 6.25 cm but reads wider thanks to the ice shader's
+	# parallax + subsurface fade softening its edges; a 6 cm wall stripe
+	# looks too thin next to it. ~15 cm Z extent feels right.
+	# (0.075 / |cos(a)| keeps Z extent constant across different a_cross.)
+	var half_sw: float = 0.075 / maxf(absf(ca), 0.1)
 	var y_bot: float = kickplate_height
 	var y_top: float = wall_height - CAP_RAIL_HEIGHT
 	var v0: Vector3 = base_pt + Vector3(-tangent.x * half_sw, y_bot, -tangent.z * half_sw)
