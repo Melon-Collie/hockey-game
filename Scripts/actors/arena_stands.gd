@@ -381,6 +381,15 @@ func _build_spectators() -> void:
 		head_mm.set_instance_transform(i, transforms[i])
 		head_mm.set_instance_color(i, head_colors[i])
 
+	# Godot's auto-AABB for MultiMesh is unreliable when transforms are pushed
+	# via set_instance_transform individually (vs. a single `buffer` set), and
+	# especially when the source mesh AABB is offset from origin (the head box
+	# is centered at y~0.58). Without an explicit AABB the renderer culls
+	# entire sections of crowd from certain camera angles.
+	var bowl_aabb: AABB = _spectator_bowl_aabb()
+	body_mm.custom_aabb = bowl_aabb
+	head_mm.custom_aabb = bowl_aabb
+
 	var body_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 	body_mmi.multimesh = body_mm
 	body_mmi.name = "SpectatorBodies"
@@ -389,6 +398,24 @@ func _build_spectators() -> void:
 	head_mmi.multimesh = head_mm
 	head_mmi.name = "SpectatorHeads"
 	add_child(head_mmi)
+
+
+# Conservative bounds around every spectator instance, in ArenaStands-local
+# space. Rotated bodies can extend by the box diagonal in any horizontal dir;
+# top of the head sits at body_h + head_h above the top tread.
+func _spectator_bowl_aabb() -> AABB:
+	var outer_extent: float = base_outward_offset \
+			+ (num_terraces - 1) * tread_depth \
+			+ spectator_inset_from_riser
+	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) * 0.71 + 0.05
+	var half_x: float = rink_width * 0.5 + outer_extent + horizontal_margin
+	var half_z: float = rink_length * 0.5 + outer_extent + horizontal_margin
+	var top_y: float = stands_base_y + (num_terraces - 1) * riser_height \
+			+ spectator_y_jitter + _BODY_SIZE.y + _HEAD_SIZE.y + 0.1
+	var bot_y: float = stands_base_y - spectator_y_jitter - 0.1
+	return AABB(
+			Vector3(-half_x, bot_y, -half_z),
+			Vector3(2.0 * half_x, top_y - bot_y, 2.0 * half_z))
 
 
 # Body box, origin at the spectator's base (feet on the tread).
