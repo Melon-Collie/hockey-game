@@ -10,6 +10,7 @@ var _mute_check: CheckButton = null
 var _volume_slider: HSlider = null
 var _sfx_slider: HSlider = null
 var _ui_slider: HSlider = null
+var _crowd_slider: HSlider = null
 var _res_btn: OptionButton = null
 var _tab_contents: Array[Control] = []
 var _tab_btns: Array[Button] = []
@@ -110,6 +111,7 @@ func _snapshot() -> Dictionary:
 		"master_volume": PlayerPrefs.master_volume,
 		"sfx_volume": PlayerPrefs.sfx_volume,
 		"ui_volume": PlayerPrefs.ui_volume,
+		"crowd_volume": PlayerPrefs.crowd_volume,
 		"master_muted": PlayerPrefs.master_muted,
 		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
 		"attack_up": PlayerPrefs.attack_up,
@@ -131,6 +133,7 @@ func _read_controls() -> Dictionary:
 		"master_volume": _volume_slider.value,
 		"sfx_volume": _sfx_slider.value,
 		"ui_volume": _ui_slider.value,
+		"crowd_volume": _crowd_slider.value,
 		"master_muted": _mute_check.button_pressed,
 		"mouse_sensitivity": _sens_slider.value,
 		"attack_up": _attack_up_check.button_pressed,
@@ -296,6 +299,11 @@ func _build_audio_tab() -> Control:
 	var ui_val := _value_label("%d%%" % int(PlayerPrefs.ui_volume * 100))
 	_ui_slider.value_changed.connect(func(v: float) -> void: ui_val.text = "%d%%" % int(v * 100))
 	box.add_child(_slider_row("UI", _ui_slider, ui_val))
+
+	_crowd_slider = _make_volume_slider(PlayerPrefs.crowd_volume)
+	var crowd_val := _value_label("%d%%" % int(PlayerPrefs.crowd_volume * 100))
+	_crowd_slider.value_changed.connect(func(v: float) -> void: crowd_val.text = "%d%%" % int(v * 100))
+	box.add_child(_slider_row("Crowd", _crowd_slider, crowd_val))
 
 	box.add_child(_section_spacer())
 
@@ -632,6 +640,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.master_volume = c.master_volume
 	PlayerPrefs.sfx_volume = c.sfx_volume
 	PlayerPrefs.ui_volume = c.ui_volume
+	PlayerPrefs.crowd_volume = c.crowd_volume
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
 	PlayerPrefs.attack_up = c.attack_up
@@ -661,6 +670,7 @@ func _on_cancel_pressed() -> void:
 	_volume_slider.value = _original.master_volume
 	_sfx_slider.value = _original.sfx_volume
 	_ui_slider.value = _original.ui_volume
+	_crowd_slider.value = _original.crowd_volume
 	_mute_check.set_pressed_no_signal(_original.master_muted)
 	_sens_slider.value = _original.mouse_sensitivity
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
