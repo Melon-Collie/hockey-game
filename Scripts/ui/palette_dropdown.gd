@@ -16,7 +16,7 @@ const _STRIPE_WIDTH: int = 8
 const _CARD_CORNER: int = 4
 # Popup grid swatch dimensions. Slightly wider than the closed state so the
 # stripe-on-primary read carries at this size.
-const _POPUP_SWATCH_SIZE: Vector2 = Vector2(96, 36)
+const _POPUP_SWATCH_SIZE: Vector2 = Vector2(48, 36)
 const _POPUP_COLUMNS: int = 4
 const _POPUP_SEPARATION: int = 6
 
