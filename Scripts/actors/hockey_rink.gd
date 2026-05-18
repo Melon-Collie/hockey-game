@@ -22,7 +22,7 @@ extends StaticBody3D
 	set(v):
 		wall_thickness = v
 		_rebuild()
-@export var corner_segments: int = 14:
+@export var corner_segments: int = 48:
 	set(v):
 		corner_segments = v
 		_rebuild()
@@ -41,10 +41,6 @@ extends StaticBody3D
 @export var board_stripe_z_nudge: float = 0.0:
 	set(v):
 		board_stripe_z_nudge = v
-		_rebuild()
-@export var kickplate_gap_z_nudge: float = 0.084:
-	set(v):
-		kickplate_gap_z_nudge = v
 		_rebuild()
 @export var kickplate_height: float = 0.20:
 	set(v):
@@ -451,18 +447,6 @@ func _kickplate_z_segments(z_start: float, z_end: float) -> Array:
 		segs.append([cur, z_end])
 	return segs
 
-func _add_kickplate_rotated(kp_w: float, length: float, pos: Vector3, rot: float) -> void:
-	var mi := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(kp_w, kickplate_height, length)
-	mi.mesh = box
-	mi.position = pos
-	mi.rotation.y = rot
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = kickplate_color
-	mi.material_override = mat
-	add_child(mi)
-
 func _add_kickplate_box(kp_size: Vector3, kp_pos: Vector3) -> void:
 	var mi := MeshInstance3D.new()
 	var box := BoxMesh.new()
@@ -602,135 +586,231 @@ func _add_wall(pos: Vector3, size: Vector3) -> void:
 	add_child(col)
 
 func _add_corner(center: Vector3, angle_start: float, angle_end: float, stripe_zs: Array = []) -> void:
-	var angle_step := (angle_end - angle_start) / corner_segments
-	for i in corner_segments:
-		var a1 := angle_start + i * angle_step
-		var a2 := angle_start + (i + 1) * angle_step
+	# Each corner is one ArrayMesh per band (kickplate / board / glass / cap rail)
+	# wrapping continuously around the arc, plus one ConcavePolygonShape3D for
+	# collision. Box-per-segment stacks were producing chord-overlap z-fighting on
+	# the cap rail and faceting the puck's rim path; an arc-correct mesh fixes
+	# both. Goal-line stripe is painted as a flat decal at the crossing angle
+	# (kickplate is no longer physically cut — red overlays yellow at the line).
+	var r_in_kick: float = corner_radius - wall_thickness / 2.0 - KICKPLATE_PROTRUSION
+	var r_in: float      = corner_radius - wall_thickness / 2.0
+	var r_out: float     = corner_radius + wall_thickness / 2.0
+	var board_top: float = wall_height
+	var glass_top: float = wall_height + glass_height
+	var rail_top: float  = glass_top + CAP_RAIL_HEIGHT
 
-		var p1 := center + Vector3(cos(a1) * corner_radius, 0, sin(a1) * corner_radius)
-		var p2 := center + Vector3(cos(a2) * corner_radius, 0, sin(a2) * corner_radius)
+	_add_corner_ring(center, angle_start, angle_end, r_in_kick, r_out,
+		0.0, kickplate_height, _make_solid_material(kickplate_color))
+	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
+		kickplate_height, board_top, _make_solid_material(wall_color))
+	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
+		board_top, glass_top, _make_glass_material())
+	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
+		glass_top, rail_top, _make_solid_material(cap_rail_color))
 
-		var mid_xz := (p1 + p2) / 2.0
-		var seg_length := p1.distance_to(p2)
-		var dir := (p2 - p1).normalized()
-		var rot_y := atan2(dir.x, dir.z)
+	for stripe in stripe_zs:
+		_add_corner_stripe(center, angle_start, angle_end, stripe)
 
-		# Kickplate — split at stripe positions to leave gaps, protrudes inward
-		var outward := (mid_xz - center).normalized()
-		var kp_x: float = mid_xz.x - outward.x * KICKPLATE_PROTRUSION / 2.0
-		var kp_z: float = mid_xz.z - outward.z * KICKPLATE_PROTRUSION / 2.0
-		var kp_w: float = wall_thickness + KICKPLATE_PROTRUSION
-		var crossing_t: float = -1.0
-		var crossing_sz: float = 0.0
-		for stripe in stripe_zs:
-			var sz: float = stripe["z"]
-			if (p1.z <= sz and sz <= p2.z) or (p2.z <= sz and sz <= p1.z):
-				crossing_t = (sz - p1.z) / (p2.z - p1.z) if absf(p2.z - p1.z) > 0.001 else 0.5
-				crossing_sz = sz
-				break
-		if crossing_t < 0.0:
-			_add_kickplate_rotated(kp_w, seg_length, Vector3(kp_x, kickplate_height / 2.0, kp_z), rot_y)
-		else:
-			# Cut at Z = gap_sz ± half_gap (Z-perpendicular) so the gap aligns with
-			# the board stripe and ice goal line rather than being a diagonal tangent cut.
-			var half_gap: float = 0.025
-			var gap_sz := crossing_sz + kickplate_gap_z_nudge * signf(crossing_sz)
-			var dz: float = p2.z - p1.z
-			var t_low  := clampf((gap_sz - half_gap - p1.z) / dz, 0.0, 1.0) if absf(dz) > 0.001 else crossing_t
-			var t_high := clampf((gap_sz + half_gap - p1.z) / dz, 0.0, 1.0) if absf(dz) > 0.001 else crossing_t
-			if t_low > t_high:
-				var tmp := t_low; t_low = t_high; t_high = tmp
-			var local_low  := (t_low  - 0.5) * seg_length
-			var local_high := (t_high - 0.5) * seg_length
-			var len1: float = local_low + seg_length / 2.0
-			var len2: float = seg_length / 2.0 - local_high
-			if len1 > 0.001:
-				var c1: float = -seg_length / 2.0 + len1 / 2.0
-				_add_kickplate_rotated(kp_w, len1,
-					Vector3(kp_x + dir.x * c1, kickplate_height / 2.0, kp_z + dir.z * c1), rot_y)
-			if len2 > 0.001:
-				var c2: float = local_high + len2 / 2.0
-				_add_kickplate_rotated(kp_w, len2,
-					Vector3(kp_x + dir.x * c2, kickplate_height / 2.0, kp_z + dir.z * c2), rot_y)
+	_add_corner_collision(center, angle_start, angle_end, r_in, r_out, 0.0, glass_top)
 
-		# Upper board (white)
-		var board_h: float = wall_height - kickplate_height
-		var board_mi := MeshInstance3D.new()
-		var board_box := BoxMesh.new()
-		board_box.size = Vector3(wall_thickness, board_h, seg_length)
-		board_mi.mesh = board_box
-		board_mi.position = Vector3(mid_xz.x, kickplate_height + board_h / 2.0, mid_xz.z)
-		board_mi.rotation.y = rot_y
-		var board_mat := StandardMaterial3D.new()
-		board_mat.albedo_color = wall_color
-		board_mi.material_override = board_mat
-		add_child(board_mi)
+func _make_solid_material(color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	return mat
 
-		# Glass mesh on top of boards
-		var glass_mi := MeshInstance3D.new()
-		var glass_box := BoxMesh.new()
-		glass_box.size = Vector3(wall_thickness, glass_height, seg_length)
-		glass_mi.mesh = glass_box
-		glass_mi.position = Vector3(mid_xz.x, wall_height + glass_height / 2.0, mid_xz.z)
-		glass_mi.rotation.y = rot_y
-		glass_mi.material_override = _make_glass_material()
-		add_child(glass_mi)
+func _add_corner_ring(center: Vector3, a0: float, a1: float,
+		r_in: float, r_out: float, y_bot: float, y_top: float,
+		material: Material) -> void:
+	# Build the four point rows around the arc — inner/outer × bottom/top —
+	# plus per-vertex radial normals for the curved faces.
+	var n: int = corner_segments
+	var step: float = (a1 - a0) / float(n)
+	var ib := PackedVector3Array(); ib.resize(n + 1)
+	var it := PackedVector3Array(); it.resize(n + 1)
+	var ob := PackedVector3Array(); ob.resize(n + 1)
+	var ot := PackedVector3Array(); ot.resize(n + 1)
+	var n_in := PackedVector3Array();  n_in.resize(n + 1)
+	var n_out := PackedVector3Array(); n_out.resize(n + 1)
+	for i in range(n + 1):
+		var a: float = a0 + i * step
+		var ca: float = cos(a)
+		var sa: float = sin(a)
+		ib[i] = Vector3(center.x + r_in  * ca, y_bot, center.z + r_in  * sa)
+		it[i] = Vector3(center.x + r_in  * ca, y_top, center.z + r_in  * sa)
+		ob[i] = Vector3(center.x + r_out * ca, y_bot, center.z + r_out * sa)
+		ot[i] = Vector3(center.x + r_out * ca, y_top, center.z + r_out * sa)
+		n_in[i]  = Vector3(-ca, 0.0, -sa)
+		n_out[i] = Vector3( ca, 0.0,  sa)
 
-		# Cap rail (kickplate color, sits on top of glass)
-		var cap_mi := MeshInstance3D.new()
-		var cap_box := BoxMesh.new()
-		cap_box.size = Vector3(wall_thickness, CAP_RAIL_HEIGHT, seg_length)
-		cap_mi.mesh = cap_box
-		cap_mi.position = Vector3(mid_xz.x, wall_height + CAP_RAIL_HEIGHT / 2.0, mid_xz.z)
-		cap_mi.rotation.y = rot_y
-		var cap_mat := StandardMaterial3D.new()
-		cap_mat.albedo_color = cap_rail_color
-		cap_mi.material_override = cap_mat
-		add_child(cap_mi)
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	# Row pairs are ordered so the emitted quad (row_a[i], row_b[i], row_b[i+1],
+	# row_a[i+1]) winds CCW when viewed from the face's outward-normal side. All
+	# call sites pass increasing angles, so this ordering is consistent across
+	# the four corners.
+	_emit_arc_strip(verts, normals, uvs, indices, it, ib, n_in)              # inner face (toward rink center)
+	_emit_arc_strip(verts, normals, uvs, indices, ob, ot, n_out)             # outer face
+	_emit_arc_strip_flat(verts, normals, uvs, indices, ot, it, Vector3.UP)   # top cap
+	_emit_arc_strip_flat(verts, normals, uvs, indices, ib, ob, Vector3.DOWN) # bottom cap
 
-		# Goal line (or other) stripes — flat ArrayMesh quad on the inner face, no depth.
-		for stripe in stripe_zs:
-			var sz: float = stripe["z"]
-			if (p1.z <= sz and sz <= p2.z) or (p2.z <= sz and sz <= p1.z):
-				var t: float = (sz - p1.z) / (p2.z - p1.z) if absf(p2.z - p1.z) > 0.001 else 0.5
-				var hit := p1 + t * (p2 - p1)
-				# Z-perpendicular stripe at exact goal-line Z.
-				# The old tangent-aligned approach subtracted outward.z * wall_thickness/2
-				# from hit.z (~9 cm at the 37° corner angle), visually offsetting the stripe
-				# from the ice goal line. Using sz directly for Z and a Z-facing quad fixes that.
-				var inward: float = wall_thickness / 2.0 + 0.001
-				var x_base := hit.x - inward / outward.x if absf(outward.x) > 0.01 else hit.x - outward.x * inward
-				var base := Vector3(x_base, 0.0, sz + board_stripe_z_nudge * signf(sz))
-				var half_sw: float = 0.025
-				var v0 := base + Vector3(-dir.x * half_sw, 0.0,         -dir.z * half_sw)
-				var v1 := base + Vector3( dir.x * half_sw, 0.0,          dir.z * half_sw)
-				var v2 := base + Vector3( dir.x * half_sw, wall_height,  dir.z * half_sw)
-				var v3 := base + Vector3(-dir.x * half_sw, wall_height, -dir.z * half_sw)
-				var norm_in := Vector3(-outward.x, 0.0, -outward.z)
-				var s_arrays: Array = []
-				s_arrays.resize(Mesh.ARRAY_MAX)
-				s_arrays[Mesh.ARRAY_VERTEX]  = PackedVector3Array([v0, v1, v2, v3])
-				s_arrays[Mesh.ARRAY_NORMAL]  = PackedVector3Array([norm_in, norm_in, norm_in, norm_in])
-				s_arrays[Mesh.ARRAY_TEX_UV]  = PackedVector2Array([Vector2(0,1), Vector2(1,1), Vector2(1,0), Vector2(0,0)])
-				s_arrays[Mesh.ARRAY_INDEX]   = PackedInt32Array([0, 1, 2, 0, 2, 3])
-				var s_mesh := ArrayMesh.new()
-				s_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s_arrays)
-				var stripe_mi := MeshInstance3D.new()
-				stripe_mi.mesh = s_mesh
-				var stripe_mat := StandardMaterial3D.new()
-				stripe_mat.albedo_color = stripe["color"]
-				stripe_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				stripe_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-				stripe_mat.render_priority = 1
-				stripe_mi.material_override = stripe_mat
-				add_child(stripe_mi)
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX]  = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
-		# Full-height collision
-		var total_height := wall_height + glass_height
-		var col := CollisionShape3D.new()
-		var shape := BoxShape3D.new()
-		shape.size = Vector3(wall_thickness, total_height, seg_length)
-		col.shape = shape
-		col.position = Vector3(mid_xz.x, total_height / 2.0, mid_xz.z)
-		col.rotation.y = rot_y
-		add_child(col)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = material
+	add_child(mi)
+
+func _emit_arc_strip(verts: PackedVector3Array, normals: PackedVector3Array,
+		uvs: PackedVector2Array, indices: PackedInt32Array,
+		row_a: PackedVector3Array, row_b: PackedVector3Array,
+		per_vert_normals: PackedVector3Array) -> void:
+	var base: int = verts.size()
+	var n: int = row_a.size()
+	for i in range(n):
+		verts.append(row_a[i])
+		verts.append(row_b[i])
+		normals.append(per_vert_normals[i])
+		normals.append(per_vert_normals[i])
+		var u: float = float(i) / float(n - 1)
+		uvs.append(Vector2(u, 1.0))
+		uvs.append(Vector2(u, 0.0))
+	for i in range(n - 1):
+		var a: int = base + i * 2
+		var b: int = base + (i + 1) * 2
+		indices.append(a); indices.append(a + 1); indices.append(b + 1)
+		indices.append(a); indices.append(b + 1); indices.append(b)
+
+func _emit_arc_strip_flat(verts: PackedVector3Array, normals: PackedVector3Array,
+		uvs: PackedVector2Array, indices: PackedInt32Array,
+		row_a: PackedVector3Array, row_b: PackedVector3Array,
+		normal: Vector3) -> void:
+	var base: int = verts.size()
+	var n: int = row_a.size()
+	for i in range(n):
+		verts.append(row_a[i])
+		verts.append(row_b[i])
+		normals.append(normal)
+		normals.append(normal)
+		var u: float = float(i) / float(n - 1)
+		uvs.append(Vector2(u, 1.0))
+		uvs.append(Vector2(u, 0.0))
+	for i in range(n - 1):
+		var a: int = base + i * 2
+		var b: int = base + (i + 1) * 2
+		indices.append(a); indices.append(a + 1); indices.append(b + 1)
+		indices.append(a); indices.append(b + 1); indices.append(b)
+
+func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionary) -> void:
+	# Flat quad on the inner face at the arc angle where the stripe's world-Z
+	# crosses the curve. Width is 2 × half_sw along the arc tangent; small enough
+	# (~0.34° of arc) that flat vs curved is imperceptible.
+	var sz: float = stripe["z"]
+	var color: Color = stripe["color"]
+	var s_arg: float = (sz - center.z) / corner_radius
+	if absf(s_arg) >= 1.0:
+		return
+	var lo: float = minf(a0, a1)
+	var hi: float = maxf(a0, a1)
+	# sin(a) = s_arg has two principal solutions; offset by ±2π handles corners
+	# whose arc spans live outside [-π, π] (e.g. the -x,-z corner at [π, 3π/2]).
+	var a_primary: float = asin(s_arg)
+	var a_secondary: float = PI - a_primary
+	var a_cross: float = NAN
+	for cand in [
+		a_primary, a_secondary,
+		a_primary - TAU, a_secondary - TAU,
+		a_primary + TAU, a_secondary + TAU,
+	]:
+		if cand >= lo - 1e-6 and cand <= hi + 1e-6:
+			a_cross = cand
+			break
+	if is_nan(a_cross):
+		return
+
+	var ca: float = cos(a_cross)
+	var sa: float = sin(a_cross)
+	var r_face: float = corner_radius - wall_thickness / 2.0
+	var inset: float = 0.001
+	# Place stripe center on the inner face, then force its world-Z to align
+	# exactly with the ice goal-line (with optional nudge). The X follows from
+	# the arc.
+	var base_pt: Vector3 = center + Vector3(
+		(r_face - inset) * ca, 0.0, (r_face - inset) * sa)
+	base_pt.z = sz + board_stripe_z_nudge * signf(sz)
+	var tangent: Vector3 = Vector3(-sa, 0.0, ca)
+	var inward: Vector3 = Vector3(-ca, 0.0, -sa)
+	var half_sw: float = 0.025
+	var v0: Vector3 = base_pt + Vector3(-tangent.x * half_sw, 0.0,         -tangent.z * half_sw)
+	var v1: Vector3 = base_pt + Vector3( tangent.x * half_sw, 0.0,          tangent.z * half_sw)
+	var v2: Vector3 = base_pt + Vector3( tangent.x * half_sw, wall_height,  tangent.z * half_sw)
+	var v3: Vector3 = base_pt + Vector3(-tangent.x * half_sw, wall_height, -tangent.z * half_sw)
+
+	var s_arrays: Array = []
+	s_arrays.resize(Mesh.ARRAY_MAX)
+	s_arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([v0, v1, v2, v3])
+	s_arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array([inward, inward, inward, inward])
+	s_arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array([Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)])
+	s_arrays[Mesh.ARRAY_INDEX]  = PackedInt32Array([0, 1, 2, 0, 2, 3])
+	var s_mesh := ArrayMesh.new()
+	s_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s_arrays)
+
+	var mi := MeshInstance3D.new()
+	mi.mesh = s_mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 1
+	mi.material_override = mat
+	add_child(mi)
+
+func _add_corner_collision(center: Vector3, a0: float, a1: float,
+		r_in: float, r_out: float, y_bot: float, y_top: float) -> void:
+	# Single ConcavePolygonShape3D wrapping the corner. With one collider per
+	# corner (instead of N boxes), corner_segments is now purely a visual knob —
+	# physics is the same regardless. End caps are omitted because the adjacent
+	# straight walls' box colliders butt up against them.
+	var n: int = corner_segments
+	var step: float = (a1 - a0) / float(n)
+	var ib: Array[Vector3] = []; ib.resize(n + 1)
+	var it: Array[Vector3] = []; it.resize(n + 1)
+	var ob: Array[Vector3] = []; ob.resize(n + 1)
+	var ot: Array[Vector3] = []; ot.resize(n + 1)
+	for i in range(n + 1):
+		var a: float = a0 + i * step
+		var ca: float = cos(a)
+		var sa: float = sin(a)
+		ib[i] = Vector3(center.x + r_in  * ca, y_bot, center.z + r_in  * sa)
+		it[i] = Vector3(center.x + r_in  * ca, y_top, center.z + r_in  * sa)
+		ob[i] = Vector3(center.x + r_out * ca, y_bot, center.z + r_out * sa)
+		ot[i] = Vector3(center.x + r_out * ca, y_top, center.z + r_out * sa)
+
+	var tris := PackedVector3Array()
+	for i in range(n):
+		# Inner face — front toward rink center
+		tris.append(it[i]); tris.append(ib[i]);   tris.append(ib[i + 1])
+		tris.append(it[i]); tris.append(ib[i + 1]); tris.append(it[i + 1])
+		# Outer face
+		tris.append(ob[i]); tris.append(ot[i]);   tris.append(ot[i + 1])
+		tris.append(ob[i]); tris.append(ot[i + 1]); tris.append(ob[i + 1])
+		# Top cap
+		tris.append(ot[i]); tris.append(it[i]);   tris.append(it[i + 1])
+		tris.append(ot[i]); tris.append(it[i + 1]); tris.append(ot[i + 1])
+		# Bottom cap
+		tris.append(ib[i]); tris.append(ob[i]);   tris.append(ob[i + 1])
+		tris.append(ib[i]); tris.append(ob[i + 1]); tris.append(ib[i + 1])
+
+	var shape := ConcavePolygonShape3D.new()
+	shape.set_faces(tris)
+	var col := CollisionShape3D.new()
+	col.shape = shape
+	add_child(col)
