@@ -69,7 +69,7 @@ static func clamp_to_rink_inner(world_xz: Vector2) -> Vector2:
 	return world_xz
 
 # ── Puck ──────────────────────────────────────────────────────────────────────
-const PUCK_START_POS: Vector3 = Vector3(0, 0.0127, 0)
+const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
 const ICE_FRICTION: float = 0.01
 # Standard gravity. Used by AI trajectory prediction to convert the
 # dimensionless ICE_FRICTION coefficient into a deceleration: a puck
