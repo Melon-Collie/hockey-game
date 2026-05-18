@@ -19,9 +19,11 @@ extends Node3D
 	set(v):
 		corner_radius = v
 		_request_rebuild()
-# Top of the glass cap rail. Boards (1.07) + glass (1.1) + cap (0.05) = 2.22.
-# First terrace tread sits at this height.
-@export var stands_base_y: float = 2.22:
+# Seat height of the first row. Fans look over the boards (Y=1.07) and
+# through the glass (Y=1.07–2.22). With a seated body+head ~0.69 m tall,
+# tread_y=0.8 puts eyes at ~1.5 m — mid-glass, behind the protective
+# barrier, exactly how rinkside seats work.
+@export var stands_base_y: float = 0.8:
 	set(v):
 		stands_base_y = v
 		_request_rebuild()
@@ -71,13 +73,51 @@ extends Node3D
 	set(v):
 		spectator_y_jitter = v
 		_request_rebuild()
+
+@export_group("Fan Mix")
+# Crowd composition. Home + away + neutral should sum to 1.0; the neutral
+# fraction is derived as max(0, 1 - home - away). Defaults model a typical
+# home arena: a wall of home colors, a sprinkling of neutrals, and a small
+# visiting-fan section's worth of away colors scattered through.
+@export_range(0.0, 1.0) var home_fan_ratio: float = 0.65:
+	set(v):
+		home_fan_ratio = v
+		_request_rebuild()
+@export_range(0.0, 1.0) var away_fan_ratio: float = 0.08:
+	set(v):
+		away_fan_ratio = v
+		_request_rebuild()
+# Of team fans, fraction wearing secondary instead of primary. Keeps the
+# bowl from reading as a solid block of one shade.
+@export_range(0.0, 1.0) var secondary_color_ratio: float = 0.30:
+	set(v):
+		secondary_color_ratio = v
+		_request_rebuild()
+# Fraction of team fans whose head matches the team color (caps / face paint).
+# Most heads use the neutral skin/hat palette regardless.
+@export_range(0.0, 1.0) var team_cap_ratio: float = 0.22:
+	set(v):
+		team_cap_ratio = v
+		_request_rebuild()
+
+@export_group("Team Colors")
+# Initial defaults; GameManager re-runs setup() with real team colors once
+# TeamColorRegistry resolves them after _spawn_world.
 @export var home_color: Color = Color(0.85, 0.20, 0.22):
 	set(v):
 		home_color = v
 		_request_rebuild()
+@export var home_color_secondary: Color = Color(0.97, 0.78, 0.20):
+	set(v):
+		home_color_secondary = v
+		_request_rebuild()
 @export var away_color: Color = Color(0.18, 0.40, 0.85):
 	set(v):
 		away_color = v
+		_request_rebuild()
+@export var away_color_secondary: Color = Color(0.92, 0.92, 0.95):
+	set(v):
+		away_color_secondary = v
 		_request_rebuild()
 
 @export_group("")
@@ -90,28 +130,48 @@ const _SEED: int = 31337
 # Spectator body dimensions — stacked boxes matching the skater art style.
 const _BODY_SIZE: Vector3 = Vector3(0.28, 0.45, 0.28)
 const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
-# Fraction of spectators that get a neutral (non-team) color so the bowl
-# doesn't read as a solid wall of red/blue.
-const _NEUTRAL_RATIO: float = 0.35
 
-var _neutral_palette: Array[Color] = [
-	Color(0.25, 0.25, 0.28),
-	Color(0.55, 0.45, 0.35),
-	Color(0.78, 0.74, 0.70),
-	Color(0.40, 0.36, 0.32),
-	Color(0.92, 0.88, 0.85),
+# Civilian shirts/coats for the neutral fan slice.
+var _neutral_body_palette: Array[Color] = [
+	Color(0.25, 0.25, 0.28),  # charcoal
+	Color(0.55, 0.45, 0.35),  # khaki
+	Color(0.78, 0.74, 0.70),  # cream
+	Color(0.40, 0.36, 0.32),  # taupe
+	Color(0.92, 0.88, 0.85),  # off-white
+	Color(0.35, 0.40, 0.45),  # slate
+	Color(0.62, 0.30, 0.20),  # rust
+]
+# Skin tones + hat colors used for the head MultiMesh. Independent of body
+# color (no team correlation) so the bowl reads as a sea of people, not a
+# wall of identical avatars.
+var _head_palette: Array[Color] = [
+	Color(0.94, 0.82, 0.70),  # light skin
+	Color(0.85, 0.69, 0.55),  # medium-light skin
+	Color(0.72, 0.55, 0.42),  # medium skin
+	Color(0.55, 0.40, 0.30),  # tan
+	Color(0.40, 0.28, 0.22),  # dark skin
+	Color(0.12, 0.10, 0.10),  # black hair / dark cap
+	Color(0.32, 0.22, 0.16),  # brown hair
+	Color(0.78, 0.74, 0.68),  # grey hair / pale cap
 ]
 
 
 func _ready() -> void:
 	_rebuild()
+	var gm: Node = get_node_or_null("/root/GameManager")
+	if gm != null and gm.has_signal("team_colors_ready"):
+		gm.team_colors_ready.connect(setup)
 
 
-# Called from GameManager once team colors are known. Re-tints the crowd
-# without rebuilding terrace geometry (full rebuild for simplicity — cheap).
-func setup(home: Color, away: Color) -> void:
-	home_color = home
-	away_color = away
+# Called from GameManager.team_colors_ready once TeamColorRegistry resolves
+# the live team colors (and again on any mid-game color change). Rebuild is
+# the full path — cheap, and keeps the per-instance roll deterministic.
+func setup(home_primary: Color, home_secondary: Color,
+		away_primary: Color, away_secondary: Color) -> void:
+	home_color = home_primary
+	home_color_secondary = home_secondary
+	away_color = away_primary
+	away_color_secondary = away_secondary
 	_rebuild()
 
 
@@ -271,13 +331,24 @@ func _append_arc(pts: PackedVector2Array, center: Vector2, radius: float,
 # ── Spectator MultiMesh ──────────────────────────────────────────────────────
 
 func _build_spectators() -> void:
-	var mesh: ArrayMesh = _build_spectator_mesh()
-	var mm: MultiMesh = MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = mesh
+	# Two MultiMesh instances share transforms: bodies tinted with the
+	# team-mix color, heads tinted from the skin/hat palette. One extra
+	# draw call vs. a combined mesh, but it lets the head pick a color
+	# independent of the body without a custom shader.
+	var body_mesh: ArrayMesh = _build_body_mesh()
+	var head_mesh: ArrayMesh = _build_head_mesh()
+	var body_mm: MultiMesh = MultiMesh.new()
+	body_mm.transform_format = MultiMesh.TRANSFORM_3D
+	body_mm.use_colors = true
+	body_mm.mesh = body_mesh
+	var head_mm: MultiMesh = MultiMesh.new()
+	head_mm.transform_format = MultiMesh.TRANSFORM_3D
+	head_mm.use_colors = true
+	head_mm.mesh = head_mesh
+
 	var transforms: Array[Transform3D] = []
-	var colors: Array[Color] = []
+	var body_colors: Array[Color] = []
+	var head_colors: Array[Color] = []
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = _SEED
 	for i: int in num_terraces:
@@ -297,34 +368,59 @@ func _build_spectators() -> void:
 					+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
 			var basis: Basis = Basis(Vector3.UP, yaw)
 			transforms.append(Transform3D(basis, pos))
-			colors.append(_pick_color(p, rng))
-	mm.instance_count = transforms.size()
-	for i: int in transforms.size():
-		mm.set_instance_transform(i, transforms[i])
-		mm.set_instance_color(i, colors[i])
-	var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
-	mmi.multimesh = mm
-	mmi.name = "Spectators"
-	add_child(mmi)
+			var picked: Array[Color] = _pick_spectator_colors(rng)
+			body_colors.append(picked[0])
+			head_colors.append(picked[1])
+
+	var n: int = transforms.size()
+	body_mm.instance_count = n
+	head_mm.instance_count = n
+	for i: int in n:
+		body_mm.set_instance_transform(i, transforms[i])
+		body_mm.set_instance_color(i, body_colors[i])
+		head_mm.set_instance_transform(i, transforms[i])
+		head_mm.set_instance_color(i, head_colors[i])
+
+	var body_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+	body_mmi.multimesh = body_mm
+	body_mmi.name = "SpectatorBodies"
+	add_child(body_mmi)
+	var head_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+	head_mmi.multimesh = head_mm
+	head_mmi.name = "SpectatorHeads"
+	add_child(head_mmi)
 
 
-# Combined body + head box mesh, drawn once per MultiMesh instance.
-func _build_spectator_mesh() -> ArrayMesh:
+# Body box, origin at the spectator's base (feet on the tread).
+func _build_body_mesh() -> ArrayMesh:
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
-	# Body — origin at base, extends upward.
 	_emit_box(st, Vector3(0.0, _BODY_SIZE.y * 0.5, 0.0), _BODY_SIZE)
-	# Head — centered above body, with a small neck gap.
+	st.generate_normals()
+	st.set_material(_spectator_material())
+	return st.commit()
+
+
+# Head box, positioned above the body's resting height so it lines up when
+# applied with the same transform as the body MultiMesh.
+func _build_head_mesh() -> ArrayMesh:
+	var st: SurfaceTool = SurfaceTool.new()
+	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
 	var head_center_y: float = _BODY_SIZE.y + _HEAD_SIZE.y * 0.5 + 0.02
 	_emit_box(st, Vector3(0.0, head_center_y, 0.0), _HEAD_SIZE)
 	st.generate_normals()
-	# Vertex color is white so per-instance MultiMesh color multiplies cleanly.
+	st.set_material(_spectator_material())
+	return st.commit()
+
+
+# Shared material — vertex color (white) multiplied by the per-instance
+# MultiMesh color produces the final albedo. Both bodies and heads use it.
+func _spectator_material() -> StandardMaterial3D:
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.albedo_color = Color.WHITE
 	mat.vertex_color_use_as_albedo = true
 	mat.roughness = 0.85
-	st.set_material(mat)
-	return st.commit()
+	return mat
 
 
 func _emit_box(st: SurfaceTool, center: Vector3, size: Vector3) -> void:
@@ -388,17 +484,35 @@ func _resample_uniform(samples: PackedVector2Array, spacing: float) -> PackedVec
 	return out
 
 
-# Color sampling: split the bowl by Z so the long sides become home/away
-# sections; end-zone arcs and a small fraction of every section get neutrals
-# so it doesn't read as two solid color blocks.
-func _pick_color(xz: Vector2, rng: RandomNumberGenerator) -> Color:
-	if rng.randf() < _NEUTRAL_RATIO:
-		return _neutral_palette[rng.randi() % _neutral_palette.size()]
-	# +Z half = home side, -Z half = away. Boundary fuzzed by a small XZ noise
-	# to avoid a hard line at Z=0.
-	var fuzz: float = rng.randf_range(-1.5, 1.5)
-	var team_base: Color = home_color if (xz.y + fuzz) > 0.0 else away_color
-	var shade: float = rng.randf_range(-0.18, 0.18)
-	if shade > 0.0:
-		return team_base.lightened(shade)
-	return team_base.darkened(-shade)
+# Roll a body + head color pair for one spectator. Returns [body, head].
+# Body roll: home_fan_ratio of home colors, away_fan_ratio of away colors,
+# rest neutral civilian shirts. Real arenas skew heavily toward home, with
+# only a small visiting-supporters section, so neutrals fill the gap.
+# Within each team slice, secondary_color_ratio swap to the secondary tint.
+# Head roll: skin/hat palette by default, with a small team_cap_ratio chance
+# of a team-colored hat for committed fans.
+func _pick_spectator_colors(rng: RandomNumberGenerator) -> Array[Color]:
+	var roll: float = rng.randf()
+	var body: Color
+	var team_loyalty: Color = Color(0, 0, 0, 0)  # alpha=0 sentinel = neutral
+	if roll < home_fan_ratio:
+		var base: Color = home_color_secondary if rng.randf() < secondary_color_ratio else home_color
+		body = _shade(base, rng)
+		team_loyalty = home_color
+	elif roll < home_fan_ratio + away_fan_ratio:
+		var base: Color = away_color_secondary if rng.randf() < secondary_color_ratio else away_color
+		body = _shade(base, rng)
+		team_loyalty = away_color
+	else:
+		body = _neutral_body_palette[rng.randi() % _neutral_body_palette.size()]
+	var head: Color
+	if team_loyalty.a > 0.0 and rng.randf() < team_cap_ratio:
+		head = _shade(team_loyalty, rng)
+	else:
+		head = _head_palette[rng.randi() % _head_palette.size()]
+	return [body, head]
+
+
+func _shade(base: Color, rng: RandomNumberGenerator) -> Color:
+	var s: float = rng.randf_range(-0.18, 0.18)
+	return base.lightened(s) if s > 0.0 else base.darkened(-s)
