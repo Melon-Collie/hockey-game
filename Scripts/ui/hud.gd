@@ -620,7 +620,7 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	# secondary tints every piece of text on top so the whole goal moment
 	# reads as that team's broadcast wash.
 	var team_colors: Dictionary = TeamColorRegistry.get_colors(
-			GameManager.teams[scoring_team.team_id].color_id, scoring_team.team_id)
+			GameManager.teams[scoring_team.team_id].color_slot, scoring_team.team_id)
 	var team_primary: Color = team_colors.primary
 	var team_secondary: Color = team_colors.secondary
 
@@ -666,7 +666,7 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 
 func _initial_team_primary(team_id: int) -> Color:
 	if GameManager.teams.size() > team_id:
-		return TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
+		return TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id).primary
 	return Color(0.5, 0.5, 0.5)  # placeholder; team_colors_ready overwrites
 
 func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:

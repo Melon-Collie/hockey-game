@@ -350,7 +350,7 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 		return
 	if _is_local_spectator:
 		_teardown_spectator_camera()
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	_registry.spawn(peer_id, team_slot, teams[team_id],
 			jersey_color, helmet_color, pants_color,
@@ -381,8 +381,8 @@ func on_player_connected(peer_id: int) -> void:
 		"period_duration": _state_machine.period_duration,
 		"ot_enabled": _state_machine.ot_enabled,
 		"ot_duration": _state_machine.ot_duration,
-		"home_color_id": NetworkManager.pending_home_color_id,
-		"away_color_id": NetworkManager.pending_away_color_id,
+		"home_color_slot": NetworkManager.pending_home_color_slot,
+		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"rule_set": _state_machine.rule_set,
 	}
 	# Spectator branch: declared via pending_lobby_slots[peer_id].team_id == -1.
@@ -452,7 +452,7 @@ func sync_existing_players(player_data: Array) -> void:
 		var is_left: bool = entry[6] if entry.size() > 6 else true
 		var p_name: String = entry[7] if entry.size() > 7 else "Player"
 		var p_number: int = entry[8] if entry.size() > 8 else 10
-		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 		_registry.spawn(peer_id, team_slot, teams[team_id],
 				jersey_color, helmet_color, pants_color,
@@ -471,7 +471,7 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		is_left_handed: bool, player_name: String, jersey_number: int = 10) -> void:
 	if peer_id == NetworkManager.local_peer_id() or _state_machine == null:
 		return
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	_registry.spawn(peer_id, team_slot, teams[team_id],
 			jersey_color, helmet_color, pants_color,
@@ -517,10 +517,10 @@ func _spawn_world() -> void:
 func _create_teams() -> void:
 	var t0 := Team.new()
 	t0.team_id = 0
-	t0.color_id = NetworkManager.pending_home_color_id
+	t0.color_slot = NetworkManager.pending_home_color_slot
 	var t1 := Team.new()
 	t1.team_id = 1
-	t1.color_id = NetworkManager.pending_away_color_id
+	t1.color_slot = NetworkManager.pending_away_color_slot
 	teams = [t0, t1]
 
 
@@ -570,7 +570,7 @@ func _spawn_goalies() -> void:
 	teams[0].goalie_controller = result.bottom_controller
 	for team_id: int in [0, 1]:
 		var goalie: Goalie = result.bottom_goalie if team_id == 0 else result.top_goalie
-		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads)
 
 
@@ -684,8 +684,8 @@ func _wire_subsystems() -> void:
 	_debug_overlay = NetworkDebugOverlay.new()
 	add_child(_debug_overlay)
 
-	var _home_c := TeamColorRegistry.get_colors(teams[0].color_id, 0)
-	var _away_c := TeamColorRegistry.get_colors(teams[1].color_id, 1)
+	var _home_c := TeamColorRegistry.get_colors(teams[0].color_slot, 0)
+	var _away_c := TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 	team_colors_ready.emit(_home_c.primary, _home_c.secondary, _away_c.primary, _away_c.secondary)
 
 	_wire_sound_signals()
@@ -1136,8 +1136,8 @@ func _build_replay_header() -> Dictionary:
 		"period_duration": _state_machine.period_duration if _state_machine != null else GameRules.PERIOD_DURATION,
 		"ot_enabled": _state_machine.ot_enabled if _state_machine != null else GameRules.OT_ENABLED,
 		"rule_set": _state_machine.rule_set if _state_machine != null else GameRules.DEFAULT_RULE_SET,
-		"home_color_id": NetworkManager.pending_home_color_id,
-		"away_color_id": NetworkManager.pending_away_color_id,
+		"home_color_slot": NetworkManager.pending_home_color_slot,
+		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"recorded_by_peer_id": NetworkManager.local_peer_id(),
 		"roster": roster,
 	}
@@ -1230,7 +1230,7 @@ func _on_replay_player_left_event(record: PlayerRecord) -> void:
 func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 		is_left: bool, p_name: String, p_number: int, is_local: bool) -> Dictionary:
 	var team: Team = teams[team_id]
-	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	if not is_local:
 		NetworkManager.send_slot_assignment(peer_id, team_slot, team_id,
@@ -1247,7 +1247,7 @@ func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 
 
 func _spawn_local(peer_id: int, team_slot: int, team: Team) -> void:
-	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team.team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team.team_id)
 	_registry.spawn(peer_id, team_slot, team,
 			colors.jersey, colors.helmet, colors.pants,
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe, colors.socks, colors.socks_stripe,
@@ -1960,26 +1960,26 @@ func _on_local_identity_changed(p_name: String, p_number: int, p_is_left: bool) 
 # is always on the home team in free play, so we re-skin its uniform and
 # the home goalie. If apply_preferred_color also re-rolled the away color
 # to avoid a collision, the away goalie gets re-tinted too.
-func _on_local_preferred_color_changed(home_color_id: String, away_color_id: String) -> void:
+func _on_local_preferred_color_changed(home_color_slot: int, away_color_slot: int) -> void:
 	if teams.size() < 2:
 		return
-	var home_changed: bool = teams[0].color_id != home_color_id
-	var away_changed: bool = teams[1].color_id != away_color_id
+	var home_changed: bool = teams[0].color_slot != home_color_slot
+	var away_changed: bool = teams[1].color_slot != away_color_slot
 	if not home_changed and not away_changed:
 		return
-	teams[0].color_id = home_color_id
-	teams[1].color_id = away_color_id
+	teams[0].color_slot = home_color_slot
+	teams[1].color_slot = away_color_slot
 	if home_changed:
 		_apply_team_colors_to_actors(0)
 	if away_changed:
 		_apply_team_colors_to_actors(1)
-	var home_c: Dictionary = TeamColorRegistry.get_colors(teams[0].color_id, 0)
-	var away_c: Dictionary = TeamColorRegistry.get_colors(teams[1].color_id, 1)
+	var home_c: Dictionary = TeamColorRegistry.get_colors(teams[0].color_slot, 0)
+	var away_c: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 	team_colors_ready.emit(home_c.primary, home_c.secondary, away_c.primary, away_c.secondary)
 
 
 func _apply_team_colors_to_actors(team_id: int) -> void:
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	# `goalies` is stored positionally ([top, bottom]) while team_id is
 	# semantic (0 = home = bottom net, 1 = away = top net) — indexing the
 	# array directly by team_id flips the two. Route through the team's
@@ -2127,7 +2127,7 @@ func _spawn_bots_from_lobby() -> void:
 		if _slot_already_taken(team_id, team_slot):
 			continue
 		var team: Team = teams[team_id]
-		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
+		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
 		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team)
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a

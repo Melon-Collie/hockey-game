@@ -7,7 +7,7 @@ extends Control
 signal name_changed(new_name: String)
 signal jersey_number_changed(new_number: int)
 signal handedness_changed(is_left: bool)
-signal preferred_color_changed(color_id: String)
+signal preferred_color_changed(color_slot: int)
 
 # Controls — kept as refs so Cancel can restore them from the snapshot.
 var _name_field: LineEdit = null
@@ -16,14 +16,14 @@ var _number_field: LineEdit = null
 var _number_warning: Label = null
 var _left_btn: Button = null
 var _right_btn: Button = null
-var _color_btn: OptionButton = null
+var _color_dropdown: PaletteDropdown = null
 var _apply_btn: Button = null
 
 # Pending state — what Apply will commit.
 var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
-var _pending_color_id: String = ""
+var _pending_color_slot: int = -1
 var _name_valid: bool = true
 var _number_valid: bool = true
 
@@ -250,15 +250,14 @@ func _build_team_section(vbox: VBoxContainer) -> void:
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(label)
 
-	var initial_id: String = PlayerPrefs.preferred_color_id
-	if initial_id.is_empty():
-		initial_id = TeamColorRegistry.DEFAULT_HOME_ID
-	_color_btn = MenuStyle.color_option_btn(initial_id, Vector2(200, 48), 18)
-	SoundManager.wire_button(_color_btn)
-	row.add_child(_color_btn)
+	var initial_slot: int = PlayerPrefs.preferred_color_slot
+	if initial_slot < 0:
+		initial_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
+	_color_dropdown = PaletteDropdown.new(initial_slot, Vector2(200, 48))
+	row.add_child(_color_dropdown)
 
-	_color_btn.item_selected.connect(func(idx: int) -> void:
-		_pending_color_id = TeamColorRegistry.get_all_ids()[idx]
+	_color_dropdown.selected.connect(func(slot: int) -> void:
+		_pending_color_slot = slot
 		_update_apply_state())
 
 
@@ -293,7 +292,7 @@ func _update_apply_state() -> void:
 	var changed: bool = (_pending_name != _snapshot.get("name", "")
 		or _pending_number != _snapshot.get("number", 0)
 		or _pending_is_left != _snapshot.get("is_left", false)
-		or _pending_color_id != _snapshot.get("color_id", ""))
+		or _pending_color_slot != _snapshot.get("color_slot", -1))
 	_apply_btn.disabled = not changed or not _name_valid or not _number_valid
 
 
@@ -303,7 +302,7 @@ func _apply() -> void:
 	var name_changed_b: bool = _pending_name != _snapshot.get("name", "")
 	var number_changed_b: bool = _pending_number != _snapshot.get("number", 0)
 	var hand_changed_b: bool = _pending_is_left != _snapshot.get("is_left", false)
-	var color_changed_b: bool = _pending_color_id != _snapshot.get("color_id", "")
+	var color_changed_b: bool = _pending_color_slot != _snapshot.get("color_slot", -1)
 	if name_changed_b:
 		PlayerPrefs.player_name = _pending_name
 		name_changed.emit(_pending_name)
@@ -319,11 +318,11 @@ func _apply() -> void:
 		# live skater updates without a respawn.
 		NetworkManager.apply_local_identity(_pending_name, _pending_number, _pending_is_left)
 	if color_changed_b:
-		# apply_preferred_color writes PlayerPrefs.preferred_color_id and
+		# apply_preferred_color writes PlayerPrefs.preferred_color_slot and
 		# emits local_preferred_color_changed so GameManager can re-tint
 		# the home team's actors and re-roll away if the new home collides.
-		NetworkManager.apply_preferred_color(_pending_color_id)
-		preferred_color_changed.emit(_pending_color_id)
+		NetworkManager.apply_preferred_color(_pending_color_slot)
+		preferred_color_changed.emit(_pending_color_slot)
 	PlayerPrefs.save()
 	visible = false
 
@@ -339,16 +338,13 @@ func _restore_from_snapshot() -> void:
 	_pending_name = _snapshot.get("name", "")
 	_pending_number = _snapshot.get("number", 0)
 	_pending_is_left = _snapshot.get("is_left", false)
-	_pending_color_id = _snapshot.get("color_id", "")
+	_pending_color_slot = _snapshot.get("color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
 	_right_btn.button_pressed = not _pending_is_left
-	if _color_btn != null:
-		var ids: Array[String] = TeamColorRegistry.get_all_ids()
-		var idx: int = ids.find(_pending_color_id)
-		if idx >= 0:
-			_color_btn.select(idx)
+	if _color_dropdown != null:
+		_color_dropdown.set_selected(_pending_color_slot)
 	_name_warning.visible = false
 	_number_warning.visible = false
 	_name_valid = true
@@ -362,14 +358,14 @@ func _on_overlay_clicked(event: InputEvent) -> void:
 
 
 func open() -> void:
-	var saved_color: String = PlayerPrefs.preferred_color_id
-	if saved_color.is_empty():
-		saved_color = TeamColorRegistry.DEFAULT_HOME_ID
+	var saved_slot: int = PlayerPrefs.preferred_color_slot
+	if saved_slot < 0:
+		saved_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
 	_snapshot = {
 		"name": PlayerPrefs.player_name,
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
-		"color_id": saved_color,
+		"color_slot": saved_slot,
 	}
 	_restore_from_snapshot()
 	visible = true

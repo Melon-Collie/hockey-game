@@ -181,7 +181,7 @@ func _rebuild_period_grid(num_periods: int) -> void:
 		var label: String = "AWAY" if team_id == 1 else "HOME"
 		var primary: Color = _HEADER
 		if GameManager.teams.size() > team_id:
-			primary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id).primary
+			primary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id).primary
 		var badge := _team_badge(label, primary)
 		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
@@ -257,7 +257,7 @@ func _make_team_header(team_id: int) -> HBoxContainer:
 	# use (slot_grid_panel.gd:174-198). A single rounded panel with a
 	# border-as-stripe instead bends the stripe around the corner, which
 	# is the "curve on curve" tell we're avoiding.
-	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
