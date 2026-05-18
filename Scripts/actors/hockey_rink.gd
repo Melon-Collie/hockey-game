@@ -22,7 +22,7 @@ extends StaticBody3D
 	set(v):
 		wall_thickness = v
 		_rebuild()
-@export var corner_segments: int = 14:
+@export var corner_segments: int = 48:
 	set(v):
 		corner_segments = v
 		_rebuild()
@@ -42,17 +42,17 @@ extends StaticBody3D
 	set(v):
 		board_stripe_z_nudge = v
 		_rebuild()
-@export var kickplate_gap_z_nudge: float = 0.084:
-	set(v):
-		kickplate_gap_z_nudge = v
-		_rebuild()
 @export var kickplate_height: float = 0.20:
 	set(v):
 		kickplate_height = v
 		_rebuild()
-@export var glass_height: float = 1.1:
+@export var glass_height: float = 1.83:
 	set(v):
 		glass_height = v
+		_rebuild()
+@export var glass_thickness: float = 0.05:
+	set(v):
+		glass_thickness = v
 		_rebuild()
 @export var glass_color: Color = Color(0.85, 0.93, 1.0, 0.12):
 	set(v):
@@ -104,9 +104,33 @@ extends StaticBody3D
 	set(v):
 		_rebuild()
 
-# Kickplate protrudes this much inward from the board face toward the ice
+# Board stack, bottom to top:
+#   kickplate (yellow lip)  → white board → cap rail (blue lip) → glass
+# Kickplate and cap rail are bands that wrap the board with a small lip on
+# both the inside (puck-facing) and outside (stands-facing) — they're wider
+# in the radial / wall-thickness axis than the board itself. The cap rail is
+# the visible band at the top of the board where it meets the glass.
 const KICKPLATE_PROTRUSION: float = 0.01
+const CAP_RAIL_PROTRUSION: float = 0.01
 const CAP_RAIL_HEIGHT: float = 0.05
+# Lift the glass 1 mm above the cap rail so the glass's bottom face isn't
+# coplanar with the cap rail's top face. Glass material uses cull_disabled
+# (renders both sides), and coplanar opaque-vs-double-sided-transparent
+# z-fights along the seam.
+const GLASS_LIFT: float = 0.001
+# Recess the kickplate's bottom this far below the ice plane. The merged
+# perimeter band uses cull_disabled (renders both sides of every face), so
+# the bottom cap would z-fight the ice plane at y=0 if they were coplanar.
+# The ice plane occludes the recess from above so the visible kickplate
+# still appears to sit on the ice; the recessed bottom cap still covers
+# the small annular strip where the kickplate's outward lip protrudes past
+# the ice rectangle (otherwise you'd see through to the dark background).
+const KICKPLATE_ICE_OFFSET: float = 0.005
+# NHL spec for reference (so future tuning has a target):
+#   Board height (kickplate + white + cap): 1.07-1.22 m (42-48 in)
+#   Glass height above boards:              1.52-2.44 m (5-8 ft)
+#   Kickplate height:                       0.15-0.30 m (6-12 in)
+#   Cap rail height:                        0.05-0.08 m (2-3 in)
 
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
@@ -126,45 +150,87 @@ func _ready() -> void:
 func _rebuild() -> void:
 	if rink_length <= 0 or rink_width <= 0:
 		return
-	
+
 	for child in get_children():
 		child.queue_free()
-	
-	var half_l = rink_length / 2.0
-	var half_w = rink_width / 2.0
-	var r = corner_radius
-	
+
+	var half_l: float = rink_length / 2.0
+	var half_w: float = rink_width / 2.0
+	var r: float = corner_radius
+
 	# --- Ice surface ---
 	_add_ice(half_l)
-	
-	# --- Walls ---
-	_add_wall(
-		Vector3(half_w, wall_height / 2.0, 0),
-		Vector3(wall_thickness, wall_height, rink_length - 2.0 * r)
-	)
-	_add_wall(
-		Vector3(-half_w, wall_height / 2.0, 0),
-		Vector3(wall_thickness, wall_height, rink_length - 2.0 * r)
-	)
-	_add_wall(
-		Vector3(0, wall_height / 2.0, -half_l),
-		Vector3(rink_width - 2.0 * r, wall_height, wall_thickness)
-	)
-	_add_wall(
-		Vector3(0, wall_height / 2.0, half_l),
-		Vector3(rink_width - 2.0 * r, wall_height, wall_thickness)
-	)
-	
-	# Goal line Z: 3.35m from each end board — stripes painted on corner boards where the line meets them
+
+	# --- Walls (continuous mesh around the entire perimeter) ---
+	# Previously the four straight walls were BoxMesh / BoxShape3D and the four
+	# corners were separate ArrayMesh / ConcavePolygonShape3D rings. The seam
+	# between them produced both visual (flat-vs-smooth shading) and physical
+	# (contact-normal kink) artifacts. Merging into one continuous loop per
+	# band eliminates every seam.
+	var stations: Array = _build_perimeter_stations()
+
+	var board_top: float = wall_height - CAP_RAIL_HEIGHT
+	var rail_top: float = wall_height
+	var glass_y_bot: float = rail_top + GLASS_LIFT
+	var glass_y_top: float = glass_y_bot + glass_height
+
+	var board_half_thick: float = wall_thickness / 2.0
+	var kick_half_thick: float = board_half_thick + KICKPLATE_PROTRUSION
+	var cap_half_thick: float = board_half_thick + CAP_RAIL_PROTRUSION
+	var glass_half_thick: float = glass_thickness / 2.0
+
+	# Solid bands use cull_disabled — the ArrayMesh inner face is otherwise
+	# culled by Godot's renderer even though the world-space winding looks
+	# correct on paper. BoxMesh works because its vertex order compensates.
+	var kp_mat: StandardMaterial3D = _make_solid_material(kickplate_color)
+	kp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var board_mat: StandardMaterial3D = _make_solid_material(wall_color)
+	board_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var cap_mat: StandardMaterial3D = _make_solid_material(cap_rail_color)
+	cap_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	# Kickplate (yellow lip with full caps — top cap forms the inward and
+	# outward shelves, bottom cap closes the volume). Bottom recessed below
+	# the ice plane to avoid coplanar z-fight (see KICKPLATE_ICE_OFFSET).
+	_add_perimeter_band(stations, kick_half_thick, kick_half_thick,
+			-KICKPLATE_ICE_OFFSET, kickplate_height, kp_mat)
+	# White board — top and bottom faces are covered by the kickplate's top
+	# cap and the cap rail's bottom cap, so skip its caps to avoid coplanar
+	# z-fight with those lips.
+	_add_perimeter_band(stations, board_half_thick, board_half_thick,
+			kickplate_height, board_top, board_mat, false, false)
+	# Cap rail (blue lip).
+	_add_perimeter_band(stations, cap_half_thick, cap_half_thick,
+			board_top, rail_top, cap_mat)
+	# Glass — transparent, narrower than the boards, lifted by GLASS_LIFT so
+	# its bottom cap doesn't z-fight the cap rail's top.
+	_add_perimeter_band(stations, glass_half_thick, glass_half_thick,
+			glass_y_bot, glass_y_top, _make_glass_material())
+
+	# Single collision around the entire perimeter at the boards' inner
+	# radius. Covers the full wall + glass height. Replaces the BoxShape3D /
+	# ConcavePolygonShape3D pair that previously caught fast pucks at the
+	# straight↔corner seam.
+	_add_perimeter_collision(stations, board_half_thick, board_half_thick,
+			0.0, glass_y_top)
+
+	# --- Painted stripes ---
+	# Goal-line stripes on each corner's white-board zone (3.35 m from each
+	# end board, drawn where the line crosses the curve).
 	var goal_z: float = half_l - 3.35
 	var corner_stripes: Array = [
 		{"z":  goal_z, "color": red_line_color},
 		{"z": -goal_z, "color": red_line_color},
 	]
-	_add_corner(Vector3(half_w - r, 0, -half_l + r), -PI / 2.0, 0.0, corner_stripes)
-	_add_corner(Vector3(half_w - r, 0, half_l - r), 0.0, PI / 2.0, corner_stripes)
-	_add_corner(Vector3(-half_w + r, 0, half_l - r), PI / 2.0, PI, corner_stripes)
-	_add_corner(Vector3(-half_w + r, 0, -half_l + r), PI, 3.0 * PI / 2.0, corner_stripes)
+	var corner_specs: Array = [
+		{"center": Vector3(half_w - r, 0, -half_l + r), "a0": -PI / 2.0, "a1": 0.0},
+		{"center": Vector3(half_w - r, 0, half_l - r), "a0": 0.0, "a1": PI / 2.0},
+		{"center": Vector3(-half_w + r, 0, half_l - r), "a0": PI / 2.0, "a1": PI},
+		{"center": Vector3(-half_w + r, 0, -half_l + r), "a0": PI, "a1": 3.0 * PI / 2.0},
+	]
+	for cs in corner_specs:
+		for st in corner_stripes:
+			_add_corner_stripe(cs.center, cs.a0, cs.a1, st)
 
 	_add_side_board_stripes(half_w)
 
@@ -431,55 +497,15 @@ func _draw_crease_arc(img: Image, cx: float, goal_y: float, toward_center: int, 
 			if alpha > 0.0:
 				img.set_pixel(px, py, img.get_pixel(px, py).lerp(color, alpha))
 
-func _kickplate_z_segments(z_start: float, z_end: float) -> Array:
-	# Returns [[z0,z1], ...] covering [z_start, z_end] with gaps cut at stripe positions.
-	var half_lw: float = 0.15  # half of 0.30m line width
-	var cuts: Array = []
-	for sz: float in [0.0, 7.29, -7.29]:
-		var g0: float = sz - half_lw
-		var g1: float = sz + half_lw
-		if g1 > z_start and g0 < z_end:
-			cuts.append([maxf(g0, z_start), minf(g1, z_end)])
-	cuts.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
-	var segs: Array = []
-	var cur: float = z_start
-	for gap in cuts:
-		if gap[0] > cur + 0.001:
-			segs.append([cur, gap[0]])
-		cur = gap[1]
-	if cur < z_end - 0.001:
-		segs.append([cur, z_end])
-	return segs
-
-func _add_kickplate_rotated(kp_w: float, length: float, pos: Vector3, rot: float) -> void:
-	var mi := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(kp_w, kickplate_height, length)
-	mi.mesh = box
-	mi.position = pos
-	mi.rotation.y = rot
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = kickplate_color
-	mi.material_override = mat
-	add_child(mi)
-
-func _add_kickplate_box(kp_size: Vector3, kp_pos: Vector3) -> void:
-	var mi := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = kp_size
-	mi.mesh = box
-	mi.position = kp_pos
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = kickplate_color
-	mi.material_override = mat
-	add_child(mi)
-
 func _add_side_board_stripes(half_w: float) -> void:
 	# Paint center red line and blue zone lines as a texture on the inner board face,
 	# identical to how rink ice lines are drawn — no physical depth, no z-fighting.
 	var wall_len: float = rink_length - 2.0 * corner_radius
+	var y_bot: float = kickplate_height
+	var y_top: float = wall_height - CAP_RAIL_HEIGHT
+	var band_h: float = y_top - y_bot
 	var img_w: int = maxi(int(wall_len * _px_per_meter), 1)
-	var img_h: int = maxi(int(wall_height * _px_per_meter), 1)
+	var img_h: int = maxi(int(band_h * _px_per_meter), 1)
 
 	var img := Image.create(img_w, img_h, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0.0, 0.0, 0.0, 0.0))  # transparent — board color shows through
@@ -494,17 +520,19 @@ func _add_side_board_stripes(half_w: float) -> void:
 	var tex := ImageTexture.create_from_image(img)
 
 	for side: float in [1.0, -1.0]:
-		# Place quad 1 mm inside the board inner face so it's never coplanar with the board.
+		# Quad spans only the white-board band (between kickplate and cap-rail
+		# lips). 1 mm inside the board inner face so it's never coplanar with
+		# the board's own surface.
 		var face_x: float = side * (half_w - wall_thickness / 2.0) - side * 0.001
 		var z0: float = -wall_len / 2.0
 		var z1: float =  wall_len / 2.0
 		var norm := Vector3(-side, 0.0, 0.0)
 
 		var verts   := PackedVector3Array([
-			Vector3(face_x, 0.0,          z0),
-			Vector3(face_x, 0.0,          z1),
-			Vector3(face_x, wall_height,  z1),
-			Vector3(face_x, wall_height,  z0),
+			Vector3(face_x, y_bot, z0),
+			Vector3(face_x, y_bot, z1),
+			Vector3(face_x, y_top, z1),
+			Vector3(face_x, y_top, z0),
 		])
 		var normals := PackedVector3Array([norm, norm, norm, norm])
 		var uvs     := PackedVector2Array([
@@ -544,193 +572,325 @@ func _make_glass_material() -> StandardMaterial3D:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return mat
 
-func _add_wall(pos: Vector3, size: Vector3) -> void:
-	# Kickplate (yellow, bottom strip) — protrudes KICKPLATE_PROTRUSION inward.
-	# Side walls are segmented to leave gaps at stripe positions.
-	if size.x <= size.z:  # side wall — thickness in X
-		var kp_x: float = pos.x - sign(pos.x) * KICKPLATE_PROTRUSION / 2.0
-		var kp_w: float = size.x + KICKPLATE_PROTRUSION
-		var z_start: float = pos.z - size.z / 2.0
-		var z_end: float   = pos.z + size.z / 2.0
-		for seg in _kickplate_z_segments(z_start, z_end):
-			_add_kickplate_box(Vector3(kp_w, kickplate_height, seg[1] - seg[0]),
-				Vector3(kp_x, kickplate_height / 2.0, (seg[0] + seg[1]) / 2.0))
-	else:  # end wall — thickness in Z, one solid piece (no stripes here)
-		var kp_z: float = pos.z - sign(pos.z) * KICKPLATE_PROTRUSION / 2.0
-		_add_kickplate_box(Vector3(size.x, kickplate_height, size.z + KICKPLATE_PROTRUSION),
-			Vector3(pos.x, kickplate_height / 2.0, kp_z))
+func _make_solid_material(color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	return mat
 
-	# Upper board (white)
-	var board_h: float = size.y - kickplate_height
-	var board_mi := MeshInstance3D.new()
-	var board_box := BoxMesh.new()
-	board_box.size = Vector3(size.x, board_h, size.z)
-	board_mi.mesh = board_box
-	board_mi.position = Vector3(pos.x, kickplate_height + board_h / 2.0, pos.z)
-	var board_mat := StandardMaterial3D.new()
-	board_mat.albedo_color = wall_color
-	board_mi.material_override = board_mat
-	add_child(board_mi)
+# ── Continuous perimeter walls ────────────────────────────────────────────────
+# The wall is a single closed loop around the rink: four straight runs plus
+# four curved corners, sharing endpoints. Building each band (kickplate,
+# white board, cap rail, glass) as a single ArrayMesh wrapping the entire
+# perimeter eliminates the visual seam where flat-shaded BoxMesh meets
+# smooth-shaded ArrayMesh corners. Building a single ConcavePolygonShape3D
+# wrapping the same perimeter eliminates the physics seam where the box
+# collider's contact normal kinks against the corner mesh's first triangle.
 
-	# Glass mesh sitting directly on top of the boards
-	var glass_mi := MeshInstance3D.new()
-	var glass_box := BoxMesh.new()
-	glass_box.size = Vector3(size.x, glass_height, size.z)
-	glass_mi.mesh = glass_box
-	glass_mi.position = Vector3(pos.x, size.y + glass_height / 2.0, pos.z)
-	glass_mi.material_override = _make_glass_material()
-	add_child(glass_mi)
+# Returns a closed loop of {pos: Vector2, inward: Vector2} stations sampled
+# along the perimeter's centerline. Straight runs contribute one station per
+# endpoint; corners contribute corner_segments stations along their arc.
+# Junction stations are de-duplicated (each shared point appears once). The
+# implicit closing edge connects the last station back to stations[0].
+func _build_perimeter_stations() -> Array:
+	var half_l: float = rink_length / 2.0
+	var half_w: float = rink_width / 2.0
+	var r: float = corner_radius
+	var n: int = corner_segments
+	var stations: Array = []
 
-	# Cap rail (kickplate color, sits on top of glass)
-	var cap_mi := MeshInstance3D.new()
-	var cap_box := BoxMesh.new()
-	cap_box.size = Vector3(size.x, CAP_RAIL_HEIGHT, size.z)
-	cap_mi.mesh = cap_box
-	cap_mi.position = Vector3(pos.x, size.y + CAP_RAIL_HEIGHT / 2.0, pos.z)
-	var cap_mat := StandardMaterial3D.new()
-	cap_mat.albedo_color = cap_rail_color
-	cap_mi.material_override = cap_mat
-	add_child(cap_mi)
+	# Walk counter-clockwise (viewed from above) starting at the south end
+	# of the east wall. At each junction, the previous section's endpoint
+	# IS the next section's start, so we only add new stations.
 
-	# Single collision covering the full board + glass height
-	var total_height := size.y + glass_height
+	# East wall (south → north)
+	stations.append({"pos": Vector2(half_w, -(half_l - r)), "inward": Vector2(-1.0, 0.0)})
+	stations.append({"pos": Vector2(half_w, half_l - r), "inward": Vector2(-1.0, 0.0)})
+
+	# NE corner (angle 0 → π/2). i=0 coincides with east wall's north end.
+	var ne_center := Vector2(half_w - r, half_l - r)
+	for i in range(1, n + 1):
+		var a: float = (PI / 2.0) * float(i) / float(n)
+		var ca: float = cos(a)
+		var sa: float = sin(a)
+		stations.append({"pos": ne_center + r * Vector2(ca, sa), "inward": -Vector2(ca, sa)})
+
+	# North wall (east → west). East endpoint is NE corner i=n.
+	stations.append({"pos": Vector2(-(half_w - r), half_l), "inward": Vector2(0.0, -1.0)})
+
+	# NW corner (π/2 → π).
+	var nw_center := Vector2(-half_w + r, half_l - r)
+	for i in range(1, n + 1):
+		var a: float = (PI / 2.0) + (PI / 2.0) * float(i) / float(n)
+		var ca: float = cos(a)
+		var sa: float = sin(a)
+		stations.append({"pos": nw_center + r * Vector2(ca, sa), "inward": -Vector2(ca, sa)})
+
+	# West wall (north → south).
+	stations.append({"pos": Vector2(-half_w, -(half_l - r)), "inward": Vector2(1.0, 0.0)})
+
+	# SW corner (π → 3π/2).
+	var sw_center := Vector2(-half_w + r, -half_l + r)
+	for i in range(1, n + 1):
+		var a: float = PI + (PI / 2.0) * float(i) / float(n)
+		var ca: float = cos(a)
+		var sa: float = sin(a)
+		stations.append({"pos": sw_center + r * Vector2(ca, sa), "inward": -Vector2(ca, sa)})
+
+	# South wall (west → east).
+	stations.append({"pos": Vector2(half_w - r, -half_l), "inward": Vector2(0.0, 1.0)})
+
+	# SE corner (3π/2 → 2π). Skip i=n — it equals stations[0]; the implicit
+	# closing edge from stations[last] to stations[0] covers the last quad.
+	var se_center := Vector2(half_w - r, -half_l + r)
+	for i in range(1, n):
+		var a: float = (3.0 * PI / 2.0) + (PI / 2.0) * float(i) / float(n)
+		var ca: float = cos(a)
+		var sa: float = sin(a)
+		stations.append({"pos": se_center + r * Vector2(ca, sa), "inward": -Vector2(ca, sa)})
+
+	return stations
+
+
+# Builds arrays for a closed band wrapping the rink. inner_offset and
+# outer_offset are the radial distances from the centerline to each face
+# (both equal half-thickness for symmetric bands). Quads connect each
+# station to the next, with the last station wrapping back to stations[0]
+# so the band closes cleanly.
+func _emit_perimeter_band_arrays(stations: Array,
+		inner_offset: float, outer_offset: float,
+		y_bot: float, y_top: float,
+		with_top_cap: bool, with_bottom_cap: bool) -> Dictionary:
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var n: int = stations.size()
+
+	# Per-station position rows + per-station normal arrays.
+	var inner_top := PackedVector3Array(); inner_top.resize(n)
+	var inner_bot := PackedVector3Array(); inner_bot.resize(n)
+	var outer_top := PackedVector3Array(); outer_top.resize(n)
+	var outer_bot := PackedVector3Array(); outer_bot.resize(n)
+	var inward_n := PackedVector3Array(); inward_n.resize(n)
+	var outward_n := PackedVector3Array(); outward_n.resize(n)
+	for i in range(n):
+		var s = stations[i]
+		var sp: Vector2 = s.pos
+		var sn: Vector2 = s.inward
+		var ip := sp + sn * inner_offset
+		var op := sp - sn * outer_offset
+		inner_top[i] = Vector3(ip.x, y_top, ip.y)
+		inner_bot[i] = Vector3(ip.x, y_bot, ip.y)
+		outer_top[i] = Vector3(op.x, y_top, op.y)
+		outer_bot[i] = Vector3(op.x, y_bot, op.y)
+		inward_n[i] = Vector3(sn.x, 0.0, sn.y)
+		outward_n[i] = Vector3(-sn.x, 0.0, -sn.y)
+
+	# Each face emits (n vertex pairs, n quads) that wrap the perimeter. The
+	# four face emissions are inlined rather than extracted into a closure so
+	# we don't rely on GDScript's lambda capture semantics for Packed arrays.
+
+	# Inner face (top → bottom rows, inward normals).
+	var base: int = verts.size()
+	for i in range(n):
+		verts.append(inner_top[i])
+		verts.append(inner_bot[i])
+		normals.append(inward_n[i])
+		normals.append(inward_n[i])
+		var u: float = float(i) / float(n)
+		uvs.append(Vector2(u, 1.0))
+		uvs.append(Vector2(u, 0.0))
+	for i in range(n):
+		var i_next: int = (i + 1) % n
+		var a: int = base + i * 2
+		var b: int = base + i_next * 2
+		indices.append(a); indices.append(a + 1); indices.append(b + 1)
+		indices.append(a); indices.append(b + 1); indices.append(b)
+
+	# Outer face (bottom → top rows, outward normals).
+	base = verts.size()
+	for i in range(n):
+		verts.append(outer_bot[i])
+		verts.append(outer_top[i])
+		normals.append(outward_n[i])
+		normals.append(outward_n[i])
+		var u: float = float(i) / float(n)
+		uvs.append(Vector2(u, 1.0))
+		uvs.append(Vector2(u, 0.0))
+	for i in range(n):
+		var i_next: int = (i + 1) % n
+		var a: int = base + i * 2
+		var b: int = base + i_next * 2
+		indices.append(a); indices.append(a + 1); indices.append(b + 1)
+		indices.append(a); indices.append(b + 1); indices.append(b)
+
+	if with_top_cap:
+		# Top cap (outer → inner at y_top, normal +Y).
+		base = verts.size()
+		for i in range(n):
+			verts.append(outer_top[i])
+			verts.append(inner_top[i])
+			normals.append(Vector3.UP)
+			normals.append(Vector3.UP)
+			var u: float = float(i) / float(n)
+			uvs.append(Vector2(u, 1.0))
+			uvs.append(Vector2(u, 0.0))
+		for i in range(n):
+			var i_next: int = (i + 1) % n
+			var a: int = base + i * 2
+			var b: int = base + i_next * 2
+			indices.append(a); indices.append(a + 1); indices.append(b + 1)
+			indices.append(a); indices.append(b + 1); indices.append(b)
+
+	if with_bottom_cap:
+		# Bottom cap (inner → outer at y_bot, normal -Y).
+		base = verts.size()
+		for i in range(n):
+			verts.append(inner_bot[i])
+			verts.append(outer_bot[i])
+			normals.append(Vector3.DOWN)
+			normals.append(Vector3.DOWN)
+			var u: float = float(i) / float(n)
+			uvs.append(Vector2(u, 1.0))
+			uvs.append(Vector2(u, 0.0))
+		for i in range(n):
+			var i_next: int = (i + 1) % n
+			var a: int = base + i * 2
+			var b: int = base + i_next * 2
+			indices.append(a); indices.append(a + 1); indices.append(b + 1)
+			indices.append(a); indices.append(b + 1); indices.append(b)
+
+	return {"verts": verts, "normals": normals, "uvs": uvs, "indices": indices}
+
+
+# Builds and adds one visual band wrapping the entire perimeter.
+func _add_perimeter_band(stations: Array,
+		inner_offset: float, outer_offset: float,
+		y_bot: float, y_top: float, material: Material,
+		with_top_cap: bool = true, with_bottom_cap: bool = true) -> void:
+	var data: Dictionary = _emit_perimeter_band_arrays(
+			stations, inner_offset, outer_offset, y_bot, y_top,
+			with_top_cap, with_bottom_cap)
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = data.verts
+	arrays[Mesh.ARRAY_NORMAL] = data.normals
+	arrays[Mesh.ARRAY_TEX_UV] = data.uvs
+	arrays[Mesh.ARRAY_INDEX] = data.indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = material
+	add_child(mi)
+
+
+# Builds and adds a single ConcavePolygonShape3D wrapping the entire wall.
+# inner_offset / outer_offset match the boards' wall_thickness/2 so the
+# collision sits at the same radius as the visible inner board face.
+func _add_perimeter_collision(stations: Array,
+		inner_offset: float, outer_offset: float,
+		y_bot: float, y_top: float) -> void:
+	var data: Dictionary = _emit_perimeter_band_arrays(
+			stations, inner_offset, outer_offset, y_bot, y_top, true, true)
+	var tris := PackedVector3Array()
+	var idx: PackedInt32Array = data.indices
+	var verts: PackedVector3Array = data.verts
+	for j in range(0, idx.size(), 3):
+		tris.append(verts[idx[j]])
+		tris.append(verts[idx[j + 1]])
+		tris.append(verts[idx[j + 2]])
+	var shape := ConcavePolygonShape3D.new()
+	shape.set_faces(tris)
+	# Backface collision so a puck that ends up on the wrong side of a
+	# triangle (CCD glance, reconcile nudge, numerical penetration) is
+	# pushed back inward instead of escaping outward.
+	shape.backface_collision = true
 	var col := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = Vector3(size.x, total_height, size.z)
 	col.shape = shape
-	col.position = Vector3(pos.x, total_height / 2.0, pos.z)
 	add_child(col)
 
-func _add_corner(center: Vector3, angle_start: float, angle_end: float, stripe_zs: Array = []) -> void:
-	var angle_step := (angle_end - angle_start) / corner_segments
-	for i in corner_segments:
-		var a1 := angle_start + i * angle_step
-		var a2 := angle_start + (i + 1) * angle_step
 
-		var p1 := center + Vector3(cos(a1) * corner_radius, 0, sin(a1) * corner_radius)
-		var p2 := center + Vector3(cos(a2) * corner_radius, 0, sin(a2) * corner_radius)
+func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionary) -> void:
+	# Flat quad on the inner face at the arc angle where the stripe's world-Z
+	# crosses the curve. Width is 2 × half_sw along the arc tangent; small enough
+	# (~0.34° of arc) that flat vs curved is imperceptible.
+	var sz: float = stripe["z"]
+	var color: Color = stripe["color"]
+	var r_face: float = corner_radius - wall_thickness / 2.0
+	# Use r_face (inner face radius) instead of corner_radius when finding the
+	# crossing angle: the stripe sits ON the inner face, not on the centerline,
+	# so the angle where r_face·sin(a) reaches sz is what we want. With the
+	# previous corner_radius-based formula, the base point ended up at a radius
+	# slightly larger than r_face (i.e. embedded inside the wall) and was
+	# occluded by the inner face from inside the rink.
+	var s_arg: float = (sz - center.z) / r_face
+	if absf(s_arg) >= 1.0:
+		return
+	var lo: float = minf(a0, a1)
+	var hi: float = maxf(a0, a1)
+	# sin(a) = s_arg has two principal solutions; offset by ±2π handles corners
+	# whose arc spans live outside [-π, π] (e.g. the -x,-z corner at [π, 3π/2]).
+	var a_primary: float = asin(s_arg)
+	var a_secondary: float = PI - a_primary
+	var a_cross: float = NAN
+	for cand in [
+		a_primary, a_secondary,
+		a_primary - TAU, a_secondary - TAU,
+		a_primary + TAU, a_secondary + TAU,
+	]:
+		if cand >= lo - 1e-6 and cand <= hi + 1e-6:
+			a_cross = cand
+			break
+	if is_nan(a_cross):
+		return
 
-		var mid_xz := (p1 + p2) / 2.0
-		var seg_length := p1.distance_to(p2)
-		var dir := (p2 - p1).normalized()
-		var rot_y := atan2(dir.x, dir.z)
+	var ca: float = cos(a_cross)
+	var sa: float = sin(a_cross)
+	var inset: float = 0.001
+	# Stripe spans only the white-board band (between the kickplate lip and the
+	# cap-rail lip). The base point sits 1 mm inward of the inner face so the
+	# stripe renders in front of the wall instead of z-fighting against it.
+	var base_pt: Vector3 = center + Vector3(
+		(r_face - inset) * ca, 0.0, (r_face - inset) * sa)
+	base_pt.z += board_stripe_z_nudge * signf(sz)
+	var tangent: Vector3 = Vector3(-sa, 0.0, ca)
+	var inward: Vector3 = Vector3(-ca, 0.0, -sa)
+	# Match the ice goal line's Z extent. The ice line uses `thin_line` = 4 px
+	# at 80 px/m, and _draw_h_line spans `half_t + half_t + 1` = 5 px, which
+	# is 0.0625 m. The arc tangent at a_cross is not aligned with Z, so a
+	# stripe of total tangent width W projects to a Z width of W · |cos(a)|.
+	# Scale the tangent width up by 1/|cos(a)| so the wall stripe's Z extent
+	# matches the ice line's. (Guarded against the tangent-perpendicular-to-Z
+	# extreme at the corner's far end, but a_cross is well inside ±60° here.)
+	# Tuned to match the perceived width of the ice goal line. The ice line
+	# is nominally 6.25 cm but reads wider thanks to the ice shader's
+	# parallax + subsurface fade softening its edges; a 6 cm wall stripe
+	# looks too thin next to it. ~15 cm Z extent feels right.
+	# (0.075 / |cos(a)| keeps Z extent constant across different a_cross.)
+	var half_sw: float = 0.075 / maxf(absf(ca), 0.1)
+	var y_bot: float = kickplate_height
+	var y_top: float = wall_height - CAP_RAIL_HEIGHT
+	var v0: Vector3 = base_pt + Vector3(-tangent.x * half_sw, y_bot, -tangent.z * half_sw)
+	var v1: Vector3 = base_pt + Vector3( tangent.x * half_sw, y_bot,  tangent.z * half_sw)
+	var v2: Vector3 = base_pt + Vector3( tangent.x * half_sw, y_top,  tangent.z * half_sw)
+	var v3: Vector3 = base_pt + Vector3(-tangent.x * half_sw, y_top, -tangent.z * half_sw)
 
-		# Kickplate — split at stripe positions to leave gaps, protrudes inward
-		var outward := (mid_xz - center).normalized()
-		var kp_x: float = mid_xz.x - outward.x * KICKPLATE_PROTRUSION / 2.0
-		var kp_z: float = mid_xz.z - outward.z * KICKPLATE_PROTRUSION / 2.0
-		var kp_w: float = wall_thickness + KICKPLATE_PROTRUSION
-		var crossing_t: float = -1.0
-		var crossing_sz: float = 0.0
-		for stripe in stripe_zs:
-			var sz: float = stripe["z"]
-			if (p1.z <= sz and sz <= p2.z) or (p2.z <= sz and sz <= p1.z):
-				crossing_t = (sz - p1.z) / (p2.z - p1.z) if absf(p2.z - p1.z) > 0.001 else 0.5
-				crossing_sz = sz
-				break
-		if crossing_t < 0.0:
-			_add_kickplate_rotated(kp_w, seg_length, Vector3(kp_x, kickplate_height / 2.0, kp_z), rot_y)
-		else:
-			# Cut at Z = gap_sz ± half_gap (Z-perpendicular) so the gap aligns with
-			# the board stripe and ice goal line rather than being a diagonal tangent cut.
-			var half_gap: float = 0.025
-			var gap_sz := crossing_sz + kickplate_gap_z_nudge * signf(crossing_sz)
-			var dz: float = p2.z - p1.z
-			var t_low  := clampf((gap_sz - half_gap - p1.z) / dz, 0.0, 1.0) if absf(dz) > 0.001 else crossing_t
-			var t_high := clampf((gap_sz + half_gap - p1.z) / dz, 0.0, 1.0) if absf(dz) > 0.001 else crossing_t
-			if t_low > t_high:
-				var tmp := t_low; t_low = t_high; t_high = tmp
-			var local_low  := (t_low  - 0.5) * seg_length
-			var local_high := (t_high - 0.5) * seg_length
-			var len1: float = local_low + seg_length / 2.0
-			var len2: float = seg_length / 2.0 - local_high
-			if len1 > 0.001:
-				var c1: float = -seg_length / 2.0 + len1 / 2.0
-				_add_kickplate_rotated(kp_w, len1,
-					Vector3(kp_x + dir.x * c1, kickplate_height / 2.0, kp_z + dir.z * c1), rot_y)
-			if len2 > 0.001:
-				var c2: float = local_high + len2 / 2.0
-				_add_kickplate_rotated(kp_w, len2,
-					Vector3(kp_x + dir.x * c2, kickplate_height / 2.0, kp_z + dir.z * c2), rot_y)
+	var s_arrays: Array = []
+	s_arrays.resize(Mesh.ARRAY_MAX)
+	s_arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([v0, v1, v2, v3])
+	s_arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array([inward, inward, inward, inward])
+	s_arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array([Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)])
+	s_arrays[Mesh.ARRAY_INDEX]  = PackedInt32Array([0, 1, 2, 0, 2, 3])
+	var s_mesh := ArrayMesh.new()
+	s_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s_arrays)
 
-		# Upper board (white)
-		var board_h: float = wall_height - kickplate_height
-		var board_mi := MeshInstance3D.new()
-		var board_box := BoxMesh.new()
-		board_box.size = Vector3(wall_thickness, board_h, seg_length)
-		board_mi.mesh = board_box
-		board_mi.position = Vector3(mid_xz.x, kickplate_height + board_h / 2.0, mid_xz.z)
-		board_mi.rotation.y = rot_y
-		var board_mat := StandardMaterial3D.new()
-		board_mat.albedo_color = wall_color
-		board_mi.material_override = board_mat
-		add_child(board_mi)
-
-		# Glass mesh on top of boards
-		var glass_mi := MeshInstance3D.new()
-		var glass_box := BoxMesh.new()
-		glass_box.size = Vector3(wall_thickness, glass_height, seg_length)
-		glass_mi.mesh = glass_box
-		glass_mi.position = Vector3(mid_xz.x, wall_height + glass_height / 2.0, mid_xz.z)
-		glass_mi.rotation.y = rot_y
-		glass_mi.material_override = _make_glass_material()
-		add_child(glass_mi)
-
-		# Cap rail (kickplate color, sits on top of glass)
-		var cap_mi := MeshInstance3D.new()
-		var cap_box := BoxMesh.new()
-		cap_box.size = Vector3(wall_thickness, CAP_RAIL_HEIGHT, seg_length)
-		cap_mi.mesh = cap_box
-		cap_mi.position = Vector3(mid_xz.x, wall_height + CAP_RAIL_HEIGHT / 2.0, mid_xz.z)
-		cap_mi.rotation.y = rot_y
-		var cap_mat := StandardMaterial3D.new()
-		cap_mat.albedo_color = cap_rail_color
-		cap_mi.material_override = cap_mat
-		add_child(cap_mi)
-
-		# Goal line (or other) stripes — flat ArrayMesh quad on the inner face, no depth.
-		for stripe in stripe_zs:
-			var sz: float = stripe["z"]
-			if (p1.z <= sz and sz <= p2.z) or (p2.z <= sz and sz <= p1.z):
-				var t: float = (sz - p1.z) / (p2.z - p1.z) if absf(p2.z - p1.z) > 0.001 else 0.5
-				var hit := p1 + t * (p2 - p1)
-				# Z-perpendicular stripe at exact goal-line Z.
-				# The old tangent-aligned approach subtracted outward.z * wall_thickness/2
-				# from hit.z (~9 cm at the 37° corner angle), visually offsetting the stripe
-				# from the ice goal line. Using sz directly for Z and a Z-facing quad fixes that.
-				var inward: float = wall_thickness / 2.0 + 0.001
-				var x_base := hit.x - inward / outward.x if absf(outward.x) > 0.01 else hit.x - outward.x * inward
-				var base := Vector3(x_base, 0.0, sz + board_stripe_z_nudge * signf(sz))
-				var half_sw: float = 0.025
-				var v0 := base + Vector3(-dir.x * half_sw, 0.0,         -dir.z * half_sw)
-				var v1 := base + Vector3( dir.x * half_sw, 0.0,          dir.z * half_sw)
-				var v2 := base + Vector3( dir.x * half_sw, wall_height,  dir.z * half_sw)
-				var v3 := base + Vector3(-dir.x * half_sw, wall_height, -dir.z * half_sw)
-				var norm_in := Vector3(-outward.x, 0.0, -outward.z)
-				var s_arrays: Array = []
-				s_arrays.resize(Mesh.ARRAY_MAX)
-				s_arrays[Mesh.ARRAY_VERTEX]  = PackedVector3Array([v0, v1, v2, v3])
-				s_arrays[Mesh.ARRAY_NORMAL]  = PackedVector3Array([norm_in, norm_in, norm_in, norm_in])
-				s_arrays[Mesh.ARRAY_TEX_UV]  = PackedVector2Array([Vector2(0,1), Vector2(1,1), Vector2(1,0), Vector2(0,0)])
-				s_arrays[Mesh.ARRAY_INDEX]   = PackedInt32Array([0, 1, 2, 0, 2, 3])
-				var s_mesh := ArrayMesh.new()
-				s_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s_arrays)
-				var stripe_mi := MeshInstance3D.new()
-				stripe_mi.mesh = s_mesh
-				var stripe_mat := StandardMaterial3D.new()
-				stripe_mat.albedo_color = stripe["color"]
-				stripe_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				stripe_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-				stripe_mat.render_priority = 1
-				stripe_mi.material_override = stripe_mat
-				add_child(stripe_mi)
-
-		# Full-height collision
-		var total_height := wall_height + glass_height
-		var col := CollisionShape3D.new()
-		var shape := BoxShape3D.new()
-		shape.size = Vector3(wall_thickness, total_height, seg_length)
-		col.shape = shape
-		col.position = Vector3(mid_xz.x, total_height / 2.0, mid_xz.z)
-		col.rotation.y = rot_y
-		add_child(col)
+	var mi := MeshInstance3D.new()
+	mi.mesh = s_mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 1
+	mi.material_override = mat
+	add_child(mi)
