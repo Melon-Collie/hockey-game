@@ -37,16 +37,28 @@ static func get_all() -> Array[Dictionary]:
 	return _identities.duplicate()
 
 
-# Returns up to `count` identities, shuffled, with no repeats. Returns fewer
-# (or zero) entries when the configured list has fewer than `count` items;
-# the caller fills the rest with generic defaults.
-static func pick_random(count: int) -> Array[Dictionary]:
+# Picks an identity for a bot slot at lobby-toggle time. If the configured
+# pool has an entry whose name is not in `used_names`, returns one at
+# random so successive toggles in the same lobby don't duplicate. When the
+# pool is empty or exhausted, returns the generic "Bot N" fallback derived
+# from `slot_key` so the lobby card still has something concrete to display.
+static func pick_for_slot(slot_key: int, used_names: Array[String]) -> Dictionary:
 	ensure_loaded()
-	var pool: Array[Dictionary] = _identities.duplicate()
-	pool.shuffle()
-	if pool.size() > count:
-		pool.resize(count)
-	return pool
+	var available: Array[Dictionary] = []
+	for entry: Dictionary in _identities:
+		if not used_names.has(entry.name):
+			available.append(entry)
+	if not available.is_empty():
+		return available.pick_random()
+	return fallback_identity(slot_key)
+
+
+static func fallback_identity(slot_key: int) -> Dictionary:
+	return {
+		"name":           "Bot %d" % (slot_key + 1),
+		"number":         80 + slot_key,
+		"is_left_handed": (slot_key % 3) % 2 == 1,
+	}
 
 
 static func _try_load_from(path: String) -> bool:

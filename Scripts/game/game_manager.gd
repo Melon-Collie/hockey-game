@@ -2093,10 +2093,8 @@ func _spawn_bots_from_lobby() -> void:
 		return
 	if NetworkManager.pending_bot_slots.is_empty():
 		return
-	# Pre-shuffle a unique identity per bot slot from the configured pool.
-	# Pool can be shorter than 6 (or empty) — spawn_bot falls back to generic
-	# defaults when the dict is empty, so we just pop one per bot.
-	var identity_pool: Array[Dictionary] = BotIdentityRegistry.pick_random(6)
+	# Identities were chosen at lobby-toggle time and synced to clients so
+	# the lobby UI could preview them — just read them back here.
 	var bot_id: int = 0
 	for slot_key: int in NetworkManager.pending_bot_slots:
 		if not NetworkManager.pending_bot_slots[slot_key]:
@@ -2112,7 +2110,7 @@ func _spawn_bots_from_lobby() -> void:
 			continue
 		var team: Team = teams[team_id]
 		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
-		var identity: Dictionary = identity_pool.pop_back() if not identity_pool.is_empty() else {}
+		var identity: Dictionary = NetworkManager.pending_bot_identities.get(slot_key, {})
 		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team, identity)
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a
@@ -2124,6 +2122,7 @@ func _spawn_bots_from_lobby() -> void:
 	# Clear after spawning so a return-to-lobby + restart starts fresh; the
 	# host will re-toggle bot slots in the next lobby session if desired.
 	NetworkManager.pending_bot_slots = {}
+	NetworkManager.pending_bot_identities = {}
 
 
 func _slot_already_taken(team_id: int, team_slot: int) -> bool:

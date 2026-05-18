@@ -482,7 +482,8 @@ func _refresh_grid() -> void:
 		return
 	_recompute_resolved_colors()
 	_slot_grid.refresh(_build_slot_grid_roster(), NetworkManager.local_peer_id(), _get_team_colors(),
-			NetworkManager.pending_bot_slots, NetworkManager.is_host)
+			NetworkManager.pending_bot_slots, NetworkManager.is_host,
+			NetworkManager.pending_bot_identities)
 	_refresh_spectator_panel()
 
 # Live vote resolution. Walks the current roster, buckets each player's vote
@@ -597,7 +598,7 @@ func _on_peer_joined(peer_id: int) -> void:
 		NetworkManager.send_lobby_roster(existing_peer, roster)
 	NetworkManager.send_color_votes_to(peer_id, _color_votes)
 	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled, _rule_set)
-	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots)
+	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots, NetworkManager.pending_bot_identities)
 	_broadcast_confirm(peer_id, target[0], target[1])
 	_update_start_btn()
 	_refresh_grid()
