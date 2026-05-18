@@ -30,7 +30,7 @@ extends StaticBody3D
 	set(v):
 		wall_color = v
 		_rebuild()
-@export_range(0.0, 2.0) var wall_emission_energy: float = 0.15:
+@export_range(0.0, 2.0) var wall_emission_energy: float = 0.0:
 	set(v):
 		wall_emission_energy = v
 		_rebuild()
@@ -38,7 +38,7 @@ extends StaticBody3D
 	set(v):
 		kickplate_color = v
 		_rebuild()
-@export_range(0.0, 2.0) var kickplate_emission_energy: float = 0.35:
+@export_range(0.0, 2.0) var kickplate_emission_energy: float = 0.0:
 	set(v):
 		kickplate_emission_energy = v
 		_rebuild()
