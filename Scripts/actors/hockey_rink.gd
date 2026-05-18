@@ -100,15 +100,20 @@ extends StaticBody3D
 	set(v):
 		_rebuild()
 
-# Kickplate protrudes this much inward from the board face toward the ice
+# Board stack, bottom to top:
+#   kickplate (yellow lip)  → white board → cap rail (blue lip) → glass
+# Kickplate and cap rail are bands that wrap the board with a small lip on
+# both the inside (puck-facing) and outside (stands-facing) — they're wider
+# in the radial / wall-thickness axis than the board itself. The cap rail is
+# the visible band at the top of the board where it meets the glass.
 const KICKPLATE_PROTRUSION: float = 0.01
+const CAP_RAIL_PROTRUSION: float = 0.01
 const CAP_RAIL_HEIGHT: float = 0.05
-# Cap rail protrudes inward from the board face so its inner-face renders in
-# front of the glass (rather than coplanar, which z-fights against the
-# double-sided transparent glass material). The radial gap before the glass
-# inner face also keeps the cap rail's outer face off the glass surface.
-const CAP_RAIL_PROTRUSION: float = 0.02
-const CAP_RAIL_GLASS_GAP: float = 0.002
+# NHL spec for reference (so future tuning has a target):
+#   Board height (kickplate + white + cap): 1.07-1.22 m (42-48 in)
+#   Glass height above boards:              1.52-2.44 m (5-8 ft)
+#   Kickplate height:                       0.15-0.30 m (6-12 in)
+#   Cap rail height:                        0.05-0.08 m (2-3 in)
 
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
@@ -433,26 +438,6 @@ func _draw_crease_arc(img: Image, cx: float, goal_y: float, toward_center: int, 
 			if alpha > 0.0:
 				img.set_pixel(px, py, img.get_pixel(px, py).lerp(color, alpha))
 
-func _kickplate_z_segments(z_start: float, z_end: float) -> Array:
-	# Returns [[z0,z1], ...] covering [z_start, z_end] with gaps cut at stripe positions.
-	var half_lw: float = 0.15  # half of 0.30m line width
-	var cuts: Array = []
-	for sz: float in [0.0, 7.29, -7.29]:
-		var g0: float = sz - half_lw
-		var g1: float = sz + half_lw
-		if g1 > z_start and g0 < z_end:
-			cuts.append([maxf(g0, z_start), minf(g1, z_end)])
-	cuts.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
-	var segs: Array = []
-	var cur: float = z_start
-	for gap in cuts:
-		if gap[0] > cur + 0.001:
-			segs.append([cur, gap[0]])
-		cur = gap[1]
-	if cur < z_end - 0.001:
-		segs.append([cur, z_end])
-	return segs
-
 func _add_kickplate_box(kp_size: Vector3, kp_pos: Vector3) -> void:
 	var mi := MeshInstance3D.new()
 	var box := BoxMesh.new()
@@ -468,8 +453,11 @@ func _add_side_board_stripes(half_w: float) -> void:
 	# Paint center red line and blue zone lines as a texture on the inner board face,
 	# identical to how rink ice lines are drawn — no physical depth, no z-fighting.
 	var wall_len: float = rink_length - 2.0 * corner_radius
+	var y_bot: float = kickplate_height
+	var y_top: float = wall_height - CAP_RAIL_HEIGHT
+	var band_h: float = y_top - y_bot
 	var img_w: int = maxi(int(wall_len * _px_per_meter), 1)
-	var img_h: int = maxi(int(wall_height * _px_per_meter), 1)
+	var img_h: int = maxi(int(band_h * _px_per_meter), 1)
 
 	var img := Image.create(img_w, img_h, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0.0, 0.0, 0.0, 0.0))  # transparent — board color shows through
@@ -484,17 +472,19 @@ func _add_side_board_stripes(half_w: float) -> void:
 	var tex := ImageTexture.create_from_image(img)
 
 	for side: float in [1.0, -1.0]:
-		# Place quad 1 mm inside the board inner face so it's never coplanar with the board.
+		# Quad spans only the white-board band (between kickplate and cap-rail
+		# lips). 1 mm inside the board inner face so it's never coplanar with
+		# the board's own surface.
 		var face_x: float = side * (half_w - wall_thickness / 2.0) - side * 0.001
 		var z0: float = -wall_len / 2.0
 		var z1: float =  wall_len / 2.0
 		var norm := Vector3(-side, 0.0, 0.0)
 
 		var verts   := PackedVector3Array([
-			Vector3(face_x, 0.0,          z0),
-			Vector3(face_x, 0.0,          z1),
-			Vector3(face_x, wall_height,  z1),
-			Vector3(face_x, wall_height,  z0),
+			Vector3(face_x, y_bot, z0),
+			Vector3(face_x, y_bot, z1),
+			Vector3(face_x, y_top, z1),
+			Vector3(face_x, y_top, z0),
 		])
 		var normals := PackedVector3Array([norm, norm, norm, norm])
 		var uvs     := PackedVector2Array([
@@ -535,23 +525,28 @@ func _make_glass_material() -> StandardMaterial3D:
 	return mat
 
 func _add_wall(pos: Vector3, size: Vector3) -> void:
-	# Kickplate (yellow, bottom strip) — protrudes KICKPLATE_PROTRUSION inward.
-	# Side walls are segmented to leave gaps at stripe positions.
-	if size.x <= size.z:  # side wall — thickness in X
-		var kp_x: float = pos.x - sign(pos.x) * KICKPLATE_PROTRUSION / 2.0
-		var kp_w: float = size.x + KICKPLATE_PROTRUSION
-		var z_start: float = pos.z - size.z / 2.0
-		var z_end: float   = pos.z + size.z / 2.0
-		for seg in _kickplate_z_segments(z_start, z_end):
-			_add_kickplate_box(Vector3(kp_w, kickplate_height, seg[1] - seg[0]),
-				Vector3(kp_x, kickplate_height / 2.0, (seg[0] + seg[1]) / 2.0))
-	else:  # end wall — thickness in Z, one solid piece (no stripes here)
-		var kp_z: float = pos.z - sign(pos.z) * KICKPLATE_PROTRUSION / 2.0
-		_add_kickplate_box(Vector3(size.x, kickplate_height, size.z + KICKPLATE_PROTRUSION),
-			Vector3(pos.x, kickplate_height / 2.0, kp_z))
+	# Stack (bottom to top):
+	#   y=0                                → y=kickplate_height                       kickplate lip
+	#   y=kickplate_height                 → y=wall_height - CAP_RAIL_HEIGHT          white board
+	#   y=wall_height - CAP_RAIL_HEIGHT    → y=wall_height                            cap-rail lip
+	#   y=wall_height                      → y=wall_height + glass_height             glass
+	# The kickplate and cap rail are slightly wider than the board on both sides
+	# (inward toward the rink, outward toward the stands) so each forms a small
+	# visible lip — what gives the boards their stacked-band silhouette.
+	var board_top: float = size.y - CAP_RAIL_HEIGHT
+	var board_h: float = board_top - kickplate_height
+	var is_side_wall: bool = size.x <= size.z
 
-	# Upper board (white)
-	var board_h: float = size.y - kickplate_height
+	# Kickplate (yellow lip) — full-length single box; no longer cut at stripe
+	# positions because the stripe decals now live only in the board zone above.
+	var kp_size: Vector3
+	if is_side_wall:
+		kp_size = Vector3(size.x + 2.0 * KICKPLATE_PROTRUSION, kickplate_height, size.z)
+	else:
+		kp_size = Vector3(size.x, kickplate_height, size.z + 2.0 * KICKPLATE_PROTRUSION)
+	_add_kickplate_box(kp_size, Vector3(pos.x, kickplate_height / 2.0, pos.z))
+
+	# White board (clean slab between the two lips)
 	var board_mi := MeshInstance3D.new()
 	var board_box := BoxMesh.new()
 	board_box.size = Vector3(size.x, board_h, size.z)
@@ -562,7 +557,24 @@ func _add_wall(pos: Vector3, size: Vector3) -> void:
 	board_mi.material_override = board_mat
 	add_child(board_mi)
 
-	# Glass mesh sitting directly on top of the boards
+	# Cap rail (blue lip) — sits at the very top of the boards where they meet
+	# the glass. Wider than the board on both sides, like the kickplate.
+	var cap_mi := MeshInstance3D.new()
+	var cap_box := BoxMesh.new()
+	if is_side_wall:
+		cap_box.size = Vector3(size.x + 2.0 * CAP_RAIL_PROTRUSION, CAP_RAIL_HEIGHT, size.z)
+	else:
+		cap_box.size = Vector3(size.x, CAP_RAIL_HEIGHT, size.z + 2.0 * CAP_RAIL_PROTRUSION)
+	cap_mi.mesh = cap_box
+	cap_mi.position = Vector3(pos.x, board_top + CAP_RAIL_HEIGHT / 2.0, pos.z)
+	var cap_mat := StandardMaterial3D.new()
+	cap_mat.albedo_color = cap_rail_color
+	cap_mi.material_override = cap_mat
+	add_child(cap_mi)
+
+	# Glass sits directly on top of the cap rail (which marks the top of the
+	# boards). Same wall_thickness as the board so it's inset from the cap-rail
+	# lip — that inset is exactly the visible top of the cap rail.
 	var glass_mi := MeshInstance3D.new()
 	var glass_box := BoxMesh.new()
 	glass_box.size = Vector3(size.x, glass_height, size.z)
@@ -570,27 +582,6 @@ func _add_wall(pos: Vector3, size: Vector3) -> void:
 	glass_mi.position = Vector3(pos.x, size.y + glass_height / 2.0, pos.z)
 	glass_mi.material_override = _make_glass_material()
 	add_child(glass_mi)
-
-	# Cap rail — small inward-protruding strip sitting in the bottom 5 cm of the
-	# glass volume, radially in front of the glass face to avoid coplanar z-fight
-	# with the double-sided glass material. Same geometry pattern as the corner
-	# cap rail (see CAP_RAIL_PROTRUSION / CAP_RAIL_GLASS_GAP).
-	var cap_mi := MeshInstance3D.new()
-	var cap_box := BoxMesh.new()
-	var cap_y: float = size.y + CAP_RAIL_HEIGHT / 2.0
-	if size.x <= size.z:  # side wall — thickness in X
-		var cap_inset: float = size.x / 2.0 + CAP_RAIL_GLASS_GAP + CAP_RAIL_PROTRUSION / 2.0
-		cap_box.size = Vector3(CAP_RAIL_PROTRUSION, CAP_RAIL_HEIGHT, size.z)
-		cap_mi.position = Vector3(pos.x - sign(pos.x) * cap_inset, cap_y, pos.z)
-	else:  # end wall — thickness in Z
-		var cap_inset_z: float = size.z / 2.0 + CAP_RAIL_GLASS_GAP + CAP_RAIL_PROTRUSION / 2.0
-		cap_box.size = Vector3(size.x, CAP_RAIL_HEIGHT, CAP_RAIL_PROTRUSION)
-		cap_mi.position = Vector3(pos.x, cap_y, pos.z - sign(pos.z) * cap_inset_z)
-	cap_mi.mesh = cap_box
-	var cap_mat := StandardMaterial3D.new()
-	cap_mat.albedo_color = cap_rail_color
-	cap_mi.material_override = cap_mat
-	add_child(cap_mi)
 
 	# Single collision covering the full board + glass height
 	var total_height := size.y + glass_height
@@ -602,36 +593,36 @@ func _add_wall(pos: Vector3, size: Vector3) -> void:
 	add_child(col)
 
 func _add_corner(center: Vector3, angle_start: float, angle_end: float, stripe_zs: Array = []) -> void:
-	# Each corner is one ArrayMesh per band (kickplate / board / glass / cap rail)
-	# wrapping continuously around the arc, plus one ConcavePolygonShape3D for
-	# collision. Box-per-segment stacks were producing chord-overlap z-fighting on
-	# the cap rail and faceting the puck's rim path; an arc-correct mesh fixes
-	# both. Goal-line stripe is painted as a flat decal at the crossing angle
-	# (kickplate is no longer physically cut — red overlays yellow at the line).
-	var r_in_kick: float = corner_radius - wall_thickness / 2.0 - KICKPLATE_PROTRUSION
+	# One ArrayMesh per band (kickplate / board / cap rail / glass) wrapping
+	# continuously around the arc, plus one ConcavePolygonShape3D for collision.
+	# Same band stack as the straight walls (see _add_wall): kickplate and cap
+	# rail are wider than the board on both sides (forming inward and outward
+	# lips), with the white board as a narrower slab between them.
 	var r_in: float      = corner_radius - wall_thickness / 2.0
 	var r_out: float     = corner_radius + wall_thickness / 2.0
-	var r_out_cap: float = r_in - CAP_RAIL_GLASS_GAP
-	var r_in_cap: float  = r_out_cap - CAP_RAIL_PROTRUSION
-	var board_top: float = wall_height
+	var r_in_kick: float = r_in - KICKPLATE_PROTRUSION
+	var r_out_kick: float = r_out + KICKPLATE_PROTRUSION
+	var r_in_cap: float  = r_in - CAP_RAIL_PROTRUSION
+	var r_out_cap: float = r_out + CAP_RAIL_PROTRUSION
+	var board_top: float = wall_height - CAP_RAIL_HEIGHT
+	var rail_top: float  = wall_height
 	var glass_top: float = wall_height + glass_height
-	var rail_top: float  = board_top + CAP_RAIL_HEIGHT
 
-	_add_corner_ring(center, angle_start, angle_end, r_in_kick, r_out,
+	# Kickplate ring (yellow lip)
+	_add_corner_ring(center, angle_start, angle_end, r_in_kick, r_out_kick,
 		0.0, kickplate_height, _make_solid_material(kickplate_color))
+	# White board ring — caps hidden by kickplate (below) and cap rail (above),
+	# so skip both to avoid coplanar z-fight against those lips' caps.
 	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
-		kickplate_height, board_top, _make_solid_material(wall_color))
-	# Cap rail is a small inward-protruding ring sitting in the bottom 5 cm of
-	# the glass volume — visible from inside the rink as a chunky blue trim
-	# between the boards and the glass. Radially offset from the glass to avoid
-	# coplanar z-fighting.
+		kickplate_height, board_top, _make_solid_material(wall_color), false, false)
+	# Cap rail ring (blue lip)
 	_add_corner_ring(center, angle_start, angle_end, r_in_cap, r_out_cap,
 		board_top, rail_top, _make_solid_material(cap_rail_color))
-	# Glass skips its bottom cap so it doesn't z-fight the opaque board top cap
-	# at y = board_top (glass is double-sided transparent, so both cap faces
-	# would render coplanar at that height).
+	# Glass — skip bottom cap so it doesn't z-fight the opaque cap-rail top cap
+	# at y=rail_top (glass is double-sided transparent, so both cap faces would
+	# render coplanar at that height).
 	_add_corner_ring(center, angle_start, angle_end, r_in, r_out,
-		board_top, glass_top, _make_glass_material(), false)
+		rail_top, glass_top, _make_glass_material(), true, false)
 
 	for stripe in stripe_zs:
 		_add_corner_stripe(center, angle_start, angle_end, stripe)
@@ -645,7 +636,8 @@ func _make_solid_material(color: Color) -> StandardMaterial3D:
 
 func _add_corner_ring(center: Vector3, a0: float, a1: float,
 		r_in: float, r_out: float, y_bot: float, y_top: float,
-		material: Material, with_bottom_cap: bool = true) -> void:
+		material: Material, with_top_cap: bool = true,
+		with_bottom_cap: bool = true) -> void:
 	# Build the four point rows around the arc — inner/outer × bottom/top —
 	# plus per-vertex radial normals for the curved faces.
 	var n: int = corner_segments
@@ -677,7 +669,8 @@ func _add_corner_ring(center: Vector3, a0: float, a1: float,
 	# the four corners.
 	_emit_arc_strip(verts, normals, uvs, indices, it, ib, n_in)              # inner face (toward rink center)
 	_emit_arc_strip(verts, normals, uvs, indices, ob, ot, n_out)             # outer face
-	_emit_arc_strip_flat(verts, normals, uvs, indices, ot, it, Vector3.UP)   # top cap
+	if with_top_cap:
+		_emit_arc_strip_flat(verts, normals, uvs, indices, ot, it, Vector3.UP)   # top cap
 	if with_bottom_cap:
 		_emit_arc_strip_flat(verts, normals, uvs, indices, ib, ob, Vector3.DOWN) # bottom cap
 
@@ -766,19 +759,22 @@ func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionar
 	var sa: float = sin(a_cross)
 	var r_face: float = corner_radius - wall_thickness / 2.0
 	var inset: float = 0.001
-	# Place stripe center on the inner face, then force its world-Z to align
-	# exactly with the ice goal-line (with optional nudge). The X follows from
-	# the arc.
+	# Stripe spans only the white-board band (between the kickplate lip and the
+	# cap-rail lip). The lips protrude inward of r_face, so a stripe drawn at
+	# r_face - 0.001 would be occluded by them — keeping the stripe inside the
+	# board zone keeps it visible without splitting into multiple quads.
 	var base_pt: Vector3 = center + Vector3(
 		(r_face - inset) * ca, 0.0, (r_face - inset) * sa)
 	base_pt.z = sz + board_stripe_z_nudge * signf(sz)
 	var tangent: Vector3 = Vector3(-sa, 0.0, ca)
 	var inward: Vector3 = Vector3(-ca, 0.0, -sa)
 	var half_sw: float = 0.025
-	var v0: Vector3 = base_pt + Vector3(-tangent.x * half_sw, 0.0,         -tangent.z * half_sw)
-	var v1: Vector3 = base_pt + Vector3( tangent.x * half_sw, 0.0,          tangent.z * half_sw)
-	var v2: Vector3 = base_pt + Vector3( tangent.x * half_sw, wall_height,  tangent.z * half_sw)
-	var v3: Vector3 = base_pt + Vector3(-tangent.x * half_sw, wall_height, -tangent.z * half_sw)
+	var y_bot: float = kickplate_height
+	var y_top: float = wall_height - CAP_RAIL_HEIGHT
+	var v0: Vector3 = base_pt + Vector3(-tangent.x * half_sw, y_bot, -tangent.z * half_sw)
+	var v1: Vector3 = base_pt + Vector3( tangent.x * half_sw, y_bot,  tangent.z * half_sw)
+	var v2: Vector3 = base_pt + Vector3( tangent.x * half_sw, y_top,  tangent.z * half_sw)
+	var v3: Vector3 = base_pt + Vector3(-tangent.x * half_sw, y_top, -tangent.z * half_sw)
 
 	var s_arrays: Array = []
 	s_arrays.resize(Mesh.ARRAY_MAX)

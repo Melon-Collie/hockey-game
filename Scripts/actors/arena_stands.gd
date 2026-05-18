@@ -41,9 +41,10 @@ extends Node3D
 		_request_rebuild()
 # Outward offset measured from rink_width/2 (the wall/glass center). Boards
 # and glass have wall_thickness=0.3 centered on this line, so their outer
-# face sits at +0.15. Anything below 0.15 embeds the first riser inside the
-# glass; values just above 0.15 put the first row flush against it.
-@export var base_outward_offset: float = 0.16:
+# face sits at +0.15, and the kickplate/cap-rail lips protrude another
+# ~1 cm beyond that. Default 0.20 keeps a few cm of clearance past the
+# lips; values below ~0.17 will clip into the cap rail in the corners.
+@export var base_outward_offset: float = 0.20:
 	set(v):
 		base_outward_offset = v
 		_request_rebuild()
