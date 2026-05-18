@@ -1458,6 +1458,13 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:
+	# One-timers are always slappers (release_slapper at full charge); record the
+	# shot sound + replay event here so the goal-replay driver can find the last
+	# "shot" event when scanning the clip — otherwise the slo-mo trims back to
+	# the start of the play instead of the moment of release.
+	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, puck.get_puck_position(), 0.0, 0.04)
+	if NetworkManager.is_host:
+		_record_replay_audio_event("shot", puck.get_puck_position(), power, {"is_slapper": true})
 	if not NetworkManager.is_host:
 		# Client path: seed local puck prediction, then tell the host.
 		if puck_controller != null:
@@ -1477,6 +1484,9 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null or record.skater == null:
 		return
+	var shot_pos: Vector3 = puck.get_puck_position()
+	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
+	_record_replay_audio_event("shot", shot_pos, power, {"is_slapper": true})
 	_host_release_one_timer(direction, power, record.skater, host_timestamp, rtt_ms)
 
 
