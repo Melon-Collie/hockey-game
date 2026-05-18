@@ -449,11 +449,16 @@ func _build_head_mesh() -> ArrayMesh:
 
 # Shared material — vertex color (white) multiplied by the per-instance
 # MultiMesh color produces the final albedo. Both bodies and heads use it.
+# Cull disabled matches the terrace material: back-face culling on individual
+# spectators was leaving rink-facing faces invisible at certain camera angles
+# (the boxes looked hollow), and the extra triangles are cheap on a few
+# thousand instances of an 8-vert mesh.
 func _spectator_material() -> StandardMaterial3D:
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.albedo_color = Color.WHITE
 	mat.vertex_color_use_as_albedo = true
 	mat.roughness = 0.85
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return mat
 
 
