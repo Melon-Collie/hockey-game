@@ -63,6 +63,10 @@ extends Camera3D
 @export var ozone_zoom_padding: float = 2.0
 @export var ozone_max_height: float = 25.0
 const _OZONE_RAMP_DISTANCE: float = 3.0
+# How far ahead (seconds) we look at the player's velocity when deciding ozone
+# engagement. Pre-empts both entry and exit so the camera anchor doesn't lag
+# the player through the blue line on a fast skate-back / skate-forward.
+const _OZONE_PREDICT_TIME: float = 0.25
 # Possession engagement smooth rate; ~0.17s settle from full to none.
 const _POSSESSION_SMOOTH: float = 6.0
 
@@ -185,7 +189,8 @@ func _physics_process(delta: float) -> void:
 	# both widens zoom and leans anchor forward while skating with the puck,
 	# without making the player drag their cursor away from the puck. Inactive
 	# off-puck so non-carry feel stays pure cursor-driven.
-	if puck != null and puck.get_carrier() == skater:
+	var is_carrying: bool = puck != null and puck.get_carrier() == skater
+	if is_carrying:
 		var vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 		var speed: float = vel_xz.length()
 		if speed > 0.5:
@@ -207,10 +212,12 @@ func _physics_process(delta: float) -> void:
 			player_pos.z + clamped_offset.z * cursor_weight)
 
 	# ── Step 3: Zoom target — lerp by clamped cursor distance ────────────────
-	# Cursor on player → tightest zoom (max precision for stickhandling).
-	# Cursor at max_cursor_dist → widest zoom (see what you're aiming at).
+	# Off-puck the camera is shift-only: zoom stays at min_height regardless
+	# of where the cursor sits. Carrying re-enables cursor-distance zoom so
+	# the player can widen the frame for long passes / shots while still
+	# getting the velocity-lead widening when skating.
 	var t_zoom: float = 0.0
-	if max_cursor_dist > 0.001:
+	if is_carrying and max_cursor_dist > 0.001:
 		t_zoom = clamped_dist / max_cursor_dist
 	var dist_mult: float = PlayerPrefs.camera_distance
 	var target_height: float = lerpf(min_height, max_height, t_zoom) * dist_mult
@@ -229,12 +236,15 @@ func _physics_process(delta: float) -> void:
 
 	# Ozone bias + zoom floor: past the attacking blue line, shift the anchor
 	# toward the goal (positioning) and lift zoom only as a backup when the
-	# shift alone can't fit player + goal in frame. Engagement ramps over
-	# OZONE_RAMP_DISTANCE past the blue line AND gates on possession (so a
-	# turnover releases the bias).
+	# shift alone can't fit player + goal in frame. Engagement uses a
+	# velocity-predicted player position rather than the current position so
+	# the bias releases (or engages) before the player physically crosses the
+	# blue line — prevents the anchor from lagging off-screen during a fast
+	# skate-back through the line.
 	var attack_dir: int = _attack_dir()
 	if attack_dir != 0:
-		var dist_past_line: float = (player_pos.z * float(attack_dir)) - GameRules.BLUE_LINE_Z
+		var predicted_z: float = player_pos.z + skater.velocity.z * _OZONE_PREDICT_TIME
+		var dist_past_line: float = (predicted_z * float(attack_dir)) - GameRules.BLUE_LINE_Z
 		var engagement: float = smoothstep(0.0, _OZONE_RAMP_DISTANCE, dist_past_line) \
 				* _possession_engagement
 		if engagement > 0.001:
