@@ -24,11 +24,12 @@ extends Camera3D
 
 # ── Breakaway ─────────────────────────────────────────────────────────────────
 # When the local player carries and no opponent sits ahead within
-# `breakaway_lookahead`, ramp the frame out toward effective_max so the goalie
-# comes into view. Smoothed both directions so a defender re-entering the lane
-# doesn't snap the zoom.
+# `breakaway_lookahead`, slide a virtual point from the player toward the
+# attacking goal so the zoom math naturally frames {player, goal}. The fit
+# tightens when you're close to the net and widens when you're farther out.
+# Smoothed both directions so a defender re-entering the lane doesn't snap the
+# zoom.
 @export var breakaway_lookahead: float = 18.0
-@export var breakaway_height_frac: float = 0.85  # share of effective_max to reach
 @export var breakaway_smooth: float = 1.5
 
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
@@ -102,6 +103,19 @@ func _get_attacking_direction() -> int:
 	if attacking_goal == null:
 		return 0
 	return 1 if attacking_goal.defending_team_id == 0 else -1
+
+# World position of the goal the carrier's team is attacking, or Vector3.INF
+# when there's no carrier.
+func _get_attacking_goal_position() -> Vector3:
+	if not _carrier_team_getter.is_valid():
+		return Vector3.INF
+	var carrier_team: int = _carrier_team_getter.call()
+	if carrier_team == -1:
+		return Vector3.INF
+	var attacking_goal: HockeyGoal = _goal_1 if carrier_team == 0 else _goal_0
+	if attacking_goal == null:
+		return Vector3.INF
+	return attacking_goal.global_position
 
 func shake(trauma: float) -> void:
 	_shake_trauma = minf(1.0, _shake_trauma + trauma)
@@ -197,9 +211,19 @@ func _physics_process(delta: float) -> void:
 				(player_pos.x + puck_pos.x) * 0.5, 0.0, (player_pos.z + puck_pos.z) * 0.5)
 		_initialized = true
 
-	# ── Step 1: Build fit set = {player, puck, nearest threat} ────────────────
-	# Including a nearby opponent widens the frame under pressure so
-	# stickhandling doesn't lock tight just when you need to see incoming hits.
+	var attack_dir: int = _get_attacking_direction()
+
+	# Breakaway engagement ramp. Drives the goal-extension below; ramping (not
+	# binary) means a defender re-entering the lane eases the frame back in.
+	var breakaway_now: float = 1.0 if _detect_breakaway(player_pos, attack_dir) else 0.0
+	_smoothed_breakaway = lerpf(_smoothed_breakaway, breakaway_now, breakaway_smooth * delta)
+
+	# ── Step 1: Build fit set ────────────────────────────────────────────────
+	# Base: {player, puck}. Plus the nearest opponent within `threat_distance`,
+	# so stickhandling under pressure widens the frame instead of locking tight.
+	# Plus a virtual point that slides from player toward the attacking goal as
+	# breakaway engagement ramps 0→1 — the zoom math naturally frames {player,
+	# goal} during breakaways without a separate height override.
 	var fit_min_x: float = minf(player_pos.x, puck_pos.x)
 	var fit_max_x: float = maxf(player_pos.x, puck_pos.x)
 	var fit_min_z: float = minf(player_pos.z, puck_pos.z)
@@ -210,6 +234,15 @@ func _physics_process(delta: float) -> void:
 		fit_max_x = maxf(fit_max_x, threat_pos.x)
 		fit_min_z = minf(fit_min_z, threat_pos.z)
 		fit_max_z = maxf(fit_max_z, threat_pos.z)
+	if _smoothed_breakaway > 0.001:
+		var goal_pos: Vector3 = _get_attacking_goal_position()
+		if not is_inf(goal_pos.x):
+			var vx: float = lerpf(player_pos.x, goal_pos.x, _smoothed_breakaway)
+			var vz: float = lerpf(player_pos.z, goal_pos.z, _smoothed_breakaway)
+			fit_min_x = minf(fit_min_x, vx)
+			fit_max_x = maxf(fit_max_x, vx)
+			fit_min_z = minf(fit_min_z, vz)
+			fit_max_z = maxf(fit_max_z, vz)
 	var base_center: Vector3 = Vector3(
 			(fit_min_x + fit_max_x) * 0.5, 0.0, (fit_min_z + fit_max_z) * 0.5)
 
@@ -218,7 +251,6 @@ func _physics_process(delta: float) -> void:
 	var half_span_z: float = (fit_max_z - fit_min_z) * 0.5
 	var needed_x: float = (half_span_x + zoom_padding) / (tan_half_fov * aspect)
 	var needed_z: float = (half_span_z + zoom_padding) / tan_half_fov
-	var attack_dir: int = _get_attacking_direction()
 	var in_ozone: bool = attack_dir != 0 and \
 			(player_pos.z * float(attack_dir)) > GameRules.BLUE_LINE_Z
 	# User-facing camera-distance multiplier (Options → Game).
@@ -226,13 +258,6 @@ func _physics_process(delta: float) -> void:
 	var effective_min: float = (ozone_min_height if in_ozone else min_height) * dist_mult
 	var effective_max: float = max_height * dist_mult
 	var target_height: float = clampf(maxf(needed_x, needed_z), effective_min, effective_max)
-
-	# Breakaway: lane to net is clear → push toward the max so the goalie reads.
-	var breakaway_now: float = 1.0 if _detect_breakaway(player_pos, attack_dir) else 0.0
-	_smoothed_breakaway = lerpf(_smoothed_breakaway, breakaway_now, breakaway_smooth * delta)
-	if _smoothed_breakaway > 0.001:
-		var breakaway_target: float = effective_max * breakaway_height_frac
-		target_height = lerpf(target_height, maxf(target_height, breakaway_target), _smoothed_breakaway)
 
 	var height_res: Array = _spring_damp(
 			_current_height, target_height, _height_vel, smooth_time_height, delta)
