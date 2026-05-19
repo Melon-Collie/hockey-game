@@ -10,11 +10,13 @@ extends Camera3D
 #     offset to the cursor offset so the camera leans forward and widens
 #     zoom without forcing the player to drag their cursor away from the
 #     puck. Off-puck the camera is pure cursor-driven.
-#   - Offensive-zone bias: past the attacking blue line, the anchor shifts
-#     toward the goal (positioning) so the goal comes into frame without
-#     needing to zoom out as much. A zoom floor still applies as a backup
-#     when the bias alone can't fit player + goal (e.g., right at the
-#     blue line), but the bias does most of the work.
+#   - Offensive-zone bias: past the attacking blue line and with the puck
+#     loose or on the local team, the anchor shifts toward the goal
+#     (positioning) so the goal comes into frame. Gated on possession —
+#     a turnover smoothly releases the bias so the camera doesn't keep
+#     pulling toward the goal while the play heads the other way. A zoom
+#     floor still applies as a backup when the bias alone can't fit
+#     player + goal.
 #
 # Predictability over expression (principle #9): no shake, no breakaway, no
 # cinematic moments, no possession-change swings.
@@ -61,6 +63,8 @@ extends Camera3D
 @export var ozone_zoom_padding: float = 2.0
 @export var ozone_max_height: float = 25.0
 const _OZONE_RAMP_DISTANCE: float = 3.0
+# Possession engagement smooth rate; ~0.17s settle from full to none.
+const _POSSESSION_SMOOTH: float = 6.0
 
 # ── Smoothing (critical-damp time constants, seconds to ~95%) ─────────────────
 # Settled but not laggy. Cursor flicks should ease rather than snap.
@@ -87,6 +91,10 @@ var _current_height: float = 15.0
 var _height_vel: float = 0.0
 var _smoothed_anchor: Vector3 = Vector3.ZERO
 var _anchor_vel: Vector3 = Vector3.ZERO
+# 1.0 when local team has (or could fight for) the puck; 0.0 when an opponent
+# is the carrier. Smoothly tracks so a turnover gracefully releases the ozone
+# bias.
+var _possession_engagement: float = 1.0
 
 func set_local_team_id(team_id: int) -> void:
 	_local_team_id = team_id
@@ -207,15 +215,28 @@ func _physics_process(delta: float) -> void:
 	var dist_mult: float = PlayerPrefs.camera_distance
 	var target_height: float = lerpf(min_height, max_height, t_zoom) * dist_mult
 
+	# Possession engagement: 1.0 when my team has the puck (or it's loose),
+	# 0.0 when an opponent has it. A turnover releases the ozone bias smoothly
+	# so the camera doesn't keep pulling toward the goal when the play is
+	# heading the other way.
+	var raw_possession: float = 1.0
+	if puck != null and _local_team_id != -1:
+		var carrier: Skater = puck.get_carrier()
+		if carrier != null and carrier.get_team_id() != _local_team_id:
+			raw_possession = 0.0
+	_possession_engagement = lerpf(
+			_possession_engagement, raw_possession, _POSSESSION_SMOOTH * delta)
+
 	# Ozone bias + zoom floor: past the attacking blue line, shift the anchor
 	# toward the goal (positioning) and lift zoom only as a backup when the
-	# shift alone can't fit player + goal in frame. Engagement ramps so the
-	# blue-line crossing isn't a snap. The bias is Z-only — lateral cursor
-	# control unchanged.
+	# shift alone can't fit player + goal in frame. Engagement ramps over
+	# OZONE_RAMP_DISTANCE past the blue line AND gates on possession (so a
+	# turnover releases the bias).
 	var attack_dir: int = _attack_dir()
 	if attack_dir != 0:
 		var dist_past_line: float = (player_pos.z * float(attack_dir)) - GameRules.BLUE_LINE_Z
-		var engagement: float = smoothstep(0.0, _OZONE_RAMP_DISTANCE, dist_past_line)
+		var engagement: float = smoothstep(0.0, _OZONE_RAMP_DISTANCE, dist_past_line) \
+				* _possession_engagement
 		if engagement > 0.001:
 			var goal_z: float = float(attack_dir) * GameRules.GOAL_LINE_Z
 			var goal_offset: float = goal_z - player_pos.z  # signed; toward the goal
