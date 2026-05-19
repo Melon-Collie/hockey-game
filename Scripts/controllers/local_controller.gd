@@ -2,6 +2,7 @@ class_name LocalController
 extends SkaterController
 
 signal hit_received(magnitude: float)
+signal hit_landed(magnitude: float)
 
 @export var reconcile_position_threshold: float = 0.10
 @export var reconcile_velocity_threshold: float = 0.4
@@ -35,6 +36,9 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 			_body_check_impulse = impulse
 			_body_check_impulse_timestamp = _current_input.host_timestamp
 			hit_received.emit(impulse.length()))
+	skater.body_checked_player.connect(
+		func(_v: Skater, impact_force: float, _d: Vector3) -> void:
+			hit_landed.emit(impact_force))
 
 # Called after setup() to provide the local player's team — needed for
 # client-side offside prediction. Separate from setup() because GDScript
@@ -46,6 +50,9 @@ func set_local_team_id(team_id: int) -> void:
 
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	camera.set_goal_context(goal_0, goal_1, carrier_team_getter)
+
+func set_play_context(local_is_carrier_getter: Callable, opponent_positions_getter: Callable) -> void:
+	camera.set_play_context(local_is_carrier_getter, opponent_positions_getter)
 
 # Team 0 defends the +Z goal → attacks -Z. Team 1 defends -Z → attacks +Z.
 # See GameManager._assign_goals_to_teams.

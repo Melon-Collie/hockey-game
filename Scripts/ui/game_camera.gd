@@ -6,26 +6,49 @@ extends Camera3D
 @export var puck: Puck
 @export var local_controller: LocalController
 
-# ── Zone Bias ─────────────────────────────────────────────────────────────────
-# Fraction of available slack to use when shifting toward the attacking zone.
-# 1.0 = push player/puck to the trailing edge of the frame; 0.0 = no bias.
-@export var zone_bias: float = 0.7
-# How fast the bias transitions when possession changes (prevents snapping).
-@export var bias_smooth_speed: float = 1.5
+# ── Lead (velocity + zone) ────────────────────────────────────────────────────
+# Velocity lead pulls the frame in the local player's skating direction so the
+# camera moves with them whether they carry or not.
+@export var lead_distance: float = 5.0          # max world-units lead at full speed
+@export var lead_full_speed: float = 12.0       # skater speed at which lead peaks
+@export var lead_smooth: float = 5.0
+# Zone lead is a possession-aware additive pull toward the attacking goal so
+# you can see receivers / the play even when stationary with the puck.
+@export var zone_lead: float = 3.5
+@export var bias_smooth_speed: float = 2.0      # smooths possession transitions
+
+# ── Threat-aware framing ──────────────────────────────────────────────────────
+# Opponents within this distance of the local player are included in the
+# zoom-fit so pressure widens the frame instead of locking tight on stickwork.
+@export var threat_distance: float = 11.0
+
+# ── Breakaway ─────────────────────────────────────────────────────────────────
+# When the local player carries and no opponent sits ahead within
+# `breakaway_lookahead`, ramp the frame out toward effective_max so the goalie
+# comes into view. Smoothed both directions so a defender re-entering the lane
+# doesn't snap the zoom.
+@export var breakaway_lookahead: float = 18.0
+@export var breakaway_height_frac: float = 0.85  # share of effective_max to reach
+@export var breakaway_smooth: float = 1.5
 
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
 @export var min_height: float = 10.0
 @export var ozone_min_height: float = 14.0  # min height when local player is in the offensive zone
 @export var max_height: float = 40.0
-@export var zoom_speed: float = 3.0
-@export var zoom_padding: float = 4.0  # extra visible space beyond player+puck span
+@export var zoom_padding: float = 4.0  # extra visible space beyond fit-set span
+
+# ── Smoothing (critical-damp time constants, seconds to ~95%) ─────────────────
+@export var smooth_time_anchor: float = 0.18
+@export var smooth_time_height: float = 0.28
+
+# ── Soft rink clamp ───────────────────────────────────────────────────────────
+# The last `clamp_softness` meters near the rink edge compress non-linearly so
+# the camera doesn't visibly pin when play sits in a corner.
+@export var clamp_softness: float = 3.0
 
 # ── Rink Bounds ───────────────────────────────────────────────────────────────
 @export var rink_half_width: float = 13.0
 @export var rink_half_length: float = 30.0
-
-# ── Smoothing ─────────────────────────────────────────────────────────────────
-@export var smooth_speed: float = 3.0
 
 # Tilted-camera pitch. Subtle by design — much steeper than this and the
 # mouse-to-world projection becomes nonlinear enough to break stickhandling.
@@ -37,10 +60,19 @@ var _goal_1: HockeyGoal = null  # Team 1's defended goal
 var _carrier_team_getter: Callable  # () -> int team_id, or -1 if no carrier
 var _local_team_id: int = -1
 
+# ── Play Context (set via set_play_context) ──────────────────────────────────
+var _local_is_carrier_getter: Callable    # () -> bool
+var _opponent_positions_getter: Callable  # () -> Array[Vector3]
+
 # ── Runtime ───────────────────────────────────────────────────────────────────
+var _initialized: bool = false
 var _current_height: float = 15.0
-var _smoothed_attack_dir: float = 0.0    # lerps between -1, 0, +1 on possession change
-var _smoothed_direction_factor: float = 1.0  # lerps movement-direction bias to avoid snapping
+var _height_vel: float = 0.0
+var _smoothed_anchor: Vector3 = Vector3.ZERO
+var _anchor_vel: Vector3 = Vector3.ZERO
+var _smoothed_attack_dir: float = 0.0
+var _smoothed_lead_offset: Vector3 = Vector3.ZERO
+var _smoothed_breakaway: float = 0.0
 
 # ── Shake ─────────────────────────────────────────────────────────────────────
 var _shake_trauma: float = 0.0
@@ -51,6 +83,10 @@ func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_gette
 	_goal_0 = goal_0
 	_goal_1 = goal_1
 	_carrier_team_getter = carrier_team_getter
+
+func set_play_context(local_is_carrier_getter: Callable, opponent_positions_getter: Callable) -> void:
+	_local_is_carrier_getter = local_is_carrier_getter
+	_opponent_positions_getter = opponent_positions_getter
 
 func set_local_team_id(team_id: int) -> void:
 	_local_team_id = team_id
@@ -76,6 +112,68 @@ func _ready() -> void:
 	GameManager.local_player_hit.connect(func(mag: float) -> void:
 		if mag >= 3.0:
 			shake(clampf(mag / 12.0, 0.2, 0.4)))
+	GameManager.local_player_landed_hit.connect(func(mag: float) -> void:
+		if mag >= 3.0:
+			shake(clampf(mag / 16.0, 0.15, 0.3)))
+
+# Critical-damped spring (SmoothDamp). Settles in ~smooth_time seconds with no
+# oscillation, framerate-independent. Returns [new_pos, new_vel].
+static func _spring_damp(current: float, target: float, vel: float, smooth_time: float, dt: float) -> Array:
+	if smooth_time < 0.0001 or dt <= 0.0:
+		return [target, 0.0]
+	var omega: float = 2.0 / smooth_time
+	var x: float = omega * dt
+	var exp_factor: float = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+	var change: float = current - target
+	var temp: float = (vel + omega * change) * dt
+	var new_vel: float = (vel - omega * temp) * exp_factor
+	var new_pos: float = target + (change + temp) * exp_factor
+	return [new_pos, new_vel]
+
+# Asymmetric saturate: identity inside ±(limit - softness), smoothly approaches
+# (but never exceeds) ±limit beyond that.
+static func _soft_clamp(x: float, limit: float, softness: float) -> float:
+	if limit <= 0.0:
+		return 0.0
+	var s: float = signf(x)
+	var ax: float = absf(x)
+	var knee: float = maxf(limit - softness, 0.0)
+	if ax <= knee:
+		return x
+	var t: float = (ax - knee) / softness
+	return s * (knee + softness * t / (1.0 + t))
+
+# Returns Vector3.INF when no opponent is within `threat_distance` of the
+# player. Caller checks `is_inf(result.x)`.
+func _find_nearest_threat(player_pos: Vector3) -> Vector3:
+	if not _opponent_positions_getter.is_valid():
+		return Vector3.INF
+	var nearest_d_sq: float = threat_distance * threat_distance
+	var nearest: Vector3 = Vector3.INF
+	var opps: Array = _opponent_positions_getter.call()
+	for opp_pos: Vector3 in opps:
+		var dx: float = opp_pos.x - player_pos.x
+		var dz: float = opp_pos.z - player_pos.z
+		var d_sq: float = dx * dx + dz * dz
+		if d_sq < nearest_d_sq:
+			nearest_d_sq = d_sq
+			nearest = Vector3(opp_pos.x, 0.0, opp_pos.z)
+	return nearest
+
+func _detect_breakaway(player_pos: Vector3, attack_dir: int) -> bool:
+	if attack_dir == 0:
+		return false
+	if not _local_is_carrier_getter.is_valid() or not _local_is_carrier_getter.call():
+		return false
+	if not _opponent_positions_getter.is_valid():
+		return false
+	var af: float = float(attack_dir)
+	var opps: Array = _opponent_positions_getter.call()
+	for opp_pos: Vector3 in opps:
+		var ahead: float = (opp_pos.z - player_pos.z) * af
+		if ahead > 0.0 and ahead < breakaway_lookahead:
+			return false
+	return true
 
 func _physics_process(delta: float) -> void:
 	if not skater or not puck:
@@ -94,89 +192,106 @@ func _physics_process(delta: float) -> void:
 	var aspect: float = get_viewport().get_visible_rect().size.x / get_viewport().get_visible_rect().size.y
 	var tan_half_fov: float = tan(fov_rad / 2.0)
 
-	# ── Step 1: Base center = midpoint of player and puck ────────────────────
-	var base_center: Vector3 = (player_pos + puck_pos) * 0.5
+	if not _initialized:
+		_smoothed_anchor = Vector3(
+				(player_pos.x + puck_pos.x) * 0.5, 0.0, (player_pos.z + puck_pos.z) * 0.5)
+		_initialized = true
 
-	# ── Step 2: Zoom to keep both player and puck in frame ───────────────────
-	var half_span_x: float = abs(player_pos.x - puck_pos.x) * 0.5
-	var half_span_z: float = abs(player_pos.z - puck_pos.z) * 0.5
+	# ── Step 1: Build fit set = {player, puck, nearest threat} ────────────────
+	# Including a nearby opponent widens the frame under pressure so
+	# stickhandling doesn't lock tight just when you need to see incoming hits.
+	var fit_min_x: float = minf(player_pos.x, puck_pos.x)
+	var fit_max_x: float = maxf(player_pos.x, puck_pos.x)
+	var fit_min_z: float = minf(player_pos.z, puck_pos.z)
+	var fit_max_z: float = maxf(player_pos.z, puck_pos.z)
+	var threat_pos: Vector3 = _find_nearest_threat(player_pos)
+	if not is_inf(threat_pos.x):
+		fit_min_x = minf(fit_min_x, threat_pos.x)
+		fit_max_x = maxf(fit_max_x, threat_pos.x)
+		fit_min_z = minf(fit_min_z, threat_pos.z)
+		fit_max_z = maxf(fit_max_z, threat_pos.z)
+	var base_center: Vector3 = Vector3(
+			(fit_min_x + fit_max_x) * 0.5, 0.0, (fit_min_z + fit_max_z) * 0.5)
+
+	# ── Step 2: Dynamic zoom to fit the set ───────────────────────────────────
+	var half_span_x: float = (fit_max_x - fit_min_x) * 0.5
+	var half_span_z: float = (fit_max_z - fit_min_z) * 0.5
 	var needed_x: float = (half_span_x + zoom_padding) / (tan_half_fov * aspect)
 	var needed_z: float = (half_span_z + zoom_padding) / tan_half_fov
-	# Zoom out when someone has the puck AND the local player is in the zone
-	# being attacked — works for either ozone, either carrier.
-	var attack_dir_now: int = _get_attacking_direction()
-	var in_ozone: bool = attack_dir_now != 0 and \
-		(player_pos.z * float(attack_dir_now)) > GameRules.BLUE_LINE_Z
-	# User-facing camera-distance multiplier (Options → Game). Scales the
-	# clamp range so the dynamic zoom math keeps its shape but the overall
-	# height shifts up/down per the player's preference.
+	var attack_dir: int = _get_attacking_direction()
+	var in_ozone: bool = attack_dir != 0 and \
+			(player_pos.z * float(attack_dir)) > GameRules.BLUE_LINE_Z
+	# User-facing camera-distance multiplier (Options → Game).
 	var dist_mult: float = PlayerPrefs.camera_distance
 	var effective_min: float = (ozone_min_height if in_ozone else min_height) * dist_mult
 	var effective_max: float = max_height * dist_mult
 	var target_height: float = clampf(maxf(needed_x, needed_z), effective_min, effective_max)
-	_current_height = lerpf(_current_height, target_height, zoom_speed * delta)
+
+	# Breakaway: lane to net is clear → push toward the max so the goalie reads.
+	var breakaway_now: float = 1.0 if _detect_breakaway(player_pos, attack_dir) else 0.0
+	_smoothed_breakaway = lerpf(_smoothed_breakaway, breakaway_now, breakaway_smooth * delta)
+	if _smoothed_breakaway > 0.001:
+		var breakaway_target: float = effective_max * breakaway_height_frac
+		target_height = lerpf(target_height, maxf(target_height, breakaway_target), _smoothed_breakaway)
+
+	var height_res: Array = _spring_damp(
+			_current_height, target_height, _height_vel, smooth_time_height, delta)
+	_current_height = height_res[0]
+	_height_vel = height_res[1]
 
 	var visible_half_x: float = tan_half_fov * aspect * _current_height
 	var visible_half_z: float = tan_half_fov * _current_height
 
-	# ── Step 3: Attacking zone bias ───────────────────────────────────────────
-	# Lerp the attack direction so possession changes ease in rather than snap.
-	var attack_dir: int = _get_attacking_direction()
+	# ── Step 3: Lead offset ───────────────────────────────────────────────────
+	# Velocity lead (always-on): offset in skating direction scaled by speed.
+	var vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
+	var speed: float = vel_xz.length()
+	var target_lead: Vector3 = Vector3.ZERO
+	if speed > 0.5:  # ignore drift
+		var t: float = clampf(speed / lead_full_speed, 0.0, 1.0)
+		target_lead = (vel_xz / speed) * t * lead_distance
+
+	# Zone lead (possession-aware additive). Smoothed possession sign keeps the
+	# pull from snapping when the carrier changes.
 	_smoothed_attack_dir = lerpf(_smoothed_attack_dir, float(attack_dir), bias_smooth_speed * delta)
+	target_lead.z += _smoothed_attack_dir * zone_lead
 
-	var target_center: Vector3 = base_center
-	if not is_zero_approx(_smoothed_attack_dir):
-		# Scale bias by how much the player is moving toward the attacking zone.
-		# Moving directly toward ozone = 1.0, sideways = 0.5, backward = 0.0.
-		# Smoothed so a momentary backward step doesn't yank the bias away.
-		var vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
-		var raw_direction_factor: float = 1.0
-		if vel_xz.length_squared() > 0.25:  # ignore drift when nearly stationary
-			var vel_dir: Vector3 = vel_xz.normalized()
-			var dot: float = vel_dir.z * float(attack_dir)
-			raw_direction_factor = clampf((dot + 1.0) * 0.5, 0.0, 1.0)
-		_smoothed_direction_factor = lerpf(_smoothed_direction_factor, raw_direction_factor, bias_smooth_speed * delta)
-		var direction_factor: float = _smoothed_direction_factor
+	_smoothed_lead_offset = _smoothed_lead_offset.lerp(target_lead, lead_smooth * delta)
+	var target_anchor: Vector3 = base_center + _smoothed_lead_offset
 
-		# Slack = how far we can shift before the trailing subject hits the frame edge.
-		var min_z: float = minf(player_pos.z, puck_pos.z)
-		var max_z: float = maxf(player_pos.z, puck_pos.z)
-		var slack_pos: float = maxf(visible_half_z - (base_center.z - min_z), 0.0)
-		var slack_neg: float = maxf(visible_half_z - (max_z - base_center.z), 0.0)
-		var blended_slack: float = 0.0
-		if _smoothed_attack_dir > 0.0:
-			blended_slack = _smoothed_attack_dir * slack_pos
-		else:
-			blended_slack = _smoothed_attack_dir * slack_neg
-		target_center.z += blended_slack * zone_bias * direction_factor
-
-	# ── Step 4: Rink clamp ────────────────────────────────────────────────────
+	# ── Step 4: Soft rink clamp ──────────────────────────────────────────────
 	var safe_x: float = maxf(rink_half_width - visible_half_x, 0.0)
 	var safe_z: float = maxf(rink_half_length - visible_half_z, 0.0)
-	target_center.x = clampf(target_center.x, -safe_x, safe_x)
-	target_center.z = clampf(target_center.z, -safe_z, safe_z)
+	target_anchor.x = _soft_clamp(target_anchor.x, safe_x, clamp_softness)
+	target_anchor.z = _soft_clamp(target_anchor.z, safe_z, clamp_softness)
 
-	# ── Step 5: Smooth movement ───────────────────────────────────────────────
-	# Tilted mode: camera looks along a slanted ray, so a camera at
-	# target_center.xz looks at a point ~h*tan(off-axis-angle) behind itself.
-	# Offset the camera in the direction the view is being pulled away from
-	# so the play stays centered. attack_up flip mirrors the offset sign.
+	# ── Step 5: Smooth-damp the anchor (xz) ──────────────────────────────────
+	var ax_res: Array = _spring_damp(
+			_smoothed_anchor.x, target_anchor.x, _anchor_vel.x, smooth_time_anchor, delta)
+	_smoothed_anchor.x = ax_res[0]
+	_anchor_vel.x = ax_res[1]
+	var az_res: Array = _spring_damp(
+			_smoothed_anchor.z, target_anchor.z, _anchor_vel.z, smooth_time_anchor, delta)
+	_smoothed_anchor.z = az_res[0]
+	_anchor_vel.z = az_res[1]
+
+	# ── Step 6: Compose camera position ──────────────────────────────────────
+	# Tilt geometry is derived from the actual (smoothed) height so the view
+	# anchor stays put during zoom transitions.
 	var pitch: float = -90.0
 	var tilt_z_offset: float = 0.0
 	if PlayerPrefs.camera_mode == PlayerPrefs.CAMERA_MODE_TILTED:
 		pitch = _TILTED_PITCH_DEG
 		var off_axis_rad: float = deg_to_rad(90.0 + _TILTED_PITCH_DEG)  # 15° at -75° pitch
-		var raw_offset: float = _current_height * tan(off_axis_rad)
 		var flip_sign: float = -1.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 1.0
-		tilt_z_offset = raw_offset * flip_sign
-	var target_pos: Vector3 = Vector3(
-			target_center.x, _current_height, target_center.z + tilt_z_offset)
-	global_position = global_position.lerp(target_pos, smooth_speed * delta)
+		tilt_z_offset = _current_height * tan(off_axis_rad) * flip_sign
 
-	# ── Step 5b: Apply projection + pitch from PlayerPrefs ────────────────────
-	# Ortho `size` = vertical world units visible; matches the perspective
-	# FOV's vertical extent at the current height so the same zone frames in
-	# both modes.
+	global_position = Vector3(
+			_smoothed_anchor.x, _current_height, _smoothed_anchor.z + tilt_z_offset)
+
+	# ── Step 7: Projection + rotation ────────────────────────────────────────
+	# Ortho `size` matches perspective FOV's vertical extent so the same zone
+	# frames in both modes.
 	var flip_y: float = 180.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 0.0
 	match PlayerPrefs.camera_mode:
 		PlayerPrefs.CAMERA_MODE_ORTHOGRAPHIC:
@@ -191,7 +306,7 @@ func _physics_process(delta: float) -> void:
 				projection = PROJECTION_PERSPECTIVE
 	rotation_degrees = Vector3(pitch, flip_y, 0.0)
 
-	# ── Step 6: Shake ─────────────────────────────────────────────────────────
+	# ── Step 8: Shake ────────────────────────────────────────────────────────
 	if _shake_trauma > 0.0:
 		_shake_trauma = maxf(0.0, _shake_trauma - _SHAKE_DECAY * delta)
 		global_position += Vector3(
