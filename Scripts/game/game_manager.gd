@@ -33,7 +33,6 @@ signal stats_updated
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color)
 signal local_player_hit(magnitude: float)
-signal local_player_landed_hit(magnitude: float)
 signal replay_started
 signal replay_stopped
 # Live tally of unanimous skip-replay votes (emitted on every accepted vote and
@@ -1270,10 +1269,9 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		var local_ctrl: LocalController = record.controller as LocalController
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
-		local_ctrl.set_play_context(_get_local_is_carrier, _get_opponent_positions)
+		local_ctrl.set_play_context(_get_opponent_positions)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
-		local_ctrl.hit_landed.connect(func(mag: float) -> void: local_player_landed_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 	# AI bots release shots through the same signal as humans, but they live
 	# only on the host (record.is_local is false). Without this connection
@@ -1327,17 +1325,8 @@ func _get_puck_carrier_team_id() -> int:
 	return -1
 
 
-# Camera play-context callables. The camera asks each frame; we resolve from
-# the registry + puck. Keep both cheap — they're called every physics tick.
-func _get_local_is_carrier() -> bool:
-	if _registry == null or puck == null:
-		return false
-	var local: PlayerRecord = _registry.get_local()
-	if local == null or local.skater == null:
-		return false
-	return puck.get_carrier() == local.skater
-
-
+# Camera play-context callable. The camera asks each frame; we resolve from
+# the registry. Keep cheap — called every physics tick.
 func _get_opponent_positions() -> Array[Vector3]:
 	var positions: Array[Vector3] = []
 	if _registry == null:

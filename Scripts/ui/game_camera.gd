@@ -23,16 +23,6 @@ extends Camera3D
 # Anchor stays on the player; only the zoom changes.
 @export var threat_distance: float = 11.0
 
-# ── Breakaway ─────────────────────────────────────────────────────────────────
-# When the local player carries and no opponent sits ahead within
-# `breakaway_lookahead`, slide a virtual point from the player toward the
-# attacking goal so the zoom math naturally frames {player, goal}. The fit
-# tightens when you're close to the net and widens when you're farther out.
-# Smoothed both directions so a defender re-entering the lane doesn't snap the
-# zoom.
-@export var breakaway_lookahead: float = 18.0
-@export var breakaway_smooth: float = 1.5
-
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
 @export var min_height: float = 10.0
 @export var ozone_min_height: float = 14.0  # min height when local player is in the offensive zone
@@ -63,7 +53,6 @@ var _carrier_team_getter: Callable  # () -> int team_id, or -1 if no carrier
 var _local_team_id: int = -1
 
 # ── Play Context (set via set_play_context) ──────────────────────────────────
-var _local_is_carrier_getter: Callable    # () -> bool
 var _opponent_positions_getter: Callable  # () -> Array[Vector3]
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
@@ -74,20 +63,13 @@ var _smoothed_anchor: Vector3 = Vector3.ZERO
 var _anchor_vel: Vector3 = Vector3.ZERO
 var _smoothed_attack_dir: float = 0.0
 var _smoothed_lead_offset: Vector3 = Vector3.ZERO
-var _smoothed_breakaway: float = 0.0
-
-# ── Shake ─────────────────────────────────────────────────────────────────────
-var _shake_trauma: float = 0.0
-const _SHAKE_DECAY: float = 4.0
-const _SHAKE_MAG: float = 0.25
 
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	_goal_0 = goal_0
 	_goal_1 = goal_1
 	_carrier_team_getter = carrier_team_getter
 
-func set_play_context(local_is_carrier_getter: Callable, opponent_positions_getter: Callable) -> void:
-	_local_is_carrier_getter = local_is_carrier_getter
+func set_play_context(opponent_positions_getter: Callable) -> void:
 	_opponent_positions_getter = opponent_positions_getter
 
 func set_local_team_id(team_id: int) -> void:
@@ -105,31 +87,8 @@ func _get_attacking_direction() -> int:
 		return 0
 	return 1 if attacking_goal.defending_team_id == 0 else -1
 
-# World position of the goal the carrier's team is attacking, or Vector3.INF
-# when there's no carrier.
-func _get_attacking_goal_position() -> Vector3:
-	if not _carrier_team_getter.is_valid():
-		return Vector3.INF
-	var carrier_team: int = _carrier_team_getter.call()
-	if carrier_team == -1:
-		return Vector3.INF
-	var attacking_goal: HockeyGoal = _goal_1 if carrier_team == 0 else _goal_0
-	if attacking_goal == null:
-		return Vector3.INF
-	return attacking_goal.global_position
-
-func shake(trauma: float) -> void:
-	_shake_trauma = minf(1.0, _shake_trauma + trauma)
-
 func _ready() -> void:
 	make_current()
-	GameManager.goal_scored.connect(func(_t, _n, _a1, _a2) -> void: shake(1.0))
-	GameManager.local_player_hit.connect(func(mag: float) -> void:
-		if mag >= 3.0:
-			shake(clampf(mag / 12.0, 0.2, 0.4)))
-	GameManager.local_player_landed_hit.connect(func(mag: float) -> void:
-		if mag >= 3.0:
-			shake(clampf(mag / 16.0, 0.15, 0.3)))
 
 # Critical-damped spring (SmoothDamp). Settles in ~smooth_time seconds with no
 # oscillation, framerate-independent. Returns [new_pos, new_vel].
@@ -175,21 +134,6 @@ func _find_nearest_threat(player_pos: Vector3) -> Vector3:
 			nearest = Vector3(opp_pos.x, 0.0, opp_pos.z)
 	return nearest
 
-func _detect_breakaway(player_pos: Vector3, attack_dir: int) -> bool:
-	if attack_dir == 0:
-		return false
-	if not _local_is_carrier_getter.is_valid() or not _local_is_carrier_getter.call():
-		return false
-	if not _opponent_positions_getter.is_valid():
-		return false
-	var af: float = float(attack_dir)
-	var opps: Array = _opponent_positions_getter.call()
-	for opp_pos: Vector3 in opps:
-		var ahead: float = (opp_pos.z - player_pos.z) * af
-		if ahead > 0.0 and ahead < breakaway_lookahead:
-			return false
-	return true
-
 func _physics_process(delta: float) -> void:
 	if not skater or not puck:
 		return
@@ -212,11 +156,6 @@ func _physics_process(delta: float) -> void:
 		_initialized = true
 
 	var attack_dir: int = _get_attacking_direction()
-
-	# Breakaway engagement ramp. Drives the goal-extension below; ramping (not
-	# binary) means a defender re-entering the lane eases the frame back in.
-	var breakaway_now: float = 1.0 if _detect_breakaway(player_pos, attack_dir) else 0.0
-	_smoothed_breakaway = lerpf(_smoothed_breakaway, breakaway_now, breakaway_smooth * delta)
 
 	# ── Step 1: Lead offset ──────────────────────────────────────────────────
 	# Computed first so the anchor is available to the zoom math below.
@@ -246,10 +185,8 @@ func _physics_process(delta: float) -> void:
 
 	# ── Step 3: Zoom from extents relative to the anchor ────────────────────
 	# Find the half-width / half-depth the camera needs to reach to keep these
-	# points visible: {player, puck, nearest threat, breakaway virtual point}.
-	# Threat: widens under pressure without moving the anchor off the player.
-	# Breakaway virtual: slides from player → attacking goal as the engagement
-	# ramp comes up, revealing the goalie on a clean rush — again, zoom only.
+	# points visible: {player, puck, nearest threat}. Threat widens under
+	# pressure without moving the anchor — anchor stays on the player.
 	var max_dx: float = absf(player_pos.x - target_anchor.x)
 	var max_dz: float = absf(player_pos.z - target_anchor.z)
 	max_dx = maxf(max_dx, absf(puck_pos.x - target_anchor.x))
@@ -258,13 +195,6 @@ func _physics_process(delta: float) -> void:
 	if not is_inf(threat_pos.x):
 		max_dx = maxf(max_dx, absf(threat_pos.x - target_anchor.x))
 		max_dz = maxf(max_dz, absf(threat_pos.z - target_anchor.z))
-	if _smoothed_breakaway > 0.001:
-		var goal_pos: Vector3 = _get_attacking_goal_position()
-		if not is_inf(goal_pos.x):
-			var vx: float = lerpf(player_pos.x, goal_pos.x, _smoothed_breakaway)
-			var vz: float = lerpf(player_pos.z, goal_pos.z, _smoothed_breakaway)
-			max_dx = maxf(max_dx, absf(vx - target_anchor.x))
-			max_dz = maxf(max_dz, absf(vz - target_anchor.z))
 
 	var needed_x: float = (max_dx + zoom_padding) / (tan_half_fov * aspect)
 	var needed_z: float = (max_dz + zoom_padding) / tan_half_fov
@@ -330,11 +260,3 @@ func _physics_process(delta: float) -> void:
 			if projection != PROJECTION_PERSPECTIVE:
 				projection = PROJECTION_PERSPECTIVE
 	rotation_degrees = Vector3(pitch, flip_y, 0.0)
-
-	# ── Step 8: Shake ────────────────────────────────────────────────────────
-	if _shake_trauma > 0.0:
-		_shake_trauma = maxf(0.0, _shake_trauma - _SHAKE_DECAY * delta)
-		global_position += Vector3(
-			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG,
-			0.0,
-			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG)
