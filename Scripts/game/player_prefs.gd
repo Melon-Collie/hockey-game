@@ -275,6 +275,12 @@ func _apply_anti_aliasing(root: Viewport) -> void:
 	root.msaa_3d = Viewport.MSAA_DISABLED
 	root.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 	root.use_taa = false
+	# FSR2 has its own temporal reconstruction and Godot rejects TAA on top
+	# of it (renderer_viewport.cpp:210). Mirror that check here so we don't
+	# emit the engine warning every Apply when the user has picked the
+	# incompatible combo — FSR2's reconstruction already provides
+	# TAA-equivalent sub-pixel AA.
+	var fsr2_active: bool = scaling_3d_mode == SCALING_3D_FSR2
 	match anti_aliasing_mode:
 		AA_FXAA:
 			root.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
@@ -285,7 +291,8 @@ func _apply_anti_aliasing(root: Viewport) -> void:
 		AA_MSAA_8X:
 			root.msaa_3d = Viewport.MSAA_8X
 		AA_TAA:
-			root.use_taa = true
+			if not fsr2_active:
+				root.use_taa = true
 
 # Builds a 16³ 3D LUT that applies the selected color-grade preset then the
 # gamma curve (output = input^(1/gamma)). Both bake into a single texture so
