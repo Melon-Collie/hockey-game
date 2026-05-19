@@ -52,6 +52,41 @@ const CROWD_DENSITY_LABELS: Array[String] = [
 const CROWD_DENSITY_LOW_TERRACES: int = 5
 const CROWD_DENSITY_HIGH_TERRACES: int = 15
 
+# 3D render scale. Lowers the internal rendertarget resolution and upscales
+# back to window size. Bilinear is cheap and blurry; FSR/FSR2 reconstruct
+# sharper edges at progressively higher GPU cost. Constants match
+# Viewport.Scaling3DMode so the value is passed through directly.
+const SCALING_3D_BILINEAR: int = 0
+const SCALING_3D_FSR: int = 1
+const SCALING_3D_FSR2: int = 2
+const SCALING_3D_LABELS: Array[String] = [
+	"Bilinear",
+	"FSR",
+	"FSR2",
+]
+const RENDER_SCALE_MIN: float = 0.5
+const RENDER_SCALE_MAX: float = 1.0
+const RENDER_SCALE_STEP: float = 0.05
+
+# Anti-aliasing mode. One dropdown that drives three viewport properties
+# (msaa_3d, screen_space_aa, use_taa) — the apply step picks the right
+# combination per mode. Default is MSAA 2x, matching the project.godot
+# baseline.
+const AA_OFF: int = 0
+const AA_FXAA: int = 1
+const AA_MSAA_2X: int = 2
+const AA_MSAA_4X: int = 3
+const AA_MSAA_8X: int = 4
+const AA_TAA: int = 5
+const AA_LABELS: Array[String] = [
+	"Off",
+	"FXAA",
+	"MSAA 2x",
+	"MSAA 4x",
+	"MSAA 8x",
+	"TAA",
+]
+
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
 	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
@@ -80,6 +115,9 @@ var color_grade_preset: int = COLOR_GRADE_BROADCAST
 var gi_mode: int = GI_MODE_OFF
 var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
+var scaling_3d_mode: int = SCALING_3D_BILINEAR
+var render_scale: float = 1.0
+var anti_aliasing_mode: int = AA_MSAA_2X
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
@@ -136,6 +174,9 @@ func save() -> void:
 	cfg.set_value("video", "gi_mode", gi_mode)
 	cfg.set_value("video", "crowd_density", crowd_density)
 	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
+	cfg.set_value("video", "scaling_3d_mode", scaling_3d_mode)
+	cfg.set_value("video", "render_scale", render_scale)
+	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "camera_mode", camera_mode)
@@ -203,6 +244,10 @@ func apply_video() -> void:
 	DisplayServer.window_set_vsync_mode(
 		DisplayServer.VSYNC_ENABLED if vsync_enabled else DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = FPS_CAP_VALUES[fps_cap_index]
+	var root: Window = get_tree().root
+	root.scaling_3d_mode = scaling_3d_mode as Viewport.Scaling3DMode
+	root.scaling_3d_scale = render_scale
+	_apply_anti_aliasing(root)
 	var scene: Node = Engine.get_main_loop().current_scene
 	if scene == null:
 		return
@@ -222,6 +267,32 @@ func apply_video() -> void:
 	var scratch := scene.find_child("IceScratchMap", true, false)
 	if scratch != null and scratch.has_method("set_enabled"):
 		scratch.call("set_enabled", ice_scratches_enabled)
+
+func _apply_anti_aliasing(root: Viewport) -> void:
+	# MSAA, FXAA, and TAA are mutually exclusive in the dropdown — the
+	# helper sets all three viewport props per row so switching modes
+	# always lands in a clean state.
+	root.msaa_3d = Viewport.MSAA_DISABLED
+	root.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+	root.use_taa = false
+	# FSR2 has its own temporal reconstruction and Godot rejects TAA on top
+	# of it (renderer_viewport.cpp:210). Mirror that check here so we don't
+	# emit the engine warning every Apply when the user has picked the
+	# incompatible combo — FSR2's reconstruction already provides
+	# TAA-equivalent sub-pixel AA.
+	var fsr2_active: bool = scaling_3d_mode == SCALING_3D_FSR2
+	match anti_aliasing_mode:
+		AA_FXAA:
+			root.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+		AA_MSAA_2X:
+			root.msaa_3d = Viewport.MSAA_2X
+		AA_MSAA_4X:
+			root.msaa_3d = Viewport.MSAA_4X
+		AA_MSAA_8X:
+			root.msaa_3d = Viewport.MSAA_8X
+		AA_TAA:
+			if not fsr2_active:
+				root.use_taa = true
 
 # Builds a 16³ 3D LUT that applies the selected color-grade preset then the
 # gamma curve (output = input^(1/gamma)). Both bake into a single texture so
@@ -303,6 +374,9 @@ func _load() -> void:
 		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
+		scaling_3d_mode = clamp(cfg.get_value("video", "scaling_3d_mode", SCALING_3D_BILINEAR), 0, SCALING_3D_LABELS.size() - 1)
+		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
+		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)

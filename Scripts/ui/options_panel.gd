@@ -22,6 +22,9 @@ var _color_grade_btn: OptionButton = null
 var _gi_mode_btn: OptionButton = null
 var _crowd_density_btn: OptionButton = null
 var _ice_scratches_check: CheckButton = null
+var _render_scale_slider: HSlider = null
+var _scaling_3d_btn: OptionButton = null
+var _aa_btn: OptionButton = null
 var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
 var _attack_up_check: CheckButton = null
@@ -114,6 +117,9 @@ func _snapshot() -> Dictionary:
 		"gi_mode": PlayerPrefs.gi_mode,
 		"crowd_density": PlayerPrefs.crowd_density,
 		"ice_scratches_enabled": PlayerPrefs.ice_scratches_enabled,
+		"render_scale": PlayerPrefs.render_scale,
+		"scaling_3d_mode": PlayerPrefs.scaling_3d_mode,
+		"anti_aliasing_mode": PlayerPrefs.anti_aliasing_mode,
 		"master_volume": PlayerPrefs.master_volume,
 		"sfx_volume": PlayerPrefs.sfx_volume,
 		"ui_volume": PlayerPrefs.ui_volume,
@@ -139,6 +145,9 @@ func _read_controls() -> Dictionary:
 		"gi_mode": _gi_mode_btn.selected,
 		"crowd_density": _crowd_density_btn.selected,
 		"ice_scratches_enabled": _ice_scratches_check.button_pressed,
+		"render_scale": _render_scale_slider.value,
+		"scaling_3d_mode": _scaling_3d_btn.selected,
+		"anti_aliasing_mode": _aa_btn.selected,
 		"master_volume": _volume_slider.value,
 		"sfx_volume": _sfx_slider.value,
 		"ui_volume": _ui_slider.value,
@@ -289,6 +298,37 @@ func _build_video_tab() -> Control:
 
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Performance"))
+
+	_render_scale_slider = HSlider.new()
+	_render_scale_slider.min_value = PlayerPrefs.RENDER_SCALE_MIN
+	_render_scale_slider.max_value = PlayerPrefs.RENDER_SCALE_MAX
+	_render_scale_slider.step = PlayerPrefs.RENDER_SCALE_STEP
+	_render_scale_slider.value = PlayerPrefs.render_scale
+	_render_scale_slider.value_changed.connect(_on_render_scale_changed)
+	var rs_val := _value_label("%d%%" % roundi(PlayerPrefs.render_scale * 100.0))
+	_render_scale_slider.value_changed.connect(
+		func(v: float) -> void: rs_val.text = "%d%%" % roundi(v * 100.0))
+	box.add_child(_slider_row("Render Scale", _render_scale_slider, rs_val))
+
+	_scaling_3d_btn = OptionButton.new()
+	_scaling_3d_btn.custom_minimum_size = Vector2(180, 40)
+	_scaling_3d_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.SCALING_3D_LABELS.size():
+		_scaling_3d_btn.add_item(PlayerPrefs.SCALING_3D_LABELS[i], i)
+	_scaling_3d_btn.selected = PlayerPrefs.scaling_3d_mode
+	_scaling_3d_btn.item_selected.connect(_on_scaling_3d_selected)
+	box.add_child(_field_row("Upscaling", _scaling_3d_btn))
+	_update_upscaling_enabled()
+
+	_aa_btn = OptionButton.new()
+	_aa_btn.custom_minimum_size = Vector2(180, 40)
+	_aa_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.AA_LABELS.size():
+		_aa_btn.add_item(PlayerPrefs.AA_LABELS[i], i)
+	_aa_btn.selected = PlayerPrefs.anti_aliasing_mode
+	_aa_btn.item_selected.connect(_on_aa_selected)
+	box.add_child(_field_row("Anti-Aliasing", _aa_btn))
+	_update_aa_compatibility()
 
 	_gi_mode_btn = OptionButton.new()
 	_gi_mode_btn.custom_minimum_size = Vector2(180, 40)
@@ -529,6 +569,33 @@ func _on_gamma_changed(_value: float) -> void:
 func _on_color_grade_selected(_idx: int) -> void:
 	_update_apply_state()
 
+func _on_render_scale_changed(_value: float) -> void:
+	_update_upscaling_enabled()
+	_update_apply_state()
+
+func _update_upscaling_enabled() -> void:
+	if _scaling_3d_btn != null and _render_scale_slider != null:
+		_scaling_3d_btn.disabled = is_equal_approx(_render_scale_slider.value, 1.0)
+
+func _on_scaling_3d_selected(_idx: int) -> void:
+	_update_aa_compatibility()
+	_update_apply_state()
+
+func _on_aa_selected(_idx: int) -> void:
+	_update_apply_state()
+
+# FSR2 has its own temporal reconstruction and Godot disallows TAA on top.
+# Grey out the TAA item in the AA dropdown whenever FSR2 is the upscaling
+# mode; if TAA happened to be selected, fall back to MSAA 2x so the
+# dropdown reflects what will actually render.
+func _update_aa_compatibility() -> void:
+	if _aa_btn == null or _scaling_3d_btn == null:
+		return
+	var fsr2: bool = _scaling_3d_btn.selected == PlayerPrefs.SCALING_3D_FSR2
+	_aa_btn.set_item_disabled(PlayerPrefs.AA_TAA, fsr2)
+	if fsr2 and _aa_btn.selected == PlayerPrefs.AA_TAA:
+		_aa_btn.selected = PlayerPrefs.AA_MSAA_2X
+
 func _on_gi_mode_selected(_idx: int) -> void:
 	_update_apply_state()
 
@@ -685,6 +752,9 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.gi_mode = c.gi_mode
 	PlayerPrefs.crowd_density = c.crowd_density
 	PlayerPrefs.ice_scratches_enabled = c.ice_scratches_enabled
+	PlayerPrefs.render_scale = c.render_scale
+	PlayerPrefs.scaling_3d_mode = c.scaling_3d_mode
+	PlayerPrefs.anti_aliasing_mode = c.anti_aliasing_mode
 	PlayerPrefs.master_volume = c.master_volume
 	PlayerPrefs.sfx_volume = c.sfx_volume
 	PlayerPrefs.ui_volume = c.ui_volume
@@ -721,6 +791,13 @@ func _on_cancel_pressed() -> void:
 		_crowd_density_btn.selected = _original.crowd_density
 	if _ice_scratches_check != null:
 		_ice_scratches_check.set_pressed_no_signal(_original.ice_scratches_enabled)
+	if _render_scale_slider != null:
+		_render_scale_slider.value = _original.render_scale
+	if _scaling_3d_btn != null:
+		_scaling_3d_btn.selected = _original.scaling_3d_mode
+	if _aa_btn != null:
+		_aa_btn.selected = _original.anti_aliasing_mode
+	_update_aa_compatibility()
 	_volume_slider.value = _original.master_volume
 	_sfx_slider.value = _original.sfx_volume
 	_ui_slider.value = _original.ui_volume
