@@ -328,6 +328,7 @@ func _build_video_tab() -> Control:
 	_aa_btn.selected = PlayerPrefs.anti_aliasing_mode
 	_aa_btn.item_selected.connect(_on_aa_selected)
 	box.add_child(_field_row("Anti-Aliasing", _aa_btn))
+	_update_aa_compatibility()
 
 	_gi_mode_btn = OptionButton.new()
 	_gi_mode_btn.custom_minimum_size = Vector2(180, 40)
@@ -577,10 +578,23 @@ func _update_upscaling_enabled() -> void:
 		_scaling_3d_btn.disabled = is_equal_approx(_render_scale_slider.value, 1.0)
 
 func _on_scaling_3d_selected(_idx: int) -> void:
+	_update_aa_compatibility()
 	_update_apply_state()
 
 func _on_aa_selected(_idx: int) -> void:
 	_update_apply_state()
+
+# FSR2 has its own temporal reconstruction and Godot disallows TAA on top.
+# Grey out the TAA item in the AA dropdown whenever FSR2 is the upscaling
+# mode; if TAA happened to be selected, fall back to MSAA 2x so the
+# dropdown reflects what will actually render.
+func _update_aa_compatibility() -> void:
+	if _aa_btn == null or _scaling_3d_btn == null:
+		return
+	var fsr2: bool = _scaling_3d_btn.selected == PlayerPrefs.SCALING_3D_FSR2
+	_aa_btn.set_item_disabled(PlayerPrefs.AA_TAA, fsr2)
+	if fsr2 and _aa_btn.selected == PlayerPrefs.AA_TAA:
+		_aa_btn.selected = PlayerPrefs.AA_MSAA_2X
 
 func _on_gi_mode_selected(_idx: int) -> void:
 	_update_apply_state()
@@ -783,6 +797,7 @@ func _on_cancel_pressed() -> void:
 		_scaling_3d_btn.selected = _original.scaling_3d_mode
 	if _aa_btn != null:
 		_aa_btn.selected = _original.anti_aliasing_mode
+	_update_aa_compatibility()
 	_volume_slider.value = _original.master_volume
 	_sfx_slider.value = _original.sfx_volume
 	_ui_slider.value = _original.ui_volume
