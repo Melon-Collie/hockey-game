@@ -83,7 +83,7 @@ var ice_scratches_enabled: bool = true
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
-var fov: float = 75.0  # GameCamera writes this to its Camera3D.fov each tick
+var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
@@ -306,7 +306,7 @@ func _load() -> void:
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
-		fov = clampf(cfg.get_value("game", "fov", 75.0), FOV_MIN, FOV_MAX)
+		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
