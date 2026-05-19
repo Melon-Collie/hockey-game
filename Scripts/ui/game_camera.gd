@@ -20,6 +20,7 @@ extends Camera3D
 # ── Threat-aware framing ──────────────────────────────────────────────────────
 # Opponents within this distance of the local player are included in the
 # zoom-fit so pressure widens the frame instead of locking tight on stickwork.
+# Anchor stays on the player; only the zoom changes.
 @export var threat_distance: float = 11.0
 
 # ── Breakaway ─────────────────────────────────────────────────────────────────
@@ -207,8 +208,7 @@ func _physics_process(delta: float) -> void:
 	var tan_half_fov: float = tan(fov_rad / 2.0)
 
 	if not _initialized:
-		_smoothed_anchor = Vector3(
-				(player_pos.x + puck_pos.x) * 0.5, 0.0, (player_pos.z + puck_pos.z) * 0.5)
+		_smoothed_anchor = Vector3(player_pos.x, 0.0, player_pos.z)
 		_initialized = true
 
 	var attack_dir: int = _get_attacking_direction()
@@ -218,57 +218,10 @@ func _physics_process(delta: float) -> void:
 	var breakaway_now: float = 1.0 if _detect_breakaway(player_pos, attack_dir) else 0.0
 	_smoothed_breakaway = lerpf(_smoothed_breakaway, breakaway_now, breakaway_smooth * delta)
 
-	# ── Step 1: Build fit set ────────────────────────────────────────────────
-	# Base: {player, puck}. Plus the nearest opponent within `threat_distance`,
-	# so stickhandling under pressure widens the frame instead of locking tight.
-	# Plus a virtual point that slides from player toward the attacking goal as
-	# breakaway engagement ramps 0→1 — the zoom math naturally frames {player,
-	# goal} during breakaways without a separate height override.
-	var fit_min_x: float = minf(player_pos.x, puck_pos.x)
-	var fit_max_x: float = maxf(player_pos.x, puck_pos.x)
-	var fit_min_z: float = minf(player_pos.z, puck_pos.z)
-	var fit_max_z: float = maxf(player_pos.z, puck_pos.z)
-	var threat_pos: Vector3 = _find_nearest_threat(player_pos)
-	if not is_inf(threat_pos.x):
-		fit_min_x = minf(fit_min_x, threat_pos.x)
-		fit_max_x = maxf(fit_max_x, threat_pos.x)
-		fit_min_z = minf(fit_min_z, threat_pos.z)
-		fit_max_z = maxf(fit_max_z, threat_pos.z)
-	if _smoothed_breakaway > 0.001:
-		var goal_pos: Vector3 = _get_attacking_goal_position()
-		if not is_inf(goal_pos.x):
-			var vx: float = lerpf(player_pos.x, goal_pos.x, _smoothed_breakaway)
-			var vz: float = lerpf(player_pos.z, goal_pos.z, _smoothed_breakaway)
-			fit_min_x = minf(fit_min_x, vx)
-			fit_max_x = maxf(fit_max_x, vx)
-			fit_min_z = minf(fit_min_z, vz)
-			fit_max_z = maxf(fit_max_z, vz)
-	var base_center: Vector3 = Vector3(
-			(fit_min_x + fit_max_x) * 0.5, 0.0, (fit_min_z + fit_max_z) * 0.5)
-
-	# ── Step 2: Dynamic zoom to fit the set ───────────────────────────────────
-	var half_span_x: float = (fit_max_x - fit_min_x) * 0.5
-	var half_span_z: float = (fit_max_z - fit_min_z) * 0.5
-	var needed_x: float = (half_span_x + zoom_padding) / (tan_half_fov * aspect)
-	var needed_z: float = (half_span_z + zoom_padding) / tan_half_fov
-	var in_ozone: bool = attack_dir != 0 and \
-			(player_pos.z * float(attack_dir)) > GameRules.BLUE_LINE_Z
-	# User-facing camera-distance multiplier (Options → Game).
-	var dist_mult: float = PlayerPrefs.camera_distance
-	var effective_min: float = (ozone_min_height if in_ozone else min_height) * dist_mult
-	var effective_max: float = max_height * dist_mult
-	var target_height: float = clampf(maxf(needed_x, needed_z), effective_min, effective_max)
-
-	var height_res: Array = _spring_damp(
-			_current_height, target_height, _height_vel, smooth_time_height, delta)
-	_current_height = height_res[0]
-	_height_vel = height_res[1]
-
-	var visible_half_x: float = tan_half_fov * aspect * _current_height
-	var visible_half_z: float = tan_half_fov * _current_height
-
-	# ── Step 3: Lead offset ───────────────────────────────────────────────────
+	# ── Step 1: Lead offset ──────────────────────────────────────────────────
+	# Computed first so the anchor is available to the zoom math below.
 	# Velocity lead (always-on): offset in skating direction scaled by speed.
+	# Constant offset at a constant speed → cursor-to-world stays predictable.
 	var vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 	var speed: float = vel_xz.length()
 	var target_lead: Vector3 = Vector3.ZERO
@@ -282,13 +235,60 @@ func _physics_process(delta: float) -> void:
 	target_lead.z += _smoothed_attack_dir * zone_lead
 
 	_smoothed_lead_offset = _smoothed_lead_offset.lerp(target_lead, lead_smooth * delta)
-	var target_anchor: Vector3 = base_center + _smoothed_lead_offset
+
+	# ── Step 2: Anchor = local player + lead ─────────────────────────────────
+	# Mitts uses mouse-as-world-pointer (stickhandling, poke-checking, passing
+	# all aim into world space — same model as a League skill-shot). For aim to
+	# feel consistent, the player's screen position must be a stable function
+	# of state. So the anchor follows ONLY the local player; the fit-set below
+	# drives zoom only.
+	var target_anchor: Vector3 = Vector3(player_pos.x, 0.0, player_pos.z) + _smoothed_lead_offset
+
+	# ── Step 3: Zoom from extents relative to the anchor ────────────────────
+	# Find the half-width / half-depth the camera needs to reach to keep these
+	# points visible: {player, puck, nearest threat, breakaway virtual point}.
+	# Threat: widens under pressure without moving the anchor off the player.
+	# Breakaway virtual: slides from player → attacking goal as the engagement
+	# ramp comes up, revealing the goalie on a clean rush — again, zoom only.
+	var max_dx: float = absf(player_pos.x - target_anchor.x)
+	var max_dz: float = absf(player_pos.z - target_anchor.z)
+	max_dx = maxf(max_dx, absf(puck_pos.x - target_anchor.x))
+	max_dz = maxf(max_dz, absf(puck_pos.z - target_anchor.z))
+	var threat_pos: Vector3 = _find_nearest_threat(player_pos)
+	if not is_inf(threat_pos.x):
+		max_dx = maxf(max_dx, absf(threat_pos.x - target_anchor.x))
+		max_dz = maxf(max_dz, absf(threat_pos.z - target_anchor.z))
+	if _smoothed_breakaway > 0.001:
+		var goal_pos: Vector3 = _get_attacking_goal_position()
+		if not is_inf(goal_pos.x):
+			var vx: float = lerpf(player_pos.x, goal_pos.x, _smoothed_breakaway)
+			var vz: float = lerpf(player_pos.z, goal_pos.z, _smoothed_breakaway)
+			max_dx = maxf(max_dx, absf(vx - target_anchor.x))
+			max_dz = maxf(max_dz, absf(vz - target_anchor.z))
+
+	var needed_x: float = (max_dx + zoom_padding) / (tan_half_fov * aspect)
+	var needed_z: float = (max_dz + zoom_padding) / tan_half_fov
+	var in_ozone: bool = attack_dir != 0 and \
+			(player_pos.z * float(attack_dir)) > GameRules.BLUE_LINE_Z
+	# User-facing camera-distance multiplier (Options → Game).
+	var dist_mult: float = PlayerPrefs.camera_distance
+	var effective_min: float = (ozone_min_height if in_ozone else min_height) * dist_mult
+	var effective_max: float = max_height * dist_mult
+	var target_height: float = clampf(maxf(needed_x, needed_z), effective_min, effective_max)
+
+	var height_res: Array = _spring_damp(
+			_current_height, target_height, _height_vel, smooth_time_height, delta)
+	_current_height = height_res[0]
+	_height_vel = height_res[1]
 
 	# ── Step 4: Soft rink clamp ──────────────────────────────────────────────
-	var safe_x: float = maxf(rink_half_width - visible_half_x, 0.0)
-	var safe_z: float = maxf(rink_half_length - visible_half_z, 0.0)
-	target_anchor.x = _soft_clamp(target_anchor.x, safe_x, clamp_softness)
-	target_anchor.z = _soft_clamp(target_anchor.z, safe_z, clamp_softness)
+	# Clamp the anchor (= look-at point) to the rink itself, not to "rink minus
+	# visible_half". This means at low zoom the camera VIEW can extend past the
+	# boards (showing some crowd), but the player stays at screen center — the
+	# whole point of option C. Anchor extension past boards comes from lead,
+	# which is bounded; soft clamp eases it back without snapping.
+	target_anchor.x = _soft_clamp(target_anchor.x, rink_half_width, clamp_softness)
+	target_anchor.z = _soft_clamp(target_anchor.z, rink_half_length, clamp_softness)
 
 	# ── Step 5: Smooth-damp the anchor (xz) ──────────────────────────────────
 	var ax_res: Array = _spring_damp(
