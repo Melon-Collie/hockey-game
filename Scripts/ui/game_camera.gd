@@ -10,10 +10,11 @@ extends Camera3D
 #     offset to the cursor offset so the camera leans forward and widens
 #     zoom without forcing the player to drag their cursor away from the
 #     puck. Off-puck the camera is pure cursor-driven.
-#   - Offensive-zone zoom floor: past the attacking blue line, zoom is
-#     floored at the height needed to keep the attacking goal in frame,
-#     because stickhandling near the slot (cursor close to player) would
-#     otherwise lock the zoom too tight to see the net.
+#   - Offensive-zone bias: past the attacking blue line, the anchor shifts
+#     toward the goal (positioning) so the goal comes into frame without
+#     needing to zoom out as much. A zoom floor still applies as a backup
+#     when the bias alone can't fit player + goal (e.g., right at the
+#     blue line), but the bias does most of the work.
 #
 # Predictability over expression (principle #9): no shake, no breakaway, no
 # cinematic moments, no possession-change swings.
@@ -48,13 +49,18 @@ extends Camera3D
 @export var min_height: float = 10.0
 @export var max_height: float = 22.0
 
-# ── Offensive-zone floor ─────────────────────────────────────────────────────
-# When the local player is past the attacking blue line, zoom is floored at
-# the height needed to keep the attacking goal in frame. Stickhandling near
-# the slot or walking the line no longer hides the net behind a wall of
-# tight zoom. Floor only — cursor can still widen above it.
+# ── Offensive-zone bias ──────────────────────────────────────────────────────
+# Past the attacking blue line, the anchor shifts toward the goal so the goal
+# comes into frame via positioning rather than zooming out. At
+# `ozone_bias_fraction = 0.5` the anchor lands at the midpoint between player
+# and goal. Engagement ramps over `OZONE_RAMP_DISTANCE` past the blue line so
+# crossing isn't a hard step. A zoom floor still applies as a backup when the
+# bias alone can't fit player + goal (e.g., near the blue line), based on the
+# BIASED anchor's extent rather than the unbiased one.
+@export var ozone_bias_fraction: float = 0.5
 @export var ozone_zoom_padding: float = 2.0
-@export var ozone_max_height: float = 35.0
+@export var ozone_max_height: float = 25.0
+const _OZONE_RAMP_DISTANCE: float = 3.0
 
 # ── Smoothing (critical-damp time constants, seconds to ~95%) ─────────────────
 # Settled but not laggy. Cursor flicks should ease rather than snap.
@@ -201,17 +207,27 @@ func _physics_process(delta: float) -> void:
 	var dist_mult: float = PlayerPrefs.camera_distance
 	var target_height: float = lerpf(min_height, max_height, t_zoom) * dist_mult
 
-	# Ozone floor: when past the attacking blue line, lift the zoom target so
-	# the attacking goal stays in frame even with cursor near the player (the
-	# stickhandle-and-can't-see-the-net case). Cursor-driven zoom can still
-	# widen above this floor; we never tighten below cursor's request.
+	# Ozone bias + zoom floor: past the attacking blue line, shift the anchor
+	# toward the goal (positioning) and lift zoom only as a backup when the
+	# shift alone can't fit player + goal in frame. Engagement ramps so the
+	# blue-line crossing isn't a snap. The bias is Z-only — lateral cursor
+	# control unchanged.
 	var attack_dir: int = _attack_dir()
-	if attack_dir != 0 and (player_pos.z * float(attack_dir)) > GameRules.BLUE_LINE_Z:
-		var goal_z: float = float(attack_dir) * GameRules.GOAL_LINE_Z
-		var goal_dist_z: float = absf(goal_z - player_pos.z)
-		var needed_height: float = goal_dist_z / tan_half_fov + ozone_zoom_padding
-		needed_height = minf(needed_height, ozone_max_height) * dist_mult
-		target_height = maxf(target_height, needed_height)
+	if attack_dir != 0:
+		var dist_past_line: float = (player_pos.z * float(attack_dir)) - GameRules.BLUE_LINE_Z
+		var engagement: float = smoothstep(0.0, _OZONE_RAMP_DISTANCE, dist_past_line)
+		if engagement > 0.001:
+			var goal_z: float = float(attack_dir) * GameRules.GOAL_LINE_Z
+			var goal_offset: float = goal_z - player_pos.z  # signed; toward the goal
+			var bias_z: float = goal_offset * ozone_bias_fraction * engagement
+			target_anchor.z += bias_z
+			var biased_anchor_z: float = player_pos.z + bias_z
+			var dist_to_player: float = absf(biased_anchor_z - player_pos.z)
+			var dist_to_goal: float = absf(biased_anchor_z - goal_z)
+			var max_extent_z: float = maxf(dist_to_player, dist_to_goal)
+			var needed_height: float = max_extent_z / tan_half_fov + ozone_zoom_padding
+			needed_height = minf(needed_height, ozone_max_height) * dist_mult
+			target_height = maxf(target_height, needed_height)
 
 	# ── Step 4: Spring-damp height ───────────────────────────────────────────
 	var height_res: Array = _spring_damp(
