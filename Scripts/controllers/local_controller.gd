@@ -28,6 +28,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_gatherer = LocalInputGatherer.new(camera)
 	add_child(_gatherer)
 	camera.skater = assigned_skater
+	camera.puck = assigned_puck
 	skater.body_check_impulse_applied.connect(
 		func(impulse: Vector3) -> void:
 			_body_check_impulse = impulse
