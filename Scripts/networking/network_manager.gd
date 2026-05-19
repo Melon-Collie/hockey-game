@@ -1334,18 +1334,20 @@ func get_target_interpolation_delay() -> float:
 func adapt_interpolation_delay(current: float) -> float:
 	var target: float = get_target_interpolation_delay()
 	var change: float = lerpf(current, target, 0.15) - current
-	# Asymmetric clamp: react fast to sustained jitter, relax fast from one-offs.
-	# +10ms/packet up: a sudden RTT spike can push target 150+ms above current;
-	#   at slower up-rates extrapolation fires every 50ms on all remote skaters
-	#   (visible micro-stutter) until the buffer catches up.
-	# -3ms/packet down: a single host stutter pushes the buffer up by 30-60ms;
-	#   at the old -1ms rate (~40ms/sec relaxation) the buffer stayed inflated
-	#   for many seconds after a one-off hitch, so remote players felt
-	#   persistently laggy long after the hitch passed. -3ms/packet ≈ 120ms/sec
-	#   relaxation, recovering a 60ms over-inflation in ~0.5s. Still slow
-	#   enough not to chase per-packet jitter — the target itself already has
-	#   `jitter_p95 * 1.5` margin baked in (see get_target_interpolation_delay).
-	return current + clampf(change, -0.003, 0.010)
+	# Asymmetric clamp: react fast to sustained jitter, relax gently from one-offs.
+	# Effective recovery rate = per-packet × broadcast rate. At the current 120Hz:
+	#   +10ms/packet up: 1200ms/sec, catches a 150ms sustained RTT spike in ~125ms.
+	#     Without this aggressive up-rate, extrapolation fires every ~50ms on
+	#     all remote skaters during the catch-up window (visible micro-stutter).
+	#   -1.5ms/packet down: 180ms/sec, recovers a 60ms buffer over-inflation in
+	#     ~330ms. The two earlier-shipped tunings here were sized for different
+	#     broadcast rates and don't carry forward: the original -1ms/packet was
+	#     40ms/sec at 40Hz (slow — buffer stayed inflated ~10s); the interim
+	#     -3ms/packet became 360ms/sec at 120Hz (too aggressive, risks
+	#     undershoot if jitter returns inside the window). -1.5ms/packet at
+	#     120Hz lands at 180ms/sec — slightly faster than the original 40Hz
+	#     target (120ms/sec) and well clear of industry norms (~80-150 ms/sec).
+	return current + clampf(change, -0.0015, 0.010)
 
 func get_peer_loss_rate(peer_id: int = -1) -> float:
 	if is_host:
