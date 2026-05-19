@@ -68,6 +68,25 @@ const RENDER_SCALE_MIN: float = 0.5
 const RENDER_SCALE_MAX: float = 1.0
 const RENDER_SCALE_STEP: float = 0.05
 
+# Anti-aliasing mode. One dropdown that drives three viewport properties
+# (msaa_3d, screen_space_aa, use_taa) — the apply step picks the right
+# combination per mode. Default is MSAA 2x, matching the project.godot
+# baseline.
+const AA_OFF: int = 0
+const AA_FXAA: int = 1
+const AA_MSAA_2X: int = 2
+const AA_MSAA_4X: int = 3
+const AA_MSAA_8X: int = 4
+const AA_TAA: int = 5
+const AA_LABELS: Array[String] = [
+	"Off",
+	"FXAA",
+	"MSAA 2x",
+	"MSAA 4x",
+	"MSAA 8x",
+	"TAA",
+]
+
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
 	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
@@ -98,6 +117,7 @@ var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
 var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
+var anti_aliasing_mode: int = AA_MSAA_2X
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
@@ -156,6 +176,7 @@ func save() -> void:
 	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
 	cfg.set_value("video", "scaling_3d_mode", scaling_3d_mode)
 	cfg.set_value("video", "render_scale", render_scale)
+	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "camera_mode", camera_mode)
@@ -226,6 +247,7 @@ func apply_video() -> void:
 	var root: Window = get_tree().root
 	root.scaling_3d_mode = scaling_3d_mode as Viewport.Scaling3DMode
 	root.scaling_3d_scale = render_scale
+	_apply_anti_aliasing(root)
 	var scene: Node = Engine.get_main_loop().current_scene
 	if scene == null:
 		return
@@ -245,6 +267,25 @@ func apply_video() -> void:
 	var scratch := scene.find_child("IceScratchMap", true, false)
 	if scratch != null and scratch.has_method("set_enabled"):
 		scratch.call("set_enabled", ice_scratches_enabled)
+
+func _apply_anti_aliasing(root: Viewport) -> void:
+	# MSAA, FXAA, and TAA are mutually exclusive in the dropdown — the
+	# helper sets all three viewport props per row so switching modes
+	# always lands in a clean state.
+	root.msaa_3d = Viewport.MSAA_DISABLED
+	root.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+	root.use_taa = false
+	match anti_aliasing_mode:
+		AA_FXAA:
+			root.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+		AA_MSAA_2X:
+			root.msaa_3d = Viewport.MSAA_2X
+		AA_MSAA_4X:
+			root.msaa_3d = Viewport.MSAA_4X
+		AA_MSAA_8X:
+			root.msaa_3d = Viewport.MSAA_8X
+		AA_TAA:
+			root.use_taa = true
 
 # Builds a 16³ 3D LUT that applies the selected color-grade preset then the
 # gamma curve (output = input^(1/gamma)). Both bake into a single texture so
@@ -328,6 +369,7 @@ func _load() -> void:
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
 		scaling_3d_mode = clamp(cfg.get_value("video", "scaling_3d_mode", SCALING_3D_BILINEAR), 0, SCALING_3D_LABELS.size() - 1)
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
+		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
