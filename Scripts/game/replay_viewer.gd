@@ -13,7 +13,7 @@ extends Node
 #   - This script on the root Node
 #   - The rink visuals + goals (HockeyGoal nodes for the net meshes)
 #   - WorldEnvironment + DirectionalLight3D for lighting
-#   - No Camera3D (SpectatorCamera is mounted at runtime)
+#   - No Camera3D (CameraDirector mounts broadcast / chase / free cams at runtime)
 #   - No HUD (added in a follow-up commit)
 
 var _spawner: ActorSpawner = null
@@ -23,7 +23,7 @@ var _goalie_controllers: Array[GoalieController] = []
 var _records: Dictionary = {}  # peer_id → PlayerRecord
 var _codec: WorldStateCodec = null
 var _driver: FileReplayDriver = null
-var _camera: SpectatorCamera = null
+var _camera_director: CameraDirector = null
 var _hud: ReplayViewerHUD = null
 # Cached so the player_joined event handler can spawn mid-game arrivals
 # without re-deriving them from header.
@@ -68,6 +68,12 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	# Restore the global flag so a subsequent live game / lobby session works.
 	NetworkManager.stop_replay_mode()
+	# Restore mouse mode if the user left free-cam with RMB captured — the
+	# next scene's UI needs a visible cursor. Director.teardown() handles
+	# this via FreeCamera.deactivate() when free is the active mode.
+	if _camera_director != null:
+		_camera_director.teardown()
+		_camera_director = null
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -159,11 +165,22 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 
 
 func _mount_camera() -> void:
-	_camera = SpectatorCamera.new()
-	add_child(_camera)
-	_camera.setup(func() -> Vector3:
-		return _puck.global_position if _puck != null else Vector3.ZERO)
-	_camera.activate()
+	_camera_director = CameraDirector.new()
+	add_child(_camera_director)
+	_camera_director.setup(
+		func() -> Vector3:
+			return _puck.global_position if _puck != null else Vector3.ZERO,
+		func() -> Array[Skater]:
+			var out: Array[Skater] = []
+			for record: PlayerRecord in _records.values():
+				if record != null and record.skater != null and is_instance_valid(record.skater):
+					out.append(record.skater)
+			return out)
+	_camera_director.activate_initial()
+
+
+func get_camera_director() -> CameraDirector:
+	return _camera_director
 
 
 func _start_playback(frames: Array) -> void:
@@ -224,7 +241,7 @@ func _on_roster_rebuild(events_through_t: Array) -> void:
 func _mount_hud(header: Dictionary) -> void:
 	_hud = ReplayViewerHUD.new()
 	add_child(_hud)
-	_hud.setup(_driver, header)
+	_hud.setup(_driver, header, _camera_director)
 
 
 # ── Stub interface for RemoteController.setup(skater, puck, game_state) ─────

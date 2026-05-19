@@ -23,6 +23,7 @@ const _SPEED_LABELS: Array[String] = ["0.25×", "0.5×", "1×", "2×", "4×"]
 const _DEFAULT_SPEED_IDX: int = 2  # 1×
 
 var _driver: FileReplayDriver = null
+var _director: CameraDirector = null
 var _header: Dictionary = {}
 var _home_color: Color = Color(0.4, 0.4, 0.4)
 var _away_color: Color = Color(0.4, 0.4, 0.4)
@@ -36,11 +37,13 @@ var _seek_slider: HSlider = null
 var _seek_bar_root: Control = null
 var _time_label: Label = null
 var _speed_btn: OptionButton = null
+var _camera_label: Label = null
 var _seeking_user: bool = false
 
 
-func setup(driver: FileReplayDriver, header: Dictionary) -> void:
+func setup(driver: FileReplayDriver, header: Dictionary, director: CameraDirector = null) -> void:
 	_driver = driver
+	_director = director
 	_header = header
 	# Legacy fruit-name strings in old replay headers won't typecheck — fall back
 	# to defaults rather than crash. Hard break: no string→slot mapping.
@@ -67,6 +70,7 @@ func _build_ui() -> void:
 
 	_build_scoreboard(root)
 	_build_back_button(root)
+	_build_camera_label(root)
 	_build_bottom_bar(root)
 
 
@@ -116,6 +120,26 @@ func _build_scoreboard(root: Control) -> void:
 	_score_label_away.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hbox.add_child(_score_label_away)
 	hbox.add_child(_team_badge("AWAY", _away_color))
+
+
+func _build_camera_label(root: Control) -> void:
+	if _director == null:
+		return
+	var panel := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = _DARK_BG
+	style.set_corner_radius_all(3)
+	style.set_content_margin_all(8)
+	panel.add_theme_stylebox_override("panel", style)
+	panel.anchor_left = 0.0
+	panel.anchor_right = 0.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 0.0
+	panel.offset_left = 12
+	panel.offset_top = 12
+	root.add_child(panel)
+	_camera_label = _label("CAMERA: BROADCAST  ·  [C] cycle  ·  [↑↓] player  ·  RMB drag look", 11, _DIM)
+	panel.add_child(_camera_label)
 
 
 func _build_back_button(root: Control) -> void:
@@ -249,6 +273,8 @@ func _process(_delta: float) -> void:
 		_format_seconds(_driver.get_duration()),
 	]
 	_seek_bar_root.queue_redraw()
+	if _camera_label != null and _director != null:
+		_camera_label.text = "CAMERA: %s  ·  [C] cycle  ·  [↑↓] player  ·  RMB drag look" % _director.get_mode_label()
 
 
 # Yellow tick marks at each goal's progress along the slider. Driven by the
@@ -280,9 +306,46 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		_exit_to_free_play()
 		get_viewport().set_input_as_handled()
-	elif event is InputEventKey and event.pressed and (event as InputEventKey).keycode == KEY_SPACE:
-		_on_play_pause_pressed()
-		get_viewport().set_input_as_handled()
+		return
+	if not (event is InputEventKey) or not event.pressed:
+		return
+	var key: InputEventKey = event as InputEventKey
+	# Skip OS auto-repeat so holding period/bracket doesn't spam frame-steps or
+	# speed changes — one tap = one action. The user re-taps to step again.
+	if key.echo:
+		return
+	match key.keycode:
+		KEY_SPACE:
+			_on_play_pause_pressed()
+			get_viewport().set_input_as_handled()
+		KEY_BRACKETLEFT:
+			_step_speed(-1)
+			get_viewport().set_input_as_handled()
+		KEY_BRACKETRIGHT:
+			_step_speed(1)
+			get_viewport().set_input_as_handled()
+		KEY_LEFT:
+			_driver.seek(_driver.get_virtual_clock() - 5.0)
+			get_viewport().set_input_as_handled()
+		KEY_RIGHT:
+			_driver.seek(_driver.get_virtual_clock() + 5.0)
+			get_viewport().set_input_as_handled()
+		KEY_COMMA:
+			if _driver.is_paused():
+				_driver.step_frame(-1)
+				get_viewport().set_input_as_handled()
+		KEY_PERIOD:
+			if _driver.is_paused():
+				_driver.step_frame(1)
+				get_viewport().set_input_as_handled()
+
+
+func _step_speed(direction: int) -> void:
+	var idx: int = clampi(_speed_btn.selected + direction, 0, _SPEEDS.size() - 1)
+	if idx == _speed_btn.selected:
+		return
+	_speed_btn.select(idx)
+	_on_speed_changed(idx)
 
 
 func _exit_to_free_play() -> void:
