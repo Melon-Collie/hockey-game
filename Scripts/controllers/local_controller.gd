@@ -28,8 +28,6 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_gatherer = LocalInputGatherer.new(camera)
 	add_child(_gatherer)
 	camera.skater = assigned_skater
-	camera.puck = assigned_puck
-	camera.local_controller = self
 	skater.body_check_impulse_applied.connect(
 		func(impulse: Vector3) -> void:
 			_body_check_impulse = impulse
@@ -43,12 +41,6 @@ func set_local_team_id(team_id: int) -> void:
 	_team_id = team_id
 	camera.set_local_team_id(team_id)
 	_gatherer.set_local_team_id(team_id)
-
-func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
-	camera.set_goal_context(goal_0, goal_1, carrier_team_getter)
-
-func set_play_context(opponent_positions_getter: Callable) -> void:
-	camera.set_play_context(opponent_positions_getter)
 
 # Team 0 defends the +Z goal → attacks -Z. Team 1 defends -Z → attacks +Z.
 # See GameManager._assign_goals_to_teams.

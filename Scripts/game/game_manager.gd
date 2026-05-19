@@ -1267,9 +1267,6 @@ func _spawn_local(peer_id: int, team_slot: int, team: Team) -> void:
 func _on_player_spawned(record: PlayerRecord) -> void:
 	if record.is_local:
 		var local_ctrl: LocalController = record.controller as LocalController
-		local_ctrl.set_goal_context(
-				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
-		local_ctrl.set_play_context(_get_opponent_positions)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
@@ -1311,37 +1308,6 @@ func _on_registry_player_added(record: PlayerRecord) -> void:
 # ── Puck / Puck controller signal handlers ───────────────────────────────────
 func _resolve_skater_team_id(skater: Skater) -> int:
 	return _registry.resolve_team_id(skater) if _registry != null else -1
-
-
-func _get_puck_carrier_team_id() -> int:
-	if puck_controller != null:
-		var local_carrier: Skater = puck_controller.get_local_carrier()
-		if local_carrier != null:
-			return _resolve_skater_team_id(local_carrier)
-	if puck != null:
-		var carrier: Skater = puck.get_carrier()
-		if carrier != null:
-			return _resolve_skater_team_id(carrier)
-	return -1
-
-
-# Camera play-context callable. The camera asks each frame; we resolve from
-# the registry. Keep cheap — called every physics tick.
-func _get_opponent_positions() -> Array[Vector3]:
-	var positions: Array[Vector3] = []
-	if _registry == null:
-		return positions
-	var local: PlayerRecord = _registry.get_local()
-	if local == null or local.team == null:
-		return positions
-	var local_team_id: int = local.team.team_id
-	for record: PlayerRecord in _registry.all().values():
-		if record == null or record.skater == null or record.team == null:
-			continue
-		if record.team.team_id == local_team_id:
-			continue
-		positions.append(record.skater.global_position)
-	return positions
 
 
 func _resolve_skater_peer_id(skater: Skater) -> int:
