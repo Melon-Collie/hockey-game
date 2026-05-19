@@ -42,9 +42,10 @@ extends Camera3D
 @export var rink_half_width: float = 13.0
 @export var rink_half_length: float = 30.0
 
-# Tilted-camera pitch. Subtle by design — much steeper than this and the
-# mouse-to-world projection becomes nonlinear enough to break stickhandling.
-const _TILTED_PITCH_DEG: float = -75.0
+# Tilted-camera pitch is driven by PlayerPrefs.tilt_angle (positive degrees
+# below horizontal; 90 = straight down). Perspective foreshortening grows as
+# tilt_angle decreases — Y-axis cursor speed becomes increasingly non-uniform
+# across the screen — so the pref is clamped between 70° and 90°.
 
 # ── Goal Context (set via set_goal_context) ───────────────────────────────────
 var _goal_0: HockeyGoal = null  # Team 0's defended goal
@@ -236,8 +237,8 @@ func _physics_process(delta: float) -> void:
 	var pitch: float = -90.0
 	var tilt_z_offset: float = 0.0
 	if PlayerPrefs.camera_mode == PlayerPrefs.CAMERA_MODE_TILTED:
-		pitch = _TILTED_PITCH_DEG
-		var off_axis_rad: float = deg_to_rad(90.0 + _TILTED_PITCH_DEG)  # 15° at -75° pitch
+		pitch = -PlayerPrefs.tilt_angle
+		var off_axis_rad: float = deg_to_rad(90.0 - PlayerPrefs.tilt_angle)
 		var flip_sign: float = -1.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 1.0
 		tilt_z_offset = _current_height * tan(off_axis_rad) * flip_sign
 

@@ -81,14 +81,20 @@ var gi_mode: int = GI_MODE_OFF
 var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
 var mouse_sensitivity: float = 1.0
-var attack_up: bool = false
+var attack_up: bool = true
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
+# Tilt angle from horizontal, in degrees. 90 = straight down (top-down look),
+# 70 = aggressively tilted. GameCamera uses pitch = -tilt_angle when camera_mode
+# is CAMERA_MODE_TILTED. Ignored by the two top-down modes.
+var tilt_angle: float = 75.0
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
 const CAMERA_DISTANCE_MIN: float = 0.6
 const CAMERA_DISTANCE_MAX: float = 1.6
+const TILT_ANGLE_MIN: float = 70.0
+const TILT_ANGLE_MAX: float = 90.0
 var bindings: Dictionary = {}  # action -> {type, physical_keycode or button_index}
 
 # Replay recording. Recording fires on every peer (host + clients) for every
@@ -141,6 +147,7 @@ func save() -> void:
 	cfg.set_value("game", "camera_mode", camera_mode)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
+	cfg.set_value("game", "tilt_angle", tilt_angle)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
 	cfg.set_value("replay", "keep_count", replay_keep_count)
 	for action: String in REBINDABLE_ACTIONS:
@@ -304,10 +311,11 @@ func _load() -> void:
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
-		attack_up = cfg.get_value("game", "attack_up", false)
+		attack_up = cfg.get_value("game", "attack_up", true)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
+		tilt_angle = clampf(cfg.get_value("game", "tilt_angle", 75.0), TILT_ANGLE_MIN, TILT_ANGLE_MAX)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
 		for action: String in REBINDABLE_ACTIONS:
