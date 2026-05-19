@@ -52,6 +52,22 @@ const CROWD_DENSITY_LABELS: Array[String] = [
 const CROWD_DENSITY_LOW_TERRACES: int = 5
 const CROWD_DENSITY_HIGH_TERRACES: int = 15
 
+# 3D render scale. Lowers the internal rendertarget resolution and upscales
+# back to window size. Bilinear is cheap and blurry; FSR/FSR2 reconstruct
+# sharper edges at progressively higher GPU cost. Constants match
+# Viewport.Scaling3DMode so the value is passed through directly.
+const SCALING_3D_BILINEAR: int = 0
+const SCALING_3D_FSR: int = 1
+const SCALING_3D_FSR2: int = 2
+const SCALING_3D_LABELS: Array[String] = [
+	"Bilinear",
+	"FSR",
+	"FSR2",
+]
+const RENDER_SCALE_MIN: float = 0.5
+const RENDER_SCALE_MAX: float = 1.0
+const RENDER_SCALE_STEP: float = 0.05
+
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
 	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
@@ -80,6 +96,8 @@ var color_grade_preset: int = COLOR_GRADE_BROADCAST
 var gi_mode: int = GI_MODE_OFF
 var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
+var scaling_3d_mode: int = SCALING_3D_BILINEAR
+var render_scale: float = 1.0
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
@@ -136,6 +154,8 @@ func save() -> void:
 	cfg.set_value("video", "gi_mode", gi_mode)
 	cfg.set_value("video", "crowd_density", crowd_density)
 	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
+	cfg.set_value("video", "scaling_3d_mode", scaling_3d_mode)
+	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "camera_mode", camera_mode)
@@ -203,6 +223,9 @@ func apply_video() -> void:
 	DisplayServer.window_set_vsync_mode(
 		DisplayServer.VSYNC_ENABLED if vsync_enabled else DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = FPS_CAP_VALUES[fps_cap_index]
+	var root: Window = get_tree().root
+	root.scaling_3d_mode = scaling_3d_mode as Viewport.Scaling3DMode
+	root.scaling_3d_scale = render_scale
 	var scene: Node = Engine.get_main_loop().current_scene
 	if scene == null:
 		return
@@ -303,6 +326,8 @@ func _load() -> void:
 		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
+		scaling_3d_mode = clamp(cfg.get_value("video", "scaling_3d_mode", SCALING_3D_BILINEAR), 0, SCALING_3D_LABELS.size() - 1)
+		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
