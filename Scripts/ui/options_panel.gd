@@ -318,6 +318,7 @@ func _build_video_tab() -> Control:
 	_scaling_3d_btn.selected = PlayerPrefs.scaling_3d_mode
 	_scaling_3d_btn.item_selected.connect(_on_scaling_3d_selected)
 	box.add_child(_field_row("Upscaling", _scaling_3d_btn))
+	_update_upscaling_enabled()
 
 	_aa_btn = OptionButton.new()
 	_aa_btn.custom_minimum_size = Vector2(180, 40)
@@ -568,7 +569,12 @@ func _on_color_grade_selected(_idx: int) -> void:
 	_update_apply_state()
 
 func _on_render_scale_changed(_value: float) -> void:
+	_update_upscaling_enabled()
 	_update_apply_state()
+
+func _update_upscaling_enabled() -> void:
+	if _scaling_3d_btn != null and _render_scale_slider != null:
+		_scaling_3d_btn.disabled = is_equal_approx(_render_scale_slider.value, 1.0)
 
 func _on_scaling_3d_selected(_idx: int) -> void:
 	_update_apply_state()
