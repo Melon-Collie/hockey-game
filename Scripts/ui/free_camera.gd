@@ -13,7 +13,6 @@ extends Camera3D
 @export var boost_speed: float = 30.0    # m/s while block (Shift) held
 @export var look_sensitivity: float = 0.18  # degrees per pixel of mouse delta
 @export var accel_time: float = 0.15     # seconds to ramp from 0 → base_speed
-@export var free_fov: float = 60.0
 
 var _prev_camera: Camera3D = null
 var _looking: bool = false
@@ -34,7 +33,7 @@ func activate(initial_xform: Transform3D) -> void:
 	_yaw_deg = rad_to_deg(basis_euler.y)
 	_pitch_deg = clampf(rad_to_deg(basis_euler.x), -89.0, 89.0)
 	_velocity = Vector3.ZERO
-	fov = free_fov
+	fov = PlayerPrefs.fov
 	make_current()
 
 
@@ -67,6 +66,10 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	if not current:
 		return
+	# Mirror GameCamera so the player FOV slider drives all three player-
+	# perspective cams (gameplay + chase + free) in lockstep.
+	if not is_equal_approx(fov, PlayerPrefs.fov):
+		fov = PlayerPrefs.fov
 	# Rotation: rebuild from accumulated yaw/pitch so the camera can't drift
 	# from float error over a long session.
 	var basis := Basis.from_euler(Vector3(deg_to_rad(_pitch_deg), deg_to_rad(_yaw_deg), 0.0))

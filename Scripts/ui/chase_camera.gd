@@ -12,7 +12,6 @@ extends Camera3D
 @export var look_height: float = 1.0       # meters above ice for aim
 @export var pos_lerp: float = 8.0
 @export var look_lerp: float = 6.0
-@export var chase_fov: float = 55.0
 
 var _target_getter: Callable = Callable()
 var _prev_camera: Camera3D = null
@@ -25,7 +24,7 @@ func setup(target_getter: Callable) -> void:
 	# Director updates the bound target by re-pointing the Callable on cycle —
 	# this cam re-reads it every frame so we don't cache stale references.
 	_target_getter = target_getter
-	fov = chase_fov
+	fov = PlayerPrefs.fov
 
 
 func activate() -> void:
@@ -73,6 +72,10 @@ func _snap_to_target() -> void:
 func _process(delta: float) -> void:
 	if not current:
 		return
+	# Mirror GameCamera so the player FOV slider drives all three player-
+	# perspective cams (gameplay + chase + free) in lockstep.
+	if not is_equal_approx(fov, PlayerPrefs.fov):
+		fov = PlayerPrefs.fov
 	var skater: Skater = _resolve_target()
 	if skater == null:
 		return
