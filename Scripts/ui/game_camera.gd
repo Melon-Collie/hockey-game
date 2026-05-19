@@ -232,32 +232,16 @@ func _physics_process(delta: float) -> void:
 	_anchor_vel.z = az_res[1]
 
 	# ── Step 6: Compose camera position ──────────────────────────────────────
-	# Tilt geometry is derived from the actual (smoothed) height so the view
-	# anchor stays put during zoom transitions.
-	var pitch: float = -90.0
-	var tilt_z_offset: float = 0.0
-	if PlayerPrefs.camera_mode == PlayerPrefs.CAMERA_MODE_TILTED:
-		pitch = -PlayerPrefs.tilt_angle
-		var off_axis_rad: float = deg_to_rad(90.0 - PlayerPrefs.tilt_angle)
-		var flip_sign: float = -1.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 1.0
-		tilt_z_offset = _current_height * tan(off_axis_rad) * flip_sign
+	# Tilt geometry derives from the smoothed height so the view anchor stays
+	# put during zoom transitions. At tilt_angle = 90° (straight down) the
+	# off-axis offset collapses to zero and the camera looks straight down.
+	var off_axis_rad: float = deg_to_rad(90.0 - PlayerPrefs.tilt_angle)
+	var flip_sign: float = -1.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 1.0
+	var tilt_z_offset: float = _current_height * tan(off_axis_rad) * flip_sign
 
 	global_position = Vector3(
 			_smoothed_anchor.x, _current_height, _smoothed_anchor.z + tilt_z_offset)
 
-	# ── Step 7: Projection + rotation ────────────────────────────────────────
-	# Ortho `size` matches perspective FOV's vertical extent so the same zone
-	# frames in both modes.
+	# ── Step 7: Rotation ─────────────────────────────────────────────────────
 	var flip_y: float = 180.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 0.0
-	match PlayerPrefs.camera_mode:
-		PlayerPrefs.CAMERA_MODE_ORTHOGRAPHIC:
-			if projection != PROJECTION_ORTHOGONAL:
-				projection = PROJECTION_ORTHOGONAL
-			size = 2.0 * tan_half_fov * _current_height
-		PlayerPrefs.CAMERA_MODE_TOP_DOWN:
-			if projection != PROJECTION_PERSPECTIVE:
-				projection = PROJECTION_PERSPECTIVE
-		PlayerPrefs.CAMERA_MODE_TILTED:
-			if projection != PROJECTION_PERSPECTIVE:
-				projection = PROJECTION_PERSPECTIVE
-	rotation_degrees = Vector3(pitch, flip_y, 0.0)
+	rotation_degrees = Vector3(-PlayerPrefs.tilt_angle, flip_y, 0.0)
