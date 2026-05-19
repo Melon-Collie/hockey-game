@@ -14,8 +14,8 @@ extends Camera3D
 @export var lead_smooth: float = 5.0
 # Zone lead is a possession-aware additive pull toward the attacking goal so
 # you can see receivers / the play even when stationary with the puck.
-@export var zone_lead: float = 3.5
-@export var bias_smooth_speed: float = 2.0      # smooths possession transitions
+@export var zone_lead: float = 1.5
+@export var bias_smooth_speed: float = 0.8      # smooths possession transitions
 
 # ── Threat-aware framing ──────────────────────────────────────────────────────
 # Opponents within this distance of the local player are included in the
