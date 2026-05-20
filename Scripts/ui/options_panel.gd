@@ -28,8 +28,6 @@ var _aa_btn: OptionButton = null
 var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
 var _attack_up_check: CheckButton = null
-var _camera_style_btn: OptionButton = null
-var _camera_mode_btn: OptionButton = null
 var _fov_slider: HSlider = null
 var _fov_label: Label = null
 var _cam_dist_slider: HSlider = null
@@ -130,8 +128,6 @@ func _snapshot() -> Dictionary:
 		"master_muted": PlayerPrefs.master_muted,
 		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
 		"attack_up": PlayerPrefs.attack_up,
-		"camera_style": PlayerPrefs.camera_style,
-		"camera_mode": PlayerPrefs.camera_mode,
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
 		"tilt_angle": PlayerPrefs.tilt_angle,
@@ -160,8 +156,6 @@ func _read_controls() -> Dictionary:
 		"master_muted": _mute_check.button_pressed,
 		"mouse_sensitivity": _sens_slider.value,
 		"attack_up": _attack_up_check.button_pressed,
-		"camera_style": _camera_style_btn.selected,
-		"camera_mode": _camera_mode_btn.selected,
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
 		"tilt_angle": _tilt_slider.value,
@@ -486,24 +480,6 @@ func _build_game_tab() -> Control:
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Camera"))
 
-	_camera_style_btn = OptionButton.new()
-	_camera_style_btn.custom_minimum_size = Vector2(220, 40)
-	_camera_style_btn.add_theme_font_size_override("font_size", 15)
-	for i: int in PlayerPrefs.CAMERA_STYLE_LABELS.size():
-		_camera_style_btn.add_item(PlayerPrefs.CAMERA_STYLE_LABELS[i], i)
-	_camera_style_btn.selected = PlayerPrefs.camera_style
-	_camera_style_btn.item_selected.connect(_on_camera_style_selected)
-	box.add_child(_field_row("Style", _camera_style_btn))
-
-	_camera_mode_btn = OptionButton.new()
-	_camera_mode_btn.custom_minimum_size = Vector2(220, 40)
-	_camera_mode_btn.add_theme_font_size_override("font_size", 15)
-	for i: int in PlayerPrefs.CAMERA_MODE_LABELS.size():
-		_camera_mode_btn.add_item(PlayerPrefs.CAMERA_MODE_LABELS[i], i)
-	_camera_mode_btn.selected = PlayerPrefs.camera_mode
-	_camera_mode_btn.item_selected.connect(_on_camera_mode_selected)
-	box.add_child(_field_row("Mode (Classic)", _camera_mode_btn))
-
 	_fov_slider = HSlider.new()
 	_fov_slider.min_value = PlayerPrefs.FOV_MIN
 	_fov_slider.max_value = PlayerPrefs.FOV_MAX
@@ -532,7 +508,7 @@ func _build_game_tab() -> Control:
 	_tilt_slider.value_changed.connect(_on_tilt_changed)
 	_tilt_label = _value_label("%d°" % int(PlayerPrefs.tilt_angle))
 	_tilt_slider.value_changed.connect(func(v: float) -> void: _tilt_label.text = "%d°" % int(v))
-	box.add_child(_slider_row("Tilt (Modern)", _tilt_slider, _tilt_label))
+	box.add_child(_slider_row("Tilt", _tilt_slider, _tilt_label))
 
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Team Colors"))
@@ -632,17 +608,6 @@ func _on_ice_scratches_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_attack_up_toggled(_pressed: bool) -> void:
-	_update_apply_state()
-
-func _on_camera_style_selected(_idx: int) -> void:
-	_update_apply_state()
-
-func _on_camera_mode_selected(_idx: int) -> void:
-	_update_apply_state()
-
-func _on_tilt_changed(value: float) -> void:
-	if _tilt_label != null:
-		_tilt_label.text = "%d°" % int(value)
 	_update_apply_state()
 
 func _on_fov_changed(value: float) -> void:
@@ -801,10 +766,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
 	PlayerPrefs.attack_up = c.attack_up
-	PlayerPrefs.camera_style = c.camera_style
-	PlayerPrefs.camera_mode = c.camera_mode
 	PlayerPrefs.fov = c.fov
-	PlayerPrefs.tilt_angle = c.tilt_angle
 	PlayerPrefs.camera_distance = c.camera_distance
 	PlayerPrefs.tilt_angle = c.tilt_angle
 	PlayerPrefs.bindings = (_pending_bindings as Dictionary).duplicate(true)
@@ -847,12 +809,6 @@ func _on_cancel_pressed() -> void:
 	_mute_check.set_pressed_no_signal(_original.master_muted)
 	_sens_slider.value = _original.mouse_sensitivity
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
-	if _camera_style_btn != null:
-		_camera_style_btn.selected = _original.camera_style
-	if _camera_mode_btn != null:
-		_camera_mode_btn.selected = _original.camera_mode
-	if _tilt_slider != null:
-		_tilt_slider.value = _original.tilt_angle
 	if _fov_slider != null:
 		_fov_slider.value = _original.fov
 	if _cam_dist_slider != null:
