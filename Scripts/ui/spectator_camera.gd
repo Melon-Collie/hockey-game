@@ -8,17 +8,19 @@ extends Camera3D
 # presets like GoalReplayDriver's inside-net cam). Pans/tilts to track the
 # puck with a small velocity lead so the rotation anticipates the play instead
 # of chasing it. Subtle perlin-style noise on yaw/pitch + position gives the
-# gentle drift of a wire-rigged broadcast camera. Zone-based FOV pulls in for
-# in-zone play and widens for neutral-zone rushes.
-#
-# Telephoto FOV (compared to the 70°-ish game cam) flattens depth in the
-# broadcast style — players group up visually as the puck moves, which sells
-# the play better than the wider game-cam framing.
+# gentle drift of a wire-rigged broadcast camera. Telephoto FOV (compared to
+# the player-perspective cams) flattens depth in the broadcast style — players
+# group up visually as the puck moves, which sells the play better than the
+# wider game-cam framing.
 
 @export var booth_x: float = 20.0        # outside the long boards (rink is ±13 wide)
-@export var booth_y: float = 16.0        # press-box elevation (~39° down to center ice)
+@export var booth_y: float = 18.0        # press-box elevation (~42° down to center ice)
 @export var booth_z: float = 0.0         # center-ice along the long axis (slides with rail_track)
-@export var replay_fov: float = 36.0
+# 28° vertical → ~50° horizontal at 16:9 → frames ~35% of the rink length from
+# the booth distance, matching the published wide-shot guideline for NHL game-
+# follow cameras. Telephoto enough to compress depth (players group visually
+# as play moves) without losing the puck in long-bomb stretch passes.
+@export var replay_fov: float = 28.0
 @export var look_speed: float = 6.0      # rotation slerp speed
 @export var lead_time: float = 0.35      # seconds of puck-velocity lookahead
 @export var max_lead: float = 5.0        # cap the lead so fast shots don't overshoot
@@ -35,13 +37,6 @@ extends Camera3D
 @export var rail_strength: float = 0.65
 @export var rail_max_offset: float = 12.0
 @export var rail_smooth_rate: float = 1.5
-
-# Zone-based FOV — tighter in offensive/defensive zones to focus on the play,
-# wider through the neutral zone for rushes. Lerped slowly so the FOV change
-# reads as a deliberate broadcast adjustment, not a snap zoom.
-@export var fov_in_zone: float = 32.0
-@export var fov_in_neutral: float = 38.0
-@export var fov_smooth_rate: float = 1.5
 
 # Low-pass filter on the target position. Real broadcast cameras don't react
 # to puck wiggle during stickhandling — the operator follows the play, not
@@ -94,17 +89,15 @@ func snap_to_position() -> void:
 
 # Re-aim this camera at a different preset (position, FOV, lead time). Caller
 # is responsible for snap_to_position() + make_current() afterward to actually
-# execute the cut. Disables rail tracking + zone FOV since custom presets
-# (e.g. GoalReplayDriver's inside-net cam) want a parked camera and constant
-# FOV, not a hard-cam that slides.
+# execute the cut. Disables rail tracking since custom presets (e.g.
+# GoalReplayDriver's inside-net cam) want a parked camera, not a hard-cam
+# that slides.
 func set_booth(pos: Vector3, new_fov: float, new_lead_time: float) -> void:
 	booth_x = pos.x
 	booth_y = pos.y
 	booth_z = pos.z
 	fov = new_fov
 	replay_fov = new_fov
-	fov_in_zone = new_fov
-	fov_in_neutral = new_fov
 	lead_time = new_lead_time
 	rail_track = false
 
@@ -129,13 +122,6 @@ func _process(delta: float) -> void:
 				-rail_max_offset, rail_max_offset)
 		var rail_alpha: float = clampf(delta * rail_smooth_rate, 0.0, 1.0)
 		booth_z = lerpf(booth_z, target_z, rail_alpha)
-
-	# Zone-based FOV — pull in when play is contained in a zone, open up in
-	# the neutral zone. The lerp here drives the camera's actual `fov`, while
-	# `replay_fov` is kept as the user-facing default-on-activate.
-	var target_fov: float = fov_in_zone if absf(_smoothed_target.z) > GameRules.BLUE_LINE_Z else fov_in_neutral
-	var fov_alpha: float = clampf(delta * fov_smooth_rate, 0.0, 1.0)
-	fov = lerpf(fov, target_fov, fov_alpha)
 
 	# Velocity-lead so the rotation anticipates the puck path. Capped so a
 	# slapshot doesn't fling the look-target past the play. The velocity is
