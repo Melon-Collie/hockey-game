@@ -4,7 +4,7 @@ extends RefCounted
 # Per-team strategy node, v2 (possession-state model). Replaces the
 # F1/F2/F3 closest-to-puck role assignment + man-to-man coverage
 # assignment with a single positional-slot system driven by team
-# possession state. See `docs/specs/AI_PLAN.md` (v2 model).
+# possession state.
 #
 # Driven by GameManager._physics_process (host only) — ticks once
 # every TICK_PERIOD seconds (~6 Hz).

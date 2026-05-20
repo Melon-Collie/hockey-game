@@ -310,6 +310,13 @@ var _reaction_age: float = 0.0             # counts up while _reacting_to_shot
 var _reaction_clear_timer: float = -1.0    # >= 0 = counting down to clear reaction
 var _reading_slapper_tell: bool = false
 
+# Reused across every `_get_config` call to avoid a per-tick GoalieBodyConfig
+# allocation (host ticks 2× per physics frame at 240Hz). Every match branch in
+# `_get_config` overwrites all 12 fields, so no stale data leaks between calls.
+# `Goalie.apply_body_config` only reads from the config; it never stores the
+# reference, so sharing one instance is safe.
+var _scratch_body_config: GoalieBodyConfig = GoalieBodyConfig.new()
+
 # ── Client Simulation ─────────────────────────────────────────────────────────
 const _CLIENT_REACTION_DURATION_S: float = 1.5  # how long the client holds the shot-reaction visual after a goalie shot RPC
 var is_extrapolating: bool = false  # always false; kept for telemetry compat
@@ -1031,7 +1038,7 @@ func _update_body_parts(delta: float) -> void:
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
 
 func _get_config(state: State) -> GoalieBodyConfig:
-	var c := GoalieBodyConfig.new()
+	var c: GoalieBodyConfig = _scratch_body_config
 	# Y-rotation on standing/ready/butterfly pads angles the toes outward so
 	# pucks deflect toward the corners and boards instead of bouncing back
 	# into the slot. Real goalies actively rotate the pads to control rebound

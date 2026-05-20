@@ -47,6 +47,21 @@ var packet_loss_pct: float = 0.0
 var jitter_p95_ms: float = 0.0
 var puck_mode: String = "—"
 
+# ── Host-frame health (host only; clients leave these at 0) ──────────────────
+# Inter-tick gap captures any stall regardless of cause (CPU steal, GC pause,
+# heavy Jolt frame, etc.). Steady state at 240Hz is ~4.17ms; a real stall shows
+# up as a single large `tick max` sample with subsequent catch-up ticks at
+# near-zero gap. Broadcast interval is wall-clock between consecutive
+# `_broadcast_state()` calls — should track the physics-driven 25ms cadence.
+var host_physics_tick_p95_ms: float = 0.0
+var host_physics_tick_p99_ms: float = 0.0
+var host_physics_tick_max_ms: float = 0.0
+var broadcast_interval_p95_ms: float = 0.0
+var _phys_tick_samples_us: Array[int] = []
+var _bcast_interval_samples_us: Array[int] = []
+const PHYS_TICK_WINDOW: int = 240   # 1s at 240Hz
+const BCAST_INTERVAL_WINDOW: int = 40  # 1s at 40Hz
+
 # ── Static call sites (no-op when not in a game session) ─────────────────────
 static func record_world_state() -> void:
 	if instance: instance._world_state_count += 1
@@ -118,6 +133,25 @@ static func record_input_lead(lead_sec: float) -> void:
 static func record_input_starvation() -> void:
 	if instance: instance._starvation_count += 1
 
+# Wall-clock microseconds between consecutive host physics ticks. Steady state
+# ≈ 4170us; a stall produces one large sample followed by near-zero catch-up
+# samples. Host-only.
+static func record_host_physics_tick_us(us: int) -> void:
+	if instance == null:
+		return
+	instance._phys_tick_samples_us.append(us)
+	if instance._phys_tick_samples_us.size() > PHYS_TICK_WINDOW:
+		instance._phys_tick_samples_us.pop_front()
+
+# Wall-clock microseconds between consecutive `_broadcast_state()` calls on the
+# host. Should track the 25ms (40Hz) physics-driven cadence.
+static func record_broadcast_interval_us(us: int) -> void:
+	if instance == null:
+		return
+	instance._bcast_interval_samples_us.append(us)
+	if instance._bcast_interval_samples_us.size() > BCAST_INTERVAL_WINDOW:
+		instance._bcast_interval_samples_us.pop_front()
+
 func observe_actors(skater_buf: int, puck_buf: int, goalie_buf: int, extrapolating: bool) -> void:
 	buffer_depth_skater = skater_buf
 	buffer_depth_puck = puck_buf
@@ -146,6 +180,27 @@ func tick(delta: float) -> void:
 		var sorted := _queue_depth_window.duplicate()
 		sorted.sort()
 		input_queue_depth_median = sorted[sorted.size() >> 1]
+	if not _phys_tick_samples_us.is_empty():
+		var pts := _phys_tick_samples_us.duplicate()
+		pts.sort()
+		var p95_i: int = mini(int(pts.size() * 0.95), pts.size() - 1)
+		var p99_i: int = mini(int(pts.size() * 0.99), pts.size() - 1)
+		host_physics_tick_p95_ms = pts[p95_i] / 1000.0
+		host_physics_tick_p99_ms = pts[p99_i] / 1000.0
+		host_physics_tick_max_ms = pts[pts.size() - 1] / 1000.0
+		_phys_tick_samples_us.clear()
+	else:
+		host_physics_tick_p95_ms = 0.0
+		host_physics_tick_p99_ms = 0.0
+		host_physics_tick_max_ms = 0.0
+	if not _bcast_interval_samples_us.is_empty():
+		var bis := _bcast_interval_samples_us.duplicate()
+		bis.sort()
+		var b95_i: int = mini(int(bis.size() * 0.95), bis.size() - 1)
+		broadcast_interval_p95_ms = bis[b95_i] / 1000.0
+		_bcast_interval_samples_us.clear()
+	else:
+		broadcast_interval_p95_ms = 0.0
 	_world_state_count = 0
 	_input_count = 0
 	_reconcile_count = 0

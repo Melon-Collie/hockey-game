@@ -64,6 +64,9 @@ var _in_replay_locally: bool = false
 # created _state_machine, the sync would otherwise be dropped and the host
 # (only delivered through this path) would never spawn on the client.
 var _pending_existing_players: Array = []
+# Wall-clock timestamp of the previous host physics tick. Used to record the
+# inter-tick gap into NetworkTelemetry so F3 can surface host stalls.
+var _last_phys_tick_us: int = 0
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
 var _spawner: ActorSpawner = null
@@ -97,6 +100,7 @@ var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _pickup_claim: PickupClaimResolver = null
+var _poke_claim: PokeClaimResolver = null
 var _hit_claim: HitClaimResolver = null
 var _phase_coord: PhaseCoordinator = null
 var _swap_coord: SlotSwapCoordinator = null
@@ -188,6 +192,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_identity_changed.connect(_on_local_identity_changed)
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
+	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
 	NetworkManager.goalie_state_transition_received.connect(_on_goalie_state_transition_received)
@@ -221,6 +226,17 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Host-frame health telemetry: wall-clock gap between consecutive physics
+	# ticks. Steady-state at 240Hz is ~4170us. A real-time stall (CPU steal,
+	# heavy Jolt frame, GC pause, OS hitch) produces one large sample followed
+	# by near-zero catch-up ticks as the engine rebases the physics clock to
+	# wall time. Surfaces on F3 as `tick p95/p99/max`. Host only — clients
+	# don't run the host simulation loop and the metric isn't meaningful there.
+	if NetworkManager.is_host:
+		var now_us: int = Time.get_ticks_usec()
+		if _last_phys_tick_us != 0:
+			NetworkTelemetry.record_host_physics_tick_us(now_us - _last_phys_tick_us)
+		_last_phys_tick_us = now_us
 	if _state_machine != null and _registry != null:
 		var local: PlayerRecord = _registry.get_local()
 		if local != null and _state_machine.current_phase == GamePhase.Phase.PLAYING:
@@ -488,6 +504,10 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 
 # ── World Spawn ───────────────────────────────────────────────────────────────
 func _spawn_world() -> void:
+	# Reset host-tick telemetry baseline. Without this, the first tick after a
+	# scene change records a huge gap (whatever wall time elapsed during the
+	# scene transition) and pollutes the p95/p99 for the first second.
+	_last_phys_tick_us = 0
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -632,6 +652,9 @@ func _wire_subsystems() -> void:
 
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
+
+	_poke_claim = PokeClaimResolver.new()
+	_poke_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
 	_hit_claim = HitClaimResolver.new()
 	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
@@ -1349,6 +1372,12 @@ func _on_pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: floa
 	_pickup_claim.receive_claim(peer_id, host_timestamp, rtt_ms, interp_delay_ms)
 
 
+func _on_poke_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	_poke_claim.receive_claim(peer_id, host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id)
+
+
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
@@ -1853,6 +1882,7 @@ func on_scene_exit() -> void:
 	_recorder = null
 	_shot_tracker = null
 	_pickup_claim = null
+	_poke_claim = null
 	_hit_claim = null
 	_phase_coord = null
 	_swap_coord = null

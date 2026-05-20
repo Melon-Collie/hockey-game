@@ -69,6 +69,7 @@ signal bot_slots_synced(bot_slots: Dictionary)
 signal rematch_vote_changed(peer_id: int, vote: bool)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
+signal poke_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int)
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float)
 signal goalie_state_transition_received(team_id: int, new_state: int)
 signal goalie_shot_reaction_received(team_id: int, impact_x: float, impact_y: float, is_elevated: bool)
@@ -144,8 +145,8 @@ var pending_bot_slots: Dictionary[int, bool] = {}
 # bot that will spawn instead of a generic "BOT" placeholder.
 var pending_bot_identities: Dictionary[int, Dictionary] = {}
 # Integer physics-tick counter on the host. Used by AI/perception code as a
-# deterministic salt for per-tick RNG (see docs/specs/AI_PLAN.md §11). Clients
-# do not maintain or consume this — they read estimated_host_time() instead.
+# deterministic salt for per-tick RNG. Clients do not maintain or consume
+# this — they read estimated_host_time() instead.
 var host_tick: int = 0
 var pending_num_periods: int = GameRules.NUM_PERIODS
 var pending_period_duration: float = GameRules.PERIOD_DURATION
@@ -192,12 +193,23 @@ var _last_ws_arrival_time: float = -1.0
 var pending_error: String = ""
 
 var _input_timer: float = 0.0
-var _state_timer: float = 0.0
+# Physics-driven broadcast cadence (see _physics_process). Counts physics ticks
+# between broadcasts. `_last_broadcast_us` tracks wall-clock for telemetry.
+var _state_tick_counter: int = 0
+var _last_broadcast_us: int = 0
 var _ping_timer: float = 0.0
 const _PING_INTERVAL: float = 2.0
 var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
+# Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
+# (240/120 = 2 at the default rate; 240/5 = 48 during dead-puck phases via
+# set_broadcast_rate). Recomputed by `set_broadcast_rate`. The broadcast loop
+# fires from `_physics_process` (not `_process`) so that on a host stall,
+# Godot's physics catch-up naturally produces back-to-back broadcasts with
+# distinct host_timestamps for the client to interpolate through — instead
+# of one big "missing snapshot" gap followed by a snap.
+var _state_tick_divisor: int = Constants.PHYSICS_TICK / Constants.STATE_RATE
 const CONNECT_TIMEOUT: float = 10.0
 
 func _ready() -> void:
@@ -392,8 +404,10 @@ func prepare_for_new_game() -> void:
 	_peer_loss_rates.clear()
 	_peer_loss_timer = 0.0
 	_input_timer = 0.0
-	_state_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
+	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
+	_state_tick_counter = 0
+	_last_broadcast_us = 0
 	_last_ws_seq_received = -1
 	_ws_drop_window = 0
 	_ws_recv_window = 0
@@ -425,8 +439,10 @@ func reset() -> void:
 	pending_bot_slots.clear()
 	pending_bot_identities.clear()
 	_input_timer = 0.0
-	_state_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
+	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
+	_state_tick_counter = 0
+	_last_broadcast_us = 0
 	_connect_timer = -1.0
 	_clock_sync = null
 	_session_start_ms = 0
@@ -465,6 +481,20 @@ func _physics_process(_delta: float) -> void:
 	# transfers (Phase 1 has no host transfer support anyway).
 	if is_host:
 		host_tick += 1
+		# World-state broadcast cadence: every Nth physics tick (N=6 at 40Hz).
+		# Lives in _physics_process — not _process — so that Godot's physics
+		# catch-up after a main-thread stall naturally fires multiple
+		# broadcasts in rapid succession, each carrying the snapshot at that
+		# physics tick. Without this, a 60ms stall produces ONE broadcast on
+		# recovery and the client interpolator runs out of bracket.
+		_state_tick_counter += 1
+		if _state_tick_counter >= _state_tick_divisor:
+			_state_tick_counter = 0
+			var now_us: int = Time.get_ticks_usec()
+			if _last_broadcast_us != 0:
+				NetworkTelemetry.record_broadcast_interval_us(now_us - _last_broadcast_us)
+			_last_broadcast_us = now_us
+			_broadcast_state()
 
 func _process(delta: float) -> void:
 	# Cap delta to avoid timer bursting on the first frame after an OS freeze
@@ -518,10 +548,9 @@ func _process(delta: float) -> void:
 			_ws_loss_window_timer = 0.0
 
 	if is_host:
-		_state_timer += capped_delta
-		if _state_timer >= state_delta:
-			_state_timer -= state_delta
-			_broadcast_state()
+		# Broadcast cadence lives in _physics_process so it stays well-paced
+		# across host main-thread stalls. The 1Hz peer-loss aggregation stays
+		# render-frame-paced — it's a slow per-second sample, not latency-critical.
 		_peer_loss_timer += capped_delta
 		if _peer_loss_timer >= 1.0:
 			for pid: int in _peer_echo_recv_window:
@@ -535,6 +564,13 @@ func _process(delta: float) -> void:
 
 func set_broadcast_rate(hz: float) -> void:
 	state_delta = 1.0 / maxf(hz, 1.0)
+	# `_physics_process` fires the broadcast every Nth physics tick. Round to
+	# the nearest integer so any hz that doesn't divide PHYSICS_TICK evenly
+	# (5, 10, 20, 30, 40, 48, 60, 80, 120) still produces the closest cadence.
+	# At 120Hz → 2 ticks; at 5Hz (dead-puck phase) → 48 ticks.
+	_state_tick_divisor = maxi(int(round(float(Constants.PHYSICS_TICK) / maxf(hz, 1.0))), 1)
+	# Reset the counter so the new cadence starts cleanly from the next tick.
+	_state_tick_counter = 0
 
 func _broadcast_state() -> void:
 	if not _world_state_provider.is_valid():
@@ -657,6 +693,19 @@ func receive_pickup_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	pickup_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms)
+
+func send_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	NetworkSimManager.send(
+		func(ts: float, rtt: float, idms: float, cpid: int) -> void:
+			receive_poke_claim.rpc_id(1, ts, rtt, idms, cpid),
+		[host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id], true)
+
+@rpc("any_peer", "reliable")
+func receive_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not is_host:
+		return
+	var peer_id: int = multiplayer.get_remote_sender_id()
+	poke_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id)
 
 func send_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
 	NetworkSimManager.send(
@@ -1273,18 +1322,32 @@ func get_target_interpolation_delay() -> float:
 	var broadcast_interval: float = 1.0 / Constants.STATE_RATE
 	# Minimum is RTT/2 + one full broadcast interval so render_time always has
 	# a buffered state ahead of it between packet arrivals. Jitter margin on top.
-	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 1.5
+	# Margin multiplier 1.0 (was 1.5): the 1.5x was sized for the old loose
+	# render-frame-driven broadcast cadence, which had baked-in 16.7ms jitter
+	# from alternating render frames at 60fps × 25ms broadcast intervals. The
+	# physics-driven broadcast loop produces a clean 1/STATE_RATE cadence, so
+	# the cushion can come down without falling into extrapolation. The
+	# adaptive +10ms/packet up-clamp still protects against sustained jitter.
+	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 1.0
 	return clampf(target, maxf(rtt_half + broadcast_interval, 0.016), 0.200)
 
 func adapt_interpolation_delay(current: float) -> float:
 	var target: float = get_target_interpolation_delay()
 	var change: float = lerpf(current, target, 0.15) - current
-	# Up-clamp raised to 10 ms/packet (was 5 ms): a sudden RTT spike can push the
-	# target 150+ ms above current; at 5 ms/packet that takes ~750 ms to converge,
-	# during which extrapolation fires every 50 ms on all remote skaters (visible
-	# micro-stutters). 10 ms/packet halves the recovery window with no oscillation
-	# risk — the down-clamp stays at 1 ms/packet to avoid chasing transient jitter.
-	return current + clampf(change, -0.001, 0.010)
+	# Asymmetric clamp: react fast to sustained jitter, relax gently from one-offs.
+	# Effective recovery rate = per-packet × broadcast rate. At the current 120Hz:
+	#   +10ms/packet up: 1200ms/sec, catches a 150ms sustained RTT spike in ~125ms.
+	#     Without this aggressive up-rate, extrapolation fires every ~50ms on
+	#     all remote skaters during the catch-up window (visible micro-stutter).
+	#   -1.5ms/packet down: 180ms/sec, recovers a 60ms buffer over-inflation in
+	#     ~330ms. The two earlier-shipped tunings here were sized for different
+	#     broadcast rates and don't carry forward: the original -1ms/packet was
+	#     40ms/sec at 40Hz (slow — buffer stayed inflated ~10s); the interim
+	#     -3ms/packet became 360ms/sec at 120Hz (too aggressive, risks
+	#     undershoot if jitter returns inside the window). -1.5ms/packet at
+	#     120Hz lands at 180ms/sec — slightly faster than the original 40Hz
+	#     target (120ms/sec) and well clear of industry norms (~80-150 ms/sec).
+	return current + clampf(change, -0.0015, 0.010)
 
 func get_peer_loss_rate(peer_id: int = -1) -> float:
 	if is_host:
