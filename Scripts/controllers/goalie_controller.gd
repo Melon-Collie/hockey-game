@@ -281,6 +281,11 @@ var _reaction: GoalieShotReaction = GoalieShotReaction.new()
 var _pose: GoalieBodyConfigBuilder = GoalieBodyConfigBuilder.new()
 var _pose_inputs: GoalieBodyConfigBuilder.Inputs = GoalieBodyConfigBuilder.Inputs.new()
 
+# ── Cached rule configs (built once in setup) ────────────────────────────────
+var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
+var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
+var _depth_cfg: GoalieBehaviorRules.DepthConfig
+
 # ── Runtime (controller-local) ────────────────────────────────────────────────
 var _current_depth: float = 0.1
 var _current_x: float = 0.0
@@ -372,6 +377,32 @@ func _configure_collaborators() -> void:
 	_pose.slide_pushoff_rot_deg = slide_pushoff_rot_deg
 	_pose.slide_body_lean_deg = slide_body_lean_deg
 	_pose.slide_initial_speed = slide_initial_speed
+	_build_rule_configs()
+
+# Rule configs are built once and reused — exports don't change at runtime.
+# Without this, three `RefCounted` allocations happen per physics tick per
+# goalie (plus extra shot-config allocs during reaction re-projection) at
+# 240Hz, for no semantic gain.
+func _build_rule_configs() -> void:
+	_shot_cfg = GoalieBehaviorRules.ShotDetectionConfig.new()
+	_shot_cfg.shot_speed_threshold = shot_speed_threshold
+	_shot_cfg.net_half_width = net_half_width
+	_shot_cfg.net_margin = net_margin
+	_shot_cfg.reaction_delay = reaction_delay
+	_shot_cfg.low_shot_threshold = low_shot_threshold
+	_shot_cfg.elevated_threshold = elevated_threshold
+	_zone_cfg = GoalieBehaviorRules.DefensiveZoneConfig.new()
+	_zone_cfg.zone_post_z = zone_post_z
+	_zone_cfg.rvh_early_angle = rvh_early_angle
+	_depth_cfg = GoalieBehaviorRules.DepthConfig.new()
+	_depth_cfg.zone_post_z = zone_post_z
+	_depth_cfg.zone_aggressive_z = zone_aggressive_z
+	_depth_cfg.zone_base_z = zone_base_z
+	_depth_cfg.zone_conservative_z = zone_conservative_z
+	_depth_cfg.depth_aggressive = depth_aggressive
+	_depth_cfg.depth_base = depth_base
+	_depth_cfg.depth_conservative = depth_conservative
+	_depth_cfg.depth_defensive = depth_defensive
 
 func is_butterfly() -> bool:
 	return _sm.is_butterfly()
@@ -450,7 +481,7 @@ func _update_tracking(delta: float) -> void:
 	# any resolving event has fired.
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
 			puck.global_position, puck.linear_velocity,
-			_goal_line_z, _goal_center_x, _shot_detection_config())
+			_goal_line_z, _goal_center_x, _shot_cfg)
 	if result.is_shot:
 		_reaction.update_impact(result.impact_x, result.impact_y)
 		# Elevated shot that's tipped low and tracking low — start the
@@ -697,7 +728,7 @@ func _update_depth(delta: float) -> void:
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
 			_tracked_threat_position, _goal_line_z, _goal_center_x)
 	var target_radius: float = GoalieBehaviorRules.target_depth_for_puck_distance(
-			threat_dist, _depth_config())
+			threat_dist, _depth_cfg)
 	if _reading_slapper_tell:
 		target_radius = maxf(target_radius - slapper_tell_depth_pull, depth_defensive)
 	_current_depth = lerpf(_current_depth, target_radius, depth_speed * delta)
@@ -942,7 +973,7 @@ func _on_puck_released() -> void:
 			puck.get_release_velocity(),
 			_goal_line_z,
 			_goal_center_x,
-			_shot_detection_config())
+			_shot_cfg)
 	if not result.is_shot:
 		return
 	# Two separate processing delays. `shot_timer` (= reaction_delay, ~130ms)
@@ -1078,33 +1109,4 @@ func apply_reaction_cleared() -> void:
 func _is_puck_in_defensive_zone() -> bool:
 	return GoalieBehaviorRules.is_puck_in_defensive_zone(
 			puck.global_position, _goal_line_z, _goal_center_x,
-			_direction_sign, _defensive_zone_config())
-
-# ── Rule configs ──────────────────────────────────────────────────────────────
-func _shot_detection_config() -> GoalieBehaviorRules.ShotDetectionConfig:
-	var cfg := GoalieBehaviorRules.ShotDetectionConfig.new()
-	cfg.shot_speed_threshold = shot_speed_threshold
-	cfg.net_half_width = net_half_width
-	cfg.net_margin = net_margin
-	cfg.reaction_delay = reaction_delay
-	cfg.low_shot_threshold = low_shot_threshold
-	cfg.elevated_threshold = elevated_threshold
-	return cfg
-
-func _defensive_zone_config() -> GoalieBehaviorRules.DefensiveZoneConfig:
-	var cfg := GoalieBehaviorRules.DefensiveZoneConfig.new()
-	cfg.zone_post_z = zone_post_z
-	cfg.rvh_early_angle = rvh_early_angle
-	return cfg
-
-func _depth_config() -> GoalieBehaviorRules.DepthConfig:
-	var cfg := GoalieBehaviorRules.DepthConfig.new()
-	cfg.zone_post_z = zone_post_z
-	cfg.zone_aggressive_z = zone_aggressive_z
-	cfg.zone_base_z = zone_base_z
-	cfg.zone_conservative_z = zone_conservative_z
-	cfg.depth_aggressive = depth_aggressive
-	cfg.depth_base = depth_base
-	cfg.depth_conservative = depth_conservative
-	cfg.depth_defensive = depth_defensive
-	return cfg
+			_direction_sign, _zone_cfg)
