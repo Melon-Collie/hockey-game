@@ -88,9 +88,14 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	_puck_controller.set_physics_process(false)
 
 	var goalie_result: Dictionary = _spawner.spawn_goalie_pair(_puck, false)
-	_goalie_controllers = [goalie_result.bottom_controller, goalie_result.top_controller]
-	_goalie_controllers[0].team_id = 0
-	_goalie_controllers[1].team_id = 1
+	# Order must match GameManager._spawn_goalies (game_manager.gd:592) —
+	# WorldStateCodec encodes per-goalie state by goalie_controllers index, so
+	# a different order here would apply top-goalie state to the bottom goalie
+	# (visible as goalies appearing in each other's net wearing the wrong
+	# team's colors).
+	_goalie_controllers = [goalie_result.top_controller, goalie_result.bottom_controller]
+	_goalie_controllers[0].team_id = 1
+	_goalie_controllers[1].team_id = 0
 	for gc: GoalieController in _goalie_controllers:
 		gc.set_physics_process(false)
 
