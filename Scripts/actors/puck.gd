@@ -12,9 +12,10 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 
 @export var max_speed: float = 38.0
 @export var reattach_cooldown: float = 0.5
-@export var ice_height: float = 0.05
+@export var ice_height: float = 0.0175
 @export var pickup_max_speed: float = 8.0
 @export var deflect_min_speed: float = 14.0
+@export var alignment_receive_bonus: float = 8.0
 @export var deflect_blend: float = 0.5
 @export var deflect_speed_retain: float = 0.7
 @export var deflect_cooldown: float = 0.3
@@ -35,6 +36,7 @@ var pickup_locked: bool = false
 var _cooldown_timers: Dictionary[Skater, float] = {}
 var _is_server: bool = false
 var _pending_reset: bool = false
+var _pending_reset_xz: Vector2 = Vector2.ZERO
 var _clamp_at_goal_line: bool = false
 # Full velocity stored by release() for every shot, applied by _integrate_forces.
 # Jolt does not preserve linear_velocity set on a frozen body when it activates
@@ -145,20 +147,9 @@ func remove_skater_cooldown(skater: Skater) -> void:
 
 # ── Physics ───────────────────────────────────────────────────────────────────
 func apply_blade_deflect(skater: Skater) -> void:
-	# Use the blade face normal — perpendicular to the stick shaft in the horizontal
-	# plane — as the reflection surface. This makes the deflection angle depend on
-	# how the player has angled their blade, not just where the puck contacted.
-	var top_hand_world: Vector3 = skater.top_hand.global_position
-	var blade_world: Vector3 = skater.get_blade_contact_global()
-	var stick_horiz: Vector3 = blade_world - top_hand_world
-	stick_horiz.y = 0.0
-	if stick_horiz.length() < 0.001:
-		stick_horiz = -skater.global_transform.basis.z
-	stick_horiz = stick_horiz.normalized()
-	# 90° rotation around Y gives the face normal; pick the face opposing the puck.
-	var contact_normal: Vector3 = Vector3(-stick_horiz.z, 0.0, stick_horiz.x)
-	if contact_normal.dot(linear_velocity) > 0.0:
-		contact_normal = -contact_normal
+	# Reflect off the blade face — angle depends on how the player has angled
+	# their stick, not just where the puck contacted.
+	var contact_normal: Vector3 = skater.get_blade_face_normal(linear_velocity)
 
 	var new_vel: Vector3 = PuckCollisionRules.deflect_velocity(
 			linear_velocity, contact_normal, deflect_blend, deflect_speed_retain)
@@ -262,13 +253,14 @@ func drop() -> void:
 		_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_released.emit()
 
-func reset() -> void:
+func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 	carrier = null
 	freeze = false  # ensure _integrate_forces is called on the next step
 	_cooldown_timers.clear()
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
 	_pending_reset = true
+	_pending_reset_xz = at_xz
 	puck_released.emit()
 
 func is_airborne() -> bool:
@@ -290,9 +282,11 @@ func _on_body_entered(body: Node3D) -> void:
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if _pending_reset:
 		_pending_reset = false
-		state.transform = Transform3D(Basis(), Vector3(0, ice_height, 0))
+		state.transform = Transform3D(Basis(),
+				Vector3(_pending_reset_xz.x, ice_height, _pending_reset_xz.y))
 		state.linear_velocity = Vector3.ZERO
 		state.angular_velocity = Vector3.ZERO
+		_pending_reset_xz = Vector2.ZERO
 		return
 	if not _pending_elevation_vel.is_zero_approx():
 		# Write the full velocity vector directly into Jolt's physics state.

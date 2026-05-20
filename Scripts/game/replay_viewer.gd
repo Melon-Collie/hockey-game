@@ -27,8 +27,8 @@ var _camera: SpectatorCamera = null
 var _hud: ReplayViewerHUD = null
 # Cached so the player_joined event handler can spawn mid-game arrivals
 # without re-deriving them from header.
-var _home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
-var _away_color_id: String = TeamColorRegistry.DEFAULT_AWAY_ID
+var _home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
+var _away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT
 var _home_colors: Dictionary = {}
 var _away_colors: Dictionary = {}
 # Header roster cached for backward-seek rebuilds — the driver sends us the
@@ -88,10 +88,23 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	for gc: GoalieController in _goalie_controllers:
 		gc.set_physics_process(false)
 
-	_home_color_id = header.get("home_color_id", TeamColorRegistry.DEFAULT_HOME_ID)
-	_away_color_id = header.get("away_color_id", TeamColorRegistry.DEFAULT_AWAY_ID)
-	_home_colors = TeamColorRegistry.get_colors(_home_color_id, 0)
-	_away_colors = TeamColorRegistry.get_colors(_away_color_id, 1)
+	# Replay headers carry int slot indices. Legacy fruit-name strings in old
+	# .mreplay files won't typecheck — fall back to defaults and warn rather
+	# than crash. Hard break: no string→slot mapping.
+	var raw_home: Variant = header.get("home_color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
+	var raw_away: Variant = header.get("away_color_slot", TeamColorRegistry.DEFAULT_AWAY_SLOT)
+	if raw_home is int:
+		_home_color_slot = raw_home
+	else:
+		push_warning("ReplayViewer: legacy color id in header, using default home")
+		_home_color_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
+	if raw_away is int:
+		_away_color_slot = raw_away
+	else:
+		push_warning("ReplayViewer: legacy color id in header, using default away")
+		_away_color_slot = TeamColorRegistry.DEFAULT_AWAY_SLOT
+	_home_colors = TeamColorRegistry.get_colors(_home_color_slot, 0)
+	_away_colors = TeamColorRegistry.get_colors(_away_color_slot, 1)
 	goalie_result.bottom_goalie.set_goalie_color(_home_colors.jersey, _home_colors.helmet, _home_colors.goalie_pads)
 	goalie_result.top_goalie.set_goalie_color(_away_colors.jersey, _away_colors.helmet, _away_colors.goalie_pads)
 
@@ -113,7 +126,7 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	var jersey_number: int = int(entry.get("jersey_number", 10))
 	var team_obj := Team.new()
 	team_obj.team_id = team_id
-	team_obj.color_id = _home_color_id if team_id == 0 else _away_color_id
+	team_obj.color_slot = _home_color_slot if team_id == 0 else _away_color_slot
 	var team_colors: Dictionary = _home_colors if team_id == 0 else _away_colors
 	var spawned: Dictionary = _spawner.spawn_remote_player(
 			PlayerRules.faceoff_position(team_id, team_slot),
@@ -225,6 +238,11 @@ func is_host() -> bool:
 
 func is_movement_locked() -> bool:
 	return true
+
+
+# Replay never wants stick wiggle — the recorded skater poses own the blade.
+func allows_blade_aim_during_lock() -> bool:
+	return false
 
 
 func is_input_blocked() -> bool:

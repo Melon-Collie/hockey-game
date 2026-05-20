@@ -25,6 +25,14 @@ signal player_joined(name: String, team_color: Color)
 signal player_left(name: String, team_color: Color)
 
 var _players: Dictionary[int, PlayerRecord] = {}
+# Hot-path lookup tables that mirror `_players[peer_id].team.team_id`,
+# maintained alongside `_players` on every spawn / remove / slot-swap.
+# AI dispatch and PuckController.poke_check both iterate skaters and
+# need O(1) team lookups; the original Callable-resolver pattern paid
+# Callable.call overhead in tight loops. Read live by reference —
+# consumers receive these once at setup and observe mutations directly.
+var team_id_by_peer: Dictionary[int, int] = {}
+var team_id_by_skater: Dictionary = {}    # Skater object -> team_id
 var _spawner: ActorSpawner = null
 var _state_machine: GameStateMachine = null
 var _teams: Array[Team] = []
@@ -95,7 +103,7 @@ func spawn(
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck
-	var blade_color: Color = TeamColorRegistry.get_colors(team.color_id, team.team_id).primary
+	var blade_color: Color = TeamColorRegistry.get_colors(team.color_slot, team.team_id).primary
 	var spawned: Dictionary
 	if is_local:
 		spawned = _spawner.spawn_local_player(
@@ -118,12 +126,14 @@ func spawn(
 	# default to Vector2.DOWN (+Z) which leaves team 0 spawning backwards.
 	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
+	team_id_by_peer[peer_id] = team.team_id
+	team_id_by_skater[spawned.skater] = team.team_id
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
 	player_added.emit(record)
 	if not is_local:
-		player_joined.emit(record.display_name(), TeamColorRegistry.get_colors(team.color_id, team.team_id).primary)
+		player_joined.emit(record.display_name(), TeamColorRegistry.get_colors(team.color_slot, team.team_id).primary)
 	return record
 
 
@@ -134,17 +144,19 @@ func spawn(
 # a reliable bot indicator (real peers and bots are both positive).
 #
 # Mirrors spawn() above but skips the human-player surface (handedness pref,
-# jersey number from preferences, ready state). Bots get deterministic
-# defaults: alternating handedness by slot, jersey numbers 80+slot, name
-# "Bot N". Stripe / glove / sock palette is generated the same way as for
-# humans via TeamColorRegistry so the visual matches.
+# jersey number from preferences, ready state). When `identity` is non-empty,
+# its name / number / handedness are used; otherwise bots fall back to
+# deterministic defaults: alternating handedness by slot, jersey numbers
+# 80+slot, name "Bot N". Stripe / glove / sock palette is generated the same
+# way as for humans via TeamColorRegistry so the visual matches.
 func spawn_bot(
 		bot_id: int,
 		team_slot: int,
-		team: Team) -> PlayerRecord:
+		team: Team,
+		identity: Dictionary = {}) -> PlayerRecord:
 	assert(bot_id >= 0 and bot_id < 6, "bot_id must be 0..5 (one per team slot)")
 	var peer_id: int = NetworkManager.BOT_ID_BASE + bot_id
-	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team.team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team.team_id)
 	var record := PlayerRecord.new(peer_id, team_slot, false, team)
 	record.is_bot = true
 	record.jersey_color        = colors.jersey
@@ -158,9 +170,14 @@ func spawn_bot(
 	record.secondary_color     = colors.get("secondary", colors.pants)
 	record.text_color          = colors.text
 	record.text_outline_color  = colors.text_outline
-	record.is_left_handed = (team_slot % 2 == 1)
-	record.player_name = "Bot %d" % (bot_id + 1)
-	record.jersey_number = 80 + bot_id
+	if identity.is_empty():
+		record.is_left_handed = (team_slot % 2 == 1)
+		record.player_name = "Bot %d" % (bot_id + 1)
+		record.jersey_number = 80 + bot_id
+	else:
+		record.is_left_handed = identity.get("is_left_handed", team_slot % 2 == 1)
+		record.player_name = identity.get("name", "Bot %d" % (bot_id + 1))
+		record.jersey_number = identity.get("number", 80 + bot_id)
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck
@@ -174,9 +191,7 @@ func spawn_bot(
 	# by team_id). We're host here (only host runs spawn_bot), so the array
 	# is populated by the time this fires.
 	var brain: TeamBrain = GameManager.team_brains[team.team_id] if team.team_id < GameManager.team_brains.size() else null
-	var resolver := func(pid: int) -> int:
-		return resolve_team_id_for_peer(pid)
-	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, resolver, record.is_left_handed)
+	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, team_id_by_peer, record.is_left_handed)
 	# Same resolver-based team lookup as spawn() — see comment there.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(record.player_name)
@@ -185,6 +200,8 @@ func spawn_bot(
 	# Same initial-facing fix as spawn() — see comment there.
 	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
+	team_id_by_peer[peer_id] = team.team_id
+	team_id_by_skater[spawned.skater] = team.team_id
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
@@ -200,9 +217,12 @@ func remove(peer_id: int) -> PlayerRecord:
 	if not _players.has(peer_id):
 		return null
 	var record: PlayerRecord = _players[peer_id]
-	player_left.emit(record.display_name(), TeamColorRegistry.get_colors(record.team.color_id, record.team.team_id).primary)
+	player_left.emit(record.display_name(), TeamColorRegistry.get_colors(record.team.color_slot, record.team.team_id).primary)
 	player_removed.emit(record)
 	_players.erase(peer_id)
+	team_id_by_peer.erase(peer_id)
+	if record.skater != null:
+		team_id_by_skater.erase(record.skater)
 	if _state_machine != null:
 		_state_machine.on_player_disconnected(peer_id)
 	if record.controller:
@@ -276,8 +296,8 @@ func reset_all_stats() -> void:
 # ── Roster + colors ──────────────────────────────────────────────────────────
 
 static func generate_colors(team_id: int) -> Dictionary:
-	var id: String = NetworkManager.pending_home_color_id if team_id == 0 else NetworkManager.pending_away_color_id
-	return TeamColorRegistry.get_colors(id, team_id)
+	var slot: int = NetworkManager.pending_home_color_slot if team_id == 0 else NetworkManager.pending_away_color_slot
+	return TeamColorRegistry.get_colors(slot, team_id)
 
 
 # Returns the domain roster enriched with live player names from PlayerRecord.
@@ -303,3 +323,5 @@ func get_slot_roster() -> Array[Dictionary]:
 
 func clear_state() -> void:
 	_players.clear()
+	team_id_by_peer.clear()
+	team_id_by_skater.clear()

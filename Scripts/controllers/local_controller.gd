@@ -56,6 +56,8 @@ func set_local_team_id(team_id: int) -> void:
 	camera.set_local_team_id(team_id)
 	_gatherer.set_local_team_id(team_id)
 
+# Forwards to the camera. The classic camera uses these for possession-aware
+# zone bias; the modern camera's `set_goal_context` is a no-op.
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	camera.set_goal_context(goal_0, goal_1, carrier_team_getter)
 
@@ -112,11 +114,37 @@ func _physics_process(delta: float) -> void:
 		var new_offset: Vector3 = skater.visual_offset * (1.0 - _RECONCILE_VISUAL_ALPHA)
 		skater.visual_offset = new_offset if new_offset.length_squared() > 0.000001 else Vector3.ZERO
 	if _game_state.is_movement_locked():
-		# Dead-puck phase: kill velocity and drain history every frame so that
-		# move_and_slide() can't drift the skater, and reconcile can't replay stale
-		# inputs when the phase lifts — regardless of packet timing.
 		skater.velocity = Vector3.ZERO
-		_input_history.clear()
+		if _game_state.allows_blade_aim_during_lock() and _gatherer != null:
+			# FACEOFF_PREP: keep the stick alive so centers can pre-angle the draw
+			# during the countdown. We neutralize move_vector and the shot flags
+			# so the input that flows to the host (and the same frames in our
+			# reconcile history) can't smuggle locomotion or a shot trigger into
+			# the live phase the instant the freeze lifts. Blade IK is the only
+			# side effect — _process_input and the state machine stay skipped.
+			var prep_input: InputState = _gatherer.gather()
+			prep_input.delta = delta
+			if NetworkManager.is_clock_ready():
+				prep_input.host_timestamp = NetworkManager.estimated_input_stamp_time()
+			prep_input.move_vector = Vector2.ZERO
+			prep_input.shoot_pressed = false
+			prep_input.shoot_held = false
+			prep_input.slap_pressed = false
+			prep_input.slap_held = false
+			prep_input.brake = false
+			prep_input.elevation_up = false
+			prep_input.elevation_down = false
+			prep_input.block_held = false
+			_current_input = prep_input
+			_input_history.append(_current_input)
+			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+			if _input_history.size() > prep_rtt_cap:
+				_input_history.pop_front()
+			apply_blade_aim_only(_current_input, delta)
+		else:
+			# Dead-puck phase with sticks frozen too — drain history so reconcile
+			# can't replay stale inputs once the phase lifts.
+			_input_history.clear()
 		return
 	# When input is blocked (menu open) the gatherer returns a neutral
 	# InputState — zero movement, no held buttons. We still run the full
@@ -149,15 +177,37 @@ func _physics_process(delta: float) -> void:
 			NetworkTelemetry.record_blade_jump(blade_delta)
 	_last_blade_pos = blade_pos
 	_claim_cooldown = maxf(_claim_cooldown - delta, 0.0)
-	if not _is_host and _claim_cooldown <= 0.0 and NetworkManager.is_clock_ready():
-		if puck.carrier == null and not puck.pickup_locked and not skater.is_ghost:
-			var dist: float = puck.global_position.distance_to(skater.get_blade_contact_global())
+	if not _is_host and _claim_cooldown <= 0.0 and NetworkManager.is_clock_ready() and not skater.is_ghost and not puck.pickup_locked:
+		var blade_pos_for_claim: Vector3 = skater.get_blade_contact_global()
+		if puck.carrier == null:
+			# Loose puck — speculative pickup claim. Host validates with rewind.
+			var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
 			if dist <= PuckController.PICKUP_RADIUS:
 				_claim_cooldown = _CLAIM_COOLDOWN_S
 				NetworkManager.send_pickup_claim(
 					NetworkManager.estimated_host_time(),
 					NetworkManager.get_latest_rtt_ms(),
 					NetworkManager.get_target_interpolation_delay() * 1000.0)
+		elif puck.carrier != skater:
+			# Opposing carrier within poke range on our screen — speculative poke
+			# claim. Host validates with rewind against what we were looking at.
+			# Skip same-team carriers locally so we don't burn the cooldown on a
+			# claim the host will just reject. Carrier peer_id comes from
+			# PuckController._carrier_peer_id, which is reliable-RPC-managed
+			# on clients (never updated from world state), so it's safe to use
+			# for the expected-carrier check.
+			var carrier_team: int = puck.carrier.get_team_id()
+			if carrier_team != _team_id and carrier_team != -1:
+				var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
+				if dist <= PuckController.POKE_RADIUS:
+					var carrier_pid: int = GameManager.puck_controller.get_carrier_peer_id() if GameManager.puck_controller != null else -1
+					if carrier_pid != -1:
+						_claim_cooldown = _CLAIM_COOLDOWN_S
+						NetworkManager.send_poke_claim(
+							NetworkManager.estimated_host_time(),
+							NetworkManager.get_latest_rtt_ms(),
+							NetworkManager.get_target_interpolation_delay() * 1000.0,
+							carrier_pid)
 
 func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_reconcile_blade: Vector3 = skater.get_blade_contact_global()

@@ -7,8 +7,10 @@ class_name GameRules
 # Access anywhere as `GameRules.BLUE_LINE_Z`.
 
 # ── Game Flow Timings ─────────────────────────────────────────────────────────
-const GOAL_PAUSE_DURATION: float   = 2.0
-const FACEOFF_PREP_DURATION: float = 0.5
+const GOAL_PAUSE_DURATION: float        = 2.0  # fallback for GOAL_SCORED auto-advance if replay never starts
+const GOAL_CELEBRATION_DURATION: float  = 1.5  # post-goal beat: movement allowed, puck pickup-locked,
+												# banner + VFX play; auto-advances to GOAL_SCORED (replay)
+const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdown before puck unlocks
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
@@ -30,12 +32,18 @@ const RINK_HALF_WIDTH: float     = 13.0   # half of 26 m
 const RINK_HALF_LENGTH: float    = 30.0   # half of 60 m
 const CORNER_RADIUS: float       = 8.53  # 28 ft
 const WALL_THICKNESS: float      = 0.3
-# Inner wall boundary — interior face of the boards
-const INNER_HALF_WIDTH: float    = RINK_HALF_WIDTH  - WALL_THICKNESS * 0.5  # 12.85
-const INNER_HALF_LENGTH: float   = RINK_HALF_LENGTH - WALL_THICKNESS * 0.5  # 29.85
-const INNER_CORNER_RADIUS: float = CORNER_RADIUS    - WALL_THICKNESS * 0.5  # 8.35
-const CORNER_CENTER_X: float     = INNER_HALF_WIDTH  - INNER_CORNER_RADIUS  # 4.5
-const CORNER_CENTER_Z: float     = INNER_HALF_LENGTH - INNER_CORNER_RADIUS  # 21.5
+# Must match HockeyRink.KICKPLATE_PROTRUSION — the kickplate's inward lip
+# sticks 1 cm inside the boards' inner face, so the visible wall surface at
+# ice level (and stick-blade level after a board-level dump) is 1 cm closer
+# to rink center than the boards' face. The blade-clamp uses this innermost
+# surface so the blade can't poke past the visible kickplate.
+const KICKPLATE_INWARD_LIP: float = 0.01
+# Inner wall boundary — the innermost visible wall surface (kickplate lip).
+const INNER_HALF_WIDTH: float    = RINK_HALF_WIDTH  - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 12.84
+const INNER_HALF_LENGTH: float   = RINK_HALF_LENGTH - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 29.84
+const INNER_CORNER_RADIUS: float = CORNER_RADIUS    - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 8.37
+const CORNER_CENTER_X: float     = INNER_HALF_WIDTH  - INNER_CORNER_RADIUS  # 4.47
+const CORNER_CENTER_Z: float     = INNER_HALF_LENGTH - INNER_CORNER_RADIUS  # 21.47
 
 # Returns world_xz projected onto the inner rink boundary (rounded rectangle).
 # If the point is already inside, returns it unchanged.
@@ -61,7 +69,7 @@ static func clamp_to_rink_inner(world_xz: Vector2) -> Vector2:
 	return world_xz
 
 # ── Puck ──────────────────────────────────────────────────────────────────────
-const PUCK_START_POS: Vector3 = Vector3(0, 0.05, 0)
+const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
 const ICE_FRICTION: float = 0.01
 # Standard gravity. Used by AI trajectory prediction to convert the
 # dimensionless ICE_FRICTION coefficient into a deceleration: a puck
@@ -76,14 +84,20 @@ const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
 # value so AI prediction models post-bounce trajectories the same
 # way Jolt resolves them.
 const PUCK_BOARD_BOUNCE: float = 0.4
-# Seconds puck must remain fully outside the rink boundary before a faceoff is forced.
-const PUCK_OOB_FACEOFF_TIMEOUT: float = 3.0
+# Silent grace before an out-of-play puck is whistled dead. Short enough that
+# the stoppage feels responsive, long enough that pucks bouncing back in off
+# the boards don't get false-flagged.
+const PUCK_OOB_GRACE_DURATION: float = 1.0
 
 # ── Infractions ───────────────────────────────────────────────────────────────
 const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icing
-# End-zone faceoff dot Z offset from center (≈ 15 ft inside goal line).
-# Hybrid icing race measures which team's player is closer to this dot.
-const ICING_FACEOFF_DOT_Z: float = 22.1
+# End-zone faceoff dot offsets from centre ice — NHL spec. The rink renderer
+# (hockey_rink.gd) paints the dots at the same positions, so puck reset and
+# player teleport land on the painted dot. Z is 20' (6.096m) inside the goal
+# line; X is 22' (6.7056m) from the centre line. The icing race re-uses the Z
+# value as the dot players sprint toward in hybrid icing.
+const END_ZONE_FACEOFF_DOT_X: float = 6.7056
+const ICING_FACEOFF_DOT_Z: float = GOAL_LINE_Z - 6.096   # 20.554
 
 # Rule preset that gates which infractions are detected and how they're punished.
 #   OFF    — no offsides, no icing (free-for-all).
@@ -149,8 +163,37 @@ const SPECTATOR_TEAM_ID: int = -1
 const MAX_CONNECTIONS: int = MAX_PLAYERS + MAX_SPECTATORS
 
 # ── Faceoff Positions ─────────────────────────────────────────────────────────
-# Indexed by [team_id][team_slot]. Team 0 occupies the +Z half; Team 1 the -Z half.
-const CENTER_FACEOFF_POSITIONS: Array = [
-	[Vector3( 0.0, 1.0,  1.5), Vector3(-5.0, 1.0,  3.0), Vector3( 5.0, 1.0,  3.0)],  # team 0
-	[Vector3( 0.0, 1.0, -1.5), Vector3(-5.0, 1.0, -3.0), Vector3( 5.0, 1.0, -3.0)],  # team 1
+# Spawn height for skaters at a faceoff. The dot itself sits on the ice (Y=0);
+# this is added at teleport time so dots and per-team offsets stay 2D.
+const FACEOFF_SPAWN_HEIGHT: float = 1.0
+
+# 2D dot positions (XZ). Center ice plus four end-zone dots — one to each side
+# of each goal, reusing the existing icing-race Z so the dots line up with the
+# hybrid-icing geometry.
+const CENTER_ICE_DOT: Vector2 = Vector2.ZERO
+const END_ZONE_FACEOFF_DOTS: Array[Vector2] = [
+	Vector2(-END_ZONE_FACEOFF_DOT_X,  ICING_FACEOFF_DOT_Z),  # team 0 defensive zone, left
+	Vector2( END_ZONE_FACEOFF_DOT_X,  ICING_FACEOFF_DOT_Z),  # team 0 defensive zone, right
+	Vector2(-END_ZONE_FACEOFF_DOT_X, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, left
+	Vector2( END_ZONE_FACEOFF_DOT_X, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, right
 ]
+
+# Per-team, per-slot XZ offsets from whichever dot is active. Team 0 stands on
+# the +Z side of the dot, team 1 on -Z (preserves team 0 = +Z half convention).
+# Indexed by [team_id][team_slot].
+const FACEOFF_OFFSETS: Array = [
+	[Vector2( 0.0,  1.5), Vector2(-5.0,  3.0), Vector2( 5.0,  3.0)],  # team 0
+	[Vector2( 0.0, -1.5), Vector2(-5.0, -3.0), Vector2( 5.0, -3.0)],  # team 1
+]
+
+# Returns the faceoff dot (center ice or end-zone) closest to the given XZ
+# point. Used to pick the spot where an out-of-play puck reconvenes.
+static func nearest_faceoff_dot(world_xz: Vector2) -> Vector2:
+	var best: Vector2 = CENTER_ICE_DOT
+	var best_d2: float = world_xz.distance_squared_to(CENTER_ICE_DOT)
+	for dot: Vector2 in END_ZONE_FACEOFF_DOTS:
+		var d2: float = world_xz.distance_squared_to(dot)
+		if d2 < best_d2:
+			best_d2 = d2
+			best = dot
+	return best

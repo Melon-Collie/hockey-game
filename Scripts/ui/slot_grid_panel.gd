@@ -62,6 +62,7 @@ var _peer_ids:     Array = [[], []]
 
 var _team_colors: Array[Dictionary] = []
 var _bot_slots: Dictionary = {}
+var _bot_identities: Dictionary = {}
 var _is_local_host: bool = false
 
 
@@ -318,15 +319,19 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 # ── Refresh ──────────────────────────────────────────────────────────────────
 
 # roster: Array of { team_id, slot, peer_id, player_name, jersey_number, is_left_handed, is_ready }
-# local_peer_id: this client's peer ID
 # team_colors: Array[Dictionary] indexed by team_id, each with jersey/text/text_outline fields
 # bot_slots: slot_key (team*3+slot) -> bool. Marks empty slots that should
 #   render as bots and (host-only) show the X action.
 # is_local_host: whether the local peer is the host. Drives X/+ visibility.
-func refresh(roster: Array[Dictionary], local_peer_id: int, team_colors: Array[Dictionary] = [],
-		bot_slots: Dictionary = {}, is_local_host: bool = false) -> void:
+# bot_identities: slot_key -> { name, number, is_left_handed }. Picked at
+#   lobby-toggle time so the bot card previews the actual name/number that
+#   will spawn instead of a generic "BOT" placeholder.
+func refresh(roster: Array[Dictionary], team_colors: Array[Dictionary] = [],
+		bot_slots: Dictionary = {}, is_local_host: bool = false,
+		bot_identities: Dictionary = {}) -> void:
 	_team_colors = team_colors
 	_bot_slots = bot_slots
+	_bot_identities = bot_identities
 	_is_local_host = is_local_host
 
 	var by_slot: Dictionary = {}
@@ -337,11 +342,10 @@ func refresh(roster: Array[Dictionary], local_peer_id: int, team_colors: Array[D
 		for s: int in PlayerRules.MAX_PER_TEAM:
 			var key: int = team_id * 3 + s
 			var entry = by_slot.get(key, null)
-			var is_local: bool = entry != null and entry.peer_id == local_peer_id
-			_update_card(team_id, s, entry, is_local)
+			_update_card(team_id, s, entry)
 
 
-func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
+func _update_card(team_id: int, slot: int, entry) -> void:
 	var style:        StyleBoxFlat = _stylebox[team_id][slot]
 	var stripe_style: StyleBoxFlat = _stripe_style[team_id][slot]
 	var num_lbl:  Label = _num_labels[team_id][slot]
@@ -398,9 +402,12 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 		_peer_ids[team_id][slot] = -1
 		style.bg_color = jersey_c
 		stripe_style.bg_color = stripe_c
-		num_lbl.text = "#"
+		var identity: Dictionary = _bot_identities.get(slot_key, {})
+		var bot_name: String = identity.get("name", "BOT")
+		var bot_num: int = identity.get("number", 0)
+		num_lbl.text = str(bot_num) if bot_num > 0 else "#"
 		num_lbl.add_theme_color_override("font_color", text_c)
-		name_lbl.text = "BOT"
+		name_lbl.text = bot_name.to_upper()
 		name_lbl.add_theme_color_override("font_color", text_c)
 		pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 		ping_lbl.visible = false
@@ -437,9 +444,9 @@ func _update_card(team_id: int, slot: int, entry, is_local: bool) -> void:
 # the team's text color (on a jersey background) or TEXT_DIM (on an empty
 # card) — guaranteed contrast since `text` is the registry's contrast-
 # engineered color. Transparent fill at rest, lightly-tinted on hover.
-func _set_action(action: Button, icon: String, visible: bool, accent: Color) -> void:
-	action.visible = visible
-	if not visible:
+func _set_action(action: Button, icon: String, should_show: bool, accent: Color) -> void:
+	action.visible = should_show
+	if not should_show:
 		return
 	action.text = icon
 	var normal_style := StyleBoxFlat.new()

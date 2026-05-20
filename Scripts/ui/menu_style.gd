@@ -190,6 +190,26 @@ static func _scale_btn(btn: Button, target: Vector2) -> void:
 	t.tween_property(btn, "scale", target, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
+# Standard breathing-pulse alpha range and per-direction duration. Anything
+# that wants a "waiting / available action" rhythm — splash prompt, skip-replay
+# reminder, future affordances — should use MenuStyle.pulse() so the cadence
+# stays identical across the game.
+const PULSE_LOW_ALPHA: float = 0.45
+const PULSE_FADE_DURATION: float = 0.9
+
+# Continuous looping alpha pulse on a CanvasItem's modulate. Returns the tween
+# so the caller can kill() it when the pulse should stop (typically on hide).
+# Sine ease-in-out gives an organic breathing rhythm rather than a hard sawtooth.
+static func pulse(node: CanvasItem) -> Tween:
+	node.modulate.a = 1.0
+	var t: Tween = node.create_tween().set_loops()
+	t.tween_property(node, "modulate:a", PULSE_LOW_ALPHA, PULSE_FADE_DURATION) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	t.tween_property(node, "modulate:a", 1.0, PULSE_FADE_DURATION) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	return t
+
+
 # Standard popup-row button: 220×48, font 20, hover-scale tween, click sound.
 static func popup_button(label: String) -> Button:
 	var btn := Button.new()
@@ -198,18 +218,4 @@ static func popup_button(label: String) -> Button:
 	btn.add_theme_font_size_override("font_size", 20)
 	wire_hover_scale(btn)
 	SoundManager.wire_button(btn)
-	return btn
-
-
-# Build an OptionButton populated with every team color preset, with one
-# selected by id. Caller wires SoundManager if desired.
-static func color_option_btn(selected_id: String, min_size: Vector2, font_size: int) -> OptionButton:
-	var btn := OptionButton.new()
-	btn.custom_minimum_size = min_size
-	btn.add_theme_font_size_override("font_size", font_size)
-	var ids: Array[String] = TeamColorRegistry.get_all_ids()
-	for i: int in ids.size():
-		btn.add_item(TeamColorRegistry.get_preset_name(ids[i]), i)
-		if ids[i] == selected_id:
-			btn.select(i)
 	return btn

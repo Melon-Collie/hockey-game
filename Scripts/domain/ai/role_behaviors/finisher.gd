@@ -137,7 +137,7 @@ static func _last_shooter_is_elevated(ctx: RoleContext) -> bool:
 	var best_pid: int = 0
 	var best_d2: float = INF
 	for pid: int in ctx.snapshot.skater_states:
-		if int(ctx.team_id_resolver.call(pid)) != ctx.team_id:
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
 			continue
 		var pos: Vector3 = ctx.snapshot.skater_states[pid].position
 		var dx: float = pos.x - puck_pos.x
@@ -200,4 +200,16 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 			best_pos = c
 
 	d.target_position = best_pos
+	# One-timer ready: positioning argmax already encoded "this is a
+	# high-value pass-and-shoot spot via score_pass." Once we've
+	# arrived at it, signal ready. No separate quality gate — if the
+	# spot is weak, score_pass(carrier, here) is low and the carrier
+	# won't pass, so the ready flag never gets consumed.
+	#
+	# Arrival tolerance = half a polar search step. The candidates
+	# are spaced SEARCH_STEP_M apart, so within half a step the bot
+	# is closer to the chosen anchor than to any neighbor candidate;
+	# they've effectively reached the spot.
+	if ctx.self_pos.distance_to(best_pos) < AIRoleHelpers.SEARCH_STEP_M * 0.5:
+		d.is_one_timer_ready = true
 	return d

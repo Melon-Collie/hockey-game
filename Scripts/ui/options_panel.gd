@@ -10,13 +10,21 @@ var _mute_check: CheckButton = null
 var _volume_slider: HSlider = null
 var _sfx_slider: HSlider = null
 var _ui_slider: HSlider = null
+var _crowd_slider: HSlider = null
 var _res_btn: OptionButton = null
 var _tab_contents: Array[Control] = []
 var _tab_btns: Array[Button] = []
 var _vsync_check: CheckButton = null
 var _fps_btn: OptionButton = null
+var _show_fps_check: CheckButton = null
 var _gamma_slider: HSlider = null
 var _color_grade_btn: OptionButton = null
+var _gi_mode_btn: OptionButton = null
+var _crowd_density_btn: OptionButton = null
+var _ice_scratches_check: CheckButton = null
+var _render_scale_slider: HSlider = null
+var _scaling_3d_btn: OptionButton = null
+var _aa_btn: OptionButton = null
 var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
 var _attack_up_check: CheckButton = null
@@ -106,11 +114,19 @@ func _snapshot() -> Dictionary:
 		"resolution_index": PlayerPrefs.resolution_index,
 		"vsync_enabled": PlayerPrefs.vsync_enabled,
 		"fps_cap_index": PlayerPrefs.fps_cap_index,
+		"show_fps": PlayerPrefs.show_fps,
 		"gamma": PlayerPrefs.gamma,
 		"color_grade_preset": PlayerPrefs.color_grade_preset,
+		"gi_mode": PlayerPrefs.gi_mode,
+		"crowd_density": PlayerPrefs.crowd_density,
+		"ice_scratches_enabled": PlayerPrefs.ice_scratches_enabled,
+		"render_scale": PlayerPrefs.render_scale,
+		"scaling_3d_mode": PlayerPrefs.scaling_3d_mode,
+		"anti_aliasing_mode": PlayerPrefs.anti_aliasing_mode,
 		"master_volume": PlayerPrefs.master_volume,
 		"sfx_volume": PlayerPrefs.sfx_volume,
 		"ui_volume": PlayerPrefs.ui_volume,
+		"crowd_volume": PlayerPrefs.crowd_volume,
 		"master_muted": PlayerPrefs.master_muted,
 		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
 		"attack_up": PlayerPrefs.attack_up,
@@ -128,11 +144,19 @@ func _read_controls() -> Dictionary:
 		"resolution_index": _res_btn.selected,
 		"vsync_enabled": _vsync_check.button_pressed,
 		"fps_cap_index": _fps_btn.selected,
+		"show_fps": _show_fps_check.button_pressed,
 		"gamma": _gamma_slider.value,
 		"color_grade_preset": _color_grade_btn.selected,
+		"gi_mode": _gi_mode_btn.selected,
+		"crowd_density": _crowd_density_btn.selected,
+		"ice_scratches_enabled": _ice_scratches_check.button_pressed,
+		"render_scale": _render_scale_slider.value,
+		"scaling_3d_mode": _scaling_3d_btn.selected,
+		"anti_aliasing_mode": _aa_btn.selected,
 		"master_volume": _volume_slider.value,
 		"sfx_volume": _sfx_slider.value,
 		"ui_volume": _ui_slider.value,
+		"crowd_volume": _crowd_slider.value,
 		"master_muted": _mute_check.button_pressed,
 		"mouse_sensitivity": _sens_slider.value,
 		"attack_up": _attack_up_check.button_pressed,
@@ -251,6 +275,12 @@ func _build_video_tab() -> Control:
 	_fps_btn.item_selected.connect(_on_fps_cap_selected)
 	box.add_child(_field_row("FPS Cap", _fps_btn))
 
+	_show_fps_check = CheckButton.new()
+	_show_fps_check.set_pressed_no_signal(PlayerPrefs.show_fps)
+	SoundManager.wire_button(_show_fps_check)
+	_show_fps_check.toggled.connect(_on_show_fps_toggled)
+	box.add_child(_field_row("Show FPS", _show_fps_check))
+
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Image"))
 
@@ -273,6 +303,64 @@ func _build_video_tab() -> Control:
 	_color_grade_btn.item_selected.connect(_on_color_grade_selected)
 	box.add_child(_field_row("Color Grade", _color_grade_btn))
 
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Performance"))
+
+	_render_scale_slider = HSlider.new()
+	_render_scale_slider.min_value = PlayerPrefs.RENDER_SCALE_MIN
+	_render_scale_slider.max_value = PlayerPrefs.RENDER_SCALE_MAX
+	_render_scale_slider.step = PlayerPrefs.RENDER_SCALE_STEP
+	_render_scale_slider.value = PlayerPrefs.render_scale
+	_render_scale_slider.value_changed.connect(_on_render_scale_changed)
+	var rs_val := _value_label("%d%%" % roundi(PlayerPrefs.render_scale * 100.0))
+	_render_scale_slider.value_changed.connect(
+		func(v: float) -> void: rs_val.text = "%d%%" % roundi(v * 100.0))
+	box.add_child(_slider_row("Render Scale", _render_scale_slider, rs_val))
+
+	_scaling_3d_btn = OptionButton.new()
+	_scaling_3d_btn.custom_minimum_size = Vector2(180, 40)
+	_scaling_3d_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.SCALING_3D_LABELS.size():
+		_scaling_3d_btn.add_item(PlayerPrefs.SCALING_3D_LABELS[i], i)
+	_scaling_3d_btn.selected = PlayerPrefs.scaling_3d_mode
+	_scaling_3d_btn.item_selected.connect(_on_scaling_3d_selected)
+	box.add_child(_field_row("Upscaling", _scaling_3d_btn))
+	_update_upscaling_enabled()
+
+	_aa_btn = OptionButton.new()
+	_aa_btn.custom_minimum_size = Vector2(180, 40)
+	_aa_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.AA_LABELS.size():
+		_aa_btn.add_item(PlayerPrefs.AA_LABELS[i], i)
+	_aa_btn.selected = PlayerPrefs.anti_aliasing_mode
+	_aa_btn.item_selected.connect(_on_aa_selected)
+	box.add_child(_field_row("Anti-Aliasing", _aa_btn))
+	_update_aa_compatibility()
+
+	_gi_mode_btn = OptionButton.new()
+	_gi_mode_btn.custom_minimum_size = Vector2(180, 40)
+	_gi_mode_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.GI_MODE_LABELS.size():
+		_gi_mode_btn.add_item(PlayerPrefs.GI_MODE_LABELS[i], i)
+	_gi_mode_btn.selected = PlayerPrefs.gi_mode
+	_gi_mode_btn.item_selected.connect(_on_gi_mode_selected)
+	box.add_child(_field_row("Global Illumination", _gi_mode_btn))
+
+	_crowd_density_btn = OptionButton.new()
+	_crowd_density_btn.custom_minimum_size = Vector2(180, 40)
+	_crowd_density_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.CROWD_DENSITY_LABELS.size():
+		_crowd_density_btn.add_item(PlayerPrefs.CROWD_DENSITY_LABELS[i], i)
+	_crowd_density_btn.selected = PlayerPrefs.crowd_density
+	_crowd_density_btn.item_selected.connect(_on_crowd_density_selected)
+	box.add_child(_field_row("Crowd Density", _crowd_density_btn))
+
+	_ice_scratches_check = CheckButton.new()
+	_ice_scratches_check.set_pressed_no_signal(PlayerPrefs.ice_scratches_enabled)
+	SoundManager.wire_button(_ice_scratches_check)
+	_ice_scratches_check.toggled.connect(_on_ice_scratches_toggled)
+	box.add_child(_field_row("Ice Scratches", _ice_scratches_check))
+
 	return box
 
 func _build_audio_tab() -> Control:
@@ -294,6 +382,11 @@ func _build_audio_tab() -> Control:
 	var ui_val := _value_label("%d%%" % int(PlayerPrefs.ui_volume * 100))
 	_ui_slider.value_changed.connect(func(v: float) -> void: ui_val.text = "%d%%" % int(v * 100))
 	box.add_child(_slider_row("UI", _ui_slider, ui_val))
+
+	_crowd_slider = _make_volume_slider(PlayerPrefs.crowd_volume)
+	var crowd_val := _value_label("%d%%" % int(PlayerPrefs.crowd_volume * 100))
+	_crowd_slider.value_changed.connect(func(v: float) -> void: crowd_val.text = "%d%%" % int(v * 100))
+	box.add_child(_slider_row("Crowd", _crowd_slider, crowd_val))
 
 	box.add_child(_section_spacer())
 
@@ -493,10 +586,49 @@ func _on_vsync_toggled(_pressed: bool) -> void:
 func _on_fps_cap_selected(_idx: int) -> void:
 	_update_apply_state()
 
+func _on_show_fps_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
 func _on_gamma_changed(_value: float) -> void:
 	_update_apply_state()
 
 func _on_color_grade_selected(_idx: int) -> void:
+	_update_apply_state()
+
+func _on_render_scale_changed(_value: float) -> void:
+	_update_upscaling_enabled()
+	_update_apply_state()
+
+func _update_upscaling_enabled() -> void:
+	if _scaling_3d_btn != null and _render_scale_slider != null:
+		_scaling_3d_btn.disabled = is_equal_approx(_render_scale_slider.value, 1.0)
+
+func _on_scaling_3d_selected(_idx: int) -> void:
+	_update_aa_compatibility()
+	_update_apply_state()
+
+func _on_aa_selected(_idx: int) -> void:
+	_update_apply_state()
+
+# FSR2 has its own temporal reconstruction and Godot disallows TAA on top.
+# Grey out the TAA item in the AA dropdown whenever FSR2 is the upscaling
+# mode; if TAA happened to be selected, fall back to MSAA 2x so the
+# dropdown reflects what will actually render.
+func _update_aa_compatibility() -> void:
+	if _aa_btn == null or _scaling_3d_btn == null:
+		return
+	var fsr2: bool = _scaling_3d_btn.selected == PlayerPrefs.SCALING_3D_FSR2
+	_aa_btn.set_item_disabled(PlayerPrefs.AA_TAA, fsr2)
+	if fsr2 and _aa_btn.selected == PlayerPrefs.AA_TAA:
+		_aa_btn.selected = PlayerPrefs.AA_MSAA_2X
+
+func _on_gi_mode_selected(_idx: int) -> void:
+	_update_apply_state()
+
+func _on_crowd_density_selected(_idx: int) -> void:
+	_update_apply_state()
+
+func _on_ice_scratches_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_attack_up_toggled(_pressed: bool) -> void:
@@ -521,6 +653,11 @@ func _on_fov_changed(value: float) -> void:
 func _on_cam_dist_changed(value: float) -> void:
 	if _cam_dist_label != null:
 		_cam_dist_label.text = "%.2fx" % value
+	_update_apply_state()
+
+func _on_tilt_changed(value: float) -> void:
+	if _tilt_label != null:
+		_tilt_label.text = "%d°" % int(value)
 	_update_apply_state()
 
 func _on_export_colors_pressed() -> void:
@@ -648,11 +785,19 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.resolution_index = c.resolution_index
 	PlayerPrefs.vsync_enabled = c.vsync_enabled
 	PlayerPrefs.fps_cap_index = c.fps_cap_index
+	PlayerPrefs.show_fps = c.show_fps
 	PlayerPrefs.gamma = c.gamma
 	PlayerPrefs.color_grade_preset = c.color_grade_preset
+	PlayerPrefs.gi_mode = c.gi_mode
+	PlayerPrefs.crowd_density = c.crowd_density
+	PlayerPrefs.ice_scratches_enabled = c.ice_scratches_enabled
+	PlayerPrefs.render_scale = c.render_scale
+	PlayerPrefs.scaling_3d_mode = c.scaling_3d_mode
+	PlayerPrefs.anti_aliasing_mode = c.anti_aliasing_mode
 	PlayerPrefs.master_volume = c.master_volume
 	PlayerPrefs.sfx_volume = c.sfx_volume
 	PlayerPrefs.ui_volume = c.ui_volume
+	PlayerPrefs.crowd_volume = c.crowd_volume
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
 	PlayerPrefs.attack_up = c.attack_up
@@ -661,6 +806,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.tilt_angle = c.tilt_angle
 	PlayerPrefs.camera_distance = c.camera_distance
+	PlayerPrefs.tilt_angle = c.tilt_angle
 	PlayerPrefs.bindings = (_pending_bindings as Dictionary).duplicate(true)
 	PlayerPrefs.apply_audio()
 	PlayerPrefs.apply_video()
@@ -676,12 +822,28 @@ func _on_cancel_pressed() -> void:
 	_res_btn.selected = _original.resolution_index
 	_vsync_check.set_pressed_no_signal(_original.vsync_enabled)
 	_fps_btn.selected = _original.fps_cap_index
+	if _show_fps_check != null:
+		_show_fps_check.set_pressed_no_signal(_original.show_fps)
 	_gamma_slider.value = _original.gamma
 	if _color_grade_btn != null:
 		_color_grade_btn.selected = _original.color_grade_preset
+	if _gi_mode_btn != null:
+		_gi_mode_btn.selected = _original.gi_mode
+	if _crowd_density_btn != null:
+		_crowd_density_btn.selected = _original.crowd_density
+	if _ice_scratches_check != null:
+		_ice_scratches_check.set_pressed_no_signal(_original.ice_scratches_enabled)
+	if _render_scale_slider != null:
+		_render_scale_slider.value = _original.render_scale
+	if _scaling_3d_btn != null:
+		_scaling_3d_btn.selected = _original.scaling_3d_mode
+	if _aa_btn != null:
+		_aa_btn.selected = _original.anti_aliasing_mode
+	_update_aa_compatibility()
 	_volume_slider.value = _original.master_volume
 	_sfx_slider.value = _original.sfx_volume
 	_ui_slider.value = _original.ui_volume
+	_crowd_slider.value = _original.crowd_volume
 	_mute_check.set_pressed_no_signal(_original.master_muted)
 	_sens_slider.value = _original.mouse_sensitivity
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
@@ -695,6 +857,8 @@ func _on_cancel_pressed() -> void:
 		_fov_slider.value = _original.fov
 	if _cam_dist_slider != null:
 		_cam_dist_slider.value = _original.camera_distance
+	if _tilt_slider != null:
+		_tilt_slider.value = _original.tilt_angle
 	_listening_action = ""
 	_pending_bindings = (_original.get("bindings", {}) as Dictionary).duplicate(true)
 	_update_binding_btns()

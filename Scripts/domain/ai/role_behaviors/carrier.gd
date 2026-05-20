@@ -31,6 +31,7 @@ extends RefCounted
 const INTENT_CARRY: int = 0
 const INTENT_SHOOT: int = 1
 const INTENT_PASS: int = 3
+const INTENT_QUICK_SHOT: int = 4
 
 # ── Scoring constants ────────────────────────────────────────────────────────
 # Re-evaluation cadence. CARRY runs at 240 Hz; without throttling the
@@ -116,6 +117,7 @@ var _scratch_teammate_ids: Array[int] = []
 # Populated every re-eval; the state machine forwards these to its
 # own debug_* fields for AIController / floating label.
 var debug_shoot_score: float = 0.0
+var debug_quick_shot_score: float = 0.0
 var debug_pass_score: float = 0.0
 var debug_pass_peer_id: int = 0
 var debug_carry_score: float = 0.0
@@ -149,6 +151,8 @@ func decide(ctx: RoleContext) -> RoleDecision:
 		INTENT_PASS:
 			d.pass_intent = true
 			d.pass_target_peer_id = pass_target_peer_id
+		INTENT_QUICK_SHOT:
+			d.quick_shot_intent = true
 	return d
 
 
@@ -195,7 +199,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == ctx.peer_id:
 			continue
-		if int(ctx.team_id_resolver.call(peer_id)) == ctx.team_id:
+		if ctx.team_id_by_peer.get(peer_id, -1) == ctx.team_id:
 			_scratch_teammate_ids.append(peer_id)
 
 	# Projected RELEASE position for SHOOT scoring. The wrister charge
@@ -231,6 +235,17 @@ func _pick_action(ctx: RoleContext) -> void:
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot, goalie_now)
 
+	# Top-level QUICK_SHOT — snap release at PASS_SPEED, no charge. The
+	# goalie can't slide during a zero-charge release, so a still-squared
+	# goalie that would otherwise drift wide stays in position. Off-axis
+	# bots benefit (their lateral arc against a still-squared goalie is
+	# open); slower puck speed naturally kills long-range attempts via
+	# the existing _lane_clear math. Release position = current self_pos
+	# (no charge motion). Opponents at current positions (no projection).
+	var quick_shoot_score: float = AIActionScoring.score_quick_shot(
+			self_pos, attacking_goal, goalie_now,
+			GameRules.NET_HALF_WIDTH, _scratch_opponents)
+
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
 	var best_pass: Array = _compute_best_pass(
@@ -243,7 +258,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# score_at(candidate, projected_opps) × path_clear × time_decay.
 	# Time uses momentum-aware effective speed so reverse candidates
 	# self-discount via longer arrival time.
-	var carry_result: Array = _best_carry(ctx, _scratch_teammate_ids, goalie_now)
+	var carry_result: Array = _best_carry(ctx, goalie_now)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 
@@ -256,6 +271,8 @@ func _pick_action(ctx: RoleContext) -> void:
 	# above fire on every re-eval and the bot would never fire.
 	if intended_action == INTENT_SHOOT:
 		shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	elif intended_action == INTENT_QUICK_SHOT:
+		quick_shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
 	elif intended_action == INTENT_PASS:
 		best_pass_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
 
@@ -263,20 +280,30 @@ func _pick_action(ctx: RoleContext) -> void:
 	# State machine forwards these to its own debug_* fields; AIController
 	# polls and refreshes only when content changes.
 	debug_shoot_score = shoot_score
+	debug_quick_shot_score = quick_shoot_score
 	debug_pass_score = best_pass_score
 	debug_pass_peer_id = best_pass_peer
 	debug_carry_score = carry_score
 	debug_carry_pos = last_carry_anchor
 
+	# Pick the better shot type first. Wrister wins ties — the
+	# higher-power option is the default. Quick-shot has to beat
+	# wrister by ACTION_HYSTERESIS_MARGIN to be chosen, which
+	# captures "only snap-shoot when the no-charge release is
+	# distinctly better than charging." Margin reuse keeps the
+	# behaviour consistent with the other fire-intent stickiness.
+	var best_shot_score: float = shoot_score
+	var best_shot_intent: int = INTENT_SHOOT
+	if quick_shoot_score > shoot_score + AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+		best_shot_score = quick_shoot_score
+		best_shot_intent = INTENT_QUICK_SHOT
+
 	# Best fire option. No noise-floor threshold — CARRY competes
 	# directly, so a weak fire naturally loses to any stronger carry
 	# candidate (and stand-still in particular bounds fire from below
 	# at score_at(self) >= score_shoot(self)).
-	var fire_score: float = -INF
-	var fire_intent: int = INTENT_CARRY
-	if shoot_score > fire_score:
-		fire_score = shoot_score
-		fire_intent = INTENT_SHOOT
+	var fire_score: float = best_shot_score
+	var fire_intent: int = best_shot_intent
 	if best_pass_score > fire_score:
 		fire_score = best_pass_score
 		fire_intent = INTENT_PASS
@@ -312,7 +339,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponents_shoot.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
-		if int(ctx.team_id_resolver.call(peer_id)) != ctx.team_id and peer_id != ctx.peer_id:
+		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id and peer_id != ctx.peer_id:
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
 			_scratch_opponents.append(s.position)
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
@@ -327,7 +354,7 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 		out_buf: Array[Vector3]) -> void:
 	out_buf.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
-		if int(ctx.team_id_resolver.call(peer_id)) != ctx.team_id and peer_id != ctx.peer_id:
+		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id and peer_id != ctx.peer_id:
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
 			out_buf.append(AITrajectory.predict_at(s.position, s.velocity, time_s))
 
@@ -397,11 +424,22 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# plus their wrister charge. The squareness term in score_shoot
 		# rewards passes that catch the goalie sliding cross-seam — this
 		# is where most of that benefit lands.
-		var receiver_release_t: float = flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+		#
+		# One-timer-ready receivers fire on contact (no wrister windup),
+		# so the goalie can't slide during a charge. Pass `flight_t`
+		# alone for the release time → predicted goalie has only had
+		# the pass flight to react, not the additional wrister charge.
+		# Catching a still-set goalie via a back-door feed becomes a
+		# high-square open-net read.
+		var receiver_is_one_timer: bool = (ctx.team_brain != null
+				and ctx.team_brain.is_one_timer_ready(peer_id))
+		var receiver_release_t: float = flight_t
+		if not receiver_is_one_timer:
+			receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 		var receiver_goalie: Vector3 = _predict_goalie_at(
 				ctx, receiver_release_t, receiver)
 		var receiver_value: float = _score_at(ctx, receiver, self_pos,
-				_scratch_opponents_pass, teammate_ids, receiver_goalie, goalie_now)
+				_scratch_opponents_pass, receiver_goalie, goalie_now)
 		# Rotation time: how long does the bot need to rotate facing to
 		# point at the receiver before the blade ROM can fire there?
 		# Within blade ROM cone (BOT_BLADE_ROM_HALF_ANGLE_RAD), the bot
@@ -465,9 +503,7 @@ func _predict_receiver(receiver: SkaterNetworkState, flight_t: float) -> Vector3
 #   score = score_at(candidate, projected_opps) × path_clear × time_decay
 # where time uses momentum-aware effective speed (backward candidates
 # self-discount via longer arrival).
-func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
-		goalie_now: Vector3) -> Array:
-	var snapshot: WorldSnapshot = ctx.snapshot
+func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var self_velocity: Vector3 = ctx.self_velocity
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
@@ -524,7 +560,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 		var cand_release_t: float = local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 		var cand_goalie: Vector3 = _predict_goalie_at(ctx, cand_release_t, candidate)
 		var dest_score: float = _score_at(ctx, candidate, self_pos,
-				_scratch_opponents_path, teammate_ids, cand_goalie, goalie_now)
+				_scratch_opponents_path, cand_goalie, goalie_now)
 		var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 		var s_total: float = dest_score * lane * decay
 		if s_total > best_score:
@@ -543,7 +579,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 		var slot_dest_goalie: Vector3 = _predict_goalie_at(
 				ctx, slot_release_t, slot_pos)
 		var slot_dest_score: float = _score_at(ctx, slot_pos, self_pos,
-				_scratch_opponents_path, teammate_ids, slot_dest_goalie, goalie_now)
+				_scratch_opponents_path, slot_dest_goalie, goalie_now)
 		var slot_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
 		var slot_total: float = slot_dest_score * slot_lane * slot_decay
@@ -558,7 +594,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 	var stand_goalie: Vector3 = _predict_goalie_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
-			_scratch_opponents, teammate_ids, stand_goalie, goalie_now)
+			_scratch_opponents, stand_goalie, goalie_now)
 	if stand_score > best_score:
 		best_score = stand_score
 		best_pos = self_pos
@@ -583,7 +619,7 @@ func _best_carry(ctx: RoleContext, teammate_ids: Array[int],
 # at `pos` (caller's responsibility — score_pass does this for
 # receivers, _best_carry does it for carry candidates).
 func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
-		opps: Array[Vector3], teammate_ids: Array[int],
+		opps: Array[Vector3],
 		predicted_goalie_pos: Vector3, goalie_now: Vector3) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var shoot_s: float = AIActionScoring.score_shoot(

@@ -81,6 +81,41 @@ var _slapper_current_ring_scale: float = 1.0
 var _charge_ring_visible: bool = false
 var _charge_lost_flash_timer: float = 0.0
 
+# Reusable resources + buffers — _rebuild_slapper_geometry() can fire every
+# physics tick during a slapper charge, so the ArrayMeshes it fills and the
+# PackedArrays it uses are allocated once and refilled in place to keep GC
+# pressure off the hot path. `_last_rebuild_*` short-circuits when nothing
+# has changed since the previous rebuild.
+var _arrow_mesh_resource: ArrayMesh = ArrayMesh.new()
+var _ring_mesh_resource: ArrayMesh = ArrayMesh.new()
+var _arrow_verts: PackedVector3Array = PackedVector3Array()
+var _arrow_normals: PackedVector3Array = PackedVector3Array()
+var _arrow_indices: PackedInt32Array = PackedInt32Array()
+var _ring_verts: PackedVector3Array = PackedVector3Array()
+var _ring_normals: PackedVector3Array = PackedVector3Array()
+var _ring_indices: PackedInt32Array = PackedInt32Array()
+var _last_rebuild_ring_scale: float = -1.0
+var _last_rebuild_radius: float = -1.0
+var _last_rebuild_ring_visible: bool = false
+
+# Per-tick caches. `update()` runs at 240 Hz across every skater, so anything
+# derived from infrequently-changing inputs (camera orientation, skater Y,
+# shader-param values) is recomputed only on change.
+var _last_skater_y: float = INF
+var _cached_cam_basis_y: Vector3 = Vector3.ZERO
+var _cached_screen_down: Vector2 = Vector2(0.0, 1.0)
+var _cached_arc_base_angle: float = 0.0
+var _cached_chevron_dir: Vector3 = Vector3(0.0, 0.0, 1.0)
+var _last_fill: float = -1.0
+var _last_pulse: float = -1.0
+var _last_lost_flash: float = -1.0
+
+# HUD geometry assumes the gameplay top-down camera (ring decals flat on ice,
+# name/chevron placed via camera screen-down). Replays cut to broadcast cams
+# at arbitrary angles, so we hide the per-skater HUD for the cinematic and
+# restore the always-visible nodes on the first non-replay tick.
+var _hidden_for_replay: bool = false
+
 
 func setup(skater: Skater) -> void:
 	_skater = skater
@@ -148,55 +183,119 @@ func setup(skater: Skater) -> void:
 	_slapper_arrow_mesh = MeshInstance3D.new()
 	_slapper_arrow_mesh.material_override = _slapper_indicator_mat
 	_slapper_arrow_mesh.visible = false
+	_slapper_arrow_mesh.mesh = _arrow_mesh_resource
 	_slapper_arrow_root.add_child(_slapper_arrow_mesh)
 
 	_slapper_ring_mesh = MeshInstance3D.new()
 	_slapper_ring_mesh.material_override = _slapper_indicator_mat
 	_slapper_ring_mesh.visible = false
+	_slapper_ring_mesh.mesh = _ring_mesh_resource
 	_slapper_arrow_root.add_child(_slapper_ring_mesh)
 
 	update_slapper_indicator_convergence(1.0)
 
 
 func update(delta: float) -> void:
-	if _ring_mesh != null:
-		_ring_mesh.global_position.y = 0.05
-	# Camera-aware screen axes for name + chevron. Falls back to +Z if no camera.
-	var screen_down: Vector2 = _hud_screen_down_xz()
-	var arc_base_angle: float = atan2(screen_down.x, screen_down.y)
+	if NetworkManager.is_replay_mode():
+		if not _hidden_for_replay:
+			_hidden_for_replay = true
+			if _ring_mesh != null: _ring_mesh.visible = false
+			if _charge_ring_mesh != null: _charge_ring_mesh.visible = false
+			if _chevron_mesh != null: _chevron_mesh.visible = false
+			if _name_label != null: _name_label.visible = false
+			if _slapper_indicator != null: _slapper_indicator.visible = false
+		return
+	if _hidden_for_replay:
+		_hidden_for_replay = false
+		# Restore the always-visible nodes. _charge_ring_mesh, _chevron_mesh,
+		# and _slapper_indicator children are gated by their own show logic
+		# (driven from skater state) and will re-enable themselves as needed.
+		if _ring_mesh != null: _ring_mesh.visible = true
+		if _name_label != null: _name_label.visible = true
+		if _slapper_indicator != null: _slapper_indicator.visible = true
+
+	_refresh_height_anchors_if_skater_moved()
+	_refresh_screen_down_cache_if_camera_changed()
+
 	if _name_label != null and _name_label.visible:
 		_name_label.global_position = Vector3(
-				_skater.global_position.x + screen_down.x * _NAME_RADIUS,
+				_skater.global_position.x + _cached_screen_down.x * _NAME_RADIUS,
 				0.05,
-				_skater.global_position.z + screen_down.y * _NAME_RADIUS)
+				_skater.global_position.z + _cached_screen_down.y * _NAME_RADIUS)
+
 	if _chevron_mesh != null:
-		_chevron_mesh.visible = _skater.is_elevated and not _skater.is_ghost
-		if _chevron_mesh.visible:
-			var side_sign: float = 1.0 if _skater.is_left_handed else -1.0
-			var chevron_angle: float = arc_base_angle + side_sign * deg_to_rad(_CHEVRON_OFFSET_DEG)
-			var dir := Vector3(sin(chevron_angle), 0.0, cos(chevron_angle))
+		var chevron_should_show: bool = _skater.is_elevated and not _skater.is_ghost
+		if _chevron_mesh.visible != chevron_should_show:
+			_chevron_mesh.visible = chevron_should_show
+		if chevron_should_show:
 			_chevron_mesh.global_position = Vector3(
-					_skater.global_position.x + dir.x * _CHEVRON_RADIUS,
+					_skater.global_position.x + _cached_chevron_dir.x * _CHEVRON_RADIUS,
 					0.05,
-					_skater.global_position.z + dir.z * _CHEVRON_RADIUS)
-			_chevron_mesh.rotation = Vector3(0.0, arc_base_angle, 0.0)
+					_skater.global_position.z + _cached_chevron_dir.z * _CHEVRON_RADIUS)
+
 	if _charge_ring_mesh != null and _charge_ring_mesh.visible:
-		_charge_ring_mesh.global_position.y = 0.05
+		var fill_val: float = clampf(_skater.shot_charge, 0.0, 1.0)
 		var pulse_amount: float = 0.0
 		if _skater.shot_charge >= 0.999:
 			pulse_amount = 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.001 * TAU * _CHARGE_FULL_PULSE_HZ)
-		_charge_ring_mat.set_shader_parameter("fill", clampf(_skater.shot_charge, 0.0, 1.0))
-		_charge_ring_mat.set_shader_parameter("pulse", pulse_amount)
 		var lost_t: float = 0.0
 		if _charge_lost_flash_timer > 0.0:
 			_charge_lost_flash_timer = maxf(_charge_lost_flash_timer - delta, 0.0)
 			lost_t = _charge_lost_flash_timer / _CHARGE_LOST_FLASH_DURATION
-		_charge_ring_mat.set_shader_parameter("lost_flash", lost_t)
+		if not is_equal_approx(fill_val, _last_fill):
+			_last_fill = fill_val
+			_charge_ring_mat.set_shader_parameter("fill", fill_val)
+		if not is_equal_approx(pulse_amount, _last_pulse):
+			_last_pulse = pulse_amount
+			_charge_ring_mat.set_shader_parameter("pulse", pulse_amount)
+		if not is_equal_approx(lost_t, _last_lost_flash):
+			_last_lost_flash = lost_t
+			_charge_ring_mat.set_shader_parameter("lost_flash", lost_t)
 		# Auto-hide once the lost flash finishes and there's nothing to show.
 		if _skater.shot_charge <= 0.001 and lost_t <= 0.001 and not _charge_ring_visible:
 			_charge_ring_mesh.visible = false
+
+
+# Y-anchor write only when skater's vertical position changes. Skater Y is
+# effectively constant on the ice; the original per-tick global_position.y
+# writes were defensive — change-detection preserves that defence at near-zero
+# cost when nothing's moved.
+func _refresh_height_anchors_if_skater_moved() -> void:
+	var y: float = _skater.global_position.y
+	if is_equal_approx(y, _last_skater_y):
+		return
+	_last_skater_y = y
+	if _ring_mesh != null:
+		_ring_mesh.global_position.y = 0.05
+	if _charge_ring_mesh != null:
+		_charge_ring_mesh.global_position.y = 0.05
 	if _slapper_indicator != null:
 		_slapper_indicator.global_position.y = 0.0
+
+
+# Screen-down + chevron direction depend only on the local camera's orientation.
+# That's effectively constant during gameplay (top-down camera), so the trig is
+# recomputed only when basis.y actually changes — usually never after first frame.
+func _refresh_screen_down_cache_if_camera_changed() -> void:
+	var vp: Viewport = _skater.get_viewport() if _skater != null else null
+	var cam: Camera3D = vp.get_camera_3d() if vp != null else null
+	if cam == null:
+		return
+	var basis_y: Vector3 = cam.global_transform.basis.y
+	if basis_y == _cached_cam_basis_y:
+		return
+	_cached_cam_basis_y = basis_y
+	var down := Vector2(-basis_y.x, -basis_y.z)
+	if down.length_squared() < 0.0001:
+		_cached_screen_down = Vector2(0.0, 1.0)
+	else:
+		_cached_screen_down = down.normalized()
+	_cached_arc_base_angle = atan2(_cached_screen_down.x, _cached_screen_down.y)
+	var side_sign: float = 1.0 if _skater.is_left_handed else -1.0
+	var chevron_angle: float = _cached_arc_base_angle + side_sign * deg_to_rad(_CHEVRON_OFFSET_DEG)
+	_cached_chevron_dir = Vector3(sin(chevron_angle), 0.0, cos(chevron_angle))
+	if _chevron_mesh != null:
+		_chevron_mesh.rotation = Vector3(0.0, _cached_arc_base_angle, 0.0)
 
 
 func set_player_name(p_name: String) -> void:
@@ -302,6 +401,18 @@ func _apply_slapshot_zone_transform(offset_x: float, offset_z: float, radius: fl
 func _rebuild_slapper_geometry() -> void:
 	if _slapper_arrow_mesh == null or _slapper_ring_mesh == null:
 		return
+	# Short-circuit when nothing's changed. Convergence ticks where the puck
+	# is momentarily stationary, plus all calls after the charge ends, hit
+	# this path and skip allocating + uploading identical geometry.
+	var ring_visible: bool = _slapper_ring_mesh.visible
+	if (is_equal_approx(_slapper_current_ring_scale, _last_rebuild_ring_scale)
+			and is_equal_approx(_slapper_zone_radius_cached, _last_rebuild_radius)
+			and ring_visible == _last_rebuild_ring_visible):
+		return
+	_last_rebuild_ring_scale = _slapper_current_ring_scale
+	_last_rebuild_radius = _slapper_zone_radius_cached
+	_last_rebuild_ring_visible = ring_visible
+
 	var r: float = _slapper_current_ring_scale
 	var w: float = _ARROW_SHAFT_HALF_W_UNIT
 	# Counter-scale stroke thickness so lines stay at HUD_LINE_THIN world meters.
@@ -312,37 +423,53 @@ func _rebuild_slapper_geometry() -> void:
 	var shoulder_z: float = tip_z - head_len
 
 	# ── Arrow mesh (shaft sides + shoulders + head diagonals) ──
-	var arrow_verts := PackedVector3Array()
-	var arrow_normals := PackedVector3Array()
-	var arrow_indices := PackedInt32Array()
+	_arrow_verts.clear()
+	_arrow_normals.clear()
+	_arrow_indices.clear()
 	var shaft_base_z: float = 0.0
-	if _slapper_ring_mesh.visible and r > w:
+	if ring_visible and r > w:
 		shaft_base_z = sqrt(r * r - w * w)
 	if shaft_base_z < shoulder_z:
 		for sign_x: float in [-1.0, 1.0]:
 			var shaft_tail := Vector2(sign_x * w, shaft_base_z)
 			var shaft_top  := Vector2(sign_x * w, shoulder_z)
-			_append_strip(arrow_verts, arrow_normals, arrow_indices, shaft_tail, shaft_top, t_unit)
+			_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shaft_tail, shaft_top, t_unit)
 	var tip := Vector2(0.0, tip_z)
 	for sign_x_h: float in [-1.0, 1.0]:
 		var shoulder_in  := Vector2(sign_x_h * w, shoulder_z)
 		var shoulder_out := Vector2(sign_x_h * head_half_w, shoulder_z)
-		_append_strip(arrow_verts, arrow_normals, arrow_indices, shoulder_in, shoulder_out, t_unit)
-		_append_strip(arrow_verts, arrow_normals, arrow_indices, shoulder_out, tip, t_unit)
-	_slapper_arrow_mesh.mesh = _build_array_mesh(arrow_verts, arrow_normals, arrow_indices)
+		_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shoulder_in, shoulder_out, t_unit)
+		_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shoulder_out, tip, t_unit)
+	_upload_to_mesh(_arrow_mesh_resource, _arrow_verts, _arrow_normals, _arrow_indices)
 
 	# ── Ring mesh (partial-arc annulus with gap on the arrow tail side) ──
-	var ring_verts := PackedVector3Array()
-	var ring_normals := PackedVector3Array()
-	var ring_indices := PackedInt32Array()
+	_ring_verts.clear()
+	_ring_normals.clear()
+	_ring_indices.clear()
 	if r > w + t_unit:
 		var gap_half: float = asin(clampf(w / r, -1.0, 1.0))
 		var sweep_total: float = TAU - 2.0 * gap_half
 		var seg_count: int = max(8, int(ceil(_RING_SEGMENTS * sweep_total / TAU)))
-		_append_partial_ring(ring_verts, ring_normals, ring_indices,
+		_append_partial_ring(_ring_verts, _ring_normals, _ring_indices,
 				r - t_unit, r,
 				gap_half, TAU - gap_half, seg_count)
-	_slapper_ring_mesh.mesh = _build_array_mesh(ring_verts, ring_normals, ring_indices)
+	_upload_to_mesh(_ring_mesh_resource, _ring_verts, _ring_normals, _ring_indices)
+
+
+func _upload_to_mesh(
+		mesh: ArrayMesh,
+		verts: PackedVector3Array,
+		normals: PackedVector3Array,
+		indices: PackedInt32Array) -> void:
+	mesh.clear_surfaces()
+	if verts.size() == 0:
+		return
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 
 # ── Private: mesh builders ────────────────────────────────────────────────────
@@ -469,22 +596,6 @@ func _create_reticle_mesh(half_len: float) -> MeshInstance3D:
 	return inst
 
 
-func _build_array_mesh(
-		verts: PackedVector3Array,
-		normals: PackedVector3Array,
-		indices: PackedInt32Array) -> ArrayMesh:
-	var mesh := ArrayMesh.new()
-	if verts.size() == 0:
-		return mesh
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_INDEX] = indices
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
-
-
 func _append_strip(
 		verts: PackedVector3Array, normals: PackedVector3Array, indices: PackedInt32Array,
 		a_pt: Vector2, b_pt: Vector2, thickness: float) -> void:
@@ -567,14 +678,3 @@ func _make_charge_ring_material() -> ShaderMaterial:
 	return mat
 
 
-# World XZ direction that maps to "down" on the local player's screen.
-func _hud_screen_down_xz() -> Vector2:
-	var vp: Viewport = _skater.get_viewport() if _skater != null else null
-	var cam: Camera3D = vp.get_camera_3d() if vp != null else null
-	if cam == null:
-		return Vector2(0.0, 1.0)
-	var up_world: Vector3 = cam.global_transform.basis.y
-	var down := Vector2(-up_world.x, -up_world.z)
-	if down.length_squared() < 0.0001:
-		return Vector2(0.0, 1.0)
-	return down.normalized()

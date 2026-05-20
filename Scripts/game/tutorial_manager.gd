@@ -415,7 +415,8 @@ func _on_shot_released(dir: Vector3, _power: float, is_slapper: bool) -> void:
 # ── Staging helpers ───────────────────────────────────────────────────────────
 
 # Places the puck at a position with zero velocity.
-# Does NOT use Puck.reset() (which always resets to center ice).
+# Does NOT use Puck.reset() (which schedules a deferred reset via _pending_reset;
+# the tutorial needs the position to land immediately).
 func _place_puck(pos: Vector3) -> void:
 	if _puck.carrier != null:
 		_puck.drop()

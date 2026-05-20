@@ -25,7 +25,7 @@ func _make_ctx(self_pos: Vector3, puck_pos: Vector3) -> RoleContext:
 	ctx.attacking_goal_pos = Vector3(0.0, 0.0, -OUR_NET_Z)
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, OUR_NET_Z)
 	ctx.own_goal_dir = 1.0
-	ctx.team_id_resolver = func(pid: int) -> int: return TEAM_ID if pid == 1 else 1
+	ctx.team_id_by_peer = {1: TEAM_ID}
 	return ctx
 
 

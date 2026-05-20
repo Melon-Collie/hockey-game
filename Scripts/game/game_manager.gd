@@ -17,6 +17,12 @@ extends Node
 signal goal_scored(scoring_team: Team, scorer_name: String, assist1_name: String, assist2_name: String)
 signal score_changed(score_0: int, score_1: int)
 signal phase_changed(new_phase: GamePhase.Phase)
+# Reliable-channel "faceoff prep begins now" beat: on the host it fires from
+# PhaseCoordinator._enter_faceoff_prep; on the client it fires after the
+# notify_faceoff_positions RPC lands. HUD listens for the countdown banner so
+# it can't race the unreliable phase broadcast and start before the skater
+# teleport.
+signal faceoff_prep_announced
 signal period_changed(new_period: int)
 signal clock_updated(time_remaining: float)
 signal game_over()
@@ -29,11 +35,19 @@ signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primar
 signal local_player_hit(magnitude: float)
 signal replay_started
 signal replay_stopped
+# Live tally of unanimous skip-replay votes (emitted on every accepted vote and
+# at replay start with current=0). HUD listens to keep the "[SPACE] TO SKIP
+# (X/Y)" prompt current.
+signal skip_replay_vote_updated(current: int, total: int)
 # Emitted on the local peer when a spectator-slot assignment lands. HUD / camera /
 # input subsystems listen so they can flip spectator chrome on/off without
 # polling. Only ever fires once per session right now (lobby → game transition);
 # mid-game player ↔ spectator swap is deferred.
 signal local_spectator_state_changed(is_spectator: bool)
+# Emitted on every peer the moment an out-of-play puck is confirmed (after the
+# grace window). HUD listens to flash the "PUCK OUT OF PLAY" toast; the
+# FACEOFF_PREP phase change drives the countdown banner separately.
+signal puck_out_of_play()
 
 # ── Domain state ──────────────────────────────────────────────────────────────
 var _state_machine: GameStateMachine = null
@@ -41,12 +55,18 @@ var _last_emitted_clock_secs: int = -1
 var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
+# Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
+# we don't fire stray vote RPCs outside of the cinematic window.
+var _in_replay_locally: bool = false
 # Holds an existing-players sync that arrived before _spawn_world ran. The
 # host sends sync_existing_players just before assign_player_slot; if the
 # RPCs land after the scene has changed but before on_slot_assigned has
 # created _state_machine, the sync would otherwise be dropped and the host
 # (only delivered through this path) would never spawn on the client.
 var _pending_existing_players: Array = []
+# Wall-clock timestamp of the previous host physics tick. Used to record the
+# inter-tick gap into NetworkTelemetry so F3 can surface host stalls.
+var _last_phys_tick_us: int = 0
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
 var _spawner: ActorSpawner = null
@@ -80,6 +100,7 @@ var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _pickup_claim: PickupClaimResolver = null
+var _poke_claim: PokeClaimResolver = null
 var _hit_claim: HitClaimResolver = null
 var _phase_coord: PhaseCoordinator = null
 var _swap_coord: SlotSwapCoordinator = null
@@ -161,6 +182,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.one_timer_release_received.connect(on_remote_one_timer_release)
 	NetworkManager.carrier_puck_dropped.connect(on_carrier_puck_dropped)
 	NetworkManager.goal_received.connect(_on_goal_received)
+	NetworkManager.puck_out_of_play_received.connect(_on_puck_out_of_play_received)
 	NetworkManager.faceoff_positions_received.connect(_on_faceoff_positions_received)
 	NetworkManager.game_reset_received.connect(on_game_reset)
 	NetworkManager.stats_received.connect(_on_stats_received)
@@ -170,6 +192,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_identity_changed.connect(_on_local_identity_changed)
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
+	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
 	NetworkManager.goalie_state_transition_received.connect(_on_goalie_state_transition_received)
@@ -177,6 +200,11 @@ func _wire_network_signals() -> void:
 	NetworkManager.goalie_reaction_cleared_received.connect(_on_goalie_reaction_cleared_received)
 	NetworkManager.input_batch_received.connect(_on_input_batch_received)
 	NetworkManager.spectator_demoted_received.connect(_on_spectator_demoted_received)
+	NetworkManager.skip_replay_request_received.connect(_on_remote_skip_replay_request)
+	NetworkManager.skip_replay_vote_updated.connect(_on_remote_skip_replay_vote)
+	NetworkManager.replay_event_received.connect(_on_replay_event_received)
+	replay_started.connect(_on_local_replay_started)
+	replay_stopped.connect(_on_local_replay_stopped)
 
 
 # ── Process ───────────────────────────────────────────────────────────────────
@@ -198,9 +226,20 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Host-frame health telemetry: wall-clock gap between consecutive physics
+	# ticks. Steady-state at 240Hz is ~4170us. A real-time stall (CPU steal,
+	# heavy Jolt frame, GC pause, OS hitch) produces one large sample followed
+	# by near-zero catch-up ticks as the engine rebases the physics clock to
+	# wall time. Surfaces on F3 as `tick p95/p99/max`. Host only — clients
+	# don't run the host simulation loop and the metric isn't meaningful there.
+	if NetworkManager.is_host:
+		var now_us: int = Time.get_ticks_usec()
+		if _last_phys_tick_us != 0:
+			NetworkTelemetry.record_host_physics_tick_us(now_us - _last_phys_tick_us)
+		_last_phys_tick_us = now_us
 	if _state_machine != null and _registry != null:
 		var local: PlayerRecord = _registry.get_local()
-		if local != null and not PhaseRules.is_dead_puck_phase(_state_machine.current_phase):
+		if local != null and _state_machine.current_phase == GamePhase.Phase.PLAYING:
 			local.stats.toi_seconds += delta
 	# Refresh goalie pose cache once per tick — read by skater IK on every
 	# blade-from-mouse call. Runs on host AND clients before the host gate
@@ -244,9 +283,15 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	var clamped := GameRules.clamp_to_rink_inner(pos2d)
 	if pos2d.distance_to(clamped) > 0.2:
 		_puck_oob_timer += delta
-		if _puck_oob_timer >= GameRules.PUCK_OOB_FACEOFF_TIMEOUT:
+		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
-			_state_machine.begin_faceoff_prep()
+			# Use the boundary projection — how far past the boards the puck
+			# travelled shouldn't sway dot selection.
+			var dot: Vector2 = GameRules.nearest_faceoff_dot(clamped)
+			puck_out_of_play.emit()
+			NetworkManager.notify_puck_out_of_play_to_all()
+			SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+			_state_machine.begin_faceoff_prep(dot)
 			_phase_coord.handle_phase_entered()
 	else:
 		_puck_oob_timer = 0.0
@@ -302,6 +347,13 @@ func on_host_started() -> void:
 	_spawn_bots_from_lobby()
 	# Registry is fully populated by this point — capture roster + open file.
 	_open_replay_file_writer()
+	# Open the match with a faceoff countdown rather than dropping straight
+	# into PLAYING. Tutorial scripts its own intro; free play is a casual
+	# warmup that shouldn't gate the player behind a countdown — both stay
+	# in PLAYING from the start.
+	if not NetworkManager.is_tutorial_mode and not NetworkManager.is_free_play_mode:
+		_state_machine.begin_faceoff_prep()
+		_phase_coord.handle_phase_entered()
 
 
 func on_connected_to_server() -> void:
@@ -320,7 +372,7 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 		return
 	if _is_local_spectator:
 		_teardown_spectator_camera()
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	_registry.spawn(peer_id, team_slot, teams[team_id],
 			jersey_color, helmet_color, pants_color,
@@ -351,8 +403,8 @@ func on_player_connected(peer_id: int) -> void:
 		"period_duration": _state_machine.period_duration,
 		"ot_enabled": _state_machine.ot_enabled,
 		"ot_duration": _state_machine.ot_duration,
-		"home_color_id": NetworkManager.pending_home_color_id,
-		"away_color_id": NetworkManager.pending_away_color_id,
+		"home_color_slot": NetworkManager.pending_home_color_slot,
+		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"rule_set": _state_machine.rule_set,
 	}
 	# Spectator branch: declared via pending_lobby_slots[peer_id].team_id == -1.
@@ -422,7 +474,7 @@ func sync_existing_players(player_data: Array) -> void:
 		var is_left: bool = entry[6] if entry.size() > 6 else true
 		var p_name: String = entry[7] if entry.size() > 7 else "Player"
 		var p_number: int = entry[8] if entry.size() > 8 else 10
-		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 		_registry.spawn(peer_id, team_slot, teams[team_id],
 				jersey_color, helmet_color, pants_color,
@@ -441,7 +493,7 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		is_left_handed: bool, player_name: String, jersey_number: int = 10) -> void:
 	if peer_id == NetworkManager.local_peer_id() or _state_machine == null:
 		return
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	_registry.spawn(peer_id, team_slot, teams[team_id],
 			jersey_color, helmet_color, pants_color,
@@ -452,6 +504,10 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 
 # ── World Spawn ───────────────────────────────────────────────────────────────
 func _spawn_world() -> void:
+	# Reset host-tick telemetry baseline. Without this, the first tick after a
+	# scene change records a huge gap (whatever wall time elapsed during the
+	# scene transition) and pollutes the p95/p99 for the first second.
+	_last_phys_tick_us = 0
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -475,13 +531,11 @@ func _spawn_world() -> void:
 	_spawn_goalies()
 	_wire_subsystems()
 	if NetworkManager.is_host:
-		var team_id_resolver := func(peer_id: int) -> int:
-			return _registry.resolve_team_id_for_peer(peer_id)
 		var is_human_resolver := func(peer_id: int) -> bool:
 			return NetworkManager.is_real_peer(peer_id)
 		team_brains = [
-				TeamBrain.new(0, team_id_resolver, is_human_resolver),
-				TeamBrain.new(1, team_id_resolver, is_human_resolver),
+				TeamBrain.new(0, _registry.team_id_by_peer, is_human_resolver),
+				TeamBrain.new(1, _registry.team_id_by_peer, is_human_resolver),
 		]
 		_connect_goal_signals()
 
@@ -489,10 +543,10 @@ func _spawn_world() -> void:
 func _create_teams() -> void:
 	var t0 := Team.new()
 	t0.team_id = 0
-	t0.color_id = NetworkManager.pending_home_color_id
+	t0.color_slot = NetworkManager.pending_home_color_slot
 	var t1 := Team.new()
 	t1.team_id = 1
-	t1.color_id = NetworkManager.pending_away_color_id
+	t1.color_slot = NetworkManager.pending_away_color_slot
 	teams = [t0, t1]
 
 
@@ -516,7 +570,8 @@ func _spawn_puck() -> void:
 	puck_controller = result.controller
 	puck.set_team_resolver(_resolve_skater_team_id)
 	puck_controller.set_peer_id_resolver(_resolve_skater_peer_id)
-	puck_controller.set_team_id_resolver(_resolve_skater_team_id)
+	# team_id_by_skater dict is owned by PlayerRegistry, which doesn't
+	# exist yet — wired in `_wire_subsystems` below.
 	puck_controller.set_skater_getter(func() -> Array:
 		if _registry == null:
 			return []
@@ -541,7 +596,7 @@ func _spawn_goalies() -> void:
 	teams[0].goalie_controller = result.bottom_controller
 	for team_id: int in [0, 1]:
 		var goalie: Goalie = result.bottom_goalie if team_id == 0 else result.top_goalie
-		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads)
 
 
@@ -549,6 +604,11 @@ func _wire_subsystems() -> void:
 	_registry = PlayerRegistry.new()
 	_registry.setup(_spawner, _state_machine, teams,
 			get_puck, self, _on_player_spawned)
+	# Hand the puck controller a live reference to the registry's
+	# Skater -> team_id dict so its poke-check loop can do O(1) lookups
+	# instead of going through a Callable that re-scans `_players`.
+	if puck_controller != null:
+		puck_controller.set_team_id_by_skater(_registry.team_id_by_skater)
 	_registry.player_joined.connect(player_joined.emit)
 	_registry.player_left.connect(player_left.emit)
 	_registry.player_added.connect(_on_registry_player_added)
@@ -593,6 +653,9 @@ func _wire_subsystems() -> void:
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
+	_poke_claim = PokeClaimResolver.new()
+	_poke_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
+
 	_hit_claim = HitClaimResolver.new()
 	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
 
@@ -624,6 +687,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
+	_phase_coord.faceoff_prep_announced.connect(faceoff_prep_announced.emit)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
 	_phase_coord.period_changed.connect(period_changed.emit)
@@ -650,8 +714,8 @@ func _wire_subsystems() -> void:
 	_debug_overlay = NetworkDebugOverlay.new()
 	add_child(_debug_overlay)
 
-	var _home_c := TeamColorRegistry.get_colors(teams[0].color_id, 0)
-	var _away_c := TeamColorRegistry.get_colors(teams[1].color_id, 1)
+	var _home_c := TeamColorRegistry.get_colors(teams[0].color_slot, 0)
+	var _away_c := TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 	team_colors_ready.emit(_home_c.primary, _home_c.secondary, _away_c.primary, _away_c.secondary)
 
 	_wire_sound_signals()
@@ -756,7 +820,9 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 		return
 	# Don't shadow live events into the replay buffer while a replay is
 	# actively playing — the cinematic is the consumer, not the producer.
-	if NetworkManager.is_replay_mode():
+	# Same gate for GOAL_CELEBRATION: those events belong to live gameplay,
+	# not the clip (which ends at the goal-moment frame).
+	if NetworkManager.is_replay_mode() or _is_celebration_phase():
 		return
 	var ts: float = NetworkManager.local_time()
 	var event: Dictionary = {
@@ -770,6 +836,40 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 		_recorder.record_event(ts, event)
 	if _replay_file_writer != null and _should_record_to_file():
 		_replay_file_writer.enqueue_event(ts, JSON.stringify(event).to_utf8_buffer())
+	# Mirror the event onto every client / spectator so their recorders see
+	# the same timeline. Required for the goal-replay cinematic to use the
+	# same shot anchor + adaptive clip start everywhere.
+	NetworkManager.notify_replay_event_to_all(ts, event)
+
+
+# Client / spectator side: host broadcast each event it recorded; we mirror
+# it into our local recorder so our goal-replay clip carries the same
+# timeline (shot anchor, pickup chain, audio cues). Same gates the host
+# applies to its own recording — skip while a cinematic is already playing.
+func _on_replay_event_received(host_ts: float, event: Dictionary) -> void:
+	if _recorder == null:
+		return
+	if NetworkManager.is_replay_mode() or _is_celebration_phase():
+		return
+	_recorder.record_event(host_ts, event)
+
+
+# Recorder-recording gate. During GOAL_CELEBRATION we skip writing to the
+# recorder (both frames and events) so the clip ends cleanly at the puck-
+# in-net moment captured via PhaseCoordinator._capture_goal_moment_frame.
+# The celebration itself is live gameplay; its frames don't belong in the
+# replay clip.
+func _is_celebration_phase() -> bool:
+	return is_in_goal_celebration()
+
+
+# Public phase query for controllers (the AIController uses this to drop
+# bot input during the celebration beat — bots coast on residual velocity
+# instead of trying to play during a stopped puck). Same value as the
+# internal _is_celebration_phase recorder gate.
+func is_in_goal_celebration() -> bool:
+	return _state_machine != null \
+			and _state_machine.current_phase == GamePhase.Phase.GOAL_CELEBRATION
 
 
 func _record_body_check_replay_event(checker_peer_id: int, victim: Skater,
@@ -894,6 +994,82 @@ func _teardown_spectator_camera() -> void:
 		local_spectator_state_changed.emit(false)
 
 
+# ── Goal-replay vote-to-skip ──────────────────────────────────────────────────
+# Rocket-League-style unanimous skip. On the local skip_replay press, route the
+# vote to the host (or register it locally if we are the host / offline). The
+# host counts, broadcasts the tally, and the driver auto-stops on unanimity —
+# clients mirror by stopping their own driver when they receive (N, N). In
+# offline / free-play the local player is the only voter, so a single press
+# instantly resolves to (1, 1) → stop.
+
+func _on_local_replay_started() -> void:
+	_in_replay_locally = true
+	# Reset HUD prompt immediately. On the host this is also the first
+	# authoritative broadcast of the voter total so clients see (0/N) right
+	# when their own driver starts.
+	if NetworkManager.is_host:
+		var total: int = _total_skip_voters()
+		NetworkManager.notify_skip_replay_vote_to_all(0, total)
+		skip_replay_vote_updated.emit(0, total)
+
+
+func _on_local_replay_stopped() -> void:
+	_in_replay_locally = false
+
+
+func is_in_replay_locally() -> bool:
+	return _in_replay_locally
+
+
+# HUD entry point. Called from _unhandled_input when the player presses
+# skip_replay during the cinematic.
+func request_local_skip_vote() -> void:
+	if not _in_replay_locally:
+		return
+	if NetworkManager.is_host:
+		_register_skip_vote(NetworkManager.local_peer_id())
+	else:
+		NetworkManager.send_skip_replay_request()
+
+
+func _on_remote_skip_replay_request(peer_id: int) -> void:
+	_register_skip_vote(peer_id)
+
+
+# Host-only: hands the vote to the driver, broadcasts the new tally so
+# clients can update their prompt and (on unanimity) tear down their own
+# driver. Bots aren't in connected_peer_ids() so they never count toward the
+# total; spectators do (they have an ENet connection).
+func _register_skip_vote(peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	# Late votes (driver stopped naturally before the RPC landed) are dropped
+	# silently — broadcasting (0, total) here would reset client HUDs that
+	# are already transitioning to FACEOFF.
+	if _goal_replay_driver == null or not _goal_replay_driver.is_active():
+		return
+	var total: int = _total_skip_voters()
+	_goal_replay_driver.register_skip_vote(peer_id, total)
+	var current: int = _goal_replay_driver.get_skip_vote_count()
+	NetworkManager.notify_skip_replay_vote_to_all(current, total)
+	skip_replay_vote_updated.emit(current, total)
+
+
+# Client-side handler for the host's tally broadcast. Forwards to HUD via the
+# local signal; on unanimity, also stops the local driver so every peer leaves
+# the cinematic at the same wall-clock moment.
+func _on_remote_skip_replay_vote(current: int, total: int) -> void:
+	if NetworkManager.is_host:
+		return  # host emits locally in _register_skip_vote
+	skip_replay_vote_updated.emit(current, total)
+	if total > 0 and current >= total and _goal_replay_driver != null:
+		_goal_replay_driver.stop()
+
+
+func _total_skip_voters() -> int:
+	return 1 + NetworkManager.connected_peer_ids().size()
+
+
 # ── Replay file recording ────────────────────────────────────────────────────
 # Opened once per game on every peer, after the registry has been populated
 # from lobby assignments / sync_existing_players. Idempotent — safe to call
@@ -990,8 +1166,8 @@ func _build_replay_header() -> Dictionary:
 		"period_duration": _state_machine.period_duration if _state_machine != null else GameRules.PERIOD_DURATION,
 		"ot_enabled": _state_machine.ot_enabled if _state_machine != null else GameRules.OT_ENABLED,
 		"rule_set": _state_machine.rule_set if _state_machine != null else GameRules.DEFAULT_RULE_SET,
-		"home_color_id": NetworkManager.pending_home_color_id,
-		"away_color_id": NetworkManager.pending_away_color_id,
+		"home_color_slot": NetworkManager.pending_home_color_slot,
+		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"recorded_by_peer_id": NetworkManager.local_peer_id(),
 		"roster": roster,
 	}
@@ -1084,7 +1260,7 @@ func _on_replay_player_left_event(record: PlayerRecord) -> void:
 func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 		is_left: bool, p_name: String, p_number: int, is_local: bool) -> Dictionary:
 	var team: Team = teams[team_id]
-	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	if not is_local:
 		NetworkManager.send_slot_assignment(peer_id, team_slot, team_id,
@@ -1101,7 +1277,7 @@ func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 
 
 func _spawn_local(peer_id: int, team_slot: int, team: Team) -> void:
-	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team.team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team.team_id)
 	_registry.spawn(peer_id, team_slot, team,
 			colors.jersey, colors.helmet, colors.pants,
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe, colors.socks, colors.socks_stripe,
@@ -1114,6 +1290,9 @@ func _spawn_local(peer_id: int, team_slot: int, team: Team) -> void:
 func _on_player_spawned(record: PlayerRecord) -> void:
 	if record.is_local:
 		var local_ctrl: LocalController = record.controller as LocalController
+		# Goal context is required by the classic camera (possession-based zone
+		# bias). The modern camera has a no-op `set_goal_context`, so this
+		# forward is safe to call unconditionally regardless of camera_style.
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
@@ -1159,6 +1338,8 @@ func _resolve_skater_team_id(skater: Skater) -> int:
 	return _registry.resolve_team_id(skater) if _registry != null else -1
 
 
+# Used by the classic camera via `set_goal_context`. The modern camera doesn't
+# call this (its `set_goal_context` is a no-op).
 func _get_puck_carrier_team_id() -> int:
 	if puck_controller != null:
 		var local_carrier: Skater = puck_controller.get_local_carrier()
@@ -1208,6 +1389,12 @@ func _on_pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: floa
 	if not NetworkManager.is_host:
 		return
 	_pickup_claim.receive_claim(peer_id, host_timestamp, rtt_ms, interp_delay_ms)
+
+
+func _on_poke_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	_poke_claim.receive_claim(peer_id, host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id)
 
 
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
@@ -1305,6 +1492,13 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:
+	# One-timers are always slappers (release_slapper at full charge); record the
+	# shot sound + replay event here so the goal-replay driver can find the last
+	# "shot" event when scanning the clip — otherwise the slo-mo trims back to
+	# the start of the play instead of the moment of release.
+	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, puck.get_puck_position(), 0.0, 0.04)
+	if NetworkManager.is_host:
+		_record_replay_audio_event("shot", puck.get_puck_position(), power, {"is_slapper": true})
 	if not NetworkManager.is_host:
 		# Client path: seed local puck prediction, then tell the host.
 		if puck_controller != null:
@@ -1324,6 +1518,9 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null or record.skater == null:
 		return
+	var shot_pos: Vector3 = puck.get_puck_position()
+	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
+	_record_replay_audio_event("shot", shot_pos, power, {"is_slapper": true})
 	_host_release_one_timer(direction, power, record.skater, host_timestamp, rtt_ms)
 
 
@@ -1412,9 +1609,10 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 		# the client's Jolt prediction (blade + velocity * rtt_half).
 		if rtt_ms > 0.0:
 			puck.set_puck_position(puck.get_puck_position() + (direction * power + skater_vel) * rtt_half)
-		for i: int in goalie_controllers.size():
-			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
-			goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
+		if not saved_goalie_positions.is_empty():
+			for i: int in goalie_controllers.size():
+				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
+				goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
 		return
 	puck.release(direction, power)
 
@@ -1466,6 +1664,14 @@ func _on_faceoff_positions_received(positions: Array) -> void:
 		_phase_coord.on_faceoff_positions(positions)
 
 
+func _on_puck_out_of_play_received() -> void:
+	# Client-side mirror of the host's OOB-confirmed moment. The FACEOFF_PREP
+	# phase change still arrives via world state; this just lights up the
+	# whistle + toast for clients at the same beat the host plays them.
+	puck_out_of_play.emit()
+	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+
+
 # ── Input batches from peers (host only) ─────────────────────────────────────
 # NetworkManager emits `input_batch_received` from its receive_input_batch RPC;
 # we route to the matching RemoteController. Drops batches for unregistered
@@ -1493,7 +1699,8 @@ func _on_world_state_received(data: PackedByteArray) -> void:
 	# clip to extract when a goal fires. Skipped during the cinematic itself
 	# (NetworkManager.is_replay_mode is mirrored to clients) so we don't
 	# overwrite the live pre-goal frames with frozen mid-replay state.
-	if _recorder != null and not NetworkManager.is_replay_mode():
+	if _recorder != null and not NetworkManager.is_replay_mode() \
+			and not _is_celebration_phase():
 		_recorder.record_frame(data, host_ts)
 	# Tee the broadcast into the local .mreplay file. Use the host_ts encoded
 	# in the packet so timestamps align across host + client recordings —
@@ -1521,6 +1728,12 @@ func _on_phase_for_broadcast_rate(new_phase: GamePhase.Phase) -> void:
 func _on_remote_phase_changed(new_phase: GamePhase.Phase) -> void:
 	_last_emitted_clock_secs = -1
 	phase_changed.emit(new_phase)
+	# Client mirror of the host's handle_phase_entered(GOAL_SCORED) trigger.
+	# Host advances GOAL_CELEBRATION → GOAL_SCORED via state-machine tick;
+	# clients learn about it via WS, and the replay cinematic kicks in here.
+	if new_phase == GamePhase.Phase.GOAL_SCORED and _phase_coord != null \
+			and not NetworkManager.is_host:
+		_phase_coord.start_goal_replay()
 
 
 func _on_clock_updated_externally(t: float) -> void:
@@ -1688,6 +1901,7 @@ func on_scene_exit() -> void:
 	_recorder = null
 	_shot_tracker = null
 	_pickup_claim = null
+	_poke_claim = null
 	_hit_claim = null
 	_phase_coord = null
 	_swap_coord = null
@@ -1751,6 +1965,31 @@ func return_to_lobby() -> void:
 	if not NetworkManager.is_host:
 		return
 	_drop_puck_if_carried()
+	# Rebuild pending_bot_slots from registry's bot records so the lobby
+	# reloads with the same bot configuration the host took into the game.
+	# Bots are stripped from the roster (they're not real peers) and instead
+	# round-trip as bot-slot markers; this is what restores the "X" action
+	# on the host's slot cards. Identities are reconstructed from the
+	# PlayerRecord so the lobby card shows the same name/number the bot
+	# wore in the previous match instead of falling back to "BOT".
+	var bot_slots: Dictionary[int, bool] = {}
+	var bot_identities: Dictionary[int, Dictionary] = {}
+	if _registry != null:
+		for peer_id: int in _registry.all():
+			var r: PlayerRecord = _registry.get_record(peer_id)
+			if r == null or not r.is_bot or r.team == null:
+				continue
+			var slot_key: int = r.team.team_id * 3 + r.team_slot
+			bot_slots[slot_key] = true
+			bot_identities[slot_key] = {
+				"name":           r.player_name,
+				"number":         r.jersey_number,
+				"is_left_handed": r.is_left_handed,
+			}
+	NetworkManager.pending_bot_slots = bot_slots
+	NetworkManager.pending_bot_identities = bot_identities
+	for peer_id: int in NetworkManager.connected_peer_ids():
+		NetworkManager.send_bot_slots_to(peer_id, bot_slots, bot_identities)
 	NetworkManager.send_return_to_lobby_to_all(_build_lobby_roster_array())
 
 
@@ -1784,26 +2023,26 @@ func _on_local_identity_changed(p_name: String, p_number: int, p_is_left: bool) 
 # is always on the home team in free play, so we re-skin its uniform and
 # the home goalie. If apply_preferred_color also re-rolled the away color
 # to avoid a collision, the away goalie gets re-tinted too.
-func _on_local_preferred_color_changed(home_color_id: String, away_color_id: String) -> void:
+func _on_local_preferred_color_changed(home_color_slot: int, away_color_slot: int) -> void:
 	if teams.size() < 2:
 		return
-	var home_changed: bool = teams[0].color_id != home_color_id
-	var away_changed: bool = teams[1].color_id != away_color_id
+	var home_changed: bool = teams[0].color_slot != home_color_slot
+	var away_changed: bool = teams[1].color_slot != away_color_slot
 	if not home_changed and not away_changed:
 		return
-	teams[0].color_id = home_color_id
-	teams[1].color_id = away_color_id
+	teams[0].color_slot = home_color_slot
+	teams[1].color_slot = away_color_slot
 	if home_changed:
 		_apply_team_colors_to_actors(0)
 	if away_changed:
 		_apply_team_colors_to_actors(1)
-	var home_c: Dictionary = TeamColorRegistry.get_colors(teams[0].color_id, 0)
-	var away_c: Dictionary = TeamColorRegistry.get_colors(teams[1].color_id, 1)
+	var home_c: Dictionary = TeamColorRegistry.get_colors(teams[0].color_slot, 0)
+	var away_c: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 	team_colors_ready.emit(home_c.primary, home_c.secondary, away_c.primary, away_c.secondary)
 
 
 func _apply_team_colors_to_actors(team_id: int) -> void:
-	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_id, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	# `goalies` is stored positionally ([top, bottom]) while team_id is
 	# semantic (0 = home = bottom net, 1 = away = top net) — indexing the
 	# array directly by team_id flips the two. Route through the team's
@@ -1843,6 +2082,11 @@ func _build_lobby_roster_array() -> Array:
 		return result
 	for peer_id: int in _registry.all():
 		var r: PlayerRecord = _registry.get_record(peer_id)
+		# Bots are not real peers — they round-trip through pending_bot_slots,
+		# not the roster. Including them here would render them as human-filled
+		# cards in the lobby with no remove action.
+		if r.is_bot:
+			continue
 		var team_id: int = r.team.team_id if r.team != null else 0
 		result.append([peer_id, team_id, r.team_slot, r.player_name,
 				r.is_left_handed, r.jersey_number])
@@ -1932,6 +2176,8 @@ func _spawn_bots_from_lobby() -> void:
 		return
 	if NetworkManager.pending_bot_slots.is_empty():
 		return
+	# Identities were chosen at lobby-toggle time and synced to clients so
+	# the lobby UI could preview them — just read them back here.
 	var bot_id: int = 0
 	for slot_key: int in NetworkManager.pending_bot_slots:
 		if not NetworkManager.pending_bot_slots[slot_key]:
@@ -1946,8 +2192,9 @@ func _spawn_bots_from_lobby() -> void:
 		if _slot_already_taken(team_id, team_slot):
 			continue
 		var team: Team = teams[team_id]
-		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_id, team_id)
-		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team)
+		var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
+		var identity: Dictionary = NetworkManager.pending_bot_identities.get(slot_key, {})
+		var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team, identity)
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a
 		# RemoteController-driven skater because peer_id is not their own.
@@ -1958,6 +2205,7 @@ func _spawn_bots_from_lobby() -> void:
 	# Clear after spawning so a return-to-lobby + restart starts fresh; the
 	# host will re-toggle bot slots in the next lobby session if desired.
 	NetworkManager.pending_bot_slots = {}
+	NetworkManager.pending_bot_identities = {}
 
 
 func _slot_already_taken(team_id: int, team_slot: int) -> bool:
@@ -2004,10 +2252,13 @@ func get_world_state() -> PackedByteArray:
 	if state.is_empty():
 		return state
 	var ts: float = NetworkManager.local_time()
-	# In-memory recorder feeds GoalReplayDriver — only the goal-replay-window
-	# gate applies (we still need dead-puck frames in the buffer to bracket
-	# the goal moment cleanly).
-	if _recorder != null and not NetworkManager.is_replay_mode():
+	# In-memory recorder feeds GoalReplayDriver. Gated by is_replay_mode (the
+	# cinematic is the consumer, not the producer) AND by GOAL_CELEBRATION
+	# (the celebration beat is live gameplay; we don't want its frames in the
+	# replay clip, which should end at the puck-in-net moment captured via
+	# _capture_goal_moment_frame).
+	if _recorder != null and not NetworkManager.is_replay_mode() \
+			and not _is_celebration_phase():
 		_recorder.record_frame(state, ts)
 	# File writer skips dead-puck phase ticks past the first one — see
 	# _should_record_to_file. The first frame on each phase transition
@@ -2045,6 +2296,12 @@ func is_movement_locked() -> bool:
 	if _state_machine == null:
 		return false
 	return _state_machine.is_movement_locked()
+
+
+func allows_blade_aim_during_lock() -> bool:
+	if _state_machine == null:
+		return false
+	return _state_machine.allows_blade_aim_during_lock()
 
 
 func is_input_blocked() -> bool:

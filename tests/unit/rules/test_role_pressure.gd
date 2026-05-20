@@ -52,7 +52,7 @@ func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 	ctx.attacking_goal_pos = Vector3(0.0, 0.0, -OUR_NET_Z)
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, OUR_NET_Z)
 	ctx.own_goal_dir = 1.0
-	ctx.team_id_resolver = func(pid: int) -> int: return int(team_map.get(pid, -1))
+	ctx.team_id_by_peer = team_map
 	return ctx
 
 

@@ -13,13 +13,10 @@ var _ready_btn: Button = null
 var _settings_panel: LobbySettingsPanel = null
 var _spectator_list_label: Label = null
 var _spectator_join_btn: Button = null
-# Team color picker widgets — populated by whichever variant of
-# _build_teams_column ran (offline gets both, online gets _my_color_btn only).
-var _offline_home_color_btn: OptionButton = null
-var _offline_home_swatch: ColorRect = null
-var _offline_away_color_btn: OptionButton = null
-var _offline_away_swatch: ColorRect = null
-var _my_color_swatch: ColorRect = null
+# Team color palette widgets — populated by whichever variant of
+# _build_teams_column ran (offline gets both, online gets _my_color_dropdown only).
+var _offline_home_dropdown: PaletteDropdown = null
+var _offline_away_dropdown: PaletteDropdown = null
 
 # key = peer_id → bool; tracks non-host peers only (host uses Start instead)
 var _ready_states: Dictionary = {}
@@ -33,24 +30,24 @@ var _rule_set: int = GameRules.DEFAULT_RULE_SET
 
 # Team color presets used as placeholders in the lobby slot-grid preview.
 # Real per-team colors are resolved from votes at game start.
-var _home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
-var _away_color_id: String = TeamColorRegistry.DEFAULT_AWAY_ID
+var _home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
+var _away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT
 
 # Local player's current color vote + a mirror of every player's vote so
 # everyone in the lobby can see who voted for what. Host is authoritative;
 # clients receive updates via NetworkManager.color_vote_changed.
-var _my_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
-var _color_votes: Dictionary = {}  # peer_id → color_id
-var _my_color_btn: OptionButton = null
+var _my_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
+var _color_votes: Dictionary = {}  # peer_id → color_slot (int)
+var _my_color_dropdown: PaletteDropdown = null
 
 func _ready() -> void:
-	_home_color_id = NetworkManager.pending_home_color_id
-	_away_color_id = NetworkManager.pending_away_color_id
+	_home_color_slot = NetworkManager.pending_home_color_slot
+	_away_color_slot = NetworkManager.pending_away_color_slot
 	_num_periods = NetworkManager.pending_num_periods
 	_period_duration = NetworkManager.pending_period_duration
 	_ot_enabled = NetworkManager.pending_ot_enabled
 	_rule_set = NetworkManager.pending_rule_set
-	_my_color_id = _initial_color_preference()
+	_my_color_slot = _initial_color_preference()
 	_color_votes = NetworkManager.pending_color_votes.duplicate()
 	_build_ui()
 	NetworkManager.peer_joined.connect(_on_peer_joined)
@@ -69,9 +66,9 @@ func _ready() -> void:
 	# Submit our own vote into the shared map so the host (and other peers)
 	# count it. send_color_vote handles both host-local and client-RPC paths.
 	# Offline mode skips this — the color vote pool stays empty, the picks
-	# made in the main menu (pending_home/away_color_id) are kept verbatim.
+	# made in the main menu (pending_home/away_color_slot) are kept verbatim.
 	if not NetworkManager.is_offline_mode:
-		NetworkManager.send_color_vote(_my_color_id)
+		NetworkManager.send_color_vote(_my_color_slot)
 
 	if not NetworkManager.pending_lobby_roster.is_empty():
 		_on_lobby_roster_synced(NetworkManager.pending_lobby_roster)
@@ -84,12 +81,12 @@ func _ready() -> void:
 	# the host-alone case stays disabled forever.
 	_update_start_btn()
 
-func _initial_color_preference() -> String:
-	var saved: String = PlayerPrefs.preferred_color_id
-	if saved.is_empty():
-		return TeamColorRegistry.DEFAULT_HOME_ID
-	if not TeamColorRegistry.get_all_ids().has(saved):
-		return TeamColorRegistry.DEFAULT_HOME_ID
+func _initial_color_preference() -> int:
+	var saved: int = PlayerPrefs.preferred_color_slot
+	if saved < 0:
+		return TeamColorRegistry.DEFAULT_HOME_SLOT
+	if not TeamColorRegistry.get_all_slots().has(saved):
+		return TeamColorRegistry.DEFAULT_HOME_SLOT
 	return saved
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -197,11 +194,11 @@ func _column_header(text: String) -> Label:
 
 # Teams column. Two variants depending on connection mode:
 #   - Offline / with bots: the local player is the host and owns both
-#     team palettes directly. Show two dropdowns (AWAY + HOME) with
-#     swatches, plus a "Host selects teams" hint.
+#     team palettes directly. Show two PaletteDropdowns (AWAY + HOME)
+#     plus a "Host selects teams" hint.
 #   - Online: every player votes for their own preferred palette and
 #     the host's resolution mixes those into the actual team colors.
-#     Show a single dropdown labelled "Your Vote".
+#     Show a single PaletteDropdown labelled "YOUR VOTE".
 func _build_teams_column() -> VBoxContainer:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 8)
@@ -209,16 +206,14 @@ func _build_teams_column() -> VBoxContainer:
 	col.add_child(_column_header("TEAMS"))
 
 	if NetworkManager.is_offline_mode:
-		var away_row := _color_picker_row("AWAY", _away_color_id, true)
-		_offline_away_swatch = away_row.get_meta(&"swatch") as ColorRect
-		_offline_away_color_btn = away_row.get_meta(&"option") as OptionButton
-		_offline_away_color_btn.item_selected.connect(_on_offline_away_color_selected)
+		var away_row := _color_picker_row("AWAY", _away_color_slot)
+		_offline_away_dropdown = away_row.get_meta(&"dropdown") as PaletteDropdown
+		_offline_away_dropdown.selected.connect(_on_offline_away_color_selected)
 		col.add_child(away_row)
 
-		var home_row := _color_picker_row("HOME", _home_color_id, false)
-		_offline_home_swatch = home_row.get_meta(&"swatch") as ColorRect
-		_offline_home_color_btn = home_row.get_meta(&"option") as OptionButton
-		_offline_home_color_btn.item_selected.connect(_on_offline_home_color_selected)
+		var home_row := _color_picker_row("HOME", _home_color_slot)
+		_offline_home_dropdown = home_row.get_meta(&"dropdown") as PaletteDropdown
+		_offline_home_dropdown.selected.connect(_on_offline_home_color_selected)
 		col.add_child(home_row)
 
 		var hint := Label.new()
@@ -227,10 +222,9 @@ func _build_teams_column() -> VBoxContainer:
 		hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
 		col.add_child(hint)
 	else:
-		var vote_row := _color_picker_row("YOUR VOTE", _my_color_id, false)
-		_my_color_swatch = vote_row.get_meta(&"swatch") as ColorRect
-		_my_color_btn = vote_row.get_meta(&"option") as OptionButton
-		_my_color_btn.item_selected.connect(_on_my_color_vote_selected)
+		var vote_row := _color_picker_row("YOUR VOTE", _my_color_slot)
+		_my_color_dropdown = vote_row.get_meta(&"dropdown") as PaletteDropdown
+		_my_color_dropdown.selected.connect(_on_my_color_vote_selected)
 		col.add_child(vote_row)
 
 		var hint := Label.new()
@@ -242,12 +236,10 @@ func _build_teams_column() -> VBoxContainer:
 	return col
 
 
-# Build one [LABEL] [swatch] [dropdown] row. The swatch is a small
-# ColorRect previewing the currently-selected palette's primary color so
-# the user can scan picks at a glance without opening the dropdown. The
-# `is_away` flag is used only to seed the initial team_id for the colors
-# lookup; the dropdown's item_selected signal is wired by the caller.
-func _color_picker_row(label_text: String, initial_color_id: String, is_away: bool) -> HBoxContainer:
+# Build one [LABEL] [PaletteDropdown] row. The dropdown's closed state shows
+# the selected slot's primary+stripe styling (lobby-card look), so no
+# separate swatch preview is needed alongside it.
+func _color_picker_row(label_text: String, initial_slot: int) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -260,19 +252,11 @@ func _color_picker_row(label_text: String, initial_color_id: String, is_away: bo
 	lbl.custom_minimum_size = Vector2(56, 0)
 	row.add_child(lbl)
 
-	var swatch := ColorRect.new()
-	swatch.custom_minimum_size = Vector2(20, 20)
-	swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	swatch.color = TeamColorRegistry.get_colors(initial_color_id, 1 if is_away else 0).get("primary", Color.WHITE)
-	row.add_child(swatch)
-
-	var dropdown := MenuStyle.color_option_btn(initial_color_id, Vector2(_SETTING_CONTROL_WIDTH - 36, 28), 12)
-	dropdown.disabled = NetworkManager.is_offline_mode and not NetworkManager.is_host
-	SoundManager.wire_button(dropdown)
+	var dropdown := PaletteDropdown.new(initial_slot, Vector2(_SETTING_CONTROL_WIDTH - 64, 32))
+	dropdown.set_disabled(NetworkManager.is_offline_mode and not NetworkManager.is_host)
 	row.add_child(dropdown)
 
-	row.set_meta(&"swatch", swatch)
-	row.set_meta(&"option", dropdown)
+	row.set_meta(&"dropdown", dropdown)
 	return row
 
 
@@ -336,9 +320,8 @@ func _refresh_spectator_panel() -> void:
 	# Spectators don't belong to a team, so their color vote can't affect any
 	# team's resolution (`_recompute_resolved_colors` skips spectator entries).
 	# Disable the dropdown so the UI doesn't suggest it does anything.
-	if _my_color_btn != null:
-		_my_color_btn.disabled = local_is_spectator
-		_my_color_btn.modulate = Color(1, 1, 1, 0.5) if local_is_spectator else Color(1, 1, 1, 1)
+	if _my_color_dropdown != null:
+		_my_color_dropdown.set_disabled(local_is_spectator)
 
 
 func _on_spectate_pressed() -> void:
@@ -353,32 +336,26 @@ func _on_spectate_pressed() -> void:
 # Online lobby: writes the player's vote into the shared pool. Host receives
 # the vote, updates pending_color_votes, recomputes resolved team colors,
 # and broadcasts. PlayerPrefs is updated so the next session remembers.
-func _on_my_color_vote_selected(idx: int) -> void:
-	_my_color_id = TeamColorRegistry.get_all_ids()[idx]
-	PlayerPrefs.preferred_color_id = _my_color_id
+func _on_my_color_vote_selected(slot: int) -> void:
+	_my_color_slot = slot
+	PlayerPrefs.preferred_color_slot = slot
 	PlayerPrefs.save()
-	if _my_color_swatch != null:
-		_my_color_swatch.color = TeamColorRegistry.get_colors(_my_color_id, 0).get("primary", Color.WHITE)
-	NetworkManager.send_color_vote(_my_color_id)
+	NetworkManager.send_color_vote(slot)
 
 
 # Offline / with-bots lobby: host writes both team colors directly into
-# NetworkManager.pending_*_color_id. No vote pool to update; the lobby's
-# own _home_color_id / _away_color_id mirror the pending values and feed
+# NetworkManager.pending_*_color_slot. No vote pool to update; the lobby's
+# own _home_color_slot / _away_color_slot mirror the pending values and feed
 # the slot-grid preview.
-func _on_offline_away_color_selected(idx: int) -> void:
-	_away_color_id = TeamColorRegistry.get_all_ids()[idx]
-	NetworkManager.pending_away_color_id = _away_color_id
-	if _offline_away_swatch != null:
-		_offline_away_swatch.color = TeamColorRegistry.get_colors(_away_color_id, 1).get("primary", Color.WHITE)
+func _on_offline_away_color_selected(slot: int) -> void:
+	_away_color_slot = slot
+	NetworkManager.pending_away_color_slot = slot
 	_refresh_grid()
 
 
-func _on_offline_home_color_selected(idx: int) -> void:
-	_home_color_id = TeamColorRegistry.get_all_ids()[idx]
-	NetworkManager.pending_home_color_id = _home_color_id
-	if _offline_home_swatch != null:
-		_offline_home_swatch.color = TeamColorRegistry.get_colors(_home_color_id, 0).get("primary", Color.WHITE)
+func _on_offline_home_color_selected(slot: int) -> void:
+	_home_color_slot = slot
+	NetworkManager.pending_home_color_slot = slot
 	_refresh_grid()
 
 
@@ -473,16 +450,17 @@ func _build_spectator_roster() -> Array[Dictionary]:
 
 func _get_team_colors() -> Array[Dictionary]:
 	return [
-		TeamColorRegistry.get_colors(_home_color_id, 0),
-		TeamColorRegistry.get_colors(_away_color_id, 1),
+		TeamColorRegistry.get_colors(_home_color_slot, 0),
+		TeamColorRegistry.get_colors(_away_color_slot, 1),
 	]
 
 func _refresh_grid() -> void:
 	if _slot_grid == null:
 		return
 	_recompute_resolved_colors()
-	_slot_grid.refresh(_build_slot_grid_roster(), NetworkManager.local_peer_id(), _get_team_colors(),
-			NetworkManager.pending_bot_slots, NetworkManager.is_host)
+	_slot_grid.refresh(_build_slot_grid_roster(), _get_team_colors(),
+			NetworkManager.pending_bot_slots, NetworkManager.is_host,
+			NetworkManager.pending_bot_identities)
 	_refresh_spectator_panel()
 
 # Live vote resolution. Walks the current roster, buckets each player's vote
@@ -491,13 +469,13 @@ func _refresh_grid() -> void:
 # already-tied lead doesn't re-roll on every unrelated vote change.
 func _recompute_resolved_colors() -> void:
 	# Offline mode: no per-player vote pool to resolve. Keep
-	# _home_color_id / _away_color_id at their init values (seeded from
-	# NetworkManager.pending_home/away_color_id, which the main menu
+	# _home_color_slot / _away_color_slot at their init values (seeded from
+	# NetworkManager.pending_home/away_color_slot, which the main menu
 	# "With Bots" popup wrote).
 	if NetworkManager.is_offline_mode:
 		return
-	var home_votes: Array[String] = []
-	var away_votes: Array[String] = []
+	var home_votes: Array[int] = []
+	var away_votes: Array[int] = []
 	for k: int in _lobby_slots:
 		if LobbySlotKey.is_spectator(k):
 			continue
@@ -506,23 +484,23 @@ func _recompute_resolved_colors() -> void:
 		if not _color_votes.has(peer_id):
 			continue
 		var team_id: int = LobbySlotKey.team_id(k)
-		var vote: String = _color_votes[peer_id]
+		var vote: int = int(_color_votes[peer_id])
 		if team_id == 0:
 			home_votes.append(vote)
 		else:
 			away_votes.append(vote)
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
-	var resolved: Array[String] = ColorVoteRules.resolve_team_colors(
+	var resolved: Array[int] = ColorVoteRules.resolve_team_colors(
 			home_votes, away_votes,
-			TeamColorRegistry.get_all_ids(),
-			TeamColorRegistry.DEFAULT_HOME_ID,
-			TeamColorRegistry.DEFAULT_AWAY_ID,
+			TeamColorRegistry.get_all_slots(),
+			TeamColorRegistry.DEFAULT_HOME_SLOT,
+			TeamColorRegistry.DEFAULT_AWAY_SLOT,
 			rng,
-			_home_color_id,
-			_away_color_id)
-	_home_color_id = resolved[0]
-	_away_color_id = resolved[1]
+			_home_color_slot,
+			_away_color_slot)
+	_home_color_slot = resolved[0]
+	_away_color_slot = resolved[1]
 
 func _broadcast_confirm(peer_id: int, team_id: int, slot: int) -> void:
 	var entry: Dictionary = _lobby_slots.get(LobbySlotKey.encode(team_id, slot), {})
@@ -534,8 +512,8 @@ func _broadcast_confirm(peer_id: int, team_id: int, slot: int) -> void:
 		NetworkManager.send_confirm_slot_swap(peer_id, -1, -1, team_id, slot,
 				Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
 		return
-	var color_id: String = _home_color_id if team_id == 0 else _away_color_id
-	var colors: Dictionary = TeamColorRegistry.get_colors(color_id, team_id)
+	var color_slot: int = _home_color_slot if team_id == 0 else _away_color_slot
+	var colors: Dictionary = TeamColorRegistry.get_colors(color_slot, team_id)
 	NetworkManager.send_confirm_slot_swap(peer_id, -1, -1, team_id, slot,
 			colors.jersey, colors.helmet, colors.pants)
 
@@ -597,7 +575,7 @@ func _on_peer_joined(peer_id: int) -> void:
 		NetworkManager.send_lobby_roster(existing_peer, roster)
 	NetworkManager.send_color_votes_to(peer_id, _color_votes)
 	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled, _rule_set)
-	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots)
+	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots, NetworkManager.pending_bot_identities)
 	_broadcast_confirm(peer_id, target[0], target[1])
 	_update_start_btn()
 	_refresh_grid()
@@ -694,14 +672,14 @@ func _on_player_ready_changed(peer_id: int, is_ready: bool) -> void:
 	_update_start_btn()
 	_refresh_grid()
 
-func _on_color_vote_changed(peer_id: int, color_id: String) -> void:
-	_color_votes[peer_id] = color_id
+func _on_color_vote_changed(peer_id: int, color_slot: int) -> void:
+	_color_votes[peer_id] = color_slot
 	_refresh_grid()
 
 func _on_color_votes_synced(votes: Dictionary) -> void:
 	_color_votes = votes.duplicate()
 	# Make sure our own vote is still recorded after a full sync.
-	_color_votes[NetworkManager.local_peer_id()] = _my_color_id
+	_color_votes[NetworkManager.local_peer_id()] = _my_color_slot
 	_refresh_grid()
 
 func _on_bot_toggled(team_id: int, slot: int, is_bot: bool) -> void:
@@ -758,7 +736,7 @@ func _on_ready_pressed() -> void:
 	NetworkManager.send_player_ready(_local_is_ready)
 
 func _on_start_pressed() -> void:
-	# _home_color_id / _away_color_id already reflect the live vote tally —
+	# _home_color_slot / _away_color_slot already reflect the live vote tally —
 	# every vote and slot change has been folded in by _refresh_grid →
 	# _recompute_resolved_colors. Just ship the current values.
 	var config: Dictionary = {
@@ -766,8 +744,8 @@ func _on_start_pressed() -> void:
 		"period_duration": _period_duration,
 		"ot_enabled": _ot_enabled,
 		"ot_duration": GameRules.OT_DURATION,
-		"home_color_id": _home_color_id,
-		"away_color_id": _away_color_id,
+		"home_color_slot": _home_color_slot,
+		"away_color_slot": _away_color_slot,
 		"rule_set": _rule_set,
 		# Minted on the host and broadcast via game_start so every peer shares
 		# the same id. Used as the .mreplay filename and (Feature C) stored on

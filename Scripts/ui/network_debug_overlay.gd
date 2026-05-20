@@ -60,5 +60,6 @@ func _process(_delta: float) -> void:
 		+ "Puck:      %s\n" % t.puck_mode
 		+ "Queue:     %d frames (2s median)   loss: %.1f%%\n" % [t.input_queue_depth_median, t.packet_loss_pct]
 		+ "InBuf:     lead %.1f ms   starved %.0f/s\n" % [t.input_lead_avg_ms, t.input_starvations_per_sec]
+		+ "Host:      tick p95 %.1f / p99 %.1f / max %.1f ms   bcast p95 %.1f ms\n" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms, t.broadcast_interval_p95_ms]
 		+ "Jitter P95: %.1f ms   interp delay: %.0f ms" % [t.jitter_p95_ms, NetworkManager.get_target_interpolation_delay() * 1000.0]
 	)

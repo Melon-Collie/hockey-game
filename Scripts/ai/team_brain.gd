@@ -4,7 +4,7 @@ extends RefCounted
 # Per-team strategy node, v2 (possession-state model). Replaces the
 # F1/F2/F3 closest-to-puck role assignment + man-to-man coverage
 # assignment with a single positional-slot system driven by team
-# possession state. See `docs/specs/AI_PLAN.md` (v2 model).
+# possession state.
 #
 # Driven by GameManager._physics_process (host only) — ticks once
 # every TICK_PERIOD seconds (~6 Hz).
@@ -18,8 +18,10 @@ extends RefCounted
 # locking; the bot whose body is in the right place gets the role.
 # Hysteresis (1.5 m) prevents flicker from small position changes.
 #
-# `team_id_resolver` is `func(peer_id: int) -> int` — bound by
-# GameManager at construction (see `_registry.resolve_team_id_for_peer`).
+# `team_id_by_peer` is `Dictionary[int, int]` — live reference owned
+# by PlayerRegistry, mutated when players spawn / leave / slot-swap.
+# Read via `dict.get(pid, -1)`. Used to be a Callable; downgraded to
+# a Dictionary because AI hot loops eat Callable.call overhead.
 # `is_human_resolver` is no longer used in v2 (no role-yield logic),
 # kept on the constructor signature for backwards compatibility with
 # GameManager's existing call site.
@@ -47,16 +49,16 @@ var _accumulator: float = 0.0
 # computes immediately. Used for event-driven re-evaluation when a
 # puck-carrier change makes the current slot assignment stale.
 var _force_tick_pending: bool = false
-var _team_id_resolver: Callable = Callable()
+var _team_id_by_peer: Dictionary = {}
 var _is_human_resolver: Callable = Callable()
 # Cached own-goal Z derived from team_id at construction. Team 0
 # defends +GOAL_LINE_Z, Team 1 defends -GOAL_LINE_Z.
 var _own_goal_z: float = 0.0
 
 
-func _init(t: int, resolver: Callable, human_resolver: Callable) -> void:
+func _init(t: int, team_id_by_peer: Dictionary, human_resolver: Callable) -> void:
 	team_id = t
-	_team_id_resolver = resolver
+	_team_id_by_peer = team_id_by_peer
 	_is_human_resolver = human_resolver
 	_own_goal_z = GameRules.GOAL_LINE_Z if t == 0 else -GameRules.GOAL_LINE_Z
 
@@ -98,7 +100,7 @@ func force_retick() -> void:
 func _compute_tick(snapshot: WorldSnapshot) -> void:
 	# 1. Possession state.
 	var new_state_pair: Array = AIPossessionState.compute(
-			snapshot, team_id, _own_goal_z, _team_id_resolver, _last_carrier_team)
+			snapshot, team_id, _own_goal_z, _team_id_by_peer, _last_carrier_team)
 	var new_state: int = new_state_pair[0]
 	_last_carrier_team = new_state_pair[1]
 	state = new_state
@@ -116,7 +118,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	#    enumeration with hysteresis. No locking needed.
 	var prev_assignments: Dictionary = slot_assignments
 	slot_assignments = AIRoleSlots.assign(
-			snapshot, team_id, _own_goal_z, state, _team_id_resolver,
+			snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
 			prev_assignments, _strong_x)
 
 
@@ -125,6 +127,29 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 # ticked yet).
 func get_slot(peer_id: int) -> int:
 	return slot_assignments.get(peer_id, AIRoleSlots.Slot.NONE)
+
+
+# ── One-timer readiness signaling ───────────────────────────────────────────
+# Off-puck bots in the FINISHER role publish "I'm camped + pre-aimed,
+# fire me a pass and I'll one-time it" via set_one_timer_ready(true).
+# The carrier reads via is_one_timer_ready(peer_id) when scoring
+# passes — a ready receiver gets a no-charge goalie prediction (since
+# they fire on contact, the goalie can't react to a wind-up), which
+# inflates the squareness term and naturally rewards passes to them.
+# Stored host-side on the brain, not in SkaterNetworkState — this is
+# pure AI bookkeeping that the network doesn't need to see.
+var _one_timer_ready_by_peer: Dictionary = {}   # peer_id -> bool
+
+
+func set_one_timer_ready(peer_id: int, ready: bool) -> void:
+	if ready:
+		_one_timer_ready_by_peer[peer_id] = true
+	else:
+		_one_timer_ready_by_peer.erase(peer_id)
+
+
+func is_one_timer_ready(peer_id: int) -> bool:
+	return _one_timer_ready_by_peer.get(peer_id, false)
 
 
 # Computes the world-space anchor for a given peer's current slot.
@@ -140,6 +165,4 @@ func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
 	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
 		carrier_pos = snapshot.skater_states[carrier_pid].position
-	return AIRoleSlots.slot_anchor(
-			slot, state, puck_pos, carrier_pos,
-			_own_goal_z, _strong_x)
+	return AIRoleSlots.slot_anchor(slot, carrier_pos)

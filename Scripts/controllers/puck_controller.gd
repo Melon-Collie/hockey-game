@@ -59,8 +59,10 @@ func get_carrier_peer_id() -> int:
 var _peer_id_resolver: Callable = Callable()
 # Callable () -> Array[Skater] of all active skaters. Host-only interaction detection.
 var _skater_getter: Callable = Callable()
-# Callable (Skater) -> int team_id. Used by poke-check eligibility.
-var _team_id_resolver: Callable = Callable()
+# Live Skater -> team_id dict owned by PlayerRegistry. Read in the
+# host-side poke-check loop at 240 Hz — used to be a Callable that
+# internally scanned the player dict, which doubled up the cost.
+var _team_id_by_skater: Dictionary = {}
 
 # ── Signals (server-side puck events, GameManager listens) ───────────────────
 signal puck_picked_up_by(peer_id: int)
@@ -91,8 +93,8 @@ func set_peer_id_resolver(resolver: Callable) -> void:
 func set_skater_getter(getter: Callable) -> void:
 	_skater_getter = getter
 
-func set_team_id_resolver(resolver: Callable) -> void:
-	_team_id_resolver = resolver
+func set_team_id_by_skater(d: Dictionary) -> void:
+	_team_id_by_skater = d
 
 func _physics_process(delta: float) -> void:
 	if puck == null:
@@ -137,6 +139,26 @@ func apply_lag_comp_pickup(skater: Skater) -> void:
 	_on_puck_picked_up(skater)
 
 
+# Called after PokeClaimResolver validates a client poke claim against the
+# state buffer. Idempotency guards:
+#   - carrier == null: a host-side _check_interactions detection beat us to
+#     the strip, or the carrier released the puck. Skip.
+#   - carrier == checker: claimant became the carrier between send and apply
+#     (shouldn't happen — client gates on `puck.carrier != skater` — but
+#     defend). Skip.
+#   - carrier != expected_ex_carrier: the carrier changed between claim send
+#     and apply (X → Z). The claimant intended to strip X, not Z; the action
+#     isn't valid against Z. Skip.
+func apply_lag_comp_poke(checker: Skater, expected_ex_carrier: Skater) -> void:
+	if not is_instance_valid(checker) or puck.carrier == null:
+		return
+	if puck.carrier == checker:
+		return
+	if puck.carrier != expected_ex_carrier:
+		return
+	puck.apply_poke_check(checker)
+
+
 # Two valid pickup claims arrived within the contest window. Neither player
 # wins — the puck squirts perpendicular to the line between the two blade
 # contact points (both blades pressing inward pinch the puck like a seed
@@ -165,11 +187,13 @@ func _check_interactions() -> void:
 
 	if puck.carrier != null:
 		if not puck.pickup_locked:
+			# Hoist the carrier team out of the loop — it's invariant
+			# across all checkers and the lookup was being repeated.
+			var carrier_team: int = _team_id_by_skater.get(puck.carrier, -1)
 			for skater: Skater in skaters:
 				if skater == puck.carrier or skater.is_ghost:
 					continue
-				var carrier_team: int = _team_id_resolver.call(puck.carrier)
-				var checker_team: int = _team_id_resolver.call(skater)
+				var checker_team: int = _team_id_by_skater.get(skater, -1)
 				if not PuckCollisionRules.can_poke_check(carrier_team, checker_team):
 					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
@@ -188,9 +212,15 @@ func _check_interactions() -> void:
 				if not PuckInteractionRules.check_pickup(_prev_puck_pos, puck_curr,
 						blade_prev, blade_curr, PICKUP_RADIUS):
 					continue
-				var puck_speed: float = puck.get_puck_velocity().length()
-				var rel_speed: float = (puck.get_puck_velocity() - skater.blade_world_velocity).length()
-				if puck_speed <= puck.pickup_max_speed or rel_speed < puck.deflect_min_speed:
+				var puck_vel: Vector3 = puck.get_puck_velocity()
+				var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
+				if PuckReceptionRules.should_receive(
+						puck_vel,
+						skater.blade_world_velocity,
+						blade_face_normal,
+						puck.pickup_max_speed,
+						puck.deflect_min_speed,
+						puck.alignment_receive_bonus):
 					puck.set_carrier(skater)
 					_on_puck_picked_up(skater)
 				else:

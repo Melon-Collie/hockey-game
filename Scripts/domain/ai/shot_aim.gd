@@ -36,15 +36,23 @@ class_name AIShotAim
 
 # Default corner bias — caller can override per shot type if desired.
 # 0 = legacy arc-midpoint behavior, 1 = aim at the post.
-const DEFAULT_CORNER_BIAS: float = 0.5
+#
+# 0.3 keeps the aim point away from the post (a third of the way from
+# arc midpoint toward the post). Combined with mouse noise, wind-up
+# offset compensation residual, and per-tick aim drift during the
+# 250 ms wrister charge, anything closer to the post (≥ 0.5) produced
+# shots that sailed wide of the net entirely. Bias under 0.3 sacrifices
+# corner placement without enough accuracy gain to justify.
+const DEFAULT_CORNER_BIAS: float = 0.3
 
 # How far ahead to project the goalie's shadow when goalie_velocity_x
-# is supplied. ~0.2 s covers typical puck flight time from slot to
-# net (≈ 5 m / 30 m/s = 0.17 s) plus a small reversal-cost buffer.
-# Raise toward 0.3 if bots aren't aiming aggressively into the
-# recovery side; lower toward 0.1 if shots go too wide of the
-# moving goalie.
-const SHADOW_VELOCITY_LOOKAHEAD_S: float = 0.2
+# is supplied. Goalie t_push_speed ≈ 6 m/s; at 0.2 s the shadow can
+# drift 1.2 m, larger than the net half-width — the aim then biases
+# fully into the recovery arc and any underestimate of the goalie's
+# motion (e.g., goalie brakes mid-slide) sends the shot wide of the
+# post. 0.12 s × 6 m/s = 0.72 m of drift, enough to bias toward the
+# recovery side without inverting the aim entirely.
+const SHADOW_VELOCITY_LOOKAHEAD_S: float = 0.12
 
 
 static func compute_open_net_aim(

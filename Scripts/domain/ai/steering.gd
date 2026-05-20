@@ -9,7 +9,7 @@ class_name AISteering
 #   thrust_dir = Vector3(move.x, 0, move.y)
 # i.e. it treats Vector2.y as world Z. Do NOT pre-rotate by facing.
 #
-# Forces (per AI_PLAN.md §10 weights — playtest-tunable):
+# Forces (playtest-tunable weights):
 #   - Attract to anchor              (1.0)
 #   - Repel from teammates           (0.4 over 3 m)
 #   - Repel from opponents           (0.6 over 4 m, inverse-square falloff)

@@ -49,6 +49,7 @@ signal carrier_puck_dropped
 signal remote_carrier_changed(new_carrier_peer_id: int)
 signal ghost_state_received(peer_id: int, is_ghost: bool)
 signal goal_received(scoring_team_id: int, score0: int, score1: int, scorer_name: String, assist1_name: String, assist2_name: String)
+signal puck_out_of_play_received
 signal faceoff_positions_received(positions: Array)
 signal game_reset_received(new_game_id: String)
 signal stats_received(data: Array)
@@ -56,7 +57,7 @@ signal slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int)
 signal slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int, new_team_id: int, new_slot: int, jersey: Color, helmet: Color, pants: Color)
 signal game_started(config: Dictionary)
 signal lobby_roster_synced(roster: Array)
-signal color_vote_changed(peer_id: int, color_id: String)
+signal color_vote_changed(peer_id: int, color_slot: int)
 signal color_votes_synced(votes: Dictionary)
 signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int)
 signal return_to_lobby_received(roster: Array)
@@ -68,6 +69,7 @@ signal bot_slots_synced(bot_slots: Dictionary)
 signal rematch_vote_changed(peer_id: int, vote: bool)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
+signal poke_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int)
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float)
 signal goalie_state_transition_received(team_id: int, new_state: int)
 signal goalie_shot_reaction_received(team_id: int, impact_x: float, impact_y: float, is_elevated: bool)
@@ -87,6 +89,21 @@ signal input_batch_received(peer_id: int, inputs: Array[InputState])
 # broadcast.
 signal spectator_demoted_received(peer_id: int)
 
+# Vote-to-skip goal replay (Rocket-League style). Clients send their vote via
+# request_skip_replay; host counts and broadcasts the running tally back to
+# everyone. Drivers tear down when current == total. Bots never have an ENet
+# connection so they're not in the voter total; spectators are.
+signal skip_replay_request_received(peer_id: int)
+signal skip_replay_vote_updated(current: int, total: int)
+
+# Replay-recorder events (shot, puck_pickup, puck_boards, body_check, etc.).
+# Host records each event into its own ring buffer AND broadcasts it so every
+# client / spectator mirrors the same event timeline. Without this clients'
+# in-memory clip would have only frames (no events), so their goal replays
+# would miss the adaptive clip-start logic, the shot-anchored slow-mo cut, the
+# behind-net cam's lateral offset, and the audio cue dispatch during playback.
+signal replay_event_received(host_ts: float, event: Dictionary)
+
 # Local player edited their identity (name / jersey number / handedness)
 # while a session is live (e.g. from the SideMenu's player card during free
 # play). GameManager listens and pushes the change to the local skater
@@ -94,10 +111,10 @@ signal spectator_demoted_received(peer_id: int)
 signal local_identity_changed(player_name: String, jersey_number: int, is_left_handed: bool)
 
 # Local player picked a different favorite team palette. Fired by
-# apply_preferred_color (which writes PlayerPrefs.preferred_color_id).
+# apply_preferred_color (which writes PlayerPrefs.preferred_color_slot).
 # GameManager re-tints the home team's local actors and, if the new home
 # now collides with the current away, re-rolls the away color too.
-signal local_preferred_color_changed(home_color_id: String, away_color_id: String)
+signal local_preferred_color_changed(home_color_slot: int, away_color_slot: int)
 
 # ── State ─────────────────────────────────────────────────────────────────────
 var is_host: bool = false
@@ -116,15 +133,20 @@ var is_tutorial_mode: bool = false
 # Boot and by return-to-free-play; cleared by reset() and whenever any other
 # activity (host, client, lobby-with-bots, tutorial) is started.
 var is_free_play_mode: bool = false
-var pending_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID
-var pending_away_color_id: String  = TeamColorRegistry.DEFAULT_AWAY_ID
-var pending_color_votes: Dictionary = {}  # peer_id → color_id (host authoritative; all peers mirror)
+var pending_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
+var pending_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT
+var pending_color_votes: Dictionary = {}  # peer_id → color_slot (int; host authoritative; all peers mirror)
 # slot_key (team*3+slot, matching LobbyManager._slot_key) → bool. Empty slots
 # marked true get an AI bot at game start. Host authoritative; clients mirror.
 var pending_bot_slots: Dictionary[int, bool] = {}
+# Parallel to pending_bot_slots: the curated identity (name / number /
+# handedness) chosen for each bot slot at toggle time. Host picks via
+# BotIdentityRegistry and broadcasts so the lobby UI can show the actual
+# bot that will spawn instead of a generic "BOT" placeholder.
+var pending_bot_identities: Dictionary[int, Dictionary] = {}
 # Integer physics-tick counter on the host. Used by AI/perception code as a
-# deterministic salt for per-tick RNG (see docs/specs/AI_PLAN.md §11). Clients
-# do not maintain or consume this — they read estimated_host_time() instead.
+# deterministic salt for per-tick RNG. Clients do not maintain or consume
+# this — they read estimated_host_time() instead.
 var host_tick: int = 0
 var pending_num_periods: int = GameRules.NUM_PERIODS
 var pending_period_duration: float = GameRules.PERIOD_DURATION
@@ -171,12 +193,23 @@ var _last_ws_arrival_time: float = -1.0
 var pending_error: String = ""
 
 var _input_timer: float = 0.0
-var _state_timer: float = 0.0
+# Physics-driven broadcast cadence (see _physics_process). Counts physics ticks
+# between broadcasts. `_last_broadcast_us` tracks wall-clock for telemetry.
+var _state_tick_counter: int = 0
+var _last_broadcast_us: int = 0
 var _ping_timer: float = 0.0
 const _PING_INTERVAL: float = 2.0
 var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
+# Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
+# (240/120 = 2 at the default rate; 240/5 = 48 during dead-puck phases via
+# set_broadcast_rate). Recomputed by `set_broadcast_rate`. The broadcast loop
+# fires from `_physics_process` (not `_process`) so that on a host stall,
+# Godot's physics catch-up naturally produces back-to-back broadcasts with
+# distinct host_timestamps for the client to interpolate through — instead
+# of one big "missing snapshot" gap followed by a snap.
+var _state_tick_divisor: int = Constants.PHYSICS_TICK / Constants.STATE_RATE
 const CONNECT_TIMEOUT: float = 10.0
 
 func _ready() -> void:
@@ -206,52 +239,52 @@ func start_offline() -> void:
 
 
 # Entry point that wraps start_offline with the free-play-specific seeding:
-# home color = the player's saved favorite (or DEFAULT_HOME_ID if none picked
-# yet), away color = a random non-home team from the registry, and the
+# home color = the player's saved favorite (or DEFAULT_HOME_SLOT if none picked
+# yet), away color = a random non-home slot from the registry, and the
 # player is always pinned to team 0 / slot 0 so they spawn as the home team
 # instead of whichever side the state machine's host-registration happens
 # to pick. Used by both Boot (initial launch) and
 # GameManager.return_to_free_play.
 func start_free_play() -> void:
-	pending_home_color_id = _resolve_preferred_home_id()
-	pending_away_color_id = _pick_random_away_id(pending_home_color_id)
+	pending_home_color_slot = _resolve_preferred_home_slot()
+	pending_away_color_slot = _pick_random_away_slot(pending_home_color_slot)
 	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
 	start_offline()
 	is_free_play_mode = true
 
 
-# Update PlayerPrefs.preferred_color_id and broadcast the change. Re-rolls
+# Update PlayerPrefs.preferred_color_slot and broadcast the change. Re-rolls
 # the away color if the new home matches the current away so the player
 # never faces a team wearing the same palette.
-func apply_preferred_color(color_id: String) -> void:
-	PlayerPrefs.preferred_color_id = color_id
+func apply_preferred_color(color_slot: int) -> void:
+	PlayerPrefs.preferred_color_slot = color_slot
 	PlayerPrefs.save()
-	pending_home_color_id = color_id
-	if pending_away_color_id == color_id:
-		pending_away_color_id = _pick_random_away_id(color_id)
-	local_preferred_color_changed.emit(pending_home_color_id, pending_away_color_id)
+	pending_home_color_slot = color_slot
+	if pending_away_color_slot == color_slot:
+		pending_away_color_slot = _pick_random_away_slot(color_slot)
+	local_preferred_color_changed.emit(pending_home_color_slot, pending_away_color_slot)
 
 
-func _resolve_preferred_home_id() -> String:
-	var saved: String = PlayerPrefs.preferred_color_id
-	if saved.is_empty():
-		return TeamColorRegistry.DEFAULT_HOME_ID
-	# Defensive: if the user's saved id was removed from the registry (e.g.
+func _resolve_preferred_home_slot() -> int:
+	var saved: int = PlayerPrefs.preferred_color_slot
+	if saved < 0:
+		return TeamColorRegistry.DEFAULT_HOME_SLOT
+	# Defensive: if the user's saved slot was removed from the registry (e.g.
 	# team list edited between releases), fall back to the default rather
 	# than crashing downstream lookups.
-	if not TeamColorRegistry.get_all_ids().has(saved):
-		return TeamColorRegistry.DEFAULT_HOME_ID
+	if not TeamColorRegistry.get_all_slots().has(saved):
+		return TeamColorRegistry.DEFAULT_HOME_SLOT
 	return saved
 
 
-func _pick_random_away_id(home_id: String) -> String:
-	var ids: Array[String] = TeamColorRegistry.get_all_ids()
-	var candidates: Array[String] = []
-	for id: String in ids:
-		if id != home_id:
-			candidates.append(id)
+func _pick_random_away_slot(home_slot: int) -> int:
+	var slots: Array[int] = TeamColorRegistry.get_all_slots()
+	var candidates: Array[int] = []
+	for slot: int in slots:
+		if slot != home_slot:
+			candidates.append(slot)
 	if candidates.is_empty():
-		return TeamColorRegistry.DEFAULT_AWAY_ID
+		return TeamColorRegistry.DEFAULT_AWAY_SLOT
 	return candidates[randi() % candidates.size()]
 
 
@@ -371,8 +404,10 @@ func prepare_for_new_game() -> void:
 	_peer_loss_rates.clear()
 	_peer_loss_timer = 0.0
 	_input_timer = 0.0
-	_state_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
+	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
+	_state_tick_counter = 0
+	_last_broadcast_us = 0
 	_last_ws_seq_received = -1
 	_ws_drop_window = 0
 	_ws_recv_window = 0
@@ -398,13 +433,16 @@ func reset() -> void:
 	pending_lobby_roster = []
 	pending_join_slot = {}
 	pending_join_players = []
-	pending_home_color_id = TeamColorRegistry.DEFAULT_HOME_ID
-	pending_away_color_id = TeamColorRegistry.DEFAULT_AWAY_ID
+	pending_home_color_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
+	pending_away_color_slot = TeamColorRegistry.DEFAULT_AWAY_SLOT
 	pending_color_votes = {}
 	pending_bot_slots.clear()
+	pending_bot_identities.clear()
 	_input_timer = 0.0
-	_state_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
+	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
+	_state_tick_counter = 0
+	_last_broadcast_us = 0
 	_connect_timer = -1.0
 	_clock_sync = null
 	_session_start_ms = 0
@@ -443,6 +481,20 @@ func _physics_process(_delta: float) -> void:
 	# transfers (Phase 1 has no host transfer support anyway).
 	if is_host:
 		host_tick += 1
+		# World-state broadcast cadence: every Nth physics tick (N=6 at 40Hz).
+		# Lives in _physics_process — not _process — so that Godot's physics
+		# catch-up after a main-thread stall naturally fires multiple
+		# broadcasts in rapid succession, each carrying the snapshot at that
+		# physics tick. Without this, a 60ms stall produces ONE broadcast on
+		# recovery and the client interpolator runs out of bracket.
+		_state_tick_counter += 1
+		if _state_tick_counter >= _state_tick_divisor:
+			_state_tick_counter = 0
+			var now_us: int = Time.get_ticks_usec()
+			if _last_broadcast_us != 0:
+				NetworkTelemetry.record_broadcast_interval_us(now_us - _last_broadcast_us)
+			_last_broadcast_us = now_us
+			_broadcast_state()
 
 func _process(delta: float) -> void:
 	# Cap delta to avoid timer bursting on the first frame after an OS freeze
@@ -496,10 +548,9 @@ func _process(delta: float) -> void:
 			_ws_loss_window_timer = 0.0
 
 	if is_host:
-		_state_timer += capped_delta
-		if _state_timer >= state_delta:
-			_state_timer -= state_delta
-			_broadcast_state()
+		# Broadcast cadence lives in _physics_process so it stays well-paced
+		# across host main-thread stalls. The 1Hz peer-loss aggregation stays
+		# render-frame-paced — it's a slow per-second sample, not latency-critical.
 		_peer_loss_timer += capped_delta
 		if _peer_loss_timer >= 1.0:
 			for pid: int in _peer_echo_recv_window:
@@ -513,6 +564,13 @@ func _process(delta: float) -> void:
 
 func set_broadcast_rate(hz: float) -> void:
 	state_delta = 1.0 / maxf(hz, 1.0)
+	# `_physics_process` fires the broadcast every Nth physics tick. Round to
+	# the nearest integer so any hz that doesn't divide PHYSICS_TICK evenly
+	# (5, 10, 20, 30, 40, 48, 60, 80, 120) still produces the closest cadence.
+	# At 120Hz → 2 ticks; at 5Hz (dead-puck phase) → 48 ticks.
+	_state_tick_divisor = maxi(int(round(float(Constants.PHYSICS_TICK) / maxf(hz, 1.0))), 1)
+	# Reset the counter so the new cadence starts cleanly from the next tick.
+	_state_tick_counter = 0
 
 func _broadcast_state() -> void:
 	if not _world_state_provider.is_valid():
@@ -636,6 +694,19 @@ func receive_pickup_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms:
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	pickup_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms)
 
+func send_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	NetworkSimManager.send(
+		func(ts: float, rtt: float, idms: float, cpid: int) -> void:
+			receive_poke_claim.rpc_id(1, ts, rtt, idms, cpid),
+		[host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id], true)
+
+@rpc("any_peer", "reliable")
+func receive_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not is_host:
+		return
+	var peer_id: int = multiplayer.get_remote_sender_id()
+	poke_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id)
+
 func send_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
 	NetworkSimManager.send(
 		func(vpid: int, ts: float, rtt: float) -> void:
@@ -688,6 +759,56 @@ func set_replay_clock(t: float) -> void:
 
 func is_replay_mode() -> bool:
 	return _replay_mode
+
+
+# Client → host: register one vote-to-skip for the current goal replay.
+# Offline / host calls register the vote locally; no RPC needed there.
+func send_skip_replay_request() -> void:
+	if is_host:
+		return
+	receive_skip_replay_request.rpc_id(1)
+
+
+@rpc("any_peer", "reliable")
+func receive_skip_replay_request() -> void:
+	if not is_host:
+		return
+	skip_replay_request_received.emit(multiplayer.get_remote_sender_id())
+
+
+# Host → all clients: latest unanimous-skip tally. Sent on every accepted vote
+# so the HUD prompt can show "(2/3)" → "(3/3)" live; clients also use the
+# final (current == total) update as their cue to stop the local driver.
+func notify_skip_replay_vote_to_all(current: int, total: int) -> void:
+	if not is_host:
+		return
+	for peer_id in connected_peer_ids():
+		notify_skip_replay_vote.rpc_id(peer_id, current, total)
+
+
+@rpc("authority", "reliable")
+func notify_skip_replay_vote(current: int, total: int) -> void:
+	skip_replay_vote_updated.emit(current, total)
+
+
+# Mirror a recorded replay event to every connected peer so client / spectator
+# recorders carry the same event timeline as the host (shot release, puck
+# pickups, body checks, audio cues). Called once per event from
+# GameManager._record_replay_audio_event right after the host's local
+# record_event(). Reliable because event timestamps drive replay-trim logic
+# and we'd rather a dropped event delay slightly than be lost.
+func notify_replay_event_to_all(host_ts: float, event: Dictionary) -> void:
+	if not is_host:
+		return
+	for peer_id in connected_peer_ids():
+		notify_replay_event.rpc_id(peer_id, host_ts, event)
+
+
+@rpc("authority", "reliable")
+func notify_replay_event(host_ts: float, event: Dictionary) -> void:
+	if is_host:
+		return  # authority RPCs are delivered only to remote peers; defense-in-depth
+	replay_event_received.emit(host_ts, event)
 
 
 func estimated_host_time() -> float:
@@ -886,6 +1007,14 @@ func notify_goal(scoring_team_id: int, score0: int, score1: int, scorer_name: St
 			goal_received.emit(tid, s0, s1, sn, a1, a2),
 		[scoring_team_id, score0, score1, scorer_name, assist1_name, assist2_name], true)
 
+func notify_puck_out_of_play_to_all() -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_puck_out_of_play.rpc_id(peer_id)
+
+@rpc("authority", "reliable")
+func notify_puck_out_of_play() -> void:
+	NetworkSimManager.send(func() -> void: puck_out_of_play_received.emit(), [], true)
+
 func send_faceoff_positions(positions: Array) -> void:
 	for peer_id in connected_peer_ids():
 		notify_faceoff_positions.rpc_id(peer_id, positions)
@@ -992,50 +1121,50 @@ signal join_in_progress(config: Dictionary)
 @rpc("authority", "reliable")
 func notify_join_in_progress(p_num_periods: int, p_period_duration: float,
 		p_ot_enabled: bool, p_ot_duration: float,
-		p_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID,
-		p_away_color_id: String = TeamColorRegistry.DEFAULT_AWAY_ID,
+		p_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
+		p_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
 		p_game_id: String = "") -> void:
-	pending_home_color_id = p_home_color_id
-	pending_away_color_id = p_away_color_id
+	pending_home_color_slot = p_home_color_slot
+	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
 	join_in_progress.emit({
 		"num_periods": p_num_periods,
 		"period_duration": p_period_duration,
 		"ot_enabled": p_ot_enabled,
 		"ot_duration": p_ot_duration,
-		"home_color_id": p_home_color_id,
-		"away_color_id": p_away_color_id,
+		"home_color_slot": p_home_color_slot,
+		"away_color_slot": p_away_color_slot,
 		"rule_set": p_rule_set,
 		"game_id": p_game_id,
 	})
 
 func send_join_in_progress(peer_id: int, config: Dictionary) -> void:
-	var hid: String = config.get("home_color_id", pending_home_color_id)
-	var aid: String = config.get("away_color_id", pending_away_color_id)
+	var hslot: int = int(config.get("home_color_slot", pending_home_color_slot))
+	var aslot: int = int(config.get("away_color_slot", pending_away_color_slot))
 	var rs: int = config.get("rule_set", pending_rule_set)
 	var gid: String = config.get("game_id", "")
 	notify_join_in_progress.rpc_id(peer_id,
 		config.num_periods, config.period_duration,
-		config.ot_enabled, config.ot_duration, hid, aid, rs, gid)
+		config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid)
 
 @rpc("authority", "reliable")
 func notify_game_start(p_num_periods: int, p_period_duration: float,
 		p_ot_enabled: bool, p_ot_duration: float,
-		p_home_color_id: String = TeamColorRegistry.DEFAULT_HOME_ID,
-		p_away_color_id: String = TeamColorRegistry.DEFAULT_AWAY_ID,
+		p_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
+		p_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
 		p_game_id: String = "") -> void:
-	pending_home_color_id = p_home_color_id
-	pending_away_color_id = p_away_color_id
+	pending_home_color_slot = p_home_color_slot
+	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
 	game_started.emit({
 		"num_periods": p_num_periods,
 		"period_duration": p_period_duration,
 		"ot_enabled": p_ot_enabled,
 		"ot_duration": p_ot_duration,
-		"home_color_id": p_home_color_id,
-		"away_color_id": p_away_color_id,
+		"home_color_slot": p_home_color_slot,
+		"away_color_slot": p_away_color_slot,
 		"rule_set": p_rule_set,
 		"game_id": p_game_id,
 	})
@@ -1046,51 +1175,51 @@ func sync_lobby_roster(roster: Array) -> void:
 	lobby_roster_synced.emit(roster)
 
 func send_game_start(config: Dictionary) -> void:
-	var hid: String = config.get("home_color_id", TeamColorRegistry.DEFAULT_HOME_ID)
-	var aid: String = config.get("away_color_id", TeamColorRegistry.DEFAULT_AWAY_ID)
+	var hslot: int = int(config.get("home_color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT))
+	var aslot: int = int(config.get("away_color_slot", TeamColorRegistry.DEFAULT_AWAY_SLOT))
 	var rs: int = config.get("rule_set", GameRules.DEFAULT_RULE_SET)
 	var gid: String = config.get("game_id", "")
-	pending_home_color_id = hid
-	pending_away_color_id = aid
+	pending_home_color_slot = hslot
+	pending_away_color_slot = aslot
 	pending_rule_set = rs
 	for peer_id: int in connected_peer_ids():
 		notify_game_start.rpc_id(peer_id,
 			config.num_periods, config.period_duration,
-			config.ot_enabled, config.ot_duration, hid, aid, rs, gid)
+			config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid)
 	game_started.emit(config)
 
 func send_lobby_roster(peer_id: int, roster: Array) -> void:
 	sync_lobby_roster.rpc_id(peer_id, roster)
 
 @rpc("any_peer", "reliable")
-func request_color_vote(color_id: String) -> void:
+func request_color_vote(color_slot: int) -> void:
 	# Host receives a peer's vote, mirrors it locally, then fans out to all
 	# peers (including the sender) so everyone holds the same vote map.
 	var peer_id: int = multiplayer.get_remote_sender_id()
-	pending_color_votes[peer_id] = color_id
+	pending_color_votes[peer_id] = color_slot
 	for remote_id: int in connected_peer_ids():
-		notify_color_vote.rpc_id(remote_id, peer_id, color_id)
-	color_vote_changed.emit(peer_id, color_id)
+		notify_color_vote.rpc_id(remote_id, peer_id, color_slot)
+	color_vote_changed.emit(peer_id, color_slot)
 
 @rpc("authority", "reliable")
-func notify_color_vote(peer_id: int, color_id: String) -> void:
-	pending_color_votes[peer_id] = color_id
-	color_vote_changed.emit(peer_id, color_id)
+func notify_color_vote(peer_id: int, color_slot: int) -> void:
+	pending_color_votes[peer_id] = color_slot
+	color_vote_changed.emit(peer_id, color_slot)
 
 @rpc("authority", "reliable")
 func sync_color_votes(votes: Dictionary) -> void:
 	pending_color_votes = votes.duplicate()
 	color_votes_synced.emit(pending_color_votes)
 
-func send_color_vote(color_id: String) -> void:
+func send_color_vote(color_slot: int) -> void:
 	if is_host:
 		var pid: int = local_peer_id()
-		pending_color_votes[pid] = color_id
+		pending_color_votes[pid] = color_slot
 		for remote_id: int in connected_peer_ids():
-			notify_color_vote.rpc_id(remote_id, pid, color_id)
-		color_vote_changed.emit(pid, color_id)
+			notify_color_vote.rpc_id(remote_id, pid, color_slot)
+		color_vote_changed.emit(pid, color_slot)
 	else:
-		request_color_vote.rpc_id(1, color_id)
+		request_color_vote.rpc_id(1, color_slot)
 
 func send_color_votes_to(peer_id: int, votes: Dictionary) -> void:
 	sync_color_votes.rpc_id(peer_id, votes)
@@ -1101,19 +1230,24 @@ func send_color_votes_to(peer_id: int, votes: Dictionary) -> void:
 # can let clients request toggles (request_bot_slot) without redesigning.
 
 @rpc("authority", "reliable")
-func notify_bot_slot(slot_key: int, is_bot: bool) -> void:
+func notify_bot_slot(slot_key: int, is_bot: bool, identity: Dictionary = {}) -> void:
 	if is_bot:
 		pending_bot_slots[slot_key] = true
+		pending_bot_identities[slot_key] = identity
 	else:
 		pending_bot_slots.erase(slot_key)
+		pending_bot_identities.erase(slot_key)
 	bot_slot_changed.emit(slot_key, is_bot)
 
 @rpc("authority", "reliable")
-func sync_bot_slots(bot_slots: Dictionary) -> void:
+func sync_bot_slots(bot_slots: Dictionary, identities: Dictionary = {}) -> void:
 	pending_bot_slots = {}
+	pending_bot_identities = {}
 	for k: int in bot_slots:
 		if bot_slots[k]:
 			pending_bot_slots[k] = true
+			if identities.has(k):
+				pending_bot_identities[k] = identities[k]
 	bot_slots_synced.emit(pending_bot_slots)
 
 func send_bot_slot(slot_key: int, is_bot: bool) -> void:
@@ -1122,16 +1256,24 @@ func send_bot_slot(slot_key: int, is_bot: bool) -> void:
 	# is_host so this branch shouldn't fire under normal flow.
 	if not is_host:
 		return
+	var identity: Dictionary = {}
 	if is_bot:
 		pending_bot_slots[slot_key] = true
+		# Pick a fresh identity that isn't already in use in another bot slot.
+		var used_names: Array[String] = []
+		for k: int in pending_bot_identities:
+			used_names.append(pending_bot_identities[k].get("name", ""))
+		identity = BotIdentityRegistry.pick_for_slot(slot_key, used_names)
+		pending_bot_identities[slot_key] = identity
 	else:
 		pending_bot_slots.erase(slot_key)
+		pending_bot_identities.erase(slot_key)
 	for remote_id: int in connected_peer_ids():
-		notify_bot_slot.rpc_id(remote_id, slot_key, is_bot)
+		notify_bot_slot.rpc_id(remote_id, slot_key, is_bot, identity)
 	bot_slot_changed.emit(slot_key, is_bot)
 
-func send_bot_slots_to(peer_id: int, bot_slots: Dictionary) -> void:
-	sync_bot_slots.rpc_id(peer_id, bot_slots)
+func send_bot_slots_to(peer_id: int, bot_slots: Dictionary, identities: Dictionary = {}) -> void:
+	sync_bot_slots.rpc_id(peer_id, bot_slots, identities)
 
 @rpc("authority", "reliable")
 func notify_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool,
@@ -1180,18 +1322,32 @@ func get_target_interpolation_delay() -> float:
 	var broadcast_interval: float = 1.0 / Constants.STATE_RATE
 	# Minimum is RTT/2 + one full broadcast interval so render_time always has
 	# a buffered state ahead of it between packet arrivals. Jitter margin on top.
-	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 1.5
+	# Margin multiplier 1.0 (was 1.5): the 1.5x was sized for the old loose
+	# render-frame-driven broadcast cadence, which had baked-in 16.7ms jitter
+	# from alternating render frames at 60fps × 25ms broadcast intervals. The
+	# physics-driven broadcast loop produces a clean 1/STATE_RATE cadence, so
+	# the cushion can come down without falling into extrapolation. The
+	# adaptive +10ms/packet up-clamp still protects against sustained jitter.
+	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 1.0
 	return clampf(target, maxf(rtt_half + broadcast_interval, 0.016), 0.200)
 
 func adapt_interpolation_delay(current: float) -> float:
 	var target: float = get_target_interpolation_delay()
 	var change: float = lerpf(current, target, 0.15) - current
-	# Up-clamp raised to 10 ms/packet (was 5 ms): a sudden RTT spike can push the
-	# target 150+ ms above current; at 5 ms/packet that takes ~750 ms to converge,
-	# during which extrapolation fires every 50 ms on all remote skaters (visible
-	# micro-stutters). 10 ms/packet halves the recovery window with no oscillation
-	# risk — the down-clamp stays at 1 ms/packet to avoid chasing transient jitter.
-	return current + clampf(change, -0.001, 0.010)
+	# Asymmetric clamp: react fast to sustained jitter, relax gently from one-offs.
+	# Effective recovery rate = per-packet × broadcast rate. At the current 120Hz:
+	#   +10ms/packet up: 1200ms/sec, catches a 150ms sustained RTT spike in ~125ms.
+	#     Without this aggressive up-rate, extrapolation fires every ~50ms on
+	#     all remote skaters during the catch-up window (visible micro-stutter).
+	#   -1.5ms/packet down: 180ms/sec, recovers a 60ms buffer over-inflation in
+	#     ~330ms. The two earlier-shipped tunings here were sized for different
+	#     broadcast rates and don't carry forward: the original -1ms/packet was
+	#     40ms/sec at 40Hz (slow — buffer stayed inflated ~10s); the interim
+	#     -3ms/packet became 360ms/sec at 120Hz (too aggressive, risks
+	#     undershoot if jitter returns inside the window). -1.5ms/packet at
+	#     120Hz lands at 180ms/sec — slightly faster than the original 40Hz
+	#     target (120ms/sec) and well clear of industry norms (~80-150 ms/sec).
+	return current + clampf(change, -0.0015, 0.010)
 
 func get_peer_loss_rate(peer_id: int = -1) -> float:
 	if is_host:

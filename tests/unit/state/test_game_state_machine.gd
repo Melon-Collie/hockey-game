@@ -13,30 +13,35 @@ func before_each() -> void:
 func test_initial_phase_is_playing() -> void:
 	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
 
-func test_goal_transitions_to_goal_scored() -> void:
+func test_goal_transitions_to_goal_celebration() -> void:
 	var scorer: int = sm.on_goal_scored(1)
 	assert_eq(scorer, 0)
-	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_SCORED)
+	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_CELEBRATION,
+			"goals first enter the celebration beat — replay phase comes after")
 	assert_eq(sm.scores[0], 1)
 	assert_eq(sm.scores[1], 0)
 
 func test_goal_ignored_during_non_playing_phase() -> void:
-	sm.on_goal_scored(1)   # → GOAL_SCORED, score 1-0
+	sm.on_goal_scored(1)   # → GOAL_CELEBRATION, score 1-0
 	var result: int = sm.on_goal_scored(1)
-	assert_eq(result, -1, "second goal during GOAL_SCORED should be ignored")
+	assert_eq(result, -1, "second goal during GOAL_CELEBRATION should be ignored")
 	assert_eq(sm.scores[0], 1, "score unchanged")
 
-func test_goal_pause_expires_to_faceoff_prep() -> void:
+func test_goal_phases_expire_to_faceoff_prep() -> void:
 	sm.on_goal_scored(1)
-	var changed: bool = sm.tick(GameRules.GOAL_PAUSE_DURATION + 0.01)
-	assert_true(changed)
+	# GOAL_CELEBRATION → GOAL_SCORED → FACEOFF_PREP (two phase transitions)
+	var changed_to_replay: bool = sm.tick(GameRules.GOAL_CELEBRATION_DURATION + 0.01)
+	assert_true(changed_to_replay)
+	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_SCORED)
+	var changed_to_faceoff: bool = sm.tick(GameRules.GOAL_PAUSE_DURATION + 0.01)
+	assert_true(changed_to_faceoff)
 	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF_PREP)
 
 func test_partial_tick_does_not_transition() -> void:
 	sm.on_goal_scored(1)
-	var changed: bool = sm.tick(GameRules.GOAL_PAUSE_DURATION / 2)
+	var changed: bool = sm.tick(GameRules.GOAL_CELEBRATION_DURATION / 2)
 	assert_false(changed)
-	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_SCORED)
+	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_CELEBRATION)
 
 func test_faceoff_prep_expires_to_faceoff() -> void:
 	sm.begin_faceoff_prep()
@@ -62,10 +67,11 @@ func test_faceoff_timeout_resumes_playing() -> void:
 	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
 
 func test_full_cycle_playing_to_playing() -> void:
-	sm.on_goal_scored(1)
-	sm.tick(GameRules.GOAL_PAUSE_DURATION + 0.01)         # → FACEOFF_PREP
-	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)       # → FACEOFF
-	sm.on_faceoff_puck_picked_up()                         # → PLAYING
+	sm.on_goal_scored(1)                                    # → GOAL_CELEBRATION
+	sm.tick(GameRules.GOAL_CELEBRATION_DURATION + 0.01)    # → GOAL_SCORED
+	sm.tick(GameRules.GOAL_PAUSE_DURATION + 0.01)          # → FACEOFF_PREP
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)        # → FACEOFF
+	sm.on_faceoff_puck_picked_up()                          # → PLAYING
 	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
 
 func test_tick_during_playing_returns_false() -> void:
@@ -74,8 +80,17 @@ func test_tick_during_playing_returns_false() -> void:
 
 # ── Movement locking ─────────────────────────────────────────────────────────
 
-func test_movement_locked_during_goal_scored() -> void:
+func test_movement_unlocked_during_goal_celebration() -> void:
+	# The post-goal celebration beat keeps movement live so players can react;
+	# only the GOAL_SCORED replay phase that follows is movement-locked.
 	sm.on_goal_scored(1)
+	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_CELEBRATION)
+	assert_false(sm.is_movement_locked(), "celebration beat allows movement")
+
+func test_movement_locked_during_goal_scored_replay() -> void:
+	sm.on_goal_scored(1)                                  # → GOAL_CELEBRATION
+	sm.tick(GameRules.GOAL_CELEBRATION_DURATION + 0.01)  # → GOAL_SCORED
+	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_SCORED)
 	assert_true(sm.is_movement_locked())
 
 func test_movement_unlocked_during_faceoff() -> void:
@@ -148,7 +163,7 @@ func test_icing_not_cleared_by_offending_team_pickup() -> void:
 
 func test_icing_not_triggered_during_dead_puck_phase() -> void:
 	sm.rule_set = GameRules.RuleSet.NHL
-	sm.on_goal_scored(1)  # → GOAL_SCORED
+	sm.on_goal_scored(1)  # → GOAL_CELEBRATION (still not PLAYING — icing path returns early)
 	sm.notify_puck_carried(0, 5.0)
 	sm.check_icing_for_loose_puck(-30.0)
 	assert_eq(sm.icing_team_id, -1, "icing only detects during PLAYING")
@@ -178,9 +193,9 @@ func test_icing_waved_off_when_icing_team_closer() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)   # peer 1 → team 0
 	sm.register_remote_assigned_player(100, 0, 1) # peer 100 → team 1
 	sm.notify_puck_carried(0, 5.0)
-	# Dot at z = -22.1 (ICING_FACEOFF_DOT_Z for team 0 icing toward -Z)
-	# Peer 1 (team 0, icing team) at z = -25 → 2.9 from dot
-	# Peer 100 (team 1, defending) at z = 0 → 22.1 from dot
+	# Dot at z = -ICING_FACEOFF_DOT_Z (for team 0 icing toward -Z).
+	# Peer 1 (team 0, icing team) at z = -25 → closer to dot
+	# Peer 100 (team 1, defending) at z = 0 → farther from dot
 	sm.check_icing_for_loose_puck(-30.0, {1: Vector3(0, 1, -25.0), 100: Vector3(0, 1, 0.0)})
 	assert_eq(sm.icing_team_id, -1, "icing team closer → waved off")
 
@@ -189,9 +204,9 @@ func test_icing_confirmed_when_defending_team_closer() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)
 	sm.register_remote_assigned_player(100, 0, 1)
 	sm.notify_puck_carried(0, 5.0)
-	# Dot at z = -22.1 (ICING_FACEOFF_DOT_Z for team 0 icing toward -Z)
-	# Peer 1 (team 0, icing team) at z = 5 → 27.1 from dot
-	# Peer 100 (team 1, defending) at z = -24 → 1.9 from dot
+	# Dot at z = -ICING_FACEOFF_DOT_Z (for team 0 icing toward -Z).
+	# Peer 1 at z = 5 is on the wrong side of centre; peer 100 at z = -24 is
+	# right by the dot.
 	sm.check_icing_for_loose_puck(-30.0, {1: Vector3(0, 1, 5.0), 100: Vector3(0, 1, -24.0)})
 	assert_eq(sm.icing_team_id, 0, "defending team closer → icing confirmed")
 
@@ -200,9 +215,8 @@ func test_icing_confirmed_when_defending_team_slightly_closer() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)
 	sm.register_remote_assigned_player(100, 0, 1)
 	sm.notify_puck_carried(0, 5.0)
-	# Dot at z = -22.1 (ICING_FACEOFF_DOT_Z for team 0 icing toward -Z)
-	# Peer 1 (team 0, icing) at z = 0 → 22.1 from dot
-	# Peer 100 (team 1, defending) at z = -20 → 2.1 from dot → closer
+	# Dot at z = -ICING_FACEOFF_DOT_Z (for team 0 icing toward -Z).
+	# Peer 100 at z = -20 sits a hair past the dot; peer 1 at centre is far.
 	sm.check_icing_for_loose_puck(-30.0, {1: Vector3(0, 1, 0.0), 100: Vector3(0, 1, -20.0)})
 	assert_eq(sm.icing_team_id, 0, "defending team slightly closer → icing confirmed")
 
@@ -212,9 +226,8 @@ func test_icing_waved_off_team1_symmetric() -> void:
 	sm.register_remote_assigned_player(100, 0, 1) # team 1
 	sm.register_remote_assigned_player(200, 1, 0) # team 0
 	sm.notify_puck_carried(1, -5.0)
-	# Dot at z = +22.1 (ICING_FACEOFF_DOT_Z for team 1 icing toward +Z)
-	# Peer 100 (team 1, icing team) at z = 25 → 2.9 from dot
-	# Peer 1 (team 0, defending) at z = 0 → 22.1 from dot
+	# Dot at z = +ICING_FACEOFF_DOT_Z (for team 1 icing toward +Z). Peer 100 is
+	# close to the dot; peer 1 is back at centre.
 	sm.check_icing_for_loose_puck(30.0, {1: Vector3(0, 1, 0.0), 100: Vector3(0, 1, 25.0)})
 	assert_eq(sm.icing_team_id, -1, "team 1 icing, waved off — attacker closer")
 
@@ -259,7 +272,7 @@ func test_off_mode_disables_offside_ghost() -> void:
 
 func test_no_ghosts_during_dead_puck_phase() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)
-	sm.on_goal_scored(1)  # → GOAL_SCORED
+	sm.on_goal_scored(1)  # → GOAL_CELEBRATION (also not PLAYING — ghosts cleared)
 	var ghosts: Dictionary = sm.compute_ghost_state(
 		{1: Vector3(0, 1, -10)},    # would be offside during play
 		-1, Vector3(0, 0, 0))
@@ -318,7 +331,9 @@ func test_apply_remote_goal_sets_phase_and_scores() -> void:
 	sm.apply_remote_goal(0, 1, 0)
 	assert_eq(sm.scores[0], 1)
 	assert_eq(sm.last_scoring_team_id, 0)
-	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_SCORED)
+	# Clients enter GOAL_CELEBRATION on the goal RPC; host's WS will later
+	# carry them on to GOAL_SCORED when the replay should start.
+	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_CELEBRATION)
 
 # ── Faceoff positions ───────────────────────────────────────────────────────
 
@@ -331,6 +346,36 @@ func test_faceoff_positions_per_player_slot() -> void:
 			PlayerRules.faceoff_position(host_assignment.team_id, host_assignment.team_slot))
 	assert_eq(positions[100],
 			PlayerRules.faceoff_position(peer_assignment.team_id, peer_assignment.team_slot))
+
+func test_active_faceoff_dot_defaults_to_center() -> void:
+	assert_eq(sm.active_faceoff_dot, GameRules.CENTER_ICE_DOT)
+
+func test_begin_faceoff_prep_stores_dot() -> void:
+	var dot := Vector2(6.5, -22.1)
+	sm.begin_faceoff_prep(dot)
+	assert_eq(sm.active_faceoff_dot, dot)
+
+func test_advance_post_goal_resets_dot_to_center() -> void:
+	sm.active_faceoff_dot = Vector2(6.5, 22.1)
+	sm.on_goal_scored(1)                                  # → GOAL_CELEBRATION
+	sm.tick(GameRules.GOAL_CELEBRATION_DURATION + 0.01)  # → GOAL_SCORED
+	sm.advance_post_goal()                                # → FACEOFF_PREP
+	assert_eq(sm.active_faceoff_dot, GameRules.CENTER_ICE_DOT)
+
+func test_period_advance_resets_dot_to_center() -> void:
+	sm.active_faceoff_dot = Vector2(-6.5, 22.1)
+	sm.tick(GameRules.PERIOD_DURATION + 0.01)        # → END_OF_PERIOD
+	sm.tick(GameRules.END_OF_PERIOD_PAUSE + 0.01)    # → FACEOFF_PREP
+	assert_eq(sm.active_faceoff_dot, GameRules.CENTER_ICE_DOT)
+
+func test_get_faceoff_positions_uses_active_dot() -> void:
+	sm.register_host(1)
+	var dot := Vector2(6.5, 22.1)
+	sm.begin_faceoff_prep(dot)
+	var positions: Dictionary = sm.get_faceoff_positions()
+	var slot: Dictionary = sm.players[1]
+	assert_eq(positions[1],
+			PlayerRules.faceoff_position(slot.team_id, slot.team_slot, dot))
 
 # ── Period / clock ───────────────────────────────────────────────────────────
 
@@ -386,7 +431,11 @@ func test_reset_all_zeros_scores_and_resets_period() -> void:
 	assert_eq(sm.time_remaining, GameRules.PERIOD_DURATION)
 
 func test_clock_does_not_tick_during_dead_puck_phase() -> void:
-	sm.on_goal_scored(1)  # → GOAL_SCORED
+	sm.on_goal_scored(1)  # → GOAL_CELEBRATION
 	var time_before: float = sm.time_remaining
-	sm.tick(GameRules.GOAL_PAUSE_DURATION + 0.01)  # advances to FACEOFF_PREP
-	assert_eq(sm.time_remaining, time_before, "clock must not tick during GOAL_SCORED")
+	# Tick through GOAL_CELEBRATION (one transition per tick — leftover delta is
+	# discarded by _set_phase, so we need separate ticks per phase to drain
+	# the goal-pause window).
+	sm.tick(GameRules.GOAL_CELEBRATION_DURATION + 0.01)  # → GOAL_SCORED
+	sm.tick(GameRules.GOAL_PAUSE_DURATION + 0.01)        # → FACEOFF_PREP
+	assert_eq(sm.time_remaining, time_before, "clock must not tick during dead-puck phases")

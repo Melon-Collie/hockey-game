@@ -34,11 +34,11 @@ func _make_snapshot(skaters: Array, carrier_pid: int = -1, puck_z: float = 0.0,
 	return snap
 
 
-func _resolver(skaters: Array) -> Callable:
+func _resolver(skaters: Array) -> Dictionary:
 	var team_map: Dictionary = {}
 	for entry: Array in skaters:
 		team_map[entry[0]] = entry[1]
-	return func(pid: int) -> int: return int(team_map.get(pid, -1))
+	return team_map
 
 
 # ─── Slot lists ─────────────────────────────────────────────────────────────

@@ -14,6 +14,11 @@ var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
 
+# Scratch InputState reused every FACEOFF_PREP tick so we don't allocate per
+# frame. All flags default to false; we only overwrite mouse_world_pos / time
+# / delta. Lifetime is the controller — bots aren't re-allocated mid-match.
+var _faceoff_input: InputState = InputState.new()
+
 # Debug: floating label above each bot showing the bot's per-tick
 # decision breakdown. Refreshes only when the rendered text actually
 # changes (commit flip, winner flip, score moves enough to re-format)
@@ -40,10 +45,10 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 # peer_id and team_id but not the controller — so the registry calls this
 # after spawn to wire the agent. Separate from setup() because setup() is
 # called by ActorSpawner before the registry knows which slot it belongs to.
-func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
+func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
 		is_left_handed: bool) -> void:
 	if _agent != null:
-		_agent.setup(peer_id, team_id, brain, resolver, is_left_handed)
+		_agent.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
 	if SHOW_DEBUG_LABEL and skater != null:
 		_debug_label = Label3D.new()
 		_debug_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -67,6 +72,22 @@ func _physics_process(delta: float) -> void:
 		# Mirror LocalController/RemoteController: zero velocity during dead
 		# phases so residual inertia from before the lock can't drift the bot.
 		skater.velocity = Vector3.ZERO
+		# FACEOFF_PREP: keep the stick alive so the bot looks alive during
+		# the countdown and naturally contests the drop. Aim at the puck —
+		# centers clash over the dot, wings/D reach toward it. We don't run
+		# _agent.tick here; the agent's full state machine isn't designed
+		# for the locked phase and could drag in stale carrier / chase intent.
+		if _game_state.allows_blade_aim_during_lock():
+			_faceoff_input.delta = delta
+			_faceoff_input.host_timestamp = NetworkManager.estimated_host_time()
+			_faceoff_input.mouse_world_pos = puck.global_position
+			apply_blade_aim_only(_faceoff_input, delta)
+		return
+	if _game_state.is_in_goal_celebration():
+		# Celebration is movement-allowed live gameplay (humans can react),
+		# but bots shouldn't be playing — they'd try to chase a pickup-locked
+		# puck and bunch around the net. Skip agent input; physics friction
+		# coasts whatever velocity the bot had at the goal moment to a stop.
 		return
 	if _game_state.is_input_blocked():
 		return

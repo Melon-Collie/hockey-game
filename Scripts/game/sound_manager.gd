@@ -18,6 +18,7 @@ enum Sound {
 	PUCK_STRIP,
 	PERIOD_BUZZER,
 	BODY_CHECK,
+	FACEOFF_WHISTLE,
 }
 
 const _SOUND_PATHS: Dictionary = {
@@ -38,6 +39,7 @@ const _SOUND_PATHS: Dictionary = {
 	Sound.PUCK_STRIP:       "res://Sounds/puck_strip.wav",
 	Sound.PERIOD_BUZZER:    "res://Sounds/period_buzzer.wav",
 	Sound.BODY_CHECK:       "res://Sounds/body_check.ogg",
+	Sound.FACEOFF_WHISTLE:  "res://Sounds/faceoff_whistle.ogg",
 }
 
 const _UI_POOL_SIZE: int = 4
@@ -52,12 +54,16 @@ var _pool_3d: Array[AudioStreamPlayer3D] = []    # SFX bus — all world sounds
 
 func _ready() -> void:
 	_ensure_buses()
+	# PlayerPrefs._ready() runs first (autoload order), so saved volumes were
+	# applied against buses that didn't exist yet. Re-apply now that SFX / UI /
+	# Crowd exist so startup volumes match the slider state.
+	PlayerPrefs.apply_audio()
 	_load_streams()
 	_build_pools()
 
 
 func _ensure_buses() -> void:
-	for bus_name: String in ["SFX", "UI"]:
+	for bus_name: String in ["SFX", "UI", "Crowd"]:
 		if AudioServer.get_bus_index(bus_name) == -1:
 			var idx: int = AudioServer.bus_count
 			AudioServer.add_bus(idx)

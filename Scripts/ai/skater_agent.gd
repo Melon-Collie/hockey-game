@@ -21,9 +21,9 @@ var _prev_mouse_world_pos: Vector3 = Vector3.ZERO
 var _has_prev_mouse: bool = false
 
 
-func setup(peer_id: int, team_id: int, brain: TeamBrain, resolver: Callable,
+func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
 		is_left_handed: bool) -> void:
-	_sm.setup(peer_id, team_id, brain, resolver, is_left_handed)
+	_sm.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
 
 
 # Returns the InputState for this physics tick. Caller must not retain a
@@ -64,10 +64,19 @@ func debug_last_decision() -> String:
 
 
 func debug_shoot_score() -> float:
+	# Show whichever of wrister/quick-shot the carrier is currently
+	# leaning on. Matches the tie-break in AIRoleCarrier._pick_action
+	# (wrister wins ties, quick must beat wrister by margin).
+	if _sm.debug_quick_shot_score > _sm.debug_shoot_score \
+			+ AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+		return _sm.debug_quick_shot_score
 	return _sm.debug_shoot_score
 
 
 func debug_shoot_label() -> String:
+	if _sm.debug_quick_shot_score > _sm.debug_shoot_score \
+			+ AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+		return "QUICK"
 	return "SHOOT"
 
 
