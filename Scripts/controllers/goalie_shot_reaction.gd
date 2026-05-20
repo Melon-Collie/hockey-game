@@ -1,0 +1,158 @@
+class_name GoalieShotReaction
+extends RefCounted
+
+# Reaction-freeze state: the goalie tracks up to release, then commits to
+# their read and processes the outcome. While frozen, lateral movement and
+# body rotation are suppressed; only body-part reactions (butterfly drop,
+# glove/blocker reach) proceed. The freeze ends on a discrete resolving event
+# (puck contact / boards / post / net / pickup) plus a short clear delay, or
+# via a safety-net duration cap.
+#
+# Two parallel processing delays after release:
+#   `shot_timer`     ≈ reaction_delay     — gates the butterfly drop on low shots
+#   `arm_timer`      ≈ arm_reaction_delay — gates the glove/blocker reach on elevated shots
+# Arms take longer than legs (close-range top-corner shots can score because
+# the arm doesn't even start moving in time).
+
+# Client-side safety timer for visualisation when no host event arrives.
+const CLIENT_REACTION_DURATION_S: float = 1.5
+
+# ── Tuning (set by controller from exports in setup()) ───────────────────────
+var reaction_delay: float = 0.13
+var arm_reaction_delay: float = 0.18
+var max_reaction_duration: float = 1.5
+var reaction_clear_delay: float = 0.25
+
+# ── Runtime state ────────────────────────────────────────────────────────────
+var reacting: bool = false
+var impact_x: float = 0.0
+var impact_y: float = 0.0
+var is_elevated: bool = false
+var shot_timer: float = 0.0
+var arm_timer: float = 0.0
+var age: float = 0.0
+# >= 0 → counting down to clear. -1 → not yet armed (no resolving event seen).
+var clear_timer: float = -1.0
+# Client-only safety timer ticked separately by tick_client().
+var client_timer: float = 0.0
+
+signal started(impact_x: float, impact_y: float, is_elevated: bool)
+signal finished()
+
+func reset() -> void:
+	reacting = false
+	impact_x = 0.0
+	impact_y = 0.0
+	is_elevated = false
+	shot_timer = 0.0
+	arm_timer = 0.0
+	age = 0.0
+	clear_timer = -1.0
+	client_timer = 0.0
+
+# Host-side: start a fresh reaction. `delay` is the per-shot reaction delay
+# returned by `GoalieBehaviorRules.detect_shot` (usually `reaction_delay`).
+# Emits `started` so the controller can fire the RPC and arm the slide lockout.
+func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: float) -> void:
+	impact_x = new_impact_x
+	impact_y = new_impact_y
+	is_elevated = elevated
+	reacting = true
+	age = 0.0
+	clear_timer = -1.0
+	shot_timer = delay
+	arm_timer = arm_reaction_delay
+	started.emit(impact_x, impact_y, is_elevated)
+
+# Tick shot/arm processing timers. Returns true if the low-shot timer just
+# expired while upright — caller should enter BUTTERFLY in response.
+func tick_processing_timers(delta: float, is_upright: bool) -> bool:
+	if arm_timer > 0.0:
+		arm_timer -= delta
+	if shot_timer <= 0.0:
+		return false
+	shot_timer -= delta
+	return shot_timer <= 0.0 and is_upright and not is_elevated
+
+# Tick the reaction-freeze countdown. Returns true if the freeze just cleared
+# this call (clear-timer fired or duration cap hit).
+#   carrier_present: true if there's now a puck-carrier (pickup happened) —
+#                    arms the clear timer if not already armed.
+func tick_freeze(delta: float, carrier_present: bool) -> bool:
+	if not reacting:
+		return false
+	if carrier_present and clear_timer < 0.0:
+		clear_timer = reaction_clear_delay
+	if clear_timer >= 0.0:
+		clear_timer -= delta
+		if clear_timer <= 0.0:
+			finish()
+			return true
+	age += delta
+	if age >= max_reaction_duration:
+		finish()
+		return true
+	return false
+
+# Arm the post-event clear timer (puck contact / boards / post / net hit).
+# No-op if not currently reacting, or if the clear timer is already armed
+# (first event wins).
+func arm_clear() -> void:
+	if not reacting:
+		return
+	if clear_timer < 0.0:
+		clear_timer = reaction_clear_delay
+
+# Centralised reaction-clear. Every host-side cleanup path goes through here
+# so listeners can hook one signal (`finished`) for the RPC fan-out.
+func finish() -> void:
+	if not reacting:
+		return
+	reacting = false
+	is_elevated = false
+	clear_timer = -1.0
+	finished.emit()
+
+# Re-projection saw the elevated shot tip down to a low shot — start the
+# butterfly drop timer (still allowed during freeze; arms-and-drop are the
+# body reactions the freeze permits).
+func tip_to_low(delay: float) -> void:
+	if is_elevated and shot_timer <= 0.0:
+		is_elevated = false
+		shot_timer = delay
+
+func update_impact(x: float, y: float) -> void:
+	impact_x = x
+	impact_y = y
+
+func arm_pending() -> bool:
+	return arm_timer > 0.0
+
+# Client-side: tick the safety timer that drops the freeze if no host clear
+# arrives. Mirrors the host's `max_reaction_duration` cap.
+func tick_client(delta: float) -> void:
+	if client_timer <= 0.0:
+		return
+	client_timer -= delta
+	if client_timer <= 0.0:
+		reacting = false
+
+# Client-side: host transitioned to STANDING/READY — drop the freeze.
+func clear_for_client() -> void:
+	reacting = false
+	is_elevated = false
+	client_timer = 0.0
+	shot_timer = 0.0
+
+# Client-side: apply an incoming `goalie_shot_reaction` RPC. Mirrors host
+# `start()`: arms the processing timers (subtract RPC transit time so client
+# lands at the same wall-clock T+delay as the host).
+func apply_remote(x: float, y: float, elevated: bool, is_upright: bool, rtt_s: float) -> void:
+	reacting = true
+	impact_x = x
+	impact_y = y
+	is_elevated = elevated
+	client_timer = CLIENT_REACTION_DURATION_S
+	if is_upright:
+		shot_timer = maxf(reaction_delay - rtt_s, 0.0)
+		arm_timer = maxf(arm_reaction_delay - rtt_s, 0.0)
