@@ -11,7 +11,12 @@ extends Camera3D
 # 1.0 = push player/puck to the trailing edge of the frame; 0.0 = no bias.
 @export var zone_bias: float = 0.7
 # How fast the bias transitions when possession changes (prevents snapping).
-@export var bias_smooth_speed: float = 1.5
+# Slower = stickier — possession changes ease over ~1.2s instead of ~0.5s.
+@export var bias_smooth_speed: float = 0.8
+# Seconds of velocity look-ahead for the in_ozone check. Engages/releases the
+# zone bias before the player physically crosses the blue line, so the
+# smoothing has time to settle before the player actually arrives.
+@export var ozone_predict_time: float = 0.25
 
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
 @export var min_height: float = 10.0
@@ -103,10 +108,13 @@ func _physics_process(delta: float) -> void:
 	var needed_x: float = (half_span_x + zoom_padding) / (tan_half_fov * aspect)
 	var needed_z: float = (half_span_z + zoom_padding) / tan_half_fov
 	# Zoom out when someone has the puck AND the local player is in the zone
-	# being attacked — works for either ozone, either carrier.
+	# being attacked — works for either ozone, either carrier. Uses a
+	# velocity-predicted Z so the bias engages/releases before the player
+	# actually crosses the blue line, leaving time for the smoothing to settle.
 	var attack_dir_now: int = _get_attacking_direction()
+	var predicted_z: float = player_pos.z + skater.velocity.z * ozone_predict_time
 	var in_ozone: bool = attack_dir_now != 0 and \
-		(player_pos.z * float(attack_dir_now)) > GameRules.BLUE_LINE_Z
+		(predicted_z * float(attack_dir_now)) > GameRules.BLUE_LINE_Z
 	# User-facing camera-distance multiplier (Options → Game). Scales the
 	# clamp range so the dynamic zoom math keeps its shape but the overall
 	# height shifts up/down per the player's preference.
