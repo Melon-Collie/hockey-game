@@ -1372,8 +1372,12 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# Walk mouse_screen_pos along the sweep direction. Per-tick delta is
 	# BOT_WRISTER_SCREEN_DELTA_PER_TICK; SkaterAimingBehavior scales by
 	# 0.01 * mouse_sensitivity to convert to world-space charge accrual.
+	# Divide by the host's actual sensitivity here so the downstream
+	# multiplication cancels out — otherwise hosts running sens=2.0
+	# double the bot's accumulation and cap the wrister at max power.
+	var sens: float = maxf(PlayerPrefs.mouse_sensitivity, 0.01)
 	input.mouse_screen_pos = (
-			_shoot_sweep_dir_xy * (BOT_WRISTER_SCREEN_DELTA_PER_TICK * float(_shoot_charge_tick)))
+			_shoot_sweep_dir_xy * (BOT_WRISTER_SCREEN_DELTA_PER_TICK * float(_shoot_charge_tick) / sens))
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		# Still charging — keep shoot_held high.
@@ -2142,7 +2146,11 @@ func _post_puck_lost_state(snapshot: WorldSnapshot) -> State:
 	if snapshot.puck_state.carrier_peer_id != -1:
 		return State.OFF_PUCK
 	var s: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if s == null:
+	# Bots that are still ghosted (offside / icing penalty) must stay
+	# OFF_PUCK — without this check, the next tick transitions them to
+	# CHASE_PUCK and the dispatch-time guard catches it, but for one
+	# tick they think they're chasing.
+	if s == null or s.is_ghost:
 		return State.OFF_PUCK
 	return State.CHASE_PUCK if _is_closest_teammate_to_puck_at(snapshot, s.position) else State.OFF_PUCK
 

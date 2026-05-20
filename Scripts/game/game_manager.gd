@@ -660,25 +660,31 @@ func _wire_subsystems() -> void:
 	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
 
 	_phase_coord = PhaseCoordinator.new()
-	var force_record: Callable = Callable()
-	if NetworkManager.is_host:
-		force_record = func() -> void:
-			var goal_frame: PackedByteArray = _codec.encode_world_state()
-			if goal_frame.is_empty():
-				return
-			var ts: float = NetworkManager.local_time()
-			_recorder.record_frame(goal_frame, ts)
-			# Also enqueue to the .mreplay file so the puck-in-net moment
-			# lands in the recording deterministically. Without this, the
-			# next 5 Hz dead-puck broadcast (the only frame `_should_record_to_file`
-			# admits while movement-locked) is what represents "goal" in the
-			# file — up to 200 ms after the actual entry. Update
-			# `_last_recorded_phase` so the natural broadcast pipeline doesn't
-			# duplicate this frame on its next tick.
-			if _replay_file_writer != null and _should_record_to_file():
-				_replay_file_writer.enqueue_frame(ts, goal_frame)
-				if _state_machine != null:
-					_last_recorded_phase = _state_machine.current_phase
+	# Every peer captures a goal frame of its own POV at goal time —
+	# host-authoritative on the host; client-interpolated on clients.
+	# Without the client side, client .mreplay files waited up to 200 ms
+	# for the next 5 Hz dead-puck broadcast.
+	var force_record: Callable = func() -> void:
+		var goal_frame: PackedByteArray = _codec.encode_world_state()
+		if goal_frame.is_empty():
+			return
+		# Host stamps with session-relative local_time(); clients with
+		# estimated_host_time() so the goal frame's timestamp lines up
+		# with the host_ts of surrounding broadcast frames in the file.
+		var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
+				else NetworkManager.estimated_host_time()
+		_recorder.record_frame(goal_frame, ts)
+		# Also enqueue to the .mreplay file so the puck-in-net moment
+		# lands in the recording deterministically. Without this, the
+		# next 5 Hz dead-puck broadcast (the only frame `_should_record_to_file`
+		# admits while movement-locked) is what represents "goal" in the
+		# file — up to 200 ms after the actual entry. Update
+		# `_last_recorded_phase` so the natural broadcast pipeline doesn't
+		# duplicate this frame on its next tick.
+		if _replay_file_writer != null and _should_record_to_file():
+			_replay_file_writer.enqueue_frame(ts, goal_frame)
+			if _state_machine != null:
+				_last_recorded_phase = _state_machine.current_phase
 	_phase_coord.setup(_state_machine, _registry, teams,
 			get_puck, _get_goalie_controllers, _shot_tracker, _drop_puck_if_carried,
 			_recorder, _goal_replay_driver, _codec,
