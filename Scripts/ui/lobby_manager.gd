@@ -382,6 +382,13 @@ func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is
 		"is_left_handed": is_left_handed,
 		"jersey_number": jersey_number,
 	}
+	# If a player takes over a bot slot, retire the bot — otherwise it would
+	# respawn the moment the player moved away. send_bot_slot is host-only;
+	# clients pick up the change via the broadcast RPC.
+	if team_id != GameRules.SPECTATOR_TEAM_ID:
+		var bot_key: int = team_id * 3 + slot
+		if NetworkManager.pending_bot_slots.get(bot_key, false):
+			NetworkManager.send_bot_slot(bot_key, false)
 
 func _find_balanced_slot(_peer_id: int) -> Array:
 	var team0: int = 0
