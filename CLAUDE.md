@@ -20,6 +20,31 @@ A 3v3 arcade hockey game built in Godot 4.6.2 (GDScript, 3D). Online multiplayer
 
 **Puck RigidBody3D has Continuous CD enabled.** Do not suggest enabling CCD as a fix for puck tunnelling — it is already on. Puck escaping the rink is more likely a velocity/reflection compounding bug or a Jolt edge case.
 
+## How It Plays
+
+**Mouse + keyboard only, no gamepad.** WASD skates, mouse cursor places the blade in real-time (continuous IK — the blade chases the cursor every frame, no aim button). Camera is third-person, per-player, dynamic-zoom, tilted ~75° so cursor-to-world projection stays usable for stickhandling.
+
+**Stickhandling is physical, not abstract.** The puck is a real `RigidBody3D` that attaches to the blade by proximity; there is no possession flag you press to engage. Carrying slows you. Moving the cursor swings the blade through forehand/backhand with a small lift through center — that's the "dangling" texture. Fast incoming pucks (≥14 m/s) deflect off a static blade; you have to draw the blade *back into* the puck to absorb a pass. No `deke` button — deception is blade placement plus skating rhythm.
+
+**Three shot types, all aim-aware:**
+- **Wrister** (LMB) — quick tap fires instantly at moderate speed; hold-and-drag charges by *drag distance*, and the drag direction *is* the aim vector.
+- **Slapshot** (RMB) — time-charged wind-up, aim locked at press. Supports **one-timers**: charge without the puck, release fires when the puck enters the shooting zone.
+- **Self-shot** (E) — emergency release while carrying.
+
+Backhand shots take a power penalty. Scroll wheel toggles elevation (ballistic targeting, apex-capped so you don't sail it over the net). Passes are quick-shots — same mechanic, no separate pass system, no saucer/tape-to-tape variants.
+
+**Skating is momentum-driven.** Thrust accelerates, drag-friction decelerates naturally, Space brakes hard or carves with direction held. Backward and lateral (crossover) movement are slower than forward. Facing lazily tracks the cursor; Shift freezes facing for strafing shots. No frame-perfect inputs — reads and positioning matter more than execution precision.
+
+**Physicality is emergent, not scripted.** Body checks trigger from closing-velocity impulse, not a hit button. Ctrl crouches to shot-block (wider hitbox, reflects shots). Poke-checks are stick-on-stick momentum contests — the blades collide and the puck goes where the blended momentum sends it. Stick lifts happen naturally from geometry, not a command.
+
+**Goalies are AI-only, never player-controlled.** Designed to feel fair, not realistic — reactive with a small reaction delay (which is the window for close-range top-corner goals), positional depth chart, butterfly with a commit timer to prevent toggling, and threat tracking weighted toward the carrier's body rather than the puck (anti-5-hole-exploit).
+
+**Game format:** 3v3, three periods plus optional OT, period length tunable. Faceoffs have a short "2 → 1 → DROP" prep. **Offsides** ghost the offending player (can't interact with the puck) until they tag back to the blue line. **Icing** ghosts the whole offending team briefly. Goals trigger a short pause + celebration window. The default ruleset is `ARCADE` — offsides on, icing off by default — because strict sim rules get in the way of arcade flow.
+
+**Tone is arcade-casual with a competitive ceiling.** The physics are responsive and forgiving on the surface, but blade placement, shot timing, charge management, and positioning meaningfully separate skilled play. Pick-up-and-play, hard to master.
+
+**Where the numbers live** (don't bake these into prose — read them when you need them): movement and shot tuning in `Scripts/controllers/skater_controller.gd`; shot math in `Scripts/domain/rules/shot_mechanics.gd`; period/faceoff/offsides/icing constants and presets in `Scripts/domain/config/game_rules.gd`; goalie tuning in `Scripts/controllers/goalie_controller.gd`.
+
 ## Tech Stack
 
 - **Engine:** Godot 4.6.2 (Jolt Physics)
