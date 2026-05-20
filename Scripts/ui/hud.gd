@@ -699,10 +699,17 @@ func _on_replay_stopped() -> void:
 	# FACEOFF banner appearing in the same spot, and a slide-out would just
 	# add a flicker between the two. Reset offsets so any subsequent show
 	# (e.g. FACEOFF) appears at rest.
-	_phase_wrapper.visible = false
-	if _phase_banner_root != null:
-		_phase_banner_root.offset_top = -220.0
-		_phase_banner_root.offset_bottom = -50.0
+	# Skip the hide if the faceoff countdown is already up: on clients the
+	# host's faceoff_positions RPC can land before our local replay's outro
+	# ends, in which case _on_faceoff_prep_announced has already shown the
+	# countdown and hiding the wrapper here would erase "FACEOFF IN 2".
+	var faceoff_already_up: bool = _faceoff_countdown_tween != null \
+			and _faceoff_countdown_tween.is_valid()
+	if not faceoff_already_up:
+		_phase_wrapper.visible = false
+		if _phase_banner_root != null:
+			_phase_banner_root.offset_top = -220.0
+			_phase_banner_root.offset_bottom = -50.0
 	_stop_skip_prompt_pulse()
 	_skip_prompt_label.visible = false
 	_skip_vote_current = 0
