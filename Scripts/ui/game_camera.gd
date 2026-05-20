@@ -260,6 +260,16 @@ func _physics_process(delta: float) -> void:
 			needed_height = minf(needed_height, ozone_max_height) * dist_mult
 			target_height = maxf(target_height, needed_height)
 
+	# Spring-damp lag compensation. The smoothed anchor lags a moving target
+	# by `velocity * smooth_time` at steady state — at high backskate speeds
+	# this can push the player off the bottom of the frame. Adding
+	# `velocity * smooth_time_anchor` to the target cancels the lag exactly,
+	# so at any constant velocity the player stays at their intended screen
+	# position. The spring still smooths *changes* in velocity (the smoothing
+	# we want); constant motion is no longer behind the camera.
+	target_anchor.x += skater.velocity.x * smooth_time_anchor
+	target_anchor.z += skater.velocity.z * smooth_time_anchor
+
 	# ── Step 4: Spring-damp height ───────────────────────────────────────────
 	var height_res: Array = _spring_damp(
 			_current_height, target_height, _height_vel, smooth_time_height, delta)
