@@ -297,12 +297,16 @@ const MOUSE_TICK_DELTA: float = 1.0 / 240.0
 #
 # Arcing the target around self_pos at this rate keeps the mouse on a
 # circle (never crossing the body) and stays in tracking range of the
-# body's facing lerp, which converges to mouse direction at
-# facing_drag_speed_braking = 10 (pre-aim brakes). Matches
-# BOT_FACING_ROTATION_RATE_RAD_S so 180° resolves in ~525 ms — under the
-# 750 ms timeout — and steady-state mouse_body_angle stays well below
-# 157° so the IK gate never trips.
-const MOUSE_ARC_RATE_RAD_S: float = 6.0
+# body's facing lerp.
+#
+# Pinned at the natural cap MOUSE_MAX_SPEED_M_S / CARRY_BLADE_AIM_FORWARD_M
+# = 15 / 2 = 7.5: above that, the arc target's tangential speed exceeds
+# the mouse's max linear step and `_step_mouse_toward` chord-cuts
+# corners instead of tracing the arc. At 7.5 rad/s a 180° back-pass
+# resolves in π/7.5 ≈ 420 ms (well under the 750 ms timeout), and
+# steady-state body lag is 7.5 / facing_drag_speed_braking = 0.75 rad
+# ≈ 43° — leaves ~110° of headroom below the 157° IK gate.
+const MOUSE_ARC_RATE_RAD_S: float = 7.5
 
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
