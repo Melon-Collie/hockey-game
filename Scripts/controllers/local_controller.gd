@@ -3,8 +3,15 @@ extends SkaterController
 
 signal hit_received(magnitude: float)
 
-@export var reconcile_position_threshold: float = 0.10
-@export var reconcile_velocity_threshold: float = 0.4
+# Sized to exceed the normal prediction-lead distance at full skating speed:
+# at ~8 m/s with RTT/2 + INPUT_LEAD_SEC ≈ 41ms (and up to ~75ms on a 100ms-RTT
+# connection), the natural client-ahead-of-server position offset is 0.33-0.6m.
+# Thresholds below that fire reconcile every broadcast on normal play, and at
+# 120Hz the visual_offset blend never finishes between snaps — feels like
+# continuous micro-jitter. Sized above worst-case prediction lead so reconcile
+# only fires on real divergence: body checks, late collision resolution, etc.
+@export var reconcile_position_threshold: float = 0.50
+@export var reconcile_velocity_threshold: float = 1.5
 
 @onready var camera: GameCamera = null
 var _gatherer: LocalInputGatherer = null
