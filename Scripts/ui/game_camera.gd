@@ -87,6 +87,15 @@ const _POSSESSION_SMOOTH: float = 6.0
 # the geometry without a separate concept).
 @export var clamp_softness: float = 3.0
 
+# ── Player visibility clamp ──────────────────────────────────────────────────
+# The local player must always be visible — this caps how far the anchor can
+# offset from the player so the cursor lean + ozone bias stack can never push
+# the player off the bottom of the screen. `player_screen_margin = 0.15` means
+# the player is always at least 15% of half-screen-height from any edge, with
+# some "behind the player" view that opens up when the cursor reaches.
+@export var player_screen_margin: float = 0.15
+@export var player_clamp_softness: float = 1.5
+
 # ── Rink Bounds ───────────────────────────────────────────────────────────────
 @export var rink_half_width: float = 13.0
 @export var rink_half_length: float = 30.0
@@ -282,7 +291,7 @@ func _physics_process(delta: float) -> void:
 	_current_height = height_res[0]
 	_height_vel = height_res[1]
 
-	# ── Step 5: Soft rink clamp on anchor ────────────────────────────────────
+	# ── Step 5a: Soft rink clamp on anchor ───────────────────────────────────
 	# Subtracting visible_half_* makes the clamp tighten as zoom widens — the
 	# anchor pulls toward rink center when the visible frustum is wide enough
 	# to threaten clipping past the boards. At the side boards this naturally
@@ -294,6 +303,18 @@ func _physics_process(delta: float) -> void:
 	var safe_z: float = maxf(rink_half_length - visible_half_z, 0.0)
 	target_anchor.x = _soft_clamp(target_anchor.x, safe_x, clamp_softness)
 	target_anchor.z = _soft_clamp(target_anchor.z, safe_z, clamp_softness)
+
+	# ── Step 5b: Player visibility clamp ─────────────────────────────────────
+	# Cap the anchor offset from the player so cursor lean + ozone bias stack
+	# can never push the player off-screen. Applied AFTER the rink clamp so
+	# it wins when they conflict — a sliver of crowd is acceptable, losing the
+	# player is not.
+	var max_offset_x: float = visible_half_x * (1.0 - player_screen_margin)
+	var max_offset_z: float = visible_half_z * (1.0 - player_screen_margin)
+	target_anchor.x = player_pos.x + _soft_clamp(
+			target_anchor.x - player_pos.x, max_offset_x, player_clamp_softness)
+	target_anchor.z = player_pos.z + _soft_clamp(
+			target_anchor.z - player_pos.z, max_offset_z, player_clamp_softness)
 
 	# ── Step 6: Spring-damp anchor (xz only; height is composed separately) ──
 	var ax_res: Array = _spring_damp(
