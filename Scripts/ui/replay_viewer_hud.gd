@@ -302,11 +302,18 @@ func _update_play_pause_text() -> void:
 
 # ── Input ────────────────────────────────────────────────────────────────────
 
-func _unhandled_input(event: InputEvent) -> void:
+# Escape lives in _shortcut_input so it fires before any focused Control's
+# _gui_input can swallow it (clicking the speed dropdown or seek slider sets
+# focus on those, and some Godot Control internals consume Escape to release
+# focus — the bug surfaced as "can't exit the replay viewer"). _shortcut_input
+# is the canonical home for global shortcuts that must work regardless of focus.
+func _shortcut_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		_exit_to_free_play()
 		get_viewport().set_input_as_handled()
-		return
+
+
+func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed:
 		return
 	var key: InputEventKey = event as InputEventKey

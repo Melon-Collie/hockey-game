@@ -45,6 +45,14 @@ func deactivate() -> void:
 	_prev_camera = null
 
 
+# Scene change mid-look would otherwise leak MOUSE_MODE_CAPTURED into the
+# next scene (you'd land in free play with an invisible cursor). Belt-and-
+# suspenders on top of deactivate()'s release.
+func _exit_tree() -> void:
+	if _looking:
+		_release_mouse()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not current:
 		return
