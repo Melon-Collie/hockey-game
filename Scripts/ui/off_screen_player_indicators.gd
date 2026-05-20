@@ -8,6 +8,8 @@ const _NEAR_DISTANCE: float = 6.0
 const _FAR_DISTANCE: float = 30.0
 const _EDGE_MARGIN: float = 28.0
 const _OUTLINE_COLOR: Color = Color(0.0, 0.0, 0.0, 0.85)
+const _PUCK_OUTLINE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.85)
+const _PUCK_FILL_COLOR: Color = Color(0.0, 0.0, 0.0, 0.95)
 const _OUTLINE_WIDTH: float = 2.0
 const _NUMBER_FONT_SIZE: int = 18
 const _NUMBER_MIN_FONT_SIZE: int = 12
@@ -63,10 +65,31 @@ func _draw() -> void:
 		var dist: float = local_pos.distance_to(world_pos)
 		var t: float = clampf(inverse_lerp(_NEAR_DISTANCE, _FAR_DISTANCE, dist), 0.0, 1.0)
 		var arrow_scale: float = lerpf(_ARROW_MAX_SCALE, _ARROW_MIN_SCALE, t)
-		_draw_arrow(edge_pos, dir, arrow_scale, record.jersey_color)
+		_draw_arrow(edge_pos, dir, arrow_scale, record.jersey_color, _OUTLINE_COLOR)
 		_draw_number(edge_pos, dir, arrow_scale, record.jersey_number, record.text_color, record.text_outline_color)
 
-func _draw_arrow(pos: Vector2, dir: Vector2, arrow_scale: float, color: Color) -> void:
+	# Puck indicator: a black-filled, white-outlined arrow distinct from the
+	# colored player arrows. Drawn after players so it sits on top in any rare
+	# overlap at a screen corner.
+	var puck: Puck = GameManager.puck
+	if puck != null:
+		var puck_world_pos: Vector3 = puck.global_position
+		var behind: bool = camera.is_position_behind(puck_world_pos)
+		var raw: Vector2 = camera.unproject_position(puck_world_pos)
+		if behind or not screen_rect.has_point(raw):
+			var dir: Vector2
+			if behind:
+				dir = (center - raw).normalized()
+			else:
+				dir = (raw - center).normalized()
+			if dir != Vector2.ZERO and is_finite(dir.x) and is_finite(dir.y):
+				var edge_pos: Vector2 = _intersect_rect_from_center(center, dir, inner)
+				var dist: float = local_pos.distance_to(puck_world_pos)
+				var t: float = clampf(inverse_lerp(_NEAR_DISTANCE, _FAR_DISTANCE, dist), 0.0, 1.0)
+				var arrow_scale: float = lerpf(_ARROW_MAX_SCALE, _ARROW_MIN_SCALE, t)
+				_draw_arrow(edge_pos, dir, arrow_scale, _PUCK_FILL_COLOR, _PUCK_OUTLINE_COLOR)
+
+func _draw_arrow(pos: Vector2, dir: Vector2, arrow_scale: float, color: Color, outline_color: Color) -> void:
 	var sz: float = _ARROW_BASE_SIZE * arrow_scale
 	var perp: Vector2 = Vector2(-dir.y, dir.x)
 	var tip: Vector2 = pos + dir * (sz * 0.55)
@@ -76,7 +99,7 @@ func _draw_arrow(pos: Vector2, dir: Vector2, arrow_scale: float, color: Color) -
 	var fill_colors: PackedColorArray = PackedColorArray([color, color, color])
 	draw_polygon(fill, fill_colors)
 	var outline: PackedVector2Array = PackedVector2Array([tip, base_left, base_right, tip])
-	draw_polyline(outline, _OUTLINE_COLOR, _OUTLINE_WIDTH, true)
+	draw_polyline(outline, outline_color, _OUTLINE_WIDTH, true)
 
 func _draw_number(pos: Vector2, dir: Vector2, arrow_scale: float, number: int, text_color: Color, outline_color: Color) -> void:
 	var sz: float = _ARROW_BASE_SIZE * arrow_scale
