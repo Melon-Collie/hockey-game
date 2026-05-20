@@ -632,6 +632,10 @@ func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> v
 	_assign_slot(peer_id, new_team_id, new_slot,
 			identity.player_name, identity.is_left_handed, identity.jersey_number)
 	_broadcast_confirm(peer_id, new_team_id, new_slot)
+	# Swapping to/from spectator changes who counts toward the ready check, so
+	# re-evaluate the start button — otherwise a sole client moving to spectate
+	# leaves the host's button stuck disabled.
+	_update_start_btn()
 	_refresh_grid()
 	_refresh_spectator_panel()
 
