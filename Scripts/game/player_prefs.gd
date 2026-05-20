@@ -8,6 +8,31 @@ const RESOLUTIONS: Array[Vector2i] = [
 ]
 const FPS_CAP_VALUES: Array[int] = [30, 60, 120, 144, 240, 0]
 
+# Camera style: which camera implementation runs.
+#   CLASSIC  — the original midpoint-anchor camera with possession-aware zone
+#              bias, goal/hit shake, and the three projection modes via
+#              `camera_mode`.
+#   MODERN   — the cursor-driven anchor + ozone-bias rewrite. Reads
+#              `tilt_angle` instead of `camera_mode`.
+# LocalController.setup() swaps the Camera3D's script based on this.
+const CAMERA_STYLE_MODERN: int = 0
+const CAMERA_STYLE_CLASSIC: int = 1
+const CAMERA_STYLE_LABELS: Array[String] = [
+	"Modern (Cursor-driven)",
+	"Classic (Midpoint)",
+]
+
+# Camera projection modes (used by CLASSIC style only). Index matches
+# OptionButton ordering in OptionsPanel.
+const CAMERA_MODE_ORTHOGRAPHIC: int = 0
+const CAMERA_MODE_TOP_DOWN: int = 1   # perspective, looking straight down (the original)
+const CAMERA_MODE_TILTED: int = 2     # perspective, pitched 15° forward of straight down
+const CAMERA_MODE_LABELS: Array[String] = [
+	"Top-Down (Orthographic)",
+	"Top-Down (Perspective)",
+	"Tilted (Perspective)",
+]
+
 # Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
 # Index matches OptionButton ordering in OptionsPanel.
 const COLOR_GRADE_NEUTRAL: int = 0
@@ -108,10 +133,12 @@ var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
 var mouse_sensitivity: float = 1.0
 var attack_up: bool = true
+var camera_style: int = CAMERA_STYLE_MODERN
+var camera_mode: int = CAMERA_MODE_TOP_DOWN  # used by CLASSIC style only
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
-# Tilt angle from horizontal, in degrees. 90 = straight down (top-down look),
-# 70 = aggressively tilted. GameCamera uses pitch = -tilt_angle each tick.
+# Tilt angle from horizontal, in degrees (MODERN style only). 90 = straight
+# down, smaller = more tilted. Ignored by CLASSIC, which uses camera_mode.
 var tilt_angle: float = 75.0
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
@@ -171,6 +198,8 @@ func save() -> void:
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("game", "attack_up", attack_up)
+	cfg.set_value("game", "camera_style", camera_style)
+	cfg.set_value("game", "camera_mode", camera_mode)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
 	cfg.set_value("game", "tilt_angle", tilt_angle)
@@ -371,6 +400,8 @@ func _load() -> void:
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		attack_up = cfg.get_value("game", "attack_up", true)
+		camera_style = clamp(cfg.get_value("game", "camera_style", CAMERA_STYLE_MODERN), 0, CAMERA_STYLE_LABELS.size() - 1)
+		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		tilt_angle = clampf(cfg.get_value("game", "tilt_angle", 75.0), TILT_ANGLE_MIN, TILT_ANGLE_MAX)

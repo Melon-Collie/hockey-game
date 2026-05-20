@@ -117,6 +117,12 @@ var _possession_engagement: float = 1.0
 func set_local_team_id(team_id: int) -> void:
 	_local_team_id = team_id
 
+# No-op: the new camera derives attack direction from `_local_team_id` directly
+# and doesn't need a carrier-team callable. Stub exists so the LocalController
+# can forward `set_goal_context` unconditionally — the classic camera uses it.
+func set_goal_context(_goal_0: HockeyGoal, _goal_1: HockeyGoal, _carrier_team_getter: Callable) -> void:
+	pass
+
 # Team 0 defends +Z (attacks -Z). Team 1 defends -Z (attacks +Z).
 # See GameManager._assign_goals_to_teams.
 func _attack_dir() -> int:
