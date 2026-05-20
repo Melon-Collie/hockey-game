@@ -35,7 +35,7 @@ Backhand shots take a power penalty. Scroll wheel toggles elevation (ballistic t
 
 **Skating is momentum-driven.** Thrust accelerates, drag-friction decelerates naturally, Space brakes hard or carves with direction held. Backward and lateral (crossover) movement are slower than forward. Facing lazily tracks the cursor, and auto-freezes during shot aim/charge/block states and when the cursor swings into the unreachable wedge behind the skater. No frame-perfect inputs — reads and positioning matter more than execution precision.
 
-**Physicality is emergent, not scripted.** Body checks trigger from closing-velocity impulse, not a hit button. Ctrl crouches to shot-block (wider hitbox, reflects shots). Poke-checks are stick-on-stick momentum contests — the blades collide and the puck goes where the blended momentum sends it. Stick lifts happen naturally from geometry, not a command.
+**Physicality is emergent, not scripted.** Body checks trigger from closing-velocity impulse, not a hit button. Ctrl crouches to shot-block (wider hitbox, reflects shots). Poke-checks are stick-on-stick momentum contests — the blades collide and the puck goes where the blended momentum sends it.
 
 **Goalies are AI-only, never player-controlled.** Designed to feel fair, not realistic — reactive with a small reaction delay (which is the window for close-range top-corner goals), positional depth chart, butterfly with a commit timer to prevent toggling, and threat tracking weighted toward the carrier's body rather than the puck (anti-5-hole-exploit).
 
