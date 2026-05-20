@@ -666,6 +666,14 @@ func set_charge_ring_visible(should_show: bool) -> void:
 	_hud.set_charge_ring_visible(should_show)
 
 
+# Latch all per-skater HUD chrome (slot ring, name label, charge ring, chevron,
+# slapper indicator/ring) off. Used by the offline replay viewer and live
+# spectator mode where broadcast / chase / free cameras frame the rink from
+# angles the flat ring decals weren't designed for.
+func set_world_hud_hidden(hidden: bool) -> void:
+	_hud.set_world_hud_hidden(hidden)
+
+
 func trigger_charge_lost_flash() -> void:
 	_hud.trigger_charge_lost_flash()
 

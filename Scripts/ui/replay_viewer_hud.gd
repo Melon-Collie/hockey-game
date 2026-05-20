@@ -39,6 +39,11 @@ var _time_label: Label = null
 var _speed_btn: OptionButton = null
 var _camera_label: Label = null
 var _seeking_user: bool = false
+var _pause_menu_container: Control = null
+var _pause_options_container: Control = null
+# Remember whether playback was paused before the user opened the pause menu
+# so closing the menu doesn't auto-resume if they had already paused.
+var _was_paused_before_menu: bool = false
 
 
 func setup(driver: FileReplayDriver, header: Dictionary, director: CameraDirector = null) -> void:
@@ -72,6 +77,7 @@ func _build_ui() -> void:
 	_build_back_button(root)
 	_build_camera_label(root)
 	_build_bottom_bar(root)
+	_build_pause_menu()
 
 
 func _build_scoreboard(root: Control) -> void:
@@ -155,8 +161,91 @@ func _build_back_button(root: Control) -> void:
 	btn.offset_top = 12
 	btn.offset_right = -12
 	btn.offset_bottom = 52
-	btn.pressed.connect(_exit_to_free_play)
+	btn.pressed.connect(_toggle_pause_menu)
 	root.add_child(btn)
+
+
+# Centered modal that escape opens. Two buttons — Options (inlines the same
+# OptionsPanel the in-game pause menu uses) and Return to Free Play. Avoids
+# the in-game PauseMenu directly because that's wired to live-game state
+# (slot grid, registry-aware buttons) which doesn't exist in the viewer.
+func _build_pause_menu() -> void:
+	_pause_menu_container = Control.new()
+	_pause_menu_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_pause_menu_container.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_menu_container.visible = false
+	# Mouse_filter STOP on the backdrop blocks clicks from reaching the HUD
+	# controls underneath while the menu is open.
+	var backdrop := ColorRect.new()
+	backdrop.color = Color(0.0, 0.0, 0.0, 0.55)
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_menu_container.add_child(backdrop)
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", MenuStyle.panel())
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_pause_menu_container.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	panel.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "Paused"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	vbox.add_child(title)
+
+	var resume_btn := MenuStyle.popup_button("Resume")
+	resume_btn.pressed.connect(_close_pause_menu)
+	vbox.add_child(resume_btn)
+
+	var options_btn := MenuStyle.popup_button("Options")
+	options_btn.pressed.connect(_open_pause_options)
+	vbox.add_child(options_btn)
+
+	var exit_btn := MenuStyle.popup_button("Return to Free Play")
+	exit_btn.pressed.connect(_exit_to_free_play)
+	vbox.add_child(exit_btn)
+
+	add_child(_pause_menu_container)
+	_build_pause_options_overlay()
+
+
+# OptionsPanel lives on its own layer above the pause menu so the user can
+# scrub video / audio / control settings without the pause menu visually
+# overlapping. Mirror PauseMenu's layout (layer 21 above the menu's 20).
+func _build_pause_options_overlay() -> void:
+	_pause_options_container = Control.new()
+	_pause_options_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_pause_options_container.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_options_container.visible = false
+
+	var backdrop := ColorRect.new()
+	backdrop.color = Color(0.0, 0.0, 0.0, 0.55)
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_options_container.add_child(backdrop)
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", MenuStyle.panel())
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+
+	var options := OptionsPanel.new()
+	options.close_requested.connect(_close_pause_options)
+	panel.add_child(options)
+	_pause_options_container.add_child(panel)
+
+	var canvas_layer := CanvasLayer.new()
+	canvas_layer.layer = 21
+	canvas_layer.add_child(_pause_options_container)
+	add_child(canvas_layer)
 
 
 func _build_bottom_bar(root: Control) -> void:
@@ -305,16 +394,21 @@ func _update_play_pause_text() -> void:
 # Escape lives in _shortcut_input so it fires before any focused Control's
 # _gui_input can swallow it (clicking the speed dropdown or seek slider sets
 # focus on those, and some Godot Control internals consume Escape to release
-# focus — the bug surfaced as "can't exit the replay viewer"). _shortcut_input
-# is the canonical home for global shortcuts that must work regardless of focus.
+# focus). _shortcut_input is the canonical home for global shortcuts that
+# must work regardless of focus.
 func _shortcut_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
-		_exit_to_free_play()
+		_toggle_pause_menu()
 		get_viewport().set_input_as_handled()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed:
+		return
+	# Pause menu blocks playback shortcuts so the user doesn't accidentally
+	# scrub or change speed while picking a menu option. Escape (handled in
+	# _shortcut_input) is the only key that still flows through.
+	if _pause_menu_container != null and _pause_menu_container.visible:
 		return
 	var key: InputEventKey = event as InputEventKey
 	# Skip OS auto-repeat so holding period/bracket doesn't spam frame-steps or
@@ -357,6 +451,49 @@ func _step_speed(direction: int) -> void:
 
 func _exit_to_free_play() -> void:
 	GameManager.return_to_free_play()
+
+
+# Escape and the × button funnel through here. Cascades: options open → close
+# options; menu open → close menu (resume); nothing open → open menu (pause).
+func _toggle_pause_menu() -> void:
+	if _pause_options_container != null and _pause_options_container.visible:
+		_close_pause_options()
+		return
+	if _pause_menu_container != null and _pause_menu_container.visible:
+		_close_pause_menu()
+		return
+	_open_pause_menu()
+
+
+func _open_pause_menu() -> void:
+	if _pause_menu_container == null:
+		return
+	_was_paused_before_menu = _driver.is_paused() if _driver != null else true
+	if _driver != null and not _was_paused_before_menu:
+		_driver.pause()
+		_update_play_pause_text()
+	_pause_menu_container.visible = true
+
+
+func _close_pause_menu() -> void:
+	if _pause_menu_container == null:
+		return
+	_pause_menu_container.visible = false
+	# Only auto-resume if the user wasn't paused before opening the menu.
+	# Otherwise they'd have to re-pause on every escape press.
+	if _driver != null and not _was_paused_before_menu:
+		_driver.play()
+		_update_play_pause_text()
+
+
+func _open_pause_options() -> void:
+	if _pause_options_container != null:
+		_pause_options_container.visible = true
+
+
+func _close_pause_options() -> void:
+	if _pause_options_container != null:
+		_pause_options_container.visible = false
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
