@@ -62,7 +62,12 @@ extends Camera3D
 @export var ozone_bias_fraction: float = 0.5
 @export var ozone_zoom_padding: float = 2.0
 @export var ozone_max_height: float = 25.0
-const _OZONE_RAMP_DISTANCE: float = 3.0
+# Ozone engagement ramp: distances past the attacking blue line at which
+# engagement is 0 (start) and 1 (end). Negative `start` means the ramp begins
+# BEFORE the line — useful so the camera is already partway engaged when the
+# player actually crosses.
+@export var ozone_ramp_start_distance: float = -1.0
+@export var ozone_ramp_end_distance: float = 5.0
 # How far ahead (seconds) we look at the player's velocity when deciding ozone
 # engagement. Pre-empts both entry and exit so the camera anchor doesn't lag
 # the player through the blue line on a fast skate-back / skate-forward.
@@ -245,7 +250,8 @@ func _physics_process(delta: float) -> void:
 	if attack_dir != 0:
 		var predicted_z: float = player_pos.z + skater.velocity.z * _OZONE_PREDICT_TIME
 		var dist_past_line: float = (predicted_z * float(attack_dir)) - GameRules.BLUE_LINE_Z
-		var engagement: float = smoothstep(0.0, _OZONE_RAMP_DISTANCE, dist_past_line) \
+		var engagement: float = smoothstep(
+				ozone_ramp_start_distance, ozone_ramp_end_distance, dist_past_line) \
 				* _possession_engagement
 		if engagement > 0.001:
 			var goal_z: float = float(attack_dir) * GameRules.GOAL_LINE_Z
