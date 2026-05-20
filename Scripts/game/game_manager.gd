@@ -1290,9 +1290,6 @@ func _spawn_local(peer_id: int, team_slot: int, team: Team) -> void:
 func _on_player_spawned(record: PlayerRecord) -> void:
 	if record.is_local:
 		var local_ctrl: LocalController = record.controller as LocalController
-		# Goal context is required by the classic camera (possession-based zone
-		# bias). The modern camera has a no-op `set_goal_context`, so this
-		# forward is safe to call unconditionally regardless of camera_style.
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
@@ -1338,8 +1335,6 @@ func _resolve_skater_team_id(skater: Skater) -> int:
 	return _registry.resolve_team_id(skater) if _registry != null else -1
 
 
-# Used by the classic camera via `set_goal_context`. The modern camera doesn't
-# call this (its `set_goal_context` is a no-op).
 func _get_puck_carrier_team_id() -> int:
 	if puck_controller != null:
 		var local_carrier: Skater = puck_controller.get_local_carrier()
