@@ -2,20 +2,25 @@ class_name SpectatorCamera
 extends Camera3D
 
 # Broadcast main-camera ("hard cam") preset for goal replays and spectator
-# viewing. Sits at the press-box position outside the long-side boards at
-# center-ice, fixed — does not slide along the rail. Pans/tilts to track the
+# viewing. Sits at the press-box position outside the long-side boards and
+# slides along the rail with the puck the way real NHL hard cams do (booth_z
+# tracks the puck's z; can be disabled via rail_track for parked custom
+# presets like GoalReplayDriver's inside-net cam). Pans/tilts to track the
 # puck with a small velocity lead so the rotation anticipates the play instead
 # of chasing it. Subtle perlin-style noise on yaw/pitch + position gives the
-# gentle drift of a wire-rigged broadcast camera.
-#
-# Telephoto FOV (compared to the 70°-ish game cam) flattens depth in the
-# broadcast style — players group up visually as the puck moves, which sells
-# the play better than the wider game-cam framing.
+# gentle drift of a wire-rigged broadcast camera. Telephoto FOV (compared to
+# the player-perspective cams) flattens depth in the broadcast style — players
+# group up visually as the puck moves, which sells the play better than the
+# wider game-cam framing.
 
 @export var booth_x: float = 20.0        # outside the long boards (rink is ±13 wide)
-@export var booth_y: float = 18.0        # press-box elevation (~50° down to center ice)
-@export var booth_z: float = 0.0         # center-ice along the long axis
-@export var replay_fov: float = 36.0
+@export var booth_y: float = 18.0        # press-box elevation (~42° down to center ice)
+@export var booth_z: float = 0.0         # center-ice along the long axis (slides with rail_track)
+# 28° vertical → ~50° horizontal at 16:9 → frames ~35% of the rink length from
+# the booth distance, matching the published wide-shot guideline for NHL game-
+# follow cameras. Telephoto enough to compress depth (players group visually
+# as play moves) without losing the puck in long-bomb stretch passes.
+@export var replay_fov: float = 28.0
 @export var look_speed: float = 6.0      # rotation slerp speed
 @export var lead_time: float = 0.35      # seconds of puck-velocity lookahead
 @export var max_lead: float = 5.0        # cap the lead so fast shots don't overshoot
@@ -23,6 +28,15 @@ extends Camera3D
 @export var noise_pitch_deg: float = 0.30
 @export var noise_pos_amp: float = 0.06  # meters
 @export var noise_freq: float = 0.45     # Hz
+
+# Rail tracking — slide along the long axis with the puck like a real NHL
+# hard cam. Set false by callers that want a parked camera (e.g.
+# GoalReplayDriver's inside-net preset). rail_strength < 1 keeps the rail
+# behind the puck so the play stays framed instead of dead-center.
+@export var rail_track: bool = true
+@export var rail_strength: float = 0.65
+@export var rail_max_offset: float = 12.0
+@export var rail_smooth_rate: float = 1.5
 
 # Low-pass filter on the target position. Real broadcast cameras don't react
 # to puck wiggle during stickhandling — the operator follows the play, not
@@ -75,7 +89,9 @@ func snap_to_position() -> void:
 
 # Re-aim this camera at a different preset (position, FOV, lead time). Caller
 # is responsible for snap_to_position() + make_current() afterward to actually
-# execute the cut.
+# execute the cut. Disables rail tracking since custom presets (e.g.
+# GoalReplayDriver's inside-net cam) want a parked camera, not a hard-cam
+# that slides.
 func set_booth(pos: Vector3, new_fov: float, new_lead_time: float) -> void:
 	booth_x = pos.x
 	booth_y = pos.y
@@ -83,6 +99,7 @@ func set_booth(pos: Vector3, new_fov: float, new_lead_time: float) -> void:
 	fov = new_fov
 	replay_fov = new_fov
 	lead_time = new_lead_time
+	rail_track = false
 
 
 func deactivate() -> void:
@@ -96,6 +113,15 @@ func _process(delta: float) -> void:
 		return
 	var target: Vector3 = _target_getter.call()
 	_smooth_target_and_velocity(target, delta)
+
+	# Rail tracking: slide booth_z toward the puck's z so the camera follows
+	# the play up/down the ice. Strength < 1 keeps the puck framed ahead of
+	# center rather than dead-center, mirroring real NHL hard-cam composition.
+	if rail_track:
+		var target_z: float = clampf(_smoothed_target.z * rail_strength,
+				-rail_max_offset, rail_max_offset)
+		var rail_alpha: float = clampf(delta * rail_smooth_rate, 0.0, 1.0)
+		booth_z = lerpf(booth_z, target_z, rail_alpha)
 
 	# Velocity-lead so the rotation anticipates the puck path. Capped so a
 	# slapshot doesn't fling the look-target past the play. The velocity is

@@ -145,6 +145,27 @@ func seek(t: float) -> void:
 	_seek_internal(clampf(t, _start_ts, _end_ts), true)
 
 
+# Frame-step while paused. direction>0 jumps to the next recorded world-state
+# frame, direction<0 to the previous. Uses the recorded host_ts (rather than a
+# fixed delta) so gaps in the recording don't show up as a stalled step —
+# stepping across the host's goal-replay window jumps in one press.
+func step_frame(direction: int) -> void:
+	if _frames.is_empty() or direction == 0:
+		return
+	var idx: int = _find_frame_idx(_virtual_clock)
+	if idx < 0:
+		idx = 0
+	# Backward from an in-bracket clock should land on the bracket's FROM
+	# frame (idx itself), not idx-1. Forward always jumps a full bracket.
+	var target_idx: int
+	if direction > 0:
+		target_idx = idx + 1
+	else:
+		target_idx = idx if _virtual_clock > _timestamps[idx] else idx - 1
+	target_idx = clampi(target_idx, 0, _timestamps.size() - 1)
+	seek(_timestamps[target_idx])
+
+
 # Lightweight seek used while the user is dragging the seek slider. Walks
 # the clock and refreshes the visible frame, but defers the roster rebuild
 # (queue_free + respawn of every actor — visible strobe at slider step

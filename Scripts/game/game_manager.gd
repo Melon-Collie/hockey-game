@@ -134,7 +134,7 @@ var _spectator_peers: Dictionary[int, bool] = {}
 # the SpectatorCamera mount and HUD chrome hiding. Also gates the local-skater
 # spawn path in on_slot_assigned.
 var _is_local_spectator: bool = false
-var _spectator_camera: SpectatorCamera = null
+var _camera_director: CameraDirector = null
 
 # ── Game identity ─────────────────────────────────────────────────────────────
 # Minted by the host in LobbyManager._on_start_pressed and broadcast via
@@ -888,22 +888,36 @@ func _record_body_check_replay_event(checker_peer_id: int, victim: Skater,
 
 
 # Local peer is a spectator. Set the flag so HUD chrome can hide local-only
-# elements, and mount a SpectatorCamera tracking the puck. No skater is
+# elements, and mount a CameraDirector tracking the puck. No skater is
 # created — the spectator renders the active 6 via the existing remote-controller
-# path that all clients already use.
+# path that all clients already use. The director owns broadcast / chase /
+# free cameras and the input handlers that switch between them.
 func _become_local_spectator() -> void:
 	_is_local_spectator = true
-	if _spectator_camera == null:
-		_spectator_camera = SpectatorCamera.new()
-		get_tree().current_scene.add_child(_spectator_camera)
-		_spectator_camera.setup(func() -> Vector3:
-			return puck.global_position if puck != null else Vector3.ZERO)
-		_spectator_camera.activate()
+	if _camera_director == null:
+		_camera_director = CameraDirector.new()
+		get_tree().current_scene.add_child(_camera_director)
+		_camera_director.setup(
+			func() -> Vector3:
+				return puck.global_position if puck != null else Vector3.ZERO,
+			func() -> Array[Skater]:
+				var out: Array[Skater] = []
+				if _registry == null:
+					return out
+				for record: PlayerRecord in _registry.all().values():
+					if record != null and record.skater != null and is_instance_valid(record.skater):
+						out.append(record.skater)
+				return out)
+		_camera_director.activate_initial()
 	local_spectator_state_changed.emit(true)
 
 
 func is_local_spectator() -> bool:
 	return _is_local_spectator
+
+
+func get_camera_director() -> CameraDirector:
+	return _camera_director
 
 
 func get_game_id() -> String:
@@ -985,10 +999,9 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 
 
 func _teardown_spectator_camera() -> void:
-	if _spectator_camera != null:
-		_spectator_camera.deactivate()
-		_spectator_camera.queue_free()
-		_spectator_camera = null
+	if _camera_director != null:
+		_camera_director.teardown()
+		_camera_director = null
 	if _is_local_spectator:
 		_is_local_spectator = false
 		local_spectator_state_changed.emit(false)

@@ -110,8 +110,16 @@ func _ready() -> void:
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
-	GameManager.local_spectator_state_changed.connect(func(_is_spec: bool) -> void: _apply_spectator_chrome())
+	GameManager.local_spectator_state_changed.connect(func(is_spec: bool) -> void:
+		_apply_spectator_chrome()
+		if is_spec and _toast_stack != null:
+			_toast_stack.push("C: camera  ·  ↑↓: player  ·  RMB drag: look", _WHITE))
 	_apply_spectator_chrome()
+	# Catch the case where the local peer entered the scene already a
+	# spectator (lobby-assigned slot) — the signal was emitted before this
+	# HUD's connect, so push the toast inline.
+	if GameManager.is_local_spectator() and _toast_stack != null:
+		_toast_stack.push("C: camera  ·  ↑↓: player  ·  RMB drag: look", _WHITE)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"skip_replay"):
