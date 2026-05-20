@@ -44,8 +44,10 @@ func _process(_delta: float) -> void:
 			jitter_max,
 			NetworkSimManager.loss_pct,
 		]
-	else:
+	elif BuildInfo.VERSION == "dev":
 		sim_label = "off  (keys 0-6 to set preset)"
+	else:
+		sim_label = "off"
 	var rtt_avg: float = NetworkManager.get_rtt_ms()
 	var rtt_last: float = NetworkManager.get_latest_rtt_ms()
 	var offset_ms: float = NetworkManager.get_clock_offset_ms()

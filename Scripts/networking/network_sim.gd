@@ -43,6 +43,11 @@ func send(c: Callable, args: Array, reliable: bool) -> void:
 	_pending.append(p)
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Preset hotkeys are dev-only — they inject artificial delay/jitter/loss
+	# that's only useful for testing. In exported builds the keys are ignored
+	# so a player can't accidentally hit one and break their session.
+	if BuildInfo.VERSION != "dev":
+		return
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var preset: int = -1
