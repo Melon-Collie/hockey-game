@@ -6,7 +6,10 @@ signal hit_received(magnitude: float)
 @export var reconcile_position_threshold: float = 0.10
 @export var reconcile_velocity_threshold: float = 0.4
 
-@onready var camera: GameCamera = null
+# Untyped so the script can be swapped between GameCamera and GameCameraClassic
+# in setup() without violating the declared type.
+@onready var camera: Camera3D = null
+const _CLASSIC_CAMERA_SCRIPT: Script = preload("res://Scripts/ui/game_camera_classic.gd")
 var _gatherer: LocalInputGatherer = null
 var _current_input: InputState = InputState.new()
 var _input_history: Array[InputState] = []
@@ -23,13 +26,22 @@ const _RECONCILE_VISUAL_ALPHA: float = 0.20  # exponential decay per physics fra
 
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
 	camera = $Camera3D
+	# Swap the script to the classic camera when that style is selected. The
+	# scene's Camera3D ships with the modern GameCamera script, so the modern
+	# style is a no-op here. @exports below are set after the script swap so
+	# they land on whichever script is active.
+	if PlayerPrefs.camera_style == PlayerPrefs.CAMERA_STYLE_CLASSIC:
+		camera.set_script(_CLASSIC_CAMERA_SCRIPT)
 	super.setup(assigned_skater, assigned_puck, game_state)
 	show_one_timer_indicator = true
 	_gatherer = LocalInputGatherer.new(camera)
 	add_child(_gatherer)
 	camera.skater = assigned_skater
 	camera.puck = assigned_puck
-	camera.local_controller = self
+	# Classic camera needs a back-reference to the controller; modern doesn't
+	# declare the property. Skip cleanly when modern is active.
+	if PlayerPrefs.camera_style == PlayerPrefs.CAMERA_STYLE_CLASSIC:
+		camera.local_controller = self
 	skater.body_check_impulse_applied.connect(
 		func(impulse: Vector3) -> void:
 			_body_check_impulse = impulse
