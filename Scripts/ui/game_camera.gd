@@ -11,7 +11,20 @@ extends Camera3D
 # 1.0 = push player/puck to the trailing edge of the frame; 0.0 = no bias.
 @export var zone_bias: float = 0.7
 # How fast the bias transitions when possession changes (prevents snapping).
-@export var bias_smooth_speed: float = 1.5
+# Slower = stickier — possession changes ease over ~1.2s instead of ~0.5s.
+@export var bias_smooth_speed: float = 0.8
+# Seconds of velocity look-ahead for the in_ozone check. Engages/releases the
+# zone bias before the player physically crosses the blue line, so the
+# smoothing has time to settle before the player actually arrives.
+@export var ozone_predict_time: float = 0.25
+
+# ── Carrier Lookahead ─────────────────────────────────────────────────────────
+# When the local player is carrying the puck, lean the anchor in the skating
+# direction so they can see ahead. Magnitude scales with speed up to
+# `carry_lookahead_distance` at `carry_lookahead_full_speed`. Inactive off-puck —
+# the midpoint anchor handles neutral / defensive framing on its own.
+@export var carry_lookahead_distance: float = 4.0
+@export var carry_lookahead_full_speed: float = 12.0
 
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
 @export var min_height: float = 10.0
@@ -104,9 +117,14 @@ func _physics_process(delta: float) -> void:
 	# Fitting the goal here lets the camera reach it via the dynamic zoom +
 	# the zone bias shift below, instead of needing a separate `ozone_min_height`
 	# bump that wastes screen on a wider general zoom-out.
+	#
+	# `in_ozone` uses a velocity-predicted Z so the bias engages/releases
+	# before the player actually crosses the blue line, leaving time for the
+	# smoothing to settle.
 	var attack_dir_now: int = _get_attacking_direction()
+	var predicted_z: float = player_pos.z + skater.velocity.z * ozone_predict_time
 	var in_ozone: bool = attack_dir_now != 0 and \
-		(player_pos.z * float(attack_dir_now)) > GameRules.BLUE_LINE_Z
+		(predicted_z * float(attack_dir_now)) > GameRules.BLUE_LINE_Z
 
 	var half_span_x: float = abs(player_pos.x - puck_pos.x) * 0.5
 	var fit_min_z: float = minf(player_pos.z, puck_pos.z)
@@ -158,6 +176,21 @@ func _physics_process(delta: float) -> void:
 		else:
 			blended_slack = _smoothed_attack_dir * slack_neg
 		target_center.z += blended_slack * zone_bias * direction_factor
+
+	# ── Step 3b: Carrier velocity lookahead ──────────────────────────────────
+	# When the local player carries the puck, lean the anchor in the skating
+	# direction. Stacks additively with the zone bias above (skating toward
+	# the attacking goal: lookahead and bias both push the same way; skating
+	# laterally with the puck: lookahead pushes sideways while bias keeps
+	# pulling toward the goal — net is a forward-and-sideways framing).
+	if puck.get_carrier() == skater:
+		var carrier_vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
+		var carrier_speed: float = carrier_vel_xz.length()
+		if carrier_speed > 0.5:
+			var t_speed: float = clampf(carrier_speed / carry_lookahead_full_speed, 0.0, 1.0)
+			var lookahead: Vector3 = (carrier_vel_xz / carrier_speed) * t_speed * carry_lookahead_distance
+			target_center.x += lookahead.x
+			target_center.z += lookahead.z
 
 	# ── Step 4: Rink clamp ────────────────────────────────────────────────────
 	var safe_x: float = maxf(rink_half_width - visible_half_x, 0.0)
