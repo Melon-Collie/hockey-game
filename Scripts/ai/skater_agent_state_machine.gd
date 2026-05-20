@@ -282,6 +282,28 @@ const MOUSE_NOISE_STD_M: float = 0.02
 # avoids threading delta through every state handler call.
 const MOUSE_TICK_DELTA: float = 1.0 / 240.0
 
+# Cap on how fast the pre-aim mouse target sweeps around self_pos at the
+# CARRY_BLADE_AIM_FORWARD_M radius. The target is otherwise a fixed point
+# at `self_pos + 2 m * aim_dir`, and `_step_mouse_toward` lerps in a
+# straight line toward it. A near-180° aim swing (back-pass to a receiver
+# behind the bot) draws a chord through self_pos: as the mouse crosses,
+# (mouse_world − skater) flips discontinuously past
+# rom_backhand_angle_max_deg + upper_body_max_twist_deg (~157°), tripping
+# the IK gate in SkaterPoseCoordinator.apply_facing. Facing then freezes
+# and the mouse settles at 180° from the frozen facing, so the gate
+# never releases — pre-aim waits on a facing alignment that can't
+# arrive, and the bot stands still until INTENT_MAX_WAIT_TICKS times out
+# and fires in the wrong direction.
+#
+# Arcing the target around self_pos at this rate keeps the mouse on a
+# circle (never crossing the body) and stays in tracking range of the
+# body's facing lerp, which converges to mouse direction at
+# facing_drag_speed_braking = 10 (pre-aim brakes). Matches
+# BOT_FACING_ROTATION_RATE_RAD_S so 180° resolves in ~525 ms — under the
+# 750 ms timeout — and steady-state mouse_body_angle stays well below
+# 157° so the IK gate never trips.
+const MOUSE_ARC_RATE_RAD_S: float = 6.0
+
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
@@ -1007,7 +1029,16 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		mouse_target = _carry_aim_track_fire(snapshot, self_pos)
 	else:
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
-	input.mouse_world_pos = _step_mouse_toward(mouse_target)
+	# Arc the per-tick mouse target around self_pos toward the final
+	# aim point. Without this, `_step_mouse_toward`'s straight chord
+	# across a 180° swing (e.g. back-pass) passes through self_pos and
+	# trips the pose coordinator's IK gate — see MOUSE_ARC_RATE_RAD_S.
+	# Convergence check below still uses the un-arced FINAL `mouse_target`
+	# so the bot fires only when the body has reached the real aim
+	# direction, not an intermediate arc point. No-op for small angle
+	# diffs (clampf passes the full diff through in a single tick).
+	input.mouse_world_pos = _step_mouse_toward(
+			_arc_step_mouse_target(self_pos, mouse_target, self_state))
 
 	# If pre-aiming, wait for mouse convergence AND facing alignment
 	# (or timeout) before transitioning to the action state. Mouse
@@ -1113,12 +1144,18 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 			return _carry_mouse_aim(snapshot, self_pos)
 
 
-# Returns a point 2 m from `self_pos` in the direction toward
-# `aim_world`. Used to put the mouse close to the bot in the
-# correct DIRECTION for an upcoming shot/pass, so it converges
-# quickly under the motion model. Distance to the actual aim point
-# doesn't matter — the shot direction at fire time depends on
-# (mouse - shoulder) or (mouse - blade), which is a unit direction.
+# Returns a point 2 m from `self_pos` heading toward `aim_world`. Used
+# to put the mouse close to the bot in the correct DIRECTION for an
+# upcoming shot/pass, so it converges quickly under the motion model.
+# Distance to the actual aim point doesn't matter — the shot direction
+# at fire time depends on (mouse - shoulder) or (mouse - blade), which
+# is a unit direction.
+#
+# Returns the FINAL aim point — the pre-aim convergence check
+# (`_state_carry`) compares the mouse against this to decide when to
+# fire, so it must be the final destination, not an intermediate
+# arc step. `_arc_step_mouse_target` is what threads the mouse target
+# around self_pos on the way here.
 func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
 	var to_aim: Vector3 = aim_world - self_pos
 	to_aim.y = 0.0
@@ -1127,6 +1164,45 @@ func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
 		# is (0, 0, -1), which is correct for team 0 but inverts for team 1.
 		return self_pos + Vector3(0.0, 0.0, -_own_goal_dir) * CARRY_BLADE_AIM_FORWARD_M
 	return self_pos + to_aim.normalized() * CARRY_BLADE_AIM_FORWARD_M
+
+
+# Returns an intermediate mouse target on the 2 m circle around self_pos
+# that walks toward `final_target` at no more than MOUSE_ARC_RATE_RAD_S.
+# See MOUSE_ARC_RATE_RAD_S comment for why arcing is required — straight
+# chords across a 180° swing pass through self_pos and trip the IK gate.
+# `_step_mouse_toward`'s straight-line lerp tracks this slowly-moving
+# target with sub-tick error, so the mouse describes the same arc.
+func _arc_step_mouse_target(self_pos: Vector3, final_target: Vector3,
+		self_state: SkaterNetworkState) -> Vector3:
+	var to_final: Vector3 = final_target - self_pos
+	to_final.y = 0.0
+	if to_final.length_squared() < 0.0001:
+		return final_target
+	var desired_dir: Vector3 = to_final.normalized()
+
+	# Seed the current angle from the mouse's current offset from self_pos
+	# when it's far enough away to define a direction unambiguously (the
+	# typical case — the mouse is held ~2 m out by previous calls). Fall
+	# back to facing when the mouse is parked on top of self_pos (e.g. the
+	# danger-zone cradle in `_carry_mouse_aim`); seeding from facing rather
+	# than snapping to desired_dir keeps the next-tick chord from crossing
+	# self_pos when desired_dir points behind the bot.
+	var current_offset := Vector2(_mouse_pos.x - self_pos.x, _mouse_pos.z - self_pos.z)
+	var seed_dir: Vector3
+	if _mouse_pos_initialized and current_offset.length_squared() >= 0.04:
+		seed_dir = Vector3(current_offset.x, 0.0, current_offset.y).normalized()
+	elif self_state != null \
+			and Vector2(self_state.facing.x, self_state.facing.y).length_squared() > 0.0001:
+		seed_dir = Vector3(self_state.facing.x, 0.0, self_state.facing.y).normalized()
+	else:
+		seed_dir = desired_dir
+
+	var current_angle: float = atan2(seed_dir.x, seed_dir.z)
+	var desired_angle: float = atan2(desired_dir.x, desired_dir.z)
+	var diff: float = wrapf(desired_angle - current_angle, -PI, PI)
+	var max_step: float = MOUSE_ARC_RATE_RAD_S * MOUSE_TICK_DELTA
+	var stepped_angle: float = current_angle + clampf(diff, -max_step, max_step)
+	return self_pos + Vector3(sin(stepped_angle), 0.0, cos(stepped_angle)) * CARRY_BLADE_AIM_FORWARD_M
 
 
 # True when the bot's facing has rotated close enough to the
