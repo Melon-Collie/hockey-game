@@ -15,7 +15,6 @@ extends Camera3D
 
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
 @export var min_height: float = 10.0
-@export var ozone_min_height: float = 14.0  # min height when local player is in the offensive zone
 @export var max_height: float = 40.0
 @export var zoom_speed: float = 3.0
 @export var zoom_padding: float = 4.0  # extra visible space beyond player+puck span
@@ -97,21 +96,32 @@ func _physics_process(delta: float) -> void:
 	# ── Step 1: Base center = midpoint of player and puck ────────────────────
 	var base_center: Vector3 = (player_pos + puck_pos) * 0.5
 
-	# ── Step 2: Zoom to keep both player and puck in frame ───────────────────
-	var half_span_x: float = abs(player_pos.x - puck_pos.x) * 0.5
-	var half_span_z: float = abs(player_pos.z - puck_pos.z) * 0.5
-	var needed_x: float = (half_span_x + zoom_padding) / (tan_half_fov * aspect)
-	var needed_z: float = (half_span_z + zoom_padding) / tan_half_fov
-	# Zoom out when someone has the puck AND the local player is in the zone
-	# being attacked — works for either ozone, either carrier.
+	# ── Step 2: Zoom to keep the fit set in frame ────────────────────────────
+	# Base fit set is {player, puck}. When the carrier is attacking and the
+	# local player is past the carrier's attacking blue line, also fit the
+	# goal in the Z extent — that's the attacking goal when carrying (ozone)
+	# and the local team's own goal when defending against a carry-in (dzone).
+	# Fitting the goal here lets the camera reach it via the dynamic zoom +
+	# the zone bias shift below, instead of needing a separate `ozone_min_height`
+	# bump that wastes screen on a wider general zoom-out.
 	var attack_dir_now: int = _get_attacking_direction()
 	var in_ozone: bool = attack_dir_now != 0 and \
 		(player_pos.z * float(attack_dir_now)) > GameRules.BLUE_LINE_Z
-	# User-facing camera-distance multiplier (Options → Game). Scales the
-	# clamp range so the dynamic zoom math keeps its shape but the overall
-	# height shifts up/down per the player's preference.
+
+	var half_span_x: float = abs(player_pos.x - puck_pos.x) * 0.5
+	var fit_min_z: float = minf(player_pos.z, puck_pos.z)
+	var fit_max_z: float = maxf(player_pos.z, puck_pos.z)
+	if in_ozone:
+		var goal_z: float = float(attack_dir_now) * GameRules.GOAL_LINE_Z
+		fit_min_z = minf(fit_min_z, goal_z)
+		fit_max_z = maxf(fit_max_z, goal_z)
+	var half_span_z: float = (fit_max_z - fit_min_z) * 0.5
+
+	var needed_x: float = (half_span_x + zoom_padding) / (tan_half_fov * aspect)
+	var needed_z: float = (half_span_z + zoom_padding) / tan_half_fov
+	# User-facing camera-distance multiplier (Options → Game).
 	var dist_mult: float = PlayerPrefs.camera_distance
-	var effective_min: float = (ozone_min_height if in_ozone else min_height) * dist_mult
+	var effective_min: float = min_height * dist_mult
 	var effective_max: float = max_height * dist_mult
 	var target_height: float = clampf(maxf(needed_x, needed_z), effective_min, effective_max)
 	_current_height = lerpf(_current_height, target_height, zoom_speed * delta)
@@ -121,8 +131,7 @@ func _physics_process(delta: float) -> void:
 
 	# ── Step 3: Attacking zone bias ───────────────────────────────────────────
 	# Lerp the attack direction so possession changes ease in rather than snap.
-	var attack_dir: int = _get_attacking_direction()
-	_smoothed_attack_dir = lerpf(_smoothed_attack_dir, float(attack_dir), bias_smooth_speed * delta)
+	_smoothed_attack_dir = lerpf(_smoothed_attack_dir, float(attack_dir_now), bias_smooth_speed * delta)
 
 	var target_center: Vector3 = base_center
 	if not is_zero_approx(_smoothed_attack_dir):
@@ -133,7 +142,7 @@ func _physics_process(delta: float) -> void:
 		var raw_direction_factor: float = 1.0
 		if vel_xz.length_squared() > 0.25:  # ignore drift when nearly stationary
 			var vel_dir: Vector3 = vel_xz.normalized()
-			var dot: float = vel_dir.z * float(attack_dir)
+			var dot: float = vel_dir.z * float(attack_dir_now)
 			raw_direction_factor = clampf((dot + 1.0) * 0.5, 0.0, 1.0)
 		_smoothed_direction_factor = lerpf(_smoothed_direction_factor, raw_direction_factor, bias_smooth_speed * delta)
 		var direction_factor: float = _smoothed_direction_factor
