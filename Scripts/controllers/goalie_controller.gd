@@ -962,7 +962,15 @@ func _update_body_parts(delta: float) -> void:
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
 func _on_puck_released() -> void:
-	if not _sm.is_upright():
+	# RVH is post-hug coverage with a separate pose — no glove reach is wired,
+	# and the goalie is already committed to the puck-side post. Every other
+	# state (STANDING, READY, BUTTERFLY, SLIDING, RECOVERING) supports the
+	# elevated-shot arm reach via the body-config builder, so the freeze starts
+	# from any of them. Previously this was gated on `is_upright()`, which
+	# silently dropped all goalie reactions to shots fired while the goalie was
+	# already down — top-corner shots over a butterflied goalie went un-tracked
+	# because no `shot_reaction_started` RPC ever fired.
+	if _sm.is_rvh():
 		return
 	# `get_release_velocity` returns the impending velocity even when
 	# `linear_velocity` is still zero (Jolt's frozen→dynamic transition queues
