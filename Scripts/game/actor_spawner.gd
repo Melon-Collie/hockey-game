@@ -23,7 +23,8 @@ func setup(scene_root: Node) -> void:
 # ── Goals (already placed in the scene by the rink — we just sort them) ──────
 func find_goals() -> Array[HockeyGoal]:
 	var goals: Array[HockeyGoal] = []
-	for node in _scene_root.get_children():
+	# Recursive: goals live under the RinkArena instance, not the scene root.
+	for node in _scene_root.find_children("*", "HockeyGoal", true, false):
 		if node is HockeyGoal:
 			goals.append(node)
 	# goals[0] is facing=-1 (negative-Z, Team 1 defends)
