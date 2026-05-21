@@ -313,8 +313,24 @@ func _build_score_line(game: Dictionary) -> Control:
 	date_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(date_label)
 
+	# Derive final score from period_scores rather than the RPC's home_score/
+	# away_score columns: the period breakdown rendered just below is the
+	# authoritative per-game record, so summing it guarantees the headline
+	# score and the grid totals can't disagree.
 	var score_label := Label.new()
-	score_label.text = "%d — %d" % [_safe_int(game.get("home_score", 0)), _safe_int(game.get("away_score", 0))]
+	var home_score: int = 0
+	var away_score: int = 0
+	var ps: Variant = game.get("period_scores", null)
+	if ps is Array and (ps as Array).size() >= 2:
+		var ps_arr: Array = ps as Array
+		for g: Variant in ps_arr[0] as Array:
+			home_score += _safe_int(g)
+		for g: Variant in ps_arr[1] as Array:
+			away_score += _safe_int(g)
+	else:
+		home_score = _safe_int(game.get("home_score", 0))
+		away_score = _safe_int(game.get("away_score", 0))
+	score_label.text = "%d — %d" % [home_score, away_score]
 	score_label.add_theme_font_size_override("font_size", 18)
 	score_label.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
 	hbox.add_child(score_label)

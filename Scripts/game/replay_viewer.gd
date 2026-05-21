@@ -99,18 +99,18 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	for gc: GoalieController in _goalie_controllers:
 		gc.set_physics_process(false)
 
-	# Replay headers carry int slot indices. Legacy fruit-name strings in old
-	# .mreplay files won't typecheck — fall back to defaults and warn rather
-	# than crash. Hard break: no string→slot mapping.
+	# Replay headers carry int slot indices, but JSON.parse_string decodes
+	# every number as float — so accept both. Legacy fruit-name strings in
+	# old .mreplay files fall back to defaults rather than crash.
 	var raw_home: Variant = header.get("home_color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
 	var raw_away: Variant = header.get("away_color_slot", TeamColorRegistry.DEFAULT_AWAY_SLOT)
-	if raw_home is int:
-		_home_color_slot = raw_home
+	if raw_home is int or raw_home is float:
+		_home_color_slot = int(raw_home)
 	else:
 		push_warning("ReplayViewer: legacy color id in header, using default home")
 		_home_color_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
-	if raw_away is int:
-		_away_color_slot = raw_away
+	if raw_away is int or raw_away is float:
+		_away_color_slot = int(raw_away)
 	else:
 		push_warning("ReplayViewer: legacy color id in header, using default away")
 		_away_color_slot = TeamColorRegistry.DEFAULT_AWAY_SLOT
