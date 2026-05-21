@@ -82,8 +82,12 @@ func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_de
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return
 	var record: PlayerRecord = _registry.get_record(peer_id)
-	if record == null or record.skater == null or record.skater.is_ghost:
+	if record == null or record.skater == null:
 		return
+	# is_ghost is checked from the rewound snapshot below (skater_snap), not
+	# present-time, so a player who became ghost in the last RTT/2 isn't
+	# wrongly denied a claim that was legal at send time, and a player who
+	# just cleared ghost isn't wrongly granted one that was illegal then.
 	if puck.is_on_cooldown(record.skater):
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
@@ -106,6 +110,8 @@ func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_de
 	var skater_snap: SkaterNetworkState = blade_snap.get_skater_state(peer_id)
 	var skater_prev_snap: SkaterNetworkState = blade_prev_snap.get_skater_state(peer_id)
 	if skater_snap == null or skater_prev_snap == null:
+		return
+	if skater_snap.is_ghost:
 		return
 	var blade_curr: Vector3 = skater_snap.blade_contact_world
 	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world

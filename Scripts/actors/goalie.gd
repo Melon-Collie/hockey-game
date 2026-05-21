@@ -53,7 +53,7 @@ func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float
 		_lerp_part(_glove, config.glove_pos, config.glove_rot, t)
 	else:
 		_glove.position = _glove.position.move_toward(config.glove_pos, glove_max_step)
-		_glove.rotation_degrees = _glove.rotation_degrees.lerp(config.glove_rot, t)
+		_glove.rotation_degrees = _lerp_euler_deg(_glove.rotation_degrees, config.glove_rot, t)
 	# Blocker assembly = blocker pad + stick (shaft, paddle, blade) as one
 	# rigid unit. Single transform via `blocker_pos` / `blocker_rot` drives
 	# the whole BlockArm; pad and stick are children that rotate together
@@ -65,7 +65,7 @@ func apply_body_config(config: GoalieBodyConfig, t: float, glove_max_step: float
 		_lerp_part(_block_arm, config.blocker_pos, config.blocker_rot, t)
 	else:
 		_block_arm.position = _block_arm.position.move_toward(config.blocker_pos, blocker_max_step)
-		_block_arm.rotation_degrees = _block_arm.rotation_degrees.lerp(config.blocker_rot, t)
+		_block_arm.rotation_degrees = _lerp_euler_deg(_block_arm.rotation_degrees, config.blocker_rot, t)
 
 func set_goalie_position(x: float, z: float) -> void:
 	global_position = Vector3(x, 0.0, z)
@@ -78,4 +78,23 @@ func get_goalie_rotation_y() -> float:
 
 func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
 	part.position = part.position.lerp(target_pos, t)
-	part.rotation_degrees = part.rotation_degrees.lerp(target_rot_deg, t)
+	part.rotation_degrees = _lerp_euler_deg(part.rotation_degrees, target_rot_deg, t)
+
+
+# Wrap-safe Euler lerp: rotation_degrees.lerp on a Vector3 interpolates each
+# axis linearly, which crosses through 0° instead of through 180° at sign
+# flips (-179° → +179° becomes a 358° spin through 0°, not a 2° step). All
+# current goalie body parts stay within ±90°, but the moment any rotation
+# range crosses ±180° the latent bug surfaces. Reduce the per-axis delta
+# into [-180°, +180°] via fmod so the lerp always takes the short way.
+static func _lerp_euler_deg(from: Vector3, to: Vector3, t: float) -> Vector3:
+	return Vector3(
+		from.x + _shortest_deg_delta(from.x, to.x) * t,
+		from.y + _shortest_deg_delta(from.y, to.y) * t,
+		from.z + _shortest_deg_delta(from.z, to.z) * t,
+	)
+
+
+static func _shortest_deg_delta(from: float, to: float) -> float:
+	var delta: float = fmod(to - from + 540.0, 360.0) - 180.0
+	return delta
