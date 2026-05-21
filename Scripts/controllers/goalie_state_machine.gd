@@ -1,0 +1,42 @@
+class_name GoalieStateMachine
+extends RefCounted
+
+# Owns the goalie's current AI state. RECOVERING is the stand-up window after
+# butterfly (vulnerable beat where the goalie can't drop/RVH/react); SLIDING is
+# the committed butterfly slide (plant outside leg, push off, arc to seal).
+# READY is the half-down active stance when the puck is in the goalie's
+# defensive half — distinct from STANDING so animation can show engagement.
+enum State { STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING }
+
+signal transitioned(prev: State, new: State)
+
+var current: State = State.STANDING
+# Counts up while in RECOVERING; reset on entry. The controller checks it
+# against `recovery_duration` to decide when to return to READY/STANDING.
+var recovery_timer: float = 0.0
+
+func reset() -> void:
+	current = State.STANDING
+	recovery_timer = 0.0
+
+func is_butterfly() -> bool:
+	return current == State.BUTTERFLY
+
+# Upright = goalie can drop to butterfly / engage RVH from this state. Both
+# STANDING and READY qualify; RECOVERING does not (it's the vulnerable
+# stand-up window).
+func is_upright() -> bool:
+	return current == State.STANDING or current == State.READY
+
+func is_rvh() -> bool:
+	return current == State.RVH_LEFT or current == State.RVH_RIGHT
+
+# Sets the state and emits `transitioned(prev, new)`. Returns true if the
+# state actually changed (no-op when new_state == current).
+func transition_to(new_state: State) -> bool:
+	if new_state == current:
+		return false
+	var prev: State = current
+	current = new_state
+	transitioned.emit(prev, new_state)
+	return true
