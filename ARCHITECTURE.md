@@ -350,7 +350,6 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 ## Known Issues / Planned Work
 
 **Performance, deferred until profiling shows them mattering:**
-- **`GoalieController._get_config(_state)`** rebuilds a fresh `GoalieBodyConfig` (~150 LOC of branching + `Vector3` literals) every physics tick per goalie. Memoize per `(state, _five_hole_openness, reaction_state)` tuple; this is the largest known hot-path allocation.
 - **AI snapshot-level caching.** `GameManager._enrich_snapshot_for_ai` publishes `teammate_ids_by_team` + `closest_to_puck_by_team` on `current_snapshot` once per host physics frame; the two per-physics-tick hotspots (`_apply_steering`, `_is_closest_teammate_to_puck_at`) read from the cache. The 6 Hz brain-tick role behaviors (`carrier`, `finisher`, `role_helpers`, `role_slots.assign`) still re-partition `snapshot.skater_states` themselves — wins there are ~30× smaller than the physics-tick paths, so deferred until profiling motivates it.
 
 **Maintainability, address opportunistically (don't refactor for its own sake):**
