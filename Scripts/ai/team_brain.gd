@@ -34,7 +34,7 @@ const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
 var state: int = AIPossessionState.State.DZONE
-var slot_assignments: Dictionary = {}      # peer_id -> AIRoleSlots.Slot
+var slot_assignments: Dictionary[int, int] = {}      # peer_id -> AIRoleSlots.Slot
 
 # Internal — sticky possession for loose-puck handling.
 var _last_carrier_team: int = -1
@@ -94,11 +94,10 @@ func force_retick() -> void:
 # rate-limit.
 func _compute_tick(snapshot: WorldSnapshot) -> void:
 	# 1. Possession state.
-	var new_state_pair: Array = AIPossessionState.compute(
+	var possession: AIPossessionState.Result = AIPossessionState.compute(
 			snapshot, team_id, _own_goal_z, _team_id_by_peer, _last_carrier_team)
-	var new_state: int = new_state_pair[0]
-	_last_carrier_team = new_state_pair[1]
-	state = new_state
+	_last_carrier_team = possession.carrier_team
+	state = possession.state
 
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:
