@@ -531,11 +531,9 @@ func _spawn_world() -> void:
 	_spawn_goalies()
 	_wire_subsystems()
 	if NetworkManager.is_host:
-		var is_human_resolver := func(peer_id: int) -> bool:
-			return NetworkManager.is_real_peer(peer_id)
 		team_brains = [
-				TeamBrain.new(0, _registry.team_id_by_peer, is_human_resolver),
-				TeamBrain.new(1, _registry.team_id_by_peer, is_human_resolver),
+				TeamBrain.new(0, _registry.team_id_by_peer),
+				TeamBrain.new(1, _registry.team_id_by_peer),
 		]
 		_connect_goal_signals()
 
