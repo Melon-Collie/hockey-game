@@ -52,8 +52,12 @@ var _local_record:     PlayerRecord    = null
 var _local_controller: LocalController = null
 var _skater:           Skater          = null
 var _puck:             Puck            = null
-var _dummy_skater:     Skater          = null
-var _dummy_controller: Node            = null
+# Puppeted bot used as a tutorial demo partner (stickcheck target, body-check
+# target, one-timer passer, shot-block shooter). Replaces the static dummy
+# skater the tutorial used to spawn — real bots get the team_id resolver wired
+# correctly so stickcheck (apply_poke_check) and body-check signal filtering
+# behave as they do in normal gameplay. See GameManager.spawn_tutorial_bot.
+var _puppet_record: PlayerRecord = null
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
@@ -122,7 +126,7 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	_disconnect_all_signals()
-	_free_dummy()
+	_free_puppet()
 	NetworkManager.is_tutorial_mode = false
 
 
@@ -275,13 +279,14 @@ func _begin_step(index: int) -> void:
 
 		STEP_STICKCHECK:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.5))
-			_ensure_dummy(Vector3(0.0, 1.0, 0.0))
-			# Give the dummy the puck — it pins to the dummy's blade each physics frame.
-			# PuckController sees the player as an opposing skater (dummy resolves to team -1)
-			# and will call apply_poke_check when the player's blade sweeps through.
+			_ensure_puppet(Vector3(0.0, 1.0, 0.0))
+			# Give the puppet the puck — PuckController pins it to the bot's blade
+			# each physics frame. The bot's team_id resolver (wired by spawn_bot)
+			# returns team 1, so apply_poke_check recognises the player as opposing
+			# and the strip fires when the player's blade sweeps through.
 			if _puck.carrier != null:
 				_puck.drop()
-			_puck.set_carrier(_dummy_skater)
+			_puck.set_carrier(_puppet_record.skater)
 			_on_stickcheck_callable = func(_ex: Skater) -> void:
 				_complete_step()
 			_puck.puck_stripped.connect(_on_stickcheck_callable)
@@ -292,7 +297,7 @@ func _begin_step(index: int) -> void:
 			# Prevent race-condition re-pickup: drop() is sync but set_puck_position is
 			# deferred by Jolt; one physics tick sees the puck at the old position.
 			_puck.set_skater_cooldown(_skater, 0.5)
-			_ensure_dummy(Vector3(4.0, 1.0, 0.0))
+			_ensure_puppet(Vector3(4.0, 1.0, 0.0))
 			_on_body_check_callable = func(_victim: Skater, _force: float, _dir: Vector3) -> void:
 				_complete_step()
 			_skater.body_checked_player.connect(_on_body_check_callable)
@@ -314,8 +319,12 @@ func _complete_step() -> void:
 	_disconnect_all_signals()
 	_complete_flash_timer = TutorialHUD._COMPLETE_FLASH_DURATION
 	_hud.flash_complete()
-	if _current_step_id() == STEP_BODY_CHECK:
-		_free_dummy()
+	# Tear the puppet down after any step that used it so it doesn't linger
+	# into a step that doesn't need it (e.g. body-check → elevation in the
+	# advanced flow).
+	var step_id: int = _current_step_id()
+	if step_id == STEP_BODY_CHECK or step_id == STEP_STICKCHECK:
+		_free_puppet()
 
 
 func _advance_step() -> void:
@@ -335,7 +344,7 @@ func _on_skip() -> void:
 	if step_id == STEP_SHOT_BLOCK:
 		_place_puck(Vector3(100.0, _ICE_Y, 100.0))  # clear the in-flight puck
 	if step_id == STEP_STICKCHECK or step_id == STEP_BODY_CHECK:
-		_free_dummy()
+		_free_puppet()
 	_complete_step()
 
 
@@ -531,25 +540,33 @@ func _fire_puck_for_shot_block() -> void:
 	_puck.apply_release_velocity(Vector3(0.0, 0.001, _SHOT_BLOCK_PUCK_SPEED))
 
 
-func _ensure_dummy(position: Vector3) -> void:
-	if is_instance_valid(_dummy_skater):
-		_dummy_skater.global_position = position
+func _ensure_puppet(position: Vector3) -> void:
+	if _puppet_record == null or not is_instance_valid(_puppet_record.skater):
+		_puppet_record = GameManager.spawn_tutorial_bot(position, 0)
+		if _puppet_record == null:
+			return
+	else:
+		_puppet_record.skater.global_position = position
+	# Face toward the player so the puppet reads as engaged with the learner.
+	# Facing is XZ in world space; team-1 bots default to (0, 1) which faces
+	# +Z, which is wrong when the player is off-axis (e.g. body-check step
+	# spawns the puppet at +X with the player at -X).
+	var to_player := Vector2(
+			_skater.global_position.x - _puppet_record.skater.global_position.x,
+			_skater.global_position.z - _puppet_record.skater.global_position.z)
+	if to_player.length() > 0.01:
+		_puppet_record.skater.set_facing(to_player.normalized())
+	var ai_ctrl: AIController = _puppet_record.controller as AIController
+	if ai_ctrl != null:
+		ai_ctrl.script_hold()
+		ai_ctrl.script_aim_at(_skater.global_position)
+
+
+func _free_puppet() -> void:
+	if _puppet_record == null:
 		return
-	var spawned: Dictionary = GameManager.spawn_tutorial_dummy(position)
-	_dummy_skater = spawned.skater as Skater
-	_dummy_controller = spawned.controller as Node
-
-
-func _free_dummy() -> void:
-	if is_instance_valid(_dummy_skater):
-		# Drop the puck before freeing so the puck carrier pointer doesn't dangle
-		if _puck != null and _puck.carrier == _dummy_skater:
-			_puck.drop()
-		_dummy_skater.queue_free()
-		_dummy_skater = null
-	if is_instance_valid(_dummy_controller):
-		_dummy_controller.queue_free()
-		_dummy_controller = null
+	GameManager.despawn_tutorial_bot(_puppet_record)
+	_puppet_record = null
 
 
 # ── Signal management ─────────────────────────────────────────────────────────
