@@ -84,6 +84,11 @@ static func record_packet_loss(pct: float) -> void:
 static func record_jitter_p95(ms: float) -> void:
 	if instance: instance.jitter_p95_ms = ms
 
+# reconcile: count + trajectory divergence magnitude (predicted-vs-server at the
+# confirmed host_timestamp). Prediction lead is subtracted out by the timestamp
+# match, so the magnitude reflects true non-determinism (body-check mis-replay,
+# contested collisions). Falls back to post-replay residual when the prediction
+# snapshot isn't available (history capped, post-teleport, session warmup).
 static func record_reconcile(delta_m: float) -> void:
 	if instance == null:
 		return
