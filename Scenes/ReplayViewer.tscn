@@ -1,96 +1,9 @@
 [gd_scene format=3 uid="uid://dhsvdrshgykvu"]
 
 [ext_resource type="Script" uid="uid://chbrxdrsy7hl1" path="res://Scripts/game/replay_viewer.gd" id="1_2tglg"]
-[ext_resource type="PhysicsMaterial" uid="uid://bo58ocxbodjpo" path="res://Physics/boards.tres" id="2_k56de"]
-[ext_resource type="Script" uid="uid://0m52yshmlqpi" path="res://Scripts/actors/hockey_rink.gd" id="3_awldj"]
-[ext_resource type="Script" uid="uid://dnmmf3sl24ex4" path="res://Scripts/actors/hockey_goal.gd" id="4_22img"]
-
-[sub_resource type="Environment" id="Environment_rxg2q"]
-background_mode = 1
-background_color = Color(0.1897483, 0.1897483, 0.2716998, 1)
-ambient_light_source = 2
-ambient_light_color = Color(0.95468724, 0.9639762, 0.9822071, 1)
-ambient_light_energy = 0.55
-glow_enabled = true
-glow_strength = 0.8
-glow_bloom = 0.08
-glow_hdr_threshold = 2.0
+[ext_resource type="PackedScene" uid="uid://dfo84ap3fvymg" path="res://Scenes/RinkArena.tscn" id="2_wscae"]
 
 [node name="ReplayViewer" type="Node3D" unique_id=565254608]
 script = ExtResource("1_2tglg")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=333867525]
-environment = SubResource("Environment_rxg2q")
-
-[node name="Rink" type="StaticBody3D" parent="." unique_id=2100473277]
-physics_material_override = ExtResource("2_k56de")
-script = ExtResource("3_awldj")
-
-[node name="GoalBottom" type="StaticBody3D" parent="." unique_id=1648202477]
-script = ExtResource("4_22img")
-
-[node name="GoalTop" type="StaticBody3D" parent="." unique_id=1374888956]
-script = ExtResource("4_22img")
-facing = -1
-
-[node name="SpotLight3D" type="SpotLight3D" parent="." unique_id=92673213]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -7, 18, -18)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.0
-light_indirect_energy = 0.3
-light_specular = 0.7
-spot_range = 32.0
-spot_attenuation = 0.6
-spot_angle = 48.0
-
-[node name="SpotLight3D2" type="SpotLight3D" parent="." unique_id=860078582]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -7, 18, 0)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.0
-light_indirect_energy = 0.3
-light_specular = 0.7
-shadow_enabled = true
-spot_range = 32.0
-spot_attenuation = 0.6
-spot_angle = 48.0
-
-[node name="SpotLight3D3" type="SpotLight3D" parent="." unique_id=2045860332]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -7, 18, 18)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.0
-light_indirect_energy = 0.3
-light_specular = 0.7
-spot_range = 32.0
-spot_attenuation = 0.6
-spot_angle = 48.0
-
-[node name="SpotLight3D4" type="SpotLight3D" parent="." unique_id=1502217364]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 7, 18, -18)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.0
-light_indirect_energy = 0.3
-light_specular = 0.7
-spot_range = 32.0
-spot_attenuation = 0.6
-spot_angle = 48.0
-
-[node name="SpotLight3D5" type="SpotLight3D" parent="." unique_id=1560442888]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 7, 18, 0)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.0
-light_indirect_energy = 0.3
-light_specular = 0.7
-shadow_enabled = true
-spot_range = 32.0
-spot_attenuation = 0.6
-spot_angle = 48.0
-
-[node name="SpotLight3D6" type="SpotLight3D" parent="." unique_id=1194539476]
-transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 7, 18, 18)
-light_color = Color(1, 0.9731482, 0.9309246, 1)
-light_energy = 3.0
-light_indirect_energy = 0.3
-light_specular = 0.7
-spot_range = 32.0
-spot_attenuation = 0.6
-spot_angle = 48.0
+[node name="RinkArena" parent="." unique_id=1570360768 instance=ExtResource("2_wscae")]
