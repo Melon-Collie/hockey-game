@@ -351,7 +351,6 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 
 **Performance, deferred until profiling shows them mattering:**
 - **`GoalieController._get_config(_state)`** rebuilds a fresh `GoalieBodyConfig` (~150 LOC of branching + `Vector3` literals) every physics tick per goalie. Memoize per `(state, _five_hole_openness, reaction_state)` tuple; this is the largest known hot-path allocation.
-- **`PlayerRegistry.resolve_peer_id` / `_resolve_skater_team_id`** are O(N) per call, hit on hot paths (per-tick body-check / pickup / `_team_resolver` callable). Reverse-map `Dictionary[Skater, int]` would make them O(1). Fine at 6 players; revisit if rosters grow.
 - **AI snapshot-level caching.** Today every bot's `_pick_action` rebuilds its own teammate-id list and runs its own closest-teammate-to-puck scan. Once per-bot off-puck utility AI lands (every bot, not just the carrier), publish a per-frame teammate roster + closest-teammate map on `GameManager.current_snapshot` so all bots read it without recomputing.
 
 **Maintainability, address opportunistically (don't refactor for its own sake):**
