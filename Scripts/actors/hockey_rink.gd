@@ -26,6 +26,17 @@ extends StaticBody3D
 	set(v):
 		corner_segments = v
 		_rebuild()
+# Collision tessellation runs independently of the visual mesh. The puck slides
+# along the inner face of a triangulated arc, and every facet transition leaks
+# a sliver of energy through bounce restitution (puck velocity isn't tangent
+# to the next facet's normal). Energy retained per corner ≈ exp(-(1-e²)·π²/(4N))
+# for restitution e and N segments — at N=256 with e=0.4 the loss per corner is
+# under 1%, so rim-arounds feel near-lossless while square hits still bounce.
+# Visual mesh stays at corner_segments for cheap rendering.
+@export var corner_collision_segments: int = 256:
+	set(v):
+		corner_collision_segments = v
+		_rebuild()
 @export var wall_color: Color = Color(0.95, 0.95, 0.95):
 	set(v):
 		wall_color = v
@@ -179,7 +190,7 @@ func _rebuild() -> void:
 	# between them produced both visual (flat-vs-smooth shading) and physical
 	# (contact-normal kink) artifacts. Merging into one continuous loop per
 	# band eliminates every seam.
-	var stations: Array = _build_perimeter_stations()
+	var stations: Array = _build_perimeter_stations(corner_segments)
 
 	var board_top: float = wall_height - CAP_RAIL_HEIGHT
 	var rail_top: float = wall_height
@@ -222,8 +233,10 @@ func _rebuild() -> void:
 	# Single collision around the entire perimeter at the boards' inner
 	# radius. Covers the full wall + glass height. Replaces the BoxShape3D /
 	# ConcavePolygonShape3D pair that previously caught fast pucks at the
-	# straight↔corner seam.
-	_add_perimeter_collision(stations, board_half_thick, board_half_thick,
+	# straight↔corner seam. Collision uses its own (much higher) corner
+	# tessellation so rim-around contact loss stays under 1% per corner.
+	var collision_stations: Array = _build_perimeter_stations(corner_collision_segments)
+	_add_perimeter_collision(collision_stations, board_half_thick, board_half_thick,
 			0.0, glass_y_top)
 
 	# --- Painted stripes ---
@@ -607,11 +620,10 @@ func _make_solid_material(color: Color, emission_energy: float = 0.0) -> Standar
 # endpoint; corners contribute corner_segments stations along their arc.
 # Junction stations are de-duplicated (each shared point appears once). The
 # implicit closing edge connects the last station back to stations[0].
-func _build_perimeter_stations() -> Array:
+func _build_perimeter_stations(n: int) -> Array:
 	var half_l: float = rink_length / 2.0
 	var half_w: float = rink_width / 2.0
 	var r: float = corner_radius
-	var n: int = corner_segments
 	var stations: Array = []
 
 	# Walk counter-clockwise (viewed from above) starting at the south end
