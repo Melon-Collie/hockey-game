@@ -2340,6 +2340,50 @@ func spawn_tutorial_dummy(position: Vector3) -> Dictionary:
 		Color(0.8, 0.3, 0.3), Color(0.8, 0.3, 0.3), false, puck, self)
 
 
+# Spawn an AI-controlled bot on the away team (team 1) in scripted/puppet
+# mode for tutorial demonstrations. The bot uses the same spawn path as
+# normal bots (so team_id resolver, jersey colors, etc. all wire up
+# correctly — this is what fixes the stickcheck/body-check unreliability
+# the static dummy suffered from), then is flipped into scripted_mode and
+# excluded from TeamBrain role assignment.
+#
+# Returns the PlayerRecord so the tutorial can hold a reference for
+# script_* commands and free it later via despawn_tutorial_bot.
+func spawn_tutorial_bot(position: Vector3, bot_id: int = 0) -> PlayerRecord:
+	if _registry == null or teams.size() < 2:
+		return null
+	var team: Team = teams[1]
+	var team_slot: int = 0
+	var identity: Dictionary = {"name": "Tutorial", "number": 99, "is_left_handed": false}
+	var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team, identity)
+	if record == null:
+		return null
+	# Position the bot at the requested location (spawn_bot places it at the
+	# faceoff position by default).
+	if record.skater != null:
+		record.skater.global_position = position
+	var ai_ctrl: AIController = record.controller as AIController
+	if ai_ctrl != null:
+		ai_ctrl.set_scripted_mode(true)
+	if team.team_id < team_brains.size():
+		team_brains[team.team_id].exclude_skater(record.peer_id)
+	return record
+
+
+# Tear down a puppeted bot spawned by spawn_tutorial_bot. Drops the puck
+# first if the bot was carrying it so the carrier pointer doesn't dangle,
+# re-includes the peer in its TeamBrain (defensive — the registry remove
+# will also drop the slot), and frees the skater + controller nodes.
+func despawn_tutorial_bot(record: PlayerRecord) -> void:
+	if record == null or _registry == null:
+		return
+	if puck != null and puck.carrier == record.skater:
+		puck.drop()
+	if record.team != null and record.team.team_id < team_brains.size():
+		team_brains[record.team.team_id].include_skater(record.peer_id)
+	_registry.remove(record.peer_id)
+
+
 # Directly triggers icing ghost mode for team 0 without requiring a hybrid-icing
 # race win. Used by TutorialManager to demonstrate the mechanic in single-player
 # (no opposing players means the race always waves off in normal detection).
