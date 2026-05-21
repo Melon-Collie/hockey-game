@@ -80,6 +80,11 @@ var _slapper_zone_radius_cached: float = 0.5
 var _slapper_current_ring_scale: float = 1.0
 var _charge_ring_visible: bool = false
 var _charge_lost_flash_timer: float = 0.0
+# Force-hide all per-skater HUD chrome regardless of replay-mode state. Used
+# by the offline replay viewer and live spectator mode where the broadcast /
+# chase / free cameras frame the rink from angles the flat ring decals weren't
+# designed for. Latched once at setup; persists for the actor's lifetime.
+var _force_world_hud_hidden: bool = false
 
 # Reusable resources + buffers — _rebuild_slapper_geometry() can fire every
 # physics tick during a slapper charge, so the ArrayMeshes it fills and the
@@ -196,7 +201,7 @@ func setup(skater: Skater) -> void:
 
 
 func update(delta: float) -> void:
-	if NetworkManager.is_replay_mode():
+	if _force_world_hud_hidden or NetworkManager.is_replay_mode() or GameManager.is_local_spectator():
 		if not _hidden_for_replay:
 			_hidden_for_replay = true
 			if _ring_mesh != null: _ring_mesh.visible = false
@@ -204,12 +209,14 @@ func update(delta: float) -> void:
 			if _chevron_mesh != null: _chevron_mesh.visible = false
 			if _name_label != null: _name_label.visible = false
 			if _slapper_indicator != null: _slapper_indicator.visible = false
+			if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
 		return
 	if _hidden_for_replay:
 		_hidden_for_replay = false
 		# Restore the always-visible nodes. _charge_ring_mesh, _chevron_mesh,
-		# and _slapper_indicator children are gated by their own show logic
-		# (driven from skater state) and will re-enable themselves as needed.
+		# _slapper_indicator children, and _slapper_ring_mesh are gated by
+		# their own show logic (driven from skater state) and will re-enable
+		# themselves as needed.
 		if _ring_mesh != null: _ring_mesh.visible = true
 		if _name_label != null: _name_label.visible = true
 		if _slapper_indicator != null: _slapper_indicator.visible = true
@@ -301,6 +308,22 @@ func _refresh_screen_down_cache_if_camera_changed() -> void:
 func set_player_name(p_name: String) -> void:
 	if _name_label != null:
 		_name_label.text = p_name
+
+
+# Latch all per-skater HUD chrome off. Used by the replay viewer (which
+# disables physics processing, so the update() check never runs) and live
+# spectator mode. Applies immediately so the rings/labels disappear on the
+# next render rather than waiting for the next physics tick.
+func set_world_hud_hidden(hidden: bool) -> void:
+	_force_world_hud_hidden = hidden
+	if hidden:
+		_hidden_for_replay = true
+		if _ring_mesh != null: _ring_mesh.visible = false
+		if _charge_ring_mesh != null: _charge_ring_mesh.visible = false
+		if _chevron_mesh != null: _chevron_mesh.visible = false
+		if _name_label != null: _name_label.visible = false
+		if _slapper_indicator != null: _slapper_indicator.visible = false
+		if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
 
 
 func set_charge_ring_visible(visible: bool) -> void:

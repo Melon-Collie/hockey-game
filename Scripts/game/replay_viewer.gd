@@ -88,9 +88,14 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	_puck_controller.set_physics_process(false)
 
 	var goalie_result: Dictionary = _spawner.spawn_goalie_pair(_puck, false)
-	_goalie_controllers = [goalie_result.bottom_controller, goalie_result.top_controller]
-	_goalie_controllers[0].team_id = 0
-	_goalie_controllers[1].team_id = 1
+	# Order must match GameManager._spawn_goalies (game_manager.gd:592) —
+	# WorldStateCodec encodes per-goalie state by goalie_controllers index, so
+	# a different order here would apply top-goalie state to the bottom goalie
+	# (visible as goalies appearing in each other's net wearing the wrong
+	# team's colors).
+	_goalie_controllers = [goalie_result.top_controller, goalie_result.bottom_controller]
+	_goalie_controllers[0].team_id = 1
+	_goalie_controllers[1].team_id = 0
 	for gc: GoalieController in _goalie_controllers:
 		gc.set_physics_process(false)
 
@@ -148,6 +153,12 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	# physics processing entirely; apply_replay_state covers all visual
 	# updates (position, blade, IK) on its own.
 	skater.set_physics_process(false)
+	# Latch off the flat-on-ice slot rings, name labels, charge rings, and
+	# slapper indicators — they're designed for the top-down gameplay camera
+	# and look wrong from any of the broadcast / chase / free camera angles
+	# the replay viewer uses. set_physics_process(false) above also means
+	# SkaterHUDCoordinator.update() would never auto-hide them.
+	skater.set_world_hud_hidden(true)
 	skater.set_player_name(p_name)
 	skater.set_jersey_info(p_name, jersey_number, team_colors.text)
 	skater.set_jersey_stripes(team_colors.jersey_stripe, team_colors.pants_stripe, team_colors.socks_stripe)
