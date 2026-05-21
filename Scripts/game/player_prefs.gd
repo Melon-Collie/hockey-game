@@ -138,6 +138,13 @@ var replay_keep_count: int = 20
 const REPLAY_KEEP_MIN: int = 1
 const REPLAY_KEEP_MAX: int = 100
 
+# Tutorial completion is stored as a single Dictionary keyed by tutorial id
+# ("basics", "advanced", future drill ids) so adding new tutorials never
+# requires a schema change. Value is currently a bool; can grow to a small
+# per-tutorial dict (timestamps, highest step reached) without migration —
+# _load() defensive-casts whatever ConfigFile returns.
+var tutorial_completion: Dictionary = {}
+
 func _get_save_path() -> String:
 	for arg: String in OS.get_cmdline_user_args():
 		if arg.begins_with("--config-suffix="):
@@ -184,6 +191,7 @@ func save() -> void:
 	cfg.set_value("game", "camera_distance", camera_distance)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
 	cfg.set_value("replay", "keep_count", replay_keep_count)
+	cfg.set_value("tutorials", "completion", tutorial_completion)
 	for action: String in REBINDABLE_ACTIONS:
 		if not bindings.has(action):
 			continue
@@ -384,6 +392,8 @@ func _load() -> void:
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
+		var raw_completion: Variant = cfg.get_value("tutorials", "completion", {})
+		tutorial_completion = raw_completion if raw_completion is Dictionary else {}
 		for action: String in REBINDABLE_ACTIONS:
 			var t: String = cfg.get_value("bindings", action + "_type", "")
 			if t == "key":
@@ -399,6 +409,25 @@ func _load() -> void:
 	apply_audio()
 	apply_bindings()
 	call_deferred(&"apply_video")
+
+
+func is_tutorial_complete(id: String) -> bool:
+	var entry: Variant = tutorial_completion.get(id, false)
+	# Value type can grow later (e.g. per-tutorial Dictionary with metadata).
+	# Accept the current bool form and any Dictionary that has a "complete" key.
+	if entry is Dictionary:
+		return entry.get("complete", false)
+	return bool(entry)
+
+
+func mark_tutorial_complete(id: String) -> void:
+	tutorial_completion[id] = true
+	save()
+
+
+func reset_tutorial(id: String) -> void:
+	tutorial_completion.erase(id)
+	save()
 
 
 func generate_uuid() -> String:

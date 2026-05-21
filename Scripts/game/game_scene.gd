@@ -4,7 +4,8 @@ func _ready() -> void:
 	PlayerPrefs.apply_video()
 	NetworkManager.on_game_scene_ready()
 	if NetworkManager.is_tutorial_mode:
-		add_child(preload("res://Scripts/game/tutorial_manager.gd").new())
+		var id: String = NetworkManager.tutorial_id if not NetworkManager.tutorial_id.is_empty() else TutorialRegistry.BASICS_ID
+		add_child(preload("res://Scripts/game/tutorial_manager.gd").new(id))
 	if not NetworkManager.is_host and not NetworkManager.pending_join_slot.is_empty():
 		var s: Dictionary = NetworkManager.pending_join_slot
 		NetworkManager.pending_join_slot = {}

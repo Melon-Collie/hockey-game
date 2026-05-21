@@ -29,6 +29,8 @@ var _online_popup: OnlinePopup = null
 var _career_screen: CareerStatsScreen = null
 var _options_container: Control = null
 var _exit_container: Control = null
+var _tutorial_container: Control = null
+var _tutorial_rows_vbox: VBoxContainer = null
 var _loading_screen: LoadingScreen = null
 
 
@@ -48,6 +50,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_options_container.visible = false
 	elif _exit_container != null and _exit_container.visible:
 		_exit_container.visible = false
+	elif _tutorial_container != null and _tutorial_container.visible:
+		_tutorial_container.visible = false
 	elif _player_popup != null and _player_popup.visible:
 		# PlayerSettingsPopup handles its own ui_cancel — let it through.
 		return
@@ -76,6 +80,8 @@ func close() -> void:
 		_options_container.visible = false
 	if _exit_container != null:
 		_exit_container.visible = false
+	if _tutorial_container != null:
+		_tutorial_container.visible = false
 	visible = false
 	closed.emit()
 
@@ -345,6 +351,7 @@ func _build_popups() -> void:
 
 	_build_options_overlay()
 	_build_exit_overlay()
+	_build_tutorial_overlay()
 
 	_loading_screen = LoadingScreen.new()
 	_loading_screen.cancel_pressed.connect(_on_join_cancelled)
@@ -435,6 +442,83 @@ func _build_exit_overlay() -> void:
 	add_child(_exit_container)
 
 
+# Tutorial picker modal. Iterates TutorialRegistry.ALL_IDS so adding a new
+# tutorial later (drills, advanced+, etc.) automatically grows the list with
+# no changes here. Row shows a checkmark when PlayerPrefs marks the tutorial
+# complete.
+func _build_tutorial_overlay() -> void:
+	var overlay := ColorRect.new()
+	overlay.color = MenuStyle.SCRIM
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.pressed:
+			_tutorial_container.visible = false)
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", MenuStyle.panel(6, 32))
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	panel.custom_minimum_size = Vector2(360, 0)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 14)
+	panel.add_child(vbox)
+
+	var close_row := HBoxContainer.new()
+	var close_spacer := Control.new()
+	close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close_row.add_child(close_spacer)
+	var close_btn := MenuStyle.close_button()
+	close_btn.pressed.connect(func() -> void: _tutorial_container.visible = false)
+	SoundManager.wire_button(close_btn)
+	close_row.add_child(close_btn)
+	vbox.add_child(close_row)
+
+	var heading := Label.new()
+	heading.text = "Tutorial"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 22)
+	heading.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	vbox.add_child(heading)
+
+	_tutorial_rows_vbox = VBoxContainer.new()
+	_tutorial_rows_vbox.add_theme_constant_override("separation", 8)
+	vbox.add_child(_tutorial_rows_vbox)
+
+	_tutorial_container = Control.new()
+	_tutorial_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_tutorial_container.visible = false
+	_tutorial_container.add_child(overlay)
+	_tutorial_container.add_child(panel)
+	add_child(_tutorial_container)
+
+	_refresh_tutorial_rows()
+
+
+# Rebuilds the row list. Called when the picker opens so the checkmark next to
+# each tutorial reflects the latest PlayerPrefs state (e.g. the player just
+# completed Basics in a previous session this run).
+func _refresh_tutorial_rows() -> void:
+	if _tutorial_rows_vbox == null:
+		return
+	for child: Node in _tutorial_rows_vbox.get_children():
+		child.queue_free()
+	for tutorial_id: String in TutorialRegistry.ALL_IDS:
+		var label_text: String = TutorialRegistry.get_display_name(tutorial_id)
+		if PlayerPrefs.is_tutorial_complete(tutorial_id):
+			label_text += "    ✓"
+		var btn := MenuStyle.popup_button(label_text)
+		btn.custom_minimum_size = Vector2(280, 44)
+		var id_copy: String = tutorial_id
+		btn.pressed.connect(func() -> void:
+			_tutorial_container.visible = false
+			_launch_tutorial(id_copy))
+		SoundManager.wire_button(btn)
+		_tutorial_rows_vbox.add_child(btn)
+
+
 # ── Action handlers ──────────────────────────────────────────────────────────
 
 func _on_player_card_pressed() -> void:
@@ -472,10 +556,20 @@ func _on_play_vs_bots_pressed() -> void:
 
 
 func _on_tutorial_pressed() -> void:
+	# Opens the tutorial submenu so the player can pick between Basics,
+	# Advanced, and any future tutorials. Selection routes through
+	# _launch_tutorial(id) which mirrors the original direct-launch flow.
+	if _tutorial_container == null:
+		return
+	_refresh_tutorial_rows()
+	_tutorial_container.visible = true
+
+
+func _launch_tutorial(id: String) -> void:
 	GameManager.on_scene_exit()
 	NetworkSimManager.clear_pending()
 	NetworkManager.reset()
-	NetworkManager.start_tutorial()
+	NetworkManager.start_tutorial(id)
 	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 
