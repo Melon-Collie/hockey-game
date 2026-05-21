@@ -156,9 +156,10 @@ func test_tip_to_low_clears_elevated_and_arms_shot_timer() -> void:
 func test_tip_to_low_no_op_if_not_elevated() -> void:
 	sr.start(0.0, 0.3, false, 0.13)
 	sr.tick_processing_timers(0.2, false)
+	var timer_before: float = sr.shot_timer
 	sr.tip_to_low(0.13)
 	assert_false(sr.is_elevated)
-	assert_eq(sr.shot_timer, 0.0, "low shot already timed out; tip_to_low is no-op")
+	assert_eq(sr.shot_timer, timer_before, "tip_to_low is a no-op when shot was never elevated")
 
 # ── Client side ──────────────────────────────────────────────────────────────
 
