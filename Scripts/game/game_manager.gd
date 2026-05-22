@@ -261,6 +261,8 @@ func _physics_process(delta: float) -> void:
 	# allocating ~10 RefCounted state objects.
 	if _state_buffer_manager != null:
 		current_snapshot = get_state_delayed(0.0)
+		if current_snapshot != null:
+			_enrich_snapshot_for_ai(current_snapshot)
 	if not team_brains.is_empty() and current_snapshot != null:
 		for brain: TeamBrain in team_brains:
 			brain.tick(delta, current_snapshot)
@@ -531,11 +533,9 @@ func _spawn_world() -> void:
 	_spawn_goalies()
 	_wire_subsystems()
 	if NetworkManager.is_host:
-		var is_human_resolver := func(peer_id: int) -> bool:
-			return NetworkManager.is_real_peer(peer_id)
 		team_brains = [
-				TeamBrain.new(0, _registry.team_id_by_peer, is_human_resolver),
-				TeamBrain.new(1, _registry.team_id_by_peer, is_human_resolver),
+				TeamBrain.new(0, _registry.team_id_by_peer),
+				TeamBrain.new(1, _registry.team_id_by_peer),
 		]
 		_connect_goal_signals()
 
@@ -1347,6 +1347,44 @@ func _on_registry_player_added(record: PlayerRecord) -> void:
 		_sync_stats_to_clients()
 	if _state_buffer_manager != null:
 		_state_buffer_manager.add_player(record.peer_id)
+
+
+# Populates per-frame AI caches on the live snapshot — a per-team peer-id
+# roster + closest-teammate-to-puck. Bots and brains read these instead of
+# re-partitioning `snapshot.skater_states` and re-scanning for the closest
+# teammate every tick. Called once per host physics frame; lag-comp rewind
+# snapshots are NOT enriched (they don't feed AI).
+func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
+	snap.teammate_ids_by_team.clear()
+	snap.closest_to_puck_by_team.clear()
+	if _registry == null:
+		return
+	var team_map: Dictionary = _registry.team_id_by_peer
+	for pid: int in snap.skater_states:
+		var team_id: int = team_map.get(pid, -1)
+		if team_id == -1:
+			continue
+		var ids: Array = snap.teammate_ids_by_team.get(team_id)
+		if ids == null:
+			ids = []
+			snap.teammate_ids_by_team[team_id] = ids
+		ids.append(pid)
+	if snap.puck_state == null:
+		return
+	var puck_pos: Vector3 = snap.puck_state.position
+	for team_id: int in snap.teammate_ids_by_team:
+		var ids: Array = snap.teammate_ids_by_team[team_id]
+		var best_pid: int = -1
+		var best_d2: float = INF
+		for pid: int in ids:
+			var pos: Vector3 = snap.skater_states[pid].position
+			var dx: float = pos.x - puck_pos.x
+			var dz: float = pos.z - puck_pos.z
+			var d2: float = dx * dx + dz * dz
+			if d2 < best_d2:
+				best_d2 = d2
+				best_pid = pid
+		snap.closest_to_puck_by_team[team_id] = best_pid
 
 
 # ── Puck / Puck controller signal handlers ───────────────────────────────────

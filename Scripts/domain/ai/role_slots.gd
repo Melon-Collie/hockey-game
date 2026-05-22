@@ -82,7 +82,7 @@ const HYSTERESIS_PENALTY_M: float = 1.0
 # Returns the list of slots for a given state, in canonical order.
 # CARRIER (if applicable) is the only fixed-resolution slot — all
 # others are filled by the permutation enumeration.
-static func slots_for_state(state: int) -> Array:
+static func slots_for_state(state: int) -> Array[int]:
 	match state:
 		AIPossessionState.State.DZONE:
 			return [Slot.PRESSURE, Slot.ANCHOR, Slot.COVER]
@@ -137,13 +137,13 @@ static func assign(
 		state: int,
 		team_id_by_peer: Dictionary,
 		prev_assignments: Dictionary,
-		_strong_x: float = 1.0) -> Dictionary:
-	var result: Dictionary = {}
+		_strong_x: float = 1.0) -> Dictionary[int, int]:
+	var result: Dictionary[int, int] = {}
 	if snapshot == null:
 		return result
 
 	# Collect our team's peers.
-	var teammates: Array = []
+	var teammates: Array[int] = []
 	for peer_id: int in snapshot.skater_states:
 		if team_id_by_peer.get(peer_id, -1) == team_id:
 			teammates.append(peer_id)

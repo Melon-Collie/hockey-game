@@ -25,14 +25,17 @@ signal player_joined(name: String, team_color: Color)
 signal player_left(name: String, team_color: Color)
 
 var _players: Dictionary[int, PlayerRecord] = {}
-# Hot-path lookup tables that mirror `_players[peer_id].team.team_id`,
-# maintained alongside `_players` on every spawn / remove / slot-swap.
+# Hot-path lookup tables that mirror `_players[peer_id]` fields,
+# maintained alongside `_players` on every spawn / remove / slot-swap
+# (slot swap mutates team_id_by_* only; peer_id_by_skater is stable
+# for the lifetime of the skater).
 # AI dispatch and PuckController.poke_check both iterate skaters and
 # need O(1) team lookups; the original Callable-resolver pattern paid
 # Callable.call overhead in tight loops. Read live by reference —
 # consumers receive these once at setup and observe mutations directly.
 var team_id_by_peer: Dictionary[int, int] = {}
 var team_id_by_skater: Dictionary = {}    # Skater object -> team_id
+var peer_id_by_skater: Dictionary = {}    # Skater object -> peer_id
 var _spawner: ActorSpawner = null
 var _state_machine: GameStateMachine = null
 var _teams: Array[Team] = []
@@ -128,6 +131,7 @@ func spawn(
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
 	team_id_by_skater[spawned.skater] = team.team_id
+	peer_id_by_skater[spawned.skater] = peer_id
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
@@ -202,6 +206,7 @@ func spawn_bot(
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
 	team_id_by_skater[spawned.skater] = team.team_id
+	peer_id_by_skater[spawned.skater] = peer_id
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
@@ -223,6 +228,7 @@ func remove(peer_id: int) -> PlayerRecord:
 	team_id_by_peer.erase(peer_id)
 	if record.skater != null:
 		team_id_by_skater.erase(record.skater)
+		peer_id_by_skater.erase(record.skater)
 	if _state_machine != null:
 		_state_machine.on_player_disconnected(peer_id)
 	if record.controller:
@@ -254,23 +260,23 @@ func get_local() -> PlayerRecord:
 
 
 func resolve_peer_id(skater: Skater) -> int:
-	for peer_id: int in _players:
-		if _players[peer_id].skater == skater:
-			return peer_id
-	return -1
+	if skater == null:
+		return -1
+	return peer_id_by_skater.get(skater, -1)
 
 
 func resolve_team(skater: Skater) -> Team:
-	for peer_id: int in _players:
-		var record: PlayerRecord = _players[peer_id]
-		if record.skater == skater:
-			return record.team
-	return null
+	var pid: int = resolve_peer_id(skater)
+	if pid == -1:
+		return null
+	var record: PlayerRecord = _players.get(pid)
+	return record.team if record != null else null
 
 
 func resolve_team_id(skater: Skater) -> int:
-	var team: Team = resolve_team(skater)
-	return team.team_id if team != null else -1
+	if skater == null:
+		return -1
+	return team_id_by_skater.get(skater, -1)
 
 
 func resolve_team_id_for_peer(peer_id: int) -> int:
@@ -325,3 +331,4 @@ func clear_state() -> void:
 	_players.clear()
 	team_id_by_peer.clear()
 	team_id_by_skater.clear()
+	peer_id_by_skater.clear()

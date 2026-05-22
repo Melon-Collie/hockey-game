@@ -1675,15 +1675,31 @@ func _predict_receiver(receiver: SkaterNetworkState, flight_t: float) -> Vector3
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
 	# Standard potential-field steering with brake-pivot.
+	# Use the per-team roster published by GameManager._enrich_snapshot_for_ai
+	# instead of re-partitioning snapshot.skater_states every physics tick.
+	# Fall back to a live partition when the cache is empty (unit tests).
 	_scratch_teammates.clear()
 	_scratch_opponents.clear()
-	for peer_id: int in snapshot.skater_states:
-		if peer_id == _peer_id:
-			continue
-		if _team_id_by_peer.get(peer_id, -1) == _team_id:
+	if not snapshot.teammate_ids_by_team.is_empty():
+		var team_ids: Array = snapshot.teammate_ids_by_team.get(_team_id, [])
+		for peer_id: int in team_ids:
+			if peer_id == _peer_id:
+				continue
 			_scratch_teammates.append(snapshot.skater_states[peer_id].position)
-		else:
-			_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+		for other_team: int in snapshot.teammate_ids_by_team:
+			if other_team == _team_id:
+				continue
+			var opp_ids: Array = snapshot.teammate_ids_by_team[other_team]
+			for peer_id: int in opp_ids:
+				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+	else:
+		for peer_id: int in snapshot.skater_states:
+			if peer_id == _peer_id:
+				continue
+			if _team_id_by_peer.get(peer_id, -1) == _team_id:
+				_scratch_teammates.append(snapshot.skater_states[peer_id].position)
+			else:
+				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 
 	# Shot-lane endpoints: only set when a teammate (not us, not opp) is
 	# the carrier — keeps off-puck bots out of the carrier's lane to the
@@ -2169,7 +2185,12 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 
 # Returns true if this bot is the closest teammate to the current
 # puck position. Used as the loose-puck-chase trigger.
+# Reads the per-team closest-to-puck cache published by
+# GameManager._enrich_snapshot_for_ai. Falls back to a live scan only
+# when the cache is empty (e.g. unit tests that hand-build snapshots).
 func _is_closest_teammate_to_puck_at(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	if not snapshot.closest_to_puck_by_team.is_empty():
+		return snapshot.closest_to_puck_by_team.get(_team_id, -1) == _peer_id
 	var puck_pos: Vector3 = snapshot.puck_state.position
 	var dx: float = self_pos.x - puck_pos.x
 	var dz: float = self_pos.z - puck_pos.z

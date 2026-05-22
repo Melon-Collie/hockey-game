@@ -18,15 +18,22 @@ class_name AIPossessionState
 
 enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL }
 
+class Result:
+	var state: int           # AIPossessionState.State enum value
+	var carrier_team: int    # -1 if no carrier ever seen
+
+	static func make(s: int, ct: int) -> Result:
+		var r := Result.new()
+		r.state = s
+		r.carrier_team = ct
+		return r
+
 # Below this puck speed, carrier-less puck is treated as NEUTRAL (a
 # fresh faceoff drop, basically). High-speed loose pucks (passes in
 # flight, stripped-puck contact) keep the prior possession state.
 const NEUTRAL_PUCK_SPEED_M_S: float = 1.0
 
 
-# Returns [new_state, new_carrier_team]. `new_carrier_team` is -1 if no
-# carrier has ever been seen (start of game).
-#
 # `team_id` is the team this brain represents (0 or 1).
 # `own_goal_z` is the z-coordinate of this team's defended net (+ for
 # team 0, − for team 1).
@@ -39,10 +46,10 @@ static func compute(
 		team_id: int,
 		own_goal_z: float,
 		team_id_by_peer: Dictionary,
-		prev_carrier_team: int) -> Array:
+		prev_carrier_team: int) -> Result:
 	if snapshot == null or snapshot.puck_state == null:
 		# Degenerate — no puck info. Default to NEUTRAL.
-		return [State.NEUTRAL, prev_carrier_team]
+		return Result.make(State.NEUTRAL, prev_carrier_team)
 
 	# Possession: current carrier's team if any, else sticky to prev.
 	var carrier: int = snapshot.puck_state.carrier_peer_id
@@ -65,7 +72,7 @@ static func compute(
 	# so that low-velocity loose pucks in our DZ (e.g., faceoff drops,
 	# puck wedged near the goalie) still resolve as DZONE.
 	if carrier == -1 and in_our_dz:
-		return [State.DZONE, carrier_team]
+		return Result.make(State.DZONE, carrier_team)
 
 	# NEUTRAL override: outside our DZ, a slow loose puck is treated
 	# as NEUTRAL (e.g., faceoff drop in NZ / opp DZ). High-speed loose
@@ -75,7 +82,7 @@ static func compute(
 		var v: Vector3 = snapshot.puck_state.velocity
 		var speed: float = sqrt(v.x * v.x + v.z * v.z)
 		if speed < NEUTRAL_PUCK_SPEED_M_S:
-			return [State.NEUTRAL, carrier_team]
+			return Result.make(State.NEUTRAL, carrier_team)
 
 	var our_possession: bool = (carrier_team == team_id)
 
@@ -85,7 +92,7 @@ static func compute(
 	else:
 		state = State.DZONE if in_our_dz else State.TRANS_OD
 
-	return [state, carrier_team]
+	return Result.make(state, carrier_team)
 
 
 # Helper: returns true if `state` is a TRANS state (used by SPRINT_BY

@@ -2,10 +2,16 @@ class_name ShotMechanics
 
 # Pure shot-release math. Callers gather world/local positions and pass them in;
 # these functions compute direction + power without touching the engine.
-#
-# Returns a Dictionary with keys:
-#   direction: Vector3 — normalized, includes Y if elevated
-#   power: float       — final shot power after backhand penalty / charge curve
+
+class ShotResult:
+	var direction: Vector3   # normalized, includes Y if elevated
+	var power: float         # final shot power after backhand penalty / charge curve
+
+	static func make(d: Vector3, p: float) -> ShotResult:
+		var r := ShotResult.new()
+		r.direction = d
+		r.power = p
+		return r
 
 class WristerConfig:
 	var min_wrister_power: float = 0.0
@@ -51,7 +57,7 @@ static func release_wrister(
 		is_elevated: bool,
 		charge_distance: float,
 		cfg: WristerConfig,
-		charge_direction: Vector3 = Vector3.ZERO) -> Dictionary:
+		charge_direction: Vector3 = Vector3.ZERO) -> ShotResult:
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
 	var charge_t: float = clampf(charge_distance / cfg.max_wrister_charge_distance, 0.0, 1.0)
 
@@ -65,10 +71,9 @@ static func release_wrister(
 		if dir.length_squared() < 0.0001:
 			dir = (target - player_xz).normalized()
 		var quick_y: float = cfg.quick_shot_elevation if is_elevated else 0.0
-		return {
-			"direction": Vector3(dir.x, quick_y, dir.z).normalized(),
-			"power": cfg.quick_shot_power,
-		}
+		return ShotResult.make(
+				Vector3(dir.x, quick_y, dir.z).normalized(),
+				cfg.quick_shot_power)
 
 	# Full wrister — shot goes where the blade was dragged, power scales with charge.
 	# charge_direction is the world-space direction the blade was sweeping at release;
@@ -90,10 +95,9 @@ static func release_wrister(
 				cfg.elevation_blade_height, cfg.elevation_gravity, cfg.elevation_goal_line_z,
 				cfg.attacking_goal_z, cfg.max_apex_above_blade,
 				cfg.away_from_net_y, cfg.toward_net_dot_threshold)
-	return {
-		"direction": Vector3(shot_dir.x, y, shot_dir.z).normalized(),
-		"power": power,
-	}
+	return ShotResult.make(
+			Vector3(shot_dir.x, y, shot_dir.z).normalized(),
+			power)
 
 # Slapper release — power scales linearly with charge time.
 #
@@ -105,7 +109,7 @@ static func release_slapper(
 		is_elevated: bool,
 		charge_time: float,
 		cfg: SlapperConfig,
-		shot_direction: Vector3 = Vector3.ZERO) -> Dictionary:
+		shot_direction: Vector3 = Vector3.ZERO) -> ShotResult:
 	var shot_dir: Vector3
 	if shot_direction.length_squared() > 0.0001:
 		shot_dir = Vector3(shot_direction.x, 0.0, shot_direction.z).normalized()
@@ -122,10 +126,9 @@ static func release_slapper(
 				cfg.elevation_blade_height, cfg.elevation_gravity, cfg.elevation_goal_line_z,
 				cfg.attacking_goal_z, cfg.max_apex_above_blade,
 				cfg.away_from_net_y, cfg.toward_net_dot_threshold)
-	return {
-		"direction": Vector3(shot_dir.x, y, shot_dir.z).normalized(),
-		"power": power,
-	}
+	return ShotResult.make(
+			Vector3(shot_dir.x, y, shot_dir.z).normalized(),
+			power)
 
 # Compute the Y direction component for an elevated shot.
 #

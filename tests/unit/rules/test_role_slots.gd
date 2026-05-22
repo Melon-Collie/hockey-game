@@ -105,7 +105,7 @@ func test_assign_dzone_distributes_three_slots() -> void:
 			[200, 1, Vector3(5.0, 0.0, 22.0)],
 	]
 	var snap := _make_snapshot(skaters, 200)
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE)
@@ -120,7 +120,7 @@ func test_assign_ozone_carrier_is_fixed() -> void:
 			[120, 0, Vector3(0.0, 0.0, -16.0)],
 	]
 	var snap := _make_snapshot(skaters, 100)
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.OZONE,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.CARRIER)
@@ -140,7 +140,7 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 			[120, 0, Vector3(0.0, 0.0, 5.0)],   # deeper, near SUPPORT anchor
 	]
 	var snap := _make_snapshot(skaters, 100)
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_DO,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.CARRIER)
@@ -160,7 +160,7 @@ func test_assign_trans_od_backcheck_goes_to_highest_player() -> void:
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier
 	]
 	var snap := _make_snapshot(skaters, 200)
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.BACKCHECK,
@@ -185,7 +185,7 @@ func test_assign_trans_od_backcheck_wins_when_caught_peer_is_also_closest_to_puc
 			[200, 1, Vector3(0.0, 0.0, -15.0)], # opp carrier at peer 100
 	]
 	var snap := _make_snapshot(skaters, 200)
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.BACKCHECK,
@@ -214,7 +214,7 @@ func test_assign_hysteresis_keeps_prev_when_close() -> void:
 			110: AIRoleSlots.Slot.COVER,
 			120: AIRoleSlots.Slot.ANCHOR,
 	}
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), prev)
 	# Effective distance: 100 = 1.0 (no penalty, was PRESSURE),
@@ -239,7 +239,7 @@ func test_assign_hysteresis_swaps_when_contender_meaningfully_closer() -> void:
 			110: AIRoleSlots.Slot.COVER,
 			120: AIRoleSlots.Slot.ANCHOR,
 	}
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), prev)
 	# 100.d = 1.0; 110.d = 0.3 + 1.0 = 1.3. 100 still wins (penalty
@@ -260,7 +260,7 @@ func test_assign_neutral_chase_and_flanks() -> void:
 			[120, 0, Vector3(5.0, 0.0, -3.0)],   # right side
 	]
 	var snap := _make_snapshot(skaters, -1, 0.0, 0.0)
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.NEUTRAL,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.CHASE)
@@ -288,7 +288,7 @@ func test_assign_neutral_flank_hysteresis_holds_through_center() -> void:
 			110: AIRoleSlots.Slot.FLANK_L,
 			120: AIRoleSlots.Slot.FLANK_R,
 	}
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.NEUTRAL,
 			_resolver(skaters), prev)
 	# Effective X: 110 = 0.3 - 1.0 = -0.7. 120 = -0.3 + 1.0 = 0.7.
@@ -310,7 +310,7 @@ func test_mixed_team_human_carrier_bots_fill_other_slots() -> void:
 			[10001, 0, Vector3(0.0, 0.0, -16.0)], # bot near SUPPORT
 	]
 	var snap := _make_snapshot(skaters, 1)
-	var assignments: Dictionary = AIRoleSlots.assign(
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.OZONE,
 			_resolver(skaters), {})
 	assert_eq(assignments[1], AIRoleSlots.Slot.CARRIER)

@@ -31,7 +31,7 @@ func _slapper_cfg() -> ShotMechanics.SlapperConfig:
 # ── Wrister: quick shot branch ───────────────────────────────────────────────
 
 func test_wrister_very_short_charge_uses_quick_shot_power() -> void:
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,                   # player_pos
 		Vector3(10, 0, 0),              # mouse at (10, 0, 0)
 		Vector3(0.5, 0, 0),             # blade world pos
@@ -42,7 +42,7 @@ func test_wrister_very_short_charge_uses_quick_shot_power() -> void:
 
 func test_wrister_quick_shot_direction_from_blade() -> void:
 	# Quick shot aims from the blade, not the player
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3(0, 0, 0),
 		Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
@@ -54,7 +54,7 @@ func test_wrister_quick_shot_direction_from_blade() -> void:
 # ── Wrister: full charge branch ──────────────────────────────────────────────
 
 func test_wrister_full_charge_maxes_power() -> void:
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,
 		Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
@@ -67,12 +67,12 @@ func test_wrister_backhand_penalty() -> void:
 	var cfg := _wrister_cfg()
 	# is_backhand is computed by the controller from the blade's upper-body-local X
 	# at WRISTER_AIM entry. These calls directly express the classification result.
-	var rh_forehand: Dictionary = ShotMechanics.release_wrister(
+	var rh_forehand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, false,                # is_backhand=false (righty forehand)
 		3.0, cfg)
-	var rh_backhand: Dictionary = ShotMechanics.release_wrister(
+	var rh_backhand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(-0.5, 0, 0),
 		true, false,                 # is_backhand=true (righty backhand)
@@ -80,12 +80,12 @@ func test_wrister_backhand_penalty() -> void:
 	assert_lt(rh_backhand.power, rh_forehand.power, "right-handed backhand penalised")
 
 	# Left-handed: natural blade side is -X. Forehand = blade at negative X, backhand = positive X.
-	var lh_forehand: Dictionary = ShotMechanics.release_wrister(
+	var lh_forehand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(-0.5, 0, 0),
 		false, false,                # is_backhand=false (lefty forehand)
 		3.0, cfg)
-	var lh_backhand: Dictionary = ShotMechanics.release_wrister(
+	var lh_backhand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		true, false,                 # is_backhand=true (lefty backhand)
@@ -94,7 +94,7 @@ func test_wrister_backhand_penalty() -> void:
 
 	# A lefty who starts with blade at +0.1 (cross-body, inside old shoulder threshold
 	# of +0.22) is still a backhand — controller passes is_backhand=true.
-	var lh_slight_backhand: Dictionary = ShotMechanics.release_wrister(
+	var lh_slight_backhand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.1, 0, 0),
 		true, false,                 # is_backhand=true (lefty slight backhand)
@@ -104,11 +104,11 @@ func test_wrister_backhand_penalty() -> void:
 
 func test_wrister_elevation_adds_y_component() -> void:
 	var cfg := _wrister_cfg()
-	var flat: Dictionary = ShotMechanics.release_wrister(
+	var flat: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, false, 3.0, cfg)
-	var elevated: Dictionary = ShotMechanics.release_wrister(
+	var elevated: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, true, 3.0, cfg)
@@ -118,7 +118,7 @@ func test_wrister_elevation_adds_y_component() -> void:
 func test_wrister_charged_uses_drag_direction_not_player_to_mouse() -> void:
 	# Player at origin, mouse to the right (+X), but blade was dragged forward (-Z).
 	# Shot should go forward (-Z), not rightward (+X).
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,           # player_pos
 		Vector3(10, 0, 0),      # mouse far to the right
 		Vector3(0.5, 0, 0),     # blade world pos
@@ -131,7 +131,7 @@ func test_wrister_charged_uses_drag_direction_not_player_to_mouse() -> void:
 
 func test_wrister_charged_falls_back_to_mouse_when_no_drag_direction() -> void:
 	# No drag direction recorded — should fall back to player→mouse aim.
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,
 		Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
@@ -146,7 +146,7 @@ func test_wrister_charged_falls_back_to_mouse_when_no_drag_direction() -> void:
 func test_slapper_uses_shot_direction_when_provided() -> void:
 	# Mouse is far to the right (+X), locked dir is straight forward (-Z).
 	# Shot should ignore mouse and go forward.
-	var result: Dictionary = ShotMechanics.release_slapper(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
 		Vector3(0.5, 0, 0), Vector3(10, 0, 0), false, 1.0,
 		_slapper_cfg(), Vector3(0, 0, -1))
 	assert_almost_eq(result.direction.z, -1.0, 0.05, "locked dir overrides blade→mouse")
@@ -154,25 +154,25 @@ func test_slapper_uses_shot_direction_when_provided() -> void:
 
 func test_slapper_falls_back_to_blade_mouse_when_no_direction() -> void:
 	# No locked dir provided — falls back to blade → mouse.
-	var result: Dictionary = ShotMechanics.release_slapper(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
 		Vector3(0, 0, 0), Vector3(10, 0, 0), false, 1.0,
 		_slapper_cfg(), Vector3.ZERO)
 	assert_gt(result.direction.x, 0.9, "falls back to blade→mouse (+X)")
 
 func test_slapper_power_scales_with_charge_time() -> void:
 	var cfg := _slapper_cfg()
-	var short_result: Dictionary = ShotMechanics.release_slapper(
+	var short_result: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
 		Vector3.ZERO, Vector3(10, 0, 0), false, 0.1, cfg)
-	var long_result: Dictionary = ShotMechanics.release_slapper(
+	var long_result: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
 		Vector3.ZERO, Vector3(10, 0, 0), false, 1.0, cfg)
 	assert_gt(long_result.power, short_result.power)
 	assert_almost_eq(long_result.power, cfg.max_slapper_power, 0.01)
 
 func test_slapper_elevation() -> void:
 	var cfg := _slapper_cfg()
-	var flat: Dictionary = ShotMechanics.release_slapper(
+	var flat: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
 		Vector3.ZERO, Vector3(10, 0, 0), false, 1.0, cfg)
-	var elevated: Dictionary = ShotMechanics.release_slapper(
+	var elevated: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
 		Vector3.ZERO, Vector3(10, 0, 0), true, 1.0, cfg)
 	assert_almost_eq(flat.direction.y, 0.0, 0.01)
 	assert_gt(elevated.direction.y, 0.0)
@@ -185,7 +185,7 @@ func test_elevation_caps_apex_for_close_max_power_shot() -> void:
 	var cfg := _wrister_cfg()
 	# Origin is 2 m from the +Z goal line so the math wants a steep angle.
 	var origin := Vector3(0, 0, 24.65)
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		origin, origin + Vector3(0, 0, 10),
 		origin + Vector3(0.5, 0, 0),
 		false, true,
@@ -201,7 +201,7 @@ func test_elevation_does_not_cap_blue_line_shot() -> void:
 	var cfg := _wrister_cfg()
 	# Blue-line distance (D ≈ 15 m) at max power: natural v_y ≈ 4.3 m/s, under cap.
 	var origin := Vector3(0, 0, 11.65)
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		origin, origin + Vector3(0, 0, 15),
 		origin + Vector3(0.5, 0, 0),
 		false, true,
@@ -219,7 +219,7 @@ func test_elevation_uses_fallback_when_shooting_away_from_net() -> void:
 	cfg.attacking_goal_z = 26.65          # team attacks +Z goal
 	cfg.away_from_net_y = 0.10
 	# Player at center, shooting toward -Z (away from offensive net).
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(0, 0, -10),
 		Vector3(0.5, 0, 0),
 		false, true,
@@ -235,7 +235,7 @@ func test_elevation_uses_full_math_when_shooting_at_net() -> void:
 	cfg.attacking_goal_z = 26.65
 	cfg.away_from_net_y = 0.10
 	# Player at center, shooting toward +Z (offensive net).
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(0, 0, 10),
 		Vector3(0.5, 0, 0),
 		false, true,
@@ -251,7 +251,7 @@ func test_elevation_lateral_shot_classified_as_away_from_net() -> void:
 	cfg.away_from_net_y = 0.10
 	# Player at center, shooting purely along +X — perpendicular to goal axis,
 	# dot(shot, to_goal) = 0 < threshold (0.5).
-	var result: Dictionary = ShotMechanics.release_wrister(
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, true,

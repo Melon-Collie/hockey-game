@@ -22,9 +22,6 @@ extends RefCounted
 # by PlayerRegistry, mutated when players spawn / leave / slot-swap.
 # Read via `dict.get(pid, -1)`. Used to be a Callable; downgraded to
 # a Dictionary because AI hot loops eat Callable.call overhead.
-# `is_human_resolver` is no longer used in v2 (no role-yield logic),
-# kept on the constructor signature for backwards compatibility with
-# GameManager's existing call site.
 
 const TICK_PERIOD: float = 1.0 / 6.0
 # Strong-side X is sign(puck.x) but with a hysteresis band so the
@@ -37,7 +34,7 @@ const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
 var state: int = AIPossessionState.State.DZONE
-var slot_assignments: Dictionary = {}      # peer_id -> AIRoleSlots.Slot
+var slot_assignments: Dictionary[int, int] = {}      # peer_id -> AIRoleSlots.Slot
 
 # Internal — sticky possession for loose-puck handling.
 var _last_carrier_team: int = -1
@@ -50,16 +47,14 @@ var _accumulator: float = 0.0
 # puck-carrier change makes the current slot assignment stale.
 var _force_tick_pending: bool = false
 var _team_id_by_peer: Dictionary = {}
-var _is_human_resolver: Callable = Callable()
 # Cached own-goal Z derived from team_id at construction. Team 0
 # defends +GOAL_LINE_Z, Team 1 defends -GOAL_LINE_Z.
 var _own_goal_z: float = 0.0
 
 
-func _init(t: int, team_id_by_peer: Dictionary, human_resolver: Callable) -> void:
+func _init(t: int, team_id_by_peer: Dictionary) -> void:
 	team_id = t
 	_team_id_by_peer = team_id_by_peer
-	_is_human_resolver = human_resolver
 	_own_goal_z = GameRules.GOAL_LINE_Z if t == 0 else -GameRules.GOAL_LINE_Z
 
 
@@ -99,11 +94,10 @@ func force_retick() -> void:
 # rate-limit.
 func _compute_tick(snapshot: WorldSnapshot) -> void:
 	# 1. Possession state.
-	var new_state_pair: Array = AIPossessionState.compute(
+	var possession: AIPossessionState.Result = AIPossessionState.compute(
 			snapshot, team_id, _own_goal_z, _team_id_by_peer, _last_carrier_team)
-	var new_state: int = new_state_pair[0]
-	_last_carrier_team = new_state_pair[1]
-	state = new_state
+	_last_carrier_team = possession.carrier_team
+	state = possession.state
 
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:
