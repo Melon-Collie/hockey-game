@@ -176,6 +176,16 @@ func _build_complete_panel() -> void:
 	btn_row.add_theme_constant_override("separation", 16)
 	vbox.add_child(btn_row)
 
+	# Primary action: continue into the next tutorial when there is one.
+	# Goes first so it's the obvious default after finishing Basics.
+	var next_id: String = TutorialRegistry.get_next_id(_tutorial_id)
+	if next_id != "":
+		var next_btn := Button.new()
+		next_btn.text = "Next: %s" % TutorialRegistry.get_display_name(next_id)
+		next_btn.pressed.connect(func() -> void: _on_continue_to_tutorial(next_id))
+		SoundManager.wire_button(next_btn)
+		btn_row.add_child(next_btn)
+
 	var free_play_btn := Button.new()
 	free_play_btn.text = "Free Play"
 	free_play_btn.pressed.connect(_on_free_play_after_tutorial)
@@ -303,6 +313,18 @@ func _on_free_play_after_tutorial() -> void:
 func _on_main_menu_after_tutorial() -> void:
 	NetworkManager.is_tutorial_mode = false
 	GameManager.return_to_free_play()
+
+
+# One-click continuation into the next tutorial in TutorialRegistry order.
+# Same teardown shape as _on_free_play_after_tutorial — drop the current
+# scene, reset the network state, and re-enter Hockey.tscn with the new
+# tutorial id staged on NetworkManager.
+func _on_continue_to_tutorial(next_id: String) -> void:
+	NetworkManager.is_tutorial_mode = false
+	GameManager.on_scene_exit()
+	NetworkManager.reset()
+	NetworkManager.start_tutorial(next_id)
+	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 
 # ── Exit-tutorial confirmation handlers ───────────────────────────────────────

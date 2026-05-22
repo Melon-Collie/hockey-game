@@ -50,3 +50,14 @@ static func get_display_name(tutorial_id: String) -> String:
 
 static func has(tutorial_id: String) -> bool:
 	return ALL_IDS.has(tutorial_id)
+
+
+# Returns the next tutorial id in ALL_IDS order, or "" if `tutorial_id` is
+# the last one (or unrecognised). Used by the completion modal to offer
+# "Next: <name>" as a one-click continuation when the player just finished
+# a tutorial that has a successor.
+static func get_next_id(tutorial_id: String) -> String:
+	var i: int = ALL_IDS.find(tutorial_id)
+	if i < 0 or i + 1 >= ALL_IDS.size():
+		return ""
+	return ALL_IDS[i + 1]

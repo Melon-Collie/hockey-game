@@ -70,3 +70,23 @@ func test_has_recognises_registered_ids() -> void:
 				"has() should return true for registered id '%s'" % id)
 	assert_false(TutorialRegistry.has("not_real"),
 			"has() should return false for an unregistered id")
+
+
+func test_get_next_id_returns_successor_in_order() -> void:
+	# The completion modal uses this to offer "Next: <name>" after the
+	# player finishes a tutorial. Pinning the contract: every id except
+	# the last has a non-empty successor; the last has "".
+	for i: int in TutorialRegistry.ALL_IDS.size():
+		var id: String = TutorialRegistry.ALL_IDS[i]
+		var next: String = TutorialRegistry.get_next_id(id)
+		if i + 1 < TutorialRegistry.ALL_IDS.size():
+			assert_eq(next, TutorialRegistry.ALL_IDS[i + 1],
+					"next id after '%s' should be the following ALL_IDS entry" % id)
+		else:
+			assert_eq(next, "",
+					"last tutorial '%s' should have no successor" % id)
+
+
+func test_get_next_id_returns_empty_for_unknown() -> void:
+	assert_eq(TutorialRegistry.get_next_id("nope"), "",
+			"unknown id should produce no successor")
