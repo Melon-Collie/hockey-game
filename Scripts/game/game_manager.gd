@@ -94,6 +94,11 @@ var puck_controller: PuckController = null
 # calls it on every skater per tick (~12 calls × 240 Hz = ~5760 dict allocs/s).
 var _cached_goalie_data: Array[Dictionary] = []
 
+# Tutorial mode gates offsides detection on this flag. Defaults to false so
+# every step except STEP_OFFSIDES has it off; TutorialManager flips it true
+# only when entering the offsides step. See _apply_ghost_state.
+var _tutorial_offsides_active: bool = false
+
 # ── Subsystems ────────────────────────────────────────────────────────────────
 var _registry: PlayerRegistry = null
 var _codec: WorldStateCodec = null
@@ -316,6 +321,19 @@ func _update_host_puck_tracking() -> void:
 
 
 func _apply_ghost_state() -> void:
+	# Tutorial gates offsides detection to the OFFSIDES step. Other steps
+	# (notably one-timer, where the player legitimately stands deep in the
+	# O-zone while the puck is stashed off-rink during the prefire delay)
+	# would otherwise trip offsides and ghost the player. Force-clear any
+	# stale ghost while the gate is closed so the previous step's ghost
+	# doesn't bleed into the next one.
+	if NetworkManager.is_tutorial_mode and not _tutorial_offsides_active:
+		for peer_id: int in _registry.all():
+			var record: PlayerRecord = _registry.get_record(peer_id)
+			if record != null and record.skater != null and record.skater.is_ghost:
+				record.skater.set_ghost(false)
+				_last_ghost_state[peer_id] = false
+		return
 	var positions: Dictionary = {}
 	var carrier_peer_id: int = -1
 	for peer_id: int in _registry.all():
@@ -2347,6 +2365,13 @@ func get_skater_team(skater: Skater) -> Team:
 
 func get_puck() -> Puck:
 	return puck
+
+
+# Tutorial-only: enable offsides ghosting on/off for the active step. The
+# OFFSIDES step turns it on; every other step (including one-timer, which
+# legitimately positions the player deep in the O-zone) leaves it off.
+func set_tutorial_offsides_active(active: bool) -> void:
+	_tutorial_offsides_active = active
 
 
 # Spawn an AI-controlled bot on the away team (team 1) in scripted/puppet

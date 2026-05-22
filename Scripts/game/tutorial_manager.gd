@@ -265,6 +265,11 @@ func _begin_step(index: int) -> void:
 	var step_id: int = _current_step_id()
 	var step: TutorialStep = _step_defs[index]
 	_hud.set_step(index, _step_ids.size(), step.title, step.instruction, step.hint)
+	# Offsides detection runs only during the OFFSIDES step. Steps that put
+	# the player deep in the O-zone with the puck temporarily off-rink
+	# (one-timer, shot-block prefire) would otherwise trip offsides and
+	# ghost the player.
+	GameManager.set_tutorial_offsides_active(step_id == STEP_OFFSIDES)
 
 	match step_id:
 		STEP_SKATE:
