@@ -21,7 +21,6 @@ const STEP_STICKCHECK: int = 7
 const STEP_BODY_CHECK: int = 8
 const STEP_ELEVATION:  int = 9
 const STEP_OFFSIDES:   int = 10
-const STEP_ICING:      int = 11
 
 # ── Tutorial identifiers ──────────────────────────────────────────────────────
 const BASICS_ID: String = "basics"
@@ -37,7 +36,7 @@ static func get_step_ids(tutorial_id: String) -> Array[int]:
 			return [STEP_SKATE, STEP_BRAKE, STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT]
 		ADVANCED_ID:
 			return [STEP_ONE_TIMER, STEP_ELEVATION, STEP_SHOT_BLOCK, STEP_STICKCHECK,
-					STEP_BODY_CHECK, STEP_OFFSIDES, STEP_ICING]
+					STEP_BODY_CHECK, STEP_OFFSIDES]
 	return []
 
 
@@ -46,6 +45,15 @@ static func get_display_name(tutorial_id: String) -> String:
 		BASICS_ID: return "Basics"
 		ADVANCED_ID: return "Advanced"
 	return tutorial_id
+
+
+# Whether the tutorial should have goalies spawned in the nets. Basics
+# teaches shot mechanics on an empty net (with a shot-on-net pass
+# criterion) so the player learns to put the puck where it needs to go
+# before adding a defender; Advanced introduces goalies as the
+# difficulty step up.
+static func wants_goalies(tutorial_id: String) -> bool:
+	return tutorial_id != BASICS_ID
 
 
 static func has(tutorial_id: String) -> bool:

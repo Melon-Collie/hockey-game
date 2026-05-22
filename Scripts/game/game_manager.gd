@@ -595,6 +595,13 @@ func _spawn_puck() -> void:
 
 
 func _spawn_goalies() -> void:
+	# Basics tutorial teaches shot mechanics on an empty net with a shot-on-net
+	# pass criterion (TutorialManager watches puck position post-release). Skip
+	# goalie spawn so the net stays open; the rest of the rink wiring tolerates
+	# empty goalies / goalie_controllers arrays.
+	if NetworkManager.is_tutorial_mode \
+			and not TutorialRegistry.wants_goalies(NetworkManager.tutorial_id):
+		return
 	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host)
 	goalies = [result.top_goalie as Goalie, result.bottom_goalie as Goalie]
 	goalie_controllers = [result.top_controller, result.bottom_controller]
@@ -2384,16 +2391,6 @@ func despawn_tutorial_bot(record: PlayerRecord) -> void:
 	if record.team != null and record.team.team_id < team_brains.size():
 		team_brains[record.team.team_id].include_skater(record.peer_id)
 	_registry.remove(record.peer_id)
-
-
-# Directly triggers icing ghost mode for team 0 without requiring a hybrid-icing
-# race win. Used by TutorialManager to demonstrate the mechanic in single-player
-# (no opposing players means the race always waves off in normal detection).
-func trigger_tutorial_icing() -> void:
-	if _state_machine == null:
-		return
-	_state_machine.icing_team_id = 0
-	_state_machine._icing_timer = GameRules.ICING_GHOST_DURATION
 
 
 func get_goalie_data() -> Array[Dictionary]:

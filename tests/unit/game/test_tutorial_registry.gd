@@ -50,7 +50,15 @@ func test_advanced_covers_defense_and_rules() -> void:
 	assert_has(steps, TutorialRegistry.STEP_STICKCHECK)
 	assert_has(steps, TutorialRegistry.STEP_BODY_CHECK)
 	assert_has(steps, TutorialRegistry.STEP_OFFSIDES)
-	assert_has(steps, TutorialRegistry.STEP_ICING)
+
+
+func test_basics_skips_goalies_advanced_keeps_them() -> void:
+	# Basics teaches shot mechanics on an empty net (shot-on-net criterion);
+	# advanced spawns goalies as the difficulty step up.
+	assert_false(TutorialRegistry.wants_goalies(TutorialRegistry.BASICS_ID),
+			"basics should run without goalies")
+	assert_true(TutorialRegistry.wants_goalies(TutorialRegistry.ADVANCED_ID),
+			"advanced should spawn goalies")
 
 
 func test_basics_and_advanced_step_lists_are_disjoint() -> void:
