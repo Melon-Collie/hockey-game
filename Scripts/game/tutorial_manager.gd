@@ -47,6 +47,13 @@ const _SHOT_BLOCK_PUCK_SPEED: float = 14.0
 const _ONE_TIMER_CROSS_SPEED: float = 5.0
 # Ice height for puck placement
 const _ICE_Y:                float = 0.05
+# Prefire delays: hold the puck off-rink for a beat at step entry so the
+# learner has time to read the instruction text and ready their hands
+# before the shot/pass actually launches. Applies only to the FIRST fire
+# of the step — in-step re-fires (puck stops, deflects past, etc.) trigger
+# immediately because the player is already engaged.
+const _SHOT_BLOCK_PREFIRE_DELAY: float = 2.5
+const _ONE_TIMER_PREFIRE_DELAY:  float = 3.0
 
 # ── References ────────────────────────────────────────────────────────────────
 
@@ -88,6 +95,11 @@ var _hud: TutorialHUD = null
 # Restage timer: counts down after a failed shot; re-places puck when it hits 0
 var _restage_timer: float = -1.0
 const _RESTAGE_DELAY: float = 1.5
+
+# Prefire timer: counts down during a step's initial pause before launching
+# the puck. -1 = no fire pending. _process dispatches to the right fire
+# helper for the active step when it reaches 0.
+var _prefire_timer: float = -1.0
 
 # Connected callables stored for safe disconnection
 var _on_release_callable:          Callable = Callable()
@@ -228,6 +240,7 @@ func _begin_step(index: int) -> void:
 	_hint_timer             = 0.0
 	_complete_flash_timer   = 0.0
 	_restage_timer          = -1.0
+	_prefire_timer          = -1.0
 	_wrister_aim_start      = -1.0
 	_offside_ghost_seen     = false
 	_icing_armed            = false
@@ -259,7 +272,12 @@ func _begin_step(index: int) -> void:
 			# (forehand faces the incoming cross-ice pass)
 			_cross_ice_dot_x = 6.0 if PlayerPrefs.is_left_handed else -6.0
 			_local_controller.teleport_to(Vector3(_cross_ice_dot_x, 1.0, -GameRules.ICING_FACEOFF_DOT_Z))
-			_fire_puck_cross_ice()
+			# Stash the puck off-rink while the prefire delay counts down so
+			# the player can read the instruction and ready RMB before the
+			# cross-ice pass actually launches. _process fires it when the
+			# timer hits 0.
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_prefire_timer = _ONE_TIMER_PREFIRE_DELAY
 			_on_one_timer_callable = func(_dir: Vector3, _power: float) -> void:
 				_complete_step()
 			_local_controller.one_timer_release_requested.connect(_on_one_timer_callable)
@@ -279,7 +297,10 @@ func _begin_step(index: int) -> void:
 
 		STEP_SHOT_BLOCK:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
-			_fire_puck_for_shot_block()
+			# Stash + delay so the player can read "hold Ctrl" before the
+			# puck launches. _process fires when the prefire timer hits 0.
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_prefire_timer = _SHOT_BLOCK_PREFIRE_DELAY
 
 		STEP_STICKCHECK:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.5))
@@ -380,6 +401,20 @@ func _process(delta: float) -> void:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
 			_place_puck(Vector3(0.0, _ICE_Y, 3.5))
 
+	# Prefire delay — dispatches to the per-step fire helper once the
+	# read-the-text pause elapses. Steps schedule this in _begin_step by
+	# setting _prefire_timer; we map the active step id back to the right
+	# helper here so adding a new prefire step doesn't need any plumbing.
+	if _prefire_timer >= 0.0:
+		_prefire_timer -= delta
+		if _prefire_timer <= 0.0:
+			_prefire_timer = -1.0
+			match _current_step_id():
+				STEP_SHOT_BLOCK:
+					_fire_puck_for_shot_block()
+				STEP_ONE_TIMER:
+					_fire_puck_cross_ice()
+
 	# Track WRISTER_AIM (state 2) entry for quick vs wrist shot distinction
 	var shot_state: int = _local_controller.get_shot_state()
 	if shot_state == 2:
@@ -417,9 +452,10 @@ func _process(delta: float) -> void:
 				_step_timer = 0.0
 			# Re-fire if the puck passed the player, came to rest before
 			# reaching them (deflected into the boards), or got blocked into
-			# a corner. The velocity check is the catch-all so the step
-			# never stalls waiting for a stuck puck.
-			if _puck.carrier == null:
+			# a corner. Skip while the prefire delay is still counting down —
+			# the stashed puck registers as "stopped" and would otherwise
+			# bypass the read-the-text pause we just set up.
+			if _prefire_timer < 0.0 and _puck.carrier == null:
 				var puck_z: float = _puck.get_puck_position().z
 				var puck_v: float = _puck.get_puck_velocity().length()
 				if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
