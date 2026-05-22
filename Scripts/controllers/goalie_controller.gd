@@ -76,8 +76,8 @@ extends Node
 # "Play the chest, not the puck": carrier body is steady while the puck swings
 # ±1.5 m during stickhandling. Higher weights track the carrier; pure-puck
 # tracking causes the goalie to shuffle perfectly into 5-hole shots.
-@export var shooter_weight_standing: float = 0.75
-@export var shooter_weight_butterfly: float = 0.90  # more committed when down
+@export var shooter_weight_standing: float = 0.55
+@export var shooter_weight_butterfly: float = 0.75  # more committed when down
 # Lead-the-target time. Threat position projects forward by
 # `carrier.velocity * carrier_velocity_lead_time` so the goalie pre-positions
 # toward where the carrier WILL be — the realistic answer to "skater is
@@ -124,10 +124,13 @@ extends Node
 # centre hold depth; slides to ±net_half_width go fully deep.
 @export var post_seal_depth: float = 0.10
 # How parallel the body becomes with the slide direction (degrees of Y
-# rotation toward slide). 90° = body fully facing slide direction —
-# matches real goalie pivot mechanics where the body swings so the sealing
-# leg leads. Animation hooks can use the SLIDING state directly.
-@export var slide_facing_max_deg: float = 90.0
+# rotation toward slide). Body parts (pads, gloves) are placed in goalie
+# local X — rotating the body yaw toward the slide direction swings those
+# local-X pads off the slide axis, so the legs stop sliding from one to the
+# other and instead point into/out of the net. Keep at 0 so the body stays
+# square to the shooter while the legs slide laterally; lean and push-off
+# pad kick already sell the pivot read.
+@export var slide_facing_max_deg: float = 0.0
 # Lateral offset from goalie center to the pad center in butterfly. Used to
 # compute the slide target so the sealing pad ends up even with the post:
 # goalie center sits at ±(net_half_width - pad_local_offset). Matches the
