@@ -186,17 +186,13 @@ func _build_complete_panel() -> void:
 		SoundManager.wire_button(next_btn)
 		btn_row.add_child(next_btn)
 
+	# "Free Play" IS the main menu in this game — Escape from free play opens
+	# the SideMenu, where the player picks their next activity. One button.
 	var free_play_btn := Button.new()
 	free_play_btn.text = "Free Play"
-	free_play_btn.pressed.connect(_on_free_play_after_tutorial)
+	free_play_btn.pressed.connect(_exit_to_free_play)
 	SoundManager.wire_button(free_play_btn)
 	btn_row.add_child(free_play_btn)
-
-	var menu_btn := Button.new()
-	menu_btn.text = "Main Menu"
-	menu_btn.pressed.connect(_on_main_menu_after_tutorial)
-	SoundManager.wire_button(menu_btn)
-	btn_row.add_child(menu_btn)
 
 	_complete_panel = Control.new()
 	_complete_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -302,23 +298,17 @@ func show_tutorial_complete() -> void:
 
 # ── Button handlers ───────────────────────────────────────────────────────────
 
-func _on_free_play_after_tutorial() -> void:
-	NetworkManager.is_tutorial_mode = false
-	GameManager.on_scene_exit()
-	NetworkManager.reset()
-	NetworkManager.start_offline()
-	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
-
-
-func _on_main_menu_after_tutorial() -> void:
+# Tear down the tutorial and drop the player back on the ice in free play.
+# Free play is also where Escape opens the SideMenu, so this doubles as the
+# "return to main menu" path — there is no separate menu scene.
+func _exit_to_free_play() -> void:
 	NetworkManager.is_tutorial_mode = false
 	GameManager.return_to_free_play()
 
 
 # One-click continuation into the next tutorial in TutorialRegistry order.
-# Same teardown shape as _on_free_play_after_tutorial — drop the current
-# scene, reset the network state, and re-enter Hockey.tscn with the new
-# tutorial id staged on NetworkManager.
+# Same teardown shape as _exit_to_free_play but re-enters Hockey.tscn with
+# the new tutorial id staged on NetworkManager.
 func _on_continue_to_tutorial(next_id: String) -> void:
 	NetworkManager.is_tutorial_mode = false
 	GameManager.on_scene_exit()
@@ -343,12 +333,12 @@ func _on_exit_confirmed() -> void:
 	# Sticky: marking complete here means the player won't be auto-routed back
 	# into this tutorial on next launch. They can still re-enter from the menu.
 	PlayerPrefs.mark_tutorial_complete(_tutorial_id)
-	_on_free_play_after_tutorial()
+	_exit_to_free_play()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _complete_panel.visible and event.is_action_pressed("ui_cancel"):
-		_on_main_menu_after_tutorial()
+		_exit_to_free_play()
 		get_viewport().set_input_as_handled()
 		return
 	if _exit_confirm_panel != null and _exit_confirm_panel.visible \
