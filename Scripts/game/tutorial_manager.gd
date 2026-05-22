@@ -145,7 +145,12 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	_disconnect_all_signals()
 	_free_puppet()
-	NetworkManager.is_tutorial_mode = false
+	# Do NOT clear NetworkManager.is_tutorial_mode here. The continuation path
+	# (Next: <tutorial> button → start_tutorial(next_id) → change_scene_to_file)
+	# sets is_tutorial_mode = true BEFORE the deferred scene change tears down
+	# this node — clearing it in _exit_tree would race with that and make the
+	# new game_scene._ready miss the tutorial spawn. Every legitimate exit path
+	# (HUD Exit / Free Play / SideMenu launchers) sets the right flag itself.
 
 
 # ── Step definitions ──────────────────────────────────────────────────────────
