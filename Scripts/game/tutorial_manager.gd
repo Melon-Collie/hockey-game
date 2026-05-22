@@ -47,13 +47,14 @@ const _SHOT_BLOCK_PUCK_SPEED: float = 14.0
 const _ONE_TIMER_CROSS_SPEED: float = 5.0
 # Ice height for puck placement
 const _ICE_Y:                float = 0.05
-# Prefire delays: hold the puck off-rink for a beat at step entry so the
-# learner has time to read the instruction text and ready their hands
-# before the shot/pass actually launches. Applies only to the FIRST fire
-# of the step — in-step re-fires (puck stops, deflects past, etc.) trigger
-# immediately because the player is already engaged.
-const _SHOT_BLOCK_PREFIRE_DELAY: float = 2.5
-const _ONE_TIMER_PREFIRE_DELAY:  float = 3.0
+# Standardised pacing across every tutorial step:
+#   PREFIRE_DELAY runs once at step entry so the learner can read the
+#   instruction before any puck launches at them.
+#   REATTEMPT_DELAY runs between attempts (puck stopped, deflected past,
+#   failed shot restage) — short enough that an engaged player isn't
+#   waiting around, long enough that the puck visibly resets.
+const _PREFIRE_DELAY:   float = 2.5
+const _REATTEMPT_DELAY: float = 1.0
 
 # ── References ────────────────────────────────────────────────────────────────
 
@@ -92,9 +93,10 @@ var _one_timer_restage_pending: bool = false
 
 var _hud: TutorialHUD = null
 
-# Restage timer: counts down after a failed shot; re-places puck when it hits 0
+# Restage timer: counts down after a failed shot; re-places puck when it hits 0.
+# Uses the standardised _REATTEMPT_DELAY so failed-shot retries match the
+# pacing of in-step re-fires on the shot-block and one-timer steps.
 var _restage_timer: float = -1.0
-const _RESTAGE_DELAY: float = 1.5
 
 # Prefire timer: counts down during a step's initial pause before launching
 # the puck. -1 = no fire pending. _process dispatches to the right fire
@@ -277,7 +279,7 @@ func _begin_step(index: int) -> void:
 			# cross-ice pass actually launches. _process fires it when the
 			# timer hits 0.
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
-			_prefire_timer = _ONE_TIMER_PREFIRE_DELAY
+			_prefire_timer = _PREFIRE_DELAY
 			_on_one_timer_callable = func(_dir: Vector3, _power: float) -> void:
 				_complete_step()
 			_local_controller.one_timer_release_requested.connect(_on_one_timer_callable)
@@ -300,7 +302,7 @@ func _begin_step(index: int) -> void:
 			# Stash + delay so the player can read "hold Ctrl" before the
 			# puck launches. _process fires when the prefire timer hits 0.
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
-			_prefire_timer = _SHOT_BLOCK_PREFIRE_DELAY
+			_prefire_timer = _PREFIRE_DELAY
 
 		STEP_STICKCHECK:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.5))
@@ -452,20 +454,26 @@ func _process(delta: float) -> void:
 				_step_timer = 0.0
 			# Re-fire if the puck passed the player, came to rest before
 			# reaching them (deflected into the boards), or got blocked into
-			# a corner. Skip while the prefire delay is still counting down —
-			# the stashed puck registers as "stopped" and would otherwise
-			# bypass the read-the-text pause we just set up.
+			# a corner. Stash + schedule via _prefire_timer so the standard
+			# 1s between-attempts beat applies and the timer's own gate
+			# stops this branch retriggering during the wait.
 			if _prefire_timer < 0.0 and _puck.carrier == null:
 				var puck_z: float = _puck.get_puck_position().z
 				var puck_v: float = _puck.get_puck_velocity().length()
 				if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
-					_fire_puck_for_shot_block()
+					_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+					_prefire_timer = _REATTEMPT_DELAY
 
 		STEP_ONE_TIMER:
-			# Re-fire if the cross-ice pass stopped (hit boards or missed the player)
-			if _icing_armed and _puck.carrier == null:
+			# Re-fire if the cross-ice pass stopped (hit boards or missed the
+			# player). Stash + schedule via _prefire_timer so the standard 1s
+			# between-attempts beat applies. _icing_armed flips false on
+			# restage so this branch can't retrigger during the wait.
+			if _icing_armed and _prefire_timer < 0.0 and _puck.carrier == null:
 				if _puck.get_puck_velocity().length() < 0.3:
-					_fire_puck_cross_ice()
+					_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+					_icing_armed = false
+					_prefire_timer = _REATTEMPT_DELAY
 
 		STEP_OFFSIDES:
 			if not _offside_ghost_seen:
@@ -528,7 +536,7 @@ func _on_shot_released(dir: Vector3, _power: float, is_slapper: bool) -> void:
 		_complete_step()
 	else:
 		# Re-stage puck after a short delay so the player can try again
-		_restage_timer = _RESTAGE_DELAY
+		_restage_timer = _REATTEMPT_DELAY
 
 
 # Deferred restage for STEP_ONE_TIMER when the player picks up the puck and
