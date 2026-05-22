@@ -609,6 +609,16 @@ func _wire_subsystems() -> void:
 	# instead of going through a Callable that re-scans `_players`.
 	if puck_controller != null:
 		puck_controller.set_team_id_by_skater(_registry.team_id_by_skater)
+	# Goalie controllers need to scan for opposing skaters near the puck for
+	# the crease-jam butterfly trigger. Same Callable shape as the puck
+	# controller's getter; computed lazily so registry churn is observed.
+	var goalie_skater_getter: Callable = func() -> Array:
+		var skaters: Array = []
+		for r: PlayerRecord in _registry.all().values():
+			skaters.append(r.skater)
+		return skaters
+	for gc: GoalieController in goalie_controllers:
+		gc.set_skater_getter(goalie_skater_getter)
 	_registry.player_joined.connect(player_joined.emit)
 	_registry.player_left.connect(player_left.emit)
 	_registry.player_added.connect(_on_registry_player_added)

@@ -96,6 +96,15 @@ extends Node
 @export var close_crease_butterfly_distance: float = 2.0
 @export var close_crease_butterfly_speed: float = 1.5  # carrier must show intent
 
+# Crease-jam butterfly. Loose puck or stationary-carrier puck inside the
+# jam zone with an opposing skater close enough to whack at it — drop and
+# seal even though nobody's "shooting" yet. Without this, bots that crowd
+# the crease and pivot-stickhandle keep the goalie upright indefinitely
+# because the carrier-at-doorstep check requires meaningful velocity and
+# loose pucks have no carrier at all.
+@export var jam_puck_distance: float = 2.0    # m — puck-to-goalie threshold
+@export var jam_opponent_distance: float = 1.5 # m — opposing-skater-to-puck threshold
+
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
 # committed butterfly slides only. They cannot reach RVH directly — must
@@ -304,6 +313,10 @@ var _puck_velocity_est: Vector3 = Vector3.ZERO
 var _prev_puck_position: Vector3 = Vector3.ZERO
 var _puck_approach_velocity: float = 0.0
 var _reading_slapper_tell: bool = false
+# Skater accessor for the crease-jam butterfly check. Host-only — the check
+# runs inside the host-side state machine and clients receive the resulting
+# transition via the existing apply_state_transition RPC.
+var _skater_getter: Callable = Callable()
 
 # ── Client Simulation ─────────────────────────────────────────────────────────
 var is_extrapolating: bool = false  # always false; kept for telemetry compat
@@ -342,6 +355,11 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 		puck.puck_hit_boards.connect(_on_reaction_resolved)
 		puck.puck_touched_post.connect(_on_reaction_resolved)
 		puck.puck_hit_goal_body.connect(_on_reaction_resolved)
+
+# Wired by GameManager so the crease-jam check can scan opposing skaters
+# without the controller knowing about the registry / spawner.
+func set_skater_getter(getter: Callable) -> void:
+	_skater_getter = getter
 
 # Push export tuning into each collaborator. Called from setup() and any time
 # exports change in the editor (only at game start in practice — runtime tuning
@@ -561,11 +579,12 @@ func _update_state(delta: float) -> void:
 			# appropriate.
 			if _is_puck_in_defensive_zone() and not _reaction.reacting:
 				_sm.transition_to(State.RVH_LEFT if puck_local_x < 0.0 else State.RVH_RIGHT)
-			elif _is_carrier_at_doorstep() and not _reaction.reacting:
-				# Carrier is at point-blank range with intent — drop butterfly.
-				# At this distance we can't track laterally fast enough; better
-				# to commit the seal and slide-react to wraparounds. Goalie
-				# commits at whatever depth they had — slide handles direction.
+			elif (_is_carrier_at_doorstep() or _is_jammed_at_crease()) and not _reaction.reacting:
+				# Either a moving carrier at point-blank range (can't track
+				# laterally fast enough → commit the seal and slide-react to
+				# wraparounds) OR a crease jam: puck close with an opponent
+				# in poke range, no shot inbound but a whack is one tick away.
+				# Both cases want pads on the ice regardless of follow-up play.
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -634,6 +653,35 @@ func _is_carrier_at_doorstep() -> bool:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
+# True when the puck is jammed in the crease — close to the goalie, and at
+# least one opposing skater is within stick-poke range of the puck. Covers
+# the cases the carrier-at-doorstep check misses: loose pucks (no carrier),
+# and stationary carriers (sub-`close_crease_butterfly_speed`). Without this
+# the goalie stays upright through extended crease scrambles. Own-team
+# carriers are excluded — defencemen jamming around the crease aren't a
+# threat. Host-only; the resulting transition is broadcast normally.
+func _is_jammed_at_crease() -> bool:
+	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
+		return false
+	var carrier: Skater = puck.get_carrier()
+	if carrier != null and team_id != -1 and carrier.get_team_id() == team_id:
+		return false
+	if carrier != null:
+		# Opposing carrier inside the jam zone is reason enough — they can
+		# whack at any moment regardless of speed.
+		return true
+	if not _skater_getter.is_valid():
+		return false
+	var skaters: Array = _skater_getter.call()
+	for skater: Skater in skaters:
+		if skater == null:
+			continue
+		if team_id != -1 and skater.get_team_id() == team_id:
+			continue
+		if skater.global_position.distance_to(puck.global_position) < jam_opponent_distance:
+			return true
+	return false
+
 func _enter_butterfly() -> void:
 	_sm.transition_to(State.BUTTERFLY)
 
@@ -693,6 +741,12 @@ func _is_threat_pressing() -> bool:
 		var carrier: Skater = puck.get_carrier()
 		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
+	# Crease jam: hold butterfly while opponents are within poke range of the
+	# puck in the goalie's lap, even if the puck is loose and slow. Same gate
+	# as the entry trigger — if conditions still warrant butterfly entry, they
+	# warrant staying down.
+	if _is_jammed_at_crease():
+		return true
 	var speed_low: bool
 	var moving_away: bool
 	if is_server:
