@@ -33,7 +33,12 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 
 var carrier: Skater = null
 var pickup_locked: bool = false
-var _cooldown_timers: Dictionary[Skater, float] = {}
+# Per-skater puck pickup cooldowns. Keyed by Skater (untyped intentionally):
+# a typed `Dictionary[Skater, float]` validates erase()'s key argument, which
+# throws when a skater node has been queue_freed (e.g. tutorial puppet bot
+# teardown) and the per-tick cleanup loop tries to drop its stale entry.
+# Untyped dict accepts the freed reference long enough for erase to clear it.
+var _cooldown_timers: Dictionary = {}
 var _is_server: bool = false
 var _pending_reset: bool = false
 var _pending_reset_xz: Vector2 = Vector2.ZERO
