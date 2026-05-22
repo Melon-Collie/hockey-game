@@ -76,6 +76,17 @@ func set_goalie_rotation_y(y: float) -> void:
 func get_goalie_rotation_y() -> float:
 	return rotation.y
 
+# Current body-local position of the glove and blocker assembly. Read by the
+# controller to pace the elevated-shot reach so the arm arrives WITH the puck
+# rather than sprinting to the destination at max speed and sitting idle until
+# impact. Returned in goalie-local space (the same space the config targets
+# live in) so the caller can `distance_to(config.glove_pos)` directly.
+func get_glove_position() -> Vector3:
+	return _glove.position
+
+func get_blocker_position() -> Vector3:
+	return _block_arm.position
+
 func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
 	part.position = part.position.lerp(target_pos, t)
 	part.rotation_degrees = _lerp_euler_deg(part.rotation_degrees, target_rot_deg, t)

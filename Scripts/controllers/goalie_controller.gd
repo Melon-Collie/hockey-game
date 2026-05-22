@@ -952,15 +952,32 @@ func _update_body_parts(delta: float) -> void:
 		lerp_t = recovery_lerp_speed * delta
 	else:
 		lerp_t = part_lerp_speed * delta
-	# Hard velocity cap on the glove and blocker during elevated shot
-	# reactions: the arm physically can't beat the puck to the spot on long
-	# reaches. Per-frame step = speed * delta, applied via move_toward in
-	# apply_body_config. -1 disables the cap (uses the shared lerp).
+	# Pace the elevated-shot arm reach so the glove/blocker arrive WITH the puck
+	# instead of sprinting to the intercept and waiting. needed_speed = distance
+	# remaining ÷ time-to-puck-arrival, capped at the per-arm max. On close-range
+	# shots with little time, max speed is used (graceful fail if the arm can't
+	# make it); on longer shots with margin, the arm cruises at the slower pace.
+	# Without this, the cap-only behaviour parked the arm early and read as the
+	# goalie precognitively beating the puck to the spot.
 	var glove_max_step: float = -1.0
 	var blocker_max_step: float = -1.0
 	if _reaction.reacting and _reaction.is_elevated:
-		glove_max_step = glove_react_max_speed * delta
-		blocker_max_step = blocker_react_max_speed * delta
+		var dt_to_plane: float = -1.0
+		if absf(_puck_velocity_est.z) > 0.001:
+			var t: float = (goalie.global_position.z - puck.global_position.z) / _puck_velocity_est.z
+			if t > 0.01:
+				dt_to_plane = t
+		if dt_to_plane > 0.0:
+			var glove_dist: float = goalie.get_glove_position().distance_to(config.glove_pos)
+			var blocker_dist: float = goalie.get_blocker_position().distance_to(config.blocker_pos)
+			glove_max_step = minf(glove_dist / dt_to_plane, glove_react_max_speed) * delta
+			blocker_max_step = minf(blocker_dist / dt_to_plane, blocker_react_max_speed) * delta
+		else:
+			# Puck already past the goalie plane or velocity unreadable — fall
+			# back to the hard cap so the arm still tracks deflections / late
+			# corrections at a sane speed instead of teleporting.
+			glove_max_step = glove_react_max_speed * delta
+			blocker_max_step = blocker_react_max_speed * delta
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
