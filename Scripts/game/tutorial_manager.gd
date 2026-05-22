@@ -37,8 +37,12 @@ const _BLOCK_HOLD:           float = 2.0
 const _SHOT_BLOCK_HOLD:      float = 1.0
 # Quick shot: must release WRISTER_AIM within this window (else counts as wrist shot)
 const _WRIST_HOLD_MIN:       float = 0.4
-# Shot block: puck comes from the offensive zone toward the player's goal
-const _SHOT_BLOCK_PUCK_SPEED: float = 22.0
+# Shot block: puck comes from the offensive zone toward the player's goal.
+# 14 m/s is a paced-down "wrister" feel — fast enough to feel like a shot,
+# slow enough that a learner has time to read it and crouch into the lane.
+# A real wrister is closer to 25 m/s but blocking that on muscle memory is
+# unrealistic for a tutorial intro.
+const _SHOT_BLOCK_PUCK_SPEED: float = 14.0
 # One-timer: cross-ice pass speed from the opposite faceoff dot
 const _ONE_TIMER_CROSS_SPEED: float = 5.0
 # Ice height for puck placement
@@ -411,10 +415,14 @@ func _process(delta: float) -> void:
 					_complete_step()
 			else:
 				_step_timer = 0.0
-			# Re-fire if puck passed the player or stopped before reaching them
+			# Re-fire if the puck passed the player, came to rest before
+			# reaching them (deflected into the boards), or got blocked into
+			# a corner. The velocity check is the catch-all so the step
+			# never stalls waiting for a stuck puck.
 			if _puck.carrier == null:
 				var puck_z: float = _puck.get_puck_position().z
-				if puck_z > _skater.global_position.z + 4.0:
+				var puck_v: float = _puck.get_puck_velocity().length()
+				if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
 					_fire_puck_for_shot_block()
 
 		STEP_ONE_TIMER:
@@ -531,13 +539,25 @@ func _fire_puck_cross_ice() -> void:
 	_icing_armed = true
 
 
-# Fires the puck from the offensive zone toward the player's goal for the shot-block step.
-# Player is at z≈5 (own half); puck comes from z=-8 in the +Z direction.
+# Fires the puck from the offensive zone toward the player's CURRENT position
+# for the shot-block step. Player starts at z=5 (own half) and the puck comes
+# from z=-8; if the player has drifted off the center axis (or wandered out
+# of the lane between re-fires) the shot used to fly past at x=0 and miss
+# them entirely. Aiming at the live position guarantees the puck heads
+# straight at them every fire.
 func _fire_puck_for_shot_block() -> void:
 	if _puck.carrier != null:
 		_puck.drop()
-	_puck.set_puck_position(Vector3(0.0, _ICE_Y, -8.0))
-	_puck.apply_release_velocity(Vector3(0.0, 0.001, _SHOT_BLOCK_PUCK_SPEED))
+	var from := Vector3(0.0, _ICE_Y, -8.0)
+	_puck.set_puck_position(from)
+	var to: Vector3 = _skater.global_position
+	var dir := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	if dir.length() < 0.01:
+		dir = Vector3.FORWARD * -1.0  # +Z fallback if player is right on top
+	dir = dir.normalized()
+	# Tiny Y so velocity survives Jolt's first integration step (same trick as
+	# _fire_puck_cross_ice — without it the puck can settle inert on tick 0).
+	_puck.apply_release_velocity(dir * _SHOT_BLOCK_PUCK_SPEED + Vector3(0.0, 0.001, 0.0))
 
 
 func _ensure_puppet(position: Vector3) -> void:

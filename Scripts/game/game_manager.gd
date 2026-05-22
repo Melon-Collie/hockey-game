@@ -275,6 +275,14 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
 		_puck_oob_timer = 0.0
 		return
+	# Tutorial steps deliberately stash the puck far outside the rink (e.g.
+	# at (100, 100) during the SKATE step) and reposition it between steps —
+	# letting the OOB check fire a faceoff under the tutorial would derail
+	# the script. The tutorial owns puck placement; nothing else can move
+	# it OOB in tutorial mode anyway.
+	if NetworkManager.is_tutorial_mode:
+		_puck_oob_timer = 0.0
+		return
 	if puck.carrier != null:
 		_puck_oob_timer = 0.0
 		return

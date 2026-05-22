@@ -102,8 +102,12 @@ func _process(_delta: float) -> void:
 	var half_w: float = rink_width * 0.5
 	var half_l: float = rink_length * 0.5
 
-	# Drop entries for skaters that left the tree.
-	for tracked: Object in _prev_state.keys():
+	# Drop entries for skaters that left the tree. Iterate untyped: a typed
+	# `tracked: Object` loop variable throws "invalid previously freed instance"
+	# on assignment when the key points to a queue_freed node from a prior
+	# frame (e.g. a tutorial puppet bot being torn down). Untyped iteration
+	# accepts the stale reference so is_instance_valid + erase can clean it up.
+	for tracked in _prev_state.keys():
 		if not is_instance_valid(tracked):
 			_prev_state.erase(tracked)
 
