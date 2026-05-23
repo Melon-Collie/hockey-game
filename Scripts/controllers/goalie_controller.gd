@@ -60,10 +60,10 @@ extends Node
 @export var rvh_post_pad_angle: float = 15.0
 
 @export var five_hole_base: float = 0.02
-@export var five_hole_shuffle_max: float = 0.06
-@export var five_hole_t_push_max: float = 0.15
+@export var five_hole_shuffle_max: float = 0.04
+@export var five_hole_t_push_max: float = 0.10
 
-@export var tracking_speed: float = 6.0
+@export var tracking_speed: float = 8.0
 @export var part_lerp_speed: float = 6.0
 @export var reaction_lerp_speed: float = 18.0
 # Recovery rises body parts from butterfly pose → READY pose. Default tuned
@@ -86,7 +86,7 @@ extends Node
 # jitter has small velocities (~1-2 m/s) so the lead barely moves
 # (0.2-0.4 m), and the existing tracking-speed lerp smooths brief deke
 # velocity spikes so quick fakes don't drag the goalie out of position.
-@export var carrier_velocity_lead_time: float = 0.18
+@export var carrier_velocity_lead_time: float = 0.12
 
 # Close-crease auto-butterfly. When an opposing carrier is at the doorstep
 # the goalie can't track laterally fast enough; better to commit butterfly
@@ -111,7 +111,7 @@ extends Node
 # stand up first (RECOVERING window).
 @export var butterfly_min_hold_time: float = 0.35   # s the goalie must stay down
 @export var recovery_duration: float = 0.35         # s spent standing back up
-@export var butterfly_drop_speed: float = 0.08      # s for pads to close to floor
+@export var butterfly_drop_speed: float = 0.05      # s for pads to close to floor
 @export var butterfly_radius: float = 0.40          # arc radius from goal center while down
 
 # ── Butterfly slide (pivot-and-ride) ─────────────────────────────────────────
@@ -124,7 +124,7 @@ extends Node
 @export var slide_initial_speed: float = 4.5        # m/s push-off speed
 @export var slide_friction: float = 6.0             # m/s² decay
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
-@export var slide_trigger_distance: float = 0.40    # m — threat-X delta needed to commit
+@export var slide_trigger_distance: float = 0.30    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
 # When a slide commits toward a post (extreme lateral target), the goalie
 # also pulls deep so the sealing pad presses the post — backdoor /
@@ -190,7 +190,7 @@ extends Node
 # Hard cap on `_reacting_to_shot` duration as a safety net only. The freeze
 # is supposed to end via a resolving event; this catches edge cases where
 # none of the expected events fire (puck stuck somewhere, signal missed).
-@export var max_reaction_duration: float = 1.5
+@export var max_reaction_duration: float = 1.0
 
 # ── Ready stance ──────────────────────────────────────────────────────────────
 # Distinct half-down stance triggered when the play is in the goalie's
