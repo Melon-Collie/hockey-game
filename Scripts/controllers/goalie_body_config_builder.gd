@@ -53,8 +53,8 @@ const PAD_TOE_OUT_DEG_BUTTERFLY: float = 12.0
 # Blocker assembly forward tilt per state (X rotation puts the blade on the
 # ice in front of the pads — pad and stick are rigidly attached at the wrist
 # so they rotate together).
-const STICK_TILT_STANDING: float = 18.0
-const STICK_TILT_READY: float = 18.0
+const STICK_TILT_STANDING: float = 22.0
+const STICK_TILT_READY: float = 22.0
 const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
 const STICK_TILT_RVH: float = 65.0
 

@@ -60,10 +60,10 @@ extends Node
 @export var rvh_post_pad_angle: float = 15.0
 
 @export var five_hole_base: float = 0.02
-@export var five_hole_shuffle_max: float = 0.06
-@export var five_hole_t_push_max: float = 0.15
+@export var five_hole_shuffle_max: float = 0.04
+@export var five_hole_t_push_max: float = 0.10
 
-@export var tracking_speed: float = 6.0
+@export var tracking_speed: float = 8.0
 @export var part_lerp_speed: float = 6.0
 @export var reaction_lerp_speed: float = 18.0
 # Recovery rises body parts from butterfly pose → READY pose. Default tuned
@@ -76,8 +76,8 @@ extends Node
 # "Play the chest, not the puck": carrier body is steady while the puck swings
 # ±1.5 m during stickhandling. Higher weights track the carrier; pure-puck
 # tracking causes the goalie to shuffle perfectly into 5-hole shots.
-@export var shooter_weight_standing: float = 0.75
-@export var shooter_weight_butterfly: float = 0.90  # more committed when down
+@export var shooter_weight_standing: float = 0.55
+@export var shooter_weight_butterfly: float = 0.75  # more committed when down
 # Lead-the-target time. Threat position projects forward by
 # `carrier.velocity * carrier_velocity_lead_time` so the goalie pre-positions
 # toward where the carrier WILL be — the realistic answer to "skater is
@@ -86,7 +86,7 @@ extends Node
 # jitter has small velocities (~1-2 m/s) so the lead barely moves
 # (0.2-0.4 m), and the existing tracking-speed lerp smooths brief deke
 # velocity spikes so quick fakes don't drag the goalie out of position.
-@export var carrier_velocity_lead_time: float = 0.18
+@export var carrier_velocity_lead_time: float = 0.12
 
 # Close-crease auto-butterfly. When an opposing carrier is at the doorstep
 # the goalie can't track laterally fast enough; better to commit butterfly
@@ -96,13 +96,22 @@ extends Node
 @export var close_crease_butterfly_distance: float = 2.0
 @export var close_crease_butterfly_speed: float = 1.5  # carrier must show intent
 
+# Crease-jam butterfly. Loose puck or stationary-carrier puck inside the
+# jam zone with an opposing skater close enough to whack at it — drop and
+# seal even though nobody's "shooting" yet. Without this, bots that crowd
+# the crease and pivot-stickhandle keep the goalie upright indefinitely
+# because the carrier-at-doorstep check requires meaningful velocity and
+# loose pucks have no carrier at all.
+@export var jam_puck_distance: float = 2.0    # m — puck-to-goalie threshold
+@export var jam_opponent_distance: float = 1.5 # m — opposing-skater-to-puck threshold
+
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
 # committed butterfly slides only. They cannot reach RVH directly — must
 # stand up first (RECOVERING window).
 @export var butterfly_min_hold_time: float = 0.35   # s the goalie must stay down
 @export var recovery_duration: float = 0.35         # s spent standing back up
-@export var butterfly_drop_speed: float = 0.08      # s for pads to close to floor
+@export var butterfly_drop_speed: float = 0.05      # s for pads to close to floor
 @export var butterfly_radius: float = 0.40          # arc radius from goal center while down
 
 # ── Butterfly slide (pivot-and-ride) ─────────────────────────────────────────
@@ -115,7 +124,7 @@ extends Node
 @export var slide_initial_speed: float = 4.5        # m/s push-off speed
 @export var slide_friction: float = 6.0             # m/s² decay
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
-@export var slide_trigger_distance: float = 0.40    # m — threat-X delta needed to commit
+@export var slide_trigger_distance: float = 0.30    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
 # When a slide commits toward a post (extreme lateral target), the goalie
 # also pulls deep so the sealing pad presses the post — backdoor /
@@ -124,10 +133,13 @@ extends Node
 # centre hold depth; slides to ±net_half_width go fully deep.
 @export var post_seal_depth: float = 0.10
 # How parallel the body becomes with the slide direction (degrees of Y
-# rotation toward slide). 90° = body fully facing slide direction —
-# matches real goalie pivot mechanics where the body swings so the sealing
-# leg leads. Animation hooks can use the SLIDING state directly.
-@export var slide_facing_max_deg: float = 90.0
+# rotation toward slide). Body parts (pads, gloves) are placed in goalie
+# local X — rotating the body yaw toward the slide direction swings those
+# local-X pads off the slide axis, so the legs stop sliding from one to the
+# other and instead point into/out of the net. Keep at 0 so the body stays
+# square to the shooter while the legs slide laterally; lean and push-off
+# pad kick already sell the pivot read.
+@export var slide_facing_max_deg: float = 0.0
 # Lateral offset from goalie center to the pad center in butterfly. Used to
 # compute the slide target so the sealing pad ends up even with the post:
 # goalie center sits at ±(net_half_width - pad_local_offset). Matches the
@@ -178,7 +190,7 @@ extends Node
 # Hard cap on `_reacting_to_shot` duration as a safety net only. The freeze
 # is supposed to end via a resolving event; this catches edge cases where
 # none of the expected events fire (puck stuck somewhere, signal missed).
-@export var max_reaction_duration: float = 1.5
+@export var max_reaction_duration: float = 1.0
 
 # ── Ready stance ──────────────────────────────────────────────────────────────
 # Distinct half-down stance triggered when the play is in the goalie's
@@ -301,6 +313,10 @@ var _puck_velocity_est: Vector3 = Vector3.ZERO
 var _prev_puck_position: Vector3 = Vector3.ZERO
 var _puck_approach_velocity: float = 0.0
 var _reading_slapper_tell: bool = false
+# Skater accessor for the crease-jam butterfly check. Host-only — the check
+# runs inside the host-side state machine and clients receive the resulting
+# transition via the existing apply_state_transition RPC.
+var _skater_getter: Callable = Callable()
 
 # ── Client Simulation ─────────────────────────────────────────────────────────
 var is_extrapolating: bool = false  # always false; kept for telemetry compat
@@ -339,6 +355,11 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 		puck.puck_hit_boards.connect(_on_reaction_resolved)
 		puck.puck_touched_post.connect(_on_reaction_resolved)
 		puck.puck_hit_goal_body.connect(_on_reaction_resolved)
+
+# Wired by GameManager so the crease-jam check can scan opposing skaters
+# without the controller knowing about the registry / spawner.
+func set_skater_getter(getter: Callable) -> void:
+	_skater_getter = getter
 
 # Push export tuning into each collaborator. Called from setup() and any time
 # exports change in the editor (only at game start in practice — runtime tuning
@@ -558,11 +579,12 @@ func _update_state(delta: float) -> void:
 			# appropriate.
 			if _is_puck_in_defensive_zone() and not _reaction.reacting:
 				_sm.transition_to(State.RVH_LEFT if puck_local_x < 0.0 else State.RVH_RIGHT)
-			elif _is_carrier_at_doorstep() and not _reaction.reacting:
-				# Carrier is at point-blank range with intent — drop butterfly.
-				# At this distance we can't track laterally fast enough; better
-				# to commit the seal and slide-react to wraparounds. Goalie
-				# commits at whatever depth they had — slide handles direction.
+			elif (_is_carrier_at_doorstep() or _is_jammed_at_crease()) and not _reaction.reacting:
+				# Either a moving carrier at point-blank range (can't track
+				# laterally fast enough → commit the seal and slide-react to
+				# wraparounds) OR a crease jam: puck close with an opponent
+				# in poke range, no shot inbound but a whack is one tick away.
+				# Both cases want pads on the ice regardless of follow-up play.
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -631,6 +653,35 @@ func _is_carrier_at_doorstep() -> bool:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
+# True when the puck is jammed in the crease — close to the goalie, and at
+# least one opposing skater is within stick-poke range of the puck. Covers
+# the cases the carrier-at-doorstep check misses: loose pucks (no carrier),
+# and stationary carriers (sub-`close_crease_butterfly_speed`). Without this
+# the goalie stays upright through extended crease scrambles. Own-team
+# carriers are excluded — defencemen jamming around the crease aren't a
+# threat. Host-only; the resulting transition is broadcast normally.
+func _is_jammed_at_crease() -> bool:
+	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
+		return false
+	var carrier: Skater = puck.get_carrier()
+	if carrier != null and team_id != -1 and carrier.get_team_id() == team_id:
+		return false
+	if carrier != null:
+		# Opposing carrier inside the jam zone is reason enough — they can
+		# whack at any moment regardless of speed.
+		return true
+	if not _skater_getter.is_valid():
+		return false
+	var skaters: Array = _skater_getter.call()
+	for skater: Skater in skaters:
+		if skater == null:
+			continue
+		if team_id != -1 and skater.get_team_id() == team_id:
+			continue
+		if skater.global_position.distance_to(puck.global_position) < jam_opponent_distance:
+			return true
+	return false
+
 func _enter_butterfly() -> void:
 	_sm.transition_to(State.BUTTERFLY)
 
@@ -690,6 +741,12 @@ func _is_threat_pressing() -> bool:
 		var carrier: Skater = puck.get_carrier()
 		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
+	# Crease jam: hold butterfly while opponents are within poke range of the
+	# puck in the goalie's lap, even if the puck is loose and slow. Same gate
+	# as the entry trigger — if conditions still warrant butterfly entry, they
+	# warrant staying down.
+	if _is_jammed_at_crease():
+		return true
 	var speed_low: bool
 	var moving_away: bool
 	if is_server:
@@ -949,15 +1006,32 @@ func _update_body_parts(delta: float) -> void:
 		lerp_t = recovery_lerp_speed * delta
 	else:
 		lerp_t = part_lerp_speed * delta
-	# Hard velocity cap on the glove and blocker during elevated shot
-	# reactions: the arm physically can't beat the puck to the spot on long
-	# reaches. Per-frame step = speed * delta, applied via move_toward in
-	# apply_body_config. -1 disables the cap (uses the shared lerp).
+	# Pace the elevated-shot arm reach so the glove/blocker arrive WITH the puck
+	# instead of sprinting to the intercept and waiting. needed_speed = distance
+	# remaining ÷ time-to-puck-arrival, capped at the per-arm max. On close-range
+	# shots with little time, max speed is used (graceful fail if the arm can't
+	# make it); on longer shots with margin, the arm cruises at the slower pace.
+	# Without this, the cap-only behaviour parked the arm early and read as the
+	# goalie precognitively beating the puck to the spot.
 	var glove_max_step: float = -1.0
 	var blocker_max_step: float = -1.0
 	if _reaction.reacting and _reaction.is_elevated:
-		glove_max_step = glove_react_max_speed * delta
-		blocker_max_step = blocker_react_max_speed * delta
+		var dt_to_plane: float = -1.0
+		if absf(_puck_velocity_est.z) > 0.001:
+			var t: float = (goalie.global_position.z - puck.global_position.z) / _puck_velocity_est.z
+			if t > 0.01:
+				dt_to_plane = t
+		if dt_to_plane > 0.0:
+			var glove_dist: float = goalie.get_glove_position().distance_to(config.glove_pos)
+			var blocker_dist: float = goalie.get_blocker_position().distance_to(config.blocker_pos)
+			glove_max_step = minf(glove_dist / dt_to_plane, glove_react_max_speed) * delta
+			blocker_max_step = minf(blocker_dist / dt_to_plane, blocker_react_max_speed) * delta
+		else:
+			# Puck already past the goalie plane or velocity unreadable — fall
+			# back to the hard cap so the arm still tracks deflections / late
+			# corrections at a sane speed instead of teleporting.
+			glove_max_step = glove_react_max_speed * delta
+			blocker_max_step = blocker_react_max_speed * delta
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
