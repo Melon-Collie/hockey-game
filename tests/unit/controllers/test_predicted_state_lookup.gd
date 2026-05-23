@@ -85,16 +85,20 @@ func test_no_match_after_newest() -> void:
 
 func test_float_tolerance_within_epsilon() -> void:
 	# host_timestamp is a float; the server echoes the client's exact value back
-	# in last_processed_host_timestamp. A 1e-6 epsilon catches identical-float
-	# round-trips that may drift by a ULP through serialization.
+	# in last_processed_host_timestamp. The TS_MATCH_EPSILON (1ms) catches
+	# round-trips that drift up to ~430µs at 1h session time through f32 wire
+	# serialization while staying well below the 4.17ms gap between adjacent
+	# 240Hz-stamped inputs (no off-by-one matches).
 	var history: Array[PredictedState] = [_snap(1.234567)]
 	var hit: PredictedState = PredictedState.find_at(history, 1.2345672)
 	assert_not_null(hit)
 
 
 func test_float_tolerance_outside_epsilon() -> void:
+	# 1e-2 (10ms) is well past the 1ms TS_MATCH_EPSILON and outside any
+	# realistic f32 round-trip precision loss, so the lookup must return null.
 	var history: Array[PredictedState] = [_snap(1.0)]
-	assert_null(PredictedState.find_at(history, 1.001))
+	assert_null(PredictedState.find_at(history, 1.01))
 
 
 func test_large_history_binary_search() -> void:
