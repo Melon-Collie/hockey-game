@@ -11,6 +11,13 @@ signal hit_received(magnitude: float)
 # impulse mis-replay, contested collision resolution, etc.
 @export var reconcile_position_threshold: float = 0.05
 @export var reconcile_velocity_threshold: float = 0.3
+# Upper-body rotation divergence past this triggers reconcile. Pose evolution
+# is currently deterministic from inputs, but `_pose.upper_body_angle` persists
+# across reconciles without a server snap, so any future non-determinism (or
+# accumulated float drift) would silently desync the torso twist. Setting this
+# above zero makes the threshold check structurally aware of the channel.
+# 0.1 rad ≈ 5.7°: well above lerp-convergence noise, well below visible desync.
+@export var reconcile_upper_body_rotation_threshold: float = 0.1
 
 @onready var camera: GameCamera = null
 var _gatherer: LocalInputGatherer = null
@@ -177,6 +184,7 @@ func _physics_process(delta: float) -> void:
 	snap.velocity = skater.velocity
 	snap.facing = _pose.facing
 	snap.shot_state = _sm.get_state() as int
+	snap.upper_body_rotation_y = _pose.upper_body_angle
 	_prediction_history.append(snap)
 	if _prediction_history.size() > _PREDICTION_HISTORY_CAP:
 		_prediction_history.pop_front()
@@ -253,6 +261,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var predicted: PredictedState = PredictedState.find_at(_prediction_history, server_state.last_processed_host_timestamp)
 	var divergence_position: Vector3 = predicted.position if predicted != null else skater.global_position
 	var divergence_velocity: Vector3 = predicted.velocity if predicted != null else skater.velocity
+	var divergence_upper_body: float = predicted.upper_body_rotation_y if predicted != null else _pose.upper_body_angle
 	# Trim confirmed predictions — future reconciles only ever look at strictly
 	# later timestamps. Mirrors the _input_history filter just above.
 	_prediction_history = _prediction_history.filter(
@@ -261,7 +270,9 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if not ReconciliationRules.skater_needs_reconcile(
 			divergence_position, divergence_velocity,
 			server_state.position, server_state.velocity,
-			reconcile_position_threshold, reconcile_velocity_threshold):
+			reconcile_position_threshold, reconcile_velocity_threshold,
+			divergence_upper_body, server_state.upper_body_rotation_y,
+			reconcile_upper_body_rotation_threshold):
 		return
 	# Suppress reconcile jitter while pressing against the boards. Wall contact
 	# causes move_and_slide vs. server-physics noise that repeatedly sets small
@@ -296,6 +307,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_pose.ik_locked_side = 0
 	_pose.lower_body_lag = 0.0
 	skater.set_lower_body_lag(0.0)
+	# Snap upper-body rotation to server value. Pose evolution is deterministic
+	# from inputs, but _pose.upper_body_angle is the one persistent pose field
+	# that carries across reconciles without a per-cycle resync — anchoring it
+	# to the server bounds drift to zero per cycle instead of accumulating.
+	_pose.upper_body_angle = server_state.upper_body_rotation_y
 	# Seed mouse pos from the first replayed input so the first frame's
 	# direction-variance delta is zero rather than a large garbage value.
 	if not _input_history.is_empty():

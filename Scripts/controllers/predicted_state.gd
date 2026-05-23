@@ -15,6 +15,11 @@ var position: Vector3
 var velocity: Vector3
 var facing: Vector2
 var shot_state: int
+# Upper-body twist in radians. Reconcile compares this against server's
+# broadcast `upper_body_rotation_y` so a divergence channel (drift between
+# host and client's lerped upper-body angle across reconciles) is visible
+# to the threshold check instead of silently accumulating.
+var upper_body_rotation_y: float
 
 
 # Binary search for the snapshot at exactly target_ts. Returns null when the
