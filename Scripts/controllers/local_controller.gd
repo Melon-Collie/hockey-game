@@ -32,8 +32,15 @@ var _team_id: int = -1  # set at setup; needed for client-side offside predictio
 var last_reconcile_error: float = 0.0
 var _claim_cooldown: float = 0.0
 var _last_blade_pos: Vector3 = Vector3.ZERO
-var _body_check_impulse: Vector3 = Vector3.ZERO
-var _body_check_impulse_timestamp: float = 0.0
+# Body check impulses captured between reconciles. Each entry is
+# {timestamp: float, impulse: Vector3}. Multiple impulses can land within a
+# single reconcile window (rapid consecutive checks, simultaneous hits from
+# two opponents) — replay must apply all of them, in timestamp order, each
+# at the first replay input whose host_timestamp catches up to it.
+# Cap prevents unbounded growth if something goes wrong; 16 covers any
+# realistic scenario at 240Hz with RTT < 2s.
+var _body_check_impulses: Array[Dictionary] = []
+const _BODY_CHECK_IMPULSE_CAP: int = 16
 const _BLADE_JUMP_THRESHOLD: float = 0.05
 const _CLAIM_COOLDOWN_S: float = 0.3  # gap between speculative pickup claims to the host
 
@@ -50,8 +57,12 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	camera.local_controller = self
 	skater.body_check_impulse_applied.connect(
 		func(impulse: Vector3) -> void:
-			_body_check_impulse = impulse
-			_body_check_impulse_timestamp = _current_input.host_timestamp
+			_body_check_impulses.append({
+				"timestamp": _current_input.host_timestamp,
+				"impulse": impulse,
+			})
+			if _body_check_impulses.size() > _BODY_CHECK_IMPULSE_CAP:
+				_body_check_impulses.pop_front()
 			hit_received.emit(impulse.length()))
 
 # Called after setup() to provide the local player's team — needed for
@@ -105,8 +116,7 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	_input_history.clear()
 	_prediction_history.clear()
 	_last_blade_pos = Vector3.ZERO
-	_body_check_impulse = Vector3.ZERO
-	_body_check_impulse_timestamp = 0.0
+	_body_check_impulses.clear()
 	if skater != null:
 		skater.visual_offset = Vector3.ZERO
 
@@ -250,10 +260,12 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_input_history = _input_history.filter(
 		func(i: InputState) -> bool: return i.host_timestamp > server_state.last_processed_host_timestamp
 	)
-	# Clear captured body check impulse once the server has processed past it.
-	if _body_check_impulse_timestamp > 0.0 and server_state.last_processed_host_timestamp >= _body_check_impulse_timestamp:
-		_body_check_impulse = Vector3.ZERO
-		_body_check_impulse_timestamp = 0.0
+	# Drop captured body check impulses the server has already processed past.
+	# Mirrors the _input_history filter: future reconciles only need impulses
+	# whose timestamp is strictly later than last_processed_host_timestamp.
+	_body_check_impulses = _body_check_impulses.filter(
+		func(r: Dictionary) -> bool: return r["timestamp"] > server_state.last_processed_host_timestamp
+	)
 	# Trajectory-based threshold check: compare what we predicted for the input
 	# at last_processed_host_timestamp against what the server says happened at
 	# that same instant. Falls back to the live position when no match is found
@@ -322,12 +334,20 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var seed_aim: Vector3 = _input_history[0].mouse_world_pos if not _input_history.is_empty() else _current_input.mouse_world_pos
 	_ik.reset_aim_smoothing(seed_aim)
 	is_replaying = true
-	var _impulse_applied: bool = false
+	# Per-impulse "applied" flags, indexed by position in _body_check_impulses.
+	# Each impulse fires once, on the first replay input whose host_timestamp
+	# catches up to the impulse's capture timestamp. Indexing by position keeps
+	# multiple simultaneous-timestamp impulses distinct (two attackers at once).
+	var applied_impulse_indices: Dictionary[int, bool] = {}
 	for input in _input_history:
 		_process_input(input, input.delta)
-		if not _impulse_applied and _body_check_impulse_timestamp > 0.0 and input.host_timestamp >= _body_check_impulse_timestamp:
-			skater.velocity += _body_check_impulse
-			_impulse_applied = true
+		for i in range(_body_check_impulses.size()):
+			if applied_impulse_indices.has(i):
+				continue
+			var record: Dictionary = _body_check_impulses[i]
+			if input.host_timestamp >= record["timestamp"]:
+				skater.velocity += record["impulse"] as Vector3
+				applied_impulse_indices[i] = true
 		skater.global_position += skater.velocity * input.delta
 		# Clamp to rink after every replay step — without this, a board bounce
 		# that differed by even one frame between client and host compounds into

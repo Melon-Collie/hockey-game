@@ -38,6 +38,14 @@ var _prev_puck_pos: Vector3 = Vector3.ZERO
 var _state_buffer: Array[BufferedPuckState] = []
 var _predicting_trajectory: bool = false
 var _pending_local_release: bool = false  # true from local release until host confirms carrier == -1
+# Hard deadline (session-relative seconds, NetworkManager.local_time base) past
+# which _pending_local_release force-clears even without a confirming snapshot.
+# Defends against the lock-forever case where both the confirming world state
+# AND the post-contact handlers are lost — without this, the puck stays in
+# pending-release mode indefinitely and apply_state early-returns on every
+# broadcast.
+var _pending_local_release_deadline: float = -1.0
+const _PENDING_RELEASE_TIMEOUT_S: float = 0.3  # ~2× typical RTT, well above any healthy network
 var _shot_rtt_ms: float = 0.0             # RTT captured at release time; used for trajectory reconcile
 var is_extrapolating: bool = false
 
@@ -273,6 +281,7 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skate
 	_local_carrier_skater = null
 	_predicting_trajectory = true
 	_pending_local_release = true
+	_pending_local_release_deadline = NetworkManager.local_time() + _PENDING_RELEASE_TIMEOUT_S
 	_shot_rtt_ms = rtt_ms
 	puck.set_client_prediction_mode(true)
 	puck.set_goal_line_clamp(true)
@@ -283,6 +292,7 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skate
 
 func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	_pending_local_release = false
+	_pending_local_release_deadline = -1.0
 	# Guard: don't kill our own trajectory prediction — we initiated the release
 	# locally and are soft-reconciling via world state.
 	if new_carrier_peer_id == -1 and _predicting_trajectory:
@@ -297,6 +307,7 @@ func notify_local_puck_dropped() -> void:
 	_local_carrier_skater = null
 	_predicting_trajectory = false
 	_pending_local_release = false
+	_pending_local_release_deadline = -1.0
 	_post_contact_timer = -1.0
 	puck.set_client_prediction_mode(false)
 	_state_buffer.clear()
@@ -350,12 +361,14 @@ func _on_client_puck_hit_goalie(_goalie: Goalie) -> void:
 	# appear to slide backward into the goalie. Jolt keeps simulating the bounce
 	# and server states are buffered (not reconciled) until the window expires.
 	_pending_local_release = false
+	_pending_local_release_deadline = -1.0
 	_post_contact_timer = NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.025
 
 func _on_client_puck_hit_post() -> void:
 	if not _predicting_trajectory or _post_contact_timer >= 0.0:
 		return
 	_pending_local_release = false
+	_pending_local_release_deadline = -1.0
 	_post_contact_timer = NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.025
 
 # ── State Serialization ───────────────────────────────────────────────────────
@@ -371,6 +384,14 @@ func get_state() -> PuckNetworkState:
 func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 	if is_server:
 		return
+	# Force-clear pending release if both the confirming snapshot and the
+	# post-contact handlers (goalie/post bounce) failed to fire within the
+	# deadline. Without this clear, apply_state's early returns below would
+	# leave the puck stuck in pending-release mode indefinitely.
+	if _pending_local_release and _pending_local_release_deadline > 0.0 \
+			and NetworkManager.local_time() > _pending_local_release_deadline:
+		_pending_local_release = false
+		_pending_local_release_deadline = -1.0
 	if _local_carrier_skater != null:
 		return  # Puck is pinned to local blade; interpolation isn't running
 	if _predicting_trajectory:
@@ -401,6 +422,7 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 		else:
 			if _pending_local_release:
 				_pending_local_release = false
+				_pending_local_release_deadline = -1.0
 			var rtt_s: float = _shot_rtt_ms / 1000.0
 			# Apply ice friction to the latency-corrected target so it matches
 			# Jolt's deceleration over the rtt advance (same shape as
