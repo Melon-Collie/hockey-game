@@ -171,6 +171,11 @@ func on_pickup(_peer_id: int) -> void:
 # ── Host: goal scoring pipeline ──────────────────────────────────────────────
 
 func on_goal_scored_into(defending_team: Team) -> void:
+	# Tutorial owns the post-goal flow — running the state machine through
+	# GOAL_CELEBRATION + faceoff prep would derail the lesson. TutorialManager
+	# watches puck position directly to detect on-net shots.
+	if NetworkManager.is_tutorial_mode:
+		return
 	var carrier_peer_id: int = _puck_drop_requester.call()
 	var scoring_team_id: int = _state_machine.on_goal_scored(defending_team.team_id)
 	if scoring_team_id == -1:

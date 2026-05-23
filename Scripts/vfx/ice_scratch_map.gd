@@ -34,9 +34,13 @@ var _viewport: SubViewport
 var _painter: Node2D
 # Pending line segments flattened as [from0, to0, from1, to1, ...].
 var _pending_segments: PackedVector2Array = PackedVector2Array()
-# Per-skater previous state: [center_world: Vector3, left_blade_px: Vector2,
-# right_blade_px: Vector2]. Used to draw a continuous stroke between frames.
-var _prev_state: Dictionary = {}
+# Per-skater previous state: value is [center_world: Vector3, left_blade_px:
+# Vector2, right_blade_px: Vector2], used to draw a continuous stroke between
+# frames. Keyed by Skater.get_instance_id() rather than the Skater node — a
+# typed Dictionary[Skater, Array] would reject erase() of a freed key when
+# a skater (e.g. a tutorial puppet bot) gets queue_freed before the per-tick
+# cleanup drops its stale entry. Plain int keys sidestep the validator.
+var _prev_state: Dictionary[int, Array] = {}
 
 func _init() -> void:
 	# Instantiate the SubViewport up front so get_texture() is safe to call
@@ -102,10 +106,16 @@ func _process(_delta: float) -> void:
 	var half_w: float = rink_width * 0.5
 	var half_l: float = rink_length * 0.5
 
-	# Drop entries for skaters that left the tree.
-	for tracked: Object in _prev_state.keys():
+	# Drop entries for skaters that left the tree. Resolving via
+	# instance_from_id keeps the dict strongly typed while still tolerating
+	# freed keys — instance_from_id returns null once the object is gone,
+	# is_instance_valid filters the null, and erase(int) bypasses the
+	# typed-Object-key validator that the previous Dictionary[Skater, Array]
+	# shape ran into.
+	for id: int in _prev_state.keys():
+		var tracked: Skater = instance_from_id(id) as Skater
 		if not is_instance_valid(tracked):
-			_prev_state.erase(tracked)
+			_prev_state.erase(id)
 
 	for node: Node in skaters:
 		var skater: Skater = node as Skater
@@ -135,10 +145,11 @@ func _process(_delta: float) -> void:
 			(right_world.z + half_l) * px_z
 		)
 
-		var prev: Variant = _prev_state.get(skater, null)
+		var id: int = skater.get_instance_id()
+		var prev: Variant = _prev_state.get(id, null)
 		# Always update prev state so next frame has a baseline, even if we
 		# skip painting this frame (ghost / teleport / too-slow).
-		_prev_state[skater] = [pos, left_px, right_px]
+		_prev_state[id] = [pos, left_px, right_px]
 
 		if skater.is_ghost or prev == null:
 			continue

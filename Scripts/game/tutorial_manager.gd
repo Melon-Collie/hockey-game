@@ -1,5 +1,21 @@
 extends Node
 
+# ── Step identifier aliases ───────────────────────────────────────────────────
+# Step IDs live in TutorialRegistry (to avoid a preload cycle); re-exported
+# here so the rest of this file reads like the original constant references.
+const STEP_SKATE:       int = TutorialRegistry.STEP_SKATE
+const STEP_BRAKE:       int = TutorialRegistry.STEP_BRAKE
+const STEP_QUICK_SHOT:  int = TutorialRegistry.STEP_QUICK_SHOT
+const STEP_WRIST_SHOT:  int = TutorialRegistry.STEP_WRIST_SHOT
+const STEP_SLAPSHOT:    int = TutorialRegistry.STEP_SLAPSHOT
+const STEP_ONE_TIMER:   int = TutorialRegistry.STEP_ONE_TIMER
+const STEP_SHOT_BLOCK:  int = TutorialRegistry.STEP_SHOT_BLOCK
+const STEP_STICKCHECK:  int = TutorialRegistry.STEP_STICKCHECK
+const STEP_BODY_CHECK:  int = TutorialRegistry.STEP_BODY_CHECK
+const STEP_ELEVATION:   int = TutorialRegistry.STEP_ELEVATION
+const STEP_OFFSIDES:    int = TutorialRegistry.STEP_OFFSIDES
+
+
 # ── Step definition ───────────────────────────────────────────────────────────
 
 class TutorialStep:
@@ -13,21 +29,6 @@ class TutorialStep:
 		hint = h
 
 
-# ── Step index constants ──────────────────────────────────────────────────────
-
-const STEP_SKATE:       int = 0
-const STEP_BRAKE:       int = 1
-const STEP_QUICK_SHOT:  int = 2
-const STEP_WRIST_SHOT:  int = 3
-const STEP_SLAPSHOT:    int = 4
-const STEP_ONE_TIMER:   int = 5
-const STEP_SHOT_BLOCK:  int = 6
-const STEP_STICKCHECK:  int = 7
-const STEP_BODY_CHECK:  int = 8
-const STEP_ELEVATION:   int = 9
-const STEP_OFFSIDES:    int = 10
-const STEP_ICING:       int = 11
-
 # Duration thresholds for sustained-hold steps
 const _SKATE_HOLD:           float = 1.5
 const _BRAKE_HOLD:           float = 1.0
@@ -35,40 +36,84 @@ const _BLOCK_HOLD:           float = 2.0
 const _SHOT_BLOCK_HOLD:      float = 1.0
 # Quick shot: must release WRISTER_AIM within this window (else counts as wrist shot)
 const _WRIST_HOLD_MIN:       float = 0.4
-# Shot block: puck comes from the offensive zone toward the player's goal
-const _SHOT_BLOCK_PUCK_SPEED: float = 22.0
+# Shot block: puck comes from the offensive zone toward the player's goal.
+# 14 m/s is a paced-down "wrister" feel — fast enough to feel like a shot,
+# slow enough that a learner has time to read it and crouch into the lane.
+# A real wrister is closer to 25 m/s but blocking that on muscle memory is
+# unrealistic for a tutorial intro.
+const _SHOT_BLOCK_PUCK_SPEED: float = 14.0
 # One-timer: cross-ice pass speed from the opposite faceoff dot
 const _ONE_TIMER_CROSS_SPEED: float = 5.0
 # Ice height for puck placement
 const _ICE_Y:                float = 0.05
+# Standardised pacing across every tutorial step:
+#   PREFIRE_DELAY runs once at step entry so the learner can read the
+#   instruction before any puck launches at them.
+#   REATTEMPT_DELAY runs between attempts (puck stopped, deflected past,
+#   failed shot restage) — short enough that an engaged player isn't
+#   waiting around, long enough that the puck visibly resets.
+const _PREFIRE_DELAY:   float = 2.5
+const _REATTEMPT_DELAY: float = 1.0
 
 # ── References ────────────────────────────────────────────────────────────────
+
+var tutorial_id: String = TutorialRegistry.BASICS_ID
 
 var _local_record:     PlayerRecord    = null
 var _local_controller: LocalController = null
 var _skater:           Skater          = null
 var _puck:             Puck            = null
-var _dummy_skater:     Skater          = null
-var _dummy_controller: Node            = null
+# Puppeted bot used as a tutorial demo partner (stickcheck target, body-check
+# target, one-timer passer, shot-block shooter). Replaces the static dummy
+# skater the tutorial used to spawn — real bots get the team_id resolver wired
+# correctly so stickcheck (apply_poke_check) and body-check signal filtering
+# behave as they do in normal gameplay. See GameManager.spawn_tutorial_bot.
+var _puppet_record: PlayerRecord = null
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
-var _steps:              Array[TutorialStep] = []
-var _current_step:       int   = 0
+# Ordered list of step IDs for this tutorial, sourced from TutorialRegistry.
+# _step_index walks this array; _current_step_id() is the active step's ID.
+var _step_ids:           Array[int]            = []
+var _step_defs:          Array[TutorialStep]   = []
+var _step_index:         int   = 0
 var _step_timer:         float = 0.0
 var _hint_timer:         float = 0.0
 var _complete_flash_timer: float = 0.0
 var _wrister_aim_start:  float = -1.0   # -1 when not in WRISTER_AIM
 var _cross_ice_dot_x:          float = 6.0   # set in _begin_step based on handedness
 var _offside_ghost_seen:       bool  = false
-var _icing_armed:              bool  = false  # true once puck is staged and loose
-var _icing_scored:             bool  = false  # true after puck crosses goal line
+# True once the one-timer cross-ice pass is in flight. The re-fire branch
+# in _process gates on this so it can't trigger before the puck launches,
+# and the re-fire scheduler clears it during the wait to keep from
+# stacking duplicate re-fires.
+var _one_timer_armed:          bool  = false
+# One-timer race guard: the player picked up the puck and shot it; we deferred
+# the cross-ice restage. While true, ignore further shot signals so a follow-up
+# shot during the restage window doesn't re-queue another restage.
+var _one_timer_restage_pending: bool = false
 
 var _hud: TutorialHUD = null
 
-# Restage timer: counts down after a failed shot; re-places puck when it hits 0
+# Restage timer: counts down after a failed shot; re-places puck when it hits 0.
+# Uses the standardised _REATTEMPT_DELAY so failed-shot retries match the
+# pacing of in-step re-fires on the shot-block and one-timer steps.
 var _restage_timer: float = -1.0
-const _RESTAGE_DELAY: float = 1.5
+
+# Prefire timer: counts down during a step's initial pause before launching
+# the puck. -1 = no fire pending. _process dispatches to the right fire
+# helper for the active step when it reaches 0.
+var _prefire_timer: float = -1.0
+
+# Shot-on-net watch state for basics QUICK/WRIST/SLAP steps. Set when the
+# player releases a shot of the right type; cleared either by the puck
+# crossing the open net (success → complete) or by the watch timer expiring
+# (restage and try again). Generous bounds — tutorial encourages "put the
+# puck on net" without demanding perfect aim.
+var _watch_for_on_net:  bool  = false
+var _shot_watch_timer:  float = 0.0
+const _SHOT_WATCH_DURATION: float = 4.0
+const _ON_NET_HALF_WIDTH:   float = 1.2  # slightly wider than the 1.83 m goal opening
 
 # Connected callables stored for safe disconnection
 var _on_release_callable:          Callable = Callable()
@@ -76,6 +121,12 @@ var _on_one_timer_callable:        Callable = Callable()
 var _on_body_check_callable:       Callable = Callable()
 var _on_regular_shot_in_one_timer: Callable = Callable()
 var _on_stickcheck_callable:       Callable = Callable()
+
+
+# Constructor sets the tutorial id; game_scene.gd passes the id selected by
+# NetworkManager.tutorial_id when it instantiates the manager.
+func _init(id: String = TutorialRegistry.BASICS_ID) -> void:
+	tutorial_id = id
 
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -90,92 +141,137 @@ func _ready() -> void:
 	_puck = GameManager.get_puck()
 
 	_build_steps()
+	if _step_ids.is_empty():
+		push_error("TutorialManager: no steps for tutorial id '%s'" % tutorial_id)
+		return
 
 	_hud = TutorialHUD.new()
+	_hud.set_tutorial_id(tutorial_id)
 	add_child(_hud)
 	_hud.skip_pressed.connect(_on_skip)
 	_hud.reset_pressed.connect(_on_reset)
 
-	_begin_step(_current_step)
+	_begin_step(0)
 
 
 func _exit_tree() -> void:
 	_disconnect_all_signals()
-	_free_dummy()
-	NetworkManager.is_tutorial_mode = false
+	_free_puppet()
+	# Do NOT clear NetworkManager.is_tutorial_mode here. The continuation path
+	# (Next: <tutorial> button → start_tutorial(next_id) → change_scene_to_file)
+	# sets is_tutorial_mode = true BEFORE the deferred scene change tears down
+	# this node — clearing it in _exit_tree would race with that and make the
+	# new game_scene._ready miss the tutorial spawn. Every legitimate exit path
+	# (HUD Exit / Free Play / SideMenu launchers) sets the right flag itself.
 
 
 # ── Step definitions ──────────────────────────────────────────────────────────
 
 func _build_steps() -> void:
-	_steps.clear()
-	_steps.append(TutorialStep.new(
-		"Skate",
-		"Use the move stick / WASD to skate around the ice.",
-		"Push the stick in any direction to build up speed."))
-	_steps.append(TutorialStep.new(
-		"Brake",
-		"Hold Space to brake. Hold Space with a direction to carve — great for sharp turns.",
-		"Tap Space while moving to shed speed quickly."))
-	_steps.append(TutorialStep.new(
-		"Quick Shot",
-		"Skate to the puck to pick it up, then click LMB quickly for a Quick Shot.",
-		"Just flick LMB — don't hold it."))
-	_steps.append(TutorialStep.new(
-		"Wrist Shot",
-		"Pick up the puck, hold LMB, and sweep the mouse to aim a Wrist Shot.",
-		"Hold LMB and sweep — the longer you hold and the further you sweep, the more power."))
-	_steps.append(TutorialStep.new(
-		"Slapshot",
-		"Pick up the puck, hold RMB to wind up, then release for a Slapshot.",
-		"RMB charges the slap — release at full charge for max power."))
-	_steps.append(TutorialStep.new(
-		"One-timer",
-		"The puck is sliding across from the far dot. Wind up RMB before it arrives, then release the moment it reaches you.",
-		"Start winding up RMB now — the puck is already on its way!"))
-	_steps.append(TutorialStep.new(
-		"Shot Block",
-		"A shot is coming at you — hold Ctrl to get into a deflecting stance.",
-		"Hold Ctrl and position yourself in the puck's path."))
-	_steps.append(TutorialStep.new(
-		"Stickcheck",
-		"Skate your stick blade into the opponent's puck to strip it — that's a stickcheck.",
-		"Move close and sweep through the puck."))
-	_steps.append(TutorialStep.new(
-		"Body Check",
-		"Skate directly into the opponent to body check them.",
-		"Pick up speed and aim straight at them."))
-	_steps.append(TutorialStep.new(
-		"Elevation",
-		"Pick up the puck, scroll the mouse wheel up, then shoot to lift the puck off the ice.",
-		"Scroll up before clicking LMB or RMB — the puck lifts when released."))
-	_steps.append(TutorialStep.new(
-		"Offsides",
-		"The puck must enter the offensive zone before your skates do. You crossed the blue line first — that's offside. You're ghosted until you skate back past the blue line!",
-		"Head back toward your own end and cross the blue line to tag up."))
-	_steps.append(TutorialStep.new(
-		"Icing",
-		"Shooting the puck from your own end past the far goal line is icing — your whole team goes ghost, giving the other team free possession. Try it now.",
-		"Wind up a big Slapshot and fire toward the far end."))
+	_step_ids = TutorialRegistry.get_step_ids(tutorial_id)
+	_step_defs.clear()
+	for step_id: int in _step_ids:
+		_step_defs.append(_step_def_for(step_id))
+
+
+# Returns the TutorialStep (title/instruction/hint) for a given step ID. Keeps
+# all teaching copy in one place; the registry decides ordering per tutorial.
+func _step_def_for(step_id: int) -> TutorialStep:
+	match step_id:
+		STEP_SKATE:
+			return TutorialStep.new(
+				"Skate",
+				"Use the move stick / WASD to skate around the ice.",
+				"Push the stick in any direction to build up speed.")
+		STEP_BRAKE:
+			return TutorialStep.new(
+				"Brake",
+				"Hold Space to brake. Hold Space with a direction to carve — great for sharp turns.",
+				"Tap Space while moving to shed speed quickly.")
+		STEP_QUICK_SHOT:
+			return TutorialStep.new(
+				"Quick Shot",
+				"Skate to the puck, then flick LMB for a Quick Shot. Put it on net to pass.",
+				"Just flick LMB — don't hold it. Aim toward the empty net.")
+		STEP_WRIST_SHOT:
+			return TutorialStep.new(
+				"Wrist Shot",
+				"Pick up the puck, hold LMB, and sweep the mouse to aim a Wrist Shot. Hit the net to pass.",
+				"Hold LMB and sweep — the longer you hold and the further you sweep, the more power.")
+		STEP_SLAPSHOT:
+			return TutorialStep.new(
+				"Slapshot",
+				"Pick up the puck, hold RMB to wind up, then release for a Slapshot. Bury it in the net.",
+				"RMB charges the slap — release at full charge for max power.")
+		STEP_ONE_TIMER:
+			return TutorialStep.new(
+				"One-timer",
+				"The puck is sliding across from the far dot. Wind up RMB before it arrives, then release the moment it reaches you.",
+				"Start winding up RMB now — the puck is already on its way!")
+		STEP_SHOT_BLOCK:
+			return TutorialStep.new(
+				"Shot Block",
+				"A shot is coming at you — hold Ctrl to get into a deflecting stance.",
+				"Hold Ctrl and position yourself in the puck's path.")
+		STEP_STICKCHECK:
+			return TutorialStep.new(
+				"Stickcheck",
+				"Skate your stick blade into the opponent's puck to strip it — that's a stickcheck.",
+				"Move close and sweep through the puck.")
+		STEP_BODY_CHECK:
+			return TutorialStep.new(
+				"Body Check",
+				"Skate directly into the opponent to body check them.",
+				"Pick up speed and aim straight at them.")
+		STEP_ELEVATION:
+			return TutorialStep.new(
+				"Elevation",
+				"Pick up the puck, scroll the mouse wheel up, then shoot to lift the puck off the ice.",
+				"Scroll up before clicking LMB or RMB — the puck lifts when released.")
+		STEP_OFFSIDES:
+			return TutorialStep.new(
+				"Offsides",
+				"The puck must enter the offensive zone before your skates do. You crossed the blue line first — that's offside. You're ghosted until you skate back past the blue line!",
+				"Head back toward your own end and cross the blue line to tag up.")
+	push_error("TutorialManager: unknown step id %d" % step_id)
+	return TutorialStep.new("", "", "")
+
+
+# Returns the active step's ID, or -1 if outside the step list. Helpers use
+# this in their match dispatchers so the index→id mapping stays in one place.
+func _current_step_id() -> int:
+	if _step_index < 0 or _step_index >= _step_ids.size():
+		return -1
+	return _step_ids[_step_index]
 
 
 # ── Step sequencing ───────────────────────────────────────────────────────────
 
 func _begin_step(index: int) -> void:
 	_disconnect_all_signals()
-	_step_timer         = 0.0
-	_hint_timer         = 0.0
-	_complete_flash_timer = 0.0
-	_restage_timer           = -1.0
-	_wrister_aim_start       = -1.0
-	_offside_ghost_seen      = false
-	_icing_armed        = false
-	_icing_scored       = false
+	_step_index             = index
+	_step_timer             = 0.0
+	_hint_timer             = 0.0
+	_complete_flash_timer   = 0.0
+	_restage_timer          = -1.0
+	_prefire_timer          = -1.0
+	_wrister_aim_start      = -1.0
+	_offside_ghost_seen     = false
+	_one_timer_armed        = false
+	_one_timer_restage_pending = false
+	_watch_for_on_net       = false
+	_shot_watch_timer       = 0.0
 
-	var step: TutorialStep = _steps[index]
-	_hud.set_step(index, _steps.size(), step.title, step.instruction, step.hint)
+	var step_id: int = _current_step_id()
+	var step: TutorialStep = _step_defs[index]
+	_hud.set_step(index, _step_ids.size(), step.title, step.instruction, step.hint)
+	# Offsides detection runs only during the OFFSIDES step. Steps that put
+	# the player deep in the O-zone with the puck temporarily off-rink
+	# (one-timer, shot-block prefire) would otherwise trip offsides and
+	# ghost the player.
+	GameManager.set_tutorial_offsides_active(step_id == STEP_OFFSIDES)
 
-	match index:
+	match step_id:
 		STEP_SKATE:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))  # out of the way
@@ -196,30 +292,46 @@ func _begin_step(index: int) -> void:
 			# (forehand faces the incoming cross-ice pass)
 			_cross_ice_dot_x = 6.0 if PlayerPrefs.is_left_handed else -6.0
 			_local_controller.teleport_to(Vector3(_cross_ice_dot_x, 1.0, -GameRules.ICING_FACEOFF_DOT_Z))
-			_fire_puck_cross_ice()
+			# Stash the puck off-rink while the prefire delay counts down so
+			# the player can read the instruction and ready RMB before the
+			# cross-ice pass actually launches. _process fires it when the
+			# timer hits 0.
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_prefire_timer = _PREFIRE_DELAY
 			_on_one_timer_callable = func(_dir: Vector3, _power: float) -> void:
 				_complete_step()
 			_local_controller.one_timer_release_requested.connect(_on_one_timer_callable)
-			# If player picks up puck normally and shoots, re-stage the cross-ice pass
+			# Race fix: if the player picks up the puck and shoots normally instead
+			# of timing the one-timer, the synchronous puck-release handler used to
+			# restage the puck in the same frame as the shot's release-velocity
+			# application — corrupting position/velocity. Defer with call_deferred
+			# + wait two physics frames so the in-progress shot fully resolves
+			# before we move the puck. _one_timer_restage_pending gates re-entry
+			# so a second shot during the wait can't queue a duplicate restage.
 			_on_regular_shot_in_one_timer = func(_dir: Vector3, _power: float, _is_slapper: bool) -> void:
-				_local_controller.teleport_to(Vector3(_cross_ice_dot_x, 1.0, -GameRules.ICING_FACEOFF_DOT_Z))
-				_icing_armed = false
-				_fire_puck_cross_ice()
+				if _one_timer_restage_pending:
+					return
+				_one_timer_restage_pending = true
+				_restage_one_timer_when_safe.call_deferred()
 			_local_controller.puck_release_requested.connect(_on_regular_shot_in_one_timer)
 
 		STEP_SHOT_BLOCK:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
-			_fire_puck_for_shot_block()
+			# Stash + delay so the player can read "hold Ctrl" before the
+			# puck launches. _process fires when the prefire timer hits 0.
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_prefire_timer = _PREFIRE_DELAY
 
 		STEP_STICKCHECK:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.5))
-			_ensure_dummy(Vector3(0.0, 1.0, 0.0))
-			# Give the dummy the puck — it pins to the dummy's blade each physics frame.
-			# PuckController sees the player as an opposing skater (dummy resolves to team -1)
-			# and will call apply_poke_check when the player's blade sweeps through.
+			_ensure_puppet(Vector3(0.0, 1.0, 0.0))
+			# Give the puppet the puck — PuckController pins it to the bot's blade
+			# each physics frame. The bot's team_id resolver (wired by spawn_bot)
+			# returns team 1, so apply_poke_check recognises the player as opposing
+			# and the strip fires when the player's blade sweeps through.
 			if _puck.carrier != null:
 				_puck.drop()
-			_puck.set_carrier(_dummy_skater)
+			_puck.set_carrier(_puppet_record.skater)
 			_on_stickcheck_callable = func(_ex: Skater) -> void:
 				_complete_step()
 			_puck.puck_stripped.connect(_on_stickcheck_callable)
@@ -230,7 +342,7 @@ func _begin_step(index: int) -> void:
 			# Prevent race-condition re-pickup: drop() is sync but set_puck_position is
 			# deferred by Jolt; one physics tick sees the puck at the old position.
 			_puck.set_skater_cooldown(_skater, 0.5)
-			_ensure_dummy(Vector3(4.0, 1.0, 0.0))
+			_ensure_puppet(Vector3(4.0, 1.0, 0.0))
 			_on_body_check_callable = func(_victim: Skater, _force: float, _dir: Vector3) -> void:
 				_complete_step()
 			_skater.body_checked_player.connect(_on_body_check_callable)
@@ -241,40 +353,42 @@ func _begin_step(index: int) -> void:
 			# Puck in neutral zone — player is immediately offside
 			_place_puck(Vector3(0.0, _ICE_Y, 0.0))
 
-		STEP_ICING:
-			# Player at own defensive end, offset from center to shoot wide of the net
-			_local_controller.teleport_to(Vector3(-5.0, 1.0, 20.0))
-			_place_puck(Vector3(-5.0, _ICE_Y, 18.5))
-			_icing_armed = false  # armed after one frame below
-
 
 func _complete_step() -> void:
 	_disconnect_all_signals()
 	_complete_flash_timer = TutorialHUD._COMPLETE_FLASH_DURATION
 	_hud.flash_complete()
-	if _current_step == STEP_BODY_CHECK:
-		_free_dummy()
+	# Tear the puppet down after any step that used it so it doesn't linger
+	# into a step that doesn't need it (e.g. body-check → elevation in the
+	# advanced flow).
+	var step_id: int = _current_step_id()
+	if step_id == STEP_BODY_CHECK or step_id == STEP_STICKCHECK:
+		_free_puppet()
 
 
 func _advance_step() -> void:
 	_hud.hide_complete_flash()
-	_current_step += 1
-	if _current_step >= _steps.size():
+	_step_index += 1
+	if _step_index >= _step_ids.size():
+		# Mark this tutorial complete so first-launch routing skips it next time
+		# and the SideMenu shows a checkmark next to it.
+		PlayerPrefs.mark_tutorial_complete(tutorial_id)
 		_hud.show_tutorial_complete()
 	else:
-		_begin_step(_current_step)
+		_begin_step(_step_index)
 
 
 func _on_skip() -> void:
-	if _current_step in [STEP_SHOT_BLOCK]:
+	var step_id: int = _current_step_id()
+	if step_id == STEP_SHOT_BLOCK:
 		_place_puck(Vector3(100.0, _ICE_Y, 100.0))  # clear the in-flight puck
-	if _current_step in [STEP_STICKCHECK, STEP_BODY_CHECK]:
-		_free_dummy()
+	if step_id == STEP_STICKCHECK or step_id == STEP_BODY_CHECK:
+		_free_puppet()
 	_complete_step()
 
 
 func _on_reset() -> void:
-	_begin_step(_current_step)
+	_begin_step(_step_index)
 
 
 # ── Per-frame logic ───────────────────────────────────────────────────────────
@@ -301,6 +415,38 @@ func _process(delta: float) -> void:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
 			_place_puck(Vector3(0.0, _ICE_Y, 3.5))
 
+	# Prefire delay — dispatches to the per-step fire helper once the
+	# read-the-text pause elapses. Steps schedule this in _begin_step by
+	# setting _prefire_timer; we map the active step id back to the right
+	# helper here so adding a new prefire step doesn't need any plumbing.
+	if _prefire_timer >= 0.0:
+		_prefire_timer -= delta
+		if _prefire_timer <= 0.0:
+			_prefire_timer = -1.0
+			match _current_step_id():
+				STEP_SHOT_BLOCK:
+					_fire_puck_for_shot_block()
+				STEP_ONE_TIMER:
+					_fire_puck_cross_ice()
+
+	# Shot-on-net watch for basics QUICK/WRIST/SLAP. Player has released a
+	# matching shot type; we're waiting for the puck to reach the empty net.
+	# Team 0 attacks toward -Z, so "in the net" = puck.z past the negative
+	# goal line and within ±_ON_NET_HALF_WIDTH of x=0.
+	if _watch_for_on_net:
+		_shot_watch_timer -= delta
+		var p: Vector3 = _puck.get_puck_position()
+		if p.z < -GameRules.GOAL_LINE_Z and absf(p.x) < _ON_NET_HALF_WIDTH:
+			_watch_for_on_net = false
+			# Tidy: keep the puck from bouncing around in the net during the
+			# completion flash before the next step takes ownership of placement.
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_complete_step()
+			return
+		if _shot_watch_timer <= 0.0:
+			_watch_for_on_net = false
+			_restage_timer = _REATTEMPT_DELAY
+
 	# Track WRISTER_AIM (state 2) entry for quick vs wrist shot distinction
 	var shot_state: int = _local_controller.get_shot_state()
 	if shot_state == 2:
@@ -310,7 +456,7 @@ func _process(delta: float) -> void:
 		if _wrister_aim_start >= 0.0:
 			_wrister_aim_start = -1.0
 
-	match _current_step:
+	match _current_step_id():
 		STEP_SKATE:
 			if _skater.velocity.length() > 2.5:
 				_step_timer += delta
@@ -336,23 +482,34 @@ func _process(delta: float) -> void:
 					_complete_step()
 			else:
 				_step_timer = 0.0
-			# Re-fire if puck passed the player or stopped before reaching them
-			if _puck.carrier == null:
+			# Re-fire if the puck passed the player, came to rest before
+			# reaching them (deflected into the boards), or got blocked into
+			# a corner. Stash + schedule via _prefire_timer so the standard
+			# 1s between-attempts beat applies and the timer's own gate
+			# stops this branch retriggering during the wait.
+			if _prefire_timer < 0.0 and _puck.carrier == null:
 				var puck_z: float = _puck.get_puck_position().z
-				if puck_z > _skater.global_position.z + 4.0:
-					_fire_puck_for_shot_block()
+				var puck_v: float = _puck.get_puck_velocity().length()
+				if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
+					_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+					_prefire_timer = _REATTEMPT_DELAY
 
 		STEP_ONE_TIMER:
-			# Re-fire if the cross-ice pass stopped (hit boards or missed the player)
-			if _icing_armed and _puck.carrier == null:
+			# Re-fire if the cross-ice pass stopped (hit boards or missed the
+			# player). Stash + schedule via _prefire_timer so the standard 1s
+			# between-attempts beat applies. _one_timer_armed flips false on
+			# restage so this branch can't retrigger during the wait.
+			if _one_timer_armed and _prefire_timer < 0.0 and _puck.carrier == null:
 				if _puck.get_puck_velocity().length() < 0.3:
-					_fire_puck_cross_ice()
+					_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+					_one_timer_armed = false
+					_prefire_timer = _REATTEMPT_DELAY
 
 		STEP_OFFSIDES:
 			if not _offside_ghost_seen:
 				if _skater.is_ghost:
 					_offside_ghost_seen = true
-					_hud.set_step(_current_step, _steps.size(),
+					_hud.set_step(_step_index, _step_ids.size(),
 						"Offsides",
 						"Now you're a ghost — passes skip right over you. Cross back past the blue line to tag up!",
 						"Head toward your own end and cross the blue line.")
@@ -360,56 +517,70 @@ func _process(delta: float) -> void:
 				if not _skater.is_ghost:
 					_complete_step()
 
-		STEP_ICING:
-			if not _icing_armed:
-				# Arm after the first physics frame so puck settles from placement
-				_icing_armed = true
-				return
-			if not _icing_scored:
-				# Wait for puck to cross the far goal line (team 0 attacks toward -Z)
-				if _puck.carrier == null:
-					var puck_z: float = _puck.get_puck_position().z
-					if puck_z < -(GameRules.GOAL_LINE_Z - 1.0):
-						_icing_scored = true
-						# Trigger ghost mode directly — single-player can't win the
-						# hybrid icing race (no defending-team players to compare against)
-						GameManager.trigger_tutorial_icing()
-						_hud.set_step(_current_step, _steps.size(),
-							"Icing — You're Ghosted",
-							"See? Your whole team goes ghost. In a real game, opponents skate in and grab the puck freely. Ghost clears in a moment.",
-							"Avoid icing in real games — free possession for the other team is bad news.")
-			else:
-				# Wait for the ghost timer to expire and ghost to clear
-				if not _skater.is_ghost:
-					_complete_step()
-
 
 # ── Shot signal handler ───────────────────────────────────────────────────────
 
 func _on_shot_released(dir: Vector3, _power: float, is_slapper: bool) -> void:
-	var completed := false
-	match _current_step:
+	# Two-stage completion: first match the shot TYPE the step is teaching,
+	# then (for basics steps) wait for the puck to actually reach the empty
+	# net. Wrong type → restage immediately so the player can try again.
+	var type_correct := false
+	match _current_step_id():
 		STEP_QUICK_SHOT:
 			if not is_slapper:
 				var elapsed: float = 0.0
 				if _wrister_aim_start >= 0.0:
 					elapsed = Time.get_ticks_msec() / 1000.0 - _wrister_aim_start
 				if elapsed < _WRIST_HOLD_MIN:
-					completed = true
+					type_correct = true
 		STEP_WRIST_SHOT:
 			if not is_slapper:
-				completed = true
+				type_correct = true
 		STEP_SLAPSHOT:
 			if is_slapper:
-				completed = true
+				type_correct = true
 		STEP_ELEVATION:
 			if dir.y > 0.1:
-				completed = true
-	if completed:
-		_complete_step()
+				type_correct = true
+	if not type_correct:
+		_restage_timer = _REATTEMPT_DELAY
+		return
+	if _requires_shot_on_net():
+		# Basics teaches shooting on an empty net — pass criterion is the
+		# puck reaching the goal. _process watches puck position.
+		_watch_for_on_net = true
+		_shot_watch_timer = _SHOT_WATCH_DURATION
 	else:
-		# Re-stage puck after a short delay so the player can try again
-		_restage_timer = _RESTAGE_DELAY
+		_complete_step()
+
+
+# Whether the active step requires a shot-on-net to complete, on top of
+# matching the correct shot type. Basics steps run with no goalie spawned
+# (see TutorialRegistry.wants_goalies), so we ask the player to actually
+# put the puck in the net. Advanced's elevation step has a goalie present
+# and is about the LIFT mechanic — type match alone completes that one.
+func _requires_shot_on_net() -> bool:
+	var sid: int = _current_step_id()
+	return sid == STEP_QUICK_SHOT or sid == STEP_WRIST_SHOT or sid == STEP_SLAPSHOT
+
+
+# Deferred restage for STEP_ONE_TIMER when the player picks up the puck and
+# shoots normally. Waits two physics frames so the in-progress release-velocity
+# application can't corrupt the new puck placement, and re-checks the step
+# (player may have pressed Reset or auto-completed mid-await).
+func _restage_one_timer_when_safe() -> void:
+	if _current_step_id() != STEP_ONE_TIMER:
+		_one_timer_restage_pending = false
+		return
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if _current_step_id() != STEP_ONE_TIMER:
+		_one_timer_restage_pending = false
+		return
+	_local_controller.teleport_to(Vector3(_cross_ice_dot_x, 1.0, -GameRules.ICING_FACEOFF_DOT_Z))
+	_one_timer_armed = false
+	_fire_puck_cross_ice()
+	_one_timer_restage_pending = false
 
 
 # ── Staging helpers ───────────────────────────────────────────────────────────
@@ -434,39 +605,57 @@ func _fire_puck_cross_ice() -> void:
 	# Slide toward the player's dot; tiny Y keeps velocity alive through Jolt's first integration step
 	var vel_x: float = signf(-from_x) * _ONE_TIMER_CROSS_SPEED
 	_puck.apply_release_velocity(Vector3(vel_x, 0.001, 0.0))
-	_icing_armed = true
+	_one_timer_armed = true
 
 
-# Fires the puck from the offensive zone toward the player's goal for the shot-block step.
-# Player is at z≈5 (own half); puck comes from z=-8 in the +Z direction.
+# Fires the puck from the offensive zone toward the player's CURRENT position
+# for the shot-block step. Player starts at z=5 (own half) and the puck comes
+# from z=-8; if the player has drifted off the center axis (or wandered out
+# of the lane between re-fires) the shot used to fly past at x=0 and miss
+# them entirely. Aiming at the live position guarantees the puck heads
+# straight at them every fire.
 func _fire_puck_for_shot_block() -> void:
 	if _puck.carrier != null:
 		_puck.drop()
-	_puck.set_puck_position(Vector3(0.0, _ICE_Y, -8.0))
-	_puck.apply_release_velocity(Vector3(0.0, 0.001, _SHOT_BLOCK_PUCK_SPEED))
+	var from := Vector3(0.0, _ICE_Y, -8.0)
+	_puck.set_puck_position(from)
+	var to: Vector3 = _skater.global_position
+	var dir := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	if dir.length() < 0.01:
+		dir = Vector3.FORWARD * -1.0  # +Z fallback if player is right on top
+	dir = dir.normalized()
+	# Tiny Y so velocity survives Jolt's first integration step (same trick as
+	# _fire_puck_cross_ice — without it the puck can settle inert on tick 0).
+	_puck.apply_release_velocity(dir * _SHOT_BLOCK_PUCK_SPEED + Vector3(0.0, 0.001, 0.0))
 
 
-# Fires the puck from z=+15 toward the player at z=-3 for the one-timer step.
+func _ensure_puppet(position: Vector3) -> void:
+	if _puppet_record == null or not is_instance_valid(_puppet_record.skater):
+		_puppet_record = GameManager.spawn_tutorial_bot(position, 0)
+		if _puppet_record == null:
+			return
+	else:
+		_puppet_record.skater.global_position = position
+	# Face toward the player so the puppet reads as engaged with the learner.
+	# Facing is XZ in world space; team-1 bots default to (0, 1) which faces
+	# +Z, which is wrong when the player is off-axis (e.g. body-check step
+	# spawns the puppet at +X with the player at -X).
+	var to_player := Vector2(
+			_skater.global_position.x - _puppet_record.skater.global_position.x,
+			_skater.global_position.z - _puppet_record.skater.global_position.z)
+	if to_player.length() > 0.01:
+		_puppet_record.skater.set_facing(to_player.normalized())
+	var ai_ctrl: AIController = _puppet_record.controller as AIController
+	if ai_ctrl != null:
+		ai_ctrl.script_hold()
+		ai_ctrl.script_aim_at(_skater.global_position)
 
-func _ensure_dummy(position: Vector3) -> void:
-	if is_instance_valid(_dummy_skater):
-		_dummy_skater.global_position = position
+
+func _free_puppet() -> void:
+	if _puppet_record == null:
 		return
-	var spawned: Dictionary = GameManager.spawn_tutorial_dummy(position)
-	_dummy_skater = spawned.skater as Skater
-	_dummy_controller = spawned.controller as Node
-
-
-func _free_dummy() -> void:
-	if is_instance_valid(_dummy_skater):
-		# Drop the puck before freeing so the puck carrier pointer doesn't dangle
-		if _puck != null and _puck.carrier == _dummy_skater:
-			_puck.drop()
-		_dummy_skater.queue_free()
-		_dummy_skater = null
-	if is_instance_valid(_dummy_controller):
-		_dummy_controller.queue_free()
-		_dummy_controller = null
+	GameManager.despawn_tutorial_bot(_puppet_record)
+	_puppet_record = null
 
 
 # ── Signal management ─────────────────────────────────────────────────────────

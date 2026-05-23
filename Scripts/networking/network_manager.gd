@@ -128,6 +128,9 @@ var pending_lobby_roster: Array = []
 var pending_join_slot: Dictionary = {}   # { team_slot, team_id, jersey_color, helmet_color, pants_color }
 var is_offline_mode: bool = false
 var is_tutorial_mode: bool = false
+# Which tutorial to run. game_scene.gd reads this when instantiating
+# TutorialManager. Empty when not in tutorial mode.
+var tutorial_id: String = ""
 # Free play is the boot mode: offline, no bots, direct entry to Hockey.tscn,
 # Escape opens the SideMenu instead of the in-match PauseMenu. Set true by
 # Boot and by return-to-free-play; cleared by reset() and whenever any other
@@ -302,8 +305,9 @@ func apply_local_identity(p_name: String, p_number: int, p_is_left: bool) -> voi
 	local_identity_changed.emit(p_name, p_number, p_is_left)
 
 
-func start_tutorial() -> void:
+func start_tutorial(id: String = TutorialRegistry.BASICS_ID) -> void:
 	is_tutorial_mode = true
+	tutorial_id = id
 	# Pre-assign team 0, slot 0 so the player always spawns as the home team.
 	# on_host_started reads pending_lobby_slots[1] and skips the random assignment path.
 	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
@@ -424,6 +428,7 @@ func reset() -> void:
 	is_offline_mode = false
 	is_free_play_mode = false
 	is_tutorial_mode = false
+	tutorial_id = ""
 	_input_batch_provider = Callable()
 	_peer_handedness.clear()
 	_peer_names.clear()

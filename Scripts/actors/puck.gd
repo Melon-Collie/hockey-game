@@ -33,7 +33,13 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 
 var carrier: Skater = null
 var pickup_locked: bool = false
-var _cooldown_timers: Dictionary[Skater, float] = {}
+# Per-skater puck pickup cooldowns. Keyed by Skater.get_instance_id() rather
+# than the Skater object directly so that the typed Dictionary's erase()
+# validator doesn't reject freed-instance keys when a skater is queue_freed
+# (e.g. tutorial puppet bot teardown) before the per-tick cleanup loop drops
+# its stale entry. Public API still takes a Skater; the int conversion is
+# internal.
+var _cooldown_timers: Dictionary[int, float] = {}
 var _is_server: bool = false
 var _pending_reset: bool = false
 var _pending_reset_xz: Vector2 = Vector2.ZERO
@@ -131,19 +137,20 @@ func clear_carrier() -> void:
 
 # ── Cooldown Helpers ──────────────────────────────────────────────────────────
 func is_on_cooldown(skater: Skater) -> bool:
-	return _cooldown_timers.get(skater, 0.0) > 0.0
+	return _cooldown_timers.get(skater.get_instance_id(), 0.0) > 0.0
 
 func _set_cooldown(skater: Skater, duration: float) -> void:
 	# Take the max with any existing entry so a shorter cooldown set immediately
 	# after a longer one (e.g. body_block_cooldown 0.1s right after reattach 0.5s)
 	# never shortens the in-flight cooldown.
-	_cooldown_timers[skater] = maxf(_cooldown_timers.get(skater, 0.0), duration)
+	var id: int = skater.get_instance_id()
+	_cooldown_timers[id] = maxf(_cooldown_timers.get(id, 0.0), duration)
 
 func set_skater_cooldown(skater: Skater, duration: float) -> void:
 	_set_cooldown(skater, duration)
 
 func remove_skater_cooldown(skater: Skater) -> void:
-	_cooldown_timers.erase(skater)
+	_cooldown_timers.erase(skater.get_instance_id())
 
 # ── Physics ───────────────────────────────────────────────────────────────────
 func apply_blade_deflect(skater: Skater) -> void:
@@ -314,17 +321,21 @@ func _physics_process(delta: float) -> void:
 	if not _is_server:
 		return
 
-	# Tick per-skater cooldowns regardless of carrier state
-	var _expired: Array = []
-	for skater in _cooldown_timers.keys():
+	# Tick per-skater cooldowns regardless of carrier state. Keys are int
+	# instance_ids; resolve back via instance_from_id and drop entries whose
+	# skater has been freed (puppet bot teardown, etc.) alongside the
+	# naturally-expired ones.
+	var _expired: Array[int] = []
+	for id: int in _cooldown_timers.keys():
+		var skater: Skater = instance_from_id(id) as Skater
 		if not is_instance_valid(skater):
-			_expired.append(skater)
+			_expired.append(id)
 			continue
-		_cooldown_timers[skater] -= delta
-		if _cooldown_timers[skater] <= 0.0:
-			_expired.append(skater)
-	for s in _expired:
-		_cooldown_timers.erase(s)
+		_cooldown_timers[id] -= delta
+		if _cooldown_timers[id] <= 0.0:
+			_expired.append(id)
+	for id: int in _expired:
+		_cooldown_timers.erase(id)
 
 	if carrier != null:
 		_pending_elevation = false

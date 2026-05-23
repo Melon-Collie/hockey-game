@@ -166,5 +166,12 @@ func _bootstrap_free_play_and_change(scene: PackedScene) -> void:
 	if _transitioned:
 		return
 	_transitioned = true
-	NetworkManager.start_free_play()
+	# First-time players land in the Basics tutorial after the splash instead
+	# of dropping straight into free play. Once they finish — or hit Skip All
+	# in the HUD — PlayerPrefs.mark_tutorial_complete("basics") flips this so
+	# subsequent boots go straight to the rink.
+	if not PlayerPrefs.is_tutorial_complete(TutorialRegistry.BASICS_ID):
+		NetworkManager.start_tutorial(TutorialRegistry.BASICS_ID)
+	else:
+		NetworkManager.start_free_play()
 	get_tree().change_scene_to_packed(scene)

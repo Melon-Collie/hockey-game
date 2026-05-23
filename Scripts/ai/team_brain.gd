@@ -46,6 +46,11 @@ var _accumulator: float = 0.0
 # computes immediately. Used for event-driven re-evaluation when a
 # puck-carrier change makes the current slot assignment stale.
 var _force_tick_pending: bool = false
+# Set of peer_ids that should NOT receive a slot assignment. Used by the
+# tutorial to puppet a bot in scripted mode — the puppeted bot's slot
+# would otherwise drag it back to a role anchor each brain tick. Kept as
+# a Dictionary[int, bool] for O(1) `has()` lookups.
+var _excluded_peers: Dictionary = {}
 var _team_id_by_peer: Dictionary = {}
 # Cached own-goal Z derived from team_id at construction. Team 0
 # defends +GOAL_LINE_Z, Team 1 defends -GOAL_LINE_Z.
@@ -89,6 +94,19 @@ func force_retick() -> void:
 	_force_tick_pending = true
 
 
+# Exclude a peer from slot assignment. Used by the tutorial when a bot is
+# put into scripted/puppet mode — without this the brain would assign it a
+# role and downstream get_slot / get_anchor calls would yank it toward an
+# anchor each tick. Include is the inverse.
+func exclude_skater(peer_id: int) -> void:
+	_excluded_peers[peer_id] = true
+	slot_assignments.erase(peer_id)
+
+
+func include_skater(peer_id: int) -> void:
+	_excluded_peers.erase(peer_id)
+
+
 # Body of the per-tick computation. Extracted from tick() so
 # force_retick() can drive it without going through the accumulator
 # rate-limit.
@@ -114,6 +132,12 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	slot_assignments = AIRoleSlots.assign(
 			snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
 			prev_assignments, _strong_x)
+	# Drop excluded peers (puppeted tutorial bots) so neither they nor any
+	# downstream consumer of get_slot / get_anchor pulls them toward a slot
+	# anchor. AIRoleSlots.assign already may have given them a slot — erase
+	# after the fact rather than touching the call signature.
+	for excluded_pid: int in _excluded_peers:
+		slot_assignments.erase(excluded_pid)
 
 
 # Returns the slot a peer is currently assigned to, or NONE if not

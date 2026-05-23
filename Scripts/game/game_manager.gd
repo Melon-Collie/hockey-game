@@ -94,6 +94,11 @@ var puck_controller: PuckController = null
 # calls it on every skater per tick (~12 calls × 240 Hz = ~5760 dict allocs/s).
 var _cached_goalie_data: Array[Dictionary] = []
 
+# Tutorial mode gates offsides detection on this flag. Defaults to false so
+# every step except STEP_OFFSIDES has it off; TutorialManager flips it true
+# only when entering the offsides step. See _apply_ghost_state.
+var _tutorial_offsides_active: bool = false
+
 # ── Subsystems ────────────────────────────────────────────────────────────────
 var _registry: PlayerRegistry = null
 var _codec: WorldStateCodec = null
@@ -277,6 +282,14 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
 		_puck_oob_timer = 0.0
 		return
+	# Tutorial steps deliberately stash the puck far outside the rink (e.g.
+	# at (100, 100) during the SKATE step) and reposition it between steps —
+	# letting the OOB check fire a faceoff under the tutorial would derail
+	# the script. The tutorial owns puck placement; nothing else can move
+	# it OOB in tutorial mode anyway.
+	if NetworkManager.is_tutorial_mode:
+		_puck_oob_timer = 0.0
+		return
 	if puck.carrier != null:
 		_puck_oob_timer = 0.0
 		return
@@ -310,6 +323,19 @@ func _update_host_puck_tracking() -> void:
 
 
 func _apply_ghost_state() -> void:
+	# Tutorial gates offsides detection to the OFFSIDES step. Other steps
+	# (notably one-timer, where the player legitimately stands deep in the
+	# O-zone while the puck is stashed off-rink during the prefire delay)
+	# would otherwise trip offsides and ghost the player. Force-clear any
+	# stale ghost while the gate is closed so the previous step's ghost
+	# doesn't bleed into the next one.
+	if NetworkManager.is_tutorial_mode and not _tutorial_offsides_active:
+		for peer_id: int in _registry.all():
+			var record: PlayerRecord = _registry.get_record(peer_id)
+			if record != null and record.skater != null and record.skater.is_ghost:
+				record.skater.set_ghost(false)
+				_last_ghost_state[peer_id] = false
+		return
 	var positions: Dictionary = {}
 	var carrier_peer_id: int = -1
 	for peer_id: int in _registry.all():
@@ -587,6 +613,13 @@ func _spawn_puck() -> void:
 
 
 func _spawn_goalies() -> void:
+	# Basics tutorial teaches shot mechanics on an empty net with a shot-on-net
+	# pass criterion (TutorialManager watches puck position post-release). Skip
+	# goalie spawn so the net stays open; the rest of the rink wiring tolerates
+	# empty goalies / goalie_controllers arrays.
+	if NetworkManager.is_tutorial_mode \
+			and not TutorialRegistry.wants_goalies(NetworkManager.tutorial_id):
+		return
 	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host)
 	goalies = [result.top_goalie as Goalie, result.bottom_goalie as Goalie]
 	goalie_controllers = [result.top_controller, result.bottom_controller]
@@ -2372,20 +2405,55 @@ func get_puck() -> Puck:
 	return puck
 
 
-func spawn_tutorial_dummy(position: Vector3) -> Dictionary:
-	return _spawner.spawn_remote_player(
-		position, Color(0.8, 0.3, 0.3), Color(0.2, 0.2, 0.2), Color(0.15, 0.15, 0.15),
-		Color(0.8, 0.3, 0.3), Color(0.8, 0.3, 0.3), false, puck, self)
+# Tutorial-only: enable offsides ghosting on/off for the active step. The
+# OFFSIDES step turns it on; every other step (including one-timer, which
+# legitimately positions the player deep in the O-zone) leaves it off.
+func set_tutorial_offsides_active(active: bool) -> void:
+	_tutorial_offsides_active = active
 
 
-# Directly triggers icing ghost mode for team 0 without requiring a hybrid-icing
-# race win. Used by TutorialManager to demonstrate the mechanic in single-player
-# (no opposing players means the race always waves off in normal detection).
-func trigger_tutorial_icing() -> void:
-	if _state_machine == null:
+# Spawn an AI-controlled bot on the away team (team 1) in scripted/puppet
+# mode for tutorial demonstrations. The bot uses the same spawn path as
+# normal bots (so team_id resolver, jersey colors, etc. all wire up
+# correctly — this is what fixes the stickcheck/body-check unreliability
+# the static dummy suffered from), then is flipped into scripted_mode and
+# excluded from TeamBrain role assignment.
+#
+# Returns the PlayerRecord so the tutorial can hold a reference for
+# script_* commands and free it later via despawn_tutorial_bot.
+func spawn_tutorial_bot(position: Vector3, bot_id: int = 0) -> PlayerRecord:
+	if _registry == null or teams.size() < 2:
+		return null
+	var team: Team = teams[1]
+	var team_slot: int = 0
+	var identity: Dictionary = {"name": "Tutorial", "number": 99, "is_left_handed": false}
+	var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team, identity)
+	if record == null:
+		return null
+	# Position the bot at the requested location (spawn_bot places it at the
+	# faceoff position by default).
+	if record.skater != null:
+		record.skater.global_position = position
+	var ai_ctrl: AIController = record.controller as AIController
+	if ai_ctrl != null:
+		ai_ctrl.set_scripted_mode(true)
+	if team.team_id < team_brains.size():
+		team_brains[team.team_id].exclude_skater(record.peer_id)
+	return record
+
+
+# Tear down a puppeted bot spawned by spawn_tutorial_bot. Drops the puck
+# first if the bot was carrying it so the carrier pointer doesn't dangle,
+# re-includes the peer in its TeamBrain (defensive — the registry remove
+# will also drop the slot), and frees the skater + controller nodes.
+func despawn_tutorial_bot(record: PlayerRecord) -> void:
+	if record == null or _registry == null:
 		return
-	_state_machine.icing_team_id = 0
-	_state_machine._icing_timer = GameRules.ICING_GHOST_DURATION
+	if puck != null and puck.carrier == record.skater:
+		puck.drop()
+	if record.team != null and record.team.team_id < team_brains.size():
+		team_brains[record.team.team_id].include_skater(record.peer_id)
+	_registry.remove(record.peer_id)
 
 
 func get_goalie_data() -> Array[Dictionary]:
