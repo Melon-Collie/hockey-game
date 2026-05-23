@@ -23,14 +23,39 @@ var _ooo_drop_count: int = 0
 var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
+# Puck trajectory three-zone correction counters. Each broadcast during
+# trajectory prediction picks one zone based on client-vs-server divergence:
+# 0=soft blend (<0.3m), 1=velocity-only (0.3-1.5m), 2=hard snap (>1.5m).
+# Healthy: mostly zone 0, occasional zone 1, zone 2 only on real physics
+# divergence (wall/goalie bounce). Zone 2 firing every shot indicates a
+# trajectory math bug; zones 0+1 oscillating frame-to-frame indicates RTT
+# jitter exceeding the bounded velocity-only band.
+var _puck_traj_soft_count: int = 0
+var _puck_traj_vel_only_count: int = 0
+var _puck_traj_hard_snap_count: int = 0
 var _window_timer: float = 0.0
 
 # ── Published metrics (read by overlay) ──────────────────────────────────────
-var world_state_hz: float = 0.0
-var input_hz: float = 0.0
+# Expected ranges below assume healthy network (RTT < 100ms, loss < 1%) and
+# steady-state gameplay (no phase transitions, no body checks in flight).
+# Spike-rate-during-normal-play is the universal latent-bug detector: anything
+# rate-based that's listed as "near-zero" but trends non-zero indicates a
+# structural problem (non-determinism, divergence channel, wire-format bug)
+# regardless of whether the symptom is visible on screen yet.
+var world_state_hz: float = 0.0          # ~120/s on host, matches send rate on clients
+var input_hz: float = 0.0                # ~60/s — input batch send rate
+# reconcile_per_sec: how often the threshold check actually snapped the skater.
+# Expected: <1/s during normal play. Sustained higher rate means either real
+# non-determinism in _process_input or a divergence channel the threshold
+# check is structurally blind to (the class of bug that motivated trajectory-
+# based reconciliation in the first place).
 var reconcile_per_sec: float = 0.0
+# reconcile_magnitude_avg: average distance snapped per reconcile, in meters.
+# Expected: <0.05m on healthy network. Larger values mean threshold check is
+# letting big divergences accumulate before firing — or, if rate is high too,
+# the predicted-vs-server lookup is missing and falling back to live position.
 var reconcile_magnitude_avg: float = 0.0
-var extrapolation_per_sec: float = 0.0
+var extrapolation_per_sec: float = 0.0   # bracket extrapolation count; expect <1/s
 var buffer_depth_skater: int = 0
 var buffer_depth_puck: int = 0
 var buffer_depth_goalie: int = 0
@@ -38,7 +63,14 @@ var blade_jump_per_sec: float = 0.0
 var blade_jump_mag_avg: float = 0.0
 var blade_reconcile_mag_avg: float = 0.0
 var prediction_divergence_avg: float = 0.0
-var ooo_drops_per_sec: float = 0.0
+var ooo_drops_per_sec: float = 0.0       # expect 0; non-zero means UDP reordering
+# Puck trajectory three-zone correction rates (Hz). All three sum to roughly
+# (post-shot broadcast rate ≈ 120/s) DURING trajectory prediction only — they're
+# zero when puck is carried or interpolated. Mostly soft, occasional vel-only,
+# hard-snap only on real divergence. Hard-snap firing every shot is a bug.
+var puck_traj_soft_per_sec: float = 0.0
+var puck_traj_vel_only_per_sec: float = 0.0
+var puck_traj_hard_snap_per_sec: float = 0.0
 var input_queue_depth_median: int = 0
 var input_lead_avg_ms: float = 0.0
 var input_starvations_per_sec: float = 0.0
@@ -124,6 +156,18 @@ static func record_prediction_divergence(meters: float) -> void:
 static func record_ooo_drop() -> void:
 	if instance: instance._ooo_drop_count += 1
 
+# puck_trajectory_zone: which three-zone branch fired for this broadcast during
+# trajectory prediction. 0=soft (<0.3m), 1=velocity-only (0.3-1.5m), 2=hard snap
+# (>1.5m + buffer clear). Used to detect oscillation around zone boundaries and
+# to flag hard-snap rates that should only ever fire on real physics divergence.
+static func record_puck_trajectory_zone(zone: int) -> void:
+	if instance == null:
+		return
+	match zone:
+		0: instance._puck_traj_soft_count += 1
+		1: instance._puck_traj_vel_only_count += 1
+		2: instance._puck_traj_hard_snap_count += 1
+
 # input_lead: estimated_host_time() - input.host_timestamp at the moment an
 # input is popped from the host queue. Near-zero means inputs are processed
 # right on schedule; consistently high means the queue is backing up.
@@ -179,6 +223,9 @@ func tick(delta: float) -> void:
 	blade_reconcile_mag_avg = _blade_reconcile_mag_sum / _blade_reconcile_n if _blade_reconcile_n > 0 else 0.0
 	prediction_divergence_avg = _prediction_divergence_sum / _prediction_divergence_n if _prediction_divergence_n > 0 else 0.0
 	ooo_drops_per_sec = _ooo_drop_count / _window_timer
+	puck_traj_soft_per_sec = _puck_traj_soft_count / _window_timer
+	puck_traj_vel_only_per_sec = _puck_traj_vel_only_count / _window_timer
+	puck_traj_hard_snap_per_sec = _puck_traj_hard_snap_count / _window_timer
 	input_lead_avg_ms = (_input_lead_sum / _input_lead_n * 1000.0) if _input_lead_n > 0 else 0.0
 	input_starvations_per_sec = _starvation_count / _window_timer
 	if not _queue_depth_window.is_empty():
@@ -220,6 +267,9 @@ func tick(delta: float) -> void:
 	_prediction_divergence_sum = 0.0
 	_prediction_divergence_n = 0
 	_ooo_drop_count = 0
+	_puck_traj_soft_count = 0
+	_puck_traj_vel_only_count = 0
+	_puck_traj_hard_snap_count = 0
 	_input_lead_sum = 0.0
 	_input_lead_n = 0
 	_starvation_count = 0

@@ -1128,10 +1128,17 @@ func apply_state(network_state: GoalieNetworkState, host_ts: float) -> void:
 	# (Euclidean to goal center) in STANDING/RECOVERING and perpendicular depth
 	# in BUTTERFLY/RVH. Pick the right one to lerp toward so the client doesn't
 	# fight its own AI. Both reduce to the same value at the centerline.
+	# Read the broadcast's own state_enum, not _sm.current — the world state
+	# (unreliable, 120Hz) can arrive before the apply_state_transition RPC
+	# (reliable), so the broadcast position is computed in the new state's
+	# coordinate space while _sm.current still reflects the old state. Using
+	# client state here would briefly lerp depth in the wrong unit on every
+	# transition (notably the BUTTERFLY drop on every shot reaction).
+	var broadcast_state := network_state.state_enum as State
 	var server_dx: float = predicted_x - _goal_center_x
 	var server_dz: float = predicted_z - _goal_line_z
 	var server_depth_value: float
-	if _sm.current == State.STANDING or _sm.current == State.READY or _sm.current == State.RECOVERING:
+	if broadcast_state == State.STANDING or broadcast_state == State.READY or broadcast_state == State.RECOVERING:
 		server_depth_value = sqrt(server_dx * server_dx + server_dz * server_dz)
 	else:
 		server_depth_value = server_dz * _direction_sign

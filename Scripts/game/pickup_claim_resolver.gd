@@ -10,7 +10,8 @@ extends RefCounted
 #     → reject if puck locked, claim stale, skater missing/ghost, on cooldown
 #     → rewind blade to host_ts + rtt/2; rewind puck to host_ts - interp_delay
 #     → reject if PuckInteractionRules.check_pickup fails
-#     → if a prior claim is pending, resolve via apply_contested_pickup
+#     → if a prior claim is pending and |Δhost_ts| < CONTEST_WINDOW_S, contest;
+#       otherwise the earlier claim_timestamp wins outright
 #     → otherwise arm pending and wait CONTEST_WINDOW_S for a contender
 #   tick(delta) [each host physics frame]
 #     → after CONTEST_WINDOW_S with no contender, apply_lag_comp_pickup and clear
@@ -30,6 +31,7 @@ var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 
 var _pending_peer_id: int = -1
 var _pending_timer: float = 0.0
+var _pending_host_timestamp: float = 0.0
 
 
 func setup(
@@ -63,6 +65,7 @@ func tick(delta: float) -> void:
 func clear() -> void:
 	_pending_peer_id = -1
 	_pending_timer = 0.0
+	_pending_host_timestamp = 0.0
 
 
 func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
@@ -118,16 +121,40 @@ func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_de
 	if not PuckInteractionRules.check_pickup(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.PICKUP_RADIUS):
 		return
 	if _pending_peer_id != -1:
-		# Resolve the prior claimant at contest time. If they've disconnected
-		# or demoted in the contest window, treat the new claim as uncontested.
-		var prior_record: PlayerRecord = _registry.get_record(_pending_peer_id)
-		if prior_record != null and prior_record.skater != null:
-			pc.apply_contested_pickup(record.skater, prior_record.skater)
-			_pending_peer_id = -1
-			_pending_timer = 0.0
+		# Gate the contest decision on claim timestamps, not RPC arrival order.
+		# Two RPCs can arrive within the 50ms host-arrival window despite their
+		# claim timestamps being far apart (jitter on one peer's link), and the
+		# fairness model is "two players reaching for the puck at roughly the
+		# same client-time," which is what host_timestamp captures.
+		var claim_delta: float = absf(host_timestamp - _pending_host_timestamp)
+		if claim_delta < CONTEST_WINDOW_S:
+			# Genuine contest — both claims stamped within window.
+			# Resolve the prior claimant at contest time. If they've disconnected
+			# or demoted in the contest window, treat the new claim as uncontested.
+			var prior_record: PlayerRecord = _registry.get_record(_pending_peer_id)
+			if prior_record != null and prior_record.skater != null:
+				pc.apply_contested_pickup(record.skater, prior_record.skater)
+				_pending_peer_id = -1
+				_pending_timer = 0.0
+				_pending_host_timestamp = 0.0
+			else:
+				_pending_peer_id = peer_id
+				_pending_host_timestamp = host_timestamp
+				_pending_timer = 0.0
 		else:
-			_pending_peer_id = peer_id
-			_pending_timer = 0.0
+			# Not contested in client-time. Whichever was stamped earlier wins
+			# outright; the later one would have found the puck already taken on
+			# an ideal network. Doesn't fix the dual case (second RPC arriving
+			# after the host-arrival window expired) — that's the cost of not
+			# adding a fixed pickup latency.
+			if host_timestamp < _pending_host_timestamp:
+				# New claim is actually earlier — apply it now and drop pending.
+				pc.apply_lag_comp_pickup(record.skater)
+				_pending_peer_id = -1
+				_pending_timer = 0.0
+				_pending_host_timestamp = 0.0
+			# else: new claim is later, drop it and let pending resolve via tick().
 	else:
 		_pending_timer = 0.0
 		_pending_peer_id = peer_id
+		_pending_host_timestamp = host_timestamp
