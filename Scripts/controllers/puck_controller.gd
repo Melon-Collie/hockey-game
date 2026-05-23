@@ -445,13 +445,16 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 				puck.set_puck_position(latency_corrected.position)
 				puck.set_puck_velocity(latency_corrected.velocity)
 				_state_buffer.clear()
+				NetworkTelemetry.record_puck_trajectory_zone(2)
 			elif dist > trajectory_soft_blend_threshold:
 				# Medium divergence: velocity-only blend, no position change.
 				puck.set_puck_velocity(puck.get_puck_velocity().lerp(latency_corrected.velocity, 0.15))
+				NetworkTelemetry.record_puck_trajectory_zone(1)
 			else:
 				# Small divergence (RTT jitter): soft position blend + velocity blend.
 				puck.set_puck_position(puck.get_puck_position().lerp(latency_corrected.position, position_correction_blend))
 				puck.set_puck_velocity(puck.get_puck_velocity().lerp(latency_corrected.velocity, 0.15))
+				NetworkTelemetry.record_puck_trajectory_zone(0)
 			return  # Don't buffer during prediction; interpolation isn't running
 	if not _state_buffer.is_empty() and host_ts < _state_buffer.back().timestamp:
 		return
