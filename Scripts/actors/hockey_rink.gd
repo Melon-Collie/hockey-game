@@ -182,7 +182,7 @@ func _rebuild() -> void:
 	var r: float = corner_radius
 
 	# --- Ice surface ---
-	_add_ice(half_l)
+	_add_ice()
 
 	# --- Walls (continuous mesh around the entire perimeter) ---
 	# Previously the four straight walls were BoxMesh / BoxShape3D and the four
@@ -240,9 +240,10 @@ func _rebuild() -> void:
 			0.0, glass_y_top)
 
 	# --- Painted stripes ---
-	# Goal-line stripes on each corner's white-board zone (3.35 m from each
-	# end board, drawn where the line crosses the curve).
-	var goal_z: float = half_l - 3.35
+	# Goal-line stripes on each corner's white-board zone, drawn where the line
+	# crosses the curve. Position is the canonical goal-line Z from GameRules
+	# so the stripe matches the painted goal line on the ice.
+	var goal_z: float = GameRules.GOAL_LINE_Z
 	var corner_stripes: Array = [
 		{"z":  goal_z, "color": red_line_color},
 		{"z": -goal_z, "color": red_line_color},
@@ -259,38 +260,39 @@ func _rebuild() -> void:
 
 	_add_side_board_stripes(half_w)
 
-func _add_ice(half_l: float) -> void:
+func _add_ice() -> void:
 	var img_w = int(rink_width * _px_per_meter)
 	var img_h = int(rink_length * _px_per_meter)
-	
+
 	var img = Image.create(img_w, img_h, false, Image.FORMAT_RGBA8)
 	img.fill(ice_color)
 
+	# Image-coordinate convention used throughout this function:
+	#   world +X → image +X
+	#   world +Z → image -Y   (rink length runs along image Y)
+	#   centre of rink → centre of image
+	# All geometric positions come from GameRules so the painted lines and
+	# dots stay locked to the gameplay coordinates the puck/skaters use.
+	var blue_z: int = int(GameRules.BLUE_LINE_Z * _px_per_meter)
+	var goal_z: int = int(GameRules.GOAL_LINE_Z * _px_per_meter)
+
 	# Goalie creases — drawn before lines so lines render on top
-	var crease_goal_z: int = int((half_l - 3.35) * _px_per_meter)
 	var crease_color: Color = Color(0.392, 0.765, 0.922)  # Pantone 298
-	_draw_crease_fill(img, img_w / 2.0, img_h / 2.0 - crease_goal_z, 1, crease_color)
-	_draw_crease_fill(img, img_w / 2.0, img_h / 2.0 + crease_goal_z, -1, crease_color)
+	_draw_crease_fill(img, img_w / 2.0, img_h / 2.0 - goal_z, 1, crease_color)
+	_draw_crease_fill(img, img_w / 2.0, img_h / 2.0 + goal_z, -1, crease_color)
 
 	# Line widths in pixels — thick (center/blue): 0.3m, thin (goal/circles): 0.05m
 	var thick_line: int = int(0.3 * _px_per_meter)
 	var thin_line: int  = max(int(0.05 * _px_per_meter), 2)
-	
-	# Helper: image coordinates
-	# X axis (rink width) = image X
-	# Z axis (rink length) = image Y
-	# Center of rink = center of image
-	
+
 	# Center red line (at Z=0)
 	_draw_h_line(img, img_h / 2.0, thick_line, red_line_color)
-	
-	# Blue lines (64 ft to near edge + half line width = 7.29m center on this rink)
-	var blue_z = int(7.29 * _px_per_meter)
+
+	# Blue lines
 	_draw_h_line(img, img_h / 2.0 - blue_z, thick_line, blue_line_color)
 	_draw_h_line(img, img_h / 2.0 + blue_z, thick_line, blue_line_color)
-	
-	# Goal lines (3.35m from end boards)
-	var goal_z = int((half_l - 3.35) * _px_per_meter)
+
+	# Goal lines
 	_draw_h_line(img, img_h / 2.0 - goal_z, thin_line, red_line_color)
 	_draw_h_line(img, img_h / 2.0 + goal_z, thin_line, red_line_color)
 
@@ -298,39 +300,29 @@ func _add_ice(half_l: float) -> void:
 	_draw_crease_arc(img, img_w / 2.0, img_h / 2.0 - goal_z, 1, thin_line, red_line_color)
 	_draw_crease_arc(img, img_w / 2.0, img_h / 2.0 + goal_z, -1, thin_line, red_line_color)
 
-	# ── Faceoff markings ─────────────────────────────────────────────────────────
-	# All measurements from NHL Official Rules.
-	var dot_r:    float = 0.3048 * _px_per_meter  # 2' diameter filled dot
-	var circle_r: float = 4.572  * _px_per_meter  # 15' radius circle
-	var ez_off_x: float = 6.7056 * _px_per_meter  # 22' from center (width)
-	var ez_off_z: float = 6.096  * _px_per_meter  # 20' from goal line toward center
-	var nz_off_x: float = 6.7056 * _px_per_meter  # same X as end-zone dots
-	var nz_off_z: float = 1.524  * _px_per_meter  # 5' from near edge of blue line toward center
+	# ── Faceoff markings ────────────────────────────────────────────────────────
+	# Dot and circle sizes from NHL Official Rules — 2' diameter filled dot,
+	# 15' radius surrounding circle.
+	var dot_r:    float = 0.3048 * _px_per_meter
+	var circle_r: float = 4.572  * _px_per_meter
 
 	# Center ice circle + filled dot
 	_draw_circle(img, img_w / 2.0, img_h / 2.0, circle_r, thin_line, blue_line_color)
 	_draw_filled_circle(img, img_w / 2.0, img_h / 2.0, dot_r, blue_line_color)
 
-	# End-zone faceoff dots and circles
-	var ez_dots: Array = [
-		[img_w / 2.0 - ez_off_x, img_h / 2.0 - goal_z + ez_off_z],
-		[img_w / 2.0 + ez_off_x, img_h / 2.0 - goal_z + ez_off_z],
-		[img_w / 2.0 - ez_off_x, img_h / 2.0 + goal_z - ez_off_z],
-		[img_w / 2.0 + ez_off_x, img_h / 2.0 + goal_z - ez_off_z],
-	]
-	for dot: Array in ez_dots:
-		_draw_filled_circle(img, dot[0], dot[1], dot_r, red_line_color)
-		_draw_circle(img, dot[0], dot[1], circle_r, thin_line, red_line_color)
+	# End-zone faceoff dots + circles — positions sourced from GameRules so
+	# faceoff teleports land exactly on the painted dot.
+	for dot: Vector2 in GameRules.END_ZONE_FACEOFF_DOTS:
+		var px: float = img_w / 2.0 + dot.x * _px_per_meter
+		var py: float = img_h / 2.0 - dot.y * _px_per_meter
+		_draw_filled_circle(img, px, py, dot_r, red_line_color)
+		_draw_circle(img, px, py, circle_r, thin_line, red_line_color)
 
-	# Neutral-zone faceoff dots
-	var nz_dots: Array = [
-		[img_w / 2.0 - nz_off_x, img_h / 2.0 - blue_z + nz_off_z],
-		[img_w / 2.0 + nz_off_x, img_h / 2.0 - blue_z + nz_off_z],
-		[img_w / 2.0 - nz_off_x, img_h / 2.0 + blue_z - nz_off_z],
-		[img_w / 2.0 + nz_off_x, img_h / 2.0 + blue_z - nz_off_z],
-	]
-	for dot: Array in nz_dots:
-		_draw_filled_circle(img, dot[0], dot[1], dot_r, red_line_color)
+	# Neutral-zone faceoff dots (no surrounding circle per NHL spec)
+	for dot: Vector2 in GameRules.NEUTRAL_ZONE_FACEOFF_DOTS:
+		var px: float = img_w / 2.0 + dot.x * _px_per_meter
+		var py: float = img_h / 2.0 - dot.y * _px_per_meter
+		_draw_filled_circle(img, px, py, dot_r, red_line_color)
 	
 	# Create texture
 	var tex = ImageTexture.create_from_image(img)
@@ -537,7 +529,7 @@ func _add_side_board_stripes(half_w: float) -> void:
 
 	var thick_px: int = int(0.3 * _px_per_meter)
 	var cx: float = float(img_w) / 2.0
-	var bx: float = 7.29 * _px_per_meter
+	var bx: float = GameRules.BLUE_LINE_Z * _px_per_meter
 	_draw_v_line(img, cx,        thick_px, red_line_color)
 	_draw_v_line(img, cx + bx,   thick_px, blue_line_color)
 	_draw_v_line(img, cx - bx,   thick_px, blue_line_color)
