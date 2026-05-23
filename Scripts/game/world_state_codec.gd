@@ -450,7 +450,7 @@ static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
 
 
 static func _decode_goalie_quantized(b: PackedByteArray) -> GoalieNetworkState:
-	if b.size() < 8:
+	if b.size() < 12:
 		push_warning("WorldStateCodec: truncated goalie block (%d bytes)" % b.size())
 		return GoalieNetworkState.new()
 	var s := GoalieNetworkState.new()
@@ -460,7 +460,6 @@ static func _decode_goalie_quantized(b: PackedByteArray) -> GoalieNetworkState:
 	s.rotation_y = b.decode_s16(o) / 32767.0 * PI; o += 2
 	s.state_enum = b.decode_u8(o); o += 1
 	s.five_hole_openness = b.decode_u8(o) / 255.0; o += 1
-	if b.size() > o + 3:
-		s.velocity_x = b.decode_s16(o) / 50.0; o += 2
-		s.velocity_z = b.decode_s16(o) / 50.0
+	s.velocity_x = b.decode_s16(o) / 50.0; o += 2
+	s.velocity_z = b.decode_s16(o) / 50.0
 	return s
