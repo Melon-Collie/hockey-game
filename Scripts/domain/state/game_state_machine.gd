@@ -50,13 +50,34 @@ var players: Dictionary[int, Dictionary] = {}
 # ── Icing ────────────────────────────────────────────────────────────────────
 var last_carrier_team_id: int = -1
 var last_carrier_z: float = 0.0
+# Last carrier's X — used to pick the side of the offending team's defensive
+# zone for the NHL icing faceoff dot.
+var last_carrier_x: float = 0.0
 var icing_team_id: int = -1
 var _icing_timer: float = 0.0
 
 # ── Offsides ─────────────────────────────────────────────────────────────────
-# Peer IDs currently serving an offside ghost. Cleared by tagging up (crossing
-# back into neutral zone) or by a dead-puck phase — not by the puck entering.
+# ARCADE path: peer IDs currently serving an offside ghost. Cleared by tagging
+# up (crossing back into neutral zone) or by a dead-puck phase.
 var _offside_peer_ids: Dictionary = {}
+# NHL delayed-offside path: peers who entered their attacking zone before the
+# puck and have not yet tagged up. Tracked separately so we don't ghost them.
+var _delayed_offside_peer_ids: Dictionary = {}
+# Set to a team_id when there is at least one offside peer on that team AND
+# the puck is in their attacking zone — i.e. an NHL delayed-offside is active
+# and any touch by that team will whistle the play dead.
+var delayed_offside_team_id: int = -1
+# Stashed at update_delayed_offside time so notify_puck_touch can build the
+# offside faceoff dot without re-receiving the puck position.
+var _last_puck_x: float = 0.0
+
+# ── Pending faceoff ──────────────────────────────────────────────────────────
+# When the domain decides a stoppage should fire (NHL icing confirmed, NHL
+# offside touch), it stashes the dot + reason here for GameManager to consume
+# in the same tick and route through the whistle + faceoff_prep pipeline.
+enum FaceoffReason { NONE, ICING, OFFSIDE }
+var pending_faceoff_dot: Vector2 = Vector2.ZERO
+var pending_faceoff_reason: int = FaceoffReason.NONE
 
 
 func _init() -> void:
@@ -120,9 +141,10 @@ func on_faceoff_puck_picked_up() -> bool:
 # Host-side: called every physics frame while the puck has a carrier. Tracks
 # carrier info for icing detection. Any pickup clears active icing (opponent
 # pickup instantly resets; same-team pickup just refreshes the tracker).
-func notify_puck_carried(carrier_team_id: int, carrier_z: float) -> void:
+func notify_puck_carried(carrier_team_id: int, carrier_z: float, carrier_x: float = 0.0) -> void:
 	last_carrier_team_id = carrier_team_id
 	last_carrier_z = carrier_z
+	last_carrier_x = carrier_x
 	if icing_team_id != -1 and carrier_team_id != icing_team_id:
 		icing_team_id = -1
 		_icing_timer = 0.0
@@ -166,6 +188,8 @@ func check_icing_for_loose_puck(
 	if InfractionRules.defending_wins_icing_race(icing_min_dist, defending_min_dist):
 		icing_team_id = offender
 		_icing_timer = GameRules.ICING_GHOST_DURATION
+		pending_faceoff_dot = GameRules.icing_faceoff_dot(offender, last_carrier_x)
+		pending_faceoff_reason = FaceoffReason.ICING
 
 	last_carrier_team_id = -1
 
@@ -188,6 +212,10 @@ func compute_ghost_state(
 		for peer_id in player_positions:
 			result[peer_id] = false
 		return result
+	# NHL replaces the per-player offside ghost with delayed-offside + whistle
+	# (driven by update_delayed_offside + notify_puck_touch), so the offside
+	# branch only runs for ARCADE here.
+	var ghost_for_offside: bool = rule_set != GameRules.RuleSet.NHL
 	for peer_id in player_positions:
 		if not players.has(peer_id):
 			result[peer_id] = false
@@ -195,21 +223,101 @@ func compute_ghost_state(
 		var slot: Dictionary = players[peer_id]
 		var pos_z: float = player_positions[peer_id].z
 		var ghost: bool = false
-		if _offside_peer_ids.has(peer_id):
-			# Already serving offside — hold until they tag up at the blue line.
-			if InfractionRules.has_tagged_up(pos_z, slot.team_id):
-				_offside_peer_ids.erase(peer_id)
+		if ghost_for_offside:
+			if _offside_peer_ids.has(peer_id):
+				# Already serving offside — hold until they tag up at the blue line.
+				if InfractionRules.has_tagged_up(pos_z, slot.team_id):
+					_offside_peer_ids.erase(peer_id)
+				else:
+					ghost = true
 			else:
-				ghost = true
-		else:
-			var is_carrier: bool = peer_id == puck_carrier_peer_id
-			if InfractionRules.is_offside(pos_z, slot.team_id, puck_position.z, is_carrier):
-				_offside_peer_ids[peer_id] = true
-				ghost = true
+				var is_carrier: bool = peer_id == puck_carrier_peer_id
+				if InfractionRules.is_offside(pos_z, slot.team_id, puck_position.z, is_carrier):
+					_offside_peer_ids[peer_id] = true
+					ghost = true
 		if icing_team_id == slot.team_id:
 			ghost = true
 		result[peer_id] = ghost
 	return result
+
+
+# Host-side (NHL only): tracks delayed-offside state. An attacker who entered
+# their attacking zone before the puck is added to the offside set and stays
+# until they tag up at the blue line. delayed_offside_team_id flips on while
+# at least one such peer is offside AND the puck is in their attacking zone;
+# it clears when everyone tags up or the puck leaves the zone (defenders
+# clear). The whistle itself fires from notify_puck_touch.
+func update_delayed_offside(
+		player_positions: Dictionary,
+		puck_position: Vector3,
+		puck_carrier_peer_id: int) -> void:
+	if rule_set != GameRules.RuleSet.NHL:
+		return
+	if current_phase != GamePhase.Phase.PLAYING:
+		_delayed_offside_peer_ids.clear()
+		delayed_offside_team_id = -1
+		return
+	var puck_z: float = puck_position.z
+	_last_puck_x = puck_position.x
+
+	# Add new offside peers; remove ones who have tagged up. A peer stays in
+	# the set even after the puck enters the zone — they must physically cross
+	# back into neutral to clear.
+	for peer_id in player_positions:
+		if not players.has(peer_id):
+			continue
+		var slot: Dictionary = players[peer_id]
+		var pos_z: float = player_positions[peer_id].z
+		if _delayed_offside_peer_ids.has(peer_id):
+			if InfractionRules.has_tagged_up(pos_z, slot.team_id):
+				_delayed_offside_peer_ids.erase(peer_id)
+		else:
+			var is_carrier: bool = peer_id == puck_carrier_peer_id
+			if InfractionRules.is_offside(pos_z, slot.team_id, puck_z, is_carrier):
+				_delayed_offside_peer_ids[peer_id] = slot.team_id
+
+	# A team's delayed offside is active once the puck reaches their attacking
+	# zone (touch by them is now a whistle). Walk the set and take the first
+	# team whose zone the puck is in.
+	delayed_offside_team_id = -1
+	for tid in _delayed_offside_peer_ids.values():
+		if _puck_in_attacking_zone(tid, puck_z):
+			delayed_offside_team_id = tid
+			break
+
+
+static func _puck_in_attacking_zone(team_id: int, puck_z: float) -> bool:
+	if team_id == 0:
+		return puck_z < -GameRules.BLUE_LINE_Z
+	else:
+		return puck_z > GameRules.BLUE_LINE_Z
+
+
+# Host-side (NHL only): called when any player gains control of / touches the
+# puck (pickup or loose-puck touch). If a delayed offside is active for that
+# player's team, stash the faceoff dot so GameManager whistles the play.
+func notify_puck_touch(peer_id: int) -> void:
+	if rule_set != GameRules.RuleSet.NHL:
+		return
+	if delayed_offside_team_id == -1:
+		return
+	if not players.has(peer_id):
+		return
+	if players[peer_id].team_id != delayed_offside_team_id:
+		return
+	pending_faceoff_dot = GameRules.offside_faceoff_dot(delayed_offside_team_id, _last_puck_x)
+	pending_faceoff_reason = FaceoffReason.OFFSIDE
+	_delayed_offside_peer_ids.clear()
+	delayed_offside_team_id = -1
+
+
+# GameManager polls each frame; if a stoppage is pending, returns the reason
+# and clears the slot so we don't double-fire. Caller reads pending_faceoff_dot
+# directly when the returned reason is non-NONE.
+func consume_pending_faceoff() -> int:
+	var r: int = pending_faceoff_reason
+	pending_faceoff_reason = FaceoffReason.NONE
+	return r
 
 
 # ── Player registry ──────────────────────────────────────────────────────────
@@ -255,6 +363,7 @@ func register_remote_assigned_player(peer_id: int, team_slot: int, team_id: int)
 func on_player_disconnected(peer_id: int) -> void:
 	players.erase(peer_id)
 	_offside_peer_ids.erase(peer_id)
+	_delayed_offside_peer_ids.erase(peer_id)
 
 func count_players_on_team(team_id: int) -> int:
 	var count: int = 0
@@ -313,6 +422,9 @@ func reset_all() -> void:
 	_icing_timer = 0.0
 	last_carrier_team_id = -1
 	_offside_peer_ids.clear()
+	_delayed_offside_peer_ids.clear()
+	delayed_offside_team_id = -1
+	pending_faceoff_reason = FaceoffReason.NONE
 
 func apply_config(p_num_periods: int, p_period_duration: float, p_ot_enabled: bool, p_ot_duration: float,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET) -> void:
@@ -325,14 +437,18 @@ func apply_config(p_num_periods: int, p_period_duration: float, p_ot_enabled: bo
 	time_remaining   = 0.0 if infinite_time else p_period_duration
 	period_scores    = _make_period_scores(num_periods)
 
-# Transitions to FACEOFF_PREP at the given dot and clears icing state. Used by
-# manual reset (default center) and the OOB path (passes the nearest dot). The
-# goal pipeline is driven automatically by the tick timer in advance_post_goal.
+# Transitions to FACEOFF_PREP at the given dot and clears infraction state.
+# Used by manual reset (default center), the OOB path, and the NHL stoppage
+# paths (icing / offside, both pass the rule-specific dot). The post-goal
+# pipeline is driven automatically by the tick timer in advance_post_goal.
 func begin_faceoff_prep(dot_xz: Vector2 = GameRules.CENTER_ICE_DOT) -> void:
 	icing_team_id = -1
 	_icing_timer = 0.0
 	last_carrier_team_id = -1
 	_offside_peer_ids.clear()
+	_delayed_offside_peer_ids.clear()
+	delayed_offside_team_id = -1
+	pending_faceoff_reason = FaceoffReason.NONE
 	active_faceoff_dot = dot_xz
 	_set_phase(GamePhase.Phase.FACEOFF_PREP)
 

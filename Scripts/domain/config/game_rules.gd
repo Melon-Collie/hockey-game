@@ -90,7 +90,7 @@ const PUCK_BOARD_BOUNCE: float = 0.4
 const PUCK_OOB_GRACE_DURATION: float = 1.0
 
 # ── Infractions ───────────────────────────────────────────────────────────────
-const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icing
+const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icing (ARCADE/legacy path)
 # End-zone faceoff dot offsets from centre ice — NHL spec. The rink renderer
 # (hockey_rink.gd) paints the dots at the same positions, so puck reset and
 # player teleport land on the painted dot. Z is 20' (6.096m) inside the goal
@@ -98,12 +98,16 @@ const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icin
 # value as the dot players sprint toward in hybrid icing.
 const END_ZONE_FACEOFF_DOT_X: float = 6.7056
 const ICING_FACEOFF_DOT_Z: float = GOAL_LINE_Z - 6.096   # 20.554
+# Neutral-zone faceoff dots — NHL spec. Painted 5' (1.524m) from each blue
+# line on the neutral-zone side. Used as the faceoff spot when an offside is
+# called and as candidates when the puck goes out of play in the neutral zone.
+const NEUTRAL_ZONE_FACEOFF_DOT_Z: float = BLUE_LINE_Z - 1.524   # 5.766
 
 # Rule preset that gates which infractions are detected and how they're punished.
 #   OFF    — no offsides, no icing (free-for-all).
 #   ARCADE — offsides ghost the offending player; icing is ignored.
-#   NHL    — offsides + icing both detected; today they fall back to the ghost
-#            penalty as a stub for the future stoppage + faceoff implementation.
+#   NHL    — full stoppage rules: icing blows the whistle after the hybrid race,
+#            offsides run delayed (no ghost) and whistle on offending-team touch.
 enum RuleSet { OFF, ARCADE, NHL }
 const DEFAULT_RULE_SET: int = RuleSet.ARCADE
 const RULE_SET_NAMES: Array[String] = ["Off", "Arcade", "NHL"]
@@ -177,6 +181,15 @@ const END_ZONE_FACEOFF_DOTS: Array[Vector2] = [
 	Vector2(-END_ZONE_FACEOFF_DOT_X, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, left
 	Vector2( END_ZONE_FACEOFF_DOT_X, -ICING_FACEOFF_DOT_Z),  # team 1 defensive zone, right
 ]
+# Neutral-zone dots — 5' from each blue line on the neutral-zone side. Index
+# pairing: first two flank the +Z blue line (team 1's attacking blue line),
+# last two flank the -Z blue line (team 0's attacking blue line).
+const NEUTRAL_ZONE_FACEOFF_DOTS: Array[Vector2] = [
+	Vector2(-END_ZONE_FACEOFF_DOT_X,  NEUTRAL_ZONE_FACEOFF_DOT_Z),
+	Vector2( END_ZONE_FACEOFF_DOT_X,  NEUTRAL_ZONE_FACEOFF_DOT_Z),
+	Vector2(-END_ZONE_FACEOFF_DOT_X, -NEUTRAL_ZONE_FACEOFF_DOT_Z),
+	Vector2( END_ZONE_FACEOFF_DOT_X, -NEUTRAL_ZONE_FACEOFF_DOT_Z),
+]
 
 # Per-team, per-slot XZ offsets from whichever dot is active. Team 0 stands on
 # the +Z side of the dot, team 1 on -Z (preserves team 0 = +Z half convention).
@@ -186,8 +199,9 @@ const FACEOFF_OFFSETS: Array = [
 	[Vector2( 0.0, -1.5), Vector2(-5.0, -3.0), Vector2( 5.0, -3.0)],  # team 1
 ]
 
-# Returns the faceoff dot (center ice or end-zone) closest to the given XZ
-# point. Used to pick the spot where an out-of-play puck reconvenes.
+# Returns the faceoff dot closest to the given XZ point — picks among centre
+# ice, the four end-zone dots, and the four neutral-zone dots. Used to pick
+# the spot where an out-of-play puck reconvenes.
 static func nearest_faceoff_dot(world_xz: Vector2) -> Vector2:
 	var best: Vector2 = CENTER_ICE_DOT
 	var best_d2: float = world_xz.distance_squared_to(CENTER_ICE_DOT)
@@ -196,4 +210,25 @@ static func nearest_faceoff_dot(world_xz: Vector2) -> Vector2:
 		if d2 < best_d2:
 			best_d2 = d2
 			best = dot
+	for dot: Vector2 in NEUTRAL_ZONE_FACEOFF_DOTS:
+		var d2: float = world_xz.distance_squared_to(dot)
+		if d2 < best_d2:
+			best_d2 = d2
+			best = dot
 	return best
+
+# NHL icing faceoff dot: in the offending team's defensive zone, on the side
+# closest to where the puck was last touched by the offending team. Team 0
+# defends +Z; team 1 defends -Z. Centerline release defaults to the +X side.
+static func icing_faceoff_dot(offender_team_id: int, last_carrier_x: float) -> Vector2:
+	var z: float = ICING_FACEOFF_DOT_Z if offender_team_id == 0 else -ICING_FACEOFF_DOT_Z
+	var x: float = END_ZONE_FACEOFF_DOT_X if last_carrier_x >= 0.0 else -END_ZONE_FACEOFF_DOT_X
+	return Vector2(x, z)
+
+# NHL offside faceoff dot: the neutral-zone dot flanking the blue line the
+# offending team crossed, on the side the puck entered. Team 0 attacks -Z
+# (crosses the -Z blue line); team 1 attacks +Z.
+static func offside_faceoff_dot(offender_team_id: int, puck_x: float) -> Vector2:
+	var z: float = -NEUTRAL_ZONE_FACEOFF_DOT_Z if offender_team_id == 0 else NEUTRAL_ZONE_FACEOFF_DOT_Z
+	var x: float = END_ZONE_FACEOFF_DOT_X if puck_x >= 0.0 else -END_ZONE_FACEOFF_DOT_X
+	return Vector2(x, z)
