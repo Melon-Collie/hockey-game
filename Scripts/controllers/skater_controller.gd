@@ -232,6 +232,13 @@ func _on_body_block_hit(body: Node3D) -> void:
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 func _process_input(input: InputState, delta: float) -> void:
+	# Snapshot the blade's current contact point before any IK mutation runs
+	# this tick. The host's swept-segment pickup/poke test (PuckController._check_interactions,
+	# priority 1) reads this later in the tick as `blade_prev`; combined with the
+	# post-IK + post-move_and_slide `blade_curr`, the segment spans both the IK
+	# sweep and the body motion. Capturing here in every controller path
+	# (Local / Remote / AI) keeps the test consistent across input sources.
+	skater.capture_prev_blade_contact()
 	if input.elevation_up:
 		_is_elevated = true
 	if input.elevation_down:
