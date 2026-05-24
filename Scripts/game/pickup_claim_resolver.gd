@@ -95,10 +95,14 @@ func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_de
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
-	var rewind_rtt: float = clampf(rtt_ms, 10.0, 200.0)
-	# Blade: client's blade state from T_client = claim send time arrives in the
-	# state buffer at host time = host_timestamp + rtt/2 (one-way transit).
-	var blade_rewind_time: float = host_timestamp + rewind_rtt / 2000.0
+	# Blade: client's blade at view-time T was produced by an input stamped
+	# T + INPUT_LEAD_SEC. The host's gated input processing applied that input
+	# at host wall T + INPUT_LEAD_SEC, and StateBufferManager captured the
+	# resulting blade state with that timestamp. RTT does not enter the formula —
+	# the rewind depth is a function of the INPUT_LEAD_SEC convention, so pickup
+	# arbitration becomes RTT-independent and lower-RTT players don't beat
+	# higher-RTT players to contested pucks they both legitimately reached for.
+	var blade_rewind_time: float = host_timestamp + NetworkManager.INPUT_LEAD_SEC
 	# Puck: client's interpolated puck is delayed by interp_delay behind host
 	# time. Rewind to the timestamp the client was actually looking at.
 	var puck_rewind_time: float = host_timestamp - clampf(interp_delay_ms, 0.0, 200.0) / 1000.0

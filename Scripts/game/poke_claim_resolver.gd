@@ -64,10 +64,14 @@ func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float,
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
-	var rewind_rtt: float = clampf(rtt_ms, 10.0, 200.0)
-	# Blade rewind: client's blade state at claim-send time arrives in the host's
-	# state buffer at host_timestamp + rtt/2 (one-way transit).
-	var blade_rewind_time: float = host_timestamp + rewind_rtt / 2000.0
+	# Blade: client's blade at view-time T was produced by an input stamped
+	# T + INPUT_LEAD_SEC. The host's gated input processing applied that input
+	# at host wall T + INPUT_LEAD_SEC, and StateBufferManager captured the
+	# resulting blade state with that timestamp. RTT does not enter the formula —
+	# the rewind depth is a function of the INPUT_LEAD_SEC convention, so poke
+	# validation becomes RTT-independent (see PickupClaimResolver for the same
+	# derivation).
+	var blade_rewind_time: float = host_timestamp + NetworkManager.INPUT_LEAD_SEC
 	# Puck rewind: client's interpolated remote carrier was rendered at
 	# host_time - interp_delay. Rewind to the timestamp the client was looking at.
 	var puck_rewind_time: float = host_timestamp - clampf(interp_delay_ms, 0.0, 200.0) / 1000.0

@@ -10,6 +10,15 @@ extends Node
 const BOT_ID_BASE: int = 10_000
 const BOT_ID_MAX: int = BOT_ID_BASE + 5  # 6 bots max (3 per team)
 
+# Re-exported from ClockSync so lag-comp resolvers can reference it without
+# loading the script directly. Single source of truth lives in clock_sync.gd.
+# Used by pickup/poke claim rewind to find the host's snapshot whose blade
+# state matches what the client predicted at view-time — the input that
+# produced the client's blade at host_timestamp T was stamped T + INPUT_LEAD_SEC
+# and the host's gated processing produced its snapshot at host wall T + INPUT_LEAD_SEC.
+const _ClockSyncScript: GDScript = preload("res://Scripts/networking/clock_sync.gd")
+const INPUT_LEAD_SEC: float = _ClockSyncScript.INPUT_LEAD_SEC
+
 
 func is_bot_peer(peer_id: int) -> bool:
 	return peer_id >= BOT_ID_BASE and peer_id <= BOT_ID_MAX
