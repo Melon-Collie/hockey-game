@@ -113,14 +113,12 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	if hitter_rec == null or victim_rec == null:
 		return
 	# Two rewinds because the attacker viewed the two bodies at different times:
-	#   - Their own body was their local prediction. Its host-side equivalent
-	#     lives at host_timestamp + INPUT_LEAD_SEC (matches PickupClaimResolver).
-	#   - The victim was a remote skater, rendered via interpolation at
-	#     host_time - interp_delay.
-	# Using one rewind for both (as the prior `host_timestamp - rtt/2` did)
-	# compares hitter-from-one-time against victim-from-another-time.
-	var hitter_rewind_time: float = host_timestamp + NetworkManager.INPUT_LEAD_SEC
-	var victim_rewind_time: float = host_timestamp - clampf(interp_delay_ms, 0.0, 200.0) / 1000.0
+	# their own body via local prediction (SELF view) and the victim via
+	# interpolation (REMOTE view). Using one rewind for both (as the prior
+	# `host_timestamp - rtt/2` did) compares hitter-from-one-time against
+	# victim-from-another-time. See LagCompRewind for the derivation.
+	var hitter_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
+	var victim_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 	var hitter_snapshot: WorldSnapshot = _state_buffer.get_state_at(hitter_rewind_time)
 	var victim_snapshot: WorldSnapshot = _state_buffer.get_state_at(victim_rewind_time)
 	var hitter_snap: SkaterNetworkState = hitter_snapshot.get_skater_state(hitter_peer_id)
