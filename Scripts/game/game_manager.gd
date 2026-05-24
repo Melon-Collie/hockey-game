@@ -1915,10 +1915,10 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
 
 
-func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
+func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	if not NetworkManager.is_host:
 		return
-	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, rtt_ms)
+	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, rtt_ms, interp_delay_ms)
 
 
 # ── Scene exit & reset ───────────────────────────────────────────────────────

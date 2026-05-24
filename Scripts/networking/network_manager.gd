@@ -79,7 +79,7 @@ signal rematch_vote_changed(peer_id: int, vote: bool)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
 signal poke_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int)
-signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float)
+signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
 signal goalie_state_transition_received(team_id: int, new_state: int)
 signal goalie_shot_reaction_received(team_id: int, impact_x: float, impact_y: float, is_elevated: bool)
 signal goalie_reaction_cleared_received(team_id: int)
@@ -721,18 +721,18 @@ func receive_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: f
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	poke_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id)
 
-func send_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
+func send_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	NetworkSimManager.send(
-		func(vpid: int, ts: float, rtt: float) -> void:
-			receive_hit_claim.rpc_id(1, vpid, ts, rtt),
-		[victim_peer_id, host_timestamp, rtt_ms], true)
+		func(vpid: int, ts: float, rtt: float, idms: float) -> void:
+			receive_hit_claim.rpc_id(1, vpid, ts, rtt, idms),
+		[victim_peer_id, host_timestamp, rtt_ms, interp_delay_ms], true)
 
 @rpc("any_peer", "reliable")
-func receive_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
+func receive_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	if not is_host:
 		return
 	var hitter_peer_id: int = multiplayer.get_remote_sender_id()
-	hit_claim_received.emit(hitter_peer_id, victim_peer_id, host_timestamp, rtt_ms)
+	hit_claim_received.emit(hitter_peer_id, victim_peer_id, host_timestamp, rtt_ms, interp_delay_ms)
 
 func start_replay_mode(initial_ts: float) -> void:
 	_replay_mode = true

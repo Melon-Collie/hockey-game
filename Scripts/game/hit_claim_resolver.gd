@@ -14,8 +14,10 @@ extends RefCounted
 #     client: pre-filters (impulse, local-carry), throttles per (hitter,victim),
 #             sends NetworkManager.send_hit_claim. The host re-validates the
 #             rule gates from rewound snapshots on receipt.
-#   receive_claim(hitter, victim, host_ts, rtt) [host]
+#   receive_claim(hitter, victim, host_ts, rtt, interp_delay_ms) [host]
 #     → reject if claim stale, peers unknown, or rewound positions out of range
+#     → rewind hitter to host_ts + INPUT_LEAD_SEC (their own predicted body)
+#       and victim to host_ts - interp_delay (the remote body they saw)
 #     → re-derive impulse from rewound velocities along hitter→victim normal
 #     → reject if HitRules.is_valid_hit fails
 #     → otherwise credit via HitTracker.on_hit
@@ -96,10 +98,11 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 	NetworkManager.send_hit_claim(
 			victim_peer_id,
 			NetworkManager.estimated_host_time(),
-			NetworkManager.get_latest_rtt_ms())
+			NetworkManager.get_latest_rtt_ms(),
+			NetworkManager.get_target_interpolation_delay() * 1000.0)
 
 
-func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
+func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, _rtt_ms: float, interp_delay_ms: float) -> void:
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
 	var now: float = NetworkManager.local_time()
@@ -109,21 +112,36 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	var victim_rec: PlayerRecord = _registry.get_record(victim_peer_id)
 	if hitter_rec == null or victim_rec == null:
 		return
-	var rewind_rtt: float = clampf(rtt_ms, 10.0, 200.0)
-	var rewind_time: float = host_timestamp - rewind_rtt / 2000.0
-	var snapshot: WorldSnapshot = _state_buffer.get_state_at(rewind_time)
-	var hitter_snap: SkaterNetworkState = snapshot.get_skater_state(hitter_peer_id)
-	var victim_snap: SkaterNetworkState = snapshot.get_skater_state(victim_peer_id)
+	# Two rewinds because the attacker viewed the two bodies at different times:
+	#   - Their own body was their local prediction. Its host-side equivalent
+	#     lives at host_timestamp + INPUT_LEAD_SEC (matches PickupClaimResolver).
+	#   - The victim was a remote skater, rendered via interpolation at
+	#     host_time - interp_delay.
+	# Using one rewind for both (as the prior `host_timestamp - rtt/2` did)
+	# compares hitter-from-one-time against victim-from-another-time.
+	var hitter_rewind_time: float = host_timestamp + NetworkManager.INPUT_LEAD_SEC
+	var victim_rewind_time: float = host_timestamp - clampf(interp_delay_ms, 0.0, 200.0) / 1000.0
+	var hitter_snapshot: WorldSnapshot = _state_buffer.get_state_at(hitter_rewind_time)
+	var victim_snapshot: WorldSnapshot = _state_buffer.get_state_at(victim_rewind_time)
+	var hitter_snap: SkaterNetworkState = hitter_snapshot.get_skater_state(hitter_peer_id)
+	var victim_snap: SkaterNetworkState = victim_snapshot.get_skater_state(victim_peer_id)
 	if hitter_snap == null or victim_snap == null:
 		return
 	if hitter_snap.position.distance_to(victim_snap.position) > MAX_RANGE_M:
 		return
-	var puck_snap: PuckNetworkState = snapshot.puck_state
+	# Puck pulled from the victim's rewind snapshot — when the attacker isn't
+	# the carrier, the puck they saw was interpolated at host_time - interp_delay
+	# alongside the victim. When the attacker IS the carrier (which the
+	# is_valid_hit gate rejects anyway), the puck would be at their blade in
+	# the hitter snapshot, but the rejection comes from the carrier_peer_id
+	# check that doesn't depend on the puck's position, so either snapshot works.
+	var puck_snap: PuckNetworkState = victim_snapshot.puck_state
 	if puck_snap == null:
 		return
 	# Re-derive impulse from rewound velocities along the hitter→victim normal.
-	# This both validates closing speed and avoids trusting a client-supplied
-	# impulse over the wire. Skater weight is uniform (1.0) so impulse ≈ approach.
+	# Each velocity is read from its own rewound snapshot so the closing speed
+	# reflects what the attacker actually saw, not a single mid-time slice.
+	# Skater weight is uniform (1.0) so impulse ≈ approach.
 	var to_victim: Vector3 = victim_snap.position - hitter_snap.position
 	to_victim.y = 0.0
 	if to_victim.length_squared() < 0.0001:
