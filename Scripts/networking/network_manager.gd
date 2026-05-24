@@ -479,7 +479,7 @@ func reset() -> void:
 	_peer_loss_timer = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
-	NetworkSimManager._pending.clear()
+	NetworkSimManager.clear_pending()
 
 # ── Process ───────────────────────────────────────────────────────────────────
 func _notification(what: int) -> void:
