@@ -259,6 +259,11 @@ func _physics_process(delta: float) -> void:
 		return
 	if _state_buffer_manager != null and puck_controller != null:
 		_state_buffer_manager.capture(_registry, puck_controller, goalie_controllers)
+		# Broadcast immediately after capture so the world-state packet reflects
+		# this tick's state. Lives here (rather than in NetworkManager._physics_process)
+		# because autoload tree order would otherwise have NetworkManager run
+		# first and broadcast last tick's snapshot — see NetworkManager.try_broadcast.
+		NetworkManager.try_broadcast()
 	# Build the shared "current frame" snapshot once after capture. AI
 	# controllers and team brains both read from current_snapshot rather
 	# than each calling get_state_delayed independently — at 6 bots + 2

@@ -205,8 +205,11 @@ var _last_ws_arrival_time: float = -1.0
 var pending_error: String = ""
 
 var _input_timer: float = 0.0
-# Physics-driven broadcast cadence (see _physics_process). Counts physics ticks
-# between broadcasts. `_last_broadcast_us` tracks wall-clock for telemetry.
+# Broadcast cadence. Counter ticks here every physics frame (see
+# `_physics_process`); the broadcast call itself fires from `try_broadcast`,
+# invoked by GameManager._physics_process after StateBufferManager.capture so
+# the broadcast reads this tick's state. `_last_broadcast_us` tracks wall-clock
+# for telemetry.
 var _state_tick_counter: int = 0
 var _last_broadcast_us: int = 0
 var _ping_timer: float = 0.0
@@ -216,11 +219,13 @@ var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
 # (240/120 = 2 at the default rate; 240/5 = 48 during dead-puck phases via
-# set_broadcast_rate). Recomputed by `set_broadcast_rate`. The broadcast loop
-# fires from `_physics_process` (not `_process`) so that on a host stall,
-# Godot's physics catch-up naturally produces back-to-back broadcasts with
-# distinct host_timestamps for the client to interpolate through — instead
-# of one big "missing snapshot" gap followed by a snap.
+# set_broadcast_rate). Recomputed by `set_broadcast_rate`. Stall resilience:
+# on a host main-thread freeze, Godot's physics catch-up fires multiple
+# back-to-back physics ticks. The counter increments in NetworkManager._physics_process
+# for each, and GameManager._physics_process invokes try_broadcast() per tick,
+# so back-to-back broadcasts fire at the cadence threshold — clients get the
+# multiple distinct host_timestamps they need to interpolate through the gap
+# instead of one snap.
 var _state_tick_divisor: int = Constants.PHYSICS_TICK / Constants.STATE_RATE
 const CONNECT_TIMEOUT: float = 10.0
 
@@ -493,22 +498,16 @@ func _physics_process(_delta: float) -> void:
 	# with this value; consumers must tolerate the counter being zero before
 	# the host starts ticking and must not assume monotonicity across host
 	# transfers (Phase 1 has no host transfer support anyway).
+	#
+	# `_state_tick_counter` also ticks here so the broadcast cadence keeps
+	# pace with the engine's physics rate independent of whether GameManager
+	# captured this tick (replay mode, missing puck, etc.). The actual
+	# broadcast call is invoked by GameManager via try_broadcast() right
+	# after StateBufferManager.capture(), so the world-state packet always
+	# reads this tick's fresh state instead of the prior tick's snapshot.
 	if is_host:
 		host_tick += 1
-		# World-state broadcast cadence: every Nth physics tick (N=6 at 40Hz).
-		# Lives in _physics_process — not _process — so that Godot's physics
-		# catch-up after a main-thread stall naturally fires multiple
-		# broadcasts in rapid succession, each carrying the snapshot at that
-		# physics tick. Without this, a 60ms stall produces ONE broadcast on
-		# recovery and the client interpolator runs out of bracket.
 		_state_tick_counter += 1
-		if _state_tick_counter >= _state_tick_divisor:
-			_state_tick_counter = 0
-			var now_us: int = Time.get_ticks_usec()
-			if _last_broadcast_us != 0:
-				NetworkTelemetry.record_broadcast_interval_us(now_us - _last_broadcast_us)
-			_last_broadcast_us = now_us
-			_broadcast_state()
 
 func _process(delta: float) -> void:
 	# Cap delta to avoid timer bursting on the first frame after an OS freeze
@@ -585,6 +584,31 @@ func set_broadcast_rate(hz: float) -> void:
 	_state_tick_divisor = maxi(int(round(float(Constants.PHYSICS_TICK) / maxf(hz, 1.0))), 1)
 	# Reset the counter so the new cadence starts cleanly from the next tick.
 	_state_tick_counter = 0
+
+# Called by GameManager._physics_process right after
+# StateBufferManager.capture() so the broadcast reads this tick's state
+# instead of the prior tick's snapshot. The cadence counter is incremented
+# in `_physics_process` regardless of whether this runs, so on a host stall
+# Godot's physics catch-up still produces back-to-back broadcasts (one per
+# eligible call) with distinct host_timestamps — clients get the multiple
+# snapshots they need to interpolate through the catch-up window.
+#
+# Routing through here (rather than firing the broadcast from
+# NetworkManager._physics_process directly) is necessary because autoload
+# tree order puts NetworkManager ahead of GameManager: a broadcast from
+# NetworkManager._physics_process would always read last tick's capture,
+# adding a one-physics-tick (~4.17ms) latency floor to every client.
+func try_broadcast() -> void:
+	if not is_host:
+		return
+	if _state_tick_counter < _state_tick_divisor:
+		return
+	_state_tick_counter = 0
+	var now_us: int = Time.get_ticks_usec()
+	if _last_broadcast_us != 0:
+		NetworkTelemetry.record_broadcast_interval_us(now_us - _last_broadcast_us)
+	_last_broadcast_us = now_us
+	_broadcast_state()
 
 func _broadcast_state() -> void:
 	if not _world_state_provider.is_valid():
