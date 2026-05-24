@@ -48,6 +48,11 @@ signal local_spectator_state_changed(is_spectator: bool)
 # grace window). HUD listens to flash the "PUCK OUT OF PLAY" toast; the
 # FACEOFF_PREP phase change drives the countdown banner separately.
 signal puck_out_of_play()
+# Emitted on every peer when an NHL-rule stoppage fires. Same role as
+# puck_out_of_play but lets HUD differentiate the toast text. Hosts emit
+# inside _consume_pending_faceoff; clients emit from the RPC handler.
+signal icing_called()
+signal offside_called()
 
 # ── Domain state ──────────────────────────────────────────────────────────────
 var _state_machine: GameStateMachine = null
@@ -188,6 +193,8 @@ func _wire_network_signals() -> void:
 	NetworkManager.carrier_puck_dropped.connect(on_carrier_puck_dropped)
 	NetworkManager.goal_received.connect(_on_goal_received)
 	NetworkManager.puck_out_of_play_received.connect(_on_puck_out_of_play_received)
+	NetworkManager.icing_called_received.connect(_on_icing_called_received)
+	NetworkManager.offside_called_received.connect(_on_offside_called_received)
 	NetworkManager.faceoff_positions_received.connect(_on_faceoff_positions_received)
 	NetworkManager.game_reset_received.connect(on_game_reset)
 	NetworkManager.stats_received.connect(_on_stats_received)
@@ -305,21 +312,52 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 			var dot: Vector2 = GameRules.nearest_faceoff_dot(clamped)
 			puck_out_of_play.emit()
 			NetworkManager.notify_puck_out_of_play_to_all()
-			SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
-			_state_machine.begin_faceoff_prep(dot)
-			_phase_coord.handle_phase_entered()
+			_whistle_and_faceoff(dot)
 	else:
 		_puck_oob_timer = 0.0
+
+
+# Plays the whistle, transitions the state machine to FACEOFF_PREP at the
+# given dot, and runs phase-entry side effects (puck reset, player teleport,
+# RPC broadcast). Shared by the OOB path and the NHL stoppage paths; the
+# caller is responsible for emitting its own pre-whistle signal + RPC so
+# clients can play their own whistle/toast.
+func _whistle_and_faceoff(dot: Vector2) -> void:
+	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	_state_machine.begin_faceoff_prep(dot)
+	_phase_coord.handle_phase_entered()
+
+
+# Host-only: drain a domain-flagged stoppage (icing race confirmed, offside
+# touch). Called after every event that can set pending_faceoff_reason —
+# loose-puck tick, pickups, deflections.
+func _consume_pending_faceoff() -> void:
+	if _state_machine == null:
+		return
+	var reason: int = _state_machine.consume_pending_faceoff()
+	if reason == GameStateMachine.FaceoffReason.NONE:
+		return
+	var dot: Vector2 = _state_machine.pending_faceoff_dot
+	match reason:
+		GameStateMachine.FaceoffReason.ICING:
+			icing_called.emit()
+			NetworkManager.notify_icing_called_to_all()
+		GameStateMachine.FaceoffReason.OFFSIDE:
+			offside_called.emit()
+			NetworkManager.notify_offside_called_to_all()
+	_whistle_and_faceoff(dot)
 
 
 func _update_host_puck_tracking() -> void:
 	if puck.carrier != null:
 		var carrier_team: Team = _registry.resolve_team(puck.carrier)
 		if carrier_team != null:
-			_state_machine.notify_puck_carried(carrier_team.team_id, puck.carrier.global_position.z)
+			_state_machine.notify_puck_carried(carrier_team.team_id,
+					puck.carrier.global_position.z, puck.carrier.global_position.x)
 	elif _state_machine.current_phase == GamePhase.Phase.PLAYING:
 		_state_machine.check_icing_for_loose_puck(
 				puck.global_position.z, _registry.positions_by_peer_id())
+		_consume_pending_faceoff()
 
 
 func _apply_ghost_state() -> void:
@@ -345,6 +383,7 @@ func _apply_ghost_state() -> void:
 			carrier_peer_id = peer_id
 	var ghosts: Dictionary = _state_machine.compute_ghost_state(
 			positions, carrier_peer_id, puck.global_position)
+	_state_machine.update_delayed_offside(positions, puck.global_position, carrier_peer_id)
 	for peer_id in ghosts:
 		var r: PlayerRecord = _registry.get_record(peer_id)
 		if r != null:
@@ -1462,6 +1501,11 @@ func _on_server_puck_picked_up_by(peer_id: int) -> void:
 	if not record.is_local:
 		NetworkManager.send_puck_picked_up(peer_id)
 	NetworkManager.send_carrier_changed_to_all(peer_id)
+	# NHL delayed-offside: pickup by an offending-team attacker whistles the
+	# play dead. Consume immediately so the faceoff fires before the next
+	# physics frame.
+	_state_machine.notify_puck_touch(peer_id)
+	_consume_pending_faceoff()
 	# Carrier just changed — force both team brains to recompute
 	# possession state + role assignments on the next physics frame
 	# instead of waiting up to TeamBrain.TICK_PERIOD (~166 ms). The
@@ -1526,6 +1570,10 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
 	_state_machine.notify_icing_contact()
+	# Deflection or body-block by an offending-team attacker also counts as a
+	# touch that whistles a delayed offside.
+	_state_machine.notify_puck_touch(peer_id)
+	_consume_pending_faceoff()
 	if _shot_tracker.on_block(peer_id):
 		_sync_stats_to_clients()
 		return
@@ -1764,6 +1812,16 @@ func _on_puck_out_of_play_received() -> void:
 	# phase change still arrives via world state; this just lights up the
 	# whistle + toast for clients at the same beat the host plays them.
 	puck_out_of_play.emit()
+	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+
+
+func _on_icing_called_received() -> void:
+	icing_called.emit()
+	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+
+
+func _on_offside_called_received() -> void:
+	offside_called.emit()
 	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
 
 

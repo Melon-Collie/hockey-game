@@ -106,6 +106,8 @@ func _ready() -> void:
 	GameManager.player_joined.connect(func(n: String, c: Color) -> void: _toast_stack.push(n + " joined", c))
 	GameManager.player_left.connect(func(n: String, c: Color) -> void: _toast_stack.push(n + " left", c))
 	GameManager.puck_out_of_play.connect(_on_puck_out_of_play)
+	GameManager.icing_called.connect(_on_icing_called)
+	GameManager.offside_called.connect(_on_offside_called)
 	GameManager.local_player_hit.connect(_on_local_player_hit)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
@@ -825,6 +827,16 @@ func _stop_faceoff_countdown() -> void:
 func _on_puck_out_of_play() -> void:
 	if _toast_stack != null:
 		_toast_stack.push("PUCK OUT OF PLAY", _WHITE)
+
+
+func _on_icing_called() -> void:
+	if _toast_stack != null:
+		_toast_stack.push("ICING", _WHITE)
+
+
+func _on_offside_called() -> void:
+	if _toast_stack != null:
+		_toast_stack.push("OFFSIDE", _WHITE)
 
 # Reset the four goal-template rows (tagline, scorer, ASSISTED BY, assist
 # names) to hidden so non-goal phases show only the phase_label hero.

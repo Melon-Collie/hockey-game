@@ -50,6 +50,8 @@ signal remote_carrier_changed(new_carrier_peer_id: int)
 signal ghost_state_received(peer_id: int, is_ghost: bool)
 signal goal_received(scoring_team_id: int, score0: int, score1: int, scorer_name: String, assist1_name: String, assist2_name: String)
 signal puck_out_of_play_received
+signal icing_called_received
+signal offside_called_received
 signal faceoff_positions_received(positions: Array)
 signal game_reset_received(new_game_id: String)
 signal stats_received(data: Array)
@@ -1019,6 +1021,22 @@ func notify_puck_out_of_play_to_all() -> void:
 @rpc("authority", "reliable")
 func notify_puck_out_of_play() -> void:
 	NetworkSimManager.send(func() -> void: puck_out_of_play_received.emit(), [], true)
+
+func notify_icing_called_to_all() -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_icing_called.rpc_id(peer_id)
+
+@rpc("authority", "reliable")
+func notify_icing_called() -> void:
+	NetworkSimManager.send(func() -> void: icing_called_received.emit(), [], true)
+
+func notify_offside_called_to_all() -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_offside_called.rpc_id(peer_id)
+
+@rpc("authority", "reliable")
+func notify_offside_called() -> void:
+	NetworkSimManager.send(func() -> void: offside_called_received.emit(), [], true)
 
 func send_faceoff_positions(positions: Array) -> void:
 	for peer_id in connected_peer_ids():

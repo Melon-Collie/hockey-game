@@ -474,8 +474,10 @@ func _update_one_timer_indicator() -> void:
 func _predict_offside() -> void:
 	if _is_host:
 		return  # Host computes authoritatively in GameManager
-	# OFF preset disables offside detection entirely; matches host behavior.
-	if GameManager.get_rule_set() == GameRules.RuleSet.OFF:
+	# Only ARCADE uses the per-player offside ghost. OFF disables offsides;
+	# NHL handles them via delayed-offside + whistle on the host (no client
+	# prediction — the FACEOFF_PREP teleport is the visible feedback).
+	if GameManager.get_rule_set() != GameRules.RuleSet.ARCADE:
 		return
 	var is_carrier: bool = puck.carrier == skater
 	var offside: bool = InfractionRules.is_offside(

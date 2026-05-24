@@ -186,6 +186,130 @@ func test_off_mode_skips_icing_detection() -> void:
 	sm.check_icing_for_loose_puck(-30.0)
 	assert_eq(sm.icing_team_id, -1, "OFF must not detect icing")
 
+# ── NHL icing → pending faceoff ──────────────────────────────────────────────
+
+func test_icing_sets_pending_faceoff_dot_in_nhl() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.notify_puck_carried(0, 5.0, 4.0)  # released from +X side
+	sm.check_icing_for_loose_puck(-30.0)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.ICING)
+	# Offender (team 0) defends +Z; carrier was on +X side → dot at (+X, +Z).
+	assert_eq(sm.pending_faceoff_dot,
+			Vector2(GameRules.END_ZONE_FACEOFF_DOT_X, GameRules.ICING_FACEOFF_DOT_Z))
+
+func test_icing_pending_dot_mirrors_carrier_side_team_1() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.notify_puck_carried(1, -5.0, -4.0)  # team 1 released from -X side
+	sm.check_icing_for_loose_puck(30.0)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.ICING)
+	# Team 1 defends -Z; -X side carrier → dot at (-X, -Z).
+	assert_eq(sm.pending_faceoff_dot,
+			Vector2(-GameRules.END_ZONE_FACEOFF_DOT_X, -GameRules.ICING_FACEOFF_DOT_Z))
+
+func test_consume_pending_faceoff_clears_state() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.notify_puck_carried(0, 5.0, 4.0)
+	sm.check_icing_for_loose_puck(-30.0)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.ICING)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE,
+			"second consume in the same stoppage must return NONE")
+
+# ── NHL delayed offside ──────────────────────────────────────────────────────
+
+func test_nhl_offside_does_not_ghost_player() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)  # team 0
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)},  # in attacking zone, puck in neutral
+		-1, Vector3(0, 0, 0))
+	assert_false(ghosts[1], "NHL must not ghost for offside — delayed system handles it")
+
+func test_arcade_offside_still_ghosts() -> void:
+	sm.rule_set = GameRules.RuleSet.ARCADE
+	sm.register_remote_assigned_player(1, 0, 0)
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, 0))
+	assert_true(ghosts[1], "ARCADE keeps the per-player offside ghost")
+
+func test_delayed_offside_idle_when_puck_still_in_neutral() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.update_delayed_offside(
+		{1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	assert_eq(sm.delayed_offside_team_id, -1,
+			"attacker tracked, but no whistle trigger until puck enters zone")
+
+func test_delayed_offside_activates_when_puck_enters_zone() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.update_delayed_offside(
+		{1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	# Puck enters the attacking zone — delayed offside flips on
+	sm.update_delayed_offside(
+		{1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+
+func test_delayed_offside_clears_when_attacker_tags_up() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)
+	# Set up: attacker enters zone ahead of puck, then puck follows in.
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+	# Player skates back across the blue line
+	sm.update_delayed_offside({1: Vector3(0, 1, 0)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, -1, "tag-up clears delayed offside")
+
+func test_delayed_offside_clears_when_defenders_clear_puck() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+	# Puck exits the attacking zone (defenders cleared)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	assert_eq(sm.delayed_offside_team_id, -1,
+			"defenders clearing the zone waves off the delayed offside")
+
+func test_offside_touch_triggers_pending_faceoff() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)  # team 0 attacker
+	sm.update_delayed_offside({1: Vector3(2, 1, -10)}, Vector3(2, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(2, 1, -10)}, Vector3(2, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+	# Offending-team touch → whistle
+	sm.notify_puck_touch(1)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.OFFSIDE)
+	# Faceoff goes to the NZ dot flanking the -Z blue line (team 0 attacked
+	# -Z), on the +X side (puck at x=2).
+	assert_eq(sm.pending_faceoff_dot,
+			Vector2(GameRules.END_ZONE_FACEOFF_DOT_X, -GameRules.NEUTRAL_ZONE_FACEOFF_DOT_Z))
+	assert_eq(sm.delayed_offside_team_id, -1, "whistle clears delayed offside")
+
+func test_offside_touch_by_defender_does_not_whistle() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)    # offside attacker (team 0)
+	sm.register_remote_assigned_player(100, 0, 1)  # defender (team 1)
+	# Attacker enters zone before puck; defender is also in their defensive
+	# zone (so they're not flagged offside themselves — different team).
+	sm.update_delayed_offside(
+		{1: Vector3(0, 1, -10), 100: Vector3(0, 1, -10)},
+		Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside(
+		{1: Vector3(0, 1, -10), 100: Vector3(0, 1, -10)},
+		Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+	sm.notify_puck_touch(100)  # defender touches the puck — defenders clearing
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE)
+
+func test_arcade_does_not_track_delayed_offside() -> void:
+	sm.rule_set = GameRules.RuleSet.ARCADE
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, -1,
+			"ARCADE uses per-player ghost only — no delayed offside tracking")
+
 # ── Hybrid icing race ────────────────────────────────────────────────────────
 
 func test_icing_waved_off_when_icing_team_closer() -> void:

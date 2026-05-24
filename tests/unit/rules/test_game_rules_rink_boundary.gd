@@ -125,5 +125,49 @@ func test_nearest_dot_for_each_corner() -> void:
 	assert_eq(GameRules.nearest_faceoff_dot(Vector2(-5.0, -25.0)), Vector2(-x, -z))
 
 func test_nearest_dot_near_center_returns_center() -> void:
-	# A point in the neutral zone is closer to center than to any end-zone dot.
-	assert_eq(GameRules.nearest_faceoff_dot(Vector2(3.0, 5.0)), GameRules.CENTER_ICE_DOT)
+	# A point at the centre-circle is closer to centre than to any other dot.
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2(0.0, 0.0)), GameRules.CENTER_ICE_DOT)
+
+func test_nearest_dot_in_neutral_zone_picks_neutral_zone_dot() -> void:
+	# An OOB whistle near the boards in the neutral zone should now land on
+	# the NZ dot rather than the far end-zone dot.
+	var x: float = GameRules.END_ZONE_FACEOFF_DOT_X
+	var z: float = GameRules.NEUTRAL_ZONE_FACEOFF_DOT_Z
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2( 12.0,  6.0)), Vector2( x,  z))
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2(-12.0,  6.0)), Vector2(-x,  z))
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2( 12.0, -6.0)), Vector2( x, -z))
+	assert_eq(GameRules.nearest_faceoff_dot(Vector2(-12.0, -6.0)), Vector2(-x, -z))
+
+
+# ── icing_faceoff_dot ───────────────────────────────────────────────────────
+# NHL rule: faceoff goes to the offending team's defensive zone, on the side
+# closest to where the puck was last touched by the offending team.
+
+func test_icing_dot_team_0_defends_positive_z() -> void:
+	var x: float = GameRules.END_ZONE_FACEOFF_DOT_X
+	var z: float = GameRules.ICING_FACEOFF_DOT_Z
+	assert_eq(GameRules.icing_faceoff_dot(0,  5.0), Vector2( x,  z))
+	assert_eq(GameRules.icing_faceoff_dot(0, -5.0), Vector2(-x,  z))
+
+func test_icing_dot_team_1_defends_negative_z() -> void:
+	var x: float = GameRules.END_ZONE_FACEOFF_DOT_X
+	var z: float = GameRules.ICING_FACEOFF_DOT_Z
+	assert_eq(GameRules.icing_faceoff_dot(1,  5.0), Vector2( x, -z))
+	assert_eq(GameRules.icing_faceoff_dot(1, -5.0), Vector2(-x, -z))
+
+
+# ── offside_faceoff_dot ─────────────────────────────────────────────────────
+# NHL rule: faceoff at the NZ dot adjacent to the blue line crossed, on the
+# side the puck entered.
+
+func test_offside_dot_team_0_at_negative_z_blue_line() -> void:
+	var x: float = GameRules.END_ZONE_FACEOFF_DOT_X
+	var z: float = GameRules.NEUTRAL_ZONE_FACEOFF_DOT_Z
+	assert_eq(GameRules.offside_faceoff_dot(0,  5.0), Vector2( x, -z))
+	assert_eq(GameRules.offside_faceoff_dot(0, -5.0), Vector2(-x, -z))
+
+func test_offside_dot_team_1_at_positive_z_blue_line() -> void:
+	var x: float = GameRules.END_ZONE_FACEOFF_DOT_X
+	var z: float = GameRules.NEUTRAL_ZONE_FACEOFF_DOT_Z
+	assert_eq(GameRules.offside_faceoff_dot(1,  5.0), Vector2( x,  z))
+	assert_eq(GameRules.offside_faceoff_dot(1, -5.0), Vector2(-x,  z))
