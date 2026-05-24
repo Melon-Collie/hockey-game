@@ -2311,14 +2311,15 @@ func _slot_already_taken(team_id: int, team_slot: int) -> bool:
 	return false
 
 
-# Public AI-facing snapshot accessor. Hides the clock detail
-# (StateBufferManager uses Time.get_ticks_usec()/1e6, NOT local_time()) so
-# callers don't accidentally cross timelines after a rehost. Pass 0 for the
-# freshest captured state.
+# Public AI-facing snapshot accessor. Captured snapshots and query timestamps
+# both live in `NetworkManager.local_time()` (session-relative) — same time
+# base as world-state broadcast headers and client claim RPCs, so callers
+# can mix host-internal and client-supplied timestamps freely. Pass 0 for
+# the freshest captured state.
 func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
 	if _state_buffer_manager == null:
 		return null
-	var ts: float = Time.get_ticks_usec() / 1_000_000.0 - delay_seconds
+	var ts: float = NetworkManager.local_time() - delay_seconds
 	return _state_buffer_manager.get_state_at(ts)
 
 

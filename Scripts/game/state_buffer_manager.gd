@@ -47,7 +47,12 @@ func is_ready() -> bool:
 
 
 func capture(registry: PlayerRegistry, puck_controller: PuckController, goalie_controllers: Array) -> void:
-	var now: float = Time.get_ticks_usec() / 1_000_000.0
+	# Session-relative time, matching `NetworkManager.local_time()` everywhere
+	# else: world-state broadcast header, client claim timestamps, AI snapshot
+	# queries. Keeping a single time base across capture + query means
+	# `get_state_at(host_timestamp)` Just Works for both client-supplied
+	# timestamps and host-internal queries — no offset translation required.
+	var now: float = NetworkManager.local_time()
 
 	for peer_id: int in registry.all():
 		if not _skater_buffers.has(peer_id):
