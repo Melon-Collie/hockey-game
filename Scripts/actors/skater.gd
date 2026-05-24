@@ -250,7 +250,9 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
-	_prev_blade_contact = get_blade_contact_global()
+	# _prev_blade_contact is captured by SkaterController._process_input before
+	# the per-tick IK update runs (see Skater.capture_prev_blade_contact()).
+	# Capturing it here would read post-IK and miss the swing within the tick.
 	var blade_world_pos: Vector3 = upper_body.to_global(blade.position)
 	blade_world_velocity = (blade_world_pos - _prev_blade_world_pos) / delta
 	_prev_blade_world_pos = blade_world_pos
@@ -397,6 +399,18 @@ func get_carry_target_global() -> Vector3:
 
 func get_prev_blade_contact_global() -> Vector3:
 	return _prev_blade_contact
+
+
+# Snapshot the blade's current world contact point as "previous" for the
+# swept-segment pickup/poke test that runs later in the same physics tick.
+# Called from SkaterController._process_input *before* the IK update mutates
+# blade.position, so the resulting (prev, curr) pair brackets both the
+# IK sweep and the move_and_slide body motion within the tick. Capturing
+# this from Skater._physics_process (which runs at priority 0, after the
+# controller's priority -1 IK update) misses the IK delta — segment would
+# only span body motion, and fast stick movements wouldn't register.
+func capture_prev_blade_contact() -> void:
+	_prev_blade_contact = get_blade_contact_global()
 
 
 # Horizontal unit vector perpendicular to the stick shaft, picking the face

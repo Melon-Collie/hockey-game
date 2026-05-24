@@ -24,6 +24,14 @@ class PendingPacket:
 	var args: Array
 
 var _pending: Array[PendingPacket] = []
+# ENet preserves reliable-RPC order per connection. Without this clamp,
+# independently-jittered fire_times can put a later-sent reliable packet
+# ahead of an earlier-sent one — test runs under NetworkSim would see
+# orderings that can't happen in production. Tracked globally rather than
+# per-peer for simplicity; over-strict in a multi-client scenario (a
+# reliable to A would serialize a near-simultaneous reliable to B) but
+# never under-strict. Reset alongside `_pending` whenever sim state clears.
+var _last_reliable_fire_time: float = 0.0
 
 func send(c: Callable, args: Array, reliable: bool) -> void:
 	if not enabled:
@@ -36,8 +44,13 @@ func send(c: Callable, args: Array, reliable: bool) -> void:
 	if d <= 0.0:
 		c.callv(args)
 		return
+	var nominal_fire_time := Time.get_ticks_msec() / 1000.0 + d
 	var p := PendingPacket.new()
-	p.fire_time = Time.get_ticks_msec() / 1000.0 + d
+	if reliable:
+		p.fire_time = maxf(nominal_fire_time, _last_reliable_fire_time)
+		_last_reliable_fire_time = p.fire_time
+	else:
+		p.fire_time = nominal_fire_time
 	p.callable = c
 	p.args = args
 	_pending.append(p)
@@ -65,6 +78,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func clear_pending() -> void:
 	_pending.clear()
+	_last_reliable_fire_time = 0.0
 
 func apply_preset(preset: int) -> void:
 	current_preset = preset
@@ -74,7 +88,7 @@ func apply_preset(preset: int) -> void:
 	jitter_ms = p.jitter
 	loss_pct = p.loss
 	if not enabled:
-		_pending.clear()
+		clear_pending()
 
 func _process(_delta: float) -> void:
 	if _pending.is_empty():

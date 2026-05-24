@@ -10,6 +10,15 @@ extends Node
 const BOT_ID_BASE: int = 10_000
 const BOT_ID_MAX: int = BOT_ID_BASE + 5  # 6 bots max (3 per team)
 
+# Re-exported from ClockSync so lag-comp resolvers can reference it without
+# loading the script directly. Single source of truth lives in clock_sync.gd.
+# Used by pickup/poke claim rewind to find the host's snapshot whose blade
+# state matches what the client predicted at view-time — the input that
+# produced the client's blade at host_timestamp T was stamped T + INPUT_LEAD_SEC
+# and the host's gated processing produced its snapshot at host wall T + INPUT_LEAD_SEC.
+const _ClockSyncScript: GDScript = preload("res://Scripts/networking/clock_sync.gd")
+const INPUT_LEAD_SEC: float = _ClockSyncScript.INPUT_LEAD_SEC
+
 
 func is_bot_peer(peer_id: int) -> bool:
 	return peer_id >= BOT_ID_BASE and peer_id <= BOT_ID_MAX
@@ -43,8 +52,8 @@ signal remote_skater_spawn_requested(peer_id: int, team_slot: int, team_id: int,
 signal existing_players_synced(player_data: Array)
 signal local_puck_pickup_confirmed
 signal local_puck_stolen
-signal remote_puck_release_received(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float)
-signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float)
+signal remote_puck_release_received(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
+signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
 signal carrier_puck_dropped
 signal remote_carrier_changed(new_carrier_peer_id: int)
 signal ghost_state_received(peer_id: int, is_ghost: bool)
@@ -70,9 +79,9 @@ signal bot_slot_changed(slot_key: int, is_bot: bool)
 signal bot_slots_synced(bot_slots: Dictionary)
 signal rematch_vote_changed(peer_id: int, vote: bool)
 signal clock_ready
-signal pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
-signal poke_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int)
-signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float)
+signal pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float)
+signal poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int)
+signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float)
 signal goalie_state_transition_received(team_id: int, new_state: int)
 signal goalie_shot_reaction_received(team_id: int, impact_x: float, impact_y: float, is_elevated: bool)
 signal goalie_reaction_cleared_received(team_id: int)
@@ -198,8 +207,11 @@ var _last_ws_arrival_time: float = -1.0
 var pending_error: String = ""
 
 var _input_timer: float = 0.0
-# Physics-driven broadcast cadence (see _physics_process). Counts physics ticks
-# between broadcasts. `_last_broadcast_us` tracks wall-clock for telemetry.
+# Broadcast cadence. Counter ticks here every physics frame (see
+# `_physics_process`); the broadcast call itself fires from `try_broadcast`,
+# invoked by GameManager._physics_process after StateBufferManager.capture so
+# the broadcast reads this tick's state. `_last_broadcast_us` tracks wall-clock
+# for telemetry.
 var _state_tick_counter: int = 0
 var _last_broadcast_us: int = 0
 var _ping_timer: float = 0.0
@@ -209,11 +221,13 @@ var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
 # (240/120 = 2 at the default rate; 240/5 = 48 during dead-puck phases via
-# set_broadcast_rate). Recomputed by `set_broadcast_rate`. The broadcast loop
-# fires from `_physics_process` (not `_process`) so that on a host stall,
-# Godot's physics catch-up naturally produces back-to-back broadcasts with
-# distinct host_timestamps for the client to interpolate through — instead
-# of one big "missing snapshot" gap followed by a snap.
+# set_broadcast_rate). Recomputed by `set_broadcast_rate`. Stall resilience:
+# on a host main-thread freeze, Godot's physics catch-up fires multiple
+# back-to-back physics ticks. The counter increments in NetworkManager._physics_process
+# for each, and GameManager._physics_process invokes try_broadcast() per tick,
+# so back-to-back broadcasts fire at the cadence threshold — clients get the
+# multiple distinct host_timestamps they need to interpolate through the gap
+# instead of one snap.
 var _state_tick_divisor: int = Constants.PHYSICS_TICK / Constants.STATE_RATE
 const CONNECT_TIMEOUT: float = 10.0
 
@@ -467,7 +481,7 @@ func reset() -> void:
 	_peer_loss_timer = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
-	NetworkSimManager._pending.clear()
+	NetworkSimManager.clear_pending()
 
 # ── Process ───────────────────────────────────────────────────────────────────
 func _notification(what: int) -> void:
@@ -486,22 +500,16 @@ func _physics_process(_delta: float) -> void:
 	# with this value; consumers must tolerate the counter being zero before
 	# the host starts ticking and must not assume monotonicity across host
 	# transfers (Phase 1 has no host transfer support anyway).
+	#
+	# `_state_tick_counter` also ticks here so the broadcast cadence keeps
+	# pace with the engine's physics rate independent of whether GameManager
+	# captured this tick (replay mode, missing puck, etc.). The actual
+	# broadcast call is invoked by GameManager via try_broadcast() right
+	# after StateBufferManager.capture(), so the world-state packet always
+	# reads this tick's fresh state instead of the prior tick's snapshot.
 	if is_host:
 		host_tick += 1
-		# World-state broadcast cadence: every Nth physics tick (N=6 at 40Hz).
-		# Lives in _physics_process — not _process — so that Godot's physics
-		# catch-up after a main-thread stall naturally fires multiple
-		# broadcasts in rapid succession, each carrying the snapshot at that
-		# physics tick. Without this, a 60ms stall produces ONE broadcast on
-		# recovery and the client interpolator runs out of bracket.
 		_state_tick_counter += 1
-		if _state_tick_counter >= _state_tick_divisor:
-			_state_tick_counter = 0
-			var now_us: int = Time.get_ticks_usec()
-			if _last_broadcast_us != 0:
-				NetworkTelemetry.record_broadcast_interval_us(now_us - _last_broadcast_us)
-			_last_broadcast_us = now_us
-			_broadcast_state()
 
 func _process(delta: float) -> void:
 	# Cap delta to avoid timer bursting on the first frame after an OS freeze
@@ -578,6 +586,31 @@ func set_broadcast_rate(hz: float) -> void:
 	_state_tick_divisor = maxi(int(round(float(Constants.PHYSICS_TICK) / maxf(hz, 1.0))), 1)
 	# Reset the counter so the new cadence starts cleanly from the next tick.
 	_state_tick_counter = 0
+
+# Called by GameManager._physics_process right after
+# StateBufferManager.capture() so the broadcast reads this tick's state
+# instead of the prior tick's snapshot. The cadence counter is incremented
+# in `_physics_process` regardless of whether this runs, so on a host stall
+# Godot's physics catch-up still produces back-to-back broadcasts (one per
+# eligible call) with distinct host_timestamps — clients get the multiple
+# snapshots they need to interpolate through the catch-up window.
+#
+# Routing through here (rather than firing the broadcast from
+# NetworkManager._physics_process directly) is necessary because autoload
+# tree order puts NetworkManager ahead of GameManager: a broadcast from
+# NetworkManager._physics_process would always read last tick's capture,
+# adding a one-physics-tick (~4.17ms) latency floor to every client.
+func try_broadcast() -> void:
+	if not is_host:
+		return
+	if _state_tick_counter < _state_tick_divisor:
+		return
+	_state_tick_counter = 0
+	var now_us: int = Time.get_ticks_usec()
+	if _last_broadcast_us != 0:
+		NetworkTelemetry.record_broadcast_interval_us(now_us - _last_broadcast_us)
+	_last_broadcast_us = now_us
+	_broadcast_state()
 
 func _broadcast_state() -> void:
 	if not _world_state_provider.is_valid():
@@ -688,44 +721,44 @@ func receive_pong(client_send_time: float, host_time: float) -> void:
 				clock_ready.emit(),
 		[client_send_time, host_time], true)
 
-func send_pickup_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func send_pickup_claim(host_timestamp: float, interp_delay_ms: float) -> void:
 	NetworkSimManager.send(
-		func(ts: float, rtt: float, idms: float) -> void:
-			receive_pickup_claim.rpc_id(1, ts, rtt, idms),
-		[host_timestamp, rtt_ms, interp_delay_ms], true)
+		func(ts: float, idms: float) -> void:
+			receive_pickup_claim.rpc_id(1, ts, idms),
+		[host_timestamp, interp_delay_ms], true)
 
 @rpc("any_peer", "reliable")
-func receive_pickup_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func receive_pickup_claim(host_timestamp: float, interp_delay_ms: float) -> void:
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
-	pickup_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms)
+	pickup_claim_received.emit(peer_id, host_timestamp, interp_delay_ms)
 
-func send_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func send_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
 	NetworkSimManager.send(
-		func(ts: float, rtt: float, idms: float, cpid: int) -> void:
-			receive_poke_claim.rpc_id(1, ts, rtt, idms, cpid),
-		[host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id], true)
+		func(ts: float, idms: float, cpid: int) -> void:
+			receive_poke_claim.rpc_id(1, ts, idms, cpid),
+		[host_timestamp, interp_delay_ms, expected_carrier_peer_id], true)
 
 @rpc("any_peer", "reliable")
-func receive_poke_claim(host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
-	poke_claim_received.emit(peer_id, host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id)
+	poke_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
-func send_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
+func send_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	NetworkSimManager.send(
-		func(vpid: int, ts: float, rtt: float) -> void:
-			receive_hit_claim.rpc_id(1, vpid, ts, rtt),
-		[victim_peer_id, host_timestamp, rtt_ms], true)
+		func(vpid: int, ts: float, idms: float) -> void:
+			receive_hit_claim.rpc_id(1, vpid, ts, idms),
+		[victim_peer_id, host_timestamp, interp_delay_ms], true)
 
 @rpc("any_peer", "reliable")
-func receive_hit_claim(victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
+func receive_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	if not is_host:
 		return
 	var hitter_peer_id: int = multiplayer.get_remote_sender_id()
-	hit_claim_received.emit(hitter_peer_id, victim_peer_id, host_timestamp, rtt_ms)
+	hit_claim_received.emit(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
 
 func start_replay_mode(initial_ts: float) -> void:
 	_replay_mode = true
@@ -969,26 +1002,30 @@ func notify_puck_stolen() -> void:
 	NetworkSimManager.send(func() -> void: local_puck_stolen.emit(), [], true)
 
 func send_puck_release(direction: Vector3, power: float, is_slapper: bool) -> void:
-	release_puck.rpc_id(1, direction, power, is_slapper, estimated_host_time(), get_latest_rtt_ms())
+	release_puck.rpc_id(1, direction, power, is_slapper,
+			estimated_host_time(), get_latest_rtt_ms(),
+			get_target_interpolation_delay() * 1000.0)
 
 @rpc("any_peer", "reliable")
-func release_puck(direction: Vector3, power: float, is_slapper: bool, host_timestamp: float, rtt_ms: float) -> void:
+func release_puck(direction: Vector3, power: float, is_slapper: bool, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	var sender: int = multiplayer.get_remote_sender_id()
 	NetworkSimManager.send(
-		func(d: Vector3, p: float, slap: bool, ts: float, rtt: float, sid: int) -> void:
-			remote_puck_release_received.emit(d, p, slap, sid, ts, rtt),
-		[direction, power, is_slapper, host_timestamp, rtt_ms, sender], true)
+		func(d: Vector3, p: float, slap: bool, ts: float, rtt: float, idms: float, sid: int) -> void:
+			remote_puck_release_received.emit(d, p, slap, sid, ts, rtt, idms),
+		[direction, power, is_slapper, host_timestamp, rtt_ms, interp_delay_ms, sender], true)
 
 func send_one_timer_release(direction: Vector3, power: float) -> void:
-	release_puck_one_timer.rpc_id(1, direction, power, estimated_host_time(), get_latest_rtt_ms())
+	release_puck_one_timer.rpc_id(1, direction, power,
+			estimated_host_time(), get_latest_rtt_ms(),
+			get_target_interpolation_delay() * 1000.0)
 
 @rpc("any_peer", "reliable")
-func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float) -> void:
+func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	var sender: int = multiplayer.get_remote_sender_id()
 	NetworkSimManager.send(
-		func(d: Vector3, p: float, ts: float, rtt: float, sid: int) -> void:
-			one_timer_release_received.emit(d, p, sid, ts, rtt),
-		[direction, power, host_timestamp, rtt_ms, sender], true)
+		func(d: Vector3, p: float, ts: float, rtt: float, idms: float, sid: int) -> void:
+			one_timer_release_received.emit(d, p, sid, ts, rtt, idms),
+		[direction, power, host_timestamp, rtt_ms, interp_delay_ms, sender], true)
 
 func notify_goal_to_all(scoring_team_id: int, score0: int, score1: int, scorer_name: String, assist1_name: String, assist2_name: String) -> void:
 	for peer_id in connected_peer_ids():

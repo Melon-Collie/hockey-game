@@ -68,7 +68,7 @@ func clear() -> void:
 	_pending_host_timestamp = 0.0
 
 
-func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
 	var puck: Puck = _puck_getter.call() as Puck
@@ -95,21 +95,19 @@ func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_de
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
-	var rewind_rtt: float = clampf(rtt_ms, 10.0, 200.0)
-	# Blade: client's blade state from T_client = claim send time arrives in the
-	# state buffer at host time = host_timestamp + rtt/2 (one-way transit).
-	var blade_rewind_time: float = host_timestamp + rewind_rtt / 2000.0
-	# Puck: client's interpolated puck is delayed by interp_delay behind host
-	# time. Rewind to the timestamp the client was actually looking at.
-	var puck_rewind_time: float = host_timestamp - clampf(interp_delay_ms, 0.0, 200.0) / 1000.0
+	# Blade is SELF-view, puck is REMOTE-view — see LagCompRewind for the
+	# derivation of both. The pair of get_state_at calls per entity (curr + one
+	# physics tick back) feeds the swept-segment test below.
+	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
+	var puck_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 	var puck_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time)
 	if puck_snap.puck_state == null or puck_snap.puck_state.carrier_peer_id != -1:
 		return
 	var puck_pos: Vector3 = puck_snap.puck_state.position
-	var puck_prev_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time - 1.0 / 240.0)
+	var puck_prev_snap: WorldSnapshot = _state_buffer.get_state_at(LagCompRewind.prev_tick(puck_rewind_time))
 	var puck_prev: Vector3 = puck_prev_snap.puck_state.position if puck_prev_snap.puck_state != null else puck_pos
 	var blade_snap: WorldSnapshot = _state_buffer.get_state_at(blade_rewind_time)
-	var blade_prev_snap: WorldSnapshot = _state_buffer.get_state_at(blade_rewind_time - 1.0 / 240.0)
+	var blade_prev_snap: WorldSnapshot = _state_buffer.get_state_at(LagCompRewind.prev_tick(blade_rewind_time))
 	var skater_snap: SkaterNetworkState = blade_snap.get_skater_state(peer_id)
 	var skater_prev_snap: SkaterNetworkState = blade_prev_snap.get_skater_state(peer_id)
 	if skater_snap == null or skater_prev_snap == null:

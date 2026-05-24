@@ -216,7 +216,6 @@ func _physics_process(delta: float) -> void:
 				_claim_cooldown = _CLAIM_COOLDOWN_S
 				NetworkManager.send_pickup_claim(
 					NetworkManager.estimated_host_time(),
-					NetworkManager.get_latest_rtt_ms(),
 					NetworkManager.get_target_interpolation_delay() * 1000.0)
 		elif puck.carrier != skater:
 			# Opposing carrier within poke range on our screen — speculative poke
@@ -235,7 +234,6 @@ func _physics_process(delta: float) -> void:
 						_claim_cooldown = _CLAIM_COOLDOWN_S
 						NetworkManager.send_poke_claim(
 							NetworkManager.estimated_host_time(),
-							NetworkManager.get_latest_rtt_ms(),
 							NetworkManager.get_target_interpolation_delay() * 1000.0,
 							carrier_pid)
 
