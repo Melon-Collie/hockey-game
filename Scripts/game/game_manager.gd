@@ -1608,11 +1608,13 @@ func _on_one_timer_release_requested(direction: Vector3, power: float, skater: S
 				puck_controller.notify_local_release(direction, power, rtt_ms, record.skater.velocity)
 		NetworkManager.send_one_timer_release(direction, power)
 		return
-	_host_release_one_timer(direction, power, skater, 0.0, 0.0)
+	# Host's own one-timer: shooter is local, no client-view rewind needed.
+	# rtt_ms=0 short-circuits the goalie rewind branch entirely.
+	_host_release_one_timer(direction, power, skater, 0.0, 0.0, 0.0)
 
 
 func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
-		host_timestamp: float, rtt_ms: float) -> void:
+		host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	if not NetworkManager.is_host or puck == null or _registry == null:
 		return
 	var record: PlayerRecord = _registry.get_record(peer_id)
@@ -1621,11 +1623,11 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	var shot_pos: Vector3 = puck.get_puck_position()
 	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
 	_record_replay_audio_event("shot", shot_pos, power, {"is_slapper": true})
-	_host_release_one_timer(direction, power, record.skater, host_timestamp, rtt_ms)
+	_host_release_one_timer(direction, power, record.skater, host_timestamp, rtt_ms, interp_delay_ms)
 
 
 func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
-		host_timestamp: float, rtt_ms: float) -> void:
+		host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	var pid: int = _registry.resolve_peer_id(skater)
 	# One-timers skip the normal pickup flow, so the shooter is never recorded
 	# in the carrier history. Record them as a deflection (the shooter redirects
@@ -1637,7 +1639,11 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	var saved_goalie_positions: Array[Vector3] = []
 	var saved_goalie_rotations: Array[float] = []
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() and rtt_ms > 0.0:
-		var rewind_time: float = host_timestamp - rtt_half
+		# Goalie was REMOTE-view from the shooter — the client doesn't interpolate
+		# the goalie, but the client's goalie AI tracks the interpolated puck, so
+		# the shooter saw the goalie in a position deterministically derived from
+		# the puck at host_time - interp_delay. See LagCompRewind for derivation.
+		var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 		var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 		for gc: GoalieController in goalie_controllers:
 			saved_goalie_positions.append(gc.goalie.global_position)
@@ -1657,7 +1663,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 			goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
 
 
-func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
+func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	# Sender must be the current carrier on the host. Without this check, any
 	# peer can send release_puck with arbitrary direction/power and the host
 	# obediently triggers puck.release on whoever is actually carrying — the
@@ -1692,7 +1698,10 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 		var saved_goalie_positions: Array[Vector3] = []
 		var saved_goalie_rotations: Array[float] = []
 		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0:
-			var rewind_time: float = host_timestamp - rtt_half
+			# Goalie is REMOTE-view from the shooter — same derivation as the
+			# one-timer rewind above. The shooter saw the goalie reacting to the
+			# puck at host_time - interp_delay; rewind to that snapshot.
+			var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 			var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 			for gc: GoalieController in goalie_controllers:
 				saved_goalie_positions.append(gc.goalie.global_position)
