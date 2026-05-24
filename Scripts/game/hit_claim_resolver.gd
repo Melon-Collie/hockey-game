@@ -89,7 +89,7 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 	if pc == null or pc.get_carrier_peer_id() == hitter_peer_id:
 		return
 	var key: String = "%d:%d" % [hitter_peer_id, victim_peer_id]
-	var now: float = Time.get_ticks_msec() / 1000.0
+	var now: float = NetworkManager.local_time()
 	if _last_claim_sent.get(key, 0.0) + HitTracker.HIT_COOLDOWN_S > now:
 		return
 	_last_claim_sent[key] = now
@@ -102,7 +102,7 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float) -> void:
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
-	var now: float = Time.get_ticks_msec() / 1000.0
+	var now: float = NetworkManager.local_time()
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return
 	var hitter_rec: PlayerRecord = _registry.get_record(hitter_peer_id)
