@@ -36,7 +36,7 @@ func setup(
 	_puck_controller_getter = puck_controller_getter
 
 
-func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float,
+func receive_claim(peer_id: int, host_timestamp: float,
 		interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return

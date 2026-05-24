@@ -68,7 +68,7 @@ func clear() -> void:
 	_pending_host_timestamp = 0.0
 
 
-func receive_claim(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
 	var puck: Puck = _puck_getter.call() as Puck

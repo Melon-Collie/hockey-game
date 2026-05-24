@@ -1485,16 +1485,16 @@ func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
 	(record.controller as RemoteController).apply_ghost_rpc(is_ghost)
 
 
-func _on_pickup_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	if not NetworkManager.is_host:
 		return
-	_pickup_claim.receive_claim(peer_id, host_timestamp, rtt_ms, interp_delay_ms)
+	_pickup_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms)
 
 
-func _on_poke_claim_received(peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
 	if not NetworkManager.is_host:
 		return
-	_poke_claim.receive_claim(peer_id, host_timestamp, rtt_ms, interp_delay_ms, expected_carrier_peer_id)
+	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
 
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
@@ -1929,10 +1929,10 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
 
 
-func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	if not NetworkManager.is_host:
 		return
-	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, rtt_ms, interp_delay_ms)
+	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
 
 
 # ── Scene exit & reset ───────────────────────────────────────────────────────

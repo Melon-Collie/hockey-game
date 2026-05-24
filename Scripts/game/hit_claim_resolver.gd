@@ -14,7 +14,7 @@ extends RefCounted
 #     client: pre-filters (impulse, local-carry), throttles per (hitter,victim),
 #             sends NetworkManager.send_hit_claim. The host re-validates the
 #             rule gates from rewound snapshots on receipt.
-#   receive_claim(hitter, victim, host_ts, rtt, interp_delay_ms) [host]
+#   receive_claim(hitter, victim, host_ts, interp_delay_ms) [host]
 #     → reject if claim stale, peers unknown, or rewound positions out of range
 #     → rewind hitter to host_ts + INPUT_LEAD_SEC (their own predicted body)
 #       and victim to host_ts - interp_delay (the remote body they saw)
@@ -98,11 +98,10 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 	NetworkManager.send_hit_claim(
 			victim_peer_id,
 			NetworkManager.estimated_host_time(),
-			NetworkManager.get_latest_rtt_ms(),
 			NetworkManager.get_target_interpolation_delay() * 1000.0)
 
 
-func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, _rtt_ms: float, interp_delay_ms: float) -> void:
+func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
 	var now: float = NetworkManager.local_time()
