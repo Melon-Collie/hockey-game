@@ -259,16 +259,28 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 # the forehand side (wrister_start_blade_local_x captured at WRISTER_AIM
 # entry), so SkaterController doesn't classify the shot as backhand
 # and apply the backhand_power_coefficient penalty.
+#
+# SIDE_M is purely a VISUAL pose intensity now (1.0 m = clearly
+# loaded forehand stance). Earlier the SIDE offset was coupled to
+# the wrister shot direction via the comp-aim rotation: increasing
+# it rotated `_shoot_sweep_dir_xy` further off clean_aim, which
+# fired the puck systematically wide. The fix below sets the
+# screen-space sweep direction from `aim_dir_init` directly,
+# decoupling SHOT direction from the visual wind-up pose. SIDE_M
+# can now be cranked for feel without breaking accuracy.
 const BOT_WRISTER_WIND_UP_BACK_M: float = 0.6
-const BOT_WRISTER_WIND_UP_SIDE_M: float = 0.4
+const BOT_WRISTER_WIND_UP_SIDE_M: float = 1.0
 
 # Release-point forward distance for the wrister swing. The lerp's
 # FORWARD endpoint sits this far ahead of the bot — not at the actual
 # far aim point — so the lateral wind-up offset stays geometrically
-# meaningful at release (a 0.4 m side offset at 30 m is 0.76°,
-# invisible; at 1.5 m it's 15°, a clear forehand pose). Aim direction
-# is geometrically compensated below so the resulting shot still
-# lands on clean_aim despite the lateral offset.
+# meaningful at release (a 1.0 m side offset at 1.5 m forward is a
+# clear forehand pose; at 30 m it would be invisible). Aim direction
+# is still geometrically compensated for the BLADE-IK target (mouse
+# world position), so the visible blade still tracks toward clean_aim
+# despite the lateral offset. The wrister SHOT direction comes from
+# the screen-space drag and is set to clean aim_dir directly — see
+# _shoot_sweep_dir_xy assignment in _state_shoot_pressed.
 const BOT_WRISTER_RELEASE_FORWARD_M: float = 1.5
 
 # Side-selection for wrister wind-up — defender within this radius
@@ -1382,7 +1394,18 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 				self_pos
 				- comp_aim_init * BOT_WRISTER_WIND_UP_BACK_M
 				+ shoot_perp_init * BOT_WRISTER_WIND_UP_SIDE_M)
-		_shoot_sweep_dir_xy = Vector2(comp_aim_init.x, comp_aim_init.z)
+		# Screen-space sweep direction = CLEAN aim_dir, not the comp-aim
+		# used by the visual mouse_world_pos lerp. The wrister fires
+		# along charge_direction = prev_blade_dir = the direction of
+		# mouse_screen_pos motion across the charge; setting that motion
+		# along clean aim_dir makes the shot land on aim_point regardless
+		# of the visual wind-up pose. Using comp_aim here rotated the
+		# shot by atan2(SIDE, FORWARD) — fine for the (mouse-bot) quick-
+		# shot direction the rotation was originally derived for, but a
+		# straight bias for full-wrister sweeps. With this split the
+		# mouse_world_pos still draws the natural forehand sweep (the
+		# visual blade IK), the puck still fires at clean_aim.
+		_shoot_sweep_dir_xy = Vector2(aim_dir_init.x, aim_dir_init.z)
 		input.shoot_pressed = true
 
 	# Recompute aim_target EVERY tick from current self_pos so the shot
