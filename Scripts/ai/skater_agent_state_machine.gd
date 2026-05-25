@@ -1322,11 +1322,31 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	if _shoot_charge_tick == 0:
 		debug_last_decision = "SHOOT"
 		_shoot_perp_sign = -1.0 if _is_left_handed else 1.0
-		var aim_dir_init: Vector3 = _shoot_aim_dir(snapshot, self_pos)
+		# Project the release position forward by BOT_WRISTER_LOOKAHEAD_S
+		# so the locked aim direction is the one that hits the chosen
+		# aim point from where the bot will ACTUALLY BE at release, not
+		# from where it is right now. The wrister shot direction is
+		# `_shoot_sweep_dir_xy` (the screen-space drag direction that
+		# feeds prev_blade_dir at release) — locked once, fired from
+		# wherever the bot ends up. A bot rushing laterally at 3 m/s
+		# during the 250 ms charge moves ~0.75 m sideways; without this
+		# projection the puck's goal-line impact is the locked aim_x
+		# PLUS that lateral drift, easily past the post on a corner
+		# shot. Steering inside SHOOT_PRESSED drives toward this same
+		# projected release point, so reality and prediction line up
+		# barring sudden braking. (Goalie prediction inside
+		# `_shoot_aim_dir` already used the wrister lookahead, but it
+		# anchored on `self_pos` not the projected release — now
+		# consistent.)
+		var release_pos: Vector3 = self_pos
+		if self_state != null:
+			var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+			release_pos = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
+		var aim_dir_init: Vector3 = _shoot_aim_dir(snapshot, release_pos)
 		# Lock the aim direction for the entire charge. Self_pos drift
-		# is fine (release_pos tracks real motion), but the direction
-		# must stay fixed so a shuffling goalie doesn't flip the chosen
-		# arc mid-swing.
+		# from the projection is fine (release_pos tracks real motion),
+		# but the direction must stay fixed so a shuffling goalie
+		# can't flip the chosen arc mid-swing.
 		_shoot_aim_dir_locked = aim_dir_init
 		var forehand_perp_init: Vector3 = Vector3(
 				aim_dir_init.z * _shoot_perp_sign, 0.0, -aim_dir_init.x * _shoot_perp_sign)
