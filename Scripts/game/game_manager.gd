@@ -1451,10 +1451,9 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 		var team_id: int = team_map.get(pid, -1)
 		if team_id == -1:
 			continue
-		var ids: Array = snap.teammate_ids_by_team.get(team_id)
-		if ids == null:
-			ids = []
-			snap.teammate_ids_by_team[team_id] = ids
+		if not snap.teammate_ids_by_team.has(team_id):
+			snap.teammate_ids_by_team[team_id] = []
+		var ids: Array = snap.teammate_ids_by_team[team_id]
 		ids.append(pid)
 	if snap.puck_state == null:
 		return
