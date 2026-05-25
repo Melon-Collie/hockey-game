@@ -10,13 +10,14 @@ extends RefCounted
 var _scratch_input: InputState = InputState.new()
 var _sm: SkaterAgentStateMachine = SkaterAgentStateMachine.new()
 
-# Mouse-world lerp factor — closes 75% of the gap toward the SM's
-# desired mouse_world_pos each tick. At 240 Hz that's a ~14 ms
-# half-life: bot blade always lags slightly behind its target so
-# tracking isn't perfectly instant, dekes don't immediately get
-# matched, and aim transitions (state change, carrier change) read
-# as a smooth swing rather than a snap.
-const MOUSE_LERP_FACTOR: float = 0.75
+# Mouse-world lerp factor — closes this fraction of the gap toward the
+# SM's desired mouse_world_pos each tick. 1.0 = snap (no smoothing).
+# Lower values add tracking lag: 0.75 gives a ~14 ms half-life so the
+# blade lags slightly behind its target, dekes don't immediately get
+# matched, and aim transitions read as a smooth swing rather than a
+# snap. Currently pinned to 1.0 for the "perfect bot" baseline; will
+# come down when difficulty tuning lands.
+const MOUSE_LERP_FACTOR: float = 1.0
 var _prev_mouse_world_pos: Vector3 = Vector3.ZERO
 var _has_prev_mouse: bool = false
 

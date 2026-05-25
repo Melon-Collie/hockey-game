@@ -49,10 +49,11 @@ const RINK_Z_INSET: float = 1.0
 # ends up at whatever angle the mouse happened to be at.
 #
 # AIM_CONVERGED_DIST_M is the distance threshold treated as
-# "converged" — must be larger than the per-tick step
-# (MOUSE_MAX_SPEED_M_S * MOUSE_TICK_DELTA = 0.0625 m at 240 Hz)
-# plus mouse noise (MOUSE_NOISE_STD_M = 0.02 m) so the bot doesn't
-# get stuck oscillating just inside the threshold.
+# "converged" — historically had to clear the per-tick step plus
+# MOUSE_NOISE_STD_M so the bot didn't oscillate just inside the
+# threshold. At perfect-bot settings (MAX_SPEED = 100, NOISE = 0)
+# convergence is near-instant; 0.15 stays as a small slop budget for
+# moving aim targets (receiver leads, goalie shadow drift).
 #
 # INTENT_MAX_WAIT_TICKS is a safety timeout against convergence
 # never landing (a receiver who keeps moving past the lead point,
@@ -270,17 +271,23 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 #   target → "where the mouse would be if you moved toward it for
 #             one frame, capped at MOUSE_MAX_SPEED_M_S, with noise"
 #
-# Real human mice move at 5-20 m/s in world terms (depending on
-# sensitivity / situation). 15 m/s lets a 6 m anchor flip resolve in
-# 0.4 s — fast enough to look responsive, slow enough that per-tick
-# target oscillations average out (mouse never reaches either
-# extreme, settles in the middle).
-#
-# Per-tick noise of 0.02 m std (uniform [-0.02, +0.02]) on each of x
-# and z gives small organic wiggle. Doesn't accumulate (applied to
-# the OUTPUT only — the underlying _mouse_pos stays smooth).
-const MOUSE_MAX_SPEED_M_S: float = 15.0
-const MOUSE_NOISE_STD_M: float = 0.02
+# Pinned for the "perfect bot" baseline:
+#   MOUSE_MAX_SPEED_M_S = 100 — effectively uncapped; the mouse can
+#     reach its target inside a single tick at any normal distance,
+#     so the wrister lerp endpoint matches `_shoot_aim_target` at
+#     release instead of trailing it. Human-feel values are in the
+#     5-20 m/s range (e.g. 15 lets a 6 m anchor flip resolve in
+#     0.4 s, slow enough that per-tick target oscillations average
+#     out); raising this here trades organic look for accuracy.
+#   MOUSE_NOISE_STD_M = 0 — zero noise. The previous 0.02 m std
+#     (uniform [-0.02, +0.02] on x and z, applied to OUTPUT only so
+#     it didn't accumulate) gave organic per-tick wiggle but
+#     translated to ~0.76° aim error on the 1.5 m blade arm — enough
+#     to miss net corners on sniped shots.
+# Both values will be re-introduced via skill profiles when
+# difficulty tuning lands.
+const MOUSE_MAX_SPEED_M_S: float = 100.0
+const MOUSE_NOISE_STD_M: float = 0.0
 # Bots run at the host physics rate (240 Hz) so we can use a fixed
 # delta. Using a constant keeps the mouse motion deterministic and
 # avoids threading delta through every state handler call.
