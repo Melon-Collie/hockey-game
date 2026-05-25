@@ -30,3 +30,12 @@ var team_brain: TeamBrain = null
 # overhead showed up in profiles. Empty dict = nothing resolves (the
 # decide() helpers all default to -1 unknown).
 var team_id_by_peer: Dictionary = {}
+# Smoothed per-peer linear acceleration (m/s² in world XZ), keyed by
+# peer_id. Built by SkaterAgentStateMachine from frame-over-frame
+# velocity diffs and low-passed for noise. Roles use this to lead
+# receivers along `pos + vel·t + ½·a·t²` instead of pure velocity
+# extrapolation — a receiver who's turning or just starting to skate
+# arrives meaningfully off the constant-velocity prediction over a
+# 0.4-0.6 s pass window. Missing entries default to ZERO (no accel
+# adjustment) — same behaviour as before this field existed.
+var acceleration_by_peer: Dictionary = {}
