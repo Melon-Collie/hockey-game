@@ -54,16 +54,20 @@ const RINK_Z_INSET: float = 1.0
 # plus mouse noise (MOUSE_NOISE_STD_M = 0.02 m) so the bot doesn't
 # get stuck oscillating just inside the threshold.
 #
-# INTENT_MAX_WAIT_TICKS is a safety timeout: after this many ticks
-# of waiting, fire anyway. A receiver who keeps moving might never
-# let the mouse "fully" converge; the timeout keeps the bot from
-# pre-aiming forever. Bumped from 60 → 180 (250 ms → 750 ms) to
-# accommodate facing rotation: a 180° back-pass needs ~520 ms for
-# the body to rotate (per BOT_FACING_ROTATION_RATE_RAD_S), so the
-# old 250 ms cap fired the press before the body finished rotating
-# and the puck went out the ROM edge instead of at the receiver.
+# INTENT_MAX_WAIT_TICKS is a safety timeout against convergence
+# never landing (a receiver who keeps moving past the lead point,
+# or numerical drift). Sized to cover the worst case under the
+# arc-step model: a 180° swing at MOUSE_ARC_RATE_RAD_S = 7.5 rad/s
+# takes π / 7.5 ≈ 420 ms before the mouse reaches the final target,
+# so 120 ticks (500 ms) leaves a small margin and then bails. In
+# normal play aim_converged fires far earlier — typical 30-60°
+# swings hit convergence in 60-120 ms — so this is just an edge
+# guard, not the dominant timing path. The arc-step in
+# _step_mouse_aim is what guarantees the body-aim angle stays
+# inside the blade ROM during the swing, which removed the need
+# for the old facing-alignment gate.
 const AIM_CONVERGED_DIST_M: float = 0.15
-const INTENT_MAX_WAIT_TICKS: int = 180   # ~750 ms at 240 Hz
+const INTENT_MAX_WAIT_TICKS: int = 120   # ~500 ms at 240 Hz
 # Aim wobble is disabled for now — bots fire perfectly past the
 # goalie shadow without it (robotic, every shot to the same spot),
 # but it was masking deeper issues during tuning. The wobble system
@@ -480,6 +484,21 @@ var _cached_move_vector: Vector2 = Vector2.ZERO
 # full dispatch sets a real target.
 var _cached_aim_target: Vector3 = Vector3.ZERO
 var _has_cached_aim_target: bool = false
+# True when the cached target should be arc-stepped (set by
+# _step_mouse_aim), false for direct chord (chase / press). Read by
+# the skipped-tick re-step so the arc keeps walking the body-relative
+# ring every tick instead of only on full-dispatch ticks.
+var _cached_aim_uses_arc: bool = false
+
+# Captured at the top of each dispatch() so _step_mouse_toward can
+# arc the per-tick mouse target around self_pos without re-threading
+# self_pos / self_state through every call site. The arc keeps the
+# mouse on a 2 m ring so straight-line chords across self_pos never
+# trip the pose coordinator's IK gate (which permanently locks
+# facing once the mouse-body angle exceeds ~157°). null until the
+# first dispatch; arc-step falls back to no-op then.
+var _current_self_pos: Vector3 = Vector3.ZERO
+var _current_self_state: SkaterNetworkState = null
 
 # Last action the bot actually fired (e.g. "SHOOT" /
 # "PASS→Backdoor"). Set inside the press-state handlers at the
@@ -668,6 +687,11 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 		return
 
 	var self_pos: Vector3 = self_state.position
+	# Cache for _step_mouse_toward's arc-step path. Refreshed every
+	# dispatch including skipped ticks so the arc walks the cached
+	# target around the body even between full re-evals.
+	_current_self_pos = self_pos
+	_current_self_state = self_state
 	var have_puck: bool = (snapshot.puck_state.carrier_peer_id == _peer_id)
 	_ticks_in_state += 1
 	_agent_tick += 1
@@ -695,7 +719,8 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 		_dispatch_skip_counter -= 1
 		input.move_vector = _cached_move_vector
 		if _has_cached_aim_target:
-			input.mouse_world_pos = _step_mouse_toward(_cached_aim_target)
+			input.mouse_world_pos = _step_mouse_internal(
+					_cached_aim_target, _cached_aim_uses_arc)
 		return
 	_dispatch_skip_counter = DISPATCH_PERIOD_TICKS - 1
 
@@ -729,7 +754,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	if self_state != null and self_state.is_ghost:
 		var tag_up: Vector3 = _tag_up_anchor(self_pos)
 		_apply_steering(input, snapshot, self_pos, tag_up)
-		input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, tag_up, snapshot))
+		input.mouse_world_pos = _step_mouse_aim(_ready_stance_aim(self_pos, tag_up, snapshot))
 		_set_one_timer_ready(false)
 	else:
 		# Role dispatch: each TeamBrain-assigned slot maps to a behavior
@@ -760,11 +785,11 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			would_be_ready = true
 		_set_one_timer_ready(would_be_ready)
 		if would_be_ready:
-			input.mouse_world_pos = _step_mouse_toward(_shot_aim_point(snapshot, self_pos, 0.0))
+			input.mouse_world_pos = _step_mouse_aim(_shot_aim_point(snapshot, self_pos, 0.0))
 		elif decision.has_aim_override:
-			input.mouse_world_pos = _step_mouse_toward(decision.aim_world_pos)
+			input.mouse_world_pos = _step_mouse_aim(decision.aim_world_pos)
 		else:
-			input.mouse_world_pos = _step_mouse_toward(_ready_stance_aim(self_pos, decision.target_position, snapshot))
+			input.mouse_world_pos = _step_mouse_aim(_ready_stance_aim(self_pos, decision.target_position, snapshot))
 
 	# Transitions
 	if have_puck:
@@ -1034,25 +1059,20 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	else:
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
 	# Arc the per-tick mouse target around self_pos toward the final
-	# aim point. Without this, `_step_mouse_toward`'s straight chord
-	# across a 180° swing (e.g. back-pass) passes through self_pos and
-	# trips the pose coordinator's IK gate — see MOUSE_ARC_RATE_RAD_S.
-	# Convergence check below still uses the un-arced FINAL `mouse_target`
-	# so the bot fires only when the body has reached the real aim
-	# direction, not an intermediate arc point. No-op for small angle
-	# diffs (clampf passes the full diff through in a single tick).
-	input.mouse_world_pos = _step_mouse_toward(
-			_arc_step_mouse_target(self_pos, mouse_target, self_state))
+	# aim point. Without this, a straight chord across a 180° swing
+	# (e.g. back-pass) passes through self_pos and trips the pose
+	# coordinator's IK gate — see MOUSE_ARC_RATE_RAD_S. Convergence
+	# check below uses the un-arced FINAL `mouse_target` (cached
+	# inside _step_mouse_aim) so the bot fires only when the body has
+	# reached the real aim direction, not an intermediate arc point.
+	input.mouse_world_pos = _step_mouse_aim(mouse_target)
 
-	# If pre-aiming, wait for mouse convergence AND facing alignment
-	# (or timeout) before transitioning to the action state. Mouse
-	# converges fast (~130 ms for a 90° pivot at MOUSE_MAX_SPEED);
-	# facing rotation is mouse-driven but lerp-based and slower
-	# (~250 ms+ for the same pivot). Without the facing check the
-	# bot fires while still rotated wrong and the puck goes out the
-	# ROM edge. Action state fires on entry, so both must be aligned
-	# at that moment. Timeout still fires after INTENT_MAX_WAIT_TICKS
-	# as a safety so the bot can't pre-aim forever.
+	# If pre-aiming, wait for mouse convergence (or timeout) before
+	# transitioning to the action state. Body facing is no longer
+	# gated: the arc-step in _step_mouse_toward keeps the mouse on
+	# a 2 m ring around the bot so the angle to facing stays inside
+	# the blade ROM regardless of body rotation lag, which is what
+	# the old facing-alignment gate was guarding against.
 	if _intended_action != State.CARRY:
 		# Distance in XZ only — mouse_pos is forced to y=0 in
 		# _step_mouse_toward but _aim_target_for_intent inherits
@@ -1064,27 +1084,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		var dz: float = _mouse_pos.z - mouse_target.z
 		var aim_dist: float = sqrt(dx * dx + dz * dz)
 		var aim_converged: bool = aim_dist < AIM_CONVERGED_DIST_M
-		var facing_aligned: bool = _is_facing_aligned_for_aim(snapshot, self_pos, mouse_target)
-		# Debug: print convergence status on first tick after commit
-		# so we can see why pre-aim is or isn't converging.
-		if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED \
-				and _intent_wait_ticks == 0:
-			var fdx: float = mouse_target.x - self_pos.x
-			var fdz: float = mouse_target.z - self_pos.z
-			var flen: float = sqrt(fdx * fdx + fdz * fdz)
-			var fcos: float = 0.0
-			if flen > 0.0001 and self_state != null:
-				var inv: float = 1.0 / flen
-				fcos = self_state.facing.x * fdx * inv + self_state.facing.y * fdz * inv
-			print("[bot %d] PRE-AIM tick0 mouse_pos=(%.2f,%.2f) target=(%.2f,%.2f) aim_dist=%.3f converged=%s facing=(%.2f,%.2f) cos=%.3f aligned=%s" % [
-					_peer_id,
-					_mouse_pos.x, _mouse_pos.z,
-					mouse_target.x, mouse_target.z,
-					aim_dist, str(aim_converged),
-					self_state.facing.x if self_state != null else 0.0,
-					self_state.facing.y if self_state != null else 0.0,
-					fcos, str(facing_aligned)])
-		if (aim_converged and facing_aligned) or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
+		if aim_converged or _intent_wait_ticks >= INTENT_MAX_WAIT_TICKS:
 			# Capture pre-aim duration for the upcoming wrister release log.
 			if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED:
 				_pre_aim_ticks_observed = _agent_tick - _commit_tick_stamp
@@ -1207,30 +1207,6 @@ func _arc_step_mouse_target(self_pos: Vector3, final_target: Vector3,
 	var max_step: float = MOUSE_ARC_RATE_RAD_S * MOUSE_TICK_DELTA
 	var stepped_angle: float = current_angle + clampf(diff, -max_step, max_step)
 	return self_pos + Vector3(sin(stepped_angle), 0.0, cos(stepped_angle)) * CARRY_BLADE_AIM_FORWARD_M
-
-
-# True when the bot's facing has rotated close enough to the
-# action-aim direction that the blade ROM can fire there cleanly.
-# Threshold is 80° each side: well within the 90° forehand /
-# 120° backhand ROM, leaves slack so the actual fire direction
-# isn't at the ROM edge. Used in the pre-aim convergence check
-# to wait for body rotation, not just mouse rotation — facing
-# is mouse-driven via the pose coordinator's lerp but lags mouse
-# convergence significantly.
-func _is_facing_aligned_for_aim(snapshot: WorldSnapshot, self_pos: Vector3,
-		aim_target: Vector3) -> bool:
-	var dx: float = aim_target.x - self_pos.x
-	var dz: float = aim_target.z - self_pos.z
-	var len_sq: float = dx * dx + dz * dz
-	if len_sq < 0.0001:
-		return true
-	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if self_state == null:
-		return true
-	var inv: float = 1.0 / sqrt(len_sq)
-	var cos_angle: float = self_state.facing.x * dx * inv + self_state.facing.y * dz * inv
-	# 80° each side: cos(80°) ≈ 0.174.
-	return cos_angle >= 0.174
 
 
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -1943,19 +1919,52 @@ var _mouse_pos_initialized: bool = false
 
 # Steps `_mouse_pos` toward `target` at MOUSE_MAX_SPEED_M_S, capped by
 # the tick budget. First call snaps to the target. Returns the result
-# with small per-tick noise for organic feel. Replaces the various
-# per-state smoothing methods we used to have — single consistent
-# model for every aim target.
+# with small per-tick noise for organic feel.
+#
+# Two entry points wrap the shared `_step_mouse_internal`:
+#
+#   _step_mouse_aim — arcs the target around self_pos on a 2 m ring
+#   before stepping. Use for "body-aim" targets (CARRY, OFF_PUCK,
+#   tag-up). The arc keeps the mouse-body angle inside the pose
+#   coordinator's IK gate (~157°) so facing can always track the
+#   mouse, even when the target flips 180° (anchor behind us after
+#   a role re-eval, or transitioning out of a back-pass press with
+#   the mouse parked behind the body). Without it, a single straight
+#   chord across self_pos trips the gate and leaves facing
+#   permanently locked opposite to where the bot is skating.
+#
+#   _step_mouse_toward — direct chord, no arc. Use for press states
+#   (wrister windup interpolates a specific blade path that
+#   arc-snapping would distort; facing is locked during press
+#   states anyway, so the gate trip can't strand it) and for the
+#   chase state (the target may be the actual puck position at
+#   close range, and projecting it onto a 2 m ring would put the
+#   mouse beyond the puck and break pickup).
+func _step_mouse_aim(target: Vector3) -> Vector3:
+	return _step_mouse_internal(target, true)
+
+
 func _step_mouse_toward(target: Vector3) -> Vector3:
-	# Capture the desired target so the decision throttle can re-step
-	# toward it on skipped ticks without re-running the state handler.
+	return _step_mouse_internal(target, false)
+
+
+func _step_mouse_internal(target: Vector3, do_arc: bool) -> Vector3:
+	# Cache the FINAL un-arced target so the skipped-tick path can
+	# re-arc fresh every physics frame; otherwise the arc would only
+	# advance on full-dispatch ticks (every DISPATCH_PERIOD_TICKS) and
+	# a 180° swing would take 4× longer than intended.
 	_cached_aim_target = target
 	_has_cached_aim_target = true
+	_cached_aim_uses_arc = do_arc
+	var step_target: Vector3 = target
+	if do_arc:
+		step_target = _arc_step_mouse_target(
+				_current_self_pos, target, _current_self_state)
 	if not _mouse_pos_initialized:
-		_mouse_pos = Vector3(target.x, 0.0, target.z)
+		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
 		_mouse_pos_initialized = true
-	var to_target_x: float = target.x - _mouse_pos.x
-	var to_target_z: float = target.z - _mouse_pos.z
+	var to_target_x: float = step_target.x - _mouse_pos.x
+	var to_target_z: float = step_target.z - _mouse_pos.z
 	var dist: float = sqrt(to_target_x * to_target_x + to_target_z * to_target_z)
 	var max_step: float = MOUSE_MAX_SPEED_M_S * MOUSE_TICK_DELTA
 	if dist > max_step:
@@ -1963,8 +1972,8 @@ func _step_mouse_toward(target: Vector3) -> Vector3:
 		_mouse_pos.x += to_target_x * inv * max_step
 		_mouse_pos.z += to_target_z * inv * max_step
 	else:
-		_mouse_pos.x = target.x
-		_mouse_pos.z = target.z
+		_mouse_pos.x = step_target.x
+		_mouse_pos.z = step_target.z
 	# Apply noise to OUTPUT only — _mouse_pos stays smooth, output
 	# adds organic per-tick wiggle (uniform [-NOISE, +NOISE] on each
 	# axis). Wiggle doesn't accumulate.
