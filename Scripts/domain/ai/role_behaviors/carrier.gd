@@ -570,7 +570,13 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var dest_score: float = _score_at(ctx, candidate, self_pos,
 				_scratch_opponents_path, cand_goalie, goalie_now)
 		var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
-		var s_total: float = dest_score * lane * decay
+		# Omnidirectional poke-safety penalty — score_at uses a forward-
+		# cone pressure (right for shooting), but for possession we also
+		# discount destinations that have a defender close by from any
+		# angle. See AIActionScoring.carry_poke_safety.
+		var safety: float = AIActionScoring.carry_poke_safety(
+				candidate, _scratch_opponents_path)
+		var s_total: float = dest_score * lane * decay * safety
 		if s_total > best_score:
 			best_score = s_total
 			best_pos = candidate
@@ -590,7 +596,9 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 				_scratch_opponents_path, slot_dest_goalie, goalie_now)
 		var slot_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
-		var slot_total: float = slot_dest_score * slot_lane * slot_decay
+		var slot_safety: float = AIActionScoring.carry_poke_safety(
+				slot_pos, _scratch_opponents_path)
+		var slot_total: float = slot_dest_score * slot_lane * slot_decay * slot_safety
 		if slot_total > best_score:
 			best_score = slot_total
 			best_pos = slot_pos
@@ -598,11 +606,16 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	# Stand-still last. Only wins on STRICTLY greater than the best
 	# movement candidate — patience must be earned. Score uses
 	# current opponents (time = 0 → no projection). Goalie predicted
-	# at the wrister window from current position.
+	# at the wrister window from current position. Poke-safety applied
+	# here too: if we're standing still in poke range of a defender,
+	# the bot should prefer to skate clear.
 	var stand_goalie: Vector3 = _predict_goalie_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
 			_scratch_opponents, stand_goalie, goalie_now)
+	var stand_safety: float = AIActionScoring.carry_poke_safety(
+			self_pos, _scratch_opponents)
+	stand_score *= stand_safety
 	if stand_score > best_score:
 		best_score = stand_score
 		best_pos = self_pos

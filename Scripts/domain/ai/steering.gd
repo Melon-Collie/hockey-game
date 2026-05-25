@@ -20,6 +20,13 @@ class_name AISteering
 const TEAMMATE_REPEL_WEIGHT: float = 0.4
 const TEAMMATE_REPEL_RADIUS: float = 3.0
 const OPPONENT_REPEL_WEIGHT: float = 0.6
+# Carrier-specific opponent repel weight. Bots with the puck weight
+# defender proximity much more heavily than off-puck bots — a defender
+# 3 m away is a poke threat to a carrier, but just a body-in-the-way
+# to a teammate maintaining formation. Doubling the weight means the
+# carrier curves AROUND nearby defenders instead of brushing past
+# them on the way to the slot.
+const OPPONENT_REPEL_WEIGHT_CARRY: float = 1.2
 const OPPONENT_REPEL_RADIUS: float = 4.0
 const BOARD_REPEL_WEIGHT: float = 0.5
 const BOARD_REPEL_DISTANCE: float = 2.0
@@ -68,7 +75,8 @@ static func compute_move_vector(
 		shot_lane_start: Vector3,
 		shot_lane_end: Vector3,
 		rink_half_x: float,
-		rink_half_z: float) -> Vector2:
+		rink_half_z: float,
+		opponent_repel_weight: float = OPPONENT_REPEL_WEIGHT) -> Vector2:
 	var force_x: float = 0.0
 	var force_z: float = 0.0
 
@@ -100,8 +108,8 @@ static func compute_move_vector(
 		if d > 0.001 and d < OPPONENT_REPEL_RADIUS:
 			var falloff: float = (OPPONENT_REPEL_RADIUS - d) / OPPONENT_REPEL_RADIUS
 			var inv_d: float = 1.0 / d
-			force_x += dx * inv_d * falloff * OPPONENT_REPEL_WEIGHT
-			force_z += dz * inv_d * falloff * OPPONENT_REPEL_WEIGHT
+			force_x += dx * inv_d * falloff * opponent_repel_weight
+			force_z += dz * inv_d * falloff * opponent_repel_weight
 
 	# Repel from boards: only kicks in within BOARD_REPEL_DISTANCE of a wall.
 	# Pushes inward proportionally to how close the bot is to the wall.

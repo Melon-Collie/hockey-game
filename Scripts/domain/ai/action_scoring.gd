@@ -693,6 +693,44 @@ static func threat_surface_pass(
 	return maxf(pass_score, lane * positional)
 
 
+# Omnidirectional poke-threat penalty for CARRY destinations. Returns
+# a multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0]: full safety (1.0)
+# when no opponent is within CARRY_POKE_SAFE_RADIUS_M of `pos`,
+# clamped to the floor when an opponent is inside the inner danger
+# radius, linear ramp in between.
+#
+# Layered ON TOP of `score_shoot` / `position_potential`, both of
+# which already penalize defenders — but those use a FORWARD-CONE
+# pressure (defenders behind/beside don't matter for a shot lane).
+# For possession protection, a defender at ANY angle within stick
+# reach is a poke threat. This penalty captures that gap so carriers
+# pick destinations that are safe to BE AT, not just safe to shoot
+# from. Caller should pass projected opponents (where they'll be at
+# the candidate's arrival time).
+const CARRY_POKE_DANGER_RADIUS_M: float = 2.0
+const CARRY_POKE_SAFE_RADIUS_M: float = 3.5
+const CARRY_POKE_SAFETY_FLOOR: float = 0.35
+
+static func carry_poke_safety(pos: Vector3, projected_opponents: Array[Vector3]) -> float:
+	var nearest_sq: float = INF
+	for p: Vector3 in projected_opponents:
+		var dx: float = p.x - pos.x
+		var dz: float = p.z - pos.z
+		var d_sq: float = dx * dx + dz * dz
+		if d_sq < nearest_sq:
+			nearest_sq = d_sq
+	if nearest_sq == INF:
+		return 1.0
+	var d: float = sqrt(nearest_sq)
+	if d >= CARRY_POKE_SAFE_RADIUS_M:
+		return 1.0
+	if d <= CARRY_POKE_DANGER_RADIUS_M:
+		return CARRY_POKE_SAFETY_FLOOR
+	var t: float = (d - CARRY_POKE_DANGER_RADIUS_M) / (
+			CARRY_POKE_SAFE_RADIUS_M - CARRY_POKE_DANGER_RADIUS_M)
+	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, t)
+
+
 # Public lane-clearance check for CARRY candidates — the bot is
 # physically traveling along this segment, not firing a puck through
 # it, so the reaction-window math from `_lane_clear` doesn't apply.

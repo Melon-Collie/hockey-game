@@ -1794,10 +1794,17 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 						SHOT_LANE_LEAD_TIME_S)
 				lane_end = _attacking_goal_pos
 
+	# Carrier-specific repel boost: when WE have the puck, weight defender
+	# proximity much more heavily so the body curves around poke threats
+	# instead of skating past them. Off-puck bots use the default.
+	var opp_repel: float = AISteering.OPPONENT_REPEL_WEIGHT
+	if carrier == _peer_id:
+		opp_repel = AISteering.OPPONENT_REPEL_WEIGHT_CARRY
 	var desired: Vector2 = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
-			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH)
+			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH,
+			opp_repel)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
 	# direction (~180° transition), it's faster to brake and reverse than
