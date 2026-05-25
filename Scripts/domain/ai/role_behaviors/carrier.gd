@@ -405,7 +405,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var dist: float = self_pos.distance_to(receiver_state.position)
 		var flight_t: float = clampf(
 				dist / AIActionScoring.PASS_SPEED_M_S, 0.0, PASS_LEAD_MAX_S)
-		var receiver: Vector3 = _predict_receiver(receiver_state, flight_t)
+		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
+		var receiver: Vector3 = _predict_receiver(receiver_state, flight_t, receiver_accel)
 		if own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
 			continue
 		if AIActionScoring.pass_lane_blocked_by_net(self_pos, receiver):
@@ -470,8 +471,11 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 	return [best_pass_peer, best_pass_score]
 
 
-# Receiver position prediction — velocity extrapolation of the blade
-# contact (in world space).
+# Receiver position prediction — velocity + acceleration
+# extrapolation of the blade contact (in world space). Accel
+# comes from the agent state machine's per-peer velocity-diff
+# cache (RoleContext.acceleration_by_peer); callers without that
+# context get a constant-velocity lead (accel defaults to ZERO).
 #
 # IMPORTANT: `receiver.blade_position` is in upper-body-LOCAL space —
 # subtracting `receiver.position` (world) was nonsense and produced
@@ -479,10 +483,13 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # `blade_contact_world` (host-only field, populated by
 # SkaterController.get_network_state) which is the blade in world
 # coordinates already.
-func _predict_receiver(receiver: SkaterNetworkState, flight_t: float) -> Vector3:
+func _predict_receiver(receiver: SkaterNetworkState, flight_t: float,
+		accel: Vector3 = Vector3.ZERO) -> Vector3:
 	# Predict the blade position forward by flight_t along body
-	# velocity (assumes blade moves with body — fine over a 0.6 s
-	# pass window).
+	# velocity + acceleration (assumes blade moves with body — fine
+	# over a 0.6 s pass window). The accel term lands a receiver
+	# who's mid-turn or accelerating from rest ~0.5·|a|·t² closer to
+	# where they actually arrive vs. a pure-velocity lead.
 	var blade_world: Vector3 = receiver.blade_contact_world
 	# Defensive fallback: if blade_contact_world isn't populated
 	# (zero — shouldn't happen on host but guard anyway), fall back
@@ -490,7 +497,8 @@ func _predict_receiver(receiver: SkaterNetworkState, flight_t: float) -> Vector3
 	# blade, but vastly better than aim at center ice.
 	if blade_world == Vector3.ZERO:
 		blade_world = receiver.position
-	return AITrajectory.predict_at(blade_world, receiver.velocity, flight_t)
+	return AITrajectory.predict_at(
+			blade_world, receiver.velocity, flight_t, 6, accel)
 
 
 # Returns [best_score, best_pos] across all 10 carry candidates:

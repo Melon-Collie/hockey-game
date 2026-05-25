@@ -27,11 +27,19 @@ class_name AITrajectory
 static func predict(pos: Vector3, vel: Vector3,
 		steps: int, dt: float,
 		decel_m_s2: float = 0.0,
-		bounce_factor: float = 0.0) -> Array[Vector3]:
+		bounce_factor: float = 0.0,
+		accel: Vector3 = Vector3.ZERO) -> Array[Vector3]:
 	var out: Array[Vector3] = []
 	var p: Vector3 = pos
 	var v: Vector3 = vel
 	for i: int in range(steps):
+		# Apply control acceleration BEFORE the position step so the
+		# i-th sample uses the velocity that the body has during that
+		# step. Forward-Euler is off by 0.5·a·dt² from the exact
+		# closed form per step, dwarfed by the pass / chase windows
+		# where this is used (≤0.6 s for passes, ≤1.5 s for chase).
+		if accel != Vector3.ZERO:
+			v += accel * dt
 		p += v * dt
 
 		# Board interaction. With a bounce factor, REFLECT perpendicular
@@ -72,14 +80,14 @@ static func predict(pos: Vector3, vel: Vector3,
 # to pick a step count. Steps default to 6 — granular enough that the
 # rink clamp catches mid-flight wall contact, cheap enough at 6 Hz.
 #
-# Constant velocity, no friction, no bounce. Use `predict_puck_at`
-# for puck-specific physics.
+# Constant velocity + optional constant acceleration, no friction,
+# no bounce. Use `predict_puck_at` for puck-specific physics.
 static func predict_at(pos: Vector3, vel: Vector3, lead_time_s: float,
-		steps: int = 6) -> Vector3:
+		steps: int = 6, accel: Vector3 = Vector3.ZERO) -> Vector3:
 	if lead_time_s <= 0.0 or steps <= 0:
 		return pos
 	var dt: float = lead_time_s / float(steps)
-	var traj: Array[Vector3] = predict(pos, vel, steps, dt)
+	var traj: Array[Vector3] = predict(pos, vel, steps, dt, 0.0, 0.0, accel)
 	return traj[traj.size() - 1]
 
 

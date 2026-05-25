@@ -109,6 +109,31 @@ const CHASE_TRAJECTORY_STEPS: int = 12
 # own X magnitude so we never overshoot to the wrong side.
 const CHASE_ANGLE_BIAS_M: float = 1.5
 
+# Kinematic chase intercept. At each step T of the puck trajectory walk,
+# the bot is reachable iff the constant acceleration required to land at
+# `puck_traj(T)` at time T (starting from current pos & velocity) has
+# magnitude ≤ CHASE_MAX_ACCEL_M_S2. Matches SkaterController.thrust
+# default (12.0) so the model reflects what the bot can actually pull
+# off. The previous heuristic (effective_speed × T ≥ distance) ignored
+# starting velocity direction except as a small ±50% bias, so a bot
+# moving sideways relative to the puck would still be modelled as
+# reaching the intercept by skating-from-rest at REF_SPEED — produced
+# bad angles that the new kinematic check rejects automatically.
+const CHASE_MAX_ACCEL_M_S2: float = 12.0
+
+# Per-peer velocity-history smoothing for acceleration estimation.
+# Raw frame-over-frame velocity diffs at 240 Hz are noisy (a thrust
+# change adds ~0.05 m/s per tick which sits on top of float jitter); an
+# IIR low-pass smooths to a usable signal. Half-life ≈ ln(2)/ALPHA
+# ticks → 0.2 ≈ 14 ms half-life, enough damping to ignore single-
+# tick spikes while still reacting inside a 400-600 ms pass window.
+const ACCEL_SMOOTH_ALPHA: float = 0.2
+# Clamp on the smoothed accel magnitude. Caps any pathological
+# spike (e.g., teleport on respawn) at a value just above
+# SkaterController.thrust so a legitimate hard turn still reads as
+# full-thrust accel.
+const ACCEL_CLAMP_M_S2: float = 14.0
+
 # Soft-hands reception. When closing on a loose puck moving faster
 # than SOFT_HANDS_PUCK_SPEED_MIN_M_S (i.e. an incoming pass / stripped
 # puck), AND we're within SOFT_HANDS_DISTANCE_M of the intercept
@@ -349,6 +374,15 @@ var _scratch_teammates: Array[Vector3] = []
 # top of _apply_steering. The CARRIER role behavior owns its own
 # scratch buffers for action scoring.
 var _scratch_opponents: Array[Vector3] = []
+
+# Per-peer velocity history for acceleration estimation. Each bot
+# maintains its own cache because dispatch runs per-bot — the
+# duplicated work across the 3 bots on a team is a few subtractions
+# per peer per tick (negligible). Untyped Dictionary because GDScript
+# 4.6's typed-dict story is rough; keys are peer_id ints, values are
+# Vector3 (last tick's velocity or smoothed accel).
+var _prev_velocity_by_peer: Dictionary = {}
+var _accel_by_peer: Dictionary = {}
 
 # Carrier-role decision behavior. Owns _pick_action's scoring +
 # hysteresis + cooldown + scratch buffers. Lives for the full
@@ -703,6 +737,10 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	_ticks_in_state += 1
 	_agent_tick += 1
 	_update_engagement_cooldown(snapshot, self_state)
+	# Updated every dispatch (including skipped-throttle ticks) so the
+	# accel signal stays usable on the next full re-eval. The accel
+	# dict feeds receiver lead in pass scoring + PASS_PRESSED aim.
+	_update_acceleration_cache(snapshot, input.delta)
 
 	# When we're ghosted (offside, can't interact with the puck), chase
 	# behavior is degenerate — we'd skate at a puck we can't pick up. Drop
@@ -833,6 +871,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.own_goal_dir = _own_goal_dir
 	ctx.team_brain = _team_brain
 	ctx.team_id_by_peer = _team_id_by_peer
+	ctx.acceleration_by_peer = _accel_by_peer
 	if _team_brain != null:
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
@@ -1623,7 +1662,8 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var dist: float = self_pos.distance_to(receiver.position)
 	var flight_t: float = clampf(
 			dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
-	return _predict_receiver(receiver, flight_t)
+	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
+	return _predict_receiver(receiver, flight_t, accel)
 
 
 # Receiver position prediction — velocity extrapolation of the blade
@@ -1633,8 +1673,10 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # An earlier version blended in the receiver's published steering
 # anchor, intending to lead bots cutting toward their slot. That
 # overshot dramatically (TRANS_DO OUTLET anchor is ~25 m up-ice).
-# Velocity-only is conservative and correct: project only as far as
-# the receiver actually moves, no aspirational pull.
+# Velocity + observed acceleration is the conservative middle
+# ground: project only as far as the receiver's current motion
+# implies (the ½·a·t² term picks up real turns / accels from the
+# physics body without committing to an aspirational anchor).
 #
 # IMPORTANT: `receiver.blade_position` is in upper-body-LOCAL space —
 # subtracting `receiver.position` (world) was nonsense and produced
@@ -1642,10 +1684,11 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # side of the rink during D→O transition. Use `blade_contact_world`
 # (host-only field, populated by SkaterController.get_network_state)
 # which is the blade in world coordinates already.
-func _predict_receiver(receiver: SkaterNetworkState, flight_t: float) -> Vector3:
+func _predict_receiver(receiver: SkaterNetworkState, flight_t: float,
+		accel: Vector3 = Vector3.ZERO) -> Vector3:
 	# Predict the blade position forward by flight_t along body
-	# velocity (assumes blade moves with body — fine over a 0.6 s
-	# pass window).
+	# velocity + acceleration (assumes blade moves with body — fine
+	# over a 0.6 s pass window).
 	var blade_world: Vector3 = receiver.blade_contact_world
 	# Defensive fallback: if blade_contact_world isn't populated
 	# (zero — shouldn't happen on host but guard anyway), fall back
@@ -1653,7 +1696,8 @@ func _predict_receiver(receiver: SkaterNetworkState, flight_t: float) -> Vector3
 	# blade, but vastly better than aim at center ice.
 	if blade_world == Vector3.ZERO:
 		blade_world = receiver.position
-	return AITrajectory.predict_at(blade_world, receiver.velocity, flight_t)
+	return AITrajectory.predict_at(
+			blade_world, receiver.velocity, flight_t, 6, accel)
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
@@ -2117,43 +2161,51 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 	# puck actually ends up; the new model matches Jolt's resolution.
 	var traj: Array[Vector3] = AITrajectory.predict_puck(
 			puck_pos, puck_vel, CHASE_TRAJECTORY_STEPS, dt)
-	# Closing-rate-aware reach: bot's velocity component toward the
-	# candidate intercept boosts the effective chase speed (bot already
-	# committed in that direction has a head start). Component AWAY
-	# from the target subtracts (bot has to redirect, slower reach).
-	# Capped at ±50% of CHASE_SPEED so extreme velocities don't blow
-	# up the estimate. Without this, the formula assumes bot starts
-	# at rest and picks intercepts that bots currently moving the
-	# wrong way can't actually reach — produces visible bad angles
-	# on slow-moving pucks.
-	var v_cap: float = AIActionScoring.SKATER_REF_SPEED_M_S * 0.5
-	# Track the previous step's "reach surplus" (eff_speed × t − dist).
-	# When it crosses zero between step i-1 and step i we have a
-	# bracket; linear-interp the actual intercept fraction within that
-	# step rather than always returning traj[i] (over-runs by up to dt).
+	# Kinematic reachability: for each step T on the puck trajectory,
+	# solve for the constant control acceleration `a` that would land
+	# the bot at `traj[i]` at time T starting from (self_pos, self_vel):
+	#
+	#     traj[i] = self_pos + self_vel·T + ½·a·T²
+	#  ⇒  a = 2·(traj[i] − self_pos − self_vel·T) / T²
+	#
+	# The bot is reachable iff |a| ≤ CHASE_MAX_ACCEL_M_S2. Compare in
+	# squared form to skip the sqrt and the per-step T² divisions:
+	#
+	#     |a|² ≤ A_max²
+	#  ⇔  4·|residual|² ≤ A_max² · T⁴
+	#  ⇔  A_max² · T⁴ − 4·|residual|² ≥ 0    (reachability surplus)
+	#
+	# First step where surplus ≥ 0 is the intercept. When the bracket
+	# spans two steps (prev < 0 ≤ curr), linear-interp T inside the
+	# step instead of always returning traj[i] (over-runs by up to dt).
+	#
+	# Implicit assumption: bang-bang acceleration with no max-speed
+	# clamp. For chase windows ≤1.5 s with bot speeds already near
+	# DEFAULT_SKATER_MAX_SPEED_M_S in roughly the right direction,
+	# the speed cap rarely binds before A_max does; if it ever
+	# becomes the dominant constraint, the model picks a slightly
+	# more aggressive intercept than the bot can actually reach and
+	# the soft-hands logic later in CHASE_PUCK still catches the
+	# closing-velocity case correctly.
+	var a_max_sq: float = CHASE_MAX_ACCEL_M_S2 * CHASE_MAX_ACCEL_M_S2
 	var prev_surplus: float = -INF
 	var prev_pos: Vector3 = self_pos
 	for i: int in traj.size():
 		var t_step: float = (i + 1) * dt
-		var dx: float = traj[i].x - self_pos.x
-		var dz: float = traj[i].z - self_pos.z
-		var dist: float = sqrt(dx * dx + dz * dz)
-		var v_along: float = 0.0
-		if dist > 0.001:
-			var inv_d: float = 1.0 / dist
-			v_along = self_vel.x * dx * inv_d + self_vel.z * dz * inv_d
-		var effective_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S + clampf(v_along, -v_cap, v_cap)
-		var surplus: float = effective_speed * t_step - dist
+		var t_sq: float = t_step * t_step
+		var t_4: float = t_sq * t_sq
+		var residual_x: float = traj[i].x - self_pos.x - self_vel.x * t_step
+		var residual_z: float = traj[i].z - self_pos.z - self_vel.z * t_step
+		var residual_sq: float = residual_x * residual_x + residual_z * residual_z
+		var surplus: float = a_max_sq * t_4 - 4.0 * residual_sq
 		if surplus >= 0.0:
 			if prev_surplus > -INF and prev_surplus < 0.0:
-				# Bracket found: surplus crossed zero between (i-1, i).
-				# Linear-interp the puck position for sub-step accuracy.
 				var frac: float = -prev_surplus / (surplus - prev_surplus)
 				return prev_pos.lerp(traj[i], frac)
 			return traj[i]
 		prev_surplus = surplus
 		prev_pos = traj[i]
-	# Puck is moving away faster than we can chase — aim at the last
+	# Puck unreachable inside the lookahead window — aim at the last
 	# projected position so we at least head in the right direction.
 	return traj[traj.size() - 1] if traj.size() > 0 else puck_pos
 
@@ -2222,6 +2274,42 @@ func _is_closest_teammate_to_puck_at(snapshot: WorldSnapshot, self_pos: Vector3)
 		if ox * ox + oz * oz < my_d2:
 			return false
 	return true
+
+
+# Frame-over-frame velocity diff per peer, low-passed into
+# _accel_by_peer. Stale peers (left the snapshot — disconnect, swap)
+# get pruned so the dict size stays bounded. First-sight peers seed
+# prev_velocity from the current value and contribute zero accel so
+# a respawn doesn't register as a thrust spike.
+func _update_acceleration_cache(snapshot: WorldSnapshot, delta: float) -> void:
+	if delta <= 0.0:
+		return
+	var inv_delta: float = 1.0 / delta
+	var seen: Dictionary = {}
+	for peer_id: int in snapshot.skater_states:
+		seen[peer_id] = true
+		var s: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var curr_v: Vector3 = s.velocity
+		var prev_v: Vector3 = _prev_velocity_by_peer.get(peer_id, curr_v)
+		_prev_velocity_by_peer[peer_id] = curr_v
+		var raw_a: Vector3 = (curr_v - prev_v) * inv_delta
+		raw_a.y = 0.0
+		var smoothed: Vector3 = _accel_by_peer.get(peer_id, Vector3.ZERO)
+		smoothed = smoothed.lerp(raw_a, ACCEL_SMOOTH_ALPHA)
+		var mag: float = sqrt(smoothed.x * smoothed.x + smoothed.z * smoothed.z)
+		if mag > ACCEL_CLAMP_M_S2:
+			var scale: float = ACCEL_CLAMP_M_S2 / mag
+			smoothed.x *= scale
+			smoothed.z *= scale
+		_accel_by_peer[peer_id] = smoothed
+	# Prune peers that left the snapshot (rare — swap / disconnect)
+	# so the dicts don't grow over a long match. Iterate a copy of
+	# the key list because `erase` during dict iteration is unsafe.
+	var existing_ids: Array = _prev_velocity_by_peer.keys()
+	for peer_id: int in existing_ids:
+		if not seen.has(peer_id):
+			_prev_velocity_by_peer.erase(peer_id)
+			_accel_by_peer.erase(peer_id)
 
 
 # Detects "puck just became loose" and arms the engagement cooldown if
