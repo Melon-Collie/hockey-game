@@ -695,27 +695,48 @@ static func threat_surface_pass(
 
 # Omnidirectional poke-threat penalty for CARRY destinations. Returns
 # a multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0]: full safety (1.0)
-# when no opponent is within CARRY_POKE_SAFE_RADIUS_M of `pos`,
-# clamped to the floor when an opponent is inside the inner danger
-# radius, linear ramp in between.
+# when no opponent's body is within CARRY_POKE_SAFE_RADIUS_M of the
+# carrier's PUCK position, clamped to the floor when an opponent is
+# inside the inner danger radius, linear ramp in between.
 #
 # Layered ON TOP of `score_shoot` / `position_potential`, both of
 # which already penalize defenders — but those use a FORWARD-CONE
 # pressure (defenders behind/beside don't matter for a shot lane).
 # For possession protection, a defender at ANY angle within stick
-# reach is a poke threat. This penalty captures that gap so carriers
-# pick destinations that are safe to BE AT, not just safe to shoot
-# from. Caller should pass projected opponents (where they'll be at
-# the candidate's arrival time).
-const CARRY_POKE_DANGER_RADIUS_M: float = 2.0
-const CARRY_POKE_SAFE_RADIUS_M: float = 3.5
+# reach of the puck is a poke threat. This penalty captures that
+# gap so carriers pick destinations that are safe to BE AT, not just
+# safe to shoot from.
+#
+# Caller passes the projected PUCK position (carrier body + carry-arm
+# offset toward attacking goal) and projected opponent body positions
+# at the candidate's arrival time. Measuring opp-body → our-puck
+# (rather than body-to-body) captures the asymmetry that a defender
+# in FRONT of the carrier is much more dangerous than one BEHIND,
+# at the same body-to-body distance — because the puck rides forward.
+#
+# Radii are derived from the physical poke geometry:
+#   DANGER = STICK_REACH + POKE_RADIUS — opp body this close to our
+#     puck and their stick CAN reach it.
+#   SAFE   = DANGER + REACT_BUFFER     — a tick of skating in plus a
+#     small margin; outside this the bot has time to move clear.
+const CARRY_POKE_REACT_BUFFER_M: float = 0.9
+const CARRY_POKE_DANGER_RADIUS_M: float = (
+		GameRules.DEFAULT_STICK_LENGTH_M
+		+ GameRules.DEFAULT_BLADE_LENGTH_M
+		+ GameRules.POKE_RADIUS_M)
+const CARRY_POKE_SAFE_RADIUS_M: float = (
+		CARRY_POKE_DANGER_RADIUS_M + CARRY_POKE_REACT_BUFFER_M)
+# Floor sets how much shot value can override safety. 0.35 means a
+# +185%-better shot from the dangerous spot still beats a safe spot
+# with equal shot quality — committed offensive plays still fire,
+# defensive carry candidates still get a real penalty.
 const CARRY_POKE_SAFETY_FLOOR: float = 0.35
 
-static func carry_poke_safety(pos: Vector3, projected_opponents: Array[Vector3]) -> float:
+static func carry_poke_safety(puck_pos: Vector3, projected_opponents: Array[Vector3]) -> float:
 	var nearest_sq: float = INF
 	for p: Vector3 in projected_opponents:
-		var dx: float = p.x - pos.x
-		var dz: float = p.z - pos.z
+		var dx: float = p.x - puck_pos.x
+		var dz: float = p.z - puck_pos.z
 		var d_sq: float = dx * dx + dz * dz
 		if d_sq < nearest_sq:
 			nearest_sq = d_sq

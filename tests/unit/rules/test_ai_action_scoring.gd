@@ -620,43 +620,63 @@ func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
 # ─── carry_poke_safety ─────────────────────────────────────────────────
 
 func test_carry_poke_safety_full_when_no_opponents() -> void:
-	var pos := Vector3.ZERO
+	var puck_pos := Vector3.ZERO
 	var empty: Array[Vector3] = []
-	assert_eq(AIActionScoring.carry_poke_safety(pos, empty), 1.0)
+	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, empty), 1.0)
 
 
 func test_carry_poke_safety_full_when_opponent_beyond_safe_radius() -> void:
-	var pos := Vector3.ZERO
+	var puck_pos := Vector3.ZERO
 	var far: Array[Vector3] = [Vector3(AIActionScoring.CARRY_POKE_SAFE_RADIUS_M + 1.0, 0.0, 0.0)]
-	assert_eq(AIActionScoring.carry_poke_safety(pos, far), 1.0)
+	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, far), 1.0)
 
 
 func test_carry_poke_safety_floor_when_opponent_inside_danger_radius() -> void:
-	var pos := Vector3.ZERO
+	var puck_pos := Vector3.ZERO
 	var close: Array[Vector3] = [Vector3(0.5, 0.0, 0.0)]
-	assert_eq(AIActionScoring.carry_poke_safety(pos, close),
+	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, close),
 			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
 
 
 func test_carry_poke_safety_ramps_between_radii() -> void:
 	# Opponent at the midpoint between danger and safe radii → safety
 	# sits midway between floor and 1.0.
-	var pos := Vector3.ZERO
+	var puck_pos := Vector3.ZERO
 	var mid_r: float = 0.5 * (
 			AIActionScoring.CARRY_POKE_DANGER_RADIUS_M
 			+ AIActionScoring.CARRY_POKE_SAFE_RADIUS_M)
 	var mid: Array[Vector3] = [Vector3(mid_r, 0.0, 0.0)]
 	var expected: float = 0.5 * (AIActionScoring.CARRY_POKE_SAFETY_FLOOR + 1.0)
-	assert_almost_eq(AIActionScoring.carry_poke_safety(pos, mid), expected, 0.01)
+	assert_almost_eq(AIActionScoring.carry_poke_safety(puck_pos, mid), expected, 0.01)
 
 
 func test_carry_poke_safety_uses_nearest_opponent() -> void:
 	# Two opponents — one far, one inside danger. Nearest dominates,
 	# so the result is the floor regardless of the second opponent.
-	var pos := Vector3.ZERO
+	var puck_pos := Vector3.ZERO
 	var opps: Array[Vector3] = [
 			Vector3(10.0, 0.0, 0.0),
 			Vector3(0.5, 0.0, 0.0),
 	]
-	assert_eq(AIActionScoring.carry_poke_safety(pos, opps),
+	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, opps),
 			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
+
+
+func test_carry_poke_safety_asymmetric_for_in_front_vs_behind() -> void:
+	# Geometric demonstration that opp-to-PUCK (not opp-to-body) is the
+	# right thing to measure. Carrier body at origin, attacking dir +X,
+	# so puck rides at (CARRY_OFFSET, 0, 0). An opponent at (CARRY_OFFSET,
+	# 0, 0) is on top of the puck — full poke threat. An opponent at
+	# (-CARRY_OFFSET, 0, 0) is 2*CARRY_OFFSET away from the puck and
+	# almost certainly outside the safe radius — no threat. Both
+	# opponents sit the SAME body-to-body distance; a body-to-body
+	# implementation would treat them identically.
+	const CARRY_OFFSET := 2.0  # matches SkaterAgentStateMachine.CARRY_BLADE_AIM_FORWARD_M
+	var puck_pos := Vector3(CARRY_OFFSET, 0.0, 0.0)
+	var in_front: Array[Vector3] = [Vector3(CARRY_OFFSET, 0.0, 0.0)]
+	var behind: Array[Vector3] = [Vector3(-CARRY_OFFSET, 0.0, 0.0)]
+	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, in_front),
+			AIActionScoring.CARRY_POKE_SAFETY_FLOOR,
+			"opponent on the puck = full danger")
+	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, behind), 1.0,
+			"opponent two carry-arms behind = safe")

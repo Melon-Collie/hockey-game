@@ -572,10 +572,11 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 		# Omnidirectional poke-safety penalty — score_at uses a forward-
 		# cone pressure (right for shooting), but for possession we also
-		# discount destinations that have a defender close by from any
-		# angle. See AIActionScoring.carry_poke_safety.
+		# discount destinations whose PUCK position has a defender close
+		# by from any angle. See AIActionScoring.carry_poke_safety.
+		var cand_puck_pos: Vector3 = _puck_pos_at(candidate, attacking_goal)
 		var safety: float = AIActionScoring.carry_poke_safety(
-				candidate, _scratch_opponents_path)
+				cand_puck_pos, _scratch_opponents_path)
 		var s_total: float = dest_score * lane * decay * safety
 		if s_total > best_score:
 			best_score = s_total
@@ -596,8 +597,9 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 				_scratch_opponents_path, slot_dest_goalie, goalie_now)
 		var slot_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
+		var slot_puck_pos: Vector3 = _puck_pos_at(slot_pos, attacking_goal)
 		var slot_safety: float = AIActionScoring.carry_poke_safety(
-				slot_pos, _scratch_opponents_path)
+				slot_puck_pos, _scratch_opponents_path)
 		var slot_total: float = slot_dest_score * slot_lane * slot_decay * slot_safety
 		if slot_total > best_score:
 			best_score = slot_total
@@ -613,8 +615,9 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
 			_scratch_opponents, stand_goalie, goalie_now)
+	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var stand_safety: float = AIActionScoring.carry_poke_safety(
-			self_pos, _scratch_opponents)
+			stand_puck_pos, _scratch_opponents)
 	stand_score *= stand_safety
 	if stand_score > best_score:
 		best_score = stand_score
@@ -652,6 +655,25 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
 	return maxf(shoot_s, potential_s)
+
+
+# Approximate puck-rest position when the carrier is at `body_pos`.
+# The puck rides ~CARRY_BLADE_AIM_FORWARD_M in front of the body in
+# the attacking-goal direction (see SkaterAgentStateMachine._carry_mouse_aim
+# — the carry mouse aims at this point and the blade IK puts the puck
+# there). Used by poke-safety scoring so the omnidirectional threat
+# penalty measures opp-body → our-puck (the real poke geometry), not
+# opp-body → our-body. Degenerate case (body_pos == attacking_goal,
+# excluded by goal-line buffer in candidate gen) falls back to body
+# position to avoid NaN.
+func _puck_pos_at(body_pos: Vector3, attacking_goal: Vector3) -> Vector3:
+	var to_goal: Vector3 = attacking_goal - body_pos
+	to_goal.y = 0.0
+	var len_sq: float = to_goal.x * to_goal.x + to_goal.z * to_goal.z
+	if len_sq < 0.0001:
+		return body_pos
+	var inv: float = 1.0 / sqrt(len_sq)
+	return body_pos + to_goal * (inv * SkaterAgentStateMachine.CARRY_BLADE_AIM_FORWARD_M)
 
 
 # OZ slot anchor — recursion terminator and a permanent carry
