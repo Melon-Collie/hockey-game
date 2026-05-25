@@ -168,18 +168,23 @@ const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 # blade gets pushed into the goalie, rebound, repeat. The buffer
 # distance lives on AIRoleHelpers.GOAL_LINE_BUFFER_M (single source).
 
-# Stickhandling: shift the carrier's mouse perpendicular to facing,
-# AWAY from the closest incoming defender. Pulls the puck off-side
-# from where the defender is reaching. Defenders beyond
-# STICKHANDLE_THREAT_RADIUS_M or moving slower than
-# STICKHANDLE_CLOSING_VEL_MIN_M_S don't trigger an offset (they're
-# not really threats). Magnitude scales linearly with proximity —
-# closer threat → larger evade. Per-tick smoothing happens
-# automatically via `_step_mouse_toward` (the unified motion model);
-# no need for offset-specific lerping.
-const STICKHANDLE_THREAT_RADIUS_M: float = 4.0
-const STICKHANDLE_CLOSING_VEL_MIN_M_S: float = 1.0
-const STICKHANDLE_OFFSET_MAX_M: float = 0.5
+# Stickhandling: shift the carrier's mouse perpendicular to the
+# attacking-goal aim, AWAY from the nearest opposing blade. Pulls
+# the puck off-side from where the defender's STICK is reaching —
+# distance is measured blade-tip to puck (matches the poke mechanic),
+# not body to body. Magnitude ramps in over a tight band so the
+# response is decisive when a poke is imminent and silent when no
+# one is close: full offset inside STICKHANDLE_FULL_OFFSET_RADIUS_M,
+# tapering to zero at STICKHANDLE_THREAT_RADIUS_M. Per-tick
+# smoothing happens automatically via `_step_mouse_toward`.
+#
+# Closing-velocity gating was intentionally dropped. A defender
+# standing still with stick extended is just as much a poke threat
+# as one skating in — the old gate left bots open to easy lifts
+# from a coasting defender.
+const STICKHANDLE_THREAT_RADIUS_M: float = 3.0
+const STICKHANDLE_FULL_OFFSET_RADIUS_M: float = 1.5
+const STICKHANDLE_OFFSET_MAX_M: float = 0.8
 
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
@@ -1916,17 +1921,27 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
-# Finds the closest opponent that's both within STICKHANDLE_THREAT_RADIUS_M
-# AND closing on us at STICKHANDLE_CLOSING_VEL_MIN_M_S+. Returns an XZ
+# Finds the closest opposing BLADE within STICKHANDLE_THREAT_RADIUS_M
+# of our puck (= carry-arm extension forward of body). Returns an XZ
 # offset perpendicular to `forward_dir`, in the direction OPPOSITE
-# the threat's lateral side, with magnitude scaling linearly with
-# proximity (closer threat → larger offset, capped at
-# STICKHANDLE_OFFSET_MAX_M). Returns Vector3.ZERO if no qualifying
-# threat is in range.
+# the threat's lateral side, ramped to STICKHANDLE_OFFSET_MAX_M
+# inside STICKHANDLE_FULL_OFFSET_RADIUS_M and tapering to zero at
+# the outer radius. Returns Vector3.ZERO if no threat is in range
+# or the threat is straight ahead (no lateral side to evade to).
+#
+# Uses `opp_state.blade_contact_world` — host-only field, populated
+# for every skater on the host. Bots only run on the host
+# (AIController is host-gated via PlayerRegistry.spawn_bot), so this
+# read is safe; the ZERO-check below covers the first-tick window
+# before SkaterController has populated it.
 func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir: Vector3) -> Vector3:
 	# Right-axis (XZ): forward rotated 90° CW around Y.
 	var right_axis: Vector3 = Vector3(forward_dir.z, 0.0, -forward_dir.x)
-	var best_lateral: float = 0.0
+	# Carrier's puck sits near the blade target, ~CARRY_BLADE_AIM_FORWARD_M
+	# forward of the body. Measure threat distance from THIS point so we
+	# react to actual stick-on-puck reach, not stick-on-body distance.
+	var carry_pos: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
+	var best_lateral_sign: float = 0.0
 	var best_dist: float = INF
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
@@ -1934,28 +1949,31 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 		if _team_id_by_peer.get(peer_id, -1) == _team_id:
 			continue
 		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
-		var to_opp: Vector3 = opp_state.position - self_pos
-		to_opp.y = 0.0
-		var dist: float = to_opp.length()
+		var threat_pos: Vector3 = opp_state.blade_contact_world
+		if threat_pos == Vector3.ZERO:
+			threat_pos = opp_state.position
+		var to_threat: Vector3 = threat_pos - carry_pos
+		to_threat.y = 0.0
+		var dist: float = to_threat.length()
 		if dist > STICKHANDLE_THREAT_RADIUS_M or dist < 0.001:
-			continue
-		# Closing velocity: component of opponent's velocity in the
-		# TOWARD-ME direction. Static or fleeing opponents don't
-		# trigger evasion.
-		var to_opp_norm: Vector3 = to_opp / dist
-		var closing_vel: float = -opp_state.velocity.dot(to_opp_norm)
-		if closing_vel < STICKHANDLE_CLOSING_VEL_MIN_M_S:
 			continue
 		if dist < best_dist:
 			best_dist = dist
-			best_lateral = right_axis.dot(to_opp)
-	if best_dist == INF or absf(best_lateral) < 0.01:
+			best_lateral_sign = signf(right_axis.dot(to_threat))
+	if best_dist == INF or best_lateral_sign == 0.0:
 		return Vector3.ZERO
-	var magnitude: float = STICKHANDLE_OFFSET_MAX_M * (1.0 - clampf(
-			best_dist / STICKHANDLE_THREAT_RADIUS_M, 0.0, 1.0))
+	# Tight ramp: full offset whenever the threat blade is inside the
+	# inner radius (real poke danger), tapering to zero at the outer
+	# radius. clampf guards against threats inside the inner radius
+	# (inverse_lerp would return >1) and t-of-zero at the outer edge.
+	var t: float = inverse_lerp(
+			STICKHANDLE_THREAT_RADIUS_M,
+			STICKHANDLE_FULL_OFFSET_RADIUS_M,
+			best_dist)
+	var magnitude: float = STICKHANDLE_OFFSET_MAX_M * clampf(t, 0.0, 1.0)
 	# Pull AWAY from threat's lateral side. If threat is on right
 	# (positive lateral dot), offset is -right (pulls puck left).
-	return -right_axis * signf(best_lateral) * magnitude
+	return -right_axis * best_lateral_sign * magnitude
 
 
 # Shot aim past the goalie's projected shadow. Uses the goalie's
