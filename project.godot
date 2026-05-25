@@ -140,6 +140,10 @@ camera_pan_down={
 ]
 }
 
+[debug]
+
+gdscript/warnings/integer_division=0
+
 [physics]
 
 common/physics_ticks_per_second=240

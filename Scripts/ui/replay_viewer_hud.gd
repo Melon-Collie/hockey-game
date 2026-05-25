@@ -533,9 +533,9 @@ func _format_period(p: int) -> String:
 
 func _format_clock(t: float) -> String:
 	var secs: int = int(ceil(t))
-	return "%d:%02d" % [int(secs / 60.0), secs % 60]
+	return "%d:%02d" % [secs / 60, secs % 60]
 
 
 func _format_seconds(s: float) -> String:
 	var secs: int = int(s)
-	return "%d:%02d" % [int(secs / 60.0), secs % 60]
+	return "%d:%02d" % [secs / 60, secs % 60]

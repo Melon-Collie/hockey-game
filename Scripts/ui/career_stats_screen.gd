@@ -506,6 +506,5 @@ func _format_date(ended_at_iso: String) -> String:
 
 static func _format_toi(seconds: Variant) -> String:
 	var s: int = _safe_int(seconds)
-	@warning_ignore("integer_division")
 	var minutes: int = s / 60
 	return "%d:%02d" % [minutes, s % 60]

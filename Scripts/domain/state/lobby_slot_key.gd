@@ -9,10 +9,10 @@ class_name LobbySlotKey
 const SPECTATOR_KEY_BASE: int = 100
 
 
-static func encode(team_id: int, slot: int) -> int:
-	if team_id == GameRules.SPECTATOR_TEAM_ID:
-		return SPECTATOR_KEY_BASE + slot
-	return team_id * PlayerRules.MAX_PER_TEAM + slot
+static func encode(team: int, slot_index: int) -> int:
+	if team == GameRules.SPECTATOR_TEAM_ID:
+		return SPECTATOR_KEY_BASE + slot_index
+	return team * PlayerRules.MAX_PER_TEAM + slot_index
 
 
 static func team_id(key: int) -> int:

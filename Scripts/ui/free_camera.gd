@@ -80,20 +80,20 @@ func _process(delta: float) -> void:
 		fov = PlayerPrefs.fov
 	# Rotation: rebuild from accumulated yaw/pitch so the camera can't drift
 	# from float error over a long session.
-	var basis := Basis.from_euler(Vector3(deg_to_rad(_pitch_deg), deg_to_rad(_yaw_deg), 0.0))
-	var input_dir: Vector3 = _read_input_direction(basis)
+	var cam_basis := Basis.from_euler(Vector3(deg_to_rad(_pitch_deg), deg_to_rad(_yaw_deg), 0.0))
+	var input_dir: Vector3 = _read_input_direction(cam_basis)
 	var target_speed: float = boost_speed if Input.is_action_pressed("block") else base_speed
 	var target_vel: Vector3 = input_dir * target_speed
 	# Ease the velocity so taps don't teleport. accel_time controls the time
 	# constant; tiny delta clamps to 1.0 so we never overshoot.
 	var alpha: float = clampf(delta / maxf(accel_time, 0.001), 0.0, 1.0)
 	_velocity = _velocity.lerp(target_vel, alpha)
-	global_transform = Transform3D(basis, global_position + _velocity * delta)
+	global_transform = Transform3D(cam_basis, global_position + _velocity * delta)
 
 
-func _read_input_direction(basis: Basis) -> Vector3:
-	var forward: Vector3 = -basis.z
-	var right: Vector3 = basis.x
+func _read_input_direction(cam_basis: Basis) -> Vector3:
+	var forward: Vector3 = -cam_basis.z
+	var right: Vector3 = cam_basis.x
 	var dir := Vector3.ZERO
 	if Input.is_action_pressed("move_up"):
 		dir += forward
