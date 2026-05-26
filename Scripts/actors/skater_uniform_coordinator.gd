@@ -29,6 +29,8 @@ var _jersey_number: int = 0
 var _text_color: Color = Color.BLACK
 var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
+var _shoulder_viewport: SubViewport
+var _shoulder_decal: ShoulderDecal
 
 
 func setup(skater: Skater) -> void:
@@ -49,6 +51,7 @@ func setup(skater: Skater) -> void:
 	_skate_l = skater.lower_body.get_node("SkateL") as MeshInstance3D
 	_skate_r = skater.lower_body.get_node("SkateR") as MeshInstance3D
 	_create_jersey_viewport()
+	_create_shoulder_viewport()
 
 
 # Spawns the SubViewport + JerseyDecal child that renders the procedural
@@ -86,6 +89,37 @@ func _create_jersey_viewport() -> void:
 	_upper_body_mesh.material_override = mat
 
 
+# Spawns a small SubViewport + ShoulderDecal shared by both shoulder
+# spheres. Godot's SphereMesh starts U=0 at +Z and increases CCW, so the
+# number drawn at texture-U=0.5 lands at sphere-U=0.5 (-Z = front) by
+# default; per-shoulder uv1_offset.x rotates the wrap a quarter turn each
+# way so the number faces outward (-X on left, +X on right).
+func _create_shoulder_viewport() -> void:
+	_shoulder_viewport = SubViewport.new()
+	_shoulder_viewport.name = "ShoulderViewport"
+	_shoulder_viewport.size = Vector2i(ShoulderDecal.IMG_W, ShoulderDecal.IMG_H)
+	_shoulder_viewport.transparent_bg = false
+	_shoulder_viewport.disable_3d = true
+	_shoulder_viewport.handle_input_locally = false
+	_shoulder_viewport.gui_disable_input = true
+	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	_skater.add_child(_shoulder_viewport)
+
+	_shoulder_decal = ShoulderDecal.new()
+	_shoulder_decal.name = "ShoulderDecal"
+	_shoulder_viewport.add_child(_shoulder_decal)
+
+	var tex: ViewportTexture = _shoulder_viewport.get_texture()
+	var mat_l := StandardMaterial3D.new()
+	mat_l.albedo_texture = tex
+	mat_l.uv1_offset = Vector3(-0.25, 0.0, 0.0)  # rotate so number at sphere -X
+	_shoulder_l.material_override = mat_l
+	var mat_r := StandardMaterial3D.new()
+	mat_r.albedo_texture = tex
+	mat_r.uv1_offset = Vector3(0.25, 0.0, 0.0)   # rotate so number at sphere +X
+	_shoulder_r.material_override = mat_r
+
+
 func apply_colors(
 		jersey_color: Color,
 		helmet_color: Color,
@@ -95,16 +129,15 @@ func apply_colors(
 		gloves_color: Color) -> void:
 	_jersey_color = jersey_color
 	_rebuild_jersey_texture()
+	_rebuild_shoulder_texture()
 	var jersey_mat: StandardMaterial3D = _make_solid_mat(jersey_color)
 	var pants_mat: StandardMaterial3D = _make_solid_mat(pants_color)
 	var socks_mat: StandardMaterial3D = _make_solid_mat(socks_color)
 	var gloves_mat: StandardMaterial3D = _make_solid_mat(gloves_color)
 	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08))
-	# Torso uses the procedural jersey texture (built by _rebuild_jersey_texture
-	# above); jersey_mat is reused for the shoulder spheres + arm bones so the
-	# uniform reads consistently across the upper body.
-	_shoulder_l.material_override = jersey_mat.duplicate()
-	_shoulder_r.material_override = jersey_mat.duplicate()
+	# Torso and shoulders use procedural textures from their viewports
+	# (jersey/shoulder rebuilds above); jersey_mat is still applied to the
+	# arm bones so the uniform reads consistently across the upper body.
 	_blade_mesh.material_override = _make_solid_mat(blade_color)
 	_set_bone_material(_skater.upper_arm_mesh, jersey_mat)
 	_set_bone_material(_skater.forearm_mesh, jersey_mat)
@@ -180,6 +213,7 @@ func apply_jersey_info(p_name: String, number: int, text_color: Color) -> void:
 	_jersey_number = number
 	_text_color = text_color
 	_rebuild_jersey_texture()
+	_rebuild_shoulder_texture()
 
 
 func apply_stripes(
@@ -235,6 +269,15 @@ func _rebuild_jersey_texture() -> void:
 			_jersey_color, _jersey_stripe_color,
 			_player_name, _jersey_number, _text_color)
 	_jersey_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+
+# Pushes the cached jersey color + number + text color into the
+# ShoulderDecal and refreshes the shared shoulder SubViewport.
+func _rebuild_shoulder_texture() -> void:
+	if _shoulder_decal == null:
+		return
+	_shoulder_decal.update_shoulder(_jersey_color, _jersey_number, _text_color)
+	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
 # Builds vertical piping cylinder on the outer side of a thigh. The piping
