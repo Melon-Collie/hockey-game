@@ -153,9 +153,10 @@ func apply_jersey_info(p_name: String, number: int, text_color: Color) -> void:
 
 func apply_stripes(
 		jersey_stripe_color: Color,
-		_pants_stripe_color: Color,
-		_socks_stripe_color: Color) -> void:
-	# Remove any previously generated stripe nodes (from older box-geometry runs).
+		pants_stripe_color: Color,
+		socks_stripe_color: Color) -> void:
+	# Remove any previously generated stripe nodes (from older box-geometry runs
+	# or a prior team-color application).
 	for node: Node in _skater.upper_body.get_children():
 		if node.name.begins_with("Stripe_"):
 			_skater.upper_body.remove_child(node)
@@ -165,21 +166,108 @@ func apply_stripes(
 			_skater.lower_body.remove_child(node)
 			node.queue_free()
 
-	# Elbow spheres carry the jersey stripe accent in the new geometry — the
-	# sphere reads as a colored elbow pad at the natural break in the sleeve.
-	# apply_colors() pre-tints them with jersey so they're never blank in the
-	# brief window before stripes apply.
+	# Elbow spheres carry the jersey stripe accent — the sphere reads as a
+	# colored elbow pad at the natural break in the sleeve. apply_colors()
+	# pre-tints them with jersey so they're never blank in the brief window
+	# before stripes apply.
 	var stripe_mat: StandardMaterial3D = _make_solid_mat(jersey_stripe_color)
 	if _skater.top_elbow_sphere != null:
 		_skater.top_elbow_sphere.material_override = stripe_mat.duplicate()
 	if _skater.bottom_elbow_sphere != null:
 		_skater.bottom_elbow_sphere.material_override = stripe_mat.duplicate()
 
-	# TODO: Jersey hem band, pants side stripe, and sock stripe were quad-faces
-	# wrapping the old box geometry — they don't fit a cylinder torso or split
-	# leg cylinders. Reimplementing as curved/ring-shaped strip meshes that
-	# wrap the cylinders is follow-up work. The pants/socks stripe colors are
-	# accepted on this API but currently unused.
+	# Jersey hem stripe — horizontal cylinder band wrapping the bottom of
+	# the torso. Radius interpolated from the parent cylinder profile so
+	# it tracks the taper if the torso geometry is tuned.
+	_add_torso_hem_stripe(jersey_stripe_color)
+
+	# Pants side stripe — vertical piping cylinder on the outer side of
+	# each thigh.
+	_add_pants_side_stripe(_thigh_l, -1.0, pants_stripe_color, "Stripe_PantsL")
+	_add_pants_side_stripe(_thigh_r, +1.0, pants_stripe_color, "Stripe_PantsR")
+
+	# Sock stripe — horizontal band around the middle of each sock cylinder.
+	_add_sock_stripe(_sock_l, socks_stripe_color, "Stripe_SockL")
+	_add_sock_stripe(_sock_r, socks_stripe_color, "Stripe_SockR")
+
+
+# Builds a thin CylinderMesh ring wrapping the bottom of the torso. The
+# band sits at the very bottom edge of the upper body cylinder and matches
+# the parent radius at that height (plus a small outset) so it reads as a
+# colored hem without z-fighting.
+func _add_torso_hem_stripe(color: Color) -> void:
+	var torso_mesh: CylinderMesh = _upper_body_mesh.mesh as CylinderMesh
+	if torso_mesh == null:
+		return
+	const HEM_HEIGHT: float = 0.06
+	var torso_y: float = _upper_body_mesh.position.y
+	var torso_bottom: float = torso_y - torso_mesh.height * 0.5
+	var hem_y: float = torso_bottom + HEM_HEIGHT * 0.5
+	var radius: float = _interp_cylinder_radius(
+			torso_mesh.top_radius, torso_mesh.bottom_radius,
+			torso_y, torso_mesh.height, hem_y) + 0.003
+	var hem := _make_band_cylinder(radius, HEM_HEIGHT, color, "Stripe_JerseyHem")
+	hem.position = Vector3(0.0, hem_y, 0.0)
+	_skater.upper_body.add_child(hem)
+
+
+# Builds vertical piping cylinder on the outer side of a thigh. The piping
+# center sits on the thigh's TOP outer surface (widest point); this keeps
+# the piping flush at the top — the small taper-induced gap at the bottom
+# reads naturally as a straight cord on a tapered leg.
+func _add_pants_side_stripe(
+		thigh: MeshInstance3D, side_sign: float, color: Color, mesh_name: String) -> void:
+	var thigh_mesh: CylinderMesh = thigh.mesh as CylinderMesh
+	if thigh_mesh == null:
+		return
+	const PIPING_RADIUS: float = 0.012
+	var pipe := _make_band_cylinder(
+			PIPING_RADIUS, thigh_mesh.height, color, mesh_name)
+	var thigh_pos: Vector3 = thigh.position
+	pipe.position = Vector3(
+			thigh_pos.x + side_sign * thigh_mesh.top_radius,
+			thigh_pos.y,
+			thigh_pos.z)
+	_skater.lower_body.add_child(pipe)
+
+
+# Builds a horizontal CylinderMesh band wrapping the middle of a sock.
+# Radius averages the sock's top/bottom (sock taper is small ~5mm so the
+# average is flush enough across the band's height).
+func _add_sock_stripe(sock: MeshInstance3D, color: Color, mesh_name: String) -> void:
+	var sock_mesh: CylinderMesh = sock.mesh as CylinderMesh
+	if sock_mesh == null:
+		return
+	const BAND_HEIGHT: float = 0.06
+	var radius: float = (sock_mesh.top_radius + sock_mesh.bottom_radius) * 0.5 + 0.003
+	var band := _make_band_cylinder(radius, BAND_HEIGHT, color, mesh_name)
+	band.position = sock.position
+	_skater.lower_body.add_child(band)
+
+
+# Linear interpolation of a CylinderMesh's radius at a given Y in its
+# parent's coordinate system. Used so hem/sock bands match the parent
+# cylinder's profile at the band's vertical position.
+func _interp_cylinder_radius(
+		top_radius: float, bottom_radius: float,
+		parent_y_center: float, parent_height: float, y: float) -> float:
+	var bottom_y: float = parent_y_center - parent_height * 0.5
+	var t: float = clampf((y - bottom_y) / parent_height, 0.0, 1.0)
+	return lerpf(bottom_radius, top_radius, t)
+
+
+func _make_band_cylinder(
+		radius: float, height: float, color: Color, mesh_name: String) -> MeshInstance3D:
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = height
+	cyl.radial_segments = 24
+	var m := MeshInstance3D.new()
+	m.name = mesh_name
+	m.mesh = cyl
+	m.material_override = _make_solid_mat(color)
+	return m
 
 
 func apply_ghost(ghost: bool) -> void:
@@ -213,12 +301,24 @@ func apply_ghost(ghost: bool) -> void:
 	var back_mesh: Node = _skater.upper_body.get_node_or_null("JerseyBackMesh")
 	if back_mesh:
 		back_mesh.visible = not ghost
-	for node: Node in _skater.upper_body.get_children():
-		if node.name.begins_with("Stripe_"):
-			node.visible = not ghost
-	for node: Node in _skater.lower_body.get_children():
-		if node.name.begins_with("Stripe_"):
-			node.visible = not ghost
+	# Stripe nodes alpha-fade alongside the body parts (rather than
+	# vanishing entirely) so ghost mode looks consistent across the skater.
+	for parent: Node in [_skater.upper_body, _skater.lower_body]:
+		for node: Node in parent.get_children():
+			if not node.name.begins_with("Stripe_"):
+				continue
+			var stripe_mesh: MeshInstance3D = node as MeshInstance3D
+			if stripe_mesh == null:
+				continue
+			var smat: StandardMaterial3D = stripe_mesh.material_override as StandardMaterial3D
+			if smat == null:
+				continue
+			if ghost:
+				smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				smat.albedo_color.a = 0.3
+			else:
+				smat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+				smat.albedo_color.a = 1.0
 
 
 func _make_solid_mat(color: Color) -> StandardMaterial3D:
