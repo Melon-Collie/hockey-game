@@ -21,7 +21,7 @@ const BACK_CENTER_X: int = 128         # paired with uv1_offset.x = 0.25
 # above on the gameplay camera) instead of the side, so keep visible
 # elements inside [0, SIDE_V_MAX_PX).
 const SIDE_V_MAX_PX: int = IMG_H / 2   # 128 — bottom of the side surface in image-y
-const HEM_HEIGHT: int = 28
+const HEM_HEIGHT: int = 18
 const HEM_Y_TOP: int = SIDE_V_MAX_PX - HEM_HEIGHT  # hem sits just inside the side range
 const NAME_FONT_SIZE: int = 28
 const NUMBER_FONT_SIZE: int = 56
