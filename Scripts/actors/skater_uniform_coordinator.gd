@@ -18,17 +18,17 @@ var _sock_r: MeshInstance3D
 var _skate_l: MeshInstance3D
 var _skate_r: MeshInstance3D
 
-# Cached jersey-texture inputs. The torso material's albedo is a procedural
-# texture combining all of these, so each apply_* function stores its
-# relevant fields and calls _rebuild_jersey_texture() — the texture always
-# reflects the latest combined state regardless of call order. Initialised
-# to safe defaults so an early apply_colors() can render even before
-# apply_jersey_info / apply_stripes have been called.
+# Cached jersey inputs. The torso material samples a SubViewport that draws
+# all of these in one pass (see JerseyDecal); each apply_* function stores
+# its relevant fields and bumps the viewport's update mode so the texture
+# refreshes on the next frame.
 var _jersey_color: Color = Color.WHITE
 var _jersey_stripe_color: Color = Color.BLACK
 var _player_name: String = ""
 var _jersey_number: int = 0
 var _text_color: Color = Color.BLACK
+var _jersey_viewport: SubViewport
+var _jersey_decal: JerseyDecal
 
 
 func setup(skater: Skater) -> void:
@@ -48,6 +48,36 @@ func setup(skater: Skater) -> void:
 	_sock_r = skater.lower_body.get_node("SockR") as MeshInstance3D
 	_skate_l = skater.lower_body.get_node("SkateL") as MeshInstance3D
 	_skate_r = skater.lower_body.get_node("SkateR") as MeshInstance3D
+	_create_jersey_viewport()
+
+
+# Spawns the SubViewport + JerseyDecal child that renders the procedural
+# jersey texture, and points the torso material at the viewport's texture.
+# Once set up, _rebuild_jersey_texture() just refreshes the decal and
+# bumps the viewport update mode — the material is never recreated, so
+# ghost-mode transparency and other material state survive team swaps.
+#
+# Matches the SubViewport pattern used by HockeyRink for its center-ice
+# decals: 2D-only, no input, render-on-demand.
+func _create_jersey_viewport() -> void:
+	_jersey_viewport = SubViewport.new()
+	_jersey_viewport.name = "JerseyViewport"
+	_jersey_viewport.size = Vector2i(JerseyDecal.IMG_W, JerseyDecal.IMG_H)
+	_jersey_viewport.transparent_bg = false
+	_jersey_viewport.disable_3d = true
+	_jersey_viewport.handle_input_locally = false
+	_jersey_viewport.gui_disable_input = true
+	_jersey_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	_skater.add_child(_jersey_viewport)
+
+	_jersey_decal = JerseyDecal.new()
+	_jersey_decal.name = "JerseyDecal"
+	_jersey_viewport.add_child(_jersey_decal)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = _jersey_viewport.get_texture()
+	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
+	_upper_body_mesh.material_override = mat
 
 
 func apply_colors(
@@ -187,29 +217,18 @@ func apply_stripes(
 	_add_sock_stripe(_sock_r, socks_stripe_color, "Stripe_SockR")
 
 
-# Rebuilds the torso material from the cached uniform inputs. Called by
-# apply_colors / apply_jersey_info / apply_stripes whenever any contributing
-# field changes — the texture always reflects the latest combined state.
-# Uses StandardMaterial3D defaults (shaded) so the jersey responds to
-# lighting the same way the solid-color body parts do.
-#
-# uv1_offset.x = 0.25 rotates the wrap 90° around the cylinder so the
-# texture's back-center (texel x=128) lands at the skater's +Z (the
-# back). Godot's CylinderMesh starts U=0 at +Z and increases CCW; without
-# this shift content drawn at x=128 would appear at +X (right side).
-# V mapping is identity — image y=0 (top) lands at cylinder top, image
-# y=IMG_H-1 (bottom) lands at cylinder bottom, matching the image's
-# natural top-down orientation.
+# Pushes the cached uniform inputs into the JerseyDecal and refreshes the
+# SubViewport. The torso material's albedo already points at the viewport
+# texture (set once in _create_jersey_viewport), so we don't touch the
+# material here — ghost-mode transparency and any other material state
+# survives the refresh.
 func _rebuild_jersey_texture() -> void:
-	if _upper_body_mesh == null:
+	if _jersey_decal == null:
 		return
-	var tex: ImageTexture = JerseyTextureGenerator.make_jersey_cylinder_texture(
+	_jersey_decal.update_jersey(
 			_jersey_color, _jersey_stripe_color,
 			_player_name, _jersey_number, _text_color)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
-	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
-	_upper_body_mesh.material_override = mat
+	_jersey_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
 # Builds vertical piping cylinder on the outer side of a thigh. The piping
