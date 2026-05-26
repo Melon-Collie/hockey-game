@@ -560,6 +560,14 @@ var _pass_should_charge: bool = false
 var _pass_charge_tick: int = 0
 var _pass_sweep_dir_xy: Vector2 = Vector2.ZERO
 
+# Sticky state for _carry_aim_track_fire's mode (shot-aim vs carry-
+# aim with stickhandle). Without it, when shoot vs carry scores are
+# close, the per-re-eval flip between the two aim targets snaps the
+# blade ~30 Hz (every decide() throttle window, ~33 ms) — visible
+# as a wobble specifically when the bot is "deciding to shoot."
+# Reset on CARRY entry via _set_state.
+var _carry_tracking_fire: bool = false
+
 # One-timer readiness mirrored from the most recent OFF_PUCK role
 # decision. Also published to TeamBrain (so the carrier reads it
 # when scoring passes). Drives the fire-on-zone-entry transition in
@@ -2081,7 +2089,27 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 	# pre-track is fine; the press state itself uses the right
 	# lookahead per shot type.
 	var best_shot_score: float = maxf(debug_shoot_score, debug_quick_shot_score)
-	if best_shot_score < FIRE_AIM_THRESHOLD or best_shot_score < debug_pass_score:
+	# Hysteresis on the tracking-fire decision: once we're tracking
+	# the shot, require the shot score to drop meaningfully below
+	# threshold (or below pass score) before falling back to carry
+	# aim. Without this margin the per-re-eval flip between the two
+	# aim modes wobbles the blade at ~30 Hz when the bot is deciding
+	# to shoot. Margin direction is signed by _carry_tracking_fire so
+	# entry requires being CLEARLY past the thresholds; exit requires
+	# being CLEARLY below them.
+	var margin: float = AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	var threshold_gate: float
+	var pass_gate: float
+	if _carry_tracking_fire:
+		threshold_gate = FIRE_AIM_THRESHOLD - margin
+		pass_gate = debug_pass_score - margin
+	else:
+		threshold_gate = FIRE_AIM_THRESHOLD + margin
+		pass_gate = debug_pass_score + margin
+	var should_track: bool = (best_shot_score >= threshold_gate
+			and best_shot_score >= pass_gate)
+	_carry_tracking_fire = should_track
+	if not should_track:
 		return _carry_mouse_aim(snapshot, self_pos)
 	return _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
 
@@ -2657,6 +2685,7 @@ func _set_state(s: State) -> void:
 		if s == State.CARRY:
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
+			_carry_tracking_fire = false
 			_carrier.clear_intent()
 		_state = s
 		_ticks_in_state = 0
