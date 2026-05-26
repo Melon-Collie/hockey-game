@@ -76,9 +76,9 @@ static func make_jersey_cylinder_texture(
 	const BACK_CENTER_X: int = 128         # paired with uv1_offset.x = 0.25 → +Z back
 	const HEM_HEIGHT: int = 28             # ≈ 6cm of a 0.55m-tall torso
 	const MAX_BACK_WIDTH: int = 280        # max horizontal text span on the back
-	const NAME_BASE_SCALE: int = 4
-	const NUM_BASE_SCALE: int = 8
-	const NAME_Y_TOP: int = 50
+	const NAME_BASE_SCALE: int = 3
+	const NUM_BASE_SCALE: int = 6
+	const NAME_Y_TOP: int = 60
 	const NUM_Y_TOP: int = 100
 
 	var img := Image.create(IMG_W, IMG_H, false, Image.FORMAT_RGBA8)
