@@ -50,11 +50,11 @@ const PASS_LEAD_MAX_S: float = 0.6
 # arrives at ~19 m/s vs ~14 for a quick-shot, shrinking the defender
 # reaction window meaningfully past ~10 m. Below this, quick-shot
 # pacing still feels right and the charge time isn't worth the
-# windup commit. TODO(scoring): _compute_best_pass still uses the
-# quick-shot speed for lane-clear / lead-time math, so the scorer is
-# pessimistic about charged passes — fixing that needs threading
-# the fire speed through score_pass and would let bots PICK long
-# passes more often, not just fire the ones they pick faster.
+# windup commit. Scoring is speed-aware via _compute_best_pass:
+# long passes are evaluated at the charged speed so opponents
+# project less and the lead is correspondingly shorter — long
+# passes score for what they ACTUALLY are, not for what a quick-
+# shot version would be.
 const LONG_PASS_DISTANCE_THRESHOLD_M: float = 10.0
 
 # UX nudge: bots prefer feeding humans on close-call passes. Capped
@@ -429,8 +429,19 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 			if not receiver_in_oz:
 				continue
 		var dist: float = self_pos.distance_to(receiver_state.position)
+		# Match the speed the state machine will actually fire at: long
+		# passes get the charged-wrister speed, short passes the quick-
+		# shot speed (see PASS_PRESSED branch on _pass_should_charge).
+		# Threading the actual speed here makes the lead and opponent
+		# projections match reality — without it, a 15 m pass scored
+		# at 14 m/s overestimates defender presence on the line and
+		# leads past the receiver, both of which depress long-pass
+		# scores below where they should be.
+		var pass_speed: float = (SkaterAgentStateMachine.BOT_PASS_CHARGE_SPEED_M_S
+				if dist > LONG_PASS_DISTANCE_THRESHOLD_M
+				else AIActionScoring.PASS_SPEED_M_S)
 		var flight_t: float = clampf(
-				dist / AIActionScoring.PASS_SPEED_M_S, 0.0, PASS_LEAD_MAX_S)
+				dist / pass_speed, 0.0, PASS_LEAD_MAX_S)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
 		var receiver: Vector3 = _predict_receiver(receiver_state, flight_t, receiver_accel)
 		if own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
