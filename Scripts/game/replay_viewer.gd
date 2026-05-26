@@ -143,6 +143,7 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 			PlayerRules.faceoff_position(team_id, team_slot),
 			team_colors.jersey, team_colors.helmet, team_colors.pants,
 			team_colors.socks, team_colors.primary,
+			team_colors.get("gloves", team_colors.pants),
 			is_left, _puck, self)
 	var skater: Skater = spawned.skater
 	var controller: RemoteController = spawned.controller

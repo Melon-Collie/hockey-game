@@ -599,10 +599,24 @@ func _update_joint_sphere(sphere: MeshInstance3D, world_pos: Vector3) -> void:
 func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vector3) -> void:
 	if mesh == null or not is_instance_valid(mesh):
 		return
-	mesh.position = upper_body.to_local(hand_w)
 	var bone_dir: Vector3 = hand_w - elbow_w
-	if bone_dir.length() > 0.0001:
-		mesh.look_at(hand_w + bone_dir.normalized(), Vector3.UP)
+	var bone_len: float = bone_dir.length()
+	if bone_len < 0.0001:
+		mesh.position = upper_body.to_local(hand_w)
+		return
+	var bone_dir_n: Vector3 = bone_dir / bone_len
+	# Glove cuff cylinder: its forward end sits at the hand and it extends
+	# back toward the elbow by its mesh height (no overlap past the hand).
+	# CylinderMesh's long axis is local Y; look_at sets -Z = -bone_dir_n
+	# (toward elbow), and rotate_object_local(X, +90°) then maps the new
+	# local Y to that elbow direction — so the cylinder stretches along
+	# the bone from hand to hand - bone_dir_n * cuff_height.
+	var cyl: CylinderMesh = mesh.mesh as CylinderMesh
+	var cuff_height: float = cyl.height if cyl != null else 0.06
+	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5)
+	mesh.position = upper_body.to_local(cuff_center_w)
+	mesh.look_at(cuff_center_w + bone_dir_n, Vector3.UP)
+	mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
 
 
 # Bone "rig" pattern: the public node is a Node3D wrapper that gets positioned,
@@ -723,8 +737,9 @@ func set_player_color(
 		helmet_color: Color,
 		pants_color: Color,
 		socks_color: Color,
-		blade_color: Color) -> void:
-	_uniform.apply_colors(jersey_color, helmet_color, pants_color, socks_color, blade_color)
+		blade_color: Color,
+		gloves_color: Color) -> void:
+	_uniform.apply_colors(jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color)
 
 
 func set_jersey_info(p_name: String, number: int, text_color: Color) -> void:

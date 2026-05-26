@@ -43,10 +43,12 @@ func apply_colors(
 		helmet_color: Color,
 		pants_color: Color,
 		socks_color: Color,
-		blade_color: Color) -> void:
+		blade_color: Color,
+		gloves_color: Color) -> void:
 	var jersey_mat: StandardMaterial3D = _make_solid_mat(jersey_color)
 	var pants_mat: StandardMaterial3D = _make_solid_mat(pants_color)
 	var socks_mat: StandardMaterial3D = _make_solid_mat(socks_color)
+	var gloves_mat: StandardMaterial3D = _make_solid_mat(gloves_color)
 	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08))
 	_upper_body_mesh.material_override = jersey_mat
 	_shoulder_l.material_override = jersey_mat.duplicate()
@@ -56,14 +58,18 @@ func apply_colors(
 	_set_bone_material(_skater.forearm_mesh, jersey_mat)
 	_set_bone_material(_skater.bottom_upper_arm_mesh, jersey_mat)
 	_set_bone_material(_skater.bottom_forearm_mesh, jersey_mat)
+	# Elbow spheres get re-painted in apply_stripes() with jersey_stripe_color
+	# (the user-facing accent stripe lives at the elbow). Default to jersey
+	# here so they're never blank during a brief window before stripes apply.
 	if _skater.top_elbow_sphere != null:
 		_skater.top_elbow_sphere.material_override = jersey_mat.duplicate()
-	if _skater.top_hand_sphere != null:
-		_skater.top_hand_sphere.material_override = jersey_mat.duplicate()
 	if _skater.bottom_elbow_sphere != null:
 		_skater.bottom_elbow_sphere.material_override = jersey_mat.duplicate()
+	# Hand spheres represent the back-of-hand part of the glove.
+	if _skater.top_hand_sphere != null:
+		_skater.top_hand_sphere.material_override = gloves_mat.duplicate()
 	if _skater.bottom_hand_sphere != null:
-		_skater.bottom_hand_sphere.material_override = jersey_mat.duplicate()
+		_skater.bottom_hand_sphere.material_override = gloves_mat.duplicate()
 	_helmet.material_override = _make_solid_mat(helmet_color)
 	_hip_l.material_override = pants_mat.duplicate()
 	_hip_r.material_override = pants_mat.duplicate()
@@ -78,6 +84,28 @@ func apply_colors(
 	# Fixed colors — set explicitly so ghost mode never creates a blank gray
 	# override and corrupts the color after ghost ends.
 	_skater.stick_mesh.material_override = _make_solid_mat(Color(0.705, 0.640, 0.605))
+
+	# Glove cuffs — short cylinders just past the wrist that extend back
+	# along the forearm. Part of the glove, so created here (in apply_colors)
+	# alongside the gloves color; not in apply_stripes. Recreated each call
+	# so team-swap / color-change re-applies without stale materials.
+	_rebuild_glove_cuffs(gloves_color)
+
+
+func _rebuild_glove_cuffs(gloves_color: Color) -> void:
+	if _skater.top_cuff_mesh != null and is_instance_valid(_skater.top_cuff_mesh):
+		_skater.upper_body.remove_child(_skater.top_cuff_mesh)
+		_skater.top_cuff_mesh.queue_free()
+	_skater.top_cuff_mesh = null
+	if _skater.bot_cuff_mesh != null and is_instance_valid(_skater.bot_cuff_mesh):
+		_skater.upper_body.remove_child(_skater.bot_cuff_mesh)
+		_skater.bot_cuff_mesh.queue_free()
+	_skater.bot_cuff_mesh = null
+	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6
+	_skater.top_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, 0.06, gloves_color, "CuffTop")
+	_skater.upper_body.add_child(_skater.top_cuff_mesh)
+	_skater.bot_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, 0.06, gloves_color, "CuffBot")
+	_skater.upper_body.add_child(_skater.bot_cuff_mesh)
 
 
 # Bone mesh wrappers are Node3D; the visible cylinder is a child MeshInstance3D
@@ -127,16 +155,6 @@ func apply_stripes(
 		jersey_stripe_color: Color,
 		_pants_stripe_color: Color,
 		_socks_stripe_color: Color) -> void:
-	# Free cuff meshes from a previous call before rebuilding.
-	if _skater.top_cuff_mesh != null and is_instance_valid(_skater.top_cuff_mesh):
-		_skater.upper_body.remove_child(_skater.top_cuff_mesh)
-		_skater.top_cuff_mesh.queue_free()
-	_skater.top_cuff_mesh = null
-	if _skater.bot_cuff_mesh != null and is_instance_valid(_skater.bot_cuff_mesh):
-		_skater.upper_body.remove_child(_skater.bot_cuff_mesh)
-		_skater.bot_cuff_mesh.queue_free()
-	_skater.bot_cuff_mesh = null
-
 	# Remove any previously generated stripe nodes (from older box-geometry runs).
 	for node: Node in _skater.upper_body.get_children():
 		if node.name.begins_with("Stripe_"):
@@ -147,22 +165,21 @@ func apply_stripes(
 			_skater.lower_body.remove_child(node)
 			node.queue_free()
 
-	# Sleeve cuffs — solid box meshes as children of upper_body. Their
-	# transforms are updated each frame in Skater.update_arm_mesh() /
-	# update_bottom_arm_mesh() using the elbow→hand direction. Compatible with
-	# the new cylinder arms (cuff sits around the wrist regardless of the bone
-	# mesh primitive).
-	var cuff_size: float = _skater.arm_mesh_thickness + 0.02
-	_skater.top_cuff_mesh = _make_cuff_mesh(cuff_size, 0.06, jersey_stripe_color, "CuffTop")
-	_skater.upper_body.add_child(_skater.top_cuff_mesh)
-	_skater.bot_cuff_mesh = _make_cuff_mesh(cuff_size, 0.06, jersey_stripe_color, "CuffBot")
-	_skater.upper_body.add_child(_skater.bot_cuff_mesh)
+	# Elbow spheres carry the jersey stripe accent in the new geometry — the
+	# sphere reads as a colored elbow pad at the natural break in the sleeve.
+	# apply_colors() pre-tints them with jersey so they're never blank in the
+	# brief window before stripes apply.
+	var stripe_mat: StandardMaterial3D = _make_solid_mat(jersey_stripe_color)
+	if _skater.top_elbow_sphere != null:
+		_skater.top_elbow_sphere.material_override = stripe_mat.duplicate()
+	if _skater.bottom_elbow_sphere != null:
+		_skater.bottom_elbow_sphere.material_override = stripe_mat.duplicate()
 
 	# TODO: Jersey hem band, pants side stripe, and sock stripe were quad-faces
 	# wrapping the old box geometry — they don't fit a cylinder torso or split
 	# leg cylinders. Reimplementing as curved/ring-shaped strip meshes that
 	# wrap the cylinders is follow-up work. The pants/socks stripe colors are
-	# accepted on this API but currently unused below the cuffs.
+	# accepted on this API but currently unused.
 
 
 func apply_ghost(ghost: bool) -> void:
@@ -210,11 +227,14 @@ func _make_solid_mat(color: Color) -> StandardMaterial3D:
 	return mat
 
 
-func _make_cuff_mesh(cross_size: float, height: float, color: Color, mesh_name: String) -> MeshInstance3D:
+func _make_glove_cuff_mesh(radius: float, height: float, color: Color, mesh_name: String) -> MeshInstance3D:
 	var m := MeshInstance3D.new()
 	m.name = mesh_name
-	var box := BoxMesh.new()
-	box.size = Vector3(cross_size, cross_size, height)
-	m.mesh = box
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = height
+	cyl.radial_segments = 16
+	m.mesh = cyl
 	m.material_override = _make_solid_mat(color)
 	return m

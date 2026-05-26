@@ -110,11 +110,11 @@ func spawn(
 	var spawned: Dictionary
 	if is_local:
 		spawned = _spawner.spawn_local_player(
-				faceoff_pos, jersey_color, helmet_color, pants_color, socks_color, blade_color,
+				faceoff_pos, jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color,
 				is_left_handed, puck, _game_state_node, team.team_id)
 	else:
 		spawned = _spawner.spawn_remote_player(
-				faceoff_pos, jersey_color, helmet_color, pants_color, socks_color, blade_color,
+				faceoff_pos, jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color,
 				is_left_handed, puck, _game_state_node)
 	record.skater = spawned.skater
 	record.controller = spawned.controller
@@ -188,7 +188,8 @@ func spawn_bot(
 	var blade_color: Color = colors.primary
 	var spawned: Dictionary = _spawner.spawn_ai_player(
 			faceoff_pos, record.jersey_color, record.helmet_color, record.pants_color,
-			record.socks_color, blade_color, record.is_left_handed, puck, _game_state_node)
+			record.socks_color, blade_color, record.gloves_color,
+			record.is_left_handed, puck, _game_state_node)
 	record.skater = spawned.skater
 	record.controller = spawned.controller
 	# Brain lookup: GameManager owns the per-team brains (host-only, indexed
