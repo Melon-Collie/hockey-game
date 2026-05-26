@@ -18,6 +18,18 @@ var _sock_r: MeshInstance3D
 var _skate_l: MeshInstance3D
 var _skate_r: MeshInstance3D
 
+# Cached jersey-texture inputs. The torso material's albedo is a procedural
+# texture combining all of these, so each apply_* function stores its
+# relevant fields and calls _rebuild_jersey_texture() — the texture always
+# reflects the latest combined state regardless of call order. Initialised
+# to safe defaults so an early apply_colors() can render even before
+# apply_jersey_info / apply_stripes have been called.
+var _jersey_color: Color = Color.WHITE
+var _jersey_stripe_color: Color = Color.BLACK
+var _player_name: String = ""
+var _jersey_number: int = 0
+var _text_color: Color = Color.BLACK
+
 
 func setup(skater: Skater) -> void:
 	_skater = skater
@@ -45,12 +57,16 @@ func apply_colors(
 		socks_color: Color,
 		blade_color: Color,
 		gloves_color: Color) -> void:
+	_jersey_color = jersey_color
+	_rebuild_jersey_texture()
 	var jersey_mat: StandardMaterial3D = _make_solid_mat(jersey_color)
 	var pants_mat: StandardMaterial3D = _make_solid_mat(pants_color)
 	var socks_mat: StandardMaterial3D = _make_solid_mat(socks_color)
 	var gloves_mat: StandardMaterial3D = _make_solid_mat(gloves_color)
 	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08))
-	_upper_body_mesh.material_override = jersey_mat
+	# Torso uses the procedural jersey texture (built by _rebuild_jersey_texture
+	# above); jersey_mat is reused for the shoulder spheres + arm bones so the
+	# uniform reads consistently across the upper body.
 	_shoulder_l.material_override = jersey_mat.duplicate()
 	_shoulder_r.material_override = jersey_mat.duplicate()
 	_blade_mesh.material_override = _make_solid_mat(blade_color)
@@ -118,45 +134,26 @@ func _set_bone_material(bone: Node3D, mat: StandardMaterial3D) -> void:
 
 
 func apply_jersey_info(p_name: String, number: int, text_color: Color) -> void:
+	# Clean up legacy floating decals from older box-geometry runs, if any.
 	for child: Node in _skater.upper_body.get_children():
 		if child.name in ["JerseyBackMesh", "JerseyShoulderL", "JerseyShoulderR"]:
 			_skater.upper_body.remove_child(child)
 			child.queue_free()
 
-	var tex: ImageTexture = JerseyTextureGenerator.make_jersey_texture(p_name, number, text_color)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.no_depth_test = false
-
-	# UpperBodyMesh is now a CylinderMesh (top_radius=0.20, bottom_radius=0.22,
-	# height=0.55) centered at (0, 0.195, 0). At Y=0.25 the cylinder's radius
-	# is ~0.208; placing the flat quad at Z=0.215 sits it just behind the back
-	# surface. Quad faces +Z by default (toward a viewer standing behind the
-	# player). The decal renders flat against a curved surface — readable from
-	# behind but visibly floating off the sides; a curved cylinder-segment
-	# decal is a future improvement.
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.36, 0.27)  # 4:3 matches 256×192 texture, slightly narrower than torso radius * 2
-	var mesh_inst := MeshInstance3D.new()
-	mesh_inst.name = "JerseyBackMesh"
-	mesh_inst.mesh = quad
-	mesh_inst.material_override = mat
-	mesh_inst.position = Vector3(0.0, 0.25, 0.215)
-	_skater.upper_body.add_child(mesh_inst)
-
-	# Shoulder texture decals are obsolete now that ShoulderL/R are 3D spheres
-	# painted with the jersey color via apply_colors(). The flat texture quads
-	# would clip into the spheres and look broken on a cylindrical torso.
+	_player_name = p_name
+	_jersey_number = number
+	_text_color = text_color
+	_rebuild_jersey_texture()
 
 
 func apply_stripes(
 		jersey_stripe_color: Color,
 		pants_stripe_color: Color,
 		socks_stripe_color: Color) -> void:
-	# Remove any previously generated stripe nodes (from older box-geometry runs
-	# or a prior team-color application).
+	# Remove any previously generated stripe nodes (from older box-geometry
+	# runs or a prior team-color application). The torso hem is now painted
+	# into the jersey texture so no Stripe_JerseyHem mesh is created below,
+	# but the cleanup still sweeps it if it exists from an older build.
 	for node: Node in _skater.upper_body.get_children():
 		if node.name.begins_with("Stripe_"):
 			_skater.upper_body.remove_child(node)
@@ -176,10 +173,9 @@ func apply_stripes(
 	if _skater.bottom_elbow_sphere != null:
 		_skater.bottom_elbow_sphere.material_override = stripe_mat.duplicate()
 
-	# Jersey hem stripe — horizontal cylinder band wrapping the bottom of
-	# the torso. Radius interpolated from the parent cylinder profile so
-	# it tracks the taper if the torso geometry is tuned.
-	_add_torso_hem_stripe(jersey_stripe_color)
+	# Jersey hem stripe — painted into the torso texture (no separate mesh).
+	_jersey_stripe_color = jersey_stripe_color
+	_rebuild_jersey_texture()
 
 	# Pants side stripe — vertical piping cylinder on the outer side of
 	# each thigh.
@@ -191,24 +187,20 @@ func apply_stripes(
 	_add_sock_stripe(_sock_r, socks_stripe_color, "Stripe_SockR")
 
 
-# Builds a thin CylinderMesh ring wrapping the bottom of the torso. The
-# band sits at the very bottom edge of the upper body cylinder and matches
-# the parent radius at that height (plus a small outset) so it reads as a
-# colored hem without z-fighting.
-func _add_torso_hem_stripe(color: Color) -> void:
-	var torso_mesh: CylinderMesh = _upper_body_mesh.mesh as CylinderMesh
-	if torso_mesh == null:
+# Rebuilds the torso material from the cached uniform inputs. Called by
+# apply_colors / apply_jersey_info / apply_stripes whenever any contributing
+# field changes — the texture always reflects the latest combined state.
+# Uses StandardMaterial3D defaults (shaded) so the jersey responds to
+# lighting the same way the solid-color body parts do.
+func _rebuild_jersey_texture() -> void:
+	if _upper_body_mesh == null:
 		return
-	const HEM_HEIGHT: float = 0.06
-	var torso_y: float = _upper_body_mesh.position.y
-	var torso_bottom: float = torso_y - torso_mesh.height * 0.5
-	var hem_y: float = torso_bottom + HEM_HEIGHT * 0.5
-	var radius: float = _interp_cylinder_radius(
-			torso_mesh.top_radius, torso_mesh.bottom_radius,
-			torso_y, torso_mesh.height, hem_y) + 0.003
-	var hem := _make_band_cylinder(radius, HEM_HEIGHT, color, "Stripe_JerseyHem")
-	hem.position = Vector3(0.0, hem_y, 0.0)
-	_skater.upper_body.add_child(hem)
+	var tex: ImageTexture = JerseyTextureGenerator.make_jersey_cylinder_texture(
+			_jersey_color, _jersey_stripe_color,
+			_player_name, _jersey_number, _text_color)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	_upper_body_mesh.material_override = mat
 
 
 # Builds vertical piping cylinder on the outer side of a thigh. The piping
@@ -243,17 +235,6 @@ func _add_sock_stripe(sock: MeshInstance3D, color: Color, mesh_name: String) -> 
 	var band := _make_band_cylinder(radius, BAND_HEIGHT, color, mesh_name)
 	band.position = sock.position
 	_skater.lower_body.add_child(band)
-
-
-# Linear interpolation of a CylinderMesh's radius at a given Y in its
-# parent's coordinate system. Used so hem/sock bands match the parent
-# cylinder's profile at the band's vertical position.
-func _interp_cylinder_radius(
-		top_radius: float, bottom_radius: float,
-		parent_y_center: float, parent_height: float, y: float) -> float:
-	var bottom_y: float = parent_y_center - parent_height * 0.5
-	var t: float = clampf((y - bottom_y) / parent_height, 0.0, 1.0)
-	return lerpf(bottom_radius, top_radius, t)
 
 
 func _make_band_cylinder(
@@ -298,9 +279,6 @@ func apply_ghost(ghost: bool) -> void:
 		else:
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 			mat.albedo_color.a = 1.0
-	var back_mesh: Node = _skater.upper_body.get_node_or_null("JerseyBackMesh")
-	if back_mesh:
-		back_mesh.visible = not ghost
 	# Stripe nodes alpha-fade alongside the body parts (rather than
 	# vanishing entirely) so ghost mode looks consistent across the skater.
 	for parent: Node in [_skater.upper_body, _skater.lower_body]:
