@@ -43,8 +43,8 @@ size = Vector3(0.04, 0.05, 1)
 
 [sub_resource type="SphereMesh" id="SphereMesh_novki"]
 material = SubResource("StandardMaterial3D_irs7m")
-radius = 0.13
-height = 0.26
+radius = 0.11
+height = 0.22
 radial_segments = 20
 rings = 10
 
@@ -52,8 +52,8 @@ rings = 10
 
 [sub_resource type="SphereMesh" id="SphereMesh_07vrx"]
 material = SubResource("StandardMaterial3D_iuvjg")
-radius = 0.11
-height = 0.22
+radius = 0.125
+height = 0.25
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ubeil"]
 
@@ -84,7 +84,7 @@ radial_segments = 16
 
 [sub_resource type="BoxMesh" id="BoxMesh_4j7xq"]
 material = SubResource("StandardMaterial3D_1634t")
-size = Vector3(0.18, 0.2, 0.3)
+size = Vector3(0.18, 0.2, 0.25)
 
 [node name="Skater" type="CharacterBody3D" unique_id=15417559]
 script = ExtResource("1_7f3a6")
@@ -108,7 +108,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.195, 0)
 mesh = SubResource("CylinderMesh_7f3a6")
 
 [node name="Helmet" type="MeshInstance3D" parent="MeshRoot/UpperBody" unique_id=1342161336]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.65, -0.05)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.65, 0)
 mesh = SubResource("SphereMesh_irs7m")
 skeleton = NodePath("../../../..")
 
@@ -128,11 +128,11 @@ mesh = SubResource("SphereMesh_novki")
 [node name="LowerBody" type="Node3D" parent="MeshRoot" unique_id=2124479063]
 
 [node name="HipL" type="MeshInstance3D" parent="MeshRoot/LowerBody" unique_id=2034017323]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, -0.085, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.11, -0.085, 0.03)
 mesh = SubResource("SphereMesh_07vrx")
 
 [node name="HipR" type="MeshInstance3D" parent="MeshRoot/LowerBody" unique_id=380576510]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, -0.085, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.11, -0.085, 0.03)
 mesh = SubResource("SphereMesh_07vrx")
 
 [node name="ThighL" type="MeshInstance3D" parent="MeshRoot/LowerBody" unique_id=1496610064]
@@ -160,9 +160,9 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, -0.63, 0)
 mesh = SubResource("CylinderMesh_jnv8m")
 
 [node name="SkateL" type="MeshInstance3D" parent="MeshRoot/LowerBody" unique_id=2043148834]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, -0.9, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, -0.9, -0.05)
 mesh = SubResource("BoxMesh_4j7xq")
 
 [node name="SkateR" type="MeshInstance3D" parent="MeshRoot/LowerBody" unique_id=584253070]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, -0.9, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, -0.9, -0.05)
 mesh = SubResource("BoxMesh_4j7xq")
