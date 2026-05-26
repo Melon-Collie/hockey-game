@@ -220,6 +220,34 @@ const STICKHANDLE_THREAT_RADIUS_M: float = 3.0
 const STICKHANDLE_FULL_OFFSET_RADIUS_M: float = 1.5
 const STICKHANDLE_OFFSET_MAX_M: float = 0.8
 
+# Poke-evade lateral cut. Layered on top of the continuous defender-
+# avoidance forces (carrier-weight opp repel in steering, sum-of-
+# forces stickhandle on the blade). Where those handle baseline
+# elusiveness, this is the discrete "deke moment" — when an opponent's
+# blade reaches into immediate poke range from the front, override
+# move_vector with a brief full-thrust perpendicular cut. Defender's
+# poke timed for our current trajectory swings through empty ice.
+#
+# Trigger band sized just outside the stickhandle DANGER_RADIUS
+# (2.1 m) so the cut fires AHEAD of the blade jitter response — we
+# want the body to redirect BEFORE the blade has to do all the work.
+# Front-hemisphere gate is critical: braking/cutting helps when the
+# defender is closing from in front, but a defender chasing from
+# behind would just close faster if we cut sideways.
+const POKE_EVADE_TRIGGER_REACH_M: float = 2.5
+const POKE_EVADE_MIN_CLOSING_VEL_M_S: float = 1.0
+const POKE_EVADE_MIN_SELF_SPEED_M_S: float = 2.0
+# Active window: long enough for a visible cut (body's lateral
+# velocity reaches a few m/s), short enough that anchor attraction
+# pulls us back on line without the bot losing its play. 150 ms ≈
+# 36 ticks at 240 Hz.
+const POKE_EVADE_ACTIVE_TICKS: int = 36
+# Cooldown after evade ends, blocks immediate retrigger. Persistent
+# threats (defender hanging in our face) would otherwise loop us
+# into a constant cut — the cooldown forces us to commit back to
+# normal steering between cuts.
+const POKE_EVADE_COOLDOWN_TICKS: int = 120
+
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
 # tag-up target sits. Slightly past the line so the host's
@@ -567,6 +595,13 @@ var _pass_sweep_dir_xy: Vector2 = Vector2.ZERO
 # as a wobble specifically when the bot is "deciding to shoot."
 # Reset on CARRY entry via _set_state.
 var _carry_tracking_fire: bool = false
+
+# Poke-evade lateral cut bookkeeping. While _active > 0, the
+# modulator overrides move_vector with a perpendicular thrust away
+# from the threat side; when it counts down to 0 the cooldown
+# kicks in and blocks retrigger. Both reset on CARRY entry.
+var _poke_evade_active_ticks: int = 0
+var _poke_evade_cooldown_ticks: int = 0
 
 # One-timer readiness mirrored from the most recent OFF_PUCK role
 # decision. Also published to TeamBrain (so the carrier reads it
@@ -1264,6 +1299,11 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# PASS_PRESSED: brake. Pass leads aim from a held spot.
 	if _intended_action == State.CARRY:
 		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+		# Discrete "deke moment" on top of continuous body steering:
+		# brief perpendicular cut away from an imminent poke threat.
+		# Pre-aim states (SHOOT/PASS pending) skip this — they have
+		# their own steering targets that the cut would override.
+		_poke_evade_modulate_steering(input, snapshot, self_pos)
 	elif _intended_action == State.SHOOT_PRESSED:
 		var hv: Vector3 = Vector3.ZERO
 		if self_state != null:
@@ -2232,6 +2272,139 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 	return right_axis * magnitude
 
 
+# Poke-evade lateral cut. Overrides input.move_vector with a brief
+# perpendicular thrust away from an imminent poke threat. Continuous
+# defender avoidance (opponent repel in body steering + stickhandle
+# offset on the blade) handles the baseline; this is the discrete
+# "deke moment" when a defender's blade is close enough that a poke
+# is imminent — full lateral thrust for POKE_EVADE_ACTIVE_TICKS
+# breaks the defender's projected interception line.
+#
+# Lifecycle (counters live on the state machine, both reset on
+# CARRY entry):
+#   - Active > 0: brake mid-evade. Decrement; on hitting 0, kick
+#     off the cooldown.
+#   - Cooldown > 0: no retrigger. Decrement; fall through to normal
+#     steering so anchor attraction pulls us back on line.
+#   - Both zero: scan for trigger. First qualifying opp activates.
+#
+# Trigger criteria (ALL must hold):
+#   - Own velocity ≥ POKE_EVADE_MIN_SELF_SPEED_M_S (cutting from
+#     near-standstill is pointless and just looks like a wiggle).
+#   - Opp blade within POKE_EVADE_TRIGGER_REACH_M of our puck.
+#   - Opp in our FRONT hemisphere relative to our velocity (cutting
+#     when defender chases from behind would just help them catch up).
+#   - Opp closing along the line between us ≥ MIN_CLOSING_VEL_M_S
+#     (static opponents don't need a deke).
+func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	if _poke_evade_active_ticks > 0:
+		_apply_poke_evade_cut(input, snapshot, self_pos)
+		_poke_evade_active_ticks -= 1
+		if _poke_evade_active_ticks == 0:
+			_poke_evade_cooldown_ticks = POKE_EVADE_COOLDOWN_TICKS
+		return
+	if _poke_evade_cooldown_ticks > 0:
+		_poke_evade_cooldown_ticks -= 1
+		return
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return
+	var vel_xz := Vector2(self_state.velocity.x, self_state.velocity.z)
+	var speed: float = vel_xz.length()
+	if speed < POKE_EVADE_MIN_SELF_SPEED_M_S:
+		return
+	var forward: Vector2 = vel_xz / speed
+	# Puck pos approximation — same carry-arm offset the stickhandle
+	# uses, so the trigger band is consistent across the two defenses.
+	var forward_3d := Vector3(forward.x, 0.0, forward.y)
+	var carry_pos: Vector3 = self_pos + forward_3d * CARRY_BLADE_AIM_FORWARD_M
+	var trigger_threat: SkaterNetworkState = null
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if _team_id_by_peer.get(peer_id, -1) == _team_id:
+			continue
+		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var threat_pos: Vector3 = opp_state.blade_contact_world
+		if threat_pos == Vector3.ZERO:
+			threat_pos = opp_state.position
+		var blade_to_puck: Vector3 = threat_pos - carry_pos
+		blade_to_puck.y = 0.0
+		if blade_to_puck.length() > POKE_EVADE_TRIGGER_REACH_M:
+			continue
+		# Front-hemisphere gate vs OUR velocity direction (not facing).
+		# The defender's poke is timed for where we're MOVING, not
+		# where we're looking — and the brief cut breaks momentum
+		# projection. Defender body relative to us, dotted with our
+		# velocity dir, must be positive (defender is "ahead").
+		var to_opp_3d: Vector3 = opp_state.position - self_pos
+		to_opp_3d.y = 0.0
+		var to_opp_len: float = to_opp_3d.length()
+		if to_opp_len < 0.001:
+			continue
+		var to_opp_norm: Vector3 = to_opp_3d / to_opp_len
+		if to_opp_norm.x * forward.x + to_opp_norm.z * forward.y <= 0.0:
+			continue
+		# Closing velocity along the bot-to-opp line.
+		var closing: float = -opp_state.velocity.dot(to_opp_norm)
+		if closing < POKE_EVADE_MIN_CLOSING_VEL_M_S:
+			continue
+		trigger_threat = opp_state
+		break
+	if trigger_threat == null:
+		return
+	_poke_evade_active_ticks = POKE_EVADE_ACTIVE_TICKS
+	_apply_poke_evade_cut(input, snapshot, self_pos)
+
+
+# Sets input.move_vector to a perpendicular thrust away from the
+# threat side. Picks the perpendicular relative to current velocity
+# (not facing) so the body redirects from where it's actually going.
+# Side selection: perpendicular pointing AWAY from the same threat
+# that triggered the evade. If the trigger threat has moved out of
+# range mid-evade, fall back to the nearest remaining opp; if none,
+# pick an arbitrary perpendicular so the cut still resolves rather
+# than collapsing to no input mid-window.
+func _apply_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return
+	var vel_xz := Vector2(self_state.velocity.x, self_state.velocity.z)
+	if vel_xz.length_squared() < 0.0001:
+		# Degenerate: bot has bled almost all forward speed. No
+		# meaningful "perpendicular." Leave move_vector untouched —
+		# default steering will reaccelerate, cut window will expire.
+		return
+	var forward: Vector2 = vel_xz.normalized()
+	# 90° CCW rotation in XZ → "left" of forward.
+	var perp := Vector2(-forward.y, forward.x)
+	# Pick the side OPPOSITE the nearest in-range opposing blade.
+	var carry_pos: Vector3 = self_pos + Vector3(forward.x, 0.0, forward.y) * CARRY_BLADE_AIM_FORWARD_M
+	var best_dist: float = INF
+	var threat_lateral: float = 0.0
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if _team_id_by_peer.get(peer_id, -1) == _team_id:
+			continue
+		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var threat_pos: Vector3 = opp_state.blade_contact_world
+		if threat_pos == Vector3.ZERO:
+			threat_pos = opp_state.position
+		var blade_to_puck: Vector3 = threat_pos - carry_pos
+		blade_to_puck.y = 0.0
+		var d: float = blade_to_puck.length()
+		if d < best_dist:
+			best_dist = d
+			threat_lateral = perp.x * blade_to_puck.x + perp.y * blade_to_puck.z
+	# If threat is on the +perp side, cut to -perp (away). Sign 0
+	# (threat dead ahead) keeps default +perp — arbitrary but
+	# better than no cut.
+	if threat_lateral > 0.0:
+		perp = -perp
+	input.move_vector = perp
+
+
 # Shot aim past the goalie's projected shadow. Uses the goalie's
 # predicted position at `release_lookahead_s` from now — defaults to
 # the wrister window for a charged shot, override to 0.0 for a
@@ -2686,6 +2859,8 @@ func _set_state(s: State) -> void:
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
 			_carry_tracking_fire = false
+			_poke_evade_active_ticks = 0
+			_poke_evade_cooldown_ticks = 0
 			_carrier.clear_intent()
 		_state = s
 		_ticks_in_state = 0
