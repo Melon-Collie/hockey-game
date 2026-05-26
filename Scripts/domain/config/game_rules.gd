@@ -131,6 +131,12 @@ const DEFAULT_SKATER_MAX_SPEED_M_S: float = 10.5
 const DEFAULT_STICK_LENGTH_M: float = 1.30
 const DEFAULT_BLADE_LENGTH_M: float = 0.30
 
+# Swept-segment hit radius for poke checks (puck-segment vs blade-segment).
+# Lives in the domain so AI scoring can derive poke-threat geometry without
+# reaching into PuckController. PuckController.POKE_RADIUS is the single
+# consumer at the infrastructure side and aliases this value.
+const POKE_RADIUS_M: float = 0.5
+
 # Wrister/slapper/quick-shot puck release speeds. The puck consumes
 # `direction × power` directly as linear velocity (see Puck.release),
 # so "power" IS m/s. Min and max bracket the charge curve.

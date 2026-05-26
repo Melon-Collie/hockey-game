@@ -151,6 +151,40 @@ const SOFT_HANDS_PUCK_SPEED_MIN_M_S: float = 8.0
 const SOFT_HANDS_DISTANCE_M: float = 1.5
 const SOFT_HANDS_MOVE_SCALE: float = 0.4
 
+# Pass-receive setup. When a fast loose puck (~pass) is heading near
+# us along a straight trajectory, we stand offset to the SIDE of the
+# puck's path so the stick spans perpendicular to the puck's velocity,
+# putting the blade face square to the incoming puck. That maximizes
+# PuckReceptionRules' alignment bonus (+8 m/s deflect tolerance at
+# perfect head-on), letting bots catch hard passes that would
+# otherwise bounce. See _pass_receive_aim_and_steer.
+#
+# Trigger threshold matches the deflect threshold: anything slower
+# bot can collect at any angle, so the angle-optimal setup is
+# unnecessary and would interfere with normal chase.
+const RECEIVE_TRIGGER_PUCK_SPEED_M_S: float = 14.0
+# Perpendicular distance cap. Bots farther than this from the puck's
+# trajectory line don't consider it "their" pass — keeps non-receiver
+# bots out of the setup, lets them keep doing whatever role they're
+# assigned to. Sized generously so we cover any pass that would
+# realistically end up at this bot.
+const RECEIVE_TRIGGER_LATERAL_M: float = 5.0
+# How far to stand SIDEWAYS of the puck's path. Derived from the
+# bot's stick reach so the blade comfortably extends across to meet
+# the puck — sit slightly inside full reach so the IK isn't at the
+# ROM clamp (mirrors BLADE_REACH_M's outward buffer, just signed
+# inward). TODO(per-player attrs): swap DEFAULT_* for this bot's
+# own stick/blade lengths when SkaterAttributes lands.
+const RECEIVE_BODY_INSET_M: float = 0.2
+const RECEIVE_BODY_OFFSET_M: float = (
+		GameRules.DEFAULT_STICK_LENGTH_M
+		+ GameRules.DEFAULT_BLADE_LENGTH_M
+		- RECEIVE_BODY_INSET_M)
+# Bot must reach the body anchor with this fraction of the puck's
+# flight time to spare — otherwise the default lead-intercept (which
+# gets the bot to the puck faster, even if at a worse angle) wins.
+const RECEIVE_TIMING_MARGIN: float = 0.9
+
 # CARRY blade aim distance (m forward in goal direction). Mouse on the
 # goal plane (25+ m away) was useless for stickhandling: a 0.3 m
 # lateral blade shift would need a ~22 m mouse offset. Putting mouse
@@ -168,18 +202,51 @@ const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 # blade gets pushed into the goalie, rebound, repeat. The buffer
 # distance lives on AIRoleHelpers.GOAL_LINE_BUFFER_M (single source).
 
-# Stickhandling: shift the carrier's mouse perpendicular to facing,
-# AWAY from the closest incoming defender. Pulls the puck off-side
-# from where the defender is reaching. Defenders beyond
-# STICKHANDLE_THREAT_RADIUS_M or moving slower than
-# STICKHANDLE_CLOSING_VEL_MIN_M_S don't trigger an offset (they're
-# not really threats). Magnitude scales linearly with proximity —
-# closer threat → larger evade. Per-tick smoothing happens
-# automatically via `_step_mouse_toward` (the unified motion model);
-# no need for offset-specific lerping.
-const STICKHANDLE_THREAT_RADIUS_M: float = 4.0
-const STICKHANDLE_CLOSING_VEL_MIN_M_S: float = 1.0
-const STICKHANDLE_OFFSET_MAX_M: float = 0.5
+# Stickhandling: shift the carrier's mouse perpendicular to the
+# attacking-goal aim, AWAY from the nearest opposing blade. Pulls
+# the puck off-side from where the defender's STICK is reaching —
+# distance is measured blade-tip to puck (matches the poke mechanic),
+# not body to body. Magnitude ramps in over a tight band so the
+# response is decisive when a poke is imminent and silent when no
+# one is close: full offset inside STICKHANDLE_FULL_OFFSET_RADIUS_M,
+# tapering to zero at STICKHANDLE_THREAT_RADIUS_M. Per-tick
+# smoothing happens automatically via `_step_mouse_toward`.
+#
+# Closing-velocity gating was intentionally dropped. A defender
+# standing still with stick extended is just as much a poke threat
+# as one skating in — the old gate left bots open to easy lifts
+# from a coasting defender.
+const STICKHANDLE_THREAT_RADIUS_M: float = 3.0
+const STICKHANDLE_FULL_OFFSET_RADIUS_M: float = 1.5
+const STICKHANDLE_OFFSET_MAX_M: float = 0.8
+
+# Poke-evade lateral cut. Layered on top of the continuous defender-
+# avoidance forces (carrier-weight opp repel in steering, sum-of-
+# forces stickhandle on the blade). Where those handle baseline
+# elusiveness, this is the discrete "deke moment" — when an opponent's
+# blade reaches into immediate poke range from the front, override
+# move_vector with a brief full-thrust perpendicular cut. Defender's
+# poke timed for our current trajectory swings through empty ice.
+#
+# Trigger band sized just outside the stickhandle DANGER_RADIUS
+# (2.1 m) so the cut fires AHEAD of the blade jitter response — we
+# want the body to redirect BEFORE the blade has to do all the work.
+# Front-hemisphere gate is critical: braking/cutting helps when the
+# defender is closing from in front, but a defender chasing from
+# behind would just close faster if we cut sideways.
+const POKE_EVADE_TRIGGER_REACH_M: float = 2.5
+const POKE_EVADE_MIN_CLOSING_VEL_M_S: float = 1.0
+const POKE_EVADE_MIN_SELF_SPEED_M_S: float = 2.0
+# Active window: long enough for a visible cut (body's lateral
+# velocity reaches a few m/s), short enough that anchor attraction
+# pulls us back on line without the bot losing its play. 150 ms ≈
+# 36 ticks at 240 Hz.
+const POKE_EVADE_ACTIVE_TICKS: int = 36
+# Cooldown after evade ends, blocks immediate retrigger. Persistent
+# threats (defender hanging in our face) would otherwise loop us
+# into a constant cut — the cooldown forces us to commit back to
+# normal steering between cuts.
+const POKE_EVADE_COOLDOWN_TICKS: int = 120
 
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
@@ -219,6 +286,11 @@ const BOT_WRISTER_CHARGE_TICKS: int = 60
 # Target accumulated charge_distance at release. SkaterController.
 # max_wrister_charge_distance defaults to 2.0; we aim for half — past
 # the quick-shot threshold (0.2), comfortable power (lerp ≈ 50%).
+# If you retune this, update AIActionScoring.BOT_PASS_CHARGE_RATIO
+# to match (= TARGET / max_wrister_charge_distance). Scoring uses
+# that ratio to derive the assumed charged-pass release speed; a
+# mismatch makes _compute_best_pass score long passes for a speed
+# the state machine doesn't actually fire at.
 const BOT_WRISTER_TARGET_CHARGE: float = 1.0
 # Per-tick mouse_screen_pos delta along the sweep direction.
 # tick_wrister_charge multiplies screen delta by 0.01 * mouse_sensitivity
@@ -250,6 +322,7 @@ const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
 const BOT_PRE_AIM_BUFFER_S: float = 0.01
 const BOT_WRISTER_LOOKAHEAD_S: float = (
 		float(BOT_WRISTER_CHARGE_TICKS) / 240.0 + BOT_PRE_AIM_BUFFER_S)
+
 # Forehand wind-up offset for the visible blade sweep. mouse_world_pos
 # at tick 0 sits BOT_WRISTER_WIND_UP_BACK_M behind the bot along
 # (-aim_dir) and BOT_WRISTER_WIND_UP_SIDE_M to the forehand side
@@ -490,6 +563,30 @@ var _shoot_perp_sign: float = 1.0
 # Locked direction = the bot committed to a target when it picked
 # SHOOT, and follows through.
 var _shoot_aim_dir_locked: Vector3 = Vector3.INF
+
+# Charged-pass bookkeeping. Mirrors the wrister charge structure
+# but with the sweep aimed at the receiver lead, not the goal
+# shadow. Set when the carrier picks PASS with pass_should_charge=
+# true; PASS_PRESSED then holds shoot_held through BOT_WRISTER_CHARGE_TICKS
+# instead of releasing on tick 0. See _state_pass_pressed.
+var _pass_should_charge: bool = false
+var _pass_charge_tick: int = 0
+var _pass_sweep_dir_xy: Vector2 = Vector2.ZERO
+
+# Sticky state for _carry_aim_track_fire's mode (shot-aim vs carry-
+# aim with stickhandle). Without it, when shoot vs carry scores are
+# close, the per-re-eval flip between the two aim targets snaps the
+# blade ~30 Hz (every decide() throttle window, ~33 ms) — visible
+# as a wobble specifically when the bot is "deciding to shoot."
+# Reset on CARRY entry via _set_state.
+var _carry_tracking_fire: bool = false
+
+# Poke-evade lateral cut bookkeeping. While _active > 0, the
+# modulator overrides move_vector with a perpendicular thrust away
+# from the threat side; when it counts down to 0 the cooldown
+# kicks in and blocks retrigger. Both reset on CARRY entry.
+var _poke_evade_active_ticks: int = 0
+var _poke_evade_cooldown_ticks: int = 0
 
 # One-timer readiness mirrored from the most recent OFF_PUCK role
 # decision. Also published to TeamBrain (so the carrier reads it
@@ -932,67 +1029,74 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 
 
 func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	# Lead intercept: aim at where the puck WILL be when we'd actually
-	# arrive, not at where it is now. Per-bot t_arrival (distance / max
-	# speed) means two bots converging on the same loose puck compute
-	# different intercept points, breaking the "both glued to the same
-	# puck position" pattern.
-	var puck_pos: Vector3 = snapshot.puck_state.position
-	var self_vel_3d: Vector3 = Vector3.ZERO
-	var self_state2: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if self_state2 != null:
-		self_vel_3d = self_state2.velocity
-	var target: Vector3 = _lead_intercept(self_pos, self_vel_3d, puck_pos, snapshot.puck_state.velocity)
-	# Angling: when an OPPONENT carries the puck, shift the intercept
-	# toward center-ice so we approach from the inside and force them to
-	# the boards. Loose pucks get the raw intercept — there's no carrier
-	# to angle off of. Teammate-carried case is filtered upstream by the
-	# F1→OFF_PUCK transition, so by the time we reach here a non-(-1)
-	# carrier is necessarily an opponent.
-	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
-	if carrier_pid != -1 and carrier_pid != _peer_id:
-		var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier_pid)
-		if carrier_state != null:
-			target = _angle_intercept_inside(target, carrier_state.position)
-	_apply_steering(input, snapshot, self_pos, target)
+	# Pass-receive setup: if a fast loose puck is heading near our
+	# trajectory, stand perpendicular to its path for an angle-optimal
+	# catch instead of chasing the puck position (default lead-intercept
+	# gives the wrong stick orientation for the alignment bonus). The
+	# helper returns false when the scenario doesn't apply and we fall
+	# through to the default chase.
+	if not _pass_receive_aim_and_steer(input, snapshot, self_pos):
+		# Lead intercept: aim at where the puck WILL be when we'd actually
+		# arrive, not at where it is now. Per-bot t_arrival (distance / max
+		# speed) means two bots converging on the same loose puck compute
+		# different intercept points, breaking the "both glued to the same
+		# puck position" pattern.
+		var puck_pos: Vector3 = snapshot.puck_state.position
+		var self_vel_3d: Vector3 = Vector3.ZERO
+		var self_state2: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+		if self_state2 != null:
+			self_vel_3d = self_state2.velocity
+		var target: Vector3 = _lead_intercept(self_pos, self_vel_3d, puck_pos, snapshot.puck_state.velocity)
+		# Angling: when an OPPONENT carries the puck, shift the intercept
+		# toward center-ice so we approach from the inside and force them to
+		# the boards. Loose pucks get the raw intercept — there's no carrier
+		# to angle off of. Teammate-carried case is filtered upstream by the
+		# F1→OFF_PUCK transition, so by the time we reach here a non-(-1)
+		# carrier is necessarily an opponent.
+		var carrier_pid: int = snapshot.puck_state.carrier_peer_id
+		if carrier_pid != -1 and carrier_pid != _peer_id:
+			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier_pid)
+			if carrier_state != null:
+				target = _angle_intercept_inside(target, carrier_state.position)
+		_apply_steering(input, snapshot, self_pos, target)
 
-	# Soft-hands: when receiving a fast loose puck (incoming pass) and
-	# we're within SOFT_HANDS_DISTANCE_M of the intercept, scale the
-	# move input down so the bot arrives at low speed instead of
-	# plowing into a 22 m/s puck. A ~10 m/s body collision against a
-	# fast puck deflects it off the blade rather than catching it;
-	# reducing closing speed lets the puck "roll onto" the stick.
-	# Carrier check ensures we're not soft-handing during a stripped-
-	# puck scrum (where opp possession is also -1 in the brief moment
-	# after stripping but the puck is slow). Bot-velocity check
-	# avoids the case where we're not actually moving toward the puck.
-	var puck_velocity: Vector3 = snapshot.puck_state.velocity
-	var puck_speed_xz: float = sqrt(puck_velocity.x * puck_velocity.x
-			+ puck_velocity.z * puck_velocity.z)
-	if carrier_pid == -1 and puck_speed_xz > SOFT_HANDS_PUCK_SPEED_MIN_M_S:
-		var dist_to_intercept: float = self_pos.distance_to(target)
-		if dist_to_intercept < SOFT_HANDS_DISTANCE_M:
-			input.move_vector *= SOFT_HANDS_MOVE_SCALE
+		# Soft-hands: when receiving a fast loose puck (incoming pass) and
+		# we're within SOFT_HANDS_DISTANCE_M of the intercept, scale the
+		# move input down so the bot arrives at low speed instead of
+		# plowing into a 22 m/s puck. A ~10 m/s body collision against a
+		# fast puck deflects it off the blade rather than catching it;
+		# reducing closing speed lets the puck "roll onto" the stick.
+		# Carrier check ensures we're not soft-handing during a stripped-
+		# puck scrum (where opp possession is also -1 in the brief moment
+		# after stripping but the puck is slow). Bot-velocity check
+		# avoids the case where we're not actually moving toward the puck.
+		var puck_velocity: Vector3 = snapshot.puck_state.velocity
+		var puck_speed_xz: float = sqrt(puck_velocity.x * puck_velocity.x
+				+ puck_velocity.z * puck_velocity.z)
+		if carrier_pid == -1 and puck_speed_xz > SOFT_HANDS_PUCK_SPEED_MIN_M_S:
+			var dist_to_intercept: float = self_pos.distance_to(target)
+			if dist_to_intercept < SOFT_HANDS_DISTANCE_M:
+				input.move_vector *= SOFT_HANDS_MOVE_SCALE
 
-	# Aim: normally blade-on-intercept, but during the engagement cooldown
-	# (just got stripped or just stick-checked someone) pull the blade
-	# back to our body so the puck can settle without auto-magnetting
-	# back to us. Once the puck is inside our blade reach, snap the aim
-	# to the puck's ACTUAL position — leading at this range puts the
-	# blade past a puck that's already on our stick. For fast loose
-	# pucks (incoming passes), aim at the puck's CURRENT position even
-	# from far out — the blade tracks the puck along its flight line so
-	# it's always on the path the puck is travelling, instead of pointing
-	# at the destination point and snapping onto the puck only at the
-	# end of the approach.
-	if _engagement_cooldown > 0:
-		input.mouse_world_pos = _step_mouse_toward(Vector3(self_pos.x, 0.0, self_pos.z))
-	elif self_pos.distance_to(puck_pos) <= BLADE_REACH_M:
-		input.mouse_world_pos = _step_mouse_toward(puck_pos)
-	elif carrier_pid == -1 and puck_speed_xz > SOFT_HANDS_PUCK_SPEED_MIN_M_S:
-		input.mouse_world_pos = _step_mouse_toward(puck_pos)
-	else:
-		input.mouse_world_pos = _step_mouse_toward(target)
+		# Aim: normally blade-on-intercept, but during the engagement cooldown
+		# (just got stripped or just stick-checked someone) pull the blade
+		# back to our body so the puck can settle without auto-magnetting
+		# back to us. Once the puck is inside our blade reach, snap the aim
+		# to the puck's ACTUAL position — leading at this range puts the
+		# blade past a puck that's already on our stick. For fast loose
+		# pucks (incoming passes), aim at the puck's CURRENT position even
+		# from far out — the blade tracks the puck along its flight line so
+		# it's always on the path the puck is travelling, instead of pointing
+		# at the destination point and snapping onto the puck only at the
+		# end of the approach.
+		if _engagement_cooldown > 0:
+			input.mouse_world_pos = _step_mouse_toward(Vector3(self_pos.x, 0.0, self_pos.z))
+		elif self_pos.distance_to(puck_pos) <= BLADE_REACH_M:
+			input.mouse_world_pos = _step_mouse_toward(puck_pos)
+		elif carrier_pid == -1 and puck_speed_xz > SOFT_HANDS_PUCK_SPEED_MIN_M_S:
+			input.mouse_world_pos = _step_mouse_toward(puck_pos)
+		else:
+			input.mouse_world_pos = _step_mouse_toward(target)
 	# Transitions: chase ends as soon as someone has the puck, OR we're
 	# no longer the closest teammate (let the new closest take over).
 	# One-timer takes priority — if the FINISHER published ready and the
@@ -1005,12 +1109,91 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		_set_state(State.OFF_PUCK)
 
 
+# Pass-receive sub-behavior. When a fast loose puck is heading along
+# a straight trajectory near us, set up perpendicular to the puck's
+# path instead of chasing the puck position. Body stands offset to
+# the side; stick reaches across to meet the puck on the path; blade
+# face opens to the puck's incoming direction → maximum alignment
+# bonus from PuckReceptionRules.
+#
+# Returns true if the helper handled the tick (caller skips default
+# chase aim/steer). Returns false when the scenario doesn't apply —
+# puck too slow, puck behind us, lateral too far, or we can't reach
+# the receive position in time.
+#
+# v1 uses constant-velocity puck math instead of the friction-aware
+# AITrajectory.predict_puck that lead-intercept uses. Fine for short
+# receive windows where the speed drop is small; for very long
+# stretch passes (>1 s flight) the puck arrives slower than
+# predicted and the timing margin gives us slack.
+func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	if snapshot.puck_state.carrier_peer_id != -1:
+		return false
+	var puck_vel: Vector3 = snapshot.puck_state.velocity
+	var puck_speed_sq: float = puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z
+	if puck_speed_sq < RECEIVE_TRIGGER_PUCK_SPEED_M_S * RECEIVE_TRIGGER_PUCK_SPEED_M_S:
+		return false
+	var puck_speed: float = sqrt(puck_speed_sq)
+	var puck_dir: Vector3 = Vector3(puck_vel.x / puck_speed, 0.0, puck_vel.z / puck_speed)
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	# Signed distance from puck along its travel direction to the foot
+	# of perpendicular from self_pos. t > 0: foot is ahead of the puck
+	# (puck still has to travel to reach our level). t <= 0: puck has
+	# already passed us — chase from behind instead.
+	var to_self: Vector3 = self_pos - puck_pos
+	to_self.y = 0.0
+	var t: float = to_self.dot(puck_dir)
+	if t <= 0.0:
+		return false
+	var perp_foot: Vector3 = puck_pos + puck_dir * t
+	var perp_off: Vector3 = self_pos - perp_foot
+	perp_off.y = 0.0
+	var perp_dist: float = perp_off.length()
+	if perp_dist > RECEIVE_TRIGGER_LATERAL_M:
+		return false
+	# Lateral direction: which side of the line the bot is on. Picking
+	# the bot's current side minimizes skating distance. Degenerate
+	# case (bot exactly on the line) — pick an arbitrary perpendicular
+	# so the body still steps off the path for a clean stick angle.
+	var lateral: Vector3
+	if perp_dist > 0.001:
+		lateral = perp_off / perp_dist
+	else:
+		lateral = Vector3(-puck_dir.z, 0.0, puck_dir.x)
+	var body_anchor: Vector3 = perp_foot + lateral * RECEIVE_BODY_OFFSET_M
+	# Timing gate: do we have time to reach body_anchor before the puck
+	# arrives at perp_foot? If not, default lead-intercept will get us
+	# closer (even if at a worse angle) — bail and let it run.
+	var puck_eta: float = t / puck_speed
+	var self_vel: Vector3 = Vector3.ZERO
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state != null:
+		self_vel = self_state.velocity
+	var bot_eta: float = AIActionScoring.time_to_arrive(self_pos, body_anchor, self_vel)
+	if bot_eta > puck_eta * RECEIVE_TIMING_MARGIN:
+		return false
+	# Commit. Steer body to body_anchor; soft-hands to arrive at rest.
+	_apply_steering(input, snapshot, self_pos, body_anchor)
+	if self_pos.distance_to(body_anchor) < SOFT_HANDS_DISTANCE_M:
+		input.move_vector *= SOFT_HANDS_MOVE_SCALE
+	# Aim: blade target tracks the puck along its flight line, one
+	# tick ahead to compensate for IK convergence lag. As the puck
+	# approaches perp_foot, the mouse follows it; body sits offset
+	# perpendicular, so the stick stays roughly perpendicular to the
+	# puck's velocity throughout the approach.
+	var blade_target: Vector3 = puck_pos + puck_vel * MOUSE_TICK_DELTA
+	blade_target.y = 0.0
+	input.mouse_world_pos = _step_mouse_toward(blade_target)
+	return true
+
+
 func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	if not have_puck:
 		_carrier.reset()
 		_intended_action = State.CARRY
 		_intent_wait_ticks = 0
 		_pass_target_peer_id = -1
+		_pass_should_charge = false
 		_shot_is_elevated = false
 		_locked_pre_aim_point = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
@@ -1031,6 +1214,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# they need to stay fresh.
 	_last_carry_anchor = _carrier.last_carry_anchor
 	_pass_target_peer_id = _carrier.pass_target_peer_id
+	_pass_should_charge = _carrier.pass_should_charge
 	_shot_is_elevated = _carrier.shot_is_elevated
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
@@ -1100,6 +1284,11 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# PASS_PRESSED: brake. Pass leads aim from a held spot.
 	if _intended_action == State.CARRY:
 		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+		# Discrete "deke moment" on top of continuous body steering:
+		# brief perpendicular cut away from an imminent poke threat.
+		# Pre-aim states (SHOOT/PASS pending) skip this — they have
+		# their own steering targets that the cut would override.
+		_poke_evade_modulate_steering(input, snapshot, self_pos)
 	elif _intended_action == State.SHOOT_PRESSED:
 		var hv: Vector3 = Vector3.ZERO
 		if self_state != null:
@@ -1497,6 +1686,14 @@ func _shoot_compensated_aim_dir(aim_dir: Vector3) -> Vector3:
 
 
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	# Lost the puck mid-charge — bail. Mirrors SHOOT_PRESSED's bail
+	# path; release-without-puck is a no-op on the controller side.
+	if not have_puck:
+		_pass_target_peer_id = -1
+		_pass_should_charge = false
+		_set_state(_post_puck_lost_state(snapshot))
+		return
+
 	_apply_brake_steering(input, snapshot, self_pos)
 	# Resolve the receiver's slot label NOW for the debug readout —
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
@@ -1504,24 +1701,70 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	var target_slot_label: String = "?"
 	if _team_brain != null and _pass_target_peer_id != -1:
 		target_slot_label = _slot_label(_team_brain.get_slot(_pass_target_peer_id))
-	debug_last_decision = "PASS→%s" % target_slot_label
-	# Aim at the receiver's lead position. Quick-shot direction is
-	# blade-from-player at release, and the blade IK swings toward
-	# mouse_world_pos — so this fires the puck along the bot→receiver
-	# vector.
+	# Aim point is the receiver's lead — speed-aware via
+	# _pass_aim_point so a charged pass leads less than a quick-shot
+	# (puck arrives sooner, receiver covers less ground in flight).
 	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
 	input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
-	input.shoot_pressed = true
-	input.shoot_held = true
-	# v2: give-and-go cut sub-mode is removed. After the pass, the bot
-	# falls back to its slot anchor for the new state (likely SUPPORT
-	# or SPRINT_BY in TRANS_DO).
-	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
-	# either way so a future PASS picks a fresh one.
-	_pass_target_peer_id = -1
-	if not have_puck:
-		_set_state(_post_puck_lost_state(snapshot))
+
+	if not _pass_should_charge:
+		# ── Quick-shot pass: one-tick release ──
+		debug_last_decision = "PASS→%s" % target_slot_label
+		input.shoot_pressed = true
+		input.shoot_held = true
+		# Same one-tick-then-exit pattern as before. Clear target so
+		# a future PASS picks a fresh one.
+		_pass_target_peer_id = -1
+		_set_state(State.CARRY)
+		return
+
+	# ── Charged wrister pass ──
+	# Mid-charge bail: opponent closes in from the front during the
+	# windup. Same logic as SHOOT_PRESSED bail — getting blasted mid-
+	# windup is worse than not firing. Skipped on tick 0 (just committed).
+	if _pass_charge_tick > 0:
+		var receiver_state: SkaterNetworkState = snapshot.skater_states.get(_pass_target_peer_id)
+		if receiver_state != null:
+			var forward: Vector3 = receiver_state.position - self_pos
+			if _opponent_within_forward(snapshot, self_pos, forward, BOT_WRISTER_BAIL_RADIUS_M):
+				input.block_held = true
+				_pass_target_peer_id = -1
+				_pass_should_charge = false
+				_set_state(State.CARRY)
+				return
+
+	debug_last_decision = "PASS+→%s" % target_slot_label
+
+	if _pass_charge_tick == 0:
+		# Capture the sweep direction = direction toward receiver lead.
+		# This is the screen-space drag direction that becomes the puck's
+		# release direction (see SHOOT_PRESSED — sweep dir → prev_blade_dir
+		# at release → release direction). Use clean_pass_aim, not the
+		# stepped mouse, so a single-tick mouse residual can't tilt it.
+		var sweep: Vector3 = clean_pass_aim - self_pos
+		sweep.y = 0.0
+		if sweep.length_squared() > 0.0001:
+			sweep = sweep.normalized()
+			_pass_sweep_dir_xy = Vector2(sweep.x, sweep.z)
+		input.shoot_pressed = true
+
+	# Walk mouse_screen_pos along the sweep direction so SkaterAimingBehavior
+	# accumulates charge_distance — same formula as SHOOT_PRESSED so the
+	# charge hits BOT_WRISTER_TARGET_CHARGE at the release tick.
+	var sens: float = maxf(PlayerPrefs.mouse_sensitivity, 0.01)
+	input.mouse_screen_pos = (
+			_pass_sweep_dir_xy * (BOT_WRISTER_SCREEN_DELTA_PER_TICK * float(_pass_charge_tick) / sens))
+
+	if _pass_charge_tick < BOT_WRISTER_CHARGE_TICKS:
+		input.shoot_held = true
+		_pass_charge_tick += 1
 	else:
+		# Release: shoot_held drops, controller's wrister_aim sees the
+		# falling edge and fires release_wrister with accumulated
+		# charge_distance and sweep direction.
+		input.shoot_held = false
+		_pass_target_peer_id = -1
+		_pass_should_charge = false
 		_set_state(State.CARRY)
 
 
@@ -1703,8 +1946,17 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	if receiver == null:
 		return _attacking_goal_pos
 	var dist: float = self_pos.distance_to(receiver.position)
+	# Speed-aware lead: charged passes arrive faster, so the receiver
+	# covers less ground in flight — leading at the quick-shot speed
+	# would over-lead by ~36% (19/14 - 1) and the puck would sail past.
+	# Reads the captured _pass_should_charge flag rather than
+	# recomputing from distance: the speed locked in at intent
+	# commit is what the controller will actually fire at.
+	var pass_speed: float = (AIActionScoring.PASS_CHARGE_SPEED_M_S
+			if _pass_should_charge
+			else AIActionScoring.PASS_SPEED_M_S)
 	var flight_t: float = clampf(
-			dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
+			dist / pass_speed, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
 	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
 	return _predict_receiver(receiver, flight_t, accel)
 
@@ -1789,10 +2041,17 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 						SHOT_LANE_LEAD_TIME_S)
 				lane_end = _attacking_goal_pos
 
+	# Carrier-specific repel boost: when WE have the puck, weight defender
+	# proximity much more heavily so the body curves around poke threats
+	# instead of skating past them. Off-puck bots use the default.
+	var opp_repel: float = AISteering.OPPONENT_REPEL_WEIGHT
+	if carrier == _peer_id:
+		opp_repel = AISteering.OPPONENT_REPEL_WEIGHT_CARRY
 	var desired: Vector2 = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
-			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH)
+			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH,
+			opp_repel)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
 	# direction (~180° transition), it's faster to brake and reverse than
@@ -1858,7 +2117,27 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 	# pre-track is fine; the press state itself uses the right
 	# lookahead per shot type.
 	var best_shot_score: float = maxf(debug_shoot_score, debug_quick_shot_score)
-	if best_shot_score < FIRE_AIM_THRESHOLD or best_shot_score < debug_pass_score:
+	# Hysteresis on the tracking-fire decision: once we're tracking
+	# the shot, require the shot score to drop meaningfully below
+	# threshold (or below pass score) before falling back to carry
+	# aim. Without this margin the per-re-eval flip between the two
+	# aim modes wobbles the blade at ~30 Hz when the bot is deciding
+	# to shoot. Margin direction is signed by _carry_tracking_fire so
+	# entry requires being CLEARLY past the thresholds; exit requires
+	# being CLEARLY below them.
+	var margin: float = AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	var threshold_gate: float
+	var pass_gate: float
+	if _carry_tracking_fire:
+		threshold_gate = FIRE_AIM_THRESHOLD - margin
+		pass_gate = debug_pass_score - margin
+	else:
+		threshold_gate = FIRE_AIM_THRESHOLD + margin
+		pass_gate = debug_pass_score + margin
+	var should_track: bool = (best_shot_score >= threshold_gate
+			and best_shot_score >= pass_gate)
+	_carry_tracking_fire = should_track
+	if not should_track:
 		return _carry_mouse_aim(snapshot, self_pos)
 	return _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
 
@@ -1916,46 +2195,202 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
-# Finds the closest opponent that's both within STICKHANDLE_THREAT_RADIUS_M
-# AND closing on us at STICKHANDLE_CLOSING_VEL_MIN_M_S+. Returns an XZ
-# offset perpendicular to `forward_dir`, in the direction OPPOSITE
-# the threat's lateral side, with magnitude scaling linearly with
-# proximity (closer threat → larger offset, capped at
-# STICKHANDLE_OFFSET_MAX_M). Returns Vector3.ZERO if no qualifying
-# threat is in range.
+# Sums signed-lateral forces from every opposing blade within
+# STICKHANDLE_THREAT_RADIUS_M of our puck (carry-arm extension
+# forward of body), each weighted by its distance ramp. Returns
+# an XZ offset perpendicular to `forward_dir`, away from the
+# threat side, clamped to STICKHANDLE_OFFSET_MAX_M magnitude.
+#
+# Summing instead of picking-nearest-then-flipping kills the jitter
+# the earlier nearest-threat version produced when surrounded: the
+# "nearest" could swap between defenders per tick, snapping the
+# offset between full-left and full-right. With a sum, opposite-side
+# threats cancel (nowhere safe to go, blade holds central — correct
+# tactically) and same-side threats reinforce (clamped at the same
+# per-tick max as before). Threats nearly directly ahead contribute
+# near-zero lateral instead of sign-flipping at the perpendicular
+# boundary.
+#
+# Uses `opp_state.blade_contact_world` — host-only field, populated
+# for every skater on the host. Bots only run on the host
+# (AIController is host-gated via PlayerRegistry.spawn_bot), so this
+# read is safe; the ZERO-check below covers the first-tick window
+# before SkaterController has populated it.
 func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir: Vector3) -> Vector3:
 	# Right-axis (XZ): forward rotated 90° CW around Y.
 	var right_axis: Vector3 = Vector3(forward_dir.z, 0.0, -forward_dir.x)
-	var best_lateral: float = 0.0
-	var best_dist: float = INF
+	# Carrier's puck sits near the blade target, ~CARRY_BLADE_AIM_FORWARD_M
+	# forward of the body. Measure threat distance from THIS point so we
+	# react to actual stick-on-puck reach, not stick-on-body distance.
+	var carry_pos: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
+	# Accumulated lateral force in [-summed, +summed]. Positive = pull
+	# toward +right_axis (because we negate per-threat lateral_unit:
+	# threat on right → lateral_unit > 0 → contribution -ramp ×
+	# lateral_unit < 0 → pulls puck to the left, away from threat).
+	# Clamped post-sum so multiple same-side threats don't push past
+	# the per-tick max offset.
+	var lateral_force: float = 0.0
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
 		if _team_id_by_peer.get(peer_id, -1) == _team_id:
 			continue
 		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
-		var to_opp: Vector3 = opp_state.position - self_pos
-		to_opp.y = 0.0
-		var dist: float = to_opp.length()
+		var threat_pos: Vector3 = opp_state.blade_contact_world
+		if threat_pos == Vector3.ZERO:
+			threat_pos = opp_state.position
+		var to_threat: Vector3 = threat_pos - carry_pos
+		to_threat.y = 0.0
+		var dist: float = to_threat.length()
 		if dist > STICKHANDLE_THREAT_RADIUS_M or dist < 0.001:
 			continue
-		# Closing velocity: component of opponent's velocity in the
-		# TOWARD-ME direction. Static or fleeing opponents don't
-		# trigger evasion.
-		var to_opp_norm: Vector3 = to_opp / dist
-		var closing_vel: float = -opp_state.velocity.dot(to_opp_norm)
-		if closing_vel < STICKHANDLE_CLOSING_VEL_MIN_M_S:
+		# Per-threat distance ramp: full inside the inner radius,
+		# tapering linearly to zero at the outer radius.
+		var ramp: float = clampf(inverse_lerp(
+				STICKHANDLE_THREAT_RADIUS_M,
+				STICKHANDLE_FULL_OFFSET_RADIUS_M,
+				dist), 0.0, 1.0)
+		# Lateral component of the unit direction TOWARD the threat in
+		# [-1, 1]. Direct-ahead → ~0, direct-side → ±1. Multiplying
+		# by ramp gives a smooth per-threat contribution; summing
+		# blends all of them.
+		var lateral_unit: float = right_axis.dot(to_threat) / dist
+		lateral_force -= lateral_unit * ramp
+	var magnitude: float = clampf(lateral_force, -1.0, 1.0) * STICKHANDLE_OFFSET_MAX_M
+	return right_axis * magnitude
+
+
+# Poke-evade lateral cut. Overrides input.move_vector with a brief
+# perpendicular thrust away from an imminent poke threat. Continuous
+# defender avoidance (opponent repel in body steering + stickhandle
+# offset on the blade) handles the baseline; this is the discrete
+# "deke moment" when a defender's blade is close enough that a poke
+# is imminent — full lateral thrust for POKE_EVADE_ACTIVE_TICKS
+# breaks the defender's projected interception line.
+#
+# Lifecycle (counters live on the state machine, both reset on
+# CARRY entry):
+#   - Active > 0: brake mid-evade. Decrement; on hitting 0, kick
+#     off the cooldown.
+#   - Cooldown > 0: no retrigger. Decrement; fall through to normal
+#     steering so anchor attraction pulls us back on line.
+#   - Both zero: scan for trigger. First qualifying opp activates.
+#
+# Trigger criteria (ALL must hold):
+#   - Own velocity ≥ POKE_EVADE_MIN_SELF_SPEED_M_S (cutting from
+#     near-standstill is pointless and just looks like a wiggle).
+#   - Opp blade within POKE_EVADE_TRIGGER_REACH_M of our puck.
+#   - Opp in our FRONT hemisphere relative to our velocity (cutting
+#     when defender chases from behind would just help them catch up).
+#   - Opp closing along the line between us ≥ MIN_CLOSING_VEL_M_S
+#     (static opponents don't need a deke).
+func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	if _poke_evade_active_ticks > 0:
+		_apply_poke_evade_cut(input, snapshot, self_pos)
+		_poke_evade_active_ticks -= 1
+		if _poke_evade_active_ticks == 0:
+			_poke_evade_cooldown_ticks = POKE_EVADE_COOLDOWN_TICKS
+		return
+	if _poke_evade_cooldown_ticks > 0:
+		_poke_evade_cooldown_ticks -= 1
+		return
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return
+	var vel_xz := Vector2(self_state.velocity.x, self_state.velocity.z)
+	var speed: float = vel_xz.length()
+	if speed < POKE_EVADE_MIN_SELF_SPEED_M_S:
+		return
+	var forward: Vector2 = vel_xz / speed
+	# Puck pos approximation — same carry-arm offset the stickhandle
+	# uses, so the trigger band is consistent across the two defenses.
+	var forward_3d := Vector3(forward.x, 0.0, forward.y)
+	var carry_pos: Vector3 = self_pos + forward_3d * CARRY_BLADE_AIM_FORWARD_M
+	var trigger_threat: SkaterNetworkState = null
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
 			continue
-		if dist < best_dist:
-			best_dist = dist
-			best_lateral = right_axis.dot(to_opp)
-	if best_dist == INF or absf(best_lateral) < 0.01:
-		return Vector3.ZERO
-	var magnitude: float = STICKHANDLE_OFFSET_MAX_M * (1.0 - clampf(
-			best_dist / STICKHANDLE_THREAT_RADIUS_M, 0.0, 1.0))
-	# Pull AWAY from threat's lateral side. If threat is on right
-	# (positive lateral dot), offset is -right (pulls puck left).
-	return -right_axis * signf(best_lateral) * magnitude
+		if _team_id_by_peer.get(peer_id, -1) == _team_id:
+			continue
+		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var threat_pos: Vector3 = opp_state.blade_contact_world
+		if threat_pos == Vector3.ZERO:
+			threat_pos = opp_state.position
+		var blade_to_puck: Vector3 = threat_pos - carry_pos
+		blade_to_puck.y = 0.0
+		if blade_to_puck.length() > POKE_EVADE_TRIGGER_REACH_M:
+			continue
+		# Front-hemisphere gate vs OUR velocity direction (not facing).
+		# The defender's poke is timed for where we're MOVING, not
+		# where we're looking — and the brief cut breaks momentum
+		# projection. Defender body relative to us, dotted with our
+		# velocity dir, must be positive (defender is "ahead").
+		var to_opp_3d: Vector3 = opp_state.position - self_pos
+		to_opp_3d.y = 0.0
+		var to_opp_len: float = to_opp_3d.length()
+		if to_opp_len < 0.001:
+			continue
+		var to_opp_norm: Vector3 = to_opp_3d / to_opp_len
+		if to_opp_norm.x * forward.x + to_opp_norm.z * forward.y <= 0.0:
+			continue
+		# Closing velocity along the bot-to-opp line.
+		var closing: float = -opp_state.velocity.dot(to_opp_norm)
+		if closing < POKE_EVADE_MIN_CLOSING_VEL_M_S:
+			continue
+		trigger_threat = opp_state
+		break
+	if trigger_threat == null:
+		return
+	_poke_evade_active_ticks = POKE_EVADE_ACTIVE_TICKS
+	_apply_poke_evade_cut(input, snapshot, self_pos)
+
+
+# Sets input.move_vector to a perpendicular thrust away from the
+# threat side. Picks the perpendicular relative to current velocity
+# (not facing) so the body redirects from where it's actually going.
+# Side selection: perpendicular pointing AWAY from the same threat
+# that triggered the evade. If the trigger threat has moved out of
+# range mid-evade, fall back to the nearest remaining opp; if none,
+# pick an arbitrary perpendicular so the cut still resolves rather
+# than collapsing to no input mid-window.
+func _apply_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return
+	var vel_xz := Vector2(self_state.velocity.x, self_state.velocity.z)
+	if vel_xz.length_squared() < 0.0001:
+		# Degenerate: bot has bled almost all forward speed. No
+		# meaningful "perpendicular." Leave move_vector untouched —
+		# default steering will reaccelerate, cut window will expire.
+		return
+	var forward: Vector2 = vel_xz.normalized()
+	# 90° CCW rotation in XZ → "left" of forward.
+	var perp := Vector2(-forward.y, forward.x)
+	# Pick the side OPPOSITE the nearest in-range opposing blade.
+	var carry_pos: Vector3 = self_pos + Vector3(forward.x, 0.0, forward.y) * CARRY_BLADE_AIM_FORWARD_M
+	var best_dist: float = INF
+	var threat_lateral: float = 0.0
+	for peer_id: int in snapshot.skater_states:
+		if peer_id == _peer_id:
+			continue
+		if _team_id_by_peer.get(peer_id, -1) == _team_id:
+			continue
+		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var threat_pos: Vector3 = opp_state.blade_contact_world
+		if threat_pos == Vector3.ZERO:
+			threat_pos = opp_state.position
+		var blade_to_puck: Vector3 = threat_pos - carry_pos
+		blade_to_puck.y = 0.0
+		var d: float = blade_to_puck.length()
+		if d < best_dist:
+			best_dist = d
+			threat_lateral = perp.x * blade_to_puck.x + perp.y * blade_to_puck.z
+	# If threat is on the +perp side, cut to -perp (away). Sign 0
+	# (threat dead ahead) keeps default +perp — arbitrary but
+	# better than no cut.
+	if threat_lateral > 0.0:
+		perp = -perp
+	input.move_vector = perp
 
 
 # Shot aim past the goalie's projected shadow. Uses the goalie's
@@ -2398,6 +2833,9 @@ func _set_state(s: State) -> void:
 			_shoot_charge_tick = 0
 			_shoot_sweep_dir_xy = Vector2.ZERO
 			_shoot_aim_dir_locked = Vector3.INF
+		if s == State.PASS_PRESSED:
+			_pass_charge_tick = 0
+			_pass_sweep_dir_xy = Vector2.ZERO
 		if s == State.ONE_TIMER_PRESSED:
 			_one_timer_press_tick = 0
 		# Intent + wait counter reset on CARRY entry so a new puck
@@ -2408,6 +2846,9 @@ func _set_state(s: State) -> void:
 		if s == State.CARRY:
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
+			_carry_tracking_fire = false
+			_poke_evade_active_ticks = 0
+			_poke_evade_cooldown_ticks = 0
 			_carrier.clear_intent()
 		_state = s
 		_ticks_in_state = 0

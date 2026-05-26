@@ -66,10 +66,13 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue
+		# Match the speed our carrier would actually fire at (see
+		# finisher.gd for rationale).
+		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
 		var pass_value: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
 				goalie_pos, GameRules.NET_HALF_WIDTH,
-				opp_positions)
+				opp_positions, Vector3.INF, pass_speed)
 		var exposure: float = _exposure(c, our_net, min_opp_time_home)
 		var score: float = pass_value * (1.0 - exposure)
 		if score > best_score:

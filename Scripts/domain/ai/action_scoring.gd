@@ -174,11 +174,52 @@ const LANE_REACTION_RAMP_S: float = 0.10
 # linear velocity directly (see Puck.release), so "power" IS m/s.
 # Sourced from GameRules so the AI's lane reaction window matches
 # the live shot mechanics. score_shoot defaults to wrister speed;
-# score_pass uses pass speed (which is quick_shot_power — passes
-# in this codebase are mechanically quick-shots).
+# score_pass uses pass speed (which is quick_shot_power — short
+# passes in this codebase are mechanically quick-shots, long ones
+# get wrister-charged for more pace — see PASS_CHARGE_SPEED_M_S /
+# expected_pass_speed).
 const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
+
+# Bot's wrister charge ratio (target charge / max charge distance).
+# Mirrors BOT_WRISTER_TARGET_CHARGE / SkaterController.max_wrister_
+# charge_distance defaults (1.0 / 2.0). Domain layer can't reference
+# the application-side constants directly, so the ratio is duplicated
+# here — must stay in sync. If you retune the bot's wrister target
+# (skater_agent_state_machine.gd: BOT_WRISTER_TARGET_CHARGE), update
+# this value to match.
+const BOT_PASS_CHARGE_RATIO: float = 0.5
+
+# Charged wrister pass release speed. Bots fire long passes (distance
+# > LONG_PASS_DISTANCE_THRESHOLD_M) at this speed instead of the
+# quick-shot PASS_SPEED_M_S — see SkaterAgentStateMachine's
+# PASS_PRESSED branch. Defensive threat modeling assumes opponents
+# play the same way.
+const PASS_CHARGE_SPEED_M_S: float = (
+		GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
+		+ (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+				- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
+		* BOT_PASS_CHARGE_RATIO)
+
+# Pass distance threshold above which the carrier wrister-charges
+# (and threat modeling assumes opponents do the same). At 19 m/s vs
+# 14, the charged version meaningfully shrinks defender reaction
+# windows past ~10 m; below this, snap-passes are simpler and the
+# windup commit isn't worth it.
+const LONG_PASS_DISTANCE_THRESHOLD_M: float = 10.0
+
+
+# Returns the speed a pass from `shooter` to `receiver` will fire at.
+# Above LONG_PASS_DISTANCE_THRESHOLD_M, the carrier charges the
+# wrister (release ≈ PASS_CHARGE_SPEED_M_S); below it, snap-pass
+# (PASS_SPEED_M_S). Used by both offensive scoring (carrier picking
+# the right speed for lead / lane math) and defensive scoring
+# (threat_surface_pass assuming opponents play the same way).
+static func expected_pass_speed(shooter: Vector3, receiver: Vector3) -> float:
+	if shooter.distance_to(receiver) > LONG_PASS_DISTANCE_THRESHOLD_M:
+		return PASS_CHARGE_SPEED_M_S
+	return PASS_SPEED_M_S
 
 # Reference top skating speed. Single source of truth shared with
 # SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.
@@ -454,12 +495,18 @@ static func score_pass(
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
 		opponents: Array[Vector3],
-		goalie_current_pos: Vector3 = Vector3.INF) -> float:
+		goalie_current_pos: Vector3 = Vector3.INF,
+		pass_speed_m_s: float = PASS_SPEED_M_S) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
 		return 0.0
-	var lane: float = _lane_clear(shooter, receiver, opponents, PASS_SPEED_M_S)
+	# Lane-clear's reaction window scales with puck flight time, so
+	# passing the actual fire speed matters: a charged pass at ~19 m/s
+	# gives defenders 36% less reaction time than the quick-shot
+	# default. Caller picks via expected_pass_speed(shooter, receiver)
+	# when the distance gate is appropriate.
+	var lane: float = _lane_clear(shooter, receiver, opponents, pass_speed_m_s)
 	if lane <= 0.0:
 		return 0.0
 	# Receiver's value as a shooter from where they are. Caller is
@@ -685,12 +732,160 @@ static func threat_surface_pass(
 		defenders: Array[Vector3]) -> float:
 	if pass_lane_blocked_by_net(carrier_pos, receiver_pos):
 		return 0.0
+	# Assume the opponent would fire this hypothetical pass at the
+	# speed our bots would — charged wrister for long passes, quick-
+	# shot otherwise. Without this, the carrier-quick-shot 14 m/s
+	# default would overestimate defender reaction time on long
+	# opponent passes and underestimate the threat.
+	var pass_speed: float = expected_pass_speed(carrier_pos, receiver_pos)
 	var pass_score: float = score_pass(
 			carrier_pos, receiver_pos, our_net, our_goalie_pos,
-			net_half_width, defenders)
-	var lane: float = _lane_clear(carrier_pos, receiver_pos, defenders, PASS_SPEED_M_S)
+			net_half_width, defenders, Vector3.INF, pass_speed)
+	var lane: float = _lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
 	var positional: float = position_potential(receiver_pos, our_net, defenders)
 	return maxf(pass_score, lane * positional)
+
+
+# Omnidirectional poke-threat penalty for CARRY destinations. Returns
+# a multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0]: full safety (1.0)
+# when no opponent's body is within CARRY_POKE_SAFE_RADIUS_M of the
+# carrier's PUCK position, clamped to the floor when an opponent is
+# inside the inner danger radius, linear ramp in between.
+#
+# Layered ON TOP of `score_shoot` / `position_potential`, both of
+# which already penalize defenders — but those use a FORWARD-CONE
+# pressure (defenders behind/beside don't matter for a shot lane).
+# For possession protection, a defender at ANY angle within stick
+# reach of the puck is a poke threat. This penalty captures that
+# gap so carriers pick destinations that are safe to BE AT, not just
+# safe to shoot from.
+#
+# Caller passes the projected PUCK position (carrier body + carry-arm
+# offset toward attacking goal) and projected opponent body positions
+# at the candidate's arrival time. Measuring opp-body → our-puck
+# (rather than body-to-body) captures the asymmetry that a defender
+# in FRONT of the carrier is much more dangerous than one BEHIND,
+# at the same body-to-body distance — because the puck rides forward.
+#
+# Radii are derived from the physical poke geometry:
+#   DANGER = STICK_REACH + POKE_RADIUS — opp body this close to our
+#     puck and their stick CAN reach it.
+#   SAFE   = DANGER + REACT_BUFFER     — a tick of skating in plus a
+#     small margin; outside this the bot has time to move clear.
+const CARRY_POKE_REACT_BUFFER_M: float = 0.9
+const CARRY_POKE_DANGER_RADIUS_M: float = (
+		GameRules.DEFAULT_STICK_LENGTH_M
+		+ GameRules.DEFAULT_BLADE_LENGTH_M
+		+ GameRules.POKE_RADIUS_M)
+const CARRY_POKE_SAFE_RADIUS_M: float = (
+		CARRY_POKE_DANGER_RADIUS_M + CARRY_POKE_REACT_BUFFER_M)
+# Floor sets how much shot value can override safety. 0.35 means a
+# +185%-better shot from the dangerous spot still beats a safe spot
+# with equal shot quality — committed offensive plays still fire,
+# defensive carry candidates still get a real penalty.
+const CARRY_POKE_SAFETY_FLOOR: float = 0.35
+
+static func carry_poke_safety(puck_pos: Vector3, projected_opponents: Array[Vector3]) -> float:
+	var nearest_sq: float = INF
+	for p: Vector3 in projected_opponents:
+		var dx: float = p.x - puck_pos.x
+		var dz: float = p.z - puck_pos.z
+		var d_sq: float = dx * dx + dz * dz
+		if d_sq < nearest_sq:
+			nearest_sq = d_sq
+	if nearest_sq == INF:
+		return 1.0
+	var d: float = sqrt(nearest_sq)
+	if d >= CARRY_POKE_SAFE_RADIUS_M:
+		return 1.0
+	if d <= CARRY_POKE_DANGER_RADIUS_M:
+		return CARRY_POKE_SAFETY_FLOOR
+	var t: float = (d - CARRY_POKE_DANGER_RADIUS_M) / (
+			CARRY_POKE_SAFE_RADIUS_M - CARRY_POKE_DANGER_RADIUS_M)
+	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, t)
+
+
+# Time-synced interception penalty for CARRY destinations. Returns a
+# multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0] driven by the worst
+# (closest) defender intercept across the bot's projected path to
+# `candidate`. Unlike carry_poke_safety (which only checks the
+# destination) and path_clearance (which checks whether a projected
+# opponent STANDS on the line), this asks: as the bot skates along
+# its path over [0, local_time], does any defender's projected
+# position pass within poke range of the bot's position AT THE SAME
+# TIME?
+#
+# Modeling defender CONVERGENCE on the bot's route lets _best_carry
+# pick lateral candidates earlier — the body bends away from a
+# closing defender before they arrive, instead of driving toward
+# them and relying on the discrete deke at the last moment.
+#
+# Math: bot and defender both modeled as constant-velocity over
+# [0, local_time]. |B(t) - D(t)|² is quadratic in t; closest
+# approach has a closed form (perpendicular of relative motion).
+# Clamp t* to [0, local_time] so closest-approach OUTSIDE the
+# window (defender passes through after we've already arrived)
+# doesn't penalize.
+#
+# Same radii / floor as carry_poke_safety — same poke geometry.
+# Caller responsibility: `opponents_current` and `opponents_at_arrival`
+# must be parallel arrays (i = same defender); a defender's velocity
+# is derived as (at_arrival - current) / local_time.
+#
+# Edge cases:
+#   - local_time ≈ 0 → bot has no path. Caller should skip (use
+#     carry_poke_safety alone for stand-still candidates).
+#   - |delta_vel|² ≈ 0 (defender and bot moving parallel-and-same-
+#     speed) → t* clamps to 0, result is distance at t=0. Falls
+#     back to "do they start in poke range?" — correct, since a
+#     parallel-pace chase isn't a poke setup, it's a continuous
+#     threat.
+static func carry_intercept_safety(
+		self_pos: Vector3,
+		candidate: Vector3,
+		local_time: float,
+		opponents_current: Array[Vector3],
+		opponents_at_arrival: Array[Vector3]) -> float:
+	if local_time <= 0.0001:
+		return 1.0
+	var n: int = opponents_current.size()
+	if n == 0 or n != opponents_at_arrival.size():
+		return 1.0
+	var inv_t: float = 1.0 / local_time
+	var bot_vx: float = (candidate.x - self_pos.x) * inv_t
+	var bot_vz: float = (candidate.z - self_pos.z) * inv_t
+	var min_d: float = INF
+	for i: int in n:
+		var opp_now: Vector3 = opponents_current[i]
+		var opp_then: Vector3 = opponents_at_arrival[i]
+		var opp_vx: float = (opp_then.x - opp_now.x) * inv_t
+		var opp_vz: float = (opp_then.z - opp_now.z) * inv_t
+		var dp_x: float = opp_now.x - self_pos.x
+		var dp_z: float = opp_now.z - self_pos.z
+		var dv_x: float = opp_vx - bot_vx
+		var dv_z: float = opp_vz - bot_vz
+		var dv_sq: float = dv_x * dv_x + dv_z * dv_z
+		var t_star: float
+		if dv_sq < 0.0001:
+			# Parallel-velocity case: relative motion is zero. Distance
+			# is constant across the window; pick t=0.
+			t_star = 0.0
+		else:
+			t_star = clampf(
+					-(dp_x * dv_x + dp_z * dv_z) / dv_sq,
+					0.0, local_time)
+		var dx_at_t: float = dp_x + dv_x * t_star
+		var dz_at_t: float = dp_z + dv_z * t_star
+		var d: float = sqrt(dx_at_t * dx_at_t + dz_at_t * dz_at_t)
+		if d < min_d:
+			min_d = d
+	if min_d == INF or min_d >= CARRY_POKE_SAFE_RADIUS_M:
+		return 1.0
+	if min_d <= CARRY_POKE_DANGER_RADIUS_M:
+		return CARRY_POKE_SAFETY_FLOOR
+	var ramp_t: float = (min_d - CARRY_POKE_DANGER_RADIUS_M) / (
+			CARRY_POKE_SAFE_RADIUS_M - CARRY_POKE_DANGER_RADIUS_M)
+	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, ramp_t)
 
 
 # Public lane-clearance check for CARRY candidates — the bot is

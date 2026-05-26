@@ -61,10 +61,15 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue
+		# Match the speed our carrier would actually fire at — outlet
+		# candidates are the long-pass receivers by definition (stretch
+		# passes across zones), so this is exactly where the charged-
+		# pass scoring matters most.
+		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
 		var score: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
 				goalie_pos, GameRules.NET_HALF_WIDTH,
-				opp_positions)
+				opp_positions, Vector3.INF, pass_speed)
 		if score > best_score:
 			best_score = score
 			best_pos = c

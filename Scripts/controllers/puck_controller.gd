@@ -2,7 +2,7 @@ class_name PuckController
 extends Node
 
 const PICKUP_RADIUS: float = 0.5
-const POKE_RADIUS: float = 0.5
+const POKE_RADIUS: float = GameRules.POKE_RADIUS_M
 const CONTEST_SQUIRT_SPEED: float = 3.0
 
 # Crease pushout — frees a puck stuck under the goalie. If a loose puck sits

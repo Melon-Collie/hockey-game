@@ -95,6 +95,12 @@ var intended_action: int = INTENT_CARRY
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
 var pass_target_peer_id: int = -1
 
+# Set alongside pass_target_peer_id when the chosen PASS is far enough
+# that the carrier wrister-charges instead of quick-releasing. The
+# state machine consumes this when entering PASS_PRESSED to branch
+# between one-tick fire and ~250 ms wrister charge.
+var pass_should_charge: bool = false
+
 # Set when intent commits to SHOOT. Consumed by the state machine's
 # press-state handlers to drive elevation.
 var shot_is_elevated: bool = false
@@ -162,6 +168,7 @@ func decide(ctx: RoleContext) -> RoleDecision:
 func reset() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
+	pass_should_charge = false
 	shot_is_elevated = false
 	last_carry_anchor = Vector3.ZERO
 	_pick_action_cooldown = 0
@@ -174,6 +181,7 @@ func reset() -> void:
 func clear_intent() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
+	pass_should_charge = false
 	_pick_action_cooldown = 0
 
 
@@ -320,6 +328,12 @@ func _pick_action(ctx: RoleContext) -> void:
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer
+			# Wrister-charge for long passes — more pace, smaller defender
+			# reaction window. Snap-pass for short feeds where the windup
+			# commit isn't worth it.
+			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
+			pass_should_charge = (receiver != null
+					and ctx.self_pos.distance_to(receiver.position) > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M)
 		elif new_intent == INTENT_SHOOT:
 			shot_is_elevated = _should_elevate_shot(ctx, shoot_score)
 	else:
@@ -402,9 +416,20 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 			var receiver_in_oz: bool = -own_goal_dir * receiver_state.position.z > GameRules.BLUE_LINE_Z
 			if not receiver_in_oz:
 				continue
+		# Match the speed the state machine will actually fire at: long
+		# passes get the charged-wrister speed, short passes the quick-
+		# shot speed (see PASS_PRESSED branch on _pass_should_charge).
+		# Threading the actual speed here makes the lead and opponent
+		# projections match reality — without it, a 15 m pass scored
+		# at 14 m/s overestimates defender presence on the line and
+		# leads past the receiver, both of which depress long-pass
+		# scores below where they should be.
 		var dist: float = self_pos.distance_to(receiver_state.position)
+		var pass_speed: float = (AIActionScoring.PASS_CHARGE_SPEED_M_S
+				if dist > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M
+				else AIActionScoring.PASS_SPEED_M_S)
 		var flight_t: float = clampf(
-				dist / AIActionScoring.PASS_SPEED_M_S, 0.0, PASS_LEAD_MAX_S)
+				dist / pass_speed, 0.0, PASS_LEAD_MAX_S)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
 		var receiver: Vector3 = _predict_receiver(receiver_state, flight_t, receiver_accel)
 		if own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
@@ -570,7 +595,24 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var dest_score: float = _score_at(ctx, candidate, self_pos,
 				_scratch_opponents_path, cand_goalie, goalie_now)
 		var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
-		var s_total: float = dest_score * lane * decay
+		# Omnidirectional poke-safety penalty — score_at uses a forward-
+		# cone pressure (right for shooting), but for possession we also
+		# discount destinations whose PUCK position has a defender close
+		# by from any angle. See AIActionScoring.carry_poke_safety.
+		var cand_puck_pos: Vector3 = _puck_pos_at(candidate, attacking_goal)
+		var safety: float = AIActionScoring.carry_poke_safety(
+				cand_puck_pos, _scratch_opponents_path)
+		# Time-synced interception penalty — discount candidates whose
+		# path lets a defender converge to poke range during transit.
+		# Pairs with carry_poke_safety: that one penalizes the
+		# destination, this one penalizes the route to it. Together
+		# they bias the bot toward lateral candidates earlier, so the
+		# discrete poke-evade cut becomes the finish on an existing
+		# curve rather than a sudden veer.
+		var intercept: float = AIActionScoring.carry_intercept_safety(
+				self_pos, candidate, local_time,
+				_scratch_opponents, _scratch_opponents_path)
+		var s_total: float = dest_score * lane * decay * safety * intercept
 		if s_total > best_score:
 			best_score = s_total
 			best_pos = candidate
@@ -590,7 +632,13 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 				_scratch_opponents_path, slot_dest_goalie, goalie_now)
 		var slot_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
-		var slot_total: float = slot_dest_score * slot_lane * slot_decay
+		var slot_puck_pos: Vector3 = _puck_pos_at(slot_pos, attacking_goal)
+		var slot_safety: float = AIActionScoring.carry_poke_safety(
+				slot_puck_pos, _scratch_opponents_path)
+		var slot_intercept: float = AIActionScoring.carry_intercept_safety(
+				self_pos, slot_pos, slot_time,
+				_scratch_opponents, _scratch_opponents_path)
+		var slot_total: float = slot_dest_score * slot_lane * slot_decay * slot_safety * slot_intercept
 		if slot_total > best_score:
 			best_score = slot_total
 			best_pos = slot_pos
@@ -598,11 +646,17 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	# Stand-still last. Only wins on STRICTLY greater than the best
 	# movement candidate — patience must be earned. Score uses
 	# current opponents (time = 0 → no projection). Goalie predicted
-	# at the wrister window from current position.
+	# at the wrister window from current position. Poke-safety applied
+	# here too: if we're standing still in poke range of a defender,
+	# the bot should prefer to skate clear.
 	var stand_goalie: Vector3 = _predict_goalie_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
 			_scratch_opponents, stand_goalie, goalie_now)
+	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
+	var stand_safety: float = AIActionScoring.carry_poke_safety(
+			stand_puck_pos, _scratch_opponents)
+	stand_score *= stand_safety
 	if stand_score > best_score:
 		best_score = stand_score
 		best_pos = self_pos
@@ -639,6 +693,25 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
 	return maxf(shoot_s, potential_s)
+
+
+# Approximate puck-rest position when the carrier is at `body_pos`.
+# The puck rides ~CARRY_BLADE_AIM_FORWARD_M in front of the body in
+# the attacking-goal direction (see SkaterAgentStateMachine._carry_mouse_aim
+# — the carry mouse aims at this point and the blade IK puts the puck
+# there). Used by poke-safety scoring so the omnidirectional threat
+# penalty measures opp-body → our-puck (the real poke geometry), not
+# opp-body → our-body. Degenerate case (body_pos == attacking_goal,
+# excluded by goal-line buffer in candidate gen) falls back to body
+# position to avoid NaN.
+func _puck_pos_at(body_pos: Vector3, attacking_goal: Vector3) -> Vector3:
+	var to_goal: Vector3 = attacking_goal - body_pos
+	to_goal.y = 0.0
+	var len_sq: float = to_goal.x * to_goal.x + to_goal.z * to_goal.z
+	if len_sq < 0.0001:
+		return body_pos
+	var inv: float = 1.0 / sqrt(len_sq)
+	return body_pos + to_goal * (inv * SkaterAgentStateMachine.CARRY_BLADE_AIM_FORWARD_M)
 
 
 # OZ slot anchor — recursion terminator and a permanent carry
