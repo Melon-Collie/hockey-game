@@ -2139,13 +2139,21 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
-# Finds the closest opposing BLADE within STICKHANDLE_THREAT_RADIUS_M
-# of our puck (= carry-arm extension forward of body). Returns an XZ
-# offset perpendicular to `forward_dir`, in the direction OPPOSITE
-# the threat's lateral side, ramped to STICKHANDLE_OFFSET_MAX_M
-# inside STICKHANDLE_FULL_OFFSET_RADIUS_M and tapering to zero at
-# the outer radius. Returns Vector3.ZERO if no threat is in range
-# or the threat is straight ahead (no lateral side to evade to).
+# Sums signed-lateral forces from every opposing blade within
+# STICKHANDLE_THREAT_RADIUS_M of our puck (carry-arm extension
+# forward of body), each weighted by its distance ramp. Returns
+# an XZ offset perpendicular to `forward_dir`, away from the
+# threat side, clamped to STICKHANDLE_OFFSET_MAX_M magnitude.
+#
+# Summing instead of picking-nearest-then-flipping kills the jitter
+# the earlier nearest-threat version produced when surrounded: the
+# "nearest" could swap between defenders per tick, snapping the
+# offset between full-left and full-right. With a sum, opposite-side
+# threats cancel (nowhere safe to go, blade holds central — correct
+# tactically) and same-side threats reinforce (clamped at the same
+# per-tick max as before). Threats nearly directly ahead contribute
+# near-zero lateral instead of sign-flipping at the perpendicular
+# boundary.
 #
 # Uses `opp_state.blade_contact_world` — host-only field, populated
 # for every skater on the host. Bots only run on the host
@@ -2159,8 +2167,13 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 	# forward of the body. Measure threat distance from THIS point so we
 	# react to actual stick-on-puck reach, not stick-on-body distance.
 	var carry_pos: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
-	var best_lateral_sign: float = 0.0
-	var best_dist: float = INF
+	# Accumulated lateral force in [-summed, +summed]. Positive = pull
+	# toward +right_axis (because we negate per-threat lateral_unit:
+	# threat on right → lateral_unit > 0 → contribution -ramp ×
+	# lateral_unit < 0 → pulls puck to the left, away from threat).
+	# Clamped post-sum so multiple same-side threats don't push past
+	# the per-tick max offset.
+	var lateral_force: float = 0.0
 	for peer_id: int in snapshot.skater_states:
 		if peer_id == _peer_id:
 			continue
@@ -2175,23 +2188,20 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 		var dist: float = to_threat.length()
 		if dist > STICKHANDLE_THREAT_RADIUS_M or dist < 0.001:
 			continue
-		if dist < best_dist:
-			best_dist = dist
-			best_lateral_sign = signf(right_axis.dot(to_threat))
-	if best_dist == INF or best_lateral_sign == 0.0:
-		return Vector3.ZERO
-	# Tight ramp: full offset whenever the threat blade is inside the
-	# inner radius (real poke danger), tapering to zero at the outer
-	# radius. clampf guards against threats inside the inner radius
-	# (inverse_lerp would return >1) and t-of-zero at the outer edge.
-	var t: float = inverse_lerp(
-			STICKHANDLE_THREAT_RADIUS_M,
-			STICKHANDLE_FULL_OFFSET_RADIUS_M,
-			best_dist)
-	var magnitude: float = STICKHANDLE_OFFSET_MAX_M * clampf(t, 0.0, 1.0)
-	# Pull AWAY from threat's lateral side. If threat is on right
-	# (positive lateral dot), offset is -right (pulls puck left).
-	return -right_axis * best_lateral_sign * magnitude
+		# Per-threat distance ramp: full inside the inner radius,
+		# tapering linearly to zero at the outer radius.
+		var ramp: float = clampf(inverse_lerp(
+				STICKHANDLE_THREAT_RADIUS_M,
+				STICKHANDLE_FULL_OFFSET_RADIUS_M,
+				dist), 0.0, 1.0)
+		# Lateral component of the unit direction TOWARD the threat in
+		# [-1, 1]. Direct-ahead → ~0, direct-side → ±1. Multiplying
+		# by ramp gives a smooth per-threat contribution; summing
+		# blends all of them.
+		var lateral_unit: float = right_axis.dot(to_threat) / dist
+		lateral_force -= lateral_unit * ramp
+	var magnitude: float = clampf(lateral_force, -1.0, 1.0) * STICKHANDLE_OFFSET_MAX_M
+	return right_axis * magnitude
 
 
 # Shot aim past the goalie's projected shadow. Uses the goalie's
