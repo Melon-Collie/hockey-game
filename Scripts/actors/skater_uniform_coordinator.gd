@@ -29,6 +29,7 @@ var _socks_color: Color = Color.WHITE
 var _player_name: String = ""
 var _jersey_number: int = 0
 var _text_color: Color = Color.BLACK
+var _text_outline_color: Color = Color.BLACK
 var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
 var _shoulder_viewport: SubViewport
@@ -206,7 +207,7 @@ func _set_bone_material(bone: Node3D, mat: StandardMaterial3D) -> void:
 	visual.material_override = mat.duplicate()
 
 
-func apply_jersey_info(p_name: String, number: int, text_color: Color) -> void:
+func apply_jersey_info(p_name: String, number: int, text_color: Color, text_outline_color: Color) -> void:
 	# Clean up legacy floating decals from older box-geometry runs, if any.
 	for child: Node in _skater.upper_body.get_children():
 		if child.name in ["JerseyBackMesh", "JerseyShoulderL", "JerseyShoulderR"]:
@@ -216,6 +217,7 @@ func apply_jersey_info(p_name: String, number: int, text_color: Color) -> void:
 	_player_name = p_name
 	_jersey_number = number
 	_text_color = text_color
+	_text_outline_color = text_outline_color
 	_rebuild_jersey_texture()
 	_rebuild_shoulder_texture()
 
@@ -245,7 +247,7 @@ func apply_stripes(
 	# "middle top of the lower arm" — hockey-style sleeve placement near
 	# the elbow, not at the cuff.
 	var forearm_tex: ImageTexture = _make_v_stripe_texture(
-			_jersey_color, jersey_stripe_color, 32, 0.10, 0.22)
+			_jersey_color, jersey_stripe_color, 32, 0.12, 0.20)
 	_set_bone_texture(_skater.forearm_mesh, forearm_tex)
 	_set_bone_texture(_skater.bottom_forearm_mesh, forearm_tex)
 
@@ -276,7 +278,7 @@ func _rebuild_jersey_texture() -> void:
 		return
 	_jersey_decal.update_jersey(
 			_jersey_color, _jersey_stripe_color,
-			_player_name, _jersey_number, _text_color)
+			_player_name, _jersey_number, _text_color, _text_outline_color)
 	_jersey_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
@@ -285,7 +287,7 @@ func _rebuild_jersey_texture() -> void:
 func _rebuild_shoulder_texture() -> void:
 	if _shoulder_decal == null:
 		return
-	_shoulder_decal.update_shoulder(_jersey_color, _jersey_number, _text_color)
+	_shoulder_decal.update_shoulder(_jersey_color, _jersey_number, _text_color, _text_outline_color)
 	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 

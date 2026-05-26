@@ -109,7 +109,7 @@ func apply_confirmed_swap(
 	# field needs re-syncing here.
 	record.skater.set_player_color(jersey, helmet, pants, colors.socks, colors.primary, colors.gloves)
 	record.skater.set_player_name(record.player_name)
-	record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text)
+	record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text, colors.text_outline)
 	record.skater.set_jersey_stripes(colors.jersey_stripe, colors.pants_stripe, colors.socks_stripe)
 	# LocalController caches the local player's team for offside prediction,
 	# camera orientation, and attack-up. Without this the local skater would

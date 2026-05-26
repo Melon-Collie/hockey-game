@@ -27,12 +27,15 @@ const NAME_FONT_SIZE: int = 28
 const NUMBER_FONT_SIZE: int = 56
 const NAME_Y_TOP: int = 8              # visual top of the name (px from image top)
 const NUMBER_Y_TOP: int = 40           # visual top of the number
+const NAME_OUTLINE_PX: int = 3
+const NUMBER_OUTLINE_PX: int = 5
 
 var jersey_color: Color = Color.WHITE
 var stripe_color: Color = Color.BLACK
 var player_name: String = ""
 var jersey_number: int = 0
 var text_color: Color = Color.BLACK
+var text_outline_color: Color = Color.BLACK
 
 
 func _draw() -> void:
@@ -41,22 +44,27 @@ func _draw() -> void:
 
 	var name_upper: String = player_name.to_upper()
 	if name_upper.length() > 0:
-		_draw_centered(name_upper, NAME_FONT_SIZE, NAME_Y_TOP)
+		_draw_centered(name_upper, NAME_FONT_SIZE, NAME_Y_TOP, NAME_OUTLINE_PX)
 	var num_str: String = str(jersey_number)
 	if num_str.length() > 0:
-		_draw_centered(num_str, NUMBER_FONT_SIZE, NUMBER_Y_TOP)
+		_draw_centered(num_str, NUMBER_FONT_SIZE, NUMBER_Y_TOP, NUMBER_OUTLINE_PX)
 
 
 # Draws a string centered horizontally at BACK_CENTER_X with its visual
 # top at y_top. draw_string positions text by baseline, so we add the
 # font's ascent to convert from "top edge" coords to baseline coords.
-func _draw_centered(s: String, font_size: int, y_top: int) -> void:
+# Outline is drawn first so the fill sits on top of it.
+func _draw_centered(s: String, font_size: int, y_top: int, outline_px: int) -> void:
 	var width: float = FONT.get_string_size(
 			s, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 	var ascent: float = FONT.get_ascent(font_size)
 	var x: float = float(BACK_CENTER_X) - width * 0.5
 	var y_baseline: float = float(y_top) + ascent
-	draw_string(FONT, Vector2(x, y_baseline), s,
+	var pos := Vector2(x, y_baseline)
+	if outline_px > 0:
+		draw_string_outline(FONT, pos, s,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, outline_px, text_outline_color)
+	draw_string(FONT, pos, s,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)
 
 
@@ -65,10 +73,11 @@ func _draw_centered(s: String, font_size: int, y_top: int) -> void:
 # UPDATE_ONCE so the texture refreshes on the next frame.
 func update_jersey(
 		j_color: Color, s_color: Color,
-		p_name: String, p_number: int, t_color: Color) -> void:
+		p_name: String, p_number: int, t_color: Color, t_outline: Color) -> void:
 	jersey_color = j_color
 	stripe_color = s_color
 	player_name = p_name
 	jersey_number = p_number
 	text_color = t_color
+	text_outline_color = t_outline
 	queue_redraw()

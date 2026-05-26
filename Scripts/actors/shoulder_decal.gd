@@ -12,10 +12,12 @@ const FONT: Font = preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")
 const IMG_W: int = 256
 const IMG_H: int = 256
 const NUMBER_FONT_SIZE: int = 56
+const NUMBER_OUTLINE_PX: int = 5
 
 var jersey_color: Color = Color.WHITE
 var jersey_number: int = 0
 var text_color: Color = Color.BLACK
+var text_outline_color: Color = Color.BLACK
 
 
 func _draw() -> void:
@@ -30,12 +32,16 @@ func _draw() -> void:
 	# Y to baseline Y by adding ascent.
 	var x: float = (float(IMG_W) - size.x) * 0.5
 	var y_baseline: float = (float(IMG_H) - size.y) * 0.5 + ascent
-	draw_string(FONT, Vector2(x, y_baseline), num_str,
+	var pos := Vector2(x, y_baseline)
+	draw_string_outline(FONT, pos, num_str,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, NUMBER_FONT_SIZE, NUMBER_OUTLINE_PX, text_outline_color)
+	draw_string(FONT, pos, num_str,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, NUMBER_FONT_SIZE, text_color)
 
 
-func update_shoulder(j_color: Color, p_number: int, t_color: Color) -> void:
+func update_shoulder(j_color: Color, p_number: int, t_color: Color, t_outline: Color) -> void:
 	jersey_color = j_color
 	jersey_number = p_number
 	text_color = t_color
+	text_outline_color = t_outline
 	queue_redraw()

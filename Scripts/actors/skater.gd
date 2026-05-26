@@ -55,11 +55,18 @@ extends CharacterBody3D
 @export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
 # actual length; X/Y control arm thickness.
-@export var arm_mesh_thickness: float = 0.13
+@export var arm_mesh_thickness: float = 0.11
 # Radius of the elbow joint spheres positioned per-tick at the IK elbow.
-@export var elbow_sphere_radius: float = 0.06
+# Kept a touch larger than arm_mesh_thickness * 0.5 so the joint reads as a
+# distinct bulge between the upper-arm and forearm cylinders.
+@export var elbow_sphere_radius: float = 0.065
 # Radius of the hand spheres positioned per-tick at the IK hand.
 @export var hand_sphere_radius: float = 0.06
+# Gap (along the bone direction, toward the elbow) between the hand-sphere
+# center and the forward face of the glove cuff cylinder. Without this the
+# cuff sits flush against the hand sphere and visually swallows it; a small
+# pullback exposes the hand sphere as a distinct ball at the wrist.
+@export var cuff_wrist_offset: float = 0.05
 
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
@@ -613,7 +620,7 @@ func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vect
 	# the bone from hand to hand - bone_dir_n * cuff_height.
 	var cyl: CylinderMesh = mesh.mesh as CylinderMesh
 	var cuff_height: float = cyl.height if cyl != null else 0.06
-	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5)
+	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5 + cuff_wrist_offset)
 	mesh.position = upper_body.to_local(cuff_center_w)
 	mesh.look_at(cuff_center_w + bone_dir_n, Vector3.UP)
 	mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
@@ -742,8 +749,8 @@ func set_player_color(
 	_uniform.apply_colors(jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color)
 
 
-func set_jersey_info(p_name: String, number: int, text_color: Color) -> void:
-	_uniform.apply_jersey_info(p_name, number, text_color)
+func set_jersey_info(p_name: String, number: int, text_color: Color, text_outline_color: Color) -> void:
+	_uniform.apply_jersey_info(p_name, number, text_color, text_outline_color)
 
 
 func set_jersey_stripes(
