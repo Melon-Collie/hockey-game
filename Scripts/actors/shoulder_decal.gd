@@ -11,7 +11,7 @@ extends Node2D
 const FONT: Font = preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")
 const IMG_W: int = 256
 const IMG_H: int = 256
-const NUMBER_FONT_SIZE: int = 72
+const NUMBER_FONT_SIZE: int = 56
 
 var jersey_color: Color = Color.WHITE
 var jersey_number: int = 0
