@@ -24,6 +24,8 @@ var _skate_r: MeshInstance3D
 # refreshes on the next frame.
 var _jersey_color: Color = Color.WHITE
 var _jersey_stripe_color: Color = Color.BLACK
+var _pants_color: Color = Color.WHITE
+var _socks_color: Color = Color.WHITE
 var _player_name: String = ""
 var _jersey_number: int = 0
 var _text_color: Color = Color.BLACK
@@ -128,6 +130,8 @@ func apply_colors(
 		blade_color: Color,
 		gloves_color: Color) -> void:
 	_jersey_color = jersey_color
+	_pants_color = pants_color
+	_socks_color = socks_color
 	_rebuild_jersey_texture()
 	_rebuild_shoulder_texture()
 	var jersey_mat: StandardMaterial3D = _make_solid_mat(jersey_color)
@@ -220,10 +224,7 @@ func apply_stripes(
 		jersey_stripe_color: Color,
 		pants_stripe_color: Color,
 		socks_stripe_color: Color) -> void:
-	# Remove any previously generated stripe nodes (from older box-geometry
-	# runs or a prior team-color application). The torso hem is now painted
-	# into the jersey texture so no Stripe_JerseyHem mesh is created below,
-	# but the cleanup still sweeps it if it exists from an older build.
+	# Sweep stripe meshes left over from older mesh-based stripe builds.
 	for node: Node in _skater.upper_body.get_children():
 		if node.name.begins_with("Stripe_"):
 			_skater.upper_body.remove_child(node)
@@ -233,28 +234,36 @@ func apply_stripes(
 			_skater.lower_body.remove_child(node)
 			node.queue_free()
 
-	# Elbow spheres carry the jersey stripe accent — the sphere reads as a
-	# colored elbow pad at the natural break in the sleeve. apply_colors()
-	# pre-tints them with jersey so they're never blank in the brief window
-	# before stripes apply.
-	var stripe_mat: StandardMaterial3D = _make_solid_mat(jersey_stripe_color)
-	if _skater.top_elbow_sphere != null:
-		_skater.top_elbow_sphere.material_override = stripe_mat.duplicate()
-	if _skater.bottom_elbow_sphere != null:
-		_skater.bottom_elbow_sphere.material_override = stripe_mat.duplicate()
-
 	# Jersey hem stripe — painted into the torso texture (no separate mesh).
 	_jersey_stripe_color = jersey_stripe_color
 	_rebuild_jersey_texture()
 
-	# Pants side stripe — vertical piping cylinder on the outer side of
-	# each thigh.
-	_add_pants_side_stripe(_thigh_l, -1.0, pants_stripe_color, "Stripe_PantsL")
-	_add_pants_side_stripe(_thigh_r, +1.0, pants_stripe_color, "Stripe_PantsR")
+	# Forearm sleeve stripe — horizontal band painted into a small texture
+	# applied to each forearm cylinder. V=0 maps to the elbow end of the
+	# bone (cylinder's local +Y, mapped to wrapper +Z which is opposite the
+	# look_at target = the hand), so a band at V≈0.10-0.20 reads as
+	# "middle top of the lower arm" — hockey-style sleeve placement near
+	# the elbow, not at the cuff.
+	var forearm_tex: ImageTexture = _make_v_stripe_texture(
+			_jersey_color, jersey_stripe_color, 32, 0.10, 0.22)
+	_set_bone_texture(_skater.forearm_mesh, forearm_tex)
+	_set_bone_texture(_skater.bottom_forearm_mesh, forearm_tex)
 
-	# Sock stripe — horizontal band around the middle of each sock cylinder.
-	_add_sock_stripe(_sock_l, socks_stripe_color, "Stripe_SockL")
-	_add_sock_stripe(_sock_r, socks_stripe_color, "Stripe_SockR")
+	# Pants side stripe — vertical column in the texture, per-thigh
+	# uv1_offset rotates the wrap to put it on each thigh's outer face
+	# (sphere/cylinder U=0 is at +Z, U=0.25 at +X, U=0.75 at -X).
+	var pants_tex: ImageTexture = _make_u_stripe_texture(
+			_pants_color, pants_stripe_color, 64, 0.47, 0.53)
+	_apply_side_stripe_material(_thigh_l, pants_tex, -0.25)
+	_apply_side_stripe_material(_thigh_r, pants_tex, 0.25)
+
+	# Sock stripe — horizontal band in the side V range. CylinderMesh
+	# allocates roughly V=0..0.5 of the texture to the side surface (caps
+	# use the rest), so V≈0.20-0.30 centers the band on the cylinder side.
+	var sock_tex: ImageTexture = _make_v_stripe_texture(
+			_socks_color, socks_stripe_color, 32, 0.20, 0.30)
+	_sock_l.material_override = _make_texture_material(sock_tex)
+	_sock_r.material_override = _make_texture_material(sock_tex)
 
 
 # Pushes the cached uniform inputs into the JerseyDecal and refreshes the
@@ -280,52 +289,64 @@ func _rebuild_shoulder_texture() -> void:
 	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
-# Builds vertical piping cylinder on the outer side of a thigh. The piping
-# center sits on the thigh's TOP outer surface (widest point); this keeps
-# the piping flush at the top — the small taper-induced gap at the bottom
-# reads naturally as a straight cord on a tapered leg.
-func _add_pants_side_stripe(
-		thigh: MeshInstance3D, side_sign: float, color: Color, mesh_name: String) -> void:
-	var thigh_mesh: CylinderMesh = thigh.mesh as CylinderMesh
-	if thigh_mesh == null:
+# Builds a small ImageTexture with a horizontal stripe band at V=[v_start, v_end]
+# over a base color fill. The texture is 4 px wide (cylinder UV wraps the
+# horizontal axis; the actual width doesn't matter for a uniform band — 4 px
+# gives some texel margin for filtering without z-fighting risk). Height is the
+# resolution of the V axis.
+func _make_v_stripe_texture(
+		base: Color, stripe: Color,
+		height_px: int, v_start: float, v_end: float) -> ImageTexture:
+	var img := Image.create(4, height_px, false, Image.FORMAT_RGBA8)
+	img.fill(base)
+	var y0: int = int(v_start * float(height_px))
+	var y1: int = int(v_end * float(height_px))
+	if y1 > y0:
+		img.fill_rect(Rect2i(0, y0, 4, y1 - y0), stripe)
+	return ImageTexture.create_from_image(img)
+
+
+# Builds a small ImageTexture with a vertical stripe column at U=[u_start, u_end]
+# over a base color fill. The stripe becomes a vertical line on the cylinder
+# side; the caller positions it via the material's uv1_offset.x.
+func _make_u_stripe_texture(
+		base: Color, stripe: Color,
+		width_px: int, u_start: float, u_end: float) -> ImageTexture:
+	var img := Image.create(width_px, 4, false, Image.FORMAT_RGBA8)
+	img.fill(base)
+	var x0: int = int(u_start * float(width_px))
+	var x1: int = int(u_end * float(width_px))
+	if x1 > x0:
+		img.fill_rect(Rect2i(x0, 0, x1 - x0, 4), stripe)
+	return ImageTexture.create_from_image(img)
+
+
+func _make_texture_material(tex: Texture2D) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	return mat
+
+
+# Applies a stripe texture to a thigh / leg cylinder with the given
+# uv1_offset.x. Negative for the left side (puts the texture's vertical
+# stripe at sphere/cylinder -X = outward for the left leg); positive
+# 0.25 for the right side.
+func _apply_side_stripe_material(
+		mesh: MeshInstance3D, tex: Texture2D, u_offset: float) -> void:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.uv1_offset = Vector3(u_offset, 0.0, 0.0)
+	mesh.material_override = mat
+
+
+# Sets the textured albedo on a bone wrapper's child cylinder. Used for the
+# forearm sleeve stripe; the wrapper itself is a Node3D, the visible cylinder
+# is reached via Skater.bone_visual().
+func _set_bone_texture(bone: Node3D, tex: Texture2D) -> void:
+	var visual: MeshInstance3D = _skater.bone_visual(bone)
+	if visual == null:
 		return
-	const PIPING_RADIUS: float = 0.012
-	var pipe := _make_band_cylinder(
-			PIPING_RADIUS, thigh_mesh.height, color, mesh_name)
-	var thigh_pos: Vector3 = thigh.position
-	pipe.position = Vector3(
-			thigh_pos.x + side_sign * thigh_mesh.top_radius,
-			thigh_pos.y,
-			thigh_pos.z)
-	_skater.lower_body.add_child(pipe)
-
-
-# Builds a horizontal CylinderMesh band wrapping the middle of a sock.
-# Radius averages the sock's top/bottom (sock taper is small ~5mm so the
-# average is flush enough across the band's height).
-func _add_sock_stripe(sock: MeshInstance3D, color: Color, mesh_name: String) -> void:
-	var sock_mesh: CylinderMesh = sock.mesh as CylinderMesh
-	if sock_mesh == null:
-		return
-	const BAND_HEIGHT: float = 0.06
-	var radius: float = (sock_mesh.top_radius + sock_mesh.bottom_radius) * 0.5 + 0.003
-	var band := _make_band_cylinder(radius, BAND_HEIGHT, color, mesh_name)
-	band.position = sock.position
-	_skater.lower_body.add_child(band)
-
-
-func _make_band_cylinder(
-		radius: float, height: float, color: Color, mesh_name: String) -> MeshInstance3D:
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = radius
-	cyl.bottom_radius = radius
-	cyl.height = height
-	cyl.radial_segments = 24
-	var m := MeshInstance3D.new()
-	m.name = mesh_name
-	m.mesh = cyl
-	m.material_override = _make_solid_mat(color)
-	return m
+	visual.material_override = _make_texture_material(tex)
 
 
 func apply_ghost(ghost: bool) -> void:
@@ -356,24 +377,6 @@ func apply_ghost(ghost: bool) -> void:
 		else:
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 			mat.albedo_color.a = 1.0
-	# Stripe nodes alpha-fade alongside the body parts (rather than
-	# vanishing entirely) so ghost mode looks consistent across the skater.
-	for parent: Node in [_skater.upper_body, _skater.lower_body]:
-		for node: Node in parent.get_children():
-			if not node.name.begins_with("Stripe_"):
-				continue
-			var stripe_mesh: MeshInstance3D = node as MeshInstance3D
-			if stripe_mesh == null:
-				continue
-			var smat: StandardMaterial3D = stripe_mesh.material_override as StandardMaterial3D
-			if smat == null:
-				continue
-			if ghost:
-				smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-				smat.albedo_color.a = 0.3
-			else:
-				smat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
-				smat.albedo_color.a = 1.0
 
 
 func _make_solid_mat(color: Color) -> StandardMaterial3D:
