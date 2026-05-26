@@ -45,18 +45,6 @@ const PICK_ACTION_PERIOD_TICKS: int = 8
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
-# Pass distance threshold above which the carrier charges a wrister
-# for the pass instead of releasing a quick-shot. The charged pass
-# arrives at ~19 m/s vs ~14 for a quick-shot, shrinking the defender
-# reaction window meaningfully past ~10 m. Below this, quick-shot
-# pacing still feels right and the charge time isn't worth the
-# windup commit. Scoring is speed-aware via _compute_best_pass:
-# long passes are evaluated at the charged speed so opponents
-# project less and the lead is correspondingly shorter — long
-# passes score for what they ACTUALLY are, not for what a quick-
-# shot version would be.
-const LONG_PASS_DISTANCE_THRESHOLD_M: float = 10.0
-
 # UX nudge: bots prefer feeding humans on close-call passes. Capped
 # at 1.0 inside the loop so bias can't push a borderline pass above
 # a clearly-better one.
@@ -345,7 +333,7 @@ func _pick_action(ctx: RoleContext) -> void:
 			# commit isn't worth it.
 			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
 			pass_should_charge = (receiver != null
-					and ctx.self_pos.distance_to(receiver.position) > LONG_PASS_DISTANCE_THRESHOLD_M)
+					and ctx.self_pos.distance_to(receiver.position) > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M)
 		elif new_intent == INTENT_SHOOT:
 			shot_is_elevated = _should_elevate_shot(ctx, shoot_score)
 	else:
@@ -428,7 +416,6 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 			var receiver_in_oz: bool = -own_goal_dir * receiver_state.position.z > GameRules.BLUE_LINE_Z
 			if not receiver_in_oz:
 				continue
-		var dist: float = self_pos.distance_to(receiver_state.position)
 		# Match the speed the state machine will actually fire at: long
 		# passes get the charged-wrister speed, short passes the quick-
 		# shot speed (see PASS_PRESSED branch on _pass_should_charge).
@@ -437,8 +424,9 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# at 14 m/s overestimates defender presence on the line and
 		# leads past the receiver, both of which depress long-pass
 		# scores below where they should be.
-		var pass_speed: float = (SkaterAgentStateMachine.BOT_PASS_CHARGE_SPEED_M_S
-				if dist > LONG_PASS_DISTANCE_THRESHOLD_M
+		var dist: float = self_pos.distance_to(receiver_state.position)
+		var pass_speed: float = (AIActionScoring.PASS_CHARGE_SPEED_M_S
+				if dist > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M
 				else AIActionScoring.PASS_SPEED_M_S)
 		var flight_t: float = clampf(
 				dist / pass_speed, 0.0, PASS_LEAD_MAX_S)

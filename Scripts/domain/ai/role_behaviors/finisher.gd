@@ -191,10 +191,16 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue
+		# Match the speed our carrier would actually fire at — long
+		# passes get the charged-wrister speed, short ones the quick-
+		# shot speed. Without this the lane-clear math assumes 14 m/s
+		# universally and a 12 m feed scores as if defenders had 36%
+		# more reaction time than they actually do.
+		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
 		var score: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
 				goalie_pos, GameRules.NET_HALF_WIDTH,
-				opp_positions)
+				opp_positions, Vector3.INF, pass_speed)
 		if score > best_score:
 			best_score = score
 			best_pos = c

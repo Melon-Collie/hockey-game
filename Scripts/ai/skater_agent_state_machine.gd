@@ -286,6 +286,11 @@ const BOT_WRISTER_CHARGE_TICKS: int = 60
 # Target accumulated charge_distance at release. SkaterController.
 # max_wrister_charge_distance defaults to 2.0; we aim for half — past
 # the quick-shot threshold (0.2), comfortable power (lerp ≈ 50%).
+# If you retune this, update AIActionScoring.BOT_PASS_CHARGE_RATIO
+# to match (= TARGET / max_wrister_charge_distance). Scoring uses
+# that ratio to derive the assumed charged-pass release speed; a
+# mismatch makes _compute_best_pass score long passes for a speed
+# the state machine doesn't actually fire at.
 const BOT_WRISTER_TARGET_CHARGE: float = 1.0
 # Per-tick mouse_screen_pos delta along the sweep direction.
 # tick_wrister_charge multiplies screen delta by 0.01 * mouse_sensitivity
@@ -318,26 +323,6 @@ const BOT_PRE_AIM_BUFFER_S: float = 0.01
 const BOT_WRISTER_LOOKAHEAD_S: float = (
 		float(BOT_WRISTER_CHARGE_TICKS) / 240.0 + BOT_PRE_AIM_BUFFER_S)
 
-# SkaterController.max_wrister_charge_distance default. Mirrored
-# here so BOT_PASS_CHARGE_SPEED_M_S and other charge math are
-# explicit about the assumption. The @export over there is the
-# authoritative source; this constant has to match.
-const SKATER_MAX_WRISTER_CHARGE_DISTANCE: float = 2.0
-
-# Release speed of a bot-charged wrister pass. Derived from the shot
-# mechanics (min + (max-min) × charge_t where charge_t comes from
-# BOT_WRISTER_TARGET_CHARGE / max_wrister_charge_distance). With
-# defaults — min 14, max 24, target 1.0 of max 2.0 → t=0.5 → 19 m/s.
-# Used by _pass_aim_point to lead the receiver correctly for a
-# charged pass; without this the lead would assume the slower quick-
-# shot speed and over-lead the receiver by ~36%.
-# TODO(per-player attrs): when SkaterAttributes lands, derive from
-# this carrier's own wrister_power_min/max + max_wrister_charge_distance.
-const BOT_PASS_CHARGE_SPEED_M_S: float = (
-		GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
-		+ (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-				- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
-		* (BOT_WRISTER_TARGET_CHARGE / SKATER_MAX_WRISTER_CHARGE_DISTANCE))
 # Forehand wind-up offset for the visible blade sweep. mouse_world_pos
 # at tick 0 sits BOT_WRISTER_WIND_UP_BACK_M behind the bot along
 # (-aim_dir) and BOT_WRISTER_WIND_UP_SIDE_M to the forehand side
@@ -1964,7 +1949,10 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# Speed-aware lead: charged passes arrive faster, so the receiver
 	# covers less ground in flight — leading at the quick-shot speed
 	# would over-lead by ~36% (19/14 - 1) and the puck would sail past.
-	var pass_speed: float = (BOT_PASS_CHARGE_SPEED_M_S
+	# Reads the captured _pass_should_charge flag rather than
+	# recomputing from distance: the speed locked in at intent
+	# commit is what the controller will actually fire at.
+	var pass_speed: float = (AIActionScoring.PASS_CHARGE_SPEED_M_S
 			if _pass_should_charge
 			else AIActionScoring.PASS_SPEED_M_S)
 	var flight_t: float = clampf(

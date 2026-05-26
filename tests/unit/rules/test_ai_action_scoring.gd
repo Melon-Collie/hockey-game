@@ -780,3 +780,49 @@ func test_carry_intercept_safety_uses_worst_defender() -> void:
 	assert_eq(AIActionScoring.carry_intercept_safety(
 			self_pos, candidate, 1.0, opps_now, opps_then),
 			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
+
+
+# ─── expected_pass_speed ────────────────────────────────────────────────
+
+func test_expected_pass_speed_short_pass_is_quick_shot() -> void:
+	var shooter := Vector3.ZERO
+	var nearby := Vector3(0.0, 0.0, AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M - 1.0)
+	assert_eq(AIActionScoring.expected_pass_speed(shooter, nearby),
+			AIActionScoring.PASS_SPEED_M_S)
+
+
+func test_expected_pass_speed_long_pass_is_charged() -> void:
+	var shooter := Vector3.ZERO
+	var far := Vector3(0.0, 0.0, AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M + 1.0)
+	assert_eq(AIActionScoring.expected_pass_speed(shooter, far),
+			AIActionScoring.PASS_CHARGE_SPEED_M_S)
+
+
+# ─── score_pass: speed-aware lane clearance ─────────────────────────────
+
+func test_score_pass_higher_at_charged_speed_with_in_lane_defender() -> void:
+	# Same defender on the same pass line. At quick-shot speed (14 m/s)
+	# the defender has more time to react and step toward the line,
+	# producing a lower lane-clear (and a lower pass score). At
+	# charged speed (~19 m/s) the puck arrives sooner, defender
+	# contributes less, score is higher.
+	#
+	# Defender geometry has to put time-to-defender INSIDE the
+	# LANE_REACTION_DELAY_S..+RAMP_S band (0.08..0.18s) at both
+	# speeds, otherwise reaction_factor clamps and the two scores
+	# match. With a 15 m pass and defender at z=2.5 (parameter
+	# t=0.167): slow flight=1.07s, t*flight=0.18s (top of ramp);
+	# fast flight=0.79s, t*flight=0.13s (mid ramp). Both inside,
+	# slow reaction stronger → slow score lower.
+	var shooter := Vector3.ZERO
+	var receiver := Vector3(0.0, 0.0, 15.0)
+	var goalie := Vector3(0.0, 0.0, GOAL.z - 1.0)
+	var in_lane: Array[Vector3] = [Vector3(0.5, 0.0, 2.5)]
+	var slow: float = AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, NET_HW, in_lane,
+			Vector3.INF, AIActionScoring.PASS_SPEED_M_S)
+	var fast: float = AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, NET_HW, in_lane,
+			Vector3.INF, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_gt(fast, slow,
+			"charged pass scores higher than quick-shot when a defender sits in the lane (less reaction time)")

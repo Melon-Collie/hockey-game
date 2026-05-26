@@ -174,11 +174,52 @@ const LANE_REACTION_RAMP_S: float = 0.10
 # linear velocity directly (see Puck.release), so "power" IS m/s.
 # Sourced from GameRules so the AI's lane reaction window matches
 # the live shot mechanics. score_shoot defaults to wrister speed;
-# score_pass uses pass speed (which is quick_shot_power — passes
-# in this codebase are mechanically quick-shots).
+# score_pass uses pass speed (which is quick_shot_power — short
+# passes in this codebase are mechanically quick-shots, long ones
+# get wrister-charged for more pace — see PASS_CHARGE_SPEED_M_S /
+# expected_pass_speed).
 const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
+
+# Bot's wrister charge ratio (target charge / max charge distance).
+# Mirrors BOT_WRISTER_TARGET_CHARGE / SkaterController.max_wrister_
+# charge_distance defaults (1.0 / 2.0). Domain layer can't reference
+# the application-side constants directly, so the ratio is duplicated
+# here — must stay in sync. If you retune the bot's wrister target
+# (skater_agent_state_machine.gd: BOT_WRISTER_TARGET_CHARGE), update
+# this value to match.
+const BOT_PASS_CHARGE_RATIO: float = 0.5
+
+# Charged wrister pass release speed. Bots fire long passes (distance
+# > LONG_PASS_DISTANCE_THRESHOLD_M) at this speed instead of the
+# quick-shot PASS_SPEED_M_S — see SkaterAgentStateMachine's
+# PASS_PRESSED branch. Defensive threat modeling assumes opponents
+# play the same way.
+const PASS_CHARGE_SPEED_M_S: float = (
+		GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
+		+ (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+				- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
+		* BOT_PASS_CHARGE_RATIO)
+
+# Pass distance threshold above which the carrier wrister-charges
+# (and threat modeling assumes opponents do the same). At 19 m/s vs
+# 14, the charged version meaningfully shrinks defender reaction
+# windows past ~10 m; below this, snap-passes are simpler and the
+# windup commit isn't worth it.
+const LONG_PASS_DISTANCE_THRESHOLD_M: float = 10.0
+
+
+# Returns the speed a pass from `shooter` to `receiver` will fire at.
+# Above LONG_PASS_DISTANCE_THRESHOLD_M, the carrier charges the
+# wrister (release ≈ PASS_CHARGE_SPEED_M_S); below it, snap-pass
+# (PASS_SPEED_M_S). Used by both offensive scoring (carrier picking
+# the right speed for lead / lane math) and defensive scoring
+# (threat_surface_pass assuming opponents play the same way).
+static func expected_pass_speed(shooter: Vector3, receiver: Vector3) -> float:
+	if shooter.distance_to(receiver) > LONG_PASS_DISTANCE_THRESHOLD_M:
+		return PASS_CHARGE_SPEED_M_S
+	return PASS_SPEED_M_S
 
 # Reference top skating speed. Single source of truth shared with
 # SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.
@@ -454,12 +495,18 @@ static func score_pass(
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
 		opponents: Array[Vector3],
-		goalie_current_pos: Vector3 = Vector3.INF) -> float:
+		goalie_current_pos: Vector3 = Vector3.INF,
+		pass_speed_m_s: float = PASS_SPEED_M_S) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
 		return 0.0
-	var lane: float = _lane_clear(shooter, receiver, opponents, PASS_SPEED_M_S)
+	# Lane-clear's reaction window scales with puck flight time, so
+	# passing the actual fire speed matters: a charged pass at ~19 m/s
+	# gives defenders 36% less reaction time than the quick-shot
+	# default. Caller picks via expected_pass_speed(shooter, receiver)
+	# when the distance gate is appropriate.
+	var lane: float = _lane_clear(shooter, receiver, opponents, pass_speed_m_s)
 	if lane <= 0.0:
 		return 0.0
 	# Receiver's value as a shooter from where they are. Caller is
@@ -685,10 +732,16 @@ static func threat_surface_pass(
 		defenders: Array[Vector3]) -> float:
 	if pass_lane_blocked_by_net(carrier_pos, receiver_pos):
 		return 0.0
+	# Assume the opponent would fire this hypothetical pass at the
+	# speed our bots would — charged wrister for long passes, quick-
+	# shot otherwise. Without this, the carrier-quick-shot 14 m/s
+	# default would overestimate defender reaction time on long
+	# opponent passes and underestimate the threat.
+	var pass_speed: float = expected_pass_speed(carrier_pos, receiver_pos)
 	var pass_score: float = score_pass(
 			carrier_pos, receiver_pos, our_net, our_goalie_pos,
-			net_half_width, defenders)
-	var lane: float = _lane_clear(carrier_pos, receiver_pos, defenders, PASS_SPEED_M_S)
+			net_half_width, defenders, Vector3.INF, pass_speed)
+	var lane: float = _lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
 	var positional: float = position_potential(receiver_pos, our_net, defenders)
 	return maxf(pass_score, lane * positional)
 
