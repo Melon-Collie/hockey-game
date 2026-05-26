@@ -289,6 +289,27 @@ const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
 const BOT_PRE_AIM_BUFFER_S: float = 0.01
 const BOT_WRISTER_LOOKAHEAD_S: float = (
 		float(BOT_WRISTER_CHARGE_TICKS) / 240.0 + BOT_PRE_AIM_BUFFER_S)
+
+# SkaterController.max_wrister_charge_distance default. Mirrored
+# here so BOT_PASS_CHARGE_SPEED_M_S and other charge math are
+# explicit about the assumption. The @export over there is the
+# authoritative source; this constant has to match.
+const SKATER_MAX_WRISTER_CHARGE_DISTANCE: float = 2.0
+
+# Release speed of a bot-charged wrister pass. Derived from the shot
+# mechanics (min + (max-min) × charge_t where charge_t comes from
+# BOT_WRISTER_TARGET_CHARGE / max_wrister_charge_distance). With
+# defaults — min 14, max 24, target 1.0 of max 2.0 → t=0.5 → 19 m/s.
+# Used by _pass_aim_point to lead the receiver correctly for a
+# charged pass; without this the lead would assume the slower quick-
+# shot speed and over-lead the receiver by ~36%.
+# TODO(per-player attrs): when SkaterAttributes lands, derive from
+# this carrier's own wrister_power_min/max + max_wrister_charge_distance.
+const BOT_PASS_CHARGE_SPEED_M_S: float = (
+		GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
+		+ (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+				- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
+		* (BOT_WRISTER_TARGET_CHARGE / SKATER_MAX_WRISTER_CHARGE_DISTANCE))
 # Forehand wind-up offset for the visible blade sweep. mouse_world_pos
 # at tick 0 sits BOT_WRISTER_WIND_UP_BACK_M behind the bot along
 # (-aim_dir) and BOT_WRISTER_WIND_UP_SIDE_M to the forehand side
@@ -529,6 +550,15 @@ var _shoot_perp_sign: float = 1.0
 # Locked direction = the bot committed to a target when it picked
 # SHOOT, and follows through.
 var _shoot_aim_dir_locked: Vector3 = Vector3.INF
+
+# Charged-pass bookkeeping. Mirrors the wrister charge structure
+# but with the sweep aimed at the receiver lead, not the goal
+# shadow. Set when the carrier picks PASS with pass_should_charge=
+# true; PASS_PRESSED then holds shoot_held through BOT_WRISTER_CHARGE_TICKS
+# instead of releasing on tick 0. See _state_pass_pressed.
+var _pass_should_charge: bool = false
+var _pass_charge_tick: int = 0
+var _pass_sweep_dir_xy: Vector2 = Vector2.ZERO
 
 # One-timer readiness mirrored from the most recent OFF_PUCK role
 # decision. Also published to TeamBrain (so the carrier reads it
@@ -1135,6 +1165,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_intended_action = State.CARRY
 		_intent_wait_ticks = 0
 		_pass_target_peer_id = -1
+		_pass_should_charge = false
 		_shot_is_elevated = false
 		_locked_pre_aim_point = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
@@ -1155,6 +1186,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# they need to stay fresh.
 	_last_carry_anchor = _carrier.last_carry_anchor
 	_pass_target_peer_id = _carrier.pass_target_peer_id
+	_pass_should_charge = _carrier.pass_should_charge
 	_shot_is_elevated = _carrier.shot_is_elevated
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
@@ -1621,6 +1653,14 @@ func _shoot_compensated_aim_dir(aim_dir: Vector3) -> Vector3:
 
 
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
+	# Lost the puck mid-charge — bail. Mirrors SHOOT_PRESSED's bail
+	# path; release-without-puck is a no-op on the controller side.
+	if not have_puck:
+		_pass_target_peer_id = -1
+		_pass_should_charge = false
+		_set_state(_post_puck_lost_state(snapshot))
+		return
+
 	_apply_brake_steering(input, snapshot, self_pos)
 	# Resolve the receiver's slot label NOW for the debug readout —
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
@@ -1628,24 +1668,70 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	var target_slot_label: String = "?"
 	if _team_brain != null and _pass_target_peer_id != -1:
 		target_slot_label = _slot_label(_team_brain.get_slot(_pass_target_peer_id))
-	debug_last_decision = "PASS→%s" % target_slot_label
-	# Aim at the receiver's lead position. Quick-shot direction is
-	# blade-from-player at release, and the blade IK swings toward
-	# mouse_world_pos — so this fires the puck along the bot→receiver
-	# vector.
+	# Aim point is the receiver's lead — speed-aware via
+	# _pass_aim_point so a charged pass leads less than a quick-shot
+	# (puck arrives sooner, receiver covers less ground in flight).
 	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
 	input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
-	input.shoot_pressed = true
-	input.shoot_held = true
-	# v2: give-and-go cut sub-mode is removed. After the pass, the bot
-	# falls back to its slot anchor for the new state (likely SUPPORT
-	# or SPRINT_BY in TRANS_DO).
-	# Same one-tick-then-exit pattern as SHOOT_PRESSED. Clear the target
-	# either way so a future PASS picks a fresh one.
-	_pass_target_peer_id = -1
-	if not have_puck:
-		_set_state(_post_puck_lost_state(snapshot))
+
+	if not _pass_should_charge:
+		# ── Quick-shot pass: one-tick release ──
+		debug_last_decision = "PASS→%s" % target_slot_label
+		input.shoot_pressed = true
+		input.shoot_held = true
+		# Same one-tick-then-exit pattern as before. Clear target so
+		# a future PASS picks a fresh one.
+		_pass_target_peer_id = -1
+		_set_state(State.CARRY)
+		return
+
+	# ── Charged wrister pass ──
+	# Mid-charge bail: opponent closes in from the front during the
+	# windup. Same logic as SHOOT_PRESSED bail — getting blasted mid-
+	# windup is worse than not firing. Skipped on tick 0 (just committed).
+	if _pass_charge_tick > 0:
+		var receiver_state: SkaterNetworkState = snapshot.skater_states.get(_pass_target_peer_id)
+		if receiver_state != null:
+			var forward: Vector3 = receiver_state.position - self_pos
+			if _opponent_within_forward(snapshot, self_pos, forward, BOT_WRISTER_BAIL_RADIUS_M):
+				input.block_held = true
+				_pass_target_peer_id = -1
+				_pass_should_charge = false
+				_set_state(State.CARRY)
+				return
+
+	debug_last_decision = "PASS+→%s" % target_slot_label
+
+	if _pass_charge_tick == 0:
+		# Capture the sweep direction = direction toward receiver lead.
+		# This is the screen-space drag direction that becomes the puck's
+		# release direction (see SHOOT_PRESSED — sweep dir → prev_blade_dir
+		# at release → release direction). Use clean_pass_aim, not the
+		# stepped mouse, so a single-tick mouse residual can't tilt it.
+		var sweep: Vector3 = clean_pass_aim - self_pos
+		sweep.y = 0.0
+		if sweep.length_squared() > 0.0001:
+			sweep = sweep.normalized()
+			_pass_sweep_dir_xy = Vector2(sweep.x, sweep.z)
+		input.shoot_pressed = true
+
+	# Walk mouse_screen_pos along the sweep direction so SkaterAimingBehavior
+	# accumulates charge_distance — same formula as SHOOT_PRESSED so the
+	# charge hits BOT_WRISTER_TARGET_CHARGE at the release tick.
+	var sens: float = maxf(PlayerPrefs.mouse_sensitivity, 0.01)
+	input.mouse_screen_pos = (
+			_pass_sweep_dir_xy * (BOT_WRISTER_SCREEN_DELTA_PER_TICK * float(_pass_charge_tick) / sens))
+
+	if _pass_charge_tick < BOT_WRISTER_CHARGE_TICKS:
+		input.shoot_held = true
+		_pass_charge_tick += 1
 	else:
+		# Release: shoot_held drops, controller's wrister_aim sees the
+		# falling edge and fires release_wrister with accumulated
+		# charge_distance and sweep direction.
+		input.shoot_held = false
+		_pass_target_peer_id = -1
+		_pass_should_charge = false
 		_set_state(State.CARRY)
 
 
@@ -1827,8 +1913,14 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	if receiver == null:
 		return _attacking_goal_pos
 	var dist: float = self_pos.distance_to(receiver.position)
+	# Speed-aware lead: charged passes arrive faster, so the receiver
+	# covers less ground in flight — leading at the quick-shot speed
+	# would over-lead by ~36% (19/14 - 1) and the puck would sail past.
+	var pass_speed: float = (BOT_PASS_CHARGE_SPEED_M_S
+			if _pass_should_charge
+			else AIActionScoring.PASS_SPEED_M_S)
 	var flight_t: float = clampf(
-			dist / AIActionScoring.PASS_SPEED_M_S, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
+			dist / pass_speed, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
 	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
 	return _predict_receiver(receiver, flight_t, accel)
 
@@ -2542,6 +2634,9 @@ func _set_state(s: State) -> void:
 			_shoot_charge_tick = 0
 			_shoot_sweep_dir_xy = Vector2.ZERO
 			_shoot_aim_dir_locked = Vector3.INF
+		if s == State.PASS_PRESSED:
+			_pass_charge_tick = 0
+			_pass_sweep_dir_xy = Vector2.ZERO
 		if s == State.ONE_TIMER_PRESSED:
 			_one_timer_press_tick = 0
 		# Intent + wait counter reset on CARRY entry so a new puck

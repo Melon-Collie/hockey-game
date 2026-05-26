@@ -45,6 +45,18 @@ const PICK_ACTION_PERIOD_TICKS: int = 8
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
+# Pass distance threshold above which the carrier charges a wrister
+# for the pass instead of releasing a quick-shot. The charged pass
+# arrives at ~19 m/s vs ~14 for a quick-shot, shrinking the defender
+# reaction window meaningfully past ~10 m. Below this, quick-shot
+# pacing still feels right and the charge time isn't worth the
+# windup commit. TODO(scoring): _compute_best_pass still uses the
+# quick-shot speed for lane-clear / lead-time math, so the scorer is
+# pessimistic about charged passes — fixing that needs threading
+# the fire speed through score_pass and would let bots PICK long
+# passes more often, not just fire the ones they pick faster.
+const LONG_PASS_DISTANCE_THRESHOLD_M: float = 10.0
+
 # UX nudge: bots prefer feeding humans on close-call passes. Capped
 # at 1.0 inside the loop so bias can't push a borderline pass above
 # a clearly-better one.
@@ -94,6 +106,12 @@ var intended_action: int = INTENT_CARRY
 # Set when intent commits to PASS. Consumed by the state machine
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
 var pass_target_peer_id: int = -1
+
+# Set alongside pass_target_peer_id when the chosen PASS is far enough
+# that the carrier wrister-charges instead of quick-releasing. The
+# state machine consumes this when entering PASS_PRESSED to branch
+# between one-tick fire and ~250 ms wrister charge.
+var pass_should_charge: bool = false
 
 # Set when intent commits to SHOOT. Consumed by the state machine's
 # press-state handlers to drive elevation.
@@ -162,6 +180,7 @@ func decide(ctx: RoleContext) -> RoleDecision:
 func reset() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
+	pass_should_charge = false
 	shot_is_elevated = false
 	last_carry_anchor = Vector3.ZERO
 	_pick_action_cooldown = 0
@@ -174,6 +193,7 @@ func reset() -> void:
 func clear_intent() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
+	pass_should_charge = false
 	_pick_action_cooldown = 0
 
 
@@ -320,6 +340,12 @@ func _pick_action(ctx: RoleContext) -> void:
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer
+			# Wrister-charge for long passes — more pace, smaller defender
+			# reaction window. Snap-pass for short feeds where the windup
+			# commit isn't worth it.
+			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
+			pass_should_charge = (receiver != null
+					and ctx.self_pos.distance_to(receiver.position) > LONG_PASS_DISTANCE_THRESHOLD_M)
 		elif new_intent == INTENT_SHOOT:
 			shot_is_elevated = _should_elevate_shot(ctx, shoot_score)
 	else:
