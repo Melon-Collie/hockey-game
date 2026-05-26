@@ -680,3 +680,103 @@ func test_carry_poke_safety_asymmetric_for_in_front_vs_behind() -> void:
 			"opponent on the puck = full danger")
 	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, behind), 1.0,
 			"opponent two carry-arms behind = safe")
+
+
+# ─── carry_intercept_safety ─────────────────────────────────────────────
+
+func test_carry_intercept_safety_returns_one_with_no_opponents() -> void:
+	var self_pos := Vector3.ZERO
+	var candidate := Vector3(5.0, 0.0, 0.0)
+	var empty: Array[Vector3] = []
+	assert_eq(AIActionScoring.carry_intercept_safety(
+			self_pos, candidate, 1.0, empty, empty), 1.0)
+
+
+func test_carry_intercept_safety_returns_one_at_zero_arrival_time() -> void:
+	# local_time ≈ 0 means bot has no path. Helper should short-
+	# circuit to 1.0 so stand-still candidates don't get a spurious
+	# penalty from this check (carry_poke_safety covers them).
+	var self_pos := Vector3.ZERO
+	var opps_now: Array[Vector3] = [Vector3(2.0, 0.0, 0.0)]
+	var opps_then: Array[Vector3] = [Vector3(2.0, 0.0, 0.0)]
+	assert_eq(AIActionScoring.carry_intercept_safety(
+			self_pos, self_pos, 0.0, opps_now, opps_then), 1.0)
+
+
+func test_carry_intercept_safety_safe_for_parallel_same_speed_chase() -> void:
+	# Defender starts 4 m to the side, parallel velocity, same speed.
+	# Relative motion is zero → constant distance over the window →
+	# fallback to distance at t=0. 4 m is outside CARRY_POKE_SAFE_RADIUS
+	# (3.0 m), so safety = 1.0.
+	var self_pos := Vector3.ZERO
+	var candidate := Vector3(0.0, 0.0, 10.0)  # bot moves +Z 10 m
+	var opps_now: Array[Vector3] = [Vector3(4.0, 0.0, 0.0)]
+	# Defender ends 4 m to the side of CANDIDATE → same +Z motion at
+	# the same speed.
+	var opps_then: Array[Vector3] = [Vector3(4.0, 0.0, 10.0)]
+	assert_eq(AIActionScoring.carry_intercept_safety(
+			self_pos, candidate, 1.0, opps_now, opps_then), 1.0)
+
+
+func test_carry_intercept_safety_floor_when_path_crosses_defender_in_window() -> void:
+	# Bot drives +Z 10 m over 1 s. Defender starts ahead and to the
+	# left, cuts across to the bot's path mid-window — defender ends
+	# ON the bot's line at t = 0.5. Closest approach is ~0 → floor.
+	var self_pos := Vector3.ZERO
+	var candidate := Vector3(0.0, 0.0, 10.0)
+	# At t=0: bot at (0,0,0), opp at (-3, 0, 5).
+	# At t=1: bot at (0,0,10), opp at (3, 0, 5).
+	# At t=0.5: bot at (0,0,5), opp at (0,0,5). Distance = 0.
+	var opps_now: Array[Vector3] = [Vector3(-3.0, 0.0, 5.0)]
+	var opps_then: Array[Vector3] = [Vector3(3.0, 0.0, 5.0)]
+	assert_eq(AIActionScoring.carry_intercept_safety(
+			self_pos, candidate, 1.0, opps_now, opps_then),
+			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
+
+
+func test_carry_intercept_safety_safe_when_defender_moves_away_from_path() -> void:
+	# Bot drives +Z 10 m. Defender at same start position as the
+	# crossing case but moving AWAY (-X to -X further). Closest
+	# approach stays far from the path → safety = 1.0.
+	# Demonstrates intercept-safety is direction-aware: it's about
+	# convergence, not just "are there opponents around."
+	var self_pos := Vector3.ZERO
+	var candidate := Vector3(0.0, 0.0, 10.0)
+	var opps_now: Array[Vector3] = [Vector3(-3.0, 0.0, 5.0)]
+	var opps_then: Array[Vector3] = [Vector3(-8.0, 0.0, 5.0)]
+	assert_eq(AIActionScoring.carry_intercept_safety(
+			self_pos, candidate, 1.0, opps_now, opps_then), 1.0)
+
+
+func test_carry_intercept_safety_ignores_closest_approach_outside_window() -> void:
+	# Bot drives +Z 10 m over 1 s. Defender starts ahead of where
+	# the bot will arrive (z=15) and creeps lateral toward the path,
+	# so analytical closest approach t* ≈ 1.54 — OUTSIDE [0, 1].
+	# Clamp to t=1 (end of window) → distance at endpoint governs.
+	# Endpoint geometry: bot at (0,0,10), opp at (-4, 0, 15), d≈6.4
+	# well outside SAFE_RADIUS → safety = 1.0.
+	var self_pos := Vector3.ZERO
+	var candidate := Vector3(0.0, 0.0, 10.0)
+	var opps_now: Array[Vector3] = [Vector3(-5.0, 0.0, 15.0)]
+	var opps_then: Array[Vector3] = [Vector3(-4.0, 0.0, 15.0)]
+	assert_eq(AIActionScoring.carry_intercept_safety(
+			self_pos, candidate, 1.0, opps_now, opps_then), 1.0)
+
+
+func test_carry_intercept_safety_uses_worst_defender() -> void:
+	# Two defenders: one converging onto the path (dangerous), one
+	# moving away (safe). Result should track the dangerous one
+	# (worst-case dominates).
+	var self_pos := Vector3.ZERO
+	var candidate := Vector3(0.0, 0.0, 10.0)
+	var opps_now: Array[Vector3] = [
+			Vector3(-3.0, 0.0, 5.0),  # converger (crosses path at t=0.5)
+			Vector3(8.0, 0.0, 5.0),   # mover-away
+	]
+	var opps_then: Array[Vector3] = [
+			Vector3(3.0, 0.0, 5.0),
+			Vector3(15.0, 0.0, 5.0),
+	]
+	assert_eq(AIActionScoring.carry_intercept_safety(
+			self_pos, candidate, 1.0, opps_now, opps_then),
+			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)

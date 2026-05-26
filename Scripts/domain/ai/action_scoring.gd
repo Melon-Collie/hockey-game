@@ -752,6 +752,89 @@ static func carry_poke_safety(puck_pos: Vector3, projected_opponents: Array[Vect
 	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, t)
 
 
+# Time-synced interception penalty for CARRY destinations. Returns a
+# multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0] driven by the worst
+# (closest) defender intercept across the bot's projected path to
+# `candidate`. Unlike carry_poke_safety (which only checks the
+# destination) and path_clearance (which checks whether a projected
+# opponent STANDS on the line), this asks: as the bot skates along
+# its path over [0, local_time], does any defender's projected
+# position pass within poke range of the bot's position AT THE SAME
+# TIME?
+#
+# Modeling defender CONVERGENCE on the bot's route lets _best_carry
+# pick lateral candidates earlier — the body bends away from a
+# closing defender before they arrive, instead of driving toward
+# them and relying on the discrete deke at the last moment.
+#
+# Math: bot and defender both modeled as constant-velocity over
+# [0, local_time]. |B(t) - D(t)|² is quadratic in t; closest
+# approach has a closed form (perpendicular of relative motion).
+# Clamp t* to [0, local_time] so closest-approach OUTSIDE the
+# window (defender passes through after we've already arrived)
+# doesn't penalize.
+#
+# Same radii / floor as carry_poke_safety — same poke geometry.
+# Caller responsibility: `opponents_current` and `opponents_at_arrival`
+# must be parallel arrays (i = same defender); a defender's velocity
+# is derived as (at_arrival - current) / local_time.
+#
+# Edge cases:
+#   - local_time ≈ 0 → bot has no path. Caller should skip (use
+#     carry_poke_safety alone for stand-still candidates).
+#   - |delta_vel|² ≈ 0 (defender and bot moving parallel-and-same-
+#     speed) → t* clamps to 0, result is distance at t=0. Falls
+#     back to "do they start in poke range?" — correct, since a
+#     parallel-pace chase isn't a poke setup, it's a continuous
+#     threat.
+static func carry_intercept_safety(
+		self_pos: Vector3,
+		candidate: Vector3,
+		local_time: float,
+		opponents_current: Array[Vector3],
+		opponents_at_arrival: Array[Vector3]) -> float:
+	if local_time <= 0.0001:
+		return 1.0
+	var n: int = opponents_current.size()
+	if n == 0 or n != opponents_at_arrival.size():
+		return 1.0
+	var inv_t: float = 1.0 / local_time
+	var bot_vx: float = (candidate.x - self_pos.x) * inv_t
+	var bot_vz: float = (candidate.z - self_pos.z) * inv_t
+	var min_d: float = INF
+	for i: int in n:
+		var opp_now: Vector3 = opponents_current[i]
+		var opp_then: Vector3 = opponents_at_arrival[i]
+		var opp_vx: float = (opp_then.x - opp_now.x) * inv_t
+		var opp_vz: float = (opp_then.z - opp_now.z) * inv_t
+		var dp_x: float = opp_now.x - self_pos.x
+		var dp_z: float = opp_now.z - self_pos.z
+		var dv_x: float = opp_vx - bot_vx
+		var dv_z: float = opp_vz - bot_vz
+		var dv_sq: float = dv_x * dv_x + dv_z * dv_z
+		var t_star: float
+		if dv_sq < 0.0001:
+			# Parallel-velocity case: relative motion is zero. Distance
+			# is constant across the window; pick t=0.
+			t_star = 0.0
+		else:
+			t_star = clampf(
+					-(dp_x * dv_x + dp_z * dv_z) / dv_sq,
+					0.0, local_time)
+		var dx_at_t: float = dp_x + dv_x * t_star
+		var dz_at_t: float = dp_z + dv_z * t_star
+		var d: float = sqrt(dx_at_t * dx_at_t + dz_at_t * dz_at_t)
+		if d < min_d:
+			min_d = d
+	if min_d == INF or min_d >= CARRY_POKE_SAFE_RADIUS_M:
+		return 1.0
+	if min_d <= CARRY_POKE_DANGER_RADIUS_M:
+		return CARRY_POKE_SAFETY_FLOOR
+	var ramp_t: float = (min_d - CARRY_POKE_DANGER_RADIUS_M) / (
+			CARRY_POKE_SAFE_RADIUS_M - CARRY_POKE_DANGER_RADIUS_M)
+	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, ramp_t)
+
+
 # Public lane-clearance check for CARRY candidates — the bot is
 # physically traveling along this segment, not firing a puck through
 # it, so the reaction-window math from `_lane_clear` doesn't apply.

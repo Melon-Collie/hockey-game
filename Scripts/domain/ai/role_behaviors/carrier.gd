@@ -614,7 +614,17 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var cand_puck_pos: Vector3 = _puck_pos_at(candidate, attacking_goal)
 		var safety: float = AIActionScoring.carry_poke_safety(
 				cand_puck_pos, _scratch_opponents_path)
-		var s_total: float = dest_score * lane * decay * safety
+		# Time-synced interception penalty — discount candidates whose
+		# path lets a defender converge to poke range during transit.
+		# Pairs with carry_poke_safety: that one penalizes the
+		# destination, this one penalizes the route to it. Together
+		# they bias the bot toward lateral candidates earlier, so the
+		# discrete poke-evade cut becomes the finish on an existing
+		# curve rather than a sudden veer.
+		var intercept: float = AIActionScoring.carry_intercept_safety(
+				self_pos, candidate, local_time,
+				_scratch_opponents, _scratch_opponents_path)
+		var s_total: float = dest_score * lane * decay * safety * intercept
 		if s_total > best_score:
 			best_score = s_total
 			best_pos = candidate
@@ -637,7 +647,10 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var slot_puck_pos: Vector3 = _puck_pos_at(slot_pos, attacking_goal)
 		var slot_safety: float = AIActionScoring.carry_poke_safety(
 				slot_puck_pos, _scratch_opponents_path)
-		var slot_total: float = slot_dest_score * slot_lane * slot_decay * slot_safety
+		var slot_intercept: float = AIActionScoring.carry_intercept_safety(
+				self_pos, slot_pos, slot_time,
+				_scratch_opponents, _scratch_opponents_path)
+		var slot_total: float = slot_dest_score * slot_lane * slot_decay * slot_safety * slot_intercept
 		if slot_total > best_score:
 			best_score = slot_total
 			best_pos = slot_pos
