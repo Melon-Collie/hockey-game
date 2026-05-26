@@ -193,15 +193,13 @@ func apply_stripes(
 # Uses StandardMaterial3D defaults (shaded) so the jersey responds to
 # lighting the same way the solid-color body parts do.
 #
-# UV transform:
-#   - uv1_offset.x = 0.25 rotates the wrap 90° around so the texture's
-#     back-center (texel x=128) lands at the skater's +Z (the back).
-#     Godot's CylinderMesh starts U=0 at +Z and increases CCW; without
-#     this shift content drawn at x=128 would appear at +X (right side).
-#   - uv1_scale.y = -1 + uv1_offset.y = 1 flip the V axis so the bottom
-#     row of the image lands at the bottom of the cylinder. Godot's
-#     CylinderMesh has V=0 at the cylinder bottom and V=1 at the top,
-#     which is inverted from image-pixel-y convention.
+# uv1_offset.x = 0.25 rotates the wrap 90° around the cylinder so the
+# texture's back-center (texel x=128) lands at the skater's +Z (the
+# back). Godot's CylinderMesh starts U=0 at +Z and increases CCW; without
+# this shift content drawn at x=128 would appear at +X (right side).
+# V mapping is identity — image y=0 (top) lands at cylinder top, image
+# y=IMG_H-1 (bottom) lands at cylinder bottom, matching the image's
+# natural top-down orientation.
 func _rebuild_jersey_texture() -> void:
 	if _upper_body_mesh == null:
 		return
@@ -210,8 +208,7 @@ func _rebuild_jersey_texture() -> void:
 			_player_name, _jersey_number, _text_color)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
-	mat.uv1_offset = Vector3(0.25, 1.0, 0.0)
-	mat.uv1_scale = Vector3(1.0, -1.0, 1.0)
+	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	_upper_body_mesh.material_override = mat
 
 
