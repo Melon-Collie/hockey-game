@@ -79,11 +79,10 @@ func _create_jersey_viewport() -> void:
 	# uv1_offset.x = 0.25 rotates the wrap 90° around the cylinder so the
 	# texture's back-center (texel x=128) lands at the skater's +Z (the
 	# back). Godot's CylinderMesh starts U=0 at +Z and increases CCW.
-	# uv1_scale.y = -1 + uv1_offset.y = 1 flips V because ViewportTexture
-	# samples bottom-up — without this the hem (drawn at image bottom)
-	# would land at the cylinder TOP instead of the bottom.
-	mat.uv1_offset = Vector3(0.25, 1.0, 0.0)
-	mat.uv1_scale = Vector3(1.0, -1.0, 1.0)
+	# V mapping is identity — Godot's cylinder side uses roughly the top
+	# half of V (cap disks use the bottom half), so JerseyDecal keeps
+	# all visible content in that range; see JerseyDecal.SIDE_V_MAX_PX.
+	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	_upper_body_mesh.material_override = mat
 
 

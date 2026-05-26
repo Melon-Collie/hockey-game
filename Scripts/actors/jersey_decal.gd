@@ -15,7 +15,14 @@ const FONT: Font = preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")
 const IMG_W: int = 512
 const IMG_H: int = 256
 const BACK_CENTER_X: int = 128         # paired with uv1_offset.x = 0.25
-const HEM_HEIGHT: int = 28             # ≈ 6cm of a 0.55m-tall torso
+# Godot's CylinderMesh allocates roughly the top half of the texture's V
+# range to the side surface and the bottom half to the cap disks. Content
+# drawn past this Y gets sampled by the flat top/bottom caps (visible from
+# above on the gameplay camera) instead of the side, so keep visible
+# elements inside [0, SIDE_V_MAX_PX).
+const SIDE_V_MAX_PX: int = IMG_H / 2   # 128 — bottom of the side surface in image-y
+const HEM_HEIGHT: int = 28
+const HEM_Y_TOP: int = SIDE_V_MAX_PX - HEM_HEIGHT  # hem sits just inside the side range
 const NAME_FONT_SIZE: int = 28
 const NUMBER_FONT_SIZE: int = 56
 const NAME_Y_TOP: int = 8              # visual top of the name (px from image top)
@@ -30,7 +37,7 @@ var text_color: Color = Color.BLACK
 
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, IMG_W, IMG_H), jersey_color, true)
-	draw_rect(Rect2(0, IMG_H - HEM_HEIGHT, IMG_W, HEM_HEIGHT), stripe_color, true)
+	draw_rect(Rect2(0, HEM_Y_TOP, IMG_W, HEM_HEIGHT), stripe_color, true)
 
 	var name_upper: String = player_name.to_upper()
 	if name_upper.length() > 0:
