@@ -4,20 +4,38 @@ extends RefCounted
 var _skater: Skater
 var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
-var _lower_body_mesh: MeshInstance3D
-var _direction_indicator: MeshInstance3D
-var _sock_mesh: MeshInstance3D
-var _skate_mesh: MeshInstance3D
+var _helmet: MeshInstance3D
+var _shoulder_l: MeshInstance3D
+var _shoulder_r: MeshInstance3D
+var _hip_l: MeshInstance3D
+var _hip_r: MeshInstance3D
+var _thigh_l: MeshInstance3D
+var _thigh_r: MeshInstance3D
+var _knee_l: MeshInstance3D
+var _knee_r: MeshInstance3D
+var _sock_l: MeshInstance3D
+var _sock_r: MeshInstance3D
+var _skate_l: MeshInstance3D
+var _skate_r: MeshInstance3D
 
 
 func setup(skater: Skater) -> void:
 	_skater = skater
 	_upper_body_mesh = skater.upper_body.get_node("UpperBodyMesh") as MeshInstance3D
 	_blade_mesh = skater.blade.get_node("MeshInstance3D") as MeshInstance3D
-	_lower_body_mesh = skater.lower_body.get_node("LowerBodyMesh") as MeshInstance3D
-	_direction_indicator = skater.upper_body.get_node("DirectionIndicator") as MeshInstance3D
-	_sock_mesh = skater.lower_body.get_node_or_null("SockMesh") as MeshInstance3D
-	_skate_mesh = skater.lower_body.get_node_or_null("SkateMesh") as MeshInstance3D
+	_helmet = skater.upper_body.get_node("Helmet") as MeshInstance3D
+	_shoulder_l = skater.upper_body.get_node("ShoulderL") as MeshInstance3D
+	_shoulder_r = skater.upper_body.get_node("ShoulderR") as MeshInstance3D
+	_hip_l = skater.lower_body.get_node("HipL") as MeshInstance3D
+	_hip_r = skater.lower_body.get_node("HipR") as MeshInstance3D
+	_thigh_l = skater.lower_body.get_node("ThighL") as MeshInstance3D
+	_thigh_r = skater.lower_body.get_node("ThighR") as MeshInstance3D
+	_knee_l = skater.lower_body.get_node("KneeL") as MeshInstance3D
+	_knee_r = skater.lower_body.get_node("KneeR") as MeshInstance3D
+	_sock_l = skater.lower_body.get_node("SockL") as MeshInstance3D
+	_sock_r = skater.lower_body.get_node("SockR") as MeshInstance3D
+	_skate_l = skater.lower_body.get_node("SkateL") as MeshInstance3D
+	_skate_r = skater.lower_body.get_node("SkateR") as MeshInstance3D
 
 
 func apply_colors(
@@ -27,25 +45,48 @@ func apply_colors(
 		socks_color: Color,
 		blade_color: Color) -> void:
 	var jersey_mat: StandardMaterial3D = _make_solid_mat(jersey_color)
+	var pants_mat: StandardMaterial3D = _make_solid_mat(pants_color)
+	var socks_mat: StandardMaterial3D = _make_solid_mat(socks_color)
+	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08))
 	_upper_body_mesh.material_override = jersey_mat
+	_shoulder_l.material_override = jersey_mat.duplicate()
+	_shoulder_r.material_override = jersey_mat.duplicate()
 	_blade_mesh.material_override = _make_solid_mat(blade_color)
-	if _skater.upper_arm_mesh != null:
-		_skater.upper_arm_mesh.material_override = jersey_mat.duplicate()
-	if _skater.forearm_mesh != null:
-		_skater.forearm_mesh.material_override = jersey_mat.duplicate()
-	if _skater.bottom_upper_arm_mesh != null:
-		_skater.bottom_upper_arm_mesh.material_override = jersey_mat.duplicate()
-	if _skater.bottom_forearm_mesh != null:
-		_skater.bottom_forearm_mesh.material_override = jersey_mat.duplicate()
-	_direction_indicator.material_override = _make_solid_mat(helmet_color)
-	_lower_body_mesh.material_override = _make_solid_mat(pants_color)
-	if _sock_mesh != null:
-		_sock_mesh.material_override = _make_solid_mat(socks_color)
+	_set_bone_material(_skater.upper_arm_mesh, jersey_mat)
+	_set_bone_material(_skater.forearm_mesh, jersey_mat)
+	_set_bone_material(_skater.bottom_upper_arm_mesh, jersey_mat)
+	_set_bone_material(_skater.bottom_forearm_mesh, jersey_mat)
+	if _skater.top_elbow_sphere != null:
+		_skater.top_elbow_sphere.material_override = jersey_mat.duplicate()
+	if _skater.top_hand_sphere != null:
+		_skater.top_hand_sphere.material_override = jersey_mat.duplicate()
+	if _skater.bottom_elbow_sphere != null:
+		_skater.bottom_elbow_sphere.material_override = jersey_mat.duplicate()
+	if _skater.bottom_hand_sphere != null:
+		_skater.bottom_hand_sphere.material_override = jersey_mat.duplicate()
+	_helmet.material_override = _make_solid_mat(helmet_color)
+	_hip_l.material_override = pants_mat.duplicate()
+	_hip_r.material_override = pants_mat.duplicate()
+	_thigh_l.material_override = pants_mat.duplicate()
+	_thigh_r.material_override = pants_mat.duplicate()
+	_knee_l.material_override = pants_mat.duplicate()
+	_knee_r.material_override = pants_mat.duplicate()
+	_sock_l.material_override = socks_mat.duplicate()
+	_sock_r.material_override = socks_mat.duplicate()
+	_skate_l.material_override = skate_mat.duplicate()
+	_skate_r.material_override = skate_mat.duplicate()
 	# Fixed colors — set explicitly so ghost mode never creates a blank gray
 	# override and corrupts the color after ghost ends.
 	_skater.stick_mesh.material_override = _make_solid_mat(Color(0.705, 0.640, 0.605))
-	if _skate_mesh != null:
-		_skate_mesh.material_override = _make_solid_mat(Color(0.08, 0.08, 0.08))
+
+
+# Bone mesh wrappers are Node3D; the visible cylinder is a child MeshInstance3D
+# resolved via Skater.bone_visual(). Returns silently if either is null.
+func _set_bone_material(bone: Node3D, mat: StandardMaterial3D) -> void:
+	var visual: MeshInstance3D = _skater.bone_visual(bone)
+	if visual == null:
+		return
+	visual.material_override = mat.duplicate()
 
 
 func apply_jersey_info(p_name: String, number: int, text_color: Color) -> void:
@@ -61,31 +102,31 @@ func apply_jersey_info(p_name: String, number: int, text_color: Color) -> void:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.no_depth_test = false
 
-	# UpperBodyMesh is a 0.5×0.65×0.28 BoxMesh centered at (0, 0.3, 0) in
-	# UpperBody local space. Back surface is at Z = +0.14; place the quad just
-	# outside it. Quad faces +Z by default (toward viewer standing behind).
+	# UpperBodyMesh is now a CylinderMesh (top_radius=0.20, bottom_radius=0.22,
+	# height=0.55) centered at (0, 0.195, 0). At Y=0.25 the cylinder's radius
+	# is ~0.208; placing the flat quad at Z=0.215 sits it just behind the back
+	# surface. Quad faces +Z by default (toward a viewer standing behind the
+	# player). The decal renders flat against a curved surface — readable from
+	# behind but visibly floating off the sides; a curved cylinder-segment
+	# decal is a future improvement.
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.40, 0.30)  # 4:3 matches 256×192 texture
+	quad.size = Vector2(0.36, 0.27)  # 4:3 matches 256×192 texture, slightly narrower than torso radius * 2
 	var mesh_inst := MeshInstance3D.new()
 	mesh_inst.name = "JerseyBackMesh"
 	mesh_inst.mesh = quad
 	mesh_inst.material_override = mat
-	mesh_inst.position = Vector3(0.0, 0.36, 0.15)
+	mesh_inst.position = Vector3(0.0, 0.25, 0.215)
 	_skater.upper_body.add_child(mesh_inst)
 
-	var shoulder_tex: ImageTexture = JerseyTextureGenerator.make_shoulder_texture(number, text_color)
-	var left_shoulder: MeshInstance3D = JerseyTextureGenerator.make_shoulder_mesh(shoulder_tex, -0.14)
-	left_shoulder.name = "JerseyShoulderL"
-	var right_shoulder: MeshInstance3D = JerseyTextureGenerator.make_shoulder_mesh(shoulder_tex, 0.14)
-	right_shoulder.name = "JerseyShoulderR"
-	_skater.upper_body.add_child(left_shoulder)
-	_skater.upper_body.add_child(right_shoulder)
+	# Shoulder texture decals are obsolete now that ShoulderL/R are 3D spheres
+	# painted with the jersey color via apply_colors(). The flat texture quads
+	# would clip into the spheres and look broken on a cylindrical torso.
 
 
 func apply_stripes(
 		jersey_stripe_color: Color,
-		pants_stripe_color: Color,
-		socks_stripe_color: Color) -> void:
+		_pants_stripe_color: Color,
+		_socks_stripe_color: Color) -> void:
 	# Free cuff meshes from a previous call before rebuilding.
 	if _skater.top_cuff_mesh != null and is_instance_valid(_skater.top_cuff_mesh):
 		_skater.upper_body.remove_child(_skater.top_cuff_mesh)
@@ -96,7 +137,7 @@ func apply_stripes(
 		_skater.bot_cuff_mesh.queue_free()
 	_skater.bot_cuff_mesh = null
 
-	# Remove any previously generated stripe nodes.
+	# Remove any previously generated stripe nodes (from older box-geometry runs).
 	for node: Node in _skater.upper_body.get_children():
 		if node.name.begins_with("Stripe_"):
 			_skater.upper_body.remove_child(node)
@@ -106,51 +147,37 @@ func apply_stripes(
 			_skater.lower_body.remove_child(node)
 			node.queue_free()
 
-	# Jersey hem band — bottom 0.08 m of the UpperBodyMesh
-	# (BoxMesh 0.5×0.65×0.28, center (0,0.3,0) → bottom at y = -0.025).
-	var hem_quads: Array = JerseyTextureGenerator.make_box_stripe_band(
-			Vector3(0.0, 0.3, 0.0), Vector3(0.25, 0.325, 0.14),
-			-0.025, 0.08, jersey_stripe_color, "Stripe_JerseyHem")
-	for q: MeshInstance3D in hem_quads:
-		_skater.upper_body.add_child(q)
-
 	# Sleeve cuffs — solid box meshes as children of upper_body. Their
 	# transforms are updated each frame in Skater.update_arm_mesh() /
-	# update_bottom_arm_mesh() using the elbow→hand direction.
+	# update_bottom_arm_mesh() using the elbow→hand direction. Compatible with
+	# the new cylinder arms (cuff sits around the wrist regardless of the bone
+	# mesh primitive).
 	var cuff_size: float = _skater.arm_mesh_thickness + 0.02
 	_skater.top_cuff_mesh = _make_cuff_mesh(cuff_size, 0.06, jersey_stripe_color, "CuffTop")
 	_skater.upper_body.add_child(_skater.top_cuff_mesh)
 	_skater.bot_cuff_mesh = _make_cuff_mesh(cuff_size, 0.06, jersey_stripe_color, "CuffBot")
 	_skater.upper_body.add_child(_skater.bot_cuff_mesh)
 
-	# Pants side stripe — full-height vertical piping on the ±X faces
-	# (LowerBodyMesh BoxMesh 0.45×0.4×0.3, center (0,−0.2,0)).
-	var pants_quads: Array = JerseyTextureGenerator.make_box_side_stripe(
-			Vector3(0.0, -0.2, 0.0), Vector3(0.225, 0.2, 0.15),
-			0.07, pants_stripe_color, "Stripe_Pants")
-	for q: MeshInstance3D in pants_quads:
-		_skater.lower_body.add_child(q)
-
-	# Sock stripe — if SockMesh is present in the scene.
-	if _sock_mesh != null:
-		var sock_box: BoxMesh = _sock_mesh.mesh as BoxMesh
-		if sock_box != null:
-			var sh: Vector3 = sock_box.size * 0.5
-			var sc: Vector3 = _sock_mesh.position
-			var sock_quads: Array = JerseyTextureGenerator.make_box_stripe_band(
-					sc, sh, sc.y + sh.y * 0.3, sh.y * 0.4,
-					socks_stripe_color, "Stripe_Sock")
-			for q: MeshInstance3D in sock_quads:
-				_skater.lower_body.add_child(q)
+	# TODO: Jersey hem band, pants side stripe, and sock stripe were quad-faces
+	# wrapping the old box geometry — they don't fit a cylinder torso or split
+	# leg cylinders. Reimplementing as curved/ring-shaped strip meshes that
+	# wrap the cylinders is follow-up work. The pants/socks stripe colors are
+	# accepted on this API but currently unused below the cuffs.
 
 
 func apply_ghost(ghost: bool) -> void:
 	var meshes: Array[MeshInstance3D] = [
 			_upper_body_mesh, _blade_mesh, _skater.stick_mesh,
-			_skater.upper_arm_mesh, _skater.forearm_mesh,
-			_skater.bottom_upper_arm_mesh, _skater.bottom_forearm_mesh,
-			_lower_body_mesh, _direction_indicator,
-			_sock_mesh, _skate_mesh,
+			_skater.bone_visual(_skater.upper_arm_mesh),
+			_skater.bone_visual(_skater.forearm_mesh),
+			_skater.bone_visual(_skater.bottom_upper_arm_mesh),
+			_skater.bone_visual(_skater.bottom_forearm_mesh),
+			_skater.top_elbow_sphere, _skater.top_hand_sphere,
+			_skater.bottom_elbow_sphere, _skater.bottom_hand_sphere,
+			_helmet, _shoulder_l, _shoulder_r,
+			_hip_l, _hip_r, _thigh_l, _thigh_r,
+			_knee_l, _knee_r, _sock_l, _sock_r,
+			_skate_l, _skate_r,
 			_skater.top_cuff_mesh, _skater.bot_cuff_mesh,
 		]
 	for mesh: MeshInstance3D in meshes:
@@ -166,10 +193,9 @@ func apply_ghost(ghost: bool) -> void:
 		else:
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 			mat.albedo_color.a = 1.0
-	for n: String in ["JerseyBackMesh", "JerseyShoulderL", "JerseyShoulderR"]:
-		var m: Node = _skater.upper_body.get_node_or_null(n)
-		if m:
-			m.visible = not ghost
+	var back_mesh: Node = _skater.upper_body.get_node_or_null("JerseyBackMesh")
+	if back_mesh:
+		back_mesh.visible = not ghost
 	for node: Node in _skater.upper_body.get_children():
 		if node.name.begins_with("Stripe_"):
 			node.visible = not ghost
