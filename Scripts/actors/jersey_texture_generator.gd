@@ -46,12 +46,18 @@ static func _draw_glyph(img: Image, ch: String, x: int, y: int, glyph_scale: int
 
 
 # Generates a 512×256 jersey texture sized to wrap the torso CylinderMesh.
-# Godot's default CylinderMesh UV maps U around the circumference
-# (counterclockwise from +X) and V along the height (V=0 at bottom).
-# In skater-local space the blade points toward -Z, so the BACK of the
-# skater is at +Z, which corresponds to U=0.25 → texel x=128.
+# Godot's CylinderMesh starts U=0 at +Z and increases counterclockwise
+# (looking down +Y). The caller pairs this texture with
+# material.uv1_offset.x = 0.25 to rotate the mapping so the texture's
+# back-center (texel x=128) lands at the skater's +Z (the back). Without
+# that offset, content drawn at x=128 would land at +X (right side).
 #
-# Layout (image y increases downward, V increases upward):
+# V maps from 0 at the TOP of the cylinder to 1 at the BOTTOM (Godot
+# generates the side with y = top − height·V), so image y=0 (the top of
+# the image) ends up at the top of the torso and image y=IMG_H−1 lands
+# at the bottom — same as a flat picture pinned to the torso.
+#
+# Layout:
 #   - Base fill: jersey_color across the entire texture
 #   - Hem band: jersey_stripe_color in the bottom 28 rows (≈ 11% of the
 #     0.55m torso → ~6cm visible hem)
@@ -67,13 +73,13 @@ static func make_jersey_cylinder_texture(
 		text_color: Color) -> ImageTexture:
 	const IMG_W: int = 512
 	const IMG_H: int = 256
-	const BACK_CENTER_X: int = 128         # U=0.25 → +Z (back of skater)
+	const BACK_CENTER_X: int = 128         # paired with uv1_offset.x = 0.25 → +Z back
 	const HEM_HEIGHT: int = 28             # ≈ 6cm of a 0.55m-tall torso
 	const MAX_BACK_WIDTH: int = 280        # max horizontal text span on the back
-	const NAME_BASE_SCALE: int = 5
-	const NUM_BASE_SCALE: int = 14
-	const NAME_Y_TOP: int = 22
-	const NUM_Y_TOP: int = 81
+	const NAME_BASE_SCALE: int = 4
+	const NUM_BASE_SCALE: int = 8
+	const NAME_Y_TOP: int = 50
+	const NUM_Y_TOP: int = 100
 
 	var img := Image.create(IMG_W, IMG_H, false, Image.FORMAT_RGBA8)
 	img.fill(jersey_color)

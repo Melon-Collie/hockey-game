@@ -192,6 +192,12 @@ func apply_stripes(
 # field changes — the texture always reflects the latest combined state.
 # Uses StandardMaterial3D defaults (shaded) so the jersey responds to
 # lighting the same way the solid-color body parts do.
+#
+# uv1_offset.x = 0.25 rotates the texture wrap 90° around the cylinder
+# so the texture's back-center (texel x=128) lands at the skater's +Z
+# (the back). Godot's CylinderMesh starts U=0 at +Z and increases CCW,
+# so without this shift content drawn at x=128 would appear at +X (the
+# skater's right side).
 func _rebuild_jersey_texture() -> void:
 	if _upper_body_mesh == null:
 		return
@@ -200,6 +206,7 @@ func _rebuild_jersey_texture() -> void:
 			_player_name, _jersey_number, _text_color)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
+	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	_upper_body_mesh.material_override = mat
 
 
