@@ -55,7 +55,7 @@ extends CharacterBody3D
 @export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
 # actual length; X/Y control arm thickness.
-@export var arm_mesh_thickness: float = 0.10
+@export var arm_mesh_thickness: float = 0.13
 # Radius of the elbow joint spheres positioned per-tick at the IK elbow.
 @export var elbow_sphere_radius: float = 0.06
 # Radius of the hand spheres positioned per-tick at the IK hand.
