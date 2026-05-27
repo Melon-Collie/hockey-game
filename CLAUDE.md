@@ -26,10 +26,9 @@ A 3v3 arcade hockey game built in Godot 4.6.2 (GDScript, 3D). Online multiplayer
 
 **Stickhandling is physical, not abstract.** The puck is a real `RigidBody3D` that attaches to the blade by proximity; there is no possession flag you press to engage. Carrying slows you. Moving the cursor swings the blade through forehand/backhand with a small lift through center — that's the "dangling" texture. Fast incoming pucks (≥14 m/s) deflect off a static blade; you have to draw the blade *back into* the puck to absorb a pass. No `deke` button — deception is blade placement plus skating rhythm.
 
-**Three shot types, all aim-aware:**
+**Two shot types, both aim-aware:**
 - **Wrister** (LMB) — quick tap fires instantly at moderate speed; hold-and-drag charges by *drag distance*, and the drag direction *is* the aim vector.
 - **Slapshot** (RMB) — time-charged wind-up, aim locked at press. Supports **one-timers**: charge without the puck, release fires when the puck enters the shooting zone.
-- **Self-shot** (E) — emergency release while carrying.
 
 Backhand shots take a power penalty. Scroll wheel toggles elevation (ballistic targeting, apex-capped so you don't sail it over the net). Passes are quick-shots — same mechanic, no separate pass system, no saucer/tape-to-tape variants.
 
