@@ -2,34 +2,22 @@ class_name SkaterAppearanceCoordinator
 extends RefCounted
 
 # Per-attribute visual scaling. Sister to SkaterUniformCoordinator /
-# SkaterHUDCoordinator — owned by Skater, lives in Scripts/actors/ even
-# though the multiplier tables are tuning data. Modifies transform.scale
-# on leaf MeshInstance3D nodes (not Node3D parents) so the procedural
+# SkaterHUDCoordinator — owned by Skater. Modifies transform.scale on
+# leaf MeshInstance3D nodes (not Node3D parents) so the procedural
 # arm-bone IK and reconcile-driven MeshRoot.position stay untouched.
 #
 # Idempotent: captures baseline scales / mesh radii on the first apply()
 # call; every subsequent call recomputes from those baselines so mid-game
 # attribute changes never compound multipliers.
+#
+# All multipliers come from PlayerAttributes — see that file for the
+# tuning tables and how to add new scalings.
 
-# Multiplier tables indexed by (level - 1): [BAD, MEDIUM, GOOD]. Medium is
-# 1.0 everywhere so all-medium renders identical to the pre-attributes
-# baseline. Spreads are wider than the gameplay multipliers — readable at
-# a glance from the third-person hockey camera matters more than realism,
-# so a Size-good skater is visibly chunkier than a Size-bad one, etc.
-# Height multiplier itself lives on PlayerAttributes (shared with the
-# controller's arm/stick length scaling) so all "proportional to height"
-# scaling pulls from one table.
-const _TORSO_BULK_MULTS: Array[float] = [0.82, 1.00, 1.18]
-const _HEAD_BULK_MULTS:  Array[float] = [0.92, 1.00, 1.08]
-const _THIGH_MULTS:      Array[float] = [0.82, 1.00, 1.18]
-const _CALF_MULTS:       Array[float] = [0.82, 1.00, 1.18]
-const _ARM_MULTS:        Array[float] = [0.78, 1.00, 1.40]
-
-# Body-chain leaf nodes that get scale.y from Size (height). All paths
-# are relative to MeshRoot. FootL/R deliberately omitted — their scene
-# transform is rotated 90° around X so the local-axis mapping doesn't
-# match the simple rule. The feet are small and mostly hidden under
-# the skates, so dropping them from the rig doesn't read.
+# Body-chain leaf nodes. All paths are relative to MeshRoot. FootL/R
+# deliberately omitted — their scene transform is rotated 90° around X
+# so the local-axis mapping doesn't match the simple rule. The feet are
+# small and mostly hidden under the skates, so dropping them from the
+# rig doesn't read.
 const _TORSO_PATHS: Array[String] = [
 	"UpperBody/UpperBodyMesh",
 	"UpperBody/ShoulderL", "UpperBody/ShoulderR",
@@ -62,12 +50,11 @@ func apply(attrs: PlayerAttributes) -> void:
 		return
 	if not _captured:
 		_capture_baselines()
-	var m_height: float = PlayerAttributes.height_scale_for(attrs.size)
-	var m_torso:  float = _mult_for(_TORSO_BULK_MULTS, attrs.size)
-	var m_head:   float = _mult_for(_HEAD_BULK_MULTS,  attrs.size)
-	var m_thigh:  float = _mult_for(_THIGH_MULTS,      attrs.speed)
-	var m_calf:   float = _mult_for(_CALF_MULTS,       attrs.agility)
-	var m_arm:    float = _mult_for(_ARM_MULTS,        attrs.shot)
+	var m_height: float = attrs.height_mult()
+	var m_torso:  float = attrs.torso_bulk_mult()
+	var m_head:   float = attrs.head_bulk_mult()
+	var m_thigh:  float = attrs.thigh_mult()
+	var m_calf:   float = attrs.calf_mult()
 	for path: String in _TORSO_PATHS:
 		_apply_scale(path, m_torso, m_height, m_torso)
 	_apply_scale(_HELMET_PATH, m_head, m_height, m_head)
@@ -75,7 +62,7 @@ func apply(attrs: PlayerAttributes) -> void:
 		_apply_scale(path, m_thigh, m_height, m_thigh)
 	for path: String in _CALF_PATHS:
 		_apply_scale(path, m_calf, m_height, m_calf)
-	_apply_arm_thickness(m_arm)
+	_apply_arm_thickness(attrs.arm_bulk_mult())
 
 
 func _capture_baselines() -> void:
@@ -156,8 +143,3 @@ static func _sphere_radius(mi: MeshInstance3D) -> float:
 	if s == null:
 		return 0.0
 	return s.radius
-
-
-static func _mult_for(table: Array[float], level: int) -> float:
-	var idx: int = clampi(level - PlayerAttributes.LEVEL_MIN, 0, table.size() - 1)
-	return table[idx]

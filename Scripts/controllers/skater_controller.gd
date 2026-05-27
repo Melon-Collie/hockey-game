@@ -221,20 +221,8 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 # Base values captured on the first apply_attributes() call so subsequent
 # applies (offline free-play picker re-applies) recompute from the original
 # @export defaults instead of compounding with the previous multiplier.
-
-# Shot also scales charge speed (lower = faster ramp to max power). Wider
-# spread than the power multiplier because this is what makes shooters
-# viable at close range — a Cannon can reach max slapshot power in ~0.62s
-# vs Stone's ~0.78s, opening windows that don't exist for non-shooters.
-# Indexed by Shot level - 1: [BAD, MEDIUM, GOOD].
-const _SHOT_CHARGE_TIME_MULTS: Array[float] = [1.12, 1.00, 0.88]
-
-# Agility also scales puck-carry speed retention so agile dekers keep
-# more momentum on the puck than clunky carriers. Modest spread — agile
-# carriers should retain speed, not zoom past non-carriers.
-# Indexed by Agility level - 1: [BAD, MEDIUM, GOOD].
-const _AGILITY_CARRY_MULTS: Array[float] = [0.96, 1.00, 1.04]
-
+# All tuning tables live on PlayerAttributes — see that file for the system
+# overview and how to add new scalings.
 var _attr_base_captured: bool = false
 var _base_thrust:                       float = 0.0
 var _base_max_speed:                    float = 0.0
@@ -271,10 +259,11 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 		return
 	if not _attr_base_captured:
 		_capture_attribute_bases()
-	var m_speed:   float = attrs.multiplier_for(PlayerAttributes.Attribute.SPEED)
-	var m_agility: float = attrs.multiplier_for(PlayerAttributes.Attribute.AGILITY)
-	var m_size:    float = attrs.multiplier_for(PlayerAttributes.Attribute.SIZE)
-	var m_shot:    float = attrs.multiplier_for(PlayerAttributes.Attribute.SHOT)
+	var m_speed:   float = attrs.speed_mult()
+	var m_agility: float = attrs.agility_mult()
+	var m_size:    float = attrs.size_mult()
+	var m_shot:    float = attrs.shot_mult()
+	var m_height:  float = attrs.height_mult()
 	thrust    = _base_thrust    * m_speed
 	max_speed = _base_max_speed * m_speed
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
@@ -282,32 +271,29 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	backward_thrust_multiplier  = _base_backward_thrust_multiplier  * m_agility
 	crossover_thrust_multiplier = _base_crossover_thrust_multiplier * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
-	var carry_mult: float = _AGILITY_CARRY_MULTS[clampi(attrs.agility - PlayerAttributes.LEVEL_MIN, 0, _AGILITY_CARRY_MULTS.size() - 1)]
-	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * carry_mult
+	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.agility_carry_mult()
 	min_wrister_power = _base_min_wrister_power * m_shot
 	max_wrister_power = _base_max_wrister_power * m_shot
 	quick_shot_power  = _base_quick_shot_power  * m_shot
 	min_slapper_power = _base_min_slapper_power * m_shot
 	max_slapper_power = _base_max_slapper_power * m_shot
-	var charge_mult: float = _SHOT_CHARGE_TIME_MULTS[clampi(attrs.shot - PlayerAttributes.LEVEL_MIN, 0, _SHOT_CHARGE_TIME_MULTS.size() - 1)]
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * charge_mult
-	max_slapper_charge_time     = _base_max_slapper_charge_time     * charge_mult
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.shot_charge_mult()
+	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
 	skater.weight                       = _base_skater_weight                  * m_size
 	skater.body_check_transfer          = _base_skater_body_check_transfer     * m_size
 	# Inverse: brace_resistance is a coefficient on incoming transfer when
 	# the victim is braced — *lower* = better resistance. A bigger-Size
 	# player should resist knockback better, so the multiplier flips.
 	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * (2.0 - m_size)
-	# Arms and stick scale with actual height (not the wider gameplay Size
-	# multiplier) — keeps proportions realistic so a taller player has a
-	# correspondingly longer arm and stick instead of looking awkward with
-	# a baseline-length stick. update_stick_mesh() and the arm bone
-	# wrappers recompute visuals from these every frame, so no separate
-	# visual pass is needed.
-	var m_h: float = PlayerAttributes.height_scale_for(attrs.size)
-	stick_length              = _base_stick_length              * m_h
-	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_h
-	skater.forearm_length     = _base_skater_forearm_length     * m_h
+	# Arms and stick scale with actual height (the dedicated height_mult,
+	# tighter than the gameplay size_mult) — keeps proportions realistic so
+	# a taller player has a correspondingly longer arm and stick rather than
+	# looking awkward with a baseline-length stick. update_stick_mesh() and
+	# the arm bone wrappers recompute visuals from these every frame, so no
+	# separate visual pass is needed.
+	stick_length              = _base_stick_length              * m_height
+	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
+	skater.forearm_length     = _base_skater_forearm_length     * m_height
 	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
 	# (matches body-check feel), height with the realistic-proportions
 	# multiplier. Skater._ready() duplicated the shape so this mutation is
@@ -317,7 +303,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 		var cyl: CylinderShape3D = col.shape as CylinderShape3D
 		if cyl != null:
 			cyl.radius = _base_skater_collision_radius * m_size
-			cyl.height = _base_skater_collision_height * m_h
+			cyl.height = _base_skater_collision_height * m_height
 	skater.apply_appearance(attrs)
 
 
