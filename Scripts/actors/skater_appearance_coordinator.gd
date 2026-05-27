@@ -21,7 +21,7 @@ const _TORSO_BULK_MULTS: Array[float] = [0.82, 1.00, 1.18]
 const _HEAD_BULK_MULTS:  Array[float] = [0.92, 1.00, 1.08]
 const _THIGH_MULTS:      Array[float] = [0.82, 1.00, 1.18]
 const _CALF_MULTS:       Array[float] = [0.82, 1.00, 1.18]
-const _ARM_MULTS:        Array[float] = [0.80, 1.00, 1.20]
+const _ARM_MULTS:        Array[float] = [0.78, 1.00, 1.40]
 
 # Body-chain leaf nodes that get scale.y from Size (height). All paths
 # are relative to MeshRoot. FootL/R deliberately omitted — their scene
