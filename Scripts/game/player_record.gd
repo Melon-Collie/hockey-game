@@ -28,6 +28,10 @@ var secondary_color: Color     = Color.WHITE
 var text_color: Color          = Color.WHITE
 var text_outline_color: Color  = Color.BLACK
 var is_left_handed: bool = true
+# Per-player gameplay attribute levels (Speed/Agility/Size/Shot). Default to
+# all-medium so a record built without attribute data behaves like the
+# pre-attributes baseline.
+var attributes: PlayerAttributes = PlayerAttributes.all_medium()
 var stats: PlayerStats = PlayerStats.new()
 
 func _init(p_peer_id: int, p_team_slot: int, p_is_local: bool, p_team: Team) -> void:

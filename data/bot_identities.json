@@ -1,24 +1,16 @@
 {
   "identities": [
-    { "name": "Maddox",   "number": 4,  "is_left_handed": true },
-    { "name": "Vance",    "number": 6,  "is_left_handed": false },
-    { "name": "Quill",    "number": 7,  "is_left_handed": true },
-    { "name": "Sniper",   "number": 9,  "is_left_handed": false },
-    { "name": "Flash",    "number": 11, "is_left_handed": false },
-    { "name": "Renko",    "number": 13, "is_left_handed": true },
-    { "name": "Pike",     "number": 17, "is_left_handed": true },
-    { "name": "Dangler",  "number": 19, "is_left_handed": true },
-    { "name": "Crusher",  "number": 22, "is_left_handed": true },
-    { "name": "Linden",   "number": 27, "is_left_handed": true },
-    { "name": "Bruner",   "number": 28, "is_left_handed": false },
-    { "name": "Falk",     "number": 33, "is_left_handed": true },
-    { "name": "Holm",     "number": 37, "is_left_handed": false },
-    { "name": "Wrecker",  "number": 44, "is_left_handed": true },
-    { "name": "Stone",    "number": 47, "is_left_handed": true },
-    { "name": "Beck",     "number": 55, "is_left_handed": false },
-    { "name": "Larsen",   "number": 61, "is_left_handed": false },
-    { "name": "Cross",    "number": 77, "is_left_handed": true },
-    { "name": "Marsh",    "number": 88, "is_left_handed": true },
-    { "name": "Weaver",   "number": 91, "is_left_handed": true }
+    { "name": "Flash",   "number": 11, "is_left_handed": false, "speed": 3, "agility": 2, "size": 1, "shot": 2 },
+    { "name": "Jet",     "number": 6,  "is_left_handed": false, "speed": 3, "agility": 2, "size": 2, "shot": 1 },
+    { "name": "Bolt",    "number": 88, "is_left_handed": true,  "speed": 3, "agility": 1, "size": 2, "shot": 2 },
+    { "name": "Dangler", "number": 19, "is_left_handed": true,  "speed": 2, "agility": 3, "size": 1, "shot": 2 },
+    { "name": "Slick",   "number": 7,  "is_left_handed": true,  "speed": 2, "agility": 3, "size": 2, "shot": 1 },
+    { "name": "Twist",   "number": 55, "is_left_handed": false, "speed": 2, "agility": 3, "size": 1, "shot": 2 },
+    { "name": "Crusher", "number": 22, "is_left_handed": true,  "speed": 2, "agility": 1, "size": 3, "shot": 2 },
+    { "name": "Wrecker", "number": 44, "is_left_handed": true,  "speed": 2, "agility": 2, "size": 3, "shot": 1 },
+    { "name": "Stone",   "number": 47, "is_left_handed": true,  "speed": 1, "agility": 2, "size": 3, "shot": 2 },
+    { "name": "Sniper",  "number": 9,  "is_left_handed": false, "speed": 1, "agility": 2, "size": 2, "shot": 3 },
+    { "name": "Hammer",  "number": 17, "is_left_handed": true,  "speed": 2, "agility": 1, "size": 2, "shot": 3 },
+    { "name": "Cannon",  "number": 61, "is_left_handed": false, "speed": 2, "agility": 2, "size": 1, "shot": 3 }
   ]
 }

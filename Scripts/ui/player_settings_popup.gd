@@ -8,6 +8,10 @@ signal name_changed(new_name: String)
 signal jersey_number_changed(new_number: int)
 signal handedness_changed(is_left: bool)
 signal preferred_color_changed(color_slot: int)
+signal attributes_changed(attrs: PlayerAttributes)
+
+const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Size", "Shot"]
+const _ATTR_NONE: int = -1
 
 # Controls — kept as refs so Cancel can restore them from the snapshot.
 var _name_field: LineEdit = null
@@ -18,12 +22,17 @@ var _left_btn: Button = null
 var _right_btn: Button = null
 var _color_dropdown: PaletteDropdown = null
 var _apply_btn: Button = null
+var _strength_buttons: Array[Button] = []
+var _weakness_buttons: Array[Button] = []
+var _attribute_lock_label: Label = null
 
 # Pending state — what Apply will commit.
 var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
+var _pending_strength: int = _ATTR_NONE
+var _pending_weakness: int = _ATTR_NONE
 var _name_valid: bool = true
 var _number_valid: bool = true
 
@@ -70,6 +79,7 @@ func _build() -> void:
 	_build_number_section(vbox)
 	_build_handedness_section(vbox)
 	_build_team_section(vbox)
+	_build_attributes_section(vbox)
 	_build_action_row(vbox)
 
 
@@ -261,6 +271,108 @@ func _build_team_section(vbox: VBoxContainer) -> void:
 		_update_apply_state())
 
 
+func _build_attributes_section(vbox: VBoxContainer) -> void:
+	# Strength / weakness picker: one button bar per row, mutually exclusive
+	# within the row, and strength + weakness can't be the same attribute.
+	# Online play locks the picker — the lock label appears in place of the
+	# helper hint. Storage is always the four levels; this UI is the only
+	# place that knows the strength/weakness shortcut.
+	var heading := Label.new()
+	heading.text = "Attributes"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 20)
+	heading.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	vbox.add_child(heading)
+
+	_attribute_lock_label = Label.new()
+	_attribute_lock_label.text = "Locked during online play."
+	_attribute_lock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_attribute_lock_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	_attribute_lock_label.add_theme_font_size_override("font_size", 13)
+	_attribute_lock_label.visible = false
+	vbox.add_child(_attribute_lock_label)
+
+	_strength_buttons = _build_attribute_row(vbox, "Strength:", true)
+	_weakness_buttons = _build_attribute_row(vbox, "Weakness:", false)
+
+
+func _build_attribute_row(vbox: VBoxContainer, label_text: String, is_strength: bool) -> Array[Button]:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	vbox.add_child(row)
+
+	var label := Label.new()
+	label.text = label_text
+	label.custom_minimum_size = Vector2(90, 0)
+	label.add_theme_font_size_override("font_size", 18)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(label)
+
+	var buttons: Array[Button] = []
+	for attr_idx: int in _ATTR_LABELS.size():
+		var btn := Button.new()
+		btn.text = _ATTR_LABELS[attr_idx]
+		btn.toggle_mode = true
+		btn.custom_minimum_size = Vector2(72, 36)
+		btn.add_theme_font_size_override("font_size", 14)
+		MenuStyle.wire_hover_scale(btn)
+		SoundManager.wire_button(btn)
+		btn.toggled.connect(_on_attribute_button_toggled.bind(attr_idx, is_strength))
+		row.add_child(btn)
+		buttons.append(btn)
+	return buttons
+
+
+func _on_attribute_button_toggled(pressed: bool, attr_idx: int, is_strength: bool) -> void:
+	var picked: int = attr_idx if pressed else _ATTR_NONE
+	# Selecting the same attribute as the other row clears the other so the
+	# 3-2-2-1 invariant always holds (strength != weakness).
+	if is_strength:
+		_pending_strength = picked
+		if pressed and _pending_weakness == attr_idx:
+			_pending_weakness = _ATTR_NONE
+	else:
+		_pending_weakness = picked
+		if pressed and _pending_strength == attr_idx:
+			_pending_strength = _ATTR_NONE
+	_refresh_attribute_buttons()
+	_update_apply_state()
+
+
+func _refresh_attribute_buttons() -> void:
+	for i: int in _strength_buttons.size():
+		_strength_buttons[i].set_pressed_no_signal(i == _pending_strength)
+	for i: int in _weakness_buttons.size():
+		_weakness_buttons[i].set_pressed_no_signal(i == _pending_weakness)
+
+
+func _set_attribute_buttons_disabled(disabled: bool) -> void:
+	for btn: Button in _strength_buttons:
+		btn.disabled = disabled
+	for btn: Button in _weakness_buttons:
+		btn.disabled = disabled
+	if _attribute_lock_label != null:
+		_attribute_lock_label.visible = disabled
+
+
+# Derives strength / weakness picks from a stored four-level spread. With the
+# 3-2-2-1 invariant the picker enforces, exactly one attribute is GOOD
+# (strength) and one is BAD (weakness) for any saved spread that came from
+# this popup; an all-medium default has both unset.
+static func _picks_from_attrs(attrs: PlayerAttributes) -> Dictionary:
+	var strength: int = _ATTR_NONE
+	var weakness: int = _ATTR_NONE
+	for attr_idx: int in _ATTR_LABELS.size():
+		var level: int = attrs.level_for(attr_idx)
+		if level == PlayerAttributes.LEVEL_GOOD and strength == _ATTR_NONE:
+			strength = attr_idx
+		elif level == PlayerAttributes.LEVEL_BAD and weakness == _ATTR_NONE:
+			weakness = attr_idx
+	return {"strength": strength, "weakness": weakness}
+
+
 func _build_action_row(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -292,7 +404,9 @@ func _update_apply_state() -> void:
 	var changed: bool = (_pending_name != _snapshot.get("name", "")
 		or _pending_number != _snapshot.get("number", 0)
 		or _pending_is_left != _snapshot.get("is_left", false)
-		or _pending_color_slot != _snapshot.get("color_slot", -1))
+		or _pending_color_slot != _snapshot.get("color_slot", -1)
+		or _pending_strength != _snapshot.get("strength", _ATTR_NONE)
+		or _pending_weakness != _snapshot.get("weakness", _ATTR_NONE))
 	_apply_btn.disabled = not changed or not _name_valid or not _number_valid
 
 
@@ -323,6 +437,17 @@ func _apply() -> void:
 		# the home team's actors and re-roll away if the new home collides.
 		NetworkManager.apply_preferred_color(_pending_color_slot)
 		preferred_color_changed.emit(_pending_color_slot)
+	var attrs_changed_b: bool = (_pending_strength != _snapshot.get("strength", _ATTR_NONE)
+		or _pending_weakness != _snapshot.get("weakness", _ATTR_NONE))
+	if attrs_changed_b:
+		var new_attrs := PlayerAttributes.from_strength_weakness(_pending_strength, _pending_weakness)
+		PlayerPrefs.set_player_attributes(new_attrs)
+		# Update NetworkManager._peer_attributes[1] so the next spawn picks
+		# the new values up. The emitted signal also re-applies the multipliers
+		# to the live local skater when allowed (offline / free-play only —
+		# GameManager's handler is the gate).
+		NetworkManager.apply_local_attributes(new_attrs)
+		attributes_changed.emit(new_attrs)
 	PlayerPrefs.save()
 	visible = false
 
@@ -339,12 +464,16 @@ func _restore_from_snapshot() -> void:
 	_pending_number = _snapshot.get("number", 0)
 	_pending_is_left = _snapshot.get("is_left", false)
 	_pending_color_slot = _snapshot.get("color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
+	_pending_strength = _snapshot.get("strength", _ATTR_NONE)
+	_pending_weakness = _snapshot.get("weakness", _ATTR_NONE)
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
 	_right_btn.button_pressed = not _pending_is_left
 	if _color_dropdown != null:
 		_color_dropdown.set_selected(_pending_color_slot)
+	_refresh_attribute_buttons()
+	_set_attribute_buttons_disabled(NetworkManager.is_in_online_match())
 	_name_warning.visible = false
 	_number_warning.visible = false
 	_name_valid = true
@@ -361,11 +490,14 @@ func open() -> void:
 	var saved_slot: int = PlayerPrefs.preferred_color_slot
 	if saved_slot < 0:
 		saved_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
+	var saved_picks: Dictionary = _picks_from_attrs(PlayerPrefs.get_player_attributes())
 	_snapshot = {
 		"name": PlayerPrefs.player_name,
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
 		"color_slot": saved_slot,
+		"strength": saved_picks.strength,
+		"weakness": saved_picks.weakness,
 	}
 	_restore_from_snapshot()
 	visible = true

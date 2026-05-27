@@ -217,6 +217,81 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_sm.setup(_cb, _aiming)
 	_pose.setup(skater, _sm, self)
 
+# ── Player Attributes ─────────────────────────────────────────────────────────
+# Base values captured on the first apply_attributes() call so subsequent
+# applies (offline free-play picker re-applies) recompute from the original
+# @export defaults instead of compounding with the previous multiplier.
+var _attr_base_captured: bool = false
+var _base_thrust:                       float = 0.0
+var _base_max_speed:                    float = 0.0
+var _base_facing_drag_speed:            float = 0.0
+var _base_facing_drag_speed_braking:    float = 0.0
+var _base_backward_thrust_multiplier:   float = 0.0
+var _base_crossover_thrust_multiplier:  float = 0.0
+var _base_brake_multiplier:             float = 0.0
+var _base_min_wrister_power:            float = 0.0
+var _base_max_wrister_power:            float = 0.0
+var _base_quick_shot_power:             float = 0.0
+var _base_min_slapper_power:            float = 0.0
+var _base_max_slapper_power:            float = 0.0
+var _base_skater_weight:                float = 0.0
+var _base_skater_body_check_transfer:   float = 0.0
+var _base_skater_body_check_brace_resistance: float = 0.0
+
+
+# Modulates the controller and skater tuning fields from a PlayerAttributes
+# resource. Safe to call multiple times — the first call snapshots the
+# shipped @export defaults, every call recomputes live = base × multiplier.
+# Called once at spawn and again whenever the local player changes picks in
+# offline free-play (online matches lock attributes at join time).
+func apply_attributes(attrs: PlayerAttributes) -> void:
+	if attrs == null or skater == null:
+		return
+	if not _attr_base_captured:
+		_capture_attribute_bases()
+	var m_speed:   float = attrs.multiplier_for(PlayerAttributes.Attribute.SPEED)
+	var m_agility: float = attrs.multiplier_for(PlayerAttributes.Attribute.AGILITY)
+	var m_size:    float = attrs.multiplier_for(PlayerAttributes.Attribute.SIZE)
+	var m_shot:    float = attrs.multiplier_for(PlayerAttributes.Attribute.SHOT)
+	thrust    = _base_thrust    * m_speed
+	max_speed = _base_max_speed * m_speed
+	facing_drag_speed           = _base_facing_drag_speed           * m_agility
+	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
+	backward_thrust_multiplier  = _base_backward_thrust_multiplier  * m_agility
+	crossover_thrust_multiplier = _base_crossover_thrust_multiplier * m_agility
+	brake_multiplier            = _base_brake_multiplier            * m_agility
+	min_wrister_power = _base_min_wrister_power * m_shot
+	max_wrister_power = _base_max_wrister_power * m_shot
+	quick_shot_power  = _base_quick_shot_power  * m_shot
+	min_slapper_power = _base_min_slapper_power * m_shot
+	max_slapper_power = _base_max_slapper_power * m_shot
+	skater.weight                       = _base_skater_weight                  * m_size
+	skater.body_check_transfer          = _base_skater_body_check_transfer     * m_size
+	# Inverse: brace_resistance is a coefficient on incoming transfer when
+	# the victim is braced — *lower* = better resistance. A bigger-Size
+	# player should resist knockback better, so the multiplier flips.
+	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * (2.0 - m_size)
+
+
+func _capture_attribute_bases() -> void:
+	_base_thrust                       = thrust
+	_base_max_speed                    = max_speed
+	_base_facing_drag_speed            = facing_drag_speed
+	_base_facing_drag_speed_braking    = facing_drag_speed_braking
+	_base_backward_thrust_multiplier   = backward_thrust_multiplier
+	_base_crossover_thrust_multiplier  = crossover_thrust_multiplier
+	_base_brake_multiplier             = brake_multiplier
+	_base_min_wrister_power            = min_wrister_power
+	_base_max_wrister_power            = max_wrister_power
+	_base_quick_shot_power             = quick_shot_power
+	_base_min_slapper_power            = min_slapper_power
+	_base_max_slapper_power            = max_slapper_power
+	_base_skater_weight                       = skater.weight
+	_base_skater_body_check_transfer          = skater.body_check_transfer
+	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
+	_attr_base_captured = true
+
+
 func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction: Vector3) -> void:
 	if not _is_host:
 		return
