@@ -13,15 +13,15 @@ extends RefCounted
 
 # Multiplier tables indexed by (level - 1): [BAD, MEDIUM, GOOD]. Medium is
 # 1.0 everywhere so all-medium renders identical to the pre-attributes
-# baseline. Tighter spreads than the gameplay multipliers — visuals stay
-# in a realistic-tone band (~5'9" to 6'5" for height) while gameplay
-# spread can be wider (Size ±18% for body-check feel).
-const _HEIGHT_MULTS:     Array[float] = [0.945, 1.000, 1.055]
-const _TORSO_BULK_MULTS: Array[float] = [0.92,  1.00,  1.10]
-const _HEAD_BULK_MULTS:  Array[float] = [0.96,  1.00,  1.05]
-const _THIGH_MULTS:      Array[float] = [0.92,  1.00,  1.10]
-const _CALF_MULTS:       Array[float] = [0.92,  1.00,  1.10]
-const _ARM_MULTS:        Array[float] = [0.90,  1.00,  1.12]
+# baseline. Spreads are wider than the gameplay multipliers — readable at
+# a glance from the third-person hockey camera matters more than realism,
+# so a Size-good skater is visibly chunkier than a Size-bad one, etc.
+const _HEIGHT_MULTS:     Array[float] = [0.91, 1.00, 1.09]
+const _TORSO_BULK_MULTS: Array[float] = [0.82, 1.00, 1.18]
+const _HEAD_BULK_MULTS:  Array[float] = [0.92, 1.00, 1.08]
+const _THIGH_MULTS:      Array[float] = [0.82, 1.00, 1.18]
+const _CALF_MULTS:       Array[float] = [0.82, 1.00, 1.18]
+const _ARM_MULTS:        Array[float] = [0.80, 1.00, 1.20]
 
 # Body-chain leaf nodes that get scale.y from Size (height). All paths
 # are relative to MeshRoot. FootL/R deliberately omitted — their scene
