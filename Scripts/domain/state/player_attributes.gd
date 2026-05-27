@@ -28,6 +28,17 @@ const _MULTIPLIERS: Dictionary = {
 	Attribute.SHOT:    [0.92, 1.00, 1.08],
 }
 
+# Visual height scale per Size level — drives every "proportional to
+# actual height" measurement so the body, arms, and stick all stretch
+# in lockstep. Decoupled from the gameplay Size multiplier (which is
+# wider for body-check feel). Shared by SkaterAppearanceCoordinator
+# (mesh.scale.y) and SkaterController (arm + stick length).
+const HEIGHT_SCALE_MULTS: Array[float] = [0.91, 1.00, 1.09]
+
+
+static func height_scale_for(level: int) -> float:
+	return HEIGHT_SCALE_MULTS[clampi(level - LEVEL_MIN, 0, HEIGHT_SCALE_MULTS.size() - 1)]
+
 var speed:   int = LEVEL_MEDIUM
 var agility: int = LEVEL_MEDIUM
 var size:    int = LEVEL_MEDIUM

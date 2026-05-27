@@ -251,6 +251,9 @@ var _base_max_slapper_power:            float = 0.0
 var _base_max_wrister_charge_distance:  float = 0.0
 var _base_max_slapper_charge_time:      float = 0.0
 var _base_puck_carry_speed_multiplier:  float = 0.0
+var _base_stick_length:                 float = 0.0
+var _base_skater_upper_arm_length:      float = 0.0
+var _base_skater_forearm_length:        float = 0.0
 var _base_skater_weight:                float = 0.0
 var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
@@ -293,6 +296,16 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# the victim is braced — *lower* = better resistance. A bigger-Size
 	# player should resist knockback better, so the multiplier flips.
 	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * (2.0 - m_size)
+	# Arms and stick scale with actual height (not the wider gameplay Size
+	# multiplier) — keeps proportions realistic so a taller player has a
+	# correspondingly longer arm and stick instead of looking awkward with
+	# a baseline-length stick. update_stick_mesh() and the arm bone
+	# wrappers recompute visuals from these every frame, so no separate
+	# visual pass is needed.
+	var m_h: float = PlayerAttributes.height_scale_for(attrs.size)
+	stick_length              = _base_stick_length              * m_h
+	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_h
+	skater.forearm_length     = _base_skater_forearm_length     * m_h
 	skater.apply_appearance(attrs)
 
 
@@ -312,6 +325,9 @@ func _capture_attribute_bases() -> void:
 	_base_max_wrister_charge_distance  = max_wrister_charge_distance
 	_base_max_slapper_charge_time      = max_slapper_charge_time
 	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
+	_base_stick_length                 = stick_length
+	_base_skater_upper_arm_length      = skater.upper_arm_length
+	_base_skater_forearm_length        = skater.forearm_length
 	_base_skater_weight                       = skater.weight
 	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance

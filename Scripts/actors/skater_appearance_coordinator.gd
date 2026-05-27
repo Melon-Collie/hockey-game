@@ -16,7 +16,9 @@ extends RefCounted
 # baseline. Spreads are wider than the gameplay multipliers — readable at
 # a glance from the third-person hockey camera matters more than realism,
 # so a Size-good skater is visibly chunkier than a Size-bad one, etc.
-const _HEIGHT_MULTS:     Array[float] = [0.91, 1.00, 1.09]
+# Height multiplier itself lives on PlayerAttributes (shared with the
+# controller's arm/stick length scaling) so all "proportional to height"
+# scaling pulls from one table.
 const _TORSO_BULK_MULTS: Array[float] = [0.82, 1.00, 1.18]
 const _HEAD_BULK_MULTS:  Array[float] = [0.92, 1.00, 1.08]
 const _THIGH_MULTS:      Array[float] = [0.82, 1.00, 1.18]
@@ -60,7 +62,7 @@ func apply(attrs: PlayerAttributes) -> void:
 		return
 	if not _captured:
 		_capture_baselines()
-	var m_height: float = _mult_for(_HEIGHT_MULTS,     attrs.size)
+	var m_height: float = PlayerAttributes.height_scale_for(attrs.size)
 	var m_torso:  float = _mult_for(_TORSO_BULK_MULTS, attrs.size)
 	var m_head:   float = _mult_for(_HEAD_BULK_MULTS,  attrs.size)
 	var m_thigh:  float = _mult_for(_THIGH_MULTS,      attrs.speed)
