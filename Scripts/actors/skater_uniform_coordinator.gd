@@ -17,6 +17,8 @@ var _sock_l: MeshInstance3D
 var _sock_r: MeshInstance3D
 var _skate_l: MeshInstance3D
 var _skate_r: MeshInstance3D
+var _foot_l: MeshInstance3D
+var _foot_r: MeshInstance3D
 
 # Cached jersey inputs. The torso material samples a SubViewport that draws
 # all of these in one pass (see JerseyDecal); each apply_* function stores
@@ -53,6 +55,8 @@ func setup(skater: Skater) -> void:
 	_sock_r = skater.lower_body.get_node("SockR") as MeshInstance3D
 	_skate_l = skater.lower_body.get_node("SkateL") as MeshInstance3D
 	_skate_r = skater.lower_body.get_node("SkateR") as MeshInstance3D
+	_foot_l = skater.lower_body.get_node("FootL") as MeshInstance3D
+	_foot_r = skater.lower_body.get_node("FootR") as MeshInstance3D
 	_create_jersey_viewport()
 	_create_shoulder_viewport()
 
@@ -171,6 +175,8 @@ func apply_colors(
 	_sock_r.material_override = socks_mat.duplicate()
 	_skate_l.material_override = skate_mat.duplicate()
 	_skate_r.material_override = skate_mat.duplicate()
+	_foot_l.material_override = skate_mat.duplicate()
+	_foot_r.material_override = skate_mat.duplicate()
 	# Fixed colors — set explicitly so ghost mode never creates a blank gray
 	# override and corrupts the color after ghost ends.
 	_skater.stick_mesh.material_override = _make_solid_mat(Color(0.705, 0.640, 0.605))
@@ -363,7 +369,7 @@ func apply_ghost(ghost: bool) -> void:
 			_helmet, _shoulder_l, _shoulder_r,
 			_hip_l, _hip_r, _thigh_l, _thigh_r,
 			_knee_l, _knee_r, _sock_l, _sock_r,
-			_skate_l, _skate_r,
+			_skate_l, _skate_r, _foot_l, _foot_r,
 			_skater.top_cuff_mesh, _skater.bot_cuff_mesh,
 		]
 	for mesh: MeshInstance3D in meshes:
