@@ -229,6 +229,12 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 # Indexed by Shot level - 1: [BAD, MEDIUM, GOOD].
 const _SHOT_CHARGE_TIME_MULTS: Array[float] = [1.12, 1.00, 0.88]
 
+# Agility also scales puck-carry speed retention so agile dekers keep
+# more momentum on the puck than clunky carriers. Modest spread — agile
+# carriers should retain speed, not zoom past non-carriers.
+# Indexed by Agility level - 1: [BAD, MEDIUM, GOOD].
+const _AGILITY_CARRY_MULTS: Array[float] = [0.96, 1.00, 1.04]
+
 var _attr_base_captured: bool = false
 var _base_thrust:                       float = 0.0
 var _base_max_speed:                    float = 0.0
@@ -244,6 +250,7 @@ var _base_min_slapper_power:            float = 0.0
 var _base_max_slapper_power:            float = 0.0
 var _base_max_wrister_charge_distance:  float = 0.0
 var _base_max_slapper_charge_time:      float = 0.0
+var _base_puck_carry_speed_multiplier:  float = 0.0
 var _base_skater_weight:                float = 0.0
 var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
@@ -270,6 +277,8 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	backward_thrust_multiplier  = _base_backward_thrust_multiplier  * m_agility
 	crossover_thrust_multiplier = _base_crossover_thrust_multiplier * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
+	var carry_mult: float = _AGILITY_CARRY_MULTS[clampi(attrs.agility - PlayerAttributes.LEVEL_MIN, 0, _AGILITY_CARRY_MULTS.size() - 1)]
+	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * carry_mult
 	min_wrister_power = _base_min_wrister_power * m_shot
 	max_wrister_power = _base_max_wrister_power * m_shot
 	quick_shot_power  = _base_quick_shot_power  * m_shot
@@ -302,6 +311,7 @@ func _capture_attribute_bases() -> void:
 	_base_max_slapper_power            = max_slapper_power
 	_base_max_wrister_charge_distance  = max_wrister_charge_distance
 	_base_max_slapper_charge_time      = max_slapper_charge_time
+	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
 	_base_skater_weight                       = skater.weight
 	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
