@@ -186,6 +186,13 @@ var _appearance: SkaterAppearanceCoordinator
 func _ready() -> void:
 	add_to_group("skaters")
 
+	# Per-instance collision shape so SkaterController.apply_attributes
+	# can scale this skater's hitbox without mutating the shared
+	# SubResource referenced by every other Skater in the scene.
+	var col: CollisionShape3D = $CollisionShape3D
+	if col != null and col.shape != null:
+		col.shape = col.shape.duplicate()
+
 	var top_hand_side_sign: float = 1.0 if is_left_handed else -1.0
 	shoulder.position = Vector3(top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
 

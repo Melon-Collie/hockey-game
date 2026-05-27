@@ -257,6 +257,8 @@ var _base_skater_forearm_length:        float = 0.0
 var _base_skater_weight:                float = 0.0
 var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
+var _base_skater_collision_radius:      float = 0.0
+var _base_skater_collision_height:      float = 0.0
 
 
 # Modulates the controller and skater tuning fields from a PlayerAttributes
@@ -306,6 +308,16 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	stick_length              = _base_stick_length              * m_h
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_h
 	skater.forearm_length     = _base_skater_forearm_length     * m_h
+	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
+	# (matches body-check feel), height with the realistic-proportions
+	# multiplier. Skater._ready() duplicated the shape so this mutation is
+	# per-instance and won't leak across skaters.
+	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if col != null:
+		var cyl: CylinderShape3D = col.shape as CylinderShape3D
+		if cyl != null:
+			cyl.radius = _base_skater_collision_radius * m_size
+			cyl.height = _base_skater_collision_height * m_h
 	skater.apply_appearance(attrs)
 
 
@@ -331,6 +343,12 @@ func _capture_attribute_bases() -> void:
 	_base_skater_weight                       = skater.weight
 	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
+	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if col != null:
+		var cyl: CylinderShape3D = col.shape as CylinderShape3D
+		if cyl != null:
+			_base_skater_collision_radius = cyl.radius
+			_base_skater_collision_height = cyl.height
 	_attr_base_captured = true
 
 
