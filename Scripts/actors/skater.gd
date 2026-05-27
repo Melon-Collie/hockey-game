@@ -55,7 +55,18 @@ extends CharacterBody3D
 @export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
 # actual length; X/Y control arm thickness.
-@export var arm_mesh_thickness: float = 0.10
+@export var arm_mesh_thickness: float = 0.11
+# Radius of the elbow joint spheres positioned per-tick at the IK elbow.
+# Kept a touch larger than arm_mesh_thickness * 0.5 so the joint reads as a
+# distinct bulge between the upper-arm and forearm cylinders.
+@export var elbow_sphere_radius: float = 0.065
+# Radius of the hand spheres positioned per-tick at the IK hand.
+@export var hand_sphere_radius: float = 0.06
+# Gap (along the bone direction, toward the elbow) between the hand-sphere
+# center and the forward face of the glove cuff cylinder. Without this the
+# cuff sits flush against the hand sphere and visually swallows it; a small
+# pullback exposes the hand sphere as a distinct ball at the wrist.
+@export var cuff_wrist_offset: float = 0.05
 
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
@@ -76,7 +87,7 @@ extends CharacterBody3D
 @onready var shoulder: Marker3D = $MeshRoot/UpperBody/Shoulder
 @onready var stick_mesh: MeshInstance3D = $MeshRoot/UpperBody/StickMesh
 # Made public so SkaterUniformCoordinator can colour the head mesh.
-@onready var direction_indicator: MeshInstance3D = $MeshRoot/UpperBody/DirectionIndicator
+@onready var helmet: MeshInstance3D = $MeshRoot/UpperBody/Helmet
 
 # Top hand: the moving IK output. Positioned by the controller each tick.
 var top_hand: Marker3D = null
@@ -88,11 +99,21 @@ var bottom_shoulder: Marker3D = null
 # Bottom hand: the reactive IK output for the bottom grip on the stick shaft.
 var bottom_hand: Marker3D = null
 
-# Arm visual meshes (shoulder → elbow → top_hand).
-var upper_arm_mesh: MeshInstance3D = null
-var forearm_mesh: MeshInstance3D = null
-var bottom_upper_arm_mesh: MeshInstance3D = null
-var bottom_forearm_mesh: MeshInstance3D = null
+# Arm visual meshes (shoulder → elbow → top_hand). Each is a Node3D wrapper
+# that gets position/scale/look_at applied by _update_bone_mesh(); the child
+# "Cylinder" MeshInstance3D holds the actual geometry (rotated 90° around X
+# so the cylinder's Y axis aligns with the wrapper's Z axis — see
+# _resolve_or_create_bone_mesh()).
+var upper_arm_mesh: Node3D = null
+var forearm_mesh: Node3D = null
+var bottom_upper_arm_mesh: Node3D = null
+var bottom_forearm_mesh: Node3D = null
+
+# Joint spheres positioned per-tick at the IK elbow / hand points.
+var top_elbow_sphere: MeshInstance3D = null
+var top_hand_sphere: MeshInstance3D = null
+var bottom_elbow_sphere: MeshInstance3D = null
+var bottom_hand_sphere: MeshInstance3D = null
 
 # Sleeve cuff stripe meshes. Created by SkaterUniformCoordinator.apply_stripes()
 # and consumed by _update_cuff_transform() here so they stay perpendicular to
@@ -237,6 +258,11 @@ func _ready() -> void:
 	forearm_mesh = _resolve_or_create_bone_mesh("ForearmMesh")
 	bottom_upper_arm_mesh = _resolve_or_create_bone_mesh("BottomUpperArmMesh")
 	bottom_forearm_mesh = _resolve_or_create_bone_mesh("BottomForearmMesh")
+
+	top_elbow_sphere = _resolve_or_create_joint_sphere("TopElbowSphere", elbow_sphere_radius)
+	top_hand_sphere = _resolve_or_create_joint_sphere("TopHandSphere", hand_sphere_radius)
+	bottom_elbow_sphere = _resolve_or_create_joint_sphere("BottomElbowSphere", elbow_sphere_radius)
+	bottom_hand_sphere = _resolve_or_create_joint_sphere("BottomHandSphere", hand_sphere_radius)
 
 	_uniform = SkaterUniformCoordinator.new()
 	_uniform.setup(self)
@@ -465,7 +491,7 @@ func set_lower_body_lean(lean_x: float, lean_z: float) -> void:
 
 
 func set_head_angle(angle: float) -> void:
-	direction_indicator.rotation.y = angle
+	helmet.rotation.y = angle
 
 
 func get_upper_body_rotation() -> float:
@@ -539,6 +565,8 @@ func update_arm_mesh() -> void:
 	_update_bone_mesh(upper_arm_mesh, shoulder_w, elbow_w)
 	_update_bone_mesh(forearm_mesh, elbow_w, hand_w)
 	_update_cuff_transform(top_cuff_mesh, elbow_w, hand_w)
+	_update_joint_sphere(top_elbow_sphere, elbow_w)
+	_update_joint_sphere(top_hand_sphere, hand_w)
 
 
 # ── Bottom Arm Mesh ───────────────────────────────────────────────────────────
@@ -553,38 +581,98 @@ func update_bottom_arm_mesh() -> void:
 	_update_bone_mesh(bottom_upper_arm_mesh, shoulder_w, elbow_w)
 	_update_bone_mesh(bottom_forearm_mesh, elbow_w, hand_w)
 	_update_cuff_transform(bot_cuff_mesh, elbow_w, hand_w)
+	_update_joint_sphere(bottom_elbow_sphere, elbow_w)
+	_update_joint_sphere(bottom_hand_sphere, hand_w)
 
 
-func _update_bone_mesh(mesh: MeshInstance3D, a_world: Vector3, b_world: Vector3) -> void:
-	if mesh == null:
+func _update_bone_mesh(bone: Node3D, a_world: Vector3, b_world: Vector3) -> void:
+	if bone == null:
 		return
 	var a_local: Vector3 = upper_body.to_local(a_world)
 	var b_local: Vector3 = upper_body.to_local(b_world)
 	var length: float = (b_local - a_local).length()
-	mesh.position = (a_local + b_local) * 0.5
-	mesh.scale = Vector3(1.0, 1.0, maxf(length, 0.001))
+	bone.position = (a_local + b_local) * 0.5
+	bone.scale = Vector3(1.0, 1.0, maxf(length, 0.001))
 	if (b_world - a_world).length() > 0.0001:
-		mesh.look_at(b_world, Vector3.UP)
+		bone.look_at(b_world, Vector3.UP)
+
+
+func _update_joint_sphere(sphere: MeshInstance3D, world_pos: Vector3) -> void:
+	if sphere == null:
+		return
+	sphere.position = upper_body.to_local(world_pos)
 
 
 func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vector3) -> void:
 	if mesh == null or not is_instance_valid(mesh):
 		return
-	mesh.position = upper_body.to_local(hand_w)
 	var bone_dir: Vector3 = hand_w - elbow_w
-	if bone_dir.length() > 0.0001:
-		mesh.look_at(hand_w + bone_dir.normalized(), Vector3.UP)
+	var bone_len: float = bone_dir.length()
+	if bone_len < 0.0001:
+		mesh.position = upper_body.to_local(hand_w)
+		return
+	var bone_dir_n: Vector3 = bone_dir / bone_len
+	# Glove cuff cylinder: its forward end sits at the hand and it extends
+	# back toward the elbow by its mesh height (no overlap past the hand).
+	# CylinderMesh's long axis is local Y; look_at sets -Z = -bone_dir_n
+	# (toward elbow), and rotate_object_local(X, +90°) then maps the new
+	# local Y to that elbow direction — so the cylinder stretches along
+	# the bone from hand to hand - bone_dir_n * cuff_height.
+	var cyl: CylinderMesh = mesh.mesh as CylinderMesh
+	var cuff_height: float = cyl.height if cyl != null else 0.06
+	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5 + cuff_wrist_offset)
+	mesh.position = upper_body.to_local(cuff_center_w)
+	mesh.look_at(cuff_center_w + bone_dir_n, Vector3.UP)
+	mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
 
 
-func _resolve_or_create_bone_mesh(node_name: String) -> MeshInstance3D:
+# Bone "rig" pattern: the public node is a Node3D wrapper that gets positioned,
+# scaled, and look_at'd by _update_bone_mesh(). The child MeshInstance3D named
+# "Cylinder" holds a unit-height CylinderMesh, pre-rotated 90° around X so the
+# cylinder's local Y axis maps to the wrapper's local Z (the look_at forward
+# axis). When the wrapper is scaled along Z to the bone's length, the cylinder
+# stretches along the bone. SkaterUniformCoordinator drills into this child to
+# set material_override (see bone_visual()).
+func _resolve_or_create_bone_mesh(node_name: String) -> Node3D:
+	var existing: Node3D = upper_body.get_node_or_null(node_name) as Node3D
+	if existing != null:
+		return existing
+	var wrapper := Node3D.new()
+	wrapper.name = node_name
+	upper_body.add_child(wrapper)
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = "Cylinder"
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = arm_mesh_thickness * 0.5
+	cyl.bottom_radius = arm_mesh_thickness * 0.5
+	cyl.height = 1.0
+	cyl.radial_segments = 16
+	mesh_instance.mesh = cyl
+	mesh_instance.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	wrapper.add_child(mesh_instance)
+	return wrapper
+
+
+# Returns the MeshInstance3D child of a bone wrapper so callers can set
+# material_override and adjust transparency without knowing the wrapper layout.
+func bone_visual(bone: Node3D) -> MeshInstance3D:
+	if bone == null:
+		return null
+	return bone.get_node_or_null("Cylinder") as MeshInstance3D
+
+
+func _resolve_or_create_joint_sphere(node_name: String, radius: float) -> MeshInstance3D:
 	var existing: MeshInstance3D = upper_body.get_node_or_null(node_name) as MeshInstance3D
 	if existing != null:
 		return existing
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = node_name
-	var box := BoxMesh.new()
-	box.size = Vector3(arm_mesh_thickness, arm_mesh_thickness, 1.0)
-	mesh_instance.mesh = box
+	var sphere := SphereMesh.new()
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	sphere.radial_segments = 14
+	sphere.rings = 8
+	mesh_instance.mesh = sphere
 	upper_body.add_child(mesh_instance)
 	return mesh_instance
 
@@ -656,12 +744,13 @@ func set_player_color(
 		helmet_color: Color,
 		pants_color: Color,
 		socks_color: Color,
-		blade_color: Color) -> void:
-	_uniform.apply_colors(jersey_color, helmet_color, pants_color, socks_color, blade_color)
+		blade_color: Color,
+		gloves_color: Color) -> void:
+	_uniform.apply_colors(jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color)
 
 
-func set_jersey_info(p_name: String, number: int, text_color: Color) -> void:
-	_uniform.apply_jersey_info(p_name, number, text_color)
+func set_jersey_info(p_name: String, number: int, text_color: Color, text_outline_color: Color) -> void:
+	_uniform.apply_jersey_info(p_name, number, text_color, text_outline_color)
 
 
 func set_jersey_stripes(

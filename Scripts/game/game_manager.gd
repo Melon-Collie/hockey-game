@@ -2180,7 +2180,7 @@ func _on_local_identity_changed(p_name: String, p_number: int, p_is_left: bool) 
 	record.is_left_handed = p_is_left
 	if record.skater != null:
 		record.skater.set_player_name(p_name)
-		record.skater.set_jersey_info(p_name, p_number, record.text_color)
+		record.skater.set_jersey_info(p_name, p_number, record.text_color, record.text_outline_color)
 		record.skater.is_left_handed = p_is_left
 
 
@@ -2236,10 +2236,10 @@ func _apply_team_colors_to_actors(team_id: int) -> void:
 		record.text_outline_color = colors.text_outline
 		record.secondary_color = colors.secondary
 		record.skater.set_player_color(colors.jersey, colors.helmet,
-				colors.pants, colors.socks, colors.primary)
+				colors.pants, colors.socks, colors.primary, colors.gloves)
 		record.skater.set_jersey_stripes(colors.jersey_stripe,
 				colors.pants_stripe, colors.socks_stripe)
-		record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text)
+		record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text, colors.text_outline)
 
 
 func _build_lobby_roster_array() -> Array:

@@ -143,6 +143,7 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 			PlayerRules.faceoff_position(team_id, team_slot),
 			team_colors.jersey, team_colors.helmet, team_colors.pants,
 			team_colors.socks, team_colors.primary,
+			team_colors.get("gloves", team_colors.pants),
 			is_left, _puck, self)
 	var skater: Skater = spawned.skater
 	var controller: RemoteController = spawned.controller
@@ -160,7 +161,7 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	# SkaterHUDCoordinator.update() would never auto-hide them.
 	skater.set_world_hud_hidden(true)
 	skater.set_player_name(p_name)
-	skater.set_jersey_info(p_name, jersey_number, team_colors.text)
+	skater.set_jersey_info(p_name, jersey_number, team_colors.text, team_colors.text_outline)
 	skater.set_jersey_stripes(team_colors.jersey_stripe, team_colors.pants_stripe, team_colors.socks_stripe)
 
 	var record := PlayerRecord.new(peer_id, team_slot, false, team_obj)
