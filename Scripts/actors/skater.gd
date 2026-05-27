@@ -180,6 +180,7 @@ var visual_offset: Vector3 = Vector3.ZERO:
 
 var _uniform: SkaterUniformCoordinator
 var _hud: SkaterHUDCoordinator
+var _appearance: SkaterAppearanceCoordinator
 
 
 func _ready() -> void:
@@ -269,6 +270,9 @@ func _ready() -> void:
 
 	_hud = SkaterHUDCoordinator.new()
 	_hud.setup(self)
+
+	_appearance = SkaterAppearanceCoordinator.new()
+	_appearance.setup(self)
 
 	var vfx := SkaterVFX.new()
 	vfx.name = "VFX"
@@ -803,3 +807,12 @@ func set_slapper_indicator_ready(_is_ready: bool) -> void:
 
 func update_slapper_indicator_window(_t: float) -> void:
 	_hud.update_slapper_indicator_window(_t)
+
+
+# ── Appearance (delegate to SkaterAppearanceCoordinator) ──────────────────────
+# Called by SkaterController.apply_attributes — same call path that applies
+# the gameplay multipliers, so visual and gameplay stay in lockstep without
+# a separate signal.
+func apply_appearance(attrs: PlayerAttributes) -> void:
+	if _appearance != null:
+		_appearance.apply(attrs)

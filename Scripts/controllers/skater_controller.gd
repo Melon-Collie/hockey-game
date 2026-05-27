@@ -271,6 +271,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# the victim is braced — *lower* = better resistance. A bigger-Size
 	# player should resist knockback better, so the multiplier flips.
 	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * (2.0 - m_size)
+	skater.apply_appearance(attrs)
 
 
 func _capture_attribute_bases() -> void:
