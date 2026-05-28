@@ -150,7 +150,7 @@ func test_advance_slide_clamps_x_to_post() -> void:
 	sb.commit_slide(0.0, 0.1, 5.0, 0.915)  # ridiculous target outside the net
 	for _i in range(20):
 		sb.advance_slide(0.05, 0.0, 0.915)
-	assert_le(sb.velocity_x, 0.0)
+	assert_true(sb.velocity_x <= 0.0, "velocity decayed to zero or below")
 	# end_x was 5.0 but position clamps at net_half_width
 	# (the snap-to-endpoint on finish sets x to end_x; the in-flight position
 	# uses clampf. Once finished, the controller transitions out of SLIDING.)
