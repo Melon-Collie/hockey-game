@@ -241,8 +241,6 @@ var _base_puck_carry_speed_multiplier:  float = 0.0
 var _base_stick_length:                 float = 0.0
 var _base_skater_upper_arm_length:      float = 0.0
 var _base_skater_forearm_length:        float = 0.0
-var _base_rom_forehand_reach_max:       float = 0.0
-var _base_rom_backhand_reach_max:       float = 0.0
 var _base_skater_weight:                float = 0.0
 var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
@@ -308,12 +306,10 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	stick_length              = _base_stick_length              * m_height
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
-	# Reach ROM scales with the same height multiplier so the arm/ROM ratio
-	# stays consistent across tiers — a small player can't reach as far as
-	# a big one. Without this, a Size=1 arm (0.68m) couldn't satisfy the
-	# baseline 0.70m backhand ROM and the IK would clamp on extends.
-	rom_forehand_reach_max    = _base_rom_forehand_reach_max    * m_height
-	rom_backhand_reach_max    = _base_rom_backhand_reach_max    * m_height
+	# Reach ROM stays universal — scaling it with height made small players
+	# visibly stiff at the cap. Big players still get more total reach from
+	# their longer arms and stick (stick + arm: ~2.30m big vs ~1.91m small)
+	# even without ROM differentiation.
 	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
 	# (matches body-check feel), height with the realistic-proportions
 	# multiplier. Skater._ready() duplicated the shape so this mutation is
@@ -345,8 +341,6 @@ func _capture_attribute_bases() -> void:
 	_base_stick_length                 = stick_length
 	_base_skater_upper_arm_length      = skater.upper_arm_length
 	_base_skater_forearm_length        = skater.forearm_length
-	_base_rom_forehand_reach_max       = rom_forehand_reach_max
-	_base_rom_backhand_reach_max       = rom_backhand_reach_max
 	_base_skater_weight                       = skater.weight
 	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance

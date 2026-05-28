@@ -49,11 +49,12 @@ extends CharacterBody3D
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. Sum must exceed
 # sqrt(drop² + rom_backhand_reach_max²) where drop = shoulder_height − hand_rest_y.
-# Baseline lengths give one-arm = 0.75m → wingspan ≈ 1.94m on a 1.78m body
-# (~108% of height, matching NHL anthropometry). 0.05m of slack above the
-# 0.70m rom_backhand_reach_max keeps the IK from clamping on full extends.
-@export var upper_arm_length: float = 0.37
-@export var forearm_length: float = 0.38
+# Baseline lengths give one-arm = 0.80m, wingspan ≈ 2.04m on a 1.78m body
+# (~115% of height). Slightly long anatomically but the small-player arm
+# (0.80 × 0.91 = 0.728m) still clears the universal 0.70m backhand ROM
+# with ~3cm of slack, so the IK never clamps in normal play.
+@export var upper_arm_length: float = 0.39
+@export var forearm_length: float = 0.41
 # Pole direction for the elbow (upper-body local).
 @export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
