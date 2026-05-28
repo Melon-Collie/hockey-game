@@ -7,9 +7,11 @@ extends RefCounted
 # enqueue_event push completed records onto a queue and post the semaphore;
 # the worker drains the queue on each wake.
 #
-# File format (.mreplay v1, magic "MREPLAY2"):
-#   [ MAGIC "MREPLAY2"  : 8 bytes      ]    -- bumped from MREPLAY1 when the
-#                                              version byte was added
+# File format (.mreplay v1, magic "MREPLAY3"):
+#   [ MAGIC "MREPLAY3"  : 8 bytes      ]    -- bumped from MREPLAY2 when the
+#                                              goalie wire format expanded for
+#                                              full pose authoritative pose
+#                                              (12 B → 40 B per goalie block)
 #   [ FORMAT_VERSION    : u8           ]    -- currently 1; reader rejects others
 #   [ HEADER LENGTH     : u32 LE       ]
 #   [ HEADER JSON       : N bytes      ]    -- game_id, build_version, roster, …
@@ -34,7 +36,7 @@ extends RefCounted
 # PackedByteArray() can't be a const expression in GDScript, so this is a
 # `static var` initialized once at class load. Same access pattern
 # (ReplayFileWriter.MAGIC) for callers.
-static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89, 50])  # "MREPLAY2"
+static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89, 51])  # "MREPLAY3"
 const FORMAT_VERSION: int = 1
 const KIND_WORLD_STATE: int = 0
 const KIND_EVENT: int = 1

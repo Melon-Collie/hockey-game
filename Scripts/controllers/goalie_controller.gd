@@ -1111,6 +1111,33 @@ func get_state() -> GoalieNetworkState:
 	s.five_hole_openness = _five_hole_openness
 	s.velocity_x = _velocity_x
 	s.velocity_z = _velocity_z
+	# Authoritative pose — read live body-part transforms so replays and clients
+	# (once step 2 lands) reflect the actual pose the host evaluated saves
+	# against. Stick mirrors blocker because today the stick is rigid-attached
+	# to BlockArm; step 2 will lift it out as its own socket.
+	var body_rot: Vector3 = goalie.get_body_rotation()
+	s.body_pitch = body_rot.x
+	s.body_roll = body_rot.z
+	s.left_pad_offset = goalie.get_left_pad_position()
+	var lp_rot: Vector3 = goalie.get_left_pad_rotation()
+	s.left_pad_pitch = lp_rot.x
+	s.left_pad_roll = lp_rot.z
+	s.right_pad_offset = goalie.get_right_pad_position()
+	var rp_rot: Vector3 = goalie.get_right_pad_rotation()
+	s.right_pad_pitch = rp_rot.x
+	s.right_pad_roll = rp_rot.z
+	s.glove_offset = goalie.get_glove_position()
+	var g_rot: Vector3 = goalie.get_glove_rotation()
+	s.glove_yaw = g_rot.y
+	s.glove_pitch = g_rot.x
+	s.blocker_offset = goalie.get_blocker_position()
+	var b_rot: Vector3 = goalie.get_blocker_rotation()
+	s.blocker_yaw = b_rot.y
+	s.blocker_pitch = b_rot.x
+	s.stick_offset = s.blocker_offset
+	s.stick_yaw = s.blocker_yaw
+	s.stick_pitch = s.blocker_pitch
+	s.head_yaw = goalie.get_head_yaw()
 	return s
 
 func apply_state(network_state: GoalieNetworkState, host_ts: float) -> void:

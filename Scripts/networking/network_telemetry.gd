@@ -23,6 +23,11 @@ var _ooo_drop_count: int = 0
 var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
+# Bandwidth: bytes seen this window. Counted at the NetworkManager boundary so
+# the value reflects payload bytes only (excludes ENet/UDP/IP headers — those
+# add ~28 B per packet but aren't visible from inside the engine).
+var _bytes_sent_window: int = 0
+var _bytes_received_window: int = 0
 # Puck trajectory three-zone correction counters. Each broadcast during
 # trajectory prediction picks one zone based on client-vs-server divergence:
 # 0=soft blend (<0.3m), 1=velocity-only (0.3-1.5m), 2=hard snap (>1.5m).
@@ -64,6 +69,13 @@ var blade_jump_mag_avg: float = 0.0
 var blade_reconcile_mag_avg: float = 0.0
 var prediction_divergence_avg: float = 0.0
 var ooo_drops_per_sec: float = 0.0       # expect 0; non-zero means UDP reordering
+# Bandwidth (KB/s). Host sees bytes_sent_per_sec as sum across all peers (1×
+# snapshot bytes per recipient per broadcast); clients see only their own
+# receive volume. Payload bytes only — ENet/UDP/IP headers add ~28 B/packet
+# beyond this. Goalie overhaul target: snapshot stays under 500 B/tick at
+# 120Hz, so per-recipient bytes_sent_per_sec should stay under ~60 KB/s.
+var bytes_sent_per_sec: float = 0.0
+var bytes_received_per_sec: float = 0.0
 # Puck trajectory three-zone correction rates (Hz). All three sum to roughly
 # (post-shot broadcast rate ≈ 120/s) DURING trajectory prediction only — they're
 # zero when puck is carried or interpolated. Mostly soft, occasional vel-only,
@@ -100,6 +112,17 @@ static func record_world_state() -> void:
 
 static func record_input_sent() -> void:
 	if instance: instance._input_count += 1
+
+# Bandwidth: bytes ferried over the wire for this session. Recorded at
+# NetworkManager send/receive boundaries. Host calls record_bytes_sent once
+# per recipient per broadcast (so host upload load = bytes_sent_per_sec
+# reflects total upstream); clients call record_bytes_received once per
+# incoming snapshot.
+static func record_bytes_sent(n: int) -> void:
+	if instance: instance._bytes_sent_window += n
+
+static func record_bytes_received(n: int) -> void:
+	if instance: instance._bytes_received_window += n
 
 const QUEUE_DEPTH_WINDOW: int = 80  # 2 s at 40 Hz
 
@@ -223,6 +246,8 @@ func tick(delta: float) -> void:
 	blade_reconcile_mag_avg = _blade_reconcile_mag_sum / _blade_reconcile_n if _blade_reconcile_n > 0 else 0.0
 	prediction_divergence_avg = _prediction_divergence_sum / _prediction_divergence_n if _prediction_divergence_n > 0 else 0.0
 	ooo_drops_per_sec = _ooo_drop_count / _window_timer
+	bytes_sent_per_sec = _bytes_sent_window / _window_timer
+	bytes_received_per_sec = _bytes_received_window / _window_timer
 	puck_traj_soft_per_sec = _puck_traj_soft_count / _window_timer
 	puck_traj_vel_only_per_sec = _puck_traj_vel_only_count / _window_timer
 	puck_traj_hard_snap_per_sec = _puck_traj_hard_snap_count / _window_timer
@@ -267,6 +292,8 @@ func tick(delta: float) -> void:
 	_prediction_divergence_sum = 0.0
 	_prediction_divergence_n = 0
 	_ooo_drop_count = 0
+	_bytes_sent_window = 0
+	_bytes_received_window = 0
 	_puck_traj_soft_count = 0
 	_puck_traj_vel_only_count = 0
 	_puck_traj_hard_snap_count = 0

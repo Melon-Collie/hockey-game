@@ -87,6 +87,33 @@ func get_glove_position() -> Vector3:
 func get_blocker_position() -> Vector3:
 	return _block_arm.position
 
+# Pose accessors used by goalie_controller.get_state() to fill the
+# authoritative socket transforms broadcast in the world snapshot. All values
+# returned in goalie-local space; rotations in radians.
+func get_left_pad_position() -> Vector3:
+	return _left_pad.position
+
+func get_left_pad_rotation() -> Vector3:
+	return _left_pad.rotation
+
+func get_right_pad_position() -> Vector3:
+	return _right_pad.position
+
+func get_right_pad_rotation() -> Vector3:
+	return _right_pad.rotation
+
+func get_body_rotation() -> Vector3:
+	return _body.rotation
+
+func get_glove_rotation() -> Vector3:
+	return _glove.rotation
+
+func get_blocker_rotation() -> Vector3:
+	return _block_arm.rotation
+
+func get_head_yaw() -> float:
+	return _head.rotation.y
+
 func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
 	part.position = part.position.lerp(target_pos, t)
 	part.rotation_degrees = _lerp_euler_deg(part.rotation_degrees, target_rot_deg, t)
