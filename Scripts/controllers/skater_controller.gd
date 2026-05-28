@@ -632,6 +632,13 @@ func _enter_slapper_charge(input: InputState) -> void:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 
 func _get_charge_direction() -> Vector3:
+	# prev_blade_dir is the cursor drag delta in world XZ, derived via
+	# mouse_world_pos which is projected through the local camera — so any
+	# attack_up camera flip is already baked into the world direction.
+	# Don't sign-flip here based on team_id + attack_up; doing so would
+	# invert correct shots (an earlier override did this because the
+	# pre-blade-driven charge tracker read screen pixels directly,
+	# bypassing the camera).
 	return _aiming.prev_blade_dir
 
 func _release_wrister(input: InputState) -> void:

@@ -447,12 +447,6 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		push_warning("Reconcile: %.3fm snap applied (inputs replayed: %d)" \
 				% [skater.visual_offset.length(), _input_history.size()])
 
-func _get_charge_direction() -> Vector3:
-	var dir: Vector3 = _aiming.prev_blade_dir
-	if PlayerPrefs.attack_up and _team_id == 1:
-		return -dir
-	return dir
-
 func on_puck_picked_up_network() -> void:
 	super.on_puck_picked_up_network()
 	_claim_cooldown = 0.0
