@@ -42,7 +42,21 @@ Backhand shots take a power penalty. Scroll wheel toggles elevation (ballistic t
 
 **Tone is arcade-casual with a competitive ceiling.** The physics are responsive and forgiving on the surface, but blade placement, shot timing, charge management, and positioning meaningfully separate skilled play. Pick-up-and-play, hard to master.
 
-**Where the numbers live** (don't bake these into prose — read them when you need them): movement and shot tuning in `Scripts/controllers/skater_controller.gd`; shot math in `Scripts/domain/rules/shot_mechanics.gd`; period/faceoff/offsides/icing constants and presets in `Scripts/domain/config/game_rules.gd`; goalie tuning in `Scripts/controllers/goalie_controller.gd`.
+**Where the numbers live** (don't bake these into prose — read them when you need them): movement and shot tuning in `Scripts/controllers/skater_controller.gd`; shot math in `Scripts/domain/rules/shot_mechanics.gd`; period/faceoff/offsides/icing constants and presets in `Scripts/domain/config/game_rules.gd`; goalie tuning in `Scripts/controllers/goalie_controller.gd`; **per-player attribute multipliers** (Speed/Agility/Size/Strength → gameplay + visual effects) in `Scripts/domain/state/player_attributes.gd`.
+
+## Player Attributes
+
+Each skater has four attributes — **Speed, Agility, Size, Strength** — on a 3-step scale (1=bad, 2=medium, 3=good). The picker UX is *strength + weakness*: pick one attribute as your strength (3), one as your weakness (1), the rest stay at medium (2). The local player edits theirs in the main menu's player popup; bots have curated picks in `data/bot_identities.json`. Online matches lock attributes at join time (replicated through `request_join` / `spawn_remote_skater`); free-play picks re-apply immediately to the live skater without a respawn.
+
+What each drives (headline effects):
+- **Speed** → `thrust`, `max_speed` *(+ visual thigh bulk)*
+- **Agility** → turn rate, brake power, edge glide (`friction_drag` inverted), puck-carry speed retention, *(+ visual calf bulk)*
+- **Size** → weight, brace resistance, hitbox cylinder, arm + stick length (height ~5'9"–6'5"), ROM derived from arm length, *(+ visual height, torso/shoulder bulk)*
+- **Strength** → body-check delivery force (`body_check_transfer`), shot power (all pools), shot charge speed (inverted), *(+ visual arm bulk)*
+
+All tuning multipliers live as private constants on `PlayerAttributes`, accessed via named instance methods (`attrs.speed_mult()`, `attrs.strength_shot_mult()`, `attrs.height_mult()`, etc.) — **never index a `_*_MULTS` table outside that file**. Different effects need different spreads: Strength is widest (±25%) so the body-check formula can outweigh Size's mass differential; Speed and shot-power stay narrower (±7–15%) so the playable range doesn't compress. Visual scaling decouples from gameplay (e.g. arm-bulk runs ±40% asymmetric for a "jacked" silhouette while the Strength canonical stays ±25%). To add a new "X scales Y" rule, see the doc-block at the top of `player_attributes.gd`.
+
+Application path: `SkaterController.apply_attributes(attrs)` reads the canonical fields and writes scaled values to controller `@export`s, `Skater.weight`, `body_check_transfer`, etc.; `SkaterAppearanceCoordinator.apply(attrs)` does the visual mesh scaling. Both are idempotent — they capture baseline values on first call and recompute from baselines on every subsequent call, so repeated applies (from free-play picker changes) never compound.
 
 ## Tech Stack
 
@@ -87,6 +101,7 @@ Before touching networking code (RPCs, reconcile, prediction, interpolation, lag
 | New phase-entry side effect | `PhaseCoordinator` |
 | New controller behavior | Method on `SkaterController`; `GameManager` calls it, never pokes internals directly |
 | New reconcile logic | `domain/rules/reconciliation_rules.gd` + GUT test |
+| New "attribute X scales Y" rule | `PlayerAttributes` (add `_FOO_MULTS` const + `foo_mult()` accessor) → multiply a captured base value in `SkaterController.apply_attributes` or `SkaterAppearanceCoordinator.apply` |
 
 ## Code Conventions
 
