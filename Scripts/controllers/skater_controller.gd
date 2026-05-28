@@ -161,11 +161,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var slapper_wind_up_hand_back: float = 0.0     # top hand pulls behind shoulder (+local z, m)
 @export var slapper_wind_up_hand_inward: float = 0.0   # top hand pulls across body toward back shoulder (m)
 # Where the blade lives at full wind-up (in body-local space, before the body
-# coils). Pulling it in and back puts the stick over the back shoulder once the
-# torso rotation completes, so the bottom hand grips on a natural arc instead
-# of stretching laterally to a stick that's still extended out to the side.
+# coils). Forward in upper-body-local (negative Z) places the blade ahead of
+# the rotated body in world space — same trick as the top hand. With the
+# coil this lands the blade on the same side as the back-shoulder rotated
+# *through* world-forward, so the stick reads as loaded across the front of
+# the player rather than wrapping behind the back shoulder.
 @export var slapper_wind_up_blade_x: float = 0.4       # blade lateral offset at full charge (was slapper_blade_x=1.0)
-@export var slapper_wind_up_blade_z: float = 0.4       # blade depth offset at full charge — positive = behind (was -0.5, forward)
+@export var slapper_wind_up_blade_z: float = -0.4      # blade depth at full charge — negative = forward in body-local
 # Snappier lerp during the slapshot coil — the default upper_body_return_speed
 # is tuned for gentle aim-tracking and only reaches ~85% of an 80° target
 # inside the 0.3s wind-up window, which reads as a half-finished coil.
