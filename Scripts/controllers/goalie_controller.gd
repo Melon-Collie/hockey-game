@@ -55,6 +55,15 @@ extends Node
 # the reaction freeze if it does turn out to be a pass.
 @export var net_margin: float = 3.0
 
+# Universal puck tracking — react to any fast loose puck on track for the
+# net, not just shots released by an opposing carrier. Catches board
+# bounces, poke-strips, deflections, rebounds, and other loose-puck threats
+# that don't fire a release event. Gated tighter than detect_shot
+# (min_speed + max_time_to_impact) so the goalie doesn't pre-react to
+# pucks dawdling near the blue line.
+@export var universal_react_min_speed: float = 8.0
+@export var universal_react_max_time_to_impact: float = 0.6
+
 @export var rvh_depth: float = 0.1
 @export var rvh_early_angle: float = 80.0
 @export var rvh_post_pad_angle: float = 15.0
@@ -297,6 +306,7 @@ var _pose_inputs: GoalieBodyConfigBuilder.Inputs = GoalieBodyConfigBuilder.Input
 var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
 var _depth_cfg: GoalieBehaviorRules.DepthConfig
+var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
 
 # ── Runtime (controller-local) ────────────────────────────────────────────────
 var _current_depth: float = 0.1
@@ -412,6 +422,11 @@ func _build_rule_configs() -> void:
 	_shot_cfg.reaction_delay = reaction_delay
 	_shot_cfg.low_shot_threshold = low_shot_threshold
 	_shot_cfg.elevated_threshold = elevated_threshold
+	_universal_reaction_cfg = GoalieBehaviorRules.UniversalReactionConfig.new()
+	_universal_reaction_cfg.min_speed = universal_react_min_speed
+	_universal_reaction_cfg.max_time_to_impact = universal_react_max_time_to_impact
+	_universal_reaction_cfg.net_half_width = net_half_width
+	_universal_reaction_cfg.net_margin = net_margin
 	_zone_cfg = GoalieBehaviorRules.DefensiveZoneConfig.new()
 	_zone_cfg.zone_post_z = zone_post_z
 	_zone_cfg.rvh_early_angle = rvh_early_angle
@@ -489,6 +504,13 @@ func _update_tracking(delta: float) -> void:
 		_tracked_threat_position = _tracked_threat_position.lerp(target_threat, tracking_speed * delta)
 	else:
 		_tracked_threat_position = target_threat
+	# Universal puck tracking: trigger a reaction for any loose puck above the
+	# threshold heading for the net within max_time_to_impact, regardless of
+	# whether a release event fired. Catches board bounces, poke-strips,
+	# deflections, rebounds. Gated to host, non-reacting, non-RVH, loose puck
+	# — release-event-triggered shots and RVH commits remain untouched.
+	if is_server and not _reaction.reacting and not _sm.is_rvh() and carrier == null:
+		_check_universal_reaction()
 	if not _reaction.reacting or not is_server:
 		return
 	# Tick the freeze (handles carrier-arm, clear-timer countdown, duration cap).
@@ -1043,6 +1065,27 @@ func _update_body_parts(delta: float) -> void:
 			glove_max_step = glove_react_max_speed * delta
 			blocker_max_step = blocker_react_max_speed * delta
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
+
+# Universal puck-tracking trigger. Runs each host physics frame on loose
+# pucks; if the puck is fast and on track for the net within the
+# reaction window, kicks off the same reaction pipeline as a release
+# event. The release-event path (`_on_puck_released`) handles the
+# carrier-just-let-go case; this handles everything else.
+func _check_universal_reaction() -> void:
+	if not GoalieBehaviorRules.should_react_to_puck(
+			puck.global_position, puck.linear_velocity,
+			_goal_line_z, _goal_center_x, _universal_reaction_cfg):
+		return
+	# Use linear_velocity here (the puck is loose, not in the
+	# Jolt-frozen->dynamic transition that `_on_puck_released` has to
+	# handle via `get_release_velocity`).
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+			puck.global_position, puck.linear_velocity,
+			_goal_line_z, _goal_center_x, _shot_cfg)
+	if not result.is_shot:
+		return
+	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay)
+
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
 func _on_puck_released() -> void:
