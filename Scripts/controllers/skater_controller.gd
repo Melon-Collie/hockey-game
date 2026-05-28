@@ -129,7 +129,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var head_track_max_deg: float = 60.0
 
 # ── Slapper Tuning ────────────────────────────────────────────────────────────
-@export var slapper_wind_up_height: float = 0.4
+@export var slapper_wind_up_height: float = 1.0
 @export var slapper_wind_up_time: float = 0.3
 @export var slapper_zone_radius: float = 0.5
 @export var slapper_zone_offset_x: float = 0.8  # lateral offset toward blade side
@@ -140,6 +140,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var slapper_blade_x: float = 1.0
 @export var slapper_blade_z: float = -0.5
 @export var slapper_aim_arc: float = 45.0
+# Wind-up coil: layered on top of the aim-tracking torso angle. Rotates the
+# back shoulder away from the target (for RHS that's CW from above, i.e. left
+# shoulder points at the puck) while pulling the top hand up and across the
+# body toward the back shoulder. Eased with sqrt so most of the coil happens
+# early and the latter part of the wind-up is a held "loaded" pose.
+@export var slapper_wind_up_twist_deg: float = 35.0
+@export var slapper_wind_up_hand_up: float = 0.30      # top hand rises (m)
+@export var slapper_wind_up_hand_back: float = 0.20    # top hand pulls behind shoulder (+local z, m)
+@export var slapper_wind_up_hand_inward: float = 0.15  # top hand pulls across body toward back shoulder (m)
 @export var slapper_elevation_target_height: float = 0.65
 @export var one_timer_window_duration: float = 0.45  # seconds after puck arrives to release
 @export var one_timer_leniency_time: float = 0.08   # seconds of puck travel added to zone radius as leniency
@@ -215,7 +224,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.apply_slapper_velocity_drag = _apply_slapper_velocity_drag
 	_cb.apply_block_movement = _apply_block_movement
 	_sm.setup(_cb, _aiming)
-	_pose.setup(skater, _sm, self)
+	_pose.setup(skater, _sm, _aiming, self)
 
 # Reach ROM is derived from arm length, not an independent tunable. These
 # ratios reflect anatomy: forehand reach is shoulder-joint-limited (about

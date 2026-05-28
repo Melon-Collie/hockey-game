@@ -36,6 +36,9 @@ func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
 func apply_slapper_blade_position() -> void:
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 	var wind_up_t: float = clampf(_aiming.slapper_charge_timer / _controller.slapper_wind_up_time, 0.0, 1.0)
+	# Front-loaded ease so the coil snaps into place and the back half of the
+	# wind-up is a held loaded pose — matches the torso coil in SkaterPoseCoordinator.
+	var wind_up_eased: float = sqrt(wind_up_t)
 	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x
 	var blade_z: float = _skater.shoulder.position.z + _controller.slapper_blade_z
 	var current_blade_y: float = lerpf(
@@ -48,7 +51,14 @@ func apply_slapper_blade_position() -> void:
 	var clamped_heel: Vector3 = blade_world
 	if _controller.has_puck:
 		clamped_heel = _ik.clamp_blade_from_goalies(clamped_heel)
-	var hand_pos := Vector3(_skater.shoulder.position.x, _controller.hand_rest_y, _skater.shoulder.position.z)
+	# Pull the top hand up, behind the shoulder, and across the body toward the
+	# back shoulder as the wind-up loads. Combined with the lifted blade and the
+	# torso coil this puts the stick over the back shoulder instead of out to the
+	# side like a T-pose.
+	var hand_pos := Vector3(
+			_skater.shoulder.position.x - blade_side_sign * _controller.slapper_wind_up_hand_inward * wind_up_eased,
+			_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased,
+			_skater.shoulder.position.z + _controller.slapper_wind_up_hand_back * wind_up_eased)
 	var hand_world: Vector3 = _skater.upper_body_to_global(hand_pos)
 	var shaft: Vector3 = clamped_heel - hand_world
 	shaft.y = 0.0
