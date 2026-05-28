@@ -217,6 +217,157 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_sm.setup(_cb, _aiming)
 	_pose.setup(skater, _sm, self)
 
+# Reach ROM is derived from arm length, not an independent tunable. These
+# ratios reflect anatomy: forehand reach is shoulder-joint-limited (about
+# 56% of arm length, can't cross the body very far); backhand reach is
+# arm-extension-limited (about 87.5% of arm length, near-full extension
+# out to the same side). Constant ratios mean the arm-bend at the ROM cap
+# looks the same on every player, big or small.
+const _ROM_FOREHAND_OF_ARM: float = 0.5625
+const _ROM_BACKHAND_OF_ARM: float = 0.875
+
+
+# ── Player Attributes ─────────────────────────────────────────────────────────
+# Base values captured on the first apply_attributes() call so subsequent
+# applies (offline free-play picker re-applies) recompute from the original
+# @export defaults instead of compounding with the previous multiplier.
+# All tuning tables live on PlayerAttributes — see that file for the system
+# overview and how to add new scalings.
+var _attr_base_captured: bool = false
+var _base_thrust:                       float = 0.0
+var _base_max_speed:                    float = 0.0
+var _base_facing_drag_speed:            float = 0.0
+var _base_facing_drag_speed_braking:    float = 0.0
+var _base_brake_multiplier:             float = 0.0
+var _base_friction_drag:                float = 0.0
+var _base_min_wrister_power:            float = 0.0
+var _base_max_wrister_power:            float = 0.0
+var _base_quick_shot_power:             float = 0.0
+var _base_min_slapper_power:            float = 0.0
+var _base_max_slapper_power:            float = 0.0
+var _base_max_wrister_charge_distance:  float = 0.0
+var _base_max_slapper_charge_time:      float = 0.0
+var _base_puck_carry_speed_multiplier:  float = 0.0
+var _base_stick_length:                 float = 0.0
+var _base_skater_upper_arm_length:      float = 0.0
+var _base_skater_forearm_length:        float = 0.0
+var _base_skater_weight:                float = 0.0
+var _base_skater_body_check_transfer:   float = 0.0
+var _base_skater_body_check_brace_resistance: float = 0.0
+var _base_skater_collision_radius:      float = 0.0
+var _base_skater_collision_height:      float = 0.0
+
+
+# Modulates the controller and skater tuning fields from a PlayerAttributes
+# resource. Safe to call multiple times — the first call snapshots the
+# shipped @export defaults, every call recomputes live = base × multiplier.
+# Called once at spawn and again whenever the local player changes picks in
+# offline free-play (online matches lock attributes at join time).
+func apply_attributes(attrs: PlayerAttributes) -> void:
+	if attrs == null or skater == null:
+		return
+	if not _attr_base_captured:
+		_capture_attribute_bases()
+	var m_speed:    float = attrs.speed_mult()
+	var m_agility:  float = attrs.agility_mult()
+	var m_size:     float = attrs.size_mult()
+	var m_strength: float = attrs.strength_mult()
+	var m_height:   float = attrs.height_mult()
+	thrust    = _base_thrust    * m_speed
+	max_speed = _base_max_speed * m_speed
+	facing_drag_speed           = _base_facing_drag_speed           * m_agility
+	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
+	brake_multiplier            = _base_brake_multiplier            * m_agility
+	# friction_drag is velocity-proportional drag — scaling it inversely
+	# with Agility gives agile players the "good edges" feel: less momentum
+	# leaks through the blades during a cut, so they carry more speed out
+	# of turns. Lateral / backward thrust multipliers are universal — every
+	# skater shares the same forward > lateral > backward shape; what makes
+	# Slick agile is how cleanly they transition between those directions.
+	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
+	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.agility_carry_mult()
+	# Shot powers use the narrower Strength-Shot multiplier (±15%) rather
+	# than canonical Strength (±25%) so the wrister floor stays playable
+	# for low-Strength shooters. Charge speed uses its own inverted table.
+	var m_shot_power: float = attrs.strength_shot_mult()
+	min_wrister_power = _base_min_wrister_power * m_shot_power
+	max_wrister_power = _base_max_wrister_power * m_shot_power
+	quick_shot_power  = _base_quick_shot_power  * m_shot_power
+	min_slapper_power = _base_min_slapper_power * m_shot_power
+	max_slapper_power = _base_max_slapper_power * m_shot_power
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.strength_charge_mult()
+	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.strength_charge_mult()
+	# Weight uses the narrower SIZE_WEIGHT spread (±12%) instead of canonical
+	# Size (±18%) so the weight_ratio in the check formula doesn't dominate
+	# the Strength-driven body_check_transfer. Brace and hitbox stay on
+	# canonical Size.
+	skater.weight                       = _base_skater_weight                  * attrs.size_weight_mult()
+	skater.body_check_transfer          = _base_skater_body_check_transfer     * m_strength
+	# Inverse: brace_resistance is a coefficient on incoming transfer when
+	# the victim is braced — *lower* = better resistance. A bigger-Size
+	# player should resist knockback better, so the multiplier flips.
+	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * (2.0 - m_size)
+	# Arms and stick scale with actual height (the dedicated height_mult,
+	# tighter than the gameplay size_mult) — keeps proportions realistic so
+	# a taller player has a correspondingly longer arm and stick rather than
+	# looking awkward with a baseline-length stick. update_stick_mesh() and
+	# the arm bone wrappers recompute visuals from these every frame, so no
+	# separate visual pass is needed.
+	stick_length              = _base_stick_length              * m_height
+	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
+	skater.forearm_length     = _base_skater_forearm_length     * m_height
+	# Reach ROM is a derived property of arm length — the ratios reflect
+	# fixed anatomy (forehand is shoulder-limited, backhand uses near-full
+	# extension), so they stay constant across sizes. Bigger arms naturally
+	# yield more reach without being an independent attribute axis. The
+	# arm-bend at the ROM cap is consistent (~87.5% extension on backhand)
+	# for every player, so small skaters don't look rigid at full reach.
+	var arm_total: float = skater.upper_arm_length + skater.forearm_length
+	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
+	rom_backhand_reach_max    = arm_total * _ROM_BACKHAND_OF_ARM
+	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
+	# (matches body-check feel), height with the realistic-proportions
+	# multiplier. Skater._ready() duplicated the shape so this mutation is
+	# per-instance and won't leak across skaters.
+	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if col != null:
+		var cyl: CylinderShape3D = col.shape as CylinderShape3D
+		if cyl != null:
+			cyl.radius = _base_skater_collision_radius * m_size
+			cyl.height = _base_skater_collision_height * m_height
+	skater.apply_appearance(attrs)
+
+
+func _capture_attribute_bases() -> void:
+	_base_thrust                       = thrust
+	_base_max_speed                    = max_speed
+	_base_facing_drag_speed            = facing_drag_speed
+	_base_facing_drag_speed_braking    = facing_drag_speed_braking
+	_base_brake_multiplier             = brake_multiplier
+	_base_friction_drag                = friction_drag
+	_base_min_wrister_power            = min_wrister_power
+	_base_max_wrister_power            = max_wrister_power
+	_base_quick_shot_power             = quick_shot_power
+	_base_min_slapper_power            = min_slapper_power
+	_base_max_slapper_power            = max_slapper_power
+	_base_max_wrister_charge_distance  = max_wrister_charge_distance
+	_base_max_slapper_charge_time      = max_slapper_charge_time
+	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
+	_base_stick_length                 = stick_length
+	_base_skater_upper_arm_length      = skater.upper_arm_length
+	_base_skater_forearm_length        = skater.forearm_length
+	_base_skater_weight                       = skater.weight
+	_base_skater_body_check_transfer          = skater.body_check_transfer
+	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
+	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if col != null:
+		var cyl: CylinderShape3D = col.shape as CylinderShape3D
+		if cyl != null:
+			_base_skater_collision_radius = cyl.radius
+			_base_skater_collision_height = cyl.height
+	_attr_base_captured = true
+
+
 func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction: Vector3) -> void:
 	if not _is_host:
 		return

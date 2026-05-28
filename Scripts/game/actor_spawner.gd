@@ -81,7 +81,8 @@ func spawn_local_player(
 		is_left_handed: bool,
 		puck: Puck,
 		game_state: Node,
-		team_id: int) -> Dictionary:
+		team_id: int,
+		attributes: PlayerAttributes = null) -> Dictionary:
 	var skater: Skater = SKATER_SCENE.instantiate()
 	skater.is_left_handed = is_left_handed  # must be set before add_child so _ready sees it
 	skater.position = position
@@ -91,6 +92,7 @@ func spawn_local_player(
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
 	controller.set_local_team_id(team_id)
+	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_medium())
 	return {"skater": skater, "controller": controller}
 
 # ── AI player (skater + AIController) ────────────────────────────────────────
@@ -109,7 +111,8 @@ func spawn_ai_player(
 		gloves_color: Color,
 		is_left_handed: bool,
 		puck: Puck,
-		game_state: Node) -> Dictionary:
+		game_state: Node,
+		attributes: PlayerAttributes = null) -> Dictionary:
 	var skater: Skater = SKATER_SCENE.instantiate()
 	skater.is_left_handed = is_left_handed
 	skater.position = position
@@ -118,6 +121,7 @@ func spawn_ai_player(
 	var controller: AIController = AI_CONTROLLER_SCENE.instantiate()
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
+	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_medium())
 	return {"skater": skater, "controller": controller}
 
 # ── Remote player (skater + RemoteController) ────────────────────────────────
@@ -132,7 +136,8 @@ func spawn_remote_player(
 		gloves_color: Color,
 		is_left_handed: bool,
 		puck: Puck,
-		game_state: Node) -> Dictionary:
+		game_state: Node,
+		attributes: PlayerAttributes = null) -> Dictionary:
 	var skater: Skater = SKATER_SCENE.instantiate()
 	skater.is_left_handed = is_left_handed  # must be set before add_child so _ready sees it
 	skater.position = position
@@ -141,4 +146,5 @@ func spawn_remote_player(
 	var controller: RemoteController = REMOTE_CONTROLLER_SCENE.instantiate()
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
+	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_medium())
 	return {"skater": skater, "controller": controller}
