@@ -217,6 +217,16 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_sm.setup(_cb, _aiming)
 	_pose.setup(skater, _sm, self)
 
+# Reach ROM is derived from arm length, not an independent tunable. These
+# ratios reflect anatomy: forehand reach is shoulder-joint-limited (about
+# 56% of arm length, can't cross the body very far); backhand reach is
+# arm-extension-limited (about 87.5% of arm length, near-full extension
+# out to the same side). Constant ratios mean the arm-bend at the ROM cap
+# looks the same on every player, big or small.
+const _ROM_FOREHAND_OF_ARM: float = 0.5625
+const _ROM_BACKHAND_OF_ARM: float = 0.875
+
+
 # ── Player Attributes ─────────────────────────────────────────────────────────
 # Base values captured on the first apply_attributes() call so subsequent
 # applies (offline free-play picker re-applies) recompute from the original
@@ -306,10 +316,15 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	stick_length              = _base_stick_length              * m_height
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
-	# Reach ROM stays universal — scaling it with height made small players
-	# visibly stiff at the cap. Big players still get more total reach from
-	# their longer arms and stick (stick + arm: ~2.30m big vs ~1.91m small)
-	# even without ROM differentiation.
+	# Reach ROM is a derived property of arm length — the ratios reflect
+	# fixed anatomy (forehand is shoulder-limited, backhand uses near-full
+	# extension), so they stay constant across sizes. Bigger arms naturally
+	# yield more reach without being an independent attribute axis. The
+	# arm-bend at the ROM cap is consistent (~87.5% extension on backhand)
+	# for every player, so small skaters don't look rigid at full reach.
+	var arm_total: float = skater.upper_arm_length + skater.forearm_length
+	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
+	rom_backhand_reach_max    = arm_total * _ROM_BACKHAND_OF_ARM
 	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
 	# (matches body-check feel), height with the realistic-proportions
 	# multiplier. Skater._ready() duplicated the shape so this mutation is
