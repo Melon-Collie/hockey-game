@@ -172,7 +172,6 @@ var _body_block_sphere: SphereShape3D = null
 var _blade_area: Area3D = null
 var _slapper_zone_area: Area3D = null
 var _slapper_zone_sphere: SphereShape3D = null
-var _slapper_zone_debug_mesh: MeshInstance3D = null
 var _default_upper_body_y: float = 0.0
 # Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
 # Advanced by update_carry_side() each tick from the IK pipeline.
@@ -257,23 +256,6 @@ func _ready() -> void:
 	zone_shape.shape = _slapper_zone_sphere
 	_slapper_zone_area.add_child(zone_shape)
 	add_child(_slapper_zone_area)
-	# DEBUG: visible marker on the slapper zone area so we can see where it
-	# actually is in the world versus where the HUD ring is drawn. Toggle the
-	# visibility via set_slapper_zone(). Remove once the alignment bug is fixed.
-	_slapper_zone_debug_mesh = MeshInstance3D.new()
-	_slapper_zone_debug_mesh.name = "SlapperZoneDebugMesh"
-	var debug_sphere := SphereMesh.new()
-	debug_sphere.radius = 1.0
-	debug_sphere.height = 2.0
-	_slapper_zone_debug_mesh.mesh = debug_sphere
-	var debug_mat := StandardMaterial3D.new()
-	debug_mat.albedo_color = Color(0.0, 1.0, 0.0, 0.35)
-	debug_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	debug_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	debug_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_slapper_zone_debug_mesh.material_override = debug_mat
-	_slapper_zone_debug_mesh.visible = false
-	_slapper_zone_area.add_child(_slapper_zone_debug_mesh)
 
 	_body_block_area = Area3D.new()
 	_body_block_area.name = "BodyBlockArea"
@@ -817,16 +799,9 @@ func set_slapper_zone(active: bool, radius: float = 0.0, offset_x: float = 0.0, 
 		# Anchor to ice level — the Skater root is at body-center height, so a
 		# local Y of 0 lands the sphere up at chest height where the puck can
 		# never reach it. Setting global Y after rebases local Y without
-		# touching XZ. The HUD ring already does this via
-		# _slapper_indicator.global_position.y = 0; the zone needs the same.
+		# touching XZ.
 		_slapper_zone_area.global_position.y = 0.0
-		# DEBUG: scale the visible marker to match the actual collision sphere
-		# and show it whenever the zone is active.
-		if _slapper_zone_debug_mesh != null:
-			_slapper_zone_debug_mesh.scale = Vector3(radius, radius, radius)
 	_slapper_zone_area.collision_layer = Constants.LAYER_BLADE_AREAS if active else 0
-	if _slapper_zone_debug_mesh != null:
-		_slapper_zone_debug_mesh.visible = active
 
 
 func is_slapper_zone_active() -> bool:
