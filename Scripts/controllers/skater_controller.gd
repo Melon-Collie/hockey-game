@@ -549,6 +549,11 @@ func on_puck_picked_up_network() -> void:
 		# the shot is cancelled and they keep the puck in carry state.
 		skater.set_slapper_zone(false)
 		skater.set_slapper_mode(true)
+		# Pin the just-attached puck to the ice for the one-timer window — same
+		# as the carry → slapshot entry path. Without this the puck snaps to
+		# the overhead blade contact the moment it attaches.
+		var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
+		skater.enter_slapshot_pinning(blade_side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
 		_aiming.one_timer_window_timer = one_timer_window_duration + NetworkManager.get_latest_rtt_ms() / 2000.0
 		_sm.set_state(State.SLAPPER_CHARGE_WITH_PUCK)
 		if show_one_timer_indicator:
@@ -601,6 +606,7 @@ func _transition_to_skating() -> void:
 	skater.set_lower_body_lag(0.0)
 	skater.set_slapper_mode(false)
 	skater.set_slapper_zone(false)
+	skater.exit_slapshot_pinning()
 	if show_one_timer_indicator:
 		skater.set_slapper_indicator(false)
 		skater.set_slapshot_arrow(false)
@@ -646,6 +652,13 @@ func _enter_slapper_charge(input: InputState) -> void:
 	skater.set_lower_body_lag(0.0)
 	if has_puck:
 		skater.set_slapper_mode(true)
+		# Pin the carried puck to the slapper-zone ice spot for the duration of
+		# the wind-up so it doesn't ride up with the blade as the stick lifts
+		# overhead. The pin travels with the player (so coasting/braking still
+		# works) and the shot fires from this position when released — see
+		# Puck.release's slapshot branch.
+		var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
+		skater.enter_slapshot_pinning(blade_side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
 		_sm.set_state(State.SLAPPER_CHARGE_WITH_PUCK)
 	else:
 		# Activate the ice-level slapper zone so the puck can be detected at

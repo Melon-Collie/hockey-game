@@ -441,7 +441,18 @@ func update_carry_side(has_puck: bool, delta: float) -> void:
 # Pure derivation: contact − face_normal × forehand_factor × carry_blade_offset.
 # Returns get_blade_contact_global() (centered) when not carrying or when
 # the geometry is degenerate, so existing non-carry consumers are unaffected.
+#
+# Slapshot wind-up override: when slapshot pinning is active the puck stays
+# at a fixed lateral/forward offset from the player (matched to the one-timer
+# slapper zone) instead of following the blade, which is lifted overhead and
+# pulled back over the back shoulder during the coil. This keeps the puck on
+# the ice in front of the skater so they can coast / brake during the wind-up
+# without leaving the puck behind, and so the eventual shot fires from a sane
+# ice position rather than from the elevated blade tip.
 func get_carry_target_global() -> Vector3:
+	if _slapshot_pin_active:
+		var local := Vector3(_slapshot_pin_local.x, 0.0, _slapshot_pin_local.y)
+		return global_position + global_transform.basis * local
 	var contact: Vector3 = get_blade_contact_global()
 	if top_hand == null:
 		return contact
@@ -455,6 +466,23 @@ func get_carry_target_global() -> Vector3:
 	# so subtraction here lands on the un-offset puck position.
 	var face_normal := Vector3(-stick.z, 0.0, stick.x)
 	return contact - face_normal * get_carry_forehand_factor() * carry_blade_offset
+
+
+# Slapshot pin state — set by SkaterController._enter_slapper_charge when the
+# carrier commits to a slap, cleared in _transition_to_skating. The pin offset
+# is XZ in skater-local space (already includes blade_side_sign).
+var _slapshot_pin_active: bool = false
+var _slapshot_pin_local: Vector2 = Vector2.ZERO
+
+func enter_slapshot_pinning(local_offset_x: float, local_offset_z: float) -> void:
+	_slapshot_pin_local = Vector2(local_offset_x, local_offset_z)
+	_slapshot_pin_active = true
+
+func exit_slapshot_pinning() -> void:
+	_slapshot_pin_active = false
+
+func is_slapshot_pinning() -> bool:
+	return _slapshot_pin_active
 
 
 func get_prev_blade_contact_global() -> Vector3:
