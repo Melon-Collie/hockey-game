@@ -132,8 +132,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var slapper_wind_up_height: float = 1.0
 @export var slapper_wind_up_time: float = 0.3
 @export var slapper_zone_radius: float = 0.5
-@export var slapper_zone_offset_x: float = 0.8  # lateral offset toward blade side
-@export var slapper_zone_offset_z: float = -1.0  # forward offset (negative = in front of player)
+# Where the one-timer reception zone (and slap-with-puck pin) lives. Heavily
+# lateral with a small forward bias matches a real cross-ice one-timer stance:
+# puck arrives on the blade side, slightly ahead of the player's centre, so
+# they can swing through it without reaching forward.
+@export var slapper_zone_offset_x: float = 1.0  # lateral offset toward blade side
+@export var slapper_zone_offset_z: float = -0.4  # forward offset (negative = in front of player)
 @export var min_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MIN_M_S
 @export var max_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 @export var max_slapper_charge_time: float = 0.7
