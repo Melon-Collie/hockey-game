@@ -104,7 +104,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
 @export var max_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-@export var max_wrister_charge_distance: float = 2.0
+@export var max_wrister_charge_distance: float = 0.7
 @export var backhand_power_coefficient: float = 0.75
 @export var max_charge_direction_variance: float = 35.0
 @export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
@@ -295,7 +295,10 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	quick_shot_power  = _base_quick_shot_power  * m_shot_power
 	min_slapper_power = _base_min_slapper_power * m_shot_power
 	max_slapper_power = _base_max_slapper_power * m_shot_power
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.strength_charge_mult()
+	# Charge cap scales with both Strength (how easy to load) and Size (so the
+	# cap stays a constant fraction of the player's ROM — small players can
+	# still fill the bar with their own full-reach sweep).
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.strength_charge_mult() * attrs.size_charge_mult()
 	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.strength_charge_mult()
 	# Weight uses the narrower SIZE_WEIGHT spread (±12%) instead of canonical
 	# Size (±18%) so the weight_ratio in the check formula doesn't dominate

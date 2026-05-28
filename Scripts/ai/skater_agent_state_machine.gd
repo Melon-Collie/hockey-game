@@ -279,18 +279,18 @@ const BLADE_REACH_M: float = (
 		+ BLADE_REACH_BUFFER_M)
 
 # ── Wrister charge ───────────────────────────────────────────────────────────
-# SHOOT_PRESSED runs a real wrister now: hold shoot_held for this many
-# ticks while sweeping the mouse, then release. ~250 ms gives a solid
-# wrister (charge_distance ≈ 1.0 of max 2.0, well past quick_shot_threshold).
+# SHOOT_PRESSED runs a real wrister: hold shoot_held for this many
+# ticks while sweeping the blade, then release.
+# NOTE: this constant — and the BOT_WRISTER_WIND_UP_* geometry below —
+# was tuned against the old screen-pos charge model and needs revisiting
+# under the blade-driven model. The actual accumulated charge at release
+# is now whatever the blade's world-space arc adds up to during the
+# wind-up → release lerp; with the wind-up endpoints currently outside
+# ROM, the blade pins at the ROM boundary and only the arc along that
+# boundary contributes (~0.6–0.9m). If retuning, also update
+# AIActionScoring.BOT_PASS_CHARGE_RATIO (= TARGET / max_wrister_charge_distance)
+# so scoring's assumed release speed matches what actually fires.
 const BOT_WRISTER_CHARGE_TICKS: int = 60
-# Target accumulated charge_distance at release. SkaterController.
-# max_wrister_charge_distance defaults to 2.0; we aim for half — past
-# the quick-shot threshold (0.2), comfortable power (lerp ≈ 50%).
-# If you retune this, update AIActionScoring.BOT_PASS_CHARGE_RATIO
-# to match (= TARGET / max_wrister_charge_distance). Scoring uses
-# that ratio to derive the assumed charged-pass release speed; a
-# mismatch makes _compute_best_pass score long passes for a speed
-# the state machine doesn't actually fire at.
 const BOT_WRISTER_TARGET_CHARGE: float = 1.0
 # Per-tick mouse_screen_pos delta along the sweep direction.
 # NOTE: this constant is currently vestigial for wrister charging —
