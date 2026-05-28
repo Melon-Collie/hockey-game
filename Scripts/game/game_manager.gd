@@ -1410,7 +1410,6 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
-		local_ctrl.puck_drop_for_slapshot_requested.connect(_on_puck_drop_for_slapshot_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 	# AI bots release shots through the same signal as humans, but they live
@@ -1420,14 +1419,6 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# into the void.
 	if record.is_bot:
 		record.controller.puck_release_requested.connect(_on_puck_release_requested)
-		record.controller.puck_drop_for_slapshot_requested.connect(_on_puck_drop_for_slapshot_requested)
-	# Remote players on the host: connect drop-on-slapshot too. Unlike shot
-	# release (which goes through an explicit client→host RPC), the drop fires
-	# from `_enter_slapper_charge` whenever the host's RemoteController runs
-	# the remote player's input, so the host can act on it authoritatively
-	# without a dedicated RPC.
-	if NetworkManager.is_host and not record.is_local and not record.is_bot:
-		record.controller.puck_drop_for_slapshot_requested.connect(_on_puck_drop_for_slapshot_requested)
 	record.controller.one_timer_release_requested.connect(
 			_on_one_timer_release_requested.bind(record.skater))
 	var pid: int = record.peer_id
@@ -1641,17 +1632,6 @@ func _defending_team_id_for_goalie(goalie: Goalie) -> int:
 
 
 # ── Puck release / one-timer ─────────────────────────────────────────────────
-func _on_puck_drop_for_slapshot_requested() -> void:
-	# Carrier committing to a slap — drop the puck to the ice so the wind-up
-	# doesn't drag it overhead. Host drops authoritatively (which also RPCs the
-	# remote carrier); local prediction is cleared so the puck stops being
-	# pinned to the blade on this machine.
-	if NetworkManager.is_host:
-		_drop_puck_if_carried()
-	if puck_controller != null:
-		puck_controller.notify_local_puck_dropped()
-
-
 func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bool) -> void:
 	var sound: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
 	SoundManager.play_world(sound, puck.get_puck_position(), 0.0, 0.04)
