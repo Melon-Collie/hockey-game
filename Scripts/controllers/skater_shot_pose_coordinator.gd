@@ -39,8 +39,13 @@ func apply_slapper_blade_position() -> void:
 	# Front-loaded ease so the coil snaps into place and the back half of the
 	# wind-up is a held loaded pose — matches the torso coil in SkaterPoseCoordinator.
 	var wind_up_eased: float = sqrt(wind_up_t)
-	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x
-	var blade_z: float = _skater.shoulder.position.z + _controller.slapper_blade_z
+	# Lerp blade XZ from the "ready" position out to the side to the "loaded"
+	# position pulled in and back, so the stick wraps over the back shoulder
+	# once the torso coil completes.
+	var blade_x_offset: float = lerpf(_controller.slapper_blade_x, _controller.slapper_wind_up_blade_x, wind_up_eased)
+	var blade_z_offset: float = lerpf(_controller.slapper_blade_z, _controller.slapper_wind_up_blade_z, wind_up_eased)
+	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * blade_x_offset
+	var blade_z: float = _skater.shoulder.position.z + blade_z_offset
 	var current_blade_y: float = lerpf(
 			_ik.blade_y_lean_corrected(blade_x, blade_z),
 			_controller.slapper_wind_up_height,

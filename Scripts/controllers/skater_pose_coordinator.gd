@@ -156,7 +156,7 @@ func apply_upper_body(delta: float) -> void:
 			var wind_up_eased: float = sqrt(wind_up_t)
 			var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 			var coil: float = -blade_side_sign * deg_to_rad(_controller.slapper_wind_up_twist_deg) * wind_up_eased
-			upper_body_angle = lerp_angle(upper_body_angle, aim_target + coil, _controller.upper_body_return_speed * delta)
+			upper_body_angle = lerp_angle(upper_body_angle, aim_target + coil, _controller.slapper_wind_up_lerp_speed * delta)
 			_skater.set_upper_body_rotation(upper_body_angle)
 		return
 
