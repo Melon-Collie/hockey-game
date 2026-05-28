@@ -56,14 +56,16 @@ func apply_slapper_blade_position() -> void:
 	var clamped_heel: Vector3 = blade_world
 	if _controller.has_puck:
 		clamped_heel = _ik.clamp_blade_from_goalies(clamped_heel)
-	# Pull the top hand up, behind the shoulder, and across the body toward the
-	# back shoulder as the wind-up loads. Combined with the lifted blade and the
-	# torso coil this puts the stick over the back shoulder instead of out to the
-	# side like a T-pose.
+	# Lift the top hand and push it forward in upper-body-local space. The
+	# forward push (negative local Z) rides the torso coil — for an LHS player
+	# the body rotates CCW so local -Z maps to world upper-left in top-down
+	# view, putting the hand out in front of the rotated body instead of glued
+	# to the back-shoulder marker. hand_back/hand_inward stay opt-in (default 0)
+	# since they fight the coil direction.
 	var hand_pos := Vector3(
 			_skater.shoulder.position.x - blade_side_sign * _controller.slapper_wind_up_hand_inward * wind_up_eased,
 			_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased,
-			_skater.shoulder.position.z + _controller.slapper_wind_up_hand_back * wind_up_eased)
+			_skater.shoulder.position.z + _controller.slapper_wind_up_hand_back * wind_up_eased - _controller.slapper_wind_up_hand_forward * wind_up_eased)
 	var hand_world: Vector3 = _skater.upper_body_to_global(hand_pos)
 	var shaft: Vector3 = clamped_heel - hand_world
 	shaft.y = 0.0

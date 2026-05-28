@@ -147,12 +147,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # early and the latter part of the wind-up is a held "loaded" pose.
 @export var slapper_wind_up_twist_deg: float = 80.0
 @export var slapper_wind_up_hand_up: float = 0.30      # top hand rises (m)
-# These two are body-local offsets — they were fighting the torso coil (the
-# body rotates +X to world +Z, so a body-local +Z offset becomes world -X, i.e.
-# the hand pulls *away* from the back-shoulder side it's supposed to end up on).
-# Default to 0 so the hand sits on the shoulder marker and rides the rotation
-# naturally; tune up only if the held pose needs extra body-local pose, not
-# direction.
+# Pushes the top hand forward in upper-body-local space (negative local Z).
+# After the torso coil, this body-local "forward" points along the rotated
+# body's new forward direction in world — so for an LHS player coiled CCW
+# the hand ends up upper-left, for an RHS player coiled CW it ends up
+# upper-right. The hand rides the rotation but is placed in front of the
+# back shoulder rather than glued to it.
+@export var slapper_wind_up_hand_forward: float = 0.35
+# Lateral body-local offsets — left at 0 because they fight the coil (a
+# body-local +Z offset rotates to a world -X under the coil, pulling the hand
+# off the back-shoulder side). Available to tune if a held pose needs extra
+# lateral character without flipping that direction.
 @export var slapper_wind_up_hand_back: float = 0.0     # top hand pulls behind shoulder (+local z, m)
 @export var slapper_wind_up_hand_inward: float = 0.0   # top hand pulls across body toward back shoulder (m)
 # Where the blade lives at full wind-up (in body-local space, before the body
