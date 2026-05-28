@@ -2,7 +2,14 @@ class_name Skater
 extends CharacterBody3D
 
 # ── Character ─────────────────────────────────────────────────────────────────
-@export var is_left_handed: bool = true
+# Set before add_child() at spawn; can also be flipped at runtime (free-play
+# picker) — the setter re-positions the four hand/shoulder Marker3Ds so the
+# rig follows. Most other sign-flips (stick orientation, blade side, IK pole)
+# read this at runtime and need no special handling.
+@export var is_left_handed: bool = true:
+	set(v):
+		is_left_handed = v
+		_position_hand_markers()
 
 # ── Blade Tuning ──────────────────────────────────────────────────────────────
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
@@ -197,29 +204,25 @@ func _ready() -> void:
 	if col != null and col.shape != null:
 		col.shape = col.shape.duplicate()
 
-	var top_hand_side_sign: float = 1.0 if is_left_handed else -1.0
-	shoulder.position = Vector3(top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
-
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
 		top_hand = Marker3D.new()
 		top_hand.name = "TopHand"
 		upper_body.add_child(top_hand)
-	top_hand.position = Vector3(shoulder.position.x, 0.0, 0.0)
 
 	bottom_shoulder = upper_body.get_node_or_null("BottomShoulder") as Marker3D
 	if bottom_shoulder == null:
 		bottom_shoulder = Marker3D.new()
 		bottom_shoulder.name = "BottomShoulder"
 		upper_body.add_child(bottom_shoulder)
-	bottom_shoulder.position = Vector3(-top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
 
 	bottom_hand = upper_body.get_node_or_null("BottomHand") as Marker3D
 	if bottom_hand == null:
 		bottom_hand = Marker3D.new()
 		bottom_hand.name = "BottomHand"
 		upper_body.add_child(bottom_hand)
-	bottom_hand.position = Vector3(bottom_shoulder.position.x, 0.0, 0.0)
+
+	_position_hand_markers()
 
 	_prev_blade_world_pos = upper_body.to_global(blade.position)
 	_default_upper_body_y = upper_body.position.y
@@ -335,6 +338,22 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		if other_delta.length_squared() > 0.0001:
 			other.body_check_impulse_applied.emit(other_delta)
 		body_checked_player.emit(other, weight * approach, -normal)
+
+
+# Re-positions the four hand/shoulder Marker3Ds based on the current
+# is_left_handed value. Called from _ready() once the markers exist, and
+# from the is_left_handed setter whenever the flag is flipped after spawn
+# (free-play picker → free-play skater follows without a respawn). Safe
+# to call before _ready() — exits early if the markers haven't been
+# created yet.
+func _position_hand_markers() -> void:
+	if shoulder == null or top_hand == null or bottom_shoulder == null or bottom_hand == null:
+		return
+	var top_hand_side_sign: float = 1.0 if is_left_handed else -1.0
+	shoulder.position        = Vector3( top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
+	top_hand.position        = Vector3(shoulder.position.x, 0.0, 0.0)
+	bottom_shoulder.position = Vector3(-top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
+	bottom_hand.position     = Vector3(bottom_shoulder.position.x, 0.0, 0.0)
 
 
 # ── Facing ────────────────────────────────────────────────────────────────────
