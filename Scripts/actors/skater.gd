@@ -814,6 +814,12 @@ func set_slapper_zone(active: bool, radius: float = 0.0, offset_x: float = 0.0, 
 		_slapper_zone_sphere.radius = radius
 		var blade_side_sign: float = -1.0 if is_left_handed else 1.0
 		_slapper_zone_area.position = Vector3(blade_side_sign * offset_x, 0.0, offset_z)
+		# Anchor to ice level — the Skater root is at body-center height, so a
+		# local Y of 0 lands the sphere up at chest height where the puck can
+		# never reach it. Setting global Y after rebases local Y without
+		# touching XZ. The HUD ring already does this via
+		# _slapper_indicator.global_position.y = 0; the zone needs the same.
+		_slapper_zone_area.global_position.y = 0.0
 		# DEBUG: scale the visible marker to match the actual collision sphere
 		# and show it whenever the zone is active.
 		if _slapper_zone_debug_mesh != null:
