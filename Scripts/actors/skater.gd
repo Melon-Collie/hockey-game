@@ -47,14 +47,14 @@ extends CharacterBody3D
 @export var carry_transit_lift: float = 0.10
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
-# Two-bone arm IK: shoulder → elbow → top_hand. Sum must exceed
-# sqrt(drop² + rom_backhand_reach_max²) where drop = shoulder_height − hand_rest_y.
-# Baseline lengths give one-arm = 0.80m, wingspan ≈ 2.04m on a 1.78m body
-# (~115% of height). Slightly long anatomically but the small-player arm
-# (0.80 × 0.91 = 0.728m) still clears the universal 0.70m backhand ROM
-# with ~3cm of slack, so the IK never clamps in normal play.
-@export var upper_arm_length: float = 0.39
-@export var forearm_length: float = 0.41
+# Two-bone arm IK: shoulder → elbow → top_hand. ROM is derived from these
+# values in SkaterController.apply_attributes (rom_backhand = arm × 0.875,
+# rom_forehand = arm × 0.5625), so the IK margin is constant across sizes
+# regardless of how aggressively arm length scales.
+# Baseline lengths give one-arm = 0.75m, wingspan ≈ 1.94m on a 1.78m body
+# (~108% of height, matching real-life NHL anthropometry).
+@export var upper_arm_length: float = 0.37
+@export var forearm_length: float = 0.38
 # Pole direction for the elbow (upper-body local).
 @export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
