@@ -413,12 +413,24 @@ func _process_input(input: InputState, delta: float) -> void:
 	# rotates toward the blade, re-expressing these in the new local frame gives
 	# the bottom-hand IK the post-rotation geometry — so arm reach is evaluated
 	# as if the body has fully caught up, independent of lerp speed.
-	var blade_world_pre: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
-	var hand_world_pre: Vector3 = skater.upper_body_to_global(skater.get_top_hand_position())
+	#
+	# Skip the preservation during slapper wind-up: the slapper pose is authored
+	# in upper-body-local space, so we WANT the stick to travel with the coiling
+	# torso (otherwise the body rotates underneath a stationary hand and the
+	# coil is invisible).
+	var is_slapper_charge: bool = _sm.get_state() in [
+			SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK,
+			SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK]
+	var blade_world_pre: Vector3
+	var hand_world_pre: Vector3
+	if not is_slapper_charge:
+		blade_world_pre = skater.upper_body_to_global(skater.get_blade_position())
+		hand_world_pre = skater.upper_body_to_global(skater.get_top_hand_position())
 	_pose.apply_upper_body(delta)
 	_pose.apply_head_tracking(input, delta)
-	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
-	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
+	if not is_slapper_charge:
+		skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
+		skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
 	_ik.update_bottom_hand()
 	# All mesh updates happen after upper body rotation is finalised so look_at
 	# orientations are computed against the correct parent transform this frame.
