@@ -126,9 +126,9 @@ var top_hand_sphere: MeshInstance3D = null
 var bottom_elbow_sphere: MeshInstance3D = null
 var bottom_hand_sphere: MeshInstance3D = null
 
-# Sleeve cuff stripe meshes. Created by SkaterUniformCoordinator.apply_stripes()
-# and consumed by _update_cuff_transform() here so they stay perpendicular to
-# the forearm bone as the arm moves.
+# Glove cuff cylinders just past the wrist. Created by SkaterUniformCoordinator
+# when the uniform is applied; consumed by _update_cuff_transform() here so
+# they stay perpendicular to the forearm bone as the arm moves.
 var top_cuff_mesh: MeshInstance3D = null
 var bot_cuff_mesh: MeshInstance3D = null
 
@@ -784,25 +784,18 @@ func get_slapper_zone_radius() -> float:
 
 
 # ── Uniform / Appearance (delegate to SkaterUniformCoordinator) ───────────────
-func set_player_color(
-		jersey_color: Color,
-		helmet_color: Color,
-		pants_color: Color,
-		socks_color: Color,
-		blade_color: Color,
-		gloves_color: Color) -> void:
-	_uniform.apply_colors(jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color)
+# Applies the full v2 colors dict (output of TeamColorRegistry.get_colors)
+# — base colors, stripe arrays, yoke, shoulder + jersey text colors, blade.
+# Call before or after set_jersey_info; both repaint the decals using cached
+# inputs from whichever side was called last.
+func set_uniform(colors: Dictionary) -> void:
+	_uniform.apply_uniform(colors)
 
 
-func set_jersey_info(p_name: String, number: int, text_color: Color, text_outline_color: Color) -> void:
-	_uniform.apply_jersey_info(p_name, number, text_color, text_outline_color)
-
-
-func set_jersey_stripes(
-		jersey_stripe_color: Color,
-		pants_stripe_color: Color,
-		socks_stripe_color: Color) -> void:
-	_uniform.apply_stripes(jersey_stripe_color, pants_stripe_color, socks_stripe_color)
+# Sets the back-of-jersey name and number; text colors come from the cached
+# uniform (last set_uniform call).
+func set_jersey_info(p_name: String, number: int) -> void:
+	_uniform.apply_jersey_info(p_name, number)
 
 
 # ── HUD (delegate to SkaterHUDCoordinator) ────────────────────────────────────
