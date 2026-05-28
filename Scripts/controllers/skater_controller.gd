@@ -108,7 +108,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var backhand_power_coefficient: float = 0.75
 @export var max_charge_direction_variance: float = 35.0
 @export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
-@export var quick_shot_threshold: float = 0.1
+# Absolute charge_distance (in meters of blade travel) below which the
+# wrister releases as a quick shot. Independent of max_wrister_charge_distance
+# so the snap-tap feel is the same across attribute spreads — a 0.15m drag
+# is a quick shot regardless of who's shooting. Above this, the wrister
+# lerps power between min and max based on charge ratio.
+@export var quick_shot_threshold: float = 0.15
 @export var quick_shot_elevation: float = 0.10
 @export var wrister_elevation_target_height: float = 0.90
 # Apex cap for elevated shots — puck can't rise more than this above the blade.
