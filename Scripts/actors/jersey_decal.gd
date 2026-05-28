@@ -23,9 +23,15 @@ const IMG_H: int = 256
 const BACK_CENTER_X: int = 128         # paired with uv1_offset.x = 0.25
 # Godot's CylinderMesh allocates roughly the top half of the texture's V
 # range to the side surface; cap disks use the bottom half. All visible
-# torso content stays inside [0, SIDE_V_MAX_PX).
+# torso side content stays inside [0, SIDE_V_MAX_PX).
 const SIDE_V_MAX_PX: int = IMG_H / 2   # 128 — bottom of the side surface
-const YOKE_HEIGHT_PX: int = 22         # top band when jersey.yoke is set
+# Top-cap disk region after the torso material's uv1_offset.x = 0.25:
+# the cap UV centers at (0.5, 0.75) with radius 0.25, so its bounding rect
+# is U ∈ [0.25, 0.75] × V ∈ [0.5, 1.0] = pixels [128, 384] × [128, 256].
+# Disjoint from the bottom cap (which wraps to x ∈ [384, 512] ∪ [0, 128]),
+# so filling this rect paints only the top cap. Only the inscribed disk
+# is actually sampled by the mesh; rect fill is just simpler than circle.
+const TOP_CAP_RECT: Rect2 = Rect2(128, 128, 256, 128)
 const NAME_FONT_SIZE: int = 28
 const NUMBER_FONT_SIZE: int = 56
 const NAME_Y_TOP: int = 8
@@ -45,9 +51,10 @@ var text_outline_color: Color = Color.BLACK
 func _draw() -> void:
 	# Base fill across the whole texture so cap disks aren't transparent.
 	draw_rect(Rect2(0, 0, IMG_W, IMG_H), jersey_color, true)
-	# Optional yoke band at the top of the torso side region.
+	# Optional yoke — paints the flat top disk of the torso cylinder by
+	# overpainting the top-cap region of the texture.
 	if yoke_color is Color:
-		draw_rect(Rect2(0, 0, IMG_W, YOKE_HEIGHT_PX), yoke_color, true)
+		draw_rect(TOP_CAP_RECT, yoke_color, true)
 	# Stripes paint in array order over the side region [0, SIDE_V_MAX_PX].
 	for stripe: Dictionary in stripes:
 		var band: Vector2i = _stripe_band(stripe, SIDE_V_MAX_PX)

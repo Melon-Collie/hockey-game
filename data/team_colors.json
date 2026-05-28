@@ -819,13 +819,13 @@
           "base": "#4A7AD6",
           "stripes": [
             {
-              "pos": 0.88,
-              "width": 0.07,
+              "pos": 0.46,
+              "width": 0.14,
               "color": "#6B1E4A"
             },
             {
-              "pos": 0.95,
-              "width": 0.07,
+              "pos": 0.6,
+              "width": 0.14,
               "color": "#C8D8F0"
             }
           ]
