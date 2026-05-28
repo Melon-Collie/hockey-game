@@ -25,15 +25,16 @@ extends RefCounted
 #                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]),
 #                      shot_charge u8
 #      Puck    (12 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
-#      Goalie  (40 B): legacy (12 B) + pose (28 B). Legacy:
+#      Goalie  (40 B): root (12 B) + pose (28 B). Root:
 #                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
 #                      vel_x/z s16@0.02m/s.
 #                      Pose: body_pitch/roll s8@π/127; left_pad offset (s8×3@1cm)
 #                      + pitch/roll s8@π/127; right_pad same; glove offset s8×3
 #                      + yaw/pitch s8@π/127; blocker same; stick same;
 #                      head_yaw s8@π/127. Pose is broadcast for replay/sync
-#                      fidelity but not consumed by clients in step 1
-#                      (clients still render locally-computed).
+#                      fidelity; clients currently still recompute body parts
+#                      via local AI — render-from-broadcast swap is the next
+#                      step in the goalie overhaul.
 #
 # 2. Stats  (reliable, event-driven):
 #      [pid, G, A, SOG, HITS, BLK] × N players
@@ -441,8 +442,8 @@ static func _decode_puck_quantized(b: PackedByteArray) -> PuckNetworkState:
 	return s
 
 
-# Goalie: 40 bytes — 12 legacy + 28 pose. See top-of-file layout comment.
-# Legacy offsets: pos_x(0..1) pos_z(2..3) rot_y(4..5) state(6) fho(7) vel_x(8..9) vel_z(10..11)
+# Goalie: 40 bytes — 12 root + 28 pose. See top-of-file layout comment.
+# Root offsets:   pos_x(0..1) pos_z(2..3) rot_y(4..5) state(6) fho(7) vel_x(8..9) vel_z(10..11)
 # Pose offsets:   body_pitch(12) body_roll(13)
 #                 left_pad_offset(14..16) left_pad_pitch(17) left_pad_roll(18)
 #                 right_pad_offset(19..21) right_pad_pitch(22) right_pad_roll(23)
