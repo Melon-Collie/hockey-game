@@ -657,7 +657,6 @@ func _enter_slapper_charge(input: InputState) -> void:
 		# overhead. The pin travels with the player (so coasting/braking still
 		# works) and the shot fires from this position when released — see
 		# Puck.release's slapshot branch.
-		var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
 		skater.enter_slapshot_pinning(blade_side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
 		_sm.set_state(State.SLAPPER_CHARGE_WITH_PUCK)
 	else:
