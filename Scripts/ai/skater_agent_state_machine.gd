@@ -1702,10 +1702,16 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# _pass_aim_point so a charged pass leads less than a quick-shot
 	# (puck arrives sooner, receiver covers less ground in flight).
 	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
-	input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 
 	if not _pass_should_charge:
 		# ── Quick-shot pass: one-tick release ──
+		# Point cursor at the receiver and fire. The charged path skips
+		# this and computes its own mouse_world_pos via the wind-up lerp
+		# below — calling _step_mouse_toward on BOTH targets per tick
+		# fights itself (_mouse_pos walks halfway to each in turn) and
+		# produces noisy cursor deltas, which the charge tracker reads as
+		# bizarre release directions on long charged passes.
+		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 		debug_last_decision = "PASS→%s" % target_slot_label
 		input.shoot_pressed = true
 		input.shoot_held = true
