@@ -67,9 +67,13 @@ const _SHOT_MULTS:    Array[float] = [0.92, 1.00, 1.08]
 # SHOT_CHARGE: inverted (lower = faster ramp to max power). Wider than the
 #   power spread so shooters meaningfully threaten at close range.
 # AGILITY_CARRY: small modest boost — agile dekers retain more puck speed.
+# AGILITY_GLIDE: inverted (lower = less drag during cuts). Agile skaters
+#   leak less momentum through their edges, so they carry more speed out
+#   of turns and crossovers — the "good edges" feel.
 const _HEIGHT_MULTS:        Array[float] = [0.91, 1.00, 1.09]
 const _SHOT_CHARGE_MULTS:   Array[float] = [1.12, 1.00, 0.88]
 const _AGILITY_CARRY_MULTS: Array[float] = [0.96, 1.00, 1.04]
+const _AGILITY_GLIDE_MULTS: Array[float] = [1.10, 1.00, 0.90]
 
 # Visual-only — drive `transform.scale` on body-chain mesh leaves and arm
 # mesh radii. Wider than gameplay tables on purpose: the third-person
@@ -143,6 +147,7 @@ func shot_mult()    -> float: return _lookup(_SHOT_MULTS,    shot)
 func height_mult()        -> float: return _lookup(_HEIGHT_MULTS,        size)
 func shot_charge_mult()   -> float: return _lookup(_SHOT_CHARGE_MULTS,   shot)
 func agility_carry_mult() -> float: return _lookup(_AGILITY_CARRY_MULTS, agility)
+func agility_glide_mult() -> float: return _lookup(_AGILITY_GLIDE_MULTS, agility)
 
 # Visual
 func torso_bulk_mult() -> float: return _lookup(_TORSO_BULK_MULTS, size)

@@ -228,9 +228,8 @@ var _base_thrust:                       float = 0.0
 var _base_max_speed:                    float = 0.0
 var _base_facing_drag_speed:            float = 0.0
 var _base_facing_drag_speed_braking:    float = 0.0
-var _base_backward_thrust_multiplier:   float = 0.0
-var _base_crossover_thrust_multiplier:  float = 0.0
 var _base_brake_multiplier:             float = 0.0
+var _base_friction_drag:                float = 0.0
 var _base_min_wrister_power:            float = 0.0
 var _base_max_wrister_power:            float = 0.0
 var _base_quick_shot_power:             float = 0.0
@@ -270,9 +269,14 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	max_speed = _base_max_speed * m_speed
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
 	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
-	backward_thrust_multiplier  = _base_backward_thrust_multiplier  * m_agility
-	crossover_thrust_multiplier = _base_crossover_thrust_multiplier * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
+	# friction_drag is velocity-proportional drag — scaling it inversely
+	# with Agility gives agile players the "good edges" feel: less momentum
+	# leaks through the blades during a cut, so they carry more speed out
+	# of turns. Lateral / backward thrust multipliers are universal — every
+	# skater shares the same forward > lateral > backward shape; what makes
+	# Slick agile is how cleanly they transition between those directions.
+	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
 	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.agility_carry_mult()
 	min_wrister_power = _base_min_wrister_power * m_shot
 	max_wrister_power = _base_max_wrister_power * m_shot
@@ -320,9 +324,8 @@ func _capture_attribute_bases() -> void:
 	_base_max_speed                    = max_speed
 	_base_facing_drag_speed            = facing_drag_speed
 	_base_facing_drag_speed_braking    = facing_drag_speed_braking
-	_base_backward_thrust_multiplier   = backward_thrust_multiplier
-	_base_crossover_thrust_multiplier  = crossover_thrust_multiplier
 	_base_brake_multiplier             = brake_multiplier
+	_base_friction_drag                = friction_drag
 	_base_min_wrister_power            = min_wrister_power
 	_base_max_wrister_power            = max_wrister_power
 	_base_quick_shot_power             = quick_shot_power
