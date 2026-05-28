@@ -5,12 +5,23 @@ class_name TeamColorRegistry
 #             res://data/team_colors.json (bundled defaults) →
 #             hardcoded fallback (if both are missing or malformed).
 #
-# Players who want to customize colors place a team_colors.json in their
-# game data directory (user://) — no other setup is required.
+# Schema: mitts.jersey.v2. Each team has home + away kits with structured
+# regions (jersey/arms/pants/socks/shoulders) carrying a base color plus
+# an array of {pos, width, color} stripes painted over the region's UV
+# range. See data/team_colors.json for the description.
 #
-# Color identity is an integer slot: the preset's index in the loaded array.
-# JSON keeps a "name" field for self-documentation, but nothing in the UI
-# displays it — modders are reassigning slot N, not "the blueberry team".
+# get_colors(slot, team_id) returns a Dictionary that's a hybrid:
+#   - Flat legacy keys (primary, secondary, helmet, gloves, goalie_pads,
+#     text, text_outline, jersey, jersey_stripe, pants, pants_stripe,
+#     socks, socks_stripe) for simple consumers (HUD trim, lobby cards,
+#     replay records) — *_stripe are derived from the first stripe color
+#     of the matching region (or the region base if no stripes).
+#   - A nested "uniform" sub-dict carrying the full v2 detail
+#     (shoulders, jersey-with-yoke-and-stripes, arms.upper/lower,
+#     pants-with-stripes, socks-with-stripes). The skater painter
+#     consumes this; UI accent code doesn't need to touch it.
+#
+# Color identity is an integer slot: the team's index in the loaded array.
 # Out-of-range slots return a fallback and log a warning; they never crash.
 
 const DEFAULT_HOME_SLOT: int = 0
@@ -18,6 +29,7 @@ const DEFAULT_AWAY_SLOT: int = 1
 
 const _USER_JSON_PATH: String = "user://team_colors.json"
 const _RES_JSON_PATH:  String = "res://data/team_colors.json"
+const _SCHEMA_ID: String = "mitts.jersey.v2"
 
 static var _presets: Array[Dictionary] = []
 static var _loaded: bool = false
@@ -27,7 +39,6 @@ static func ensure_loaded() -> void:
 	if _loaded:
 		return
 	_loaded = true
-	# Try the player's editable copy first, then the bundled defaults.
 	for path: String in [_USER_JSON_PATH, _RES_JSON_PATH]:
 		if _try_load_from(path):
 			return
@@ -42,29 +53,33 @@ static func get_preset(slot: int) -> Dictionary:
 	push_warning("TeamColorRegistry: unknown slot '%d', using default" % slot)
 	if _presets.size() > DEFAULT_HOME_SLOT:
 		return _presets[DEFAULT_HOME_SLOT]
-	return _hardcoded_penguins()
+	return _hardcoded_papaya()
 
 
-# Returns the color set appropriate for the given team slot.
-# team_id == 0 → home (dark jersey), team_id == 1 → away (white jersey).
-# Merges top-level primary/secondary with the slot-specific fields.
+# Returns the merged color set for a given team slot + side.
+# team_id == 0 → home, team_id == 1 → away.
 static func get_colors(slot: int, team_id: int) -> Dictionary:
 	var preset: Dictionary = get_preset(slot)
-	var jersey_slot: Dictionary = preset.home if team_id == 0 else preset.away
+	var kit: Dictionary = preset.home if team_id == 0 else preset.away
+	var jersey_block: Dictionary = kit.jersey
+	var pants_block: Dictionary  = kit.pants
+	var socks_block: Dictionary  = kit.socks
+	var shoulders: Dictionary    = kit.shoulders
 	return {
 		"primary":        preset.primary,
 		"secondary":      preset.secondary,
-		"helmet":         jersey_slot.helmet,
-		"jersey":         jersey_slot.jersey,
-		"jersey_stripe":  jersey_slot.jersey_stripe,
-		"gloves":         jersey_slot.gloves,
-		"pants":          jersey_slot.pants,
-		"pants_stripe":   jersey_slot.pants_stripe,
-		"socks":          jersey_slot.socks,
-		"socks_stripe":   jersey_slot.socks_stripe,
-		"goalie_pads":    jersey_slot.goalie_pads,
-		"text":           jersey_slot.text,
-		"text_outline":   jersey_slot.text_outline,
+		"helmet":         kit.helmet,
+		"jersey":         jersey_block.base,
+		"jersey_stripe":  _accent_color(jersey_block, shoulders.color),
+		"gloves":         kit.gloves,
+		"pants":          pants_block.base,
+		"pants_stripe":   _accent_color(pants_block, shoulders.color),
+		"socks":          socks_block.base,
+		"socks_stripe":   _accent_color(socks_block, shoulders.color),
+		"goalie_pads":    kit.goalie_pads,
+		"text":           kit.text.color,
+		"text_outline":   kit.text.outline,
+		"uniform":        kit,
 	}
 
 
@@ -76,10 +91,17 @@ static func get_all_slots() -> Array[int]:
 	return result
 
 
-# Display label. Kept around for debug/inspector use; the UI no longer
-# renders names anywhere.
 static func get_preset_name(slot: int) -> String:
 	return get_preset(slot).get("name", "Slot %d" % slot)
+
+
+# Pick the "accent" color for legacy *_stripe consumers: first stripe of
+# the region, or the shoulder color if the region has no stripes.
+static func _accent_color(region: Dictionary, fallback: Color) -> Color:
+	var stripes: Array = region.get("stripes", [])
+	if stripes.size() > 0:
+		return stripes[0].color
+	return fallback
 
 
 static func _try_load_from(path: String) -> bool:
@@ -88,124 +110,178 @@ static func _try_load_from(path: String) -> bool:
 		return false
 	var text: String = file.get_as_text()
 	file.close()
-	var data = JSON.parse_string(text)
-	if not data is Dictionary or not data.has("presets"):
+	var data: Variant = JSON.parse_string(text)
+	if not data is Dictionary:
 		push_error("TeamColorRegistry: malformed JSON in %s" % path)
 		return false
+	var data_dict: Dictionary = data
+	if data_dict.get("schema", "") != _SCHEMA_ID:
+		push_error("TeamColorRegistry: %s schema mismatch (need %s)" % [path, _SCHEMA_ID])
+		return false
+	if not data_dict.has("teams"):
+		push_error("TeamColorRegistry: %s missing 'teams' array" % path)
+		return false
 	_presets.clear()
-	for entry: Dictionary in data["presets"]:
-		var home: Dictionary = entry.get("home", {})
-		var away: Dictionary = entry.get("away", {})
+	for entry: Dictionary in data_dict.teams:
 		_presets.append({
 			"name":      entry.get("name", "Slot %d" % _presets.size()),
 			"primary":   _parse_color(entry.get("primary",   "#FFFFFF")),
 			"secondary": _parse_color(entry.get("secondary", "#FFFFFF")),
-			"home": {
-				"helmet":        _parse_color(home.get("helmet",        "#FFFFFF")),
-				"jersey":        _parse_color(home.get("jersey",        "#FFFFFF")),
-				"jersey_stripe": _parse_color(home.get("jersey_stripe", "#000000")),
-				"gloves":        _parse_color(home.get("gloves",        "#000000")),
-				"pants":         _parse_color(home.get("pants",         "#FFFFFF")),
-				"pants_stripe":  _parse_color(home.get("pants_stripe",  "#000000")),
-				"socks":         _parse_color(home.get("socks",         "#FFFFFF")),
-				"socks_stripe":  _parse_color(home.get("socks_stripe",  "#000000")),
-				"goalie_pads":   _parse_color(home.get("goalie_pads",   "#FFFFFF")),
-				"text":          _parse_color(home.get("text",          "#000000")),
-				"text_outline":  _parse_color(home.get("text_outline",  "#FFFFFF")),
-			},
-			"away": {
-				"helmet":        _parse_color(away.get("helmet",        "#FFFFFF")),
-				"jersey":        _parse_color(away.get("jersey",        "#FFFFFF")),
-				"jersey_stripe": _parse_color(away.get("jersey_stripe", "#000000")),
-				"gloves":        _parse_color(away.get("gloves",        "#000000")),
-				"pants":         _parse_color(away.get("pants",         "#FFFFFF")),
-				"pants_stripe":  _parse_color(away.get("pants_stripe",  "#000000")),
-				"socks":         _parse_color(away.get("socks",         "#FFFFFF")),
-				"socks_stripe":  _parse_color(away.get("socks_stripe",  "#000000")),
-				"goalie_pads":   _parse_color(away.get("goalie_pads",   "#FFFFFF")),
-				"text":          _parse_color(away.get("text",          "#000000")),
-				"text_outline":  _parse_color(away.get("text_outline",  "#FFFFFF")),
-			},
+			"home":      _parse_kit(entry.get("home", {})),
+			"away":      _parse_kit(entry.get("away", {})),
 		})
 	if _presets.is_empty():
-		push_warning("TeamColorRegistry: %s contained no valid presets" % path)
+		push_warning("TeamColorRegistry: %s contained no valid teams" % path)
 		return false
 	return true
 
 
-static func _parse_color(hex: String) -> Color:
-	return Color.from_string(hex, Color.WHITE)
-
-
-static func _load_hardcoded_fallback() -> void:
-	_presets.clear()
-	_presets.append(_hardcoded_penguins())
-	_presets.append(_hardcoded_leafs())
-
-
-static func _hardcoded_penguins() -> Dictionary:
+static func _parse_kit(raw: Dictionary) -> Dictionary:
+	var shoulders_raw: Dictionary = raw.get("shoulders", {})
+	var jersey_raw:    Dictionary = raw.get("jersey",    {})
+	var arms_raw:      Dictionary = raw.get("arms",      {})
+	var arms_upper:    Dictionary = arms_raw.get("upper", {})
+	var arms_lower:    Dictionary = arms_raw.get("lower", {})
+	var pants_raw:     Dictionary = raw.get("pants",     {})
+	var socks_raw:     Dictionary = raw.get("socks",     {})
+	var text_raw:      Dictionary = raw.get("text",      {})
 	return {
-		"name":      "Pittsburgh Penguins",
-		"primary":   Color(0.988, 0.710, 0.078),
-		"secondary": Color(0.06,  0.06,  0.06),
-		"home": {
-			"helmet":        Color(0.06,  0.06,  0.06),
-			"jersey":        Color(0.988, 0.710, 0.078),
-			"jersey_stripe": Color(0.06,  0.06,  0.06),
-			"gloves":        Color(0.06,  0.06,  0.06),
-			"pants":         Color(0.06,  0.06,  0.06),
-			"pants_stripe":  Color(0.988, 0.710, 0.078),
-			"socks":         Color(0.988, 0.710, 0.078),
-			"socks_stripe":  Color(0.06,  0.06,  0.06),
-			"goalie_pads":   Color(1.0,   1.0,   1.0),
-			"text":          Color(0.06,  0.06,  0.06),
-			"text_outline":  Color(0.988, 0.710, 0.078),
+		"helmet":      _parse_color(raw.get("helmet", "#FFFFFF")),
+		"shoulders": {
+			"color":   _parse_color(shoulders_raw.get("color",   "#FFFFFF")),
+			"text":    _parse_color(shoulders_raw.get("text",    "#FFFFFF")),
+			"outline": _parse_color(shoulders_raw.get("outline", "#000000")),
 		},
-		"away": {
-			"helmet":        Color(0.06,  0.06,  0.06),
-			"jersey":        Color(1.0,   1.0,   1.0),
-			"jersey_stripe": Color(0.988, 0.710, 0.078),
-			"gloves":        Color(0.06,  0.06,  0.06),
-			"pants":         Color(1.0,   1.0,   1.0),
-			"pants_stripe":  Color(0.988, 0.710, 0.078),
-			"socks":         Color(1.0,   1.0,   1.0),
-			"socks_stripe":  Color(0.988, 0.710, 0.078),
-			"goalie_pads":   Color(0.988, 0.710, 0.078),
-			"text":          Color(0.06,  0.06,  0.06),
-			"text_outline":  Color(0.988, 0.710, 0.078),
+		"jersey": {
+			"base":    _parse_color(jersey_raw.get("base",    "#FFFFFF")),
+			"yoke":    _parse_optional_color(jersey_raw.get("yoke", null)),
+			"stripes": _parse_stripes(jersey_raw.get("stripes", [])),
+		},
+		"arms": {
+			"upper": {
+				"base":    _parse_color(arms_upper.get("base",    "#FFFFFF")),
+				"stripes": _parse_stripes(arms_upper.get("stripes", [])),
+			},
+			"lower": {
+				"base":    _parse_color(arms_lower.get("base",    "#FFFFFF")),
+				"stripes": _parse_stripes(arms_lower.get("stripes", [])),
+			},
+		},
+		"gloves":      _parse_color(raw.get("gloves", "#FFFFFF")),
+		"pants": {
+			"base":    _parse_color(pants_raw.get("base",    "#FFFFFF")),
+			"stripes": _parse_stripes(pants_raw.get("stripes", [])),
+		},
+		"socks": {
+			"base":    _parse_color(socks_raw.get("base",    "#FFFFFF")),
+			"stripes": _parse_stripes(socks_raw.get("stripes", [])),
+		},
+		"goalie_pads": _parse_color(raw.get("goalie_pads", "#FFFFFF")),
+		"text": {
+			"color":   _parse_color(text_raw.get("color",   "#FFFFFF")),
+			"outline": _parse_color(text_raw.get("outline", "#000000")),
 		},
 	}
 
 
-static func _hardcoded_leafs() -> Dictionary:
+# Parses an array of {pos, width, color} stripes into Dictionaries with
+# real Color values. Bad entries are skipped with a warning.
+static func _parse_stripes(raw: Variant) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	if not raw is Array:
+		return out
+	for s: Variant in raw:
+		if not s is Dictionary:
+			continue
+		var sd: Dictionary = s
+		out.append({
+			"pos":   float(sd.get("pos",   0.5)),
+			"width": float(sd.get("width", 0.0)),
+			"color": _parse_color(sd.get("color", "#FFFFFF")),
+		})
+	return out
+
+
+static func _parse_color(hex: Variant) -> Color:
+	if hex is String:
+		return Color.from_string(hex, Color.WHITE)
+	return Color.WHITE
+
+
+# yoke is optional — null means "no yoke band".
+static func _parse_optional_color(hex: Variant) -> Variant:
+	if hex == null:
+		return null
+	return _parse_color(hex)
+
+
+static func _load_hardcoded_fallback() -> void:
+	_presets.clear()
+	_presets.append(_hardcoded_papaya())
+	_presets.append(_hardcoded_lime())
+
+
+static func _hardcoded_papaya() -> Dictionary:
+	# Mirrors the Papaya team from data/team_colors.json so a missing file
+	# still produces a usable kit.
 	return {
-		"name":      "Toronto Maple Leafs",
-		"primary":   Color(0.000, 0.125, 0.357),
-		"secondary": Color(1.0,   1.0,   1.0),
-		"home": {
-			"helmet":        Color(0.000, 0.125, 0.357),
-			"jersey":        Color(0.000, 0.125, 0.357),
-			"jersey_stripe": Color(1.0,   1.0,   1.0),
-			"gloves":        Color(0.000, 0.125, 0.357),
-			"pants":         Color(0.000, 0.125, 0.357),
-			"pants_stripe":  Color(1.0,   1.0,   1.0),
-			"socks":         Color(0.000, 0.125, 0.357),
-			"socks_stripe":  Color(1.0,   1.0,   1.0),
-			"goalie_pads":   Color(1.0,   1.0,   1.0),
-			"text":          Color(1.0,   1.0,   1.0),
-			"text_outline":  Color(0.000, 0.125, 0.357),
-		},
-		"away": {
-			"helmet":        Color(0.000, 0.125, 0.357),
-			"jersey":        Color(1.0,   1.0,   1.0),
-			"jersey_stripe": Color(0.000, 0.125, 0.357),
-			"gloves":        Color(0.000, 0.125, 0.357),
-			"pants":         Color(1.0,   1.0,   1.0),
-			"pants_stripe":  Color(0.000, 0.125, 0.357),
-			"socks":         Color(1.0,   1.0,   1.0),
-			"socks_stripe":  Color(0.000, 0.125, 0.357),
-			"goalie_pads":   Color(1.0,   1.0,   1.0),
-			"text":          Color(0.000, 0.125, 0.357),
-			"text_outline":  Color(0.000, 0.125, 0.357),
-		},
+		"name":      "Papaya",
+		"primary":   _parse_color("#F46B2A"),
+		"secondary": _parse_color("#2A9472"),
+		"home":      _parse_kit({
+			"helmet":      "#2A9472",
+			"shoulders":   {"color": "#2A9472", "text": "#FFFFFF", "outline": "#C8321A"},
+			"jersey":      {"base": "#F46B2A", "stripes": []},
+			"arms":        {"upper": {"base": "#F46B2A", "stripes": []},
+			                "lower": {"base": "#C8321A", "stripes": []}},
+			"gloves":      "#2A9472",
+			"pants":       {"base": "#2A9472", "stripes": []},
+			"socks":       {"base": "#F46B2A", "stripes": []},
+			"goalie_pads": "#F46B2A",
+			"text":        {"color": "#FFFFFF", "outline": "#C8321A"},
+		}),
+		"away":      _parse_kit({
+			"helmet":      "#FFFFFF",
+			"shoulders":   {"color": "#2A9472", "text": "#F46B2A", "outline": "#C8321A"},
+			"jersey":      {"base": "#FFFFFF", "stripes": []},
+			"arms":        {"upper": {"base": "#F46B2A", "stripes": []},
+			                "lower": {"base": "#C8321A", "stripes": []}},
+			"gloves":      "#2A9472",
+			"pants":       {"base": "#2A9472", "stripes": []},
+			"socks":       {"base": "#FFFFFF", "stripes": []},
+			"goalie_pads": "#FFFFFF",
+			"text":        {"color": "#F46B2A", "outline": "#C8321A"},
+		}),
+	}
+
+
+static func _hardcoded_lime() -> Dictionary:
+	return {
+		"name":      "Lime",
+		"primary":   _parse_color("#7FB320"),
+		"secondary": _parse_color("#4A6B15"),
+		"home":      _parse_kit({
+			"helmet":      "#4A6B15",
+			"shoulders":   {"color": "#7FB320", "text": "#FFFFFF", "outline": "#4A6B15"},
+			"jersey":      {"base": "#7FB320", "stripes": []},
+			"arms":        {"upper": {"base": "#7FB320", "stripes": []},
+			                "lower": {"base": "#7FB320", "stripes": []}},
+			"gloves":      "#4A6B15",
+			"pants":       {"base": "#4A6B15", "stripes": []},
+			"socks":       {"base": "#7FB320", "stripes": []},
+			"goalie_pads": "#7FB320",
+			"text":        {"color": "#F5E6D3", "outline": "#4A6B15"},
+		}),
+		"away":      _parse_kit({
+			"helmet":      "#FFFFFF",
+			"shoulders":   {"color": "#7FB320", "text": "#FFFFFF", "outline": "#4A6B15"},
+			"jersey":      {"base": "#FFFFFF", "stripes": []},
+			"arms":        {"upper": {"base": "#FFFFFF", "stripes": []},
+			                "lower": {"base": "#FFFFFF", "stripes": []}},
+			"gloves":      "#4A6B15",
+			"pants":       {"base": "#4A6B15", "stripes": []},
+			"socks":       {"base": "#FFFFFF", "stripes": []},
+			"goalie_pads": "#FFFFFF",
+			"text":        {"color": "#7FB320", "outline": "#4A6B15"},
+		}),
 	}

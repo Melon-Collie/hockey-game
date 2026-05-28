@@ -1,6 +1,27 @@
 class_name SkaterUniformCoordinator
 extends RefCounted
 
+# Paints the full skater uniform from a v2 colors dict (see
+# TeamColorRegistry.get_colors). Two entry points:
+#
+#   apply_uniform(colors)        — colors, stripes, text colors, blade
+#   apply_jersey_info(name, num) — name + number; re-renders decals
+#                                  using cached text colors from apply_uniform
+#
+# Painting paths:
+#   - Torso  → SubViewport + JerseyDecal (base + optional yoke + stripe array
+#     + name/number text). One viewport per skater.
+#   - Shoulders → shared SubViewport + ShoulderDecal (shoulder base color +
+#     shoulder text color/outline; independent of jersey text).
+#   - Forearm / upper arm / socks → ImageTexture with horizontal bands stacked
+#     in array order; widths shrink to form concentric "centered cross-section"
+#     bands (watermelon rind, lime pith).
+#   - Pants thighs → ImageTexture with vertical columns positioned by stripe.pos
+#     (kept as a vertical side stripe, not a horizontal band — pants are the
+#     one region whose stripe.pos refers to U, not V).
+#   - Helmet / gloves / cuffs / elbow / hand spheres / hips / knees / skates →
+#     solid materials.
+
 var _skater: Skater
 var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
@@ -20,14 +41,16 @@ var _skate_r: MeshInstance3D
 var _foot_l: MeshInstance3D
 var _foot_r: MeshInstance3D
 
-# Cached jersey inputs. The torso material samples a SubViewport that draws
-# all of these in one pass (see JerseyDecal); each apply_* function stores
-# its relevant fields and bumps the viewport's update mode so the texture
-# refreshes on the next frame.
-var _jersey_color: Color = Color.WHITE
-var _jersey_stripe_color: Color = Color.BLACK
-var _pants_color: Color = Color.WHITE
-var _socks_color: Color = Color.WHITE
+# Cached jersey + shoulder decal inputs. Both decals are repainted whenever
+# either the uniform (apply_uniform) or the name/number (apply_jersey_info)
+# changes; the cache lets each entry point trigger a refresh without re-
+# supplying the other side's data.
+var _jersey_base_color: Color = Color.WHITE
+var _jersey_yoke_color: Variant = null            # Color or null
+var _jersey_stripes: Array[Dictionary] = []
+var _shoulder_color: Color = Color.WHITE
+var _shoulder_text_color: Color = Color.BLACK
+var _shoulder_outline_color: Color = Color.BLACK
 var _player_name: String = ""
 var _jersey_number: int = 0
 var _text_color: Color = Color.BLACK
@@ -61,14 +84,12 @@ func setup(skater: Skater) -> void:
 	_create_shoulder_viewport()
 
 
-# Spawns the SubViewport + JerseyDecal child that renders the procedural
-# jersey texture, and points the torso material at the viewport's texture.
-# Once set up, _rebuild_jersey_texture() just refreshes the decal and
-# bumps the viewport update mode — the material is never recreated, so
-# ghost-mode transparency and other material state survive team swaps.
-#
-# Matches the SubViewport pattern used by HockeyRink for its center-ice
-# decals: 2D-only, no input, render-on-demand.
+# Spawns the SubViewport + JerseyDecal that renders the procedural jersey
+# texture, and points the torso material at the viewport's texture. The
+# albedo material is created once here so apply_uniform / apply_jersey_info
+# can refresh the texture without recreating the material (which would lose
+# ghost-mode transparency state). Same pattern as the rink's center-ice
+# decal viewport.
 func _create_jersey_viewport() -> void:
 	_jersey_viewport = SubViewport.new()
 	_jersey_viewport.name = "JerseyViewport"
@@ -87,20 +108,15 @@ func _create_jersey_viewport() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = _jersey_viewport.get_texture()
 	# uv1_offset.x = 0.25 rotates the wrap 90° around the cylinder so the
-	# texture's back-center (texel x=128) lands at the skater's +Z (the
-	# back). Godot's CylinderMesh starts U=0 at +Z and increases CCW.
-	# V mapping is identity — Godot's cylinder side uses roughly the top
-	# half of V (cap disks use the bottom half), so JerseyDecal keeps
-	# all visible content in that range; see JerseyDecal.SIDE_V_MAX_PX.
+	# texture's back-center (texel x=128) lands at the skater's +Z (back).
+	# Godot's CylinderMesh starts U=0 at +Z and increases CCW.
 	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	_upper_body_mesh.material_override = mat
 
 
-# Spawns a small SubViewport + ShoulderDecal shared by both shoulder
-# spheres. Godot's SphereMesh starts U=0 at +Z and increases CCW, so the
-# number drawn at texture-U=0.5 lands at sphere-U=0.5 (-Z = front) by
-# default; per-shoulder uv1_offset.x rotates the wrap a quarter turn each
-# way so the number faces outward (-X on left, +X on right).
+# Shared SubViewport + ShoulderDecal for both shoulder spheres. Sphere U=0 is
+# at +Z, so per-shoulder uv1_offset.x rotates the wrap a quarter turn each
+# way to face the number outward (-X on left, +X on right).
 func _create_shoulder_viewport() -> void:
 	_shoulder_viewport = SubViewport.new()
 	_shoulder_viewport.name = "ShoulderViewport"
@@ -119,73 +135,222 @@ func _create_shoulder_viewport() -> void:
 	var tex: ViewportTexture = _shoulder_viewport.get_texture()
 	var mat_l := StandardMaterial3D.new()
 	mat_l.albedo_texture = tex
-	mat_l.uv1_offset = Vector3(-0.25, 0.0, 0.0)  # rotate so number at sphere -X
+	mat_l.uv1_offset = Vector3(-0.25, 0.0, 0.0)
 	_shoulder_l.material_override = mat_l
 	var mat_r := StandardMaterial3D.new()
 	mat_r.albedo_texture = tex
-	mat_r.uv1_offset = Vector3(0.25, 0.0, 0.0)   # rotate so number at sphere +X
+	mat_r.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	_shoulder_r.material_override = mat_r
 
 
-func apply_colors(
-		jersey_color: Color,
-		helmet_color: Color,
-		pants_color: Color,
-		socks_color: Color,
-		blade_color: Color,
-		gloves_color: Color) -> void:
-	_jersey_color = jersey_color
-	_pants_color = pants_color
-	_socks_color = socks_color
+# Applies the full v2 colors dict (TeamColorRegistry.get_colors output) to
+# every uniform mesh. Reads colors.uniform for kit detail and colors.primary
+# for the stick blade; text colors come from colors.text/.text_outline.
+func apply_uniform(colors: Dictionary) -> void:
+	# Sweep legacy mesh-based stripes from older builds (if a saved scene
+	# happens to carry them) so they don't double up with the texture paint.
+	for node: Node in _skater.upper_body.get_children():
+		if node.name.begins_with("Stripe_"):
+			_skater.upper_body.remove_child(node)
+			node.queue_free()
+	for node: Node in _skater.lower_body.get_children():
+		if node.name.begins_with("Stripe_"):
+			_skater.lower_body.remove_child(node)
+			node.queue_free()
+
+	var uniform: Dictionary = colors.uniform
+	_text_color = colors.text
+	_text_outline_color = colors.text_outline
+
+	# Jersey torso (decal repaint).
+	_jersey_base_color = uniform.jersey.base
+	_jersey_yoke_color = uniform.jersey.yoke
+	_jersey_stripes = uniform.jersey.stripes
 	_rebuild_jersey_texture()
+
+	# Shoulder caps (decal repaint with shoulder-specific color + text).
+	_shoulder_color = uniform.shoulders.color
+	_shoulder_text_color = uniform.shoulders.text
+	_shoulder_outline_color = uniform.shoulders.outline
 	_rebuild_shoulder_texture()
-	var jersey_mat: StandardMaterial3D = _make_solid_mat(jersey_color)
-	var pants_mat: StandardMaterial3D = _make_solid_mat(pants_color)
-	var socks_mat: StandardMaterial3D = _make_solid_mat(socks_color)
-	var gloves_mat: StandardMaterial3D = _make_solid_mat(gloves_color)
-	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08))
-	# Torso and shoulders use procedural textures from their viewports
-	# (jersey/shoulder rebuilds above); jersey_mat is still applied to the
-	# arm bones so the uniform reads consistently across the upper body.
-	_blade_mesh.material_override = _make_solid_mat(blade_color)
-	_set_bone_material(_skater.upper_arm_mesh, jersey_mat)
-	_set_bone_material(_skater.forearm_mesh, jersey_mat)
-	_set_bone_material(_skater.bottom_upper_arm_mesh, jersey_mat)
-	_set_bone_material(_skater.bottom_forearm_mesh, jersey_mat)
-	# Elbow spheres get re-painted in apply_stripes() with jersey_stripe_color
-	# (the user-facing accent stripe lives at the elbow). Default to jersey
-	# here so they're never blank during a brief window before stripes apply.
-	if _skater.top_elbow_sphere != null:
-		_skater.top_elbow_sphere.material_override = jersey_mat.duplicate()
-	if _skater.bottom_elbow_sphere != null:
-		_skater.bottom_elbow_sphere.material_override = jersey_mat.duplicate()
-	# Hand spheres represent the back-of-hand part of the glove.
+
+	# Helmet + blade.
+	_helmet.material_override = _make_solid_mat(uniform.helmet)
+	_blade_mesh.material_override = _make_solid_mat(colors.primary)
+
+	# Stick — fixed wood color. Set explicitly so ghost mode doesn't leave
+	# behind a stale gray material_override when ghost ends.
+	_skater.stick_mesh.material_override = _make_solid_mat(Color(0.705, 0.640, 0.605))
+
+	# Gloves (hand spheres + cuffs, single solid color).
+	var gloves_mat: StandardMaterial3D = _make_solid_mat(uniform.gloves)
 	if _skater.top_hand_sphere != null:
 		_skater.top_hand_sphere.material_override = gloves_mat.duplicate()
 	if _skater.bottom_hand_sphere != null:
 		_skater.bottom_hand_sphere.material_override = gloves_mat.duplicate()
-	_helmet.material_override = _make_solid_mat(helmet_color)
-	_hip_l.material_override = pants_mat.duplicate()
-	_hip_r.material_override = pants_mat.duplicate()
-	_thigh_l.material_override = pants_mat.duplicate()
-	_thigh_r.material_override = pants_mat.duplicate()
-	_knee_l.material_override = pants_mat.duplicate()
-	_knee_r.material_override = pants_mat.duplicate()
-	_sock_l.material_override = socks_mat.duplicate()
-	_sock_r.material_override = socks_mat.duplicate()
+	_rebuild_glove_cuffs(uniform.gloves)
+
+	# Arms — upper + lower bone cylinders, each painted with horizontal
+	# stripes (or solid if the stripes array is empty).
+	var arms_upper: Dictionary = uniform.arms.upper
+	var arms_lower: Dictionary = uniform.arms.lower
+	_paint_cylinder_h(_skater.upper_arm_mesh, arms_upper)
+	_paint_cylinder_h(_skater.bottom_upper_arm_mesh, arms_upper)
+	_paint_cylinder_h(_skater.forearm_mesh, arms_lower)
+	_paint_cylinder_h(_skater.bottom_forearm_mesh, arms_lower)
+
+	# Elbow spheres — paint as arms.lower.base so they read as the upper
+	# edge of the lower-arm cuff. (Hand spheres above already covered.)
+	var elbow_mat: StandardMaterial3D = _make_solid_mat(arms_lower.base)
+	if _skater.top_elbow_sphere != null:
+		_skater.top_elbow_sphere.material_override = elbow_mat.duplicate()
+	if _skater.bottom_elbow_sphere != null:
+		_skater.bottom_elbow_sphere.material_override = elbow_mat.duplicate()
+
+	# Pants — vertical side stripes (pants stripe pos is U, width is column
+	# thickness; see _make_v_stripes_texture). Hips/knees match pants base.
+	var pants_block: Dictionary = uniform.pants
+	_paint_pants_thigh(_thigh_l, pants_block, -0.25)
+	_paint_pants_thigh(_thigh_r, pants_block, 0.25)
+	var pants_solid: StandardMaterial3D = _make_solid_mat(pants_block.base)
+	_hip_l.material_override = pants_solid.duplicate()
+	_hip_r.material_override = pants_solid.duplicate()
+	_knee_l.material_override = pants_solid.duplicate()
+	_knee_r.material_override = pants_solid.duplicate()
+
+	# Socks — horizontal stripes on the cylinder side.
+	var sock_mat: StandardMaterial3D = _socks_material(uniform.socks)
+	_sock_l.material_override = sock_mat
+	_sock_r.material_override = sock_mat.duplicate()
+
+	# Skates — fixed dark, set explicitly so ghost mode never leaves a blank
+	# gray override behind.
+	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08))
 	_skate_l.material_override = skate_mat.duplicate()
 	_skate_r.material_override = skate_mat.duplicate()
 	_foot_l.material_override = skate_mat.duplicate()
 	_foot_r.material_override = skate_mat.duplicate()
-	# Fixed colors — set explicitly so ghost mode never creates a blank gray
-	# override and corrupts the color after ghost ends.
-	_skater.stick_mesh.material_override = _make_solid_mat(Color(0.705, 0.640, 0.605))
 
-	# Glove cuffs — short cylinders just past the wrist that extend back
-	# along the forearm. Part of the glove, so created here (in apply_colors)
-	# alongside the gloves color; not in apply_stripes. Recreated each call
-	# so team-swap / color-change re-applies without stale materials.
-	_rebuild_glove_cuffs(gloves_color)
+
+# Repaints the jersey + shoulder decals with the new name/number using the
+# text colors cached from the last apply_uniform.
+func apply_jersey_info(p_name: String, number: int) -> void:
+	# Clean up legacy floating decal meshes from older box-geometry builds.
+	for child: Node in _skater.upper_body.get_children():
+		if child.name in ["JerseyBackMesh", "JerseyShoulderL", "JerseyShoulderR"]:
+			_skater.upper_body.remove_child(child)
+			child.queue_free()
+	_player_name = p_name
+	_jersey_number = number
+	_rebuild_jersey_texture()
+	_rebuild_shoulder_texture()
+
+
+func _rebuild_jersey_texture() -> void:
+	if _jersey_decal == null:
+		return
+	_jersey_decal.update_jersey(
+			_jersey_base_color, _jersey_yoke_color, _jersey_stripes,
+			_player_name, _jersey_number, _text_color, _text_outline_color)
+	_jersey_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+
+func _rebuild_shoulder_texture() -> void:
+	if _shoulder_decal == null:
+		return
+	_shoulder_decal.update_shoulder(
+			_shoulder_color, _jersey_number, _shoulder_text_color, _shoulder_outline_color)
+	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+
+# Paints a bone cylinder (upper or lower arm) with horizontal stripes.
+# If the segment has no stripes, uses a solid material instead of building
+# a single-color texture — slightly cheaper, and keeps the simple case
+# trivially debuggable in the inspector.
+func _paint_cylinder_h(bone: Node3D, segment: Dictionary) -> void:
+	var visual: MeshInstance3D = _skater.bone_visual(bone)
+	if visual == null:
+		return
+	if segment.stripes.is_empty():
+		visual.material_override = _make_solid_mat(segment.base)
+		return
+	var tex: ImageTexture = _make_h_stripes_texture(segment.base, segment.stripes)
+	visual.material_override = _make_texture_material(tex)
+
+
+# Paints a single thigh cylinder with vertical side-column stripes. Per-side
+# uv1_offset rotates the wrap so the texture's stripe column (centered around
+# U=0.5 by convention) lands on each thigh's outer face.
+func _paint_pants_thigh(thigh: MeshInstance3D, pants_block: Dictionary, u_offset: float) -> void:
+	if pants_block.stripes.is_empty():
+		thigh.material_override = _make_solid_mat(pants_block.base)
+		return
+	var tex: ImageTexture = _make_v_stripes_texture(pants_block.base, pants_block.stripes)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.uv1_offset = Vector3(u_offset, 0.0, 0.0)
+	thigh.material_override = mat
+
+
+# Returns the sock material — textured if stripes are present, solid otherwise.
+func _socks_material(socks_block: Dictionary) -> StandardMaterial3D:
+	if socks_block.stripes.is_empty():
+		return _make_solid_mat(socks_block.base)
+	return _make_texture_material(_make_h_stripes_texture(socks_block.base, socks_block.stripes))
+
+
+# Builds a (4 × height_px) image of horizontal stripe bands over the
+# cylinder's side V range. Godot's CylinderMesh allocates roughly V ∈ [0, 0.5]
+# of the texture to the side surface (cap disks use [0.5, 1.0]); each stripe's
+# pos / width is normalized over that side region. Painted in array order so
+# concentric-shrink stacks (Lime, Watermelon, Pomegranate) overprint correctly.
+const _CYLINDER_SIDE_V_FRACTION: float = 0.5
+const _STRIPE_TEX_HEIGHT_PX: int = 128
+const _STRIPE_TEX_WIDTH_PX: int = 4
+
+func _make_h_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTexture:
+	var img := Image.create(_STRIPE_TEX_WIDTH_PX, _STRIPE_TEX_HEIGHT_PX, false, Image.FORMAT_RGBA8)
+	img.fill(base)
+	var side_px: int = int(round(_CYLINDER_SIDE_V_FRACTION * float(_STRIPE_TEX_HEIGHT_PX)))
+	for s: Dictionary in stripes:
+		var center_px: float = float(s.pos) * float(side_px)
+		var half_px:   float = float(s.width) * float(side_px) * 0.5
+		var y0: int = clampi(int(round(center_px - half_px)), 0, side_px)
+		var y1: int = clampi(int(round(center_px + half_px)), 0, side_px)
+		if y1 > y0:
+			img.fill_rect(Rect2i(0, y0, _STRIPE_TEX_WIDTH_PX, y1 - y0), s.color)
+	return ImageTexture.create_from_image(img)
+
+
+# Builds a (width_px × 4) image of vertical stripe columns. Used by pants:
+# each stripe.pos is the U position of the column center, stripe.width is the
+# column width. The caller's per-thigh uv1_offset.x lands the centered column
+# on the outer face of each leg.
+const _PANTS_TEX_WIDTH_PX: int = 128
+
+func _make_v_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTexture:
+	var img := Image.create(_PANTS_TEX_WIDTH_PX, _STRIPE_TEX_WIDTH_PX, false, Image.FORMAT_RGBA8)
+	img.fill(base)
+	for s: Dictionary in stripes:
+		var center_px: float = float(s.pos) * float(_PANTS_TEX_WIDTH_PX)
+		var half_px:   float = float(s.width) * float(_PANTS_TEX_WIDTH_PX) * 0.5
+		var x0: int = clampi(int(round(center_px - half_px)), 0, _PANTS_TEX_WIDTH_PX)
+		var x1: int = clampi(int(round(center_px + half_px)), 0, _PANTS_TEX_WIDTH_PX)
+		if x1 > x0:
+			img.fill_rect(Rect2i(x0, 0, x1 - x0, _STRIPE_TEX_WIDTH_PX), s.color)
+	return ImageTexture.create_from_image(img)
+
+
+func _make_texture_material(tex: Texture2D) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	return mat
+
+
+func _make_solid_mat(color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	return mat
 
 
 func _rebuild_glove_cuffs(gloves_color: Color) -> void:
@@ -204,157 +369,17 @@ func _rebuild_glove_cuffs(gloves_color: Color) -> void:
 	_skater.upper_body.add_child(_skater.bot_cuff_mesh)
 
 
-# Bone mesh wrappers are Node3D; the visible cylinder is a child MeshInstance3D
-# resolved via Skater.bone_visual(). Returns silently if either is null.
-func _set_bone_material(bone: Node3D, mat: StandardMaterial3D) -> void:
-	var visual: MeshInstance3D = _skater.bone_visual(bone)
-	if visual == null:
-		return
-	visual.material_override = mat.duplicate()
-
-
-func apply_jersey_info(p_name: String, number: int, text_color: Color, text_outline_color: Color) -> void:
-	# Clean up legacy floating decals from older box-geometry runs, if any.
-	for child: Node in _skater.upper_body.get_children():
-		if child.name in ["JerseyBackMesh", "JerseyShoulderL", "JerseyShoulderR"]:
-			_skater.upper_body.remove_child(child)
-			child.queue_free()
-
-	_player_name = p_name
-	_jersey_number = number
-	_text_color = text_color
-	_text_outline_color = text_outline_color
-	_rebuild_jersey_texture()
-	_rebuild_shoulder_texture()
-
-
-func apply_stripes(
-		jersey_stripe_color: Color,
-		pants_stripe_color: Color,
-		socks_stripe_color: Color) -> void:
-	# Sweep stripe meshes left over from older mesh-based stripe builds.
-	for node: Node in _skater.upper_body.get_children():
-		if node.name.begins_with("Stripe_"):
-			_skater.upper_body.remove_child(node)
-			node.queue_free()
-	for node: Node in _skater.lower_body.get_children():
-		if node.name.begins_with("Stripe_"):
-			_skater.lower_body.remove_child(node)
-			node.queue_free()
-
-	# Jersey hem stripe — painted into the torso texture (no separate mesh).
-	_jersey_stripe_color = jersey_stripe_color
-	_rebuild_jersey_texture()
-
-	# Forearm sleeve stripe — horizontal band painted into a small texture
-	# applied to each forearm cylinder. V=0 maps to the elbow end of the
-	# bone (cylinder's local +Y, mapped to wrapper +Z which is opposite the
-	# look_at target = the hand), so a band at V≈0.10-0.20 reads as
-	# "middle top of the lower arm" — hockey-style sleeve placement near
-	# the elbow, not at the cuff.
-	var forearm_tex: ImageTexture = _make_v_stripe_texture(
-			_jersey_color, jersey_stripe_color, 32, 0.12, 0.20)
-	_set_bone_texture(_skater.forearm_mesh, forearm_tex)
-	_set_bone_texture(_skater.bottom_forearm_mesh, forearm_tex)
-
-	# Pants side stripe — vertical column in the texture, per-thigh
-	# uv1_offset rotates the wrap to put it on each thigh's outer face
-	# (sphere/cylinder U=0 is at +Z, U=0.25 at +X, U=0.75 at -X).
-	var pants_tex: ImageTexture = _make_u_stripe_texture(
-			_pants_color, pants_stripe_color, 64, 0.47, 0.53)
-	_apply_side_stripe_material(_thigh_l, pants_tex, -0.25)
-	_apply_side_stripe_material(_thigh_r, pants_tex, 0.25)
-
-	# Sock stripe — horizontal band in the side V range. CylinderMesh
-	# allocates roughly V=0..0.5 of the texture to the side surface (caps
-	# use the rest), so V≈0.20-0.30 centers the band on the cylinder side.
-	var sock_tex: ImageTexture = _make_v_stripe_texture(
-			_socks_color, socks_stripe_color, 32, 0.20, 0.30)
-	_sock_l.material_override = _make_texture_material(sock_tex)
-	_sock_r.material_override = _make_texture_material(sock_tex)
-
-
-# Pushes the cached uniform inputs into the JerseyDecal and refreshes the
-# SubViewport. The torso material's albedo already points at the viewport
-# texture (set once in _create_jersey_viewport), so we don't touch the
-# material here — ghost-mode transparency and any other material state
-# survives the refresh.
-func _rebuild_jersey_texture() -> void:
-	if _jersey_decal == null:
-		return
-	_jersey_decal.update_jersey(
-			_jersey_color, _jersey_stripe_color,
-			_player_name, _jersey_number, _text_color, _text_outline_color)
-	_jersey_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
-
-
-# Pushes the cached jersey color + number + text color into the
-# ShoulderDecal and refreshes the shared shoulder SubViewport.
-func _rebuild_shoulder_texture() -> void:
-	if _shoulder_decal == null:
-		return
-	_shoulder_decal.update_shoulder(_jersey_color, _jersey_number, _text_color, _text_outline_color)
-	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
-
-
-# Builds a small ImageTexture with a horizontal stripe band at V=[v_start, v_end]
-# over a base color fill. The texture is 4 px wide (cylinder UV wraps the
-# horizontal axis; the actual width doesn't matter for a uniform band — 4 px
-# gives some texel margin for filtering without z-fighting risk). Height is the
-# resolution of the V axis.
-func _make_v_stripe_texture(
-		base: Color, stripe: Color,
-		height_px: int, v_start: float, v_end: float) -> ImageTexture:
-	var img := Image.create(4, height_px, false, Image.FORMAT_RGBA8)
-	img.fill(base)
-	var y0: int = int(v_start * float(height_px))
-	var y1: int = int(v_end * float(height_px))
-	if y1 > y0:
-		img.fill_rect(Rect2i(0, y0, 4, y1 - y0), stripe)
-	return ImageTexture.create_from_image(img)
-
-
-# Builds a small ImageTexture with a vertical stripe column at U=[u_start, u_end]
-# over a base color fill. The stripe becomes a vertical line on the cylinder
-# side; the caller positions it via the material's uv1_offset.x.
-func _make_u_stripe_texture(
-		base: Color, stripe: Color,
-		width_px: int, u_start: float, u_end: float) -> ImageTexture:
-	var img := Image.create(width_px, 4, false, Image.FORMAT_RGBA8)
-	img.fill(base)
-	var x0: int = int(u_start * float(width_px))
-	var x1: int = int(u_end * float(width_px))
-	if x1 > x0:
-		img.fill_rect(Rect2i(x0, 0, x1 - x0, 4), stripe)
-	return ImageTexture.create_from_image(img)
-
-
-func _make_texture_material(tex: Texture2D) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
-	return mat
-
-
-# Applies a stripe texture to a thigh / leg cylinder with the given
-# uv1_offset.x. Negative for the left side (puts the texture's vertical
-# stripe at sphere/cylinder -X = outward for the left leg); positive
-# 0.25 for the right side.
-func _apply_side_stripe_material(
-		mesh: MeshInstance3D, tex: Texture2D, u_offset: float) -> void:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
-	mat.uv1_offset = Vector3(u_offset, 0.0, 0.0)
-	mesh.material_override = mat
-
-
-# Sets the textured albedo on a bone wrapper's child cylinder. Used for the
-# forearm sleeve stripe; the wrapper itself is a Node3D, the visible cylinder
-# is reached via Skater.bone_visual().
-func _set_bone_texture(bone: Node3D, tex: Texture2D) -> void:
-	var visual: MeshInstance3D = _skater.bone_visual(bone)
-	if visual == null:
-		return
-	visual.material_override = _make_texture_material(tex)
+func _make_glove_cuff_mesh(radius: float, height: float, color: Color, mesh_name: String) -> MeshInstance3D:
+	var m := MeshInstance3D.new()
+	m.name = mesh_name
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = height
+	cyl.radial_segments = 16
+	m.mesh = cyl
+	m.material_override = _make_solid_mat(color)
+	return m
 
 
 func apply_ghost(ghost: bool) -> void:
@@ -385,22 +410,3 @@ func apply_ghost(ghost: bool) -> void:
 		else:
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 			mat.albedo_color.a = 1.0
-
-
-func _make_solid_mat(color: Color) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	return mat
-
-
-func _make_glove_cuff_mesh(radius: float, height: float, color: Color, mesh_name: String) -> MeshInstance3D:
-	var m := MeshInstance3D.new()
-	m.name = mesh_name
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = radius
-	cyl.bottom_radius = radius
-	cyl.height = height
-	cyl.radial_segments = 16
-	m.mesh = cyl
-	m.material_override = _make_solid_mat(color)
-	return m

@@ -68,16 +68,13 @@ func spawn_goalie_pair(puck: Puck, is_server: bool) -> Dictionary:
 		"bottom_controller": bottom_controller,
 	}
 
-# ── Local player (skater + LocalController, fully set up) ────────────────────
-# Returns { "skater": Skater, "controller": LocalController }.
+# ── Local player (skater + LocalController) ──────────────────────────────────
+# Returns { "skater": Skater, "controller": LocalController }. Caller is
+# responsible for calling skater.set_uniform() + skater.set_jersey_info()
+# after spawn — coloring is no longer applied here so the v2 uniform paint
+# happens in one place (PlayerRegistry / GameManager mid-game flow).
 func spawn_local_player(
 		position: Vector3,
-		jersey_color: Color,
-		helmet_color: Color,
-		pants_color: Color,
-		socks_color: Color,
-		blade_color: Color,
-		gloves_color: Color,
 		is_left_handed: bool,
 		puck: Puck,
 		game_state: Node,
@@ -87,7 +84,6 @@ func spawn_local_player(
 	skater.is_left_handed = is_left_handed  # must be set before add_child so _ready sees it
 	skater.position = position
 	_scene_root.add_child(skater)
-	skater.set_player_color(jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color)
 	var controller: LocalController = LOCAL_CONTROLLER_SCENE.instantiate()
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
@@ -103,12 +99,6 @@ func spawn_local_player(
 # Returns { "skater": Skater, "controller": AIController }.
 func spawn_ai_player(
 		position: Vector3,
-		jersey_color: Color,
-		helmet_color: Color,
-		pants_color: Color,
-		socks_color: Color,
-		blade_color: Color,
-		gloves_color: Color,
 		is_left_handed: bool,
 		puck: Puck,
 		game_state: Node,
@@ -117,7 +107,6 @@ func spawn_ai_player(
 	skater.is_left_handed = is_left_handed
 	skater.position = position
 	_scene_root.add_child(skater)
-	skater.set_player_color(jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color)
 	var controller: AIController = AI_CONTROLLER_SCENE.instantiate()
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
@@ -128,12 +117,6 @@ func spawn_ai_player(
 # Returns { "skater": Skater, "controller": RemoteController }.
 func spawn_remote_player(
 		position: Vector3,
-		jersey_color: Color,
-		helmet_color: Color,
-		pants_color: Color,
-		socks_color: Color,
-		blade_color: Color,
-		gloves_color: Color,
 		is_left_handed: bool,
 		puck: Puck,
 		game_state: Node,
@@ -142,7 +125,6 @@ func spawn_remote_player(
 	skater.is_left_handed = is_left_handed  # must be set before add_child so _ready sees it
 	skater.position = position
 	_scene_root.add_child(skater)
-	skater.set_player_color(jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color)
 	var controller: RemoteController = REMOTE_CONTROLLER_SCENE.instantiate()
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
