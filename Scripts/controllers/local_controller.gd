@@ -306,6 +306,14 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# inflates O(N) per broadcast, popping the blade above slapper_wind_up_height.
 	var pre_slapper_charge_timer: float = _aiming.slapper_charge_timer
 	var pre_wrister_start_blade_x: float = _aiming.wrister_start_blade_local_x
+	# Same shape of problem as the slapper timer: tick_wrister_charge accumulates
+	# inside _update_wrister_charge during replay, so without save/restore each
+	# reconcile re-adds the unconfirmed window's blade delta and the charge bar
+	# inflates O(N). Save the live values and restore after replay; live tick
+	# state is the truth, replay's pass through the same inputs is discarded.
+	var pre_charge_distance: float = _aiming.charge_distance
+	var pre_charge_prev_blade_pos: Vector3 = _aiming.prev_blade_pos_rel_skater
+	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
 	skater.global_position = server_state.position
 	skater.velocity = server_state.velocity
 	# Snap facing for replay accuracy — facing drives move_and_slide direction,
@@ -322,10 +330,6 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# that carries across reconciles without a per-cycle resync — anchoring it
 	# to the server bounds drift to zero per cycle instead of accumulating.
 	_pose.upper_body_angle = server_state.upper_body_rotation_y
-	# Seed mouse pos from the first replayed input so the first frame's
-	# direction-variance delta is zero rather than a large garbage value.
-	if not _input_history.is_empty():
-		_aiming.prev_mouse_screen_pos = _input_history[0].mouse_screen_pos
 	# Seed the IK aim smoother from the first replayed input so the blade speed
 	# cap operates against a deterministic baseline across reconcile — the live
 	# smoothed value would otherwise bias the replay's first tick.
@@ -371,10 +375,9 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.one_timer_window_timer = pre_one_timer_window_timer
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.wrister_start_blade_local_x = pre_wrister_start_blade_x
-	# Set mouse pos baseline to the end of the replay window so the next real
-	# frame's direction-variance delta is correct.
-	if not _input_history.is_empty():
-		_aiming.prev_mouse_screen_pos = _input_history.back().mouse_screen_pos
+	_aiming.charge_distance = pre_charge_distance
+	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
+	_aiming.prev_blade_dir = pre_charge_prev_blade_dir
 	# Server authority on shot state — but never revert past a release transition.
 	# If the client is in FOLLOW_THROUGH and the server is still in an aim state,
 	# the host just hasn't processed the release input yet; the reliable RPC already

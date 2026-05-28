@@ -293,10 +293,15 @@ const BOT_WRISTER_CHARGE_TICKS: int = 60
 # the state machine doesn't actually fire at.
 const BOT_WRISTER_TARGET_CHARGE: float = 1.0
 # Per-tick mouse_screen_pos delta along the sweep direction.
-# tick_wrister_charge multiplies screen delta by 0.01 * mouse_sensitivity
-# to get world-space accumulation, so this works out at sens=1.0; hosts
-# with non-default sens see a 2x range, which the target charge headroom
-# absorbs.
+# NOTE: this constant is currently vestigial for wrister charging —
+# tick_wrister_charge now accumulates from actual blade world-position
+# delta (driven by mouse_world_pos via IK), not from mouse_screen_pos.
+# Bot wrister power therefore comes from the wind-up → release-target
+# geometry below, not from this value. Kept for the moment so the
+# synthesized screen-pos walk at the charge call site doesn't go to
+# zero (other code paths may still inspect mouse_screen_pos). To be
+# removed alongside a re-tune of BOT_WRISTER_WIND_UP_* once bot
+# wrister power is recalibrated against the new charge model.
 const BOT_WRISTER_SCREEN_DELTA_PER_TICK: float = (
 		BOT_WRISTER_TARGET_CHARGE / BOT_WRISTER_CHARGE_TICKS / 0.01)
 # Mid-charge bail radius. If an opponent gets inside this distance
@@ -1623,12 +1628,12 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	var t: float = float(_shoot_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
 	input.mouse_world_pos = _step_mouse_toward(_shoot_wind_up_start.lerp(_shoot_aim_target, t))
 
-	# Walk mouse_screen_pos along the sweep direction. Per-tick delta is
-	# BOT_WRISTER_SCREEN_DELTA_PER_TICK; SkaterAimingBehavior scales by
-	# 0.01 * mouse_sensitivity to convert to world-space charge accrual.
-	# Divide by the host's actual sensitivity here so the downstream
-	# multiplication cancels out — otherwise hosts running sens=2.0
-	# double the bot's accumulation and cap the wrister at max power.
+	# Walk mouse_screen_pos along the sweep direction. NOTE: as of the
+	# blade-driven charge fix, this no longer drives wrister charging —
+	# charge now accumulates from the blade's actual world motion (driven
+	# by the mouse_world_pos lerp above). Left in place because other
+	# systems still observe mouse_screen_pos. Bot wrister power should
+	# be retuned via BOT_WRISTER_WIND_UP_* / BOT_WRISTER_RELEASE_FORWARD_M.
 	var sens: float = maxf(PlayerPrefs.mouse_sensitivity, 0.01)
 	input.mouse_screen_pos = (
 			_shoot_sweep_dir_xy * (BOT_WRISTER_SCREEN_DELTA_PER_TICK * float(_shoot_charge_tick) / sens))
@@ -2826,9 +2831,8 @@ func _update_engagement_cooldown(snapshot: WorldSnapshot, self_state: SkaterNetw
 func _set_state(s: State) -> void:
 	if s != _state:
 		# Wrister charge resets on every SHOOT_PRESSED entry — fresh
-		# sweep direction, fresh tick count, fresh prev_mouse_screen_pos
-		# (the SkaterStateMachine seeds that from input.mouse_screen_pos
-		# at the entry edge).
+		# sweep direction, fresh tick count. SkaterStateMachine seeds the
+		# charge tracker from the blade's current position at the entry edge.
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
 			_shoot_sweep_dir_xy = Vector2.ZERO

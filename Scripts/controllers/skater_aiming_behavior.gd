@@ -4,9 +4,12 @@ extends RefCounted
 # ── Wrister charge state ──────────────────────────────────────────────────────
 var charge_distance: float = 0.0
 var wrister_start_blade_local_x: float = 0.0
-# prev_mouse_screen_pos is intentionally public (no underscore): LocalController
-# seeds it from _input_history at the start and end of reconcile() replay.
-var prev_mouse_screen_pos: Vector2 = Vector2.ZERO
+# Blade world position with skater translation subtracted — the frame the
+# charge tracker measures in. Translation removed so locomotion doesn't pump
+# charge; rotation kept in world XZ so the accumulated direction matches the
+# aim vector at release. Public (no underscore): LocalController saves and
+# restores it across reconcile() replay alongside charge_distance.
+var prev_blade_pos_rel_skater: Vector3 = Vector3.ZERO
 var prev_blade_dir: Vector3 = Vector3.ZERO
 
 # ── Slapper charge state ──────────────────────────────────────────────────────
@@ -15,24 +18,22 @@ var one_timer_window_timer: float = 0.0
 
 # ── Wrister ───────────────────────────────────────────────────────────────────
 
-func reset_wrister(initial_mouse_pos: Vector2) -> void:
+func reset_wrister(initial_blade_pos_rel_skater: Vector3) -> void:
 	charge_distance = 0.0
 	prev_blade_dir = Vector3.ZERO
-	prev_mouse_screen_pos = initial_mouse_pos
+	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
 
 
 func tick_wrister_charge(
-		screen_pos: Vector2,
+		blade_pos_rel_skater: Vector3,
 		max_charge_direction_variance: float,
 		max_wrister_charge_distance: float) -> void:
-	var scale: float = 0.01 * PlayerPrefs.mouse_sensitivity
-	var cur := Vector3(screen_pos.x * scale, 0.0, screen_pos.y * scale)
-	var prev := Vector3(prev_mouse_screen_pos.x * scale, 0.0, prev_mouse_screen_pos.y * scale)
 	var result: Dictionary = ChargeTracking.accumulate(
-			prev, cur, prev_blade_dir, charge_distance, max_charge_direction_variance)
+			prev_blade_pos_rel_skater, blade_pos_rel_skater, prev_blade_dir,
+			charge_distance, max_charge_direction_variance)
 	charge_distance = minf(result.charge, max_wrister_charge_distance)
 	prev_blade_dir = result.direction
-	prev_mouse_screen_pos = screen_pos
+	prev_blade_pos_rel_skater = blade_pos_rel_skater
 
 # ── Slapper ───────────────────────────────────────────────────────────────────
 

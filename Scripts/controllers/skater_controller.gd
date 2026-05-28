@@ -675,10 +675,17 @@ func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
 
-func _update_wrister_charge(input: InputState) -> void:
+func _update_wrister_charge(_input: InputState) -> void:
 	if not has_puck:
 		return
-	_aiming.tick_wrister_charge(input.mouse_screen_pos, max_charge_direction_variance, max_wrister_charge_distance)
+	# Charge measured in blade world XZ, with skater translation subtracted so
+	# locomotion doesn't load the shot. ROM clamping inside apply_blade_from_mouse
+	# has already run this tick, so a cursor past the reach limit produces zero
+	# delta here instead of growing charge.
+	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
+	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
+	blade_pos_rel_skater.y = 0.0
+	_aiming.tick_wrister_charge(blade_pos_rel_skater, max_charge_direction_variance, max_wrister_charge_distance)
 	skater.shot_charge = _aiming.charge_distance / max_wrister_charge_distance
 	# Charge ring is local-only; gate on the same flag as the one-timer reticle.
 	if show_one_timer_indicator:
