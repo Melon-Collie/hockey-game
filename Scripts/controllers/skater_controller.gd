@@ -624,12 +624,9 @@ func _transition_to_skating() -> void:
 	skater.set_slapper_mode(false)
 	skater.set_slapper_zone(false)
 	skater.exit_slapshot_pinning()
-	if show_one_timer_indicator:
-		skater.set_slapper_indicator(false)
-		skater.set_slapshot_arrow(false)
-		skater.set_charge_ring_visible(false)
-		if was_charging:
-			skater.trigger_charge_lost_flash()
+	_hide_slapshot_hud()
+	if show_one_timer_indicator and was_charging:
+		skater.trigger_charge_lost_flash()
 
 func _enter_shot_block() -> void:
 	_sm.set_state(State.SHOT_BLOCKING)
@@ -734,6 +731,18 @@ func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 	_sm.follow_through_is_slapper = true
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
+	# Hide the slapshot HUD the moment the shot fires. Follow-through is body
+	# animation only — leaving the ring/arrow visible during that ~0.5s makes
+	# them appear to rotate with the skater, which reads as weird.
+	# _transition_to_skating still hides everything at the end as a safety net.
+	_hide_slapshot_hud()
+
+func _hide_slapshot_hud() -> void:
+	if not show_one_timer_indicator:
+		return
+	skater.set_slapper_indicator(false)
+	skater.set_slapshot_arrow(false)
+	skater.set_charge_ring_visible(false)
 
 func _update_wrister_charge(input: InputState) -> void:
 	if not has_puck:
@@ -777,6 +786,9 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	result.power *= 1.0 + one_timer_center_power_bonus * (2.0 * proximity - 1.0)
 	if not is_replaying:
 		one_timer_release_requested.emit(result.direction, result.power)
+	# Same as _release_slapper — hide the HUD as soon as the shot fires so it
+	# doesn't ride along through the follow-through.
+	_hide_slapshot_hud()
 	return {fired = true, direction = result.direction, follow_through_duration = follow_through_duration}
 
 func _apply_block_movement(input: InputState, delta: float) -> void:
