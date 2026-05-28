@@ -12,10 +12,10 @@ extends RefCounted
 #      u16 ws_sequence, f32 host_capture_time, u8 num_skaters
 #      [u32 peer_id, skater_bytes(35), u8 queue_depth] × num_skaters
 #      puck_bytes(12)
-#      u8 num_goalies, [goalie_bytes(40)] × num_goalies
+#      u8 num_goalies, [goalie_bytes(35)] × num_goalies
 #      u8 score0, u8 score1, u8 phase, u8 period, u16 time_remaining
 #
-#    Total for 6 players + 2 goalies: 358 bytes (well under 1392-byte ENet MTU)
+#    Total for 6 players + 2 goalies: 348 bytes (well under 1392-byte ENet MTU)
 #
 #    Quantization layout:
 #      Skater  (37 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s,
@@ -25,16 +25,17 @@ extends RefCounted
 #                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]),
 #                      shot_charge u8
 #      Puck    (12 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
-#      Goalie  (40 B): root (12 B) + pose (28 B). Root:
+#      Goalie  (35 B): root (12 B) + pose (23 B). Root:
 #                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
 #                      vel_x/z s16@0.02m/s.
 #                      Pose: body_pitch/roll s8@π/127; left_pad offset (s8×3@1cm)
 #                      + pitch/roll s8@π/127; right_pad same; glove offset s8×3
-#                      + yaw/pitch s8@π/127; blocker same; stick same;
-#                      head_yaw s8@π/127. Pose is broadcast for replay/sync
-#                      fidelity; clients currently still recompute body parts
-#                      via local AI — render-from-broadcast swap is the next
-#                      step in the goalie overhaul.
+#                      + yaw/pitch s8@π/127; blocker same; head_yaw s8@π/127.
+#                      Stick rides the blocker socket (rigid IRL attachment),
+#                      so no separate stick fields on the wire. Pose is
+#                      broadcast for replay/sync fidelity; clients currently
+#                      still recompute body parts via local AI — render-from-
+#                      broadcast swap is the next step in the goalie overhaul.
 #
 # 2. Stats  (reliable, event-driven):
 #      [pid, G, A, SOG, HITS, BLK] × N players
@@ -55,7 +56,7 @@ signal queue_depth_feedback(depth: int)
 const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + f32 host_capture_time (4) + u8 num_skaters (1)
 const SKATER_BLOCK_SIZE: int = 42  # u32 peer_id (4) + 37B skater state + u8 queue_depth (1)
 const PUCK_BLOCK_SIZE: int = 12    # 11B pos+vel + 1B carrier_idx
-const GOALIE_BLOCK_SIZE: int = 40
+const GOALIE_BLOCK_SIZE: int = 35
 const GAME_STATE_BLOCK_SIZE: int = 6  # 4×u8 + u16 time_remaining
 const STATS_PLAYER_RECORD_SIZE: int = 6  # peer_id, G, A, SOG, HITS, BLK
 
@@ -442,15 +443,14 @@ static func _decode_puck_quantized(b: PackedByteArray) -> PuckNetworkState:
 	return s
 
 
-# Goalie: 40 bytes — 12 root + 28 pose. See top-of-file layout comment.
+# Goalie: 35 bytes — 12 root + 23 pose. See top-of-file layout comment.
 # Root offsets:   pos_x(0..1) pos_z(2..3) rot_y(4..5) state(6) fho(7) vel_x(8..9) vel_z(10..11)
 # Pose offsets:   body_pitch(12) body_roll(13)
 #                 left_pad_offset(14..16) left_pad_pitch(17) left_pad_roll(18)
 #                 right_pad_offset(19..21) right_pad_pitch(22) right_pad_roll(23)
 #                 glove_offset(24..26) glove_yaw(27) glove_pitch(28)
 #                 blocker_offset(29..31) blocker_yaw(32) blocker_pitch(33)
-#                 stick_offset(34..36) stick_yaw(37) stick_pitch(38)
-#                 head_yaw(39)
+#                 head_yaw(34)
 # Offset quantization: s8 @1cm (range ±1.27m, ample for ±0.85m glove reach).
 # Angle quantization:  s8 @π/127 (~1.43° precision, full ±π range).
 const _POSE_OFFSET_SCALE: float = 100.0
@@ -482,9 +482,6 @@ static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
 	o = _encode_offset(b, o, s.blocker_offset)
 	b.encode_s8(o, _quant_angle(s.blocker_yaw)); o += 1
 	b.encode_s8(o, _quant_angle(s.blocker_pitch)); o += 1
-	o = _encode_offset(b, o, s.stick_offset)
-	b.encode_s8(o, _quant_angle(s.stick_yaw)); o += 1
-	b.encode_s8(o, _quant_angle(s.stick_pitch)); o += 1
 	b.encode_s8(o, _quant_angle(s.head_yaw))
 	return b
 
@@ -517,9 +514,6 @@ static func _decode_goalie_quantized(b: PackedByteArray) -> GoalieNetworkState:
 	s.blocker_offset = _decode_offset(b, o); o += 3
 	s.blocker_yaw = _dequant_angle(b.decode_s8(o)); o += 1
 	s.blocker_pitch = _dequant_angle(b.decode_s8(o)); o += 1
-	s.stick_offset = _decode_offset(b, o); o += 3
-	s.stick_yaw = _dequant_angle(b.decode_s8(o)); o += 1
-	s.stick_pitch = _dequant_angle(b.decode_s8(o)); o += 1
 	s.head_yaw = _dequant_angle(b.decode_s8(o))
 	return s
 

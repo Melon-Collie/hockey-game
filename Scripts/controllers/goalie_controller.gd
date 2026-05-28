@@ -1113,8 +1113,9 @@ func get_state() -> GoalieNetworkState:
 	s.velocity_z = _velocity_z
 	# Authoritative pose — read live body-part transforms so replays and clients
 	# (once step 2 lands) reflect the actual pose the host evaluated saves
-	# against. Stick mirrors blocker because today the stick is rigid-attached
-	# to BlockArm; step 2 will lift it out as its own socket.
+	# against. Stick rides the blocker arm IRL (blocker pad on stick hand), so
+	# no separate socket — the stick transform is derived from blocker + the
+	# fixed scene offset baked into BlockArm.
 	var body_rot: Vector3 = goalie.get_body_rotation()
 	s.body_pitch = body_rot.x
 	s.body_roll = body_rot.z
@@ -1134,9 +1135,6 @@ func get_state() -> GoalieNetworkState:
 	var b_rot: Vector3 = goalie.get_blocker_rotation()
 	s.blocker_yaw = b_rot.y
 	s.blocker_pitch = b_rot.x
-	s.stick_offset = s.blocker_offset
-	s.stick_yaw = s.blocker_yaw
-	s.stick_pitch = s.blocker_pitch
 	s.head_yaw = goalie.get_head_yaw()
 	return s
 

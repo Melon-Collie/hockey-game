@@ -125,9 +125,6 @@ func _make_goalie_state() -> GoalieNetworkState:
 	s.blocker_offset = Vector3(0.38, 0.47, -0.08)
 	s.blocker_yaw = -0.45
 	s.blocker_pitch = 0.20
-	s.stick_offset = Vector3(0.38, 0.47, -0.08)
-	s.stick_yaw = -0.45
-	s.stick_pitch = 0.20
 	s.head_yaw = 0.12
 	return s
 
@@ -161,8 +158,6 @@ func test_goalie_round_trip_preserves_fields_within_quantization() -> void:
 	assert_almost_eq(decoded.glove_pitch, orig.glove_pitch, 0.03)
 	assert_almost_eq(decoded.blocker_offset.y, orig.blocker_offset.y, 0.011)
 	assert_almost_eq(decoded.blocker_yaw, orig.blocker_yaw, 0.03)
-	assert_almost_eq(decoded.stick_offset.z, orig.stick_offset.z, 0.011)
-	assert_almost_eq(decoded.stick_yaw, orig.stick_yaw, 0.03)
 	assert_almost_eq(decoded.head_yaw, orig.head_yaw, 0.03)
 
 
@@ -176,5 +171,4 @@ func test_goalie_zero_state_round_trips() -> void:
 	assert_eq(decoded.body_pitch, 0.0)
 	assert_eq(decoded.left_pad_offset, Vector3.ZERO)
 	assert_eq(decoded.glove_yaw, 0.0)
-	assert_eq(decoded.stick_offset, Vector3.ZERO)
 	assert_eq(decoded.head_yaw, 0.0)

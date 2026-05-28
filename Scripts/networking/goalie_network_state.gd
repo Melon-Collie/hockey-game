@@ -12,9 +12,10 @@ class_name GoalieNetworkState
 #     Rotations are radians. Body root has pitch + roll for shoulder-save lean
 #     (yaw is the existing rotation_y field).
 #
-# Stick is currently rigid-attached to the BlockArm; its broadcast mirrors
-# blocker until a later step lifts the stick out as its own authoritative
-# socket.
+# The stick is rigid-attached to the blocker arm IRL (blocker pad sits on the
+# back of the stick hand). Its transform is derived from the blocker socket
+# plus the fixed scene offset baked into BlockArm — no independent socket
+# needed on the wire.
 var position_x: float = 0.0
 var position_z: float = 0.0
 var rotation_y: float = 0.0
@@ -36,9 +37,6 @@ var glove_pitch: float = 0.0
 var blocker_offset: Vector3 = Vector3.ZERO
 var blocker_yaw: float = 0.0
 var blocker_pitch: float = 0.0
-var stick_offset: Vector3 = Vector3.ZERO
-var stick_yaw: float = 0.0
-var stick_pitch: float = 0.0
 var head_yaw: float = 0.0
 
 var host_timestamp: float = 0.0  # host-only, not serialized
@@ -65,8 +63,5 @@ func copy_from(s: GoalieNetworkState) -> void:
 	blocker_offset = s.blocker_offset
 	blocker_yaw = s.blocker_yaw
 	blocker_pitch = s.blocker_pitch
-	stick_offset = s.stick_offset
-	stick_yaw = s.stick_yaw
-	stick_pitch = s.stick_pitch
 	head_yaw = s.head_yaw
 	host_timestamp = s.host_timestamp
