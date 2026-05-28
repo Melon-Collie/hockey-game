@@ -4,9 +4,12 @@ class_name ChargeTracking
 #   - DIRECTION & variance check: derived from the cursor (intent) delta.
 #     Captures what the player is dragging toward — independent of body
 #     pose, blade IK convergence, or ROM clamping.
-#   - MAGNITUDE: derived from the actual blade delta. Gates charge on
-#     real physical blade travel, so a cursor pushed past ROM with the
-#     blade pinned at the boundary contributes zero charge.
+#   - MAGNITUDE: blade delta PROJECTED onto the intent direction. Only
+#     blade motion aligned with the player's drag intent counts toward
+#     charge — blade motion at an angle (e.g., body-rotation tangent,
+#     IK catch-up after a press snap, locomotion residue) is filtered
+#     out. ROM clamping still gates magnitude because a pinned blade
+#     produces zero blade_delta regardless of intent.
 #
 # Both positions are passed in the same frame (typically world XZ minus
 # skater translation, so locomotion / camera drift cancels out). The
@@ -50,11 +53,15 @@ static func accumulate(
 		if angle_deg > max_direction_variance_deg:
 			new_charge = 0.0
 
-	# Magnitude from actual blade travel (ROM-clamped). Blade-delta
-	# direction is discarded — only its length matters for charge.
-	# Direction is set by the cursor above.
+	# Magnitude from blade travel PROJECTED onto the intent direction.
+	# Only motion the player intended counts — tangential blade motion
+	# (body-rotation drift, IK catch-up after a press snap) projects to
+	# zero or negative and contributes nothing. ROM clamping still gates
+	# because a pinned blade has zero blade_delta.
 	var blade_delta := current_blade_pos - prev_blade_pos
 	blade_delta.y = 0.0
-	new_charge += blade_delta.length()
+	var aligned_magnitude: float = blade_delta.dot(current_dir)
+	if aligned_magnitude > 0.0:
+		new_charge += aligned_magnitude
 
 	return {"charge": new_charge, "direction": current_dir}

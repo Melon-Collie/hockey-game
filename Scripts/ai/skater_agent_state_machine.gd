@@ -1575,6 +1575,16 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, shot_target_charge, _shoot_side_sign)
 		_shoot_wind_up_start = endpoints.start
 		_shoot_aim_target = endpoints.target
+		# Snap the smoothed cursor straight to the wind-up start world pos.
+		# Without this, _step_mouse_toward needs ~6 ticks to bridge the 2m+
+		# gap from the pre-aim cursor (~2m ahead of bot) to the wind-up start
+		# (~0.35m behind). During those ticks, intent_delta points -aim_dir
+		# (catch-up direction), which then flips +aim_dir once the cursor
+		# catches up — burning a direction-variance reset and leaking
+		# directional bias if the reset lands awkwardly. Snapping leaves
+		# a clean 60-tick lerp at pure +aim_dir for the charge tracker.
+		_mouse_pos = self_pos + endpoints.start
+		_mouse_pos_initialized = true
 		input.shoot_pressed = true
 
 	# Lerp mouse_world_pos from wind-up start to aim target across the
@@ -1755,6 +1765,13 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, pass_target_charge, +1.0)
 		_pass_wind_up_start = endpoints.start
 		_pass_aim_target = endpoints.target
+		# Snap the smoothed cursor to the wind-up start — same reasoning as
+		# the SHOOT_PRESSED snap. For passes the jump is even larger (cursor
+		# was at the receiver position 10m+ in front, wind-up start is just
+		# behind the bot), so the catch-up would otherwise consume most of
+		# the 60-tick window.
+		_mouse_pos = self_pos + endpoints.start
+		_mouse_pos_initialized = true
 		input.shoot_pressed = true
 
 	# Override the top-of-function "step toward clean_pass_aim" with the

@@ -72,6 +72,23 @@ func test_direction_comes_from_cursor_not_blade() -> void:
 	assert_almost_eq(ab.prev_blade_dir.x, 1.0, 0.001, "direction.x should be +1 (cursor direction)")
 	assert_almost_eq(ab.prev_blade_dir.z, 0.0, 0.001, "direction.z should be 0 (cursor direction, not blade)")
 
+func test_blade_motion_orthogonal_to_intent_contributes_zero_charge() -> void:
+	# Blade motion projected onto the intent direction: motion perpendicular
+	# to the player's drag (e.g., body-rotation tangent, IK catch-up after a
+	# press snap) projects to zero magnitude. This is what keeps a snapped
+	# wind-up's blade catch-up from over-charging passes.
+	ab.tick_wrister_charge(Vector3(0.5, 0.0, 0.0), Vector3(0.0, 0.0, 0.5), VARIANCE_DEG, MAX_DISTANCE)
+	assert_almost_eq(ab.charge_distance, 0.0, 0.001,
+			"orthogonal blade motion projects to zero, no charge accumulated")
+
+func test_blade_motion_against_intent_contributes_zero_charge() -> void:
+	# Blade moving opposite the drag direction (e.g., catching up from a
+	# previous pose toward the wind-up start while the cursor has snapped
+	# forward) projects to negative — clamped to zero, no charge added.
+	ab.tick_wrister_charge(Vector3(0.5, 0.0, 0.0), Vector3(-0.5, 0.0, 0.0), VARIANCE_DEG, MAX_DISTANCE)
+	assert_almost_eq(ab.charge_distance, 0.0, 0.001,
+			"blade motion opposite intent projects negative, clamped to zero")
+
 func test_direction_reversal_resets_charge() -> void:
 	ab.tick_wrister_charge(Vector3(0.5, 0.0, 0.0), Vector3(0.5, 0.0, 0.0), VARIANCE_DEG, MAX_DISTANCE)
 	var charge_after_first: float = ab.charge_distance
