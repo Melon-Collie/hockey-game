@@ -533,17 +533,6 @@ var _shoot_side_sign: float = 1.0
 # orient the wind-up's lateral offset onto the forehand side.
 var _handedness_perp_sign: float = 1.0
 
-# Aim DIRECTION (unit vector toward goal-shadow aim point) locked at
-# SHOOT_PRESSED entry. Self_pos still recomputes per tick so the
-# release position tracks real motion, but the direction is fixed for
-# the 250 ms charge. Without locking, every per-tick `_shoot_aim_dir`
-# call re-runs `compute_open_net_aim` against the goalie's current
-# position + velocity; a shuffling goalie can flip the larger-arc
-# choice mid-charge and the aim swings wildly, sending shots wide.
-# Locked direction = the bot committed to a target when it picked
-# SHOOT, and follows through.
-var _shoot_aim_dir_locked: Vector3 = Vector3.INF
-
 # Charged-pass bookkeeping. Mirrors the wrister charge structure
 # but with the sweep aimed at the receiver lead, not the goal
 # shadow. Set when the carrier picks PASS with pass_should_charge=
@@ -1540,12 +1529,16 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		if self_state != null:
 			var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
 			release_pos = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
-		var aim_dir_init: Vector3 = _shoot_aim_dir(snapshot, release_pos)
-		# Lock the aim direction for the entire charge. Self_pos drift
-		# from the projection is fine (release_pos tracks real motion),
-		# but the direction must stay fixed so a shuffling goalie
-		# can't flip the chosen arc mid-swing.
-		_shoot_aim_dir_locked = aim_dir_init
+		# Read aim_point directly (not just direction) so we can pass aim
+		# distance into _wind_up_endpoint_offsets for side-offset compensation.
+		var aim_point: Vector3 = _shot_aim_point(snapshot, release_pos)
+		var aim_vec: Vector3 = Vector3(aim_point.x - release_pos.x, 0.0, aim_point.z - release_pos.z)
+		var aim_dir_init: Vector3 = aim_vec.normalized() if aim_vec.length_squared() > 0.0001 else Vector3(0.0, 0.0, 1.0)
+		var aim_distance: float = aim_vec.length()
+		# aim_dir is captured once into the wind-up endpoint offsets below
+		# and held for the charge. A shuffling goalie cannot flip the
+		# chosen arc mid-swing because the endpoint offsets are frozen at
+		# tick 0; no per-tick aim recompute exists.
 		var forehand_perp_init: Vector3 = Vector3(
 				aim_dir_init.z * _handedness_perp_sign, 0.0, -aim_dir_init.x * _handedness_perp_sign)
 
@@ -1579,7 +1572,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# positions move forward at the bot's locomotion speed, leaving the
 		# blade's rel-skater motion as pure aim_dir lerp at the target rate.
 		var shot_target_charge: float = _max_wrister_charge_distance * BOT_WRISTER_SHOT_CHARGE_FRACTION
-		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, shot_target_charge, _shoot_side_sign)
+		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, shot_target_charge, _shoot_side_sign)
 		_shoot_wind_up_start = endpoints.start
 		_shoot_aim_target = endpoints.target
 		input.shoot_pressed = true
@@ -1635,23 +1628,58 @@ func _shoot_aim_dir(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # CANCEL the lerp velocity in that frame (charge accumulation would
 # stall or invert direction on rushes).
 #
-# Endpoint offsets:
-#   start  = -aim_dir * (target/2) + forehand_perp * side_sign * SIDE_OFFSET
-#   target = +aim_dir * (target/2) + forehand_perp * side_sign * SIDE_OFFSET
+# Inside the helper, aim_dir is pre-tilted to compensate for the lateral
+# release offset (see _aim_dir_compensated_for_side_offset). With the
+# compensation, the puck's trajectory from the release position passes
+# exactly through the aim point instead of flying parallel-offset to it.
+#
+# Endpoint offsets (in the compensated frame):
+#   start  = -aim_dir' * (target/2) + forehand_perp' * side_sign * SIDE_OFFSET
+#   target = +aim_dir' * (target/2) + forehand_perp' * side_sign * SIDE_OFFSET
 # Both lie inside ROM (target ≤ max_wrister_charge_distance ≈ 0.7 m,
 # half ≤ 0.35 m, side ≤ 0.15 m), so the blade IK chases the mouse 1:1
-# without clamping. Per-tick delta in rel-skater frame = +aim_dir *
+# without clamping. Per-tick delta in rel-skater frame = +aim_dir' *
 # (target/ticks), so accumulated charge = target exactly and
-# prev_blade_dir at release = aim_dir (shot fires straight at aim).
-func _wind_up_endpoint_offsets(aim_dir: Vector3, target_charge_m: float, side_sign: float) -> Dictionary:
+# prev_blade_dir at release = aim_dir' (the tilt-compensated direction).
+func _wind_up_endpoint_offsets(aim_dir: Vector3, aim_distance_m: float, target_charge_m: float, side_sign: float) -> Dictionary:
 	var half: float = target_charge_m * 0.5
+	var compensated: Vector3 = _aim_dir_compensated_for_side_offset(aim_dir, aim_distance_m, side_sign)
 	var forehand_perp: Vector3 = Vector3(
-			aim_dir.z * _handedness_perp_sign, 0.0, -aim_dir.x * _handedness_perp_sign)
+			compensated.z * _handedness_perp_sign, 0.0, -compensated.x * _handedness_perp_sign)
 	var perp: Vector3 = forehand_perp * side_sign
 	return {
-		"start":  -aim_dir * half + perp * BOT_WRISTER_SIDE_OFFSET_M,
-		"target": +aim_dir * half + perp * BOT_WRISTER_SIDE_OFFSET_M,
+		"start":  -compensated * half + perp * BOT_WRISTER_SIDE_OFFSET_M,
+		"target": +compensated * half + perp * BOT_WRISTER_SIDE_OFFSET_M,
 	}
+
+
+# Pre-tilts aim_dir to compensate for the wind-up's lateral release
+# offset. With symmetric perp offsets on both endpoints (start and
+# target both at +perp*SIDE_OFFSET), the puck releases SIDE_OFFSET meters
+# perpendicular to the aim line and flies in pure aim_dir — missing the
+# aim point by SIDE_OFFSET at every distance.
+#
+# Rotating the wind-up frame by θ = asin(SIDE_OFFSET / aim_distance)
+# toward -perp makes the puck trajectory pass exactly through the aim
+# point. Closed-form solve: setting up the puck flight from the rotated
+# release in the rotated aim_dir and requiring it to pass through
+# (aim_distance, 0) in the original frame yields side/sin(θ) = aim_distance.
+#
+# Practical impact at SIDE_OFFSET = 0.15 m:
+#   aim_distance = 5 m   → θ ≈ 1.72° (~3% of goal width corrected)
+#   aim_distance = 20 m  → θ ≈ 0.43° (smaller absolute correction, but
+#                                     more important — defenders fill the
+#                                     lane harder past 10 m)
+# Degenerate guard: if aim_distance is ≤ SIDE_OFFSET, the aim point is
+# inside the wind-up zone (unreachable shot setup); return raw aim_dir
+# rather than asin'ing past 1.
+func _aim_dir_compensated_for_side_offset(aim_dir: Vector3, aim_distance_m: float, side_sign: float) -> Vector3:
+	if aim_distance_m <= BOT_WRISTER_SIDE_OFFSET_M:
+		return aim_dir
+	var theta: float = asin(BOT_WRISTER_SIDE_OFFSET_M / aim_distance_m)
+	var forehand_perp: Vector3 = Vector3(
+			aim_dir.z * _handedness_perp_sign, 0.0, -aim_dir.x * _handedness_perp_sign)
+	return aim_dir * cos(theta) - forehand_perp * side_sign * sin(theta)
 
 
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -1712,12 +1740,13 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		# the stepped mouse so a single-tick mouse residual can't tilt it.
 		var sweep: Vector3 = clean_pass_aim - self_pos
 		sweep.y = 0.0
-		var aim_dir_init: Vector3 = sweep.normalized() if sweep.length_squared() > 0.0001 else Vector3(0.0, 0.0, 1.0)
+		var aim_distance: float = sweep.length()
+		var aim_dir_init: Vector3 = sweep.normalized() if aim_distance > 0.01 else Vector3(0.0, 0.0, 1.0)
 		var pass_target_charge: float = _max_wrister_charge_distance * BOT_WRISTER_PASS_CHARGE_FRACTION
 		# Pass always sweeps on the forehand side — no defender-aware
 		# side flip like SHOOT_PRESSED (passes don't justify backhand power
 		# penalty trade-offs the same way).
-		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, pass_target_charge, +1.0)
+		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, pass_target_charge, +1.0)
 		_pass_wind_up_start = endpoints.start
 		_pass_aim_target = endpoints.target
 		input.shoot_pressed = true
@@ -2804,7 +2833,6 @@ func _set_state(s: State) -> void:
 		# charge tracker from the blade's current position at the entry edge.
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
-			_shoot_aim_dir_locked = Vector3.INF
 		if s == State.PASS_PRESSED:
 			_pass_charge_tick = 0
 		if s == State.ONE_TIMER_PRESSED:
