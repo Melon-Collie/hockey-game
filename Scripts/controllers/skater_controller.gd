@@ -129,17 +129,53 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var head_track_max_deg: float = 60.0
 
 # ── Slapper Tuning ────────────────────────────────────────────────────────────
-@export var slapper_wind_up_height: float = 0.4
+@export var slapper_wind_up_height: float = 1.0
 @export var slapper_wind_up_time: float = 0.3
 @export var slapper_zone_radius: float = 0.5
-@export var slapper_zone_offset_x: float = 0.8  # lateral offset toward blade side
-@export var slapper_zone_offset_z: float = -1.0  # forward offset (negative = in front of player)
+# Where the one-timer reception zone (and slap-with-puck pin) lives. Heavily
+# lateral with a small forward bias matches a real cross-ice one-timer stance:
+# puck arrives on the blade side, slightly ahead of the player's centre, so
+# they can swing through it without reaching forward.
+@export var slapper_zone_offset_x: float = 1.0  # lateral offset toward blade side
+@export var slapper_zone_offset_z: float = -0.4  # forward offset (negative = in front of player)
 @export var min_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MIN_M_S
 @export var max_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 @export var max_slapper_charge_time: float = 0.7
 @export var slapper_blade_x: float = 1.0
 @export var slapper_blade_z: float = -0.5
 @export var slapper_aim_arc: float = 45.0
+# Wind-up coil: layered on top of the aim-tracking torso angle. Rotates the
+# back shoulder away from the target (for RHS that's CW from above, i.e. left
+# shoulder points at the puck) while pulling the top hand up and across the
+# body toward the back shoulder. Eased with sqrt so most of the coil happens
+# early and the latter part of the wind-up is a held "loaded" pose.
+@export var slapper_wind_up_twist_deg: float = 80.0
+@export var slapper_wind_up_hand_up: float = 0.30      # top hand rises (m)
+# Pushes the top hand forward in upper-body-local space (negative local Z).
+# After the torso coil, this body-local "forward" points along the rotated
+# body's new forward direction in world — so for an LHS player coiled CCW
+# the hand ends up upper-left, for an RHS player coiled CW it ends up
+# upper-right. The hand rides the rotation but is placed in front of the
+# back shoulder rather than glued to it.
+@export var slapper_wind_up_hand_forward: float = 0.35
+# Lateral body-local offsets — left at 0 because they fight the coil (a
+# body-local +Z offset rotates to a world -X under the coil, pulling the hand
+# off the back-shoulder side). Available to tune if a held pose needs extra
+# lateral character without flipping that direction.
+@export var slapper_wind_up_hand_back: float = 0.0     # top hand pulls behind shoulder (+local z, m)
+@export var slapper_wind_up_hand_inward: float = 0.0   # top hand pulls across body toward back shoulder (m)
+# Where the blade lives at full wind-up (in body-local space, before the body
+# coils). Forward in upper-body-local (negative Z) places the blade ahead of
+# the rotated body in world space — same trick as the top hand. With the
+# coil this lands the blade on the same side as the back-shoulder rotated
+# *through* world-forward, so the stick reads as loaded across the front of
+# the player rather than wrapping behind the back shoulder.
+@export var slapper_wind_up_blade_x: float = 0.4       # blade lateral offset at full charge (was slapper_blade_x=1.0)
+@export var slapper_wind_up_blade_z: float = -0.4      # blade depth at full charge — negative = forward in body-local
+# Snappier lerp during the slapshot coil — the default upper_body_return_speed
+# is tuned for gentle aim-tracking and only reaches ~85% of an 80° target
+# inside the 0.3s wind-up window, which reads as a half-finished coil.
+@export var slapper_wind_up_lerp_speed: float = 18.0
 @export var slapper_elevation_target_height: float = 0.65
 @export var one_timer_window_duration: float = 0.45  # seconds after puck arrives to release
 @export var one_timer_leniency_time: float = 0.08   # seconds of puck travel added to zone radius as leniency
@@ -215,7 +251,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.apply_slapper_velocity_drag = _apply_slapper_velocity_drag
 	_cb.apply_block_movement = _apply_block_movement
 	_sm.setup(_cb, _aiming)
-	_pose.setup(skater, _sm, self)
+	_pose.setup(skater, _sm, _aiming, self)
 
 # Reach ROM is derived from arm length, not an independent tunable. These
 # ratios reflect anatomy: forehand reach is shoulder-joint-limited (about
@@ -404,12 +440,24 @@ func _process_input(input: InputState, delta: float) -> void:
 	# rotates toward the blade, re-expressing these in the new local frame gives
 	# the bottom-hand IK the post-rotation geometry — so arm reach is evaluated
 	# as if the body has fully caught up, independent of lerp speed.
-	var blade_world_pre: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
-	var hand_world_pre: Vector3 = skater.upper_body_to_global(skater.get_top_hand_position())
+	#
+	# Skip the preservation during slapper wind-up: the slapper pose is authored
+	# in upper-body-local space, so we WANT the stick to travel with the coiling
+	# torso (otherwise the body rotates underneath a stationary hand and the
+	# coil is invisible).
+	var is_slapper_charge: bool = _sm.get_state() in [
+			SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK,
+			SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK]
+	var blade_world_pre: Vector3
+	var hand_world_pre: Vector3
+	if not is_slapper_charge:
+		blade_world_pre = skater.upper_body_to_global(skater.get_blade_position())
+		hand_world_pre = skater.upper_body_to_global(skater.get_top_hand_position())
 	_pose.apply_upper_body(delta)
 	_pose.apply_head_tracking(input, delta)
-	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
-	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
+	if not is_slapper_charge:
+		skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
+		skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
 	_ik.update_bottom_hand()
 	# All mesh updates happen after upper body rotation is finalised so look_at
 	# orientations are computed against the correct parent transform this frame.
@@ -518,6 +566,11 @@ func on_puck_picked_up_network() -> void:
 		# the shot is cancelled and they keep the puck in carry state.
 		skater.set_slapper_zone(false)
 		skater.set_slapper_mode(true)
+		# Pin the just-attached puck to the ice for the one-timer window — same
+		# as the carry → slapshot entry path. Without this the puck snaps to
+		# the overhead blade contact the moment it attaches.
+		var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
+		skater.enter_slapshot_pinning(blade_side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
 		_aiming.one_timer_window_timer = one_timer_window_duration + NetworkManager.get_latest_rtt_ms() / 2000.0
 		_sm.set_state(State.SLAPPER_CHARGE_WITH_PUCK)
 		if show_one_timer_indicator:
@@ -570,12 +623,10 @@ func _transition_to_skating() -> void:
 	skater.set_lower_body_lag(0.0)
 	skater.set_slapper_mode(false)
 	skater.set_slapper_zone(false)
-	if show_one_timer_indicator:
-		skater.set_slapper_indicator(false)
-		skater.set_slapshot_arrow(false)
-		skater.set_charge_ring_visible(false)
-		if was_charging:
-			skater.trigger_charge_lost_flash()
+	skater.exit_slapshot_pinning()
+	_hide_slapshot_hud()
+	if show_one_timer_indicator and was_charging:
+		skater.trigger_charge_lost_flash()
 
 func _enter_shot_block() -> void:
 	_sm.set_state(State.SHOT_BLOCKING)
@@ -615,6 +666,12 @@ func _enter_slapper_charge(input: InputState) -> void:
 	skater.set_lower_body_lag(0.0)
 	if has_puck:
 		skater.set_slapper_mode(true)
+		# Pin the carried puck to the slapper-zone ice spot for the duration of
+		# the wind-up so it doesn't ride up with the blade as the stick lifts
+		# overhead. The pin travels with the player (so coasting/braking still
+		# works) and the shot fires from this position when released — see
+		# Puck.release's slapshot branch.
+		skater.enter_slapshot_pinning(blade_side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
 		_sm.set_state(State.SLAPPER_CHARGE_WITH_PUCK)
 	else:
 		# Activate the ice-level slapper zone so the puck can be detected at
@@ -674,6 +731,18 @@ func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 	_sm.follow_through_is_slapper = true
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
+	# Hide the slapshot HUD the moment the shot fires. Follow-through is body
+	# animation only — leaving the ring/arrow visible during that ~0.5s makes
+	# them appear to rotate with the skater, which reads as weird.
+	# _transition_to_skating still hides everything at the end as a safety net.
+	_hide_slapshot_hud()
+
+func _hide_slapshot_hud() -> void:
+	if not show_one_timer_indicator:
+		return
+	skater.set_slapper_indicator(false)
+	skater.set_slapshot_arrow(false)
+	skater.set_charge_ring_visible(false)
 
 func _update_wrister_charge(input: InputState) -> void:
 	if not has_puck:
@@ -717,6 +786,9 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	result.power *= 1.0 + one_timer_center_power_bonus * (2.0 * proximity - 1.0)
 	if not is_replaying:
 		one_timer_release_requested.emit(result.direction, result.power)
+	# Same as _release_slapper — hide the HUD as soon as the shot fires so it
+	# doesn't ride along through the follow-through.
+	_hide_slapshot_hud()
 	return {fired = true, direction = result.direction, follow_through_duration = follow_through_duration}
 
 func _apply_block_movement(input: InputState, delta: float) -> void:

@@ -36,8 +36,16 @@ func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
 func apply_slapper_blade_position() -> void:
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 	var wind_up_t: float = clampf(_aiming.slapper_charge_timer / _controller.slapper_wind_up_time, 0.0, 1.0)
-	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x
-	var blade_z: float = _skater.shoulder.position.z + _controller.slapper_blade_z
+	# Front-loaded ease so the coil snaps into place and the back half of the
+	# wind-up is a held loaded pose — matches the torso coil in SkaterPoseCoordinator.
+	var wind_up_eased: float = sqrt(wind_up_t)
+	# Lerp blade XZ from the "ready" position out to the side to the "loaded"
+	# position pulled in and back, so the stick wraps over the back shoulder
+	# once the torso coil completes.
+	var blade_x_offset: float = lerpf(_controller.slapper_blade_x, _controller.slapper_wind_up_blade_x, wind_up_eased)
+	var blade_z_offset: float = lerpf(_controller.slapper_blade_z, _controller.slapper_wind_up_blade_z, wind_up_eased)
+	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * blade_x_offset
+	var blade_z: float = _skater.shoulder.position.z + blade_z_offset
 	var current_blade_y: float = lerpf(
 			_ik.blade_y_lean_corrected(blade_x, blade_z),
 			_controller.slapper_wind_up_height,
@@ -48,7 +56,16 @@ func apply_slapper_blade_position() -> void:
 	var clamped_heel: Vector3 = blade_world
 	if _controller.has_puck:
 		clamped_heel = _ik.clamp_blade_from_goalies(clamped_heel)
-	var hand_pos := Vector3(_skater.shoulder.position.x, _controller.hand_rest_y, _skater.shoulder.position.z)
+	# Lift the top hand and push it forward in upper-body-local space. The
+	# forward push (negative local Z) rides the torso coil — for an LHS player
+	# the body rotates CCW so local -Z maps to world upper-left in top-down
+	# view, putting the hand out in front of the rotated body instead of glued
+	# to the back-shoulder marker. hand_back/hand_inward stay opt-in (default 0)
+	# since they fight the coil direction.
+	var hand_pos := Vector3(
+			_skater.shoulder.position.x - blade_side_sign * _controller.slapper_wind_up_hand_inward * wind_up_eased,
+			_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased,
+			_skater.shoulder.position.z + _controller.slapper_wind_up_hand_back * wind_up_eased - _controller.slapper_wind_up_hand_forward * wind_up_eased)
 	var hand_world: Vector3 = _skater.upper_body_to_global(hand_pos)
 	var shaft: Vector3 = clamped_heel - hand_world
 	shaft.y = 0.0

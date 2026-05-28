@@ -32,11 +32,14 @@ var _prev_upper_body_angle: float = 0.0
 # ── References ────────────────────────────────────────────────────────────────
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
+var _aiming: SkaterAimingBehavior = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
 
-func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
+func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
+		controller: SkaterController) -> void:
 	_skater = skater
 	_sm = sm
+	_aiming = aiming
 	_controller = controller
 	_prev_facing_angle = atan2(facing.x, facing.y)
 	_prev_upper_body_angle = upper_body_angle
@@ -138,16 +141,22 @@ func apply_upper_body(delta: float) -> void:
 		return
 
 	if _sm.get_state() in [State.SLAPPER_CHARGE_WITH_PUCK, State.SLAPPER_CHARGE_WITHOUT_PUCK]:
-		# Hold upper body facing the locked shot direction throughout the wind-up.
-		# Re-computed from world space each frame so the torso stays on target
-		# even if the feet pivot while skating.
+		# Hold upper body facing the locked shot direction throughout the wind-up,
+		# then layer the coil rotation on top: back shoulder pulls away from the
+		# target as the wind-up timer fills, ending in a loaded stance with the
+		# non-stick shoulder pointing at the puck. Re-computed from world space
+		# each frame so the torso stays on target even if the feet pivot.
 		if _sm.locked_slapper_dir.length_squared() > 0.0001:
 			var locked_world := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 			var local_dir := _skater.global_transform.basis.inverse() * locked_world
 			var locked_angle := atan2(local_dir.x, -local_dir.z)
 			var max_twist := deg_to_rad(_controller.upper_body_max_twist_deg)
-			var target: float = clampf(-locked_angle * _controller.upper_body_twist_ratio, -max_twist, max_twist)
-			upper_body_angle = lerp_angle(upper_body_angle, target, _controller.upper_body_return_speed * delta)
+			var aim_target: float = clampf(-locked_angle * _controller.upper_body_twist_ratio, -max_twist, max_twist)
+			var wind_up_t: float = clampf(_aiming.slapper_charge_timer / _controller.slapper_wind_up_time, 0.0, 1.0)
+			var wind_up_eased: float = sqrt(wind_up_t)
+			var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+			var coil: float = -blade_side_sign * deg_to_rad(_controller.slapper_wind_up_twist_deg) * wind_up_eased
+			upper_body_angle = lerp_angle(upper_body_angle, aim_target + coil, _controller.slapper_wind_up_lerp_speed * delta)
 			_skater.set_upper_body_rotation(upper_body_angle)
 		return
 
