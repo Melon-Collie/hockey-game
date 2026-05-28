@@ -106,7 +106,7 @@ var preferred_color_slot: int = -1  # team color preset slot index; -1 → use t
 var attr_speed:   int = PlayerAttributes.LEVEL_MEDIUM
 var attr_agility: int = PlayerAttributes.LEVEL_MEDIUM
 var attr_size:    int = PlayerAttributes.LEVEL_MEDIUM
-var attr_shot:    int = PlayerAttributes.LEVEL_MEDIUM
+var attr_strength:    int = PlayerAttributes.LEVEL_MEDIUM
 var last_ip: String = ""
 var master_volume: float = 1.0
 var sfx_volume: float = 1.0
@@ -176,7 +176,7 @@ func save() -> void:
 	cfg.set_value("player", "attr_speed",   attr_speed)
 	cfg.set_value("player", "attr_agility", attr_agility)
 	cfg.set_value("player", "attr_size",    attr_size)
-	cfg.set_value("player", "attr_shot",    attr_shot)
+	cfg.set_value("player", "attr_strength",    attr_strength)
 	cfg.set_value("player", "last_ip", last_ip)
 	cfg.set_value("audio", "master_volume", master_volume)
 	cfg.set_value("audio", "sfx_volume", sfx_volume)
@@ -384,7 +384,7 @@ func _load() -> void:
 				PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
 		attr_size    = clampi(int(cfg.get_value("player", "attr_size",    PlayerAttributes.LEVEL_MEDIUM)),
 				PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
-		attr_shot    = clampi(int(cfg.get_value("player", "attr_shot",    PlayerAttributes.LEVEL_MEDIUM)),
+		attr_strength    = clampi(int(cfg.get_value("player", "attr_strength",    PlayerAttributes.LEVEL_MEDIUM)),
 				PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
 		last_ip = cfg.get_value("player", "last_ip", "")
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 1.0), 0.0, 1.0)
@@ -432,7 +432,7 @@ func _load() -> void:
 
 
 func get_player_attributes() -> PlayerAttributes:
-	return PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_shot)
+	return PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength)
 
 
 func set_player_attributes(attrs: PlayerAttributes) -> void:
@@ -441,7 +441,7 @@ func set_player_attributes(attrs: PlayerAttributes) -> void:
 	attr_speed   = attrs.speed
 	attr_agility = attrs.agility
 	attr_size    = attrs.size
-	attr_shot    = attrs.shot
+	attr_strength = attrs.strength
 
 
 func is_tutorial_complete(id: String) -> bool:

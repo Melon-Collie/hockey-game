@@ -260,11 +260,11 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 		return
 	if not _attr_base_captured:
 		_capture_attribute_bases()
-	var m_speed:   float = attrs.speed_mult()
-	var m_agility: float = attrs.agility_mult()
-	var m_size:    float = attrs.size_mult()
-	var m_shot:    float = attrs.shot_mult()
-	var m_height:  float = attrs.height_mult()
+	var m_speed:    float = attrs.speed_mult()
+	var m_agility:  float = attrs.agility_mult()
+	var m_size:     float = attrs.size_mult()
+	var m_strength: float = attrs.strength_mult()
+	var m_height:   float = attrs.height_mult()
 	thrust    = _base_thrust    * m_speed
 	max_speed = _base_max_speed * m_speed
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
@@ -278,15 +278,23 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# Slick agile is how cleanly they transition between those directions.
 	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
 	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.agility_carry_mult()
-	min_wrister_power = _base_min_wrister_power * m_shot
-	max_wrister_power = _base_max_wrister_power * m_shot
-	quick_shot_power  = _base_quick_shot_power  * m_shot
-	min_slapper_power = _base_min_slapper_power * m_shot
-	max_slapper_power = _base_max_slapper_power * m_shot
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.shot_charge_mult()
-	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
-	skater.weight                       = _base_skater_weight                  * m_size
-	skater.body_check_transfer          = _base_skater_body_check_transfer     * m_size
+	# Shot powers use the narrower Strength-Shot multiplier (±15%) rather
+	# than canonical Strength (±25%) so the wrister floor stays playable
+	# for low-Strength shooters. Charge speed uses its own inverted table.
+	var m_shot_power: float = attrs.strength_shot_mult()
+	min_wrister_power = _base_min_wrister_power * m_shot_power
+	max_wrister_power = _base_max_wrister_power * m_shot_power
+	quick_shot_power  = _base_quick_shot_power  * m_shot_power
+	min_slapper_power = _base_min_slapper_power * m_shot_power
+	max_slapper_power = _base_max_slapper_power * m_shot_power
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.strength_charge_mult()
+	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.strength_charge_mult()
+	# Weight uses the narrower SIZE_WEIGHT spread (±12%) instead of canonical
+	# Size (±18%) so the weight_ratio in the check formula doesn't dominate
+	# the Strength-driven body_check_transfer. Brace and hitbox stay on
+	# canonical Size.
+	skater.weight                       = _base_skater_weight                  * attrs.size_weight_mult()
+	skater.body_check_transfer          = _base_skater_body_check_transfer     * m_strength
 	# Inverse: brace_resistance is a coefficient on incoming transfer when
 	# the victim is braced — *lower* = better resistance. A bigger-Size
 	# player should resist knockback better, so the multiplier flips.

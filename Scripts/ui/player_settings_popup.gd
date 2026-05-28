@@ -10,7 +10,7 @@ signal handedness_changed(is_left: bool)
 signal preferred_color_changed(color_slot: int)
 signal attributes_changed(attrs: PlayerAttributes)
 
-const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Size", "Shot"]
+const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Size", "Strength"]
 const _ATTR_NONE: int = -1
 
 # Controls — kept as refs so Cancel can restore them from the snapshot.

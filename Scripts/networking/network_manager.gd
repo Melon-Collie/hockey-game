@@ -414,7 +414,7 @@ func _on_connected_to_server() -> void:
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
 	_peer_attributes[1] = local_attrs
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
-			local_attrs.speed, local_attrs.agility, local_attrs.size, local_attrs.shot)
+			local_attrs.speed, local_attrs.agility, local_attrs.size, local_attrs.strength)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -648,13 +648,13 @@ func _broadcast_state() -> void:
 @rpc("any_peer", "reliable")
 func request_join(is_left_handed: bool, player_name: String, jersey_number: int = 10,
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
+		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_strength: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
 	var sender_id: int = multiplayer.get_remote_sender_id()
 	_peer_handedness[sender_id] = is_left_handed
 	var sanitized_name: String = player_name.strip_edges().left(10)
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
 	_peer_numbers[sender_id] = jersey_number
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_shot)
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength)
 	# Set a generous disconnect window here rather than in _on_peer_connected —
 	# peer_connected fires before ENet registers the peer, so get_peer() asserts.
 	# By the time any RPC arrives the peer is guaranteed to be in the table.
@@ -967,8 +967,8 @@ func assign_player_slot(team_slot: int, team_id: int, jersey_color: Color, helme
 @rpc("authority", "reliable")
 func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10,
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
-	var attrs := PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_shot)
+		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_strength: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
+	var attrs := PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength)
 	_peer_attributes[peer_id] = attrs
 	remote_skater_spawn_requested.emit(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number, attrs)
 
@@ -1172,7 +1172,7 @@ func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey
 		return
 	var attrs: PlayerAttributes = attributes if attributes != null else PlayerAttributes.all_medium()
 	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number,
-			attrs.speed, attrs.agility, attrs.size, attrs.shot)
+			attrs.speed, attrs.agility, attrs.size, attrs.strength)
 
 func send_sync_existing_players(peer_id: int, player_data: Array) -> void:
 	sync_existing_players.rpc_id(peer_id, player_data)

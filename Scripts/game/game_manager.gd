@@ -2431,7 +2431,7 @@ func _collect_existing_player_data() -> Array[Array]:
 		existing.append([peer_id, r.team_slot, r.team.team_id,
 				r.jersey_color, r.helmet_color, r.pants_color,
 				r.is_left_handed, r.player_name, r.jersey_number,
-				attrs.speed, attrs.agility, attrs.size, attrs.shot])
+				attrs.speed, attrs.agility, attrs.size, attrs.strength])
 	return existing
 
 
