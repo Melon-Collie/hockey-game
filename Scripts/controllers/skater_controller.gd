@@ -531,6 +531,12 @@ signal puck_release_requested(direction: Vector3, power: float, is_slapper: bool
 # carried — the leniency one-timer. GameManager acquires + releases the puck;
 # the controller transitions to follow-through immediately.
 signal one_timer_release_requested(direction: Vector3, power: float)
+# Fired when a carrying player commits to a slapshot wind-up. The puck should
+# leave the blade and stay on the ice — the wind-up lifts the stick overhead
+# and pulls it back behind the body, and the shot fires from the puck's ice
+# position when released. Cancelling the wind-up (block) loses the puck —
+# accepted consequence of committing to a slap.
+signal puck_drop_for_slapshot_requested
 
 func _do_release(direction: Vector3, power: float) -> void:
 	if is_replaying:
@@ -647,6 +653,8 @@ func _enter_slapper_charge(input: InputState) -> void:
 	if has_puck:
 		skater.set_slapper_mode(true)
 		_sm.set_state(State.SLAPPER_CHARGE_WITH_PUCK)
+		if not is_replaying:
+			puck_drop_for_slapshot_requested.emit()
 	else:
 		# Activate the ice-level slapper zone so the puck can be detected at
 		# ground level even though the blade is lifted during wind-up.
