@@ -1594,6 +1594,15 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	var t: float = float(_shoot_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
 	input.mouse_world_pos = _step_mouse_toward(self_pos + _shoot_wind_up_start.lerp(_shoot_aim_target, t))
 
+	# Synthesize mouse_screen_pos walking along the compensated aim direction
+	# (= lerp endpoints' world direction). The charge tracker reads its
+	# DIRECTION from screen-pos delta, which the bot doesn't naturally have
+	# — fake it so the per-tick screen delta matches the world sweep.
+	# Magnitude is irrelevant (tracker only reads the normalized direction);
+	# we just need consecutive ticks to differ by a consistent direction.
+	var sweep_dir_3d: Vector3 = (_shoot_aim_target - _shoot_wind_up_start).normalized()
+	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_shoot_charge_tick)
+
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		# Still charging — keep shoot_held high.
 		input.shoot_held = true
@@ -1780,6 +1789,12 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# _wind_up_endpoint_offsets doc for why).
 	var t: float = float(_pass_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
 	input.mouse_world_pos = _step_mouse_toward(self_pos + _pass_wind_up_start.lerp(_pass_aim_target, t))
+
+	# Synthesize mouse_screen_pos walking along the compensated aim direction
+	# — same reasoning as the SHOOT_PRESSED synthesis. Charge tracker reads
+	# direction from screen-pos delta; we fake it from the lerp endpoints.
+	var sweep_dir_3d: Vector3 = (_pass_aim_target - _pass_wind_up_start).normalized()
+	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_pass_charge_tick)
 
 	if _pass_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		input.shoot_held = true

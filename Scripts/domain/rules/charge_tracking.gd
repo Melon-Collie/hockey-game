@@ -2,18 +2,24 @@ class_name ChargeTracking
 
 # Accumulates wrister charge from two decoupled signals:
 #   - DIRECTION & variance check: derived from the cursor (intent) delta.
-#     Captures what the player is dragging toward — independent of body
-#     pose, blade IK convergence, or ROM clamping.
+#     The intent_pos is conventionally screen space (pixel position
+#     packed as Vector3(x, 0, y)), which is the camera-immune frame —
+#     pixel motion captures the player's mouse drag intent independent
+#     of camera lag, body rotation, or skater locomotion. World-space
+#     intent leaks transient bias from camera-follow lag during brakes
+#     and direction changes; screen-space doesn't.
 #   - MAGNITUDE: blade delta PROJECTED onto the intent direction. Only
 #     blade motion aligned with the player's drag intent counts toward
-#     charge — blade motion at an angle (e.g., body-rotation tangent,
-#     IK catch-up after a press snap, locomotion residue) is filtered
-#     out. ROM clamping still gates magnitude because a pinned blade
-#     produces zero blade_delta regardless of intent.
+#     charge — blade motion at an angle (body-rotation tangent, IK
+#     catch-up after a press snap, locomotion residue) is filtered out.
+#     ROM clamping still gates magnitude because a pinned blade produces
+#     zero blade_delta regardless of intent.
 #
-# Both positions are passed in the same frame (typically world XZ minus
-# skater translation, so locomotion / camera drift cancels out). The
-# tracker itself doesn't care which frame as long as it's consistent.
+# Frames don't need to match between the two signals — intent_pos can be
+# in screen pixels while blade_pos is in world meters, because direction
+# only uses intent_pos and magnitude only uses blade_pos. The dot product
+# is direction × blade_delta and only the SIGN of the dot matters when
+# you've already factored out unit conversion (intent_pos normalized).
 #
 # Resets the accumulator when the cursor's direction of motion changes
 # by more than max_direction_variance_deg — models the player "setting

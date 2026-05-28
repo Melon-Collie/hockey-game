@@ -637,13 +637,12 @@ func _enter_slapper_charge(input: InputState) -> void:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 
 func _get_charge_direction() -> Vector3:
-	# prev_blade_dir is the cursor drag delta in world XZ, derived via
-	# mouse_world_pos which is projected through the local camera — so any
-	# attack_up camera flip is already baked into the world direction.
-	# Don't sign-flip here based on team_id + attack_up; doing so would
-	# invert correct shots (an earlier override did this because the
-	# pre-blade-driven charge tracker read screen pixels directly,
-	# bypassing the camera).
+	# prev_blade_dir is the screen-space cursor drag direction, packed
+	# (x, 0, y) and treated as a world XZ vector. Screen Y → world Z
+	# directly with no flip for the attack_up camera, so an attack_up
+	# team-1 player whose camera is rotated 180° has prev_blade_dir
+	# pointing at their own goal. LocalController overrides this to
+	# apply the sign flip for that specific case.
 	return _aiming.prev_blade_dir
 
 func _release_wrister(input: InputState) -> void:
@@ -693,11 +692,11 @@ func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 func _update_wrister_charge(input: InputState) -> void:
 	if not has_puck:
 		return
-	# Direction signal: cursor world position with skater translation subtracted.
-	# Camera drift (which moves with the skater) cancels out, leaving pure player
-	# drag intent. Independent of body pose, IK convergence, ROM clamping.
-	var intent_pos_rel_skater: Vector3 = input.mouse_world_pos - skater.global_position
-	intent_pos_rel_skater.y = 0.0
+	# Direction signal: cursor SCREEN position, packed (x, 0, y) for the
+	# tracker's Vector3 interface. Screen space is the camera-immune
+	# frame — pixel motion captures the player's mouse drag intent
+	# independent of camera lag, body rotation, or skater locomotion.
+	var intent_pos := Vector3(input.mouse_screen_pos.x, 0.0, input.mouse_screen_pos.y)
 	# Magnitude signal: blade world position with skater translation subtracted.
 	# ROM clamping inside apply_blade_from_mouse has already run this tick, so a
 	# cursor past the reach limit produces zero delta here — no charge growth
@@ -706,7 +705,7 @@ func _update_wrister_charge(input: InputState) -> void:
 	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
 	blade_pos_rel_skater.y = 0.0
 	_aiming.tick_wrister_charge(
-			intent_pos_rel_skater, blade_pos_rel_skater,
+			intent_pos, blade_pos_rel_skater,
 			max_charge_direction_variance, max_wrister_charge_distance)
 	skater.shot_charge = _aiming.charge_distance / max_wrister_charge_distance
 	# Charge ring is local-only; gate on the same flag as the one-timer reticle.

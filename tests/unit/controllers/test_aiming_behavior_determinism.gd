@@ -34,8 +34,8 @@ func test_wrister_charge_deterministic_from_neutral_start() -> void:
 			"charge_distance must be deterministic from identical input sequence")
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir,
 			"prev_blade_dir must match")
-	assert_eq(a.prev_intent_pos_rel_skater, b.prev_intent_pos_rel_skater,
-			"prev_intent_pos_rel_skater must match")
+	assert_eq(a.prev_intent_pos, b.prev_intent_pos,
+			"prev_intent_pos must match")
 	assert_eq(a.prev_blade_pos_rel_skater, b.prev_blade_pos_rel_skater,
 			"prev_blade_pos_rel_skater must match")
 
@@ -48,11 +48,11 @@ func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 	var b := SkaterAimingBehavior.new()
 	a.charge_distance = 0.4
 	a.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
-	a.prev_intent_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
+	a.prev_intent_pos = Vector3(0.3, 0.0, 0.2)
 	a.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
 	b.charge_distance = 0.4
 	b.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
-	b.prev_intent_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
+	b.prev_intent_pos = Vector3(0.3, 0.0, 0.2)
 	b.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
 	var sweep: Array[Vector3] = [
 		Vector3(0.35, 0.0, 0.22), Vector3(0.4, 0.0, 0.25), Vector3(0.45, 0.0, 0.28), Vector3(0.5, 0.0, 0.32),
@@ -62,7 +62,7 @@ func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 		b.tick_wrister_charge(p, p, 35.0, 2.0)
 	assert_eq(a.charge_distance, b.charge_distance)
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir)
-	assert_eq(a.prev_intent_pos_rel_skater, b.prev_intent_pos_rel_skater)
+	assert_eq(a.prev_intent_pos, b.prev_intent_pos)
 	assert_eq(a.prev_blade_pos_rel_skater, b.prev_blade_pos_rel_skater)
 
 

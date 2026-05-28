@@ -182,16 +182,15 @@ func _state_shot_blocking(skater: Skater, input: InputState, delta: float, _has_
 func _enter_wrister_aim(skater: Skater, input: InputState) -> void:
 	_state = State.WRISTER_AIM
 	shot_dir = Vector3.ZERO
-	# Seed both the cursor (intent) and the blade in the same skater-translation-
-	# subtracted frame the charge tracker reads each tick — first tick after press
-	# produces a delta of zero against this baseline, so a spurious wide-angle
-	# direction-variance reset can't fire on the first frame.
-	var intent_pos_rel_skater: Vector3 = input.mouse_world_pos - skater.global_position
-	intent_pos_rel_skater.y = 0.0
+	# Seed both the cursor (screen-space) and the blade (skater-translation-
+	# subtracted world) baselines the charge tracker reads each tick — first
+	# tick after press produces a delta of zero against these, so a spurious
+	# wide-angle direction-variance reset can't fire on the first frame.
+	var intent_pos := Vector3(input.mouse_screen_pos.x, 0.0, input.mouse_screen_pos.y)
 	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
 	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
 	blade_pos_rel_skater.y = 0.0
-	_aiming.reset_wrister(intent_pos_rel_skater, blade_pos_rel_skater)
+	_aiming.reset_wrister(intent_pos, blade_pos_rel_skater)
 
 
 func _cancel_slapper_internal() -> void:

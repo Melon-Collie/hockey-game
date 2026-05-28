@@ -312,7 +312,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# inflates O(N). Save the live values and restore after replay; live tick
 	# state is the truth, replay's pass through the same inputs is discarded.
 	var pre_charge_distance: float = _aiming.charge_distance
-	var pre_charge_prev_intent_pos: Vector3 = _aiming.prev_intent_pos_rel_skater
+	var pre_charge_prev_intent_pos: Vector3 = _aiming.prev_intent_pos
 	var pre_charge_prev_blade_pos: Vector3 = _aiming.prev_blade_pos_rel_skater
 	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
 	skater.global_position = server_state.position
@@ -377,7 +377,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.wrister_start_blade_local_x = pre_wrister_start_blade_x
 	_aiming.charge_distance = pre_charge_distance
-	_aiming.prev_intent_pos_rel_skater = pre_charge_prev_intent_pos
+	_aiming.prev_intent_pos = pre_charge_prev_intent_pos
 	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
 	_aiming.prev_blade_dir = pre_charge_prev_blade_dir
 	# Server authority on shot state — but never revert past a release transition.
@@ -446,6 +446,21 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if OS.is_debug_build() and skater.visual_offset.length() > 0.05:
 		push_warning("Reconcile: %.3fm snap applied (inputs replayed: %d)" \
 				% [skater.visual_offset.length(), _input_history.size()])
+
+func _get_charge_direction() -> Vector3:
+	# Screen-space charge direction maps screen Y → world Z directly, which
+	# gives "up on screen = -Z in world" regardless of camera orientation.
+	# For team-1 attack_up players the camera is rotated 180°, so "up on
+	# screen" intent means +Z in world (toward their opponent's goal). The
+	# screen-pos signal can't see the camera flip — it lives in raw pixels —
+	# so we fix it up here by negating the recorded direction. Team 0 and
+	# team 1 without attack_up don't need this because their camera matches
+	# the default screen → world XZ mapping.
+	var dir: Vector3 = _aiming.prev_blade_dir
+	if PlayerPrefs.attack_up and _team_id == 1:
+		return -dir
+	return dir
+
 
 func on_puck_picked_up_network() -> void:
 	super.on_puck_picked_up_network()

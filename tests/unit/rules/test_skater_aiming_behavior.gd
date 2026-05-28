@@ -3,12 +3,14 @@ extends GutTest
 # SkaterAimingBehavior — owns wrister charge state and slapper charge timers.
 # Tests operate directly on the RefCounted; no Skater node needed.
 #
-# tick_wrister_charge takes TWO positions, both in a skater-translation-
-# subtracted frame (world XZ orientation, skater pos removed):
-#   - intent_pos: cursor position — drives direction + variance check
-#   - blade_pos: actual blade position — drives charge magnitude
-# Most tests below move them together (active drag tracking the cursor 1:1);
-# the ROM-clamp and direction-from-cursor tests intentionally split them.
+# tick_wrister_charge takes TWO positions:
+#   - intent_pos: cursor position (screen-space in prod — packed (x, 0, y)),
+#     drives DIRECTION and variance check. Camera-immune.
+#   - blade_pos: actual blade position in skater-translation-subtracted
+#     world XZ — drives MAGNITUDE via projection onto intent direction.
+# The two frames don't have to match: direction only reads intent, magnitude
+# only reads blade. Tests below pass arbitrary Vector3s for both and assert
+# on the behaviors that follow from the dual-signal contract.
 
 const VARIANCE_DEG: float = 35.0
 const MAX_DISTANCE: float = 1.5
@@ -20,7 +22,7 @@ func before_each() -> void:
 
 func test_initial_state() -> void:
 	assert_almost_eq(ab.charge_distance, 0.0, 0.001)
-	assert_eq(ab.prev_intent_pos_rel_skater, Vector3.ZERO)
+	assert_eq(ab.prev_intent_pos, Vector3.ZERO)
 	assert_eq(ab.prev_blade_pos_rel_skater, Vector3.ZERO)
 	assert_eq(ab.prev_blade_dir, Vector3.ZERO)
 	assert_almost_eq(ab.slapper_charge_timer, 0.0, 0.001)
@@ -38,7 +40,7 @@ func test_charge_capped_at_max() -> void:
 
 func test_tick_updates_prev_positions() -> void:
 	ab.tick_wrister_charge(Vector3(0.3, 0.0, 0.1), Vector3(0.25, 0.0, 0.05), VARIANCE_DEG, MAX_DISTANCE)
-	assert_eq(ab.prev_intent_pos_rel_skater, Vector3(0.3, 0.0, 0.1))
+	assert_eq(ab.prev_intent_pos, Vector3(0.3, 0.0, 0.1))
 	assert_eq(ab.prev_blade_pos_rel_skater, Vector3(0.25, 0.0, 0.05))
 
 func test_rom_clamp_cursor_drags_blade_pinned_no_charge() -> void:
@@ -104,7 +106,7 @@ func test_reset_wrister_zeroes_charge_and_seeds_pos() -> void:
 	ab.reset_wrister(Vector3(0.2, 0.0, 0.1), Vector3(0.25, 0.0, 0.05))
 	assert_almost_eq(ab.charge_distance, 0.0, 0.001)
 	assert_eq(ab.prev_blade_dir, Vector3.ZERO)
-	assert_eq(ab.prev_intent_pos_rel_skater, Vector3(0.2, 0.0, 0.1))
+	assert_eq(ab.prev_intent_pos, Vector3(0.2, 0.0, 0.1))
 	assert_eq(ab.prev_blade_pos_rel_skater, Vector3(0.25, 0.0, 0.05))
 
 func test_tick_slapper_increments_timer() -> void:
