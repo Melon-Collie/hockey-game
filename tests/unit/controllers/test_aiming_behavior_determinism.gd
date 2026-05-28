@@ -19,21 +19,23 @@ extends GutTest
 func test_wrister_charge_deterministic_from_neutral_start() -> void:
 	var a := SkaterAimingBehavior.new()
 	var b := SkaterAimingBehavior.new()
-	a.reset_wrister(Vector3.ZERO)
-	b.reset_wrister(Vector3.ZERO)
-	# Identical synthetic blade-position sweep — diagonal drag with a small
-	# direction reversal mid-sweep to exercise the variance check.
+	a.reset_wrister(Vector3.ZERO, Vector3.ZERO)
+	b.reset_wrister(Vector3.ZERO, Vector3.ZERO)
+	# Identical synthetic cursor+blade sweep — both track together (active
+	# drag), with a small direction reversal mid-sweep to exercise variance.
 	var sweep: Array[Vector3] = [
 		Vector3(0.1, 0.0, 0.0), Vector3(0.2, 0.0, 0.05), Vector3(0.3, 0.0, 0.1),
 		Vector3(0.4, 0.0, 0.12), Vector3(0.35, 0.0, 0.15), Vector3(0.45, 0.0, 0.18), Vector3(0.55, 0.0, 0.2),
 	]
 	for p: Vector3 in sweep:
-		a.tick_wrister_charge(p, 35.0, 2.0)
-		b.tick_wrister_charge(p, 35.0, 2.0)
+		a.tick_wrister_charge(p, p, 35.0, 2.0)
+		b.tick_wrister_charge(p, p, 35.0, 2.0)
 	assert_eq(a.charge_distance, b.charge_distance,
 			"charge_distance must be deterministic from identical input sequence")
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir,
 			"prev_blade_dir must match")
+	assert_eq(a.prev_intent_pos_rel_skater, b.prev_intent_pos_rel_skater,
+			"prev_intent_pos_rel_skater must match")
 	assert_eq(a.prev_blade_pos_rel_skater, b.prev_blade_pos_rel_skater,
 			"prev_blade_pos_rel_skater must match")
 
@@ -46,18 +48,21 @@ func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 	var b := SkaterAimingBehavior.new()
 	a.charge_distance = 0.4
 	a.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
+	a.prev_intent_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
 	a.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
 	b.charge_distance = 0.4
 	b.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
+	b.prev_intent_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
 	b.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
 	var sweep: Array[Vector3] = [
 		Vector3(0.35, 0.0, 0.22), Vector3(0.4, 0.0, 0.25), Vector3(0.45, 0.0, 0.28), Vector3(0.5, 0.0, 0.32),
 	]
 	for p: Vector3 in sweep:
-		a.tick_wrister_charge(p, 35.0, 2.0)
-		b.tick_wrister_charge(p, 35.0, 2.0)
+		a.tick_wrister_charge(p, p, 35.0, 2.0)
+		b.tick_wrister_charge(p, p, 35.0, 2.0)
 	assert_eq(a.charge_distance, b.charge_distance)
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir)
+	assert_eq(a.prev_intent_pos_rel_skater, b.prev_intent_pos_rel_skater)
 	assert_eq(a.prev_blade_pos_rel_skater, b.prev_blade_pos_rel_skater)
 
 
@@ -131,11 +136,11 @@ func test_one_timer_window_stops_at_zero() -> void:
 func test_wrister_charge_differs_for_different_sequences() -> void:
 	var a := SkaterAimingBehavior.new()
 	var b := SkaterAimingBehavior.new()
-	a.reset_wrister(Vector3.ZERO)
-	b.reset_wrister(Vector3.ZERO)
-	a.tick_wrister_charge(Vector3(1.0, 0, 0), 35.0, 2.0)
-	a.tick_wrister_charge(Vector3(2.0, 0, 0), 35.0, 2.0)
-	b.tick_wrister_charge(Vector3(0.5, 0, 0), 35.0, 2.0)
-	b.tick_wrister_charge(Vector3(0.75, 0, 0), 35.0, 2.0)
+	a.reset_wrister(Vector3.ZERO, Vector3.ZERO)
+	b.reset_wrister(Vector3.ZERO, Vector3.ZERO)
+	a.tick_wrister_charge(Vector3(1.0, 0, 0), Vector3(1.0, 0, 0), 35.0, 2.0)
+	a.tick_wrister_charge(Vector3(2.0, 0, 0), Vector3(2.0, 0, 0), 35.0, 2.0)
+	b.tick_wrister_charge(Vector3(0.5, 0, 0), Vector3(0.5, 0, 0), 35.0, 2.0)
+	b.tick_wrister_charge(Vector3(0.75, 0, 0), Vector3(0.75, 0, 0), 35.0, 2.0)
 	assert_ne(a.charge_distance, b.charge_distance,
 			"different sweep magnitudes must produce different charge")
