@@ -62,6 +62,17 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_agent = SkaterAgent.new()
 
 
+# Push the per-attribute wrister cap into the agent so its shot and pass
+# charge targets scale with the same Size + Strength multipliers as the
+# base controller's `max_wrister_charge_distance`. Called on every attribute
+# apply (initial spawn + free-play picker changes) so the agent never sees
+# a stale cap.
+func apply_attributes(attrs: PlayerAttributes) -> void:
+	super.apply_attributes(attrs)
+	if _agent != null:
+		_agent.set_max_wrister_charge_distance(max_wrister_charge_distance)
+
+
 # Bots are spawned by PlayerRegistry.spawn_bot, which knows the bot's
 # peer_id and team_id but not the controller — so the registry calls this
 # after spawn to wire the agent. Separate from setup() because setup() is

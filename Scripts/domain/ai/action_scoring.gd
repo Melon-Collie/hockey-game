@@ -182,13 +182,11 @@ const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 
-# Bot's wrister charge ratio (target charge / max charge distance).
-# Mirrors BOT_WRISTER_TARGET_CHARGE / SkaterController.max_wrister_
-# charge_distance defaults (1.0 / 2.0). Domain layer can't reference
-# the application-side constants directly, so the ratio is duplicated
-# here — must stay in sync. If you retune the bot's wrister target
-# (skater_agent_state_machine.gd: BOT_WRISTER_TARGET_CHARGE), update
-# this value to match.
+# Bot's charged-pass target as a fraction of max_wrister_charge_distance.
+# The agent state machine (skater_agent_state_machine.gd) imports this
+# directly via BOT_WRISTER_PASS_CHARGE_FRACTION, so changing it here
+# automatically retargets the bot's pass wind-up geometry and
+# PASS_CHARGE_SPEED_M_S derivation below stays in sync.
 const BOT_PASS_CHARGE_RATIO: float = 0.5
 
 # Charged wrister pass release speed. Bots fire long passes (distance
