@@ -608,7 +608,7 @@ func _update_bone_mesh(bone: Node3D, a_world: Vector3, b_world: Vector3) -> void
 	bone.position = (a_local + b_local) * 0.5
 	bone.scale = Vector3(1.0, 1.0, maxf(length, 0.001))
 	if (b_world - a_world).length() > 0.0001:
-		bone.look_at(b_world, Vector3.UP)
+		bone.look_at(b_world, _up_for_look_at(b_world - a_world))
 
 
 func _update_joint_sphere(sphere: MeshInstance3D, world_pos: Vector3) -> void:
@@ -636,8 +636,19 @@ func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vect
 	var cuff_height: float = cyl.height if cyl != null else 0.06
 	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5 + cuff_wrist_offset)
 	mesh.position = upper_body.to_local(cuff_center_w)
-	mesh.look_at(cuff_center_w + bone_dir_n, Vector3.UP)
+	mesh.look_at(cuff_center_w + bone_dir_n, _up_for_look_at(bone_dir_n))
 	mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+
+
+# Returns an up vector that's safely non-colinear with `direction`. Falls back
+# to Vector3.FORWARD when `direction` is near-vertical so look_at() doesn't
+# warn about colinear basis vectors. Cylindrical meshes (arm bones, cuffs)
+# are rotationally symmetric around their long axis, so the choice of up only
+# matters for the warning — not for the rendered geometry.
+static func _up_for_look_at(direction: Vector3) -> Vector3:
+	if absf(direction.normalized().y) > 0.99:
+		return Vector3.FORWARD
+	return Vector3.UP
 
 
 # Bone "rig" pattern: the public node is a Node3D wrapper that gets positioned,
