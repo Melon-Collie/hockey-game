@@ -147,8 +147,14 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # early and the latter part of the wind-up is a held "loaded" pose.
 @export var slapper_wind_up_twist_deg: float = 80.0
 @export var slapper_wind_up_hand_up: float = 0.30      # top hand rises (m)
-@export var slapper_wind_up_hand_back: float = 0.20    # top hand pulls behind shoulder (+local z, m)
-@export var slapper_wind_up_hand_inward: float = 0.15  # top hand pulls across body toward back shoulder (m)
+# These two are body-local offsets — they were fighting the torso coil (the
+# body rotates +X to world +Z, so a body-local +Z offset becomes world -X, i.e.
+# the hand pulls *away* from the back-shoulder side it's supposed to end up on).
+# Default to 0 so the hand sits on the shoulder marker and rides the rotation
+# naturally; tune up only if the held pose needs extra body-local pose, not
+# direction.
+@export var slapper_wind_up_hand_back: float = 0.0     # top hand pulls behind shoulder (+local z, m)
+@export var slapper_wind_up_hand_inward: float = 0.0   # top hand pulls across body toward back shoulder (m)
 # Where the blade lives at full wind-up (in body-local space, before the body
 # coils). Pulling it in and back puts the stick over the back shoulder once the
 # torso rotation completes, so the bottom hand grips on a natural arc instead
