@@ -879,10 +879,20 @@ func _move_along_arc(delta: float) -> Vector2:
 
 # Arc target (x, z) at the current radius — STANDING/RECOVERING tracing.
 # BUTTERFLY uses compute_slide_destination directly with butterfly_radius.
+#
+# Post-seal: the X target is clamped so the body never tracks past the point
+# where the leading pad would extend past the post once the goalie drops
+# into butterfly. Use the butterfly pad extension (pad_local_offset) for the
+# clamp so STANDING tracking is always butterfly-drop-safe — if a shot fires
+# while standing wide, the resulting butterfly still has both pads at or
+# inside the posts. Real-goalie "post integration" principle.
 func _arc_target_xz() -> Vector2:
-	return GoalieBehaviorRules.target_arc_position(
+	var arc: Vector2 = GoalieBehaviorRules.target_arc_position(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
 			_direction_sign, _current_depth, net_half_width)
+	arc.x = GoalieBehaviorRules.clamp_lateral_post_seal(
+			arc.x, _goal_center_x, net_half_width, pad_local_offset)
+	return arc
 
 # Five-hole openness for BUTTERFLY/SLIDING. Server-only — clients adopt the
 # server's value via apply_state.
