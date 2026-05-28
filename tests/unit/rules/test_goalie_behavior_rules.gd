@@ -314,3 +314,140 @@ func test_threat_distance_euclidean() -> void:
 		Vector3(3, 0, 22.6), 26.6, 0.0)
 	# dx=3, dz=-4 → sqrt(9+16) = 5
 	assert_almost_eq(d, 5.0, 0.001)
+
+# ── clamp_lateral_post_seal ──────────────────────────────────────────────────
+
+func test_post_seal_lets_centered_position_through() -> void:
+	# Within the seal envelope — no clamp.
+	var clamped: float = GoalieBehaviorRules.clamp_lateral_post_seal(
+		0.1, 0.0, 0.915, 0.42)
+	assert_almost_eq(clamped, 0.1, 0.001)
+
+func test_post_seal_pulls_back_when_pad_would_pass_post() -> void:
+	# Butterfly pad extension 0.42m, post at 0.915m. Max body X = 0.495m.
+	# Asking for 0.7 should clamp to 0.495.
+	var clamped: float = GoalieBehaviorRules.clamp_lateral_post_seal(
+		0.7, 0.0, 0.915, 0.42)
+	assert_almost_eq(clamped, 0.495, 0.001)
+
+func test_post_seal_clamps_symmetrically_on_both_sides() -> void:
+	# Negative direction clamps to -(net_half_width - pad_extension).
+	var clamped: float = GoalieBehaviorRules.clamp_lateral_post_seal(
+		-0.7, 0.0, 0.915, 0.42)
+	assert_almost_eq(clamped, -0.495, 0.001)
+
+func test_post_seal_with_off_center_goal() -> void:
+	# Goal centered at +5; same envelope, just shifted.
+	var clamped: float = GoalieBehaviorRules.clamp_lateral_post_seal(
+		5.7, 5.0, 0.915, 0.42)
+	assert_almost_eq(clamped, 5.495, 0.001)
+
+func test_post_seal_with_oversized_pad_collapses_to_center() -> void:
+	# Pad wider than the net — caller pathology, but the math should not
+	# explode. Returns goal_center_x with zero envelope.
+	var clamped: float = GoalieBehaviorRules.clamp_lateral_post_seal(
+		0.5, 0.0, 0.5, 0.8)
+	assert_almost_eq(clamped, 0.0, 0.001)
+
+func test_post_seal_with_standing_pad_extension_is_looser() -> void:
+	# In STANDING, pad extension is smaller (~0.22m), so the seal envelope
+	# is wider — max body X = 0.915 - 0.22 = 0.695m.
+	var clamped: float = GoalieBehaviorRules.clamp_lateral_post_seal(
+		0.8, 0.0, 0.915, 0.22)
+	assert_almost_eq(clamped, 0.695, 0.001)
+
+# ── should_react_to_puck ─────────────────────────────────────────────────────
+
+func _reaction_cfg() -> GoalieBehaviorRules.UniversalReactionConfig:
+	var cfg := GoalieBehaviorRules.UniversalReactionConfig.new()
+	cfg.min_speed = 8.0
+	cfg.max_time_to_impact = 0.6
+	cfg.net_half_width = 0.915
+	cfg.net_margin = 0.5
+	return cfg
+
+func test_react_to_fast_puck_on_target() -> void:
+	# Puck at (0, 0, 20) heading +Z fast → on track for goal at z=26.6.
+	assert_true(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 20), Vector3(0, 0, 20),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_slow_puck() -> void:
+	# 4 m/s is below the 8 m/s threshold — even on a perfect line, no reaction.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 20), Vector3(0, 0, 4),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_puck_moving_away() -> void:
+	# Negative vz away from the goal.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 20), Vector3(0, 0, -15),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_puck_off_target() -> void:
+	# Fast and arriving within max_time_to_impact, but landing wide of the net.
+	# t = (26.6 - 20) / 15 = 0.44s; impact_x = 5 × 0.44 = 2.2m, outside the
+	# (0.915 + 0.5) = 1.415m allowed window. Filter must catch the lateral
+	# miss specifically, not bounce on the eta gate.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 20), Vector3(5, 0, 15),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_far_puck_with_long_eta() -> void:
+	# Fast puck but very far away → t_to_impact > max_time_to_impact.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 0), Vector3(0, 0, 10),  # t = 26.6 / 10 = 2.66s > 0.6
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_fires_on_bounced_puck() -> void:
+	# Off-board bounce — puck coming at the net from a sharp angle, fast.
+	# Velocity vector blends X + Z components; check we still react.
+	assert_true(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(2, 0, 22), Vector3(-3, 0, 15),
+		26.6, 0.0, _reaction_cfg()))
+
+# ── lateral_puck_velocity_in_slot ────────────────────────────────────────────
+
+func test_cross_crease_pass_detected_in_slot() -> void:
+	# Puck in slot zone, moving primarily sideways (vx = 8, vz = 1, ratio 8.0).
+	# direction_sign = -1 (defends +Z goal at z=26.6, slot 5m in front).
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 23.5), Vector3(8, 0, 1),
+		26.6, -1, 5.0, 1.5)
+	assert_almost_eq(vx, 8.0, 0.001)
+
+func test_cross_crease_returns_zero_when_puck_moves_forward() -> void:
+	# Puck in slot but heading toward net (forward dominates lateral).
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 23.5), Vector3(2, 0, 10),
+		26.6, -1, 5.0, 1.5)
+	assert_eq(vx, 0.0)
+
+func test_cross_crease_returns_zero_outside_slot() -> void:
+	# Puck way back, even if moving sideways fast — not a slot pass yet.
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 18), Vector3(10, 0, 1),
+		26.6, -1, 5.0, 1.5)
+	assert_eq(vx, 0.0)
+
+func test_cross_crease_returns_zero_when_puck_behind_goal_line() -> void:
+	# Puck behind the goal — not in front, no reaction.
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 27.5), Vector3(8, 0, 0),
+		26.6, -1, 5.0, 1.5)
+	assert_eq(vx, 0.0)
+
+func test_cross_crease_signed_velocity() -> void:
+	# Pass going LEFT should return negative.
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 23.5), Vector3(-8, 0, 1),
+		26.6, -1, 5.0, 1.5)
+	assert_almost_eq(vx, -8.0, 0.001)
+
+func test_cross_crease_works_for_other_team() -> void:
+	# Team that defends -Z goal: direction_sign = +1, goal_line_z = -26.6.
+	# Slot is in front of THAT goal (puck.z near goal at z=-26.6).
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, -23.5), Vector3(8, 0, -1),
+		-26.6, 1, 5.0, 1.5)
+	assert_almost_eq(vx, 8.0, 0.001)

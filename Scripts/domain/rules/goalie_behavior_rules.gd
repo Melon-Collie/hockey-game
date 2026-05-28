@@ -272,3 +272,90 @@ static func should_commit_slide(
 		target_x: float,
 		slide_trigger_distance: float) -> bool:
 	return absf(target_x - current_x) >= slide_trigger_distance
+
+
+# ── Post-seal positioning ────────────────────────────────────────────────────
+# "Post integration" — coverage past the post is wasted coverage. Real goalies
+# position so the leading pad's outer edge sits AT the post, not past it. With
+# pads spread to ±pad_lateral_extension from the body, the constraint is:
+#   |goalie_x + pad_extension - goal_center_x|  <=  net_half_width
+# i.e. the goalie body's lateral offset from center can't exceed
+# (net_half_width - pad_extension). Same constraint applies symmetrically on
+# both sides (whichever pad is leading toward the threat).
+#
+# pad_lateral_extension is state-dependent: ~0.42m in butterfly (pads spread
+# wide), ~0.22m in standing (pads tighter under the body). Caller passes the
+# state-appropriate value.
+static func clamp_lateral_post_seal(
+		target_x: float,
+		goal_center_x: float,
+		net_half_width: float,
+		pad_lateral_extension: float) -> float:
+	var max_offset: float = maxf(0.0, net_half_width - pad_lateral_extension)
+	var delta: float = target_x - goal_center_x
+	return goal_center_x + clampf(delta, -max_offset, max_offset)
+
+
+# ── Universal puck reaction trigger ──────────────────────────────────────────
+# Any puck moving toward the net above a speed threshold should put the goalie
+# into shot-reaction mode, not just classified `detect_shot()` releases. This
+# covers board bounces, poke-strips, deflections, and rebounds that arrive at
+# the net without an explicit release event.
+#
+# Returns true if the puck will plausibly cross the goal line within the net
+# width + margin in <= max_time_to_impact seconds. Caller still uses
+# detect_shot() for impact_y classification (low vs elevated) once reacting.
+class UniversalReactionConfig:
+	var min_speed: float = 8.0           # m/s — slower pucks aren't urgent
+	var max_time_to_impact: float = 0.6  # s — anything further out the AI has time to track normally
+	var net_half_width: float = 0.0
+	var net_margin: float = 0.0
+
+
+static func should_react_to_puck(
+		puck_position: Vector3,
+		puck_velocity: Vector3,
+		goal_line_z: float,
+		goal_center_x: float,
+		cfg: UniversalReactionConfig) -> bool:
+	if puck_velocity.length() < cfg.min_speed:
+		return false
+	if abs(puck_velocity.z) < 0.001:
+		return false
+	var t: float = (goal_line_z - puck_position.z) / puck_velocity.z
+	if t <= 0.0 or t > cfg.max_time_to_impact:
+		return false
+	var impact_x: float = puck_position.x + puck_velocity.x * t
+	return abs(impact_x - goal_center_x) <= cfg.net_half_width + cfg.net_margin
+
+
+# ── Cross-crease pass detection ──────────────────────────────────────────────
+# Backdoor passes are the slide-trigger blind spot today: the puck whips across
+# the slot toward a receiver on the far post, but the *carrier* hasn't moved
+# (they just passed), so threat-position-based triggers miss it. Reading puck
+# velocity directly catches the pass at the moment of release.
+#
+# Returns the puck's lateral velocity component (signed X) if the puck is in
+# the slot zone (in front of the goal, within slot_z_depth) AND moving
+# primarily sideways (|vx| >= |vz| * lateral_ratio). Else 0.
+#
+# direction_sign: +1 / -1 depending on which goal the goalie defends (see
+# top-of-file).  slot_z_depth measures how deep into the offensive zone the
+# pass-detection window extends (typical: ~5m, matching the slot region).
+static func lateral_puck_velocity_in_slot(
+		puck_position: Vector3,
+		puck_velocity: Vector3,
+		goal_line_z: float,
+		direction_sign: int,
+		slot_z_depth: float,
+		lateral_ratio: float) -> float:
+	# In front of the goal? Per the direction_sign convention at the top of
+	# this file, `(puck_z - goal_line_z) * direction_sign > 0` means the puck
+	# is on the goalie's side of the goal line (NOT behind it).
+	var puck_in_front: float = (puck_position.z - goal_line_z) * direction_sign
+	if puck_in_front <= 0.0 or puck_in_front > slot_z_depth:
+		return 0.0
+	var forward_speed: float = absf(puck_velocity.z)
+	if absf(puck_velocity.x) < forward_speed * lateral_ratio:
+		return 0.0
+	return puck_velocity.x
