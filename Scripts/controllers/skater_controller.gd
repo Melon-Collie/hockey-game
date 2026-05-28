@@ -145,7 +145,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # shoulder points at the puck) while pulling the top hand up and across the
 # body toward the back shoulder. Eased with sqrt so most of the coil happens
 # early and the latter part of the wind-up is a held "loaded" pose.
-@export var slapper_wind_up_twist_deg: float = 35.0
+@export var slapper_wind_up_twist_deg: float = 80.0
 @export var slapper_wind_up_hand_up: float = 0.30      # top hand rises (m)
 @export var slapper_wind_up_hand_back: float = 0.20    # top hand pulls behind shoulder (+local z, m)
 @export var slapper_wind_up_hand_inward: float = 0.15  # top hand pulls across body toward back shoulder (m)
