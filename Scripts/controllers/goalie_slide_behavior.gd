@@ -123,7 +123,8 @@ func can_recover() -> bool:
 
 # True when the slide-trigger gate is open (cooldown elapsed, drop animation
 # finished, no in-progress event lockout). Caller is responsible for the
-# spatial trigger check (`GoalieBehaviorRules.should_commit_slide`).
+# spatial trigger check (the pad-coverage check in
+# `GoalieController._try_commit_slide`).
 func can_commit_slide() -> bool:
 	return cooldown_timer >= slide_cooldown \
 			and drop_progress >= 1.0 \

@@ -148,20 +148,17 @@ extends Node
 @export var slide_initial_speed: float = 2.0        # m/s push-off speed (visible glide, not teleport)
 @export var slide_friction: float = 1.5             # m/s² decay (gentle so the slide reads as motion)
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
-@export var slide_trigger_distance: float = 0.50    # m — threat-X delta needed to commit (threshold path; intentionally strict)
 @export var slide_cooldown: float = 0.20            # s between committed slides
-# Cross-crease commits use a smaller distance gate than the threshold path
-# because the puck-velocity event already qualifies the play as goal-
-# imminent. Without a smaller gate, the corrected pad geometry's tight
-# seal target (~7cm from centre on a centred goalie) would mean the cross-
-# crease detector almost never reaches the commit threshold.
-@export var cross_crease_trigger_distance: float = 0.10
-# Threshold-path imminence gate. The threshold slide is meant for "super out
-# of position on a developing imminent threat" — wraparounds, recovery
-# scrambles. Long shots are not imminent and shouldn't trigger slides
-# regardless of how much the carrier moves laterally. Threats further than
-# this from the goal (Euclidean) skip the threshold slide entirely.
-@export var slide_threat_max_distance: float = 5.0
+# Slide trigger is a pad-coverage check: slide when the puck (projected forward
+# by slide_anticipation_time via _puck_velocity_est) is past the goalie's pad
+# reach by more than slide_coverage_buffer, AND the puck is within
+# slide_threat_max_distance of the goal (imminent). Captures both spec'd
+# scenarios — forehand-backhand deke (puck dragged past goalie's pads while
+# carrier stays put) and cross-crease pass (puck flies across into pad-edge
+# territory on the other side) — without needing separate detector paths.
+@export var slide_threat_max_distance: float = 6.0  # m — Euclidean puck→goal; filters long shots
+@export var slide_coverage_buffer: float = 0.10     # m — past pad edge before triggering (anti-jitter)
+@export var slide_anticipation_time: float = 0.10   # s — projects puck via velocity so cross-crease commits early
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -173,19 +170,14 @@ extends Node
 # the seal target. Reads as a deliberate plant-and-push instead of the body
 # teleporting laterally with rotation lerping independently.
 @export var slide_coil_duration: float = 0.12
-# Stickhandling rejection: the threshold-based slide (above) only commits once
-# the tracked threat has moved in a CONSISTENT lateral direction for this long.
-# A carrier dangling laterally reverses direction inside this window and never
-# trips it — kills the random-slide-on-deke problem. The cross-crease puck-
-# velocity trigger below is exempt (it's an explicit pass event, not a read).
-@export var slide_intent_min_time: float = 0.35     # s of consistent lateral threat motion
-@export var slide_intent_min_speed: float = 0.5     # m/s — below this, threat is "still", timer pauses
 
-# ── Cross-crease detection ────────────────────────────────────────────────────
+# ── Cross-crease detection (STANDING push only) ──────────────────────────────
 # A pass whipping across the slot is read off PUCK velocity, not the smoothed
-# threat (which lags toward the passer's body). When detected: in butterfly the
-# goalie slides toward the projected crossing; standing, it pushes hard on its
-# feet toward it (drops only if a shot then comes). This is the backdoor /
+# threat (which lags toward the passer's body). When detected and the goalie
+# is STANDING, the goalie pushes hard on its feet toward the projected
+# crossing. (Butterfly slides are NOT triggered here — they come out of the
+# pad-coverage check in _try_commit_slide, which handles both this and dekes
+# uniformly.) This is the backdoor /
 # one-timer fix — the smoothed-threat threshold trigger fires too late on these.
 @export var cross_crease_slot_depth: float = 5.0        # m in front of goal the pass window covers
 @export var cross_crease_lateral_ratio: float = 1.5     # |vx| must exceed |vz|*this to count as a pass
@@ -393,12 +385,6 @@ var _puck_velocity_est: Vector3 = Vector3.ZERO
 var _prev_puck_position: Vector3 = Vector3.ZERO
 var _puck_approach_velocity: float = 0.0
 var _reading_slapper_tell: bool = false
-# Stickhandling-rejection state: how long the tracked threat has been moving in
-# a consistent lateral direction, and the sign of that motion. The threshold
-# slide trigger gates on this so dangles (which reverse quickly) don't commit.
-var _threat_lateral_persist: float = 0.0
-var _threat_lateral_sign: float = 0.0
-var _prev_threat_x: float = 0.0
 # Cross-crease push state (standing "push on feet" toward a detected pass).
 # `_cross_crease_timer` counts down while the push is committed; while > 0 the
 # standing movement drives toward `_cross_crease_target_x` at push speed.
@@ -433,7 +419,6 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	_current_depth = depth_defensive
 	_tracked_threat_position = puck.global_position
 	_prev_puck_position = puck.global_position
-	_prev_threat_x = _tracked_threat_position.x
 	_configure_collaborators()
 	_sm.transitioned.connect(_on_sm_transitioned)
 	_reaction.started.connect(_on_reaction_started)
@@ -546,9 +531,6 @@ func reset_to_crease() -> void:
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
 	_prev_puck_position = _tracked_threat_position
-	_prev_threat_x = _tracked_threat_position.x
-	_threat_lateral_persist = 0.0
-	_threat_lateral_sign = 0.0
 	_cross_crease_timer = 0.0
 	_cross_crease_target_x = 0.0
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
@@ -601,7 +583,6 @@ func _update_tracking(delta: float) -> void:
 	else:
 		_tracked_threat_position = target_threat
 	if is_server:
-		_update_lateral_intent(delta)
 		_update_cross_crease(delta, carrier)
 	# Universal puck tracking: trigger a reaction for any loose puck above the
 	# threshold heading for the net within max_time_to_impact, regardless of
@@ -1086,49 +1067,38 @@ func _try_commit_slide() -> void:
 		return
 	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
 	var slide_rot: float = deg_to_rad(slide_max_rotation_deg)
-	# Cross-crease pass: an explicit puck-velocity event. Slide to the seal
-	# spot on the side the puck is heading, bypassing the stickhandling-
-	# rejection gate (this isn't a read of a dangling carrier, it's a committed
-	# pass). _cross_crease_target_x carries the projected crossing — sign tells
-	# us which post to seal.
-	if _cross_crease_timer > 0.0:
-		var cc_side: float = signf(_cross_crease_target_x - _goal_center_x)
-		var cc_target: float = _post_edge_seal_x(cc_side, pad_edge, slide_rot)
-		# Cross-crease uses the smaller cross_crease_trigger_distance — the
-		# puck-velocity event already qualifies the play as imminent, so we
-		# don't also need the "super out of position" gate from the threshold
-		# path.
-		if GoalieBehaviorRules.should_commit_slide(_current_x, cc_target, cross_crease_trigger_distance):
-			_slide_start_rotation_y = goalie.get_goalie_rotation_y()
-			var cc_end: Vector2 = _coil_end_xz(cc_side, slide_rot)
-			_slide.commit_slide(_current_x, _current_depth, cc_target,
-					net_half_width, cc_end.x, cc_end.y)
-			_sm.transition_to(State.COILING)
-			return
-	# Threshold path: only commit once (1) lateral intent has been sustained —
-	# a dangle reverses inside the window and never trips it — AND (2) the
-	# threat is imminent (within slide_threat_max_distance of the goal) AND
-	# (3) the goalie is super out of position (distance to seal target exceeds
-	# the strict slide_trigger_distance). Long shots fail (2) regardless of
-	# how much the carrier moves laterally while winding up. Normal lateral
-	# tracking near the net fails (3) because the butterfly already covers
-	# most of the net — only big positional mistakes trigger threshold slides.
-	if not _has_sustained_lateral_intent():
+	# Imminence gate: only slide for threats close to the net. Long shots
+	# (puck still far in z) skip the trigger entirely. Euclidean so a wide
+	# threat in the slot still qualifies.
+	var puck_dist_to_goal: float = GoalieBehaviorRules.threat_distance_to_goal(
+			puck.global_position, _goal_line_z, _goal_center_x)
+	if puck_dist_to_goal > slide_threat_max_distance:
 		return
-	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
-			_tracked_threat_position, _goal_line_z, _goal_center_x)
-	if threat_dist > slide_threat_max_distance:
+	# Pad-coverage check: project the puck forward via its position-derived
+	# velocity (works for carried + loose pucks; linear_velocity is zero
+	# while frozen on a carrier's blade). If the projected puck is past the
+	# goalie's pad reach by more than slide_coverage_buffer, the goalie
+	# can't seal that side from butterfly without sliding. Captures both
+	# spec'd scenarios — F-B deke (puck pulled past the pads while carrier
+	# stays put) and cross-crease pass (puck flies into pad-edge territory
+	# on the far side) — uniformly.
+	var projected_puck_x: float = puck.global_position.x \
+			+ _puck_velocity_est.x * slide_anticipation_time
+	var lateral_offset: float = projected_puck_x - _current_x
+	if absf(lateral_offset) <= pad_edge + slide_coverage_buffer:
 		return
-	var threat_side: float = signf(_tracked_threat_position.x - _goal_center_x)
-	if threat_side == 0.0:
+	var puck_side: float = signf(lateral_offset)
+	if puck_side == 0.0:
 		return
-	var seal_target: float = _post_edge_seal_x(threat_side, pad_edge, slide_rot)
-	if not GoalieBehaviorRules.should_commit_slide(_current_x, seal_target, slide_trigger_distance):
+	var seal_target: float = _post_edge_seal_x(puck_side, pad_edge, slide_rot)
+	# Skip if we're already at (or very near) the seal spot — the slide just
+	# completed, no need to re-commit on the same side.
+	if absf(seal_target - _current_x) < 0.05:
 		return
 	_slide_start_rotation_y = goalie.get_goalie_rotation_y()
-	var t_end: Vector2 = _coil_end_xz(threat_side, slide_rot)
+	var seal_end: Vector2 = _coil_end_xz(puck_side, slide_rot)
 	_slide.commit_slide(_current_x, _current_depth, seal_target,
-			net_half_width, t_end.x, t_end.y)
+			net_half_width, seal_end.x, seal_end.y)
 	_sm.transition_to(State.COILING)
 
 
@@ -1299,36 +1269,16 @@ func _update_body_parts(delta: float) -> void:
 			blocker_max_step = blocker_react_max_speed * delta
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
 
-# ── Slide trigger helpers (host-only) ────────────────────────────────────────
+# ── Cross-crease detection (STANDING push only) ───────────────────────────────
 
-# Track how long the tracked threat has moved in a consistent lateral
-# direction. Feeds the stickhandling-rejection gate on the threshold slide:
-# a dangle reverses direction inside slide_intent_min_time and never builds
-# up enough persistence to commit, while a genuine lateral play sustains it.
-func _update_lateral_intent(delta: float) -> void:
-	var lateral_vel: float = (_tracked_threat_position.x - _prev_threat_x) / maxf(delta, 0.0001)
-	_prev_threat_x = _tracked_threat_position.x
-	if absf(lateral_vel) < slide_intent_min_speed:
-		# Threat effectively still — hold the timer (don't reset), don't grow.
-		return
-	var sign_now: float = signf(lateral_vel)
-	if sign_now == _threat_lateral_sign:
-		_threat_lateral_persist += delta
-	else:
-		_threat_lateral_sign = sign_now
-		_threat_lateral_persist = 0.0
-
-# True once lateral intent has been sustained long enough to trust a
-# threshold-based slide. Cross-crease slides bypass this (explicit event).
-func _has_sustained_lateral_intent() -> bool:
-	return _threat_lateral_persist >= slide_intent_min_time
-
-# Read a cross-crease pass off PUCK velocity and respond. In butterfly the
-# slide is committed here (the actual slide is consumed in _try_commit_slide);
-# standing, we arm the "push on feet" target/timer consumed in _move_along_arc.
-# Restricted to LOOSE pucks (a pass/bounce/strip in flight) — a carried puck
-# moving laterally is just a lateral rush, handled by normal tracking + the
-# threshold slide, and reacting to it here would over-commit on a deke.
+# Read a cross-crease pass off PUCK velocity. The STANDING goalie arms its
+# "push on feet" target/timer (consumed in _move_along_arc) toward the
+# projected crossing. Butterfly slides are NOT triggered here — they fall
+# out of the pad-coverage check in _try_commit_slide.
+# Restricted to LOOSE pucks (a pass/bounce/strip in flight) — a carrier
+# moving laterally with the puck is normal lateral skating, handled by the
+# standing arc tracking. Loose-puck cross-creases get the standing push so
+# the goalie can beat the puck to the far post on its feet.
 func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	if _cross_crease_timer > 0.0:
 		_cross_crease_timer -= delta

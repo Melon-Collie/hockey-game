@@ -260,18 +260,6 @@ static func compute_slide_destination(
 			direction_sign, butterfly_radius, net_half_width)
 
 
-# Trigger threshold for committing a butterfly slide: the threat has moved
-# enough laterally that staying put leaves the net exposed. Compare the
-# current goalie X to where the threat says they should be; if the gap
-# exceeds `slide_trigger_distance`, commit a slide.
-#
-# Caller is responsible for the cooldown gate (`time_since_last_slide >=
-# slide_cooldown`) — that's stateful and lives on the controller.
-static func should_commit_slide(
-		current_x: float,
-		target_x: float,
-		slide_trigger_distance: float) -> bool:
-	return absf(target_x - current_x) >= slide_trigger_distance
 
 
 # ── Universal puck reaction trigger ──────────────────────────────────────────

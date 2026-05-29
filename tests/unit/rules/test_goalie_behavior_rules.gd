@@ -295,18 +295,6 @@ func test_slide_destination_matches_arc_at_butterfly_depth() -> void:
 	assert_almost_eq(slide.x, arc.x, 0.001)
 	assert_almost_eq(slide.y, arc.y, 0.001)
 
-# ── should_commit_slide ──────────────────────────────────────────────────────
-
-func test_slide_trigger_below_threshold_does_not_commit() -> void:
-	assert_false(GoalieBehaviorRules.should_commit_slide(0.0, 0.3, 0.5))
-
-func test_slide_trigger_above_threshold_commits() -> void:
-	assert_true(GoalieBehaviorRules.should_commit_slide(0.0, 0.6, 0.5))
-
-func test_slide_trigger_negative_delta_uses_absolute_value() -> void:
-	# Threat moved hard to the left — still triggers a slide.
-	assert_true(GoalieBehaviorRules.should_commit_slide(0.0, -0.7, 0.5))
-
 # ── threat_distance_to_goal ──────────────────────────────────────────────────
 
 func test_threat_distance_euclidean() -> void:
