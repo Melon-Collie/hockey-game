@@ -1531,14 +1531,21 @@ func _on_puck_released() -> void:
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay)
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
-# don't trigger spurious slides, and starts the reaction clear delay — the
-# goalie has physically engaged with the shot, so the read is over. Filters
-# by identity since `Puck.puck_touched_goalie` fires on either net's goalie.
+# don't trigger spurious slides, starts the reaction clear delay, and drops
+# the goalie into butterfly if they were still upright — modern butterfly is
+# the rebound-control posture (Hockey Canada / OMHA coaching). After a
+# high-shot save off the chest/glove the goalie should be sealing the ice
+# while the rebound resolves, not still standing. The existing recovery gate
+# then decides standing back up based on whether the rebound is still close.
+# Filters by identity since `Puck.puck_touched_goalie` fires on either
+# net's goalie.
 func _on_puck_contact(contacted: Goalie) -> void:
 	if contacted != goalie:
 		return
 	_slide.arm_event_lockout()
 	_reaction.arm_clear()
+	if is_server and _sm.is_upright():
+		_enter_butterfly()
 
 # Resolving events (boards / post / net) that aren't goalie-specific. Any of
 # these means the shot has resolved — no longer a threat the goalie is
