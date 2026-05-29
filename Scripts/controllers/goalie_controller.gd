@@ -192,6 +192,11 @@ extends Node
 @export var lunge_extension: float = 0.35        # m — forward push at peak
 @export var lunge_duration: float = 0.15         # s — active window (0→peak→0 sin curve)
 @export var lunge_cooldown: float = 0.60         # s — minimum gap between lunges
+# Goalie poke check: when the stick blade comes within this radius of the
+# carried puck, the goalie strips it. The puck is magneted to the carrier's
+# blade with no physics during carry, so RigidBody contact won't fire — this
+# is the explicit substitute. Host-only.
+@export var goalie_poke_radius: float = 0.25
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -427,6 +432,12 @@ var _cross_crease_target_x: float = 0.0
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
 var _lunge_cooldown_timer: float = 0.0
+# Blade velocity tracking for the goalie poke check. We need the BLADE's
+# world velocity (not the goalie body's) because the strip-velocity math
+# blends checker blade velocity with carrier blade velocity. Position-
+# derived so it works regardless of how the pose updates the blade.
+var _prev_blade_world_pos: Vector3 = Vector3.ZERO
+var _blade_world_velocity: Vector3 = Vector3.ZERO
 # Body rotation captured at slide commit. The coil-phase facing lerps from
 # this to the slide end angle so the rotation completes during the coil and
 # holds through the translation phase.
@@ -593,6 +604,8 @@ func _physics_process(delta: float) -> void:
 	_update_position(delta)
 	_update_facing(delta)
 	_update_body_parts(delta)
+	if is_server:
+		_update_goalie_poke(delta)
 
 # ── Tracking ──────────────────────────────────────────────────────────────────
 # "Threat" = where the goalie's positioning targets. Carrier body (steady)
@@ -887,6 +900,34 @@ func _should_lunge() -> bool:
 	if (puck.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
 		return false
 	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
+
+
+# Goalie poke check. The puck is magneted to the carrier's blade with no
+# physics during carry, so RigidBody contact won't strip it. Instead we run
+# an explicit distance check each frame after the pose has been applied:
+# if the goalie's blade is within goalie_poke_radius of the carried puck
+# (and the carrier is opposing), call Puck.apply_goalie_poke_check.
+#
+# After a successful strip the puck has no carrier, so next-tick's check
+# self-suppresses. The carrier's reattach_cooldown prevents an instant
+# re-pickup that would let the goalie chain pokes.
+#
+# Velocity is position-derived (works regardless of how the pose system
+# updates the blade) and used by poke_strip_velocity to direct the strip.
+func _update_goalie_poke(delta: float) -> void:
+	var current_blade_pos: Vector3 = goalie.get_blade_world_position()
+	if _prev_blade_world_pos == Vector3.ZERO:
+		_prev_blade_world_pos = current_blade_pos
+	_blade_world_velocity = (current_blade_pos - _prev_blade_world_pos) / maxf(delta, 0.0001)
+	_prev_blade_world_pos = current_blade_pos
+	var carrier: Skater = puck.get_carrier()
+	if carrier == null:
+		return
+	if team_id != -1 and carrier.get_team_id() == team_id:
+		return
+	if puck.global_position.distance_to(current_blade_pos) > goalie_poke_radius:
+		return
+	puck.apply_goalie_poke_check(current_blade_pos, _blade_world_velocity)
 
 
 # Returns the current lunge progress as a sin curve: 0 at start, 1 at peak

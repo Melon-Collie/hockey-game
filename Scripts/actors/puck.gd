@@ -236,6 +236,31 @@ func apply_poke_check(checker_skater: Skater) -> void:
 	puck_stripped.emit(ex_carrier)
 	puck_released.emit()
 
+# Goalie-flavoured poke check. The goalie's stick isn't a Skater (no
+# blade_world_velocity / cooldown table entry), so it gets its own entry
+# point. Strip velocity uses the goalie's blade position + the controller's
+# computed blade velocity as the checker inputs.
+#
+# No checker-side cooldown — the goalie's lunge cooldown already prevents
+# spam pokes, and adding the goalie to the per-skater cooldown table would
+# fight every other system that filters by Skater identity.
+func apply_goalie_poke_check(blade_pos: Vector3, blade_vel: Vector3) -> void:
+	var ex_carrier: Skater = carrier
+	var fallback_dir := Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
+	clear_carrier()
+	linear_velocity = PuckCollisionRules.poke_strip_velocity(
+			blade_vel,
+			ex_carrier.blade_world_velocity,
+			ex_carrier.global_position,
+			blade_pos,
+			poke_carrier_vel_blend,
+			poke_strip_speed,
+			fallback_dir)
+	_set_cooldown(ex_carrier, reattach_cooldown)
+	puck_stripped.emit(ex_carrier)
+	puck_released.emit()
+
+
 func release(direction: Vector3, power: float) -> void:
 	var ex_carrier: Skater = carrier
 	# Set position while still frozen so Jolt activates from the correct state.

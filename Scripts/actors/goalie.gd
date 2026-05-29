@@ -15,6 +15,7 @@ extends Node3D
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
 @onready var _block_arm: Node3D = $BlockArm
+@onready var _stick_blade: CollisionShape3D = $BlockArm/Stick/StickBladeCollider
 
 @onready var _left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var _right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
@@ -113,6 +114,14 @@ func get_blocker_rotation() -> Vector3:
 
 func get_head_yaw() -> float:
 	return _head.rotation.y
+
+# Stick blade world position. Used by the controller's goalie poke check —
+# the puck is magneted to the carrier's blade with no physics during carry,
+# so we can't rely on RigidBody contact firing. The check is host-side:
+# when this position is within poke radius of a carried puck, the goalie
+# strips the puck.
+func get_blade_world_position() -> Vector3:
+	return _stick_blade.global_position
 
 
 # Apply an authoritative pose snapshot directly to the body parts — used by
