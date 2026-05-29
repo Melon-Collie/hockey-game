@@ -188,6 +188,18 @@ extends Node
 # blade with no physics during carry, so RigidBody contact won't fire — this
 # is the explicit substitute. Host-only.
 @export var goalie_poke_radius: float = 0.25
+
+# ── Paddle-down sweep ─────────────────────────────────────────────────────────
+# Butterfly-only stick behavior: paddle drops flat to the ice and the blocker
+# arm yaws aggressively toward the puck side. Used to disrupt cross-crease
+# one-timers, sweep loose pucks at the goalie's feet, or pressure a deking
+# carrier without breaking the pad seal. Composes with the goalie poke check
+# automatically — the swept blade reaches further laterally and the per-tick
+# poke check fires when it comes within range of a carried puck.
+@export var paddle_sweep_trigger_distance: float = 1.5
+@export var paddle_sweep_max_yaw_deg: float = 65.0
+@export var paddle_sweep_y_drop: float = 0.08
+@export var paddle_sweep_x_extension: float = 0.10
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -513,6 +525,9 @@ func _configure_collaborators() -> void:
 	_pose.active_blade_max_yaw_deg = active_blade_max_yaw_deg
 	_pose.active_blade_lookahead = active_blade_lookahead
 	_pose.lunge_extension = lunge_extension
+	_pose.paddle_sweep_max_yaw_deg = paddle_sweep_max_yaw_deg
+	_pose.paddle_sweep_y_drop = paddle_sweep_y_drop
+	_pose.paddle_sweep_x_extension = paddle_sweep_x_extension
 	_pose.body_lean_max_deg = body_lean_max_deg
 	_pose.body_lean_reach_norm = body_lean_reach_norm
 	_pose.shoulder_pitch_y_neutral = shoulder_pitch_y_neutral
@@ -857,6 +872,20 @@ func _is_blade_intent_active() -> bool:
 	# nearby (someone who can actually whack it).
 	if goalie.global_position.distance_to(puck.global_position) \
 			>= active_blade_loose_puck_radius:
+		return false
+	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
+
+
+# True when the goalie should commit to a paddle-down sweep instead of the
+# upright active blade intent. Butterfly-family states only, and the puck
+# (loose or carried) must be close to the goalie with an opposing shooter
+# present. Skipped during reactions — the elevated reach owns the blocker.
+func _is_paddle_sweep_active() -> bool:
+	if not _sm.is_down():
+		return false
+	if _reaction.reacting:
+		return false
+	if goalie.global_position.distance_to(puck.global_position) > paddle_sweep_trigger_distance:
 		return false
 	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
 
@@ -1383,6 +1412,7 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.puck_velocity_est = _puck_velocity_est
 	_pose_inputs.blade_intent_active = _is_blade_intent_active()
 	_pose_inputs.lunge_progress = _lunge_progress()
+	_pose_inputs.paddle_sweep_active = _is_paddle_sweep_active()
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
 	var lerp_t: float
 	if _sm.is_down():

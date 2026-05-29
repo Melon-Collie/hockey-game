@@ -79,6 +79,16 @@ var active_blade_lookahead: float = 1.5
 # local -Z, the slot direction). Sin-curved by the controller's
 # lunge_progress so it reads as a quick jab.
 var lunge_extension: float = 0.35
+# Paddle-down sweep tunables (BUTTERFLY-family only). Larger yaw cap than the
+# upright-state active blade intent because the blocker pad sliding laterally
+# is fine when the pads are already on the ice (it's part of the sweep
+# motion). Y drop lowers the blocker hand so the paddle/blade trace closer to
+# the ice. X extension pushes the assembly slightly toward the puck side so
+# the blade reaches further laterally without yaw alone having to do all the
+# work.
+var paddle_sweep_max_yaw_deg: float = 65.0
+var paddle_sweep_y_drop: float = 0.08
+var paddle_sweep_x_extension: float = 0.10
 
 # Per-tick input bundle. Controller scratches one instance and overwrites all
 # fields before each `build()` call.
@@ -109,6 +119,12 @@ class Inputs:
 	# stick a deliberate obstacle the carrier has to dangle around. Elevated
 	# shot reactions still override this (they have their own yaw math).
 	var blade_intent_active: bool = false
+	# Paddle-down sweep: stronger version of blade intent for BUTTERFLY-family
+	# states. Lowers the blocker hand toward the ice + yaws more aggressively
+	# toward the puck so the paddle traces flat across the front of the
+	# crease. Replaces (not stacks with) blade_intent_active in the down
+	# states.
+	var paddle_sweep_active: bool = false
 	# Lunge progress, sin-curved 0 → 1 → 0 over the active window. Pose
 	# builder scales the forward blocker extension by this value.
 	var lunge_progress: float = 0.0
@@ -141,12 +157,12 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			# is driven by _update_position; the pose builder doesn't need
 			# to model the planted-leg weight shift directly.
 			_set_butterfly_pose(c, inputs)
-			_apply_active_blade_intent(c, inputs)
+			_apply_blade_intent_for_down_state(c, inputs)
 			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.SLIDING:
 			_set_sliding_pose(c, inputs)
-			_apply_active_blade_intent(c, inputs)
+			_apply_blade_intent_for_down_state(c, inputs)
 			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.RVH_LEFT:
@@ -352,6 +368,42 @@ func _apply_active_blade_intent(c: GoalieBodyConfig, inputs: Inputs) -> void:
 			c.blocker_rot.x,
 			clampf(yaw_deg, -active_blade_max_yaw_deg, active_blade_max_yaw_deg),
 			c.blocker_rot.z)
+
+
+# Dispatch the right blade-intent helper for the BUTTERFLY-family states.
+# Paddle-down sweep, when active, is a stronger version of the upright
+# active-blade-intent yaw — it replaces (not stacks with) the active intent
+# so we don't double-apply the yaw math.
+func _apply_blade_intent_for_down_state(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.paddle_sweep_active:
+		_apply_paddle_sweep(c, inputs)
+	else:
+		_apply_active_blade_intent(c, inputs)
+
+
+# Paddle-down sweep: blocker hand drops toward the ice and the assembly
+# yaws (and shifts laterally) aggressively toward the puck side, so the
+# paddle traces a wider arc flat across the front of the crease. Replaces
+# the upright active blade intent in BUTTERFLY-family states when active.
+# Skipped during shot reactions — the reach math wins.
+func _apply_paddle_sweep(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.reacting_to_shot:
+		return
+	# Same goalie-local-X math as the elevated shot reach + active blade
+	# intent (+Z-defending goalie's local +X is global -X).
+	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
+	var side: float = signf(puck_local_x)
+	# Larger lookahead than the upright active intent so a small wiggle
+	# doesn't whip the swept paddle — sweeps should commit to a direction.
+	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
+	c.blocker_rot = Vector3(
+			c.blocker_rot.x,
+			clampf(yaw_deg, -paddle_sweep_max_yaw_deg, paddle_sweep_max_yaw_deg),
+			c.blocker_rot.z)
+	c.blocker_pos = Vector3(
+			c.blocker_pos.x + side * paddle_sweep_x_extension,
+			c.blocker_pos.y - paddle_sweep_y_drop,
+			c.blocker_pos.z)
 
 
 # Lunge: push the blocker assembly forward (goalie-local -Z) by the
