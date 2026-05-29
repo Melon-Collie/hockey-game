@@ -18,14 +18,19 @@ class_name AIRoleSupport
 # at 0; the (1 - exposure) factor goes negative when opps clearly
 # beat me home, naturally rejecting unrecoverable candidates.
 #
-# Step 2 of the no-anchors refactor: search center is derived from
-# in-game references (the carrier's position) rather than read from
-# ctx.anchor. Polar samples around the carrier let the score
-# function find the right "trail" position — exposure penalizes
-# candidates ahead of the carrier (toward opp net), so argmax
-# converges on positions behind/beside the carrier toward our net.
-# The "trail" direction emerges from the math, not from a hand-coded
-# weak-side bias.
+# Search center is derived from in-game references (the carrier's
+# position) rather than ctx.anchor. Polar samples around the carrier
+# feed the score function; exposure penalizes candidates the opp would
+# beat us back from, biasing toward recoverable depth.
+#
+# On top of that soft bias, SUPPORT enforces a HARD goal-side
+# constraint (GOAL_SIDE_TOLERANCE_M): candidates up-ice of the carrier
+# are rejected outright. SUPPORT is the conservative trailer / safety
+# valve — the carrier must never be the last man back, so if they're
+# stripped SUPPORT is already the recovery layer. The up-ice stretch
+# option is OUTLET's job, not SUPPORT's. Without the hard constraint
+# the pass-quality term would sometimes pull SUPPORT even with or ahead
+# of the carrier on a clean breakout, leaving no one home.
 
 # Polar sampling radius around the search center. Same scale as
 # AIRoleCarrier.CARRY_SEARCH_STEP_M (3.0 m) — sampling parameter,
@@ -33,14 +38,24 @@ class_name AIRoleSupport
 # anti-crowding filter; samples at the rim of the circle remain.
 const SEARCH_RADIUS_M: float = 5.0
 
+# Safety-valve constraint. SUPPORT is the conservative trailer: it stays
+# goal-side of (no further toward the opp net than) the carrier so the
+# carrier is never the last man back — if the carrier is stripped,
+# SUPPORT is already the recovery layer for the rush the other way. The
+# tolerance lets SUPPORT sit roughly EVEN with the carrier (a weak-side
+# option even with the puck) without drifting into a true stretch
+# position ahead of it; ~one stick-length of slack, not a behavioral
+# knob to open up the offense. Raise OUTLET's role for the up-ice option.
+const GOAL_SIDE_TOLERANCE_M: float = 1.5
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	# Bail-out: no teammate carrier means there's no offensive
-	# context to score against. Brain re-tick will re-route this peer
-	# on the next physics frame; in the meantime hold position.
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_teammate_carrier_pos(ctx)
+	# No live teammate carrier (loose puck / pass in flight) — orient
+	# off the puck instead of freezing, so SUPPORT keeps flowing into
+	# the developing play. Only truly stand still if there's no puck.
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_offensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d
@@ -66,6 +81,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue
+		# Safety-valve: reject candidates up-ice of the carrier so
+		# SUPPORT stays the goal-side recovery layer (see
+		# GOAL_SIDE_TOLERANCE_M). Carrier never the last man back.
+		if not _is_goal_side_of_carrier(c, carrier_pos, ctx.own_goal_dir):
+			continue
 		# Match the speed our carrier would actually fire at (see
 		# finisher.gd for rationale).
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
@@ -81,6 +101,16 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	d.target_position = best_pos
 	return d
+
+
+# True if candidate `c` is goal-side of (or roughly even with) the
+# carrier on the rink's depth axis — i.e., no further toward the opp
+# net than the carrier, within GOAL_SIDE_TOLERANCE_M. own_goal_dir is
+# +1 when our net is at +Z and -1 when at -Z, so own_goal_dir * z grows
+# toward our net; a larger value is "deeper / more goal-side".
+static func _is_goal_side_of_carrier(c: Vector3, carrier_pos: Vector3,
+		own_goal_dir: float) -> bool:
+	return own_goal_dir * c.z >= own_goal_dir * carrier_pos.z - GOAL_SIDE_TOLERANCE_M
 
 
 # ── Candidate generation (in-game-ref) ──────────────────────────────────────

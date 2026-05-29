@@ -61,16 +61,18 @@ func _make_ctx(self_pos: Vector3, anchor: Vector3, carrier_pid: int = -1,
 
 # ── Bail-out cases ──────────────────────────────────────────────────────────
 
-func test_falls_back_to_self_pos_when_no_carrier() -> void:
-	# Default snapshot: just self, no puck carrier. Step 2 of the
-	# no-anchors refactor: SUPPORT now falls back to self_pos
-	# (hold position) instead of an anchor — brain re-tick will
-	# reassign roles within a frame.
-	var self_pos := Vector3(0, 0, -10)
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)
+func test_supports_loose_puck_instead_of_freezing() -> void:
+	# Loose puck (breakout pass in flight). SUPPORT used to freeze at
+	# self_pos — the "stuck on the heels" bug. It must now read off the
+	# puck and present a support option. Bot starts buried deep in our
+	# own end; target must advance toward the play, never self_pos.
+	var self_pos := Vector3(10, 0, 22)   # buried deep in our own end
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)   # loose puck at origin
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
-	assert_eq(d.target_position, self_pos,
-			"no carrier → fall back to self_pos")
+	assert_ne(d.target_position, self_pos,
+			"loose puck → support the play, don't freeze at self_pos")
+	assert_lt(d.target_position.z, self_pos.z,
+			"target advances toward the puck / opp net; got z=%f" % d.target_position.z)
 
 
 func test_falls_back_to_self_pos_when_opp_has_puck() -> void:
@@ -99,6 +101,31 @@ func test_returns_a_legal_position_when_carrier_is_teammate() -> void:
 			"x within rink")
 	assert_true(absf(d.target_position.z) <= GameRules.GOAL_LINE_Z,
 			"z within goal line bounds")
+
+
+# ── Safety valve: stays goal-side of the carrier ────────────────────────────
+
+func test_stays_goal_side_of_carrier() -> void:
+	# SUPPORT is the conservative safety valve: even starting up-ice
+	# (ahead of the carrier toward the opp net) where the cleanest
+	# pass/shot would sit, it must pick a position goal-side of the
+	# carrier so the carrier is never the last man back. Team 0 attacks
+	# -Z / defends +Z, so own_goal_dir * z grows toward our net.
+	var carrier_pos := Vector3(0, 0, 5)        # breaking out, our half
+	var self_pos := Vector3(3, 0, -12)         # up-ice, ahead of the carrier
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],          # us (SUPPORT)
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],     # carrier
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var d: RoleDecision = AIRoleSupport.decide(ctx)
+	assert_true(
+			ctx.own_goal_dir * d.target_position.z
+				>= ctx.own_goal_dir * carrier_pos.z - AIRoleSupport.GOAL_SIDE_TOLERANCE_M - 0.01,
+			"SUPPORT must stay goal-side of the carrier; got target.z=%f vs carrier.z=%f"
+				% [d.target_position.z, carrier_pos.z])
+	assert_gt(d.target_position.z, self_pos.z,
+			"SUPPORT drops back from an up-ice start toward the safety position")
 
 
 # ── Anti-crowding ───────────────────────────────────────────────────────────

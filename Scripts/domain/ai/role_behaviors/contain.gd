@@ -34,9 +34,10 @@ class_name AIRoleContain
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	# Bail-out: no carrier means there's no puck-side to contain.
-	# Brain re-tick reassigns within a frame.
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_any_carrier_pos(ctx)
+	# No live carrier (loose puck / pass in flight) — contain the puck
+	# itself instead of freezing, so CONTAIN keeps recovering toward the
+	# play. Only stand still if there's no puck at all.
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d

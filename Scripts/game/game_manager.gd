@@ -117,6 +117,9 @@ var _swap_coord: SlotSwapCoordinator = null
 var _telemetry: NetworkTelemetry = null
 var _debug_overlay: NetworkDebugOverlay = null
 var _state_buffer_manager: StateBufferManager = null
+# Per-team last-elected loose-puck chaser, fed back into
+# AILoosePuckChase.elect each frame for incumbent hysteresis.
+var _prev_chase_by_team: Dictionary[int, int] = {}
 var _recorder: ReplayRecorder = null
 var _goal_replay_driver: GoalReplayDriver = null
 var _career_reporter: CareerStatsReporter = null
@@ -1469,18 +1472,17 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 	if snap.puck_state == null:
 		return
 	var puck_pos: Vector3 = snap.puck_state.position
+	var puck_vel: Vector3 = snap.puck_state.velocity
 	for team_id: int in snap.teammate_ids_by_team:
 		var ids: Array = snap.teammate_ids_by_team[team_id]
-		var best_pid: int = -1
-		var best_d2: float = INF
-		for pid: int in ids:
-			var pos: Vector3 = snap.skater_states[pid].position
-			var dx: float = pos.x - puck_pos.x
-			var dz: float = pos.z - puck_pos.z
-			var d2: float = dx * dx + dz * dz
-			if d2 < best_d2:
-				best_d2 = d2
-				best_pid = pid
+		# Momentum-aware + hysteretic election (see AILoosePuckChase):
+		# the teammate who actually arrives first keeps the role unless
+		# a challenger clearly beats them, instead of the raw-nearest bot
+		# flickering frame-to-frame.
+		var best_pid: int = AILoosePuckChase.elect(
+				snap.skater_states, ids, puck_pos, puck_vel,
+				_prev_chase_by_team.get(team_id, -1))
+		_prev_chase_by_team[team_id] = best_pid
 		snap.closest_to_puck_by_team[team_id] = best_pid
 
 

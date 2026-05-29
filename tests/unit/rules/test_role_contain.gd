@@ -58,14 +58,18 @@ func _make_ctx(self_pos: Vector3, skaters: Array = [],
 
 # ── Bail-outs ───────────────────────────────────────────────────────────────
 
-func test_falls_back_to_self_pos_when_no_carrier() -> void:
-	# Loose puck — nothing to CONTAIN. Brain re-tick will reassign;
-	# meanwhile hold position.
-	var self_pos := Vector3(0, 0, 10)
-	var ctx: RoleContext = _make_ctx(self_pos)
+func test_contains_loose_puck_instead_of_freezing() -> void:
+	# Loose puck — CONTAIN used to freeze at self_pos. It must now
+	# recover toward the puck→slot spine instead of standing flat-
+	# footed. Bot starts up-ice (offensive side); target pulls back
+	# toward our net, never self_pos.
+	var self_pos := Vector3(0, 0, -6)   # up-ice (offensive side)
+	var ctx: RoleContext = _make_ctx(self_pos)   # loose puck at origin
 	var d: RoleDecision = AIRoleContain.decide(ctx)
-	assert_eq(d.target_position, self_pos,
-			"loose puck → fall back to self_pos")
+	assert_ne(d.target_position, self_pos,
+			"loose puck → recover toward the play, don't freeze")
+	assert_gt(d.target_position.z, self_pos.z,
+			"target pulls back toward our net (+Z); got z=%f" % d.target_position.z)
 
 
 # ── Target sits on the carrier→slot spine ──────────────────────────────────

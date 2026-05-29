@@ -149,6 +149,59 @@ static func resolve_any_carrier_pos(ctx: RoleContext) -> Vector3:
 	return ctx.snapshot.skater_states[carrier_pid].position
 
 
+# ── Play reference (anti-freeze) ─────────────────────────────────────────────
+# Off-puck roles orient their candidate search around the carrier. But
+# there's no live carrier for most of every transition — a loose puck,
+# a breakout pass in flight, the beat after a won battle. The old
+# fallback was to freeze at self_pos, which is the "stuck on the heels"
+# bug: standing still is almost never the right call mid-transition.
+#
+# These resolvers fall back to the PUCK itself when no carrier holds it,
+# so the role keeps flowing toward the developing play (the elected
+# chaser contests it; the others set up as the next option / recover
+# into shape). Returns INF only when there's no puck state at all
+# (degenerate first frame) — callers still self_pos that case.
+
+# Offensive roles (SUPPORT, OUTLET, FINISHER): prefer a live teammate
+# carrier; else, when the puck is genuinely LOOSE, orient off the puck.
+# An opp carrier is deliberately NOT a fallback — there's no offensive
+# context to a candidate-pass-from-the-opp, and the brain re-ticks to a
+# defensive role the same frame on the carrier change, so the caller
+# holds for that one transient frame.
+static func resolve_offensive_play_ref(ctx: RoleContext) -> Vector3:
+	var carrier: Vector3 = resolve_teammate_carrier_pos(ctx)
+	if carrier.is_finite():
+		return carrier
+	if ctx.snapshot != null and ctx.snapshot.puck_state != null \
+			and ctx.snapshot.puck_state.carrier_peer_id == -1:
+		return ctx.snapshot.puck_state.position
+	return Vector3.INF
+
+
+# Defensive roles (PRESSURE, CONTAIN, COVER): prefer whoever carries the
+# puck (an opp by definition in their states); else orient off the puck.
+static func resolve_defensive_play_ref(ctx: RoleContext) -> Vector3:
+	var carrier: Vector3 = resolve_any_carrier_pos(ctx)
+	if carrier.is_finite():
+		return carrier
+	if ctx.snapshot != null and ctx.snapshot.puck_state != null:
+		return ctx.snapshot.puck_state.position
+	return Vector3.INF
+
+
+# Velocity of the play reference — the carrier's velocity when one holds
+# the puck, else the puck's own velocity (loose / in flight). Roles that
+# lead their search center off the reference (PRESSURE) use this so the
+# lead is well-defined even with no live carrier.
+static func resolve_play_ref_velocity(ctx: RoleContext) -> Vector3:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return Vector3.ZERO
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	if carrier_pid != -1 and ctx.snapshot.skater_states.has(carrier_pid):
+		return ctx.snapshot.skater_states[carrier_pid].velocity
+	return ctx.snapshot.puck_state.velocity
+
+
 # Returns positions of opp peers other than the puck carrier — i.e.,
 # the carrier's potential pass receivers. Defensive roles use this
 # to score "carrier's best pass" when evaluating how much a candidate

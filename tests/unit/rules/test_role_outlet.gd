@@ -60,14 +60,18 @@ func _make_ctx(self_pos: Vector3, anchor: Vector3, carrier_pid: int = -1,
 
 # ── Bail-outs ───────────────────────────────────────────────────────────────
 
-func test_falls_back_to_self_pos_when_no_carrier() -> void:
-	# Step 2 of the no-anchors refactor: bail-out holds at self_pos
-	# instead of an anchor.
-	var self_pos := Vector3(-4, 0, -GameRules.BLUE_LINE_Z + 2.5)
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)
+func test_presents_outlet_on_loose_puck_instead_of_freezing() -> void:
+	# Loose puck (breakout in flight). OUTLET used to freeze at self_pos
+	# — the "stuck on the heels" bug. It must now read off the puck and
+	# get up-ice to present the stretch option. Bot starts buried deep
+	# in our own end; target must advance up-ice, never self_pos.
+	var self_pos := Vector3(4, 0, 20)   # buried deep in our own end
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)   # loose puck at origin
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
-	assert_eq(d.target_position, self_pos,
-			"no carrier → fall back to self_pos")
+	assert_ne(d.target_position, self_pos,
+			"loose puck → get up-ice for the outlet, don't freeze")
+	assert_lt(d.target_position.z, self_pos.z,
+			"target advances up-ice toward the stretch position; got z=%f" % d.target_position.z)
 
 
 func test_falls_back_to_self_pos_when_opp_has_puck() -> void:
