@@ -745,12 +745,15 @@ func _update_state(delta: float) -> void:
 			# appropriate.
 			if _is_puck_in_defensive_zone() and not _reaction.reacting:
 				_sm.transition_to(State.RVH_LEFT if puck_local_x < 0.0 else State.RVH_RIGHT)
-			elif (_is_carrier_at_doorstep() or _is_jammed_at_crease()) and not _reaction.reacting:
-				# Either a moving carrier at point-blank range (can't track
-				# laterally fast enough → commit the seal and slide-react to
-				# wraparounds) OR a crease jam: puck close with an opponent
-				# in poke range, no shot inbound but a whack is one tick away.
-				# Both cases want pads on the ice regardless of follow-up play.
+			elif _is_carrier_at_doorstep() and not _reaction.reacting:
+				# Slapshot windup at point-blank range — close-range slapshots
+				# travel faster than the goalie can react after release, so the
+				# drop has to happen during the windup. This is the only
+				# proactive drop trigger from STANDING/READY; everything else
+				# (stickhandlers, loose pucks, scrambles) drops reactively via
+				# shot reaction or save contact. Crease scrambles still pin
+				# the goalie DOWN via _is_threat_pressing in _update_state's
+				# BUTTERFLY → RECOVERING gate.
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -840,21 +843,35 @@ func _is_carrier_at_doorstep() -> bool:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
-# True when the puck is jammed in the crease — close to the goalie, and at
-# least one opposing skater is within stick-poke range of the puck. Covers
-# the cases the carrier-at-doorstep check misses: loose pucks (no carrier),
-# any carrier that's NOT loading a slapshot (the doorstep check is now
-# slapshot-only), and multi-stick scrambles. Without this the goalie stays
-# upright through extended crease scrambles. Own-team carriers are
-# excluded — defencemen jamming around the crease aren't a threat.
-# Host-only; the resulting transition is broadcast normally.
+# True when there's LOOSE-puck traffic in the crease — puck close to the
+# goalie with no carrier and at least one opposing skater within stick-poke
+# range of it. Used by the recovery gate (_is_threat_pressing) to hold
+# butterfly when the goalie is already down and a loose puck is rattling
+# around with opponents nearby (rebound scramble, tip attempt with the
+# puck loose, etc.).
+#
+# Does NOT trigger butterfly entry — proactive drops are now slapshot-
+# windup only (_is_carrier_at_doorstep) plus save contact and shot
+# reaction. A single stickhandler approaching the crease isn't a "jam"
+# and shouldn't force the goalie down; coaches teach staying up against
+# controlled carry. The carrier-near-goalie case is handled separately
+# by _is_threat_pressing's first condition.
 func _is_jammed_at_crease() -> bool:
-	# Lunge takes priority — try the stick first, drop after.
-	if _lunge_active_timer > 0.0:
-		return false
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
-	return _opposing_shooter_near_puck(jam_opponent_distance)
+	if puck.get_carrier() != null:
+		return false
+	if not _skater_getter.is_valid():
+		return false
+	var skaters: Array = _skater_getter.call()
+	for skater: Skater in skaters:
+		if skater == null:
+			continue
+		if team_id != -1 and skater.get_team_id() == team_id:
+			continue
+		if skater.global_position.distance_to(puck.global_position) < jam_opponent_distance:
+			return true
+	return false
 
 # True when an opposing shooter is close enough to the goalie that the stick
 # blade should actively point at the puck side. Carrier within
