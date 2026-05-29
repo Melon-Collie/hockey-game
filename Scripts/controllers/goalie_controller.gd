@@ -183,6 +183,15 @@ extends Node
 # Larger = more lateral offset needed to fully commit the yaw; smaller = blade
 # snaps quicker but jumps on small puck wiggles.
 @export var active_blade_lookahead: float = 1.5
+# Lunge: when an opposing threat is right at the doorstep, the blocker
+# assembly briefly extends forward — the stick blade jabs at the puck. Brief
+# active window with a cooldown so the goalie can't spam-stick into every
+# carrier. The user spec'd this as "lunge"; mechanically it's just a quick
+# forward push on c.blocker_pos.z, sin-curved over the active window.
+@export var lunge_trigger_distance: float = 1.2  # m — puck-to-goalie radius
+@export var lunge_extension: float = 0.35        # m — forward push at peak
+@export var lunge_duration: float = 0.15         # s — active window (0→peak→0 sin curve)
+@export var lunge_cooldown: float = 0.60         # s — minimum gap between lunges
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -414,6 +423,10 @@ var _reading_slapper_tell: bool = false
 # standing movement drives toward `_cross_crease_target_x` at push speed.
 var _cross_crease_timer: float = 0.0
 var _cross_crease_target_x: float = 0.0
+# Lunge state: active timer counts down while the blocker is extended;
+# cooldown timer counts down after each lunge before another can fire.
+var _lunge_active_timer: float = 0.0
+var _lunge_cooldown_timer: float = 0.0
 # Body rotation captured at slide commit. The coil-phase facing lerps from
 # this to the slide end angle so the rotation completes during the coil and
 # holds through the translation phase.
@@ -497,6 +510,7 @@ func _configure_collaborators() -> void:
 	_pose.blocker_max_yaw_deg = blocker_max_yaw_deg
 	_pose.active_blade_max_yaw_deg = active_blade_max_yaw_deg
 	_pose.active_blade_lookahead = active_blade_lookahead
+	_pose.lunge_extension = lunge_extension
 	_pose.body_lean_max_deg = body_lean_max_deg
 	_pose.body_lean_reach_norm = body_lean_reach_norm
 	_pose.shoulder_pitch_y_neutral = shoulder_pitch_y_neutral
@@ -559,6 +573,8 @@ func reset_to_crease() -> void:
 	_prev_puck_position = _tracked_threat_position
 	_cross_crease_timer = 0.0
 	_cross_crease_target_x = 0.0
+	_lunge_active_timer = 0.0
+	_lunge_cooldown_timer = 0.0
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 
@@ -610,6 +626,7 @@ func _update_tracking(delta: float) -> void:
 		_tracked_threat_position = target_threat
 	if is_server:
 		_update_cross_crease(delta, carrier)
+		_update_lunge(delta)
 	# Universal puck tracking: trigger a reaction for any loose puck above the
 	# threshold heading for the net within max_time_to_impact, regardless of
 	# whether a release event fired. Catches board bounces, poke-strips,
@@ -831,6 +848,45 @@ func _is_blade_intent_active() -> bool:
 			>= active_blade_loose_puck_radius:
 		return false
 	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
+
+
+# Lunge timing: tick the active and cooldown timers, and trigger a fresh
+# lunge if both are idle and the trigger conditions hold. Host-only.
+func _update_lunge(delta: float) -> void:
+	if _lunge_active_timer > 0.0:
+		_lunge_active_timer = maxf(_lunge_active_timer - delta, 0.0)
+		return
+	if _lunge_cooldown_timer > 0.0:
+		_lunge_cooldown_timer = maxf(_lunge_cooldown_timer - delta, 0.0)
+		return
+	if _should_lunge():
+		_lunge_active_timer = lunge_duration
+		_lunge_cooldown_timer = lunge_duration + lunge_cooldown
+
+
+# Lunge trigger: doorstep threat. Puck close to the goalie, on the slot side
+# (not behind), and someone can actually shoot it. No lunging during a shot
+# reaction (the arm reach takes priority over the stick jab) or from RVH.
+func _should_lunge() -> bool:
+	if _reaction.reacting:
+		return false
+	if _sm.is_rvh():
+		return false
+	if goalie.global_position.distance_to(puck.global_position) > lunge_trigger_distance:
+		return false
+	if (puck.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
+		return false
+	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
+
+
+# Returns the current lunge progress as a sin curve: 0 at start, 1 at peak
+# (mid-window), 0 at end. The pose builder consumes this to scale the
+# forward blocker extension.
+func _lunge_progress() -> float:
+	if _lunge_active_timer <= 0.0 or lunge_duration <= 0.0:
+		return 0.0
+	var elapsed: float = clampf((lunge_duration - _lunge_active_timer) / lunge_duration, 0.0, 1.0)
+	return sin(PI * elapsed)
 
 
 # True when the puck has someone who can actually shoot it: either an opposing
@@ -1280,6 +1336,7 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.puck_position = puck.global_position
 	_pose_inputs.puck_velocity_est = _puck_velocity_est
 	_pose_inputs.blade_intent_active = _is_blade_intent_active()
+	_pose_inputs.lunge_progress = _lunge_progress()
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
 	var lerp_t: float
 	if _sm.is_down():

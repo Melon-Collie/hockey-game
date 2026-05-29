@@ -75,6 +75,10 @@ var active_blade_max_yaw_deg: float = 25.0
 # produces a readable rotation (rather than the blade hard-snapping to 90°
 # whenever the puck is even slightly off-centre).
 var active_blade_lookahead: float = 1.5
+# Lunge forward extension at peak. Pushes c.blocker_pos forward (in goalie-
+# local -Z, the slot direction). Sin-curved by the controller's
+# lunge_progress so it reads as a quick jab.
+var lunge_extension: float = 0.35
 
 # Per-tick input bundle. Controller scratches one instance and overwrites all
 # fields before each `build()` call.
@@ -105,6 +109,9 @@ class Inputs:
 	# stick a deliberate obstacle the carrier has to dangle around. Elevated
 	# shot reactions still override this (they have their own yaw math).
 	var blade_intent_active: bool = false
+	# Lunge progress, sin-curved 0 → 1 → 0 over the active window. Pose
+	# builder scales the forward blocker extension by this value.
+	var lunge_progress: float = 0.0
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -120,10 +127,12 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 		GoalieStateMachine.State.STANDING:
 			_set_standing_pose(c, inputs)
 			_apply_active_blade_intent(c, inputs)
+			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.READY, GoalieStateMachine.State.RECOVERING:
 			_set_ready_pose(c, inputs)
 			_apply_active_blade_intent(c, inputs)
+			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.BUTTERFLY, GoalieStateMachine.State.COILING:
 			# COILING shares the butterfly pose — pads on the ice, body
@@ -133,10 +142,12 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			# to model the planted-leg weight shift directly.
 			_set_butterfly_pose(c, inputs)
 			_apply_active_blade_intent(c, inputs)
+			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.SLIDING:
 			_set_sliding_pose(c, inputs)
 			_apply_active_blade_intent(c, inputs)
+			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.RVH_LEFT:
 			_set_rvh_left_pose(c)
@@ -341,6 +352,21 @@ func _apply_active_blade_intent(c: GoalieBodyConfig, inputs: Inputs) -> void:
 			c.blocker_rot.x,
 			clampf(yaw_deg, -active_blade_max_yaw_deg, active_blade_max_yaw_deg),
 			c.blocker_rot.z)
+
+
+# Lunge: push the blocker assembly forward (goalie-local -Z) by the
+# lunge_progress fraction of lunge_extension. The blocker pad and stick are
+# rigid, so the entire arm jabs forward — blade moves with it. Skipped
+# during shot reactions (the reach math wins).
+func _apply_lunge(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.lunge_progress <= 0.0:
+		return
+	if inputs.reacting_to_shot:
+		return
+	c.blocker_pos = Vector3(
+			c.blocker_pos.x,
+			c.blocker_pos.y,
+			c.blocker_pos.z - lunge_extension * inputs.lunge_progress)
 
 
 func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
