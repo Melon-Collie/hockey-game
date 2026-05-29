@@ -96,7 +96,7 @@ func test_commit_slide_enters_coil_phase() -> void:
 	# Coil-then-slide: commit captures dir + endpoints but holds velocity at
 	# zero until the coil timer expires. Push-off velocity is applied inside
 	# advance_slide() on the tick the coil completes.
-	sb.commit_slide(0.0, 0.1, 0.5, 0.915)
+	sb.commit_slide(0.0, 0.1, 0.5, 0.915, 0.0, 0.1)
 	assert_eq(sb.velocity_x, 0.0, "no push-off until coil completes")
 	assert_almost_eq(sb.coil_timer, sb.coil_duration, 0.001, "coil timer set")
 	assert_eq(sb.dir, 1.0)
@@ -106,7 +106,7 @@ func test_commit_slide_enters_coil_phase() -> void:
 	assert_eq(sb.cooldown_timer, 0.0)
 
 func test_advance_slide_applies_pushoff_after_coil() -> void:
-	sb.commit_slide(0.0, 0.1, 0.5, 0.915)
+	sb.commit_slide(0.0, 0.1, 0.5, 0.915, 0.0, 0.1)
 	# Tick past the coil duration in one step — velocity should pick up the
 	# committed direction's push-off speed.
 	sb.advance_slide(sb.coil_duration + 0.001, 0.0, 0.915)
@@ -114,7 +114,7 @@ func test_advance_slide_applies_pushoff_after_coil() -> void:
 			"push-off applied on coil-complete tick (minus one frame of decay)")
 
 func test_commit_slide_leftward_direction_captured() -> void:
-	sb.commit_slide(0.0, 0.1, -0.5, 0.915)
+	sb.commit_slide(0.0, 0.1, -0.5, 0.915, 0.0, 0.1)
 	assert_eq(sb.dir, -1.0)
 	# Push-off picks up sign from `dir` when coil completes.
 	sb.advance_slide(sb.coil_duration + 0.001, 0.0, 0.915)
@@ -123,18 +123,18 @@ func test_commit_slide_leftward_direction_captured() -> void:
 # Post-seal depth scales with target X extremity. Centre target: hold depth.
 # Post-line target: full post-seal depth.
 func test_commit_slide_to_centre_holds_depth() -> void:
-	sb.commit_slide(0.0, 0.6, 0.0, 0.915)
+	sb.commit_slide(0.0, 0.6, 0.0, 0.915, 0.0, 0.6)
 	assert_almost_eq(sb.end_depth, 0.6, 0.001, "0 extremity → unchanged depth")
 
 func test_commit_slide_to_post_pulls_post_seal_depth() -> void:
-	sb.commit_slide(0.0, 0.6, 0.915, 0.915)
+	sb.commit_slide(0.0, 0.6, 0.915, 0.915, 0.0, 0.6)
 	# x_extremity = 1.0 → lerp(0.6, 0.10, 1.0) = 0.10
 	assert_almost_eq(sb.end_depth, 0.10, 0.001, "post target → fully post-seal depth")
 
 # ── Advance slide ────────────────────────────────────────────────────────────
 
 func test_advance_slide_decays_velocity() -> void:
-	sb.commit_slide(0.0, 0.1, 1.0, 0.915)
+	sb.commit_slide(0.0, 0.1, 1.0, 0.915, 0.0, 0.1)
 	# Skip past the coil so push-off has been applied.
 	sb.advance_slide(sb.coil_duration, 0.0, 0.915)
 	var v0: float = sb.velocity_x
@@ -143,14 +143,14 @@ func test_advance_slide_decays_velocity() -> void:
 	assert_almost_eq(sb.velocity_x, v0 - 0.6, 0.001)
 
 func test_advance_slide_progresses_arc() -> void:
-	sb.commit_slide(0.0, 0.1, 1.0, 0.915)
+	sb.commit_slide(0.0, 0.1, 1.0, 0.915, 0.0, 0.1)
 	sb.advance_slide(sb.coil_duration, 0.0, 0.915)  # exit coil
 	sb.advance_slide(0.05, 0.0, 0.915)
 	assert_gt(sb.arc_t, 0.0)
 	assert_lt(sb.arc_t, 1.0)
 
 func test_advance_slide_holds_position_during_coil() -> void:
-	sb.commit_slide(0.5, 0.1, 1.5, 0.915)
+	sb.commit_slide(0.5, 0.1, 1.5, 0.915, 0.5, 0.1)
 	# A tick that doesn't exit coil should leave position at the start point
 	# and not advance the arc.
 	var pos: Vector2 = sb.advance_slide(sb.coil_duration * 0.5, 0.0, 0.915)
@@ -162,7 +162,7 @@ func test_advance_slide_holds_position_during_coil() -> void:
 # When velocity decays below slide_min_speed, the slide snaps to its endpoint
 # and the cooldown resets (allowing a follow-up slide).
 func test_advance_slide_finishes_below_min_speed() -> void:
-	sb.commit_slide(0.0, 0.1, 0.5, 0.915)
+	sb.commit_slide(0.0, 0.1, 0.5, 0.915, 0.0, 0.1)
 	# Tick enough to fully decay (initial speed 4.5; friction 6.0 → ~0.75s to zero)
 	for _i in range(20):
 		sb.advance_slide(0.05, 0.0, 0.915)
@@ -174,7 +174,7 @@ func test_advance_slide_finishes_below_min_speed() -> void:
 # Position is clamped to the post line — slide arcing wider than the net is
 # pinned at ±net_half_width.
 func test_advance_slide_clamps_x_to_post() -> void:
-	sb.commit_slide(0.0, 0.1, 5.0, 0.915)  # ridiculous target outside the net
+	sb.commit_slide(0.0, 0.1, 5.0, 0.915, 0.0, 0.1)  # ridiculous target outside the net
 	for _i in range(20):
 		sb.advance_slide(0.05, 0.0, 0.915)
 	assert_lte(sb.velocity_x, 0.0, "velocity decayed to zero or below")
@@ -201,7 +201,7 @@ func test_clamp_lateral_target_negative_side() -> void:
 # ── Reset / enter_fresh_butterfly ────────────────────────────────────────────
 
 func test_reset_clears_all_state() -> void:
-	sb.commit_slide(0.0, 0.1, 0.5, 0.915)
+	sb.commit_slide(0.0, 0.1, 0.5, 0.915, 0.0, 0.1)
 	sb.tick_butterfly(0.1)
 	sb.cooldown_timer = 1.0
 	sb.reset()

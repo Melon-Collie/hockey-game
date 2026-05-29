@@ -1059,7 +1059,9 @@ func _try_commit_slide() -> void:
 		var cc_target: float = _post_edge_seal_x(cc_side, pad_edge, slide_rot)
 		if GoalieBehaviorRules.should_commit_slide(_current_x, cc_target, slide_trigger_distance):
 			_slide_start_rotation_y = goalie.get_goalie_rotation_y()
-			_slide.commit_slide(_current_x, _current_depth, cc_target, net_half_width)
+			var cc_end: Vector2 = _coil_end_xz(cc_side, slide_rot)
+			_slide.commit_slide(_current_x, _current_depth, cc_target,
+					net_half_width, cc_end.x, cc_end.y)
 			_sm.transition_to(State.SLIDING)
 			return
 	# Threshold path: only commit once lateral intent has been sustained — a
@@ -1077,8 +1079,37 @@ func _try_commit_slide() -> void:
 	if not GoalieBehaviorRules.should_commit_slide(_current_x, seal_target, slide_trigger_distance):
 		return
 	_slide_start_rotation_y = goalie.get_goalie_rotation_y()
-	_slide.commit_slide(_current_x, _current_depth, seal_target, net_half_width)
+	var t_end: Vector2 = _coil_end_xz(threat_side, slide_rot)
+	_slide.commit_slide(_current_x, _current_depth, seal_target,
+			net_half_width, t_end.x, t_end.y)
 	_sm.transition_to(State.SLIDING)
+
+
+# Where the body ends up after the coil phase: it rotates around the PIVOT
+# FOOT (the planted pad, opposite the slide direction) by the slide deviation,
+# so the body sweeps an arc and lands somewhere shifted from the start. The
+# planted pad's WORLD position stays fixed; the body and the OTHER pad swing.
+#
+# Body offset from pivot at slide start = (+side * pad_local_offset, 0), and it
+# rotates by `deviation = direction_sign * side * slide_rot` in the XZ plane.
+# The result fed to commit_slide as the coil-end / slide-phase start position.
+#
+# Returns Vector2(coil_end_x_world, coil_end_perp_depth).
+func _coil_end_xz(side: float, slide_rot: float) -> Vector2:
+	var deviation: float = _direction_sign * side * slide_rot
+	var c: float = cos(deviation)
+	var s: float = sin(deviation)
+	# Body's offset from pivot rotates: (pad_local_offset, 0) → (pad*c, pad*s).
+	# Delta in world XZ from the start body position is therefore
+	# (pad*(c-1), pad*s) in the +side direction, but we want the delta in body
+	# world coords: shift_x = side * pad * (c - 1), shift_z = side * pad * s.
+	var shift_x: float = side * pad_local_offset * (c - 1.0)
+	var shift_z: float = side * pad_local_offset * s
+	# Convert world Z shift into perpendicular depth shift. Depth is
+	# (z_world - goal_line_z) * direction_sign, so a positive z_world delta
+	# becomes a +direction_sign delta in depth.
+	var depth_shift: float = shift_z * _direction_sign
+	return Vector2(_current_x + shift_x, _current_depth + depth_shift)
 
 
 # Compute the goalie body X that puts the leading pad's outer edge ON the post

@@ -40,13 +40,19 @@ var velocity_x: float = 0.0
 # after velocity decays to 0.
 var dir: float = 0.0           # ±1, committed slide direction
 var arc_t: float = 0.0         # 0→1 progress along the committed span
+# start_x/start_depth are the SLIDE-PHASE start — i.e. the body's position
+# after the coil completes. coil_start_x/coil_start_depth are where the body
+# was AT commit (before the coil rotation moved it around the pivot foot).
 var start_x: float = 0.0
 var start_depth: float = 0.0
 var end_x: float = 0.0
 var end_depth: float = 0.0
-# Coil phase countdown. > 0 means we're still rotating into the slide pose;
-# the body holds its start position until this hits zero, then push-off
-# velocity is applied and translation begins.
+var coil_start_x: float = 0.0
+var coil_start_depth: float = 0.0
+# Coil phase countdown. > 0 means we're still rotating around the pivot
+# foot; advance_slide() lerps the body's position from (coil_start_x,
+# coil_start_depth) to (start_x, start_depth) over this window. When it hits
+# zero, push-off velocity is applied and the translation phase begins.
 var coil_timer: float = 0.0
 # Butterfly cycle timers. drop_progress drives the pads-to-floor animation;
 # hold_timer counts butterfly time toward `butterfly_min_hold_time` before
@@ -67,6 +73,8 @@ func reset() -> void:
 	start_depth = 0.0
 	end_x = 0.0
 	end_depth = 0.0
+	coil_start_x = 0.0
+	coil_start_depth = 0.0
 	drop_progress = 0.0
 	hold_timer = 0.0
 	cooldown_timer = 0.0
@@ -124,12 +132,18 @@ func can_commit_slide() -> bool:
 # Commit a new slide toward `target_x`. Captures arc endpoints + push-off
 # direction. Post-seal depth scaling: more extreme lateral targets pull the
 # goalie deeper so the sealing pad presses the post (backdoor coverage).
-func commit_slide(current_x: float, current_depth: float, target_x: float, net_half_width: float) -> void:
+func commit_slide(current_x: float, current_depth: float, target_x: float, net_half_width: float,
+		coil_end_x: float, coil_end_depth: float) -> void:
 	var commit_dir: float = signf(target_x - current_x)
-	# Start in COIL phase: no translation until coil completes. Push-off
-	# velocity is applied in advance_slide() when coil_timer hits zero.
+	# Start in COIL phase: body lerps from (current_x, current_depth) — captured
+	# as coil_start_* — to (coil_end_x, coil_end_depth) as it rotates around the
+	# pivot foot. The slide phase then translates from (coil_end_x, coil_end_depth)
+	# — which is also start_x/start_depth — to the seal target. Push-off velocity
+	# is applied in advance_slide() when coil_timer hits zero.
 	velocity_x = 0.0
 	coil_timer = coil_duration
+	coil_start_x = current_x
+	coil_start_depth = current_depth
 	cooldown_timer = 0.0
 	# Extremity is measured against the SLIDE CLAMP LIMIT (the puck-side
 	# post-pad-edge, where target_x is already clamped to), not the post
@@ -142,11 +156,14 @@ func commit_slide(current_x: float, current_depth: float, target_x: float, net_h
 	# diving from an aggressive depth.
 	var clamp_limit: float = maxf(net_half_width - pad_edge_extent, 0.001)
 	var x_extremity: float = clampf(absf(target_x) / clamp_limit, 0.0, 1.0)
-	var depth_target: float = lerpf(current_depth, post_seal_depth, x_extremity)
+	var depth_target: float = lerpf(coil_end_depth, post_seal_depth, x_extremity)
 	dir = commit_dir
 	arc_t = 0.0
-	start_x = current_x
-	start_depth = current_depth
+	# Slide phase begins where the coil left off — the body has already
+	# rotated around the pivot foot to (coil_end_x, coil_end_depth) by the
+	# time push-off fires.
+	start_x = coil_end_x
+	start_depth = coil_end_depth
 	end_x = target_x
 	end_depth = depth_target
 
@@ -157,13 +174,18 @@ func commit_slide(current_x: float, current_depth: float, target_x: float, net_h
 # pivot. When velocity falls below `slide_min_speed` the slide ends — caller
 # should check `is_slide_finished()` after this call.
 func advance_slide(delta: float, goal_center_x: float, net_half_width: float) -> Vector2:
-	# COIL phase: body holds its start position while rotation completes.
-	# When the coil timer expires, apply push-off and fall through to the
-	# translation logic immediately so the slide doesn't stall for one tick.
+	# COIL phase: body lerps from (coil_start_x, coil_start_depth) to
+	# (start_x, start_depth) — the rotation-around-pivot-foot end position —
+	# as the coil timer drains. When it hits zero, push-off velocity is applied
+	# and we fall through to translation immediately so the slide doesn't
+	# stall for one tick.
 	if coil_timer > 0.0:
 		coil_timer = maxf(coil_timer - delta, 0.0)
-		if coil_timer > 0.0:
-			return Vector2(start_x, start_depth)
+		if coil_timer > 0.0 and coil_duration > 0.0:
+			var coil_progress: float = clampf(1.0 - coil_timer / coil_duration, 0.0, 1.0)
+			return Vector2(
+					lerpf(coil_start_x, start_x, coil_progress),
+					lerpf(coil_start_depth, start_depth, coil_progress))
 		# Coil just completed this frame — push off.
 		velocity_x = dir * slide_initial_speed
 	var decay: float = slide_friction * delta
