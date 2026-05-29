@@ -269,6 +269,16 @@ extends Node
 # full lean for corner pulls).
 @export var body_lean_max_deg: float = 14.0
 @export var body_lean_reach_norm: float = 0.7   # reach distance that maps to full lean
+# Shoulder save: forward/back pitch on the body during an elevated shot reaction.
+# Low-chest shots (intercept_y below `shoulder_pitch_y_neutral`) lean the torso
+# forward to present the chest into the shot. Upper-body / head shots lean the
+# torso back so the chest collider rocks up and the glove/blocker have room to
+# come in. Applied additively on top of each state's resting body pitch so the
+# butterfly's existing -10° forward lean is preserved at neutral height.
+@export var shoulder_pitch_y_neutral: float = 0.95
+@export var shoulder_pitch_forward_max_deg: float = 8.0
+@export var shoulder_pitch_back_max_deg: float = 5.0
+@export var shoulder_pitch_y_range: float = 0.55  # y-distance from neutral that maps to full back lean
 # Hard cap on glove linear speed during shot reactions, in m/s. Lerp-based
 # tracking made the math vague (asymptotic convergence); a velocity cap is
 # exact: max per-frame travel = speed * delta. Real glove speeds are
@@ -417,6 +427,10 @@ func _configure_collaborators() -> void:
 	_pose.blocker_max_yaw_deg = blocker_max_yaw_deg
 	_pose.body_lean_max_deg = body_lean_max_deg
 	_pose.body_lean_reach_norm = body_lean_reach_norm
+	_pose.shoulder_pitch_y_neutral = shoulder_pitch_y_neutral
+	_pose.shoulder_pitch_forward_max_deg = shoulder_pitch_forward_max_deg
+	_pose.shoulder_pitch_back_max_deg = shoulder_pitch_back_max_deg
+	_pose.shoulder_pitch_y_range = shoulder_pitch_y_range
 	_pose.react_hand_y_min = react_hand_y_min
 	_pose.react_hand_y_max = react_hand_y_max
 	_pose.react_hand_z = react_hand_z

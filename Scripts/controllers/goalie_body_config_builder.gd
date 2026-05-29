@@ -33,6 +33,13 @@ var blocker_max_yaw_deg: float = 60.0
 # Body lean into the reach side during elevated saves.
 var body_lean_max_deg: float = 14.0
 var body_lean_reach_norm: float = 0.7
+# Shoulder-save pitch. Forward for low-chest shots, back for upper-body / head
+# shots. Applied additively on top of each state's resting body pitch so the
+# butterfly's existing -10° forward lean still holds at neutral height.
+var shoulder_pitch_y_neutral: float = 0.95
+var shoulder_pitch_forward_max_deg: float = 8.0
+var shoulder_pitch_back_max_deg: float = 5.0
+var shoulder_pitch_y_range: float = 0.55
 
 # Reach height clamp + rest Z for the glove/blocker target.
 var react_hand_y_min: float = 0.50
@@ -273,7 +280,21 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	var lean_factor: float = clampf(absf(impact_local_x) / maxf(body_lean_reach_norm, 0.001), 0.0, 1.0)
 	var lean_sign: float = signf(-impact_local_x)
 	var lean_deg: float = lean_sign * lean_factor * body_lean_max_deg
-	c.body_rot = Vector3(c.body_rot.x, c.body_rot.y, lean_deg)
+	# Shoulder-save pitch: forward for low-chest shots, back for upper-body /
+	# head shots. Engages independently of lateral reach so a centre-chest shot
+	# still gets a visible commit (no "arms flopping alone" look). Additive so
+	# the state's resting pitch (e.g. butterfly's -10° forward lean) is
+	# preserved at neutral height.
+	var pitch_deg: float = 0.0
+	if intercept_y < shoulder_pitch_y_neutral:
+		var p: float = clampf((shoulder_pitch_y_neutral - intercept_y) \
+				/ maxf(shoulder_pitch_y_neutral, 0.001), 0.0, 1.0)
+		pitch_deg = -shoulder_pitch_forward_max_deg * p
+	else:
+		var p: float = clampf((intercept_y - shoulder_pitch_y_neutral) \
+				/ maxf(shoulder_pitch_y_range, 0.001), 0.0, 1.0)
+		pitch_deg = shoulder_pitch_back_max_deg * p
+	c.body_rot = Vector3(c.body_rot.x + pitch_deg, c.body_rot.y, lean_deg)
 	if impact_local_x <= 0.0:
 		_reach_glove(c, impact_local_x, target_y)
 	else:
