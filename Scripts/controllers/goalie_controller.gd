@@ -148,8 +148,20 @@ extends Node
 @export var slide_initial_speed: float = 2.0        # m/s push-off speed (visible glide, not teleport)
 @export var slide_friction: float = 1.5             # m/s² decay (gentle so the slide reads as motion)
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
-@export var slide_trigger_distance: float = 0.30    # m — threat-X delta needed to commit
+@export var slide_trigger_distance: float = 0.50    # m — threat-X delta needed to commit (threshold path; intentionally strict)
 @export var slide_cooldown: float = 0.20            # s between committed slides
+# Cross-crease commits use a smaller distance gate than the threshold path
+# because the puck-velocity event already qualifies the play as goal-
+# imminent. Without a smaller gate, the corrected pad geometry's tight
+# seal target (~7cm from centre on a centred goalie) would mean the cross-
+# crease detector almost never reaches the commit threshold.
+@export var cross_crease_trigger_distance: float = 0.10
+# Threshold-path imminence gate. The threshold slide is meant for "super out
+# of position on a developing imminent threat" — wraparounds, recovery
+# scrambles. Long shots are not imminent and shouldn't trigger slides
+# regardless of how much the carrier moves laterally. Threats further than
+# this from the goal (Euclidean) skip the threshold slide entirely.
+@export var slide_threat_max_distance: float = 5.0
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -1082,20 +1094,30 @@ func _try_commit_slide() -> void:
 	if _cross_crease_timer > 0.0:
 		var cc_side: float = signf(_cross_crease_target_x - _goal_center_x)
 		var cc_target: float = _post_edge_seal_x(cc_side, pad_edge, slide_rot)
-		if GoalieBehaviorRules.should_commit_slide(_current_x, cc_target, slide_trigger_distance):
+		# Cross-crease uses the smaller cross_crease_trigger_distance — the
+		# puck-velocity event already qualifies the play as imminent, so we
+		# don't also need the "super out of position" gate from the threshold
+		# path.
+		if GoalieBehaviorRules.should_commit_slide(_current_x, cc_target, cross_crease_trigger_distance):
 			_slide_start_rotation_y = goalie.get_goalie_rotation_y()
 			var cc_end: Vector2 = _coil_end_xz(cc_side, slide_rot)
 			_slide.commit_slide(_current_x, _current_depth, cc_target,
 					net_half_width, cc_end.x, cc_end.y)
 			_sm.transition_to(State.COILING)
 			return
-	# Threshold path: only commit once lateral intent has been sustained — a
-	# dangle reverses inside the window and never trips it. Target is the
-	# post-edge-seal on the threat's side (not threat-tracked) — slides are
-	# discrete "commit to sealing the back post" motions, not partial
-	# adjustments. The distance gate keeps the goalie from sliding when it's
-	# already near that seal spot.
+	# Threshold path: only commit once (1) lateral intent has been sustained —
+	# a dangle reverses inside the window and never trips it — AND (2) the
+	# threat is imminent (within slide_threat_max_distance of the goal) AND
+	# (3) the goalie is super out of position (distance to seal target exceeds
+	# the strict slide_trigger_distance). Long shots fail (2) regardless of
+	# how much the carrier moves laterally while winding up. Normal lateral
+	# tracking near the net fails (3) because the butterfly already covers
+	# most of the net — only big positional mistakes trigger threshold slides.
 	if not _has_sustained_lateral_intent():
+		return
+	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
+			_tracked_threat_position, _goal_line_z, _goal_center_x)
+	if threat_dist > slide_threat_max_distance:
 		return
 	var threat_side: float = signf(_tracked_threat_position.x - _goal_center_x)
 	if threat_side == 0.0:
