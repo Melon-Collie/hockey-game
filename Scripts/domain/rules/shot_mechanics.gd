@@ -61,7 +61,7 @@ static func release_wrister(
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
 	var charge_t: float = clampf(charge_distance / cfg.max_wrister_charge_distance, 0.0, 1.0)
 
-	if charge_t < cfg.quick_shot_threshold:
+	if charge_distance < cfg.quick_shot_threshold:
 		# Quick shot — aim player→blade. The blade tracks the cursor via IK so
 		# aim is accurate, and ROM constraints mean the blade can never be behind
 		# the player, so this direction can't flip backward when the cursor is.

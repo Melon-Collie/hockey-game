@@ -104,11 +104,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
 @export var max_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-@export var max_wrister_charge_distance: float = 2.0
+@export var max_wrister_charge_distance: float = 0.7
 @export var backhand_power_coefficient: float = 0.75
 @export var max_charge_direction_variance: float = 35.0
 @export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
-@export var quick_shot_threshold: float = 0.1
+# Absolute charge_distance (in meters of blade travel) below which the
+# wrister releases as a quick shot. Independent of max_wrister_charge_distance
+# so the snap-tap feel is the same across attribute spreads — a 0.15m drag
+# is a quick shot regardless of who's shooting. Above this, the wrister
+# lerps power between min and max based on charge ratio.
+@export var quick_shot_threshold: float = 0.15
 @export var quick_shot_elevation: float = 0.10
 @export var wrister_elevation_target_height: float = 0.90
 # Apex cap for elevated shots — puck can't rise more than this above the blade.
@@ -331,7 +336,10 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	quick_shot_power  = _base_quick_shot_power  * m_shot_power
 	min_slapper_power = _base_min_slapper_power * m_shot_power
 	max_slapper_power = _base_max_slapper_power * m_shot_power
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.strength_charge_mult()
+	# Charge cap scales with both Strength (how easy to load) and Size (so the
+	# cap stays a constant fraction of the player's ROM — small players can
+	# still fill the bar with their own full-reach sweep).
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.strength_charge_mult() * attrs.size_charge_mult()
 	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.strength_charge_mult()
 	# Weight uses the narrower SIZE_WEIGHT spread (±12%) instead of canonical
 	# Size (±18%) so the weight_ratio in the check formula doesn't dominate
@@ -686,6 +694,12 @@ func _enter_slapper_charge(input: InputState) -> void:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 
 func _get_charge_direction() -> Vector3:
+	# prev_blade_dir is the screen-space cursor drag direction, packed
+	# (x, 0, y) and treated as a world XZ vector. Screen Y → world Z
+	# directly with no flip for the attack_up camera, so an attack_up
+	# team-1 player whose camera is rotated 180° has prev_blade_dir
+	# pointing at their own goal. LocalController overrides this to
+	# apply the sign flip for that specific case.
 	return _aiming.prev_blade_dir
 
 func _release_wrister(input: InputState) -> void:
@@ -747,7 +761,21 @@ func _hide_slapshot_hud() -> void:
 func _update_wrister_charge(input: InputState) -> void:
 	if not has_puck:
 		return
-	_aiming.tick_wrister_charge(input.mouse_screen_pos, max_charge_direction_variance, max_wrister_charge_distance)
+	# Direction signal: cursor SCREEN position, packed (x, 0, y) for the
+	# tracker's Vector3 interface. Screen space is the camera-immune
+	# frame — pixel motion captures the player's mouse drag intent
+	# independent of camera lag, body rotation, or skater locomotion.
+	var intent_pos := Vector3(input.mouse_screen_pos.x, 0.0, input.mouse_screen_pos.y)
+	# Magnitude signal: blade world position with skater translation subtracted.
+	# ROM clamping inside apply_blade_from_mouse has already run this tick, so a
+	# cursor past the reach limit produces zero delta here — no charge growth
+	# from cursor motion that the blade physically didn't follow.
+	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
+	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
+	blade_pos_rel_skater.y = 0.0
+	_aiming.tick_wrister_charge(
+			intent_pos, blade_pos_rel_skater,
+			max_charge_direction_variance, max_wrister_charge_distance)
 	skater.shot_charge = _aiming.charge_distance / max_wrister_charge_distance
 	# Charge ring is local-only; gate on the same flag as the one-timer reticle.
 	if show_one_timer_indicator:

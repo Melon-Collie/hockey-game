@@ -95,10 +95,10 @@ func _state_skating_without_puck(_skater: Skater, input: InputState, delta: floa
 		_cb.enter_slapper_charge.call(input)
 
 
-func _state_skating_with_puck(_skater: Skater, input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:
+func _state_skating_with_puck(skater: Skater, input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:
 	_cb.apply_blade_from_mouse.call(input, delta)
 	if input.shoot_pressed:
-		_enter_wrister_aim(input)
+		_enter_wrister_aim(skater, input)
 	if input.slap_pressed:
 		_cb.enter_slapper_charge.call(input)
 
@@ -179,10 +179,18 @@ func _state_shot_blocking(skater: Skater, input: InputState, delta: float, _has_
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-func _enter_wrister_aim(input: InputState) -> void:
+func _enter_wrister_aim(skater: Skater, input: InputState) -> void:
 	_state = State.WRISTER_AIM
 	shot_dir = Vector3.ZERO
-	_aiming.reset_wrister(input.mouse_screen_pos)
+	# Seed both the cursor (screen-space) and the blade (skater-translation-
+	# subtracted world) baselines the charge tracker reads each tick — first
+	# tick after press produces a delta of zero against these, so a spurious
+	# wide-angle direction-variance reset can't fire on the first frame.
+	var intent_pos := Vector3(input.mouse_screen_pos.x, 0.0, input.mouse_screen_pos.y)
+	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
+	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
+	blade_pos_rel_skater.y = 0.0
+	_aiming.reset_wrister(intent_pos, blade_pos_rel_skater)
 
 
 func _cancel_slapper_internal() -> void:

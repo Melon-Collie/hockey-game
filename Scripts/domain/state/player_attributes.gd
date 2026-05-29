@@ -29,6 +29,8 @@ extends RefCounted
 #   - Weight is decoupled from canonical Size (±12% vs ±18%) so Strength
 #     can outweigh raw mass differential in the check formula
 #   - Charge speed wants Strength inverted (lower = faster, ±12%)
+#   - Charge cap matches Size→arm length so all sizes fill the bar with the
+#     same fraction of their ROM (±9%, same shape as HEIGHT_MULTS)
 #   - Carry retention wants a small Agility spread (±4%)
 # A single per-attribute table couldn't carry all those shapes.
 #
@@ -78,12 +80,19 @@ const _STRENGTH_MULTS: Array[float] = [0.75, 1.00, 1.25]
 #   actually matters.
 # STRENGTH_CHARGE: inverted (lower = faster ramp to max power). Lets a
 #   Strength-strong player threaten at close range.
+# SIZE_CHARGE: matches HEIGHT (arm length, hence ROM). Compensates for the
+#   blade-driven charge model — without it, smaller players couldn't fill
+#   the charge bar because their ROM caps the achievable blade arc. Scaling
+#   the cap proportionally to ROM keeps the "fraction of your reach used"
+#   constant across sizes, so a small player and a big player both fill
+#   the bar with the same relative effort.
 const _HEIGHT_MULTS:          Array[float] = [0.91, 1.00, 1.09]
 const _SIZE_WEIGHT_MULTS:     Array[float] = [0.88, 1.00, 1.12]
 const _AGILITY_CARRY_MULTS:   Array[float] = [0.96, 1.00, 1.04]
 const _AGILITY_GLIDE_MULTS:   Array[float] = [1.10, 1.00, 0.90]
 const _STRENGTH_SHOT_MULTS:   Array[float] = [0.85, 1.00, 1.15]
 const _STRENGTH_CHARGE_MULTS: Array[float] = [1.12, 1.00, 0.88]
+const _SIZE_CHARGE_MULTS:     Array[float] = [0.91, 1.00, 1.09]
 
 # Visual-only — drive `transform.scale` on body-chain mesh leaves and arm
 # mesh radii. Wider than gameplay tables on purpose: the third-person
@@ -161,6 +170,7 @@ func agility_carry_mult()   -> float: return _lookup(_AGILITY_CARRY_MULTS,   agi
 func agility_glide_mult()   -> float: return _lookup(_AGILITY_GLIDE_MULTS,   agility)
 func strength_shot_mult()   -> float: return _lookup(_STRENGTH_SHOT_MULTS,   strength)
 func strength_charge_mult() -> float: return _lookup(_STRENGTH_CHARGE_MULTS, strength)
+func size_charge_mult()     -> float: return _lookup(_SIZE_CHARGE_MULTS,     size)
 
 # Visual
 func torso_bulk_mult() -> float: return _lookup(_TORSO_BULK_MULTS, size)
