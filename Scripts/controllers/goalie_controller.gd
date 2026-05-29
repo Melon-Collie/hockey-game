@@ -159,6 +159,11 @@ extends Node
 @export var slide_threat_max_distance: float = 6.0  # m — Euclidean puck→goal; filters long shots
 @export var slide_coverage_buffer: float = 0.10     # m — past pad edge before triggering (anti-jitter)
 @export var slide_anticipation_time: float = 0.10   # s — projects puck via velocity so cross-crease commits early
+# Shooter-present gate: only slide if there's someone who can actually shoot
+# the puck. Opposing carrier (any range) counts; loose puck counts only if an
+# opposing skater is within this radius. No need to seal the back door for a
+# puck nobody can play.
+@export var slide_loose_puck_shooter_radius: float = 2.0
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -785,12 +790,17 @@ func _is_carrier_at_doorstep() -> bool:
 func _is_jammed_at_crease() -> bool:
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
+	return _opposing_shooter_near_puck(jam_opponent_distance)
+
+# True when the puck has someone who can actually shoot it: either an opposing
+# carrier (any range), or a loose puck with an opposing skater within
+# `loose_puck_radius`. Own-team possession / own-team retrieves don't count
+# as shooting threats.
+func _opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
 	var carrier: Skater = puck.get_carrier()
-	if carrier != null and team_id != -1 and carrier.get_team_id() == team_id:
-		return false
 	if carrier != null:
-		# Opposing carrier inside the jam zone is reason enough — they can
-		# whack at any moment regardless of speed.
+		if team_id != -1 and carrier.get_team_id() == team_id:
+			return false
 		return true
 	if not _skater_getter.is_valid():
 		return false
@@ -800,7 +810,7 @@ func _is_jammed_at_crease() -> bool:
 			continue
 		if team_id != -1 and skater.get_team_id() == team_id:
 			continue
-		if skater.global_position.distance_to(puck.global_position) < jam_opponent_distance:
+		if skater.global_position.distance_to(puck.global_position) < loose_puck_radius:
 			return true
 	return false
 
@@ -1067,6 +1077,11 @@ func _try_commit_slide() -> void:
 		return
 	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
 	var slide_rot: float = deg_to_rad(slide_max_rotation_deg)
+	# Shooter-present gate: no point sealing the back door for a puck nobody
+	# can play. Either an opposing carrier or an opposing skater within
+	# slide_loose_puck_shooter_radius of a loose puck.
+	if not _opposing_shooter_near_puck(slide_loose_puck_shooter_radius):
+		return
 	# Imminence gate: only slide for threats close to the net. Long shots
 	# (puck still far in z) skip the trigger entirely. Euclidean so a wide
 	# threat in the slot still qualifies.
