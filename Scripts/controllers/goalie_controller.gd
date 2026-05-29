@@ -200,6 +200,19 @@ extends Node
 @export var paddle_sweep_max_yaw_deg: float = 65.0
 @export var paddle_sweep_y_drop: float = 0.08
 @export var paddle_sweep_x_extension: float = 0.10
+
+# ── Standing sweep ───────────────────────────────────────────────────────────
+# Upright equivalent of the paddle-down sweep. More aggressive blade reach
+# than the default active blade intent — yaws further, pushes laterally,
+# drops the hand a bit. Gated specifically on slow / stationary carriers (or
+# loose pucks) at close range, where the goalie has time to commit and
+# coaches teach being more aggressive with the stick. Against fast carriers
+# the default mild active blade intent stays.
+@export var standing_sweep_trigger_distance: float = 2.0
+@export var standing_sweep_carrier_max_speed: float = 3.0  # m/s — above this, default to mild intent
+@export var standing_sweep_max_yaw_deg: float = 45.0
+@export var standing_sweep_y_drop: float = 0.04
+@export var standing_sweep_x_extension: float = 0.06
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -528,6 +541,9 @@ func _configure_collaborators() -> void:
 	_pose.paddle_sweep_max_yaw_deg = paddle_sweep_max_yaw_deg
 	_pose.paddle_sweep_y_drop = paddle_sweep_y_drop
 	_pose.paddle_sweep_x_extension = paddle_sweep_x_extension
+	_pose.standing_sweep_max_yaw_deg = standing_sweep_max_yaw_deg
+	_pose.standing_sweep_y_drop = standing_sweep_y_drop
+	_pose.standing_sweep_x_extension = standing_sweep_x_extension
 	_pose.body_lean_max_deg = body_lean_max_deg
 	_pose.body_lean_reach_norm = body_lean_reach_norm
 	_pose.shoulder_pitch_y_neutral = shoulder_pitch_y_neutral
@@ -891,6 +907,29 @@ func _is_blade_intent_active() -> bool:
 			>= active_blade_loose_puck_radius:
 		return false
 	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
+
+
+# True when the goalie should commit to a standing sweep instead of the
+# subtle active-blade-intent yaw. Upright states only; puck must be close,
+# carrier slow (or puck loose), and an opposing shooter present. Skipped
+# during reactions. The "carrier slow" gate is the realism win — coaches
+# teach being more aggressive with the stick against dawdling stickhandlers
+# (they're not moving fast enough to surprise the goalie), but staying mild
+# against carriers driving hard (commitment leaves the goalie exposed).
+func _is_standing_sweep_active() -> bool:
+	if _sm.is_down():
+		return false
+	if _reaction.reacting:
+		return false
+	if goalie.global_position.distance_to(puck.global_position) > standing_sweep_trigger_distance:
+		return false
+	if not _opposing_shooter_near_puck(slide_loose_puck_shooter_radius):
+		return false
+	# Loose puck = aggressive by default; carrier must be slow to qualify.
+	var carrier: Skater = puck.get_carrier()
+	if carrier == null:
+		return true
+	return carrier.velocity.length() <= standing_sweep_carrier_max_speed
 
 
 # True when the goalie should commit to a paddle-down sweep instead of the
@@ -1430,6 +1469,7 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.blade_intent_active = _is_blade_intent_active()
 	_pose_inputs.lunge_progress = _lunge_progress()
 	_pose_inputs.paddle_sweep_active = _is_paddle_sweep_active()
+	_pose_inputs.standing_sweep_active = _is_standing_sweep_active()
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
 	var lerp_t: float
 	if _sm.is_down():

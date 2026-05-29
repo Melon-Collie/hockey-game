@@ -79,6 +79,9 @@ var active_blade_lookahead: float = 1.5
 # local -Z, the slot direction). Sin-curved by the controller's
 # lunge_progress so it reads as a quick jab.
 var lunge_extension: float = 0.35
+var standing_sweep_max_yaw_deg: float = 45.0
+var standing_sweep_y_drop: float = 0.04
+var standing_sweep_x_extension: float = 0.06
 # Paddle-down sweep tunables (BUTTERFLY-family only). Larger yaw cap than the
 # upright-state active blade intent because the blocker pad sliding laterally
 # is fine when the pads are already on the ice (it's part of the sweep
@@ -125,6 +128,11 @@ class Inputs:
 	# crease. Replaces (not stacks with) blade_intent_active in the down
 	# states.
 	var paddle_sweep_active: bool = false
+	# Standing sweep — upright equivalent of paddle-down sweep. Triggered
+	# specifically against slow / stationary carriers and loose pucks at
+	# close range, where the goalie has time to commit a sustained reach.
+	# Replaces (not stacks with) blade_intent_active in the upright states.
+	var standing_sweep_active: bool = false
 	# Lunge progress, sin-curved 0 → 1 → 0 over the active window. Pose
 	# builder scales the forward blocker extension by this value.
 	var lunge_progress: float = 0.0
@@ -142,12 +150,12 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 	match inputs.state:
 		GoalieStateMachine.State.STANDING:
 			_set_standing_pose(c, inputs)
-			_apply_active_blade_intent(c, inputs)
+			_apply_blade_intent_for_upright_state(c, inputs)
 			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.READY, GoalieStateMachine.State.RECOVERING:
 			_set_ready_pose(c, inputs)
-			_apply_active_blade_intent(c, inputs)
+			_apply_blade_intent_for_upright_state(c, inputs)
 			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.BUTTERFLY, GoalieStateMachine.State.COILING:
@@ -379,6 +387,41 @@ func _apply_blade_intent_for_down_state(c: GoalieBodyConfig, inputs: Inputs) -> 
 		_apply_paddle_sweep(c, inputs)
 	else:
 		_apply_active_blade_intent(c, inputs)
+
+
+# Dispatch the right blade-intent helper for the STANDING / READY /
+# RECOVERING states. Standing sweep (more reach, lateral push, slight
+# paddle drop) replaces the subtle active-blade-intent yaw when the
+# carrier is slow / stationary — coaches teach being more aggressive
+# with the stick when the puck isn't moving fast enough to surprise you.
+func _apply_blade_intent_for_upright_state(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.standing_sweep_active:
+		_apply_standing_sweep(c, inputs)
+	else:
+		_apply_active_blade_intent(c, inputs)
+
+
+# Standing sweep: upright version of the butterfly paddle-down sweep. Yaws
+# the blocker assembly more aggressively toward the puck side, pushes
+# slightly laterally, and drops the hand a bit so the blade traces lower.
+# Smaller magnitudes than _apply_paddle_sweep because in standing the
+# blocker pad sits right next to the body — large yaw / push swings the
+# pad off the body in a way that reads wrong without "pads already on
+# the ice" to justify it. Skipped during shot reactions.
+func _apply_standing_sweep(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.reacting_to_shot:
+		return
+	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
+	var side: float = signf(puck_local_x)
+	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
+	c.blocker_rot = Vector3(
+			c.blocker_rot.x,
+			clampf(yaw_deg, -standing_sweep_max_yaw_deg, standing_sweep_max_yaw_deg),
+			c.blocker_rot.z)
+	c.blocker_pos = Vector3(
+			c.blocker_pos.x + side * standing_sweep_x_extension,
+			c.blocker_pos.y - standing_sweep_y_drop,
+			c.blocker_pos.z)
 
 
 # Paddle-down sweep: blocker hand drops toward the ice and the assembly
