@@ -109,7 +109,7 @@ extends Node
 # and slide-react. Different from the old `is_under_pressure` (2.5 m + 1 m/s)
 # which fired far enough out to be exploitable — this only fires inside the
 # crease where dropping is the correct read regardless of follow-up play.
-@export var close_crease_butterfly_distance: float = 2.0
+@export var close_crease_butterfly_distance: float = 1.5
 @export var close_crease_butterfly_speed: float = 1.5  # carrier must show intent
 # Minimum carrier-velocity component toward the goal line (m/s) before a
 # doorstep carrier counts as a drop trigger. Strict ">0" would let a carrier
