@@ -47,8 +47,11 @@ func test_rom_clamp_cursor_drags_blade_pinned_no_charge() -> void:
 	# Regression test for the ROM-clamp bug: cursor keeps moving (player drags
 	# past their reach) but the blade is pinned at the ROM boundary. Charge
 	# must not accumulate — magnitude comes from blade, not cursor.
+	# Seed prev state to the pinned configuration so the first tick doesn't
+	# count a "jump from zero to pinned" as a delta.
+	ab.reset_wrister(Vector3(0.5, 0.0, 0.0), Vector3(0.4, 0.0, 0.0))
 	for i in range(5):
-		var cursor: Vector3 = Vector3(0.5 * (i + 1), 0.0, 0.0)  # cursor moves each tick
+		var cursor: Vector3 = Vector3(0.5 * (i + 2), 0.0, 0.0)  # cursor moves each tick
 		var blade: Vector3 = Vector3(0.4, 0.0, 0.0)              # blade pinned
 		ab.tick_wrister_charge(cursor, blade, VARIANCE_DEG, MAX_DISTANCE)
 	assert_almost_eq(ab.charge_distance, 0.0, 0.001,
@@ -57,7 +60,9 @@ func test_rom_clamp_cursor_drags_blade_pinned_no_charge() -> void:
 func test_stationary_cursor_no_charge_even_if_blade_moves() -> void:
 	# Symmetric to the ROM-clamp case: if the cursor isn't moving the player has
 	# no drag intent, so blade motion (e.g., body rotation, locomotion residue)
-	# alone must not pump charge.
+	# alone must not pump charge. Seed prev state at the steady position so
+	# tick 1 doesn't see a jump from zero.
+	ab.reset_wrister(Vector3(0.3, 0.0, 0.0), Vector3(0.3, 0.0, 0.0))
 	for i in range(5):
 		var cursor: Vector3 = Vector3(0.3, 0.0, 0.0)            # cursor held
 		var blade: Vector3 = Vector3(0.3 + 0.05 * i, 0.0, 0.0)  # blade drifting
