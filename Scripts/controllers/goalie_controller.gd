@@ -145,17 +145,23 @@ extends Node
 # Destination is committed at slide-start; mid-slide can't correct. That's the
 # realism win — fast cross-passes can beat the slide because the goalie already
 # committed the read.
-@export var slide_initial_speed: float = 4.5        # m/s push-off speed
-@export var slide_friction: float = 6.0             # m/s² decay
+@export var slide_initial_speed: float = 2.0        # m/s push-off speed (visible glide, not teleport)
+@export var slide_friction: float = 1.5             # m/s² decay (gentle so the slide reads as motion)
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
 @export var slide_trigger_distance: float = 0.30    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
+# Body rotation toward the slide direction, applied as a fixed end angle (not
+# free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
+# so the slide target body_x has to account for it — the two settings are
+# computed together so the leading pad EDGE lands on the post regardless of
+# rotation. Pure visual "lean into the motion" without breaking the seal.
+@export var slide_max_rotation_deg: float = 25.0
 # Stickhandling rejection: the threshold-based slide (above) only commits once
 # the tracked threat has moved in a CONSISTENT lateral direction for this long.
 # A carrier dangling laterally reverses direction inside this window and never
 # trips it — kills the random-slide-on-deke problem. The cross-crease puck-
 # velocity trigger below is exempt (it's an explicit pass event, not a read).
-@export var slide_intent_min_time: float = 0.20     # s of consistent lateral threat motion
+@export var slide_intent_min_time: float = 0.35     # s of consistent lateral threat motion
 @export var slide_intent_min_speed: float = 0.5     # m/s — below this, threat is "still", timer pauses
 
 # ── Cross-crease detection ────────────────────────────────────────────────────
@@ -1032,6 +1038,7 @@ func _try_commit_slide() -> void:
 	if _is_puck_in_defensive_zone():
 		return
 	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
+	var slide_rot: float = deg_to_rad(slide_max_rotation_deg)
 	# Cross-crease pass: an explicit puck-velocity event. Slide to the seal
 	# spot on the side the puck is heading, bypassing the stickhandling-
 	# rejection gate (this isn't a read of a dangling carrier, it's a committed
@@ -1039,7 +1046,7 @@ func _try_commit_slide() -> void:
 	# us which post to seal.
 	if _cross_crease_timer > 0.0:
 		var cc_side: float = signf(_cross_crease_target_x - _goal_center_x)
-		var cc_target: float = _post_edge_seal_x(cc_side, pad_edge)
+		var cc_target: float = _post_edge_seal_x(cc_side, pad_edge, slide_rot)
 		if GoalieBehaviorRules.should_commit_slide(_current_x, cc_target, slide_trigger_distance):
 			_slide.commit_slide(_current_x, _current_depth, cc_target, net_half_width)
 			_sm.transition_to(State.SLIDING)
@@ -1055,7 +1062,7 @@ func _try_commit_slide() -> void:
 	var threat_side: float = signf(_tracked_threat_position.x - _goal_center_x)
 	if threat_side == 0.0:
 		return
-	var seal_target: float = _post_edge_seal_x(threat_side, pad_edge)
+	var seal_target: float = _post_edge_seal_x(threat_side, pad_edge, slide_rot)
 	if not GoalieBehaviorRules.should_commit_slide(_current_x, seal_target, slide_trigger_distance):
 		return
 	_slide.commit_slide(_current_x, _current_depth, seal_target, net_half_width)
@@ -1063,10 +1070,14 @@ func _try_commit_slide() -> void:
 
 
 # Compute the goalie body X that puts the leading pad's outer edge ON the post
-# for the given side (+1 = right post, -1 = left post). This is where a slide
-# commits to: full post seal with no overhang.
-func _post_edge_seal_x(side: float, pad_edge_extent: float) -> float:
-	return _goal_center_x + side * maxf(net_half_width - pad_edge_extent, 0.0)
+# for the given side (+1 = right post, -1 = left post), accounting for the
+# body rotation the slide will end at: a rotated pad reaches `cos(rot)` of its
+# unrotated lateral extent, so the body has to sit `pad_edge_extent * cos(rot)`
+# inside the post (not `pad_edge_extent`). Without this correction the pad
+# falls short of the post when the body is rotated, leaving the seal open.
+func _post_edge_seal_x(side: float, pad_edge_extent: float, rotation_rad: float) -> float:
+	var effective_reach: float = pad_edge_extent * cos(rotation_rad)
+	return _goal_center_x + side * maxf(net_half_width - effective_reach, 0.0)
 
 # ── Facing ────────────────────────────────────────────────────────────────────
 # Threat-based facing: rotate toward where the goalie is tracking, not raw
@@ -1101,21 +1112,18 @@ func _update_facing(delta: float) -> void:
 				goalie.get_goalie_rotation_y(), center_angle, rotation_speed * 0.5 * delta))
 		return
 	if _sm.current == State.SLIDING:
-		# Body faces ALONG the slide direction — current → committed end.
-		# This points the chest at the destination, which orients the lead
-		# pad's blade-side and the glove/blocker at the receiver, instead of
-		# staying squared to the original threat. Capped at max_facing_angle.
-		var slide_vec_x: float = _slide.end_x - goalie.global_position.x
-		var slide_vec_z: float = (_goal_line_z + _direction_sign * _slide.end_depth) \
-				- goalie.global_position.z
-		if Vector2(slide_vec_x, slide_vec_z).length() > 0.1:
-			var base_angle: float = PI if _direction_sign == 1 else 0.0
-			var target_y: float = atan2(-slide_vec_x, -slide_vec_z)
-			var max_rad: float = deg_to_rad(max_facing_angle)
-			var deviation: float = clampf(angle_difference(base_angle, target_y), -max_rad, max_rad)
-			target_y = base_angle + deviation
-			goalie.set_goalie_rotation_y(lerp_angle(
-					goalie.get_goalie_rotation_y(), target_y, rotation_speed * delta))
+		# Body rotates to a FIXED end angle (slide_max_rotation_deg, signed by
+		# slide direction), not free-form facing. This matches the cos() pad
+		# reach correction baked into the slide target so the pad edge actually
+		# lands on the post — using atan2-based facing here would let the
+		# rotation vary by slide steepness and break the seal geometry.
+		# Convention: deviation = direction_sign * _slide.dir * slide_rot,
+		# verified against the standing facing code for both goal sides.
+		var base_angle: float = PI if _direction_sign == 1 else 0.0
+		var deviation: float = _direction_sign * _slide.dir * deg_to_rad(slide_max_rotation_deg)
+		var target_y: float = base_angle + deviation
+		goalie.set_goalie_rotation_y(lerp_angle(
+				goalie.get_goalie_rotation_y(), target_y, rotation_speed * delta))
 		return
 	var dx: float = _tracked_threat_position.x - goalie.global_position.x
 	var dz: float = _tracked_threat_position.z - goalie.global_position.z
