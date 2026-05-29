@@ -146,6 +146,36 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 		_mirror_hands(c)
 	return c
 
+# State-dependent body / head positions. The pose builder hardcodes these
+# inside each per-state function, but the replay path needs them WITHOUT
+# running the full pose pipeline (which depends on slide/reaction state
+# the replay snapshot doesn't carry). This static lookup mirrors the
+# values in `_set_*_pose` below — keep in sync if those change.
+static func resting_body_position_for_state(state: int) -> Vector3:
+	match state:
+		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.16,  0.0)
+		GoalieStateMachine.State.READY:                           return Vector3(0.0,  1.00, -0.05)
+		GoalieStateMachine.State.RECOVERING:                      return Vector3(0.0,  1.00, -0.05)
+		GoalieStateMachine.State.BUTTERFLY:                       return Vector3(0.0,  0.46,  0.0)
+		GoalieStateMachine.State.COILING:                         return Vector3(0.0,  0.46,  0.0)
+		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.46,  0.0)
+		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 0.66, 0.05)
+		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 0.66, 0.05)
+	return Vector3(0.0, 1.16, 0.0)
+
+static func resting_head_position_for_state(state: int) -> Vector3:
+	match state:
+		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.69,  0.08)
+		GoalieStateMachine.State.READY:                           return Vector3(0.0,  1.48, -0.22)
+		GoalieStateMachine.State.RECOVERING:                      return Vector3(0.0,  1.48, -0.22)
+		GoalieStateMachine.State.BUTTERFLY:                       return Vector3(0.0,  0.99, -0.06)
+		GoalieStateMachine.State.COILING:                         return Vector3(0.0,  0.99, -0.06)
+		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.99, -0.06)
+		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 1.19, 0.08)
+		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 1.19, 0.08)
+	return Vector3(0.0, 1.69, 0.08)
+
+
 func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.left_pad_pos  = Vector3(-0.22 - inputs.five_hole_openness, 0.44, -0.20)
 	c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_STANDING, -12.0)
