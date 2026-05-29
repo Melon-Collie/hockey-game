@@ -161,15 +161,6 @@ extends Node
 # goalie center sits at ±(net_half_width - pad_local_offset). Matches the
 # `left_pad_pos.x = -0.42` value baked into the BUTTERFLY body config.
 @export var pad_local_offset: float = 0.42
-# Half-width of a splayed butterfly pad (BoxShape3D x-extent / 2). Added to
-# pad_local_offset to get the pad's OUTER edge from body center — the surface
-# the post-seal positions on so the visible pad edge lands on the post rather
-# than overhanging it. Matches the LeftPad/RightPad BoxShape3D (0.28 wide).
-@export var butterfly_pad_half_width: float = 0.14
-# Shot angle (from straight-on, degrees) at which the standing goalie fully
-# commits to the near-post seal. Below this it lerps from centered; at/above,
-# the near pad edge sits on the near post and (sharper still) RVH takes over.
-@export var post_seal_full_commit_angle_deg: float = 28.0
 # Forward bow of the pivot arc at mid-slide, in metres. The goalie's center
 # traces a slight arc toward the shooter as the body pivots around the
 # push-off foot — depth peaks at mid-slide then settles at the seal target.
@@ -754,14 +745,6 @@ func _on_sm_transitioned(prev: State, new_state: State) -> void:
 				# Standing/Ready stored radius; butterfly holds perpendicular
 				# depth, so snap to the goalie's actual world perp depth.
 				_current_depth = (goalie.global_position.z - _goal_line_z) * _direction_sign
-				if debug_goalie_reads and is_server:
-					# Show where the splayed pads land relative to the posts so
-					# we can confirm the drop seals the near post.
-					var edge: float = pad_local_offset + butterfly_pad_half_width
-					var near_edge: float = absf(_current_x - _goal_center_x) + edge
-					print("[goalie %d] butterfly drop: body_x=%.2f near_pad_edge=%.2f post=%.2f %s" % [
-							team_id, _current_x, near_edge, net_half_width,
-							"SEALED" if absf(near_edge - net_half_width) < 0.08 else "off-post"])
 			_slide.velocity_x = 0.0
 		State.RECOVERING:
 			_slide.velocity_x = 0.0
@@ -947,19 +930,9 @@ func _move_along_arc(delta: float) -> Vector2:
 # while standing wide, the resulting butterfly still has both pads at or
 # inside the posts. Real-goalie "post integration" principle.
 func _arc_target_xz() -> Vector2:
-	# Depth (z) still comes from the challenge-angle arc. Lateral (x) is driven
-	# by the butterfly post-seal: position the body so the puck-side pad edge
-	# lands on the puck-side post, scaled by shot angle. Standing here means the
-	# butterfly drop seals in place — no lateral teleport at the drop. This
-	# replaces the arc's own (post-agnostic) lateral output.
-	var arc: Vector2 = GoalieBehaviorRules.target_arc_position(
+	return GoalieBehaviorRules.target_arc_position(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
 			_direction_sign, _current_depth, net_half_width)
-	arc.x = GoalieBehaviorRules.butterfly_seal_lateral_x(
-			_tracked_threat_position, _goal_line_z, _goal_center_x,
-			net_half_width, pad_local_offset + butterfly_pad_half_width,
-			deg_to_rad(post_seal_full_commit_angle_deg))
-	return arc
 
 # Five-hole openness for BUTTERFLY/SLIDING. Server-only — clients adopt the
 # server's value via apply_state.

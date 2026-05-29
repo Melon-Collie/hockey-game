@@ -274,37 +274,6 @@ static func should_commit_slide(
 	return absf(target_x - current_x) >= slide_trigger_distance
 
 
-# ── Butterfly post-seal positioning ──────────────────────────────────────────
-# "Post integration": when the goalie drops into butterfly the pads form a
-# fixed-width wall (body_x ± pad_edge_extent). A centered drop leaves ~equal net
-# exposed at both posts — wasteful, since the body already covers the middle.
-# The efficient drop commits the wall toward the puck side so the near pad's
-# OUTER EDGE sits on the near post (no overhang past it), accepting the far side
-# is exposed (a shooter at a sharp angle can't hit the far post anyway).
-#
-# Because the standing goalie is positioned here, the drop is sealed in place —
-# no lateral teleport at the moment of the drop. Commit scales with shot angle:
-# straight-on → centered; at/beyond `full_commit_angle_rad` → the body sits at
-# ±(net_half_width - pad_edge_extent) so the near pad edge is exactly on the
-# post. Beyond the commit angle the controller hands off to RVH (pad on post).
-#
-# pad_edge_extent = pad lateral offset + pad half-width (the outer edge of the
-# splayed butterfly pad, measured from the body center).
-static func butterfly_seal_lateral_x(
-		threat_position: Vector3,
-		goal_line_z: float,
-		goal_center_x: float,
-		net_half_width: float,
-		pad_edge_extent: float,
-		full_commit_angle_rad: float) -> float:
-	var lateral: float = threat_position.x - goal_center_x
-	var perp: float = absf(threat_position.z - goal_line_z)
-	var angle: float = atan2(absf(lateral), maxf(perp, 0.05))
-	var commit: float = clampf(angle / maxf(full_commit_angle_rad, 0.01), 0.0, 1.0)
-	var seal_line: float = goal_center_x + signf(lateral) * maxf(0.0, net_half_width - pad_edge_extent)
-	return lerpf(goal_center_x, seal_line, commit)
-
-
 # ── Universal puck reaction trigger ──────────────────────────────────────────
 # Any puck on track to cross the goal line within the net soon should put the
 # goalie into shot-reaction mode, not just classified `detect_shot()` releases.

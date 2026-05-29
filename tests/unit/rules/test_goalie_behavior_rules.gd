@@ -315,58 +315,6 @@ func test_threat_distance_euclidean() -> void:
 	# dx=3, dz=-4 → sqrt(9+16) = 5
 	assert_almost_eq(d, 5.0, 0.001)
 
-# ── butterfly_seal_lateral_x ─────────────────────────────────────────────────
-# Geometry: goal at +Z (goal_line_z=26.6), goal_center_x=0, net_half_width=0.915,
-# pad_edge_extent=0.56 (0.42 offset + 0.14 half-width). full_commit at 28°.
-# Full-seal body X = net_half_width - pad_edge_extent = 0.355.
-
-const _SEAL_EDGE: float = 0.56
-const _SEAL_ANGLE: float = deg_to_rad(28.0)
-
-func test_seal_centers_on_straight_on_threat() -> void:
-	# Threat dead in front → no angle → centered (a centered butterfly covers
-	# both posts as evenly as a fixed-width wall can).
-	var x: float = GoalieBehaviorRules.butterfly_seal_lateral_x(
-		Vector3(0, 0, 21.6), 26.6, 0.0, 0.915, _SEAL_EDGE, _SEAL_ANGLE)
-	assert_almost_eq(x, 0.0, 0.001)
-
-func test_seal_full_commit_puts_near_pad_edge_on_post() -> void:
-	# Sharp angle (well past 28°): body sits at net_half_width - pad_edge_extent
-	# so near pad edge (body_x + 0.56) lands exactly on the post (0.915).
-	var x: float = GoalieBehaviorRules.butterfly_seal_lateral_x(
-		Vector3(5, 0, 26.0), 26.6, 0.0, 0.915, _SEAL_EDGE, _SEAL_ANGLE)
-	assert_almost_eq(x, 0.355, 0.001)
-	assert_almost_eq(x + _SEAL_EDGE, 0.915, 0.001)  # pad edge on post
-
-func test_seal_commits_to_left_post_for_left_threat() -> void:
-	# Threat on the left → body shifts negative, near (left) pad edge on -post.
-	var x: float = GoalieBehaviorRules.butterfly_seal_lateral_x(
-		Vector3(-5, 0, 26.0), 26.6, 0.0, 0.915, _SEAL_EDGE, _SEAL_ANGLE)
-	assert_almost_eq(x, -0.355, 0.001)
-
-func test_seal_scales_partially_at_moderate_angle() -> void:
-	# Threat at ~14° (half the commit angle) → roughly half commit.
-	# perp = 26.6 - 24.6 = 2.0; lateral for 14° = 2.0 * tan(14°) ≈ 0.499.
-	var lateral: float = 2.0 * tan(deg_to_rad(14.0))
-	var x: float = GoalieBehaviorRules.butterfly_seal_lateral_x(
-		Vector3(lateral, 0, 24.6), 26.6, 0.0, 0.915, _SEAL_EDGE, _SEAL_ANGLE)
-	# commit ≈ 0.5 → x ≈ 0.5 * 0.355 = 0.1775
-	assert_almost_eq(x, 0.1775, 0.02)
-
-func test_seal_never_overhangs_post() -> void:
-	# Even at an extreme angle the near pad edge never exceeds the post — the
-	# whole point. Body X capped at 0.355, edge at 0.915.
-	var x: float = GoalieBehaviorRules.butterfly_seal_lateral_x(
-		Vector3(50, 0, 26.5), 26.6, 0.0, 0.915, _SEAL_EDGE, _SEAL_ANGLE)
-	assert_true(x + _SEAL_EDGE <= 0.915 + 0.001,
-		"near pad edge %.3f must not overhang post 0.915" % (x + _SEAL_EDGE))
-
-func test_seal_respects_off_center_goal() -> void:
-	# Goal centered at +5: full commit on a right threat → 5 + 0.355.
-	var x: float = GoalieBehaviorRules.butterfly_seal_lateral_x(
-		Vector3(10, 0, 26.0), 26.6, 5.0, 0.915, _SEAL_EDGE, _SEAL_ANGLE)
-	assert_almost_eq(x, 5.355, 0.001)
-
 # ── should_react_to_puck ─────────────────────────────────────────────────────
 
 func _reaction_cfg() -> GoalieBehaviorRules.UniversalReactionConfig:
