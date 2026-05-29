@@ -1255,12 +1255,17 @@ func apply_state(network_state: GoalieNetworkState, host_ts: float) -> void:
 	# Client AI doesn't compute _five_hole_openness, so nothing fights the correction.
 	_five_hole_openness = lerpf(_five_hole_openness, network_state.five_hole_openness, 0.80)
 
-func apply_replay_state(state: GoalieNetworkState, delta: float) -> void:
+func apply_replay_state(state: GoalieNetworkState, _delta: float) -> void:
+	# Replays use the authoritative pose captured in the snapshot, not a
+	# client-AI reconstruction. The pose fields (pad/glove/blocker/body
+	# offsets and rotations) were broadcast by the host during the original
+	# play — applying them directly means playback shows what actually
+	# happened, addressing the "replay goalie isn't real" complaint.
 	_sm.current = state.state_enum as State
 	_five_hole_openness = state.five_hole_openness
-	_update_body_parts(delta)
 	goalie.set_goalie_position(state.position_x, state.position_z)
 	goalie.set_goalie_rotation_y(state.rotation_y)
+	goalie.apply_replay_pose(state)
 
 
 func apply_state_transition(new_state: int) -> void:

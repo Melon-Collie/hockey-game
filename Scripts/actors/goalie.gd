@@ -114,6 +114,25 @@ func get_blocker_rotation() -> Vector3:
 func get_head_yaw() -> float:
 	return _head.rotation.y
 
+
+# Apply an authoritative pose snapshot directly to the body parts — used by
+# the replay system so playback reflects what the host actually had during
+# the play, not a client-side AI reconstruction. Skips the body_config_builder
+# entirely. Rotations come in radians (matching the wire format); axes we
+# don't carry on the wire (body yaw, blocker/glove roll) are left intact so
+# whatever the live system set last frame survives.
+func apply_replay_pose(state: GoalieNetworkState) -> void:
+	_body.rotation = Vector3(state.body_pitch, _body.rotation.y, state.body_roll)
+	_left_pad.position = state.left_pad_offset
+	_left_pad.rotation = Vector3(state.left_pad_pitch, _left_pad.rotation.y, state.left_pad_roll)
+	_right_pad.position = state.right_pad_offset
+	_right_pad.rotation = Vector3(state.right_pad_pitch, _right_pad.rotation.y, state.right_pad_roll)
+	_glove.position = state.glove_offset
+	_glove.rotation = Vector3(state.glove_pitch, state.glove_yaw, _glove.rotation.z)
+	_block_arm.position = state.blocker_offset
+	_block_arm.rotation = Vector3(state.blocker_pitch, state.blocker_yaw, _block_arm.rotation.z)
+	_head.rotation = Vector3(_head.rotation.x, state.head_yaw, _head.rotation.z)
+
 func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
 	part.position = part.position.lerp(target_pos, t)
 	part.rotation_degrees = _lerp_euler_deg(part.rotation_degrees, target_rot_deg, t)
