@@ -796,6 +796,13 @@ func _is_ready_situation() -> bool:
 # out fly-bys, side-of-net plays, and behind-the-net retrieves that the raw
 # 2m sphere otherwise dropped the goalie for.
 func _is_carrier_at_doorstep() -> bool:
+	# While the lunge is mid-jab, hold the drop off. The goalie should
+	# commit to the stick first; if the threat persists when the lunge ends
+	# the doorstep check fires normally next tick. Without this the drop
+	# triggers at 1.5m and the goalie is in butterfly by the time the
+	# lunge wants to fire at 1.2m, which reads as "jab from butterfly".
+	if _lunge_active_timer > 0.0:
+		return false
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
 		return false
@@ -826,6 +833,9 @@ func _is_carrier_at_doorstep() -> bool:
 # carriers are excluded — defencemen jamming around the crease aren't a
 # threat. Host-only; the resulting transition is broadcast normally.
 func _is_jammed_at_crease() -> bool:
+	# Lunge takes priority — try the stick first, drop after.
+	if _lunge_active_timer > 0.0:
+		return false
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
 	return _opposing_shooter_near_puck(jam_opponent_distance)
