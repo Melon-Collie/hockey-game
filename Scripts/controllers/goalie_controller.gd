@@ -111,6 +111,14 @@ extends Node
 # crease where dropping is the correct read regardless of follow-up play.
 @export var close_crease_butterfly_distance: float = 2.0
 @export var close_crease_butterfly_speed: float = 1.5  # carrier must show intent
+# Minimum carrier-velocity component toward the goal line (m/s) before a
+# doorstep carrier counts as a drop trigger. Strict ">0" would let a carrier
+# strafing past the net with a hair of forward drift drop the goalie; a small
+# positive floor requires real forward commitment toward the goal. Combined
+# with the "in front of goalie" gate this filters out fly-bys / side-of-net
+# plays / behind-the-net retrieves while still catching walk-outs and slot
+# breakaways.
+@export var close_crease_min_approach_speed: float = 0.5
 
 # Crease-jam butterfly. Loose puck or stationary-carrier puck inside the
 # jam zone with an opposing skater close enough to whack at it — drop and
@@ -719,10 +727,13 @@ func _is_ready_situation() -> bool:
 		return false
 	return true
 
-# True when an opposing carrier is at point-blank range with intent (moving).
-# Used to commit butterfly proactively — at this range the goalie can't track
+# True when an opposing carrier is at point-blank range with intent (moving),
+# in front of the goalie, and committed toward the net. Used to commit
+# butterfly proactively — at this range and angle the goalie can't track
 # laterally fast enough, so dropping is the correct read regardless of follow-
-# up play. Stationary teammates / opposing regroup don't trigger.
+# up play. The directional gates ("in front" + "approaching the net") filter
+# out fly-bys, side-of-net plays, and behind-the-net retrieves that the raw
+# 2m sphere otherwise dropped the goalie for.
 func _is_carrier_at_doorstep() -> bool:
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
@@ -730,6 +741,19 @@ func _is_carrier_at_doorstep() -> bool:
 	if carrier.get_team_id() == team_id and team_id != -1:
 		return false
 	if carrier.velocity.length() < close_crease_butterfly_speed:
+		return false
+	# "In front of goalie" — carrier on the slot side relative to the goalie,
+	# not behind or even with them. Same sign convention as the rest of the
+	# file (positive = on slot side); RVH handles behind-net plays.
+	if (carrier.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
+		return false
+	# "Approaching the net" — carrier's z-velocity component drives toward the
+	# goal line, above a small floor so a hair of forward drift on an
+	# otherwise-lateral pass doesn't qualify as real intent. Approach speed
+	# uses the canonical -vz*direction_sign formula (matches
+	# _puck_approach_velocity).
+	var approach_speed: float = -carrier.velocity.z * _direction_sign
+	if approach_speed < close_crease_min_approach_speed:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
