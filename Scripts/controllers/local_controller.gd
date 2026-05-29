@@ -447,21 +447,6 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		push_warning("Reconcile: %.3fm snap applied (inputs replayed: %d)" \
 				% [skater.visual_offset.length(), _input_history.size()])
 
-func _get_charge_direction() -> Vector3:
-	# Screen-space charge direction maps screen Y → world Z directly, which
-	# gives "up on screen = -Z in world" regardless of camera orientation.
-	# For team-1 attack_up players the camera is rotated 180°, so "up on
-	# screen" intent means +Z in world (toward their opponent's goal). The
-	# screen-pos signal can't see the camera flip — it lives in raw pixels —
-	# so we fix it up here by negating the recorded direction. Team 0 and
-	# team 1 without attack_up don't need this because their camera matches
-	# the default screen → world XZ mapping.
-	var dir: Vector3 = _aiming.prev_blade_dir
-	if PlayerPrefs.attack_up and _team_id == 1:
-		return -dir
-	return dir
-
-
 func on_puck_picked_up_network() -> void:
 	super.on_puck_picked_up_network()
 	_claim_cooldown = 0.0
