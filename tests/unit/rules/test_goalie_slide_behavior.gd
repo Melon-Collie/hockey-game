@@ -15,7 +15,7 @@ func before_each() -> void:
 	sb.slide_cooldown = 0.20
 	sb.slide_pivot_arc_depth = 0.04
 	sb.post_seal_depth = 0.10
-	sb.pad_edge_extent = 0.56
+	sb.pad_edge_extent = 0.84  # pad_local_offset (0.42) + butterfly_pad_half_extent (0.42)
 	sb.post_event_slide_lockout = 0.25
 	sb.butterfly_drop_speed = 0.08
 	sb.butterfly_min_hold_time = 0.35
@@ -188,18 +188,19 @@ func test_advance_slide_clamps_x_to_post() -> void:
 # ── Lateral target clamp ─────────────────────────────────────────────────────
 
 # Backdoor seal: clamp slide target so pad EDGE lands on post (not pad center).
-# net_half_width = 0.915, pad_edge_extent = 0.56 → max_lateral = 0.355.
+# net_half_width = 0.915, pad_edge_extent = 0.84 (pad_local_offset 0.42 +
+# butterfly_pad_half_extent 0.42) → max body_x = 0.075.
 func test_clamp_lateral_target_to_pad_edge_line() -> void:
-	var result: float = sb.clamp_lateral_target(2.0, 0.0, 0.915, 0.56)
-	assert_almost_eq(result, 0.355, 0.001)
+	var result: float = sb.clamp_lateral_target(2.0, 0.0, 0.915, 0.84)
+	assert_almost_eq(result, 0.075, 0.001)
 
 func test_clamp_lateral_target_passes_through_mid_net() -> void:
-	var result: float = sb.clamp_lateral_target(0.2, 0.0, 0.915, 0.56)
-	assert_almost_eq(result, 0.2, 0.001, "mid-net targets pass through unchanged")
+	var result: float = sb.clamp_lateral_target(0.05, 0.0, 0.915, 0.84)
+	assert_almost_eq(result, 0.05, 0.001, "mid-net targets pass through unchanged")
 
 func test_clamp_lateral_target_negative_side() -> void:
-	var result: float = sb.clamp_lateral_target(-2.0, 0.0, 0.915, 0.56)
-	assert_almost_eq(result, -0.355, 0.001)
+	var result: float = sb.clamp_lateral_target(-2.0, 0.0, 0.915, 0.84)
+	assert_almost_eq(result, -0.075, 0.001)
 
 # ── Reset / enter_fresh_butterfly ────────────────────────────────────────────
 

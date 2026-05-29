@@ -192,11 +192,16 @@ extends Node
 # goalie center sits at ±(net_half_width - pad_local_offset). Matches the
 # `left_pad_pos.x = -0.42` value baked into the BUTTERFLY body config.
 @export var pad_local_offset: float = 0.42
-# Half-width of a splayed butterfly pad. Added to pad_local_offset to get the
-# pad's OUTER EDGE distance from the body center. Slide targets aim for
-# (post - pad_edge_extent) so the visible pad edge lands ON the post rather
-# than overhanging it — sealing with the edge, not the center.
-@export var butterfly_pad_half_width: float = 0.14
+# Half-extent of a splayed butterfly pad along the goalie's lateral (X) axis.
+# Subtle: the pad collider is BoxShape3D(0.28, 0.84, 0.2), but in butterfly the
+# pad is rotated 90° around its Z axis (see GoalieBodyConfigBuilder), which
+# swaps the X and Y axes in body-local space — the pad's LENGTH (0.84) becomes
+# its lateral extent, not its WIDTH (0.28). Half-length = 0.42.
+# Added to pad_local_offset to get the pad's OUTER edge distance from body
+# center. Slide targets aim for (post - pad_edge_extent) so the visible pad
+# edge lands ON the post rather than overhanging it — sealing with the edge,
+# not the center.
+@export var butterfly_pad_half_width: float = 0.42
 # Forward bow of the pivot arc at mid-slide, in metres. The goalie's center
 # traces a slight arc toward the shooter as the body pivots around the
 # push-off foot — depth peaks at mid-slide then settles at the seal target.
