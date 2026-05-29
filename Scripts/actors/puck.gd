@@ -239,8 +239,15 @@ func apply_poke_check(checker_skater: Skater) -> void:
 func release(direction: Vector3, power: float) -> void:
 	var ex_carrier: Skater = carrier
 	# Set position while still frozen so Jolt activates from the correct state.
+	# Slapshot wind-up: the blade is overhead and pulled back, but the puck has
+	# been pinned to a stable ice offset via get_carry_target_global. Read from
+	# that pin instead of the elevated blade contact so the shot fires from
+	# where the puck visibly is.
 	if ex_carrier != null:
-		global_position = ex_carrier.get_blade_contact_global()
+		if ex_carrier.is_slapshot_pinning():
+			global_position = ex_carrier.get_carry_target_global()
+		else:
+			global_position = ex_carrier.get_blade_contact_global()
 	if direction.y > 0:
 		global_position.y = ice_height + 0.1
 		_pending_elevation = true

@@ -411,6 +411,13 @@ func _apply_slapshot_zone_transform(offset_x: float, offset_z: float, radius: fl
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 	_slapper_indicator.position = Vector3(blade_side_sign * offset_x, 0.0, offset_z)
 	_slapper_indicator.scale = Vector3(radius, 1.0, radius)
+	# Re-anchor to ice level — the Skater root sits at body-center height, so
+	# the local Y=0 just written puts the ring at chest height in world. The
+	# per-frame anchor in _refresh_height_anchors_if_skater_moved would catch
+	# this on a Y change, but skater Y is constant during play so it never
+	# re-fires after the initial frame; do it explicitly here every time we
+	# rebase the position. Setting global Y rebases local Y without touching XZ.
+	_slapper_indicator.global_position.y = 0.0
 	_slapper_zone_radius_cached = radius
 	# Counter-scale the centre crosshair so it stays at fixed world size
 	# regardless of the parent indicator's radius scale.

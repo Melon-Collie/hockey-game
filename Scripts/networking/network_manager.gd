@@ -48,7 +48,7 @@ signal peer_joined(peer_id: int)
 signal peer_disconnected(peer_id: int)
 signal world_state_received(data: PackedByteArray)
 signal slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color)
-signal remote_skater_spawn_requested(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int)
+signal remote_skater_spawn_requested(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int, attributes: PlayerAttributes)
 signal existing_players_synced(player_data: Array)
 signal local_puck_pickup_confirmed
 signal local_puck_stolen
@@ -121,6 +121,13 @@ signal replay_event_received(host_ts: float, event: Dictionary)
 # without a respawn.
 signal local_identity_changed(player_name: String, jersey_number: int, is_left_handed: bool)
 
+# Local player picked a different attribute spread (Speed/Agility/Size/Shot).
+# Fires after the new picks land in PlayerPrefs and _peer_attributes[1] is
+# updated. GameManager listens and re-applies the multipliers to the local
+# skater's controller. Only emitted in offline play — online matches lock
+# attributes at join time.
+signal local_attributes_changed(attributes: PlayerAttributes)
+
 # Local player picked a different favorite team palette. Fired by
 # apply_preferred_color (which writes PlayerPrefs.preferred_color_slot).
 # GameManager re-tints the home team's local actors and, if the new home
@@ -173,6 +180,11 @@ var pending_replay_path: String = ""
 var _peer_handedness: Dictionary = {}     # peer_id -> bool (host only)
 var _peer_names: Dictionary = {}          # peer_id -> String (host only)
 var _peer_numbers: Dictionary = {}        # peer_id -> int (host only)
+# peer_id -> PlayerAttributes. Populated from request_join on the host and
+# from sync_existing_players / spawn_remote_skater on clients. The host's
+# own entry (key 1) is seeded from PlayerPrefs at startup and updated when
+# the local player edits attributes in offline play.
+var _peer_attributes: Dictionary[int, PlayerAttributes] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
 # Callable () -> Array. Set by GameManager at startup so the broadcast loop
 # can pull world state without reaching up into the application layer.
@@ -244,6 +256,7 @@ func _ready() -> void:
 	local_player_name = PlayerPrefs.player_name
 	local_jersey_number = PlayerPrefs.jersey_number
 	local_is_left_handed = PlayerPrefs.is_left_handed
+	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 
 # ── Connection ────────────────────────────────────────────────────────────────
 func start_offline() -> void:
@@ -253,6 +266,7 @@ func start_offline() -> void:
 	_peer_handedness[1] = local_is_left_handed
 	_peer_names[1] = local_player_name
 	_peer_numbers[1] = local_jersey_number
+	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
 			"rule_set": GameRules.DEFAULT_RULE_SET}
 
@@ -340,6 +354,7 @@ func start_host() -> void:
 	_peer_handedness[1] = local_is_left_handed
 	_peer_names[1] = local_player_name
 	_peer_numbers[1] = local_jersey_number
+	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	var peer := ENetMultiplayerPeer.new()
 	var error := peer.create_server(Constants.PORT, GameRules.MAX_CONNECTIONS)
 	if error != OK:
@@ -384,6 +399,7 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_handedness.erase(id)
 	_peer_names.erase(id)
 	_peer_numbers.erase(id)
+	_peer_attributes.erase(id)
 	pending_color_votes.erase(id)
 	peer_disconnected.emit(id)
 	# Notify all remaining clients so they remove the stale skater.
@@ -395,7 +411,10 @@ func _on_connected_to_server() -> void:
 	_session_start_ms = Time.get_ticks_msec()
 	_clock_sync = load("res://Scripts/networking/clock_sync.gd").new()
 	_clock_sync.init_session(_session_start_ms)
-	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number)
+	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
+	_peer_attributes[1] = local_attrs
+	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
+			local_attrs.speed, local_attrs.agility, local_attrs.size, local_attrs.strength)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -449,6 +468,8 @@ func reset() -> void:
 	_peer_handedness.clear()
 	_peer_names.clear()
 	_peer_numbers.clear()
+	_peer_attributes.clear()
+	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	pending_game_config = {}
 	pending_lobby_slots = {}
 	pending_lobby_roster = []
@@ -626,12 +647,15 @@ func _broadcast_state() -> void:
 
 # ── RPCs ──────────────────────────────────────────────────────────────────────
 @rpc("any_peer", "reliable")
-func request_join(is_left_handed: bool, player_name: String, jersey_number: int = 10) -> void:
+func request_join(is_left_handed: bool, player_name: String, jersey_number: int = 10,
+		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
+		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_strength: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
 	var sender_id: int = multiplayer.get_remote_sender_id()
 	_peer_handedness[sender_id] = is_left_handed
 	var sanitized_name: String = player_name.strip_edges().left(10)
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
 	_peer_numbers[sender_id] = jersey_number
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength)
 	# Set a generous disconnect window here rather than in _on_peer_connected —
 	# peer_connected fires before ENet registers the peer, so get_peer() asserts.
 	# By the time any RPC arrives the peer is guaranteed to be in the table.
@@ -650,6 +674,28 @@ func get_peer_name(peer_id: int) -> String:
 
 func get_peer_number(peer_id: int) -> int:
 	return _peer_numbers.get(peer_id, 10)
+
+func get_peer_attributes(peer_id: int) -> PlayerAttributes:
+	var attrs: PlayerAttributes = _peer_attributes.get(peer_id, null)
+	if attrs == null:
+		return PlayerAttributes.all_medium()
+	return attrs
+
+# True only during an active online match. Used by the player-settings popup
+# to gate mid-match attribute edits: offline / free-play / lobby allows the
+# pick to apply live; online play locks attributes at join time so all peers
+# simulate the same numbers without a runtime attribute-change RPC.
+func is_in_online_match() -> bool:
+	return game_initiated and not is_offline_mode
+
+# Single entry point for in-session attribute edits, mirroring
+# apply_local_identity. Offline / free-play only — the picker UI is
+# responsible for gating its Apply button via is_in_online_match().
+func apply_local_attributes(attrs: PlayerAttributes) -> void:
+	if attrs == null:
+		return
+	_peer_attributes[1] = attrs
+	local_attributes_changed.emit(attrs)
 
 # Cap on inputs per RPC. Matches the host queue depth in RemoteController so a
 # malicious peer can't force the loop into hundreds of failed decode iterations
@@ -921,8 +967,12 @@ func assign_player_slot(team_slot: int, team_id: int, jersey_color: Color, helme
 	slot_assigned.emit(team_slot, team_id, jersey_color, helmet_color, pants_color)
 
 @rpc("authority", "reliable")
-func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10) -> void:
-	remote_skater_spawn_requested.emit(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number)
+func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10,
+		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
+		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_strength: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
+	var attrs := PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength)
+	_peer_attributes[peer_id] = attrs
+	remote_skater_spawn_requested.emit(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number, attrs)
 
 @rpc("authority", "reliable")
 func sync_existing_players(player_data: Array) -> void:
@@ -1115,14 +1165,16 @@ func confirm_slot_swap(peer_id: int, old_team_id: int, old_slot: int,
 func send_slot_assignment(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color) -> void:
 	assign_player_slot.rpc_id(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color)
 
-func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10) -> void:
+func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10, attributes: PlayerAttributes = null) -> void:
 	# Offline mode: no peers to broadcast to, and rpc() with no
 	# multiplayer peer pushes an error. Bot spawn still happens locally
 	# via _registry.spawn_bot in the caller; this RPC is purely the
 	# fan-out so connected clients see the bot.
 	if is_offline_mode:
 		return
-	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number)
+	var attrs: PlayerAttributes = attributes if attributes != null else PlayerAttributes.all_medium()
+	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number,
+			attrs.speed, attrs.agility, attrs.size, attrs.strength)
 
 func send_sync_existing_players(peer_id: int, player_data: Array) -> void:
 	sync_existing_players.rpc_id(peer_id, player_data)

@@ -2,7 +2,14 @@ class_name Skater
 extends CharacterBody3D
 
 # ── Character ─────────────────────────────────────────────────────────────────
-@export var is_left_handed: bool = true
+# Set before add_child() at spawn; can also be flipped at runtime (free-play
+# picker) — the setter re-positions the four hand/shoulder Marker3Ds so the
+# rig follows. Most other sign-flips (stick orientation, blade side, IK pole)
+# read this at runtime and need no special handling.
+@export var is_left_handed: bool = true:
+	set(v):
+		is_left_handed = v
+		_position_hand_markers()
 
 # ── Blade Tuning ──────────────────────────────────────────────────────────────
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
@@ -47,10 +54,14 @@ extends CharacterBody3D
 @export var carry_transit_lift: float = 0.10
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
-# Two-bone arm IK: shoulder → elbow → top_hand. Sum must exceed
-# sqrt(drop² + rom_backhand_reach_max²) where drop = shoulder_height − hand_rest_y.
-@export var upper_arm_length: float = 0.44
-@export var forearm_length: float = 0.46
+# Two-bone arm IK: shoulder → elbow → top_hand. ROM is derived from these
+# values in SkaterController.apply_attributes (rom_backhand = arm × 0.875,
+# rom_forehand = arm × 0.5625), so the IK margin is constant across sizes
+# regardless of how aggressively arm length scales.
+# Baseline lengths give one-arm = 0.75m, wingspan ≈ 1.94m on a 1.78m body
+# (~108% of height, matching real-life NHL anthropometry).
+@export var upper_arm_length: float = 0.37
+@export var forearm_length: float = 0.38
 # Pole direction for the elbow (upper-body local).
 @export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
@@ -115,9 +126,9 @@ var top_hand_sphere: MeshInstance3D = null
 var bottom_elbow_sphere: MeshInstance3D = null
 var bottom_hand_sphere: MeshInstance3D = null
 
-# Sleeve cuff stripe meshes. Created by SkaterUniformCoordinator.apply_stripes()
-# and consumed by _update_cuff_transform() here so they stay perpendicular to
-# the forearm bone as the arm moves.
+# Glove cuff cylinders just past the wrist. Created by SkaterUniformCoordinator
+# when the uniform is applied; consumed by _update_cuff_transform() here so
+# they stay perpendicular to the forearm bone as the arm moves.
 var top_cuff_mesh: MeshInstance3D = null
 var bot_cuff_mesh: MeshInstance3D = null
 
@@ -180,34 +191,38 @@ var visual_offset: Vector3 = Vector3.ZERO:
 
 var _uniform: SkaterUniformCoordinator
 var _hud: SkaterHUDCoordinator
+var _appearance: SkaterAppearanceCoordinator
 
 
 func _ready() -> void:
 	add_to_group("skaters")
 
-	var top_hand_side_sign: float = 1.0 if is_left_handed else -1.0
-	shoulder.position = Vector3(top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
+	# Per-instance collision shape so SkaterController.apply_attributes
+	# can scale this skater's hitbox without mutating the shared
+	# SubResource referenced by every other Skater in the scene.
+	var col: CollisionShape3D = $CollisionShape3D
+	if col != null and col.shape != null:
+		col.shape = col.shape.duplicate()
 
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
 		top_hand = Marker3D.new()
 		top_hand.name = "TopHand"
 		upper_body.add_child(top_hand)
-	top_hand.position = Vector3(shoulder.position.x, 0.0, 0.0)
 
 	bottom_shoulder = upper_body.get_node_or_null("BottomShoulder") as Marker3D
 	if bottom_shoulder == null:
 		bottom_shoulder = Marker3D.new()
 		bottom_shoulder.name = "BottomShoulder"
 		upper_body.add_child(bottom_shoulder)
-	bottom_shoulder.position = Vector3(-top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
 
 	bottom_hand = upper_body.get_node_or_null("BottomHand") as Marker3D
 	if bottom_hand == null:
 		bottom_hand = Marker3D.new()
 		bottom_hand.name = "BottomHand"
 		upper_body.add_child(bottom_hand)
-	bottom_hand.position = Vector3(bottom_shoulder.position.x, 0.0, 0.0)
+
+	_position_hand_markers()
 
 	_prev_blade_world_pos = upper_body.to_global(blade.position)
 	_default_upper_body_y = upper_body.position.y
@@ -270,6 +285,9 @@ func _ready() -> void:
 	_hud = SkaterHUDCoordinator.new()
 	_hud.setup(self)
 
+	_appearance = SkaterAppearanceCoordinator.new()
+	_appearance.setup(self)
+
 	var vfx := SkaterVFX.new()
 	vfx.name = "VFX"
 	add_child(vfx)
@@ -320,6 +338,22 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		if other_delta.length_squared() > 0.0001:
 			other.body_check_impulse_applied.emit(other_delta)
 		body_checked_player.emit(other, weight * approach, -normal)
+
+
+# Re-positions the four hand/shoulder Marker3Ds based on the current
+# is_left_handed value. Called from _ready() once the markers exist, and
+# from the is_left_handed setter whenever the flag is flipped after spawn
+# (free-play picker → free-play skater follows without a respawn). Safe
+# to call before _ready() — exits early if the markers haven't been
+# created yet.
+func _position_hand_markers() -> void:
+	if shoulder == null or top_hand == null or bottom_shoulder == null or bottom_hand == null:
+		return
+	var top_hand_side_sign: float = 1.0 if is_left_handed else -1.0
+	shoulder.position        = Vector3( top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
+	top_hand.position        = Vector3(shoulder.position.x, 0.0, 0.0)
+	bottom_shoulder.position = Vector3(-top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
+	bottom_hand.position     = Vector3(bottom_shoulder.position.x, 0.0, 0.0)
 
 
 # ── Facing ────────────────────────────────────────────────────────────────────
@@ -407,7 +441,18 @@ func update_carry_side(has_puck: bool, delta: float) -> void:
 # Pure derivation: contact − face_normal × forehand_factor × carry_blade_offset.
 # Returns get_blade_contact_global() (centered) when not carrying or when
 # the geometry is degenerate, so existing non-carry consumers are unaffected.
+#
+# Slapshot wind-up override: when slapshot pinning is active the puck stays
+# at a fixed lateral/forward offset from the player (matched to the one-timer
+# slapper zone) instead of following the blade, which is lifted overhead and
+# pulled back over the back shoulder during the coil. This keeps the puck on
+# the ice in front of the skater so they can coast / brake during the wind-up
+# without leaving the puck behind, and so the eventual shot fires from a sane
+# ice position rather than from the elevated blade tip.
 func get_carry_target_global() -> Vector3:
+	if _slapshot_pin_active:
+		var local := Vector3(_slapshot_pin_local.x, 0.0, _slapshot_pin_local.y)
+		return global_position + global_transform.basis * local
 	var contact: Vector3 = get_blade_contact_global()
 	if top_hand == null:
 		return contact
@@ -421,6 +466,23 @@ func get_carry_target_global() -> Vector3:
 	# so subtraction here lands on the un-offset puck position.
 	var face_normal := Vector3(-stick.z, 0.0, stick.x)
 	return contact - face_normal * get_carry_forehand_factor() * carry_blade_offset
+
+
+# Slapshot pin state — set by SkaterController._enter_slapper_charge when the
+# carrier commits to a slap, cleared in _transition_to_skating. The pin offset
+# is XZ in skater-local space (already includes blade_side_sign).
+var _slapshot_pin_active: bool = false
+var _slapshot_pin_local: Vector2 = Vector2.ZERO
+
+func enter_slapshot_pinning(local_offset_x: float, local_offset_z: float) -> void:
+	_slapshot_pin_local = Vector2(local_offset_x, local_offset_z)
+	_slapshot_pin_active = true
+
+func exit_slapshot_pinning() -> void:
+	_slapshot_pin_active = false
+
+func is_slapshot_pinning() -> bool:
+	return _slapshot_pin_active
 
 
 func get_prev_blade_contact_global() -> Vector3:
@@ -594,7 +656,7 @@ func _update_bone_mesh(bone: Node3D, a_world: Vector3, b_world: Vector3) -> void
 	bone.position = (a_local + b_local) * 0.5
 	bone.scale = Vector3(1.0, 1.0, maxf(length, 0.001))
 	if (b_world - a_world).length() > 0.0001:
-		bone.look_at(b_world, Vector3.UP)
+		bone.look_at(b_world, _up_for_look_at(b_world - a_world))
 
 
 func _update_joint_sphere(sphere: MeshInstance3D, world_pos: Vector3) -> void:
@@ -622,8 +684,19 @@ func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vect
 	var cuff_height: float = cyl.height if cyl != null else 0.06
 	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5 + cuff_wrist_offset)
 	mesh.position = upper_body.to_local(cuff_center_w)
-	mesh.look_at(cuff_center_w + bone_dir_n, Vector3.UP)
+	mesh.look_at(cuff_center_w + bone_dir_n, _up_for_look_at(bone_dir_n))
 	mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+
+
+# Returns an up vector that's safely non-colinear with `direction`. Falls back
+# to Vector3.FORWARD when `direction` is near-vertical so look_at() doesn't
+# warn about colinear basis vectors. Cylindrical meshes (arm bones, cuffs)
+# are rotationally symmetric around their long axis, so the choice of up only
+# matters for the warning — not for the rendered geometry.
+static func _up_for_look_at(direction: Vector3) -> Vector3:
+	if absf(direction.normalized().y) > 0.99:
+		return Vector3.FORWARD
+	return Vector3.UP
 
 
 # Bone "rig" pattern: the public node is a Node3D wrapper that gets positioned,
@@ -723,6 +796,11 @@ func set_slapper_zone(active: bool, radius: float = 0.0, offset_x: float = 0.0, 
 		_slapper_zone_sphere.radius = radius
 		var blade_side_sign: float = -1.0 if is_left_handed else 1.0
 		_slapper_zone_area.position = Vector3(blade_side_sign * offset_x, 0.0, offset_z)
+		# Anchor to ice level — the Skater root is at body-center height, so a
+		# local Y of 0 lands the sphere up at chest height where the puck can
+		# never reach it. Setting global Y after rebases local Y without
+		# touching XZ.
+		_slapper_zone_area.global_position.y = 0.0
 	_slapper_zone_area.collision_layer = Constants.LAYER_BLADE_AREAS if active else 0
 
 
@@ -739,25 +817,18 @@ func get_slapper_zone_radius() -> float:
 
 
 # ── Uniform / Appearance (delegate to SkaterUniformCoordinator) ───────────────
-func set_player_color(
-		jersey_color: Color,
-		helmet_color: Color,
-		pants_color: Color,
-		socks_color: Color,
-		blade_color: Color,
-		gloves_color: Color) -> void:
-	_uniform.apply_colors(jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color)
+# Applies the full v2 colors dict (output of TeamColorRegistry.get_colors)
+# — base colors, stripe arrays, yoke, shoulder + jersey text colors, blade.
+# Call before or after set_jersey_info; both repaint the decals using cached
+# inputs from whichever side was called last.
+func set_uniform(colors: Dictionary) -> void:
+	_uniform.apply_uniform(colors)
 
 
-func set_jersey_info(p_name: String, number: int, text_color: Color, text_outline_color: Color) -> void:
-	_uniform.apply_jersey_info(p_name, number, text_color, text_outline_color)
-
-
-func set_jersey_stripes(
-		jersey_stripe_color: Color,
-		pants_stripe_color: Color,
-		socks_stripe_color: Color) -> void:
-	_uniform.apply_stripes(jersey_stripe_color, pants_stripe_color, socks_stripe_color)
+# Sets the back-of-jersey name and number; text colors come from the cached
+# uniform (last set_uniform call).
+func set_jersey_info(p_name: String, number: int) -> void:
+	_uniform.apply_jersey_info(p_name, number)
 
 
 # ── HUD (delegate to SkaterHUDCoordinator) ────────────────────────────────────
@@ -803,3 +874,12 @@ func set_slapper_indicator_ready(_is_ready: bool) -> void:
 
 func update_slapper_indicator_window(_t: float) -> void:
 	_hud.update_slapper_indicator_window(_t)
+
+
+# ── Appearance (delegate to SkaterAppearanceCoordinator) ──────────────────────
+# Called by SkaterController.apply_attributes — same call path that applies
+# the gameplay multipliers, so visual and gameplay stay in lockstep without
+# a separate signal.
+func apply_appearance(attrs: PlayerAttributes) -> void:
+	if _appearance != null:
+		_appearance.apply(attrs)

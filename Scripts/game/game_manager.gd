@@ -202,6 +202,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.slot_swap_confirmed.connect(_on_slot_swap_confirmed)
 	NetworkManager.return_to_lobby_received.connect(_on_return_to_lobby)
 	NetworkManager.local_identity_changed.connect(_on_local_identity_changed)
+	NetworkManager.local_attributes_changed.connect(_on_local_attributes_changed)
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
 	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
@@ -451,7 +452,8 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe, colors.socks, colors.socks_stripe,
 			colors.secondary, colors.text, colors.text_outline,
 			NetworkManager.local_is_left_handed, NetworkManager.local_player_name, true,
-			NetworkManager.local_jersey_number)
+			NetworkManager.local_jersey_number,
+			NetworkManager.get_peer_attributes(peer_id))
 	# Flush any sync_existing_players payload that landed before _spawn_world
 	# ran. Both the GameManager queue (RPC arrived after scene load, while
 	# _state_machine was null) and NetworkManager.pending_join_players (RPC
@@ -546,13 +548,18 @@ func sync_existing_players(player_data: Array) -> void:
 		var is_left: bool = entry[6] if entry.size() > 6 else true
 		var p_name: String = entry[7] if entry.size() > 7 else "Player"
 		var p_number: int = entry[8] if entry.size() > 8 else 10
+		var attrs: PlayerAttributes
+		if entry.size() > 12:
+			attrs = PlayerAttributes.new(int(entry[9]), int(entry[10]), int(entry[11]), int(entry[12]))
+		else:
+			attrs = PlayerAttributes.all_medium()
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 		_registry.spawn(peer_id, team_slot, teams[team_id],
 				jersey_color, helmet_color, pants_color,
 				colors.jersey_stripe, colors.gloves, colors.pants_stripe, colors.socks, colors.socks_stripe,
 				colors.secondary, colors.text, colors.text_outline,
-				is_left, p_name, false, p_number)
+				is_left, p_name, false, p_number, attrs)
 	# Client / spectator: registry is now populated with all players the host
 	# knew about at the moment we joined. Open the replay file so subsequent
 	# world-state broadcasts get recorded. Idempotent — short-circuits if a
@@ -562,7 +569,8 @@ func sync_existing_players(player_data: Array) -> void:
 
 func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		jersey_color: Color, helmet_color: Color, pants_color: Color,
-		is_left_handed: bool, player_name: String, jersey_number: int = 10) -> void:
+		is_left_handed: bool, player_name: String, jersey_number: int = 10,
+		attributes: PlayerAttributes = null) -> void:
 	if peer_id == NetworkManager.local_peer_id() or _state_machine == null:
 		return
 	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
@@ -571,7 +579,8 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 			jersey_color, helmet_color, pants_color,
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe, colors.socks, colors.socks_stripe,
 			colors.secondary, colors.text, colors.text_outline,
-			is_left_handed, player_name, false, jersey_number)
+			is_left_handed, player_name, false, jersey_number,
+			attributes if attributes != null else PlayerAttributes.all_medium())
 
 
 # ── World Spawn ───────────────────────────────────────────────────────────────
@@ -1367,18 +1376,19 @@ func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 		is_left: bool, p_name: String, p_number: int, is_local: bool) -> Dictionary:
 	var team: Team = teams[team_id]
 	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
+	var attrs: PlayerAttributes = NetworkManager.get_peer_attributes(peer_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 	if not is_local:
 		NetworkManager.send_slot_assignment(peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants)
 	NetworkManager.send_spawn_remote_skater(peer_id, team_slot, team_id,
-			colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number)
+			colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number, attrs)
 	_registry.spawn(peer_id, team_slot, team,
 			colors.jersey, colors.helmet, colors.pants,
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe,
 			colors.socks, colors.socks_stripe,
 			colors.secondary, colors.text, colors.text_outline,
-			is_left, p_name, is_local, p_number)
+			is_left, p_name, is_local, p_number, attrs)
 	return colors
 
 
@@ -1389,7 +1399,8 @@ func _spawn_local(peer_id: int, team_slot: int, team: Team) -> void:
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe, colors.socks, colors.socks_stripe,
 			colors.secondary, colors.text, colors.text_outline,
 			NetworkManager.local_is_left_handed, NetworkManager.local_player_name, true,
-			NetworkManager.local_jersey_number)
+			NetworkManager.local_jersey_number,
+			NetworkManager.get_peer_attributes(peer_id))
 
 
 # ── Spawn wire-up (callback invoked by PlayerRegistry after spawn) ───────────
@@ -2180,8 +2191,26 @@ func _on_local_identity_changed(p_name: String, p_number: int, p_is_left: bool) 
 	record.is_left_handed = p_is_left
 	if record.skater != null:
 		record.skater.set_player_name(p_name)
-		record.skater.set_jersey_info(p_name, p_number, record.text_color, record.text_outline_color)
+		record.skater.set_jersey_info(p_name, p_number)
 		record.skater.is_left_handed = p_is_left
+
+
+# Pushes new attribute multipliers into the live local controller. Always
+# updates the record (so the next respawn lands the new values), but only
+# touches the running controller when we're not in an active online match —
+# online play locks attributes at join time to keep both peers simulating
+# the same numbers.
+func _on_local_attributes_changed(attrs: PlayerAttributes) -> void:
+	if _registry == null or attrs == null:
+		return
+	var record: PlayerRecord = _registry.get_local()
+	if record == null:
+		return
+	record.attributes = attrs
+	if NetworkManager.is_in_online_match():
+		return
+	if record.controller != null:
+		(record.controller as SkaterController).apply_attributes(attrs)
 
 
 # Re-tint home (and possibly away) when the local player picks a new
@@ -2235,11 +2264,8 @@ func _apply_team_colors_to_actors(team_id: int) -> void:
 		record.text_color = colors.text
 		record.text_outline_color = colors.text_outline
 		record.secondary_color = colors.secondary
-		record.skater.set_player_color(colors.jersey, colors.helmet,
-				colors.pants, colors.socks, colors.primary, colors.gloves)
-		record.skater.set_jersey_stripes(colors.jersey_stripe,
-				colors.pants_stripe, colors.socks_stripe)
-		record.skater.set_jersey_info(record.player_name, record.jersey_number, colors.text, colors.text_outline)
+		record.skater.set_uniform(colors)
+		record.skater.set_jersey_info(record.player_name, record.jersey_number)
 
 
 func _build_lobby_roster_array() -> Array:
@@ -2366,7 +2392,7 @@ func _spawn_bots_from_lobby() -> void:
 		# RemoteController-driven skater because peer_id is not their own.
 		NetworkManager.send_spawn_remote_skater(record.peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants,
-				record.is_left_handed, record.player_name, record.jersey_number)
+				record.is_left_handed, record.player_name, record.jersey_number, record.attributes)
 		bot_id += 1
 	# Clear after spawning so a return-to-lobby + restart starts fresh; the
 	# host will re-toggle bot slots in the next lobby session if desired.
@@ -2398,9 +2424,11 @@ func _collect_existing_player_data() -> Array[Array]:
 	var existing: Array[Array] = []
 	for peer_id: int in _registry.all():
 		var r: PlayerRecord = _registry.get_record(peer_id)
+		var attrs: PlayerAttributes = r.attributes if r.attributes != null else PlayerAttributes.all_medium()
 		existing.append([peer_id, r.team_slot, r.team.team_id,
 				r.jersey_color, r.helmet_color, r.pants_color,
-				r.is_left_handed, r.player_name, r.jersey_number])
+				r.is_left_handed, r.player_name, r.jersey_number,
+				attrs.speed, attrs.agility, attrs.size, attrs.strength])
 	return existing
 
 

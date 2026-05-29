@@ -27,6 +27,10 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 	_sm.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
 
 
+func set_max_wrister_charge_distance(d: float) -> void:
+	_sm.set_max_wrister_charge_distance(d)
+
+
 # Returns the InputState for this physics tick. Caller must not retain a
 # reference past the next tick — same scratch buffer is reused.
 func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> InputState:

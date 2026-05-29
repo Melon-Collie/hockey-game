@@ -83,7 +83,8 @@ func spawn(
 		is_left_handed: bool,
 		player_name: String,
 		is_local: bool,
-		jersey_number: int = 10) -> PlayerRecord:
+		jersey_number: int = 10,
+		attributes: PlayerAttributes = null) -> PlayerRecord:
 	var record := PlayerRecord.new(peer_id, team_slot, is_local, team)
 	# Derive is_bot from the peer_id so client-side records (where bots come
 	# in via spawn_remote_skater RPC) match host-side records. The flag
@@ -103,19 +104,22 @@ func spawn(
 	record.is_left_handed = is_left_handed
 	record.player_name = player_name
 	record.jersey_number = jersey_number
+	record.attributes = attributes if attributes != null else PlayerAttributes.all_medium()
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck
-	var blade_color: Color = TeamColorRegistry.get_colors(team.color_slot, team.team_id).primary
+	# Look up the full v2 uniform locally — the wire-supplied jersey/helmet/
+	# pants args above are kept for record bookkeeping but the painter reads
+	# the local team_colors.json (so stripes and shoulder/arm detail come
+	# from the same source as the base colors).
+	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team.team_id)
 	var spawned: Dictionary
 	if is_local:
 		spawned = _spawner.spawn_local_player(
-				faceoff_pos, jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color,
-				is_left_handed, puck, _game_state_node, team.team_id)
+				faceoff_pos, is_left_handed, puck, _game_state_node, team.team_id, record.attributes)
 	else:
 		spawned = _spawner.spawn_remote_player(
-				faceoff_pos, jersey_color, helmet_color, pants_color, socks_color, blade_color, gloves_color,
-				is_left_handed, puck, _game_state_node)
+				faceoff_pos, is_left_handed, puck, _game_state_node, record.attributes)
 	record.skater = spawned.skater
 	record.controller = spawned.controller
 	# Resolver-based team lookup so a mid-game slot swap only has to update
@@ -123,8 +127,8 @@ func spawn(
 	# from the registry rather than a cached field that drifts.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(player_name)
-	spawned.skater.set_jersey_info(player_name, jersey_number, text_color, text_outline_color)
-	spawned.skater.set_jersey_stripes(jersey_stripe_color, pants_stripe_color, socks_stripe_color)
+	spawned.skater.set_uniform(colors)
+	spawned.skater.set_jersey_info(player_name, jersey_number)
 	# Square the skater up to the puck on initial spawn — without this they
 	# default to Vector2.DOWN (+Z) which leaves team 0 spawning backwards.
 	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
@@ -178,18 +182,21 @@ func spawn_bot(
 		record.is_left_handed = (team_slot % 2 == 1)
 		record.player_name = "Bot %d" % (bot_id + 1)
 		record.jersey_number = 80 + bot_id
+		record.attributes = PlayerAttributes.all_medium()
 	else:
 		record.is_left_handed = identity.get("is_left_handed", team_slot % 2 == 1)
 		record.player_name = identity.get("name", "Bot %d" % (bot_id + 1))
 		record.jersey_number = identity.get("number", 80 + bot_id)
+		record.attributes = PlayerAttributes.new(
+				int(identity.get("speed",   PlayerAttributes.LEVEL_MEDIUM)),
+				int(identity.get("agility", PlayerAttributes.LEVEL_MEDIUM)),
+				int(identity.get("size",    PlayerAttributes.LEVEL_MEDIUM)),
+				int(identity.get("strength", PlayerAttributes.LEVEL_MEDIUM)))
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck
-	var blade_color: Color = colors.primary
 	var spawned: Dictionary = _spawner.spawn_ai_player(
-			faceoff_pos, record.jersey_color, record.helmet_color, record.pants_color,
-			record.socks_color, blade_color, record.gloves_color,
-			record.is_left_handed, puck, _game_state_node)
+			faceoff_pos, record.is_left_handed, puck, _game_state_node, record.attributes)
 	record.skater = spawned.skater
 	record.controller = spawned.controller
 	# Brain lookup: GameManager owns the per-team brains (host-only, indexed
@@ -200,8 +207,8 @@ func spawn_bot(
 	# Same resolver-based team lookup as spawn() — see comment there.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(record.player_name)
-	spawned.skater.set_jersey_info(record.player_name, record.jersey_number, record.text_color, record.text_outline_color)
-	spawned.skater.set_jersey_stripes(record.jersey_stripe_color, record.pants_stripe_color, record.socks_stripe_color)
+	spawned.skater.set_uniform(colors)
+	spawned.skater.set_jersey_info(record.player_name, record.jersey_number)
 	# Same initial-facing fix as spawn() — see comment there.
 	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record

@@ -279,26 +279,23 @@ const BLADE_REACH_M: float = (
 		+ BLADE_REACH_BUFFER_M)
 
 # ── Wrister charge ───────────────────────────────────────────────────────────
-# SHOOT_PRESSED runs a real wrister now: hold shoot_held for this many
-# ticks while sweeping the mouse, then release. ~250 ms gives a solid
-# wrister (charge_distance ≈ 1.0 of max 2.0, well past quick_shot_threshold).
+# SHOOT_PRESSED and the charged PASS_PRESSED variant hold shoot_held
+# for this many ticks while the blade sweeps from wind_up_start to
+# aim_target, then release. ~250 ms at 240 Hz. Total time is fixed;
+# how much CHARGE accumulates over those ticks is set by the geometry
+# (start→target distance = target charge).
 const BOT_WRISTER_CHARGE_TICKS: int = 60
-# Target accumulated charge_distance at release. SkaterController.
-# max_wrister_charge_distance defaults to 2.0; we aim for half — past
-# the quick-shot threshold (0.2), comfortable power (lerp ≈ 50%).
-# If you retune this, update AIActionScoring.BOT_PASS_CHARGE_RATIO
-# to match (= TARGET / max_wrister_charge_distance). Scoring uses
-# that ratio to derive the assumed charged-pass release speed; a
-# mismatch makes _compute_best_pass score long passes for a speed
-# the state machine doesn't actually fire at.
-const BOT_WRISTER_TARGET_CHARGE: float = 1.0
-# Per-tick mouse_screen_pos delta along the sweep direction.
-# tick_wrister_charge multiplies screen delta by 0.01 * mouse_sensitivity
-# to get world-space accumulation, so this works out at sens=1.0; hosts
-# with non-default sens see a 2x range, which the target charge headroom
-# absorbs.
-const BOT_WRISTER_SCREEN_DELTA_PER_TICK: float = (
-		BOT_WRISTER_TARGET_CHARGE / BOT_WRISTER_CHARGE_TICKS / 0.01)
+
+# Shot charge fractions of max_wrister_charge_distance:
+# - shots aim for full charge (the carry scorer assumes WRISTER_SHOT_SPEED_M_S
+#   = DEFAULT_WRISTER_POWER_MAX_M_S, so the bot should produce ~max)
+# - charged passes aim for half (matches AIActionScoring.BOT_PASS_CHARGE_RATIO
+#   which is consumed by PASS_CHARGE_SPEED_M_S for scoring)
+# TODO(threat-aware): shots could vary their target by time-until-pressured
+# instead of always going full — the existing bail-on-close-opponent path
+# in _state_shoot_pressed is the safety hatch for now.
+const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
+const BOT_WRISTER_PASS_CHARGE_FRACTION: float = AIActionScoring.BOT_PASS_CHARGE_RATIO
 # Mid-charge bail radius. If an opponent gets inside this distance
 # while we're charging, cancel via block_held — getting blasted in the
 # slot mid-windup is worse than not shooting. The carry state can re-
@@ -323,38 +320,22 @@ const BOT_PRE_AIM_BUFFER_S: float = 0.01
 const BOT_WRISTER_LOOKAHEAD_S: float = (
 		float(BOT_WRISTER_CHARGE_TICKS) / 240.0 + BOT_PRE_AIM_BUFFER_S)
 
-# Forehand wind-up offset for the visible blade sweep. mouse_world_pos
-# at tick 0 sits BOT_WRISTER_WIND_UP_BACK_M behind the bot along
-# (-aim_dir) and BOT_WRISTER_WIND_UP_SIDE_M to the forehand side
-# perpendicular to aim_dir. Across the charge it lerps to the aim
-# point, so the blade IK draws the stick back-and-to-the-handed-side
-# then sweeps through the puck. Also forces the entry blade pose to
-# the forehand side (wrister_start_blade_local_x captured at WRISTER_AIM
-# entry), so SkaterController doesn't classify the shot as backhand
-# and apply the backhand_power_coefficient penalty.
+# Wind-up geometry for the visible blade sweep. The mouse cursor lerps
+# from a wind-up start position to a release target across the charge,
+# with the blade IK following 1:1 (both endpoints sit inside the bot's
+# ROM by construction, so no clamping happens). The straight-line
+# distance between endpoints equals the target charge — that's the
+# entire knob for "how much power".
 #
-# SIDE_M is purely a VISUAL pose intensity now (1.0 m = clearly
-# loaded forehand stance). Earlier the SIDE offset was coupled to
-# the wrister shot direction via the comp-aim rotation: increasing
-# it rotated `_shoot_sweep_dir_xy` further off clean_aim, which
-# fired the puck systematically wide. The fix below sets the
-# screen-space sweep direction from `aim_dir_init` directly,
-# decoupling SHOT direction from the visual wind-up pose. SIDE_M
-# can now be cranked for feel without breaking accuracy.
-const BOT_WRISTER_WIND_UP_BACK_M: float = 0.6
-const BOT_WRISTER_WIND_UP_SIDE_M: float = 1.0
-
-# Release-point forward distance for the wrister swing. The lerp's
-# FORWARD endpoint sits this far ahead of the bot — not at the actual
-# far aim point — so the lateral wind-up offset stays geometrically
-# meaningful at release (a 1.0 m side offset at 1.5 m forward is a
-# clear forehand pose; at 30 m it would be invisible). Aim direction
-# is still geometrically compensated for the BLADE-IK target (mouse
-# world position), so the visible blade still tracks toward clean_aim
-# despite the lateral offset. The wrister SHOT direction comes from
-# the screen-space drag and is set to clean aim_dir directly — see
-# _shoot_sweep_dir_xy assignment in _state_shoot_pressed.
-const BOT_WRISTER_RELEASE_FORWARD_M: float = 1.5
+# SIDE_OFFSET keeps the stick visually on the forehand side (the lerp
+# line is offset perpendicular to aim_dir). 0.15 m is small enough to
+# stay inside ROM even at the bot's max charge target, but large enough
+# that the wind-up reads as a forehand pose rather than a straight
+# back-to-front jab through the body's centerline. Forces the entry
+# blade pose to the forehand side, so wrister_start_blade_local_x
+# captured at WRISTER_AIM entry classifies the shot as forehand (no
+# backhand_power_coefficient penalty).
+const BOT_WRISTER_SIDE_OFFSET_M: float = 0.15
 
 # Side-selection for wrister wind-up — defender within this radius
 # AND clearly on the forehand side flips the wind-up to backhand.
@@ -530,39 +511,27 @@ var _agent_tick: int = 0
 # charge_distance and SkaterStateMachine fires a real wrister at release
 # (direction = sweep direction, power = lerp(min, max, charge_t)).
 var _shoot_charge_tick: int = 0
-# Sweep direction in screen XY = world XZ (charge tracker does no camera
-# transform). Captured at SHOOT_PRESSED entry; mouse_screen_pos walks
-# along this each tick.
-var _shoot_sweep_dir_xy: Vector2 = Vector2.ZERO
-# Wind-up start position in WORLD space — captured ONCE at SHOOT_PRESSED
-# entry (tick 0). Defines where the visible swing starts (behind the
-# bot on the chosen side). Stays fixed in world space for the duration
-# of the charge so the blade IK draws a clean sweep from this point.
+# Wind-up endpoint OFFSETS (relative to self_pos) — captured ONCE at
+# SHOOT_PRESSED entry (tick 0) and held for the charge. Each tick the
+# lerp position is added to CURRENT self_pos to get the world target,
+# so both endpoints float with the bot's locomotion. Storing as offsets
+# (not world positions) is critical: the charge tracker measures blade
+# delta in the skater-translation-subtracted frame, so endpoints that
+# stayed fixed in world would have locomotion CANCEL the lerp velocity
+# in that frame and charge accumulation would stall on rushes.
 var _shoot_wind_up_start: Vector3 = Vector3.ZERO
-# Aim target = release position. Recomputed EVERY tick from current
-# self_pos so the shot direction at release reflects where the bot
-# actually IS when the shot fires, not where they were at tick 0. The
-# bot may travel up to ~2 m during the wind-up even with active braking;
-# without per-tick recompute the locked aim_target sits where the bot
-# WAS, and (mouse − blade) at release can point backwards.
 var _shoot_aim_target: Vector3 = Vector3.ZERO
-# Wind-up side decision: +1 = forehand, -1 = backhand. Captured at
-# tick 0 (based on forehand-side pressure) and locked for the charge
-# so the swing doesn't flip mid-press if a defender shuffles in and
-# out of stick reach.
+# Wind-up side decision for SHOOT_PRESSED: +1 = forehand, -1 = backhand.
+# Captured at tick 0 (based on forehand-side pressure) and locked for the
+# charge so the swing doesn't flip mid-press if a defender shuffles in
+# and out of stick reach. PASS_PRESSED hardcodes +1 (no backhand passes).
 var _shoot_side_sign: float = 1.0
-var _shoot_perp_sign: float = 1.0
 
-# Aim DIRECTION (unit vector toward goal-shadow aim point) locked at
-# SHOOT_PRESSED entry. Self_pos still recomputes per tick so the
-# release position tracks real motion, but the direction is fixed for
-# the 250 ms charge. Without locking, every per-tick `_shoot_aim_dir`
-# call re-runs `compute_open_net_aim` against the goalie's current
-# position + velocity; a shuffling goalie can flip the larger-arc
-# choice mid-charge and the aim swings wildly, sending shots wide.
-# Locked direction = the bot committed to a target when it picked
-# SHOOT, and follows through.
-var _shoot_aim_dir_locked: Vector3 = Vector3.INF
+# Handedness perpendicular sign — +1 for right-handed (top hand on right
+# shoulder, blade on left), -1 for left-handed. Set once at setup from
+# is_left_handed and never changes. Used by _wind_up_endpoint_offsets to
+# orient the wind-up's lateral offset onto the forehand side.
+var _handedness_perp_sign: float = 1.0
 
 # Charged-pass bookkeeping. Mirrors the wrister charge structure
 # but with the sweep aimed at the receiver lead, not the goal
@@ -571,7 +540,20 @@ var _shoot_aim_dir_locked: Vector3 = Vector3.INF
 # instead of releasing on tick 0. See _state_pass_pressed.
 var _pass_should_charge: bool = false
 var _pass_charge_tick: int = 0
-var _pass_sweep_dir_xy: Vector2 = Vector2.ZERO
+# Wind-up endpoint OFFSETS (relative to self_pos) for the charged pass —
+# same geometry pattern as the SHOOT_PRESSED fields, but aim_dir points
+# at the receiver lead and the target charge is half of max so the puck
+# releases at PASS_CHARGE_SPEED_M_S instead of the wrister max.
+var _pass_wind_up_start: Vector3 = Vector3.ZERO
+var _pass_aim_target: Vector3 = Vector3.ZERO
+
+# Per-bot wrister charge cap, mirroring SkaterController.max_wrister_
+# charge_distance. Set by AIController.apply_attributes after the base
+# controller computes its attribute-scaled value, so the agent's shot
+# and pass targets scale with Size + Strength alongside the controller's
+# cap. Default matches the controller's @export default so unset bots
+# still work; the setter overrides on first attribute apply.
+var _max_wrister_charge_distance: float = 0.7
 
 # Sticky state for _carry_aim_track_fire's mode (shot-aim vs carry-
 # aim with stickhandle). Without it, when shoot vs carry scores are
@@ -672,6 +654,10 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
+func set_max_wrister_charge_distance(d: float) -> void:
+	_max_wrister_charge_distance = d
+
+
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
 		is_left_handed: bool) -> void:
 	if brain == null:
@@ -685,6 +671,11 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 	_team_brain = brain
 	_team_id_by_peer = team_id_by_peer
 	_is_left_handed = is_left_handed
+	# Perpendicular sign derived from handedness — used by _wind_up_endpoint_offsets
+	# to put the wind-up on the bot's forehand side (right-handed: stick on left of
+	# body, forehand sweeps from right-back to right-front in body frame, so perp
+	# points toward +X in skater-local = +1). Set at setup, never changes.
+	_handedness_perp_sign = -1.0 if _is_left_handed else 1.0
 	# Seed the per-bot RNG. peer_id × prime spreads the bot id range
 	# (10000+) across the seed space; XOR with NetworkManager.host_tick
 	# at spawn salts the seed per-session, still deterministic for
@@ -1522,35 +1513,34 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# on the forehand side.
 	if _shoot_charge_tick == 0:
 		debug_last_decision = "SHOOT"
-		_shoot_perp_sign = -1.0 if _is_left_handed else 1.0
 		# Project the release position forward by BOT_WRISTER_LOOKAHEAD_S
 		# so the locked aim direction is the one that hits the chosen
 		# aim point from where the bot will ACTUALLY BE at release, not
-		# from where it is right now. The wrister shot direction is
-		# `_shoot_sweep_dir_xy` (the screen-space drag direction that
-		# feeds prev_blade_dir at release) — locked once, fired from
-		# wherever the bot ends up. A bot rushing laterally at 3 m/s
-		# during the 250 ms charge moves ~0.75 m sideways; without this
-		# projection the puck's goal-line impact is the locked aim_x
-		# PLUS that lateral drift, easily past the post on a corner
-		# shot. Steering inside SHOOT_PRESSED drives toward this same
-		# projected release point, so reality and prediction line up
-		# barring sudden braking. (Goalie prediction inside
-		# `_shoot_aim_dir` already used the wrister lookahead, but it
-		# anchored on `self_pos` not the projected release — now
-		# consistent.)
+		# from where it is right now. With endpoint OFFSETS (relative to
+		# self_pos) the lerp follows the bot's locomotion automatically,
+		# but the AIM DIRECTION still needs projecting — a bot rushing
+		# laterally at 3 m/s during the 250 ms charge moves ~0.75 m
+		# sideways, and without projection the locked aim would be
+		# computed from the commit position, not the release position,
+		# easily missing past the post on a corner shot. Goalie prediction
+		# inside `_shoot_aim_dir` already used the wrister lookahead, so
+		# anchoring the aim_dir lookup on the projected release matches.
 		var release_pos: Vector3 = self_pos
 		if self_state != null:
 			var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
 			release_pos = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
-		var aim_dir_init: Vector3 = _shoot_aim_dir(snapshot, release_pos)
-		# Lock the aim direction for the entire charge. Self_pos drift
-		# from the projection is fine (release_pos tracks real motion),
-		# but the direction must stay fixed so a shuffling goalie
-		# can't flip the chosen arc mid-swing.
-		_shoot_aim_dir_locked = aim_dir_init
+		# Read aim_point directly (not just direction) so we can pass aim
+		# distance into _wind_up_endpoint_offsets for side-offset compensation.
+		var aim_point: Vector3 = _shot_aim_point(snapshot, release_pos)
+		var aim_vec: Vector3 = Vector3(aim_point.x - release_pos.x, 0.0, aim_point.z - release_pos.z)
+		var aim_dir_init: Vector3 = aim_vec.normalized() if aim_vec.length_squared() > 0.0001 else Vector3(0.0, 0.0, 1.0)
+		var aim_distance: float = aim_vec.length()
+		# aim_dir is captured once into the wind-up endpoint offsets below
+		# and held for the charge. A shuffling goalie cannot flip the
+		# chosen arc mid-swing because the endpoint offsets are frozen at
+		# tick 0; no per-tick aim recompute exists.
 		var forehand_perp_init: Vector3 = Vector3(
-				aim_dir_init.z * _shoot_perp_sign, 0.0, -aim_dir_init.x * _shoot_perp_sign)
+				aim_dir_init.z * _handedness_perp_sign, 0.0, -aim_dir_init.x * _handedness_perp_sign)
 
 		# Pick wind-up side: forehand by default. Flip to backhand if a
 		# defender is within stick reach AND clearly on the forehand
@@ -1574,64 +1564,44 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 				_shoot_side_sign = -1.0
 				break
 
-		# wind_up_start is FIXED in world space — defines where the
-		# visible swing starts. Compute from initial position with
-		# initial compensated aim_dir.
-		var comp_aim_init: Vector3 = _shoot_compensated_aim_dir(aim_dir_init)
-		var shoot_perp_init: Vector3 = forehand_perp_init * _shoot_side_sign
-		_shoot_wind_up_start = (
-				self_pos
-				- comp_aim_init * BOT_WRISTER_WIND_UP_BACK_M
-				+ shoot_perp_init * BOT_WRISTER_WIND_UP_SIDE_M)
-		# Screen-space sweep direction = CLEAN aim_dir, not the comp-aim
-		# used by the visual mouse_world_pos lerp. The wrister fires
-		# along charge_direction = prev_blade_dir = the direction of
-		# mouse_screen_pos motion across the charge; setting that motion
-		# along clean aim_dir makes the shot land on aim_point regardless
-		# of the visual wind-up pose. Using comp_aim here rotated the
-		# shot by atan2(SIDE, FORWARD) — fine for the (mouse-bot) quick-
-		# shot direction the rotation was originally derived for, but a
-		# straight bias for full-wrister sweeps. With this split the
-		# mouse_world_pos still draws the natural forehand sweep (the
-		# visual blade IK), the puck still fires at clean_aim.
-		_shoot_sweep_dir_xy = Vector2(aim_dir_init.x, aim_dir_init.z)
+		# Wind-up endpoint OFFSETS captured at tick 0 (relative to self_pos)
+		# and held constant for the charge. Sized so the straight-line
+		# distance between endpoints equals the bot's per-attribute charge
+		# cap (Size + Strength scaled). Each tick the lerp is anchored at
+		# CURRENT self_pos so the endpoints float with the bot — both world
+		# positions move forward at the bot's locomotion speed, leaving the
+		# blade's rel-skater motion as pure aim_dir lerp at the target rate.
+		var shot_target_charge: float = _max_wrister_charge_distance * BOT_WRISTER_SHOT_CHARGE_FRACTION
+		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, shot_target_charge, _shoot_side_sign)
+		_shoot_wind_up_start = endpoints.start
+		_shoot_aim_target = endpoints.target
+		# Snap the smoothed cursor straight to the wind-up start world pos.
+		# Without this, _step_mouse_toward needs ~6 ticks to bridge the 2m+
+		# gap from the pre-aim cursor (~2m ahead of bot) to the wind-up start
+		# (~0.35m behind). During those ticks, intent_delta points -aim_dir
+		# (catch-up direction), which then flips +aim_dir once the cursor
+		# catches up — burning a direction-variance reset and leaking
+		# directional bias if the reset lands awkwardly. Snapping leaves
+		# a clean 60-tick lerp at pure +aim_dir for the charge tracker.
+		_mouse_pos = self_pos + endpoints.start
+		_mouse_pos_initialized = true
 		input.shoot_pressed = true
 
-	# Recompute aim_target EVERY tick from current self_pos so the shot
-	# direction at release reflects where the bot ACTUALLY is when the
-	# shot fires, not where they were at tick 0. With active braking
-	# the bot still travels ~2 m during the 250 ms wind-up; a fixed
-	# tick-0 aim_target ends up BEHIND the bot at release and the shot
-	# direction (mouse − blade) points the wrong way. The aim DIRECTION
-	# is locked to the tick-0 capture (`_shoot_aim_dir_locked`) so a
-	# mid-charge goalie shuffle can't flip the chosen arc — only the
-	# release position moves per tick.
-	var aim_dir_now: Vector3 = _shoot_aim_dir_locked
-	var comp_aim_now: Vector3 = _shoot_compensated_aim_dir(aim_dir_now)
-	var forehand_perp_now: Vector3 = Vector3(
-			aim_dir_now.z * _shoot_perp_sign, 0.0, -aim_dir_now.x * _shoot_perp_sign)
-	var shoot_perp_now: Vector3 = forehand_perp_now * _shoot_side_sign
-	_shoot_aim_target = (
-			self_pos
-			+ comp_aim_now * BOT_WRISTER_RELEASE_FORWARD_M
-			+ shoot_perp_now * BOT_WRISTER_WIND_UP_SIDE_M)
-
-	# Lerp mouse_world_pos from wind-up start (fixed) to aim target
-	# (fresh) across the charge. Blade IK chases the lerp; the swing
-	# starts from a fixed point behind the bot and ends at the
-	# release point in front of the bot's CURRENT position.
+	# Lerp mouse_world_pos from wind-up start to aim target across the
+	# charge. The fields hold OFFSETS; world position = self_pos + lerp(offsets).
+	# Endpoints move with the bot, so charge accumulates at the intended
+	# per-tick rate regardless of locomotion speed during the wind-up.
 	var t: float = float(_shoot_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
-	input.mouse_world_pos = _step_mouse_toward(_shoot_wind_up_start.lerp(_shoot_aim_target, t))
+	input.mouse_world_pos = _step_mouse_toward(self_pos + _shoot_wind_up_start.lerp(_shoot_aim_target, t))
 
-	# Walk mouse_screen_pos along the sweep direction. Per-tick delta is
-	# BOT_WRISTER_SCREEN_DELTA_PER_TICK; SkaterAimingBehavior scales by
-	# 0.01 * mouse_sensitivity to convert to world-space charge accrual.
-	# Divide by the host's actual sensitivity here so the downstream
-	# multiplication cancels out — otherwise hosts running sens=2.0
-	# double the bot's accumulation and cap the wrister at max power.
-	var sens: float = maxf(PlayerPrefs.mouse_sensitivity, 0.01)
-	input.mouse_screen_pos = (
-			_shoot_sweep_dir_xy * (BOT_WRISTER_SCREEN_DELTA_PER_TICK * float(_shoot_charge_tick) / sens))
+	# Synthesize mouse_screen_pos walking along the compensated aim direction
+	# (= lerp endpoints' world direction). The charge tracker reads its
+	# DIRECTION from screen-pos delta, which the bot doesn't naturally have
+	# — fake it so the per-tick screen delta matches the world sweep.
+	# Magnitude is irrelevant (tracker only reads the normalized direction);
+	# we just need consecutive ticks to differ by a consistent direction.
+	var sweep_dir_3d: Vector3 = (_shoot_aim_target - _shoot_wind_up_start).normalized()
+	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_shoot_charge_tick)
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		# Still charging — keep shoot_held high.
@@ -1669,20 +1639,66 @@ func _shoot_aim_dir(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	return Vector3(0.0, 0.0, 1.0)
 
 
-# Compensates aim_dir against the geometric forehand bias introduced
-# by the lateral release offset (atan2(SIDE, FORWARD)). Rotates
-# aim_dir AWAY from shoot_perp so that (mouse − blade) at release
-# still points at the original clean_aim. Sign depends on side +
-# handedness — see the rot derivation comment.
-func _shoot_compensated_aim_dir(aim_dir: Vector3) -> Vector3:
-	var bias_rad: float = atan2(BOT_WRISTER_WIND_UP_SIDE_M, BOT_WRISTER_RELEASE_FORWARD_M)
-	var rot: float = bias_rad * _shoot_side_sign * _shoot_perp_sign
-	var cos_r: float = cos(rot)
-	var sin_r: float = sin(rot)
-	return Vector3(
-			aim_dir.x * cos_r - aim_dir.z * sin_r,
-			0.0,
-			aim_dir.x * sin_r + aim_dir.z * cos_r)
+# Computes wind-up endpoint OFFSETS (relative to self_pos) for a wrister
+# charge. Caller adds current self_pos when consuming each tick so the
+# endpoints move with the bot — critical because tick_wrister_charge
+# measures blade delta in the skater-translation-subtracted frame, so
+# world-fixed endpoints would have a forward-rushing bot's locomotion
+# CANCEL the lerp velocity in that frame (charge accumulation would
+# stall or invert direction on rushes).
+#
+# Inside the helper, aim_dir is pre-tilted to compensate for the lateral
+# release offset (see _aim_dir_compensated_for_side_offset). With the
+# compensation, the puck's trajectory from the release position passes
+# exactly through the aim point instead of flying parallel-offset to it.
+#
+# Endpoint offsets (in the compensated frame):
+#   start  = -aim_dir' * (target/2) + forehand_perp' * side_sign * SIDE_OFFSET
+#   target = +aim_dir' * (target/2) + forehand_perp' * side_sign * SIDE_OFFSET
+# Both lie inside ROM (target ≤ max_wrister_charge_distance ≈ 0.7 m,
+# half ≤ 0.35 m, side ≤ 0.15 m), so the blade IK chases the mouse 1:1
+# without clamping. Per-tick delta in rel-skater frame = +aim_dir' *
+# (target/ticks), so accumulated charge = target exactly and
+# prev_blade_dir at release = aim_dir' (the tilt-compensated direction).
+func _wind_up_endpoint_offsets(aim_dir: Vector3, aim_distance_m: float, target_charge_m: float, side_sign: float) -> Dictionary:
+	var half: float = target_charge_m * 0.5
+	var compensated: Vector3 = _aim_dir_compensated_for_side_offset(aim_dir, aim_distance_m, side_sign)
+	var forehand_perp: Vector3 = Vector3(
+			compensated.z * _handedness_perp_sign, 0.0, -compensated.x * _handedness_perp_sign)
+	var perp: Vector3 = forehand_perp * side_sign
+	return {
+		"start":  -compensated * half + perp * BOT_WRISTER_SIDE_OFFSET_M,
+		"target": +compensated * half + perp * BOT_WRISTER_SIDE_OFFSET_M,
+	}
+
+
+# Pre-tilts aim_dir to compensate for the wind-up's lateral release
+# offset. With symmetric perp offsets on both endpoints (start and
+# target both at +perp*SIDE_OFFSET), the puck releases SIDE_OFFSET meters
+# perpendicular to the aim line and flies in pure aim_dir — missing the
+# aim point by SIDE_OFFSET at every distance.
+#
+# Rotating the wind-up frame by θ = asin(SIDE_OFFSET / aim_distance)
+# toward -perp makes the puck trajectory pass exactly through the aim
+# point. Closed-form solve: setting up the puck flight from the rotated
+# release in the rotated aim_dir and requiring it to pass through
+# (aim_distance, 0) in the original frame yields side/sin(θ) = aim_distance.
+#
+# Practical impact at SIDE_OFFSET = 0.15 m:
+#   aim_distance = 5 m   → θ ≈ 1.72° (~3% of goal width corrected)
+#   aim_distance = 20 m  → θ ≈ 0.43° (smaller absolute correction, but
+#                                     more important — defenders fill the
+#                                     lane harder past 10 m)
+# Degenerate guard: if aim_distance is ≤ SIDE_OFFSET, the aim point is
+# inside the wind-up zone (unreachable shot setup); return raw aim_dir
+# rather than asin'ing past 1.
+func _aim_dir_compensated_for_side_offset(aim_dir: Vector3, aim_distance_m: float, side_sign: float) -> Vector3:
+	if aim_distance_m <= BOT_WRISTER_SIDE_OFFSET_M:
+		return aim_dir
+	var theta: float = asin(BOT_WRISTER_SIDE_OFFSET_M / aim_distance_m)
+	var forehand_perp: Vector3 = Vector3(
+			aim_dir.z * _handedness_perp_sign, 0.0, -aim_dir.x * _handedness_perp_sign)
+	return aim_dir * cos(theta) - forehand_perp * side_sign * sin(theta)
 
 
 func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -1705,10 +1721,16 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# _pass_aim_point so a charged pass leads less than a quick-shot
 	# (puck arrives sooner, receiver covers less ground in flight).
 	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
-	input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 
 	if not _pass_should_charge:
 		# ── Quick-shot pass: one-tick release ──
+		# Point cursor at the receiver and fire. The charged path skips
+		# this and computes its own mouse_world_pos via the wind-up lerp
+		# below — calling _step_mouse_toward on BOTH targets per tick
+		# fights itself (_mouse_pos walks halfway to each in turn) and
+		# produces noisy cursor deltas, which the charge tracker reads as
+		# bizarre release directions on long charged passes.
+		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 		debug_last_decision = "PASS→%s" % target_slot_label
 		input.shoot_pressed = true
 		input.shoot_held = true
@@ -1736,24 +1758,43 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	debug_last_decision = "PASS+→%s" % target_slot_label
 
 	if _pass_charge_tick == 0:
-		# Capture the sweep direction = direction toward receiver lead.
-		# This is the screen-space drag direction that becomes the puck's
-		# release direction (see SHOOT_PRESSED — sweep dir → prev_blade_dir
-		# at release → release direction). Use clean_pass_aim, not the
-		# stepped mouse, so a single-tick mouse residual can't tilt it.
+		# Capture aim direction toward the receiver and build wind-up
+		# endpoint offsets (same helper as SHOOT_PRESSED, half the target
+		# charge so the puck releases at PASS_CHARGE_SPEED_M_S). aim_dir
+		# is taken from clean_pass_aim (the receiver's lead) rather than
+		# the stepped mouse so a single-tick mouse residual can't tilt it.
 		var sweep: Vector3 = clean_pass_aim - self_pos
 		sweep.y = 0.0
-		if sweep.length_squared() > 0.0001:
-			sweep = sweep.normalized()
-			_pass_sweep_dir_xy = Vector2(sweep.x, sweep.z)
+		var aim_distance: float = sweep.length()
+		var aim_dir_init: Vector3 = sweep.normalized() if aim_distance > 0.01 else Vector3(0.0, 0.0, 1.0)
+		var pass_target_charge: float = _max_wrister_charge_distance * BOT_WRISTER_PASS_CHARGE_FRACTION
+		# Pass always sweeps on the forehand side — no defender-aware
+		# side flip like SHOOT_PRESSED (passes don't justify backhand power
+		# penalty trade-offs the same way).
+		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, pass_target_charge, +1.0)
+		_pass_wind_up_start = endpoints.start
+		_pass_aim_target = endpoints.target
+		# Snap the smoothed cursor to the wind-up start — same reasoning as
+		# the SHOOT_PRESSED snap. For passes the jump is even larger (cursor
+		# was at the receiver position 10m+ in front, wind-up start is just
+		# behind the bot), so the catch-up would otherwise consume most of
+		# the 60-tick window.
+		_mouse_pos = self_pos + endpoints.start
+		_mouse_pos_initialized = true
 		input.shoot_pressed = true
 
-	# Walk mouse_screen_pos along the sweep direction so SkaterAimingBehavior
-	# accumulates charge_distance — same formula as SHOOT_PRESSED so the
-	# charge hits BOT_WRISTER_TARGET_CHARGE at the release tick.
-	var sens: float = maxf(PlayerPrefs.mouse_sensitivity, 0.01)
-	input.mouse_screen_pos = (
-			_pass_sweep_dir_xy * (BOT_WRISTER_SCREEN_DELTA_PER_TICK * float(_pass_charge_tick) / sens))
+	# Override the top-of-function "step toward clean_pass_aim" with the
+	# wind-up lerp so the blade actually sweeps. Endpoints are offsets;
+	# add current self_pos so they float with the bot (see
+	# _wind_up_endpoint_offsets doc for why).
+	var t: float = float(_pass_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
+	input.mouse_world_pos = _step_mouse_toward(self_pos + _pass_wind_up_start.lerp(_pass_aim_target, t))
+
+	# Synthesize mouse_screen_pos walking along the compensated aim direction
+	# — same reasoning as the SHOOT_PRESSED synthesis. Charge tracker reads
+	# direction from screen-pos delta; we fake it from the lerp endpoints.
+	var sweep_dir_3d: Vector3 = (_pass_aim_target - _pass_wind_up_start).normalized()
+	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_pass_charge_tick)
 
 	if _pass_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		input.shoot_held = true
@@ -2826,16 +2867,12 @@ func _update_engagement_cooldown(snapshot: WorldSnapshot, self_state: SkaterNetw
 func _set_state(s: State) -> void:
 	if s != _state:
 		# Wrister charge resets on every SHOOT_PRESSED entry — fresh
-		# sweep direction, fresh tick count, fresh prev_mouse_screen_pos
-		# (the SkaterStateMachine seeds that from input.mouse_screen_pos
-		# at the entry edge).
+		# sweep direction, fresh tick count. SkaterStateMachine seeds the
+		# charge tracker from the blade's current position at the entry edge.
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
-			_shoot_sweep_dir_xy = Vector2.ZERO
-			_shoot_aim_dir_locked = Vector3.INF
 		if s == State.PASS_PRESSED:
 			_pass_charge_tick = 0
-			_pass_sweep_dir_xy = Vector2.ZERO
 		if s == State.ONE_TIMER_PRESSED:
 			_one_timer_press_tick = 0
 		# Intent + wait counter reset on CARRY entry so a new puck
