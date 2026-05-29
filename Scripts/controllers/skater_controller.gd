@@ -694,12 +694,12 @@ func _enter_slapper_charge(input: InputState) -> void:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 
 func _get_charge_direction() -> Vector3:
-	# prev_blade_dir is the screen-space cursor drag direction, packed
-	# (x, 0, y) and treated as a world XZ vector. Screen Y → world Z
-	# directly with no flip for the attack_up camera, so an attack_up
-	# team-1 player whose camera is rotated 180° has prev_blade_dir
-	# pointing at their own goal. LocalController overrides this to
-	# apply the sign flip for that specific case.
+	# prev_blade_dir is the screen-space cursor drag direction packed
+	# (x, 0, y), already in world XZ frame: LocalInputGatherer negates
+	# mouse_screen_pos for attack_up team 1, so by the time the tracker
+	# records this direction it's been pre-aligned with world XZ for
+	# both screen-pos and the blade frame the magnitude reads from.
+	# Don't re-flip here — that would invert correct shots.
 	return _aiming.prev_blade_dir
 
 func _release_wrister(input: InputState) -> void:

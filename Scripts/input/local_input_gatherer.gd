@@ -52,6 +52,18 @@ func gather() -> InputState:
 	state.mouse_screen_pos = get_viewport().get_mouse_position()
 	if PlayerPrefs.attack_up and _local_team_id == 1:
 		state.move_vector = -state.move_vector
+		# Negate screen-pos too. The wrister charge tracker reads its
+		# direction from screen-pos delta via the Vector3(x, 0, y) packing,
+		# which assumes screen Y → world Z directly. With the attack_up
+		# camera rotated 180°, that mapping is backwards — drag-up-on-screen
+		# points to -Z but the player's actual world attack is +Z, and the
+		# blade tracks mouse_world (which projects through the flipped
+		# camera correctly). Without this flip, intent_dir and blade_delta
+		# end up in opposite frames; the charge tracker's
+		# blade_delta·intent_dir projection clamps to zero and charge never
+		# accumulates, so every shot fires as a quick shot. Negating screen-
+		# pos puts both signals in the same frame for the tracker.
+		state.mouse_screen_pos = -state.mouse_screen_pos
 	state.shoot_held = Input.is_action_pressed("shoot")
 	state.shoot_pressed = _pending_shoot_pressed
 	state.slap_held = Input.is_action_pressed("slapshot")
