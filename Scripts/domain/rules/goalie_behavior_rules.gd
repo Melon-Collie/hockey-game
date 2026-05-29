@@ -297,17 +297,24 @@ static func clamp_lateral_post_seal(
 
 
 # ── Universal puck reaction trigger ──────────────────────────────────────────
-# Any puck moving toward the net above a speed threshold should put the goalie
-# into shot-reaction mode, not just classified `detect_shot()` releases. This
-# covers board bounces, poke-strips, deflections, and rebounds that arrive at
-# the net without an explicit release event.
+# Any puck on track to cross the goal line within the net soon should put the
+# goalie into shot-reaction mode, not just classified `detect_shot()` releases.
+# This covers board bounces, poke-strips, deflections, and slow tricklers that
+# arrive at the net without an explicit release event.
 #
-# Returns true if the puck will plausibly cross the goal line within the net
-# width + margin in <= max_time_to_impact seconds. Caller still uses
-# detect_shot() for impact_y classification (low vs elevated) once reacting.
+# Urgency is NOT a function of raw speed — a puck dribbling at the 5-hole from a
+# foot out is more urgent than a rocket from the blue line, not less. The real
+# gates are: (1) on-net trajectory, (2) time-to-impact <= max_time_to_impact.
+# Speed only matters insofar as it sets the ETA (slow + far = long ETA, ignored;
+# slow + close = short ETA, react). `min_speed` is a tiny anti-jitter floor to
+# skip essentially-stationary pucks whose direction wobbles, NOT an urgency cut.
+#
+# Returns true if the puck will cross the goal line within net width + margin in
+# <= max_time_to_impact seconds. Caller still uses detect_shot() for impact_y
+# classification (low vs elevated) once reacting.
 class UniversalReactionConfig:
-	var min_speed: float = 8.0           # m/s — slower pucks aren't urgent
-	var max_time_to_impact: float = 0.6  # s — anything further out the AI has time to track normally
+	var min_speed: float = 1.0           # m/s — anti-jitter floor, not an urgency gate
+	var max_time_to_impact: float = 0.6  # s — react once a goal is this imminent
 	var net_half_width: float = 0.0
 	var net_margin: float = 0.0
 

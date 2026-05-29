@@ -360,7 +360,7 @@ func test_post_seal_with_standing_pad_extension_is_looser() -> void:
 
 func _reaction_cfg() -> GoalieBehaviorRules.UniversalReactionConfig:
 	var cfg := GoalieBehaviorRules.UniversalReactionConfig.new()
-	cfg.min_speed = 8.0
+	cfg.min_speed = 1.0  # anti-jitter floor only
 	cfg.max_time_to_impact = 0.6
 	cfg.net_half_width = 0.915
 	cfg.net_margin = 0.5
@@ -372,8 +372,25 @@ func test_react_to_fast_puck_on_target() -> void:
 		Vector3(0, 0, 20), Vector3(0, 0, 20),
 		26.6, 0.0, _reaction_cfg()))
 
-func test_react_skips_slow_puck() -> void:
-	# 4 m/s is below the 8 m/s threshold — even on a perfect line, no reaction.
+func test_react_to_slow_trickler_at_doorstep() -> void:
+	# The case that motivated removing the speed gate: a puck oozing at 2 m/s
+	# from 0.6m out (t = 0.3s < 0.6) on a line into the net MUST trigger a
+	# reaction — standing there while it trickles between the legs is the bug.
+	assert_true(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 26.0), Vector3(0, 0, 2),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_essentially_stationary_puck() -> void:
+	# Below the anti-jitter floor (0.3 m/s < 1.0) — a near-dead puck whose
+	# direction wobbles shouldn't twitch the goalie into a reaction.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 26.2), Vector3(0, 0, 0.3),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_slow_puck_far_away() -> void:
+	# Slow AND far → long ETA, correctly ignored. 4 m/s from z=20 is 1.65s out,
+	# past the max_time_to_impact window. The ETA gate (not a speed gate) is
+	# what filters this — the goalie has time to track it normally first.
 	assert_false(GoalieBehaviorRules.should_react_to_puck(
 		Vector3(0, 0, 20), Vector3(0, 0, 4),
 		26.6, 0.0, _reaction_cfg()))

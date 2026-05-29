@@ -55,13 +55,14 @@ extends Node
 # the reaction freeze if it does turn out to be a pass.
 @export var net_margin: float = 3.0
 
-# Universal puck tracking — react to any fast loose puck on track for the
-# net, not just shots released by an opposing carrier. Catches board
-# bounces, poke-strips, deflections, rebounds, and other loose-puck threats
-# that don't fire a release event. Gated tighter than detect_shot
-# (min_speed + max_time_to_impact) so the goalie doesn't pre-react to
-# pucks dawdling near the blue line.
-@export var universal_react_min_speed: float = 8.0
+# Universal puck tracking — react to any loose puck on track to cross the goal
+# line soon, not just shots released by an opposing carrier. Catches board
+# bounces, poke-strips, deflections, rebounds, and slow tricklers that don't
+# fire a release event. Urgency is set by time-to-impact, NOT raw speed: a
+# puck oozing at the 5-hole from a foot out must trigger a reaction even though
+# it's slow. `min_speed` is only an anti-jitter floor for near-stationary
+# pucks; `max_time_to_impact` is the real "is a goal imminent" gate.
+@export var universal_react_min_speed: float = 1.0
 @export var universal_react_max_time_to_impact: float = 0.6
 
 # Diagnostic toggle. When on, prints to the console whenever the universal
