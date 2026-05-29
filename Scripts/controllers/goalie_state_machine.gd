@@ -3,10 +3,12 @@ extends RefCounted
 
 # Owns the goalie's current AI state. RECOVERING is the stand-up window after
 # butterfly (vulnerable beat where the goalie can't drop/RVH/react); SLIDING is
-# the committed butterfly slide (plant outside leg, push off, arc to seal).
+# the committed butterfly slide (push off, translate to seal). COILING sits
+# between BUTTERFLY and SLIDING: the goalie has committed to a slide and is
+# rotating around the planted (pivot) foot before the push-off translates it.
 # READY is the half-down active stance when the puck is in the goalie's
 # defensive half — distinct from STANDING so animation can show engagement.
-enum State { STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING }
+enum State { STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING, COILING }
 
 signal transitioned(prev: State, new: State)
 
@@ -21,6 +23,14 @@ func reset() -> void:
 
 func is_butterfly() -> bool:
 	return current == State.BUTTERFLY
+
+# "On the ice" — the three down states share the butterfly pose shape (pads
+# splayed). Use for code that should treat the goalie as "in a butterfly-ish
+# stance" regardless of whether they're coiled, mid-slide, or stationary.
+func is_down() -> bool:
+	return current == State.BUTTERFLY \
+			or current == State.COILING \
+			or current == State.SLIDING
 
 # Upright = goalie can drop to butterfly / engage RVH from this state. Both
 # STANDING and READY qualify; RECOVERING does not (it's the vulnerable

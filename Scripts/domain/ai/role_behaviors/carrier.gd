@@ -77,6 +77,7 @@ const ELEVATE_SCORE_GATE: float = 0.4
 const _GOALIE_STATE_BUTTERFLY: int = 1
 const _GOALIE_STATE_RECOVERING: int = 2
 const _GOALIE_STATE_SLIDING: int = 6
+const _GOALIE_STATE_COILING: int = 7
 
 # Pre-baked rotations for the 8 polar cardinal carry candidates.
 const _POLAR_ANGLES: Array[float] = [
@@ -754,7 +755,8 @@ func _should_elevate_shot(ctx: RoleContext, shoot_score: float) -> bool:
 	var s: int = opp_goalie.state_enum
 	if s == _GOALIE_STATE_BUTTERFLY \
 			or s == _GOALIE_STATE_RECOVERING \
-			or s == _GOALIE_STATE_SLIDING:
+			or s == _GOALIE_STATE_SLIDING \
+			or s == _GOALIE_STATE_COILING:
 		return true
 	var range_to_goal: float = ctx.self_pos.distance_to(ctx.attacking_goal_pos)
 	return range_to_goal <= ELEVATE_CLOSE_SHOT_RANGE_M and shoot_score >= ELEVATE_SCORE_GATE

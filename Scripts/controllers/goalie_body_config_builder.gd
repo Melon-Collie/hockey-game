@@ -102,7 +102,12 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 		GoalieStateMachine.State.READY, GoalieStateMachine.State.RECOVERING:
 			_set_ready_pose(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
-		GoalieStateMachine.State.BUTTERFLY:
+		GoalieStateMachine.State.BUTTERFLY, GoalieStateMachine.State.COILING:
+			# COILING shares the butterfly pose — pads on the ice, body
+			# squared up. The body rotation is driven separately by the
+			# controller's _update_facing branch and the pivot-foot motion
+			# is driven by _update_position; the pose builder doesn't need
+			# to model the planted-leg weight shift directly.
 			_set_butterfly_pose(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.SLIDING:

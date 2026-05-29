@@ -167,27 +167,44 @@ func commit_slide(current_x: float, current_depth: float, target_x: float, net_h
 	end_x = target_x
 	end_depth = depth_target
 
-# Tick the active slide. Returns the new (x, depth). Velocity decays via
-# friction and drives arc progress (0→1); position is computed from arc
-# progress rather than accumulated from velocity directly. Depth bows forward
-# (sin(π·t)) at mid-arc, matching the "push out and settle" shape of a real
-# pivot. When velocity falls below `slide_min_speed` the slide ends — caller
-# should check `is_slide_finished()` after this call.
-func advance_slide(delta: float, goal_center_x: float, net_half_width: float) -> Vector2:
-	# COIL phase: body lerps from (coil_start_x, coil_start_depth) to
-	# (start_x, start_depth) — the rotation-around-pivot-foot end position —
-	# as the coil timer drains. When it hits zero, push-off velocity is applied
-	# and we fall through to translation immediately so the slide doesn't
-	# stall for one tick.
-	if coil_timer > 0.0:
-		coil_timer = maxf(coil_timer - delta, 0.0)
-		if coil_timer > 0.0 and coil_duration > 0.0:
-			var coil_progress: float = clampf(1.0 - coil_timer / coil_duration, 0.0, 1.0)
-			return Vector2(
-					lerpf(coil_start_x, start_x, coil_progress),
-					lerpf(coil_start_depth, start_depth, coil_progress))
-		# Coil just completed this frame — push off.
+# Tick the COILING phase. Body lerps from (coil_start_x, coil_start_depth) to
+# (start_x, start_depth) — the post-pivot-rotation position — as the coil
+# timer drains. Returns the interpolated body (x, depth). When the coil timer
+# hits zero this also applies push-off velocity so the next advance_slide()
+# tick starts the translation phase with momentum; the controller should
+# transition to State.SLIDING when `is_coil_complete()` reports true.
+func tick_coil(delta: float) -> Vector2:
+	if coil_timer <= 0.0:
+		# Coil already done (or duration was zero); body sits at the
+		# post-coil position.
+		return Vector2(start_x, start_depth)
+	coil_timer = maxf(coil_timer - delta, 0.0)
+	if coil_timer == 0.0:
+		# Coil completed this tick — arm push-off so the next advance_slide
+		# tick starts the translation phase under momentum.
 		velocity_x = dir * slide_initial_speed
+		return Vector2(start_x, start_depth)
+	var coil_progress: float = clampf(1.0 - coil_timer / coil_duration, 0.0, 1.0) \
+			if coil_duration > 0.0 else 1.0
+	return Vector2(
+			lerpf(coil_start_x, start_x, coil_progress),
+			lerpf(coil_start_depth, start_depth, coil_progress))
+
+# True once the coil timer has expired and push-off has been applied. The
+# controller polls this from State.COILING to transition into State.SLIDING.
+func is_coil_complete() -> bool:
+	return coil_timer <= 0.0
+
+
+# Tick the translation phase of the slide. Returns the new (x, depth).
+# Velocity decays via friction and drives arc progress (0→1); position is
+# computed from arc progress rather than accumulated from velocity directly.
+# Depth bows forward (sin(π·t)) at mid-arc, matching the "push out and settle"
+# shape of a real pivot. When velocity falls below `slide_min_speed` the slide
+# ends — caller should check `is_slide_finished()` after this call. Coil is
+# handled separately by tick_coil() — this function assumes coil is already
+# complete.
+func advance_slide(delta: float, goal_center_x: float, net_half_width: float) -> Vector2:
 	var decay: float = slide_friction * delta
 	if velocity_x > 0.0:
 		velocity_x = maxf(velocity_x - decay, 0.0)

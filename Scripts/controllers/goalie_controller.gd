@@ -625,7 +625,9 @@ func _compute_threat_position() -> Vector3:
 			or _sm.is_rvh() \
 			or _sm.current == State.RECOVERING:
 		return puck.global_position
-	var w: float = shooter_weight_butterfly if _sm.is_butterfly() else shooter_weight_standing
+	# COILING and SLIDING share the down-state chest weight (they're part of
+	# the butterfly cycle, just at different points in the motion).
+	var w: float = shooter_weight_butterfly if _sm.is_down() else shooter_weight_standing
 	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
 	# Lead by carrier velocity. Sustained lateral motion projects ahead;
@@ -697,13 +699,15 @@ func _update_state(delta: float) -> void:
 					_sm.transition_to(State.READY)
 				elif _sm.current == State.READY and not should_be_ready:
 					_sm.transition_to(State.STANDING)
-		State.BUTTERFLY, State.SLIDING:
+		State.BUTTERFLY, State.COILING, State.SLIDING:
+			# All three down states share the butterfly hold/drop animation.
+			# tick_butterfly drains drop_progress, hold_timer, event_lockout.
 			_slide.tick_butterfly(delta)
-			# Recovery only fires from idle BUTTERFLY (not mid-slide). Slide
-			# completion transitions back to BUTTERFLY first — recovery
-			# can fire on the next tick if conditions hold. RVH from butterfly
-			# is forbidden: must stand first so the goalie eats a recovery
-			# window on wraparound plays.
+			# Recovery only fires from idle BUTTERFLY (not mid-slide and not
+			# mid-coil). Slide completion transitions back to BUTTERFLY first —
+			# recovery can fire on the next tick if conditions hold. RVH from
+			# butterfly is forbidden: must stand first so the goalie eats a
+			# recovery window on wraparound plays.
 			if _sm.current == State.BUTTERFLY \
 					and _slide.can_recover() \
 					and not _is_threat_pressing():
@@ -814,10 +818,10 @@ func _on_sm_transitioned(prev: State, new_state: State) -> void:
 	match new_state:
 		State.BUTTERFLY:
 			# Fresh butterfly entry resets timers + snaps depth. Returning
-			# from a slide (SLIDING → BUTTERFLY) preserves accumulated hold
-			# time, drop progress, and the depth the slide ended at — the
-			# slide is part of the same butterfly cycle.
-			if prev != State.SLIDING:
+			# inside the same slide cycle (COILING/SLIDING → BUTTERFLY)
+			# preserves accumulated hold time, drop progress, and the depth
+			# the slide ended at.
+			if prev != State.SLIDING and prev != State.COILING:
 				_slide.enter_fresh_butterfly()
 				# Standing/Ready stored radius; butterfly holds perpendicular
 				# depth, so snap to the goalie's actual world perp depth.
@@ -893,6 +897,10 @@ func _update_depth(delta: float) -> void:
 	if _sm.current == State.BUTTERFLY:
 		# Idle butterfly: commit at the depth set on entry, hold it.
 		return
+	if _sm.current == State.COILING:
+		# Depth is managed by `_slide.tick_coil` (lerps from coil_start_depth
+		# toward start_depth as the body rotates around the pivot foot).
+		return
 	if _sm.current == State.SLIDING:
 		# Depth is managed by `_slide.advance_slide` (lerps toward the
 		# post-seal target during slide). Don't touch from here.
@@ -934,6 +942,18 @@ func _update_position(delta: float) -> void:
 			_update_butterfly_five_hole(delta)
 			_try_commit_slide()
 			new_z = _goal_line_z + _direction_sign * _current_depth
+		State.COILING:
+			# Body rotates around the planted (pivot) foot, sweeping from
+			# (coil_start_x, coil_start_depth) to the post-rotation
+			# (start_x, start_depth). When the coil completes the next tick
+			# enters SLIDING with push-off velocity already armed.
+			_update_butterfly_five_hole(delta)
+			var coil_pair: Vector2 = _slide.tick_coil(delta)
+			_current_x = coil_pair.x
+			_current_depth = coil_pair.y
+			new_z = _goal_line_z + _direction_sign * _current_depth
+			if _slide.is_coil_complete():
+				_sm.transition_to(State.SLIDING)
 		State.SLIDING:
 			_update_butterfly_five_hole(delta)
 			var pair: Vector2 = _slide.advance_slide(delta, _goal_center_x, net_half_width)
@@ -1062,7 +1082,7 @@ func _try_commit_slide() -> void:
 			var cc_end: Vector2 = _coil_end_xz(cc_side, slide_rot)
 			_slide.commit_slide(_current_x, _current_depth, cc_target,
 					net_half_width, cc_end.x, cc_end.y)
-			_sm.transition_to(State.SLIDING)
+			_sm.transition_to(State.COILING)
 			return
 	# Threshold path: only commit once lateral intent has been sustained — a
 	# dangle reverses inside the window and never trips it. Target is the
@@ -1082,7 +1102,7 @@ func _try_commit_slide() -> void:
 	var t_end: Vector2 = _coil_end_xz(threat_side, slide_rot)
 	_slide.commit_slide(_current_x, _current_depth, seal_target,
 			net_half_width, t_end.x, t_end.y)
-	_sm.transition_to(State.SLIDING)
+	_sm.transition_to(State.COILING)
 
 
 # Where the body ends up after the coil phase: it rotates around the PIVOT
@@ -1154,24 +1174,29 @@ func _update_facing(delta: float) -> void:
 		goalie.set_goalie_rotation_y(lerp_angle(
 				goalie.get_goalie_rotation_y(), center_angle, rotation_speed * 0.5 * delta))
 		return
-	if _sm.current == State.SLIDING:
-		# Two-phase slide: rotation happens during the COIL phase (timed by
-		# _slide.coil_timer), then holds through the translation phase. The
-		# end angle is the fixed cos()-coupled value the seal target was
-		# computed against — using atan2-based facing here would let
-		# rotation vary by slide steepness and break the seal geometry.
-		# Convention: deviation = direction_sign * _slide.dir * slide_rot,
-		# verified against the standing facing code for both goal sides.
+	if _sm.current == State.COILING:
+		# Coil phase: lerp body rotation from the start angle (captured at
+		# commit) to the slide end angle, driven by coil_progress. End angle
+		# is the fixed cos()-coupled value the seal target was computed
+		# against — using atan2-based facing here would let rotation vary by
+		# slide steepness and break the seal geometry. Convention:
+		# deviation = direction_sign * _slide.dir * slide_rot, verified
+		# against the standing facing code for both goal sides.
 		var base_angle: float = PI if _direction_sign == 1 else 0.0
 		var deviation: float = _direction_sign * _slide.dir * deg_to_rad(slide_max_rotation_deg)
 		var target_y: float = base_angle + deviation
-		if _slide.coil_timer > 0.0 and _slide.coil_duration > 0.0:
-			var coil_progress: float = clampf(
-					1.0 - _slide.coil_timer / _slide.coil_duration, 0.0, 1.0)
-			goalie.set_goalie_rotation_y(lerp_angle(
-					_slide_start_rotation_y, target_y, coil_progress))
-		else:
-			goalie.set_goalie_rotation_y(target_y)
+		var coil_progress: float = clampf(
+				1.0 - _slide.coil_timer / _slide.coil_duration, 0.0, 1.0) \
+				if _slide.coil_duration > 0.0 else 1.0
+		goalie.set_goalie_rotation_y(lerp_angle(
+				_slide_start_rotation_y, target_y, coil_progress))
+		return
+	if _sm.current == State.SLIDING:
+		# Slide phase: hold the end angle the coil set. No further rotation —
+		# the body is committed and translating.
+		var base_angle: float = PI if _direction_sign == 1 else 0.0
+		var deviation: float = _direction_sign * _slide.dir * deg_to_rad(slide_max_rotation_deg)
+		goalie.set_goalie_rotation_y(base_angle + deviation)
 		return
 	var dx: float = _tracked_threat_position.x - goalie.global_position.x
 	var dz: float = _tracked_threat_position.z - goalie.global_position.z
@@ -1203,13 +1228,14 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.puck_velocity_est = _puck_velocity_est
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
 	var lerp_t: float
-	if _sm.current == State.BUTTERFLY or _sm.current == State.SLIDING:
+	if _sm.is_down():
 		# Drop snap: scale lerp speed so pads converge ~95% within
 		# `butterfly_drop_speed`. Lerp is asymptotic — for time-to-95%
 		# convergence we need `speed * time ≈ 3`, so the factor is 3/x not 1/x.
 		# Once the drop is complete, fall back to reaction speed for any
-		# remaining tweaks. SLIDING shares the same logic — it's still
-		# butterfly form, just with active lateral motion.
+		# remaining tweaks. BUTTERFLY / COILING / SLIDING share the same
+		# logic — they're all butterfly form, just at different motion
+		# phases.
 		var drop_lerp: float = 3.0 / maxf(butterfly_drop_speed, 0.001)
 		lerp_t = drop_lerp * delta if _slide.drop_progress < 1.0 else reaction_lerp_speed * delta
 	elif _reaction.reacting:
