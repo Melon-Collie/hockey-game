@@ -64,6 +64,12 @@ extends Node
 @export var universal_react_min_speed: float = 8.0
 @export var universal_react_max_time_to_impact: float = 0.6
 
+# Diagnostic toggle. When on, prints to the console whenever the universal
+# reaction fires and whenever the post-seal clamp actively pulls the standing
+# target in (i.e. the clamp changed the value, not a no-op). Host-only so the
+# log isn't doubled. Leave off in normal play.
+@export var debug_goalie_reads: bool = false
+
 @export var rvh_depth: float = 0.1
 @export var rvh_early_angle: float = 80.0
 @export var rvh_post_pad_angle: float = 15.0
@@ -912,8 +918,12 @@ func _arc_target_xz() -> Vector2:
 	var arc: Vector2 = GoalieBehaviorRules.target_arc_position(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
 			_direction_sign, _current_depth, net_half_width)
-	arc.x = GoalieBehaviorRules.clamp_lateral_post_seal(
+	var sealed_x: float = GoalieBehaviorRules.clamp_lateral_post_seal(
 			arc.x, _goal_center_x, net_half_width, pad_local_offset)
+	if debug_goalie_reads and is_server and not is_equal_approx(sealed_x, arc.x):
+		print("[goalie %d] post-seal clamp: %.2f -> %.2f (depth %.2f)" % [
+				team_id, arc.x, sealed_x, _current_depth])
+	arc.x = sealed_x
 	return arc
 
 # Five-hole openness for BUTTERFLY/SLIDING. Server-only — clients adopt the
@@ -1084,6 +1094,11 @@ func _check_universal_reaction() -> void:
 			_goal_line_z, _goal_center_x, _shot_cfg)
 	if not result.is_shot:
 		return
+	if debug_goalie_reads:
+		print("[goalie %d] universal reaction: puck@%.1f,%.1f vel=%.1f impact_x=%.2f %s" % [
+				team_id, puck.global_position.x, puck.global_position.z,
+				puck.linear_velocity.length(), result.impact_x,
+				"ELEVATED" if result.is_elevated else "low"])
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay)
 
 
