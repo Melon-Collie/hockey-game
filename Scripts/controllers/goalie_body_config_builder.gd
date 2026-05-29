@@ -65,6 +65,17 @@ const STICK_TILT_READY: float = 22.0
 const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
 const STICK_TILT_RVH: float = 65.0
 
+# Active blade intent: max yaw on the blocker assembly to point the blade
+# toward a close-range threat. Smaller cap than the elevated-shot reach yaw
+# because the blocker pad is rigidly attached — swinging too far moves the
+# whole pad off the right side of the body.
+var active_blade_max_yaw_deg: float = 25.0
+# Forward depth fed into the yaw atan2. Treating the threat as if it's
+# `active_blade_lookahead` metres in front means a small lateral offset still
+# produces a readable rotation (rather than the blade hard-snapping to 90°
+# whenever the puck is even slightly off-centre).
+var active_blade_lookahead: float = 1.5
+
 # Per-tick input bundle. Controller scratches one instance and overwrites all
 # fields before each `build()` call.
 class Inputs:
@@ -88,6 +99,12 @@ class Inputs:
 	# the position-derived `_puck_velocity_est` estimate.
 	var puck_position: Vector3 = Vector3.ZERO
 	var puck_velocity_est: Vector3 = Vector3.ZERO
+	# Active blade intent — set by the controller when there's a close-range
+	# opposing threat. The pose builder applies a small yaw on the blocker
+	# assembly so the stick blade points toward the puck side, making the
+	# stick a deliberate obstacle the carrier has to dangle around. Elevated
+	# shot reactions still override this (they have their own yaw math).
+	var blade_intent_active: bool = false
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -95,12 +112,18 @@ var _scratch: GoalieBodyConfig = GoalieBodyConfig.new()
 
 func build(inputs: Inputs) -> GoalieBodyConfig:
 	var c: GoalieBodyConfig = _scratch
+	# Per-state baseline pose, then active blade intent (small yaw toward a
+	# close-range threat), then elevated-shot reach (overrides the yaw with
+	# its own intercept math when reacting). RVH skips both — post-hug pose
+	# is committed.
 	match inputs.state:
 		GoalieStateMachine.State.STANDING:
 			_set_standing_pose(c, inputs)
+			_apply_active_blade_intent(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.READY, GoalieStateMachine.State.RECOVERING:
 			_set_ready_pose(c, inputs)
+			_apply_active_blade_intent(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.BUTTERFLY, GoalieStateMachine.State.COILING:
 			# COILING shares the butterfly pose — pads on the ice, body
@@ -109,9 +132,11 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			# is driven by _update_position; the pose builder doesn't need
 			# to model the planted-leg weight shift directly.
 			_set_butterfly_pose(c, inputs)
+			_apply_active_blade_intent(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.SLIDING:
 			_set_sliding_pose(c, inputs)
+			_apply_active_blade_intent(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.RVH_LEFT:
 			_set_rvh_left_pose(c)
@@ -258,6 +283,36 @@ func _mirror_hands(c: GoalieBodyConfig) -> void:
 # forward of the goal line (~0.4-1.2 m) so the puck passes through the glove's
 # plane before reaching the goal. Falls back to the goal-line impact value
 # if the intercept can't be computed.
+# Active blade intent: when an opposing shooter is close, yaw the blocker
+# assembly so the stick blade points toward the puck side. Bot skaters
+# stickhandle around exposed blades (see `_stickhandle_offset` in
+# skater_agent_state_machine.gd), so an intent-driven stick makes the goalie
+# meaningfully harder to dangle around without anything as crude as a "poke
+# check" verb. Capped at active_blade_max_yaw_deg so the blocker pad doesn't
+# swing all the way off the right side.
+#
+# Skipped during shot reactions — _apply_elevated_shot_reaction runs next and
+# has its own intercept-based yaw math that should win.
+func _apply_active_blade_intent(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if not inputs.blade_intent_active:
+		return
+	if inputs.reacting_to_shot:
+		return
+	# Puck position in goalie-local X (matches the convention used by
+	# _apply_elevated_shot_reaction: the +Z-defending goalie is rotated PI in
+	# world so its local +X is global -X).
+	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
+	# Treat the puck as `active_blade_lookahead` metres in front of the
+	# goalie so the yaw scales with lateral offset (atan2 against a fixed
+	# depth) instead of hard-snapping. Same sign convention as the elevated
+	# reach's blocker_yaw calc.
+	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
+	c.blocker_rot = Vector3(
+			c.blocker_rot.x,
+			clampf(yaw_deg, -active_blade_max_yaw_deg, active_blade_max_yaw_deg),
+			c.blocker_rot.z)
+
+
 func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	if not inputs.reacting_to_shot or not inputs.shot_is_elevated:
 		return

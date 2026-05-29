@@ -164,6 +164,25 @@ extends Node
 # opposing skater is within this radius. No need to seal the back door for a
 # puck nobody can play.
 @export var slide_loose_puck_shooter_radius: float = 2.0
+
+# ── Active blade intent ───────────────────────────────────────────────────────
+# When an opposing shooter is close, the goalie yaws the blocker assembly so
+# the stick blade points toward the puck side — making the stick a deliberate
+# obstacle the carrier has to dangle around. Trigger conditions:
+#   - Opposing carrier within `active_blade_carrier_radius` of the goalie, OR
+#   - Loose puck within `active_blade_loose_puck_radius` with an opposing
+#     skater within `slide_loose_puck_shooter_radius` (re-using the slide
+#     trigger's shooter-present helper).
+@export var active_blade_carrier_radius: float = 2.5
+@export var active_blade_loose_puck_radius: float = 1.5
+# Max blocker-assembly yaw the active-stick intent will apply. Smaller than
+# the elevated-reach yaw cap because the blocker pad rides with the rotation
+# and we don't want it swinging off the right side.
+@export var active_blade_max_yaw_deg: float = 25.0
+# Lookahead depth (m) used in the atan2(-puck_local_x, -lookahead) yaw calc.
+# Larger = more lateral offset needed to fully commit the yaw; smaller = blade
+# snaps quicker but jumps on small puck wiggles.
+@export var active_blade_lookahead: float = 1.5
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -476,6 +495,8 @@ func _configure_collaborators() -> void:
 	_pose.blocker_max_x_inward = blocker_max_x_inward
 	_pose.blocker_max_z_reach = blocker_max_z_reach
 	_pose.blocker_max_yaw_deg = blocker_max_yaw_deg
+	_pose.active_blade_max_yaw_deg = active_blade_max_yaw_deg
+	_pose.active_blade_lookahead = active_blade_lookahead
 	_pose.body_lean_max_deg = body_lean_max_deg
 	_pose.body_lean_reach_norm = body_lean_reach_norm
 	_pose.shoulder_pitch_y_neutral = shoulder_pitch_y_neutral
@@ -791,6 +812,26 @@ func _is_jammed_at_crease() -> bool:
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
 	return _opposing_shooter_near_puck(jam_opponent_distance)
+
+# True when an opposing shooter is close enough to the goalie that the stick
+# blade should actively point at the puck side. Carrier within
+# active_blade_carrier_radius, OR loose puck within active_blade_loose_puck_
+# radius with an opposing skater near it (the slide trigger's shooter-present
+# check, scoped to the loose-puck case).
+func _is_blade_intent_active() -> bool:
+	var carrier: Skater = puck.get_carrier()
+	if carrier != null:
+		if team_id != -1 and carrier.get_team_id() == team_id:
+			return false
+		return goalie.global_position.distance_to(carrier.global_position) \
+				< active_blade_carrier_radius
+	# Loose puck: must be close to the goalie AND have an opposing skater
+	# nearby (someone who can actually whack it).
+	if goalie.global_position.distance_to(puck.global_position) \
+			>= active_blade_loose_puck_radius:
+		return false
+	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
+
 
 # True when the puck has someone who can actually shoot it: either an opposing
 # carrier (any range), or a loose puck with an opposing skater within
@@ -1238,6 +1279,7 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.arm_reaction_pending = _reaction.arm_pending()
 	_pose_inputs.puck_position = puck.global_position
 	_pose_inputs.puck_velocity_est = _puck_velocity_est
+	_pose_inputs.blade_intent_active = _is_blade_intent_active()
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
 	var lerp_t: float
 	if _sm.is_down():
