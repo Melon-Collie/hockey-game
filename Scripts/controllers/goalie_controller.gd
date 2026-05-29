@@ -173,6 +173,11 @@ extends Node
 # goalie center sits at ±(net_half_width - pad_local_offset). Matches the
 # `left_pad_pos.x = -0.42` value baked into the BUTTERFLY body config.
 @export var pad_local_offset: float = 0.42
+# Half-width of a splayed butterfly pad. Added to pad_local_offset to get the
+# pad's OUTER EDGE distance from the body center. Slide targets aim for
+# (post - pad_edge_extent) so the visible pad edge lands ON the post rather
+# than overhanging it — sealing with the edge, not the center.
+@export var butterfly_pad_half_width: float = 0.14
 # Forward bow of the pivot arc at mid-slide, in metres. The goalie's center
 # traces a slight arc toward the shooter as the body pivots around the
 # push-off foot — depth peaks at mid-slide then settles at the seal target.
@@ -422,7 +427,7 @@ func _configure_collaborators() -> void:
 	_slide.slide_cooldown = slide_cooldown
 	_slide.slide_pivot_arc_depth = slide_pivot_arc_depth
 	_slide.post_seal_depth = post_seal_depth
-	_slide.pad_local_offset = pad_local_offset
+	_slide.pad_edge_extent = pad_local_offset + butterfly_pad_half_width
 	_slide.post_event_slide_lockout = post_event_slide_lockout
 	_slide.butterfly_drop_speed = butterfly_drop_speed
 	_slide.butterfly_min_hold_time = butterfly_min_hold_time
@@ -1002,27 +1007,42 @@ func _try_commit_slide() -> void:
 	# Don't slide-track a puck in the defensive zone — RVH path handles it.
 	if _is_puck_in_defensive_zone():
 		return
-	# Cross-crease pass: an explicit puck-velocity event. Slide toward the
-	# projected crossing immediately, bypassing the stickhandling-rejection
-	# gate (this isn't a read of a dangling carrier, it's a committed pass).
+	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
+	# Cross-crease pass: an explicit puck-velocity event. Slide to the seal
+	# spot on the side the puck is heading, bypassing the stickhandling-
+	# rejection gate (this isn't a read of a dangling carrier, it's a committed
+	# pass). _cross_crease_target_x carries the projected crossing — sign tells
+	# us which post to seal.
 	if _cross_crease_timer > 0.0:
-		var cc_target: float = _slide.clamp_lateral_target(
-				_cross_crease_target_x, _goal_center_x, net_half_width)
+		var cc_side: float = signf(_cross_crease_target_x - _goal_center_x)
+		var cc_target: float = _post_edge_seal_x(cc_side, pad_edge)
 		if GoalieBehaviorRules.should_commit_slide(_current_x, cc_target, slide_trigger_distance):
 			_slide.commit_slide(_current_x, _current_depth, cc_target, net_half_width)
 			_sm.transition_to(State.SLIDING)
 			return
-	# Threshold path: track the smoothed threat, but only commit once lateral
-	# intent has been sustained — a dangle reverses inside the window and never
-	# trips it (kills random slides on dekes).
-	var slide_target_x: float = _slide.clamp_lateral_target(
-			_tracked_threat_position.x, _goal_center_x, net_half_width)
-	if not GoalieBehaviorRules.should_commit_slide(_current_x, slide_target_x, slide_trigger_distance):
-		return
+	# Threshold path: only commit once lateral intent has been sustained — a
+	# dangle reverses inside the window and never trips it. Target is the
+	# post-edge-seal on the threat's side (not threat-tracked) — slides are
+	# discrete "commit to sealing the back post" motions, not partial
+	# adjustments. The distance gate keeps the goalie from sliding when it's
+	# already near that seal spot.
 	if not _has_sustained_lateral_intent():
 		return
-	_slide.commit_slide(_current_x, _current_depth, slide_target_x, net_half_width)
+	var threat_side: float = signf(_tracked_threat_position.x - _goal_center_x)
+	if threat_side == 0.0:
+		return
+	var seal_target: float = _post_edge_seal_x(threat_side, pad_edge)
+	if not GoalieBehaviorRules.should_commit_slide(_current_x, seal_target, slide_trigger_distance):
+		return
+	_slide.commit_slide(_current_x, _current_depth, seal_target, net_half_width)
 	_sm.transition_to(State.SLIDING)
+
+
+# Compute the goalie body X that puts the leading pad's outer edge ON the post
+# for the given side (+1 = right post, -1 = left post). This is where a slide
+# commits to: full post seal with no overhang.
+func _post_edge_seal_x(side: float, pad_edge_extent: float) -> float:
+	return _goal_center_x + side * maxf(net_half_width - pad_edge_extent, 0.0)
 
 # ── Facing ────────────────────────────────────────────────────────────────────
 # Threat-based facing: rotate toward where the goalie is tracking, not raw
@@ -1043,25 +1063,30 @@ func _update_facing(delta: float) -> void:
 		return
 	if _reaction.shot_timer > 0.0:
 		return
-	if _sm.current == State.BUTTERFLY or _sm.current == State.RECOVERING:
-		# Body stays square in butterfly; gentle return to centre during recovery.
+	if _sm.current == State.BUTTERFLY:
+		# Idle butterfly: hold whatever angle the slide ended at (or the drop
+		# came in at). No animation — real goalies don't rotate the body once
+		# down, and the slow lerp toward centre we used to do quietly undid
+		# the slide's facing while the goalie was still down.
+		return
+	if _sm.current == State.RECOVERING:
+		# Standing back up — gentle return to square so the next read starts
+		# from a neutral base.
 		var center_angle: float = PI if _direction_sign == 1 else 0.0
-		var return_speed: float = rotation_speed * 0.5 if _sm.current == State.RECOVERING else rotation_speed * 0.25
 		goalie.set_goalie_rotation_y(lerp_angle(
-				goalie.get_goalie_rotation_y(), center_angle, return_speed * delta))
+				goalie.get_goalie_rotation_y(), center_angle, rotation_speed * 0.5 * delta))
 		return
 	if _sm.current == State.SLIDING:
-		# Body faces the THREAT during the slide — same logic as standing,
-		# applied through the slide. The receiver/puck is to the side and
-		# forward; aiming the chest at it points the lead pad's blade-side
-		# at the puck and keeps the glove/blocker oriented to intercept,
-		# instead of the body staying squared to the old shooter direction.
-		# Capped at max_facing_angle so the body never over-rotates.
-		var dx_t: float = _tracked_threat_position.x - goalie.global_position.x
-		var dz_t: float = _tracked_threat_position.z - goalie.global_position.z
-		if Vector2(dx_t, dz_t).length() > 0.1:
+		# Body faces ALONG the slide direction — current → committed end.
+		# This points the chest at the destination, which orients the lead
+		# pad's blade-side and the glove/blocker at the receiver, instead of
+		# staying squared to the original threat. Capped at max_facing_angle.
+		var slide_vec_x: float = _slide.end_x - goalie.global_position.x
+		var slide_vec_z: float = (_goal_line_z + _direction_sign * _slide.end_depth) \
+				- goalie.global_position.z
+		if Vector2(slide_vec_x, slide_vec_z).length() > 0.1:
 			var base_angle: float = PI if _direction_sign == 1 else 0.0
-			var target_y: float = atan2(-dx_t, -dz_t)
+			var target_y: float = atan2(-slide_vec_x, -slide_vec_z)
 			var max_rad: float = deg_to_rad(max_facing_angle)
 			var deviation: float = clampf(angle_difference(base_angle, target_y), -max_rad, max_rad)
 			target_y = base_angle + deviation
@@ -1183,10 +1208,13 @@ func _update_cross_crease(delta: float, carrier: Skater) -> void:
 			_direction_sign, cross_crease_slot_depth, cross_crease_lateral_ratio)
 	if absf(cross_vx) < cross_crease_min_lateral_speed:
 		return
-	# Project the puck forward along its lateral motion to where it'll be in
-	# `cross_crease_lead_time`, clamped so the diving pad parks at the post.
+	# Project the puck forward along its lateral motion. The slide consumer
+	# uses the sign to pick which post to seal; the standing "push on feet"
+	# consumer uses the value directly. Clamp to the seal extent so the
+	# standing push doesn't overshoot the sealing position.
+	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
 	var target_x: float = puck.global_position.x + cross_vx * cross_crease_lead_time
-	target_x = _slide.clamp_lateral_target(target_x, _goal_center_x, net_half_width)
+	target_x = _slide.clamp_lateral_target(target_x, _goal_center_x, net_half_width, pad_edge)
 	_cross_crease_target_x = target_x
 	_cross_crease_timer = cross_crease_push_duration
 

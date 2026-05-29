@@ -19,7 +19,11 @@ var slide_min_speed: float = 0.3
 var slide_cooldown: float = 0.20
 var slide_pivot_arc_depth: float = 0.04
 var post_seal_depth: float = 0.10
-var pad_local_offset: float = 0.42
+# Pad edge extent: distance from body center to the OUTER edge of a splayed
+# butterfly pad. Slide targets aim for `post - pad_edge_extent` so the visible
+# pad edge lands on the post. Set by the controller (pad_local_offset +
+# butterfly_pad_half_width).
+var pad_edge_extent: float = 0.56
 var post_event_slide_lockout: float = 0.25
 var butterfly_drop_speed: float = 0.08
 var butterfly_min_hold_time: float = 0.35
@@ -122,7 +126,7 @@ func commit_slide(current_x: float, current_depth: float, target_x: float, net_h
 	# post. Normalizing against the clamp limit means a wide slide goes fully
 	# back to post_seal_depth, giving the angled path real goalies use when
 	# diving from an aggressive depth.
-	var clamp_limit: float = maxf(net_half_width - pad_local_offset, 0.001)
+	var clamp_limit: float = maxf(net_half_width - pad_edge_extent, 0.001)
 	var x_extremity: float = clampf(absf(target_x) / clamp_limit, 0.0, 1.0)
 	var depth_target: float = lerpf(current_depth, post_seal_depth, x_extremity)
 	dir = commit_dir
@@ -164,11 +168,11 @@ func advance_slide(delta: float, goal_center_x: float, net_half_width: float) ->
 func is_slide_finished() -> bool:
 	return velocity_x == 0.0 and arc_t >= 1.0
 
-# Slide destination clamps to "diving pad even with post" — the goalie can't
-# slide past the spot where the lead pad's center sits at the post line.
-# Threats heading wide naturally clamp here, parking the diving pad at the
-# post (backdoor seal). Threats mid-net track threat.x directly.
-func clamp_lateral_target(target_x: float, goal_center_x: float, net_half_width: float) -> float:
-	var max_x: float = goal_center_x + (net_half_width - pad_local_offset)
-	var min_x: float = goal_center_x - (net_half_width - pad_local_offset)
+# Slide destination clamps to "diving pad EDGE even with post" — the lead pad's
+# outer edge lands on the post rather than overhanging it. Threats heading wide
+# park the lead pad at the post (sealed with the edge, no wasted overhang).
+# Threats mid-net track threat.x directly.
+func clamp_lateral_target(target_x: float, goal_center_x: float, net_half_width: float, pad_edge_extent: float) -> float:
+	var max_x: float = goal_center_x + (net_half_width - pad_edge_extent)
+	var min_x: float = goal_center_x - (net_half_width - pad_edge_extent)
 	return clampf(target_x, min_x, max_x)
