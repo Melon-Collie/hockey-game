@@ -113,7 +113,17 @@ func commit_slide(current_x: float, current_depth: float, target_x: float, net_h
 	var commit_dir: float = signf(target_x - current_x)
 	velocity_x = commit_dir * slide_initial_speed
 	cooldown_timer = 0.0
-	var x_extremity: float = clampf(absf(target_x) / maxf(net_half_width, 0.001), 0.0, 1.0)
+	# Extremity is measured against the SLIDE CLAMP LIMIT (the puck-side
+	# post-pad-edge, where target_x is already clamped to), not the post
+	# position. The old normalization (absf(target_x) / net_half_width) capped
+	# extremity at ~0.54 even on a full post-to-post slide because the clamp
+	# eats half the range — so the depth pull toward post_seal_depth barely
+	# fired and the slide looked nearly lateral instead of angling back to the
+	# post. Normalizing against the clamp limit means a wide slide goes fully
+	# back to post_seal_depth, giving the angled path real goalies use when
+	# diving from an aggressive depth.
+	var clamp_limit: float = maxf(net_half_width - pad_local_offset, 0.001)
+	var x_extremity: float = clampf(absf(target_x) / clamp_limit, 0.0, 1.0)
 	var depth_target: float = lerpf(current_depth, post_seal_depth, x_extremity)
 	dir = commit_dir
 	arc_t = 0.0

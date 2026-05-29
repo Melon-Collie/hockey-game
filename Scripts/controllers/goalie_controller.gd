@@ -168,14 +168,6 @@ extends Node
 # scaled by how extreme the lateral slide endpoint is. Slides toward
 # centre hold depth; slides to ±net_half_width go fully deep.
 @export var post_seal_depth: float = 0.10
-# How parallel the body becomes with the slide direction (degrees of Y
-# rotation toward slide). Body parts (pads, gloves) are placed in goalie
-# local X — rotating the body yaw toward the slide direction swings those
-# local-X pads off the slide axis, so the legs stop sliding from one to the
-# other and instead point into/out of the net. Keep at 0 so the body stays
-# square to the shooter while the legs slide laterally; lean and push-off
-# pad kick already sell the pivot read.
-@export var slide_facing_max_deg: float = 0.0
 # Lateral offset from goalie center to the pad center in butterfly. Used to
 # compute the slide target so the sealing pad ends up even with the post:
 # goalie center sits at ±(net_half_width - pad_local_offset). Matches the
@@ -1059,19 +1051,22 @@ func _update_facing(delta: float) -> void:
 				goalie.get_goalie_rotation_y(), center_angle, return_speed * delta))
 		return
 	if _sm.current == State.SLIDING:
-		# Body rotates toward the slide direction so the goalie reads as
-		# leaning into the motion. Uses `_velocity_x` (position-derived) so
-		# the rotation works on both host (where slide velocity matches)
-		# AND client (where the slide is reflected via apply_state position
-		# corrections). +Y rotates -Z → -X, so leftward motion gets positive
-		# yaw — same convention as glove reach yaw.
-		var base_angle: float = PI if _direction_sign == 1 else 0.0
-		var speed_ratio: float = clampf(absf(_velocity_x) / maxf(slide_initial_speed, 0.01), 0.0, 1.0)
-		var slide_dir: float = -signf(_velocity_x)
-		var slide_yaw: float = slide_dir * deg_to_rad(slide_facing_max_deg) * speed_ratio
-		var target_y: float = base_angle + slide_yaw
-		goalie.set_goalie_rotation_y(lerp_angle(
-				goalie.get_goalie_rotation_y(), target_y, rotation_speed * delta))
+		# Body faces the THREAT during the slide — same logic as standing,
+		# applied through the slide. The receiver/puck is to the side and
+		# forward; aiming the chest at it points the lead pad's blade-side
+		# at the puck and keeps the glove/blocker oriented to intercept,
+		# instead of the body staying squared to the old shooter direction.
+		# Capped at max_facing_angle so the body never over-rotates.
+		var dx_t: float = _tracked_threat_position.x - goalie.global_position.x
+		var dz_t: float = _tracked_threat_position.z - goalie.global_position.z
+		if Vector2(dx_t, dz_t).length() > 0.1:
+			var base_angle: float = PI if _direction_sign == 1 else 0.0
+			var target_y: float = atan2(-dx_t, -dz_t)
+			var max_rad: float = deg_to_rad(max_facing_angle)
+			var deviation: float = clampf(angle_difference(base_angle, target_y), -max_rad, max_rad)
+			target_y = base_angle + deviation
+			goalie.set_goalie_rotation_y(lerp_angle(
+					goalie.get_goalie_rotation_y(), target_y, rotation_speed * delta))
 		return
 	var dx: float = _tracked_threat_position.x - goalie.global_position.x
 	var dz: float = _tracked_threat_position.z - goalie.global_position.z
