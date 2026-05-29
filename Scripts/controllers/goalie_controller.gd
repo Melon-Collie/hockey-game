@@ -142,6 +142,26 @@ extends Node
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
 @export var slide_trigger_distance: float = 0.30    # m — threat-X delta needed to commit
 @export var slide_cooldown: float = 0.20            # s between committed slides
+# Stickhandling rejection: the threshold-based slide (above) only commits once
+# the tracked threat has moved in a CONSISTENT lateral direction for this long.
+# A carrier dangling laterally reverses direction inside this window and never
+# trips it — kills the random-slide-on-deke problem. The cross-crease puck-
+# velocity trigger below is exempt (it's an explicit pass event, not a read).
+@export var slide_intent_min_time: float = 0.20     # s of consistent lateral threat motion
+@export var slide_intent_min_speed: float = 0.5     # m/s — below this, threat is "still", timer pauses
+
+# ── Cross-crease detection ────────────────────────────────────────────────────
+# A pass whipping across the slot is read off PUCK velocity, not the smoothed
+# threat (which lags toward the passer's body). When detected: in butterfly the
+# goalie slides toward the projected crossing; standing, it pushes hard on its
+# feet toward it (drops only if a shot then comes). This is the backdoor /
+# one-timer fix — the smoothed-threat threshold trigger fires too late on these.
+@export var cross_crease_slot_depth: float = 5.0        # m in front of goal the pass window covers
+@export var cross_crease_lateral_ratio: float = 1.5     # |vx| must exceed |vz|*this to count as a pass
+@export var cross_crease_min_lateral_speed: float = 6.0 # m/s puck lateral speed to trigger
+@export var cross_crease_lead_time: float = 0.30        # s to project the puck forward for the target
+@export var cross_crease_push_speed: float = 6.0        # m/s standing desperation push toward crossing
+@export var cross_crease_push_duration: float = 0.50    # s the standing push stays committed
 # When a slide commits toward a post (extreme lateral target), the goalie
 # also pulls deep so the sealing pad presses the post — backdoor /
 # wraparound coverage. Depth target = lerp(current_depth, post_seal_depth)
@@ -340,6 +360,17 @@ var _puck_velocity_est: Vector3 = Vector3.ZERO
 var _prev_puck_position: Vector3 = Vector3.ZERO
 var _puck_approach_velocity: float = 0.0
 var _reading_slapper_tell: bool = false
+# Stickhandling-rejection state: how long the tracked threat has been moving in
+# a consistent lateral direction, and the sign of that motion. The threshold
+# slide trigger gates on this so dangles (which reverse quickly) don't commit.
+var _threat_lateral_persist: float = 0.0
+var _threat_lateral_sign: float = 0.0
+var _prev_threat_x: float = 0.0
+# Cross-crease push state (standing "push on feet" toward a detected pass).
+# `_cross_crease_timer` counts down while the push is committed; while > 0 the
+# standing movement drives toward `_cross_crease_target_x` at push speed.
+var _cross_crease_timer: float = 0.0
+var _cross_crease_target_x: float = 0.0
 # Skater accessor for the crease-jam butterfly check. Host-only — the check
 # runs inside the host-side state machine and clients receive the resulting
 # transition via the existing apply_state_transition RPC.
@@ -365,6 +396,7 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	_current_depth = depth_defensive
 	_tracked_threat_position = puck.global_position
 	_prev_puck_position = puck.global_position
+	_prev_threat_x = _tracked_threat_position.x
 	_configure_collaborators()
 	_sm.transitioned.connect(_on_sm_transitioned)
 	_reaction.started.connect(_on_reaction_started)
@@ -476,6 +508,11 @@ func reset_to_crease() -> void:
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
 	_prev_puck_position = _tracked_threat_position
+	_prev_threat_x = _tracked_threat_position.x
+	_threat_lateral_persist = 0.0
+	_threat_lateral_sign = 0.0
+	_cross_crease_timer = 0.0
+	_cross_crease_target_x = 0.0
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 
@@ -525,6 +562,9 @@ func _update_tracking(delta: float) -> void:
 		_tracked_threat_position = _tracked_threat_position.lerp(target_threat, tracking_speed * delta)
 	else:
 		_tracked_threat_position = target_threat
+	if is_server:
+		_update_lateral_intent(delta)
+		_update_cross_crease(delta, carrier)
 	# Universal puck tracking: trigger a reaction for any loose puck above the
 	# threshold heading for the net within max_time_to_impact, regardless of
 	# whether a release event fired. Catches board bounces, poke-strips,
@@ -897,11 +937,21 @@ func _move_along_arc(delta: float) -> Vector2:
 			_five_hole_openness = lerpf(_five_hole_openness, five_hole_base, part_lerp_speed * delta)
 		return current
 	var target_xz: Vector2 = _arc_target_xz()
+	# Cross-crease "push on feet": a detected pass overrides the lateral target
+	# toward the projected crossing and drives at push speed — a desperation
+	# T-push to beat the puck to the far post while staying up to react high.
+	# Host-only (the timer is host-set; clients adopt position via broadcast).
+	var cross_crease_push: bool = is_server and _cross_crease_timer > 0.0
+	if cross_crease_push:
+		target_xz.x = _cross_crease_target_x
 	_target_x = target_xz.x
 	var delta_2d: float = current.distance_to(target_xz)
 	var move_speed: float
 	var five_hole_target: float
-	if delta_2d < 0.01:
+	if cross_crease_push:
+		move_speed = cross_crease_push_speed
+		five_hole_target = five_hole_t_push_max
+	elif delta_2d < 0.01:
 		move_speed = shuffle_speed
 		five_hole_target = five_hole_base
 	elif delta_2d > lateral_threshold:
@@ -923,12 +973,9 @@ func _move_along_arc(delta: float) -> Vector2:
 # Arc target (x, z) at the current radius — STANDING/RECOVERING tracing.
 # BUTTERFLY uses compute_slide_destination directly with butterfly_radius.
 #
-# Post-seal: the X target is clamped so the body never tracks past the point
-# where the leading pad would extend past the post once the goalie drops
-# into butterfly. Use the butterfly pad extension (pad_local_offset) for the
-# clamp so STANDING tracking is always butterfly-drop-safe — if a shot fires
-# while standing wide, the resulting butterfly still has both pads at or
-# inside the posts. Real-goalie "post integration" principle.
+# Arc target (x, z) at the current radius — the challenge-angle position for
+# STANDING/READY/RECOVERING tracing. BUTTERFLY uses compute_slide_destination
+# with butterfly_radius instead.
 func _arc_target_xz() -> Vector2:
 	return GoalieBehaviorRules.target_arc_position(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
@@ -963,9 +1010,24 @@ func _try_commit_slide() -> void:
 	# Don't slide-track a puck in the defensive zone — RVH path handles it.
 	if _is_puck_in_defensive_zone():
 		return
+	# Cross-crease pass: an explicit puck-velocity event. Slide toward the
+	# projected crossing immediately, bypassing the stickhandling-rejection
+	# gate (this isn't a read of a dangling carrier, it's a committed pass).
+	if _cross_crease_timer > 0.0:
+		var cc_target: float = _slide.clamp_lateral_target(
+				_cross_crease_target_x, _goal_center_x, net_half_width)
+		if GoalieBehaviorRules.should_commit_slide(_current_x, cc_target, slide_trigger_distance):
+			_slide.commit_slide(_current_x, _current_depth, cc_target, net_half_width)
+			_sm.transition_to(State.SLIDING)
+			return
+	# Threshold path: track the smoothed threat, but only commit once lateral
+	# intent has been sustained — a dangle reverses inside the window and never
+	# trips it (kills random slides on dekes).
 	var slide_target_x: float = _slide.clamp_lateral_target(
 			_tracked_threat_position.x, _goal_center_x, net_half_width)
 	if not GoalieBehaviorRules.should_commit_slide(_current_x, slide_target_x, slide_trigger_distance):
+		return
+	if not _has_sustained_lateral_intent():
 		return
 	_slide.commit_slide(_current_x, _current_depth, slide_target_x, net_half_width)
 	_sm.transition_to(State.SLIDING)
@@ -1083,6 +1145,55 @@ func _update_body_parts(delta: float) -> void:
 			glove_max_step = glove_react_max_speed * delta
 			blocker_max_step = blocker_react_max_speed * delta
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
+
+# ── Slide trigger helpers (host-only) ────────────────────────────────────────
+
+# Track how long the tracked threat has moved in a consistent lateral
+# direction. Feeds the stickhandling-rejection gate on the threshold slide:
+# a dangle reverses direction inside slide_intent_min_time and never builds
+# up enough persistence to commit, while a genuine lateral play sustains it.
+func _update_lateral_intent(delta: float) -> void:
+	var lateral_vel: float = (_tracked_threat_position.x - _prev_threat_x) / maxf(delta, 0.0001)
+	_prev_threat_x = _tracked_threat_position.x
+	if absf(lateral_vel) < slide_intent_min_speed:
+		# Threat effectively still — hold the timer (don't reset), don't grow.
+		return
+	var sign_now: float = signf(lateral_vel)
+	if sign_now == _threat_lateral_sign:
+		_threat_lateral_persist += delta
+	else:
+		_threat_lateral_sign = sign_now
+		_threat_lateral_persist = 0.0
+
+# True once lateral intent has been sustained long enough to trust a
+# threshold-based slide. Cross-crease slides bypass this (explicit event).
+func _has_sustained_lateral_intent() -> bool:
+	return _threat_lateral_persist >= slide_intent_min_time
+
+# Read a cross-crease pass off PUCK velocity and respond. In butterfly the
+# slide is committed here (the actual slide is consumed in _try_commit_slide);
+# standing, we arm the "push on feet" target/timer consumed in _move_along_arc.
+# Restricted to LOOSE pucks (a pass/bounce/strip in flight) — a carried puck
+# moving laterally is just a lateral rush, handled by normal tracking + the
+# threshold slide, and reacting to it here would over-commit on a deke.
+func _update_cross_crease(delta: float, carrier: Skater) -> void:
+	if _cross_crease_timer > 0.0:
+		_cross_crease_timer -= delta
+	if carrier != null:
+		return
+	if _reaction.reacting or _sm.is_rvh():
+		return
+	var cross_vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+			puck.global_position, puck.linear_velocity, _goal_line_z,
+			_direction_sign, cross_crease_slot_depth, cross_crease_lateral_ratio)
+	if absf(cross_vx) < cross_crease_min_lateral_speed:
+		return
+	# Project the puck forward along its lateral motion to where it'll be in
+	# `cross_crease_lead_time`, clamped so the diving pad parks at the post.
+	var target_x: float = puck.global_position.x + cross_vx * cross_crease_lead_time
+	target_x = _slide.clamp_lateral_target(target_x, _goal_center_x, net_half_width)
+	_cross_crease_target_x = target_x
+	_cross_crease_timer = cross_crease_push_duration
 
 # Universal puck-tracking trigger. Runs each host physics frame on loose
 # pucks; if the puck is fast and on track for the net within the
