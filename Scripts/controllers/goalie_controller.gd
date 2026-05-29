@@ -923,7 +923,14 @@ func _update_goalie_poke(delta: float) -> void:
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
 		return
-	if team_id != -1 and carrier.get_team_id() == team_id:
+	# Phase lock — same gate the skater path's _check_interactions respects.
+	# Faceoff prep / goal celebration freezes the puck; no pokes during those.
+	if puck.pickup_locked:
+		return
+	# Use the shared can_poke_check rule (excludes own-team, future rules
+	# inherited automatically) instead of inlining the team comparison.
+	var carrier_team: int = carrier.get_team_id()
+	if not PuckCollisionRules.can_poke_check(carrier_team, team_id):
 		return
 	if puck.global_position.distance_to(current_blade_pos) > goalie_poke_radius:
 		return
