@@ -156,6 +156,11 @@ extends Node
 # computed together so the leading pad EDGE lands on the post regardless of
 # rotation. Pure visual "lean into the motion" without breaking the seal.
 @export var slide_max_rotation_deg: float = 25.0
+# Coil phase duration. The slide is two-phase: body rotates in place (loading
+# weight on the far leg) for this long, then push-off translates linearly to
+# the seal target. Reads as a deliberate plant-and-push instead of the body
+# teleporting laterally with rotation lerping independently.
+@export var slide_coil_duration: float = 0.12
 # Stickhandling rejection: the threshold-based slide (above) only commits once
 # the tracked threat has moved in a CONSISTENT lateral direction for this long.
 # A carrier dangling laterally reverses direction inside this window and never
@@ -382,6 +387,10 @@ var _prev_threat_x: float = 0.0
 # standing movement drives toward `_cross_crease_target_x` at push speed.
 var _cross_crease_timer: float = 0.0
 var _cross_crease_target_x: float = 0.0
+# Body rotation captured at slide commit. The coil-phase facing lerps from
+# this to the slide end angle so the rotation completes during the coil and
+# holds through the translation phase.
+var _slide_start_rotation_y: float = 0.0
 # Skater accessor for the crease-jam butterfly check. Host-only — the check
 # runs inside the host-side state machine and clients receive the resulting
 # transition via the existing apply_state_transition RPC.
@@ -442,6 +451,7 @@ func _configure_collaborators() -> void:
 	_slide.slide_pivot_arc_depth = slide_pivot_arc_depth
 	_slide.post_seal_depth = post_seal_depth
 	_slide.pad_edge_extent = pad_local_offset + butterfly_pad_half_width
+	_slide.coil_duration = slide_coil_duration
 	_slide.post_event_slide_lockout = post_event_slide_lockout
 	_slide.butterfly_drop_speed = butterfly_drop_speed
 	_slide.butterfly_min_hold_time = butterfly_min_hold_time
@@ -1048,6 +1058,7 @@ func _try_commit_slide() -> void:
 		var cc_side: float = signf(_cross_crease_target_x - _goal_center_x)
 		var cc_target: float = _post_edge_seal_x(cc_side, pad_edge, slide_rot)
 		if GoalieBehaviorRules.should_commit_slide(_current_x, cc_target, slide_trigger_distance):
+			_slide_start_rotation_y = goalie.get_goalie_rotation_y()
 			_slide.commit_slide(_current_x, _current_depth, cc_target, net_half_width)
 			_sm.transition_to(State.SLIDING)
 			return
@@ -1065,6 +1076,7 @@ func _try_commit_slide() -> void:
 	var seal_target: float = _post_edge_seal_x(threat_side, pad_edge, slide_rot)
 	if not GoalieBehaviorRules.should_commit_slide(_current_x, seal_target, slide_trigger_distance):
 		return
+	_slide_start_rotation_y = goalie.get_goalie_rotation_y()
 	_slide.commit_slide(_current_x, _current_depth, seal_target, net_half_width)
 	_sm.transition_to(State.SLIDING)
 
@@ -1112,18 +1124,23 @@ func _update_facing(delta: float) -> void:
 				goalie.get_goalie_rotation_y(), center_angle, rotation_speed * 0.5 * delta))
 		return
 	if _sm.current == State.SLIDING:
-		# Body rotates to a FIXED end angle (slide_max_rotation_deg, signed by
-		# slide direction), not free-form facing. This matches the cos() pad
-		# reach correction baked into the slide target so the pad edge actually
-		# lands on the post — using atan2-based facing here would let the
+		# Two-phase slide: rotation happens during the COIL phase (timed by
+		# _slide.coil_timer), then holds through the translation phase. The
+		# end angle is the fixed cos()-coupled value the seal target was
+		# computed against — using atan2-based facing here would let
 		# rotation vary by slide steepness and break the seal geometry.
 		# Convention: deviation = direction_sign * _slide.dir * slide_rot,
 		# verified against the standing facing code for both goal sides.
 		var base_angle: float = PI if _direction_sign == 1 else 0.0
 		var deviation: float = _direction_sign * _slide.dir * deg_to_rad(slide_max_rotation_deg)
 		var target_y: float = base_angle + deviation
-		goalie.set_goalie_rotation_y(lerp_angle(
-				goalie.get_goalie_rotation_y(), target_y, rotation_speed * delta))
+		if _slide.coil_timer > 0.0 and _slide.coil_duration > 0.0:
+			var coil_progress: float = clampf(
+					1.0 - _slide.coil_timer / _slide.coil_duration, 0.0, 1.0)
+			goalie.set_goalie_rotation_y(lerp_angle(
+					_slide_start_rotation_y, target_y, coil_progress))
+		else:
+			goalie.set_goalie_rotation_y(target_y)
 		return
 	var dx: float = _tracked_threat_position.x - goalie.global_position.x
 	var dz: float = _tracked_threat_position.z - goalie.global_position.z

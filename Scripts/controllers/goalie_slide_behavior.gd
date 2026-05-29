@@ -25,6 +25,11 @@ var post_seal_depth: float = 0.10
 # butterfly_pad_half_width).
 var pad_edge_extent: float = 0.56
 var post_event_slide_lockout: float = 0.25
+# Coil phase duration. The slide is two-phase: COIL (body rotates in place,
+# loading weight on the far leg) → SLIDE (body translates linearly toward
+# the seal target). Reads as a deliberate plant-and-push motion instead of
+# the body teleporting laterally with rotation lerping independently.
+var coil_duration: float = 0.12
 var butterfly_drop_speed: float = 0.08
 var butterfly_min_hold_time: float = 0.35
 
@@ -39,6 +44,10 @@ var start_x: float = 0.0
 var start_depth: float = 0.0
 var end_x: float = 0.0
 var end_depth: float = 0.0
+# Coil phase countdown. > 0 means we're still rotating into the slide pose;
+# the body holds its start position until this hits zero, then push-off
+# velocity is applied and translation begins.
+var coil_timer: float = 0.0
 # Butterfly cycle timers. drop_progress drives the pads-to-floor animation;
 # hold_timer counts butterfly time toward `butterfly_min_hold_time` before
 # recovery can fire.
@@ -62,6 +71,7 @@ func reset() -> void:
 	hold_timer = 0.0
 	cooldown_timer = 0.0
 	event_lockout = 0.0
+	coil_timer = 0.0
 
 # Fresh butterfly entry resets timers + slide state. Called when entering
 # BUTTERFLY from anywhere EXCEPT a finished SLIDING — slide→butterfly preserves
@@ -72,6 +82,7 @@ func enter_fresh_butterfly() -> void:
 	hold_timer = 0.0
 	cooldown_timer = 0.0
 	event_lockout = 0.0
+	coil_timer = 0.0
 	dir = 0.0
 	arc_t = 0.0
 	velocity_x = 0.0
@@ -115,7 +126,10 @@ func can_commit_slide() -> bool:
 # goalie deeper so the sealing pad presses the post (backdoor coverage).
 func commit_slide(current_x: float, current_depth: float, target_x: float, net_half_width: float) -> void:
 	var commit_dir: float = signf(target_x - current_x)
-	velocity_x = commit_dir * slide_initial_speed
+	# Start in COIL phase: no translation until coil completes. Push-off
+	# velocity is applied in advance_slide() when coil_timer hits zero.
+	velocity_x = 0.0
+	coil_timer = coil_duration
 	cooldown_timer = 0.0
 	# Extremity is measured against the SLIDE CLAMP LIMIT (the puck-side
 	# post-pad-edge, where target_x is already clamped to), not the post
@@ -143,6 +157,15 @@ func commit_slide(current_x: float, current_depth: float, target_x: float, net_h
 # pivot. When velocity falls below `slide_min_speed` the slide ends — caller
 # should check `is_slide_finished()` after this call.
 func advance_slide(delta: float, goal_center_x: float, net_half_width: float) -> Vector2:
+	# COIL phase: body holds its start position while rotation completes.
+	# When the coil timer expires, apply push-off and fall through to the
+	# translation logic immediately so the slide doesn't stall for one tick.
+	if coil_timer > 0.0:
+		coil_timer = maxf(coil_timer - delta, 0.0)
+		if coil_timer > 0.0:
+			return Vector2(start_x, start_depth)
+		# Coil just completed this frame — push off.
+		velocity_x = dir * slide_initial_speed
 	var decay: float = slide_friction * delta
 	if velocity_x > 0.0:
 		velocity_x = maxf(velocity_x - decay, 0.0)
