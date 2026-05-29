@@ -37,10 +37,10 @@ const SEARCH_RADIUS_M: float = 5.0
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	# Bail-out: no teammate carrier means there's no offensive
-	# context to score against. Brain re-tick will re-route this peer
-	# on the next physics frame; in the meantime hold position.
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_teammate_carrier_pos(ctx)
+	# No live teammate carrier (loose puck / pass in flight) — orient
+	# off the puck instead of freezing, so SUPPORT keeps flowing into
+	# the developing play. Only truly stand still if there's no puck.
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_offensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d

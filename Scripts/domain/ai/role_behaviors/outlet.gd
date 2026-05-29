@@ -35,7 +35,10 @@ const WEAK_SIDE_INSET_M: float = 2.0
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_teammate_carrier_pos(ctx)
+	# No live teammate carrier (loose puck / pass in flight) — orient
+	# off the puck instead of freezing so OUTLET keeps presenting the
+	# stretch option. Only stand still if there's no puck at all.
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_offensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d

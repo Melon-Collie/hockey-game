@@ -1,7 +1,7 @@
 extends GutTest
 
 # AIRolePressure — DZONE + TRANS_OD puck pressurer. Tests cover:
-#   - Bail-out (no carrier).
+#   - Loose puck (no carrier) → pressures the puck, never freezes.
 #   - Goal-side filter rejects wrong-side candidates.
 #   - Argmax picks a position that blocks the shot lane when
 #     carrier has a clear shot.
@@ -58,16 +58,19 @@ func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 
 # ── Bail-outs ───────────────────────────────────────────────────────────────
 
-func test_falls_back_to_self_pos_when_no_carrier() -> void:
-	# Loose puck — PRESSURE has no target to pressure. NEUTRAL play
-	# is handled by CHASE/FLANK roles; if PRESSURE somehow runs
-	# without a carrier (in-flight pass moment), bail to self_pos
-	# until the brain re-tick reassigns.
-	var self_pos := Vector3(0, 0, 18)
-	var ctx: RoleContext = _make_ctx(self_pos)
+func test_pressures_loose_puck_instead_of_freezing() -> void:
+	# Loose puck (in-flight pass / contested moment). PRESSURE used to
+	# freeze at self_pos here — the "stuck on the heels" bug. It must now
+	# orient off the puck and close it goal-side. Bot starts up-ice on
+	# the wrong side of the puck; the chosen target must be goal-side of
+	# the loose puck, never self_pos.
+	var self_pos := Vector3(6, 0, -4)   # up-ice, wrong side of the puck
+	var ctx: RoleContext = _make_ctx(self_pos)   # loose puck at origin
 	var d: RoleDecision = AIRolePressure.decide(ctx)
-	assert_eq(d.target_position, self_pos,
-			"loose puck → fall back to self_pos")
+	assert_ne(d.target_position, self_pos,
+			"loose puck → pressure the puck, don't freeze at self_pos")
+	assert_true(d.target_position.z >= -0.01,
+			"chosen target is goal-side of the loose puck; got z=%f" % d.target_position.z)
 
 
 # ── Goal-side filter ────────────────────────────────────────────────────────

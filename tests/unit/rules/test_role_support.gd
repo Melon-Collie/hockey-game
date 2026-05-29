@@ -61,16 +61,18 @@ func _make_ctx(self_pos: Vector3, anchor: Vector3, carrier_pid: int = -1,
 
 # ── Bail-out cases ──────────────────────────────────────────────────────────
 
-func test_falls_back_to_self_pos_when_no_carrier() -> void:
-	# Default snapshot: just self, no puck carrier. Step 2 of the
-	# no-anchors refactor: SUPPORT now falls back to self_pos
-	# (hold position) instead of an anchor — brain re-tick will
-	# reassign roles within a frame.
-	var self_pos := Vector3(0, 0, -10)
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)
+func test_supports_loose_puck_instead_of_freezing() -> void:
+	# Loose puck (breakout pass in flight). SUPPORT used to freeze at
+	# self_pos — the "stuck on the heels" bug. It must now read off the
+	# puck and present a support option. Bot starts buried deep in our
+	# own end; target must advance toward the play, never self_pos.
+	var self_pos := Vector3(10, 0, 22)   # buried deep in our own end
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)   # loose puck at origin
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
-	assert_eq(d.target_position, self_pos,
-			"no carrier → fall back to self_pos")
+	assert_ne(d.target_position, self_pos,
+			"loose puck → support the play, don't freeze at self_pos")
+	assert_lt(d.target_position.z, self_pos.z,
+			"target advances toward the puck / opp net; got z=%f" % d.target_position.z)
 
 
 func test_falls_back_to_self_pos_when_opp_has_puck() -> void:

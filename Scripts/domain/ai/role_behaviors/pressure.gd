@@ -48,12 +48,11 @@ class_name AIRolePressure
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	# Bail-out: no carrier means no pressure target. PRESSURE is a
-	# DZONE/TRANS_OD role and an opp carries the puck by definition
-	# in those states; an absent carrier means a transition is in
-	# flight and the brain re-tick will reassign within a frame.
+	# No live carrier (loose puck / pass in flight) — pressure the puck
+	# itself instead of freezing, so PRESSURE keeps closing the play.
+	# Only stand still if there's no puck at all.
 	# (NEUTRAL has no carrier and uses CHASE/FLANK roles instead.)
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_any_carrier_pos(ctx)
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d
@@ -83,8 +82,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	#     range on the defensive side — the cut-off line — instead of
 	#     on top of the carrier.
 	# Goal-side filter below still trims wrong-side polar samples.
-	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
-	var carrier_velocity: Vector3 = ctx.snapshot.skater_states[carrier_pid].velocity
+	# Lead off the carrier's velocity, or the puck's when it's loose /
+	# in flight (carrier_pid == -1 → no skater_states entry to index).
+	var carrier_velocity: Vector3 = AIRoleHelpers.resolve_play_ref_velocity(ctx)
 	var lead: Vector3 = carrier_pos + carrier_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 	var to_net: Vector3 = our_net - lead
 	var search_center: Vector3 = lead
