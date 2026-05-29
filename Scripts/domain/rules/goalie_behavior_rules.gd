@@ -274,26 +274,35 @@ static func should_commit_slide(
 	return absf(target_x - current_x) >= slide_trigger_distance
 
 
-# ── Post-seal positioning ────────────────────────────────────────────────────
-# "Post integration" — coverage past the post is wasted coverage. Real goalies
-# position so the leading pad's outer edge sits AT the post, not past it. With
-# pads spread to ±pad_lateral_extension from the body, the constraint is:
-#   |goalie_x + pad_extension - goal_center_x|  <=  net_half_width
-# i.e. the goalie body's lateral offset from center can't exceed
-# (net_half_width - pad_extension). Same constraint applies symmetrically on
-# both sides (whichever pad is leading toward the threat).
+# ── Butterfly post-seal positioning ──────────────────────────────────────────
+# "Post integration": when the goalie drops into butterfly the pads form a
+# fixed-width wall (body_x ± pad_edge_extent). A centered drop leaves ~equal net
+# exposed at both posts — wasteful, since the body already covers the middle.
+# The efficient drop commits the wall toward the puck side so the near pad's
+# OUTER EDGE sits on the near post (no overhang past it), accepting the far side
+# is exposed (a shooter at a sharp angle can't hit the far post anyway).
 #
-# pad_lateral_extension is state-dependent: ~0.42m in butterfly (pads spread
-# wide), ~0.22m in standing (pads tighter under the body). Caller passes the
-# state-appropriate value.
-static func clamp_lateral_post_seal(
-		target_x: float,
+# Because the standing goalie is positioned here, the drop is sealed in place —
+# no lateral teleport at the moment of the drop. Commit scales with shot angle:
+# straight-on → centered; at/beyond `full_commit_angle_rad` → the body sits at
+# ±(net_half_width - pad_edge_extent) so the near pad edge is exactly on the
+# post. Beyond the commit angle the controller hands off to RVH (pad on post).
+#
+# pad_edge_extent = pad lateral offset + pad half-width (the outer edge of the
+# splayed butterfly pad, measured from the body center).
+static func butterfly_seal_lateral_x(
+		threat_position: Vector3,
+		goal_line_z: float,
 		goal_center_x: float,
 		net_half_width: float,
-		pad_lateral_extension: float) -> float:
-	var max_offset: float = maxf(0.0, net_half_width - pad_lateral_extension)
-	var delta: float = target_x - goal_center_x
-	return goal_center_x + clampf(delta, -max_offset, max_offset)
+		pad_edge_extent: float,
+		full_commit_angle_rad: float) -> float:
+	var lateral: float = threat_position.x - goal_center_x
+	var perp: float = absf(threat_position.z - goal_line_z)
+	var angle: float = atan2(absf(lateral), maxf(perp, 0.05))
+	var commit: float = clampf(angle / maxf(full_commit_angle_rad, 0.01), 0.0, 1.0)
+	var seal_line: float = goal_center_x + signf(lateral) * maxf(0.0, net_half_width - pad_edge_extent)
+	return lerpf(goal_center_x, seal_line, commit)
 
 
 # ── Universal puck reaction trigger ──────────────────────────────────────────
