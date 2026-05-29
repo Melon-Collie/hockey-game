@@ -110,15 +110,6 @@ extends Node
 # which fired far enough out to be exploitable — this only fires inside the
 # crease where dropping is the correct read regardless of follow-up play.
 @export var close_crease_butterfly_distance: float = 1.5
-@export var close_crease_butterfly_speed: float = 1.5  # carrier must show intent
-# Minimum carrier-velocity component toward the goal line (m/s) before a
-# doorstep carrier counts as a drop trigger. Strict ">0" would let a carrier
-# strafing past the net with a hair of forward drift drop the goalie; a small
-# positive floor requires real forward commitment toward the goal. Combined
-# with the "in front of goalie" gate this filters out fly-bys / side-of-net
-# plays / behind-the-net retrieves while still catching walk-outs and slot
-# breakaways.
-@export var close_crease_min_approach_speed: float = 0.5
 
 # Crease-jam butterfly. Loose puck or stationary-carrier puck inside the
 # jam zone with an opposing skater close enough to whack at it — drop and
@@ -801,19 +792,23 @@ func _is_ready_situation() -> bool:
 		return false
 	return true
 
-# True when an opposing carrier is at point-blank range with intent (moving),
-# in front of the goalie, and committed toward the net. Used to commit
-# butterfly proactively — at this range and angle the goalie can't track
-# laterally fast enough, so dropping is the correct read regardless of follow-
-# up play. The directional gates ("in front" + "approaching the net") filter
-# out fly-bys, side-of-net plays, and behind-the-net retrieves that the raw
-# 2m sphere otherwise dropped the goalie for.
+# True when an opposing carrier at point-blank range is loading a SLAPSHOT.
+# This is the only carrier-state that drops a goalie proactively in coaching:
+# slapshot windup is an unambiguous commit (no cancel-and-deke option from
+# SLAPPER_CHARGE_WITH_PUCK), so the goalie reads it and drops early —
+# tracking a close-range slapshot from standing is a losing battle.
+#
+# We DON'T drop for "controlled stickhandler in tight" — coaches teach
+# staying up against a controlled carrier, forcing them to release. Wrister
+# charge is also intentionally NOT a drop trigger: the player can hold or
+# cancel a wrister indefinitely, and reacting to charge alone commits the
+# goalie prematurely. The actual wrister release fires the existing reaction
+# pipeline, which drops on low projection.
+#
+# Crease scrambles (loose puck + multiple sticks) still drop via the
+# separate _is_jammed_at_crease check.
 func _is_carrier_at_doorstep() -> bool:
-	# While the lunge is mid-jab, hold the drop off. The goalie should
-	# commit to the stick first; if the threat persists when the lunge ends
-	# the doorstep check fires normally next tick. Without this the drop
-	# triggers at 1.5m and the goalie is in butterfly by the time the
-	# lunge wants to fire at 1.2m, which reads as "jab from butterfly".
+	# Lunge precedence — give the stick first.
 	if _lunge_active_timer > 0.0:
 		return false
 	var carrier: Skater = puck.get_carrier()
@@ -821,30 +816,23 @@ func _is_carrier_at_doorstep() -> bool:
 		return false
 	if carrier.get_team_id() == team_id and team_id != -1:
 		return false
-	if carrier.velocity.length() < close_crease_butterfly_speed:
+	# Slapshot windup is the only drop tell from a single carrier.
+	if carrier.current_shot_state != SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
 		return false
 	# "In front of goalie" — carrier on the slot side relative to the goalie,
-	# not behind or even with them. Same sign convention as the rest of the
-	# file (positive = on slot side); RVH handles behind-net plays.
+	# not behind or even with them. RVH handles behind-net plays.
 	if (carrier.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
-		return false
-	# "Approaching the net" — carrier's z-velocity component drives toward the
-	# goal line, above a small floor so a hair of forward drift on an
-	# otherwise-lateral pass doesn't qualify as real intent. Approach speed
-	# uses the canonical -vz*direction_sign formula (matches
-	# _puck_approach_velocity).
-	var approach_speed: float = -carrier.velocity.z * _direction_sign
-	if approach_speed < close_crease_min_approach_speed:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
 # True when the puck is jammed in the crease — close to the goalie, and at
 # least one opposing skater is within stick-poke range of the puck. Covers
 # the cases the carrier-at-doorstep check misses: loose pucks (no carrier),
-# and stationary carriers (sub-`close_crease_butterfly_speed`). Without this
-# the goalie stays upright through extended crease scrambles. Own-team
-# carriers are excluded — defencemen jamming around the crease aren't a
-# threat. Host-only; the resulting transition is broadcast normally.
+# any carrier that's NOT loading a slapshot (the doorstep check is now
+# slapshot-only), and multi-stick scrambles. Without this the goalie stays
+# upright through extended crease scrambles. Own-team carriers are
+# excluded — defencemen jamming around the crease aren't a threat.
+# Host-only; the resulting transition is broadcast normally.
 func _is_jammed_at_crease() -> bool:
 	# Lunge takes priority — try the stick first, drop after.
 	if _lunge_active_timer > 0.0:
