@@ -219,6 +219,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.skip_replay_request_received.connect(_on_remote_skip_replay_request)
 	NetworkManager.skip_replay_vote_updated.connect(_on_remote_skip_replay_vote)
 	NetworkManager.replay_event_received.connect(_on_replay_event_received)
+	NetworkManager.replay_mode_changed.connect(_on_remote_replay_mode_changed)
 	replay_started.connect(_on_local_replay_started)
 	replay_stopped.connect(_on_local_replay_stopped)
 
@@ -957,6 +958,25 @@ func _on_replay_event_received(host_ts: float, event: Dictionary) -> void:
 	if NetworkManager.is_replay_mode() or _is_celebration_phase():
 		return
 	_recorder.record_event(host_ts, event)
+
+
+# Client / spectator side: the host mirrors its replay-mode flag here when it
+# enters (true) / leaves (false) the goal cinematic. The host's GOAL_SCORED
+# phase never arrives via world state (it stops broadcasting the instant it
+# freezes for the replay), so this edge is what drives the client's own
+# GoalReplayDriver. On `true` we kick off the local cinematic — the recorder
+# already holds the clip and on_goal_received has set the defending-goal Z for
+# the inside-net cam. On `false` we tear it down so the client's replay ends
+# in lockstep with the host (which only resumes broadcasting / advances to
+# FACEOFF_PREP after its own cinematic finishes), instead of overrunning into
+# the live faceoff data on its independent outro timer.
+func _on_remote_replay_mode_changed(active: bool) -> void:
+	if NetworkManager.is_host or _phase_coord == null:
+		return
+	if active:
+		_phase_coord.start_goal_replay()
+	elif _goal_replay_driver != null:
+		_goal_replay_driver.stop()
 
 
 # Recorder-recording gate. During GOAL_CELEBRATION we skip writing to the
@@ -1907,12 +1927,12 @@ func _on_phase_for_broadcast_rate(new_phase: GamePhase.Phase) -> void:
 func _on_remote_phase_changed(new_phase: GamePhase.Phase) -> void:
 	_last_emitted_clock_secs = -1
 	phase_changed.emit(new_phase)
-	# Client mirror of the host's handle_phase_entered(GOAL_SCORED) trigger.
-	# Host advances GOAL_CELEBRATION → GOAL_SCORED via state-machine tick;
-	# clients learn about it via WS, and the replay cinematic kicks in here.
-	if new_phase == GamePhase.Phase.GOAL_SCORED and _phase_coord != null \
-			and not NetworkManager.is_host:
-		_phase_coord.start_goal_replay()
+	# Note: the client's goal-replay cinematic is NOT triggered here. The host
+	# enters GOAL_SCORED and replay mode in the same frame, gating off its own
+	# world-state broadcasts before any packet carries GOAL_SCORED — so this
+	# handler never observes that phase. The client trigger lives in
+	# _on_remote_replay_mode_changed, driven by the reliable notify_replay_mode
+	# RPC the host sends when its cinematic starts.
 
 
 func _on_clock_updated_externally(t: float) -> void:

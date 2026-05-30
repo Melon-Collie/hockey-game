@@ -115,6 +115,13 @@ signal skip_replay_vote_updated(current: int, total: int)
 # behind-net cam's lateral offset, and the audio cue dispatch during playback.
 signal replay_event_received(host_ts: float, event: Dictionary)
 
+# Host entered (true) or left (false) the goal-replay cinematic. Mirrored to
+# clients via notify_replay_mode so they can start / stop their own local
+# GoalReplayDriver in lockstep with the host. The world-state phase never
+# carries GOAL_SCORED to clients (the host stops broadcasting the instant it
+# enters replay mode), so this flag edge is the client's trigger.
+signal replay_mode_changed(active: bool)
+
 # Local player edited their identity (name / jersey number / handedness)
 # while a session is live (e.g. from the SideMenu's player card during free
 # play). GameManager listens and pushes the change to the local skater
@@ -809,10 +816,12 @@ func receive_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_
 func start_replay_mode(initial_ts: float) -> void:
 	_replay_mode = true
 	_replay_clock = initial_ts
-	# Mirror the flag onto every connected client so their .mreplay recorder
-	# gates identically. Clients still receive (frozen) world-state broadcasts
-	# during the cinematic, but their file writer skips them so the host and
-	# client files align.
+	# Mirror the flag onto every connected client so their recorder + .mreplay
+	# writer gate identically, and so they start their own GoalReplayDriver in
+	# lockstep (see GameManager._on_remote_replay_mode_changed). The host stops
+	# broadcasting world state for the duration of the cinematic
+	# (GameManager._physics_process bails while is_replay_mode), so clients
+	# receive no frames during replay — each peer drives its own clip locally.
 	if is_host:
 		for peer_id: int in connected_peer_ids():
 			notify_replay_mode.rpc_id(peer_id, true)
@@ -837,6 +846,10 @@ func notify_replay_mode(active: bool) -> void:
 	_replay_mode = active
 	if not active:
 		_replay_clock = 0.0
+	# Drive the client's local cinematic off this edge. The host's GOAL_SCORED
+	# phase never reaches clients via world state, so this is where their
+	# GoalReplayDriver starts (active) and is torn down (inactive).
+	replay_mode_changed.emit(active)
 
 
 func set_replay_clock(t: float) -> void:
