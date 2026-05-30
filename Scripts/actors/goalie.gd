@@ -124,13 +124,14 @@ func get_blade_world_position() -> Vector3:
 	return _stick_blade.global_position
 
 
-# Apply an authoritative pose snapshot directly to the body parts — used by
-# the replay system so playback reflects what the host actually had during
-# the play, not a client-side AI reconstruction. Skips the body_config_builder
-# entirely. Rotations come in radians (matching the wire format); axes we
-# don't carry on the wire (body yaw, blocker/glove roll) are left intact so
-# whatever the live system set last frame survives.
-func apply_replay_pose(state: GoalieNetworkState) -> void:
+# Apply an authoritative pose snapshot directly to the body parts. Used by
+# both live client rendering (interpolated broadcast pose) and replay playback
+# — neither runs the local AI, so this writes the host's socket transforms
+# straight onto the scene nodes. Skips the body_config_builder entirely.
+# Rotations come in radians (matching the wire format); axes we don't carry on
+# the wire (body yaw, blocker/glove roll) are left intact so whatever was last
+# set survives.
+func apply_network_pose(state: GoalieNetworkState) -> void:
 	# Body + head positions are state-dependent (the pose builder hardcodes
 	# different y-heights per state — body 0.46 in butterfly, 1.16 standing
 	# etc.). The wire format doesn't carry them, so derive from state_enum

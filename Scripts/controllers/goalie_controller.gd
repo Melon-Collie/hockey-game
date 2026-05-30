@@ -347,11 +347,13 @@ extends Node
 # from float jitter, spamming state-change RPCs.
 @export var rvh_swap_deadband_m: float = 0.25
 
-# ── Client Correction Tuning ──────────────────────────────────────────────────
-# Server broadcasts (40 Hz) soft-correct the client-side goalie simulation.
-@export var correction_blend: float = 0.40      # per-broadcast blend strength toward server
-@export var correction_hard_snap: float = 1.5   # metres — snap immediately if farther than this
-@export var correction_dead_zone: float = 0.02  # metres — ignore errors smaller than this
+# ── Client Render Tuning ──────────────────────────────────────────────────────
+# Clients consume the host's broadcast goalie pose through a small buffer and
+# render at `now - interpolation_delay`, mirroring the skater / puck pattern.
+# Local AI doesn't run on clients — the pose is purely interpolated, so the
+# client view always matches what the host actually saw save-relevant frames.
+@export var interpolation_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
+@export var extrapolation_max_ms: float = 50.0  # cap dead-reckon when snapshots are late
 
 @export var low_shot_threshold: float = 0.45
 @export var elevated_threshold: float = 0.45
@@ -488,11 +490,15 @@ var _slide_start_rotation_y: float = 0.0
 var _skater_getter: Callable = Callable()
 
 # ── Client Simulation ─────────────────────────────────────────────────────────
-var is_extrapolating: bool = false  # always false; kept for telemetry compat
-var _last_server_ts: float = 0.0
+# State buffer holds the most recent host snapshots (sorted by timestamp).
+# `_interpolate_and_apply` reads from it at render_time and writes the pose
+# straight onto the goalie node. Bounded at 30 entries (~0.25 s at 120 Hz) to
+# match the skater buffer.
+var _state_buffer: Array[BufferedGoalieState] = []
+var is_extrapolating: bool = false
 
 func get_buffer_depth() -> int:
-	return 0  # no longer buffering; kept for telemetry compat
+	return _state_buffer.size()
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: float, assigned_is_server: bool) -> void:
@@ -639,10 +645,14 @@ func reset_to_crease() -> void:
 func _physics_process(delta: float) -> void:
 	if goalie == null or puck == null:
 		return
-	# Client runs the full goalie AI every frame using its local puck position.
-	# Server broadcasts correct the AI state softly via apply_state().
+	# Clients are pure interpolators: the host's authoritative pose is buffered
+	# and rendered at `now - interpolation_delay`, no local AI tick. This
+	# eliminates host/client divergence (ghost saves, phantom goals) that the
+	# old client-AI-with-soft-correction model produced when the local puck
+	# read and the broadcast read disagreed.
 	if not is_server:
-		_reaction.tick_client(delta)
+		_interpolate_and_apply()
+		return
 	_update_tracking(delta)
 	_update_shot_timer(delta)
 	_update_state(delta)
@@ -650,8 +660,7 @@ func _physics_process(delta: float) -> void:
 	_update_position(delta)
 	_update_facing(delta)
 	_update_body_parts(delta)
-	if is_server:
-		_update_goalie_poke(delta)
+	_update_goalie_poke(delta)
 
 # ── Tracking ──────────────────────────────────────────────────────────────────
 # "Threat" = where the goalie's positioning targets. Carrier body (steady)
@@ -1729,43 +1738,98 @@ func get_state() -> GoalieNetworkState:
 func apply_state(network_state: GoalieNetworkState, host_ts: float) -> void:
 	if is_server:
 		return
-	if host_ts < _last_server_ts:
-		return  # out-of-order packet; discard
-	_last_server_ts = host_ts
-	# Forward-predict server position to compensate for broadcast transit time.
-	# elapsed ≈ RTT/2 at call-time; capped to avoid over-shooting on bad connections.
-	var elapsed: float = clampf(NetworkManager.estimated_host_time() - host_ts, 0.0, 0.15)
-	var predicted_x: float = network_state.position_x + network_state.velocity_x * elapsed
-	var predicted_z: float = network_state.position_z + network_state.velocity_z * elapsed
-	# `_current_depth` carries different units per state — it's the arc radius
-	# (Euclidean to goal center) in STANDING/RECOVERING and perpendicular depth
-	# in BUTTERFLY/RVH. Pick the right one to lerp toward so the client doesn't
-	# fight its own AI. Both reduce to the same value at the centerline.
-	# Read the broadcast's own state_enum, not _sm.current — the world state
-	# (unreliable, 120Hz) can arrive before the apply_state_transition RPC
-	# (reliable), so the broadcast position is computed in the new state's
-	# coordinate space while _sm.current still reflects the old state. Using
-	# client state here would briefly lerp depth in the wrong unit on every
-	# transition (notably the BUTTERFLY drop on every shot reaction).
-	var broadcast_state := network_state.state_enum as State
-	var server_dx: float = predicted_x - _goal_center_x
-	var server_dz: float = predicted_z - _goal_line_z
-	var server_depth_value: float
-	if broadcast_state == State.STANDING or broadcast_state == State.READY or broadcast_state == State.RECOVERING:
-		server_depth_value = sqrt(server_dx * server_dx + server_dz * server_dz)
+	# Drop out-of-order packets — the buffer must stay sorted by timestamp for
+	# bracket search to work, and an older snapshot can't visibly improve a
+	# render anyway.
+	if not _state_buffer.is_empty() and host_ts <= _state_buffer.back().timestamp:
+		NetworkTelemetry.record_ooo_drop()
+		return
+	var entry := BufferedGoalieState.new()
+	entry.timestamp = host_ts
+	entry.state = network_state
+	_state_buffer.append(entry)
+	if _state_buffer.size() > 30:
+		_state_buffer.pop_front()
+	interpolation_delay = NetworkManager.adapt_interpolation_delay(interpolation_delay)
+
+# Renders the goalie at `now - interpolation_delay` from the buffered host
+# snapshots. Lerps root + every socket transform between bracketing entries;
+# when the buffer is empty or we've overshot the newest entry, dead-reckons
+# the newest pose forward by velocity (capped at `extrapolation_max_ms`).
+func _interpolate_and_apply() -> void:
+	if _state_buffer.is_empty():
+		is_extrapolating = false
+		return
+	var render_time: float = NetworkManager.estimated_host_time() - interpolation_delay
+	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
+			_state_buffer, render_time)
+	if bracket == null:
+		is_extrapolating = false
+		return
+	is_extrapolating = bracket.is_extrapolating
+	var interpolated: GoalieNetworkState
+	if bracket.is_extrapolating:
+		var dt: float = minf(bracket.extrapolation_dt, extrapolation_max_ms / 1000.0)
+		var newest: GoalieNetworkState = bracket.to_state
+		interpolated = _extrapolate_goalie_state(newest, dt)
 	else:
-		server_depth_value = server_dz * _direction_sign
-	var client_z: float = goalie.global_position.z
-	var dist: float = Vector2(_current_x - predicted_x, client_z - predicted_z).length()
-	if dist > correction_hard_snap:
-		_current_x = predicted_x
-		_current_depth = server_depth_value
-	elif dist > correction_dead_zone:
-		_current_x = lerpf(_current_x, predicted_x, correction_blend)
-		_current_depth = lerpf(_current_depth, server_depth_value, correction_blend)
-	# Five hole: strong blend so client visual matches server physics within ~50 ms.
-	# Client AI doesn't compute _five_hole_openness, so nothing fights the correction.
-	_five_hole_openness = lerpf(_five_hole_openness, network_state.five_hole_openness, 0.80)
+		interpolated = _lerp_goalie_state(bracket.from_state, bracket.to_state, bracket.t)
+	_apply_interpolated(interpolated)
+	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
+
+func _lerp_goalie_state(from_s: GoalieNetworkState, to_s: GoalieNetworkState, t: float) -> GoalieNetworkState:
+	var r := GoalieNetworkState.new()
+	r.position_x = lerpf(from_s.position_x, to_s.position_x, t)
+	r.position_z = lerpf(from_s.position_z, to_s.position_z, t)
+	r.rotation_y = lerp_angle(from_s.rotation_y, to_s.rotation_y, t)
+	# State enum can't lerp — take the freshest so visuals don't lag the host
+	# transition by half a bracket. Body / head height lookups depend on this.
+	r.state_enum = to_s.state_enum
+	r.five_hole_openness = lerpf(from_s.five_hole_openness, to_s.five_hole_openness, t)
+	r.velocity_x = lerpf(from_s.velocity_x, to_s.velocity_x, t)
+	r.velocity_z = lerpf(from_s.velocity_z, to_s.velocity_z, t)
+	r.body_pitch = lerp_angle(from_s.body_pitch, to_s.body_pitch, t)
+	r.body_roll = lerp_angle(from_s.body_roll, to_s.body_roll, t)
+	r.left_pad_offset = from_s.left_pad_offset.lerp(to_s.left_pad_offset, t)
+	r.left_pad_pitch = lerp_angle(from_s.left_pad_pitch, to_s.left_pad_pitch, t)
+	r.left_pad_roll = lerp_angle(from_s.left_pad_roll, to_s.left_pad_roll, t)
+	r.right_pad_offset = from_s.right_pad_offset.lerp(to_s.right_pad_offset, t)
+	r.right_pad_pitch = lerp_angle(from_s.right_pad_pitch, to_s.right_pad_pitch, t)
+	r.right_pad_roll = lerp_angle(from_s.right_pad_roll, to_s.right_pad_roll, t)
+	r.glove_offset = from_s.glove_offset.lerp(to_s.glove_offset, t)
+	r.glove_yaw = lerp_angle(from_s.glove_yaw, to_s.glove_yaw, t)
+	r.glove_pitch = lerp_angle(from_s.glove_pitch, to_s.glove_pitch, t)
+	r.blocker_offset = from_s.blocker_offset.lerp(to_s.blocker_offset, t)
+	r.blocker_yaw = lerp_angle(from_s.blocker_yaw, to_s.blocker_yaw, t)
+	r.blocker_pitch = lerp_angle(from_s.blocker_pitch, to_s.blocker_pitch, t)
+	r.head_yaw = lerp_angle(from_s.head_yaw, to_s.head_yaw, t)
+	return r
+
+func _extrapolate_goalie_state(newest: GoalieNetworkState, dt: float) -> GoalieNetworkState:
+	# Pose fields don't have an authoritative angular velocity on the wire, so
+	# we hold the newest pose and only dead-reckon root translation via the
+	# broadcast linear velocity. Brief gap holds (≤ extrapolation_max_ms) read
+	# as a momentary freeze on the body parts — far better than wildly
+	# extrapolating arm sweep angles past their intended endpoints.
+	var r := GoalieNetworkState.new()
+	r.copy_from(newest)
+	r.position_x = newest.position_x + newest.velocity_x * dt
+	r.position_z = newest.position_z + newest.velocity_z * dt
+	return r
+
+func _apply_interpolated(s: GoalieNetworkState) -> void:
+	# Track the host's state enum and five-hole openness for any client code
+	# that reads them (debug overlays, telemetry). The body / head heights
+	# inside apply_network_pose key off s.state_enum directly.
+	_sm.current = s.state_enum as State
+	_five_hole_openness = s.five_hole_openness
+	# Keep the controller-local kinematic mirrors in sync so external readers
+	# (e.g. _current_x for the debug HUD) reflect what the client is rendering,
+	# not stale spawn defaults.
+	_current_x = s.position_x
+	goalie.set_goalie_position(s.position_x, s.position_z)
+	goalie.set_goalie_rotation_y(s.rotation_y)
+	goalie.apply_network_pose(s)
 
 func apply_replay_state(state: GoalieNetworkState, _delta: float) -> void:
 	# Replays use the authoritative pose captured in the snapshot, not a
@@ -1777,7 +1841,7 @@ func apply_replay_state(state: GoalieNetworkState, _delta: float) -> void:
 	_five_hole_openness = state.five_hole_openness
 	goalie.set_goalie_position(state.position_x, state.position_z)
 	goalie.set_goalie_rotation_y(state.rotation_y)
-	goalie.apply_replay_pose(state)
+	goalie.apply_network_pose(state)
 
 
 func apply_state_transition(new_state: int) -> void:
