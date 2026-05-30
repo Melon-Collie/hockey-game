@@ -115,6 +115,13 @@ signal skip_replay_vote_updated(current: int, total: int)
 # behind-net cam's lateral offset, and the audio cue dispatch during playback.
 signal replay_event_received(host_ts: float, event: Dictionary)
 
+# Host entered (true) or left (false) the goal-replay cinematic. Mirrored to
+# clients via notify_replay_mode so they can start / stop their own local
+# GoalReplayDriver in lockstep with the host. The world-state phase never
+# carries GOAL_SCORED to clients (the host stops broadcasting the instant it
+# enters replay mode), so this flag edge is the client's trigger.
+signal replay_mode_changed(active: bool)
+
 # Local player edited their identity (name / jersey number / handedness)
 # while a session is live (e.g. from the SideMenu's player card during free
 # play). GameManager listens and pushes the change to the local skater
@@ -837,6 +844,10 @@ func notify_replay_mode(active: bool) -> void:
 	_replay_mode = active
 	if not active:
 		_replay_clock = 0.0
+	# Drive the client's local cinematic off this edge. The host's GOAL_SCORED
+	# phase never reaches clients via world state, so this is where their
+	# GoalReplayDriver starts (active) and is torn down (inactive).
+	replay_mode_changed.emit(active)
 
 
 func set_replay_clock(t: float) -> void:
