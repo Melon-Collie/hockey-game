@@ -489,6 +489,21 @@ var _slide_start_rotation_y: float = 0.0
 # transition via the existing apply_state_transition RPC.
 var _skater_getter: Callable = Callable()
 
+# Lag-comp back-date (seconds) consumed by the next release-triggered
+# reaction. Set by GameManager.on_remote_puck_release / one_timer when a
+# client RPC carries a host_timestamp older than now. Cleared on consumption
+# so it never bleeds into a later shot.
+var _pending_reaction_back_date: float = 0.0
+
+# Sets the back-date in seconds for the next puck_released reaction. Should
+# be called immediately before puck.release() so the synchronous
+# puck_released signal handler picks it up. Out-of-flow callers (deferred
+# release, multiple frames between set and consume) risk applying the
+# back-date to the wrong shot — the field clears the moment _on_puck_released
+# runs OR _physics_process ticks, whichever comes first.
+func set_pending_reaction_back_date(seconds: float) -> void:
+	_pending_reaction_back_date = maxf(seconds, 0.0)
+
 # ── Client Simulation ─────────────────────────────────────────────────────────
 # State buffer holds the most recent host snapshots (sorted by timestamp).
 # `_interpolate_and_apply` reads from it at render_time and writes the pose
@@ -1626,6 +1641,11 @@ func _check_universal_reaction() -> void:
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
 func _on_puck_released() -> void:
+	# Consume any pending lag-comp back-date up front so an early `_sm.is_rvh()`
+	# return or a no-shot result still clears the field — otherwise the next
+	# puck event would inherit stale latency from a previous unrelated release.
+	var back_date: float = _pending_reaction_back_date
+	_pending_reaction_back_date = 0.0
 	# RVH is post-hug coverage with a separate pose — no glove reach is wired,
 	# and the goalie is already committed to the puck-side post. Every other
 	# state (STANDING, READY, BUTTERFLY, SLIDING, RECOVERING) supports the
@@ -1652,8 +1672,10 @@ func _on_puck_released() -> void:
 	# gates the butterfly drop on low shots — leg drop is reflexive.
 	# `arm_timer` (= arm_reaction_delay, ~180ms) gates the glove/blocker reach
 	# on elevated shots — arms need extra processing time to decide WHERE in
-	# the upper net to reach. Both run in parallel; start() arms both.
-	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay)
+	# the upper net to reach. Both run in parallel; start() arms both, and
+	# `back_date` lag-comps client-initiated releases so the goalie gets the
+	# same effective reaction window the shooter perceived.
+	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay, back_date)
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
 # don't trigger spurious slides, starts the reaction clear delay, and drops
