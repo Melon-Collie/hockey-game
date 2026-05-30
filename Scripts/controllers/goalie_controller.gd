@@ -106,6 +106,27 @@ extends Node
 # (0.2-0.4 m), and the existing tracking-speed lerp smooths brief deke
 # velocity spikes so quick fakes don't drag the goalie out of position.
 @export var carrier_velocity_lead_time: float = 0.12
+# Puck velocity lead. Adds projection of where the PUCK itself is going (vs
+# just the carrier body), which catches cases the carrier-velocity lead misses:
+#   - Forehand-backhand dekes: carrier body stationary, puck drags laterally
+#   - Loose-puck cross-creases: no carrier, only puck velocity exists
+#   - Carrier pivoting to shoot: body still, blade swings out for release
+# Shorter than the carrier lead because puck velocity is jittery during
+# stickhandling — the existing tracking-speed lerp + this shorter lead means
+# transient dangles don't drag the goalie out while sustained motion (real
+# dekes, cross-crease passes) does.
+@export var puck_velocity_lead_time: float = 0.08
+
+# ── Lateral pressure depth retreat ───────────────────────────────────────────
+# When a lateral threat moves faster than the goalie can t-push, retreat
+# depth (back toward the goal line). Real goaltending principle: shorter
+# post-to-post distance from the goal line is easier to seal than the
+# aggressive angle. Scales with the velocity deficit (carrier_vx vs
+# t_push_speed) so small lateral plays don't trigger any retreat; only
+# genuine overspeed plays do. Capped so the goalie doesn't collapse to
+# the goal line entirely.
+@export var lateral_pressure_depth_pull: float = 0.20  # m of retreat per m/s of deficit
+@export var lateral_pressure_max_pull: float = 0.50    # m max retreat from Buckley depth
 
 # Close-crease auto-butterfly. When an opposing carrier is at the doorstep
 # the goalie can't track laterally fast enough; better to commit butterfly
@@ -703,17 +724,24 @@ func _compute_threat_position() -> Vector3:
 	if carrier == null or _reaction.reacting \
 			or _sm.is_rvh() \
 			or _sm.current == State.RECOVERING:
-		return puck.global_position
+		# Loose puck (or reaction-frozen / RVH / recovering): track raw puck
+		# position with PUCK velocity projection so cross-crease passes and
+		# loose-puck plays get the same lookahead carriers get.
+		var puck_lead: Vector3 = _puck_velocity_est * puck_velocity_lead_time
+		puck_lead.y = 0.0
+		return puck.global_position + puck_lead
 	# COILING and SLIDING share the down-state chest weight (they're part of
 	# the butterfly cycle, just at different points in the motion).
 	var w: float = shooter_weight_butterfly if _sm.is_down() else shooter_weight_standing
 	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
-	# Lead by carrier velocity. Sustained lateral motion projects ahead;
-	# transient deke spikes are smoothed by the tracking-speed lerp. Y is
-	# zeroed because skaters don't move vertically — leading height noise
-	# would drift the threat off the ice.
-	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time
+	# Two leads: CARRIER velocity captures body motion (sustained skating);
+	# PUCK velocity captures dangle / dragged-across motion (forehand-backhand
+	# dekes, pivot-to-shoot blade swings) that the carrier body wouldn't show.
+	# Both contribute to the projection. Y is zeroed because skaters don't
+	# move vertically — leading height noise would drift the threat off ice.
+	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time \
+			+ _puck_velocity_est * puck_velocity_lead_time
 	lead.y = 0.0
 	return blended + lead
 
@@ -1155,6 +1183,16 @@ func _update_depth(delta: float) -> void:
 			threat_dist, _depth_cfg)
 	if _reading_slapper_tell:
 		target_radius = maxf(target_radius - slapper_tell_depth_pull, depth_defensive)
+	# Lateral pressure retreat — when a lateral threat moves faster than the
+	# goalie can t-push, pull depth back toward the goal line so the lateral
+	# distance to cover shrinks. Scales with the velocity deficit so only
+	# overspeed plays trigger meaningful retreat; small lateral motion at
+	# normal carry speeds doesn't move the depth.
+	var lateral_deficit: float = maxf(absf(_puck_velocity_est.x) - t_push_speed, 0.0)
+	var lateral_pull: float = minf(lateral_deficit * lateral_pressure_depth_pull,
+			lateral_pressure_max_pull)
+	if lateral_pull > 0.0:
+		target_radius = maxf(target_radius - lateral_pull, depth_defensive)
 	_current_depth = lerpf(_current_depth, target_radius, depth_speed * delta)
 
 # ── Position ──────────────────────────────────────────────────────────────────
