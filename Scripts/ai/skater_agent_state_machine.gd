@@ -2102,6 +2102,14 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	if self_state != null:
 		var v: Vector3 = self_state.velocity
 		desired = AISteering.brake_pivot(desired, Vector2(v.x, v.z))
+		# Body-level offside guard: keep an attacking non-carrier from
+		# skating its body across the attacking blue line before the puck
+		# (instant ghost in ARCADE). Applied after brake_pivot so the
+		# hard constraint wins. The role-level target filter can't hold a
+		# momentum-driven body to the line on its own.
+		desired = AISteering.offside_brake(
+				desired, self_pos, v, _own_goal_dir,
+				snapshot.puck_state.position.z, carrier == _peer_id)
 	input.move_vector = desired
 
 

@@ -65,6 +65,22 @@ const ANCHOR_DEADBAND: float = 0.5
 const BRAKE_PIVOT_ANGLE_DEG: float = 120.0
 const BRAKE_PIVOT_MIN_SPEED: float = 3.0
 
+# Offside brake. In ARCADE an attacking non-carrier whose body-center
+# crosses the attacking blue line before the puck is ghosted instantly
+# (single tick, no tolerance). The role-level target filter
+# (AIRoleOutlet._is_offside) only keeps the chosen TARGET legal — it
+# can't hold a momentum-driven body to a hard line, and the steering
+# field can push the body across regardless. This is the body-level
+# guard, applied to the actual move output every tick.
+#
+# OFFSIDE_BRAKE_DECEL_M_S2 is the braking deceleration assumed when
+# estimating stopping distance — set a touch below skater thrust accel
+# so the bot starts braking early enough to stop short rather than
+# crossing. OFFSIDE_BRAKE_MARGIN_M is the safety gap the projected stop
+# must clear the line by, since one tick over is already a ghost.
+const OFFSIDE_BRAKE_DECEL_M_S2: float = 10.0
+const OFFSIDE_BRAKE_MARGIN_M: float = 0.35
+
 
 # Returns a unit-or-shorter Vector2 in world XZ.
 #
@@ -229,3 +245,48 @@ static func brake_pivot(desired: Vector2, velocity_xz: Vector2) -> Vector2:
 	if vel_dir.dot(desired_dir) >= threshold_dot:
 		return desired
 	return -vel_dir * desired_len
+
+
+# Hard body-level guard against skating offside. Returns `desired`
+# unchanged unless the bot is an attacking non-carrier moving toward its
+# attacking blue line, the puck is still on the near side (entering
+# would be offside), and the bot's stopping distance would carry it
+# across within OFFSIDE_BRAKE_MARGIN_M. In that case it overrides the
+# steering with a hard brake away from the line (full reverse thrust on
+# the depth axis, lateral intent preserved), so the body stops short
+# instead of ghosting. Releases the instant the puck crosses the line
+# (offside risk gone) or the bot is already retreating.
+#
+# `own_goal_dir` is +1 when our net is at +Z (we attack -Z) and -1 when
+# our net is at -Z (we attack +Z). The attacking blue line sits at
+# `-own_goal_dir * BLUE_LINE_Z`; `attack_dir = -own_goal_dir` is the
+# depth direction the team attacks.
+static func offside_brake(
+		desired: Vector2,
+		self_pos: Vector3,
+		self_velocity: Vector3,
+		own_goal_dir: float,
+		puck_z: float,
+		is_carrier: bool) -> Vector2:
+	if is_carrier:
+		return desired
+	var attack_dir: float = -own_goal_dir
+	# Puck already across the attacking blue line → entering is legal now.
+	if attack_dir * puck_z > GameRules.BLUE_LINE_Z:
+		return desired
+	# Only a concern when actually moving toward the attacking zone.
+	var v_toward: float = attack_dir * self_velocity.z
+	if v_toward <= 0.0:
+		return desired
+	# Signed distance from the body to the attacking blue line along the
+	# attack direction (negative once already across).
+	var dist_to_line: float = GameRules.BLUE_LINE_Z - attack_dir * self_pos.z
+	var stop_dist: float = (v_toward * v_toward) / (2.0 * OFFSIDE_BRAKE_DECEL_M_S2)
+	if stop_dist + OFFSIDE_BRAKE_MARGIN_M < dist_to_line:
+		return desired  # plenty of room to stop before the line
+	# Brake: full reverse thrust along the depth axis (back toward our
+	# own end), keep lateral intent, clamp to unit length.
+	var brake := Vector2(desired.x, -attack_dir)
+	if brake.length() > 1.0:
+		brake = brake.normalized()
+	return brake
