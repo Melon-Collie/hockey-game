@@ -28,7 +28,7 @@ class_name AIActionScoring
 # score_at(pos) defined in the SM. Top-level options compete uniformly:
 #
 #   shoot:  score_shoot(self_pos)
-#   pass:   score_at(receiver_lead) × path_clearance × time_factor
+#   pass:   score_at(receiver_lead) × lane_clear × time_factor
 #   carry:  score_at(candidate)     × path_clearance × time_factor
 #
 # score_at(pos) = max(score_shoot(pos), carry_to_slot_from_pos)
@@ -359,11 +359,11 @@ static func score_shoot(
 	# the shot path) have little reaction time and barely contribute;
 	# defenders mid-line have full intercept weight. Shots travel fast
 	# enough (~30 m/s) that even mid-line defenders only marginally
-	# block — `_lane_clear` does the per-defender reaction-window math.
+	# block — `lane_clear` does the per-defender reaction-window math.
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			shooter, predicted_goalie_pos, attacking_goal.z,
 			net_half_width, GOALIE_SHADOW_HALF_M)
-	var lane: float = _lane_clear(shooter, aim, opponents, shot_speed_m_s)
+	var lane: float = lane_clear(shooter, aim, opponents, shot_speed_m_s)
 
 	# Directional pressure: only opponents in the forward cone toward
 	# the attacking goal disrupt the shot. Behind/beside ones don't
@@ -389,7 +389,7 @@ static func score_shoot(
 #   - shot_speed = PASS_SPEED_M_S (quick-shot release speed)
 #
 # Most of the quick-shot's tactical signature falls out of the speed
-# swap inside _lane_clear: slower puck → more reaction time for
+# swap inside lane_clear: slower puck → more reaction time for
 # defenders → lanes naturally close at longer range. There's no
 # explicit distance cutoff because the lane math already prices it.
 # Reward for catching a still-squared goalie comes from squareness
@@ -504,7 +504,7 @@ static func score_pass(
 	# gives defenders 36% less reaction time than the quick-shot
 	# default. Caller picks via expected_pass_speed(shooter, receiver)
 	# when the distance gate is appropriate.
-	var lane: float = _lane_clear(shooter, receiver, opponents, pass_speed_m_s)
+	var lane: float = lane_clear(shooter, receiver, opponents, pass_speed_m_s)
 	if lane <= 0.0:
 		return 0.0
 	# Receiver's value as a shooter from where they are. Caller is
@@ -593,7 +593,13 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 	return clampf(weighted / float(max_count), 0.0, 1.0)
 
 
-# Lane-clear factor in [0, 1]. Per-defender block strength composes:
+# Lane-clear factor in [0, 1] for a FIRED puck (shot or pass). This is
+# the reaction-window model: a defender near the lane reads the release
+# and steps in, with block strength scaled by how much flight time they
+# have before the puck reaches their segment position. Public because
+# the carrier's pass scoring uses it directly — a pass is a fired puck,
+# so it gets this model rather than the geometric carry-path
+# `path_clearance`. Per-defender block strength composes:
 #
 #   perp_factor     = 1 - perp/LANE_CLEAR_RADIUS_M    (1 on line, 0 at radius)
 #   reaction_factor = clamp((t × flight - REACTION) / RAMP, 0, 1)
@@ -611,7 +617,7 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 #
 # Only counts opponents whose projection onto the segment falls between
 # the endpoints (t ∈ [0, 1]).
-static func _lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
+static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		puck_speed_m_s: float) -> float:
 	var dx: float = to.x - from.x
 	var dz: float = to.z - from.z
@@ -739,7 +745,7 @@ static func threat_surface_pass(
 	var pass_score: float = score_pass(
 			carrier_pos, receiver_pos, our_net, our_goalie_pos,
 			net_half_width, defenders, Vector3.INF, pass_speed)
-	var lane: float = _lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
+	var lane: float = lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
 	var positional: float = position_potential(receiver_pos, our_net, defenders)
 	return maxf(pass_score, lane * positional)
 
@@ -888,7 +894,7 @@ static func carry_intercept_safety(
 
 # Public lane-clearance check for CARRY candidates — the bot is
 # physically traveling along this segment, not firing a puck through
-# it, so the reaction-window math from `_lane_clear` doesn't apply.
+# it, so the reaction-window math from `lane_clear` doesn't apply.
 # A defender anywhere on the path is in the way regardless of flight
 # time. Returns 1.0 if no opponent is within LANE_CLEAR_RADIUS_M of
 # the segment, ramps linearly to 0.0 as defender approaches the line.
@@ -1001,45 +1007,6 @@ static func pass_crosses_own_slot(from: Vector3, to: Vector3, own_goal_z: float)
 				from.x, from.z, to.x, to.z,
 				-half_w, half_w,
 				own_goal_z, own_goal_z + depth)
-
-
-# Turnover-risk discount for a contested pass that originates or
-# travels through our own half. The carrier's raw pass score
-# (receiver_value × lane) already down-weights contested lanes, but it
-# does NOT scale that down-weight by the COST of the turnover. A
-# breakout pass picked off deep in our zone hands the opponent a
-# high-danger chance; the same lane clearance in the offensive zone
-# costs nothing. This multiplier supplies that asymmetry so bots stop
-# forcing hopeful seam passes out of their own end.
-#
-#   intercept_p = 1 - lane_clearance                  (contested → high)
-#   danger      = ramp 0 at center ice → 1 at our goal line, taken at
-#                 the DEEPEST (most toward our net) endpoint of the
-#                 lane. Using the deepest endpoint means a contested
-#                 pass with EITHER end deep is treated as risky — a
-#                 stretch pass out of our zone that gets picked is just
-#                 as costly as a short one.
-#   risk        = intercept_p × danger
-#   safety      = 1 - TURNOVER_RISK_PENALTY × risk   ∈ [1-penalty, 1]
-#
-# Clean lanes (lane ≈ 1) and passes entirely in the offensive half
-# (danger 0) are unaffected — offensive aggression is preserved; only
-# hopeful, contested own-half passes get discounted. Raise
-# TURNOVER_RISK_PENALTY toward 0.8 to make bots play it even safer on
-# breakouts; lower toward 0.4 if they get too conservative and refuse
-# clean-enough outlets.
-const TURNOVER_RISK_PENALTY: float = 0.6
-
-static func breakout_pass_safety(from: Vector3, to: Vector3,
-		own_goal_z: float, lane_clearance: float) -> float:
-	var own_dir: float = signf(own_goal_z)
-	var deepest: float = maxf(own_dir * from.z, own_dir * to.z)
-	var danger: float = clampf(deepest / absf(own_goal_z), 0.0, 1.0)
-	if danger <= 0.0:
-		return 1.0
-	var intercept_p: float = clampf(1.0 - lane_clearance, 0.0, 1.0)
-	var risk: float = intercept_p * danger
-	return 1.0 - TURNOVER_RISK_PENALTY * risk
 
 
 # Liang-Barsky parametric clipping: returns true iff the segment from

@@ -248,7 +248,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# goalie that would otherwise drift wide stays in position. Off-axis
 	# bots benefit (their lateral arc against a still-squared goalie is
 	# open); slower puck speed naturally kills long-range attempts via
-	# the existing _lane_clear math. Release position = current self_pos
+	# the existing lane_clear math. Release position = current self_pos
 	# (no charge motion). Opponents at current positions (no projection).
 	var quick_shoot_score: float = AIActionScoring.score_quick_shot(
 			self_pos, attacking_goal, goalie_now,
@@ -375,11 +375,14 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 
 # Loops every legal pass target and returns [best_pid, best_score]. A
 # pass takes 0.5–1.1 s of flight time, so the receiver and every
-# defender are projected forward by that flight time before scoring.
+# defender are projected forward by that flight time for the receiver's
+# inner score_at (pressure when the puck arrives). The lane-interception
+# term uses the reaction-window pass model on CURRENT defender positions
+# instead, since lane_clear models defenders closing over the flight.
 # Top-level pass scoring under the universal model:
 #
 #   pass_score(receiver) = score_at(receiver_lead, projected_opps)
-#                          × path_clearance(self → receiver_lead)
+#                          × lane_clear(self → receiver_lead, pass_speed)
 #                          × pow(decay, pass_flight_time)
 #
 # score_at recursively considers what the receiver could do (shoot,
@@ -442,8 +445,15 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# and the receiver's inner score_at (lanes/pressure on receiver
 		# at the time they receive the puck).
 		_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)
-		var lane: float = AIActionScoring.path_clearance(
-				self_pos, receiver, _scratch_opponents_pass)
+		# Lane interception uses the reaction-window PASS model
+		# (lane_clear) on CURRENT defender positions, not the geometric
+		# carry-path check — a pass is a fired puck, so a defender near
+		# the lane reads the release and steps in, scaled by flight time
+		# and the actual pass speed. This matches how score_pass (the
+		# off-puck roles' view of the same lane) evaluates it, so the
+		# carrier and its receivers agree on what's actually threadable.
+		var lane: float = AIActionScoring.lane_clear(
+				self_pos, receiver, _scratch_opponents, pass_speed)
 		if lane <= 0.0:
 			continue
 		# Predict goalie at the time the receiver fires: pass flight time
@@ -487,14 +497,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var time_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
 				flight_t + rotation_time)
-		# Turnover-risk discount: a contested pass out of our own half
-		# is high-cost if picked off (breakout giveaway → chance against).
-		# Clean lanes and offensive-half passes are unaffected; only
-		# hopeful, contested own-half passes get knocked down so the bot
-		# favours the safe outlet over forcing a seam.
-		var turnover_safety: float = AIActionScoring.breakout_pass_safety(
-				self_pos, receiver, own_goal_z, lane)
-		var s: float = receiver_value * lane * time_decay * turnover_safety
+		var s: float = receiver_value * lane * time_decay
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:

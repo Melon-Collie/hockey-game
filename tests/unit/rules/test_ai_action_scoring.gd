@@ -60,7 +60,7 @@ func test_shoot_score_unaffected_by_low_t_defender() -> void:
 	# their stick before a fast puck blows past them. Lane clearance
 	# should pass through clean.
 	#
-	# Tested against _lane_clear directly. Full-score equivalence is
+	# Tested against lane_clear directly. Full-score equivalence is
 	# not possible to assert here: under LANE_REACTION_DELAY_S = 0.08
 	# and a 34 m/s slapper, any defender close enough to be low-t
 	# (within ~2.72 m along the shot path) is also inside the 4 m
@@ -71,12 +71,12 @@ func test_shoot_score_unaffected_by_low_t_defender() -> void:
 	var shooter := Vector3(0.0, 0.0, 15.0)
 	var aim := Vector3(0.0, 0.0, 26.65)
 	var slapper := AIActionScoring.SLAPPER_SHOT_SPEED_M_S
-	var clear: float = AIActionScoring._lane_clear(shooter, aim, [], slapper)
+	var clear: float = AIActionScoring.lane_clear(shooter, aim, [], slapper)
 	# Defender at z=17.0 — 2 m past shooter on the line.
 	# t ≈ 0.172, time_to_defender ≈ 0.059 s, below the 0.08 s reaction
 	# threshold → reaction_factor = 0 → zero contribution to block.
 	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 17.0)]
-	var blocked: float = AIActionScoring._lane_clear(shooter, aim, close_blocker, slapper)
+	var blocked: float = AIActionScoring.lane_clear(shooter, aim, close_blocker, slapper)
 	assert_almost_eq(blocked, clear, 0.001,
 			"low-t defender with no reaction time shouldn't reduce lane clearance")
 
@@ -828,64 +828,41 @@ func test_score_pass_higher_at_charged_speed_with_in_lane_defender() -> void:
 			"charged pass scores higher than quick-shot when a defender sits in the lane (less reaction time)")
 
 
-# ── breakout_pass_safety: turnover-risk discount ─────────────────────────────
-# Team 0 defends +Z (own_goal_z = +26.65), attacks -Z. Our own half is
-# +Z; the offensive half is -Z. Danger ramps 0 at center ice → 1 at our
-# goal line, on the deepest (+Z-most) endpoint.
+# ── lane_clear: reaction-window pass model (now public) ──────────────────────
+# The carrier's pass scoring uses this directly, so cover the two
+# invariants that make a pass "less likely to get picked off": a
+# defender sitting mid-lane with time to react cuts the clearance, while
+# a defender right at the passer (no reaction time before the puck blows
+# past) does not.
 
-const OWN_GOAL_Z: float = 26.65
-
-
-func test_breakout_safety_no_penalty_for_clean_lane() -> void:
-	# Deep in our own zone but a fully clear lane (lane_clearance = 1) →
-	# zero interception probability → no discount.
-	var from := Vector3(0.0, 0.0, 24.0)
-	var to := Vector3(0.0, 0.0, 10.0)
-	var s: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 1.0)
-	assert_almost_eq(s, 1.0, 0.0001, "clean lane incurs no turnover discount")
+func test_lane_clear_full_with_no_defenders() -> void:
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var s: float = AIActionScoring.lane_clear(from, to, [], AIActionScoring.PASS_SPEED_M_S)
+	assert_almost_eq(s, 1.0, 0.0001, "empty lane is fully clear")
 
 
-func test_breakout_safety_no_penalty_in_offensive_half() -> void:
-	# Contested lane but entirely in the offensive half (both ends -Z) →
-	# danger clamps to 0 → no discount, offensive aggression preserved.
-	var from := Vector3(0.0, 0.0, -10.0)
-	var to := Vector3(0.0, 0.0, -20.0)
-	var s: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 0.0)
-	assert_almost_eq(s, 1.0, 0.0001, "offensive-half pass is never turnover-discounted")
+func test_lane_clear_reduced_by_mid_lane_defender_with_reaction_time() -> void:
+	# Defender mid-segment (t ≈ 0.5) and on the line. At pass speed the
+	# puck takes long enough to reach them that they can step in →
+	# reaction_factor > 0 → clearance drops below 1.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var mid_lane: Array[Vector3] = [Vector3(0.2, 0.0, 7.0)]
+	var s: float = AIActionScoring.lane_clear(from, to, mid_lane, AIActionScoring.PASS_SPEED_M_S)
+	assert_lt(s, 1.0, "a defender mid-lane with reaction time reduces clearance")
 
 
-func test_breakout_safety_discounts_contested_deep_pass() -> void:
-	# Contested lane (lane_clearance = 0) deep in our own zone (z near our
-	# goal line) → max risk → discount approaches the floor.
-	var from := Vector3(0.0, 0.0, OWN_GOAL_Z)  # at our goal line, danger = 1
-	var to := Vector3(5.0, 0.0, OWN_GOAL_Z)
-	var s: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 0.0)
-	assert_almost_eq(s, 1.0 - AIActionScoring.TURNOVER_RISK_PENALTY, 0.0001,
-			"fully contested pass at our goal line hits the turnover floor")
-
-
-func test_breakout_safety_scales_with_lane_and_depth() -> void:
-	# A more-contested lane at the same depth should be discounted more.
-	var from := Vector3(0.0, 0.0, 20.0)
-	var to := Vector3(4.0, 0.0, 20.0)
-	var open: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 0.8)
-	var contested: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 0.2)
-	assert_lt(contested, open, "lower lane clearance → larger turnover discount at the same depth")
-	# And a deeper turnover location should be discounted more than a
-	# shallow one at the same lane clearance.
-	var shallow := Vector3(0.0, 0.0, 10.0)
-	var deep := Vector3(0.0, 0.0, 24.0)
-	var s_shallow: float = AIActionScoring.breakout_pass_safety(shallow, shallow, OWN_GOAL_Z, 0.2)
-	var s_deep: float = AIActionScoring.breakout_pass_safety(deep, deep, OWN_GOAL_Z, 0.2)
-	assert_lt(s_deep, s_shallow, "deeper (more dangerous) turnover location → larger discount")
-
-
-func test_breakout_safety_uses_deepest_endpoint() -> void:
-	# A stretch pass with one end deep in our zone and the other at
-	# center ice is treated by its DEEP end, not its average — a picked
-	# breakout pass is costly regardless of where the receiver stands.
-	var deep_from := Vector3(0.0, 0.0, 24.0)
-	var shallow_to := Vector3(0.0, 0.0, 0.0)
-	var with_deep_end: float = AIActionScoring.breakout_pass_safety(
-			deep_from, shallow_to, OWN_GOAL_Z, 0.3)
-	assert_lt(with_deep_end, 1.0, "a deep originating endpoint still triggers the turnover discount")
+func test_lane_clear_charged_pass_threads_better_than_quick() -> void:
+	# A faster (charged) pass gives the defender less reaction time, so
+	# the lane reads as more open. This is why routing the carrier
+	# through the real pass speed matters for pickoff risk. Defender at
+	# low-t (z=2.5 on a 15 m pass) keeps time_to_defender inside the
+	# reaction ramp at BOTH speeds so they produce different block
+	# strengths — at high t both saturate the ramp and the speeds tie.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 15.0)
+	var lane_def: Array[Vector3] = [Vector3(0.3, 0.0, 2.5)]
+	var quick: float = AIActionScoring.lane_clear(from, to, lane_def, AIActionScoring.PASS_SPEED_M_S)
+	var charged: float = AIActionScoring.lane_clear(from, to, lane_def, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_gt(charged, quick, "faster pass → less defender reaction time → cleaner lane")
