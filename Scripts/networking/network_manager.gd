@@ -816,10 +816,12 @@ func receive_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_
 func start_replay_mode(initial_ts: float) -> void:
 	_replay_mode = true
 	_replay_clock = initial_ts
-	# Mirror the flag onto every connected client so their .mreplay recorder
-	# gates identically. Clients still receive (frozen) world-state broadcasts
-	# during the cinematic, but their file writer skips them so the host and
-	# client files align.
+	# Mirror the flag onto every connected client so their recorder + .mreplay
+	# writer gate identically, and so they start their own GoalReplayDriver in
+	# lockstep (see GameManager._on_remote_replay_mode_changed). The host stops
+	# broadcasting world state for the duration of the cinematic
+	# (GameManager._physics_process bails while is_replay_mode), so clients
+	# receive no frames during replay — each peer drives its own clip locally.
 	if is_host:
 		for peer_id: int in connected_peer_ids():
 			notify_replay_mode.rpc_id(peer_id, true)
