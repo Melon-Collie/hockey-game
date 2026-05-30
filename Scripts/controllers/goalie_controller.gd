@@ -91,9 +91,12 @@ extends Node
 # ── Threat tracking ───────────────────────────────────────────────────────────
 # "Play the chest, not the puck": carrier body is steady while the puck swings
 # ±1.5 m during stickhandling. Higher weights track the carrier; pure-puck
-# tracking causes the goalie to shuffle perfectly into 5-hole shots.
-@export var shooter_weight_standing: float = 0.55
-@export var shooter_weight_butterfly: float = 0.75  # more committed when down
+# tracking causes the goalie to shuffle perfectly into 5-hole shots. With the
+# active blade / poke / sweep systems now disrupting close-range puck control,
+# we can afford to bias slightly more toward the puck — the goalie's stick
+# pressures the carrier into committing rather than the body chasing dangles.
+@export var shooter_weight_standing: float = 0.40
+@export var shooter_weight_butterfly: float = 0.60
 # Lead-the-target time. Threat position projects forward by
 # `carrier.velocity * carrier_velocity_lead_time` so the goalie pre-positions
 # toward where the carrier WILL be — the realistic answer to "skater is
