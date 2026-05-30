@@ -826,3 +826,66 @@ func test_score_pass_higher_at_charged_speed_with_in_lane_defender() -> void:
 			Vector3.INF, AIActionScoring.PASS_CHARGE_SPEED_M_S)
 	assert_gt(fast, slow,
 			"charged pass scores higher than quick-shot when a defender sits in the lane (less reaction time)")
+
+
+# ── breakout_pass_safety: turnover-risk discount ─────────────────────────────
+# Team 0 defends +Z (own_goal_z = +26.65), attacks -Z. Our own half is
+# +Z; the offensive half is -Z. Danger ramps 0 at center ice → 1 at our
+# goal line, on the deepest (+Z-most) endpoint.
+
+const OWN_GOAL_Z: float = 26.65
+
+
+func test_breakout_safety_no_penalty_for_clean_lane() -> void:
+	# Deep in our own zone but a fully clear lane (lane_clearance = 1) →
+	# zero interception probability → no discount.
+	var from := Vector3(0.0, 0.0, 24.0)
+	var to := Vector3(0.0, 0.0, 10.0)
+	var s: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 1.0)
+	assert_almost_eq(s, 1.0, 0.0001, "clean lane incurs no turnover discount")
+
+
+func test_breakout_safety_no_penalty_in_offensive_half() -> void:
+	# Contested lane but entirely in the offensive half (both ends -Z) →
+	# danger clamps to 0 → no discount, offensive aggression preserved.
+	var from := Vector3(0.0, 0.0, -10.0)
+	var to := Vector3(0.0, 0.0, -20.0)
+	var s: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 0.0)
+	assert_almost_eq(s, 1.0, 0.0001, "offensive-half pass is never turnover-discounted")
+
+
+func test_breakout_safety_discounts_contested_deep_pass() -> void:
+	# Contested lane (lane_clearance = 0) deep in our own zone (z near our
+	# goal line) → max risk → discount approaches the floor.
+	var from := Vector3(0.0, 0.0, OWN_GOAL_Z)  # at our goal line, danger = 1
+	var to := Vector3(5.0, 0.0, OWN_GOAL_Z)
+	var s: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 0.0)
+	assert_almost_eq(s, 1.0 - AIActionScoring.TURNOVER_RISK_PENALTY, 0.0001,
+			"fully contested pass at our goal line hits the turnover floor")
+
+
+func test_breakout_safety_scales_with_lane_and_depth() -> void:
+	# A more-contested lane at the same depth should be discounted more.
+	var from := Vector3(0.0, 0.0, 20.0)
+	var to := Vector3(4.0, 0.0, 20.0)
+	var open: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 0.8)
+	var contested: float = AIActionScoring.breakout_pass_safety(from, to, OWN_GOAL_Z, 0.2)
+	assert_lt(contested, open, "lower lane clearance → larger turnover discount at the same depth")
+	# And a deeper turnover location should be discounted more than a
+	# shallow one at the same lane clearance.
+	var shallow := Vector3(0.0, 0.0, 10.0)
+	var deep := Vector3(0.0, 0.0, 24.0)
+	var s_shallow: float = AIActionScoring.breakout_pass_safety(shallow, shallow, OWN_GOAL_Z, 0.2)
+	var s_deep: float = AIActionScoring.breakout_pass_safety(deep, deep, OWN_GOAL_Z, 0.2)
+	assert_lt(s_deep, s_shallow, "deeper (more dangerous) turnover location → larger discount")
+
+
+func test_breakout_safety_uses_deepest_endpoint() -> void:
+	# A stretch pass with one end deep in our zone and the other at
+	# center ice is treated by its DEEP end, not its average — a picked
+	# breakout pass is costly regardless of where the receiver stands.
+	var deep_from := Vector3(0.0, 0.0, 24.0)
+	var shallow_to := Vector3(0.0, 0.0, 0.0)
+	var with_deep_end: float = AIActionScoring.breakout_pass_safety(
+			deep_from, shallow_to, OWN_GOAL_Z, 0.3)
+	assert_lt(with_deep_end, 1.0, "a deep originating endpoint still triggers the turnover discount")

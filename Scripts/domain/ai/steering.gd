@@ -17,8 +17,16 @@ class_name AISteering
 #   - Repel from own shot lanes      (0.3 within 2 m of segment)
 # Sum, clamp to unit length.
 
-const TEAMMATE_REPEL_WEIGHT: float = 0.4
-const TEAMMATE_REPEL_RADIUS: float = 3.0
+# Teammate spacing. Bumped from the original 0.4 / 3.0 m — bots
+# clumped in puck battles where several role search-centers converge
+# on the same area, so the soft field now pushes apart sooner (larger
+# radius) and harder (higher weight). Still kept below the opponent
+# repel weight (0.6): maintaining space against a checker matters more
+# than against your own formation. Tuning: raise the weight toward the
+# opponent value if bots still bunch; lower toward 0.4 if formation
+# spacing feels too loose (give-and-go support drifting wide).
+const TEAMMATE_REPEL_WEIGHT: float = 0.55
+const TEAMMATE_REPEL_RADIUS: float = 3.5
 const OPPONENT_REPEL_WEIGHT: float = 0.6
 # Carrier-specific opponent repel weight. Bots with the puck weight
 # defender proximity much more heavily than off-puck bots — a defender

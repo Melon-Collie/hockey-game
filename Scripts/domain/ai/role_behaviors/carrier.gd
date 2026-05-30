@@ -487,7 +487,14 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var time_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
 				flight_t + rotation_time)
-		var s: float = receiver_value * lane * time_decay
+		# Turnover-risk discount: a contested pass out of our own half
+		# is high-cost if picked off (breakout giveaway → chance against).
+		# Clean lanes and offensive-half passes are unaffected; only
+		# hopeful, contested own-half passes get knocked down so the bot
+		# favours the safe outlet over forcing a seam.
+		var turnover_safety: float = AIActionScoring.breakout_pass_safety(
+				self_pos, receiver, own_goal_z, lane)
+		var s: float = receiver_value * lane * time_decay * turnover_safety
 		if NetworkManager.is_real_peer(peer_id):
 			s = minf(s * HUMAN_PASS_BIAS, 1.0)
 		if s > best_pass_score:

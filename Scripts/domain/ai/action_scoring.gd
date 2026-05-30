@@ -1003,6 +1003,45 @@ static func pass_crosses_own_slot(from: Vector3, to: Vector3, own_goal_z: float)
 				own_goal_z, own_goal_z + depth)
 
 
+# Turnover-risk discount for a contested pass that originates or
+# travels through our own half. The carrier's raw pass score
+# (receiver_value × lane) already down-weights contested lanes, but it
+# does NOT scale that down-weight by the COST of the turnover. A
+# breakout pass picked off deep in our zone hands the opponent a
+# high-danger chance; the same lane clearance in the offensive zone
+# costs nothing. This multiplier supplies that asymmetry so bots stop
+# forcing hopeful seam passes out of their own end.
+#
+#   intercept_p = 1 - lane_clearance                  (contested → high)
+#   danger      = ramp 0 at center ice → 1 at our goal line, taken at
+#                 the DEEPEST (most toward our net) endpoint of the
+#                 lane. Using the deepest endpoint means a contested
+#                 pass with EITHER end deep is treated as risky — a
+#                 stretch pass out of our zone that gets picked is just
+#                 as costly as a short one.
+#   risk        = intercept_p × danger
+#   safety      = 1 - TURNOVER_RISK_PENALTY × risk   ∈ [1-penalty, 1]
+#
+# Clean lanes (lane ≈ 1) and passes entirely in the offensive half
+# (danger 0) are unaffected — offensive aggression is preserved; only
+# hopeful, contested own-half passes get discounted. Raise
+# TURNOVER_RISK_PENALTY toward 0.8 to make bots play it even safer on
+# breakouts; lower toward 0.4 if they get too conservative and refuse
+# clean-enough outlets.
+const TURNOVER_RISK_PENALTY: float = 0.6
+
+static func breakout_pass_safety(from: Vector3, to: Vector3,
+		own_goal_z: float, lane_clearance: float) -> float:
+	var own_dir: float = signf(own_goal_z)
+	var deepest: float = maxf(own_dir * from.z, own_dir * to.z)
+	var danger: float = clampf(deepest / absf(own_goal_z), 0.0, 1.0)
+	if danger <= 0.0:
+		return 1.0
+	var intercept_p: float = clampf(1.0 - lane_clearance, 0.0, 1.0)
+	var risk: float = intercept_p * danger
+	return 1.0 - TURNOVER_RISK_PENALTY * risk
+
+
 # Liang-Barsky parametric clipping: returns true iff the segment from
 # (fx, fz) to (tx, tz) intersects the axis-aligned rectangle bounded
 # by [x_min, x_max] × [z_min, z_max]. Endpoint inside the rect counts
