@@ -194,6 +194,34 @@ func test_assign_breakout_strong_follows_strong_x_sign() -> void:
 	assert_eq(assignments[110], AIRoleSlots.Slot.BREAKOUT_WEAK)
 
 
+func test_slots_for_forecheck() -> void:
+	# FORECHECK (opp possesses in their own DZ) uses {F1_PRESSURE,
+	# F2_MID, F3_HIGH}: the 1-1-1 forecheck. No CARRIER (opp has it).
+	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.FORECHECK)
+	assert_true(slots.has(AIRoleSlots.Slot.F1_PRESSURE))
+	assert_true(slots.has(AIRoleSlots.Slot.F2_MID))
+	assert_true(slots.has(AIRoleSlots.Slot.F3_HIGH))
+
+
+func test_assign_forecheck_f1_pressures_puck_f3_is_high() -> void:
+	# Team 0 forechecking in the opp end (opp net at -Z). Opp 200 carries
+	# the puck deep (z = -22). F3 = closest to the opp blue line (highest
+	# / least deep), F1 = closest to the puck of the rest, F2 = leftover.
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, -8.0)],   # high, near opp blue (-7.29) → F3
+			[110, 0, Vector3(2.0, 0.0, -21.0)],  # deep, near puck → F1
+			[120, 0, Vector3(-3.0, 0.0, -14.0)], # mid → F2
+			[200, 1, Vector3(0.0, 0.0, -22.0)],  # opp carrier, deep
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.FORECHECK,
+			_resolver(skaters), {})
+	assert_eq(assignments[100], AIRoleSlots.Slot.F3_HIGH, "highest bot is the safety")
+	assert_eq(assignments[110], AIRoleSlots.Slot.F1_PRESSURE, "bot nearest the puck pressures")
+	assert_eq(assignments[120], AIRoleSlots.Slot.F2_MID, "leftover bot reads the mid lane")
+
+
 func test_assign_trans_od_backcheck_goes_to_highest_player() -> void:
 	# Sprinting Through (3v3 backcheck technique): TRANS_OD's
 	# BACKCHECK criterion is closest-to-opp-net, so the up-ice peer

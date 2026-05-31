@@ -72,12 +72,26 @@ func test_breakout_when_we_carry_in_our_own_dz() -> void:
 	assert_eq(result.carrier_team, 0)
 
 
-func test_trans_od_when_opp_carries_outside_our_dz() -> void:
+func test_trans_od_when_opp_carries_in_neutral_zone() -> void:
+	# Opp possession in the NZ (puck between blue lines) → retreat.
 	var snap := _make_snapshot(200, 0.0)
 	var result: AIPossessionState.Result = AIPossessionState.compute(
 			snap, TEAM_ID, OUR_NET_Z,
 			_resolver([[100, 0], [200, 1]]), -1)
 	assert_eq(result.state, AIPossessionState.State.TRANS_OD)
+
+
+func test_forecheck_when_opp_carries_in_their_own_dz() -> void:
+	# Opp possession deep in THEIR DZ (puck past their blue line, z <
+	# -BLUE_LINE_Z for team 0's view) → FORECHECK, not TRANS_OD. The
+	# mirror of BREAKOUT.
+	var snap := _make_snapshot(200, -22.0)
+	var result: AIPossessionState.Result = AIPossessionState.compute(
+			snap, TEAM_ID, OUR_NET_Z,
+			_resolver([[100, 0], [200, 1]]), -1)
+	assert_eq(result.state, AIPossessionState.State.FORECHECK,
+			"opp possession deep in their own end is a forecheck, not a NZ retreat")
+	assert_eq(result.carrier_team, 1)
 
 
 func test_loose_puck_keeps_last_carrier_team() -> void:
@@ -119,6 +133,7 @@ func test_is_transition_helper() -> void:
 	assert_false(AIPossessionState.is_transition(AIPossessionState.State.OZONE))
 	assert_false(AIPossessionState.is_transition(AIPossessionState.State.NEUTRAL))
 	assert_false(AIPossessionState.is_transition(AIPossessionState.State.BREAKOUT))
+	assert_false(AIPossessionState.is_transition(AIPossessionState.State.FORECHECK))
 
 
 func test_neutral_when_loose_puck_stationary() -> void:

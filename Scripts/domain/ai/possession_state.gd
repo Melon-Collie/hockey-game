@@ -5,12 +5,25 @@ class_name AIPossessionState
 # role assignment with a possession-state-driven model, following the
 # three principles: sprint-by, play off heels, simple 2v1.
 #
-# State table (per team):
-#   OZONE    — we have the puck AND puck is in their DZ
-#   DZONE    — opp has the puck AND puck is in our DZ
-#   BREAKOUT — we have the puck AND puck is in OUR DZ (break it out)
-#   TRANS_DO — we have the puck AND puck is in the NZ (D→O rush)
-#   TRANS_OD — opp has the puck AND puck is NOT in our DZ (O→D defend)
+# State table (per team) — symmetric in puck zone × possession:
+#                  we possess        opp possesses
+#   their DZ       OZONE             FORECHECK
+#   neutral zone   TRANS_DO          TRANS_OD
+#   our DZ         BREAKOUT          DZONE
+#
+#   OZONE     — we possess in their DZ (push / cycle)
+#   FORECHECK — opp possesses in their DZ (pin them in, recover deep)
+#   TRANS_DO  — we possess in the NZ (D→O rush)
+#   TRANS_OD  — opp possesses in the NZ (O→D retreat)
+#   BREAKOUT  — we possess in our DZ (break it out)
+#   DZONE     — opp possesses in our DZ (in-zone defense)
+#
+# FORECHECK vs TRANS_OD: both are "opp possesses, not in our DZ", split
+# by where the puck is. Deep in their end the job is to forecheck (pin
+# them, force a turnover); once the puck reaches the NZ it's a retreat
+# (TRANS_OD's Sprinting-Through backcheck). The old single TRANS_OD
+# bucket held both, so it retreated even when the opp was sloppy deep in
+# their own zone — the exact opposite of a forecheck.
 #
 # BREAKOUT vs TRANS_DO: both are "we possess, not in their DZ", split by
 # where the puck is. Deep in our own end the job is to break out safely
@@ -24,7 +37,7 @@ class_name AIPossessionState
 # oscillation (e.g., stick-on-stick contact during a strip) naturally —
 # we sample at the brain tick, not every physics tick.
 
-enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT }
+enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT, FORECHECK }
 
 class Result:
 	var state: int           # AIPossessionState.State enum value
@@ -103,7 +116,12 @@ static func compute(
 		else:
 			state = State.TRANS_DO
 	else:
-		state = State.DZONE if in_our_dz else State.TRANS_OD
+		if in_our_dz:
+			state = State.DZONE
+		elif in_their_dz:
+			state = State.FORECHECK
+		else:
+			state = State.TRANS_OD
 
 	return Result.make(state, carrier_team)
 

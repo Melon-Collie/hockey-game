@@ -781,6 +781,8 @@ func _team_state_label(state: int) -> String:
 			return "Neutral"
 		AIPossessionState.State.BREAKOUT:
 			return "Breakout"
+		AIPossessionState.State.FORECHECK:
+			return "Forecheck"
 		_:
 			return "?"
 
@@ -809,6 +811,12 @@ func _slot_label(slot: int) -> String:
 			return "BreakStrong"
 		AIRoleSlots.Slot.BREAKOUT_WEAK:
 			return "BreakWeak"
+		AIRoleSlots.Slot.F1_PRESSURE:
+			return "F1"
+		AIRoleSlots.Slot.F2_MID:
+			return "F2"
+		AIRoleSlots.Slot.F3_HIGH:
+			return "F3"
 		AIRoleSlots.Slot.CHASE:
 			return "Chase"
 		AIRoleSlots.Slot.FLANK_L:
@@ -1010,6 +1018,15 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			return AIRoleBreakout.decide(ctx, true)
 		AIRoleSlots.Slot.BREAKOUT_WEAK:
 			return AIRoleBreakout.decide(ctx, false)
+		AIRoleSlots.Slot.F1_PRESSURE:
+			# F1 reuses PRESSURE — goal-side cutoff of the carrier, already
+			# loose-puck-safe; follows the puck out and accepts the tag-up
+			# risk if the opp breaks out.
+			return AIRolePressure.decide(ctx)
+		AIRoleSlots.Slot.F2_MID:
+			return AIRoleForecheck.decide(ctx, false)
+		AIRoleSlots.Slot.F3_HIGH:
+			return AIRoleForecheck.decide(ctx, true)
 		AIRoleSlots.Slot.PRESSURE:
 			return AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.ANCHOR:

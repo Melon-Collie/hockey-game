@@ -49,6 +49,10 @@ enum Slot {
 	# carrier breaking the puck out:
 	BREAKOUT_STRONG,  # strong-side-wall outlet, free to advance up-ice.
 	BREAKOUT_WEAK,    # weak-side reverse valve, stays goal-side of carrier.
+	# FORECHECK (opp possesses in THEIR DZ). Conservative 1-1-1 press:
+	F1_PRESSURE,  # deep puck-pressurer (reuses PRESSURE). Accepts tag-up risk.
+	F2_MID,       # mid-lane breakout-pass read, high in the zone.
+	F3_HIGH,      # high safety at the opp blue line; first man back.
 	# NEUTRAL — loose puck, no clear possession. Race + hold shape.
 	CHASE,      # closest peer races to the puck for retrieval.
 	FLANK_L,    # left flank, defensive support behind puck.
@@ -96,6 +100,8 @@ static func slots_for_state(state: int) -> Array[int]:
 			return [Slot.CARRIER, Slot.OUTLET, Slot.SUPPORT]
 		AIPossessionState.State.BREAKOUT:
 			return [Slot.CARRIER, Slot.BREAKOUT_STRONG, Slot.BREAKOUT_WEAK]
+		AIPossessionState.State.FORECHECK:
+			return [Slot.F1_PRESSURE, Slot.F2_MID, Slot.F3_HIGH]
 		AIPossessionState.State.TRANS_OD:
 			return [Slot.PRESSURE, Slot.BACKCHECK, Slot.CONTAIN]
 		AIPossessionState.State.NEUTRAL:
@@ -221,6 +227,20 @@ static func assign(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
 					Slot.BREAKOUT_STRONG, strong_wall,
 					Slot.BREAKOUT_WEAK)
+
+		AIPossessionState.State.FORECHECK:
+			# Conservative 1-1-1: F1 pressures the puck deep, F3 is the
+			# high safety at the opp blue line (longest way home), F2 reads
+			# the mid-lane in between. F3 anchored at the opp blue line
+			# gets first claim so the safety is always filled even if the
+			# geometry is awkward; F1 then takes whoever of the remaining
+			# two is closest to the puck, and F2 takes the leftover.
+			var opp_blue := Vector3(0.0, 0.0, -signf(own_goal_z) * GameRules.BLUE_LINE_Z)
+			_assign_pair_then_remainder(
+					snapshot, teammates, fixed_peers, prev_assignments, result,
+					Slot.F3_HIGH, opp_blue,
+					Slot.F1_PRESSURE, puck_pos,
+					Slot.F2_MID)
 
 		AIPossessionState.State.NEUTRAL:
 			_assign_chase_and_flanks(
