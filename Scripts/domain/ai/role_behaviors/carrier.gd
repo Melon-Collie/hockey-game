@@ -580,6 +580,11 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	var self_velocity: Vector3 = ctx.self_velocity
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var own_goal_dir: float = ctx.own_goal_dir
+	# Our goalie feeds the turnover-cost term (how much a strip helps the
+	# opponent, dampened by our net coverage). Resolved once for all
+	# carry candidates. _scratch_our_defenders is already built by
+	# _build_action_opponents_lists earlier in _pick_action.
+	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 	var slot_pos: Vector3 = _slot_anchor(own_goal_dir)
 	# Polar forward direction: toward slot. Fallback to attacking-goal
 	# axis when degenerate (bot exactly at slot).
@@ -651,7 +656,22 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var intercept: float = AIActionScoring.carry_intercept_safety(
 				self_pos, candidate, local_time,
 				_scratch_opponents, _scratch_opponents_path)
-		var s_total: float = dest_score * lane * decay * safety * intercept
+		# Expected-value: benefit (offensive upside, kept byte-identical
+		# to the prior all-multiplicative score) minus the turnover cost.
+		# keep_prob = safety × intercept is the possession-protection
+		# probability; (1 - keep_prob) is the strip probability, so the
+		# loss-probability lives in exactly one place (no double-count
+		# with the benefit, which keeps its safety/intercept multipliers
+		# as the "value of arriving with the puck" discount). Loss point
+		# = the destination puck position — where a converging defender
+		# would strip it. Cost self-localizes: ~0 driving into the OZ,
+		# large driving into our own slot.
+		var benefit: float = dest_score * lane * decay * safety * intercept
+		var keep_prob: float = safety * intercept
+		var cost: float = AIActionScoring.turnover_cost(
+				cand_puck_pos, 1.0 - keep_prob, ctx.defending_goal_pos,
+				our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+		var s_total: float = benefit - cost
 		if s_total > best_score:
 			best_score = s_total
 			best_pos = candidate
@@ -677,7 +697,13 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var slot_intercept: float = AIActionScoring.carry_intercept_safety(
 				self_pos, slot_pos, slot_time,
 				_scratch_opponents, _scratch_opponents_path)
-		var slot_total: float = slot_dest_score * slot_lane * slot_decay * slot_safety * slot_intercept
+		# EV: same benefit − turnover_cost shape as the polar candidates.
+		var slot_benefit: float = slot_dest_score * slot_lane * slot_decay * slot_safety * slot_intercept
+		var slot_keep_prob: float = slot_safety * slot_intercept
+		var slot_cost: float = AIActionScoring.turnover_cost(
+				slot_puck_pos, 1.0 - slot_keep_prob, ctx.defending_goal_pos,
+				our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+		var slot_total: float = slot_benefit - slot_cost
 		if slot_total > best_score:
 			best_score = slot_total
 			best_pos = slot_pos
