@@ -45,11 +45,6 @@ const PICK_ACTION_PERIOD_TICKS: int = 8
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
-# UX nudge: bots prefer feeding humans on close-call passes. Capped
-# at 1.0 inside the loop so bias can't push a borderline pass above
-# a clearly-better one.
-const HUMAN_PASS_BIAS: float = 1.25
-
 # Quick-shot blade ROM cone: passes within this half-angle of facing
 # don't pay rotation cost (blade can fire from current facing).
 # Outside the cone, only the OVERSHOOT (angle - ROM) costs time.
@@ -530,11 +525,6 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# turnovers, large for own-zone ones. Loss point is the
 		# interceptor's spot on the lane.
 		var benefit: float = receiver_value * lane * time_decay
-		# UX nudge: bias the BENEFIT (not the net EV) toward feeding
-		# humans — scaling the post-cost EV would make a net-negative
-		# human pass score worse, inverting the nudge.
-		if NetworkManager.is_real_peer(peer_id):
-			benefit = minf(benefit * HUMAN_PASS_BIAS, 1.0)
 		var loss_point: Vector3 = AIActionScoring.lane_loss_point(
 				self_pos, receiver, _scratch_opponents, pass_speed)
 		var cost: float = AIActionScoring.turnover_cost(
