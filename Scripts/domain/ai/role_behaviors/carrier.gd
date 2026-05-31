@@ -416,9 +416,6 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 #     forward into nothing).
 #   - Hard zero for net-blocker (segment crosses net body) and
 #     own-DZ slot crossing (intercepted = goal-against).
-#
-# HUMAN_PASS_BIAS is a UX nudge — bots prefer feeding humans on
-# close-call passes.
 func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		teammate_ids: Array[int], goalie_now: Vector3) -> Array:
 	var snapshot: WorldSnapshot = ctx.snapshot
