@@ -54,5 +54,5 @@ func test_clear_resets_pending_claim() -> void:
 
 func test_receive_claim_with_null_puck_getter_is_noop() -> void:
 	# Empty Callables → puck/pc resolve to null → early return without crash.
-	resolver.receive_claim(1, 0.0, 50.0, 30.0)
+	resolver.receive_claim(1, 0.0, 30.0)
 	assert_eq(resolver._pending_peer_id, -1)

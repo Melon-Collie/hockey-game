@@ -15,6 +15,7 @@ extends Node3D
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
 @onready var _block_arm: Node3D = $BlockArm
+@onready var _stick_blade: CollisionShape3D = $BlockArm/Stick/StickBladeCollider
 
 @onready var _left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var _right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
@@ -86,6 +87,69 @@ func get_glove_position() -> Vector3:
 
 func get_blocker_position() -> Vector3:
 	return _block_arm.position
+
+# Pose accessors used by goalie_controller.get_state() to fill the
+# authoritative socket transforms broadcast in the world snapshot. All values
+# returned in goalie-local space; rotations in radians.
+func get_left_pad_position() -> Vector3:
+	return _left_pad.position
+
+func get_left_pad_rotation() -> Vector3:
+	return _left_pad.rotation
+
+func get_right_pad_position() -> Vector3:
+	return _right_pad.position
+
+func get_right_pad_rotation() -> Vector3:
+	return _right_pad.rotation
+
+func get_body_rotation() -> Vector3:
+	return _body.rotation
+
+func get_glove_rotation() -> Vector3:
+	return _glove.rotation
+
+func get_blocker_rotation() -> Vector3:
+	return _block_arm.rotation
+
+func get_head_yaw() -> float:
+	return _head.rotation.y
+
+# Stick blade world position. Used by the controller's goalie poke check —
+# the puck is magneted to the carrier's blade with no physics during carry,
+# so we can't rely on RigidBody contact firing. The check is host-side:
+# when this position is within poke radius of a carried puck, the goalie
+# strips the puck.
+func get_blade_world_position() -> Vector3:
+	return _stick_blade.global_position
+
+
+# Apply an authoritative pose snapshot directly to the body parts. Used by
+# both live client rendering (interpolated broadcast pose) and replay playback
+# — neither runs the local AI, so this writes the host's socket transforms
+# straight onto the scene nodes. Skips the body_config_builder entirely.
+# Rotations come in radians (matching the wire format); axes we don't carry on
+# the wire (body yaw, blocker/glove roll) are left intact so whatever was last
+# set survives.
+func apply_network_pose(state: GoalieNetworkState) -> void:
+	# Body + head positions are state-dependent (the pose builder hardcodes
+	# different y-heights per state — body 0.46 in butterfly, 1.16 standing
+	# etc.). The wire format doesn't carry them, so derive from state_enum
+	# via the pose builder's lookup. Without this the chest/head freeze at
+	# the scene-default standing height while the legs animate, which reads
+	# as a floating head over crouching pads.
+	_body.position = GoalieBodyConfigBuilder.resting_body_position_for_state(state.state_enum)
+	_body.rotation = Vector3(state.body_pitch, _body.rotation.y, state.body_roll)
+	_head.position = GoalieBodyConfigBuilder.resting_head_position_for_state(state.state_enum)
+	_head.rotation = Vector3(_head.rotation.x, state.head_yaw, _head.rotation.z)
+	_left_pad.position = state.left_pad_offset
+	_left_pad.rotation = Vector3(state.left_pad_pitch, _left_pad.rotation.y, state.left_pad_roll)
+	_right_pad.position = state.right_pad_offset
+	_right_pad.rotation = Vector3(state.right_pad_pitch, _right_pad.rotation.y, state.right_pad_roll)
+	_glove.position = state.glove_offset
+	_glove.rotation = Vector3(state.glove_pitch, state.glove_yaw, _glove.rotation.z)
+	_block_arm.position = state.blocker_offset
+	_block_arm.rotation = Vector3(state.blocker_pitch, state.blocker_yaw, _block_arm.rotation.z)
 
 func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
 	part.position = part.position.lerp(target_pos, t)

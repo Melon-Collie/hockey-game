@@ -5,14 +5,6 @@ const PICKUP_RADIUS: float = 0.5
 const POKE_RADIUS: float = GameRules.POKE_RADIUS_M
 const CONTEST_SQUIRT_SPEED: float = 3.0
 
-# Crease pushout — frees a puck stuck under the goalie. If a loose puck sits
-# nearly stationary inside a crease for CREASE_PUSHOUT_DELAY seconds, the host
-# kicks it outward at CREASE_PUSHOUT_SPEED. Naturally retries (timer resets to
-# 0 after each kick) if the first kick doesn't dislodge it.
-const CREASE_PUSHOUT_DELAY: float = 2.0
-const CREASE_PUSHOUT_SPEED: float = 3.0
-const CREASE_STATIONARY_SPEED: float = 0.5
-
 @export var interpolation_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
 @export var extrapolation_max_ms: float = 50.0
 # Velocity decay applied during extrapolation to approximate ice friction.
@@ -52,7 +44,6 @@ var is_extrapolating: bool = false
 var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
 var _post_contact_timer: float = -1.0    # >= 0 while suppressing reconcile after a bounce
 var _rejoin_blend_from_pos: Vector3 = Vector3.ZERO
-var _crease_idle_timer: float = 0.0      # server-only; seconds loose & stationary in a crease
 
 func get_buffer_depth() -> int:
 	return _state_buffer.size()
@@ -109,7 +100,6 @@ func _physics_process(delta: float) -> void:
 		return
 	if is_server:
 		_check_interactions()
-		_tick_crease_pushout(delta)
 		_prev_puck_pos = puck.get_puck_position()
 		return
 	if _rejoin_blend_elapsed >= 0.0:
@@ -234,31 +224,6 @@ func _check_interactions() -> void:
 				else:
 					puck.apply_blade_deflect(skater)
 				break
-
-
-# ── Crease Pushout ───────────────────────────────────────────────────────────
-# Frees a puck that sits stationary in a crease (typically wedged under the
-# goalie). Speed gate uses puck velocity; any blade deflect / body block / poke
-# bumps the puck above the threshold so legitimate play resets the timer for
-# free. Pickup also resets via the carrier check.
-func _tick_crease_pushout(delta: float) -> void:
-	if puck.carrier != null or puck.pickup_locked:
-		_crease_idle_timer = 0.0
-		return
-	var puck_pos: Vector3 = puck.get_puck_position()
-	var puck_xz: Vector2 = Vector2(puck_pos.x, puck_pos.z)
-	if not CreaseRules.is_in_crease(puck_xz):
-		_crease_idle_timer = 0.0
-		return
-	if puck.get_puck_velocity().length() > CREASE_STATIONARY_SPEED:
-		_crease_idle_timer = 0.0
-		return
-	_crease_idle_timer += delta
-	if _crease_idle_timer < CREASE_PUSHOUT_DELAY:
-		return
-	var outward: Vector2 = CreaseRules.outward_direction(puck_xz)
-	puck.set_puck_velocity(Vector3(outward.x, 0.0, outward.y) * CREASE_PUSHOUT_SPEED)
-	_crease_idle_timer = 0.0
 
 
 # ── Local Prediction ──────────────────────────────────────────────────────────

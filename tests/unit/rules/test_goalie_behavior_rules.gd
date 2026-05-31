@@ -295,18 +295,6 @@ func test_slide_destination_matches_arc_at_butterfly_depth() -> void:
 	assert_almost_eq(slide.x, arc.x, 0.001)
 	assert_almost_eq(slide.y, arc.y, 0.001)
 
-# ── should_commit_slide ──────────────────────────────────────────────────────
-
-func test_slide_trigger_below_threshold_does_not_commit() -> void:
-	assert_false(GoalieBehaviorRules.should_commit_slide(0.0, 0.3, 0.5))
-
-func test_slide_trigger_above_threshold_commits() -> void:
-	assert_true(GoalieBehaviorRules.should_commit_slide(0.0, 0.6, 0.5))
-
-func test_slide_trigger_negative_delta_uses_absolute_value() -> void:
-	# Threat moved hard to the left — still triggers a slide.
-	assert_true(GoalieBehaviorRules.should_commit_slide(0.0, -0.7, 0.5))
-
 # ── threat_distance_to_goal ──────────────────────────────────────────────────
 
 func test_threat_distance_euclidean() -> void:
@@ -314,3 +302,116 @@ func test_threat_distance_euclidean() -> void:
 		Vector3(3, 0, 22.6), 26.6, 0.0)
 	# dx=3, dz=-4 → sqrt(9+16) = 5
 	assert_almost_eq(d, 5.0, 0.001)
+
+# ── should_react_to_puck ─────────────────────────────────────────────────────
+
+func _reaction_cfg() -> GoalieBehaviorRules.UniversalReactionConfig:
+	var cfg := GoalieBehaviorRules.UniversalReactionConfig.new()
+	cfg.min_speed = 1.0  # anti-jitter floor only
+	cfg.max_time_to_impact = 0.6
+	cfg.net_half_width = 0.915
+	cfg.net_margin = 0.5
+	return cfg
+
+func test_react_to_fast_puck_on_target() -> void:
+	# Puck at (0, 0, 20) heading +Z fast → on track for goal at z=26.6.
+	assert_true(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 20), Vector3(0, 0, 20),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_to_slow_trickler_at_doorstep() -> void:
+	# The case that motivated removing the speed gate: a puck oozing at 2 m/s
+	# from 0.6m out (t = 0.3s < 0.6) on a line into the net MUST trigger a
+	# reaction — standing there while it trickles between the legs is the bug.
+	assert_true(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 26.0), Vector3(0, 0, 2),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_essentially_stationary_puck() -> void:
+	# Below the anti-jitter floor (0.3 m/s < 1.0) — a near-dead puck whose
+	# direction wobbles shouldn't twitch the goalie into a reaction.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 26.2), Vector3(0, 0, 0.3),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_slow_puck_far_away() -> void:
+	# Slow AND far → long ETA, correctly ignored. 4 m/s from z=20 is 1.65s out,
+	# past the max_time_to_impact window. The ETA gate (not a speed gate) is
+	# what filters this — the goalie has time to track it normally first.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 20), Vector3(0, 0, 4),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_puck_moving_away() -> void:
+	# Negative vz away from the goal.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 20), Vector3(0, 0, -15),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_puck_off_target() -> void:
+	# Fast and arriving within max_time_to_impact, but landing wide of the net.
+	# t = (26.6 - 20) / 15 = 0.44s; impact_x = 5 × 0.44 = 2.2m, outside the
+	# (0.915 + 0.5) = 1.415m allowed window. Filter must catch the lateral
+	# miss specifically, not bounce on the eta gate.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 20), Vector3(5, 0, 15),
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_skips_far_puck_with_long_eta() -> void:
+	# Fast puck but very far away → t_to_impact > max_time_to_impact.
+	assert_false(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(0, 0, 0), Vector3(0, 0, 10),  # t = 26.6 / 10 = 2.66s > 0.6
+		26.6, 0.0, _reaction_cfg()))
+
+func test_react_fires_on_bounced_puck() -> void:
+	# Off-board bounce — puck coming at the net from a sharp angle, fast.
+	# Velocity vector blends X + Z components; check we still react.
+	assert_true(GoalieBehaviorRules.should_react_to_puck(
+		Vector3(2, 0, 22), Vector3(-3, 0, 15),
+		26.6, 0.0, _reaction_cfg()))
+
+# ── lateral_puck_velocity_in_slot ────────────────────────────────────────────
+
+func test_cross_crease_pass_detected_in_slot() -> void:
+	# Puck in slot zone, moving primarily sideways (vx = 8, vz = 1, ratio 8.0).
+	# direction_sign = -1 (defends +Z goal at z=26.6, slot 5m in front).
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 23.5), Vector3(8, 0, 1),
+		26.6, -1, 5.0, 1.5)
+	assert_almost_eq(vx, 8.0, 0.001)
+
+func test_cross_crease_returns_zero_when_puck_moves_forward() -> void:
+	# Puck in slot but heading toward net (forward dominates lateral).
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 23.5), Vector3(2, 0, 10),
+		26.6, -1, 5.0, 1.5)
+	assert_eq(vx, 0.0)
+
+func test_cross_crease_returns_zero_outside_slot() -> void:
+	# Puck way back, even if moving sideways fast — not a slot pass yet.
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 18), Vector3(10, 0, 1),
+		26.6, -1, 5.0, 1.5)
+	assert_eq(vx, 0.0)
+
+func test_cross_crease_returns_zero_when_puck_behind_goal_line() -> void:
+	# Puck behind the goal — not in front, no reaction.
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 27.5), Vector3(8, 0, 0),
+		26.6, -1, 5.0, 1.5)
+	assert_eq(vx, 0.0)
+
+func test_cross_crease_signed_velocity() -> void:
+	# Pass going LEFT should return negative.
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, 23.5), Vector3(-8, 0, 1),
+		26.6, -1, 5.0, 1.5)
+	assert_almost_eq(vx, -8.0, 0.001)
+
+func test_cross_crease_works_for_other_team() -> void:
+	# Team that defends -Z goal: direction_sign = +1, goal_line_z = -26.6.
+	# Slot is in front of THAT goal (puck.z near goal at z=-26.6).
+	var vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
+		Vector3(0, 0, -23.5), Vector3(8, 0, -1),
+		-26.6, 1, 5.0, 1.5)
+	assert_almost_eq(vx, 8.0, 0.001)

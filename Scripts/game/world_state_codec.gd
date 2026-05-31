@@ -12,10 +12,10 @@ extends RefCounted
 #      u16 ws_sequence, f32 host_capture_time, u8 num_skaters
 #      [u32 peer_id, skater_bytes(35), u8 queue_depth] × num_skaters
 #      puck_bytes(12)
-#      u8 num_goalies, [goalie_bytes(12)] × num_goalies
+#      u8 num_goalies, [goalie_bytes(35)] × num_goalies
 #      u8 score0, u8 score1, u8 phase, u8 period, u16 time_remaining
 #
-#    Total for 6 players + 2 goalies: 302 bytes (well under 1392-byte ENet MTU)
+#    Total for 6 players + 2 goalies: 348 bytes (well under 1392-byte ENet MTU)
 #
 #    Quantization layout:
 #      Skater  (37 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s,
@@ -25,7 +25,17 @@ extends RefCounted
 #                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]),
 #                      shot_charge u8
 #      Puck    (12 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
-#      Goalie  (12 B): pos_x s16@1cm, pos_z s16@1cm, rot_y s16@π/32767, state u8, fho u8, vel_x s16@0.02m/s, vel_z s16@0.02m/s
+#      Goalie  (35 B): root (12 B) + pose (23 B). Root:
+#                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
+#                      vel_x/z s16@0.02m/s.
+#                      Pose: body_pitch/roll s8@π/127; left_pad offset (s8×3@1cm)
+#                      + pitch/roll s8@π/127; right_pad same; glove offset s8×3
+#                      + yaw/pitch s8@π/127; blocker same; head_yaw s8@π/127.
+#                      Stick rides the blocker socket (rigid IRL attachment),
+#                      so no separate stick fields on the wire. Pose is
+#                      broadcast for replay/sync fidelity; clients currently
+#                      still recompute body parts via local AI — render-from-
+#                      broadcast swap is the next step in the goalie overhaul.
 #
 # 2. Stats  (reliable, event-driven):
 #      [pid, G, A, SOG, HITS, BLK] × N players
@@ -46,7 +56,7 @@ signal queue_depth_feedback(depth: int)
 const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + f32 host_capture_time (4) + u8 num_skaters (1)
 const SKATER_BLOCK_SIZE: int = 42  # u32 peer_id (4) + 37B skater state + u8 queue_depth (1)
 const PUCK_BLOCK_SIZE: int = 12    # 11B pos+vel + 1B carrier_idx
-const GOALIE_BLOCK_SIZE: int = 12
+const GOALIE_BLOCK_SIZE: int = 35
 const GAME_STATE_BLOCK_SIZE: int = 6  # 4×u8 + u16 time_remaining
 const STATS_PLAYER_RECORD_SIZE: int = 6  # peer_id, G, A, SOG, HITS, BLK
 
@@ -433,11 +443,22 @@ static func _decode_puck_quantized(b: PackedByteArray) -> PuckNetworkState:
 	return s
 
 
-# Goalie: 12 bytes
-# Offsets: pos_x(0..1) pos_z(2..3) rot_y(4..5) state(6) fho(7) vel_x(8..9) vel_z(10..11)
+# Goalie: 35 bytes — 12 root + 23 pose. See top-of-file layout comment.
+# Root offsets:   pos_x(0..1) pos_z(2..3) rot_y(4..5) state(6) fho(7) vel_x(8..9) vel_z(10..11)
+# Pose offsets:   body_pitch(12) body_roll(13)
+#                 left_pad_offset(14..16) left_pad_pitch(17) left_pad_roll(18)
+#                 right_pad_offset(19..21) right_pad_pitch(22) right_pad_roll(23)
+#                 glove_offset(24..26) glove_yaw(27) glove_pitch(28)
+#                 blocker_offset(29..31) blocker_yaw(32) blocker_pitch(33)
+#                 head_yaw(34)
+# Offset quantization: s8 @1cm (range ±1.27m, ample for ±0.85m glove reach).
+# Angle quantization:  s8 @π/127 (~1.43° precision, full ±π range).
+const _POSE_OFFSET_SCALE: float = 100.0
+const _POSE_ANGLE_SCALE: float = 127.0 / PI
+
 static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
 	var b := PackedByteArray()
-	b.resize(12)
+	b.resize(GOALIE_BLOCK_SIZE)
 	var o: int = 0
 	b.encode_s16(o, clampi(roundi(s.position_x * 100.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.position_z * 100.0), -32768, 32767)); o += 2
@@ -445,12 +466,28 @@ static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
 	b.encode_u8(o, s.state_enum); o += 1
 	b.encode_u8(o, clampi(roundi(s.five_hole_openness * 255.0), 0, 255)); o += 1
 	b.encode_s16(o, clampi(roundi(s.velocity_x * 50.0), -32768, 32767)); o += 2
-	b.encode_s16(o, clampi(roundi(s.velocity_z * 50.0), -32768, 32767))
+	b.encode_s16(o, clampi(roundi(s.velocity_z * 50.0), -32768, 32767)); o += 2
+	# Pose block
+	b.encode_s8(o, _quant_angle(s.body_pitch)); o += 1
+	b.encode_s8(o, _quant_angle(s.body_roll)); o += 1
+	o = _encode_offset(b, o, s.left_pad_offset)
+	b.encode_s8(o, _quant_angle(s.left_pad_pitch)); o += 1
+	b.encode_s8(o, _quant_angle(s.left_pad_roll)); o += 1
+	o = _encode_offset(b, o, s.right_pad_offset)
+	b.encode_s8(o, _quant_angle(s.right_pad_pitch)); o += 1
+	b.encode_s8(o, _quant_angle(s.right_pad_roll)); o += 1
+	o = _encode_offset(b, o, s.glove_offset)
+	b.encode_s8(o, _quant_angle(s.glove_yaw)); o += 1
+	b.encode_s8(o, _quant_angle(s.glove_pitch)); o += 1
+	o = _encode_offset(b, o, s.blocker_offset)
+	b.encode_s8(o, _quant_angle(s.blocker_yaw)); o += 1
+	b.encode_s8(o, _quant_angle(s.blocker_pitch)); o += 1
+	b.encode_s8(o, _quant_angle(s.head_yaw))
 	return b
 
 
 static func _decode_goalie_quantized(b: PackedByteArray) -> GoalieNetworkState:
-	if b.size() < 12:
+	if b.size() < GOALIE_BLOCK_SIZE:
 		push_warning("WorldStateCodec: truncated goalie block (%d bytes)" % b.size())
 		return GoalieNetworkState.new()
 	var s := GoalieNetworkState.new()
@@ -461,5 +498,41 @@ static func _decode_goalie_quantized(b: PackedByteArray) -> GoalieNetworkState:
 	s.state_enum = b.decode_u8(o); o += 1
 	s.five_hole_openness = b.decode_u8(o) / 255.0; o += 1
 	s.velocity_x = b.decode_s16(o) / 50.0; o += 2
-	s.velocity_z = b.decode_s16(o) / 50.0
+	s.velocity_z = b.decode_s16(o) / 50.0; o += 2
+	# Pose block
+	s.body_pitch = _dequant_angle(b.decode_s8(o)); o += 1
+	s.body_roll = _dequant_angle(b.decode_s8(o)); o += 1
+	s.left_pad_offset = _decode_offset(b, o); o += 3
+	s.left_pad_pitch = _dequant_angle(b.decode_s8(o)); o += 1
+	s.left_pad_roll = _dequant_angle(b.decode_s8(o)); o += 1
+	s.right_pad_offset = _decode_offset(b, o); o += 3
+	s.right_pad_pitch = _dequant_angle(b.decode_s8(o)); o += 1
+	s.right_pad_roll = _dequant_angle(b.decode_s8(o)); o += 1
+	s.glove_offset = _decode_offset(b, o); o += 3
+	s.glove_yaw = _dequant_angle(b.decode_s8(o)); o += 1
+	s.glove_pitch = _dequant_angle(b.decode_s8(o)); o += 1
+	s.blocker_offset = _decode_offset(b, o); o += 3
+	s.blocker_yaw = _dequant_angle(b.decode_s8(o)); o += 1
+	s.blocker_pitch = _dequant_angle(b.decode_s8(o)); o += 1
+	s.head_yaw = _dequant_angle(b.decode_s8(o))
 	return s
+
+
+static func _quant_angle(a: float) -> int:
+	return clampi(roundi(a * _POSE_ANGLE_SCALE), -128, 127)
+
+static func _dequant_angle(q: int) -> float:
+	return q / _POSE_ANGLE_SCALE
+
+static func _encode_offset(b: PackedByteArray, o: int, v: Vector3) -> int:
+	b.encode_s8(o, clampi(roundi(v.x * _POSE_OFFSET_SCALE), -128, 127))
+	b.encode_s8(o + 1, clampi(roundi(v.y * _POSE_OFFSET_SCALE), -128, 127))
+	b.encode_s8(o + 2, clampi(roundi(v.z * _POSE_OFFSET_SCALE), -128, 127))
+	return o + 3
+
+static func _decode_offset(b: PackedByteArray, o: int) -> Vector3:
+	return Vector3(
+		b.decode_s8(o) / _POSE_OFFSET_SCALE,
+		b.decode_s8(o + 1) / _POSE_OFFSET_SCALE,
+		b.decode_s8(o + 2) / _POSE_OFFSET_SCALE,
+	)

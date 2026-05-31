@@ -1716,13 +1716,18 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	_shot_tracker.on_deflection(pid)
 	_shot_tracker.on_shot_started(pid)
 	var rtt_half: float = rtt_ms / 2000.0
+	# Lag-comp the goalie reaction trigger (see on_remote_puck_release for the
+	# full rationale). One-timers go through the same RPC-back-date flow.
+	var release_back_date: float = maxf(NetworkManager.estimated_host_time() - host_timestamp, 0.0)
+	for gc: GoalieController in goalie_controllers:
+		gc.set_pending_reaction_back_date(release_back_date)
 	var saved_goalie_positions: Array[Vector3] = []
 	var saved_goalie_rotations: Array[float] = []
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() and rtt_ms > 0.0:
-		# Goalie was REMOTE-view from the shooter — the client doesn't interpolate
-		# the goalie, but the client's goalie AI tracks the interpolated puck, so
-		# the shooter saw the goalie in a position deterministically derived from
-		# the puck at host_time - interp_delay. See LagCompRewind for derivation.
+		# Goalie was REMOTE-view from the shooter — clients render the goalie
+		# from buffered host snapshots at host_time - interp_delay, so the
+		# shooter saw the goalie at that earlier moment. Rewind to that snapshot
+		# for fair puck/goalie geometry at the release. See LagCompRewind.
 		var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 		var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 		for gc: GoalieController in goalie_controllers:
@@ -1775,12 +1780,22 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 			if shooter_record != null and shooter_record.skater != null:
 				skater_vel = shooter_record.skater.velocity
 				skater_vel.y = 0.0
+		# Lag-comp the goalie reaction trigger: back-date the reaction timers
+		# by the one-way trip (now - shooter's host_timestamp) so the goalie
+		# gets the same effective reaction window the shooter perceived
+		# locally. Without this, the host's reaction starts RTT/2 after the
+		# shooter saw the puck leave the stick, eating ~28% of the arm delay
+		# on a 100ms RTT and flipping close-range saves into goals.
+		var release_back_date: float = maxf(NetworkManager.estimated_host_time() - host_timestamp, 0.0)
+		for gc: GoalieController in goalie_controllers:
+			gc.set_pending_reaction_back_date(release_back_date)
 		var saved_goalie_positions: Array[Vector3] = []
 		var saved_goalie_rotations: Array[float] = []
 		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0:
 			# Goalie is REMOTE-view from the shooter — same derivation as the
-			# one-timer rewind above. The shooter saw the goalie reacting to the
-			# puck at host_time - interp_delay; rewind to that snapshot.
+			# one-timer rewind above. The shooter saw the goalie at
+			# host_time - interp_delay (the buffered render path); rewind to
+			# that snapshot for fair puck/goalie geometry at the release moment.
 			var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 			var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 			for gc: GoalieController in goalie_controllers:

@@ -33,6 +33,13 @@ var blocker_max_yaw_deg: float = 60.0
 # Body lean into the reach side during elevated saves.
 var body_lean_max_deg: float = 14.0
 var body_lean_reach_norm: float = 0.7
+# Shoulder-save pitch. Forward for low-chest shots, back for upper-body / head
+# shots. Applied additively on top of each state's resting body pitch so the
+# butterfly's existing -10° forward lean still holds at neutral height.
+var shoulder_pitch_y_neutral: float = 0.95
+var shoulder_pitch_forward_max_deg: float = 8.0
+var shoulder_pitch_back_max_deg: float = 5.0
+var shoulder_pitch_y_range: float = 0.55
 
 # Reach height clamp + rest Z for the glove/blocker target.
 var react_hand_y_min: float = 0.50
@@ -58,6 +65,34 @@ const STICK_TILT_READY: float = 22.0
 const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
 const STICK_TILT_RVH: float = 65.0
 
+# Active blade intent: max yaw on the blocker assembly to point the blade
+# toward a close-range threat. Smaller cap than the elevated-shot reach yaw
+# because the blocker pad is rigidly attached — swinging too far moves the
+# whole pad off the right side of the body.
+var active_blade_max_yaw_deg: float = 25.0
+# Forward depth fed into the yaw atan2. Treating the threat as if it's
+# `active_blade_lookahead` metres in front means a small lateral offset still
+# produces a readable rotation (rather than the blade hard-snapping to 90°
+# whenever the puck is even slightly off-centre).
+var active_blade_lookahead: float = 1.5
+# Lunge forward extension at peak. Pushes c.blocker_pos forward (in goalie-
+# local -Z, the slot direction). Sin-curved by the controller's
+# lunge_progress so it reads as a quick jab.
+var lunge_extension: float = 0.35
+var standing_sweep_max_yaw_deg: float = 45.0
+var standing_sweep_y_drop: float = 0.04
+var standing_sweep_x_extension: float = 0.06
+# Paddle-down sweep tunables (BUTTERFLY-family only). Larger yaw cap than the
+# upright-state active blade intent because the blocker pad sliding laterally
+# is fine when the pads are already on the ice (it's part of the sweep
+# motion). Y drop lowers the blocker hand so the paddle/blade trace closer to
+# the ice. X extension pushes the assembly slightly toward the puck side so
+# the blade reaches further laterally without yaw alone having to do all the
+# work.
+var paddle_sweep_max_yaw_deg: float = 65.0
+var paddle_sweep_y_drop: float = 0.08
+var paddle_sweep_x_extension: float = 0.10
+
 # Per-tick input bundle. Controller scratches one instance and overwrites all
 # fields before each `build()` call.
 class Inputs:
@@ -81,6 +116,26 @@ class Inputs:
 	# the position-derived `_puck_velocity_est` estimate.
 	var puck_position: Vector3 = Vector3.ZERO
 	var puck_velocity_est: Vector3 = Vector3.ZERO
+	# Active blade intent — set by the controller when there's a close-range
+	# opposing threat. The pose builder applies a small yaw on the blocker
+	# assembly so the stick blade points toward the puck side, making the
+	# stick a deliberate obstacle the carrier has to dangle around. Elevated
+	# shot reactions still override this (they have their own yaw math).
+	var blade_intent_active: bool = false
+	# Paddle-down sweep: stronger version of blade intent for BUTTERFLY-family
+	# states. Lowers the blocker hand toward the ice + yaws more aggressively
+	# toward the puck so the paddle traces flat across the front of the
+	# crease. Replaces (not stacks with) blade_intent_active in the down
+	# states.
+	var paddle_sweep_active: bool = false
+	# Standing sweep — upright equivalent of paddle-down sweep. Triggered
+	# specifically against slow / stationary carriers and loose pucks at
+	# close range, where the goalie has time to commit a sustained reach.
+	# Replaces (not stacks with) blade_intent_active in the upright states.
+	var standing_sweep_active: bool = false
+	# Lunge progress, sin-curved 0 → 1 → 0 over the active window. Pose
+	# builder scales the forward blocker extension by this value.
+	var lunge_progress: float = 0.0
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -88,18 +143,35 @@ var _scratch: GoalieBodyConfig = GoalieBodyConfig.new()
 
 func build(inputs: Inputs) -> GoalieBodyConfig:
 	var c: GoalieBodyConfig = _scratch
+	# Per-state baseline pose, then active blade intent (small yaw toward a
+	# close-range threat), then elevated-shot reach (overrides the yaw with
+	# its own intercept math when reacting). RVH skips both — post-hug pose
+	# is committed.
 	match inputs.state:
 		GoalieStateMachine.State.STANDING:
 			_set_standing_pose(c, inputs)
+			_apply_blade_intent_for_upright_state(c, inputs)
+			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.READY, GoalieStateMachine.State.RECOVERING:
 			_set_ready_pose(c, inputs)
+			_apply_blade_intent_for_upright_state(c, inputs)
+			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
-		GoalieStateMachine.State.BUTTERFLY:
+		GoalieStateMachine.State.BUTTERFLY, GoalieStateMachine.State.COILING:
+			# COILING shares the butterfly pose — pads on the ice, body
+			# squared up. The body rotation is driven separately by the
+			# controller's _update_facing branch and the pivot-foot motion
+			# is driven by _update_position; the pose builder doesn't need
+			# to model the planted-leg weight shift directly.
 			_set_butterfly_pose(c, inputs)
+			_apply_blade_intent_for_down_state(c, inputs)
+			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.SLIDING:
 			_set_sliding_pose(c, inputs)
+			_apply_blade_intent_for_down_state(c, inputs)
+			_apply_lunge(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.RVH_LEFT:
 			_set_rvh_left_pose(c)
@@ -108,6 +180,36 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 	if not catches_left:
 		_mirror_hands(c)
 	return c
+
+# State-dependent body / head positions. The pose builder hardcodes these
+# inside each per-state function, but the replay path needs them WITHOUT
+# running the full pose pipeline (which depends on slide/reaction state
+# the replay snapshot doesn't carry). This static lookup mirrors the
+# values in `_set_*_pose` below — keep in sync if those change.
+static func resting_body_position_for_state(state: int) -> Vector3:
+	match state:
+		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.16,  0.0)
+		GoalieStateMachine.State.READY:                           return Vector3(0.0,  1.00, -0.05)
+		GoalieStateMachine.State.RECOVERING:                      return Vector3(0.0,  1.00, -0.05)
+		GoalieStateMachine.State.BUTTERFLY:                       return Vector3(0.0,  0.46,  0.0)
+		GoalieStateMachine.State.COILING:                         return Vector3(0.0,  0.46,  0.0)
+		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.46,  0.0)
+		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 0.66, 0.05)
+		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 0.66, 0.05)
+	return Vector3(0.0, 1.16, 0.0)
+
+static func resting_head_position_for_state(state: int) -> Vector3:
+	match state:
+		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.69,  0.08)
+		GoalieStateMachine.State.READY:                           return Vector3(0.0,  1.48, -0.22)
+		GoalieStateMachine.State.RECOVERING:                      return Vector3(0.0,  1.48, -0.22)
+		GoalieStateMachine.State.BUTTERFLY:                       return Vector3(0.0,  0.99, -0.06)
+		GoalieStateMachine.State.COILING:                         return Vector3(0.0,  0.99, -0.06)
+		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.99, -0.06)
+		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 1.19, 0.08)
+		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 1.19, 0.08)
+	return Vector3(0.0, 1.69, 0.08)
+
 
 func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.left_pad_pos  = Vector3(-0.22 - inputs.five_hole_openness, 0.44, -0.20)
@@ -246,6 +348,122 @@ func _mirror_hands(c: GoalieBodyConfig) -> void:
 # forward of the goal line (~0.4-1.2 m) so the puck passes through the glove's
 # plane before reaching the goal. Falls back to the goal-line impact value
 # if the intercept can't be computed.
+# Active blade intent: when an opposing shooter is close, yaw the blocker
+# assembly so the stick blade points toward the puck side. Bot skaters
+# stickhandle around exposed blades (see `_stickhandle_offset` in
+# skater_agent_state_machine.gd), so an intent-driven stick makes the goalie
+# meaningfully harder to dangle around without anything as crude as a "poke
+# check" verb. Capped at active_blade_max_yaw_deg so the blocker pad doesn't
+# swing all the way off the right side.
+#
+# Skipped during shot reactions — _apply_elevated_shot_reaction runs next and
+# has its own intercept-based yaw math that should win.
+func _apply_active_blade_intent(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if not inputs.blade_intent_active:
+		return
+	if inputs.reacting_to_shot:
+		return
+	# Puck position in goalie-local X (matches the convention used by
+	# _apply_elevated_shot_reaction: the +Z-defending goalie is rotated PI in
+	# world so its local +X is global -X).
+	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
+	# Treat the puck as `active_blade_lookahead` metres in front of the
+	# goalie so the yaw scales with lateral offset (atan2 against a fixed
+	# depth) instead of hard-snapping. Same sign convention as the elevated
+	# reach's blocker_yaw calc.
+	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
+	c.blocker_rot = Vector3(
+			c.blocker_rot.x,
+			clampf(yaw_deg, -active_blade_max_yaw_deg, active_blade_max_yaw_deg),
+			c.blocker_rot.z)
+
+
+# Dispatch the right blade-intent helper for the BUTTERFLY-family states.
+# Paddle-down sweep, when active, is a stronger version of the upright
+# active-blade-intent yaw — it replaces (not stacks with) the active intent
+# so we don't double-apply the yaw math.
+func _apply_blade_intent_for_down_state(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.paddle_sweep_active:
+		_apply_paddle_sweep(c, inputs)
+	else:
+		_apply_active_blade_intent(c, inputs)
+
+
+# Dispatch the right blade-intent helper for the STANDING / READY /
+# RECOVERING states. Standing sweep (more reach, lateral push, slight
+# paddle drop) replaces the subtle active-blade-intent yaw when the
+# carrier is slow / stationary — coaches teach being more aggressive
+# with the stick when the puck isn't moving fast enough to surprise you.
+func _apply_blade_intent_for_upright_state(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.standing_sweep_active:
+		_apply_standing_sweep(c, inputs)
+	else:
+		_apply_active_blade_intent(c, inputs)
+
+
+# Standing sweep: upright version of the butterfly paddle-down sweep. Yaws
+# the blocker assembly more aggressively toward the puck side, pushes
+# slightly laterally, and drops the hand a bit so the blade traces lower.
+# Smaller magnitudes than _apply_paddle_sweep because in standing the
+# blocker pad sits right next to the body — large yaw / push swings the
+# pad off the body in a way that reads wrong without "pads already on
+# the ice" to justify it. Skipped during shot reactions.
+func _apply_standing_sweep(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.reacting_to_shot:
+		return
+	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
+	var side: float = signf(puck_local_x)
+	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
+	c.blocker_rot = Vector3(
+			c.blocker_rot.x,
+			clampf(yaw_deg, -standing_sweep_max_yaw_deg, standing_sweep_max_yaw_deg),
+			c.blocker_rot.z)
+	c.blocker_pos = Vector3(
+			c.blocker_pos.x + side * standing_sweep_x_extension,
+			c.blocker_pos.y - standing_sweep_y_drop,
+			c.blocker_pos.z)
+
+
+# Paddle-down sweep: blocker hand drops toward the ice and the assembly
+# yaws (and shifts laterally) aggressively toward the puck side, so the
+# paddle traces a wider arc flat across the front of the crease. Replaces
+# the upright active blade intent in BUTTERFLY-family states when active.
+# Skipped during shot reactions — the reach math wins.
+func _apply_paddle_sweep(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.reacting_to_shot:
+		return
+	# Same goalie-local-X math as the elevated shot reach + active blade
+	# intent (+Z-defending goalie's local +X is global -X).
+	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
+	var side: float = signf(puck_local_x)
+	# Larger lookahead than the upright active intent so a small wiggle
+	# doesn't whip the swept paddle — sweeps should commit to a direction.
+	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
+	c.blocker_rot = Vector3(
+			c.blocker_rot.x,
+			clampf(yaw_deg, -paddle_sweep_max_yaw_deg, paddle_sweep_max_yaw_deg),
+			c.blocker_rot.z)
+	c.blocker_pos = Vector3(
+			c.blocker_pos.x + side * paddle_sweep_x_extension,
+			c.blocker_pos.y - paddle_sweep_y_drop,
+			c.blocker_pos.z)
+
+
+# Lunge: push the blocker assembly forward (goalie-local -Z) by the
+# lunge_progress fraction of lunge_extension. The blocker pad and stick are
+# rigid, so the entire arm jabs forward — blade moves with it. Skipped
+# during shot reactions (the reach math wins).
+func _apply_lunge(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.lunge_progress <= 0.0:
+		return
+	if inputs.reacting_to_shot:
+		return
+	c.blocker_pos = Vector3(
+			c.blocker_pos.x,
+			c.blocker_pos.y,
+			c.blocker_pos.z - lunge_extension * inputs.lunge_progress)
+
+
 func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	if not inputs.reacting_to_shot or not inputs.shot_is_elevated:
 		return
@@ -273,7 +491,21 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	var lean_factor: float = clampf(absf(impact_local_x) / maxf(body_lean_reach_norm, 0.001), 0.0, 1.0)
 	var lean_sign: float = signf(-impact_local_x)
 	var lean_deg: float = lean_sign * lean_factor * body_lean_max_deg
-	c.body_rot = Vector3(c.body_rot.x, c.body_rot.y, lean_deg)
+	# Shoulder-save pitch: forward for low-chest shots, back for upper-body /
+	# head shots. Engages independently of lateral reach so a centre-chest shot
+	# still gets a visible commit (no "arms flopping alone" look). Additive so
+	# the state's resting pitch (e.g. butterfly's -10° forward lean) is
+	# preserved at neutral height.
+	var pitch_deg: float = 0.0
+	if intercept_y < shoulder_pitch_y_neutral:
+		var p: float = clampf((shoulder_pitch_y_neutral - intercept_y) \
+				/ maxf(shoulder_pitch_y_neutral, 0.001), 0.0, 1.0)
+		pitch_deg = -shoulder_pitch_forward_max_deg * p
+	else:
+		var p: float = clampf((intercept_y - shoulder_pitch_y_neutral) \
+				/ maxf(shoulder_pitch_y_range, 0.001), 0.0, 1.0)
+		pitch_deg = shoulder_pitch_back_max_deg * p
+	c.body_rot = Vector3(c.body_rot.x + pitch_deg, c.body_rot.y, lean_deg)
 	if impact_local_x <= 0.0:
 		_reach_glove(c, impact_local_x, target_y)
 	else:

@@ -650,6 +650,7 @@ func _broadcast_state() -> void:
 		return
 	for peer_id in connected_peer_ids():
 		receive_world_state.rpc_id(peer_id, state)
+		NetworkTelemetry.record_bytes_sent(state.size())
 
 # ── RPCs ──────────────────────────────────────────────────────────────────────
 @rpc("any_peer", "reliable")
@@ -748,6 +749,7 @@ func receive_world_state(data: PackedByteArray) -> void:
 			if s.size() >= 2:
 				_on_ws_sequence_received(s.decode_u16(0))
 			NetworkTelemetry.record_world_state()
+			NetworkTelemetry.record_bytes_received(s.size())
 			world_state_received.emit(s),
 		[data], false)
 

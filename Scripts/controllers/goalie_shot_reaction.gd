@@ -52,16 +52,24 @@ func reset() -> void:
 
 # Host-side: start a fresh reaction. `delay` is the per-shot reaction delay
 # returned by `GoalieBehaviorRules.detect_shot` (usually `reaction_delay`).
+# `back_date_s` lag-comps client-initiated releases: when the host receives a
+# release RPC carrying client timestamp T, it passes `now - T` (≈ one-way
+# latency) so the goalie's reaction window matches what the shooter
+# perceived locally. Local host shots pass 0.0.
 # Emits `started` so the controller can fire the RPC and arm the slide lockout.
-func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: float) -> void:
+func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: float, back_date_s: float = 0.0) -> void:
+	# Cap back-date at 0.5s. Beyond that the connection is too rough for fair
+	# lag-comp and we'd be starting reactions already past the puck-impact
+	# moment, which looks like teleporting saves on the shooter's view.
+	back_date_s = clampf(back_date_s, 0.0, 0.5)
 	impact_x = new_impact_x
 	impact_y = new_impact_y
 	is_elevated = elevated
 	reacting = true
-	age = 0.0
+	age = back_date_s
 	clear_timer = -1.0
-	shot_timer = delay
-	arm_timer = arm_reaction_delay
+	shot_timer = maxf(delay - back_date_s, 0.0)
+	arm_timer = maxf(arm_reaction_delay - back_date_s, 0.0)
 	started.emit(impact_x, impact_y, is_elevated)
 
 # Tick shot/arm processing timers. Returns true if the low-shot timer just

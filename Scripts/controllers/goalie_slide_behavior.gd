@@ -19,8 +19,17 @@ var slide_min_speed: float = 0.3
 var slide_cooldown: float = 0.20
 var slide_pivot_arc_depth: float = 0.04
 var post_seal_depth: float = 0.10
-var pad_local_offset: float = 0.42
+# Pad edge extent: distance from body center to the OUTER edge of a splayed
+# butterfly pad. Slide targets aim for `post - pad_edge_extent` so the visible
+# pad edge lands on the post. Set by the controller (pad_local_offset +
+# butterfly_pad_half_width).
+var pad_edge_extent: float = 0.56
 var post_event_slide_lockout: float = 0.25
+# Coil phase duration. The slide is two-phase: COIL (body rotates in place,
+# loading weight on the far leg) → SLIDE (body translates linearly toward
+# the seal target). Reads as a deliberate plant-and-push motion instead of
+# the body teleporting laterally with rotation lerping independently.
+var coil_duration: float = 0.12
 var butterfly_drop_speed: float = 0.08
 var butterfly_min_hold_time: float = 0.35
 
@@ -31,10 +40,20 @@ var velocity_x: float = 0.0
 # after velocity decays to 0.
 var dir: float = 0.0           # ±1, committed slide direction
 var arc_t: float = 0.0         # 0→1 progress along the committed span
+# start_x/start_depth are the SLIDE-PHASE start — i.e. the body's position
+# after the coil completes. coil_start_x/coil_start_depth are where the body
+# was AT commit (before the coil rotation moved it around the pivot foot).
 var start_x: float = 0.0
 var start_depth: float = 0.0
 var end_x: float = 0.0
 var end_depth: float = 0.0
+var coil_start_x: float = 0.0
+var coil_start_depth: float = 0.0
+# Coil phase countdown. > 0 means we're still rotating around the pivot
+# foot; advance_slide() lerps the body's position from (coil_start_x,
+# coil_start_depth) to (start_x, start_depth) over this window. When it hits
+# zero, push-off velocity is applied and the translation phase begins.
+var coil_timer: float = 0.0
 # Butterfly cycle timers. drop_progress drives the pads-to-floor animation;
 # hold_timer counts butterfly time toward `butterfly_min_hold_time` before
 # recovery can fire.
@@ -54,10 +73,13 @@ func reset() -> void:
 	start_depth = 0.0
 	end_x = 0.0
 	end_depth = 0.0
+	coil_start_x = 0.0
+	coil_start_depth = 0.0
 	drop_progress = 0.0
 	hold_timer = 0.0
 	cooldown_timer = 0.0
 	event_lockout = 0.0
+	coil_timer = 0.0
 
 # Fresh butterfly entry resets timers + slide state. Called when entering
 # BUTTERFLY from anywhere EXCEPT a finished SLIDING — slide→butterfly preserves
@@ -68,6 +90,7 @@ func enter_fresh_butterfly() -> void:
 	hold_timer = 0.0
 	cooldown_timer = 0.0
 	event_lockout = 0.0
+	coil_timer = 0.0
 	dir = 0.0
 	arc_t = 0.0
 	velocity_x = 0.0
@@ -100,7 +123,8 @@ func can_recover() -> bool:
 
 # True when the slide-trigger gate is open (cooldown elapsed, drop animation
 # finished, no in-progress event lockout). Caller is responsible for the
-# spatial trigger check (`GoalieBehaviorRules.should_commit_slide`).
+# spatial trigger check (the pad-coverage check in
+# `GoalieController._try_commit_slide`).
 func can_commit_slide() -> bool:
 	return cooldown_timer >= slide_cooldown \
 			and drop_progress >= 1.0 \
@@ -109,25 +133,78 @@ func can_commit_slide() -> bool:
 # Commit a new slide toward `target_x`. Captures arc endpoints + push-off
 # direction. Post-seal depth scaling: more extreme lateral targets pull the
 # goalie deeper so the sealing pad presses the post (backdoor coverage).
-func commit_slide(current_x: float, current_depth: float, target_x: float, net_half_width: float) -> void:
+func commit_slide(current_x: float, current_depth: float, target_x: float, net_half_width: float,
+		coil_end_x: float, coil_end_depth: float) -> void:
 	var commit_dir: float = signf(target_x - current_x)
-	velocity_x = commit_dir * slide_initial_speed
+	# Start in COIL phase: body lerps from (current_x, current_depth) — captured
+	# as coil_start_* — to (coil_end_x, coil_end_depth) as it rotates around the
+	# pivot foot. The slide phase then translates from (coil_end_x, coil_end_depth)
+	# — which is also start_x/start_depth — to the seal target. Push-off velocity
+	# is applied in advance_slide() when coil_timer hits zero.
+	velocity_x = 0.0
+	coil_timer = coil_duration
+	coil_start_x = current_x
+	coil_start_depth = current_depth
 	cooldown_timer = 0.0
-	var x_extremity: float = clampf(absf(target_x) / maxf(net_half_width, 0.001), 0.0, 1.0)
-	var depth_target: float = lerpf(current_depth, post_seal_depth, x_extremity)
+	# Extremity is measured against the SLIDE CLAMP LIMIT (the puck-side
+	# post-pad-edge, where target_x is already clamped to), not the post
+	# position. The old normalization (absf(target_x) / net_half_width) capped
+	# extremity at ~0.54 even on a full post-to-post slide because the clamp
+	# eats half the range — so the depth pull toward post_seal_depth barely
+	# fired and the slide looked nearly lateral instead of angling back to the
+	# post. Normalizing against the clamp limit means a wide slide goes fully
+	# back to post_seal_depth, giving the angled path real goalies use when
+	# diving from an aggressive depth.
+	var clamp_limit: float = maxf(net_half_width - pad_edge_extent, 0.001)
+	var x_extremity: float = clampf(absf(target_x) / clamp_limit, 0.0, 1.0)
+	var depth_target: float = lerpf(coil_end_depth, post_seal_depth, x_extremity)
 	dir = commit_dir
 	arc_t = 0.0
-	start_x = current_x
-	start_depth = current_depth
+	# Slide phase begins where the coil left off — the body has already
+	# rotated around the pivot foot to (coil_end_x, coil_end_depth) by the
+	# time push-off fires.
+	start_x = coil_end_x
+	start_depth = coil_end_depth
 	end_x = target_x
 	end_depth = depth_target
 
-# Tick the active slide. Returns the new (x, depth). Velocity decays via
-# friction and drives arc progress (0→1); position is computed from arc
-# progress rather than accumulated from velocity directly. Depth bows forward
-# (sin(π·t)) at mid-arc, matching the "push out and settle" shape of a real
-# pivot. When velocity falls below `slide_min_speed` the slide ends — caller
-# should check `is_slide_finished()` after this call.
+# Tick the COILING phase. Body lerps from (coil_start_x, coil_start_depth) to
+# (start_x, start_depth) — the post-pivot-rotation position — as the coil
+# timer drains. Returns the interpolated body (x, depth). When the coil timer
+# hits zero this also applies push-off velocity so the next advance_slide()
+# tick starts the translation phase with momentum; the controller should
+# transition to State.SLIDING when `is_coil_complete()` reports true.
+func tick_coil(delta: float) -> Vector2:
+	if coil_timer <= 0.0:
+		# Coil already done (or duration was zero); body sits at the
+		# post-coil position.
+		return Vector2(start_x, start_depth)
+	coil_timer = maxf(coil_timer - delta, 0.0)
+	if coil_timer == 0.0:
+		# Coil completed this tick — arm push-off so the next advance_slide
+		# tick starts the translation phase under momentum.
+		velocity_x = dir * slide_initial_speed
+		return Vector2(start_x, start_depth)
+	var coil_progress: float = clampf(1.0 - coil_timer / coil_duration, 0.0, 1.0) \
+			if coil_duration > 0.0 else 1.0
+	return Vector2(
+			lerpf(coil_start_x, start_x, coil_progress),
+			lerpf(coil_start_depth, start_depth, coil_progress))
+
+# True once the coil timer has expired and push-off has been applied. The
+# controller polls this from State.COILING to transition into State.SLIDING.
+func is_coil_complete() -> bool:
+	return coil_timer <= 0.0
+
+
+# Tick the translation phase of the slide. Returns the new (x, depth).
+# Velocity decays via friction and drives arc progress (0→1); position is
+# computed from arc progress rather than accumulated from velocity directly.
+# Depth bows forward (sin(π·t)) at mid-arc, matching the "push out and settle"
+# shape of a real pivot. When velocity falls below `slide_min_speed` the slide
+# ends — caller should check `is_slide_finished()` after this call. Coil is
+# handled separately by tick_coil() — this function assumes coil is already
+# complete.
 func advance_slide(delta: float, goal_center_x: float, net_half_width: float) -> Vector2:
 	var decay: float = slide_friction * delta
 	if velocity_x > 0.0:
@@ -154,11 +231,11 @@ func advance_slide(delta: float, goal_center_x: float, net_half_width: float) ->
 func is_slide_finished() -> bool:
 	return velocity_x == 0.0 and arc_t >= 1.0
 
-# Slide destination clamps to "diving pad even with post" — the goalie can't
-# slide past the spot where the lead pad's center sits at the post line.
-# Threats heading wide naturally clamp here, parking the diving pad at the
-# post (backdoor seal). Threats mid-net track threat.x directly.
-func clamp_lateral_target(target_x: float, goal_center_x: float, net_half_width: float) -> float:
-	var max_x: float = goal_center_x + (net_half_width - pad_local_offset)
-	var min_x: float = goal_center_x - (net_half_width - pad_local_offset)
+# Slide destination clamps to "diving pad EDGE even with post" — the lead pad's
+# outer edge lands on the post rather than overhanging it. Threats heading wide
+# park the lead pad at the post (sealed with the edge, no wasted overhang).
+# Threats mid-net track threat.x directly.
+func clamp_lateral_target(target_x: float, goal_center_x: float, net_half_width: float, pad_edge_extent: float) -> float:
+	var max_x: float = goal_center_x + (net_half_width - pad_edge_extent)
+	var min_x: float = goal_center_x - (net_half_width - pad_edge_extent)
 	return clampf(target_x, min_x, max_x)
