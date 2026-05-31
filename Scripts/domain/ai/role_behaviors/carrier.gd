@@ -310,10 +310,12 @@ func _pick_action(ctx: RoleContext) -> void:
 		best_shot_score = quick_shoot_score
 		best_shot_intent = INTENT_QUICK_SHOT
 
-	# Best fire option. No noise-floor threshold — CARRY competes
-	# directly, so a weak fire naturally loses to any stronger carry
-	# candidate (and stand-still in particular bounds fire from below
-	# at score_at(self) >= score_shoot(self)).
+	# Best fire option. No noise-floor threshold against CARRY — a weak
+	# fire loses to any stronger carry candidate on its own (and
+	# stand-still bounds fire from below at score_at(self) >=
+	# score_shoot(self)). The one hard floor is the positive-value gate
+	# in the fire-vs-carry compete below: a ZERO fire can't win, so the
+	# puck is never given away for nothing.
 	var fire_score: float = best_shot_score
 	var fire_intent: int = best_shot_intent
 	if best_pass_score > fire_score:
@@ -327,8 +329,18 @@ func _pick_action(ctx: RoleContext) -> void:
 	# beat fire is when a movement candidate has a STRICTLY better
 	# future-action value, which means there's a real reason to keep
 	# moving instead of firing now.
+	#
+	# EXCEPT: fire must have POSITIVE value to win. Firing surrenders the
+	# puck (shot up-ice, or a pass); holding/carrying retains it and its
+	# optionality. So a zero-value fire must not beat a zero-value hold —
+	# otherwise a carrier swarmed deep in its own zone (shoot = 0 out of
+	# range, pass = 0 all lanes covered, carry collapsing toward 0) flings
+	# a worthless shot away on the 0-0 tie. The threshold is exactly 0,
+	# not a tunable: "you need SOME expected value to justify giving up
+	# possession." In the offensive zone a real shot scores well above 0
+	# and still wins ties, so no behavior change there.
 	var new_intent: int
-	if fire_score >= carry_score:
+	if fire_score >= carry_score and fire_score > 0.0:
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer

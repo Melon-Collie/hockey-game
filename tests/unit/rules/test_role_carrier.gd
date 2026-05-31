@@ -202,3 +202,33 @@ func test_decide_carry_intent_clears_fire_flags() -> void:
 		# CARRY case — both fire flags must be false.
 		assert_false(d.shoot_intent)
 		assert_false(d.pass_intent)
+
+
+func test_zero_value_fire_does_not_win_in_own_zone() -> void:
+	# Carrier buried deep in its own end (z = +22, ~48 m from the opp
+	# goal at z = -26.65). Shoot/quick-shot score 0 (far past
+	# SHOT_RANGE_FALLOFF_M) and there are no teammates to pass to, so
+	# every fire option is 0. Before the positive-value gate the bot
+	# fired on the 0-0 fire-vs-carry tie (FIRE WINS TIES); now a zero
+	# fire can't win, so it must keep the puck (CARRY).
+	var c := AIRoleCarrier.new()
+	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 22.0))
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"a zero-value fire must not beat holding the puck deep in our own zone")
+	assert_eq(c.debug_shoot_score, 0.0,
+			"sanity: shoot really is 0 from the own zone (out of range)")
+
+
+func test_positive_fire_still_wins_in_offensive_zone() -> void:
+	# Regression guard for the gate: in the offensive zone a real shot
+	# scores well above 0 and a fire intent must still win (the gate only
+	# blocks ZERO fires, not positive ones). Bot in the slot, no
+	# pressure. Asserts a fire intent wins — not which shot type, since
+	# the shoot-vs-quick-shot tie-break is orthogonal to this gate.
+	var c := AIRoleCarrier.new()
+	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, -22.0))  # in slot
+	c.decide(ctx)
+	assert_gt(c.debug_shoot_score, 0.0, "slot shot scores positive")
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"a positive slot shot still wins over carry/hold")
