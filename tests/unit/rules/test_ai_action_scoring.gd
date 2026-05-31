@@ -866,3 +866,97 @@ func test_lane_clear_charged_pass_threads_better_than_quick() -> void:
 	var quick: float = AIActionScoring.lane_clear(from, to, lane_def, AIActionScoring.PASS_SPEED_M_S)
 	var charged: float = AIActionScoring.lane_clear(from, to, lane_def, AIActionScoring.PASS_CHARGE_SPEED_M_S)
 	assert_gt(charged, quick, "faster pass → less defender reaction time → cleaner lane")
+
+
+# ── lane_loss_point: interceptor location for the turnover-cost term ──────────
+# The loss location must be the worst blocker's closest-point ON the
+# segment (where the puck actually gets picked), and INF when the lane
+# is clean (no turnover to cost).
+
+func test_lane_loss_point_inf_when_no_blocker() -> void:
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var p: Vector3 = AIActionScoring.lane_loss_point(from, to, [], AIActionScoring.PASS_SPEED_M_S)
+	assert_false(p.is_finite(), "clean lane has no interception point")
+
+
+func test_lane_loss_point_inf_when_defender_off_lane() -> void:
+	# Defender well outside LANE_CLEAR_RADIUS_M of the segment → no block.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var off_lane: Array[Vector3] = [Vector3(6.0, 0.0, 7.0)]
+	var p: Vector3 = AIActionScoring.lane_loss_point(from, to, off_lane, AIActionScoring.PASS_SPEED_M_S)
+	assert_false(p.is_finite(), "defender off the lane yields no interception point")
+
+
+func test_lane_loss_point_is_projection_onto_segment() -> void:
+	# Single mid-lane defender at (0.4, 7.0) on a straight +Z lane: the
+	# loss point is its perpendicular projection onto the segment —
+	# x snaps to the lane (0), z stays at the defender's 7.0.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var mid: Array[Vector3] = [Vector3(0.4, 0.0, 7.0)]
+	var p: Vector3 = AIActionScoring.lane_loss_point(from, to, mid, AIActionScoring.PASS_SPEED_M_S)
+	assert_true(p.is_finite(), "a blocking defender yields an interception point")
+	assert_almost_eq(p.x, 0.0, 0.001, "loss point projects onto the lane (x=0)")
+	assert_almost_eq(p.z, 7.0, 0.001, "loss point sits at the defender's position along the lane")
+
+
+func test_lane_loss_point_picks_worst_blocker() -> void:
+	# Two blockers; the one with higher block strength (closer to the
+	# line, mid-segment with reaction time) defines the loss point. The
+	# near-perfect mid-lane defender at z=7 outweighs a marginal one at
+	# z=11 that's near the radius edge — loss point should be at z≈7.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var blockers: Array[Vector3] = [
+			Vector3(0.05, 0.0, 7.0),   # dead-on, mid-lane → strong block
+			Vector3(1.6, 0.0, 11.0),   # near the radius edge → weak block
+	]
+	var p: Vector3 = AIActionScoring.lane_loss_point(from, to, blockers, AIActionScoring.PASS_SPEED_M_S)
+	assert_almost_eq(p.z, 7.0, 0.001, "loss point follows the strongest blocker")
+
+
+# ── turnover_cost: defensive half of the carrier EV ──────────────────────────
+# cost = loss_prob × threat_surface_shoot(loss_point → our net). Zero
+# when there's nothing to lose; scales with both probability and how
+# dangerous the steal location is, which self-localizes by geometry.
+
+const OUR_NET := Vector3(0.0, 0.0, 26.65)        # we defend +Z
+const OUR_GOALIE := Vector3(0.0, 0.0, 26.0)
+
+
+func test_turnover_cost_zero_when_no_loss_point() -> void:
+	var c: float = AIActionScoring.turnover_cost(
+			Vector3.INF, 0.5, OUR_NET, OUR_GOALIE, NET_HW, [])
+	assert_eq(c, 0.0, "no interception point → no turnover cost")
+
+
+func test_turnover_cost_zero_when_no_loss_prob() -> void:
+	var loss := Vector3(0.0, 0.0, 21.0)  # dangerous spot, but...
+	var c: float = AIActionScoring.turnover_cost(
+			loss, 0.0, OUR_NET, OUR_GOALIE, NET_HW, [])
+	assert_eq(c, 0.0, "zero loss probability → no turnover cost")
+
+
+func test_turnover_cost_scales_with_loss_probability() -> void:
+	var loss := Vector3(0.0, 0.0, 21.0)  # in our slot, in front of our net
+	var low: float = AIActionScoring.turnover_cost(
+			loss, 0.2, OUR_NET, OUR_GOALIE, NET_HW, [])
+	var high: float = AIActionScoring.turnover_cost(
+			loss, 0.8, OUR_NET, OUR_GOALIE, NET_HW, [])
+	assert_gt(high, low, "higher interception probability → higher turnover cost")
+
+
+func test_turnover_cost_self_localizes_by_geometry() -> void:
+	# Same loss probability: a steal in our slot must cost far more than
+	# one out by our blue line / center ice — this is the "no zone flag"
+	# property. threat_surface_shoot toward our net does the localizing.
+	var in_slot := Vector3(0.0, 0.0, 21.0)       # ~5.6 m from our net
+	var far_out := Vector3(0.0, 0.0, 2.0)        # near center ice
+	var slot_cost: float = AIActionScoring.turnover_cost(
+			in_slot, 0.5, OUR_NET, OUR_GOALIE, NET_HW, [])
+	var far_cost: float = AIActionScoring.turnover_cost(
+			far_out, 0.5, OUR_NET, OUR_GOALIE, NET_HW, [])
+	assert_gt(slot_cost, far_cost,
+			"own-zone turnover costs more than a neutral-ice one at equal probability")

@@ -653,6 +653,55 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 	return clampf(1.0 - max_block, 0.0, 1.0)
 
 
+# Interceptor point for a fired-puck lane: the closest-point-on-segment
+# of the defender with the highest block strength — the spot where the
+# puck is most likely to be picked off. Returns Vector3.INF when no
+# defender blocks the lane (i.e. lane_clear would return 1.0).
+#
+# This is the loss location for the carrier's pass turnover-cost term
+# (turnover_cost): "if this pass is intercepted, the opponent gains the
+# puck HERE." Deliberately a separate loop from lane_clear rather than
+# folded into it — lane_clear sits on a hot path (every score_shoot /
+# score_pass eval) and must stay allocation- and branch-free. The
+# per-defender block math below MUST stay in sync with lane_clear.
+static func lane_loss_point(from: Vector3, to: Vector3,
+		opponents: Array[Vector3], puck_speed_m_s: float) -> Vector3:
+	var dx: float = to.x - from.x
+	var dz: float = to.z - from.z
+	var line_len_sq: float = dx * dx + dz * dz
+	if line_len_sq < 0.01:
+		return Vector3.INF
+	var line_len: float = sqrt(line_len_sq)
+	var flight_time: float = line_len / maxf(puck_speed_m_s, 1.0)
+	var max_block: float = 0.0
+	var best_point: Vector3 = Vector3.INF
+	for p: Vector3 in opponents:
+		var pdx: float = p.x - from.x
+		var pdz: float = p.z - from.z
+		var t: float = (pdx * dx + pdz * dz) / line_len_sq
+		if t <= 0.0 or t >= 1.0:
+			continue
+		var time_to_defender: float = t * flight_time
+		var reaction_factor: float = clampf(
+				(time_to_defender - LANE_REACTION_DELAY_S) / LANE_REACTION_RAMP_S,
+				0.0, 1.0)
+		if reaction_factor <= 0.0:
+			continue
+		var closest_x: float = from.x + t * dx
+		var closest_z: float = from.z + t * dz
+		var perp_x: float = p.x - closest_x
+		var perp_z: float = p.z - closest_z
+		var perp: float = sqrt(perp_x * perp_x + perp_z * perp_z)
+		if perp >= LANE_CLEAR_RADIUS_M:
+			continue
+		var perp_factor: float = 1.0 - perp / LANE_CLEAR_RADIUS_M
+		var block: float = perp_factor * reaction_factor
+		if block > max_block:
+			max_block = block
+			best_point = Vector3(closest_x, 0.0, closest_z)
+	return best_point
+
+
 # Position potential in [0, 1] — "value of being at this position,
 # regardless of any specific shot or pass." Three multiplicative
 # factors:
@@ -748,6 +797,44 @@ static func threat_surface_pass(
 	var lane: float = lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
 	var positional: float = position_potential(receiver_pos, our_net, defenders)
 	return maxf(pass_score, lane * positional)
+
+
+# Expected turnover cost — the defensive half of the carrier's
+# expected-value model. The value of having the puck (score_at / pass
+# upside) is one side; this is the other: the possession value the
+# OPPONENT gains if we lose the puck at `loss_point`, weighted by the
+# probability of losing it.
+#
+#   turnover_cost = loss_prob × threat_surface_shoot(loss_point → our net)
+#
+# The benefit (us shooting their net) and the cost (them shooting ours)
+# are scored with the SAME threat surface — score_shoot-shaped value of
+# possessing the puck at a location. Because both sides share one
+# (uncalibrated but consistent) surface, any miscalibration factor is
+# common to both terms and cancels in the argmax: the exchange rate
+# between a goal-for and a goal-against is exactly 1, so there is NO
+# aversion weight. "Don't turn it over where it hurts" then falls out of
+# geometry alone — threat_surface_shoot is ~0 when loss_point is far
+# from / wide of our net (offensive-zone turnover) and large in front of
+# it (own-zone turnover), so the cost self-localizes with no zone flag.
+#
+# `our_defenders` are our skaters (excluding the carrier, who just got
+# beat); they reduce the opponent's threat exactly as in the defensive
+# roles. Returns 0 when there's no loss location (INF) or no loss
+# probability.
+static func turnover_cost(
+		loss_point: Vector3,
+		loss_prob: float,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		our_defenders: Array[Vector3]) -> float:
+	if not loss_point.is_finite():
+		return 0.0
+	if loss_prob <= 0.0:
+		return 0.0
+	return loss_prob * threat_surface_shoot(
+			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders)
 
 
 # Omnidirectional poke-threat penalty for CARRY destinations. Returns

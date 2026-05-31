@@ -118,6 +118,10 @@ var _scratch_opponents_shoot: Array[Vector3] = []
 var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
 var _scratch_teammate_ids: Array[int] = []
+# Our skaters excluding the carrier — the defenders that reduce the
+# opponent's threat in the turnover-cost term (the carrier just got
+# beat, so they don't count). Rebuilt once per _pick_action.
+var _scratch_our_defenders: Array[Vector3] = []
 
 # ── Debug readout ────────────────────────────────────────────────────────────
 # Populated every re-eval; the state machine forwards these to its
@@ -352,12 +356,18 @@ func _pick_action(ctx: RoleContext) -> void:
 func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponents_shoot.clear()
+	_scratch_our_defenders.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
-		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id and peer_id != ctx.peer_id:
-			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
+		if peer_id == ctx.peer_id:
+			continue
+		var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
+		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id:
 			_scratch_opponents.append(s.position)
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
+		else:
+			# Our teammate — a defender for the turnover-cost term.
+			_scratch_our_defenders.append(s.position)
 
 
 # Refills `out_buf` with each opponent's position projected forward
@@ -409,6 +419,9 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 	var own_goal_dir: float = ctx.own_goal_dir
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
+	# Our goalie + defenders feed the turnover-cost term: how much an
+	# interception would help the opponent, dampened by our coverage.
+	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 	var carrier_in_oz: bool = -own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
 	var own_goal_z: float = own_goal_dir * GameRules.GOAL_LINE_Z
 	for peer_id: int in teammate_ids:
@@ -497,9 +510,25 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var time_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
 				flight_t + rotation_time)
-		var s: float = receiver_value * lane * time_decay
+		# Expected-value model. Benefit = P(complete) × value of us
+		# having it at the receiver. Cost = P(intercepted) × value the
+		# OPPONENT gains from the steal location (turnover_cost). Same
+		# threat surface both ways, so the exchange rate is 1 (no aversion
+		# knob); the cost self-localizes — ~0 for offensive-zone
+		# turnovers, large for own-zone ones. Loss point is the
+		# interceptor's spot on the lane.
+		var benefit: float = receiver_value * lane * time_decay
+		# UX nudge: bias the BENEFIT (not the net EV) toward feeding
+		# humans — scaling the post-cost EV would make a net-negative
+		# human pass score worse, inverting the nudge.
 		if NetworkManager.is_real_peer(peer_id):
-			s = minf(s * HUMAN_PASS_BIAS, 1.0)
+			benefit = minf(benefit * HUMAN_PASS_BIAS, 1.0)
+		var loss_point: Vector3 = AIActionScoring.lane_loss_point(
+				self_pos, receiver, _scratch_opponents, pass_speed)
+		var cost: float = AIActionScoring.turnover_cost(
+				loss_point, 1.0 - lane, ctx.defending_goal_pos, our_goalie,
+				GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+		var s: float = benefit - cost
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
