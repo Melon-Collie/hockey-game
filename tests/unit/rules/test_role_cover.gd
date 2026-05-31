@@ -55,15 +55,35 @@ func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 
 # ── Bail-outs ───────────────────────────────────────────────────────────────
 
-func test_falls_back_to_self_pos_when_no_carrier() -> void:
-	# Loose puck — COVER has no carrier to read. NEUTRAL play uses
-	# CHASE/FLANK; an in-flight pass moment in DZONE resolves within
-	# a frame via the brain's event-driven re-tick.
+func test_falls_back_to_self_pos_when_no_puck_threat() -> void:
+	# Loose puck AND no opponents in the snapshot — nothing to cover, so
+	# COVER stands still (bails at the no-opp-teammates guard). With opps
+	# present a loose puck is read off, not frozen — see
+	# test_reads_off_loose_puck_instead_of_freezing.
 	var self_pos := Vector3(-3, 0, 18)
 	var ctx: RoleContext = _make_ctx(self_pos)
 	var d: RoleDecision = AIRoleCover.decide(ctx)
 	assert_eq(d.target_position, self_pos,
-			"loose puck → fall back to self_pos")
+			"loose puck with no opponents → nothing to cover, stand still")
+
+
+func test_reads_off_loose_puck_instead_of_freezing() -> void:
+	# DZONE loose puck in our own zone (the possession_state
+	# loose-in-our-DZ override keeps us in DZONE). COVER used to freeze
+	# at self_pos with no carrier; it must now read the pass threat off
+	# the PUCK spot and reposition. Two opps present so there's a pass
+	# threat to cover. Bot starts off to the side; target must move.
+	var self_pos := Vector3(-8, 0, 12)
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos],                 # us (COVER)
+		[200, 1 - TEAM_ID, Vector3(2, 0, 20)],  # opp near the loose puck
+		[210, 1 - TEAM_ID, Vector3(-4, 0, 24)], # opp pass-threat receiver, slot-side
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, -1, skaters)  # carrier -1 = loose
+	ctx.snapshot.puck_state.position = Vector3(2, 0, 20)     # loose puck in our DZ
+	var d: RoleDecision = AIRoleCover.decide(ctx)
+	assert_ne(d.target_position, self_pos,
+			"loose puck with opps present → read off the puck, don't freeze")
 
 
 func test_falls_back_to_self_pos_when_only_carrier_no_pass_receivers() -> void:

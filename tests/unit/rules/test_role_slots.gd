@@ -65,6 +65,16 @@ func test_slots_for_trans_do() -> void:
 	assert_true(slots.has(AIRoleSlots.Slot.SUPPORT))
 
 
+func test_slots_for_breakout() -> void:
+	# BREAKOUT (we possess in our own DZ) uses {CARRIER, BREAKOUT_STRONG,
+	# BREAKOUT_WEAK}: the carrier plus a strong-side-wall outlet and a
+	# weak-side reverse valve.
+	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.BREAKOUT)
+	assert_true(slots.has(AIRoleSlots.Slot.CARRIER))
+	assert_true(slots.has(AIRoleSlots.Slot.BREAKOUT_STRONG))
+	assert_true(slots.has(AIRoleSlots.Slot.BREAKOUT_WEAK))
+
+
 func test_slots_for_trans_od() -> void:
 	# TRANS_OD uses {PRESSURE, BACKCHECK, CONTAIN}: the same primary
 	# pressurer as DZONE plus a Sprinting-Through pair (up-ice peer
@@ -146,6 +156,70 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 	assert_eq(assignments[100], AIRoleSlots.Slot.CARRIER)
 	assert_eq(assignments[110], AIRoleSlots.Slot.OUTLET, "up-ice bot becomes OUTLET")
 	assert_eq(assignments[120], AIRoleSlots.Slot.SUPPORT, "deep bot becomes SUPPORT")
+
+
+func test_assign_breakout_strong_goes_to_strong_side_peer() -> void:
+	# Carrier deep in our own zone. Strong side is +X (default
+	# _strong_x = +1), so the +X non-carrier takes BREAKOUT_STRONG and
+	# the -X one takes the weak-side reverse (BREAKOUT_WEAK).
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, 20.0)],   # carrier, deep in our DZ
+			[110, 0, Vector3(9.0, 0.0, 12.0)],   # +X side → STRONG
+			[120, 0, Vector3(-9.0, 0.0, 20.0)],  # -X side → WEAK
+	]
+	var snap := _make_snapshot(skaters, 100)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.BREAKOUT,
+			_resolver(skaters), {}, 1.0)
+	assert_eq(assignments[100], AIRoleSlots.Slot.CARRIER)
+	assert_eq(assignments[110], AIRoleSlots.Slot.BREAKOUT_STRONG,
+			"+X-side bot takes the strong-side-wall outlet")
+	assert_eq(assignments[120], AIRoleSlots.Slot.BREAKOUT_WEAK,
+			"-X-side bot takes the weak-side reverse valve")
+
+
+func test_assign_breakout_strong_follows_strong_x_sign() -> void:
+	# Flip the strong side to -X: now the -X peer should take STRONG.
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, 20.0)],
+			[110, 0, Vector3(9.0, 0.0, 12.0)],
+			[120, 0, Vector3(-9.0, 0.0, 12.0)],
+	]
+	var snap := _make_snapshot(skaters, 100)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.BREAKOUT,
+			_resolver(skaters), {}, -1.0)
+	assert_eq(assignments[120], AIRoleSlots.Slot.BREAKOUT_STRONG,
+			"with strong side -X, the -X bot takes the strong outlet")
+	assert_eq(assignments[110], AIRoleSlots.Slot.BREAKOUT_WEAK)
+
+
+func test_slots_for_forecheck() -> void:
+	# FORECHECK (opp possesses in their own DZ) uses {F1_PRESSURE,
+	# F2_MID, F3_HIGH}: the 1-1-1 forecheck. No CARRIER (opp has it).
+	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.FORECHECK)
+	assert_true(slots.has(AIRoleSlots.Slot.F1_PRESSURE))
+	assert_true(slots.has(AIRoleSlots.Slot.F2_MID))
+	assert_true(slots.has(AIRoleSlots.Slot.F3_HIGH))
+
+
+func test_assign_forecheck_f1_pressures_puck_f3_is_high() -> void:
+	# Team 0 forechecking in the opp end (opp net at -Z). Opp 200 carries
+	# the puck deep (z = -22). F3 = closest to the opp blue line (highest
+	# / least deep), F1 = closest to the puck of the rest, F2 = leftover.
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, -8.0)],   # high, near opp blue (-7.29) → F3
+			[110, 0, Vector3(2.0, 0.0, -21.0)],  # deep, near puck → F1
+			[120, 0, Vector3(-3.0, 0.0, -14.0)], # mid → F2
+			[200, 1, Vector3(0.0, 0.0, -22.0)],  # opp carrier, deep
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.FORECHECK,
+			_resolver(skaters), {})
+	assert_eq(assignments[100], AIRoleSlots.Slot.F3_HIGH, "highest bot is the safety")
+	assert_eq(assignments[110], AIRoleSlots.Slot.F1_PRESSURE, "bot nearest the puck pressures")
+	assert_eq(assignments[120], AIRoleSlots.Slot.F2_MID, "leftover bot reads the mid lane")
 
 
 func test_assign_trans_od_backcheck_goes_to_highest_player() -> void:

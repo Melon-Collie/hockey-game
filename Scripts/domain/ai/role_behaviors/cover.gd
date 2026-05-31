@@ -47,9 +47,16 @@ const WEAK_SIDE_OFFSET_M: float = 3.0
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	# Bail-out: no carrier means no pass threat to cover.
-	# (NEUTRAL has no carrier and uses FLANK roles instead.)
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_any_carrier_pos(ctx)
+	# Play reference: the opp carrier when one holds it, else the loose
+	# puck itself. COVER used to freeze at self_pos on a loose puck —
+	# the defensive analog of the "stuck on the heels" bug. In DZONE a
+	# loose puck in our own zone (the possession_state loose-in-our-DZ
+	# override) is a live threat: an opp can grab it and feed a teammate.
+	# Reading off the puck spot keeps COVER in the most dangerous
+	# secondary lane instead of standing still while ANCHOR/PRESSURE
+	# handle the direct recovery/shot. Only truly stand still if there's
+	# no puck at all. (NEUTRAL has no carrier and uses FLANK roles.)
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d

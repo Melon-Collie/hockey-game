@@ -43,7 +43,7 @@ func test_teammate_repel_pushes_away() -> void:
 
 
 func test_opponent_repel_stronger_than_teammate() -> void:
-	# Opponent repel weight 0.6 vs teammate 0.4 — same configuration
+	# Opponent repel weight 0.6 vs teammate 0.55 — same configuration
 	# should push the bot back harder when the obstacle is an opponent.
 	var pos := Vector3(0, 0, 0)
 	var anchor := Vector3(0, 0, 5)
@@ -166,3 +166,84 @@ func test_brake_pivot_handles_zero_desired() -> void:
 	var velocity := Vector2(8.0, 0.0)
 	var v := AISteering.brake_pivot(desired, velocity)
 	assert_almost_eq(v.length(), 0.0, 0.001, "zero desired stays zero")
+
+
+# offside_brake tests — body-level guard against skating across the
+# attacking blue line before the puck. Team 0 (own_goal_dir = +1)
+# attacks -Z, so its attacking blue line is at -BLUE_LINE_Z and "toward
+# the zone" is -Z. The puck is "near side" (offside risk) while
+# puck_z >= -BLUE_LINE_Z.
+
+const TEAM0_DIR: float = 1.0   # own net +Z, attacks -Z
+const TEAM1_DIR: float = -1.0  # own net -Z, attacks +Z
+const NEAR_PUCK_Z: float = 0.0 # center ice — near side for both teams
+
+
+func test_offside_brake_noop_for_carrier() -> void:
+	# Carrier is never offside — even barreling across, no brake.
+	var desired := Vector2(0.0, -1.0)
+	var pos := Vector3(0.0, 0.0, -7.0)
+	var vel := Vector3(0.0, 0.0, -8.0)
+	var v := AISteering.offside_brake(desired, pos, vel, TEAM0_DIR, NEAR_PUCK_Z, true)
+	assert_eq(v, desired, "carrier is exempt from the offside brake")
+
+
+func test_offside_brake_noop_when_puck_already_across() -> void:
+	# Puck already in the attacking zone (z < -BLUE_LINE_Z) → entering is
+	# legal, no brake even at speed toward the line.
+	var desired := Vector2(0.0, -1.0)
+	var pos := Vector3(0.0, 0.0, -7.0)
+	var vel := Vector3(0.0, 0.0, -8.0)
+	var puck_across: float = -GameRules.BLUE_LINE_Z - 2.0
+	var v := AISteering.offside_brake(desired, pos, vel, TEAM0_DIR, puck_across, false)
+	assert_eq(v, desired, "no brake once the puck has entered the zone")
+
+
+func test_offside_brake_noop_when_moving_away_from_line() -> void:
+	# Retreating toward our own end (v toward zone <= 0) → leave the
+	# steering alone so the bot can tag back / recover.
+	var desired := Vector2(0.0, 1.0)
+	var pos := Vector3(0.0, 0.0, -7.0)
+	var vel := Vector3(0.0, 0.0, 5.0)  # +Z, away from the -Z zone
+	var v := AISteering.offside_brake(desired, pos, vel, TEAM0_DIR, NEAR_PUCK_Z, false)
+	assert_eq(v, desired, "no brake when already moving away from the line")
+
+
+func test_offside_brake_noop_with_room_to_stop() -> void:
+	# Far from the line and slow — stopping distance clears the line by
+	# more than the margin, so the bot is free to keep its target.
+	var desired := Vector2(0.0, -1.0)
+	var pos := Vector3(0.0, 0.0, 0.0)   # center ice, ~7.3 m from the line
+	var vel := Vector3(0.0, 0.0, -2.0)  # slow toward the zone
+	var v := AISteering.offside_brake(desired, pos, vel, TEAM0_DIR, NEAR_PUCK_Z, false)
+	assert_eq(v, desired, "plenty of room to stop → no brake")
+
+
+func test_offside_brake_engages_on_fast_approach() -> void:
+	# Near the line and fast toward the zone — stopping distance would
+	# carry the body across, so brake away from the line (+Z for team 0).
+	var desired := Vector2(0.0, -1.0)  # bot wants to keep driving into the zone
+	var pos := Vector3(0.0, 0.0, -5.0) # ~2.3 m from the -7.29 line
+	var vel := Vector3(0.0, 0.0, -8.0) # 8 m/s toward the zone
+	var v := AISteering.offside_brake(desired, pos, vel, TEAM0_DIR, NEAR_PUCK_Z, false)
+	assert_gt(v.y, 0.0, "team 0 should brake back toward +Z to avoid crossing the -Z blue line")
+
+
+func test_offside_brake_engages_team1_mirrored() -> void:
+	# Mirror for team 1 (attacks +Z, line at +BLUE_LINE_Z): brake toward -Z.
+	var desired := Vector2(0.0, 1.0)
+	var pos := Vector3(0.0, 0.0, 5.0)
+	var vel := Vector3(0.0, 0.0, 8.0)  # toward the +Z zone
+	var v := AISteering.offside_brake(desired, pos, vel, TEAM1_DIR, NEAR_PUCK_Z, false)
+	assert_lt(v.y, 0.0, "team 1 should brake back toward -Z to avoid crossing the +Z blue line")
+
+
+func test_offside_brake_preserves_lateral_intent() -> void:
+	# When braking, the lateral (x) component of the desired move is kept
+	# so the bot can still adjust its width along the line.
+	var desired := Vector2(0.6, -1.0)
+	var pos := Vector3(0.0, 0.0, -5.0)
+	var vel := Vector3(0.0, 0.0, -8.0)
+	var v := AISteering.offside_brake(desired, pos, vel, TEAM0_DIR, NEAR_PUCK_Z, false)
+	assert_gt(v.x, 0.0, "lateral intent is preserved through the brake")
+	assert_gt(v.y, 0.0, "depth component still brakes back from the line")

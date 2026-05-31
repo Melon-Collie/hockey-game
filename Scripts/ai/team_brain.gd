@@ -147,6 +147,14 @@ func get_slot(peer_id: int) -> int:
 	return slot_assignments.get(peer_id, AIRoleSlots.Slot.NONE)
 
 
+# Hysteretic strong-side sign (+1 = +X, -1 = -X), updated per brain
+# tick from puck.x. Role behaviors (BREAKOUT outlets) read this so
+# their strong/weak split matches the brain's slot assignment instead
+# of recomputing a raw sign that would thrash near center ice.
+func strong_x() -> float:
+	return _strong_x
+
+
 # ── One-timer readiness signaling ───────────────────────────────────────────
 # Off-puck bots in the FINISHER role publish "I'm camped + pre-aimed,
 # fire me a pass and I'll one-time it" via set_one_timer_ready(true).

@@ -5,18 +5,39 @@ class_name AIPossessionState
 # role assignment with a possession-state-driven model, following the
 # three principles: sprint-by, play off heels, simple 2v1.
 #
-# State table (per team):
-#   OZONE    — we have the puck AND puck is in their DZ
-#   DZONE    — opp has the puck AND puck is in our DZ
-#   TRANS_DO — we have the puck AND puck is NOT in their DZ (D→O attack)
-#   TRANS_OD — opp has the puck AND puck is NOT in our DZ (O→D defend)
+# State table (per team) — symmetric in puck zone × possession:
+#                  we possess        opp possesses
+#   their DZ       OZONE             FORECHECK
+#   neutral zone   TRANS_DO          TRANS_OD
+#   our DZ         BREAKOUT          DZONE
+#
+#   OZONE     — we possess in their DZ (push / cycle)
+#   FORECHECK — opp possesses in their DZ (pin them in, recover deep)
+#   TRANS_DO  — we possess in the NZ (D→O rush)
+#   TRANS_OD  — opp possesses in the NZ (O→D retreat)
+#   BREAKOUT  — we possess in our DZ (break it out)
+#   DZONE     — opp possesses in our DZ (in-zone defense)
+#
+# FORECHECK vs TRANS_OD: both are "opp possesses, not in our DZ", split
+# by where the puck is. Deep in their end the job is to forecheck (pin
+# them, force a turnover); once the puck reaches the NZ it's a retreat
+# (TRANS_OD's Sprinting-Through backcheck). The old single TRANS_OD
+# bucket held both, so it retreated even when the opp was sloppy deep in
+# their own zone — the exact opposite of a forecheck.
+#
+# BREAKOUT vs TRANS_DO: both are "we possess, not in their DZ", split by
+# where the puck is. Deep in our own end the job is to break out safely
+# (the supports present strong-side-wall + weak-side-reverse outlets);
+# once the puck reaches the NZ it's a rush and TRANS_DO's stretch OUTLET
+# at the far blue line makes sense. The old single TRANS_DO bucket held
+# both, which is why its OUTLET misfired from deep in our zone.
 #
 # Loose-puck handling: possession is sticky. `prev_carrier_team` carries
 # over until a new carrier sets it. The 6 Hz brain tick smooths sub-tick
 # oscillation (e.g., stick-on-stick contact during a strip) naturally —
 # we sample at the brain tick, not every physics tick.
 
-enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL }
+enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT, FORECHECK }
 
 class Result:
 	var state: int           # AIPossessionState.State enum value
@@ -88,9 +109,19 @@ static func compute(
 
 	var state: State
 	if our_possession:
-		state = State.OZONE if in_their_dz else State.TRANS_DO
+		if in_their_dz:
+			state = State.OZONE
+		elif in_our_dz:
+			state = State.BREAKOUT
+		else:
+			state = State.TRANS_DO
 	else:
-		state = State.DZONE if in_our_dz else State.TRANS_OD
+		if in_our_dz:
+			state = State.DZONE
+		elif in_their_dz:
+			state = State.FORECHECK
+		else:
+			state = State.TRANS_OD
 
 	return Result.make(state, carrier_team)
 

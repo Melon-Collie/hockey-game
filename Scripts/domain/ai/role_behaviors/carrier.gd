@@ -45,11 +45,6 @@ const PICK_ACTION_PERIOD_TICKS: int = 8
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
-# UX nudge: bots prefer feeding humans on close-call passes. Capped
-# at 1.0 inside the loop so bias can't push a borderline pass above
-# a clearly-better one.
-const HUMAN_PASS_BIAS: float = 1.25
-
 # Quick-shot blade ROM cone: passes within this half-angle of facing
 # don't pay rotation cost (blade can fire from current facing).
 # Outside the cone, only the OVERSHOOT (angle - ROM) costs time.
@@ -119,6 +114,10 @@ var _scratch_opponents_shoot: Array[Vector3] = []
 var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
 var _scratch_teammate_ids: Array[int] = []
+# Our skaters excluding the carrier — the defenders that reduce the
+# opponent's threat in the turnover-cost term (the carrier just got
+# beat, so they don't count). Rebuilt once per _pick_action.
+var _scratch_our_defenders: Array[Vector3] = []
 
 # ── Debug readout ────────────────────────────────────────────────────────────
 # Populated every re-eval; the state machine forwards these to its
@@ -249,7 +248,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# goalie that would otherwise drift wide stays in position. Off-axis
 	# bots benefit (their lateral arc against a still-squared goalie is
 	# open); slower puck speed naturally kills long-range attempts via
-	# the existing _lane_clear math. Release position = current self_pos
+	# the existing lane_clear math. Release position = current self_pos
 	# (no charge motion). Opponents at current positions (no projection).
 	var quick_shoot_score: float = AIActionScoring.score_quick_shot(
 			self_pos, attacking_goal, goalie_now,
@@ -307,10 +306,12 @@ func _pick_action(ctx: RoleContext) -> void:
 		best_shot_score = quick_shoot_score
 		best_shot_intent = INTENT_QUICK_SHOT
 
-	# Best fire option. No noise-floor threshold — CARRY competes
-	# directly, so a weak fire naturally loses to any stronger carry
-	# candidate (and stand-still in particular bounds fire from below
-	# at score_at(self) >= score_shoot(self)).
+	# Best fire option. No noise-floor threshold against CARRY — a weak
+	# fire loses to any stronger carry candidate on its own (and
+	# stand-still bounds fire from below at score_at(self) >=
+	# score_shoot(self)). The one hard floor is the positive-value gate
+	# in the fire-vs-carry compete below: a ZERO fire can't win, so the
+	# puck is never given away for nothing.
 	var fire_score: float = best_shot_score
 	var fire_intent: int = best_shot_intent
 	if best_pass_score > fire_score:
@@ -324,8 +325,18 @@ func _pick_action(ctx: RoleContext) -> void:
 	# beat fire is when a movement candidate has a STRICTLY better
 	# future-action value, which means there's a real reason to keep
 	# moving instead of firing now.
+	#
+	# EXCEPT: fire must have POSITIVE value to win. Firing surrenders the
+	# puck (shot up-ice, or a pass); holding/carrying retains it and its
+	# optionality. So a zero-value fire must not beat a zero-value hold —
+	# otherwise a carrier swarmed deep in its own zone (shoot = 0 out of
+	# range, pass = 0 all lanes covered, carry collapsing toward 0) flings
+	# a worthless shot away on the 0-0 tie. The threshold is exactly 0,
+	# not a tunable: "you need SOME expected value to justify giving up
+	# possession." In the offensive zone a real shot scores well above 0
+	# and still wins ties, so no behavior change there.
 	var new_intent: int
-	if fire_score >= carry_score:
+	if fire_score >= carry_score and fire_score > 0.0:
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer
@@ -353,12 +364,18 @@ func _pick_action(ctx: RoleContext) -> void:
 func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponents_shoot.clear()
+	_scratch_our_defenders.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
-		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id and peer_id != ctx.peer_id:
-			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
+		if peer_id == ctx.peer_id:
+			continue
+		var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
+		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id:
 			_scratch_opponents.append(s.position)
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
+		else:
+			# Our teammate — a defender for the turnover-cost term.
+			_scratch_our_defenders.append(s.position)
 
 
 # Refills `out_buf` with each opponent's position projected forward
@@ -376,11 +393,14 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 
 # Loops every legal pass target and returns [best_pid, best_score]. A
 # pass takes 0.5–1.1 s of flight time, so the receiver and every
-# defender are projected forward by that flight time before scoring.
+# defender are projected forward by that flight time for the receiver's
+# inner score_at (pressure when the puck arrives). The lane-interception
+# term uses the reaction-window pass model on CURRENT defender positions
+# instead, since lane_clear models defenders closing over the flight.
 # Top-level pass scoring under the universal model:
 #
 #   pass_score(receiver) = score_at(receiver_lead, projected_opps)
-#                          × path_clearance(self → receiver_lead)
+#                          × lane_clear(self → receiver_lead, pass_speed)
 #                          × pow(decay, pass_flight_time)
 #
 # score_at recursively considers what the receiver could do (shoot,
@@ -397,9 +417,6 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 #     forward into nothing).
 #   - Hard zero for net-blocker (segment crosses net body) and
 #     own-DZ slot crossing (intercepted = goal-against).
-#
-# HUMAN_PASS_BIAS is a UX nudge — bots prefer feeding humans on
-# close-call passes.
 func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		teammate_ids: Array[int], goalie_now: Vector3) -> Array:
 	var snapshot: WorldSnapshot = ctx.snapshot
@@ -407,6 +424,9 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 	var own_goal_dir: float = ctx.own_goal_dir
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
+	# Our goalie + defenders feed the turnover-cost term: how much an
+	# interception would help the opponent, dampened by our coverage.
+	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 	var carrier_in_oz: bool = -own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
 	var own_goal_z: float = own_goal_dir * GameRules.GOAL_LINE_Z
 	for peer_id: int in teammate_ids:
@@ -443,8 +463,15 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# and the receiver's inner score_at (lanes/pressure on receiver
 		# at the time they receive the puck).
 		_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)
-		var lane: float = AIActionScoring.path_clearance(
-				self_pos, receiver, _scratch_opponents_pass)
+		# Lane interception uses the reaction-window PASS model
+		# (lane_clear) on CURRENT defender positions, not the geometric
+		# carry-path check — a pass is a fired puck, so a defender near
+		# the lane reads the release and steps in, scaled by flight time
+		# and the actual pass speed. This matches how score_pass (the
+		# off-puck roles' view of the same lane) evaluates it, so the
+		# carrier and its receivers agree on what's actually threadable.
+		var lane: float = AIActionScoring.lane_clear(
+				self_pos, receiver, _scratch_opponents, pass_speed)
 		if lane <= 0.0:
 			continue
 		# Predict goalie at the time the receiver fires: pass flight time
@@ -488,9 +515,20 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var time_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
 				flight_t + rotation_time)
-		var s: float = receiver_value * lane * time_decay
-		if NetworkManager.is_real_peer(peer_id):
-			s = minf(s * HUMAN_PASS_BIAS, 1.0)
+		# Expected-value model. Benefit = P(complete) × value of us
+		# having it at the receiver. Cost = P(intercepted) × value the
+		# OPPONENT gains from the steal location (turnover_cost). Same
+		# threat surface both ways, so the exchange rate is 1 (no aversion
+		# knob); the cost self-localizes — ~0 for offensive-zone
+		# turnovers, large for own-zone ones. Loss point is the
+		# interceptor's spot on the lane.
+		var benefit: float = receiver_value * lane * time_decay
+		var loss_point: Vector3 = AIActionScoring.lane_loss_point(
+				self_pos, receiver, _scratch_opponents, pass_speed)
+		var cost: float = AIActionScoring.turnover_cost(
+				loss_point, 1.0 - lane, ctx.defending_goal_pos, our_goalie,
+				GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+		var s: float = benefit - cost
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
@@ -542,6 +580,11 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	var self_velocity: Vector3 = ctx.self_velocity
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var own_goal_dir: float = ctx.own_goal_dir
+	# Our goalie feeds the turnover-cost term (how much a strip helps the
+	# opponent, dampened by our net coverage). Resolved once for all
+	# carry candidates. _scratch_our_defenders is already built by
+	# _build_action_opponents_lists earlier in _pick_action.
+	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 	var slot_pos: Vector3 = _slot_anchor(own_goal_dir)
 	# Polar forward direction: toward slot. Fallback to attacking-goal
 	# axis when degenerate (bot exactly at slot).
@@ -613,7 +656,22 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var intercept: float = AIActionScoring.carry_intercept_safety(
 				self_pos, candidate, local_time,
 				_scratch_opponents, _scratch_opponents_path)
-		var s_total: float = dest_score * lane * decay * safety * intercept
+		# Expected-value: benefit (offensive upside, kept byte-identical
+		# to the prior all-multiplicative score) minus the turnover cost.
+		# keep_prob = safety × intercept is the possession-protection
+		# probability; (1 - keep_prob) is the strip probability, so the
+		# loss-probability lives in exactly one place (no double-count
+		# with the benefit, which keeps its safety/intercept multipliers
+		# as the "value of arriving with the puck" discount). Loss point
+		# = the destination puck position — where a converging defender
+		# would strip it. Cost self-localizes: ~0 driving into the OZ,
+		# large driving into our own slot.
+		var benefit: float = dest_score * lane * decay * safety * intercept
+		var keep_prob: float = safety * intercept
+		var cost: float = AIActionScoring.turnover_cost(
+				cand_puck_pos, 1.0 - keep_prob, ctx.defending_goal_pos,
+				our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+		var s_total: float = benefit - cost
 		if s_total > best_score:
 			best_score = s_total
 			best_pos = candidate
@@ -639,7 +697,13 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var slot_intercept: float = AIActionScoring.carry_intercept_safety(
 				self_pos, slot_pos, slot_time,
 				_scratch_opponents, _scratch_opponents_path)
-		var slot_total: float = slot_dest_score * slot_lane * slot_decay * slot_safety * slot_intercept
+		# EV: same benefit − turnover_cost shape as the polar candidates.
+		var slot_benefit: float = slot_dest_score * slot_lane * slot_decay * slot_safety * slot_intercept
+		var slot_keep_prob: float = slot_safety * slot_intercept
+		var slot_cost: float = AIActionScoring.turnover_cost(
+				slot_puck_pos, 1.0 - slot_keep_prob, ctx.defending_goal_pos,
+				our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+		var slot_total: float = slot_benefit - slot_cost
 		if slot_total > best_score:
 			best_score = slot_total
 			best_pos = slot_pos
