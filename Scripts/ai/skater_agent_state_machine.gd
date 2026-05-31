@@ -248,6 +248,34 @@ const POKE_EVADE_ACTIVE_TICKS: int = 36
 # normal steering between cuts.
 const POKE_EVADE_COOLDOWN_TICKS: int = 120
 
+# ── Defensive poke jab (active stick-check to strip the carrier) ──────────────
+# The host auto-strips the carrier whenever a defender's blade SWEEPS
+# THROUGH the puck (PuckController._check_interactions → check_poke).
+# Off-puck pressurers position perfectly next to the carrier but their
+# ready-stance aim points the blade a fixed distance in the threat
+# direction — it never reaches THROUGH the puck, so they shadow without
+# ever stripping. The jab fixes that: when a puck-pressurer is within
+# reach of the carrier's puck, it briefly aims its blade tip AT the puck
+# so the IK swings the blade through it and the host detection fires.
+#
+# Discrete (jab + cooldown), not continuous, so it's a real reach-in
+# that commits and can miss (a carrier can deke around it) rather than a
+# permanent stick-on-puck that feels sticky/cheap. Mirrors the offensive
+# poke-EVADE's lifecycle.
+#
+# Reach is the bot's own forehand stick reach plus the poke radius —
+# the distance at which a blade sweep can actually contact the puck.
+const POKE_JAB_REACH_M: float = (
+		GameRules.DEFAULT_STICK_LENGTH_M
+		+ GameRules.DEFAULT_BLADE_LENGTH_M
+		+ GameRules.POKE_RADIUS_M)
+# Jab window: long enough for the blade to sweep through the puck at
+# IK aim-step speed, short enough to read as a discrete poke. ~80 ms.
+const POKE_JAB_ACTIVE_TICKS: int = 20
+# Cooldown after a jab so the bot commits back to gap control between
+# attempts instead of mashing the carrier's puck every tick.
+const POKE_JAB_COOLDOWN_TICKS: int = 90
+
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
 # tag-up target sits. Slightly past the line so the host's
@@ -569,6 +597,13 @@ var _carry_tracking_fire: bool = false
 # kicks in and blocks retrigger. Both reset on CARRY entry.
 var _poke_evade_active_ticks: int = 0
 var _poke_evade_cooldown_ticks: int = 0
+
+# Defensive poke-jab bookkeeping (see POKE_JAB_* constants). While
+# _active > 0 the bot aims its blade at the carrier's puck so the host
+# strip detection fires; the cooldown then blocks retrigger so the jab
+# is a discrete reach-in, not a permanent stick-on-puck.
+var _poke_jab_active_ticks: int = 0
+var _poke_jab_cooldown_ticks: int = 0
 
 # One-timer readiness mirrored from the most recent OFF_PUCK role
 # decision. Also published to TeamBrain (so the carrier reads it
@@ -943,7 +978,18 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				and snapshot.puck_state.carrier_peer_id == -1:
 			would_be_ready = true
 		_set_one_timer_ready(would_be_ready)
-		if would_be_ready:
+		# Defensive poke jab: a puck-pressurer within reach of the
+		# carrier's puck aims its blade THROUGH the puck so the host strip
+		# detection fires. Only evaluated when no offensive intent
+		# (one-timer) is live — a pressurer is never one-timer-ready, but
+		# gating here keeps the jab lifecycle from ticking during
+		# offensive states. INF (no jab) falls through to the normal aim.
+		var jab_aim: Vector3 = Vector3.INF
+		if not would_be_ready:
+			jab_aim = _poke_jab_aim(snapshot, self_pos)
+		if jab_aim.is_finite():
+			input.mouse_world_pos = _step_mouse_aim(jab_aim)
+		elif would_be_ready:
 			input.mouse_world_pos = _step_mouse_aim(_shot_aim_point(snapshot, self_pos, 0.0))
 		elif decision.has_aim_override:
 			input.mouse_world_pos = _step_mouse_aim(decision.aim_world_pos)
@@ -2470,6 +2516,65 @@ func _apply_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos:
 	input.move_vector = perp
 
 
+# Defensive poke jab. Returns the aim point (the carrier's puck
+# position) when a puck-pressurer should reach its blade through the
+# puck to trigger a host strip; Vector3.INF when no jab is active.
+#
+# Runs the discrete jab lifecycle (mirror of the offensive poke-evade):
+#   - active > 0: keep aiming at the puck; decrement, start cooldown at 0.
+#   - cooldown > 0: decrement, no jab (commit back to gap control).
+#   - both 0: trigger a fresh jab iff we're an on-puck defensive role and
+#     within reach of an opposing carrier's puck.
+# Only the puck-pressurer slots jab (PRESSURE / F1_PRESSURE / CONTAIN) —
+# the backside roles keep pure positioning, so the team doesn't collapse
+# two bots onto the puck.
+func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	if _poke_jab_active_ticks > 0:
+		_poke_jab_active_ticks -= 1
+		if _poke_jab_active_ticks == 0:
+			_poke_jab_cooldown_ticks = POKE_JAB_COOLDOWN_TICKS
+		return _carrier_puck_pos(snapshot)
+	if _poke_jab_cooldown_ticks > 0:
+		_poke_jab_cooldown_ticks -= 1
+		return Vector3.INF
+	if not _is_puck_pressurer_slot():
+		return Vector3.INF
+	if snapshot.puck_state == null:
+		return Vector3.INF
+	# Must be an opposing carrier (not loose, not a teammate carrying).
+	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
+	if carrier_pid == -1 or _team_id_by_peer.get(carrier_pid, -1) == _team_id:
+		return Vector3.INF
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var dx: float = puck_pos.x - self_pos.x
+	var dz: float = puck_pos.z - self_pos.z
+	if dx * dx + dz * dz > POKE_JAB_REACH_M * POKE_JAB_REACH_M:
+		return Vector3.INF
+	_poke_jab_active_ticks = POKE_JAB_ACTIVE_TICKS
+	return puck_pos
+
+
+# True if our current brain slot is an on-puck defensive pressurer —
+# the only roles that actively jab. (PRESSURE is shared by DZONE +
+# TRANS_OD; F1_PRESSURE is FORECHECK; CONTAIN is the TRANS_OD engager.)
+func _is_puck_pressurer_slot() -> bool:
+	if _team_brain == null:
+		return false
+	var slot: int = _team_brain.get_slot(_peer_id)
+	return (slot == AIRoleSlots.Slot.PRESSURE
+			or slot == AIRoleSlots.Slot.F1_PRESSURE
+			or slot == AIRoleSlots.Slot.CONTAIN)
+
+
+# The opposing carrier's puck position, or Vector3.INF if no carrier.
+# Used as the jab aim point — aiming the blade at the puck makes the IK
+# sweep the blade through it, which the host strip detection picks up.
+func _carrier_puck_pos(snapshot: WorldSnapshot) -> Vector3:
+	if snapshot.puck_state == null or snapshot.puck_state.carrier_peer_id == -1:
+		return Vector3.INF
+	return snapshot.puck_state.position
+
+
 # Shot aim past the goalie's projected shadow. Uses the goalie's
 # predicted position at `release_lookahead_s` from now — defaults to
 # the wrister window for a charged shot, override to 0.0 for a
@@ -2922,6 +3027,8 @@ func _set_state(s: State) -> void:
 			_carry_tracking_fire = false
 			_poke_evade_active_ticks = 0
 			_poke_evade_cooldown_ticks = 0
+			_poke_jab_active_ticks = 0
+			_poke_jab_cooldown_ticks = 0
 			_carrier.clear_intent()
 		_state = s
 		_ticks_in_state = 0
