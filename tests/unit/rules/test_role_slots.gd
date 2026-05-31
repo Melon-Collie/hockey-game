@@ -65,6 +65,16 @@ func test_slots_for_trans_do() -> void:
 	assert_true(slots.has(AIRoleSlots.Slot.SUPPORT))
 
 
+func test_slots_for_breakout() -> void:
+	# BREAKOUT (we possess in our own DZ) uses {CARRIER, BREAKOUT_STRONG,
+	# BREAKOUT_WEAK}: the carrier plus a strong-side-wall outlet and a
+	# weak-side reverse valve.
+	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.BREAKOUT)
+	assert_true(slots.has(AIRoleSlots.Slot.CARRIER))
+	assert_true(slots.has(AIRoleSlots.Slot.BREAKOUT_STRONG))
+	assert_true(slots.has(AIRoleSlots.Slot.BREAKOUT_WEAK))
+
+
 func test_slots_for_trans_od() -> void:
 	# TRANS_OD uses {PRESSURE, BACKCHECK, CONTAIN}: the same primary
 	# pressurer as DZONE plus a Sprinting-Through pair (up-ice peer
@@ -146,6 +156,42 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 	assert_eq(assignments[100], AIRoleSlots.Slot.CARRIER)
 	assert_eq(assignments[110], AIRoleSlots.Slot.OUTLET, "up-ice bot becomes OUTLET")
 	assert_eq(assignments[120], AIRoleSlots.Slot.SUPPORT, "deep bot becomes SUPPORT")
+
+
+func test_assign_breakout_strong_goes_to_strong_side_peer() -> void:
+	# Carrier deep in our own zone. Strong side is +X (default
+	# _strong_x = +1), so the +X non-carrier takes BREAKOUT_STRONG and
+	# the -X one takes the weak-side reverse (BREAKOUT_WEAK).
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, 20.0)],   # carrier, deep in our DZ
+			[110, 0, Vector3(9.0, 0.0, 12.0)],   # +X side → STRONG
+			[120, 0, Vector3(-9.0, 0.0, 20.0)],  # -X side → WEAK
+	]
+	var snap := _make_snapshot(skaters, 100)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.BREAKOUT,
+			_resolver(skaters), {}, 1.0)
+	assert_eq(assignments[100], AIRoleSlots.Slot.CARRIER)
+	assert_eq(assignments[110], AIRoleSlots.Slot.BREAKOUT_STRONG,
+			"+X-side bot takes the strong-side-wall outlet")
+	assert_eq(assignments[120], AIRoleSlots.Slot.BREAKOUT_WEAK,
+			"-X-side bot takes the weak-side reverse valve")
+
+
+func test_assign_breakout_strong_follows_strong_x_sign() -> void:
+	# Flip the strong side to -X: now the -X peer should take STRONG.
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, 20.0)],
+			[110, 0, Vector3(9.0, 0.0, 12.0)],
+			[120, 0, Vector3(-9.0, 0.0, 12.0)],
+	]
+	var snap := _make_snapshot(skaters, 100)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.BREAKOUT,
+			_resolver(skaters), {}, -1.0)
+	assert_eq(assignments[120], AIRoleSlots.Slot.BREAKOUT_STRONG,
+			"with strong side -X, the -X bot takes the strong outlet")
+	assert_eq(assignments[110], AIRoleSlots.Slot.BREAKOUT_WEAK)
 
 
 func test_assign_trans_od_backcheck_goes_to_highest_player() -> void:

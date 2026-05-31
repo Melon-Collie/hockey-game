@@ -8,15 +8,23 @@ class_name AIPossessionState
 # State table (per team):
 #   OZONE    — we have the puck AND puck is in their DZ
 #   DZONE    — opp has the puck AND puck is in our DZ
-#   TRANS_DO — we have the puck AND puck is NOT in their DZ (D→O attack)
+#   BREAKOUT — we have the puck AND puck is in OUR DZ (break it out)
+#   TRANS_DO — we have the puck AND puck is in the NZ (D→O rush)
 #   TRANS_OD — opp has the puck AND puck is NOT in our DZ (O→D defend)
+#
+# BREAKOUT vs TRANS_DO: both are "we possess, not in their DZ", split by
+# where the puck is. Deep in our own end the job is to break out safely
+# (the supports present strong-side-wall + weak-side-reverse outlets);
+# once the puck reaches the NZ it's a rush and TRANS_DO's stretch OUTLET
+# at the far blue line makes sense. The old single TRANS_DO bucket held
+# both, which is why its OUTLET misfired from deep in our zone.
 #
 # Loose-puck handling: possession is sticky. `prev_carrier_team` carries
 # over until a new carrier sets it. The 6 Hz brain tick smooths sub-tick
 # oscillation (e.g., stick-on-stick contact during a strip) naturally —
 # we sample at the brain tick, not every physics tick.
 
-enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL }
+enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT }
 
 class Result:
 	var state: int           # AIPossessionState.State enum value
@@ -88,7 +96,12 @@ static func compute(
 
 	var state: State
 	if our_possession:
-		state = State.OZONE if in_their_dz else State.TRANS_DO
+		if in_their_dz:
+			state = State.OZONE
+		elif in_our_dz:
+			state = State.BREAKOUT
+		else:
+			state = State.TRANS_DO
 	else:
 		state = State.DZONE if in_our_dz else State.TRANS_OD
 

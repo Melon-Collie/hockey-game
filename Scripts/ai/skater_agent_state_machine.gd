@@ -779,6 +779,8 @@ func _team_state_label(state: int) -> String:
 			return "OtoD"
 		AIPossessionState.State.NEUTRAL:
 			return "Neutral"
+		AIPossessionState.State.BREAKOUT:
+			return "Breakout"
 		_:
 			return "?"
 
@@ -803,6 +805,10 @@ func _slot_label(slot: int) -> String:
 			return "Outlet"
 		AIRoleSlots.Slot.SUPPORT:
 			return "Support"
+		AIRoleSlots.Slot.BREAKOUT_STRONG:
+			return "BreakStrong"
+		AIRoleSlots.Slot.BREAKOUT_WEAK:
+			return "BreakWeak"
 		AIRoleSlots.Slot.CHASE:
 			return "Chase"
 		AIRoleSlots.Slot.FLANK_L:
@@ -975,6 +981,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	if _team_brain != null:
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
+		ctx.strong_x = _team_brain.strong_x()
 	else:
 		ctx.anchor = self_pos
 	return ctx
@@ -999,6 +1006,10 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			return AIRoleSupport.decide(ctx)
 		AIRoleSlots.Slot.OUTLET:
 			return AIRoleOutlet.decide(ctx)
+		AIRoleSlots.Slot.BREAKOUT_STRONG:
+			return AIRoleBreakout.decide(ctx, true)
+		AIRoleSlots.Slot.BREAKOUT_WEAK:
+			return AIRoleBreakout.decide(ctx, false)
 		AIRoleSlots.Slot.PRESSURE:
 			return AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.ANCHOR:

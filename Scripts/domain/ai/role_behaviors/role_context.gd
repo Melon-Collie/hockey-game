@@ -23,6 +23,10 @@ var own_goal_dir: float = 1.0
 var anchor: Vector3 = Vector3.ZERO
 # TeamBrain reference for queries like get_slot(other_peer_id).
 var team_brain: TeamBrain = null
+# Hysteretic strong-side sign from the brain (+1 = +X side, -1 = -X).
+# BREAKOUT outlet roles read this so their strong/weak side matches the
+# brain's slot assignment. Defaults to +1 when no brain is wired (tests).
+var strong_x: float = 1.0
 # Peer -> team_id lookup for opponent / teammate filtering. Live dict
 # owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. Used to
 # be a `Callable`; downgraded to a Dictionary because role decide() and
