@@ -5,24 +5,27 @@ class_name AIRoleForecheck
 # conservative 1-1-1 press (F1 reuses AIRolePressure, dispatched
 # directly — not here):
 #
-#   F3 (is_high = true)  — high safety at the opp blue line. Holds the
-#     line on the strong side so the zone stays pinned, but is the
-#     designated first-man-back: it never ventures deep, so it never
-#     risks an offside tag-up and is always the recovery layer on a
-#     rush the other way. Pure positional anchor.
-#   F2 (is_high = false) — mid-lane read. Sits high in the zone and
-#     takes away the most dangerous breakout PASS the carrier could
+#   F2 (is_high = false) — mid-lane read, AGGRESSIVE. Sits in the zone
+#     and takes away the most dangerous breakout PASS the carrier could
 #     make to a teammate. Inverse pass-threat scoring (mirror of COVER),
-#     but its search region is biased toward the opp blue line (the
-#     breakout lanes) instead of toward our net, and constrained to the
-#     OZ side so it doesn't drop deep and clutter F1.
+#     search region biased toward the opp blue line (the breakout
+#     lanes). Stays IN the zone — that's the forecheck; sagging out
+#     would concede it.
+#   F3 (is_high = true)  — high safety at the opp blue line, strong
+#     side. The one conservative role: the designated first-man-back if
+#     the forecheck fails, so it holds the line rather than pressuring
+#     deep. Pure positional anchor.
 #
-# Offside safety: F2 and F3 both keep their search centers / candidates
-# on the attacking-zone side near the blue line — they're already
-# legally in the zone with the puck, and they never trail the puck out,
-# so the delayed-offside tag-up (see InfractionRules) only ever applies
-# to F1 chasing the puck out. That asymmetry is by design: only the
-# deep pressurer accepts the over-commit risk.
+# Nobody is offside during a forecheck. We turned the puck over after a
+# legal zone entry, so the whole team is onside as long as the puck
+# stays in the zone — and keeping it in the zone IS the goal. So F1 and
+# F2 press freely with no offside concern; there's no penalty for being
+# deep here. If the forecheck fails and the puck leaves the zone, the
+# possession state flips to TRANS_OD, whose BACKCHECK/CONTAIN pull
+# everyone home — any brief delayed-offside ghost self-clears on that
+# retreat (tag up at the line, re-engage). The risk is accepted, not
+# avoided: keeping possession in their end is worth a few bots being
+# caught deep on the occasional failed pin.
 
 # How far off the strong-side boards F3 holds at the blue line. Keeps it
 # off the wall so it can step to either breakout lane.
@@ -90,11 +93,13 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
-		# Stay OZ-side of the opp blue line so F2 doesn't drop deep into
-		# F1's pressure area (and stays the high read). own_goal_dir * z
-		# grows toward our net; the opp blue line is at
-		# -own_goal_dir * BLUE_LINE_Z, so "OZ side" is z more negative
-		# than that for team 0 — i.e. own_goal_dir * c.z <= -BLUE_LINE_Z.
+		# Keep F2 IN the attacking zone — sagging back across the blue
+		# line concedes the forecheck. Reject candidates on the NZ side of
+		# the opp blue line. own_goal_dir * z grows toward our net; the
+		# opp blue line is at -own_goal_dir * BLUE_LINE_Z, so "in the zone"
+		# is own_goal_dir * c.z <= -BLUE_LINE_Z (z past the line toward
+		# the opp net). No offside concern — the team is onside until the
+		# puck leaves, and keeping it in is the whole point.
 		if ctx.own_goal_dir * c.z > -GameRules.BLUE_LINE_Z:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, our_team_excluding_self):

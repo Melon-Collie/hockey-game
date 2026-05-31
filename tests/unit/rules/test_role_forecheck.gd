@@ -89,10 +89,11 @@ func test_f2_reads_off_loose_puck_instead_of_freezing() -> void:
 	assert_ne(d.target_position, self_pos, "F2 reads off the loose puck, doesn't freeze")
 
 
-func test_f2_stays_oz_side_of_opp_blue_line() -> void:
-	# F2's target must stay on the attacking-zone side of the opp blue
-	# line (z <= -BLUE_LINE_Z for team 0) so it doesn't drop deep into
-	# F1's pressure area — and so it never trails the puck out to ghost.
+func test_f2_stays_in_the_zone() -> void:
+	# F2 must hold inside the attacking zone (z <= -BLUE_LINE_Z for team
+	# 0) — sagging back across the blue line would concede the forecheck.
+	# Not an offside concern: the team is onside until the puck leaves;
+	# keeping it in is the point.
 	var self_pos := Vector3(0, 0, -12)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
@@ -102,4 +103,4 @@ func test_f2_stays_oz_side_of_opp_blue_line() -> void:
 	var ctx := _make_ctx(self_pos, 200, skaters, 1.0)
 	var d: RoleDecision = AIRoleForecheck.decide(ctx, false)
 	assert_lte(d.target_position.z, -GameRules.BLUE_LINE_Z + 0.001,
-			"F2 stays OZ-side of the opp blue line (never drops deep / trails out)")
+			"F2 holds in the attacking zone rather than sagging out across the blue line")
