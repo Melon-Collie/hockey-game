@@ -368,14 +368,6 @@ const _ROUGH_BLADE: float = 0.5    # matte blade face
 const _STICK_SHAFT_COLOR: Color = Color(0.06, 0.06, 0.07)
 const _BLADE_COLOR: Color = Color(0.05, 0.05, 0.05)
 
-# Cosmetic blade tilt, applied to the blade *mesh* only — never the Blade marker
-# the puck-contact math reads (set_blade_position / get_blade_contact_global).
-# Toe-lift (lie) is handedness-neutral; the face-open loft flips sign with
-# handedness, since the forehand face is on opposite sides for L/R shots. Both
-# are tunable — flip a sign here if a side looks wrong in the editor.
-const _BLADE_TOE_LIFT_DEG: float = 7.0
-const _BLADE_FACE_OPEN_DEG: float = 6.0
-
 
 func _make_texture_material(tex: Texture2D, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
@@ -391,19 +383,12 @@ func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardM
 	return mat
 
 
-# Paints the blade matte black, applies the cosmetic handed tilt to the blade
-# *mesh* (never the marker), and (re)builds the team-colored tape band wrapped
-# around the heel→mid of the blade, leaving the toe end bare black.
+# Paints the blade matte black and (re)builds the team-colored tape band wrapped
+# around the heel→mid of the blade, leaving the toe end bare black. The cosmetic
+# handed tilt lives on the rig (Skater._apply_blade_tilt) so it tracks live
+# handedness flips; the tape, being a child of the blade mesh, inherits it.
 func _rebuild_blade(tape_color: Color) -> void:
 	_blade_mesh.material_override = _make_solid_mat(_BLADE_COLOR, _ROUGH_BLADE)
-
-	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
-	var rot: Basis = Basis.IDENTITY \
-			.rotated(Vector3.RIGHT, deg_to_rad(_BLADE_TOE_LIFT_DEG)) \
-			.rotated(Vector3.BACK, deg_to_rad(_BLADE_FACE_OPEN_DEG * blade_side_sign))
-	# Preserve any scale already on the mesh; only inject rotation (origin kept).
-	var keep_scale: Vector3 = _blade_mesh.transform.basis.get_scale()
-	_blade_mesh.transform.basis = rot.scaled(keep_scale)
 
 	if _blade_tape != null and is_instance_valid(_blade_tape):
 		_blade_mesh.remove_child(_blade_tape)

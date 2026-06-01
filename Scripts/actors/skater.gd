@@ -12,6 +12,15 @@ extends CharacterBody3D
 		_position_hand_markers()
 
 # ── Blade Tuning ──────────────────────────────────────────────────────────────
+# Cosmetic blade tilt, applied to the blade *mesh* only — never the Blade marker
+# the puck-contact math reads (set_blade_position / get_blade_contact_global).
+# Toe-lift (lie) is handedness-neutral; the face-open loft flips sign with
+# handedness, since the forehand face is on opposite sides for L/R shots. Applied
+# from _position_hand_markers() so it tracks live handedness flips. Both are
+# tunable — flip a sign here if a side looks wrong in the editor.
+const _BLADE_TOE_LIFT_DEG: float = 7.0
+const _BLADE_FACE_OPEN_DEG: float = 6.0
+
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
 # (blade on −X) has the top hand on the right shoulder (+X), and vice versa.
@@ -359,6 +368,26 @@ func _position_hand_markers() -> void:
 	top_hand.position        = Vector3(shoulder.position.x, 0.0, 0.0)
 	bottom_shoulder.position = Vector3(-top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
 	bottom_hand.position     = Vector3(bottom_shoulder.position.x, 0.0, 0.0)
+	_apply_blade_tilt()
+
+
+# Sets the cosmetic toe-lift + handedness-signed face-open loft on the blade
+# *mesh* (the Blade marker itself is untouched, so puck-contact math is
+# unaffected). Idempotent: recomputed from identity each call, scale preserved,
+# so the tape-band child rides along. Safe before _ready() — exits if the mesh
+# isn't there yet.
+func _apply_blade_tilt() -> void:
+	if blade == null:
+		return
+	var blade_mesh: MeshInstance3D = blade.get_node_or_null("MeshInstance3D") as MeshInstance3D
+	if blade_mesh == null:
+		return
+	var blade_side_sign: float = -1.0 if is_left_handed else 1.0
+	var rot: Basis = Basis.IDENTITY \
+			.rotated(Vector3.RIGHT, deg_to_rad(_BLADE_TOE_LIFT_DEG)) \
+			.rotated(Vector3.BACK, deg_to_rad(_BLADE_FACE_OPEN_DEG * blade_side_sign))
+	var keep_scale: Vector3 = blade_mesh.transform.basis.get_scale()
+	blade_mesh.transform.basis = rot.scaled(keep_scale)
 
 
 # ── Facing ────────────────────────────────────────────────────────────────────
