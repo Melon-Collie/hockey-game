@@ -32,7 +32,7 @@ A 3v3 arcade hockey game built in Godot 4.6.2 (GDScript, 3D). Online multiplayer
 
 Backhand shots take a power penalty. Scroll wheel toggles elevation (ballistic targeting, apex-capped so you don't sail it over the net). Passes are quick-shots — same mechanic, no separate pass system, no saucer/tape-to-tape variants.
 
-**Skating is momentum-driven.** Thrust accelerates, drag-friction decelerates naturally, Space brakes hard or carves with direction held. Backward and lateral (crossover) movement are slower than forward. Facing lazily tracks the cursor, and auto-freezes during shot aim/charge/block states and when the cursor swings into the unreachable wedge behind the skater. No frame-perfect inputs — reads and positioning matter more than execution precision.
+**Skating is momentum-driven.** Thrust accelerates, drag-friction decelerates naturally, Space brakes hard (heavy friction, direction-agnostic). Backward and lateral (crossover) movement are slower than forward. Facing lazily tracks the cursor, and auto-freezes during shot aim/charge/block states and when the cursor swings into the unreachable wedge behind the skater. No frame-perfect inputs — reads and positioning matter more than execution precision.
 
 **Physicality is emergent, not scripted.** Body checks trigger from closing-velocity impulse, not a hit button. Ctrl crouches to shot-block (wider hitbox, reflects shots). Poke-checks are stick-on-stick momentum contests — the blades collide and the puck goes where the blended momentum sends it.
 
