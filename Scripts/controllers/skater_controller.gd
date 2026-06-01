@@ -561,7 +561,7 @@ func apply_network_state(_net_state: SkaterNetworkState, _host_ts: float) -> voi
 func get_queue_depth() -> int:
 	return 0
 
-func apply_replay_state(state: SkaterNetworkState) -> void:
+func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	if skater == null:
 		return
 	skater.global_position = state.position
@@ -579,6 +579,11 @@ func apply_replay_state(state: SkaterNetworkState) -> void:
 	skater.update_stick_mesh()
 	skater.update_arm_mesh()
 	skater.update_bottom_arm_mesh()
+	# Procedural leg gait — derived from the velocity just applied, exactly as in
+	# live play, so replayed skaters stride instead of gliding rigidly. `delta` is
+	# the replay's virtual-clock advance this frame (slow-mo-scaled, 0 on a paused
+	# scrub) so the stride cadence tracks the visible motion rather than wall time.
+	_skating.apply(delta)
 	
 signal puck_release_requested(direction: Vector3, power: float, is_slapper: bool)
 # Fired when the player releases slap while the puck is nearby but not yet
