@@ -72,15 +72,24 @@ func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: floa
 	arm_timer = maxf(arm_reaction_delay - back_date_s, 0.0)
 	started.emit(impact_x, impact_y, is_elevated)
 
-# Tick shot/arm processing timers. Returns true if the low-shot timer just
-# expired while upright — caller should enter BUTTERFLY in response.
-func tick_processing_timers(delta: float, is_upright: bool) -> bool:
+# Tick the shot/arm processing delays. Both decrement toward zero (clamped).
+# The drop DECISION is split into `low_drop_ready` so the controller can gate
+# the actual butterfly entry on shot imminence — a release is read instantly,
+# but the leg drop waits until the puck is closing on the net (see
+# GoalieController._update_shot_timer).
+func tick_processing_timers(delta: float) -> void:
 	if arm_timer > 0.0:
-		arm_timer -= delta
-	if shot_timer <= 0.0:
-		return false
-	shot_timer -= delta
-	return shot_timer <= 0.0 and is_upright and not is_elevated
+		arm_timer = maxf(arm_timer - delta, 0.0)
+	if shot_timer > 0.0:
+		shot_timer = maxf(shot_timer - delta, 0.0)
+
+# True while the reflexive low-shot leg drop is eligible: actively reacting to
+# a non-elevated shot whose processing delay has elapsed, with the goalie still
+# upright. Level (not edge) — stays true every tick until the goalie drops or
+# the reaction clears, so the controller can defer the drop until the puck is
+# imminent and still fire it on a later tick.
+func low_drop_ready(is_upright: bool) -> bool:
+	return reacting and shot_timer <= 0.0 and not is_elevated and is_upright
 
 # Tick the reaction-freeze countdown. Returns true if the freeze just cleared
 # this call (clear-timer fired or duration cap hit).

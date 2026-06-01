@@ -44,6 +44,28 @@ extends Node
 # extension once the arm clears the delay.
 @export var arm_reaction_delay: float = 0.18
 
+# Imminence gate on the reflexive low-shot butterfly drop. The goalie reads and
+# freezes the instant a shot is RELEASED (arm reach + tracking start right
+# away), but it only commits the LEG drop once the puck is within this many
+# seconds of crossing the goal line. Passes are quick-shots — they fire the
+# same release event as a real shot — so without this gate a hard pass or clear
+# up the ice reads as a low shot from across the rink and drops the goalie long
+# before the play arrives. At 0.45s a 25 m/s shot drops around the top of the
+# circles; slower pucks have to get correspondingly closer before it commits.
+@export var drop_max_time_to_impact: float = 0.45
+
+# Imminence gate on STARTING a release reaction at all. A release whose puck is
+# more than this many seconds from crossing the goal line doesn't begin a
+# reaction (no freeze, no arm read) — it's too far to be worth committing to.
+# Without it, a hard pass or clear up the ice (passes fire puck_released like a
+# shot) freezes the goalie from across the rink even though the leg drop is now
+# gated. Must be >= drop_max_time_to_impact (you read before you drop). Genuine
+# long shots that release outside this window aren't lost: once the loose puck
+# closes to within `universal_react_max_time_to_impact` the universal-reaction
+# path picks it up. 0.9s comfortably covers point shots (a 30 m/s blue-line
+# slapshot is ~0.65s out) while ignoring slow clears/passes from distance.
+@export var react_max_time_to_impact: float = 0.9
+
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
 # Margin past the net edges for "is this a shot on goal" classification.
@@ -775,8 +797,31 @@ func _compute_threat_position() -> Vector3:
 # butterfly drop (low shots) AND the arm reach (elevated shots, see
 # `GoalieBodyConfigBuilder._apply_elevated_shot_reaction`).
 func _update_shot_timer(delta: float) -> void:
-	if _reaction.tick_processing_timers(delta, _sm.is_upright()):
+	_reaction.tick_processing_timers(delta)
+	if not _reaction.low_drop_ready(_sm.is_upright()):
+		return
+	# Leg drop is reflexive once the shot's read, but only commit to butterfly
+	# when the puck is actually closing on the net. Passes fire puck_released
+	# like any quick-shot, so without this a pass/clear up the ice reads as a
+	# low shot from across the rink and drops the goalie before the play
+	# arrives. The reaction freeze + arm tracking still begin at release (in
+	# _on_puck_released); only the leg drop waits for the puck to close within
+	# drop_max_time_to_impact. `low_drop_ready` is a level signal, so the drop
+	# fires on whichever tick the puck first becomes imminent.
+	var ttg: float = _puck_time_to_goal_line()
+	if ttg >= 0.0 and ttg <= drop_max_time_to_impact:
 		_enter_butterfly()
+
+# Seconds until the puck crosses this goalie's goal line on its current heading,
+# or -1 if it isn't approaching (moving parallel or away). Host-side only — uses
+# linear_velocity, reliable on the host. Drives the imminence gate on the
+# low-shot butterfly drop in _update_shot_timer.
+func _puck_time_to_goal_line() -> float:
+	var vz: float = puck.linear_velocity.z
+	if absf(vz) < 0.001:
+		return -1.0
+	var t: float = (_goal_line_z - puck.global_position.z) / vz
+	return t if t > 0.0 else -1.0
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 # Entry rules:
@@ -1667,6 +1712,14 @@ func _on_puck_released() -> void:
 			_goal_center_x,
 			_shot_cfg)
 	if not result.is_shot:
+		return
+	# Imminence gate: a release still way out (a hard pass or clear up the ice —
+	# passes fire puck_released too) shouldn't begin a reaction. Don't freeze /
+	# arm-read from across the rink. Genuine long shots aren't lost: once the
+	# loose puck closes to within `universal_react_max_time_to_impact` the
+	# universal-reaction path in _update_tracking picks it up. The back-date
+	# (client latency) effectively brings the shot a touch closer, so subtract it.
+	if result.time_to_impact - back_date > react_max_time_to_impact:
 		return
 	# Two separate processing delays. `shot_timer` (= reaction_delay, ~130ms)
 	# gates the butterfly drop on low shots — leg drop is reflexive.

@@ -17,6 +17,10 @@ class ShotResult:
 	var impact_y: float = 0.0
 	var is_low: bool = false      # impact_y < low_shot_threshold
 	var is_elevated: bool = false # impact_y >= elevated_threshold
+	# Seconds until the puck crosses the goal line on its current heading.
+	# Only meaningful when is_shot; lets callers gate on imminence (e.g. don't
+	# start a reaction to a release that's still way out) without recomputing.
+	var time_to_impact: float = 0.0
 
 class ShotDetectionConfig:
 	var shot_speed_threshold: float = 0.0
@@ -81,6 +85,7 @@ static func detect_shot(
 	result.reaction_delay = cfg.reaction_delay
 	result.impact_x = impact_x
 	result.impact_y = impact_y
+	result.time_to_impact = t_to_goal
 	result.is_low = impact_y < cfg.low_shot_threshold
 	result.is_elevated = impact_y >= cfg.elevated_threshold
 	return result
