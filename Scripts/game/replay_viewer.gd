@@ -31,6 +31,9 @@ var _home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
 var _away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT
 var _home_colors: Dictionary = {}
 var _away_colors: Dictionary = {}
+# Regulation period count from the replay header — sizes the Tab scoreboard's
+# per-period grid and the OT-label threshold. Set in _mount_hud.
+var _num_periods: int = GameRules.NUM_PERIODS
 # Header roster cached for backward-seek rebuilds — the driver sends us the
 # events stream up through the new clock, but we have to re-spawn the
 # initial roster ourselves first.
@@ -118,6 +121,7 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	_away_colors = TeamColorRegistry.get_colors(_away_color_slot, 1)
 	goalie_result.bottom_goalie.set_goalie_color(_home_colors.jersey, _home_colors.helmet, _home_colors.goalie_pads)
 	goalie_result.top_goalie.set_goalie_color(_away_colors.jersey, _away_colors.helmet, _away_colors.goalie_pads)
+	_apply_crowd_colors()
 
 	_header_roster = header.get("roster", []) as Array
 	for entry: Variant in _header_roster:
@@ -171,6 +175,21 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	record.text_color = team_colors.text
 	record.text_outline_color = team_colors.text_outline
 	_records[record.peer_id] = record
+
+
+# The crowd (ArenaStands) lives inside the instanced RinkArena scene. In the
+# live game it recolors itself off GameManager.team_colors_ready, which never
+# fires for replay colors offline — so push the replay palette to it directly
+# here, reusing the same setup() the live signal would call. find_child returns
+# Node, so type the result for member access.
+func _apply_crowd_colors() -> void:
+	var stands: ArenaStands = find_child("ArenaStands", true, false) as ArenaStands
+	if stands == null:
+		push_warning("ReplayViewer: ArenaStands not found; crowd keeps default colors")
+		return
+	stands.setup(
+		_home_colors.primary, _home_colors.secondary,
+		_away_colors.primary, _away_colors.secondary)
 
 
 func _mount_camera() -> void:
@@ -250,7 +269,91 @@ func _on_roster_rebuild(events_through_t: Array) -> void:
 func _mount_hud(header: Dictionary) -> void:
 	_hud = ReplayViewerHUD.new()
 	add_child(_hud)
-	_hud.setup(_driver, header, _camera_director)
+	_num_periods = _scoreboard_num_periods(header)
+	_hud.setup(_driver, header, _camera_director,
+		_home_color_slot, _away_color_slot, _num_periods,
+		Callable(self, "_scoreboard_players"),
+		Callable(self, "_scoreboard_period_scores"))
+
+
+# ── Tab-scoreboard data providers ────────────────────────────────────────────
+# The replay reuses the live Scoreboard, which reads players + period scores.
+# Replay world-state frames carry no per-player stats block (stats ship on a
+# separate reliable channel that isn't recorded), so the only stats we can
+# reconstruct are GOALS and ASSISTS — recorded goal events carry the scorer /
+# assist display names. SOG / hits / blocks are not in the file and show 0.
+# Goal events identify players by display name only (no peer id), so we match
+# names against records; the synthesized scoreboard names ("P1"/"P2"/"P3" for
+# nameless players) are deterministic, so they still match the recorded names.
+
+# Returns peer_id → PlayerRecord, the exact shape GameManager.get_players()
+# yields, after refreshing each record's goal / assist counts from the events.
+func _scoreboard_players() -> Dictionary:
+	_refresh_event_stats()
+	return _records
+
+
+# [team0_periods[], team1_periods[]] — same shape as GameManager.get_period_scores().
+# Reconstructed from goal events with host_ts <= the current virtual clock so
+# the board tracks live as the user scrubs.
+func _scoreboard_period_scores() -> Array:
+	var num_periods: int = maxi(1, _num_periods)
+	var scores: Array = [[], []]
+	for team: int in 2:
+		for _p: int in num_periods:
+			(scores[team] as Array).append(0)
+	if _driver == null:
+		return scores
+	var clock: float = _driver.get_virtual_clock()
+	for event: Dictionary in _driver.get_events():
+		if event.host_ts > clock:
+			continue
+		var data: Dictionary = event.get("data", {}) as Dictionary
+		if data.get("kind", "") != "goal":
+			continue
+		var team_id: int = clampi(int(data.get("scoring_team_id", 0)), 0, 1)
+		var period_idx: int = clampi(int(data.get("period", 1)) - 1, 0, num_periods - 1)
+		(scores[team_id] as Array)[period_idx] += 1
+	return scores
+
+
+# Recount goals + assists from the event stream up to the current clock and
+# write them onto each record's PlayerStats. Idempotent — fully recomputed each
+# call so scrubbing backward decrements correctly. Goal events carry only
+# display names (no peer id), so credit by matching record.display_name().
+func _refresh_event_stats() -> void:
+	var by_name: Dictionary = {}  # display_name → PlayerStats
+	for record: PlayerRecord in _records.values():
+		if record == null or record.stats == null:
+			continue
+		record.stats.goals = 0
+		record.stats.assists = 0
+		by_name[record.display_name()] = record.stats
+	if _driver == null:
+		return
+	var clock: float = _driver.get_virtual_clock()
+	for event: Dictionary in _driver.get_events():
+		if event.host_ts > clock:
+			continue
+		var data: Dictionary = event.get("data", {}) as Dictionary
+		if data.get("kind", "") != "goal":
+			continue
+		var scorer: String = str(data.get("scorer", ""))
+		if by_name.has(scorer):
+			(by_name[scorer] as PlayerStats).goals += 1
+		for key: String in ["assist1", "assist2"]:
+			var assister: String = str(data.get(key, ""))
+			if not assister.is_empty() and by_name.has(assister):
+				(by_name[assister] as PlayerStats).assists += 1
+
+
+# Header may carry a num_periods field; default to the rules constant. Accepts
+# int OR float (JSON decodes numbers as float).
+func _scoreboard_num_periods(header: Dictionary) -> int:
+	var raw: Variant = header.get("num_periods", GameRules.NUM_PERIODS)
+	if raw is int or raw is float:
+		return maxi(1, int(raw))
+	return GameRules.NUM_PERIODS
 
 
 # ── Stub interface for RemoteController.setup(skater, puck, game_state) ─────
