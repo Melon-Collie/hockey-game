@@ -61,6 +61,11 @@ void fragment() {
 }
 """
 
+# Slot-ring relationship to the LOCAL player, resolved live so a late-spawning
+# local player and mid-game slot swaps self-correct. UNKNOWN keeps the neutral
+# HUD_ICE tint (the pre-coloring default).
+enum RingRelation { UNKNOWN = -1, SELF = 0, TEAMMATE = 1, ENEMY = 2 }
+
 var _skater: Skater
 
 var _ring_mesh: MeshInstance3D
@@ -114,6 +119,16 @@ var _cached_chevron_dir: Vector3 = Vector3(0.0, 0.0, 1.0)
 var _last_fill: float = -1.0
 var _last_pulse: float = -1.0
 var _last_lost_flash: float = -1.0
+
+# Slot-ring relationship tint. The resolver (installed by PlayerRegistry)
+# returns a RingRelation each refresh; recolor is re-evaluated on a coarse
+# interval rather than every 240 Hz tick since relationship changes rarely
+# (local-player spawn, slot swap). RingRelation values are non-negative; -2 is
+# an unreachable sentinel that forces the first refresh to apply.
+const _RING_RECOLOR_INTERVAL: float = 0.25
+var _ring_relation_resolver: Callable = Callable()
+var _ring_relation_cached: int = -2
+var _ring_recolor_accum: float = _RING_RECOLOR_INTERVAL
 
 # HUD geometry assumes the gameplay top-down camera (ring decals flat on ice,
 # name/chevron placed via camera screen-down). Replays cut to broadcast cams
@@ -224,6 +239,11 @@ func update(delta: float) -> void:
 	_refresh_height_anchors_if_skater_moved()
 	_refresh_screen_down_cache_if_camera_changed()
 
+	_ring_recolor_accum += delta
+	if _ring_recolor_accum >= _RING_RECOLOR_INTERVAL:
+		_ring_recolor_accum = 0.0
+		_refresh_ring_color()
+
 	if _name_label != null and _name_label.visible:
 		_name_label.global_position = Vector3(
 				_skater.global_position.x + _cached_screen_down.x * _NAME_RADIUS,
@@ -308,6 +328,40 @@ func _refresh_screen_down_cache_if_camera_changed() -> void:
 func set_player_name(p_name: String) -> void:
 	if _name_label != null:
 		_name_label.text = p_name
+
+
+# Installs the resolver that maps this skater to a RingRelation (self/teammate/
+# enemy) relative to the local player, then applies the color immediately so
+# the ring is correct on the spawn frame rather than after the first interval.
+func set_ring_relation_resolver(resolver: Callable) -> void:
+	_ring_relation_resolver = resolver
+	_ring_recolor_accum = 0.0
+	_refresh_ring_color()
+
+
+# Re-resolves the relationship and rewrites the slot-ring tint only when it
+# changes. Opacity is preserved from HUD_OPACITY; the ring material is a
+# per-skater StandardMaterial3D (see _make_hud_ice_material) so mutating its
+# albedo here never bleeds into other skaters' rings.
+func _refresh_ring_color() -> void:
+	if _ring_mesh == null or not _ring_relation_resolver.is_valid():
+		return
+	var relation: int = _ring_relation_resolver.call() as int
+	if relation == _ring_relation_cached:
+		return
+	_ring_relation_cached = relation
+	var col: Color = _ring_color_for_relation(relation)
+	var mat: StandardMaterial3D = _ring_mesh.material_override as StandardMaterial3D
+	if mat != null:
+		mat.albedo_color = Color(col.r, col.g, col.b, MenuStyle.HUD_OPACITY)
+
+
+func _ring_color_for_relation(relation: int) -> Color:
+	match relation:
+		RingRelation.SELF:     return MenuStyle.HUD_RING_SELF
+		RingRelation.TEAMMATE: return MenuStyle.HUD_RING_TEAM
+		RingRelation.ENEMY:    return MenuStyle.HUD_RING_ENEMY
+		_:                     return MenuStyle.HUD_ICE
 
 
 # Latch all per-skater HUD chrome off. Used by the replay viewer (which

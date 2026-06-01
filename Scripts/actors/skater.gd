@@ -836,6 +836,10 @@ func set_player_name(p_name: String) -> void:
 	_hud.set_player_name(p_name)
 
 
+func set_ring_relation_resolver(resolver: Callable) -> void:
+	_hud.set_ring_relation_resolver(resolver)
+
+
 func set_charge_ring_visible(should_show: bool) -> void:
 	_hud.set_charge_ring_visible(should_show)
 

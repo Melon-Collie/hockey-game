@@ -99,6 +99,17 @@ const HUD_OPACITY    := 0.85               # darker color reads better at higher
 const HUD_LINE_THIN  := 0.03               # "thin line" thickness in 3D meters (slot ring, reticle, arrow)
 const HUD_LINE_THICK := 0.045              # heavier stroke for symbols (arrow, chevron)
 
+# Slot-ring tint by the skater's relationship to the LOCAL player, so you can
+# re-identify your own skater and read friend-vs-foe at a glance while the
+# camera pans. Relationship-relative (not absolute team), so it stays the same
+# regardless of which jersey each side wears. Blue-vs-red is colorblind-safe;
+# the cyan self-ring stands clearly apart from both and avoids the warm
+# yellow→orange→red charge-ring palette. HUD_ICE remains the neutral fallback
+# (e.g. before the local player has spawned, or in replay/spectator).
+const HUD_RING_SELF  := Color(0.20, 0.90, 1.00, 1.00)   # cyan — your own skater
+const HUD_RING_TEAM  := Color(0.25, 0.55, 1.00, 1.00)   # blue — teammates
+const HUD_RING_ENEMY := Color(0.95, 0.25, 0.25, 1.00)   # red  — opponents
+
 # Charge-ring fill colors. Lerps from CHARGE_LOW → CHARGE_HIGH across the fill;
 # CHARGE_FULL pulses at 100%; CHARGE_LOST flashes briefly when charge is
 # cancelled without firing (e.g. puck stripped during wrister aim).
