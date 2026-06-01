@@ -132,6 +132,11 @@ var bottom_hand_sphere: MeshInstance3D = null
 var top_cuff_mesh: MeshInstance3D = null
 var bot_cuff_mesh: MeshInstance3D = null
 
+# Butt-end knob cylinder at the top of the shaft (just past the top hand).
+# Created by SkaterUniformCoordinator on uniform apply; positioned per-tick by
+# update_stick_mesh() so it rides the butt end as the shaft swings.
+var stick_knob_mesh: MeshInstance3D = null
+
 signal body_checked_player(victim: Skater, impact_force: float, hit_direction: Vector3)
 signal body_check_impulse_applied(impulse: Vector3)
 signal body_block_hit(body: Node3D)
@@ -659,6 +664,25 @@ func update_stick_mesh() -> void:
 	stick_mesh.position = stick_origin + to_blade / 2.0
 	stick_mesh.scale.z = to_blade.length()
 	stick_mesh.look_at(upper_body.to_global(blade.position), Vector3.UP)
+	_update_stick_knob(stick_origin, to_blade)
+
+
+# Rides the knob just past the top hand, along the shaft away from the blade,
+# with its CylinderMesh long axis (local Y) aligned to the shaft — same look_at +
+# rotate_object_local(X, 90°) trick as the glove cuffs.
+func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
+	if stick_knob_mesh == null or not is_instance_valid(stick_knob_mesh):
+		return
+	if to_blade.length_squared() < 0.0001:
+		return
+	var hand_w: Vector3 = upper_body.to_global(stick_origin)
+	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(blade.position)).normalized()
+	var cyl: CylinderMesh = stick_knob_mesh.mesh as CylinderMesh
+	var knob_h: float = cyl.height if cyl != null else 0.05
+	var knob_center_w: Vector3 = hand_w + up_shaft_w * (knob_h * 0.5)
+	stick_knob_mesh.position = upper_body.to_local(knob_center_w)
+	stick_knob_mesh.look_at(knob_center_w + up_shaft_w, _up_for_look_at(up_shaft_w))
+	stick_knob_mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
 
 
 # ── Arm Mesh ──────────────────────────────────────────────────────────────────
