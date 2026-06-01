@@ -114,6 +114,11 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 		return
 	if skater_snap.is_ghost:
 		return
+	# A crouched shot-blocker can't corral the puck with their stick. Checked
+	# from the rewound snapshot (like is_ghost) so the verdict matches the
+	# stance the claimant actually held at send time.
+	if skater_snap.shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+		return
 	var blade_curr: Vector3 = skater_snap.blade_contact_world
 	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world
 	if not PuckInteractionRules.check_pickup(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.PICKUP_RADIUS):
