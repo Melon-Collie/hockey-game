@@ -101,6 +101,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var lower_body_lag_max_deg: float = 20.0
 @export var lower_body_lag_speed: float = 5.0
 
+# ── Skating Stride Tuning ─────────────────────────────────────────────────────
+# Procedural leg gait — see SkaterSkatingCoordinator. All cosmetic. Forward,
+# backward, and lateral (crossover) gaits blend by direction of travel.
+@export var stride_cadence: float = 1.4          # radians of stride phase per metre skated
+@export var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
+@export var stride_pitch_deg: float = 6.0         # forward push amplitude (fore/aft)
+@export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)
+@export var crossover_lean_deg: float = 6.0       # static lean into the crossover direction
+@export var crossover_scissor_deg: float = 8.0    # legs scissor laterally across each other
+@export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
+
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
 @export var max_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
@@ -236,6 +247,7 @@ var _is_elevated: bool = false
 var _aiming: SkaterAimingBehavior = SkaterAimingBehavior.new()
 var _pose: SkaterPoseCoordinator = SkaterPoseCoordinator.new()
 var _shot_pose: SkaterShotPoseCoordinator = SkaterShotPoseCoordinator.new()
+var _skating: SkaterSkatingCoordinator = SkaterSkatingCoordinator.new()
 var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
 var has_puck: bool = false
@@ -270,6 +282,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.apply_block_movement = _apply_block_movement
 	_sm.setup(_cb, _aiming)
 	_pose.setup(skater, _sm, _aiming, self)
+	_skating.setup(skater, _sm, self)
 
 # Reach ROM is derived from arm length, not an independent tunable. These
 # ratios reflect anatomy: forehand reach is shoulder-joint-limited (about
@@ -487,6 +500,9 @@ func _process_input(input: InputState, delta: float) -> void:
 	skater.update_bottom_arm_mesh()
 	if not is_replaying:
 		_pose.update_angular_velocities(delta)
+		# Cosmetic leg gait — derived from velocity, so it's skipped during replay
+		# (reconcile re-simulates many ticks per frame and would over-spin the phase).
+		_skating.apply(delta)
 
 
 # Aim-only blade update for FACEOFF_PREP: drives the blade target from the
