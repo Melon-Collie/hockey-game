@@ -3,7 +3,7 @@ extends CanvasLayer
 
 signal rematch_toggled
 signal host_action_pressed
-signal disconnect_pressed
+signal free_play_pressed
 signal exit_pressed
 
 const _GOLD := MenuStyle.GOLD
@@ -57,15 +57,20 @@ func _build_ui() -> void:
 	_vote_label.add_theme_color_override("font_color", _DIM)
 	rematch_box.add_child(_vote_label)
 
-	if NetworkManager.is_host:
-		var host_label: String = "Return to Menu" if NetworkManager.is_offline_mode else "Return to Lobby"
-		_host_btn = MenuStyle.popup_button(host_label)
+	# "Return to Lobby" only exists for an online host — it pulls the whole
+	# group back to the shared lobby. Offline has no lobby, and clients can't
+	# drive everyone's scene, so neither sees this button.
+	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
+		_host_btn = MenuStyle.popup_button("Return to Lobby")
 		_host_btn.pressed.connect(func() -> void: host_action_pressed.emit())
 		vbox.add_child(_host_btn)
 
-	var disconnect_btn := MenuStyle.popup_button("Disconnect")
-	disconnect_btn.pressed.connect(func() -> void: disconnect_pressed.emit())
-	vbox.add_child(disconnect_btn)
+	# Always available: drop to solo free play. Offline this is the only leave
+	# action; for an online client it disconnects just them; for an online host
+	# it tears down the server (everyone drops out).
+	var free_play_btn := MenuStyle.popup_button("Return to Free Play")
+	free_play_btn.pressed.connect(func() -> void: free_play_pressed.emit())
+	vbox.add_child(free_play_btn)
 
 	var exit_btn := MenuStyle.popup_button("Exit Game")
 	exit_btn.pressed.connect(func() -> void: exit_pressed.emit())

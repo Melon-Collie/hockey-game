@@ -207,7 +207,7 @@ func _physics_process(delta: float) -> void:
 			NetworkTelemetry.record_blade_jump(blade_delta)
 	_last_blade_pos = blade_pos
 	_claim_cooldown = maxf(_claim_cooldown - delta, 0.0)
-	if not _is_host and _claim_cooldown <= 0.0 and NetworkManager.is_clock_ready() and not skater.is_ghost and not puck.pickup_locked:
+	if not _is_host and _claim_cooldown <= 0.0 and NetworkManager.is_clock_ready() and not skater.is_ghost and not puck.pickup_locked and _sm.get_state() != State.SHOT_BLOCKING:
 		var blade_pos_for_claim: Vector3 = skater.get_blade_contact_global()
 		if puck.carrier == null:
 			# Loose puck — speculative pickup claim. Host validates with rewind.

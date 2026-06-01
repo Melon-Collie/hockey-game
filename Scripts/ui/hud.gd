@@ -68,7 +68,7 @@ func _ready() -> void:
 	_game_over_popup = GameOverPopup.new()
 	_game_over_popup.rematch_toggled.connect(_on_rematch_vote_pressed)
 	_game_over_popup.host_action_pressed.connect(_on_game_over_host_action)
-	_game_over_popup.disconnect_pressed.connect(_on_game_over_disconnect)
+	_game_over_popup.free_play_pressed.connect(_on_game_over_free_play)
 	_game_over_popup.exit_pressed.connect(_on_game_over_exit)
 	add_child(_game_over_popup)
 	_pause_menu = PauseMenu.new()
@@ -918,14 +918,18 @@ func _update_rematch_ui() -> void:
 	var total: int = NetworkManager.connected_peer_ids().size() + 1
 	_game_over_popup.update_votes(_rematch_votes, total, _local_voted)
 
+# Online-host-only button (offline/clients don't show it): pull the whole
+# group back to the shared lobby.
 func _on_game_over_host_action() -> void:
-	if NetworkManager.is_offline_mode:
-		GameManager.return_to_free_play()
-	else:
-		GameManager.return_to_lobby()
+	GameManager.return_to_lobby()
 
-func _on_game_over_disconnect() -> void:
-	_show_confirm("Return to free play?", GameManager.return_to_free_play)
+# Drop to solo free play. For an online host this tears down the server, so the
+# confirm spells out that it ends the match for everyone.
+func _on_game_over_free_play() -> void:
+	var msg: String = "Return to free play?"
+	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
+		msg = "Return to free play? This ends the match for everyone."
+	_show_confirm(msg, GameManager.return_to_free_play)
 
 func _on_game_over_exit() -> void:
 	_show_confirm("Exit game?", func() -> void:

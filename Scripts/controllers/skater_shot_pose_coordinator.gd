@@ -83,6 +83,29 @@ func apply_slapper_blade_position() -> void:
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(pos)
 
+# ── Shot-Block Pose ───────────────────────────────────────────────────────────
+# Choreographed "stick down" block: the blade lies flat on the ice extended
+# forward (toward the shooter the stance snapped to on entry) and slightly to
+# the stick side, with the top hand dropped low and pushed forward so the shaft
+# lies across the lane. Authored in upper-body-local space like the slapper
+# pose; the torso doesn't rotate during the block (SkaterPoseCoordinator's
+# apply_upper_body early-returns for SHOT_BLOCKING and _enter_shot_block zeroes
+# lean), so blade_y_lean_corrected reduces to a flat ice height and the pose
+# holds steady relative to the snapped facing.
+func apply_block_blade_position() -> void:
+	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * _controller.block_blade_x
+	var blade_z: float = _skater.shoulder.position.z - _controller.block_blade_reach
+	var blade_y: float = _ik.blade_y_lean_corrected(blade_x, blade_z)
+	var blade_local := Vector3(blade_x, blade_y, blade_z)
+	blade_local = _skater.clamp_blade_to_walls(blade_local)
+	var hand_pos := Vector3(
+			_skater.shoulder.position.x + blade_side_sign * _controller.block_hand_x,
+			_controller.block_hand_y,
+			_skater.shoulder.position.z - _controller.block_hand_forward)
+	_skater.set_top_hand_position(hand_pos)
+	_skater.set_blade_position(blade_local)
+
 # ── Wrister Follow-Through ────────────────────────────────────────────────────
 func apply_wrister_follow_through() -> void:
 	var t: float = 1.0 - (_sm.follow_through_timer / _controller.follow_through_duration)

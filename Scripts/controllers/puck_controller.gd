@@ -205,6 +205,11 @@ func _check_interactions() -> void:
 			for skater: Skater in skaters:
 				if skater.is_ghost or puck.is_on_cooldown(skater):
 					continue
+				# A crouched shot-blocker can't corral the puck with their stick —
+				# the blade is committed to the block. Let it ride past (body-block
+				# dampening still applies via the body collision path).
+				if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
 				var blade_prev: Vector3 = skater.get_prev_blade_contact_global()
 				if not PuckInteractionRules.check_pickup(_prev_puck_pos, puck_curr,
