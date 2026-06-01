@@ -371,73 +371,49 @@ func get_facing() -> Vector2:
 
 
 # ── Skating Stride ────────────────────────────────────────────────────────────
-# Procedural leg animation, driven by SkaterSkatingCoordinator. The leg
-# primitives (thigh/knee/sock/skate/foot) are siblings under LowerBody with no
-# kinematic chain, so each leg is rotated as a rigid group about its hip joint in
-# LowerBody-local space — the stride therefore inherits facing and lean for free.
-# Rest transforms are captured once (lazily) and every call recomputes from them,
-# so repeated calls never compound. The leaf .scale (owned independently by
-# SkaterAppearanceCoordinator) is read fresh each call and preserved, so stride
-# and attribute scaling coexist on the same nodes.
-const _LEG_L_PART_NAMES: Array[String] = ["ThighL", "KneeL", "SockL", "SkateL", "FootL"]
-const _LEG_R_PART_NAMES: Array[String] = ["ThighR", "KneeR", "SockR", "SkateR", "FootR"]
-
-var _leg_baseline_captured: bool = false
-var _leg_l_parts: Array[Node3D] = []
-var _leg_r_parts: Array[Node3D] = []
-var _leg_l_rest_pos: Array[Vector3] = []
-var _leg_r_rest_pos: Array[Vector3] = []
-var _leg_l_rest_basis: Array[Basis] = []
-var _leg_r_rest_basis: Array[Basis] = []
-var _leg_pivot_l: Vector3 = Vector3.ZERO
-var _leg_pivot_r: Vector3 = Vector3.ZERO
+# Procedural leg animation, driven by SkaterSkatingCoordinator. Each leg is a
+# two-segment pivot chain in the scene (see Scenes/Skater.tscn):
+#
+#   LowerBody/LegL          Node3D at the hip joint  — rotate to swing the leg
+#     ├─ HipL, ThighL, KneeL   (upper-leg meshes)
+#     └─ ShinL              Node3D at the knee joint — rotate for the knee bend
+#          └─ SockL, SkateL, FootL   (lower-leg meshes)
+#
+# Animating is just rotating the two pivots — the limb meshes hang underneath
+# and keep their own positions and .scale (the latter owned by
+# SkaterAppearanceCoordinator), so the gait and attribute scaling never write
+# the same property. Pivots are resolved lazily and null-guarded so the rig
+# degrades to a static pose if the scene hasn't been updated yet.
+var _legs_resolved: bool = false
+var _leg_l: Node3D = null
+var _leg_r: Node3D = null
+var _shin_l: Node3D = null
+var _shin_r: Node3D = null
 
 
-# pitch = rotation about local X (fore/aft swing), roll = rotation about local Z
-# (side-to-side splay), both in radians, applied about each leg's hip joint.
-func set_leg_swing(left_pitch: float, left_roll: float, right_pitch: float, right_roll: float) -> void:
-	if not _leg_baseline_captured:
-		_capture_leg_baseline()
-	_apply_leg_group(_leg_l_parts, _leg_l_rest_pos, _leg_l_rest_basis, _leg_pivot_l, left_pitch, left_roll)
-	_apply_leg_group(_leg_r_parts, _leg_r_rest_pos, _leg_r_rest_basis, _leg_pivot_r, right_pitch, right_roll)
+# pitch = fore/aft swing (local X) and roll = side-to-side splay (local Z) of the
+# whole leg about the hip; knee = flex of the lower leg (local X) about the knee.
+# All radians.
+func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
+		right_pitch: float, right_roll: float, right_knee: float) -> void:
+	if not _legs_resolved:
+		_resolve_leg_pivots()
+	if _leg_l != null:
+		_leg_l.rotation = Vector3(left_pitch, 0.0, left_roll)
+	if _shin_l != null:
+		_shin_l.rotation.x = left_knee
+	if _leg_r != null:
+		_leg_r.rotation = Vector3(right_pitch, 0.0, right_roll)
+	if _shin_r != null:
+		_shin_r.rotation.x = right_knee
 
 
-func _capture_leg_baseline() -> void:
-	_capture_leg_side(_LEG_L_PART_NAMES, _leg_l_parts, _leg_l_rest_pos, _leg_l_rest_basis)
-	_capture_leg_side(_LEG_R_PART_NAMES, _leg_r_parts, _leg_r_rest_pos, _leg_r_rest_basis)
-	var hip_l: Node3D = lower_body.get_node_or_null("HipL") as Node3D
-	var hip_r: Node3D = lower_body.get_node_or_null("HipR") as Node3D
-	if hip_l != null:
-		_leg_pivot_l = hip_l.position
-	if hip_r != null:
-		_leg_pivot_r = hip_r.position
-	_leg_baseline_captured = true
-
-
-func _capture_leg_side(names: Array[String], parts: Array[Node3D],
-		rest_pos: Array[Vector3], rest_basis: Array[Basis]) -> void:
-	for part_name: String in names:
-		var node: Node3D = lower_body.get_node_or_null(part_name) as Node3D
-		if node == null:
-			continue
-		parts.append(node)
-		rest_pos.append(node.position)
-		# Orthonormalize so the captured rest carries the part's rotation only
-		# (e.g. the feet's baked 90° tilt) — scale is read live in _apply_leg_group.
-		rest_basis.append(node.basis.orthonormalized())
-
-
-func _apply_leg_group(parts: Array[Node3D], rest_pos: Array[Vector3],
-		rest_basis: Array[Basis], pivot: Vector3, pitch: float, roll: float) -> void:
-	var r: Basis = Basis.from_euler(Vector3(pitch, 0.0, roll))
-	for i: int in parts.size():
-		var node: Node3D = parts[i]
-		# Read live scale so SkaterAppearanceCoordinator's attribute scaling is
-		# preserved, and re-apply it on the right (columns) — node.scale is the
-		# local-frame scale composed as rotation * scale, not Basis.scaled()'s rows.
-		var scl: Vector3 = node.scale
-		node.position = pivot + r * (rest_pos[i] - pivot)
-		node.basis = (r * rest_basis[i]) * Basis.from_scale(scl)
+func _resolve_leg_pivots() -> void:
+	_leg_l = lower_body.get_node_or_null("LegL") as Node3D
+	_leg_r = lower_body.get_node_or_null("LegR") as Node3D
+	_shin_l = lower_body.get_node_or_null("LegL/ShinL") as Node3D
+	_shin_r = lower_body.get_node_or_null("LegR/ShinR") as Node3D
+	_legs_resolved = true
 
 
 # ── Blade ─────────────────────────────────────────────────────────────────────

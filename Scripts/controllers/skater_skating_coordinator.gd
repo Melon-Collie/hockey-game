@@ -99,4 +99,12 @@ func apply(delta: float) -> void:
 	l_roll += lr_w * (lean + s * scissor)
 	r_roll += lr_w * (lean - s * scissor)
 
-	_skater.set_leg_swing(l_pitch, l_roll, r_pitch, r_roll)
+	# Knee flex. Each knee tucks on the recovery half of its stroke and extends on
+	# the push, 180° out of phase between legs. Direction-agnostic — the recovery
+	# tuck reads the same whichever way the skater is travelling. Negative so the
+	# shin folds back under the body (flip stride_knee_deg's sign to invert).
+	var knee_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity
+	var l_knee: float = -knee_amp * (0.5 - 0.5 * s)
+	var r_knee: float = -knee_amp * (0.5 + 0.5 * s)
+
+	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)

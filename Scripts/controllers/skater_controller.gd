@@ -110,6 +110,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)
 @export var crossover_lean_deg: float = 6.0       # static lean into the crossover direction
 @export var crossover_scissor_deg: float = 8.0    # legs scissor laterally across each other
+@export var stride_knee_deg: float = 18.0         # knee flex depth on the recovery half-stroke
 @export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
