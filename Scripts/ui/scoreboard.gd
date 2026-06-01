@@ -263,7 +263,7 @@ func _make_team_header(team_id: int) -> HBoxContainer:
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var stripe_style := StyleBoxFlat.new()
-	stripe_style.bg_color = colors.jersey_stripe
+	stripe_style.bg_color = colors.ui_stripe
 	stripe_style.corner_radius_top_left = 4
 	stripe_style.corner_radius_bottom_left = 4
 	stripe_style.corner_radius_top_right = 0
@@ -274,7 +274,7 @@ func _make_team_header(team_id: int) -> HBoxContainer:
 	row.add_child(stripe)
 
 	var body_style := StyleBoxFlat.new()
-	body_style.bg_color = colors.jersey
+	body_style.bg_color = colors.ui_base
 	body_style.corner_radius_top_left = 0
 	body_style.corner_radius_bottom_left = 0
 	body_style.corner_radius_top_right = 4
@@ -286,7 +286,7 @@ func _make_team_header(team_id: int) -> HBoxContainer:
 	var body := PanelContainer.new()
 	body.add_theme_stylebox_override("panel", body_style)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var lbl := _lbl(label_text, 16, colors.text)
+	var lbl := _lbl(label_text, 16, colors.ui_text)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	body.add_child(lbl)
 	row.add_child(body)

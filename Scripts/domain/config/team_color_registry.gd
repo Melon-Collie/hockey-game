@@ -11,11 +11,16 @@ class_name TeamColorRegistry
 # range. See data/team_colors.json for the description.
 #
 # get_colors(slot, team_id) returns a Dictionary that's a hybrid:
-#   - Flat legacy keys (primary, secondary, helmet, gloves, goalie_pads,
-#     text, text_outline, jersey, jersey_stripe, pants, pants_stripe,
-#     socks, socks_stripe) for simple consumers (HUD trim, lobby cards,
-#     replay records) — *_stripe are derived from the first stripe color
-#     of the matching region (or the region base if no stripes).
+#   - Flat legacy keys (primary, secondary, light, helmet, gloves,
+#     goalie_pads, text, text_outline, jersey, jersey_stripe, pants,
+#     pants_stripe, socks, socks_stripe) for simple consumers (replay
+#     records, goalie/spawn paint) — *_stripe are derived from the first
+#     stripe color of the matching region (or the region base if no stripes).
+#   - UI palette keys (ui_base, ui_stripe, ui_text) — the canonical 3-color
+#     scheme for HUD/lobby surfaces (scorebug header, lobby slot cards). See
+#     get_ui_colors() for the home/away rule. UI code should read these, NOT
+#     the jersey/* keys (those mirror the 3D uniform mesh and look muddy in
+#     flat UI panels).
 #   - A nested "uniform" sub-dict carrying the full v2 detail
 #     (shoulders, jersey-with-yoke-and-stripes, arms.upper/lower,
 #     pants-with-stripes, socks-with-stripes). The skater painter
@@ -30,6 +35,11 @@ const DEFAULT_AWAY_SLOT: int = 1
 const _USER_JSON_PATH: String = "user://team_colors.json"
 const _RES_JSON_PATH:  String = "res://data/team_colors.json"
 const _SCHEMA_ID: String = "mitts.jersey.v2"
+
+# Fallback "light" (away body) for presets that predate the field or come
+# from a malformed file. A faint cool white so the away card still reads as a
+# card against the dark lobby/HUD panels.
+const _UI_WHITE: Color = Color(0.949, 0.957, 0.969)  # #F2F4F7
 
 static var _presets: Array[Dictionary] = []
 static var _loaded: bool = false
@@ -65,9 +75,14 @@ static func get_colors(slot: int, team_id: int) -> Dictionary:
 	var pants_block: Dictionary  = kit.pants
 	var socks_block: Dictionary  = kit.socks
 	var shoulders: Dictionary    = kit.shoulders
+	var ui: Dictionary           = get_ui_colors(slot, team_id)
 	return {
 		"primary":        preset.primary,
 		"secondary":      preset.secondary,
+		"light":          preset.get("light", _UI_WHITE),
+		"ui_base":        ui.base,
+		"ui_stripe":      ui.stripe,
+		"ui_text":        ui.text,
 		"helmet":         kit.helmet,
 		"jersey":         jersey_block.base,
 		"jersey_stripe":  _accent_color(jersey_block, shoulders.color),
@@ -81,6 +96,23 @@ static func get_colors(slot: int, team_id: int) -> Dictionary:
 		"text_outline":   kit.text.outline,
 		"uniform":        kit,
 	}
+
+
+# Canonical UI palette for a team's side. The single source of truth for how
+# HUD/lobby surfaces color a home/away team — keep all UI panels routed through
+# here (directly, or via get_colors' ui_base/ui_stripe/ui_text keys) so the
+# scheme stays consistent.
+#
+#   Home (team_id 0): primary body, secondary stripe, light lettering.
+#   Away (team_id 1): light body, primary stripe, primary lettering.
+#
+# Returns { base, stripe, text } as Colors.
+static func get_ui_colors(slot: int, team_id: int) -> Dictionary:
+	var preset: Dictionary = get_preset(slot)
+	var light: Color = preset.get("light", _UI_WHITE)
+	if team_id == 0:
+		return {"base": preset.primary, "stripe": preset.secondary, "text": light}
+	return {"base": light, "stripe": preset.primary, "text": preset.primary}
 
 
 static func get_all_slots() -> Array[int]:
@@ -127,6 +159,7 @@ static func _try_load_from(path: String) -> bool:
 			"name":      entry.get("name", "Slot %d" % _presets.size()),
 			"primary":   _parse_color(entry.get("primary",   "#FFFFFF")),
 			"secondary": _parse_color(entry.get("secondary", "#FFFFFF")),
+			"light":     _parse_color(entry.get("light",     "#F2F4F7")),
 			"home":      _parse_kit(entry.get("home", {})),
 			"away":      _parse_kit(entry.get("away", {})),
 		})
@@ -228,6 +261,7 @@ static func _hardcoded_papaya() -> Dictionary:
 		"name":      "Papaya",
 		"primary":   _parse_color("#F46B2A"),
 		"secondary": _parse_color("#2A9472"),
+		"light":     _parse_color("#FBF3EC"),
 		"home":      _parse_kit({
 			"helmet":      "#2A9472",
 			"shoulders":   {"color": "#2A9472", "text": "#FFFFFF", "outline": "#C8321A"},
@@ -260,6 +294,7 @@ static func _hardcoded_lime() -> Dictionary:
 		"name":      "Lime",
 		"primary":   _parse_color("#7FB320"),
 		"secondary": _parse_color("#4A6B15"),
+		"light":     _parse_color("#F4F7EC"),
 		"home":      _parse_kit({
 			"helmet":      "#4A6B15",
 			"shoulders":   {"color": "#7FB320", "text": "#FFFFFF", "outline": "#4A6B15"},

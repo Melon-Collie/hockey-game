@@ -1,11 +1,12 @@
 {
   "schema": "mitts.jersey.v2",
-  "description": "Mitts fruit league - 8 teams, each with home and away kits. Stripes are procedural horizontal bands over a UV region: pos = band center (0=top of region, 1=bottom), width = band height as a fraction of the region, both 0..1. Stripes paint in array order (later over earlier). Centered cross-section bands = stack stripes sharing pos with shrinking widths, widest first (Lime, Pomegranate, Watermelon). Asymmetric slices offset a band's pos off-center (Dragonfruit seed-line). For a cross-section to show its outer color, set the region base to that color so it reads as the skin/rind edges. 'No outline' on text = outline equal to color. yoke = top band of the torso; shoulders.color = caps at the top of the arms.",
+  "description": "Mitts fruit league - 8 teams, each with home and away kits. Stripes are procedural horizontal bands over a UV region: pos = band center (0=top of region, 1=bottom), width = band height as a fraction of the region, both 0..1. Stripes paint in array order (later over earlier). Centered cross-section bands = stack stripes sharing pos with shrinking widths, widest first (Lime, Pomegranate, Watermelon). Asymmetric slices offset a band's pos off-center (Dragonfruit seed-line). For a cross-section to show its outer color, set the region base to that color so it reads as the skin/rind edges. 'No outline' on text = outline equal to color. yoke = top band of the torso; shoulders.color = caps at the top of the arms. primary/secondary/light are the team's UI palette (HUD, lobby cards, scorebug headers): home cards render as primary body + secondary stripe, away cards as light body + primary stripe. light is a near-white tinted slightly toward the team. These drive UI only; the home/away kit blocks below drive the 3D uniform meshes.",
   "teams": [
     {
       "name": "Papaya",
       "primary": "#F46B2A",
       "secondary": "#2A9472",
+      "light": "#FBF3EC",
       "home": {
         "helmet": "#2A9472",
         "shoulders": {
@@ -147,6 +148,7 @@
       "name": "Lime",
       "primary": "#7FB320",
       "secondary": "#4A6B15",
+      "light": "#F4F7EC",
       "home": {
         "helmet": "#4A6B15",
         "shoulders": {
@@ -300,6 +302,7 @@
       "name": "Pomegranate",
       "primary": "#971829",
       "secondary": "#E8445A",
+      "light": "#F8ECEE",
       "home": {
         "helmet": "#971829",
         "shoulders": {
@@ -485,6 +488,7 @@
       "name": "Lemon",
       "primary": "#F5D028",
       "secondary": "#5AB4E0",
+      "light": "#FBF8E8",
       "home": {
         "helmet": "#5AB4E0",
         "shoulders": {
@@ -618,6 +622,7 @@
       "name": "Dragonfruit",
       "primary": "#E31B6D",
       "secondary": "#1A1A1A",
+      "light": "#FAECF1",
       "home": {
         "helmet": "#1A1A1A",
         "shoulders": {
@@ -761,6 +766,7 @@
       "name": "Blueberry",
       "primary": "#4A7AD6",
       "secondary": "#6B1E4A",
+      "light": "#ECF0F8",
       "home": {
         "helmet": "#6B1E4A",
         "shoulders": {
@@ -916,6 +922,7 @@
       "name": "Plum",
       "primary": "#382B6E",
       "secondary": "#DE7324",
+      "light": "#EFEDF5",
       "home": {
         "helmet": "#382B6E",
         "shoulders": {
@@ -1053,6 +1060,7 @@
       "name": "Watermelon",
       "primary": "#E8455A",
       "secondary": "#21643A",
+      "light": "#FAECEE",
       "home": {
         "helmet": "#21643A",
         "shoulders": {
