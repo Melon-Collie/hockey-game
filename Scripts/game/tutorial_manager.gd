@@ -186,7 +186,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_BRAKE:
 			return TutorialStep.new(
 				"Brake",
-				"Hold Space to brake. Hold Space with a direction to carve — great for sharp turns.",
+				"Hold Space to brake hard — friction kicks up and you shed speed fast.",
 				"Tap Space while moving to shed speed quickly.")
 		STEP_QUICK_SHOT:
 			return TutorialStep.new(

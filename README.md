@@ -28,7 +28,7 @@ The main menu shows an **"Update available"** notice when your build is behind t
 | **Left click (tap)** | Quick shot / pass |
 | **Left click (hold + sweep)** | Wrister — sweep blade to charge, release to shoot |
 | **Right click (hold)** | Slapshot — charge up, release to shoot |
-| **Space** | Brake (no direction) / Carve (hold direction) |
+| **Space** | Brake (hard friction) |
 | **Ctrl (hold, no puck)** | Shot-block stance — crouch, widen block area, slow movement, face puck |
 | **Ctrl (during wind-up)** | Cancel shot — abort a wrister or slapshot wind-up without firing |
 | **Scroll up / down** | Toggle elevated shot |
