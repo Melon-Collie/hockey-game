@@ -9,11 +9,14 @@ extends VBoxContainer
 #   │ │                       ●  32ms  │     position letter top-right;
 #   └──────────────────────────────────┘     name in middle; ping or AI label
 #                                            bottom-right; left stripe in
-#                                            jersey_stripe color.
+#                                            the team's UI stripe color.
+#
+# Cards use the team's canonical UI palette (TeamColorRegistry.get_ui_colors):
+# home = primary body + secondary stripe, away = light body + primary stripe.
 #
 # Card visual semantics:
 #   - Empty slot      → dark neutral bg, no stripe color, "+" icon (host).
-#   - Bot slot        → jersey color bg, stripe, "AI" badge bottom-right, "X" icon (host).
+#   - Bot slot        → team body color bg, stripe, "AI" badge bottom-right, "X" icon (host).
 #   - Remote human    → jersey color bg, stripe, "##ms ●" ping with status dot.
 #   - Your slot       → jersey color bg, stripe, ping, plus a 1px TEAL_DIM
 #                       border around the whole card so the local player can
@@ -319,7 +322,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 # ── Refresh ──────────────────────────────────────────────────────────────────
 
 # roster: Array of { team_id, slot, peer_id, player_name, jersey_number, is_left_handed, is_ready }
-# team_colors: Array[Dictionary] indexed by team_id, each with jersey/text/text_outline fields
+# team_colors: Array[Dictionary] indexed by team_id, each with ui_base/ui_stripe/ui_text fields
 # bot_slots: slot_key (team*3+slot) -> bool. Marks empty slots that should
 #   render as bots and (host-only) show the X action.
 # is_local_host: whether the local peer is the host. Drives X/+ visibility.
@@ -362,9 +365,9 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	var text_c:    Color = MenuStyle.TEXT_BODY
 	if _team_colors.size() > team_id:
 		var tc: Dictionary = _team_colors[team_id]
-		jersey_c = tc.get("jersey", jersey_c)
-		stripe_c = tc.get("jersey_stripe", stripe_c)
-		text_c   = tc.get("text", text_c)
+		jersey_c = tc.get("ui_base", jersey_c)
+		stripe_c = tc.get("ui_stripe", stripe_c)
+		text_c   = tc.get("ui_text", text_c)
 
 	var slot_key: int = team_id * 3 + slot
 	var is_bot_slot: bool = entry == null and _bot_slots.get(slot_key, false)
