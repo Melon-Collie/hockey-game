@@ -25,10 +25,13 @@ static func apply_interpolated_snapshot(
 		to_snap: Dictionary,
 		t: float,
 		dt: float,
-		delta: float,
+		sim_delta: float,
 		records: Dictionary,
 		puck: Puck,
 		goalie_controllers: Array) -> void:
+	# `dt` is the bracket span (for Hermite tangent scaling); `sim_delta` is the
+	# virtual-clock time advanced this frame — slow-mo-scaled and 0 on a paused
+	# scrub. The skater leg gait integrates it; goalies currently ignore it.
 	# `records` is peer_id → PlayerRecord. GoalReplayDriver passes
 	# PlayerRegistry.all() (the underlying dict); FileReplayDriver builds its
 	# own dict from the .mreplay header so the viewer doesn't need to stand
@@ -57,7 +60,7 @@ static func apply_interpolated_snapshot(
 		interp.blade_position = fs.blade_position.lerp(ts.blade_position, t)
 		interp.top_hand_position = fs.top_hand_position.lerp(ts.top_hand_position, t)
 		interp.is_ghost = ts.is_ghost
-		record.controller.apply_replay_state(interp)
+		record.controller.apply_replay_state(interp, sim_delta)
 
 	var fp: PuckNetworkState = from_snap.puck
 	var tp: PuckNetworkState = to_snap.puck
@@ -97,4 +100,4 @@ static func apply_interpolated_snapshot(
 		interp.blocker_yaw = lerpf(fg.blocker_yaw, tg.blocker_yaw, t)
 		interp.blocker_pitch = lerpf(fg.blocker_pitch, tg.blocker_pitch, t)
 		interp.head_yaw = lerpf(fg.head_yaw, tg.head_yaw, t)
-		goalie_controllers[i].apply_replay_state(interp, delta)
+		goalie_controllers[i].apply_replay_state(interp, sim_delta)

@@ -68,18 +68,21 @@ func setup(skater: Skater) -> void:
 	_helmet = skater.upper_body.get_node("Helmet") as MeshInstance3D
 	_shoulder_l = skater.upper_body.get_node("ShoulderL") as MeshInstance3D
 	_shoulder_r = skater.upper_body.get_node("ShoulderR") as MeshInstance3D
-	_hip_l = skater.lower_body.get_node("HipL") as MeshInstance3D
-	_hip_r = skater.lower_body.get_node("HipR") as MeshInstance3D
-	_thigh_l = skater.lower_body.get_node("ThighL") as MeshInstance3D
-	_thigh_r = skater.lower_body.get_node("ThighR") as MeshInstance3D
-	_knee_l = skater.lower_body.get_node("KneeL") as MeshInstance3D
-	_knee_r = skater.lower_body.get_node("KneeR") as MeshInstance3D
-	_sock_l = skater.lower_body.get_node("SockL") as MeshInstance3D
-	_sock_r = skater.lower_body.get_node("SockR") as MeshInstance3D
-	_skate_l = skater.lower_body.get_node("SkateL") as MeshInstance3D
-	_skate_r = skater.lower_body.get_node("SkateR") as MeshInstance3D
-	_foot_l = skater.lower_body.get_node("FootL") as MeshInstance3D
-	_foot_r = skater.lower_body.get_node("FootR") as MeshInstance3D
+	# Leg meshes live under per-leg pivot chains: LowerBody/Leg{L,R} carries the
+	# upper-leg meshes, and its ShinL/R child carries the lower-leg meshes. See
+	# the Skating Stride block in skater.gd for the full hierarchy.
+	_hip_l = skater.lower_body.get_node("LegL/HipL") as MeshInstance3D
+	_hip_r = skater.lower_body.get_node("LegR/HipR") as MeshInstance3D
+	_thigh_l = skater.lower_body.get_node("LegL/ThighL") as MeshInstance3D
+	_thigh_r = skater.lower_body.get_node("LegR/ThighR") as MeshInstance3D
+	_knee_l = skater.lower_body.get_node("LegL/KneeL") as MeshInstance3D
+	_knee_r = skater.lower_body.get_node("LegR/KneeR") as MeshInstance3D
+	_sock_l = skater.lower_body.get_node("LegL/ShinL/SockL") as MeshInstance3D
+	_sock_r = skater.lower_body.get_node("LegR/ShinR/SockR") as MeshInstance3D
+	_skate_l = skater.lower_body.get_node("LegL/ShinL/SkateL") as MeshInstance3D
+	_skate_r = skater.lower_body.get_node("LegR/ShinR/SkateR") as MeshInstance3D
+	_foot_l = skater.lower_body.get_node("LegL/ShinL/FootL") as MeshInstance3D
+	_foot_r = skater.lower_body.get_node("LegR/ShinR/FootR") as MeshInstance3D
 	_create_jersey_viewport()
 	_create_shoulder_viewport()
 

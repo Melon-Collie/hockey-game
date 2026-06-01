@@ -370,6 +370,52 @@ func get_facing() -> Vector2:
 	return _facing
 
 
+# ── Skating Stride ────────────────────────────────────────────────────────────
+# Procedural leg animation, driven by SkaterSkatingCoordinator. Each leg is a
+# two-segment pivot chain in the scene (see Scenes/Skater.tscn):
+#
+#   LowerBody/LegL          Node3D at the hip joint  — rotate to swing the leg
+#     ├─ HipL, ThighL, KneeL   (upper-leg meshes)
+#     └─ ShinL              Node3D at the knee joint — rotate for the knee bend
+#          └─ SockL, SkateL, FootL   (lower-leg meshes)
+#
+# Animating is just rotating the two pivots — the limb meshes hang underneath
+# and keep their own positions and .scale (the latter owned by
+# SkaterAppearanceCoordinator), so the gait and attribute scaling never write
+# the same property. Pivots are resolved lazily and null-guarded so the rig
+# degrades to a static pose if the scene hasn't been updated yet.
+var _legs_resolved: bool = false
+var _leg_l: Node3D = null
+var _leg_r: Node3D = null
+var _shin_l: Node3D = null
+var _shin_r: Node3D = null
+
+
+# pitch = fore/aft swing (local X) and roll = side-to-side splay (local Z) of the
+# whole leg about the hip; knee = flex of the lower leg (local X) about the knee.
+# All radians.
+func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
+		right_pitch: float, right_roll: float, right_knee: float) -> void:
+	if not _legs_resolved:
+		_resolve_leg_pivots()
+	if _leg_l != null:
+		_leg_l.rotation = Vector3(left_pitch, 0.0, left_roll)
+	if _shin_l != null:
+		_shin_l.rotation.x = left_knee
+	if _leg_r != null:
+		_leg_r.rotation = Vector3(right_pitch, 0.0, right_roll)
+	if _shin_r != null:
+		_shin_r.rotation.x = right_knee
+
+
+func _resolve_leg_pivots() -> void:
+	_leg_l = lower_body.get_node_or_null("LegL") as Node3D
+	_leg_r = lower_body.get_node_or_null("LegR") as Node3D
+	_shin_l = lower_body.get_node_or_null("LegL/ShinL") as Node3D
+	_shin_r = lower_body.get_node_or_null("LegR/ShinR") as Node3D
+	_legs_resolved = true
+
+
 # ── Blade ─────────────────────────────────────────────────────────────────────
 func set_blade_position(pos: Vector3) -> void:
 	blade.position = pos

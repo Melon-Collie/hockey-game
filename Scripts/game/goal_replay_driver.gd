@@ -270,6 +270,7 @@ func _process(delta: float) -> void:
 			if _shot_event_ts >= 0.0 else _clip_end_ts - slowmo_window
 	var in_slowmo: bool = _virtual_clock >= slowmo_trigger_ts
 	var speed: float = slowmo_speed if in_slowmo else playback_speed
+	var prev_clock: float = _virtual_clock
 	_virtual_clock += delta * speed
 	if _virtual_clock >= _clip_end_ts:
 		_virtual_clock = _clip_end_ts
@@ -303,7 +304,10 @@ func _process(delta: float) -> void:
 	var bracket_dt: float = _timestamps[idx_next] - _timestamps[idx]
 	var t: float = clampf((_virtual_clock - _timestamps[idx]) / bracket_dt, 0.0, 1.0) \
 			if bracket_dt > 0.0 else 0.0
-	_apply_interpolated_snapshot(t, bracket_dt, delta)
+	# Pass the virtual-clock advance (slow-mo-scaled, exactly clamped at clip end)
+	# rather than the wall-frame delta, so procedural pose driven off it — the
+	# skater leg gait — keeps cadence with the on-screen motion during slow-mo.
+	_apply_interpolated_snapshot(t, bracket_dt, _virtual_clock - prev_clock)
 	_dispatch_due_events()
 
 
@@ -366,9 +370,9 @@ func _compute_trimmed_clip_start_ts() -> float:
 	return clampf(play_start, _shot_event_ts - max_pre_shot, _shot_event_ts - min_pre_shot)
 
 
-func _apply_interpolated_snapshot(t: float, dt: float, delta: float) -> void:
+func _apply_interpolated_snapshot(t: float, dt: float, sim_delta: float) -> void:
 	ReplayPlaybackEngine.apply_interpolated_snapshot(
-			_cached_from_snap, _cached_to_snap, t, dt, delta,
+			_cached_from_snap, _cached_to_snap, t, dt, sim_delta,
 			_registry.all(), _puck, _goalie_controllers)
 
 

@@ -24,13 +24,13 @@ const _TORSO_PATHS: Array[String] = [
 ]
 const _HELMET_PATH: String = "UpperBody/Helmet"
 const _THIGH_PATHS: Array[String] = [
-	"LowerBody/HipL",   "LowerBody/HipR",
-	"LowerBody/ThighL", "LowerBody/ThighR",
-	"LowerBody/KneeL",  "LowerBody/KneeR",
+	"LowerBody/LegL/HipL",   "LowerBody/LegR/HipR",
+	"LowerBody/LegL/ThighL", "LowerBody/LegR/ThighR",
+	"LowerBody/LegL/KneeL",  "LowerBody/LegR/KneeR",
 ]
 const _CALF_PATHS: Array[String] = [
-	"LowerBody/SockL",  "LowerBody/SockR",
-	"LowerBody/SkateL", "LowerBody/SkateR",
+	"LowerBody/LegL/ShinL/SockL",  "LowerBody/LegR/ShinR/SockR",
+	"LowerBody/LegL/ShinL/SkateL", "LowerBody/LegR/ShinR/SkateR",
 ]
 
 var _skater: Skater = null

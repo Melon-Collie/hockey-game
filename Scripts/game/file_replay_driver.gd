@@ -246,14 +246,18 @@ func _process(delta: float) -> void:
 		return
 	_virtual_clock += delta * playback_speed
 	_skip_recording_gaps()
+	# Pass the virtual-time advance (playback-speed-scaled), not the wall-frame
+	# delta, so the skater leg gait strides in cadence with on-screen motion at
+	# any playback speed. Seeks call _apply_current_frame(0.0) — no advance.
+	var sim_delta: float = delta * playback_speed
 	if _virtual_clock >= _end_ts:
 		_virtual_clock = _end_ts
 		_paused = true
-		_apply_current_frame(delta)
+		_apply_current_frame(sim_delta)
 		_emit_due_events()
 		playback_ended.emit()
 		return
-	_apply_current_frame(delta)
+	_apply_current_frame(sim_delta)
 	_emit_due_events()
 
 
@@ -278,7 +282,7 @@ func _skip_recording_gaps() -> void:
 	_virtual_clock = _timestamps[idx + 1]
 
 
-func _apply_current_frame(delta: float) -> void:
+func _apply_current_frame(sim_delta: float) -> void:
 	# Keep NetworkManager._replay_clock in lockstep with the virtual clock
 	# so estimated_host_time() reflects playback position rather than 0.
 	# Mirrors GoalReplayDriver._process. Set every apply (rather than once
@@ -304,7 +308,7 @@ func _apply_current_frame(delta: float) -> void:
 	else:
 		t = 0.0
 	ReplayPlaybackEngine.apply_interpolated_snapshot(
-			_cached_from_snap, _cached_to_snap, t, bracket_dt, delta,
+			_cached_from_snap, _cached_to_snap, t, bracket_dt, sim_delta,
 			_records, _puck, _goalie_controllers)
 	# Emit game-state changes (score / phase / period / clock) so the viewer
 	# HUD doesn't have to poll every tick. Compare-and-emit avoids spamming

@@ -37,6 +37,9 @@ func _physics_process(delta: float) -> void:
 			_rejoin_blend_elapsed += delta
 		_interpolate()
 		skater.update_stick_mesh()
+		# Cosmetic leg gait, derived from the interpolated velocity — no extra
+		# network state. (Host-driven remotes animate via _process_input above.)
+		_skating.apply(delta)
 
 func receive_input_batch(batch: Array[InputState]) -> void:
 	# Reject inputs whose timestamps fall outside a plausible window around the
