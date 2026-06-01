@@ -261,7 +261,7 @@ static func _hardcoded_papaya() -> Dictionary:
 		"name":      "Papaya",
 		"primary":   _parse_color("#F46B2A"),
 		"secondary": _parse_color("#2A9472"),
-		"light":     _parse_color("#FBF3EC"),
+		"light":     _parse_color("#FFFFFF"),  # mirrors away jersey base
 		"home":      _parse_kit({
 			"helmet":      "#2A9472",
 			"shoulders":   {"color": "#2A9472", "text": "#FFFFFF", "outline": "#C8321A"},
@@ -294,7 +294,7 @@ static func _hardcoded_lime() -> Dictionary:
 		"name":      "Lime",
 		"primary":   _parse_color("#7FB320"),
 		"secondary": _parse_color("#4A6B15"),
-		"light":     _parse_color("#F4F7EC"),
+		"light":     _parse_color("#FFFFFF"),  # mirrors away jersey base
 		"home":      _parse_kit({
 			"helmet":      "#4A6B15",
 			"shoulders":   {"color": "#7FB320", "text": "#FFFFFF", "outline": "#4A6B15"},

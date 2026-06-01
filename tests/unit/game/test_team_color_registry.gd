@@ -34,11 +34,14 @@ func test_get_colors_exposes_ui_keys_matching_get_ui_colors() -> void:
 		assert_eq(colors.ui_text, ui.text)
 
 
-func test_light_field_parsed_from_json() -> void:
-	# Papaya's light is authored as #FBF3EC; a near-white, not the white fallback.
-	var preset: Dictionary = TeamColorRegistry.get_preset(_PAPAYA)
-	assert_true(preset.has("light"), "preset carries a light color")
-	assert_almost_eq(preset.light.r, Color("#FBF3EC").r, 0.01)
+func test_light_mirrors_away_jersey_base() -> void:
+	# light is authored to match the away kit's jersey base so the UI away
+	# card matches the 3D away sweater. Verify across all teams.
+	for slot: int in TeamColorRegistry.get_all_slots():
+		var preset: Dictionary = TeamColorRegistry.get_preset(slot)
+		assert_true(preset.has("light"), "slot %d carries a light color" % slot)
+		assert_eq(preset.light, preset.away.jersey.base,
+			"slot %d light matches away jersey base" % slot)
 
 
 func test_unknown_slot_still_returns_valid_ui_colors() -> void:

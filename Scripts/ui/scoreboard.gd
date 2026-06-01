@@ -37,12 +37,14 @@ func _on_game_over() -> void:
 	visible = true
 	_refresh()
 
-func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
-	# Period-summary team identifiers now use the scorebug's stripe+label
-	# treatment (white text next to a vertical color band), so only the
-	# stripe needs to follow team colors. Labels stay white.
+func _on_team_colors_ready(_home_primary: Color, home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
+	# Period-summary team identifiers use the scorebug's stripe+label treatment
+	# (white text next to a vertical color band), so only the stripe needs to
+	# follow team colors. The stripe is the team's canonical UI stripe
+	# (TeamColorRegistry.get_ui_colors): home = secondary, away = primary.
+	# Labels stay white.
 	if _home_badge_style != null:
-		_home_badge_style.bg_color = home_primary
+		_home_badge_style.bg_color = home_secondary
 	if _away_badge_style != null:
 		_away_badge_style.bg_color = away_primary
 
@@ -179,10 +181,10 @@ func _rebuild_period_grid(num_periods: int) -> void:
 
 	for team_id: int in [1, 0]:
 		var label: String = "AWAY" if team_id == 1 else "HOME"
-		var primary: Color = _HEADER
+		var stripe_color: Color = _HEADER
 		if GameManager.teams.size() > team_id:
-			primary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id).primary
-		var badge := _team_badge(label, primary)
+			stripe_color = TeamColorRegistry.get_ui_colors(GameManager.teams[team_id].color_slot, team_id).stripe
+		var badge := _team_badge(label, stripe_color)
 		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
 			_away_badge_style = badge_style
