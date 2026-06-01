@@ -46,6 +46,15 @@ func test_fast_puck_on_target_is_shot() -> void:
 	assert_true(result.is_shot)
 	assert_almost_eq(result.reaction_delay, 0.10, 0.001)
 
+# time_to_impact is exposed so callers can gate on imminence. Puck at z=10,
+# vz=20, goal line at z=26.6 → (26.6 - 10) / 20 = 0.83s.
+func test_shot_exposes_time_to_impact() -> void:
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+		Vector3(0, 0, 10), Vector3(0, 0, 20),
+		26.6, 0.0, _shot_cfg())
+	assert_true(result.is_shot)
+	assert_almost_eq(result.time_to_impact, 0.83, 0.01)
+
 func test_fast_puck_moving_away_not_a_shot() -> void:
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
 		Vector3(0, 0, 10), Vector3(0, 0, -20),  # away from +Z goal
