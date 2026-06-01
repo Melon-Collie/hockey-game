@@ -18,13 +18,18 @@ extends CharacterBody3D
 # handedness, since the forehand face is on opposite sides for L/R shots. Applied
 # from _position_hand_markers() so it tracks live handedness flips. Both are
 # tunable — flip a sign here if a side looks wrong in the editor.
-const _BLADE_TOE_LIFT_DEG: float = 7.0
-const _BLADE_FACE_OPEN_DEG: float = 6.0
-# Extra toe-lift blended in while elevation mode is on (scroll-wheel ballistic
-# aim) — the blade leans back as if cupping the puck to loft it. Eased via
-# _blade_elevation_blend in _physics_process so it doesn't snap.
-const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 12.0
-const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0   # blend units/sec (full swing in ~0.17 s)
+# Resting blade tilt. Toe-lift (about X, lie angle, handedness-neutral) is kept
+# small; the face-open loft (about Z, handedness-signed — the forehand face is
+# on opposite sides for L/R) is a tiny resting cup.
+const _BLADE_TOE_LIFT_DEG: float = 4.0
+const _BLADE_FACE_OPEN_DEG: float = 4.0
+# Blended in while elevation mode is on (scroll-wheel ballistic aim): the loft
+# opens the face upward to "scoop" the puck, so elevation keys off the Z loft
+# far more than the X toe-lift. Eased via _blade_elevation_blend in
+# _physics_process so it doesn't snap.
+const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
+const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
+const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
 
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
@@ -393,9 +398,10 @@ func _apply_blade_tilt() -> void:
 		return
 	var blade_side_sign: float = -1.0 if is_left_handed else 1.0
 	var toe_lift: float = _BLADE_TOE_LIFT_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LIFT_DEG
+	var loft: float = (_BLADE_FACE_OPEN_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG) * blade_side_sign
 	var rot: Basis = Basis.IDENTITY \
 			.rotated(Vector3.RIGHT, deg_to_rad(toe_lift)) \
-			.rotated(Vector3.BACK, deg_to_rad(_BLADE_FACE_OPEN_DEG * blade_side_sign))
+			.rotated(Vector3.BACK, deg_to_rad(loft))
 	var keep_scale: Vector3 = blade_mesh.transform.basis.get_scale()
 	blade_mesh.transform.basis = rot.scaled(keep_scale)
 
