@@ -44,6 +44,16 @@ extends Node
 # extension once the arm clears the delay.
 @export var arm_reaction_delay: float = 0.18
 
+# Imminence gate on the reflexive low-shot butterfly drop. The goalie reads and
+# freezes the instant a shot is RELEASED (arm reach + tracking start right
+# away), but it only commits the LEG drop once the puck is within this many
+# seconds of crossing the goal line. Passes are quick-shots — they fire the
+# same release event as a real shot — so without this gate a hard pass or clear
+# up the ice reads as a low shot from across the rink and drops the goalie long
+# before the play arrives. At 0.45s a 25 m/s shot drops around the top of the
+# circles; slower pucks have to get correspondingly closer before it commits.
+@export var drop_max_time_to_impact: float = 0.45
+
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
 # Margin past the net edges for "is this a shot on goal" classification.
@@ -775,8 +785,31 @@ func _compute_threat_position() -> Vector3:
 # butterfly drop (low shots) AND the arm reach (elevated shots, see
 # `GoalieBodyConfigBuilder._apply_elevated_shot_reaction`).
 func _update_shot_timer(delta: float) -> void:
-	if _reaction.tick_processing_timers(delta, _sm.is_upright()):
+	_reaction.tick_processing_timers(delta)
+	if not _reaction.low_drop_ready(_sm.is_upright()):
+		return
+	# Leg drop is reflexive once the shot's read, but only commit to butterfly
+	# when the puck is actually closing on the net. Passes fire puck_released
+	# like any quick-shot, so without this a pass/clear up the ice reads as a
+	# low shot from across the rink and drops the goalie before the play
+	# arrives. The reaction freeze + arm tracking still begin at release (in
+	# _on_puck_released); only the leg drop waits for the puck to close within
+	# drop_max_time_to_impact. `low_drop_ready` is a level signal, so the drop
+	# fires on whichever tick the puck first becomes imminent.
+	var ttg: float = _puck_time_to_goal_line()
+	if ttg >= 0.0 and ttg <= drop_max_time_to_impact:
 		_enter_butterfly()
+
+# Seconds until the puck crosses this goalie's goal line on its current heading,
+# or -1 if it isn't approaching (moving parallel or away). Host-side only — uses
+# linear_velocity, reliable on the host. Drives the imminence gate on the
+# low-shot butterfly drop in _update_shot_timer.
+func _puck_time_to_goal_line() -> float:
+	var vz: float = puck.linear_velocity.z
+	if absf(vz) < 0.001:
+		return -1.0
+	var t: float = (_goal_line_z - puck.global_position.z) / vz
+	return t if t > 0.0 else -1.0
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 # Entry rules:

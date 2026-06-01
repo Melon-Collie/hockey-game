@@ -47,40 +47,49 @@ func test_start_clears_clear_timer_and_age() -> void:
 
 # ── tick_processing_timers ───────────────────────────────────────────────────
 
-# Low shot, upright, timer just expired → returns true to trigger butterfly drop.
+# Low shot, upright, timer just expired → drop becomes eligible.
 func test_processing_timer_expiry_triggers_butterfly_when_upright() -> void:
 	sr.start(0.0, 0.2, false, 0.05)
-	var triggered: bool = sr.tick_processing_timers(0.1, true)
-	assert_true(triggered)
+	sr.tick_processing_timers(0.1)
+	assert_true(sr.low_drop_ready(true))
 
-# Elevated shot: never triggers butterfly drop from the shot timer (leg drop
-# is for low shots only).
+# Elevated shot: never eligible for the low-shot leg drop.
 func test_processing_timer_does_not_trigger_for_elevated() -> void:
 	sr.start(0.0, 1.2, true, 0.05)
-	var triggered: bool = sr.tick_processing_timers(0.1, true)
-	assert_false(triggered)
+	sr.tick_processing_timers(0.1)
+	assert_false(sr.low_drop_ready(true))
 
-# Not upright (already in butterfly/RVH) — no trigger.
+# Not upright (already in butterfly/RVH) — not eligible.
 func test_processing_timer_does_not_trigger_when_not_upright() -> void:
 	sr.start(0.0, 0.2, false, 0.05)
-	var triggered: bool = sr.tick_processing_timers(0.1, false)
-	assert_false(triggered)
+	sr.tick_processing_timers(0.1)
+	assert_false(sr.low_drop_ready(false))
 
 func test_processing_timer_returns_false_when_not_yet_expired() -> void:
 	sr.start(0.0, 0.2, false, 0.13)
-	var triggered: bool = sr.tick_processing_timers(0.01, true)
-	assert_false(triggered)
+	sr.tick_processing_timers(0.01)
+	assert_false(sr.low_drop_ready(true))
 	assert_almost_eq(sr.shot_timer, 0.12, 0.001)
+
+# `low_drop_ready` is a LEVEL signal: it stays true across subsequent ticks
+# once eligible, so the controller can defer the drop until the puck is imminent
+# and still fire it on a later tick.
+func test_low_drop_ready_is_level_not_edge() -> void:
+	sr.start(0.0, 0.2, false, 0.05)
+	sr.tick_processing_timers(0.1)
+	assert_true(sr.low_drop_ready(true))
+	sr.tick_processing_timers(0.1)
+	assert_true(sr.low_drop_ready(true), "stays eligible on subsequent ticks")
 
 func test_arm_timer_decays_in_parallel() -> void:
 	sr.start(0.0, 1.2, true, 0.13)
-	sr.tick_processing_timers(0.05, true)
+	sr.tick_processing_timers(0.05)
 	assert_almost_eq(sr.arm_timer, 0.13, 0.001)
 
 func test_arm_pending_during_arm_timer() -> void:
 	sr.start(0.0, 1.2, true, 0.13)
 	assert_true(sr.arm_pending())
-	sr.tick_processing_timers(0.20, false)
+	sr.tick_processing_timers(0.20)
 	assert_false(sr.arm_pending())
 
 # ── tick_freeze ──────────────────────────────────────────────────────────────
@@ -148,14 +157,14 @@ func test_finish_no_op_when_not_reacting() -> void:
 func test_tip_to_low_clears_elevated_and_arms_shot_timer() -> void:
 	sr.start(0.0, 1.2, true, 0.13)
 	# Wait out the shot timer first (otherwise tip_to_low is a no-op)
-	sr.tick_processing_timers(0.2, false)
+	sr.tick_processing_timers(0.2)
 	sr.tip_to_low(0.13)
 	assert_false(sr.is_elevated)
 	assert_almost_eq(sr.shot_timer, 0.13, 0.001)
 
 func test_tip_to_low_no_op_if_not_elevated() -> void:
 	sr.start(0.0, 0.3, false, 0.13)
-	sr.tick_processing_timers(0.2, false)
+	sr.tick_processing_timers(0.2)
 	var timer_before: float = sr.shot_timer
 	sr.tip_to_low(0.13)
 	assert_false(sr.is_elevated)
