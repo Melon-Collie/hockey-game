@@ -136,6 +136,9 @@ func spawn(
 	team_id_by_peer[peer_id] = team.team_id
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
+	# Slot-ring tint by relationship to the local player. Same resolver style as
+	# the team lookup above — reads live so it survives slot swaps.
+	spawned.skater.set_ring_relation_resolver(func() -> int: return ring_relation_for_peer(peer_id))
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
@@ -215,6 +218,8 @@ func spawn_bot(
 	team_id_by_peer[peer_id] = team.team_id
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
+	# Same slot-ring relationship tint as spawn() — see comment there.
+	spawned.skater.set_ring_relation_resolver(func() -> int: return ring_relation_for_peer(peer_id))
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
@@ -290,6 +295,24 @@ func resolve_team_id(skater: Skater) -> int:
 func resolve_team_id_for_peer(peer_id: int) -> int:
 	var record: PlayerRecord = _players.get(peer_id)
 	return record.team.team_id if record != null else -1
+
+
+# Relationship of the given peer's skater to the LOCAL player, for HUD slot-ring
+# coloring (self / teammate / enemy). Read live each refresh so a late-spawning
+# local player and mid-game slot swaps self-correct. Returns UNKNOWN until the
+# local player and both team ids are known, leaving the ring its neutral tint.
+func ring_relation_for_peer(peer_id: int) -> int:
+	var local: PlayerRecord = get_local()
+	if local == null:
+		return SkaterHUDCoordinator.RingRelation.UNKNOWN
+	if local.peer_id == peer_id:
+		return SkaterHUDCoordinator.RingRelation.SELF
+	var my_team: int = resolve_team_id_for_peer(peer_id)
+	var local_team: int = resolve_team_id_for_peer(local.peer_id)
+	if my_team == -1 or local_team == -1:
+		return SkaterHUDCoordinator.RingRelation.UNKNOWN
+	return SkaterHUDCoordinator.RingRelation.TEAMMATE if my_team == local_team \
+			else SkaterHUDCoordinator.RingRelation.ENEMY
 
 
 # Returns the live players dict as positions for icing/ghost computation.
