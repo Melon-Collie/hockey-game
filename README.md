@@ -59,8 +59,4 @@ You can charge up a one-timer without the puck by holding right click. If you re
 
 - Characters with unique abilities (deferred until game feel is right)
 - 5v5?
-- Skater Bots
-- Spectate feature
-- Replays
-- Tracked stats between games
 - Different rinks
