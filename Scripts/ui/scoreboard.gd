@@ -21,6 +21,7 @@ func _ready() -> void:
 	_build_panel()
 	GameManager.stats_updated.connect(_refresh)
 	GameManager.game_over.connect(_on_game_over)
+	GameManager.game_reset.connect(_on_game_reset)
 	GameManager.team_colors_ready.connect(_on_team_colors_ready)
 	var ping_timer := Timer.new()
 	ping_timer.wait_time = 2.0
@@ -36,6 +37,11 @@ func _input(event: InputEvent) -> void:
 func _on_game_over() -> void:
 	visible = true
 	_refresh()
+
+# A new game/rematch auto-closes the end-of-game box score. The player can
+# still re-open it with Tab during play.
+func _on_game_reset() -> void:
+	visible = false
 
 func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
 	# Period-summary team identifiers now use the scorebug's stripe+label
