@@ -396,7 +396,9 @@ func _apply_blade_tilt() -> void:
 	var blade_mesh: MeshInstance3D = blade.get_node_or_null("MeshInstance3D") as MeshInstance3D
 	if blade_mesh == null:
 		return
-	var blade_side_sign: float = -1.0 if is_left_handed else 1.0
+	# Loft sign: opens the forehand face upward. Flipped from the usual
+	# blade_side_sign convention so the cup tilts the right way for each hand.
+	var blade_side_sign: float = 1.0 if is_left_handed else -1.0
 	var toe_lift: float = _BLADE_TOE_LIFT_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LIFT_DEG
 	var loft: float = (_BLADE_FACE_OPEN_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG) * blade_side_sign
 	var rot: Basis = Basis.IDENTITY \
