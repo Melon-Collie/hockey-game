@@ -225,16 +225,23 @@ func _build_leave_overlay() -> void:
 	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
 	vbox.add_child(title)
 
-	if NetworkManager.is_offline_mode:
-		_add_host_button(vbox, "Return to Free Play", func() -> void: GameManager.return_to_free_play())
-	else:
+	# "Return to Lobby" only exists for an online host — it pulls the whole
+	# group back to the shared lobby. Offline has no lobby, and clients can't
+	# drive everyone's scene, so neither sees this button. (Mirrors the
+	# game-over popup's leave buttons.)
+	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
 		_add_host_button(vbox, "Return to Lobby", func() -> void: GameManager.return_to_lobby())
 
-	if not NetworkManager.is_offline_mode:
-		var disconnect_btn := MenuStyle.popup_button("Disconnect")
-		disconnect_btn.pressed.connect(func() -> void:
-			_show_confirm("Return to free play?", GameManager.return_to_free_play))
-		vbox.add_child(disconnect_btn)
+	# Always available: drop to solo free play. Offline this is the only leave
+	# action; for an online client it disconnects just them; for an online host
+	# it tears down the server (everyone drops out), so the confirm says so.
+	var free_play_btn := MenuStyle.popup_button("Return to Free Play")
+	free_play_btn.pressed.connect(func() -> void:
+		var msg: String = "Return to free play?"
+		if NetworkManager.is_host and not NetworkManager.is_offline_mode:
+			msg = "Return to free play? This ends the match for everyone."
+		_show_confirm(msg, GameManager.return_to_free_play))
+	vbox.add_child(free_play_btn)
 
 	var exit_btn := MenuStyle.popup_button("Exit Game")
 	exit_btn.pressed.connect(func() -> void:
