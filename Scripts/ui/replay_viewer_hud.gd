@@ -41,23 +41,40 @@ var _camera_label: Label = null
 var _seeking_user: bool = false
 var _pause_menu_container: Control = null
 var _pause_options_container: Control = null
+# Full Tab scoreboard overlay — reuses the live game's Scoreboard, fed
+# replay-derived data through provider Callables supplied by ReplayViewer.
+var _scoreboard: Scoreboard = null
+var _home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
+var _away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT
+var _num_periods: int = 3
+var _players_provider: Callable = Callable()
+var _period_scores_provider: Callable = Callable()
 # Remember whether playback was paused before the user opened the pause menu
 # so closing the menu doesn't auto-resume if they had already paused.
 var _was_paused_before_menu: bool = false
 
 
-func setup(driver: FileReplayDriver, header: Dictionary, director: CameraDirector = null) -> void:
+func setup(driver: FileReplayDriver, header: Dictionary, director: CameraDirector = null,
+		home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
+		away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
+		num_periods: int = 3,
+		players_provider: Callable = Callable(),
+		period_scores_provider: Callable = Callable()) -> void:
 	_driver = driver
 	_director = director
 	_header = header
-	# Legacy fruit-name strings in old replay headers won't typecheck — fall back
-	# to defaults rather than crash. Hard break: no string→slot mapping.
-	var raw_home: Variant = header.get("home_color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
-	var raw_away: Variant = header.get("away_color_slot", TeamColorRegistry.DEFAULT_AWAY_SLOT)
-	var home_slot: int = raw_home if raw_home is int else TeamColorRegistry.DEFAULT_HOME_SLOT
-	var away_slot: int = raw_away if raw_away is int else TeamColorRegistry.DEFAULT_AWAY_SLOT
-	_home_color = TeamColorRegistry.get_colors(home_slot, 0).primary
-	_away_color = TeamColorRegistry.get_colors(away_slot, 1).primary
+	_home_color_slot = home_color_slot
+	_away_color_slot = away_color_slot
+	_num_periods = num_periods
+	_players_provider = players_provider
+	_period_scores_provider = period_scores_provider
+	# Resolve scorebug colors from the slots ReplayViewer already parsed (it
+	# accepts the int-or-float JSON quirk). The previous local re-parse used an
+	# `is int` check that JSON's float-decoded slot indices always failed,
+	# silently falling back to the default palette — that was the scorebug
+	# color bug.
+	_home_color = TeamColorRegistry.get_colors(_home_color_slot, 0).primary
+	_away_color = TeamColorRegistry.get_colors(_away_color_slot, 1).primary
 	_build_ui()
 	_driver.game_state_changed.connect(_on_game_state_changed)
 	_driver.playback_ended.connect(_on_playback_ended)
@@ -78,6 +95,7 @@ func _build_ui() -> void:
 	_build_camera_label(root)
 	_build_bottom_bar(root)
 	_build_pause_menu()
+	_build_stats_overlay()
 
 
 func _build_scoreboard(root: Control) -> void:
@@ -126,6 +144,16 @@ func _build_scoreboard(root: Control) -> void:
 	_score_label_away.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hbox.add_child(_score_label_away)
 	hbox.add_child(_team_badge("AWAY", _away_color))
+
+
+# Full Tab scoreboard. Reuses the live Scoreboard (its own CanvasLayer sits
+# above this HUD) in externally-controlled mode: this HUD owns Tab/Escape and
+# the board reads replay data through the injected providers.
+func _build_stats_overlay() -> void:
+	_scoreboard = Scoreboard.new()
+	_scoreboard.configure(_home_color_slot, _away_color_slot, _num_periods,
+		_players_provider, _period_scores_provider)
+	add_child(_scoreboard)
 
 
 func _build_camera_label(root: Control) -> void:
@@ -398,6 +426,12 @@ func _update_play_pause_text() -> void:
 # must work regardless of focus.
 func _shortcut_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
+		# Escape closes the stats scoreboard first if it's open, before the
+		# pause-menu cascade (CLAUDE.md: every overlay closes via ui_cancel).
+		if _scoreboard != null and _scoreboard.visible:
+			_scoreboard.hide_board()
+			get_viewport().set_input_as_handled()
+			return
 		_toggle_pause_menu()
 		get_viewport().set_input_as_handled()
 
@@ -416,6 +450,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if key.echo:
 		return
 	match key.keycode:
+		KEY_TAB:
+			# Toggle the full stats scoreboard. Works while playing or paused;
+			# Escape (in _shortcut_input) closes it ahead of the pause menu.
+			if _scoreboard != null:
+				_scoreboard.toggle_board()
+			get_viewport().set_input_as_handled()
 		KEY_SPACE:
 			_on_play_pause_pressed()
 			get_viewport().set_input_as_handled()

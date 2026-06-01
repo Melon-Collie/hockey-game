@@ -15,24 +15,66 @@ var _period_summary_grid: GridContainer = null
 var _away_badge_style: StyleBoxFlat = null
 var _home_badge_style: StyleBoxFlat = null
 
+# Replay mode: when configured(), an external owner (the replay HUD) drives
+# visibility and supplies replay-derived data through these providers instead
+# of the live GameManager / NetworkManager autoloads.
+var _external_control: bool = false
+var _players_provider: Callable = Callable()
+var _period_scores_provider: Callable = Callable()
+var _color_slots: Array[int] = [
+	TeamColorRegistry.DEFAULT_HOME_SLOT, TeamColorRegistry.DEFAULT_AWAY_SLOT]
+var _num_periods_override: int = -1
+
 func _ready() -> void:
-	layer = 10
+	# Replay mode renders above the replay HUD chrome (its CanvasLayer is also
+	# layer 10) but below the pause menu (layer 20/21). Live mode keeps 10.
+	layer = 15 if _external_control else 10
 	visible = false
+	if not _external_control:
+		GameManager.stats_updated.connect(_refresh)
+		GameManager.game_over.connect(_on_game_over)
+		GameManager.game_reset.connect(_on_game_reset)
+		GameManager.team_colors_ready.connect(_on_team_colors_ready)
+		var ping_timer := Timer.new()
+		ping_timer.wait_time = 2.0
+		ping_timer.autostart = true
+		ping_timer.timeout.connect(_refresh)
+		add_child(ping_timer)
 	_build_panel()
-	GameManager.stats_updated.connect(_refresh)
-	GameManager.game_over.connect(_on_game_over)
-	GameManager.game_reset.connect(_on_game_reset)
-	GameManager.team_colors_ready.connect(_on_team_colors_ready)
-	var ping_timer := Timer.new()
-	ping_timer.wait_time = 2.0
-	ping_timer.autostart = true
-	ping_timer.timeout.connect(_refresh)
-	add_child(ping_timer)
+
+# Replay entry point. Call before add_child so _ready() skips the live
+# GameManager wiring and self-Tab handling. The replay HUD owns Tab/Escape and
+# pushes replay data through the providers. team_id 0 = home, 1 = away.
+func configure(home_slot: int, away_slot: int, num_periods: int,
+		players_provider: Callable, period_scores_provider: Callable) -> void:
+	_external_control = true
+	_color_slots = [home_slot, away_slot]
+	_num_periods_override = num_periods
+	_players_provider = players_provider
+	_period_scores_provider = period_scores_provider
 
 func _input(event: InputEvent) -> void:
+	if _external_control:
+		return  # replay HUD owns Tab/Escape for this board
 	if event is InputEventKey and event.pressed and event.keycode == KEY_TAB:
 		visible = not visible
+		if visible:
+			_refresh()
 		get_viewport().set_input_as_handled()
+
+# Visibility control for externally-driven (replay) mode.
+func show_board() -> void:
+	_refresh()
+	visible = true
+
+func hide_board() -> void:
+	visible = false
+
+func toggle_board() -> void:
+	if visible:
+		hide_board()
+	else:
+		show_board()
 
 func _on_game_over() -> void:
 	visible = true
@@ -162,7 +204,7 @@ func _build_period_summary(vbox: VBoxContainer) -> void:
 	_period_summary_grid.add_theme_constant_override("v_separation", 5)
 	h_wrap.add_child(_period_summary_grid)
 
-	_rebuild_period_grid(GameManager.get_period_scores()[0].size())
+	_rebuild_period_grid(_data_period_scores()[0].size())
 
 func _rebuild_period_grid(num_periods: int) -> void:
 	for child in _period_summary_grid.get_children():
@@ -175,7 +217,8 @@ func _rebuild_period_grid(num_periods: int) -> void:
 	_period_summary_grid.add_child(Control.new())
 	for p: int in num_periods:
 		var period_num: int = p + 1
-		var header_text: String = "OT%d" % (period_num - GameManager.get_num_periods()) if period_num > GameManager.get_num_periods() else str(period_num)
+		var reg_periods: int = _data_num_periods()
+		var header_text: String = "OT%d" % (period_num - reg_periods) if period_num > reg_periods else str(period_num)
 		var h := _lbl(header_text, 12, _HEADER)
 		h.custom_minimum_size = Vector2(col_num, 0)
 		h.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -187,9 +230,7 @@ func _rebuild_period_grid(num_periods: int) -> void:
 
 	for team_id: int in [1, 0]:
 		var label: String = "AWAY" if team_id == 1 else "HOME"
-		var stripe_color: Color = _HEADER
-		if GameManager.teams.size() > team_id:
-			stripe_color = TeamColorRegistry.get_ui_colors(GameManager.teams[team_id].color_slot, team_id).stripe
+		var stripe_color: Color = TeamColorRegistry.get_ui_colors(_team_color_slot(team_id), team_id).stripe
 		var badge := _team_badge(label, stripe_color)
 		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
@@ -211,7 +252,7 @@ func _refresh() -> void:
 		return
 
 	if not _period_score_labels.is_empty():
-		var ps: Array = GameManager.get_period_scores()
+		var ps: Array = _data_period_scores()
 		var num_periods: int = ps[0].size()
 		# Rebuild the grid if OT added a period
 		if _period_score_labels[0].size() != num_periods + 1:
@@ -230,9 +271,9 @@ func _refresh() -> void:
 		child.queue_free()
 
 	var sorted: Array[PlayerRecord] = []
-	var all_players := GameManager.get_players()
+	var all_players: Dictionary = _data_players()
 	for pid: int in all_players:
-		sorted.append(all_players[pid])
+		sorted.append(all_players[pid] as PlayerRecord)
 	sorted.sort_custom(func(a: PlayerRecord, b: PlayerRecord) -> bool:
 		if a.team.team_id != b.team.team_id:
 			return a.team.team_id > b.team.team_id  # team 1 (away) first
@@ -265,7 +306,7 @@ func _make_team_header(team_id: int) -> HBoxContainer:
 	# use (slot_grid_panel.gd:174-198). A single rounded panel with a
 	# border-as-stripe instead bends the stripe around the corner, which
 	# is the "curve on curve" tell we're avoiding.
-	var colors: Dictionary = TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id)
+	var colors: Dictionary = TeamColorRegistry.get_colors(_team_color_slot(team_id), team_id)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -306,7 +347,33 @@ func _make_row() -> HBoxContainer:
 	row.add_theme_constant_override("separation", 0)
 	return row
 
+# ── Data accessors (live GameManager / NetworkManager, or replay providers) ──
+
+func _data_players() -> Dictionary:
+	if _players_provider.is_valid():
+		return _players_provider.call() as Dictionary
+	return GameManager.get_players()
+
+func _data_period_scores() -> Array:
+	if _period_scores_provider.is_valid():
+		return _period_scores_provider.call() as Array
+	return GameManager.get_period_scores()
+
+func _data_num_periods() -> int:
+	if _num_periods_override >= 0:
+		return _num_periods_override
+	return GameManager.get_num_periods()
+
+func _team_color_slot(team_id: int) -> int:
+	if _external_control:
+		return _color_slots[clampi(team_id, 0, 1)]
+	if GameManager.teams.size() > team_id:
+		return GameManager.teams[team_id].color_slot
+	return _color_slots[clampi(team_id, 0, 1)]
+
 func _ping_label(peer_id: int) -> String:
+	if _external_control:
+		return "—"  # ping is meaningless for an offline file replay
 	var local_id: int = NetworkManager.local_peer_id()
 	if peer_id == local_id:
 		return "—" if NetworkManager.is_host else "%d ms" % int(NetworkManager.get_rtt_ms())
