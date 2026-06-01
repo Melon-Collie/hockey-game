@@ -27,10 +27,14 @@ albedo_color = Color(1, 0.5921569, 1, 1)
 
 [sub_resource type="SphereMesh" id="SphereMesh_irs7m"]
 material = SubResource("StandardMaterial3D_50o0c")
-radius = 0.18
-height = 0.36
+radius = 0.155
+height = 0.31
 radial_segments = 24
 rings = 12
+
+[sub_resource type="SphereMesh" id="SphereMesh_7f3a6"]
+radius = 0.11
+height = 0.26
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_vy5pj"]
 albedo_color = Color(0, 0, 0, 1)
@@ -121,6 +125,10 @@ mesh = SubResource("CylinderMesh_7f3a6")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.65, 0)
 mesh = SubResource("SphereMesh_irs7m")
 skeleton = NodePath("../../../..")
+
+[node name="Face" type="MeshInstance3D" parent="MeshRoot/UpperBody" unique_id=1354628256]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.63, -0.06)
+mesh = SubResource("SphereMesh_7f3a6")
 
 [node name="StickMesh" type="MeshInstance3D" parent="MeshRoot/UpperBody" unique_id=1045205501]
 mesh = SubResource("BoxMesh_bmxlf")
