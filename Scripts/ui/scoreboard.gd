@@ -33,6 +33,7 @@ func _ready() -> void:
 	if not _external_control:
 		GameManager.stats_updated.connect(_refresh)
 		GameManager.game_over.connect(_on_game_over)
+		GameManager.game_reset.connect(_on_game_reset)
 		GameManager.team_colors_ready.connect(_on_team_colors_ready)
 		var ping_timer := Timer.new()
 		ping_timer.wait_time = 2.0
@@ -79,12 +80,19 @@ func _on_game_over() -> void:
 	visible = true
 	_refresh()
 
-func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
-	# Period-summary team identifiers now use the scorebug's stripe+label
-	# treatment (white text next to a vertical color band), so only the
-	# stripe needs to follow team colors. Labels stay white.
+# A new game/rematch auto-closes the end-of-game box score. The player can
+# still re-open it with Tab during play.
+func _on_game_reset() -> void:
+	visible = false
+
+func _on_team_colors_ready(_home_primary: Color, home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
+	# Period-summary team identifiers use the scorebug's stripe+label treatment
+	# (white text next to a vertical color band), so only the stripe needs to
+	# follow team colors. The stripe is the team's canonical UI stripe
+	# (TeamColorRegistry.get_ui_colors): home = secondary, away = primary.
+	# Labels stay white.
 	if _home_badge_style != null:
-		_home_badge_style.bg_color = home_primary
+		_home_badge_style.bg_color = home_secondary
 	if _away_badge_style != null:
 		_away_badge_style.bg_color = away_primary
 
@@ -222,8 +230,8 @@ func _rebuild_period_grid(num_periods: int) -> void:
 
 	for team_id: int in [1, 0]:
 		var label: String = "AWAY" if team_id == 1 else "HOME"
-		var primary: Color = TeamColorRegistry.get_colors(_team_color_slot(team_id), team_id).primary
-		var badge := _team_badge(label, primary)
+		var stripe_color: Color = TeamColorRegistry.get_ui_colors(_team_color_slot(team_id), team_id).stripe
+		var badge := _team_badge(label, stripe_color)
 		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
 			_away_badge_style = badge_style
@@ -304,7 +312,7 @@ func _make_team_header(team_id: int) -> HBoxContainer:
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var stripe_style := StyleBoxFlat.new()
-	stripe_style.bg_color = colors.jersey_stripe
+	stripe_style.bg_color = colors.ui_stripe
 	stripe_style.corner_radius_top_left = 4
 	stripe_style.corner_radius_bottom_left = 4
 	stripe_style.corner_radius_top_right = 0
@@ -315,7 +323,7 @@ func _make_team_header(team_id: int) -> HBoxContainer:
 	row.add_child(stripe)
 
 	var body_style := StyleBoxFlat.new()
-	body_style.bg_color = colors.jersey
+	body_style.bg_color = colors.ui_base
 	body_style.corner_radius_top_left = 0
 	body_style.corner_radius_bottom_left = 0
 	body_style.corner_radius_top_right = 4
@@ -327,7 +335,7 @@ func _make_team_header(team_id: int) -> HBoxContainer:
 	var body := PanelContainer.new()
 	body.add_theme_stylebox_override("panel", body_style)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var lbl := _lbl(label_text, 16, colors.text)
+	var lbl := _lbl(label_text, 16, colors.ui_text)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	body.add_child(lbl)
 	row.add_child(body)

@@ -195,8 +195,20 @@ var show_one_timer_indicator: bool = false
 @export var slapper_follow_through_arc_dist: float = 0.4  # blade XZ travel along shot_dir during follow-through
 
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
-@export var block_speed_multiplier: float = 0.45   # movement speed while blocking
+@export var block_speed_multiplier: float = 0.45   # movement speed while blocking (unused while the
+                                                   # stance is fully planted; kept for tuning)
 @export var active_block_dampen: float = 0.35      # puck energy retention on active block
+# Choreographed "stick down" block pose, authored in upper-body-local space.
+# Forward is local −Z (toward the shooter the stance snapped to on entry); the
+# stick side is +X for a righty, −X for a lefty (blade_side_sign). The blade lies
+# flat on the ice (Y is lean-corrected to ice level); the top hand drops low and
+# pushes forward so the shaft lies down across the lane. First-pass numbers —
+# tune in the editor (see CLAUDE.md "get it working, then tune numbers").
+@export var block_blade_reach: float = 1.0   # forward blade extension from the shoulder (m, local −Z)
+@export var block_blade_x: float = 0.2       # lateral blade offset to the stick side (m)
+@export var block_hand_forward: float = 0.3  # forward push of the top hand (m, local −Z)
+@export var block_hand_x: float = 0.1        # lateral top-hand offset to the stick side (m)
+@export var block_hand_y: float = -0.17      # top-hand height while blocking (m, local; matches hand_rest_y)
 
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
 # XZ cylinder radius used to push the blade (and carried puck) away from a
@@ -243,6 +255,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	var _cb := SkaterStateMachine.Callbacks.new()
 	_cb.apply_blade_from_mouse = _ik.apply_blade_from_mouse
 	_cb.apply_slapper_blade_position = _shot_pose.apply_slapper_blade_position
+	_cb.apply_block_blade_position = _shot_pose.apply_block_blade_position
 	_cb.apply_wrister_follow_through = _shot_pose.apply_wrister_follow_through
 	_cb.apply_slapper_follow_through = _shot_pose.apply_slapper_follow_through
 	_cb.enter_shot_block = _enter_shot_block
@@ -639,6 +652,16 @@ func _transition_to_skating() -> void:
 func _enter_shot_block() -> void:
 	_sm.set_state(State.SHOT_BLOCKING)
 	skater.set_block_stance(true)
+	# Square the upper body and clear lean/lag so the choreographed block pose
+	# (authored in upper-body-local space) points straight along the snapped
+	# facing instead of inheriting residual twist from the prior state. The torso
+	# pose pipeline early-returns during SHOT_BLOCKING, so these stay put for the
+	# duration of the stance.
+	_pose.reset_lean_and_lag()
+	skater.set_upper_body_rotation(0.0)
+	skater.set_upper_body_lean(0.0)
+	skater.set_lower_body_lean(0.0, 0.0)
+	skater.set_lower_body_lag(0.0)
 	# Snap facing toward puck on entry — locked for duration of stance
 	var to_puck: Vector3 = puck.global_position - skater.global_position
 	to_puck.y = 0.0
@@ -819,10 +842,16 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	_hide_slapshot_hud()
 	return {fired = true, direction = result.direction, follow_through_duration = follow_through_duration}
 
-func _apply_block_movement(input: InputState, delta: float) -> void:
+func _apply_block_movement(_input: InputState, delta: float) -> void:
+	# Committed stance: no directional thrust. Whatever momentum you carried in
+	# bleeds off under the hard brake friction, so dropping into a block reads as
+	# a deliberate plant rather than crouched skating. is_braking drives the
+	# hockey-stop skid VFX (gated on speed, so it only shows while sliding to a
+	# stop, not once planted).
+	skater.is_braking = true
 	skater.velocity = SkaterMovementRules.apply_movement(
-			skater.velocity, input.move_vector, skater.rotation.y,
-			false, input.brake, delta, _block_movement_config())
+			skater.velocity, Vector2.ZERO, skater.rotation.y,
+			false, true, delta, _block_movement_config())
 
 func _effective_one_timer_leniency() -> float:
 	var puck_xz_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()

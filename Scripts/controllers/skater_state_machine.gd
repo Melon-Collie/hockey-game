@@ -18,6 +18,7 @@ class Callbacks:
 	# Blade / IK
 	var apply_blade_from_mouse: Callable          # (input: InputState, delta: float)
 	var apply_slapper_blade_position: Callable    # ()
+	var apply_block_blade_position: Callable      # ()
 	var apply_wrister_follow_through: Callable    # ()
 	var apply_slapper_follow_through: Callable    # ()
 	# State entry
@@ -176,6 +177,7 @@ func _state_shot_blocking(skater: Skater, input: InputState, delta: float, _has_
 		_cb.transition_to_skating.call()
 		return
 	_cb.apply_block_movement.call(input, delta)
+	_cb.apply_block_blade_position.call()
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
