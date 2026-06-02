@@ -28,6 +28,10 @@ var _aa_btn: OptionButton = null
 var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
 var _confine_mouse_check: CheckButton = null
+var _cursor_style_btn: OptionButton = null
+var _cursor_color_btn: ColorPickerButton = null
+var _cursor_size_slider: HSlider = null
+var _cursor_size_label: Label = null
 var _attack_up_check: CheckButton = null
 var _tilt_slider: HSlider = null
 var _tilt_label: Label = null
@@ -129,6 +133,9 @@ func _snapshot() -> Dictionary:
 		"master_muted": PlayerPrefs.master_muted,
 		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
 		"confine_mouse": PlayerPrefs.confine_mouse,
+		"cursor_style": PlayerPrefs.cursor_style,
+		"cursor_color": PlayerPrefs.cursor_color,
+		"cursor_size": PlayerPrefs.cursor_size,
 		"attack_up": PlayerPrefs.attack_up,
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
 		"fov": PlayerPrefs.fov,
@@ -158,6 +165,9 @@ func _read_controls() -> Dictionary:
 		"master_muted": _mute_check.button_pressed,
 		"mouse_sensitivity": _sens_slider.value,
 		"confine_mouse": _confine_mouse_check.button_pressed,
+		"cursor_style": _cursor_style_btn.selected,
+		"cursor_color": _cursor_color_btn.color,
+		"cursor_size": int(_cursor_size_slider.value),
 		"attack_up": _attack_up_check.button_pressed,
 		"camera_tilt_deg": _tilt_slider.value,
 		"fov": _fov_slider.value,
@@ -434,6 +444,36 @@ func _build_input_tab() -> Control:
 	box.add_child(_field_row("Confine Cursor to Window", _confine_mouse_check))
 
 	box.add_child(_section_spacer())
+	box.add_child(_section_header("Cursor"))
+
+	_cursor_style_btn = OptionButton.new()
+	_cursor_style_btn.custom_minimum_size = Vector2(160, 40)
+	_cursor_style_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.CURSOR_STYLE_LABELS.size():
+		_cursor_style_btn.add_item(PlayerPrefs.CURSOR_STYLE_LABELS[i], i)
+	_cursor_style_btn.selected = PlayerPrefs.cursor_style
+	_cursor_style_btn.item_selected.connect(_on_cursor_style_selected)
+	box.add_child(_field_row("Style", _cursor_style_btn))
+
+	_cursor_color_btn = ColorPickerButton.new()
+	_cursor_color_btn.custom_minimum_size = Vector2(160, 36)
+	_cursor_color_btn.color = PlayerPrefs.cursor_color
+	_cursor_color_btn.edit_alpha = false
+	SoundManager.wire_button(_cursor_color_btn)
+	_cursor_color_btn.color_changed.connect(_on_cursor_color_changed)
+	box.add_child(_field_row("Color", _cursor_color_btn))
+
+	_cursor_size_slider = HSlider.new()
+	_cursor_size_slider.min_value = PlayerPrefs.CURSOR_SIZE_MIN
+	_cursor_size_slider.max_value = PlayerPrefs.CURSOR_SIZE_MAX
+	_cursor_size_slider.step = 2.0
+	_cursor_size_slider.value = PlayerPrefs.cursor_size
+	_cursor_size_slider.value_changed.connect(_on_cursor_size_changed)
+	_cursor_size_label = _value_label("%dpx" % PlayerPrefs.cursor_size)
+	_cursor_size_slider.value_changed.connect(func(v: float) -> void: _cursor_size_label.text = "%dpx" % int(v))
+	box.add_child(_slider_row("Size", _cursor_size_slider, _cursor_size_label))
+
+	box.add_child(_section_spacer())
 	box.add_child(_section_header("Key Bindings"))
 
 	_pending_bindings = PlayerPrefs.bindings.duplicate(true)
@@ -622,6 +662,15 @@ func _on_attack_up_toggled(_pressed: bool) -> void:
 func _on_confine_mouse_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
+func _on_cursor_style_selected(_idx: int) -> void:
+	_update_apply_state()
+
+func _on_cursor_color_changed(_color: Color) -> void:
+	_update_apply_state()
+
+func _on_cursor_size_changed(_value: float) -> void:
+	_update_apply_state()
+
 func _on_tilt_changed(_value: float) -> void:
 	_update_apply_state()
 
@@ -776,6 +825,9 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
 	PlayerPrefs.confine_mouse = c.confine_mouse
+	PlayerPrefs.cursor_style = c.cursor_style
+	PlayerPrefs.cursor_color = c.cursor_color
+	PlayerPrefs.cursor_size = c.cursor_size
 	PlayerPrefs.attack_up = c.attack_up
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
 	PlayerPrefs.fov = c.fov
@@ -784,6 +836,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.apply_audio()
 	PlayerPrefs.apply_video()
 	PlayerPrefs.apply_input()
+	PlayerPrefs.apply_cursor()
 	PlayerPrefs.apply_bindings()
 	PlayerPrefs.save()
 	_original = _snapshot()
@@ -822,6 +875,12 @@ func _on_cancel_pressed() -> void:
 	_sens_slider.value = _original.mouse_sensitivity
 	if _confine_mouse_check != null:
 		_confine_mouse_check.set_pressed_no_signal(_original.confine_mouse)
+	if _cursor_style_btn != null:
+		_cursor_style_btn.selected = _original.cursor_style
+	if _cursor_color_btn != null:
+		_cursor_color_btn.color = _original.cursor_color
+	if _cursor_size_slider != null:
+		_cursor_size_slider.value = _original.cursor_size
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
 	if _tilt_slider != null:
 		_tilt_slider.value = _original.camera_tilt_deg
