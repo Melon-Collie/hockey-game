@@ -360,6 +360,9 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 - **Reconnect / slot reservation:** When a peer drops, host marks the slot "reserved" for ~60 s. If the same player (matched by name) reconnects within the window, they reclaim their slot, stats, and team without restarting the game. Requires a pending-reconnect state in `GameManager` and a rejoin handshake in `NetworkManager`.
 - **Shot lag compensation:** Shots currently use the host's blade position at the time the RPC arrives, so high-RTT players see their shots fire from where the blade was, not where they aimed. Need a lag-comp claim path that rewinds blade state to the shooter's input timestamp at release. Deferred until the goalie rewrite stabilizes — goalie reaction tuning shifts with shot-origin changes, so re-tuning on a moving target is wasteful.
 
+**UX / input experiments, smaller scope:**
+- **Locked-mouse aiming mode (settings option):** An optional input mode that keeps the cursor pinned near the skater instead of free-roaming to the window edges — the cursor (and therefore the blade target) stays within a bounded radius of the player and recenters as they skate, so aim never drifts to a far corner of the screen. Would sit next to the existing "Confine Cursor to Window" input option (`PlayerPrefs.confine_mouse`). Implementation needs a capture-relative motion path — accumulate `InputEventMouseMotion.relative`, clamp the virtual aim point to a radius around the skater's screen position, and warp the OS cursor back each frame — rather than reading the absolute OS cursor position the way `local_input_gatherer._get_mouse_world_pos` does today. Floated as a feel experiment by a playtester; not scoped yet.
+
 ---
 
 ## Open Questions
