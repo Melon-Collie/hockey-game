@@ -27,6 +27,7 @@ var _scaling_3d_btn: OptionButton = null
 var _aa_btn: OptionButton = null
 var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
+var _confine_mouse_check: CheckButton = null
 var _attack_up_check: CheckButton = null
 var _camera_mode_btn: OptionButton = null
 var _fov_slider: HSlider = null
@@ -126,6 +127,7 @@ func _snapshot() -> Dictionary:
 		"crowd_volume": PlayerPrefs.crowd_volume,
 		"master_muted": PlayerPrefs.master_muted,
 		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
+		"confine_mouse": PlayerPrefs.confine_mouse,
 		"attack_up": PlayerPrefs.attack_up,
 		"camera_mode": PlayerPrefs.camera_mode,
 		"fov": PlayerPrefs.fov,
@@ -154,6 +156,7 @@ func _read_controls() -> Dictionary:
 		"crowd_volume": _crowd_slider.value,
 		"master_muted": _mute_check.button_pressed,
 		"mouse_sensitivity": _sens_slider.value,
+		"confine_mouse": _confine_mouse_check.button_pressed,
 		"attack_up": _attack_up_check.button_pressed,
 		"camera_mode": _camera_mode_btn.selected,
 		"fov": _fov_slider.value,
@@ -423,6 +426,12 @@ func _build_input_tab() -> Control:
 	_sens_field.focus_exited.connect(func() -> void: _on_sensitivity_typed(_sens_field.text))
 	box.add_child(_slider_row("Sensitivity", _sens_slider, _sens_field))
 
+	_confine_mouse_check = CheckButton.new()
+	_confine_mouse_check.set_pressed_no_signal(PlayerPrefs.confine_mouse)
+	SoundManager.wire_button(_confine_mouse_check)
+	_confine_mouse_check.toggled.connect(_on_confine_mouse_toggled)
+	box.add_child(_field_row("Confine Cursor to Window", _confine_mouse_check))
+
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Key Bindings"))
 
@@ -608,6 +617,9 @@ func _on_ice_scratches_toggled(_pressed: bool) -> void:
 func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
+func _on_confine_mouse_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
 func _on_camera_mode_selected(_idx: int) -> void:
 	_update_apply_state()
 
@@ -761,6 +773,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.crowd_volume = c.crowd_volume
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
+	PlayerPrefs.confine_mouse = c.confine_mouse
 	PlayerPrefs.attack_up = c.attack_up
 	PlayerPrefs.camera_mode = c.camera_mode
 	PlayerPrefs.fov = c.fov
@@ -768,6 +781,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.bindings = (_pending_bindings as Dictionary).duplicate(true)
 	PlayerPrefs.apply_audio()
 	PlayerPrefs.apply_video()
+	PlayerPrefs.apply_input()
 	PlayerPrefs.apply_bindings()
 	PlayerPrefs.save()
 	_original = _snapshot()
@@ -804,6 +818,8 @@ func _on_cancel_pressed() -> void:
 	_crowd_slider.value = _original.crowd_volume
 	_mute_check.set_pressed_no_signal(_original.master_muted)
 	_sens_slider.value = _original.mouse_sensitivity
+	if _confine_mouse_check != null:
+		_confine_mouse_check.set_pressed_no_signal(_original.confine_mouse)
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
 	if _camera_mode_btn != null:
 		_camera_mode_btn.selected = _original.camera_mode

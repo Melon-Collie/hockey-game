@@ -127,6 +127,11 @@ var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
 var mouse_sensitivity: float = 1.0
+# Confine the OS cursor to the window so fast cursor flicks (aiming the blade)
+# can't slide off-screen onto a second monitor. On by default; applied via
+# apply_input() at load and on settings Apply. See free_camera.gd for the one
+# place that temporarily overrides mouse_mode (spectator look).
+var confine_mouse: bool = true
 var attack_up: bool = false
 var camera_mode: int = CAMERA_MODE_TOP_DOWN
 var fov: float = 75.0  # GameCamera writes this to its Camera3D.fov each tick
@@ -197,6 +202,7 @@ func save() -> void:
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
+	cfg.set_value("input", "confine_mouse", confine_mouse)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "camera_mode", camera_mode)
 	cfg.set_value("game", "fov", fov)
@@ -254,6 +260,14 @@ func apply_audio() -> void:
 	var crowd_bus := AudioServer.get_bus_index("Crowd")
 	if crowd_bus != -1:
 		AudioServer.set_bus_volume_db(crowd_bus, linear_to_db(maxf(crowd_volume, 0.0001)))
+
+func apply_input() -> void:
+	# CONFINED keeps the cursor visible (the blade is aimed by the on-screen
+	# cursor) but clamps it to the window rect. When off, restore the normal
+	# free-roaming visible cursor. This is also the canonical "un-capture"
+	# target: free_camera calls it when leaving spectator look so it lands in
+	# the configured state rather than forcing VISIBLE.
+	Input.mouse_mode = Input.MOUSE_MODE_CONFINED if confine_mouse else Input.MOUSE_MODE_VISIBLE
 
 func apply_video() -> void:
 	if is_fullscreen:
@@ -406,6 +420,7 @@ func _load() -> void:
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
+		confine_mouse = cfg.get_value("input", "confine_mouse", true)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
 		fov = clampf(cfg.get_value("game", "fov", 75.0), FOV_MIN, FOV_MAX)
@@ -428,6 +443,7 @@ func _load() -> void:
 				bindings[action] = b
 	apply_audio()
 	apply_bindings()
+	call_deferred(&"apply_input")
 	call_deferred(&"apply_video")
 
 
