@@ -181,58 +181,58 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_SKATE:
 			return TutorialStep.new(
 				"Skate",
-				"Use the move stick / WASD to skate around the ice.",
-				"Push the stick in any direction to build up speed.")
+				"Press W, A, S, D to skate around the ice.",
+				"Hold a direction to build up speed — you keep gliding when you let go.")
 		STEP_BRAKE:
 			return TutorialStep.new(
 				"Brake",
-				"Hold Space to brake hard — friction kicks up and you shed speed fast.",
-				"Tap Space while moving to shed speed quickly.")
+				"Hold Space to brake hard and stop quickly.",
+				"Tap Space while moving to scrub off speed fast.")
 		STEP_QUICK_SHOT:
 			return TutorialStep.new(
 				"Quick Shot",
-				"Skate to the puck, then flick LMB for a Quick Shot. Put it on net to pass.",
-				"Just flick LMB — don't hold it. Aim toward the empty net.")
+				"Skate over the puck to pick it up, then click the left mouse button to snap a quick shot into the net.",
+				"Just click — don't hold. Aim at the open net ahead of you.")
 		STEP_WRIST_SHOT:
 			return TutorialStep.new(
 				"Wrist Shot",
-				"Pick up the puck, hold LMB, and sweep the mouse to aim a Wrist Shot. Hit the net to pass.",
-				"Hold LMB and sweep — the longer you hold and the further you sweep, the more power.")
+				"With the puck, hold the left mouse button and drag to aim, then release to fire a wrist shot into the net.",
+				"Hold and drag — a longer drag means more power, and the drag direction is your aim.")
 		STEP_SLAPSHOT:
 			return TutorialStep.new(
 				"Slapshot",
-				"Pick up the puck, hold RMB to wind up, then release for a Slapshot. Bury it in the net.",
-				"RMB charges the slap — release at full charge for max power.")
+				"With the puck, hold the right mouse button to wind up, then release to blast a slapshot into the net.",
+				"Hold right-click to charge — the longer you hold, the harder the shot.")
 		STEP_ONE_TIMER:
 			return TutorialStep.new(
-				"One-timer",
-				"The puck is sliding across from the far dot. Wind up RMB before it arrives, then release the moment it reaches you.",
-				"Start winding up RMB now — the puck is already on its way!")
+				"One-Timer",
+				"A pass is sliding toward you from the far dot. Hold the right mouse button to wind up before it arrives, then release the instant it reaches your stick.",
+				"Start charging right-click now — don't wait for the puck to get there.")
 		STEP_SHOT_BLOCK:
 			return TutorialStep.new(
 				"Shot Block",
-				"A shot is coming at you — hold Ctrl to get into a deflecting stance.",
-				"Hold Ctrl and position yourself in the puck's path.")
+				"A shot is coming at you. Hold Ctrl to drop into a blocking stance and get in its path.",
+				"Hold Ctrl and line your body up with the puck.")
 		STEP_STICKCHECK:
 			return TutorialStep.new(
-				"Stickcheck",
-				"Skate your stick blade into the opponent's puck to strip it — that's a stickcheck.",
-				"Move close and sweep through the puck.")
+				"Stick Check",
+				"Skate your stick into the opponent's puck to knock it loose — that's a stick check.",
+				"Get close and sweep your stick through the puck.")
 		STEP_BODY_CHECK:
 			return TutorialStep.new(
 				"Body Check",
-				"Skate directly into the opponent to body check them.",
-				"Pick up speed and aim straight at them.")
+				"Build up speed and skate straight into the opponent to knock them off the puck.",
+				"Get a running start and aim right at them.")
 		STEP_ELEVATION:
 			return TutorialStep.new(
-				"Elevation",
-				"Pick up the puck, scroll the mouse wheel up, then shoot to lift the puck off the ice.",
-				"Scroll up before clicking LMB or RMB — the puck lifts when released.")
+				"Lifting the Puck",
+				"With the puck, scroll the mouse wheel up, then shoot to lift the puck off the ice.",
+				"Scroll up first, then left- or right-click to shoot — the puck flies up off the ground.")
 		STEP_OFFSIDES:
 			return TutorialStep.new(
 				"Offsides",
-				"The puck must enter the offensive zone before your skates do. You crossed the blue line first — that's offside. You're ghosted until you skate back past the blue line!",
-				"Head back toward your own end and cross the blue line to tag up.")
+				"The puck has to cross the blue line into the attacking zone before you do. You went in first, so you're offside — and now you're a ghost until you skate back out past the blue line.",
+				"Skate back toward your own end and cross the blue line to reset.")
 	push_error("TutorialManager: unknown step id %d" % step_id)
 	return TutorialStep.new("", "", "")
 
@@ -280,9 +280,13 @@ func _begin_step(index: int) -> void:
 			pass  # player is already on the ice from the skate step
 
 		STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT, STEP_ELEVATION:
-			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
-			# Puck 1 m ahead in attacking direction (-Z)
-			_place_puck(Vector3(0.0, _ICE_Y, 3.5))
+			# Spawn in the slot — the prime scoring area right in front of the
+			# attacking net (team 0 attacks -Z) — so it reads as "shoot the puck
+			# into the net a few metres away" rather than from center ice.
+			var slot_z: float = -(GameRules.GOAL_LINE_Z - GameRules.SLOT_DIST_M)
+			_local_controller.teleport_to(Vector3(0.0, 1.0, slot_z))
+			# Puck 1.5 m ahead toward the net so the player skates onto it facing the goal.
+			_place_puck(Vector3(0.0, _ICE_Y, slot_z - 1.5))
 			_on_release_callable = func(dir: Vector3, power: float, is_slapper: bool) -> void:
 				_on_shot_released(dir, power, is_slapper)
 			_local_controller.puck_release_requested.connect(_on_release_callable)
@@ -511,8 +515,8 @@ func _process(delta: float) -> void:
 					_offside_ghost_seen = true
 					_hud.set_step(_step_index, _step_ids.size(),
 						"Offsides",
-						"Now you're a ghost — passes skip right over you. Cross back past the blue line to tag up!",
-						"Head toward your own end and cross the blue line.")
+						"Now you're a ghost — passes go right through you. Skate back out past the blue line to get back in the play.",
+						"Skate toward your own end and cross the blue line.")
 			else:
 				if not _skater.is_ghost:
 					_complete_step()
