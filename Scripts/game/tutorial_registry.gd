@@ -47,6 +47,16 @@ static func get_display_name(tutorial_id: String) -> String:
 	return tutorial_id
 
 
+# "Part N of M" framing so the two tutorials read as one course the player is
+# partway through, not two optional extras. N is the 1-based position in
+# ALL_IDS; returns "" for an unrecognised id.
+static func get_sequence_label(tutorial_id: String) -> String:
+	var i: int = ALL_IDS.find(tutorial_id)
+	if i < 0:
+		return ""
+	return "Part %d of %d" % [i + 1, ALL_IDS.size()]
+
+
 # Whether the tutorial should have goalies spawned in the nets. Basics
 # teaches shot mechanics on an empty net (with a shot-on-net pass
 # criterion) so the player learns to put the puck where it needs to go

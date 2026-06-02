@@ -157,16 +157,31 @@ func _build_complete_panel() -> void:
 	vbox.add_theme_constant_override("separation", 20)
 	panel.add_child(vbox)
 
+	# When there's a follow-up tutorial (finishing Basics), the modal pushes
+	# hard into it: the heading names what was just done, the subtitle pitches
+	# the next part as part of the same course, and the continue button is the
+	# big primary CTA with Free Play demoted to a secondary "skip" link.
+	var next_id: String = TutorialRegistry.get_next_id(_tutorial_id)
+
 	var heading := Label.new()
-	heading.text = "Tutorial Complete!"
+	heading.text = ("%s Complete!" % TutorialRegistry.get_display_name(_tutorial_id)) \
+		if next_id != "" else "Tutorial Complete!"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.add_theme_font_size_override("font_size", 36)
 	heading.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
 	vbox.add_child(heading)
 
 	var sub := Label.new()
-	sub.text = "You know the ropes — now get out there."
+	if next_id != "":
+		sub.text = "That's %s done. %s — %s — covers one-timers, shot blocking, checking, and offsides: the moves that win games. Finish the set before you hit the ice." % [
+			TutorialRegistry.get_display_name(_tutorial_id),
+			TutorialRegistry.get_sequence_label(next_id),
+			TutorialRegistry.get_display_name(next_id)]
+	else:
+		sub.text = "You know the ropes — now get out there."
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sub.custom_minimum_size = Vector2(440, 0)
 	sub.add_theme_font_size_override("font_size", 16)
 	sub.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	vbox.add_child(sub)
@@ -176,23 +191,28 @@ func _build_complete_panel() -> void:
 	btn_row.add_theme_constant_override("separation", 16)
 	vbox.add_child(btn_row)
 
-	# Primary action: continue into the next tutorial when there is one.
-	# Goes first so it's the obvious default after finishing Basics.
-	var next_id: String = TutorialRegistry.get_next_id(_tutorial_id)
 	if next_id != "":
-		var next_btn := Button.new()
-		next_btn.text = "Next: %s" % TutorialRegistry.get_display_name(next_id)
+		# Primary CTA: the big, hover-scaled popup_button so continuing reads as
+		# the expected path, not an optional extra the player can overlook.
+		var next_btn := MenuStyle.popup_button("Continue → %s: %s" % [
+			TutorialRegistry.get_sequence_label(next_id),
+			TutorialRegistry.get_display_name(next_id)])
 		next_btn.pressed.connect(func() -> void: _on_continue_to_tutorial(next_id))
-		SoundManager.wire_button(next_btn)
 		btn_row.add_child(next_btn)
 
-	# "Free Play" IS the main menu in this game — Escape from free play opens
-	# the SideMenu, where the player picks their next activity. One button.
-	var free_play_btn := Button.new()
-	free_play_btn.text = "Free Play"
-	free_play_btn.pressed.connect(_exit_to_free_play)
-	SoundManager.wire_button(free_play_btn)
-	btn_row.add_child(free_play_btn)
+		# Demoted bail-out. "Free Play" IS the main menu in this game — Escape
+		# from free play opens the SideMenu — so this is the skip-the-rest link.
+		var skip_btn := Button.new()
+		skip_btn.text = "Skip to Free Play"
+		skip_btn.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+		skip_btn.pressed.connect(_exit_to_free_play)
+		SoundManager.wire_button(skip_btn)
+		btn_row.add_child(skip_btn)
+	else:
+		# Last tutorial in the set — Free Play is the only, primary action.
+		var free_play_btn := MenuStyle.popup_button("Free Play")
+		free_play_btn.pressed.connect(_exit_to_free_play)
+		btn_row.add_child(free_play_btn)
 
 	_complete_panel = Control.new()
 	_complete_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

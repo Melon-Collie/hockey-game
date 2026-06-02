@@ -506,7 +506,11 @@ func _refresh_tutorial_rows() -> void:
 	for child: Node in _tutorial_rows_vbox.get_children():
 		child.queue_free()
 	for tutorial_id: String in TutorialRegistry.ALL_IDS:
-		var label_text: String = TutorialRegistry.get_display_name(tutorial_id)
+		# "Part 1 of 2 · Basics" framing so the picker reads as one ordered
+		# course rather than two standalone options.
+		var seq: String = TutorialRegistry.get_sequence_label(tutorial_id)
+		var label_text: String = "%s · %s" % [seq, TutorialRegistry.get_display_name(tutorial_id)] \
+			if seq != "" else TutorialRegistry.get_display_name(tutorial_id)
 		if PlayerPrefs.is_tutorial_complete(tutorial_id):
 			label_text += "    ✓"
 		var btn := MenuStyle.popup_button(label_text)
