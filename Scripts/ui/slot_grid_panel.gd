@@ -16,7 +16,7 @@ extends VBoxContainer
 #
 # Card visual semantics:
 #   - Empty slot      → dark neutral bg, no stripe color, "+" icon (host).
-#   - Bot slot        → team body color bg, stripe, "AI" badge bottom-right, "X" icon (host).
+#   - Bot slot        → team body color bg, stripe, "BOT" badge bottom-right, "X" icon (host).
 #   - Remote human    → jersey color bg, stripe, "##ms ●" ping with status dot.
 #   - Your slot       → jersey color bg, stripe, ping, plus a 1px TEAL_DIM
 #                       border around the whole card so the local player can
@@ -288,7 +288,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	_ping_dot[team_id][slot] = dot
 
 	var ai_lbl := Label.new()
-	ai_lbl.text = "AI"
+	ai_lbl.text = "BOT"
 	ai_lbl.add_theme_font_size_override("font_size", 11)
 	ai_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	ai_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
