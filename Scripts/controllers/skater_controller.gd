@@ -631,6 +631,10 @@ func on_puck_released_network() -> void:
 func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	skater.global_position = pos
 	skater.velocity = Vector3.ZERO
+	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
+	# charge. Otherwise the slapper charge timer keeps ticking across the
+	# respawn and the player drops into the faceoff already charged.
+	_cancel_active_charge()
 	# Faceoff / slot swap teleports pass a non-zero facing so the skater
 	# squares up to the puck instead of carrying their last-frame heading
 	# (which routinely left players spawned backwards). Tutorial / test
@@ -638,6 +642,18 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	if facing != Vector2.ZERO:
 		skater.set_facing(facing)
 		_pose.facing = facing
+
+# Cancels an in-progress wrister/slapper wind-up. No-op unless actually mid-
+# charge, so a routine teleport doesn't disturb skating state. Suppresses the
+# charge-lost flash since a forced respawn isn't player-initiated charge loss.
+func _cancel_active_charge() -> void:
+	var s: int = _sm.get_state()
+	if s != State.WRISTER_AIM and s != State.SLAPPER_CHARGE_WITH_PUCK \
+			and s != State.SLAPPER_CHARGE_WITHOUT_PUCK:
+		return
+	_aiming.reset_slapper()
+	_aiming.charge_distance = 0.0
+	_transition_to_skating(true)
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 func _apply_state(input: InputState, delta: float) -> void:
@@ -647,7 +663,7 @@ func _apply_state(input: InputState, delta: float) -> void:
 		_aiming.wrister_start_blade_local_x = skater.get_blade_position().x
 
 # ── State Helpers ─────────────────────────────────────────────────────────────
-func _transition_to_skating() -> void:
+func _transition_to_skating(suppress_lost_flash: bool = false) -> void:
 	# Lost-charge feedback: if we're leaving an active charge state without
 	# firing (i.e. not via FOLLOW_THROUGH), flash the charge ring red. The
 	# ring auto-clears via Skater._physics_process once the flash decays.
@@ -668,7 +684,7 @@ func _transition_to_skating() -> void:
 	skater.set_slapper_zone(false)
 	skater.exit_slapshot_pinning()
 	_hide_slapshot_hud()
-	if show_one_timer_indicator and was_charging:
+	if show_one_timer_indicator and was_charging and not suppress_lost_flash:
 		skater.trigger_charge_lost_flash()
 
 func _enter_shot_block() -> void:
