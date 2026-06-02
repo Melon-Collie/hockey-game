@@ -149,6 +149,9 @@ var cursor_style: int = CURSOR_STYLE_DOT
 var cursor_color: Color = Color(1.0, 0.45, 0.1)  # high-contrast orange on white ice
 var cursor_size: int = 28
 var attack_up: bool = false
+# Accessibility: swap the on-ice self/team/enemy ring colors for a
+# colorblind-safe palette (SkaterHUDCoordinator reads this live).
+var colorblind_rings: bool = false
 var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
@@ -224,6 +227,7 @@ func save() -> void:
 	cfg.set_value("input", "cursor_size", cursor_size)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "has_opened_player_settings", has_opened_player_settings)
+	cfg.set_value("game", "colorblind_rings", colorblind_rings)
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
@@ -509,6 +513,7 @@ func _load() -> void:
 		cursor_size = clampi(int(cfg.get_value("input", "cursor_size", cursor_size)), CURSOR_SIZE_MIN, CURSOR_SIZE_MAX)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		has_opened_player_settings = cfg.get_value("game", "has_opened_player_settings", false)
+		colorblind_rings = cfg.get_value("game", "colorblind_rings", false)
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)

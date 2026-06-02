@@ -33,6 +33,7 @@ var _cursor_color_btn: ColorPickerButton = null
 var _cursor_size_slider: HSlider = null
 var _cursor_size_label: Label = null
 var _attack_up_check: CheckButton = null
+var _colorblind_check: CheckButton = null
 var _tilt_slider: HSlider = null
 var _tilt_label: Label = null
 var _fov_slider: HSlider = null
@@ -137,6 +138,7 @@ func _snapshot() -> Dictionary:
 		"cursor_color": PlayerPrefs.cursor_color,
 		"cursor_size": PlayerPrefs.cursor_size,
 		"attack_up": PlayerPrefs.attack_up,
+		"colorblind_rings": PlayerPrefs.colorblind_rings,
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
@@ -169,6 +171,7 @@ func _read_controls() -> Dictionary:
 		"cursor_color": _cursor_color_btn.color,
 		"cursor_size": int(_cursor_size_slider.value),
 		"attack_up": _attack_up_check.button_pressed,
+		"colorblind_rings": _colorblind_check.button_pressed,
 		"camera_tilt_deg": _tilt_slider.value,
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
@@ -526,6 +529,12 @@ func _build_game_tab() -> Control:
 	_attack_up_check.toggled.connect(_on_attack_up_toggled)
 	box.add_child(_field_row("Always Attack Up", _attack_up_check))
 
+	_colorblind_check = CheckButton.new()
+	_colorblind_check.set_pressed_no_signal(PlayerPrefs.colorblind_rings)
+	SoundManager.wire_button(_colorblind_check)
+	_colorblind_check.toggled.connect(_on_colorblind_toggled)
+	box.add_child(_field_row("Colorblind Team Colors", _colorblind_check))
+
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Camera"))
 
@@ -657,6 +666,9 @@ func _on_ice_scratches_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_attack_up_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
+func _on_colorblind_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_confine_mouse_toggled(_pressed: bool) -> void:
@@ -829,6 +841,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.cursor_color = c.cursor_color
 	PlayerPrefs.cursor_size = c.cursor_size
 	PlayerPrefs.attack_up = c.attack_up
+	PlayerPrefs.colorblind_rings = c.colorblind_rings
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
@@ -882,6 +895,8 @@ func _on_cancel_pressed() -> void:
 	if _cursor_size_slider != null:
 		_cursor_size_slider.value = _original.cursor_size
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
+	if _colorblind_check != null:
+		_colorblind_check.set_pressed_no_signal(_original.colorblind_rings)
 	if _tilt_slider != null:
 		_tilt_slider.value = _original.camera_tilt_deg
 	if _fov_slider != null:
