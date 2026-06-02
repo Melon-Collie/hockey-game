@@ -127,6 +127,10 @@ var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
 var mouse_sensitivity: float = 1.0
+# First-run onboarding: false until the player opens the player-settings popup
+# for the first time. Drives the one-time "edit your player here" callout on
+# the SideMenu player card.
+var has_opened_player_settings: bool = false
 # Confine the OS cursor to the window so fast cursor flicks (aiming the blade)
 # can't slide off-screen onto a second monitor. On by default; applied via
 # apply_input() at load and on settings Apply. See free_camera.gd for the one
@@ -204,6 +208,7 @@ func save() -> void:
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("input", "confine_mouse", confine_mouse)
 	cfg.set_value("game", "attack_up", attack_up)
+	cfg.set_value("game", "has_opened_player_settings", has_opened_player_settings)
 	cfg.set_value("game", "camera_mode", camera_mode)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
@@ -422,6 +427,7 @@ func _load() -> void:
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
 		confine_mouse = cfg.get_value("input", "confine_mouse", true)
 		attack_up = cfg.get_value("game", "attack_up", false)
+		has_opened_player_settings = cfg.get_value("game", "has_opened_player_settings", false)
 		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
 		fov = clampf(cfg.get_value("game", "fov", 75.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
@@ -476,6 +482,16 @@ func mark_tutorial_complete(id: String) -> void:
 
 func reset_tutorial(id: String) -> void:
 	tutorial_completion.erase(id)
+	save()
+
+
+# Latches has_opened_player_settings the first time the player opens the
+# player-settings popup, so the SideMenu's first-run callout shows once and
+# never again. No-op (and no disk write) once already set.
+func mark_player_settings_opened() -> void:
+	if has_opened_player_settings:
+		return
+	has_opened_player_settings = true
 	save()
 
 
