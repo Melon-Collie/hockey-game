@@ -8,17 +8,15 @@ const RESOLUTIONS: Array[Vector2i] = [
 ]
 const FPS_CAP_VALUES: Array[int] = [30, 60, 120, 144, 240, 0]
 
-# Camera projection modes. Index matches OptionButton ordering in
-# OptionsPanel; GameCamera reads camera_mode each tick to flip projection
-# and pitch.
-const CAMERA_MODE_ORTHOGRAPHIC: int = 0
-const CAMERA_MODE_TOP_DOWN: int = 1   # perspective, looking straight down (the original)
-const CAMERA_MODE_TILTED: int = 2     # perspective, pitched 15° forward of straight down
-const CAMERA_MODE_LABELS: Array[String] = [
-	"Top-Down (Orthographic)",
-	"Top-Down (Perspective)",
-	"Tilted (Perspective)",
-]
+# Camera tilt. The game uses a single tilted-perspective camera; the only
+# user-facing camera adjustment is a small tilt nudge around the default.
+# GameCamera reads camera_tilt_deg each tick to drive pitch and the off-axis
+# follow offset. Kept subtle by design — much steeper and the mouse-to-world
+# projection becomes nonlinear enough to break stickhandling, so the slider is
+# clamped to a tight band around the default.
+const CAMERA_TILT_DEFAULT: float = 75.0
+const CAMERA_TILT_MIN: float = 73.0
+const CAMERA_TILT_MAX: float = 77.0
 
 # Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
 # Index matches OptionButton ordering in OptionsPanel.
@@ -137,8 +135,8 @@ var has_opened_player_settings: bool = false
 # place that temporarily overrides mouse_mode (spectator look).
 var confine_mouse: bool = true
 var attack_up: bool = false
-var camera_mode: int = CAMERA_MODE_TOP_DOWN
-var fov: float = 75.0  # GameCamera writes this to its Camera3D.fov each tick
+var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
+var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
@@ -209,7 +207,7 @@ func save() -> void:
 	cfg.set_value("input", "confine_mouse", confine_mouse)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "has_opened_player_settings", has_opened_player_settings)
-	cfg.set_value("game", "camera_mode", camera_mode)
+	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
@@ -428,8 +426,8 @@ func _load() -> void:
 		confine_mouse = cfg.get_value("input", "confine_mouse", true)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		has_opened_player_settings = cfg.get_value("game", "has_opened_player_settings", false)
-		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
-		fov = clampf(cfg.get_value("game", "fov", 75.0), FOV_MIN, FOV_MAX)
+		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
+		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)

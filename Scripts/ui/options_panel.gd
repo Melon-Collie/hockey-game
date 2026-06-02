@@ -29,7 +29,8 @@ var _sens_slider: HSlider = null
 var _sens_field: LineEdit = null
 var _confine_mouse_check: CheckButton = null
 var _attack_up_check: CheckButton = null
-var _camera_mode_btn: OptionButton = null
+var _tilt_slider: HSlider = null
+var _tilt_label: Label = null
 var _fov_slider: HSlider = null
 var _fov_label: Label = null
 var _cam_dist_slider: HSlider = null
@@ -129,7 +130,7 @@ func _snapshot() -> Dictionary:
 		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
 		"confine_mouse": PlayerPrefs.confine_mouse,
 		"attack_up": PlayerPrefs.attack_up,
-		"camera_mode": PlayerPrefs.camera_mode,
+		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
 		"bindings": PlayerPrefs.bindings.duplicate(true),
@@ -158,7 +159,7 @@ func _read_controls() -> Dictionary:
 		"mouse_sensitivity": _sens_slider.value,
 		"confine_mouse": _confine_mouse_check.button_pressed,
 		"attack_up": _attack_up_check.button_pressed,
-		"camera_mode": _camera_mode_btn.selected,
+		"camera_tilt_deg": _tilt_slider.value,
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
 		"bindings": _pending_bindings.duplicate(true),
@@ -488,14 +489,15 @@ func _build_game_tab() -> Control:
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Camera"))
 
-	_camera_mode_btn = OptionButton.new()
-	_camera_mode_btn.custom_minimum_size = Vector2(220, 40)
-	_camera_mode_btn.add_theme_font_size_override("font_size", 15)
-	for i: int in PlayerPrefs.CAMERA_MODE_LABELS.size():
-		_camera_mode_btn.add_item(PlayerPrefs.CAMERA_MODE_LABELS[i], i)
-	_camera_mode_btn.selected = PlayerPrefs.camera_mode
-	_camera_mode_btn.item_selected.connect(_on_camera_mode_selected)
-	box.add_child(_field_row("Mode", _camera_mode_btn))
+	_tilt_slider = HSlider.new()
+	_tilt_slider.min_value = PlayerPrefs.CAMERA_TILT_MIN
+	_tilt_slider.max_value = PlayerPrefs.CAMERA_TILT_MAX
+	_tilt_slider.step = 0.5
+	_tilt_slider.value = PlayerPrefs.camera_tilt_deg
+	_tilt_slider.value_changed.connect(_on_tilt_changed)
+	_tilt_label = _value_label("%.1f°" % PlayerPrefs.camera_tilt_deg)
+	_tilt_slider.value_changed.connect(func(v: float) -> void: _tilt_label.text = "%.1f°" % v)
+	box.add_child(_slider_row("Tilt", _tilt_slider, _tilt_label))
 
 	_fov_slider = HSlider.new()
 	_fov_slider.min_value = PlayerPrefs.FOV_MIN
@@ -620,7 +622,7 @@ func _on_attack_up_toggled(_pressed: bool) -> void:
 func _on_confine_mouse_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
-func _on_camera_mode_selected(_idx: int) -> void:
+func _on_tilt_changed(_value: float) -> void:
 	_update_apply_state()
 
 func _on_fov_changed(value: float) -> void:
@@ -775,7 +777,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
 	PlayerPrefs.confine_mouse = c.confine_mouse
 	PlayerPrefs.attack_up = c.attack_up
-	PlayerPrefs.camera_mode = c.camera_mode
+	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
 	PlayerPrefs.bindings = (_pending_bindings as Dictionary).duplicate(true)
@@ -821,8 +823,8 @@ func _on_cancel_pressed() -> void:
 	if _confine_mouse_check != null:
 		_confine_mouse_check.set_pressed_no_signal(_original.confine_mouse)
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
-	if _camera_mode_btn != null:
-		_camera_mode_btn.selected = _original.camera_mode
+	if _tilt_slider != null:
+		_tilt_slider.value = _original.camera_tilt_deg
 	if _fov_slider != null:
 		_fov_slider.value = _original.fov
 	if _cam_dist_slider != null:
