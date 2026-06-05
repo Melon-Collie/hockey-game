@@ -41,6 +41,8 @@ var _phase_slide_tween: Tween = null
 var _faceoff_countdown_tween: Tween = null
 var _skip_prompt_label: Label = null
 var _skip_prompt_tween: Tween = null
+var _menu_hint_label: Label = null
+var _menu_hint_tween: Tween = null
 var _skip_vote_current: int = 0
 var _skip_vote_total: int = 0
 var _spectator_banner: PanelContainer = null
@@ -79,6 +81,14 @@ func _ready() -> void:
 	_side_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
 	_side_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
 	add_child(_side_menu)
+	# Free play IS the main menu, so land with the SideMenu open (it's obvious
+	# one exists) and keep a pulsing "[ESC] MENU" affordance up whenever it's
+	# closed. Only in free play — a real match uses the PauseMenu instead.
+	if NetworkManager.is_free_play_mode:
+		_build_menu_hint()
+		_side_menu.opened.connect(_hide_menu_hint)
+		_side_menu.closed.connect(_show_menu_hint)
+		_side_menu.open()
 	_confirm_dialog = ConfirmDialog.new()
 	_confirm_dialog.confirmed.connect(_on_confirm_dialog_confirmed)
 	_confirm_dialog.cancelled.connect(_on_confirm_dialog_cancelled)
@@ -530,6 +540,40 @@ func _build_skip_replay_prompt() -> void:
 	_skip_prompt_label.offset_bottom = -24.0
 	_skip_prompt_label.visible = false
 	add_child(_skip_prompt_label)
+
+func _build_menu_hint() -> void:
+	_menu_hint_label = _lbl("[ESC] MENU", 16, _WHITE)
+	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_menu_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_menu_hint_label.anchor_left = 0.0
+	_menu_hint_label.anchor_right = 0.0
+	_menu_hint_label.anchor_top = 0.0
+	_menu_hint_label.anchor_bottom = 0.0
+	_menu_hint_label.offset_left = 20.0
+	_menu_hint_label.offset_right = 220.0
+	_menu_hint_label.offset_top = 16.0
+	_menu_hint_label.offset_bottom = 40.0
+	# Starts hidden — _ready opens the menu right away, which fires the opened
+	# signal and keeps the hint down until the player first closes the menu.
+	_menu_hint_label.visible = false
+	add_child(_menu_hint_label)
+
+func _show_menu_hint() -> void:
+	if _menu_hint_label == null:
+		return
+	_menu_hint_label.visible = true
+	if _menu_hint_tween != null and _menu_hint_tween.is_running():
+		_menu_hint_tween.kill()
+	_menu_hint_tween = MenuStyle.pulse(_menu_hint_label)
+
+func _hide_menu_hint() -> void:
+	if _menu_hint_label == null:
+		return
+	if _menu_hint_tween != null and _menu_hint_tween.is_running():
+		_menu_hint_tween.kill()
+	_menu_hint_tween = null
+	_menu_hint_label.modulate.a = 1.0
+	_menu_hint_label.visible = false
 
 func _start_skip_prompt_pulse() -> void:
 	if _skip_prompt_tween != null and _skip_prompt_tween.is_running():

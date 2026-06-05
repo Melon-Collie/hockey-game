@@ -39,10 +39,6 @@ extends Camera3D
 # ── Smoothing ─────────────────────────────────────────────────────────────────
 @export var smooth_speed: float = 3.0
 
-# Tilted-camera pitch. Subtle by design — much steeper than this and the
-# mouse-to-world projection becomes nonlinear enough to break stickhandling.
-const _TILTED_PITCH_DEG: float = -75.0
-
 # ── Goal Context (set via set_goal_context) ───────────────────────────────────
 var _goal_0: HockeyGoal = null  # Team 0's defended goal
 var _goal_1: HockeyGoal = null  # Team 1's defended goal
@@ -199,38 +195,25 @@ func _physics_process(delta: float) -> void:
 	target_center.z = clampf(target_center.z, -safe_z, safe_z)
 
 	# ── Step 5: Smooth movement ───────────────────────────────────────────────
-	# Tilted mode: camera looks along a slanted ray, so a camera at
-	# target_center.xz looks at a point ~h*tan(off-axis-angle) behind itself.
-	# Offset the camera in the direction the view is being pulled away from
-	# so the play stays centered. attack_up flip mirrors the offset sign.
-	var pitch: float = -90.0
-	var tilt_z_offset: float = 0.0
-	if PlayerPrefs.camera_mode == PlayerPrefs.CAMERA_MODE_TILTED:
-		pitch = _TILTED_PITCH_DEG
-		var off_axis_rad: float = deg_to_rad(90.0 + _TILTED_PITCH_DEG)  # 15° at -75° pitch
-		var raw_offset: float = _current_height * tan(off_axis_rad)
-		var flip_sign: float = -1.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 1.0
-		tilt_z_offset = raw_offset * flip_sign
+	# The camera looks along a slanted ray, so a camera at target_center.xz
+	# looks at a point ~h*tan(off-axis-angle) behind itself. Offset the camera
+	# in the direction the view is being pulled away from so the play stays
+	# centered. attack_up flip mirrors the offset sign. The tilt magnitude is
+	# user-tunable in a tight band (Options → Game → Camera Tilt).
+	var tilt_deg: float = PlayerPrefs.camera_tilt_deg
+	var pitch: float = -tilt_deg
+	var off_axis_rad: float = deg_to_rad(90.0 - tilt_deg)  # 15° at 75° tilt
+	var raw_offset: float = _current_height * tan(off_axis_rad)
+	var flip_sign: float = -1.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 1.0
+	var tilt_z_offset: float = raw_offset * flip_sign
 	var target_pos: Vector3 = Vector3(
 			target_center.x, _current_height, target_center.z + tilt_z_offset)
 	global_position = global_position.lerp(target_pos, smooth_speed * delta)
 
-	# ── Step 5b: Apply projection + pitch from PlayerPrefs ────────────────────
-	# Ortho `size` = vertical world units visible; matches the perspective
-	# FOV's vertical extent at the current height so the same zone frames in
-	# both modes.
+	# ── Step 5b: Apply pitch + attack-up yaw flip. Always tilted perspective. ──
+	if projection != PROJECTION_PERSPECTIVE:
+		projection = PROJECTION_PERSPECTIVE
 	var flip_y: float = 180.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 0.0
-	match PlayerPrefs.camera_mode:
-		PlayerPrefs.CAMERA_MODE_ORTHOGRAPHIC:
-			if projection != PROJECTION_ORTHOGONAL:
-				projection = PROJECTION_ORTHOGONAL
-			size = 2.0 * tan_half_fov * _current_height
-		PlayerPrefs.CAMERA_MODE_TOP_DOWN:
-			if projection != PROJECTION_PERSPECTIVE:
-				projection = PROJECTION_PERSPECTIVE
-		PlayerPrefs.CAMERA_MODE_TILTED:
-			if projection != PROJECTION_PERSPECTIVE:
-				projection = PROJECTION_PERSPECTIVE
 	rotation_degrees = Vector3(pitch, flip_y, 0.0)
 
 	# ── Step 6: Shake ─────────────────────────────────────────────────────────

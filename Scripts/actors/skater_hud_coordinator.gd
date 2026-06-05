@@ -5,10 +5,11 @@ extends RefCounted
 # Slot ring sits just inside RING_OUTER_R. Charge ring is concentric, just
 # outside, with a small gap. Chevron and player name sit below the rings on
 # the screen-down side.
-const RING_OUTER_R: float        = 0.45
-const CHARGE_RING_GAP: float     = 0.02
-const CHARGE_RING_OUTER_R: float = 0.49
-const CHARGE_RING_INNER_R: float = CHARGE_RING_OUTER_R - 0.04
+const RING_SCALE: float          = 2.5   # playtester readability bump; visual only, never a hitbox
+const RING_OUTER_R: float        = 0.45 * RING_SCALE
+const CHARGE_RING_GAP: float     = 0.02 * RING_SCALE
+const CHARGE_RING_OUTER_R: float = 0.49 * RING_SCALE
+const CHARGE_RING_INNER_R: float = CHARGE_RING_OUTER_R - 0.04 * RING_SCALE
 const _CHARGE_FULL_PULSE_HZ: float = 3.0
 const _CHARGE_LOST_FLASH_DURATION: float = 0.35
 
@@ -128,6 +129,7 @@ var _last_lost_flash: float = -1.0
 const _RING_RECOLOR_INTERVAL: float = 0.25
 var _ring_relation_resolver: Callable = Callable()
 var _ring_relation_cached: int = -2
+var _ring_colorblind_cached: bool = false
 var _ring_recolor_accum: float = _RING_RECOLOR_INTERVAL
 
 # HUD geometry assumes the gameplay top-down camera (ring decals flat on ice,
@@ -142,7 +144,7 @@ func setup(skater: Skater) -> void:
 
 	_ring_mesh = MeshInstance3D.new()
 	_ring_mesh.name = "RingIndicator"
-	_ring_mesh.mesh = _create_ring_mesh(RING_OUTER_R - MenuStyle.HUD_LINE_THIN, RING_OUTER_R, 48)
+	_ring_mesh.mesh = _create_ring_mesh(RING_OUTER_R - MenuStyle.HUD_LINE_THIN * RING_SCALE, RING_OUTER_R, 48)
 	_ring_mesh.position = Vector3.ZERO
 	_ring_mesh.material_override = _make_hud_ice_material()
 	_skater.add_child(_ring_mesh)
@@ -347,9 +349,14 @@ func _refresh_ring_color() -> void:
 	if _ring_mesh == null or not _ring_relation_resolver.is_valid():
 		return
 	var relation: int = _ring_relation_resolver.call() as int
-	if relation == _ring_relation_cached:
+	# Recolor when the relationship changes OR the colorblind setting is
+	# toggled — the periodic update() recolor (every _RING_RECOLOR_INTERVAL)
+	# then picks up a live palette switch from the options panel within ~0.25s.
+	var cb: bool = PlayerPrefs.colorblind_rings
+	if relation == _ring_relation_cached and cb == _ring_colorblind_cached:
 		return
 	_ring_relation_cached = relation
+	_ring_colorblind_cached = cb
 	var col: Color = _ring_color_for_relation(relation)
 	var mat: StandardMaterial3D = _ring_mesh.material_override as StandardMaterial3D
 	if mat != null:
@@ -357,10 +364,11 @@ func _refresh_ring_color() -> void:
 
 
 func _ring_color_for_relation(relation: int) -> Color:
+	var cb: bool = PlayerPrefs.colorblind_rings
 	match relation:
-		RingRelation.SELF:     return MenuStyle.HUD_RING_SELF
-		RingRelation.TEAMMATE: return MenuStyle.HUD_RING_TEAM
-		RingRelation.ENEMY:    return MenuStyle.HUD_RING_ENEMY
+		RingRelation.SELF:     return MenuStyle.HUD_RING_SELF_CB  if cb else MenuStyle.HUD_RING_SELF
+		RingRelation.TEAMMATE: return MenuStyle.HUD_RING_TEAM_CB  if cb else MenuStyle.HUD_RING_TEAM
+		RingRelation.ENEMY:    return MenuStyle.HUD_RING_ENEMY_CB if cb else MenuStyle.HUD_RING_ENEMY
 		_:                     return MenuStyle.HUD_ICE
 
 
