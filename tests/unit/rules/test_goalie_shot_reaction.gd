@@ -170,49 +170,6 @@ func test_tip_to_low_no_op_if_not_elevated() -> void:
 	assert_false(sr.is_elevated)
 	assert_eq(sr.shot_timer, timer_before, "tip_to_low is a no-op when shot was never elevated")
 
-# ── Client side ──────────────────────────────────────────────────────────────
-
-func test_apply_remote_seeds_client_timer() -> void:
-	sr.apply_remote(0.5, 1.2, true, true, 0.0)
-	assert_true(sr.reacting)
-	assert_eq(sr.client_timer, GoalieShotReaction.CLIENT_REACTION_DURATION_S)
-	assert_eq(sr.impact_x, 0.5)
-	assert_eq(sr.impact_y, 1.2)
-	assert_true(sr.is_elevated)
-
-# RTT compensation: client subtracts transit time so the processing timer
-# lands at the same wall-clock T+delay as the host.
-func test_apply_remote_subtracts_rtt_from_shot_timer() -> void:
-	sr.apply_remote(0.0, 0.3, false, true, 0.05)
-	assert_almost_eq(sr.shot_timer, 0.13 - 0.05, 0.001)
-	assert_almost_eq(sr.arm_timer, 0.18 - 0.05, 0.001)
-
-func test_apply_remote_clamps_negative_timer_to_zero() -> void:
-	# RTT >= delay → react on arrival
-	sr.apply_remote(0.0, 0.3, false, true, 1.0)
-	assert_eq(sr.shot_timer, 0.0)
-	assert_eq(sr.arm_timer, 0.0)
-
-func test_apply_remote_skips_timers_when_not_upright() -> void:
-	sr.shot_timer = 0.05
-	sr.arm_timer = 0.05
-	sr.apply_remote(0.0, 0.3, false, false, 0.0)
-	# Timers untouched when not upright (caller already past the standing/ready window)
-	assert_almost_eq(sr.shot_timer, 0.05, 0.001)
-
-func test_tick_client_expires_freeze() -> void:
-	sr.apply_remote(0.0, 0.5, false, true, 0.0)
-	sr.tick_client(2.0)
-	assert_false(sr.reacting)
-
-func test_clear_for_client_drops_all_freeze_state() -> void:
-	sr.apply_remote(0.0, 1.2, true, true, 0.0)
-	sr.clear_for_client()
-	assert_false(sr.reacting)
-	assert_false(sr.is_elevated)
-	assert_eq(sr.client_timer, 0.0)
-	assert_eq(sr.shot_timer, 0.0)
-
 # ── update_impact ────────────────────────────────────────────────────────────
 
 func test_update_impact_replaces_coords() -> void:

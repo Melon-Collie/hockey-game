@@ -10,7 +10,7 @@ extends RefCounted
 #
 # 1. World state  (40 Hz, unreliable_ordered) — single flat PackedByteArray:
 #      u16 ws_sequence, f32 host_capture_time, u8 num_skaters
-#      [u32 peer_id, skater_bytes(35), u8 queue_depth] × num_skaters
+#      [u32 peer_id, skater_bytes(37), u8 queue_depth] × num_skaters
 #      puck_bytes(12)
 #      u8 num_goalies, [goalie_bytes(35)] × num_goalies
 #      u8 score0, u8 score1, u8 phase, u8 period, u16 time_remaining
@@ -101,7 +101,7 @@ func encode_world_state() -> PackedByteArray:
 	hdr.encode_float(2, NetworkManager.local_time())
 	hdr.encode_u8(6, peers.size())
 	b.append_array(hdr)
-	# Skaters: u32 peer_id + 35B state + u8 queue_depth
+	# Skaters: u32 peer_id + 37B state + u8 queue_depth
 	for peer_id: int in peers:
 		var record: PlayerRecord = _registry.get_record(peer_id)
 		var depth: int = 0

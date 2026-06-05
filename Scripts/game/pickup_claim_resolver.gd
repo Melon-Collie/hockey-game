@@ -6,9 +6,10 @@ extends RefCounted
 # rewind, contest-window arbitration) lives in one testable place.
 #
 # Flow:
-#   receive_claim(peer_id, host_ts, rtt, interp_delay)
+#   receive_claim(peer_id, host_ts, interp_delay)
 #     → reject if puck locked, claim stale, skater missing/ghost, on cooldown
-#     → rewind blade to host_ts + rtt/2; rewind puck to host_ts - interp_delay
+#     → rewind blade to LagCompRewind.self_view_time(host_ts) and puck to
+#       LagCompRewind.remote_view_time(host_ts, interp_delay) — never rtt/2
 #     → reject if PuckInteractionRules.check_pickup fails
 #     → if a prior claim is pending and |Δhost_ts| < CONTEST_WINDOW_S, contest;
 #       otherwise the earlier claim_timestamp wins outright

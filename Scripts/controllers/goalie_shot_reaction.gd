@@ -14,9 +14,6 @@ extends RefCounted
 # Arms take longer than legs (close-range top-corner shots can score because
 # the arm doesn't even start moving in time).
 
-# Client-side safety timer for visualisation when no host event arrives.
-const CLIENT_REACTION_DURATION_S: float = 1.5
-
 # ── Tuning (set by controller from exports in setup()) ───────────────────────
 var reaction_delay: float = 0.13
 var arm_reaction_delay: float = 0.18
@@ -33,11 +30,11 @@ var arm_timer: float = 0.0
 var age: float = 0.0
 # >= 0 → counting down to clear. -1 → not yet armed (no resolving event seen).
 var clear_timer: float = -1.0
-# Client-only safety timer ticked separately by tick_client().
-var client_timer: float = 0.0
 
+# Emitted host-side when a reaction starts; the controller hooks this to arm the
+# slide lockout. Clients render the goalie purely from the interpolated host
+# pose broadcast, so no client-facing reaction signal/RPC is needed.
 signal started(impact_x: float, impact_y: float, is_elevated: bool)
-signal finished()
 
 func reset() -> void:
 	reacting = false
@@ -48,7 +45,6 @@ func reset() -> void:
 	arm_timer = 0.0
 	age = 0.0
 	clear_timer = -1.0
-	client_timer = 0.0
 
 # Host-side: start a fresh reaction. `delay` is the per-shot reaction delay
 # returned by `GoalieBehaviorRules.detect_shot` (usually `reaction_delay`).
@@ -120,15 +116,13 @@ func arm_clear() -> void:
 	if clear_timer < 0.0:
 		clear_timer = reaction_clear_delay
 
-# Centralised reaction-clear. Every host-side cleanup path goes through here
-# so listeners can hook one signal (`finished`) for the RPC fan-out.
+# Centralised reaction-clear. Every host-side cleanup path goes through here.
 func finish() -> void:
 	if not reacting:
 		return
 	reacting = false
 	is_elevated = false
 	clear_timer = -1.0
-	finished.emit()
 
 # Re-projection saw the elevated shot tip down to a low shot — start the
 # butterfly drop timer (still allowed during freeze; arms-and-drop are the
@@ -144,32 +138,3 @@ func update_impact(x: float, y: float) -> void:
 
 func arm_pending() -> bool:
 	return arm_timer > 0.0
-
-# Client-side: tick the safety timer that drops the freeze if no host clear
-# arrives. Mirrors the host's `max_reaction_duration` cap.
-func tick_client(delta: float) -> void:
-	if client_timer <= 0.0:
-		return
-	client_timer -= delta
-	if client_timer <= 0.0:
-		reacting = false
-
-# Client-side: host transitioned to STANDING/READY — drop the freeze.
-func clear_for_client() -> void:
-	reacting = false
-	is_elevated = false
-	client_timer = 0.0
-	shot_timer = 0.0
-
-# Client-side: apply an incoming `goalie_shot_reaction` RPC. Mirrors host
-# `start()`: arms the processing timers (subtract RPC transit time so client
-# lands at the same wall-clock T+delay as the host).
-func apply_remote(x: float, y: float, elevated: bool, is_upright: bool, rtt_s: float) -> void:
-	reacting = true
-	impact_x = x
-	impact_y = y
-	is_elevated = elevated
-	client_timer = CLIENT_REACTION_DURATION_S
-	if is_upright:
-		shot_timer = maxf(reaction_delay - rtt_s, 0.0)
-		arm_timer = maxf(arm_reaction_delay - rtt_s, 0.0)
