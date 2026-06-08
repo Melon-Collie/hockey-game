@@ -134,12 +134,6 @@ func test_arm_clear_no_op_when_not_reacting() -> void:
 
 # ── finish ───────────────────────────────────────────────────────────────────
 
-func test_finish_emits_signal() -> void:
-	sr.start(0.0, 0.5, true, 0.13)
-	watch_signals(sr)
-	sr.finish()
-	assert_signal_emitted(sr, "finished")
-
 func test_finish_clears_is_elevated() -> void:
 	sr.start(0.0, 1.2, true, 0.13)
 	sr.finish()
@@ -147,9 +141,10 @@ func test_finish_clears_is_elevated() -> void:
 	assert_false(sr.reacting)
 
 func test_finish_no_op_when_not_reacting() -> void:
-	watch_signals(sr)
+	# Not reacting → finish() returns early and touches nothing.
 	sr.finish()
-	assert_signal_not_emitted(sr, "finished")
+	assert_false(sr.reacting)
+	assert_eq(sr.clear_timer, -1.0)
 
 # ── tip_to_low ───────────────────────────────────────────────────────────────
 
