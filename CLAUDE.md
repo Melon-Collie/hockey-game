@@ -81,7 +81,7 @@ See `ARCHITECTURE.md` → **Confusing Boundaries** for class-responsibility deta
 
 ## Autoloads
 
-Initialized in this order: `PlayerPrefs` → `Constants` → `BuildInfo` → `SoundManager` (`sound_manager.gd`, no class_name) → `NetworkManager` → `NetworkSimManager` (`network_sim.gd`, no class_name) → `GameManager`. `NetworkManager._ready()` is a no-op; the menu drives initialization. `SoundManager` exposes `play_ui(sound: SoundManager.Sound, volume_db := 0.0, pitch_variance := 0.0)` and `play_world(sound: SoundManager.Sound, pos: Vector3, volume_db := 0.0, pitch_variance := 0.0)`; sound constants live in its `Sound` enum.
+Initialized in this order: `PlayerPrefs` → `Constants` → `BuildInfo` → `SoundManager` (`sound_manager.gd`, no class_name) → `NetworkManager` → `NetworkSimManager` (`network_sim.gd`, no class_name) → `SteamManager` (`steam_manager.gd`, no class_name) → `GameManager`. `NetworkManager._ready()` is a no-op; the menu drives initialization. `SteamManager` owns every GodotSteam (`Steam` singleton) call — init + lobby lifecycle — and degrades to a no-op (`is_available = false`) when Steam isn't running or the GDExtension is absent (headless CI), so offline/free-play/tutorial and the GUT suite are unaffected. `SoundManager` exposes `play_ui(sound: SoundManager.Sound, volume_db := 0.0, pitch_variance := 0.0)` and `play_world(sound: SoundManager.Sound, pos: Vector3, volume_db := 0.0, pitch_variance := 0.0)`; sound constants live in its `Sound` enum.
 
 ## Networking
 
@@ -123,7 +123,7 @@ Before touching networking code (RPCs, reconcile, prediction, interpolation, lag
 
 ## Launch Modes
 
-All start paths go through `MainMenu.tscn`. `NetworkManager._ready()` does nothing — the menu calls `start_offline()`, `start_host()`, or `start_client(ip)` directly. These set up ENet but defer world spawning. `Hockey.tscn`'s root node runs `game_scene.gd`, whose `_ready()` calls `NetworkManager.on_game_scene_ready()`, which emits `host_ready` on hosts; `GameManager` listens and calls `on_host_started`. Client world spawn is triggered by the `client_connected` signal from `_on_connected_to_server()`.
+All start paths go through `MainMenu.tscn`. `NetworkManager._ready()` does nothing — the menu calls `start_offline()`, `start_host()`, or `start_client_lobby(lobby_id)` directly. Online transport is **Steam P2P via `SteamMultiplayerPeer`** (GodotSteam GDExtension), a drop-in `MultiplayerPeer`, so all RPCs/prediction/reconcile/lag-comp are transport-agnostic and unchanged. Unlike ENet's instant `create_server`/`create_client`, Steam lobby create/join are **async**: `start_host()` waits for `SteamManager.lobby_created` then emits `host_lobby_ready` (the menu spinner waits on it before changing scene); `start_client_lobby()` waits for `lobby_joined`, reads the lobby owner's Steam ID, then the normal `connected_to_server` handshake runs unchanged. `Hockey.tscn`'s root node runs `game_scene.gd`, whose `_ready()` calls `NetworkManager.on_game_scene_ready()`, which emits `host_ready` on hosts; `GameManager` listens and calls `on_host_started`. Client world spawn is triggered by the `client_connected` signal from `_on_connected_to_server()`.
 
 NetworkManager → GameManager communication is signal-based: every RPC / ENet callback emits a typed signal, and GameManager wires all connections once in `_ready()` via `_wire_network_signals()`. The only downward data flow is `NetworkManager.set_world_state_provider(Callable)`.
 
