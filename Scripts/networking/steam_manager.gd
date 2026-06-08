@@ -30,6 +30,7 @@ const LOBBY_DISTANCE_WORLDWIDE: int = 3  # ELobbyDistanceFilter: widest search
 # ── Availability ────────────────────────────────────────────────────────────
 var is_available: bool = false   # true iff Steam initialised successfully
 var steam_id: int = 0            # local user's SteamID64 (0 when unavailable)
+var persona_name: String = ""    # local user's Steam display name ("" when unavailable)
 var current_lobby_id: int = 0    # 0 when not in a lobby
 
 # ── Outbound signals (NetworkManager / menu listen) ─────────────────────────
@@ -74,6 +75,7 @@ func _try_init() -> void:
 
 	is_available = true
 	steam_id = Steam.getSteamID()
+	persona_name = Steam.getPersonaName()
 	_connect_steam_signals()
 	_check_launch_invite()
 

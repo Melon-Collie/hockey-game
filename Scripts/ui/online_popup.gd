@@ -8,6 +8,10 @@ signal join_pressed(lobby_id: int)
 var _list_box: VBoxContainer = null
 var _status_label: Label = null
 var _refresh_btn: Button = null
+var _steam_status_label: Label = null
+
+const _STEAM_OK_COLOR: Color = Color(0.45, 0.85, 0.55, 1.0)
+const _STEAM_OFF_COLOR: Color = Color(0.85, 0.5, 0.45, 1.0)
 
 
 func _ready() -> void:
@@ -55,6 +59,12 @@ func _build() -> void:
 	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
 	vbox.add_child(title)
 
+	# At-a-glance Steam init check: green "connected as <name>" or a red hint.
+	_steam_status_label = Label.new()
+	_steam_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_steam_status_label.add_theme_font_size_override("font_size", 15)
+	vbox.add_child(_steam_status_label)
+
 	var host_btn := _menu_button("Host Game")
 	host_btn.pressed.connect(func() -> void:
 		visible = false
@@ -94,6 +104,15 @@ func _build() -> void:
 	_status_label.add_theme_font_size_override("font_size", 16)
 	_status_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65, 1.0))
 	vbox.add_child(_status_label)
+
+
+func _refresh_steam_status() -> void:
+	if SteamManager.is_available:
+		_steam_status_label.text = "Steam: connected as %s" % SteamManager.persona_name
+		_steam_status_label.add_theme_color_override("font_color", _STEAM_OK_COLOR)
+	else:
+		_steam_status_label.text = "Steam: not running"
+		_steam_status_label.add_theme_color_override("font_color", _STEAM_OFF_COLOR)
 
 
 func _menu_button(label: String) -> Button:
@@ -168,6 +187,7 @@ func _on_overlay_clicked(event: InputEvent) -> void:
 
 func open() -> void:
 	visible = true
+	_refresh_steam_status()
 	if SteamManager.is_available:
 		_refresh_lobbies()
 	else:
