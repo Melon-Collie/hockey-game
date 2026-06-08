@@ -8,10 +8,11 @@ extends RefCounted
 # claim sees carrier == null from the first's apply_poke_check and skips.
 #
 # Flow:
-#   receive_claim(peer_id, host_ts, rtt, interp_delay, expected_carrier_peer_id)
+#   receive_claim(peer_id, host_ts, interp_delay, expected_carrier_peer_id)
 #     → reject if puck locked, no carrier, carrier changed, claim stale,
 #       skater missing/ghost, attempting to poke self or teammate
-#     → rewind blade to host_ts + rtt/2; rewind puck to host_ts - interp_delay
+#     → rewind blade to LagCompRewind.self_view_time(host_ts) and puck to
+#       LagCompRewind.remote_view_time(host_ts, interp_delay) — never rtt/2
 #     → reject if PuckInteractionRules.check_poke fails against rewound state
 #     → apply_lag_comp_poke (idempotent — re-checks carrier on apply path
 #       so a concurrent host-side _check_interactions detection that already

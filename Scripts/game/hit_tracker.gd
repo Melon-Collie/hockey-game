@@ -7,8 +7,8 @@ extends RefCounted
 # Flow:
 #   on_hit(hitter_peer_id, victim_peer_id, victim_team_id) → credits hit if cross-team, emits hit_credited
 #
-# Dedup: a 0.5s per-pair cooldown prevents double-counting when both host
-# physics and the lag-compensated claim path fire for the same contact.
+# Dedup: a per-pair cooldown (HIT_COOLDOWN_S) prevents double-counting when both
+# host physics and the lag-compensated claim path fire for the same contact.
 
 signal hit_credited
 

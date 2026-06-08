@@ -432,16 +432,10 @@ extends Node
 
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
-# ── External signals ──────────────────────────────────────────────────────────
-signal state_transitioned(team_id: int, new_state: int)
-signal shot_reaction_started(team_id: int, impact_x: float, impact_y: float, is_elevated: bool)
-# Fired host-side whenever the reaction freeze clears via any path (resolving
-# event + delay, safety timeout, BUTTERFLY entry). Wired through NetworkManager
-# so clients drop their own freeze on the same beat — without this, the client's
-# `_client_reaction_timer` (1.5 s safety) was the only escape for elevated
-# shots that don't trigger any state change, leaving clients visibly frozen
-# long after the host had moved on.
-signal reaction_cleared(team_id: int)
+# Clients render the goalie purely from the interpolated host pose broadcast
+# (see `_interpolate_and_apply`), so there are no client-facing state-transition
+# or shot-reaction signals/RPCs — the host's broadcast pose carries the butterfly
+# drop, glove/blocker reach, and recovery directly.
 
 # ── References ────────────────────────────────────────────────────────────────
 var goalie: Goalie = null
@@ -507,8 +501,8 @@ var _blade_world_velocity: Vector3 = Vector3.ZERO
 # holds through the translation phase.
 var _slide_start_rotation_y: float = 0.0
 # Skater accessor for the crease-jam butterfly check. Host-only — the check
-# runs inside the host-side state machine and clients receive the resulting
-# transition via the existing apply_state_transition RPC.
+# runs inside the host-side state machine; clients render the resulting pose
+# from the interpolated host broadcast.
 var _skater_getter: Callable = Callable()
 
 # Lag-comp back-date (seconds) consumed by the next release-triggered
@@ -553,7 +547,6 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	_configure_collaborators()
 	_sm.transitioned.connect(_on_sm_transitioned)
 	_reaction.started.connect(_on_reaction_started)
-	_reaction.finished.connect(_on_reaction_finished)
 	# Place the goalie in the crease BEFORE the first physics tick — otherwise
 	# the actor sits at scene-default (0,0,0) and the AI skates it to position
 	# on tick 1, which players see as "spawning at center ice then moving."
@@ -1145,8 +1138,9 @@ func _opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
 func _enter_butterfly() -> void:
 	_sm.transition_to(State.BUTTERFLY)
 
-# Entry side-effects for state changes — runs for EVERY transition (host AND
-# client) because `apply_state_transition` also routes through `_sm.transition_to`.
+# Entry side-effects for state changes — host-only, since it fires off
+# `_sm.transition_to` and only the host runs the goalie state machine (clients
+# render the interpolated host pose and set `_sm.current` directly).
 # Snap-back-to-depth bookkeeping is unit-sensitive: `_current_depth` carries
 # different units per state (radius in STANDING/READY/RECOVERING; perpendicular
 # depth in BUTTERFLY/RVH) and the wrong unit on entry teleports the goalie.
@@ -1176,8 +1170,6 @@ func _on_sm_transitioned(prev: State, new_state: State) -> void:
 			# so the position holds, then `_update_depth` lerps gently to
 			# `rvh_depth` from there.
 			_current_depth = (goalie.global_position.z - _goal_line_z) * _direction_sign
-	if is_server:
-		state_transitioned.emit(team_id, new_state as int)
 
 # Should the goalie keep holding butterfly because the puck is still a threat?
 # Hold conditions, in priority:
@@ -1698,7 +1690,7 @@ func _on_puck_released() -> void:
 	# from any of them. Previously this was gated on `is_upright()`, which
 	# silently dropped all goalie reactions to shots fired while the goalie was
 	# already down — top-corner shots over a butterflied goalie went un-tracked
-	# because no `shot_reaction_started` RPC ever fired.
+	# because the reaction freeze never started.
 	if _sm.is_rvh():
 		return
 	# `get_release_velocity` returns the impending velocity even when
@@ -1753,23 +1745,15 @@ func _on_puck_contact(contacted: Goalie) -> void:
 func _on_reaction_resolved() -> void:
 	_reaction.arm_clear()
 
-# Reaction collaborator signal handlers — translate to controller-level effects
-# (slide lockout, external signal fan-out with team_id).
-func _on_reaction_started(impact_x: float, impact_y: float, is_elevated: bool) -> void:
+# Reaction collaborator signal handler — translates the reaction start into the
+# host-side slide lockout. (Host-only in practice: clients render from the
+# interpolated pose broadcast and never run the reaction state machine.)
+func _on_reaction_started(_impact_x: float, _impact_y: float, _is_elevated: bool) -> void:
 	# Goalies track up until release, then commit to their read — they need a
 	# beat to process the shot before they can react to a new lateral threat.
 	# Suppresses slide triggers during that window. Same mechanism as the
 	# post-contact lockout; one runtime timer covers both events (max wins).
 	_slide.arm_event_lockout()
-	if is_server:
-		shot_reaction_started.emit(team_id, impact_x, impact_y, is_elevated)
-
-func _on_reaction_finished() -> void:
-	# Without this RPC, clients receive no signal that the host's freeze ended
-	# for elevated shots (no state change to drop butterfly), and they stay
-	# frozen until the `_client_reaction_timer` 1.5 s safety timer expires.
-	if is_server:
-		reaction_cleared.emit(team_id)
 
 # ── State Serialization ───────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
@@ -1918,36 +1902,6 @@ func apply_replay_state(state: GoalieNetworkState, _delta: float) -> void:
 	goalie.set_goalie_rotation_y(state.rotation_y)
 	goalie.apply_network_pose(state)
 
-
-func apply_state_transition(new_state: int) -> void:
-	if is_server:
-		return
-	# Route through transition_to so `_on_sm_transitioned` mirrors host-side
-	# entry bookkeeping (drop progress, snap-to-perp-depth, etc.).
-	_sm.transition_to(new_state as State)
-	if new_state == State.STANDING as int or new_state == State.READY as int:
-		_reaction.clear_for_client()
-	elif new_state == State.RECOVERING as int:
-		_sm.recovery_timer = 0.0
-		_reaction.reacting = false
-
-func apply_shot_reaction(impact_x: float, impact_y: float, is_elevated: bool) -> void:
-	if is_server:
-		return
-	# Mirror host: arms processing-delay countdowns so client/server arm reach
-	# (elevated) and butterfly drop (low) happen on the same wall-clock offset.
-	# Subtract RPC transit time (≈ full RTT) so the client lands at the same
-	# T+delay as the host. At RTT >= delay the timer clamps to 0 — react on
-	# arrival.
-	var rtt_s: float = NetworkManager.get_latest_rtt_ms() / 1000.0
-	_reaction.apply_remote(impact_x, impact_y, is_elevated, _sm.is_upright(), rtt_s)
-
-# Host fired the reaction-cleared signal — drop the freeze on this client.
-# Idempotent: if state-change RPC already cleared us, this is a no-op.
-func apply_reaction_cleared() -> void:
-	if is_server:
-		return
-	_reaction.clear_for_client()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 # Defensive-zone test uses raw puck position, not threat — the goalie reacts
