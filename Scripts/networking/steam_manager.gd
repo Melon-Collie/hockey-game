@@ -25,8 +25,6 @@ const APP_ID: int = 480
 # run_callbacks never delivers the result).
 const LOBBY_OP_TIMEOUT: float = 12.0
 
-const LOBBY_DISTANCE_WORLDWIDE: int = 3  # ELobbyDistanceFilter: widest search
-
 # ── Availability ────────────────────────────────────────────────────────────
 var is_available: bool = false   # true iff Steam initialised successfully
 var steam_id: int = 0            # local user's SteamID64 (0 when unavailable)
@@ -187,8 +185,8 @@ func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response:
 		lobby_join_failed.emit("Could not join the lobby (response %d)." % response)
 		return
 	current_lobby_id = lobby_id
-	var owner: int = Steam.getLobbyOwner(lobby_id)
-	lobby_joined.emit(lobby_id, owner)
+	var lobby_owner: int = Steam.getLobbyOwner(lobby_id)
+	lobby_joined.emit(lobby_id, lobby_owner)
 
 
 # ── Public lobby browser ────────────────────────────────────────────────────
@@ -196,7 +194,8 @@ func request_lobby_list() -> void:
 	if not is_available:
 		lobby_list_received.emit([])
 		return
-	Steam.addRequestLobbyListDistanceFilter(LOBBY_DISTANCE_WORLDWIDE)
+	Steam.addRequestLobbyListDistanceFilter(
+			Steam.LOBBY_DISTANCE_FILTER_WORLDWIDE as Steam.LobbyDistanceFilter)
 	Steam.addRequestLobbyListStringFilter("game", "mitts", Steam.LOBBY_COMPARISON_EQUAL)
 	Steam.addRequestLobbyListStringFilter("protocol", str(BuildInfo.PROTOCOL_VERSION),
 			Steam.LOBBY_COMPARISON_EQUAL)

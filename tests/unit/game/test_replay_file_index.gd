@@ -21,11 +21,11 @@ func _clear_dir() -> void:
 	if d == null:
 		return
 	d.list_dir_begin()
-	var name: String = d.get_next()
-	while not name.is_empty():
+	var entry: String = d.get_next()
+	while not entry.is_empty():
 		if not d.current_is_dir():
-			DirAccess.remove_absolute(TEST_DIR.path_join(name))
-		name = d.get_next()
+			DirAccess.remove_absolute(TEST_DIR.path_join(entry))
+		entry = d.get_next()
 	d.list_dir_end()
 	DirAccess.remove_absolute(TEST_DIR)
 
@@ -36,8 +36,8 @@ func _clear_dir() -> void:
 # for the order-sensitive tests to be deterministic. (10 ms wasn't enough —
 # all three files ended up sharing a second, sort returned all-equal, and
 # stable sort kept directory-listing order = alphabetical.)
-func _make_replay(name: String) -> String:
-	var path: String = TEST_DIR.path_join(name)
+func _make_replay(file_name: String) -> String:
+	var path: String = TEST_DIR.path_join(file_name)
 	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
 	f.store_8(0)
 	f.close()

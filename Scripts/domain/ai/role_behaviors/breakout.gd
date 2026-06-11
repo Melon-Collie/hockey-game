@@ -118,7 +118,7 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 #     blue line — presents ahead of the puck on the boards.
 #   WEAK:   weak-side, level with the carrier on the depth axis — the
 #     reverse-valve release point.
-static func _search_center(ctx: RoleContext, carrier_pos: Vector3,
+static func _search_center(_ctx: RoleContext, carrier_pos: Vector3,
 		is_strong: bool, side_x: float, up_ice_z: float) -> Vector3:
 	var wall_x: float = side_x * (GameRules.RINK_HALF_WIDTH - WALL_INSET_M)
 	if is_strong:
