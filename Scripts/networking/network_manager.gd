@@ -42,6 +42,15 @@ func is_real_peer(peer_id: int) -> bool:
 # _ready and executes the corresponding orchestration work. Keeps the upward
 # call discipline — infrastructure never calls into application directly.
 signal host_ready
+# Host: the Steam lobby is up and the SteamMultiplayerPeer is assigned — the
+# menu waits on this before changing to the Lobby scene (Steam lobby creation
+# is async, unlike ENet's instant create_server). Failure path mirrors it.
+signal host_lobby_ready
+signal host_lobby_failed(reason: String)
+# Client: lobby join failed before the connection handshake even began (Steam
+# couldn't enter the lobby). Post-join handshake failures still surface via the
+# existing connection_failed / CONNECT_TIMEOUT paths.
+signal client_lobby_failed(reason: String)
 signal client_connected
 signal disconnected_from_server
 signal peer_joined(peer_id: int)
@@ -351,6 +360,10 @@ func start_tutorial(id: String = TutorialRegistry.BASICS_ID) -> void:
 func local_time() -> float:
 	return (Time.get_ticks_msec() - _session_start_ms) / 1000.0
 
+# Host startup is now async: kick off Steam lobby creation and assign the
+# SteamMultiplayerPeer once the lobby_created callback lands. The menu waits on
+# host_lobby_ready before changing scene. Host is still peer id 1, so all
+# downstream RPC / slot / spawn code is unchanged.
 func start_host() -> void:
 	_session_start_ms = Time.get_ticks_msec()
 	is_host = true
@@ -359,23 +372,58 @@ func start_host() -> void:
 	_peer_names[1] = local_player_name
 	_peer_numbers[1] = local_jersey_number
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
-	var peer := ENetMultiplayerPeer.new()
-	var error := peer.create_server(Constants.PORT, GameRules.MAX_CONNECTIONS)
+	SteamManager.lobby_created.connect(_on_steam_lobby_created, CONNECT_ONE_SHOT)
+	SteamManager.lobby_create_failed.connect(_on_steam_lobby_create_failed, CONNECT_ONE_SHOT)
+	SteamManager.create_lobby(GameRules.MAX_CONNECTIONS, true)
+
+func _on_steam_lobby_created(_lobby_id: int) -> void:
+	if SteamManager.lobby_create_failed.is_connected(_on_steam_lobby_create_failed):
+		SteamManager.lobby_create_failed.disconnect(_on_steam_lobby_create_failed)
+	# create_host's first arg is a virtual port (0 is fine); the optional second
+	# arg is an ESteamNetworkingConfigValue options array (empty is fine).
+	var peer := SteamMultiplayerPeer.new()
+	var error := peer.create_host(0)
 	if error != OK:
-		push_error("Failed to start server: " + str(error))
+		push_error("Failed to start Steam host: " + str(error))
+		host_lobby_failed.emit("Failed to create the host peer.")
 		return
 	multiplayer.multiplayer_peer = peer
+	host_lobby_ready.emit()
 
-func start_client(ip: String) -> void:
+func _on_steam_lobby_create_failed(reason: String) -> void:
+	if SteamManager.lobby_created.is_connected(_on_steam_lobby_created):
+		SteamManager.lobby_created.disconnect(_on_steam_lobby_created)
+	host_lobby_failed.emit(reason)
+
+# Client startup is two async phases: (1) join the Steam lobby, then (2) the
+# normal connection handshake. Phase 1 resolves via SteamManager.lobby_joined;
+# phase 2 is identical to the old ENet path (connected_to_server →
+# _on_connected_to_server → client_connected + request_join).
+func start_client_lobby(lobby_id: int) -> void:
 	is_host = false
 	game_initiated = true
-	var peer := ENetMultiplayerPeer.new()
-	var error := peer.create_client(ip, Constants.PORT)
+	SteamManager.lobby_joined.connect(_on_steam_lobby_joined, CONNECT_ONE_SHOT)
+	SteamManager.lobby_join_failed.connect(_on_steam_lobby_join_failed, CONNECT_ONE_SHOT)
+	SteamManager.join_lobby(lobby_id)
+
+func _on_steam_lobby_joined(_lobby_id: int, owner_steam_id: int) -> void:
+	if SteamManager.lobby_join_failed.is_connected(_on_steam_lobby_join_failed):
+		SteamManager.lobby_join_failed.disconnect(_on_steam_lobby_join_failed)
+	var peer := SteamMultiplayerPeer.new()
+	var error := peer.create_client(owner_steam_id, 0)
 	if error != OK:
-		push_error("Failed to connect: " + str(error))
+		push_error("Failed to connect to Steam host: " + str(error))
+		client_lobby_failed.emit("Failed to create the client peer.")
 		return
 	multiplayer.multiplayer_peer = peer
+	# Arm the handshake timeout only now that the peer exists, so a slow lobby
+	# join can't false-trip it.
 	_connect_timer = 0.0
+
+func _on_steam_lobby_join_failed(reason: String) -> void:
+	if SteamManager.lobby_joined.is_connected(_on_steam_lobby_joined):
+		SteamManager.lobby_joined.disconnect(_on_steam_lobby_joined)
+	client_lobby_failed.emit(reason)
 
 func on_game_scene_ready() -> void:
 	if is_host:
@@ -438,6 +486,11 @@ func _exit_tree() -> void:
 func _close() -> void:
 	if multiplayer.multiplayer_peer != null and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
 		multiplayer.multiplayer_peer.close()
+	# Close P2P sessions (above) before leaving the lobby that owns them.
+	# Idempotent — a no-op in offline/free-play/tutorial where no lobby exists.
+	# Every teardown path (reset, _exit_tree, return_to_free_play, join-cancel)
+	# funnels through here, so this one call covers them all.
+	SteamManager.leave_lobby()
 
 func prepare_for_new_game() -> void:
 	_input_batch_provider = Callable()
@@ -660,14 +713,8 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
 	_peer_numbers[sender_id] = jersey_number
 	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength)
-	# Set a generous disconnect window here rather than in _on_peer_connected —
-	# peer_connected fires before ENet registers the peer, so get_peer() asserts.
-	# By the time any RPC arrives the peer is guaranteed to be in the table.
-	var enet_peer := multiplayer.multiplayer_peer as ENetMultiplayerPeer
-	if enet_peer:
-		var peer := enet_peer.get_peer(sender_id)
-		if peer:
-			peer.set_timeout(0, 10000, 60000)
+	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
+	# manages its own keepalive over Steam's relay, so there's nothing to set.)
 	peer_joined.emit(sender_id)
 
 func get_peer_handedness(peer_id: int) -> bool:
