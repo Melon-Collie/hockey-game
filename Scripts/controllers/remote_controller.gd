@@ -221,6 +221,9 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
 	skater.set_ghost(state.is_ghost)
+	# Replicated from the host so the elevated-shot blade lift (Skater
+	# ._update_blade_elevation) shows on spectated remotes, not just locally.
+	skater.is_elevated = state.is_elevated
 	skater.current_shot_state = state.shot_state
 	# Arms are derived from shoulder + hand each frame; update after both are set.
 	skater.update_arm_mesh()
