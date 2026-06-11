@@ -115,7 +115,7 @@ Before touching networking code (RPCs, reconcile, prediction, interpolation, lag
 
 **Network API uses typed objects, not raw arrays.** Functions accept `SkaterNetworkState` / `PuckNetworkState` directly. Serialization happens only at the RPC boundary.
 
-**Get it working, then tune numbers.** Use `@export` on tunable parameters so values can be adjusted in the editor. Don't prematurely optimize or bikeshed on constants before the mechanic runs.
+**Get it working, then tune numbers.** Use `@export` on tunable parameters so values can be adjusted in the editor. Don't prematurely optimize or bikeshed on constants before the mechanic runs. **Live editor tuning is not a workflow here** — the developer doesn't tweak exports while the game runs, so hot-path code may cache config objects built from exports (rebuilt on `apply_attributes`) without preserving per-tick rebuild semantics. Don't undo config caching to restore live-tuning.
 
 **Don't shy away from complexity when it improves feel.** This project already has full client-side prediction with input replay, buffered interpolation, and puck trajectory prediction with reconciliation. If adding a complex system will make the game feel meaningfully better to play, it's worth doing — think it through carefully first, then implement it properly.
 
