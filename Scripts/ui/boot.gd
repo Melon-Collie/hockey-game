@@ -179,8 +179,11 @@ func _bootstrap_free_play_and_change(scene: PackedScene) -> void:
 	# First-time players land in the Basics tutorial after the splash instead
 	# of dropping straight into free play. Once they finish — or hit Skip All
 	# in the HUD — PlayerPrefs.mark_tutorial_complete("basics") flips this so
-	# subsequent boots go straight to the rink.
-	if not PlayerPrefs.is_tutorial_complete(TutorialRegistry.BASICS_ID):
+	# subsequent boots go straight to the rink. An accepted Steam invite
+	# trumps the tutorial: the player clicked "Join Game", and the SideMenu
+	# consumes the stashed lobby id once free play is up.
+	if not PlayerPrefs.is_tutorial_complete(TutorialRegistry.BASICS_ID) \
+			and SteamManager.pending_invite_lobby_id == 0:
 		NetworkManager.start_tutorial(TutorialRegistry.BASICS_ID)
 	else:
 		NetworkManager.start_free_play()

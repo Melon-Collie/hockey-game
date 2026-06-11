@@ -8,7 +8,7 @@ extends RefCounted
 #
 # Two wire formats are defined here:
 #
-# 1. World state  (40 Hz, unreliable_ordered) — single flat PackedByteArray:
+# 1. World state  (120 Hz, unreliable_ordered) — single flat PackedByteArray:
 #      u16 ws_sequence, f32 host_capture_time, u8 num_skaters
 #      [u32 peer_id, skater_bytes(37), u8 queue_depth] × num_skaters
 #      puck_bytes(12)
@@ -32,10 +32,10 @@ extends RefCounted
 #                      + pitch/roll s8@π/127; right_pad same; glove offset s8×3
 #                      + yaw/pitch s8@π/127; blocker same; head_yaw s8@π/127.
 #                      Stick rides the blocker socket (rigid IRL attachment),
-#                      so no separate stick fields on the wire. Pose is
-#                      broadcast for replay/sync fidelity; clients currently
-#                      still recompute body parts via local AI — render-from-
-#                      broadcast swap is the next step in the goalie overhaul.
+#                      so no separate stick fields on the wire. The broadcast
+#                      pose is authoritative: clients render the goalie purely
+#                      from the interpolated host pose (no client-side goalie
+#                      AI — see ARCHITECTURE.md Networking Invariants).
 #
 # 2. Stats  (reliable, event-driven):
 #      [pid, G, A, SOG, HITS, BLK] × N players

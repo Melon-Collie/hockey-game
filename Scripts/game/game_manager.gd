@@ -69,6 +69,13 @@ var _in_replay_locally: bool = false
 # created _state_machine, the sync would otherwise be dropped and the host
 # (only delivered through this path) would never spawn on the client.
 var _pending_existing_players: Array = []
+# Same defense for spawn_remote_skater RPCs: at game start the host's spawn
+# burst (bots + peers assigned after us in the lobby fan-out) can land while
+# _state_machine is still null (scene loading). Each entry is the full
+# argument list of spawn_remote_skater; flushed in on_slot_assigned. Without
+# this the skaters were silently dropped and never appeared on this client —
+# there is no later re-sync.
+var _pending_remote_spawns: Array[Array] = []
 # Wall-clock timestamp of the previous host physics tick. Used to record the
 # inter-tick gap into NetworkTelemetry so F3 can surface host stalls.
 var _last_phys_tick_us: int = 0
@@ -440,6 +447,10 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 	var is_mid_game_promote: bool = _state_machine != null
 	if not is_mid_game_promote:
 		_spawn_world()
+	# Flush stashed roster/spawn payloads now that the world exists — before
+	# the spectator branch, since spectators need the existing skaters spawned
+	# too (previously the spectator early-return skipped the flush entirely).
+	_flush_pending_player_syncs()
 	var peer_id: int = NetworkManager.local_peer_id()
 	if team_id == GameRules.SPECTATOR_TEAM_ID:
 		_become_local_spectator()
@@ -455,11 +466,14 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 			NetworkManager.local_is_left_handed, NetworkManager.local_player_name, true,
 			NetworkManager.local_jersey_number,
 			NetworkManager.get_peer_attributes(peer_id))
-	# Flush any sync_existing_players payload that landed before _spawn_world
-	# ran. Both the GameManager queue (RPC arrived after scene load, while
-	# _state_machine was null) and NetworkManager.pending_join_players (RPC
-	# arrived during scene transition but pending_join_slot was empty when
-	# game_scene._ready ran) are drained here so the host record always lands.
+
+
+# Drains every queue of player data that landed before _spawn_world ran: the
+# GameManager sync queue (RPC arrived after scene load, while _state_machine
+# was null), NetworkManager.pending_join_players (RPC arrived during scene
+# transition but pending_join_slot was empty when game_scene._ready ran), and
+# queued spawn_remote_skater bursts (game-start fan-out racing the scene load).
+func _flush_pending_player_syncs() -> void:
 	if not _pending_existing_players.is_empty():
 		var queued: Array = _pending_existing_players
 		_pending_existing_players = []
@@ -468,6 +482,11 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 		var deferred: Array = NetworkManager.pending_join_players
 		NetworkManager.pending_join_players = []
 		sync_existing_players(deferred)
+	if not _pending_remote_spawns.is_empty():
+		var spawns: Array[Array] = _pending_remote_spawns
+		_pending_remote_spawns = []
+		for args: Array in spawns:
+			callv("spawn_remote_skater", args)
 
 
 func on_player_connected(peer_id: int) -> void:
@@ -588,7 +607,14 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		jersey_color: Color, helmet_color: Color, pants_color: Color,
 		is_left_handed: bool, player_name: String, jersey_number: int = 10,
 		attributes: PlayerAttributes = null) -> void:
-	if peer_id == NetworkManager.local_peer_id() or _state_machine == null:
+	if peer_id == NetworkManager.local_peer_id():
+		return
+	if _state_machine == null:
+		# World not built yet (scene loading) — queue instead of dropping;
+		# on_slot_assigned flushes once _spawn_world has run.
+		_pending_remote_spawns.append([peer_id, team_slot, team_id,
+				jersey_color, helmet_color, pants_color,
+				is_left_handed, player_name, jersey_number, attributes])
 		return
 	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
@@ -2137,6 +2163,12 @@ func on_scene_exit() -> void:
 		_registry.clear_state()
 	_state_machine = null
 	_spawner = null
+	# Stale stashes must not survive into the next session — a sync that
+	# landed just as a host vanished mid-join would otherwise be flushed by
+	# the next on_slot_assigned and spawn the wrong roster.
+	_pending_existing_players = []
+	_pending_remote_spawns = []
+	_last_ghost_state.clear()
 	teams.clear()
 	puck = null
 	goals.clear()
@@ -2444,8 +2476,8 @@ func _spawn_bots_from_lobby() -> void:
 	# Host-only. Iterates pending_bot_slots (set by lobby toggles), spawns an
 	# AIController-driven skater per marked slot, and broadcasts a remote-skater
 	# spawn so clients render each bot through their existing RemoteController
-	# pipeline. Synthetic peer_ids in [-6, -1] avoid colliding with real ENet
-	# peers (always positive); send_slot_assignment is skipped because it
+	# pipeline. Synthetic peer_ids from BOT_ID_BASE (10000) upward avoid
+	# colliding with real peers; send_slot_assignment is skipped because it
 	# targets peer_ids and bots have no peer connection.
 	if not NetworkManager.is_host:
 		return

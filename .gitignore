@@ -1,6 +1,7 @@
 # Godot
 .godot/
 *.translation
+*.tmp
 
 # Export
 *.exe

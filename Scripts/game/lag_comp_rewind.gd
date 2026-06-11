@@ -13,10 +13,9 @@ class_name LagCompRewind
 #                resulting state with that timestamp.
 #
 #   REMOTE view: anything the claimant rendered via interpolation (other
-#                skaters, loose puck, remote-carried puck, and — although the
-#                client runs goalie AI locally rather than interpolating — the
-#                goalie, because the client's AI tracked the interpolated puck
-#                from T - interp_delay).
+#                skaters, loose puck, remote-carried puck, and the goalie —
+#                clients render the goalie purely from the interpolated host
+#                pose broadcast).
 #
 # Pick the perspective per entity. Hit checks need both — see HitClaimResolver
 # for the canonical two-rewind pattern. Pickup/poke rewind the blade as SELF

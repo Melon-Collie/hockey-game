@@ -159,9 +159,9 @@ func _enqueue(host_ts: float, kind: int, payload: PackedByteArray) -> void:
 # reader to detect via missing END_OF_RECORDS.
 #
 # Flushing after every drain (rather than only on shutdown) bounds the
-# crash-recovery loss to a single batch (~25 ms of frames at the broadcast
-# rate) instead of whatever the OS happened to buffer. Cost is ~40 syscalls/
-# sec at 25 ms broadcast cadence; negligible vs. the data-recovery benefit.
+# crash-recovery loss to a single batch instead of whatever the OS happened
+# to buffer. Cost is up to ~120 user-space flushes/sec at the 120 Hz
+# broadcast cadence; negligible vs. the data-recovery benefit.
 func _worker_loop() -> void:
 	while true:
 		_semaphore.wait()

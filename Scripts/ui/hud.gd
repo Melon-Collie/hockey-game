@@ -95,6 +95,13 @@ func _ready() -> void:
 	add_child(_confirm_dialog)
 	_toast_stack = ToastStack.new()
 	add_child(_toast_stack)
+	# Surface the connection error from whatever session dumped us back here
+	# (host quit, join failed, timed out, kicked). pending_error is written
+	# right before return_to_free_play() and was previously read by nothing —
+	# every connection failure was a silent teleport to free play.
+	if not NetworkManager.pending_error.is_empty():
+		_toast_stack.push(NetworkManager.pending_error, Color(0.95, 0.55, 0.5))
+		NetworkManager.pending_error = ""
 	_flash_overlay = FlashOverlay.new()
 	add_child(_flash_overlay)
 	_period_label.text = _period_ordinal(1)

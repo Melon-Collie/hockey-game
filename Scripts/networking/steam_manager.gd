@@ -32,6 +32,11 @@ var is_available: bool = false   # true iff Steam initialised successfully
 var steam_id: int = 0            # local user's SteamID64 (0 when unavailable)
 var persona_name: String = ""    # local user's Steam display name ("" when unavailable)
 var current_lobby_id: int = 0    # 0 when not in a lobby
+# Lobby id from an accepted invite that no UI was alive to handle: cold launch
+# via `+connect_lobby` fires during autoload init (Boot title card — no
+# SideMenu exists yet), and overlay accepts can land in the Lobby scene. The
+# SideMenu consumes this when it builds; emitting alone loses the invite.
+var pending_invite_lobby_id: int = 0
 
 # ── Outbound signals (NetworkManager / menu listen) ─────────────────────────
 signal steam_unavailable
@@ -88,14 +93,23 @@ func _connect_steam_signals() -> void:
 
 
 # Cold-launch via a friend invite passes `+connect_lobby <id>` on the command
-# line; honour it once Steam is up.
+# line; honour it once Steam is up. Stash only (no emit) — this runs during
+# autoload init, before any listener exists.
 func _check_launch_invite() -> void:
 	var args: PackedStringArray = OS.get_cmdline_args()
 	var idx: int = args.find("+connect_lobby")
 	if idx != -1 and idx + 1 < args.size():
 		var lobby_id: int = int(args[idx + 1])
 		if lobby_id != 0:
-			lobby_invite_accepted.emit.call_deferred(lobby_id)
+			pending_invite_lobby_id = lobby_id
+
+
+# One-shot read of a stashed invite; clearing on read keeps a consumed invite
+# from re-firing every time the consumer (SideMenu) is rebuilt on scene load.
+func consume_pending_invite() -> int:
+	var lobby_id: int = pending_invite_lobby_id
+	pending_invite_lobby_id = 0
+	return lobby_id
 
 
 func _process(delta: float) -> void:
@@ -204,6 +218,10 @@ func _on_lobby_match_list(lobbies: Array) -> void:
 
 # ── Invites / overlay ───────────────────────────────────────────────────────
 func _on_join_requested(lobby_id: int, _friend_id: int) -> void:
+	# Stash as well as emit: if no SideMenu is alive to hear the signal (Lobby
+	# scene, mid-transition), the next one to build consumes the stash. The
+	# live handler consumes it too, so it never double-fires.
+	pending_invite_lobby_id = lobby_id
 	lobby_invite_accepted.emit(lobby_id)
 
 

@@ -9,7 +9,7 @@ extends RefCounted
 # can claim header_size = 0xFFFFFFFF and trigger a multi-gigabyte allocation
 # inside file.get_buffer(); these limits are well above any legitimate value
 # (a 6-player header is &lt; 4 KB; broadcast frames are &lt; 1 KB; a 30-min game
-# at 40 Hz is ~30 MB on disk).
+# at 120 Hz is ~90 MB on disk).
 const _MAX_FILE_BYTES: int = 200 * 1024 * 1024  # 200 MB
 const _MAX_HEADER_BYTES: int = 64 * 1024        # 64 KB
 const _MAX_FRAME_BYTES: int = 64 * 1024         # 64 KB

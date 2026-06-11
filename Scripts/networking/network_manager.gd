@@ -191,6 +191,14 @@ var pending_period_duration: float = GameRules.PERIOD_DURATION
 var pending_ot_enabled: bool = GameRules.OT_ENABLED
 var pending_rule_set: int = GameRules.DEFAULT_RULE_SET
 var pending_join_players: Array = []     # sync_existing_players data for join-in-progress
+
+# Client: true between learning that a Hockey-scene (re)load is coming
+# (join-in-progress / game-start RPC) and the new scene's on_game_scene_ready.
+# Forces assign_player_slot / sync_existing_players into their stash path —
+# the scene-path check alone passes when joining FROM free play (the dying
+# scene is also Hockey.tscn), which spawned the world into a scene about to
+# be freed.
+var scene_swap_pending: bool = false
 # Path to a .mreplay set by the main-menu replay browser before changing scene
 # to the viewer. Cleared by ReplayViewer._ready after consumption.
 var pending_replay_path: String = ""
@@ -438,6 +446,7 @@ func _on_steam_lobby_join_failed(reason: String) -> void:
 	client_lobby_failed.emit(reason)
 
 func on_game_scene_ready() -> void:
+	scene_swap_pending = false
 	if is_host:
 		host_ready.emit()
 
@@ -559,6 +568,7 @@ func reset() -> void:
 	pending_lobby_roster = []
 	pending_join_slot = {}
 	pending_join_players = []
+	scene_swap_pending = false
 	pending_home_color_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
 	pending_away_color_slot = TeamColorRegistry.DEFAULT_AWAY_SLOT
 	pending_color_votes = {}
@@ -1092,7 +1102,7 @@ func on_queue_depth_received(depth: int) -> void:
 @rpc("authority", "reliable")
 func assign_player_slot(team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color) -> void:
 	var scene := get_tree().current_scene
-	if not is_host and (scene == null or scene.scene_file_path != Constants.SCENE_HOCKEY):
+	if not is_host and (scene_swap_pending or scene == null or scene.scene_file_path != Constants.SCENE_HOCKEY):
 		pending_join_slot = { "team_slot": team_slot, "team_id": team_id,
 			"jersey_color": jersey_color, "helmet_color": helmet_color, "pants_color": pants_color }
 		return
@@ -1109,7 +1119,7 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_colo
 @rpc("authority", "reliable")
 func sync_existing_players(player_data: Array) -> void:
 	var scene := get_tree().current_scene
-	if not is_host and (scene == null or scene.scene_file_path != Constants.SCENE_HOCKEY):
+	if not is_host and (scene_swap_pending or scene == null or scene.scene_file_path != Constants.SCENE_HOCKEY):
 		pending_join_players = player_data
 		return
 	existing_players_synced.emit(player_data)
@@ -1343,6 +1353,9 @@ func notify_join_in_progress(p_num_periods: int, p_period_duration: float,
 	pending_home_color_slot = p_home_color_slot
 	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
+	# The Hockey scene is about to be (re)loaded for this join — stash any
+	# slot/roster RPCs that land before the new scene's _ready.
+	scene_swap_pending = true
 	join_in_progress.emit({
 		"num_periods": p_num_periods,
 		"period_duration": p_period_duration,
@@ -1373,6 +1386,8 @@ func notify_game_start(p_num_periods: int, p_period_duration: float,
 	pending_home_color_slot = p_home_color_slot
 	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
+	# Lobby → Hockey transition incoming; same stash-forcing as join-in-progress.
+	scene_swap_pending = true
 	game_started.emit({
 		"num_periods": p_num_periods,
 		"period_duration": p_period_duration,

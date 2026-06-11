@@ -363,7 +363,7 @@ func _build_popups() -> void:
 
 	# Steam overlay "Join Game" / accepted invite (and `+connect_lobby` launch)
 	# routes straight into the join flow.
-	SteamManager.lobby_invite_accepted.connect(_on_join_pressed)
+	SteamManager.lobby_invite_accepted.connect(_on_invite_accepted)
 
 	_career_screen = CareerStatsScreen.new()
 	add_child(_career_screen)
@@ -375,6 +375,21 @@ func _build_popups() -> void:
 	_loading_screen = LoadingScreen.new()
 	_loading_screen.cancel_pressed.connect(_on_join_cancelled)
 	add_child(_loading_screen)
+
+	# An invite accepted while no SideMenu was alive to hear the signal —
+	# cold launch via `+connect_lobby` (Boot title card) or an overlay accept
+	# in the Lobby scene — was stashed by SteamManager. Deferred so the join
+	# teardown doesn't run inside this scene's _ready.
+	var stashed_invite: int = SteamManager.consume_pending_invite()
+	if stashed_invite != 0:
+		_on_join_pressed.call_deferred(stashed_invite)
+
+
+# Live overlay accept: consume the stash SteamManager set alongside the emit
+# so a later SideMenu rebuild can't replay this invite.
+func _on_invite_accepted(lobby_id: int) -> void:
+	SteamManager.consume_pending_invite()
+	_on_join_pressed(lobby_id)
 
 
 func _build_options_overlay() -> void:
