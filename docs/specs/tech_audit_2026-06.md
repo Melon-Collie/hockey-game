@@ -364,15 +364,65 @@ Also worth doing:
 
 ---
 
-## 7. Suggested order of attack
+## 7. Addendum: GodotSteam port review (merged from main after the audit)
+
+The ENet → Steam P2P migration (`steam_manager.gd`, `SteamMultiplayerPeer`, lobby browser) landed
+on main and is merged into this branch. Review verdict: **the port is well-built** — `SteamManager`
+is a clean isolation layer (only file touching the `Steam` singleton), degrades gracefully when
+Steam/the GDExtension is absent (CI-safe), has an op-timeout so the spinner can't hang, filters the
+lobby browser on `"game" == "mitts"` (necessary on the shared SpaceWar app id 480), arms the
+connect timeout only after the peer exists, and `_close()` orders P2P shutdown before
+`leaveLobby`. The shipped binaries are the MultiplayerPeer flavor (symbol verified). **G1 is now
+largely resolved**; the remaining items there are swapping `APP_ID` 480 for the real app id and
+the audit's untouched findings. New findings from the port:
+
+- **A1 (HIGH). Cold-launch invites are silently lost.** `SteamManager._check_launch_invite`
+  emits `lobby_invite_accepted` deferred during autoload init (`steam_manager.gd:92-98`), but the
+  only listener is `SideMenu` (`side_menu.gd:366`), which is built inside the Hockey scene's HUD —
+  the Boot title card is still up when the deferred emit fires. Accepting a Steam invite while the
+  game is closed (`+connect_lobby`) launches to the title card and does nothing. Same loss for an
+  overlay "Join Game" accepted before free play loads. **Fix:** stash
+  `pending_invite_lobby_id: int` in `SteamManager` instead of (or in addition to) emitting;
+  `SideMenu` consumes it when it wires up (and Boot could fast-path past the title card when an
+  invite is pending).
+- **A2 (HIGH, widens S1).** The new failure paths inherit the join-cancel dead-world bug. The
+  loading screen's Cancel on `show_error` routes to `_on_join_cancelled` (`side_menu.gd:376`),
+  which only `reset()`s — and `_on_host_lobby_failed` / `_on_join_lobby_failed` likewise reset
+  without rebuilding. Since `_on_host_pressed` / `_on_join_pressed` run `GameManager.on_scene_exit()`
+  *before* the async lobby op, every failure or cancel now strands the player in the half-dead
+  free-play world (S1's symptoms: unpickable puck, null `_phase_coord` goal sensors). The
+  "Steam isn't running" pre-checks are safe (they error out before teardown). **Fix is unchanged
+  and now triply justified:** route cancel/failure dismissal through
+  `GameManager.return_to_free_play()`.
+- **A3 (MEDIUM). `reset()` doesn't clear pending Steam one-shots, and a cancelled join leaks
+  lobby membership.** Cancel while a `joinLobby` is in flight: the
+  `SteamManager.lobby_joined → _on_steam_lobby_joined` one-shot survives `reset()`, so the next
+  `start_client_lobby` `connect()` hits "already connected" (error spam; functionally survivable).
+  Worse: `leave_lobby()` no-ops (`current_lobby_id == 0`) and when Steam's join callback then
+  lands, `_on_lobby_joined` early-returns on the `_pending_op` guard without leaving — the player
+  stays a member of that lobby on Steam's backend until app exit, occupying a member slot and
+  showing in the browser count. **Fix:** disconnect the four lobby one-shots in `reset()`; in
+  `SteamManager._on_lobby_joined`, when `_pending_op != 2` but the join succeeded, immediately
+  `Steam.leaveLobby(lobby_id)`.
+- **A4 (LOW). Dead ENet-era code:** `Constants.PORT`, `PlayerPrefs.last_ip` (+ its save/load
+  lines), `LoadingScreen.show_joining(ip)` are now unreferenced. Delete on the next pass.
+- **A5 (note).** B2 (version handshake) is still open and Steam makes a cheap second layer
+  available: set a `"version"` lobby-data key at create and filter/annotate the browser on it.
+  Keep the `request_join` protocol check as the authoritative gate either way. B3 (mid-game 7th
+  joiner crash) is unchanged — the Steam lobby caps members at 10, which is exactly the
+  configuration that triggers it.
+
+---
+
+## 8. Suggested order of attack
 
 1. **B1** — `ShotReleaseValidator` (one-timer gate + rtt/back-date/power clamps). Closes all three
    shot exploits in one consistent unit.
 2. **B2** — protocol version in `request_join` + instantiate `UpdateChecker` (~a day, one workflow).
 3. **B3 + M4** — mid-game roster gate + join idempotence/timeout (same code area).
-4. **S1–S3** — join-cancel recovery, transition-pending stash flag, surface `pending_error` +
-   `start_host` error return. All small; together they cover every "playtester hits a bad join"
-   path.
+4. **S1/A2 + S2 + S3 + A1/A3** — join-cancel/failure recovery via `return_to_free_play()`,
+   transition-pending stash flag, surface `pending_error`, invite stash, one-shot cleanup. All
+   small; together they cover every "playtester hits a bad join" path.
 5. **G2** — drop the anon UPDATE policy (5 minutes, do it now).
 6. **M9** — replay ring resize (trivial, user-visible win).
 7. **P1–P5** when convenient — biggest wins are IK config caching and gating mesh updates out of
