@@ -83,7 +83,7 @@ static func read(path: String) -> Dictionary:
 			break  # malformed length claim; refuse to allocate
 		if file.get_position() + frame_len > file_len:
 			break  # partial trailing record (writer crashed)
-		var host_ts: float = file.get_float()
+		var host_ts: float = float(file.get_32()) / Constants.TIME_WIRE_SCALE
 		var kind: int = file.get_8()
 		var payload_size: int = frame_len - ReplayFileWriter.FRAME_INNER_HEADER_SIZE
 		var payload: PackedByteArray

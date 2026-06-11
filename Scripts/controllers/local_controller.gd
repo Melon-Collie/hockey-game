@@ -260,12 +260,20 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# last_processed_host_timestamp sits at the front. The previous filter()
 	# rebuilds allocated a fresh array + ran a lambda per element on every
 	# broadcast (120 Hz), even in the healthy no-reconcile case.
+	# The trim boundary carries TS_MATCH_EPSILON slack: the ack arrives
+	# through the 0.1ms wire grid while local stamps are full-precision f64,
+	# so without it the exact acked input could survive the trim (grid value
+	# a hair below the local stamp) and be double-applied on replay. Epsilon
+	# (1ms) is far below the 4.17ms input spacing, so it can never trim an
+	# unacked input. find_at below uses the pure ack (its own epsilon match
+	# handles the grid error symmetrically).
 	var ack_ts: float = server_state.last_processed_host_timestamp
-	while not _input_history.is_empty() and _input_history[0].host_timestamp <= ack_ts:
+	var trim_ts: float = ack_ts + PredictedState.TS_MATCH_EPSILON
+	while not _input_history.is_empty() and _input_history[0].host_timestamp <= trim_ts:
 		_input_history.pop_front()
 	# Drop captured body check impulses the server has already processed past:
 	# future reconciles only need impulses strictly later than the ack.
-	while not _body_check_impulses.is_empty() and _body_check_impulses[0]["timestamp"] <= ack_ts:
+	while not _body_check_impulses.is_empty() and _body_check_impulses[0]["timestamp"] <= trim_ts:
 		_body_check_impulses.pop_front()
 	# Trajectory-based threshold check: compare what we predicted for the input
 	# at last_processed_host_timestamp against what the server says happened at
@@ -277,7 +285,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var divergence_upper_body: float = predicted.upper_body_rotation_y if predicted != null else _pose.upper_body_angle
 	# Trim confirmed predictions — future reconciles only ever look at strictly
 	# later timestamps.
-	while not _prediction_history.is_empty() and _prediction_history[0].host_timestamp <= ack_ts:
+	while not _prediction_history.is_empty() and _prediction_history[0].host_timestamp <= trim_ts:
 		_prediction_history.pop_front()
 	if not ReconciliationRules.skater_needs_reconcile(
 			divergence_position, divergence_velocity,

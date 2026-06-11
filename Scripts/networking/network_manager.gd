@@ -916,6 +916,12 @@ func receive_pickup_claim(host_timestamp: float, interp_delay_ms: float) -> void
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
+	# Stamp plausibility against the host's own ping for this peer — closes
+	# the timestamp-shopping window the absolute age cap leaves open (see
+	# LagCompRewind). Applied at the trust boundary so all claim resolvers
+	# inherit it.
+	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		return
 	pickup_claim_received.emit(peer_id, host_timestamp, interp_delay_ms)
 
 func send_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
@@ -929,6 +935,8 @@ func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
+	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		return
 	poke_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
 func send_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
@@ -942,6 +950,8 @@ func receive_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_
 	if not is_host:
 		return
 	var hitter_peer_id: int = multiplayer.get_remote_sender_id()
+	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(hitter_peer_id))):
+		return
 	hit_claim_received.emit(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
 
 func start_replay_mode(initial_ts: float) -> void:

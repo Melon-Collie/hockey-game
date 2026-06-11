@@ -14,7 +14,9 @@ const VERSION: String = "dev"
 # sessions decode positional binary as garbage that passes size checks, so the
 # host rejects mismatched joiners outright. Independent of VERSION: builds
 # that don't touch the wire keep the same protocol and stay compatible.
-const PROTOCOL_VERSION: int = 1
+# v2: wire timestamps f32 seconds -> u32 0.1ms units (world-state header,
+#     skater last_processed_ts, input host_timestamp).
+const PROTOCOL_VERSION: int = 2
 
 const RELEASE_TAG: String = "latest"
 const REPO: String = "Melon-Collie/mitts"

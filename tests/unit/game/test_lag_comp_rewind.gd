@@ -69,3 +69,38 @@ func test_self_and_remote_diverge_by_input_lead_plus_interp_delay() -> void:
 	var self_t: float = LagCompRewind.self_view_time(host_ts)
 	var remote_t: float = LagCompRewind.remote_view_time(host_ts, interp_ms)
 	assert_almost_eq(self_t - remote_t, NetworkManager.INPUT_LEAD_SEC + interp_ms / 1000.0, EPSILON)
+
+# ── Claim-stamp plausibility ──────────────────────────────────────────────────
+
+func test_stamp_legit_one_way_delay_accepted() -> void:
+	# 80ms RTT peer, claim arrives one-way (40ms) after the stamp.
+	assert_true(LagCompRewind.is_claim_stamp_plausible(10.0, 10.0 - 0.04, 80.0))
+
+
+func test_stamp_backdated_beyond_ping_rejected() -> void:
+	# 30ms RTT peer backdating 190ms (still inside the 200ms absolute age cap)
+	# — the timestamp-shopping exploit this check closes.
+	assert_false(LagCompRewind.is_claim_stamp_plausible(10.0, 10.0 - 0.19, 30.0))
+
+
+func test_stamp_jitter_slack_tolerated() -> void:
+	# Elapsed = one_way + 90ms of frame alignment / jitter — inside the slack.
+	assert_true(LagCompRewind.is_claim_stamp_plausible(10.0, 10.0 - 0.105, 30.0))
+
+
+func test_stamp_future_rejected() -> void:
+	assert_false(LagCompRewind.is_claim_stamp_plausible(10.0, 10.2, 80.0))
+
+
+func test_stamp_small_future_ntp_error_tolerated() -> void:
+	assert_true(LagCompRewind.is_claim_stamp_plausible(10.0, 10.02, 80.0))
+
+
+func test_stamp_no_ping_sample_only_future_bound_applies() -> void:
+	assert_true(LagCompRewind.is_claim_stamp_plausible(10.0, 9.5, 0.0),
+			"no measurement yet -> resolvers' absolute age cap is the only past bound")
+	assert_false(LagCompRewind.is_claim_stamp_plausible(10.0, 10.5, 0.0))
+
+
+func test_stamp_nan_rejected() -> void:
+	assert_false(LagCompRewind.is_claim_stamp_plausible(10.0, NAN, 80.0))

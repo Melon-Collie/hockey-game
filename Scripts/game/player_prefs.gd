@@ -186,8 +186,44 @@ func _get_save_path() -> String:
 func _ready() -> void:
 	_load()
 	if player_uuid.is_empty():
+		# Prefer the backup over minting a fresh identity: ConfigFile.save
+		# isn't atomic, so a crash/power loss mid-write truncates the prefs
+		# file — regenerating the uuid then would permanently sever this
+		# player from their career stats and Steam-link row.
+		player_uuid = _load_uuid_backup()
+		if not player_uuid.is_empty():
+			save()
+	if player_uuid.is_empty():
 		player_uuid = generate_uuid()
 		save()
+	_store_uuid_backup()
+
+
+# The career uuid lives in the prefs file, but a torn prefs write must not be
+# able to destroy it — so it's mirrored to a tiny sidecar file that is only
+# rewritten when the uuid actually changes. Rides the same per-instance
+# suffixing as the prefs file (--config-suffix) so two local test instances
+# keep separate identities.
+func _uuid_backup_path() -> String:
+	return _get_save_path() + ".uuid"
+
+
+func _load_uuid_backup() -> String:
+	var f := FileAccess.open(_uuid_backup_path(), FileAccess.READ)
+	if f == null:
+		return ""
+	var uuid: String = f.get_line().strip_edges()
+	# Canonical 36-char UUID or nothing — a corrupted backup must not become
+	# an identity.
+	return uuid if uuid.length() == 36 else ""
+
+
+func _store_uuid_backup() -> void:
+	if _load_uuid_backup() == player_uuid:
+		return
+	var f := FileAccess.open(_uuid_backup_path(), FileAccess.WRITE)
+	if f != null:
+		f.store_line(player_uuid)
 
 func save() -> void:
 	var cfg := ConfigFile.new()
