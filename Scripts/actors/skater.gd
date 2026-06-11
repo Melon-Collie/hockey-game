@@ -12,6 +12,25 @@ extends CharacterBody3D
 		_position_hand_markers()
 
 # ── Blade Tuning ──────────────────────────────────────────────────────────────
+# Cosmetic blade tilt, applied to the blade *mesh* only — never the Blade marker
+# the puck-contact math reads (set_blade_position / get_blade_contact_global).
+# Toe-lift (lie) is handedness-neutral; the face-open loft flips sign with
+# handedness, since the forehand face is on opposite sides for L/R shots. Applied
+# from _position_hand_markers() so it tracks live handedness flips. Both are
+# tunable — flip a sign here if a side looks wrong in the editor.
+# Resting blade tilt. Toe-lift (about X, lie angle, handedness-neutral) is kept
+# small; the face-open loft (about Z, handedness-signed — the forehand face is
+# on opposite sides for L/R) is a tiny resting cup.
+const _BLADE_TOE_LIFT_DEG: float = 4.0
+const _BLADE_FACE_OPEN_DEG: float = 4.0
+# Blended in while elevation mode is on (scroll-wheel ballistic aim): the loft
+# opens the face upward to "scoop" the puck, so elevation keys off the Z loft
+# far more than the X toe-lift. Eased via _blade_elevation_blend in
+# _physics_process so it doesn't snap.
+const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
+const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
+const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
+
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
 # (blade on −X) has the top hand on the right shoulder (+X), and vice versa.
@@ -132,6 +151,11 @@ var bottom_hand_sphere: MeshInstance3D = null
 var top_cuff_mesh: MeshInstance3D = null
 var bot_cuff_mesh: MeshInstance3D = null
 
+# Butt-end knob cylinder at the top of the shaft (just past the top hand).
+# Created by SkaterUniformCoordinator on uniform apply; positioned per-tick by
+# update_stick_mesh() so it rides the butt end as the shaft swings.
+var stick_knob_mesh: MeshInstance3D = null
+
 signal body_checked_player(victim: Skater, impact_force: float, hit_direction: Vector3)
 signal body_check_impulse_applied(impulse: Vector3)
 signal body_block_hit(body: Node3D)
@@ -158,6 +182,9 @@ func get_team_id() -> int:
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _facing: Vector2 = Vector2.DOWN
 var is_elevated: bool = false
+# Eased 0→1 toward is_elevated; drives the extra blade toe-lift (see
+# _update_blade_elevation / _apply_blade_tilt).
+var _blade_elevation_blend: float = 0.0
 var is_ghost: bool = false
 var is_braking: bool = false
 var is_braced: bool = false
@@ -307,6 +334,7 @@ func _physics_process(delta: float) -> void:
 	var body_check_delta: Vector3 = velocity - vel_after_slide
 	if body_check_delta.length_squared() > 0.0001:
 		body_check_impulse_applied.emit(body_check_delta)
+	_update_blade_elevation(delta)
 	_hud.update(delta)
 
 
@@ -354,6 +382,42 @@ func _position_hand_markers() -> void:
 	top_hand.position        = Vector3(shoulder.position.x, 0.0, 0.0)
 	bottom_shoulder.position = Vector3(-top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
 	bottom_hand.position     = Vector3(bottom_shoulder.position.x, 0.0, 0.0)
+	_apply_blade_tilt()
+
+
+# Sets the cosmetic toe-lift + handedness-signed face-open loft on the blade
+# *mesh* (the Blade marker itself is untouched, so puck-contact math is
+# unaffected). Idempotent: recomputed from identity each call, scale preserved,
+# so the tape-band child rides along. Safe before _ready() — exits if the mesh
+# isn't there yet.
+func _apply_blade_tilt() -> void:
+	if blade == null:
+		return
+	var blade_mesh: MeshInstance3D = blade.get_node_or_null("MeshInstance3D") as MeshInstance3D
+	if blade_mesh == null:
+		return
+	# Loft sign: opens the forehand face upward. Flipped from the usual
+	# blade_side_sign convention so the cup tilts the right way for each hand.
+	var blade_side_sign: float = 1.0 if is_left_handed else -1.0
+	var toe_lift: float = _BLADE_TOE_LIFT_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LIFT_DEG
+	var loft: float = (_BLADE_FACE_OPEN_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG) * blade_side_sign
+	var rot: Basis = Basis.IDENTITY \
+			.rotated(Vector3.RIGHT, deg_to_rad(toe_lift)) \
+			.rotated(Vector3.BACK, deg_to_rad(loft))
+	var keep_scale: Vector3 = blade_mesh.transform.basis.get_scale()
+	blade_mesh.transform.basis = rot.scaled(keep_scale)
+
+
+# Eases the elevation blend toward is_elevated each tick and re-tilts the blade
+# only while transitioning (move_toward lands exactly on the target, after which
+# the early-out stops the per-tick basis churn). Called from _physics_process.
+func _update_blade_elevation(delta: float) -> void:
+	var target: float = 1.0 if is_elevated else 0.0
+	if is_equal_approx(_blade_elevation_blend, target):
+		return
+	_blade_elevation_blend = move_toward(
+			_blade_elevation_blend, target, _BLADE_ELEVATION_BLEND_SPEED * delta)
+	_apply_blade_tilt()
 
 
 # ── Facing ────────────────────────────────────────────────────────────────────
@@ -659,6 +723,25 @@ func update_stick_mesh() -> void:
 	stick_mesh.position = stick_origin + to_blade / 2.0
 	stick_mesh.scale.z = to_blade.length()
 	stick_mesh.look_at(upper_body.to_global(blade.position), Vector3.UP)
+	_update_stick_knob(stick_origin, to_blade)
+
+
+# Rides the knob just past the top hand, along the shaft away from the blade,
+# with its CylinderMesh long axis (local Y) aligned to the shaft — same look_at +
+# rotate_object_local(X, 90°) trick as the glove cuffs.
+func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
+	if stick_knob_mesh == null or not is_instance_valid(stick_knob_mesh):
+		return
+	if to_blade.length_squared() < 0.0001:
+		return
+	var hand_w: Vector3 = upper_body.to_global(stick_origin)
+	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(blade.position)).normalized()
+	var cyl: CylinderMesh = stick_knob_mesh.mesh as CylinderMesh
+	var knob_h: float = cyl.height if cyl != null else 0.05
+	var knob_center_w: Vector3 = hand_w + up_shaft_w * (knob_h * 0.5)
+	stick_knob_mesh.position = upper_body.to_local(knob_center_w)
+	stick_knob_mesh.look_at(knob_center_w + up_shaft_w, _up_for_look_at(up_shaft_w))
+	stick_knob_mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
 
 
 # ── Arm Mesh ──────────────────────────────────────────────────────────────────

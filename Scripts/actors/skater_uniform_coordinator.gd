@@ -25,6 +25,7 @@ extends RefCounted
 var _skater: Skater
 var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
+var _blade_tape: MeshInstance3D                    # team-colored tape band, child of _blade_mesh
 var _helmet: MeshInstance3D
 var _shoulder_l: MeshInstance3D
 var _shoulder_r: MeshInstance3D
@@ -110,6 +111,7 @@ func _create_jersey_viewport() -> void:
 
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = _jersey_viewport.get_texture()
+	mat.roughness = _ROUGH_CLOTH
 	# uv1_offset.x = 0.25 rotates the wrap 90° around the cylinder so the
 	# texture's back-center (texel x=128) lands at the skater's +Z (back).
 	# Godot's CylinderMesh starts U=0 at +Z and increases CCW.
@@ -138,10 +140,12 @@ func _create_shoulder_viewport() -> void:
 	var tex: ViewportTexture = _shoulder_viewport.get_texture()
 	var mat_l := StandardMaterial3D.new()
 	mat_l.albedo_texture = tex
+	mat_l.roughness = _ROUGH_CLOTH
 	mat_l.uv1_offset = Vector3(-0.25, 0.0, 0.0)
 	_shoulder_l.material_override = mat_l
 	var mat_r := StandardMaterial3D.new()
 	mat_r.albedo_texture = tex
+	mat_r.roughness = _ROUGH_CLOTH
 	mat_r.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	_shoulder_r.material_override = mat_r
 
@@ -177,13 +181,19 @@ func apply_uniform(colors: Dictionary) -> void:
 	_shoulder_outline_color = uniform.shoulders.outline
 	_rebuild_shoulder_texture()
 
-	# Helmet + blade.
-	_helmet.material_override = _make_solid_mat(uniform.helmet)
-	_blade_mesh.material_override = _make_solid_mat(colors.primary)
+	# Helmet — glossy hard plastic.
+	_helmet.material_override = _make_solid_mat(uniform.helmet, _ROUGH_HELMET)
 
-	# Stick — fixed wood color. Set explicitly so ghost mode doesn't leave
-	# behind a stale gray material_override when ghost ends.
-	_skater.stick_mesh.material_override = _make_solid_mat(Color(0.705, 0.640, 0.605))
+	# Blade — matte black with a team-colored tape band (colors.primary carries
+	# the team accent onto the tape) plus the cosmetic handed tilt.
+	_rebuild_blade(colors.primary)
+
+	# Stick shaft — near-black composite, satin finish. Set explicitly so ghost
+	# mode doesn't leave behind a stale gray material_override when ghost ends.
+	_skater.stick_mesh.material_override = _make_solid_mat(_STICK_SHAFT_COLOR, _ROUGH_STICK)
+
+	# Butt-end knob — team accent, recreated here so the color tracks the kit.
+	_rebuild_stick_knob(colors.primary)
 
 	# Gloves (hand spheres + cuffs, single solid color).
 	var gloves_mat: StandardMaterial3D = _make_solid_mat(uniform.gloves)
@@ -228,7 +238,7 @@ func apply_uniform(colors: Dictionary) -> void:
 
 	# Skates — fixed dark, set explicitly so ghost mode never leaves a blank
 	# gray override behind.
-	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08))
+	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08), _ROUGH_SKATE)
 	_skate_l.material_override = skate_mat.duplicate()
 	_skate_r.material_override = skate_mat.duplicate()
 	_foot_l.material_override = skate_mat.duplicate()
@@ -344,16 +354,77 @@ func _make_v_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTe
 	return ImageTexture.create_from_image(img)
 
 
-func _make_texture_material(tex: Texture2D) -> StandardMaterial3D:
+# ── Surface finishes ──────────────────────────────────────────────────────────
+# Roughness presets so each material reads as its real surface instead of the
+# uniform default-plastic look. Metallic stays 0 everywhere (all dielectric);
+# the spread in roughness alone separates cloth / plastic / leather / composite.
+const _ROUGH_CLOTH: float = 0.9    # jersey, socks, pants, arms, gloves
+const _ROUGH_HELMET: float = 0.28  # glossy hard plastic
+const _ROUGH_SKATE: float = 0.42   # synthetic boot leather
+const _ROUGH_STICK: float = 0.4    # composite shaft (satin)
+const _ROUGH_BLADE: float = 0.5    # matte blade face
+
+# Stick colors (kept off the team palette — modern composites are near-black).
+const _STICK_SHAFT_COLOR: Color = Color(0.06, 0.06, 0.07)
+const _BLADE_COLOR: Color = Color(0.05, 0.05, 0.05)
+
+
+func _make_texture_material(tex: Texture2D, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
+	mat.roughness = roughness
 	return mat
 
 
-func _make_solid_mat(color: Color) -> StandardMaterial3D:
+func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
+	mat.roughness = roughness
 	return mat
+
+
+# Paints the blade matte black and (re)builds the team-colored tape band wrapped
+# around the heel→mid of the blade, leaving the toe end bare black. The cosmetic
+# handed tilt lives on the rig (Skater._apply_blade_tilt) so it tracks live
+# handedness flips; the tape, being a child of the blade mesh, inherits it.
+func _rebuild_blade(tape_color: Color) -> void:
+	_blade_mesh.material_override = _make_solid_mat(_BLADE_COLOR, _ROUGH_BLADE)
+
+	if _blade_tape != null and is_instance_valid(_blade_tape):
+		_blade_mesh.remove_child(_blade_tape)
+		_blade_tape.queue_free()
+	_blade_tape = MeshInstance3D.new()
+	_blade_tape.name = "BladeTape"
+	var box := BoxMesh.new()
+	# Slightly proud of the 0.04 × 0.06 × 0.30 blade in face-normal (X) and
+	# height (Y); ~70% of the length (Z), shifted toward the heel (+Z in mesh
+	# space) so the toe end stays bare black.
+	box.size = Vector3(0.046, 0.062, 0.21)
+	_blade_tape.mesh = box
+	_blade_tape.position = Vector3(0.0, 0.0, 0.045)
+	_blade_tape.material_override = _make_solid_mat(tape_color, _ROUGH_CLOTH)
+	_blade_mesh.add_child(_blade_tape)
+
+
+# (Re)builds the butt-end knob cylinder, stored on the skater so update_stick_mesh
+# rides it on the shaft each tick. Recreated per uniform so the team accent color
+# tracks kit changes — same pattern as the glove cuffs.
+func _rebuild_stick_knob(color: Color) -> void:
+	if _skater.stick_knob_mesh != null and is_instance_valid(_skater.stick_knob_mesh):
+		_skater.upper_body.remove_child(_skater.stick_knob_mesh)
+		_skater.stick_knob_mesh.queue_free()
+	_skater.stick_knob_mesh = null
+	var m := MeshInstance3D.new()
+	m.name = "StickKnob"
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.035
+	cyl.bottom_radius = 0.03
+	cyl.height = 0.05
+	cyl.radial_segments = 12
+	m.mesh = cyl
+	m.material_override = _make_solid_mat(color, _ROUGH_CLOTH)
+	_skater.stick_knob_mesh = m
+	_skater.upper_body.add_child(m)
 
 
 func _rebuild_glove_cuffs(gloves_color: Color) -> void:
@@ -387,7 +458,8 @@ func _make_glove_cuff_mesh(radius: float, height: float, color: Color, mesh_name
 
 func apply_ghost(ghost: bool) -> void:
 	var meshes: Array[MeshInstance3D] = [
-			_upper_body_mesh, _blade_mesh, _skater.stick_mesh,
+			_upper_body_mesh, _blade_mesh, _blade_tape, _skater.stick_mesh,
+			_skater.stick_knob_mesh,
 			_skater.bone_visual(_skater.upper_arm_mesh),
 			_skater.bone_visual(_skater.forearm_mesh),
 			_skater.bone_visual(_skater.bottom_upper_arm_mesh),
