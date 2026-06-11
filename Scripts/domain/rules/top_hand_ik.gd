@@ -35,7 +35,9 @@ class_name TopHandIK
 #                  +1.0 for a right-handed shooter (blade lives on +X).
 # The shoulder is expected to live on the opposite (top-hand) side.
 #
-# Returns: { "hand": Vector3, "blade": Vector3 } in upper-body-local space.
+# Returns a Result (hand + blade in upper-body-local space). Callers on the
+# 240 Hz tick path pass a reused `out` instance to avoid per-solve allocation;
+# omitting it allocates a fresh Result (fine for tests / cold paths).
 
 class Config:
 	var stick_length: float = 0.0            # rigid stick length (meters)
@@ -47,11 +49,18 @@ class Config:
 	var rom_forehand_reach_max: float = 0.0  # meters; max hand displacement forehand
 	var rom_backhand_reach_max: float = 0.0  # meters; max hand displacement backhand
 
+class Result:
+	var hand: Vector3 = Vector3.ZERO
+	var blade: Vector3 = Vector3.ZERO
+
 static func solve(
 		shoulder: Vector3,
 		desired_blade_xz: Vector2,
 		blade_side_sign: float,
-		cfg: Config) -> Dictionary:
+		cfg: Config,
+		out: Result = null) -> Result:
+	if out == null:
+		out = Result.new()
 	var stick_length: float = cfg.stick_length
 	var blade_y: float = cfg.blade_y
 	var hand_rest_y: float = cfg.hand_rest_y
@@ -75,10 +84,9 @@ static func solve(
 		var hand_y: float = minf(ideal_hand_y, hand_y_max)
 		var stick_horiz: float = _stick_horiz_for(stick_length, hand_y, blade_y)
 		var close_blade_xz: Vector2 = shoulder_xz + aim_dir * stick_horiz
-		return {
-			"hand": Vector3(shoulder_xz.x, hand_y, shoulder_xz.y),
-			"blade": Vector3(close_blade_xz.x, blade_y, close_blade_xz.y),
-		}
+		out.hand = Vector3(shoulder_xz.x, hand_y, shoulder_xz.y)
+		out.blade = Vector3(close_blade_xz.x, blade_y, close_blade_xz.y)
+		return out
 
 	# FAR regime: target is beyond the default stick reach. Hand stays at
 	# rest Y; displaces toward target in XZ, clamped to asymmetric ROM.
@@ -128,10 +136,9 @@ static func solve(
 	var blade_dir := Vector2(sin(world_angle), -cos(world_angle))
 	var blade_xz: Vector2 = hand_xz + blade_dir * stick_horiz_at_rest
 
-	return {
-		"hand": Vector3(hand_xz.x, hand_rest_y, hand_xz.y),
-		"blade": Vector3(blade_xz.x, blade_y, blade_xz.y),
-	}
+	out.hand = Vector3(hand_xz.x, hand_rest_y, hand_xz.y)
+	out.blade = Vector3(blade_xz.x, blade_y, blade_xz.y)
+	return out
 
 # Horizontal stick projection at a given hand Y. Clamped to a tiny positive
 # value so the solver never divides by zero even at edge cases where the

@@ -107,8 +107,8 @@ func apply_network_state(state: SkaterNetworkState, _host_ts: float) -> void:
 	# the blade is placed (lean isn't transmitted; receivers re-derive).
 	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
-	skater.update_arm_mesh()
-	skater.update_bottom_arm_mesh()
+	# Arm/stick meshes derive from the markers once per rendered frame in
+	# Skater._process.
 
 
 func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
@@ -255,28 +255,30 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# source of truth for teleport positions; world-state snapshots may lag behind
 		# and would fight it if applied here.
 		return
-	_input_history = _input_history.filter(
-		func(i: InputState) -> bool: return i.host_timestamp > server_state.last_processed_host_timestamp
-	)
-	# Drop captured body check impulses the server has already processed past.
-	# Mirrors the _input_history filter: future reconciles only need impulses
-	# whose timestamp is strictly later than last_processed_host_timestamp.
-	_body_check_impulses = _body_check_impulses.filter(
-		func(r: Dictionary) -> bool: return r["timestamp"] > server_state.last_processed_host_timestamp
-	)
+	# Front-trim the acked prefix of each history. All three arrays are
+	# timestamp-sorted (appended chronologically), so everything at or before
+	# last_processed_host_timestamp sits at the front. The previous filter()
+	# rebuilds allocated a fresh array + ran a lambda per element on every
+	# broadcast (120 Hz), even in the healthy no-reconcile case.
+	var ack_ts: float = server_state.last_processed_host_timestamp
+	while not _input_history.is_empty() and _input_history[0].host_timestamp <= ack_ts:
+		_input_history.pop_front()
+	# Drop captured body check impulses the server has already processed past:
+	# future reconciles only need impulses strictly later than the ack.
+	while not _body_check_impulses.is_empty() and _body_check_impulses[0]["timestamp"] <= ack_ts:
+		_body_check_impulses.pop_front()
 	# Trajectory-based threshold check: compare what we predicted for the input
 	# at last_processed_host_timestamp against what the server says happened at
 	# that same instant. Falls back to the live position when no match is found
 	# (history capped, post-teleport, dead-puck gap, session warmup).
-	var predicted: PredictedState = PredictedState.find_at(_prediction_history, server_state.last_processed_host_timestamp)
+	var predicted: PredictedState = PredictedState.find_at(_prediction_history, ack_ts)
 	var divergence_position: Vector3 = predicted.position if predicted != null else skater.global_position
 	var divergence_velocity: Vector3 = predicted.velocity if predicted != null else skater.velocity
 	var divergence_upper_body: float = predicted.upper_body_rotation_y if predicted != null else _pose.upper_body_angle
 	# Trim confirmed predictions — future reconciles only ever look at strictly
-	# later timestamps. Mirrors the _input_history filter just above.
-	_prediction_history = _prediction_history.filter(
-		func(p: PredictedState) -> bool: return p.host_timestamp > server_state.last_processed_host_timestamp
-	)
+	# later timestamps.
+	while not _prediction_history.is_empty() and _prediction_history[0].host_timestamp <= ack_ts:
+		_prediction_history.pop_front()
 	if not ReconciliationRules.skater_needs_reconcile(
 			divergence_position, divergence_velocity,
 			server_state.position, server_state.velocity,

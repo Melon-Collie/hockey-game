@@ -62,6 +62,7 @@ const STATS_PLAYER_RECORD_SIZE: int = 6  # peer_id, G, A, SOG, HITS, BLK
 
 var _ws_sequence: int = 0
 var _last_period: int = -1
+var _last_clock_second: int = -1
 
 var _registry: PlayerRegistry = null
 var _state_machine: GameStateMachine = null
@@ -224,7 +225,13 @@ func _apply_game_state(score0: int, score1: int, new_phase: GamePhase.Phase,
 	if period != _last_period:
 		_last_period = period
 		period_changed.emit(period)
-	clock_updated.emit(t_remaining)
+	# Emit only when the displayed second changes (mirrors the host's 1 Hz
+	# gate in GameManager). Per-packet emission made clients rebuild the HUD
+	# clock label + dirty its theme cache at 120 Hz for an unchanged display.
+	var whole_second: int = int(ceilf(t_remaining))
+	if whole_second != _last_clock_second:
+		_last_clock_second = whole_second
+		clock_updated.emit(t_remaining)
 
 
 # ── Replay decode (host-side, no side effects) ───────────────────────────────

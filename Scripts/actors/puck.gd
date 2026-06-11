@@ -356,18 +356,20 @@ func _physics_process(delta: float) -> void:
 	# Tick per-skater cooldowns regardless of carrier state. Keys are int
 	# instance_ids; resolve back via instance_from_id and drop entries whose
 	# skater has been freed (puppet bot teardown, etc.) alongside the
-	# naturally-expired ones.
-	var _expired: Array[int] = []
-	for id: int in _cooldown_timers.keys():
-		var skater: Skater = instance_from_id(id) as Skater
-		if not is_instance_valid(skater):
-			_expired.append(id)
-			continue
-		_cooldown_timers[id] -= delta
-		if _cooldown_timers[id] <= 0.0:
-			_expired.append(id)
-	for id: int in _expired:
-		_cooldown_timers.erase(id)
+	# naturally-expired ones. The early-out + lazily-created expiry list keep
+	# this allocation-free in the common no-cooldowns case (240 Hz path).
+	if not _cooldown_timers.is_empty():
+		var _expired: Array[int] = []
+		for id: int in _cooldown_timers:
+			var skater: Skater = instance_from_id(id) as Skater
+			if not is_instance_valid(skater):
+				_expired.append(id)
+				continue
+			_cooldown_timers[id] -= delta
+			if _cooldown_timers[id] <= 0.0:
+				_expired.append(id)
+		for id: int in _expired:
+			_cooldown_timers.erase(id)
 
 	if carrier != null:
 		_pending_elevation = false

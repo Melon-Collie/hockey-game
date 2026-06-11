@@ -21,33 +21,38 @@ class BracketResult:
 # When render_time overshoots the newest snapshot, returns is_extrapolating=true
 # with extrapolation_dt set so callers can dead-reckon with the newest velocity.
 # Works with a single-entry buffer for the extrapolation case.
-static func find_bracket(buffer: Array, render_time: float) -> BracketResult:
+# Tick-path callers pass a reused `out` instance (every field is rewritten on
+# each fill) so the per-tick lookup is allocation-free; null return still means
+# "no bracket" regardless of whether `out` was supplied.
+static func find_bracket(buffer: Array, render_time: float, out: BracketResult = null) -> BracketResult:
 	if buffer.is_empty():
 		return null
+	if out == null:
+		out = BracketResult.new()
 	var newest = buffer[buffer.size() - 1]
 	if render_time > newest.timestamp:
-		var r := BracketResult.new()
-		r.from_state = newest.state
-		r.to_state = newest.state
-		r.t = 1.0
-		r.is_extrapolating = true
-		r.extrapolation_dt = render_time - newest.timestamp
-		return r
+		out.from_state = newest.state
+		out.to_state = newest.state
+		out.t = 1.0
+		out.is_extrapolating = true
+		out.extrapolation_dt = render_time - newest.timestamp
+		out.bracket_dt = 0.0
+		return out
 	if buffer.size() < 2:
 		# Only one snapshot and render_time is behind it — display it directly
 		# rather than holding at the spawn position until a second arrives.
-		var r := BracketResult.new()
-		r.from_state = newest.state
-		r.to_state = newest.state
-		r.t = 0.0
-		r.is_extrapolating = false
-		r.bracket_dt = 0.0
-		return r
+		out.from_state = newest.state
+		out.to_state = newest.state
+		out.t = 0.0
+		out.is_extrapolating = false
+		out.extrapolation_dt = 0.0
+		out.bracket_dt = 0.0
+		return out
 	for i in range(buffer.size() - 1):
 		var a = buffer[i]
 		var b = buffer[i + 1]
 		if a.timestamp <= render_time and render_time <= b.timestamp:
-			return _make(a, b, render_time)
+			return _make(a, b, render_time, out)
 	return null
 
 # Drops stale buffer entries; keeps at least min_keep at the tail so the next
@@ -91,11 +96,12 @@ static func hermite_angle(a0: float, av0: float, a1: float, av1: float, t: float
 		 + (-2.0*t3 + 3.0*t2) * a1 \
 		 + (t3 - t2) * dt * av1
 
-static func _make(a, b, render_time: float) -> BracketResult:
-	var r := BracketResult.new()
-	r.from_state = a.state
-	r.to_state = b.state
+static func _make(a, b, render_time: float, out: BracketResult) -> BracketResult:
+	out.from_state = a.state
+	out.to_state = b.state
 	var span: float = b.timestamp - a.timestamp
-	r.t = clampf((render_time - a.timestamp) / span, 0.0, 1.0) if span > 0.0 else 0.0
-	r.bracket_dt = span
-	return r
+	out.t = clampf((render_time - a.timestamp) / span, 0.0, 1.0) if span > 0.0 else 0.0
+	out.is_extrapolating = false
+	out.extrapolation_dt = 0.0
+	out.bracket_dt = span
+	return out

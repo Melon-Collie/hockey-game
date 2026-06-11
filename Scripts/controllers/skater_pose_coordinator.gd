@@ -100,8 +100,9 @@ func snap_lean_to_state() -> void:
 	_skater.set_lower_body_lean(velocity_lean_x, velocity_lean_z)
 
 func apply_facing(input: InputState, delta: float) -> void:
-	if not _sm.get_state() in [State.WRISTER_AIM, State.SLAPPER_CHARGE_WITH_PUCK,
-			State.SLAPPER_CHARGE_WITHOUT_PUCK, State.SHOT_BLOCKING]:
+	var s: SkaterStateMachine.State = _sm.get_state()
+	if not (s == State.WRISTER_AIM or s == State.SLAPPER_CHARGE_WITH_PUCK
+			or s == State.SLAPPER_CHARGE_WITHOUT_PUCK or s == State.SHOT_BLOCKING):
 		var prev_angle: float = _skater.rotation.y
 		var mouse_world: Vector3 = input.mouse_world_pos
 		var to_mouse: Vector2 = Vector2(
@@ -140,7 +141,8 @@ func apply_upper_body(delta: float) -> void:
 	if _sm.get_state() == State.SHOT_BLOCKING:
 		return
 
-	if _sm.get_state() in [State.SLAPPER_CHARGE_WITH_PUCK, State.SLAPPER_CHARGE_WITHOUT_PUCK]:
+	var charge_state: SkaterStateMachine.State = _sm.get_state()
+	if charge_state == State.SLAPPER_CHARGE_WITH_PUCK or charge_state == State.SLAPPER_CHARGE_WITHOUT_PUCK:
 		# Hold upper body facing the locked shot direction throughout the wind-up,
 		# then layer the coil rotation on top: back shoulder pulls away from the
 		# target as the wind-up timer fills, ending in a loaded stance with the

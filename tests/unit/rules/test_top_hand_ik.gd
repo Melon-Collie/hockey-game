@@ -60,7 +60,7 @@ func test_stick_length_3d_is_constant_for_all_targets() -> void:
 		for dist: float in [0.0, 0.2, 0.8, 1.16, 1.5, 2.5, 5.0]:
 			var angle: float = deg_to_rad(deg)
 			var target := Vector2(sin(angle) * dist, -cos(angle) * dist)
-			var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+			var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 			var length_3d: float = result.hand.distance_to(result.blade)
 			assert_almost_eq(
 				length_3d, STICK_LENGTH, 0.001,
@@ -76,7 +76,7 @@ func test_blade_y_locked_and_hand_y_within_bounds() -> void:
 			Vector2(-1.5, -1.5),       # far forehand
 			Vector2(1.5, -1.2),        # far backhand
 		]:
-		var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+		var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 		assert_almost_eq(result.blade.y, BLADE_Y, 0.0001, "blade Y locked")
 		assert_true(
 				result.hand.y >= HAND_REST_Y - 0.0001 and result.hand.y <= HAND_Y_MAX + 0.0001,
@@ -90,7 +90,7 @@ func test_far_target_on_stick_sphere_hits_target_exactly() -> void:
 	# (or CLOSE with hand_y at rest); either way blade lands on target.
 	var shoulder: Vector3 = _lefty_shoulder()
 	var target := Vector2(shoulder.x, shoulder.z - STICK_HORIZ_AT_REST)
-	var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+	var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 	assert_almost_eq(result.blade.x, target.x, 0.001, "blade X == target X")
 	assert_almost_eq(result.blade.z, target.y, 0.001, "blade Z == target Z")
 	assert_almost_eq(result.hand.y, HAND_REST_Y, 0.001, "hand at rest Y at boundary")
@@ -99,7 +99,7 @@ func test_far_target_slightly_past_stick_reachable_by_small_hand_extension() -> 
 	# Backhand side, just past stick_horiz_at_rest but within backhand ROM.
 	var shoulder: Vector3 = _lefty_shoulder()
 	var target := Vector2(shoulder.x + STICK_HORIZ_AT_REST + 0.15, shoulder.z - 0.2)
-	var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+	var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 	assert_almost_eq(result.blade.x, target.x, 0.001, "reachable backhand: blade on target X")
 	assert_almost_eq(result.blade.z, target.y, 0.001, "reachable backhand: blade on target Z")
 	assert_almost_eq(result.hand.y, HAND_REST_Y, 0.001, "hand at rest Y in FAR regime")
@@ -107,7 +107,7 @@ func test_far_target_slightly_past_stick_reachable_by_small_hand_extension() -> 
 func test_far_forehand_target_past_rom_clamps_hand_short() -> void:
 	var shoulder: Vector3 = _lefty_shoulder()
 	var target := Vector2(shoulder.x - 4.0, shoulder.z - 0.1)
-	var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+	var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 
 	var hand_disp := Vector2(
 			result.hand.x - shoulder.x, result.hand.z - shoulder.z).length()
@@ -123,7 +123,7 @@ func test_far_forehand_target_past_rom_clamps_hand_short() -> void:
 func test_far_backhand_hand_extends_to_backhand_reach_max() -> void:
 	var shoulder: Vector3 = _lefty_shoulder()
 	var target := Vector2(shoulder.x + 5.0, shoulder.z - 0.1)
-	var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+	var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 	var hand_disp := Vector2(
 			result.hand.x - shoulder.x, result.hand.z - shoulder.z).length()
 	assert_almost_eq(
@@ -161,7 +161,7 @@ func test_close_target_hits_blade_exactly_via_hand_rise() -> void:
 	# sqrt(1.5² − r²) ≤ blade_y + hand_y_max + 0.95 = 1.25 → r ≥ sqrt(1.5² − 1.25²)
 	# ≈ 0.829. Pick r = 0.9, which is < stick_horiz_at_rest (1.16).
 	var target := Vector2(shoulder.x, shoulder.z - 0.9)
-	var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+	var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 	assert_almost_eq(result.blade.x, target.x, 0.001, "blade X lands on target")
 	assert_almost_eq(result.blade.z, target.y, 0.001, "blade Z lands on target")
 	assert_gt(result.hand.y, HAND_REST_Y + 0.0001, "hand rose above rest")
@@ -171,7 +171,7 @@ func test_close_target_stays_at_shoulder_xz() -> void:
 	# CLOSE regime: hand XZ stays at shoulder; only Y rises.
 	var shoulder: Vector3 = _lefty_shoulder()
 	var target := Vector2(shoulder.x + 0.3, shoulder.z - 0.5)  # ~0.58 from shoulder
-	var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+	var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 	assert_almost_eq(result.hand.x, shoulder.x, 0.001, "hand X at shoulder in CLOSE regime")
 	assert_almost_eq(result.hand.z, shoulder.z, 0.001, "hand Z at shoulder in CLOSE regime")
 
@@ -184,7 +184,7 @@ func test_close_target_at_shoulder_clamps_hand_and_overshoots_along_aim() -> voi
 	# shoulder + (0, -1) × STICK_HORIZ_AT_MAX.
 	var shoulder: Vector3 = _lefty_shoulder()
 	var target := Vector2(shoulder.x, shoulder.z)
-	var result: Dictionary = TopHandIK.solve(shoulder, target, -1.0, _cfg())
+	var result: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, _cfg())
 	assert_almost_eq(result.hand.y, HAND_Y_MAX, 0.001, "hand clamped at hand_y_max")
 	assert_almost_eq(result.blade.x, shoulder.x, 0.001, "blade on forward axis")
 	assert_almost_eq(result.blade.z, shoulder.z - STICK_HORIZ_AT_MAX, 0.001, "blade at min horizontal reach along forward")

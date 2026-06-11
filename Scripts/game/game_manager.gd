@@ -58,6 +58,10 @@ signal offside_called()
 var _state_machine: GameStateMachine = null
 var _last_emitted_clock_secs: int = -1
 var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
+# Reused peer_id -> position scratch for the per-tick ghost-state and icing
+# checks (host only). The domain calls read it synchronously and never retain
+# it; each call site clears + refills before use.
+var _positions_scratch: Dictionary = {}
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
 # Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
@@ -369,8 +373,9 @@ func _update_host_puck_tracking() -> void:
 			_state_machine.notify_puck_carried(carrier_team.team_id,
 					puck.carrier.global_position.z, puck.carrier.global_position.x)
 	elif _state_machine.current_phase == GamePhase.Phase.PLAYING:
+		_registry.fill_positions_by_peer_id(_positions_scratch)
 		_state_machine.check_icing_for_loose_puck(
-				puck.global_position.z, _registry.positions_by_peer_id())
+				puck.global_position.z, _positions_scratch)
 		_consume_pending_faceoff()
 
 
@@ -388,7 +393,8 @@ func _apply_ghost_state() -> void:
 				record.skater.set_ghost(false)
 				_last_ghost_state[peer_id] = false
 		return
-	var positions: Dictionary = {}
+	var positions: Dictionary = _positions_scratch
+	positions.clear()
 	var carrier_peer_id: int = -1
 	for peer_id: int in _registry.all():
 		var record: PlayerRecord = _registry.get_record(peer_id)
@@ -694,13 +700,10 @@ func _spawn_puck() -> void:
 	puck_controller.set_peer_id_resolver(_resolve_skater_peer_id)
 	# team_id_by_skater dict is owned by PlayerRegistry, which doesn't
 	# exist yet — wired in `_wire_subsystems` below.
+	# Returns the registry's live cached list (rebuilt on roster change) —
+	# building a fresh array per call allocated twice per 240 Hz tick.
 	puck_controller.set_skater_getter(func() -> Array:
-		if _registry == null:
-			return []
-		var skaters: Array = []
-		for r: PlayerRecord in _registry.all().values():
-			skaters.append(r.skater)
-		return skaters)
+		return _registry.skaters() if _registry != null else [])
 	puck_controller.puck_picked_up_by.connect(_on_server_puck_picked_up_by)
 	puck_controller.puck_released_by_carrier.connect(_on_server_puck_released_by_carrier)
 	puck_controller.puck_stripped_from.connect(_on_server_puck_stripped_from)
@@ -740,12 +743,11 @@ func _wire_subsystems() -> void:
 		puck_controller.set_team_id_by_skater(_registry.team_id_by_skater)
 	# Goalie controllers need to scan for opposing skaters near the puck for
 	# the crease-jam butterfly trigger. Same Callable shape as the puck
-	# controller's getter; computed lazily so registry churn is observed.
+	# controller's getter; the registry's live cached list observes roster
+	# churn without rebuilding an array per call (this fired 3-5× per goalie
+	# per 240 Hz tick under crease pressure).
 	var goalie_skater_getter: Callable = func() -> Array:
-		var skaters: Array = []
-		for r: PlayerRecord in _registry.all().values():
-			skaters.append(r.skater)
-		return skaters
+		return _registry.skaters() if _registry != null else []
 	for gc: GoalieController in goalie_controllers:
 		gc.set_skater_getter(goalie_skater_getter)
 	_registry.player_joined.connect(player_joined.emit)

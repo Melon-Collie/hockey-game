@@ -24,9 +24,27 @@ var _controller: SkaterController = null  # tunables, _do_release, _game_state, 
 var _smoothed_aim_world: Vector3 = Vector3.ZERO
 var _smoothed_aim_initialized: bool = false
 
+# ── Cached Solver Objects ─────────────────────────────────────────────────────
+# The IK configs read only controller @exports, which change exclusively in
+# SkaterController.apply_attributes — so they're built once and invalidated
+# from there. Per-tick fields (blade_y, hand_y, backhand_angle) are written
+# into the cached instance each use. Building fresh configs per solve was the
+# hottest allocation site in the game (~7 RefCounted/Dictionary allocs per
+# skater per 240 Hz tick across the 3-pass loop).
+var _cached_top_cfg: TopHandIK.Config = null
+var _cached_bottom_cfg: BottomHandIK.Config = null
+var _ik_result := TopHandIK.Result.new()
+
 func setup(skater: Skater, controller: SkaterController) -> void:
 	_skater = skater
 	_controller = controller
+
+# Drop the cached configs so the next solve rebuilds them from the controller
+# exports. Called by SkaterController.apply_attributes (stick length, ROM, and
+# hand heights all scale with attributes).
+func invalidate_configs() -> void:
+	_cached_top_cfg = null
+	_cached_bottom_cfg = null
 
 # Snap the smoothed aim to a known world-space target. Called by LocalController
 # at reconcile entry so replay starts deterministically from the first replayed
@@ -109,13 +127,14 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	# returns hand+blade consistent with stick_length, so no post-override is
 	# needed (the converged blade_y already produces blade-on-ice in world).
 	var blade_y: float = blade_y_local()
-	var ik: Dictionary = {}
+	var ik: TopHandIK.Result = _ik_result
 	for i in 3:
-		ik = TopHandIK.solve(
+		TopHandIK.solve(
 				_skater.shoulder.position,
 				desired_blade_xz,
 				blade_side_sign,
-				_ik_config(blade_y))
+				_ik_config(blade_y),
+				ik)
 		blade_y = blade_y_lean_corrected(ik.blade.x, ik.blade.z)
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
@@ -353,25 +372,28 @@ func stick_horiz() -> float:
 	return sqrt(maxf(sq, 0.0001))
 
 # ── Config Builders ───────────────────────────────────────────────────────────
+# Cached: export-derived fields are filled once (until invalidate_configs);
+# only the per-tick fields are written per call.
 func _ik_config(blade_y: float) -> TopHandIK.Config:
-	var cfg := TopHandIK.Config.new()
-	cfg.stick_length = _controller.stick_length
-	cfg.blade_y = blade_y
-	cfg.hand_rest_y = _controller.hand_rest_y
-	cfg.hand_y_max = _controller.hand_y_max
-	cfg.rom_forehand_angle_max = deg_to_rad(_controller.rom_forehand_angle_max_deg)
-	cfg.rom_backhand_angle_max = deg_to_rad(_controller.rom_backhand_angle_max_deg)
-	cfg.rom_forehand_reach_max = _controller.rom_forehand_reach_max
-	cfg.rom_backhand_reach_max = _controller.rom_backhand_reach_max
-	return cfg
+	if _cached_top_cfg == null:
+		_cached_top_cfg = TopHandIK.Config.new()
+		_cached_top_cfg.stick_length = _controller.stick_length
+		_cached_top_cfg.hand_rest_y = _controller.hand_rest_y
+		_cached_top_cfg.hand_y_max = _controller.hand_y_max
+		_cached_top_cfg.rom_forehand_angle_max = deg_to_rad(_controller.rom_forehand_angle_max_deg)
+		_cached_top_cfg.rom_backhand_angle_max = deg_to_rad(_controller.rom_backhand_angle_max_deg)
+		_cached_top_cfg.rom_forehand_reach_max = _controller.rom_forehand_reach_max
+		_cached_top_cfg.rom_backhand_reach_max = _controller.rom_backhand_reach_max
+	_cached_top_cfg.blade_y = blade_y
+	return _cached_top_cfg
 
 func _bottom_hand_ik_config() -> BottomHandIK.Config:
-	var cfg := BottomHandIK.Config.new()
-	cfg.hand_y = _controller.bh_hand_y
-	cfg.backhand_angle = _bh_backhand_angle()
-	cfg.release_angle_max = deg_to_rad(_controller.bh_release_angle_deg)
-	cfg.release_angle_band = deg_to_rad(_controller.bh_release_angle_band_deg)
-	return cfg
+	if _cached_bottom_cfg == null:
+		_cached_bottom_cfg = BottomHandIK.Config.new()
+		_cached_bottom_cfg.release_angle_max = deg_to_rad(_controller.bh_release_angle_deg)
+		_cached_bottom_cfg.release_angle_band = deg_to_rad(_controller.bh_release_angle_band_deg)
+	_cached_bottom_cfg.backhand_angle = _bh_backhand_angle()
+	return _cached_bottom_cfg
 
 # Blade world angle toward the backhand side, in the skater's body frame.
 # Returns a positive value when the blade is on the backhand side; 0 on forehand.

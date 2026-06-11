@@ -11,6 +11,10 @@ var _state_buffer: Array[BufferedSkaterState] = []
 var is_extrapolating: bool = false
 
 var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
+# Reused scratch objects for the per-tick interpolation lookup + output —
+# allocating fresh ones each tick was measurable churn at 240 Hz × 5 remotes.
+var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
+var _scratch_interp := SkaterNetworkState.new()
 var _rejoin_blend_from_pos: Vector3 = Vector3.ZERO
 var _rejoin_blend_from_blade: Vector3 = Vector3.ZERO
 var _rejoin_blend_from_hand: Vector3 = Vector3.ZERO
@@ -36,9 +40,9 @@ func _physics_process(delta: float) -> void:
 		if _rejoin_blend_elapsed >= 0.0:
 			_rejoin_blend_elapsed += delta
 		_interpolate()
-		skater.update_stick_mesh()
 		# Cosmetic leg gait, derived from the interpolated velocity — no extra
-		# network state. (Host-driven remotes animate via _process_input above.)
+		# network state. (Host-driven remotes animate via _process_input above.
+		# Stick/arm meshes update once per rendered frame in Skater._process.)
 		_skating.apply(delta)
 
 func receive_input_batch(batch: Array[InputState]) -> void:
@@ -137,12 +141,14 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 func _interpolate() -> void:
 	var render_time: float = NetworkManager.estimated_host_time() - interpolation_delay
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
-			_state_buffer, render_time)
+			_state_buffer, render_time, _scratch_bracket)
 	var prev_extrapolating: bool = is_extrapolating
 	is_extrapolating = bracket != null and bracket.is_extrapolating
 	if bracket == null:
 		return
-	var interpolated := SkaterNetworkState.new()
+	# Reused scratch (240 Hz path): both branches below write every field that
+	# _apply_state_to_skater reads, so no stale value can leak across ticks.
+	var interpolated := _scratch_interp
 	if bracket.is_extrapolating:
 		var dt: float = minf(bracket.extrapolation_dt, extrapolation_max_ms / 1000.0)
 		var newest: SkaterNetworkState = bracket.to_state
@@ -159,6 +165,8 @@ func _interpolate() -> void:
 		interpolated.facing_angular_velocity = newest.facing_angular_velocity
 		interpolated.upper_body_angular_velocity = newest.upper_body_angular_velocity
 		interpolated.is_ghost = newest.is_ghost
+		interpolated.is_elevated = newest.is_elevated
+		interpolated.shot_state = newest.shot_state
 	else:
 		var from_state: SkaterNetworkState = bracket.from_state
 		var to_state: SkaterNetworkState = bracket.to_state
@@ -176,9 +184,15 @@ func _interpolate() -> void:
 				atan2(from_state.facing.x, from_state.facing.y), from_state.facing_angular_velocity,
 				atan2(to_state.facing.x, to_state.facing.y), to_state.facing_angular_velocity, t, dt)
 		interpolated.facing = Vector2(sin(interp_fa), cos(interp_fa))
-		# Boolean fields can't be lerped; take the freshest value so ghost-mode
-		# toggles flow through to remote skaters without a one-broadcast delay.
+		# Boolean/enum fields can't be lerped; take the freshest value so
+		# ghost-mode and shot-pose toggles flow through to remote skaters
+		# without a one-broadcast delay. (shot_state / is_elevated were
+		# previously never copied onto the interpolated object at all, so
+		# _apply_state_to_skater wrote type defaults to the skater every tick
+		# and the elevated-blade replication had no effect on remotes.)
 		interpolated.is_ghost = to_state.is_ghost
+		interpolated.is_elevated = to_state.is_elevated
+		interpolated.shot_state = to_state.shot_state
 		# Push position forward from render_time to present using the interpolated
 		# velocity. Capped at extrapolation_max_ms so a large interpolation buffer
 		# on a rough connection doesn't over-predict on direction changes.
@@ -225,9 +239,7 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# ._update_blade_elevation) shows on spectated remotes, not just locally.
 	skater.is_elevated = state.is_elevated
 	skater.current_shot_state = state.shot_state
-	# Arms are derived from shoulder + hand each frame; update after both are set.
-	skater.update_arm_mesh()
 	# Bottom hand is purely reactive to top_hand + blade (both already set
-	# above) and needs no network state of its own.
+	# above) and needs no network state of its own. Arm/stick meshes derive
+	# from the markers once per rendered frame in Skater._process.
 	_ik.update_bottom_hand()
-	skater.update_bottom_arm_mesh()

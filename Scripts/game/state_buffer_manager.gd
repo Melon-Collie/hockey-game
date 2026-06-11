@@ -54,20 +54,21 @@ func capture(registry: PlayerRegistry, puck_controller: PuckController, goalie_c
 	# timestamps and host-internal queries — no offset translation required.
 	var now: float = NetworkManager.local_time()
 
+	# fill_* writes each controller's state directly into the pre-allocated
+	# ring slot — the previous get_*() calls allocated a throwaway state per
+	# actor per tick, defeating the rings' purpose (the header's whole point).
 	for peer_id: int in registry.all():
 		if not _skater_buffers.has(peer_id):
 			_alloc_skater(peer_id)
 		var ptr: int = _skater_ptrs[peer_id]
 		var slot: SkaterNetworkState = _skater_buffers[peer_id][ptr]
-		var state: SkaterNetworkState = registry.get_record(peer_id).controller.get_network_state()
-		slot.copy_from(state)
+		registry.get_record(peer_id).controller.fill_network_state(slot)
 		slot.host_timestamp = now
 		_skater_ptrs[peer_id] = (ptr + 1) % BUFFER_SIZE
 		_skater_counts[peer_id] = mini(_skater_counts.get(peer_id, 0) + 1, BUFFER_SIZE)
 
 	var puck_slot: PuckNetworkState = _puck_buffer[_puck_ptr]
-	var puck_state: PuckNetworkState = puck_controller.get_state()
-	puck_slot.copy_from(puck_state)
+	puck_controller.fill_state(puck_slot)
 	puck_slot.host_timestamp = now
 	_puck_ptr = (_puck_ptr + 1) % BUFFER_SIZE
 	_puck_count = mini(_puck_count + 1, BUFFER_SIZE)
@@ -77,8 +78,7 @@ func capture(registry: PlayerRegistry, puck_controller: PuckController, goalie_c
 			_alloc_goalie(gc.team_id)
 		var ptr: int = _goalie_ptrs[gc.team_id]
 		var slot: GoalieNetworkState = _goalie_buffers[gc.team_id][ptr]
-		var state: GoalieNetworkState = gc.get_state()
-		slot.copy_from(state)
+		gc.fill_state(slot)
 		slot.host_timestamp = now
 		_goalie_ptrs[gc.team_id] = (ptr + 1) % BUFFER_SIZE
 		_goalie_counts[gc.team_id] = mini(_goalie_counts.get(gc.team_id, 0) + 1, BUFFER_SIZE)
