@@ -27,6 +27,10 @@ NetworkSimManager="*res://Scripts/networking/network_sim.gd"
 SteamManager="*res://Scripts/networking/steam_manager.gd"
 GameManager="*uid://bpqctbi2qkaeo"
 
+[debug]
+
+gdscript/warnings/integer_division=0
+
 [display]
 
 window/size/viewport_width=1920
@@ -136,10 +140,6 @@ camera_pan_down={
 ]
 }
 
-[debug]
-
-gdscript/warnings/integer_division=0
-
 [physics]
 
 common/physics_ticks_per_second=240
@@ -148,3 +148,10 @@ common/physics_ticks_per_second=240
 [rendering]
 
 anti_aliasing/quality/msaa_3d=2
+
+[steam]
+
+initialization/app_id=0
+initialization/initialize_on_startup=false
+initialization/embed_callbacks=false
+multiplayer_peer/max_channels=4
