@@ -211,9 +211,6 @@ func _wire_network_signals() -> void:
 	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
-	NetworkManager.goalie_state_transition_received.connect(_on_goalie_state_transition_received)
-	NetworkManager.goalie_shot_reaction_received.connect(_on_goalie_shot_reaction_received)
-	NetworkManager.goalie_reaction_cleared_received.connect(_on_goalie_reaction_cleared_received)
 	NetworkManager.input_batch_received.connect(_on_input_batch_received)
 	NetworkManager.spectator_demoted_received.connect(_on_spectator_demoted_received)
 	NetworkManager.skip_replay_request_received.connect(_on_remote_skip_replay_request)
@@ -809,10 +806,6 @@ func _wire_subsystems() -> void:
 	_swap_coord.carrier_swap_needs_drop.connect(_drop_puck_if_carried)
 
 	if NetworkManager.is_host:
-		for gc: GoalieController in goalie_controllers:
-			gc.state_transitioned.connect(NetworkManager.send_goalie_state_transition_to_all)
-			gc.shot_reaction_started.connect(NetworkManager.send_goalie_shot_reaction_to_all)
-			gc.reaction_cleared.connect(NetworkManager.send_goalie_reaction_cleared_to_all)
 		_phase_coord.phase_changed.connect(_on_phase_for_broadcast_rate)
 
 	_telemetry = NetworkTelemetry.new()
@@ -1615,27 +1608,6 @@ func _on_server_puck_touched_while_loose(peer_id: int) -> void:
 		_sync_stats_to_clients()
 		return
 	_shot_tracker.on_deflection(peer_id)
-
-
-func _on_goalie_state_transition_received(team_id: int, new_state: int) -> void:
-	for gc: GoalieController in goalie_controllers:
-		if gc.team_id == team_id:
-			gc.apply_state_transition(new_state)
-			return
-
-
-func _on_goalie_shot_reaction_received(team_id: int, impact_x: float, impact_y: float, is_elevated: bool) -> void:
-	for gc: GoalieController in goalie_controllers:
-		if gc.team_id == team_id:
-			gc.apply_shot_reaction(impact_x, impact_y, is_elevated)
-			return
-
-
-func _on_goalie_reaction_cleared_received(team_id: int) -> void:
-	for gc: GoalieController in goalie_controllers:
-		if gc.team_id == team_id:
-			gc.apply_reaction_cleared()
-			return
 
 
 func _on_puck_touched_by_goalie(goalie: Goalie) -> void:

@@ -119,4 +119,6 @@ func _capture_mouse() -> void:
 
 func _release_mouse() -> void:
 	_looking = false
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	# Restore whatever the cursor-confine setting asks for rather than forcing
+	# VISIBLE, so leaving spectator look doesn't un-confine the cursor.
+	PlayerPrefs.apply_input()

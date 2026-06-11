@@ -21,13 +21,13 @@ The Rocket League freeplay ceiling is a guiding star: the stickhandling-to-shot 
 | Channel | Rate | Transport |
 |---------|------|-----------|
 | Input (client → host) | 60 Hz | Unreliable, last 12 frames per packet |
-| World state (host → clients) | 120 Hz | Unreliable, ~302 bytes at 6 players + 2 goalies (single flat PackedByteArray, well under 1392-byte ENet MTU) |
+| World state (host → clients) | 120 Hz | Unreliable, ~348 bytes at 6 players + 2 goalies (single flat PackedByteArray, well under 1392-byte ENet MTU) |
 | Events (pickup, spawn, goal, goalie transitions) | On event | Reliable |
 | Stats sync | On change | Reliable |
 
 Interpolation delay: 75ms baseline, adapts per-packet via `lerp(0.15)`, capped at +10ms / −1.5ms per packet.
 
-Wire format: Skater 37B · Puck 12B · Goalie 12B. ~62% reduction vs unquantized.
+Wire format: Skater 37B · Puck 12B · Goalie 35B (12 B root + 23 B pose). Quantized; ~50% reduction vs unquantized.
 
 **Input timestamp lead:** Client inputs are stamped with `NetworkManager.estimated_input_stamp_time()` = `estimated_host_time() + INPUT_LEAD_SEC` (~25ms). `estimated_host_time()` already encodes the NTP-measured RTT/2, so inputs arrive at the host at approximately their timestamp. The 25ms lead = 16.7ms worst-case batch-send jitter + 8.3ms two-tick buffer, ensuring the host input queue never starves between 60Hz batches. The host gates consumption in `RemoteController._drive_from_input`: inputs are held until `host_timestamp <= estimated_host_time()`. F3 overlay reports `InBuf: lead X ms  starved Y/s` — healthy values are lead ≈ 0–8ms, starved = 0.
 
@@ -87,11 +87,9 @@ Period clock ticks only during `PLAYING`. On expiry: if periods remain → `END_
 
 ### Goalie Networking
 
-**GoalieController** AI runs on both host and client. Clients do not interpolate server snapshots — they run the full goalie state machine every physics tick using their local puck position. This eliminates interpolation delay and keeps goalie reactions immediate. Server broadcasts (120 Hz) soft-correct position only, keeping client and host in sync despite the client tracking a slightly stale puck.
+**The goalie AI runs only on the host; clients are pure interpolators.** The host runs the full goalie state machine every physics tick. Clients do **not** run the AI — they buffer the host's broadcast goalie snapshots and render them at `now - interpolation_delay` via `GoalieController._interpolate_and_apply`, exactly like remote skaters and the loose puck. When `render_time` overshoots the newest snapshot, the root translation is dead-reckoned by the broadcast linear velocity (capped at `extrapolation_max_ms`) while the pose holds its newest value — a brief gap reads as a momentary freeze rather than wildly extrapolated sweep angles. This replaced the older "client runs the AI + soft position correction" model, which produced ghost saves and phantom goals whenever the client's local puck read disagreed with the host broadcast.
 
-Serialized per goalie: position (x/z), rotation_y, state_enum, five_hole_openness, velocity (x/z) — 7 fields, 8 B quantized. `apply_state` forward-predicts the server position using `velocity * elapsed` (elapsed ≈ RTT/2 at call time), then blends at 40% per broadcast. `five_hole_openness` is computed only on the server; clients adopt it at 80% blend per broadcast so the visual pad gap matches server physics within ~50 ms. The client AI does not recompute `five_hole_openness`, so nothing fights the correction. Body part configs are rebuilt from the running AI state each frame.
-
-State changes (STANDING ↔ BUTTERFLY ↔ RVH) and shot reactions are delivered via reliable RPCs (`apply_state_transition`, `apply_shot_reaction`). `apply_state_transition` directly sets the client state machine. `apply_shot_reaction` seeds `_shot_timer` on the client so the butterfly drop cadence matches the server.
+The full pose is on the wire, so the broadcast is the authoritative visual: butterfly drop, glove/blocker reach, RVH hug, and recovery all come straight from the interpolated host pose. Serialized per goalie (35 B quantized): root — position (x/z), rotation_y, state_enum, five_hole_openness, velocity (x/z); pose — body pitch/roll, each pad's offset + pitch/roll, glove and blocker offsets + yaw/pitch, head yaw. `_apply_interpolated` sets `_sm.current` directly from the snapshot enum (body/head height lookups in `apply_network_pose` key off it, and debug/telemetry readers see the host's state), and adopts `five_hole_openness` from the snapshot. There is **no** client-side goalie AI tick, reaction state machine, or goalie state/reaction RPC. The host's only reaction signal, `GoalieShotReaction.started`, is host-internal — `_on_reaction_started` consumes it to arm the slide event-lockout, and it is never fanned out to clients.
 
 RVH triggers when `_is_puck_in_defensive_zone()` — either the puck is behind the goal line, or it is within `zone_post_z` of the goal line and the horizontal angle to the puck exceeds `rvh_early_angle` (default 60°). This matches the Buckley depth chart's "Defensive" corner zones, which extend slightly in front of the goal line at sharp angles.
 
@@ -305,7 +303,7 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 
 **Trajectory prediction exits on post contact and puck-goalie contact**, not only on carrier-change RPCs. Both controllers call `end_trajectory_prediction()` directly on the relevant physics signal.
 
-**Goalie state transitions and shot reactions are sent via reliable RPCs** (`state_transitioned`, `shot_reaction_started` on `GoalieController`). `apply_state_transition` directly sets the client state machine; `apply_shot_reaction` seeds `_shot_timer` so the butterfly cadence matches the host. The client runs a full copy of the goalie AI every frame — do not add interpolation logic or attempt to derive goalie state from unreliable broadcasts.
+**The goalie AI is host-only; clients render the goalie purely from the interpolated host pose broadcast.** The full pose (root + body/pad/glove/blocker/head) is on the wire every world-state tick, so the broadcast carries the butterfly drop, glove/blocker reach, RVH, and recovery directly — there is no client-side goalie AI tick, reaction state machine, or per-event goalie RPC. Do not reintroduce client-side goalie AI or `apply_state_transition`/`apply_shot_reaction`-style reliable RPCs: the earlier client-AI-with-soft-correction model caused ghost saves and phantom goals when the client's local puck read disagreed with the host. The host's `GoalieShotReaction.started` signal stays host-internal (it arms the slide event-lockout via `_on_reaction_started`).
 
 **Reconcile saves and restores only narrow shot-state fields** (`_state`, follow-through timers, one-timer window, `slapper_charge_timer`). Visual and charge fields come from replay output. The `slapper_charge_timer` save/restore is required because `_update_slapper_charge` ticks the timer inside the replay loop — without it each reconcile re-ticks the unconfirmed inputs and the timer inflates O(N) per broadcast, popping the blade above `slapper_wind_up_height`. Server authority on shot state: if `server_state.shot_state` differs after replay, server wins — `_state` and `_charge_distance` are overwritten. **Two symmetric guards protect in-flight shot transitions:**
 - **`FOLLOW_THROUGH` → aim state blocked.** When the client is in `FOLLOW_THROUGH` it has already sent the release RPC; the host is processing-lag behind. Reverting would loop the follow-through animation every broadcast.
@@ -359,6 +357,9 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 **Planned features, Tier 3 — larger scope:**
 - **Reconnect / slot reservation:** When a peer drops, host marks the slot "reserved" for ~60 s. If the same player (matched by name) reconnects within the window, they reclaim their slot, stats, and team without restarting the game. Requires a pending-reconnect state in `GameManager` and a rejoin handshake in `NetworkManager`.
 - **Shot lag compensation:** Shots currently use the host's blade position at the time the RPC arrives, so high-RTT players see their shots fire from where the blade was, not where they aimed. Need a lag-comp claim path that rewinds blade state to the shooter's input timestamp at release. Deferred until the goalie rewrite stabilizes — goalie reaction tuning shifts with shot-origin changes, so re-tuning on a moving target is wasteful.
+
+**UX / input experiments, smaller scope:**
+- **Locked-mouse aiming mode (settings option):** An optional input mode that keeps the cursor pinned near the skater instead of free-roaming to the window edges — the cursor (and therefore the blade target) stays within a bounded radius of the player and recenters as they skate, so aim never drifts to a far corner of the screen. Would sit next to the existing "Confine Cursor to Window" input option (`PlayerPrefs.confine_mouse`). Implementation needs a capture-relative motion path — accumulate `InputEventMouseMotion.relative`, clamp the virtual aim point to a radius around the skater's screen position, and warp the OS cursor back each frame — rather than reading the absolute OS cursor position the way `local_input_gatherer._get_mouse_world_pos` does today. Floated as a feel experiment by a playtester; not scoped yet.
 
 ---
 

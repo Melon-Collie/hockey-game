@@ -8,17 +8,15 @@ const RESOLUTIONS: Array[Vector2i] = [
 ]
 const FPS_CAP_VALUES: Array[int] = [30, 60, 120, 144, 240, 0]
 
-# Camera projection modes. Index matches OptionButton ordering in
-# OptionsPanel; GameCamera reads camera_mode each tick to flip projection
-# and pitch.
-const CAMERA_MODE_ORTHOGRAPHIC: int = 0
-const CAMERA_MODE_TOP_DOWN: int = 1   # perspective, looking straight down (the original)
-const CAMERA_MODE_TILTED: int = 2     # perspective, pitched 15° forward of straight down
-const CAMERA_MODE_LABELS: Array[String] = [
-	"Top-Down (Orthographic)",
-	"Top-Down (Perspective)",
-	"Tilted (Perspective)",
-]
+# Camera tilt. The game uses a single tilted-perspective camera; the only
+# user-facing camera adjustment is a small tilt nudge around the default.
+# GameCamera reads camera_tilt_deg each tick to drive pitch and the off-axis
+# follow offset. Kept subtle by design — much steeper and the mouse-to-world
+# projection becomes nonlinear enough to break stickhandling, so the slider is
+# clamped to a tight band around the default.
+const CAMERA_TILT_DEFAULT: float = 75.0
+const CAMERA_TILT_MIN: float = 73.0
+const CAMERA_TILT_MAX: float = 77.0
 
 # Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
 # Index matches OptionButton ordering in OptionsPanel.
@@ -127,9 +125,35 @@ var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
 var mouse_sensitivity: float = 1.0
+# First-run onboarding: false until the player opens the player-settings popup
+# for the first time. Drives the one-time "edit your player here" callout on
+# the SideMenu player card.
+var has_opened_player_settings: bool = false
+# Confine the OS cursor to the window so fast cursor flicks (aiming the blade)
+# can't slide off-screen onto a second monitor. On by default; applied via
+# apply_input() at load and on settings Apply. See free_camera.gd for the one
+# place that temporarily overrides mouse_mode (spectator look).
+var confine_mouse: bool = true
+# Custom in-game cursor. The OS white pointer blends into the ice, so we draw a
+# procedural high-contrast (dark-outlined) cursor and set it via
+# Input.set_custom_mouse_cursor in apply_cursor(). Only the default arrow shape
+# is replaced — UI controls that request a pointing hand still get the system
+# one. Tunable in Options → Input → Cursor.
+const CURSOR_STYLE_DOT: int = 0
+const CURSOR_STYLE_CROSSHAIR: int = 1
+const CURSOR_STYLE_RING: int = 2
+const CURSOR_STYLE_LABELS: Array[String] = ["Dot", "Crosshair", "Ring"]
+const CURSOR_SIZE_MIN: int = 16
+const CURSOR_SIZE_MAX: int = 48
+var cursor_style: int = CURSOR_STYLE_DOT
+var cursor_color: Color = Color(1.0, 0.45, 0.1)  # high-contrast orange on white ice
+var cursor_size: int = 28
 var attack_up: bool = false
-var camera_mode: int = CAMERA_MODE_TOP_DOWN
-var fov: float = 75.0  # GameCamera writes this to its Camera3D.fov each tick
+# Accessibility: swap the on-ice self/team/enemy ring colors for a
+# colorblind-safe palette (SkaterHUDCoordinator reads this live).
+var colorblind_rings: bool = false
+var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
+var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
@@ -197,8 +221,14 @@ func save() -> void:
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
+	cfg.set_value("input", "confine_mouse", confine_mouse)
+	cfg.set_value("input", "cursor_style", cursor_style)
+	cfg.set_value("input", "cursor_color", cursor_color)
+	cfg.set_value("input", "cursor_size", cursor_size)
 	cfg.set_value("game", "attack_up", attack_up)
-	cfg.set_value("game", "camera_mode", camera_mode)
+	cfg.set_value("game", "has_opened_player_settings", has_opened_player_settings)
+	cfg.set_value("game", "colorblind_rings", colorblind_rings)
+	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
@@ -254,6 +284,76 @@ func apply_audio() -> void:
 	var crowd_bus := AudioServer.get_bus_index("Crowd")
 	if crowd_bus != -1:
 		AudioServer.set_bus_volume_db(crowd_bus, linear_to_db(maxf(crowd_volume, 0.0001)))
+
+func apply_input() -> void:
+	# CONFINED keeps the cursor visible (the blade is aimed by the on-screen
+	# cursor) but clamps it to the window rect. When off, restore the normal
+	# free-roaming visible cursor. This is also the canonical "un-capture"
+	# target: free_camera calls it when leaving spectator look so it lands in
+	# the configured state rather than forcing VISIBLE.
+	Input.mouse_mode = Input.MOUSE_MODE_CONFINED if confine_mouse else Input.MOUSE_MODE_VISIBLE
+
+# Renders the configured cursor to a small RGBA image and installs it as the
+# default-arrow cursor. Called deferred at load and on settings Apply. Hotspot
+# is the image centre so the aim point sits under the geometry centre.
+func apply_cursor() -> void:
+	var s: int = clampi(cursor_size, CURSOR_SIZE_MIN, CURSOR_SIZE_MAX)
+	var img: Image = Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.0, 0.0, 0.0, 0.0))
+	var fill: Color = cursor_color
+	var outline := Color(0.0, 0.0, 0.0, 0.9)  # dark halo for contrast on white ice
+	var c: float = (s - 1) * 0.5
+	var r: float = c
+	match cursor_style:
+		CURSOR_STYLE_DOT:
+			_draw_disc(img, c, r * 0.40, r * 0.40 + maxf(1.5, s * 0.07), fill, outline)
+		CURSOR_STYLE_RING:
+			_draw_ring(img, c, r * 0.74, maxf(1.6, s * 0.11), fill, outline)
+		CURSOR_STYLE_CROSSHAIR:
+			_draw_crosshair(img, c, r, maxf(1.6, s * 0.09), r * 0.22, fill, outline)
+	var tex := ImageTexture.create_from_image(img)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_ARROW, Vector2(c, c))
+
+# Filled disc of `fill` with a `outline` halo out to outline_r.
+func _draw_disc(img: Image, c: float, fill_r: float, outline_r: float, fill: Color, outline: Color) -> void:
+	var s: int = img.get_width()
+	for y: int in s:
+		for x: int in s:
+			var d: float = Vector2(x - c, y - c).length()
+			if d <= fill_r:
+				img.set_pixel(x, y, fill)
+			elif d <= outline_r:
+				img.set_pixel(x, y, outline)
+
+# Annulus at `radius` of width `thickness`, dark-edged on both sides.
+func _draw_ring(img: Image, c: float, radius: float, thickness: float, fill: Color, outline: Color) -> void:
+	var s: int = img.get_width()
+	var half: float = thickness * 0.5
+	for y: int in s:
+		for x: int in s:
+			var d: float = absf(Vector2(x - c, y - c).length() - radius)
+			if d <= half:
+				img.set_pixel(x, y, fill)
+			elif d <= half + 1.4:
+				img.set_pixel(x, y, outline)
+
+# Four-arm crosshair with a centre gap, dark-outlined.
+func _draw_crosshair(img: Image, c: float, reach: float, thickness: float, gap: float, fill: Color, outline: Color) -> void:
+	var s: int = img.get_width()
+	var half: float = thickness * 0.5
+	for y: int in s:
+		for x: int in s:
+			var dx: float = absf(x - c)
+			var dy: float = absf(y - c)
+			var on_v: bool = dx <= half and dy >= gap and dy <= reach
+			var on_h: bool = dy <= half and dx >= gap and dx <= reach
+			if on_v or on_h:
+				img.set_pixel(x, y, fill)
+				continue
+			var near_v: bool = dx <= half + 1.4 and dy >= gap - 1.4 and dy <= reach + 1.4
+			var near_h: bool = dy <= half + 1.4 and dx >= gap - 1.4 and dx <= reach + 1.4
+			if near_v or near_h:
+				img.set_pixel(x, y, outline)
 
 func apply_video() -> void:
 	if is_fullscreen:
@@ -406,9 +506,16 @@ func _load() -> void:
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
+		confine_mouse = cfg.get_value("input", "confine_mouse", true)
+		cursor_style = clampi(int(cfg.get_value("input", "cursor_style", CURSOR_STYLE_DOT)), 0, CURSOR_STYLE_LABELS.size() - 1)
+		var raw_cursor_color: Variant = cfg.get_value("input", "cursor_color", cursor_color)
+		cursor_color = raw_cursor_color if raw_cursor_color is Color else cursor_color
+		cursor_size = clampi(int(cfg.get_value("input", "cursor_size", cursor_size)), CURSOR_SIZE_MIN, CURSOR_SIZE_MAX)
 		attack_up = cfg.get_value("game", "attack_up", false)
-		camera_mode = clamp(cfg.get_value("game", "camera_mode", CAMERA_MODE_TOP_DOWN), 0, CAMERA_MODE_LABELS.size() - 1)
-		fov = clampf(cfg.get_value("game", "fov", 75.0), FOV_MIN, FOV_MAX)
+		has_opened_player_settings = cfg.get_value("game", "has_opened_player_settings", false)
+		colorblind_rings = cfg.get_value("game", "colorblind_rings", false)
+		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
+		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
@@ -428,6 +535,8 @@ func _load() -> void:
 				bindings[action] = b
 	apply_audio()
 	apply_bindings()
+	call_deferred(&"apply_input")
+	call_deferred(&"apply_cursor")
 	call_deferred(&"apply_video")
 
 
@@ -460,6 +569,16 @@ func mark_tutorial_complete(id: String) -> void:
 
 func reset_tutorial(id: String) -> void:
 	tutorial_completion.erase(id)
+	save()
+
+
+# Latches has_opened_player_settings the first time the player opens the
+# player-settings popup, so the SideMenu's first-run callout shows once and
+# never again. No-op (and no disk write) once already set.
+func mark_player_settings_opened() -> void:
+	if has_opened_player_settings:
+		return
+	has_opened_player_settings = true
 	save()
 
 

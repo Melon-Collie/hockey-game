@@ -24,6 +24,8 @@ var _player_card_panel: PanelContainer = null
 var _player_card_normal: StyleBoxFlat = null
 var _player_card_hover: StyleBoxFlat = null
 var _player_card_edit_icon: TextureRect = null
+var _player_card_callout: Label = null
+var _player_card_callout_tween: Tween = null
 var _player_popup: PlayerSettingsPopup = null
 var _online_popup: OnlinePopup = null
 var _career_screen: CareerStatsScreen = null
@@ -218,6 +220,19 @@ func _build_player_card(parent: VBoxContainer) -> void:
 	_player_card_panel.mouse_exited.connect(func() -> void:
 		_player_card_panel.add_theme_stylebox_override("panel", _player_card_normal)
 		_player_card_edit_icon.modulate = MenuStyle.TEXT_MUTED)
+
+	# First-run callout: point new players at the card so they discover the
+	# name / number / handedness / attributes editor. Pulses to draw the eye and
+	# is dismissed for good the first time the card is opened.
+	if not PlayerPrefs.has_opened_player_settings:
+		_player_card_callout = Label.new()
+		_player_card_callout.text = "↑ New here? Tap to set your name, number & attributes"
+		_player_card_callout.add_theme_font_size_override("font_size", 13)
+		_player_card_callout.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
+		_player_card_callout.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_player_card_callout.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		parent.add_child(_player_card_callout)
+		_player_card_callout_tween = MenuStyle.pulse(_player_card_callout)
 
 
 # A single activity row — text-only, with a 2px teal left accent bar and a
@@ -506,7 +521,11 @@ func _refresh_tutorial_rows() -> void:
 	for child: Node in _tutorial_rows_vbox.get_children():
 		child.queue_free()
 	for tutorial_id: String in TutorialRegistry.ALL_IDS:
-		var label_text: String = TutorialRegistry.get_display_name(tutorial_id)
+		# "Part 1 of 2 · Basics" framing so the picker reads as one ordered
+		# course rather than two standalone options.
+		var seq: String = TutorialRegistry.get_sequence_label(tutorial_id)
+		var label_text: String = "%s · %s" % [seq, TutorialRegistry.get_display_name(tutorial_id)] \
+			if seq != "" else TutorialRegistry.get_display_name(tutorial_id)
 		if PlayerPrefs.is_tutorial_complete(tutorial_id):
 			label_text += "    ✓"
 		var btn := MenuStyle.popup_button(label_text)
@@ -522,7 +541,20 @@ func _refresh_tutorial_rows() -> void:
 # ── Action handlers ──────────────────────────────────────────────────────────
 
 func _on_player_card_pressed() -> void:
+	_dismiss_player_card_callout()
 	_player_popup.open()
+
+
+# Tears down the first-run callout and latches the flag so it never shows again.
+func _dismiss_player_card_callout() -> void:
+	if _player_card_callout == null:
+		return
+	PlayerPrefs.mark_player_settings_opened()
+	if _player_card_callout_tween != null and _player_card_callout_tween.is_running():
+		_player_card_callout_tween.kill()
+	_player_card_callout_tween = null
+	_player_card_callout.queue_free()
+	_player_card_callout = null
 
 
 func _on_player_name_changed(new_name: String) -> void:
