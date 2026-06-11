@@ -19,6 +19,12 @@ class_name ShotReleaseRules
 # this earns no lag-comp benefits.
 const MAX_CLAIM_AGE_S: float = 0.2
 
+# Float-rounding slack on the age boundary. 0.2 isn't representable, so
+# `now - host_timestamp` for a stamp at exactly MAX_CLAIM_AGE_S can land an ULP
+# above it and wrongly reject an at-boundary claim. 1 µs is negligible against
+# the 200 ms window. Applied to both age comparisons so they agree at the edge.
+const _AGE_EPSILON_S: float = 0.000001
+
 # Hard ceiling on the claimed RTT used for the release-point forward advance.
 # Without it, a forged rtt_ms teleports the puck (direction * power * rtt/2)
 # arbitrarily far downfield on every shot.
@@ -59,7 +65,7 @@ static func clamp_back_date(now: float, host_timestamp: float) -> float:
 	if not is_finite(host_timestamp):
 		return 0.0
 	var elapsed: float = now - host_timestamp
-	if elapsed < 0.0 or elapsed > MAX_CLAIM_AGE_S:
+	if elapsed < 0.0 or elapsed > MAX_CLAIM_AGE_S + _AGE_EPSILON_S:
 		return 0.0
 	return elapsed
 
@@ -69,7 +75,7 @@ static func is_timestamp_fresh(now: float, host_timestamp: float) -> bool:
 	if not is_finite(host_timestamp):
 		return false
 	var elapsed: float = now - host_timestamp
-	return elapsed >= 0.0 and elapsed <= MAX_CLAIM_AGE_S
+	return elapsed >= 0.0 and elapsed <= MAX_CLAIM_AGE_S + _AGE_EPSILON_S
 
 
 # Normalize a client-supplied shot direction and clamp its elevation angle.
