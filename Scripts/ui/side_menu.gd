@@ -361,6 +361,10 @@ func _build_popups() -> void:
 	_online_popup.join_pressed.connect(_on_join_pressed)
 	add_child(_online_popup)
 
+	# Steam overlay "Join Game" / accepted invite (and `+connect_lobby` launch)
+	# routes straight into the join flow.
+	SteamManager.lobby_invite_accepted.connect(_on_join_pressed)
+
 	_career_screen = CareerStatsScreen.new()
 	add_child(_career_screen)
 
@@ -618,26 +622,58 @@ func _on_exit_pressed() -> void:
 
 
 func _on_host_pressed() -> void:
+	if not SteamManager.is_available:
+		_loading_screen.show_error("Steam isn't running.\nStart Steam and relaunch to play online.")
+		return
 	GameManager.on_scene_exit()
 	NetworkSimManager.clear_pending()
 	NetworkManager.reset()
+	# Steam lobby creation is async — wait for host_lobby_ready before changing
+	# scene (mirrors the client's existing one-shot wait pattern below).
+	_loading_screen.show_hosting()
+	NetworkManager.host_lobby_ready.connect(_on_host_lobby_ready, CONNECT_ONE_SHOT)
+	NetworkManager.host_lobby_failed.connect(_on_host_lobby_failed, CONNECT_ONE_SHOT)
 	NetworkManager.start_host()
-	get_tree().change_scene_to_file(Constants.SCENE_LOBBY)
 
 
-func _on_join_pressed(ip: String) -> void:
-	PlayerPrefs.last_ip = ip
-	PlayerPrefs.save()
+func _on_host_lobby_ready() -> void:
+	if NetworkManager.host_lobby_failed.is_connected(_on_host_lobby_failed):
+		NetworkManager.host_lobby_failed.disconnect(_on_host_lobby_failed)
+	_loading_screen.close_when_ready(func() -> void:
+		get_tree().change_scene_to_file(Constants.SCENE_LOBBY))
+
+
+func _on_host_lobby_failed(reason: String) -> void:
+	if NetworkManager.host_lobby_ready.is_connected(_on_host_lobby_ready):
+		NetworkManager.host_lobby_ready.disconnect(_on_host_lobby_ready)
+	NetworkManager.reset()
+	_loading_screen.show_error(reason)
+
+
+# `lobby_id` comes from the public lobby browser or a Steam friend invite.
+func _on_join_pressed(lobby_id: int) -> void:
+	if not SteamManager.is_available:
+		_loading_screen.show_error("Steam isn't running.\nStart Steam and relaunch to play online.")
+		return
 	GameManager.on_scene_exit()
 	NetworkSimManager.clear_pending()
 	_disconnect_join_signals()
 	NetworkManager.reset()
-	NetworkManager.start_client(ip)
-	_loading_screen.show_joining(ip)
+	NetworkManager.start_client_lobby(lobby_id)
+	_loading_screen.show_joining_lobby()
+	# Lobby-join phase failure (Steam couldn't enter the lobby) surfaces here;
+	# the four signals after it are the unchanged post-connect handshake waits.
+	NetworkManager.client_lobby_failed.connect(_on_join_lobby_failed, CONNECT_ONE_SHOT)
 	NetworkManager.client_connected.connect(_on_loading_connected, CONNECT_ONE_SHOT)
 	NetworkManager.clock_ready.connect(_on_loading_clock_ready, CONNECT_ONE_SHOT)
 	NetworkManager.lobby_roster_synced.connect(_on_join_got_lobby, CONNECT_ONE_SHOT)
 	NetworkManager.join_in_progress.connect(_on_join_got_game, CONNECT_ONE_SHOT)
+
+
+func _on_join_lobby_failed(reason: String) -> void:
+	_disconnect_join_signals()
+	NetworkManager.reset()
+	_loading_screen.show_error(reason)
 
 
 func _on_join_cancelled() -> void:
@@ -647,6 +683,8 @@ func _on_join_cancelled() -> void:
 
 
 func _disconnect_join_signals() -> void:
+	if NetworkManager.client_lobby_failed.is_connected(_on_join_lobby_failed):
+		NetworkManager.client_lobby_failed.disconnect(_on_join_lobby_failed)
 	if NetworkManager.client_connected.is_connected(_on_loading_connected):
 		NetworkManager.client_connected.disconnect(_on_loading_connected)
 	if NetworkManager.clock_ready.is_connected(_on_loading_clock_ready):

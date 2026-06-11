@@ -10,6 +10,7 @@ var _base_status: String = ""
 var _dot_timer: float = 0.0
 var _dot_count: int = 0
 var _shown_at: float = -1.0
+var _is_error: bool = false
 
 const MIN_DISPLAY_SECS: float = 1.0
 
@@ -67,7 +68,7 @@ func _build_ui() -> void:
 	vbox.add_child(cancel_container)
 
 func _process(delta: float) -> void:
-	if not visible:
+	if not visible or _is_error:
 		return
 	_dot_timer += delta
 	if _dot_timer >= 0.4:
@@ -78,8 +79,38 @@ func _process(delta: float) -> void:
 func show_joining(ip: String) -> void:
 	_subtitle_label.text = "Joining %s" % ip
 	_cancel_btn.visible = true
+	_is_error = false
 	set_status("Connecting")
 	_shown_at = Time.get_ticks_msec() / 1000.0
+	visible = true
+
+# Host spinner while the Steam lobby is being created (no cancel — creation is
+# quick and there's nothing to back out of yet).
+func show_hosting() -> void:
+	_subtitle_label.text = "Hosting"
+	_cancel_btn.visible = false
+	_is_error = false
+	set_status("Creating lobby")
+	_shown_at = Time.get_ticks_msec() / 1000.0
+	visible = true
+
+# Client spinner during the Steam lobby-join + connection handshake.
+func show_joining_lobby() -> void:
+	_subtitle_label.text = "Joining game"
+	_cancel_btn.visible = true
+	_is_error = false
+	set_status("Connecting")
+	_shown_at = Time.get_ticks_msec() / 1000.0
+	visible = true
+
+# Surface a lobby/connection failure in place; the Cancel button dismisses it
+# (wired to the same cancel handler that resets network state).
+func show_error(message: String) -> void:
+	_subtitle_label.text = ""
+	_cancel_btn.visible = true
+	_is_error = true
+	_base_status = message
+	_status_label.text = message
 	visible = true
 
 func close_when_ready(callback: Callable) -> void:
