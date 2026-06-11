@@ -5,11 +5,11 @@ extends RefCounted
 # Slot ring sits just inside RING_OUTER_R. Charge ring is concentric, just
 # outside, with a small gap. Chevron and player name sit below the rings on
 # the screen-down side.
-const RING_SCALE: float          = 2.5   # playtester readability bump; visual only, never a hitbox
-const RING_OUTER_R: float        = 0.45 * RING_SCALE
-const CHARGE_RING_GAP: float     = 0.02 * RING_SCALE
-const CHARGE_RING_OUTER_R: float = 0.49 * RING_SCALE
-const CHARGE_RING_INNER_R: float = CHARGE_RING_OUTER_R - 0.04 * RING_SCALE
+const RING_LINE_SCALE: float     = 2.0   # line-thickness bump for readability; visual only, never a hitbox
+const RING_OUTER_R: float        = 0.45
+const CHARGE_RING_GAP: float     = 0.02
+const CHARGE_RING_OUTER_R: float = 0.49
+const CHARGE_RING_INNER_R: float = CHARGE_RING_OUTER_R - 0.04 * RING_LINE_SCALE
 const _CHARGE_FULL_PULSE_HZ: float = 3.0
 const _CHARGE_LOST_FLASH_DURATION: float = 0.35
 
@@ -144,7 +144,7 @@ func setup(skater: Skater) -> void:
 
 	_ring_mesh = MeshInstance3D.new()
 	_ring_mesh.name = "RingIndicator"
-	_ring_mesh.mesh = _create_ring_mesh(RING_OUTER_R - MenuStyle.HUD_LINE_THIN * RING_SCALE, RING_OUTER_R, 48)
+	_ring_mesh.mesh = _create_ring_mesh(RING_OUTER_R - MenuStyle.HUD_LINE_THIN * RING_LINE_SCALE, RING_OUTER_R, 48)
 	_ring_mesh.position = Vector3.ZERO
 	_ring_mesh.material_override = _make_hud_ice_material()
 	_skater.add_child(_ring_mesh)
