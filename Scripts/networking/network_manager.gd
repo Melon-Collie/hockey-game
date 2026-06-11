@@ -53,6 +53,10 @@ signal host_lobby_failed(reason: String)
 signal client_lobby_failed(reason: String)
 signal client_connected
 signal disconnected_from_server
+# Client: the host refused our request_join (version mismatch, match full).
+# Fires before the host drops the connection so the join UI can show the
+# reason instead of a generic timeout.
+signal join_rejected(reason: String)
 signal peer_joined(peer_id: int)
 signal peer_disconnected(peer_id: int)
 signal world_state_received(data: PackedByteArray)
@@ -199,6 +203,14 @@ var _peer_numbers: Dictionary = {}        # peer_id -> int (host only)
 # the local player edits attributes in offline play.
 var _peer_attributes: Dictionary[int, PlayerAttributes] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
+
+# Host: peers that have connected but not yet sent request_join, keyed to
+# their connect time (local_time()). Swept in _process — a peer that never
+# completes the handshake within _HANDSHAKE_TIMEOUT_S is dropped so it can't
+# hold a lobby slot forever.
+var _pending_handshake: Dictionary[int, float] = {}
+const _HANDSHAKE_TIMEOUT_S: float = 10.0
+const _KICK_FLUSH_DELAY_S: float = 0.5
 # Callable () -> Array. Set by GameManager at startup so the broadcast loop
 # can pull world state without reaching up into the application layer.
 var _world_state_provider: Callable = Callable()
@@ -444,10 +456,12 @@ func connected_peer_ids() -> PackedInt32Array:
 	return multiplayer.get_peers()
 
 # ── Network Signals ───────────────────────────────────────────────────────────
-func _on_peer_connected(_id: int) -> void:
-	pass
+func _on_peer_connected(id: int) -> void:
+	if is_host:
+		_pending_handshake[id] = local_time()
 
 func _on_peer_disconnected(id: int) -> void:
+	_pending_handshake.erase(id)
 	_peer_handedness.erase(id)
 	_peer_names.erase(id)
 	_peer_numbers.erase(id)
@@ -466,7 +480,8 @@ func _on_connected_to_server() -> void:
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
 	_peer_attributes[1] = local_attrs
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
-			local_attrs.speed, local_attrs.agility, local_attrs.size, local_attrs.strength)
+			local_attrs.speed, local_attrs.agility, local_attrs.size, local_attrs.strength,
+			BuildInfo.PROTOCOL_VERSION)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -514,6 +529,17 @@ func prepare_for_new_game() -> void:
 
 func reset() -> void:
 	_close()
+	# Pending Steam lobby one-shots from an aborted host/join attempt must not
+	# survive the reset — a late lobby callback would otherwise assign a stale
+	# SteamMultiplayerPeer into whatever session comes next.
+	if SteamManager.lobby_created.is_connected(_on_steam_lobby_created):
+		SteamManager.lobby_created.disconnect(_on_steam_lobby_created)
+	if SteamManager.lobby_create_failed.is_connected(_on_steam_lobby_create_failed):
+		SteamManager.lobby_create_failed.disconnect(_on_steam_lobby_create_failed)
+	if SteamManager.lobby_joined.is_connected(_on_steam_lobby_joined):
+		SteamManager.lobby_joined.disconnect(_on_steam_lobby_joined)
+	if SteamManager.lobby_join_failed.is_connected(_on_steam_lobby_join_failed):
+		SteamManager.lobby_join_failed.disconnect(_on_steam_lobby_join_failed)
 	multiplayer.multiplayer_peer = null
 	is_host = false
 	game_initiated = false
@@ -522,6 +548,7 @@ func reset() -> void:
 	is_tutorial_mode = false
 	tutorial_id = ""
 	_input_batch_provider = Callable()
+	_pending_handshake.clear()
 	_peer_handedness.clear()
 	_peer_names.clear()
 	_peer_numbers.clear()
@@ -603,6 +630,15 @@ func _process(delta: float) -> void:
 	if not is_host and _clock_sync != null:
 		if _clock_sync.tick(capped_delta):
 			send_ping.rpc_id(1, local_time())
+
+	if is_host and not _pending_handshake.is_empty():
+		var now_s: float = local_time()
+		for pid: int in _pending_handshake.keys():
+			if now_s - _pending_handshake[pid] >= _HANDSHAKE_TIMEOUT_S:
+				_pending_handshake.erase(pid)
+				push_warning("Dropping peer %d: no request_join within %ds" % [pid, int(_HANDSHAKE_TIMEOUT_S)])
+				if multiplayer.multiplayer_peer != null:
+					multiplayer.multiplayer_peer.disconnect_peer(pid)
 
 	_ping_timer += capped_delta
 	if _ping_timer >= _PING_INTERVAL:
@@ -706,16 +742,55 @@ func _broadcast_state() -> void:
 @rpc("any_peer", "reliable")
 func request_join(is_left_handed: bool, player_name: String, jersey_number: int = 10,
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_strength: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
+		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_strength: int = PlayerAttributes.LEVEL_MEDIUM,
+		protocol_version: int = 0) -> void:
+	if not is_host:
+		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
+	# Protocol gate: the wire format is positional binary, so a mixed-version
+	# session decodes garbage that passes the size checks. `protocol_version`
+	# sits last with a default so a pre-handshake build (which omits the arg)
+	# decodes as 0 and gets a clean rejection instead of a silent desync.
+	if protocol_version != BuildInfo.PROTOCOL_VERSION:
+		push_warning("Rejected join from peer %d: protocol %d, host expects %d"
+				% [sender_id, protocol_version, BuildInfo.PROTOCOL_VERSION])
+		kick_peer(sender_id, "Game version mismatch (host is on v%s).\nUpdate to the latest build to play together." % BuildInfo.VERSION)
+		return
+	# Duplicate request_join (lost-ack resend or forged repeat) would re-emit
+	# peer_joined and double-spawn the peer's skater — first join wins.
+	if _peer_names.has(sender_id):
+		return
+	_pending_handshake.erase(sender_id)
 	_peer_handedness[sender_id] = is_left_handed
 	var sanitized_name: String = player_name.strip_edges().left(10)
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
-	_peer_numbers[sender_id] = jersey_number
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength)
+	_peer_numbers[sender_id] = clampi(jersey_number, 0, 99)
+	# Spread validation (not just per-level clamping): a modified client can
+	# send 3/3/3/3 — only picker-reachable spreads are accepted.
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength) \
+			if PlayerAttributes.is_valid_spread(attr_speed, attr_agility, attr_size, attr_strength) \
+			else PlayerAttributes.all_medium()
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
 	peer_joined.emit(sender_id)
+
+
+# Host → rejected peer: carries the human-readable reason ahead of the
+# disconnect so the join UI can show it (the disconnect alone is just a
+# generic timeout from the client's perspective).
+@rpc("authority", "reliable")
+func notify_join_rejected(reason: String) -> void:
+	pending_error = reason
+	join_rejected.emit(reason)
+
+
+# Send a reject reason to a peer, then drop them. The reliable RPC needs a
+# beat to flush before the disconnect, hence the deferred kick.
+func kick_peer(peer_id: int, reason: String) -> void:
+	notify_join_rejected.rpc_id(peer_id, reason)
+	get_tree().create_timer(_KICK_FLUSH_DELAY_S).timeout.connect(func() -> void:
+		if multiplayer.multiplayer_peer != null and peer_id in multiplayer.get_peers():
+			multiplayer.multiplayer_peer.disconnect_peer(peer_id))
 
 func get_peer_handedness(peer_id: int) -> bool:
 	return _peer_handedness.get(peer_id, true)

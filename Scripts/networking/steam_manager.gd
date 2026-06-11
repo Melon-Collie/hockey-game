@@ -143,6 +143,9 @@ func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 	# Advertise the host name so the public browser has something to show.
 	Steam.setLobbyData(lobby_id, "name", "%s's game" % Steam.getPersonaName())
 	Steam.setLobbyData(lobby_id, "game", "mitts")
+	# Stamped so the browser only lists wire-compatible games; the
+	# request_join handshake remains the authoritative version gate.
+	Steam.setLobbyData(lobby_id, "protocol", str(BuildInfo.PROTOCOL_VERSION))
 	lobby_created.emit(lobby_id)
 
 
@@ -158,6 +161,12 @@ func join_lobby(lobby_id: int) -> void:
 
 func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response: int) -> void:
 	if _pending_op != 2:
+		# Late callback after a cancelled join (the host's own create echo also
+		# lands here, but _on_lobby_created already recorded that lobby id). If
+		# Steam actually entered a lobby nobody wants anymore, leave it —
+		# otherwise we linger as a ghost member occupying a slot.
+		if response == 1 and lobby_id != current_lobby_id:
+			Steam.leaveLobby(lobby_id)
 		return
 	_clear_op()
 	if response != 1:  # 1 == k_EChatRoomEnterResponseSuccess
@@ -175,6 +184,8 @@ func request_lobby_list() -> void:
 		return
 	Steam.addRequestLobbyListDistanceFilter(LOBBY_DISTANCE_WORLDWIDE)
 	Steam.addRequestLobbyListStringFilter("game", "mitts", Steam.LOBBY_COMPARISON_EQUAL)
+	Steam.addRequestLobbyListStringFilter("protocol", str(BuildInfo.PROTOCOL_VERSION),
+			Steam.LOBBY_COMPARISON_EQUAL)
 	Steam.requestLobbyList()
 
 

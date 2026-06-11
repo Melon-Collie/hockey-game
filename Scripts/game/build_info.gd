@@ -8,5 +8,13 @@ extends Node
 
 const VERSION: String = "dev"
 
+# Network protocol version, checked in the request_join handshake and stamped
+# on Steam lobbies. Bump this manually whenever the wire format changes
+# (world-state codec layout, input encoding, RPC signatures) — mixed-protocol
+# sessions decode positional binary as garbage that passes size checks, so the
+# host rejects mismatched joiners outright. Independent of VERSION: builds
+# that don't touch the wire keep the same protocol and stay compatible.
+const PROTOCOL_VERSION: int = 1
+
 const RELEASE_TAG: String = "latest"
 const REPO: String = "Melon-Collie/mitts"

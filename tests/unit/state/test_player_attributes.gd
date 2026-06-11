@@ -113,3 +113,35 @@ func test_level_for_each_attribute() -> void:
 	assert_eq(a.level_for(ATTR_AGILITY),  PlayerAttributes.LEVEL_MEDIUM)
 	assert_eq(a.level_for(ATTR_SIZE),     PlayerAttributes.LEVEL_GOOD)
 	assert_eq(a.level_for(ATTR_STRENGTH), PlayerAttributes.LEVEL_BAD)
+
+
+# ── is_valid_spread (host-side join validation) ──────────────────────────────
+
+func test_valid_spread_all_medium() -> void:
+	assert_true(PlayerAttributes.is_valid_spread(2, 2, 2, 2))
+
+
+func test_valid_spread_strength_and_weakness() -> void:
+	assert_true(PlayerAttributes.is_valid_spread(3, 2, 2, 1))
+
+
+func test_valid_spread_single_pick_only() -> void:
+	assert_true(PlayerAttributes.is_valid_spread(3, 2, 2, 2), "strength without weakness")
+	assert_true(PlayerAttributes.is_valid_spread(2, 1, 2, 2), "weakness without strength")
+
+
+func test_invalid_spread_forged_all_good() -> void:
+	assert_false(PlayerAttributes.is_valid_spread(3, 3, 3, 3))
+
+
+func test_invalid_spread_two_goods() -> void:
+	assert_false(PlayerAttributes.is_valid_spread(3, 3, 2, 1))
+
+
+func test_invalid_spread_two_bads() -> void:
+	assert_false(PlayerAttributes.is_valid_spread(3, 1, 1, 2))
+
+
+func test_invalid_spread_out_of_range_levels() -> void:
+	assert_false(PlayerAttributes.is_valid_spread(0, 2, 2, 2))
+	assert_false(PlayerAttributes.is_valid_spread(2, 2, 2, 4))

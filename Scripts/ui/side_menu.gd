@@ -664,6 +664,7 @@ func _on_join_pressed(lobby_id: int) -> void:
 	# Lobby-join phase failure (Steam couldn't enter the lobby) surfaces here;
 	# the four signals after it are the unchanged post-connect handshake waits.
 	NetworkManager.client_lobby_failed.connect(_on_join_lobby_failed, CONNECT_ONE_SHOT)
+	NetworkManager.join_rejected.connect(_on_join_rejected, CONNECT_ONE_SHOT)
 	NetworkManager.client_connected.connect(_on_loading_connected, CONNECT_ONE_SHOT)
 	NetworkManager.clock_ready.connect(_on_loading_clock_ready, CONNECT_ONE_SHOT)
 	NetworkManager.lobby_roster_synced.connect(_on_join_got_lobby, CONNECT_ONE_SHOT)
@@ -676,15 +677,31 @@ func _on_join_lobby_failed(reason: String) -> void:
 	_loading_screen.show_error(reason)
 
 
-func _on_join_cancelled() -> void:
+# Host refused our request_join (version mismatch, match full). Reset
+# immediately — closing our peer now means the host's follow-up disconnect
+# can't fire _on_server_disconnected and yank the error screen away.
+func _on_join_rejected(reason: String) -> void:
 	_disconnect_join_signals()
 	NetworkManager.reset()
+	_loading_screen.show_error(reason)
+
+
+func _on_join_cancelled() -> void:
+	# The host/join flow tears down the live world (GameManager.on_scene_exit
+	# in _on_host_pressed/_on_join_pressed) before the async lobby op, so the
+	# scene behind the loading screen is half-dead — no phase coordinator, no
+	# host-side puck logic. Rebuild free play instead of just hiding the
+	# spinner; the spinner-only version stranded the player in that world.
+	_disconnect_join_signals()
 	_loading_screen.visible = false
+	GameManager.return_to_free_play()
 
 
 func _disconnect_join_signals() -> void:
 	if NetworkManager.client_lobby_failed.is_connected(_on_join_lobby_failed):
 		NetworkManager.client_lobby_failed.disconnect(_on_join_lobby_failed)
+	if NetworkManager.join_rejected.is_connected(_on_join_rejected):
+		NetworkManager.join_rejected.disconnect(_on_join_rejected)
 	if NetworkManager.client_connected.is_connected(_on_loading_connected):
 		NetworkManager.client_connected.disconnect(_on_loading_connected)
 	if NetworkManager.clock_ready.is_connected(_on_loading_clock_ready):
