@@ -135,13 +135,13 @@ func test_far_backhand_target_reaches_farther_than_forehand() -> void:
 	var d: float = STICK_HORIZ_AT_REST + 0.50
 
 	var fore_target := Vector2(shoulder.x - d, shoulder.z)
-	var fore_result: Dictionary = TopHandIK.solve(shoulder, fore_target, -1.0, _cfg())
+	var fore_result: TopHandIK.Result = TopHandIK.solve(shoulder, fore_target, -1.0, _cfg())
 	var fore_blade := Vector2(fore_result.blade.x, fore_result.blade.z)
 	var fore_reach_achieved: float = shoulder.distance_to(
 			Vector3(fore_blade.x, shoulder.y, fore_blade.y))
 
 	var back_target := Vector2(shoulder.x + d, shoulder.z)
-	var back_result: Dictionary = TopHandIK.solve(shoulder, back_target, -1.0, _cfg())
+	var back_result: TopHandIK.Result = TopHandIK.solve(shoulder, back_target, -1.0, _cfg())
 	var back_blade := Vector2(back_result.blade.x, back_result.blade.z)
 	var back_reach_achieved: float = shoulder.distance_to(
 			Vector3(back_blade.x, shoulder.y, back_blade.y))
@@ -199,8 +199,8 @@ func test_close_to_far_continuity_at_stick_horiz_at_rest() -> void:
 	var just_below_target := shoulder_xz_from(shoulder) + forward * (STICK_HORIZ_AT_REST - 0.0005)
 	var just_above_target := shoulder_xz_from(shoulder) + forward * (STICK_HORIZ_AT_REST + 0.0005)
 
-	var below: Dictionary = TopHandIK.solve(shoulder, just_below_target, -1.0, _cfg())
-	var above: Dictionary = TopHandIK.solve(shoulder, just_above_target, -1.0, _cfg())
+	var below: TopHandIK.Result = TopHandIK.solve(shoulder, just_below_target, -1.0, _cfg())
+	var above: TopHandIK.Result = TopHandIK.solve(shoulder, just_above_target, -1.0, _cfg())
 
 	# Hand Y should be nearly identical across the boundary — the CLOSE branch's
 	# ideal_hand_y converges to hand_rest_y as r → stick_horiz_at_rest.
@@ -226,8 +226,8 @@ func test_righty_mirrors_lefty_in_x() -> void:
 	var lefty_target := Vector2(-1.5, -1.2)
 	var righty_target := Vector2(1.5, -1.2)
 
-	var lefty: Dictionary = TopHandIK.solve(lefty_shoulder, lefty_target, -1.0, _cfg())
-	var righty: Dictionary = TopHandIK.solve(righty_shoulder, righty_target, 1.0, _cfg())
+	var lefty: TopHandIK.Result = TopHandIK.solve(lefty_shoulder, lefty_target, -1.0, _cfg())
+	var righty: TopHandIK.Result = TopHandIK.solve(righty_shoulder, righty_target, 1.0, _cfg())
 
 	assert_almost_eq(lefty.hand.x, -righty.hand.x, 0.001, "hand X mirrors")
 	assert_almost_eq(lefty.hand.y, righty.hand.y, 0.001, "hand Y matches")
