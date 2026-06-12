@@ -477,9 +477,12 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_attributes.erase(id)
 	pending_color_votes.erase(id)
 	peer_disconnected.emit(id)
-	# Notify all remaining clients so they remove the stale skater.
-	for peer_id in connected_peer_ids():
-		notify_player_disconnected.rpc_id(peer_id, id)
+	# Notify all remaining clients so they remove the stale skater. Host-only:
+	# the transport relays peer disconnects to clients too, and a client
+	# attempting this authority RPC would just be refused with error spam.
+	if is_host:
+		for peer_id in connected_peer_ids():
+			notify_player_disconnected.rpc_id(peer_id, id)
 
 func _on_connected_to_server() -> void:
 	_connect_timer = -1.0
@@ -500,7 +503,10 @@ func _on_connection_failed() -> void:
 
 func _on_server_disconnected() -> void:
 	push_error("Server disconnected")
-	pending_error = "Lost connection to server."
+	# Keep a more specific reason (host ended the match, kicked) if one
+	# arrived just before the transport closed.
+	if pending_error.is_empty():
+		pending_error = "Lost connection to server."
 	disconnected_from_server.emit()
 	GameManager.return_to_free_play()
 
@@ -801,6 +807,29 @@ func kick_peer(peer_id: int, reason: String) -> void:
 	get_tree().create_timer(_KICK_FLUSH_DELAY_S).timeout.connect(func() -> void:
 		if multiplayer.multiplayer_peer != null and peer_id in multiplayer.get_peers():
 			multiplayer.multiplayer_peer.disconnect_peer(peer_id))
+
+
+# Host announces the match is over before tearing the session down, so clients
+# toast "Host ended the match." instead of a generic connection-loss message.
+# Await it before reset()/quit() — the reliable RPC needs a beat to flush
+# before the peer closes, same as kick_peer.
+func announce_match_end() -> void:
+	if not is_host or is_offline_mode or multiplayer.multiplayer_peer == null:
+		return
+	var sent: bool = false
+	for peer_id: int in connected_peer_ids():
+		notify_match_ended.rpc_id(peer_id)
+		sent = true
+	if sent:
+		await get_tree().create_timer(_KICK_FLUSH_DELAY_S).timeout
+
+
+# Client side of the graceful host shutdown: same routing as
+# _on_server_disconnected, but with a reason that doesn't read like a crash.
+@rpc("authority", "reliable")
+func notify_match_ended() -> void:
+	pending_error = "Host ended the match."
+	GameManager.return_to_free_play()
 
 func get_peer_handedness(peer_id: int) -> bool:
 	return _peer_handedness.get(peer_id, true)
@@ -1274,6 +1303,8 @@ func receive_stats(data: Array) -> void:
 
 @rpc("any_peer", "reliable")
 func request_slot_swap(new_team_id: int, new_slot: int) -> void:
+	if not is_host:
+		return
 	slot_swap_requested.emit(multiplayer.get_remote_sender_id(), new_team_id, new_slot)
 
 @rpc("authority", "reliable")
@@ -1316,6 +1347,8 @@ func send_confirm_slot_swap(peer_id: int, old_team_id: int, old_slot: int,
 
 @rpc("any_peer", "reliable")
 func request_player_ready(is_ready: bool) -> void:
+	if not is_host:
+		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	for remote_id: int in connected_peer_ids():
 		notify_player_ready.rpc_id(remote_id, peer_id, is_ready)
@@ -1333,6 +1366,8 @@ func send_player_ready(is_ready: bool) -> void:
 
 @rpc("any_peer", "reliable")
 func request_rematch_vote(vote: bool) -> void:
+	if not is_host:
+		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	for remote_id: int in connected_peer_ids():
 		notify_rematch_vote.rpc_id(remote_id, peer_id, vote)
@@ -1433,6 +1468,8 @@ func send_lobby_roster(peer_id: int, roster: Array) -> void:
 
 @rpc("any_peer", "reliable")
 func request_color_vote(color_slot: int) -> void:
+	if not is_host:
+		return
 	# Host receives a peer's vote, mirrors it locally, then fans out to all
 	# peers (including the sender) so everyone holds the same vote map.
 	var peer_id: int = multiplayer.get_remote_sender_id()

@@ -240,12 +240,15 @@ func _build_leave_overlay() -> void:
 		var msg: String = "Return to free play?"
 		if NetworkManager.is_host and not NetworkManager.is_offline_mode:
 			msg = "Return to free play? This ends the match for everyone."
-		_show_confirm(msg, GameManager.return_to_free_play))
+		_show_confirm(msg, func() -> void:
+			await NetworkManager.announce_match_end()
+			GameManager.return_to_free_play()))
 	vbox.add_child(free_play_btn)
 
 	var exit_btn := MenuStyle.popup_button("Exit Game")
 	exit_btn.pressed.connect(func() -> void:
 		_show_confirm("Exit game?", func() -> void:
+			await NetworkManager.announce_match_end()
 			GameManager.on_scene_exit()
 			NetworkManager.reset()
 			get_tree().quit()))

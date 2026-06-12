@@ -16,7 +16,10 @@ const VERSION: String = "dev"
 # that don't touch the wire keep the same protocol and stay compatible.
 # v2: wire timestamps f32 seconds -> u32 0.1ms units (world-state header,
 #     skater last_processed_ts, input host_timestamp).
-const PROTOCOL_VERSION: int = 2
+# v3: added notify_match_ended RPC (graceful host shutdown) — Godot identifies
+#     RPCs by index in the name-sorted method list, so adding one shifts every
+#     index after it and breaks cross-build RPC routing.
+const PROTOCOL_VERSION: int = 3
 
 const RELEASE_TAG: String = "latest"
 const REPO: String = "Melon-Collie/mitts"

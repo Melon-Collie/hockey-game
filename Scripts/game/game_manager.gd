@@ -2231,6 +2231,10 @@ func reset_game() -> void:
 
 
 func on_game_reset(new_game_id: String = "") -> void:
+	# The rematch RPC can land while this client is mid scene-transition
+	# (lobby return / disconnect teardown) — guard like sibling RPC handlers.
+	if _state_machine == null:
+		return
 	_apply_reset()
 	_rollover_replay_file_to(new_game_id)
 	# Clear client-side carry state so PuckController stops pinning to blade.

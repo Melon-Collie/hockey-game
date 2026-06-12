@@ -980,10 +980,13 @@ func _on_game_over_free_play() -> void:
 	var msg: String = "Return to free play?"
 	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
 		msg = "Return to free play? This ends the match for everyone."
-	_show_confirm(msg, GameManager.return_to_free_play)
+	_show_confirm(msg, func() -> void:
+		await NetworkManager.announce_match_end()
+		GameManager.return_to_free_play())
 
 func _on_game_over_exit() -> void:
 	_show_confirm("Exit game?", func() -> void:
+		await NetworkManager.announce_match_end()
 		GameManager.on_scene_exit()
 		NetworkManager.reset()
 		get_tree().quit())

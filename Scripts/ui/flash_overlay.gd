@@ -30,6 +30,8 @@ func _build_layer(layer_index: int, initial_color: Color) -> ColorRect:
 
 
 func flash(color: Color, intensity: float = 0.45, duration: float = 0.35) -> void:
+	if not PlayerPrefs.screen_flash:
+		return
 	_flash_rect.color = Color(color.r, color.g, color.b, intensity)
 	_flash_rect.modulate.a = 1.0
 	var t := create_tween()
@@ -38,6 +40,8 @@ func flash(color: Color, intensity: float = 0.45, duration: float = 0.35) -> voi
 
 
 func vignette_pulse(intensity: float, duration: float = 0.5) -> void:
+	if not PlayerPrefs.screen_flash:
+		return
 	_vignette_rect.modulate.a = intensity
 	var t := create_tween()
 	t.tween_property(_vignette_rect, "modulate:a", 0.0, duration) \
