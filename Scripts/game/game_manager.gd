@@ -58,6 +58,10 @@ signal offside_called()
 var _state_machine: GameStateMachine = null
 var _last_emitted_clock_secs: int = -1
 var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
+# Reused peer_id -> position scratch for the per-tick ghost-state and icing
+# checks (host only). The domain calls read it synchronously and never retain
+# it; each call site clears + refills before use.
+var _positions_scratch: Dictionary = {}
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
 # Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
@@ -69,6 +73,13 @@ var _in_replay_locally: bool = false
 # created _state_machine, the sync would otherwise be dropped and the host
 # (only delivered through this path) would never spawn on the client.
 var _pending_existing_players: Array = []
+# Same defense for spawn_remote_skater RPCs: at game start the host's spawn
+# burst (bots + peers assigned after us in the lobby fan-out) can land while
+# _state_machine is still null (scene loading). Each entry is the full
+# argument list of spawn_remote_skater; flushed in on_slot_assigned. Without
+# this the skaters were silently dropped and never appeared on this client —
+# there is no later re-sync.
+var _pending_remote_spawns: Array[Array] = []
 # Wall-clock timestamp of the previous host physics tick. Used to record the
 # inter-tick gap into NetworkTelemetry so F3 can surface host stalls.
 var _last_phys_tick_us: int = 0
@@ -362,8 +373,9 @@ func _update_host_puck_tracking() -> void:
 			_state_machine.notify_puck_carried(carrier_team.team_id,
 					puck.carrier.global_position.z, puck.carrier.global_position.x)
 	elif _state_machine.current_phase == GamePhase.Phase.PLAYING:
+		_registry.fill_positions_by_peer_id(_positions_scratch)
 		_state_machine.check_icing_for_loose_puck(
-				puck.global_position.z, _registry.positions_by_peer_id())
+				puck.global_position.z, _positions_scratch)
 		_consume_pending_faceoff()
 
 
@@ -381,7 +393,8 @@ func _apply_ghost_state() -> void:
 				record.skater.set_ghost(false)
 				_last_ghost_state[peer_id] = false
 		return
-	var positions: Dictionary = {}
+	var positions: Dictionary = _positions_scratch
+	positions.clear()
 	var carrier_peer_id: int = -1
 	for peer_id: int in _registry.all():
 		var record: PlayerRecord = _registry.get_record(peer_id)
@@ -440,6 +453,10 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 	var is_mid_game_promote: bool = _state_machine != null
 	if not is_mid_game_promote:
 		_spawn_world()
+	# Flush stashed roster/spawn payloads now that the world exists — before
+	# the spectator branch, since spectators need the existing skaters spawned
+	# too (previously the spectator early-return skipped the flush entirely).
+	_flush_pending_player_syncs()
 	var peer_id: int = NetworkManager.local_peer_id()
 	if team_id == GameRules.SPECTATOR_TEAM_ID:
 		_become_local_spectator()
@@ -455,11 +472,14 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 			NetworkManager.local_is_left_handed, NetworkManager.local_player_name, true,
 			NetworkManager.local_jersey_number,
 			NetworkManager.get_peer_attributes(peer_id))
-	# Flush any sync_existing_players payload that landed before _spawn_world
-	# ran. Both the GameManager queue (RPC arrived after scene load, while
-	# _state_machine was null) and NetworkManager.pending_join_players (RPC
-	# arrived during scene transition but pending_join_slot was empty when
-	# game_scene._ready ran) are drained here so the host record always lands.
+
+
+# Drains every queue of player data that landed before _spawn_world ran: the
+# GameManager sync queue (RPC arrived after scene load, while _state_machine
+# was null), NetworkManager.pending_join_players (RPC arrived during scene
+# transition but pending_join_slot was empty when game_scene._ready ran), and
+# queued spawn_remote_skater bursts (game-start fan-out racing the scene load).
+func _flush_pending_player_syncs() -> void:
 	if not _pending_existing_players.is_empty():
 		var queued: Array = _pending_existing_players
 		_pending_existing_players = []
@@ -468,6 +488,11 @@ func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_
 		var deferred: Array = NetworkManager.pending_join_players
 		NetworkManager.pending_join_players = []
 		sync_existing_players(deferred)
+	if not _pending_remote_spawns.is_empty():
+		var spawns: Array[Array] = _pending_remote_spawns
+		_pending_remote_spawns = []
+		for args: Array in spawns:
+			callv("spawn_remote_skater", args)
 
 
 func on_player_connected(peer_id: int) -> void:
@@ -491,6 +516,22 @@ func on_player_connected(peer_id: int) -> void:
 		NetworkManager.send_join_in_progress(peer_id, config)
 		NetworkManager.send_slot_assignment(peer_id,
 				pending_slot.get("team_slot", 0), GameRules.SPECTATOR_TEAM_ID,
+				Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
+		NetworkManager.send_sync_existing_players(peer_id, _collect_existing_player_data())
+		return
+	# Roster gate: when both teams are at MAX_PER_TEAM, a mid-game joiner comes
+	# in as a spectator instead of overflowing the roster — the state machine
+	# would otherwise hand out team_slot == MAX_PER_TEAM, and the next faceoff
+	# indexes FACEOFF_OFFSETS out of bounds (host-side script error). If the
+	# spectator gallery is also full, kick with a reason instead.
+	if _state_machine.count_players_on_team(0) >= PlayerRules.MAX_PER_TEAM \
+			and _state_machine.count_players_on_team(1) >= PlayerRules.MAX_PER_TEAM:
+		if _spectator_peers.size() >= GameRules.MAX_SPECTATORS:
+			NetworkManager.kick_peer(peer_id, "Match is full.")
+			return
+		_spectator_peers[peer_id] = true
+		NetworkManager.send_join_in_progress(peer_id, config)
+		NetworkManager.send_slot_assignment(peer_id, 0, GameRules.SPECTATOR_TEAM_ID,
 				Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
 		NetworkManager.send_sync_existing_players(peer_id, _collect_existing_player_data())
 		return
@@ -572,7 +613,14 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		jersey_color: Color, helmet_color: Color, pants_color: Color,
 		is_left_handed: bool, player_name: String, jersey_number: int = 10,
 		attributes: PlayerAttributes = null) -> void:
-	if peer_id == NetworkManager.local_peer_id() or _state_machine == null:
+	if peer_id == NetworkManager.local_peer_id():
+		return
+	if _state_machine == null:
+		# World not built yet (scene loading) — queue instead of dropping;
+		# on_slot_assigned flushes once _spawn_world has run.
+		_pending_remote_spawns.append([peer_id, team_slot, team_id,
+				jersey_color, helmet_color, pants_color,
+				is_left_handed, player_name, jersey_number, attributes])
 		return
 	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
@@ -652,13 +700,10 @@ func _spawn_puck() -> void:
 	puck_controller.set_peer_id_resolver(_resolve_skater_peer_id)
 	# team_id_by_skater dict is owned by PlayerRegistry, which doesn't
 	# exist yet — wired in `_wire_subsystems` below.
+	# Returns the registry's live cached list (rebuilt on roster change) —
+	# building a fresh array per call allocated twice per 240 Hz tick.
 	puck_controller.set_skater_getter(func() -> Array:
-		if _registry == null:
-			return []
-		var skaters: Array = []
-		for r: PlayerRecord in _registry.all().values():
-			skaters.append(r.skater)
-		return skaters)
+		return _registry.skaters() if _registry != null else [])
 	puck_controller.puck_picked_up_by.connect(_on_server_puck_picked_up_by)
 	puck_controller.puck_released_by_carrier.connect(_on_server_puck_released_by_carrier)
 	puck_controller.puck_stripped_from.connect(_on_server_puck_stripped_from)
@@ -698,12 +743,11 @@ func _wire_subsystems() -> void:
 		puck_controller.set_team_id_by_skater(_registry.team_id_by_skater)
 	# Goalie controllers need to scan for opposing skaters near the puck for
 	# the crease-jam butterfly trigger. Same Callable shape as the puck
-	# controller's getter; computed lazily so registry churn is observed.
+	# controller's getter; the registry's live cached list observes roster
+	# churn without rebuilding an array per call (this fired 3-5× per goalie
+	# per 240 Hz tick under crease pressure).
 	var goalie_skater_getter: Callable = func() -> Array:
-		var skaters: Array = []
-		for r: PlayerRecord in _registry.all().values():
-			skaters.append(r.skater)
-		return skaters
+		return _registry.skaters() if _registry != null else []
 	for gc: GoalieController in goalie_controllers:
 		gc.set_skater_getter(goalie_skater_getter)
 	_registry.player_joined.connect(player_joined.emit)
@@ -1672,10 +1716,44 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null or record.skater == null:
 		return
+	# Host-side eligibility gate (ShotReleaseRules). The client already checked
+	# locally, so a rejection here is either a forged RPC or a race (the puck
+	# was picked up / the phase locked just before this landed) — silently
+	# dropping is correct for both. Without these checks a client could fire
+	# `release_puck_one_timer` at any moment and `puck.set_carrier` would
+	# teleport the puck off anyone's stick to the shooter's blade.
+	if puck.carrier != null or puck.pickup_locked or is_movement_locked() or record.skater.is_ghost:
+		return
+	var safe_direction: Vector3 = ShotReleaseRules.sanitize_direction(direction)
+	if safe_direction == Vector3.ZERO:
+		return
+	var controller: SkaterController = record.controller
+	var safe_power: float = ShotReleaseRules.clamp_power(power,
+			controller.max_slapper_power * (1.0 + controller.one_timer_center_power_bonus))
+	var safe_rtt_ms: float = ShotReleaseRules.clamp_rtt_ms(
+			rtt_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
+	# Range gate against the puck the shooter saw: rewind to their interpolated
+	# view when the stamp is fresh, otherwise use the live puck.
+	var now: float = NetworkManager.estimated_host_time()
+	var view_puck_pos: Vector3 = puck.get_puck_position()
+	if _state_buffer_manager != null and _state_buffer_manager.is_ready() \
+			and ShotReleaseRules.is_timestamp_fresh(now, host_timestamp):
+		var snap: WorldSnapshot = _state_buffer_manager.get_state_at(
+				LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms))
+		if snap != null and snap.puck_state != null:
+			view_puck_pos = snap.puck_state.position
+	var zone_world: Vector3 = record.skater.get_slapper_zone_global_position()
+	var puck_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
+	if not ShotReleaseRules.one_timer_in_range(
+			Vector2(zone_world.x, zone_world.z), Vector2(view_puck_pos.x, view_puck_pos.z),
+			controller.slapper_zone_radius, puck_speed, controller.one_timer_leniency_time):
+		return
+	# Sound/replay event below the validation so a rejected RPC can't spam
+	# phantom shot sounds (mirrors on_remote_puck_release).
 	var shot_pos: Vector3 = puck.get_puck_position()
 	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
-	_record_replay_audio_event("shot", shot_pos, power, {"is_slapper": true})
-	_host_release_one_timer(direction, power, record.skater, host_timestamp, rtt_ms, interp_delay_ms)
+	_record_replay_audio_event("shot", shot_pos, safe_power, {"is_slapper": true})
+	_host_release_one_timer(safe_direction, safe_power, record.skater, host_timestamp, safe_rtt_ms, interp_delay_ms)
 
 
 func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
@@ -1690,12 +1768,17 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	var rtt_half: float = rtt_ms / 2000.0
 	# Lag-comp the goalie reaction trigger (see on_remote_puck_release for the
 	# full rationale). One-timers go through the same RPC-back-date flow.
-	var release_back_date: float = maxf(NetworkManager.estimated_host_time() - host_timestamp, 0.0)
+	# clamp_back_date also zeroes the host's own path (host_timestamp = 0 →
+	# stale → 0) — previously that computed `now - 0` and back-dated the goalie
+	# by the whole session on every host one-timer.
+	var release_back_date: float = ShotReleaseRules.clamp_back_date(
+			NetworkManager.estimated_host_time(), host_timestamp)
 	for gc: GoalieController in goalie_controllers:
 		gc.set_pending_reaction_back_date(release_back_date)
 	var saved_goalie_positions: Array[Vector3] = []
 	var saved_goalie_rotations: Array[float] = []
-	if _state_buffer_manager != null and _state_buffer_manager.is_ready() and rtt_ms > 0.0:
+	if _state_buffer_manager != null and _state_buffer_manager.is_ready() and rtt_ms > 0.0 \
+			and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
 		# Goalie was REMOTE-view from the shooter — clients render the goalie
 		# from buffered host snapshots at host_time - interp_delay, so the
 		# shooter saw the goalie at that earlier moment. Rewind to that snapshot
@@ -1738,6 +1821,22 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 			return
 		if _registry.resolve_peer_id(puck.carrier) != shooter_peer_id:
 			return
+	# Clamp every client-supplied parameter before it touches the sim
+	# (ShotReleaseRules): direction normalized + elevation-capped, power capped
+	# to the shooter's attribute-scaled maximum, rtt capped against the host's
+	# own ping measurement (an unclamped rtt forward-teleports the puck tens of
+	# meters via the release advance below).
+	if NetworkManager.is_host:
+		direction = ShotReleaseRules.sanitize_direction(direction)
+		if direction == Vector3.ZERO:
+			return
+		var shooter: PlayerRecord = _registry.get_record(shooter_peer_id)
+		if shooter != null and shooter.controller != null:
+			var max_power: float = shooter.controller.max_slapper_power if is_slapper \
+					else shooter.controller.max_wrister_power
+			power = ShotReleaseRules.clamp_power(power, max_power)
+		rtt_ms = ShotReleaseRules.clamp_rtt_ms(
+				rtt_ms, float(NetworkManager.get_peer_ping_ms(shooter_peer_id)))
 	var sound: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
 	var shot_pos: Vector3 = puck.get_puck_position() if puck != null else Vector3.ZERO
 	SoundManager.play_world(sound, shot_pos, 0.0, 0.04)
@@ -1757,13 +1856,16 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 		# gets the same effective reaction window the shooter perceived
 		# locally. Without this, the host's reaction starts RTT/2 after the
 		# shooter saw the puck leave the stick, eating ~28% of the arm delay
-		# on a 100ms RTT and flipping close-range saves into goals.
-		var release_back_date: float = maxf(NetworkManager.estimated_host_time() - host_timestamp, 0.0)
+		# on a 100ms RTT and flipping close-range saves into goals. Clamped so
+		# a forged/stale stamp (or pre-warmup zero stamp) earns no back-date.
+		var release_back_date: float = ShotReleaseRules.clamp_back_date(
+				NetworkManager.estimated_host_time(), host_timestamp)
 		for gc: GoalieController in goalie_controllers:
 			gc.set_pending_reaction_back_date(release_back_date)
 		var saved_goalie_positions: Array[Vector3] = []
 		var saved_goalie_rotations: Array[float] = []
-		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0:
+		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0 \
+				and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
 			# Goalie is REMOTE-view from the shooter — same derivation as the
 			# one-timer rewind above. The shooter saw the goalie at
 			# host_time - interp_delay (the buffered render path); rewind to
@@ -1880,7 +1982,8 @@ func _on_world_state_received(data: PackedByteArray) -> void:
 		_codec.decode_world_state(data)  # updates _state_machine.current_phase
 	if data.size() < 6:
 		return
-	var host_ts: float = data.decode_float(2)
+	# u32 0.1ms wire units — must match WorldStateCodec's header encoding.
+	var host_ts: float = float(data.decode_u32(2)) / Constants.TIME_WIRE_SCALE
 	# Feed the in-memory ring buffer so this peer's GoalReplayDriver has a
 	# clip to extract when a goal fires. Skipped during the cinematic itself
 	# (NetworkManager.is_replay_mode is mirrored to clients) so we don't
@@ -2063,6 +2166,12 @@ func on_scene_exit() -> void:
 		_registry.clear_state()
 	_state_machine = null
 	_spawner = null
+	# Stale stashes must not survive into the next session — a sync that
+	# landed just as a host vanished mid-join would otherwise be flushed by
+	# the next on_slot_assigned and spawn the wrong roster.
+	_pending_existing_players = []
+	_pending_remote_spawns = []
+	_last_ghost_state.clear()
 	teams.clear()
 	puck = null
 	goals.clear()
@@ -2370,8 +2479,8 @@ func _spawn_bots_from_lobby() -> void:
 	# Host-only. Iterates pending_bot_slots (set by lobby toggles), spawns an
 	# AIController-driven skater per marked slot, and broadcasts a remote-skater
 	# spawn so clients render each bot through their existing RemoteController
-	# pipeline. Synthetic peer_ids in [-6, -1] avoid colliding with real ENet
-	# peers (always positive); send_slot_assignment is skipped because it
+	# pipeline. Synthetic peer_ids from BOT_ID_BASE (10000) upward avoid
+	# colliding with real peers; send_slot_assignment is skipped because it
 	# targets peer_ids and bots have no peer connection.
 	if not NetworkManager.is_host:
 		return

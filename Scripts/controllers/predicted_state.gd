@@ -28,12 +28,13 @@ var upper_body_rotation_y: float
 # by host_timestamp). Mirrors StateBufferManager._find_bracket — same shape,
 # applied to a client-side history instead of the host's ring buffer.
 #
-# Epsilon must exceed the float32 round-trip precision of host_timestamp.
-# last_processed_host_timestamp is serialized as f32 on the wire (world state
-# codec, 4B), so its precision is T × 2^-23 — ~430µs at 1h session time.
-# Local history stores the original f64. 1ms is comfortably above f32 precision
-# for multi-hour sessions and well below the 4.17ms gap between adjacent
-# 240Hz-stamped inputs, so no risk of off-by-one matches.
+# Epsilon must exceed the wire round-trip error of host_timestamp.
+# last_processed_host_timestamp rides the wire as u32 in 0.1ms units
+# (Constants.TIME_WIRE_SCALE), so the worst-case round-trip error against the
+# f64 the local history stores is 0.05ms — constant regardless of session
+# length (the old f32 encoding degraded with host uptime). 1ms is comfortably
+# above that and well below the 4.17ms gap between adjacent 240Hz-stamped
+# inputs, so no risk of off-by-one matches.
 const TS_MATCH_EPSILON: float = 1e-3
 
 static func find_at(history: Array[PredictedState], target_ts: float) -> PredictedState:

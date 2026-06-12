@@ -406,6 +406,11 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 		if cyl != null:
 			cyl.radius = _base_skater_collision_radius * m_size
 			cyl.height = _base_skater_collision_height * m_height
+	# Attribute scaling rewrote the exports the cached configs were built
+	# from — drop them so the next tick rebuilds with the new values.
+	_ik.invalidate_configs()
+	_cached_move_cfg = null
+	_cached_block_move_cfg = null
 	skater.apply_appearance(attrs)
 
 
@@ -480,9 +485,10 @@ func _process_input(input: InputState, delta: float) -> void:
 	# in upper-body-local space, so we WANT the stick to travel with the coiling
 	# torso (otherwise the body rotates underneath a stationary hand and the
 	# coil is invisible).
-	var is_slapper_charge: bool = _sm.get_state() in [
-			SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK,
-			SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK]
+	var pre_state: SkaterStateMachine.State = _sm.get_state()
+	var is_slapper_charge: bool = (
+			pre_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
+			or pre_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK)
 	var blade_world_pre: Vector3
 	var hand_world_pre: Vector3
 	if not is_slapper_charge:
@@ -494,11 +500,10 @@ func _process_input(input: InputState, delta: float) -> void:
 		skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 		skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
 	_ik.update_bottom_hand()
-	# All mesh updates happen after upper body rotation is finalised so look_at
-	# orientations are computed against the correct parent transform this frame.
-	skater.update_stick_mesh()
-	skater.update_arm_mesh()
-	skater.update_bottom_arm_mesh()
+	# Stick/arm mesh updates moved to Skater._process — they're write-only
+	# visuals recomputed from the markers this tick just placed, so one pass
+	# per rendered frame (after all physics ticks) replaces the per-tick (and
+	# per-reconcile-replayed-input) passes that used to run here.
 	if not is_replaying:
 		_pose.update_angular_velocities(delta)
 		# Cosmetic leg gait — derived from velocity, so it's skipped during replay
@@ -524,9 +529,6 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
 	_ik.update_bottom_hand()
-	skater.update_stick_mesh()
-	skater.update_arm_mesh()
-	skater.update_bottom_arm_mesh()
 
 
 # ── Network State ─────────────────────────────────────────────────────────────
@@ -534,6 +536,13 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 # RPC boundary (GameManager.get_world_state), not here.
 func get_network_state() -> SkaterNetworkState:
 	var state := SkaterNetworkState.new()
+	fill_network_state(state)
+	return state
+
+# Writes the current state into a caller-owned instance. StateBufferManager
+# fills its pre-allocated ring slots through this at 240 Hz — allocating a
+# fresh state per capture (get_network_state) defeated the ring's purpose.
+func fill_network_state(state: SkaterNetworkState) -> void:
 	state.position = skater.global_position
 	state.velocity = skater.velocity
 	state.blade_position = skater.get_blade_position()
@@ -548,7 +557,6 @@ func get_network_state() -> SkaterNetworkState:
 	state.is_elevated = skater.is_elevated
 	state.shot_state = _sm.get_state() as int
 	state.shot_charge = _aiming.charge_distance
-	return state
 
 func get_shot_state() -> int:
 	return _sm.get_state()
@@ -577,9 +585,6 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
 	_ik.update_bottom_hand()
-	skater.update_stick_mesh()
-	skater.update_arm_mesh()
-	skater.update_bottom_arm_mesh()
 	# Procedural leg gait — derived from the velocity just applied, exactly as in
 	# live play, so replayed skaters stride instead of gliding rigidly. `delta` is
 	# the replay's virtual-clock advance this frame (slow-mo-scaled, 0 on a paused
@@ -896,7 +901,8 @@ func _effective_one_timer_leniency() -> float:
 	return slapper_zone_radius + puck_xz_speed * one_timer_leniency_time
 
 func _is_in_slapper_state() -> bool:
-	return _sm.get_state() in [State.SLAPPER_CHARGE_WITH_PUCK, State.SLAPPER_CHARGE_WITHOUT_PUCK]
+	var s: SkaterStateMachine.State = _sm.get_state()
+	return s == State.SLAPPER_CHARGE_WITH_PUCK or s == State.SLAPPER_CHARGE_WITHOUT_PUCK
 
 # ── Movement ──────────────────────────────────────────────────────────────────
 func _apply_movement(input: InputState, delta: float) -> void:
@@ -904,7 +910,8 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	skater.is_braking = input.brake
 	skater.is_braced = input.brake
 
-	if _sm.get_state() in [State.SLAPPER_CHARGE_WITH_PUCK, State.SHOT_BLOCKING]:
+	var move_state: SkaterStateMachine.State = _sm.get_state()
+	if move_state == State.SLAPPER_CHARGE_WITH_PUCK or move_state == State.SHOT_BLOCKING:
 		return
 
 	var cfg: SkaterMovementRules.MovementConfig = _movement_config()
@@ -912,7 +919,27 @@ func _apply_movement(input: InputState, delta: float) -> void:
 			skater.velocity, input.move_vector, skater.rotation.y,
 			has_puck, input.brake, delta, cfg)
 
+# Movement configs are cached — _apply_movement runs every 240 Hz tick (and
+# once per reconcile-replayed input), and the source exports change only in
+# apply_attributes. Same pattern as the goalie controller's cached rule
+# configs. The block config is an independent instance, NOT a mutated copy of
+# the shared one — mutating the cached base would corrupt normal skating.
+var _cached_move_cfg: SkaterMovementRules.MovementConfig = null
+var _cached_block_move_cfg: SkaterMovementRules.MovementConfig = null
+
 func _movement_config() -> SkaterMovementRules.MovementConfig:
+	if _cached_move_cfg == null:
+		_cached_move_cfg = _build_movement_config()
+	return _cached_move_cfg
+
+func _block_movement_config() -> SkaterMovementRules.MovementConfig:
+	if _cached_block_move_cfg == null:
+		_cached_block_move_cfg = _build_movement_config()
+		_cached_block_move_cfg.max_speed = max_speed * block_speed_multiplier
+		_cached_block_move_cfg.thrust = thrust * block_speed_multiplier
+	return _cached_block_move_cfg
+
+func _build_movement_config() -> SkaterMovementRules.MovementConfig:
 	var cfg := SkaterMovementRules.MovementConfig.new()
 	cfg.thrust = thrust
 	cfg.friction = friction
@@ -923,12 +950,6 @@ func _movement_config() -> SkaterMovementRules.MovementConfig:
 	cfg.puck_carry_speed_multiplier = puck_carry_speed_multiplier
 	cfg.backward_thrust_multiplier = backward_thrust_multiplier
 	cfg.crossover_thrust_multiplier = crossover_thrust_multiplier
-	return cfg
-
-func _block_movement_config() -> SkaterMovementRules.MovementConfig:
-	var cfg: SkaterMovementRules.MovementConfig = _movement_config()
-	cfg.max_speed = max_speed * block_speed_multiplier
-	cfg.thrust = thrust * block_speed_multiplier
 	return cfg
 
 func _wrister_config() -> ShotMechanics.WristerConfig:

@@ -36,6 +36,11 @@ var _players: Dictionary[int, PlayerRecord] = {}
 var team_id_by_peer: Dictionary[int, int] = {}
 var team_id_by_skater: Dictionary = {}    # Skater object -> team_id
 var peer_id_by_skater: Dictionary = {}    # Skater object -> peer_id
+# Flat skater list for the per-tick scan loops (puck interactions, goalie
+# crease-jam checks). Rebuilt on spawn/remove; consumers read the live
+# reference through their skater-getter Callable and must not mutate it.
+# Rebuilding per call allocated two arrays per invocation at 240 Hz.
+var _skaters_cache: Array[Skater] = []
 var _spawner: ActorSpawner = null
 var _state_machine: GameStateMachine = null
 var _teams: Array[Team] = []
@@ -142,6 +147,7 @@ func spawn(
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
+	_rebuild_skaters_cache()
 	player_added.emit(record)
 	if not is_local:
 		player_joined.emit(record.display_name(), TeamColorRegistry.get_colors(team.color_slot, team.team_id).primary)
@@ -223,6 +229,7 @@ func spawn_bot(
 
 	if _spawn_wireup.is_valid():
 		_spawn_wireup.call(record)
+	_rebuild_skaters_cache()
 	player_added.emit(record)
 	player_joined.emit(record.display_name(), colors.primary)
 	return record
@@ -242,6 +249,7 @@ func remove(peer_id: int) -> PlayerRecord:
 	if record.skater != null:
 		team_id_by_skater.erase(record.skater)
 		peer_id_by_skater.erase(record.skater)
+	_rebuild_skaters_cache()
 	if _state_machine != null:
 		_state_machine.on_player_disconnected(peer_id)
 	if record.controller:
@@ -259,6 +267,18 @@ func get_record(peer_id: int) -> PlayerRecord:
 
 func has(peer_id: int) -> bool:
 	return _players.has(peer_id)
+
+
+# Live reference to the cached skater list — consumers must not mutate it.
+func skaters() -> Array[Skater]:
+	return _skaters_cache
+
+
+func _rebuild_skaters_cache() -> void:
+	_skaters_cache.clear()
+	for r: PlayerRecord in _players.values():
+		if r.skater != null:
+			_skaters_cache.append(r.skater)
 
 
 func all() -> Dictionary[int, PlayerRecord]:
@@ -318,9 +338,16 @@ func ring_relation_for_peer(peer_id: int) -> int:
 # Returns the live players dict as positions for icing/ghost computation.
 func positions_by_peer_id() -> Dictionary:
 	var positions: Dictionary = {}
-	for peer_id: int in _players:
-		positions[peer_id] = _players[peer_id].skater.global_position
+	fill_positions_by_peer_id(positions)
 	return positions
+
+
+# Caller-owned-dictionary variant for per-tick callers (ghost state, icing
+# check) so the 240 Hz host loop doesn't allocate a Dictionary per call.
+func fill_positions_by_peer_id(out: Dictionary) -> void:
+	out.clear()
+	for peer_id: int in _players:
+		out[peer_id] = _players[peer_id].skater.global_position
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
@@ -363,3 +390,4 @@ func clear_state() -> void:
 	team_id_by_peer.clear()
 	team_id_by_skater.clear()
 	peer_id_by_skater.clear()
+	_skaters_cache.clear()

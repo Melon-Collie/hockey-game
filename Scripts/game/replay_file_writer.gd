@@ -12,11 +12,11 @@ extends RefCounted
 #                                              goalie wire format expanded for
 #                                              full pose authoritative pose
 #                                              (12 B → 40 B per goalie block)
-#   [ FORMAT_VERSION    : u8           ]    -- currently 1; reader rejects others
+#   [ FORMAT_VERSION    : u8           ]    -- currently 2; reader rejects others
 #   [ HEADER LENGTH     : u32 LE       ]
 #   [ HEADER JSON       : N bytes      ]    -- game_id, build_version, roster, …
 #   ([ FRAME LENGTH     : u32 LE       ]
-#    [ host_ts          : f32 LE       ]
+#    [ host_ts          : u32 LE       ]    -- 0.1ms units (TIME_WIRE_SCALE)
 #    [ kind             : u8           ]    -- KIND_WORLD_STATE | KIND_EVENT
 #    [ payload          : (len-5) bytes])*
 #   [ END_OF_RECORDS    : u32 LE = 0   ]    -- sentinel marking clean shutdown
@@ -37,7 +37,10 @@ extends RefCounted
 # `static var` initialized once at class load. Same access pattern
 # (ReplayFileWriter.MAGIC) for callers.
 static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89, 51])  # "MREPLAY3"
-const FORMAT_VERSION: int = 1
+# v2: frame/world-state timestamps f32 seconds -> u32 0.1ms units (matches
+#     BuildInfo.PROTOCOL_VERSION 2's wire change; the embedded world-state
+#     packets carry the new header).
+const FORMAT_VERSION: int = 2
 const KIND_WORLD_STATE: int = 0
 const KIND_EVENT: int = 1
 const FRAME_INNER_HEADER_SIZE: int = 5  # host_ts (4) + kind (1)
@@ -142,7 +145,9 @@ func _enqueue(host_ts: float, kind: int, payload: PackedByteArray) -> void:
 	var record := PackedByteArray()
 	record.resize(4 + FRAME_INNER_HEADER_SIZE)
 	record.encode_u32(0, inner_size)
-	record.encode_float(4, host_ts)
+	# u32 0.1ms units (format v2) — matches the wire-timestamp encoding so
+	# multi-hour recordings keep constant timestamp precision.
+	record.encode_u32(4, roundi(maxf(host_ts, 0.0) * Constants.TIME_WIRE_SCALE))
 	record.encode_u8(8, kind)
 	record.append_array(payload)
 	_mutex.lock()
@@ -159,9 +164,9 @@ func _enqueue(host_ts: float, kind: int, payload: PackedByteArray) -> void:
 # reader to detect via missing END_OF_RECORDS.
 #
 # Flushing after every drain (rather than only on shutdown) bounds the
-# crash-recovery loss to a single batch (~25 ms of frames at the broadcast
-# rate) instead of whatever the OS happened to buffer. Cost is ~40 syscalls/
-# sec at 25 ms broadcast cadence; negligible vs. the data-recovery benefit.
+# crash-recovery loss to a single batch instead of whatever the OS happened
+# to buffer. Cost is up to ~120 user-space flushes/sec at the 120 Hz
+# broadcast cadence; negligible vs. the data-recovery benefit.
 func _worker_loop() -> void:
 	while true:
 		_semaphore.wait()

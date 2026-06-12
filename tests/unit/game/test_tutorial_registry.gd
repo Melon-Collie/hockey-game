@@ -22,8 +22,8 @@ func test_each_registered_id_has_steps() -> void:
 
 func test_each_registered_id_has_display_name() -> void:
 	for id: String in TutorialRegistry.ALL_IDS:
-		var name: String = TutorialRegistry.get_display_name(id)
-		assert_ne(name, "",
+		var display_name: String = TutorialRegistry.get_display_name(id)
+		assert_ne(display_name, "",
 				"tutorial '%s' has no display name" % id)
 
 

@@ -96,7 +96,7 @@ var puck_mode: String = "—"
 # heavy Jolt frame, etc.). Steady state at 240Hz is ~4.17ms; a real stall shows
 # up as a single large `tick max` sample with subsequent catch-up ticks at
 # near-zero gap. Broadcast interval is wall-clock between consecutive
-# `_broadcast_state()` calls — should track the physics-driven 25ms cadence.
+# `_broadcast_state()` calls — should track the ~8.3ms cadence at 120 Hz.
 var host_physics_tick_p95_ms: float = 0.0
 var host_physics_tick_p99_ms: float = 0.0
 var host_physics_tick_max_ms: float = 0.0
@@ -104,7 +104,7 @@ var broadcast_interval_p95_ms: float = 0.0
 var _phys_tick_samples_us: Array[int] = []
 var _bcast_interval_samples_us: Array[int] = []
 const PHYS_TICK_WINDOW: int = 240   # 1s at 240Hz
-const BCAST_INTERVAL_WINDOW: int = 40  # 1s at 40Hz
+const BCAST_INTERVAL_WINDOW: int = 120  # 1s at 120Hz
 
 # ── Static call sites (no-op when not in a game session) ─────────────────────
 static func record_world_state() -> void:
@@ -124,7 +124,7 @@ static func record_bytes_sent(n: int) -> void:
 static func record_bytes_received(n: int) -> void:
 	if instance: instance._bytes_received_window += n
 
-const QUEUE_DEPTH_WINDOW: int = 80  # 2 s at 40 Hz
+const QUEUE_DEPTH_WINDOW: int = 240  # 2 s at the 120 Hz broadcast rate
 
 static func record_queue_depth(depth: int) -> void:
 	if instance == null:
@@ -216,7 +216,7 @@ static func record_host_physics_tick_us(us: int) -> void:
 		instance._phys_tick_samples_us.pop_front()
 
 # Wall-clock microseconds between consecutive `_broadcast_state()` calls on the
-# host. Should track the 25ms (40Hz) physics-driven cadence.
+# host. Should track the ~8.3ms (120Hz) physics-driven cadence.
 static func record_broadcast_interval_us(us: int) -> void:
 	if instance == null:
 		return

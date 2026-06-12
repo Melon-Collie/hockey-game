@@ -53,6 +53,10 @@ signal host_lobby_failed(reason: String)
 signal client_lobby_failed(reason: String)
 signal client_connected
 signal disconnected_from_server
+# Client: the host refused our request_join (version mismatch, match full).
+# Fires before the host drops the connection so the join UI can show the
+# reason instead of a generic timeout.
+signal join_rejected(reason: String)
 signal peer_joined(peer_id: int)
 signal peer_disconnected(peer_id: int)
 signal world_state_received(data: PackedByteArray)
@@ -187,6 +191,14 @@ var pending_period_duration: float = GameRules.PERIOD_DURATION
 var pending_ot_enabled: bool = GameRules.OT_ENABLED
 var pending_rule_set: int = GameRules.DEFAULT_RULE_SET
 var pending_join_players: Array = []     # sync_existing_players data for join-in-progress
+
+# Client: true between learning that a Hockey-scene (re)load is coming
+# (join-in-progress / game-start RPC) and the new scene's on_game_scene_ready.
+# Forces assign_player_slot / sync_existing_players into their stash path —
+# the scene-path check alone passes when joining FROM free play (the dying
+# scene is also Hockey.tscn), which spawned the world into a scene about to
+# be freed.
+var scene_swap_pending: bool = false
 # Path to a .mreplay set by the main-menu replay browser before changing scene
 # to the viewer. Cleared by ReplayViewer._ready after consumption.
 var pending_replay_path: String = ""
@@ -199,6 +211,14 @@ var _peer_numbers: Dictionary = {}        # peer_id -> int (host only)
 # the local player edits attributes in offline play.
 var _peer_attributes: Dictionary[int, PlayerAttributes] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
+
+# Host: peers that have connected but not yet sent request_join, keyed to
+# their connect time (local_time()). Swept in _process — a peer that never
+# completes the handshake within _HANDSHAKE_TIMEOUT_S is dropped so it can't
+# hold a lobby slot forever.
+var _pending_handshake: Dictionary[int, float] = {}
+const _HANDSHAKE_TIMEOUT_S: float = 10.0
+const _KICK_FLUSH_DELAY_S: float = 0.5
 # Callable () -> Array. Set by GameManager at startup so the broadcast loop
 # can pull world state without reaching up into the application layer.
 var _world_state_provider: Callable = Callable()
@@ -426,6 +446,7 @@ func _on_steam_lobby_join_failed(reason: String) -> void:
 	client_lobby_failed.emit(reason)
 
 func on_game_scene_ready() -> void:
+	scene_swap_pending = false
 	if is_host:
 		host_ready.emit()
 
@@ -444,10 +465,12 @@ func connected_peer_ids() -> PackedInt32Array:
 	return multiplayer.get_peers()
 
 # ── Network Signals ───────────────────────────────────────────────────────────
-func _on_peer_connected(_id: int) -> void:
-	pass
+func _on_peer_connected(id: int) -> void:
+	if is_host:
+		_pending_handshake[id] = local_time()
 
 func _on_peer_disconnected(id: int) -> void:
+	_pending_handshake.erase(id)
 	_peer_handedness.erase(id)
 	_peer_names.erase(id)
 	_peer_numbers.erase(id)
@@ -466,7 +489,8 @@ func _on_connected_to_server() -> void:
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
 	_peer_attributes[1] = local_attrs
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
-			local_attrs.speed, local_attrs.agility, local_attrs.size, local_attrs.strength)
+			local_attrs.speed, local_attrs.agility, local_attrs.size, local_attrs.strength,
+			BuildInfo.PROTOCOL_VERSION)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -514,6 +538,17 @@ func prepare_for_new_game() -> void:
 
 func reset() -> void:
 	_close()
+	# Pending Steam lobby one-shots from an aborted host/join attempt must not
+	# survive the reset — a late lobby callback would otherwise assign a stale
+	# SteamMultiplayerPeer into whatever session comes next.
+	if SteamManager.lobby_created.is_connected(_on_steam_lobby_created):
+		SteamManager.lobby_created.disconnect(_on_steam_lobby_created)
+	if SteamManager.lobby_create_failed.is_connected(_on_steam_lobby_create_failed):
+		SteamManager.lobby_create_failed.disconnect(_on_steam_lobby_create_failed)
+	if SteamManager.lobby_joined.is_connected(_on_steam_lobby_joined):
+		SteamManager.lobby_joined.disconnect(_on_steam_lobby_joined)
+	if SteamManager.lobby_join_failed.is_connected(_on_steam_lobby_join_failed):
+		SteamManager.lobby_join_failed.disconnect(_on_steam_lobby_join_failed)
 	multiplayer.multiplayer_peer = null
 	is_host = false
 	game_initiated = false
@@ -522,6 +557,7 @@ func reset() -> void:
 	is_tutorial_mode = false
 	tutorial_id = ""
 	_input_batch_provider = Callable()
+	_pending_handshake.clear()
 	_peer_handedness.clear()
 	_peer_names.clear()
 	_peer_numbers.clear()
@@ -532,6 +568,7 @@ func reset() -> void:
 	pending_lobby_roster = []
 	pending_join_slot = {}
 	pending_join_players = []
+	scene_swap_pending = false
 	pending_home_color_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
 	pending_away_color_slot = TeamColorRegistry.DEFAULT_AWAY_SLOT
 	pending_color_votes = {}
@@ -603,6 +640,15 @@ func _process(delta: float) -> void:
 	if not is_host and _clock_sync != null:
 		if _clock_sync.tick(capped_delta):
 			send_ping.rpc_id(1, local_time())
+
+	if is_host and not _pending_handshake.is_empty():
+		var now_s: float = local_time()
+		for pid: int in _pending_handshake.keys():
+			if now_s - _pending_handshake[pid] >= _HANDSHAKE_TIMEOUT_S:
+				_pending_handshake.erase(pid)
+				push_warning("Dropping peer %d: no request_join within %ds" % [pid, int(_HANDSHAKE_TIMEOUT_S)])
+				if multiplayer.multiplayer_peer != null:
+					multiplayer.multiplayer_peer.disconnect_peer(pid)
 
 	_ping_timer += capped_delta
 	if _ping_timer >= _PING_INTERVAL:
@@ -706,16 +752,55 @@ func _broadcast_state() -> void:
 @rpc("any_peer", "reliable")
 func request_join(is_left_handed: bool, player_name: String, jersey_number: int = 10,
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_strength: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
+		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_strength: int = PlayerAttributes.LEVEL_MEDIUM,
+		protocol_version: int = 0) -> void:
+	if not is_host:
+		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
+	# Protocol gate: the wire format is positional binary, so a mixed-version
+	# session decodes garbage that passes the size checks. `protocol_version`
+	# sits last with a default so a pre-handshake build (which omits the arg)
+	# decodes as 0 and gets a clean rejection instead of a silent desync.
+	if protocol_version != BuildInfo.PROTOCOL_VERSION:
+		push_warning("Rejected join from peer %d: protocol %d, host expects %d"
+				% [sender_id, protocol_version, BuildInfo.PROTOCOL_VERSION])
+		kick_peer(sender_id, "Game version mismatch (host is on v%s).\nUpdate to the latest build to play together." % BuildInfo.VERSION)
+		return
+	# Duplicate request_join (lost-ack resend or forged repeat) would re-emit
+	# peer_joined and double-spawn the peer's skater — first join wins.
+	if _peer_names.has(sender_id):
+		return
+	_pending_handshake.erase(sender_id)
 	_peer_handedness[sender_id] = is_left_handed
 	var sanitized_name: String = player_name.strip_edges().left(10)
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
-	_peer_numbers[sender_id] = jersey_number
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength)
+	_peer_numbers[sender_id] = clampi(jersey_number, 0, 99)
+	# Spread validation (not just per-level clamping): a modified client can
+	# send 3/3/3/3 — only picker-reachable spreads are accepted.
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_strength) \
+			if PlayerAttributes.is_valid_spread(attr_speed, attr_agility, attr_size, attr_strength) \
+			else PlayerAttributes.all_medium()
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
 	peer_joined.emit(sender_id)
+
+
+# Host → rejected peer: carries the human-readable reason ahead of the
+# disconnect so the join UI can show it (the disconnect alone is just a
+# generic timeout from the client's perspective).
+@rpc("authority", "reliable")
+func notify_join_rejected(reason: String) -> void:
+	pending_error = reason
+	join_rejected.emit(reason)
+
+
+# Send a reject reason to a peer, then drop them. The reliable RPC needs a
+# beat to flush before the disconnect, hence the deferred kick.
+func kick_peer(peer_id: int, reason: String) -> void:
+	notify_join_rejected.rpc_id(peer_id, reason)
+	get_tree().create_timer(_KICK_FLUSH_DELAY_S).timeout.connect(func() -> void:
+		if multiplayer.multiplayer_peer != null and peer_id in multiplayer.get_peers():
+			multiplayer.multiplayer_peer.disconnect_peer(peer_id))
 
 func get_peer_handedness(peer_id: int) -> bool:
 	return _peer_handedness.get(peer_id, true)
@@ -831,6 +916,12 @@ func receive_pickup_claim(host_timestamp: float, interp_delay_ms: float) -> void
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
+	# Stamp plausibility against the host's own ping for this peer — closes
+	# the timestamp-shopping window the absolute age cap leaves open (see
+	# LagCompRewind). Applied at the trust boundary so all claim resolvers
+	# inherit it.
+	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		return
 	pickup_claim_received.emit(peer_id, host_timestamp, interp_delay_ms)
 
 func send_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
@@ -844,6 +935,8 @@ func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
+	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		return
 	poke_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
 func send_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
@@ -857,6 +950,8 @@ func receive_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_
 	if not is_host:
 		return
 	var hitter_peer_id: int = multiplayer.get_remote_sender_id()
+	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(hitter_peer_id))):
+		return
 	hit_claim_received.emit(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
 
 func start_replay_mode(initial_ts: float) -> void:
@@ -1017,7 +1112,7 @@ func on_queue_depth_received(depth: int) -> void:
 @rpc("authority", "reliable")
 func assign_player_slot(team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color) -> void:
 	var scene := get_tree().current_scene
-	if not is_host and (scene == null or scene.scene_file_path != Constants.SCENE_HOCKEY):
+	if not is_host and (scene_swap_pending or scene == null or scene.scene_file_path != Constants.SCENE_HOCKEY):
 		pending_join_slot = { "team_slot": team_slot, "team_id": team_id,
 			"jersey_color": jersey_color, "helmet_color": helmet_color, "pants_color": pants_color }
 		return
@@ -1034,7 +1129,7 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_colo
 @rpc("authority", "reliable")
 func sync_existing_players(player_data: Array) -> void:
 	var scene := get_tree().current_scene
-	if not is_host and (scene == null or scene.scene_file_path != Constants.SCENE_HOCKEY):
+	if not is_host and (scene_swap_pending or scene == null or scene.scene_file_path != Constants.SCENE_HOCKEY):
 		pending_join_players = player_data
 		return
 	existing_players_synced.emit(player_data)
@@ -1268,6 +1363,9 @@ func notify_join_in_progress(p_num_periods: int, p_period_duration: float,
 	pending_home_color_slot = p_home_color_slot
 	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
+	# The Hockey scene is about to be (re)loaded for this join — stash any
+	# slot/roster RPCs that land before the new scene's _ready.
+	scene_swap_pending = true
 	join_in_progress.emit({
 		"num_periods": p_num_periods,
 		"period_duration": p_period_duration,
@@ -1298,6 +1396,8 @@ func notify_game_start(p_num_periods: int, p_period_duration: float,
 	pending_home_color_slot = p_home_color_slot
 	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
+	# Lobby → Hockey transition incoming; same stash-forcing as join-in-progress.
+	scene_swap_pending = true
 	game_started.emit({
 		"num_periods": p_num_periods,
 		"period_duration": p_period_duration,

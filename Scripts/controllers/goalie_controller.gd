@@ -526,6 +526,13 @@ func set_pending_reaction_back_date(seconds: float) -> void:
 # straight onto the goalie node. Bounded at 30 entries (~0.25 s at 120 Hz) to
 # match the skater buffer.
 var _state_buffer: Array[BufferedGoalieState] = []
+# Reused scratch objects for the per-tick client interpolation (both state
+# builders rewrite every field on each call, so no stale values leak).
+var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
+var _scratch_state := GoalieNetworkState.new()
+# Per-physics-frame memo for _opposing_shooter_near_puck (host hot path).
+var _shooter_near_memo_frame: int = -1
+var _shooter_near_memo: bool = false
 var is_extrapolating: bool = false
 
 func get_buffer_depth() -> int:
@@ -1118,6 +1125,20 @@ func _lunge_progress() -> float:
 # `loose_puck_radius`. Own-team possession / own-team retrieves don't count
 # as shooting threats.
 func _opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
+	# Per-tick memo: five predicates call this every _physics_process with the
+	# same radius, and nothing it reads changes within a tick. Only the common
+	# radius is memoized so an unusual caller still computes exactly.
+	var frame: int = Engine.get_physics_frames()
+	var memoizable: bool = loose_puck_radius == slide_loose_puck_shooter_radius
+	if memoizable and frame == _shooter_near_memo_frame:
+		return _shooter_near_memo
+	var result: bool = _compute_opposing_shooter_near_puck(loose_puck_radius)
+	if memoizable:
+		_shooter_near_memo_frame = frame
+		_shooter_near_memo = result
+	return result
+
+func _compute_opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
 	var carrier: Skater = puck.get_carrier()
 	if carrier != null:
 		if team_id != -1 and carrier.get_team_id() == team_id:
@@ -1760,6 +1781,11 @@ func _on_reaction_started(_impact_x: float, _impact_y: float, _is_elevated: bool
 # RPC boundary (GameManager.get_world_state), not here.
 func get_state() -> GoalieNetworkState:
 	var s := GoalieNetworkState.new()
+	fill_state(s)
+	return s
+
+# Caller-owned-instance variant for the 240 Hz StateBufferManager capture.
+func fill_state(s: GoalieNetworkState) -> void:
 	s.position_x = goalie.global_position.x
 	s.position_z = goalie.global_position.z
 	s.rotation_y = goalie.get_goalie_rotation_y()
@@ -1792,7 +1818,6 @@ func get_state() -> GoalieNetworkState:
 	s.blocker_yaw = b_rot.y
 	s.blocker_pitch = b_rot.x
 	s.head_yaw = goalie.get_head_yaw()
-	return s
 
 func apply_state(network_state: GoalieNetworkState, host_ts: float) -> void:
 	if is_server:
@@ -1821,7 +1846,7 @@ func _interpolate_and_apply() -> void:
 		return
 	var render_time: float = NetworkManager.estimated_host_time() - interpolation_delay
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
-			_state_buffer, render_time)
+			_state_buffer, render_time, _scratch_bracket)
 	if bracket == null:
 		is_extrapolating = false
 		return
@@ -1836,8 +1861,11 @@ func _interpolate_and_apply() -> void:
 	_apply_interpolated(interpolated)
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
 
+# Fills and returns the reused _scratch_state — every field is written (lerp
+# covers all fields; extrapolate copy_froms), keeping the 240 Hz render path
+# allocation-free.
 func _lerp_goalie_state(from_s: GoalieNetworkState, to_s: GoalieNetworkState, t: float) -> GoalieNetworkState:
-	var r := GoalieNetworkState.new()
+	var r := _scratch_state
 	r.position_x = lerpf(from_s.position_x, to_s.position_x, t)
 	r.position_z = lerpf(from_s.position_z, to_s.position_z, t)
 	r.rotation_y = lerp_angle(from_s.rotation_y, to_s.rotation_y, t)
@@ -1870,7 +1898,7 @@ func _extrapolate_goalie_state(newest: GoalieNetworkState, dt: float) -> GoalieN
 	# broadcast linear velocity. Brief gap holds (≤ extrapolation_max_ms) read
 	# as a momentary freeze on the body parts — far better than wildly
 	# extrapolating arm sweep angles past their intended endpoints.
-	var r := GoalieNetworkState.new()
+	var r := _scratch_state
 	r.copy_from(newest)
 	r.position_x = newest.position_x + newest.velocity_x * dt
 	r.position_z = newest.position_z + newest.velocity_z * dt

@@ -147,6 +147,24 @@ static func from_strength_weakness(strength_pick: int, weakness_pick: int) -> Pl
 			levels[Attribute.SIZE], levels[Attribute.STRENGTH])
 
 
+# Whether a raw level tuple is reachable through the strength+weakness picker:
+# every level in range, at most one GOOD, at most one BAD. The host validates
+# joiner attributes with this — per-level clamping alone still admits forged
+# spreads like 3/3/3/3 (+7% speed +10% agility +18% size +25% strength over
+# everyone). Out-of-grammar spreads fall back to all_medium().
+static func is_valid_spread(p_speed: int, p_agility: int, p_size: int, p_strength: int) -> bool:
+	var goods: int = 0
+	var bads: int = 0
+	for level: int in [p_speed, p_agility, p_size, p_strength]:
+		if level < LEVEL_MIN or level > LEVEL_MAX:
+			return false
+		if level == LEVEL_GOOD:
+			goods += 1
+		elif level == LEVEL_BAD:
+			bads += 1
+	return goods <= 1 and bads <= 1
+
+
 func level_for(attr: int) -> int:
 	match attr:
 		Attribute.SPEED:    return speed

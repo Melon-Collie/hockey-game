@@ -235,7 +235,7 @@ func is_slide_finished() -> bool:
 # outer edge lands on the post rather than overhanging it. Threats heading wide
 # park the lead pad at the post (sealed with the edge, no wasted overhang).
 # Threats mid-net track threat.x directly.
-func clamp_lateral_target(target_x: float, goal_center_x: float, net_half_width: float, pad_edge_extent: float) -> float:
-	var max_x: float = goal_center_x + (net_half_width - pad_edge_extent)
-	var min_x: float = goal_center_x - (net_half_width - pad_edge_extent)
+func clamp_lateral_target(target_x: float, goal_center_x: float, net_half_width: float, edge_extent: float) -> float:
+	var max_x: float = goal_center_x + (net_half_width - edge_extent)
+	var min_x: float = goal_center_x - (net_half_width - edge_extent)
 	return clampf(target_x, min_x, max_x)

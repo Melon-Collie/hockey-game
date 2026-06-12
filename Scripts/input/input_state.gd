@@ -44,7 +44,11 @@ func to_array() -> Array:
 
 func to_bytes() -> PackedByteArray:
 	var b := PackedByteArray(); b.resize(BYTES_SIZE)
-	b.encode_float(0, host_timestamp)
+	# host_timestamp rides as u32 in 0.1ms units (Constants.TIME_WIRE_SCALE):
+	# constant precision over ~119h vs f32's uptime-degrading ULP, which would
+	# start quantizing adjacent 240 Hz stamps equal (dedupe-dropped as
+	# duplicates) after ~4.6h of host uptime.
+	b.encode_u32(0, roundi(maxf(host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE))
 	b.encode_float(4, delta)
 	b.encode_s16(8,  clampi(roundi(move_vector.x * 1000.0), -32768, 32767))
 	b.encode_s16(10, clampi(roundi(move_vector.y * 1000.0), -32768, 32767))
@@ -65,10 +69,15 @@ func to_bytes() -> PackedByteArray:
 
 static func from_bytes(b: PackedByteArray, offset: int = 0) -> InputState:
 	var s := InputState.new()
-	s.host_timestamp     = b.decode_float(offset)
+	s.host_timestamp     = float(b.decode_u32(offset)) / Constants.TIME_WIRE_SCALE
 	s.delta              = b.decode_float(offset + 4)
 	s.move_vector.x      = b.decode_s16(offset + 8)  / 1000.0
 	s.move_vector.y      = b.decode_s16(offset + 10) / 1000.0
+	# The s16 wire range admits magnitudes up to ~32.7 and the movement rules
+	# consume the vector unnormalized as thrust direction — clamp to the unit
+	# disc at the trust boundary so a forged long vector can't buy instant
+	# 0-to-max acceleration / one-tick 180° flips in a momentum-skating game.
+	s.move_vector        = s.move_vector.limit_length(1.0)
 	s.mouse_world_pos.x  = b.decode_s16(offset + 12) / 100.0
 	s.mouse_world_pos.y  = b.decode_s8( offset + 14) / 100.0
 	s.mouse_world_pos.z  = b.decode_s16(offset + 15) / 100.0

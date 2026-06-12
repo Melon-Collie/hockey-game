@@ -112,6 +112,16 @@ func _build_ui() -> void:
 	version_label.offset_bottom = -12
 	add_child(version_label)
 
+	# Polls the GitHub Releases API once and shows an "update available" nudge
+	# when the running build is stale (no-op in dev builds). Boot is the one
+	# screen every launch passes through, so the check lives here.
+	var update_checker := UpdateChecker.new()
+	update_checker.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	update_checker.offset_top = -84
+	update_checker.offset_bottom = -36
+	update_checker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(update_checker)
+
 	# Gentle pulse on the prompt so it reads as "waiting for input."
 	MenuStyle.pulse(_prompt_label)
 
@@ -169,8 +179,11 @@ func _bootstrap_free_play_and_change(scene: PackedScene) -> void:
 	# First-time players land in the Basics tutorial after the splash instead
 	# of dropping straight into free play. Once they finish — or hit Skip All
 	# in the HUD — PlayerPrefs.mark_tutorial_complete("basics") flips this so
-	# subsequent boots go straight to the rink.
-	if not PlayerPrefs.is_tutorial_complete(TutorialRegistry.BASICS_ID):
+	# subsequent boots go straight to the rink. An accepted Steam invite
+	# trumps the tutorial: the player clicked "Join Game", and the SideMenu
+	# consumes the stashed lobby id once free play is up.
+	if not PlayerPrefs.is_tutorial_complete(TutorialRegistry.BASICS_ID) \
+			and SteamManager.pending_invite_lobby_id == 0:
 		NetworkManager.start_tutorial(TutorialRegistry.BASICS_ID)
 	else:
 		NetworkManager.start_free_play()

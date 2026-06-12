@@ -8,8 +8,8 @@ extends RefCounted
 #
 # Two wire formats are defined here:
 #
-# 1. World state  (40 Hz, unreliable_ordered) — single flat PackedByteArray:
-#      u16 ws_sequence, f32 host_capture_time, u8 num_skaters
+# 1. World state  (120 Hz, unreliable_ordered) — single flat PackedByteArray:
+#      u16 ws_sequence, u32 host_capture_time (0.1ms units), u8 num_skaters
 #      [u32 peer_id, skater_bytes(37), u8 queue_depth] × num_skaters
 #      puck_bytes(12)
 #      u8 num_goalies, [goalie_bytes(35)] × num_goalies
@@ -32,10 +32,10 @@ extends RefCounted
 #                      + pitch/roll s8@π/127; right_pad same; glove offset s8×3
 #                      + yaw/pitch s8@π/127; blocker same; head_yaw s8@π/127.
 #                      Stick rides the blocker socket (rigid IRL attachment),
-#                      so no separate stick fields on the wire. Pose is
-#                      broadcast for replay/sync fidelity; clients currently
-#                      still recompute body parts via local AI — render-from-
-#                      broadcast swap is the next step in the goalie overhaul.
+#                      so no separate stick fields on the wire. The broadcast
+#                      pose is authoritative: clients render the goalie purely
+#                      from the interpolated host pose (no client-side goalie
+#                      AI — see ARCHITECTURE.md Networking Invariants).
 #
 # 2. Stats  (reliable, event-driven):
 #      [pid, G, A, SOG, HITS, BLK] × N players
@@ -62,6 +62,7 @@ const STATS_PLAYER_RECORD_SIZE: int = 6  # peer_id, G, A, SOG, HITS, BLK
 
 var _ws_sequence: int = 0
 var _last_period: int = -1
+var _last_clock_second: int = -1
 
 var _registry: PlayerRegistry = null
 var _state_machine: GameStateMachine = null
@@ -94,11 +95,11 @@ func encode_world_state() -> PackedByteArray:
 	var peers: Array = Array(_registry.all().keys())
 	var goalie_controllers: Array = _goalie_controllers_getter.call()
 	var b := PackedByteArray()
-	# Header: u16 sequence + f32 host_capture_time + u8 skater count
+	# Header: u16 sequence + u32 host_capture_time (0.1ms units) + u8 skater count
 	var hdr := PackedByteArray(); hdr.resize(WS_HEADER_SIZE)
 	hdr.encode_u16(0, _ws_sequence)
 	_ws_sequence = (_ws_sequence + 1) & 0xFFFF
-	hdr.encode_float(2, NetworkManager.local_time())
+	hdr.encode_u32(2, roundi(maxf(NetworkManager.local_time(), 0.0) * Constants.TIME_WIRE_SCALE))
 	hdr.encode_u8(6, peers.size())
 	b.append_array(hdr)
 	# Skaters: u32 peer_id + 37B state + u8 queue_depth
@@ -148,7 +149,7 @@ func decode_world_state(data: PackedByteArray) -> void:
 		return
 	var o: int = 0
 	o += 2  # ws_sequence already consumed by NetworkManager for loss tracking
-	var host_ts: float = data.decode_float(o); o += 4
+	var host_ts: float = float(data.decode_u32(o)) / Constants.TIME_WIRE_SCALE; o += 4
 	var num_skaters: int = data.decode_u8(o); o += 1
 	var min_size: int = WS_HEADER_SIZE + num_skaters * SKATER_BLOCK_SIZE + PUCK_BLOCK_SIZE + 1 + GAME_STATE_BLOCK_SIZE
 	if data.size() < min_size:
@@ -224,7 +225,13 @@ func _apply_game_state(score0: int, score1: int, new_phase: GamePhase.Phase,
 	if period != _last_period:
 		_last_period = period
 		period_changed.emit(period)
-	clock_updated.emit(t_remaining)
+	# Emit only when the displayed second changes (mirrors the host's 1 Hz
+	# gate in GameManager). Per-packet emission made clients rebuild the HUD
+	# clock label + dirty its theme cache at 120 Hz for an unchanged display.
+	var whole_second: int = int(ceilf(t_remaining))
+	if whole_second != _last_clock_second:
+		_last_clock_second = whole_second
+		clock_updated.emit(t_remaining)
 
 
 # ── Replay decode (host-side, no side effects) ───────────────────────────────
@@ -249,7 +256,7 @@ func decode_for_replay(data: PackedByteArray) -> Dictionary:
 		return {}
 	var o: int = 0
 	o += 2  # ws_sequence
-	var host_ts: float = data.decode_float(o); o += 4
+	var host_ts: float = float(data.decode_u32(o)) / Constants.TIME_WIRE_SCALE; o += 4
 	var num_skaters: int = data.decode_u8(o); o += 1
 	var min_size: int = WS_HEADER_SIZE + num_skaters * SKATER_BLOCK_SIZE + PUCK_BLOCK_SIZE + 1 + GAME_STATE_BLOCK_SIZE
 	if data.size() < min_size:
@@ -319,9 +326,24 @@ func encode_stats() -> Array:
 
 
 func decode_stats(data: Array) -> void:
+	# Defensive decode: this only arrives from the host (authority RPC), but a
+	# version-skewed host sends a shape whose unguarded index walk script-errors
+	# on every stats sync — turning "mixed versions" into error spam. Bail with
+	# a warning instead; the protocol handshake is the real gate.
+	if data.is_empty() or typeof(data[-1]) != TYPE_INT:
+		push_warning("WorldStateCodec: malformed stats payload (empty or non-int footer)")
+		return
 	var num_periods: int = data[-1]
 	var footer_size: int = 2 + 2 * num_periods + 1  # shots×2 + scores×2P + sentinel
+	if num_periods < 0 or num_periods > 64 or data.size() < footer_size:
+		push_warning("WorldStateCodec: malformed stats payload (periods=%d, size=%d)" % [num_periods, data.size()])
+		return
 	var players_end: int = data.size() - footer_size
+	if players_end % STATS_PLAYER_RECORD_SIZE != 0 \
+			or typeof(data[players_end]) != TYPE_INT or typeof(data[players_end + 1]) != TYPE_INT:
+		push_warning("WorldStateCodec: malformed stats payload (player block %d not a multiple of %d)"
+				% [players_end, STATS_PLAYER_RECORD_SIZE])
+		return
 	var i: int = 0
 	while i < players_end:
 		var pid: int = data[i]
@@ -372,7 +394,7 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	b.encode_s16(o, clampi(roundi(s.upper_body_rotation_y / PI * 32767.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.facing_angular_velocity / (PI * 10.0) * 32767.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.upper_body_angular_velocity / (PI * 10.0) * 32767.0), -32768, 32767)); o += 2
-	b.encode_float(o, s.last_processed_host_timestamp); o += 4
+	b.encode_u32(o, roundi(maxf(s.last_processed_host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE)); o += 4
 	var flags: int = (s.shot_state & 0x0F) \
 			| (0x10 if s.is_ghost else 0) \
 			| (0x20 if s.is_elevated else 0)
@@ -404,7 +426,7 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	s.upper_body_rotation_y = b.decode_s16(o) / 32767.0 * PI; o += 2
 	s.facing_angular_velocity = b.decode_s16(o) / 32767.0 * (PI * 10.0); o += 2
 	s.upper_body_angular_velocity = b.decode_s16(o) / 32767.0 * (PI * 10.0); o += 2
-	s.last_processed_host_timestamp = b.decode_float(o); o += 4
+	s.last_processed_host_timestamp = float(b.decode_u32(o)) / Constants.TIME_WIRE_SCALE; o += 4
 	var flags: int = b.decode_u8(o); o += 1
 	s.shot_state = flags & 0x0F
 	s.is_ghost = (flags & 0x10) != 0

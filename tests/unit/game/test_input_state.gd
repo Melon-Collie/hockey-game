@@ -109,3 +109,51 @@ func test_from_bytes_supports_offset() -> void:
 	var r := InputState.from_bytes(buf, 5)
 	assert_almost_eq(r.host_timestamp, 2.0, 0.0001)
 	assert_eq(r.shoot_pressed, true)
+
+# ── Wire timestamp precision (u32 @ 0.1ms units) ─────────────────────────────
+
+func test_bytes_round_trip_timestamp_precision_at_long_session() -> void:
+	# 5 hours of host uptime. The old f32 encoding had ~2ms ULP here — adjacent
+	# 240 Hz stamps (4.17ms apart) were near collision; u32 @ 0.1ms units keeps
+	# constant 0.05ms worst-case error regardless of session length.
+	var s := InputState.new()
+	s.host_timestamp = 18000.123456
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_almost_eq(r.host_timestamp, s.host_timestamp, 0.0001)
+
+
+func test_bytes_round_trip_adjacent_240hz_stamps_stay_distinct() -> void:
+	var a := InputState.new()
+	var b := InputState.new()
+	a.host_timestamp = 18000.0
+	b.host_timestamp = 18000.0 + 1.0 / 240.0
+	var ra := InputState.from_bytes(a.to_bytes())
+	var rb := InputState.from_bytes(b.to_bytes())
+	assert_true(rb.host_timestamp > ra.host_timestamp,
+			"adjacent tick stamps must not quantize equal (dedupe would drop one)")
+
+
+func test_bytes_negative_timestamp_clamped_to_zero() -> void:
+	var s := InputState.new()
+	s.host_timestamp = -1.0
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_almost_eq(r.host_timestamp, 0.0, 0.0001)
+
+
+# ── move_vector trust boundary ────────────────────────────────────────────────
+
+func test_bytes_forged_long_move_vector_clamped_to_unit() -> void:
+	# The s16 wire range admits length ~32; the decode clamps to the unit disc.
+	var s := InputState.new()
+	s.move_vector = Vector2(30.0, 0.0)
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_almost_eq(r.move_vector.length(), 1.0, 0.001)
+	assert_true(r.move_vector.x > 0.0, "direction preserved")
+
+
+func test_bytes_legit_move_vector_unchanged() -> void:
+	var s := InputState.new()
+	s.move_vector = Vector2(0.6, -0.8)  # length 1.0
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_almost_eq(r.move_vector.x, 0.6, 0.01)
+	assert_almost_eq(r.move_vector.y, -0.8, 0.01)

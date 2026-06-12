@@ -291,7 +291,7 @@ func _process(delta: float) -> void:
 		return
 	var idx_next: int = mini(idx + 1, _frames.size() - 1)
 
-	# Re-decode only when the bracket changes (every ~25 ms at 40 Hz).
+	# Re-decode only when the bracket changes (every ~8.3 ms at 120 Hz).
 	if idx != _cached_from_idx or idx_next != _cached_to_idx:
 		_cached_from_snap = _codec.decode_for_replay(_frames[idx])
 		_cached_to_snap = _codec.decode_for_replay(_frames[idx_next])

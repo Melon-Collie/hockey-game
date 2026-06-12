@@ -43,6 +43,9 @@ var is_extrapolating: bool = false
 
 var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
 var _post_contact_timer: float = -1.0    # >= 0 while suppressing reconcile after a bounce
+# Reused scratch objects for the per-tick interpolation lookup + output.
+var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
+var _scratch_interp := PuckNetworkState.new()
 var _rejoin_blend_from_pos: Vector3 = Vector3.ZERO
 
 func get_buffer_depth() -> int:
@@ -346,10 +349,14 @@ func _on_client_puck_hit_post() -> void:
 # RPC boundary (GameManager.get_world_state), not here.
 func get_state() -> PuckNetworkState:
 	var state := PuckNetworkState.new()
+	fill_state(state)
+	return state
+
+# Caller-owned-instance variant for the 240 Hz StateBufferManager capture.
+func fill_state(state: PuckNetworkState) -> void:
 	state.position = puck.get_puck_position()
 	state.velocity = puck.get_puck_velocity()
 	state.carrier_peer_id = _carrier_peer_id
-	return state
 
 func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 	if is_server:
@@ -439,12 +446,14 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 func _interpolate() -> void:
 	var render_time: float = NetworkManager.estimated_host_time() - interpolation_delay
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
-			_state_buffer, render_time)
+			_state_buffer, render_time, _scratch_bracket)
 	var prev_extrapolating: bool = is_extrapolating
 	is_extrapolating = bracket != null and bracket.is_extrapolating
 	if bracket == null:
 		return
-	var interpolated := PuckNetworkState.new()
+	# Reused scratch (240 Hz path); both branches write position + velocity,
+	# the only fields _apply_state_to_puck consumes.
+	var interpolated := _scratch_interp
 	if bracket.is_extrapolating:
 		var dt: float = minf(bracket.extrapolation_dt, extrapolation_max_ms / 1000.0)
 		var newest: PuckNetworkState = bracket.to_state

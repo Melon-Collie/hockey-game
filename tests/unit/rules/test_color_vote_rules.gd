@@ -7,9 +7,9 @@ const _ALL_SLOTS: Array[int] = [0, 1, 2, 3, 4, 5, 6, 7]
 const _DEFAULT_HOME: int = 0  # "blueberry"
 const _DEFAULT_AWAY: int = 1  # "pomegranate"
 
-func _rng(seed: int = 1) -> RandomNumberGenerator:
+func _rng(seed_val: int = 1) -> RandomNumberGenerator:
 	var r := RandomNumberGenerator.new()
-	r.seed = seed
+	r.seed = seed_val
 	return r
 
 
@@ -112,9 +112,9 @@ func test_resolve_default_clash_forces_away_reroll() -> void:
 func test_pick_winner_sticky_keeps_previous_when_still_tied() -> void:
 	var t: Dictionary = ColorVoteRules.tally_votes([2, 7, 6] as Array[int])
 	# Three-way tie: 2, 7, 6. Sticky on 7 should keep 7 regardless of rng seed.
-	for seed: int in [1, 2, 3, 4, 5]:
-		var winner: int = ColorVoteRules.pick_winner_sticky(t, 7, _rng(seed))
-		assert_eq(winner, 7, "sticky should hold previous on seed %d" % seed)
+	for seed_val: int in [1, 2, 3, 4, 5]:
+		var winner: int = ColorVoteRules.pick_winner_sticky(t, 7, _rng(seed_val))
+		assert_eq(winner, 7, "sticky should hold previous on seed %d" % seed_val)
 
 func test_pick_winner_sticky_rerolls_when_previous_no_longer_tied() -> void:
 	# 2 now has 2 votes, 7/6 only 1. Previous 7 is no longer a leader.

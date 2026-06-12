@@ -25,13 +25,16 @@ const APP_ID: int = 480
 # run_callbacks never delivers the result).
 const LOBBY_OP_TIMEOUT: float = 12.0
 
-const LOBBY_DISTANCE_WORLDWIDE: int = 3  # ELobbyDistanceFilter: widest search
-
 # ── Availability ────────────────────────────────────────────────────────────
 var is_available: bool = false   # true iff Steam initialised successfully
 var steam_id: int = 0            # local user's SteamID64 (0 when unavailable)
 var persona_name: String = ""    # local user's Steam display name ("" when unavailable)
 var current_lobby_id: int = 0    # 0 when not in a lobby
+# Lobby id from an accepted invite that no UI was alive to handle: cold launch
+# via `+connect_lobby` fires during autoload init (Boot title card — no
+# SideMenu exists yet), and overlay accepts can land in the Lobby scene. The
+# SideMenu consumes this when it builds; emitting alone loses the invite.
+var pending_invite_lobby_id: int = 0
 
 # ── Outbound signals (NetworkManager / menu listen) ─────────────────────────
 signal steam_unavailable
@@ -88,14 +91,23 @@ func _connect_steam_signals() -> void:
 
 
 # Cold-launch via a friend invite passes `+connect_lobby <id>` on the command
-# line; honour it once Steam is up.
+# line; honour it once Steam is up. Stash only (no emit) — this runs during
+# autoload init, before any listener exists.
 func _check_launch_invite() -> void:
 	var args: PackedStringArray = OS.get_cmdline_args()
 	var idx: int = args.find("+connect_lobby")
 	if idx != -1 and idx + 1 < args.size():
 		var lobby_id: int = int(args[idx + 1])
 		if lobby_id != 0:
-			lobby_invite_accepted.emit.call_deferred(lobby_id)
+			pending_invite_lobby_id = lobby_id
+
+
+# One-shot read of a stashed invite; clearing on read keeps a consumed invite
+# from re-firing every time the consumer (SideMenu) is rebuilt on scene load.
+func consume_pending_invite() -> int:
+	var lobby_id: int = pending_invite_lobby_id
+	pending_invite_lobby_id = 0
+	return lobby_id
 
 
 func _process(delta: float) -> void:
@@ -143,6 +155,9 @@ func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 	# Advertise the host name so the public browser has something to show.
 	Steam.setLobbyData(lobby_id, "name", "%s's game" % Steam.getPersonaName())
 	Steam.setLobbyData(lobby_id, "game", "mitts")
+	# Stamped so the browser only lists wire-compatible games; the
+	# request_join handshake remains the authoritative version gate.
+	Steam.setLobbyData(lobby_id, "protocol", str(BuildInfo.PROTOCOL_VERSION))
 	lobby_created.emit(lobby_id)
 
 
@@ -158,14 +173,20 @@ func join_lobby(lobby_id: int) -> void:
 
 func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response: int) -> void:
 	if _pending_op != 2:
+		# Late callback after a cancelled join (the host's own create echo also
+		# lands here, but _on_lobby_created already recorded that lobby id). If
+		# Steam actually entered a lobby nobody wants anymore, leave it —
+		# otherwise we linger as a ghost member occupying a slot.
+		if response == 1 and lobby_id != current_lobby_id:
+			Steam.leaveLobby(lobby_id)
 		return
 	_clear_op()
 	if response != 1:  # 1 == k_EChatRoomEnterResponseSuccess
 		lobby_join_failed.emit("Could not join the lobby (response %d)." % response)
 		return
 	current_lobby_id = lobby_id
-	var owner: int = Steam.getLobbyOwner(lobby_id)
-	lobby_joined.emit(lobby_id, owner)
+	var lobby_owner: int = Steam.getLobbyOwner(lobby_id)
+	lobby_joined.emit(lobby_id, lobby_owner)
 
 
 # ── Public lobby browser ────────────────────────────────────────────────────
@@ -173,8 +194,11 @@ func request_lobby_list() -> void:
 	if not is_available:
 		lobby_list_received.emit([])
 		return
-	Steam.addRequestLobbyListDistanceFilter(LOBBY_DISTANCE_WORLDWIDE)
+	Steam.addRequestLobbyListDistanceFilter(
+			Steam.LOBBY_DISTANCE_FILTER_WORLDWIDE as Steam.LobbyDistanceFilter)
 	Steam.addRequestLobbyListStringFilter("game", "mitts", Steam.LOBBY_COMPARISON_EQUAL)
+	Steam.addRequestLobbyListStringFilter("protocol", str(BuildInfo.PROTOCOL_VERSION),
+			Steam.LOBBY_COMPARISON_EQUAL)
 	Steam.requestLobbyList()
 
 
@@ -193,6 +217,10 @@ func _on_lobby_match_list(lobbies: Array) -> void:
 
 # ── Invites / overlay ───────────────────────────────────────────────────────
 func _on_join_requested(lobby_id: int, _friend_id: int) -> void:
+	# Stash as well as emit: if no SideMenu is alive to hear the signal (Lobby
+	# scene, mid-transition), the next one to build consumes the stash. The
+	# live handler consumes it too, so it never double-fires.
+	pending_invite_lobby_id = lobby_id
 	lobby_invite_accepted.emit(lobby_id)
 
 
