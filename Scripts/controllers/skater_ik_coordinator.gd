@@ -390,6 +390,7 @@ func _ik_config(blade_y: float) -> TopHandIK.Config:
 func _bottom_hand_ik_config() -> BottomHandIK.Config:
 	if _cached_bottom_cfg == null:
 		_cached_bottom_cfg = BottomHandIK.Config.new()
+		_cached_bottom_cfg.hand_y = _controller.bh_hand_y
 		_cached_bottom_cfg.release_angle_max = deg_to_rad(_controller.bh_release_angle_deg)
 		_cached_bottom_cfg.release_angle_band = deg_to_rad(_controller.bh_release_angle_band_deg)
 	_cached_bottom_cfg.backhand_angle = _bh_backhand_angle()
