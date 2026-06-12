@@ -8,14 +8,25 @@ An arcade hockey game built in Godot 4.6.2 (Jolt Physics). Online multiplayer �
 
 ## Download & Play
 
-1. Go to the [latest release](../../releases/tag/latest) and download the zip for your platform
+1. Go to the [latest release](../../releases/tag/latest) and download the zip for your platform (Windows and Linux only — no macOS build yet)
    - **Windows:** `Windows Desktop.zip` → extract and run `mitts.exe`
    - **Linux:** `LinuxX11.zip` → extract, `chmod +x mitts.x86_64`, then run it
-2. Pick **Play Offline**, **Host Game**, or **Join** from the main menu
+2. The game launches straight onto the ice in free play (first launch runs a short tutorial). Press **Esc** for the menu — set your name and attributes under **Player**, start games under **Online**, replay the tutorial, or browse your career stats.
 
-For online play the host needs UDP port **7777** forwarded on their router.
+**Online play uses Steam** — Steam must be running on every machine (host and joiners). **Host Game** creates a lobby, **Join Game** opens a lobby browser, and Steam friend invites work too. No port forwarding needed.
 
-The main menu shows an **"Update available"** notice when your build is behind the latest release. It doesn't patch automatically — grab the new zip from the release page when you see it.
+The title screen shows an **"Update available"** notice when your build is behind the latest release. It doesn't patch automatically — grab the new zip from the release page when you see it.
+
+---
+
+## Feedback & Bug Reports
+
+Use the in-game **Report Bug** button (bottom-right corner) — it attaches your version and connection telemetry automatically. If the game crashed or something went visibly wrong, also grab the newest log file and include it however you're sending feedback:
+
+- **Windows:** `%APPDATA%\Godot\app_userdata\Mitts\logs\godot.log`
+- **Linux:** `~/.local/share/godot/app_userdata/Mitts/logs/godot.log`
+
+**Alpha limitations to know about:** if the host leaves, the match ends for everyone (no host migration); there's no reconnect — if you disconnect you can rejoin from the lobby browser, but with a fresh slot and stats; no in-game chat; a team plays shorthanded if someone drops mid-match.
 
 ---
 

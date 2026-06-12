@@ -33,6 +33,41 @@ jobs:
           # checker can compare against the release name.
           sed -i "s/^const VERSION: String = \"dev\"$/const VERSION: String = \"${VERSION}\"/" Scripts/game/build_info.gd
           grep '^const VERSION:' Scripts/game/build_info.gd
+          # Stamp Windows exe version metadata (x.x.x.x format required by
+          # rcedit). Committed preset keeps these empty so local exports
+          # without rcedit never trip format validation.
+          sed -i "s|^application/file_version=.*|application/file_version=\"${VERSION}.0\"|" export_presets.cfg
+          sed -i "s|^application/product_version=.*|application/product_version=\"${VERSION}.0\"|" export_presets.cfg
+
+      # The Windows exe icon + version strings are embedded by rcedit (run
+      # through wine). Both steps are best-effort: if either fails, Godot
+      # simply skips embedding (warning, not error) and the export proceeds.
+      - name: Generate Windows icon from icon.svg
+        id: icon
+        continue-on-error: true
+        run: |
+          convert -density 384 -background none icon.svg -define icon:auto-resize=256,128,64,48,32,16 icon.ico
+          test -s icon.ico
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up rcedit for Windows exe branding
+        continue-on-error: true
+        if: steps.icon.outputs.ok == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wine64
+          WINE_BIN=$(command -v wine64 || command -v wine)
+          curl -fsSL -o /usr/local/bin/rcedit.exe \
+            https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe
+          mkdir -p ~/.config/godot
+          cat > ~/.config/godot/editor_settings-4.6.tres <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/windows/rcedit = "/usr/local/bin/rcedit.exe"
+          export/windows/wine = "${WINE_BIN}"
+          EOF
+          echo "rcedit configured (wine: ${WINE_BIN})"
 
       - name: Export with Godot
         uses: firebelley/godot-export@v5.2.1
@@ -67,10 +102,29 @@ jobs:
           done
           echo "All archives look good."
 
-      - name: Move latest tag to HEAD
+      - name: Push tags (latest + versioned)
         run: |
           git tag -f latest
           git push origin -f latest
+          # Immutable per-release tag so a bad build can be rolled back by
+          # pointing players at the previous version's release.
+          git tag -f "v${{ steps.version.outputs.version }}"
+          git push origin -f "v${{ steps.version.outputs.version }}"
+
+      # Versioned archive release (prerelease so the GitHub "Latest" badge
+      # and the in-game UpdateChecker — which fetches releases/tags/latest —
+      # keep pointing at the rolling release below). This is the rollback
+      # path: every build stays downloadable.
+      - name: Upload versioned release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "/home/runner/.local/share/godot/archives/*.zip"
+          tag: "v${{ steps.version.outputs.version }}"
+          name: "${{ steps.version.outputs.version }}"
+          body: "Archived build ${{ steps.version.outputs.version }}. Most players want the [latest release](../../releases/tag/latest)."
+          prerelease: true
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release
         uses: ncipollo/release-action@v1
@@ -78,7 +132,16 @@ jobs:
           artifacts: "/home/runner/.local/share/godot/archives/*.zip"
           tag: "latest"
           name: "${{ steps.version.outputs.version }}"
-          body: "3v3 arcade hockey. Windows and Linux builds."
+          body: |
+            3v3 arcade hockey — alpha build for playtesters. Windows and Linux (no macOS build yet).
+
+            **Online play needs Steam running** on every machine. Host a game or join from the in-game lobby browser (Esc → Online); Steam friend invites work too. No port forwarding required.
+
+            **Known alpha limitations:** if the host leaves, the match ends for everyone; there's no reconnect — if you drop, rejoin from the lobby browser (fresh slot and stats); no in-game chat; a team plays shorthanded if someone disconnects mid-match.
+
+            **Found a bug?** Use the in-game Report Bug button (bottom-right corner). If the game crashed, attach the newest log from `%APPDATA%\Godot\app_userdata\Mitts\logs` (Windows) or `~/.local/share/godot/app_userdata/Mitts/logs` (Linux).
+
+            Older builds are kept under [pre-releases](../../releases) if you need to roll back.
           allowUpdates: true
           removeArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
