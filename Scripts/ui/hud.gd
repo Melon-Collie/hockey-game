@@ -150,9 +150,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not event.is_action_pressed(&"ui_cancel"):
 		return
-	if _game_over_popup.visible:
-		return
 	if _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible:
+		return
+	if _game_over_popup.visible:
+		# The game-over popup is persistent chrome, not a dismissable modal —
+		# closing it would strand the player with no post-game actions. Esc
+		# instead opens the pause menu over it so Options stays reachable.
+		_pause_menu.open()
+		get_viewport().set_input_as_handled()
 		return
 	if NetworkManager.is_free_play_mode:
 		_side_menu.open()

@@ -161,6 +161,7 @@ func _build_slot_grid_overlay() -> void:
 	_slot_grid = SlotGridPanel.new()
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_grid.slot_selected.connect(_on_slot_selected)
+	_slot_grid.kick_requested.connect(_on_kick_requested)
 	vbox.add_child(_slot_grid)
 
 	_slot_grid_container = Control.new()
@@ -293,13 +294,21 @@ func _on_slot_selected(team_id: int, slot: int) -> void:
 	close()
 
 
+func _on_kick_requested(peer_id: int, player_name: String) -> void:
+	_show_confirm("Kick %s from the game?" % player_name, func() -> void:
+		NetworkManager.kick_peer(peer_id, "You were kicked by the host."))
+
+
 func _on_stats_updated() -> void:
 	if visible and _slot_grid != null:
 		_refresh_slot_grid()
 
 
 func _refresh_slot_grid() -> void:
-	_slot_grid.refresh(GameManager.get_slot_roster(), _get_team_colors())
+	# No bot add/remove mid-match, but the host keeps the kick X on connected
+	# peers' cards.
+	_slot_grid.refresh(GameManager.get_slot_roster(), _get_team_colors(), {},
+			NetworkManager.is_host, {}, false)
 
 
 func _get_team_colors() -> Array[Dictionary]:

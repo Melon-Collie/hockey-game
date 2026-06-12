@@ -17,19 +17,22 @@ extends VBoxContainer
 # Card visual semantics:
 #   - Empty slot      → dark neutral bg, no stripe color, "+" icon (host).
 #   - Bot slot        → team body color bg, stripe, "BOT" badge bottom-right, "X" icon (host).
-#   - Remote human    → jersey color bg, stripe, "##ms ●" ping with status dot.
+#   - Remote human    → jersey color bg, stripe, "##ms ●" ping with status dot,
+#                       "X" kick icon (host only, connected transport peers only).
 #   - Your slot       → jersey color bg, stripe, ping, plus a 1px TEAL_DIM
 #                       border around the whole card so the local player can
 #                       recognize their own slot at a glance.
 #
 # Clicking the card body emits slot_selected (used by LobbyManager to swap
 # into the slot). Clicking the action icon emits bot_toggled (add/remove a
-# bot, host-only). The two click targets are siblings under the card root
+# bot on empty/bot cards) or kick_requested (remote-human cards), both
+# host-only. The two click targets are siblings under the card root
 # and use mouse_filter STOP, so clicking the icon does NOT propagate to the
 # card's swap handler.
 
 signal slot_selected(team_id: int, slot: int)
 signal bot_toggled(team_id: int, slot: int, is_bot: bool)
+signal kick_requested(peer_id: int, player_name: String)
 
 # Column display order: Left Wing (slot 1), Center (slot 0), Right Wing (slot 2)
 const _DISPLAY_ORDER  := [1, 0, 2]
@@ -67,6 +70,7 @@ var _team_colors: Array[Dictionary] = []
 var _bot_slots: Dictionary = {}
 var _bot_identities: Dictionary = {}
 var _is_local_host: bool = false
+var _bot_editing: bool = true
 
 
 func _init() -> void:
@@ -329,13 +333,17 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 # bot_identities: slot_key -> { name, number, is_left_handed }. Picked at
 #   lobby-toggle time so the bot card previews the actual name/number that
 #   will spawn instead of a generic "BOT" placeholder.
+# allow_bot_edit: shows the host's +/X bot actions. The pause menu's mid-match
+#   grid passes false (no bot add/remove once the game is running) while still
+#   passing is_local_host so the kick X stays available on peer cards.
 func refresh(roster: Array[Dictionary], team_colors: Array[Dictionary] = [],
 		bot_slots: Dictionary = {}, is_local_host: bool = false,
-		bot_identities: Dictionary = {}) -> void:
+		bot_identities: Dictionary = {}, allow_bot_edit: bool = true) -> void:
 	_team_colors = team_colors
 	_bot_slots = bot_slots
 	_bot_identities = bot_identities
 	_is_local_host = is_local_host
+	_bot_editing = allow_bot_edit
 
 	var by_slot: Dictionary = {}
 	for entry: Dictionary in roster:
@@ -390,7 +398,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		name_lbl.add_theme_font_size_override("font_size", 18)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_set_action(action, "+", _is_local_host, MenuStyle.TEXT_DIM)
+		_set_action(action, "+", _is_local_host and _bot_editing, MenuStyle.TEXT_DIM)
 		return
 
 	# Filled cards (bot or human) — restore the number + right columns and
@@ -417,7 +425,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		dot.visible = false
 		ai_lbl.visible = true
 		ai_lbl.add_theme_color_override("font_color", _muted(text_c, 0.75))
-		_set_action(action, "x", _is_local_host, text_c)
+		_set_action(action, "x", _is_local_host and _bot_editing, text_c)
 		return
 
 	# === Human-filled slot (local or remote) =====================
@@ -438,9 +446,13 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	ping_lbl.visible = true
 	dot.visible = true
 	_apply_ping(ping_lbl, dot, peer_id, text_c)
-	# Local player's own slot — no kick-yourself action.
-	# Remote-human slot — no action either; only host-edited bots get one.
-	action.visible = false
+	# Host gets a kick X on other connected peers' cards — never its own, and
+	# never a mid-match bot (bot actor ids aren't transport peers).
+	if _is_local_host and peer_id != NetworkManager.local_peer_id() \
+			and peer_id in NetworkManager.connected_peer_ids():
+		_set_action(action, "x", true, text_c)
+	else:
+		action.visible = false
 
 
 # Small outline-only square in the top-left corner of a card. `accent` is
@@ -530,6 +542,14 @@ func _on_card_input(event: InputEvent, team_id: int, slot: int) -> void:
 
 
 func _on_action_pressed(team_id: int, slot: int) -> void:
+	var peer_id: int = _peer_ids[team_id][slot]
+	if peer_id > 0:
+		# Card held by a live actor — the only action shown here is the
+		# host's kick X (gated to connected transport peers in _update_card).
+		if peer_id in NetworkManager.connected_peer_ids():
+			var name_lbl: Label = _name_labels[team_id][slot]
+			kick_requested.emit(peer_id, name_lbl.text)
+		return
 	# is_bot=true when slot was empty (+ icon → add), false when bot (X icon → remove).
 	var slot_key: int = team_id * 3 + slot
 	var was_bot: bool = _bot_slots.get(slot_key, false)
