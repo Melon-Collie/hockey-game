@@ -185,6 +185,7 @@ Blade placement goes through a custom top-hand inverse-kinematics solver (`TopHa
 
 - **Engine:** Godot 4.6.2 with Jolt Physics
 - 240 Hz physics tick (prevents tunneling at high puck speeds)
+- **30 FPS host floor.** `max_physics_steps_per_frame` is left at Godot's default of 8. At 240 Hz that means the host must render ≥ `240 / 8 = 30` FPS to keep physics real-time; below that, the sim dilates (slow-motion vs. the wall clock that clock-sync uses) and every client interpolator extrapolates at once. This is the deliberate, safe failure mode: raising the cap to tolerate lower framerates risks a physics "spiral of death" (more catch-up steps make each frame slower still), and lowering the physics rate isn't an option (the 240 Hz tick is what prevents puck tunneling). The floor is a documented operating constraint, not a setting — `8` is the engine default so it can't be pinned in `project.godot` (the editor strips default values on save). Keep the host comfortably above it via the per-tick perf budget; watch the tick p95/p99 telemetry for transient dips (a GC hitch or heavy reconcile-replay frame can momentarily blow past 30 FPS).
 - CCD enabled on puck
 - Puck mass 0.17 kg, radius 0.1 m
 - `GameRules.ICE_FRICTION = 0.01` — used in puck trajectory prediction. The rink ice surface is a child `StaticBody3D` with `physics_material_override` set directly, so friction applies correctly.

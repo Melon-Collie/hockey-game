@@ -143,7 +143,6 @@ camera_pan_down={
 [physics]
 
 common/physics_ticks_per_second=240
-common/max_physics_steps_per_frame=8
 3d/physics_engine="Jolt Physics"
 
 [rendering]
