@@ -407,6 +407,7 @@ func _on_steam_lobby_created(_lobby_id: int) -> void:
 		push_error("Failed to start Steam host: " + str(error))
 		host_lobby_failed.emit("Failed to create the host peer.")
 		return
+	_disable_nagle(peer)
 	multiplayer.multiplayer_peer = peer
 	host_lobby_ready.emit()
 
@@ -435,10 +436,25 @@ func _on_steam_lobby_joined(_lobby_id: int, owner_steam_id: int) -> void:
 		push_error("Failed to connect to Steam host: " + str(error))
 		client_lobby_failed.emit("Failed to create the client peer.")
 		return
+	_disable_nagle(peer)
 	multiplayer.multiplayer_peer = peer
 	# Arm the handshake timeout only now that the peer exists, so a slow lobby
 	# join can't false-trip it.
 	_connect_timer = 0.0
+
+# Disable Steam's Nagle batching so each send flushes immediately instead of
+# being coalesced up to the Nagle timer (~ms scale). Steam's default coalescing
+# clumps the steady 120 Hz world-state stream into bursts, which the client sees
+# as irregular arrivals → interpolation-buffer dry-outs → extrapolation snaps on
+# remote actors. Applied to both peers: the host's flag governs its world-state
+# sends, the client's governs its input-batch sends. Guarded by has_method so a
+# GodotSteam build without the accessor degrades to default behaviour rather
+# than crashing — watch for the warning in the log if smoothing doesn't improve.
+func _disable_nagle(peer: SteamMultiplayerPeer) -> void:
+	if peer.has_method("set_no_nagle"):
+		peer.set_no_nagle(true)
+	else:
+		push_warning("SteamMultiplayerPeer.set_no_nagle unavailable; Nagle stays on (snapshot arrival may clump).")
 
 func _on_steam_lobby_join_failed(reason: String) -> void:
 	if SteamManager.lobby_joined.is_connected(_on_steam_lobby_joined):
@@ -869,11 +885,16 @@ func receive_world_state(data: PackedByteArray) -> void:
 			var now: float = local_time()
 			if _last_ws_arrival_time > 0.0:
 				const EXPECTED_INTERVAL: float = 1.0 / Constants.STATE_RATE
-				var jitter: float = absf((now - _last_ws_arrival_time) - EXPECTED_INTERVAL)
+				var gap: float = now - _last_ws_arrival_time
+				var jitter: float = absf(gap - EXPECTED_INTERVAL)
 				_jitter_samples.append(jitter)
 				if _jitter_samples.size() > 40:
 					_jitter_samples.pop_front()
 				NetworkTelemetry.record_jitter_p95(get_jitter_p95() * 1000.0)
+				# Raw inter-arrival gap histogram: distinguishes Steam Nagle
+				# clumping (bimodal — a cluster of near-0 gaps then a big one)
+				# from smooth path/relay jitter (spread around the 8.3ms interval).
+				NetworkTelemetry.record_ws_arrival_gap(gap * 1000.0)
 			_last_ws_arrival_time = now
 			if s.size() >= 2:
 				_on_ws_sequence_received(s.decode_u16(0))

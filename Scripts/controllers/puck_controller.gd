@@ -473,7 +473,11 @@ func _interpolate() -> void:
 		_rejoin_blend_elapsed = 0.0
 	if _rejoin_blend_elapsed >= 0.0:
 		var ease_t: float = clampf(_rejoin_blend_elapsed / rejoin_blend_duration, 0.0, 1.0)
-		interpolated.position = _rejoin_blend_from_pos.lerp(interpolated.position, ease_t)
+		# Smoothstep (C1) re-entry — see RemoteController._interpolate for the
+		# rationale: ramps the error-correction velocity in/out so the seam back
+		# into interpolation has no velocity kink.
+		var eased: float = smoothstep(0.0, 1.0, ease_t)
+		interpolated.position = _rejoin_blend_from_pos.lerp(interpolated.position, eased)
 		if ease_t >= 1.0:
 			_rejoin_blend_elapsed = -1.0
 	_apply_state_to_puck(interpolated)

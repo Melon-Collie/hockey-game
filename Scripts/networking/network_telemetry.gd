@@ -90,6 +90,15 @@ var _queue_depth_window: Array[int] = []
 var packet_loss_pct: float = 0.0
 var jitter_p95_ms: float = 0.0
 var puck_mode: String = "—"
+# World-state inter-arrival gap histogram (client-only; empty on host). Buckets
+# in ms by upper edge; the published string is percentages per bucket over the
+# 1s window. Bimodal (mass in <4ms AND >12ms, little at 8ms) = Steam Nagle
+# clumping → no_nagle should flatten it. A spread centred on ~8ms = path/relay
+# jitter that only a deeper interpolation buffer can absorb.
+const WS_GAP_EDGES_MS: Array[float] = [4.0, 8.0, 12.0, 16.0, 24.0]
+const WS_GAP_LABELS: Array[String] = ["<4", "4-8", "8-12", "12-16", "16-24", "24+"]
+var _ws_gap_counts: Array[int] = [0, 0, 0, 0, 0, 0]
+var ws_gap_histogram: String = "—"
 
 # ── Host-frame health (host only; clients leave these at 0) ──────────────────
 # Inter-tick gap captures any stall regardless of cause (CPU steal, GC pause,
@@ -138,6 +147,17 @@ static func record_packet_loss(pct: float) -> void:
 
 static func record_jitter_p95(ms: float) -> void:
 	if instance: instance.jitter_p95_ms = ms
+
+# Bucket one world-state inter-arrival gap (ms) into the histogram window.
+static func record_ws_arrival_gap(gap_ms: float) -> void:
+	if instance == null:
+		return
+	var idx: int = WS_GAP_EDGES_MS.size()  # overflow (last) bucket
+	for i: int in WS_GAP_EDGES_MS.size():
+		if gap_ms < WS_GAP_EDGES_MS[i]:
+			idx = i
+			break
+	instance._ws_gap_counts[idx] += 1
 
 # reconcile: count + trajectory divergence magnitude (predicted-vs-server at the
 # confirmed host_timestamp). Prediction lead is subtracted out by the timestamp
@@ -257,6 +277,16 @@ func tick(delta: float) -> void:
 		var sorted := _queue_depth_window.duplicate()
 		sorted.sort()
 		input_queue_depth_median = sorted[sorted.size() >> 1]
+	var gap_total: int = 0
+	for c: int in _ws_gap_counts:
+		gap_total += c
+	if gap_total > 0:
+		var parts: Array[String] = []
+		for i: int in _ws_gap_counts.size():
+			parts.append("%s:%d%%" % [WS_GAP_LABELS[i], roundi(100.0 * _ws_gap_counts[i] / gap_total)])
+		ws_gap_histogram = " ".join(parts)
+	for i: int in _ws_gap_counts.size():
+		_ws_gap_counts[i] = 0
 	if not _phys_tick_samples_us.is_empty():
 		var pts := _phys_tick_samples_us.duplicate()
 		pts.sort()
