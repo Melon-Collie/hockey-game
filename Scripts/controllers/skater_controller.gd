@@ -212,8 +212,8 @@ var show_one_timer_indicator: bool = false
 @export var slapper_follow_through_arc_dist: float = 0.4  # blade XZ travel along shot_dir during follow-through
 
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
-@export var block_speed_multiplier: float = 0.45   # movement speed while blocking (unused while the
-                                                   # stance is fully planted; kept for tuning)
+# Movement speed while blocking (unused while the stance is fully planted; kept for tuning).
+@export var block_speed_multiplier: float = 0.45
 @export var active_block_dampen: float = 0.35      # puck energy retention on active block
 # Choreographed "stick down" block pose, authored in upper-body-local space.
 # Forward is local −Z (toward the shooter the stance snapped to on entry); the
