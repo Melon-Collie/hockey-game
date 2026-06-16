@@ -64,7 +64,7 @@ signal slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_c
 signal remote_skater_spawn_requested(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int, attributes: PlayerAttributes)
 signal existing_players_synced(player_data: Array)
 signal local_puck_pickup_confirmed
-signal local_puck_stolen
+signal local_puck_stolen(was_stick_lift: bool)
 signal remote_puck_release_received(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
 signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
 signal carrier_puck_dropped
@@ -101,6 +101,7 @@ signal goal_body_hit_received(position: Vector3)
 signal deflection_received(position: Vector3)
 signal body_block_received(position: Vector3)
 signal puck_strip_received(position: Vector3)
+signal stick_lift_received(position: Vector3)
 signal input_batch_received(peer_id: int, inputs: Array[InputState])
 # Mid-game player → spectator transition. Host broadcasts to all peers; every
 # receiver despawns the demoted peer's skater locally (registry.remove handles
@@ -1259,14 +1260,14 @@ func send_carrier_changed_to_all(new_carrier_peer_id: int) -> void:
 func notify_carrier_changed(new_carrier_peer_id: int) -> void:
 	NetworkSimManager.send(func(id: int) -> void: remote_carrier_changed.emit(id), [new_carrier_peer_id], true)
 
-func send_puck_stolen(victim_peer_id: int) -> void:
+func send_puck_stolen(victim_peer_id: int, was_stick_lift: bool = false) -> void:
 	if not is_real_peer(victim_peer_id):
 		return  # AI bot or sentinel — see send_puck_picked_up rationale.
-	notify_puck_stolen.rpc_id(victim_peer_id)
+	notify_puck_stolen.rpc_id(victim_peer_id, was_stick_lift)
 
 @rpc("authority", "reliable")
-func notify_puck_stolen() -> void:
-	NetworkSimManager.send(func() -> void: local_puck_stolen.emit(), [], true)
+func notify_puck_stolen(was_stick_lift: bool) -> void:
+	NetworkSimManager.send(func(wsl: bool) -> void: local_puck_stolen.emit(wsl), [was_stick_lift], true)
 
 func send_puck_release(direction: Vector3, power: float, is_slapper: bool) -> void:
 	release_puck.rpc_id(1, direction, power, is_slapper,
@@ -1768,6 +1769,14 @@ func send_puck_strip_to_all(position: Vector3) -> void:
 @rpc("authority", "unreliable")
 func notify_puck_strip(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: puck_strip_received.emit(pos), [position], false)
+
+func send_stick_lift_to_all(position: Vector3) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_stick_lift.rpc_id(peer_id, position)
+
+@rpc("authority", "unreliable")
+func notify_stick_lift(position: Vector3) -> void:
+	NetworkSimManager.send(func(pos: Vector3) -> void: stick_lift_received.emit(pos), [position], false)
 
 func send_spectator_demoted_to_all(peer_id: int) -> void:
 	for remote_id: int in connected_peer_ids():

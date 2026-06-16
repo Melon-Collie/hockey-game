@@ -50,6 +50,11 @@ var _pending_local_release_deadline: float = -1.0
 const _PENDING_RELEASE_TIMEOUT_S: float = 0.3  # ~2× typical RTT, well above any healthy network
 var _shot_rtt_ms: float = 0.0             # RTT captured at release time; used for trajectory reconcile
 var is_extrapolating: bool = false
+# Scoped true only while a stick-lift strip is being applied, so the synchronous
+# puck_stripped_from handlers (sound + victim notify) can tell a stick lift apart
+# from a poke/body-check strip and pick the right cue. Read via
+# is_processing_stick_lift(); always reset immediately after apply_poke_check.
+var _processing_stick_lift: bool = false
 
 var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
 var _post_contact_timer: float = -1.0    # >= 0 while suppressing reconcile after a bounce
@@ -182,7 +187,13 @@ func apply_lag_comp_stick_lift(checker: Skater, expected_ex_carrier: Skater) -> 
 	if puck.carrier != expected_ex_carrier:
 		return
 	puck.carrier.force_blade_lift(STICK_LIFT_FORCED_LIFT_S)
+	_processing_stick_lift = true
 	puck.apply_poke_check(checker)
+	_processing_stick_lift = false
+
+
+func is_processing_stick_lift() -> bool:
+	return _processing_stick_lift
 
 
 # Two valid pickup claims arrived within the contest window. Neither player
@@ -234,7 +245,9 @@ func _check_interactions() -> void:
 							blade_curr, vic_hand, carrier_skater.get_blade_contact_global(),
 							STICK_LIFT_RADIUS, STICK_LIFT_UNDER_MARGIN):
 						carrier_skater.force_blade_lift(STICK_LIFT_FORCED_LIFT_S)
+						_processing_stick_lift = true
 						puck.apply_poke_check(skater)
+						_processing_stick_lift = false
 						break
 					continue
 				var blade_prev: Vector3 = skater.get_prev_blade_contact_global()

@@ -25,6 +25,7 @@ var _puck: Puck = null
 var _trail_emitter: GPUParticles3D = null
 var _trail_particles: GPUParticles3D = null
 var _trail_mat: ParticleProcessMaterial = null
+var _stick_lift_burst: CPUParticles3D = null
 var _prev_pos: Vector3 = Vector3.ZERO
 
 func _ready() -> void:
@@ -38,7 +39,18 @@ func _ready() -> void:
 	# NodePath from TrailEmitter to its sibling TrailParticles.
 	_trail_emitter.sub_emitter = NodePath("../TrailParticles")
 
+	_stick_lift_burst = _make_stick_lift_emitter()
+	add_child(_stick_lift_burst)
+
 	_prev_pos = global_position
+
+
+# One-shot spark pop when a stick lift strips the puck. Anchored to the puck via
+# this node's transform, so it fires wherever the dislodge happened. local_coords
+# off keeps the sparks in world space as the freed puck starts moving.
+func fire_stick_lift_burst() -> void:
+	if _stick_lift_burst != null:
+		_stick_lift_burst.restart()
 
 func _process(delta: float) -> void:
 	var curr_pos: Vector3 = global_position
@@ -143,4 +155,36 @@ func _make_trail_sub_emitter() -> GPUParticles3D:
 	disk.material = mesh_mat
 	e.draw_pass_1 = disk
 
+	return e
+
+# Small upward spark fan — the "pop" of the stick getting lifted. Brief, explosive,
+# light gravity so the sparks arc back down. Distinct from the puck-strip trail.
+func _make_stick_lift_emitter() -> CPUParticles3D:
+	var e := CPUParticles3D.new()
+	e.name = "StickLiftBurst"
+	e.emitting = false
+	e.amount = 14
+	e.lifetime = 0.3
+	e.one_shot = true
+	e.explosiveness = 0.95
+	e.randomness = 0.4
+	e.local_coords = false
+	e.direction = Vector3(0.0, 1.0, 0.0)
+	e.spread = 55.0
+	e.initial_velocity_min = 2.0
+	e.initial_velocity_max = 5.0
+	e.gravity = Vector3(0.0, -18.0, 0.0)
+	e.scale_amount_min = 0.02
+	e.scale_amount_max = 0.045
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.5
+	sphere.height = 1.0
+	sphere.radial_segments = 4
+	sphere.rings = 2
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.97, 0.85, 0.9)
+	sphere.material = mat
+	e.mesh = sphere
 	return e

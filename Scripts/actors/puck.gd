@@ -305,6 +305,13 @@ func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 func is_airborne() -> bool:
 	return position.y > ice_height + 0.05
 
+# One-shot spark burst at the puck for a stick-lift strip. Delegated to PuckVFX
+# (child "VFX"); the burst anchors to the puck, which sits at the dislodge point.
+func fire_stick_lift_vfx() -> void:
+	var vfx := get_node_or_null("VFX") as PuckVFX
+	if vfx != null:
+		vfx.fire_stick_lift_burst()
+
 func _on_body_entered(body: Node3D) -> void:
 	if carrier != null:
 		return

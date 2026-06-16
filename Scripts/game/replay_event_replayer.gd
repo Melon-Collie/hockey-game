@@ -56,6 +56,8 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 			SoundManager.play_world(SoundManager.Sound.PUCK_BODY_BLOCK, pos, volume_db, 0.07)
 		"puck_strip":
 			SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, pos, volume_db, 0.06)
+		"stick_lift":
+			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, volume_db, 0.06)
 		"puck_goalie":
 			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, volume_db, 0.05)
 		"puck_post":
