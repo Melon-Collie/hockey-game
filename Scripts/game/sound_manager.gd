@@ -32,7 +32,7 @@ const _SOUND_PATHS: Dictionary = {
 	Sound.PUCK_GOALIE:      "res://Sounds/puck_goalie.wav",
 	Sound.PUCK_POST:        "res://Sounds/puck_post.wav",
 	Sound.PUCK_GOAL_BODY:   "res://Sounds/puck_goal_body.wav",
-	Sound.PUCK_DEFLECTION:  "res://Sounds/puck_boards.wav",
+	Sound.PUCK_DEFLECTION:  "res://Sounds/puck_deflection.wav",
 	Sound.PUCK_BODY_BLOCK:  "res://Sounds/puck_body_block.ogg",
 	Sound.PUCK_STRIP:       "res://Sounds/puck_strip.wav",
 	Sound.PERIOD_BUZZER:    "res://Sounds/period_buzzer.wav",
@@ -123,7 +123,7 @@ func play_sfx(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0)
 			return
 
 
-func play_world(sound: Sound, position: Vector3, volume_db: float = 0.0, pitch_variance: float = 0.0) -> void:
+func play_world(sound: Sound, position: Vector3, volume_db: float = 0.0, pitch_variance: float = 0.0, pitch_scale: float = 1.0) -> void:
 	var stream: AudioStream = _streams.get(sound)
 	if stream == null:
 		return
@@ -131,7 +131,7 @@ func play_world(sound: Sound, position: Vector3, volume_db: float = 0.0, pitch_v
 		if not p.playing:
 			p.stream = stream
 			p.volume_db = volume_db
-			p.pitch_scale = randf_range(1.0 - pitch_variance, 1.0 + pitch_variance) if pitch_variance > 0.0 else 1.0
+			p.pitch_scale = randf_range(1.0 - pitch_variance, 1.0 + pitch_variance) * pitch_scale if pitch_variance > 0.0 else pitch_scale
 			p.global_position = position
 			p.play()
 			return
