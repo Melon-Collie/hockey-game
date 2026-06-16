@@ -929,8 +929,12 @@ func _wire_sound_signals() -> void:
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_BODY_BLOCK, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.07))
 	NetworkManager.puck_strip_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
-	period_changed.connect(func(_p: int) -> void: SoundManager.play_sfx(SoundManager.Sound.PERIOD_BUZZER))
-	game_over.connect(func() -> void: SoundManager.play_sfx(SoundManager.Sound.PERIOD_BUZZER))
+	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
+	# regulation periods, GAME_OVER for the final one. (Not period_changed, which
+	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
+	phase_changed.connect(func(p: GamePhase.Phase) -> void:
+		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
+			SoundManager.play_sfx(SoundManager.Sound.PERIOD_BUZZER))
 
 
 func _on_local_pickup_sound() -> void:
@@ -2231,6 +2235,10 @@ func reset_game() -> void:
 
 
 func on_game_reset(new_game_id: String = "") -> void:
+	# The rematch RPC can land while this client is mid scene-transition
+	# (lobby return / disconnect teardown) — guard like sibling RPC handlers.
+	if _state_machine == null:
+		return
 	_apply_reset()
 	_rollover_replay_file_to(new_game_id)
 	# Clear client-side carry state so PuckController stops pinning to blade.

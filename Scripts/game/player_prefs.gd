@@ -105,7 +105,6 @@ var attr_speed:   int = PlayerAttributes.LEVEL_MEDIUM
 var attr_agility: int = PlayerAttributes.LEVEL_MEDIUM
 var attr_size:    int = PlayerAttributes.LEVEL_MEDIUM
 var attr_strength:    int = PlayerAttributes.LEVEL_MEDIUM
-var last_ip: String = ""
 var master_volume: float = 1.0
 var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
@@ -152,6 +151,11 @@ var attack_up: bool = false
 # Accessibility: swap the on-ice self/team/enemy ring colors for a
 # colorblind-safe palette (SkaterHUDCoordinator reads this live).
 var colorblind_rings: bool = false
+# Accessibility: photosensitivity / motion options. screen_flash gates the
+# full-screen goal flash and hit vignette (FlashOverlay); screen_shake gates
+# camera trauma shake (GameCamera.shake). Both default on.
+var screen_flash: bool = true
+var screen_shake: bool = true
 var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
@@ -237,7 +241,6 @@ func save() -> void:
 	cfg.set_value("player", "attr_agility", attr_agility)
 	cfg.set_value("player", "attr_size",    attr_size)
 	cfg.set_value("player", "attr_strength",    attr_strength)
-	cfg.set_value("player", "last_ip", last_ip)
 	cfg.set_value("audio", "master_volume", master_volume)
 	cfg.set_value("audio", "sfx_volume", sfx_volume)
 	cfg.set_value("audio", "ui_volume", ui_volume)
@@ -264,6 +267,8 @@ func save() -> void:
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "has_opened_player_settings", has_opened_player_settings)
 	cfg.set_value("game", "colorblind_rings", colorblind_rings)
+	cfg.set_value("game", "screen_flash", screen_flash)
+	cfg.set_value("game", "screen_shake", screen_shake)
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
@@ -522,7 +527,6 @@ func _load() -> void:
 				PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
 		attr_strength    = clampi(int(cfg.get_value("player", "attr_strength",    PlayerAttributes.LEVEL_MEDIUM)),
 				PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
-		last_ip = cfg.get_value("player", "last_ip", "")
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 1.0), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
@@ -550,6 +554,8 @@ func _load() -> void:
 		attack_up = cfg.get_value("game", "attack_up", false)
 		has_opened_player_settings = cfg.get_value("game", "has_opened_player_settings", false)
 		colorblind_rings = cfg.get_value("game", "colorblind_rings", false)
+		screen_flash = cfg.get_value("game", "screen_flash", true)
+		screen_shake = cfg.get_value("game", "screen_shake", true)
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)

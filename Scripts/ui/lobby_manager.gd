@@ -8,6 +8,8 @@ const _SETTING_CONTROL_WIDTH: int = 220
 var _lobby_slots: Dictionary = {}
 
 var _slot_grid: SlotGridPanel = null
+var _kick_confirm: ConfirmDialog = null
+var _kick_pending_peer: int = -1
 var _start_btn: Button = null
 var _ready_btn: Button = null
 var _settings_panel: LobbySettingsPanel = null
@@ -50,6 +52,10 @@ func _ready() -> void:
 	_my_color_slot = _initial_color_preference()
 	_color_votes = NetworkManager.pending_color_votes.duplicate()
 	_build_ui()
+	_kick_confirm = ConfirmDialog.new()
+	_kick_confirm.confirmed.connect(_on_kick_confirmed)
+	_kick_confirm.cancelled.connect(func() -> void: _kick_pending_peer = -1)
+	add_child(_kick_confirm)
 	NetworkManager.peer_joined.connect(_on_peer_joined)
 	NetworkManager.peer_disconnected.connect(_on_peer_disconnected)
 	NetworkManager.slot_swap_requested.connect(_on_slot_swap_requested)
@@ -129,6 +135,7 @@ func _build_ui() -> void:
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_grid.slot_selected.connect(_on_slot_selected)
 	_slot_grid.bot_toggled.connect(_on_bot_toggled)
+	_slot_grid.kick_requested.connect(_on_kick_requested)
 	vbox.add_child(_slot_grid)
 
 	# Three-column section below the slot grid: TEAMS / MATCH / SPECTATORS.
@@ -692,6 +699,19 @@ func _on_color_votes_synced(votes: Dictionary) -> void:
 	# Make sure our own vote is still recorded after a full sync.
 	_color_votes[NetworkManager.local_peer_id()] = _my_color_slot
 	_refresh_grid()
+
+func _on_kick_requested(peer_id: int, player_name: String) -> void:
+	# SlotGridPanel only shows the kick X to the host, but re-check anyway.
+	if not NetworkManager.is_host:
+		return
+	_kick_pending_peer = peer_id
+	_kick_confirm.open("Remove %s from the lobby?" % player_name)
+
+func _on_kick_confirmed() -> void:
+	if _kick_pending_peer > 0:
+		NetworkManager.kick_peer(_kick_pending_peer,
+				"You were removed from the lobby by the host.")
+	_kick_pending_peer = -1
 
 func _on_bot_toggled(team_id: int, slot: int, is_bot: bool) -> void:
 	# Host-only by gating: SlotGridPanel hides the CheckButton on non-hosts so

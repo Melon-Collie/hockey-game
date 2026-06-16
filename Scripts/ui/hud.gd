@@ -150,9 +150,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not event.is_action_pressed(&"ui_cancel"):
 		return
-	if _game_over_popup.visible:
-		return
 	if _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible:
+		return
+	if _game_over_popup.visible:
+		# The game-over popup is persistent chrome, not a dismissable modal —
+		# closing it would strand the player with no post-game actions. Esc
+		# instead opens the pause menu over it so Options stays reachable.
+		_pause_menu.open()
+		get_viewport().set_input_as_handled()
 		return
 	if NetworkManager.is_free_play_mode:
 		_side_menu.open()
@@ -550,16 +555,18 @@ func _build_skip_replay_prompt() -> void:
 
 func _build_menu_hint() -> void:
 	_menu_hint_label = _lbl("[ESC] MENU", 16, _WHITE)
-	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_menu_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	_menu_hint_label.anchor_left = 0.0
-	_menu_hint_label.anchor_right = 0.0
-	_menu_hint_label.anchor_top = 0.0
-	_menu_hint_label.anchor_bottom = 0.0
-	_menu_hint_label.offset_left = 20.0
-	_menu_hint_label.offset_right = 220.0
-	_menu_hint_label.offset_top = 16.0
-	_menu_hint_label.offset_bottom = 40.0
+	# Bottom-center: anchored to the bottom edge, horizontally centered (a ~200px
+	# box straddling the 0.5 anchor), sitting 16px above the bottom.
+	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_menu_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_menu_hint_label.anchor_left = 0.5
+	_menu_hint_label.anchor_right = 0.5
+	_menu_hint_label.anchor_top = 1.0
+	_menu_hint_label.anchor_bottom = 1.0
+	_menu_hint_label.offset_left = -100.0
+	_menu_hint_label.offset_right = 100.0
+	_menu_hint_label.offset_top = -40.0
+	_menu_hint_label.offset_bottom = -16.0
 	# Starts hidden — _ready opens the menu right away, which fires the opened
 	# signal and keeps the hint down until the player first closes the menu.
 	_menu_hint_label.visible = false
@@ -980,10 +987,13 @@ func _on_game_over_free_play() -> void:
 	var msg: String = "Return to free play?"
 	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
 		msg = "Return to free play? This ends the match for everyone."
-	_show_confirm(msg, GameManager.return_to_free_play)
+	_show_confirm(msg, func() -> void:
+		await NetworkManager.announce_match_end()
+		GameManager.return_to_free_play())
 
 func _on_game_over_exit() -> void:
 	_show_confirm("Exit game?", func() -> void:
+		await NetworkManager.announce_match_end()
 		GameManager.on_scene_exit()
 		NetworkManager.reset()
 		get_tree().quit())

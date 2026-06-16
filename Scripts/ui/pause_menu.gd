@@ -161,6 +161,7 @@ func _build_slot_grid_overlay() -> void:
 	_slot_grid = SlotGridPanel.new()
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_grid.slot_selected.connect(_on_slot_selected)
+	_slot_grid.kick_requested.connect(_on_kick_requested)
 	vbox.add_child(_slot_grid)
 
 	_slot_grid_container = Control.new()
@@ -240,12 +241,15 @@ func _build_leave_overlay() -> void:
 		var msg: String = "Return to free play?"
 		if NetworkManager.is_host and not NetworkManager.is_offline_mode:
 			msg = "Return to free play? This ends the match for everyone."
-		_show_confirm(msg, GameManager.return_to_free_play))
+		_show_confirm(msg, func() -> void:
+			await NetworkManager.announce_match_end()
+			GameManager.return_to_free_play()))
 	vbox.add_child(free_play_btn)
 
 	var exit_btn := MenuStyle.popup_button("Exit Game")
 	exit_btn.pressed.connect(func() -> void:
 		_show_confirm("Exit game?", func() -> void:
+			await NetworkManager.announce_match_end()
 			GameManager.on_scene_exit()
 			NetworkManager.reset()
 			get_tree().quit()))
@@ -290,13 +294,21 @@ func _on_slot_selected(team_id: int, slot: int) -> void:
 	close()
 
 
+func _on_kick_requested(peer_id: int, player_name: String) -> void:
+	_show_confirm("Kick %s from the game?" % player_name, func() -> void:
+		NetworkManager.kick_peer(peer_id, "You were kicked by the host."))
+
+
 func _on_stats_updated() -> void:
 	if visible and _slot_grid != null:
 		_refresh_slot_grid()
 
 
 func _refresh_slot_grid() -> void:
-	_slot_grid.refresh(GameManager.get_slot_roster(), _get_team_colors())
+	# No bot add/remove mid-match, but the host keeps the kick X on connected
+	# peers' cards.
+	_slot_grid.refresh(GameManager.get_slot_roster(), _get_team_colors(), {},
+			NetworkManager.is_host, {}, false)
 
 
 func _get_team_colors() -> Array[Dictionary]:

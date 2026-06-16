@@ -34,6 +34,8 @@ var _cursor_size_slider: HSlider = null
 var _cursor_size_label: Label = null
 var _attack_up_check: CheckButton = null
 var _colorblind_check: CheckButton = null
+var _screen_flash_check: CheckButton = null
+var _screen_shake_check: CheckButton = null
 var _tilt_slider: HSlider = null
 var _tilt_label: Label = null
 var _fov_slider: HSlider = null
@@ -139,6 +141,8 @@ func _snapshot() -> Dictionary:
 		"cursor_size": PlayerPrefs.cursor_size,
 		"attack_up": PlayerPrefs.attack_up,
 		"colorblind_rings": PlayerPrefs.colorblind_rings,
+		"screen_flash": PlayerPrefs.screen_flash,
+		"screen_shake": PlayerPrefs.screen_shake,
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
@@ -172,6 +176,8 @@ func _read_controls() -> Dictionary:
 		"cursor_size": int(_cursor_size_slider.value),
 		"attack_up": _attack_up_check.button_pressed,
 		"colorblind_rings": _colorblind_check.button_pressed,
+		"screen_flash": _screen_flash_check.button_pressed,
+		"screen_shake": _screen_shake_check.button_pressed,
 		"camera_tilt_deg": _tilt_slider.value,
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
@@ -535,6 +541,18 @@ func _build_game_tab() -> Control:
 	_colorblind_check.toggled.connect(_on_colorblind_toggled)
 	box.add_child(_field_row("Colorblind Team Colors", _colorblind_check))
 
+	_screen_flash_check = CheckButton.new()
+	_screen_flash_check.set_pressed_no_signal(PlayerPrefs.screen_flash)
+	SoundManager.wire_button(_screen_flash_check)
+	_screen_flash_check.toggled.connect(_on_screen_flash_toggled)
+	box.add_child(_field_row("Screen Flash Effects", _screen_flash_check))
+
+	_screen_shake_check = CheckButton.new()
+	_screen_shake_check.set_pressed_no_signal(PlayerPrefs.screen_shake)
+	SoundManager.wire_button(_screen_shake_check)
+	_screen_shake_check.toggled.connect(_on_screen_shake_toggled)
+	box.add_child(_field_row("Camera Shake", _screen_shake_check))
+
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Camera"))
 
@@ -669,6 +687,12 @@ func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_colorblind_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
+func _on_screen_flash_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
+func _on_screen_shake_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_confine_mouse_toggled(_pressed: bool) -> void:
@@ -842,6 +866,8 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.cursor_size = c.cursor_size
 	PlayerPrefs.attack_up = c.attack_up
 	PlayerPrefs.colorblind_rings = c.colorblind_rings
+	PlayerPrefs.screen_flash = c.screen_flash
+	PlayerPrefs.screen_shake = c.screen_shake
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
@@ -897,6 +923,10 @@ func _on_cancel_pressed() -> void:
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
 	if _colorblind_check != null:
 		_colorblind_check.set_pressed_no_signal(_original.colorblind_rings)
+	if _screen_flash_check != null:
+		_screen_flash_check.set_pressed_no_signal(_original.screen_flash)
+	if _screen_shake_check != null:
+		_screen_shake_check.set_pressed_no_signal(_original.screen_shake)
 	if _tilt_slider != null:
 		_tilt_slider.value = _original.camera_tilt_deg
 	if _fov_slider != null:

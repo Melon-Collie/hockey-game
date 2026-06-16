@@ -8,7 +8,6 @@ enum Sound {
 	PUCK_PICKUP,
 	GOAL_HORN,
 	SKATE_BRAKE,
-	SKATE_CARVE,
 	PUCK_BOARDS,
 	PUCK_GOALIE,
 	PUCK_POST,
@@ -29,7 +28,6 @@ const _SOUND_PATHS: Dictionary = {
 	Sound.PUCK_PICKUP:      "res://Sounds/puck_pickup.ogg",
 	Sound.GOAL_HORN:        "res://Sounds/goal_horn.ogg",
 	Sound.SKATE_BRAKE:      "res://Sounds/skate_brake.wav",
-	Sound.SKATE_CARVE:      "res://Sounds/skate_carve.wav",
 	Sound.PUCK_BOARDS:      "res://Sounds/puck_boards.wav",
 	Sound.PUCK_GOALIE:      "res://Sounds/puck_goalie.wav",
 	Sound.PUCK_POST:        "res://Sounds/puck_post.wav",
@@ -39,7 +37,7 @@ const _SOUND_PATHS: Dictionary = {
 	Sound.PUCK_STRIP:       "res://Sounds/puck_strip.wav",
 	Sound.PERIOD_BUZZER:    "res://Sounds/period_buzzer.wav",
 	Sound.BODY_CHECK:       "res://Sounds/body_check.ogg",
-	Sound.FACEOFF_WHISTLE:  "res://Sounds/faceoff_whistle.ogg",
+	Sound.FACEOFF_WHISTLE:  "res://Sounds/faceoff_whistle.wav",
 }
 
 const _UI_POOL_SIZE: int = 4

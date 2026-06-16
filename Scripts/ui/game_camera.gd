@@ -76,6 +76,8 @@ func _get_attacking_direction() -> int:
 	return 1 if attacking_goal.defending_team_id == 0 else -1
 
 func shake(trauma: float) -> void:
+	if not PlayerPrefs.screen_shake:
+		return
 	_shake_trauma = minf(1.0, _shake_trauma + trauma)
 
 func _ready() -> void:
