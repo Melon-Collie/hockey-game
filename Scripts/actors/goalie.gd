@@ -24,7 +24,37 @@ extends Node3D
 @onready var _glove_mesh: MeshInstance3D = $Glove/MeshInstance3D
 @onready var _blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
 
-func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Color) -> void:
+var _stripe_meshes: Array[MeshInstance3D] = []
+var _number_label_front: Label3D = null
+var _number_label_back: Label3D = null
+var _name_label_back: Label3D = null
+var _left_hip_connector: MeshInstance3D = null
+var _right_hip_connector: MeshInstance3D = null
+var _glove_arm_connector: MeshInstance3D = null
+var _blocker_arm_connector: MeshInstance3D = null
+
+
+func _ready() -> void:
+	_init_head_mesh()
+	_init_jersey_stripes()
+	_init_labels()
+	_init_connectors()
+
+
+func _process(_delta: float) -> void:
+	_update_connectors()
+
+
+func set_goalie_identity(number: int, name: String) -> void:
+	if _number_label_front:
+		_number_label_front.text = str(number)
+	if _number_label_back:
+		_number_label_back.text = str(number)
+	if _name_label_back:
+		_name_label_back.text = name.to_upper()
+
+
+func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Color, stripe_color: Color = Color.WHITE) -> void:
 	var jersey_mat := StandardMaterial3D.new()
 	jersey_mat.albedo_color = jersey_color
 	_body_mesh.material_override = jersey_mat
@@ -37,6 +67,8 @@ func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Colo
 	_right_pad_mesh.material_override = pads_mat.duplicate()
 	_glove_mesh.material_override = pads_mat.duplicate()
 	_blocker_mesh.material_override = pads_mat.duplicate()
+	_apply_stripe_color(stripe_color)
+	_apply_connector_colors(jersey_color, pads_color)
 
 # `glove_max_step` / `blocker_max_step`: optional caps on linear movement
 # this frame (metres). Callers pass `*_react_max_speed * delta` to enforce a
@@ -173,3 +205,139 @@ static func _lerp_euler_deg(from: Vector3, to: Vector3, t: float) -> Vector3:
 static func _shortest_deg_delta(from: float, to: float) -> float:
 	var delta: float = fmod(to - from + 540.0, 360.0) - 180.0
 	return delta
+
+
+func _init_head_mesh() -> void:
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.15
+	sphere.height = 0.22
+	_head_mesh.mesh = sphere
+
+
+func _init_jersey_stripes() -> void:
+	# Three horizontal stripe bands painted over the body front + back faces.
+	var stripe_ys: PackedFloat32Array = PackedFloat32Array([-0.17, -0.04, 0.09])
+	for y: float in stripe_ys:
+		for front: bool in [true, false]:
+			var mi := MeshInstance3D.new()
+			var box := BoxMesh.new()
+			box.size = Vector3(0.50, 0.045, 0.003)
+			mi.mesh = box
+			mi.position = Vector3(0.0, y, -0.143 if front else 0.143)
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_body.add_child(mi)
+			_stripe_meshes.append(mi)
+
+
+func _init_labels() -> void:
+	_number_label_front = _make_number_label()
+	_number_label_front.position = Vector3(0.0, -0.06, -0.145)
+	_body.add_child(_number_label_front)
+
+	_number_label_back = _make_number_label()
+	_number_label_back.position = Vector3(0.0, -0.03, 0.145)
+	_number_label_back.rotation_degrees.y = 180.0
+	_body.add_child(_number_label_back)
+
+	_name_label_back = Label3D.new()
+	_name_label_back.font_size = 14
+	_name_label_back.pixel_size = 0.004
+	_name_label_back.outline_size = 3
+	_name_label_back.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_name_label_back.position = Vector3(0.0, 0.16, 0.145)
+	_name_label_back.rotation_degrees.y = 180.0
+	_body.add_child(_name_label_back)
+
+
+func _make_number_label() -> Label3D:
+	var lbl := Label3D.new()
+	lbl.font_size = 32
+	lbl.pixel_size = 0.004
+	lbl.outline_size = 4
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	return lbl
+
+
+func _init_connectors() -> void:
+	_left_hip_connector = _make_connector_mesh(0.08)
+	add_child(_left_hip_connector)
+	_right_hip_connector = _make_connector_mesh(0.08)
+	add_child(_right_hip_connector)
+	_glove_arm_connector = _make_connector_mesh(0.055)
+	add_child(_glove_arm_connector)
+	_blocker_arm_connector = _make_connector_mesh(0.055)
+	add_child(_blocker_arm_connector)
+
+
+func _make_connector_mesh(radius: float) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = 0.1
+	mi.mesh = cyl
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+
+func _apply_stripe_color(color: Color) -> void:
+	if _stripe_meshes.is_empty():
+		return
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	for mi: MeshInstance3D in _stripe_meshes:
+		mi.material_override = mat
+	if _number_label_front:
+		_number_label_front.modulate = color
+	if _number_label_back:
+		_number_label_back.modulate = color
+	if _name_label_back:
+		_name_label_back.modulate = color
+
+
+func _apply_connector_colors(jersey_color: Color, pads_color: Color) -> void:
+	if not _glove_arm_connector:
+		return
+	var jersey_mat := StandardMaterial3D.new()
+	jersey_mat.albedo_color = jersey_color
+	_glove_arm_connector.material_override = jersey_mat
+	_blocker_arm_connector.material_override = jersey_mat.duplicate()
+	var pads_mat := StandardMaterial3D.new()
+	pads_mat.albedo_color = pads_color
+	_left_hip_connector.material_override = pads_mat
+	_right_hip_connector.material_override = pads_mat.duplicate()
+
+
+# Bridge each body-part pair with a cylinder that tracks their current positions
+# every frame. All positions are in goalie-local space (direct children of the
+# Goalie root), so no coordinate conversion needed.
+func _update_connectors() -> void:
+	_point_connector(_left_hip_connector,
+		_body.position + _body.basis * Vector3(-0.10, -0.24, 0.0),
+		_left_pad.position)
+	_point_connector(_right_hip_connector,
+		_body.position + _body.basis * Vector3(0.10, -0.24, 0.0),
+		_right_pad.position)
+	_point_connector(_glove_arm_connector,
+		_body.position + _body.basis * Vector3(0.23, 0.12, 0.0),
+		_glove.position)
+	_point_connector(_blocker_arm_connector,
+		_body.position + _body.basis * Vector3(-0.23, 0.12, 0.0),
+		_block_arm.position)
+
+
+func _point_connector(mesh: MeshInstance3D, from_pos: Vector3, to_pos: Vector3) -> void:
+	var diff: Vector3 = to_pos - from_pos
+	var length: float = diff.length()
+	if length < 0.02:
+		mesh.visible = false
+		return
+	mesh.visible = true
+	mesh.position = (from_pos + to_pos) * 0.5
+	# Orient CylinderMesh (Y-axis aligned) to point from from_pos to to_pos.
+	var y_axis: Vector3 = diff / length
+	var ref: Vector3 = Vector3.FORWARD if abs(y_axis.dot(Vector3.UP)) < 0.99 else Vector3.RIGHT
+	var x_axis: Vector3 = ref.cross(y_axis).normalized()
+	var z_axis: Vector3 = x_axis.cross(y_axis).normalized()
+	mesh.basis = Basis(x_axis, y_axis, z_axis)
+	(mesh.mesh as CylinderMesh).height = length
