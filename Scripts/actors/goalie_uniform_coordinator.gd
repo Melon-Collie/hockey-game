@@ -1,21 +1,24 @@
 class_name GoalieUniformCoordinator
 extends RefCounted
 
-# Paints the goalie jersey using the same SubViewport + JerseyDecal pipeline as
-# SkaterUniformCoordinator. The goalie body BoxMesh is replaced with a CylinderMesh
-# so the jersey texture maps cleanly with uv1_offset.x = 0.25 (same UV convention
-# as the skater torso: back-center of the cylinder lands at +Z).
+# Paints the goalie uniform using a custom spatial shader on the body BoxMesh
+# (goalie_jersey.gdshader) rather than the CylinderMesh + JerseyDecal viewport
+# approach used for skaters. The body stays a BoxMesh so the visual silhouette
+# matches the square hitbox of a heavily-padded goalie.
+#
+# Jersey stripes are placed in object-space Y by the shader — no UV layout
+# knowledge required. Name/number are rendered into a face-proportioned
+# SubViewport (GoalieTextDecal) and projected onto the ±Z faces by the shader.
 #
 # Entry points match the skater coordinator interface:
-#   apply_uniform(colors)           — full v2 colors dict → jersey + solid pads/helmet
-#   apply_jersey_info(name, number) — repaint jersey decal only (cached colors reused)
+#   apply_uniform(colors)           — full v2 colors dict → body shader params + solid pads
+#   apply_jersey_info(name, number) — repaint text decal only (cached colors reused)
 
-const _ROUGH_CLOTH: float = 0.9
 const _ROUGH_HELMET: float = 0.28
 const _ROUGH_PADS: float = 0.75
-const _BODY_RADIUS: float = 0.22
-const _BODY_HEIGHT: float = 0.6
-const _BODY_SEGMENTS: int = 20
+const _MAX_STRIPES: int = 5
+
+const _JERSEY_SHADER: Shader = preload("res://Assets/Shaders/goalie_jersey.gdshader")
 
 var _goalie: Goalie
 var _body_mesh: MeshInstance3D
@@ -25,17 +28,15 @@ var _right_pad_mesh: MeshInstance3D
 var _glove_mesh: MeshInstance3D
 var _blocker_mesh: MeshInstance3D
 
-var _jersey_viewport: SubViewport
-var _jersey_decal: JerseyDecal
+var _jersey_mat: ShaderMaterial
+var _text_viewport: SubViewport
+var _text_decal: GoalieTextDecal
 
-# Cached so apply_jersey_info can repaint without re-supplying uniform data.
-var _jersey_base_color: Color = Color.WHITE
-var _jersey_yoke_color: Variant = null
-var _jersey_stripes: Array[Dictionary] = []
+# Cached for apply_jersey_info refresh.
+var _text_color: Color = Color.WHITE
+var _text_outline_color: Color = Color.BLACK
 var _player_name: String = ""
 var _jersey_number: int = 0
-var _text_color: Color = Color.BLACK
-var _text_outline_color: Color = Color.BLACK
 
 
 func setup(goalie: Goalie, body_mesh: MeshInstance3D, head_mesh: MeshInstance3D,
@@ -48,18 +49,18 @@ func setup(goalie: Goalie, body_mesh: MeshInstance3D, head_mesh: MeshInstance3D,
 	_right_pad_mesh = right_pad_mesh
 	_glove_mesh = glove_mesh
 	_blocker_mesh = blocker_mesh
-	_init_body_mesh()
-	_create_jersey_viewport()
+	_create_jersey_material()
 
 
 func apply_uniform(colors: Dictionary) -> void:
 	var uniform: Dictionary = colors.uniform
 	_text_color = colors.text
 	_text_outline_color = colors.text_outline
-	_jersey_base_color = uniform.jersey.base
-	_jersey_yoke_color = uniform.jersey.yoke
-	_jersey_stripes = uniform.jersey.stripes
-	_rebuild_jersey_texture()
+
+	var jersey: Dictionary = uniform.jersey
+	_jersey_mat.set_shader_parameter("base_color", jersey.base)
+	_set_stripe_params(jersey.stripes)
+
 	_head_mesh.material_override = _make_solid_mat(uniform.helmet, _ROUGH_HELMET)
 	var pads_mat: StandardMaterial3D = _make_solid_mat(colors.goalie_pads, _ROUGH_PADS)
 	_left_pad_mesh.material_override = pads_mat
@@ -67,56 +68,67 @@ func apply_uniform(colors: Dictionary) -> void:
 	_glove_mesh.material_override = pads_mat.duplicate()
 	_blocker_mesh.material_override = pads_mat.duplicate()
 
+	# Repaint text with new team text colors (number/name unchanged).
+	_rebuild_text_decal()
+
 
 func apply_jersey_info(p_name: String, number: int) -> void:
 	_player_name = p_name
 	_jersey_number = number
-	_rebuild_jersey_texture()
+	_rebuild_text_decal()
 
 
-func _init_body_mesh() -> void:
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = _BODY_RADIUS
-	cyl.bottom_radius = _BODY_RADIUS
-	cyl.height = _BODY_HEIGHT
-	cyl.radial_segments = _BODY_SEGMENTS
-	_body_mesh.mesh = cyl
+func _create_jersey_material() -> void:
+	_jersey_mat = ShaderMaterial.new()
+	_jersey_mat.shader = _JERSEY_SHADER
+
+	_text_viewport = SubViewport.new()
+	_text_viewport.name = "GoalieTextViewport"
+	_text_viewport.size = Vector2i(GoalieTextDecal.IMG_W, GoalieTextDecal.IMG_H)
+	_text_viewport.transparent_bg = true
+	_text_viewport.disable_3d = true
+	_text_viewport.handle_input_locally = false
+	_text_viewport.gui_disable_input = true
+	_text_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	_goalie.add_child(_text_viewport)
+
+	_text_decal = GoalieTextDecal.new()
+	_text_decal.name = "GoalieTextDecal"
+	_text_viewport.add_child(_text_decal)
+
+	_jersey_mat.set_shader_parameter("text_decal", _text_viewport.get_texture())
+	_body_mesh.material_override = _jersey_mat
 
 
-# Spawns the SubViewport + JerseyDecal and points the body material at the
-# viewport texture. Same pattern as SkaterUniformCoordinator._create_jersey_viewport.
-func _create_jersey_viewport() -> void:
-	_jersey_viewport = SubViewport.new()
-	_jersey_viewport.name = "GoalieJerseyViewport"
-	_jersey_viewport.size = Vector2i(JerseyDecal.IMG_W, JerseyDecal.IMG_H)
-	_jersey_viewport.transparent_bg = false
-	_jersey_viewport.disable_3d = true
-	_jersey_viewport.handle_input_locally = false
-	_jersey_viewport.gui_disable_input = true
-	_jersey_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
-	_goalie.add_child(_jersey_viewport)
+# Packs up to _MAX_STRIPES stripe definitions from the v2 stripes array into
+# the shader's fixed-size uniform arrays.
+func _set_stripe_params(stripes: Array[Dictionary]) -> void:
+	var count: int = mini(stripes.size(), _MAX_STRIPES)
+	_jersey_mat.set_shader_parameter("stripe_count", count)
 
-	_jersey_decal = JerseyDecal.new()
-	_jersey_decal.name = "GoalieJerseyDecal"
-	_jersey_viewport.add_child(_jersey_decal)
-
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = _jersey_viewport.get_texture()
-	mat.roughness = _ROUGH_CLOTH
-	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
-	_body_mesh.material_override = mat
-
-
-func _rebuild_jersey_texture() -> void:
-	if _jersey_decal == null:
-		return
-	_jersey_decal.update_jersey(
-			_jersey_base_color, _jersey_yoke_color, _jersey_stripes,
-			_player_name, _jersey_number, _text_color, _text_outline_color)
-	_jersey_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	var colors: Array[Color] = []
+	var positions: PackedFloat32Array = PackedFloat32Array()
+	var widths: PackedFloat32Array = PackedFloat32Array()
+	for i: int in range(_MAX_STRIPES):
+		if i < count:
+			colors.append(stripes[i].color as Color)
+			positions.append(float(stripes[i].pos))
+			widths.append(float(stripes[i].width))
+		else:
+			colors.append(Color.WHITE)
+			positions.append(0.0)
+			widths.append(0.0)
+	_jersey_mat.set_shader_parameter("stripe_colors", colors)
+	_jersey_mat.set_shader_parameter("stripe_positions", positions)
+	_jersey_mat.set_shader_parameter("stripe_widths", widths)
 
 
-func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
+func _rebuild_text_decal() -> void:
+	_text_decal.update_text(_player_name, _jersey_number, _text_color, _text_outline_color)
+	_text_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+
+func _make_solid_mat(color: Color, roughness: float) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.roughness = roughness
