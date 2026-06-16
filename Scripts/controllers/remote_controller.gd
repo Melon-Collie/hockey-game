@@ -166,6 +166,7 @@ func _interpolate() -> void:
 		interpolated.upper_body_angular_velocity = newest.upper_body_angular_velocity
 		interpolated.is_ghost = newest.is_ghost
 		interpolated.is_elevated = newest.is_elevated
+		interpolated.blade_up = newest.blade_up
 		interpolated.shot_state = newest.shot_state
 	else:
 		var from_state: SkaterNetworkState = bracket.from_state
@@ -192,6 +193,7 @@ func _interpolate() -> void:
 		# and the elevated-blade replication had no effect on remotes.)
 		interpolated.is_ghost = to_state.is_ghost
 		interpolated.is_elevated = to_state.is_elevated
+		interpolated.blade_up = to_state.blade_up
 		interpolated.shot_state = to_state.shot_state
 		# Push position forward from render_time to present using the interpolated
 		# velocity. Capped at extrapolation_max_ms so a large interpolation buffer
@@ -245,6 +247,10 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# Replicated from the host so the elevated-shot blade lift (Skater
 	# ._update_blade_elevation) shows on spectated remotes, not just locally.
 	skater.is_elevated = state.is_elevated
+	# Resolved stick-lift state. The lifted blade pose already rides in via the
+	# replicated blade_position above; this keeps skater.blade_up correct for
+	# any reader (AI off-puck, VFX) on spectated remotes.
+	skater.blade_up = state.blade_up
 	skater.current_shot_state = state.shot_state
 	# Bottom hand is purely reactive to top_hand + blade (both already set
 	# above) and needs no network state of its own. Arm/stick meshes derive

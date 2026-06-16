@@ -205,6 +205,8 @@ func _check_interactions() -> void:
 					break
 	else:
 		if not puck.pickup_locked:
+			# On-ice/off-ice gate is invariant across skaters this tick.
+			var puck_airborne: bool = puck.is_airborne()
 			for skater: Skater in skaters:
 				if skater.is_ghost or puck.is_on_cooldown(skater):
 					continue
@@ -213,11 +215,21 @@ func _check_interactions() -> void:
 				# dampening still applies via the body collision path).
 				if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
 					continue
+				# Grounded blade ↔ grounded puck, lifted blade ↔ airborne puck.
+				# A stationary grounded blade lets a saucer pass fly over; a lifted
+				# blade reaches only airborne pucks (and only to tip them).
+				if not PuckReceptionRules.blade_can_interact(skater.blade_up, puck_airborne):
+					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
 				var blade_prev: Vector3 = skater.get_prev_blade_contact_global()
 				if not PuckInteractionRules.check_pickup(_prev_puck_pos, puck_curr,
 						blade_prev, blade_curr, PICKUP_RADIUS):
 					continue
+				if skater.blade_up:
+					# Lifted blade can only tip an airborne puck — never corral it
+					# onto the stick. Redirect off the blade face and move on.
+					puck.apply_blade_deflect(skater)
+					break
 				var puck_vel: Vector3 = puck.get_puck_velocity()
 				var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
 				if PuckReceptionRules.should_receive(
