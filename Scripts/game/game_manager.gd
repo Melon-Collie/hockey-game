@@ -122,6 +122,7 @@ var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
+var _stick_lift_claim: StickLiftClaimResolver = null
 var _hit_claim: HitClaimResolver = null
 var _phase_coord: PhaseCoordinator = null
 var _swap_coord: SlotSwapCoordinator = null
@@ -220,6 +221,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
 	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
+	NetworkManager.stick_lift_claim_received.connect(_on_stick_lift_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
 	NetworkManager.input_batch_received.connect(_on_input_batch_received)
@@ -796,6 +798,9 @@ func _wire_subsystems() -> void:
 
 	_poke_claim = PokeClaimResolver.new()
 	_poke_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
+
+	_stick_lift_claim = StickLiftClaimResolver.new()
+	_stick_lift_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
 	_hit_claim = HitClaimResolver.new()
 	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
@@ -1614,6 +1619,12 @@ func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_m
 	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
 
+func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+
+
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
@@ -2201,6 +2212,7 @@ func on_scene_exit() -> void:
 	_shot_tracker = null
 	_pickup_claim = null
 	_poke_claim = null
+	_stick_lift_claim = null
 	_hit_claim = null
 	_phase_coord = null
 	_swap_coord = null

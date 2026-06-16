@@ -4,6 +4,16 @@ extends Node
 const PICKUP_RADIUS: float = 0.5
 const POKE_RADIUS: float = GameRules.POKE_RADIUS_M
 const CONTEST_SQUIRT_SPEED: float = 3.0
+# Stick-lift geometry: how close the attacker's (lifted) blade must be to the
+# carrier's hand→blade shaft, and how far below it, to hook under and pop it up.
+# Slightly wider than POKE_RADIUS — the lifted blade meets the shaft up off the
+# ice rather than the puck on it.
+const STICK_LIFT_RADIUS: float = 0.45
+const STICK_LIFT_UNDER_MARGIN: float = 0.0
+# How long a forced stick-lift keeps the victim's blade popped up after the hook
+# lands — enough to read as a lift and to deny an instant re-grab on top of the
+# reattach cooldown apply_poke_check already sets.
+const STICK_LIFT_FORCED_LIFT_S: float = 0.4
 
 @export var interpolation_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
 @export var extrapolation_max_ms: float = 50.0
@@ -160,6 +170,21 @@ func apply_lag_comp_poke(checker: Skater, expected_ex_carrier: Skater) -> void:
 	puck.apply_poke_check(checker)
 
 
+# Called after StickLiftClaimResolver validates a client stick-lift claim
+# against the state buffer. Same idempotency guards as apply_lag_comp_poke
+# (carrier null / claimant became carrier / carrier changed). On success the
+# victim's blade is popped up and the puck is stripped via the poke path.
+func apply_lag_comp_stick_lift(checker: Skater, expected_ex_carrier: Skater) -> void:
+	if not is_instance_valid(checker) or puck.carrier == null:
+		return
+	if puck.carrier == checker:
+		return
+	if puck.carrier != expected_ex_carrier:
+		return
+	puck.carrier.force_blade_lift(STICK_LIFT_FORCED_LIFT_S)
+	puck.apply_poke_check(checker)
+
+
 # Two valid pickup claims arrived within the contest window. Neither player
 # wins — the puck squirts perpendicular to the line between the two blade
 # contact points (both blades pressing inward pinch the puck like a seed
@@ -191,6 +216,7 @@ func _check_interactions() -> void:
 			# Hoist the carrier team out of the loop — it's invariant
 			# across all checkers and the lookup was being repeated.
 			var carrier_team: int = _team_id_by_skater.get(puck.carrier, -1)
+			var carrier_skater: Skater = puck.carrier
 			for skater: Skater in skaters:
 				if skater == puck.carrier or skater.is_ghost:
 					continue
@@ -198,6 +224,19 @@ func _check_interactions() -> void:
 				if not PuckCollisionRules.can_poke_check(carrier_team, checker_team):
 					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
+				if skater.blade_up:
+					# Stick lift: the attacker's lifted blade hooked under the
+					# carrier's shaft pops their blade up and strips the puck. A
+					# lifted blade pokes nothing the normal way (it's off the ice),
+					# so it's stick-lift-or-skip for this checker.
+					var vic_hand: Vector3 = carrier_skater.upper_body_to_global(carrier_skater.get_top_hand_position())
+					if PuckInteractionRules.check_blade_under_stick(
+							blade_curr, vic_hand, carrier_skater.get_blade_contact_global(),
+							STICK_LIFT_RADIUS, STICK_LIFT_UNDER_MARGIN):
+						carrier_skater.force_blade_lift(STICK_LIFT_FORCED_LIFT_S)
+						puck.apply_poke_check(skater)
+						break
+					continue
 				var blade_prev: Vector3 = skater.get_prev_blade_contact_global()
 				if PuckInteractionRules.check_poke(_prev_puck_pos, puck_curr,
 						blade_prev, blade_curr, POKE_RADIUS):

@@ -94,6 +94,7 @@ signal rematch_vote_changed(peer_id: int, vote: bool)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float)
 signal poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int)
+signal stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int)
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float)
 signal board_hit_received(position: Vector3)
 signal goal_body_hit_received(position: Vector3)
@@ -1016,6 +1017,21 @@ func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
 		return
 	poke_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+
+func send_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	NetworkSimManager.send(
+		func(ts: float, idms: float, cpid: int) -> void:
+			receive_stick_lift_claim.rpc_id(1, ts, idms, cpid),
+		[host_timestamp, interp_delay_ms, expected_carrier_peer_id], true)
+
+@rpc("any_peer", "reliable")
+func receive_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not is_host:
+		return
+	var peer_id: int = multiplayer.get_remote_sender_id()
+	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		return
+	stick_lift_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
 func send_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	NetworkSimManager.send(
