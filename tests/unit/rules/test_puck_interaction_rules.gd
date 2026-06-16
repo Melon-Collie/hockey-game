@@ -168,3 +168,58 @@ func test_poke_and_pickup_return_same_result_for_same_inputs() -> void:
 		var pickup := PuckInteractionRules.check_pickup(c[0], c[1], c[2], c[3], c[4])
 		var poke   := PuckInteractionRules.check_poke(c[0], c[1], c[2], c[3], c[4])
 		assert_eq(pickup, poke, "check_pickup and check_poke disagree for %s" % str(c))
+
+
+# ── check_blade_under_stick — stick-lift trigger geometry ────────────────────
+# Victim's stick runs along X at height Y=1 (hand at x=0, blade at x=1).
+# Attacker's blade is a single point.
+
+func test_blade_under_stick_hooked_below_within_radius() -> void:
+	# Attacker blade directly below the middle of the shaft, 0.2 m down.
+	assert_true(PuckInteractionRules.check_blade_under_stick(
+		Vector3(0.5, 0.8, 0),
+		Vector3(0, 1, 0), Vector3(1, 1, 0), 0.5))
+
+func test_blade_above_stick_does_not_trigger() -> void:
+	# Same proximity but the attacker blade is above the shaft — not hooked under.
+	assert_false(PuckInteractionRules.check_blade_under_stick(
+		Vector3(0.5, 1.2, 0),
+		Vector3(0, 1, 0), Vector3(1, 1, 0), 0.5))
+
+func test_blade_below_but_beyond_radius_does_not_trigger() -> void:
+	# Below the shaft but 0.8 m away — outside the radius.
+	assert_false(PuckInteractionRules.check_blade_under_stick(
+		Vector3(0.5, 0.2, 0),
+		Vector3(0, 1, 0), Vector3(1, 1, 0), 0.5))
+
+func test_blade_level_with_stick_does_not_trigger() -> void:
+	# Exactly level (not strictly below) with zero margin → no trigger.
+	assert_false(PuckInteractionRules.check_blade_under_stick(
+		Vector3(0.5, 1.0, 0),
+		Vector3(0, 1, 0), Vector3(1, 1, 0), 0.5))
+
+func test_blade_under_stick_closest_point_at_endpoint() -> void:
+	# Attacker blade off the hand end of the shaft; closest point is the hand
+	# endpoint (0,1,0). Within radius and below → triggers.
+	assert_true(PuckInteractionRules.check_blade_under_stick(
+		Vector3(-0.2, 0.7, 0),
+		Vector3(0, 1, 0), Vector3(1, 1, 0), 0.5))
+
+func test_blade_under_stick_degenerate_zero_length_shaft() -> void:
+	# Zero-length shaft degenerates to point-vs-point at the hand position.
+	assert_true(PuckInteractionRules.check_blade_under_stick(
+		Vector3(0, 0.8, 0),
+		Vector3(0, 1, 0), Vector3(0, 1, 0), 0.5))
+	assert_false(PuckInteractionRules.check_blade_under_stick(
+		Vector3(0, 1.2, 0),
+		Vector3(0, 1, 0), Vector3(0, 1, 0), 0.5))
+
+func test_blade_under_stick_under_margin_requires_clearance() -> void:
+	# 0.1 m below the shaft but a 0.2 m margin is required → no trigger.
+	assert_false(PuckInteractionRules.check_blade_under_stick(
+		Vector3(0.5, 0.9, 0),
+		Vector3(0, 1, 0), Vector3(1, 1, 0), 0.5, 0.2))
+	# 0.3 m below clears the same margin → triggers.
+	assert_true(PuckInteractionRules.check_blade_under_stick(
+		Vector3(0.5, 0.7, 0),
+		Vector3(0, 1, 0), Vector3(1, 1, 0), 0.5, 0.2))

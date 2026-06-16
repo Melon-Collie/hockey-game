@@ -33,3 +33,12 @@ static func should_receive(
 		alignment = maxf(0.0, -rel_vel.normalized().dot(blade_face_normal))
 	var threshold: float = deflect_min_speed + alignment_bonus * alignment
 	return rel_speed < threshold
+
+
+# Pure on-ice/off-ice gate: a blade only interacts with pucks on its own
+# vertical plane. A lifted blade (off the ice) handles airborne pucks; a
+# grounded blade handles grounded pucks. This is what lets a saucer pass fly
+# over a stationary, grounded blade instead of being corralled out of the air,
+# and is what limits a lifted blade to tipping airborne pucks.
+static func blade_can_interact(blade_up: bool, puck_airborne: bool) -> bool:
+	return blade_up == puck_airborne

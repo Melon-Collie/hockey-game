@@ -20,6 +20,34 @@ static func check_poke(
 	return _segment_segment_dist_sq(puck_prev, puck_curr, blade_prev, blade_curr) <= radius * radius
 
 
+# Stick-lift trigger geometry. The attacker's blade is a single point; the
+# victim's stick is the hand→blade shaft segment. A lift fires when the
+# attacker's blade is within `radius` of the shaft AND sits below the shaft at
+# the closest point (their blade is hooked under the victim's stick).
+# `under_margin` is how much lower the blade must be than the shaft contact
+# point (0.0 = strictly below).
+static func check_blade_under_stick(
+		att_blade: Vector3,
+		vic_hand: Vector3, vic_blade: Vector3,
+		radius: float,
+		under_margin: float = 0.0) -> bool:
+	var contact: Vector3 = _closest_point_on_segment(att_blade, vic_hand, vic_blade)
+	if att_blade.distance_squared_to(contact) > radius * radius:
+		return false
+	return att_blade.y < contact.y - under_margin
+
+
+# Closest point on segment a→b to point p. Degenerates to `a` for a zero-length
+# segment.
+static func _closest_point_on_segment(p: Vector3, a: Vector3, b: Vector3) -> Vector3:
+	var ab: Vector3 = b - a
+	var ab_len_sq: float = ab.length_squared()
+	if ab_len_sq <= 1e-10:
+		return a
+	var t: float = clampf((p - a).dot(ab) / ab_len_sq, 0.0, 1.0)
+	return a + ab * t
+
+
 # Minimum squared distance between two line segments (Eberly analytical solution).
 # Degenerates correctly when either or both segments have zero length.
 static func _segment_segment_dist_sq(
