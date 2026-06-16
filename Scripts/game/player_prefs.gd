@@ -88,6 +88,7 @@ const AA_LABELS: Array[String] = [
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
 	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
+	"stick_lift",
 ]
 
 var player_uuid: String = ""

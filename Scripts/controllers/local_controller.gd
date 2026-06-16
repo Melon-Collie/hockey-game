@@ -150,6 +150,7 @@ func _physics_process(delta: float) -> void:
 			prep_input.elevation_up = false
 			prep_input.elevation_down = false
 			prep_input.block_held = false
+			prep_input.stick_lift_held = false
 			_current_input = prep_input
 			_input_history.append(_current_input)
 			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)

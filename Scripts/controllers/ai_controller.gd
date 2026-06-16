@@ -302,3 +302,4 @@ func _zero_script_input(delta: float) -> void:
 	_script_input.elevation_up = false
 	_script_input.elevation_down = true
 	_script_input.block_held = false
+	_script_input.stick_lift_held = false
