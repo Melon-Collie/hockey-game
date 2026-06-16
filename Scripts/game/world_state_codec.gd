@@ -400,7 +400,8 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	b.encode_u32(o, roundi(maxf(s.last_processed_host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE)); o += 4
 	var flags: int = (s.shot_state & 0x0F) \
 			| (0x10 if s.is_ghost else 0) \
-			| (0x20 if s.is_elevated else 0)
+			| (0x20 if s.is_elevated else 0) \
+			| (0x40 if s.blade_up else 0)
 	b.encode_u8(o, flags); o += 1
 	b.encode_u8(o, clampi(roundi(s.shot_charge * 255.0), 0, 255))
 	return b
@@ -434,6 +435,7 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	s.shot_state = flags & 0x0F
 	s.is_ghost = (flags & 0x10) != 0
 	s.is_elevated = (flags & 0x20) != 0
+	s.blade_up = (flags & 0x40) != 0
 	s.shot_charge = b.decode_u8(o) / 255.0
 	return s
 

@@ -31,6 +31,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # scene. This also means crouching (block stance) doesn't pull the blade
 # through the ice — the local Y compensates automatically.
 @export var blade_height: float = 0.03
+# World-space height the blade rises to when lifted (stick-lift / Q held, or a
+# forced pop from an opponent's stick lift). A lifted blade clears grounded
+# pucks and sticks — it only meets airborne pucks, to tip them. Eased in via
+# Skater._blade_lift_blend and consumed by SkaterIKCoordinator.blade_y_local().
+@export var blade_lift_height: float = 0.35
 # Fixed, rigid shaft length (hand to blade heel). Baseline 1.30 m ≈ adult
 # senior stick shaft (butt-to-heel). The blade mesh extends forward from the
 # heel; see Skater.blade_length. Total hand-to-toe is stick_length + blade_length.
@@ -207,8 +212,8 @@ var show_one_timer_indicator: bool = false
 @export var slapper_follow_through_arc_dist: float = 0.4  # blade XZ travel along shot_dir during follow-through
 
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
-@export var block_speed_multiplier: float = 0.45   # movement speed while blocking (unused while the
-                                                   # stance is fully planted; kept for tuning)
+# Movement speed while blocking (unused while the stance is fully planted; kept for tuning).
+@export var block_speed_multiplier: float = 0.45
 @export var active_block_dampen: float = 0.35      # puck energy retention on active block
 # Choreographed "stick down" block pose, authored in upper-body-local space.
 # Forward is local −Z (toward the shooter the stance snapped to on entry); the
@@ -472,6 +477,12 @@ func _process_input(input: InputState, delta: float) -> void:
 		_is_elevated = false
 	skater.is_elevated = _is_elevated
 
+	# Stick lift (Q). Voluntary lift is gated on NOT carrying — you can't raise
+	# your own blade off the puck while stickhandling. A forced lift (an opponent
+	# hooked under your stick) overrides regardless of possession and is what
+	# dislodges the carried puck.
+	skater.blade_up = (input.stick_lift_held and not has_puck) or skater.is_forced_lift_active()
+
 	_apply_movement(input, delta)
 	_pose.apply_velocity_lean(delta)
 	_pose.apply_facing(input, delta)
@@ -555,6 +566,11 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.last_processed_host_timestamp = last_processed_host_timestamp
 	state.is_ghost = skater.is_ghost
 	state.is_elevated = skater.is_elevated
+	state.blade_up = skater.blade_up
+	# Host-only shaft segment for stick-lift claim resolution (paired with
+	# blade_contact_world). World-space grip point — the wire top_hand_position
+	# is upper-body-local and can't be used for host-side world geometry.
+	state.top_hand_world = skater.upper_body_to_global(skater.get_top_hand_position())
 	state.shot_state = _sm.get_state() as int
 	state.shot_charge = _aiming.charge_distance
 
@@ -576,6 +592,7 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	skater.global_position = state.position
 	skater.visual_offset = Vector3.ZERO
 	skater.velocity = state.velocity
+	skater.blade_up = state.blade_up
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)

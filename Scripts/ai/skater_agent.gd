@@ -130,3 +130,4 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	input.elevation_up = false
 	input.elevation_down = true
 	input.block_held = false
+	input.stick_lift_held = false

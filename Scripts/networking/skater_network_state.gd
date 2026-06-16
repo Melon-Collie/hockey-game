@@ -17,8 +17,18 @@ var is_ghost: bool = false
 # can read teammate flags directly instead of inferring from puck
 # physics.
 var is_elevated: bool = false
+# True when the blade is lifted off the ice (own Q held, or involuntarily
+# popped up by an opponent's stick lift). Effective value: the receiver only
+# needs the resolved "is the blade up" answer for rendering and the
+# on-ice/off-ice interaction gate.
+var blade_up: bool = false
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
+# World-space top-hand (grip) point. host-only, not serialized — paired with
+# blade_contact_world to form the shaft segment for stick-lift claim
+# resolution. The wire `top_hand_position` is upper-body-local, so it can't be
+# used for host-side world-space geometry.
+var top_hand_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 
 func to_array() -> Array:
 	return [
@@ -35,6 +45,7 @@ func to_array() -> Array:
 		facing_angular_velocity,
 		upper_body_angular_velocity,
 		is_elevated,
+		blade_up,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -49,10 +60,12 @@ func copy_from(s: SkaterNetworkState) -> void:
 	last_processed_host_timestamp = s.last_processed_host_timestamp
 	is_ghost = s.is_ghost
 	is_elevated = s.is_elevated
+	blade_up = s.blade_up
 	shot_state = s.shot_state
 	shot_charge = s.shot_charge
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
+	top_hand_world = s.top_hand_world
 
 static func from_array(data: Array) -> SkaterNetworkState:
 	var state := SkaterNetworkState.new()
@@ -70,4 +83,6 @@ static func from_array(data: Array) -> SkaterNetworkState:
 	state.upper_body_angular_velocity = data[11]
 	if data.size() > 12:
 		state.is_elevated = data[12]
+	if data.size() > 13:
+		state.blade_up = data[13]
 	return state

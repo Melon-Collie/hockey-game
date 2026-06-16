@@ -150,6 +150,7 @@ func _physics_process(delta: float) -> void:
 			prep_input.elevation_up = false
 			prep_input.elevation_down = false
 			prep_input.block_held = false
+			prep_input.stick_lift_held = false
 			_current_input = prep_input
 			_input_history.append(_current_input)
 			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
@@ -227,15 +228,29 @@ func _physics_process(delta: float) -> void:
 			# for the expected-carrier check.
 			var carrier_team: int = puck.carrier.get_team_id()
 			if carrier_team != _team_id and carrier_team != -1:
-				var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
-				if dist <= PuckController.POKE_RADIUS:
-					var carrier_pid: int = GameManager.puck_controller.get_carrier_peer_id() if GameManager.puck_controller != null else -1
-					if carrier_pid != -1:
-						_claim_cooldown = _CLAIM_COOLDOWN_S
-						NetworkManager.send_poke_claim(
-							NetworkManager.estimated_host_time(),
-							NetworkManager.get_target_interpolation_delay() * 1000.0,
-							carrier_pid)
+				var carrier_pid: int = GameManager.puck_controller.get_carrier_peer_id() if GameManager.puck_controller != null else -1
+				if carrier_pid != -1:
+					if skater.blade_up:
+						# Our blade is lifted — attempt a stick lift: hook the raised
+						# blade under the carrier's shaft. Host re-validates with rewind.
+						var c_hand: Vector3 = puck.carrier.upper_body_to_global(puck.carrier.get_top_hand_position())
+						var c_blade: Vector3 = puck.carrier.get_blade_contact_global()
+						if PuckInteractionRules.check_blade_under_stick(
+								blade_pos_for_claim, c_hand, c_blade,
+								PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN):
+							_claim_cooldown = _CLAIM_COOLDOWN_S
+							NetworkManager.send_stick_lift_claim(
+								NetworkManager.estimated_host_time(),
+								NetworkManager.get_target_interpolation_delay() * 1000.0,
+								carrier_pid)
+					else:
+						var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
+						if dist <= PuckController.POKE_RADIUS:
+							_claim_cooldown = _CLAIM_COOLDOWN_S
+							NetworkManager.send_poke_claim(
+								NetworkManager.estimated_host_time(),
+								NetworkManager.get_target_interpolation_delay() * 1000.0,
+								carrier_pid)
 
 func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_reconcile_blade: Vector3 = skater.get_blade_contact_global()

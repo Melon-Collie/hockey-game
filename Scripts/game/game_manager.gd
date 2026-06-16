@@ -122,6 +122,7 @@ var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
+var _stick_lift_claim: StickLiftClaimResolver = null
 var _hit_claim: HitClaimResolver = null
 var _phase_coord: PhaseCoordinator = null
 var _swap_coord: SlotSwapCoordinator = null
@@ -220,6 +221,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
 	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
+	NetworkManager.stick_lift_claim_received.connect(_on_stick_lift_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
 	NetworkManager.input_batch_received.connect(_on_input_batch_received)
@@ -797,6 +799,9 @@ func _wire_subsystems() -> void:
 	_poke_claim = PokeClaimResolver.new()
 	_poke_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
+	_stick_lift_claim = StickLiftClaimResolver.new()
+	_stick_lift_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
+
 	_hit_claim = HitClaimResolver.new()
 	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
 
@@ -893,9 +898,17 @@ func _wire_sound_signals() -> void:
 			_record_replay_audio_event("puck_body_block", puck.get_puck_position(), spd))
 		puck_controller.puck_stripped_from.connect(func(_pid: int) -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
-			NetworkManager.send_puck_strip_to_all(puck.get_puck_position())
-			_record_replay_audio_event("puck_strip", puck.get_puck_position(), spd))
+			var pos: Vector3 = puck.get_puck_position()
+			if puck_controller.is_processing_stick_lift():
+				# Distinct stick-lift cue instead of the generic puck-strip thud.
+				SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(spd), 0.06)
+				puck.fire_stick_lift_vfx()
+				NetworkManager.send_stick_lift_to_all(pos)
+				_record_replay_audio_event("stick_lift", pos, spd)
+			else:
+				SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, pos, _puck_speed_volume(spd), 0.06)
+				NetworkManager.send_puck_strip_to_all(pos)
+				_record_replay_audio_event("puck_strip", pos, spd))
 	puck.puck_touched_goalie.connect(
 		func(_g: Goalie) -> void:
 			var spd: float = puck.linear_velocity.length()
@@ -929,6 +942,11 @@ func _wire_sound_signals() -> void:
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_BODY_BLOCK, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.07))
 	NetworkManager.puck_strip_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
+	NetworkManager.stick_lift_received.connect(
+		func(pos: Vector3) -> void:
+			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
+			if puck != null:
+				puck.fire_stick_lift_vfx())
 	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
 	# regulation periods, GAME_OVER for the final one. (Not period_changed, which
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
@@ -1614,6 +1632,12 @@ func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_m
 	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
 
+func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+
+
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
@@ -1643,7 +1667,9 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 		return
 	_state_machine.notify_icing_contact()
 	if not record.is_local:
-		NetworkManager.send_puck_stolen(peer_id)
+		# Tell the victim's client whether this was a stick lift so it can pop
+		# their own blade up locally (their prediction never saw the host force).
+		NetworkManager.send_puck_stolen(peer_id, puck_controller.is_processing_stick_lift())
 
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
@@ -1925,11 +1951,16 @@ func on_local_player_picked_up_puck() -> void:
 		puck_controller.notify_local_pickup(record.skater)
 
 
-func on_local_player_puck_stolen() -> void:
+func on_local_player_puck_stolen(was_stick_lift: bool = false) -> void:
 	var local_record := _registry.get_local() if _registry != null else null
 	if local_record != null:
 		local_record.controller.on_puck_released_network()
 		puck_controller.notify_local_puck_dropped()
+		# Stick-lift victim cue: pop our own blade up so the strip reads as a
+		# lift on our screen too (the host forced it, but our local prediction
+		# of our own skater never saw that). Reuses the exact lift mechanic.
+		if was_stick_lift and local_record.skater != null:
+			local_record.skater.force_blade_lift(PuckController.STICK_LIFT_FORCED_LIFT_S)
 
 
 # ── Goal received (client-side RPC) ──────────────────────────────────────────
@@ -2201,6 +2232,7 @@ func on_scene_exit() -> void:
 	_shot_tracker = null
 	_pickup_claim = null
 	_poke_claim = null
+	_stick_lift_claim = null
 	_hit_claim = null
 	_phase_coord = null
 	_swap_coord = null

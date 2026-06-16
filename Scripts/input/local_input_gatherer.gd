@@ -72,6 +72,7 @@ func gather() -> InputState:
 	state.elevation_up = _pending_elevation_up
 	state.elevation_down = _pending_elevation_down
 	state.block_held = Input.is_action_pressed("block")
+	state.stick_lift_held = Input.is_action_pressed("stick_lift")
 	state.mouse_world_pos = _get_mouse_world_pos(_camera)
 	state.host_timestamp = NetworkManager.estimated_host_time()
 	_last_mouse_world_pos = state.mouse_world_pos
