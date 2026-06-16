@@ -729,8 +729,8 @@ func _spawn_goalies() -> void:
 	for team_id: int in [0, 1]:
 		var goalie: Goalie = result.bottom_goalie if team_id == 0 else result.top_goalie
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
-		goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads, colors.jersey_stripe)
-		goalie.set_goalie_identity(31 if team_id == 0 else 35, "HART" if team_id == 0 else "WARD")
+		goalie.apply_uniform(colors)
+		goalie.apply_jersey_info("HART" if team_id == 0 else "WARD", 31 if team_id == 0 else 35)
 
 
 func _wire_subsystems() -> void:
@@ -2372,7 +2372,7 @@ func _apply_team_colors_to_actors(team_id: int) -> void:
 	# set up in _spawn_goalies.
 	var gc: GoalieController = teams[team_id].goalie_controller
 	if gc != null and gc.goalie != null:
-		gc.goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads, colors.jersey_stripe)
+		gc.goalie.apply_uniform(colors)
 	if _registry == null:
 		return
 	for peer_id: int in _registry.all():

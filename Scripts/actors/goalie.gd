@@ -24,10 +24,7 @@ extends Node3D
 @onready var _glove_mesh: MeshInstance3D = $Glove/MeshInstance3D
 @onready var _blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
 
-var _stripe_meshes: Array[MeshInstance3D] = []
-var _number_label_front: Label3D = null
-var _number_label_back: Label3D = null
-var _name_label_back: Label3D = null
+var _uniform_coordinator: GoalieUniformCoordinator
 var _left_hip_connector: MeshInstance3D = null
 var _right_hip_connector: MeshInstance3D = null
 var _glove_arm_connector: MeshInstance3D = null
@@ -36,39 +33,21 @@ var _blocker_arm_connector: MeshInstance3D = null
 
 func _ready() -> void:
 	_init_head_mesh()
-	_init_jersey_stripes()
-	_init_labels()
 	_init_connectors()
+	_setup_uniform_coordinator()
 
 
 func _process(_delta: float) -> void:
 	_update_connectors()
 
 
-func set_goalie_identity(number: int, name: String) -> void:
-	if _number_label_front:
-		_number_label_front.text = str(number)
-	if _number_label_back:
-		_number_label_back.text = str(number)
-	if _name_label_back:
-		_name_label_back.text = name.to_upper()
+func apply_jersey_info(p_name: String, number: int) -> void:
+	_uniform_coordinator.apply_jersey_info(p_name, number)
 
 
-func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Color, stripe_color: Color = Color.WHITE) -> void:
-	var jersey_mat := StandardMaterial3D.new()
-	jersey_mat.albedo_color = jersey_color
-	_body_mesh.material_override = jersey_mat
-	var helmet_mat := StandardMaterial3D.new()
-	helmet_mat.albedo_color = helmet_color
-	_head_mesh.material_override = helmet_mat
-	var pads_mat := StandardMaterial3D.new()
-	pads_mat.albedo_color = pads_color
-	_left_pad_mesh.material_override = pads_mat
-	_right_pad_mesh.material_override = pads_mat.duplicate()
-	_glove_mesh.material_override = pads_mat.duplicate()
-	_blocker_mesh.material_override = pads_mat.duplicate()
-	_apply_stripe_color(stripe_color)
-	_apply_connector_colors(jersey_color, pads_color)
+func apply_uniform(colors: Dictionary) -> void:
+	_uniform_coordinator.apply_uniform(colors)
+	_apply_connector_colors(colors.jersey, colors.goalie_pads)
 
 # `glove_max_step` / `blocker_max_step`: optional caps on linear movement
 # this frame (metres). Callers pass `*_react_max_speed * delta` to enforce a
@@ -214,48 +193,10 @@ func _init_head_mesh() -> void:
 	_head_mesh.mesh = sphere
 
 
-func _init_jersey_stripes() -> void:
-	# Three horizontal stripe bands painted over the body front + back faces.
-	var stripe_ys: PackedFloat32Array = PackedFloat32Array([-0.17, -0.04, 0.09])
-	for y: float in stripe_ys:
-		for front: bool in [true, false]:
-			var mi := MeshInstance3D.new()
-			var box := BoxMesh.new()
-			box.size = Vector3(0.50, 0.045, 0.003)
-			mi.mesh = box
-			mi.position = Vector3(0.0, y, -0.143 if front else 0.143)
-			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_body.add_child(mi)
-			_stripe_meshes.append(mi)
-
-
-func _init_labels() -> void:
-	_number_label_front = _make_number_label()
-	_number_label_front.position = Vector3(0.0, -0.06, -0.145)
-	_body.add_child(_number_label_front)
-
-	_number_label_back = _make_number_label()
-	_number_label_back.position = Vector3(0.0, -0.03, 0.145)
-	_number_label_back.rotation_degrees.y = 180.0
-	_body.add_child(_number_label_back)
-
-	_name_label_back = Label3D.new()
-	_name_label_back.font_size = 14
-	_name_label_back.pixel_size = 0.004
-	_name_label_back.outline_size = 3
-	_name_label_back.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_name_label_back.position = Vector3(0.0, 0.16, 0.145)
-	_name_label_back.rotation_degrees.y = 180.0
-	_body.add_child(_name_label_back)
-
-
-func _make_number_label() -> Label3D:
-	var lbl := Label3D.new()
-	lbl.font_size = 32
-	lbl.pixel_size = 0.004
-	lbl.outline_size = 4
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	return lbl
+func _setup_uniform_coordinator() -> void:
+	_uniform_coordinator = GoalieUniformCoordinator.new()
+	_uniform_coordinator.setup(self, _body_mesh, _head_mesh,
+			_left_pad_mesh, _right_pad_mesh, _glove_mesh, _blocker_mesh)
 
 
 func _init_connectors() -> void:
@@ -278,21 +219,6 @@ func _make_connector_mesh(radius: float) -> MeshInstance3D:
 	mi.mesh = cyl
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return mi
-
-
-func _apply_stripe_color(color: Color) -> void:
-	if _stripe_meshes.is_empty():
-		return
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	for mi: MeshInstance3D in _stripe_meshes:
-		mi.material_override = mat
-	if _number_label_front:
-		_number_label_front.modulate = color
-	if _number_label_back:
-		_number_label_back.modulate = color
-	if _name_label_back:
-		_name_label_back.modulate = color
 
 
 func _apply_connector_colors(jersey_color: Color, pads_color: Color) -> void:
