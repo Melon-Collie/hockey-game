@@ -103,6 +103,31 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 @export var body_check_restitution: float = 0.25
 @export var body_check_transfer: float = 0.45
 @export var body_check_brace_resistance: float = 0.4
+# Nonlinear "big hit" curve. Below the threshold (closing speed in m/s) transfer
+# is linear; above it, each extra m/s of closing speed multiplies the velocity
+# transferred to the victim by `body_check_power_ramp`, capped at
+# `body_check_power_max`. Keeps glancing bumps subtle while letting a hard,
+# head-on check launch the victim — the "knee" that makes hitting read as big.
+# Only scales the victim's velocity transfer; the emitted impact_force (and thus
+# the hit-stat gate in HitRules) stays the raw closing impulse, unchanged.
+@export var body_check_power_threshold: float = 6.0
+@export var body_check_power_ramp: float = 0.12
+@export var body_check_power_max: float = 1.6
+
+# ── Stagger (control loss on the victim of a solid check) ─────────────────────
+# A check whose closing speed clears `stagger_min_approach` briefly robs the
+# victim of acceleration: their effective thrust is scaled to
+# `stagger_thrust_floor` at the moment of impact and eases back to full over the
+# stagger window (duration scales with closing speed between min/max). This is
+# the gameplay payoff — a clean hit creates real separation instead of a floaty
+# nudge. Read by SkaterController._apply_movement; ticks in real time only
+# (Skater._physics_process), never inside reconcile replay, so the multiplier is
+# held constant across a replay window and can't oscillate. Both host and client
+# arm it from the same collision impulse, so it predicts and reconciles cleanly.
+@export var stagger_min_approach: float = 4.0
+@export var stagger_min_duration: float = 0.18
+@export var stagger_max_duration: float = 0.42
+@export var stagger_thrust_floor: float = 0.4
 
 # ── Body Block Tuning ─────────────────────────────────────────────────────────
 @export var body_block_radius: float = 0.5
@@ -179,6 +204,30 @@ func get_team_id() -> int:
 	if not _team_id_resolver.is_valid():
 		return -1
 	return _team_id_resolver.call() as int
+
+
+# ── Stagger ───────────────────────────────────────────────────────────────────
+# Arm (or refresh) a stagger window. A stronger ongoing stagger is never
+# shortened by a weaker follow-up hit.
+func apply_stagger(duration: float) -> void:
+	if duration <= _stagger_timer:
+		return
+	_stagger_timer = duration
+	_stagger_duration = duration
+
+
+func is_staggered() -> bool:
+	return _stagger_timer > 0.0
+
+
+# Thrust multiplier the controller applies while staggered: drops to
+# `stagger_thrust_floor` at the instant of impact and eases back to 1.0 over the
+# window. 1.0 when not staggered.
+func stagger_thrust_mult() -> float:
+	if _stagger_timer <= 0.0:
+		return 1.0
+	var t: float = clampf(_stagger_timer / maxf(_stagger_duration, 0.0001), 0.0, 1.0)
+	return lerpf(1.0, stagger_thrust_floor, t)
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _facing: Vector2 = Vector2.DOWN
 var is_elevated: bool = false
@@ -188,6 +237,10 @@ var _blade_elevation_blend: float = 0.0
 var is_ghost: bool = false
 var is_braking: bool = false
 var is_braced: bool = false
+# Remaining stagger time and the duration it was armed with (for the ease).
+# Decays in _physics_process; see the Stagger export block above.
+var _stagger_timer: float = 0.0
+var _stagger_duration: float = 0.0
 var shot_charge: float = 0.0
 var slapper_aim_dir: Vector3 = Vector3.ZERO
 var blade_world_velocity: Vector3 = Vector3.ZERO
@@ -342,6 +395,10 @@ func _physics_process(delta: float) -> void:
 	var blade_world_pos: Vector3 = upper_body.to_global(blade.position)
 	blade_world_velocity = (blade_world_pos - _prev_blade_world_pos) / delta
 	_prev_blade_world_pos = blade_world_pos
+	# Decay stagger in real time (once per physics frame). Deliberately NOT
+	# ticked inside reconcile replay — see the stagger export block.
+	if _stagger_timer > 0.0:
+		_stagger_timer = maxf(0.0, _stagger_timer - delta)
 	var vel_before: Vector3 = velocity
 	move_and_slide()
 	var vel_after_slide: Vector3 = velocity
@@ -374,12 +431,32 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 			continue
 		velocity += normal * approach * body_check_restitution
 		var effective_transfer: float = body_check_transfer * (other.body_check_brace_resistance if other.is_braced else 1.0)
+		# Nonlinear knee: hard hits transfer disproportionately more than the
+		# linear base, so a freight-train check launches the victim while a
+		# glancing bump stays subtle. Capped so it can't fling them off the rink.
+		var power_mult: float = 1.0
+		if approach > body_check_power_threshold:
+			power_mult = minf(
+					1.0 + (approach - body_check_power_threshold) * body_check_power_ramp,
+					body_check_power_max)
 		var other_vel_before: Vector3 = other.velocity
 		var weight_ratio: float = weight / maxf(other.weight, 0.001)
-		other.velocity -= normal * approach * weight_ratio * effective_transfer
+		other.velocity -= normal * approach * weight_ratio * effective_transfer * power_mult
 		var other_delta: Vector3 = other.velocity - other_vel_before
 		if other_delta.length_squared() > 0.0001:
 			other.body_check_impulse_applied.emit(other_delta)
+		# Stagger the victim on a solid check (brace cuts the closing speed that
+		# counts, same as it cuts the transfer). Duration scales with how hard it
+		# landed. Armed identically on host and client off the shared impulse.
+		var stagger_approach: float = approach * (other.body_check_brace_resistance if other.is_braced else 1.0)
+		if stagger_approach >= other.stagger_min_approach:
+			var t: float = clampf(
+					(stagger_approach - other.stagger_min_approach) / maxf(body_check_power_threshold - other.stagger_min_approach, 0.001),
+					0.0, 1.0)
+			other.apply_stagger(lerpf(other.stagger_min_duration, other.stagger_max_duration, t))
+		# impact_force stays the raw closing impulse — power_mult must not leak
+		# into the hit-stat gate (HitRules.MIN_HIT_IMPULSE) or the feel-juice
+		# scaling, both of which key off this value.
 		body_checked_player.emit(other, weight * approach, -normal)
 
 

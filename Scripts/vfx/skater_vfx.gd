@@ -8,6 +8,10 @@ const TELEPORT_THRESHOLD: float = 1.0 # skip frame if skater moved this far (rec
 # Hockey stop VFX — two-layer effect (surface marks + airborne spray) per blade side.
 const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
 
+# Body-check burst particle count, scaled by hit strength in fire_body_check_burst.
+const BODY_CHECK_AMOUNT_MIN: int = 12
+const BODY_CHECK_AMOUNT_MAX: int = 44
+
 # Blade trail — same zero-gap GPU approach as puck trail, one system per skate.
 # Two dots per trail (left/right blade) pinned to ICE_Y so marks scrape the ice surface.
 const BLADE_TRAIL_SPACING: float = 0.05   # meters between skate mark dots
@@ -121,7 +125,7 @@ func _on_body_check(victim: Skater, force: float, hit_dir: Vector3) -> void:
 # routing through body_checked_player — re-emitting the signal would also
 # re-trigger GameManager's hit-landed / sound / replay-record closures,
 # which is wrong during playback (and recursive for the recorder).
-func fire_body_check_burst(victim: Skater, _force: float, hit_dir: Vector3) -> void:
+func fire_body_check_burst(victim: Skater, force: float, hit_dir: Vector3) -> void:
 	if victim == null:
 		return
 	# Burst at the victim's position, emitting outward along the hit direction.
@@ -131,6 +135,14 @@ func fire_body_check_burst(victim: Skater, _force: float, hit_dir: Vector3) -> v
 	var flat_hit: Vector3 = Vector3(hit_dir.x, 0.0, hit_dir.z)
 	var world_dir: Vector3 = (flat_hit + Vector3(0.0, 0.4, 0.0)).normalized()
 	_body_check_burst.direction = _body_check_burst.global_transform.basis.inverse() * world_dir
+	# Scale the spray to the hit: a hard check throws more debris, faster and
+	# wider, than a glancing bump (closing impulse ~3..14). restart() re-emits
+	# with the new amount.
+	var t: float = clampf(remap(force, 3.0, 14.0, 0.0, 1.0), 0.0, 1.0)
+	_body_check_burst.amount = int(lerpf(BODY_CHECK_AMOUNT_MIN, BODY_CHECK_AMOUNT_MAX, t))
+	_body_check_burst.initial_velocity_min = lerpf(2.0, 4.0, t)
+	_body_check_burst.initial_velocity_max = lerpf(5.0, 11.0, t)
+	_body_check_burst.spread = lerpf(40.0, 65.0, t)
 	_body_check_burst.restart()
 
 func _set_blade_trails_emitting(active: bool) -> void:
@@ -263,7 +275,7 @@ func _make_speed_lines_emitter() -> CPUParticles3D:
 func _make_body_check_emitter() -> CPUParticles3D:
 	var e := CPUParticles3D.new()
 	e.emitting = false
-	e.amount = 20
+	e.amount = BODY_CHECK_AMOUNT_MAX  # per-hit fire_body_check_burst sets the live count
 	e.lifetime = 0.4
 	e.one_shot = true
 	e.explosiveness = 0.95

@@ -33,6 +33,9 @@ signal stats_updated
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color)
 signal local_player_hit(magnitude: float)
+# Fired when the LOCAL player *lands* a check (attacker side), so the camera can
+# kick. local_player_hit covers the victim side; this is its counterpart.
+signal local_player_landed_hit(magnitude: float)
 signal replay_started
 signal replay_stopped
 # Live tally of unanimous skip-replay votes (emitted on every accepted vote and
@@ -1475,6 +1478,9 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
+		# Attacker-side feedback: this skater landing a check kicks the local camera.
+		record.skater.body_checked_player.connect(
+			func(_v: Skater, f: float, _d: Vector3) -> void: local_player_landed_hit.emit(f))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 	# AI bots release shots through the same signal as humans, but they live
 	# only on the host (record.is_local is false). Without this connection
@@ -1490,8 +1496,11 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
 	)
 	record.skater.body_checked_player.connect(
-		func(_v: Skater, _f: float, _d: Vector3) -> void:
-			SoundManager.play_world(SoundManager.Sound.BODY_CHECK, record.skater.global_position, 0.0, 0.08)
+		func(_v: Skater, f: float, _d: Vector3) -> void:
+			# Louder for harder hits (closing impulse ~3..14). Quiet bumps sit
+			# back in the mix; freight-train checks crack.
+			var vol_db: float = clampf(remap(f, 3.0, 14.0, -6.0, 4.0), -6.0, 4.0)
+			SoundManager.play_world(SoundManager.Sound.BODY_CHECK, record.skater.global_position, vol_db, 0.08)
 	)
 	if NetworkManager.is_host:
 		record.skater.body_checked_player.connect(

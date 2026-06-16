@@ -55,6 +55,20 @@ var _shake_trauma: float = 0.0
 const _SHAKE_DECAY: float = 4.0
 const _SHAKE_MAG: float = 0.25
 
+# ── Hit punch ─────────────────────────────────────────────────────────────────
+# A sharp downward (zoom-in) camera jolt layered over shake on a body check —
+# the camera-safe stand-in for hitstop (real time-dilation would desync the
+# networked sim). Springs back on its own: each frame's position lerp pulls the
+# camera toward target, so the punch only has to add a decaying offset.
+var _punch: float = 0.0
+const _PUNCH_DECAY: float = 7.0
+const _PUNCH_MAG: float = 0.7  # meters of zoom-in at full punch
+
+func punch(amount: float) -> void:
+	if not PlayerPrefs.screen_shake:
+		return
+	_punch = minf(1.0, _punch + amount)
+
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	_goal_0 = goal_0
 	_goal_1 = goal_1
@@ -83,9 +97,18 @@ func shake(trauma: float) -> void:
 func _ready() -> void:
 	make_current()
 	GameManager.goal_scored.connect(func(_t, _n, _a1, _a2) -> void: shake(1.0))
+	# Taking a hit: shake + a touch of punch, scaled by the impulse received.
 	GameManager.local_player_hit.connect(func(mag: float) -> void:
 		if mag >= 3.0:
-			shake(clampf(mag / 12.0, 0.2, 0.4)))
+			shake(clampf(mag / 12.0, 0.2, 0.45))
+			punch(clampf(mag / 14.0, 0.2, 0.5)))
+	# Landing a hit: the attacker now gets feedback too (previously only the
+	# victim's camera reacted). A solid check kicks harder than it shakes so it
+	# reads as "drove through them" rather than "got rocked".
+	GameManager.local_player_landed_hit.connect(func(mag: float) -> void:
+		if mag >= 3.0:
+			shake(clampf(mag / 14.0, 0.15, 0.35))
+			punch(clampf(mag / 11.0, 0.3, 0.6)))
 
 func _physics_process(delta: float) -> void:
 	if not skater or not puck:
@@ -218,10 +241,14 @@ func _physics_process(delta: float) -> void:
 	var flip_y: float = 180.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 0.0
 	rotation_degrees = Vector3(pitch, flip_y, 0.0)
 
-	# ── Step 6: Shake ─────────────────────────────────────────────────────────
+	# ── Step 6: Shake + hit punch ──────────────────────────────────────────────
 	if _shake_trauma > 0.0:
 		_shake_trauma = maxf(0.0, _shake_trauma - _SHAKE_DECAY * delta)
 		global_position += Vector3(
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG,
 			0.0,
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG)
+	if _punch > 0.0:
+		_punch = maxf(0.0, _punch - _PUNCH_DECAY * delta)
+		# Drop the camera (zoom in) — next frame's height lerp springs it back.
+		global_position.y -= _punch * _PUNCH_MAG

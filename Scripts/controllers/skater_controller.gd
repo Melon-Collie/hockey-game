@@ -915,8 +915,14 @@ func _apply_movement(input: InputState, delta: float) -> void:
 		return
 
 	var cfg: SkaterMovementRules.MovementConfig = _movement_config()
+	# Stagger scales the player's thrust input down (without mutating the stored
+	# input, which still flows verbatim to the host + reconcile history). thrust
+	# is linear in move-vector magnitude, so this is a clean acceleration cut —
+	# a freshly-checked skater can't immediately power back into the play. Both
+	# host and client read the same skater-local timer, so the prediction matches.
+	var staggered_move: Vector2 = input.move_vector * skater.stagger_thrust_mult()
 	skater.velocity = SkaterMovementRules.apply_movement(
-			skater.velocity, input.move_vector, skater.rotation.y,
+			skater.velocity, staggered_move, skater.rotation.y,
 			has_puck, input.brake, delta, cfg)
 
 # Movement configs are cached — _apply_movement runs every 240 Hz tick (and
