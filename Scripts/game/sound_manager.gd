@@ -39,7 +39,7 @@ const _SOUND_PATHS: Dictionary = {
 	Sound.PUCK_STRIP:       "res://Sounds/puck_strip.wav",
 	Sound.PERIOD_BUZZER:    "res://Sounds/period_buzzer.wav",
 	Sound.BODY_CHECK:       "res://Sounds/body_check.ogg",
-	Sound.FACEOFF_WHISTLE:  "res://Sounds/faceoff_whistle.ogg",
+	Sound.FACEOFF_WHISTLE:  "res://Sounds/faceoff_whistle.wav",
 }
 
 const _UI_POOL_SIZE: int = 4

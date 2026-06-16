@@ -9,9 +9,9 @@ extends Node
 # cheer pool both live here, mirroring how SkaterSoundController owns its own
 # skate-loop AudioStreamPlayer3D.
 
-@export var ambient_stream_path: String = "res://Sounds/crowd_ambient.ogg"
-@export var cheer_stream_path: String = "res://Sounds/crowd_cheer.ogg"
-@export var ambient_volume_db: float = -14.0
+@export var ambient_stream_path: String = "res://Sounds/crowd_ambient.wav"
+@export var cheer_stream_path: String = "res://Sounds/crowd_cheer.wav"
+@export var ambient_volume_db: float = -16.5
 @export var cheer_volume_db: float = 0.0
 @export var duck_volume_db: float = -4.0
 @export var duck_recover_time: float = 4.0

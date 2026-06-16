@@ -555,16 +555,18 @@ func _build_skip_replay_prompt() -> void:
 
 func _build_menu_hint() -> void:
 	_menu_hint_label = _lbl("[ESC] MENU", 16, _WHITE)
-	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_menu_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	_menu_hint_label.anchor_left = 0.0
-	_menu_hint_label.anchor_right = 0.0
-	_menu_hint_label.anchor_top = 0.0
-	_menu_hint_label.anchor_bottom = 0.0
-	_menu_hint_label.offset_left = 20.0
-	_menu_hint_label.offset_right = 220.0
-	_menu_hint_label.offset_top = 16.0
-	_menu_hint_label.offset_bottom = 40.0
+	# Bottom-center: anchored to the bottom edge, horizontally centered (a ~200px
+	# box straddling the 0.5 anchor), sitting 16px above the bottom.
+	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_menu_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_menu_hint_label.anchor_left = 0.5
+	_menu_hint_label.anchor_right = 0.5
+	_menu_hint_label.anchor_top = 1.0
+	_menu_hint_label.anchor_bottom = 1.0
+	_menu_hint_label.offset_left = -100.0
+	_menu_hint_label.offset_right = 100.0
+	_menu_hint_label.offset_top = -40.0
+	_menu_hint_label.offset_bottom = -16.0
 	# Starts hidden — _ready opens the menu right away, which fires the opened
 	# signal and keeps the hint down until the player first closes the menu.
 	_menu_hint_label.visible = false
