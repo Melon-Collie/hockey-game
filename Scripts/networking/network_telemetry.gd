@@ -24,8 +24,9 @@ var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
 # Bandwidth: bytes seen this window. Counted at the NetworkManager boundary so
-# the value reflects payload bytes only (excludes ENet/UDP/IP headers — those
-# add ~28 B per packet but aren't visible from inside the engine).
+# the value reflects payload bytes only (excludes the Steam transport + UDP/IP
+# framing, and SDR relay overhead when not directly connected — none of which is
+# visible from inside the engine).
 var _bytes_sent_window: int = 0
 var _bytes_received_window: int = 0
 # Puck trajectory three-zone correction counters. Each broadcast during
@@ -71,8 +72,9 @@ var prediction_divergence_avg: float = 0.0
 var ooo_drops_per_sec: float = 0.0       # expect 0; non-zero means UDP reordering
 # Bandwidth (KB/s). Host sees bytes_sent_per_sec as sum across all peers (1×
 # snapshot bytes per recipient per broadcast); clients see only their own
-# receive volume. Payload bytes only — ENet/UDP/IP headers add ~28 B/packet
-# beyond this. Goalie overhaul target: snapshot stays under 500 B/tick at
+# receive volume. Payload bytes only — Steam transport + UDP/IP framing (plus
+# SDR relay overhead when not directly connected) add to this on the wire beyond
+# what we count here. Goalie overhaul target: snapshot stays under 500 B/tick at
 # 120Hz, so per-recipient bytes_sent_per_sec should stay under ~60 KB/s.
 var bytes_sent_per_sec: float = 0.0
 var bytes_received_per_sec: float = 0.0

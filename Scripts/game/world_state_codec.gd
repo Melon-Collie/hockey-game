@@ -15,7 +15,10 @@ extends RefCounted
 #      u8 num_goalies, [goalie_bytes(35)] × num_goalies
 #      u8 score0, u8 score1, u8 phase, u8 period, u16 time_remaining
 #
-#    Total for 6 players + 2 goalies: 348 bytes (well under 1392-byte ENet MTU)
+#    Total for 6 players + 2 goalies: 348 bytes — stays in a single packet, well
+#    under Steam's ~1200-byte unreliable cap. This matters: Steam (unlike ENet)
+#    does NOT fragment unreliable messages, so an oversized snapshot would be
+#    dropped at send rather than split across datagrams.
 #
 #    Quantization layout:
 #      Skater  (37 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s,

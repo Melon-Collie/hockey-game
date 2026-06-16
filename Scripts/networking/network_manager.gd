@@ -219,6 +219,15 @@ var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all
 var _pending_handshake: Dictionary[int, float] = {}
 const _HANDSHAKE_TIMEOUT_S: float = 10.0
 const _KICK_FLUSH_DELAY_S: float = 0.5
+# Host: last time (local_time()) each connected peer sent us anything — input
+# batches (~input rate) or clock-sync pings (every 2s). Swept in _process; a peer
+# silent past _PEER_LIVENESS_TIMEOUT_S is force-disconnected. ENet's per-peer
+# timeout used to cover this; Steam's relay keepalive does eventually, but ~2x
+# slower, so a hard-crashed or network-yanked peer's skater lingers frozen on
+# everyone's screen. This detects it app-side from the traffic that's already
+# flowing. Bots never enter here (no real connection); offline mode stays empty.
+var _peer_last_seen: Dictionary[int, float] = {}
+const _PEER_LIVENESS_TIMEOUT_S: float = 5.0
 # Callable () -> Array. Set by GameManager at startup so the broadcast loop
 # can pull world state without reaching up into the application layer.
 var _world_state_provider: Callable = Callable()
@@ -484,9 +493,13 @@ func connected_peer_ids() -> PackedInt32Array:
 func _on_peer_connected(id: int) -> void:
 	if is_host:
 		_pending_handshake[id] = local_time()
+		# Start the liveness clock at connect so the grace window covers the
+		# handshake; the first clock-sync ping (within ~0.5s) refreshes it.
+		_peer_last_seen[id] = local_time()
 
 func _on_peer_disconnected(id: int) -> void:
 	_pending_handshake.erase(id)
+	_peer_last_seen.erase(id)
 	_peer_handedness.erase(id)
 	_peer_names.erase(id)
 	_peer_numbers.erase(id)
@@ -574,6 +587,7 @@ func reset() -> void:
 	tutorial_id = ""
 	_input_batch_provider = Callable()
 	_pending_handshake.clear()
+	_peer_last_seen.clear()
 	_peer_handedness.clear()
 	_peer_names.clear()
 	_peer_numbers.clear()
@@ -664,6 +678,15 @@ func _process(delta: float) -> void:
 				_pending_handshake.erase(pid)
 				push_warning("Dropping peer %d: no request_join within %ds" % [pid, int(_HANDSHAKE_TIMEOUT_S)])
 				if multiplayer.multiplayer_peer != null:
+					multiplayer.multiplayer_peer.disconnect_peer(pid)
+
+	if is_host and not _peer_last_seen.is_empty():
+		var live_now: float = local_time()
+		for pid: int in _peer_last_seen.keys():
+			if live_now - _peer_last_seen[pid] >= _PEER_LIVENESS_TIMEOUT_S:
+				_peer_last_seen.erase(pid)
+				push_warning("Dropping peer %d: silent for %ds (liveness timeout)" % [pid, int(_PEER_LIVENESS_TIMEOUT_S)])
+				if multiplayer.multiplayer_peer != null and pid in multiplayer.get_peers():
 					multiplayer.multiplayer_peer.disconnect_peer(pid)
 
 	_ping_timer += capped_delta
@@ -857,6 +880,9 @@ const _MAX_INPUTS_PER_BATCH: int = 120
 @rpc("any_peer", "unreliable_ordered")
 func receive_input_batch(data: PackedByteArray) -> void:
 	var sender_id: int = multiplayer.get_remote_sender_id()
+	# Liveness: stamp actual receipt time (before any NetworkSimManager delay).
+	if is_host and _peer_last_seen.has(sender_id):
+		_peer_last_seen[sender_id] = local_time()
 	NetworkSimManager.send(
 		func(d: PackedByteArray, sid: int) -> void:
 			if d.size() < 3:
@@ -909,6 +935,8 @@ func send_ping(client_send_time: float) -> void:
 	if not is_host:
 		return
 	var peer_id := multiplayer.get_remote_sender_id()
+	if _peer_last_seen.has(peer_id):
+		_peer_last_seen[peer_id] = local_time()
 	NetworkSimManager.send(
 		func(cst: float, pid: int) -> void:
 			receive_pong.rpc_id(pid, cst, local_time()),
