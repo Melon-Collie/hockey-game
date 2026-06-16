@@ -1562,13 +1562,16 @@ func get_target_interpolation_delay() -> float:
 	var broadcast_interval: float = 1.0 / Constants.STATE_RATE
 	# Minimum is RTT/2 + one full broadcast interval so render_time always has
 	# a buffered state ahead of it between packet arrivals. Jitter margin on top.
-	# Margin multiplier 1.0 (was 1.5): the 1.5x was sized for the old loose
-	# render-frame-driven broadcast cadence, which had baked-in 16.7ms jitter
-	# from alternating render frames at 60fps × 25ms broadcast intervals. The
-	# physics-driven broadcast loop produces a clean 1/STATE_RATE cadence, so
-	# the cushion can come down without falling into extrapolation. The
-	# adaptive +10ms/packet up-clamp still protects against sustained jitter.
-	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 1.0
+	# Margin multiplier 2.0: the cushion was briefly cut to 1.0x on the theory
+	# that the physics-driven broadcast loop emits a clean 1/STATE_RATE cadence.
+	# That holds on LAN/ENet, but Steam P2P relays packets in clumps — several
+	# snapshots land together, then a gap exceeding the nominal interval — so
+	# real inter-arrival spikes routinely run past a P95-sized cushion. With a
+	# 1.0x margin the remote interpolation buffer outran its newest sample during
+	# fast play (Extrap climbing well past the <1/s target, visible as rhythmic
+	# snap-back on remote skaters). 2.0x absorbs the clumps; the adaptive
+	# +10ms/packet up-clamp still handles sustained RTT spikes on top.
+	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 2.0
 	return clampf(target, maxf(rtt_half + broadcast_interval, 0.016), 0.200)
 
 func adapt_interpolation_delay(current: float) -> float:
