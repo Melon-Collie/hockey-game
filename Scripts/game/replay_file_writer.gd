@@ -40,7 +40,9 @@ static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89,
 # v2: frame/world-state timestamps f32 seconds -> u32 0.1ms units (matches
 #     BuildInfo.PROTOCOL_VERSION 2's wire change; the embedded world-state
 #     packets carry the new header).
-const FORMAT_VERSION: int = 2
+# v3: skater wire block grew 37->38 bytes (sprint stamina) — the embedded
+#     world-state packets carry the wider block (PROTOCOL_VERSION 4).
+const FORMAT_VERSION: int = 3
 const KIND_WORLD_STATE: int = 0
 const KIND_EVENT: int = 1
 const FRAME_INNER_HEADER_SIZE: int = 5  # host_ts (4) + kind (1)

@@ -10,23 +10,23 @@ extends RefCounted
 #
 # 1. World state  (120 Hz, unreliable_ordered) — single flat PackedByteArray:
 #      u16 ws_sequence, u32 host_capture_time (0.1ms units), u8 num_skaters
-#      [u32 peer_id, skater_bytes(37), u8 queue_depth] × num_skaters
+#      [u32 peer_id, skater_bytes(38), u8 queue_depth] × num_skaters
 #      puck_bytes(12)
 #      u8 num_goalies, [goalie_bytes(35)] × num_goalies
 #      u8 score0, u8 score1, u8 phase, u8 period, u16 time_remaining
 #
-#    Total for 6 players + 2 goalies: 348 bytes — stays in a single packet, well
+#    Total for 6 players + 2 goalies: 354 bytes — stays in a single packet, well
 #    under Steam's ~1200-byte unreliable cap. This matters: Steam (unlike ENet)
 #    does NOT fragment unreliable messages, so an oversized snapshot would be
 #    dropped at send rather than split across datagrams.
 #
 #    Quantization layout:
-#      Skater  (37 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s,
+#      Skater  (38 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s,
 #                      blade 3×s16@1cm, top_hand 3×s16@1cm,
 #                      facing u16 (0–TAU→0–65535), upper_body_rot s16 (−π–π→−32767–32767),
 #                      facing_angular_velocity s16@PI*10 rad/s, upper_body_angular_velocity s16@PI*10 rad/s,
-#                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]),
-#                      shot_charge u8
+#                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]+elevated[5]+sprint_locked[6]),
+#                      shot_charge u8, stamina u8
 #      Puck    (12 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
 #      Goalie  (35 B): root (12 B) + pose (23 B). Root:
 #                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
@@ -170,7 +170,7 @@ func decode_world_state(data: PackedByteArray) -> void:
 		# decode_s32 to match the encoder; negative ids are AI bots.
 		var peer_id: int = data.decode_s32(o); o += 4
 		decoded_peers.append(peer_id)
-		var skater_bytes: PackedByteArray = data.slice(o, o + 37); o += 37
+		var skater_bytes: PackedByteArray = data.slice(o, o + 38); o += 38
 		var depth: int = data.decode_u8(o); o += 1
 		if skip_actors:
 			continue
@@ -270,7 +270,7 @@ func decode_for_replay(data: PackedByteArray) -> Dictionary:
 	for _i: int in num_skaters:
 		var peer_id: int = data.decode_s32(o); o += 4
 		decoded_peers.append(peer_id)
-		var skater_bytes: PackedByteArray = data.slice(o, o + 37); o += 37
+		var skater_bytes: PackedByteArray = data.slice(o, o + 38); o += 38
 		o += 1  # queue_depth (not needed for replay)
 		skaters[peer_id] = _decode_skater_quantized(skater_bytes)
 
@@ -371,12 +371,12 @@ func decode_stats(data: Array) -> void:
 
 # ── Quantization helpers ──────────────────────────────────────────────────────
 
-# Skater: 37 bytes
+# Skater: 38 bytes
 # Offsets: pos(0..4) vel(5..10) blade(11..16) top_hand(17..22)
-#          facing(23..24) ubrot(25..26) fav(27..28) ubav(29..30) lp_ts(31..34) flags(35) charge(36)
+#          facing(23..24) ubrot(25..26) fav(27..28) ubav(29..30) lp_ts(31..34) flags(35) charge(36) stamina(37)
 static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	var b := PackedByteArray()
-	b.resize(37)
+	b.resize(38)
 	var o: int = 0
 	b.encode_s16(o, clampi(roundi(s.position.x * 100.0), -32768, 32767)); o += 2
 	b.encode_s8(o, clampi(roundi(s.position.y * 100.0), -128, 127)); o += 1
@@ -400,14 +400,16 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	b.encode_u32(o, roundi(maxf(s.last_processed_host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE)); o += 4
 	var flags: int = (s.shot_state & 0x0F) \
 			| (0x10 if s.is_ghost else 0) \
-			| (0x20 if s.is_elevated else 0)
+			| (0x20 if s.is_elevated else 0) \
+			| (0x40 if s.sprint_locked else 0)
 	b.encode_u8(o, flags); o += 1
-	b.encode_u8(o, clampi(roundi(s.shot_charge * 255.0), 0, 255))
+	b.encode_u8(o, clampi(roundi(s.shot_charge * 255.0), 0, 255)); o += 1
+	b.encode_u8(o, clampi(roundi(s.stamina * 255.0), 0, 255))
 	return b
 
 
 static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
-	if b.size() < 37:
+	if b.size() < 38:
 		push_warning("WorldStateCodec: truncated skater block (%d bytes)" % b.size())
 		return SkaterNetworkState.new()
 	var s := SkaterNetworkState.new()
@@ -434,7 +436,9 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	s.shot_state = flags & 0x0F
 	s.is_ghost = (flags & 0x10) != 0
 	s.is_elevated = (flags & 0x20) != 0
-	s.shot_charge = b.decode_u8(o) / 255.0
+	s.sprint_locked = (flags & 0x40) != 0
+	s.shot_charge = b.decode_u8(o) / 255.0; o += 1
+	s.stamina = b.decode_u8(o) / 255.0
 	return s
 
 

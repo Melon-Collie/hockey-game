@@ -52,6 +52,31 @@ func test_puck_carry_reduces_max_speed() -> void:
 	assert_lt(carry_speed, free_speed, "carrying the puck caps speed lower than free skating")
 	assert_lt(carry_speed, cfg.max_speed, "carry speed should be below full max_speed")
 
+func test_sprint_raises_top_speed() -> void:
+	# Accelerate to the cap with and without sprint; sprint should settle higher.
+	var cfg := _default_cfg()
+	cfg.sprint_max_speed_multiplier = 1.3
+	cfg.sprint_thrust_multiplier = 1.2
+	var v_normal := Vector3.ZERO
+	var v_sprint := Vector3.ZERO
+	for i in range(1000):
+		v_normal = SkaterMovementRules.apply_movement(v_normal, Vector2(1, 0), 0.0, false, false, 0.01, cfg, false)
+		v_sprint = SkaterMovementRules.apply_movement(v_sprint, Vector2(1, 0), 0.0, false, false, 0.01, cfg, true)
+	var normal_speed: float = Vector2(v_normal.x, v_normal.z).length()
+	var sprint_speed: float = Vector2(v_sprint.x, v_sprint.z).length()
+	assert_gt(sprint_speed, normal_speed, "sprint settles at a higher top speed")
+	assert_almost_eq(sprint_speed, cfg.max_speed * cfg.sprint_max_speed_multiplier, 0.2,
+		"sprint cap is max_speed × sprint_max_speed_multiplier")
+
+func test_sprint_inactive_matches_baseline() -> void:
+	# Default multipliers + sprint_active=false must be a no-op vs the old 7-arg path.
+	var cfg := _default_cfg()
+	var with_default_arg: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3(3, 0, 0), Vector2(1, 0), 0.0, false, false, 0.01, cfg)
+	var explicit_false: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3(3, 0, 0), Vector2(1, 0), 0.0, false, false, 0.01, cfg, false)
+	assert_almost_eq(with_default_arg.x, explicit_false.x, 0.00001, "omitted sprint arg == sprint_active false")
+
 func test_over_max_preserved_when_no_thrust() -> void:
 	# Skater blasted by a body check to speed 20 — without new thrust input, the
 	# clamp shouldn't yank them back to max_speed. Only friction erodes it.

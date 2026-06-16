@@ -17,6 +17,12 @@ var is_ghost: bool = false
 # can read teammate flags directly instead of inferring from puck
 # physics.
 var is_elevated: bool = false
+# Sprint stamina (0..1 fraction of the full pool) and the exhaustion lockout
+# flag. Both replicated so the local player's reconcile can snap them to the
+# host's authoritative value before replaying inputs — same treatment as
+# velocity. See StaminaRules / LocalController.reconcile.
+var stamina: float = 1.0
+var sprint_locked: bool = false
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 
@@ -35,6 +41,8 @@ func to_array() -> Array:
 		facing_angular_velocity,
 		upper_body_angular_velocity,
 		is_elevated,
+		stamina,
+		sprint_locked,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -51,6 +59,8 @@ func copy_from(s: SkaterNetworkState) -> void:
 	is_elevated = s.is_elevated
 	shot_state = s.shot_state
 	shot_charge = s.shot_charge
+	stamina = s.stamina
+	sprint_locked = s.sprint_locked
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
 
@@ -70,4 +80,7 @@ static func from_array(data: Array) -> SkaterNetworkState:
 	state.upper_body_angular_velocity = data[11]
 	if data.size() > 12:
 		state.is_elevated = data[12]
+	if data.size() > 14:
+		state.stamina = data[13]
+		state.sprint_locked = data[14]
 	return state

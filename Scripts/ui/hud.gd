@@ -48,6 +48,14 @@ var _skip_vote_total: int = 0
 var _spectator_banner: PanelContainer = null
 var _spectator_wrapper: Control = null
 var _fps_label: Label = null
+var _stamina_root: Control = null
+var _stamina_fill: ColorRect = null
+
+const _STAMINA_W: float = 240.0
+const _STAMINA_H: float = 12.0
+const _STAMINA_NORMAL := MenuStyle.HUD_RING_SELF             # cyan — matches your own skater ring
+const _STAMINA_LOW    := Color(0.95, 0.65, 0.20, 1.0)        # amber when running low
+const _STAMINA_LOCKED := MenuStyle.DANGER                    # red while exhausted
 
 const _DARK_BG    := MenuStyle.BROADCAST_BG
 const _WHITE      := MenuStyle.BROADCAST_CREAM
@@ -63,6 +71,7 @@ func _ready() -> void:
 	_build_top_goal_banner()
 	_build_version_tag()
 	_build_fps_label()
+	_build_stamina_bar()
 	_build_bug_icon()
 	_build_skip_replay_prompt()
 	_bug_dialog = BugReportDialog.new()
@@ -666,12 +675,70 @@ func _build_fps_label() -> void:
 	_fps_label.visible = PlayerPrefs.show_fps
 	add_child(_fps_label)
 
+# Sprint stamina bar — a thin gauge centred along the bottom edge. Only the
+# local player's stamina is shown; it's driven each frame from the local
+# controller in _update_stamina_bar(). Hidden for spectators (no controller).
+func _build_stamina_bar() -> void:
+	_stamina_root = Control.new()
+	_stamina_root.anchor_left = 0.5
+	_stamina_root.anchor_right = 0.5
+	_stamina_root.anchor_top = 1.0
+	_stamina_root.anchor_bottom = 1.0
+	_stamina_root.offset_left = -_STAMINA_W * 0.5
+	_stamina_root.offset_right = _STAMINA_W * 0.5
+	_stamina_root.offset_top = -44.0
+	_stamina_root.offset_bottom = -44.0 + _STAMINA_H
+	_stamina_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stamina_root.visible = false
+
+	var bg := ColorRect.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.color = Color(_DARK_BG.r, _DARK_BG.g, _DARK_BG.b, 0.72)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stamina_root.add_child(bg)
+
+	# Fill spans 0..stamina of the root width via anchor_right; a 1px inset keeps
+	# the dark background reading as a frame around it.
+	_stamina_fill = ColorRect.new()
+	_stamina_fill.anchor_left = 0.0
+	_stamina_fill.anchor_top = 0.0
+	_stamina_fill.anchor_right = 1.0
+	_stamina_fill.anchor_bottom = 1.0
+	_stamina_fill.offset_left = 1.0
+	_stamina_fill.offset_top = 1.0
+	_stamina_fill.offset_bottom = -1.0
+	_stamina_fill.color = _STAMINA_NORMAL
+	_stamina_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stamina_root.add_child(_stamina_fill)
+
+	add_child(_stamina_root)
+
+func _update_stamina_bar() -> void:
+	if _stamina_root == null:
+		return
+	var record: PlayerRecord = GameManager.get_local_player()
+	var controller: SkaterController = record.controller if record != null else null
+	if controller == null:
+		_stamina_root.visible = false
+		return
+	_stamina_root.visible = true
+	var s: float = clampf(controller.stamina, 0.0, 1.0)
+	# Fill width: inset by 1px on the right so it never overhangs the frame.
+	_stamina_fill.offset_right = -1.0 - (1.0 - s) * (_STAMINA_W - 2.0)
+	if controller.is_sprint_exhausted():
+		_stamina_fill.color = _STAMINA_LOCKED
+	elif s < 0.3:
+		_stamina_fill.color = _STAMINA_LOW
+	else:
+		_stamina_fill.color = _STAMINA_NORMAL
+
 func _process(_delta: float) -> void:
 	var enabled: bool = PlayerPrefs.show_fps
 	if _fps_label.visible != enabled:
 		_fps_label.visible = enabled
 	if enabled:
 		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
+	_update_stamina_bar()
 
 
 # ---------------------------------------------------------------------------

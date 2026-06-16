@@ -4,7 +4,7 @@ const BYTES_SIZE: int = 23
 # Layout: f32 timestamp(0) f32 delta(4) s16 move.x(8) s16 move.y(10)
 #         s16 mwp.x(12) s8 mwp.y(14) s16 mwp.z(15) u16 msp.x(17) u16 msp.y(19)
 #         u16 flags(21)  flags: shoot_pressed[0] shoot_held[1] slap_pressed[2]
-#         slap_held[3] (reserved)[4] brake[5] elevation_up[6] elevation_down[7]
+#         slap_held[3] sprint_held[4] brake[5] elevation_up[6] elevation_down[7]
 #         block_held[8]
 
 var host_timestamp: float = 0.0
@@ -20,6 +20,7 @@ var brake: bool = false
 var elevation_up: bool = false
 var elevation_down: bool = false
 var block_held: bool = false
+var sprint_held: bool = false
 
 func to_array() -> Array:
 	return [
@@ -40,6 +41,7 @@ func to_array() -> Array:
 		block_held,
 		mouse_screen_pos.x,
 		mouse_screen_pos.y,
+		sprint_held,
 	]
 
 func to_bytes() -> PackedByteArray:
@@ -60,7 +62,7 @@ func to_bytes() -> PackedByteArray:
 	var flags: int = (
 		(0x001 if shoot_pressed  else 0) | (0x002 if shoot_held     else 0) |
 		(0x004 if slap_pressed   else 0) | (0x008 if slap_held      else 0) |
-										   (0x020 if brake          else 0) |
+		(0x010 if sprint_held    else 0) | (0x020 if brake          else 0) |
 		(0x040 if elevation_up   else 0) | (0x080 if elevation_down else 0) |
 		(0x100 if block_held     else 0))
 	b.encode_u16(21, flags)
@@ -88,6 +90,7 @@ static func from_bytes(b: PackedByteArray, offset: int = 0) -> InputState:
 	s.shoot_held         = (flags & 0x002) != 0
 	s.slap_pressed       = (flags & 0x004) != 0
 	s.slap_held          = (flags & 0x008) != 0
+	s.sprint_held        = (flags & 0x010) != 0
 	s.brake              = (flags & 0x020) != 0
 	s.elevation_up       = (flags & 0x040) != 0
 	s.elevation_down     = (flags & 0x080) != 0
@@ -110,4 +113,6 @@ static func from_array(data: Array) -> InputState:
 	state.elevation_down = data[13]
 	state.block_held = data[14]
 	state.mouse_screen_pos = Vector2(data[15], data[16])
+	if data.size() > 17:
+		state.sprint_held = data[17]
 	return state
