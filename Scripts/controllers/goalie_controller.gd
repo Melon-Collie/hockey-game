@@ -376,6 +376,7 @@ extends Node
 # client view always matches what the host actually saw save-relevant frames.
 @export var interpolation_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
 @export var extrapolation_max_ms: float = 50.0  # cap dead-reckon when snapshots are late
+@export var rejoin_blend_duration: float = 0.075  # smoothstep window back from extrapolation
 
 @export var low_shot_threshold: float = 0.45
 @export var elevated_threshold: float = 0.45
@@ -534,6 +535,14 @@ var _scratch_state := GoalieNetworkState.new()
 var _shooter_near_memo_frame: int = -1
 var _shooter_near_memo: bool = false
 var is_extrapolating: bool = false
+# Rejoin blend (root translation only): on the extrapolation→interpolation seam
+# the dead-reckoned root position is smoothstepped back to the authoritative
+# position so a goalie that changed direction during a packet gap (butterfly
+# drop, push to a post) doesn't pop at the crease. Pose joints are frozen during
+# extrapolation, not dead-reckoned, so they need no blend. < 0 means inactive.
+var _rejoin_blend_elapsed: float = -1.0
+var _rejoin_blend_from_x: float = 0.0
+var _rejoin_blend_from_z: float = 0.0
 
 func get_buffer_depth() -> int:
 	return _state_buffer.size()
@@ -688,6 +697,8 @@ func _physics_process(delta: float) -> void:
 	# old client-AI-with-soft-correction model produced when the local puck
 	# read and the broadcast read disagreed.
 	if not is_server:
+		if _rejoin_blend_elapsed >= 0.0:
+			_rejoin_blend_elapsed += delta
 		_interpolate_and_apply()
 		return
 	_update_tracking(delta)
@@ -1841,6 +1852,7 @@ func apply_state(network_state: GoalieNetworkState, host_ts: float) -> void:
 # when the buffer is empty or we've overshot the newest entry, dead-reckons
 # the newest pose forward by velocity (capped at `extrapolation_max_ms`).
 func _interpolate_and_apply() -> void:
+	var prev_extrapolating: bool = is_extrapolating
 	if _state_buffer.is_empty():
 		is_extrapolating = false
 		return
@@ -1858,6 +1870,22 @@ func _interpolate_and_apply() -> void:
 		interpolated = _extrapolate_goalie_state(newest, dt)
 	else:
 		interpolated = _lerp_goalie_state(bracket.from_state, bracket.to_state, bracket.t)
+	# Seam back from extrapolation: capture the currently-rendered root position
+	# and smoothstep it onto the authoritative one over rejoin_blend_duration, so
+	# a direction change during the gap doesn't snap. Mirrors the skater / puck
+	# rejoin blend; scoped to root translation since the pose was held, not
+	# dead-reckoned. C1 easing keeps the correction velocity from kinking.
+	if prev_extrapolating and not is_extrapolating:
+		_rejoin_blend_from_x = goalie.global_position.x
+		_rejoin_blend_from_z = goalie.global_position.z
+		_rejoin_blend_elapsed = 0.0
+	if _rejoin_blend_elapsed >= 0.0:
+		var ease_t: float = clampf(_rejoin_blend_elapsed / rejoin_blend_duration, 0.0, 1.0)
+		var eased: float = smoothstep(0.0, 1.0, ease_t)
+		interpolated.position_x = lerpf(_rejoin_blend_from_x, interpolated.position_x, eased)
+		interpolated.position_z = lerpf(_rejoin_blend_from_z, interpolated.position_z, eased)
+		if ease_t >= 1.0:
+			_rejoin_blend_elapsed = -1.0
 	_apply_interpolated(interpolated)
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
 

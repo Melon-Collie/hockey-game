@@ -219,6 +219,15 @@ var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all
 var _pending_handshake: Dictionary[int, float] = {}
 const _HANDSHAKE_TIMEOUT_S: float = 10.0
 const _KICK_FLUSH_DELAY_S: float = 0.5
+# Host: last time (local_time()) each connected peer sent us anything — input
+# batches (~input rate) or clock-sync pings (every 2s). Swept in _process; a peer
+# silent past _PEER_LIVENESS_TIMEOUT_S is force-disconnected. ENet's per-peer
+# timeout used to cover this; Steam's relay keepalive does eventually, but ~2x
+# slower, so a hard-crashed or network-yanked peer's skater lingers frozen on
+# everyone's screen. This detects it app-side from the traffic that's already
+# flowing. Bots never enter here (no real connection); offline mode stays empty.
+var _peer_last_seen: Dictionary[int, float] = {}
+const _PEER_LIVENESS_TIMEOUT_S: float = 5.0
 # Callable () -> Array. Set by GameManager at startup so the broadcast loop
 # can pull world state without reaching up into the application layer.
 var _world_state_provider: Callable = Callable()
@@ -407,6 +416,7 @@ func _on_steam_lobby_created(_lobby_id: int) -> void:
 		push_error("Failed to start Steam host: " + str(error))
 		host_lobby_failed.emit("Failed to create the host peer.")
 		return
+	_disable_nagle(peer)
 	multiplayer.multiplayer_peer = peer
 	host_lobby_ready.emit()
 
@@ -435,10 +445,25 @@ func _on_steam_lobby_joined(_lobby_id: int, owner_steam_id: int) -> void:
 		push_error("Failed to connect to Steam host: " + str(error))
 		client_lobby_failed.emit("Failed to create the client peer.")
 		return
+	_disable_nagle(peer)
 	multiplayer.multiplayer_peer = peer
 	# Arm the handshake timeout only now that the peer exists, so a slow lobby
 	# join can't false-trip it.
 	_connect_timer = 0.0
+
+# Disable Steam's Nagle batching so each send flushes immediately instead of
+# being coalesced up to the Nagle timer (~ms scale). Steam's default coalescing
+# clumps the steady 120 Hz world-state stream into bursts, which the client sees
+# as irregular arrivals → interpolation-buffer dry-outs → extrapolation snaps on
+# remote actors. Applied to both peers: the host's flag governs its world-state
+# sends, the client's governs its input-batch sends. Guarded by has_method so a
+# GodotSteam build without the accessor degrades to default behaviour rather
+# than crashing — watch for the warning in the log if smoothing doesn't improve.
+func _disable_nagle(peer: SteamMultiplayerPeer) -> void:
+	if peer.has_method("set_no_nagle"):
+		peer.set_no_nagle(true)
+	else:
+		push_warning("SteamMultiplayerPeer.set_no_nagle unavailable; Nagle stays on (snapshot arrival may clump).")
 
 func _on_steam_lobby_join_failed(reason: String) -> void:
 	if SteamManager.lobby_joined.is_connected(_on_steam_lobby_joined):
@@ -468,9 +493,13 @@ func connected_peer_ids() -> PackedInt32Array:
 func _on_peer_connected(id: int) -> void:
 	if is_host:
 		_pending_handshake[id] = local_time()
+		# Start the liveness clock at connect so the grace window covers the
+		# handshake; the first clock-sync ping (within ~0.5s) refreshes it.
+		_peer_last_seen[id] = local_time()
 
 func _on_peer_disconnected(id: int) -> void:
 	_pending_handshake.erase(id)
+	_peer_last_seen.erase(id)
 	_peer_handedness.erase(id)
 	_peer_names.erase(id)
 	_peer_numbers.erase(id)
@@ -564,6 +593,7 @@ func reset() -> void:
 	tutorial_id = ""
 	_input_batch_provider = Callable()
 	_pending_handshake.clear()
+	_peer_last_seen.clear()
 	_peer_handedness.clear()
 	_peer_names.clear()
 	_peer_numbers.clear()
@@ -654,6 +684,15 @@ func _process(delta: float) -> void:
 				_pending_handshake.erase(pid)
 				push_warning("Dropping peer %d: no request_join within %ds" % [pid, int(_HANDSHAKE_TIMEOUT_S)])
 				if multiplayer.multiplayer_peer != null:
+					multiplayer.multiplayer_peer.disconnect_peer(pid)
+
+	if is_host and not _peer_last_seen.is_empty():
+		var live_now: float = local_time()
+		for pid: int in _peer_last_seen.keys():
+			if live_now - _peer_last_seen[pid] >= _PEER_LIVENESS_TIMEOUT_S:
+				_peer_last_seen.erase(pid)
+				push_warning("Dropping peer %d: silent for %ds (liveness timeout)" % [pid, int(_PEER_LIVENESS_TIMEOUT_S)])
+				if multiplayer.multiplayer_peer != null and pid in multiplayer.get_peers():
 					multiplayer.multiplayer_peer.disconnect_peer(pid)
 
 	_ping_timer += capped_delta
@@ -870,6 +909,9 @@ const _MAX_INPUTS_PER_BATCH: int = 120
 @rpc("any_peer", "unreliable_ordered")
 func receive_input_batch(data: PackedByteArray) -> void:
 	var sender_id: int = multiplayer.get_remote_sender_id()
+	# Liveness: stamp actual receipt time (before any NetworkSimManager delay).
+	if is_host and _peer_last_seen.has(sender_id):
+		_peer_last_seen[sender_id] = local_time()
 	NetworkSimManager.send(
 		func(d: PackedByteArray, sid: int) -> void:
 			if d.size() < 3:
@@ -898,11 +940,16 @@ func receive_world_state(data: PackedByteArray) -> void:
 			var now: float = local_time()
 			if _last_ws_arrival_time > 0.0:
 				const EXPECTED_INTERVAL: float = 1.0 / Constants.STATE_RATE
-				var jitter: float = absf((now - _last_ws_arrival_time) - EXPECTED_INTERVAL)
+				var gap: float = now - _last_ws_arrival_time
+				var jitter: float = absf(gap - EXPECTED_INTERVAL)
 				_jitter_samples.append(jitter)
 				if _jitter_samples.size() > 40:
 					_jitter_samples.pop_front()
 				NetworkTelemetry.record_jitter_p95(get_jitter_p95() * 1000.0)
+				# Raw inter-arrival gap histogram: distinguishes Steam Nagle
+				# clumping (bimodal — a cluster of near-0 gaps then a big one)
+				# from smooth path/relay jitter (spread around the 8.3ms interval).
+				NetworkTelemetry.record_ws_arrival_gap(gap * 1000.0)
 			_last_ws_arrival_time = now
 			if s.size() >= 2:
 				_on_ws_sequence_received(s.decode_u16(0))
@@ -917,6 +964,8 @@ func send_ping(client_send_time: float) -> void:
 	if not is_host:
 		return
 	var peer_id := multiplayer.get_remote_sender_id()
+	if _peer_last_seen.has(peer_id):
+		_peer_last_seen[peer_id] = local_time()
 	NetworkSimManager.send(
 		func(cst: float, pid: int) -> void:
 			receive_pong.rpc_id(pid, cst, local_time()),
@@ -1599,13 +1648,16 @@ func get_target_interpolation_delay() -> float:
 	var broadcast_interval: float = 1.0 / Constants.STATE_RATE
 	# Minimum is RTT/2 + one full broadcast interval so render_time always has
 	# a buffered state ahead of it between packet arrivals. Jitter margin on top.
-	# Margin multiplier 1.0 (was 1.5): the 1.5x was sized for the old loose
-	# render-frame-driven broadcast cadence, which had baked-in 16.7ms jitter
-	# from alternating render frames at 60fps × 25ms broadcast intervals. The
-	# physics-driven broadcast loop produces a clean 1/STATE_RATE cadence, so
-	# the cushion can come down without falling into extrapolation. The
-	# adaptive +10ms/packet up-clamp still protects against sustained jitter.
-	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 1.0
+	# Margin multiplier 2.0: the cushion was briefly cut to 1.0x on the theory
+	# that the physics-driven broadcast loop emits a clean 1/STATE_RATE cadence.
+	# That holds on LAN/ENet, but Steam P2P relays packets in clumps — several
+	# snapshots land together, then a gap exceeding the nominal interval — so
+	# real inter-arrival spikes routinely run past a P95-sized cushion. With a
+	# 1.0x margin the remote interpolation buffer outran its newest sample during
+	# fast play (Extrap climbing well past the <1/s target, visible as rhythmic
+	# snap-back on remote skaters). 2.0x absorbs the clumps; the adaptive
+	# +10ms/packet up-clamp still handles sustained RTT spikes on top.
+	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 2.0
 	return clampf(target, maxf(rtt_half + broadcast_interval, 0.016), 0.200)
 
 func adapt_interpolation_delay(current: float) -> float:

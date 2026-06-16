@@ -209,9 +209,16 @@ func _interpolate() -> void:
 		_rejoin_blend_elapsed = 0.0
 	if _rejoin_blend_elapsed >= 0.0:
 		var ease_t: float = clampf(_rejoin_blend_elapsed / rejoin_blend_duration, 0.0, 1.0)
-		interpolated.position = _rejoin_blend_from_pos.lerp(interpolated.position, ease_t)
-		interpolated.blade_position = _rejoin_blend_from_blade.lerp(interpolated.blade_position, ease_t)
-		interpolated.top_hand_position = _rejoin_blend_from_hand.lerp(interpolated.top_hand_position, ease_t)
+		# Smoothstep (C1) rather than a linear blend: closing the extrapolation
+		# error linearly injects a constant correction velocity that switches on
+		# at blend start and off at blend end, leaving a velocity kink at both
+		# seams. Easing ramps that correction velocity in and out, so the re-entry
+		# is velocity-continuous. The base interpolated motion is followed the
+		# whole time — only the error term rides the eased curve.
+		var eased: float = smoothstep(0.0, 1.0, ease_t)
+		interpolated.position = _rejoin_blend_from_pos.lerp(interpolated.position, eased)
+		interpolated.blade_position = _rejoin_blend_from_blade.lerp(interpolated.blade_position, eased)
+		interpolated.top_hand_position = _rejoin_blend_from_hand.lerp(interpolated.top_hand_position, eased)
 		if ease_t >= 1.0:
 			_rejoin_blend_elapsed = -1.0
 	_apply_state_to_skater(interpolated)
