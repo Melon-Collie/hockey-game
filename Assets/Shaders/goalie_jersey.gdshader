@@ -11,9 +11,9 @@ shader_type spatial;
 // overwrite earlier (same as JerseyDecal band painting).
 //
 // Text decal: a 256x320 SubViewport (aspect-matched to the 0.48 x 0.6 m face)
-// rendering name and number on a transparent background. Sampled on ±Z faces
-// by projecting object-space x/y onto [0,1]² UV; front face (-Z) mirrors U so
-// the number reads correctly when viewed from the shooter's side.
+// rendering name and number on a transparent background. Sampled only on the
+// back (+Z) face — the goalie faces -Z toward the shooter, so +Z is the back
+// of the jersey where the nameplate lives. U: 0=left, 1=right from behind.
 
 const int MAX_STRIPES = 5;
 
@@ -44,8 +44,10 @@ void fragment() {
 	ROUGHNESS = 0.9;
 	METALLIC = 0.0;
 
-	// Normalise height to [0, 1] (0 = bottom of body, 1 = top).
-	float norm_y = (v_obj_y + HALF_H) / (HALF_H * 2.0);
+	// Normalise height to [0, 1] (0 = TOP of body, 1 = BOTTOM) to match the
+	// v2 jersey schema convention where stripe pos=0 is the collar and pos=1
+	// is the waist — same direction as JerseyDecal's pixel-V coordinate.
+	float norm_y = (HALF_H - v_obj_y) / (HALF_H * 2.0);
 
 	// Base colour, then stripes in array order.
 	vec3 col = base_color.rgb;
@@ -56,16 +58,13 @@ void fragment() {
 		}
 	}
 
-	// Project text decal onto front (-Z) and back (+Z) faces.
-	if (abs(v_obj_normal.z) > 0.9) {
-		// U: 0 at left edge, 1 at right (mirrored on the front face so text
-		// reads correctly when viewed from the shooter's side).
-		float face_u = (v_obj_normal.z < 0.0)
-			? (v_obj_x + HALF_W) / (HALF_W * 2.0)
-			: (HALF_W - v_obj_x) / (HALF_W * 2.0);
-		// V: 0 at top of body, 1 at bottom (screen / texture convention).
-		float face_v = (HALF_H - v_obj_y) / (HALF_H * 2.0);
-		vec4 decal = texture(text_decal, vec2(face_u, face_v));
+	// Project text decal onto the back (+Z) face only. The goalie faces -Z
+	// toward the shooter, so +Z is the back of the jersey — where the name
+	// plate and number live. U: 0 at left, 1 at right from behind. V reuses
+	// norm_y (0=collar, 1=waist) which already matches the texture convention.
+	if (v_obj_normal.z > 0.9) {
+		float face_u = (HALF_W - v_obj_x) / (HALF_W * 2.0);
+		vec4 decal = texture(text_decal, vec2(face_u, norm_y));
 		col = mix(col, decal.rgb, decal.a);
 	}
 

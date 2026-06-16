@@ -24,16 +24,23 @@ extends Node3D
 @onready var _glove_mesh: MeshInstance3D = $Glove/MeshInstance3D
 @onready var _blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
 
+const _ARM_UPPER_LEN: float = 0.38
+const _ARM_FOREARM_LEN: float = 0.38
+const _ARM_RADIUS: float = 0.07
+
 var _uniform_coordinator: GoalieUniformCoordinator
 var _left_hip_connector: MeshInstance3D = null
 var _right_hip_connector: MeshInstance3D = null
-var _glove_arm_connector: MeshInstance3D = null
-var _blocker_arm_connector: MeshInstance3D = null
+var _glove_upper_arm: Node3D = null
+var _glove_forearm: Node3D = null
+var _blocker_upper_arm: Node3D = null
+var _blocker_forearm: Node3D = null
 
 
 func _ready() -> void:
 	_init_head_mesh()
 	_init_connectors()
+	_init_arm_bones()
 	_setup_uniform_coordinator()
 
 
@@ -47,7 +54,7 @@ func apply_jersey_info(p_name: String, number: int) -> void:
 
 func apply_uniform(colors: Dictionary) -> void:
 	_uniform_coordinator.apply_uniform(colors)
-	_apply_connector_colors(colors.jersey, colors.goalie_pads)
+	_apply_connector_colors(colors.goalie_pads)
 
 # `glove_max_step` / `blocker_max_step`: optional caps on linear movement
 # this frame (metres). Callers pass `*_react_max_speed * delta` to enforce a
@@ -196,7 +203,8 @@ func _init_head_mesh() -> void:
 func _setup_uniform_coordinator() -> void:
 	_uniform_coordinator = GoalieUniformCoordinator.new()
 	_uniform_coordinator.setup(self, _body_mesh, _head_mesh,
-			_left_pad_mesh, _right_pad_mesh, _glove_mesh, _blocker_mesh)
+			_left_pad_mesh, _right_pad_mesh, _glove_mesh, _blocker_mesh,
+			_glove_upper_arm, _glove_forearm, _blocker_upper_arm, _blocker_forearm)
 
 
 func _init_connectors() -> void:
@@ -204,10 +212,17 @@ func _init_connectors() -> void:
 	add_child(_left_hip_connector)
 	_right_hip_connector = _make_connector_mesh(0.08)
 	add_child(_right_hip_connector)
-	_glove_arm_connector = _make_connector_mesh(0.055)
-	add_child(_glove_arm_connector)
-	_blocker_arm_connector = _make_connector_mesh(0.055)
-	add_child(_blocker_arm_connector)
+
+
+func _init_arm_bones() -> void:
+	_glove_upper_arm = _make_arm_bone()
+	add_child(_glove_upper_arm)
+	_glove_forearm = _make_arm_bone()
+	add_child(_glove_forearm)
+	_blocker_upper_arm = _make_arm_bone()
+	add_child(_blocker_upper_arm)
+	_blocker_forearm = _make_arm_bone()
+	add_child(_blocker_forearm)
 
 
 func _make_connector_mesh(radius: float) -> MeshInstance3D:
@@ -221,13 +236,63 @@ func _make_connector_mesh(radius: float) -> MeshInstance3D:
 	return mi
 
 
-func _apply_connector_colors(jersey_color: Color, pads_color: Color) -> void:
-	if not _glove_arm_connector:
+# Two-bone arm IK. shoulder_local / hand_local are in goalie-local space.
+# pole_local is the elbow-hint direction in goalie-local space — the solver
+# converts to world space before projecting onto the perpendicular plane.
+func _update_arm_ik(upper: Node3D, forearm_bone: Node3D,
+		shoulder_local: Vector3, hand_local: Vector3, pole_local: Vector3) -> void:
+	if upper == null or forearm_bone == null:
 		return
-	var jersey_mat := StandardMaterial3D.new()
-	jersey_mat.albedo_color = jersey_color
-	_glove_arm_connector.material_override = jersey_mat
-	_blocker_arm_connector.material_override = jersey_mat.duplicate()
+	var shoulder_w: Vector3 = to_global(shoulder_local)
+	var hand_w: Vector3 = to_global(hand_local)
+	var pole_w: Vector3 = global_transform.basis * pole_local
+	var elbow_w: Vector3 = TwoBoneIK.solve_elbow(
+			shoulder_w, hand_w, _ARM_UPPER_LEN, _ARM_FOREARM_LEN, pole_w)
+	var elbow_local: Vector3 = to_local(elbow_w)
+	_update_arm_bone(upper, shoulder_local, elbow_local)
+	_update_arm_bone(forearm_bone, elbow_local, hand_local)
+
+
+func _update_arm_bone(bone: Node3D, a_local: Vector3, b_local: Vector3) -> void:
+	if bone == null:
+		return
+	var length: float = (b_local - a_local).length()
+	bone.position = (a_local + b_local) * 0.5
+	bone.scale = Vector3(1.0, 1.0, maxf(length, 0.001))
+	var a_world: Vector3 = to_global(a_local)
+	var b_world: Vector3 = to_global(b_local)
+	if (b_world - a_world).length() > 0.0001:
+		bone.look_at(b_world, _up_for_look_at(b_world - a_world))
+
+
+static func _up_for_look_at(direction: Vector3) -> Vector3:
+	if absf(direction.normalized().y) > 0.99:
+		return Vector3.FORWARD
+	return Vector3.UP
+
+
+# Node3D wrapper with a unit CylinderMesh child rotated 90° around X so the
+# cylinder's local Y maps to the wrapper's look_at forward axis (Z). scale.z
+# is set per tick to the bone's actual length by _update_arm_bone().
+func _make_arm_bone() -> Node3D:
+	var wrapper := Node3D.new()
+	var mi := MeshInstance3D.new()
+	mi.name = "Cylinder"
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = _ARM_RADIUS * 0.5
+	cyl.bottom_radius = _ARM_RADIUS * 0.5
+	cyl.height = 1.0
+	cyl.radial_segments = 12
+	mi.mesh = cyl
+	mi.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	wrapper.add_child(mi)
+	return wrapper
+
+
+func _apply_connector_colors(pads_color: Color) -> void:
+	if not _left_hip_connector:
+		return
 	var pads_mat := StandardMaterial3D.new()
 	pads_mat.albedo_color = pads_color
 	_left_hip_connector.material_override = pads_mat
@@ -244,12 +309,17 @@ func _update_connectors() -> void:
 	_point_connector(_right_hip_connector,
 		_body.position + _body.basis * Vector3(0.10, -0.24, 0.0),
 		_right_pad.position)
-	_point_connector(_glove_arm_connector,
-		_body.position + _body.basis * Vector3(0.23, 0.12, 0.0),
-		_glove.position)
-	_point_connector(_blocker_arm_connector,
+	# Glove arm: shoulder on body's left side (goalie's catch hand), elbow bends
+	# outward and toward the shooter (-Z).
+	_update_arm_ik(_glove_upper_arm, _glove_forearm,
 		_body.position + _body.basis * Vector3(-0.23, 0.12, 0.0),
-		_block_arm.position)
+		_glove.position,
+		Vector3(-1.0, 0.0, -0.5))
+	# Blocker arm: shoulder on body's right side.
+	_update_arm_ik(_blocker_upper_arm, _blocker_forearm,
+		_body.position + _body.basis * Vector3(0.23, 0.12, 0.0),
+		_block_arm.position,
+		Vector3(1.0, 0.0, -0.5))
 
 
 func _point_connector(mesh: MeshInstance3D, from_pos: Vector3, to_pos: Vector3) -> void:

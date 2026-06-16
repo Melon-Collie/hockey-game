@@ -32,6 +32,11 @@ var _jersey_mat: ShaderMaterial
 var _text_viewport: SubViewport
 var _text_decal: GoalieTextDecal
 
+var _glove_upper_arm: Node3D
+var _glove_forearm: Node3D
+var _blocker_upper_arm: Node3D
+var _blocker_forearm: Node3D
+
 # Cached for apply_jersey_info refresh.
 var _text_color: Color = Color.WHITE
 var _text_outline_color: Color = Color.BLACK
@@ -41,7 +46,9 @@ var _jersey_number: int = 0
 
 func setup(goalie: Goalie, body_mesh: MeshInstance3D, head_mesh: MeshInstance3D,
 		left_pad_mesh: MeshInstance3D, right_pad_mesh: MeshInstance3D,
-		glove_mesh: MeshInstance3D, blocker_mesh: MeshInstance3D) -> void:
+		glove_mesh: MeshInstance3D, blocker_mesh: MeshInstance3D,
+		glove_upper_arm: Node3D, glove_forearm: Node3D,
+		blocker_upper_arm: Node3D, blocker_forearm: Node3D) -> void:
 	_goalie = goalie
 	_body_mesh = body_mesh
 	_head_mesh = head_mesh
@@ -49,6 +56,10 @@ func setup(goalie: Goalie, body_mesh: MeshInstance3D, head_mesh: MeshInstance3D,
 	_right_pad_mesh = right_pad_mesh
 	_glove_mesh = glove_mesh
 	_blocker_mesh = blocker_mesh
+	_glove_upper_arm = glove_upper_arm
+	_glove_forearm = glove_forearm
+	_blocker_upper_arm = blocker_upper_arm
+	_blocker_forearm = blocker_forearm
 	_create_jersey_material()
 
 
@@ -67,6 +78,12 @@ func apply_uniform(colors: Dictionary) -> void:
 	_right_pad_mesh.material_override = pads_mat.duplicate()
 	_glove_mesh.material_override = pads_mat.duplicate()
 	_blocker_mesh.material_override = pads_mat.duplicate()
+
+	var arms: Dictionary = uniform.arms
+	_paint_cylinder_h(_glove_upper_arm, arms.upper)
+	_paint_cylinder_h(_blocker_upper_arm, arms.upper)
+	_paint_cylinder_h(_glove_forearm, arms.lower)
+	_paint_cylinder_h(_blocker_forearm, arms.lower)
 
 	# Repaint text with new team text colors (number/name unchanged).
 	_rebuild_text_decal()
@@ -128,7 +145,52 @@ func _rebuild_text_decal() -> void:
 	_text_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
-func _make_solid_mat(color: Color, roughness: float) -> StandardMaterial3D:
+func _paint_cylinder_h(bone: Node3D, segment: Dictionary) -> void:
+	var visual: MeshInstance3D = _bone_visual(bone)
+	if visual == null:
+		return
+	var stripes: Array = segment.get("stripes", []) as Array
+	if stripes.is_empty():
+		visual.material_override = _make_solid_mat(segment.base)
+		return
+	var tex: ImageTexture = _make_h_stripes_texture(segment.base, stripes)
+	visual.material_override = _make_texture_material(tex)
+
+
+func _bone_visual(bone: Node3D) -> MeshInstance3D:
+	if bone == null:
+		return null
+	return bone.get_node_or_null("Cylinder") as MeshInstance3D
+
+
+const _CYLINDER_SIDE_V_FRACTION: float = 0.5
+const _STRIPE_TEX_HEIGHT_PX: int = 128
+const _STRIPE_TEX_WIDTH_PX: int = 4
+
+func _make_h_stripes_texture(base: Color, stripes: Array) -> ImageTexture:
+	var img := Image.create(_STRIPE_TEX_WIDTH_PX, _STRIPE_TEX_HEIGHT_PX, false, Image.FORMAT_RGBA8)
+	img.fill(base)
+	var side_px: int = int(round(_CYLINDER_SIDE_V_FRACTION * float(_STRIPE_TEX_HEIGHT_PX)))
+	for s: Dictionary in stripes:
+		var center_px: float = float(s.pos) * float(side_px)
+		var half_px: float = float(s.width) * float(side_px) * 0.5
+		var y0: int = clampi(int(round(center_px - half_px)), 0, side_px)
+		var y1: int = clampi(int(round(center_px + half_px)), 0, side_px)
+		if y1 > y0:
+			img.fill_rect(Rect2i(0, y0, _STRIPE_TEX_WIDTH_PX, y1 - y0), s.color)
+	return ImageTexture.create_from_image(img)
+
+
+const _ROUGH_CLOTH: float = 0.9
+
+func _make_texture_material(tex: Texture2D) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.roughness = _ROUGH_CLOTH
+	return mat
+
+
+func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.roughness = roughness
