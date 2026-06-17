@@ -250,6 +250,13 @@ static func record_broadcast_interval_us(us: int) -> void:
 	if instance._bcast_interval_samples_us.size() > BCAST_INTERVAL_WINDOW:
 		instance._bcast_interval_samples_us.pop_front()
 
+# Nearest-rank percentile index into a sorted-ascending array of size n.
+# int(n*p) over-shoots (e.g. n=40, p=0.95 -> index 38 ~ p97.5); ceil(n*p)-1 is
+# the correct 0-based nearest-rank index (-> 37 = true p95). Callers guard n>0.
+static func percentile_index(n: int, p: float) -> int:
+	return clampi(int(ceil(n * p)) - 1, 0, n - 1)
+
+
 func observe_actors(skater_buf: int, puck_buf: int, goalie_buf: int, extrapolating: bool) -> void:
 	buffer_depth_skater = skater_buf
 	buffer_depth_puck = puck_buf
@@ -312,7 +319,7 @@ func tick(delta: float) -> void:
 	if not _bcast_interval_samples_us.is_empty():
 		var bis := _bcast_interval_samples_us.duplicate()
 		bis.sort()
-		var b95_i: int = mini(int(bis.size() * 0.95), bis.size() - 1)
+		var b95_i: int = percentile_index(bis.size(), 0.95)
 		broadcast_interval_p95_ms = bis[b95_i] / 1000.0
 		_bcast_interval_samples_us.clear()
 	else:

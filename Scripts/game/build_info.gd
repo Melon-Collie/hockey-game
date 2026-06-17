@@ -19,7 +19,9 @@ const VERSION: String = "dev"
 # v3: added notify_match_ended RPC (graceful host shutdown) — Godot identifies
 #     RPCs by index in the name-sorted method list, so adding one shifts every
 #     index after it and breaks cross-build RPC routing.
-const PROTOCOL_VERSION: int = 3
+# v4: puck wire Y widened s8 -> s16 (was clipping elevated/saucer shots at the
+#     s8 ±1.27 m range); puck block grew 12 -> 13 bytes.
+const PROTOCOL_VERSION: int = 4
 
 const RELEASE_TAG: String = "latest"
 const REPO: String = "Melon-Collie/mitts"
