@@ -66,8 +66,11 @@ func apply_uniform(colors: Dictionary) -> void:
 	var pads_mat: StandardMaterial3D = _make_solid_mat(colors.goalie_pads, _ROUGH_PADS)
 	_goalie.left_pad_mesh.material_override = pads_mat
 	_goalie.right_pad_mesh.material_override = pads_mat.duplicate()
-	_goalie.glove_mesh.material_override = pads_mat.duplicate()
+	_goalie.glove_ring_mesh.material_override = pads_mat.duplicate()
+	_goalie.glove_main_mesh.material_override = pads_mat.duplicate()
+	_goalie.glove_detail_mesh.material_override = pads_mat.duplicate()
 	_goalie.blocker_mesh.material_override = pads_mat.duplicate()
+	_goalie.blocker_hand_mesh.material_override = pads_mat.duplicate()
 
 	var arms: Dictionary = uniform.arms
 	_paint_cylinder_h(_goalie.glove_upper_arm, arms.upper)
@@ -89,11 +92,6 @@ func apply_uniform(colors: Dictionary) -> void:
 	# connectors are too thin for side-stripe positioning to matter).
 	_paint_mesh_h(_goalie.left_hip_connector, uniform.pants)
 	_paint_mesh_h(_goalie.right_hip_connector, uniform.pants)
-
-	# Hand spheres: glove hand is pad color (it's the catch glove); blocker
-	# hand is the jersey sleeve visible below the pad.
-	_goalie.glove_hand_sphere.material_override = _make_solid_mat(colors.goalie_pads, _ROUGH_PADS)
-	_goalie.blocker_hand_sphere.material_override = _make_solid_mat(arms.lower.base)
 
 	_rebuild_text_decal()
 

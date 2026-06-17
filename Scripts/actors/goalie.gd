@@ -24,18 +24,17 @@ extends Node3D
 @onready var head_mesh: MeshInstance3D = $Head/MeshInstance3D
 @onready var left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
-@onready var glove_mesh: MeshInstance3D = $Glove/MeshInstance3D
+@onready var glove_ring_mesh: MeshInstance3D = $Glove/Ring
+@onready var glove_main_mesh: MeshInstance3D = $Glove/Main
+@onready var glove_detail_mesh: MeshInstance3D = $Glove/MeshInstance3D2
 @onready var blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
+@onready var blocker_hand_mesh: MeshInstance3D = $BlockArm/BlockerHand
 
 const _ARM_UPPER_LEN: float = 0.38
 const _ARM_FOREARM_LEN: float = 0.38
 const _ARM_RADIUS: float = 0.16
 const _SHOULDER_SPHERE_RADIUS: float = 0.10
 const _ELBOW_SPHERE_RADIUS: float = 0.08
-const _HAND_SPHERE_RADIUS: float = 0.09
-# Extra retreat to clear the pad mesh on the body side of _block_arm.position
-# (which is the node centre, not the back face of the pad geometry).
-const _BLOCKER_PAD_HALF_DEPTH: float = 0.11
 
 var _uniform_coordinator: GoalieUniformCoordinator
 # Dynamic visual nodes — public for GoalieUniformCoordinator access.
@@ -49,8 +48,6 @@ var glove_shoulder_sphere: MeshInstance3D = null
 var blocker_shoulder_sphere: MeshInstance3D = null
 var glove_elbow_sphere: MeshInstance3D = null
 var blocker_elbow_sphere: MeshInstance3D = null
-var glove_hand_sphere: MeshInstance3D = null
-var blocker_hand_sphere: MeshInstance3D = null
 
 
 func _ready() -> void:
@@ -249,10 +246,6 @@ func _init_arm_bones() -> void:
 	add_child(glove_elbow_sphere)
 	blocker_elbow_sphere = _make_sphere_mesh(_ELBOW_SPHERE_RADIUS)
 	add_child(blocker_elbow_sphere)
-	glove_hand_sphere = _make_sphere_mesh(_HAND_SPHERE_RADIUS)
-	add_child(glove_hand_sphere)
-	blocker_hand_sphere = _make_sphere_mesh(_HAND_SPHERE_RADIUS)
-	add_child(blocker_hand_sphere)
 
 
 func _make_connector_mesh(radius: float) -> MeshInstance3D:
@@ -271,8 +264,7 @@ func _make_connector_mesh(radius: float) -> MeshInstance3D:
 # converts to world space before projecting onto the perpendicular plane.
 func _update_arm_ik(upper: Node3D, forearm_bone: Node3D,
 		shoulder_local: Vector3, hand_local: Vector3, pole_local: Vector3,
-		elbow_sphere: MeshInstance3D = null,
-		hand_sphere: MeshInstance3D = null) -> void:
+		elbow_sphere: MeshInstance3D = null) -> void:
 	if upper == null or forearm_bone == null:
 		return
 	var shoulder_w: Vector3 = to_global(shoulder_local)
@@ -283,8 +275,6 @@ func _update_arm_ik(upper: Node3D, forearm_bone: Node3D,
 	var elbow_local: Vector3 = to_local(elbow_w)
 	if elbow_sphere != null:
 		elbow_sphere.position = elbow_local
-	if hand_sphere != null:
-		hand_sphere.position = hand_local
 	_update_arm_bone(upper, shoulder_local, elbow_local)
 	_update_arm_bone(forearm_bone, elbow_local, hand_local)
 
@@ -356,17 +346,12 @@ func _update_connectors() -> void:
 	# Glove arm: shoulder on body's left side (goalie's catch hand), elbow drops down.
 	_update_arm_ik(glove_upper_arm, glove_forearm,
 		glove_shoulder, _glove.position, Vector3(-0.3, -1.0, 0.0),
-		glove_elbow_sphere, glove_hand_sphere)
-	# Blocker arm: retreat the IK target back toward the shoulder so the forearm
-	# terminates at the back edge of the blocker pad instead of its centre.
-	var blocker_to_shoulder: Vector3 = (blocker_shoulder - _block_arm.position)
-	var blocker_dist: float = blocker_to_shoulder.length()
-	var blocker_hand_target: Vector3 = _block_arm.position
-	if blocker_dist > 0.001:
-		blocker_hand_target += (blocker_to_shoulder / blocker_dist) * (_HAND_SPHERE_RADIUS + _BLOCKER_PAD_HALF_DEPTH)
+		glove_elbow_sphere)
+	# Blocker arm: forearm connects directly to BlockArm (wrist position of the
+	# blocker pad + hand mesh assembly).
 	_update_arm_ik(blocker_upper_arm, blocker_forearm,
-		blocker_shoulder, blocker_hand_target, Vector3(0.3, -1.0, 0.0),
-		blocker_elbow_sphere, blocker_hand_sphere)
+		blocker_shoulder, _block_arm.position, Vector3(0.3, -1.0, 0.0),
+		blocker_elbow_sphere)
 
 
 func _point_connector(mesh: MeshInstance3D, from_pos: Vector3, to_pos: Vector3) -> void:
