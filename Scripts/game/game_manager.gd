@@ -744,7 +744,7 @@ func _spawn_goalies() -> void:
 		var goalie: Goalie = result.bottom_goalie if team_id == 0 else result.top_goalie
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		goalie.apply_uniform(colors)
-		goalie.apply_jersey_info("HART" if team_id == 0 else "WARD", 31 if team_id == 0 else 35)
+		goalie.apply_jersey_info("WALL" if team_id == 0 else "WARD", 31 if team_id == 0 else 35)
 
 
 func _wire_subsystems() -> void:

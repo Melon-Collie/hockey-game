@@ -18,12 +18,12 @@ const IMG_W: int = 256
 const IMG_H: int = 320
 const CENTER_X: int = IMG_W / 2
 
-const NAME_FONT_SIZE: int = 22
-const NUMBER_FONT_SIZE: int = 46
-const NAME_Y_TOP: int = 58
-const NUMBER_Y_TOP: int = 86
-const NAME_OUTLINE_PX: int = 3
-const NUMBER_OUTLINE_PX: int = 5
+const NAME_FONT_SIZE: int = 32
+const NUMBER_FONT_SIZE: int = 72
+const NAME_Y_TOP: int = 52
+const NUMBER_Y_TOP: int = 92
+const NAME_OUTLINE_PX: int = 4
+const NUMBER_OUTLINE_PX: int = 7
 
 var player_name: String = ""
 var jersey_number: int = 0
