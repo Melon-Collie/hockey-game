@@ -584,6 +584,10 @@ func sync_existing_players(player_data: Array) -> void:
 		return
 	for entry: Array in player_data:
 		var peer_id: int = entry[0]
+		# Idempotency backstop — see spawn_remote_skater. Skip any peer already
+		# spawned so a redundant delivery never orphans an existing skater node.
+		if _registry.has(peer_id):
+			continue
 		var team_slot: int = entry[1]
 		var team_id: int = entry[2]
 		var jersey_color: Color = entry[3]
@@ -623,6 +627,14 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		_pending_remote_spawns.append([peer_id, team_slot, team_id,
 				jersey_color, helmet_color, pants_color,
 				is_left_handed, player_name, jersey_number, attributes])
+		return
+	# Idempotency guard. The game-start fan-out routes each peer through a single
+	# channel (see _push_lobby_assignments_to_clients), so this should not fire
+	# there — but it's a cheap backstop against any path that delivers a peer
+	# twice (mid-game RPC races, future spawn sites). A second _registry.spawn
+	# would overwrite _players[peer_id] and orphan the first skater node in the
+	# scene tree as an uncontrolled phantom (host never hits this; clients would).
+	if _registry.has(peer_id):
 		return
 	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
@@ -1446,16 +1458,21 @@ func _on_replay_player_left_event(record: PlayerRecord) -> void:
 #   - send_slot_assignment to the joining peer (skipped if the peer is the
 #     local host, who already has its slot)
 #   - broadcast spawn_remote_skater to all peers (handler short-circuits
-#     for the local peer)
+#     for the local peer) — unless `broadcast` is false
 #   - _registry.spawn locally
 #
+# `broadcast` defaults true (mid-game join, where existing clients learn the
+# new peer only through this broadcast). The game-start lobby push passes false
+# because it fans the full roster out through a single sync_existing_players
+# instead — broadcasting there would double-deliver and orphan phantom skaters.
+#
 # Returns the resolved colors dict so callers can reuse it for adjacent
-# bookkeeping (e.g. _push_lobby_assignments_to_clients's `existing` array).
-# Adjacent RPCs that vary by call site (send_join_in_progress,
+# bookkeeping. Adjacent RPCs that vary by call site (send_join_in_progress,
 # send_sync_existing_players, spectator-camera teardown) stay inline at
 # the caller — this helper owns only the shared shape.
 func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
-		is_left: bool, p_name: String, p_number: int, is_local: bool) -> Dictionary:
+		is_left: bool, p_name: String, p_number: int, is_local: bool,
+		broadcast: bool = true) -> Dictionary:
 	var team: Team = teams[team_id]
 	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
 	var attrs: PlayerAttributes = NetworkManager.get_peer_attributes(peer_id)
@@ -1463,8 +1480,9 @@ func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 	if not is_local:
 		NetworkManager.send_slot_assignment(peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants)
-	NetworkManager.send_spawn_remote_skater(peer_id, team_slot, team_id,
-			colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number, attrs)
+	if broadcast:
+		NetworkManager.send_spawn_remote_skater(peer_id, team_slot, team_id,
+				colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number, attrs)
 	_registry.spawn(peer_id, team_slot, team,
 			colors.jersey, colors.helmet, colors.pants,
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe,
@@ -2488,7 +2506,14 @@ func _drop_puck_if_carried() -> int:
 
 func _push_lobby_assignments_to_clients() -> void:
 	var slots: Dictionary = NetworkManager.pending_lobby_slots
-	var existing: Array[Array] = _collect_existing_player_data()
+	# Two-phase fan-out. Phase 1 spawns every assigned player on the host and
+	# tells each client its own slot — but does NOT broadcast spawn_remote_skater.
+	# Phase 2 then sends every connected peer a single sync_existing_players
+	# carrying the complete roster minus themselves. Routing every peer through
+	# exactly one delivery channel is what prevents the double-spawn that
+	# orphaned phantom skaters on clients (a broadcast spawn plus the same peer
+	# inside a later client's sync). It also lets the sync carry full attributes
+	# via _collect_existing_player_data — the old incremental append dropped them.
 	for peer_id: int in slots:
 		if peer_id == 1:
 			continue
@@ -2497,22 +2522,37 @@ func _push_lobby_assignments_to_clients() -> void:
 		var team_slot: int = entry.team_slot
 		if team_id == GameRules.SPECTATOR_TEAM_ID:
 			# Spectators get the slot-assignment RPC so they take the SpectatorCamera
-			# path on the client, plus existing-players sync for actor render. No
-			# state-machine slot is reserved and no skater is spawned.
+			# path on the client. No state-machine slot is reserved and no skater is
+			# spawned; the phase-2 sync below renders the player actors for them.
 			_spectator_peers[peer_id] = true
 			NetworkManager.send_slot_assignment(peer_id, team_slot, team_id,
 					Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
-			NetworkManager.send_sync_existing_players(peer_id, existing)
 			continue
-		var is_left: bool = entry.get("is_left_handed", true)
-		var p_name: String = entry.get("player_name", "Player")
-		var p_number: int = entry.get("jersey_number", 10)
-		NetworkManager.send_sync_existing_players(peer_id, existing)
-		var colors: Dictionary = _spawn_player_and_broadcast(
-				peer_id, team_id, team_slot, is_left, p_name, p_number, false)
-		existing.append([peer_id, team_slot, team_id,
-				colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number])
+		_spawn_player_and_broadcast(
+				peer_id, team_id, team_slot,
+				entry.get("is_left_handed", true),
+				entry.get("player_name", "Player"),
+				entry.get("jersey_number", 10), false, false)
+	# Phase 2: registry now holds the full roster. Sync it to each peer,
+	# excluding their own record (clients spawn their own skater locally via
+	# on_slot_assigned, so re-sending it would spawn a remote-controlled twin).
+	var full: Array[Array] = _collect_existing_player_data()
+	for peer_id: int in slots:
+		if peer_id == 1:
+			continue
+		NetworkManager.send_sync_existing_players(peer_id, _roster_excluding(full, peer_id))
 	NetworkManager.pending_lobby_slots = {}
+
+
+# Returns a copy of a roster array (as built by _collect_existing_player_data)
+# with the given peer's entry removed. Used so a client's existing-players sync
+# never contains itself.
+func _roster_excluding(roster: Array[Array], peer_id: int) -> Array[Array]:
+	var out: Array[Array] = []
+	for entry: Array in roster:
+		if entry[0] != peer_id:
+			out.append(entry)
+	return out
 
 
 func _spawn_bots_from_lobby() -> void:
@@ -2548,6 +2588,11 @@ func _spawn_bots_from_lobby() -> void:
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a
 		# RemoteController-driven skater because peer_id is not their own.
+		# This broadcast is the bot's *sole* delivery channel — bots spawn after
+		# _push_lobby_assignments_to_clients runs, so they're never in any
+		# sync_existing_players payload. Unlike the human spawn broadcast (removed
+		# from the lobby push to stop double-delivery), there's no overlapping
+		# channel here, so this must stay. Don't "consolidate" it away.
 		NetworkManager.send_spawn_remote_skater(record.peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants,
 				record.is_left_handed, record.player_name, record.jersey_number, record.attributes)
