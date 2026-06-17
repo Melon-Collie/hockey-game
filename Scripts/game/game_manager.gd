@@ -1826,8 +1826,19 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		gc.set_pending_reaction_back_date(release_back_date)
 	var saved_goalie_positions: Array[Vector3] = []
 	var saved_goalie_rotations: Array[float] = []
+	var rewound_origin: Vector3 = Vector3.ZERO
+	var have_rewound_origin: bool = false
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() and rtt_ms > 0.0 \
 			and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
+		# Shot ORIGIN rewind (SELF view) — see on_remote_puck_release for the full
+		# rationale. Fire the one-timer from the shooter's blade at the redirect
+		# moment, not where it drifted to during the RPC transit.
+		var blade_snap: WorldSnapshot = _state_buffer_manager.get_state_at(
+				LagCompRewind.self_view_time(host_timestamp))
+		var shooter_state: SkaterNetworkState = blade_snap.get_skater_state(pid)
+		if shooter_state != null:
+			rewound_origin = shooter_state.blade_contact_world
+			have_rewound_origin = true
 		# Goalie was REMOTE-view from the shooter — clients render the goalie
 		# from buffered host snapshots at host_time - interp_delay, so the
 		# shooter saw the goalie at that earlier moment. Rewind to that snapshot
@@ -1845,7 +1856,12 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	puck.release(direction, power)
 	if rtt_ms > 0.0:
 		var skater_vel := Vector3(skater.velocity.x, 0.0, skater.velocity.z)
-		puck.set_puck_position(puck.get_puck_position() + (direction * power + skater_vel) * rtt_half)
+		# Rewind only the horizontal origin — preserve release()'s elevation y.
+		var origin: Vector3 = puck.get_puck_position()
+		if have_rewound_origin:
+			origin.x = rewound_origin.x
+			origin.z = rewound_origin.z
+		puck.set_puck_position(origin + (direction * power + skater_vel) * rtt_half)
 	if not saved_goalie_positions.is_empty():
 		for i: int in goalie_controllers.size():
 			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -1913,8 +1929,24 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 			gc.set_pending_reaction_back_date(release_back_date)
 		var saved_goalie_positions: Array[Vector3] = []
 		var saved_goalie_rotations: Array[float] = []
+		var rewound_origin: Vector3 = Vector3.ZERO
+		var have_rewound_origin: bool = false
 		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0 \
 				and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
+			# Shot ORIGIN rewind (SELF view): the shooter released from their
+			# locally-predicted blade at host_timestamp, but puck.release() snaps to
+			# the carrier's blade as it has drifted during the RPC's ~RTT/2 transit.
+			# Rewind the shooter's own blade so the puck fires from where they aimed —
+			# composes with the advance below to start the host trajectory where the
+			# client predicted it, so the three-zone reconcile stops correcting it
+			# mid-flight. blade_contact_world is captured + interpolated per tick (same
+			# field the pickup/poke/stick-lift resolvers rewind).
+			var blade_snap: WorldSnapshot = _state_buffer_manager.get_state_at(
+					LagCompRewind.self_view_time(host_timestamp))
+			var shooter_state: SkaterNetworkState = blade_snap.get_skater_state(shooter_peer_id)
+			if shooter_state != null:
+				rewound_origin = shooter_state.blade_contact_world
+				have_rewound_origin = true
 			# Goalie is REMOTE-view from the shooter — same derivation as the
 			# one-timer rewind above. The shooter saw the goalie at
 			# host_time - interp_delay (the buffered render path); rewind to
@@ -1931,11 +1963,18 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 		puck.release(direction, power)
 		# Apply RTT advance AFTER release. puck.release() snaps global_position to
 		# ex_carrier.get_blade_contact_global() (carrier is still set at call time),
-		# so any position set before release() is silently overwritten. Applying the
-		# advance here ensures the host trajectory starts from the same position as
-		# the client's Jolt prediction (blade + velocity * rtt_half).
+		# so any position set before release() is silently overwritten. Start from
+		# the rewound shooter blade when available (origin lag-comp), else the live
+		# blade; either way add the RTT/2 advance so the host trajectory matches the
+		# client's Jolt prediction (blade + velocity * rtt_half). Rewind only the
+		# horizontal origin — release() set y for the elevation launch (ice_height +
+		# lift on an elevated shot), which must carry through.
 		if rtt_ms > 0.0:
-			puck.set_puck_position(puck.get_puck_position() + (direction * power + skater_vel) * rtt_half)
+			var origin: Vector3 = puck.get_puck_position()
+			if have_rewound_origin:
+				origin.x = rewound_origin.x
+				origin.z = rewound_origin.z
+			puck.set_puck_position(origin + (direction * power + skater_vel) * rtt_half)
 		if not saved_goalie_positions.is_empty():
 			for i: int in goalie_controllers.size():
 				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -1952,8 +1991,21 @@ func _start_pending_shot_from_carrier() -> void:
 
 # ── Puck network events ──────────────────────────────────────────────────────
 func _on_remote_carrier_changed(new_carrier_peer_id: int) -> void:
-	if puck_controller != null:
+	if puck_controller == null:
+		return
+	if new_carrier_peer_id == -1:
+		puck_controller.notify_remote_carrier_changed(-1)
+		return
+	# Pin the puck to the carrier's interpolated blade so it shares one render
+	# timeline with the stick instead of interpolating from its own buffer. Fall
+	# back to the plain carrier-changed path (stop predicting, no pin) when the
+	# carrier is the local player — handled by on_local_player_picked_up_puck —
+	# or their skater isn't spawned on this client yet.
+	var record: PlayerRecord = _registry.get_record(new_carrier_peer_id) if _registry != null else null
+	if record == null or record.skater == null or record.is_local:
 		puck_controller.notify_remote_carrier_changed(new_carrier_peer_id)
+		return
+	puck_controller.notify_remote_pickup(record.skater)
 
 
 func on_carrier_puck_dropped() -> void:

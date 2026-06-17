@@ -19,7 +19,8 @@ class_name LagCompRewind
 #
 # Pick the perspective per entity. Hit checks need both — see HitClaimResolver
 # for the canonical two-rewind pattern. Pickup/poke rewind the blade as SELF
-# and the puck as REMOTE.
+# and the puck as REMOTE. Shot release rewinds the shooter's blade as SELF (the
+# firing origin) and the goalie as REMOTE.
 
 const _INTERP_DELAY_CLAMP_MS_MAX: float = 200.0
 
