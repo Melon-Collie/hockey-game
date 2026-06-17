@@ -4,17 +4,19 @@ extends VBoxContainer
 signal close_requested
 
 var _res_row: HBoxContainer = null
-var _res_label: Label = null   # dimmed when fullscreen is on (resolution disabled)
-var _fs_check: CheckButton = null
+var _res_label: Label = null   # dimmed in fullscreen modes (resolution disabled)
+var _window_mode_btn: OptionButton = null
+var _monitor_btn: OptionButton = null
 var _mute_check: CheckButton = null
 var _volume_slider: HSlider = null
 var _sfx_slider: HSlider = null
 var _ui_slider: HSlider = null
 var _crowd_slider: HSlider = null
 var _res_btn: OptionButton = null
+var _res_values: Array[Vector2i] = []   # parallel to _res_btn items; selected → resolution
 var _tab_contents: Array[Control] = []
 var _tab_btns: Array[Button] = []
-var _vsync_check: CheckButton = null
+var _vsync_btn: OptionButton = null
 var _fps_btn: OptionButton = null
 var _show_fps_check: CheckButton = null
 var _gamma_slider: HSlider = null
@@ -120,9 +122,10 @@ func _ready() -> void:
 
 func _snapshot() -> Dictionary:
 	return {
-		"fullscreen": PlayerPrefs.is_fullscreen,
-		"resolution_index": PlayerPrefs.resolution_index,
-		"vsync_enabled": PlayerPrefs.vsync_enabled,
+		"window_mode": PlayerPrefs.window_mode,
+		"resolution": PlayerPrefs.resolution,
+		"display_monitor": PlayerPrefs.display_monitor,
+		"vsync_mode": PlayerPrefs.vsync_mode,
 		"fps_cap_index": PlayerPrefs.fps_cap_index,
 		"show_fps": PlayerPrefs.show_fps,
 		"gamma": PlayerPrefs.gamma,
@@ -158,9 +161,10 @@ func _snapshot() -> Dictionary:
 
 func _read_controls() -> Dictionary:
 	return {
-		"fullscreen": _fs_check.button_pressed,
-		"resolution_index": _res_btn.selected,
-		"vsync_enabled": _vsync_check.button_pressed,
+		"window_mode": _window_mode_btn.selected,
+		"resolution": _selected_resolution(),
+		"display_monitor": _selected_monitor(),
+		"vsync_mode": _vsync_btn.selected,
 		"fps_cap_index": _fps_btn.selected,
 		"show_fps": _show_fps_check.button_pressed,
 		"gamma": _gamma_slider.value,
@@ -266,31 +270,49 @@ func _build_video_tab() -> Control:
 
 	box.add_child(_section_header("Display"))
 
-	_fs_check = CheckButton.new()
-	_fs_check.set_pressed_no_signal(PlayerPrefs.is_fullscreen)
-	SoundManager.wire_button(_fs_check)
-	_fs_check.toggled.connect(_on_fullscreen_toggled)
-	box.add_child(_field_row("Fullscreen", _fs_check))
+	_window_mode_btn = OptionButton.new()
+	_window_mode_btn.custom_minimum_size = Vector2(220, 40)
+	_window_mode_btn.add_theme_font_size_override("font_size", 15)
+	for label: String in PlayerPrefs.WINDOW_MODE_LABELS:
+		_window_mode_btn.add_item(label)
+	_window_mode_btn.selected = PlayerPrefs.window_mode
+	_window_mode_btn.item_selected.connect(_on_window_mode_selected)
+	box.add_child(_field_row("Window Mode", _window_mode_btn))
+
+	# Monitor selector — only meaningful with more than one screen, so the row
+	# is added only on multi-monitor rigs. Item 0 = Automatic (follow the
+	# window); items 1..n target screen index 0..n-1.
+	_monitor_btn = OptionButton.new()
+	_monitor_btn.custom_minimum_size = Vector2(220, 40)
+	_monitor_btn.add_theme_font_size_override("font_size", 15)
+	_monitor_btn.add_item("Automatic")
+	var screen_count: int = DisplayServer.get_screen_count()
+	for s: int in screen_count:
+		_monitor_btn.add_item("Monitor %d" % (s + 1))
+	_monitor_btn.selected = clampi(PlayerPrefs.display_monitor + 1, 0, screen_count)
+	_monitor_btn.item_selected.connect(_on_monitor_selected)
+	if screen_count > 1:
+		box.add_child(_field_row("Monitor", _monitor_btn))
 
 	_res_btn = OptionButton.new()
-	_res_btn.custom_minimum_size = Vector2(180, 40)
+	_res_btn.custom_minimum_size = Vector2(220, 40)
 	_res_btn.add_theme_font_size_override("font_size", 15)
-	for i: int in PlayerPrefs.RESOLUTIONS.size():
-		var r: Vector2i = PlayerPrefs.RESOLUTIONS[i]
-		_res_btn.add_item("%dx%d" % [r.x, r.y], i)
-	_res_btn.selected = PlayerPrefs.resolution_index
+	_populate_resolutions()
 	_res_btn.item_selected.connect(_on_resolution_selected)
 	_res_row = _field_row("Resolution", _res_btn)
 	# Cache the label so we can dim it when the resolution row is disabled.
 	_res_label = _res_row.get_child(0) as Label
 	box.add_child(_res_row)
-	_apply_res_disabled_state(PlayerPrefs.is_fullscreen)
+	_apply_res_disabled_state(PlayerPrefs.window_mode != PlayerPrefs.WINDOW_MODE_WINDOWED)
 
-	_vsync_check = CheckButton.new()
-	_vsync_check.set_pressed_no_signal(PlayerPrefs.vsync_enabled)
-	SoundManager.wire_button(_vsync_check)
-	_vsync_check.toggled.connect(_on_vsync_toggled)
-	box.add_child(_field_row("VSync", _vsync_check))
+	_vsync_btn = OptionButton.new()
+	_vsync_btn.custom_minimum_size = Vector2(160, 40)
+	_vsync_btn.add_theme_font_size_override("font_size", 15)
+	for label: String in PlayerPrefs.VSYNC_LABELS:
+		_vsync_btn.add_item(label)
+	_vsync_btn.selected = PlayerPrefs.vsync_mode
+	_vsync_btn.item_selected.connect(_on_vsync_selected)
+	box.add_child(_field_row("VSync", _vsync_btn))
 
 	_fps_btn = OptionButton.new()
 	_fps_btn.custom_minimum_size = Vector2(140, 40)
@@ -649,19 +671,65 @@ func _build_game_tab() -> Control:
 # Signal handlers — controls only; no PlayerPrefs writes until Apply
 # ---------------------------------------------------------------------------
 
-func _on_fullscreen_toggled(_pressed: bool) -> void:
-	_apply_res_disabled_state(_fs_check.button_pressed)
+func _on_window_mode_selected(_idx: int) -> void:
+	_apply_res_disabled_state(_window_mode_btn.selected != PlayerPrefs.WINDOW_MODE_WINDOWED)
 	_update_apply_state()
 
+func _on_monitor_selected(_idx: int) -> void:
+	# A different monitor can support a different resolution set; rebuild the
+	# dropdown against the newly chosen screen (preview only — no prefs write).
+	_populate_resolutions()
+	_update_apply_state()
 
 # Resolution only matters in windowed mode. We disable rather than hide the
-# row so toggling fullscreen doesn't change the panel's height.
-func _apply_res_disabled_state(fullscreen: bool) -> void:
+# row so changing window mode doesn't change the panel's height.
+func _apply_res_disabled_state(disabled: bool) -> void:
 	if _res_btn != null:
-		_res_btn.disabled = fullscreen
+		_res_btn.disabled = disabled
 	if _res_label != null:
 		_res_label.add_theme_color_override("font_color",
-			MenuStyle.TEXT_MUTED if fullscreen else _WHITE)
+			MenuStyle.TEXT_MUTED if disabled else _WHITE)
+
+# Builds the resolution dropdown from the monitor-filtered list, selecting the
+# entry nearest the saved resolution by pixel count (the exact size may be gone
+# when prefs moved from a larger monitor). The monitor's native size is tagged.
+func _populate_resolutions() -> void:
+	var screen: int = _query_screen()
+	_res_values = PlayerPrefs.get_available_resolutions(screen)
+	var native: Vector2i = DisplayServer.screen_get_size(screen)
+	var target: int = PlayerPrefs.resolution.x * PlayerPrefs.resolution.y
+	_res_btn.clear()
+	var best_idx: int = 0
+	var best_delta: int = 1 << 62
+	for i: int in _res_values.size():
+		var r: Vector2i = _res_values[i]
+		var label: String = "%d x %d" % [r.x, r.y]
+		if r == native:
+			label += "  (Native)"
+		_res_btn.add_item(label, i)
+		var delta: int = absi(r.x * r.y - target)
+		if delta < best_delta:
+			best_delta = delta
+			best_idx = i
+	_res_btn.selected = best_idx
+
+# Screen the resolution list should be queried against: the monitor picked in
+# the dropdown, or the current window's screen when set to Automatic.
+func _query_screen() -> int:
+	var sel: int = _selected_monitor()
+	if sel >= 0 and sel < DisplayServer.get_screen_count():
+		return sel
+	return DisplayServer.window_get_current_screen()
+
+func _selected_resolution() -> Vector2i:
+	var idx: int = _res_btn.selected
+	if idx >= 0 and idx < _res_values.size():
+		return _res_values[idx]
+	return PlayerPrefs.resolution
+
+# Item 0 is "Automatic" → -1; items 1..n map to screen index 0..n-1.
+func _selected_monitor() -> int:
+	return _monitor_btn.selected - 1
 
 func _on_resolution_selected(_idx: int) -> void:
 	_update_apply_state()
@@ -672,7 +740,7 @@ func _on_volume_changed(_value: float) -> void:
 func _on_mute_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
-func _on_vsync_toggled(_pressed: bool) -> void:
+func _on_vsync_selected(_idx: int) -> void:
 	_update_apply_state()
 
 func _on_fps_cap_selected(_idx: int) -> void:
@@ -884,9 +952,10 @@ func _binding_display(b: Dictionary) -> String:
 
 func _on_apply_pressed() -> void:
 	var c: Dictionary = _read_controls()
-	PlayerPrefs.is_fullscreen = c.fullscreen
-	PlayerPrefs.resolution_index = c.resolution_index
-	PlayerPrefs.vsync_enabled = c.vsync_enabled
+	PlayerPrefs.window_mode = c.window_mode
+	PlayerPrefs.resolution = c.resolution
+	PlayerPrefs.display_monitor = c.display_monitor
+	PlayerPrefs.vsync_mode = c.vsync_mode
 	PlayerPrefs.fps_cap_index = c.fps_cap_index
 	PlayerPrefs.show_fps = c.show_fps
 	PlayerPrefs.gamma = c.gamma
@@ -929,10 +998,11 @@ func _on_apply_pressed() -> void:
 	close_requested.emit()
 
 func _on_cancel_pressed() -> void:
-	_fs_check.set_pressed_no_signal(_original.fullscreen)
-	_apply_res_disabled_state(_original.fullscreen)
-	_res_btn.selected = _original.resolution_index
-	_vsync_check.set_pressed_no_signal(_original.vsync_enabled)
+	_window_mode_btn.selected = _original.window_mode
+	_apply_res_disabled_state(_original.window_mode != PlayerPrefs.WINDOW_MODE_WINDOWED)
+	_monitor_btn.selected = clampi(int(_original.display_monitor) + 1, 0, _monitor_btn.item_count - 1)
+	_populate_resolutions()
+	_vsync_btn.selected = _original.vsync_mode
 	_fps_btn.selected = _original.fps_cap_index
 	if _show_fps_check != null:
 		_show_fps_check.set_pressed_no_signal(_original.show_fps)

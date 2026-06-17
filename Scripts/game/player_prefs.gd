@@ -1,10 +1,59 @@
 extends Node
 
 const SAVE_PATH: String = "user://preferences.cfg"
-const RESOLUTIONS: Array[Vector2i] = [
+
+# Window mode. Godot's WINDOW_MODE_FULLSCREEN is a borderless "fullscreen
+# window" (native res, instant alt-tab) — NOT a true mode switch;
+# EXCLUSIVE_FULLSCREEN is the real exclusive mode (lowest latency, slower
+# alt-tab). Windowed clears the project.godot borderless baseline so the player
+# gets a movable, titled window at the chosen Resolution. Borderless Fullscreen
+# is the default — it fills any monitor (ultrawide / 4K included) at native res
+# on first launch instead of stranding a fixed-size window. Index matches the
+# OptionsPanel dropdown.
+const WINDOW_MODE_WINDOWED: int = 0
+const WINDOW_MODE_BORDERLESS: int = 1
+const WINDOW_MODE_EXCLUSIVE: int = 2
+const WINDOW_MODE_LABELS: Array[String] = [
+	"Windowed",
+	"Borderless Fullscreen",
+	"Exclusive Fullscreen",
+]
+
+# Windowed-mode resolution candidates. The dropdown is filtered at build time to
+# those that fit the active monitor (get_available_resolutions), and the
+# monitor's native size is always folded in — so ultrawide / 4K players see
+# their real resolution instead of a hardcoded 16:9 ladder. Covers 16:9, 16:10,
+# 21:9 ultrawide, and 32:9 super-ultrawide.
+const RESOLUTION_CANDIDATES: Array[Vector2i] = [
 	Vector2i(1280, 720),
+	Vector2i(1600, 900),
 	Vector2i(1920, 1080),
+	Vector2i(1920, 1200),
+	Vector2i(2560, 1080),   # 21:9 ultrawide
 	Vector2i(2560, 1440),
+	Vector2i(2560, 1600),
+	Vector2i(3440, 1440),   # 21:9 ultrawide
+	Vector2i(3840, 1600),   # 21:9 ultrawide
+	Vector2i(3840, 2160),   # 4K
+	Vector2i(5120, 1440),   # 32:9 super-ultrawide
+]
+const RESOLUTION_DEFAULT: Vector2i = Vector2i(1920, 1080)
+
+# VSync mode. Disabled tears but is lowest-latency; Enabled is double-buffered
+# v-sync; Adaptive tears only when the frame rate drops below refresh (kills
+# the hard judder of vsync stutter); Mailbox is low-latency triple-buffering
+# (no tearing, not capped to refresh). Index matches the OptionsPanel dropdown
+# AND the DisplayServer.VSyncMode enum order, so the value passes through
+# directly.
+const VSYNC_DISABLED: int = 0
+const VSYNC_ENABLED: int = 1
+const VSYNC_ADAPTIVE: int = 2
+const VSYNC_MAILBOX: int = 3
+const VSYNC_LABELS: Array[String] = [
+	"Disabled",
+	"Enabled",
+	"Adaptive",
+	"Mailbox",
 ]
 const FPS_CAP_VALUES: Array[int] = [30, 60, 120, 144, 240, 0]
 
@@ -110,9 +159,10 @@ var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
 var crowd_volume: float = 1.0
 var master_muted: bool = false
-var is_fullscreen: bool = false
-var resolution_index: int = 1
-var vsync_enabled: bool = true
+var window_mode: int = WINDOW_MODE_BORDERLESS
+var resolution: Vector2i = RESOLUTION_DEFAULT
+var display_monitor: int = -1  # -1 = follow the window (automatic); else target screen index
+var vsync_mode: int = VSYNC_ENABLED
 var fps_cap_index: int = 5
 var show_fps: bool = false
 var gamma: float = 1.0
@@ -259,9 +309,10 @@ func save() -> void:
 	cfg.set_value("audio", "ui_volume", ui_volume)
 	cfg.set_value("audio", "crowd_volume", crowd_volume)
 	cfg.set_value("audio", "master_muted", master_muted)
-	cfg.set_value("video", "fullscreen", is_fullscreen)
-	cfg.set_value("video", "resolution_index", resolution_index)
-	cfg.set_value("video", "vsync_enabled", vsync_enabled)
+	cfg.set_value("video", "window_mode", window_mode)
+	cfg.set_value("video", "resolution", resolution)
+	cfg.set_value("video", "display_monitor", display_monitor)
+	cfg.set_value("video", "vsync_mode", vsync_mode)
 	cfg.set_value("video", "fps_cap_index", fps_cap_index)
 	cfg.set_value("video", "show_fps", show_fps)
 	cfg.set_value("video", "gamma", gamma)
@@ -412,14 +463,39 @@ func _draw_crosshair(img: Image, c: float, reach: float, thickness: float, gap: 
 			if near_v or near_h:
 				img.set_pixel(x, y, outline)
 
+# Windowed resolutions valid for a monitor: every candidate that fits inside
+# the screen, plus the monitor's native size, de-duplicated and sorted ascending
+# by pixel count. Rebuilt each time Options opens (and per monitor pick) so the
+# offered list always matches the screen the window will actually use. Never
+# empty — falls back to the default on a degenerate/headless display query.
+# `screen` defaults to the target monitor; pass an index to preview another.
+func get_available_resolutions(screen: int = -1) -> Array[Vector2i]:
+	if screen < 0 or screen >= DisplayServer.get_screen_count():
+		screen = _target_screen()
+	var native: Vector2i = DisplayServer.screen_get_size(screen)
+	var out: Array[Vector2i] = []
+	for r: Vector2i in RESOLUTION_CANDIDATES:
+		if r.x <= native.x and r.y <= native.y and not out.has(r):
+			out.append(r)
+	if native.x > 0 and native.y > 0 and not out.has(native):
+		out.append(native)
+	if out.is_empty():
+		out.append(RESOLUTION_DEFAULT)
+	out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.x * a.y < b.x * b.y)
+	return out
+
+
+# The monitor fullscreen / windowed-centering should target: the saved override
+# when it points at a real screen, otherwise the screen the window lives on.
+func _target_screen() -> int:
+	if display_monitor >= 0 and display_monitor < DisplayServer.get_screen_count():
+		return display_monitor
+	return DisplayServer.window_get_current_screen()
+
+
 func apply_video() -> void:
-	if is_fullscreen:
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
-	else:
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-		DisplayServer.window_set_size(RESOLUTIONS[resolution_index])
-	DisplayServer.window_set_vsync_mode(
-		DisplayServer.VSYNC_ENABLED if vsync_enabled else DisplayServer.VSYNC_DISABLED)
+	_apply_window_mode()
+	DisplayServer.window_set_vsync_mode(vsync_mode as DisplayServer.VSyncMode)
 	Engine.max_fps = FPS_CAP_VALUES[fps_cap_index]
 	var root: Window = get_tree().root
 	root.scaling_3d_mode = scaling_3d_mode as Viewport.Scaling3DMode
@@ -444,6 +520,39 @@ func apply_video() -> void:
 	var scratch := scene.find_child("IceScratchMap", true, false)
 	if scratch != null and scratch.has_method("set_enabled"):
 		scratch.call("set_enabled", ice_scratches_enabled)
+
+# Routes window_mode + display_monitor + resolution into DisplayServer. The
+# monitor is selected first so a fullscreen mode lands on the right screen.
+func _apply_window_mode() -> void:
+	var screen: int = _target_screen()
+	if DisplayServer.window_get_current_screen() != screen:
+		DisplayServer.window_set_current_screen(screen)
+	match window_mode:
+		WINDOW_MODE_BORDERLESS:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		WINDOW_MODE_EXCLUSIVE:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+		_:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+			# project.godot ships window/size/borderless=true; clear it in true
+			# windowed mode so the player gets a movable, titled window. Then
+			# size it (clamped to the monitor) and center it on that screen.
+			DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, false)
+			var size: Vector2i = _fit_resolution(resolution, screen)
+			DisplayServer.window_set_size(size)
+			var screen_pos: Vector2i = DisplayServer.screen_get_position(screen)
+			var screen_size: Vector2i = DisplayServer.screen_get_size(screen)
+			DisplayServer.window_set_position(screen_pos + (screen_size - size) / 2)
+
+
+# Clamp a windowed resolution to the monitor so a size saved on a larger display
+# can't open a window taller/wider than the current screen.
+func _fit_resolution(size: Vector2i, screen: int) -> Vector2i:
+	var native: Vector2i = DisplayServer.screen_get_size(screen)
+	if native.x <= 0 or native.y <= 0:
+		return size
+	return Vector2i(mini(size.x, native.x), mini(size.y, native.y))
+
 
 func _apply_anti_aliasing(root: Viewport) -> void:
 	# MSAA, FXAA, and TAA are mutually exclusive in the dropdown — the
@@ -547,9 +656,11 @@ func _load() -> void:
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
 		crowd_volume = clampf(cfg.get_value("audio", "crowd_volume", 1.0), 0.0, 1.0)
 		master_muted = cfg.get_value("audio", "master_muted", false)
-		is_fullscreen = cfg.get_value("video", "fullscreen", false)
-		resolution_index = clamp(cfg.get_value("video", "resolution_index", 1), 0, RESOLUTIONS.size() - 1)
-		vsync_enabled = cfg.get_value("video", "vsync_enabled", true)
+		window_mode = clampi(int(cfg.get_value("video", "window_mode", WINDOW_MODE_BORDERLESS)), 0, WINDOW_MODE_LABELS.size() - 1)
+		var raw_resolution: Variant = cfg.get_value("video", "resolution", RESOLUTION_DEFAULT)
+		resolution = raw_resolution if raw_resolution is Vector2i else RESOLUTION_DEFAULT
+		display_monitor = int(cfg.get_value("video", "display_monitor", -1))
+		vsync_mode = clampi(int(cfg.get_value("video", "vsync_mode", VSYNC_ENABLED)), 0, VSYNC_LABELS.size() - 1)
 		fps_cap_index = clamp(cfg.get_value("video", "fps_cap_index", 5), 0, FPS_CAP_VALUES.size() - 1)
 		show_fps = cfg.get_value("video", "show_fps", false)
 		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
