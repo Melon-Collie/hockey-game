@@ -254,11 +254,11 @@ func _process(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	# Host-frame health telemetry: wall-clock gap between consecutive physics
-	# ticks. Steady-state at 120 Hz is ~8333us. A real-time stall (CPU steal,
-	# heavy Jolt frame, GC pause, OS hitch) produces one large sample followed
-	# by near-zero catch-up ticks as the engine rebases the physics clock to
-	# wall time. Surfaces on F3 as `tick p95/p99/max`. Host only — clients
-	# don't run the host simulation loop and the metric isn't meaningful there.
+	# ticks. The MEAN gap → effective tick rate (F3 "Sim rate"): ≈ target means
+	# real-time, well below means the host is overloaded and the sim is dilating.
+	# The MAX gap → worst stall (F3 "Worst stall"): CPU steal, heavy Jolt frame,
+	# GC pause, OS hitch. The raw gap is quantized to render frames, so we report
+	# mean+max, not percentiles. Host only — clients don't run the sim loop.
 	if NetworkManager.is_host:
 		var now_us: int = Time.get_ticks_usec()
 		if _last_phys_tick_us != 0:
