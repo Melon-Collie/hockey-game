@@ -10,6 +10,7 @@ const _HOCKEY_SCENE_PATH := "res://Scenes/Hockey.tscn"
 
 var _prompt_label: Label = null
 var _loading_label: Label = null
+var _settings_container: Control = null
 var _input_received: bool = false
 var _transitioned: bool = false
 
@@ -100,6 +101,13 @@ func _build_ui() -> void:
 	_loading_label.visible = false
 	vbox.add_child(_loading_label)
 
+	# Lets players adjust audio / video / controls before committing to a
+	# session. The OptionsPanel reads PlayerPrefs at build time and only writes
+	# on Apply, so it's safe to open before the rink scene exists.
+	var settings_btn := MenuStyle.popup_button("Settings")
+	settings_btn.pressed.connect(_on_settings_pressed)
+	vbox.add_child(settings_btn)
+
 	var version_label := Label.new()
 	version_label.text = "v%s" % BuildInfo.VERSION
 	version_label.add_theme_font_size_override("font_size", 14)
@@ -122,11 +130,54 @@ func _build_ui() -> void:
 	update_checker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(update_checker)
 
+	# Settings overlay sits on top of everything; hidden until the button is hit.
+	_build_settings_overlay()
+
 	# Gentle pulse on the prompt so it reads as "waiting for input."
 	MenuStyle.pulse(_prompt_label)
 
 
+func _build_settings_overlay() -> void:
+	var overlay := ColorRect.new()
+	overlay.color = MenuStyle.SCRIM
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.pressed:
+			_settings_container.visible = false)
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", MenuStyle.panel())
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+
+	var options := OptionsPanel.new()
+	options.close_requested.connect(func() -> void:
+		_settings_container.visible = false)
+	panel.add_child(options)
+
+	_settings_container = Control.new()
+	_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_settings_container.visible = false
+	_settings_container.add_child(overlay)
+	_settings_container.add_child(panel)
+	add_child(_settings_container)
+
+
+func _on_settings_pressed() -> void:
+	if _settings_container != null:
+		_settings_container.visible = true
+
+
 func _unhandled_input(event: InputEvent) -> void:
+	# While the settings overlay is up, Escape closes it and every other input
+	# is swallowed so the title card isn't dismissed out from under the panel.
+	if _settings_container != null and _settings_container.visible:
+		if event.is_action_pressed(&"ui_cancel"):
+			_settings_container.visible = false
+			get_viewport().set_input_as_handled()
+		return
 	if _input_received:
 		return
 	# Accept key presses, mouse clicks, and joypad buttons — anything decisive.

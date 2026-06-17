@@ -1214,7 +1214,7 @@ func _defaults() -> Dictionary:
 		"render_scale": 1.0,
 		"scaling_3d_mode": PlayerPrefs.SCALING_3D_BILINEAR,
 		"anti_aliasing_mode": PlayerPrefs.AA_MSAA_2X,
-		"master_volume": 1.0,
+		"master_volume": 0.5,
 		"sfx_volume": 1.0,
 		"ui_volume": 1.0,
 		"crowd_volume": 1.0,

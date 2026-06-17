@@ -154,7 +154,7 @@ var attr_speed:   int = PlayerAttributes.LEVEL_MEDIUM
 var attr_agility: int = PlayerAttributes.LEVEL_MEDIUM
 var attr_size:    int = PlayerAttributes.LEVEL_MEDIUM
 var attr_strength:    int = PlayerAttributes.LEVEL_MEDIUM
-var master_volume: float = 1.0
+var master_volume: float = 0.5
 var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
 var crowd_volume: float = 1.0
@@ -684,7 +684,7 @@ func _load() -> void:
 				PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
 		attr_strength    = clampi(int(cfg.get_value("player", "attr_strength",    PlayerAttributes.LEVEL_MEDIUM)),
 				PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
-		master_volume = clampf(cfg.get_value("audio", "master_volume", 1.0), 0.0, 1.0)
+		master_volume = clampf(cfg.get_value("audio", "master_volume", 0.5), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
 		crowd_volume = clampf(cfg.get_value("audio", "crowd_volume", 1.0), 0.0, 1.0)
