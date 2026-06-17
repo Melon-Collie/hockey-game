@@ -227,6 +227,14 @@ const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
 const CAMERA_DISTANCE_MIN: float = 0.6
 const CAMERA_DISTANCE_MAX: float = 1.6
+# HUD scale. A uniform scale on the gameplay HUD CanvasLayer, applied about the
+# viewport center — so values below 1.0 both shrink the overlay AND pull its
+# edge-anchored elements inward (a safe-area inset for ultrawide / 32:9, where
+# corner widgets otherwise sit uncomfortably far apart). HUD reads it live in
+# _process. Menus render on their own CanvasLayers and are unaffected.
+var hud_scale: float = 1.0
+const HUD_SCALE_MIN: float = 0.80
+const HUD_SCALE_MAX: float = 1.20
 var bindings: Dictionary = {}  # action -> {type, physical_keycode or button_index}
 
 # Replay recording. Recording fires on every peer (host + clients) for every
@@ -339,6 +347,7 @@ func save() -> void:
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
+	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
 	cfg.set_value("replay", "keep_count", replay_keep_count)
 	cfg.set_value("tutorials", "completion", tutorial_completion)
@@ -691,6 +700,7 @@ func _load() -> void:
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
+		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
 		var raw_completion: Variant = cfg.get_value("tutorials", "completion", {})

@@ -13,7 +13,10 @@ var _sfx_slider: HSlider = null
 var _ui_slider: HSlider = null
 var _crowd_slider: HSlider = null
 var _res_btn: OptionButton = null
-var _res_values: Array[Vector2i] = []   # parallel to _res_btn items; selected → resolution
+var _res_values: Array[Vector2i] = []   # parallel to _res_btn items
+var _windowed_res_idx: int = 0          # the committed windowed pick (survives fullscreen display swap)
+var _native_res_idx: int = 0            # the monitor's native entry, shown (greyed) in fullscreen modes
+var _suppress_ring_sync: bool = false   # guards re-entrancy while a ring preset writes the pickers
 var _tab_contents: Array[Control] = []
 var _tab_btns: Array[Button] = []
 var _vsync_btn: OptionButton = null
@@ -35,9 +38,12 @@ var _cursor_color_btn: ColorPickerButton = null
 var _cursor_size_slider: HSlider = null
 var _cursor_size_label: Label = null
 var _attack_up_check: CheckButton = null
+var _ring_preset_btn: OptionButton = null
 var _ring_self_color_btn: ColorPickerButton = null
 var _ring_team_color_btn: ColorPickerButton = null
 var _ring_enemy_color_btn: ColorPickerButton = null
+var _hud_scale_slider: HSlider = null
+var _hud_scale_label: Label = null
 var _self_beacon_mode_btn: OptionButton = null
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
@@ -156,6 +162,7 @@ func _snapshot() -> Dictionary:
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
+		"hud_scale": PlayerPrefs.hud_scale,
 		"bindings": PlayerPrefs.bindings.duplicate(true),
 	}
 
@@ -195,6 +202,7 @@ func _read_controls() -> Dictionary:
 		"camera_tilt_deg": _tilt_slider.value,
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
+		"hud_scale": _hud_scale_slider.value,
 		"bindings": _pending_bindings.duplicate(true),
 	}
 
@@ -591,6 +599,18 @@ func _build_game_tab() -> Control:
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Ring Colors"))
 
+	# Colorblind preset picker. Item 0 is "Custom"; items 1..n apply a curated
+	# self / ally / enemy palette to the three pickers below. The pickers stay
+	# fully editable — tweaking any of them flips this back to "Custom".
+	_ring_preset_btn = OptionButton.new()
+	_ring_preset_btn.custom_minimum_size = Vector2(180, 36)
+	_ring_preset_btn.add_theme_font_size_override("font_size", 15)
+	_ring_preset_btn.add_item("Custom")
+	for p: Dictionary in _ring_presets():
+		_ring_preset_btn.add_item(p.name)
+	_ring_preset_btn.item_selected.connect(_on_ring_preset_selected)
+	box.add_child(_field_row("Preset", _ring_preset_btn))
+
 	_ring_self_color_btn = ColorPickerButton.new()
 	_ring_self_color_btn.custom_minimum_size = Vector2(160, 36)
 	_ring_self_color_btn.color = PlayerPrefs.ring_color_self
@@ -614,6 +634,7 @@ func _build_game_tab() -> Control:
 	SoundManager.wire_button(_ring_enemy_color_btn)
 	_ring_enemy_color_btn.color_changed.connect(_on_ring_color_changed)
 	box.add_child(_field_row("Enemy Rings", _ring_enemy_color_btn))
+	_sync_ring_preset_selection()
 
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Camera"))
@@ -648,6 +669,16 @@ func _build_game_tab() -> Control:
 	_cam_dist_slider.value_changed.connect(func(v: float) -> void: _cam_dist_label.text = "%.2fx" % v)
 	box.add_child(_slider_row("Distance", _cam_dist_slider, _cam_dist_label))
 
+	_hud_scale_slider = HSlider.new()
+	_hud_scale_slider.min_value = PlayerPrefs.HUD_SCALE_MIN
+	_hud_scale_slider.max_value = PlayerPrefs.HUD_SCALE_MAX
+	_hud_scale_slider.step = 0.05
+	_hud_scale_slider.value = PlayerPrefs.hud_scale
+	_hud_scale_slider.value_changed.connect(_on_hud_scale_changed)
+	_hud_scale_label = _value_label("%d%%" % roundi(PlayerPrefs.hud_scale * 100.0))
+	_hud_scale_slider.value_changed.connect(func(v: float) -> void: _hud_scale_label.text = "%d%%" % roundi(v * 100.0))
+	box.add_child(_slider_row("HUD Scale", _hud_scale_slider, _hud_scale_label))
+
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Team Colors"))
 
@@ -673,6 +704,7 @@ func _build_game_tab() -> Control:
 
 func _on_window_mode_selected(_idx: int) -> void:
 	_apply_res_disabled_state(_window_mode_btn.selected != PlayerPrefs.WINDOW_MODE_WINDOWED)
+	_refresh_res_display()
 	_update_apply_state()
 
 func _on_monitor_selected(_idx: int) -> void:
@@ -690,9 +722,11 @@ func _apply_res_disabled_state(disabled: bool) -> void:
 		_res_label.add_theme_color_override("font_color",
 			MenuStyle.TEXT_MUTED if disabled else _WHITE)
 
-# Builds the resolution dropdown from the monitor-filtered list, selecting the
-# entry nearest the saved resolution by pixel count (the exact size may be gone
-# when prefs moved from a larger monitor). The monitor's native size is tagged.
+# Builds the resolution dropdown from the monitor-filtered list. Records the
+# entry nearest the saved resolution (_windowed_res_idx — the committed windowed
+# pick) and the monitor's native entry (_native_res_idx, tagged "(Native)").
+# In fullscreen modes the box is greyed and shows the native entry, since that
+# IS what those modes render at; windowed modes show the picked size.
 func _populate_resolutions() -> void:
 	var screen: int = _query_screen()
 	_res_values = PlayerPrefs.get_available_resolutions(screen)
@@ -701,17 +735,30 @@ func _populate_resolutions() -> void:
 	_res_btn.clear()
 	var best_idx: int = 0
 	var best_delta: int = 1 << 62
+	_native_res_idx = 0
 	for i: int in _res_values.size():
 		var r: Vector2i = _res_values[i]
 		var label: String = "%d x %d" % [r.x, r.y]
 		if r == native:
 			label += "  (Native)"
+			_native_res_idx = i
 		_res_btn.add_item(label, i)
 		var delta: int = absi(r.x * r.y - target)
 		if delta < best_delta:
 			best_delta = delta
 			best_idx = i
-	_res_btn.selected = best_idx
+	_windowed_res_idx = best_idx
+	_refresh_res_display()
+
+# Points the (possibly greyed) dropdown at the right entry for the current mode:
+# the native resolution while fullscreen — what the GPU actually renders — or
+# the committed windowed pick otherwise. Programmatic, so it never disturbs
+# _windowed_res_idx.
+func _refresh_res_display() -> void:
+	if _window_mode_btn.selected == PlayerPrefs.WINDOW_MODE_WINDOWED:
+		_res_btn.selected = _windowed_res_idx
+	else:
+		_res_btn.selected = _native_res_idx
 
 # Screen the resolution list should be queried against: the monitor picked in
 # the dropdown, or the current window's screen when set to Automatic.
@@ -721,10 +768,12 @@ func _query_screen() -> int:
 		return sel
 	return DisplayServer.window_get_current_screen()
 
+# The committed windowed resolution — driven by _windowed_res_idx, NOT the
+# greyed native size shown in fullscreen — so applying in fullscreen leaves the
+# saved windowed size intact.
 func _selected_resolution() -> Vector2i:
-	var idx: int = _res_btn.selected
-	if idx >= 0 and idx < _res_values.size():
-		return _res_values[idx]
+	if _windowed_res_idx >= 0 and _windowed_res_idx < _res_values.size():
+		return _res_values[_windowed_res_idx]
 	return PlayerPrefs.resolution
 
 # Item 0 is "Automatic" → -1; items 1..n map to screen index 0..n-1.
@@ -732,6 +781,8 @@ func _selected_monitor() -> int:
 	return _monitor_btn.selected - 1
 
 func _on_resolution_selected(_idx: int) -> void:
+	# Only fires when the box is enabled (windowed); record the new windowed pick.
+	_windowed_res_idx = _res_btn.selected
 	_update_apply_state()
 
 func _on_volume_changed(_value: float) -> void:
@@ -795,6 +846,58 @@ func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_ring_color_changed(_color: Color) -> void:
+	# A manual tweak (not a preset write) means the palette is no longer one of
+	# the curated sets — reflect that as "Custom".
+	if not _suppress_ring_sync:
+		_sync_ring_preset_selection()
+	_update_apply_state()
+
+# Curated self / ally / enemy ring palettes. "Default" restores the canonical
+# green/blue/red; the three deficiency presets are starting points the player
+# can fine-tune with the pickers (they're built around hues that stay separable
+# under each common form of color blindness — light/neutral self, cool ally,
+# warm enemy). Not persisted: the selection is re-derived from the live colors
+# whenever the panel opens (see _sync_ring_preset_selection).
+func _ring_presets() -> Array[Dictionary]:
+	var presets: Array[Dictionary] = [
+		{"name": "Default",
+			"self": MenuStyle.HUD_RING_SELF, "team": MenuStyle.HUD_RING_TEAM, "enemy": MenuStyle.HUD_RING_ENEMY},
+		{"name": "Deuteranopia",
+			"self": Color(0.95, 0.95, 0.95), "team": Color(0.30, 0.55, 0.95), "enemy": Color(0.95, 0.55, 0.10)},
+		{"name": "Protanopia",
+			"self": Color(0.97, 0.91, 0.30), "team": Color(0.25, 0.60, 0.95), "enemy": Color(0.90, 0.45, 0.10)},
+		{"name": "Tritanopia",
+			"self": Color(0.95, 0.95, 0.95), "team": Color(0.10, 0.75, 0.55), "enemy": Color(0.90, 0.20, 0.30)},
+	]
+	return presets
+
+func _on_ring_preset_selected(idx: int) -> void:
+	if idx <= 0:
+		return  # "Custom" — leave the pickers as the player has them
+	var p: Dictionary = _ring_presets()[idx - 1]
+	_suppress_ring_sync = true
+	_ring_self_color_btn.color = p["self"]
+	_ring_team_color_btn.color = p["team"]
+	_ring_enemy_color_btn.color = p["enemy"]
+	_suppress_ring_sync = false
+	_ring_preset_btn.selected = idx
+	_update_apply_state()
+
+# Selects the preset whose palette matches the current pickers, else "Custom".
+func _sync_ring_preset_selection() -> void:
+	if _ring_preset_btn == null:
+		return
+	var presets: Array[Dictionary] = _ring_presets()
+	for i: int in presets.size():
+		var p: Dictionary = presets[i]
+		if _ring_self_color_btn.color.is_equal_approx(p["self"]) \
+				and _ring_team_color_btn.color.is_equal_approx(p["team"]) \
+				and _ring_enemy_color_btn.color.is_equal_approx(p["enemy"]):
+			_ring_preset_btn.selected = i + 1
+			return
+	_ring_preset_btn.selected = 0  # Custom
+
+func _on_hud_scale_changed(_value: float) -> void:
 	_update_apply_state()
 
 func _on_self_beacon_mode_selected(_idx: int) -> void:
@@ -952,6 +1055,15 @@ func _binding_display(b: Dictionary) -> String:
 
 func _on_apply_pressed() -> void:
 	var c: Dictionary = _read_controls()
+	# Capture the pre-apply display state so a revert dialog can roll back a
+	# window mode / resolution / monitor change that left the screen unusable.
+	var display_changed: bool = (
+		c.window_mode != _original.window_mode
+		or c.resolution != _original.resolution
+		or c.display_monitor != _original.display_monitor)
+	var prev_mode: int = _original.window_mode
+	var prev_res: Vector2i = _original.resolution
+	var prev_mon: int = _original.display_monitor
 	PlayerPrefs.window_mode = c.window_mode
 	PlayerPrefs.resolution = c.resolution
 	PlayerPrefs.display_monitor = c.display_monitor
@@ -986,6 +1098,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
+	PlayerPrefs.hud_scale = c.hud_scale
 	PlayerPrefs.bindings = (_pending_bindings as Dictionary).duplicate(true)
 	PlayerPrefs.apply_audio()
 	PlayerPrefs.apply_video()
@@ -995,7 +1108,38 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.save()
 	_original = _snapshot()
 	_apply_btn.disabled = true
+	if display_changed:
+		_show_display_revert_dialog(prev_mode, prev_res, prev_mon)
 	close_requested.emit()
+
+# Spawns a 15-second "Keep these display settings?" confirmation after a window
+# mode / resolution / monitor change. Lives at the scene-tree root so it
+# outlives the (closing) Options overlay; on timeout or "Revert" it restores the
+# prior display values, re-applies, and resyncs the panel so a later reopen
+# doesn't show stale settings.
+func _show_display_revert_dialog(prev_mode: int, prev_res: Vector2i, prev_mon: int) -> void:
+	var dialog := DisplayRevertDialog.new()
+	var revert := func() -> void:
+		PlayerPrefs.window_mode = prev_mode
+		PlayerPrefs.resolution = prev_res
+		PlayerPrefs.display_monitor = prev_mon
+		PlayerPrefs.apply_video()
+		PlayerPrefs.save()
+		_resync_display_from_prefs()
+	get_tree().root.add_child(dialog)
+	dialog.open(15.0, revert)
+
+# Rebuilds the Video tab's display controls from the live PlayerPrefs values and
+# re-baselines _original, so the panel reflects a reverted state cleanly.
+func _resync_display_from_prefs() -> void:
+	if _window_mode_btn == null:
+		return
+	_window_mode_btn.selected = PlayerPrefs.window_mode
+	_apply_res_disabled_state(PlayerPrefs.window_mode != PlayerPrefs.WINDOW_MODE_WINDOWED)
+	_monitor_btn.selected = clampi(PlayerPrefs.display_monitor + 1, 0, _monitor_btn.item_count - 1)
+	_populate_resolutions()
+	_original = _read_controls()
+	_update_apply_state()
 
 func _on_cancel_pressed() -> void:
 	_window_mode_btn.selected = _original.window_mode
@@ -1043,6 +1187,7 @@ func _on_cancel_pressed() -> void:
 		_ring_team_color_btn.color = _original.ring_color_team
 	if _ring_enemy_color_btn != null:
 		_ring_enemy_color_btn.color = _original.ring_color_enemy
+	_sync_ring_preset_selection()
 	if _self_beacon_mode_btn != null:
 		_self_beacon_mode_btn.selected = _original.self_beacon_mode
 	if _screen_flash_check != null:
@@ -1055,6 +1200,8 @@ func _on_cancel_pressed() -> void:
 		_fov_slider.value = _original.fov
 	if _cam_dist_slider != null:
 		_cam_dist_slider.value = _original.camera_distance
+	if _hud_scale_slider != null:
+		_hud_scale_slider.value = _original.hud_scale
 	_listening_action = ""
 	_pending_bindings = (_original.get("bindings", {}) as Dictionary).duplicate(true)
 	_update_binding_btns()

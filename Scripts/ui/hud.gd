@@ -666,12 +666,34 @@ func _build_fps_label() -> void:
 	_fps_label.visible = PlayerPrefs.show_fps
 	add_child(_fps_label)
 
+var _hud_scale_applied: float = -1.0
+var _hud_scale_viewport: Vector2i = Vector2i.ZERO
+
 func _process(_delta: float) -> void:
+	_update_hud_scale()
 	var enabled: bool = PlayerPrefs.show_fps
 	if _fps_label.visible != enabled:
 		_fps_label.visible = enabled
 	if enabled:
 		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
+
+
+# Applies PlayerPrefs.hud_scale to this CanvasLayer about the viewport center,
+# so edge-anchored widgets pull inward as the scale drops. Re-applies only when
+# the scale or the viewport size actually changes (dirty-check), so the steady
+# state costs one float + one Vector2i compare per frame. Child CanvasLayers
+# (menus, dialogs, toasts) render on their own layers and are unaffected.
+func _update_hud_scale() -> void:
+	var s: float = PlayerPrefs.hud_scale
+	var vp: Vector2i = Vector2i(get_viewport().get_visible_rect().size)
+	if is_equal_approx(s, _hud_scale_applied) and vp == _hud_scale_viewport:
+		return
+	_hud_scale_applied = s
+	_hud_scale_viewport = vp
+	scale = Vector2(s, s)
+	# Keep the viewport center fixed: a point p maps to s*p + offset, so the
+	# center stays put when offset = center * (1 - s).
+	offset = Vector2(vp) * 0.5 * (1.0 - s)
 
 
 # ---------------------------------------------------------------------------
