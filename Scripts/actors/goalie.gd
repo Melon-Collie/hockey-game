@@ -49,6 +49,18 @@ var blocker_shoulder_sphere: MeshInstance3D = null
 var glove_elbow_sphere: MeshInstance3D = null
 var blocker_elbow_sphere: MeshInstance3D = null
 
+# P8 dirty-skip cache for `_update_connectors`. The arm-IK + connector rebuild
+# is value-type-cheap but runs every rendered frame for both goalies; the pose
+# only changes when `apply_body_config` / `apply_network_pose` move a part, and
+# a settled goalie holds its stance for seconds, so we recompute only when one
+# of the body-local part transforms actually changed. Default-mismatched so the
+# first frame always rebuilds.
+var _last_body_xform: Transform3D
+var _last_left_pad_pos: Vector3 = Vector3.INF
+var _last_right_pad_pos: Vector3
+var _last_glove_pos: Vector3
+var _last_block_arm_pos: Vector3
+
 
 func _ready() -> void:
 	# The stick is a hooked shape that snagged skaters when it shared LAYER_WALLS
@@ -331,7 +343,19 @@ func _make_sphere_mesh(radius: float) -> MeshInstance3D:
 # Bridge each body-part pair with a cylinder that tracks their current positions
 # every frame. All positions are in goalie-local space (direct children of the
 # Goalie root), so no coordinate conversion needed.
+#
+# P8: value-type-cheap but runs every rendered frame for both goalies. Skip when
+# the goalie is hidden, and when no part moved since the last frame — a settled
+# goalie's `apply_body_config` lerp converges to a fixed pose, so holding a
+# stance skips the arm-IK rebuild entirely. Root translation/yaw doesn't dirty
+# the pose: the arms are children and ride along rigidly, so only the body-local
+# part transforms matter. Nothing here feeds gameplay (colliders are read
+# directly), so a skipped frame is purely cosmetic.
 func _update_connectors() -> void:
+	if not is_visible_in_tree():
+		return
+	if not _connectors_pose_changed():
+		return
 	_point_connector(left_hip_connector,
 		_body.position + _body.basis * Vector3(-0.10, -0.24, 0.0),
 		_left_pad.position)
@@ -352,6 +376,26 @@ func _update_connectors() -> void:
 	_update_arm_ik(blocker_upper_arm, blocker_forearm,
 		blocker_shoulder, _block_arm.position, Vector3(0.3, -1.0, 0.0),
 		blocker_elbow_sphere)
+
+
+# Returns true (and refreshes the snapshot) when any input to `_update_connectors`
+# moved since the last rebuild. Exact equality is sufficient: a converged lerp
+# produces bit-identical transforms tick over tick, and any real movement trips
+# the compare. Body transform covers both the shoulder pivots (position + basis)
+# and the connector roots in one check.
+func _connectors_pose_changed() -> bool:
+	if _body.transform == _last_body_xform \
+			and _left_pad.position == _last_left_pad_pos \
+			and _right_pad.position == _last_right_pad_pos \
+			and _glove.position == _last_glove_pos \
+			and _block_arm.position == _last_block_arm_pos:
+		return false
+	_last_body_xform = _body.transform
+	_last_left_pad_pos = _left_pad.position
+	_last_right_pad_pos = _right_pad.position
+	_last_glove_pos = _glove.position
+	_last_block_arm_pos = _block_arm.position
+	return true
 
 
 func _point_connector(mesh: MeshInstance3D, from_pos: Vector3, to_pos: Vector3) -> void:
