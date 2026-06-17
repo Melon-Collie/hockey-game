@@ -44,6 +44,7 @@ var _ring_team_color_btn: ColorPickerButton = null
 var _ring_enemy_color_btn: ColorPickerButton = null
 var _hud_scale_slider: HSlider = null
 var _hud_scale_label: Label = null
+var _share_stats_check: CheckButton = null
 var _self_beacon_mode_btn: OptionButton = null
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
@@ -116,6 +117,11 @@ func _ready() -> void:
 	btn_row.add_theme_constant_override("separation", 12)
 	add_child(btn_row)
 
+	var reset_btn := _make_small_button("Defaults")
+	reset_btn.tooltip_text = "Reset all options to their defaults (preview — applies on Apply)"
+	reset_btn.pressed.connect(_on_reset_pressed)
+	btn_row.add_child(reset_btn)
+
 	_apply_btn = _make_small_button("Apply")
 	_apply_btn.theme_type_variation = &"ButtonPrimary"
 	_apply_btn.pressed.connect(_on_apply_pressed)
@@ -163,6 +169,7 @@ func _snapshot() -> Dictionary:
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
 		"hud_scale": PlayerPrefs.hud_scale,
+		"share_gameplay_stats": PlayerPrefs.share_gameplay_stats,
 		"bindings": PlayerPrefs.bindings.duplicate(true),
 	}
 
@@ -203,6 +210,7 @@ func _read_controls() -> Dictionary:
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
 		"hud_scale": _hud_scale_slider.value,
+		"share_gameplay_stats": _share_stats_check.button_pressed,
 		"bindings": _pending_bindings.duplicate(true),
 	}
 
@@ -696,6 +704,25 @@ func _build_game_tab() -> Control:
 	_export_status_label.custom_minimum_size = Vector2(0, 0)
 	box.add_child(_export_status_label)
 
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Data Sharing"))
+
+	_share_stats_check = CheckButton.new()
+	_share_stats_check.set_pressed_no_signal(PlayerPrefs.share_gameplay_stats)
+	SoundManager.wire_button(_share_stats_check)
+	_share_stats_check.toggled.connect(_on_share_stats_toggled)
+	box.add_child(_field_row("Share Gameplay Stats", _share_stats_check))
+
+	var stats_notice := Label.new()
+	stats_notice.text = "Uploads match results so you can track your career. " \
+		+ "With this off, the Career menu and replay playback are unavailable — " \
+		+ "both are built from your uploaded games."
+	stats_notice.add_theme_font_size_override("font_size", 12)
+	stats_notice.add_theme_color_override("font_color", _MUTED)
+	stats_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stats_notice.custom_minimum_size = Vector2(380, 0)
+	box.add_child(stats_notice)
+
 	return box
 
 # ---------------------------------------------------------------------------
@@ -900,6 +927,9 @@ func _sync_ring_preset_selection() -> void:
 func _on_hud_scale_changed(_value: float) -> void:
 	_update_apply_state()
 
+func _on_share_stats_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
 func _on_self_beacon_mode_selected(_idx: int) -> void:
 	_update_apply_state()
 
@@ -1099,6 +1129,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
 	PlayerPrefs.hud_scale = c.hud_scale
+	PlayerPrefs.share_gameplay_stats = c.share_gameplay_stats
 	PlayerPrefs.bindings = (_pending_bindings as Dictionary).duplicate(true)
 	PlayerPrefs.apply_audio()
 	PlayerPrefs.apply_video()
@@ -1142,72 +1173,141 @@ func _resync_display_from_prefs() -> void:
 	_update_apply_state()
 
 func _on_cancel_pressed() -> void:
-	_window_mode_btn.selected = _original.window_mode
-	_apply_res_disabled_state(_original.window_mode != PlayerPrefs.WINDOW_MODE_WINDOWED)
-	_monitor_btn.selected = clampi(int(_original.display_monitor) + 1, 0, _monitor_btn.item_count - 1)
+	_apply_values_to_controls(_original)
+	close_requested.emit()
+
+# Reverts every control to its factory default (the same values PlayerPrefs
+# initializes to), as a preview only — nothing is written until Apply, and
+# Cancel still restores the pre-open state. Bindings reset to the project
+# defaults captured at load.
+func _on_reset_pressed() -> void:
+	_apply_values_to_controls(_defaults())
+
+# The factory-default control values. Mirrors the var initializers in
+# PlayerPrefs — keep the two in sync when a default changes.
+func _defaults() -> Dictionary:
+	return {
+		"window_mode": PlayerPrefs.WINDOW_MODE_BORDERLESS,
+		"resolution": PlayerPrefs.RESOLUTION_DEFAULT,
+		"display_monitor": -1,
+		"vsync_mode": PlayerPrefs.VSYNC_ENABLED,
+		"fps_cap_index": 5,
+		"show_fps": false,
+		"gamma": 1.0,
+		"color_grade_preset": PlayerPrefs.COLOR_GRADE_BROADCAST,
+		"gi_mode": PlayerPrefs.GI_MODE_OFF,
+		"crowd_density": PlayerPrefs.CROWD_DENSITY_HIGH,
+		"ice_scratches_enabled": true,
+		"render_scale": 1.0,
+		"scaling_3d_mode": PlayerPrefs.SCALING_3D_BILINEAR,
+		"anti_aliasing_mode": PlayerPrefs.AA_MSAA_2X,
+		"master_volume": 1.0,
+		"sfx_volume": 1.0,
+		"ui_volume": 1.0,
+		"crowd_volume": 1.0,
+		"master_muted": false,
+		"mouse_sensitivity": 1.0,
+		"confine_mouse": true,
+		"cursor_style": PlayerPrefs.CURSOR_STYLE_DOT,
+		"cursor_color": Color(1.0, 0.45, 0.1),
+		"cursor_size": 28,
+		"attack_up": false,
+		"ring_color_self": MenuStyle.HUD_RING_SELF,
+		"ring_color_team": MenuStyle.HUD_RING_TEAM,
+		"ring_color_enemy": MenuStyle.HUD_RING_ENEMY,
+		"self_beacon_mode": PlayerPrefs.BEACON_MODE_SMART,
+		"screen_flash": true,
+		"screen_shake": true,
+		"camera_tilt_deg": PlayerPrefs.CAMERA_TILT_DEFAULT,
+		"fov": 50.0,
+		"camera_distance": 1.0,
+		"hud_scale": 1.0,
+		"share_gameplay_stats": true,
+		"bindings": PlayerPrefs.default_bindings.duplicate(true),
+	}
+
+# Pushes a values dictionary (shaped like _snapshot / _read_controls) into every
+# control. Shared by Cancel (restores _original) and Reset (loads _defaults).
+func _apply_values_to_controls(v: Dictionary) -> void:
+	_window_mode_btn.selected = v.window_mode
+	_apply_res_disabled_state(int(v.window_mode) != PlayerPrefs.WINDOW_MODE_WINDOWED)
+	_monitor_btn.selected = clampi(int(v.display_monitor) + 1, 0, _monitor_btn.item_count - 1)
 	_populate_resolutions()
-	_vsync_btn.selected = _original.vsync_mode
-	_fps_btn.selected = _original.fps_cap_index
+	_select_windowed_resolution(v.resolution)
+	_vsync_btn.selected = v.vsync_mode
+	_fps_btn.selected = v.fps_cap_index
 	if _show_fps_check != null:
-		_show_fps_check.set_pressed_no_signal(_original.show_fps)
-	_gamma_slider.value = _original.gamma
+		_show_fps_check.set_pressed_no_signal(v.show_fps)
+	_gamma_slider.value = v.gamma
 	if _color_grade_btn != null:
-		_color_grade_btn.selected = _original.color_grade_preset
+		_color_grade_btn.selected = v.color_grade_preset
 	if _gi_mode_btn != null:
-		_gi_mode_btn.selected = _original.gi_mode
+		_gi_mode_btn.selected = v.gi_mode
 	if _crowd_density_btn != null:
-		_crowd_density_btn.selected = _original.crowd_density
+		_crowd_density_btn.selected = v.crowd_density
 	if _ice_scratches_check != null:
-		_ice_scratches_check.set_pressed_no_signal(_original.ice_scratches_enabled)
+		_ice_scratches_check.set_pressed_no_signal(v.ice_scratches_enabled)
 	if _render_scale_slider != null:
-		_render_scale_slider.value = _original.render_scale
+		_render_scale_slider.value = v.render_scale
 	if _scaling_3d_btn != null:
-		_scaling_3d_btn.selected = _original.scaling_3d_mode
+		_scaling_3d_btn.selected = v.scaling_3d_mode
 	if _aa_btn != null:
-		_aa_btn.selected = _original.anti_aliasing_mode
+		_aa_btn.selected = v.anti_aliasing_mode
 	_update_aa_compatibility()
-	_volume_slider.value = _original.master_volume
-	_sfx_slider.value = _original.sfx_volume
-	_ui_slider.value = _original.ui_volume
-	_crowd_slider.value = _original.crowd_volume
-	_mute_check.set_pressed_no_signal(_original.master_muted)
-	_sens_slider.value = _original.mouse_sensitivity
+	_volume_slider.value = v.master_volume
+	_sfx_slider.value = v.sfx_volume
+	_ui_slider.value = v.ui_volume
+	_crowd_slider.value = v.crowd_volume
+	_mute_check.set_pressed_no_signal(v.master_muted)
+	_sens_slider.value = v.mouse_sensitivity
 	if _confine_mouse_check != null:
-		_confine_mouse_check.set_pressed_no_signal(_original.confine_mouse)
+		_confine_mouse_check.set_pressed_no_signal(v.confine_mouse)
 	if _cursor_style_btn != null:
-		_cursor_style_btn.selected = _original.cursor_style
+		_cursor_style_btn.selected = v.cursor_style
 	if _cursor_color_btn != null:
-		_cursor_color_btn.color = _original.cursor_color
+		_cursor_color_btn.color = v.cursor_color
 	if _cursor_size_slider != null:
-		_cursor_size_slider.value = _original.cursor_size
-	_attack_up_check.set_pressed_no_signal(_original.attack_up)
+		_cursor_size_slider.value = v.cursor_size
+	_attack_up_check.set_pressed_no_signal(v.attack_up)
 	if _ring_self_color_btn != null:
-		_ring_self_color_btn.color = _original.ring_color_self
+		_ring_self_color_btn.color = v.ring_color_self
 	if _ring_team_color_btn != null:
-		_ring_team_color_btn.color = _original.ring_color_team
+		_ring_team_color_btn.color = v.ring_color_team
 	if _ring_enemy_color_btn != null:
-		_ring_enemy_color_btn.color = _original.ring_color_enemy
+		_ring_enemy_color_btn.color = v.ring_color_enemy
 	_sync_ring_preset_selection()
 	if _self_beacon_mode_btn != null:
-		_self_beacon_mode_btn.selected = _original.self_beacon_mode
+		_self_beacon_mode_btn.selected = v.self_beacon_mode
 	if _screen_flash_check != null:
-		_screen_flash_check.set_pressed_no_signal(_original.screen_flash)
+		_screen_flash_check.set_pressed_no_signal(v.screen_flash)
 	if _screen_shake_check != null:
-		_screen_shake_check.set_pressed_no_signal(_original.screen_shake)
+		_screen_shake_check.set_pressed_no_signal(v.screen_shake)
 	if _tilt_slider != null:
-		_tilt_slider.value = _original.camera_tilt_deg
+		_tilt_slider.value = v.camera_tilt_deg
 	if _fov_slider != null:
-		_fov_slider.value = _original.fov
+		_fov_slider.value = v.fov
 	if _cam_dist_slider != null:
-		_cam_dist_slider.value = _original.camera_distance
+		_cam_dist_slider.value = v.camera_distance
 	if _hud_scale_slider != null:
-		_hud_scale_slider.value = _original.hud_scale
+		_hud_scale_slider.value = v.hud_scale
+	if _share_stats_check != null:
+		_share_stats_check.set_pressed_no_signal(v.share_gameplay_stats)
 	_listening_action = ""
-	_pending_bindings = (_original.get("bindings", {}) as Dictionary).duplicate(true)
+	_pending_bindings = (v.get("bindings", {}) as Dictionary).duplicate(true)
 	_update_binding_btns()
 	if _conflict_label != null:
 		_conflict_label.text = ""
-	close_requested.emit()
+	_update_apply_state()
+
+# Points the resolution dropdown at the entry matching `res` (the committed
+# windowed pick), leaving the nearest-match from _populate_resolutions if the
+# exact size isn't offered on the current monitor.
+func _select_windowed_resolution(res: Vector2i) -> void:
+	for i: int in _res_values.size():
+		if _res_values[i] == res:
+			_windowed_res_idx = i
+			break
+	_refresh_res_display()
 
 # ---------------------------------------------------------------------------
 # Tab-layout helpers — every tab uses the same building blocks so labels and

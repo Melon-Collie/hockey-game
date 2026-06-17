@@ -236,6 +236,17 @@ var hud_scale: float = 1.0
 const HUD_SCALE_MIN: float = 0.80
 const HUD_SCALE_MAX: float = 1.20
 var bindings: Dictionary = {}  # action -> {type, physical_keycode or button_index}
+# Project-default key bindings, captured once at load before any saved override
+# is applied — the canonical source for Options' "Reset to Defaults".
+var default_bindings: Dictionary = {}
+
+# Telemetry / privacy. When false, no career-stats rows are uploaded at game
+# over (GameManager skips CareerStatsReporter). Both the Career screen and the
+# replay browser are driven entirely by that uploaded backend data, so opting
+# out leaves them empty — the Career menu is greyed out in the side menu and
+# replays can't be browsed. Default on. Toggle + notice live in
+# Options → Game → Data Sharing.
+var share_gameplay_stats: bool = true
 
 # Replay recording. Recording fires on every peer (host + clients) for every
 # multiplayer game; offline / tutorial sessions never record. ReplayFileIndex
@@ -348,6 +359,7 @@ func save() -> void:
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
 	cfg.set_value("game", "hud_scale", hud_scale)
+	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
 	cfg.set_value("replay", "keep_count", replay_keep_count)
 	cfg.set_value("tutorials", "completion", tutorial_completion)
@@ -642,6 +654,13 @@ func _apply_grade_broadcast(c: Color) -> Color:
 	return c
 
 func _load() -> void:
+	# InputMap still holds the untouched project defaults here (apply_bindings
+	# hasn't run yet), so snapshot them for Reset to Defaults before any saved
+	# override is read in below.
+	for action: String in REBINDABLE_ACTIONS:
+		var d: Dictionary = _read_current_input_event(action)
+		if not d.is_empty():
+			default_bindings[action] = d
 	var cfg := ConfigFile.new()
 	if cfg.load(_get_save_path()) == OK:
 		player_uuid = cfg.get_value("identity", "player_uuid", "")
@@ -701,6 +720,7 @@ func _load() -> void:
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
+		share_gameplay_stats = cfg.get_value("game", "share_gameplay_stats", true)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
 		var raw_completion: Variant = cfg.get_value("tutorials", "completion", {})
