@@ -29,10 +29,15 @@ var _goalie: Goalie
 var _jersey_mat: ShaderMaterial
 var _text_viewport: SubViewport
 var _text_decal: GoalieTextDecal
+var _shoulder_viewport: SubViewport
+var _shoulder_decal: ShoulderDecal
 
 # Cached for apply_jersey_info refresh.
 var _text_color: Color = Color.WHITE
 var _text_outline_color: Color = Color.BLACK
+var _shoulder_color: Color = Color.WHITE
+var _shoulder_text_color: Color = Color.BLACK
+var _shoulder_outline_color: Color = Color.BLACK
 var _player_name: String = ""
 var _jersey_number: int = 0
 
@@ -40,6 +45,7 @@ var _jersey_number: int = 0
 func setup(goalie: Goalie) -> void:
 	_goalie = goalie
 	_create_jersey_material()
+	_create_shoulder_viewport()
 
 
 func apply_uniform(colors: Dictionary) -> void:
@@ -69,9 +75,10 @@ func apply_uniform(colors: Dictionary) -> void:
 	_paint_cylinder_h(_goalie.glove_forearm, arms.lower)
 	_paint_cylinder_h(_goalie.blocker_forearm, arms.lower)
 
-	var shoulder_mat: StandardMaterial3D = _make_solid_mat(uniform.shoulders.color)
-	_goalie.glove_shoulder_sphere.material_override = shoulder_mat
-	_goalie.blocker_shoulder_sphere.material_override = shoulder_mat.duplicate()
+	_shoulder_color = uniform.shoulders.color
+	_shoulder_text_color = uniform.shoulders.text
+	_shoulder_outline_color = uniform.shoulders.outline
+	_rebuild_shoulder_texture()
 
 	var elbow_mat: StandardMaterial3D = _make_solid_mat(arms.lower.base)
 	_goalie.glove_elbow_sphere.material_override = elbow_mat
@@ -95,6 +102,7 @@ func apply_jersey_info(p_name: String, number: int) -> void:
 	_player_name = p_name
 	_jersey_number = number
 	_rebuild_text_decal()
+	_rebuild_shoulder_texture()
 
 
 func _create_jersey_material() -> void:
@@ -117,6 +125,45 @@ func _create_jersey_material() -> void:
 
 	_jersey_mat.set_shader_parameter("text_decal", _text_viewport.get_texture())
 	_goalie.body_mesh.material_override = _jersey_mat
+
+
+# Shared SubViewport + ShoulderDecal for both shoulder spheres. Sphere U=0 is
+# at +Z, so per-shoulder uv1_offset.x rotates the wrap a quarter turn each way
+# to face the number outward: glove side (-X) gets -0.25, blocker side (+X) +0.25.
+func _create_shoulder_viewport() -> void:
+	_shoulder_viewport = SubViewport.new()
+	_shoulder_viewport.name = "GoalieShoulderViewport"
+	_shoulder_viewport.size = Vector2i(ShoulderDecal.IMG_W, ShoulderDecal.IMG_H)
+	_shoulder_viewport.transparent_bg = false
+	_shoulder_viewport.disable_3d = true
+	_shoulder_viewport.handle_input_locally = false
+	_shoulder_viewport.gui_disable_input = true
+	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	_goalie.add_child(_shoulder_viewport)
+
+	_shoulder_decal = ShoulderDecal.new()
+	_shoulder_decal.name = "GoalieShoulderDecal"
+	_shoulder_viewport.add_child(_shoulder_decal)
+
+	var tex: ViewportTexture = _shoulder_viewport.get_texture()
+	var mat_glove := StandardMaterial3D.new()
+	mat_glove.albedo_texture = tex
+	mat_glove.roughness = _ROUGH_CLOTH
+	mat_glove.uv1_offset = Vector3(-0.25, 0.0, 0.0)
+	_goalie.glove_shoulder_sphere.material_override = mat_glove
+	var mat_blocker := StandardMaterial3D.new()
+	mat_blocker.albedo_texture = tex
+	mat_blocker.roughness = _ROUGH_CLOTH
+	mat_blocker.uv1_offset = Vector3(0.25, 0.0, 0.0)
+	_goalie.blocker_shoulder_sphere.material_override = mat_blocker
+
+
+func _rebuild_shoulder_texture() -> void:
+	if _shoulder_decal == null:
+		return
+	_shoulder_decal.update_shoulder(
+			_shoulder_color, _jersey_number, _shoulder_text_color, _shoulder_outline_color)
+	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
 # Packs up to _MAX_STRIPES stripe definitions from the v2 stripes array into

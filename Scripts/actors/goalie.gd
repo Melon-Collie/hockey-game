@@ -35,7 +35,7 @@ const _ELBOW_SPHERE_RADIUS: float = 0.08
 const _HAND_SPHERE_RADIUS: float = 0.09
 # Extra retreat to clear the pad mesh on the body side of _block_arm.position
 # (which is the node centre, not the back face of the pad geometry).
-const _BLOCKER_PAD_HALF_DEPTH: float = 0.08
+const _BLOCKER_PAD_HALF_DEPTH: float = 0.11
 
 var _uniform_coordinator: GoalieUniformCoordinator
 # Dynamic visual nodes — public for GoalieUniformCoordinator access.
