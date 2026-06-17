@@ -459,6 +459,26 @@ func test_apply_remote_goal_sets_phase_and_scores() -> void:
 	# carry them on to GOAL_SCORED when the replay should start.
 	assert_eq(sm.current_phase, GamePhase.Phase.GOAL_CELEBRATION)
 
+func test_apply_remote_faceoff_prep_advances_from_celebration() -> void:
+	sm.apply_remote_goal(0, 1, 0)  # client sits in GOAL_CELEBRATION during replay
+	var changed: bool = sm.apply_remote_faceoff_prep()
+	assert_true(changed)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF_PREP)
+
+func test_apply_remote_faceoff_prep_noop_when_already_in_prep() -> void:
+	sm.apply_remote_faceoff_prep()
+	var changed: bool = sm.apply_remote_faceoff_prep()
+	assert_false(changed)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF_PREP)
+
+func test_apply_remote_faceoff_prep_does_not_regress_from_faceoff() -> void:
+	# A very-late reliable faceoff RPC must not pull a client that WS already
+	# advanced to FACEOFF back into the prep countdown.
+	sm.apply_remote_state(0, 0, GamePhase.Phase.FACEOFF, 1, 200.0)
+	var changed: bool = sm.apply_remote_faceoff_prep()
+	assert_false(changed)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
+
 # ── Faceoff positions ───────────────────────────────────────────────────────
 
 func test_faceoff_positions_per_player_slot() -> void:
