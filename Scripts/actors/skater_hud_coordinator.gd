@@ -471,8 +471,10 @@ func _update_beacon_visibility() -> void:
 		return
 	# Shown when crowded OR ghosted: a scrum is where you lose yourself, and a
 	# lone ghosted player still needs the cue to steer back to the blue line.
+	# Gated by the Self Marker option (PlayerPrefs, read live).
 	var ghosted: bool = _skater != null and _skater.is_ghost
 	_self_beacon.visible = (_self_beacon_active
+			and PlayerPrefs.self_beacon_enabled
 			and (_beacon_crowded or ghosted)
 			and not _hidden_for_replay
 			and not _force_world_hud_hidden)
@@ -489,10 +491,10 @@ func _update_beacon_crowd_state(delta: float) -> void:
 			_beacon_linger_timer = _BEACON_CROWD_LINGER
 	if _beacon_linger_timer > 0.0:
 		_beacon_linger_timer = maxf(_beacon_linger_timer - delta, 0.0)
-	var want: bool = _beacon_linger_timer > 0.0
-	if want != _beacon_crowded:
-		_beacon_crowded = want
-		_update_beacon_visibility()
+	_beacon_crowded = _beacon_linger_timer > 0.0
+	# Refresh every active tick (single skater) so a live Self Marker toggle and
+	# ghost transitions reflect immediately, not just on a crowd-state change.
+	_update_beacon_visibility()
 
 
 # True once _BEACON_CROWD_COUNT other skaters sit within _BEACON_CROWD_RADIUS of
