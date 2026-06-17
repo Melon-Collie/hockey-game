@@ -58,7 +58,7 @@ const _CLAIM_COOLDOWN_S: float = 0.3  # sustained re-fire gap while a claim targ
 const _PICKUP_CLAIM_FLOOR_S: float = 0.05  # min gap between pickup claims; caps rising-edge jitter spam
 const _POKE_CLAIM_FLOOR_S: float = 0.05    # same for poke / stick-lift claims
 
-const _RECONCILE_VISUAL_ALPHA: float = 0.20  # exponential decay per physics frame
+const _RECONCILE_VISUAL_ALPHA: float = 0.20  # per-tick decay factor at the nominal 120 Hz tick; applied frame-rate-independently (see _physics_process)
 
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
 	camera = $Camera3D
@@ -140,7 +140,13 @@ func _physics_process(delta: float) -> void:
 	if NetworkManager.is_replay_mode():
 		return
 	if not skater.visual_offset.is_zero_approx():
-		var new_offset: Vector3 = skater.visual_offset * (1.0 - _RECONCILE_VISUAL_ALPHA)
+		# Frame-rate-independent decay: (1 - alpha) is the per-tick factor at the
+		# nominal 120 Hz tick; raising it to delta x PHYSICS_TICK holds the
+		# wall-clock decay constant when the host dilates (longer ticks). Without
+		# the delta term the offset collapses in fewer real milliseconds exactly
+		# when a stalling host produces the largest, most frequent corrections.
+		var decay: float = pow(1.0 - _RECONCILE_VISUAL_ALPHA, delta * float(Constants.PHYSICS_TICK))
+		var new_offset: Vector3 = skater.visual_offset * decay
 		skater.visual_offset = new_offset if new_offset.length_squared() > 0.000001 else Vector3.ZERO
 	if _game_state.is_movement_locked():
 		skater.velocity = Vector3.ZERO
@@ -171,6 +177,10 @@ func _physics_process(delta: float) -> void:
 			if _input_history.size() > prep_rtt_cap:
 				_input_history.pop_front()
 			apply_blade_aim_only(_current_input, delta)
+			# Snapshot the frozen prep frame too, so a broadcast that acks a
+			# prep-phase input after the lock lifts matches in find_at instead of
+			# falling back to the live position (a spurious post-faceoff reconcile).
+			_append_prediction_snapshot()
 		else:
 			# Dead-puck phase with sticks frozen too — drain history so reconcile
 			# can't replay stale inputs once the phase lifts.
@@ -199,20 +209,7 @@ func _physics_process(delta: float) -> void:
 	if _input_history.size() > rtt_cap:
 		_input_history.pop_front()
 	_process_input(_current_input, _current_input.delta)
-	# Capture per-input prediction snapshot keyed by host_timestamp. Reconcile
-	# uses this to compare what the client predicted for timestamp T against
-	# what the server says happened at T — subtracting prediction lead out of
-	# the divergence measurement.
-	var snap := PredictedState.new()
-	snap.host_timestamp = _current_input.host_timestamp
-	snap.position = skater.global_position
-	snap.velocity = skater.velocity
-	snap.facing = _pose.facing
-	snap.shot_state = _sm.get_state() as int
-	snap.upper_body_rotation_y = _pose.upper_body_angle
-	_prediction_history.append(snap)
-	if _prediction_history.size() > _PREDICTION_HISTORY_CAP:
-		_prediction_history.pop_front()
+	_append_prediction_snapshot()
 	skater.current_shot_state = _sm.get_state() as int
 	_update_one_timer_indicator()
 	var blade_pos: Vector3 = skater.get_blade_contact_global()
@@ -300,6 +297,25 @@ func _physics_process(delta: float) -> void:
 			# contact registers as a clean rising edge.
 			_was_in_pickup_range = false
 			_was_in_poke_range = false
+
+func _append_prediction_snapshot() -> void:
+	# Per-input prediction snapshot keyed by host_timestamp so reconcile can
+	# compare predicted-vs-server at the same instant (subtracting prediction lead
+	# out of the divergence). Appended on every gathered input — including frozen
+	# FACEOFF_PREP frames (position locked, velocity zero) — so a broadcast that
+	# acks a prep-phase input after the lock lifts finds a match instead of falling
+	# back to the live position and firing a spurious reconcile on the first touch.
+	var snap := PredictedState.new()
+	snap.host_timestamp = _current_input.host_timestamp
+	snap.position = skater.global_position
+	snap.velocity = skater.velocity
+	snap.facing = _pose.facing
+	snap.shot_state = _sm.get_state() as int
+	snap.upper_body_rotation_y = _pose.upper_body_angle
+	_prediction_history.append(snap)
+	if _prediction_history.size() > _PREDICTION_HISTORY_CAP:
+		_prediction_history.pop_front()
+
 
 func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_reconcile_blade: Vector3 = skater.get_blade_contact_global()
