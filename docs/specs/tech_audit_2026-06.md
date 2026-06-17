@@ -270,6 +270,18 @@ Also worth doing:
   `Puck._physics_process` allocates two arrays per tick even idle (`puck.gd:360-370`);
   `clock_updated` emitted per packet → HUD label + theme-cache dirty at 120 Hz on clients
   (`world_state_codec.gd:227`, `hud.gd:896-902` — emit on integer-second change like `_last_period`).
+- **P8. Goalie cosmetic arm IK recomputes unconditionally every rendered frame.**
+  `goalie.gd:65-66` calls `_update_connectors()` from `_process` — correctly render-rate, *not* the
+  240 Hz tick (this is the P2 pattern already applied) — which runs two `TwoBoneIK.solve_elbow` plus
+  four `_update_arm_bone` passes (each a `look_at` + two `to_global`) plus connectors and shoulder
+  spheres, per goalie per frame (`goalie.gd:334-354`). It's value-type math (`Vector3`/`Basis`), so
+  it is **not** allocation churn and **not** a P1–P5-class issue — but it runs for both goalies every
+  frame with no dirty-skip (a goalie idle in its stance recomputes the full rig 60×/s for zero visual
+  change) and no visibility cull (the off-camera goalie still solves). Fix: cache last-applied
+  `_body`/`_glove`/`_block_arm` transforms and bail when unchanged (the big win — goalies are
+  stationary most of the time); gate on `is_visible_in_tree()` or a `VisibleOnScreenNotifier3D`.
+  Tagged distinctly — render-rate, client-side, value-type — so it isn't mistaken for a host-tick
+  regression or lumped in with the allocation-churn work.
 
 ### Standalone bug
 
