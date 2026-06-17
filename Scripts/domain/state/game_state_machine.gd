@@ -484,6 +484,24 @@ func apply_remote_goal(scoring_team_id: int, score0: int, score1: int) -> void:
 		_phase_timer = 0.0
 
 
+# Called on clients when they receive the reliable faceoff-positions RPC. The
+# faceoff RPC is the authoritative, reliable trigger for the prep phase — world
+# state (unreliable) is only a correction channel. Without this the client's
+# phase advanced into the faceoff sequence solely via the WS phase byte, so a
+# lost FACEOFF_PREP/FACEOFF packet right after a goal replay could collapse the
+# client straight from GOAL_CELEBRATION into a later PLAYING packet — dropping
+# them into live play with no faceoff prep ("spawned in as the game started").
+# Guarded so a very-late RPC can't regress a client that WS already advanced to
+# FACEOFF. Returns true if the phase changed (caller emits phase_changed).
+func apply_remote_faceoff_prep() -> bool:
+	if current_phase == GamePhase.Phase.FACEOFF_PREP \
+			or current_phase == GamePhase.Phase.FACEOFF:
+		return false
+	current_phase = GamePhase.Phase.FACEOFF_PREP
+	_phase_timer = 0.0
+	return true
+
+
 # ── Queries ──────────────────────────────────────────────────────────────────
 
 func is_movement_locked() -> bool:
