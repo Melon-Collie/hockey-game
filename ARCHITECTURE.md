@@ -31,6 +31,27 @@ Wire format: Skater 37B · Puck 12B · Goalie 35B (12 B root + 23 B pose). Quant
 
 **Input timestamp lead:** Client inputs are stamped with `NetworkManager.estimated_input_stamp_time()` = `estimated_host_time() + INPUT_LEAD_SEC` (~25ms). `estimated_host_time()` already encodes the NTP-measured RTT/2, so inputs arrive at the host at approximately their timestamp. The 25ms lead = 16.7ms worst-case batch-send jitter + 8.3ms two-tick buffer, ensuring the host input queue never starves between 60Hz batches. The host gates consumption in `RemoteController._drive_from_input`: inputs are held until `host_timestamp <= estimated_host_time()`. The F3 overlay's host-only "Client input queue" section reports `Input lead` and `Starvations` — healthy values are lead ≈ 0–8ms, starvations = 0.
 
+### F3 Network Debug Overlay
+
+`Scripts/ui/network_debug_overlay.gd` — toggled with **F3**. Reads `NetworkTelemetry.instance` + `NetworkManager` every frame and renders a color-coded health readout. It's a diagnostic for "is this lag expected or is something actually broken?", not a raw number dump.
+
+**Reading it:**
+- **Header verdict** — `● OK / ● WATCH / ● PROBLEM` rolls up the worst single metric on screen. Green header = nothing needs attention.
+- **Per-line dots** — green / yellow / red, thresholded against the documented healthy ranges. Each line also carries a plain-English label and its target range inline, so no separate legend is needed.
+- **Info lines** (grey `·`) — context with no health judgment (clock offset, bandwidth, puck mode, buffer depths).
+
+**Role-gated** — only the sections that apply to your role render, so you never read a misleading zero:
+
+| Role | Detection | Sections shown |
+|------|-----------|----------------|
+| `SOLO (offline)` | `is_offline_mode` | local frame health only |
+| `HOST` | `is_host && !is_offline_mode` | per-peer pings, client input queue, host frame health, upload bandwidth |
+| `CLIENT` | otherwise | connection (RTT/loss/jitter), prediction/corrections, smoothing buffers, download bandwidth, watch metrics |
+
+**Watch metrics** (client-only: prediction drift, stick jumps, puck hard-snaps, out-of-order drops) stay collapsed into a single `✓ Internals nominal` line and surface individually only when they leave the healthy band — they're the latent-bug tripwire.
+
+**Expected vs. unexpected:** RTT/jitter red while everything else is green is just distance (expected). RTT green but Corrections or a watch metric red means the network is fine and the *simulation* is diverging (a real bug). Thresholds live in the overlay's health helpers and mirror the "Expected ranges" comments in `network_telemetry.gd` — keep the two in sync if either moves.
+
 ### Collision Layers
 
 | Constant | Value | Purpose |
