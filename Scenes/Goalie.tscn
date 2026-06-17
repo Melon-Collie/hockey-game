@@ -47,12 +47,21 @@ size = Vector3(0.22, 0.22, 0.2)
 [sub_resource type="BoxShape3D" id="BoxShape3D_8k2b8"]
 size = Vector3(0.25, 0.25, 0.2)
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_mlftn"]
-albedo_color = Color(0.653846, 0.402607, 0.170112, 1)
+[sub_resource type="TorusMesh" id="TorusMesh_168ps"]
+inner_radius = 0.1
+outer_radius = 0.15
 
-[sub_resource type="BoxMesh" id="BoxMesh_f2adc"]
-material = SubResource("StandardMaterial3D_mlftn")
-size = Vector3(0.25, 0.25, 0.2)
+[sub_resource type="CylinderMesh" id="CylinderMesh_jpvxq"]
+top_radius = 0.1
+bottom_radius = 0.1
+height = 0.05
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0fnhx"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_e8rcv"]
+material = SubResource("StandardMaterial3D_0fnhx")
+radius = 0.025
+height = 0.05
 
 [sub_resource type="BoxMesh" id="BoxMesh_g4lw1"]
 size = Vector3(0.03, 0.5, 0.03)
@@ -81,6 +90,13 @@ albedo_color = Color(0.806895, 0.160214, 0.779268, 1)
 [sub_resource type="BoxMesh" id="BoxMesh_n2fuc"]
 material = SubResource("StandardMaterial3D_u3old")
 size = Vector3(0.2, 0.3, 0.05)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_168ps"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_jpvxq"]
+material = SubResource("StandardMaterial3D_168ps")
+radius = 0.05
+height = 0.1
 
 [node name="Goalie" type="Node3D" unique_id=1555786498]
 script = ExtResource("1_fbmg1")
@@ -127,8 +143,16 @@ physics_material_override = ExtResource("2_168ps")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Glove" unique_id=1294887346]
 shape = SubResource("BoxShape3D_8k2b8")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Glove" unique_id=32463217]
-mesh = SubResource("BoxMesh_f2adc")
+[node name="Ring" type="MeshInstance3D" parent="Glove" unique_id=1391347921]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, 0, -0.05)
+mesh = SubResource("TorusMesh_168ps")
+
+[node name="Main" type="MeshInstance3D" parent="Glove" unique_id=895400860]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, 0, -0.03)
+mesh = SubResource("CylinderMesh_jpvxq")
+
+[node name="MeshInstance3D2" type="MeshInstance3D" parent="Glove" unique_id=562176041]
+mesh = SubResource("SphereMesh_e8rcv")
 
 [node name="BlockArm" type="Node3D" parent="." unique_id=296162046]
 
@@ -161,7 +185,7 @@ transform = Transform3D(0.97437006, -0.22495104, 0, 0.22495104, 0.97437006, 0, 0
 shape = SubResource("BoxShape3D_cwmwh")
 
 [node name="Blocker" type="StaticBody3D" parent="BlockArm" unique_id=415853721]
-transform = Transform3D(0.8660254, -0.5, 0, 0.5, 0.8660254, 0, 0, 0, 1, -0.06, 0.03, 0)
+transform = Transform3D(0.8660254, -0.5, 0, 0.5, 0.8660254, 0, 0, 0, 1, -0.06, 0.03, -0.05)
 physics_material_override = ExtResource("2_168ps")
 
 [node name="BlockerPadCollider" type="CollisionShape3D" parent="BlockArm/Blocker" unique_id=1315615311]
@@ -169,3 +193,6 @@ shape = SubResource("BoxShape3D_waq38")
 
 [node name="BlockerPadMesh" type="MeshInstance3D" parent="BlockArm/Blocker" unique_id=730862037]
 mesh = SubResource("BoxMesh_n2fuc")
+
+[node name="BlockerHand" type="MeshInstance3D" parent="BlockArm" unique_id=1585778462]
+mesh = SubResource("SphereMesh_jpvxq")
