@@ -124,6 +124,9 @@ func _render_client(t: NetworkTelemetry) -> void:
 	var rec := _worse(_band(t.reconcile_per_sec, 1.0, 5.0), _band(t.reconcile_magnitude_avg, 0.05, 0.2))
 	_metric(rec, "Corrections", "%.1f/s, %.3f m avg" % [t.reconcile_per_sec, t.reconcile_magnitude_avg],
 		"server snapping your prediction back; want <1/s and <5 cm")
+	if t.reconcile_per_sec > 0.5:
+		_info("Reconcile cause", "pos %.0f · vel %.0f · rot %.0f /s" % [t.recon_pos_per_sec, t.recon_vel_per_sec, t.recon_ubody_per_sec],
+			"which channel tripped the snap; at rest pos/vel ~0, so rot>0 means pose/aim divergence, not position desync")
 	_metric(_band(t.extrapolation_per_sec, 1.0, 5.0), "Guessing ahead", "%.1f/s" % t.extrapolation_per_sec,
 		"frames guessed past the buffer (a packet was late); want <1/s")
 	_info("Puck mode", t.puck_mode, "interp = smoothed, trajectory = predicted flight, carried = on a stick")

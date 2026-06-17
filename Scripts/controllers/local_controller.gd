@@ -381,6 +381,14 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# Errors above 5 cm are real desync and still fire through.
 	if skater.is_on_wall() and skater.global_position.distance_to(server_state.position) < 0.05:
 		return
+	# Attribute which channel tripped the snap (diagnostic): at rest the position
+	# and velocity channels are ~zero, so a non-zero "rot" count isolates
+	# pose/aim (upper-body) divergence firing reconciles, vs a position desync.
+	NetworkTelemetry.record_reconcile_cause(
+		divergence_position.distance_to(server_state.position) >= reconcile_position_threshold,
+		divergence_velocity.distance_to(server_state.velocity) >= reconcile_velocity_threshold,
+		reconcile_upper_body_rotation_threshold > 0.0 and absf(angle_difference(
+				divergence_upper_body, server_state.upper_body_rotation_y)) >= reconcile_upper_body_rotation_threshold)
 	# Record how far the client has predicted ahead of the server's last known position.
 	# This grows naturally with RTT and speed — it is not a non-determinism signal.
 	var pre_replay_divergence: float = skater.global_position.distance_to(server_state.position)
