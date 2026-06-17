@@ -31,13 +31,16 @@ const _PREDICTION_HISTORY_CAP: int = 480  # ~2s at 240Hz
 var _team_id: int = -1  # set at setup; needed for client-side offside prediction
 var last_reconcile_error: float = 0.0
 var _claim_cooldown: float = 0.0
-# Pickup-claim edge state: whether the (interpolated) loose puck was within
-# pickup range of the blade last tick, plus a short anti-jitter floor. A pickup
-# claim fires on the rising edge of entering range so a fast/contested puck
-# brushing the blade still claims at the contact instant, instead of being
-# missed between the 300 ms throttle windows the poke path still uses.
+# Claim edge state: whether the blade was within pickup / poke range last tick,
+# plus short anti-jitter floors. Each claim type fires on the rising edge of
+# entering range so a fast/contested contact still claims at the instant the
+# host's lag-comp rewind needs, instead of being missed between throttle windows.
+# Pickup and poke carry separate cooldowns so neither blocks the other.
 var _was_in_pickup_range: bool = false
 var _pickup_claim_floor: float = 0.0
+var _was_in_poke_range: bool = false
+var _poke_cooldown: float = 0.0
+var _poke_claim_floor: float = 0.0
 var _last_blade_pos: Vector3 = Vector3.ZERO
 # Body check impulses captured between reconciles. Each entry is
 # {timestamp: float, impulse: Vector3}. Multiple impulses can land within a
@@ -49,8 +52,9 @@ var _last_blade_pos: Vector3 = Vector3.ZERO
 var _body_check_impulses: Array[Dictionary] = []
 const _BODY_CHECK_IMPULSE_CAP: int = 16
 const _BLADE_JUMP_THRESHOLD: float = 0.05
-const _CLAIM_COOLDOWN_S: float = 0.3  # sustained re-fire gap for poke/stick-lift + pickup retry
+const _CLAIM_COOLDOWN_S: float = 0.3  # sustained re-fire gap while a claim target stays in range
 const _PICKUP_CLAIM_FLOOR_S: float = 0.05  # min gap between pickup claims; caps rising-edge jitter spam
+const _POKE_CLAIM_FLOOR_S: float = 0.05    # same for poke / stick-lift claims
 
 const _RECONCILE_VISUAL_ALPHA: float = 0.20  # exponential decay per physics frame
 
@@ -217,6 +221,8 @@ func _physics_process(delta: float) -> void:
 	_last_blade_pos = blade_pos
 	_claim_cooldown = maxf(_claim_cooldown - delta, 0.0)
 	_pickup_claim_floor = maxf(_pickup_claim_floor - delta, 0.0)
+	_poke_cooldown = maxf(_poke_cooldown - delta, 0.0)
+	_poke_claim_floor = maxf(_poke_claim_floor - delta, 0.0)
 	if not _is_host and NetworkManager.is_clock_ready() and not skater.is_ghost and not puck.pickup_locked and _sm.get_state() != State.SHOT_BLOCKING:
 		var blade_pos_for_claim: Vector3 = skater.get_blade_contact_global()
 		if puck.carrier == null:
@@ -244,40 +250,54 @@ func _physics_process(delta: float) -> void:
 				if GameManager.puck_controller != null:
 					GameManager.puck_controller.try_provisional_pickup(skater)
 			_was_in_pickup_range = in_range
-		elif puck.carrier != skater and _claim_cooldown <= 0.0:
+			_was_in_poke_range = false
+		elif puck.carrier != skater:
 			_was_in_pickup_range = false
-			# Opposing carrier within poke range on our screen — speculative poke
-			# claim. Host validates with rewind against what we were looking at.
-			# Skip same-team carriers locally so we don't burn the cooldown on a
-			# claim the host will just reject. Carrier peer_id comes from
-			# PuckController._carrier_peer_id, which is reliable-RPC-managed
-			# on clients (never updated from world state), so it's safe to use
-			# for the expected-carrier check.
+			# Opposing carrier — speculative poke OR stick-lift claim, edge-triggered
+			# on the same rationale as pickup: fire the instant the blade enters poke
+			# range / hooks under the shaft, so a fast sweep isn't missed between the
+			# 300ms throttle windows; re-fire on the throttle while it stays in range.
+			# Own timers (not the pickup cooldown) so the two actions don't block each
+			# other. Skip same-team carriers — the host would reject. Carrier peer_id
+			# comes from PuckController._carrier_peer_id (reliable-RPC-managed on
+			# clients, never world state), so it's safe for the expected-carrier check.
 			var carrier_team: int = puck.carrier.get_team_id()
+			var carrier_pid: int = -1
+			var in_poke_range: bool = false
+			var is_lift: bool = false
 			if carrier_team != _team_id and carrier_team != -1:
-				var carrier_pid: int = GameManager.puck_controller.get_carrier_peer_id() if GameManager.puck_controller != null else -1
+				carrier_pid = GameManager.puck_controller.get_carrier_peer_id() if GameManager.puck_controller != null else -1
 				if carrier_pid != -1:
 					if skater.blade_up:
-						# Our blade is lifted — attempt a stick lift: hook the raised
-						# blade under the carrier's shaft. Host re-validates with rewind.
+						# Lifted blade — hook under the carrier's shaft for a stick lift.
+						is_lift = true
 						var c_hand: Vector3 = puck.carrier.upper_body_to_global(puck.carrier.get_top_hand_position())
 						var c_blade: Vector3 = puck.carrier.get_blade_contact_global()
-						if PuckInteractionRules.check_blade_under_stick(
+						in_poke_range = PuckInteractionRules.check_blade_under_stick(
 								blade_pos_for_claim, c_hand, c_blade,
-								PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN):
-							_claim_cooldown = _CLAIM_COOLDOWN_S
-							NetworkManager.send_stick_lift_claim(
-								NetworkManager.estimated_host_time(),
-								NetworkManager.get_target_interpolation_delay() * 1000.0,
-								carrier_pid)
+								PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN)
 					else:
-						var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
-						if dist <= PuckController.POKE_RADIUS:
-							_claim_cooldown = _CLAIM_COOLDOWN_S
-							NetworkManager.send_poke_claim(
-								NetworkManager.estimated_host_time(),
-								NetworkManager.get_target_interpolation_delay() * 1000.0,
-								carrier_pid)
+						in_poke_range = puck.global_position.distance_to(blade_pos_for_claim) <= PuckController.POKE_RADIUS
+			var rising_poke_edge: bool = in_poke_range and not _was_in_poke_range
+			if in_poke_range and _poke_claim_floor <= 0.0 and (rising_poke_edge or _poke_cooldown <= 0.0):
+				_poke_claim_floor = _POKE_CLAIM_FLOOR_S
+				_poke_cooldown = _CLAIM_COOLDOWN_S
+				if is_lift:
+					NetworkManager.send_stick_lift_claim(
+						NetworkManager.estimated_host_time(),
+						NetworkManager.get_target_interpolation_delay() * 1000.0,
+						carrier_pid)
+				else:
+					NetworkManager.send_poke_claim(
+						NetworkManager.estimated_host_time(),
+						NetworkManager.get_target_interpolation_delay() * 1000.0,
+						carrier_pid)
+			_was_in_poke_range = in_poke_range
+		else:
+			# We carry the puck — reset both edges so a future loose / contest
+			# contact registers as a clean rising edge.
+			_was_in_pickup_range = false
+			_was_in_poke_range = false
 
 func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_reconcile_blade: Vector3 = skater.get_blade_contact_global()
@@ -502,10 +522,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 func on_puck_picked_up_network() -> void:
 	super.on_puck_picked_up_network()
 	_claim_cooldown = 0.0
-	# Reset pickup edge state so a drop-then-regrab re-claims on the next contact
-	# instead of waiting out the throttle.
+	_poke_cooldown = 0.0
+	# Reset claim edge state so a drop-then-regrab (or an immediate poke after
+	# losing it) re-claims on the next contact instead of waiting out the throttle.
 	_was_in_pickup_range = false
 	_pickup_claim_floor = 0.0
+	_was_in_poke_range = false
+	_poke_claim_floor = 0.0
 
 
 func _update_one_timer_indicator() -> void:
