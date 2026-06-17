@@ -144,6 +144,10 @@ func _build_totals_tab() -> Control:
 
 func _refresh_totals() -> void:
 	_clear_totals_content()
+	if SteamManager.steam_id == 0:
+		_totals_status.text = "Sign in to Steam to view career stats."
+		_totals_status.visible = true
+		return
 	_totals_status.text = "Loading..."
 	_totals_status.visible = true
 	_reporter.fetch_totals(_on_totals_received)
@@ -228,9 +232,13 @@ func _build_recent_games_tab() -> Control:
 
 func _refresh_recent_games() -> void:
 	_clear_recent_content()
+	if SteamManager.steam_id == 0:
+		_recent_status.text = "Sign in to Steam to view recent games."
+		_recent_status.visible = true
+		return
 	_recent_status.text = "Loading..."
 	_recent_status.visible = true
-	_reporter.fetch_recent_games(PlayerPrefs.player_uuid, 20, _on_recent_received)
+	_reporter.fetch_recent_games(SteamManager.steam_id, 20, _on_recent_received)
 
 
 func _on_recent_received(games: Array) -> void:
