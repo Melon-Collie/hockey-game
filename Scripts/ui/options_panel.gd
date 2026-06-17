@@ -8,6 +8,7 @@ var _res_label: Label = null   # dimmed in fullscreen modes (resolution disabled
 var _window_mode_btn: OptionButton = null
 var _monitor_btn: OptionButton = null
 var _mute_check: CheckButton = null
+var _mute_unfocused_check: CheckButton = null
 var _volume_slider: HSlider = null
 var _sfx_slider: HSlider = null
 var _ui_slider: HSlider = null
@@ -153,6 +154,7 @@ func _snapshot() -> Dictionary:
 		"ui_volume": PlayerPrefs.ui_volume,
 		"crowd_volume": PlayerPrefs.crowd_volume,
 		"master_muted": PlayerPrefs.master_muted,
+		"mute_when_unfocused": PlayerPrefs.mute_when_unfocused,
 		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
 		"confine_mouse": PlayerPrefs.confine_mouse,
 		"cursor_style": PlayerPrefs.cursor_style,
@@ -194,6 +196,7 @@ func _read_controls() -> Dictionary:
 		"ui_volume": _ui_slider.value,
 		"crowd_volume": _crowd_slider.value,
 		"master_muted": _mute_check.button_pressed,
+		"mute_when_unfocused": _mute_unfocused_check.button_pressed,
 		"mouse_sensitivity": _sens_slider.value,
 		"confine_mouse": _confine_mouse_check.button_pressed,
 		"cursor_style": _cursor_style_btn.selected,
@@ -459,6 +462,12 @@ func _build_audio_tab() -> Control:
 	SoundManager.wire_button(_mute_check)
 	_mute_check.toggled.connect(_on_mute_toggled)
 	box.add_child(_field_row("Mute All", _mute_check))
+
+	_mute_unfocused_check = CheckButton.new()
+	_mute_unfocused_check.set_pressed_no_signal(PlayerPrefs.mute_when_unfocused)
+	SoundManager.wire_button(_mute_unfocused_check)
+	_mute_unfocused_check.toggled.connect(_on_mute_unfocused_toggled)
+	box.add_child(_field_row("Mute When Unfocused", _mute_unfocused_check))
 
 	return box
 
@@ -818,6 +827,9 @@ func _on_volume_changed(_value: float) -> void:
 func _on_mute_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
+func _on_mute_unfocused_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
 func _on_vsync_selected(_idx: int) -> void:
 	_update_apply_state()
 
@@ -1113,6 +1125,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.ui_volume = c.ui_volume
 	PlayerPrefs.crowd_volume = c.crowd_volume
 	PlayerPrefs.master_muted = c.master_muted
+	PlayerPrefs.mute_when_unfocused = c.mute_when_unfocused
 	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
 	PlayerPrefs.confine_mouse = c.confine_mouse
 	PlayerPrefs.cursor_style = c.cursor_style
@@ -1206,6 +1219,7 @@ func _defaults() -> Dictionary:
 		"ui_volume": 1.0,
 		"crowd_volume": 1.0,
 		"master_muted": false,
+		"mute_when_unfocused": true,
 		"mouse_sensitivity": 1.0,
 		"confine_mouse": true,
 		"cursor_style": PlayerPrefs.CURSOR_STYLE_DOT,
@@ -1259,6 +1273,8 @@ func _apply_values_to_controls(v: Dictionary) -> void:
 	_ui_slider.value = v.ui_volume
 	_crowd_slider.value = v.crowd_volume
 	_mute_check.set_pressed_no_signal(v.master_muted)
+	if _mute_unfocused_check != null:
+		_mute_unfocused_check.set_pressed_no_signal(v.mute_when_unfocused)
 	_sens_slider.value = v.mouse_sensitivity
 	if _confine_mouse_check != null:
 		_confine_mouse_check.set_pressed_no_signal(v.confine_mouse)

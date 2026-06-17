@@ -1,5 +1,28 @@
 extends Node
 
+# Mute-on-unfocus: silence the Master bus while the OS focus is on another
+# window, then restore the player's intended mute state on return. Gated by
+# PlayerPrefs.mute_when_unfocused (default on). Mirrors network_manager's use
+# of the WM window-focus notifications.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		_apply_focus_mute(true)
+	elif what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		_apply_focus_mute(false)
+
+
+func _apply_focus_mute(unfocused: bool) -> void:
+	var master: int = AudioServer.get_bus_index("Master")
+	if master == -1:
+		return
+	if unfocused:
+		if PlayerPrefs.mute_when_unfocused:
+			AudioServer.set_bus_mute(master, true)
+	else:
+		# On focus return, restore whatever the player's Mute All setting was.
+		AudioServer.set_bus_mute(master, PlayerPrefs.master_muted)
+
+
 enum Sound {
 	UI_HOVER,
 	UI_CLICK,

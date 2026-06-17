@@ -159,6 +159,10 @@ var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
 var crowd_volume: float = 1.0
 var master_muted: bool = false
+# Silence the game while another window has OS focus (alt-tabbed away). On by
+# default; streamers / second-monitor players can turn it off. SoundManager
+# mutes the Master bus on focus-out and restores master_muted on focus-in.
+var mute_when_unfocused: bool = true
 var window_mode: int = WINDOW_MODE_BORDERLESS
 var resolution: Vector2i = RESOLUTION_DEFAULT
 var display_monitor: int = -1  # -1 = follow the window (automatic); else target screen index
@@ -328,6 +332,7 @@ func save() -> void:
 	cfg.set_value("audio", "ui_volume", ui_volume)
 	cfg.set_value("audio", "crowd_volume", crowd_volume)
 	cfg.set_value("audio", "master_muted", master_muted)
+	cfg.set_value("audio", "mute_when_unfocused", mute_when_unfocused)
 	cfg.set_value("video", "window_mode", window_mode)
 	cfg.set_value("video", "resolution", resolution)
 	cfg.set_value("video", "display_monitor", display_monitor)
@@ -684,6 +689,7 @@ func _load() -> void:
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
 		crowd_volume = clampf(cfg.get_value("audio", "crowd_volume", 1.0), 0.0, 1.0)
 		master_muted = cfg.get_value("audio", "master_muted", false)
+		mute_when_unfocused = cfg.get_value("audio", "mute_when_unfocused", true)
 		window_mode = clampi(int(cfg.get_value("video", "window_mode", WINDOW_MODE_BORDERLESS)), 0, WINDOW_MODE_LABELS.size() - 1)
 		var raw_resolution: Variant = cfg.get_value("video", "resolution", RESOLUTION_DEFAULT)
 		resolution = raw_resolution if raw_resolution is Vector2i else RESOLUTION_DEFAULT
