@@ -607,7 +607,7 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	# the replay's virtual-clock advance this frame (slow-mo-scaled, 0 on a paused
 	# scrub) so the stride cadence tracks the visible motion rather than wall time.
 	_skating.apply(delta)
-	
+
 signal puck_release_requested(direction: Vector3, power: float, is_slapper: bool)
 # Fired when the player releases slap while the puck is nearby but not yet
 # carried — the leniency one-timer. GameManager acquires + releases the puck;

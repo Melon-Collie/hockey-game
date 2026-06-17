@@ -1,0 +1,29 @@
+# gdlint config — tuned to catch real problems (dead code, mistakes, whitespace
+# hygiene), NOT style/architecture opinions that don't match this codebase.
+# Godot's own editor analyzer still owns engine-specific warnings it can't see
+# (SHADOWED_VARIABLE_BASE_CLASS, INT_AS_ENUM, etc.); this is the headless,
+# cross-environment subset. Run via .claude/hooks/run-lint.sh.
+disable:
+  # Style / formatting opinions — this project uses long lines and its own layout.
+  - max-line-length
+  - class-definitions-order
+  - no-else-return
+  - no-elif-return
+  # Complexity metrics — god-class extraction is tracked deliberately in ARCHITECTURE.md.
+  - max-returns
+  - max-file-lines
+  - max-public-methods
+  - max-line-length
+  - function-arguments-number
+  # Naming conventions — the project has its own (SCREAMING consts, _private, etc.).
+  - function-variable-name
+  - class-variable-name
+  - constant-name
+  - load-constant-name
+  # Tab-indent + space-alignment of continuations (comments, math, bit-flags) is
+  # a deliberate, stable style here — not the churn culprit (that was space-
+  # *indented* lines, fixed separately). Flagging it would force invasive de-aligns.
+  - mixed-tabs-and-spaces
+# Everything else stays ON — notably: unused-argument, unused-variable,
+# duplicated-load, expression-not-assigned, comparison-with-itself,
+# trailing-whitespace.

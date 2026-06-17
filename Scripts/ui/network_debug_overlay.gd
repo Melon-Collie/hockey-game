@@ -241,7 +241,7 @@ func _watch(h: Health, label: String, value: String, hint: String) -> bool:
 	_metric(h, label, value, hint)
 	return true
 
-func _sim_line(t: NetworkTelemetry) -> void:
+func _sim_line(_t: NetworkTelemetry) -> void:
 	if NetworkSimManager.enabled:
 		var rtt_est: float = NetworkSimManager.delay_ms * 2.0
 		var jitter_max: float = NetworkSimManager.jitter_ms * 2.0

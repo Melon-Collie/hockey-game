@@ -521,7 +521,7 @@ func _on_peer_disconnected(id: int) -> void:
 func _on_connected_to_server() -> void:
 	_connect_timer = -1.0
 	_session_start_ms = Time.get_ticks_msec()
-	_clock_sync = load("res://Scripts/networking/clock_sync.gd").new()
+	_clock_sync = _ClockSyncScript.new()
 	_clock_sync.init_session(_session_start_ms)
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
 	_peer_attributes[1] = local_attrs
@@ -1237,7 +1237,7 @@ func sync_existing_players(player_data: Array) -> void:
 		pending_join_players = player_data
 		return
 	existing_players_synced.emit(player_data)
-	
+
 func send_puck_picked_up(peer_id: int) -> void:
 	# AI bots have no ENet connection — rpc_id would fail. Bots are driven
 	# directly by the host's AIController, so no client-side notification

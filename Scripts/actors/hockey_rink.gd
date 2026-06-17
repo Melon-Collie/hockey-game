@@ -323,10 +323,10 @@ func _add_ice() -> void:
 		var px: float = img_w / 2.0 + dot.x * _px_per_meter
 		var py: float = img_h / 2.0 - dot.y * _px_per_meter
 		_draw_filled_circle(img, px, py, dot_r, red_line_color)
-	
+
 	# Create texture
 	var tex = ImageTexture.create_from_image(img)
-	
+
 	# Ice mesh
 	var mesh_instance = MeshInstance3D.new()
 	var plane = PlaneMesh.new()
@@ -394,7 +394,7 @@ func _add_ice() -> void:
 		0.5 + half_size / rink_width,
 		0.5 + half_size / rink_length
 	))
-	
+
 	# Ice collision — needs its own StaticBody3D so physics_material_override applies
 	var ice_body := StaticBody3D.new()
 	var phys_mat := PhysicsMaterial.new()
