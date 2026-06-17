@@ -2231,6 +2231,11 @@ func _on_game_over() -> void:
 	# (start_tutorial calls start_offline).
 	if NetworkManager.is_offline_mode:
 		return
+	# Privacy opt-out: with stat sharing off, no career row is uploaded. The
+	# Career screen and replay browser both read from this backend data, so they
+	# stay empty by the player's choice (see PlayerPrefs.share_gameplay_stats).
+	if not PlayerPrefs.share_gameplay_stats:
+		return
 	var local: PlayerRecord = _registry.get_local()
 	if local == null or local.team == null:
 		return

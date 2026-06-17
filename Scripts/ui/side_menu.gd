@@ -30,6 +30,7 @@ var _player_popup: PlayerSettingsPopup = null
 var _online_popup: OnlinePopup = null
 var _career_screen: CareerStatsScreen = null
 var _options_container: Control = null
+var _career_row: Control = null
 var _exit_container: Control = null
 var _tutorial_container: Control = null
 var _tutorial_rows_vbox: VBoxContainer = null
@@ -71,8 +72,23 @@ func _unhandled_input(event: InputEvent) -> void:
 func open() -> void:
 	if visible:
 		return
+	_refresh_career_row()
 	visible = true
 	opened.emit()
+
+
+# Greys the Career row and gives it an explanatory tooltip when stat sharing is
+# off (Career + replays have no data to show); restores it otherwise. Called on
+# open and whenever the Options overlay closes (where the toggle is flipped).
+func _refresh_career_row() -> void:
+	if _career_row == null:
+		return
+	var enabled: bool = PlayerPrefs.share_gameplay_stats
+	_career_row.modulate.a = 1.0 if enabled else 0.4
+	_career_row.mouse_default_cursor_shape = \
+		Control.CURSOR_POINTING_HAND if enabled else Control.CURSOR_FORBIDDEN
+	_career_row.tooltip_text = "" if enabled else \
+		"Career & replays need stat sharing.\nEnable “Share Gameplay Stats” in Options → Game."
 
 
 func close() -> void:
@@ -136,9 +152,13 @@ func _build_panel() -> void:
 	_add_row(vbox, "Play Online", false, _on_play_online_pressed)
 	_add_row(vbox, "Play vs Bots", false, _on_play_vs_bots_pressed)
 	_add_row(vbox, "Tutorial", false, _on_tutorial_pressed)
-	_add_row(vbox, "Career", false, _on_career_pressed)
+	# Career reads only from uploaded stats, so it's disabled when the player has
+	# opted out of stat sharing (the disabled_check is evaluated live on hover/click).
+	_career_row = _add_row(vbox, "Career", false, _on_career_pressed,
+		func() -> bool: return not PlayerPrefs.share_gameplay_stats)
 	_add_row(vbox, "Options", false, _on_options_pressed)
 	_add_row(vbox, "Exit Game", true, _on_exit_pressed)
+	_refresh_career_row()
 
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -239,7 +259,8 @@ func _build_player_card(parent: VBoxContainer) -> void:
 # small text shift on hover. `danger` makes the row use the warning color
 # (Exit Game). The row is built as a Control + child Label so we can paint
 # the accent bar via a ColorRect anchored to the left edge.
-func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: Callable) -> void:
+func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: Callable,
+		disabled_check: Callable = Callable()) -> Control:
 	var row := Control.new()
 	row.custom_minimum_size = Vector2(0, 42)
 	row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -273,6 +294,10 @@ func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: 
 		label.modulate.a = 0.85
 
 	row.mouse_entered.connect(func() -> void:
+		# Disabled rows give no hover feedback — the dimmed look + tooltip is the
+		# whole affordance.
+		if disabled_check.is_valid() and disabled_check.call():
+			return
 		label.add_theme_color_override("font_color", hover_color)
 		label.offset_left = 18.0
 		accent.modulate.a = 1.0
@@ -287,8 +312,11 @@ func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: 
 			label.modulate.a = 0.85)
 	row.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			if disabled_check.is_valid() and disabled_check.call():
+				return
 			SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
 			handler.call())
+	return row
 
 
 func _build_footer(parent: VBoxContainer) -> void:
@@ -408,7 +436,9 @@ func _build_options_overlay() -> void:
 	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 
 	var options := OptionsPanel.new()
-	options.close_requested.connect(func() -> void: _options_container.visible = false)
+	options.close_requested.connect(func() -> void:
+		_options_container.visible = false
+		_refresh_career_row())  # stat-sharing may have just been toggled
 	panel.add_child(options)
 
 	_options_container = Control.new()
@@ -625,6 +655,8 @@ func _launch_tutorial(id: String) -> void:
 
 
 func _on_career_pressed() -> void:
+	if not PlayerPrefs.share_gameplay_stats:
+		return
 	_career_screen.open()
 
 
