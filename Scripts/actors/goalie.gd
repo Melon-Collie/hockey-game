@@ -27,9 +27,9 @@ extends Node3D
 
 const _ARM_UPPER_LEN: float = 0.38
 const _ARM_FOREARM_LEN: float = 0.38
-const _ARM_RADIUS: float = 0.07
-const _SHOULDER_SPHERE_RADIUS: float = 0.08
-const _ELBOW_SPHERE_RADIUS: float = 0.06
+const _ARM_RADIUS: float = 0.16
+const _SHOULDER_SPHERE_RADIUS: float = 0.10
+const _ELBOW_SPHERE_RADIUS: float = 0.08
 
 var _uniform_coordinator: GoalieUniformCoordinator
 var _left_hip_connector: MeshInstance3D = null
@@ -354,10 +354,10 @@ func _update_connectors() -> void:
 	# Glove arm: shoulder on body's left side (goalie's catch hand), elbow bends
 	# outward and toward the shooter (-Z).
 	_update_arm_ik(_glove_upper_arm, _glove_forearm,
-		glove_shoulder, _glove.position, Vector3(-1.0, 0.0, -0.5), _glove_elbow_sphere)
+		glove_shoulder, _glove.position, Vector3(-0.3, -1.0, 0.0), _glove_elbow_sphere)
 	# Blocker arm: shoulder on body's right side.
 	_update_arm_ik(_blocker_upper_arm, _blocker_forearm,
-		blocker_shoulder, _block_arm.position, Vector3(1.0, 0.0, -0.5), _blocker_elbow_sphere)
+		blocker_shoulder, _block_arm.position, Vector3(0.3, -1.0, 0.0), _blocker_elbow_sphere)
 
 
 func _point_connector(mesh: MeshInstance3D, from_pos: Vector3, to_pos: Vector3) -> void:
