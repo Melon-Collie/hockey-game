@@ -165,8 +165,13 @@ func _render_host(t: NetworkTelemetry) -> void:
 	_metric(_worse(_band(t.host_physics_tick_p95_ms, 6.0, 10.0), _band(t.host_physics_tick_max_ms, 16.0, 33.0)),
 		"Physics tick", "p95 %.1f / p99 %.1f / max %.1f ms" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms],
 		"gap between 240Hz ticks; steady ~4.2ms, a big max = a stall everyone feels")
-	_metric(_band(t.broadcast_interval_p95_ms, 11.0, 16.0), "Broadcast gap", "p95 %.1f ms" % t.broadcast_interval_p95_ms,
-		"gap between snapshots sent; should track ~8.3ms (120Hz)")
+	# The host throttles the broadcast rate to 5Hz during dead-puck phases
+	# (faceoff prep, goal, period breaks), so judge the gap against the live
+	# target interval rather than a fixed 120Hz, or every stoppage reads red.
+	var bcast_target_ms := NetworkManager.state_delta * 1000.0
+	_metric(_band(t.broadcast_interval_p95_ms, bcast_target_ms * 1.4, bcast_target_ms * 2.0),
+		"Broadcast gap", "p95 %.1f ms (target ~%.0f)" % [t.broadcast_interval_p95_ms, bcast_target_ms],
+		"gap between snapshots; tracks the current send rate, which drops to 5Hz during stoppages")
 
 	_info("Bandwidth", "%.1f KB/s up" % (t.bytes_sent_per_sec / 1024.0),
 		"total game data sent to all clients (payload only, excludes Steam framing)")
