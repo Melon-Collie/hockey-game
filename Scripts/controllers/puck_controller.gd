@@ -12,7 +12,7 @@ const STICK_LIFT_RADIUS: float = 0.45
 const STICK_LIFT_UNDER_MARGIN: float = 0.0
 # How long a forced stick-lift keeps the victim's blade popped up after the hook
 # lands — enough to read as a lift and to deny an instant re-grab on top of the
-# reattach cooldown apply_poke_check already sets.
+# reattach cooldown apply_stick_lift_strip already sets.
 const STICK_LIFT_FORCED_LIFT_S: float = 0.4
 
 @export var interpolation_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
@@ -53,7 +53,7 @@ var is_extrapolating: bool = false
 # Scoped true only while a stick-lift strip is being applied, so the synchronous
 # puck_stripped_from handlers (sound + victim notify) can tell a stick lift apart
 # from a poke/body-check strip and pick the right cue. Read via
-# is_processing_stick_lift(); always reset immediately after apply_poke_check.
+# is_processing_stick_lift(); always reset immediately after apply_stick_lift_strip.
 var _processing_stick_lift: bool = false
 
 var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
@@ -188,7 +188,7 @@ func apply_lag_comp_stick_lift(checker: Skater, expected_ex_carrier: Skater) -> 
 		return
 	puck.carrier.force_blade_lift(STICK_LIFT_FORCED_LIFT_S)
 	_processing_stick_lift = true
-	puck.apply_poke_check(checker)
+	puck.apply_stick_lift_strip(checker)
 	_processing_stick_lift = false
 
 
@@ -246,7 +246,7 @@ func _check_interactions() -> void:
 							STICK_LIFT_RADIUS, STICK_LIFT_UNDER_MARGIN):
 						carrier_skater.force_blade_lift(STICK_LIFT_FORCED_LIFT_S)
 						_processing_stick_lift = true
-						puck.apply_poke_check(skater)
+						puck.apply_stick_lift_strip(skater)
 						_processing_stick_lift = false
 						break
 					continue
