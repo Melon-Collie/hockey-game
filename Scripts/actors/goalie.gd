@@ -33,9 +33,6 @@ const _ARM_RADIUS: float = 0.16
 const _SHOULDER_SPHERE_RADIUS: float = 0.10
 const _ELBOW_SPHERE_RADIUS: float = 0.08
 const _HAND_SPHERE_RADIUS: float = 0.09
-# Pull the blocker IK hand target back toward the shoulder so the arm
-# terminates at the back edge of the blocker pad rather than its centre.
-const _BLOCKER_WRIST_RETREAT: float = 0.07
 
 var _uniform_coordinator: GoalieUniformCoordinator
 # Dynamic visual nodes — public for GoalieUniformCoordinator access.
@@ -363,7 +360,7 @@ func _update_connectors() -> void:
 	var blocker_dist: float = blocker_to_shoulder.length()
 	var blocker_hand_target: Vector3 = _block_arm.position
 	if blocker_dist > 0.001:
-		blocker_hand_target += (blocker_to_shoulder / blocker_dist) * _BLOCKER_WRIST_RETREAT
+		blocker_hand_target += (blocker_to_shoulder / blocker_dist) * _HAND_SPHERE_RADIUS
 	_update_arm_ik(blocker_upper_arm, blocker_forearm,
 		blocker_shoulder, blocker_hand_target, Vector3(0.3, -1.0, 0.0),
 		blocker_elbow_sphere, blocker_hand_sphere)
