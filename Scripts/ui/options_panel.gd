@@ -82,6 +82,7 @@ const _VALUE_COL_WIDTH := 56
 # supported window with room for the popup chrome (title + tab bar + buttons).
 const _TAB_VIEWPORT_SIZE := Vector2(500, 500)
 const _SCROLLBAR_GUTTER := 12   # reserved on every tab so columns line up scroll-or-not
+const _INPUT_TAB_IDX := 3       # index into the tab list (Game, Video, Audio, Input)
 const _REBINDABLE_ACTIONS: Array = [
 	{"action": "move_up",        "label": "Move Up"},
 	{"action": "move_down",      "label": "Move Down"},
@@ -278,7 +279,8 @@ func _build_tab_switcher() -> Control:
 	return wrapper
 
 func _activate_tab(idx: int) -> void:
-	if idx != 2 and not _listening_action.is_empty():
+	# Leaving the Input tab mid-rebind cancels the pending key-listen.
+	if idx != _INPUT_TAB_IDX and not _listening_action.is_empty():
 		_listening_action = ""
 		_update_binding_btns()
 	for i: int in _tab_contents.size():
