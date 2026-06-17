@@ -46,11 +46,13 @@ Wire format: Skater 37B · Puck 13B · Goalie 35B (12 B root + 23 B pose). Quant
 |------|-----------|----------------|
 | `SOLO (offline)` | `is_offline_mode` | local frame health only |
 | `HOST` | `is_host && !is_offline_mode` | per-peer pings, client input queue, host frame health, upload bandwidth |
-| `CLIENT` | otherwise | connection (RTT/loss/jitter), prediction/corrections, smoothing buffers, download bandwidth, watch metrics |
+| `CLIENT` | otherwise | connection (RTT/loss/jitter/delay-spread), prediction/corrections, smoothing buffers, download bandwidth, watch metrics |
 
 **Watch metrics** (client-only: prediction drift, stick jumps, puck hard-snaps, out-of-order drops) stay collapsed into a single `✓ Internals nominal` line and surface individually only when they leave the healthy band — they're the latent-bug tripwire.
 
 **Expected vs. unexpected:** RTT/jitter red while everything else is green is just distance (expected). RTT green but Corrections or a watch metric red means the network is fine and the *simulation* is diverging (a real bug). Thresholds live in the overlay's health helpers and mirror the "Expected ranges" comments in `network_telemetry.gd` — keep the two in sync if either moves.
+
+**`Jitter` vs `Delay spread` (the clumping tell):** `Jitter` is the p95 of raw packet *arrival-gap* deviation (IPDV) — it rises both for genuine path jitter and for relay **clumping** (several snapshots landing together, then a gap). `Delay spread` measures each packet's delay against the *synced host clock* (PDV — `estimated_host_time() − host_capture_time`, a de-clumped Jacobson EWMA of `mean + 4·dev` over a slow-rising floor), which clumping barely moves because each packet is timed against its own capture stamp. So: **`Jitter` high but `Delay spread` low ⇒ the link is clumping** (benign — packets just arrive early and fill the buffer), **both high ⇒ the path is genuinely jittery** and needs buffer depth. Read alongside `Packet spacing` (the arrival-gap histogram: bimodal low+high = clumping, a spread around ~8 ms = path jitter) for the full picture. This is the measure-first diagnostic for sizing the interpolation buffer — the `Delay spread` floor also reads out the de-clumped one-way path delay (≈ RTT/2).
 
 ### Collision Layers
 

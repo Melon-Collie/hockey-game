@@ -258,6 +258,13 @@ var _peer_loss_timer: float = 0.0
 # Jitter measurement (client side)
 var _jitter_samples: Array[float] = []
 var _last_ws_arrival_time: float = -1.0
+# Packet delay (PDV) measurement — see _record_packet_delay. Each packet's delay
+# vs the synced host clock, NOT the raw inter-arrival gap, so relay clumping
+# barely moves it. Diagnostic only today (F3 overlay); a later change can feed
+# this de-clumped estimate into the interp-delay target.
+var _pdv_floor: float = -1.0
+var _pdv_mean: float = 0.0
+var _pdv_dev: float = 0.0
 # get_target_interpolation_delay() per-physics-frame cache (see that function).
 var _target_interp_cached: float = -1.0
 var _target_interp_frame: int = -1
@@ -575,6 +582,9 @@ func prepare_for_new_game() -> void:
 	packet_loss_pct = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
+	_pdv_floor = -1.0
+	_pdv_mean = 0.0
+	_pdv_dev = 0.0
 	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
 
 func reset() -> void:
@@ -638,6 +648,9 @@ func reset() -> void:
 	_peer_loss_timer = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
+	_pdv_floor = -1.0
+	_pdv_mean = 0.0
+	_pdv_dev = 0.0
 	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
 	NetworkSimManager.clear_pending()
 
@@ -958,6 +971,10 @@ func receive_world_state(data: PackedByteArray) -> void:
 				# from smooth path/relay jitter (spread around the 8.3ms interval).
 				NetworkTelemetry.record_ws_arrival_gap(gap * 1000.0)
 			_last_ws_arrival_time = now
+			# PDV delay vs the synced host clock (header host_capture_time at bytes
+			# 2..5, u32 0.1ms units). Clumping barely moves this, unlike the gap above.
+			if is_clock_ready() and s.size() >= 6:
+				_record_packet_delay(estimated_host_time() - float(s.decode_u32(2)) / Constants.TIME_WIRE_SCALE)
 			if s.size() >= 2:
 				_on_ws_sequence_received(s.decode_u16(0))
 			# Advance the shared interpolation delay once per packet, before the
@@ -1664,7 +1681,32 @@ func get_jitter_p95() -> float:
 		return 0.0
 	var sorted: Array = _jitter_samples.duplicate()
 	sorted.sort()
-	return sorted[mini(int(sorted.size() * 0.95), sorted.size() - 1)]
+	return sorted[NetworkTelemetry.percentile_index(sorted.size(), 0.95)]
+
+# Records one world-state packet's delay vs the synced host clock. floor is the
+# de-clumped path delay (drops instantly to a better delay, rises slowly toward
+# worse); mean/dev are Jacobson EWMAs of the excess over floor. Because each
+# packet is timed against its own capture stamp, a burst of packets landing
+# together does NOT inflate the spread — that's what separates clumping from
+# genuine path jitter.
+func _record_packet_delay(d: float) -> void:
+	const GAIN: float = 0.125       # Jacobson 1/8: ~8-sample memory, spike decays geometrically
+	const FLOOR_RISE: float = 0.01
+	if _pdv_floor < 0.0 or d < _pdv_floor:
+		_pdv_floor = d
+	else:
+		_pdv_floor += (d - _pdv_floor) * FLOOR_RISE
+	var excess: float = maxf(0.0, d - _pdv_floor)
+	_pdv_mean += (excess - _pdv_mean) * GAIN
+	_pdv_dev += (absf(excess - _pdv_mean) - _pdv_dev) * GAIN
+
+# PDV jitter estimate (ms): EWMA mean excess + 4×mean-deviation (the
+# Jacobson/RFC-6298 safety multiple) over the de-clumped delay.
+func get_packet_delay_spread_ms() -> float:
+	return (_pdv_mean + 4.0 * _pdv_dev) * 1000.0
+
+func get_packet_delay_floor_ms() -> float:
+	return maxf(_pdv_floor, 0.0) * 1000.0
 
 func get_target_interpolation_delay() -> float:
 	# Cached once per physics frame: get_jitter_p95() duplicates + sorts the sample

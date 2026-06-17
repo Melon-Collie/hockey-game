@@ -113,7 +113,10 @@ func _render_client(t: NetworkTelemetry) -> void:
 	_metric(_band(t.packet_loss_pct, 1.0, 5.0), "Packet loss", "%.1f%%" % t.packet_loss_pct,
 		"dropped packets; <1% great, >5% causes rubber-banding")
 	_metric(_band(t.jitter_p95_ms, 8.0, 20.0), "Jitter", "%.1f ms" % t.jitter_p95_ms,
-		"how uneven packet arrival is; <8 smooth, >20 choppy")
+		"unevenness of packet ARRIVAL GAPS; <8 smooth, >20 choppy — but also rises on clumping")
+	var pdv := NetworkManager.get_packet_delay_spread_ms()
+	_metric(_band(pdv, 8.0, 20.0), "Delay spread", "%.1f ms (floor %.0f)" % [pdv, NetworkManager.get_packet_delay_floor_ms()],
+		"jitter measured vs the host CLOCK, ignores clumping; if Jitter is high but this is low, packets are clumping, not the path being jittery")
 	_info("Updates in", "%.0f/s" % t.world_state_hz, "world snapshots received; matches host send rate")
 	_sim_line(t)
 
