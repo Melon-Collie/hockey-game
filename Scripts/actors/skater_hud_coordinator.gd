@@ -18,6 +18,26 @@ const _NAME_RADIUS: float   = RING_OUTER_R + 0.10
 const _CHEVRON_RADIUS: float = RING_OUTER_R + 0.10
 const _CHEVRON_OFFSET_DEG: float = 60.0
 
+# Overhead self-beacon. A billboarded downward-arrow that floats above ONLY the
+# local player's own skater so "which one is me" is answered pre-attentively
+# (shape + motion + high-contrast self color) rather than by color-matching a
+# flat on-ice ring. Self-only: driven from the ring-relation resolver
+# (RingRelation.SELF). Bobs vertically and pulses in scale to draw the eye;
+# hidden in replay/spectator, while ghosted, and for every non-local skater.
+# HOVER_OFFSET is metres above the skater root, which sits at body-centre
+# height (~1.0 m), so the apex clears the head with room to spare.
+const _BEACON_HOVER_OFFSET: float    = 1.05
+const _BEACON_HALF_W: float          = 0.17
+const _BEACON_HALF_H: float          = 0.15
+const _BEACON_OUTLINE_SCALE: float   = 1.4
+const _BEACON_OPACITY: float         = 0.95
+const _BEACON_OUTLINE_COLOR: Color   = Color(0.05, 0.07, 0.10, 0.9)
+const _BEACON_BOB_HZ: float          = 1.1
+const _BEACON_BOB_AMPLITUDE: float   = 0.045
+const _BEACON_PULSE_HZ: float        = 1.6
+const _BEACON_PULSE_MIN_SCALE: float = 0.92
+const _BEACON_PULSE_MAX_SCALE: float = 1.10
+
 # Slapper one-timer reticle. All geometry is built in unit (1 m) space;
 # _slapper_indicator.scale = (radius, 1, radius) carries the zone radius.
 const _SLAPPER_RING_MIN_SCALE: float   = 0.15
@@ -74,6 +94,14 @@ var _charge_ring_mesh: MeshInstance3D
 var _charge_ring_mat: ShaderMaterial
 var _chevron_mesh: MeshInstance3D
 var _name_label: Label3D
+
+# Overhead self-beacon. `_self_beacon` is top_level (world transform rewritten
+# each tick, like the name label) and parents an outline + fill MeshInstance.
+# `_self_beacon_active` latches whether the resolver currently reports SELF;
+# actual visibility also gates on ghost/replay/spectator state.
+var _self_beacon: Node3D
+var _self_beacon_fill_mat: StandardMaterial3D
+var _self_beacon_active: bool = false
 
 var _slapper_indicator: Node3D
 var _slapper_indicator_mat: StandardMaterial3D
@@ -182,6 +210,33 @@ func setup(skater: Skater) -> void:
 	_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_skater.add_child(_name_label)
 
+	# Overhead self-beacon. Built once and hidden until the ring-relation
+	# resolver reports SELF. top_level so its world transform is rewritten each
+	# tick independent of the skater's body rotation (mirrors the name label).
+	# Outline (larger, dark) draws behind the bright fill via render_priority;
+	# both are no-depth-test so the marker stays readable through a scrum.
+	_self_beacon = Node3D.new()
+	_self_beacon.name = "SelfBeacon"
+	_self_beacon.top_level = true
+	_self_beacon.visible = false
+	_skater.add_child(_self_beacon)
+
+	var beacon_outline := MeshInstance3D.new()
+	beacon_outline.name = "Outline"
+	beacon_outline.mesh = _create_beacon_mesh(
+			_BEACON_HALF_W * _BEACON_OUTLINE_SCALE, _BEACON_HALF_H * _BEACON_OUTLINE_SCALE)
+	beacon_outline.material_override = _make_beacon_material(_BEACON_OUTLINE_COLOR, 0)
+	_self_beacon.add_child(beacon_outline)
+
+	_self_beacon_fill_mat = _make_beacon_material(
+			Color(MenuStyle.HUD_RING_SELF.r, MenuStyle.HUD_RING_SELF.g,
+					MenuStyle.HUD_RING_SELF.b, _BEACON_OPACITY), 1)
+	var beacon_fill := MeshInstance3D.new()
+	beacon_fill.name = "Fill"
+	beacon_fill.mesh = _create_beacon_mesh(_BEACON_HALF_W, _BEACON_HALF_H)
+	beacon_fill.material_override = _self_beacon_fill_mat
+	_self_beacon.add_child(beacon_fill)
+
 	# Slapper one-timer reticle. The parent _slapper_indicator carries the
 	# zone offset + radius scale. Arrow + ring share _slapper_arrow_root's
 	# rotation so the ring gap stays glued to the arrow tail.
@@ -227,6 +282,7 @@ func update(delta: float) -> void:
 			if _name_label != null: _name_label.visible = false
 			if _slapper_indicator != null: _slapper_indicator.visible = false
 			if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
+			if _self_beacon != null: _self_beacon.visible = false
 		return
 	if _hidden_for_replay:
 		_hidden_for_replay = false
@@ -237,6 +293,7 @@ func update(delta: float) -> void:
 		if _ring_mesh != null: _ring_mesh.visible = true
 		if _name_label != null: _name_label.visible = true
 		if _slapper_indicator != null: _slapper_indicator.visible = true
+		_update_beacon_visibility()
 
 	_refresh_height_anchors_if_skater_moved()
 	_refresh_screen_down_cache_if_camera_changed()
@@ -251,6 +308,20 @@ func update(delta: float) -> void:
 				_skater.global_position.x + _cached_screen_down.x * _NAME_RADIUS,
 				0.05,
 				_skater.global_position.z + _cached_screen_down.y * _NAME_RADIUS)
+
+	# Overhead self-beacon: float above the head with a gentle vertical bob and
+	# a scale pulse. Only the local player's own skater ever has this visible,
+	# so the per-tick trig runs for a single skater.
+	if _self_beacon != null and _self_beacon.visible:
+		var now: float = Time.get_ticks_msec() * 0.001
+		var bob: float = sin(now * TAU * _BEACON_BOB_HZ) * _BEACON_BOB_AMPLITUDE
+		_self_beacon.global_position = Vector3(
+				_skater.global_position.x,
+				_skater.global_position.y + _BEACON_HOVER_OFFSET + bob,
+				_skater.global_position.z)
+		var pulse_t: float = 0.5 + 0.5 * sin(now * TAU * _BEACON_PULSE_HZ)
+		var s: float = lerpf(_BEACON_PULSE_MIN_SCALE, _BEACON_PULSE_MAX_SCALE, pulse_t)
+		_self_beacon.scale = Vector3(s, s, s)
 
 	if _chevron_mesh != null:
 		var chevron_should_show: bool = _skater.is_elevated and not _skater.is_ghost
@@ -361,6 +432,27 @@ func _refresh_ring_color() -> void:
 	var mat: StandardMaterial3D = _ring_mesh.material_override as StandardMaterial3D
 	if mat != null:
 		mat.albedo_color = Color(col.r, col.g, col.b, MenuStyle.HUD_OPACITY)
+	_apply_self_beacon_relation(relation)
+
+
+# Show the overhead beacon only when this skater is the local player's own, and
+# keep its fill in sync with the (colorblind-aware) self color. Visibility still
+# gates on ghost / replay / spectator via _update_beacon_visibility.
+func _apply_self_beacon_relation(relation: int) -> void:
+	_self_beacon_active = (relation == RingRelation.SELF)
+	if _self_beacon_active and _self_beacon_fill_mat != null:
+		var col: Color = _ring_color_for_relation(RingRelation.SELF)
+		_self_beacon_fill_mat.albedo_color = Color(col.r, col.g, col.b, _BEACON_OPACITY)
+	_update_beacon_visibility()
+
+
+func _update_beacon_visibility() -> void:
+	if _self_beacon == null:
+		return
+	_self_beacon.visible = (_self_beacon_active
+			and not _hidden_for_replay
+			and not _force_world_hud_hidden
+			and _skater != null and not _skater.is_ghost)
 
 
 func _ring_color_for_relation(relation: int) -> Color:
@@ -386,6 +478,7 @@ func set_world_hud_hidden(hidden: bool) -> void:
 		if _name_label != null: _name_label.visible = false
 		if _slapper_indicator != null: _slapper_indicator.visible = false
 		if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
+		if _self_beacon != null: _self_beacon.visible = false
 
 
 func set_charge_ring_visible(visible: bool) -> void:
@@ -465,6 +558,9 @@ func apply_ghost(ghost: bool) -> void:
 			_slapper_ring_mesh.visible = false
 		if _slapper_reticle_node != null:
 			_slapper_reticle_node.visible = false
+	# set_ghost() writes _skater.is_ghost before calling here, so the helper
+	# reads the up-to-date ghost state.
+	_update_beacon_visibility()
 
 
 # ── Private: zone transform ───────────────────────────────────────────────────
@@ -742,6 +838,45 @@ func _append_quad(
 	for _n: int in 4:
 		normals.append(Vector3.UP)
 	indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+
+
+# Downward-pointing triangle in the local XY plane (billboard space): the apex
+# sits at the bottom and points down at the skater; the base spans the top.
+func _create_beacon_mesh(half_w: float, half_h: float) -> ArrayMesh:
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var indices := PackedInt32Array()
+	verts.append(Vector3(0.0, -half_h, 0.0))     # apex (points down)
+	verts.append(Vector3(-half_w, half_h, 0.0))  # top-left
+	verts.append(Vector3(half_w, half_h, 0.0))   # top-right
+	for _n: int in 3:
+		normals.append(Vector3.BACK)
+	indices.append_array([0, 1, 2])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+# Billboarded, unshaded, no-depth-test material for the self-beacon. The outline
+# (lower render_priority) draws behind the fill so the marker keeps a dark edge
+# against bright ice or a busy scrum. billboard_keep_scale preserves the
+# per-tick pulse scale written to the parent node.
+func _make_beacon_material(color: Color, render_priority: int) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
+	mat.no_depth_test = true
+	mat.render_priority = render_priority
+	mat.albedo_color = color
+	return mat
 
 
 func _make_hud_ice_material() -> StandardMaterial3D:
