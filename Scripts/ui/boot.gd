@@ -2,13 +2,15 @@ class_name Boot
 extends Control
 
 # Title card shown at app launch. Holds the user on the logo while Hockey.tscn
-# loads in a background thread, then on first key/mouse press bootstraps free
-# play and transitions to the rink. The user lands directly on the ice — there
-# is no main menu screen; Escape from free play opens the SideMenu instead.
+# loads in a background thread. A small menu — Play / Options / Exit — sits
+# under the logo: Play bootstraps free play (or the first-run tutorial) and
+# transitions to the rink, Options opens the settings overlay in place, Exit
+# quits. There is no separate main menu screen; Escape from free play opens
+# the SideMenu instead.
 
 const _HOCKEY_SCENE_PATH := "res://Scenes/Hockey.tscn"
 
-var _prompt_label: Label = null
+var _button_column: Control = null
 var _loading_label: Label = null
 var _settings_container: Control = null
 var _input_received: bool = false
@@ -17,14 +19,13 @@ var _transitioned: bool = false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	# Pass mouse events through to _unhandled_input so the title card can
-	# be dismissed by clicking, not just by keyboard. The default STOP
-	# filter on a root Control would otherwise swallow the click.
+	# The root is just a backdrop; let the menu buttons handle their own clicks
+	# rather than the default STOP filter swallowing them at the root.
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	TeamColorRegistry.ensure_loaded()
 	PlayerPrefs.apply_video()
 	# Kick off threaded load of the heavy rink scene immediately. By the time
-	# the user has reacted to the title card the load is almost always done.
+	# the user has read the menu the load is almost always done.
 	ResourceLoader.load_threaded_request(_HOCKEY_SCENE_PATH)
 	_build_ui()
 
@@ -82,16 +83,28 @@ func _build_ui() -> void:
 	logo.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	logo_slot.add_child(logo)
 
-	_prompt_label = Label.new()
-	_prompt_label.text = "Press any key"
-	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_prompt_label.add_theme_font_size_override("font_size", 22)
-	_prompt_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	_prompt_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(_prompt_label)
+	# Play / Options / Exit. Play enters the game; Options opens the settings
+	# overlay (PlayerPrefs is read at build time and only written on Apply, so
+	# it's safe before the rink scene exists); Exit quits.
+	_button_column = VBoxContainer.new()
+	(_button_column as VBoxContainer).alignment = BoxContainer.ALIGNMENT_CENTER
+	_button_column.add_theme_constant_override("separation", 12)
+	vbox.add_child(_button_column)
 
-	# Hidden until the user presses something before the threaded load finishes.
-	# Replaces the prompt so the moment doesn't feel frozen.
+	var play_btn := MenuStyle.popup_button("Play")
+	play_btn.pressed.connect(_on_play_pressed)
+	_button_column.add_child(play_btn)
+
+	var options_btn := MenuStyle.popup_button("Options")
+	options_btn.pressed.connect(_on_settings_pressed)
+	_button_column.add_child(options_btn)
+
+	var exit_btn := MenuStyle.popup_button("Exit")
+	exit_btn.pressed.connect(_on_exit_pressed)
+	_button_column.add_child(exit_btn)
+
+	# Hidden until Play is pressed before the threaded load finishes. Replaces
+	# the menu so the moment doesn't feel frozen.
 	_loading_label = Label.new()
 	_loading_label.text = "Loading…"
 	_loading_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -100,13 +113,6 @@ func _build_ui() -> void:
 	_loading_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_loading_label.visible = false
 	vbox.add_child(_loading_label)
-
-	# Lets players adjust audio / video / controls before committing to a
-	# session. The OptionsPanel reads PlayerPrefs at build time and only writes
-	# on Apply, so it's safe to open before the rink scene exists.
-	var settings_btn := MenuStyle.popup_button("Settings")
-	settings_btn.pressed.connect(_on_settings_pressed)
-	vbox.add_child(settings_btn)
 
 	var version_label := Label.new()
 	version_label.text = "v%s" % BuildInfo.VERSION
@@ -130,11 +136,8 @@ func _build_ui() -> void:
 	update_checker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(update_checker)
 
-	# Settings overlay sits on top of everything; hidden until the button is hit.
+	# Settings overlay sits on top of everything; hidden until Options is hit.
 	_build_settings_overlay()
-
-	# Gentle pulse on the prompt so it reads as "waiting for input."
-	MenuStyle.pulse(_prompt_label)
 
 
 func _build_settings_overlay() -> void:
@@ -170,32 +173,27 @@ func _on_settings_pressed() -> void:
 		_settings_container.visible = true
 
 
+func _on_play_pressed() -> void:
+	if _input_received:
+		return
+	_input_received = true
+	if _button_column != null:
+		_button_column.visible = false
+	if _loading_label != null:
+		_loading_label.visible = true
+	_try_transition()
+
+
+func _on_exit_pressed() -> void:
+	get_tree().quit()
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	# While the settings overlay is up, Escape closes it and every other input
-	# is swallowed so the title card isn't dismissed out from under the panel.
+	# While the settings overlay is up, Escape closes it.
 	if _settings_container != null and _settings_container.visible:
 		if event.is_action_pressed(&"ui_cancel"):
 			_settings_container.visible = false
 			get_viewport().set_input_as_handled()
-		return
-	if _input_received:
-		return
-	# Accept key presses, mouse clicks, and joypad buttons — anything decisive.
-	# Ignore mouse motion and key releases.
-	var triggered: bool = (
-		(event is InputEventKey and event.pressed and not event.echo)
-		or (event is InputEventMouseButton and event.pressed)
-		or (event is InputEventJoypadButton and event.pressed)
-	)
-	if not triggered:
-		return
-	_input_received = true
-	get_viewport().set_input_as_handled()
-	if _prompt_label != null:
-		_prompt_label.visible = false
-	if _loading_label != null:
-		_loading_label.visible = true
-	_try_transition()
 
 
 func _process(_delta: float) -> void:
