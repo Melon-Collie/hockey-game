@@ -23,6 +23,8 @@ const float HALF_H = 0.3;   // body height 0.6 m
 const float HALF_W = 0.24;  // body width  0.48 m
 
 uniform vec4 base_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform vec4 yoke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform bool yoke_enabled = false;
 uniform int stripe_count = 0;
 uniform vec4 stripe_colors[MAX_STRIPES] : source_color;
 uniform float stripe_positions[MAX_STRIPES];
@@ -56,6 +58,13 @@ void fragment() {
 				abs(norm_y - stripe_positions[i]) < stripe_widths[i] * 0.5) {
 			col = stripe_colors[i].rgb;
 		}
+	}
+
+	// Yoke on the top face only — same approach as JerseyDecal's TOP_CAP_RECT
+	// which paints the flat top disk of the skater's CylinderMesh. Here the
+	// top face is detected by the upward-facing normal.
+	if (yoke_enabled && v_obj_normal.y > 0.9) {
+		col = yoke_color.rgb;
 	}
 
 	// Project text decal onto the back (+Z) face only. The goalie faces -Z
