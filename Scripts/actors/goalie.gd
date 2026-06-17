@@ -33,6 +33,9 @@ const _ARM_RADIUS: float = 0.16
 const _SHOULDER_SPHERE_RADIUS: float = 0.10
 const _ELBOW_SPHERE_RADIUS: float = 0.08
 const _HAND_SPHERE_RADIUS: float = 0.09
+# Extra retreat to clear the pad mesh on the body side of _block_arm.position
+# (which is the node centre, not the back face of the pad geometry).
+const _BLOCKER_PAD_HALF_DEPTH: float = 0.08
 
 var _uniform_coordinator: GoalieUniformCoordinator
 # Dynamic visual nodes — public for GoalieUniformCoordinator access.
@@ -360,7 +363,7 @@ func _update_connectors() -> void:
 	var blocker_dist: float = blocker_to_shoulder.length()
 	var blocker_hand_target: Vector3 = _block_arm.position
 	if blocker_dist > 0.001:
-		blocker_hand_target += (blocker_to_shoulder / blocker_dist) * _HAND_SPHERE_RADIUS
+		blocker_hand_target += (blocker_to_shoulder / blocker_dist) * (_HAND_SPHERE_RADIUS + _BLOCKER_PAD_HALF_DEPTH)
 	_update_arm_ik(blocker_upper_arm, blocker_forearm,
 		blocker_shoulder, blocker_hand_target, Vector3(0.3, -1.0, 0.0),
 		blocker_elbow_sphere, blocker_hand_sphere)
