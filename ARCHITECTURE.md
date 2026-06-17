@@ -21,13 +21,13 @@ The Rocket League freeplay ceiling is a guiding star: the stickhandling-to-shot 
 | Channel | Rate | Transport |
 |---------|------|-----------|
 | Input (client → host) | 60 Hz | Unreliable, last 12 frames per packet |
-| World state (host → clients) | 120 Hz | Unreliable, ~348 bytes at 6 players + 2 goalies (single flat PackedByteArray, well under 1392-byte ENet MTU) |
+| World state (host → clients) | 120 Hz | Unreliable, ~349 bytes at 6 players + 2 goalies (single flat PackedByteArray, well under 1392-byte ENet MTU) |
 | Events (pickup, spawn, goal, goalie transitions) | On event | Reliable |
 | Stats sync | On change | Reliable |
 
 Interpolation delay: 75ms baseline, adapts per-packet via `lerp(0.15)`, capped at +10ms / −1.5ms per packet. **One shared delay** drives every remote interpolator (remote skaters, loose puck, goalie): `NetworkManager._interp_delay`, advanced once per received world-state packet in `receive_world_state` and read via `get_interpolation_delay()`. Per-actor independently-adapting delays used to drift apart, skewing relative timing (puck-vs-stick on a pass, save-vs-puck); the single value renders them all at the same instant. `get_target_interpolation_delay()` is cached per physics frame (it sorts the jitter buffer).
 
-Wire format: Skater 37B · Puck 12B · Goalie 35B (12 B root + 23 B pose). Quantized; ~50% reduction vs unquantized.
+Wire format: Skater 37B · Puck 13B · Goalie 35B (12 B root + 23 B pose). Quantized; ~50% reduction vs unquantized. Puck Y is s16 (not s8) so elevated/saucer shots above the s8 ±1.27 m range don't clip flat on the wire.
 
 **Input timestamp lead:** Client inputs are stamped with `NetworkManager.estimated_input_stamp_time()` = `estimated_host_time() + INPUT_LEAD_SEC` (~25ms). `estimated_host_time()` already encodes the NTP-measured RTT/2, so inputs arrive at the host at approximately their timestamp. The 25ms lead = 16.7ms worst-case batch-send jitter + 8.3ms two-tick buffer, ensuring the host input queue never starves between 60Hz batches. The host gates consumption in `RemoteController._drive_from_input`: inputs are held until `host_timestamp <= estimated_host_time()`. The F3 overlay's host-only "Client input queue" section reports `Input lead` and `Starvations` — healthy values are lead ≈ 0–8ms, starvations = 0.
 
