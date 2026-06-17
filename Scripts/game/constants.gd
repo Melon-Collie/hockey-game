@@ -43,6 +43,12 @@ const NETWORK_INTERPOLATION_DELAY: float = 0.075
 const TIME_WIRE_SCALE: float = 10000.0
 
 # ── Physics ───────────────────────────────────────────────────────────────────
+# Single source of truth for the GDScript-side tick rate: every tick-derived
+# timing constant (clock-sync input lead, AI charge/cooldown windows, telemetry
+# windows) preloads this file and divides PHYSICS_TICK, so they all track it.
+# The ENGINE steps at project.godot's physics/common/physics_ticks_per_second,
+# which is a SEPARATE knob — to change the tick rate, edit BOTH. `_ready()` below
+# push_errors at boot if they drift (a mismatch silently dilates the sim).
 const PHYSICS_TICK: int = 240
 
 # ── Scenes ────────────────────────────────────────────────────────────────────
@@ -50,3 +56,16 @@ const SCENE_BOOT: String          = "res://Scenes/Boot.tscn"
 const SCENE_HOCKEY: String        = "res://Scenes/Hockey.tscn"
 const SCENE_LOBBY: String         = "res://Scenes/Lobby.tscn"
 const SCENE_REPLAY_VIEWER: String = "res://Scenes/ReplayViewer.tscn"
+
+
+func _ready() -> void:
+	# Guard the two-knob coupling: the engine steps at project.godot's rate while
+	# all GDScript timing derives from PHYSICS_TICK. If they disagree the sim
+	# silently dilates against the wall clock that clock-sync and broadcast
+	# cadence depend on — catch it loudly at boot instead of in the field.
+	var engine_tick: int = int(ProjectSettings.get_setting(
+			"physics/common/physics_ticks_per_second", PHYSICS_TICK))
+	if engine_tick != PHYSICS_TICK:
+		push_error(("Constants.PHYSICS_TICK (%d) != project.godot " +
+				"physics_ticks_per_second (%d) — update both to change the tick rate.") %
+				[PHYSICS_TICK, engine_tick])

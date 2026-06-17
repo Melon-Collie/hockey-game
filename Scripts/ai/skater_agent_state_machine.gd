@@ -1,6 +1,8 @@
 class_name SkaterAgentStateMachine
 extends RefCounted
 
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+
 # Per-bot AI state machine. Mirrors the dispatch + match + per-state handler
 # pattern used by Scripts/controllers/skater_state_machine.gd. Owned by
 # SkaterAgent; the agent owns the InputState scratch buffer and the
@@ -68,7 +70,7 @@ const RINK_Z_INSET: float = 1.0
 # inside the blade ROM during the swing, which removed the need
 # for the old facing-alignment gate.
 const AIM_CONVERGED_DIST_M: float = 0.15
-const INTENT_MAX_WAIT_TICKS: int = 120   # ~500 ms at 240 Hz
+const INTENT_MAX_WAIT_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~500 ms
 # Aim wobble is disabled for now — bots fire perfectly past the
 # goalie shadow without it (robotic, every shot to the same spot),
 # but it was masking deeper issues during tuning. The wobble system
@@ -84,8 +86,8 @@ const INTENT_MAX_WAIT_TICKS: int = 120   # ~500 ms at 240 Hz
 # between two bots involved in the same engagement (their speeds are
 # almost never identical). Speed reference comes from
 # AIActionScoring.SKATER_REF_SPEED_M_S (single source).
-const ENGAGEMENT_COOLDOWN_MIN_TICKS: int = 24    # ~100 ms at 240 Hz
-const ENGAGEMENT_COOLDOWN_MAX_TICKS: int = 96    # ~400 ms at 240 Hz
+const ENGAGEMENT_COOLDOWN_MIN_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 10        # ~100 ms
+const ENGAGEMENT_COOLDOWN_MAX_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 2 / 5     # ~400 ms
 const ENGAGEMENT_PROXIMITY_M: float = 2.0        # blade-on-puck range
 
 # Reference top skating speed for chase intercept lookahead lives in
@@ -241,12 +243,12 @@ const POKE_EVADE_MIN_SELF_SPEED_M_S: float = 2.0
 # velocity reaches a few m/s), short enough that anchor attraction
 # pulls us back on line without the bot losing its play. 150 ms ≈
 # 36 ticks at 240 Hz.
-const POKE_EVADE_ACTIVE_TICKS: int = 36
+const POKE_EVADE_ACTIVE_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 20   # ~150 ms
 # Cooldown after evade ends, blocks immediate retrigger. Persistent
 # threats (defender hanging in our face) would otherwise loop us
 # into a constant cut — the cooldown forces us to commit back to
 # normal steering between cuts.
-const POKE_EVADE_COOLDOWN_TICKS: int = 120
+const POKE_EVADE_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~500 ms
 
 # ── Defensive poke jab (active stick-check to strip the carrier) ──────────────
 # The host auto-strips the carrier whenever a defender's blade SWEEPS
@@ -271,10 +273,10 @@ const POKE_JAB_REACH_M: float = (
 		+ GameRules.POKE_RADIUS_M)
 # Jab window: long enough for the blade to sweep through the puck at
 # IK aim-step speed, short enough to read as a discrete poke. ~80 ms.
-const POKE_JAB_ACTIVE_TICKS: int = 20
+const POKE_JAB_ACTIVE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 12   # ~80 ms
 # Cooldown after a jab so the bot commits back to gap control between
 # attempts instead of mashing the carrier's puck every tick.
-const POKE_JAB_COOLDOWN_TICKS: int = 90
+const POKE_JAB_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 8   # ~375 ms
 
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
@@ -312,7 +314,7 @@ const BLADE_REACH_M: float = (
 # aim_target, then release. ~250 ms at 240 Hz. Total time is fixed;
 # how much CHARGE accumulates over those ticks is set by the geometry
 # (start→target distance = target charge).
-const BOT_WRISTER_CHARGE_TICKS: int = 60
+const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4   # ~250 ms
 
 # Shot charge fractions of max_wrister_charge_distance:
 # - shots aim for full charge (the carry scorer assumes WRISTER_SHOT_SPEED_M_S
@@ -346,7 +348,7 @@ const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
 # during-pre-aim workaround needed to keep projection honest.
 const BOT_PRE_AIM_BUFFER_S: float = 0.01
 const BOT_WRISTER_LOOKAHEAD_S: float = (
-		float(BOT_WRISTER_CHARGE_TICKS) / 240.0 + BOT_PRE_AIM_BUFFER_S)
+		float(BOT_WRISTER_CHARGE_TICKS) / _PhysicsConstants.PHYSICS_TICK + BOT_PRE_AIM_BUFFER_S)
 
 # Wind-up geometry for the visible blade sweep. The mouse cursor lerps
 # from a wind-up start position to a release target across the charge,
@@ -410,7 +412,7 @@ const MOUSE_NOISE_STD_M: float = 0.0
 # Bots run at the host physics rate (240 Hz) so we can use a fixed
 # delta. Using a constant keeps the mouse motion deterministic and
 # avoids threading delta through every state handler call.
-const MOUSE_TICK_DELTA: float = 1.0 / 240.0
+const MOUSE_TICK_DELTA: float = 1.0 / _PhysicsConstants.PHYSICS_TICK
 
 # Cap on how fast the pre-aim mouse target sweeps around self_pos at the
 # CARRY_BLADE_AIM_FORWARD_M radius. The target is otherwise a fixed point
@@ -642,7 +644,7 @@ var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 # Press states (SHOOT_PRESSED / PASS_PRESSED) always run full-rate —
 # wrister charge timing and pre-aim convergence are tick-sensitive.
 # State transitions reset the counter so the next dispatch runs full.
-const DISPATCH_PERIOD_TICKS: int = 4
+const DISPATCH_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 60   # ~60 Hz
 var _dispatch_skip_counter: int = 0
 var _cached_move_vector: Vector2 = Vector2.ZERO
 # Updated inside `_step_mouse_toward` so skipped ticks can re-step

@@ -1,6 +1,8 @@
 class_name AIRoleCarrier
 extends RefCounted
 
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+
 # CARRIER role behavior: the puck-carrying utility AI. Scores SHOOT
 # (wrister), PASS (per teammate), and CARRY (8 polar candidates +
 # slot anchor + stand-still) on equal footing every
@@ -38,7 +40,7 @@ const INTENT_QUICK_SHOT: int = 4
 # scoring (10 carry candidates × per-teammate pass × opponent
 # projections) would fire 240×/sec/bot. ~30 Hz is plenty — pre-aim
 # convergence gates the actual transition, and humans react in 250 ms+.
-const PICK_ACTION_PERIOD_TICKS: int = 8
+const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~30 Hz re-eval
 
 # Pass flight clamp. A 0.6 s lead lets the bot pass to a teammate up
 # to ~16 m away (PASS_SPEED_M_S × 0.6); longer leads suffer from

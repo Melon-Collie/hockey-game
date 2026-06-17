@@ -5,6 +5,8 @@ extends RefCounted
 # Call sites use static methods so they're null-safe outside a game session.
 static var instance: NetworkTelemetry = null
 
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+
 # ── Window counters (reset each second) ──────────────────────────────────────
 var _world_state_count: int = 0
 var _input_count: int = 0
@@ -114,7 +116,7 @@ var host_physics_tick_max_ms: float = 0.0
 var broadcast_interval_p95_ms: float = 0.0
 var _phys_tick_samples_us: Array[int] = []
 var _bcast_interval_samples_us: Array[int] = []
-const PHYS_TICK_WINDOW: int = 240   # 1s at 240Hz
+const PHYS_TICK_WINDOW: int = _PhysicsConstants.PHYSICS_TICK   # 1 s of samples
 const BCAST_INTERVAL_WINDOW: int = 120  # 1s at 120Hz
 
 # ── Static call sites (no-op when not in a game session) ─────────────────────

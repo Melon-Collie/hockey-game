@@ -165,7 +165,7 @@ func _physics_process(delta: float) -> void:
 			prep_input.stick_lift_held = false
 			_current_input = prep_input
 			_input_history.append(_current_input)
-			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * float(Constants.PHYSICS_TICK)) * 2, Constants.PHYSICS_TICK / 5, Constants.PHYSICS_TICK * 2)
 			if _input_history.size() > prep_rtt_cap:
 				_input_history.pop_front()
 			apply_blade_aim_only(_current_input, delta)
@@ -192,8 +192,8 @@ func _physics_process(delta: float) -> void:
 	_input_history.append(_current_input)
 	# Cap history size to prevent unbounded growth
 	# Cap scales with RTT so sustained high-loss can't grow the buffer unboundedly:
-	# 2× RTT worth of frames (min 48, max 480) covers the full in-flight window.
-	var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+	# 2× RTT worth of frames (min 0.2 s, max 2 s of ticks) covers the in-flight window.
+	var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * float(Constants.PHYSICS_TICK)) * 2, Constants.PHYSICS_TICK / 5, Constants.PHYSICS_TICK * 2)
 	if _input_history.size() > rtt_cap:
 		_input_history.pop_front()
 	_process_input(_current_input, _current_input.delta)
