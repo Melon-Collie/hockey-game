@@ -360,6 +360,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# that same instant. Falls back to the live position when no match is found
 	# (history capped, post-teleport, dead-puck gap, session warmup).
 	var predicted: PredictedState = PredictedState.find_at(_prediction_history, ack_ts)
+	NetworkTelemetry.record_reconcile_match(predicted != null)
 	var divergence_position: Vector3 = predicted.position if predicted != null else skater.global_position
 	var divergence_velocity: Vector3 = predicted.velocity if predicted != null else skater.velocity
 	var divergence_upper_body: float = predicted.upper_body_rotation_y if predicted != null else _pose.upper_body_angle

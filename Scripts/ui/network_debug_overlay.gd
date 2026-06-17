@@ -218,6 +218,8 @@ func _render_watch(t: NetworkTelemetry) -> void:
 		"puck flight snapped hard; expected only on real bounces, not every shot") or any
 	any = _watch(_when_positive(t.ooo_drops_per_sec, 5.0), "Out-of-order drops", "%.1f/s" % t.ooo_drops_per_sec,
 		"packets arrived reordered and were discarded; want 0") or any
+	any = _watch(_band(100.0 - t.reconcile_match_pct, 5.0, 30.0), "Reconcile match", "%.0f%% matched" % t.reconcile_match_pct,
+		"client found its prediction for the server's ack timestamp; <100% = find_at missing, so it reconciles on lag not real error") or any
 	if not any:
 		_lines.append("[color=#%s]%s Internals nominal[/color] [color=#%s](drift, stick jumps, puck snaps, dropped packets all healthy)[/color]" % [
 			COL_OK, DOT, COL_DIM])
