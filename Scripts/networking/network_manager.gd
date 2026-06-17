@@ -279,7 +279,7 @@ var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
-# (240/120 = 2 at the default rate; 240/5 = 48 during dead-puck phases via
+# (120/120 = 1 at the default rate; 120/5 = 24 during dead-puck phases via
 # set_broadcast_rate). Recomputed by `set_broadcast_rate`. Stall resilience:
 # on a host main-thread freeze, Godot's physics catch-up fires multiple
 # back-to-back physics ticks. The counter increments in NetworkManager._physics_process
