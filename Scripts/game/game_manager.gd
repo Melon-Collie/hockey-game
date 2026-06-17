@@ -584,6 +584,11 @@ func sync_existing_players(player_data: Array) -> void:
 		return
 	for entry: Array in player_data:
 		var peer_id: int = entry[0]
+		# Idempotency guard — see spawn_remote_skater. The same peer can arrive
+		# via the broadcast spawn RPC and again in this targeted snapshot; skip
+		# the redundant spawn so we don't orphan an already-spawned skater node.
+		if _registry.has(peer_id):
+			continue
 		var team_slot: int = entry[1]
 		var team_id: int = entry[2]
 		var jersey_color: Color = entry[3]
@@ -623,6 +628,16 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		_pending_remote_spawns.append([peer_id, team_slot, team_id,
 				jersey_color, helmet_color, pants_color,
 				is_left_handed, player_name, jersey_number, attributes])
+		return
+	# Idempotency guard: a peer can legitimately be delivered twice at game
+	# start — once via this broadcast spawn_remote_skater (from
+	# _push_lobby_assignments_to_clients) and again inside the targeted
+	# sync_existing_players snapshot sent to peers processed later in that loop.
+	# Without it, the second spawn overwrites _players[peer_id] and orphans the
+	# first skater node in the scene tree — an uncontrolled phantom skater
+	# visible only on clients (the host never receives these RPCs). First
+	# delivery wins; both carry identical roster data.
+	if _registry.has(peer_id):
 		return
 	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
