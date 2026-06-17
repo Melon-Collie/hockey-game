@@ -107,7 +107,7 @@ var puck_controller: PuckController = null
 # physics tick from `goalies` / `goalie_controllers`. Without the cache,
 # `get_goalie_data()` allocates a fresh `Array[Dictionary]` of two dict
 # literals on every call — `SkaterIKCoordinator.clamp_blade_from_goalies`
-# calls it on every skater per tick (~12 calls × 240 Hz = ~5760 dict allocs/s).
+# calls it on every skater per tick (~12 calls every physics tick).
 var _cached_goalie_data: Array[Dictionary] = []
 
 # Tutorial mode gates offsides detection on this flag. Defaults to false so
@@ -254,7 +254,7 @@ func _process(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	# Host-frame health telemetry: wall-clock gap between consecutive physics
-	# ticks. Steady-state at 240Hz is ~4170us. A real-time stall (CPU steal,
+	# ticks. Steady-state at 120 Hz is ~8333us. A real-time stall (CPU steal,
 	# heavy Jolt frame, GC pause, OS hitch) produces one large sample followed
 	# by near-zero catch-up ticks as the engine rebases the physics clock to
 	# wall time. Surfaces on F3 as `tick p95/p99/max`. Host only — clients
@@ -715,7 +715,7 @@ func _spawn_puck() -> void:
 	# team_id_by_skater dict is owned by PlayerRegistry, which doesn't
 	# exist yet — wired in `_wire_subsystems` below.
 	# Returns the registry's live cached list (rebuilt on roster change) —
-	# building a fresh array per call allocated twice per 240 Hz tick.
+	# building a fresh array per call allocated twice per physics tick.
 	puck_controller.set_skater_getter(func() -> Array:
 		return _registry.skaters() if _registry != null else [])
 	puck_controller.puck_picked_up_by.connect(_on_server_puck_picked_up_by)
@@ -760,7 +760,7 @@ func _wire_subsystems() -> void:
 	# the crease-jam butterfly trigger. Same Callable shape as the puck
 	# controller's getter; the registry's live cached list observes roster
 	# churn without rebuilding an array per call (this fired 3-5× per goalie
-	# per 240 Hz tick under crease pressure).
+	# per physics tick under crease pressure).
 	var goalie_skater_getter: Callable = func() -> Array:
 		return _registry.skaters() if _registry != null else []
 	for gc: GoalieController in goalie_controllers:

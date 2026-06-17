@@ -378,7 +378,7 @@ func _physics_process(delta: float) -> void:
 	# instance_ids; resolve back via instance_from_id and drop entries whose
 	# skater has been freed (puppet bot teardown, etc.) alongside the
 	# naturally-expired ones. The early-out + lazily-created expiry list keep
-	# this allocation-free in the common no-cooldowns case (240 Hz path).
+	# this allocation-free in the common no-cooldowns case (per-tick path).
 	if not _cooldown_timers.is_empty():
 		var _expired: Array[int] = []
 		for id: int in _cooldown_timers:

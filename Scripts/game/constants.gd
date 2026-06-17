@@ -35,7 +35,7 @@ const NETWORK_INTERPOLATION_DELAY: float = 0.075
 # Wire encoding for session-relative timestamps: u32 in 0.1 ms units
 # (seconds × this scale). Replaces f32 seconds, whose ULP degraded with host
 # uptime — ~1 ms error at 2.3 h (visible interpolation jitter), ~2 ms at
-# 4.6 h (240 Hz input stamps quantize equal and get dropped as duplicates).
+# 4.6 h (per-tick input stamps quantize equal and get dropped as duplicates).
 # u32 @ 0.1 ms gives constant precision over a ~119-hour range. Encode with
 # roundi so round-trips through the grid are exact; bump
 # BuildInfo.PROTOCOL_VERSION and ReplayFileWriter.FORMAT_VERSION if this

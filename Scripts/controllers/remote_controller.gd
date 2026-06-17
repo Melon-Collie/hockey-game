@@ -11,7 +11,7 @@ var is_extrapolating: bool = false
 
 var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
 # Reused scratch objects for the per-tick interpolation lookup + output —
-# allocating fresh ones each tick was measurable churn at 240 Hz × 5 remotes.
+# allocating fresh ones each tick was measurable churn at the physics rate × 5 remotes.
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
 var _scratch_interp := SkaterNetworkState.new()
 var _rejoin_blend_from_pos: Vector3 = Vector3.ZERO
@@ -51,7 +51,7 @@ func receive_input_batch(batch: Array[InputState]) -> void:
 	# would otherwise sit in the queue indefinitely (future) or fail the gate
 	# forever (past). The queue cap below already truncates older stragglers.
 	const FUTURE_SLACK_S: float = 0.1   # INPUT_LEAD_SEC (~25ms) + slack for jitter / clock convergence
-	const PAST_SLACK_S: float = 2.0     # generous: queue cap is 0.5s at 240Hz, this is 4x
+	const PAST_SLACK_S: float = 2.0     # generous: queue cap is ~0.5 s, this is 4x
 	var now: float = NetworkManager.estimated_host_time()
 	var existing_timestamps: Dictionary = {}
 	for queued: InputState in _input_queue:
@@ -67,7 +67,7 @@ func receive_input_batch(batch: Array[InputState]) -> void:
 		existing_timestamps[state.host_timestamp] = true
 	_input_queue.sort_custom(func(a: InputState, b: InputState) -> bool:
 		return a.host_timestamp < b.host_timestamp)
-	const MAX_QUEUE_DEPTH: int = 120  # 0.5s at 240 Hz
+	var MAX_QUEUE_DEPTH: int = Constants.PHYSICS_TICK / 2  # ~0.5 s
 	while _input_queue.size() > MAX_QUEUE_DEPTH:
 		_input_queue.pop_front()
 
@@ -147,7 +147,7 @@ func _interpolate() -> void:
 	is_extrapolating = bracket != null and bracket.is_extrapolating
 	if bracket == null:
 		return
-	# Reused scratch (240 Hz path): both branches below write every field that
+	# Reused scratch (per-tick path): both branches below write every field that
 	# _apply_state_to_skater reads, so no stale value can leak across ticks.
 	var interpolated := _scratch_interp
 	if bracket.is_extrapolating:

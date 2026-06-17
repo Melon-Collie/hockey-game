@@ -106,7 +106,7 @@ var ws_gap_histogram: String = "—"
 
 # ── Host-frame health (host only; clients leave these at 0) ──────────────────
 # Inter-tick gap captures any stall regardless of cause (CPU steal, GC pause,
-# heavy Jolt frame, etc.). Steady state at 240Hz is ~4.17ms; a real stall shows
+# heavy Jolt frame, etc.). Steady state at 120 Hz is ~8.33ms; a real stall shows
 # up as a single large `tick max` sample with subsequent catch-up ticks at
 # near-zero gap. Broadcast interval is wall-clock between consecutive
 # `_broadcast_state()` calls — should track the ~8.3ms cadence at 120 Hz.

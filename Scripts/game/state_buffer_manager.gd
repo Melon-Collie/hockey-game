@@ -2,7 +2,7 @@ class_name StateBufferManager
 extends RefCounted
 
 # Host-only rolling snapshot buffer for all actors.
-# Pre-allocated ring buffers avoid per-tick GC pressure at 240 Hz.
+# Pre-allocated ring buffers avoid per-tick GC pressure at the physics rate.
 # Owned by GameManager; WorldStateCodec reads latest_*() for broadcasts.
 # Phase 7 lag compensation queries get_state_at() for historical rewind.
 

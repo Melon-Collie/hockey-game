@@ -551,7 +551,7 @@ func get_network_state() -> SkaterNetworkState:
 	return state
 
 # Writes the current state into a caller-owned instance. StateBufferManager
-# fills its pre-allocated ring slots through this at 240 Hz — allocating a
+# fills its pre-allocated ring slots through this every physics tick — allocating a
 # fresh state per capture (get_network_state) defeated the ring's purpose.
 func fill_network_state(state: SkaterNetworkState) -> void:
 	state.position = skater.global_position
@@ -936,7 +936,7 @@ func _apply_movement(input: InputState, delta: float) -> void:
 			skater.velocity, input.move_vector, skater.rotation.y,
 			has_puck, input.brake, delta, cfg)
 
-# Movement configs are cached — _apply_movement runs every 240 Hz tick (and
+# Movement configs are cached — _apply_movement runs every physics tick (and
 # once per reconcile-replayed input), and the source exports change only in
 # apply_attributes. Same pattern as the goalie controller's cached rule
 # configs. The block config is an independent instance, NOT a mutated copy of

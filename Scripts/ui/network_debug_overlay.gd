@@ -164,7 +164,7 @@ func _render_host(t: NetworkTelemetry) -> void:
 	_section("Host frame health")
 	_metric(_worse(_band(t.host_physics_tick_p95_ms, 6.0, 10.0), _band(t.host_physics_tick_max_ms, 16.0, 33.0)),
 		"Physics tick", "p95 %.1f / p99 %.1f / max %.1f ms" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms],
-		"gap between 240Hz ticks; steady ~4.2ms, a big max = a stall everyone feels")
+		"gap between 120 Hz ticks; steady ~8.3ms, a big max = a stall everyone feels")
 	# The host throttles the broadcast rate to 5Hz during dead-puck phases
 	# (faceoff prep, goal, period breaks), so judge the gap against the live
 	# target interval rather than a fixed 120Hz, or every stoppage reads red.
@@ -183,7 +183,7 @@ func _render_solo(t: NetworkTelemetry) -> void:
 		_section("Frame health")
 		_metric(_worse(_band(t.host_physics_tick_p95_ms, 6.0, 10.0), _band(t.host_physics_tick_max_ms, 16.0, 33.0)),
 			"Physics tick", "p95 %.1f / p99 %.1f / max %.1f ms" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms],
-			"gap between 240Hz ticks; steady ~4.2ms, a big max = a frame hitch")
+			"gap between 120 Hz ticks; steady ~8.3ms, a big max = a frame hitch")
 
 # Watch metrics: shown only when they leave the healthy band, so the client view
 # stays quiet until something is actually wrong. When all clear, one calm line.

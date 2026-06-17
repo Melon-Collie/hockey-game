@@ -654,7 +654,7 @@ func _notification(what: int) -> void:
 
 func _physics_process(_delta: float) -> void:
 	# Single source of truth for the host-side integer tick counter. Increments
-	# at the engine's physics rate (240 Hz). AI agents salt their per-tick RNG
+	# at the engine's physics rate (120 Hz). AI agents salt their per-tick RNG
 	# with this value; consumers must tolerate the counter being zero before
 	# the host starts ticking and must not assume monotonicity across host
 	# transfers (Phase 1 has no host transfer support anyway).

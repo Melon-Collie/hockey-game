@@ -124,7 +124,7 @@ const CHASE_ANGLE_BIAS_M: float = 1.5
 const CHASE_MAX_ACCEL_M_S2: float = 12.0
 
 # Per-peer velocity-history smoothing for acceleration estimation.
-# Raw frame-over-frame velocity diffs at 240 Hz are noisy (a thrust
+# Raw frame-over-frame velocity diffs at the physics rate are noisy (a thrust
 # change adds ~0.05 m/s per tick which sits on top of float jitter); an
 # IIR low-pass smooths to a usable signal. Half-life ≈ ln(2)/ALPHA
 # ticks → 0.2 ≈ 14 ms half-life, enough damping to ignore single-
@@ -242,7 +242,7 @@ const POKE_EVADE_MIN_SELF_SPEED_M_S: float = 2.0
 # Active window: long enough for a visible cut (body's lateral
 # velocity reaches a few m/s), short enough that anchor attraction
 # pulls us back on line without the bot losing its play. 150 ms ≈
-# 36 ticks at 240 Hz.
+# PHYSICS_TICK × 3/20 ticks.
 const POKE_EVADE_ACTIVE_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 20   # ~150 ms
 # Cooldown after evade ends, blocks immediate retrigger. Persistent
 # threats (defender hanging in our face) would otherwise loop us
@@ -311,7 +311,7 @@ const BLADE_REACH_M: float = (
 # ── Wrister charge ───────────────────────────────────────────────────────────
 # SHOOT_PRESSED and the charged PASS_PRESSED variant hold shoot_held
 # for this many ticks while the blade sweeps from wind_up_start to
-# aim_target, then release. ~250 ms at 240 Hz. Total time is fixed;
+# aim_target, then release. ~250 ms (derived from PHYSICS_TICK). Total time is fixed;
 # how much CHARGE accumulates over those ticks is set by the geometry
 # (start→target distance = target charge).
 const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4   # ~250 ms
@@ -339,7 +339,7 @@ const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
 #      (_carry_aim_track_fire keeps facing pre-tracked toward the
 #      best fire option during CARRY), this is typically 0-50 ms.
 #      The buffer accounts for typical mouse residual convergence.
-#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / 240 = 250 ms.
+#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / PHYSICS_TICK = 250 ms.
 #
 # Used both for projecting the shooter's release-pos AND for
 # predicting where the goalie / opponents will be at release.
@@ -409,7 +409,7 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 # difficulty tuning lands.
 const MOUSE_MAX_SPEED_M_S: float = 100.0
 const MOUSE_NOISE_STD_M: float = 0.0
-# Bots run at the host physics rate (240 Hz) so we can use a fixed
+# Bots run at the host physics rate (120 Hz) so we can use a fixed
 # delta. Using a constant keeps the mouse motion deterministic and
 # avoids threading delta through every state handler call.
 const MOUSE_TICK_DELTA: float = 1.0 / _PhysicsConstants.PHYSICS_TICK
@@ -640,7 +640,7 @@ var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 # decisions, action scoring, steering compute, aim target selection)
 # runs every DISPATCH_PERIOD_TICKS physics ticks during non-press
 # states; skipped ticks reuse the cached move_vector and step the
-# mouse toward the cached aim target so blade motion stays at 240 Hz.
+# mouse toward the cached aim target so blade motion stays at the physics rate.
 # Press states (SHOOT_PRESSED / PASS_PRESSED) always run full-rate —
 # wrister charge timing and pre-aim convergence are tick-sensitive.
 # State transitions reset the counter so the next dispatch runs full.
@@ -904,7 +904,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	# Decision throttle: outside press states, re-run the full state
 	# handler every DISPATCH_PERIOD_TICKS ticks. On skipped ticks reuse
 	# the last-decided move_vector and re-step the mouse toward the
-	# cached aim target so blade motion stays smooth at 240 Hz. State
+	# cached aim target so blade motion stays smooth at the physics rate. State
 	# transitions zero `_dispatch_skip_counter` (via `_set_state`) so a
 	# fresh state always dispatches full on its first tick.
 	var is_press_state: bool = (_state == State.SHOOT_PRESSED
