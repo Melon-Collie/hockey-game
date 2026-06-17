@@ -43,6 +43,15 @@ const _CARD_HEIGHT: int = 96
 const _STRIPE_WIDTH: int = 6
 const _ICON_SIZE: int = 20
 
+# Name label font sizing. The name auto-shrinks to fit the card so long names
+# (e.g. "SCHROEDER") display in full instead of hard-clipping at the default
+# size. _NAME_FONT_SIZE is the preferred size on filled cards, _OPEN the
+# (smaller, centered) "OPEN SLOT" placeholder size, and _MIN the floor below
+# which we stop shrinking and let clip_text take over as a last resort.
+const _NAME_FONT_SIZE: int = 24
+const _NAME_FONT_SIZE_OPEN: int = 18
+const _NAME_FONT_MIN: int = 14
+
 # Ping color bands (ms).
 const _PING_GREEN: int  = 60
 const _PING_YELLOW: int = 120
@@ -226,15 +235,21 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	main_row.add_child(num)
 	_num_labels[team_id][slot] = num
 
-	# Name label fills the remaining width to the right of the number.
+	# Name label fills the remaining width to the right of the number. It
+	# auto-shrinks to fit (see _fit_name): "fit_base" is the preferred size,
+	# re-fit on every layout change via the resized signal so it tracks
+	# window resizing. clip_text stays on purely as a last-resort guard for
+	# pathologically long names that hit _NAME_FONT_MIN.
 	var name_lbl := Label.new()
 	name_lbl.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
-	name_lbl.add_theme_font_size_override("font_size", 24)
+	name_lbl.add_theme_font_size_override("font_size", _NAME_FONT_SIZE)
+	name_lbl.set_meta("fit_base", _NAME_FONT_SIZE)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lbl.clip_text = true
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_lbl.resized.connect(_fit_name.bind(name_lbl))
 	main_row.add_child(name_lbl)
 	_name_labels[team_id][slot] = name_lbl
 
@@ -246,7 +261,11 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	var right_col := VBoxContainer.new()
 	right_col.alignment = BoxContainer.ALIGNMENT_BEGIN
 	right_col.add_theme_constant_override("separation", 0)
-	right_col.custom_minimum_size = Vector2(72, 0)
+	# Reserve only what the position letter / ping ("###ms ●") actually need.
+	# This used to be 72, which stranded whitespace next to a single-char
+	# position letter and squeezed the name; 56 fits the ping comfortably
+	# (~42px) while handing the freed width to the name column.
+	right_col.custom_minimum_size = Vector2(56, 0)
 	right_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	main_row.add_child(right_col)
 	_right_cols[team_id][slot] = right_col
@@ -395,9 +414,10 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		num_lbl.visible = false
 		right_col.visible = false
 		name_lbl.text = "OPEN SLOT"
-		name_lbl.add_theme_font_size_override("font_size", 18)
+		name_lbl.set_meta("fit_base", _NAME_FONT_SIZE_OPEN)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_fit_name(name_lbl)
 		_set_action(action, "+", _is_local_host and _bot_editing, MenuStyle.TEXT_DIM)
 		return
 
@@ -405,7 +425,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	# the default left-aligned full-size name.
 	num_lbl.visible = true
 	right_col.visible = true
-	name_lbl.add_theme_font_size_override("font_size", 24)
+	name_lbl.set_meta("fit_base", _NAME_FONT_SIZE)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 
 	if is_bot_slot:
@@ -420,6 +440,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		num_lbl.add_theme_color_override("font_color", text_c)
 		name_lbl.text = bot_name.to_upper()
 		name_lbl.add_theme_color_override("font_color", text_c)
+		_fit_name(name_lbl)
 		pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 		ping_lbl.visible = false
 		dot.visible = false
@@ -440,6 +461,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	var p_name: String = entry.get("player_name", "")
 	name_lbl.text = p_name.to_upper() if not p_name.is_empty() else "PLAYER"
 	name_lbl.add_theme_color_override("font_color", text_c)
+	_fit_name(name_lbl)
 	pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 
 	ai_lbl.visible = false
@@ -453,6 +475,31 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		_set_action(action, "x", true, text_c)
 	else:
 		action.visible = false
+
+
+# Shrink the name's font size so the whole name fits the label's current
+# width, mirroring the in-game jersey renderer (which measures the string and
+# fits it) rather than hard-clipping. Measures at the label's preferred
+# "fit_base" size and scales down proportionally if the text overflows,
+# flooring at _NAME_FONT_MIN; clip_text catches anything still too long. Wired
+# to the label's resized signal so it re-fits on window/layout changes, and
+# called explicitly after each text update. Idempotent — always measures from
+# fit_base, so repeated calls converge without drift.
+func _fit_name(lbl: Label) -> void:
+	var base: int = lbl.get_meta("fit_base", _NAME_FONT_SIZE)
+	var avail: float = lbl.size.x
+	if avail <= 0.0 or lbl.text.is_empty():
+		# Layout not resolved yet (or nothing to show) — keep the preferred
+		# size; the resized signal will re-fit once a real width is known.
+		lbl.add_theme_font_size_override("font_size", base)
+		return
+	var font: Font = lbl.get_theme_font("font")
+	var text_w: float = font.get_string_size(
+			lbl.text, lbl.horizontal_alignment, -1, base).x
+	var size_px: int = base
+	if text_w > avail:
+		size_px = maxi(_NAME_FONT_MIN, int(floor(base * avail / text_w)))
+	lbl.add_theme_font_size_override("font_size", size_px)
 
 
 # Small outline-only square in the top-left corner of a card. `accent` is
