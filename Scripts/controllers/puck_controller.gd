@@ -29,6 +29,13 @@ const STICK_LIFT_FORCED_LIFT_S: float = 0.4
 # identical physics; tune upward if free-puck trajectories drift apart.
 @export var prediction_extra_friction: float = 0.0
 @export var carry_smoothing_speed: float = 80.0
+# Optimistic (visual-only) pickup: a loose pickup is treated as uncontested —
+# safe to attach locally before the host confirms — only when no other skater's
+# blade is within this radius of the puck on our rendered view. Inflated past
+# PICKUP_RADIUS to absorb the ~interp-delay lag in other skaters' rendered
+# positions, so a converging opponent still trips it. Tune up for fewer
+# rollbacks, down for snappier attaches in light traffic.
+@export var contest_danger_radius: float = 1.5
 
 var puck: Puck = null
 var is_server: bool = false
@@ -41,6 +48,19 @@ var _local_carrier_skater: Skater = null  # client-side: local skater while carr
 # rather than interpolating from its own buffer — the two used to run on
 # independent adaptive delays, drifting the puck off the carrier's stick.
 var _remote_carrier_skater: Skater = null
+# Client-side optimistic pickup (visual only). When the local blade enters an
+# uncontested loose puck, the puck pins to it immediately so the grab looks
+# instant, but the carry state machine does NOT engage until the host confirms
+# via notify_local_pickup — on grant the pin promotes seamlessly, on timeout or
+# a different carrier it rolls back to interpolation. Gating on "uncontested"
+# preserves the no-pickup-prediction guarantee for contested plays (the case
+# where rollback feels worse than the round-trip).
+var _provisional_carrier_skater: Skater = null
+var _provisional_deadline: float = -1.0       # local_time past which we roll back
+# Post-loss lockout: don't optimistically re-grab while the host's reattach
+# cooldown would still refuse us, which would attach then visibly pop off.
+var _provisional_lockout_until: float = -1.0
+const _PROVISIONAL_TIMEOUT_S: float = 0.3     # floor; scaled up by RTT in try_provisional_pickup
 var _prev_puck_pos: Vector3 = Vector3.ZERO
 var _state_buffer: Array[BufferedPuckState] = []
 var _predicting_trajectory: bool = false
@@ -130,10 +150,29 @@ func _physics_process(delta: float) -> void:
 	# A despawned / demoted remote carrier drops the pin back to interpolation.
 	if _remote_carrier_skater != null and not is_instance_valid(_remote_carrier_skater):
 		_remote_carrier_skater = null
+	# Drop an optimistic pin the instant it stops being legitimate: the puck went
+	# dead (whistle/goal — host is about to reset it) or we got ghosted (offside —
+	# can't hold the puck). Timeout/grant/steal are handled below and in the RPCs.
+	if _provisional_carrier_skater != null and (puck.pickup_locked \
+			or not is_instance_valid(_provisional_carrier_skater) or _provisional_carrier_skater.is_ghost):
+		_clear_provisional()
 	if _local_carrier_skater != null:
 		is_extrapolating = false
 		_pin_puck_to_carrier(_local_carrier_skater, delta)
 		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "pinned"
+	elif _provisional_carrier_skater != null:
+		if not is_instance_valid(_provisional_carrier_skater) or NetworkManager.local_time() > _provisional_deadline:
+			# No host grant arrived in time (or the carrier despawned): roll back to
+			# interpolation. The buffer stayed warm during the pin, so the hand-off
+			# is seamless — and since we only pinned an uncontested catch, a denial
+			# this late is rare.
+			_clear_provisional()
+			_interpolate()
+			if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "interpolating"
+		else:
+			is_extrapolating = false
+			_pin_puck_to_carrier(_provisional_carrier_skater, delta)
+			if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "pinned_provisional"
 	elif _remote_carrier_skater != null:
 		is_extrapolating = false
 		_pin_puck_to_carrier(_remote_carrier_skater, delta)
@@ -314,6 +353,10 @@ func _check_interactions() -> void:
 func notify_local_pickup(local_skater: Skater) -> void:
 	_local_carrier_skater = local_skater
 	_remote_carrier_skater = null
+	# Host confirmed our pickup. If we were already provisionally pinned to this
+	# same blade, this promotes it seamlessly (no visible change); otherwise it
+	# attaches now.
+	_clear_provisional()
 	_predicting_trajectory = false
 	_post_contact_timer = -1.0
 	puck.set_client_prediction_mode(false)
@@ -327,6 +370,7 @@ func notify_local_pickup(local_skater: Skater) -> void:
 func notify_remote_pickup(remote_skater: Skater) -> void:
 	_remote_carrier_skater = remote_skater
 	_local_carrier_skater = null
+	_clear_provisional()  # a different player won the puck — roll back our optimistic pin
 	_predicting_trajectory = false
 	_pending_local_release = false
 	_pending_local_release_deadline = -1.0
@@ -344,6 +388,7 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skate
 		release_pos = _local_carrier_skater.get_blade_contact_global()
 		release_pos.y = puck.ice_height
 	_local_carrier_skater = null
+	_arm_provisional_lockout()  # post-release reattach cooldown — don't optimistically re-grab
 	_predicting_trajectory = true
 	_pending_local_release = true
 	_pending_local_release_deadline = NetworkManager.local_time() + _PENDING_RELEASE_TIMEOUT_S
@@ -363,6 +408,7 @@ func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	if new_carrier_peer_id == -1 and _predicting_trajectory:
 		return
 	_remote_carrier_skater = null
+	_clear_provisional()
 	_predicting_trajectory = false
 	_post_contact_timer = -1.0
 	puck.set_client_prediction_mode(false)  # also clears _clamp_at_goal_line
@@ -372,12 +418,78 @@ func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 func notify_local_puck_dropped() -> void:
 	_local_carrier_skater = null
 	_remote_carrier_skater = null
+	_arm_provisional_lockout()  # we just lost the puck — host won't hand it back during reattach cooldown
 	_predicting_trajectory = false
 	_pending_local_release = false
 	_pending_local_release_deadline = -1.0
 	_post_contact_timer = -1.0
 	puck.set_client_prediction_mode(false)
 	_state_buffer.clear()
+
+
+# ── Optimistic (visual-only) pickup ──────────────────────────────────────────
+# Called by LocalController when its blade enters pickup range of a loose puck.
+# Pins the puck to the local blade immediately so the grab looks instant — but
+# only when the host is overwhelmingly likely to GRANT A CATCH: the puck is
+# grounded and slow enough to always be caught (never deflected), we're not in
+# the post-loss reattach lockout, and no other skater is contesting on our
+# rendered view. Visual only — the carry state machine engages on the host's
+# confirming notify_local_pickup, not here.
+func try_provisional_pickup(local_skater: Skater) -> void:
+	if is_server or not is_instance_valid(local_skater):
+		return
+	# Already committed, or the puck isn't loose on our view.
+	if _local_carrier_skater != null or _provisional_carrier_skater != null:
+		return
+	if _remote_carrier_skater != null or _predicting_trajectory:
+		return
+	if _provisional_lockout_until > 0.0 and NetworkManager.local_time() < _provisional_lockout_until:
+		return
+	if puck.is_airborne() or _estimated_puck_speed() >= puck.pickup_max_speed:
+		return
+	if _is_pickup_contested(local_skater):
+		return
+	_provisional_carrier_skater = local_skater
+	# Grant travels ~1 RTT (claim out, confirm back) plus host processing; scale
+	# the rollback deadline off RTT so a slow link doesn't pop the pin before the
+	# confirm arrives.
+	var window: float = maxf(_PROVISIONAL_TIMEOUT_S, NetworkManager.get_latest_rtt_ms() / 1000.0 * 2.0)
+	_provisional_deadline = NetworkManager.local_time() + window
+	puck.set_client_prediction_mode(false)  # ensure frozen; the pin drives position
+
+
+func _is_pickup_contested(local_skater: Skater) -> bool:
+	if not _skater_getter.is_valid():
+		return true  # can't tell who's around → assume contested (conservative)
+	var puck_pos: Vector3 = puck.get_puck_position()
+	for s: Skater in _skater_getter.call():
+		if s == local_skater or not is_instance_valid(s) or s.is_ghost:
+			continue
+		# Any other skater (either team) racing the same loose puck is a contest —
+		# only one can be granted it. Their blade is interpolated, hence the
+		# inflated radius.
+		if s.get_blade_contact_global().distance_to(puck_pos) <= contest_danger_radius:
+			return true
+	return false
+
+
+# During interpolation the RigidBody is frozen (velocity ~0), so read the host's
+# broadcast speed from the newest buffered snapshot. Empty buffer → no data yet,
+# treat as fast so we stay conservative and skip the optimistic attach.
+func _estimated_puck_speed() -> float:
+	if _state_buffer.is_empty():
+		return INF
+	return _state_buffer.back().state.velocity.length()
+
+
+func _clear_provisional() -> void:
+	_provisional_carrier_skater = null
+	_provisional_deadline = -1.0
+
+
+func _arm_provisional_lockout() -> void:
+	_provisional_lockout_until = NetworkManager.local_time() + puck.reattach_cooldown
+	_clear_provisional()
 
 func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:
 	# Smooth puck toward the carrier's carry target each tick. Shared by the local

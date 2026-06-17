@@ -237,6 +237,12 @@ func _physics_process(delta: float) -> void:
 				NetworkManager.send_pickup_claim(
 					NetworkManager.estimated_host_time(),
 					NetworkManager.get_target_interpolation_delay() * 1000.0)
+				# Optimistic visual-only attach for uncontested pickups: pins the
+				# puck to our blade immediately so the grab feels instant, rolling
+				# back if the host doesn't confirm. Idempotent + self-gating, so
+				# calling it on every claim (rising edge or throttle re-fire) is safe.
+				if GameManager.puck_controller != null:
+					GameManager.puck_controller.try_provisional_pickup(skater)
 			_was_in_pickup_range = in_range
 		elif puck.carrier != skater and _claim_cooldown <= 0.0:
 			_was_in_pickup_range = false
