@@ -75,6 +75,14 @@ const _LABEL_FONT_SIZE := 17
 const _VALUE_FONT_SIZE := 14
 const _SECTION_FONT_SIZE := 11
 const _VALUE_COL_WIDTH := 56
+# Hard cap on the tab-content viewport. Each tab is wrapped in a fixed-height
+# ScrollContainer of this size, so every tab is identically tall (the popup
+# never resizes when switching) and any tab whose content exceeds the cap
+# scrolls instead of overflowing. Sized to fit comfortably inside the smallest
+# supported window with room for the popup chrome (title + tab bar + buttons).
+const _TAB_VIEWPORT_SIZE := Vector2(500, 500)
+const _SCROLLBAR_GUTTER := 12   # reserved on every tab so columns line up scroll-or-not
+const _INPUT_TAB_IDX := 3       # index into the tab list (Game, Video, Audio, Input)
 const _REBINDABLE_ACTIONS: Array = [
 	{"action": "move_up",        "label": "Move Up"},
 	{"action": "move_down",      "label": "Move Down"},
@@ -236,26 +244,24 @@ func _build_tab_switcher() -> Control:
 	sep.custom_minimum_size = Vector2(0, 1)
 	wrapper.add_child(sep)
 
-	# Pin the tab-content viewport so the popup doesn't resize when switching
-	# between tabs of different heights. Sized to fit the tallest tab (Input —
-	# 10 rebind rows + sensitivity + sticky). Bump if a tab outgrows it.
+	# Pin the tab-content viewport to a fixed cap so the popup never resizes when
+	# switching between tabs of different heights. Each tab is wrapped in a
+	# fixed-height scroll viewport (see _scroll_wrap), so short tabs simply leave
+	# headroom and tall tabs scroll rather than overflowing the popup.
 	var content_margin := MarginContainer.new()
-	content_margin.custom_minimum_size = Vector2(500, 520)
+	content_margin.custom_minimum_size = _TAB_VIEWPORT_SIZE
 	content_margin.add_theme_constant_override("margin_top", 16)
 	content_margin.add_theme_constant_override("margin_bottom", 8)
 	content_margin.add_theme_constant_override("margin_left", 0)
 	content_margin.add_theme_constant_override("margin_right", 0)
 	wrapper.add_child(content_margin)
 
-	var game_tab := _build_game_tab()
-	var video_tab := _build_video_tab()
-	var audio_tab := _build_audio_tab()
-	var input_tab := _build_input_tab()
-	_tab_contents = [game_tab, video_tab, audio_tab, input_tab]
-	content_margin.add_child(game_tab)
-	content_margin.add_child(video_tab)
-	content_margin.add_child(audio_tab)
-	content_margin.add_child(input_tab)
+	# _tab_contents holds the scroll wrappers — those are the nodes whose
+	# visibility _activate_tab toggles.
+	for tab: Control in [_build_game_tab(), _build_video_tab(), _build_audio_tab(), _build_input_tab()]:
+		var scroll := _scroll_wrap(tab)
+		_tab_contents.append(scroll)
+		content_margin.add_child(scroll)
 
 	for i: int in ["Game", "Video", "Audio", "Input"].size():
 		var btn := Button.new()
@@ -273,7 +279,8 @@ func _build_tab_switcher() -> Control:
 	return wrapper
 
 func _activate_tab(idx: int) -> void:
-	if idx != 2 and not _listening_action.is_empty():
+	# Leaving the Input tab mid-rebind cancels the pending key-listen.
+	if idx != _INPUT_TAB_IDX and not _listening_action.is_empty():
 		_listening_action = ""
 		_update_binding_btns()
 	for i: int in _tab_contents.size():
@@ -544,22 +551,12 @@ func _build_input_tab() -> Control:
 
 	_pending_bindings = PlayerPrefs.bindings.duplicate(true)
 
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 240)
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	box.add_child(scroll)
-
-	# Right margin keeps the rebind buttons from butting against the scrollbar.
-	var scroll_margin := MarginContainer.new()
-	scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll_margin.add_theme_constant_override("margin_right", 12)
-	scroll.add_child(scroll_margin)
-
+	# No inner scroll here — the whole tab scrolls via the _scroll_wrap viewport,
+	# so the rebind list just flows into the page.
 	var grid := VBoxContainer.new()
 	grid.add_theme_constant_override("separation", 6)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll_margin.add_child(grid)
+	box.add_child(grid)
 
 	for entry: Dictionary in _REBINDABLE_ACTIONS:
 		var action: String = entry.action
@@ -1337,6 +1334,24 @@ func _tab_box() -> VBoxContainer:
 	box.add_theme_constant_override("separation", 10)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return box
+
+
+# Wraps a tab's content box in a fixed-height scroll viewport. Horizontal scroll
+# is disabled (content fills the width), and the scrollbar gutter is reserved on
+# every tab via margin_right so the two-column layout lines up identically
+# whether or not a given tab is tall enough to actually scroll.
+func _scroll_wrap(content: Control) -> ScrollContainer:
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_theme_constant_override("margin_right", _SCROLLBAR_GUTTER)
+	margin.add_child(content)
+	scroll.add_child(margin)
+	return scroll
 
 
 # Small-caps muted heading used to group rows into named sections.
