@@ -49,7 +49,7 @@ const TIME_WIRE_SCALE: float = 10000.0
 # The ENGINE steps at project.godot's physics/common/physics_ticks_per_second,
 # which is a SEPARATE knob — to change the tick rate, edit BOTH. `_ready()` below
 # push_errors at boot if they drift (a mismatch silently dilates the sim).
-const PHYSICS_TICK: int = 240
+const PHYSICS_TICK: int = 120
 
 # ── Scenes ────────────────────────────────────────────────────────────────────
 const SCENE_BOOT: String          = "res://Scenes/Boot.tscn"
