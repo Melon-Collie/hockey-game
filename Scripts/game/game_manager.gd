@@ -2588,6 +2588,11 @@ func _spawn_bots_from_lobby() -> void:
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a
 		# RemoteController-driven skater because peer_id is not their own.
+		# This broadcast is the bot's *sole* delivery channel — bots spawn after
+		# _push_lobby_assignments_to_clients runs, so they're never in any
+		# sync_existing_players payload. Unlike the human spawn broadcast (removed
+		# from the lobby push to stop double-delivery), there's no overlapping
+		# channel here, so this must stay. Don't "consolidate" it away.
 		NetworkManager.send_spawn_remote_skater(record.peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants,
 				record.is_left_handed, record.player_name, record.jersey_number, record.attributes)
