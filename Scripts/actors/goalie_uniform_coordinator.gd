@@ -36,6 +36,10 @@ var _glove_upper_arm: Node3D
 var _glove_forearm: Node3D
 var _blocker_upper_arm: Node3D
 var _blocker_forearm: Node3D
+var _glove_shoulder_sphere: MeshInstance3D
+var _blocker_shoulder_sphere: MeshInstance3D
+var _glove_elbow_sphere: MeshInstance3D
+var _blocker_elbow_sphere: MeshInstance3D
 
 # Cached for apply_jersey_info refresh.
 var _text_color: Color = Color.WHITE
@@ -48,7 +52,9 @@ func setup(goalie: Goalie, body_mesh: MeshInstance3D, head_mesh: MeshInstance3D,
 		left_pad_mesh: MeshInstance3D, right_pad_mesh: MeshInstance3D,
 		glove_mesh: MeshInstance3D, blocker_mesh: MeshInstance3D,
 		glove_upper_arm: Node3D, glove_forearm: Node3D,
-		blocker_upper_arm: Node3D, blocker_forearm: Node3D) -> void:
+		blocker_upper_arm: Node3D, blocker_forearm: Node3D,
+		glove_shoulder_sphere: MeshInstance3D, blocker_shoulder_sphere: MeshInstance3D,
+		glove_elbow_sphere: MeshInstance3D, blocker_elbow_sphere: MeshInstance3D) -> void:
 	_goalie = goalie
 	_body_mesh = body_mesh
 	_head_mesh = head_mesh
@@ -60,6 +66,10 @@ func setup(goalie: Goalie, body_mesh: MeshInstance3D, head_mesh: MeshInstance3D,
 	_glove_forearm = glove_forearm
 	_blocker_upper_arm = blocker_upper_arm
 	_blocker_forearm = blocker_forearm
+	_glove_shoulder_sphere = glove_shoulder_sphere
+	_blocker_shoulder_sphere = blocker_shoulder_sphere
+	_glove_elbow_sphere = glove_elbow_sphere
+	_blocker_elbow_sphere = blocker_elbow_sphere
 	_create_jersey_material()
 
 
@@ -84,6 +94,14 @@ func apply_uniform(colors: Dictionary) -> void:
 	_paint_cylinder_h(_blocker_upper_arm, arms.upper)
 	_paint_cylinder_h(_glove_forearm, arms.lower)
 	_paint_cylinder_h(_blocker_forearm, arms.lower)
+
+	var shoulder_mat: StandardMaterial3D = _make_solid_mat(uniform.shoulders.color)
+	_glove_shoulder_sphere.material_override = shoulder_mat
+	_blocker_shoulder_sphere.material_override = shoulder_mat.duplicate()
+
+	var elbow_mat: StandardMaterial3D = _make_solid_mat(arms.lower.base)
+	_glove_elbow_sphere.material_override = elbow_mat
+	_blocker_elbow_sphere.material_override = elbow_mat.duplicate()
 
 	# Repaint text with new team text colors (number/name unchanged).
 	_rebuild_text_decal()

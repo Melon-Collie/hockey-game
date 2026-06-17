@@ -27,6 +27,8 @@ extends Node3D
 const _ARM_UPPER_LEN: float = 0.38
 const _ARM_FOREARM_LEN: float = 0.38
 const _ARM_RADIUS: float = 0.07
+const _SHOULDER_SPHERE_RADIUS: float = 0.08
+const _ELBOW_SPHERE_RADIUS: float = 0.06
 
 var _uniform_coordinator: GoalieUniformCoordinator
 var _left_hip_connector: MeshInstance3D = null
@@ -35,6 +37,10 @@ var _glove_upper_arm: Node3D = null
 var _glove_forearm: Node3D = null
 var _blocker_upper_arm: Node3D = null
 var _blocker_forearm: Node3D = null
+var _glove_shoulder_sphere: MeshInstance3D = null
+var _blocker_shoulder_sphere: MeshInstance3D = null
+var _glove_elbow_sphere: MeshInstance3D = null
+var _blocker_elbow_sphere: MeshInstance3D = null
 
 
 func _ready() -> void:
@@ -204,7 +210,9 @@ func _setup_uniform_coordinator() -> void:
 	_uniform_coordinator = GoalieUniformCoordinator.new()
 	_uniform_coordinator.setup(self, _body_mesh, _head_mesh,
 			_left_pad_mesh, _right_pad_mesh, _glove_mesh, _blocker_mesh,
-			_glove_upper_arm, _glove_forearm, _blocker_upper_arm, _blocker_forearm)
+			_glove_upper_arm, _glove_forearm, _blocker_upper_arm, _blocker_forearm,
+			_glove_shoulder_sphere, _blocker_shoulder_sphere,
+			_glove_elbow_sphere, _blocker_elbow_sphere)
 
 
 func _init_connectors() -> void:
@@ -223,6 +231,14 @@ func _init_arm_bones() -> void:
 	add_child(_blocker_upper_arm)
 	_blocker_forearm = _make_arm_bone()
 	add_child(_blocker_forearm)
+	_glove_shoulder_sphere = _make_sphere_mesh(_SHOULDER_SPHERE_RADIUS)
+	add_child(_glove_shoulder_sphere)
+	_blocker_shoulder_sphere = _make_sphere_mesh(_SHOULDER_SPHERE_RADIUS)
+	add_child(_blocker_shoulder_sphere)
+	_glove_elbow_sphere = _make_sphere_mesh(_ELBOW_SPHERE_RADIUS)
+	add_child(_glove_elbow_sphere)
+	_blocker_elbow_sphere = _make_sphere_mesh(_ELBOW_SPHERE_RADIUS)
+	add_child(_blocker_elbow_sphere)
 
 
 func _make_connector_mesh(radius: float) -> MeshInstance3D:
@@ -240,7 +256,8 @@ func _make_connector_mesh(radius: float) -> MeshInstance3D:
 # pole_local is the elbow-hint direction in goalie-local space — the solver
 # converts to world space before projecting onto the perpendicular plane.
 func _update_arm_ik(upper: Node3D, forearm_bone: Node3D,
-		shoulder_local: Vector3, hand_local: Vector3, pole_local: Vector3) -> void:
+		shoulder_local: Vector3, hand_local: Vector3, pole_local: Vector3,
+		elbow_sphere: MeshInstance3D = null) -> void:
 	if upper == null or forearm_bone == null:
 		return
 	var shoulder_w: Vector3 = to_global(shoulder_local)
@@ -249,6 +266,8 @@ func _update_arm_ik(upper: Node3D, forearm_bone: Node3D,
 	var elbow_w: Vector3 = TwoBoneIK.solve_elbow(
 			shoulder_w, hand_w, _ARM_UPPER_LEN, _ARM_FOREARM_LEN, pole_w)
 	var elbow_local: Vector3 = to_local(elbow_w)
+	if elbow_sphere != null:
+		elbow_sphere.position = elbow_local
 	_update_arm_bone(upper, shoulder_local, elbow_local)
 	_update_arm_bone(forearm_bone, elbow_local, hand_local)
 
@@ -290,6 +309,18 @@ func _make_arm_bone() -> Node3D:
 	return wrapper
 
 
+func _make_sphere_mesh(radius: float) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	sphere.radial_segments = 12
+	sphere.rings = 6
+	mi.mesh = sphere
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+
 func _apply_connector_colors(pads_color: Color) -> void:
 	if not _left_hip_connector:
 		return
@@ -309,17 +340,18 @@ func _update_connectors() -> void:
 	_point_connector(_right_hip_connector,
 		_body.position + _body.basis * Vector3(0.10, -0.24, 0.0),
 		_right_pad.position)
+	# Shoulder spheres follow the body pivot each frame.
+	var glove_shoulder: Vector3 = _body.position + _body.basis * Vector3(-0.23, 0.12, 0.0)
+	var blocker_shoulder: Vector3 = _body.position + _body.basis * Vector3(0.23, 0.12, 0.0)
+	_glove_shoulder_sphere.position = glove_shoulder
+	_blocker_shoulder_sphere.position = blocker_shoulder
 	# Glove arm: shoulder on body's left side (goalie's catch hand), elbow bends
 	# outward and toward the shooter (-Z).
 	_update_arm_ik(_glove_upper_arm, _glove_forearm,
-		_body.position + _body.basis * Vector3(-0.23, 0.12, 0.0),
-		_glove.position,
-		Vector3(-1.0, 0.0, -0.5))
+		glove_shoulder, _glove.position, Vector3(-1.0, 0.0, -0.5), _glove_elbow_sphere)
 	# Blocker arm: shoulder on body's right side.
 	_update_arm_ik(_blocker_upper_arm, _blocker_forearm,
-		_body.position + _body.basis * Vector3(0.23, 0.12, 0.0),
-		_block_arm.position,
-		Vector3(1.0, 0.0, -0.5))
+		blocker_shoulder, _block_arm.position, Vector3(1.0, 0.0, -0.5), _blocker_elbow_sphere)
 
 
 func _point_connector(mesh: MeshInstance3D, from_pos: Vector3, to_pos: Vector3) -> void:
