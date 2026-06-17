@@ -1,7 +1,6 @@
 class_name RemoteController
 extends SkaterController
 
-@export var interpolation_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
 @export var extrapolation_max_ms: float = 50.0
 @export var rejoin_blend_duration: float = 0.075
 
@@ -136,10 +135,12 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 	_state_buffer.append(buffered)
 	if _state_buffer.size() > 30:
 		_state_buffer.pop_front()
-	_adapt_interpolation_delay()
 
 func _interpolate() -> void:
-	var render_time: float = NetworkManager.estimated_host_time() - interpolation_delay
+	# Shared delay (NetworkManager) so this skater renders at the same instant as
+	# the puck and other remotes — no per-actor drift in relative timing.
+	var interp_delay: float = NetworkManager.get_interpolation_delay()
+	var render_time: float = NetworkManager.estimated_host_time() - interp_delay
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
 			_state_buffer, render_time, _scratch_bracket)
 	var prev_extrapolating: bool = is_extrapolating
@@ -198,7 +199,7 @@ func _interpolate() -> void:
 		# Push position forward from render_time to present using the interpolated
 		# velocity. Capped at extrapolation_max_ms so a large interpolation buffer
 		# on a rough connection doesn't over-predict on direction changes.
-		var forward_dt: float = minf(interpolation_delay, extrapolation_max_ms / 1000.0)
+		var forward_dt: float = minf(interp_delay, extrapolation_max_ms / 1000.0)
 		interpolated.position += interpolated.velocity * forward_dt
 		# blade_position and top_hand_position are in upper_body local space;
 		# velocity is world space. Adding them is a coordinate frame error.
@@ -225,9 +226,6 @@ func _interpolate() -> void:
 			_rejoin_blend_elapsed = -1.0
 	_apply_state_to_skater(interpolated)
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
-
-func _adapt_interpolation_delay() -> void:
-	interpolation_delay = NetworkManager.adapt_interpolation_delay(interpolation_delay)
 
 func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	skater.global_position = state.position

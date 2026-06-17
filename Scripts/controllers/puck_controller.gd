@@ -15,7 +15,6 @@ const STICK_LIFT_UNDER_MARGIN: float = 0.0
 # reattach cooldown apply_poke_check already sets.
 const STICK_LIFT_FORCED_LIFT_S: float = 0.4
 
-@export var interpolation_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
 @export var extrapolation_max_ms: float = 50.0
 # Velocity decay applied during extrapolation to approximate ice friction.
 # Set to match observed Jolt physics deceleration rate (m/s per second linear).
@@ -609,7 +608,6 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 			_state_buffer.append(post_contact_buf)
 			if _state_buffer.size() > 30:
 				_state_buffer.pop_front()
-			_adapt_interpolation_delay()
 			return
 		else:
 			if _pending_local_release:
@@ -656,10 +654,11 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 	_state_buffer.append(buffered)
 	if _state_buffer.size() > 30:
 		_state_buffer.pop_front()
-	_adapt_interpolation_delay()
 
 func _interpolate() -> void:
-	var render_time: float = NetworkManager.estimated_host_time() - interpolation_delay
+	# Shared delay (NetworkManager) so the loose puck renders at the same instant
+	# as the skaters — relative timing (puck-vs-stick on a pass) stays exact.
+	var render_time: float = NetworkManager.estimated_host_time() - NetworkManager.get_interpolation_delay()
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
 			_state_buffer, render_time, _scratch_bracket)
 	var prev_extrapolating: bool = is_extrapolating
@@ -697,9 +696,6 @@ func _interpolate() -> void:
 			_rejoin_blend_elapsed = -1.0
 	_apply_state_to_puck(interpolated)
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
-
-func _adapt_interpolation_delay() -> void:
-	interpolation_delay = NetworkManager.adapt_interpolation_delay(interpolation_delay)
 
 func _apply_state_to_puck(state: PuckNetworkState) -> void:
 	# Position only — puck is frozen during interpolation, Jolt ignores velocity.

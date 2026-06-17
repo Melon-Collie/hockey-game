@@ -258,6 +258,9 @@ var _peer_loss_timer: float = 0.0
 # Jitter measurement (client side)
 var _jitter_samples: Array[float] = []
 var _last_ws_arrival_time: float = -1.0
+# get_target_interpolation_delay() per-physics-frame cache (see that function).
+var _target_interp_cached: float = -1.0
+var _target_interp_frame: int = -1
 
 # ── Timers ────────────────────────────────────────────────────────────────────
 var pending_error: String = ""
@@ -572,6 +575,7 @@ func prepare_for_new_game() -> void:
 	packet_loss_pct = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
+	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
 
 func reset() -> void:
 	_close()
@@ -634,6 +638,7 @@ func reset() -> void:
 	_peer_loss_timer = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
+	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
 	NetworkSimManager.clear_pending()
 
 # ── Process ───────────────────────────────────────────────────────────────────
@@ -955,6 +960,10 @@ func receive_world_state(data: PackedByteArray) -> void:
 			_last_ws_arrival_time = now
 			if s.size() >= 2:
 				_on_ws_sequence_received(s.decode_u16(0))
+			# Advance the shared interpolation delay once per packet, before the
+			# decode applies state to actors — so every interpolator this frame
+			# reads the same freshly-adapted value.
+			advance_interpolation_delay()
 			NetworkTelemetry.record_world_state()
 			NetworkTelemetry.record_bytes_received(s.size())
 			world_state_received.emit(s),
@@ -1658,6 +1667,17 @@ func get_jitter_p95() -> float:
 	return sorted[mini(int(sorted.size() * 0.95), sorted.size() - 1)]
 
 func get_target_interpolation_delay() -> float:
+	# Cached once per physics frame: get_jitter_p95() duplicates + sorts the sample
+	# buffer, and this is read by the per-packet shared-delay advance plus every
+	# claim-send. The target drifts slowly (adapt clamps ±1.5/+10 ms per packet),
+	# so a frame of staleness is irrelevant.
+	var frame: int = Engine.get_physics_frames()
+	if frame != _target_interp_frame:
+		_target_interp_frame = frame
+		_target_interp_cached = _compute_target_interpolation_delay()
+	return _target_interp_cached
+
+func _compute_target_interpolation_delay() -> float:
 	if not is_clock_ready():
 		return Constants.NETWORK_INTERPOLATION_DELAY
 	var rtt: float = get_rtt_ms() / 1000.0
@@ -1694,6 +1714,22 @@ func adapt_interpolation_delay(current: float) -> float:
 	#     120Hz lands at 180ms/sec — slightly faster than the original 40Hz
 	#     target (120ms/sec) and well clear of industry norms (~80-150 ms/sec).
 	return current + clampf(change, -0.0015, 0.010)
+
+# ── Shared interpolation delay ──────────────────────────────────────────────
+# One delay drives every remote interpolator (remote skaters, loose puck,
+# goalie) so they all render at estimated_host_time() - _interp_delay — the SAME
+# instant — keeping relative timing (puck-on-stick, save-vs-puck) exact instead
+# of letting independently-adapting per-actor delays drift apart. Advanced once
+# per received world-state packet in receive_world_state (the per-packet cadence
+# the adapt rates are tuned for; multiple actors reading the same value cost
+# nothing).
+var _interp_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
+
+func advance_interpolation_delay() -> void:
+	_interp_delay = adapt_interpolation_delay(_interp_delay)
+
+func get_interpolation_delay() -> float:
+	return _interp_delay
 
 func get_peer_loss_rate(peer_id: int = -1) -> float:
 	if is_host:
