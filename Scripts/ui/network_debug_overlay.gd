@@ -193,7 +193,7 @@ func _frame_health(t: NetworkTelemetry) -> void:
 	var ratio: float = t.host_effective_tick_hz / float(target_hz)
 	var sim_h: Health = Health.OK
 	if ratio < 0.90:
-		sim_h = Health.PROBLEM
+		sim_h = Health.BAD
 	elif ratio < 0.97:
 		sim_h = Health.WARN
 	_metric(sim_h, "Sim rate", "%.0f Hz (target %d)" % [t.host_effective_tick_hz, target_hz],
