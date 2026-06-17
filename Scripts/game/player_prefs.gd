@@ -92,7 +92,6 @@ const REBINDABLE_ACTIONS: PackedStringArray = [
 ]
 
 var player_uuid: String = ""
-var steam_id_linked: bool = false
 
 var player_name: String = "Player"
 var jersey_number: int = 10
@@ -237,7 +236,6 @@ func _store_uuid_backup() -> void:
 func save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("identity", "player_uuid", player_uuid)
-	cfg.set_value("identity", "steam_id_linked", steam_id_linked)
 	cfg.set_value("player", "name", player_name)
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
@@ -517,7 +515,6 @@ func _load() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(_get_save_path()) == OK:
 		player_uuid = cfg.get_value("identity", "player_uuid", "")
-		steam_id_linked = cfg.get_value("identity", "steam_id_linked", false)
 		player_name = cfg.get_value("player", "name", "Player").substr(0, 10)
 		jersey_number = clamp(cfg.get_value("player", "jersey_number", 10), 0, 99)
 		is_left_handed = cfg.get_value("player", "left_handed", true)
