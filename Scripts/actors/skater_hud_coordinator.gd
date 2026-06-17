@@ -26,7 +26,7 @@ const _CHEVRON_OFFSET_DEG: float = 60.0
 # hidden in replay/spectator, while ghosted, and for every non-local skater.
 # HOVER_OFFSET is metres above the skater root, which sits at body-centre
 # height (~1.0 m), so the apex clears the head with room to spare.
-const _BEACON_HOVER_OFFSET: float    = 1.05
+const _BEACON_HOVER_OFFSET: float    = 1.30
 const _BEACON_HALF_W: float          = 0.17
 const _BEACON_HALF_H: float          = 0.15
 const _BEACON_OUTLINE_SCALE: float   = 1.4
@@ -37,6 +37,17 @@ const _BEACON_BOB_AMPLITUDE: float   = 0.045
 const _BEACON_PULSE_HZ: float        = 1.6
 const _BEACON_PULSE_MIN_SCALE: float = 0.92
 const _BEACON_PULSE_MAX_SCALE: float = 1.10
+
+# Crowd-gated visibility. The beacon is clutter on open ice and only earns its
+# place in a scrum, so it shows only when at least _BEACON_CROWD_COUNT other
+# skaters are within _BEACON_CROWD_RADIUS of the local player (or while ghosted
+# — see _update_beacon_visibility). A linger timer keeps it up briefly after the
+# crowd disperses so skaters weaving past don't make it flicker. The proximity
+# scan runs on a coarse interval, not every 240 Hz tick.
+const _BEACON_CROWD_RADIUS: float         = 4.5
+const _BEACON_CROWD_COUNT: int            = 2
+const _BEACON_CROWD_LINGER: float         = 1.0
+const _BEACON_CROWD_CHECK_INTERVAL: float = 0.2
 
 # Slapper one-timer reticle. All geometry is built in unit (1 m) space;
 # _slapper_indicator.scale = (radius, 1, radius) carries the zone radius.
@@ -102,6 +113,11 @@ var _name_label: Label3D
 var _self_beacon: Node3D
 var _self_beacon_fill_mat: StandardMaterial3D
 var _self_beacon_active: bool = false
+# Crowd-gate state. `_beacon_crowded` is the latched "enough skaters nearby"
+# result; `_beacon_linger_timer` holds it on briefly after the crowd clears.
+var _beacon_crowded: bool = false
+var _beacon_crowd_accum: float = _BEACON_CROWD_CHECK_INTERVAL
+var _beacon_linger_timer: float = 0.0
 
 var _slapper_indicator: Node3D
 var _slapper_indicator_mat: StandardMaterial3D
@@ -309,9 +325,11 @@ func update(delta: float) -> void:
 				0.05,
 				_skater.global_position.z + _cached_screen_down.y * _NAME_RADIUS)
 
-	# Overhead self-beacon: float above the head with a gentle vertical bob and
-	# a scale pulse. Only the local player's own skater ever has this visible,
-	# so the per-tick trig runs for a single skater.
+	# Overhead self-beacon: re-evaluate the crowd gate (self-only), then float
+	# above the head with a gentle vertical bob and a scale pulse. Only the local
+	# player's own skater is ever active, so this runs for a single skater.
+	if _self_beacon != null and _self_beacon_active:
+		_update_beacon_crowd_state(delta)
 	if _self_beacon != null and _self_beacon.visible:
 		var now: float = Time.get_ticks_msec() * 0.001
 		var bob: float = sin(now * TAU * _BEACON_BOB_HZ) * _BEACON_BOB_AMPLITUDE
@@ -451,9 +469,49 @@ func _apply_self_beacon_relation(relation: int) -> void:
 func _update_beacon_visibility() -> void:
 	if _self_beacon == null:
 		return
+	# Shown when crowded OR ghosted: a scrum is where you lose yourself, and a
+	# lone ghosted player still needs the cue to steer back to the blue line.
+	var ghosted: bool = _skater != null and _skater.is_ghost
 	_self_beacon.visible = (_self_beacon_active
+			and (_beacon_crowded or ghosted)
 			and not _hidden_for_replay
 			and not _force_world_hud_hidden)
+
+
+# Coarse-interval proximity scan + linger timer that drives _beacon_crowded.
+# Re-arms the linger every time a scan still finds a crowd, so the gate only
+# falls _BEACON_CROWD_LINGER seconds after the last crowded sample.
+func _update_beacon_crowd_state(delta: float) -> void:
+	_beacon_crowd_accum += delta
+	if _beacon_crowd_accum >= _BEACON_CROWD_CHECK_INTERVAL:
+		_beacon_crowd_accum = 0.0
+		if _is_crowded():
+			_beacon_linger_timer = _BEACON_CROWD_LINGER
+	if _beacon_linger_timer > 0.0:
+		_beacon_linger_timer = maxf(_beacon_linger_timer - delta, 0.0)
+	var want: bool = _beacon_linger_timer > 0.0
+	if want != _beacon_crowded:
+		_beacon_crowded = want
+		_update_beacon_visibility()
+
+
+# True once _BEACON_CROWD_COUNT other skaters sit within _BEACON_CROWD_RADIUS of
+# the local skater. Counts both teams — overlapping bodies of either jersey are
+# what make you lose yourself. Early-outs as soon as the threshold is met.
+func _is_crowded() -> bool:
+	var players: Dictionary[int, PlayerRecord] = GameManager.get_players()
+	var origin: Vector3 = _skater.global_position
+	var r2: float = _BEACON_CROWD_RADIUS * _BEACON_CROWD_RADIUS
+	var count: int = 0
+	for peer_id: int in players:
+		var rec: PlayerRecord = players[peer_id]
+		if rec == null or rec.skater == null or rec.skater == _skater:
+			continue
+		if origin.distance_squared_to(rec.skater.global_position) <= r2:
+			count += 1
+			if count >= _BEACON_CROWD_COUNT:
+				return true
+	return false
 
 
 func _ring_color_for_relation(relation: int) -> Color:
@@ -559,7 +617,9 @@ func apply_ghost(ghost: bool) -> void:
 			_slapper_ring_mesh.visible = false
 		if _slapper_reticle_node != null:
 			_slapper_reticle_node.visible = false
-	# Beacon deliberately left untouched here — it stays visible while ghosted.
+	# set_ghost() writes _skater.is_ghost before calling here, so the gate sees
+	# the up-to-date ghost state (beacon stays visible while ghosted).
+	_update_beacon_visibility()
 
 
 # ── Private: zone transform ───────────────────────────────────────────────────
