@@ -14,6 +14,11 @@ var _reconcile_count: int = 0
 var _extrapolation_count: int = 0
 var _reconcile_mag_sum: float = 0.0
 var _reconcile_mag_n: int = 0
+var _reconcile_lookup_count: int = 0
+var _reconcile_match_count: int = 0
+var _recon_pos_trips: int = 0
+var _recon_vel_trips: int = 0
+var _recon_ubody_trips: int = 0
 var _blade_jump_count: int = 0
 var _blade_jump_mag_sum: float = 0.0
 var _blade_jump_n: int = 0
@@ -63,6 +68,17 @@ var reconcile_per_sec: float = 0.0
 # letting big divergences accumulate before firing — or, if rate is high too,
 # the predicted-vs-server lookup is missing and falling back to live position.
 var reconcile_magnitude_avg: float = 0.0
+# Fraction of reconcile lookups that found the client's own prediction for the
+# server's ack timestamp. <100% = find_at missing, so reconcile falls back to
+# live-vs-server (which includes prediction lead) and fires false corrections —
+# the single most diagnostic number for "why am I reconciling on a clean LAN."
+var reconcile_match_pct: float = 100.0
+# Per-channel reconcile trip rates (Hz): which threshold fired the snap. At rest,
+# pos/vel are ~0, so a non-zero rot rate isolates pose/aim (upper-body)
+# divergence as the reconcile trigger rather than a position desync.
+var recon_pos_per_sec: float = 0.0
+var recon_vel_per_sec: float = 0.0
+var recon_ubody_per_sec: float = 0.0
 var extrapolation_per_sec: float = 0.0   # bracket extrapolation count; expect <1/s
 var buffer_depth_skater: int = 0
 var buffer_depth_puck: int = 0
@@ -201,6 +217,25 @@ static func record_prediction_divergence(meters: float) -> void:
 	instance._prediction_divergence_sum += meters
 	instance._prediction_divergence_n += 1
 
+# Whether a reconcile's find_at located a prediction snapshot for the ack ts.
+static func record_reconcile_match(matched: bool) -> void:
+	if instance == null:
+		return
+	instance._reconcile_lookup_count += 1
+	if matched:
+		instance._reconcile_match_count += 1
+
+# Which reconcile channel(s) tripped the snap this time (diagnostic attribution).
+static func record_reconcile_cause(pos: bool, vel: bool, ubody: bool) -> void:
+	if instance == null:
+		return
+	if pos:
+		instance._recon_pos_trips += 1
+	if vel:
+		instance._recon_vel_trips += 1
+	if ubody:
+		instance._recon_ubody_trips += 1
+
 # ooo_drop: a world-state packet arrived out of order and was silently discarded.
 static func record_ooo_drop() -> void:
 	if instance: instance._ooo_drop_count += 1
@@ -274,6 +309,10 @@ func tick(delta: float) -> void:
 	reconcile_per_sec = _reconcile_count / _window_timer
 	extrapolation_per_sec = _extrapolation_count / _window_timer
 	reconcile_magnitude_avg = _reconcile_mag_sum / _reconcile_mag_n if _reconcile_mag_n > 0 else 0.0
+	reconcile_match_pct = (100.0 * _reconcile_match_count / _reconcile_lookup_count) if _reconcile_lookup_count > 0 else 100.0
+	recon_pos_per_sec = _recon_pos_trips / _window_timer
+	recon_vel_per_sec = _recon_vel_trips / _window_timer
+	recon_ubody_per_sec = _recon_ubody_trips / _window_timer
 	blade_jump_per_sec = _blade_jump_count / _window_timer
 	blade_jump_mag_avg = _blade_jump_mag_sum / _blade_jump_n if _blade_jump_n > 0 else 0.0
 	blade_reconcile_mag_avg = _blade_reconcile_mag_sum / _blade_reconcile_n if _blade_reconcile_n > 0 else 0.0
@@ -330,6 +369,11 @@ func tick(delta: float) -> void:
 	_extrapolation_count = 0
 	_reconcile_mag_sum = 0.0
 	_reconcile_mag_n = 0
+	_reconcile_lookup_count = 0
+	_reconcile_match_count = 0
+	_recon_pos_trips = 0
+	_recon_vel_trips = 0
+	_recon_ubody_trips = 0
 	_blade_jump_count = 0
 	_blade_jump_mag_sum = 0.0
 	_blade_jump_n = 0

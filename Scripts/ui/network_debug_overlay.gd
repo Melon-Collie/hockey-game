@@ -124,6 +124,9 @@ func _render_client(t: NetworkTelemetry) -> void:
 	var rec := _worse(_band(t.reconcile_per_sec, 1.0, 5.0), _band(t.reconcile_magnitude_avg, 0.05, 0.2))
 	_metric(rec, "Corrections", "%.1f/s, %.3f m avg" % [t.reconcile_per_sec, t.reconcile_magnitude_avg],
 		"server snapping your prediction back; want <1/s and <5 cm")
+	if t.reconcile_per_sec > 0.5:
+		_info("Reconcile cause", "pos %.0f · vel %.0f · rot %.0f /s" % [t.recon_pos_per_sec, t.recon_vel_per_sec, t.recon_ubody_per_sec],
+			"which channel tripped the snap; at rest pos/vel ~0, so rot>0 means pose/aim divergence, not position desync")
 	_metric(_band(t.extrapolation_per_sec, 1.0, 5.0), "Guessing ahead", "%.1f/s" % t.extrapolation_per_sec,
 		"frames guessed past the buffer (a packet was late); want <1/s")
 	_info("Puck mode", t.puck_mode, "interp = smoothed, trajectory = predicted flight, carried = on a stick")
@@ -218,6 +221,8 @@ func _render_watch(t: NetworkTelemetry) -> void:
 		"puck flight snapped hard; expected only on real bounces, not every shot") or any
 	any = _watch(_when_positive(t.ooo_drops_per_sec, 5.0), "Out-of-order drops", "%.1f/s" % t.ooo_drops_per_sec,
 		"packets arrived reordered and were discarded; want 0") or any
+	any = _watch(_band(100.0 - t.reconcile_match_pct, 5.0, 30.0), "Reconcile match", "%.0f%% matched" % t.reconcile_match_pct,
+		"client found its prediction for the server's ack timestamp; <100% = find_at missing, so it reconciles on lag not real error") or any
 	if not any:
 		_lines.append("[color=#%s]%s Internals nominal[/color] [color=#%s](drift, stick jumps, puck snaps, dropped packets all healthy)[/color]" % [
 			COL_OK, DOT, COL_DIM])
