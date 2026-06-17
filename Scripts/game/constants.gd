@@ -6,18 +6,23 @@ extends Node
 # const class.
 
 # ── Collision Layers ──────────────────────────────────────────────────────────
-# Layer 1 (bit 0, value  1) — walls, ice, goalie bodies
+# Layer 1 (bit 0, value  1) — walls, ice, goalie bodies (pads/body/head/glove/blocker)
 # Layer 2 (bit 1, value  2) — skater blade Area3Ds
+# Layer 3 (bit 2, value  4) — goalie stick (puck bounces off it; skaters pass through)
 # Layer 4 (bit 3, value  8) — puck body (goal sensors use mask 8 to detect it)
 # Layer 5 (bit 4, value 16) — skater CharacterBody3D bodies
 const LAYER_WALLS: int          = 1
 const LAYER_BLADE_AREAS: int    = 2
+const LAYER_GOALIE_STICK: int   = 4
 const LAYER_PUCK: int           = 8
 const LAYER_SKATER_BODIES: int  = 16
 
 # ── Composed Masks ────────────────────────────────────────────────────────────
-const MASK_PUCK: int   = LAYER_WALLS                         # bounces off boards + goalie bodies
-const MASK_SKATER: int = LAYER_WALLS | LAYER_SKATER_BODIES   # blocked by boards + other skaters
+# Puck bounces off boards + goalie bodies AND the goalie stick, but the stick is
+# kept off LAYER_WALLS so skaters (whose mask omits LAYER_GOALIE_STICK) skate
+# straight through it instead of snagging on the hooked shaft/paddle/blade.
+const MASK_PUCK: int   = LAYER_WALLS | LAYER_GOALIE_STICK    # bounces off boards + goalie bodies + stick
+const MASK_SKATER: int = LAYER_WALLS | LAYER_SKATER_BODIES   # blocked by boards + goalie bodies + other skaters
 
 # ── Network (transport-level) ─────────────────────────────────────────────────
 const PORT: int = 7777
