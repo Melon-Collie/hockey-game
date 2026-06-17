@@ -418,7 +418,6 @@ func _apply_ghost_state() -> void:
 
 # ── Network Callbacks ─────────────────────────────────────────────────────────
 func on_host_started() -> void:
-	_maybe_backfill_steam_id()
 	_spawn_world()
 	if not NetworkManager.pending_lobby_slots.is_empty():
 		var my_slot: Dictionary = NetworkManager.pending_lobby_slots.get(1, {})
@@ -447,19 +446,7 @@ func on_host_started() -> void:
 
 
 func on_connected_to_server() -> void:
-	_maybe_backfill_steam_id()
-
-
-# One-time, per-machine backfill of legacy uuid-keyed career rows with the
-# local SteamID64. Self-latches via PlayerPrefs.steam_id_linked inside the
-# reporter, so calling it on every online session start is cheap. Skipped
-# offline (no career writes there) and when Steam is unavailable.
-func _maybe_backfill_steam_id() -> void:
-	if NetworkManager.is_offline_mode or _career_reporter == null:
-		return
-	if not SteamManager.is_available or SteamManager.steam_id == 0:
-		return
-	_career_reporter.migrate_to_steam_id(PlayerPrefs.player_uuid, SteamManager.steam_id)
+	pass
 
 
 func on_slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color) -> void:

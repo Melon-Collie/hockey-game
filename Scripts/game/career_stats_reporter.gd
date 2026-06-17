@@ -21,31 +21,14 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 
 
 # Calls the recent_games_for RPC and returns up to `limit` recent games the
-# given player UUID participated in, newest first. Each game row carries
-# nested players JSON, period_scores, and the home/away final score. Used by
-# the Career screen's Recent Games tab. Empty array on error or no games.
+# given player participated in, newest first. Each game row carries nested
+# players JSON, period_scores, and the home/away final score. Used by the
+# Career screen's Recent Games tab. Empty array on error or no games.
 func fetch_recent_games(steam_id: int, limit: int, callback: Callable) -> void:
 	_call_rpc("recent_games_for", {
 		"player_steam_id": steam_id,
 		"game_limit": limit,
 	}, callback)
-
-
-# One-time backfill: stamp this machine's legacy uuid-keyed rows (steam_id IS
-# NULL) with the now-known SteamID64 so old and new games unify under one
-# identity. Only the local machine knows its own uuid↔steam_id mapping, so it
-# only ever patches its own rows. Latches on success — a failed PATCH leaves
-# steam_id_linked false so the next session retries rather than orphaning
-# history forever.
-func migrate_to_steam_id(uuid: String, steam_id: int) -> void:
-	if PlayerPrefs.steam_id_linked or steam_id == 0:
-		return
-	var url: String = "%s/rest/v1/career_stats?uuid=eq.%s&steam_id=is.null" % [SupabaseConfig.URL, uuid]
-	_patch(url, {"steam_id": steam_id}, func(ok: bool) -> void:
-		if ok:
-			PlayerPrefs.steam_id_linked = true
-			PlayerPrefs.save()
-	)
 
 
 func fetch_totals(callback: Callable) -> void:
@@ -59,29 +42,18 @@ func _post(url: String, body: Dictionary) -> void:
 	_fire(url, HTTPClient.METHOD_POST, body)
 
 
-func _patch(url: String, body: Dictionary, on_done: Callable = Callable()) -> void:
-	_fire(url, HTTPClient.METHOD_PATCH, body, on_done)
-
-
-# on_done, when valid, is called with a single bool: true on a 2xx response,
-# false on a non-2xx or a failed-to-dispatch request.
-func _fire(url: String, method: HTTPClient.Method, body: Dictionary, on_done: Callable = Callable()) -> void:
+func _fire(url: String, method: HTTPClient.Method, body: Dictionary) -> void:
 	var root: Window = (Engine.get_main_loop() as SceneTree).root
 	var req := HTTPRequest.new()
 	root.add_child(req)
 	req.request_completed.connect(func(_result: int, code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
-		var ok: bool = code >= 200 and code < 300
-		if not ok:
+		if code < 200 or code >= 300:
 			push_warning("CareerStatsReporter: HTTP %d on %s" % [code, url])
-		if on_done.is_valid():
-			on_done.call(ok)
 		req.queue_free()
 	)
 	var err: Error = req.request(url, _write_headers(), method, JSON.stringify(body))
 	if err != OK:
 		push_warning("CareerStatsReporter: request failed: %s" % error_string(err))
-		if on_done.is_valid():
-			on_done.call(false)
 		req.queue_free()
 
 
