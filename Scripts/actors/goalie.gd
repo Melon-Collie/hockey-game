@@ -15,7 +15,17 @@ extends Node3D
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
 @onready var _block_arm: Node3D = $BlockArm
+@onready var _stick: StaticBody3D = $BlockArm/Stick
 @onready var _stick_blade: CollisionShape3D = $BlockArm/Stick/StickBladeCollider
+
+func _ready() -> void:
+	# The stick (shaft + paddle + angled blade) is a hooked shape that snagged
+	# skaters when it shared LAYER_WALLS with the rest of the goalie. Move it to
+	# its own LAYER_GOALIE_STICK: the puck's mask includes that layer so shots
+	# still rebound off the stick, but the skater's mask omits it so players
+	# pass through instead of getting caught. Every other goalie part keeps the
+	# scene-default LAYER_WALLS and goes on blocking both puck and skaters.
+	_stick.collision_layer = Constants.LAYER_GOALIE_STICK
 
 @onready var _left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var _right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D

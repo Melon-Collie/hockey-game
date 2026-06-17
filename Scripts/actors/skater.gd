@@ -185,6 +185,21 @@ var is_elevated: bool = false
 # Eased 0→1 toward is_elevated; drives the extra blade toe-lift (see
 # _update_blade_elevation / _apply_blade_tilt).
 var _blade_elevation_blend: float = 0.0
+# True when the blade is lifted off the ice — own stick-lift (Q held while not
+# carrying) or a forced pop from an opponent hooking under this stick. Set each
+# tick by the controller; read host-side by PuckController's interaction gate
+# and replicated so remotes/AI can read it. A lifted blade only meets airborne
+# pucks (to tip them); it clears grounded pucks and sticks.
+var blade_up: bool = false
+# Eased 0→1 toward blade_up; drives the IK blade-lift offset (see
+# SkaterIKCoordinator.blade_y_local). Mirrors _blade_elevation_blend.
+var _blade_lift_blend: float = 0.0
+# Counts down while an opponent's stick-lift has forcibly popped this skater's
+# blade up. Set host-side by the stick-lift claim path; decremented every tick.
+# The controller ORs this into the effective blade_up regardless of possession,
+# so a forced lift dislodges a carried puck. Stays 0 on clients (they read the
+# resolved blade_up off the wire).
+var _forced_lift_timer: float = 0.0
 var is_ghost: bool = false
 var is_braking: bool = false
 var is_braced: bool = false
@@ -350,6 +365,8 @@ func _physics_process(delta: float) -> void:
 	if body_check_delta.length_squared() > 0.0001:
 		body_check_impulse_applied.emit(body_check_delta)
 	_update_blade_elevation(delta)
+	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
+	_update_blade_lift(delta)
 	_hud.update(delta)
 
 
@@ -433,6 +450,37 @@ func _update_blade_elevation(delta: float) -> void:
 	_blade_elevation_blend = move_toward(
 			_blade_elevation_blend, target, _BLADE_ELEVATION_BLEND_SPEED * delta)
 	_apply_blade_tilt()
+
+
+# Blend units/sec for the blade-lift ease (~0.08 s for a full lift). Snappier
+# than the elevation blend — a stick lift is a deliberate, quick action.
+const _BLADE_LIFT_BLEND_SPEED: float = 12.0
+
+
+# Eases _blade_lift_blend toward blade_up each tick. The IK reads the blend via
+# get_blade_lift_blend() to raise the blade target toward blade_lift_height, so
+# the whole stick rises off the ice instead of snapping. Called from
+# _physics_process.
+func _update_blade_lift(delta: float) -> void:
+	var target: float = 1.0 if blade_up else 0.0
+	_blade_lift_blend = move_toward(
+			_blade_lift_blend, target, _BLADE_LIFT_BLEND_SPEED * delta)
+
+
+# Eased 0→1 lift factor consumed by SkaterIKCoordinator.blade_y_local().
+func get_blade_lift_blend() -> float:
+	return _blade_lift_blend
+
+
+# Forcibly pop this skater's blade up for `duration` seconds (opponent stick
+# lift). Takes the max with any in-flight timer so a fresh hook never shortens
+# an existing one. Host-side only; clients receive the resolved blade_up.
+func force_blade_lift(duration: float) -> void:
+	_forced_lift_timer = maxf(_forced_lift_timer, duration)
+
+
+func is_forced_lift_active() -> bool:
+	return _forced_lift_timer > 0.0
 
 
 # ── Facing ────────────────────────────────────────────────────────────────────

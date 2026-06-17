@@ -172,3 +172,27 @@ func test_goalie_zero_state_round_trips() -> void:
 	assert_eq(decoded.left_pad_offset, Vector3.ZERO)
 	assert_eq(decoded.glove_yaw, 0.0)
 	assert_eq(decoded.head_yaw, 0.0)
+
+
+# ── Skater flags byte: shot_state | ghost | elevated | blade_up ───────────────
+# All four share the single flags byte (shot_state low nibble, the rest are
+# bits 0x10/0x20/0x40). This exercises every combination so a new bit can't
+# silently clobber a neighbour.
+
+func test_skater_flags_round_trip_all_combinations() -> void:
+	for shot_state: int in [0, 5, 15]:
+		for ghost: bool in [false, true]:
+			for elevated: bool in [false, true]:
+				for blade_up: bool in [false, true]:
+					var s := SkaterNetworkState.new()
+					s.shot_state  = shot_state
+					s.is_ghost    = ghost
+					s.is_elevated = elevated
+					s.blade_up    = blade_up
+					var enc: PackedByteArray = WorldStateCodec._encode_skater_quantized(s)
+					var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(enc)
+					var ctx := "shot=%d ghost=%s elev=%s up=%s" % [shot_state, ghost, elevated, blade_up]
+					assert_eq(dec.shot_state, shot_state, ctx)
+					assert_eq(dec.is_ghost, ghost, ctx)
+					assert_eq(dec.is_elevated, elevated, ctx)
+					assert_eq(dec.blade_up, blade_up, ctx)

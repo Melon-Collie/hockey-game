@@ -156,6 +156,10 @@ func _interpolate_skater(peer_id: int, ts: float) -> SkaterNetworkState:
 	result.velocity = from_s.velocity.lerp(to_s.velocity, t)
 	result.blade_position = from_s.blade_position.lerp(to_s.blade_position, t)
 	result.blade_contact_world = from_s.blade_contact_world.lerp(to_s.blade_contact_world, t)
+	# top_hand_world (host-only) pairs with blade_contact_world as the shaft
+	# segment for stick-lift claim resolution — interpolate it too, or the
+	# resolver reads a (0,0,0) hand on rewound snapshots.
+	result.top_hand_world = from_s.top_hand_world.lerp(to_s.top_hand_world, t)
 	result.top_hand_position = from_s.top_hand_position.lerp(to_s.top_hand_position, t)
 	var bracket_dt: float = to_s.host_timestamp - from_s.host_timestamp
 	result.upper_body_rotation_y = BufferedStateInterpolator.hermite_angle(

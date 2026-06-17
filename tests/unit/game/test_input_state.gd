@@ -27,6 +27,7 @@ func test_round_trip_preserves_all_fields() -> void:
 	s.elevation_up     = true
 	s.elevation_down   = false
 	s.block_held       = true
+	s.stick_lift_held  = true
 
 	var r := InputState.from_array(s.to_array())
 
@@ -46,13 +47,25 @@ func test_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.elevation_up,    s.elevation_up)
 	assert_eq(r.elevation_down,  s.elevation_down)
 	assert_eq(r.block_held,      s.block_held)
+	assert_eq(r.stick_lift_held, s.stick_lift_held)
 
 
-func test_array_length_is_sixteen() -> void:
+func test_array_length_is_eighteen() -> void:
 	# Field count sentinel — if someone adds a field without updating
 	# to_array/from_array, this catches the mismatch.
 	var s := InputState.new()
-	assert_eq(s.to_array().size(), 17)
+	assert_eq(s.to_array().size(), 18)
+
+
+func test_stick_lift_back_compat_defaults_false() -> void:
+	# A short array from an older sender (no stick_lift_held at index 17) must
+	# decode without error, defaulting the flag to false.
+	var s := InputState.new()
+	s.stick_lift_held = true
+	var short_array: Array = s.to_array()
+	short_array.resize(17)  # drop stick_lift_held
+	var r := InputState.from_array(short_array)
+	assert_false(r.stick_lift_held, "missing stick_lift_held index should default false")
 
 
 # ── Binary (bytes) round-trip ─────────────────────────────────────────────────
@@ -72,6 +85,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	s.elevation_up     = true
 	s.elevation_down   = false
 	s.block_held       = true
+	s.stick_lift_held  = true
 
 	var r := InputState.from_bytes(s.to_bytes())
 
@@ -91,6 +105,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.elevation_up,    s.elevation_up)
 	assert_eq(r.elevation_down,  s.elevation_down)
 	assert_eq(r.block_held,      s.block_held)
+	assert_eq(r.stick_lift_held, s.stick_lift_held)
 
 
 func test_bytes_size_sentinel() -> void:

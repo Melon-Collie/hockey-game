@@ -78,3 +78,22 @@ func test_zero_alignment_bonus_matches_baseline_behavior() -> void:
 	assert_true(PuckReceptionRules.should_receive(
 		puck_vel, blade_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, 0.0),
 		"13 m/s puck under baseline threshold should still receive")
+
+
+# ── blade_can_interact — on-ice/off-ice gate ─────────────────────────────────
+
+func test_grounded_blade_interacts_with_grounded_puck() -> void:
+	assert_true(PuckReceptionRules.blade_can_interact(false, false))
+
+func test_grounded_blade_ignores_airborne_puck() -> void:
+	# The saucer-pass change: a stationary grounded blade lets an airborne puck
+	# fly over instead of corralling it.
+	assert_false(PuckReceptionRules.blade_can_interact(false, true))
+
+func test_lifted_blade_ignores_grounded_puck() -> void:
+	assert_false(PuckReceptionRules.blade_can_interact(true, false))
+
+func test_lifted_blade_interacts_with_airborne_puck() -> void:
+	# Lifted blade only reaches airborne pucks (and may only tip them — the
+	# tip-vs-catch restriction is enforced at the call site, not here).
+	assert_true(PuckReceptionRules.blade_can_interact(true, true))
