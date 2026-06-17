@@ -436,8 +436,10 @@ func _refresh_ring_color() -> void:
 
 
 # Show the overhead beacon only when this skater is the local player's own, and
-# keep its fill in sync with the (colorblind-aware) self color. Visibility still
-# gates on ghost / replay / spectator via _update_beacon_visibility.
+# keep its fill in sync with the (colorblind-aware) self color. Stays visible
+# while ghosted — being ghosted (offside/icing) is exactly when steering back
+# to tag the blue line makes the self cue most valuable — so only replay /
+# spectator hiding gates it.
 func _apply_self_beacon_relation(relation: int) -> void:
 	_self_beacon_active = (relation == RingRelation.SELF)
 	if _self_beacon_active and _self_beacon_fill_mat != null:
@@ -451,8 +453,7 @@ func _update_beacon_visibility() -> void:
 		return
 	_self_beacon.visible = (_self_beacon_active
 			and not _hidden_for_replay
-			and not _force_world_hud_hidden
-			and _skater != null and not _skater.is_ghost)
+			and not _force_world_hud_hidden)
 
 
 func _ring_color_for_relation(relation: int) -> Color:
@@ -558,9 +559,7 @@ func apply_ghost(ghost: bool) -> void:
 			_slapper_ring_mesh.visible = false
 		if _slapper_reticle_node != null:
 			_slapper_reticle_node.visible = false
-	# set_ghost() writes _skater.is_ghost before calling here, so the helper
-	# reads the up-to-date ghost state.
-	_update_beacon_visibility()
+	# Beacon deliberately left untouched here — it stays visible while ghosted.
 
 
 # ── Private: zone transform ───────────────────────────────────────────────────
