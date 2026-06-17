@@ -29,7 +29,7 @@ Interpolation delay: 75ms baseline, adapts per-packet via `lerp(0.15)`, capped a
 
 Wire format: Skater 37B · Puck 12B · Goalie 35B (12 B root + 23 B pose). Quantized; ~50% reduction vs unquantized.
 
-**Input timestamp lead:** Client inputs are stamped with `NetworkManager.estimated_input_stamp_time()` = `estimated_host_time() + INPUT_LEAD_SEC` (~25ms). `estimated_host_time()` already encodes the NTP-measured RTT/2, so inputs arrive at the host at approximately their timestamp. The 25ms lead = 16.7ms worst-case batch-send jitter + 8.3ms two-tick buffer, ensuring the host input queue never starves between 60Hz batches. The host gates consumption in `RemoteController._drive_from_input`: inputs are held until `host_timestamp <= estimated_host_time()`. F3 overlay reports `InBuf: lead X ms  starved Y/s` — healthy values are lead ≈ 0–8ms, starved = 0.
+**Input timestamp lead:** Client inputs are stamped with `NetworkManager.estimated_input_stamp_time()` = `estimated_host_time() + INPUT_LEAD_SEC` (~25ms). `estimated_host_time()` already encodes the NTP-measured RTT/2, so inputs arrive at the host at approximately their timestamp. The 25ms lead = 16.7ms worst-case batch-send jitter + 8.3ms two-tick buffer, ensuring the host input queue never starves between 60Hz batches. The host gates consumption in `RemoteController._drive_from_input`: inputs are held until `host_timestamp <= estimated_host_time()`. The F3 overlay's host-only "Client input queue" section reports `Input lead` and `Starvations` — healthy values are lead ≈ 0–8ms, starvations = 0.
 
 ### Collision Layers
 

@@ -1,8 +1,38 @@
 class_name NetworkDebugOverlay
 extends CanvasLayer
 
-var _label: Label
+# F3 network debug overlay. Reads NetworkTelemetry + NetworkManager and renders a
+# role-aware, color-coded health readout. Design notes:
+#   • Each metric is colored green / yellow / red by comparing the live value to
+#     the healthy ranges documented in network_telemetry.gd. The colored dot is
+#     the at-a-glance "expected vs unexpected" signal the raw numbers never gave.
+#   • Every line carries an inline plain-English hint (what it means + the target
+#     range) so the overlay is self-explanatory without a separate cheat sheet.
+#   • Sections are gated by role (SOLO / HOST / CLIENT): a client never sees
+#     host-frame stats that would read as misleading zeros, and vice-versa.
+#   • "Watch" metrics (drift, stick jumps, puck snaps, dropped packets) stay
+#     hidden while healthy and surface only when they cross a threshold, so the
+#     overlay stays calm until something actually needs attention.
+# Thresholds below are derived from the "Expected ranges" comments in
+# network_telemetry.gd — keep the two in sync if either moves.
+
+enum Health { OK, WARN, BAD }
+
+const COL_OK := "9ad27c"
+const COL_WARN := "e6cf52"
+const COL_BAD := "e87060"
+const COL_HEAD := "8fb3d9"
+const COL_DIM := "8a93a0"
+const COL_VAL := "ececec"
+const DOT := "●"
+
+var _rt: RichTextLabel
 var _showing: bool = false
+
+# Built fresh each frame: collected metric lines + the worst health seen, which
+# rolls up into the header verdict.
+var _lines: PackedStringArray = []
+var _worst: Health = Health.OK
 
 func _ready() -> void:
 	layer = 100
@@ -14,14 +44,19 @@ func _ready() -> void:
 	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	panel.position = Vector2(-8, 8)
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.0, 0.0, 0.0, 0.72)
+	style.bg_color = Color(0.0, 0.0, 0.0, 0.78)
 	style.set_corner_radius_all(4)
 	style.set_content_margin_all(8.0)
 	panel.add_theme_stylebox_override("panel", style)
-	_label = Label.new()
-	_label.add_theme_font_size_override("font_size", 13)
-	_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9, 1.0))
-	panel.add_child(_label)
+	_rt = RichTextLabel.new()
+	_rt.bbcode_enabled = true
+	_rt.fit_content = true
+	_rt.scroll_active = false
+	_rt.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_rt.custom_minimum_size = Vector2(580, 0)
+	_rt.add_theme_font_size_override("normal_font_size", 13)
+	_rt.add_theme_font_size_override("bold_font_size", 13)
+	panel.add_child(_rt)
 	add_child(panel)
 	hide()
 
@@ -31,39 +66,201 @@ func _unhandled_input(event: InputEvent) -> void:
 		visible = _showing
 
 func _process(_delta: float) -> void:
-	if not _showing or NetworkTelemetry.instance == null:
+	if not _showing:
 		return
+	_lines.clear()
+	_worst = Health.OK
+
 	var t: NetworkTelemetry = NetworkTelemetry.instance
-	var sim_label: String
+	if t == null:
+		_rt.text = (
+			"[b]Network Debug[/b]   [color=#%s](F3 to close)[/color]\n" % COL_DIM
+			+ "[color=#%s]Not in a session — start a game to see live metrics.[/color]" % COL_DIM
+		)
+		return
+
+	var role: String
+	if NetworkManager.is_offline_mode:
+		role = "SOLO (offline)"
+		_render_solo(t)
+	elif NetworkManager.is_host:
+		role = "HOST"
+		_render_host(t)
+	else:
+		role = "CLIENT"
+		_render_client(t)
+
+	# Header is built last so the verdict reflects the worst line above it.
+	var verdict: String = ["● OK", "● WATCH", "● PROBLEM"][int(_worst)]
+	var header := "[b]Network Debug[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]   [color=#%s](F3 to close)[/color]" % [
+		_col(_worst), verdict, COL_HEAD, role, COL_DIM]
+	_rt.text = header + "\n" + "\n".join(_lines)
+
+# ── Role renderers ───────────────────────────────────────────────────────────
+
+func _render_client(t: NetworkTelemetry) -> void:
+	_section("Connection")
+	var rtt_avg := NetworkManager.get_rtt_ms()
+	var rtt_last := NetworkManager.get_latest_rtt_ms()
+	if not NetworkManager.is_clock_ready():
+		_metric(Health.WARN, "Ping (RTT)", "syncing clock…",
+			"round-trip to host; waiting for the clock to lock in")
+	else:
+		_metric(_band(rtt_avg, 80.0, 150.0), "Ping (RTT)", "%.0f ms avg, %.0f ms last" % [rtt_avg, rtt_last],
+			"round-trip to host; <80 great, 80-150 playable, >150 laggy")
+	var offset := NetworkManager.get_clock_offset_ms()
+	_info("Clock offset", ("%+.0f ms" % offset), "your clock vs host's; just informational")
+	_metric(_band(t.packet_loss_pct, 1.0, 5.0), "Packet loss", "%.1f%%" % t.packet_loss_pct,
+		"dropped packets; <1% great, >5% causes rubber-banding")
+	_metric(_band(t.jitter_p95_ms, 8.0, 20.0), "Jitter", "%.1f ms" % t.jitter_p95_ms,
+		"how uneven packet arrival is; <8 smooth, >20 choppy")
+	_info("Updates in", "%.0f/s" % t.world_state_hz, "world snapshots received; matches host send rate")
+	_sim_line(t)
+
+	_section("Prediction (your view of remote players & puck)")
+	var rec := _worse(_band(t.reconcile_per_sec, 1.0, 5.0), _band(t.reconcile_magnitude_avg, 0.05, 0.2))
+	_metric(rec, "Corrections", "%.1f/s, %.3f m avg" % [t.reconcile_per_sec, t.reconcile_magnitude_avg],
+		"server snapping your prediction back; want <1/s and <5 cm")
+	_metric(_band(t.extrapolation_per_sec, 1.0, 5.0), "Guessing ahead", "%.1f/s" % t.extrapolation_per_sec,
+		"frames guessed past the buffer (a packet was late); want <1/s")
+	_info("Puck mode", t.puck_mode, "interp = smoothed, trajectory = predicted flight, carried = on a stick")
+
+	_section("Smoothing buffers")
+	_info("Interp depth", "skater %d · puck %d · goalie %d" % [t.buffer_depth_skater, t.buffer_depth_puck, t.buffer_depth_goalie],
+		"frames queued to smooth motion; ~2-4 healthy, 0-1 risks stutter")
+	_info("Smoothing delay", "%.0f ms" % (NetworkManager.get_target_interpolation_delay() * 1000.0),
+		"intentional delay added to hide jitter; grows with RTT/jitter")
+	if t.ws_gap_histogram != "—":
+		_info("Packet spacing", t.ws_gap_histogram,
+			"% of updates by gap (ms); steady ~8ms is smooth, split low+high = clumping")
+
+	_info("Bandwidth", "%.1f KB/s down" % (t.bytes_received_per_sec / 1024.0),
+		"game data received per second (payload only, excludes Steam framing)")
+
+	_render_watch(t)
+
+func _render_host(t: NetworkTelemetry) -> void:
+	_section("Connection (you are the authority / clock)")
+	var peers := NetworkManager.connected_peer_ids()
+	if peers.is_empty():
+		_info("Peers", "none connected", "no clients are joined yet")
+	else:
+		for pid: int in peers:
+			var ping := NetworkManager.get_peer_ping_ms(pid)
+			_metric(_band(float(ping), 80.0, 150.0), NetworkManager.get_peer_name(pid),
+				"%d ms" % ping, "this client's round-trip to you")
+	_info("Snapshots out", "%.0f/s" % t.world_state_hz, "world states broadcast per tick (varies by phase)")
+	_sim_line(t)
+
+	if not peers.is_empty():
+		_section("Client input queue")
+		_metric(_queue_health(t.input_queue_depth_median), "Queue depth", "%d frames" % t.input_queue_depth_median,
+			"client inputs waiting to apply; ~1-3 healthy, 0 = starving, high = backed up")
+		_metric(_band(t.input_lead_avg_ms, 10.0, 30.0), "Input lead", "%.1f ms" % t.input_lead_avg_ms,
+			"how late inputs arrive vs schedule; want near 0")
+		_metric(_band(t.input_starvations_per_sec, 0.5, 5.0), "Starvations", "%.1f/s" % t.input_starvations_per_sec,
+			"ticks with no client input (reused last); want 0")
+
+	_section("Host frame health")
+	_metric(_worse(_band(t.host_physics_tick_p95_ms, 6.0, 10.0), _band(t.host_physics_tick_max_ms, 16.0, 33.0)),
+		"Physics tick", "p95 %.1f / p99 %.1f / max %.1f ms" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms],
+		"gap between 240Hz ticks; steady ~4.2ms, a big max = a stall everyone feels")
+	_metric(_band(t.broadcast_interval_p95_ms, 11.0, 16.0), "Broadcast gap", "p95 %.1f ms" % t.broadcast_interval_p95_ms,
+		"gap between snapshots sent; should track ~8.3ms (120Hz)")
+
+	_info("Bandwidth", "%.1f KB/s up" % (t.bytes_sent_per_sec / 1024.0),
+		"total game data sent to all clients (payload only, excludes Steam framing)")
+
+func _render_solo(t: NetworkTelemetry) -> void:
+	_info("Mode", "offline — no network", "metrics below reflect your local sim only")
+	_sim_line(t)
+	if t.host_physics_tick_p95_ms > 0.0:
+		_section("Frame health")
+		_metric(_worse(_band(t.host_physics_tick_p95_ms, 6.0, 10.0), _band(t.host_physics_tick_max_ms, 16.0, 33.0)),
+			"Physics tick", "p95 %.1f / p99 %.1f / max %.1f ms" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms],
+			"gap between 240Hz ticks; steady ~4.2ms, a big max = a frame hitch")
+
+# Watch metrics: shown only when they leave the healthy band, so the client view
+# stays quiet until something is actually wrong. When all clear, one calm line.
+func _render_watch(t: NetworkTelemetry) -> void:
+	var any := false
+	any = _watch(_band(t.prediction_divergence_avg, 0.05, 0.2), "Prediction drift", "%.3f m" % t.prediction_divergence_avg,
+		"client vs server before replay; near 0 healthy, growing = non-determinism") or any
+	any = _watch(_when_positive(t.blade_jump_per_sec, 10.0), "Stick jumps", "%.1f/s (%.2f m avg)" % [t.blade_jump_per_sec, t.blade_jump_mag_avg],
+		"blade teleported >5 cm; want 0") or any
+	any = _watch(_band(t.puck_traj_hard_snap_per_sec, 2.0, 10.0), "Puck hard-snaps", "%.1f/s" % t.puck_traj_hard_snap_per_sec,
+		"puck flight snapped hard; expected only on real bounces, not every shot") or any
+	any = _watch(_when_positive(t.ooo_drops_per_sec, 5.0), "Out-of-order drops", "%.1f/s" % t.ooo_drops_per_sec,
+		"packets arrived reordered and were discarded; want 0") or any
+	if not any:
+		_lines.append("[color=#%s]%s Internals nominal[/color] [color=#%s](drift, stick jumps, puck snaps, dropped packets all healthy)[/color]" % [
+			COL_OK, DOT, COL_DIM])
+
+# ── Line builders ────────────────────────────────────────────────────────────
+
+func _section(title: String) -> void:
+	_lines.append("[color=#%s]── %s ──[/color]" % [COL_HEAD, title])
+
+func _metric(h: Health, label: String, value: String, hint: String) -> void:
+	if int(h) > int(_worst):
+		_worst = h
+	_lines.append("[color=#%s]%s[/color] %s: [color=#%s]%s[/color]  [color=#%s]%s[/color]" % [
+		_col(h), DOT, label, COL_VAL, value, COL_DIM, hint])
+
+func _info(label: String, value: String, hint: String) -> void:
+	_lines.append("[color=#%s]·[/color] %s: [color=#%s]%s[/color]  [color=#%s]%s[/color]" % [
+		COL_DIM, label, COL_VAL, value, COL_DIM, hint])
+
+# Appends a metric only if it's not healthy; returns whether it was shown.
+func _watch(h: Health, label: String, value: String, hint: String) -> bool:
+	if h == Health.OK:
+		return false
+	_metric(h, label, value, hint)
+	return true
+
+func _sim_line(t: NetworkTelemetry) -> void:
 	if NetworkSimManager.enabled:
 		var rtt_est: float = NetworkSimManager.delay_ms * 2.0
 		var jitter_max: float = NetworkSimManager.jitter_ms * 2.0
-		sim_label = "preset %d  (~%.0fms RTT  +0-%.0fms jitter  %.0f%% loss)" % [
-			NetworkSimManager.current_preset,
-			rtt_est,
-			jitter_max,
-			NetworkSimManager.loss_pct,
-		]
+		_lines.append("[color=#%s]%s[/color] Sim: [color=#%s]preset %d — ~%.0fms RTT, +0-%.0fms jitter, %.0f%% loss[/color]  [color=#%s]artificial lag is ON (keys 0-6)[/color]" % [
+			COL_WARN, DOT, COL_VAL, NetworkSimManager.current_preset, rtt_est, jitter_max, NetworkSimManager.loss_pct, COL_DIM])
 	elif BuildInfo.VERSION == "dev":
-		sim_label = "off  (keys 0-6 to set preset)"
-	else:
-		sim_label = "off"
-	var rtt_avg: float = NetworkManager.get_rtt_ms()
-	var rtt_last: float = NetworkManager.get_latest_rtt_ms()
-	var offset_ms: float = NetworkManager.get_clock_offset_ms()
-	var clock_suffix: String = "" if NetworkManager.is_clock_ready() else " (syncing)"
-	var offset_str: String = ("+%.0f ms" % offset_ms) if offset_ms >= 0.0 else ("%.0f ms" % offset_ms)
-	_label.text = (
-		"-- Net Debug (F3 to close) ------\n"
-		+ "RTT:       avg %.0f ms   last %.0f ms   offset: %s%s\n" % [rtt_avg, rtt_last, offset_str, clock_suffix]
-		+ "Sim:       %s\n" % sim_label
-		+ "Reconcile: %.1f/s   avg %.3f m\n" % [t.reconcile_per_sec, t.reconcile_magnitude_avg]
-		+ "Extrap:    %.1f/s   buf: skater=%d  puck=%d  goalie=%d\n" % [t.extrapolation_per_sec, t.buffer_depth_skater, t.buffer_depth_puck, t.buffer_depth_goalie]
-		+ "Puck:      %s\n" % t.puck_mode
-		+ "Queue:     %d frames (2s median)   loss: %.1f%%\n" % [t.input_queue_depth_median, t.packet_loss_pct]
-		+ "InBuf:     lead %.1f ms   starved %.0f/s\n" % [t.input_lead_avg_ms, t.input_starvations_per_sec]
-		+ "Host:      tick p95 %.1f / p99 %.1f / max %.1f ms   bcast p95 %.1f ms\n" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms, t.broadcast_interval_p95_ms]
-		+ "Jitter P95: %.1f ms   interp delay: %.0f ms\n" % [t.jitter_p95_ms, NetworkManager.get_target_interpolation_delay() * 1000.0]
-		+ "WS gaps:   %s\n" % t.ws_gap_histogram
-		+ "Bandwidth: up %.1f KB/s   down %.1f KB/s" % [t.bytes_sent_per_sec / 1024.0, t.bytes_received_per_sec / 1024.0]
-	)
+		_info("Sim", "off", "press keys 0-6 to inject fake lag for testing")
+
+# ── Health helpers ───────────────────────────────────────────────────────────
+
+# Higher value is worse (the common case).
+func _band(value: float, warn: float, bad: float) -> Health:
+	if value >= bad:
+		return Health.BAD
+	if value >= warn:
+		return Health.WARN
+	return Health.OK
+
+# Anything above zero is a yellow flag; past `bad` it's red.
+func _when_positive(value: float, bad: float) -> Health:
+	if value >= bad:
+		return Health.BAD
+	if value > 0.0:
+		return Health.WARN
+	return Health.OK
+
+# Input queue: starving (0) and backed up (high) are both bad; ~1-3 is healthy.
+func _queue_health(depth: int) -> Health:
+	if depth == 0 or depth > 12:
+		return Health.BAD
+	if depth > 6:
+		return Health.WARN
+	return Health.OK
+
+func _worse(a: Health, b: Health) -> Health:
+	return a if int(a) >= int(b) else b
+
+func _col(h: Health) -> String:
+	match h:
+		Health.OK:
+			return COL_OK
+		Health.WARN:
+			return COL_WARN
+		_:
+			return COL_BAD
