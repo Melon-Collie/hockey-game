@@ -9,17 +9,14 @@ const _SKATE_MAX_VOL_DB: float = 0.0
 const _SKATE_MIN_PITCH: float = 0.85
 const _SKATE_MAX_PITCH: float = 1.15
 
-const _BRAKE_DECEL_THRESHOLD: float = 4.0  # m/s drop per second to trigger
-const _BRAKE_MIN_SPEED: float = 1.5        # must be moving this fast before decel
+const _BRAKE_MIN_SPEED: float = 1.5        # must be moving this fast for brake sound
 
-var _skater: CharacterBody3D = null
+var _skater: Skater = null
 var _skate_player: AudioStreamPlayer3D = null
 var _brake_player: AudioStreamPlayer3D = null
 
-var _prev_speed: float = 0.0
 
-
-func setup(skater: CharacterBody3D) -> void:
+func setup(skater: Skater) -> void:
 	_skater = skater
 	_skate_player = _make_loop_player("res://Sounds/skate_loop.ogg")
 	_brake_player = _make_oneshot_player("res://Sounds/skate_brake.wav")
@@ -49,7 +46,7 @@ func _make_oneshot_player(path: String) -> AudioStreamPlayer3D:
 	return p
 
 
-func _physics_process(delta: float) -> void:
+func _physics_process(_delta: float) -> void:
 	if _skater == null:
 		return
 
@@ -57,9 +54,7 @@ func _physics_process(delta: float) -> void:
 	var speed: float = Vector2(vel.x, vel.z).length()
 
 	_update_skate_loop(speed)
-	_update_brake(speed, delta)
-
-	_prev_speed = speed
+	_update_brake(speed)
 
 
 func _update_skate_loop(speed: float) -> void:
@@ -77,12 +72,9 @@ func _update_skate_loop(speed: float) -> void:
 			_skate_player.stop()
 
 
-func _update_brake(speed: float, delta: float) -> void:
+func _update_brake(speed: float) -> void:
 	if _brake_player.stream == null or _brake_player.playing:
 		return
-	if delta <= 0.0:
-		return
-	var decel: float = (_prev_speed - speed) / delta
-	if _prev_speed >= _BRAKE_MIN_SPEED and decel >= _BRAKE_DECEL_THRESHOLD:
+	if _skater.is_braking and speed >= _BRAKE_MIN_SPEED:
 		_brake_player.global_position = _skater.global_position
 		_brake_player.play()

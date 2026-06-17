@@ -34,6 +34,7 @@ var _cursor_size_slider: HSlider = null
 var _cursor_size_label: Label = null
 var _attack_up_check: CheckButton = null
 var _colorblind_check: CheckButton = null
+var _self_beacon_check: CheckButton = null
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
 var _tilt_slider: HSlider = null
@@ -73,6 +74,7 @@ const _REBINDABLE_ACTIONS: Array = [
 	{"action": "block",          "label": "Block"},
 	{"action": "elevation_up",   "label": "Elevation Up"},
 	{"action": "elevation_down", "label": "Elevation Down"},
+	{"action": "stick_lift",     "label": "Stick Lift"},
 ]
 
 func _ready() -> void:
@@ -141,6 +143,7 @@ func _snapshot() -> Dictionary:
 		"cursor_size": PlayerPrefs.cursor_size,
 		"attack_up": PlayerPrefs.attack_up,
 		"colorblind_rings": PlayerPrefs.colorblind_rings,
+		"self_beacon_enabled": PlayerPrefs.self_beacon_enabled,
 		"screen_flash": PlayerPrefs.screen_flash,
 		"screen_shake": PlayerPrefs.screen_shake,
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
@@ -176,6 +179,7 @@ func _read_controls() -> Dictionary:
 		"cursor_size": int(_cursor_size_slider.value),
 		"attack_up": _attack_up_check.button_pressed,
 		"colorblind_rings": _colorblind_check.button_pressed,
+		"self_beacon_enabled": _self_beacon_check.button_pressed,
 		"screen_flash": _screen_flash_check.button_pressed,
 		"screen_shake": _screen_shake_check.button_pressed,
 		"camera_tilt_deg": _tilt_slider.value,
@@ -541,6 +545,12 @@ func _build_game_tab() -> Control:
 	_colorblind_check.toggled.connect(_on_colorblind_toggled)
 	box.add_child(_field_row("Colorblind Team Colors", _colorblind_check))
 
+	_self_beacon_check = CheckButton.new()
+	_self_beacon_check.set_pressed_no_signal(PlayerPrefs.self_beacon_enabled)
+	SoundManager.wire_button(_self_beacon_check)
+	_self_beacon_check.toggled.connect(_on_self_beacon_toggled)
+	box.add_child(_field_row("Self Marker", _self_beacon_check))
+
 	_screen_flash_check = CheckButton.new()
 	_screen_flash_check.set_pressed_no_signal(PlayerPrefs.screen_flash)
 	SoundManager.wire_button(_screen_flash_check)
@@ -687,6 +697,9 @@ func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_colorblind_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
+func _on_self_beacon_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
 func _on_screen_flash_toggled(_pressed: bool) -> void:
@@ -866,6 +879,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.cursor_size = c.cursor_size
 	PlayerPrefs.attack_up = c.attack_up
 	PlayerPrefs.colorblind_rings = c.colorblind_rings
+	PlayerPrefs.self_beacon_enabled = c.self_beacon_enabled
 	PlayerPrefs.screen_flash = c.screen_flash
 	PlayerPrefs.screen_shake = c.screen_shake
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
@@ -923,6 +937,8 @@ func _on_cancel_pressed() -> void:
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
 	if _colorblind_check != null:
 		_colorblind_check.set_pressed_no_signal(_original.colorblind_rings)
+	if _self_beacon_check != null:
+		_self_beacon_check.set_pressed_no_signal(_original.self_beacon_enabled)
 	if _screen_flash_check != null:
 		_screen_flash_check.set_pressed_no_signal(_original.screen_flash)
 	if _screen_shake_check != null:

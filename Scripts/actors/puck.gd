@@ -236,7 +236,21 @@ func apply_poke_check(checker_skater: Skater) -> void:
 	puck_stripped.emit(ex_carrier)
 	puck_released.emit()
 
-# Goalie-flavoured poke check. The goalie's stick isn't a Skater (no
+# Stick-lift strip: unlike a poke (which squirts the puck off the blade contact),
+# a lifted stick just leaves the puck where it was being carried — so it keeps
+# travelling in the carrier's direction at the carrier's speed, as if the carry
+# simply continued without the stick on it. Horizontal only; a stationary
+# carrier's puck stays put (the reattach cooldown still denies an instant
+# re-grab). Same cooldowns + signals as apply_poke_check so the carrier-clear,
+# stats, and victim-notify paths fire identically.
+func apply_stick_lift_strip(checker_skater: Skater) -> void:
+	var ex_carrier: Skater = carrier  # capture before clear_carrier()
+	clear_carrier()
+	linear_velocity = Vector3(ex_carrier.velocity.x, 0.0, ex_carrier.velocity.z)
+	_set_cooldown(ex_carrier, reattach_cooldown)
+	_set_cooldown(checker_skater, poke_checker_cooldown)
+	puck_stripped.emit(ex_carrier)
+	puck_released.emit()
 # blade_world_velocity / cooldown table entry), so it gets its own entry
 # point. Strip velocity uses the goalie's blade position + the controller's
 # computed blade velocity as the checker inputs.
@@ -304,6 +318,13 @@ func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 
 func is_airborne() -> bool:
 	return position.y > ice_height + 0.05
+
+# One-shot spark burst at the puck for a stick-lift strip. Delegated to PuckVFX
+# (child "VFX"); the burst anchors to the puck, which sits at the dislodge point.
+func fire_stick_lift_vfx() -> void:
+	var vfx := get_node_or_null("VFX") as PuckVFX
+	if vfx != null:
+		vfx.fire_stick_lift_burst()
 
 func _on_body_entered(body: Node3D) -> void:
 	if carrier != null:

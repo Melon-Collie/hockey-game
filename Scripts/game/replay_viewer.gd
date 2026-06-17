@@ -119,8 +119,8 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 		_away_color_slot = TeamColorRegistry.DEFAULT_AWAY_SLOT
 	_home_colors = TeamColorRegistry.get_colors(_home_color_slot, 0)
 	_away_colors = TeamColorRegistry.get_colors(_away_color_slot, 1)
-	goalie_result.bottom_goalie.set_goalie_color(_home_colors.jersey, _home_colors.helmet, _home_colors.goalie_pads)
-	goalie_result.top_goalie.set_goalie_color(_away_colors.jersey, _away_colors.helmet, _away_colors.goalie_pads)
+	goalie_result.bottom_goalie.apply_uniform(_home_colors)
+	goalie_result.top_goalie.apply_uniform(_away_colors)
 	_apply_crowd_colors()
 
 	_header_roster = header.get("roster", []) as Array

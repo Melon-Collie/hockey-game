@@ -122,6 +122,7 @@ var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
+var _stick_lift_claim: StickLiftClaimResolver = null
 var _hit_claim: HitClaimResolver = null
 var _phase_coord: PhaseCoordinator = null
 var _swap_coord: SlotSwapCoordinator = null
@@ -220,6 +221,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
 	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
+	NetworkManager.stick_lift_claim_received.connect(_on_stick_lift_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
 	NetworkManager.hit_claim_received.connect(_on_hit_claim_received)
 	NetworkManager.input_batch_received.connect(_on_input_batch_received)
@@ -582,6 +584,10 @@ func sync_existing_players(player_data: Array) -> void:
 		return
 	for entry: Array in player_data:
 		var peer_id: int = entry[0]
+		# Idempotency backstop — see spawn_remote_skater. Skip any peer already
+		# spawned so a redundant delivery never orphans an existing skater node.
+		if _registry.has(peer_id):
+			continue
 		var team_slot: int = entry[1]
 		var team_id: int = entry[2]
 		var jersey_color: Color = entry[3]
@@ -621,6 +627,14 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 		_pending_remote_spawns.append([peer_id, team_slot, team_id,
 				jersey_color, helmet_color, pants_color,
 				is_left_handed, player_name, jersey_number, attributes])
+		return
+	# Idempotency guard. The game-start fan-out routes each peer through a single
+	# channel (see _push_lobby_assignments_to_clients), so this should not fire
+	# there — but it's a cheap backstop against any path that delivers a peer
+	# twice (mid-game RPC races, future spawn sites). A second _registry.spawn
+	# would overwrite _players[peer_id] and orphan the first skater node in the
+	# scene tree as an uncontrolled phantom (host never hits this; clients would).
+	if _registry.has(peer_id):
 		return
 	var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 	_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
@@ -729,7 +743,8 @@ func _spawn_goalies() -> void:
 	for team_id: int in [0, 1]:
 		var goalie: Goalie = result.bottom_goalie if team_id == 0 else result.top_goalie
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
-		goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads)
+		goalie.apply_uniform(colors)
+		goalie.apply_jersey_info("WALL" if team_id == 0 else "WARD", 31 if team_id == 0 else 35)
 
 
 func _wire_subsystems() -> void:
@@ -796,6 +811,9 @@ func _wire_subsystems() -> void:
 
 	_poke_claim = PokeClaimResolver.new()
 	_poke_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
+
+	_stick_lift_claim = StickLiftClaimResolver.new()
+	_stick_lift_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
 	_hit_claim = HitClaimResolver.new()
 	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
@@ -883,7 +901,7 @@ func _wire_sound_signals() -> void:
 			_record_replay_audio_event("puck_goal_body", puck.get_puck_position(), spd))
 		puck.puck_touched_loose.connect(func(_s: Skater) -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
+			SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, puck.get_puck_position(), _puck_speed_volume(spd), 0.06, 1.2)
 			NetworkManager.send_deflection_to_all(puck.get_puck_position())
 			_record_replay_audio_event("puck_deflection", puck.get_puck_position(), spd))
 		puck.puck_body_blocked.connect(func(_s: Skater) -> void:
@@ -893,9 +911,17 @@ func _wire_sound_signals() -> void:
 			_record_replay_audio_event("puck_body_block", puck.get_puck_position(), spd))
 		puck_controller.puck_stripped_from.connect(func(_pid: int) -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
-			NetworkManager.send_puck_strip_to_all(puck.get_puck_position())
-			_record_replay_audio_event("puck_strip", puck.get_puck_position(), spd))
+			var pos: Vector3 = puck.get_puck_position()
+			if puck_controller.is_processing_stick_lift():
+				# Distinct stick-lift cue instead of the generic puck-strip thud.
+				SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(spd), 0.06)
+				puck.fire_stick_lift_vfx()
+				NetworkManager.send_stick_lift_to_all(pos)
+				_record_replay_audio_event("stick_lift", pos, spd)
+			else:
+				SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, pos, _puck_speed_volume(spd), 0.06)
+				NetworkManager.send_puck_strip_to_all(pos)
+				_record_replay_audio_event("puck_strip", pos, spd))
 	puck.puck_touched_goalie.connect(
 		func(_g: Goalie) -> void:
 			var spd: float = puck.linear_velocity.length()
@@ -924,11 +950,16 @@ func _wire_sound_signals() -> void:
 	NetworkManager.goal_body_hit_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
 	NetworkManager.deflection_received.connect(
-		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
+		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06, 1.2))
 	NetworkManager.body_block_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_BODY_BLOCK, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.07))
 	NetworkManager.puck_strip_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
+	NetworkManager.stick_lift_received.connect(
+		func(pos: Vector3) -> void:
+			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
+			if puck != null:
+				puck.fire_stick_lift_vfx())
 	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
 	# regulation periods, GAME_OVER for the final one. (Not period_changed, which
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
@@ -1428,16 +1459,21 @@ func _on_replay_player_left_event(record: PlayerRecord) -> void:
 #   - send_slot_assignment to the joining peer (skipped if the peer is the
 #     local host, who already has its slot)
 #   - broadcast spawn_remote_skater to all peers (handler short-circuits
-#     for the local peer)
+#     for the local peer) — unless `broadcast` is false
 #   - _registry.spawn locally
 #
+# `broadcast` defaults true (mid-game join, where existing clients learn the
+# new peer only through this broadcast). The game-start lobby push passes false
+# because it fans the full roster out through a single sync_existing_players
+# instead — broadcasting there would double-deliver and orphan phantom skaters.
+#
 # Returns the resolved colors dict so callers can reuse it for adjacent
-# bookkeeping (e.g. _push_lobby_assignments_to_clients's `existing` array).
-# Adjacent RPCs that vary by call site (send_join_in_progress,
+# bookkeeping. Adjacent RPCs that vary by call site (send_join_in_progress,
 # send_sync_existing_players, spectator-camera teardown) stay inline at
 # the caller — this helper owns only the shared shape.
 func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
-		is_left: bool, p_name: String, p_number: int, is_local: bool) -> Dictionary:
+		is_left: bool, p_name: String, p_number: int, is_local: bool,
+		broadcast: bool = true) -> Dictionary:
 	var team: Team = teams[team_id]
 	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team_id)
 	var attrs: PlayerAttributes = NetworkManager.get_peer_attributes(peer_id)
@@ -1445,8 +1481,9 @@ func _spawn_player_and_broadcast(peer_id: int, team_id: int, team_slot: int,
 	if not is_local:
 		NetworkManager.send_slot_assignment(peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants)
-	NetworkManager.send_spawn_remote_skater(peer_id, team_slot, team_id,
-			colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number, attrs)
+	if broadcast:
+		NetworkManager.send_spawn_remote_skater(peer_id, team_slot, team_id,
+				colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number, attrs)
 	_registry.spawn(peer_id, team_slot, team,
 			colors.jersey, colors.helmet, colors.pants,
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe,
@@ -1614,6 +1651,12 @@ func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_m
 	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
 
+func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+
+
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
@@ -1643,7 +1686,9 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 		return
 	_state_machine.notify_icing_contact()
 	if not record.is_local:
-		NetworkManager.send_puck_stolen(peer_id)
+		# Tell the victim's client whether this was a stick lift so it can pop
+		# their own blade up locally (their prediction never saw the host force).
+		NetworkManager.send_puck_stolen(peer_id, puck_controller.is_processing_stick_lift())
 
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
@@ -1781,8 +1826,19 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		gc.set_pending_reaction_back_date(release_back_date)
 	var saved_goalie_positions: Array[Vector3] = []
 	var saved_goalie_rotations: Array[float] = []
+	var rewound_origin: Vector3 = Vector3.ZERO
+	var have_rewound_origin: bool = false
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() and rtt_ms > 0.0 \
 			and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
+		# Shot ORIGIN rewind (SELF view) — see on_remote_puck_release for the full
+		# rationale. Fire the one-timer from the shooter's blade at the redirect
+		# moment, not where it drifted to during the RPC transit.
+		var blade_snap: WorldSnapshot = _state_buffer_manager.get_state_at(
+				LagCompRewind.self_view_time(host_timestamp))
+		var shooter_state: SkaterNetworkState = blade_snap.get_skater_state(pid)
+		if shooter_state != null:
+			rewound_origin = shooter_state.blade_contact_world
+			have_rewound_origin = true
 		# Goalie was REMOTE-view from the shooter — clients render the goalie
 		# from buffered host snapshots at host_time - interp_delay, so the
 		# shooter saw the goalie at that earlier moment. Rewind to that snapshot
@@ -1800,7 +1856,12 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	puck.release(direction, power)
 	if rtt_ms > 0.0:
 		var skater_vel := Vector3(skater.velocity.x, 0.0, skater.velocity.z)
-		puck.set_puck_position(puck.get_puck_position() + (direction * power + skater_vel) * rtt_half)
+		# Rewind only the horizontal origin — preserve release()'s elevation y.
+		var origin: Vector3 = puck.get_puck_position()
+		if have_rewound_origin:
+			origin.x = rewound_origin.x
+			origin.z = rewound_origin.z
+		puck.set_puck_position(origin + (direction * power + skater_vel) * rtt_half)
 	if not saved_goalie_positions.is_empty():
 		for i: int in goalie_controllers.size():
 			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -1868,8 +1929,24 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 			gc.set_pending_reaction_back_date(release_back_date)
 		var saved_goalie_positions: Array[Vector3] = []
 		var saved_goalie_rotations: Array[float] = []
+		var rewound_origin: Vector3 = Vector3.ZERO
+		var have_rewound_origin: bool = false
 		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0 \
 				and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
+			# Shot ORIGIN rewind (SELF view): the shooter released from their
+			# locally-predicted blade at host_timestamp, but puck.release() snaps to
+			# the carrier's blade as it has drifted during the RPC's ~RTT/2 transit.
+			# Rewind the shooter's own blade so the puck fires from where they aimed —
+			# composes with the advance below to start the host trajectory where the
+			# client predicted it, so the three-zone reconcile stops correcting it
+			# mid-flight. blade_contact_world is captured + interpolated per tick (same
+			# field the pickup/poke/stick-lift resolvers rewind).
+			var blade_snap: WorldSnapshot = _state_buffer_manager.get_state_at(
+					LagCompRewind.self_view_time(host_timestamp))
+			var shooter_state: SkaterNetworkState = blade_snap.get_skater_state(shooter_peer_id)
+			if shooter_state != null:
+				rewound_origin = shooter_state.blade_contact_world
+				have_rewound_origin = true
 			# Goalie is REMOTE-view from the shooter — same derivation as the
 			# one-timer rewind above. The shooter saw the goalie at
 			# host_time - interp_delay (the buffered render path); rewind to
@@ -1886,11 +1963,18 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 		puck.release(direction, power)
 		# Apply RTT advance AFTER release. puck.release() snaps global_position to
 		# ex_carrier.get_blade_contact_global() (carrier is still set at call time),
-		# so any position set before release() is silently overwritten. Applying the
-		# advance here ensures the host trajectory starts from the same position as
-		# the client's Jolt prediction (blade + velocity * rtt_half).
+		# so any position set before release() is silently overwritten. Start from
+		# the rewound shooter blade when available (origin lag-comp), else the live
+		# blade; either way add the RTT/2 advance so the host trajectory matches the
+		# client's Jolt prediction (blade + velocity * rtt_half). Rewind only the
+		# horizontal origin — release() set y for the elevation launch (ice_height +
+		# lift on an elevated shot), which must carry through.
 		if rtt_ms > 0.0:
-			puck.set_puck_position(puck.get_puck_position() + (direction * power + skater_vel) * rtt_half)
+			var origin: Vector3 = puck.get_puck_position()
+			if have_rewound_origin:
+				origin.x = rewound_origin.x
+				origin.z = rewound_origin.z
+			puck.set_puck_position(origin + (direction * power + skater_vel) * rtt_half)
 		if not saved_goalie_positions.is_empty():
 			for i: int in goalie_controllers.size():
 				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -1907,8 +1991,21 @@ func _start_pending_shot_from_carrier() -> void:
 
 # ── Puck network events ──────────────────────────────────────────────────────
 func _on_remote_carrier_changed(new_carrier_peer_id: int) -> void:
-	if puck_controller != null:
+	if puck_controller == null:
+		return
+	if new_carrier_peer_id == -1:
+		puck_controller.notify_remote_carrier_changed(-1)
+		return
+	# Pin the puck to the carrier's interpolated blade so it shares one render
+	# timeline with the stick instead of interpolating from its own buffer. Fall
+	# back to the plain carrier-changed path (stop predicting, no pin) when the
+	# carrier is the local player — handled by on_local_player_picked_up_puck —
+	# or their skater isn't spawned on this client yet.
+	var record: PlayerRecord = _registry.get_record(new_carrier_peer_id) if _registry != null else null
+	if record == null or record.skater == null or record.is_local:
 		puck_controller.notify_remote_carrier_changed(new_carrier_peer_id)
+		return
+	puck_controller.notify_remote_pickup(record.skater)
 
 
 func on_carrier_puck_dropped() -> void:
@@ -1925,11 +2022,16 @@ func on_local_player_picked_up_puck() -> void:
 		puck_controller.notify_local_pickup(record.skater)
 
 
-func on_local_player_puck_stolen() -> void:
+func on_local_player_puck_stolen(was_stick_lift: bool = false) -> void:
 	var local_record := _registry.get_local() if _registry != null else null
 	if local_record != null:
 		local_record.controller.on_puck_released_network()
 		puck_controller.notify_local_puck_dropped()
+		# Stick-lift victim cue: pop our own blade up so the strip reads as a
+		# lift on our screen too (the host forced it, but our local prediction
+		# of our own skater never saw that). Reuses the exact lift mechanic.
+		if was_stick_lift and local_record.skater != null:
+			local_record.skater.force_blade_lift(PuckController.STICK_LIFT_FORCED_LIFT_S)
 
 
 # ── Goal received (client-side RPC) ──────────────────────────────────────────
@@ -2201,6 +2303,7 @@ func on_scene_exit() -> void:
 	_shot_tracker = null
 	_pickup_claim = null
 	_poke_claim = null
+	_stick_lift_claim = null
 	_hit_claim = null
 	_phase_coord = null
 	_swap_coord = null
@@ -2371,7 +2474,7 @@ func _apply_team_colors_to_actors(team_id: int) -> void:
 	# set up in _spawn_goalies.
 	var gc: GoalieController = teams[team_id].goalie_controller
 	if gc != null and gc.goalie != null:
-		gc.goalie.set_goalie_color(colors.jersey, colors.helmet, colors.goalie_pads)
+		gc.goalie.apply_uniform(colors)
 	if _registry == null:
 		return
 	for peer_id: int in _registry.all():
@@ -2456,7 +2559,14 @@ func _drop_puck_if_carried() -> int:
 
 func _push_lobby_assignments_to_clients() -> void:
 	var slots: Dictionary = NetworkManager.pending_lobby_slots
-	var existing: Array[Array] = _collect_existing_player_data()
+	# Two-phase fan-out. Phase 1 spawns every assigned player on the host and
+	# tells each client its own slot — but does NOT broadcast spawn_remote_skater.
+	# Phase 2 then sends every connected peer a single sync_existing_players
+	# carrying the complete roster minus themselves. Routing every peer through
+	# exactly one delivery channel is what prevents the double-spawn that
+	# orphaned phantom skaters on clients (a broadcast spawn plus the same peer
+	# inside a later client's sync). It also lets the sync carry full attributes
+	# via _collect_existing_player_data — the old incremental append dropped them.
 	for peer_id: int in slots:
 		if peer_id == 1:
 			continue
@@ -2465,22 +2575,37 @@ func _push_lobby_assignments_to_clients() -> void:
 		var team_slot: int = entry.team_slot
 		if team_id == GameRules.SPECTATOR_TEAM_ID:
 			# Spectators get the slot-assignment RPC so they take the SpectatorCamera
-			# path on the client, plus existing-players sync for actor render. No
-			# state-machine slot is reserved and no skater is spawned.
+			# path on the client. No state-machine slot is reserved and no skater is
+			# spawned; the phase-2 sync below renders the player actors for them.
 			_spectator_peers[peer_id] = true
 			NetworkManager.send_slot_assignment(peer_id, team_slot, team_id,
 					Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
-			NetworkManager.send_sync_existing_players(peer_id, existing)
 			continue
-		var is_left: bool = entry.get("is_left_handed", true)
-		var p_name: String = entry.get("player_name", "Player")
-		var p_number: int = entry.get("jersey_number", 10)
-		NetworkManager.send_sync_existing_players(peer_id, existing)
-		var colors: Dictionary = _spawn_player_and_broadcast(
-				peer_id, team_id, team_slot, is_left, p_name, p_number, false)
-		existing.append([peer_id, team_slot, team_id,
-				colors.jersey, colors.helmet, colors.pants, is_left, p_name, p_number])
+		_spawn_player_and_broadcast(
+				peer_id, team_id, team_slot,
+				entry.get("is_left_handed", true),
+				entry.get("player_name", "Player"),
+				entry.get("jersey_number", 10), false, false)
+	# Phase 2: registry now holds the full roster. Sync it to each peer,
+	# excluding their own record (clients spawn their own skater locally via
+	# on_slot_assigned, so re-sending it would spawn a remote-controlled twin).
+	var full: Array[Array] = _collect_existing_player_data()
+	for peer_id: int in slots:
+		if peer_id == 1:
+			continue
+		NetworkManager.send_sync_existing_players(peer_id, _roster_excluding(full, peer_id))
 	NetworkManager.pending_lobby_slots = {}
+
+
+# Returns a copy of a roster array (as built by _collect_existing_player_data)
+# with the given peer's entry removed. Used so a client's existing-players sync
+# never contains itself.
+func _roster_excluding(roster: Array[Array], peer_id: int) -> Array[Array]:
+	var out: Array[Array] = []
+	for entry: Array in roster:
+		if entry[0] != peer_id:
+			out.append(entry)
+	return out
 
 
 func _spawn_bots_from_lobby() -> void:
@@ -2516,6 +2641,11 @@ func _spawn_bots_from_lobby() -> void:
 		_state_machine.register_remote_assigned_player(record.peer_id, team_slot, team_id)
 		# Bot visible to clients: same RPC humans use. Clients spawn it as a
 		# RemoteController-driven skater because peer_id is not their own.
+		# This broadcast is the bot's *sole* delivery channel — bots spawn after
+		# _push_lobby_assignments_to_clients runs, so they're never in any
+		# sync_existing_players payload. Unlike the human spawn broadcast (removed
+		# from the lobby push to stop double-delivery), there's no overlapping
+		# channel here, so this must stay. Don't "consolidate" it away.
 		NetworkManager.send_spawn_remote_skater(record.peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants,
 				record.is_left_handed, record.player_name, record.jersey_number, record.attributes)

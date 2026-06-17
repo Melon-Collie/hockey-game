@@ -88,6 +88,7 @@ const AA_LABELS: Array[String] = [
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "brake",
 	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
+	"stick_lift",
 ]
 
 var player_uuid: String = ""
@@ -151,6 +152,10 @@ var attack_up: bool = false
 # Accessibility: swap the on-ice self/team/enemy ring colors for a
 # colorblind-safe palette (SkaterHUDCoordinator reads this live).
 var colorblind_rings: bool = false
+# Show the overhead self-beacon — the floating marker above your own skater that
+# appears in scrums (and while ghosted) so you don't lose which skater is yours.
+# SkaterHUDCoordinator reads this live. Default on.
+var self_beacon_enabled: bool = true
 # Accessibility: photosensitivity / motion options. screen_flash gates the
 # full-screen goal flash and hit vignette (FlashOverlay); screen_shake gates
 # camera trauma shake (GameCamera.shake). Both default on.
@@ -267,6 +272,7 @@ func save() -> void:
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "has_opened_player_settings", has_opened_player_settings)
 	cfg.set_value("game", "colorblind_rings", colorblind_rings)
+	cfg.set_value("game", "self_beacon_enabled", self_beacon_enabled)
 	cfg.set_value("game", "screen_flash", screen_flash)
 	cfg.set_value("game", "screen_shake", screen_shake)
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
@@ -554,6 +560,7 @@ func _load() -> void:
 		attack_up = cfg.get_value("game", "attack_up", false)
 		has_opened_player_settings = cfg.get_value("game", "has_opened_player_settings", false)
 		colorblind_rings = cfg.get_value("game", "colorblind_rings", false)
+		self_beacon_enabled = cfg.get_value("game", "self_beacon_enabled", true)
 		screen_flash = cfg.get_value("game", "screen_flash", true)
 		screen_shake = cfg.get_value("game", "screen_shake", true)
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)

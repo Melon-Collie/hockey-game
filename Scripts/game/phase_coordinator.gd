@@ -263,6 +263,10 @@ func on_faceoff_positions(positions: Array) -> void:
 			var record: PlayerRecord = _registry.get_record(peer_id)
 			var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
 			record.controller.teleport_to(pos, facing)
+	# Drive the client's phase entry off this reliable RPC rather than leaving
+	# it to the unreliable world-state phase byte — see apply_remote_faceoff_prep.
+	if _state_machine != null and _state_machine.apply_remote_faceoff_prep():
+		phase_changed.emit(_state_machine.current_phase)
 	faceoff_prep_announced.emit()
 
 

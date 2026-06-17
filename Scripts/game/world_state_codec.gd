@@ -25,7 +25,7 @@ extends RefCounted
 #                      blade 3×s16@1cm, top_hand 3×s16@1cm,
 #                      facing u16 (0–TAU→0–65535), upper_body_rot s16 (−π–π→−32767–32767),
 #                      facing_angular_velocity s16@PI*10 rad/s, upper_body_angular_velocity s16@PI*10 rad/s,
-#                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]+elevated[5]+sprint_locked[6]),
+#                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]+elevated[5]+blade_up[6]+sprint_locked[7]),
 #                      shot_charge u8, stamina u8
 #      Puck    (12 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
 #      Goalie  (35 B): root (12 B) + pose (23 B). Root:
@@ -57,7 +57,7 @@ signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal queue_depth_feedback(depth: int)
 
 const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + f32 host_capture_time (4) + u8 num_skaters (1)
-const SKATER_BLOCK_SIZE: int = 42  # u32 peer_id (4) + 37B skater state + u8 queue_depth (1)
+const SKATER_BLOCK_SIZE: int = 43  # u32 peer_id (4) + 38B skater state + u8 queue_depth (1)
 const PUCK_BLOCK_SIZE: int = 12    # 11B pos+vel + 1B carrier_idx
 const GOALIE_BLOCK_SIZE: int = 35
 const GAME_STATE_BLOCK_SIZE: int = 6  # 4×u8 + u16 time_remaining
@@ -105,7 +105,7 @@ func encode_world_state() -> PackedByteArray:
 	hdr.encode_u32(2, roundi(maxf(NetworkManager.local_time(), 0.0) * Constants.TIME_WIRE_SCALE))
 	hdr.encode_u8(6, peers.size())
 	b.append_array(hdr)
-	# Skaters: u32 peer_id + 37B state + u8 queue_depth
+	# Skaters: u32 peer_id + 38B state + u8 queue_depth
 	for peer_id: int in peers:
 		var record: PlayerRecord = _registry.get_record(peer_id)
 		var depth: int = 0
@@ -401,7 +401,8 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	var flags: int = (s.shot_state & 0x0F) \
 			| (0x10 if s.is_ghost else 0) \
 			| (0x20 if s.is_elevated else 0) \
-			| (0x40 if s.sprint_locked else 0)
+			| (0x40 if s.blade_up else 0) \
+			| (0x80 if s.sprint_locked else 0)
 	b.encode_u8(o, flags); o += 1
 	b.encode_u8(o, clampi(roundi(s.shot_charge * 255.0), 0, 255)); o += 1
 	b.encode_u8(o, clampi(roundi(s.stamina * 255.0), 0, 255))
@@ -436,7 +437,8 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	s.shot_state = flags & 0x0F
 	s.is_ghost = (flags & 0x10) != 0
 	s.is_elevated = (flags & 0x20) != 0
-	s.sprint_locked = (flags & 0x40) != 0
+	s.blade_up = (flags & 0x40) != 0
+	s.sprint_locked = (flags & 0x80) != 0
 	s.shot_charge = b.decode_u8(o) / 255.0; o += 1
 	s.stamina = b.decode_u8(o) / 255.0
 	return s

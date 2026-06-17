@@ -15,28 +15,63 @@ extends Node3D
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
 @onready var _block_arm: Node3D = $BlockArm
+@onready var _stick: StaticBody3D = $BlockArm/Stick
 @onready var _stick_blade: CollisionShape3D = $BlockArm/Stick/StickBladeCollider
 
-@onready var _left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
-@onready var _right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
-@onready var _body_mesh: MeshInstance3D = $Body/MeshInstance3D
-@onready var _head_mesh: MeshInstance3D = $Head/MeshInstance3D
-@onready var _glove_mesh: MeshInstance3D = $Glove/MeshInstance3D
-@onready var _blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
+# Visual mesh refs — public so GoalieUniformCoordinator can read them directly
+# without a growing parameter list, matching the SkaterUniformCoordinator pattern.
+@onready var body_mesh: MeshInstance3D = $Body/MeshInstance3D
+@onready var head_mesh: MeshInstance3D = $Head/MeshInstance3D
+@onready var left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
+@onready var right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
+@onready var glove_ring_mesh: MeshInstance3D = $Glove/Ring
+@onready var glove_main_mesh: MeshInstance3D = $Glove/Main
+@onready var glove_detail_mesh: MeshInstance3D = $Glove/MeshInstance3D2
+@onready var blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
+@onready var blocker_hand_mesh: MeshInstance3D = $BlockArm/BlockerHand
 
-func set_goalie_color(jersey_color: Color, helmet_color: Color, pads_color: Color) -> void:
-	var jersey_mat := StandardMaterial3D.new()
-	jersey_mat.albedo_color = jersey_color
-	_body_mesh.material_override = jersey_mat
-	var helmet_mat := StandardMaterial3D.new()
-	helmet_mat.albedo_color = helmet_color
-	_head_mesh.material_override = helmet_mat
-	var pads_mat := StandardMaterial3D.new()
-	pads_mat.albedo_color = pads_color
-	_left_pad_mesh.material_override = pads_mat
-	_right_pad_mesh.material_override = pads_mat.duplicate()
-	_glove_mesh.material_override = pads_mat.duplicate()
-	_blocker_mesh.material_override = pads_mat.duplicate()
+const _ARM_UPPER_LEN: float = 0.38
+const _ARM_FOREARM_LEN: float = 0.38
+const _ARM_RADIUS: float = 0.16
+const _SHOULDER_SPHERE_RADIUS: float = 0.10
+const _ELBOW_SPHERE_RADIUS: float = 0.08
+
+var _uniform_coordinator: GoalieUniformCoordinator
+# Dynamic visual nodes — public for GoalieUniformCoordinator access.
+var left_hip_connector: MeshInstance3D = null
+var right_hip_connector: MeshInstance3D = null
+var glove_upper_arm: Node3D = null
+var glove_forearm: Node3D = null
+var blocker_upper_arm: Node3D = null
+var blocker_forearm: Node3D = null
+var glove_shoulder_sphere: MeshInstance3D = null
+var blocker_shoulder_sphere: MeshInstance3D = null
+var glove_elbow_sphere: MeshInstance3D = null
+var blocker_elbow_sphere: MeshInstance3D = null
+
+
+func _ready() -> void:
+	# The stick is a hooked shape that snagged skaters when it shared LAYER_WALLS
+	# with the rest of the goalie. Move it to LAYER_GOALIE_STICK: the puck mask
+	# includes that layer so shots still rebound off the stick, but the skater
+	# mask omits it so players pass through instead of getting caught.
+	_stick.collision_layer = Constants.LAYER_GOALIE_STICK
+	_init_head_mesh()
+	_init_connectors()
+	_init_arm_bones()
+	_setup_uniform_coordinator()
+
+
+func _process(_delta: float) -> void:
+	_update_connectors()
+
+
+func apply_jersey_info(p_name: String, number: int) -> void:
+	_uniform_coordinator.apply_jersey_info(p_name, number)
+
+
+func apply_uniform(colors: Dictionary) -> void:
+	_uniform_coordinator.apply_uniform(colors)
 
 # `glove_max_step` / `blocker_max_step`: optional caps on linear movement
 # this frame (metres). Callers pass `*_react_max_speed * delta` to enforce a
@@ -173,3 +208,164 @@ static func _lerp_euler_deg(from: Vector3, to: Vector3, t: float) -> Vector3:
 static func _shortest_deg_delta(from: float, to: float) -> float:
 	var delta: float = fmod(to - from + 540.0, 360.0) - 180.0
 	return delta
+
+
+func _init_head_mesh() -> void:
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.15
+	sphere.height = 0.22
+	head_mesh.mesh = sphere
+
+
+func _setup_uniform_coordinator() -> void:
+	_uniform_coordinator = GoalieUniformCoordinator.new()
+	_uniform_coordinator.setup(self)
+
+
+func _init_connectors() -> void:
+	left_hip_connector = _make_connector_mesh(0.08)
+	add_child(left_hip_connector)
+	right_hip_connector = _make_connector_mesh(0.08)
+	add_child(right_hip_connector)
+
+
+func _init_arm_bones() -> void:
+	glove_upper_arm = _make_arm_bone()
+	add_child(glove_upper_arm)
+	glove_forearm = _make_arm_bone()
+	add_child(glove_forearm)
+	blocker_upper_arm = _make_arm_bone()
+	add_child(blocker_upper_arm)
+	blocker_forearm = _make_arm_bone()
+	add_child(blocker_forearm)
+	glove_shoulder_sphere = _make_sphere_mesh(_SHOULDER_SPHERE_RADIUS)
+	add_child(glove_shoulder_sphere)
+	blocker_shoulder_sphere = _make_sphere_mesh(_SHOULDER_SPHERE_RADIUS)
+	add_child(blocker_shoulder_sphere)
+	glove_elbow_sphere = _make_sphere_mesh(_ELBOW_SPHERE_RADIUS)
+	add_child(glove_elbow_sphere)
+	blocker_elbow_sphere = _make_sphere_mesh(_ELBOW_SPHERE_RADIUS)
+	add_child(blocker_elbow_sphere)
+
+
+func _make_connector_mesh(radius: float) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = 0.1
+	mi.mesh = cyl
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+
+# Two-bone arm IK. shoulder_local / hand_local are in goalie-local space.
+# pole_local is the elbow-hint direction in goalie-local space — the solver
+# converts to world space before projecting onto the perpendicular plane.
+func _update_arm_ik(upper: Node3D, forearm_bone: Node3D,
+		shoulder_local: Vector3, hand_local: Vector3, pole_local: Vector3,
+		elbow_sphere: MeshInstance3D = null) -> void:
+	if upper == null or forearm_bone == null:
+		return
+	var shoulder_w: Vector3 = to_global(shoulder_local)
+	var hand_w: Vector3 = to_global(hand_local)
+	var pole_w: Vector3 = global_transform.basis * pole_local
+	var elbow_w: Vector3 = TwoBoneIK.solve_elbow(
+			shoulder_w, hand_w, _ARM_UPPER_LEN, _ARM_FOREARM_LEN, pole_w)
+	var elbow_local: Vector3 = to_local(elbow_w)
+	if elbow_sphere != null:
+		elbow_sphere.position = elbow_local
+	_update_arm_bone(upper, shoulder_local, elbow_local)
+	_update_arm_bone(forearm_bone, elbow_local, hand_local)
+
+
+func _update_arm_bone(bone: Node3D, a_local: Vector3, b_local: Vector3) -> void:
+	if bone == null:
+		return
+	var length: float = (b_local - a_local).length()
+	bone.position = (a_local + b_local) * 0.5
+	bone.scale = Vector3(1.0, 1.0, maxf(length, 0.001))
+	var a_world: Vector3 = to_global(a_local)
+	var b_world: Vector3 = to_global(b_local)
+	if (b_world - a_world).length() > 0.0001:
+		bone.look_at(b_world, _up_for_look_at(b_world - a_world))
+
+
+static func _up_for_look_at(direction: Vector3) -> Vector3:
+	if absf(direction.normalized().y) > 0.99:
+		return Vector3.FORWARD
+	return Vector3.UP
+
+
+# Node3D wrapper with a unit CylinderMesh child rotated 90° around X so the
+# cylinder's local Y maps to the wrapper's look_at forward axis (Z). scale.z
+# is set per tick to the bone's actual length by _update_arm_bone().
+func _make_arm_bone() -> Node3D:
+	var wrapper := Node3D.new()
+	var mi := MeshInstance3D.new()
+	mi.name = "Cylinder"
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = _ARM_RADIUS * 0.5
+	cyl.bottom_radius = _ARM_RADIUS * 0.5
+	cyl.height = 1.0
+	cyl.radial_segments = 12
+	mi.mesh = cyl
+	mi.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	wrapper.add_child(mi)
+	return wrapper
+
+
+func _make_sphere_mesh(radius: float) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	sphere.radial_segments = 12
+	sphere.rings = 6
+	mi.mesh = sphere
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+
+# Bridge each body-part pair with a cylinder that tracks their current positions
+# every frame. All positions are in goalie-local space (direct children of the
+# Goalie root), so no coordinate conversion needed.
+func _update_connectors() -> void:
+	_point_connector(left_hip_connector,
+		_body.position + _body.basis * Vector3(-0.10, -0.24, 0.0),
+		_left_pad.position)
+	_point_connector(right_hip_connector,
+		_body.position + _body.basis * Vector3(0.10, -0.24, 0.0),
+		_right_pad.position)
+	# Shoulder spheres follow the body pivot each frame.
+	var glove_shoulder: Vector3 = _body.position + _body.basis * Vector3(-0.23, 0.12, 0.0)
+	var blocker_shoulder: Vector3 = _body.position + _body.basis * Vector3(0.23, 0.12, 0.0)
+	glove_shoulder_sphere.position = glove_shoulder
+	blocker_shoulder_sphere.position = blocker_shoulder
+	# Glove arm: shoulder on body's left side (goalie's catch hand), elbow drops down.
+	_update_arm_ik(glove_upper_arm, glove_forearm,
+		glove_shoulder, _glove.position, Vector3(-0.3, -1.0, 0.0),
+		glove_elbow_sphere)
+	# Blocker arm: forearm connects directly to BlockArm (wrist position of the
+	# blocker pad + hand mesh assembly).
+	_update_arm_ik(blocker_upper_arm, blocker_forearm,
+		blocker_shoulder, _block_arm.position, Vector3(0.3, -1.0, 0.0),
+		blocker_elbow_sphere)
+
+
+func _point_connector(mesh: MeshInstance3D, from_pos: Vector3, to_pos: Vector3) -> void:
+	var diff: Vector3 = to_pos - from_pos
+	var length: float = diff.length()
+	if length < 0.02:
+		mesh.visible = false
+		return
+	mesh.visible = true
+	mesh.position = (from_pos + to_pos) * 0.5
+	# Orient CylinderMesh (Y-axis aligned) to point from from_pos to to_pos.
+	var y_axis: Vector3 = diff / length
+	var ref: Vector3 = Vector3.FORWARD if abs(y_axis.dot(Vector3.UP)) < 0.99 else Vector3.RIGHT
+	var x_axis: Vector3 = ref.cross(y_axis).normalized()
+	var z_axis: Vector3 = x_axis.cross(y_axis).normalized()
+	mesh.basis = Basis(x_axis, y_axis, z_axis)
+	(mesh.mesh as CylinderMesh).height = length

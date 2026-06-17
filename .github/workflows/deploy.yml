@@ -40,19 +40,12 @@ jobs:
           sed -i "s|^application/product_version=.*|application/product_version=\"${VERSION}.0\"|" export_presets.cfg
 
       # The Windows exe icon + version strings are embedded by rcedit (run
-      # through wine). Both steps are best-effort: if either fails, Godot
-      # simply skips embedding (warning, not error) and the export proceeds.
-      - name: Generate Windows icon from icon.svg
-        id: icon
-        continue-on-error: true
-        run: |
-          convert -density 384 -background none icon.svg -define icon:auto-resize=256,128,64,48,32,16 icon.ico
-          test -s icon.ico
-          echo "ok=true" >> "$GITHUB_OUTPUT"
-
+      # through wine). icon.ico is committed (generated from icon.svg), so the
+      # only build-time dependency here is rcedit/wine. Best-effort: if the
+      # setup fails, Godot skips embedding (warning, not error) and the export
+      # proceeds with the default icon.
       - name: Set up rcedit for Windows exe branding
         continue-on-error: true
-        if: steps.icon.outputs.ok == 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq wine64

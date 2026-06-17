@@ -337,7 +337,11 @@ func _clamp_blade_butterfly_box(blade_world: Vector3, gpos: Vector3, rot_y: floa
 # Uses the upper body's world Y so the result is correct regardless of where
 # the skater's CharacterBody3D origin sits above the ice.
 func blade_y_local() -> float:
-	return _controller.blade_height - _skater.upper_body.global_position.y
+	# Add the eased stick-lift offset so a lifted blade (and the hand/stick the
+	# IK solves from it) rises off the ice. blend is 0 in all shot/carry states
+	# (blade_up is gated off then), so this is a no-op except during a lift.
+	var lift: float = _skater.get_blade_lift_blend() * _controller.blade_lift_height
+	return (_controller.blade_height + lift) - _skater.upper_body.global_position.y
 
 # Lean-corrected blade Y for a given blade local (X, Z). Computes the local Y
 # that — after the upper body's pitch (X) and roll (Z) rotations under Godot's

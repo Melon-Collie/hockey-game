@@ -53,7 +53,7 @@ var _stamina_fill: ColorRect = null
 
 const _STAMINA_W: float = 240.0
 const _STAMINA_H: float = 12.0
-const _STAMINA_NORMAL := MenuStyle.HUD_RING_SELF             # cyan — matches your own skater ring
+const _STAMINA_NORMAL := MenuStyle.HUD_RING_SELF             # matches your own skater ring color
 const _STAMINA_LOW    := Color(0.95, 0.65, 0.20, 1.0)        # amber when running low
 const _STAMINA_LOCKED := MenuStyle.DANGER                    # red while exhausted
 

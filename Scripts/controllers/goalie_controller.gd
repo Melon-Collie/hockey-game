@@ -371,10 +371,10 @@ extends Node
 
 # ── Client Render Tuning ──────────────────────────────────────────────────────
 # Clients consume the host's broadcast goalie pose through a small buffer and
-# render at `now - interpolation_delay`, mirroring the skater / puck pattern.
-# Local AI doesn't run on clients — the pose is purely interpolated, so the
-# client view always matches what the host actually saw save-relevant frames.
-@export var interpolation_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
+# render at `now - NetworkManager.get_interpolation_delay()`, the shared delay
+# the skater / puck interpolators also use — so a save reads correctly relative
+# to the puck. Local AI doesn't run on clients — the pose is purely
+# interpolated, so the client view always matches the host's save-relevant frames.
 @export var extrapolation_max_ms: float = 50.0  # cap dead-reckon when snapshots are late
 @export var rejoin_blend_duration: float = 0.075  # smoothstep window back from extrapolation
 
@@ -1845,7 +1845,6 @@ func apply_state(network_state: GoalieNetworkState, host_ts: float) -> void:
 	_state_buffer.append(entry)
 	if _state_buffer.size() > 30:
 		_state_buffer.pop_front()
-	interpolation_delay = NetworkManager.adapt_interpolation_delay(interpolation_delay)
 
 # Renders the goalie at `now - interpolation_delay` from the buffered host
 # snapshots. Lerps root + every socket transform between bracketing entries;
@@ -1856,7 +1855,7 @@ func _interpolate_and_apply() -> void:
 	if _state_buffer.is_empty():
 		is_extrapolating = false
 		return
-	var render_time: float = NetworkManager.estimated_host_time() - interpolation_delay
+	var render_time: float = NetworkManager.estimated_host_time() - NetworkManager.get_interpolation_delay()
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
 			_state_buffer, render_time, _scratch_bracket)
 	if bracket == null:

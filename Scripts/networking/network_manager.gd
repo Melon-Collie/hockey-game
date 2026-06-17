@@ -64,7 +64,7 @@ signal slot_assigned(team_slot: int, team_id: int, jersey_color: Color, helmet_c
 signal remote_skater_spawn_requested(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int, attributes: PlayerAttributes)
 signal existing_players_synced(player_data: Array)
 signal local_puck_pickup_confirmed
-signal local_puck_stolen
+signal local_puck_stolen(was_stick_lift: bool)
 signal remote_puck_release_received(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
 signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
 signal carrier_puck_dropped
@@ -94,12 +94,14 @@ signal rematch_vote_changed(peer_id: int, vote: bool)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float)
 signal poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int)
+signal stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int)
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float)
 signal board_hit_received(position: Vector3)
 signal goal_body_hit_received(position: Vector3)
 signal deflection_received(position: Vector3)
 signal body_block_received(position: Vector3)
 signal puck_strip_received(position: Vector3)
+signal stick_lift_received(position: Vector3)
 signal input_batch_received(peer_id: int, inputs: Array[InputState])
 # Mid-game player → spectator transition. Host broadcasts to all peers; every
 # receiver despawns the demoted peer's skater locally (registry.remove handles
@@ -256,6 +258,9 @@ var _peer_loss_timer: float = 0.0
 # Jitter measurement (client side)
 var _jitter_samples: Array[float] = []
 var _last_ws_arrival_time: float = -1.0
+# get_target_interpolation_delay() per-physics-frame cache (see that function).
+var _target_interp_cached: float = -1.0
+var _target_interp_frame: int = -1
 
 # ── Timers ────────────────────────────────────────────────────────────────────
 var pending_error: String = ""
@@ -570,6 +575,7 @@ func prepare_for_new_game() -> void:
 	packet_loss_pct = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
+	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
 
 func reset() -> void:
 	_close()
@@ -632,6 +638,7 @@ func reset() -> void:
 	_peer_loss_timer = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
+	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
 	NetworkSimManager.clear_pending()
 
 # ── Process ───────────────────────────────────────────────────────────────────
@@ -953,6 +960,10 @@ func receive_world_state(data: PackedByteArray) -> void:
 			_last_ws_arrival_time = now
 			if s.size() >= 2:
 				_on_ws_sequence_received(s.decode_u16(0))
+			# Advance the shared interpolation delay once per packet, before the
+			# decode applies state to actors — so every interpolator this frame
+			# reads the same freshly-adapted value.
+			advance_interpolation_delay()
 			NetworkTelemetry.record_world_state()
 			NetworkTelemetry.record_bytes_received(s.size())
 			world_state_received.emit(s),
@@ -1016,6 +1027,21 @@ func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
 		return
 	poke_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+
+func send_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	NetworkSimManager.send(
+		func(ts: float, idms: float, cpid: int) -> void:
+			receive_stick_lift_claim.rpc_id(1, ts, idms, cpid),
+		[host_timestamp, interp_delay_ms, expected_carrier_peer_id], true)
+
+@rpc("any_peer", "reliable")
+func receive_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+	if not is_host:
+		return
+	var peer_id: int = multiplayer.get_remote_sender_id()
+	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		return
+	stick_lift_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
 
 func send_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	NetworkSimManager.send(
@@ -1243,14 +1269,14 @@ func send_carrier_changed_to_all(new_carrier_peer_id: int) -> void:
 func notify_carrier_changed(new_carrier_peer_id: int) -> void:
 	NetworkSimManager.send(func(id: int) -> void: remote_carrier_changed.emit(id), [new_carrier_peer_id], true)
 
-func send_puck_stolen(victim_peer_id: int) -> void:
+func send_puck_stolen(victim_peer_id: int, was_stick_lift: bool = false) -> void:
 	if not is_real_peer(victim_peer_id):
 		return  # AI bot or sentinel — see send_puck_picked_up rationale.
-	notify_puck_stolen.rpc_id(victim_peer_id)
+	notify_puck_stolen.rpc_id(victim_peer_id, was_stick_lift)
 
 @rpc("authority", "reliable")
-func notify_puck_stolen() -> void:
-	NetworkSimManager.send(func() -> void: local_puck_stolen.emit(), [], true)
+func notify_puck_stolen(was_stick_lift: bool) -> void:
+	NetworkSimManager.send(func(wsl: bool) -> void: local_puck_stolen.emit(wsl), [was_stick_lift], true)
 
 func send_puck_release(direction: Vector3, power: float, is_slapper: bool) -> void:
 	release_puck.rpc_id(1, direction, power, is_slapper,
@@ -1641,6 +1667,17 @@ func get_jitter_p95() -> float:
 	return sorted[mini(int(sorted.size() * 0.95), sorted.size() - 1)]
 
 func get_target_interpolation_delay() -> float:
+	# Cached once per physics frame: get_jitter_p95() duplicates + sorts the sample
+	# buffer, and this is read by the per-packet shared-delay advance plus every
+	# claim-send. The target drifts slowly (adapt clamps ±1.5/+10 ms per packet),
+	# so a frame of staleness is irrelevant.
+	var frame: int = Engine.get_physics_frames()
+	if frame != _target_interp_frame:
+		_target_interp_frame = frame
+		_target_interp_cached = _compute_target_interpolation_delay()
+	return _target_interp_cached
+
+func _compute_target_interpolation_delay() -> float:
 	if not is_clock_ready():
 		return Constants.NETWORK_INTERPOLATION_DELAY
 	var rtt: float = get_rtt_ms() / 1000.0
@@ -1677,6 +1714,22 @@ func adapt_interpolation_delay(current: float) -> float:
 	#     120Hz lands at 180ms/sec — slightly faster than the original 40Hz
 	#     target (120ms/sec) and well clear of industry norms (~80-150 ms/sec).
 	return current + clampf(change, -0.0015, 0.010)
+
+# ── Shared interpolation delay ──────────────────────────────────────────────
+# One delay drives every remote interpolator (remote skaters, loose puck,
+# goalie) so they all render at estimated_host_time() - _interp_delay — the SAME
+# instant — keeping relative timing (puck-on-stick, save-vs-puck) exact instead
+# of letting independently-adapting per-actor delays drift apart. Advanced once
+# per received world-state packet in receive_world_state (the per-packet cadence
+# the adapt rates are tuned for; multiple actors reading the same value cost
+# nothing).
+var _interp_delay: float = Constants.NETWORK_INTERPOLATION_DELAY
+
+func advance_interpolation_delay() -> void:
+	_interp_delay = adapt_interpolation_delay(_interp_delay)
+
+func get_interpolation_delay() -> float:
+	return _interp_delay
 
 func get_peer_loss_rate(peer_id: int = -1) -> float:
 	if is_host:
@@ -1752,6 +1805,14 @@ func send_puck_strip_to_all(position: Vector3) -> void:
 @rpc("authority", "unreliable")
 func notify_puck_strip(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: puck_strip_received.emit(pos), [position], false)
+
+func send_stick_lift_to_all(position: Vector3) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_stick_lift.rpc_id(peer_id, position)
+
+@rpc("authority", "unreliable")
+func notify_stick_lift(position: Vector3) -> void:
+	NetworkSimManager.send(func(pos: Vector3) -> void: stick_lift_received.emit(pos), [position], false)
 
 func send_spectator_demoted_to_all(peer_id: int) -> void:
 	for remote_id: int in connected_peer_ids():
