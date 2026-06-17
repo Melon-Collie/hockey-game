@@ -1933,8 +1933,21 @@ func _start_pending_shot_from_carrier() -> void:
 
 # ── Puck network events ──────────────────────────────────────────────────────
 func _on_remote_carrier_changed(new_carrier_peer_id: int) -> void:
-	if puck_controller != null:
+	if puck_controller == null:
+		return
+	if new_carrier_peer_id == -1:
+		puck_controller.notify_remote_carrier_changed(-1)
+		return
+	# Pin the puck to the carrier's interpolated blade so it shares one render
+	# timeline with the stick instead of interpolating from its own buffer. Fall
+	# back to the plain carrier-changed path (stop predicting, no pin) when the
+	# carrier is the local player — handled by on_local_player_picked_up_puck —
+	# or their skater isn't spawned on this client yet.
+	var record: PlayerRecord = _registry.get_record(new_carrier_peer_id) if _registry != null else null
+	if record == null or record.skater == null or record.is_local:
 		puck_controller.notify_remote_carrier_changed(new_carrier_peer_id)
+		return
+	puck_controller.notify_remote_pickup(record.skater)
 
 
 func on_carrier_puck_dropped() -> void:

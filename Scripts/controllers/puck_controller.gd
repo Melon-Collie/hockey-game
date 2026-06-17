@@ -36,6 +36,11 @@ var is_server: bool = false
 # ── State ─────────────────────────────────────────────────────────────────────
 var _carrier_peer_id: int = -1            # server-side authoritative carrier
 var _local_carrier_skater: Skater = null  # client-side: local skater while carrying
+# Client-side: the remote skater currently carrying, when it's NOT the local
+# player. While set, the puck is pinned to this skater's interpolated blade
+# rather than interpolating from its own buffer — the two used to run on
+# independent adaptive delays, drifting the puck off the carrier's stick.
+var _remote_carrier_skater: Skater = null
 var _prev_puck_pos: Vector3 = Vector3.ZERO
 var _state_buffer: Array[BufferedPuckState] = []
 var _predicting_trajectory: bool = false
@@ -122,10 +127,17 @@ func _physics_process(delta: float) -> void:
 		return
 	if _rejoin_blend_elapsed >= 0.0:
 		_rejoin_blend_elapsed += delta
+	# A despawned / demoted remote carrier drops the pin back to interpolation.
+	if _remote_carrier_skater != null and not is_instance_valid(_remote_carrier_skater):
+		_remote_carrier_skater = null
 	if _local_carrier_skater != null:
 		is_extrapolating = false
-		_apply_local_carrier_position(delta)
+		_pin_puck_to_carrier(_local_carrier_skater, delta)
 		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "pinned"
+	elif _remote_carrier_skater != null:
+		is_extrapolating = false
+		_pin_puck_to_carrier(_remote_carrier_skater, delta)
+		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "pinned_remote"
 	elif not _predicting_trajectory:
 		_interpolate()
 		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "interpolating"
@@ -301,7 +313,23 @@ func _check_interactions() -> void:
 # ── Local Prediction ──────────────────────────────────────────────────────────
 func notify_local_pickup(local_skater: Skater) -> void:
 	_local_carrier_skater = local_skater
+	_remote_carrier_skater = null
 	_predicting_trajectory = false
+	_post_contact_timer = -1.0
+	puck.set_client_prediction_mode(false)
+	_state_buffer.clear()
+
+
+# A remote (non-local) player took possession. Pin the puck to their
+# interpolated blade so it shares the carrier's render timeline instead of
+# interpolating from its own buffer. Mirrors notify_local_pickup. GameManager
+# only calls this for non-local carriers whose skater is spawned on this client.
+func notify_remote_pickup(remote_skater: Skater) -> void:
+	_remote_carrier_skater = remote_skater
+	_local_carrier_skater = null
+	_predicting_trajectory = false
+	_pending_local_release = false
+	_pending_local_release_deadline = -1.0
 	_post_contact_timer = -1.0
 	puck.set_client_prediction_mode(false)
 	_state_buffer.clear()
@@ -334,6 +362,7 @@ func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	# locally and are soft-reconciling via world state.
 	if new_carrier_peer_id == -1 and _predicting_trajectory:
 		return
+	_remote_carrier_skater = null
 	_predicting_trajectory = false
 	_post_contact_timer = -1.0
 	puck.set_client_prediction_mode(false)  # also clears _clamp_at_goal_line
@@ -342,6 +371,7 @@ func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 # Does not start trajectory prediction — just drops back to interpolation.
 func notify_local_puck_dropped() -> void:
 	_local_carrier_skater = null
+	_remote_carrier_skater = null
 	_predicting_trajectory = false
 	_pending_local_release = false
 	_pending_local_release_deadline = -1.0
@@ -349,13 +379,15 @@ func notify_local_puck_dropped() -> void:
 	puck.set_client_prediction_mode(false)
 	_state_buffer.clear()
 
-func _apply_local_carrier_position(delta: float) -> void:
-	# Smooth puck toward the carry target each tick. The lerp damps rapid blade
-	# movements so the puck feels weighty during stickhandling rather than
-	# teleporting instantly to the blade tip. Carry target is the un-offset
-	# contact (= cursor position) so the puck stays under the cursor while the
-	# blade renders to the forehand or backhand side.
-	var contact: Vector3 = _local_carrier_skater.get_carry_target_global()
+func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:
+	# Smooth puck toward the carrier's carry target each tick. Shared by the local
+	# carry and the remote-carrier pin. The lerp damps rapid blade movements so the
+	# puck feels weighty during stickhandling rather than teleporting instantly to
+	# the blade tip. Carry target is the un-offset contact (= cursor position on the
+	# owning client) so the puck stays under the cursor while the blade renders to
+	# the forehand or backhand side; on a remote skater the forehand factor is 0 so
+	# it cleanly reduces to the interpolated blade contact.
+	var contact: Vector3 = carrier.get_carry_target_global()
 	contact.y = puck.ice_height
 	puck.set_puck_position(puck.get_puck_position().lerp(contact, carry_smoothing_speed * delta))
 
@@ -435,6 +467,13 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 		_pending_local_release_deadline = -1.0
 	if _local_carrier_skater != null:
 		return  # Puck is pinned to local blade; interpolation isn't running
+	# Remote-carrier pin: the rendered position is driven by the pin in
+	# _physics_process, but we keep buffering host snapshots below (prediction is
+	# false while pinned, so control falls through) so the buffer stays warm. The
+	# instant the carrier releases or is stripped, interpolation has fresh bracket
+	# data and hands off with no refill freeze — and since the remote blade is
+	# itself interpolated, the pinned puck and the buffered timeline share a render
+	# time, so there's no pop at the transition.
 	if _predicting_trajectory:
 		if state.carrier_peer_id != -1:
 			if _pending_local_release:
