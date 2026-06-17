@@ -148,13 +148,23 @@ var cursor_style: int = CURSOR_STYLE_DOT
 var cursor_color: Color = Color(1.0, 0.45, 0.1)  # high-contrast orange on white ice
 var cursor_size: int = 28
 var attack_up: bool = false
-# Accessibility: swap the on-ice self/team/enemy ring colors for a
-# colorblind-safe palette (SkaterHUDCoordinator reads this live).
-var colorblind_rings: bool = false
-# Show the overhead self-beacon — the floating marker above your own skater that
-# appears in scrums (and while ghosted) so you don't lose which skater is yours.
-# SkaterHUDCoordinator reads this live. Default on.
-var self_beacon_enabled: bool = true
+# On-ice self/team/enemy ring colors, relationship-relative to the local player.
+# Fully user-pickable (Options → Game → Ring Colors) so players can dial in a
+# colorblind-safe palette or any scheme they like. SkaterHUDCoordinator reads
+# these live. Defaults are MenuStyle's canonical green/blue/red.
+var ring_color_self: Color = MenuStyle.HUD_RING_SELF
+var ring_color_team: Color = MenuStyle.HUD_RING_TEAM
+var ring_color_enemy: Color = MenuStyle.HUD_RING_ENEMY
+# Overhead self-beacon — the floating marker above your own skater that helps you
+# not lose which skater is yours. SkaterHUDCoordinator reads this live.
+#   ALWAYS   — always shown over your skater.
+#   SMART    — shown only in scrums and while ghosted (default).
+#   DISABLED — never shown.
+const BEACON_MODE_ALWAYS: int = 0
+const BEACON_MODE_SMART: int = 1
+const BEACON_MODE_DISABLED: int = 2
+const BEACON_MODE_LABELS: Array[String] = ["Always On", "Smart", "Disabled"]
+var self_beacon_mode: int = BEACON_MODE_SMART
 # Accessibility: photosensitivity / motion options. screen_flash gates the
 # full-screen goal flash and hit vignette (FlashOverlay); screen_shake gates
 # camera trauma shake (GameCamera.shake). Both default on.
@@ -269,8 +279,10 @@ func save() -> void:
 	cfg.set_value("input", "cursor_size", cursor_size)
 	cfg.set_value("game", "attack_up", attack_up)
 	cfg.set_value("game", "has_opened_player_settings", has_opened_player_settings)
-	cfg.set_value("game", "colorblind_rings", colorblind_rings)
-	cfg.set_value("game", "self_beacon_enabled", self_beacon_enabled)
+	cfg.set_value("game", "ring_color_self", ring_color_self)
+	cfg.set_value("game", "ring_color_team", ring_color_team)
+	cfg.set_value("game", "ring_color_enemy", ring_color_enemy)
+	cfg.set_value("game", "self_beacon_mode", self_beacon_mode)
 	cfg.set_value("game", "screen_flash", screen_flash)
 	cfg.set_value("game", "screen_shake", screen_shake)
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
@@ -556,8 +568,13 @@ func _load() -> void:
 		cursor_size = clampi(int(cfg.get_value("input", "cursor_size", cursor_size)), CURSOR_SIZE_MIN, CURSOR_SIZE_MAX)
 		attack_up = cfg.get_value("game", "attack_up", false)
 		has_opened_player_settings = cfg.get_value("game", "has_opened_player_settings", false)
-		colorblind_rings = cfg.get_value("game", "colorblind_rings", false)
-		self_beacon_enabled = cfg.get_value("game", "self_beacon_enabled", true)
+		var raw_ring_self: Variant = cfg.get_value("game", "ring_color_self", ring_color_self)
+		ring_color_self = raw_ring_self if raw_ring_self is Color else ring_color_self
+		var raw_ring_team: Variant = cfg.get_value("game", "ring_color_team", ring_color_team)
+		ring_color_team = raw_ring_team if raw_ring_team is Color else ring_color_team
+		var raw_ring_enemy: Variant = cfg.get_value("game", "ring_color_enemy", ring_color_enemy)
+		ring_color_enemy = raw_ring_enemy if raw_ring_enemy is Color else ring_color_enemy
+		self_beacon_mode = clampi(int(cfg.get_value("game", "self_beacon_mode", BEACON_MODE_SMART)), 0, BEACON_MODE_LABELS.size() - 1)
 		screen_flash = cfg.get_value("game", "screen_flash", true)
 		screen_shake = cfg.get_value("game", "screen_shake", true)
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)

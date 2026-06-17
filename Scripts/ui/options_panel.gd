@@ -33,8 +33,10 @@ var _cursor_color_btn: ColorPickerButton = null
 var _cursor_size_slider: HSlider = null
 var _cursor_size_label: Label = null
 var _attack_up_check: CheckButton = null
-var _colorblind_check: CheckButton = null
-var _self_beacon_check: CheckButton = null
+var _ring_self_color_btn: ColorPickerButton = null
+var _ring_team_color_btn: ColorPickerButton = null
+var _ring_enemy_color_btn: ColorPickerButton = null
+var _self_beacon_mode_btn: OptionButton = null
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
 var _tilt_slider: HSlider = null
@@ -142,8 +144,10 @@ func _snapshot() -> Dictionary:
 		"cursor_color": PlayerPrefs.cursor_color,
 		"cursor_size": PlayerPrefs.cursor_size,
 		"attack_up": PlayerPrefs.attack_up,
-		"colorblind_rings": PlayerPrefs.colorblind_rings,
-		"self_beacon_enabled": PlayerPrefs.self_beacon_enabled,
+		"ring_color_self": PlayerPrefs.ring_color_self,
+		"ring_color_team": PlayerPrefs.ring_color_team,
+		"ring_color_enemy": PlayerPrefs.ring_color_enemy,
+		"self_beacon_mode": PlayerPrefs.self_beacon_mode,
 		"screen_flash": PlayerPrefs.screen_flash,
 		"screen_shake": PlayerPrefs.screen_shake,
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
@@ -178,8 +182,10 @@ func _read_controls() -> Dictionary:
 		"cursor_color": _cursor_color_btn.color,
 		"cursor_size": int(_cursor_size_slider.value),
 		"attack_up": _attack_up_check.button_pressed,
-		"colorblind_rings": _colorblind_check.button_pressed,
-		"self_beacon_enabled": _self_beacon_check.button_pressed,
+		"ring_color_self": _ring_self_color_btn.color,
+		"ring_color_team": _ring_team_color_btn.color,
+		"ring_color_enemy": _ring_enemy_color_btn.color,
+		"self_beacon_mode": _self_beacon_mode_btn.selected,
 		"screen_flash": _screen_flash_check.button_pressed,
 		"screen_shake": _screen_shake_check.button_pressed,
 		"camera_tilt_deg": _tilt_slider.value,
@@ -539,17 +545,14 @@ func _build_game_tab() -> Control:
 	_attack_up_check.toggled.connect(_on_attack_up_toggled)
 	box.add_child(_field_row("Always Attack Up", _attack_up_check))
 
-	_colorblind_check = CheckButton.new()
-	_colorblind_check.set_pressed_no_signal(PlayerPrefs.colorblind_rings)
-	SoundManager.wire_button(_colorblind_check)
-	_colorblind_check.toggled.connect(_on_colorblind_toggled)
-	box.add_child(_field_row("Colorblind Team Colors", _colorblind_check))
-
-	_self_beacon_check = CheckButton.new()
-	_self_beacon_check.set_pressed_no_signal(PlayerPrefs.self_beacon_enabled)
-	SoundManager.wire_button(_self_beacon_check)
-	_self_beacon_check.toggled.connect(_on_self_beacon_toggled)
-	box.add_child(_field_row("Self Marker", _self_beacon_check))
+	_self_beacon_mode_btn = OptionButton.new()
+	_self_beacon_mode_btn.custom_minimum_size = Vector2(160, 40)
+	_self_beacon_mode_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.BEACON_MODE_LABELS.size():
+		_self_beacon_mode_btn.add_item(PlayerPrefs.BEACON_MODE_LABELS[i], i)
+	_self_beacon_mode_btn.selected = PlayerPrefs.self_beacon_mode
+	_self_beacon_mode_btn.item_selected.connect(_on_self_beacon_mode_selected)
+	box.add_child(_field_row("Self Marker", _self_beacon_mode_btn))
 
 	_screen_flash_check = CheckButton.new()
 	_screen_flash_check.set_pressed_no_signal(PlayerPrefs.screen_flash)
@@ -562,6 +565,33 @@ func _build_game_tab() -> Control:
 	SoundManager.wire_button(_screen_shake_check)
 	_screen_shake_check.toggled.connect(_on_screen_shake_toggled)
 	box.add_child(_field_row("Camera Shake", _screen_shake_check))
+
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Ring Colors"))
+
+	_ring_self_color_btn = ColorPickerButton.new()
+	_ring_self_color_btn.custom_minimum_size = Vector2(160, 36)
+	_ring_self_color_btn.color = PlayerPrefs.ring_color_self
+	_ring_self_color_btn.edit_alpha = false
+	SoundManager.wire_button(_ring_self_color_btn)
+	_ring_self_color_btn.color_changed.connect(_on_ring_color_changed)
+	box.add_child(_field_row("Your Ring", _ring_self_color_btn))
+
+	_ring_team_color_btn = ColorPickerButton.new()
+	_ring_team_color_btn.custom_minimum_size = Vector2(160, 36)
+	_ring_team_color_btn.color = PlayerPrefs.ring_color_team
+	_ring_team_color_btn.edit_alpha = false
+	SoundManager.wire_button(_ring_team_color_btn)
+	_ring_team_color_btn.color_changed.connect(_on_ring_color_changed)
+	box.add_child(_field_row("Ally Rings", _ring_team_color_btn))
+
+	_ring_enemy_color_btn = ColorPickerButton.new()
+	_ring_enemy_color_btn.custom_minimum_size = Vector2(160, 36)
+	_ring_enemy_color_btn.color = PlayerPrefs.ring_color_enemy
+	_ring_enemy_color_btn.edit_alpha = false
+	SoundManager.wire_button(_ring_enemy_color_btn)
+	_ring_enemy_color_btn.color_changed.connect(_on_ring_color_changed)
+	box.add_child(_field_row("Enemy Rings", _ring_enemy_color_btn))
 
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Camera"))
@@ -696,10 +726,10 @@ func _on_ice_scratches_toggled(_pressed: bool) -> void:
 func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
-func _on_colorblind_toggled(_pressed: bool) -> void:
+func _on_ring_color_changed(_color: Color) -> void:
 	_update_apply_state()
 
-func _on_self_beacon_toggled(_pressed: bool) -> void:
+func _on_self_beacon_mode_selected(_idx: int) -> void:
 	_update_apply_state()
 
 func _on_screen_flash_toggled(_pressed: bool) -> void:
@@ -878,8 +908,10 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.cursor_color = c.cursor_color
 	PlayerPrefs.cursor_size = c.cursor_size
 	PlayerPrefs.attack_up = c.attack_up
-	PlayerPrefs.colorblind_rings = c.colorblind_rings
-	PlayerPrefs.self_beacon_enabled = c.self_beacon_enabled
+	PlayerPrefs.ring_color_self = c.ring_color_self
+	PlayerPrefs.ring_color_team = c.ring_color_team
+	PlayerPrefs.ring_color_enemy = c.ring_color_enemy
+	PlayerPrefs.self_beacon_mode = c.self_beacon_mode
 	PlayerPrefs.screen_flash = c.screen_flash
 	PlayerPrefs.screen_shake = c.screen_shake
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
@@ -935,10 +967,14 @@ func _on_cancel_pressed() -> void:
 	if _cursor_size_slider != null:
 		_cursor_size_slider.value = _original.cursor_size
 	_attack_up_check.set_pressed_no_signal(_original.attack_up)
-	if _colorblind_check != null:
-		_colorblind_check.set_pressed_no_signal(_original.colorblind_rings)
-	if _self_beacon_check != null:
-		_self_beacon_check.set_pressed_no_signal(_original.self_beacon_enabled)
+	if _ring_self_color_btn != null:
+		_ring_self_color_btn.color = _original.ring_color_self
+	if _ring_team_color_btn != null:
+		_ring_team_color_btn.color = _original.ring_color_team
+	if _ring_enemy_color_btn != null:
+		_ring_enemy_color_btn.color = _original.ring_color_enemy
+	if _self_beacon_mode_btn != null:
+		_self_beacon_mode_btn.selected = _original.self_beacon_mode
 	if _screen_flash_check != null:
 		_screen_flash_check.set_pressed_no_signal(_original.screen_flash)
 	if _screen_shake_check != null:
