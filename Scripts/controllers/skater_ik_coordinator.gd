@@ -30,7 +30,7 @@ var _smoothed_aim_initialized: bool = false
 # from there. Per-tick fields (blade_y, hand_y, backhand_angle) are written
 # into the cached instance each use. Building fresh configs per solve was the
 # hottest allocation site in the game (~7 RefCounted/Dictionary allocs per
-# skater per 240 Hz tick across the 3-pass loop).
+# skater per physics tick across the 3-pass loop).
 var _cached_top_cfg: TopHandIK.Config = null
 var _cached_bottom_cfg: BottomHandIK.Config = null
 var _ik_result := TopHandIK.Result.new()

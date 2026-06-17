@@ -279,7 +279,7 @@ var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
-# (240/120 = 2 at the default rate; 240/5 = 48 during dead-puck phases via
+# (120/120 = 1 at the default rate; 120/5 = 24 during dead-puck phases via
 # set_broadcast_rate). Recomputed by `set_broadcast_rate`. Stall resilience:
 # on a host main-thread freeze, Godot's physics catch-up fires multiple
 # back-to-back physics ticks. The counter increments in NetworkManager._physics_process
@@ -654,7 +654,7 @@ func _notification(what: int) -> void:
 
 func _physics_process(_delta: float) -> void:
 	# Single source of truth for the host-side integer tick counter. Increments
-	# at the engine's physics rate (240 Hz). AI agents salt their per-tick RNG
+	# at the engine's physics rate (120 Hz). AI agents salt their per-tick RNG
 	# with this value; consumers must tolerate the counter being zero before
 	# the host starts ticking and must not assume monotonicity across host
 	# transfers (Phase 1 has no host transfer support anyway).

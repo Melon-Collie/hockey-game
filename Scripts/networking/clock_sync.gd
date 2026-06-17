@@ -11,9 +11,10 @@ const OFFSET_EMA_ALPHA: float = 0.3  # after is_ready; ~3 pings to reach 66% of 
 # scheduled processing tick, keeping the host queue non-empty.
 # BATCH_INTERVAL: worst-case send delay (input stamped right after a batch went out).
 # BUFFER_TICKS: target host-side queue depth after accounting for batch delay.
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 const BATCH_INTERVAL: float = 1.0 / 60.0
 const BUFFER_TICKS: float = 2.0
-const TICK_DURATION: float = 1.0 / 240.0
+const TICK_DURATION: float = 1.0 / _PhysicsConstants.PHYSICS_TICK
 const INPUT_LEAD_SEC: float = BATCH_INTERVAL + BUFFER_TICKS * TICK_DURATION  # ~25 ms
 
 var is_ready: bool = false

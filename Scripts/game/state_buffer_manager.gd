@@ -2,11 +2,12 @@ class_name StateBufferManager
 extends RefCounted
 
 # Host-only rolling snapshot buffer for all actors.
-# Pre-allocated ring buffers avoid per-tick GC pressure at 240 Hz.
+# Pre-allocated ring buffers avoid per-tick GC pressure at the physics rate.
 # Owned by GameManager; WorldStateCodec reads latest_*() for broadcasts.
 # Phase 7 lag compensation queries get_state_at() for historical rewind.
 
-const BUFFER_SIZE: int = 720  # 3 seconds at 240 Hz
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+const BUFFER_SIZE: int = _PhysicsConstants.PHYSICS_TICK * 3  # 3 seconds of history
 
 var _skater_buffers: Dictionary = {}   # peer_id -> Array[SkaterNetworkState]
 var _skater_ptrs: Dictionary = {}      # peer_id -> int

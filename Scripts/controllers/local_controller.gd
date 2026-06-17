@@ -1,6 +1,8 @@
 class_name LocalController
 extends SkaterController
 
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+
 signal hit_received(magnitude: float)
 
 # Trajectory-based reconcile: thresholds compare the client's prediction *at
@@ -27,7 +29,7 @@ var _input_history: Array[InputState] = []
 # true divergence against server state at the same timestamp instead of
 # comparing current client position (which is ahead by prediction lead).
 var _prediction_history: Array[PredictedState] = []
-const _PREDICTION_HISTORY_CAP: int = 480  # ~2s at 240Hz
+const _PREDICTION_HISTORY_CAP: int = _PhysicsConstants.PHYSICS_TICK * 2  # ~2 s, matches the reconcile input cap
 var _team_id: int = -1  # set at setup; needed for client-side offside prediction
 var last_reconcile_error: float = 0.0
 var _claim_cooldown: float = 0.0
@@ -48,7 +50,7 @@ var _last_blade_pos: Vector3 = Vector3.ZERO
 # two opponents) — replay must apply all of them, in timestamp order, each
 # at the first replay input whose host_timestamp catches up to it.
 # Cap prevents unbounded growth if something goes wrong; 16 covers any
-# realistic scenario at 240Hz with RTT < 2s.
+# realistic scenario at the physics rate with RTT < 2s.
 var _body_check_impulses: Array[Dictionary] = []
 const _BODY_CHECK_IMPULSE_CAP: int = 16
 const _BLADE_JUMP_THRESHOLD: float = 0.05
@@ -165,7 +167,7 @@ func _physics_process(delta: float) -> void:
 			prep_input.stick_lift_held = false
 			_current_input = prep_input
 			_input_history.append(_current_input)
-			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * float(Constants.PHYSICS_TICK)) * 2, Constants.PHYSICS_TICK / 5, Constants.PHYSICS_TICK * 2)
 			if _input_history.size() > prep_rtt_cap:
 				_input_history.pop_front()
 			apply_blade_aim_only(_current_input, delta)
@@ -192,8 +194,8 @@ func _physics_process(delta: float) -> void:
 	_input_history.append(_current_input)
 	# Cap history size to prevent unbounded growth
 	# Cap scales with RTT so sustained high-loss can't grow the buffer unboundedly:
-	# 2× RTT worth of frames (min 48, max 480) covers the full in-flight window.
-	var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+	# 2× RTT worth of frames (min 0.2 s, max 2 s of ticks) covers the in-flight window.
+	var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * float(Constants.PHYSICS_TICK)) * 2, Constants.PHYSICS_TICK / 5, Constants.PHYSICS_TICK * 2)
 	if _input_history.size() > rtt_cap:
 		_input_history.pop_front()
 	_process_input(_current_input, _current_input.delta)

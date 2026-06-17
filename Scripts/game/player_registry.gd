@@ -39,7 +39,7 @@ var peer_id_by_skater: Dictionary = {}    # Skater object -> peer_id
 # Flat skater list for the per-tick scan loops (puck interactions, goalie
 # crease-jam checks). Rebuilt on spawn/remove; consumers read the live
 # reference through their skater-getter Callable and must not mutate it.
-# Rebuilding per call allocated two arrays per invocation at 240 Hz.
+# Rebuilding per call allocated two arrays per invocation at the physics rate.
 var _skaters_cache: Array[Skater] = []
 var _spawner: ActorSpawner = null
 var _state_machine: GameStateMachine = null
@@ -343,7 +343,7 @@ func positions_by_peer_id() -> Dictionary:
 
 
 # Caller-owned-dictionary variant for per-tick callers (ghost state, icing
-# check) so the 240 Hz host loop doesn't allocate a Dictionary per call.
+# check) so the per-tick host loop doesn't allocate a Dictionary per call.
 func fill_positions_by_peer_id(out: Dictionary) -> void:
 	out.clear()
 	for peer_id: int in _players:

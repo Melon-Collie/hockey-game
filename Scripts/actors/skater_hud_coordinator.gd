@@ -43,7 +43,7 @@ const _BEACON_PULSE_MAX_SCALE: float = 1.10
 # skaters are within _BEACON_CROWD_RADIUS of the local player (or while ghosted
 # — see _update_beacon_visibility). A linger timer keeps it up briefly after the
 # crowd disperses so skaters weaving past don't make it flicker. The proximity
-# scan runs on a coarse interval, not every 240 Hz tick.
+# scan runs on a coarse interval, not every physics tick.
 const _BEACON_CROWD_RADIUS: float         = 4.5
 const _BEACON_CROWD_COUNT: int            = 2
 const _BEACON_CROWD_LINGER: float         = 1.0
@@ -153,7 +153,7 @@ var _last_rebuild_ring_scale: float = -1.0
 var _last_rebuild_radius: float = -1.0
 var _last_rebuild_ring_visible: bool = false
 
-# Per-tick caches. `update()` runs at 240 Hz across every skater, so anything
+# Per-tick caches. `update()` runs every physics tick across every skater, so anything
 # derived from infrequently-changing inputs (camera orientation, skater Y,
 # shader-param values) is recomputed only on change.
 var _last_skater_y: float = INF
@@ -167,7 +167,7 @@ var _last_lost_flash: float = -1.0
 
 # Slot-ring relationship tint. The resolver (installed by PlayerRegistry)
 # returns a RingRelation each refresh; recolor is re-evaluated on a coarse
-# interval rather than every 240 Hz tick since relationship changes rarely
+# interval rather than every physics tick since relationship changes rarely
 # (local-player spawn, slot swap). RingRelation values are non-negative; -2 is
 # an unreachable sentinel that forces the first refresh to apply.
 const _RING_RECOLOR_INTERVAL: float = 0.25

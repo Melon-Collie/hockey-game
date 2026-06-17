@@ -5,6 +5,8 @@ extends RefCounted
 # Call sites use static methods so they're null-safe outside a game session.
 static var instance: NetworkTelemetry = null
 
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+
 # ── Window counters (reset each second) ──────────────────────────────────────
 var _world_state_count: int = 0
 var _input_count: int = 0
@@ -103,18 +105,20 @@ var _ws_gap_counts: Array[int] = [0, 0, 0, 0, 0, 0]
 var ws_gap_histogram: String = "—"
 
 # ── Host-frame health (host only; clients leave these at 0) ──────────────────
-# Inter-tick gap captures any stall regardless of cause (CPU steal, GC pause,
-# heavy Jolt frame, etc.). Steady state at 240Hz is ~4.17ms; a real stall shows
-# up as a single large `tick max` sample with subsequent catch-up ticks at
-# near-zero gap. Broadcast interval is wall-clock between consecutive
-# `_broadcast_state()` calls — should track the ~8.3ms cadence at 120 Hz.
-var host_physics_tick_p95_ms: float = 0.0
-var host_physics_tick_p99_ms: float = 0.0
-var host_physics_tick_max_ms: float = 0.0
+# Inter-tick gap. The MEAN gap gives the effective tick rate (`host_effective_tick_hz`):
+# ≈ the target tick rate means physics is keeping real-time; well below means the host
+# is overloaded and the sim is dilating (slow-motion). The MAX gap is the worst stall
+# (CPU steal, GC pause, OS hitch). Note the gap does NOT sit at a clean 1/tick_rate:
+# physics steps run inside the main loop, so consecutive ticks are quantized to whole
+# render frames — at a render FPS above the tick rate the per-tick gap alternates 1-2
+# frames, which is exactly why we report the mean (rate) and max (stall), not raw
+# percentiles of the gap. Broadcast interval is wall-clock between `_broadcast_state()`.
+var host_effective_tick_hz: float = 0.0    # mean inter-tick rate; ≈ target = real-time, below = dilating
+var host_physics_tick_max_ms: float = 0.0  # worst inter-tick gap in the window = worst stall
 var broadcast_interval_p95_ms: float = 0.0
 var _phys_tick_samples_us: Array[int] = []
 var _bcast_interval_samples_us: Array[int] = []
-const PHYS_TICK_WINDOW: int = 240   # 1s at 240Hz
+const PHYS_TICK_WINDOW: int = _PhysicsConstants.PHYSICS_TICK   # 1 s of samples
 const BCAST_INTERVAL_WINDOW: int = 120  # 1s at 120Hz
 
 # ── Static call sites (no-op when not in a game session) ─────────────────────
@@ -290,17 +294,20 @@ func tick(delta: float) -> void:
 	for i: int in _ws_gap_counts.size():
 		_ws_gap_counts[i] = 0
 	if not _phys_tick_samples_us.is_empty():
-		var pts := _phys_tick_samples_us.duplicate()
-		pts.sort()
-		var p95_i: int = mini(int(pts.size() * 0.95), pts.size() - 1)
-		var p99_i: int = mini(int(pts.size() * 0.99), pts.size() - 1)
-		host_physics_tick_p95_ms = pts[p95_i] / 1000.0
-		host_physics_tick_p99_ms = pts[p99_i] / 1000.0
-		host_physics_tick_max_ms = pts[pts.size() - 1] / 1000.0
+		# Mean → effective rate (the real "are we keeping real-time?" signal);
+		# max → worst stall. Single pass, no sort needed.
+		var sum_us: int = 0
+		var max_us: int = 0
+		for s: int in _phys_tick_samples_us:
+			sum_us += s
+			if s > max_us:
+				max_us = s
+		var mean_us: float = float(sum_us) / _phys_tick_samples_us.size()
+		host_effective_tick_hz = (1000000.0 / mean_us) if mean_us > 0.0 else 0.0
+		host_physics_tick_max_ms = max_us / 1000.0
 		_phys_tick_samples_us.clear()
 	else:
-		host_physics_tick_p95_ms = 0.0
-		host_physics_tick_p99_ms = 0.0
+		host_effective_tick_hz = 0.0
 		host_physics_tick_max_ms = 0.0
 	if not _bcast_interval_samples_us.is_empty():
 		var bis := _bcast_interval_samples_us.duplicate()

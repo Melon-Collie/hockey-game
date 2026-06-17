@@ -638,7 +638,7 @@ func _configure_collaborators() -> void:
 # Rule configs are built once and reused — exports don't change at runtime.
 # Without this, three `RefCounted` allocations happen per physics tick per
 # goalie (plus extra shot-config allocs during reaction re-projection) at
-# 240Hz, for no semantic gain.
+# every physics tick, for no semantic gain.
 func _build_rule_configs() -> void:
 	_shot_cfg = GoalieBehaviorRules.ShotDetectionConfig.new()
 	_shot_cfg.shot_speed_threshold = shot_speed_threshold
@@ -1795,7 +1795,7 @@ func get_state() -> GoalieNetworkState:
 	fill_state(s)
 	return s
 
-# Caller-owned-instance variant for the 240 Hz StateBufferManager capture.
+# Caller-owned-instance variant for the per-tick StateBufferManager capture.
 func fill_state(s: GoalieNetworkState) -> void:
 	s.position_x = goalie.global_position.x
 	s.position_z = goalie.global_position.z
@@ -1889,7 +1889,7 @@ func _interpolate_and_apply() -> void:
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
 
 # Fills and returns the reused _scratch_state — every field is written (lerp
-# covers all fields; extrapolate copy_froms), keeping the 240 Hz render path
+# covers all fields; extrapolate copy_froms), keeping the per-tick render path
 # allocation-free.
 func _lerp_goalie_state(from_s: GoalieNetworkState, to_s: GoalieNetworkState, t: float) -> GoalieNetworkState:
 	var r := _scratch_state

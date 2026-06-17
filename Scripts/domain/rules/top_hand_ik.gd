@@ -36,7 +36,7 @@ class_name TopHandIK
 # The shoulder is expected to live on the opposite (top-hand) side.
 #
 # Returns a Result (hand + blade in upper-body-local space). Callers on the
-# 240 Hz tick path pass a reused `out` instance to avoid per-solve allocation;
+# per-tick path pass a reused `out` instance to avoid per-solve allocation;
 # omitting it allocates a fresh Result (fine for tests / cold paths).
 
 class Config:

@@ -33,7 +33,7 @@ var upper_body_rotation_y: float
 # (Constants.TIME_WIRE_SCALE), so the worst-case round-trip error against the
 # f64 the local history stores is 0.05ms — constant regardless of session
 # length (the old f32 encoding degraded with host uptime). 1ms is comfortably
-# above that and well below the 4.17ms gap between adjacent 240Hz-stamped
+# above that and well below the 8.33ms gap between adjacent 120 Hz-stamped
 # inputs, so no risk of off-by-one matches.
 const TS_MATCH_EPSILON: float = 1e-3
 

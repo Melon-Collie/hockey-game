@@ -340,7 +340,7 @@ func _process(_delta: float) -> void:
 	# write-only functions of the marker positions (top_hand, blade, shoulder,
 	# bottom_hand) that the physics-rate controllers and interpolators
 	# maintain — nothing reads the mesh transforms back. Recomputing them at
-	# 240 Hz wasted ~75% of the work on poses that never rendered, and
+	# the physics rate wasted ~75% of the work on poses that never rendered, and
 	# reconcile re-ran them once per replayed input (a hitch exactly when the
 	# network was already degraded). One pass per rendered frame, after all
 	# physics ticks for the frame have finalized the markers, is exactly the

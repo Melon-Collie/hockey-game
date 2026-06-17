@@ -48,7 +48,7 @@ func to_bytes() -> PackedByteArray:
 	var b := PackedByteArray(); b.resize(BYTES_SIZE)
 	# host_timestamp rides as u32 in 0.1ms units (Constants.TIME_WIRE_SCALE):
 	# constant precision over ~119h vs f32's uptime-degrading ULP, which would
-	# start quantizing adjacent 240 Hz stamps equal (dedupe-dropped as
+	# start quantizing adjacent per-tick stamps equal (dedupe-dropped as
 	# duplicates) after ~4.6h of host uptime.
 	b.encode_u32(0, roundi(maxf(host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE))
 	b.encode_float(4, delta)

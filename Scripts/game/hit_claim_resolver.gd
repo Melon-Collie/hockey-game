@@ -22,7 +22,7 @@ extends RefCounted
 #     → reject if HitRules.is_valid_hit fails
 #     → otherwise credit via HitTracker.on_hit
 #
-# Throttle: body_checked_player fires every 240Hz tick during sustained contact;
+# Throttle: body_checked_player fires every physics tick during sustained contact;
 # unthrottled claim RPCs flood the host. The throttle window matches
 # HitTracker.HIT_COOLDOWN_S so claims can't outrun crediting.
 #

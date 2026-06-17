@@ -162,9 +162,7 @@ func _render_host(t: NetworkTelemetry) -> void:
 			"ticks with no client input (reused last); want 0")
 
 	_section("Host frame health")
-	_metric(_worse(_band(t.host_physics_tick_p95_ms, 6.0, 10.0), _band(t.host_physics_tick_max_ms, 16.0, 33.0)),
-		"Physics tick", "p95 %.1f / p99 %.1f / max %.1f ms" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms],
-		"gap between 240Hz ticks; steady ~4.2ms, a big max = a stall everyone feels")
+	_frame_health(t)
 	# The host throttles the broadcast rate to 5Hz during dead-puck phases
 	# (faceoff prep, goal, period breaks), so judge the gap against the live
 	# target interval rather than a fixed 120Hz, or every stoppage reads red.
@@ -179,11 +177,31 @@ func _render_host(t: NetworkTelemetry) -> void:
 func _render_solo(t: NetworkTelemetry) -> void:
 	_info("Mode", "offline — no network", "metrics below reflect your local sim only")
 	_sim_line(t)
-	if t.host_physics_tick_p95_ms > 0.0:
+	if t.host_effective_tick_hz > 0.0:
 		_section("Frame health")
-		_metric(_worse(_band(t.host_physics_tick_p95_ms, 6.0, 10.0), _band(t.host_physics_tick_max_ms, 16.0, 33.0)),
-			"Physics tick", "p95 %.1f / p99 %.1f / max %.1f ms" % [t.host_physics_tick_p95_ms, t.host_physics_tick_p99_ms, t.host_physics_tick_max_ms],
-			"gap between 240Hz ticks; steady ~4.2ms, a big max = a frame hitch")
+		_frame_health(t)
+
+# Honest host-frame health. The raw gap between physics ticks is quantized onto render
+# frames (steps run inside the main loop), so its percentiles read high even when the
+# sim is perfectly real-time — at >tick-rate FPS the gap alternates 1-2 frames. So we
+# report what actually matters: the effective rate (mean gap → Hz; "are we keeping
+# real-time?"), the worst stall (max gap), and render FPS for context.
+func _frame_health(t: NetworkTelemetry) -> void:
+	if t.host_effective_tick_hz <= 0.0:
+		return
+	var target_hz: int = Constants.PHYSICS_TICK
+	var ratio: float = t.host_effective_tick_hz / float(target_hz)
+	var sim_h: Health = Health.OK
+	if ratio < 0.90:
+		sim_h = Health.BAD
+	elif ratio < 0.97:
+		sim_h = Health.WARN
+	_metric(sim_h, "Sim rate", "%.0f Hz (target %d)" % [t.host_effective_tick_hz, target_hz],
+		"physics keeping real-time; well below target = host overloaded, sim runs slow-motion")
+	_info("Render FPS", "%d" % int(Engine.get_frames_per_second()),
+		"your draw rate; physics ticks land on render frames, so a tick spacing of 1-2 frames is normal")
+	_metric(_band(t.host_physics_tick_max_ms, 33.0, 66.0), "Worst stall", "%.0f ms" % t.host_physics_tick_max_ms,
+		"longest pause between ticks in the last second; under ~33ms is fine, a big spike = a hitch everyone feels")
 
 # Watch metrics: shown only when they leave the healthy band, so the client view
 # stays quiet until something is actually wrong. When all clear, one calm line.

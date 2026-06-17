@@ -101,7 +101,7 @@ var _peer_id_resolver: Callable = Callable()
 # Callable () -> Array[Skater] of all active skaters. Host-only interaction detection.
 var _skater_getter: Callable = Callable()
 # Live Skater -> team_id dict owned by PlayerRegistry. Read in the
-# host-side poke-check loop at 240 Hz — used to be a Callable that
+# host-side poke-check loop at the physics rate — used to be a Callable that
 # internally scanned the player dict, which doubled up the cost.
 var _team_id_by_skater: Dictionary = {}
 
@@ -559,7 +559,7 @@ func get_state() -> PuckNetworkState:
 	fill_state(state)
 	return state
 
-# Caller-owned-instance variant for the 240 Hz StateBufferManager capture.
+# Caller-owned-instance variant for the per-tick StateBufferManager capture.
 func fill_state(state: PuckNetworkState) -> void:
 	state.position = puck.get_puck_position()
 	state.velocity = puck.get_puck_velocity()
@@ -665,7 +665,7 @@ func _interpolate() -> void:
 	is_extrapolating = bracket != null and bracket.is_extrapolating
 	if bracket == null:
 		return
-	# Reused scratch (240 Hz path); both branches write position + velocity,
+	# Reused scratch (per-tick path); both branches write position + velocity,
 	# the only fields _apply_state_to_puck consumes.
 	var interpolated := _scratch_interp
 	if bracket.is_extrapolating:
