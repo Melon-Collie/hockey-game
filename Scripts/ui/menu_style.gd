@@ -99,28 +99,22 @@ const HUD_OPACITY    := 0.85               # darker color reads better at higher
 const HUD_LINE_THIN  := 0.03               # "thin line" thickness in 3D meters (slot ring, reticle, arrow)
 const HUD_LINE_THICK := 0.045              # heavier stroke for symbols (arrow, chevron)
 
-# Slot-ring tint by the skater's relationship to the LOCAL player, so you can
-# re-identify your own skater and read friend-vs-foe at a glance while the
-# camera pans. Relationship-relative (not absolute team), so it stays the same
-# regardless of which jersey each side wears. Blue-vs-red is colorblind-safe;
-# self is green — a third primary that stays clearly apart from both the team
-# blue and enemy red (the old cyan sat adjacent to team blue and was easy to
-# confuse mid-rush) and avoids the warm yellow→orange→red charge-ring palette.
-# Also drives the overhead self-beacon (SkaterHUDCoordinator) so the on-ice
-# ring and the floating marker share one self color. HUD_ICE remains the
-# neutral fallback (e.g. before the local player has spawned, or replay).
+# Default slot-ring tint by the skater's relationship to the LOCAL player, so
+# you can re-identify your own skater and read friend-vs-foe at a glance while
+# the camera pans. Relationship-relative (not absolute team), so it stays the
+# same regardless of which jersey each side wears. Blue-vs-red is
+# colorblind-safe; self is green — a third primary that stays clearly apart from
+# both the team blue and enemy red (the old cyan sat adjacent to team blue and
+# was easy to confuse mid-rush) and avoids the warm yellow→orange→red
+# charge-ring palette. These are only the DEFAULTS now: each is fully
+# user-pickable (Options → Game → Ring Colors), and PlayerPrefs.ring_color_*
+# holds the live values that SkaterHUDCoordinator reads. The self color also
+# drives the overhead self-beacon so the on-ice ring and the floating marker
+# share one self color. HUD_ICE remains the neutral fallback (e.g. before the
+# local player has spawned, or replay).
 const HUD_RING_SELF  := Color(0.20, 0.95, 0.40, 1.00)   # green — your own skater
 const HUD_RING_TEAM  := Color(0.25, 0.55, 1.00, 1.00)   # blue — teammates
 const HUD_RING_ENEMY := Color(0.95, 0.25, 0.25, 1.00)   # red  — opponents
-
-# Colorblind-safe alternates (Options → Game → Colorblind Team Colors). Drawn
-# from the Okabe-Ito palette so self/team/enemy stay separable under deutan-,
-# protan-, and tritanopia: a bright yellow self, sky blue team, and a warm
-# vermillion enemy that doesn't collapse toward the team blue the way pure red
-# can. SkaterHUDCoordinator picks these when PlayerPrefs.colorblind_rings is on.
-const HUD_RING_SELF_CB  := Color(0.95, 0.90, 0.25, 1.00)  # yellow — your own skater
-const HUD_RING_TEAM_CB  := Color(0.35, 0.70, 0.90, 1.00)  # sky blue — teammates
-const HUD_RING_ENEMY_CB := Color(0.85, 0.40, 0.00, 1.00)  # vermillion — opponents
 
 # Charge-ring fill colors. Lerps from CHARGE_LOW → CHARGE_HIGH across the fill;
 # CHARGE_FULL pulses at 100%; CHARGE_LOST flashes briefly when charge is
