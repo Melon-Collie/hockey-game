@@ -196,15 +196,16 @@ func _interpolate() -> void:
 		interpolated.is_elevated = to_state.is_elevated
 		interpolated.blade_up = to_state.blade_up
 		interpolated.shot_state = to_state.shot_state
-		# Push position forward from render_time to present using the interpolated
-		# velocity. Capped at extrapolation_max_ms so a large interpolation buffer
-		# on a rough connection doesn't over-predict on direction changes.
-		var forward_dt: float = minf(interp_delay, extrapolation_max_ms / 1000.0)
-		interpolated.position += interpolated.velocity * forward_dt
-		# blade_position and top_hand_position are in upper_body local space;
-		# velocity is world space. Adding them is a coordinate frame error.
-		# The body forward-advance above already moves their world positions
-		# via the scene tree — no additional local-space offset needed.
+		# No forward projection: remotes render at the buffered (past) instant
+		# render_time, the hermite result above. Projecting the body ahead by
+		# interp_delay toward "present" overshot on every direction change and
+		# then snapped back when the next real sample landed (Extrap climbing,
+		# visible as rhythmic snap-back on remote skaters during fast play). The
+		# AAA "interpolate in the past" model trades a little extra latency on
+		# other players' bodies for jitter-free motion. The packet-loss case
+		# (render_time past the newest sample) still extrapolates in the
+		# is_extrapolating branch above. blade/top_hand are upper_body-local and
+		# ride the body through the scene tree, so they need no projection.
 	if prev_extrapolating and not is_extrapolating and skater != null:
 		_rejoin_blend_from_pos = skater.global_position
 		_rejoin_blend_from_blade = skater.get_blade_position()
