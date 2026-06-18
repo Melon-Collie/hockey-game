@@ -23,7 +23,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # 0..1 fraction; drain/regen are fractions-per-second. Flat for every player in
 # v1 (not attribute-scaled) — but the cap they multiply, max_speed, is already
 # Speed-scaled, so faster skaters get a proportionally faster sprint for free.
-@export var sprint_max_speed_multiplier: float = 1.20
+@export var sprint_max_speed_multiplier: float = 1.12
 @export var sprint_thrust_multiplier: float = 1.20
 @export var sprint_drain_per_sec: float = 0.45         # ~2.2s of full sprint off-puck
 @export var sprint_carry_drain_multiplier: float = 1.6 # carrying drains faster (~1.4s)
