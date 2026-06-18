@@ -418,18 +418,21 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# sniper). Wrister-only today; the slapshot path applies no backhand penalty
 	# (see ShotMechanics.release_slapper).
 	backhand_power_coefficient  = _base_backhand_power_coefficient  * attrs.hands_backhand_mult()
-	# Shot drives raw scoring: power (narrower ±15% spread so the wrister floor
-	# stays playable) and charge speed (inverted — quick release).
-	var m_shot_power: float = attrs.shot_power_mult()
-	min_wrister_power = _base_min_wrister_power * m_shot_power
-	max_wrister_power = _base_max_wrister_power * m_shot_power
-	quick_shot_power  = _base_quick_shot_power  * m_shot_power
-	min_slapper_power = _base_min_slapper_power * m_shot_power
-	max_slapper_power = _base_max_slapper_power * m_shot_power
-	# Charge cap scales with Shot (how fast you load) and Size (so the cap stays
-	# a constant fraction of the player's ROM — small players can still fill the
-	# bar with their own full-reach sweep).
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.shot_charge_mult() * attrs.size_charge_mult()
+	# Shot is DYNAMIC, not a flat scale. The quick/uncharged wrister (and the
+	# quick_shot pass) ride the WIDE _SHOT_FLOOR curve so a low-Shot snap is junk
+	# and a high-Shot snap is near a charged shot; the fully-charged ceiling rides
+	# the narrower shot_power curve. Slapper power stays on the flat ceiling.
+	var m_shot_ceil:  float = attrs.shot_power_mult()
+	var m_shot_floor: float = attrs.shot_floor_mult()
+	min_wrister_power = _base_min_wrister_power * m_shot_floor
+	max_wrister_power = _base_max_wrister_power * m_shot_ceil
+	quick_shot_power  = _base_quick_shot_power  * m_shot_floor
+	min_slapper_power = _base_min_slapper_power * m_shot_ceil
+	max_slapper_power = _base_max_slapper_power * m_shot_ceil
+	# Wrister charge effort is WIDER than the slapper's (low Shot must drag far to
+	# reach its charged ceiling) and stays coupled to Size so the cap tracks reach.
+	# Slapper wind-up time keeps the gentler shot_charge curve.
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.shot_wrister_charge_mult() * attrs.size_charge_mult()
 	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
 	# Body checks read two attributes on different axes (so they compose, not
 	# double-count): Size sets `weight` (the weight_ratio — a heavy player is hard
