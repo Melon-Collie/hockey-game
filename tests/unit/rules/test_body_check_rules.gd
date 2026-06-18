@@ -50,12 +50,26 @@ func test_stagger_scales_with_strength() -> void:
 	assert_gt(hard, medium, "harder hit → longer recovery window")
 
 
-# ── stamina_drain_from_impulse ────────────────────────────────────────────────
+# ── incremental_stamina_drain ─────────────────────────────────────────────────
 
-func test_stamina_drain_scales_with_strength() -> void:
-	assert_almost_eq(BodyCheckRules.stamina_drain_from_impulse(3.0, _cfg), 0.0, 0.0001, "min → no drain")
-	assert_almost_eq(BodyCheckRules.stamina_drain_from_impulse(9.0, _cfg), 0.35, 0.0001, "full → max drain")
-	assert_almost_eq(BodyCheckRules.stamina_drain_from_impulse(6.0, _cfg), 0.175, 0.0001, "midpoint → half drain")
+func test_clean_hit_from_settled_bites_full_intensity() -> void:
+	# prev_stagger_timer 0 → full intensity-scaled drain (same as a from-zero bite).
+	assert_almost_eq(BodyCheckRules.incremental_stamina_drain(0.0, 3.0, _cfg), 0.0, 0.0001, "min → no drain")
+	assert_almost_eq(BodyCheckRules.incremental_stamina_drain(0.0, 9.0, _cfg), 0.35, 0.0001, "full → max drain")
+	assert_almost_eq(BodyCheckRules.incremental_stamina_drain(0.0, 6.0, _cfg), 0.175, 0.0001, "midpoint → half drain")
+
+func test_no_drain_when_hit_not_harder_than_residual() -> void:
+	# A full hit lands a 1.0s window; a follow-up no harder than the residual bites nothing.
+	assert_almost_eq(BodyCheckRules.incremental_stamina_drain(1.0, 9.0, _cfg), 0.0, 0.0001,
+			"equal-strength re-hit during stagger → no extra drain")
+	assert_almost_eq(BodyCheckRules.incremental_stamina_drain(0.6, 6.0, _cfg), 0.0, 0.0001,
+			"weaker re-hit than residual → no extra drain")
+
+func test_sustained_contact_only_tops_up() -> void:
+	# A full hit (add=1.0s) one decay-tick into an existing 0.99s stagger charges
+	# only the 0.01s top-up: (1.0-0.99)/1.0 * 0.35.
+	assert_almost_eq(BodyCheckRules.incremental_stamina_drain(0.99, 9.0, _cfg), 0.0035, 0.0001,
+			"sustained contact bites only the incremental severity")
 
 
 # ── thrust_mult ───────────────────────────────────────────────────────────────

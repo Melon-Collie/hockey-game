@@ -39,9 +39,20 @@ static func stagger_seconds_from_impulse(impulse_mag: float, cfg: Config) -> flo
 	return intensity(impulse_mag, cfg) * cfg.max_stagger_seconds
 
 
-# Stamina (pool fraction, 0..1) a fresh hit drains from the victim.
-static func stamina_drain_from_impulse(impulse_mag: float, cfg: Config) -> float:
-	return intensity(impulse_mag, cfg) * cfg.max_stamina_drain
+# Stamina (pool fraction, 0..1) a hit drains, charged only for the stagger it adds
+# BEYOND what's already decaying on the victim. A clean hit from a settled skater
+# (prev_stagger_timer 0) bites the full intensity-scaled amount; during sustained
+# contact, where prev is near the incoming stagger, only the small top-up is
+# charged — so grinding someone bleeds stamina at roughly the decay rate instead of
+# emptying the pool tick-by-tick. Returns 0 when the hit isn't harder than the
+# residual stagger.
+static func incremental_stamina_drain(prev_stagger_timer: float, impulse_mag: float, cfg: Config) -> float:
+	if cfg.max_stagger_seconds <= 0.0:
+		return 0.0
+	var add: float = stagger_seconds_from_impulse(impulse_mag, cfg)
+	if add <= prev_stagger_timer:
+		return 0.0
+	return ((add - prev_stagger_timer) / cfg.max_stagger_seconds) * cfg.max_stamina_drain
 
 
 # Thrust multiplier (<= 1.0) for the stagger remaining this tick. The penalty is

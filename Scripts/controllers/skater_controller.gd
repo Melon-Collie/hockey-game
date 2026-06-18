@@ -563,10 +563,13 @@ func _on_body_check_received(impulse_magnitude: float) -> void:
 		return
 	var cfg: BodyCheckRules.Config = _body_check_config()
 	var add: float = BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg)
-	if add <= 0.0:
+	# Only extend (never shorten) the stagger window, and only bite stamina when
+	# this hit is harder than the residual — incremental_stamina_drain handles the
+	# sustained-contact case so a grind doesn't empty the pool every tick.
+	if add <= stagger_timer:
 		return
-	stagger_timer = maxf(stagger_timer, add)
-	stamina = maxf(stamina - BodyCheckRules.stamina_drain_from_impulse(impulse_magnitude, cfg), 0.0)
+	stamina = maxf(stamina - BodyCheckRules.incremental_stamina_drain(stagger_timer, impulse_magnitude, cfg), 0.0)
+	stagger_timer = add
 
 func _on_body_block_hit(body: Node3D) -> void:
 	if not _is_host:
