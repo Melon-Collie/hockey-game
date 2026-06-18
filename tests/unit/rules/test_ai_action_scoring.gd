@@ -868,6 +868,65 @@ func test_lane_clear_charged_pass_threads_better_than_quick() -> void:
 	assert_gt(charged, quick, "faster pass → less defender reaction time → cleaner lane")
 
 
+# ── lane_clear_saucer / prefers_saucer: lofting over mid-lane defenders ───────
+# A saucer pass flies the puck over a defender's grounded blade mid-lane,
+# so a mid-lane defender that blocks a flat pass does NOT block a saucer —
+# but a defender draped over the receiver (puck has landed) still does.
+
+func test_lane_clear_saucer_ignores_mid_lane_defender() -> void:
+	# Same mid-lane defender that drops the grounded lane below 1.0: the
+	# saucer flies over it, so the saucer lane stays fully clear.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var mid_lane: Array[Vector3] = [Vector3(0.2, 0.0, 7.0)]  # t ≈ 0.5
+	var grounded: float = AIActionScoring.lane_clear(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_lt(grounded, 1.0, "sanity: grounded lane is contested by the mid-lane defender")
+	assert_almost_eq(saucer, 1.0, 0.0001, "saucer flies over the mid-lane defender → lane clear")
+
+
+func test_lane_clear_saucer_still_blocked_near_receiver() -> void:
+	# Defender close to the receiver end (high t, past the airborne
+	# window): the saucer has landed by then, so it still blocks.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	# t ≈ 0.9 (> SAUCER_AIRBORNE_T_MAX) → puck grounded, defender blocks.
+	var near_receiver: Array[Vector3] = [Vector3(0.2, 0.0, 12.6)]
+	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, near_receiver, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_lt(saucer, 1.0, "a defender at the receiver end still blocks a landed saucer")
+
+
+func test_prefers_saucer_true_for_contested_mid_lane() -> void:
+	# A long pass with a defender squarely mid-lane: grounded is contested,
+	# the saucer clears it by more than the margin → prefer the saucer.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var mid_lane: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]
+	assert_true(
+			AIActionScoring.prefers_saucer(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S),
+			"a mid-lane defender on a long pass should prompt a saucer")
+
+
+func test_prefers_saucer_false_when_lane_open() -> void:
+	# No defender in the lane: nothing to loft over, stay grounded.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	assert_false(
+			AIActionScoring.prefers_saucer(from, to, [], AIActionScoring.PASS_CHARGE_SPEED_M_S),
+			"an open lane never wants a saucer")
+
+
+func test_prefers_saucer_false_when_blocker_at_receiver() -> void:
+	# The only defender is at the receiver end, where the saucer has
+	# landed — lofting doesn't help, so don't saucer.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var near_receiver: Array[Vector3] = [Vector3(0.0, 0.0, 12.6)]  # t ≈ 0.9
+	assert_false(
+			AIActionScoring.prefers_saucer(from, to, near_receiver, AIActionScoring.PASS_CHARGE_SPEED_M_S),
+			"a saucer doesn't clear a defender at the receiver, so don't loft")
+
+
 # ── lane_loss_point: interceptor location for the turnover-cost term ──────────
 # The loss location must be the worst blocker's closest-point ON the
 # segment (where the puck actually gets picked), and INF when the lane

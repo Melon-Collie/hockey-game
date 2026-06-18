@@ -187,6 +187,21 @@ const RECEIVE_BODY_OFFSET_M: float = (
 # gets the bot to the puck faster, even if at a worse angle) wins.
 const RECEIVE_TIMING_MARGIN: float = 0.9
 
+# Deflect-lift. An airborne loose puck (a saucer pass or an elevated
+# clear) can only be touched by a LIFTED blade — a grounded stick lets
+# it fly over. When the chasing bot is closing on an airborne puck within
+# this radius, it raises its blade (stick_lift_held) so it can knock the
+# puck down / tip it instead of whiffing underneath. Sized a touch beyond
+# blade reach so the lift blend completes before the puck arrives.
+const DEFLECT_LIFT_REACH_M: float = BLADE_REACH_M + 1.0
+# Margin (m) above the ice rest height at which the puck counts as
+# airborne for the deflect-lift decision. Mirrors Puck.is_airborne()'s
+# `ice_height + 0.05` threshold; combined with GameRules.PUCK_START_POS.y
+# (the rest height) it reproduces that gate so the bot lifts exactly when
+# a grounded blade would lose contact.
+const PUCK_AIRBORNE_MARGIN_M: float = 0.05
+const PUCK_AIRBORNE_Y_M: float = GameRules.PUCK_START_POS.y + PUCK_AIRBORNE_MARGIN_M
+
 # CARRY blade aim distance (m forward in goal direction). Mouse on the
 # goal plane (25+ m away) was useless for stickhandling: a 0.3 m
 # lateral blade shift would need a ~22 m mouse offset. Putting mouse
@@ -569,6 +584,10 @@ var _handedness_perp_sign: float = 1.0
 # true; PASS_PRESSED then holds shoot_held through BOT_WRISTER_CHARGE_TICKS
 # instead of releasing on tick 0. See _state_pass_pressed.
 var _pass_should_charge: bool = false
+# Mirrored from _carrier.pass_should_saucer. When true, PASS_PRESSED
+# toggles elevation on for the release so the puck lofts over a
+# contested mid-lane defender (saucer pass). Only set for long passes.
+var _pass_should_saucer: bool = false
 var _pass_charge_tick: int = 0
 # Wind-up endpoint OFFSETS (relative to self_pos) for the charged pass —
 # same geometry pattern as the SHOOT_PRESSED fields, but aim_dir points
@@ -1164,6 +1183,13 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			input.mouse_world_pos = _step_mouse_toward(puck_pos)
 		else:
 			input.mouse_world_pos = _step_mouse_toward(target)
+		# Deflect-lift: an airborne loose puck (saucer / elevated clear)
+		# can't be touched by a grounded blade. When it's within reach,
+		# raise the blade so we knock it down out of the air instead of
+		# skating under it. The mouse aim above already tracks the puck,
+		# so the lifted blade is pointed at it; lifting just lets it tip.
+		if _should_lift_to_deflect(snapshot, self_pos):
+			input.stick_lift_held = true
 	# Transitions: chase ends as soon as someone has the puck, OR we're
 	# no longer the closest teammate (let the new closest take over).
 	# One-timer takes priority — if the FINISHER published ready and the
@@ -1195,6 +1221,12 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 # predicted and the timing margin gives us slack.
 func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	if snapshot.puck_state.carrier_peer_id != -1:
+		return false
+	# Airborne pucks (saucers / elevated clears) fly over a grounded
+	# blade, so the perpendicular grounded-catch setup this helper builds
+	# can't corral them. Bail to the default chase, which lifts the blade
+	# to knock the puck down instead.
+	if _puck_is_airborne(snapshot.puck_state):
 		return false
 	var puck_vel: Vector3 = snapshot.puck_state.velocity
 	var puck_speed_sq: float = puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z
@@ -1254,6 +1286,28 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	return true
 
 
+# True when the loose puck sits high enough off the ice that only a
+# lifted blade can touch it. Mirrors Puck.is_airborne() (see
+# PUCK_AIRBORNE_Y_M). Carried pucks are not "loose" — guard upstream.
+func _puck_is_airborne(puck: PuckNetworkState) -> bool:
+	return puck.position.y > PUCK_AIRBORNE_Y_M
+
+
+# Should the chasing bot raise its blade to knock down an airborne puck?
+# True only for a LOOSE airborne puck within deflect reach — a carried
+# puck can't be deflected, and a grounded puck wants the normal grounded
+# corral (lifting would make the blade unable to touch it).
+func _should_lift_to_deflect(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var puck: PuckNetworkState = snapshot.puck_state
+	if puck.carrier_peer_id != -1:
+		return false
+	if not _puck_is_airborne(puck):
+		return false
+	var dx: float = puck.position.x - self_pos.x
+	var dz: float = puck.position.z - self_pos.z
+	return dx * dx + dz * dz <= DEFLECT_LIFT_REACH_M * DEFLECT_LIFT_REACH_M
+
+
 func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	if not have_puck:
 		_carrier.reset()
@@ -1261,6 +1315,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_intent_wait_ticks = 0
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
+		_pass_should_saucer = false
 		_shot_is_elevated = false
 		_locked_pre_aim_point = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
@@ -1282,6 +1337,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	_last_carry_anchor = _carrier.last_carry_anchor
 	_pass_target_peer_id = _carrier.pass_target_peer_id
 	_pass_should_charge = _carrier.pass_should_charge
+	_pass_should_saucer = _carrier.pass_should_saucer
 	_shot_is_elevated = _carrier.shot_is_elevated
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
@@ -1783,10 +1839,19 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	if not have_puck:
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
+		_pass_should_saucer = false
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
 	_apply_brake_steering(input, snapshot, self_pos)
+	# Saucer: loft the release so the puck flies over a contested mid-lane
+	# defender. Set every tick we're in PASS_PRESSED (the controller's
+	# _is_elevated flag is sticky and reset by the default elevation_down,
+	# so we must keep raising it through the charge until release). Both up
+	# and down in one frame ends DOWN on the controller, so clear down here.
+	if _pass_should_saucer:
+		input.elevation_up = true
+		input.elevation_down = false
 	# Resolve the receiver's slot label NOW for the debug readout —
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
 	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
@@ -1828,6 +1893,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 				input.block_held = true
 				_pass_target_peer_id = -1
 				_pass_should_charge = false
+				_pass_should_saucer = false
 				_set_state(State.CARRY)
 				return
 
@@ -1882,6 +1948,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		input.shoot_held = false
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
+		_pass_should_saucer = false
 		_set_state(State.CARRY)
 
 

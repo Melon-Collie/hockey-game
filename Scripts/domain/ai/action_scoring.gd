@@ -207,6 +207,34 @@ const PASS_CHARGE_SPEED_M_S: float = (
 # windup commit isn't worth it.
 const LONG_PASS_DISTANCE_THRESHOLD_M: float = 10.0
 
+# ── Saucer pass ──────────────────────────────────────────────────────────────
+# A saucer (elevated) pass lofts the puck off the ice so it flies over a
+# defender's grounded stick mid-lane and settles back down near the
+# receiver. The lane-interception model treats this as: defenders in the
+# MID-LANE airborne window can't pick the puck off (it's over their
+# blade), but defenders close to the passer (puck hasn't lofted yet) or
+# close to the receiver (puck has landed) still block normally.
+#
+# `t` is the fractional position along the pass segment (0 = passer,
+# 1 = receiver). The puck is treated as airborne — uninterceptable by a
+# grounded blade — for t in [SAUCER_AIRBORNE_T_MIN, SAUCER_AIRBORNE_T_MAX].
+# The window is deliberately conservative (not the full 0–1 span): the
+# loft takes a beat to clear stick height, and the puck is descending /
+# grounded by the time it reaches the receiver, so a defender draped over
+# the receiver still kills it. Matches the shared elevation mechanic —
+# the same low flip a human gets toggling elevation on a pass.
+const SAUCER_AIRBORNE_T_MIN: float = 0.20
+const SAUCER_AIRBORNE_T_MAX: float = 0.70
+
+# Saucer only wins over a grounded pass when it clears the lane by at
+# least this much (lane_clear delta, 0..1). Below it the loft isn't worth
+# the extra flight time / reception fiddliness, so the bot stays grounded.
+const SAUCER_LANE_BENEFIT_MARGIN: float = 0.20
+
+# If the grounded lane is already this clear, never bother with a saucer —
+# there's no defender worth lofting over.
+const SAUCER_SKIP_WHEN_LANE_CLEAR: float = 0.85
+
 
 # Returns the speed a pass from `shooter` to `receiver` will fire at.
 # Above LONG_PASS_DISTANCE_THRESHOLD_M, the carrier charges the
@@ -651,6 +679,70 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		if block > max_block:
 			max_block = block
 	return clampf(1.0 - max_block, 0.0, 1.0)
+
+
+# Lane-clear for a SAUCER (elevated) pass. Identical model to lane_clear
+# except defenders in the mid-lane airborne window (t in
+# [SAUCER_AIRBORNE_T_MIN, SAUCER_AIRBORNE_T_MAX]) are skipped — the puck
+# is over their grounded blade there and can't be picked off. Defenders
+# near the passer (puck not yet lofted) or near the receiver (puck has
+# landed) still block exactly as in the grounded model. MUST stay in sync
+# with lane_clear's per-defender block math.
+static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vector3],
+		puck_speed_m_s: float) -> float:
+	var dx: float = to.x - from.x
+	var dz: float = to.z - from.z
+	var line_len_sq: float = dx * dx + dz * dz
+	if line_len_sq < 0.01:
+		return 1.0  # degenerate (overlapping endpoints)
+	var line_len: float = sqrt(line_len_sq)
+	var flight_time: float = line_len / maxf(puck_speed_m_s, 1.0)
+	var max_block: float = 0.0
+	for p: Vector3 in opponents:
+		var pdx: float = p.x - from.x
+		var pdz: float = p.z - from.z
+		var t: float = (pdx * dx + pdz * dz) / line_len_sq
+		if t <= 0.0 or t >= 1.0:
+			continue
+		# Airborne over this defender — the saucer flies the puck above
+		# their grounded blade, so they can't intercept.
+		if t >= SAUCER_AIRBORNE_T_MIN and t <= SAUCER_AIRBORNE_T_MAX:
+			continue
+		var time_to_defender: float = t * flight_time
+		var reaction_factor: float = clampf(
+				(time_to_defender - LANE_REACTION_DELAY_S) / LANE_REACTION_RAMP_S,
+				0.0, 1.0)
+		if reaction_factor <= 0.0:
+			continue
+		var closest_x: float = from.x + t * dx
+		var closest_z: float = from.z + t * dz
+		var perp_x: float = p.x - closest_x
+		var perp_z: float = p.z - closest_z
+		var perp: float = sqrt(perp_x * perp_x + perp_z * perp_z)
+		if perp >= LANE_CLEAR_RADIUS_M:
+			continue
+		var perp_factor: float = 1.0 - perp / LANE_CLEAR_RADIUS_M
+		var block: float = perp_factor * reaction_factor
+		if block > max_block:
+			max_block = block
+	return clampf(1.0 - max_block, 0.0, 1.0)
+
+
+# Should a pass over this lane be lofted (saucer) rather than fired flat?
+# True when the grounded lane is contested but a saucer meaningfully
+# clears it — i.e. there's a mid-lane defender the loft flies over.
+# Returns false when the grounded lane is already open (nothing to loft
+# over) or when the saucer doesn't beat grounded by SAUCER_LANE_BENEFIT_MARGIN
+# (loft not worth the extra flight time / fiddlier reception). The caller
+# gates the DISTANCE (saucers are a long-pass tool); this judges only the
+# lane geometry.
+static func prefers_saucer(from: Vector3, to: Vector3, opponents: Array[Vector3],
+		puck_speed_m_s: float) -> bool:
+	var grounded: float = lane_clear(from, to, opponents, puck_speed_m_s)
+	if grounded >= SAUCER_SKIP_WHEN_LANE_CLEAR:
+		return false
+	var saucer: float = lane_clear_saucer(from, to, opponents, puck_speed_m_s)
+	return saucer > grounded + SAUCER_LANE_BENEFIT_MARGIN
 
 
 # Interceptor point for a fired-puck lane: the closest-point-on-segment

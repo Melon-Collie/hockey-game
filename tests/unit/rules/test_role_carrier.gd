@@ -63,6 +63,8 @@ func test_reset_clears_all_persistent_state() -> void:
 	var c := AIRoleCarrier.new()
 	c.intended_action = AIRoleCarrier.INTENT_PASS
 	c.pass_target_peer_id = 42
+	c.pass_should_charge = true
+	c.pass_should_saucer = true
 	c.shot_is_elevated = true
 	c.last_carry_anchor = Vector3(5.0, 0.0, -10.0)
 
@@ -70,6 +72,8 @@ func test_reset_clears_all_persistent_state() -> void:
 
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY)
 	assert_eq(c.pass_target_peer_id, -1)
+	assert_false(c.pass_should_charge)
+	assert_false(c.pass_should_saucer)
 	assert_false(c.shot_is_elevated)
 	assert_eq(c.last_carry_anchor, Vector3.ZERO)
 
@@ -80,6 +84,8 @@ func test_clear_intent_resets_intent_but_preserves_carry_anchor() -> void:
 	var c := AIRoleCarrier.new()
 	c.intended_action = AIRoleCarrier.INTENT_SHOOT
 	c.pass_target_peer_id = 42
+	c.pass_should_charge = true
+	c.pass_should_saucer = true
 	c.last_carry_anchor = Vector3(5.0, 0.0, -10.0)
 
 	c.clear_intent()
@@ -88,6 +94,8 @@ func test_clear_intent_resets_intent_but_preserves_carry_anchor() -> void:
 	# may still be reading it during the press cycle).
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY)
 	assert_eq(c.pass_target_peer_id, -1)
+	assert_false(c.pass_should_charge)
+	assert_false(c.pass_should_saucer)
 	assert_eq(c.last_carry_anchor, Vector3(5.0, 0.0, -10.0))
 
 

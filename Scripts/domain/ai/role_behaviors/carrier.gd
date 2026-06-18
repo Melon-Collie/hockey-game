@@ -99,6 +99,12 @@ var pass_target_peer_id: int = -1
 # between one-tick fire and ~250 ms wrister charge.
 var pass_should_charge: bool = false
 
+# Set alongside pass_target_peer_id when the chosen PASS is a long
+# feed whose lane is contested by a mid-lane defender that a saucer
+# (elevated) pass would fly over. The state machine consumes this when
+# entering PASS_PRESSED to toggle elevation on for the release.
+var pass_should_saucer: bool = false
+
 # Set when intent commits to SHOOT. Consumed by the state machine's
 # press-state handlers to drive elevation.
 var shot_is_elevated: bool = false
@@ -171,6 +177,7 @@ func reset() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
 	pass_should_charge = false
+	pass_should_saucer = false
 	shot_is_elevated = false
 	last_carry_anchor = Vector3.ZERO
 	_pick_action_cooldown = 0
@@ -184,6 +191,7 @@ func clear_intent() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
 	pass_should_charge = false
+	pass_should_saucer = false
 	_pick_action_cooldown = 0
 
 
@@ -262,6 +270,7 @@ func _pick_action(ctx: RoleContext) -> void:
 			ctx, self_state.facing, _scratch_teammate_ids, goalie_now)
 	var best_pass_peer: int = best_pass[0]
 	var best_pass_score: float = best_pass[1]
+	var best_pass_saucer: bool = best_pass[2]
 
 	# Top-level CARRY — best of 10 candidates (8 polar around the slot
 	# direction + slot anchor + stand-still). Each scored uniformly:
@@ -348,6 +357,9 @@ func _pick_action(ctx: RoleContext) -> void:
 			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
 			pass_should_charge = (receiver != null
 					and ctx.self_pos.distance_to(receiver.position) > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M)
+			# Saucer it over a contested mid-lane defender (only ever true
+			# for long passes — see _compute_best_pass).
+			pass_should_saucer = best_pass_saucer
 		elif new_intent == INTENT_SHOOT:
 			shot_is_elevated = _should_elevate_shot(ctx, shoot_score)
 	else:
@@ -426,6 +438,10 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 	var own_goal_dir: float = ctx.own_goal_dir
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
+	# Whether the winning pass should be lofted (saucer) over a contested
+	# mid-lane defender. Tracked alongside best_pass_score so it reflects
+	# the pass that actually wins, not the last one evaluated.
+	var best_pass_saucer: bool = false
 	# Our goalie + defenders feed the turnover-cost term: how much an
 	# interception would help the opponent, dampened by our coverage.
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
@@ -534,7 +550,16 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
-	return [best_pass_peer, best_pass_score]
+			# Loft this feed only if it's a long pass (saucers are a
+			# stretch-pass tool) AND a mid-lane defender is in the way that
+			# the saucer flies over. Reuses the current-position opponents
+			# the grounded lane was scored against, so the two agree on the
+			# geometry. dist > threshold is exactly the charged-pass branch.
+			best_pass_saucer = (
+					dist > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M
+					and AIActionScoring.prefers_saucer(
+							self_pos, receiver, _scratch_opponents, pass_speed))
+	return [best_pass_peer, best_pass_score, best_pass_saucer]
 
 
 # Receiver position prediction — velocity + acceleration
