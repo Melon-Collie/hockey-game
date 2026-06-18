@@ -128,7 +128,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Skating Stride Tuning ─────────────────────────────────────────────────────
 # Procedural leg gait — see SkaterSkatingCoordinator. All cosmetic. Forward,
 # backward, and lateral (crossover) gaits blend by direction of travel.
-@export var stride_cadence: float = 1.4          # radians of stride phase per metre skated
+@export var stride_cadence: float = 1.4          # low-speed slope: radians of stride phase per metre skated
+@export var stride_cadence_max_rate: float = 6.5  # rad/s ceiling the cadence saturates toward (caps sprint leg turnover)
 @export var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
 @export var stride_pitch_deg: float = 6.0         # forward push amplitude (fore/aft)
 @export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)
@@ -136,6 +137,14 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var crossover_scissor_deg: float = 8.0    # legs scissor laterally across each other
 @export var stride_knee_deg: float = 18.0         # knee flex depth on the recovery half-stroke
 @export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
+@export var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)
+# Glide-vs-push: stride amplitude scales above/below the speed baseline by the
+# sign of tangential acceleration — driving digs in, coasting settles to a glide.
+@export var stride_effort_ref_accel: float = 9.0  # m/s^2 of tangential accel mapping to full push effort
+@export var stride_effort_speed: float = 5.0      # how fast the glide<->push effort signal eases
+@export var stride_push_gain: float = 0.7         # how far effort drives amplitude off the speed baseline
+@export var stride_glide_floor: float = 0.35      # min amplitude scale when coasting (the glide)
+@export var stride_push_ceiling: float = 1.5      # max amplitude scale when driving hard
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
