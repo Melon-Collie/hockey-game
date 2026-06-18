@@ -529,6 +529,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		last_reconcile_error = predicted.position.distance_to(server_state.position)
 	else:
 		last_reconcile_error = (skater.global_position - server_state.position).length()
+	# Post-replay residual: distance from the server AFTER snap+replay. At rest
+	# (no unacked movement to predict) this should be ~0 if the snap converged; a
+	# persistently non-zero value means the replay itself leaves the body
+	# off-server, so the offset rebuilds every cycle instead of settling.
+	NetworkTelemetry.record_post_replay_residual(skater.global_position.distance_to(server_state.position))
 	# Blade must be re-applied after position is set — upper_body_to_local()
 	# uses skater.global_position, so it must reflect the final replayed position.
 	# Dispatch by state: slapper/follow-through have their own pose handlers; using

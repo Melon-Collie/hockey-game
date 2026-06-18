@@ -21,6 +21,8 @@ var _recon_vel_trips: int = 0
 var _recon_ubody_trips: int = 0
 var _pos_offset_ticks_sum: float = 0.0
 var _pos_offset_ticks_n: int = 0
+var _post_replay_residual_sum: float = 0.0
+var _post_replay_residual_n: int = 0
 var _blade_jump_count: int = 0
 var _blade_jump_mag_sum: float = 0.0
 var _blade_jump_n: int = 0
@@ -85,6 +87,9 @@ var recon_ubody_per_sec: float = 0.0
 # lead(+)/lag(-) along velocity. ~+/-1.0 = a clean one-tick capture/integration
 # phase mismatch; near 0 or noisy = something else.
 var pos_offset_ticks_avg: float = 0.0
+# Distance from the server AFTER snap+replay (m). ~0 = the snap converged; a
+# persistent value = the replay leaves the body off-server (offset rebuilds).
+var post_replay_residual_avg: float = 0.0
 var extrapolation_per_sec: float = 0.0   # bracket extrapolation count; expect <1/s
 var buffer_depth_skater: int = 0
 var buffer_depth_puck: int = 0
@@ -249,6 +254,13 @@ static func record_pos_offset_ticks(ticks: float) -> void:
 	instance._pos_offset_ticks_sum += ticks
 	instance._pos_offset_ticks_n += 1
 
+# Distance from server after the reconcile's snap+replay completes (meters).
+static func record_post_replay_residual(meters: float) -> void:
+	if instance == null:
+		return
+	instance._post_replay_residual_sum += meters
+	instance._post_replay_residual_n += 1
+
 # ooo_drop: a world-state packet arrived out of order and was silently discarded.
 static func record_ooo_drop() -> void:
 	if instance: instance._ooo_drop_count += 1
@@ -327,6 +339,7 @@ func tick(delta: float) -> void:
 	recon_vel_per_sec = _recon_vel_trips / _window_timer
 	recon_ubody_per_sec = _recon_ubody_trips / _window_timer
 	pos_offset_ticks_avg = _pos_offset_ticks_sum / _pos_offset_ticks_n if _pos_offset_ticks_n > 0 else 0.0
+	post_replay_residual_avg = _post_replay_residual_sum / _post_replay_residual_n if _post_replay_residual_n > 0 else 0.0
 	blade_jump_per_sec = _blade_jump_count / _window_timer
 	blade_jump_mag_avg = _blade_jump_mag_sum / _blade_jump_n if _blade_jump_n > 0 else 0.0
 	blade_reconcile_mag_avg = _blade_reconcile_mag_sum / _blade_reconcile_n if _blade_reconcile_n > 0 else 0.0
@@ -390,6 +403,8 @@ func tick(delta: float) -> void:
 	_recon_ubody_trips = 0
 	_pos_offset_ticks_sum = 0.0
 	_pos_offset_ticks_n = 0
+	_post_replay_residual_sum = 0.0
+	_post_replay_residual_n = 0
 	_blade_jump_count = 0
 	_blade_jump_mag_sum = 0.0
 	_blade_jump_n = 0

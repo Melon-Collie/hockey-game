@@ -125,8 +125,8 @@ func _render_client(t: NetworkTelemetry) -> void:
 	_metric(rec, "Corrections", "%.1f/s, %.3f m avg" % [t.reconcile_per_sec, t.reconcile_magnitude_avg],
 		"server snapping your prediction back; want <1/s and <5 cm")
 	if t.reconcile_per_sec > 0.5:
-		_info("Reconcile cause", "pos %.0f · vel %.0f · rot %.0f /s · off %+.1ft" % [t.recon_pos_per_sec, t.recon_vel_per_sec, t.recon_ubody_per_sec, t.pos_offset_ticks_avg],
-			"which channel tripped the snap; off = position error in ticks-of-travel (+lead/-lag). ~±1.0 = one-tick phase offset, not real desync")
+		_info("Reconcile cause", "pos %.0f · vel %.0f · rot %.0f /s · off %+.1ft · resid %.0fcm" % [t.recon_pos_per_sec, t.recon_vel_per_sec, t.recon_ubody_per_sec, t.pos_offset_ticks_avg, t.post_replay_residual_avg * 100.0],
+			"resid = distance from server AFTER the snap+replay. At rest it should be ~0; if resid stays ~9cm the replay isn't converging (offset rebuilds), vs ~0 = rebuild is in normal physics")
 	_metric(_band(t.extrapolation_per_sec, 1.0, 5.0), "Guessing ahead", "%.1f/s" % t.extrapolation_per_sec,
 		"frames guessed past the buffer (a packet was late); want <1/s")
 	_info("Puck mode", t.puck_mode, "interp = smoothed, trajectory = predicted flight, carried = on a stick")
