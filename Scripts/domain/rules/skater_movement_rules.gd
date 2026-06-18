@@ -15,6 +15,8 @@ class MovementConfig:
 	var backward_thrust_multiplier: float = 0.0  # thrust scale when moving against facing
 	var crossover_thrust_multiplier: float = 0.0 # thrust scale when moving perpendicular to facing
 	var friction_drag: float = 0.0               # velocity-proportional drag coefficient (m/s² per m/s)
+	var sprint_thrust_multiplier: float = 1.0     # thrust boost while sprinting (modest, to reach the cap)
+	var sprint_max_speed_multiplier: float = 1.0  # top-speed boost while sprinting (the headline effect)
 
 static func apply_movement(
 		current_velocity: Vector3,
@@ -23,8 +25,13 @@ static func apply_movement(
 		has_puck: bool,
 		brake: bool,
 		delta: float,
-		cfg: MovementConfig) -> Vector3:
+		cfg: MovementConfig,
+		sprint_active: bool = false) -> Vector3:
 	var velocity: Vector3 = current_velocity
+	# Sprint multiplies the base thrust and (mainly) the speed cap. Default 1.0
+	# multipliers + sprint_active=false make this a no-op for non-sprint callers.
+	var sprint_thrust: float = cfg.sprint_thrust_multiplier if sprint_active else 1.0
+	var sprint_max: float = cfg.sprint_max_speed_multiplier if sprint_active else 1.0
 
 	if not brake and move_input.length() > cfg.move_deadzone:
 		# NORMAL: apply thrust in the input direction, scaled by facing alignment.
@@ -38,17 +45,19 @@ static func apply_movement(
 		else:
 			thrust_scale = lerpf(cfg.backward_thrust_multiplier, cfg.crossover_thrust_multiplier, move_dot + 1.0)
 
-		velocity += thrust_dir * cfg.thrust * thrust_scale * delta
+		var applied_thrust: float = cfg.thrust * sprint_thrust
+		velocity += thrust_dir * applied_thrust * thrust_scale * delta
 
 		# Speed cap — but preserve over-max speed from external sources (body
 		# check boost, etc.) so we don't instantly clamp a legitimate momentum gain.
-		var effective_max: float = cfg.max_speed * cfg.puck_carry_speed_multiplier if has_puck else cfg.max_speed
+		var base_max: float = cfg.max_speed * sprint_max
+		var effective_max: float = base_max * cfg.puck_carry_speed_multiplier if has_puck else base_max
 		var horiz := Vector2(velocity.x, velocity.z)
 		var speed: float = horiz.length()
 		if speed > effective_max:
 			var pre_thrust_speed: float = Vector2(
-				velocity.x - thrust_dir.x * cfg.thrust * thrust_scale * delta,
-				velocity.z - thrust_dir.z * cfg.thrust * thrust_scale * delta
+				velocity.x - thrust_dir.x * applied_thrust * thrust_scale * delta,
+				velocity.z - thrust_dir.z * applied_thrust * thrust_scale * delta
 			).length()
 			var target_speed: float = maxf(pre_thrust_speed, effective_max)
 			if speed > target_speed:

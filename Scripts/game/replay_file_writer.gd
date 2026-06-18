@@ -42,7 +42,9 @@ static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89,
 #     packets carry the new header).
 # v3: puck wire Y widened s8 -> s16 (PROTOCOL_VERSION 4); embedded world-state
 #     puck block grew 12 -> 13 bytes.
-const FORMAT_VERSION: int = 3
+# v4: skater wire block grew 37->38 bytes (sprint stamina) — the embedded
+#     world-state packets carry the wider block (PROTOCOL_VERSION 5).
+const FORMAT_VERSION: int = 4
 const KIND_WORLD_STATE: int = 0
 const KIND_EVENT: int = 1
 const FRAME_INNER_HEADER_SIZE: int = 5  # host_ts (4) + kind (1)

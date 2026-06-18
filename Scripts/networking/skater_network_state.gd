@@ -22,6 +22,12 @@ var is_elevated: bool = false
 # needs the resolved "is the blade up" answer for rendering and the
 # on-ice/off-ice interaction gate.
 var blade_up: bool = false
+# Sprint stamina (0..1 fraction of the full pool) and the exhaustion lockout
+# flag. Both replicated so the local player's reconcile can snap them to the
+# host's authoritative value before replaying inputs — same treatment as
+# velocity. See StaminaRules / LocalController.reconcile.
+var stamina: float = 1.0
+var sprint_locked: bool = false
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 # World-space top-hand (grip) point. host-only, not serialized — paired with
@@ -46,6 +52,8 @@ func to_array() -> Array:
 		upper_body_angular_velocity,
 		is_elevated,
 		blade_up,
+		stamina,
+		sprint_locked,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -63,6 +71,8 @@ func copy_from(s: SkaterNetworkState) -> void:
 	blade_up = s.blade_up
 	shot_state = s.shot_state
 	shot_charge = s.shot_charge
+	stamina = s.stamina
+	sprint_locked = s.sprint_locked
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
 	top_hand_world = s.top_hand_world
@@ -85,4 +95,7 @@ static func from_array(data: Array) -> SkaterNetworkState:
 		state.is_elevated = data[12]
 	if data.size() > 13:
 		state.blade_up = data[13]
+	if data.size() > 15:
+		state.stamina = data[14]
+		state.sprint_locked = data[15]
 	return state

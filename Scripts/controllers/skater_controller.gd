@@ -8,7 +8,7 @@ const State = SkaterStateMachine.State
 var _sm: SkaterStateMachine = SkaterStateMachine.new()
 
 # ── Movement Tuning ───────────────────────────────────────────────────────────
-@export var thrust: float = 12.0
+@export var thrust: float = 10.5
 @export var friction: float = 0.8
 @export var friction_drag: float = 0.27
 @export var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
@@ -17,6 +17,25 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var puck_carry_speed_multiplier: float = 0.86
 @export var backward_thrust_multiplier: float = 0.80
 @export var crossover_thrust_multiplier: float = 0.90
+# ── Sprint / Stamina Tuning ───────────────────────────────────────────────────
+# Sprint (Shift) burns a stamina pool for a top-speed burst. Boost is primarily
+# the speed cap; a smaller thrust bump lets you actually reach it. Stamina is a
+# 0..1 fraction; drain/regen are fractions-per-second. Flat for every player in
+# v1 (not attribute-scaled) — but the cap they multiply, max_speed, is already
+# Speed-scaled, so faster skaters get a proportionally faster sprint for free.
+@export var sprint_max_speed_multiplier: float = 1.18
+@export var sprint_thrust_multiplier: float = 1.20
+@export var sprint_drain_per_sec: float = 0.45         # ~2.2s of full sprint off-puck
+@export var sprint_carry_drain_multiplier: float = 1.6 # carrying drains faster (~1.4s)
+@export var stamina_regen_per_sec: float = 0.30        # ~3.3s to refill from empty
+@export var sprint_unlock_fraction: float = 0.5        # exhausted → recover to here before sprinting again
+# Turn-rate scale while sprinting (< 1.0 = wider, lazier turns). This is the
+# tradeoff that makes sprint a decision rather than a hold-always button:
+# committed straight-line speed at the cost of agility, mirroring the
+# hustle/turn-radius coupling in sim hockey games. Scales facing_drag_speed in
+# SkaterPoseCoordinator.apply_facing. Deterministic from sprint_active, so it
+# re-derives identically through reconcile replay (no new wire state).
+@export var sprint_turn_multiplier: float = 0.55
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -258,6 +277,17 @@ var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
 var has_puck: bool = false
 var is_replaying: bool = false
+# Sprint stamina (0..1) and the exhaustion lockout latch. Updated deterministically
+# each tick in _apply_movement; the local player's reconcile snaps both to the
+# host's authoritative value before replay (see LocalController.reconcile) and
+# the host broadcasts them via fill_network_state.
+var stamina: float = 1.0
+var _sprint_locked: bool = false
+# Resolved sprint-boost state for this tick. Written in _apply_movement (which
+# runs before _pose.apply_facing in _process_input) and read by the pose
+# coordinator to apply the turn-rate penalty. Public so the pose collaborator
+# can read it without a getter.
+var sprint_active: bool = false
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
@@ -573,9 +603,16 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.top_hand_world = skater.upper_body_to_global(skater.get_top_hand_position())
 	state.shot_state = _sm.get_state() as int
 	state.shot_charge = _aiming.charge_distance
+	state.stamina = stamina
+	state.sprint_locked = _sprint_locked
 
 func get_shot_state() -> int:
 	return _sm.get_state()
+
+# Whether sprint is currently locked out by exhaustion (stamina bottomed out and
+# hasn't recovered past sprint_unlock_fraction yet). Read-only view for the HUD.
+func is_sprint_exhausted() -> bool:
+	return _sprint_locked
 
 func apply_network_state(_net_state: SkaterNetworkState, _host_ts: float) -> void:
 	pass  # overridden by RemoteController on client
@@ -593,6 +630,8 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	skater.visual_offset = Vector3.ZERO
 	skater.velocity = state.velocity
 	skater.blade_up = state.blade_up
+	stamina = state.stamina
+	_sprint_locked = state.sprint_locked
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
@@ -653,6 +692,11 @@ func on_puck_released_network() -> void:
 func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	skater.global_position = pos
 	skater.velocity = Vector3.ZERO
+	# Fresh legs out of a faceoff / respawn — refill the stamina pool and clear
+	# any exhaustion lockout so play resumes from a clean slate.
+	stamina = 1.0
+	_sprint_locked = false
+	sprint_active = false
 	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
 	# charge. Otherwise the slapper charge timer keeps ticking across the
 	# respawn and the player drops into the faceoff already charged.
@@ -928,13 +972,25 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	skater.is_braced = input.brake
 
 	var move_state: SkaterStateMachine.State = _sm.get_state()
-	if move_state == State.SLAPPER_CHARGE_WITH_PUCK or move_state == State.SHOT_BLOCKING:
+	# Locomotion is suppressed during a planted slap windup / block stance, but
+	# stamina still ticks (you can't sprint, so it regenerates). Computing it
+	# before the early-return keeps the bar honest through those states.
+	var locomotion_suppressed: bool = \
+			move_state == State.SLAPPER_CHARGE_WITH_PUCK or move_state == State.SHOT_BLOCKING
+	var is_moving: bool = not input.brake and input.move_vector.length() > move_deadzone
+	sprint_active = not locomotion_suppressed and StaminaRules.sprint_active(
+			stamina, input.sprint_held, is_moving, _sprint_locked)
+	var stamina_cfg: StaminaRules.StaminaConfig = _stamina_config()
+	stamina = StaminaRules.next_stamina(stamina, sprint_active, has_puck, delta, stamina_cfg)
+	_sprint_locked = StaminaRules.next_locked(_sprint_locked, stamina, sprint_active, stamina_cfg)
+
+	if locomotion_suppressed:
 		return
 
 	var cfg: SkaterMovementRules.MovementConfig = _movement_config()
 	skater.velocity = SkaterMovementRules.apply_movement(
 			skater.velocity, input.move_vector, skater.rotation.y,
-			has_puck, input.brake, delta, cfg)
+			has_puck, input.brake, delta, cfg, sprint_active)
 
 # Movement configs are cached — _apply_movement runs every physics tick (and
 # once per reconcile-replayed input), and the source exports change only in
@@ -967,7 +1023,23 @@ func _build_movement_config() -> SkaterMovementRules.MovementConfig:
 	cfg.puck_carry_speed_multiplier = puck_carry_speed_multiplier
 	cfg.backward_thrust_multiplier = backward_thrust_multiplier
 	cfg.crossover_thrust_multiplier = crossover_thrust_multiplier
+	cfg.sprint_thrust_multiplier = sprint_thrust_multiplier
+	cfg.sprint_max_speed_multiplier = sprint_max_speed_multiplier
 	return cfg
+
+# Stamina config is flat (not attribute-scaled), so a single lazily-built
+# instance is reused for the controller's lifetime — same caching pattern as
+# the movement config, minus the apply_attributes invalidation.
+var _cached_stamina_cfg: StaminaRules.StaminaConfig = null
+
+func _stamina_config() -> StaminaRules.StaminaConfig:
+	if _cached_stamina_cfg == null:
+		_cached_stamina_cfg = StaminaRules.StaminaConfig.new()
+		_cached_stamina_cfg.drain_per_sec = sprint_drain_per_sec
+		_cached_stamina_cfg.carry_drain_multiplier = sprint_carry_drain_multiplier
+		_cached_stamina_cfg.regen_per_sec = stamina_regen_per_sec
+		_cached_stamina_cfg.unlock_fraction = sprint_unlock_fraction
+	return _cached_stamina_cfg
 
 func _wrister_config() -> ShotMechanics.WristerConfig:
 	var cfg := ShotMechanics.WristerConfig.new()

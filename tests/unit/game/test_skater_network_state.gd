@@ -21,6 +21,8 @@ func test_round_trip_preserves_all_wire_fields() -> void:
 	s.blade_up                    = true
 	s.shot_state                  = 2
 	s.shot_charge                 = 0.75
+	s.stamina                     = 0.4
+	s.sprint_locked               = true
 
 	var r := SkaterNetworkState.from_array(s.to_array())
 
@@ -39,17 +41,19 @@ func test_round_trip_preserves_all_wire_fields() -> void:
 	assert_eq(r.blade_up,    s.blade_up)
 	assert_eq(r.shot_state,  s.shot_state)
 	assert_almost_eq(r.shot_charge, s.shot_charge, 0.00001)
+	assert_almost_eq(r.stamina, s.stamina, 0.00001)
+	assert_eq(r.sprint_locked, s.sprint_locked)
 
 
-func test_array_length_is_fourteen() -> void:
+func test_array_length_sentinel() -> void:
 	# Field-count sentinel — if a field is added without updating to_array /
 	# from_array, this catches the mismatch before it becomes a silent bug.
-	# 14: position, velocity, blade_position, top_hand_position,
+	# 16: position, velocity, blade_position, top_hand_position,
 	# upper_body_rotation_y, facing, last_processed_host_timestamp,
 	# is_ghost, shot_state, shot_charge, facing_angular_velocity,
-	# upper_body_angular_velocity, is_elevated, blade_up.
+	# upper_body_angular_velocity, is_elevated, blade_up, stamina, sprint_locked.
 	var s := SkaterNetworkState.new()
-	assert_eq(s.to_array().size(), 14)
+	assert_eq(s.to_array().size(), 16)
 
 
 func test_blade_up_back_compat_defaults_false() -> void:
@@ -58,9 +62,22 @@ func test_blade_up_back_compat_defaults_false() -> void:
 	var s := SkaterNetworkState.new()
 	s.blade_up = true
 	var short_array: Array = s.to_array()
-	short_array.resize(13)  # drop blade_up
+	short_array.resize(13)  # drop blade_up, stamina, sprint_locked
 	var r := SkaterNetworkState.from_array(short_array)
 	assert_false(r.blade_up, "missing blade_up index should default false")
+
+
+func test_stamina_back_compat_defaults() -> void:
+	# A short array missing stamina/sprint_locked (indices 14/15) must decode
+	# with the safe defaults — full stamina, not locked.
+	var s := SkaterNetworkState.new()
+	s.stamina = 0.2
+	s.sprint_locked = true
+	var short_array: Array = s.to_array()
+	short_array.resize(14)  # keep blade_up, drop stamina + sprint_locked
+	var r := SkaterNetworkState.from_array(short_array)
+	assert_almost_eq(r.stamina, 1.0, 0.00001, "missing stamina defaults to full")
+	assert_false(r.sprint_locked, "missing sprint_locked defaults false")
 
 
 func test_host_only_fields_not_serialized() -> void:

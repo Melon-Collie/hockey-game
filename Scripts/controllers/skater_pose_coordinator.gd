@@ -125,6 +125,11 @@ func apply_facing(input: InputState, delta: float) -> void:
 			else:
 				ik_locked_side = 0
 				var drag: float = _controller.facing_drag_speed_braking if input.brake else _controller.facing_drag_speed
+				# Sprinting widens the turn: commit to straight-line speed at the
+				# cost of agility. sprint_active is resolved in _apply_movement
+				# earlier this tick, so it's deterministic across reconcile replay.
+				if _controller.sprint_active:
+					drag *= _controller.sprint_turn_multiplier
 				facing = facing.lerp(to_mouse.normalized(), drag * delta).normalized()
 		_skater.set_facing(facing)
 		var turn_delta: float = angle_difference(prev_angle, _skater.rotation.y)

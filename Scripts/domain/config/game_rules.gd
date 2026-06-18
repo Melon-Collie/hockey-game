@@ -127,7 +127,12 @@ const SLOT_DIST_M: float = 5.0
 # `attribute_resolver.call(peer_id).max_speed` (or .stick_length, etc.)
 # instead of these defaults. They become "league average" fallbacks only
 # used when an attribute isn't resolvable.
-const DEFAULT_SKATER_MAX_SPEED_M_S: float = 10.5
+# Base (Speed-2) skater top speed. 9.0 m/s ≈ 20 mph ≈ 32 km/h — a solid NHL
+# stride. This is the *cruising* cap; the Sprint burst (sprint_max_speed_multiplier
+# on SkaterController) lifts it to ~25 mph, the real elite top speed. Tuned so
+# base + sprint both stay anchored to plausible skating speeds rather than
+# stacking into superhuman territory.
+const DEFAULT_SKATER_MAX_SPEED_M_S: float = 9.0
 const DEFAULT_STICK_LENGTH_M: float = 1.30
 const DEFAULT_BLADE_LENGTH_M: float = 0.30
 

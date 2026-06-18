@@ -6,7 +6,7 @@ extends GutTest
 # over the nearer-right-now bot), and incumbent hysteresis (the current
 # chaser keeps the role unless a challenger clearly beats them).
 
-const REF: float = 10.5   # AIActionScoring.SKATER_REF_SPEED_M_S
+const REF: float = 9.0   # AIActionScoring.SKATER_REF_SPEED_M_S
 
 
 func _skater(pos: Vector3, vel: Vector3 = Vector3.ZERO) -> SkaterNetworkState:

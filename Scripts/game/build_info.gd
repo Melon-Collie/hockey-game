@@ -21,7 +21,9 @@ const VERSION: String = "dev"
 #     index after it and breaks cross-build RPC routing.
 # v4: puck wire Y widened s8 -> s16 (was clipping elevated/saucer shots at the
 #     s8 ±1.27 m range); puck block grew 12 -> 13 bytes.
-const PROTOCOL_VERSION: int = 4
+# v5: sprint/stamina — skater wire block 37->38 bytes (u8 stamina + sprint_locked
+#     flag bit); input flags reuse the previously-reserved bit [4] for sprint_held.
+const PROTOCOL_VERSION: int = 5
 
 const RELEASE_TAG: String = "latest"
 const REPO: String = "Melon-Collie/mitts"

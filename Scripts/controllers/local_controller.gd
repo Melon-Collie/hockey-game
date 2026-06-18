@@ -165,6 +165,7 @@ func _physics_process(delta: float) -> void:
 			prep_input.slap_pressed = false
 			prep_input.slap_held = false
 			prep_input.brake = false
+			prep_input.sprint_held = false
 			prep_input.elevation_up = false
 			prep_input.elevation_down = false
 			prep_input.block_held = false
@@ -420,6 +421,12 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
 	skater.global_position = server_state.position
 	skater.velocity = server_state.velocity
+	# Stamina + lockout are deterministic from inputs, exactly like velocity:
+	# snap to the server baseline, then the replay loop below re-derives them
+	# forward through the unacked inputs (do NOT save/restore them — that's for
+	# fields replay must not advance, like the charge timers).
+	stamina = server_state.stamina
+	_sprint_locked = server_state.sprint_locked
 	# Snap facing for replay accuracy — facing drives move_and_slide direction,
 	# so the replay must start from the server's facing to reproduce the trajectory.
 	_pose.facing = server_state.facing
