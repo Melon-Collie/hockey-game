@@ -24,12 +24,12 @@ extends RefCounted
 #                body_check_brace_resistance (hard to PUT DOWN — the active
 #                brace) + stamina (slower drain / faster regen). The grinder /
 #                motor stat: deliver hits, absorb hits, never gas out.
-#   - Shot     → shot power + charge speed, but DYNAMIC rather than a flat scale:
-#                the quick / uncharged wrister (and pass speed) rides a WIDE curve
-#                while the fully-charged ceiling stays narrow, and wrister charge
-#                effort is inverted + widened. So a low-Shot snap is really weak
-#                but a hard-earned full charge reaches okay-ish, while a high-Shot
-#                snap is already near a charged shot. The quick-release sniper lever.
+#   - Shot     → the CHARGED-shot power ceiling (wrister max + both slapper pools)
+#                plus wrister charge EFFORT (inverted + widened — low Shot must
+#                drag far to fill the bar, high Shot fills it fast). The quick /
+#                uncharged snap stays BASELINE for everyone because it doubles as
+#                pass speed, so Shot is "what a charge buys you and how fast you
+#                can charge it," not snap power. The sniper lever.
 #
 # Two pairs intentionally co-own one outcome on DIFFERENT axes, so they compose
 # rather than double-count:
@@ -89,8 +89,8 @@ const BUDGET: int = 18
 
 # Canonical gameplay (one per attribute) — the "headline" effect each attribute
 # drives. (Hands' canonical headline is blade speed; Physical's is check force;
-# Shot's is the charged-shot power ceiling — the quick/uncharged floor rides the
-# wider _SHOT_FLOOR table below.)
+# Shot's is the charged-shot power ceiling — the quick/uncharged snap stays
+# baseline because it doubles as pass speed.)
 const _SPEED_MULTS:          Array[float] = [0.93, 0.965, 1.00, 1.035, 1.07]
 const _AGILITY_MULTS:        Array[float] = [0.90, 0.95,  1.00, 1.05,  1.10]
 const _HANDS_BLADE_MULTS:    Array[float] = [0.85, 0.925, 1.00, 1.125, 1.25]
@@ -131,11 +131,6 @@ const _SHOT_POWER_MULTS:     Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 #   is 0.75, so L5 (×1.24 → 0.93) stays safely below a forehand — a backhand
 #   never beats the forehand it's penalizing.
 # AGILITY_GLIDE: inverted (lower = less drag during cuts) — the "good edges" feel.
-# SHOT_FLOOR: quick/uncharged wrister power (and quick_shot pass speed) — a
-#   deliberately WIDE, asymmetric curve (0.75 .. 1.50). A low-Shot snap is really
-#   weak; a high-Shot snap is near a medium player's fully-charged shot. Paired
-#   with the narrower _SHOT_POWER ceiling, this is what makes Shot dynamic: low
-#   Shot has a big quick→charged range (rewards effort), high Shot is good instantly.
 # SHOT_WRISTER_CHARGE: inverted, WIDER than SHOT_CHARGE — low Shot must drag a lot
 #   farther to reach its charged ceiling (charging is real effort); high Shot fills
 #   the bar with a short drag. Multiplied by SIZE_CHARGE so the cap still tracks reach.
@@ -153,7 +148,6 @@ const _SIZE_CHARGE_MULTS:     Array[float] = [0.957, 1.000, 1.029, 1.071, 1.100]
 const _HANDS_CARRY_MULTS:     Array[float] = [0.90,  0.95,  1.00, 1.05,  1.10]
 const _HANDS_BACKHAND_MULTS:  Array[float] = [0.85,  0.93,  1.00, 1.12,  1.24]
 const _AGILITY_GLIDE_MULTS:   Array[float] = [1.10,  1.05,  1.00, 0.95,  0.90]
-const _SHOT_FLOOR_MULTS:          Array[float] = [0.75, 0.875, 1.00, 1.25, 1.50]
 const _SHOT_WRISTER_CHARGE_MULTS: Array[float] = [1.35, 1.17,  1.00, 0.86, 0.72]
 const _SHOT_CHARGE_MULTS:     Array[float] = [1.12,  1.06,  1.00, 0.94,  0.88]
 const _PHYSICAL_BRACE_MULTS:  Array[float] = [1.18,  1.09,  1.00, 0.91,  0.82]
@@ -264,7 +258,6 @@ func size_charge_mult()    -> float: return _lookup(_SIZE_CHARGE_MULTS,    size)
 func hands_carry_mult()    -> float: return _lookup(_HANDS_CARRY_MULTS,    hands)
 func hands_backhand_mult() -> float: return _lookup(_HANDS_BACKHAND_MULTS, hands)
 func agility_glide_mult()  -> float: return _lookup(_AGILITY_GLIDE_MULTS,  agility)
-func shot_floor_mult()          -> float: return _lookup(_SHOT_FLOOR_MULTS,          shot)
 func shot_wrister_charge_mult() -> float: return _lookup(_SHOT_WRISTER_CHARGE_MULTS, shot)
 func shot_charge_mult()    -> float: return _lookup(_SHOT_CHARGE_MULTS,    shot)
 func physical_brace_mult() -> float: return _lookup(_PHYSICAL_BRACE_MULTS, physical)

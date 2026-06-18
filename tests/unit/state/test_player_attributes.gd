@@ -132,22 +132,6 @@ func test_hands_backhand_scales_and_stays_under_forehand() -> void:
 			"L5 backhand must not lift the 0.75 base coefficient to/above a forehand")
 
 
-func test_shot_floor_more_dynamic_than_ceiling() -> void:
-	# Quick/uncharged wrister power (floor) swings WIDER with Shot than the
-	# fully-charged power (ceiling): a low-Shot snap is really weak (well below the
-	# charged scaling) but a high-Shot snap is strong (above it). This floor/ceiling
-	# gap is what makes Shot dynamic — low Shot must charge to be useful, high Shot
-	# is dangerous instantly.
-	var lo := PlayerAttributes.new(2, 2, 2, 2, 2, PlayerAttributes.LEVEL_MIN)
-	var med := PlayerAttributes.all_medium()
-	var hi := PlayerAttributes.new(2, 2, 2, 2, 2, PlayerAttributes.LEVEL_MAX)
-	assert_lt(lo.shot_floor_mult(), 1.0)
-	assert_eq(med.shot_floor_mult(), 1.0)
-	assert_gt(hi.shot_floor_mult(), 1.0)
-	assert_lt(lo.shot_floor_mult(), lo.shot_power_mult(), "low-Shot snap weaker than its charged ceiling scaling")
-	assert_gt(hi.shot_floor_mult(), hi.shot_power_mult(), "high-Shot snap stronger than its charged ceiling scaling")
-
-
 func test_shot_wrister_charge_wider_than_slapper_charge() -> void:
 	# Both inverted (higher Shot = less effort), but the wrister drag-distance
 	# spread is wider than the slapper wind-up spread.

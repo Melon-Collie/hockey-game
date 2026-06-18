@@ -418,15 +418,16 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# sniper). Wrister-only today; the slapshot path applies no backhand penalty
 	# (see ShotMechanics.release_slapper).
 	backhand_power_coefficient  = _base_backhand_power_coefficient  * attrs.hands_backhand_mult()
-	# Shot is DYNAMIC, not a flat scale. The quick/uncharged wrister (and the
-	# quick_shot pass) ride the WIDE _SHOT_FLOOR curve so a low-Shot snap is junk
-	# and a high-Shot snap is near a charged shot; the fully-charged ceiling rides
-	# the narrower shot_power curve. Slapper power stays on the flat ceiling.
-	var m_shot_ceil:  float = attrs.shot_power_mult()
-	var m_shot_floor: float = attrs.shot_floor_mult()
-	min_wrister_power = _base_min_wrister_power * m_shot_floor
+	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
+	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_shot
+	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
+	# min_wrister is held at baseline too so the charge curve starts at the snap
+	# value and only climbs (no "winding up made it weaker" dead zone for low Shot).
+	# So Shot = "what a charge buys you, and how fast you can charge it."
+	var m_shot_ceil: float = attrs.shot_power_mult()
+	min_wrister_power = _base_min_wrister_power              # baseline floor (= snap)
 	max_wrister_power = _base_max_wrister_power * m_shot_ceil
-	quick_shot_power  = _base_quick_shot_power  * m_shot_floor
+	quick_shot_power  = _base_quick_shot_power               # baseline — also the pass speed
 	min_slapper_power = _base_min_slapper_power * m_shot_ceil
 	max_slapper_power = _base_max_slapper_power * m_shot_ceil
 	# Wrister charge effort is WIDER than the slapper's (low Shot must drag far to
