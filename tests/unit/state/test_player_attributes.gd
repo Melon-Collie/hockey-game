@@ -167,13 +167,22 @@ func test_physical_brace_is_inverted() -> void:
 	assert_gt(lo.physical_brace_mult(), hi.physical_brace_mult())
 
 
-func test_physical_stamina_scales() -> void:
+func test_physical_drain_and_regen_scale() -> void:
 	var lo := PlayerAttributes.new(2, 2, 2, 2, PlayerAttributes.LEVEL_MIN, 2)
 	var med := PlayerAttributes.all_medium()
 	var hi := PlayerAttributes.new(2, 2, 2, 2, PlayerAttributes.LEVEL_MAX, 2)
-	assert_lt(lo.physical_stamina_mult(), 1.0)
-	assert_eq(med.physical_stamina_mult(), 1.0)
-	assert_gt(hi.physical_stamina_mult(), 1.0)
+	# Drain (sprint duration): gentle, medium = 1.0.
+	assert_lt(lo.physical_drain_mult(), 1.0)
+	assert_eq(med.physical_drain_mult(), 1.0)
+	assert_gt(hi.physical_drain_mult(), 1.0)
+	# Regen (recovery): medium = 1.0, but the low-end penalty is far STEEPER than
+	# the drain spread — a low-Physical player recovers dramatically slower than it
+	# loses sprint duration.
+	assert_lt(lo.physical_regen_mult(), 1.0)
+	assert_eq(med.physical_regen_mult(), 1.0)
+	assert_gt(hi.physical_regen_mult(), 1.0)
+	assert_lt(lo.physical_regen_mult(), lo.physical_drain_mult(),
+			"low-Physical recovery penalty must be steeper than its sprint-duration penalty")
 
 
 func test_height_identity_at_level_two() -> void:

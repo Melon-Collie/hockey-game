@@ -21,9 +21,12 @@ extends RefCounted
 #                coupling. Resists checks through MASS (the weight_ratio in the
 #                check formula, skater.gd): a big player is hard to MOVE.
 #   - Physical → body_check_transfer (how hard you DELIVER a hit) +
-#                body_check_brace_resistance (hard to PUT DOWN — the active
-#                brace) + stamina (slower drain / faster regen). The grinder /
-#                motor stat: deliver hits, absorb hits, never gas out.
+#                body_check_brace_resistance (hard to PUT DOWN — the active brace)
+#                + stamina on TWO curves: a gentle drain scale (sprint duration)
+#                and a STEEP, asymmetric regen scale (recovery). Low Physical
+#                sprints nearly as long but recovers brutally slowly — a full bar
+#                takes ~9 s (≈4.5 s to the sprint-unlock) vs ~3 s for high. The
+#                grinder / motor stat: deliver hits, absorb hits, outlast everyone.
 #   - Shot     → the CHARGED-shot power ceiling (wrister max + both slapper pools)
 #                plus wrister charge EFFORT (inverted + widened — low Shot must
 #                drag far to fill the bar, high Shot fills it fast). The quick /
@@ -139,8 +142,14 @@ const _SHOT_POWER_MULTS:     Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 # PHYSICAL_BRACE: inverted (lower = better resistance) — Physical is the active
 #   brace that keeps you on your feet / on the puck through contact. Replaces the
 #   old Size-driven brace; Size now resists only through mass (weight_ratio).
-# PHYSICAL_STAMINA: endurance — drain is divided by it, regen multiplied by it,
-#   so a high-Physical grinder gets a deeper pool and recovers faster.
+# PHYSICAL_DRAIN: inverted (lower = slower drain) — sprint DURATION. Gentle spread
+#   so every build gets a usable burst (free sprint ~1.9 s at L1 → ~2.6 s at L5).
+# PHYSICAL_REGEN: stamina recovery rate (multiplied in). STEEP on the low end and
+#   asymmetric — medium/high refill near the shipped rate, but a low-Physical
+#   player who gases out is punished hard: a full bar runs ~9 s at L1 (≈4.5 s to
+#   the 0.5 sprint-unlock) vs ~3 s at L5. High barely beats medium; the spread is
+#   all downside for neglecting the stat. Kept separate from DRAIN so recovery can
+#   be brutal without also shortening the sprint itself.
 const _HEIGHT_MULTS:          Array[float] = [0.957, 1.000, 1.029, 1.071, 1.100]
 const _STICK_LEN_MULTS:       Array[float] = [0.972, 1.000, 1.019, 1.046, 1.065]
 const _SIZE_WEIGHT_MULTS:     Array[float] = [0.82,  0.91,  1.00, 1.09,  1.18]
@@ -151,7 +160,8 @@ const _AGILITY_GLIDE_MULTS:   Array[float] = [1.10,  1.05,  1.00, 0.95,  0.90]
 const _SHOT_WRISTER_CHARGE_MULTS: Array[float] = [1.35, 1.17,  1.00, 0.86, 0.72]
 const _SHOT_CHARGE_MULTS:     Array[float] = [1.12,  1.06,  1.00, 0.94,  0.88]
 const _PHYSICAL_BRACE_MULTS:  Array[float] = [1.18,  1.09,  1.00, 0.91,  0.82]
-const _PHYSICAL_STAMINA_MULTS:Array[float] = [0.85,  0.925, 1.00, 1.075, 1.15]
+const _PHYSICAL_DRAIN_MULTS:  Array[float] = [0.85,  0.925, 1.00, 1.075, 1.15]
+const _PHYSICAL_REGEN_MULTS:  Array[float] = [0.45,  0.70,  1.00, 1.15,  1.30]
 
 # Visual-only — drive `transform.scale` on body-chain mesh leaves and arm mesh
 # radii. Wider than gameplay tables on purpose: the third-person hockey camera
@@ -261,7 +271,8 @@ func agility_glide_mult()  -> float: return _lookup(_AGILITY_GLIDE_MULTS,  agili
 func shot_wrister_charge_mult() -> float: return _lookup(_SHOT_WRISTER_CHARGE_MULTS, shot)
 func shot_charge_mult()    -> float: return _lookup(_SHOT_CHARGE_MULTS,    shot)
 func physical_brace_mult() -> float: return _lookup(_PHYSICAL_BRACE_MULTS, physical)
-func physical_stamina_mult() -> float: return _lookup(_PHYSICAL_STAMINA_MULTS, physical)
+func physical_drain_mult() -> float: return _lookup(_PHYSICAL_DRAIN_MULTS, physical)
+func physical_regen_mult() -> float: return _lookup(_PHYSICAL_REGEN_MULTS, physical)
 
 # Visual
 func torso_bulk_mult()     -> float: return _lookup(_TORSO_BULK_MULTS,     size)

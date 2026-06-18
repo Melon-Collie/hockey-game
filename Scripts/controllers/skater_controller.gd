@@ -27,7 +27,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var sprint_thrust_multiplier: float = 1.20
 @export var sprint_drain_per_sec: float = 0.45         # ~2.2s of full sprint off-puck
 @export var sprint_carry_drain_multiplier: float = 1.6 # carrying drains faster (~1.4s)
-@export var stamina_regen_per_sec: float = 0.30        # ~3.3s to refill from empty
+@export var stamina_regen_per_sec: float = 0.25        # baseline (medium Physical): ~4s to refill, ~2s to the 0.5 sprint-unlock
 @export var sprint_unlock_fraction: float = 0.5        # exhausted → recover to here before sprinting again
 # Turn-rate scale while sprinting (< 1.0 = wider, lazier turns). This is the
 # tradeoff that makes sprint a decision rather than a hold-always button:
@@ -443,11 +443,14 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	skater.weight                      = _base_skater_weight                  * attrs.size_weight_mult()
 	skater.body_check_transfer         = _base_skater_body_check_transfer     * attrs.physical_check_mult()
 	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * attrs.physical_brace_mult()
-	# Physical also conditions the sprint engine: a deeper stamina pool (slower
-	# drain) and faster regen. The cached stamina config is dropped below so the
-	# next tick rebuilds from these rewritten rates.
-	sprint_drain_per_sec  = _base_sprint_drain_per_sec  / attrs.physical_stamina_mult()
-	stamina_regen_per_sec = _base_stamina_regen_per_sec * attrs.physical_stamina_mult()
+	# Physical conditions the sprint engine on two SEPARATE curves: a gentle drain
+	# scale (sprint duration stays usable at every level) and a steep, asymmetric
+	# regen scale (recovery). A low-Physical player sprints nearly as long but is
+	# punished hard on recovery — gas the bar out and a full refill runs ~9 s
+	# (≈4.5 s to the half-bar sprint-unlock) vs ~3 s for high Physical. The cached
+	# stamina config is dropped below so the next tick rebuilds from these rates.
+	sprint_drain_per_sec  = _base_sprint_drain_per_sec  / attrs.physical_drain_mult()
+	stamina_regen_per_sec = _base_stamina_regen_per_sec * attrs.physical_regen_mult()
 	# Arms scale with actual height (the dedicated height_mult,
 	# tighter than the gameplay size_mult) — keeps proportions realistic so
 	# a taller player has correspondingly longer arms (and ROM) rather than
