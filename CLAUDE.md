@@ -68,7 +68,7 @@ Application path: `SkaterController.apply_attributes(attrs)` reads the canonical
 
 - **Engine:** Godot 4.6.2 (Jolt Physics)
 - **Language:** GDScript
-- **Physics tick:** 240 Hz
+- **Physics tick:** 120 Hz
 - **Testing:** GUT v9.6.0 under `addons/gut/`; tests in `tests/unit/` (rules/, state/, game/). Run via GUT panel in the Godot editor.
 - **CI:** `.github/workflows/test.yml` runs GUT on every push and PR; `deploy.yml`'s export job gates on tests passing.
 - **Deployment:** GitHub Actions → Windows + Linux export → GitHub Releases (tag: `latest`)
