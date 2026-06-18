@@ -25,6 +25,13 @@ var stride_phase: float = 0.0
 # Smoothed [0,1] stride intensity so the legs ease in/out of motion at the
 # start/end of a stride instead of snapping to full amplitude.
 var _intensity: float = 0.0
+# Smoothed effort signal in [-1, +1]: +1 driving hard (deep push), -1
+# coasting/braking (settle into a glide). Derived from tangential acceleration —
+# see apply(). Previous velocity backs the finite-difference; the flag suppresses
+# the spurious spike on the very first frame (no prior sample yet).
+var _effort: float = 0.0
+var _prev_velocity: Vector3 = Vector3.ZERO
+var _have_prev_velocity: bool = false
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -68,6 +75,33 @@ func apply(delta: float) -> void:
 	var phase_rate: float = cadence_ceiling * tanh(linear_rate / cadence_ceiling)
 	stride_phase = wrapf(stride_phase + phase_rate * delta, 0.0, TAU)
 
+	# ── Effort: glide vs. push ─────────────────────────────────────────────────
+	# Velocity-only skating pumps the legs purely by speed, so a skater coasting at
+	# top speed strides exactly as hard as one digging for it. Real skating glides
+	# when it isn't gaining speed and pushes hard when it is. Recover that intent
+	# from the sign of tangential acceleration (the component of accel along travel):
+	# speeding up reads as a push, coasting/braking as a glide. Acceleration is the
+	# only "is the player pushing?" signal available without new network state — it
+	# falls out of the velocity remotes and replays already have — so they inherit
+	# the glide/push texture for free, exactly like the rest of the gait.
+	var effort_target: float = 0.0
+	if _have_prev_velocity:
+		var accel: Vector3 = (vel - _prev_velocity) / delta
+		var travel: Vector2 = Vector2(vel.x, vel.z)
+		if travel.length() > 0.1:
+			var tangential: float = Vector2(accel.x, accel.z).dot(travel.normalized())
+			effort_target = clampf(
+					tangential / maxf(_controller.stride_effort_ref_accel, 0.001), -1.0, 1.0)
+	_prev_velocity = vel
+	_have_prev_velocity = true
+	_effort = lerpf(_effort, effort_target, _controller.stride_effort_speed * delta)
+	# Push-amplitude scale around the speed baseline: >1 driving, easing toward
+	# stride_glide_floor when coasting so the legs settle instead of churning. The
+	# static crossover lean is intentionally left off this scale — you still lean
+	# through a turn while gliding.
+	var push_scale: float = clampf(1.0 + _effort * _controller.stride_push_gain,
+			_controller.stride_glide_floor, _controller.stride_push_ceiling)
+
 	# Decompose travel into the body frame: -Z is forward, +X is the skater's right.
 	var local_vel: Vector3 = _skater.global_transform.basis.inverse() * vel
 	var fwd: float = -local_vel.z   # >0 skating forward, <0 skating backward
@@ -80,8 +114,14 @@ func apply(delta: float) -> void:
 		fb_w = absf(fwd) / denom
 		lr_w = absf(lat) / denom
 
-	var s: float = sin(stride_phase)
-	var roll_amp: float = deg_to_rad(_controller.stride_roll_deg) * _intensity
+	# Asymmetric stroke: warp the phase before sampling the sine so the push and
+	# recovery halves aren't mirror images — a snappier drive flowing into a longer
+	# glide reads as skating rather than a metronome tick-tock. stride_skew in
+	# [0, 1); 0 collapses to the pure sine. Both legs and every amplitude sample
+	# this same warped `s`, so they stay 180° opposed and phase-coherent.
+	var warped_phase: float = stride_phase - _controller.stride_skew * sin(stride_phase)
+	var s: float = sin(warped_phase)
+	var roll_amp: float = deg_to_rad(_controller.stride_roll_deg) * _intensity * push_scale
 
 	var l_pitch: float = 0.0
 	var l_roll: float = 0.0
@@ -96,7 +136,7 @@ func apply(delta: float) -> void:
 	# shallower amplitude.
 	var push_deg: float = _controller.stride_pitch_deg if fwd >= 0.0 else _controller.stride_back_pitch_deg
 	var push_dir: float = 1.0 if fwd >= 0.0 else -1.0
-	var push_amp: float = deg_to_rad(push_deg) * _intensity * push_dir
+	var push_amp: float = deg_to_rad(push_deg) * _intensity * push_dir * push_scale
 	l_pitch += fb_w * s * push_amp
 	r_pitch += fb_w * -s * push_amp
 	l_roll += fb_w * s * roll_amp
@@ -106,7 +146,7 @@ func apply(delta: float) -> void:
 	# of the turn) plus a scissoring roll 180° out of phase between the legs so
 	# they cross over one another laterally.
 	var lean: float = signf(lat) * deg_to_rad(_controller.crossover_lean_deg) * _intensity
-	var scissor: float = deg_to_rad(_controller.crossover_scissor_deg) * _intensity
+	var scissor: float = deg_to_rad(_controller.crossover_scissor_deg) * _intensity * push_scale
 	l_roll += lr_w * (lean + s * scissor)
 	r_roll += lr_w * (lean - s * scissor)
 
@@ -114,7 +154,7 @@ func apply(delta: float) -> void:
 	# the push, 180° out of phase between legs. Direction-agnostic — the recovery
 	# tuck reads the same whichever way the skater is travelling. Negative so the
 	# shin folds back under the body (flip stride_knee_deg's sign to invert).
-	var knee_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity
+	var knee_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale
 	var l_knee: float = -knee_amp * (0.5 - 0.5 * s)
 	var r_knee: float = -knee_amp * (0.5 + 0.5 * s)
 
