@@ -260,8 +260,9 @@ var _jitter_samples: Array[float] = []
 var _last_ws_arrival_time: float = -1.0
 # Packet delay (PDV) measurement — see _record_packet_delay. Each packet's delay
 # vs the synced host clock, NOT the raw inter-arrival gap, so relay clumping
-# barely moves it. Diagnostic only today (F3 overlay); a later change can feed
-# this de-clumped estimate into the interp-delay target.
+# barely moves it. This de-clumped spread is the jitter cushion fed into the
+# interp-delay target (_compute_target_interpolation_delay) as well as the F3
+# "Delay spread" readout.
 var _pdv_floor: float = -1.0
 var _pdv_mean: float = 0.0
 var _pdv_dev: float = 0.0
@@ -1727,16 +1728,25 @@ func _compute_target_interpolation_delay() -> float:
 	var broadcast_interval: float = 1.0 / Constants.STATE_RATE
 	# Minimum is RTT/2 + one full broadcast interval so render_time always has
 	# a buffered state ahead of it between packet arrivals. Jitter margin on top.
-	# Margin multiplier 2.0: the cushion was briefly cut to 1.0x on the theory
-	# that the physics-driven broadcast loop emits a clean 1/STATE_RATE cadence.
-	# That holds on LAN/ENet, but Steam P2P relays packets in clumps — several
-	# snapshots land together, then a gap exceeding the nominal interval — so
-	# real inter-arrival spikes routinely run past a P95-sized cushion. With a
-	# 1.0x margin the remote interpolation buffer outran its newest sample during
-	# fast play (Extrap climbing well past the <1/s target, visible as rhythmic
-	# snap-back on remote skaters). 2.0x absorbs the clumps; the adaptive
-	# +10ms/packet up-clamp still handles sustained RTT spikes on top.
-	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 2.0
+	#
+	# The margin is the DE-CLUMPED packet-delay spread (Jacobson mean + 4x mean-
+	# deviation of each packet's delay vs the host clock — get_packet_delay_spread_ms).
+	# Because every packet is timed against its own host-capture stamp, relay
+	# clumping (several snapshots landing together, then a gap) barely moves it:
+	# it measures genuine PATH jitter, not arrival bunching. So it needs no clump-
+	# compensation multiplier and is used at 1.0x — lower baseline render latency
+	# on every remote entity than the old arrival-gap "jitter_p95 x 2.0" cushion,
+	# which over-cushioned a clean link to absorb clumps it couldn't tell apart
+	# from jitter. Transient clumps are absorbed by the asymmetric +10ms/packet
+	# up-clamp in adapt_interpolation_delay instead of by a fat static baseline.
+	#
+	# Canary if this under-cushions a real link: "Guessing ahead" (extrapolation
+	# /s, F3) climbing past the <1/s target — the buffer is underrunning between
+	# clumps faster than the up-clamp can chase, visible as rhythmic snap-back on
+	# remote skaters during fast play. If that shows up, swap the margin back to
+	# the conservative `get_jitter_p95() * 2.0`. See ARCHITECTURE.md -> Tier 2A.
+	var jitter_margin: float = get_packet_delay_spread_ms() / 1000.0
+	var target: float = rtt_half + broadcast_interval + jitter_margin
 	return clampf(target, maxf(rtt_half + broadcast_interval, 0.016), 0.200)
 
 func adapt_interpolation_delay(current: float) -> float:

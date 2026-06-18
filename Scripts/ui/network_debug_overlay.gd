@@ -128,14 +128,14 @@ func _render_client(t: NetworkTelemetry) -> void:
 		_info("Reconcile cause", "pos %.0f · vel %.0f · rot %.0f /s · off %+.1ft · resid %.0fcm" % [t.recon_pos_per_sec, t.recon_vel_per_sec, t.recon_ubody_per_sec, t.pos_offset_ticks_avg, t.post_replay_residual_avg * 100.0],
 			"resid = distance from server AFTER the snap+replay. At rest it should be ~0; if resid stays ~9cm the replay isn't converging (offset rebuilds), vs ~0 = rebuild is in normal physics")
 	_metric(_band(t.extrapolation_per_sec, 1.0, 5.0), "Guessing ahead", "%.1f/s" % t.extrapolation_per_sec,
-		"frames guessed past the buffer (a packet was late); want <1/s")
+		"frames guessed past the buffer; want <1/s. If this climbs on a clumpy link, the jitter cushion is too thin — see Smoothing delay")
 	_info("Puck mode", t.puck_mode, "interp = smoothed, trajectory = predicted flight, carried = on a stick")
 
 	_section("Smoothing buffers")
 	_info("Interp depth", "skater %d · puck %d · goalie %d" % [t.buffer_depth_skater, t.buffer_depth_puck, t.buffer_depth_goalie],
 		"frames queued to smooth motion; ~2-4 healthy, 0-1 risks stutter")
 	_info("Smoothing delay", "%.0f ms" % (NetworkManager.get_target_interpolation_delay() * 1000.0),
-		"intentional delay added to hide jitter; grows with RTT/jitter")
+		"intentional delay to hide jitter; sized off Delay spread (de-clumped path jitter), grows with RTT. If Guessing ahead climbs, this is under-cushioning")
 	if t.ws_gap_histogram != "—":
 		_info("Packet spacing", t.ws_gap_histogram,
 			"% of updates by gap (ms); steady ~8ms is smooth, split low+high = clumping")
