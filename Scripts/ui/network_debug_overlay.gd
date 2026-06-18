@@ -6,13 +6,22 @@ extends CanvasLayer
 #   • Each metric is colored green / yellow / red by comparing the live value to
 #     the healthy ranges documented in network_telemetry.gd. The colored dot is
 #     the at-a-glance "expected vs unexpected" signal the raw numbers never gave.
+#   • The header verdict (OK / WATCH / PROBLEM) must mean "something is actually
+#     WRONG" — so only ACTUAL-PROBLEM metrics drive it (via _metric). Connection
+#     FACTS (ping, jitter, delay spread) are colored for context but verdict-
+#     neutral (via _context): a far/jittery link is expected and compensated, so
+#     it shows red on its own line while the header stays green. The real damage a
+#     bad link does surfaces through its own driving metrics (loss, Guessing
+#     ahead, Corrections). Glance at the header to know if anything's wrong.
 #   • Every line carries an inline plain-English hint (what it means + the target
 #     range) so the overlay is self-explanatory without a separate cheat sheet.
 #   • Sections are gated by role (SOLO / HOST / CLIENT): a client never sees
 #     host-frame stats that would read as misleading zeros, and vice-versa.
-#   • "Watch" metrics (drift, stick jumps, puck snaps, dropped packets) stay
+#   • "Watch" metrics (stick jumps, puck snaps, reorders, reconcile match) stay
 #     hidden while healthy and surface only when they cross a threshold, so the
-#     overlay stays calm until something actually needs attention.
+#     overlay stays calm until something actually needs attention. They are
+#     calibrated to NOT fire on normal play (e.g. fast stickhandling is not a
+#     "stick jump") — a visible flag means a real anomaly, not a false alarm.
 # Thresholds below are derived from the "Expected ranges" comments in
 # network_telemetry.gd — keep the two in sync if either moves.
 
@@ -106,16 +115,16 @@ func _render_client(t: NetworkTelemetry) -> void:
 		_metric(Health.WARN, "Ping (RTT)", "syncing clock…",
 			"round-trip to host; waiting for the clock to lock in")
 	else:
-		_metric(_band(rtt_avg, 80.0, 150.0), "Ping (RTT)", "%.0f ms avg, %.0f ms last" % [rtt_avg, rtt_last],
-			"round-trip to host; <80 great, 80-150 playable, >150 laggy")
+		_context(_band(rtt_avg, 80.0, 150.0), "Ping (RTT)", "%.0f ms avg, %.0f ms last" % [rtt_avg, rtt_last],
+			"round-trip to host; <80 great, 80-150 playable, >150 laggy — distance, not a bug (doesn't flag the header)")
 	var offset := NetworkManager.get_clock_offset_ms()
 	_info("Clock offset", ("%+.0f ms" % offset), "your clock vs host's; just informational")
 	_metric(_band(t.packet_loss_pct, 1.0, 5.0), "Packet loss", "%.1f%%" % t.packet_loss_pct,
 		"dropped packets; <1% great, >5% causes rubber-banding")
-	_metric(_band(t.jitter_p95_ms, 8.0, 20.0), "Jitter", "%.1f ms" % t.jitter_p95_ms,
-		"unevenness of packet ARRIVAL GAPS; <8 smooth, >20 choppy — but also rises on clumping")
+	_context(_band(t.jitter_p95_ms, 8.0, 20.0), "Jitter", "%.1f ms" % t.jitter_p95_ms,
+		"unevenness of packet ARRIVAL GAPS; the buffer absorbs it (real overruns show as Guessing ahead), so context only")
 	var pdv := NetworkManager.get_packet_delay_spread_ms()
-	_metric(_band(pdv, 8.0, 20.0), "Delay spread", "%.1f ms (floor %.0f)" % [pdv, NetworkManager.get_packet_delay_floor_ms()],
+	_context(_band(pdv, 8.0, 20.0), "Delay spread", "%.1f ms (floor %.0f)" % [pdv, NetworkManager.get_packet_delay_floor_ms()],
 		"jitter measured vs the host CLOCK, ignores clumping; if Jitter is high but this is low, packets are clumping, not the path being jittery")
 	_info("Updates in", "%.0f/s" % t.world_state_hz, "world snapshots received; matches host send rate")
 	_sim_line(t)
@@ -153,8 +162,8 @@ func _render_host(t: NetworkTelemetry) -> void:
 	else:
 		for pid: int in peers:
 			var ping := NetworkManager.get_peer_ping_ms(pid)
-			_metric(_band(float(ping), 80.0, 150.0), NetworkManager.get_peer_name(pid),
-				"%d ms" % ping, "this client's round-trip to you")
+			_context(_band(float(ping), 80.0, 150.0), NetworkManager.get_peer_name(pid),
+				"%d ms" % ping, "this client's round-trip to you — distance, not a bug (doesn't flag the header)")
 	_info("Snapshots out", "%.0f/s" % t.world_state_hz, "world states broadcast per tick (varies by phase)")
 	_sim_line(t)
 
@@ -213,18 +222,16 @@ func _frame_health(t: NetworkTelemetry) -> void:
 # stays quiet until something is actually wrong. When all clear, one calm line.
 func _render_watch(t: NetworkTelemetry) -> void:
 	var any := false
-	any = _watch(_band(t.prediction_divergence_avg, 0.05, 0.2), "Prediction drift", "%.3f m" % t.prediction_divergence_avg,
-		"client vs server before replay; near 0 healthy, growing = non-determinism") or any
 	any = _watch(_when_positive(t.blade_jump_per_sec, 10.0), "Stick jumps", "%.1f/s (%.2f m avg)" % [t.blade_jump_per_sec, t.blade_jump_mag_avg],
-		"blade teleported >5 cm; want 0") or any
+		"a reconcile teleported the blade >5 cm; want 0 (normal fast stickhandling no longer counts)") or any
 	any = _watch(_band(t.puck_traj_hard_snap_per_sec, 2.0, 10.0), "Puck hard-snaps", "%.1f/s" % t.puck_traj_hard_snap_per_sec,
 		"puck flight snapped hard; expected only on real bounces, not every shot") or any
-	any = _watch(_when_positive(t.ooo_drops_per_sec, 5.0), "Out-of-order drops", "%.1f/s" % t.ooo_drops_per_sec,
-		"packets arrived reordered and were discarded; want 0") or any
+	any = _watch(_band(t.ooo_drops_per_sec, 2.0, 10.0), "Out-of-order drops", "%.1f/s" % t.ooo_drops_per_sec,
+		"packets arrived reordered and were discarded; occasional is normal UDP, a steady stream is a problem") or any
 	any = _watch(_band(100.0 - t.reconcile_match_pct, 5.0, 30.0), "Reconcile match", "%.0f%% matched" % t.reconcile_match_pct,
 		"client found its prediction for the server's ack timestamp; <100% = find_at missing, so it reconciles on lag not real error") or any
 	if not any:
-		_lines.append("[color=#%s]%s Internals nominal[/color] [color=#%s](drift, stick jumps, puck snaps, dropped packets all healthy)[/color]" % [
+		_lines.append("[color=#%s]%s Internals nominal[/color] [color=#%s](stick jumps, puck snaps, reorders, reconcile match all healthy)[/color]" % [
 			COL_OK, DOT, COL_DIM])
 
 # ── Line builders ────────────────────────────────────────────────────────────
@@ -235,6 +242,16 @@ func _section(title: String) -> void:
 func _metric(h: Health, label: String, value: String, hint: String) -> void:
 	if int(h) > int(_worst):
 		_worst = h
+	_lines.append("[color=#%s]%s[/color] %s: [color=#%s]%s[/color]  [color=#%s]%s[/color]" % [
+		_col(h), DOT, label, COL_VAL, value, COL_DIM, hint])
+
+# Like _metric but VERDICT-NEUTRAL: colors the line so you can read link quality
+# at a glance, but never escalates the header. For connection FACTS (ping,
+# jitter, delay spread) — a far or jittery link is expected and the netcode
+# compensates for it, so it must not make the header read PROBLEM. The actual
+# problems a bad link can cause surface through their own verdict-driving
+# metrics: loss (rubber-banding), Guessing ahead (buffer overrun), Corrections.
+func _context(h: Health, label: String, value: String, hint: String) -> void:
 	_lines.append("[color=#%s]%s[/color] %s: [color=#%s]%s[/color]  [color=#%s]%s[/color]" % [
 		_col(h), DOT, label, COL_VAL, value, COL_DIM, hint])
 
