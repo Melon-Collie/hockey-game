@@ -90,9 +90,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the dangle-speed range (~8-14 m/s) so it's the Hands "quick hands" lever —
 # scaled by attrs.hands_blade_mult() in apply_attributes(), it gates how fast you
 # can whip the blade forehand-to-backhand. A medium player's full ROM span is
-# ~1.18 m, so 10 m/s crosses it in ~118 ms (±15% Hands → ~103-139 ms across
-# levels). Tune UP if deliberate aim feels laggy at low Hands; tune DOWN if fast
-# dangling feels the same at L1 and L5. (Live-feel call — can't be measured headless.)
+# ~1.18 m, so 10 m/s crosses it in ~118 ms; the Hands spread (−15% / +25%) puts
+# that at ~139 ms (L1) to ~94 ms (L5). Tune UP if deliberate aim feels laggy at
+# low Hands; tune DOWN if fast dangling feels the same at L1 and L5. (Live-feel
+# call — can't be measured headless.)
 @export var max_blade_speed: float = 10.0
 
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────

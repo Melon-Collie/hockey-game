@@ -88,7 +88,7 @@ const BUDGET: int = 18
 # Shot's is shot power.)
 const _SPEED_MULTS:          Array[float] = [0.93, 0.965, 1.00, 1.035, 1.07]
 const _AGILITY_MULTS:        Array[float] = [0.90, 0.95,  1.00, 1.05,  1.10]
-const _HANDS_BLADE_MULTS:    Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
+const _HANDS_BLADE_MULTS:    Array[float] = [0.85, 0.925, 1.00, 1.125, 1.25]
 const _SIZE_MULTS:           Array[float] = [0.82, 0.91,  1.00, 1.09,  1.18]
 const _PHYSICAL_CHECK_MULTS: Array[float] = [0.80, 0.90,  1.00, 1.10,  1.20]
 const _SHOT_POWER_MULTS:     Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
