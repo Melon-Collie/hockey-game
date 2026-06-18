@@ -126,3 +126,25 @@ func test_one_timer_fast_puck_gets_speed_leniency() -> void:
 			Vector2(0, 0), Vector2(2.5, 0), 0.5, 14.0, 0.08))
 	assert_false(ShotReleaseRules.one_timer_in_range(
 			Vector2(0, 0), Vector2(2.8, 0), 0.5, 14.0, 0.08))
+
+
+# ── clamp_origin ──────────────────────────────────────────────────────────────
+
+func test_origin_within_reach_passes_through() -> void:
+	# 1 m from the body (< 2.5 m reach): returned unchanged, y preserved.
+	var got: Vector3 = ShotReleaseRules.clamp_origin(Vector3(1.0, 0.05, 0.0), Vector3(0.0, 1.0, 0.0))
+	assert_almost_eq(got, Vector3(1.0, 0.05, 0.0), Vector3(0.001, 0.001, 0.001))
+
+func test_origin_beyond_reach_clamped_to_boundary() -> void:
+	# 10 m downfield collapses onto the 2.5 m reach circle, same direction.
+	var got: Vector3 = ShotReleaseRules.clamp_origin(Vector3(10.0, 0.05, 0.0), Vector3(0.0, 1.0, 0.0))
+	assert_almost_eq(got, Vector3(2.5, 0.05, 0.0), Vector3(0.001, 0.001, 0.001))
+
+func test_origin_clamp_is_horizontal_only_and_keeps_y() -> void:
+	# Diagonal forged origin clamps in XZ but the client y rides through untouched.
+	var got: Vector3 = ShotReleaseRules.clamp_origin(Vector3(0.0, 0.9, 10.0), Vector3(0.0, 1.0, 0.0))
+	assert_almost_eq(got, Vector3(0.0, 0.9, 2.5), Vector3(0.001, 0.001, 0.001))
+
+func test_origin_non_finite_falls_back_to_body() -> void:
+	var got: Vector3 = ShotReleaseRules.clamp_origin(Vector3(NAN, 0.0, 0.0), Vector3(1.0, 1.0, 1.0))
+	assert_almost_eq(got, Vector3(1.0, 1.0, 1.0), Vector3(0.001, 0.001, 0.001))

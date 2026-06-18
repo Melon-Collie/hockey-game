@@ -45,6 +45,16 @@ const MAX_DIRECTION_Y: float = 0.6
 # puck. Generous on purpose — the client already enforced the tight check.
 const ONE_TIMER_RANGE_SLACK_M: float = 1.0
 
+# Maximum horizontal distance a shot origin may sit from the shooter's body
+# center — roughly full stick + arm reach. The client sends its true release
+# point (its locally-predicted blade) so the host fires the puck from exactly
+# where the shooter shot; the host trusts that point but clamps it to this
+# radius of the shooter's host-live body so a forged origin can't fire from
+# across the rink. The body barely moves in the RPC window (unlike the swinging
+# blade), so it's a stable anchor. Generous on purpose — this is an anti-abuse
+# fence, not a precision check (the client's point is already the right one).
+const MAX_ORIGIN_REACH_M: float = 2.5
+
 
 # Clamp a client-claimed RTT against the host's own measurement of that peer.
 # `host_measured_ms <= 0` means no sample yet (just connected) — fall back to
@@ -102,6 +112,20 @@ static func clamp_power(power: float, max_power: float) -> float:
 	if not is_finite(power):
 		return 0.0
 	return clampf(power, 0.0, max_power)
+
+
+# Validate a client-supplied shot ORIGIN against the shooter's body. Clamps the
+# horizontal (XZ) offset to `max_reach`; the y component is passed through
+# untouched (the host overrides it with release()'s elevation y anyway). A
+# non-finite origin falls back to the shooter's body position. See
+# MAX_ORIGIN_REACH_M for why the body — not the buffered blade — is the anchor.
+static func clamp_origin(client_origin: Vector3, shooter_pos: Vector3, max_reach: float = MAX_ORIGIN_REACH_M) -> Vector3:
+	if not client_origin.is_finite():
+		return shooter_pos
+	var off := Vector2(client_origin.x - shooter_pos.x, client_origin.z - shooter_pos.z)
+	if off.length() > max_reach:
+		off = off.normalized() * max_reach
+	return Vector3(shooter_pos.x + off.x, client_origin.y, shooter_pos.z + off.y)
 
 
 # One-timer range gate: the (rewound) puck the shooter saw must be within the
