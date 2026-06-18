@@ -427,13 +427,18 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# the victim is braced — *lower* = better resistance. A bigger-Size
 	# player should resist knockback better, so the multiplier flips.
 	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * (2.0 - m_size)
-	# Arms and stick scale with actual height (the dedicated height_mult,
+	# Arms scale with actual height (the dedicated height_mult,
 	# tighter than the gameplay size_mult) — keeps proportions realistic so
-	# a taller player has a correspondingly longer arm and stick rather than
-	# looking awkward with a baseline-length stick. update_stick_mesh() and
+	# a taller player has correspondingly longer arms (and ROM) rather than
+	# looking awkward with baseline-length limbs. The stick is equipment, not
+		# anatomy, so it rides a GENTLER curve (stick_len_mult, ~0.65x the height
+		# deviation): real played stick lengths track height only loosely, so a
+		# small player keeps a near-full-size stick. Total blade reach is still
+		# arm-driven ROM + stick (top_hand_ik FAR regime), so the eased stick is
+		# not a proportionally eased reach. update_stick_mesh() and
 	# the arm bone wrappers recompute visuals from these every frame, so no
 	# separate visual pass is needed.
-	stick_length              = _base_stick_length              * m_height
+	stick_length              = _base_stick_length              * attrs.stick_len_mult()
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
 	# Reach ROM is a derived property of arm length — the ratios reflect

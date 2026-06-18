@@ -128,6 +128,32 @@ func test_size_charge_tracks_height() -> void:
 				"size_charge must equal height at level %d" % level)
 
 
+func test_stick_len_identity_at_level_two() -> void:
+	# Stick shares height's L2-identity exception (its 1.0 sits at the mesh-native
+	# 5'10", level 2), so medium-Size runs a slightly-longer-than-mesh stick.
+	var lvl2 := PlayerAttributes.new(2, 2, 2, 2)
+	assert_almost_eq(lvl2.stick_len_mult(), 1.0, 0.0001)
+	assert_gt(PlayerAttributes.all_medium().stick_len_mult(), 1.0, "medium Size is 6'0\"")
+
+
+func test_stick_len_gentler_than_height() -> void:
+	# The stick is equipment, not anatomy, so it scales on a gentler curve than
+	# height — every level's deviation from 1.0 is smaller than height's, and the
+	# two stay on the same side of 1.0 (no inversion). Arms/ROM keep full height.
+	for level: int in range(PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX + 1):
+		var a := PlayerAttributes.new(2, 2, level, 2)
+		var stick_dev: float = absf(a.stick_len_mult() - 1.0)
+		var height_dev: float = absf(a.height_mult() - 1.0)
+		assert_lte(stick_dev, height_dev,
+				"stick deviation must not exceed height deviation at level %d" % level)
+		if height_dev > 0.0001:
+			assert_gt(stick_dev, 0.0,
+					"stick should still vary with size at level %d" % level)
+			# Same side of 1.0 as height (a taller player never gets a shorter stick).
+			assert_gt((a.stick_len_mult() - 1.0) * (a.height_mult() - 1.0), 0.0,
+					"stick and height must move together at level %d" % level)
+
+
 func test_arm_bulk_keyed_to_size_not_skill() -> void:
 	# The "jacked" silhouette follows physical frame (Size), not the invisible
 	# Skill stat. A high-Size / low-Skill build should still have thick arms.
