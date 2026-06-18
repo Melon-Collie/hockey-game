@@ -110,6 +110,24 @@ func test_skill_charge_is_inverted() -> void:
 	assert_gt(lo.skill_charge_mult(), hi.skill_charge_mult())
 
 
+func test_height_identity_at_level_two() -> void:
+	# Medium-Size is intentionally 6'0" (taller than the 1.78 m / 5'10" mesh), so
+	# the height multiplier's 1.0 identity sits at level 2 (mesh-native height),
+	# not level 3 — a documented exception to the medium=1.0 convention.
+	var lvl2 := PlayerAttributes.new(2, 2, 2, 2)
+	assert_almost_eq(lvl2.height_mult(), 1.0, 0.0001)
+	assert_gt(PlayerAttributes.all_medium().height_mult(), 1.0, "medium Size is 6'0\", taller than the mesh")
+
+
+func test_size_charge_tracks_height() -> void:
+	# Charge cap must stay a constant fraction of reach/ROM, so size_charge_mult
+	# is coupled 1:1 to height_mult. Lock it so the two can't silently drift.
+	for level: int in range(PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX + 1):
+		var a := PlayerAttributes.new(2, 2, level, 2)
+		assert_almost_eq(a.size_charge_mult(), a.height_mult(), 0.0001,
+				"size_charge must equal height at level %d" % level)
+
+
 func test_arm_bulk_keyed_to_size_not_skill() -> void:
 	# The "jacked" silhouette follows physical frame (Size), not the invisible
 	# Skill stat. A high-Size / low-Skill build should still have thick arms.

@@ -34,6 +34,8 @@ extends RefCounted
 #   1. Add a `_FOO_MULTS: Array[float] = [L1, L2, MEDIUM, L4, L5]` const. MEDIUM
 #      (index 2) should be 1.0; usually L1 < 1.0 < L5 (or "inverted" if a higher
 #      attribute should yield a smaller value, like _SKILL_CHARGE_MULTS).
+#      (Exception: _HEIGHT_MULTS / _SIZE_CHARGE_MULTS put their 1.0 at L2 — the
+#      mesh-native 5'10" — because medium-Size height is intentionally 6'0".)
 #   2. Add an accessor `func foo_mult() -> float` returning
 #      `_lookup(_FOO_MULTS, <relevant attribute field>)`.
 #   3. In the consumer (SkaterController.apply_attributes or
@@ -74,11 +76,12 @@ const _SKILL_SHOT_MULTS: Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 
 # Specialized gameplay — extra effects layered on top of the canonical ones.
 # HEIGHT: every "proportional to actual body height" measurement (arms, stick,
-#   mesh Y-scale, hitbox height, and reach/ROM derived from arm length). On the
-#   1.78 m (5'10") baseline mesh this spans ~5'7" (L1) to ~6'5" (L5) — asymmetric
-#   up, matching hockey's right-skewed height distribution and avoiding an
-#   unrealistically short floor. Narrower than SIZE_WEIGHT because a bigger
-#   player gains mass (3D) faster than height (1D).
+#   mesh Y-scale, hitbox height, and reach/ROM derived from arm length). Heights
+#   on the 1.78 m (5'10") mesh: L1 5'7", L2 5'10", L3 6'0", L4 6'3", L5 6'5" —
+#   a deliberately tall, modern-NHL-skewed league. NOTE the exception to the
+#   medium=1.0 convention: because medium-Size is 6'0", the 1.0 identity (the
+#   mesh-native 5'10") sits at L2, not L3. Narrower than SIZE_WEIGHT because a
+#   bigger player gains mass (3D) faster than height (1D).
 # SIZE_WEIGHT: the ONLY thing that scales body-check force now — via weight_ratio
 #   in skater.gd. Widened to ±18% (heaviest ≈ 1.44× the lightest) for a realistic
 #   small-vs-large mass differential, which also makes checks read clearly
@@ -87,16 +90,18 @@ const _SKILL_SHOT_MULTS: Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 # AGILITY_GLIDE: inverted (lower = less drag during cuts) — the "good edges" feel.
 # SKILL_CHARGE: inverted (lower = slower ramp to max power). High Skill threatens
 #   at close range.
-# SIZE_CHARGE: matches HEIGHT (arm length → ROM). Keeps the charge cap a constant
-#   fraction of each player's reach so all sizes fill the bar with equal effort.
+# SIZE_CHARGE: coupled 1:1 to HEIGHT (arm length → ROM) — keeps the charge cap a
+#   constant fraction of each player's reach so all sizes fill the bar with equal
+#   effort. MUST stay equal to _HEIGHT_MULTS (test_size_charge_tracks_height
+#   locks this), so it inherits the same L2-identity exception.
 # SKILL_BLADE: max_blade_speed — how fast the blade chases the cursor through the
 #   dangle arc and draws back to absorb fast passes. The "hands" lever.
-const _HEIGHT_MULTS:        Array[float] = [0.955, 0.978, 1.00, 1.05,  1.10]
+const _HEIGHT_MULTS:        Array[float] = [0.957, 1.000, 1.029, 1.071, 1.100]
 const _SIZE_WEIGHT_MULTS:   Array[float] = [0.82,  0.91,  1.00, 1.09,  1.18]
 const _AGILITY_CARRY_MULTS: Array[float] = [0.96, 0.98,  1.00, 1.02,  1.04]
 const _AGILITY_GLIDE_MULTS: Array[float] = [1.10, 1.05,  1.00, 0.95,  0.90]
 const _SKILL_CHARGE_MULTS:  Array[float] = [1.12, 1.06,  1.00, 0.94,  0.88]
-const _SIZE_CHARGE_MULTS:   Array[float] = [0.91, 0.955, 1.00, 1.045, 1.09]
+const _SIZE_CHARGE_MULTS:   Array[float] = [0.957, 1.000, 1.029, 1.071, 1.100]
 const _SKILL_BLADE_MULTS:   Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 
 # Visual-only — drive `transform.scale` on body-chain mesh leaves and arm mesh
