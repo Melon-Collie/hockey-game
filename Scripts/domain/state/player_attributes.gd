@@ -74,12 +74,15 @@ const _SKILL_SHOT_MULTS: Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 
 # Specialized gameplay — extra effects layered on top of the canonical ones.
 # HEIGHT: every "proportional to actual body height" measurement (arms, stick,
-#   mesh Y-scale, hitbox height). Tighter than _SIZE_MULTS because real height
-#   range is narrower than mass range.
+#   mesh Y-scale, hitbox height, and reach/ROM derived from arm length). On the
+#   1.78 m (5'10") baseline mesh this spans ~5'7" (L1) to ~6'5" (L5) — asymmetric
+#   up, matching hockey's right-skewed height distribution and avoiding an
+#   unrealistically short floor. Narrower than SIZE_WEIGHT because a bigger
+#   player gains mass (3D) faster than height (1D).
 # SIZE_WEIGHT: the ONLY thing that scales body-check force now — via weight_ratio
-#   in skater.gd. (Was kept narrow to avoid overpowering the old Strength-driven
-#   delivery multiplier; that multiplier is gone, so this is the knob to widen if
-#   checks feel too samey across sizes.)
+#   in skater.gd. Widened to ±18% (heaviest ≈ 1.44× the lightest) for a realistic
+#   small-vs-large mass differential, which also makes checks read clearly
+#   across sizes.
 # AGILITY_CARRY: small boost — agile dekers retain more puck speed.
 # AGILITY_GLIDE: inverted (lower = less drag during cuts) — the "good edges" feel.
 # SKILL_CHARGE: inverted (lower = slower ramp to max power). High Skill threatens
@@ -88,8 +91,8 @@ const _SKILL_SHOT_MULTS: Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 #   fraction of each player's reach so all sizes fill the bar with equal effort.
 # SKILL_BLADE: max_blade_speed — how fast the blade chases the cursor through the
 #   dangle arc and draws back to absorb fast passes. The "hands" lever.
-const _HEIGHT_MULTS:        Array[float] = [0.91, 0.955, 1.00, 1.045, 1.09]
-const _SIZE_WEIGHT_MULTS:   Array[float] = [0.88, 0.94,  1.00, 1.06,  1.12]
+const _HEIGHT_MULTS:        Array[float] = [0.955, 0.978, 1.00, 1.05,  1.10]
+const _SIZE_WEIGHT_MULTS:   Array[float] = [0.82,  0.91,  1.00, 1.09,  1.18]
 const _AGILITY_CARRY_MULTS: Array[float] = [0.96, 0.98,  1.00, 1.02,  1.04]
 const _AGILITY_GLIDE_MULTS: Array[float] = [1.10, 1.05,  1.00, 0.95,  0.90]
 const _SKILL_CHARGE_MULTS:  Array[float] = [1.12, 1.06,  1.00, 0.94,  0.88]
