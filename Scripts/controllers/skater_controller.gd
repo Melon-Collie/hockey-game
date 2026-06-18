@@ -128,7 +128,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Skating Stride Tuning ─────────────────────────────────────────────────────
 # Procedural leg gait — see SkaterSkatingCoordinator. All cosmetic. Forward,
 # backward, and lateral (crossover) gaits blend by direction of travel.
-@export var stride_cadence: float = 1.4          # radians of stride phase per metre skated
+@export var stride_cadence: float = 1.4          # low-speed slope: radians of stride phase per metre skated
+@export var stride_cadence_max_rate: float = 6.5  # rad/s ceiling the cadence saturates toward (caps sprint leg turnover)
 @export var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
 @export var stride_pitch_deg: float = 6.0         # forward push amplitude (fore/aft)
 @export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)

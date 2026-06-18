@@ -53,9 +53,20 @@ func apply(delta: float) -> void:
 	var target_intensity: float = 0.0 if planted else speed_t
 	_intensity = lerpf(_intensity, target_intensity, _controller.stride_intensity_speed * delta)
 
-	# Advance phase by distance travelled so cadence scales with speed and freezes
-	# at a standstill. stride_cadence is radians of phase per metre skated.
-	stride_phase = wrapf(stride_phase + ground_speed * _controller.stride_cadence * delta, 0.0, TAU)
+	# Advance the stride phase. The naive law — rate = ground_speed × cadence — is
+	# linear and uncapped, so leg turnover doubles when speed doubles and the gait
+	# "whirs" at sprint. Real skating instead plateaus its stride *rate* and buys
+	# extra speed with longer strides (more glide + reach per push), which the
+	# speed-scaled amplitude below already delivers. So treat ground_speed × cadence
+	# as the low-speed slope but saturate it through tanh toward a ceiling: near a
+	# standstill the response is ~linear (phase still freezes at zero speed), and by
+	# top speed the cadence has flattened to ~stride_cadence_max_rate. Cruise and
+	# sprint then share almost the same leg turnover — the sprint reads as longer,
+	# more powerful strides, not faster ones.
+	var cadence_ceiling: float = maxf(_controller.stride_cadence_max_rate, 0.001)
+	var linear_rate: float = ground_speed * _controller.stride_cadence
+	var phase_rate: float = cadence_ceiling * tanh(linear_rate / cadence_ceiling)
+	stride_phase = wrapf(stride_phase + phase_rate * delta, 0.0, TAU)
 
 	# Decompose travel into the body frame: -Z is forward, +X is the skater's right.
 	var local_vel: Vector3 = _skater.global_transform.basis.inverse() * vel
