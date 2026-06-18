@@ -27,7 +27,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var sprint_thrust_multiplier: float = 1.20
 @export var sprint_drain_per_sec: float = 0.45         # ~2.2s of full sprint off-puck
 @export var sprint_carry_drain_multiplier: float = 1.6 # carrying drains faster (~1.4s)
-@export var stamina_regen_per_sec: float = 0.30        # ~3.3s to refill from empty
+@export var stamina_regen_per_sec: float = 0.25        # baseline (medium Physical): ~4s to refill, ~2s to the 0.5 sprint-unlock
 @export var sprint_unlock_fraction: float = 0.5        # exhausted → recover to here before sprinting again
 # Turn-rate scale while sprinting (< 1.0 = wider, lazier turns). This is the
 # tradeoff that makes sprint a decision rather than a hold-always button:
@@ -84,13 +84,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var rom_backhand_angle_max_deg: float = 90.0
 @export var rom_forehand_reach_max: float = 0.45
 @export var rom_backhand_reach_max: float = 0.70
-# Cap on how fast the aim target can move in world XZ per second. Smooths fast
-# mouse wraps across the back of the player (avoiding the blade snap that
-# crossing the IK ROM boundary used to produce) and ROM-clamp pops near the
-# reach limit. The IK consumes the smoothed target, so the blade visibly
-# inherits the cap. Tune up if normal aim feels laggy; tune down if wraps still
-# feel snappy.
-@export var max_blade_speed: float = 60.0
+# Cap on how fast the aim target can move in world XZ per second. The IK consumes
+# the smoothed target, so the blade visibly inherits the cap. Originally a high
+# (60 m/s) smoothing cap that only bound on fast mouse wraps; now lowered into
+# the dangle-speed range (~8-14 m/s) so it's the Hands "quick hands" lever —
+# scaled by attrs.hands_blade_mult() in apply_attributes(), it gates how fast you
+# can whip the blade forehand-to-backhand. A medium player's full ROM span is
+# ~1.18 m, so 10 m/s crosses it in ~118 ms; the Hands spread (−15% / +25%) puts
+# that at ~139 ms (L1) to ~94 ms (L5). Tune UP if deliberate aim feels laggy at
+# low Hands; tune DOWN if fast dangling feels the same at L1 and L5. (Live-feel
+# call — can't be measured headless.)
+@export var max_blade_speed: float = 10.0
 
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
@@ -359,15 +363,19 @@ var _base_min_slapper_power:            float = 0.0
 var _base_max_slapper_power:            float = 0.0
 var _base_max_wrister_charge_distance:  float = 0.0
 var _base_max_slapper_charge_time:      float = 0.0
+var _base_max_blade_speed:              float = 0.0
 var _base_puck_carry_speed_multiplier:  float = 0.0
 var _base_stick_length:                 float = 0.0
 var _base_skater_upper_arm_length:      float = 0.0
 var _base_skater_forearm_length:        float = 0.0
 var _base_skater_weight:                float = 0.0
-var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
+var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_collision_radius:      float = 0.0
 var _base_skater_collision_height:      float = 0.0
+var _base_backhand_power_coefficient:   float = 0.0
+var _base_sprint_drain_per_sec:         float = 0.0
+var _base_stamina_regen_per_sec:        float = 0.0
 
 
 # Modulates the controller and skater tuning fields from a PlayerAttributes
@@ -380,13 +388,16 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 		return
 	if not _attr_base_captured:
 		_capture_attribute_bases()
-	var m_speed:    float = attrs.speed_mult()
-	var m_agility:  float = attrs.agility_mult()
-	var m_size:     float = attrs.size_mult()
-	var m_strength: float = attrs.strength_mult()
-	var m_height:   float = attrs.height_mult()
-	thrust    = _base_thrust    * m_speed
+	var m_speed:   float = attrs.speed_mult()
+	var m_agility: float = attrs.agility_mult()
+	var m_size:    float = attrs.size_mult()
+	var m_height:  float = attrs.height_mult()
+	# Speed owns top-end velocity (and through it sprint payoff — sprint
+	# multiplies max_speed). Agility owns acceleration: thrust, plus the
+	# turn/brake/edge handling below. Splitting them makes Speed the
+	# straight-line stat and Agility the quickness/control stat.
 	max_speed = _base_max_speed * m_speed
+	thrust    = _base_thrust    * m_agility
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
 	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
@@ -397,38 +408,61 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# skater shares the same forward > lateral > backward shape; what makes
 	# Slick agile is how cleanly they transition between those directions.
 	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
-	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.agility_carry_mult()
-	# Shot powers use the narrower Strength-Shot multiplier (±15%) rather
-	# than canonical Strength (±25%) so the wrister floor stays playable
-	# for low-Strength shooters. Charge speed uses its own inverted table.
-	var m_shot_power: float = attrs.strength_shot_mult()
-	min_wrister_power = _base_min_wrister_power * m_shot_power
-	max_wrister_power = _base_max_wrister_power * m_shot_power
-	quick_shot_power  = _base_quick_shot_power  * m_shot_power
-	min_slapper_power = _base_min_slapper_power * m_shot_power
-	max_slapper_power = _base_max_slapper_power * m_shot_power
-	# Charge cap scales with both Strength (how easy to load) and Size (so the
-	# cap stays a constant fraction of the player's ROM — small players can
-	# still fill the bar with their own full-reach sweep).
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.strength_charge_mult() * attrs.size_charge_mult()
-	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.strength_charge_mult()
-	# Weight uses the narrower SIZE_WEIGHT spread (±12%) instead of canonical
-	# Size (±18%) so the weight_ratio in the check formula doesn't dominate
-	# the Strength-driven body_check_transfer. Brace and hitbox stay on
-	# canonical Size.
-	skater.weight                       = _base_skater_weight                  * attrs.size_weight_mult()
-	skater.body_check_transfer          = _base_skater_body_check_transfer     * m_strength
-	# Inverse: brace_resistance is a coefficient on incoming transfer when
-	# the victim is braced — *lower* = better resistance. A bigger-Size
-	# player should resist knockback better, so the multiplier flips.
-	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * (2.0 - m_size)
-	# Arms and stick scale with actual height (the dedicated height_mult,
+	# Hands owns the puck game: blade speed (how fast the blade chases the cursor
+	# through the dangle arc and draws back to absorb fast passes), carry speed
+	# (how little the puck slows you), and the backhand finish below.
+	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.hands_carry_mult()
+	max_blade_speed             = _base_max_blade_speed             * attrs.hands_blade_mult()
+	# Backhand coefficient scales UP toward 1.0 with Hands — a great backhand
+	# barely drops off (the in-tight finish that separates the dangler from the
+	# sniper). Wrister-only today; the slapshot path applies no backhand penalty
+	# (see ShotMechanics.release_slapper).
+	backhand_power_coefficient  = _base_backhand_power_coefficient  * attrs.hands_backhand_mult()
+	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
+	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_shot
+	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
+	# min_wrister is held at baseline too so the charge curve starts at the snap
+	# value and only climbs (no "winding up made it weaker" dead zone for low Shot).
+	# So Shot = "what a charge buys you, and how fast you can charge it."
+	var m_shot_ceil: float = attrs.shot_power_mult()
+	min_wrister_power = _base_min_wrister_power              # baseline floor (= snap)
+	max_wrister_power = _base_max_wrister_power * m_shot_ceil
+	quick_shot_power  = _base_quick_shot_power               # baseline — also the pass speed
+	min_slapper_power = _base_min_slapper_power * m_shot_ceil
+	max_slapper_power = _base_max_slapper_power * m_shot_ceil
+	# Wrister charge effort is WIDER than the slapper's (low Shot must drag far to
+	# reach its charged ceiling) and stays coupled to Size so the cap tracks reach.
+	# Slapper wind-up time keeps the gentler shot_charge curve.
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.shot_wrister_charge_mult() * attrs.size_charge_mult()
+	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
+	# Body checks read two attributes on different axes (so they compose, not
+	# double-count): Size sets `weight` (the weight_ratio — a heavy player is hard
+	# to MOVE and lands a heavier hit), Physical sets the transfer/brace
+	# coefficients (how hard you DELIVER a check, and how hard you are to PUT
+	# DOWN). Brace is inverse: lower = better resistance.
+	skater.weight                      = _base_skater_weight                  * attrs.size_weight_mult()
+	skater.body_check_transfer         = _base_skater_body_check_transfer     * attrs.physical_check_mult()
+	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * attrs.physical_brace_mult()
+	# Physical conditions the sprint engine on two SEPARATE curves: a gentle drain
+	# scale (sprint duration stays usable at every level) and a steep, asymmetric
+	# regen scale (recovery). A low-Physical player sprints nearly as long but is
+	# punished hard on recovery — gas the bar out and a full refill runs ~9 s
+	# (≈4.5 s to the half-bar sprint-unlock) vs ~3 s for high Physical. The cached
+	# stamina config is dropped below so the next tick rebuilds from these rates.
+	sprint_drain_per_sec  = _base_sprint_drain_per_sec  / attrs.physical_drain_mult()
+	stamina_regen_per_sec = _base_stamina_regen_per_sec * attrs.physical_regen_mult()
+	# Arms scale with actual height (the dedicated height_mult,
 	# tighter than the gameplay size_mult) — keeps proportions realistic so
-	# a taller player has a correspondingly longer arm and stick rather than
-	# looking awkward with a baseline-length stick. update_stick_mesh() and
+	# a taller player has correspondingly longer arms (and ROM) rather than
+	# looking awkward with baseline-length limbs. The stick is equipment, not
+		# anatomy, so it rides a GENTLER curve (stick_len_mult, ~0.65x the height
+		# deviation): real played stick lengths track height only loosely, so a
+		# small player keeps a near-full-size stick. Total blade reach is still
+		# arm-driven ROM + stick (top_hand_ik FAR regime), so the eased stick is
+		# not a proportionally eased reach. update_stick_mesh() and
 	# the arm bone wrappers recompute visuals from these every frame, so no
 	# separate visual pass is needed.
-	stick_length              = _base_stick_length              * m_height
+	stick_length              = _base_stick_length              * attrs.stick_len_mult()
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
 	# Reach ROM is a derived property of arm length — the ratios reflect
@@ -455,6 +489,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	_ik.invalidate_configs()
 	_cached_move_cfg = null
 	_cached_block_move_cfg = null
+	_cached_stamina_cfg = null
 	skater.apply_appearance(attrs)
 
 
@@ -472,6 +507,10 @@ func _capture_attribute_bases() -> void:
 	_base_max_slapper_power            = max_slapper_power
 	_base_max_wrister_charge_distance  = max_wrister_charge_distance
 	_base_max_slapper_charge_time      = max_slapper_charge_time
+	_base_max_blade_speed              = max_blade_speed
+	_base_backhand_power_coefficient   = backhand_power_coefficient
+	_base_sprint_drain_per_sec         = sprint_drain_per_sec
+	_base_stamina_regen_per_sec        = stamina_regen_per_sec
 	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
 	_base_stick_length                 = stick_length
 	_base_skater_upper_arm_length      = skater.upper_arm_length

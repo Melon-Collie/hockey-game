@@ -23,6 +23,12 @@ var _controller: SkaterController = null  # tunables, _do_release, _game_state, 
 # ROM-boundary pops swing at most max_blade_speed * delta per tick.
 var _smoothed_aim_world: Vector3 = Vector3.ZERO
 var _smoothed_aim_initialized: bool = false
+# Skater world position (XZ) at the previous aim-smoothing tick. The blade-speed
+# cap is applied RELATIVE to the skater: each tick the smoothed target is first
+# carried along by the skater's own translation, so skating velocity doesn't eat
+# the dangle-speed budget. (A pure world-space cap makes the blade drag while
+# skating, and lag the cursor forever once skating speed exceeds the cap.)
+var _prev_skater_pos: Vector3 = Vector3.ZERO
 
 # ── Cached Solver Objects ─────────────────────────────────────────────────────
 # The IK configs read only controller @exports, which change exclusively in
@@ -52,6 +58,11 @@ func invalidate_configs() -> void:
 func reset_aim_smoothing(target_world: Vector3) -> void:
 	target_world.y = 0.0
 	_smoothed_aim_world = target_world
+	# Anchor the translation baseline to the (already-snapped) server position so
+	# the per-tick carry-along starts deterministically from the replay baseline.
+	var sp: Vector3 = _skater.global_position
+	sp.y = 0.0
+	_prev_skater_pos = sp
 	_smoothed_aim_initialized = true
 
 # ── Blade From Mouse (Top-Hand IK) ────────────────────────────────────────────
@@ -61,12 +72,22 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	var mouse_world: Vector3 = input.mouse_world_pos
 	mouse_world.y = 0.0
 
-	# Speed-cap the aim target: slew the smoothed target toward the raw mouse
-	# by at most max_blade_speed * delta. The IK consumes the smoothed target,
-	# so the blade can't traverse more than the cap distance per tick.
+	var skater_pos: Vector3 = _skater.global_position
+	skater_pos.y = 0.0
+	# Speed-cap the aim target RELATIVE TO THE SKATER. max_blade_speed bounds how
+	# fast the blade traverses its ROM in front of the player (dangle speed). The
+	# cursor's WORLD position drifts at the skater's skating velocity (the camera
+	# follows the player), so capping in world space would bleed skating speed into
+	# the budget — the blade would drag while skating and, once skating speed
+	# exceeds the cap, never catch the cursor. So carry the smoothed target along
+	# with the skater's translation first, then cap only the residual aim change
+	# relative to the player. The IK consumes the smoothed target.
 	if not _smoothed_aim_initialized:
 		_smoothed_aim_world = mouse_world
+		_prev_skater_pos = skater_pos
 		_smoothed_aim_initialized = true
+	_smoothed_aim_world += skater_pos - _prev_skater_pos
+	_prev_skater_pos = skater_pos
 	var step: Vector3 = mouse_world - _smoothed_aim_world
 	step.y = 0.0
 	var max_step: float = _controller.max_blade_speed * delta
