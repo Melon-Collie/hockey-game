@@ -1732,8 +1732,11 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		if record != null:
 			record.controller.on_puck_released_network()
 		var shot_rtt_ms: float = NetworkManager.get_latest_rtt_ms()
-		puck_controller.notify_local_release(direction, power, shot_rtt_ms, record.skater.velocity)
-		NetworkManager.send_puck_release(direction, power, is_slapper)
+		# notify_local_release returns the exact un-advanced release point (the
+		# client's predicted blade contact). Ship it so the host fires the
+		# authoritative puck from there instead of a stale buffer rewind.
+		var origin: Vector3 = puck_controller.notify_local_release(direction, power, shot_rtt_ms, record.skater.velocity)
+		NetworkManager.send_puck_release(direction, power, is_slapper, origin)
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:
@@ -1746,20 +1749,21 @@ func _on_one_timer_release_requested(direction: Vector3, power: float, skater: S
 		_record_replay_audio_event("shot", puck.get_puck_position(), power, {"is_slapper": true})
 	if not NetworkManager.is_host:
 		# Client path: seed local puck prediction, then tell the host.
+		var origin: Vector3 = puck.get_puck_position()
 		if puck_controller != null:
 			var record := _registry.get_local()
 			if record != null:
 				var rtt_ms: float = NetworkManager.get_latest_rtt_ms()
-				puck_controller.notify_local_release(direction, power, rtt_ms, record.skater.velocity)
-		NetworkManager.send_one_timer_release(direction, power)
+				origin = puck_controller.notify_local_release(direction, power, rtt_ms, record.skater.velocity)
+		NetworkManager.send_one_timer_release(direction, power, origin)
 		return
 	# Host's own one-timer: shooter is local, no client-view rewind needed.
-	# rtt_ms=0 short-circuits the goalie rewind branch entirely.
-	_host_release_one_timer(direction, power, skater, 0.0, 0.0, 0.0)
+	# rtt_ms=0 short-circuits the goalie rewind branch entirely; ZERO origin is unused.
+	_host_release_one_timer(direction, power, skater, 0.0, 0.0, 0.0, Vector3.ZERO)
 
 
 func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
-		host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+		host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
 	if not NetworkManager.is_host or puck == null or _registry == null:
 		return
 	var record: PlayerRecord = _registry.get_record(peer_id)
@@ -1802,11 +1806,11 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	var shot_pos: Vector3 = puck.get_puck_position()
 	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
 	_record_replay_audio_event("shot", shot_pos, safe_power, {"is_slapper": true})
-	_host_release_one_timer(safe_direction, safe_power, record.skater, host_timestamp, safe_rtt_ms, interp_delay_ms)
+	_host_release_one_timer(safe_direction, safe_power, record.skater, host_timestamp, safe_rtt_ms, interp_delay_ms, client_origin)
 
 
 func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
-		host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+		host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
 	var pid: int = _registry.resolve_peer_id(skater)
 	# One-timers skip the normal pickup flow, so the shooter is never recorded
 	# in the carrier history. Record them as a deflection (the shooter redirects
@@ -1828,17 +1832,15 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	var saved_goalie_rotations: Array[float] = []
 	var rewound_origin: Vector3 = Vector3.ZERO
 	var have_rewound_origin: bool = false
+	if rtt_ms > 0.0 and skater != null:
+		# Shot ORIGIN (SELF view) — see on_remote_puck_release for the full
+		# rationale. Fire the one-timer from the redirect point the client sent,
+		# clamped to the shooter's stick reach, not from where the blade drifted
+		# to during RPC transit.
+		rewound_origin = ShotReleaseRules.clamp_origin(client_origin, skater.global_position)
+		have_rewound_origin = true
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() and rtt_ms > 0.0 \
 			and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
-		# Shot ORIGIN rewind (SELF view) — see on_remote_puck_release for the full
-		# rationale. Fire the one-timer from the shooter's blade at the redirect
-		# moment, not where it drifted to during the RPC transit.
-		var blade_snap: WorldSnapshot = _state_buffer_manager.get_state_at(
-				LagCompRewind.self_view_time(host_timestamp))
-		var shooter_state: SkaterNetworkState = blade_snap.get_skater_state(pid)
-		if shooter_state != null:
-			rewound_origin = shooter_state.blade_contact_world
-			have_rewound_origin = true
 		# Goalie was REMOTE-view from the shooter — clients render the goalie
 		# from buffered host snapshots at host_time - interp_delay, so the
 		# shooter saw the goalie at that earlier moment. Rewind to that snapshot
@@ -1868,7 +1870,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 			goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
 
 
-func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
 	# Sender must be the current carrier on the host. Without this check, any
 	# peer can send release_puck with arbitrary direction/power and the host
 	# obediently triggers puck.release on whoever is actually carrying — the
@@ -1931,26 +1933,26 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 		var saved_goalie_rotations: Array[float] = []
 		var rewound_origin: Vector3 = Vector3.ZERO
 		var have_rewound_origin: bool = false
+		var origin_anchor: PlayerRecord = _registry.get_record(shooter_peer_id)
+		if rtt_ms > 0.0 and origin_anchor != null and origin_anchor.skater != null:
+			# Shot ORIGIN (SELF view): the shooter released from their locally-predicted
+			# blade and SENT that exact point in the RPC. The host can't reconstruct it
+			# itself — the release pose lands in the state buffer ~INPUT_LEAD_SEC in the
+			# FUTURE relative to this immediate release RPC, so a self-view buffer rewind
+			# reads the stale pre-release blade (the bug this replaces). Trust the
+			# client's point but VALIDATE it: clamp to the shooter's stick reach of their
+			# host-live body (stable in the RPC window, unlike the swinging blade) so a
+			# forged origin can't fire from across the rink. Composes with the advance
+			# below to start the host trajectory where the client predicted it — keeping
+			# the three-zone reconcile AND the goalie-rebound geometry aligned, which is
+			# what matters most on close shots.
+			rewound_origin = ShotReleaseRules.clamp_origin(client_origin, origin_anchor.skater.global_position)
+			have_rewound_origin = true
 		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0 \
 				and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
-			# Shot ORIGIN rewind (SELF view): the shooter released from their
-			# locally-predicted blade at host_timestamp, but puck.release() snaps to
-			# the carrier's blade as it has drifted during the RPC's ~RTT/2 transit.
-			# Rewind the shooter's own blade so the puck fires from where they aimed —
-			# composes with the advance below to start the host trajectory where the
-			# client predicted it, so the three-zone reconcile stops correcting it
-			# mid-flight. blade_contact_world is captured + interpolated per tick (same
-			# field the pickup/poke/stick-lift resolvers rewind).
-			var blade_snap: WorldSnapshot = _state_buffer_manager.get_state_at(
-					LagCompRewind.self_view_time(host_timestamp))
-			var shooter_state: SkaterNetworkState = blade_snap.get_skater_state(shooter_peer_id)
-			if shooter_state != null:
-				rewound_origin = shooter_state.blade_contact_world
-				have_rewound_origin = true
-			# Goalie is REMOTE-view from the shooter — same derivation as the
-			# one-timer rewind above. The shooter saw the goalie at
-			# host_time - interp_delay (the buffered render path); rewind to
-			# that snapshot for fair puck/goalie geometry at the release moment.
+			# Goalie is REMOTE-view from the shooter — the shooter saw the goalie at
+			# host_time - interp_delay (the buffered render path); rewind to that
+			# snapshot for fair puck/goalie geometry at the release moment.
 			var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 			var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 			for gc: GoalieController in goalie_controllers:
