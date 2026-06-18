@@ -114,13 +114,21 @@ func apply(delta: float) -> void:
 		fb_w = absf(fwd) / denom
 		lr_w = absf(lat) / denom
 
-	# Asymmetric stroke: warp the phase before sampling the sine so the push and
-	# recovery halves aren't mirror images — a snappier drive flowing into a longer
-	# glide reads as skating rather than a metronome tick-tock. stride_skew in
-	# [0, 1); 0 collapses to the pure sine. Both legs and every amplitude sample
-	# this same warped `s`, so they stay 180° opposed and phase-coherent.
-	var warped_phase: float = stride_phase - _controller.stride_skew * sin(stride_phase)
-	var s: float = sin(warped_phase)
+	# Asymmetric stroke: warp the phase before sampling the sine so each leg's swing
+	# eases out to the push and snaps back, reading as skating rather than a
+	# metronome tick-tock. The two legs are half a cycle apart, so the right leg
+	# samples the SAME warp shifted by PI — `s_opp`, not a negated `s`. For a pure
+	# sine sin(θ+PI) == -sin(θ), but once warped that identity breaks: negating
+	# flips the skew, so `-s` would give the right leg the opposite (load-fast /
+	# release-slow) asymmetry — one leg snappy, one not. Sampling θ+PI gives both
+	# legs the identical slow-load / fast-release stroke. stride_skew in [0, 1);
+	# 0 collapses both back to the pure sine (s_opp == -s). The fore/aft roll below
+	# stays in-phase (`s` for both legs) on purpose — it's the shared weight-shift
+	# edge rock, not a per-leg stroke.
+	var skew: float = _controller.stride_skew
+	var s: float = sin(stride_phase - skew * sin(stride_phase))
+	var phase_opp: float = stride_phase + PI
+	var s_opp: float = sin(phase_opp - skew * sin(phase_opp))
 	var roll_amp: float = deg_to_rad(_controller.stride_roll_deg) * _intensity * push_scale
 
 	var l_pitch: float = 0.0
@@ -138,7 +146,7 @@ func apply(delta: float) -> void:
 	var push_dir: float = 1.0 if fwd >= 0.0 else -1.0
 	var push_amp: float = deg_to_rad(push_deg) * _intensity * push_dir * push_scale
 	l_pitch += fb_w * s * push_amp
-	r_pitch += fb_w * -s * push_amp
+	r_pitch += fb_w * s_opp * push_amp
 	l_roll += fb_w * s * roll_amp
 	r_roll += fb_w * s * roll_amp
 
@@ -148,7 +156,7 @@ func apply(delta: float) -> void:
 	var lean: float = signf(lat) * deg_to_rad(_controller.crossover_lean_deg) * _intensity
 	var scissor: float = deg_to_rad(_controller.crossover_scissor_deg) * _intensity * push_scale
 	l_roll += lr_w * (lean + s * scissor)
-	r_roll += lr_w * (lean - s * scissor)
+	r_roll += lr_w * (lean + s_opp * scissor)
 
 	# Knee flex. Each knee tucks on the recovery half of its stroke and extends on
 	# the push, 180° out of phase between legs. Direction-agnostic — the recovery
@@ -156,6 +164,6 @@ func apply(delta: float) -> void:
 	# shin folds back under the body (flip stride_knee_deg's sign to invert).
 	var knee_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale
 	var l_knee: float = -knee_amp * (0.5 - 0.5 * s)
-	var r_knee: float = -knee_amp * (0.5 + 0.5 * s)
+	var r_knee: float = -knee_amp * (0.5 - 0.5 * s_opp)
 
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
