@@ -10,7 +10,9 @@ signal handedness_changed(is_left: bool)
 signal preferred_color_changed(color_slot: int)
 signal attributes_changed(attrs: PlayerAttributes)
 
-const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Size", "Skill"]
+# Order must match PlayerAttributes.Attribute (Speed, Agility, Hands, Size,
+# Physical, Shot) — _pending_levels is indexed by that enum.
+const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Hands", "Size", "Physical", "Shot"]
 
 # Controls — kept as refs so Cancel can restore them from the snapshot.
 var _name_field: LineEdit = null
@@ -31,7 +33,7 @@ var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
-# Four attribute levels indexed by PlayerAttributes.Attribute (SPEED..SKILL).
+# Six attribute levels indexed by PlayerAttributes.Attribute (SPEED..SHOT).
 var _pending_levels: Array[int] = []
 var _name_valid: bool = true
 var _number_valid: bool = true
@@ -447,8 +449,10 @@ func _apply() -> void:
 		var new_attrs := PlayerAttributes.from_levels(
 				_pending_levels[PlayerAttributes.Attribute.SPEED],
 				_pending_levels[PlayerAttributes.Attribute.AGILITY],
+				_pending_levels[PlayerAttributes.Attribute.HANDS],
 				_pending_levels[PlayerAttributes.Attribute.SIZE],
-				_pending_levels[PlayerAttributes.Attribute.SKILL])
+				_pending_levels[PlayerAttributes.Attribute.PHYSICAL],
+				_pending_levels[PlayerAttributes.Attribute.SHOT])
 		PlayerPrefs.set_player_attributes(new_attrs)
 		# Update NetworkManager._peer_attributes[1] so the next spawn picks
 		# the new values up. The emitted signal also re-applies the multipliers
@@ -500,7 +504,7 @@ func open() -> void:
 	if saved_slot < 0:
 		saved_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
 	var a: PlayerAttributes = PlayerPrefs.get_player_attributes()
-	var levels: Array[int] = [a.speed, a.agility, a.size, a.skill]
+	var levels: Array[int] = [a.speed, a.agility, a.hands, a.size, a.physical, a.shot]
 	_snapshot = {
 		"name": PlayerPrefs.player_name,
 		"number": PlayerPrefs.jersey_number,

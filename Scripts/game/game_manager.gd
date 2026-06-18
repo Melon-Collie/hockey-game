@@ -597,8 +597,9 @@ func sync_existing_players(player_data: Array) -> void:
 		var p_name: String = entry[7] if entry.size() > 7 else "Player"
 		var p_number: int = entry[8] if entry.size() > 8 else 10
 		var attrs: PlayerAttributes
-		if entry.size() > 12:
-			attrs = PlayerAttributes.new(int(entry[9]), int(entry[10]), int(entry[11]), int(entry[12]))
+		if entry.size() > 14:
+			attrs = PlayerAttributes.new(int(entry[9]), int(entry[10]), int(entry[11]),
+					int(entry[12]), int(entry[13]), int(entry[14]))
 		else:
 			attrs = PlayerAttributes.all_medium()
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
@@ -2691,7 +2692,7 @@ func _collect_existing_player_data() -> Array[Array]:
 		existing.append([peer_id, r.team_slot, r.team.team_id,
 				r.jersey_color, r.helmet_color, r.pants_color,
 				r.is_left_handed, r.player_name, r.jersey_number,
-				attrs.speed, attrs.agility, attrs.size, attrs.skill])
+				attrs.speed, attrs.agility, attrs.hands, attrs.size, attrs.physical, attrs.shot])
 	return existing
 
 

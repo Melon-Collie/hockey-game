@@ -18,8 +18,13 @@ extends RefCounted
 # so the local-axis mapping doesn't match the simple rule. The feet are
 # small and mostly hidden under the skates, so dropping them from the
 # rig doesn't read.
+# Torso/head read Size (frame/mass); shoulders read Physical (the grinder yoke),
+# so a small-but-strong build reads broad-shouldered and a big-but-soft one
+# narrow. Both groups still take the height multiplier on Y.
 const _TORSO_PATHS: Array[String] = [
 	"UpperBody/UpperBodyMesh",
+]
+const _SHOULDER_PATHS: Array[String] = [
 	"UpperBody/ShoulderL", "UpperBody/ShoulderR",
 ]
 const _HELMET_PATH: String = "UpperBody/Helmet"
@@ -50,23 +55,28 @@ func apply(attrs: PlayerAttributes) -> void:
 		return
 	if not _captured:
 		_capture_baselines()
-	var m_height: float = attrs.height_mult()
-	var m_torso:  float = attrs.torso_bulk_mult()
-	var m_head:   float = attrs.head_bulk_mult()
-	var m_thigh:  float = attrs.thigh_mult()
-	var m_calf:   float = attrs.calf_mult()
+	var m_height:   float = attrs.height_mult()
+	var m_torso:    float = attrs.torso_bulk_mult()
+	var m_shoulder: float = attrs.shoulder_bulk_mult()
+	var m_head:     float = attrs.head_bulk_mult()
+	var m_thigh:    float = attrs.thigh_mult()
+	var m_calf:     float = attrs.calf_mult()
 	for path: String in _TORSO_PATHS:
 		_apply_scale(path, m_torso, m_height, m_torso)
+	for path: String in _SHOULDER_PATHS:
+		_apply_scale(path, m_shoulder, m_height, m_shoulder)
 	_apply_scale(_HELMET_PATH, m_head, m_height, m_head)
 	for path: String in _THIGH_PATHS:
 		_apply_scale(path, m_thigh, m_height, m_thigh)
 	for path: String in _CALF_PATHS:
 		_apply_scale(path, m_calf, m_height, m_calf)
-	_apply_arm_thickness(attrs.arm_bulk_mult())
+	_apply_arm_thickness(attrs.forearm_bulk_mult(), attrs.upper_arm_bulk_mult())
 
 
 func _capture_baselines() -> void:
 	for path: String in _TORSO_PATHS:
+		_capture_scale(path)
+	for path: String in _SHOULDER_PATHS:
 		_capture_scale(path)
 	_capture_scale(_HELMET_PATH)
 	for path: String in _THIGH_PATHS:
@@ -99,18 +109,21 @@ func _apply_scale(path: String, x_mult: float, y_mult: float, z_mult: float) -> 
 	node.scale = Vector3(base.x * x_mult, base.y * y_mult, base.z * z_mult)
 
 
-func _apply_arm_thickness(mult: float) -> void:
-	var new_radius: float = _base_arm_radius * mult
-	var new_elbow:  float = _base_elbow_sphere_radius * mult
-	var new_hand:   float = _base_hand_sphere_radius  * mult
-	_set_bone_radius(_skater.upper_arm_mesh,        new_radius)
-	_set_bone_radius(_skater.forearm_mesh,          new_radius)
-	_set_bone_radius(_skater.bottom_upper_arm_mesh, new_radius)
-	_set_bone_radius(_skater.bottom_forearm_mesh,   new_radius)
-	_set_sphere_radius(_skater.top_elbow_sphere,    new_elbow)
-	_set_sphere_radius(_skater.bottom_elbow_sphere, new_elbow)
-	_set_sphere_radius(_skater.top_hand_sphere,     new_hand)
-	_set_sphere_radius(_skater.bottom_hand_sphere,  new_hand)
+# Arm bulk is split at the elbow so two stats read off one limb: Hands drives the
+# forearms (+ the hand spheres on that side), Shot drives the upper arms (+ the
+# elbow joints on that side). A thick-forearm / normal-bicep reads as "hands";
+# the reverse reads as "shot".
+func _apply_arm_thickness(forearm_mult: float, upper_mult: float) -> void:
+	var fore_radius:  float = _base_arm_radius * forearm_mult
+	var upper_radius: float = _base_arm_radius * upper_mult
+	_set_bone_radius(_skater.upper_arm_mesh,        upper_radius)
+	_set_bone_radius(_skater.bottom_upper_arm_mesh, upper_radius)
+	_set_bone_radius(_skater.forearm_mesh,          fore_radius)
+	_set_bone_radius(_skater.bottom_forearm_mesh,   fore_radius)
+	_set_sphere_radius(_skater.top_elbow_sphere,    _base_elbow_sphere_radius * upper_mult)
+	_set_sphere_radius(_skater.bottom_elbow_sphere, _base_elbow_sphere_radius * upper_mult)
+	_set_sphere_radius(_skater.top_hand_sphere,     _base_hand_sphere_radius * forearm_mult)
+	_set_sphere_radius(_skater.bottom_hand_sphere,  _base_hand_sphere_radius * forearm_mult)
 
 
 func _set_bone_radius(bone: Node3D, radius: float) -> void:

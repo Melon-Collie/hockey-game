@@ -9,14 +9,15 @@ class_name BotIdentityRegistry
 #   {
 #     "identities": [
 #       { "name": "Wayne Gretzky", "number": 99, "is_left_handed": false,
-#         "speed": 3, "agility": 3, "size": 2, "skill": 5 },
+#         "speed": 3, "agility": 5, "hands": 5, "size": 2, "physical": 1, "shot": 5 },
 #       ...
 #     ]
 #   }
 #
 # Attribute fields are optional; missing values default to LEVEL_MEDIUM so
-# older identity files keep loading. Out-of-range values are clamped via
-# PlayerAttributes.new() so a typo in JSON doesn't crash the game.
+# older identity files keep loading. A legacy four-attribute file (with the old
+# "skill"/"strength" axis) seeds both Shot and Hands from it. Out-of-range values
+# are clamped via PlayerAttributes.new() so a typo in JSON doesn't crash the game.
 #
 # A well-formed file with zero entries is valid — the caller treats an empty
 # pool as "use the old deterministic defaults".
@@ -65,8 +66,10 @@ static func fallback_identity(slot_key: int) -> Dictionary:
 		"is_left_handed": (slot_key % 3) % 2 == 1,
 		"speed":          PlayerAttributes.LEVEL_MEDIUM,
 		"agility":        PlayerAttributes.LEVEL_MEDIUM,
+		"hands":          PlayerAttributes.LEVEL_MEDIUM,
 		"size":           PlayerAttributes.LEVEL_MEDIUM,
-		"skill":          PlayerAttributes.LEVEL_MEDIUM,
+		"physical":       PlayerAttributes.LEVEL_MEDIUM,
+		"shot":           PlayerAttributes.LEVEL_MEDIUM,
 	}
 
 
@@ -84,14 +87,18 @@ static func _try_load_from(path: String) -> bool:
 		var entry_name: String = entry.get("name", "")
 		if entry_name.is_empty():
 			continue
+		# A legacy four-attribute file carries "skill" (or the older "strength");
+		# seed both Shot and Hands from it so old user:// copies still load.
+		var legacy_skill: int = int(entry.get("skill", entry.get("strength", PlayerAttributes.LEVEL_MEDIUM)))
 		_identities.append({
 			"name":           entry_name,
 			"number":         int(entry.get("number", 0)),
 			"is_left_handed": bool(entry.get("is_left_handed", false)),
-			"speed":          int(entry.get("speed",   PlayerAttributes.LEVEL_MEDIUM)),
-			"agility":        int(entry.get("agility", PlayerAttributes.LEVEL_MEDIUM)),
-			"size":           int(entry.get("size",    PlayerAttributes.LEVEL_MEDIUM)),
-			# Accept the legacy "strength" key so an older user:// copy still loads.
-			"skill":          int(entry.get("skill",   entry.get("strength", PlayerAttributes.LEVEL_MEDIUM))),
+			"speed":          int(entry.get("speed",    PlayerAttributes.LEVEL_MEDIUM)),
+			"agility":        int(entry.get("agility",  PlayerAttributes.LEVEL_MEDIUM)),
+			"hands":          int(entry.get("hands",    legacy_skill)),
+			"size":           int(entry.get("size",     PlayerAttributes.LEVEL_MEDIUM)),
+			"physical":       int(entry.get("physical", PlayerAttributes.LEVEL_MEDIUM)),
+			"shot":           int(entry.get("shot",     legacy_skill)),
 		})
 	return true

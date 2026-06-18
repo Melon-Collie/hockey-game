@@ -23,7 +23,9 @@ const VERSION: String = "dev"
 #     s8 ±1.27 m range); puck block grew 12 -> 13 bytes.
 # v5: sprint/stamina — skater wire block 37->38 bytes (u8 stamina + sprint_locked
 #     flag bit); input flags reuse the previously-reserved bit [4] for sprint_held.
-const PROTOCOL_VERSION: int = 5
+# v6: attributes 4 -> 6 (Speed/Agility/Hands/Size/Physical/Shot) — request_join /
+#     spawn_remote_skater now carry six int levels instead of four.
+const PROTOCOL_VERSION: int = 6
 
 const RELEASE_TAG: String = "latest"
 const REPO: String = "Melon-Collie/mitts"

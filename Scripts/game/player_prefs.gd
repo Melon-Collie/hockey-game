@@ -150,10 +150,12 @@ var preferred_color_slot: int = -1  # team color preset slot index; -1 → use t
 # Per-player attribute levels on a 1..5 scale (3 = medium = baseline). Default
 # to medium across the board so a fresh install plays identically to the
 # pre-attributes baseline. Builds are point-buy (see PlayerAttributes.BUDGET).
-var attr_speed:   int = PlayerAttributes.LEVEL_MEDIUM
-var attr_agility: int = PlayerAttributes.LEVEL_MEDIUM
-var attr_size:    int = PlayerAttributes.LEVEL_MEDIUM
-var attr_skill:   int = PlayerAttributes.LEVEL_MEDIUM
+var attr_speed:    int = PlayerAttributes.LEVEL_MEDIUM
+var attr_agility:  int = PlayerAttributes.LEVEL_MEDIUM
+var attr_hands:    int = PlayerAttributes.LEVEL_MEDIUM
+var attr_size:     int = PlayerAttributes.LEVEL_MEDIUM
+var attr_physical: int = PlayerAttributes.LEVEL_MEDIUM
+var attr_shot:     int = PlayerAttributes.LEVEL_MEDIUM
 var master_volume: float = 0.5
 var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
@@ -323,13 +325,15 @@ func save() -> void:
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
-	cfg.set_value("player", "attr_speed",   attr_speed)
-	cfg.set_value("player", "attr_agility", attr_agility)
-	cfg.set_value("player", "attr_size",    attr_size)
-	cfg.set_value("player", "attr_skill",   attr_skill)
-	# Marks the values above as already on the 1..5 / Skill-renamed scale so
-	# _load() doesn't re-run the legacy 1..3 migration on them.
-	cfg.set_value("player", "attr_scale_version", 2)
+	cfg.set_value("player", "attr_speed",    attr_speed)
+	cfg.set_value("player", "attr_agility",  attr_agility)
+	cfg.set_value("player", "attr_hands",    attr_hands)
+	cfg.set_value("player", "attr_size",     attr_size)
+	cfg.set_value("player", "attr_physical", attr_physical)
+	cfg.set_value("player", "attr_shot",     attr_shot)
+	# Marks the values above as already on the six-attribute scale so _load()
+	# doesn't re-run the 1..3 → 1..5 or the four → six migration on them.
+	cfg.set_value("player", "attr_scale_version", 3)
 	cfg.set_value("audio", "master_volume", master_volume)
 	cfg.set_value("audio", "sfx_volume", sfx_volume)
 	cfg.set_value("audio", "ui_volume", ui_volume)
@@ -679,19 +683,36 @@ func _load() -> void:
 		# key is ignored — hard break, no migration. -1 falls back to the default at
 		# next lobby join.
 		preferred_color_slot = int(cfg.get_value("player", "preferred_color_slot", -1))
-		if int(cfg.get_value("player", "attr_scale_version", 1)) >= 2:
-			attr_speed   = _clamp_attr(int(cfg.get_value("player", "attr_speed",   PlayerAttributes.LEVEL_MEDIUM)))
-			attr_agility = _clamp_attr(int(cfg.get_value("player", "attr_agility", PlayerAttributes.LEVEL_MEDIUM)))
-			attr_size    = _clamp_attr(int(cfg.get_value("player", "attr_size",    PlayerAttributes.LEVEL_MEDIUM)))
-			attr_skill   = _clamp_attr(int(cfg.get_value("player", "attr_skill",   PlayerAttributes.LEVEL_MEDIUM)))
+		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
+		if attr_ver >= 3:
+			attr_speed    = _clamp_attr(int(cfg.get_value("player", "attr_speed",    PlayerAttributes.LEVEL_MEDIUM)))
+			attr_agility  = _clamp_attr(int(cfg.get_value("player", "attr_agility",  PlayerAttributes.LEVEL_MEDIUM)))
+			attr_hands    = _clamp_attr(int(cfg.get_value("player", "attr_hands",    PlayerAttributes.LEVEL_MEDIUM)))
+			attr_size     = _clamp_attr(int(cfg.get_value("player", "attr_size",     PlayerAttributes.LEVEL_MEDIUM)))
+			attr_physical = _clamp_attr(int(cfg.get_value("player", "attr_physical", PlayerAttributes.LEVEL_MEDIUM)))
+			attr_shot     = _clamp_attr(int(cfg.get_value("player", "attr_shot",     PlayerAttributes.LEVEL_MEDIUM)))
 		else:
-			# Legacy 1..3 scale (medium = 2) → 1..5 (medium = 3) via new = 2·old − 1,
-			# and the renamed Strength → Skill axis. Endpoints map cleanly:
-			# old-1 → 1, old-2 → 3, old-3 → 5. Persisted on the next save().
-			attr_speed   = _migrate_legacy_level(int(cfg.get_value("player", "attr_speed",    2)))
-			attr_agility = _migrate_legacy_level(int(cfg.get_value("player", "attr_agility",  2)))
-			attr_size    = _migrate_legacy_level(int(cfg.get_value("player", "attr_size",     2)))
-			attr_skill   = _migrate_legacy_level(int(cfg.get_value("player", "attr_strength", 2)))
+			# Build a four-attribute (Speed/Agility/Size/Skill) intermediate from
+			# whichever older format is on disk, then split it into six below.
+			var sp: int
+			var ag: int
+			var sz: int
+			var sk: int
+			if attr_ver >= 2:
+				# Already on the 1..5 / Skill-renamed scale.
+				sp = _clamp_attr(int(cfg.get_value("player", "attr_speed",   PlayerAttributes.LEVEL_MEDIUM)))
+				ag = _clamp_attr(int(cfg.get_value("player", "attr_agility", PlayerAttributes.LEVEL_MEDIUM)))
+				sz = _clamp_attr(int(cfg.get_value("player", "attr_size",    PlayerAttributes.LEVEL_MEDIUM)))
+				sk = _clamp_attr(int(cfg.get_value("player", "attr_skill",   PlayerAttributes.LEVEL_MEDIUM)))
+			else:
+				# Legacy 1..3 scale (medium = 2) → 1..5 (medium = 3) via new = 2·old − 1,
+				# and the renamed Strength → Skill axis. Endpoints map cleanly:
+				# old-1 → 1, old-2 → 3, old-3 → 5.
+				sp = _migrate_legacy_level(int(cfg.get_value("player", "attr_speed",    2)))
+				ag = _migrate_legacy_level(int(cfg.get_value("player", "attr_agility",  2)))
+				sz = _migrate_legacy_level(int(cfg.get_value("player", "attr_size",     2)))
+				sk = _migrate_legacy_level(int(cfg.get_value("player", "attr_strength", 2)))
+			_migrate_four_to_six(sp, ag, sz, sk)
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 0.5), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
@@ -759,16 +780,18 @@ func _load() -> void:
 
 
 func get_player_attributes() -> PlayerAttributes:
-	return PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_skill)
+	return PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot)
 
 
 func set_player_attributes(attrs: PlayerAttributes) -> void:
 	if attrs == null:
 		return
-	attr_speed   = attrs.speed
-	attr_agility = attrs.agility
-	attr_size    = attrs.size
-	attr_skill   = attrs.skill
+	attr_speed    = attrs.speed
+	attr_agility  = attrs.agility
+	attr_hands    = attrs.hands
+	attr_size     = attrs.size
+	attr_physical = attrs.physical
+	attr_shot     = attrs.shot
 
 
 func _clamp_attr(v: int) -> int:
@@ -778,6 +801,26 @@ func _clamp_attr(v: int) -> int:
 # Remaps a legacy 1..3 attribute level onto the 1..5 scale (medium 2 → 3).
 func _migrate_legacy_level(old: int) -> int:
 	return _clamp_attr(2 * clampi(old, 1, 3) - 1)
+
+
+# Splits a legacy four-attribute build (Speed/Agility/Size/Skill on the 1..5
+# scale) into the six-attribute scale. Skill is the scoring heir → Shot; Hands
+# and Physical are new axes seeded at medium, then trimmed (Hands first, then
+# Physical) so the migrated build fits the new BUDGET without disturbing the
+# player's expressed identity. Persisted as version 3 on the next save().
+func _migrate_four_to_six(sp: int, ag: int, sz: int, sk: int) -> void:
+	attr_speed    = sp
+	attr_agility  = ag
+	attr_size     = sz
+	attr_shot     = sk
+	attr_hands    = PlayerAttributes.LEVEL_MEDIUM
+	attr_physical = PlayerAttributes.LEVEL_MEDIUM
+	while attr_speed + attr_agility + attr_hands + attr_size + attr_physical + attr_shot > PlayerAttributes.BUDGET \
+			and (attr_hands > PlayerAttributes.LEVEL_MIN or attr_physical > PlayerAttributes.LEVEL_MIN):
+		if attr_hands > PlayerAttributes.LEVEL_MIN:
+			attr_hands -= 1
+		else:
+			attr_physical -= 1
 
 
 func is_tutorial_complete(id: String) -> bool:

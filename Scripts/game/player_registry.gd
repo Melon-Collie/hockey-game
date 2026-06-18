@@ -197,10 +197,12 @@ func spawn_bot(
 		record.player_name = identity.get("name", "Bot %d" % (bot_id + 1))
 		record.jersey_number = identity.get("number", 80 + bot_id)
 		record.attributes = PlayerAttributes.new(
-				int(identity.get("speed",   PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("agility", PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("size",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("skill",   PlayerAttributes.LEVEL_MEDIUM)))
+				int(identity.get("speed",    PlayerAttributes.LEVEL_MEDIUM)),
+				int(identity.get("agility",  PlayerAttributes.LEVEL_MEDIUM)),
+				int(identity.get("hands",    PlayerAttributes.LEVEL_MEDIUM)),
+				int(identity.get("size",     PlayerAttributes.LEVEL_MEDIUM)),
+				int(identity.get("physical", PlayerAttributes.LEVEL_MEDIUM)),
+				int(identity.get("shot",     PlayerAttributes.LEVEL_MEDIUM)))
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck

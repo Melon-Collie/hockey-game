@@ -366,8 +366,12 @@ var _base_skater_upper_arm_length:      float = 0.0
 var _base_skater_forearm_length:        float = 0.0
 var _base_skater_weight:                float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
+var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_collision_radius:      float = 0.0
 var _base_skater_collision_height:      float = 0.0
+var _base_backhand_power_coefficient:   float = 0.0
+var _base_sprint_drain_per_sec:         float = 0.0
+var _base_stamina_regen_per_sec:        float = 0.0
 
 
 # Modulates the controller and skater tuning fields from a PlayerAttributes
@@ -400,33 +404,42 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# skater shares the same forward > lateral > backward shape; what makes
 	# Slick agile is how cleanly they transition between those directions.
 	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
-	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.agility_carry_mult()
-	# Skill drives the whole offensive puck game: shot power (narrower ±15%
-	# spread so the wrister floor stays playable), charge speed (inverted),
-	# and blade speed (the dangle/absorb "hands" lever) below.
-	var m_shot_power: float = attrs.skill_shot_mult()
+	# Hands owns the puck game: blade speed (how fast the blade chases the cursor
+	# through the dangle arc and draws back to absorb fast passes), carry speed
+	# (how little the puck slows you), and the backhand finish below.
+	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.hands_carry_mult()
+	max_blade_speed             = _base_max_blade_speed             * attrs.hands_blade_mult()
+	# Backhand coefficient scales UP toward 1.0 with Hands — a great backhand
+	# barely drops off (the in-tight finish that separates the dangler from the
+	# sniper). Wrister-only today; the slapshot path applies no backhand penalty
+	# (see ShotMechanics.release_slapper).
+	backhand_power_coefficient  = _base_backhand_power_coefficient  * attrs.hands_backhand_mult()
+	# Shot drives raw scoring: power (narrower ±15% spread so the wrister floor
+	# stays playable) and charge speed (inverted — quick release).
+	var m_shot_power: float = attrs.shot_power_mult()
 	min_wrister_power = _base_min_wrister_power * m_shot_power
 	max_wrister_power = _base_max_wrister_power * m_shot_power
 	quick_shot_power  = _base_quick_shot_power  * m_shot_power
 	min_slapper_power = _base_min_slapper_power * m_shot_power
 	max_slapper_power = _base_max_slapper_power * m_shot_power
-	# Charge cap scales with Skill (how fast you load) and Size (so the cap
-	# stays a constant fraction of the player's ROM — small players can still
-	# fill the bar with their own full-reach sweep).
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.skill_charge_mult() * attrs.size_charge_mult()
-	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.skill_charge_mult()
-	# Blade speed — how fast the blade chases the cursor through the dangle arc
-	# and draws back to absorb fast passes. The "hands" lever, Skill-scaled.
-	max_blade_speed             = _base_max_blade_speed             * attrs.skill_blade_mult()
-	# Size drives body checking purely through `weight` (the weight_ratio in the
-	# check formula, skater.gd). body_check_transfer stays a flat constant —
-	# scaling BOTH it and weight by Size would double-count Size multiplicatively.
-	# Brace and hitbox stay on canonical Size.
-	skater.weight                       = _base_skater_weight                  * attrs.size_weight_mult()
-	# Inverse: brace_resistance is a coefficient on incoming transfer when
-	# the victim is braced — *lower* = better resistance. A bigger-Size
-	# player should resist knockback better, so the multiplier flips.
-	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * (2.0 - m_size)
+	# Charge cap scales with Shot (how fast you load) and Size (so the cap stays
+	# a constant fraction of the player's ROM — small players can still fill the
+	# bar with their own full-reach sweep).
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.shot_charge_mult() * attrs.size_charge_mult()
+	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
+	# Body checks read two attributes on different axes (so they compose, not
+	# double-count): Size sets `weight` (the weight_ratio — a heavy player is hard
+	# to MOVE and lands a heavier hit), Physical sets the transfer/brace
+	# coefficients (how hard you DELIVER a check, and how hard you are to PUT
+	# DOWN). Brace is inverse: lower = better resistance.
+	skater.weight                      = _base_skater_weight                  * attrs.size_weight_mult()
+	skater.body_check_transfer         = _base_skater_body_check_transfer     * attrs.physical_check_mult()
+	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * attrs.physical_brace_mult()
+	# Physical also conditions the sprint engine: a deeper stamina pool (slower
+	# drain) and faster regen. The cached stamina config is dropped below so the
+	# next tick rebuilds from these rewritten rates.
+	sprint_drain_per_sec  = _base_sprint_drain_per_sec  / attrs.physical_stamina_mult()
+	stamina_regen_per_sec = _base_stamina_regen_per_sec * attrs.physical_stamina_mult()
 	# Arms scale with actual height (the dedicated height_mult,
 	# tighter than the gameplay size_mult) — keeps proportions realistic so
 	# a taller player has correspondingly longer arms (and ROM) rather than
@@ -465,6 +478,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	_ik.invalidate_configs()
 	_cached_move_cfg = null
 	_cached_block_move_cfg = null
+	_cached_stamina_cfg = null
 	skater.apply_appearance(attrs)
 
 
@@ -483,11 +497,15 @@ func _capture_attribute_bases() -> void:
 	_base_max_wrister_charge_distance  = max_wrister_charge_distance
 	_base_max_slapper_charge_time      = max_slapper_charge_time
 	_base_max_blade_speed              = max_blade_speed
+	_base_backhand_power_coefficient   = backhand_power_coefficient
+	_base_sprint_drain_per_sec         = sprint_drain_per_sec
+	_base_stamina_regen_per_sec        = stamina_regen_per_sec
 	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
 	_base_stick_length                 = stick_length
 	_base_skater_upper_arm_length      = skater.upper_arm_length
 	_base_skater_forearm_length        = skater.forearm_length
 	_base_skater_weight                       = skater.weight
+	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
 	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	if col != null:

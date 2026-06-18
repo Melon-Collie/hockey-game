@@ -534,7 +534,8 @@ func _on_connected_to_server() -> void:
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
 	_peer_attributes[1] = local_attrs
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
-			local_attrs.speed, local_attrs.agility, local_attrs.size, local_attrs.skill,
+			local_attrs.speed, local_attrs.agility, local_attrs.hands,
+			local_attrs.size, local_attrs.physical, local_attrs.shot,
 			BuildInfo.PROTOCOL_VERSION)
 	client_connected.emit()
 
@@ -818,7 +819,8 @@ func _broadcast_state() -> void:
 @rpc("any_peer", "reliable")
 func request_join(is_left_handed: bool, player_name: String, jersey_number: int = 10,
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_skill: int = PlayerAttributes.LEVEL_MEDIUM,
+		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
+		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM,
 		protocol_version: int = 0) -> void:
 	if not is_host:
 		return
@@ -844,8 +846,8 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	# Budget validation (not just per-level clamping): a modified client can
 	# send an over-budget 5/5/5/5 — only spreads within the point-buy budget
 	# are accepted; anything over-budget falls back to all-medium.
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_skill) \
-			if PlayerAttributes.is_within_budget(attr_speed, attr_agility, attr_size, attr_skill) \
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
+			if PlayerAttributes.is_within_budget(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
 			else PlayerAttributes.all_medium()
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
@@ -1244,8 +1246,9 @@ func assign_player_slot(team_slot: int, team_id: int, jersey_color: Color, helme
 @rpc("authority", "reliable")
 func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10,
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_size: int = PlayerAttributes.LEVEL_MEDIUM, attr_skill: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
-	var attrs := PlayerAttributes.new(attr_speed, attr_agility, attr_size, attr_skill)
+		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
+		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
+	var attrs := PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot)
 	_peer_attributes[peer_id] = attrs
 	remote_skater_spawn_requested.emit(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number, attrs)
 
@@ -1420,7 +1423,7 @@ func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey
 		return
 	var attrs: PlayerAttributes = attributes if attributes != null else PlayerAttributes.all_medium()
 	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number,
-			attrs.speed, attrs.agility, attrs.size, attrs.skill)
+			attrs.speed, attrs.agility, attrs.hands, attrs.size, attrs.physical, attrs.shot)
 
 func send_sync_existing_players(peer_id: int, player_data: Array) -> void:
 	sync_existing_players.rpc_id(peer_id, player_data)
