@@ -137,7 +137,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var crossover_scissor_deg: float = 8.0    # legs scissor laterally across each other
 @export var stride_knee_deg: float = 18.0         # knee flex depth on the recovery half-stroke
 @export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
-@export var stride_skew: float = 0.15             # push/recovery asymmetry of the stroke (0 = pure sine)
+@export var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)
 # Glide-vs-push: stride amplitude scales above/below the speed baseline by the
 # sign of tangential acceleration — driving digs in, coasting settles to a glide.
 @export var stride_effort_ref_accel: float = 9.0  # m/s^2 of tangential accel mapping to full push effort
