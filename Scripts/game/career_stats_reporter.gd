@@ -4,6 +4,10 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 		game_id: String, team_id: int, period_scores: Array, num_periods: int) -> void:
 	var body: Dictionary = record.stats.to_dict()
 	body["uuid"] = PlayerPrefs.player_uuid
+	# steam_id is the career identity (cross-machine); uuid stays for legacy rows
+	# and bug reports. Career stats only write in online (Steam) sessions, so a
+	# valid SteamID64 is always available here.
+	body["steam_id"] = SteamManager.steam_id
 	body["player_name"] = record.display_name()
 	body["game_version"] = BuildInfo.VERSION
 	body["goals_for"] = goals_for
@@ -17,38 +21,25 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 
 
 # Calls the recent_games_for RPC and returns up to `limit` recent games the
-# given player UUID participated in, newest first. Each game row carries
-# nested players JSON, period_scores, and the home/away final score. Used by
-# the Career screen's Recent Games tab. Empty array on error or no games.
-func fetch_recent_games(player_uuid: String, limit: int, callback: Callable) -> void:
+# given player participated in, newest first. Each game row carries nested
+# players JSON, period_scores, and the home/away final score. Used by the
+# Career screen's Recent Games tab. Empty array on error or no games.
+func fetch_recent_games(steam_id: int, limit: int, callback: Callable) -> void:
 	_call_rpc("recent_games_for", {
-		"player_uuid": player_uuid,
+		"player_steam_id": steam_id,
 		"game_limit": limit,
 	}, callback)
 
 
-func migrate_to_steam_id(uuid: String, steam_id: int) -> void:
-	if PlayerPrefs.steam_id_linked:
-		return
-	var url: String = "%s/rest/v1/career_stats?uuid=eq.%s&steam_id=is.null" % [SupabaseConfig.URL, uuid]
-	_patch(url, {"steam_id": steam_id})
-	PlayerPrefs.steam_id_linked = true
-	PlayerPrefs.save()
-
-
 func fetch_totals(callback: Callable) -> void:
-	var url: String = "%s/rest/v1/career_totals?uuid=eq.%s" % [
-		SupabaseConfig.URL, PlayerPrefs.player_uuid
+	var url: String = "%s/rest/v1/career_totals?steam_id=eq.%d" % [
+		SupabaseConfig.URL, SteamManager.steam_id
 	]
 	_fetch(url, callback)
 
 
 func _post(url: String, body: Dictionary) -> void:
 	_fire(url, HTTPClient.METHOD_POST, body)
-
-
-func _patch(url: String, body: Dictionary) -> void:
-	_fire(url, HTTPClient.METHOD_PATCH, body)
 
 
 func _fire(url: String, method: HTTPClient.Method, body: Dictionary) -> void:

@@ -11,7 +11,7 @@ var is_extrapolating: bool = false
 
 var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
 # Reused scratch objects for the per-tick interpolation lookup + output —
-# allocating fresh ones each tick was measurable churn at 240 Hz × 5 remotes.
+# allocating fresh ones each tick was measurable churn at the physics rate × 5 remotes.
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
 var _scratch_interp := SkaterNetworkState.new()
 var _rejoin_blend_from_pos: Vector3 = Vector3.ZERO
@@ -51,7 +51,7 @@ func receive_input_batch(batch: Array[InputState]) -> void:
 	# would otherwise sit in the queue indefinitely (future) or fail the gate
 	# forever (past). The queue cap below already truncates older stragglers.
 	const FUTURE_SLACK_S: float = 0.1   # INPUT_LEAD_SEC (~25ms) + slack for jitter / clock convergence
-	const PAST_SLACK_S: float = 2.0     # generous: queue cap is 0.5s at 240Hz, this is 4x
+	const PAST_SLACK_S: float = 2.0     # generous: queue cap is ~0.5 s, this is 4x
 	var now: float = NetworkManager.estimated_host_time()
 	var existing_timestamps: Dictionary = {}
 	for queued: InputState in _input_queue:
@@ -67,7 +67,7 @@ func receive_input_batch(batch: Array[InputState]) -> void:
 		existing_timestamps[state.host_timestamp] = true
 	_input_queue.sort_custom(func(a: InputState, b: InputState) -> bool:
 		return a.host_timestamp < b.host_timestamp)
-	const MAX_QUEUE_DEPTH: int = 120  # 0.5s at 240 Hz
+	var MAX_QUEUE_DEPTH: int = Constants.PHYSICS_TICK / 2  # ~0.5 s
 	while _input_queue.size() > MAX_QUEUE_DEPTH:
 		_input_queue.pop_front()
 
@@ -147,7 +147,7 @@ func _interpolate() -> void:
 	is_extrapolating = bracket != null and bracket.is_extrapolating
 	if bracket == null:
 		return
-	# Reused scratch (240 Hz path): both branches below write every field that
+	# Reused scratch (per-tick path): both branches below write every field that
 	# _apply_state_to_skater reads, so no stale value can leak across ticks.
 	var interpolated := _scratch_interp
 	if bracket.is_extrapolating:
@@ -196,15 +196,16 @@ func _interpolate() -> void:
 		interpolated.is_elevated = to_state.is_elevated
 		interpolated.blade_up = to_state.blade_up
 		interpolated.shot_state = to_state.shot_state
-		# Push position forward from render_time to present using the interpolated
-		# velocity. Capped at extrapolation_max_ms so a large interpolation buffer
-		# on a rough connection doesn't over-predict on direction changes.
-		var forward_dt: float = minf(interp_delay, extrapolation_max_ms / 1000.0)
-		interpolated.position += interpolated.velocity * forward_dt
-		# blade_position and top_hand_position are in upper_body local space;
-		# velocity is world space. Adding them is a coordinate frame error.
-		# The body forward-advance above already moves their world positions
-		# via the scene tree — no additional local-space offset needed.
+		# No forward projection: remotes render at the buffered (past) instant
+		# render_time, the hermite result above. Projecting the body ahead by
+		# interp_delay toward "present" overshot on every direction change and
+		# then snapped back when the next real sample landed (Extrap climbing,
+		# visible as rhythmic snap-back on remote skaters during fast play). The
+		# AAA "interpolate in the past" model trades a little extra latency on
+		# other players' bodies for jitter-free motion. The packet-loss case
+		# (render_time past the newest sample) still extrapolates in the
+		# is_extrapolating branch above. blade/top_hand are upper_body-local and
+		# ride the body through the scene tree, so they need no projection.
 	if prev_extrapolating and not is_extrapolating and skater != null:
 		_rejoin_blend_from_pos = skater.global_position
 		_rejoin_blend_from_blade = skater.get_blade_position()

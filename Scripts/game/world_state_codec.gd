@@ -11,11 +11,11 @@ extends RefCounted
 # 1. World state  (120 Hz, unreliable_ordered) — single flat PackedByteArray:
 #      u16 ws_sequence, u32 host_capture_time (0.1ms units), u8 num_skaters
 #      [u32 peer_id, skater_bytes(38), u8 queue_depth] × num_skaters
-#      puck_bytes(12)
+#      puck_bytes(13)
 #      u8 num_goalies, [goalie_bytes(35)] × num_goalies
 #      u8 score0, u8 score1, u8 phase, u8 period, u16 time_remaining
 #
-#    Total for 6 players + 2 goalies: 354 bytes — stays in a single packet, well
+#    Total for 6 players + 2 goalies: 355 bytes — stays in a single packet, well
 #    under Steam's ~1200-byte unreliable cap. This matters: Steam (unlike ENet)
 #    does NOT fragment unreliable messages, so an oversized snapshot would be
 #    dropped at send rather than split across datagrams.
@@ -27,7 +27,7 @@ extends RefCounted
 #                      facing_angular_velocity s16@PI*10 rad/s, upper_body_angular_velocity s16@PI*10 rad/s,
 #                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]+elevated[5]+blade_up[6]+sprint_locked[7]),
 #                      shot_charge u8, stamina u8
-#      Puck    (12 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
+#      Puck    (13 B): pos s16/s16/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
 #      Goalie  (35 B): root (12 B) + pose (23 B). Root:
 #                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
 #                      vel_x/z s16@0.02m/s.
@@ -58,7 +58,7 @@ signal queue_depth_feedback(depth: int)
 
 const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + f32 host_capture_time (4) + u8 num_skaters (1)
 const SKATER_BLOCK_SIZE: int = 43  # u32 peer_id (4) + 38B skater state + u8 queue_depth (1)
-const PUCK_BLOCK_SIZE: int = 12    # 11B pos+vel + 1B carrier_idx
+const PUCK_BLOCK_SIZE: int = 13    # 12B pos+vel + 1B carrier_idx
 const GOALIE_BLOCK_SIZE: int = 35
 const GAME_STATE_BLOCK_SIZE: int = 6  # 4×u8 + u16 time_remaining
 const STATS_PLAYER_RECORD_SIZE: int = 6  # peer_id, G, A, SOG, HITS, BLK
@@ -119,7 +119,7 @@ func encode_world_state() -> PackedByteArray:
 		b.append_array(id_bytes)
 		b.append_array(_encode_skater_quantized(_state_buffer.latest_skater_state(peer_id)))
 		b.append(clampi(depth, 0, 255))
-	# Puck: 11B pos+vel + 1B carrier index (0xFF = no carrier).
+	# Puck: 12B pos+vel + 1B carrier index (0xFF = no carrier).
 	# Carrier is encoded as the index of the carrier's peer_id in the peers array
 	# above so the client can resolve it without a separate peer_id lookup.
 	var puck_state := _state_buffer.latest_puck_state()
@@ -183,10 +183,10 @@ func decode_world_state(data: PackedByteArray) -> void:
 			queue_depth_feedback.emit(depth)
 		else:
 			record.controller.apply_network_state(skater_state, host_ts)
-	# Puck: 11B pos+vel + 1B carrier index. 0xFF is the "no carrier"
+	# Puck: 12B pos+vel + 1B carrier index. 0xFF is the "no carrier"
 	# sentinel — checked explicitly so a future bump of MAX_CONNECTIONS
 	# past 255 doesn't silently alias the sentinel onto a real index.
-	var puck_state := _decode_puck_quantized(data.slice(o, o + 11)); o += 11
+	var puck_state := _decode_puck_quantized(data.slice(o, o + 12)); o += 12
 	var carrier_idx: int = data.decode_u8(o); o += 1
 	puck_state.carrier_peer_id = -1 if carrier_idx == 0xFF or carrier_idx >= decoded_peers.size() else decoded_peers[carrier_idx]
 	if not skip_actors:
@@ -274,7 +274,7 @@ func decode_for_replay(data: PackedByteArray) -> Dictionary:
 		o += 1  # queue_depth (not needed for replay)
 		skaters[peer_id] = _decode_skater_quantized(skater_bytes)
 
-	var puck_state := _decode_puck_quantized(data.slice(o, o + 11)); o += 11
+	var puck_state := _decode_puck_quantized(data.slice(o, o + 12)); o += 12
 	var carrier_idx: int = data.decode_u8(o); o += 1
 	# 0xFF is the encoder's "no carrier" sentinel — see decode_world_state.
 	var carrier_peer_id: int = -1 if carrier_idx == 0xFF or carrier_idx >= decoded_peers.size() else decoded_peers[carrier_idx]
@@ -444,14 +444,16 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	return s
 
 
-# Puck: 11 bytes (pos + vel only; carrier index handled separately in encode/decode_world_state)
-# Offsets: pos(0..4) vel(5..10)
+# Puck: 12 bytes (pos + vel only; carrier index handled separately in encode/decode_world_state)
+# Offsets: pos(0..5) vel(6..11)
 static func _encode_puck_quantized(s: PuckNetworkState) -> PackedByteArray:
 	var b := PackedByteArray()
-	b.resize(11)
+	b.resize(12)
 	var o: int = 0
 	b.encode_s16(o, clampi(roundi(s.position.x * 100.0), -32768, 32767)); o += 2
-	b.encode_s8(o, clampi(roundi(s.position.y * 100.0), -128, 127)); o += 1
+	# s16 (not s8) on Y: elevated/saucer shots exceed the s8 ±1.27 m range and
+	# would clip flat on the wire. s16 @1cm covers the puck's ~3 m max_height.
+	b.encode_s16(o, clampi(roundi(s.position.y * 100.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.position.z * 100.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.velocity.x * 50.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.velocity.y * 50.0), -32768, 32767)); o += 2
@@ -460,13 +462,13 @@ static func _encode_puck_quantized(s: PuckNetworkState) -> PackedByteArray:
 
 
 static func _decode_puck_quantized(b: PackedByteArray) -> PuckNetworkState:
-	if b.size() < 11:
+	if b.size() < 12:
 		push_warning("WorldStateCodec: truncated puck block (%d bytes)" % b.size())
 		return PuckNetworkState.new()
 	var s := PuckNetworkState.new()
 	var o: int = 0
 	s.position.x = b.decode_s16(o) / 100.0; o += 2
-	s.position.y = b.decode_s8(o) / 100.0; o += 1
+	s.position.y = b.decode_s16(o) / 100.0; o += 2
 	s.position.z = b.decode_s16(o) / 100.0; o += 2
 	s.velocity.x = b.decode_s16(o) / 50.0; o += 2
 	s.velocity.y = b.decode_s16(o) / 50.0; o += 2

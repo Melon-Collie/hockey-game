@@ -16,9 +16,6 @@ const STICK_LIFT_UNDER_MARGIN: float = 0.0
 const STICK_LIFT_FORCED_LIFT_S: float = 0.4
 
 @export var extrapolation_max_ms: float = 50.0
-# Velocity decay applied during extrapolation to approximate ice friction.
-# Set to match observed Jolt physics deceleration rate (m/s per second linear).
-@export var extrapolation_friction: float = 0.5
 @export var trajectory_hard_snap_threshold: float = 1.5
 @export var trajectory_soft_blend_threshold: float = 0.3
 @export var position_correction_blend: float = 0.1
@@ -101,7 +98,7 @@ var _peer_id_resolver: Callable = Callable()
 # Callable () -> Array[Skater] of all active skaters. Host-only interaction detection.
 var _skater_getter: Callable = Callable()
 # Live Skater -> team_id dict owned by PlayerRegistry. Read in the
-# host-side poke-check loop at 240 Hz — used to be a Callable that
+# host-side poke-check loop at the physics rate — used to be a Callable that
 # internally scanned the player dict, which doubled up the cost.
 var _team_id_by_skater: Dictionary = {}
 
@@ -377,11 +374,14 @@ func notify_remote_pickup(remote_skater: Skater) -> void:
 	puck.set_client_prediction_mode(false)
 	_state_buffer.clear()
 
-func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skater_vel: Vector3 = Vector3.ZERO) -> void:
+func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skater_vel: Vector3 = Vector3.ZERO) -> Vector3:
 	# PuckController (priority 1) runs after LocalController (priority 0), so the puck
 	# hasn't been re-pinned to the current blade position yet this frame. Read blade
 	# directly from the carrier so we start from the current-frame position, not last
 	# frame's pin.
+	# Returns the un-advanced release origin (the blade contact point) so the caller
+	# can ship it to the host in the release RPC — the host fires the authoritative
+	# puck from this exact point instead of guessing it from a stale buffer rewind.
 	var release_pos: Vector3 = puck.get_puck_position()
 	if _local_carrier_skater != null:
 		release_pos = _local_carrier_skater.get_blade_contact_global()
@@ -398,6 +398,7 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skate
 	puck.set_puck_position(release_pos + (direction * power + skater_vel) * rtt_half)
 	puck.apply_release_velocity(direction * power)
 	_state_buffer.clear()
+	return release_pos
 
 func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	_pending_local_release = false
@@ -559,7 +560,7 @@ func get_state() -> PuckNetworkState:
 	fill_state(state)
 	return state
 
-# Caller-owned-instance variant for the 240 Hz StateBufferManager capture.
+# Caller-owned-instance variant for the per-tick StateBufferManager capture.
 func fill_state(state: PuckNetworkState) -> void:
 	state.position = puck.get_puck_position()
 	state.velocity = puck.get_puck_velocity()
@@ -620,7 +621,7 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 			# target overshoots the actual host position by ~0.5 * a * rtt²,
 			# visible as a slight forward bias on long shots at high RTT before
 			# the soft blend pulls it back.
-			var friction_vel: Vector3 = state.velocity * maxf(0.0, 1.0 - extrapolation_friction * rtt_s)
+			var friction_vel: Vector3 = _ice_friction_velocity(state.velocity, rtt_s)
 			var latency_corrected := PuckNetworkState.new()
 			latency_corrected.position = state.position + friction_vel * rtt_s
 			latency_corrected.velocity = friction_vel
@@ -655,6 +656,19 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 	if _state_buffer.size() > 30:
 		_state_buffer.pop_front()
 
+# Coulomb ice friction: a puck on ice loses a fixed amount of speed per second
+# (mu*g = GameRules.PUCK_ICE_DECEL_M_S2), independent of speed — matching the host's
+# Jolt physics material. The previous viscous model (speed × factor) decelerated
+# ~100x too hard at game speeds, so extrapolated / latency-corrected pucks lagged
+# the host. Horizontal in practice (a grounded puck's velocity is planar).
+func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
+	var speed: float = vel.length()
+	if speed < 0.0001:
+		return vel
+	var new_speed: float = maxf(0.0, speed - GameRules.PUCK_ICE_DECEL_M_S2 * dt)
+	return vel * (new_speed / speed)
+
+
 func _interpolate() -> void:
 	# Shared delay (NetworkManager) so the loose puck renders at the same instant
 	# as the skaters — relative timing (puck-vs-stick on a pass) stays exact.
@@ -665,7 +679,7 @@ func _interpolate() -> void:
 	is_extrapolating = bracket != null and bracket.is_extrapolating
 	if bracket == null:
 		return
-	# Reused scratch (240 Hz path); both branches write position + velocity,
+	# Reused scratch (per-tick path); both branches write position + velocity,
 	# the only fields _apply_state_to_puck consumes.
 	var interpolated := _scratch_interp
 	if bracket.is_extrapolating:
@@ -673,7 +687,7 @@ func _interpolate() -> void:
 		var newest: PuckNetworkState = bracket.to_state
 		# Decay velocity to approximate ice friction so the extrapolated position
 		# matches Jolt's deceleration rather than linear dead-reckoning overshoot.
-		var friction_vel: Vector3 = newest.velocity * maxf(0.0, 1.0 - extrapolation_friction * dt)
+		var friction_vel: Vector3 = _ice_friction_velocity(newest.velocity, dt)
 		interpolated.position = newest.position + friction_vel * dt
 		interpolated.velocity = friction_vel
 	else:

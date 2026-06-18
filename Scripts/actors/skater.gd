@@ -340,7 +340,7 @@ func _process(_delta: float) -> void:
 	# write-only functions of the marker positions (top_hand, blade, shoulder,
 	# bottom_hand) that the physics-rate controllers and interpolators
 	# maintain — nothing reads the mesh transforms back. Recomputing them at
-	# 240 Hz wasted ~75% of the work on poses that never rendered, and
+	# the physics rate wasted ~75% of the work on poses that never rendered, and
 	# reconcile re-ran them once per replayed input (a hitch exactly when the
 	# network was already degraded). One pass per rendered frame, after all
 	# physics ticks for the frame have finalized the markers, is exactly the
@@ -358,7 +358,19 @@ func _physics_process(delta: float) -> void:
 	blade_world_velocity = (blade_world_pos - _prev_blade_world_pos) / delta
 	_prev_blade_world_pos = blade_world_pos
 	var vel_before: Vector3 = velocity
+	# Top-down game: the body never moves vertically (no gravity, velocity.y is
+	# pinned to 0). The collision cylinder's bottom rests exactly on the ice
+	# collider (cylinder default height 2.0, half-height 1.0, body centered at
+	# spawn height Y=1.0 → bottom at the ice top Y=0), so move_and_slide nudges Y
+	# up off that knife-edge contact every tick. That ~9 cm vertical resolution is
+	# reproduced by neither the Euler reconcile replay nor the host broadcast,
+	# firing a constant position correction 60+/s (visible as vertical bounce).
+	# Pinning Y across the move removes the spurious vertical displacement while
+	# leaving all horizontal wall/skater collision intact, so live prediction,
+	# replay, and host authority agree on Y.
+	var y_before: float = global_position.y
 	move_and_slide()
+	global_position.y = y_before
 	var vel_after_slide: Vector3 = velocity
 	_resolve_player_collisions(vel_before)
 	var body_check_delta: Vector3 = velocity - vel_after_slide

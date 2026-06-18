@@ -43,7 +43,7 @@ const _BEACON_PULSE_MAX_SCALE: float = 1.10
 # skaters are within _BEACON_CROWD_RADIUS of the local player (or while ghosted
 # — see _update_beacon_visibility). A linger timer keeps it up briefly after the
 # crowd disperses so skaters weaving past don't make it flicker. The proximity
-# scan runs on a coarse interval, not every 240 Hz tick.
+# scan runs on a coarse interval, not every physics tick.
 const _BEACON_CROWD_RADIUS: float         = 4.5
 const _BEACON_CROWD_COUNT: int            = 2
 const _BEACON_CROWD_LINGER: float         = 1.0
@@ -153,7 +153,7 @@ var _last_rebuild_ring_scale: float = -1.0
 var _last_rebuild_radius: float = -1.0
 var _last_rebuild_ring_visible: bool = false
 
-# Per-tick caches. `update()` runs at 240 Hz across every skater, so anything
+# Per-tick caches. `update()` runs every physics tick across every skater, so anything
 # derived from infrequently-changing inputs (camera orientation, skater Y,
 # shader-param values) is recomputed only on change.
 var _last_skater_y: float = INF
@@ -167,13 +167,13 @@ var _last_lost_flash: float = -1.0
 
 # Slot-ring relationship tint. The resolver (installed by PlayerRegistry)
 # returns a RingRelation each refresh; recolor is re-evaluated on a coarse
-# interval rather than every 240 Hz tick since relationship changes rarely
+# interval rather than every physics tick since relationship changes rarely
 # (local-player spawn, slot swap). RingRelation values are non-negative; -2 is
 # an unreachable sentinel that forces the first refresh to apply.
 const _RING_RECOLOR_INTERVAL: float = 0.25
 var _ring_relation_resolver: Callable = Callable()
 var _ring_relation_cached: int = -2
-var _ring_colorblind_cached: bool = false
+var _ring_color_cached: Color = Color(0, 0, 0, 0)  # unreachable sentinel; forces first refresh
 var _ring_recolor_accum: float = _RING_RECOLOR_INTERVAL
 
 # HUD geometry assumes the gameplay top-down camera (ring decals flat on ice,
@@ -244,9 +244,11 @@ func setup(skater: Skater) -> void:
 	beacon_outline.material_override = _make_beacon_material(_BEACON_OUTLINE_COLOR, 0)
 	_self_beacon.add_child(beacon_outline)
 
+	# Fill shares the local player's self ring color (kept in sync live by
+	# _apply_self_beacon_relation); seed it from the picked color here.
+	var self_col: Color = PlayerPrefs.ring_color_self
 	_self_beacon_fill_mat = _make_beacon_material(
-			Color(MenuStyle.HUD_RING_SELF.r, MenuStyle.HUD_RING_SELF.g,
-					MenuStyle.HUD_RING_SELF.b, _BEACON_OPACITY), 1)
+			Color(self_col.r, self_col.g, self_col.b, _BEACON_OPACITY), 1)
 	var beacon_fill := MeshInstance3D.new()
 	beacon_fill.name = "Fill"
 	beacon_fill.mesh = _create_beacon_mesh(_BEACON_HALF_W, _BEACON_HALF_H)
@@ -438,15 +440,14 @@ func _refresh_ring_color() -> void:
 	if _ring_mesh == null or not _ring_relation_resolver.is_valid():
 		return
 	var relation: int = _ring_relation_resolver.call() as int
-	# Recolor when the relationship changes OR the colorblind setting is
-	# toggled — the periodic update() recolor (every _RING_RECOLOR_INTERVAL)
-	# then picks up a live palette switch from the options panel within ~0.25s.
-	var cb: bool = PlayerPrefs.colorblind_rings
-	if relation == _ring_relation_cached and cb == _ring_colorblind_cached:
+	var col: Color = _ring_color_for_relation(relation)
+	# Recolor when the relationship changes OR the picked color changes — the
+	# periodic update() recolor (every _RING_RECOLOR_INTERVAL) then picks up a
+	# live ring-color change from the options panel within ~0.25s.
+	if relation == _ring_relation_cached and col == _ring_color_cached:
 		return
 	_ring_relation_cached = relation
-	_ring_colorblind_cached = cb
-	var col: Color = _ring_color_for_relation(relation)
+	_ring_color_cached = col
 	var mat: StandardMaterial3D = _ring_mesh.material_override as StandardMaterial3D
 	if mat != null:
 		mat.albedo_color = Color(col.r, col.g, col.b, MenuStyle.HUD_OPACITY)
@@ -454,7 +455,7 @@ func _refresh_ring_color() -> void:
 
 
 # Show the overhead beacon only when this skater is the local player's own, and
-# keep its fill in sync with the (colorblind-aware) self color. Stays visible
+# keep its fill in sync with the user-picked self ring color. Stays visible
 # while ghosted — being ghosted (offside/icing) is exactly when steering back
 # to tag the blue line makes the self cue most valuable — so only replay /
 # spectator hiding gates it.
@@ -469,13 +470,20 @@ func _apply_self_beacon_relation(relation: int) -> void:
 func _update_beacon_visibility() -> void:
 	if _self_beacon == null:
 		return
-	# Shown when crowded OR ghosted: a scrum is where you lose yourself, and a
-	# lone ghosted player still needs the cue to steer back to the blue line.
-	# Gated by the Self Marker option (PlayerPrefs, read live).
+	# Gated by the Self Marker mode (PlayerPrefs, read live):
+	#   ALWAYS   — shown whenever this is your skater.
+	#   SMART    — shown when crowded OR ghosted: a scrum is where you lose
+	#              yourself, and a lone ghosted player still needs the cue to
+	#              steer back to the blue line.
+	#   DISABLED — never shown.
 	var ghosted: bool = _skater != null and _skater.is_ghost
+	var gate: bool
+	match PlayerPrefs.self_beacon_mode:
+		PlayerPrefs.BEACON_MODE_ALWAYS: gate = true
+		PlayerPrefs.BEACON_MODE_SMART:  gate = _beacon_crowded or ghosted
+		_:                              gate = false
 	_self_beacon.visible = (_self_beacon_active
-			and PlayerPrefs.self_beacon_enabled
-			and (_beacon_crowded or ghosted)
+			and gate
 			and not _hidden_for_replay
 			and not _force_world_hud_hidden)
 
@@ -517,11 +525,10 @@ func _is_crowded() -> bool:
 
 
 func _ring_color_for_relation(relation: int) -> Color:
-	var cb: bool = PlayerPrefs.colorblind_rings
 	match relation:
-		RingRelation.SELF:     return MenuStyle.HUD_RING_SELF_CB  if cb else MenuStyle.HUD_RING_SELF
-		RingRelation.TEAMMATE: return MenuStyle.HUD_RING_TEAM_CB  if cb else MenuStyle.HUD_RING_TEAM
-		RingRelation.ENEMY:    return MenuStyle.HUD_RING_ENEMY_CB if cb else MenuStyle.HUD_RING_ENEMY
+		RingRelation.SELF:     return PlayerPrefs.ring_color_self
+		RingRelation.TEAMMATE: return PlayerPrefs.ring_color_team
+		RingRelation.ENEMY:    return PlayerPrefs.ring_color_enemy
 		_:                     return MenuStyle.HUD_ICE
 
 

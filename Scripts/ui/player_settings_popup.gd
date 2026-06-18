@@ -110,7 +110,10 @@ func _build_name_section(vbox: VBoxContainer) -> void:
 
 	_name_field = LineEdit.new()
 	_name_field.placeholder_text = "Player"
-	_name_field.max_length = 10
+	# 12 fits the skater jersey nameplate at font 28 without clipping at the
+	# back-center seam (jersey_decal.gd centers the name in ~256px of room),
+	# and the lobby slot cards shrink-to-fit anything up to it.
+	_name_field.max_length = 12
 	_name_field.custom_minimum_size = Vector2(200, 48)
 	_name_field.add_theme_font_size_override("font_size", 18)
 	row.add_child(_name_field)

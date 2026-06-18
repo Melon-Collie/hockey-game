@@ -65,8 +65,8 @@ signal remote_skater_spawn_requested(peer_id: int, team_slot: int, team_id: int,
 signal existing_players_synced(player_data: Array)
 signal local_puck_pickup_confirmed
 signal local_puck_stolen(was_stick_lift: bool)
-signal remote_puck_release_received(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
-signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float)
+signal remote_puck_release_received(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3)
+signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3)
 signal carrier_puck_dropped
 signal remote_carrier_changed(new_carrier_peer_id: int)
 signal ghost_state_received(peer_id: int, is_ghost: bool)
@@ -258,6 +258,14 @@ var _peer_loss_timer: float = 0.0
 # Jitter measurement (client side)
 var _jitter_samples: Array[float] = []
 var _last_ws_arrival_time: float = -1.0
+# Packet delay (PDV) measurement — see _record_packet_delay. Each packet's delay
+# vs the synced host clock, NOT the raw inter-arrival gap, so relay clumping
+# barely moves it. This de-clumped spread is the jitter cushion fed into the
+# interp-delay target (_compute_target_interpolation_delay) as well as the F3
+# "Delay spread" readout.
+var _pdv_floor: float = -1.0
+var _pdv_mean: float = 0.0
+var _pdv_dev: float = 0.0
 # get_target_interpolation_delay() per-physics-frame cache (see that function).
 var _target_interp_cached: float = -1.0
 var _target_interp_frame: int = -1
@@ -279,7 +287,7 @@ var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
-# (240/120 = 2 at the default rate; 240/5 = 48 during dead-puck phases via
+# (120/120 = 1 at the default rate; 120/5 = 24 during dead-puck phases via
 # set_broadcast_rate). Recomputed by `set_broadcast_rate`. Stall resilience:
 # on a host main-thread freeze, Godot's physics catch-up fires multiple
 # back-to-back physics ticks. The counter increments in NetworkManager._physics_process
@@ -521,7 +529,7 @@ func _on_peer_disconnected(id: int) -> void:
 func _on_connected_to_server() -> void:
 	_connect_timer = -1.0
 	_session_start_ms = Time.get_ticks_msec()
-	_clock_sync = load("res://Scripts/networking/clock_sync.gd").new()
+	_clock_sync = _ClockSyncScript.new()
 	_clock_sync.init_session(_session_start_ms)
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
 	_peer_attributes[1] = local_attrs
@@ -575,6 +583,9 @@ func prepare_for_new_game() -> void:
 	packet_loss_pct = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
+	_pdv_floor = -1.0
+	_pdv_mean = 0.0
+	_pdv_dev = 0.0
 	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
 
 func reset() -> void:
@@ -638,6 +649,9 @@ func reset() -> void:
 	_peer_loss_timer = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
+	_pdv_floor = -1.0
+	_pdv_mean = 0.0
+	_pdv_dev = 0.0
 	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
 	NetworkSimManager.clear_pending()
 
@@ -654,7 +668,7 @@ func _notification(what: int) -> void:
 
 func _physics_process(_delta: float) -> void:
 	# Single source of truth for the host-side integer tick counter. Increments
-	# at the engine's physics rate (240 Hz). AI agents salt their per-tick RNG
+	# at the engine's physics rate (120 Hz). AI agents salt their per-tick RNG
 	# with this value; consumers must tolerate the counter being zero before
 	# the host starts ticking and must not assume monotonicity across host
 	# transfers (Phase 1 has no host transfer support anyway).
@@ -958,6 +972,10 @@ func receive_world_state(data: PackedByteArray) -> void:
 				# from smooth path/relay jitter (spread around the 8.3ms interval).
 				NetworkTelemetry.record_ws_arrival_gap(gap * 1000.0)
 			_last_ws_arrival_time = now
+			# PDV delay vs the synced host clock (header host_capture_time at bytes
+			# 2..5, u32 0.1ms units). Clumping barely moves this, unlike the gap above.
+			if is_clock_ready() and s.size() >= 6:
+				_record_packet_delay(estimated_host_time() - float(s.decode_u32(2)) / Constants.TIME_WIRE_SCALE)
 			if s.size() >= 2:
 				_on_ws_sequence_received(s.decode_u16(0))
 			# Advance the shared interpolation delay once per packet, before the
@@ -1237,7 +1255,7 @@ func sync_existing_players(player_data: Array) -> void:
 		pending_join_players = player_data
 		return
 	existing_players_synced.emit(player_data)
-	
+
 func send_puck_picked_up(peer_id: int) -> void:
 	# AI bots have no ENet connection — rpc_id would fail. Bots are driven
 	# directly by the host's AIController, so no client-side notification
@@ -1278,31 +1296,31 @@ func send_puck_stolen(victim_peer_id: int, was_stick_lift: bool = false) -> void
 func notify_puck_stolen(was_stick_lift: bool) -> void:
 	NetworkSimManager.send(func(wsl: bool) -> void: local_puck_stolen.emit(wsl), [was_stick_lift], true)
 
-func send_puck_release(direction: Vector3, power: float, is_slapper: bool) -> void:
+func send_puck_release(direction: Vector3, power: float, is_slapper: bool, origin: Vector3) -> void:
 	release_puck.rpc_id(1, direction, power, is_slapper,
 			estimated_host_time(), get_latest_rtt_ms(),
-			get_target_interpolation_delay() * 1000.0)
+			get_target_interpolation_delay() * 1000.0, origin)
 
 @rpc("any_peer", "reliable")
-func release_puck(direction: Vector3, power: float, is_slapper: bool, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func release_puck(direction: Vector3, power: float, is_slapper: bool, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
 	var sender: int = multiplayer.get_remote_sender_id()
 	NetworkSimManager.send(
-		func(d: Vector3, p: float, slap: bool, ts: float, rtt: float, idms: float, sid: int) -> void:
-			remote_puck_release_received.emit(d, p, slap, sid, ts, rtt, idms),
-		[direction, power, is_slapper, host_timestamp, rtt_ms, interp_delay_ms, sender], true)
+		func(d: Vector3, p: float, slap: bool, ts: float, rtt: float, idms: float, org: Vector3, sid: int) -> void:
+			remote_puck_release_received.emit(d, p, slap, sid, ts, rtt, idms, org),
+		[direction, power, is_slapper, host_timestamp, rtt_ms, interp_delay_ms, client_origin, sender], true)
 
-func send_one_timer_release(direction: Vector3, power: float) -> void:
+func send_one_timer_release(direction: Vector3, power: float, origin: Vector3) -> void:
 	release_puck_one_timer.rpc_id(1, direction, power,
 			estimated_host_time(), get_latest_rtt_ms(),
-			get_target_interpolation_delay() * 1000.0)
+			get_target_interpolation_delay() * 1000.0, origin)
 
 @rpc("any_peer", "reliable")
-func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
+func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
 	var sender: int = multiplayer.get_remote_sender_id()
 	NetworkSimManager.send(
-		func(d: Vector3, p: float, ts: float, rtt: float, idms: float, sid: int) -> void:
-			one_timer_release_received.emit(d, p, sid, ts, rtt, idms),
-		[direction, power, host_timestamp, rtt_ms, interp_delay_ms, sender], true)
+		func(d: Vector3, p: float, ts: float, rtt: float, idms: float, org: Vector3, sid: int) -> void:
+			one_timer_release_received.emit(d, p, sid, ts, rtt, idms, org),
+		[direction, power, host_timestamp, rtt_ms, interp_delay_ms, client_origin, sender], true)
 
 func notify_goal_to_all(scoring_team_id: int, score0: int, score1: int, scorer_name: String, assist1_name: String, assist2_name: String) -> void:
 	for peer_id in connected_peer_ids():
@@ -1664,7 +1682,32 @@ func get_jitter_p95() -> float:
 		return 0.0
 	var sorted: Array = _jitter_samples.duplicate()
 	sorted.sort()
-	return sorted[mini(int(sorted.size() * 0.95), sorted.size() - 1)]
+	return sorted[NetworkTelemetry.percentile_index(sorted.size(), 0.95)]
+
+# Records one world-state packet's delay vs the synced host clock. floor is the
+# de-clumped path delay (drops instantly to a better delay, rises slowly toward
+# worse); mean/dev are Jacobson EWMAs of the excess over floor. Because each
+# packet is timed against its own capture stamp, a burst of packets landing
+# together does NOT inflate the spread — that's what separates clumping from
+# genuine path jitter.
+func _record_packet_delay(d: float) -> void:
+	const GAIN: float = 0.125       # Jacobson 1/8: ~8-sample memory, spike decays geometrically
+	const FLOOR_RISE: float = 0.01
+	if _pdv_floor < 0.0 or d < _pdv_floor:
+		_pdv_floor = d
+	else:
+		_pdv_floor += (d - _pdv_floor) * FLOOR_RISE
+	var excess: float = maxf(0.0, d - _pdv_floor)
+	_pdv_mean += (excess - _pdv_mean) * GAIN
+	_pdv_dev += (absf(excess - _pdv_mean) - _pdv_dev) * GAIN
+
+# PDV jitter estimate (ms): EWMA mean excess + 4×mean-deviation (the
+# Jacobson/RFC-6298 safety multiple) over the de-clumped delay.
+func get_packet_delay_spread_ms() -> float:
+	return (_pdv_mean + 4.0 * _pdv_dev) * 1000.0
+
+func get_packet_delay_floor_ms() -> float:
+	return maxf(_pdv_floor, 0.0) * 1000.0
 
 func get_target_interpolation_delay() -> float:
 	# Cached once per physics frame: get_jitter_p95() duplicates + sorts the sample
@@ -1685,16 +1728,25 @@ func _compute_target_interpolation_delay() -> float:
 	var broadcast_interval: float = 1.0 / Constants.STATE_RATE
 	# Minimum is RTT/2 + one full broadcast interval so render_time always has
 	# a buffered state ahead of it between packet arrivals. Jitter margin on top.
-	# Margin multiplier 2.0: the cushion was briefly cut to 1.0x on the theory
-	# that the physics-driven broadcast loop emits a clean 1/STATE_RATE cadence.
-	# That holds on LAN/ENet, but Steam P2P relays packets in clumps — several
-	# snapshots land together, then a gap exceeding the nominal interval — so
-	# real inter-arrival spikes routinely run past a P95-sized cushion. With a
-	# 1.0x margin the remote interpolation buffer outran its newest sample during
-	# fast play (Extrap climbing well past the <1/s target, visible as rhythmic
-	# snap-back on remote skaters). 2.0x absorbs the clumps; the adaptive
-	# +10ms/packet up-clamp still handles sustained RTT spikes on top.
-	var target: float = rtt_half + broadcast_interval + get_jitter_p95() * 2.0
+	#
+	# The margin is the DE-CLUMPED packet-delay spread (Jacobson mean + 4x mean-
+	# deviation of each packet's delay vs the host clock — get_packet_delay_spread_ms).
+	# Because every packet is timed against its own host-capture stamp, relay
+	# clumping (several snapshots landing together, then a gap) barely moves it:
+	# it measures genuine PATH jitter, not arrival bunching. So it needs no clump-
+	# compensation multiplier and is used at 1.0x — lower baseline render latency
+	# on every remote entity than the old arrival-gap "jitter_p95 x 2.0" cushion,
+	# which over-cushioned a clean link to absorb clumps it couldn't tell apart
+	# from jitter. Transient clumps are absorbed by the asymmetric +10ms/packet
+	# up-clamp in adapt_interpolation_delay instead of by a fat static baseline.
+	#
+	# Canary if this under-cushions a real link: "Guessing ahead" (extrapolation
+	# /s, F3) climbing past the <1/s target — the buffer is underrunning between
+	# clumps faster than the up-clamp can chase, visible as rhythmic snap-back on
+	# remote skaters during fast play. If that shows up, swap the margin back to
+	# the conservative `get_jitter_p95() * 2.0`. See ARCHITECTURE.md -> Tier 2A.
+	var jitter_margin: float = get_packet_delay_spread_ms() / 1000.0
+	var target: float = rtt_half + broadcast_interval + jitter_margin
 	return clampf(target, maxf(rtt_half + broadcast_interval, 0.016), 0.200)
 
 func adapt_interpolation_delay(current: float) -> float:

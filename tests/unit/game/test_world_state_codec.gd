@@ -174,6 +174,26 @@ func test_goalie_zero_state_round_trips() -> void:
 	assert_eq(decoded.head_yaw, 0.0)
 
 
+# ── Puck wire block: pos + vel (carrier handled separately) ───────────────────
+
+func test_puck_round_trip_preserves_elevated_y() -> void:
+	# Y on the wire is s16 (not s8): an elevated/saucer shot above the old s8
+	# ±1.27 m range must survive the round-trip instead of clipping flat.
+	var orig := PuckNetworkState.new()
+	orig.position = Vector3(12.3, 2.5, -8.7)
+	orig.velocity = Vector3(18.0, 4.0, -22.5)
+	var encoded: PackedByteArray = WorldStateCodec._encode_puck_quantized(orig)
+	assert_eq(encoded.size(), 12, "puck pos+vel block is 12 bytes")
+	var decoded: PuckNetworkState = WorldStateCodec._decode_puck_quantized(encoded)
+	# Position s16@1cm, velocity s16@0.02m/s.
+	assert_almost_eq(decoded.position.x, orig.position.x, 0.011)
+	assert_almost_eq(decoded.position.y, orig.position.y, 0.011)  # would clip to 1.27 under s8
+	assert_almost_eq(decoded.position.z, orig.position.z, 0.011)
+	assert_almost_eq(decoded.velocity.x, orig.velocity.x, 0.021)
+	assert_almost_eq(decoded.velocity.y, orig.velocity.y, 0.021)
+	assert_almost_eq(decoded.velocity.z, orig.velocity.z, 0.021)
+
+
 # ── Skater flags byte: shot_state | ghost | elevated | blade_up | sprint_lock ─
 # All share the single flags byte (shot_state low nibble, the rest are bits
 # 0x10/0x20/0x40/0x80). This exercises every combination so a new bit can't

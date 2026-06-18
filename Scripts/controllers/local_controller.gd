@@ -1,6 +1,8 @@
 class_name LocalController
 extends SkaterController
 
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+
 signal hit_received(magnitude: float)
 
 # Trajectory-based reconcile: thresholds compare the client's prediction *at
@@ -27,7 +29,7 @@ var _input_history: Array[InputState] = []
 # true divergence against server state at the same timestamp instead of
 # comparing current client position (which is ahead by prediction lead).
 var _prediction_history: Array[PredictedState] = []
-const _PREDICTION_HISTORY_CAP: int = 480  # ~2s at 240Hz
+const _PREDICTION_HISTORY_CAP: int = _PhysicsConstants.PHYSICS_TICK * 2  # ~2 s, matches the reconcile input cap
 var _team_id: int = -1  # set at setup; needed for client-side offside prediction
 var last_reconcile_error: float = 0.0
 var _claim_cooldown: float = 0.0
@@ -41,14 +43,13 @@ var _pickup_claim_floor: float = 0.0
 var _was_in_poke_range: bool = false
 var _poke_cooldown: float = 0.0
 var _poke_claim_floor: float = 0.0
-var _last_blade_pos: Vector3 = Vector3.ZERO
 # Body check impulses captured between reconciles. Each entry is
 # {timestamp: float, impulse: Vector3}. Multiple impulses can land within a
 # single reconcile window (rapid consecutive checks, simultaneous hits from
 # two opponents) — replay must apply all of them, in timestamp order, each
 # at the first replay input whose host_timestamp catches up to it.
 # Cap prevents unbounded growth if something goes wrong; 16 covers any
-# realistic scenario at 240Hz with RTT < 2s.
+# realistic scenario at the physics rate with RTT < 2s.
 var _body_check_impulses: Array[Dictionary] = []
 const _BODY_CHECK_IMPULSE_CAP: int = 16
 const _BLADE_JUMP_THRESHOLD: float = 0.05
@@ -56,7 +57,7 @@ const _CLAIM_COOLDOWN_S: float = 0.3  # sustained re-fire gap while a claim targ
 const _PICKUP_CLAIM_FLOOR_S: float = 0.05  # min gap between pickup claims; caps rising-edge jitter spam
 const _POKE_CLAIM_FLOOR_S: float = 0.05    # same for poke / stick-lift claims
 
-const _RECONCILE_VISUAL_ALPHA: float = 0.20  # exponential decay per physics frame
+const _RECONCILE_VISUAL_ALPHA: float = 0.20  # per-tick decay factor at the nominal 120 Hz tick; applied frame-rate-independently (see _physics_process)
 
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
 	camera = $Camera3D
@@ -127,7 +128,6 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	super.teleport_to(pos, facing)
 	_input_history.clear()
 	_prediction_history.clear()
-	_last_blade_pos = Vector3.ZERO
 	_body_check_impulses.clear()
 	if skater != null:
 		skater.visual_offset = Vector3.ZERO
@@ -138,7 +138,13 @@ func _physics_process(delta: float) -> void:
 	if NetworkManager.is_replay_mode():
 		return
 	if not skater.visual_offset.is_zero_approx():
-		var new_offset: Vector3 = skater.visual_offset * (1.0 - _RECONCILE_VISUAL_ALPHA)
+		# Frame-rate-independent decay: (1 - alpha) is the per-tick factor at the
+		# nominal 120 Hz tick; raising it to delta x PHYSICS_TICK holds the
+		# wall-clock decay constant when the host dilates (longer ticks). Without
+		# the delta term the offset collapses in fewer real milliseconds exactly
+		# when a stalling host produces the largest, most frequent corrections.
+		var decay: float = pow(1.0 - _RECONCILE_VISUAL_ALPHA, delta * float(Constants.PHYSICS_TICK))
+		var new_offset: Vector3 = skater.visual_offset * decay
 		skater.visual_offset = new_offset if new_offset.length_squared() > 0.000001 else Vector3.ZERO
 	if _game_state.is_movement_locked():
 		skater.velocity = Vector3.ZERO
@@ -166,10 +172,14 @@ func _physics_process(delta: float) -> void:
 			prep_input.stick_lift_held = false
 			_current_input = prep_input
 			_input_history.append(_current_input)
-			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+			var prep_rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * float(Constants.PHYSICS_TICK)) * 2, Constants.PHYSICS_TICK / 5, Constants.PHYSICS_TICK * 2)
 			if _input_history.size() > prep_rtt_cap:
 				_input_history.pop_front()
 			apply_blade_aim_only(_current_input, delta)
+			# Snapshot the frozen prep frame too, so a broadcast that acks a
+			# prep-phase input after the lock lifts matches in find_at instead of
+			# falling back to the live position (a spurious post-faceoff reconcile).
+			_append_prediction_snapshot()
 		else:
 			# Dead-puck phase with sticks frozen too — drain history so reconcile
 			# can't replay stale inputs once the phase lifts.
@@ -193,33 +203,14 @@ func _physics_process(delta: float) -> void:
 	_input_history.append(_current_input)
 	# Cap history size to prevent unbounded growth
 	# Cap scales with RTT so sustained high-loss can't grow the buffer unboundedly:
-	# 2× RTT worth of frames (min 48, max 480) covers the full in-flight window.
-	var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * 240.0) * 2, 48, 480)
+	# 2× RTT worth of frames (min 0.2 s, max 2 s of ticks) covers the in-flight window.
+	var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * float(Constants.PHYSICS_TICK)) * 2, Constants.PHYSICS_TICK / 5, Constants.PHYSICS_TICK * 2)
 	if _input_history.size() > rtt_cap:
 		_input_history.pop_front()
 	_process_input(_current_input, _current_input.delta)
-	# Capture per-input prediction snapshot keyed by host_timestamp. Reconcile
-	# uses this to compare what the client predicted for timestamp T against
-	# what the server says happened at T — subtracting prediction lead out of
-	# the divergence measurement.
-	var snap := PredictedState.new()
-	snap.host_timestamp = _current_input.host_timestamp
-	snap.position = skater.global_position
-	snap.velocity = skater.velocity
-	snap.facing = _pose.facing
-	snap.shot_state = _sm.get_state() as int
-	snap.upper_body_rotation_y = _pose.upper_body_angle
-	_prediction_history.append(snap)
-	if _prediction_history.size() > _PREDICTION_HISTORY_CAP:
-		_prediction_history.pop_front()
+	_append_prediction_snapshot()
 	skater.current_shot_state = _sm.get_state() as int
 	_update_one_timer_indicator()
-	var blade_pos: Vector3 = skater.get_blade_contact_global()
-	if not _last_blade_pos.is_zero_approx():
-		var blade_delta: float = blade_pos.distance_to(_last_blade_pos)
-		if blade_delta > _BLADE_JUMP_THRESHOLD:
-			NetworkTelemetry.record_blade_jump(blade_delta)
-	_last_blade_pos = blade_pos
 	_claim_cooldown = maxf(_claim_cooldown - delta, 0.0)
 	_pickup_claim_floor = maxf(_pickup_claim_floor - delta, 0.0)
 	_poke_cooldown = maxf(_poke_cooldown - delta, 0.0)
@@ -300,6 +291,25 @@ func _physics_process(delta: float) -> void:
 			_was_in_pickup_range = false
 			_was_in_poke_range = false
 
+func _append_prediction_snapshot() -> void:
+	# Per-input prediction snapshot keyed by host_timestamp so reconcile can
+	# compare predicted-vs-server at the same instant (subtracting prediction lead
+	# out of the divergence). Appended on every gathered input — including frozen
+	# FACEOFF_PREP frames (position locked, velocity zero) — so a broadcast that
+	# acks a prep-phase input after the lock lifts finds a match instead of falling
+	# back to the live position and firing a spurious reconcile on the first touch.
+	var snap := PredictedState.new()
+	snap.host_timestamp = _current_input.host_timestamp
+	snap.position = skater.global_position
+	snap.velocity = skater.velocity
+	snap.facing = _pose.facing
+	snap.shot_state = _sm.get_state() as int
+	snap.upper_body_rotation_y = _pose.upper_body_angle
+	_prediction_history.append(snap)
+	if _prediction_history.size() > _PREDICTION_HISTORY_CAP:
+		_prediction_history.pop_front()
+
+
 func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_reconcile_blade: Vector3 = skater.get_blade_contact_global()
 	var pre_reconcile_visual_pos: Vector3 = skater.global_position + skater.visual_offset
@@ -343,6 +353,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# that same instant. Falls back to the live position when no match is found
 	# (history capped, post-teleport, dead-puck gap, session warmup).
 	var predicted: PredictedState = PredictedState.find_at(_prediction_history, ack_ts)
+	NetworkTelemetry.record_reconcile_match(predicted != null)
 	var divergence_position: Vector3 = predicted.position if predicted != null else skater.global_position
 	var divergence_velocity: Vector3 = predicted.velocity if predicted != null else skater.velocity
 	var divergence_upper_body: float = predicted.upper_body_rotation_y if predicted != null else _pose.upper_body_angle
@@ -363,6 +374,26 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# Errors above 5 cm are real desync and still fire through.
 	if skater.is_on_wall() and skater.global_position.distance_to(server_state.position) < 0.05:
 		return
+	# Attribute which channel tripped the snap (diagnostic): at rest the position
+	# and velocity channels are ~zero, so a non-zero "rot" count isolates
+	# pose/aim (upper-body) divergence firing reconciles, vs a position desync.
+	NetworkTelemetry.record_reconcile_cause(
+		divergence_position.distance_to(server_state.position) >= reconcile_position_threshold,
+		divergence_velocity.distance_to(server_state.velocity) >= reconcile_velocity_threshold,
+		reconcile_upper_body_rotation_threshold > 0.0 and absf(angle_difference(
+				divergence_upper_body, server_state.upper_body_rotation_y)) >= reconcile_upper_body_rotation_threshold)
+	# Diagnostic: express the same-timestamp position offset in units of one tick
+	# of travel, signed +/- by whether the prediction leads or lags the server
+	# along the velocity. ~+1.0 = predicted is one move_and_slide AHEAD of the
+	# server; ~-1.0 = one behind. Isolates a capture/integration phase mismatch
+	# (vs random non-determinism, which wouldn't sit at a clean +/-1).
+	if predicted != null:
+		var off_vec: Vector3 = predicted.position - server_state.position
+		var spd: float = server_state.velocity.length()
+		if spd > 0.05:
+			var one_tick: float = spd / float(Constants.PHYSICS_TICK)
+			NetworkTelemetry.record_pos_offset_ticks(
+					(off_vec.length() / one_tick) * signf(off_vec.dot(server_state.velocity)))
 	# Record how far the client has predicted ahead of the server's last known position.
 	# This grows naturally with RTT and speed — it is not a non-determinism signal.
 	var pre_replay_divergence: float = skater.global_position.distance_to(server_state.position)
@@ -497,6 +528,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		last_reconcile_error = predicted.position.distance_to(server_state.position)
 	else:
 		last_reconcile_error = (skater.global_position - server_state.position).length()
+	# Post-replay residual: distance from the server AFTER snap+replay. At rest
+	# (no unacked movement to predict) this should be ~0 if the snap converged; a
+	# persistently non-zero value means the replay itself leaves the body
+	# off-server, so the offset rebuilds every cycle instead of settling.
+	NetworkTelemetry.record_post_replay_residual(skater.global_position.distance_to(server_state.position))
 	# Blade must be re-applied after position is set — upper_body_to_local()
 	# uses skater.global_position, so it must reflect the final replayed position.
 	# Dispatch by state: slapper/follow-through have their own pose handlers; using
@@ -519,9 +555,6 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if blade_reconcile_delta > _BLADE_JUMP_THRESHOLD:
 		NetworkTelemetry.record_blade_jump(blade_reconcile_delta)
 	skater.visual_offset = pre_reconcile_visual_pos - skater.global_position
-	# Update the blade baseline so the next physics tick doesn't report a
-	# spurious blade jump equal to the reconcile snap distance.
-	_last_blade_pos = skater.get_blade_contact_global()
 	if OS.is_debug_build() and skater.visual_offset.length() > 0.05:
 		push_warning("Reconcile: %.3fm snap applied (inputs replayed: %d)" \
 				% [skater.visual_offset.length(), _input_history.size()])

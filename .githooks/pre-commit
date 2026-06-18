@@ -1,0 +1,32 @@
+#!/bin/bash
+# Block commits that introduce gdlint problems in staged .gd files (honors
+# .gdlintrc). This is the "never commit warnings" gate — it runs for every
+# committer (you, agents, web sessions), local Godot-editor edits included.
+#
+# Activated via: git config core.hooksPath .githooks  (set locally, and by the
+# SessionStart hook on web). Escape hatch: git commit --no-verify.
+#
+# Note: gdlint is the headless, cross-env subset — it won't catch Godot's
+# engine-only analyzer warnings (SHADOWED_VARIABLE_BASE_CLASS, INT_AS_ENUM).
+set -uo pipefail
+
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACM -- '*.gd')
+[ "${#staged[@]}" -eq 0 ] && exit 0
+
+PY=""
+for c in python python3; do
+  if command -v "$c" >/dev/null 2>&1 && "$c" -m gdtoolkit.linter --version >/dev/null 2>&1; then
+    PY="$c"; break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "pre-commit: gdtoolkit not found; skipping gdlint (pip install gdtoolkit)." >&2
+  exit 0
+fi
+
+if ! "$PY" -m gdtoolkit.linter "${staged[@]}"; then
+  echo "" >&2
+  echo "pre-commit: gdlint found problems in staged .gd files (above)." >&2
+  echo "Fix them, or bypass with:  git commit --no-verify" >&2
+  exit 1
+fi

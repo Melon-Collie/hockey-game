@@ -1,6 +1,8 @@
 class_name AIController
 extends SkaterController
 
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+
 # Host-only controller for AI bots. Owns one SkaterAgent and forwards its
 # per-tick InputState to SkaterController._process_input. Clients see the
 # bot through the existing SkaterNetworkState broadcast (no input
@@ -32,9 +34,9 @@ var _script_aim: Vector3 = Vector3.INF
 var _script_hold: bool = true
 const _SCRIPT_ARRIVAL_RADIUS_M: float = 0.5
 # Charge ticks: wrister matches the bot SM's BOT_WRISTER_CHARGE_TICKS (60 →
-# 250 ms at 240 Hz); slap is longer for a recognisable wind-up.
-const _SCRIPT_WRIST_CHARGE_TICKS: int = 60
-const _SCRIPT_SLAP_CHARGE_TICKS: int = 90
+# 250 ms at 120 Hz); slap is longer for a recognisable wind-up.
+const _SCRIPT_WRIST_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4       # 250 ms
+const _SCRIPT_SLAP_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 8    # 375 ms
 # Shot mini-state-machine: 0 idle, 1 press-edge, 2 charging, 3 release-pending.
 var _script_shot_kind: String = ""   # "", "wrist", "slap", "quick"
 var _script_shot_phase: int = 0
