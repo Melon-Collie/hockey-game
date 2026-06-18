@@ -1527,10 +1527,9 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	record.skater.body_checked_player.connect(
 		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
 	)
-	record.skater.body_checked_player.connect(
-		func(_v: Skater, _f: float, _d: Vector3) -> void:
-			SoundManager.play_world(SoundManager.Sound.BODY_CHECK, record.skater.global_position, 0.0, 0.08)
-	)
+	# The impact sound is played (throttled + strength-scaled, at the victim) by the
+	# attacker's SkaterVFX._on_body_check — same signal, one place, so it can't
+	# double with the burst or re-fire on sustained contact.
 	if NetworkManager.is_host:
 		record.skater.body_checked_player.connect(
 			func(v: Skater, f: float, d: Vector3) -> void:

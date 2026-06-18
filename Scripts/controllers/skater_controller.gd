@@ -36,6 +36,19 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # SkaterPoseCoordinator.apply_facing. Deterministic from sprint_active, so it
 # re-derives identically through reconcile replay (no new wire state).
 @export var sprint_turn_multiplier: float = 0.55
+# ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
+# Getting checked hard staggers the victim: a temporary thrust penalty plus a
+# stamina bite, both scaled by how hard the hit landed (the m/s transfer impulse).
+# stagger_timer (seconds) holds the recovery window AND drives the penalty depth —
+# a harder hit sets a longer timer, easing back to full thrust as it decays. Flat
+# for every player in v1 (the hit strength already reflects the attacker's Size/
+# Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
+# and replicated so it survives reconcile replay (same treatment as stamina).
+@export var stagger_min_impulse: float = 3.0       # m/s transfer delta below which a hit doesn't stagger
+@export var stagger_ref_impulse: float = 9.0       # m/s transfer delta treated as a full-strength check
+@export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
+@export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
+@export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -296,6 +309,11 @@ var is_replaying: bool = false
 # the host broadcasts them via fill_network_state.
 var stamina: float = 1.0
 var _sprint_locked: bool = false
+# Body-check stagger: seconds of thrust-penalty recovery remaining. Set
+# host-authoritatively when this skater absorbs a check (_on_body_check_received),
+# decayed each tick in _apply_movement, and replicated so the local player's
+# reconcile snaps it to the host baseline before replay (same as stamina).
+var stagger_timer: float = 0.0
 # Resolved sprint-boost state for this tick. Written in _apply_movement (which
 # runs before _pose.apply_facing in _process_input) and read by the pose
 # coordinator to apply the turn-rate penalty. Public so the pose collaborator
@@ -310,6 +328,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_is_host = game_state.is_host()
 	process_physics_priority = -1  # Run before Skater.move_and_slide
 	skater.body_checked_player.connect(_on_body_checked_player)
+	skater.body_check_received.connect(_on_body_check_received)
 	skater.body_block_hit.connect(_on_body_block_hit)
 	_ik.setup(skater, self)
 	_shot_pose.setup(skater, _sm, _aiming, _ik, self)
@@ -532,6 +551,23 @@ func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction:
 		return
 	puck.on_body_check(skater, victim, impact_force, hit_direction)
 
+# This skater just absorbed a check (victim-only signal). Host-authoritative: the
+# host sets the stagger window + stamina bite scaled by hit strength, then
+# broadcasts stagger_timer / stamina via fill_network_state; clients receive the
+# resolved values and (for the local player) re-derive the decay through reconcile
+# replay. On clients this fires only for host-simulated bodies — never the local
+# skater, whose hits arrive via the host snapshot — and the gate makes that
+# explicit. `max` so a weaker follow-up never shortens an in-flight stagger.
+func _on_body_check_received(impulse_magnitude: float) -> void:
+	if not _is_host:
+		return
+	var cfg: BodyCheckRules.Config = _body_check_config()
+	var add: float = BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg)
+	if add <= 0.0:
+		return
+	stagger_timer = maxf(stagger_timer, add)
+	stamina = maxf(stamina - BodyCheckRules.stamina_drain_from_impulse(impulse_magnitude, cfg), 0.0)
+
 func _on_body_block_hit(body: Node3D) -> void:
 	if not _is_host:
 		return
@@ -653,6 +689,7 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.shot_charge = _aiming.charge_distance
 	state.stamina = stamina
 	state.sprint_locked = _sprint_locked
+	state.stagger_timer = stagger_timer
 
 func get_shot_state() -> int:
 	return _sm.get_state()
@@ -680,6 +717,7 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	skater.blade_up = state.blade_up
 	stamina = state.stamina
 	_sprint_locked = state.sprint_locked
+	stagger_timer = state.stagger_timer
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
@@ -745,6 +783,7 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	stamina = 1.0
 	_sprint_locked = false
 	sprint_active = false
+	stagger_timer = 0.0
 	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
 	# charge. Otherwise the slapper charge timer keeps ticking across the
 	# respawn and the player drops into the faceoff already charged.
@@ -1031,11 +1070,20 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	var stamina_cfg: StaminaRules.StaminaConfig = _stamina_config()
 	stamina = StaminaRules.next_stamina(stamina, sprint_active, has_puck, delta, stamina_cfg)
 	_sprint_locked = StaminaRules.next_locked(_sprint_locked, stamina, sprint_active, stamina_cfg)
+	# Body-check stagger decays deterministically every tick (including during a
+	# planted charge/block and through reconcile replay), so the thrust penalty
+	# eases back on its own. Decayed before the suppression early-out so a player
+	# checked mid-windup keeps recovering.
+	stagger_timer = maxf(stagger_timer - delta, 0.0)
 
 	if locomotion_suppressed:
 		return
 
 	var cfg: SkaterMovementRules.MovementConfig = _movement_config()
+	# Apply the stagger thrust penalty on top of the attribute-scaled base thrust.
+	# cfg.thrust is set from `thrust` every tick (cheap, no allocation), so the
+	# penalty is transient and never compounds into the cached config.
+	cfg.thrust = thrust * BodyCheckRules.thrust_mult(stagger_timer, _body_check_config())
 	skater.velocity = SkaterMovementRules.apply_movement(
 			skater.velocity, input.move_vector, skater.rotation.y,
 			has_puck, input.brake, delta, cfg, sprint_active)
@@ -1088,6 +1136,22 @@ func _stamina_config() -> StaminaRules.StaminaConfig:
 		_cached_stamina_cfg.regen_per_sec = stamina_regen_per_sec
 		_cached_stamina_cfg.unlock_fraction = sprint_unlock_fraction
 	return _cached_stamina_cfg
+
+# Body-check stagger config is flat (not attribute-scaled), so a single lazily-built
+# instance is reused for the controller's lifetime — same pattern as the stamina
+# config, read both on a hit (_on_body_check_received) and every tick (the thrust
+# penalty in _apply_movement).
+var _cached_body_check_cfg: BodyCheckRules.Config = null
+
+func _body_check_config() -> BodyCheckRules.Config:
+	if _cached_body_check_cfg == null:
+		_cached_body_check_cfg = BodyCheckRules.Config.new()
+		_cached_body_check_cfg.min_impulse = stagger_min_impulse
+		_cached_body_check_cfg.ref_impulse = stagger_ref_impulse
+		_cached_body_check_cfg.max_stagger_seconds = stagger_max_seconds
+		_cached_body_check_cfg.max_stamina_drain = stagger_max_stamina_drain
+		_cached_body_check_cfg.max_thrust_penalty = stagger_max_thrust_penalty
+	return _cached_body_check_cfg
 
 func _wrister_config() -> ShotMechanics.WristerConfig:
 	var cfg := ShotMechanics.WristerConfig.new()

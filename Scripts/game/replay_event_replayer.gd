@@ -69,10 +69,15 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 			var sound: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
 			SoundManager.play_world(sound, pos, 0.0, 0.04)
 		"body_check":
-			SoundManager.play_world(SoundManager.Sound.BODY_CHECK, pos, 0.0, 0.08)
+			# "speed" carries the recorded impact_force; scale sound + burst by it
+			# the same way live play does (SkaterVFX.check_*).
+			var check_force: float = float(event.get("speed", 0.0))
+			SoundManager.play_world(SoundManager.Sound.BODY_CHECK, pos,
+					SkaterVFX.check_sound_volume_db(check_force), 0.08,
+					SkaterVFX.check_sound_pitch_scale(check_force))
 			# Drive the burst directly (not via body_checked_player) so we don't
-			# re-trigger GameManager's hit-landed / sound / replay-record
-			# closures — the third one would recursively record a new event.
+			# re-trigger GameManager's hit-landed / replay-record closures — the
+			# latter would recursively record a new event.
 			var checker_peer_id: int = int(event.get("checker_peer_id", -1))
 			var victim_peer_id: int = int(event.get("victim_peer_id", -1))
 			var checker_rec: PlayerRecord = records.get(checker_peer_id)
@@ -82,8 +87,7 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 				var vfx: SkaterVFX = checker_rec.skater.get_node_or_null("VFX") as SkaterVFX
 				if vfx != null:
 					var hit_dir: Vector3 = _pos_from_array(event.get("hit_dir", []))
-					vfx.fire_body_check_burst(
-							victim_rec.skater, float(event.get("speed", 0.0)), hit_dir)
+					vfx.fire_body_check_burst(victim_rec.skater, check_force, hit_dir)
 		"goal":
 			# Goal horn fires only via the file-replay path. The in-game goal
 			# cinematic relies on the live goal_scored closure that already
