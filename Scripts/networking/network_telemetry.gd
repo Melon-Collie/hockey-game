@@ -204,7 +204,10 @@ static func record_reconcile(delta_m: float) -> void:
 	instance._reconcile_mag_sum += delta_m
 	instance._reconcile_mag_n += 1
 
-# blade_jump: any physics frame where blade world pos moved > 5 cm (teleport-class).
+# blade_jump: a reconcile teleported the blade > 5 cm (a real visible pop).
+# Recorded ONLY from the reconcile path now — the old per-tick live check also
+# fired here, but normal fast stickhandling legitimately moves the blade > 5 cm
+# in a 8.3ms tick (= 6 m/s), so it flagged "stick jumps" during ordinary play.
 static func record_blade_jump(magnitude: float) -> void:
 	if instance == null:
 		return
@@ -219,9 +222,11 @@ static func record_blade_reconcile(magnitude: float) -> void:
 	instance._blade_reconcile_mag_sum += magnitude
 	instance._blade_reconcile_n += 1
 
-# prediction_divergence: position error between client prediction and server state
-# measured before the input replay, each time a reconcile fires. Average over the
-# window surfaces non-determinism — a healthy connection should see near-zero drift.
+# prediction_divergence: distance from the server's last known position measured
+# before the input replay, each time a reconcile fires. NOTE this is the natural
+# prediction LEAD (grows with RTT × speed) — NOT a non-determinism signal — so it
+# is no longer surfaced as a health flag on F3 (it cried wolf at speed). Kept as a
+# raw diagnostic; the real divergence signal is reconcile_per_sec + magnitude.
 static func record_prediction_divergence(meters: float) -> void:
 	if instance == null:
 		return

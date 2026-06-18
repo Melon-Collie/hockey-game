@@ -43,7 +43,6 @@ var _pickup_claim_floor: float = 0.0
 var _was_in_poke_range: bool = false
 var _poke_cooldown: float = 0.0
 var _poke_claim_floor: float = 0.0
-var _last_blade_pos: Vector3 = Vector3.ZERO
 # Body check impulses captured between reconciles. Each entry is
 # {timestamp: float, impulse: Vector3}. Multiple impulses can land within a
 # single reconcile window (rapid consecutive checks, simultaneous hits from
@@ -129,7 +128,6 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	super.teleport_to(pos, facing)
 	_input_history.clear()
 	_prediction_history.clear()
-	_last_blade_pos = Vector3.ZERO
 	_body_check_impulses.clear()
 	if skater != null:
 		skater.visual_offset = Vector3.ZERO
@@ -212,12 +210,6 @@ func _physics_process(delta: float) -> void:
 	_append_prediction_snapshot()
 	skater.current_shot_state = _sm.get_state() as int
 	_update_one_timer_indicator()
-	var blade_pos: Vector3 = skater.get_blade_contact_global()
-	if not _last_blade_pos.is_zero_approx():
-		var blade_delta: float = blade_pos.distance_to(_last_blade_pos)
-		if blade_delta > _BLADE_JUMP_THRESHOLD:
-			NetworkTelemetry.record_blade_jump(blade_delta)
-	_last_blade_pos = blade_pos
 	_claim_cooldown = maxf(_claim_cooldown - delta, 0.0)
 	_pickup_claim_floor = maxf(_pickup_claim_floor - delta, 0.0)
 	_poke_cooldown = maxf(_poke_cooldown - delta, 0.0)
@@ -556,9 +548,6 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if blade_reconcile_delta > _BLADE_JUMP_THRESHOLD:
 		NetworkTelemetry.record_blade_jump(blade_reconcile_delta)
 	skater.visual_offset = pre_reconcile_visual_pos - skater.global_position
-	# Update the blade baseline so the next physics tick doesn't report a
-	# spurious blade jump equal to the reconcile snap distance.
-	_last_blade_pos = skater.get_blade_contact_global()
 	if OS.is_debug_build() and skater.visual_offset.length() > 0.05:
 		push_warning("Reconcile: %.3fm snap applied (inputs replayed: %d)" \
 				% [skater.visual_offset.length(), _input_history.size()])
