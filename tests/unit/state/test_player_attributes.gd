@@ -154,13 +154,14 @@ func test_stick_len_gentler_than_height() -> void:
 					"stick and height must move together at level %d" % level)
 
 
-func test_arm_bulk_keyed_to_size_not_skill() -> void:
-	# The "jacked" silhouette follows physical frame (Size), not the invisible
-	# Skill stat. A high-Size / low-Skill build should still have thick arms.
+func test_arm_bulk_keyed_to_skill_not_size() -> void:
+	# Arm bulk is Skill's visual tell (the "hands" stat reads as forearm/bicep
+	# mass), independent of physical frame (Size). A small high-Skill dangler has
+	# thick arms; a big low-Skill build has thin ones.
 	var big_unskilled := PlayerAttributes.new(2, 2, PlayerAttributes.LEVEL_MAX, PlayerAttributes.LEVEL_MIN)
 	var small_skilled := PlayerAttributes.new(2, 2, PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
-	assert_gt(big_unskilled.arm_bulk_mult(), 1.0)
-	assert_lt(small_skilled.arm_bulk_mult(), 1.0)
+	assert_lt(big_unskilled.arm_bulk_mult(), 1.0)
+	assert_gt(small_skilled.arm_bulk_mult(), 1.0)
 
 
 # ── from_levels / point-buy ──────────────────────────────────────────────────

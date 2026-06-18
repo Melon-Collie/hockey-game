@@ -117,9 +117,11 @@ const _SKILL_BLADE_MULTS:   Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 # Visual-only — drive `transform.scale` on body-chain mesh leaves and arm mesh
 # radii. Wider than gameplay tables on purpose: the third-person hockey camera
 # makes subtle differences hard to read, so silhouettes meaningfully differ
-# between attribute extremes. Arm bulk is keyed to Size (physical frame, not the
-# invisible Skill stat) and is widest / asymmetric on the GOOD side for a
-# "jacked" big-player silhouette.
+# between attribute extremes. Each attribute owns one visual tell: torso/head →
+# Size, thigh → Speed, calf → Agility, and arm bulk → Skill (so the otherwise
+# invisible "hands" stat reads as forearm/bicep mass — a high-Skill dangler has
+# noticeably thick arms). Arm bulk is widest / asymmetric on the GOOD side for a
+# "jacked" silhouette.
 const _TORSO_BULK_MULTS: Array[float] = [0.82, 0.91, 1.00, 1.09, 1.18]
 const _HEAD_BULK_MULTS:  Array[float] = [0.92, 0.96, 1.00, 1.04, 1.08]
 const _THIGH_MULTS:      Array[float] = [0.82, 0.91, 1.00, 1.09, 1.18]
@@ -207,7 +209,7 @@ func torso_bulk_mult() -> float: return _lookup(_TORSO_BULK_MULTS, size)
 func head_bulk_mult()  -> float: return _lookup(_HEAD_BULK_MULTS,  size)
 func thigh_mult()      -> float: return _lookup(_THIGH_MULTS,      speed)
 func calf_mult()       -> float: return _lookup(_CALF_MULTS,       agility)
-func arm_bulk_mult()   -> float: return _lookup(_ARM_BULK_MULTS,   size)
+func arm_bulk_mult()   -> float: return _lookup(_ARM_BULK_MULTS,   skill)
 
 
 # Generic accessor for the canonical-gameplay multipliers, parameterized by
