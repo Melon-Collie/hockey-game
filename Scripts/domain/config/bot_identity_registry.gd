@@ -9,7 +9,7 @@ class_name BotIdentityRegistry
 #   {
 #     "identities": [
 #       { "name": "Wayne Gretzky", "number": 99, "is_left_handed": false,
-#         "speed": 2, "agility": 2, "size": 2, "strength": 3 },
+#         "speed": 3, "agility": 3, "size": 2, "skill": 5 },
 #       ...
 #     ]
 #   }
@@ -66,7 +66,7 @@ static func fallback_identity(slot_key: int) -> Dictionary:
 		"speed":          PlayerAttributes.LEVEL_MEDIUM,
 		"agility":        PlayerAttributes.LEVEL_MEDIUM,
 		"size":           PlayerAttributes.LEVEL_MEDIUM,
-		"strength":       PlayerAttributes.LEVEL_MEDIUM,
+		"skill":          PlayerAttributes.LEVEL_MEDIUM,
 	}
 
 
@@ -91,6 +91,7 @@ static func _try_load_from(path: String) -> bool:
 			"speed":          int(entry.get("speed",   PlayerAttributes.LEVEL_MEDIUM)),
 			"agility":        int(entry.get("agility", PlayerAttributes.LEVEL_MEDIUM)),
 			"size":           int(entry.get("size",    PlayerAttributes.LEVEL_MEDIUM)),
-			"strength":       int(entry.get("strength", PlayerAttributes.LEVEL_MEDIUM)),
+			# Accept the legacy "strength" key so an older user:// copy still loads.
+			"skill":          int(entry.get("skill",   entry.get("strength", PlayerAttributes.LEVEL_MEDIUM))),
 		})
 	return true

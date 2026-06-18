@@ -359,12 +359,12 @@ var _base_min_slapper_power:            float = 0.0
 var _base_max_slapper_power:            float = 0.0
 var _base_max_wrister_charge_distance:  float = 0.0
 var _base_max_slapper_charge_time:      float = 0.0
+var _base_max_blade_speed:              float = 0.0
 var _base_puck_carry_speed_multiplier:  float = 0.0
 var _base_stick_length:                 float = 0.0
 var _base_skater_upper_arm_length:      float = 0.0
 var _base_skater_forearm_length:        float = 0.0
 var _base_skater_weight:                float = 0.0
-var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
 var _base_skater_collision_radius:      float = 0.0
 var _base_skater_collision_height:      float = 0.0
@@ -380,13 +380,16 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 		return
 	if not _attr_base_captured:
 		_capture_attribute_bases()
-	var m_speed:    float = attrs.speed_mult()
-	var m_agility:  float = attrs.agility_mult()
-	var m_size:     float = attrs.size_mult()
-	var m_strength: float = attrs.strength_mult()
-	var m_height:   float = attrs.height_mult()
-	thrust    = _base_thrust    * m_speed
+	var m_speed:   float = attrs.speed_mult()
+	var m_agility: float = attrs.agility_mult()
+	var m_size:    float = attrs.size_mult()
+	var m_height:  float = attrs.height_mult()
+	# Speed owns top-end velocity (and through it sprint payoff — sprint
+	# multiplies max_speed). Agility owns acceleration: thrust, plus the
+	# turn/brake/edge handling below. Splitting them makes Speed the
+	# straight-line stat and Agility the quickness/control stat.
 	max_speed = _base_max_speed * m_speed
+	thrust    = _base_thrust    * m_agility
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
 	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
@@ -398,26 +401,28 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# Slick agile is how cleanly they transition between those directions.
 	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
 	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.agility_carry_mult()
-	# Shot powers use the narrower Strength-Shot multiplier (±15%) rather
-	# than canonical Strength (±25%) so the wrister floor stays playable
-	# for low-Strength shooters. Charge speed uses its own inverted table.
-	var m_shot_power: float = attrs.strength_shot_mult()
+	# Skill drives the whole offensive puck game: shot power (narrower ±15%
+	# spread so the wrister floor stays playable), charge speed (inverted),
+	# and blade speed (the dangle/absorb "hands" lever) below.
+	var m_shot_power: float = attrs.skill_shot_mult()
 	min_wrister_power = _base_min_wrister_power * m_shot_power
 	max_wrister_power = _base_max_wrister_power * m_shot_power
 	quick_shot_power  = _base_quick_shot_power  * m_shot_power
 	min_slapper_power = _base_min_slapper_power * m_shot_power
 	max_slapper_power = _base_max_slapper_power * m_shot_power
-	# Charge cap scales with both Strength (how easy to load) and Size (so the
-	# cap stays a constant fraction of the player's ROM — small players can
-	# still fill the bar with their own full-reach sweep).
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.strength_charge_mult() * attrs.size_charge_mult()
-	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.strength_charge_mult()
-	# Weight uses the narrower SIZE_WEIGHT spread (±12%) instead of canonical
-	# Size (±18%) so the weight_ratio in the check formula doesn't dominate
-	# the Strength-driven body_check_transfer. Brace and hitbox stay on
-	# canonical Size.
+	# Charge cap scales with Skill (how fast you load) and Size (so the cap
+	# stays a constant fraction of the player's ROM — small players can still
+	# fill the bar with their own full-reach sweep).
+	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.skill_charge_mult() * attrs.size_charge_mult()
+	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.skill_charge_mult()
+	# Blade speed — how fast the blade chases the cursor through the dangle arc
+	# and draws back to absorb fast passes. The "hands" lever, Skill-scaled.
+	max_blade_speed             = _base_max_blade_speed             * attrs.skill_blade_mult()
+	# Size drives body checking purely through `weight` (the weight_ratio in the
+	# check formula, skater.gd). body_check_transfer stays a flat constant —
+	# scaling BOTH it and weight by Size would double-count Size multiplicatively.
+	# Brace and hitbox stay on canonical Size.
 	skater.weight                       = _base_skater_weight                  * attrs.size_weight_mult()
-	skater.body_check_transfer          = _base_skater_body_check_transfer     * m_strength
 	# Inverse: brace_resistance is a coefficient on incoming transfer when
 	# the victim is braced — *lower* = better resistance. A bigger-Size
 	# player should resist knockback better, so the multiplier flips.
@@ -472,12 +477,12 @@ func _capture_attribute_bases() -> void:
 	_base_max_slapper_power            = max_slapper_power
 	_base_max_wrister_charge_distance  = max_wrister_charge_distance
 	_base_max_slapper_charge_time      = max_slapper_charge_time
+	_base_max_blade_speed              = max_blade_speed
 	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
 	_base_stick_length                 = stick_length
 	_base_skater_upper_arm_length      = skater.upper_arm_length
 	_base_skater_forearm_length        = skater.forearm_length
 	_base_skater_weight                       = skater.weight
-	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
 	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	if col != null:

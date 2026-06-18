@@ -200,7 +200,7 @@ func spawn_bot(
 				int(identity.get("speed",   PlayerAttributes.LEVEL_MEDIUM)),
 				int(identity.get("agility", PlayerAttributes.LEVEL_MEDIUM)),
 				int(identity.get("size",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("strength", PlayerAttributes.LEVEL_MEDIUM)))
+				int(identity.get("skill",   PlayerAttributes.LEVEL_MEDIUM)))
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck
