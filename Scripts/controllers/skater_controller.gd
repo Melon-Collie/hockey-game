@@ -29,6 +29,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var sprint_carry_drain_multiplier: float = 1.6 # carrying drains faster (~1.4s)
 @export var stamina_regen_per_sec: float = 0.30        # ~3.3s to refill from empty
 @export var sprint_unlock_fraction: float = 0.5        # exhausted → recover to here before sprinting again
+# Turn-rate scale while sprinting (< 1.0 = wider, lazier turns). This is the
+# tradeoff that makes sprint a decision rather than a hold-always button:
+# committed straight-line speed at the cost of agility, mirroring the
+# hustle/turn-radius coupling in sim hockey games. Scales facing_drag_speed in
+# SkaterPoseCoordinator.apply_facing. Deterministic from sprint_active, so it
+# re-derives identically through reconcile replay (no new wire state).
+@export var sprint_turn_multiplier: float = 0.55
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -276,6 +283,11 @@ var is_replaying: bool = false
 # the host broadcasts them via fill_network_state.
 var stamina: float = 1.0
 var _sprint_locked: bool = false
+# Resolved sprint-boost state for this tick. Written in _apply_movement (which
+# runs before _pose.apply_facing in _process_input) and read by the pose
+# coordinator to apply the turn-rate penalty. Public so the pose collaborator
+# can read it without a getter.
+var sprint_active: bool = false
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
@@ -684,6 +696,7 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	# any exhaustion lockout so play resumes from a clean slate.
 	stamina = 1.0
 	_sprint_locked = false
+	sprint_active = false
 	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
 	# charge. Otherwise the slapper charge timer keeps ticking across the
 	# respawn and the player drops into the faceoff already charged.
@@ -965,7 +978,7 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	var locomotion_suppressed: bool = \
 			move_state == State.SLAPPER_CHARGE_WITH_PUCK or move_state == State.SHOT_BLOCKING
 	var is_moving: bool = not input.brake and input.move_vector.length() > move_deadzone
-	var sprint_active: bool = not locomotion_suppressed and StaminaRules.sprint_active(
+	sprint_active = not locomotion_suppressed and StaminaRules.sprint_active(
 			stamina, input.sprint_held, is_moving, _sprint_locked)
 	var stamina_cfg: StaminaRules.StaminaConfig = _stamina_config()
 	stamina = StaminaRules.next_stamina(stamina, sprint_active, has_puck, delta, stamina_cfg)
