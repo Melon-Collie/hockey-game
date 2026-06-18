@@ -16,6 +16,13 @@ var target_position: Vector3 = Vector3.ZERO
 var aim_world_pos: Vector3 = Vector3.ZERO
 var has_aim_override: bool = false
 
+# Raise the blade off the ice (stick_lift_held) this tick. Set by
+# FINISHER's reactive deflection routine when the incoming on-net shot is
+# ELEVATED — a grounded blade flies under an airborne puck, so the bot
+# lifts to tip it. Off-puck only (the controller ignores voluntary lifts
+# while carrying). Consumed by the state machine's OFF_PUCK handler.
+var lift_blade: bool = false
+
 # Fire-intent flags. Set by CARRIER (and any role that opportunistically
 # fires, like FINISHER on a tip). Mutually exclusive in practice — the
 # state machine consumes whichever is true to drive its transition into

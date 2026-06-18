@@ -4,12 +4,11 @@ class_name AIRoleFinisher
 # Two-mode decision:
 #
 #   1. REACTIVE: an incoming shot is detected (puck heading at our
-#      offensive goal at speed). Decide tip vs. step-out vs. hold:
-#      - STEP OUT if the shooter is_elevated (the puck will be in
-#        the air — body block risk, blade can't reach).
-#      - TIP otherwise (fast ground shot, on or off target — both
-#        are deflection candidates). Aim override points the blade
-#        toward net for the redirect.
+#      offensive goal at speed) — the off-puck deflection routine.
+#      Always TIP: move onto the puck path and point the blade at net
+#      for the redirect (works for on- and off-target shots). When the
+#      incoming shot is ELEVATED, also raise the blade (lift_blade) so
+#      it can reach the airborne puck — a grounded stick flies under it.
 #      Reactive overrides positioning when active.
 #
 #   2. POSITIONING: no incoming shot. FINISHER cares about exactly
@@ -35,9 +34,6 @@ class_name AIRoleFinisher
 
 # Speed gate: pucks slower than this are passes / rolling, not shots.
 const INCOMING_SHOT_SPEED_M_S: float = 12.0
-
-# Lateral step magnitude used to clear the puck path on STEP_OUT.
-const STEP_OUT_M: float = 1.5
 
 # How far in front of the opp goal the positioning search center
 # sits. Sourced from GameRules.SLOT_DIST_M — the faceoff-hash slot,
@@ -89,39 +85,29 @@ static func _try_reactive_decision(ctx: RoleContext) -> RoleDecision:
 		return null
 	var path_x_at_my_z: float = puck_pos.x + puck_vel.x * t_to_my_z
 
-	# Elevated check: read the most-recent shooter's `is_elevated`
-	# flag directly from their network state (cleaner than projecting
-	# puck y velocity through gravity math). Closest teammate to the
-	# puck is the proxy for "shooter" since once the puck is in
-	# flight there's no carrier — but the bot that just released
-	# will typically be the closest teammate.
+	# TIP. Shift target onto the puck path at our current z plane, aim
+	# mouse at goal so the blade angles toward net for a deflection /
+	# redirect. Works for both on-target shots (steers the puck through a
+	# different angle past the goalie) and off-target shots (redirects
+	# toward net).
 	#
 	# Reactive references the FINISHER's CURRENT position (self_pos)
 	# rather than a static anchor — under the no-anchors refactor
 	# FINISHER roams, so reactive responses are anchored to where
 	# the bot actually is when the puck arrives.
 	var d := RoleDecision.new()
-	if _last_shooter_is_elevated(ctx):
-		# STEP OUT — move laterally so our body isn't in the path of
-		# the elevated shot. Blade can't reach an elevated puck so
-		# tipping isn't an option here.
-		var step_dir: float = signf(path_x_at_my_z - ctx.self_pos.x)
-		if step_dir == 0.0:
-			step_dir = 1.0
-		d.target_position = Vector3(
-				ctx.self_pos.x - step_dir * STEP_OUT_M,
-				0.0,
-				ctx.self_pos.z)
-		return d
-
-	# Fast ground shot — TIP. Shift target onto the puck path at our
-	# current z plane, aim mouse at goal so the blade angles toward
-	# net for a deflection / redirect. Works for both on-target shots
-	# (steers the puck through a different angle past the goalie) and
-	# off-target shots (redirects toward net).
 	d.target_position = Vector3(path_x_at_my_z, 0.0, ctx.self_pos.z)
 	d.aim_world_pos = Vector3(0.0, 0.0, opp_goal_z)
 	d.has_aim_override = true
+	# Elevated check: read the most-recent shooter's `is_elevated` flag
+	# directly from their network state (cleaner than projecting puck y
+	# velocity through gravity math). Closest teammate to the puck is the
+	# proxy for "shooter" since once the puck is in flight there's no
+	# carrier — but the bot that just released is typically still nearest.
+	# When the incoming on-net puck is airborne, raise the blade so we can
+	# actually tip it — a grounded blade flies under an elevated puck.
+	if _last_shooter_is_elevated(ctx):
+		d.lift_blade = true
 	return d
 
 

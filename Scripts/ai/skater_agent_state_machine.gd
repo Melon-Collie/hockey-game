@@ -187,21 +187,6 @@ const RECEIVE_BODY_OFFSET_M: float = (
 # gets the bot to the puck faster, even if at a worse angle) wins.
 const RECEIVE_TIMING_MARGIN: float = 0.9
 
-# Deflect-lift. An airborne loose puck (a saucer pass or an elevated
-# clear) can only be touched by a LIFTED blade — a grounded stick lets
-# it fly over. When the chasing bot is closing on an airborne puck within
-# this radius, it raises its blade (stick_lift_held) so it can knock the
-# puck down / tip it instead of whiffing underneath. Sized a touch beyond
-# blade reach so the lift blend completes before the puck arrives.
-const DEFLECT_LIFT_REACH_M: float = BLADE_REACH_M + 1.0
-# Margin (m) above the ice rest height at which the puck counts as
-# airborne for the deflect-lift decision. Mirrors Puck.is_airborne()'s
-# `ice_height + 0.05` threshold; combined with GameRules.PUCK_START_POS.y
-# (the rest height) it reproduces that gate so the bot lifts exactly when
-# a grounded blade would lose contact.
-const PUCK_AIRBORNE_MARGIN_M: float = 0.05
-const PUCK_AIRBORNE_Y_M: float = GameRules.PUCK_START_POS.y + PUCK_AIRBORNE_MARGIN_M
-
 # CARRY blade aim distance (m forward in goal direction). Mouse on the
 # goal plane (25+ m away) was useless for stickhandling: a 0.3 m
 # lateral blade shift would need a ~22 m mouse offset. Putting mouse
@@ -979,6 +964,10 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
 		_apply_steering(input, snapshot, self_pos, decision.target_position)
+		# Deflection routine: FINISHER raises its blade to tip an incoming
+		# ELEVATED on-net shot (a grounded blade flies under it). Off-puck
+		# only — the controller ignores voluntary lifts while carrying.
+		input.stick_lift_held = decision.lift_blade
 		# One-timer ready overrides the default ready-stance aim: point
 		# mouse + facing at the open net so the bot is pre-aimed when
 		# the puck arrives. Mouse aim is what drives blade IK + body
@@ -1183,13 +1172,6 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			input.mouse_world_pos = _step_mouse_toward(puck_pos)
 		else:
 			input.mouse_world_pos = _step_mouse_toward(target)
-		# Deflect-lift: an airborne loose puck (saucer / elevated clear)
-		# can't be touched by a grounded blade. When it's within reach,
-		# raise the blade so we knock it down out of the air instead of
-		# skating under it. The mouse aim above already tracks the puck,
-		# so the lifted blade is pointed at it; lifting just lets it tip.
-		if _should_lift_to_deflect(snapshot, self_pos):
-			input.stick_lift_held = true
 	# Transitions: chase ends as soon as someone has the puck, OR we're
 	# no longer the closest teammate (let the new closest take over).
 	# One-timer takes priority — if the FINISHER published ready and the
@@ -1221,12 +1203,6 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 # predicted and the timing margin gives us slack.
 func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	if snapshot.puck_state.carrier_peer_id != -1:
-		return false
-	# Airborne pucks (saucers / elevated clears) fly over a grounded
-	# blade, so the perpendicular grounded-catch setup this helper builds
-	# can't corral them. Bail to the default chase, which lifts the blade
-	# to knock the puck down instead.
-	if _puck_is_airborne(snapshot.puck_state):
 		return false
 	var puck_vel: Vector3 = snapshot.puck_state.velocity
 	var puck_speed_sq: float = puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z
@@ -1284,28 +1260,6 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	blade_target.y = 0.0
 	input.mouse_world_pos = _step_mouse_toward(blade_target)
 	return true
-
-
-# True when the loose puck sits high enough off the ice that only a
-# lifted blade can touch it. Mirrors Puck.is_airborne() (see
-# PUCK_AIRBORNE_Y_M). Carried pucks are not "loose" — guard upstream.
-func _puck_is_airborne(puck: PuckNetworkState) -> bool:
-	return puck.position.y > PUCK_AIRBORNE_Y_M
-
-
-# Should the chasing bot raise its blade to knock down an airborne puck?
-# True only for a LOOSE airborne puck within deflect reach — a carried
-# puck can't be deflected, and a grounded puck wants the normal grounded
-# corral (lifting would make the blade unable to touch it).
-func _should_lift_to_deflect(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
-	var puck: PuckNetworkState = snapshot.puck_state
-	if puck.carrier_peer_id != -1:
-		return false
-	if not _puck_is_airborne(puck):
-		return false
-	var dx: float = puck.position.x - self_pos.x
-	var dz: float = puck.position.z - self_pos.z
-	return dx * dx + dz * dz <= DEFLECT_LIFT_REACH_M * DEFLECT_LIFT_REACH_M
 
 
 func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
