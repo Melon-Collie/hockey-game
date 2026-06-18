@@ -84,13 +84,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var rom_backhand_angle_max_deg: float = 90.0
 @export var rom_forehand_reach_max: float = 0.45
 @export var rom_backhand_reach_max: float = 0.70
-# Cap on how fast the aim target can move in world XZ per second. Smooths fast
-# mouse wraps across the back of the player (avoiding the blade snap that
-# crossing the IK ROM boundary used to produce) and ROM-clamp pops near the
-# reach limit. The IK consumes the smoothed target, so the blade visibly
-# inherits the cap. Tune up if normal aim feels laggy; tune down if wraps still
-# feel snappy.
-@export var max_blade_speed: float = 60.0
+# Cap on how fast the aim target can move in world XZ per second. The IK consumes
+# the smoothed target, so the blade visibly inherits the cap. Originally a high
+# (60 m/s) smoothing cap that only bound on fast mouse wraps; now lowered into
+# the dangle-speed range (~8-14 m/s) so it's the Hands "quick hands" lever —
+# scaled by attrs.hands_blade_mult() in apply_attributes(), it gates how fast you
+# can whip the blade forehand-to-backhand. A medium player's full ROM span is
+# ~1.18 m, so 10 m/s crosses it in ~118 ms (±15% Hands → ~103-139 ms across
+# levels). Tune UP if deliberate aim feels laggy at low Hands; tune DOWN if fast
+# dangling feels the same at L1 and L5. (Live-feel call — can't be measured headless.)
+@export var max_blade_speed: float = 10.0
 
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
