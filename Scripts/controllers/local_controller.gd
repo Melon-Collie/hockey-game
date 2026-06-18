@@ -389,6 +389,18 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		divergence_velocity.distance_to(server_state.velocity) >= reconcile_velocity_threshold,
 		reconcile_upper_body_rotation_threshold > 0.0 and absf(angle_difference(
 				divergence_upper_body, server_state.upper_body_rotation_y)) >= reconcile_upper_body_rotation_threshold)
+	# Diagnostic: express the same-timestamp position offset in units of one tick
+	# of travel, signed +/- by whether the prediction leads or lags the server
+	# along the velocity. ~+1.0 = predicted is one move_and_slide AHEAD of the
+	# server; ~-1.0 = one behind. Isolates a capture/integration phase mismatch
+	# (vs random non-determinism, which wouldn't sit at a clean +/-1).
+	if predicted != null:
+		var off_vec: Vector3 = predicted.position - server_state.position
+		var spd: float = server_state.velocity.length()
+		if spd > 0.05:
+			var one_tick: float = spd / float(Constants.PHYSICS_TICK)
+			NetworkTelemetry.record_pos_offset_ticks(
+					(off_vec.length() / one_tick) * signf(off_vec.dot(server_state.velocity)))
 	# Record how far the client has predicted ahead of the server's last known position.
 	# This grows naturally with RTT and speed — it is not a non-determinism signal.
 	var pre_replay_divergence: float = skater.global_position.distance_to(server_state.position)
