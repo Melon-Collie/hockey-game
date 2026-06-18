@@ -125,12 +125,13 @@ func test_tip_shifts_anchor_onto_puck_path_and_aims_at_goal() -> void:
 	assert_almost_eq(d.aim_world_pos.x, 0.0, 0.001)
 
 
-# ─── STEP_OUT: elevated shot ──────────────────────────────────────────────
+# ─── TIP + LIFT: elevated shot ────────────────────────────────────────────
 
-func test_step_out_when_shooter_is_elevated() -> void:
+func test_lift_and_tip_when_shooter_is_elevated() -> void:
 	# Same geometry as the TIP test but the shooting teammate has
-	# is_elevated = true. Finisher should step laterally instead of
-	# moving onto the path.
+	# is_elevated = true. Finisher should still move ONTO the path and aim
+	# at net (a tip), and additionally raise its blade so it can reach the
+	# airborne puck — not step out of the way.
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var teammate_pos := Vector3(4.0, 0.0, -15.0)
 	var ctx: RoleContext = _make_ctx(
@@ -141,12 +142,29 @@ func test_step_out_when_shooter_is_elevated() -> void:
 				_make_skater(2, TEAM_ID, teammate_pos, true),  # elevated
 			])
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
-	# Path crosses at x ≈ 2.6, anchor.x = -2.0. step_dir = sign(2.6 - -2.0) = +1.
-	# Step anchor x = -2.0 - 1 * 1.5 = -3.5 (move laterally away from path).
-	assert_almost_eq(d.target_position.x, -3.5, 0.001)
+	# Target moves onto the puck path (same as the ground tip), x ≈ 2.6.
+	assert_almost_eq(d.target_position.x, 2.6, 0.1)
 	assert_almost_eq(d.target_position.z, -22.0, 0.001)
-	# No aim override on STEP_OUT.
-	assert_false(d.has_aim_override)
+	# Aim override toward opp net, and the blade is lifted to reach the air.
+	assert_true(d.has_aim_override)
+	assert_almost_eq(d.aim_world_pos.z, OPP_NET_Z, 0.001)
+	assert_true(d.lift_blade, "elevated incoming shot → lift to tip it")
+
+
+func test_ground_tip_does_not_lift_blade() -> void:
+	# A fast GROUND shot is tipped with the blade down — lifting would
+	# make the grounded blade unable to touch the on-ice puck.
+	var anchor := Vector3(-2.0, 0.0, -22.0)
+	var teammate_pos := Vector3(4.0, 0.0, -15.0)
+	var ctx: RoleContext = _make_ctx(
+			Vector3(-2.0, 0.0, -22.0), anchor,
+			teammate_pos, Vector3(-3.0, 0.0, -15.0),
+			[
+				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),
+				_make_skater(2, TEAM_ID, teammate_pos, false),  # NOT elevated
+			])
+	var d: RoleDecision = AIRoleFinisher.decide(ctx)
+	assert_false(d.lift_blade, "a ground shot is tipped with a grounded blade")
 
 
 # ─── HOLD: puck won't reach our z-plane ───────────────────────────────────

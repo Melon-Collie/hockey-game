@@ -569,6 +569,10 @@ var _handedness_perp_sign: float = 1.0
 # true; PASS_PRESSED then holds shoot_held through BOT_WRISTER_CHARGE_TICKS
 # instead of releasing on tick 0. See _state_pass_pressed.
 var _pass_should_charge: bool = false
+# Mirrored from _carrier.pass_should_saucer. When true, PASS_PRESSED
+# toggles elevation on for the release so the puck lofts over a
+# contested mid-lane defender (saucer pass). Only set for long passes.
+var _pass_should_saucer: bool = false
 var _pass_charge_tick: int = 0
 # Wind-up endpoint OFFSETS (relative to self_pos) for the charged pass —
 # same geometry pattern as the SHOOT_PRESSED fields, but aim_dir points
@@ -960,6 +964,10 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
 		_apply_steering(input, snapshot, self_pos, decision.target_position)
+		# Deflection routine: FINISHER raises its blade to tip an incoming
+		# ELEVATED on-net shot (a grounded blade flies under it). Off-puck
+		# only — the controller ignores voluntary lifts while carrying.
+		input.stick_lift_held = decision.lift_blade
 		# One-timer ready overrides the default ready-stance aim: point
 		# mouse + facing at the open net so the bot is pre-aimed when
 		# the puck arrives. Mouse aim is what drives blade IK + body
@@ -1261,6 +1269,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_intent_wait_ticks = 0
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
+		_pass_should_saucer = false
 		_shot_is_elevated = false
 		_locked_pre_aim_point = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
@@ -1282,6 +1291,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	_last_carry_anchor = _carrier.last_carry_anchor
 	_pass_target_peer_id = _carrier.pass_target_peer_id
 	_pass_should_charge = _carrier.pass_should_charge
+	_pass_should_saucer = _carrier.pass_should_saucer
 	_shot_is_elevated = _carrier.shot_is_elevated
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
@@ -1783,10 +1793,19 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	if not have_puck:
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
+		_pass_should_saucer = false
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
 	_apply_brake_steering(input, snapshot, self_pos)
+	# Saucer: loft the release so the puck flies over a contested mid-lane
+	# defender. Set every tick we're in PASS_PRESSED (the controller's
+	# _is_elevated flag is sticky and reset by the default elevation_down,
+	# so we must keep raising it through the charge until release). Both up
+	# and down in one frame ends DOWN on the controller, so clear down here.
+	if _pass_should_saucer:
+		input.elevation_up = true
+		input.elevation_down = false
 	# Resolve the receiver's slot label NOW for the debug readout —
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
 	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
@@ -1828,6 +1847,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 				input.block_held = true
 				_pass_target_peer_id = -1
 				_pass_should_charge = false
+				_pass_should_saucer = false
 				_set_state(State.CARRY)
 				return
 
@@ -1882,6 +1902,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		input.shoot_held = false
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
+		_pass_should_saucer = false
 		_set_state(State.CARRY)
 
 
