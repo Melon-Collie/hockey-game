@@ -551,15 +551,25 @@ func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction:
 		return
 	puck.on_body_check(skater, victim, impact_force, hit_direction)
 
-# This skater just absorbed a check (victim-only signal). Host-authoritative: the
-# host sets the stagger window + stamina bite scaled by hit strength, then
-# broadcasts stagger_timer / stamina via fill_network_state; clients receive the
-# resolved values and (for the local player) re-derive the decay through reconcile
-# replay. On clients this fires only for host-simulated bodies — never the local
-# skater, whose hits arrive via the host snapshot — and the gate makes that
-# explicit. `max` so a weaker follow-up never shortens an in-flight stagger.
+# This skater just absorbed a check (victim-only signal). Host sets the stagger
+# window + stamina bite scaled by hit strength, then broadcasts stagger_timer /
+# stamina via fill_network_state; clients receive the resolved values and (for the
+# local player) re-derive the decay through reconcile replay. `max` so a weaker
+# follow-up never shortens an in-flight stagger.
+#
+# Client-side prediction (Lever C): the LOCAL victim also fires this (via the
+# Lever-D kept transfer branch), so predict its thrust stagger immediately off the
+# same transfer impulse instead of waiting a full round-trip for the host's
+# stagger_timer snapshot. Stamina stays host-only (predicting a pool drain that
+# might be refunded is more jarring than a brief thrust dip). Reconcile snaps
+# stagger_timer to the server value and re-derives decay, so a misprediction
+# self-heals in one reconcile — exactly how the host-set stagger is already
+# treated. Remote bodies on a client still defer to the snapshot (early return).
 func _on_body_check_received(impulse_magnitude: float) -> void:
 	if not _is_host:
+		if skater.is_local_skater:
+			stagger_timer = maxf(stagger_timer,
+					BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, _body_check_config()))
 		return
 	var cfg: BodyCheckRules.Config = _body_check_config()
 	var add: float = BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg)
