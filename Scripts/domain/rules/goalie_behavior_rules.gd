@@ -373,3 +373,51 @@ static func compute_clear_velocity(
 	if dlen < 0.0001:
 		return Vector3.ZERO
 	return (dir / dlen) * clear_speed
+
+
+# ── Screen detection ─────────────────────────────────────────────────────────
+# A body between the puck and the goalie blocks the goalie's sightline, so they
+# pick up the shot late. Returns 0 (clear look) .. 1 (fully screened); the
+# controller turns it into extra reaction delay. Evaluated in the XZ plane —
+# shots and bodies live on the ice. The geometry self-limits in two ways that
+# make it feel right for free: a screen needs a body BETWEEN puck and goalie, so
+# point-blank shots can't be screened (no room); and a body near the goalie
+# screens harder than one near the shooter (it covers a wider cone of the net —
+# the `goalie_proximity_bias` term).
+class ScreenConfig:
+	var screener_radius: float = 0.6        # m — body half-width that blocks sight
+	var min_t: float = 0.12                 # exclude the shooter (puck end of the line)
+	var max_t: float = 0.95                 # exclude bodies basically on top of the goalie
+	var goalie_proximity_bias: float = 0.5  # 0 = position-independent; 1 = only goalie-side bodies screen
+
+# Worst-single-screener intensity. `screener_positions` is every body that could
+# screen (the caller decides who qualifies); the shooter self-excludes via min_t.
+static func screen_intensity(
+		puck_position: Vector3,
+		goalie_position: Vector3,
+		screener_positions: PackedVector3Array,
+		cfg: ScreenConfig) -> float:
+	var px: float = puck_position.x
+	var pz: float = puck_position.z
+	var dx: float = goalie_position.x - px
+	var dz: float = goalie_position.z - pz
+	var len2: float = dx * dx + dz * dz
+	if len2 < 0.0001:
+		return 0.0  # puck on top of the goalie — no meaningful sightline
+	var radius: float = maxf(cfg.screener_radius, 0.0001)
+	var worst: float = 0.0
+	for s in screener_positions:
+		# Projection parameter along the puck→goalie segment (0 = puck, 1 = goalie).
+		var t: float = ((s.x - px) * dx + (s.z - pz) * dz) / len2
+		if t <= cfg.min_t or t >= cfg.max_t:
+			continue
+		# Perpendicular distance from the body to the sightline.
+		var cx: float = px + t * dx
+		var cz: float = pz + t * dz
+		var perp: float = sqrt((s.x - cx) * (s.x - cx) + (s.z - cz) * (s.z - cz))
+		if perp >= radius:
+			continue
+		var centrality: float = 1.0 - perp / radius            # dead-on the line screens hardest
+		var proximity: float = (1.0 - cfg.goalie_proximity_bias) + cfg.goalie_proximity_bias * t
+		worst = maxf(worst, centrality * proximity)
+	return clampf(worst, 0.0, 1.0)

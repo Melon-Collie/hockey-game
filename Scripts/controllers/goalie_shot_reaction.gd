@@ -53,19 +53,23 @@ func reset() -> void:
 # latency) so the goalie's reaction window matches what the shooter
 # perceived locally. Local host shots pass 0.0.
 # Emits `started` so the controller can fire the RPC and arm the slide lockout.
-func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: float, back_date_s: float = 0.0) -> void:
+# `screen_delay_s` is extra read latency from a screen (a body blocking the
+# goalie's sightline at release); it pushes BOTH processing timers back — the
+# goalie reads the leg drop AND the arm reach late when they can't see the shot.
+func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: float, back_date_s: float = 0.0, screen_delay_s: float = 0.0) -> void:
 	# Cap back-date at 0.5s. Beyond that the connection is too rough for fair
 	# lag-comp and we'd be starting reactions already past the puck-impact
 	# moment, which looks like teleporting saves on the shooter's view.
 	back_date_s = clampf(back_date_s, 0.0, 0.5)
+	screen_delay_s = maxf(screen_delay_s, 0.0)
 	impact_x = new_impact_x
 	impact_y = new_impact_y
 	is_elevated = elevated
 	reacting = true
 	age = back_date_s
 	clear_timer = -1.0
-	shot_timer = maxf(delay - back_date_s, 0.0)
-	arm_timer = maxf(arm_reaction_delay - back_date_s, 0.0)
+	shot_timer = maxf(delay + screen_delay_s - back_date_s, 0.0)
+	arm_timer = maxf(arm_reaction_delay + screen_delay_s - back_date_s, 0.0)
 	started.emit(impact_x, impact_y, is_elevated)
 
 # Tick the shot/arm processing delays. Both decrement toward zero (clamped).

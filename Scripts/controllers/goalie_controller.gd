@@ -66,6 +66,19 @@ extends Node
 # slapshot is ~0.65s out) while ignoring slow clears/passes from distance.
 @export var react_max_time_to_impact: float = 0.9
 
+# ── Screening ─────────────────────────────────────────────────────────────────
+# A body between the puck and the goalie blocks the sightline, so the goalie
+# reads the shot late — both the leg drop and the arm reach are delayed by up to
+# `screen_max_extra_delay` for a full screen, scaled by how badly the look is
+# blocked (see GoalieBehaviorRules.screen_intensity). Makes net-front traffic
+# and point shots through a screen a real threat. Evaluated once at the read
+# (the goalie loses the beat the moment they can't see the puck leave the
+# stick); re-checking mid-flight would hand the time back. Host-only like all
+# goalie AI, so it costs nothing on the wire and never diverges on clients.
+@export var screen_max_extra_delay: float = 0.15  # s added to the read for a full screen
+@export var screener_radius: float = 0.6          # m — body half-width that blocks sight
+@export var screen_proximity_bias: float = 0.5    # how much a goalie-side body out-screens a shooter-side one
+
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
 # Margin past the net edges for "is this a shot on goal" classification.
@@ -493,6 +506,10 @@ var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
 var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
+var _screen_cfg: GoalieBehaviorRules.ScreenConfig
+# Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
+# array. PackedVector3Array.clear() keeps capacity across shots.
+var _screen_positions: PackedVector3Array = PackedVector3Array()
 
 # ── Runtime (controller-local) ────────────────────────────────────────────────
 var _current_depth: float = 0.1
@@ -679,6 +696,9 @@ func _build_rule_configs() -> void:
 	_shot_cfg.reaction_delay = reaction_delay
 	_shot_cfg.low_shot_threshold = low_shot_threshold
 	_shot_cfg.elevated_threshold = elevated_threshold
+	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
+	_screen_cfg.screener_radius = screener_radius
+	_screen_cfg.goalie_proximity_bias = screen_proximity_bias
 	_universal_reaction_cfg = GoalieBehaviorRules.UniversalReactionConfig.new()
 	_universal_reaction_cfg.min_speed = universal_react_min_speed
 	_universal_reaction_cfg.max_time_to_impact = universal_react_max_time_to_impact
@@ -1794,7 +1814,30 @@ func _check_universal_reaction() -> void:
 				team_id, puck.global_position.x, puck.global_position.z,
 				puck.linear_velocity.length(), result.impact_x,
 				"ELEVATED" if result.is_elevated else "low"])
-	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay)
+	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
+			result.reaction_delay, 0.0, _screen_extra_delay())
+
+
+# Extra reaction latency from a screen at the moment of the read: gather every
+# body that could block the goalie's sightline (both teams — a D-man screens his
+# own goalie too; ghosted players don't), and scale the worst single screen by
+# `screen_max_extra_delay`. The shooter self-excludes geometrically (they sit at
+# the puck end of the sightline). Event-driven (once per shot), so the skater
+# scan is off the hot path.
+func _screen_extra_delay() -> float:
+	if screen_max_extra_delay <= 0.0 or not _skater_getter.is_valid():
+		return 0.0
+	var skaters: Array = _skater_getter.call()
+	_screen_positions.clear()
+	for skater: Skater in skaters:
+		if skater == null or skater.is_ghost:
+			continue
+		_screen_positions.append(skater.global_position)
+	if _screen_positions.is_empty():
+		return 0.0
+	var intensity: float = GoalieBehaviorRules.screen_intensity(
+			puck.global_position, goalie.global_position, _screen_positions, _screen_cfg)
+	return intensity * screen_max_extra_delay
 
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
@@ -1841,7 +1884,8 @@ func _on_puck_released() -> void:
 	# the upper net to reach. Both run in parallel; start() arms both, and
 	# `back_date` lag-comps client-initiated releases so the goalie gets the
 	# same effective reaction window the shooter perceived.
-	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay, back_date)
+	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
+			result.reaction_delay, back_date, _screen_extra_delay())
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
 # don't trigger spurious slides, starts the reaction clear delay, and drops
