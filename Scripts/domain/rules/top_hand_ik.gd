@@ -53,46 +53,44 @@ class Result:
 	var hand: Vector3 = Vector3.ZERO
 	var blade: Vector3 = Vector3.ZERO
 
-static func solve(
+# Projects a desired blade target onto the reachable blade region (the ROM
+# envelope), in upper-body-local space. This is the closed-form clamp — no
+# iteration, no hand work — that decides WHERE the blade ends up. solve() builds
+# the full hand pose on top of it; callers that only need the resulting blade
+# position (e.g. a per-tick speed cap chasing the reachable target) use this
+# directly and skip the hand reconstruction. Returns the blade as (x, blade_y, z).
+static func project_blade(
 		shoulder: Vector3,
 		desired_blade_xz: Vector2,
 		blade_side_sign: float,
-		cfg: Config,
-		out: Result = null) -> Result:
-	if out == null:
-		out = Result.new()
+		cfg: Config) -> Vector3:
 	var stick_length: float = cfg.stick_length
 	var blade_y: float = cfg.blade_y
-	var hand_rest_y: float = cfg.hand_rest_y
-	var hand_y_max: float = cfg.hand_y_max
-
-	var stick_horiz_at_rest: float = _stick_horiz_for(stick_length, hand_rest_y, blade_y)
+	var stick_horiz_at_rest: float = _stick_horiz_for(stick_length, cfg.hand_rest_y, blade_y)
 
 	var shoulder_xz := Vector2(shoulder.x, shoulder.z)
 	var delta: Vector2 = desired_blade_xz - shoulder_xz
 	var r: float = delta.length()
 	var aim_dir: Vector2 = delta / r if r > 0.0001 else Vector2(0.0, -1.0)
 
-	# CLOSE regime: target is inside the default stick reach. Raise the hand
-	# so the stick tilts more vertically, shortening its horizontal reach to
-	# hit the target exactly. If the hand can't rise far enough (hand_y_max
-	# clamp), the blade overshoots along the aim line at the minimum
-	# achievable stick_horiz.
+	# CLOSE regime: target is inside the default stick reach. The hand would
+	# rise so the stick tilts more vertically, shortening its horizontal reach
+	# to hit the target exactly. If it can't rise far enough (hand_y_max clamp),
+	# the blade overshoots along the aim line at the minimum stick_horiz.
 	if r < stick_horiz_at_rest:
 		var ideal_drop_sq: float = stick_length * stick_length - r * r
 		var ideal_hand_y: float = blade_y + sqrt(maxf(ideal_drop_sq, 0.0))
-		var hand_y: float = minf(ideal_hand_y, hand_y_max)
+		var hand_y: float = minf(ideal_hand_y, cfg.hand_y_max)
 		var stick_horiz: float = _stick_horiz_for(stick_length, hand_y, blade_y)
 		var close_blade_xz: Vector2 = shoulder_xz + aim_dir * stick_horiz
-		out.hand = Vector3(shoulder_xz.x, hand_y, shoulder_xz.y)
-		out.blade = Vector3(close_blade_xz.x, blade_y, close_blade_xz.y)
-		return out
+		return Vector3(close_blade_xz.x, blade_y, close_blade_xz.y)
 
-	# FAR regime: target is beyond the default stick reach. Hand stays at
-	# rest Y; displaces toward target in XZ, clamped to asymmetric ROM.
-	# Blade sits stick_horiz_at_rest from the clamped hand along the aim line.
-	var disp_len: float = r - stick_horiz_at_rest
-	var disp: Vector2 = aim_dir * disp_len
+	# FAR regime: target is beyond the default stick reach. The hand displaces
+	# toward the target in XZ, clamped to asymmetric ROM; the blade sits
+	# stick_horiz_at_rest farther along the same (clamped) arm direction. Since
+	# hand and blade are colinear from the shoulder, the blade lands at
+	# radius + stick_horiz_at_rest along blade_dir — no need to place the hand.
+	var disp: Vector2 = aim_dir * (r - stick_horiz_at_rest)
 
 	# Forehand-signed polar: angle > 0 always means "displaced toward forehand
 	# side of body" regardless of handedness. The shoulder lives on the
@@ -103,41 +101,66 @@ static func solve(
 	var radius: float = disp.length()
 
 	# Clamp angle asymmetrically: forehand side is tight, backhand is open.
-	var fore_angle_max: float = cfg.rom_forehand_angle_max
-	var back_angle_max: float = cfg.rom_backhand_angle_max
-	angle_to_forehand = clampf(angle_to_forehand, -back_angle_max, fore_angle_max)
+	angle_to_forehand = clampf(
+			angle_to_forehand, -cfg.rom_backhand_angle_max, cfg.rom_forehand_angle_max)
 
 	# Max reach is asymmetric: cross-body forehand reach is limited by
 	# anatomy, same-side backhand reach allows full arm extension. Small
 	# linear blend across zero avoids a seam.
 	var blend_band: float = deg_to_rad(5.0)
-	var fore_reach: float = cfg.rom_forehand_reach_max
-	var back_reach: float = cfg.rom_backhand_reach_max
 	var max_reach: float
 	if angle_to_forehand >= blend_band:
-		max_reach = fore_reach
+		max_reach = cfg.rom_forehand_reach_max
 	elif angle_to_forehand <= -blend_band:
-		max_reach = back_reach
+		max_reach = cfg.rom_backhand_reach_max
 	else:
 		var t: float = (angle_to_forehand + blend_band) / (2.0 * blend_band)
-		max_reach = lerpf(back_reach, fore_reach, t)
+		max_reach = lerpf(cfg.rom_backhand_reach_max, cfg.rom_forehand_reach_max, t)
 	radius = clampf(radius, 0.0, max_reach)
 
-	# Back to Cartesian. world_angle undoes the forehand-sign flip.
+	# Back to Cartesian. world_angle undoes the forehand-sign flip. Using the
+	# clamped world_angle (not hand_to_target) keeps the blade at the ROM limit
+	# when the mouse is past it — hand_to_target wraps around as the mouse moves
+	# further past the limit, swinging the blade the wrong way.
 	var world_angle: float = angle_to_forehand * blade_side_sign
-	var hand_disp := Vector2(sin(world_angle) * radius, -cos(world_angle) * radius)
-	var hand_xz: Vector2 = shoulder_xz + hand_disp
-
-	# Blade sits exactly stick_horiz_at_rest from the hand along the clamped
-	# arm direction. Using the clamped world_angle (not hand_to_target) ensures
-	# the blade stays at the ROM limit when the mouse is past it — hand_to_target
-	# wraps around as the mouse moves further past the limit, causing the blade
-	# to swing in the wrong direction.
 	var blade_dir := Vector2(sin(world_angle), -cos(world_angle))
-	var blade_xz: Vector2 = hand_xz + blade_dir * stick_horiz_at_rest
+	var blade_xz: Vector2 = shoulder_xz + blade_dir * (radius + stick_horiz_at_rest)
+	return Vector3(blade_xz.x, blade_y, blade_xz.y)
 
-	out.hand = Vector3(hand_xz.x, hand_rest_y, hand_xz.y)
-	out.blade = Vector3(blade_xz.x, blade_y, blade_xz.y)
+static func solve(
+		shoulder: Vector3,
+		desired_blade_xz: Vector2,
+		blade_side_sign: float,
+		cfg: Config,
+		out: Result = null) -> Result:
+	if out == null:
+		out = Result.new()
+
+	# Where the blade lands (closed-form ROM projection).
+	var blade: Vector3 = project_blade(shoulder, desired_blade_xz, blade_side_sign, cfg)
+	out.blade = blade
+
+	# Reconstruct the hand from the blade. Hand and blade are colinear from the
+	# shoulder with a rigid stick, so the blade's distance from the shoulder
+	# fully determines the hand — no need to re-derive the clamped angle/regime:
+	#   FAR  (d ≥ stick_horiz_at_rest): hand at rest Y, stick_horiz_at_rest
+	#         closer to the shoulder along the same direction.
+	#   CLOSE (d < stick_horiz_at_rest): hand at the shoulder XZ; its Y is fixed
+	#         by the rigid stick (drop = sqrt(stick_length² − d²)). This inverts
+	#         exactly even when the close-regime hand_y was clamped, since the
+	#         blade distance already reflects the clamped stick_horiz.
+	var shoulder_xz := Vector2(shoulder.x, shoulder.z)
+	var from_shoulder: Vector2 = Vector2(blade.x, blade.z) - shoulder_xz
+	var d: float = from_shoulder.length()
+	var stick_horiz_at_rest: float = _stick_horiz_for(cfg.stick_length, cfg.hand_rest_y, cfg.blade_y)
+	if d >= stick_horiz_at_rest:
+		var dir: Vector2 = from_shoulder / d if d > 0.0001 else Vector2(0.0, -1.0)
+		var hand_xz: Vector2 = shoulder_xz + dir * (d - stick_horiz_at_rest)
+		out.hand = Vector3(hand_xz.x, cfg.hand_rest_y, hand_xz.y)
+	else:
+		var drop_sq: float = cfg.stick_length * cfg.stick_length - d * d
+		var hand_y: float = cfg.blade_y + sqrt(maxf(drop_sq, 0.0))
+		out.hand = Vector3(shoulder_xz.x, hand_y, shoulder_xz.y)
 	return out
 
 # Horizontal stick projection at a given hand Y. Clamped to a tiny positive
