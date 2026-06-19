@@ -45,7 +45,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
 # and replicated so it survives reconcile replay (same treatment as stamina).
 @export var stagger_min_impulse: float = 3.0       # m/s transfer delta below which a hit doesn't stagger
-@export var stagger_ref_impulse: float = 9.0       # m/s transfer delta treated as a full-strength check
+@export var stagger_ref_impulse: float = 11.0      # m/s transfer delta treated as a full-strength check
 @export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
 @export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
 @export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
