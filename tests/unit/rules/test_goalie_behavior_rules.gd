@@ -532,3 +532,38 @@ func test_screen_never_exceeds_one() -> void:
 		Vector3.ZERO, Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(0, 0, 9.4)]), _screen_cfg())
 	assert_lte(i, 1.0)
+
+# ── movement_read_penalty ─────────────────────────────────────────────────────
+# A set (stopped) goalie reads at the base delay; a moving / scrambling one reads
+# late. reference_speed 2.5, max_delay 0.12, scramble_unset 1.0.
+
+func _move_read_cfg() -> GoalieBehaviorRules.MovementReadConfig:
+	var cfg := GoalieBehaviorRules.MovementReadConfig.new()
+	cfg.reference_speed = 2.5
+	cfg.max_delay = 0.12
+	cfg.scramble_unset = 1.0
+	return cfg
+
+func test_move_read_set_goalie_no_penalty() -> void:
+	var d: float = GoalieBehaviorRules.movement_read_penalty(0.0, false, _move_read_cfg())
+	assert_eq(d, 0.0)
+
+func test_move_read_scales_with_speed() -> void:
+	# Half reference speed → half the max delay.
+	var d: float = GoalieBehaviorRules.movement_read_penalty(1.25, false, _move_read_cfg())
+	assert_almost_eq(d, 0.06, 0.001)
+
+func test_move_read_caps_at_max() -> void:
+	# Well over reference speed → clamped to max_delay.
+	var d: float = GoalieBehaviorRules.movement_read_penalty(6.0, false, _move_read_cfg())
+	assert_almost_eq(d, 0.12, 0.001)
+
+func test_move_read_scrambling_floors_unset() -> void:
+	# Standing-up posture: full penalty even when barely moving.
+	var d: float = GoalieBehaviorRules.movement_read_penalty(0.1, true, _move_read_cfg())
+	assert_almost_eq(d, 0.12, 0.001)
+
+func test_move_read_faster_is_later() -> void:
+	var slow: float = GoalieBehaviorRules.movement_read_penalty(0.5, false, _move_read_cfg())
+	var fast: float = GoalieBehaviorRules.movement_read_penalty(2.0, false, _move_read_cfg())
+	assert_gt(fast, slow)

@@ -79,6 +79,15 @@ extends Node
 @export var screener_radius: float = 0.6          # m — body half-width that blocks sight
 @export var screen_proximity_bias: float = 0.5    # how much a goalie-side body out-screens a shooter-side one
 
+# ── Caught moving ─────────────────────────────────────────────────────────────
+# A goalie is only sharp when SET — square and stopped. Caught mid-push, sliding,
+# or standing up, they read the shot late (see GoalieBehaviorRules.movement_read_
+# penalty). Like screening, this adds to the read; unlike a flat difficulty buff
+# it ONLY fires while the goalie is in motion, so it opens scoring windows (shoot
+# while he's moving) without making a set goalie any harder to beat.
+@export var move_read_max_delay: float = 0.12      # s — extra read latency when fully unset
+@export var move_read_reference_speed: float = 2.5 # m/s — planar speed counted as fully moving
+
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
 # Margin past the net edges for "is this a shot on goal" classification.
@@ -507,6 +516,7 @@ var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
 var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
 var _screen_cfg: GoalieBehaviorRules.ScreenConfig
+var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
 # Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
 # array. PackedVector3Array.clear() keeps capacity across shots.
 var _screen_positions: PackedVector3Array = PackedVector3Array()
@@ -699,6 +709,9 @@ func _build_rule_configs() -> void:
 	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
 	_screen_cfg.screener_radius = screener_radius
 	_screen_cfg.goalie_proximity_bias = screen_proximity_bias
+	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
+	_move_read_cfg.reference_speed = move_read_reference_speed
+	_move_read_cfg.max_delay = move_read_max_delay
 	_universal_reaction_cfg = GoalieBehaviorRules.UniversalReactionConfig.new()
 	_universal_reaction_cfg.min_speed = universal_react_min_speed
 	_universal_reaction_cfg.max_time_to_impact = universal_react_max_time_to_impact
@@ -1815,16 +1828,21 @@ func _check_universal_reaction() -> void:
 				puck.linear_velocity.length(), result.impact_x,
 				"ELEVATED" if result.is_elevated else "low"])
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
-			result.reaction_delay, 0.0, _screen_extra_delay())
+			result.reaction_delay, 0.0, _read_extra_delay())
 
 
-# Extra reaction latency from a screen at the moment of the read: gather every
-# body that could block the goalie's sightline (both teams — a D-man screens his
-# own goalie too; ghosted players don't), and scale the worst single screen by
-# `screen_max_extra_delay`. The shooter self-excludes geometrically (they sit at
-# the puck end of the sightline). Event-driven (once per shot), so the skater
-# scan is off the hot path.
-func _screen_extra_delay() -> float:
+# Total extra latency before the goalie picks up the shot: a screen blocking the
+# sightline PLUS being caught moving / unset at the read. Both push the leg drop
+# and arm reach back. Computed once per shot (event-driven), off the hot path.
+func _read_extra_delay() -> float:
+	return _screen_delay() + _movement_read_delay()
+
+
+# Screen contribution: gather every body that could block the goalie's sightline
+# (both teams — a D-man screens his own goalie too; ghosted players don't), and
+# scale the worst single screen by `screen_max_extra_delay`. The shooter
+# self-excludes geometrically (they sit at the puck end of the sightline).
+func _screen_delay() -> float:
 	if screen_max_extra_delay <= 0.0 or not _skater_getter.is_valid():
 		return 0.0
 	var skaters: Array = _skater_getter.call()
@@ -1838,6 +1856,18 @@ func _screen_extra_delay() -> float:
 	var intensity: float = GoalieBehaviorRules.screen_intensity(
 			puck.global_position, goalie.global_position, _screen_positions, _screen_cfg)
 	return intensity * screen_max_extra_delay
+
+
+# Caught-moving contribution: how unset the goalie is at the read. Planar speed
+# (lateral + depth motion) is the main driver; RECOVERING adds a posture floor
+# (standing up is the least ready stance to make a save from). Mid-slide unset is
+# already captured by the slide's translation speed.
+func _movement_read_delay() -> float:
+	if move_read_max_delay <= 0.0:
+		return 0.0
+	var planar_speed: float = sqrt(_velocity_x * _velocity_x + _velocity_z * _velocity_z)
+	var scrambling: bool = _sm.current == State.RECOVERING
+	return GoalieBehaviorRules.movement_read_penalty(planar_speed, scrambling, _move_read_cfg)
 
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
@@ -1885,7 +1915,7 @@ func _on_puck_released() -> void:
 	# `back_date` lag-comps client-initiated releases so the goalie gets the
 	# same effective reaction window the shooter perceived.
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
-			result.reaction_delay, back_date, _screen_extra_delay())
+			result.reaction_delay, back_date, _read_extra_delay())
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
 # don't trigger spurious slides, starts the reaction clear delay, and drops

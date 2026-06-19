@@ -421,3 +421,23 @@ static func screen_intensity(
 		var proximity: float = (1.0 - cfg.goalie_proximity_bias) + cfg.goalie_proximity_bias * t
 		worst = maxf(worst, centrality * proximity)
 	return clampf(worst, 0.0, 1.0)
+
+
+# ── Movement read penalty ─────────────────────────────────────────────────────
+# A goalie is only sharp when set — square and stopped. Caught mid-push, sliding,
+# or standing back up, they read the shot late. Returns extra read latency in
+# seconds, scaled by how unset the goalie is: `planar_speed` (lateral/depth
+# motion) ramps it toward `max_delay` at `reference_speed`, and `scrambling`
+# (recovering / mid-slide posture) floors the unset-ness at `scramble_unset`.
+# This only ever ADDS delay while the goalie is in motion — a set goalie reads
+# at the base delay — so it opens scoring windows without buffing the save.
+class MovementReadConfig:
+	var reference_speed: float = 2.5    # m/s — planar speed that counts as fully moving
+	var max_delay: float = 0.12         # s — read latency when fully unset
+	var scramble_unset: float = 1.0     # unset floor (0..1) while recovering / scrambling
+
+static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: MovementReadConfig) -> float:
+	var unset: float = clampf(planar_speed / maxf(cfg.reference_speed, 0.0001), 0.0, 1.0)
+	if scrambling:
+		unset = maxf(unset, cfg.scramble_unset)
+	return unset * cfg.max_delay
