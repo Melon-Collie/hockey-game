@@ -24,13 +24,24 @@ const STEP_OFFSIDES:   int = 10
 const STEP_SPRINT:     int = 11
 const STEP_BLADE_LIFT: int = 12
 const STEP_STICK_LIFT: int = 13
+# Shooting module — deeper, drill-based shot teaching. Separate IDs from the
+# Basics wrist/slap steps because the behaviour differs (target waves, the
+# elevation toggle, a stationary goalie), so TutorialManager dispatches them
+# distinctly rather than overloading the Basics steps.
+const STEP_SHOOT_WRIST:   int = 14   # charged wrist shot into the open net
+const STEP_SHOOT_TARGETS: int = 15   # pick-your-spot: low wave, high wave, toggle off
+const STEP_SHOOT_SLAP:    int = 16   # slapshot into the open net
+const STEP_SHOOT_GOALIE:  int = 17   # stationary goalie: top corners + five-hole
+const STEP_SHOOT_FINISH:  int = 18   # free finish on a stationary goalie
 
 # ── Tutorial identifiers ──────────────────────────────────────────────────────
 const BASICS_ID: String = "basics"
+const SHOOTING_ID: String = "shooting"
 const ADVANCED_ID: String = "advanced"
 
-# Display order — also drives the SideMenu submenu row order.
-const ALL_IDS: Array[String] = [BASICS_ID, ADVANCED_ID]
+# Display order — also drives the SideMenu submenu row order. Shooting slots
+# between Basics (movement + pickup) and Advanced (defence + rules).
+const ALL_IDS: Array[String] = [BASICS_ID, SHOOTING_ID, ADVANCED_ID]
 
 
 static func get_step_ids(tutorial_id: String) -> Array[int]:
@@ -38,6 +49,9 @@ static func get_step_ids(tutorial_id: String) -> Array[int]:
 		BASICS_ID:
 			return [STEP_SKATE, STEP_SPRINT, STEP_BRAKE,
 					STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT]
+		SHOOTING_ID:
+			return [STEP_SHOOT_WRIST, STEP_SHOOT_TARGETS, STEP_SHOOT_SLAP,
+					STEP_SHOOT_GOALIE, STEP_SHOOT_FINISH]
 		ADVANCED_ID:
 			return [STEP_ONE_TIMER, STEP_ELEVATION, STEP_SHOT_BLOCK,
 					STEP_BLADE_LIFT, STEP_STICK_LIFT, STEP_STICKCHECK,
@@ -48,6 +62,7 @@ static func get_step_ids(tutorial_id: String) -> Array[int]:
 static func get_display_name(tutorial_id: String) -> String:
 	match tutorial_id:
 		BASICS_ID: return "Basics"
+		SHOOTING_ID: return "Shooting"
 		ADVANCED_ID: return "Advanced"
 	return tutorial_id
 
@@ -62,13 +77,12 @@ static func get_sequence_label(tutorial_id: String) -> String:
 	return "Part %d of %d" % [i + 1, ALL_IDS.size()]
 
 
-# Whether the tutorial should have goalies spawned in the nets. Basics
-# teaches shot mechanics on an empty net (with a shot-on-net pass
-# criterion) so the player learns to put the puck where it needs to go
-# before adding a defender; Advanced introduces goalies as the
-# difficulty step up.
+# Whether the tutorial should have the normal AI goalie PAIR auto-spawned by
+# GameManager. Basics teaches shot mechanics on an empty net; Shooting spawns
+# its own single STATIONARY goalie on demand for the goalie drills (so the
+# early shooting drills stay open-net), so only Advanced wants the live pair.
 static func wants_goalies(tutorial_id: String) -> bool:
-	return tutorial_id != BASICS_ID
+	return tutorial_id == ADVANCED_ID
 
 
 static func has(tutorial_id: String) -> bool:

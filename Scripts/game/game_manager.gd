@@ -101,6 +101,11 @@ var current_snapshot: WorldSnapshot = null
 var goals: Array[HockeyGoal] = []
 var goalies: Array[Goalie] = []
 var goalie_controllers: Array[GoalieController] = []
+# Single stationary goalie spawned on demand for the Shooting tutorial's goalie
+# drills (see spawn_tutorial_goalie). Kept out of the `goalies` arrays so the
+# rest of the rink wiring (team brains, goalie data cache) ignores it.
+var _tutorial_goalie: Goalie = null
+var _tutorial_goalie_controller: GoalieController = null
 var puck_controller: PuckController = null
 
 # Cached snapshot of goalie pose for skater IK clamping. Refreshed once per
@@ -2828,6 +2833,37 @@ func despawn_tutorial_bot(record: PlayerRecord) -> void:
 	if record.team != null and record.team.team_id < team_brains.size():
 		team_brains[record.team.team_id].include_skater(record.peer_id)
 	_registry.remove(record.peer_id)
+
+
+# Spawns a single STATIONARY goalie in the net the tutorial player attacks
+# (team 0 shoots toward -Z). is_server=false so it wires no puck-reaction
+# signals, and we disable its process so the AI never ticks — it freezes
+# standing in the crease (where setup() places it) as a shooting target. The
+# goalie's collision still saves shots, so the top corners and five-hole are
+# the only gaps. Idempotent: a second call while one exists is a no-op.
+func spawn_tutorial_goalie() -> void:
+	if _tutorial_goalie != null:
+		return
+	if _spawner == null or puck == null:
+		return
+	var result: Dictionary = _spawner.spawn_single_goalie(puck, -GameRules.GOAL_LINE_Z, false)
+	_tutorial_goalie = result.goalie as Goalie
+	_tutorial_goalie_controller = result.controller as GoalieController
+	_tutorial_goalie_controller.set_physics_process(false)
+	_tutorial_goalie_controller.set_process(false)
+	if teams.size() > 1:
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
+		_tutorial_goalie.apply_uniform(colors)
+		_tutorial_goalie.apply_jersey_info("WARD", 35)
+
+
+func despawn_tutorial_goalie() -> void:
+	if _tutorial_goalie_controller != null:
+		_tutorial_goalie_controller.queue_free()
+		_tutorial_goalie_controller = null
+	if _tutorial_goalie != null:
+		_tutorial_goalie.queue_free()
+		_tutorial_goalie = null
 
 
 func get_goalie_data() -> Array[Dictionary]:
