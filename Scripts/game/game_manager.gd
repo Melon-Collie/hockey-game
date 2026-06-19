@@ -1507,6 +1507,11 @@ func _spawn_local(peer_id: int, team_slot: int, team: Team) -> void:
 
 # ── Spawn wire-up (callback invoked by PlayerRegistry after spawn) ───────────
 func _on_player_spawned(record: PlayerRecord) -> void:
+	# Machine-authority flags for the body-check transfer gate (Lever D). Set once
+	# here where the registry record + NetworkManager are in scope, so Skater never
+	# reaches into an autoload itself.
+	record.skater.is_host_machine = NetworkManager.is_host
+	record.skater.is_local_skater = record.is_local
 	if record.is_local:
 		var local_ctrl: LocalController = record.controller as LocalController
 		local_ctrl.set_goal_context(

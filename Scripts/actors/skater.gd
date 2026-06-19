@@ -104,6 +104,16 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 @export var body_check_transfer: float = 0.45
 @export var body_check_brace_resistance: float = 0.4
 
+# Machine-authority flags, injected once at spawn by GameManager._on_player_spawned
+# (collaborator pattern — the actor stays autoload-free). They gate the victim-side
+# transfer in _resolve_player_collisions so it only mutates a body this machine
+# authoritatively owns: the host owns every skater; a client owns only its local
+# predicted skater. Remote-vs-remote contact on a client is non-authoritative
+# (the host snapshot owns those bodies), so applying a transfer there is churn the
+# next interpolation tick overwrites — and can read as micro-jitter.
+var is_host_machine: bool = false
+var is_local_skater: bool = false
+
 # ── Body Block Tuning ─────────────────────────────────────────────────────────
 @export var body_block_radius: float = 0.5
 @export var block_body_radius: float = 0.9
@@ -410,14 +420,23 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		if approach <= 0.0:
 			continue
 		velocity += normal * approach * body_check_restitution
-		var effective_transfer: float = body_check_transfer * (other.body_check_brace_resistance if other.is_braced else 1.0)
-		var other_vel_before: Vector3 = other.velocity
-		var weight_ratio: float = weight / maxf(other.weight, 0.001)
-		other.velocity -= normal * approach * weight_ratio * effective_transfer
-		var other_delta: Vector3 = other.velocity - other_vel_before
-		if other_delta.length_squared() > 0.0001:
-			other.body_check_impulse_applied.emit(other_delta)
-			other.body_check_received.emit(other_delta.length())
+		# Victim-side transfer + emits only when `other` is authoritative on this
+		# machine (host owns all; a client owns only its local skater). Skipping it
+		# for remote-vs-remote contact on a client removes non-authoritative churn
+		# the host snapshot would overwrite anyway. The local victim's predicted
+		# push is preserved here (other.is_local_skater), and reconcile snaps it.
+		if is_host_machine or other.is_local_skater:
+			var effective_transfer: float = body_check_transfer * (other.body_check_brace_resistance if other.is_braced else 1.0)
+			var other_vel_before: Vector3 = other.velocity
+			var weight_ratio: float = weight / maxf(other.weight, 0.001)
+			other.velocity -= normal * approach * weight_ratio * effective_transfer
+			var other_delta: Vector3 = other.velocity - other_vel_before
+			if other_delta.length_squared() > 0.0001:
+				other.body_check_impulse_applied.emit(other_delta)
+				other.body_check_received.emit(other_delta.length())
+		# body_checked_player drives the host's credit/claim path and is NOT gated:
+		# it must fire on the attacker's own machine (local skater) and on the host
+		# so the hit can be lag-comp validated and broadcast (Lever A).
 		body_checked_player.emit(other, weight * approach, -normal)
 
 
