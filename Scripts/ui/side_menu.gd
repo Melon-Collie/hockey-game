@@ -42,6 +42,20 @@ func _ready() -> void:
 	visible = false
 	_build_panel()
 	_build_popups()
+	_maybe_offer_reconnect()
+
+
+# A mid-match connection loss returns the player to free play (rebuilding this
+# scene) and leaves a lobby id on NetworkManager. Surface a Reconnect prompt
+# over the fresh scene so they can rejoin and reclaim their held slot. Consumed
+# once — cleared here so a later host/join doesn't re-show it.
+func _maybe_offer_reconnect() -> void:
+	var lobby_id: int = NetworkManager.pending_reconnect_lobby_id
+	if lobby_id == 0:
+		return
+	NetworkManager.pending_reconnect_lobby_id = 0
+	_loading_screen.show_reconnect("Connection lost.",
+			func() -> void: _on_join_pressed(lobby_id))
 
 
 func _unhandled_input(event: InputEvent) -> void:

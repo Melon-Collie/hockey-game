@@ -597,6 +597,9 @@ func _maybe_reserve_slot(peer_id: int, record: PlayerRecord) -> void:
 		return
 	if _state_machine.current_phase == GamePhase.Phase.GAME_OVER:
 		return
+	# A kicked player must not be able to reclaim a slot by rejoining.
+	if NetworkManager.was_peer_kicked(peer_id):
+		return
 	var steam_id: int = NetworkManager.get_peer_steam_id(peer_id)
 	if steam_id == 0:
 		return

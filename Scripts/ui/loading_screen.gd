@@ -6,6 +6,8 @@ signal cancel_pressed
 var _status_label: Label = null
 var _subtitle_label: Label = null
 var _cancel_btn: Button = null
+var _reconnect_btn: Button = null
+var _reconnect_cb: Callable = Callable()
 var _base_status: String = ""
 var _dot_timer: float = 0.0
 var _dot_count: int = 0
@@ -57,6 +59,17 @@ func _build_ui() -> void:
 	_status_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.90, 1.0))
 	vbox.add_child(_status_label)
 
+	_reconnect_btn = Button.new()
+	_reconnect_btn.text = "Reconnect"
+	_reconnect_btn.custom_minimum_size = Vector2(200, 48)
+	_reconnect_btn.add_theme_font_size_override("font_size", 20)
+	_reconnect_btn.pressed.connect(_on_reconnect_pressed)
+	_reconnect_btn.visible = false
+	SoundManager.wire_button(_reconnect_btn)
+	var reconnect_container := CenterContainer.new()
+	reconnect_container.add_child(_reconnect_btn)
+	vbox.add_child(reconnect_container)
+
 	_cancel_btn = Button.new()
 	_cancel_btn.text = "Cancel"
 	_cancel_btn.custom_minimum_size = Vector2(200, 48)
@@ -66,6 +79,10 @@ func _build_ui() -> void:
 	var cancel_container := CenterContainer.new()
 	cancel_container.add_child(_cancel_btn)
 	vbox.add_child(cancel_container)
+
+func _on_reconnect_pressed() -> void:
+	if _reconnect_cb.is_valid():
+		_reconnect_cb.call()
 
 func _process(delta: float) -> void:
 	if not visible or _is_error:
@@ -81,6 +98,7 @@ func _process(delta: float) -> void:
 func show_hosting() -> void:
 	_subtitle_label.text = "Hosting"
 	_cancel_btn.visible = false
+	_reconnect_btn.visible = false
 	_is_error = false
 	set_status("Creating lobby")
 	_shown_at = Time.get_ticks_msec() / 1000.0
@@ -90,6 +108,7 @@ func show_hosting() -> void:
 func show_joining_lobby() -> void:
 	_subtitle_label.text = "Joining game"
 	_cancel_btn.visible = true
+	_reconnect_btn.visible = false
 	_is_error = false
 	set_status("Connecting")
 	_shown_at = Time.get_ticks_msec() / 1000.0
@@ -99,6 +118,21 @@ func show_joining_lobby() -> void:
 # (wired to the same cancel handler that resets network state).
 func show_error(message: String) -> void:
 	_subtitle_label.text = ""
+	_cancel_btn.visible = true
+	_reconnect_btn.visible = false
+	_is_error = true
+	_base_status = message
+	_status_label.text = message
+	visible = true
+
+# Connection-lost variant: same as show_error but adds a Reconnect button that
+# invokes `on_reconnect`. Used when the host may still be holding the player's
+# slot open (reconnect / slot-reservation window). Cancel falls back to free play
+# via the shared cancel_pressed path.
+func show_reconnect(message: String, on_reconnect: Callable) -> void:
+	_subtitle_label.text = ""
+	_reconnect_cb = on_reconnect
+	_reconnect_btn.visible = true
 	_cancel_btn.visible = true
 	_is_error = true
 	_base_status = message

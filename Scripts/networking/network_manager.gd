@@ -218,6 +218,11 @@ var _peer_numbers: Dictionary = {}        # peer_id -> int (host only)
 # restore a returning player's team/slot/stats. 0 when the joiner sent no Steam
 # ID (pre-v7 build, or a non-Steam transport).
 var _peer_steam_ids: Dictionary[int, int] = {}
+# peer_ids the host intentionally kicked (host only). Read during the
+# peer_disconnected emit so GameManager skips the reconnect reservation — a
+# kicked player must not be able to reclaim a held slot by rejoining. Erased
+# after the emit / on reset.
+var _kicked_peers: Dictionary[int, bool] = {}
 # peer_id -> PlayerAttributes. Populated from request_join on the host and
 # from sync_existing_players / spawn_remote_skater on clients. The host's
 # own entry (key 1) is seeded from PlayerPrefs at startup and updated when
@@ -283,6 +288,12 @@ var _target_interp_frame: int = -1
 
 # ── Timers ────────────────────────────────────────────────────────────────────
 var pending_error: String = ""
+# Set when a client loses an established connection mid-match (not a kick or a
+# graceful host shutdown) so the rebuilt free-play SideMenu can offer a
+# Reconnect button into the same Steam lobby — the host may be holding the slot
+# open. Deliberately NOT cleared by reset() (it must survive the
+# return_to_free_play teardown); SideMenu consumes and clears it on _ready.
+var pending_reconnect_lobby_id: int = 0
 
 var _input_timer: float = 0.0
 # Broadcast cadence. Counter ticks here every physics frame (see
@@ -534,6 +545,7 @@ func _on_peer_disconnected(id: int) -> void:
 	# get_peer_steam_id(id) to key the reconnect reservation. Erased after.
 	peer_disconnected.emit(id)
 	_peer_steam_ids.erase(id)
+	_kicked_peers.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
 	# attempting this authority RPC would just be refused with error spam.
@@ -564,7 +576,13 @@ func _on_server_disconnected() -> void:
 	# Keep a more specific reason (host ended the match, kicked) if one
 	# arrived just before the transport closed.
 	if pending_error.is_empty():
-		pending_error = "Lost connection to server."
+		# Genuine, unexpected loss — offer a reconnect into the same lobby instead
+		# of a toast. The host's reservation window may still be holding our slot.
+		# Captured before reset()/_close() leaves the lobby and clears the id.
+		if not is_host and SteamManager.current_lobby_id != 0:
+			pending_reconnect_lobby_id = SteamManager.current_lobby_id
+		else:
+			pending_error = "Lost connection to server."
 	disconnected_from_server.emit()
 	GameManager.return_to_free_play()
 
@@ -631,6 +649,7 @@ func reset() -> void:
 	_peer_names.clear()
 	_peer_numbers.clear()
 	_peer_steam_ids.clear()
+	_kicked_peers.clear()
 	_peer_attributes.clear()
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	pending_game_config = {}
@@ -883,6 +902,7 @@ func notify_join_rejected(reason: String) -> void:
 # Send a reject reason to a peer, then drop them. The reliable RPC needs a
 # beat to flush before the disconnect, hence the deferred kick.
 func kick_peer(peer_id: int, reason: String) -> void:
+	_kicked_peers[peer_id] = true
 	notify_join_rejected.rpc_id(peer_id, reason)
 	get_tree().create_timer(_KICK_FLUSH_DELAY_S).timeout.connect(func() -> void:
 		if multiplayer.multiplayer_peer != null and peer_id in multiplayer.get_peers():
@@ -922,6 +942,11 @@ func get_peer_number(peer_id: int) -> int:
 
 func get_peer_steam_id(peer_id: int) -> int:
 	return _peer_steam_ids.get(peer_id, 0)
+
+# True if the host kicked this peer (vs. a voluntary/network drop). Valid only
+# during the peer_disconnected emit; gates the reconnect reservation.
+func was_peer_kicked(peer_id: int) -> bool:
+	return _kicked_peers.has(peer_id)
 
 func get_peer_attributes(peer_id: int) -> PlayerAttributes:
 	var attrs: PlayerAttributes = _peer_attributes.get(peer_id, null)
