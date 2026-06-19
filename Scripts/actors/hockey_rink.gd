@@ -163,6 +163,10 @@ var _px_per_meter: float = 80.0
 var _scratch_map: IceScratchMap = null
 
 func _ready() -> void:
+	# Boards live on their own collision layer (puck masks it, skaters don't) so a
+	# skater CharacterBody cylinder never wedges in the concave corner mesh; the
+	# skater is held inside the rink analytically instead. See Constants.LAYER_BOARDS.
+	collision_layer = Constants.LAYER_BOARDS
 	_rebuild()
 	if not Engine.is_editor_hint() and _scratch_map != null:
 		# period_changed emits `new_period: int`; clear() takes no args, so we
@@ -397,6 +401,10 @@ func _add_ice() -> void:
 
 	# Ice collision — needs its own StaticBody3D so physics_material_override applies
 	var ice_body := StaticBody3D.new()
+	# Ice stays on LAYER_WALLS (skaters + puck both collide with it). Only the
+	# perimeter boards move to LAYER_BOARDS; the ice is a flat slab and never
+	# produces the concave-corner crease that wedged the skater.
+	ice_body.collision_layer = Constants.LAYER_WALLS
 	var phys_mat := PhysicsMaterial.new()
 	phys_mat.friction = ice_friction
 	phys_mat.bounce = 0.0

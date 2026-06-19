@@ -217,11 +217,6 @@ var blade_world_velocity: Vector3 = Vector3.ZERO
 var _prev_blade_world_pos: Vector3 = Vector3.ZERO
 var _prev_blade_contact: Vector3 = Vector3.ZERO
 var _last_wall_normal: Vector3 = Vector3.ZERO
-# TEMP debug: log collision state when the body is pushing hard but barely
-# displacing (the "stuck against the boards" signature). Flip off / delete
-# once the freeze mechanism is identified.
-const DEBUG_STUCK: bool = true
-var _stuck_dbg_cooldown: float = 0.0
 var _body_block_area: Area3D = null
 var _body_block_sphere: SphereShape3D = null
 var _blade_area: Area3D = null
@@ -385,15 +380,18 @@ func _physics_process(delta: float) -> void:
 	# untouched, so live prediction, reconcile replay, and host authority all
 	# agree on Y without a post-move override. Horizontal wall/skater collision
 	# is unaffected.
-	var pos_before: Vector3 = global_position
 	move_and_slide()
 	var vel_after_slide: Vector3 = velocity
 	_resolve_player_collisions(vel_before)
-	if DEBUG_STUCK:
-		_debug_stuck_probe(delta, vel_before, pos_before)
 	var body_check_delta: Vector3 = velocity - vel_after_slide
 	if body_check_delta.length_squared() > 0.0001:
 		body_check_impulse_applied.emit(body_check_delta)
+	# Boards are off the skater's physics mask (a CharacterBody cylinder wedges in
+	# the concave corner mesh), so hold the body inside the rink analytically.
+	# Runs AFTER the body-check delta is captured so a board slide never reads as
+	# a hit, and after move_and_slide so the ice/skater/goalie collisions resolve
+	# first. The reconcile replay calls the same method (see LocalController).
+	clamp_body_to_rink()
 	_update_blade_elevation(delta)
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
@@ -431,38 +429,30 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		body_checked_player.emit(other, weight * approach, -normal)
 
 
-# TEMP: prints collision diagnostics when the body intends meaningful
-# horizontal motion (vel_before) but the actual horizontal displacement this
-# tick is a small fraction of it — i.e. something is eating the motion. Dumps
-# move_and_slide's contact classification + every slide collision's normal and
-# collider so we can see whether it's a wall corner wedge, a phantom floor
-# contact, depenetration recovery, or a skater-vs-skater pin. Throttled per body.
-func _debug_stuck_probe(delta: float, vel_before: Vector3, pos_before: Vector3) -> void:
-	_stuck_dbg_cooldown = maxf(_stuck_dbg_cooldown - delta, 0.0)
-	var intended := Vector2(vel_before.x, vel_before.z)
-	var intended_speed: float = intended.length()
-	if intended_speed < 1.5:
-		return  # not really trying to move; ignore drift/idle
-	var moved := Vector2(global_position.x - pos_before.x, global_position.z - pos_before.z)
-	var expected: float = intended_speed * delta
-	# Stuck = displaced under 25% of what the intended velocity should have moved.
-	if expected <= 0.0 or moved.length() > expected * 0.25:
+# Holds the body inside the rink by projecting its XZ onto the inner board
+# boundary (the same GameRules.clamp_to_rink_inner the puck-OOB check, blade
+# clamp, and reconcile replay use) and removing any velocity pointing into the
+# boards, so the skater slides smoothly along them. Replaces physics collision
+# with the concave board mesh, which pinned the CharacterBody cylinder in a
+# vertical-only crease in the corners. Pure value-type math — no allocation, so
+# it's hot-path safe at 120 Hz × actors. Called live after move_and_slide and
+# re-used by LocalController's reconcile replay so both paths agree.
+func clamp_body_to_rink() -> void:
+	var xz := Vector2(global_position.x, global_position.z)
+	var clamped: Vector2 = GameRules.clamp_to_rink_inner(xz)
+	if xz.distance_squared_to(clamped) <= 1e-6:
 		return
-	if _stuck_dbg_cooldown > 0.0:
-		return
-	_stuck_dbg_cooldown = 0.25
-	var contacts: String = ""
-	for i: int in get_slide_collision_count():
-		var c := get_slide_collision(i)
-		var who: String = "?"
-		var collider: Object = c.get_collider()
-		if collider != null and collider is Node:
-			who = (collider as Node).name
-		contacts += "\n    #%d n=%s collider=%s" % [i, c.get_normal(), who]
-	print("[STUCK] %s pos=(%.2f,%.2f) intended=%.2f m/s moved=%.3f m floor=%s wall=%s wall_only=%s wall_n=%s floor_n=%s contacts=%d%s" % [
-		name, global_position.x, global_position.z, intended_speed, moved.length(),
-		is_on_floor(), is_on_wall(), is_on_wall_only(),
-		get_wall_normal(), get_floor_normal(), get_slide_collision_count(), contacts])
+	var inward: Vector2 = (clamped - xz).normalized()
+	var vel_xz := Vector2(velocity.x, velocity.z)
+	var into_boards: float = vel_xz.dot(inward)
+	if into_boards < 0.0:
+		# Velocity points outward into the boards — strip that component, keep the
+		# tangential slide.
+		vel_xz -= into_boards * inward
+		velocity.x = vel_xz.x
+		velocity.z = vel_xz.y
+	global_position.x = clamped.x
+	global_position.z = clamped.y
 
 
 # Re-positions the four hand/shoulder Marker3Ds based on the current
