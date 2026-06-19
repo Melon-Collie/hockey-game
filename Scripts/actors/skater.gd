@@ -217,6 +217,7 @@ var blade_world_velocity: Vector3 = Vector3.ZERO
 var _prev_blade_world_pos: Vector3 = Vector3.ZERO
 var _prev_blade_contact: Vector3 = Vector3.ZERO
 var _last_wall_normal: Vector3 = Vector3.ZERO
+var _collision_cyl: CylinderShape3D = null
 var _body_block_area: Area3D = null
 var _body_block_sphere: SphereShape3D = null
 var _blade_area: Area3D = null
@@ -249,10 +250,13 @@ func _ready() -> void:
 
 	# Per-instance collision shape so SkaterController.apply_attributes
 	# can scale this skater's hitbox without mutating the shared
-	# SubResource referenced by every other Skater in the scene.
+	# SubResource referenced by every other Skater in the scene. Cache the
+	# cylinder so the rink clamp can read the current (Size-scaled) radius each
+	# tick without a node lookup; apply_attributes mutates this same instance.
 	var col: CollisionShape3D = $CollisionShape3D
 	if col != null and col.shape != null:
 		col.shape = col.shape.duplicate()
+		_collision_cyl = col.shape as CylinderShape3D
 
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
@@ -438,8 +442,13 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 # it's hot-path safe at 120 Hz × actors. Called live after move_and_slide and
 # re-used by LocalController's reconcile replay so both paths agree.
 func clamp_body_to_rink() -> void:
+	# Inset the boundary by the (Size-scaled) cylinder radius so the body's EDGE
+	# stops at the boards, matching where physics collision used to halt it —
+	# otherwise the center reaches the surface and the body clips in by its radius
+	# (worse for bigger players).
+	var radius: float = _collision_cyl.radius if _collision_cyl != null else 0.0
 	var xz := Vector2(global_position.x, global_position.z)
-	var clamped: Vector2 = GameRules.clamp_to_rink_inner(xz)
+	var clamped: Vector2 = GameRules.clamp_to_rink_inner(xz, radius)
 	if xz.distance_squared_to(clamped) <= 1e-6:
 		return
 	var inward: Vector2 = (clamped - xz).normalized()
