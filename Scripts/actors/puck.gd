@@ -276,6 +276,20 @@ func apply_goalie_poke_check(blade_pos: Vector3, blade_vel: Vector3) -> void:
 	puck_released.emit()
 
 
+# Goalie loose-puck sweep / clear. The poke check (apply_goalie_poke_check)
+# strips a CARRIED puck; this is its loose-puck counterpart — the goalie
+# sweeps an uncarried puck out of the crease toward the corner. There's no
+# carrier to clear and nobody was dispossessed, so it fires no strip/release
+# signals; it just imparts the clearing velocity. No-op on a carried puck
+# (the poke path owns that case). Host-only — the authoritative velocity
+# replicates to clients through the normal puck sync.
+func apply_goalie_sweep(sweep_velocity: Vector3) -> void:
+	if carrier != null:
+		return
+	sleeping = false
+	linear_velocity = sweep_velocity
+
+
 func release(direction: Vector3, power: float) -> void:
 	var ex_carrier: Skater = carrier
 	# Set position while still frozen so Jolt activates from the correct state.

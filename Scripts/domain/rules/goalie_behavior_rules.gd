@@ -337,3 +337,39 @@ static func lateral_puck_velocity_in_slot(
 	if absf(puck_velocity.x) < forward_speed * lateral_ratio:
 		return 0.0
 	return puck_velocity.x
+
+
+# ── Loose-puck clear ─────────────────────────────────────────────────────────
+# A slow loose puck sitting in the blue paint should be swept to the corner,
+# not left in front of the goalie for an opponent to bang in (the classic
+# "stop the 5-hole shot, then poke the rebound in as the goalie stands up"
+# pattern). The sweep is mostly lateral — toward the boards on the side the
+# puck already sits — with a forward component (out of the crease, away from
+# the goal line) so the puck is cleared toward the corner rather than fed back
+# up the slot where it could be one-timed.
+#
+# A dead-centre puck (|offset| <= center_deadband) has no natural side, so it's
+# pushed toward `default_side` (the goalie's stick side) instead of the
+# direction being undefined / flickering on float jitter.
+#
+# direction_sign convention per the top of this file: forward (away from the
+# goal line, into the rink) is the +direction_sign Z direction.
+# Returns a world-space velocity (y = 0); zero if the inputs degenerate.
+static func compute_clear_velocity(
+		puck_position: Vector3,
+		goal_center_x: float,
+		direction_sign: int,
+		lateral_weight: float,
+		forward_weight: float,
+		clear_speed: float,
+		center_deadband: float,
+		default_side: float) -> Vector3:
+	var offset_x: float = puck_position.x - goal_center_x
+	var side: float = signf(offset_x) if absf(offset_x) > center_deadband else signf(default_side)
+	if side == 0.0:
+		side = 1.0
+	var dir := Vector3(side * lateral_weight, 0.0, float(direction_sign) * forward_weight)
+	var dlen: float = dir.length()
+	if dlen < 0.0001:
+		return Vector3.ZERO
+	return (dir / dlen) * clear_speed

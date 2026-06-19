@@ -424,3 +424,34 @@ func test_cross_crease_works_for_other_team() -> void:
 		Vector3(0, 0, -23.5), Vector3(8, 0, -1),
 		-26.6, 1, 5.0, 1.5)
 	assert_almost_eq(vx, 8.0, 0.001)
+
+# ── compute_clear_velocity ────────────────────────────────────────────────────
+# Goal at +Z (goal_line_z = +26.6, direction_sign = -1). Forward (out of the
+# crease, into the rink) is therefore the -Z direction.
+
+func test_clear_sweeps_to_the_side_the_puck_sits() -> void:
+	# Puck offset to +X → swept toward +X (that corner), and forward (-Z).
+	var vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+		Vector3(0.5, 0, 25.8), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0)
+	assert_gt(vel.x, 0.0)
+	assert_lt(vel.z, 0.0)        # forward = -Z for the +Z goal
+	assert_almost_eq(vel.y, 0.0, 0.0001)
+	assert_almost_eq(vel.length(), 7.0, 0.001)
+
+func test_clear_lateral_dominates_forward() -> void:
+	# Lateral weight > forward weight → cleared cornerward, not back up the slot.
+	var vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+		Vector3(0.5, 0, 25.8), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0)
+	assert_gt(absf(vel.x), absf(vel.z))
+
+func test_clear_dead_centre_uses_default_side() -> void:
+	# Puck dead centre (within deadband) → pushed toward default_side (-1 here).
+	var vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+		Vector3(0.05, 0, 25.8), 0.0, -1, 1.0, 0.5, 7.0, 0.15, -1.0)
+	assert_lt(vel.x, 0.0)
+
+func test_clear_forward_flips_for_other_goal() -> void:
+	# Goal at -Z (direction_sign = +1): forward is +Z.
+	var vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+		Vector3(0.5, 0, -25.8), 0.0, 1, 1.0, 0.5, 7.0, 0.15, 1.0)
+	assert_gt(vel.z, 0.0)

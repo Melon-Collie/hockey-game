@@ -259,6 +259,24 @@ extends Node
 @export var standing_sweep_max_yaw_deg: float = 45.0
 @export var standing_sweep_y_drop: float = 0.04
 @export var standing_sweep_x_extension: float = 0.06
+
+# ── Loose-puck clear (sweep the crease) ──────────────────────────────────────
+# The stick poke check only strips a CARRIED puck — a loose puck sitting at the
+# goalie's feet does nothing on blade contact. This is the missing counterpart:
+# a slow loose puck within stick reach in front of the goalie gets actively
+# swept to the corner, so the goalie doesn't stand up and leave a rebound in
+# the blue paint (the "stop the 5-hole, poke the loose puck in" pattern). Fires
+# from any non-reacting state, butterfly or upright, regardless of whether an
+# opponent is nearby — clearing the crease is correct even with no pressure.
+# Drives the standing / paddle sweep pose too so the reach reads visually.
+@export var clear_reach: float = 1.4            # m — goalie-to-puck distance the stick can sweep
+@export var clear_max_puck_speed: float = 4.0   # m/s — above this it's a live shot/rebound, leave it
+@export var clear_speed: float = 7.0            # m/s imparted to the swept puck
+@export var clear_lateral_weight: float = 1.0   # corner-ward bias (lateral vs forward)
+@export var clear_forward_weight: float = 0.5   # out-of-crease bias
+@export var clear_center_deadband: float = 0.15 # m — |puck.x| under this picks the stick side
+@export var clear_cooldown: float = 0.45        # s between sweeps (anti-dribble)
+
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -491,6 +509,9 @@ var _cross_crease_target_x: float = 0.0
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
 var _lunge_cooldown_timer: float = 0.0
+# Loose-puck sweep cooldown — counts down after each crease clear so the goalie
+# sweeps once and lets the puck travel instead of dribbling it tick-by-tick.
+var _clear_cooldown_timer: float = 0.0
 # Blade velocity tracking for the goalie poke check. We need the BLADE's
 # world velocity (not the goalie body's) because the strip-velocity math
 # blends checker blade velocity with carrier blade velocity. Position-
@@ -684,6 +705,7 @@ func reset_to_crease() -> void:
 	_cross_crease_target_x = 0.0
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
+	_clear_cooldown_timer = 0.0
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 
@@ -1032,6 +1054,10 @@ func _is_standing_sweep_active() -> bool:
 		return false
 	if _reaction.reacting:
 		return false
+	# A loose puck in tight gets the aggressive reach even with no opponent near
+	# — the goalie is actively sweeping the crease (see _try_clear_loose_puck).
+	if _is_loose_puck_clearable():
+		return true
 	if goalie.global_position.distance_to(puck.global_position) > standing_sweep_trigger_distance:
 		return false
 	if not _opposing_shooter_near_puck(slide_loose_puck_shooter_radius):
@@ -1052,6 +1078,10 @@ func _is_paddle_sweep_active() -> bool:
 		return false
 	if _reaction.reacting:
 		return false
+	# Loose puck in tight gets the paddle reach even with no opponent near — the
+	# goalie sweeps the crease from butterfly (see _try_clear_loose_puck).
+	if _is_loose_puck_clearable():
+		return true
 	if goalie.global_position.distance_to(puck.global_position) > paddle_sweep_trigger_distance:
 		return false
 	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
@@ -1106,6 +1136,8 @@ func _update_goalie_poke(delta: float) -> void:
 	_prev_blade_world_pos = current_blade_pos
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
+		# No carrier to strip — instead sweep a loose puck out of the crease.
+		_try_clear_loose_puck(delta)
 		return
 	# Phase lock — same gate the skater path's _check_interactions respects.
 	# Faceoff prep / goal celebration freezes the puck; no pokes during those.
@@ -1119,6 +1151,52 @@ func _update_goalie_poke(delta: float) -> void:
 	if puck.global_position.distance_to(current_blade_pos) > goalie_poke_radius:
 		return
 	puck.apply_goalie_poke_check(current_blade_pos, _blade_world_velocity)
+
+
+# Loose-puck crease clear. The poke check above strips a CARRIED puck; this is
+# its loose-puck counterpart — when a slow loose puck is sitting within stick
+# reach in front of the goalie, sweep it to the corner so the goalie doesn't
+# stand up and leave a rebound in the blue paint. A cooldown gates it to one
+# sweep per visit so the goalie shoves the puck clear instead of dribbling it
+# tick-by-tick. Host-only (called from the host-gated _update_goalie_poke).
+func _try_clear_loose_puck(delta: float) -> void:
+	if _clear_cooldown_timer > 0.0:
+		_clear_cooldown_timer = maxf(_clear_cooldown_timer - delta, 0.0)
+		return
+	if not _is_loose_puck_clearable():
+		return
+	# Dead-centre pucks have no natural corner — sweep toward the stick side.
+	var default_side: float = 1.0 if catches_left else -1.0
+	var sweep_vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+			puck.global_position, _goal_center_x, _direction_sign,
+			clear_lateral_weight, clear_forward_weight, clear_speed,
+			clear_center_deadband, default_side)
+	puck.apply_goalie_sweep(sweep_vel)
+	_clear_cooldown_timer = clear_cooldown
+
+
+# True when a loose puck is sitting in front of the goalie, slow and close
+# enough to sweep to the corner with the stick. Drives both the actual clear
+# (_try_clear_loose_puck) and the standing / paddle sweep pose so the reach
+# reads visually. Loose pucks only — carried pucks go through the poke check.
+# Skipped while reacting to a shot (the goalie is reading a save, not poking at
+# a rebound) and from RVH (post-hug owns the behind-net puck). Fires regardless
+# of whether an opponent is near — clearing the crease is correct with no
+# pressure too. Cheap value math only (no allocation, no skater scan), so it's
+# safe to call several times per tick.
+func _is_loose_puck_clearable() -> bool:
+	if puck.get_carrier() != null:
+		return false
+	if puck.pickup_locked:
+		return false
+	if _reaction.reacting or _sm.is_rvh():
+		return false
+	# In front of the goal line only — never sweep a puck behind the net.
+	if (puck.global_position.z - _goal_line_z) * _direction_sign <= 0.0:
+		return false
+	if puck.linear_velocity.length() > clear_max_puck_speed:
+		return false
+	return goalie.global_position.distance_to(puck.global_position) <= clear_reach
 
 
 # Returns the current lunge progress as a sin curve: 0 at start, 1 at peak
