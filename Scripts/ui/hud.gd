@@ -32,6 +32,10 @@ var _score_1: int = 0
 var _home_badge_style: StyleBoxFlat = null
 var _away_badge_style: StyleBoxFlat = null
 var _last_clock_pulse_second: int = -1
+var _clock_warning_label: Label = null
+var _warned_one_min: bool = false
+var _warned_thirty: bool = false
+var _last_warning_pulse_second: int = -1
 var _confirm_dialog: ConfirmDialog = null
 var _confirm_callback: Callable = Callable()
 var _rematch_votes: Dictionary[int, bool] = {}
@@ -72,6 +76,7 @@ func _ready() -> void:
 	_build_offscreen_indicators()
 	_build_scorebug()
 	_build_phase_banner()
+	_build_clock_warning()
 	_build_top_goal_banner()
 	_build_version_tag()
 	_build_fps_label()
@@ -127,7 +132,7 @@ func _ready() -> void:
 	GameManager.goal_scored.connect(_on_goal_scored)
 	GameManager.phase_changed.connect(_on_phase_changed)
 	GameManager.faceoff_prep_announced.connect(_on_faceoff_prep_announced)
-	GameManager.period_changed.connect(_on_period_changed)
+	GameManager.period_synced.connect(_on_period_synced)
 	GameManager.clock_updated.connect(_on_clock_updated)
 	GameManager.game_over.connect(_on_game_over)
 	GameManager.game_reset.connect(_on_game_reset)
@@ -997,8 +1002,9 @@ func _on_phase_changed(new_phase: int) -> void:
 			_clear_goal_template()
 		GamePhase.Phase.GOAL_CELEBRATION:
 			# Live celebration beat — top wash already playing via _on_goal_scored,
-			# lower-third stays hidden until the replay phase fires.
-			pass
+			# lower-third stays hidden until the replay phase fires. Clear the
+			# final-10 countdown if a goal interrupts the dying seconds.
+			_hide_clock_warning()
 		GamePhase.Phase.GOAL_SCORED:
 			# Replay phase. Chyron is driven by _on_replay_started, not by this
 			# signal — wait for that.
@@ -1018,7 +1024,9 @@ func _on_phase_changed(new_phase: int) -> void:
 			_show_phase_banner_at_rest()
 		GamePhase.Phase.END_OF_PERIOD:
 			_stop_faceoff_countdown()
+			_hide_clock_warning()
 			_clear_goal_template()
+			_flash_period_end()
 			_phase_label.text = "END OF PERIOD"
 			_phase_label.add_theme_color_override("font_color", _WHITE)
 			_phase_label.visible = true
@@ -1026,6 +1034,8 @@ func _on_phase_changed(new_phase: int) -> void:
 			_show_phase_banner_at_rest()
 		GamePhase.Phase.GAME_OVER:
 			_stop_faceoff_countdown()
+			_hide_clock_warning()
+			_flash_period_end()
 			_show_phase_banner_at_rest()  # text + color set by _on_game_over
 		_:
 			_clear_goal_template()
@@ -1094,18 +1104,65 @@ func _clear_goal_template() -> void:
 	_assist_tag_label.visible = false
 	_assist_label.visible = false
 
-func _on_period_changed(new_period: int) -> void:
+func _on_period_synced(new_period: int) -> void:
 	_period_label.text = _period_ordinal(new_period)
+
+# Big, screen-centered countdown shown only in the final 10 seconds of a
+# period — the small scorebug clock is easy to miss while watching the puck,
+# so this is the unmissable "the period is about to end" cue. Hidden by
+# default; driven by _on_clock_updated. mouse_filter IGNORE so it never eats
+# input, and it sits below the goal/phase banners' layer ordering by being
+# added before them.
+func _build_clock_warning() -> void:
+	_clock_warning_label = _lbl("", 150, _GOLD)
+	_clock_warning_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_clock_warning_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_clock_warning_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_clock_warning_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_clock_warning_label.modulate = Color(1.0, 1.0, 1.0, 0.9)
+	_clock_warning_label.visible = false
+	add_child(_clock_warning_label)
+
+func _hide_clock_warning() -> void:
+	if _clock_warning_label != null:
+		_clock_warning_label.visible = false
+	_last_warning_pulse_second = -1
+
+# Gold screen flash when a period (or the game) ends — a visual partner to the
+# period buzzer, which GameManager already fires on these same phases.
+func _flash_period_end() -> void:
+	if _flash_overlay != null:
+		_flash_overlay.flash(_GOLD, 0.35, 0.5)
 
 func _on_clock_updated(t: float) -> void:
 	_clock_label.text = _format_clock(t)
 	if NetworkManager.is_offline_mode:
 		_clock_label.add_theme_color_override("font_color", _WHITE)
 		_last_clock_pulse_second = -1
+		_hide_clock_warning()
 		return
 	_clock_label.add_theme_color_override("font_color", _GOLD if t <= 30.0 and t > 0.0 else _WHITE)
+	# Advance warnings (one-shot per period) so the clock doesn't sneak up on a
+	# player focused on the puck. _warned_* re-arm when the clock resets above
+	# the threshold (period start / next-period faceoff).
+	if t > 60.0:
+		_warned_one_min = false
+		_warned_thirty = false
+	if t <= 60.0 and t > 30.0 and not _warned_one_min:
+		_warned_one_min = true
+		if _toast_stack != null:
+			_toast_stack.push("1 MINUTE LEFT", _GOLD)
+	if t <= 30.0 and t > 0.0 and not _warned_thirty:
+		_warned_thirty = true
+		if _toast_stack != null:
+			_toast_stack.push("30 SECONDS LEFT", _STAMINA_LOW)
+	# Final-10 hero countdown + per-second pulse on both the big number and the
+	# scorebug clock.
 	if t > 0.0 and t <= 10.0:
 		var sec := int(ceil(t))
+		if _clock_warning_label != null:
+			_clock_warning_label.text = str(sec)
+			_clock_warning_label.visible = true
 		if sec != _last_clock_pulse_second:
 			_last_clock_pulse_second = sec
 			_clock_label.pivot_offset = _clock_label.size / 2.0
@@ -1113,8 +1170,16 @@ func _on_clock_updated(t: float) -> void:
 			cp.tween_property(_clock_label, "scale", Vector2(1.3, 1.3), 0.0)
 			cp.tween_property(_clock_label, "scale", Vector2.ONE, 0.25) \
 				.set_trans(Tween.TRANS_SPRING).set_ease(Tween.EASE_OUT)
+		if sec != _last_warning_pulse_second and _clock_warning_label != null:
+			_last_warning_pulse_second = sec
+			_clock_warning_label.pivot_offset = _clock_warning_label.size / 2.0
+			var wp := create_tween()
+			wp.tween_property(_clock_warning_label, "scale", Vector2(1.5, 1.5), 0.0)
+			wp.tween_property(_clock_warning_label, "scale", Vector2.ONE, 0.45) \
+				.set_trans(Tween.TRANS_SPRING).set_ease(Tween.EASE_OUT)
 	else:
 		_last_clock_pulse_second = -1
+		_hide_clock_warning()
 
 func _on_game_over() -> void:
 	_phase_style.bg_color = MenuStyle.BROADCAST_BG  # clear any residual goal tint

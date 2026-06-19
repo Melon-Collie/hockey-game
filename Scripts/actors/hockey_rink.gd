@@ -169,10 +169,10 @@ func _ready() -> void:
 	collision_layer = Constants.LAYER_BOARDS
 	_rebuild()
 	if not Engine.is_editor_hint() and _scratch_map != null:
-		# period_changed emits `new_period: int`; clear() takes no args, so we
+		# period_synced emits `new_period: int`; clear() takes no args, so we
 		# unbind the int — without this, Godot errors silently each emit
 		# ("Expected 0 arguments, got 1") and the ice never resets.
-		GameManager.period_changed.connect(_scratch_map.clear.unbind(1))
+		GameManager.period_synced.connect(_scratch_map.clear.unbind(1))
 
 func _rebuild() -> void:
 	if rink_length <= 0 or rink_width <= 0:

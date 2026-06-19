@@ -23,7 +23,7 @@ signal phase_changed(new_phase: GamePhase.Phase)
 # it can't race the unreliable phase broadcast and start before the skater
 # teleport.
 signal faceoff_prep_announced
-signal period_changed(new_period: int)
+signal period_synced(new_period: int)
 signal clock_updated(time_remaining: float)
 signal game_over()
 signal game_reset()
@@ -794,7 +794,7 @@ func _wire_subsystems() -> void:
 			get_puck, _get_puck_controller, _get_goalie_controllers, _state_buffer_manager)
 	_codec.phase_changed.connect(_on_remote_phase_changed)
 	_codec.game_over_triggered.connect(game_over.emit)
-	_codec.period_changed.connect(period_changed.emit)
+	_codec.period_synced.connect(period_synced.emit)
 	_codec.clock_updated.connect(_on_clock_updated_externally)
 	_codec.shots_on_goal_changed.connect(shots_on_goal_changed.emit)
 	_codec.queue_depth_feedback.connect(NetworkManager.on_queue_depth_received)
@@ -856,7 +856,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.faceoff_prep_announced.connect(faceoff_prep_announced.emit)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
-	_phase_coord.period_changed.connect(period_changed.emit)
+	_phase_coord.period_synced.connect(period_synced.emit)
 	_phase_coord.clock_updated.connect(_on_clock_updated_externally)
 	_phase_coord.game_over.connect(game_over.emit)
 	_phase_coord.stats_need_sync.connect(_sync_stats_to_clients)
@@ -966,7 +966,7 @@ func _wire_sound_signals() -> void:
 			var snd: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
 			SoundManager.play_world(snd, pos, 0.0, 0.04))
 	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
-	# regulation periods, GAME_OVER for the final one. (Not period_changed, which
+	# regulation periods, GAME_OVER for the final one. (Not period_synced, which
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
 	phase_changed.connect(func(p: GamePhase.Phase) -> void:
 		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
@@ -2367,7 +2367,7 @@ func _apply_reset() -> void:
 	_hit_claim.reset_throttle()
 	_puck_oob_timer = 0.0
 	score_changed.emit(0, 0)
-	period_changed.emit(1)
+	period_synced.emit(1)
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()

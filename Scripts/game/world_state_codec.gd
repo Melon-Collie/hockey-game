@@ -51,7 +51,7 @@ extends RefCounted
 
 signal phase_changed(new_phase: int)
 signal game_over_triggered()
-signal period_changed(period: int)
+signal period_synced(period: int)
 signal clock_updated(time_remaining: float)
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal queue_depth_feedback(depth: int)
@@ -227,7 +227,7 @@ func _apply_game_state(score0: int, score1: int, new_phase: GamePhase.Phase,
 		phase_changed.emit(new_phase)
 	if period != _last_period:
 		_last_period = period
-		period_changed.emit(period)
+		period_synced.emit(period)
 	# Emit only when the displayed second changes (mirrors the host's 1 Hz
 	# gate in GameManager). Per-packet emission made clients rebuild the HUD
 	# clock label + dirty its theme cache at 120 Hz for an unchanged display.
