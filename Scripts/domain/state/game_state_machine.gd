@@ -71,6 +71,15 @@ var delayed_offside_team_id: int = -1
 # offside faceoff dot without re-receiving the puck position.
 var _last_puck_x: float = 0.0
 
+# ── Crease protection ─────────────────────────────────────────────────────────
+# peer_id → seconds the skater has continuously dwelt inside a goalie crease.
+# Accumulates while in the paint, resets (key erased) on exit. Once it reaches
+# GameRules.CREASE_DWELL_DURATION the skater is ghosted until they leave — the
+# crease boundary is the "tag-up line". Advanced inside compute_ghost_state
+# (the one per-tick path that has every player's position). Active in ARCADE
+# and NHL; cleared on OFF and during dead-puck phases like the offside set.
+var _crease_dwell: Dictionary[int, float] = {}
+
 # ── Pending faceoff ──────────────────────────────────────────────────────────
 # When the domain decides a stoppage should fire (NHL icing confirmed, NHL
 # offside touch), it stashes the dot + reason here for GameManager to consume
@@ -197,11 +206,13 @@ func check_icing_for_loose_puck(
 func compute_ghost_state(
 		player_positions: Dictionary,
 		puck_carrier_peer_id: int,
-		puck_position: Vector3) -> Dictionary:
+		puck_position: Vector3,
+		delta: float = 0.0) -> Dictionary:
 	var result: Dictionary = {}
 	# OFF preset disables every infraction-driven ghost.
 	if rule_set == GameRules.RuleSet.OFF:
 		_offside_peer_ids.clear()
+		_crease_dwell.clear()
 		for peer_id in player_positions:
 			result[peer_id] = false
 		return result
@@ -209,6 +220,7 @@ func compute_ghost_state(
 			or current_phase == GamePhase.Phase.FACEOFF)
 	if not is_active_play:
 		_offside_peer_ids.clear()
+		_crease_dwell.clear()
 		for peer_id in player_positions:
 			result[peer_id] = false
 		return result
@@ -237,6 +249,19 @@ func compute_ghost_state(
 					ghost = true
 		if icing_team_id == slot.team_id:
 			ghost = true
+		# Crease protection — no field skater (either team, carrier included) may
+		# camp in a goalie crease. Dwell-timed: a brief net drive passes through;
+		# lingering past CREASE_DWELL_DURATION ghosts you until you leave the paint
+		# (exit resets the timer, which un-ghosts next tick — the crease is the
+		# tag-up line). Independent of offside/icing so it stacks with them.
+		var pos: Vector3 = player_positions[peer_id]
+		if CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
+			var dwell: float = _crease_dwell.get(peer_id, 0.0) + delta
+			_crease_dwell[peer_id] = dwell
+			if dwell >= GameRules.CREASE_DWELL_DURATION:
+				ghost = true
+		else:
+			_crease_dwell.erase(peer_id)
 		result[peer_id] = ghost
 	return result
 

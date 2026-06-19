@@ -101,6 +101,14 @@ const PUCK_OOB_GRACE_DURATION: float = 1.0
 
 # ── Infractions ───────────────────────────────────────────────────────────────
 const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icing (ARCADE/legacy path)
+# Crease protection — anti-camp / goalie interference. A field skater of EITHER
+# team (carrier included) who lingers in a goalie crease this long is ghosted
+# (loses puck/body interaction) until they leave the paint. Dwell-timed, not
+# instant: aggressive net drives, wraparounds, and jam plays pass through
+# untouched — only parking in the blue paint is punished. Active in ARCADE and
+# NHL (not OFF). Reuses the offside ghost mechanism; the crease itself is the
+# "blue line" you tag up at (un-ghosts on exit).
+const CREASE_DWELL_DURATION: float = 0.6  # seconds in the crease before ghosting
 # End-zone faceoff dot offsets from centre ice — NHL spec. The rink renderer
 # (hockey_rink.gd) paints the dots at the same positions, so puck reset and
 # player teleport land on the painted dot. Z is 20' (6.096m) inside the goal
@@ -114,10 +122,12 @@ const ICING_FACEOFF_DOT_Z: float = GOAL_LINE_Z - 6.096   # 20.554
 const NEUTRAL_ZONE_FACEOFF_DOT_Z: float = BLUE_LINE_Z - 1.524   # 5.766
 
 # Rule preset that gates which infractions are detected and how they're punished.
-#   OFF    — no offsides, no icing (free-for-all).
+#   OFF    — no offsides, no icing, no crease protection (free-for-all).
 #   ARCADE — offsides ghost the offending player; icing is ignored.
 #   NHL    — full stoppage rules: icing blows the whistle after the hybrid race,
 #            offsides run delayed (no ghost) and whistle on offending-team touch.
+# Crease protection (anti-camp / goalie interference) is active in ARCADE and
+# NHL — see CREASE_DWELL_DURATION and GameStateMachine.compute_ghost_state.
 enum RuleSet { OFF, ARCADE, NHL }
 const DEFAULT_RULE_SET: int = RuleSet.ARCADE
 const RULE_SET_NAMES: Array[String] = ["Off", "Arcade", "NHL"]

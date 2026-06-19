@@ -420,6 +420,71 @@ func test_offside_cleared_by_tagging_up() -> void:
 		{1: Vector3(0, 1, 0)}, -1, Vector3(0, 0, 0))
 	assert_false(ghosts[1], "offside ghost must clear once player tags up at blue line")
 
+# ── Crease protection (anti-camp / goalie interference) ──────────────────────
+# Team 0 defends the +Z goal (crease centered at z = +GOAL_LINE_Z). A point at
+# z = 25.5 sits inside that crease; z = 20.0 is in the same end but outside the
+# paint. Both are in team 0's own zone, so neither is offside — isolating crease.
+
+func test_crease_camp_ghosts_after_dwell() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)  # team 0
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO,
+		GameRules.CREASE_DWELL_DURATION)
+	assert_true(ghosts[1], "lingering in the crease past the dwell window ghosts the skater")
+
+func test_crease_brief_entry_not_ghosted() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, 0.1)
+	assert_false(ghosts[1], "a brief net drive through the crease must not ghost")
+
+func test_crease_dwell_accumulates_across_ticks() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)
+	var half: float = GameRules.CREASE_DWELL_DURATION * 0.6  # two ticks crosses the threshold
+	var first: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, half)
+	assert_false(first[1], "below the dwell threshold after one tick")
+	var second: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, half)
+	assert_true(second[1], "dwell accumulates across ticks and crosses the threshold")
+
+func test_crease_ghost_clears_on_exit() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, GameRules.CREASE_DWELL_DURATION)
+	# Skater leaves the paint (still in own end, not offside) — un-ghosts.
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 20.0)}, -1, Vector3.ZERO, 0.1)
+	assert_false(ghosts[1], "leaving the crease clears the ghost and resets the dwell")
+
+func test_crease_carrier_not_exempt() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, 1, Vector3.ZERO,  # peer 1 carries the puck
+		GameRules.CREASE_DWELL_DURATION)
+	assert_true(ghosts[1], "the carrier is not exempt — camping the crease still ghosts")
+
+func test_crease_protection_off_in_off_preset() -> void:
+	sm.rule_set = GameRules.RuleSet.OFF
+	sm.register_remote_assigned_player(1, 0, 0)
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, GameRules.CREASE_DWELL_DURATION)
+	assert_false(ghosts[1], "OFF disables crease protection")
+
+func test_crease_protection_active_in_nhl() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, GameRules.CREASE_DWELL_DURATION)
+	assert_true(ghosts[1], "crease protection runs in NHL as well as ARCADE")
+
+func test_crease_no_ghost_during_dead_puck_phase() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.on_goal_scored(1)  # → GOAL_CELEBRATION (not active play — ghosts cleared)
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, GameRules.CREASE_DWELL_DURATION)
+	assert_false(ghosts[1], "no crease ghost while the puck is dead")
+
 # ── Reset ────────────────────────────────────────────────────────────────────
 
 func test_reset_scores_zeros_both_teams() -> void:
