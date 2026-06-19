@@ -78,7 +78,16 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 				victim_peer_id, puck_carrier, victim.global_position, puck.global_position)
 		if not HitRules.is_valid_hit(impulse_magnitude, attacker_has_puck, victim_relevant):
 			return
-		_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, _registry.resolve_team_id(victim))
+		# Direction for the impact burst — hitter → victim on the horizontal plane,
+		# the same vector the lag-comp claim path derives from rewound positions.
+		var hitter_rec: PlayerRecord = _registry.get_record(hitter_peer_id)
+		var hit_dir: Vector3 = Vector3.ZERO
+		if hitter_rec != null and hitter_rec.skater != null:
+			hit_dir = victim.global_position - hitter_rec.skater.global_position
+			hit_dir.y = 0.0
+			hit_dir = hit_dir.normalized()
+		_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, _registry.resolve_team_id(victim),
+				impulse_magnitude, hit_dir)
 		return
 	# Client: pre-filter on impulse and local puck state so we don't spam the
 	# host with claims for trivial bumps or while the local player is carrying
@@ -153,4 +162,8 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 			victim_snap.position, puck_snap.position)
 	if not HitRules.is_valid_hit(impulse, attacker_has_puck, victim_relevant):
 		return
-	_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, victim_rec.team.team_id)
+	# `impulse` is the rewound closing speed; scale by the hitter's weight to match
+	# the VFX-scale impact force the host path passes (body_checked_player carries
+	# weight * approach). `normal` is the hitter → victim direction for the burst.
+	var hit_force: float = impulse * (hitter_rec.skater.weight if hitter_rec.skater != null else 1.0)
+	_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, victim_rec.team.team_id, hit_force, normal)
