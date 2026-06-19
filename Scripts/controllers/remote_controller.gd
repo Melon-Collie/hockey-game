@@ -10,6 +10,19 @@ var _state_buffer: Array[BufferedSkaterState] = []
 var is_extrapolating: bool = false
 
 var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
+
+# Knockback lead (Lever B): a brief, self-zeroing forward bias on the interpolated
+# position right after a credited check, so the victim's knockback reads as a sharp
+# punch on remote screens instead of arriving interpolation_delay late and smoothed.
+# A SCOPED, time-boxed exception to the "interpolate in the past / no forward
+# projection" model (ARCHITECTURE.md): the offset is a 0→peak→0 pulse, so it never
+# causes lasting divergence — it lurches the body into the hit direction immediately,
+# then decays as the real (lagged) knockback samples catch up and hand off. Magnitude
+# and duration are feel-tunable.
+var _knockback_lead_elapsed: float = -1.0  # < 0 means inactive
+var _knockback_lead_offset: Vector3 = Vector3.ZERO  # peak offset = dir * meters
+const _KNOCKBACK_LEAD_DURATION_S: float = 0.12
+const _KNOCKBACK_LEAD_MAX_M: float = 0.22  # peak lead at a full-strength check
 # Reused scratch objects for the per-tick interpolation lookup + output —
 # allocating fresh ones each tick was measurable churn at the physics rate × 5 remotes.
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
@@ -28,6 +41,19 @@ func apply_ghost_rpc(is_ghost: bool) -> void:
 	if skater != null:
 		skater.set_ghost(is_ghost)
 
+# Called by GameManager when this remote skater is the victim of a credited check
+# (Lever B). Starts the knockback-lead pulse, scaled by hit strength. No-op on the
+# host (host drives remotes from input, not interpolation) and for a zero/degenerate
+# hit direction.
+func start_knockback_lead(hit_dir: Vector3, force: float) -> void:
+	if _is_host:
+		return
+	var flat := Vector3(hit_dir.x, 0.0, hit_dir.z)
+	if flat.length_squared() < 0.0001:
+		return
+	_knockback_lead_offset = flat.normalized() * (_KNOCKBACK_LEAD_MAX_M * SkaterVFX.check_intensity(force))
+	_knockback_lead_elapsed = 0.0
+
 func _physics_process(delta: float) -> void:
 	if skater == null:
 		return
@@ -38,6 +64,8 @@ func _physics_process(delta: float) -> void:
 	else:
 		if _rejoin_blend_elapsed >= 0.0:
 			_rejoin_blend_elapsed += delta
+		if _knockback_lead_elapsed >= 0.0:
+			_knockback_lead_elapsed += delta
 		_interpolate()
 		# Cosmetic leg gait, derived from the interpolated velocity — no extra
 		# network state. (Host-driven remotes animate via _process_input above.
@@ -225,6 +253,16 @@ func _interpolate() -> void:
 		interpolated.top_hand_position = _rejoin_blend_from_hand.lerp(interpolated.top_hand_position, eased)
 		if ease_t >= 1.0:
 			_rejoin_blend_elapsed = -1.0
+	# Knockback lead pulse (Lever B), applied as a final additive offset so it
+	# composes with — and can't corrupt — the interpolated/rejoin result. sin(t·π)
+	# is a clean 0→1→0: the body lurches into the hit immediately, peaks at ~60ms,
+	# then fully decays as the real lagged knockback samples arrive.
+	if _knockback_lead_elapsed >= 0.0:
+		var klt: float = _knockback_lead_elapsed / _KNOCKBACK_LEAD_DURATION_S
+		if klt >= 1.0:
+			_knockback_lead_elapsed = -1.0
+		else:
+			interpolated.position += _knockback_lead_offset * sin(klt * PI)
 	_apply_state_to_skater(interpolated)
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
 

@@ -2251,6 +2251,12 @@ func _on_body_check_landed(victim_peer_id: int, force: float, hit_dir: Vector3) 
 		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
 	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
 			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
+	# Lever B: lead the knockback on a remotely-interpolated victim so the hit reads
+	# punchy instead of mushy-late. No-op for the local (predicted) victim — its
+	# controller isn't a RemoteController — and on the host (guarded inside).
+	var rc: RemoteController = victim_rec.controller as RemoteController
+	if rc != null:
+		rc.start_knockback_lead(hit_dir, force)
 
 
 func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
