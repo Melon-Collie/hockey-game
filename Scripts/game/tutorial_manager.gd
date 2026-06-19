@@ -14,6 +14,9 @@ const STEP_STICKCHECK:  int = TutorialRegistry.STEP_STICKCHECK
 const STEP_BODY_CHECK:  int = TutorialRegistry.STEP_BODY_CHECK
 const STEP_ELEVATION:   int = TutorialRegistry.STEP_ELEVATION
 const STEP_OFFSIDES:    int = TutorialRegistry.STEP_OFFSIDES
+const STEP_SPRINT:      int = TutorialRegistry.STEP_SPRINT
+const STEP_BLADE_LIFT:  int = TutorialRegistry.STEP_BLADE_LIFT
+const STEP_STICK_LIFT:  int = TutorialRegistry.STEP_STICK_LIFT
 
 
 # ── Step definition ───────────────────────────────────────────────────────────
@@ -32,6 +35,13 @@ class TutorialStep:
 # Duration thresholds for sustained-hold steps
 const _SKATE_HOLD:           float = 1.5
 const _BRAKE_HOLD:           float = 1.0
+const _SPRINT_HOLD:          float = 1.0
+const _STICK_LIFT_HOLD:      float = 0.75
+# Blade-lift (dangle) step: how far the smoothed forehand factor (−1 backhand
+# … +1 forehand) must swing to each side before that side counts as "seen".
+# Both sides must register, which guarantees the blade swung through center —
+# the lift-through-center this step teaches.
+const _DANGLE_SIDE_THRESHOLD: float = 0.6
 const _BLOCK_HOLD:           float = 2.0
 const _SHOT_BLOCK_HOLD:      float = 1.0
 # Quick shot: must release WRISTER_AIM within this window (else counts as wrist shot)
@@ -83,6 +93,10 @@ var _complete_flash_timer: float = 0.0
 var _wrister_aim_start:  float = -1.0   # -1 when not in WRISTER_AIM
 var _cross_ice_dot_x:          float = 6.0   # set in _begin_step based on handedness
 var _offside_ghost_seen:       bool  = false
+# Blade-lift step: latched once the carrier sweeps the blade fully to each
+# side. Completion needs both, proving a forehand↔backhand swing through center.
+var _dangle_forehand_seen:     bool  = false
+var _dangle_backhand_seen:     bool  = false
 # True once the one-timer cross-ice pass is in flight. The re-fire branch
 # in _process gates on this so it can't trigger before the puck launches,
 # and the re-fire scheduler clears it during the wait to keep from
@@ -183,11 +197,26 @@ func _step_def_for(step_id: int) -> TutorialStep:
 				"Skate",
 				"Press W, A, S, D to skate around the ice.",
 				"Hold a direction to build up speed — you keep gliding when you let go.")
+		STEP_SPRINT:
+			return TutorialStep.new(
+				"Sprint",
+				"Hold Shift while skating to sprint for a burst of speed.",
+				"Sprinting drains stamina and widens your turn radius — use it in straight-line bursts.")
 		STEP_BRAKE:
 			return TutorialStep.new(
 				"Brake",
 				"Hold Space to brake hard and stop quickly.",
 				"Tap Space while moving to scrub off speed fast.")
+		STEP_BLADE_LIFT:
+			return TutorialStep.new(
+				"Stickhandle",
+				"Skate onto the puck, then sweep the mouse left and right to stickhandle — the blade lifts over the puck as it swings through the center.",
+				"Move the cursor side to side past your skater to dangle the puck forehand to backhand.")
+		STEP_STICK_LIFT:
+			return TutorialStep.new(
+				"Stick Lift",
+				"Hold Q to raise your stick blade — you'll use this to lift over an opponent's stick and knock the puck loose.",
+				"Press and hold Q and your blade pops up. (You can't lift while carrying the puck.)")
 		STEP_QUICK_SHOT:
 			return TutorialStep.new(
 				"Quick Shot",
@@ -257,6 +286,8 @@ func _begin_step(index: int) -> void:
 	_prefire_timer          = -1.0
 	_wrister_aim_start      = -1.0
 	_offside_ghost_seen     = false
+	_dangle_forehand_seen   = false
+	_dangle_backhand_seen   = false
 	_one_timer_armed        = false
 	_one_timer_restage_pending = false
 	_watch_for_on_net       = false
@@ -272,12 +303,21 @@ func _begin_step(index: int) -> void:
 	GameManager.set_tutorial_offsides_active(step_id == STEP_OFFSIDES)
 
 	match step_id:
-		STEP_SKATE:
+		STEP_SKATE, STEP_SPRINT, STEP_STICK_LIFT:
+			# Open ice, puck stashed out of the way. Sprint and stick-lift both
+			# need the player puck-free (sprint to read stamina cleanly, stick-lift
+			# because the voluntary Q raise is gated off while carrying).
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))  # out of the way
 
 		STEP_BRAKE:
-			pass  # player is already on the ice from the skate step
+			pass  # player is already on the ice from the sprint/skate step
+
+		STEP_BLADE_LIFT:
+			# Open ice with the puck just ahead so the player skates onto it and
+			# carries — stickhandling only reads while the puck is on the blade.
+			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
+			_place_puck(Vector3(0.0, _ICE_Y, 3.5))
 
 		STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT, STEP_ELEVATION:
 			# Spawn in the slot — the prime scoring area right in front of the
@@ -469,11 +509,43 @@ func _process(delta: float) -> void:
 			else:
 				_step_timer = 0.0
 
+		STEP_SPRINT:
+			# sprint_active is the resolved per-tick truth: sprint held, moving,
+			# stamina available, not locked out. Hold it for a beat to complete.
+			if _local_controller.sprint_active:
+				_step_timer += delta
+				if _step_timer >= _SPRINT_HOLD:
+					_complete_step()
+			else:
+				_step_timer = 0.0
+
 		STEP_BRAKE:
 			# is_braced is true whenever Space is held, with or without a direction
 			if _skater.is_braced:
 				_step_timer += delta
 				if _step_timer >= _BRAKE_HOLD:
+					_complete_step()
+			else:
+				_step_timer = 0.0
+
+		STEP_BLADE_LIFT:
+			# Only reads while the player is carrying, so latching both sides
+			# proves a full forehand↔backhand swing through center with the puck.
+			if _puck.carrier == _skater:
+				var forehand_factor: float = _skater.get_carry_forehand_factor()
+				if forehand_factor > _DANGLE_SIDE_THRESHOLD:
+					_dangle_forehand_seen = true
+				elif forehand_factor < -_DANGLE_SIDE_THRESHOLD:
+					_dangle_backhand_seen = true
+				if _dangle_forehand_seen and _dangle_backhand_seen:
+					_complete_step()
+
+		STEP_STICK_LIFT:
+			# blade_up is the voluntary Q raise (gated off while carrying). Hold
+			# it briefly so a stray tap doesn't auto-complete.
+			if _skater.blade_up:
+				_step_timer += delta
+				if _step_timer >= _STICK_LIFT_HOLD:
 					_complete_step()
 			else:
 				_step_timer = 0.0
