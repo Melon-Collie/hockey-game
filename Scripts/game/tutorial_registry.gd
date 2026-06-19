@@ -21,6 +21,9 @@ const STEP_STICKCHECK: int = 7
 const STEP_BODY_CHECK: int = 8
 const STEP_ELEVATION:  int = 9
 const STEP_OFFSIDES:   int = 10
+const STEP_SPRINT:     int = 11
+const STEP_BLADE_LIFT: int = 12
+const STEP_STICK_LIFT: int = 13
 
 # ── Tutorial identifiers ──────────────────────────────────────────────────────
 const BASICS_ID: String = "basics"
@@ -33,9 +36,11 @@ const ALL_IDS: Array[String] = [BASICS_ID, ADVANCED_ID]
 static func get_step_ids(tutorial_id: String) -> Array[int]:
 	match tutorial_id:
 		BASICS_ID:
-			return [STEP_SKATE, STEP_BRAKE, STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT]
+			return [STEP_SKATE, STEP_SPRINT, STEP_BRAKE,
+					STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT]
 		ADVANCED_ID:
-			return [STEP_ONE_TIMER, STEP_ELEVATION, STEP_SHOT_BLOCK, STEP_STICKCHECK,
+			return [STEP_ONE_TIMER, STEP_ELEVATION, STEP_SHOT_BLOCK,
+					STEP_BLADE_LIFT, STEP_STICK_LIFT, STEP_STICKCHECK,
 					STEP_BODY_CHECK, STEP_OFFSIDES]
 	return []
 
