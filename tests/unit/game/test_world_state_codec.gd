@@ -230,3 +230,149 @@ func test_skater_stamina_quantizes_within_tolerance() -> void:
 		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
 				WorldStateCodec._encode_skater_quantized(s))
 		assert_almost_eq(dec.stamina, v, 1.0 / 255.0, "stamina %f round-trips within u8 tolerance" % v)
+
+
+# ── decode_for_replay: side-effect-free world-state decode ────────────────────
+# The replay viewer / goal-replay driver decode packets through decode_for_replay
+# instead of decode_world_state precisely because it must NOT mutate the live
+# state machine. These build a world-state buffer by hand (the live encoder pulls
+# from CharacterBody3D controllers, untestable headless) using the same documented
+# layout and the static quantizers the round-trip tests above already validate.
+
+func _append_s32(buf: PackedByteArray, v: int) -> void:
+	var t := PackedByteArray()
+	t.resize(4)
+	t.encode_s32(0, v)
+	buf.append_array(t)
+
+
+# skaters: Array of { id: int, state: SkaterNetworkState } in wire order.
+# carrier_idx is the raw on-wire byte (0xFF = no carrier).
+func _build_ws(
+		host_ts: float,
+		skaters: Array,
+		puck: PuckNetworkState,
+		carrier_idx: int,
+		goalies: Array,
+		game_state: Dictionary) -> PackedByteArray:
+	var buf := PackedByteArray()
+	var header := PackedByteArray()
+	header.resize(WorldStateCodec.WS_HEADER_SIZE)
+	header.encode_u16(0, 1)  # ws_sequence
+	header.encode_u32(2, roundi(host_ts * Constants.TIME_WIRE_SCALE))
+	header.encode_u8(6, skaters.size())
+	buf.append_array(header)
+	for entry: Dictionary in skaters:
+		_append_s32(buf, entry.id)
+		buf.append_array(WorldStateCodec._encode_skater_quantized(entry.state))  # 38 B
+		buf.append(0)  # queue_depth (ignored by replay decode)
+	buf.append_array(WorldStateCodec._encode_puck_quantized(puck))  # 12 B
+	buf.append(carrier_idx & 0xFF)
+	buf.append(goalies.size())
+	for g: GoalieNetworkState in goalies:
+		buf.append_array(WorldStateCodec._encode_goalie_quantized(g))  # 35 B
+	var gs := PackedByteArray()
+	gs.resize(WorldStateCodec.GAME_STATE_BLOCK_SIZE)
+	gs.encode_u8(0, game_state.score0)
+	gs.encode_u8(1, game_state.score1)
+	gs.encode_u8(2, game_state.phase)
+	gs.encode_u8(3, game_state.period)
+	gs.encode_u16(4, game_state.time_remaining)
+	buf.append_array(gs)
+	return buf
+
+
+func _make_skater(x: float) -> SkaterNetworkState:
+	var s := SkaterNetworkState.new()
+	s.position = Vector3(x, 0.5, -x)
+	s.velocity = Vector3(1.0, 0.0, -2.0)
+	s.stamina = 0.5
+	return s
+
+
+func test_decode_for_replay_round_trips_full_packet() -> void:
+	var puck := PuckNetworkState.new()
+	puck.position = Vector3(3.0, 0.2, -4.0)
+	puck.velocity = Vector3(5.0, 0.0, 1.0)
+	var goalie := _make_goalie_state()
+	var buf := _build_ws(12.5,
+			[{id = 10, state = _make_skater(2.0)}, {id = 11, state = _make_skater(-6.0)}],
+			puck, 1, [goalie],
+			{score0 = 2, score1 = 1, phase = 3, period = 2, time_remaining = 600})
+
+	var out: Dictionary = codec.decode_for_replay(buf)
+
+	assert_false(out.is_empty(), "valid packet decodes")
+	assert_almost_eq(out.host_ts, 12.5, 0.001, "host_ts survives 0.1ms quantization")
+	# Skaters keyed by peer_id, decoded poses within s16@1cm tolerance.
+	assert_eq((out.skaters as Dictionary).size(), 2)
+	assert_true(out.skaters.has(10) and out.skaters.has(11))
+	assert_almost_eq(out.skaters[10].position.x, 2.0, 0.011)
+	assert_almost_eq(out.skaters[11].position.x, -6.0, 0.011)
+	# carrier_idx 1 → second decoded peer (11).
+	assert_eq(out.carrier_peer_id, 11)
+	# Puck + goalies.
+	assert_almost_eq(out.puck.position.x, 3.0, 0.011)
+	assert_eq((out.goalies as Array).size(), 1)
+	assert_almost_eq(out.goalies[0].position_x, goalie.position_x, 0.011)
+	# Game-state block (HUD fields) — note time_remaining rides as a raw u16.
+	assert_eq(out.game_state.score0, 2)
+	assert_eq(out.game_state.score1, 1)
+	assert_eq(out.game_state.phase, 3)
+	assert_eq(out.game_state.period, 2)
+	assert_eq(out.game_state.time_remaining, 600.0)
+
+
+func test_decode_for_replay_no_carrier_sentinel() -> void:
+	var buf := _build_ws(1.0,
+			[{id = 10, state = _make_skater(1.0)}],
+			PuckNetworkState.new(), 0xFF, [],
+			{score0 = 0, score1 = 0, phase = 0, period = 1, time_remaining = 0})
+	var out: Dictionary = codec.decode_for_replay(buf)
+	assert_eq(out.carrier_peer_id, -1, "0xFF sentinel decodes to no carrier")
+
+
+func test_decode_for_replay_out_of_range_carrier_idx_is_no_carrier() -> void:
+	# A carrier_idx beyond the decoded peer count must not index out of bounds.
+	var buf := _build_ws(1.0,
+			[{id = 10, state = _make_skater(1.0)}, {id = 11, state = _make_skater(2.0)}],
+			PuckNetworkState.new(), 5, [],
+			{score0 = 0, score1 = 0, phase = 0, period = 1, time_remaining = 0})
+	var out: Dictionary = codec.decode_for_replay(buf)
+	assert_eq(out.carrier_peer_id, -1)
+
+
+func test_decode_for_replay_zero_skaters_zero_goalies() -> void:
+	var buf := _build_ws(2.0, [], PuckNetworkState.new(), 0xFF, [],
+			{score0 = 0, score1 = 0, phase = 1, period = 1, time_remaining = 1200})
+	var out: Dictionary = codec.decode_for_replay(buf)
+	assert_false(out.is_empty(), "empty-roster packet still decodes puck + game state")
+	assert_eq((out.skaters as Dictionary).size(), 0)
+	assert_eq((out.goalies as Array).size(), 0)
+	assert_eq(out.game_state.time_remaining, 1200.0)
+
+
+func test_decode_for_replay_rejects_short_header() -> void:
+	var buf := PackedByteArray()
+	buf.resize(WorldStateCodec.WS_HEADER_SIZE - 1)
+	assert_true(codec.decode_for_replay(buf).is_empty(), "sub-header buffer rejected")
+
+
+func test_decode_for_replay_rejects_truncated_body() -> void:
+	# Header claims 2 skaters but no body follows — the min-size guard must bail
+	# before reading past the buffer.
+	var buf := PackedByteArray()
+	buf.resize(WorldStateCodec.WS_HEADER_SIZE)
+	buf.encode_u8(6, 2)  # num_skaters
+	assert_true(codec.decode_for_replay(buf).is_empty(), "truncated body rejected")
+
+
+func test_decode_for_replay_rejects_overrun_goalie_count() -> void:
+	# A crafted packet with a huge num_goalies but no goalie payload must be
+	# refused wholesale, not partially decoded off a stale offset (the guard
+	# protects the replay viewer from malformed .mreplay files).
+	var buf := _build_ws(1.0, [], PuckNetworkState.new(), 0xFF, [],
+			{score0 = 0, score1 = 0, phase = 0, period = 1, time_remaining = 0})
+	# num_goalies sits just before the 6-byte game-state tail.
+	buf.encode_u8(buf.size() - WorldStateCodec.GAME_STATE_BLOCK_SIZE - 1, 255)
+	assert_true(codec.decode_for_replay(buf).is_empty(), "overrun goalie count rejected")
