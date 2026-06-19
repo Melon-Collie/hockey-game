@@ -30,6 +30,12 @@ extends Node
 
 @export var shuffle_speed: float = 2.0
 @export var t_push_speed: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
+# Lateral push acceleration (m/s²). The goalie ramps up to shuffle / T-push speed
+# instead of snapping to it — pushes read like real push-offs, and a quick play
+# can beat the goalie across before they reach speed (realism + a scoring window).
+# The cross-crease desperation push bypasses this (stays instant). Set very high
+# (e.g. 100) to restore the old snap-to-speed behaviour.
+@export var lateral_accel: float = 14.0
 @export var lateral_threshold: float = 0.3
 @export var max_facing_angle: float = 70.0
 @export var rotation_speed: float = 5.0
@@ -65,6 +71,28 @@ extends Node
 # path picks it up. 0.9s comfortably covers point shots (a 30 m/s blue-line
 # slapshot is ~0.65s out) while ignoring slow clears/passes from distance.
 @export var react_max_time_to_impact: float = 0.9
+
+# ── Screening ─────────────────────────────────────────────────────────────────
+# A body between the puck and the goalie blocks the sightline, so the goalie
+# reads the shot late — both the leg drop and the arm reach are delayed by up to
+# `screen_max_extra_delay` for a full screen, scaled by how badly the look is
+# blocked (see GoalieBehaviorRules.screen_intensity). Makes net-front traffic
+# and point shots through a screen a real threat. Evaluated once at the read
+# (the goalie loses the beat the moment they can't see the puck leave the
+# stick); re-checking mid-flight would hand the time back. Host-only like all
+# goalie AI, so it costs nothing on the wire and never diverges on clients.
+@export var screen_max_extra_delay: float = 0.15  # s added to the read for a full screen
+@export var screener_radius: float = 0.6          # m — body half-width that blocks sight
+@export var screen_proximity_bias: float = 0.5    # how much a goalie-side body out-screens a shooter-side one
+
+# ── Caught moving ─────────────────────────────────────────────────────────────
+# A goalie is only sharp when SET — square and stopped. Caught mid-push, sliding,
+# or standing up, they read the shot late (see GoalieBehaviorRules.movement_read_
+# penalty). Like screening, this adds to the read; unlike a flat difficulty buff
+# it ONLY fires while the goalie is in motion, so it opens scoring windows (shoot
+# while he's moving) without making a set goalie any harder to beat.
+@export var move_read_max_delay: float = 0.12      # s — extra read latency when fully unset
+@export var move_read_reference_speed: float = 2.5 # m/s — planar speed counted as fully moving
 
 @export var shot_speed_threshold: float = 5.0
 @export var net_half_width: float = 0.915
@@ -259,6 +287,33 @@ extends Node
 @export var standing_sweep_max_yaw_deg: float = 45.0
 @export var standing_sweep_y_drop: float = 0.04
 @export var standing_sweep_x_extension: float = 0.06
+
+# ── Rebound steering (pad toe-out) ───────────────────────────────────────────
+# Pads are angled (Y-yaw, toes outward) so a save deflects the puck toward the
+# corner instead of reflecting it straight back up the slot — pose-based rebound
+# control, no physics override. Butterfly carries the larger angle: it's the
+# low-shot / 5-hole save posture where a straight-back rebound is most
+# dangerous. Pushed into the pose builder in _configure_collaborators.
+@export var pad_toe_out_standing_deg: float = 12.0
+@export var pad_toe_out_butterfly_deg: float = 18.0
+
+# ── Loose-puck clear (sweep the crease) ──────────────────────────────────────
+# The stick poke check only strips a CARRIED puck — a loose puck sitting at the
+# goalie's feet does nothing on blade contact. This is the missing counterpart:
+# a slow loose puck within stick reach in front of the goalie gets actively
+# swept to the corner, so the goalie doesn't stand up and leave a rebound in
+# the blue paint (the "stop the 5-hole, poke the loose puck in" pattern). Fires
+# from any non-reacting state, butterfly or upright, regardless of whether an
+# opponent is nearby — clearing the crease is correct even with no pressure.
+# Drives the standing / paddle sweep pose too so the reach reads visually.
+@export var clear_reach: float = 1.4            # m — goalie-to-puck distance the stick can sweep
+@export var clear_max_puck_speed: float = 4.0   # m/s — above this it's a live shot/rebound, leave it
+@export var clear_speed: float = 7.0            # m/s imparted to the swept puck
+@export var clear_lateral_weight: float = 1.0   # corner-ward bias (lateral vs forward)
+@export var clear_forward_weight: float = 0.5   # out-of-crease bias
+@export var clear_center_deadband: float = 0.15 # m — |puck.x| under this picks the stick side
+@export var clear_cooldown: float = 0.45        # s between sweeps (anti-dribble)
+
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
@@ -466,6 +521,11 @@ var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
 var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
+var _screen_cfg: GoalieBehaviorRules.ScreenConfig
+var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
+# Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
+# array. PackedVector3Array.clear() keeps capacity across shots.
+var _screen_positions: PackedVector3Array = PackedVector3Array()
 
 # ── Runtime (controller-local) ────────────────────────────────────────────────
 var _current_depth: float = 0.1
@@ -473,6 +533,10 @@ var _current_x: float = 0.0
 var _target_x: float = 0.0
 var _velocity_x: float = 0.0
 var _velocity_z: float = 0.0
+# Ramped lateral move speed for the upright arc mover. Accelerates toward the
+# desired shuffle / T-push speed at `lateral_accel` so pushes aren't instant;
+# reset to 0 whenever the goalie is set/frozen so the next push starts from rest.
+var _move_speed_current: float = 0.0
 var _five_hole_openness: float = 0.0
 var _tracked_threat_position: Vector3 = Vector3.ZERO
 # Position-derived puck velocity, for intercept math during elevated shots.
@@ -491,6 +555,9 @@ var _cross_crease_target_x: float = 0.0
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
 var _lunge_cooldown_timer: float = 0.0
+# Loose-puck sweep cooldown — counts down after each crease clear so the goalie
+# sweeps once and lets the puck travel instead of dribbling it tick-by-tick.
+var _clear_cooldown_timer: float = 0.0
 # Blade velocity tracking for the goalie poke check. We need the BLADE's
 # world velocity (not the goalie body's) because the strip-velocity math
 # blends checker blade velocity with carrier blade velocity. Position-
@@ -603,6 +670,8 @@ func _configure_collaborators() -> void:
 	_reaction.reaction_clear_delay = reaction_clear_delay
 	_pose.catches_left = catches_left
 	_pose.rvh_post_pad_angle = rvh_post_pad_angle
+	_pose.pad_toe_out_standing = pad_toe_out_standing_deg
+	_pose.pad_toe_out_butterfly = pad_toe_out_butterfly_deg
 	_pose.glove_max_x_outward = glove_max_x_outward
 	_pose.glove_max_x_inward = glove_max_x_inward
 	_pose.glove_max_z_reach = glove_max_z_reach
@@ -647,6 +716,12 @@ func _build_rule_configs() -> void:
 	_shot_cfg.reaction_delay = reaction_delay
 	_shot_cfg.low_shot_threshold = low_shot_threshold
 	_shot_cfg.elevated_threshold = elevated_threshold
+	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
+	_screen_cfg.screener_radius = screener_radius
+	_screen_cfg.goalie_proximity_bias = screen_proximity_bias
+	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
+	_move_read_cfg.reference_speed = move_read_reference_speed
+	_move_read_cfg.max_delay = move_read_max_delay
 	_universal_reaction_cfg = GoalieBehaviorRules.UniversalReactionConfig.new()
 	_universal_reaction_cfg.min_speed = universal_react_min_speed
 	_universal_reaction_cfg.max_time_to_impact = universal_react_max_time_to_impact
@@ -684,6 +759,8 @@ func reset_to_crease() -> void:
 	_cross_crease_target_x = 0.0
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
+	_clear_cooldown_timer = 0.0
+	_move_speed_current = 0.0
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 
@@ -1032,6 +1109,10 @@ func _is_standing_sweep_active() -> bool:
 		return false
 	if _reaction.reacting:
 		return false
+	# A loose puck in tight gets the aggressive reach even with no opponent near
+	# — the goalie is actively sweeping the crease (see _try_clear_loose_puck).
+	if _is_loose_puck_clearable():
+		return true
 	if goalie.global_position.distance_to(puck.global_position) > standing_sweep_trigger_distance:
 		return false
 	if not _opposing_shooter_near_puck(slide_loose_puck_shooter_radius):
@@ -1052,6 +1133,10 @@ func _is_paddle_sweep_active() -> bool:
 		return false
 	if _reaction.reacting:
 		return false
+	# Loose puck in tight gets the paddle reach even with no opponent near — the
+	# goalie sweeps the crease from butterfly (see _try_clear_loose_puck).
+	if _is_loose_puck_clearable():
+		return true
 	if goalie.global_position.distance_to(puck.global_position) > paddle_sweep_trigger_distance:
 		return false
 	return _opposing_shooter_near_puck(slide_loose_puck_shooter_radius)
@@ -1106,6 +1191,8 @@ func _update_goalie_poke(delta: float) -> void:
 	_prev_blade_world_pos = current_blade_pos
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
+		# No carrier to strip — instead sweep a loose puck out of the crease.
+		_try_clear_loose_puck(delta)
 		return
 	# Phase lock — same gate the skater path's _check_interactions respects.
 	# Faceoff prep / goal celebration freezes the puck; no pokes during those.
@@ -1119,6 +1206,52 @@ func _update_goalie_poke(delta: float) -> void:
 	if puck.global_position.distance_to(current_blade_pos) > goalie_poke_radius:
 		return
 	puck.apply_goalie_poke_check(current_blade_pos, _blade_world_velocity)
+
+
+# Loose-puck crease clear. The poke check above strips a CARRIED puck; this is
+# its loose-puck counterpart — when a slow loose puck is sitting within stick
+# reach in front of the goalie, sweep it to the corner so the goalie doesn't
+# stand up and leave a rebound in the blue paint. A cooldown gates it to one
+# sweep per visit so the goalie shoves the puck clear instead of dribbling it
+# tick-by-tick. Host-only (called from the host-gated _update_goalie_poke).
+func _try_clear_loose_puck(delta: float) -> void:
+	if _clear_cooldown_timer > 0.0:
+		_clear_cooldown_timer = maxf(_clear_cooldown_timer - delta, 0.0)
+		return
+	if not _is_loose_puck_clearable():
+		return
+	# Dead-centre pucks have no natural corner — sweep toward the stick side.
+	var default_side: float = 1.0 if catches_left else -1.0
+	var sweep_vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+			puck.global_position, _goal_center_x, _direction_sign,
+			clear_lateral_weight, clear_forward_weight, clear_speed,
+			clear_center_deadband, default_side)
+	puck.apply_goalie_sweep(sweep_vel)
+	_clear_cooldown_timer = clear_cooldown
+
+
+# True when a loose puck is sitting in front of the goalie, slow and close
+# enough to sweep to the corner with the stick. Drives both the actual clear
+# (_try_clear_loose_puck) and the standing / paddle sweep pose so the reach
+# reads visually. Loose pucks only — carried pucks go through the poke check.
+# Skipped while reacting to a shot (the goalie is reading a save, not poking at
+# a rebound) and from RVH (post-hug owns the behind-net puck). Fires regardless
+# of whether an opponent is near — clearing the crease is correct with no
+# pressure too. Cheap value math only (no allocation, no skater scan), so it's
+# safe to call several times per tick.
+func _is_loose_puck_clearable() -> bool:
+	if puck.get_carrier() != null:
+		return false
+	if puck.pickup_locked:
+		return false
+	if _reaction.reacting or _sm.is_rvh():
+		return false
+	# In front of the goal line only — never sweep a puck behind the net.
+	if (puck.global_position.z - _goal_line_z) * _direction_sign <= 0.0:
+		return false
+	if puck.linear_velocity.length() > clear_max_puck_speed:
+		return false
+	return goalie.global_position.distance_to(puck.global_position) <= clear_reach
 
 
 # Returns the current lunge progress as a sin curve: 0 at start, 1 at peak
@@ -1191,6 +1324,8 @@ func _on_sm_transitioned(prev: State, new_state: State) -> void:
 			_slide.velocity_x = 0.0
 		State.RECOVERING:
 			_slide.velocity_x = 0.0
+			# Standing back up from a drop — the upright mover starts from rest.
+			_move_speed_current = 0.0
 		State.STANDING:
 			_slide.drop_progress = 0.0
 			_slide.velocity_x = 0.0
@@ -1360,6 +1495,9 @@ func _update_position(delta: float) -> void:
 func _move_along_arc(delta: float) -> Vector2:
 	var current := Vector2(_current_x, goalie.global_position.z)
 	if _reaction.reacting:
+		# Frozen and reading the shot — the goalie is set, so the next push after
+		# the freeze clears starts the ramp from rest.
+		_move_speed_current = 0.0
 		if is_server:
 			_five_hole_openness = lerpf(_five_hole_openness, five_hole_base, part_lerp_speed * delta)
 		return current
@@ -1387,7 +1525,18 @@ func _move_along_arc(delta: float) -> Vector2:
 	else:
 		move_speed = shuffle_speed
 		five_hole_target = five_hole_shuffle_max
-	var step: float = move_speed * delta
+	# Ramp the effective speed toward the desired so a push isn't instant — the
+	# goalie accelerates onto its edge. The cross-crease desperation push bypasses
+	# the ramp (it's already a committed all-out push); carry its speed into
+	# `_move_speed_current` so a normal track continuing afterward doesn't re-ramp.
+	var effective_speed: float
+	if cross_crease_push:
+		effective_speed = move_speed
+		_move_speed_current = move_speed
+	else:
+		_move_speed_current = move_toward(_move_speed_current, move_speed, lateral_accel * delta)
+		effective_speed = _move_speed_current
+	var step: float = effective_speed * delta
 	var new_xz: Vector2
 	if delta_2d <= step or delta_2d < 0.0001:
 		new_xz = target_xz
@@ -1705,7 +1854,47 @@ func _check_universal_reaction() -> void:
 				team_id, puck.global_position.x, puck.global_position.z,
 				puck.linear_velocity.length(), result.impact_x,
 				"ELEVATED" if result.is_elevated else "low"])
-	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay)
+	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
+			result.reaction_delay, 0.0, _read_extra_delay())
+
+
+# Total extra latency before the goalie picks up the shot: a screen blocking the
+# sightline PLUS being caught moving / unset at the read. Both push the leg drop
+# and arm reach back. Computed once per shot (event-driven), off the hot path.
+func _read_extra_delay() -> float:
+	return _screen_delay() + _movement_read_delay()
+
+
+# Screen contribution: gather every body that could block the goalie's sightline
+# (both teams — a D-man screens his own goalie too; ghosted players don't), and
+# scale the worst single screen by `screen_max_extra_delay`. The shooter
+# self-excludes geometrically (they sit at the puck end of the sightline).
+func _screen_delay() -> float:
+	if screen_max_extra_delay <= 0.0 or not _skater_getter.is_valid():
+		return 0.0
+	var skaters: Array = _skater_getter.call()
+	_screen_positions.clear()
+	for skater: Skater in skaters:
+		if skater == null or skater.is_ghost:
+			continue
+		_screen_positions.append(skater.global_position)
+	if _screen_positions.is_empty():
+		return 0.0
+	var intensity: float = GoalieBehaviorRules.screen_intensity(
+			puck.global_position, goalie.global_position, _screen_positions, _screen_cfg)
+	return intensity * screen_max_extra_delay
+
+
+# Caught-moving contribution: how unset the goalie is at the read. Planar speed
+# (lateral + depth motion) is the main driver; RECOVERING adds a posture floor
+# (standing up is the least ready stance to make a save from). Mid-slide unset is
+# already captured by the slide's translation speed.
+func _movement_read_delay() -> float:
+	if move_read_max_delay <= 0.0:
+		return 0.0
+	var planar_speed: float = sqrt(_velocity_x * _velocity_x + _velocity_z * _velocity_z)
+	var scrambling: bool = _sm.current == State.RECOVERING
+	return GoalieBehaviorRules.movement_read_penalty(planar_speed, scrambling, _move_read_cfg)
 
 
 # ── Shot Detection ────────────────────────────────────────────────────────────
@@ -1752,7 +1941,8 @@ func _on_puck_released() -> void:
 	# the upper net to reach. Both run in parallel; start() arms both, and
 	# `back_date` lag-comps client-initiated releases so the goalie gets the
 	# same effective reaction window the shooter perceived.
-	_reaction.start(result.impact_x, result.impact_y, result.is_elevated, result.reaction_delay, back_date)
+	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
+			result.reaction_delay, back_date, _read_extra_delay())
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
 # don't trigger spurious slides, starts the reaction clear delay, and drops

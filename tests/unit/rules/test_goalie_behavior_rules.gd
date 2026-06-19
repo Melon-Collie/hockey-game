@@ -424,3 +424,146 @@ func test_cross_crease_works_for_other_team() -> void:
 		Vector3(0, 0, -23.5), Vector3(8, 0, -1),
 		-26.6, 1, 5.0, 1.5)
 	assert_almost_eq(vx, 8.0, 0.001)
+
+# ── compute_clear_velocity ────────────────────────────────────────────────────
+# Goal at +Z (goal_line_z = +26.6, direction_sign = -1). Forward (out of the
+# crease, into the rink) is therefore the -Z direction.
+
+func test_clear_sweeps_to_the_side_the_puck_sits() -> void:
+	# Puck offset to +X → swept toward +X (that corner), and forward (-Z).
+	var vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+		Vector3(0.5, 0, 25.8), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0)
+	assert_gt(vel.x, 0.0)
+	assert_lt(vel.z, 0.0)        # forward = -Z for the +Z goal
+	assert_almost_eq(vel.y, 0.0, 0.0001)
+	assert_almost_eq(vel.length(), 7.0, 0.001)
+
+func test_clear_lateral_dominates_forward() -> void:
+	# Lateral weight > forward weight → cleared cornerward, not back up the slot.
+	var vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+		Vector3(0.5, 0, 25.8), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0)
+	assert_gt(absf(vel.x), absf(vel.z))
+
+func test_clear_dead_centre_uses_default_side() -> void:
+	# Puck dead centre (within deadband) → pushed toward default_side (-1 here).
+	var vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+		Vector3(0.05, 0, 25.8), 0.0, -1, 1.0, 0.5, 7.0, 0.15, -1.0)
+	assert_lt(vel.x, 0.0)
+
+func test_clear_forward_flips_for_other_goal() -> void:
+	# Goal at -Z (direction_sign = +1): forward is +Z.
+	var vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+		Vector3(0.5, 0, -25.8), 0.0, 1, 1.0, 0.5, 7.0, 0.15, 1.0)
+	assert_gt(vel.z, 0.0)
+
+# ── screen_intensity ──────────────────────────────────────────────────────────
+# Puck at origin, goalie 10m down +Z; sightline is the +Z axis. Defaults:
+# radius 0.6, min_t 0.12, max_t 0.95, proximity_bias 0.5.
+
+func _screen_cfg() -> GoalieBehaviorRules.ScreenConfig:
+	var cfg := GoalieBehaviorRules.ScreenConfig.new()
+	cfg.screener_radius = 0.6
+	cfg.min_t = 0.12
+	cfg.max_t = 0.95
+	cfg.goalie_proximity_bias = 0.5
+	return cfg
+
+func test_screen_no_bodies_is_clear() -> void:
+	var i: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10), PackedVector3Array(), _screen_cfg())
+	assert_eq(i, 0.0)
+
+func test_screen_dead_on_midway() -> void:
+	# t=0.5, perp=0 → centrality 1, proximity 0.5 + 0.5*0.5 = 0.75.
+	var i: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 5)]), _screen_cfg())
+	assert_almost_eq(i, 0.75, 0.001)
+
+func test_screen_off_to_the_side_clears() -> void:
+	# perp 1.0 > radius 0.6 → not on the sightline.
+	var i: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(1.0, 0, 5)]), _screen_cfg())
+	assert_eq(i, 0.0)
+
+func test_screen_behind_goalie_clears() -> void:
+	var i: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 12)]), _screen_cfg())
+	assert_eq(i, 0.0)
+
+func test_screen_at_shooter_clears() -> void:
+	# t=0.05 < min_t → the shooter doesn't screen themselves.
+	var i: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 0.5)]), _screen_cfg())
+	assert_eq(i, 0.0)
+
+func test_screen_goalie_side_body_screens_harder() -> void:
+	# Same perp (dead-on), body nearer the goalie covers more net.
+	var near_goalie: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 8)]), _screen_cfg())
+	var near_shooter: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 2)]), _screen_cfg())
+	assert_gt(near_goalie, near_shooter)
+
+func test_screen_edge_body_weaker_than_dead_on() -> void:
+	var dead_on: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 5)]), _screen_cfg())
+	var edge: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0.3, 0, 5)]), _screen_cfg())
+	assert_gt(dead_on, edge)
+	assert_gt(edge, 0.0)
+
+func test_screen_takes_worst_of_many() -> void:
+	# One weak edge body + one strong dead-on body → the strong one wins.
+	var i: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0.5, 0, 3), Vector3(0, 0, 8)]), _screen_cfg())
+	assert_almost_eq(i, 0.9, 0.001)  # dead-on at t=0.8: 1.0 * (0.5 + 0.5*0.8)
+
+func test_screen_never_exceeds_one() -> void:
+	var i: float = GoalieBehaviorRules.screen_intensity(
+		Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 9.4)]), _screen_cfg())
+	assert_lte(i, 1.0)
+
+# ── movement_read_penalty ─────────────────────────────────────────────────────
+# A set (stopped) goalie reads at the base delay; a moving / scrambling one reads
+# late. reference_speed 2.5, max_delay 0.12, scramble_unset 1.0.
+
+func _move_read_cfg() -> GoalieBehaviorRules.MovementReadConfig:
+	var cfg := GoalieBehaviorRules.MovementReadConfig.new()
+	cfg.reference_speed = 2.5
+	cfg.max_delay = 0.12
+	cfg.scramble_unset = 1.0
+	return cfg
+
+func test_move_read_set_goalie_no_penalty() -> void:
+	var d: float = GoalieBehaviorRules.movement_read_penalty(0.0, false, _move_read_cfg())
+	assert_eq(d, 0.0)
+
+func test_move_read_scales_with_speed() -> void:
+	# Half reference speed → half the max delay.
+	var d: float = GoalieBehaviorRules.movement_read_penalty(1.25, false, _move_read_cfg())
+	assert_almost_eq(d, 0.06, 0.001)
+
+func test_move_read_caps_at_max() -> void:
+	# Well over reference speed → clamped to max_delay.
+	var d: float = GoalieBehaviorRules.movement_read_penalty(6.0, false, _move_read_cfg())
+	assert_almost_eq(d, 0.12, 0.001)
+
+func test_move_read_scrambling_floors_unset() -> void:
+	# Standing-up posture: full penalty even when barely moving.
+	var d: float = GoalieBehaviorRules.movement_read_penalty(0.1, true, _move_read_cfg())
+	assert_almost_eq(d, 0.12, 0.001)
+
+func test_move_read_faster_is_later() -> void:
+	var slow: float = GoalieBehaviorRules.movement_read_penalty(0.5, false, _move_read_cfg())
+	var fast: float = GoalieBehaviorRules.movement_read_penalty(2.0, false, _move_read_cfg())
+	assert_gt(fast, slow)
