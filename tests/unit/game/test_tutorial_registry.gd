@@ -40,7 +40,6 @@ func test_basics_covers_movement_and_shot_types() -> void:
 	assert_has(steps, TutorialRegistry.STEP_SKATE)
 	assert_has(steps, TutorialRegistry.STEP_SPRINT)
 	assert_has(steps, TutorialRegistry.STEP_BRAKE)
-	assert_has(steps, TutorialRegistry.STEP_BLADE_LIFT)
 	assert_has(steps, TutorialRegistry.STEP_QUICK_SHOT)
 	assert_has(steps, TutorialRegistry.STEP_WRIST_SHOT)
 	assert_has(steps, TutorialRegistry.STEP_SLAPSHOT)
@@ -49,6 +48,7 @@ func test_basics_covers_movement_and_shot_types() -> void:
 func test_advanced_covers_defense_and_rules() -> void:
 	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.ADVANCED_ID)
 	assert_has(steps, TutorialRegistry.STEP_ONE_TIMER)
+	assert_has(steps, TutorialRegistry.STEP_BLADE_LIFT)
 	assert_has(steps, TutorialRegistry.STEP_STICK_LIFT)
 	assert_has(steps, TutorialRegistry.STEP_STICKCHECK)
 	assert_has(steps, TutorialRegistry.STEP_BODY_CHECK)

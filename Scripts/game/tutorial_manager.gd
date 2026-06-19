@@ -36,12 +36,9 @@ class TutorialStep:
 const _SKATE_HOLD:           float = 1.5
 const _BRAKE_HOLD:           float = 1.0
 const _SPRINT_HOLD:          float = 1.0
-const _STICK_LIFT_HOLD:      float = 0.75
-# Blade-lift (dangle) step: how far the smoothed forehand factor (−1 backhand
-# … +1 forehand) must swing to each side before that side counts as "seen".
-# Both sides must register, which guarantees the blade swung through center —
-# the lift-through-center this step teaches.
-const _DANGLE_SIDE_THRESHOLD: float = 0.6
+# Blade-lift step (raise your own stick with Q): hold the blade up briefly so a
+# stray tap doesn't auto-complete.
+const _BLADE_LIFT_HOLD:      float = 0.75
 const _BLOCK_HOLD:           float = 2.0
 const _SHOT_BLOCK_HOLD:      float = 1.0
 # Quick shot: must release WRISTER_AIM within this window (else counts as wrist shot)
@@ -93,10 +90,6 @@ var _complete_flash_timer: float = 0.0
 var _wrister_aim_start:  float = -1.0   # -1 when not in WRISTER_AIM
 var _cross_ice_dot_x:          float = 6.0   # set in _begin_step based on handedness
 var _offside_ghost_seen:       bool  = false
-# Blade-lift step: latched once the carrier sweeps the blade fully to each
-# side. Completion needs both, proving a forehand↔backhand swing through center.
-var _dangle_forehand_seen:     bool  = false
-var _dangle_backhand_seen:     bool  = false
 # True once the one-timer cross-ice pass is in flight. The re-fire branch
 # in _process gates on this so it can't trigger before the puck launches,
 # and the re-fire scheduler clears it during the wait to keep from
@@ -135,6 +128,7 @@ var _on_one_timer_callable:        Callable = Callable()
 var _on_body_check_callable:       Callable = Callable()
 var _on_regular_shot_in_one_timer: Callable = Callable()
 var _on_stickcheck_callable:       Callable = Callable()
+var _on_stick_lift_callable:       Callable = Callable()
 
 
 # Constructor sets the tutorial id; game_scene.gd passes the id selected by
@@ -209,14 +203,14 @@ func _step_def_for(step_id: int) -> TutorialStep:
 				"Tap Space while moving to scrub off speed fast.")
 		STEP_BLADE_LIFT:
 			return TutorialStep.new(
-				"Stickhandle",
-				"Skate onto the puck, then sweep the mouse left and right to stickhandle — the blade lifts over the puck as it swings through the center.",
-				"Move the cursor side to side past your skater to dangle the puck forehand to backhand.")
+				"Blade Lift",
+				"Hold Q to lift your stick blade up off the ice.",
+				"Press and hold Q and your blade pops up. (You can't lift while carrying the puck.)")
 		STEP_STICK_LIFT:
 			return TutorialStep.new(
 				"Stick Lift",
-				"Hold Q to raise your stick blade — you'll use this to lift over an opponent's stick and knock the puck loose.",
-				"Press and hold Q and your blade pops up. (You can't lift while carrying the puck.)")
+				"Get under the opponent's stick and hold Q to lift it — that pops the puck off their blade and strips it loose.",
+				"Skate your blade beneath their stick, then hold Q to lift it and knock the puck free.")
 		STEP_QUICK_SHOT:
 			return TutorialStep.new(
 				"Quick Shot",
@@ -286,8 +280,6 @@ func _begin_step(index: int) -> void:
 	_prefire_timer          = -1.0
 	_wrister_aim_start      = -1.0
 	_offside_ghost_seen     = false
-	_dangle_forehand_seen   = false
-	_dangle_backhand_seen   = false
 	_one_timer_armed        = false
 	_one_timer_restage_pending = false
 	_watch_for_on_net       = false
@@ -303,9 +295,9 @@ func _begin_step(index: int) -> void:
 	GameManager.set_tutorial_offsides_active(step_id == STEP_OFFSIDES)
 
 	match step_id:
-		STEP_SKATE, STEP_SPRINT, STEP_STICK_LIFT:
-			# Open ice, puck stashed out of the way. Sprint and stick-lift both
-			# need the player puck-free (sprint to read stamina cleanly, stick-lift
+		STEP_SKATE, STEP_SPRINT, STEP_BLADE_LIFT:
+			# Open ice, puck stashed out of the way. Sprint and blade-lift both
+			# need the player puck-free (sprint to read stamina cleanly, blade-lift
 			# because the voluntary Q raise is gated off while carrying).
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))  # out of the way
@@ -313,11 +305,23 @@ func _begin_step(index: int) -> void:
 		STEP_BRAKE:
 			pass  # player is already on the ice from the sprint/skate step
 
-		STEP_BLADE_LIFT:
-			# Open ice with the puck just ahead so the player skates onto it and
-			# carries — stickhandling only reads while the puck is on the blade.
-			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
-			_place_puck(Vector3(0.0, _ICE_Y, 3.5))
+		STEP_STICK_LIFT:
+			# Same puppet-with-the-puck setup as the stick-check step, but the
+			# player strips by lifting the puppet's stick (blade up + under it)
+			# instead of poking. Completion only fires for a lift (see the
+			# puck_stripped handler); a stray poke re-pins the puck (see _process).
+			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.5))
+			_ensure_puppet(Vector3(0.0, 1.0, 0.0))
+			if _puck.carrier != null:
+				_puck.drop()
+			_puck.set_carrier(_puppet_record.skater)
+			_on_stick_lift_callable = func(_ex: Skater) -> void:
+				# A lifted blade can't poke (puck_controller skips the poke path
+				# when blade_up), so a strip while the player's blade is up is a
+				# stick lift. A no-blade poke falls through to the _process re-pin.
+				if _skater.blade_up:
+					_complete_step()
+			_puck.puck_stripped.connect(_on_stick_lift_callable)
 
 		STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT, STEP_ELEVATION:
 			# Spawn in the slot — the prime scoring area right in front of the
@@ -406,7 +410,7 @@ func _complete_step() -> void:
 	# into a step that doesn't need it (e.g. body-check → elevation in the
 	# advanced flow).
 	var step_id: int = _current_step_id()
-	if step_id == STEP_BODY_CHECK or step_id == STEP_STICKCHECK:
+	if step_id == STEP_BODY_CHECK or step_id == STEP_STICKCHECK or step_id == STEP_STICK_LIFT:
 		_free_puppet()
 
 
@@ -426,7 +430,7 @@ func _on_skip() -> void:
 	var step_id: int = _current_step_id()
 	if step_id == STEP_SHOT_BLOCK:
 		_place_puck(Vector3(100.0, _ICE_Y, 100.0))  # clear the in-flight puck
-	if step_id == STEP_STICKCHECK or step_id == STEP_BODY_CHECK:
+	if step_id == STEP_STICKCHECK or step_id == STEP_BODY_CHECK or step_id == STEP_STICK_LIFT:
 		_free_puppet()
 	_complete_step()
 
@@ -529,26 +533,24 @@ func _process(delta: float) -> void:
 				_step_timer = 0.0
 
 		STEP_BLADE_LIFT:
-			# Only reads while the player is carrying, so latching both sides
-			# proves a full forehand↔backhand swing through center with the puck.
-			if _puck.carrier == _skater:
-				var forehand_factor: float = _skater.get_carry_forehand_factor()
-				if forehand_factor > _DANGLE_SIDE_THRESHOLD:
-					_dangle_forehand_seen = true
-				elif forehand_factor < -_DANGLE_SIDE_THRESHOLD:
-					_dangle_backhand_seen = true
-				if _dangle_forehand_seen and _dangle_backhand_seen:
-					_complete_step()
-
-		STEP_STICK_LIFT:
 			# blade_up is the voluntary Q raise (gated off while carrying). Hold
 			# it briefly so a stray tap doesn't auto-complete.
 			if _skater.blade_up:
 				_step_timer += delta
-				if _step_timer >= _STICK_LIFT_HOLD:
+				if _step_timer >= _BLADE_LIFT_HOLD:
 					_complete_step()
 			else:
 				_step_timer = 0.0
+
+		STEP_STICK_LIFT:
+			# If the player knocked the puck loose without a lift (a stray poke),
+			# give it back to the puppet once it settles so they can try the lift
+			# again. A successful lift completes the step in the strip handler,
+			# after which _complete_flash_timer short-circuits _process.
+			if _puck.carrier == null and _puppet_record != null \
+					and is_instance_valid(_puppet_record.skater) \
+					and _puck.get_puck_velocity().length() < 0.3:
+				_puck.set_carrier(_puppet_record.skater)
 
 		STEP_SHOT_BLOCK:
 			# Complete when player holds the block stance for long enough
@@ -764,3 +766,8 @@ func _disconnect_all_signals() -> void:
 		if _puck.puck_stripped.is_connected(_on_stickcheck_callable):
 			_puck.puck_stripped.disconnect(_on_stickcheck_callable)
 		_on_stickcheck_callable = Callable()
+
+	if _on_stick_lift_callable.is_valid() and _puck != null:
+		if _puck.puck_stripped.is_connected(_on_stick_lift_callable):
+			_puck.puck_stripped.disconnect(_on_stick_lift_callable)
+		_on_stick_lift_callable = Callable()
