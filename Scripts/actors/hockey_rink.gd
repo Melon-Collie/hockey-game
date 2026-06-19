@@ -403,14 +403,19 @@ func _add_ice() -> void:
 	ice_body.physics_material_override = phys_mat
 	add_child(ice_body)
 
-	# Ice collision: 0.1 m thick (top at y=0). Thicker than the visible mesh
-	# costs nothing and avoids potential edge cases (CCD / contact normals)
-	# that can happen with very thin collision volumes.
+	# Ice collision: a deep slab, top face at y=0. Depth matters — a flat-bottomed
+	# body resting flush on a *thin* slab generates contacts against BOTH faces
+	# (the collision margin spans the volume), so a skater on the ice picked up an
+	# opposing +Y/-Y normal pair. Harmless on open ice (Y is axis-locked), but in
+	# a corner those two verticals plus the wall normal leave move_and_slide no
+	# free direction and the skater freezes against the boards. A 2 m slab keeps
+	# the bottom face far below any body resting on the surface, so only the +Y
+	# top contact is ever generated. Invisible and free (nothing lives below y=0).
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(rink_width, 0.1, rink_length)
+	shape.size = Vector3(rink_width, 2.0, rink_length)
 	col.shape = shape
-	col.position = Vector3(0, -0.05, 0)
+	col.position = Vector3(0, -1.0, 0)
 	ice_body.add_child(col)
 
 func _draw_v_line(img: Image, x: float, thickness: int, color: Color) -> void:
