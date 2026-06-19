@@ -30,6 +30,12 @@ extends Node
 
 @export var shuffle_speed: float = 2.0
 @export var t_push_speed: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
+# Lateral push acceleration (m/s²). The goalie ramps up to shuffle / T-push speed
+# instead of snapping to it — pushes read like real push-offs, and a quick play
+# can beat the goalie across before they reach speed (realism + a scoring window).
+# The cross-crease desperation push bypasses this (stays instant). Set very high
+# (e.g. 100) to restore the old snap-to-speed behaviour.
+@export var lateral_accel: float = 14.0
 @export var lateral_threshold: float = 0.3
 @export var max_facing_angle: float = 70.0
 @export var rotation_speed: float = 5.0
@@ -527,6 +533,10 @@ var _current_x: float = 0.0
 var _target_x: float = 0.0
 var _velocity_x: float = 0.0
 var _velocity_z: float = 0.0
+# Ramped lateral move speed for the upright arc mover. Accelerates toward the
+# desired shuffle / T-push speed at `lateral_accel` so pushes aren't instant;
+# reset to 0 whenever the goalie is set/frozen so the next push starts from rest.
+var _move_speed_current: float = 0.0
 var _five_hole_openness: float = 0.0
 var _tracked_threat_position: Vector3 = Vector3.ZERO
 # Position-derived puck velocity, for intercept math during elevated shots.
@@ -750,6 +760,7 @@ func reset_to_crease() -> void:
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
 	_clear_cooldown_timer = 0.0
+	_move_speed_current = 0.0
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 
@@ -1313,6 +1324,8 @@ func _on_sm_transitioned(prev: State, new_state: State) -> void:
 			_slide.velocity_x = 0.0
 		State.RECOVERING:
 			_slide.velocity_x = 0.0
+			# Standing back up from a drop — the upright mover starts from rest.
+			_move_speed_current = 0.0
 		State.STANDING:
 			_slide.drop_progress = 0.0
 			_slide.velocity_x = 0.0
@@ -1482,6 +1495,9 @@ func _update_position(delta: float) -> void:
 func _move_along_arc(delta: float) -> Vector2:
 	var current := Vector2(_current_x, goalie.global_position.z)
 	if _reaction.reacting:
+		# Frozen and reading the shot — the goalie is set, so the next push after
+		# the freeze clears starts the ramp from rest.
+		_move_speed_current = 0.0
 		if is_server:
 			_five_hole_openness = lerpf(_five_hole_openness, five_hole_base, part_lerp_speed * delta)
 		return current
@@ -1509,7 +1525,18 @@ func _move_along_arc(delta: float) -> Vector2:
 	else:
 		move_speed = shuffle_speed
 		five_hole_target = five_hole_shuffle_max
-	var step: float = move_speed * delta
+	# Ramp the effective speed toward the desired so a push isn't instant — the
+	# goalie accelerates onto its edge. The cross-crease desperation push bypasses
+	# the ramp (it's already a committed all-out push); carry its speed into
+	# `_move_speed_current` so a normal track continuing afterward doesn't re-ramp.
+	var effective_speed: float
+	if cross_crease_push:
+		effective_speed = move_speed
+		_move_speed_current = move_speed
+	else:
+		_move_speed_current = move_toward(_move_speed_current, move_speed, lateral_accel * delta)
+		effective_speed = _move_speed_current
+	var step: float = effective_speed * delta
 	var new_xz: Vector2
 	if delta_2d <= step or delta_2d < 0.0001:
 		new_xz = target_xz
