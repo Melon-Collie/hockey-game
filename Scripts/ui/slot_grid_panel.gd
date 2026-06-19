@@ -18,7 +18,9 @@ extends VBoxContainer
 #   - Empty slot      → dark neutral bg, no stripe color, "+" icon (host).
 #   - Bot slot        → team body color bg, stripe, "BOT" badge bottom-right, "X" icon (host).
 #   - Remote human    → jersey color bg, stripe, "##ms ●" ping with status dot,
-#                       "X" kick icon (host only, connected transport peers only).
+#                       a green "READY" / amber "WAITING" tag in the status row
+#                       (lobby only, non-host humans), "X" kick icon (host only,
+#                       connected transport peers only).
 #   - Your slot       → jersey color bg, stripe, ping, plus a 1px TEAL_DIM
 #                       border around the whole card so the local player can
 #                       recognize their own slot at a glance.
@@ -59,6 +61,10 @@ const _COLOR_PING_GOOD := Color(0.36, 0.85, 0.45, 1.0)
 const _COLOR_PING_OKAY := Color(0.95, 0.78, 0.22, 1.0)
 const _COLOR_PING_BAD  := Color(0.92, 0.40, 0.40, 1.0)
 
+# Ready-status tag colors (green = readied up, amber = still waiting).
+const _COLOR_READY   := Color(0.36, 0.85, 0.45, 1.0)
+const _COLOR_WAITING := Color(0.95, 0.78, 0.22, 1.0)
+
 # Per-slot widget caches. Indexed [team_id][slot].
 var _cards:        Array = [[], []]
 var _stylebox:     Array = [[], []]   # StyleBoxFlat — recolored per refresh
@@ -72,6 +78,7 @@ var _status_box:   Array = [[], []]   # HBoxContainer holding ping/AI
 var _ping_label:   Array = [[], []]
 var _ping_dot:     Array = [[], []]
 var _ai_label:     Array = [[], []]
+var _ready_label:  Array = [[], []]   # READY / WAITING tag (lobby only, non-host humans)
 var _action_btn:   Array = [[], []]   # X / + button (host only, hidden on remote-human)
 var _peer_ids:     Array = [[], []]
 
@@ -80,6 +87,7 @@ var _bot_slots: Dictionary = {}
 var _bot_identities: Dictionary = {}
 var _is_local_host: bool = false
 var _bot_editing: bool = true
+var _show_ready: bool = false
 
 
 func _init() -> void:
@@ -146,6 +154,7 @@ func _build_grid() -> void:
 		_ping_label[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_ping_dot[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_ai_label[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_ready_label[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_action_btn[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_peer_ids[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_peer_ids[team_id].fill(-1)
@@ -310,6 +319,17 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	status_box.add_child(dot)
 	_ping_dot[team_id][slot] = dot
 
+	# Ready tag, sitting after the ping ("32ms ● READY"). Color carries the
+	# meaning (green ready / amber waiting); default-hidden and only shown for
+	# non-host human cards in a lobby (see _update_card).
+	var ready_lbl := Label.new()
+	ready_lbl.add_theme_font_size_override("font_size", 11)
+	ready_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	ready_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ready_lbl.visible = false
+	status_box.add_child(ready_lbl)
+	_ready_label[team_id][slot] = ready_lbl
+
 	var ai_lbl := Label.new()
 	ai_lbl.text = "BOT"
 	ai_lbl.add_theme_font_size_override("font_size", 11)
@@ -355,14 +375,19 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 # allow_bot_edit: shows the host's +/X bot actions. The pause menu's mid-match
 #   grid passes false (no bot add/remove once the game is running) while still
 #   passing is_local_host so the kick X stays available on peer cards.
+# show_ready: render the per-player READY / WAITING tag. Lobby passes true; the
+#   mid-match grid leaves it off (ready state is a lobby concept and the
+#   mid-match roster doesn't carry is_ready).
 func refresh(roster: Array[Dictionary], team_colors: Array[Dictionary] = [],
 		bot_slots: Dictionary = {}, is_local_host: bool = false,
-		bot_identities: Dictionary = {}, allow_bot_edit: bool = true) -> void:
+		bot_identities: Dictionary = {}, allow_bot_edit: bool = true,
+		show_ready: bool = false) -> void:
 	_team_colors = team_colors
 	_bot_slots = bot_slots
 	_bot_identities = bot_identities
 	_is_local_host = is_local_host
 	_bot_editing = allow_bot_edit
+	_show_ready = show_ready
 
 	var by_slot: Dictionary = {}
 	for entry: Dictionary in roster:
@@ -385,6 +410,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	var ping_lbl: Label = _ping_label[team_id][slot]
 	var dot:      ColorRect = _ping_dot[team_id][slot]
 	var ai_lbl:   Label = _ai_label[team_id][slot]
+	var ready_lbl: Label = _ready_label[team_id][slot]
 	var action:   Button = _action_btn[team_id][slot]
 
 	var jersey_c:  Color = MenuStyle.PANEL_BG
@@ -446,6 +472,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		dot.visible = false
 		ai_lbl.visible = true
 		ai_lbl.add_theme_color_override("font_color", _muted(text_c, 0.75))
+		ready_lbl.visible = false
 		_set_action(action, "x", _is_local_host and _bot_editing, text_c)
 		return
 
@@ -468,6 +495,17 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	ping_lbl.visible = true
 	dot.visible = true
 	_apply_ping(ping_lbl, dot, peer_id, text_c)
+	# READY / WAITING tag — lobby only, and never for the host (peer 1), who
+	# gates the start via the Start button rather than readying up. Bots are
+	# handled in the bot branch above (no tag).
+	if _show_ready and peer_id != 1:
+		ready_lbl.visible = true
+		var is_ready: bool = entry.get("is_ready", false)
+		ready_lbl.text = "READY" if is_ready else "WAITING"
+		ready_lbl.add_theme_color_override(
+				"font_color", _COLOR_READY if is_ready else _COLOR_WAITING)
+	else:
+		ready_lbl.visible = false
 	# Host gets a kick X on other connected peers' cards — never its own, and
 	# never a mid-match bot (bot actor ids aren't transport peers).
 	if _is_local_host and peer_id != NetworkManager.local_peer_id() \

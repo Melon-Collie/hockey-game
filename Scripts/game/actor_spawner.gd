@@ -68,6 +68,20 @@ func spawn_goalie_pair(puck: Puck, is_server: bool) -> Dictionary:
 		"bottom_controller": bottom_controller,
 	}
 
+
+# Spawns a single goalie + controller for the net at `goal_line_z`. Used by the
+# Shooting tutorial's stationary-goalie drills: the caller passes is_server=false
+# (so no puck-reaction signals are wired) and disables the controller's process
+# afterward, leaving the goalie frozen in the crease as a shooting target.
+# Returns { "goalie": Goalie, "controller": GoalieController }.
+func spawn_single_goalie(puck: Puck, goal_line_z: float, is_server: bool) -> Dictionary:
+	var goalie: Goalie = GOALIE_SCENE.instantiate()
+	_scene_root.add_child(goalie)
+	var controller := GoalieController.new()
+	_scene_root.add_child(controller)
+	controller.setup(goalie, puck, goal_line_z, is_server)
+	return {"goalie": goalie, "controller": controller}
+
 # ── Local player (skater + LocalController) ──────────────────────────────────
 # Returns { "skater": Skater, "controller": LocalController }. Caller is
 # responsible for calling skater.set_uniform() + skater.set_jersey_info()

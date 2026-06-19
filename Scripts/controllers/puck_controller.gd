@@ -374,14 +374,14 @@ func notify_remote_pickup(remote_skater: Skater) -> void:
 	puck.set_client_prediction_mode(false)
 	_state_buffer.clear()
 
-func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skater_vel: Vector3 = Vector3.ZERO) -> Vector3:
+func notify_local_release(direction: Vector3, power: float, rtt_ms: float) -> Vector3:
 	# PuckController (priority 1) runs after LocalController (priority 0), so the puck
 	# hasn't been re-pinned to the current blade position yet this frame. Read blade
 	# directly from the carrier so we start from the current-frame position, not last
 	# frame's pin.
-	# Returns the un-advanced release origin (the blade contact point) so the caller
-	# can ship it to the host in the release RPC — the host fires the authoritative
-	# puck from this exact point instead of guessing it from a stale buffer rewind.
+	# Returns the release origin (the blade contact point) so the caller can ship it
+	# to the host in the release RPC — the host fires the authoritative puck from this
+	# exact point instead of guessing it from a stale buffer rewind.
 	var release_pos: Vector3 = puck.get_puck_position()
 	if _local_carrier_skater != null:
 		release_pos = _local_carrier_skater.get_blade_contact_global()
@@ -394,8 +394,13 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skate
 	_shot_rtt_ms = rtt_ms
 	puck.set_client_prediction_mode(true)
 	puck.set_goal_line_clamp(true)
-	var rtt_half: float = rtt_ms / 2000.0
-	puck.set_puck_position(release_pos + (direction * power + skater_vel) * rtt_half)
+	# Fire from the blade and predict forward — no forward advance. The host is
+	# authoritative and fires from this same (client-sent) origin; the shooter's
+	# three-zone reconcile (apply_state) projects the host broadcast forward by the
+	# full RTT, so prediction and authority stay aligned without shoving the puck
+	# ahead of the stick (which used to pop on the host / other clients and could
+	# skip the puck into a close goalie or the boards).
+	puck.set_puck_position(release_pos)
 	puck.apply_release_velocity(direction * power)
 	_state_buffer.clear()
 	return release_pos
@@ -616,7 +621,7 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 				_pending_local_release_deadline = -1.0
 			var rtt_s: float = _shot_rtt_ms / 1000.0
 			# Apply ice friction to the latency-corrected target so it matches
-			# Jolt's deceleration over the rtt advance (same shape as
+			# Jolt's deceleration over the RTT projection window (same shape as
 			# `_interpolate()` extrapolation at line ~416). Without this the
 			# target overshoots the actual host position by ~0.5 * a * rtt²,
 			# visible as a slight forward bias on long shots at high RTT before
@@ -625,9 +630,9 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 			var latency_corrected := PuckNetworkState.new()
 			latency_corrected.position = state.position + friction_vel * rtt_s
 			latency_corrected.velocity = friction_vel
-			# Both client and host Jolt start from the same position (same rtt_ms
-			# used for both advances), so they run identically. Small errors are
-			# RTT jitter — blending toward a noisy target creates visible snapback.
+			# Client and host run identical Jolt from the same (client-sent) release
+			# origin — no release-time advance on either side — so small errors are
+			# RTT jitter; blending toward a noisy target creates visible snapback.
 			# Only hard-snap on genuine physics divergence (wall/goalie bounce
 			# that differed between client and host).
 			var dist: float = puck.get_puck_position().distance_to(latency_corrected.position)

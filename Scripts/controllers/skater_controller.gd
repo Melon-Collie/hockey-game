@@ -169,6 +169,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var max_wrister_charge_distance: float = 0.7
 @export var backhand_power_coefficient: float = 0.75
 @export var max_charge_direction_variance: float = 35.0
+# Blade-speed budget ALONG the shot axis during a wrister aim (m/s of blade
+# travel, applied relative to the skater like max_blade_speed). High and FLAT
+# (not Hands-scaled) so the wind-back-and-snap of a wrister tracks responsively
+# for every player — Hands still gates the off-axis (lateral/dangle) component,
+# which stays capped at max_blade_speed. See SkaterIKCoordinator.apply_blade_from_mouse.
+@export var wrister_on_axis_blade_speed: float = 60.0
 @export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 # Absolute charge_distance (in meters of blade travel) below which the
 # wrister releases as a quick shot. Independent of max_wrister_charge_distance

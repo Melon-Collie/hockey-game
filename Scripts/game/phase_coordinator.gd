@@ -20,7 +20,7 @@ extends RefCounted
 signal goal_scored(scoring_team: Team, scorer_name: String, assist1_name: String, assist2_name: String)
 signal score_changed(score_0: int, score_1: int)
 signal phase_changed(new_phase: GamePhase.Phase)
-signal period_changed(new_period: int)
+signal period_synced(new_period: int)
 signal clock_updated(time_remaining: float)
 signal game_over
 signal stats_need_sync
@@ -109,7 +109,7 @@ func handle_phase_entered() -> void:
 		GamePhase.Phase.FACEOFF_PREP:
 			if _goal_replay_driver != null:
 				_goal_replay_driver.stop()
-			period_changed.emit(_state_machine.current_period)
+			period_synced.emit(_state_machine.current_period)
 			clock_updated.emit(_state_machine.time_remaining)
 			stats_need_sync.emit()
 			_enter_faceoff_prep(puck)

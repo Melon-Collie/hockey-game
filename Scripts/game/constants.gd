@@ -11,18 +11,26 @@ extends Node
 # Layer 3 (bit 2, value  4) — goalie stick (puck bounces off it; skaters pass through)
 # Layer 4 (bit 3, value  8) — puck body (goal sensors use mask 8 to detect it)
 # Layer 5 (bit 4, value 16) — skater CharacterBody3D bodies
+# Layer 6 (bit 5, value 32) — perimeter boards (puck only; skaters clamp analytically)
 const LAYER_WALLS: int          = 1
 const LAYER_BLADE_AREAS: int    = 2
 const LAYER_GOALIE_STICK: int   = 4
 const LAYER_PUCK: int           = 8
 const LAYER_SKATER_BODIES: int  = 16
+# Boards live on their own layer so the puck still bounces off the concave board
+# mesh while skaters DON'T collide with it. A CharacterBody cylinder straddling
+# the 256-segment corner mesh gets pinned in a vertical-only crease (two facet
+# normals → vertical cross product) and freezes; skaters are kept off the boards
+# and held inside the rink by GameRules.clamp_to_rink_inner instead. The ice and
+# goalie bodies and nets stay on LAYER_WALLS, so skaters still collide with those.
+const LAYER_BOARDS: int         = 32
 
 # ── Composed Masks ────────────────────────────────────────────────────────────
 # Puck bounces off boards + goalie bodies AND the goalie stick, but the stick is
 # kept off LAYER_WALLS so skaters (whose mask omits LAYER_GOALIE_STICK) skate
 # straight through it instead of snagging on the hooked shaft/paddle/blade.
-const MASK_PUCK: int   = LAYER_WALLS | LAYER_GOALIE_STICK    # bounces off boards + goalie bodies + stick
-const MASK_SKATER: int = LAYER_WALLS | LAYER_SKATER_BODIES   # blocked by boards + goalie bodies + other skaters
+const MASK_PUCK: int   = LAYER_WALLS | LAYER_BOARDS | LAYER_GOALIE_STICK  # bounces off boards + goalie bodies/nets/ice + stick
+const MASK_SKATER: int = LAYER_WALLS | LAYER_SKATER_BODIES   # goalie bodies/nets/ice + other skaters; boards handled analytically
 
 # ── Network (transport-level) ─────────────────────────────────────────────────
 const PORT: int = 7777

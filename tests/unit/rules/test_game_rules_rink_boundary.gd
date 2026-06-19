@@ -106,6 +106,45 @@ func test_corner_projection_preserves_direction() -> void:
 	assert_almost_eq(dir_out.y, dir_in.y, TOLERANCE, "projection direction preserved z")
 
 
+# ── margin (body radius inset) ────────────────────────────────────────────────
+# A body of radius `margin` must have its CENTER held `margin` inside the boards
+# so its edge — not its center — meets the surface.
+
+const MARGIN: float = 0.4
+
+func test_margin_default_is_zero_inset() -> void:
+	# Omitting margin must behave exactly like the legacy point clamp.
+	var a: Vector2 = GameRules.clamp_to_rink_inner(Vector2(15.0, 0.0))
+	var b: Vector2 = GameRules.clamp_to_rink_inner(Vector2(15.0, 0.0), 0.0)
+	assert_almost_eq(a.x, b.x, TOLERANCE, "default margin matches explicit 0 (x)")
+	assert_almost_eq(a.y, b.y, TOLERANCE, "default margin matches explicit 0 (z)")
+
+func test_margin_insets_side_wall() -> void:
+	var result: Vector2 = GameRules.clamp_to_rink_inner(Vector2(15.0, 0.0), MARGIN)
+	assert_almost_eq(result.x, GameRules.INNER_HALF_WIDTH - MARGIN, TOLERANCE,
+		"center held a margin inside the side wall")
+
+func test_margin_insets_end_wall() -> void:
+	var result: Vector2 = GameRules.clamp_to_rink_inner(Vector2(0.0, 35.0), MARGIN)
+	assert_almost_eq(result.y, GameRules.INNER_HALF_LENGTH - MARGIN, TOLERANCE,
+		"center held a margin inside the end wall")
+
+func test_margin_insets_corner_arc() -> void:
+	var result: Vector2 = GameRules.clamp_to_rink_inner(Vector2(11.0, 27.0), MARGIN)
+	var dist_from_center: float = result.distance_to(
+		Vector2(GameRules.CORNER_CENTER_X, GameRules.CORNER_CENTER_Z))
+	assert_almost_eq(dist_from_center, GameRules.INNER_CORNER_RADIUS - MARGIN, TOLERANCE,
+		"corner center held a margin inside the arc")
+
+func test_margin_corner_centers_invariant() -> void:
+	# A point just inside the inset side wall but short of the corner center must
+	# still be treated as straight-region (corner split unchanged by the inset).
+	var x: float = GameRules.INNER_HALF_WIDTH - MARGIN - 0.01
+	var result: Vector2 = GameRules.clamp_to_rink_inner(Vector2(x, 0.0), MARGIN)
+	assert_almost_eq(result.x, x, TOLERANCE, "just inside inset side wall unchanged")
+	assert_almost_eq(result.y, 0.0, TOLERANCE, "z unchanged")
+
+
 # ── nearest_faceoff_dot ─────────────────────────────────────────────────────
 # Five dots total: center ice plus four end-zone dots at NHL spec positions
 # (END_ZONE_FACEOFF_DOT_X by ±ICING_FACEOFF_DOT_Z). For any rink-interior point

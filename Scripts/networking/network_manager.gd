@@ -102,6 +102,7 @@ signal deflection_received(position: Vector3)
 signal body_block_received(position: Vector3)
 signal puck_strip_received(position: Vector3)
 signal stick_lift_received(position: Vector3)
+signal shot_sound_received(position: Vector3, is_slapper: bool)
 # Host-authoritative body-check impact (Lever A). Fired on every client (and
 # self-emitted on the host) when a hit is credited, so impact VFX/sound are
 # consistent everywhere instead of relying on each client's non-authoritative
@@ -1884,6 +1885,22 @@ func send_stick_lift_to_all(position: Vector3) -> void:
 @rpc("authority", "unreliable")
 func notify_stick_lift(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: stick_lift_received.emit(pos), [position], false)
+
+# Shot SFX (wrister/slapper). Unlike puck-collision SFX, the shooter already
+# plays the cue locally the instant they release (LocalController path), so the
+# host excludes them from the broadcast to avoid a double-hit; every other peer
+# hears it here. `except_peer_id` is the shooter (host's own shots pass -1).
+func send_shot_to_all(position: Vector3, is_slapper: bool, except_peer_id: int = -1) -> void:
+	for peer_id: int in connected_peer_ids():
+		if peer_id == except_peer_id:
+			continue
+		notify_shot.rpc_id(peer_id, position, is_slapper)
+
+@rpc("authority", "unreliable")
+func notify_shot(position: Vector3, is_slapper: bool) -> void:
+	NetworkSimManager.send(
+		func(pos: Vector3, slap: bool) -> void: shot_sound_received.emit(pos, slap),
+		[position, is_slapper], false)
 
 func send_spectator_demoted_to_all(peer_id: int) -> void:
 	for remote_id: int in connected_peer_ids():

@@ -23,7 +23,7 @@ signal phase_changed(new_phase: GamePhase.Phase)
 # it can't race the unreliable phase broadcast and start before the skater
 # teleport.
 signal faceoff_prep_announced
-signal period_changed(new_period: int)
+signal period_synced(new_period: int)
 signal clock_updated(time_remaining: float)
 signal game_over()
 signal game_reset()
@@ -101,6 +101,11 @@ var current_snapshot: WorldSnapshot = null
 var goals: Array[HockeyGoal] = []
 var goalies: Array[Goalie] = []
 var goalie_controllers: Array[GoalieController] = []
+# Single stationary goalie spawned on demand for the Shooting tutorial's goalie
+# drills (see spawn_tutorial_goalie). Kept out of the `goalies` arrays so the
+# rest of the rink wiring (team brains, goalie data cache) ignores it.
+var _tutorial_goalie: Goalie = null
+var _tutorial_goalie_controller: GoalieController = null
 var puck_controller: PuckController = null
 
 # Cached snapshot of goalie pose for skater IK clamping. Refreshed once per
@@ -300,7 +305,7 @@ func _physics_process(delta: float) -> void:
 			brain.tick(delta, current_snapshot)
 	_update_host_puck_tracking()
 	_check_puck_out_of_bounds(delta)
-	_apply_ghost_state()
+	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
 	_pickup_claim.tick(delta)
 
@@ -381,7 +386,7 @@ func _update_host_puck_tracking() -> void:
 		_consume_pending_faceoff()
 
 
-func _apply_ghost_state() -> void:
+func _apply_ghost_state(delta: float) -> void:
 	# Tutorial gates offsides detection to the OFFSIDES step. Other steps
 	# (notably one-timer, where the player legitimately stands deep in the
 	# O-zone while the puck is stashed off-rink during the prefire delay)
@@ -404,7 +409,7 @@ func _apply_ghost_state() -> void:
 		if puck.carrier != null and record.skater == puck.carrier:
 			carrier_peer_id = peer_id
 	var ghosts: Dictionary = _state_machine.compute_ghost_state(
-			positions, carrier_peer_id, puck.global_position)
+			positions, carrier_peer_id, puck.global_position, delta)
 	_state_machine.update_delayed_offside(positions, puck.global_position, carrier_peer_id)
 	for peer_id in ghosts:
 		var r: PlayerRecord = _registry.get_record(peer_id)
@@ -794,7 +799,7 @@ func _wire_subsystems() -> void:
 			get_puck, _get_puck_controller, _get_goalie_controllers, _state_buffer_manager)
 	_codec.phase_changed.connect(_on_remote_phase_changed)
 	_codec.game_over_triggered.connect(game_over.emit)
-	_codec.period_changed.connect(period_changed.emit)
+	_codec.period_synced.connect(period_synced.emit)
 	_codec.clock_updated.connect(_on_clock_updated_externally)
 	_codec.shots_on_goal_changed.connect(shots_on_goal_changed.emit)
 	_codec.queue_depth_feedback.connect(NetworkManager.on_queue_depth_received)
@@ -856,7 +861,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.faceoff_prep_announced.connect(faceoff_prep_announced.emit)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
-	_phase_coord.period_changed.connect(period_changed.emit)
+	_phase_coord.period_synced.connect(period_synced.emit)
 	_phase_coord.clock_updated.connect(_on_clock_updated_externally)
 	_phase_coord.game_over.connect(game_over.emit)
 	_phase_coord.stats_need_sync.connect(_sync_stats_to_clients)
@@ -962,8 +967,12 @@ func _wire_sound_signals() -> void:
 			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
 			if puck != null:
 				puck.fire_stick_lift_vfx())
+	NetworkManager.shot_sound_received.connect(
+		func(pos: Vector3, is_slapper: bool) -> void:
+			var snd: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
+			SoundManager.play_world(snd, pos, 0.0, 0.04))
 	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
-	# regulation periods, GAME_OVER for the final one. (Not period_changed, which
+	# regulation periods, GAME_OVER for the final one. (Not period_synced, which
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
 	phase_changed.connect(func(p: GamePhase.Phase) -> void:
 		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
@@ -1732,6 +1741,9 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 	if NetworkManager.is_host:
 		_record_replay_audio_event("shot", puck.get_puck_position(), power, {"is_slapper": is_slapper})
 	if NetworkManager.is_host:
+		# Host-local (or bot) shot: every client needs the cue. No shooter to
+		# exclude — the host already played it locally above.
+		NetworkManager.send_shot_to_all(puck.get_puck_position(), is_slapper)
 		_start_pending_shot_from_carrier()
 		puck.release(direction, power)
 	else:
@@ -1739,10 +1751,10 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		if record != null:
 			record.controller.on_puck_released_network()
 		var shot_rtt_ms: float = NetworkManager.get_latest_rtt_ms()
-		# notify_local_release returns the exact un-advanced release point (the
-		# client's predicted blade contact). Ship it so the host fires the
-		# authoritative puck from there instead of a stale buffer rewind.
-		var origin: Vector3 = puck_controller.notify_local_release(direction, power, shot_rtt_ms, record.skater.velocity)
+		# notify_local_release returns the release point (the client's predicted
+		# blade contact). Ship it so the host fires the authoritative puck from
+		# there instead of a stale buffer rewind.
+		var origin: Vector3 = puck_controller.notify_local_release(direction, power, shot_rtt_ms)
 		NetworkManager.send_puck_release(direction, power, is_slapper, origin)
 
 
@@ -1761,11 +1773,12 @@ func _on_one_timer_release_requested(direction: Vector3, power: float, skater: S
 			var record := _registry.get_local()
 			if record != null:
 				var rtt_ms: float = NetworkManager.get_latest_rtt_ms()
-				origin = puck_controller.notify_local_release(direction, power, rtt_ms, record.skater.velocity)
+				origin = puck_controller.notify_local_release(direction, power, rtt_ms)
 		NetworkManager.send_one_timer_release(direction, power, origin)
 		return
 	# Host's own one-timer: shooter is local, no client-view rewind needed.
 	# rtt_ms=0 short-circuits the goalie rewind branch entirely; ZERO origin is unused.
+	NetworkManager.send_shot_to_all(puck.get_puck_position(), true)
 	_host_release_one_timer(direction, power, skater, 0.0, 0.0, 0.0, Vector3.ZERO)
 
 
@@ -1813,6 +1826,8 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	var shot_pos: Vector3 = puck.get_puck_position()
 	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
 	_record_replay_audio_event("shot", shot_pos, safe_power, {"is_slapper": true})
+	# Fan the cue out to the other clients (the shooter already played it locally).
+	NetworkManager.send_shot_to_all(shot_pos, true, peer_id)
 	_host_release_one_timer(safe_direction, safe_power, record.skater, host_timestamp, safe_rtt_ms, interp_delay_ms, client_origin)
 
 
@@ -1825,7 +1840,6 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	# work — without this, get_last_toucher() returns the passer at goal time.
 	_shot_tracker.on_deflection(pid)
 	_shot_tracker.on_shot_started(pid)
-	var rtt_half: float = rtt_ms / 2000.0
 	# Lag-comp the goalie reaction trigger (see on_remote_puck_release for the
 	# full rationale). One-timers go through the same RPC-back-date flow.
 	# clamp_back_date also zeroes the host's own path (host_timestamp = 0 →
@@ -1863,14 +1877,14 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 				gc.goalie.set_goalie_rotation_y(gs.rotation_y)
 	puck.set_carrier(skater)
 	puck.release(direction, power)
-	if rtt_ms > 0.0:
-		var skater_vel := Vector3(skater.velocity.x, 0.0, skater.velocity.z)
-		# Rewind only the horizontal origin — preserve release()'s elevation y.
+	# Reposition to the (client-sent, clamped) origin — no forward advance; the host
+	# fires authoritatively from here. Rewind only the horizontal origin to preserve
+	# release()'s elevation y.
+	if have_rewound_origin:
 		var origin: Vector3 = puck.get_puck_position()
-		if have_rewound_origin:
-			origin.x = rewound_origin.x
-			origin.z = rewound_origin.z
-		puck.set_puck_position(origin + (direction * power + skater_vel) * rtt_half)
+		origin.x = rewound_origin.x
+		origin.z = rewound_origin.z
+		puck.set_puck_position(origin)
 	if not saved_goalie_positions.is_empty():
 		for i: int in goalie_controllers.size():
 			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -1916,15 +1930,11 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 	SoundManager.play_world(sound, shot_pos, 0.0, 0.04)
 	if NetworkManager.is_host:
 		_record_replay_audio_event("shot", shot_pos, power, {"is_slapper": is_slapper})
+		# Fan the cue out to the other clients (the shooter already played it
+		# locally the instant they released).
+		NetworkManager.send_shot_to_all(shot_pos, is_slapper, shooter_peer_id)
 	if NetworkManager.is_host:
 		_start_pending_shot_from_carrier()
-		var rtt_half: float = rtt_ms / 2000.0
-		var skater_vel := Vector3.ZERO
-		if rtt_ms > 0.0:
-			var shooter_record: PlayerRecord = _registry.get_record(shooter_peer_id)
-			if shooter_record != null and shooter_record.skater != null:
-				skater_vel = shooter_record.skater.velocity
-				skater_vel.y = 0.0
 		# Lag-comp the goalie reaction trigger: back-date the reaction timers
 		# by the one-way trip (now - shooter's host_timestamp) so the goalie
 		# gets the same effective reaction window the shooter perceived
@@ -1949,10 +1959,9 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 			# reads the stale pre-release blade (the bug this replaces). Trust the
 			# client's point but VALIDATE it: clamp to the shooter's stick reach of their
 			# host-live body (stable in the RPC window, unlike the swinging blade) so a
-			# forged origin can't fire from across the rink. Composes with the advance
-			# below to start the host trajectory where the client predicted it — keeping
-			# the three-zone reconcile AND the goalie-rebound geometry aligned, which is
-			# what matters most on close shots.
+			# forged origin can't fire from across the rink. This is the authoritative
+			# fire point: the host simulates forward from here (no advance) and the
+			# shooter's three-zone reconcile aligns its prediction to it.
 			rewound_origin = ShotReleaseRules.clamp_origin(client_origin, origin_anchor.skater.global_position)
 			have_rewound_origin = true
 		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0 \
@@ -1970,20 +1979,17 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 					gc.goalie.set_goalie_position(gs.position_x, gs.position_z)
 					gc.goalie.set_goalie_rotation_y(gs.rotation_y)
 		puck.release(direction, power)
-		# Apply RTT advance AFTER release. puck.release() snaps global_position to
+		# Reposition to the (client-sent, clamped) origin — no forward advance. The
+		# host is authoritative and simulates forward from here; the shooter
+		# reconciles its prediction to this. puck.release() snaps global_position to
 		# ex_carrier.get_blade_contact_global() (carrier is still set at call time),
-		# so any position set before release() is silently overwritten. Start from
-		# the rewound shooter blade when available (origin lag-comp), else the live
-		# blade; either way add the RTT/2 advance so the host trajectory matches the
-		# client's Jolt prediction (blade + velocity * rtt_half). Rewind only the
-		# horizontal origin — release() set y for the elevation launch (ice_height +
-		# lift on an elevated shot), which must carry through.
-		if rtt_ms > 0.0:
+		# so this must run AFTER release(). Rewind only the horizontal origin —
+		# release() set y for the elevation launch (ice_height + lift), keep it.
+		if have_rewound_origin:
 			var origin: Vector3 = puck.get_puck_position()
-			if have_rewound_origin:
-				origin.x = rewound_origin.x
-				origin.z = rewound_origin.z
-			puck.set_puck_position(origin + (direction * power + skater_vel) * rtt_half)
+			origin.x = rewound_origin.x
+			origin.z = rewound_origin.z
+			puck.set_puck_position(origin)
 		if not saved_goalie_positions.is_empty():
 			for i: int in goalie_controllers.size():
 				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -2408,7 +2414,7 @@ func _apply_reset() -> void:
 	_hit_claim.reset_throttle()
 	_puck_oob_timer = 0.0
 	score_changed.emit(0, 0)
-	period_changed.emit(1)
+	period_synced.emit(1)
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()
@@ -2869,6 +2875,37 @@ func despawn_tutorial_bot(record: PlayerRecord) -> void:
 	if record.team != null and record.team.team_id < team_brains.size():
 		team_brains[record.team.team_id].include_skater(record.peer_id)
 	_registry.remove(record.peer_id)
+
+
+# Spawns a single STATIONARY goalie in the net the tutorial player attacks
+# (team 0 shoots toward -Z). is_server=false so it wires no puck-reaction
+# signals, and we disable its process so the AI never ticks — it freezes
+# standing in the crease (where setup() places it) as a shooting target. The
+# goalie's collision still saves shots, so the top corners and five-hole are
+# the only gaps. Idempotent: a second call while one exists is a no-op.
+func spawn_tutorial_goalie() -> void:
+	if _tutorial_goalie != null:
+		return
+	if _spawner == null or puck == null:
+		return
+	var result: Dictionary = _spawner.spawn_single_goalie(puck, -GameRules.GOAL_LINE_Z, false)
+	_tutorial_goalie = result.goalie as Goalie
+	_tutorial_goalie_controller = result.controller as GoalieController
+	_tutorial_goalie_controller.set_physics_process(false)
+	_tutorial_goalie_controller.set_process(false)
+	if teams.size() > 1:
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
+		_tutorial_goalie.apply_uniform(colors)
+		_tutorial_goalie.apply_jersey_info("WARD", 35)
+
+
+func despawn_tutorial_goalie() -> void:
+	if _tutorial_goalie_controller != null:
+		_tutorial_goalie_controller.queue_free()
+		_tutorial_goalie_controller = null
+	if _tutorial_goalie != null:
+		_tutorial_goalie.queue_free()
+		_tutorial_goalie = null
 
 
 func get_goalie_data() -> Array[Dictionary]:

@@ -13,6 +13,8 @@ extends RefCounted
 # class is the controller-facing dispatcher that builds configs from the
 # controller's @export tunables and writes blade/hand positions onto Skater.
 
+const State = SkaterStateMachine.State
+
 # ── References ────────────────────────────────────────────────────────────────
 var _skater: Skater = null
 var _controller: SkaterController = null  # tunables, _do_release, _game_state, has_puck
@@ -91,11 +93,48 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	var step: Vector3 = mouse_world - _smoothed_aim_world
 	step.y = 0.0
 	var max_step: float = _controller.max_blade_speed * delta
-	var step_len: float = step.length()
-	if max_step > 0.0 and step_len > max_step:
-		_smoothed_aim_world += step * (max_step / step_len)
-	else:
-		_smoothed_aim_world = mouse_world
+	if max_step > 0.0:
+		# During a wrister aim, uncap blade motion ALONG the shot axis — the
+		# wind-back-and-snap that makes the shot feel responsive regardless of
+		# Hands — while keeping the PERPENDICULAR component capped at the normal
+		# dangle budget (max_step). Lateral blade sweep IS dangling; capping only
+		# that axis fixes low-Hands shot feel without letting "shoot mode" become
+		# a way to dangle at full blade speed. The axis is skater→smoothed-target
+		# (the current aim line). Reading the LAGGED smoothed target (not the raw
+		# cursor) self-stabilizes the split: a fast lateral whip can't drag the
+		# axis along with it (off-axis is capped, so the axis can only rotate as
+		# fast as that cap allows), while a slow re-aim turns the axis naturally.
+		# The on-axis budget is flat (Hands-independent) so shooting feels the
+		# same for everyone — Hands still gates the off-axis dangle.
+		var axis_vec: Vector3 = _smoothed_aim_world - skater_pos
+		axis_vec.y = 0.0
+		if _controller.get_shot_state() == State.WRISTER_AIM and axis_vec.length_squared() > 0.0001:
+			var axis: Vector3 = axis_vec.normalized()
+			var on_axis: Vector3 = axis * step.dot(axis)
+			var off_axis: Vector3 = step - on_axis
+			var on_max: float = _controller.wrister_on_axis_blade_speed * delta
+			var on_len: float = on_axis.length()
+			if on_len > on_max:
+				on_axis *= on_max / on_len
+			var off_len: float = off_axis.length()
+			if off_len > max_step:
+				off_axis *= max_step / off_len
+			_smoothed_aim_world += on_axis + off_axis
+		else:
+			var step_len: float = step.length()
+			if step_len > max_step:
+				# Cursor is beyond the dangle-speed budget this tick — step toward it.
+				_smoothed_aim_world += step * (max_step / step_len)
+			else:
+				# Within budget this tick — the blade can reach the cursor.
+				_smoothed_aim_world = mouse_world
+	# else (delta == 0): no wall-clock elapsed, so the blade traverses no ROM.
+	# This is the reconcile final re-apply path (LocalController.reconcile passes
+	# delta 0.0 to re-place the blade in the post-snap body frame). Snapping to
+	# the cursor here would zero out the hands speed cap on every reconcile —
+	# clients reconcile constantly, the host never does, so the host would feel
+	# the clamp at full strength while clients barely felt it. Keep the replayed
+	# (already clamped) smoothed aim instead of snapping.
 	mouse_world = _smoothed_aim_world
 
 	var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
