@@ -803,16 +803,19 @@ func _update_ghost_banner() -> void:
 	var team_id: int = record.team.team_id
 	var reason: String = ""
 	var instruction: String = ""
-	# Reason is derived from the local skater's position with crease taking
-	# priority — it's the more specific, more immediately clearable violation,
-	# and a skater can be both deep in the zone and in the crease at once.
-	if CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
-		reason = "CREASE VIOLATION"
-		instruction = "Clear out of the goal crease to rejoin the play"
-	elif GameManager.get_rule_set() == GameRules.RuleSet.ARCADE \
+	# Reason is derived from the local skater's position. Offside takes priority:
+	# a skater in the opponent crease is usually also offside, and the single
+	# correct action is to skate back to the blue line — which clears the crease
+	# violation incidentally on the way. (A defender camping their OWN crease is
+	# never offside — has_tagged_up holds in their own end — so that case falls
+	# through to the crease prompt regardless of ordering.)
+	if GameManager.get_rule_set() == GameRules.RuleSet.ARCADE \
 			and not InfractionRules.has_tagged_up(pos.z, team_id):
 		reason = "OFFSIDE"
 		instruction = "Skate back to your blue line to tag up"
+	elif CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
+		reason = "CREASE VIOLATION"
+		instruction = "Clear out of the goal crease to rejoin the play"
 	else:
 		# Any other ghost cause (e.g. a whole-team icing ghost) surfaces through
 		# its own toast — no per-player recovery action to prompt here.
