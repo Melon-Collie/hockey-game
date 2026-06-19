@@ -925,7 +925,7 @@ func _on_phase_changed(new_phase: int) -> void:
 			_stop_faceoff_countdown()
 			_hide_clock_warning()
 			_clear_goal_template()
-			_sound_period_end()
+			_flash_period_end()
 			_phase_label.text = "END OF PERIOD"
 			_phase_label.add_theme_color_override("font_color", _WHITE)
 			_phase_label.visible = true
@@ -934,7 +934,7 @@ func _on_phase_changed(new_phase: int) -> void:
 		GamePhase.Phase.GAME_OVER:
 			_stop_faceoff_countdown()
 			_hide_clock_warning()
-			_sound_period_end()
+			_flash_period_end()
 			_show_phase_banner_at_rest()  # text + color set by _on_game_over
 		_:
 			_clear_goal_template()
@@ -1030,10 +1030,9 @@ func _hide_clock_warning() -> void:
 		_clock_warning_label.visible = false
 	_last_warning_pulse_second = -1
 
-# Buzzer + screen flash when a period (or the game) ends — the definitive
-# "it's over" cue. The PERIOD_BUZZER asset existed but was never played.
-func _sound_period_end() -> void:
-	SoundManager.play_sfx(SoundManager.Sound.PERIOD_BUZZER)
+# Gold screen flash when a period (or the game) ends — a visual partner to the
+# period buzzer, which GameManager already fires on these same phases.
+func _flash_period_end() -> void:
 	if _flash_overlay != null:
 		_flash_overlay.flash(_GOLD, 0.35, 0.5)
 
