@@ -127,7 +127,7 @@ func _ready() -> void:
 	GameManager.goal_scored.connect(_on_goal_scored)
 	GameManager.phase_changed.connect(_on_phase_changed)
 	GameManager.faceoff_prep_announced.connect(_on_faceoff_prep_announced)
-	GameManager.period_changed.connect(_on_period_changed)
+	GameManager.period_synced.connect(_on_period_synced)
 	GameManager.clock_updated.connect(_on_clock_updated)
 	GameManager.game_over.connect(_on_game_over)
 	GameManager.game_reset.connect(_on_game_reset)
@@ -1003,11 +1003,8 @@ func _clear_goal_template() -> void:
 	_assist_tag_label.visible = false
 	_assist_label.visible = false
 
-func _on_period_changed(new_period: int) -> void:
+func _on_period_synced(new_period: int) -> void:
 	_period_label.text = _period_ordinal(new_period)
-	_warned_one_min = false
-	_warned_thirty = false
-	_hide_clock_warning()
 
 # Big, screen-centered countdown shown only in the final 10 seconds of a
 # period — the small scorebug clock is easy to miss while watching the puck,
