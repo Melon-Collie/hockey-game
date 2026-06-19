@@ -163,6 +163,10 @@ var _px_per_meter: float = 80.0
 var _scratch_map: IceScratchMap = null
 
 func _ready() -> void:
+	# Boards live on their own collision layer (puck masks it, skaters don't) so a
+	# skater CharacterBody cylinder never wedges in the concave corner mesh; the
+	# skater is held inside the rink analytically instead. See Constants.LAYER_BOARDS.
+	collision_layer = Constants.LAYER_BOARDS
 	_rebuild()
 	if not Engine.is_editor_hint() and _scratch_map != null:
 		# period_changed emits `new_period: int`; clear() takes no args, so we
@@ -397,20 +401,29 @@ func _add_ice() -> void:
 
 	# Ice collision — needs its own StaticBody3D so physics_material_override applies
 	var ice_body := StaticBody3D.new()
+	# Ice stays on LAYER_WALLS (skaters + puck both collide with it). Only the
+	# perimeter boards move to LAYER_BOARDS; the ice is a flat slab and never
+	# produces the concave-corner crease that wedged the skater.
+	ice_body.collision_layer = Constants.LAYER_WALLS
 	var phys_mat := PhysicsMaterial.new()
 	phys_mat.friction = ice_friction
 	phys_mat.bounce = 0.0
 	ice_body.physics_material_override = phys_mat
 	add_child(ice_body)
 
-	# Ice collision: 0.1 m thick (top at y=0). Thicker than the visible mesh
-	# costs nothing and avoids potential edge cases (CCD / contact normals)
-	# that can happen with very thin collision volumes.
+	# Ice collision: a deep slab, top face at y=0. Depth matters — a flat-bottomed
+	# body resting flush on a *thin* slab generates contacts against BOTH faces
+	# (the collision margin spans the volume), so a skater on the ice picked up an
+	# opposing +Y/-Y normal pair. Harmless on open ice (Y is axis-locked), but in
+	# a corner those two verticals plus the wall normal leave move_and_slide no
+	# free direction and the skater freezes against the boards. A 2 m slab keeps
+	# the bottom face far below any body resting on the surface, so only the +Y
+	# top contact is ever generated. Invisible and free (nothing lives below y=0).
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(rink_width, 0.1, rink_length)
+	shape.size = Vector3(rink_width, 2.0, rink_length)
 	col.shape = shape
-	col.position = Vector3(0, -0.05, 0)
+	col.position = Vector3(0, -1.0, 0)
 	ice_body.add_child(col)
 
 func _draw_v_line(img: Image, x: float, thickness: int, color: Color) -> void:

@@ -62,7 +62,8 @@ func set_team_resolver(resolver: Callable) -> void:
 
 func _ready() -> void:
 	# Puck body sits on its own layer so goal sensors can detect it.
-	# Mask = LAYER_WALLS only: bounces off boards + goalie bodies, not skater bodies.
+	# Mask bounces it off boards (LAYER_BOARDS) + goalie bodies/nets/ice
+	# (LAYER_WALLS) + goalie stick, but not skater bodies.
 	collision_layer = Constants.LAYER_PUCK
 	collision_mask  = Constants.MASK_PUCK
 	continuous_cd = true

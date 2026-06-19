@@ -47,7 +47,17 @@ const CORNER_CENTER_Z: float     = INNER_HALF_LENGTH - INNER_CORNER_RADIUS  # 21
 
 # Returns world_xz projected onto the inner rink boundary (rounded rectangle).
 # If the point is already inside, returns it unchanged.
-static func clamp_to_rink_inner(world_xz: Vector2) -> Vector2:
+#
+# `margin` insets the boundary uniformly — pass a body's collision radius to keep
+# its CENTER that far from the boards, so the body's edge (not its center) stops
+# at the surface. The corner CENTERS are invariant under the inset (half-width
+# and corner-radius shrink by the same margin), so the straight/corner split is
+# unchanged. Default 0.0 leaves point callers (puck-OOB, blade clamp, trajectory)
+# exactly as before.
+static func clamp_to_rink_inner(world_xz: Vector2, margin: float = 0.0) -> Vector2:
+	var half_w: float = INNER_HALF_WIDTH - margin
+	var half_l: float = INNER_HALF_LENGTH - margin
+	var corner_r: float = INNER_CORNER_RADIUS - margin
 	var ax: float = absf(world_xz.x)
 	var az: float = absf(world_xz.y)
 	if ax > CORNER_CENTER_X and az > CORNER_CENTER_Z:
@@ -55,17 +65,17 @@ static func clamp_to_rink_inner(world_xz: Vector2) -> Vector2:
 		var dx: float = ax - CORNER_CENTER_X
 		var dz: float = az - CORNER_CENTER_Z
 		var dist: float = sqrt(dx * dx + dz * dz)
-		if dist > INNER_CORNER_RADIUS:
-			var scale: float = INNER_CORNER_RADIUS / dist
+		if dist > corner_r:
+			var scale: float = corner_r / dist
 			return Vector2(
 				sign(world_xz.x) * (CORNER_CENTER_X + dx * scale),
 				sign(world_xz.y) * (CORNER_CENTER_Z + dz * scale)
 			)
 	else:
-		if ax > INNER_HALF_WIDTH:
-			return Vector2(sign(world_xz.x) * INNER_HALF_WIDTH, world_xz.y)
-		if az > INNER_HALF_LENGTH:
-			return Vector2(world_xz.x, sign(world_xz.y) * INNER_HALF_LENGTH)
+		if ax > half_w:
+			return Vector2(sign(world_xz.x) * half_w, world_xz.y)
+		if az > half_l:
+			return Vector2(world_xz.x, sign(world_xz.y) * half_l)
 	return world_xz
 
 # ── Puck ──────────────────────────────────────────────────────────────────────

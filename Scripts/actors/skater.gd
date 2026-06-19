@@ -217,6 +217,7 @@ var blade_world_velocity: Vector3 = Vector3.ZERO
 var _prev_blade_world_pos: Vector3 = Vector3.ZERO
 var _prev_blade_contact: Vector3 = Vector3.ZERO
 var _last_wall_normal: Vector3 = Vector3.ZERO
+var _collision_cyl: CylinderShape3D = null
 var _body_block_area: Area3D = null
 var _body_block_sphere: SphereShape3D = null
 var _blade_area: Area3D = null
@@ -249,10 +250,13 @@ func _ready() -> void:
 
 	# Per-instance collision shape so SkaterController.apply_attributes
 	# can scale this skater's hitbox without mutating the shared
-	# SubResource referenced by every other Skater in the scene.
+	# SubResource referenced by every other Skater in the scene. Cache the
+	# cylinder so the rink clamp can read the current (Size-scaled) radius each
+	# tick without a node lookup; apply_attributes mutates this same instance.
 	var col: CollisionShape3D = $CollisionShape3D
 	if col != null and col.shape != null:
 		col.shape = col.shape.duplicate()
+		_collision_cyl = col.shape as CylinderShape3D
 
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
@@ -279,6 +283,16 @@ func _ready() -> void:
 
 	collision_layer = Constants.LAYER_SKATER_BODIES
 	collision_mask  = Constants.MASK_SKATER
+
+	# Top-down game: the body never moves vertically (no gravity, velocity.y
+	# pinned to 0). Locking the Y axis stops move_and_slide from nudging the
+	# body up off the knife-edge ice contact every tick — the spurious vertical
+	# bounce that a post-move `global_position.y` override used to mask. The
+	# override re-embedded the cylinder bottom in the wall collider's Y=0 bottom
+	# cap (backface-on) each tick, so against the boards move_and_slide couldn't
+	# find a clean slide and the skater stuck. With the axis locked there is no Y
+	# motion to undo, so no override and no re-embedding.
+	axis_lock_linear_y = true
 
 	_blade_area = Area3D.new()
 	_blade_area.name = "BladeArea"
@@ -366,24 +380,22 @@ func _physics_process(delta: float) -> void:
 	blade_world_velocity = (blade_world_pos - _prev_blade_world_pos) / delta
 	_prev_blade_world_pos = blade_world_pos
 	var vel_before: Vector3 = velocity
-	# Top-down game: the body never moves vertically (no gravity, velocity.y is
-	# pinned to 0). The collision cylinder's bottom rests exactly on the ice
-	# collider (cylinder default height 2.0, half-height 1.0, body centered at
-	# spawn height Y=1.0 → bottom at the ice top Y=0), so move_and_slide nudges Y
-	# up off that knife-edge contact every tick. That ~9 cm vertical resolution is
-	# reproduced by neither the Euler reconcile replay nor the host broadcast,
-	# firing a constant position correction 60+/s (visible as vertical bounce).
-	# Pinning Y across the move removes the spurious vertical displacement while
-	# leaving all horizontal wall/skater collision intact, so live prediction,
-	# replay, and host authority agree on Y.
-	var y_before: float = global_position.y
+	# Y is axis-locked (see _ready): move_and_slide leaves global_position.y
+	# untouched, so live prediction, reconcile replay, and host authority all
+	# agree on Y without a post-move override. Horizontal wall/skater collision
+	# is unaffected.
 	move_and_slide()
-	global_position.y = y_before
 	var vel_after_slide: Vector3 = velocity
 	_resolve_player_collisions(vel_before)
 	var body_check_delta: Vector3 = velocity - vel_after_slide
 	if body_check_delta.length_squared() > 0.0001:
 		body_check_impulse_applied.emit(body_check_delta)
+	# Boards are off the skater's physics mask (a CharacterBody cylinder wedges in
+	# the concave corner mesh), so hold the body inside the rink analytically.
+	# Runs AFTER the body-check delta is captured so a board slide never reads as
+	# a hit, and after move_and_slide so the ice/skater/goalie collisions resolve
+	# first. The reconcile replay calls the same method (see LocalController).
+	clamp_body_to_rink()
 	_update_blade_elevation(delta)
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
@@ -419,6 +431,37 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 			other.body_check_impulse_applied.emit(other_delta)
 			other.body_check_received.emit(other_delta.length())
 		body_checked_player.emit(other, weight * approach, -normal)
+
+
+# Holds the body inside the rink by projecting its XZ onto the inner board
+# boundary (the same GameRules.clamp_to_rink_inner the puck-OOB check, blade
+# clamp, and reconcile replay use) and removing any velocity pointing into the
+# boards, so the skater slides smoothly along them. Replaces physics collision
+# with the concave board mesh, which pinned the CharacterBody cylinder in a
+# vertical-only crease in the corners. Pure value-type math — no allocation, so
+# it's hot-path safe at 120 Hz × actors. Called live after move_and_slide and
+# re-used by LocalController's reconcile replay so both paths agree.
+func clamp_body_to_rink() -> void:
+	# Inset the boundary by the (Size-scaled) cylinder radius so the body's EDGE
+	# stops at the boards, matching where physics collision used to halt it —
+	# otherwise the center reaches the surface and the body clips in by its radius
+	# (worse for bigger players).
+	var radius: float = _collision_cyl.radius if _collision_cyl != null else 0.0
+	var xz := Vector2(global_position.x, global_position.z)
+	var clamped: Vector2 = GameRules.clamp_to_rink_inner(xz, radius)
+	if xz.distance_squared_to(clamped) <= 1e-6:
+		return
+	var inward: Vector2 = (clamped - xz).normalized()
+	var vel_xz := Vector2(velocity.x, velocity.z)
+	var into_boards: float = vel_xz.dot(inward)
+	if into_boards < 0.0:
+		# Velocity points outward into the boards — strip that component, keep the
+		# tangential slide.
+		vel_xz -= into_boards * inward
+		velocity.x = vel_xz.x
+		velocity.z = vel_xz.y
+	global_position.x = clamped.x
+	global_position.z = clamped.y
 
 
 # Re-positions the four hand/shoulder Marker3Ds based on the current
