@@ -122,6 +122,11 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	input.slap_pressed = false
 	input.slap_held = false
 	input.brake = false
+	# Sprint defaults off every tick. The scratch buffer is reused, so a state
+	# that set sprint_held last tick would otherwise leak it into a state that
+	# doesn't touch it (e.g. a press state). The SM re-decides it each full
+	# dispatch via _resolve_sprint and restores the cache on throttled ticks.
+	input.sprint_held = false
 	# Default elevation_down high so the SkaterController's sticky
 	# _is_elevated flag is reset every tick the bot isn't actively
 	# firing an elevated shot. Press states override with

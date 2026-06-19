@@ -291,6 +291,13 @@ const OFFSIDE_HOLD_BUFFER_M: float = 1.0
 # wrong zone entirely.
 const SHOT_LANE_LEAD_TIME_S: float = 0.25
 
+# Half-width (m) of the corridor in front of the carrier checked for opponents
+# when deciding a breakaway sprint (see _carry_has_open_lane). An opponent
+# inside this perpendicular distance of the carrier→net line counts as in the
+# way. ~1 m wider than the poke-threat radius so the burst only fires with
+# genuine open ice, not when a defender is one stride off the lane.
+const BREAKAWAY_CORRIDOR_M: float = 3.0
+
 # Blade-reach radius. Inside this distance the bot's stick can already
 # reach the puck where it actually is, so the blade IK should aim at
 # the puck's CURRENT position instead of the lead intercept — otherwise
@@ -651,6 +658,11 @@ var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 const DISPATCH_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 60   # ~60 Hz
 var _dispatch_skip_counter: int = 0
 var _cached_move_vector: Vector2 = Vector2.ZERO
+# Sprint is decided alongside move_vector on full-dispatch ticks; skipped
+# throttle ticks reuse this cached value so sprint_held doesn't flicker off at
+# 60 Hz (which would halve the burst and strobe the facing turn-rate penalty).
+# Also serves as the `was_sprinting` hysteresis input to BotSprintRules.
+var _cached_sprint_held: bool = false
 # Updated inside `_step_mouse_toward` so skipped ticks can re-step
 # toward the most recently decided target without re-running the
 # state handler. ZERO sentinel suppresses stepping until the first
@@ -918,6 +930,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	if not is_press_state and _dispatch_skip_counter > 0:
 		_dispatch_skip_counter -= 1
 		input.move_vector = _cached_move_vector
+		input.sprint_held = _cached_sprint_held
 		if _has_cached_aim_target:
 			input.mouse_world_pos = _step_mouse_internal(
 					_cached_aim_target, _cached_aim_uses_arc)
@@ -941,6 +954,10 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_one_timer_pressed(input, snapshot, self_pos, have_puck)
 
 	_cached_move_vector = input.move_vector
+	# Mirror move_vector caching: press states leave sprint_held false (zeroed
+	# each tick by SkaterAgent), so a shot/charge cleanly drops the cache to
+	# false and the next OFF_PUCK/CARRY tick re-engages from a fresh state.
+	_cached_sprint_held = input.sprint_held
 
 
 # ── State handlers ───────────────────────────────────────────────────────────
@@ -954,6 +971,8 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	if self_state != null and self_state.is_ghost:
 		var tag_up: Vector3 = _tag_up_anchor(self_pos)
 		_apply_steering(input, snapshot, self_pos, tag_up)
+		# Race back to the blue line to clear the offside as fast as possible.
+		_resolve_sprint(input, self_state, self_pos, tag_up, false, false)
 		input.mouse_world_pos = _step_mouse_aim(_ready_stance_aim(self_pos, tag_up, snapshot))
 		_set_one_timer_ready(false)
 	else:
@@ -964,6 +983,11 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
 		_apply_steering(input, snapshot, self_pos, decision.target_position)
+		# Sprint to close a long gap to the role's destination — backcheck
+		# racing home, forecheck closing from depth, breakout up-ice. The gap
+		# gate keeps a bot camped near its anchor (or a pre-aimed FINISHER) off
+		# the throttle; the turn gate keeps it from sprinting into a sharp cut.
+		_resolve_sprint(input, self_state, self_pos, decision.target_position, false, false)
 		# Deflection routine: FINISHER raises its blade to tip an incoming
 		# ELEVATED on-net shot (a grounded blade flies under it). Off-puck
 		# only — the controller ignores voluntary lifts while carrying.
@@ -1172,6 +1196,13 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			input.mouse_world_pos = _step_mouse_toward(puck_pos)
 		else:
 			input.mouse_world_pos = _step_mouse_toward(target)
+	# Sprint to win the race to a loose / contested puck. Gap is measured to
+	# the puck itself — soft-hands closing (inside ~1.5 m) falls under the gap
+	# gate, so the bot eases off the throttle for a clean reception. Resolved
+	# after both steering paths above so the turn gate sees the final heading.
+	var chase_self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	_resolve_sprint(input, chase_self_state, self_pos, snapshot.puck_state.position, false, false)
+
 	# Transitions: chase ends as soon as someone has the puck, OR we're
 	# no longer the closest teammate (let the new closest take over).
 	# One-timer takes priority — if the FINISHER published ready and the
@@ -1366,6 +1397,14 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		# Pre-aim states (SHOOT/PASS pending) skip this — they have
 		# their own steering targets that the cut would override.
 		_poke_evade_modulate_steering(input, snapshot, self_pos)
+		# Breakaway burst: a carrier only sprints with a clear lane to the net
+		# (carrying drains stamina ~1.6× faster and the wide turn radius wrecks
+		# dangling, so it's reckless in traffic). Resolved after the poke-evade
+		# cut so the turn gate sees the real heading. Pre-aim / shot / pass
+		# branches below never sprint — sprint_held stays false (zeroed each
+		# tick), so a wind-up is always at full agility.
+		_resolve_sprint(input, self_state, self_pos, _last_carry_anchor,
+				true, _carry_has_open_lane(snapshot, self_pos))
 	elif _intended_action == State.SHOOT_PRESSED:
 		var hv: Vector3 = Vector3.ZERO
 		if self_state != null:
@@ -2208,6 +2247,56 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				desired, self_pos, v, _own_goal_dir,
 				snapshot.puck_state.position.z, carrier == _peer_id)
 	input.move_vector = desired
+
+
+# Decide whether to hold sprint this tick and write it onto `input`. Reads the
+# bot's own stamina + lockout from the perception snapshot (both replicated on
+# SkaterNetworkState) and the live steering output, then defers to the pure
+# BotSprintRules gate. `target` is the steering destination the closing gap is
+# measured against; `carrying` / `breakaway` gate the carrier case. Must be
+# called AFTER _apply_steering / _apply_brake_steering so input.move_vector is
+# the final heading the turn gate evaluates.
+func _resolve_sprint(input: InputState, self_state: SkaterNetworkState,
+		self_pos: Vector3, target: Vector3, carrying: bool, breakaway: bool) -> void:
+	if self_state == null:
+		input.sprint_held = false
+		return
+	var gap: float = Vector2(target.x - self_pos.x, target.z - self_pos.z).length()
+	var vel_xz := Vector2(self_state.velocity.x, self_state.velocity.z)
+	input.sprint_held = BotSprintRules.should_sprint(
+			_cached_sprint_held, gap, vel_xz, input.move_vector,
+			self_state.stamina, self_state.sprint_locked, carrying, breakaway)
+
+
+# True iff the carrier has a clear lane to the attacking goal — no opponent
+# skater ahead of it (toward the net) inside a narrow corridor. A clean
+# breakaway is the one case a carrier sprints: open ice means the wide turn
+# radius doesn't bite and the burst beats the backcheck to the net. Goalies
+# aren't in skater_states, so they never block the lane (the goalie is the
+# thing you're skating in on). Conservative by design — false positives would
+# have the carrier sprint into traffic and lose the agility to dangle.
+func _carry_has_open_lane(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var to_net: Vector3 = _attacking_goal_pos - self_pos
+	to_net.y = 0.0
+	var dist_net: float = to_net.length()
+	if dist_net < 0.01:
+		return false
+	var net_dir: Vector3 = to_net / dist_net
+	for pid: int in snapshot.skater_states:
+		if pid == _peer_id:
+			continue
+		if _team_id_by_peer.get(pid, -1) == _team_id:
+			continue  # teammate — doesn't block the lane
+		var opp_pos: Vector3 = snapshot.skater_states[pid].position
+		var to_opp: Vector3 = opp_pos - self_pos
+		to_opp.y = 0.0
+		var along: float = to_opp.dot(net_dir)
+		if along <= 0.0 or along > dist_net:
+			continue  # behind us, or past the net — not in the lane
+		var perp: float = (to_opp - net_dir * along).length()
+		if perp < BREAKAWAY_CORRIDOR_M:
+			return false
+	return true
 
 
 # Returns the opposing goalie's CURRENT world position. Used as input
