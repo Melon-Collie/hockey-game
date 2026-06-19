@@ -474,7 +474,7 @@ func _refresh_grid() -> void:
 	_recompute_resolved_colors()
 	_slot_grid.refresh(_build_slot_grid_roster(), _get_team_colors(),
 			NetworkManager.pending_bot_slots, NetworkManager.is_host,
-			NetworkManager.pending_bot_identities)
+			NetworkManager.pending_bot_identities, true, true)
 	_refresh_spectator_panel()
 
 # Live vote resolution. Walks the current roster, buckets each player's vote
