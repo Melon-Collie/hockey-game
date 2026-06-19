@@ -50,6 +50,10 @@ var _spectator_wrapper: Control = null
 var _fps_label: Label = null
 var _stamina_root: Control = null
 var _stamina_fill: ColorRect = null
+var _ghost_banner_root: Control = null
+var _ghost_reason_label: Label = null
+var _ghost_instr_label: Label = null
+var _ghost_pulse_t: float = 0.0
 
 const _STAMINA_W: float = 240.0
 const _STAMINA_H: float = 12.0
@@ -72,6 +76,7 @@ func _ready() -> void:
 	_build_version_tag()
 	_build_fps_label()
 	_build_stamina_bar()
+	_build_ghost_banner()
 	_build_bug_icon()
 	_build_skip_replay_prompt()
 	_bug_dialog = BugReportDialog.new()
@@ -732,6 +737,98 @@ func _update_stamina_bar() -> void:
 	else:
 		_stamina_fill.color = _STAMINA_NORMAL
 
+# Local-player infraction banner. Shown whenever the local skater is ghosted
+# for a reason the player can clear themselves (offside or crease violation),
+# naming the infraction and the action that lifts it. Built once in code (like
+# the rest of the HUD chrome) and driven each frame from the local skater's own
+# position in _update_ghost_banner(); icing (a whole-team ghost) keeps its
+# existing toast.
+func _build_ghost_banner() -> void:
+	var root := Control.new()
+	root.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	# Sits below the scorebug, centred in the upper third — out of the way of the
+	# lower-third phase chyron and the bottom-edge stamina bar.
+	root.offset_top = 96.0
+	root.offset_bottom = 220.0
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ghost_banner_root = root
+	add_child(root)
+
+	var centering := CenterContainer.new()
+	centering.set_anchors_preset(Control.PRESET_FULL_RECT)
+	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(centering)
+
+	var style := StyleBoxFlat.new()
+	style.bg_color = MenuStyle.BROADCAST_BG
+	style.set_corner_radius_all(4)
+	style.anti_aliasing = false
+	style.set_content_margin(SIDE_LEFT, 28)
+	style.set_content_margin(SIDE_RIGHT, 28)
+	style.set_content_margin(SIDE_TOP, 12)
+	style.set_content_margin(SIDE_BOTTOM, 12)
+	style.set_border_width_all(2)
+	style.border_color = MenuStyle.DANGER
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", style)
+	var wrapper: Control = MenuStyle.wrap_drop_shadow(panel, Vector2(4, 4))
+	centering.add_child(wrapper)
+
+	var vbox := VBoxContainer.new()
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 2)
+	panel.add_child(vbox)
+
+	_ghost_reason_label = _lbl("", 30, MenuStyle.DANGER)
+	_ghost_reason_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(_ghost_reason_label)
+
+	_ghost_instr_label = _lbl("", 16, _WHITE)
+	_ghost_instr_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(_ghost_instr_label)
+
+	root.visible = false
+
+func _update_ghost_banner() -> void:
+	if _ghost_banner_root == null:
+		return
+	var record: PlayerRecord = GameManager.get_local_player()
+	var skater: Skater = record.skater if record != null else null
+	if skater == null or record.team == null or not skater.is_ghost:
+		if _ghost_banner_root.visible:
+			_ghost_banner_root.visible = false
+		return
+	var pos: Vector3 = skater.global_position
+	var team_id: int = record.team.team_id
+	var reason: String = ""
+	var instruction: String = ""
+	# Reason is derived from the local skater's position with crease taking
+	# priority — it's the more specific, more immediately clearable violation,
+	# and a skater can be both deep in the zone and in the crease at once.
+	if CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
+		reason = "CREASE VIOLATION"
+		instruction = "Clear out of the goal crease to rejoin the play"
+	elif GameManager.get_rule_set() == GameRules.RuleSet.ARCADE \
+			and not InfractionRules.has_tagged_up(pos.z, team_id):
+		reason = "OFFSIDE"
+		instruction = "Skate back to your blue line to tag up"
+	else:
+		# Any other ghost cause (e.g. a whole-team icing ghost) surfaces through
+		# its own toast — no per-player recovery action to prompt here.
+		if _ghost_banner_root.visible:
+			_ghost_banner_root.visible = false
+		return
+	if _ghost_reason_label.text != reason:
+		_ghost_reason_label.text = reason
+	if _ghost_instr_label.text != instruction:
+		_ghost_instr_label.text = instruction
+	_ghost_banner_root.visible = true
+	# Slow attention pulse on the banner alpha so a persistent ghost keeps
+	# drawing the eye without flashing.
+	_ghost_pulse_t += get_process_delta_time() * 4.0
+	_ghost_banner_root.modulate.a = 0.75 + 0.25 * sin(_ghost_pulse_t)
+
 var _hud_scale_applied: float = -1.0
 var _hud_scale_viewport: Vector2i = Vector2i.ZERO
 
@@ -743,6 +840,7 @@ func _process(_delta: float) -> void:
 	if enabled:
 		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
 	_update_stamina_bar()
+	_update_ghost_banner()
 
 
 # Applies PlayerPrefs.hud_scale to this CanvasLayer about the viewport center,
