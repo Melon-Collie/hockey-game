@@ -7,6 +7,7 @@ const _HINT_DELAY: float = 8.0
 var _step_label: Label = null
 var _title_label: Label = null
 var _instruction_label: Label = null
+var _objective_label: Label = null
 var _hint_label: Label = null
 var _reset_btn: Button = null
 var _skip_btn: Button = null
@@ -108,7 +109,17 @@ func _build() -> void:
 	_instruction_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_instruction_label)
 
-	# Row 4: hint (hidden until hint delay expires)
+	# Row 4: objective / progress line (e.g. "Targets hit — 1 / 3"). Drill steps
+	# set it; teaching steps leave it blank. Brighter than the body so the
+	# current goal reads at a glance.
+	_objective_label = Label.new()
+	_objective_label.add_theme_font_size_override("font_size", 14)
+	_objective_label.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
+	_objective_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_objective_label.visible = false
+	vbox.add_child(_objective_label)
+
+	# Row 5: hint (hidden until hint delay expires)
 	_hint_label = Label.new()
 	_hint_label.add_theme_font_size_override("font_size", 11)
 	_hint_label.add_theme_color_override("font_color", MenuStyle.TEAL_DIM)
@@ -173,7 +184,7 @@ func _build_complete_panel() -> void:
 
 	var sub := Label.new()
 	if next_id != "":
-		sub.text = "That's %s done. %s — %s — covers one-timers, shot blocking, checking, and offsides: the moves that win games. Finish the set before you hit the ice." % [
+		sub.text = "That's %s done. Up next — %s: %s. Finish the set before you hit the ice." % [
 			TutorialRegistry.get_display_name(_tutorial_id),
 			TutorialRegistry.get_sequence_label(next_id),
 			TutorialRegistry.get_display_name(next_id)]
@@ -296,6 +307,22 @@ func set_step(index: int, total: int, title: String, instruction: String, hint: 
 	_hint_label.visible = false
 	_complete_flash.visible = false
 	_complete_label.visible = false
+	clear_objective()
+
+
+# Drill steps set a progress / goal line under the instruction (e.g.
+# "Targets hit — 1 / 3" or "Score on the open net"). Cleared on every new step.
+func set_objective(text: String) -> void:
+	if _objective_label == null:
+		return
+	_objective_label.text = text
+	_objective_label.visible = text != ""
+
+
+func clear_objective() -> void:
+	if _objective_label != null:
+		_objective_label.text = ""
+		_objective_label.visible = false
 
 
 func show_hint() -> void:

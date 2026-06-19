@@ -55,24 +55,36 @@ func test_advanced_covers_defense_and_rules() -> void:
 	assert_has(steps, TutorialRegistry.STEP_OFFSIDES)
 
 
-func test_basics_skips_goalies_advanced_keeps_them() -> void:
-	# Basics teaches shot mechanics on an empty net (shot-on-net criterion);
-	# advanced spawns goalies as the difficulty step up.
+func test_shooting_covers_the_drill_sequence() -> void:
+	# Pin the Shooting curriculum so a refactor can't drop a drill.
+	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.SHOOTING_ID)
+	assert_has(steps, TutorialRegistry.STEP_SHOOT_WRIST)
+	assert_has(steps, TutorialRegistry.STEP_SHOOT_TARGETS)
+	assert_has(steps, TutorialRegistry.STEP_SHOOT_SLAP)
+	assert_has(steps, TutorialRegistry.STEP_SHOOT_GOALIE)
+	assert_has(steps, TutorialRegistry.STEP_SHOOT_FINISH)
+
+
+func test_only_advanced_auto_spawns_the_goalie_pair() -> void:
+	# Basics teaches on an empty net; Shooting spawns its own stationary goalie
+	# on demand; only Advanced wants the normal live AI pair auto-spawned.
 	assert_false(TutorialRegistry.wants_goalies(TutorialRegistry.BASICS_ID),
 			"basics should run without goalies")
+	assert_false(TutorialRegistry.wants_goalies(TutorialRegistry.SHOOTING_ID),
+			"shooting manages its own stationary goalie, not the auto pair")
 	assert_true(TutorialRegistry.wants_goalies(TutorialRegistry.ADVANCED_ID),
 			"advanced should spawn goalies")
 
 
-func test_basics_and_advanced_step_lists_are_disjoint() -> void:
+func test_step_lists_are_disjoint_across_modules() -> void:
 	# Pin the split so a future edit doesn't accidentally duplicate a step
-	# across both tutorials — the auto-launched Basics should never repeat
-	# something the Advanced menu also teaches.
-	var basics: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.BASICS_ID)
-	var advanced: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.ADVANCED_ID)
-	for step_id: int in basics:
-		assert_false(advanced.has(step_id),
-				"step %d is in both Basics and Advanced" % step_id)
+	# across modules — each course teaches its own distinct set.
+	var seen: Dictionary = {}
+	for id: String in TutorialRegistry.ALL_IDS:
+		for step_id: int in TutorialRegistry.get_step_ids(id):
+			assert_false(seen.has(step_id),
+					"step %d appears in more than one module" % step_id)
+			seen[step_id] = true
 
 
 func test_has_recognises_registered_ids() -> void:

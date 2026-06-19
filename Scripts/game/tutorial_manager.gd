@@ -17,6 +17,11 @@ const STEP_OFFSIDES:    int = TutorialRegistry.STEP_OFFSIDES
 const STEP_SPRINT:      int = TutorialRegistry.STEP_SPRINT
 const STEP_BLADE_LIFT:  int = TutorialRegistry.STEP_BLADE_LIFT
 const STEP_STICK_LIFT:  int = TutorialRegistry.STEP_STICK_LIFT
+const STEP_SHOOT_WRIST:   int = TutorialRegistry.STEP_SHOOT_WRIST
+const STEP_SHOOT_TARGETS: int = TutorialRegistry.STEP_SHOOT_TARGETS
+const STEP_SHOOT_SLAP:    int = TutorialRegistry.STEP_SHOOT_SLAP
+const STEP_SHOOT_GOALIE:  int = TutorialRegistry.STEP_SHOOT_GOALIE
+const STEP_SHOOT_FINISH:  int = TutorialRegistry.STEP_SHOOT_FINISH
 
 
 # ── Step definition ───────────────────────────────────────────────────────────
@@ -122,6 +127,35 @@ var _shot_watch_timer:  float = 0.0
 const _SHOT_WATCH_DURATION: float = 4.0
 const _ON_NET_HALF_WIDTH:   float = 1.2  # slightly wider than the 1.83 m goal opening
 
+# ── Shooting module (drill-based) ─────────────────────────────────────────────
+# The net the tutorial player attacks (team 0 shoots toward -Z) and its lateral
+# bound for goal/target detection.
+const _GOAL_PLANE_Z:  float = -GameRules.GOAL_LINE_Z
+const _NET_HALF_WIDTH: float = GameRules.NET_HALF_WIDTH
+# Target sets, as (x = lateral, y = height) in the goal plane.
+const _LOW_TARGETS: Array[Vector2] = [
+	Vector2(-0.62, 0.30), Vector2(0.0, 0.30), Vector2(0.62, 0.30)]
+const _HIGH_TARGETS: Array[Vector2] = [
+	Vector2(-0.62, 0.95), Vector2(0.62, 0.95)]
+const _GOALIE_TARGETS: Array[Vector2] = [
+	Vector2(-0.62, 0.95), Vector2(0.62, 0.95), Vector2(0.0, 0.22)]
+const _TARGET_RADIUS:       float = 0.33
+const _TARGET_FRONT_OFFSET: float = 0.10  # float the rings just in front of the net
+# Player's shooting spot for the slot drills, and the deeper start for Finish.
+const _FINISH_START_Z: float = -10.0
+
+var _shooting_active:     bool  = false
+var _last_shot_qualifies: bool  = false   # did the last shot match the drill's required type
+var _wrist_peak_charge:   float = 0.0     # peak normalised wrister charge this aim
+var _shoot_restage_timer: float = -1.0    # countdown to re-stage the puck on the stick
+var _targets:          Array[Vector2] = []
+var _target_hit:       Array[bool]    = []
+var _targets_remaining: int = 0
+var _targets_phase:     int = 0           # 0 = low wave, 1 = high wave, 2 = toggle-off beat
+var _target_noun:       String = "Targets hit"
+var _target_node: TutorialTargets = null
+var _on_shooting_shot_callable: Callable = Callable()
+
 # Connected callables stored for safe disconnection
 var _on_release_callable:          Callable = Callable()
 var _on_one_timer_callable:        Callable = Callable()
@@ -165,6 +199,7 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	_disconnect_all_signals()
 	_free_puppet()
+	_teardown_shooting()
 	# Do NOT clear NetworkManager.is_tutorial_mode here. The continuation path
 	# (Next: <tutorial> button → start_tutorial(next_id) → change_scene_to_file)
 	# sets is_tutorial_mode = true BEFORE the deferred scene change tears down
@@ -256,6 +291,32 @@ func _step_def_for(step_id: int) -> TutorialStep:
 				"Offsides",
 				"The puck has to cross the blue line into the attacking zone before you do. You went in first, so you're offside — and now you're a ghost until you skate back out past the blue line.",
 				"Skate back toward your own end and cross the blue line to reset.")
+		STEP_SHOOT_WRIST:
+			return TutorialStep.new(
+				"Wrist Shot",
+				"You've got the puck. Hold left-click, drag toward the net, and release. The way you drag is your aim — and the farther you drag, the harder the shot.",
+				"Don't just hold and sit still — drag the mouse toward the net before you let go.")
+		STEP_SHOOT_TARGETS:
+			# Live copy is set per-wave by _show_targets_wave; this is the wave-1 default.
+			return TutorialStep.new(
+				"Pick Your Spot",
+				"Three targets are lit across the net. Drag each shot toward one to knock it out — any order.",
+				"Aim is the direction you drag, not where the cursor sits.")
+		STEP_SHOOT_SLAP:
+			return TutorialStep.new(
+				"Slapshot",
+				"Hold right-click to wind up a slapshot. It fires toward your mouse, and the shot's direction locks the moment you press — so aim with the cursor first. You'll keep gliding, but you can't steer or change the shot mid-wind-up.",
+				"Point the cursor where you want it before you press. The longer you hold, the harder it goes.")
+		STEP_SHOOT_GOALIE:
+			return TutorialStep.new(
+				"Beat the Goalie",
+				"A goalie's in the net now — but he's standing still. Pick him apart: top-left corner, top-right corner, and the five-hole between his pads.",
+				"Elevation gets it over his glove. The five-hole is the gap between his legs — keep that one low.")
+		STEP_SHOOT_FINISH:
+			return TutorialStep.new(
+				"Finish",
+				"Last one. You've got the puck and a goalie ahead of you. Score however you like.",
+				"Everything you've practiced is fair game — pick a corner, go five-hole, walk him side to side.")
 	push_error("TutorialManager: unknown step id %d" % step_id)
 	return TutorialStep.new("", "", "")
 
@@ -272,6 +333,7 @@ func _current_step_id() -> int:
 
 func _begin_step(index: int) -> void:
 	_disconnect_all_signals()
+	_teardown_shooting()
 	_step_index             = index
 	_step_timer             = 0.0
 	_hint_timer             = 0.0
@@ -401,6 +463,28 @@ func _begin_step(index: int) -> void:
 			# Puck in neutral zone — player is immediately offside
 			_place_puck(Vector3(0.0, _ICE_Y, 0.0))
 
+		STEP_SHOOT_WRIST, STEP_SHOOT_SLAP:
+			# Open net, puck on the stick in the slot. Type-gated completion
+			# (dragged wrister / slapper) handled in _on_shooting_shot.
+			_setup_shooting_drill(_slot_z())
+			_hud.set_objective("Score on the open net.")
+
+		STEP_SHOOT_TARGETS:
+			_setup_shooting_drill(_slot_z())
+			_show_targets_wave(0)
+
+		STEP_SHOOT_GOALIE:
+			_setup_shooting_drill(_slot_z())
+			GameManager.spawn_tutorial_goalie()
+			_target_noun = "Beat him"
+			_show_target_set(_GOALIE_TARGETS)
+
+		STEP_SHOOT_FINISH:
+			# Deeper start so they skate in and finish however they like.
+			_setup_shooting_drill(_FINISH_START_Z)
+			GameManager.spawn_tutorial_goalie()
+			_hud.set_objective("Score.")
+
 
 func _complete_step() -> void:
 	_disconnect_all_signals()
@@ -412,6 +496,9 @@ func _complete_step() -> void:
 	var step_id: int = _current_step_id()
 	if step_id == STEP_BODY_CHECK or step_id == STEP_STICKCHECK or step_id == STEP_STICK_LIFT:
 		_free_puppet()
+	# Shooting drills tear down their targets / stationary goalie on completion
+	# (the final Finish step has no _begin_step after it to do the cleanup).
+	_teardown_shooting()
 
 
 func _advance_step() -> void:
@@ -503,6 +590,18 @@ func _process(delta: float) -> void:
 	else:
 		if _wrister_aim_start >= 0.0:
 			_wrister_aim_start = -1.0
+
+	# Shooting module: a self-contained watch/restage loop plus the targets
+	# drill's final scroll-down-to-go-flat beat. These steps don't use the
+	# match below, so handle them here and return.
+	if _shooting_active:
+		if shot_state == 2:
+			_wrist_peak_charge = maxf(_wrist_peak_charge, _skater.shot_charge)
+		_shooting_tick(delta)
+		if _current_step_id() == STEP_SHOOT_TARGETS and _targets_phase == 2 \
+				and not _skater.is_elevated:
+			_complete_step()
+		return
 
 	match _current_step_id():
 		STEP_SKATE:
@@ -771,3 +870,190 @@ func _disconnect_all_signals() -> void:
 		if _puck.puck_stripped.is_connected(_on_stick_lift_callable):
 			_puck.puck_stripped.disconnect(_on_stick_lift_callable)
 		_on_stick_lift_callable = Callable()
+
+	if _on_shooting_shot_callable.is_valid():
+		if _local_controller.puck_release_requested.is_connected(_on_shooting_shot_callable):
+			_local_controller.puck_release_requested.disconnect(_on_shooting_shot_callable)
+		_on_shooting_shot_callable = Callable()
+
+
+# ── Shooting module helpers ───────────────────────────────────────────────────
+
+# Player's shooting spot for the slot drills: in the slot, SLOT_DIST_M out from
+# the attacking net (team 0 attacks -Z).
+func _slot_z() -> float:
+	return -(GameRules.GOAL_LINE_Z - GameRules.SLOT_DIST_M)
+
+
+# Shared setup for every shooting drill: stand the player at start_z facing the
+# net, put the puck on the stick, and listen for shots.
+func _setup_shooting_drill(start_z: float) -> void:
+	_shooting_active     = true
+	_shoot_restage_timer = -1.0
+	_wrist_peak_charge   = 0.0
+	_last_shot_qualifies = false
+	_targets_phase       = 0
+	_target_noun         = "Targets hit"
+	_local_controller.teleport_to(Vector3(0.0, 1.0, start_z), Vector2(0.0, -1.0))
+	_give_puck_to_player()
+	_on_shooting_shot_callable = func(d: Vector3, p: float, s: bool) -> void:
+		_on_shooting_shot(d, p, s)
+	_local_controller.puck_release_requested.connect(_on_shooting_shot_callable)
+
+
+# Records whether the just-released shot satisfies the active drill's required
+# type. Plain-goal drills (wrist, slap, finish) complete only when this is true;
+# the target/goalie drills clear via the target test, so they never complete on
+# a plain goal (qualifies stays false).
+func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
+	match _current_step_id():
+		STEP_SHOOT_WRIST:
+			var peak_dist: float = _wrist_peak_charge * _local_controller.max_wrister_charge_distance
+			_last_shot_qualifies = (not is_slapper) and TutorialShotRules.is_dragged_wrister(
+					peak_dist, _local_controller.quick_shot_threshold)
+		STEP_SHOOT_SLAP:
+			_last_shot_qualifies = is_slapper
+		STEP_SHOOT_FINISH:
+			_last_shot_qualifies = true
+		_:
+			_last_shot_qualifies = false
+	_wrist_peak_charge = 0.0
+
+
+# Per-frame watch/restage loop for shooting drills. Waits out the re-stage
+# beat, then watches the loose puck for a goal-line crossing (handled by
+# _on_puck_crossed_net) or a shot that died short (→ re-stage and try again).
+func _shooting_tick(delta: float) -> void:
+	if _shoot_restage_timer >= 0.0:
+		_shoot_restage_timer -= delta
+		if _shoot_restage_timer <= 0.0:
+			_shoot_restage_timer = -1.0
+			_give_puck_to_player()
+		return
+	if _puck.carrier != null:
+		return  # puck on a stick — nothing in flight
+	var pos: Vector3 = _puck.get_puck_position()
+	if TutorialShotRules.crossed_goal_line(pos.x, pos.z, _GOAL_PLANE_Z, -1.0, _NET_HALF_WIDTH):
+		_on_puck_crossed_net(pos)
+		return
+	if _puck.get_puck_velocity().length() < 0.3:
+		_stash_and_restage()
+
+
+# Resolve a puck that just crossed the goal line. Target drills clear the
+# nearest lit target; plain-goal drills complete if the shot type matched.
+func _on_puck_crossed_net(pos: Vector3) -> void:
+	if not _targets.is_empty():
+		var idx: int = TutorialShotRules.nearest_target(pos.x, pos.y, _targets, _TARGET_RADIUS)
+		if idx >= 0 and not _target_hit[idx]:
+			_target_hit[idx] = true
+			_targets_remaining -= 1
+			if _target_node != null and is_instance_valid(_target_node):
+				_target_node.hide_target(idx)
+			SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
+			_update_target_objective()
+			if _targets_remaining <= 0 and _on_targets_wave_cleared():
+				_complete_step()
+				return
+		_stash_and_restage()
+		return
+	if _last_shot_qualifies:
+		_complete_step()
+	else:
+		_stash_and_restage()
+
+
+# Called when the active wave's targets are all cleared. Returns true if the
+# whole step is done, false if the drill advanced to a new wave / beat.
+func _on_targets_wave_cleared() -> bool:
+	match _current_step_id():
+		STEP_SHOOT_TARGETS:
+			if _targets_phase == 0:
+				_show_targets_wave(1)
+				return false
+			# High wave cleared → the toggle-off beat. Completion happens in
+			# _process once the player scrolls elevation back off.
+			_targets_phase = 2
+			_targets = []
+			if _target_node != null and is_instance_valid(_target_node):
+				_target_node.clear()
+			_hud.set_step(_step_index, _step_ids.size(),
+				"Pick Your Spot",
+				"Nice. Your lifted shot is still on, though — scroll the wheel DOWN to switch back to a flat shot, or your next one sails high too.",
+				"Elevation is a toggle you manage: up to lift, down to flatten.")
+			_hud.set_objective("Scroll down to go flat.")
+			return false
+		STEP_SHOOT_GOALIE:
+			return true
+	return true
+
+
+# Sets the copy + target set for one wave of the Pick Your Spot drill.
+func _show_targets_wave(phase: int) -> void:
+	_targets_phase = phase
+	_target_noun = "Targets hit"
+	if phase == 0:
+		_hud.set_step(_step_index, _step_ids.size(),
+			"Pick Your Spot",
+			"Three targets are lit across the net. Drag each shot toward one to knock it out — any order.",
+			"Aim is the direction you drag, not where the cursor sits.")
+		_show_target_set(_LOW_TARGETS)
+	else:
+		_hud.set_step(_step_index, _step_ids.size(),
+			"Pick Your Spot",
+			"Now two up high. Scroll the wheel UP to switch to a lifted shot — it's a toggle, so it stays on. Put both in the top corners.",
+			"Scroll up first; you'll see the puck rise off the ice when you shoot.")
+		_show_target_set(_HIGH_TARGETS)
+
+
+# Spawns a fresh set of ring targets and resets the hit bookkeeping.
+func _show_target_set(targets: Array[Vector2]) -> void:
+	_ensure_target_node()
+	_targets = targets
+	_target_hit = []
+	for _i: int in _targets.size():
+		_target_hit.append(false)
+	_targets_remaining = _targets.size()
+	_target_node.show_targets(_targets, _GOAL_PLANE_Z, _TARGET_FRONT_OFFSET)
+	_update_target_objective()
+
+
+func _update_target_objective() -> void:
+	var hit: int = _targets.size() - _targets_remaining
+	_hud.set_objective("%s — %d / %d" % [_target_noun, hit, _targets.size()])
+
+
+func _ensure_target_node() -> void:
+	if _target_node == null or not is_instance_valid(_target_node):
+		_target_node = TutorialTargets.new()
+		add_child(_target_node)
+
+
+# Puts the puck back on the player's stick for another attempt.
+func _give_puck_to_player() -> void:
+	if _puck.carrier != null:
+		_puck.drop()
+	_puck.set_puck_position(Vector3(_skater.global_position.x, _ICE_Y, _skater.global_position.z))
+	_puck.linear_velocity = Vector3.ZERO
+	_puck.set_carrier(_skater)
+
+
+# Stash the puck off-rink (so a crossing can't re-trigger) and schedule the
+# re-stage that hands it back to the player.
+func _stash_and_restage() -> void:
+	_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+	_shoot_restage_timer = _REATTEMPT_DELAY
+
+
+# Clears all shooting-drill state: targets, the stationary goalie, the watch
+# loop. Safe to call on any step (no-op when no shooting drill is active).
+func _teardown_shooting() -> void:
+	_shooting_active     = false
+	_shoot_restage_timer = -1.0
+	_targets             = []
+	_target_hit          = []
+	_targets_remaining   = 0
+	_targets_phase       = 0
+	if _target_node != null and is_instance_valid(_target_node):
+		_target_node.clear()
+	GameManager.despawn_tutorial_goalie()
