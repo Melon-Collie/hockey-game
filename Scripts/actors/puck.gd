@@ -5,7 +5,7 @@ signal puck_released()
 signal puck_stripped(ex_carrier: Skater)
 signal puck_touched_loose(skater: Skater)  # blade redirect (deflection, tip-in)
 signal puck_body_blocked(skater: Skater)   # puck absorbed by a player's body
-signal puck_touched_goalie(goalie: Goalie)  # puck contacted a goalie StaticBody3D part while uncarried
+signal puck_touched_goalie(goalie: Goalie, part: int)  # uncarried puck hit a goalie StaticBody3D; part = Goalie.SavePart
 signal puck_touched_post  # puck contacted any HockeyGoal geometry while uncarried
 signal puck_hit_boards     # uncarried puck struck rink boards at meaningful speed
 signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe goal geometry)
@@ -53,6 +53,13 @@ var _pending_elevation_vel: Vector3 = Vector3.ZERO
 # Belt-and-suspenders for _physics_process: skip is_airborne() zeroing the
 # same frame as release() so _pending_elevation_vel reaches _integrate_forces.
 var _pending_elevation: bool = false
+# Goalie rebound control. The save's reflection off the StaticBody3D pad is a
+# raw physics bounce — it sends the puck back up the slot it came from. The
+# goalie controller instead computes a designed rebound (out to the corner) and
+# arms it here; _integrate_forces writes it directly into the physics state on
+# the next step, overriding Jolt's reflection (same pattern as elevation).
+var _pending_rebound: bool = false
+var _pending_rebound_vel: Vector3 = Vector3.ZERO
 # Callable (Skater) -> int team_id, or -1 if the skater isn't registered. Set
 # by GameManager at spawn time so Puck doesn't reach upward for team checks.
 var _team_resolver: Callable = Callable()
@@ -290,6 +297,19 @@ func apply_goalie_sweep(sweep_velocity: Vector3) -> void:
 	linear_velocity = sweep_velocity
 
 
+# Goalie rebound control. Called from the controller's puck_touched_goalie
+# handler on a save: replaces the raw physics reflection (which kicks the puck
+# back up the slot) with a designed rebound out to the corner. Armed here and
+# applied in _integrate_forces so it overrides Jolt's collision response on the
+# next step rather than racing it. Host-only (the handler is host-gated); the
+# authoritative velocity replicates through the normal puck sync.
+func apply_rebound_control(rebound_velocity: Vector3) -> void:
+	if carrier != null:
+		return
+	_pending_rebound = true
+	_pending_rebound_vel = rebound_velocity
+
+
 func release(direction: Vector3, power: float) -> void:
 	var ex_carrier: Skater = carrier
 	# Set position while still frozen so Jolt activates from the correct state.
@@ -345,7 +365,8 @@ func _on_body_entered(body: Node3D) -> void:
 	if carrier != null:
 		return
 	if body.get_parent() is Goalie:
-		puck_touched_goalie.emit(body.get_parent() as Goalie)
+		var hit_goalie: Goalie = body.get_parent() as Goalie
+		puck_touched_goalie.emit(hit_goalie, hit_goalie.classify_save_part(body))
 	elif body is HockeyGoal:
 		puck_touched_post.emit()
 	elif body.get_parent() is HockeyGoal:
@@ -371,6 +392,14 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		if _pending_elevation_vel.y > 0.0:
 			state.transform.origin.y = ice_height + 0.1
 		_pending_elevation_vel = Vector3.ZERO
+	if _pending_rebound:
+		# Override the bounce with the goalie's designed rebound (out to the
+		# corner). Applied after elevation so a saved elevated shot still gets
+		# redirected, and before the max-speed clamp so it's bounded like any
+		# other velocity.
+		state.linear_velocity = _pending_rebound_vel
+		_pending_rebound = false
+		_pending_rebound_vel = Vector3.ZERO
 	if state.linear_velocity.length() > max_speed:
 		state.linear_velocity = state.linear_velocity.normalized() * max_speed
 	if state.transform.origin.y > ice_height + max_height:

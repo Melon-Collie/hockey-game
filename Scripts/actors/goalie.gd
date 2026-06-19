@@ -171,6 +171,25 @@ func get_blade_world_position() -> Vector3:
 	return _stick_blade.global_position
 
 
+# Which body part a loose puck just contacted, for rebound control. The
+# controller maps this to how lively the rebound is: PAD / STICK are reactive
+# deflections that kick out, while BODY / GLOVE / HEAD are controlled saves
+# that deaden the puck. `part` is the StaticBody3D the puck's body_entered
+# reported.
+enum SavePart { PAD, STICK, BODY, GLOVE, HEAD }
+
+func classify_save_part(part: Node) -> SavePart:
+	if part == _glove:
+		return SavePart.GLOVE
+	if part == _stick:
+		return SavePart.STICK
+	if part == _body:
+		return SavePart.BODY
+	if part == _head:
+		return SavePart.HEAD
+	return SavePart.PAD
+
+
 # Apply an authoritative pose snapshot directly to the body parts. Used by
 # both live client rendering (interpolated broadcast pose) and replay playback
 # — neither runs the local AI, so this writes the host's socket transforms
