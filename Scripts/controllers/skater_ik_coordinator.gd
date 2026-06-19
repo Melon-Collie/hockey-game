@@ -104,7 +104,9 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	var mouse_local: Vector3 = _skater.upper_body_to_local(mouse_world)
 	var target_blade_xz := Vector2(mouse_local.x, mouse_local.z)
 	target_blade_xz = _apply_carry_offset(target_blade_xz)
-	var target_ik: TopHandIK.Result = _solve_top_hand(target_blade_xz, blade_side_sign)
+	# Single pass: only the ROM-clamped blade XZ is needed to cap against, and the
+	# capped result is re-solved at full precision below.
+	var target_ik: TopHandIK.Result = _solve_top_hand(target_blade_xz, blade_side_sign, 1)
 	var target_blade_world: Vector3 = _skater.upper_body_to_global(target_ik.blade)
 	target_blade_world.y = 0.0
 
@@ -278,10 +280,16 @@ func _apply_carry_offset(desired_blade_xz: Vector2) -> Vector2:
 # reach + max lean. Using the SOLVED blade XZ from each pass (not the raw target)
 # converges to the right answer even when the target is past ROM. Writes into and
 # returns the shared _ik_result — callers must consume it before the next solve.
-func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float) -> TopHandIK.Result:
+#
+# `passes` trades accuracy for cost: the final pose solve uses the full 3 (it
+# drives the visible stick + blade_y), but the speed-cap target solve passes 1 —
+# it only needs the ROM-clamped blade XZ to chase, and the sub-cm blade_y/lean
+# refinement the extra passes buy is irrelevant to a point that's about to be
+# capped and re-solved accurately.
+func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float, passes: int = 3) -> TopHandIK.Result:
 	var blade_y: float = blade_y_local()
 	var ik: TopHandIK.Result = _ik_result
-	for i in 3:
+	for i in passes:
 		TopHandIK.solve(
 				_skater.shoulder.position,
 				desired_blade_xz,
