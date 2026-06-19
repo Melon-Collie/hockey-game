@@ -805,7 +805,7 @@ func _wire_subsystems() -> void:
 
 	_hit_tracker = HitTracker.new()
 	_hit_tracker.setup(_registry)
-	_hit_tracker.hit_credited.connect(_sync_stats_to_clients)
+	_hit_tracker.hit_credited.connect(_on_hit_credited)
 
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
@@ -956,6 +956,7 @@ func _wire_sound_signals() -> void:
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_BODY_BLOCK, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.07))
 	NetworkManager.puck_strip_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
+	NetworkManager.body_check_landed.connect(_on_body_check_landed)
 	NetworkManager.stick_lift_received.connect(
 		func(pos: Vector3) -> void:
 			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
@@ -1532,9 +1533,10 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	record.skater.body_checked_player.connect(
 		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
 	)
-	# The impact sound is played (throttled + strength-scaled, at the victim) by the
-	# attacker's SkaterVFX._on_body_check — same signal, one place, so it can't
-	# double with the burst or re-fire on sustained contact.
+	# Impact burst + sound are NOT played here — they fire from the host-authoritative
+	# body_check_landed broadcast (_on_body_check_landed) once a hit is credited, so
+	# they read identically on every client. This closure only routes the contact
+	# into the credit/claim path (_on_hit_landed → HitClaimResolver).
 	if NetworkManager.is_host:
 		record.skater.body_checked_player.connect(
 			func(v: Skater, f: float, d: Vector3) -> void:
@@ -2220,6 +2222,35 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 
 func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
+
+
+# Host-only (hit_credited fires only on the host, from the deduped credit path).
+# Sync stats as before, then broadcast the authoritative impact so every client
+# renders one consistent burst/thud; self-fire locally since the RPC reaches only
+# remote peers (and so offline/free-play still gets the impact).
+func _on_hit_credited(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
+	_sync_stats_to_clients()
+	NetworkManager.send_body_check_to_all(victim_peer_id, force, hit_dir)
+	_on_body_check_landed(victim_peer_id, force, hit_dir)
+
+
+# Drives the body-check VFX + sound on every machine (clients via the RPC signal,
+# host via the self-fire above). The burst self-positions at the victim, so the
+# victim's VFX node is the right owner. `force` is VFX-scale impact force, fed
+# straight into SkaterVFX.check_* — the same path the replay system uses. Local
+# victim camera shake is NOT driven here: it already fires immediately off the
+# predicted body_check_impulse_applied → local_player_hit path.
+func _on_body_check_landed(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
+	if _registry == null:
+		return
+	var victim_rec: PlayerRecord = _registry.get_record(victim_peer_id)
+	if victim_rec == null or victim_rec.skater == null:
+		return
+	var vfx: SkaterVFX = victim_rec.skater.get_node_or_null("VFX") as SkaterVFX
+	if vfx != null:
+		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
+	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
+			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
 
 
 func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:

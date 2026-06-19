@@ -24,12 +24,6 @@ const _CHECK_VOL_MIN_DB: float = -6.0
 const _CHECK_VOL_MAX_DB: float = 3.0
 const _CHECK_PITCH_LIGHT: float = 1.10   # glancing bump — higher, snappier
 const _CHECK_PITCH_HEAVY: float = 0.90   # full check — lower, heavier thud
-# Cosmetic de-dup window. body_checked_player can fire on consecutive physics
-# ticks during sustained closing contact (the gameplay/credit path is throttled
-# elsewhere, but the burst + sound are not), which reads as a flammed double-hit.
-# One feedback per hit event within this window; well under the gap between
-# distinct checks.
-const _CHECK_SFX_COOLDOWN_MS: int = 180
 
 # Blade trail — same zero-gap GPU approach as puck trail, one system per skate.
 # Two dots per trail (left/right blade) pinned to ICE_Y so marks scrape the ice surface.
@@ -49,9 +43,6 @@ var _speed_lines: CPUParticles3D = null
 var _body_check_burst: CPUParticles3D = null
 var _prev_pos: Vector3 = Vector3.ZERO
 var _prev_vel: Vector3 = Vector3.ZERO
-# Wall-clock timestamp (ms) of the last body-check feedback, for the cosmetic
-# de-dup window. Time-based so it's immune to _process early-returns.
-var _last_check_sfx_ms: int = -100000
 
 func _ready() -> void:
 	# Build left/right blade trail systems (same zero-gap GPU approach as puck).
@@ -79,9 +70,10 @@ func _ready() -> void:
 	_body_check_burst = _make_body_check_emitter()
 	add_child(_body_check_burst)
 
-	var skater: Skater = get_parent() as Skater
-	if skater != null:
-		skater.body_checked_player.connect(_on_body_check)
+	# Body-check burst + sound are driven by the host-authoritative broadcast
+	# (GameManager._on_body_check_landed → fire_body_check_burst), not by the local
+	# body_checked_player signal — so the impact reads identically on every client
+	# instead of firing off each machine's non-authoritative local collision.
 
 	_prev_pos = global_position
 
@@ -153,21 +145,6 @@ static func check_sound_volume_db(force: float) -> float:
 
 static func check_sound_pitch_scale(force: float) -> float:
 	return lerpf(_CHECK_PITCH_LIGHT, _CHECK_PITCH_HEAVY, check_intensity(force))
-
-
-func _on_body_check(victim: Skater, force: float, hit_dir: Vector3) -> void:
-	if victim == null:
-		return
-	# De-dup sustained-contact re-fires (body_checked_player can land on
-	# consecutive ticks) so one hit reads as one impact, not a flam.
-	var now: int = Time.get_ticks_msec()
-	if now - _last_check_sfx_ms < _CHECK_SFX_COOLDOWN_MS:
-		return
-	_last_check_sfx_ms = now
-	fire_body_check_burst(victim, force, hit_dir)
-	# Impact sound at the point of contact (the victim), scaled by hit strength.
-	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim.global_position,
-			check_sound_volume_db(force), 0.08, check_sound_pitch_scale(force))
 
 
 # Public so ReplayEventReplayer can fire the burst during replay without
