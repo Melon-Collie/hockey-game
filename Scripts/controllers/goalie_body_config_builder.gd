@@ -52,11 +52,15 @@ var slide_pushoff_rot_deg: float = 35.0
 var slide_body_lean_deg: float = 6.0
 var slide_initial_speed: float = 4.5
 
-# Pose constants — fixed across all goalies, never tuned.
-# Pad Y-rotation angles the toes outward so pucks deflect toward corners
-# rather than back into the slot.
-const PAD_TOE_OUT_DEG_STANDING: float = 8.0
-const PAD_TOE_OUT_DEG_BUTTERFLY: float = 12.0
+# Pad Y-rotation angles the toes outward so pucks deflect toward the corners
+# rather than reflecting straight back up the slot — pose-based rebound control
+# (a real goalie squares the pads to steer rebounds wide). Pushed from the
+# controller's exports in setup() so the rebound angle is tunable in the editor
+# panel alongside the rest of the goalie tuning. Butterfly carries the larger
+# angle because that's the low-shot / 5-hole save posture where a straight-back
+# rebound is most dangerous.
+var pad_toe_out_standing: float = 12.0
+var pad_toe_out_butterfly: float = 18.0
 # Blocker assembly forward tilt per state (X rotation puts the blade on the
 # ice in front of the pads — pad and stick are rigidly attached at the wrist
 # so they rotate together).
@@ -213,9 +217,9 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 
 func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.left_pad_pos  = Vector3(-0.22 - inputs.five_hole_openness, 0.44, -0.20)
-	c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_STANDING, -12.0)
+	c.left_pad_rot  = Vector3(0.0,  pad_toe_out_standing, -12.0)
 	c.right_pad_pos = Vector3( 0.22 + inputs.five_hole_openness, 0.44, -0.20)
-	c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING,  12.0)
+	c.right_pad_rot = Vector3(0.0, -pad_toe_out_standing,  12.0)
 	c.body_pos      = Vector3(0.0,  1.16,  0.0)
 	c.body_rot      = Vector3.ZERO
 	c.head_pos      = Vector3(0.0,  1.69,  0.08)
@@ -239,9 +243,9 @@ func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 # no up-then-back-down overshoot.
 func _set_ready_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.left_pad_pos  = Vector3(-0.22 - inputs.five_hole_openness, 0.44, -0.16)
-	c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_STANDING, -10.0)
+	c.left_pad_rot  = Vector3(0.0,  pad_toe_out_standing, -10.0)
 	c.right_pad_pos = Vector3( 0.22 + inputs.five_hole_openness, 0.44, -0.16)
-	c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_STANDING,  10.0)
+	c.right_pad_rot = Vector3(0.0, -pad_toe_out_standing,  10.0)
 	c.body_pos      = Vector3(0.0,  1.00, -0.05)
 	c.body_rot      = Vector3(-14.0, 0.0, 0.0)
 	c.head_pos      = Vector3(0.0,  1.48, -0.22)
@@ -256,9 +260,9 @@ func _set_ready_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 
 func _set_butterfly_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.left_pad_pos  = Vector3(-0.42 - inputs.five_hole_openness, 0.14, -0.20)
-	c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY, -90.0)
+	c.left_pad_rot  = Vector3(0.0,  pad_toe_out_butterfly, -90.0)
 	c.right_pad_pos = Vector3( 0.42 + inputs.five_hole_openness, 0.14, -0.20)
-	c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY,  90.0)
+	c.right_pad_rot = Vector3(0.0, -pad_toe_out_butterfly,  90.0)
 	c.body_pos      = Vector3(0.0,  0.46,  0.0)
 	c.body_rot      = Vector3(-10.0, 0.0, 0.0)
 	c.head_pos      = Vector3(0.0,  0.99, -0.06)
@@ -290,15 +294,15 @@ func _set_sliding_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	if inputs.slide_dir * -inputs.direction_sign > 0.0:
 		# Sliding right: right pad seals the post, left pad pushes off.
 		c.right_pad_pos = Vector3( 0.42 + inputs.five_hole_openness, 0.14, -0.20)
-		c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY,  90.0)
+		c.right_pad_rot = Vector3(0.0, -pad_toe_out_butterfly,  90.0)
 		c.left_pad_pos  = Vector3(-0.42, 0.14 + push_lift, -0.20)
-		c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY, -(90.0 - push_rot))
+		c.left_pad_rot  = Vector3(0.0,  pad_toe_out_butterfly, -(90.0 - push_rot))
 	else:
 		# Sliding left: left pad seals the post, right pad pushes off.
 		c.left_pad_pos  = Vector3(-0.42 - inputs.five_hole_openness, 0.14, -0.20)
-		c.left_pad_rot  = Vector3(0.0,  PAD_TOE_OUT_DEG_BUTTERFLY, -90.0)
+		c.left_pad_rot  = Vector3(0.0,  pad_toe_out_butterfly, -90.0)
 		c.right_pad_pos = Vector3( 0.42, 0.14 + push_lift, -0.20)
-		c.right_pad_rot = Vector3(0.0, -PAD_TOE_OUT_DEG_BUTTERFLY,  90.0 - push_rot)
+		c.right_pad_rot = Vector3(0.0, -pad_toe_out_butterfly,  90.0 - push_rot)
 
 func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	# RVH stick swings toward the post. Z rotation rolls the stick laterally

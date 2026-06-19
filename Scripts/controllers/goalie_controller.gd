@@ -260,6 +260,15 @@ extends Node
 @export var standing_sweep_y_drop: float = 0.04
 @export var standing_sweep_x_extension: float = 0.06
 
+# ── Rebound steering (pad toe-out) ───────────────────────────────────────────
+# Pads are angled (Y-yaw, toes outward) so a save deflects the puck toward the
+# corner instead of reflecting it straight back up the slot — pose-based rebound
+# control, no physics override. Butterfly carries the larger angle: it's the
+# low-shot / 5-hole save posture where a straight-back rebound is most
+# dangerous. Pushed into the pose builder in _configure_collaborators.
+@export var pad_toe_out_standing_deg: float = 12.0
+@export var pad_toe_out_butterfly_deg: float = 18.0
+
 # ── Loose-puck clear (sweep the crease) ──────────────────────────────────────
 # The stick poke check only strips a CARRIED puck — a loose puck sitting at the
 # goalie's feet does nothing on blade contact. This is the missing counterpart:
@@ -276,21 +285,6 @@ extends Node
 @export var clear_forward_weight: float = 0.5   # out-of-crease bias
 @export var clear_center_deadband: float = 0.15 # m — |puck.x| under this picks the stick side
 @export var clear_cooldown: float = 0.45        # s between sweeps (anti-dribble)
-
-# ── Rebound control (direct saves to the corner) ─────────────────────────────
-# A save is otherwise a raw physics reflection off the pad/body collider, which
-# sends the puck straight back up the slot it came from — the juicy rebound the
-# player banks on. Instead, redirect the rebound to the corner (reusing the
-# loose-puck clear's corner-direction math), with liveliness set by which part
-# made the save: pads / stick kick out, chest / glove / head deaden to a soft
-# trickle. Only real shots are redirected — a slow scramble touch falls through
-# to normal physics and the loose-puck sweep. Host-authoritative; the override
-# replicates through the puck's normal sync.
-@export var rebound_min_incoming_speed: float = 6.0  # m/s — below this it's a scramble touch, not a shot
-@export var rebound_kick_speed: float = 7.0          # m/s — pad / stick deflection out to the corner
-@export var rebound_deaden_speed: float = 2.5        # m/s — chest / glove / head controlled save
-@export var rebound_lateral_weight: float = 1.0      # corner-ward bias (lateral vs forward)
-@export var rebound_forward_weight: float = 0.6      # out-of-crease bias
 
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
@@ -639,6 +633,8 @@ func _configure_collaborators() -> void:
 	_reaction.reaction_clear_delay = reaction_clear_delay
 	_pose.catches_left = catches_left
 	_pose.rvh_post_pad_angle = rvh_post_pad_angle
+	_pose.pad_toe_out_standing = pad_toe_out_standing_deg
+	_pose.pad_toe_out_butterfly = pad_toe_out_butterfly_deg
 	_pose.glove_max_x_outward = glove_max_x_outward
 	_pose.glove_max_x_inward = glove_max_x_inward
 	_pose.glove_max_z_reach = glove_max_z_reach
@@ -1856,41 +1852,13 @@ func _on_puck_released() -> void:
 # then decides standing back up based on whether the rebound is still close.
 # Filters by identity since `Puck.puck_touched_goalie` fires on either
 # net's goalie.
-func _on_puck_contact(contacted: Goalie, part: int) -> void:
+func _on_puck_contact(contacted: Goalie) -> void:
 	if contacted != goalie:
 		return
 	_slide.arm_event_lockout()
 	_reaction.arm_clear()
-	if is_server:
-		_apply_rebound_control(part)
-		if _sm.is_upright():
-			_enter_butterfly()
-
-
-# Redirect a save's rebound to the corner instead of letting it reflect back up
-# the slot. Part-driven liveliness: reactive deflections (pad / stick) kick out
-# at `rebound_kick_speed`, controlled saves (chest / glove / head) deaden to
-# `rebound_deaden_speed`. Gated on incoming speed so only genuine shots are
-# redirected — a slow scramble touch keeps its natural physics and is handled
-# by the loose-puck sweep instead. Host-only (caller is host-gated). Incoming
-# speed comes from `_puck_velocity_est`, the position-derived estimate updated
-# in _update_tracking before contact — the puck's own linear_velocity has
-# already reflected off the collider by the time this fires.
-func _apply_rebound_control(part: int) -> void:
-	if puck.pickup_locked:
-		return
-	if _puck_velocity_est.length() < rebound_min_incoming_speed:
-		return
-	var controlled: bool = part == Goalie.SavePart.BODY \
-			or part == Goalie.SavePart.GLOVE \
-			or part == Goalie.SavePart.HEAD
-	var out_speed: float = rebound_deaden_speed if controlled else rebound_kick_speed
-	var default_side: float = 1.0 if catches_left else -1.0
-	var rebound_vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
-			puck.global_position, _goal_center_x, _direction_sign,
-			rebound_lateral_weight, rebound_forward_weight, out_speed,
-			clear_center_deadband, default_side)
-	puck.apply_rebound_control(rebound_vel)
+	if is_server and _sm.is_upright():
+		_enter_butterfly()
 
 # Resolving events (boards / post / net) that aren't goalie-specific. Any of
 # these means the shot has resolved — no longer a threat the goalie is
