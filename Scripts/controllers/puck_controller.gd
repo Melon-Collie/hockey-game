@@ -374,14 +374,14 @@ func notify_remote_pickup(remote_skater: Skater) -> void:
 	puck.set_client_prediction_mode(false)
 	_state_buffer.clear()
 
-func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skater_vel: Vector3 = Vector3.ZERO) -> Vector3:
+func notify_local_release(direction: Vector3, power: float, rtt_ms: float) -> Vector3:
 	# PuckController (priority 1) runs after LocalController (priority 0), so the puck
 	# hasn't been re-pinned to the current blade position yet this frame. Read blade
 	# directly from the carrier so we start from the current-frame position, not last
 	# frame's pin.
-	# Returns the un-advanced release origin (the blade contact point) so the caller
-	# can ship it to the host in the release RPC — the host fires the authoritative
-	# puck from this exact point instead of guessing it from a stale buffer rewind.
+	# Returns the release origin (the blade contact point) so the caller can ship it
+	# to the host in the release RPC — the host fires the authoritative puck from this
+	# exact point instead of guessing it from a stale buffer rewind.
 	var release_pos: Vector3 = puck.get_puck_position()
 	if _local_carrier_skater != null:
 		release_pos = _local_carrier_skater.get_blade_contact_global()
@@ -394,14 +394,13 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skate
 	_shot_rtt_ms = rtt_ms
 	puck.set_client_prediction_mode(true)
 	puck.set_goal_line_clamp(true)
-	var rtt_half: float = rtt_ms / 2000.0
-	# RTT/2 lag-comp advance: start the trajectory where the host will (so the
-	# client isn't reconciled back). Render the puck at the un-advanced blade point
-	# and ease it forward via a decaying visual offset so it doesn't visibly rocket
-	# off the stick — the physics body still jumps so prediction stays in sync.
-	var advance: Vector3 = (direction * power + skater_vel) * rtt_half
-	puck.set_puck_position(release_pos + advance)
-	puck.add_visual_offset(-advance)
+	# Fire from the blade and predict forward — no forward advance. The host is
+	# authoritative and fires from this same (client-sent) origin; the shooter's
+	# three-zone reconcile (apply_state) projects the host broadcast forward by the
+	# full RTT, so prediction and authority stay aligned without shoving the puck
+	# ahead of the stick (which used to pop on the host / other clients and could
+	# skip the puck into a close goalie or the boards).
+	puck.set_puck_position(release_pos)
 	puck.apply_release_velocity(direction * power)
 	_state_buffer.clear()
 	return release_pos
@@ -622,7 +621,7 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 				_pending_local_release_deadline = -1.0
 			var rtt_s: float = _shot_rtt_ms / 1000.0
 			# Apply ice friction to the latency-corrected target so it matches
-			# Jolt's deceleration over the rtt advance (same shape as
+			# Jolt's deceleration over the RTT projection window (same shape as
 			# `_interpolate()` extrapolation at line ~416). Without this the
 			# target overshoots the actual host position by ~0.5 * a * rtt²,
 			# visible as a slight forward bias on long shots at high RTT before
@@ -631,9 +630,9 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 			var latency_corrected := PuckNetworkState.new()
 			latency_corrected.position = state.position + friction_vel * rtt_s
 			latency_corrected.velocity = friction_vel
-			# Both client and host Jolt start from the same position (same rtt_ms
-			# used for both advances), so they run identically. Small errors are
-			# RTT jitter — blending toward a noisy target creates visible snapback.
+			# Client and host run identical Jolt from the same (client-sent) release
+			# origin — no release-time advance on either side — so small errors are
+			# RTT jitter; blending toward a noisy target creates visible snapback.
 			# Only hard-snap on genuine physics divergence (wall/goalie bounce
 			# that differed between client and host).
 			var dist: float = puck.get_puck_position().distance_to(latency_corrected.position)
@@ -699,19 +698,6 @@ func _interpolate() -> void:
 	else:
 		var from_state: PuckNetworkState = bracket.from_state
 		var to_state: PuckNetworkState = bracket.to_state
-		# A shot release teleports the host puck forward by the RTT/2 lag-comp
-		# advance, so the broadcast carries a single bracket whose endpoints are
-		# implausibly far apart (well beyond what max_speed could cover in
-		# bracket_dt). Hermite-ing straight across it reads as the puck rocketing
-		# forward on observer clients. Detect that jump and ease through it with the
-		# rejoin blend (same machinery as extrapolation re-entry) so the puck leaves
-		# the blade cleanly here too. bracket_dt-scaled so a packet-loss gap (a
-		# legitimately wider bracket) doesn't false-trigger.
-		var bracket_jump: float = from_state.position.distance_to(to_state.position)
-		var jump_ceiling: float = puck.max_speed * bracket.bracket_dt * 1.5 + 0.25
-		if bracket_jump > jump_ceiling and _rejoin_blend_elapsed < 0.0:
-			_rejoin_blend_from_pos = puck.get_puck_position()
-			_rejoin_blend_elapsed = 0.0
 		interpolated.position = BufferedStateInterpolator.hermite(from_state.position, from_state.velocity,
 				to_state.position, to_state.velocity, bracket.t, bracket.bracket_dt)
 		interpolated.velocity = from_state.velocity.lerp(to_state.velocity, bracket.t)
