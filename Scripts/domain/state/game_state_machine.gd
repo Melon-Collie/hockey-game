@@ -47,6 +47,16 @@ var period_scores: Array[Array] = []  # [team_id][period_index 0-based]; grows d
 # on demand via PlayerRules.faceoff_position(team_id, team_slot, active_dot).
 var players: Dictionary[int, Dictionary] = {}
 
+# Slots held open for a dropped player who may reconnect (see
+# GameManager._reserved_slots, which owns the steam_id → data mapping and the
+# expiry timer). Each entry is { team_slot: int, team_id: int }. Host-only in
+# practice — clients despawn and re-spawn the returning skater from broadcasts,
+# so this stays empty on them. A reserved slot is counted as occupied by
+# count_players_on_team (keeps auto-balance + the roster-full gate honest, so
+# the team plays short-handed rather than letting a different joiner take it)
+# and skipped by _first_available_slot (so it isn't reassigned).
+var reserved_slots: Array[Dictionary] = []
+
 # ── Icing ────────────────────────────────────────────────────────────────────
 var last_carrier_team_id: int = -1
 var last_carrier_z: float = 0.0
@@ -352,6 +362,9 @@ func _first_available_slot(team_id: int) -> int:
 	for p: Dictionary in players.values():
 		if p.team_id == team_id:
 			occupied.append(p.team_slot)
+	for r: Dictionary in reserved_slots:
+		if r.team_id == team_id:
+			occupied.append(r.team_slot)
 	for s: int in range(PlayerRules.MAX_PER_TEAM):
 		if s not in occupied:
 			return s
@@ -395,7 +408,35 @@ func count_players_on_team(team_id: int) -> int:
 	for peer_id in players:
 		if players[peer_id].team_id == team_id:
 			count += 1
+	for r: Dictionary in reserved_slots:
+		if r.team_id == team_id:
+			count += 1
 	return count
+
+
+# ── Slot reservation (host-only; reconnect support) ──────────────────────────
+# Holds (team_id, team_slot) open for a dropped player so a reconnecting peer
+# reclaims it. Idempotent — re-reserving an already-held slot is a no-op.
+func reserve_slot(team_id: int, team_slot: int) -> void:
+	for r: Dictionary in reserved_slots:
+		if r.team_id == team_id and r.team_slot == team_slot:
+			return
+	reserved_slots.append({ "team_id": team_id, "team_slot": team_slot })
+
+# Frees a reserved slot — called on reconnect (the returning player re-registers
+# into it) or on expiry (the window lapsed; the slot becomes truly open).
+func release_reserved(team_id: int, team_slot: int) -> void:
+	for i: int in range(reserved_slots.size()):
+		var r: Dictionary = reserved_slots[i]
+		if r.team_id == team_id and r.team_slot == team_slot:
+			reserved_slots.remove_at(i)
+			return
+
+func is_slot_reserved(team_id: int, team_slot: int) -> bool:
+	for r: Dictionary in reserved_slots:
+		if r.team_id == team_id and r.team_slot == team_slot:
+			return true
+	return false
 
 # Returns Array of { peer_id, team_id, slot } for all registered players.
 # player_name is not stored here; callers enrich via PlayerRecord if needed.
@@ -450,6 +491,7 @@ func reset_all() -> void:
 	_delayed_offside_peer_ids.clear()
 	delayed_offside_team_id = -1
 	pending_faceoff_reason = FaceoffReason.NONE
+	reserved_slots.clear()
 
 func apply_config(p_num_periods: int, p_period_duration: float, p_ot_enabled: bool, p_ot_duration: float,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET) -> void:

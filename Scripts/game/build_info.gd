@@ -25,7 +25,10 @@ const VERSION: String = "dev"
 #     flag bit); input flags reuse the previously-reserved bit [4] for sprint_held.
 # v6: attributes 4 -> 6 (Speed/Agility/Hands/Size/Physical/Shot) — request_join /
 #     spawn_remote_skater now carry six int levels instead of four.
-const PROTOCOL_VERSION: int = 6
+# v7: request_join carries the joiner's SteamID64 so the host can match a
+#     reconnecting peer (new peer_id) to a reserved slot and restore their
+#     team/slot/stats.
+const PROTOCOL_VERSION: int = 7
 
 const RELEASE_TAG: String = "latest"
 const REPO: String = "Melon-Collie/mitts"

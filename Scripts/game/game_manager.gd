@@ -160,6 +160,19 @@ var _last_recorded_phase: int = -1
 # scene exit. Spectators are NOT in `_registry`, so any path that iterates
 # `_registry.all()` already excludes them naturally.
 var _spectator_peers: Dictionary[int, bool] = {}
+# ── Reconnect / slot reservation (host-side) ──────────────────────────────────
+# steam_id -> { team_id, team_slot, stats: PlayerStats, attributes, token: int }.
+# Populated when a player drops mid-match (on_player_disconnected); consumed when
+# a peer with the same Steam ID rejoins (on_player_connected → restore). The
+# domain GameStateMachine.reserved_slots mirrors the (team_id, team_slot) so the
+# slot isn't reassigned and the team plays short-handed in the meantime. Each
+# reservation carries a monotonic `token`; the expiry SceneTreeTimer captures it
+# so a re-drop (which mints a fresh token) isn't expired by a stale timer.
+# Cleared wholesale on scene exit. Keyed by Steam ID because a reconnecting peer
+# gets a brand-new peer_id from the transport.
+var _reserved_slots: Dictionary[int, Dictionary] = {}
+var _reservation_token: int = 0
+const RECONNECT_RESERVATION_S: float = 60.0
 # Client-side: true when the local peer was assigned a spectator slot. Drives
 # the SpectatorCamera mount and HUD chrome hiding. Also gates the local-skater
 # spawn path in on_slot_assigned.
@@ -514,6 +527,12 @@ func on_player_connected(peer_id: int) -> void:
 		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"rule_set": _state_machine.rule_set,
 	}
+	# Reconnect branch: a peer whose Steam ID matches a live reservation reclaims
+	# its held team/slot/stats instead of going through fresh auto-balance.
+	var steam_id: int = NetworkManager.get_peer_steam_id(peer_id)
+	if steam_id != 0 and _reserved_slots.has(steam_id):
+		_restore_reserved_player(peer_id, steam_id, config)
+		return
 	# Spectator branch: declared via pending_lobby_slots[peer_id].team_id == -1.
 	# Mid-game joiners always come in as players (existing auto-balance flow);
 	# joining-as-spectator is a lobby-only choice for v1.
@@ -561,7 +580,84 @@ func on_player_disconnected(peer_id: int) -> void:
 	# the record is still intact.
 	if NetworkManager.is_host and puck != null and puck.carrier == record.skater:
 		puck.drop()
+	# Hold the slot open for a possible reconnect (host-only, active match, real
+	# peer with a Steam ID) before the despawn frees the record.
+	_maybe_reserve_slot(peer_id, record)
 	_despawn_skater_for_peer(peer_id)
+
+
+# Host-side: snapshot a dropped player's slot + stats so a reconnecting peer
+# (matched by Steam ID) can reclaim them within RECONNECT_RESERVATION_S. No-op
+# off-host, for bots, once the match is over, or when the peer has no Steam ID
+# (pre-v7 / non-Steam). The team plays short-handed until the window lapses.
+func _maybe_reserve_slot(peer_id: int, record: PlayerRecord) -> void:
+	if not NetworkManager.is_host or _state_machine == null:
+		return
+	if record.is_bot:
+		return
+	if _state_machine.current_phase == GamePhase.Phase.GAME_OVER:
+		return
+	# A kicked player must not be able to reclaim a slot by rejoining.
+	if NetworkManager.was_peer_kicked(peer_id):
+		return
+	var steam_id: int = NetworkManager.get_peer_steam_id(peer_id)
+	if steam_id == 0:
+		return
+	var team_id: int = record.team.team_id
+	var team_slot: int = record.team_slot
+	_reservation_token += 1
+	var token: int = _reservation_token
+	_reserved_slots[steam_id] = {
+		"team_id": team_id,
+		"team_slot": team_slot,
+		"stats": record.stats,
+		"attributes": record.attributes,
+		"token": token,
+	}
+	_state_machine.reserve_slot(team_id, team_slot)
+	var timer: SceneTreeTimer = get_tree().create_timer(RECONNECT_RESERVATION_S)
+	timer.timeout.connect(_expire_reservation.bind(steam_id, token))
+
+
+# Reconnect window lapsed — free the held slot for real (the next joiner can
+# take it). Guarded by token so a re-drop's fresh reservation isn't torn down by
+# the previous drop's stale timer, and against a reservation already claimed by a
+# successful reconnect.
+func _expire_reservation(steam_id: int, token: int) -> void:
+	var res: Dictionary = _reserved_slots.get(steam_id, {})
+	if res.is_empty() or res.token != token:
+		return
+	_reserved_slots.erase(steam_id)
+	if _state_machine != null:
+		_state_machine.release_reserved(res.team_id, res.team_slot)
+
+
+# Host-side: a peer reconnected into a reserved slot. Restore team/slot, re-seed
+# the preserved stats and locked attributes, then spawn + broadcast through the
+# normal mid-game path.
+func _restore_reserved_player(peer_id: int, steam_id: int, config: Dictionary) -> void:
+	var res: Dictionary = _reserved_slots[steam_id]
+	_reserved_slots.erase(steam_id)
+	var team_id: int = res.team_id
+	var team_slot: int = res.team_slot
+	# Free the domain hold; _spawn_player_and_broadcast re-registers the peer into
+	# the same slot via register_remote_assigned_player.
+	_state_machine.release_reserved(team_id, team_slot)
+	# Re-lock the attributes the player held at their original join so a drop +
+	# prefs edit + rejoin can't swap builds.
+	NetworkManager.set_peer_attributes(peer_id, res.attributes)
+	NetworkManager.send_join_in_progress(peer_id, config)
+	NetworkManager.send_sync_existing_players(peer_id, _collect_existing_player_data())
+	_spawn_player_and_broadcast(peer_id, team_id, team_slot,
+			NetworkManager.get_peer_handedness(peer_id),
+			NetworkManager.get_peer_name(peer_id),
+			NetworkManager.get_peer_number(peer_id),
+			false)
+	# Carry the pre-drop stats forward onto the fresh record; the next world-state
+	# broadcast propagates them to all clients.
+	var rec: PlayerRecord = _registry.get_record(peer_id)
+	if rec != null:
+		rec.stats = res.stats
 
 
 # Tears down host/client-side actor state for a peer whose skater is going
@@ -2332,6 +2428,7 @@ func on_scene_exit() -> void:
 	# the next on_slot_assigned and spawn the wrong roster.
 	_pending_existing_players = []
 	_pending_remote_spawns = []
+	_reserved_slots.clear()
 	_last_ghost_state.clear()
 	teams.clear()
 	puck = null
