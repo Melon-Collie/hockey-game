@@ -93,9 +93,18 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	var max_step: float = _controller.max_blade_speed * delta
 	var step_len: float = step.length()
 	if max_step > 0.0 and step_len > max_step:
+		# Cursor is beyond the dangle-speed budget this tick — step toward it.
 		_smoothed_aim_world += step * (max_step / step_len)
-	else:
+	elif max_step > 0.0:
+		# Within budget this tick — the blade can reach the cursor.
 		_smoothed_aim_world = mouse_world
+	# else (delta == 0): no wall-clock elapsed, so the blade traverses no ROM.
+	# This is the reconcile final re-apply path (LocalController.reconcile passes
+	# delta 0.0 to re-place the blade in the post-snap body frame). Snapping to
+	# the cursor here would zero out the hands speed cap on every reconcile —
+	# clients reconcile constantly, the host never does, so the host would feel
+	# the clamp at full strength while clients barely felt it. Keep the replayed
+	# (already clamped) smoothed aim instead of snapping.
 	mouse_world = _smoothed_aim_world
 
 	var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
