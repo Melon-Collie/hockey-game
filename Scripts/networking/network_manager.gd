@@ -213,6 +213,11 @@ var pending_replay_path: String = ""
 var _peer_handedness: Dictionary = {}     # peer_id -> bool (host only)
 var _peer_names: Dictionary = {}          # peer_id -> String (host only)
 var _peer_numbers: Dictionary = {}        # peer_id -> int (host only)
+# peer_id -> SteamID64 (host only), captured from request_join. Stable across a
+# reconnect (the peer_id is not), so GameManager keys reserved slots by it to
+# restore a returning player's team/slot/stats. 0 when the joiner sent no Steam
+# ID (pre-v7 build, or a non-Steam transport).
+var _peer_steam_ids: Dictionary[int, int] = {}
 # peer_id -> PlayerAttributes. Populated from request_join on the host and
 # from sync_existing_players / spawn_remote_skater on clients. The host's
 # own entry (key 1) is seeded from PlayerPrefs at startup and updated when
@@ -524,7 +529,11 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_numbers.erase(id)
 	_peer_attributes.erase(id)
 	pending_color_votes.erase(id)
+	# NOTE: _peer_steam_ids is deliberately NOT erased before the emit below —
+	# GameManager.on_player_disconnected (a synchronous listener) reads
+	# get_peer_steam_id(id) to key the reconnect reservation. Erased after.
 	peer_disconnected.emit(id)
+	_peer_steam_ids.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
 	# attempting this authority RPC would just be refused with error spam.
@@ -542,7 +551,7 @@ func _on_connected_to_server() -> void:
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.speed, local_attrs.agility, local_attrs.hands,
 			local_attrs.size, local_attrs.physical, local_attrs.shot,
-			BuildInfo.PROTOCOL_VERSION)
+			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -621,6 +630,7 @@ func reset() -> void:
 	_peer_handedness.clear()
 	_peer_names.clear()
 	_peer_numbers.clear()
+	_peer_steam_ids.clear()
 	_peer_attributes.clear()
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	pending_game_config = {}
@@ -827,7 +837,7 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM,
-		protocol_version: int = 0) -> void:
+		steam_id: int = 0, protocol_version: int = 0) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -846,6 +856,7 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		return
 	_pending_handshake.erase(sender_id)
 	_peer_handedness[sender_id] = is_left_handed
+	_peer_steam_ids[sender_id] = steam_id
 	var sanitized_name: String = player_name.strip_edges().left(10)
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
 	_peer_numbers[sender_id] = clampi(jersey_number, 0, 99)
@@ -909,11 +920,21 @@ func get_peer_name(peer_id: int) -> String:
 func get_peer_number(peer_id: int) -> int:
 	return _peer_numbers.get(peer_id, 10)
 
+func get_peer_steam_id(peer_id: int) -> int:
+	return _peer_steam_ids.get(peer_id, 0)
+
 func get_peer_attributes(peer_id: int) -> PlayerAttributes:
 	var attrs: PlayerAttributes = _peer_attributes.get(peer_id, null)
 	if attrs == null:
 		return PlayerAttributes.all_medium()
 	return attrs
+
+# Host-side override of a peer's locked attributes. Used by the reconnect path
+# to restore the build the player held at their original join, so a mid-match
+# drop + prefs edit + rejoin can't swap to a different attribute spread.
+func set_peer_attributes(peer_id: int, attrs: PlayerAttributes) -> void:
+	if attrs != null:
+		_peer_attributes[peer_id] = attrs
 
 # True only during an active online match. Used by the player-settings popup
 # to gate mid-match attribute edits: offline / free-play / lobby allows the

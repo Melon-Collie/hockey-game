@@ -128,6 +128,57 @@ func test_disconnected_player_removed() -> void:
 	assert_false(sm.players.has(100))
 	assert_true(sm.players.has(1))
 
+# ── Slot reservation (reconnect support) ─────────────────────────────────────
+
+func test_reserved_slot_counts_toward_team_total() -> void:
+	# Reserving a slot keeps the team "full" for balance/roster purposes so a
+	# dropped player's spot isn't backfilled — the team plays short-handed.
+	sm.reserve_slot(0, 1)
+	assert_eq(sm.count_players_on_team(0), 1, "reserved slot counts as occupied")
+	assert_eq(sm.count_players_on_team(1), 0)
+
+func test_reserved_slot_skipped_by_auto_assign() -> void:
+	# Host on one team; reserve slot 0 of the other. A fresh joiner must NOT take
+	# the reserved slot — it lands on the next free slot of that team instead.
+	var host: Dictionary = sm.register_host(1)
+	var other_team: int = 1 - host.team_id
+	sm.reserve_slot(other_team, 0)
+	# Force the next joiner onto the reserved team by filling slots so balance
+	# sends them there; simplest: directly check _first_available_slot skips it.
+	var slot: int = sm._first_available_slot(other_team)
+	assert_ne(slot, 0, "reserved slot 0 must not be offered to a new joiner")
+
+func test_release_reserved_frees_the_slot() -> void:
+	sm.reserve_slot(0, 2)
+	assert_true(sm.is_slot_reserved(0, 2))
+	sm.release_reserved(0, 2)
+	assert_false(sm.is_slot_reserved(0, 2))
+	assert_eq(sm.count_players_on_team(0), 0, "released slot no longer counts")
+
+func test_reserve_slot_is_idempotent() -> void:
+	sm.reserve_slot(0, 1)
+	sm.reserve_slot(0, 1)
+	assert_eq(sm.reserved_slots.size(), 1, "re-reserving the same slot is a no-op")
+
+func test_reconnect_into_reserved_slot_round_trip() -> void:
+	# A reconnecting peer releases the reservation then re-registers into the same
+	# slot — the canonical restore path GameManager drives.
+	var host: Dictionary = sm.register_host(1)
+	var other_team: int = 1 - host.team_id
+	sm.reserve_slot(other_team, 0)
+	# Restore: free the hold, register the returning peer into the held slot.
+	sm.release_reserved(other_team, 0)
+	sm.register_remote_assigned_player(999, 0, other_team)
+	assert_true(sm.players.has(999))
+	assert_eq(sm.players[999].team_id, other_team)
+	assert_eq(sm.players[999].team_slot, 0)
+	assert_eq(sm.reserved_slots.size(), 0)
+
+func test_reset_all_clears_reservations() -> void:
+	sm.reserve_slot(0, 1)
+	sm.reset_all()
+	assert_eq(sm.reserved_slots.size(), 0, "a fresh match starts with no held slots")
+
 # ── Icing ────────────────────────────────────────────────────────────────────
 # Icing detection only runs in NHL rule mode; tests force it explicitly.
 
