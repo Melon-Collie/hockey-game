@@ -94,11 +94,19 @@ const BUDGET: int = 18
 # drives. (Hands' canonical headline is blade speed; Physical's is check force;
 # Shot's is the charged-shot power ceiling — the quick/uncharged snap stays
 # baseline because it doubles as pass speed.)
+# PHYSICAL_CHECK is the WIDEST canonical spread (+/-36%) on purpose: Physical is
+# the dedicated "how hard you DELIVER a hit" lever, so it has to read clearly at
+# both ends. A maxed enforcer hits like a freight train (L5 1.36, and a
+# Size5+Physical5 build delivers ~1.6x baseline, ~2x against a small victim),
+# while a low-Physical player barely registers a check — at L1 (0.64) a
+# moderate-speed hit falls under the stagger threshold entirely, so they bump
+# people rather than rock them. Size still contributes delivery through mass
+# (weight_ratio), but Physical is the stat that says "I hit people."
 const _SPEED_MULTS:          Array[float] = [0.93, 0.965, 1.00, 1.035, 1.07]
 const _AGILITY_MULTS:        Array[float] = [0.90, 0.95,  1.00, 1.05,  1.10]
 const _HANDS_BLADE_MULTS:    Array[float] = [0.85, 0.925, 1.00, 1.125, 1.25]
 const _SIZE_MULTS:           Array[float] = [0.82, 0.91,  1.00, 1.09,  1.18]
-const _PHYSICAL_CHECK_MULTS: Array[float] = [0.80, 0.90,  1.00, 1.10,  1.20]
+const _PHYSICAL_CHECK_MULTS: Array[float] = [0.64, 0.82,  1.00, 1.18,  1.36]
 const _SHOT_POWER_MULTS:     Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 
 # Specialized gameplay — extra effects layered on top of the canonical ones.

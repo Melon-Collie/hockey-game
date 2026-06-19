@@ -8,6 +8,29 @@ const TELEPORT_THRESHOLD: float = 1.0 # skip frame if skater moved this far (rec
 # Hockey stop VFX — two-layer effect (surface marks + airborne spray) per blade side.
 const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
 
+# Body-check feedback scales with hit strength (the impact_force = weight x
+# closing-speed the signal carries), normalized 0..1 between a light bump and a
+# big hit. Burst size/velocity and sound volume/pitch all read this so a freight-
+# train check reads bigger and lower than a glancing bump.
+const _CHECK_FORCE_MIN: float = 3.0   # impact_force of a glancing bump (matches HitRules.MIN_HIT_IMPULSE)
+const _CHECK_FORCE_REF: float = 14.0  # impact_force treated as a full-strength check
+# Burst particle budget at the low/high end of the intensity range.
+const _CHECK_BURST_AMOUNT_MIN: int = 10
+const _CHECK_BURST_AMOUNT_MAX: int = 30
+const _CHECK_BURST_VEL_MIN: float = 2.5   # initial_velocity_max at a light hit
+const _CHECK_BURST_VEL_MAX: float = 9.0   # initial_velocity_max at a full hit
+# Sound: louder + lower-pitched as the hit gets harder.
+const _CHECK_VOL_MIN_DB: float = -6.0
+const _CHECK_VOL_MAX_DB: float = 3.0
+const _CHECK_PITCH_LIGHT: float = 1.10   # glancing bump — higher, snappier
+const _CHECK_PITCH_HEAVY: float = 0.90   # full check — lower, heavier thud
+# Cosmetic de-dup window. body_checked_player can fire on consecutive physics
+# ticks during sustained closing contact (the gameplay/credit path is throttled
+# elsewhere, but the burst + sound are not), which reads as a flammed double-hit.
+# One feedback per hit event within this window; well under the gap between
+# distinct checks.
+const _CHECK_SFX_COOLDOWN_MS: int = 180
+
 # Blade trail — same zero-gap GPU approach as puck trail, one system per skate.
 # Two dots per trail (left/right blade) pinned to ICE_Y so marks scrape the ice surface.
 const BLADE_TRAIL_SPACING: float = 0.05   # meters between skate mark dots
@@ -26,6 +49,9 @@ var _speed_lines: CPUParticles3D = null
 var _body_check_burst: CPUParticles3D = null
 var _prev_pos: Vector3 = Vector3.ZERO
 var _prev_vel: Vector3 = Vector3.ZERO
+# Wall-clock timestamp (ms) of the last body-check feedback, for the cosmetic
+# de-dup window. Time-based so it's immune to _process early-returns.
+var _last_check_sfx_ms: int = -100000
 
 func _ready() -> void:
 	# Build left/right blade trail systems (same zero-gap GPU approach as puck).
@@ -113,17 +139,50 @@ func _process(_delta: float) -> void:
 
 
 
+# 0..1 hit hardness from the impact_force the body_checked_player signal carries.
+# Static so the burst, the sound, and the replay path all map strength the same way.
+static func check_intensity(force: float) -> float:
+	if _CHECK_FORCE_REF <= _CHECK_FORCE_MIN:
+		return 0.0
+	return clampf((force - _CHECK_FORCE_MIN) / (_CHECK_FORCE_REF - _CHECK_FORCE_MIN), 0.0, 1.0)
+
+
+static func check_sound_volume_db(force: float) -> float:
+	return lerpf(_CHECK_VOL_MIN_DB, _CHECK_VOL_MAX_DB, check_intensity(force))
+
+
+static func check_sound_pitch_scale(force: float) -> float:
+	return lerpf(_CHECK_PITCH_LIGHT, _CHECK_PITCH_HEAVY, check_intensity(force))
+
+
 func _on_body_check(victim: Skater, force: float, hit_dir: Vector3) -> void:
+	if victim == null:
+		return
+	# De-dup sustained-contact re-fires (body_checked_player can land on
+	# consecutive ticks) so one hit reads as one impact, not a flam.
+	var now: int = Time.get_ticks_msec()
+	if now - _last_check_sfx_ms < _CHECK_SFX_COOLDOWN_MS:
+		return
+	_last_check_sfx_ms = now
 	fire_body_check_burst(victim, force, hit_dir)
+	# Impact sound at the point of contact (the victim), scaled by hit strength.
+	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim.global_position,
+			check_sound_volume_db(force), 0.08, check_sound_pitch_scale(force))
 
 
 # Public so ReplayEventReplayer can fire the burst during replay without
 # routing through body_checked_player — re-emitting the signal would also
-# re-trigger GameManager's hit-landed / sound / replay-record closures,
-# which is wrong during playback (and recursive for the recorder).
-func fire_body_check_burst(victim: Skater, _force: float, hit_dir: Vector3) -> void:
+# re-trigger GameManager's hit-landed / replay-record closures, which is wrong
+# during playback (and recursive for the recorder). Burst size + velocity scale
+# with hit strength (the impact_force) so a big check throws more, faster debris.
+func fire_body_check_burst(victim: Skater, force: float, hit_dir: Vector3) -> void:
 	if victim == null:
 		return
+	var t: float = check_intensity(force)
+	_body_check_burst.amount = int(lerpf(float(_CHECK_BURST_AMOUNT_MIN), float(_CHECK_BURST_AMOUNT_MAX), t))
+	var vel_max: float = lerpf(_CHECK_BURST_VEL_MIN, _CHECK_BURST_VEL_MAX, t)
+	_body_check_burst.initial_velocity_min = vel_max * 0.4
+	_body_check_burst.initial_velocity_max = vel_max
 	# Burst at the victim's position, emitting outward along the hit direction.
 	# direction must be in the emitter's local space — convert the world-space
 	# hit vector using the emitter's inverse basis (inherited from the skater's facing).

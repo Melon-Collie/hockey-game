@@ -28,6 +28,12 @@ var blade_up: bool = false
 # velocity. See StaminaRules / LocalController.reconcile.
 var stamina: float = 1.0
 var sprint_locked: bool = false
+# Body-check stagger: seconds of thrust-penalty recovery remaining on the victim.
+# Replicated for the same reason as stamina — the local player's reconcile snaps
+# it to the host baseline before replay and it decays deterministically forward
+# (see BodyCheckRules / SkaterController._apply_movement). Host-authoritative: only
+# the host sets it on a hit; clients receive the resolved value off the wire.
+var stagger_timer: float = 0.0
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 # World-space top-hand (grip) point. host-only, not serialized — paired with
@@ -54,6 +60,7 @@ func to_array() -> Array:
 		blade_up,
 		stamina,
 		sprint_locked,
+		stagger_timer,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -73,6 +80,7 @@ func copy_from(s: SkaterNetworkState) -> void:
 	shot_charge = s.shot_charge
 	stamina = s.stamina
 	sprint_locked = s.sprint_locked
+	stagger_timer = s.stagger_timer
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
 	top_hand_world = s.top_hand_world
@@ -98,4 +106,6 @@ static func from_array(data: Array) -> SkaterNetworkState:
 	if data.size() > 15:
 		state.stamina = data[14]
 		state.sprint_locked = data[15]
+	if data.size() > 16:
+		state.stagger_timer = data[16]
 	return state

@@ -23,6 +23,7 @@ func test_round_trip_preserves_all_wire_fields() -> void:
 	s.shot_charge                 = 0.75
 	s.stamina                     = 0.4
 	s.sprint_locked               = true
+	s.stagger_timer               = 0.65
 
 	var r := SkaterNetworkState.from_array(s.to_array())
 
@@ -43,17 +44,19 @@ func test_round_trip_preserves_all_wire_fields() -> void:
 	assert_almost_eq(r.shot_charge, s.shot_charge, 0.00001)
 	assert_almost_eq(r.stamina, s.stamina, 0.00001)
 	assert_eq(r.sprint_locked, s.sprint_locked)
+	assert_almost_eq(r.stagger_timer, s.stagger_timer, 0.00001)
 
 
 func test_array_length_sentinel() -> void:
 	# Field-count sentinel — if a field is added without updating to_array /
 	# from_array, this catches the mismatch before it becomes a silent bug.
-	# 16: position, velocity, blade_position, top_hand_position,
+	# 17: position, velocity, blade_position, top_hand_position,
 	# upper_body_rotation_y, facing, last_processed_host_timestamp,
 	# is_ghost, shot_state, shot_charge, facing_angular_velocity,
-	# upper_body_angular_velocity, is_elevated, blade_up, stamina, sprint_locked.
+	# upper_body_angular_velocity, is_elevated, blade_up, stamina, sprint_locked,
+	# stagger_timer.
 	var s := SkaterNetworkState.new()
-	assert_eq(s.to_array().size(), 16)
+	assert_eq(s.to_array().size(), 17)
 
 
 func test_blade_up_back_compat_defaults_false() -> void:
@@ -78,6 +81,17 @@ func test_stamina_back_compat_defaults() -> void:
 	var r := SkaterNetworkState.from_array(short_array)
 	assert_almost_eq(r.stamina, 1.0, 0.00001, "missing stamina defaults to full")
 	assert_false(r.sprint_locked, "missing sprint_locked defaults false")
+
+
+func test_stagger_back_compat_defaults() -> void:
+	# A short array from an older sender (no stagger_timer at index 16) must decode
+	# with stagger_timer defaulting to 0 (not staggered).
+	var s := SkaterNetworkState.new()
+	s.stagger_timer = 0.8
+	var short_array: Array = s.to_array()
+	short_array.resize(16)  # keep stamina + sprint_locked, drop stagger_timer
+	var r := SkaterNetworkState.from_array(short_array)
+	assert_almost_eq(r.stagger_timer, 0.0, 0.00001, "missing stagger_timer defaults to 0")
 
 
 func test_host_only_fields_not_serialized() -> void:

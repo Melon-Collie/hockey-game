@@ -427,6 +427,10 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# fields replay must not advance, like the charge timers).
 	stamina = server_state.stamina
 	_sprint_locked = server_state.sprint_locked
+	# Body-check stagger is deterministic from the host baseline + tick decay,
+	# exactly like stamina: snap to the server value, then the replay loop's
+	# per-tick decay (in _apply_movement) re-derives it forward.
+	stagger_timer = server_state.stagger_timer
 	# Snap facing for replay accuracy — facing drives move_and_slide direction,
 	# so the replay must start from the server's facing to reproduce the trajectory.
 	_pose.facing = server_state.facing
