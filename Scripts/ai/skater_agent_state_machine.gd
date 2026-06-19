@@ -477,6 +477,16 @@ var _scratch_teammates: Array[Vector3] = []
 # top of _apply_steering. The CARRIER role behavior owns its own
 # scratch buffers for action scoring.
 var _scratch_opponents: Array[Vector3] = []
+# Shared empty fallback so the per-tick cache reads don't allocate a `[]`
+# default literal (Dictionary.get evaluates its default eagerly). Never mutated.
+var _empty_ids: Array = []
+# Reused fallback buffer for _opponent_ids when the per-frame team cache is
+# empty (unit tests). Production always hits the cache and never touches this.
+var _scratch_opp_ids: Array[int] = []
+# Reused RoleContext — refilled (not reallocated) each dispatch so its scratch
+# buffers persist across calls. Dispatch is sequential per bot, so a single
+# instance is safe; the role decide() consumes everything before the next build.
+var _role_ctx := RoleContext.new()
 
 # Per-peer velocity history for acceleration estimation. Each bot
 # maintains its own cache because dispatch runs per-bot — the
@@ -1054,7 +1064,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 # this ever shows up in flame graphs.
 func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		self_state: SkaterNetworkState) -> RoleContext:
-	var ctx := RoleContext.new()
+	var ctx := _role_ctx
 	ctx.snapshot = snapshot
 	ctx.self_pos = self_pos
 	ctx.self_velocity = self_state.velocity if self_state != null else Vector3.ZERO
@@ -1072,6 +1082,9 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.strong_x = _team_brain.strong_x()
 	else:
 		ctx.anchor = self_pos
+		# Match RoleContext.new()'s default when no brain is wired (tests),
+		# since the reused instance would otherwise carry a stale value.
+		ctx.strong_x = 1.0
 	return ctx
 
 
@@ -2180,7 +2193,8 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	_scratch_teammates.clear()
 	_scratch_opponents.clear()
 	if not snapshot.teammate_ids_by_team.is_empty():
-		var team_ids: Array = snapshot.teammate_ids_by_team.get(_team_id, [])
+		var team_ids: Array = snapshot.teammate_ids_by_team[_team_id] \
+				if snapshot.teammate_ids_by_team.has(_team_id) else _empty_ids
 		for peer_id: int in team_ids:
 			if peer_id == _peer_id:
 				continue
@@ -2268,6 +2282,21 @@ func _resolve_sprint(input: InputState, self_state: SkaterNetworkState,
 			self_state.stamina, self_state.sprint_locked, carrying, breakaway)
 
 
+# Opponent peer ids, read straight from the per-frame roster cache published by
+# GameManager._enrich_snapshot_for_ai (no allocation, no per-peer team lookup).
+# Falls back to a live partition into a reused buffer when the cache is empty
+# (unit tests); production on the host always hits the cache.
+func _opponent_ids(snapshot: WorldSnapshot) -> Array:
+	var opp_team: int = 1 - _team_id
+	if snapshot.teammate_ids_by_team.has(opp_team):
+		return snapshot.teammate_ids_by_team[opp_team]
+	_scratch_opp_ids.clear()
+	for pid: int in snapshot.skater_states:
+		if pid != _peer_id and _team_id_by_peer.get(pid, -1) != _team_id:
+			_scratch_opp_ids.append(pid)
+	return _scratch_opp_ids
+
+
 # True iff the carrier has a clear lane to the attacking goal — no opponent
 # skater ahead of it (toward the net) inside a narrow corridor. A clean
 # breakaway is the one case a carrier sprints: open ice means the wide turn
@@ -2282,11 +2311,7 @@ func _carry_has_open_lane(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	if dist_net < 0.01:
 		return false
 	var net_dir: Vector3 = to_net / dist_net
-	for pid: int in snapshot.skater_states:
-		if pid == _peer_id:
-			continue
-		if _team_id_by_peer.get(pid, -1) == _team_id:
-			continue  # teammate — doesn't block the lane
+	for pid: int in _opponent_ids(snapshot):
 		var opp_pos: Vector3 = snapshot.skater_states[pid].position
 		var to_opp: Vector3 = opp_pos - self_pos
 		to_opp.y = 0.0
@@ -2465,11 +2490,7 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 	# Clamped post-sum so multiple same-side threats don't push past
 	# the per-tick max offset.
 	var lateral_force: float = 0.0
-	for peer_id: int in snapshot.skater_states:
-		if peer_id == _peer_id:
-			continue
-		if _team_id_by_peer.get(peer_id, -1) == _team_id:
-			continue
+	for peer_id: int in _opponent_ids(snapshot):
 		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		var threat_pos: Vector3 = opp_state.blade_contact_world
 		if threat_pos == Vector3.ZERO:
@@ -2799,7 +2820,11 @@ func _step_mouse_internal(target: Vector3, do_arc: bool) -> Vector3:
 		_mouse_pos.z = step_target.z
 	# Apply noise to OUTPUT only — _mouse_pos stays smooth, output
 	# adds organic per-tick wiggle (uniform [-NOISE, +NOISE] on each
-	# axis). Wiggle doesn't accumulate.
+	# axis). Wiggle doesn't accumulate. Skip the two RNG advances entirely
+	# when noise is disabled (the current perfect-bot baseline) — this runs
+	# at tick rate for every bot, including throttle-skipped ticks.
+	if MOUSE_NOISE_STD_M == 0.0:
+		return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
 	var nx: float = _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M
 	var nz: float = _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M
 	return Vector3(_mouse_pos.x + nx, 0.0, _mouse_pos.z + nz)

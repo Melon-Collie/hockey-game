@@ -68,7 +68,8 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 
-	var opp_teammates: Array[Vector3] = AIRoleHelpers.collect_opp_team_excluding_carrier(ctx)
+	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
+	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates)
 	if opp_teammates.is_empty():
 		# No outlet receivers to deny — sit at the high-zone read spot so
 		# F2 still pressures the breakout lane rather than freezing.
@@ -82,7 +83,8 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 	# our candidate) as the defenders, evaluated toward our net.
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
-	var our_team_excluding_self: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
+	var our_team_excluding_self: Array[Vector3] = ctx.scratch_teammates
+	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
 	var search_center: Vector3 = _mid_search_center(ctx, carrier_pos)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(

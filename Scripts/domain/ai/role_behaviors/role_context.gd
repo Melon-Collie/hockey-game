@@ -43,3 +43,16 @@ var team_id_by_peer: Dictionary = {}
 # 0.4-0.6 s pass window. Missing entries default to ZERO (no accel
 # adjustment) — same behaviour as before this field existed.
 var acceleration_by_peer: Dictionary = {}
+
+# ── Reusable scratch buffers (not inputs) ────────────────────────────────────
+# The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the
+# collect_* helpers fill these buffers instead of allocating fresh arrays at AI
+# dispatch rate (~60 Hz per off-puck bot). Each helper clears its buffer before
+# filling, and each buffer is consumed at most once per decide(), so reuse is
+# safe. Roles must go through the collect_* helpers — never read stale contents
+# directly. Vector3 results escape decide() only as value-type copies, never as
+# retained array references, so the buffers are free to be overwritten next call.
+var scratch_opp_positions: Array[Vector3] = []
+var scratch_opp_states: Array[SkaterNetworkState] = []
+var scratch_teammates: Array[Vector3] = []
+var scratch_opp_receivers: Array[Vector3] = []

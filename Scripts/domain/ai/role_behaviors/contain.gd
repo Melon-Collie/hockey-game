@@ -46,17 +46,19 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var our_slot := Vector3(0.0, 0.0,
 			our_net.z - ctx.own_goal_dir * GameRules.SLOT_DIST_M)
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
-	var our_team_excluding_self: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
+	var our_team_excluding_self: Array[Vector3] = ctx.scratch_teammates
+	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
 	# Opp peers other than the carrier — pass receivers for the
 	# carrier_best_option scoring.
-	var opp_teammates: Array[Vector3] = AIRoleHelpers.collect_opp_team_excluding_carrier(ctx)
+	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
+	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates)
 
 	# Foot-race-home baseline: fastest opp time back to our slot.
 	# CONTAIN's exposure measures whether my time to slot beats
 	# this; over-committed candidates get penalized.
-	var opp_positions: Array[Vector3] = []
-	var opp_states: Array[SkaterNetworkState] = []
+	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var min_opp_time_to_slot: float = INF
 	for s: SkaterNetworkState in opp_states:
