@@ -395,7 +395,13 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float, skate
 	puck.set_client_prediction_mode(true)
 	puck.set_goal_line_clamp(true)
 	var rtt_half: float = rtt_ms / 2000.0
-	puck.set_puck_position(release_pos + (direction * power + skater_vel) * rtt_half)
+	# RTT/2 lag-comp advance: start the trajectory where the host will (so the
+	# client isn't reconciled back). Render the puck at the un-advanced blade point
+	# and ease it forward via a decaying visual offset so it doesn't visibly rocket
+	# off the stick — the physics body still jumps so prediction stays in sync.
+	var advance: Vector3 = (direction * power + skater_vel) * rtt_half
+	puck.set_puck_position(release_pos + advance)
+	puck.add_visual_offset(-advance)
 	puck.apply_release_velocity(direction * power)
 	_state_buffer.clear()
 	return release_pos
@@ -693,6 +699,19 @@ func _interpolate() -> void:
 	else:
 		var from_state: PuckNetworkState = bracket.from_state
 		var to_state: PuckNetworkState = bracket.to_state
+		# A shot release teleports the host puck forward by the RTT/2 lag-comp
+		# advance, so the broadcast carries a single bracket whose endpoints are
+		# implausibly far apart (well beyond what max_speed could cover in
+		# bracket_dt). Hermite-ing straight across it reads as the puck rocketing
+		# forward on observer clients. Detect that jump and ease through it with the
+		# rejoin blend (same machinery as extrapolation re-entry) so the puck leaves
+		# the blade cleanly here too. bracket_dt-scaled so a packet-loss gap (a
+		# legitimately wider bracket) doesn't false-trigger.
+		var bracket_jump: float = from_state.position.distance_to(to_state.position)
+		var jump_ceiling: float = puck.max_speed * bracket.bracket_dt * 1.5 + 0.25
+		if bracket_jump > jump_ceiling and _rejoin_blend_elapsed < 0.0:
+			_rejoin_blend_from_pos = puck.get_puck_position()
+			_rejoin_blend_elapsed = 0.0
 		interpolated.position = BufferedStateInterpolator.hermite(from_state.position, from_state.velocity,
 				to_state.position, to_state.velocity, bracket.t, bracket.bracket_dt)
 		interpolated.velocity = from_state.velocity.lerp(to_state.velocity, bracket.t)

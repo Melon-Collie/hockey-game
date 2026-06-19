@@ -961,6 +961,10 @@ func _wire_sound_signals() -> void:
 			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
 			if puck != null:
 				puck.fire_stick_lift_vfx())
+	NetworkManager.shot_sound_received.connect(
+		func(pos: Vector3, is_slapper: bool) -> void:
+			var snd: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
+			SoundManager.play_world(snd, pos, 0.0, 0.04))
 	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
 	# regulation periods, GAME_OVER for the final one. (Not period_changed, which
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
@@ -1725,6 +1729,9 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 	if NetworkManager.is_host:
 		_record_replay_audio_event("shot", puck.get_puck_position(), power, {"is_slapper": is_slapper})
 	if NetworkManager.is_host:
+		# Host-local (or bot) shot: every client needs the cue. No shooter to
+		# exclude — the host already played it locally above.
+		NetworkManager.send_shot_to_all(puck.get_puck_position(), is_slapper)
 		_start_pending_shot_from_carrier()
 		puck.release(direction, power)
 	else:
@@ -1759,6 +1766,7 @@ func _on_one_timer_release_requested(direction: Vector3, power: float, skater: S
 		return
 	# Host's own one-timer: shooter is local, no client-view rewind needed.
 	# rtt_ms=0 short-circuits the goalie rewind branch entirely; ZERO origin is unused.
+	NetworkManager.send_shot_to_all(puck.get_puck_position(), true)
 	_host_release_one_timer(direction, power, skater, 0.0, 0.0, 0.0, Vector3.ZERO)
 
 
@@ -1806,6 +1814,8 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	var shot_pos: Vector3 = puck.get_puck_position()
 	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
 	_record_replay_audio_event("shot", shot_pos, safe_power, {"is_slapper": true})
+	# Fan the cue out to the other clients (the shooter already played it locally).
+	NetworkManager.send_shot_to_all(shot_pos, true, peer_id)
 	_host_release_one_timer(safe_direction, safe_power, record.skater, host_timestamp, safe_rtt_ms, interp_delay_ms, client_origin)
 
 
@@ -1863,7 +1873,11 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		if have_rewound_origin:
 			origin.x = rewound_origin.x
 			origin.z = rewound_origin.z
-		puck.set_puck_position(origin + (direction * power + skater_vel) * rtt_half)
+		# Render at the un-advanced point and ease to the advanced physics position
+		# so the puck doesn't pop forward (see Puck.add_visual_offset).
+		var advance: Vector3 = (direction * power + skater_vel) * rtt_half
+		puck.set_puck_position(origin + advance)
+		puck.add_visual_offset(-advance)
 	if not saved_goalie_positions.is_empty():
 		for i: int in goalie_controllers.size():
 			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -1909,6 +1923,9 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 	SoundManager.play_world(sound, shot_pos, 0.0, 0.04)
 	if NetworkManager.is_host:
 		_record_replay_audio_event("shot", shot_pos, power, {"is_slapper": is_slapper})
+		# Fan the cue out to the other clients (the shooter already played it
+		# locally the instant they released).
+		NetworkManager.send_shot_to_all(shot_pos, is_slapper, shooter_peer_id)
 	if NetworkManager.is_host:
 		_start_pending_shot_from_carrier()
 		var rtt_half: float = rtt_ms / 2000.0
@@ -1976,7 +1993,12 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 			if have_rewound_origin:
 				origin.x = rewound_origin.x
 				origin.z = rewound_origin.z
-			puck.set_puck_position(origin + (direction * power + skater_vel) * rtt_half)
+			# Render the puck at the un-advanced release point and ease it to the
+			# advanced physics position so it doesn't pop forward on the host /
+			# other clients (see Puck.add_visual_offset). Physics still advances.
+			var advance: Vector3 = (direction * power + skater_vel) * rtt_half
+			puck.set_puck_position(origin + advance)
+			puck.add_visual_offset(-advance)
 		if not saved_goalie_positions.is_empty():
 			for i: int in goalie_controllers.size():
 				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]

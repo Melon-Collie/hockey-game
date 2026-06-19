@@ -57,6 +57,23 @@ var _pending_elevation: bool = false
 # by GameManager at spawn time so Puck doesn't reach upward for team checks.
 var _team_resolver: Callable = Callable()
 
+# ── Visual offset (shot-release pop smoothing) ────────────────────────────────
+# On a shot release the puck's PHYSICS position is teleported forward by the
+# RTT/2 lag-comp advance (see PuckController.notify_local_release and
+# GameManager's host release paths). Keeping the teleport aligns the host and
+# shooter trajectories, but the instant 1-tick jump reads as the puck
+# "rocketing" off the blade on the host and other clients. We keep the physics
+# teleport and instead render the MESH (and trail) at the un-advanced point,
+# easing it to the physics position over a short window so the puck leaves the
+# blade cleanly. World-space; reapplied through the body's inverse basis each
+# frame so the puck's free Y spin doesn't orbit the offset. Visual only —
+# gameplay reads get_puck_position() (the physics body), never the mesh.
+var _visual_offset: Vector3 = Vector3.ZERO
+const _VISUAL_OFFSET_DECAY_PER_SEC: float = 16.0  # ~99% gone in ~290ms
+const _VISUAL_OFFSET_EPSILON: float = 0.0005
+var _mesh_node: MeshInstance3D = null
+var _vfx_node: PuckVFX = null
+
 func set_team_resolver(resolver: Callable) -> void:
 	_team_resolver = resolver
 
@@ -74,6 +91,39 @@ func _ready() -> void:
 	var vfx := PuckVFX.new()
 	vfx.name = "VFX"
 	add_child(vfx)
+	_vfx_node = vfx
+	_mesh_node = get_node_or_null("MeshInstance3D") as MeshInstance3D
+
+
+# Shift the rendered mesh + trail by `world_offset` (a one-frame nudge that then
+# decays to zero in _process). Called right after a release-advance teleport with
+# the negated advance vector so the puck appears where it left the blade and eases
+# to the advanced physics position. Additive so a second release mid-decay composes.
+func add_visual_offset(world_offset: Vector3) -> void:
+	if not world_offset.is_finite():
+		return
+	_visual_offset += world_offset
+	_apply_visual_offset()
+
+
+func _apply_visual_offset() -> void:
+	# World offset → local: divide out the body's Y spin so the offset stays put
+	# in world space across the decay. basis is pure rotation (no scale) so the
+	# inverse is the transpose — cheap.
+	var local_off: Vector3 = global_transform.basis.inverse() * _visual_offset
+	if _mesh_node != null:
+		_mesh_node.position = local_off
+	if _vfx_node != null:
+		_vfx_node.position = local_off
+
+
+func _process(delta: float) -> void:
+	if _visual_offset == Vector3.ZERO:
+		return
+	_visual_offset = _visual_offset.lerp(Vector3.ZERO, clampf(_VISUAL_OFFSET_DECAY_PER_SEC * delta, 0.0, 1.0))
+	if _visual_offset.length() < _VISUAL_OFFSET_EPSILON:
+		_visual_offset = Vector3.ZERO
+	_apply_visual_offset()
 
 # ── Server Mode ───────────────────────────────────────────────────────────────
 func set_server_mode(is_server: bool) -> void:
