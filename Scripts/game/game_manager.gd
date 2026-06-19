@@ -300,7 +300,7 @@ func _physics_process(delta: float) -> void:
 			brain.tick(delta, current_snapshot)
 	_update_host_puck_tracking()
 	_check_puck_out_of_bounds(delta)
-	_apply_ghost_state()
+	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
 	_pickup_claim.tick(delta)
 
@@ -381,7 +381,7 @@ func _update_host_puck_tracking() -> void:
 		_consume_pending_faceoff()
 
 
-func _apply_ghost_state() -> void:
+func _apply_ghost_state(delta: float) -> void:
 	# Tutorial gates offsides detection to the OFFSIDES step. Other steps
 	# (notably one-timer, where the player legitimately stands deep in the
 	# O-zone while the puck is stashed off-rink during the prefire delay)
@@ -404,7 +404,7 @@ func _apply_ghost_state() -> void:
 		if puck.carrier != null and record.skater == puck.carrier:
 			carrier_peer_id = peer_id
 	var ghosts: Dictionary = _state_machine.compute_ghost_state(
-			positions, carrier_peer_id, puck.global_position)
+			positions, carrier_peer_id, puck.global_position, delta)
 	_state_machine.update_delayed_offside(positions, puck.global_position, carrier_peer_id)
 	for peer_id in ghosts:
 		var r: PlayerRecord = _registry.get_record(peer_id)
