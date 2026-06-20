@@ -2,23 +2,26 @@ class_name RemoteController
 extends SkaterController
 
 @export var extrapolation_max_ms: float = 50.0
-@export var rejoin_blend_duration: float = 0.075
+# Forward-projection toward host-present, 0..1 (see _interpolate). 0 reproduces
+# the legacy interpolate-in-the-past behaviour; higher values close the chase and
+# body-check contact gap. Tune up by feel; the SmoothDamp stage absorbs the error.
+@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.5
+# Critically-damped smoothing time (s) for the remote body position. Larger =
+# smoother corrections, more chase lag; smaller = snappier, jumpier.
+@export var position_smooth_time: float = 0.05
 
 var _input_queue: Array[InputState] = []
 var _fallback_input: InputState = InputState.new()
 var _state_buffer: Array[BufferedSkaterState] = []
 var is_extrapolating: bool = false
 
-var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
-
 # Knockback lead (Lever B): a brief, self-zeroing forward bias on the interpolated
 # position right after a credited check, so the victim's knockback reads as a sharp
-# punch on remote screens instead of arriving interpolation_delay late and smoothed.
-# A SCOPED, time-boxed exception to the "interpolate in the past / no forward
-# projection" model (ARCHITECTURE.md): the offset is a 0→peak→0 pulse, so it never
-# causes lasting divergence — it lurches the body into the hit direction immediately,
-# then decays as the real (lagged) knockback samples catch up and hand off. Magnitude
-# and duration are feel-tunable.
+# punch on remote screens instead of reading soft under the SmoothDamp stage.
+# Applied as a final additive AFTER the position smoother (see _interpolate) so the
+# offset is a 0→peak→0 pulse that never causes lasting divergence — it lurches the
+# body into the hit direction immediately, then decays as the real (now less-delayed)
+# knockback samples catch up and hand off. Magnitude and duration are feel-tunable.
 var _knockback_lead_elapsed: float = -1.0  # < 0 means inactive
 var _knockback_lead_offset: Vector3 = Vector3.ZERO  # peak offset = dir * meters
 const _KNOCKBACK_LEAD_DURATION_S: float = 0.12
@@ -27,9 +30,12 @@ const _KNOCKBACK_LEAD_MAX_M: float = 0.22  # peak lead at a full-strength check
 # allocating fresh ones each tick was measurable churn at the physics rate × 5 remotes.
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
 var _scratch_interp := SkaterNetworkState.new()
-var _rejoin_blend_from_pos: Vector3 = Vector3.ZERO
-var _rejoin_blend_from_blade: Vector3 = Vector3.ZERO
-var _rejoin_blend_from_hand: Vector3 = Vector3.ZERO
+# Critically-damped position smoother state (see _interpolate). Persistent across
+# ticks; SmoothDamp tracks the moving render target so lead errors blend out.
+var _smooth_pos: Vector3 = Vector3.ZERO
+var _smooth_vel: Vector3 = Vector3.ZERO
+var _smooth_initialized: bool = false
+const _SMOOTH_SNAP_DIST: float = 2.0  # teleport/faceoff jump → snap, don't slide
 
 func get_buffer_depth() -> int:
 	return _state_buffer.size()
@@ -62,11 +68,9 @@ func _physics_process(delta: float) -> void:
 	if _is_host:
 		_drive_from_input(delta)
 	else:
-		if _rejoin_blend_elapsed >= 0.0:
-			_rejoin_blend_elapsed += delta
 		if _knockback_lead_elapsed >= 0.0:
 			_knockback_lead_elapsed += delta
-		_interpolate()
+		_interpolate(delta)
 		# Cosmetic leg gait, derived from the interpolated velocity — no extra
 		# network state. (Host-driven remotes animate via _process_input above.
 		# Stick/arm meshes update once per rendered frame in Skater._process.)
@@ -164,14 +168,19 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 	if _state_buffer.size() > 30:
 		_state_buffer.pop_front()
 
-func _interpolate() -> void:
-	# Shared delay (NetworkManager) so this skater renders at the same instant as
-	# the puck and other remotes — no per-actor drift in relative timing.
+func _interpolate(delta: float) -> void:
+	# Shared delay (NetworkManager) keeps the puck and other remotes on the same
+	# timeline; the per-skater lead below shifts this body toward host-present.
 	var interp_delay: float = NetworkManager.get_interpolation_delay()
-	var render_time: float = NetworkManager.estimated_host_time() - interp_delay
+	# Lead the render time toward host-present by a fraction of the buffer depth so
+	# remote bodies sit closer to where the host actually has them — the chase gap
+	# and the client-vs-host body-check contact mismatch both shrink with it.
+	# fraction 0 == legacy "interpolate in the past"; 1 == render at present (full
+	# ~interp_delay of dead-reckon). Scales with interp_delay, so it tracks RTT/jitter.
+	var render_time: float = NetworkManager.estimated_host_time() \
+			- interp_delay * (1.0 - extrapolation_lead_fraction)
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
 			_state_buffer, render_time, _scratch_bracket)
-	var prev_extrapolating: bool = is_extrapolating
 	is_extrapolating = bracket != null and bracket.is_extrapolating
 	if bracket == null:
 		return
@@ -224,39 +233,33 @@ func _interpolate() -> void:
 		interpolated.is_elevated = to_state.is_elevated
 		interpolated.blade_up = to_state.blade_up
 		interpolated.shot_state = to_state.shot_state
-		# No forward projection: remotes render at the buffered (past) instant
-		# render_time, the hermite result above. Projecting the body ahead by
-		# interp_delay toward "present" overshot on every direction change and
-		# then snapped back when the next real sample landed (Extrap climbing,
-		# visible as rhythmic snap-back on remote skaters during fast play). The
-		# AAA "interpolate in the past" model trades a little extra latency on
-		# other players' bodies for jitter-free motion. The packet-loss case
-		# (render_time past the newest sample) still extrapolates in the
-		# is_extrapolating branch above. blade/top_hand are upper_body-local and
-		# ride the body through the scene tree, so they need no projection.
-	if prev_extrapolating and not is_extrapolating and skater != null:
-		_rejoin_blend_from_pos = skater.global_position
-		_rejoin_blend_from_blade = skater.get_blade_position()
-		_rejoin_blend_from_hand = skater.top_hand.position
-		_rejoin_blend_elapsed = 0.0
-	if _rejoin_blend_elapsed >= 0.0:
-		var ease_t: float = clampf(_rejoin_blend_elapsed / rejoin_blend_duration, 0.0, 1.0)
-		# Smoothstep (C1) rather than a linear blend: closing the extrapolation
-		# error linearly injects a constant correction velocity that switches on
-		# at blend start and off at blend end, leaving a velocity kink at both
-		# seams. Easing ramps that correction velocity in and out, so the re-entry
-		# is velocity-continuous. The base interpolated motion is followed the
-		# whole time — only the error term rides the eased curve.
-		var eased: float = smoothstep(0.0, 1.0, ease_t)
-		interpolated.position = _rejoin_blend_from_pos.lerp(interpolated.position, eased)
-		interpolated.blade_position = _rejoin_blend_from_blade.lerp(interpolated.blade_position, eased)
-		interpolated.top_hand_position = _rejoin_blend_from_hand.lerp(interpolated.top_hand_position, eased)
-		if ease_t >= 1.0:
-			_rejoin_blend_elapsed = -1.0
-	# Knockback lead pulse (Lever B), applied as a final additive offset so it
-	# composes with — and can't corrupt — the interpolated/rejoin result. sin(t·π)
-	# is a clean 0→1→0: the body lurches into the hit immediately, peaks at ~60ms,
-	# then fully decays as the real lagged knockback samples arrive.
+		# render_time is led toward present by extrapolation_lead_fraction, so the
+		# hermite result already sits close to the host's live pose (or, past the
+		# newest sample, the is_extrapolating branch dead-reckons it). The position
+		# error from a wrong lead is absorbed by the SmoothDamp stage below — the
+		# old "interpolate strictly in the past" rule was relaxed once that smoother
+		# replaced the snap-prone steady advance. blade/top_hand are upper_body-local
+		# and ride the body through the scene tree, so they need no projection.
+	# Critically-damped error smoothing on the collision body position. The raw
+	# target jumps when a contradicting snapshot lands (the lead's dead-reckon was
+	# wrong) or when the interp<->extrap branch flips; SmoothDamp chases the MOVING
+	# target with bounded lag and no overshoot, so those jumps blend out instead of
+	# snapping back — the failure mode that retired the old steady forward-advance.
+	# It subsumes the former extrapolation rejoin-blend (every seam, not just
+	# extrap->interp). A large delta (teleport / faceoff / goal reset) snaps rather
+	# than sliding the body across the rink.
+	var target_pos: Vector3 = interpolated.position
+	if not _smooth_initialized or _smooth_pos.distance_to(target_pos) > _SMOOTH_SNAP_DIST:
+		_smooth_pos = target_pos
+		_smooth_vel = Vector3.ZERO
+		_smooth_initialized = true
+	else:
+		_smooth_pos = _smooth_damp(_smooth_pos, target_pos, position_smooth_time, delta)
+	interpolated.position = _smooth_pos
+	# Knockback lead pulse (Lever B), applied as a final additive AFTER smoothing so
+	# the punch stays sharp instead of being absorbed by SmoothDamp. sin(t·π) is a
+	# clean 0→1→0: the body lurches into the hit immediately, peaks ~60ms, then
+	# decays as the real (now less-delayed) knockback samples arrive.
 	if _knockback_lead_elapsed >= 0.0:
 		var klt: float = _knockback_lead_elapsed / _KNOCKBACK_LEAD_DURATION_S
 		if klt >= 1.0:
@@ -265,6 +268,19 @@ func _interpolate() -> void:
 			interpolated.position += _knockback_lead_offset * sin(klt * PI)
 	_apply_state_to_skater(interpolated)
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
+
+
+# Unity-style critically damped smoothing toward a (possibly moving) target.
+# Mutates _smooth_vel; returns the new position. Pure value-type math — no alloc,
+# hot-path safe at 120 Hz × remotes.
+func _smooth_damp(current: Vector3, target: Vector3, smooth_time: float, delta: float) -> Vector3:
+	var omega: float = 2.0 / maxf(smooth_time, 0.0001)
+	var x: float = omega * delta
+	var exp_factor: float = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+	var change: Vector3 = current - target
+	var temp: Vector3 = (_smooth_vel + change * omega) * delta
+	_smooth_vel = (_smooth_vel - temp * omega) * exp_factor
+	return target + (change + temp) * exp_factor
 
 func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	skater.global_position = state.position
