@@ -308,6 +308,8 @@ extends Node
 # Drives the standing / paddle sweep pose too so the reach reads visually.
 @export var clear_reach: float = 1.4            # m — goalie-to-puck distance the stick can sweep
 @export var clear_max_puck_speed: float = 4.0   # m/s — above this it's a live shot/rebound, leave it
+@export var clear_max_height: float = 0.12      # m — puck must be on the ice; airborne pucks aren't swept
+@export var clear_dwell: float = 0.35           # s — the puck must sit clearable this long before the sweep
 @export var clear_speed: float = 7.0            # m/s imparted to the swept puck
 @export var clear_lateral_weight: float = 1.0   # corner-ward bias (lateral vs forward)
 @export var clear_forward_weight: float = 0.5   # out-of-crease bias
@@ -558,6 +560,10 @@ var _lunge_cooldown_timer: float = 0.0
 # Loose-puck sweep cooldown — counts down after each crease clear so the goalie
 # sweeps once and lets the puck travel instead of dribbling it tick-by-tick.
 var _clear_cooldown_timer: float = 0.0
+# Counts up while a loose puck sits clearable in front of the goalie; the sweep
+# only fires once it crosses `clear_dwell`. Resets the moment the puck leaves
+# the clearable window so the goalie doesn't bat live/airborne pucks on contact.
+var _clear_dwell_timer: float = 0.0
 # Blade velocity tracking for the goalie poke check. We need the BLADE's
 # world velocity (not the goalie body's) because the strip-velocity math
 # blends checker blade velocity with carrier blade velocity. Position-
@@ -1222,6 +1228,14 @@ func _try_clear_loose_puck(delta: float) -> void:
 		_clear_cooldown_timer = maxf(_clear_cooldown_timer - delta, 0.0)
 		return
 	if not _is_loose_puck_clearable():
+		_clear_dwell_timer = 0.0
+		return
+	# The puck has to settle on the ice in front of the goalie for a beat before
+	# the sweep fires — otherwise the goalie bats pucks away the instant they
+	# drift into reach. Accumulate dwell while clearable; the predicate already
+	# reset it to zero the moment the puck left the window.
+	_clear_dwell_timer += delta
+	if _clear_dwell_timer < clear_dwell:
 		return
 	# Dead-centre pucks have no natural corner — sweep toward the stick side.
 	var default_side: float = 1.0 if catches_left else -1.0
@@ -1231,10 +1245,11 @@ func _try_clear_loose_puck(delta: float) -> void:
 			clear_center_deadband, default_side)
 	puck.apply_goalie_sweep(sweep_vel)
 	_clear_cooldown_timer = clear_cooldown
+	_clear_dwell_timer = 0.0
 
 
-# True when a loose puck is sitting in front of the goalie, slow and close
-# enough to sweep to the corner with the stick. Drives both the actual clear
+# True when a loose puck is sitting on the ice in front of the goalie, slow and
+# close enough to sweep to the corner with the stick. Drives both the actual clear
 # (_try_clear_loose_puck) and the standing / paddle sweep pose so the reach
 # reads visually. Loose pucks only — carried pucks go through the poke check.
 # Skipped while reacting to a shot (the goalie is reading a save, not poking at
@@ -1251,6 +1266,10 @@ func _is_loose_puck_clearable() -> bool:
 		return false
 	# In front of the goal line only — never sweep a puck behind the net.
 	if (puck.global_position.z - _goal_line_z) * _direction_sign <= 0.0:
+		return false
+	# On the ice only — a puck in the air is a live shot/deflection, not a loose
+	# puck to sweep. Without this the goalie bats airborne pucks out of the air.
+	if puck.global_position.y > clear_max_height:
 		return false
 	if puck.linear_velocity.length() > clear_max_puck_speed:
 		return false
