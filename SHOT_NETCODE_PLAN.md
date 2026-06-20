@@ -24,8 +24,9 @@ sources of the disagreement it amplifies.
 |---|------|--------|
 | **D** | **Quick-shot cliff** — `shot_mechanics.release_wrister` switches at `quick_shot_threshold` (0.15 m) between two *different* direction bases (player→blade vs. cursor-drag) and two *different* power formulas (fixed `quick_shot_power` vs. charged lerp). | A sub-mm charge disagreement flips the shot **direction** → the puck redirects in flight → "weird bounce." Also the mechanism of the live forehand-left bug. |
 | **C** | **Charge reconciled wrong** — `LocalController.reconcile` saves/restores `charge_distance` and then **unconditionally imports the host's value** (`local_controller.gd:513`). | Local charge gets yanked to the host's lagged, choppy value every broadcast. Source of the live bug and the old "rubber-banded charge" feel. |
-| **A** | **Host eats inputs unevenly** — `RemoteController._drive_from_input` pops one input/tick gated by timestamp and repeats `_fallback_input` on gaps. | Under jitter the host simulates a *different input sequence* than the client did → different charge/blade → different shot. |
-| **B** | **`delta` mismatch** — host passes its frame `delta` (`remote_controller.gd:125`); client uses `input.delta`. The blade speed cap (`max_blade_speed * delta`) and charge depend on it. | Per-tick blade travel differs between host and client. |
+| **A** | **Host eats inputs unevenly** — `RemoteController._drive_from_input` pops one input/tick gated by timestamp and repeats `_fallback_input` on gaps. | *Smaller than first thought.* A repeated input has zero `intent_delta`, so `charge_tracking.gd:48` adds **no** charge (and `prev_intent_pos` tracking means the next real input still measures the full delta) — fallback repeats are charge-neutral. Residual effect is only on per-tick **body position** (below). |
+| **B** | ~~`delta` mismatch~~ — **NOT REAL.** Both host and client feed `_process_input` the `_physics_process` delta, which Godot fixes at the physics timestep (1/120) regardless of frame rate. Already identical. | None. |
+| **F** | **Prediction lead** — the host simulates the shooter's body slightly behind the client's predicted body, so `TopHandIK.project_blade` clamps the same cursor against a slightly different body-relative position. | The real remaining host↔client charge/blade divergence. Continuous (Step 1 smooths it); **Step 4** removes it by making the host's value the one that matters. |
 | **E** | **Origin is trusted, not derived** — host fires from the **client-sent** origin, clamped to stick reach (`game_manager.gd:2056`, `ShotReleaseRules.clamp_origin`). Docs note the host *can't* reconstruct it because the release pose is buffered ~`INPUT_LEAD_SEC` in the future relative to the immediate release RPC. | Not authoritative; and a wrong origin makes the puck jump at t=0 regardless of direction. |
 
 ## Target architecture
@@ -129,12 +130,14 @@ a tiny charge disagreement now produces a tiny shot disagreement.
   across the ROM fills the bar fast (the visual blade lags behind, capped). This
   is the intended "fast flick" feel; do not add a per-tick rate cap.
 
-### Step 3 — Deterministic host sim (leaks A, B)
-- `remote_controller.gd`: input jitter buffer deep enough that the host always has
-  the next real input — `_fallback_input` becomes the rare genuine-starvation
-  case, not a per-jitter contaminant. Pass `input.delta` (or a canonical fixed
-  tick delta) into `_process_input`, not the host frame delta.
-- Use one fixed sim delta for the blade cap + charge on both sides.
+### Step 3 — ~~Deterministic host sim (leaks A, B)~~ — MOSTLY UNNECESSARY
+Re-examined after Steps 1–2 landed: leak B was never real (deltas already equal),
+and leak A's fallback repeats are charge-neutral (zero `intent_delta` → no charge),
+so an input jitter buffer buys **nothing for the shot**. The only residual shot
+divergence is prediction lead (leak F), which a buffer doesn't address. A jitter
+buffer remains a *general* movement-determinism nicety (fewer position reconciles
+under jitter), but it's risky, online-only to verify, and out of scope for shot
+fidelity. **Skip unless Step 4 testing shows input-cadence divergence.**
 
 ### Step 4 — Host derives the shot (leaks E + authority)
 - `remote_controller._drive_from_input`: on the release-input tick, run
