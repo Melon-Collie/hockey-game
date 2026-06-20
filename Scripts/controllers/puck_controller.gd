@@ -723,8 +723,10 @@ func _interpolate(delta: float) -> void:
 		# trajectory streams in. Boards only; goalie/net/skater bounces still lean
 		# on the SmoothDamp below.
 		if stop_extrapolation_at_boards and _crosses_board(projected):
+			# Hold at the last authoritative spot and report zero velocity so the
+			# feed-forward smoother below doesn't nudge the held puck on toward the board.
 			interpolated.position = newest.position
-			interpolated.velocity = newest.velocity
+			interpolated.velocity = Vector3.ZERO
 		else:
 			interpolated.position = projected
 			interpolated.velocity = friction_vel
@@ -734,11 +736,12 @@ func _interpolate(delta: float) -> void:
 		interpolated.position = BufferedStateInterpolator.hermite(from_state.position, from_state.velocity,
 				to_state.position, to_state.velocity, bracket.t, bracket.bracket_dt)
 		interpolated.velocity = from_state.velocity.lerp(to_state.velocity, bracket.t)
-	# Critically-damped error smoothing on the rendered puck position. On a fresh
-	# entry into interpolation (carry / trajectory / extrap → loose) seed from the
-	# puck's live spot so the seam blends; a contradicting lead (a bounce the
-	# dead-reckon missed) or a pathological gap snaps. Velocity stays the
-	# authoritative interpolated value — only the rendered position smooths.
+	# Velocity-feed-forward error smoothing on the rendered puck position. Advancing
+	# by the target's own velocity gives zero steady-state lag (smoothing the absolute
+	# position trails a fast puck by ~velocity × smooth_time — metres on a shot/pass);
+	# only the residual error is critically damped. On a fresh entry into interpolation
+	# (carry / trajectory / extrap → loose) seed from the puck's live spot so the seam
+	# blends; a pathological gap snaps.
 	var target_pos: Vector3 = interpolated.position
 	if not _smooth_initialized:
 		_smooth_pos = puck.get_puck_position()
@@ -748,6 +751,7 @@ func _interpolate(delta: float) -> void:
 		_smooth_pos = target_pos
 		_smooth_vel = Vector3.ZERO
 	else:
+		_smooth_pos += interpolated.velocity * delta
 		_smooth_pos = _smooth_damp(_smooth_pos, target_pos, position_smooth_time, delta)
 	interpolated.position = _smooth_pos
 	_apply_state_to_puck(interpolated)

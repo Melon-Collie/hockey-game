@@ -240,20 +240,21 @@ func _interpolate(delta: float) -> void:
 		# old "interpolate strictly in the past" rule was relaxed once that smoother
 		# replaced the snap-prone steady advance. blade/top_hand are upper_body-local
 		# and ride the body through the scene tree, so they need no projection.
-	# Critically-damped error smoothing on the collision body position. The raw
-	# target jumps when a contradicting snapshot lands (the lead's dead-reckon was
-	# wrong) or when the interp<->extrap branch flips; SmoothDamp chases the MOVING
-	# target with bounded lag and no overshoot, so those jumps blend out instead of
-	# snapping back — the failure mode that retired the old steady forward-advance.
-	# It subsumes the former extrapolation rejoin-blend (every seam, not just
-	# extrap->interp). A large delta (teleport / faceoff / goal reset) snaps rather
-	# than sliding the body across the rink.
+	# Velocity-feed-forward error smoothing on the collision body position. We advance
+	# by the target's OWN velocity each frame (zero steady-state lag — smoothing the
+	# absolute position instead trails a moving body by ~velocity × smooth_time) and
+	# critically-damp only the residual error toward the authoritative target. So a
+	# wrong lead, a contradicting snapshot, or an interp<->extrap branch flip blends
+	# out, while straight-line motion tracks exactly. position_smooth_time now governs
+	# how fast that residual decays, not steady tracking. Subsumes the former
+	# rejoin-blend (every seam); a large delta (teleport / faceoff / goal reset) snaps.
 	var target_pos: Vector3 = interpolated.position
 	if not _smooth_initialized or _smooth_pos.distance_to(target_pos) > _SMOOTH_SNAP_DIST:
 		_smooth_pos = target_pos
 		_smooth_vel = Vector3.ZERO
 		_smooth_initialized = true
 	else:
+		_smooth_pos += interpolated.velocity * delta
 		_smooth_pos = _smooth_damp(_smooth_pos, target_pos, position_smooth_time, delta)
 	interpolated.position = _smooth_pos
 	# Knockback lead pulse (Lever B), applied as a final additive AFTER smoothing so
