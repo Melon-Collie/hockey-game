@@ -51,20 +51,39 @@ an input (legitimate — it's the player's control), the host *uses* it; the hos
 
 ## Fork decision: how charge becomes deterministic
 
-- **Fork 1 — deterministic blade sim.** Keep charge coupled to the simulated
-  blade (ROM-gated, speed-cap-gated — the recent feel). Requires the *entire*
-  blade pipeline (smoothing, on/off-axis cap, ROM clamp) to be bit-reproducible
-  on host and client. Leans on cross-machine float determinism of `sin/cos/atan2`
-  — **not guaranteed**, so leak D's continuity becomes load-bearing insurance.
-- **Fork 2 — charge from replicated inputs.** Derive charge magnitude from the
-  mouse stream (already byte-identical on the wire) + a small replicated state,
-  **not** from the smoothed blade. Charge becomes *exactly* deterministic with no
-  float risk, at the cost of some blade-coupled feel (the "fast lateral sweep
-  builds less charge" texture).
+**Hard requirement:** charge must be gated by *reachable blade-travel space* — a
+blade pinned at the ROM edge builds no charge. Mouse-position-based charge keeps
+accruing against dead space past the reach limit (tried before, rejected). So the
+ROM coupling stays; the question is only *which* blade reading charge uses.
 
-**Recommendation: Fork 2 + continuity (D).** It computes the shot from quantities
-that are already identical on both machines, which is the only way to *guarantee*
-"client shot == host shot" rather than hope a long trig-heavy integration matches.
+- **Fork 1 — charge from the fully-simulated blade (current).** Reads
+  `get_blade_position()` = smoothed + on/off-axis-capped + ROM-clamped +
+  wall-clamped. The smoothing layer is stateful and delta/position-sensitive, so
+  it won't replay cleanly. Leans on cross-machine float determinism of the *whole*
+  blade pipeline — **not guaranteed.** (This is what diverges today.)
+- **Fork 2 — charge from raw mouse position.** Exactly deterministic, but
+  **breaks the ROM space-gate** — the cursor keeps moving past reach and charge
+  keeps building. Rejected on the core feel requirement.
+- **Fork 3 — charge from the ROM-clamped *target* blade.** Read the closed-form
+  `TopHandIK.project_blade` result (`target_blade_world`,
+  `skater_ik_coordinator.gd:115`), computed every tick *before* any smoothing,
+  instead of the speed-capped smoothed blade.
+
+**Recommendation: Fork 3.** It is strictly better than both:
+
+- **Keeps the space-gate** — the target pins at the ROM edge, so cursor-past-reach
+  → zero target travel → no charge. Same feel as today.
+- **Drops the non-determinism** — `project_blade` is a pure closed-form clamp of
+  (mouse-relative-to-body, ROM config); no stateful smoothing to diverge or
+  replay. The determinism story stops depending on float-exact trig over a long
+  integration and becomes simply *"both sides clamp the same mouse to the same
+  ROM."*
+- **Bonus:** also fixes the original forehand-left bug directly — the speed-cap no
+  longer starves charge on lateral sweeps, because charge reads the reachable
+  target, not the lagging capped blade.
+
+This is the same change first floated for the live bug, now doing double duty as
+the determinism foundation.
 
 ## Defining "continuous shot" (leak D, numeric)
 
@@ -78,7 +97,9 @@ over a transition band, e.g. charge_t in `[t0, t1] = [0.15, 0.30]` of
 - **Direction:** `dir = slerp(player_to_blade, cursor_drag, w)` where
   `w = smoothstep(t0, t1, charge_t)`. Low charge → player→blade (stable when the
   drag vector is too short to be meaningful); rising charge → cursor-drag. No
-  categorical flip at any single charge value.
+  categorical flip at any single charge value. For determinism consistency,
+  `player_to_blade` should use the ROM-clamped *target* (Fork 3), not the smoothed
+  blade — so the whole shot reads from the same deterministic source.
 
 Result: the tap-vs-charge *feel* is preserved (a tap still fires player→blade at
 snap power; a deliberate drag still aims where you dragged at charged power), but
@@ -93,14 +114,21 @@ a tiny charge disagreement now produces a tiny shot disagreement.
   from a categorical flip into a mild, smoothable nudge — even before the
   determinism work.
 
-### Step 2 — Charge is client-local-predicted + deterministic (leak C, Fork 2)
-- `local_controller.gd`: drop the unconditional import (line 513). Snap charge to
-  the server baseline + replay forward like `stamina` (remove the save/restore
-  band-aid once replay is deterministic), OR keep charge purely local-predicted
-  for now — decide alongside Step 4.
-- Charge tracker (`charge_tracking.gd` / `skater_aiming_behavior.gd`): derive
-  magnitude from the replicated mouse stream rather than the smoothed blade.
-- **Fixes the live bug fully** (no more host-charge yank).
+### Step 2 — Charge from the ROM-clamped target + deterministic reconcile (leak C, Fork 3)
+- Charge source (`skater_controller._update_wrister_charge`): read the closed-form
+  ROM-clamped target (`target_blade_world`) instead of `get_blade_position()` (the
+  smoothed/capped blade). Keeps the ROM space-gate; sheds the smoothing coupling.
+  (Needs `target_blade_world` exposed from `apply_blade_from_mouse`, which computes
+  it but doesn't currently surface it.)
+- Reconcile (`local_controller.gd`): drop the unconditional host-charge import
+  (line 513). With the source now deterministic, charge can be snapped to the
+  server baseline + replayed forward like `stamina` (retire the save/restore
+  band-aid) — decided alongside Step 4.
+- **Fixes the live bug fully** (no more host-charge yank, no speed-cap starvation).
+- **Tuning surfaced:** target-travel charge is distance-across-reach, not
+  time-spent-sweeping — a fast flick across ROM could charge faster than a
+  deliberate sweep (visual blade still lags, capped). Decide whether a light rate
+  element is wanted.
 
 ### Step 3 — Deterministic host sim (leaks A, B)
 - `remote_controller.gd`: input jitter buffer deep enough that the host always has
@@ -128,16 +156,17 @@ a tiny charge disagreement now produces a tiny shot disagreement.
 
 ## Risks / open questions
 
-- **Cross-machine float determinism** (Fork 1 risk) — sidestepped by Fork 2 for
-  charge, but the blade *position* still feeds origin; Step 4 derives origin on
-  the host so the client's predicted origin only needs to be *close* (smoothable),
-  not exact.
+- **Cross-machine float determinism** — Fork 3 reduces charge to a closed-form ROM
+  clamp (no long trig integration), so the dominant risk is gone. The blade
+  *position* still feeds origin via trig; Step 4 derives origin on the host so the
+  client's predicted origin only needs to be *close* (smoothable), not exact.
 - **Host derives shot ~`INPUT_LEAD_SEC` late** on its own timeline (it fires when
   its sim reaches tick T). Fine for the shooter (predicted locally) and spectators
   (interpolated in the past); confirm it doesn't delay the host-local goalie
   reaction (the existing `clamp_back_date` lag-comp already addresses this).
-- **Feel cost of Fork 2** — losing some blade-coupled charge texture. Tunable;
-  decide how much of that texture to reconstruct from input-space.
+- **Feel shift from Fork 3** — charge becomes distance-across-reach rather than
+  blade-speed-limited time. Keeps the ROM gate, but the wind-up *timing* changes;
+  may want a light rate element (see Step 2 tuning note).
 - **Protocol** — removing trusted shot params / `shot_charge` on the wire is a
   `PROTOCOL_VERSION` bump. Can defer (leave fields unused) to avoid churn.
 
