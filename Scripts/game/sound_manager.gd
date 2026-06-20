@@ -69,18 +69,27 @@ const _UI_POOL_SIZE: int = 4
 const _SFX_2D_POOL_SIZE: int = 4
 const _SFX_3D_POOL_SIZE: int = 12
 
-# 3D world-sound falloff. Live play frames the puck closely (game cam ~15 m up),
-# so the tight defaults keep events spatial without bleeding across the rink.
+# 3D world-sound falloff presets, selected via set_world_audio_range.
+#
+# LIVE — live play frames the puck closely (game cam ~15 m up), so the tight
+#   defaults keep events spatial without bleeding across the rink.
+# REPLAY_FAR — replay cameras parked far from the action: the offline viewer's
+#   broadcast/chase/free cams and the goal replay's press-box hard cam sit
+#   ~19–38 m from the puck, where the LIVE falloff attenuates recorded events
+#   to near-silence (far-side events hit the 40 m cutoff entirely). Widen the
+#   curve so the cinematic distance stays audible while keeping stereo cues.
+# REPLAY_NEAR — the goal replay's behind-the-net cam (~4.5–10 m from the puck).
+#   Already in the audible regime, so only a gentle lift: REPLAY_FAR's wide
+#   curve would over-amplify (the close cam would be +13 dB and blow out the
+#   money shot), while LIVE leaves it flat.
+enum AudioRange { LIVE, REPLAY_NEAR, REPLAY_FAR }
+
 const _WORLD_UNIT_SIZE: float = 6.0
 const _WORLD_MAX_DISTANCE: float = 40.0
-# Replay viewing widens the falloff: the offline viewer's cameras (broadcast
-# booth, chase, free) sit far from the action — the press-box hard cam is
-# ~19–38 m from the puck, where the live defaults attenuate recorded events to
-# near-silence (and far-side events hit the 40 m cutoff entirely). The wider
-# curve keeps positional/stereo cues but lifts the level so the cinematic
-# distance stays audible. Toggled by set_replay_audio_range, restored on exit.
-const _REPLAY_UNIT_SIZE: float = 20.0
-const _REPLAY_MAX_DISTANCE: float = 80.0
+const _REPLAY_FAR_UNIT_SIZE: float = 20.0
+const _REPLAY_FAR_MAX_DISTANCE: float = 80.0
+const _REPLAY_NEAR_UNIT_SIZE: float = 10.0
+const _REPLAY_NEAR_MAX_DISTANCE: float = 60.0
 
 var _streams: Dictionary = {}
 var _pool_ui: Array[AudioStreamPlayer] = []      # UI bus — hover, click
@@ -175,13 +184,24 @@ func play_world(sound: Sound, position: Vector3, volume_db: float = 0.0, pitch_v
 			return
 
 
-# Widen (or restore) the 3D world-sound falloff for replay viewing. The offline
-# replay viewer's cameras sit far from the action, where the live falloff
-# attenuates recorded events to silence; this lifts the level while keeping
-# stereo/positional cues. Call with true on replay entry, false on exit. Idempotent.
-func set_replay_audio_range(enabled: bool) -> void:
-	var unit_size: float = _REPLAY_UNIT_SIZE if enabled else _WORLD_UNIT_SIZE
-	var max_distance: float = _REPLAY_MAX_DISTANCE if enabled else _WORLD_MAX_DISTANCE
+# Select the 3D world-sound falloff to match the active camera distance. Replay
+# cameras sit far from the action, where the LIVE falloff attenuates recorded
+# events to silence; the REPLAY_* presets lift the level while keeping
+# stereo/positional cues. Call REPLAY_FAR/NEAR on the matching camera, LIVE to
+# restore. Idempotent.
+func set_world_audio_range(audio_range: AudioRange) -> void:
+	var unit_size: float
+	var max_distance: float
+	match audio_range:
+		AudioRange.REPLAY_FAR:
+			unit_size = _REPLAY_FAR_UNIT_SIZE
+			max_distance = _REPLAY_FAR_MAX_DISTANCE
+		AudioRange.REPLAY_NEAR:
+			unit_size = _REPLAY_NEAR_UNIT_SIZE
+			max_distance = _REPLAY_NEAR_MAX_DISTANCE
+		_:
+			unit_size = _WORLD_UNIT_SIZE
+			max_distance = _WORLD_MAX_DISTANCE
 	for p: AudioStreamPlayer3D in _pool_3d:
 		p.unit_size = unit_size
 		p.max_distance = max_distance
