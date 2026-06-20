@@ -27,6 +27,10 @@ const STICK_LIFT_FORCED_LIFT_S: float = 0.4
 # Critically-damped smoothing time (s) for the loose-puck position. Slightly above
 # the skater's so bounce overshoot blends out cleanly.
 @export var position_smooth_time: float = 0.06
+# Smart extrapolation: when the forward dead-reckon would carry the puck across a
+# board within the lead window, stop leading for that frame and hold at the newest
+# authoritative position instead of projecting through the boards (see _interpolate).
+@export var stop_extrapolation_at_boards: bool = true
 # Extra friction applied during trajectory prediction to compensate for any
 # divergence between client and host Jolt friction. Set to 0 while both run
 # identical physics; tune upward if free-puck trajectories drift apart.
@@ -709,8 +713,21 @@ func _interpolate(delta: float) -> void:
 		# Decay velocity to approximate ice friction so the extrapolated position
 		# matches Jolt's deceleration rather than linear dead-reckoning overshoot.
 		var friction_vel: Vector3 = _ice_friction_velocity(newest.velocity, dt)
-		interpolated.position = newest.position + friction_vel * dt
-		interpolated.velocity = friction_vel
+		var projected: Vector3 = newest.position + friction_vel * dt
+		# Smart extrapolation: only dead-reckon forward when the puck won't cross a
+		# board this frame. Projecting THROUGH a board overshoots outside the rink,
+		# then snaps back when the host's reflected samples land. Predicting the
+		# bounce client-side would risk disagreeing with the host's authoritative
+		# restitution/angle, so instead we just stop leading when a board is in the
+		# way — hold at the newest authoritative position until the post-bounce
+		# trajectory streams in. Boards only; goalie/net/skater bounces still lean
+		# on the SmoothDamp below.
+		if stop_extrapolation_at_boards and _crosses_board(projected):
+			interpolated.position = newest.position
+			interpolated.velocity = newest.velocity
+		else:
+			interpolated.position = projected
+			interpolated.velocity = friction_vel
 	else:
 		var from_state: PuckNetworkState = bracket.from_state
 		var to_state: PuckNetworkState = bracket.to_state
@@ -735,6 +752,15 @@ func _interpolate(delta: float) -> void:
 	interpolated.position = _smooth_pos
 	_apply_state_to_puck(interpolated)
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
+
+
+# True when world position `p` (XZ) lies outside the inner board boundary — i.e.
+# a straight dead-reckon to here would have crossed a board (bounced). Uses the
+# same rounded-rect projection as the puck-OOB / blade-clamp callers, so the
+# corners are handled exactly.
+func _crosses_board(p: Vector3) -> bool:
+	var xz := Vector2(p.x, p.z)
+	return GameRules.clamp_to_rink_inner(xz).distance_squared_to(xz) > 1e-6
 
 
 # Unity-style critically damped smoothing toward a (possibly moving) target.
