@@ -352,7 +352,12 @@ func decode_stats(data: Array) -> void:
 		var pid: int = data[i]
 		var record: PlayerRecord = _registry.get_record(pid)
 		if record != null:
-			record.stats = PlayerStats.from_array(
+			# Update in place rather than reassigning: record.stats carries
+			# toi_seconds, which is tracked locally and absent from the wire.
+			# A fresh from_array() object would reset it to zero every packet.
+			if record.stats == null:
+				record.stats = PlayerStats.new()
+			record.stats.update_from_array(
 					data.slice(i + 1, i + STATS_PLAYER_RECORD_SIZE))
 		i += STATS_PLAYER_RECORD_SIZE
 	_state_machine.team_shots[0] = data[i]

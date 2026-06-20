@@ -17,12 +17,20 @@ func to_array() -> Array:
 
 static func from_array(a: Array) -> PlayerStats:
 	var s := PlayerStats.new()
-	s.goals = a[0]
-	s.assists = a[1]
-	s.shots_on_goal = a[2]
-	s.hits = a[3]
-	s.shots_blocked = a[4]
+	s.update_from_array(a)
 	return s
+
+# In-place update from the wire array, PRESERVING toi_seconds. Time-on-ice is
+# tracked locally per-peer (see the field doc above) and never crosses the wire,
+# so reassigning record.stats to a fresh from_array() object on every stats
+# packet would wipe a client's accumulated TOI to zero. Clients route through
+# this instead so the local count survives each decode.
+func update_from_array(a: Array) -> void:
+	goals = a[0]
+	assists = a[1]
+	shots_on_goal = a[2]
+	hits = a[3]
+	shots_blocked = a[4]
 
 func to_dict() -> Dictionary:
 	return {
