@@ -139,16 +139,49 @@ buffer remains a *general* movement-determinism nicety (fewer position reconcile
 under jitter), but it's risky, online-only to verify, and out of scope for shot
 fidelity. **Skip unless Step 4 testing shows input-cadence divergence.**
 
-### Step 4 — Host derives the shot (leaks E + authority)
-- `remote_controller._drive_from_input`: on the release-input tick, run
-  `release_wrister`/`release_slapper` from the host's own sim; derive origin from
-  the host's blade. Fire the authoritative puck here.
-- `game_manager.on_remote_puck_release`: the client params become a *predicted
-  hint* (or are removed); the host no longer trusts direction/power/origin —
-  it derives them. Keep eligibility gates.
-- Validate against the existing puck reconcile: with Steps 1–3, host-derived and
-  client-predicted shots should agree to within the soft-blend zone (< 0.3 m), so
-  the puck converges without a hard snap.
+### Step 4 — Host derives the shot (authority) — RESHAPED BY FINDINGS
+
+**Finding:** the host *already* derives the authoritative shot. A remote human's
+`RemoteController` runs `_process_input` → shot state machine → `_release_wrister`,
+computing host-derived direction/power from its own replayed charge + ROM-target
+blade, and emits `puck_release_requested`. But that signal is **only connected for
+`is_local` and `is_bot`** (`game_manager.gd:1631,1640`), so for remote humans it
+goes into the void (`_do_release` guards only `is_replaying`, not host). The host
+then fires the client's RPC params (`on_remote_puck_release`, trust-but-clamp)
+instead. So Step 4 = *use the shot the host already computes*, not build it.
+
+**Complication 1 — release timing.** The host-derived shot fires when
+`_drive_from_input` reaches the release input (host-time ≈ release +
+`INPUT_LEAD_SEC` ≈ 25 ms). The immediate `release_puck` RPC arrives at ≈ release +
+rtt/2 — *earlier* on fast links, later on slow ones. Whichever fires must be the
+single authoritative release; the other becomes a no-op / metadata-only.
+
+**Complication 2 — lag-comp lives on the RPC path.** `on_remote_puck_release`
+carries `host_timestamp` + `interp_delay_ms` and uses them for goalie rewind
+(fair shooter-view geometry), goalie reaction back-date, shot crediting, and the
+shot-sound fan-out. The input-stream release has the `host_timestamp` but not
+`interp_delay_ms`. Moving authority to the host-derived shot means threading that
+lag-comp context to wherever the shot actually fires.
+
+**Proposed shape (behind a default-OFF toggle, `HOST_AUTHORITATIVE_REMOTE_SHOTS`):**
+- Connect remote-human `puck_release_requested` on the host to a handler that
+  fires the authoritative puck from host-derived dir/power + the host's **live**
+  blade contact as origin (no client origin, no buffer rewind — the live blade at
+  the release tick *is* the authoritative point).
+- The immediate `release_puck` RPC, when the toggle is on, **stashes** its
+  lag-comp metadata (`host_timestamp`, `interp_delay_ms`, `rtt_ms`) per shooter
+  and does eligibility validation, but does **not** fire. The host-derived handler
+  consumes the stash. v1 limitation: on slow links where the input-stream release
+  precedes the RPC, lag-comp falls back to last-known/default interp delay.
+- Extract the fire body (sanitize/clamp + goalie rewind + release + crediting +
+  sound) into one helper both paths call, so the toggle-off path is byte-identical
+  to today.
+- Shooter still predicts locally (`notify_local_release`), unchanged. With Step 1
+  continuity, the host-derived vs. client-predicted residual (prediction lead,
+  leak F) lands in the puck reconcile's soft-blend zone instead of snapping.
+
+**Untestable headless.** Needs host+client online A/B (toggle off vs on) under
+induced latency — watch for double-release, wrong origin, goalie-save timing.
 
 ### Step 5 — Verify & tune
 - Confirm three-zone thresholds (`trajectory_soft_blend_threshold` 0.3,
