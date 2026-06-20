@@ -25,6 +25,7 @@ var _codec: WorldStateCodec = null
 var _driver: FileReplayDriver = null
 var _camera_director: CameraDirector = null
 var _hud: ReplayViewerHUD = null
+var _crowd: CrowdAudioController = null
 # Cached so the player_joined event handler can spawn mid-game arrivals
 # without re-deriving them from header.
 var _home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
@@ -70,6 +71,7 @@ func _ready() -> void:
 	_spawner.setup(self)
 	_spawn_actors_from_header(read_result.header)
 	_mount_camera()
+	_mount_crowd_audio()
 	_start_playback(read_result.frames)
 	_mount_hud(read_result.header)
 
@@ -219,6 +221,16 @@ func get_camera_director() -> CameraDirector:
 	return _camera_director
 
 
+# Live play instances CrowdAudio as a node in Hockey.tscn; the offline viewer
+# scene has no such node, so mount the same controller in code. Its _ready
+# starts the ambient murmur loop on the Crowd bus (the same bus + PlayerPrefs
+# volume slider live play uses). Goal cheers are driven from _on_replay_event
+# instead of the GameManager signals, which don't fire offline.
+func _mount_crowd_audio() -> void:
+	_crowd = CrowdAudioController.new()
+	add_child(_crowd)
+
+
 func _start_playback(frames: Array) -> void:
 	_codec = WorldStateCodec.new()
 	# decode_for_replay only walks the packet bytes — it doesn't reach into
@@ -247,6 +259,11 @@ func _on_replay_event(event: Dictionary) -> void:
 		# play it on goal_received; offline replays don't have NetworkManager
 		# delivering anything).
 		ReplayEventReplayer.dispatch_with_records(event, _records)
+		# Crowd cheer + ambient duck on replayed goals — the live
+		# GameManager.goal_scored that drives this in a real game doesn't
+		# fire offline, so trigger it off the recorded goal event here.
+		if kind == "goal" and _crowd != null:
+			_crowd.cheer()
 
 
 func _despawn_skater(peer_id: int) -> void:
