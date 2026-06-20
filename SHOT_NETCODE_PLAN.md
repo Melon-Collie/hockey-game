@@ -141,6 +141,15 @@ fidelity. **Skip unless Step 4 testing shows input-cadence divergence.**
 
 ### Step 4 — Host derives the shot (authority) — RESHAPED BY FINDINGS
 
+**Status:** chose option **C** (input-stream-driven, RPC-free end state), landed in
+two steps. **C-step 1 IMPLEMENTED** behind `HOST_AUTHORITATIVE_REMOTE_SHOTS`
+(default OFF): the host fires its own derived shot from the RemoteController's
+input-stream release, live blade as origin, reusing `on_remote_puck_release`'s
+firing + goalie-rewind via a re-entrancy flag; the inbound release RPC is demoted
+to a cached lag-comp metadata carrier. Needs online A/B (toggle off vs on).
+**C-step 2 PENDING:** move interp_delay into the input stream (`PROTOCOL_VERSION`
+bump) and delete the shot RPC. Plus: one-timer release still on the legacy RPC path.
+
 **Finding:** the host *already* derives the authoritative shot. A remote human's
 `RemoteController` runs `_process_input` → shot state machine → `_release_wrister`,
 computing host-derived direction/power from its own replayed charge + ROM-target

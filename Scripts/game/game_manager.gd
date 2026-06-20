@@ -121,6 +121,14 @@ var _cached_goalie_data: Array[Dictionary] = []
 var _tutorial_offsides_active: bool = false
 
 # ── Subsystems ────────────────────────────────────────────────────────────────
+# Re-entrancy flag: set while _on_remote_derived_release calls back into
+# on_remote_puck_release so the latter actually FIRES the host-derived shot instead
+# of taking the metadata-cache-and-return branch meant for the inbound client RPC.
+var _firing_derived_shot: bool = false
+# Last lag-comp metadata seen on a shooter's release RPC (interp_delay / rtt), keyed
+# by peer_id. The host-derived release consumes it for the goalie rewind when the
+# RPC arrived before the input-stream release (the common, fast-link case).
+var _shooter_lagcomp_cache: Dictionary[int, Dictionary] = {}
 var _registry: PlayerRegistry = null
 var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
@@ -173,6 +181,12 @@ var _spectator_peers: Dictionary[int, bool] = {}
 var _reserved_slots: Dictionary[int, Dictionary] = {}
 var _reservation_token: int = 0
 const RECONNECT_RESERVATION_S: float = 60.0
+# When true, a remote human's shot is fired by the HOST from its own RemoteController
+# release (host-derived dir/power/origin), and the client's release RPC is demoted to
+# a lag-comp metadata carrier (cached, not fired). When false, the legacy path runs:
+# the host fires the client-sent params from on_remote_puck_release. (Step C-1 toward
+# fully input-stream-driven, RPC-free shooting — see SHOT_NETCODE_PLAN.md.)
+const HOST_AUTHORITATIVE_REMOTE_SHOTS: bool = false
 # Client-side: true when the local peer was assigned a spectator slot. Drives
 # the SpectatorCamera mount and HUD chrome hiding. Also gates the local-skater
 # spawn path in on_slot_assigned.
@@ -1638,6 +1652,13 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# into the void.
 	if record.is_bot:
 		record.controller.puck_release_requested.connect(_on_puck_release_requested)
+	# Remote human on the host: its RemoteController runs the shot state machine from
+	# the replayed input stream and computes a host-derived shot, emitting
+	# puck_release_requested. Route it so the host can fire its OWN authoritative shot
+	# (gated by HOST_AUTHORITATIVE_REMOTE_SHOTS); a no-op when the toggle is off.
+	if NetworkManager.is_host and not record.is_local and not record.is_bot:
+		record.controller.puck_release_requested.connect(
+				_on_remote_derived_release.bind(record.peer_id))
 	record.controller.one_timer_release_requested.connect(
 			_on_one_timer_release_requested.bind(record.skater))
 	var pid: int = record.peer_id
@@ -1994,6 +2015,17 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 
 
 func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
+	# Host-authoritative mode: don't fire from the client's params. The host fires its
+	# OWN derived shot from the input-stream release (_on_remote_derived_release); this
+	# inbound RPC only carries lag-comp metadata the goalie rewind needs — cache it and
+	# return. (Skipped when _firing_derived_shot, i.e. the derived handler re-entering
+	# here to actually fire.)
+	if NetworkManager.is_host and HOST_AUTHORITATIVE_REMOTE_SHOTS and not _firing_derived_shot:
+		_shooter_lagcomp_cache[shooter_peer_id] = {
+			"rtt_ms": rtt_ms,
+			"interp_delay_ms": interp_delay_ms,
+		}
+		return
 	# Sender must be the current carrier on the host. Without this check, any
 	# peer can send release_puck with arbitrary direction/power and the host
 	# obediently triggers puck.release on whoever is actually carrying — the
@@ -2098,6 +2130,37 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 				goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
 		return
 	puck.release(direction, power)
+
+
+# Host-authoritative remote shot (C-step 1). The host's RemoteController reached the
+# shooter's release input and computed its OWN dir/power via _release_wrister, emitting
+# puck_release_requested. Fire the authoritative puck from that — host-derived params,
+# the host's LIVE blade as origin (no client origin), the release input's host_timestamp
+# for lag-comp — by re-entering on_remote_puck_release with _firing_derived_shot set so
+# it runs the full validated firing + goalie-rewind path instead of caching. No-op when
+# the toggle is off (the inbound RPC fires the legacy path instead).
+func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int) -> void:
+	if not (NetworkManager.is_host and HOST_AUTHORITATIVE_REMOTE_SHOTS):
+		return
+	if puck == null or _registry == null or puck.carrier == null:
+		return
+	var record: PlayerRecord = _registry.get_record(shooter_peer_id)
+	if record == null or record.skater == null or record.controller == null:
+		return
+	if _registry.resolve_peer_id(puck.carrier) != shooter_peer_id:
+		return
+	# Origin: the host's authoritative blade contact at the release tick (not a
+	# client-sent point). Timestamp: the release input the host just processed.
+	var origin: Vector3 = record.skater.get_blade_contact_global()
+	var release_ts: float = record.controller.last_processed_host_timestamp
+	var meta: Dictionary = _shooter_lagcomp_cache.get(shooter_peer_id, {})
+	var rtt_ms: float = meta.get("rtt_ms", float(NetworkManager.get_peer_ping_ms(shooter_peer_id)))
+	var interp_delay_ms: float = meta.get(
+			"interp_delay_ms", NetworkManager.get_target_interpolation_delay() * 1000.0)
+	_firing_derived_shot = true
+	on_remote_puck_release(
+			direction, power, is_slapper, shooter_peer_id, release_ts, rtt_ms, interp_delay_ms, origin)
+	_firing_derived_shot = false
 
 
 func _start_pending_shot_from_carrier() -> void:
