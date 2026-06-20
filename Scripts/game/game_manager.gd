@@ -1137,6 +1137,12 @@ func _on_replay_event_received(host_ts: float, event: Dictionary) -> void:
 	if NetworkManager.is_replay_mode() or _is_celebration_phase():
 		return
 	_recorder.record_event(host_ts, event)
+	# Persist into the client's own .mreplay file too — clients write replay
+	# files (the writer isn't host-gated) but only ever recorded world-state
+	# frames here, so client-saved replays played back silent. Mirror the host's
+	# file-write (_record_replay_audio_event) so the events land on disk.
+	if _replay_file_writer != null and _should_record_to_file():
+		_replay_file_writer.enqueue_event(host_ts, JSON.stringify(event).to_utf8_buffer())
 
 
 # Client / spectator side: the host mirrors its replay-mode flag here when it
