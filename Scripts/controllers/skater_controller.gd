@@ -500,15 +500,18 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
 	rom_backhand_reach_max    = arm_total * _ROM_BACKHAND_OF_ARM
 	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
-	# (matches body-check feel), height with the realistic-proportions
-	# multiplier. Skater._ready() duplicated the shape so this mutation is
-	# per-instance and won't leak across skaters.
+	# (matches body-check feel). Height is held CONSTANT for every player — a
+	# taller Size-scaled cylinder grew tall enough to touch several faces of the
+	# concave net/goal geometry at once and wedge the body in a corner. The
+	# visual mesh still scales on Y (appearance coordinator), so big players
+	# still look tall; only the physics hitbox height is fixed. Skater._ready()
+	# duplicated the shape so this mutation is per-instance and won't leak.
 	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	if col != null:
 		var cyl: CylinderShape3D = col.shape as CylinderShape3D
 		if cyl != null:
 			cyl.radius = _base_skater_collision_radius * m_size
-			cyl.height = _base_skater_collision_height * m_height
+			cyl.height = _base_skater_collision_height
 	# Attribute scaling rewrote the exports the cached configs were built
 	# from — drop them so the next tick rebuilds with the new values.
 	_ik.invalidate_configs()
