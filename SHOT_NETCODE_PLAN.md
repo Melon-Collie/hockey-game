@@ -125,10 +125,9 @@ a tiny charge disagreement now produces a tiny shot disagreement.
   server baseline + replayed forward like `stamina` (retire the save/restore
   band-aid) — decided alongside Step 4.
 - **Fixes the live bug fully** (no more host-charge yank, no speed-cap starvation).
-- **Tuning surfaced:** target-travel charge is distance-across-reach, not
-  time-spent-sweeping — a fast flick across ROM could charge faster than a
-  deliberate sweep (visual blade still lags, capped). Decide whether a light rate
-  element is wanted.
+- **Decided:** charge is distance-across-reach, **no rate element** — a fast flick
+  across the ROM fills the bar fast (the visual blade lags behind, capped). This
+  is the intended "fast flick" feel; do not add a per-tick rate cap.
 
 ### Step 3 — Deterministic host sim (leaks A, B)
 - `remote_controller.gd`: input jitter buffer deep enough that the host always has
@@ -165,8 +164,8 @@ a tiny charge disagreement now produces a tiny shot disagreement.
   (interpolated in the past); confirm it doesn't delay the host-local goalie
   reaction (the existing `clamp_back_date` lag-comp already addresses this).
 - **Feel shift from Fork 3** — charge becomes distance-across-reach rather than
-  blade-speed-limited time. Keeps the ROM gate, but the wind-up *timing* changes;
-  may want a light rate element (see Step 2 tuning note).
+  blade-speed-limited time. Keeps the ROM gate; the fast-flick fill is **intended**
+  (decided — no rate element).
 - **Protocol** — removing trusted shot params / `shot_charge` on the wire is a
   `PROTOCOL_VERSION` bump. Can defer (leave fields unused) to avoid churn.
 
