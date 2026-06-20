@@ -315,3 +315,59 @@ func test_wind_up_sweep_is_parallel_to_compensated_aim() -> void:
 	var comp: Vector3 = sm._aim_dir_compensated_for_side_offset(aim, 15.0, 1.0)
 	var sweep_dir: Vector3 = (ep["target"] - ep["start"]).normalized()
 	assert_almost_eq(sweep_dir.dot(comp), 1.0, 1e-5)
+
+
+# ── Slice 4: dispatch guards + decision throttle ─────────────────────────────
+# The dispatch() entry guards and the throttle skip-path both return before the
+# state-handler `match` (which runs role behavior), so they're testable without
+# mocking the role carrier. A snapshot that can't be acted on resets the bot to
+# OFF_PUCK; a throttled tick reuses the last decision instead of re-deciding.
+
+func test_dispatch_null_snapshot_resets_off_puck() -> void:
+	sm._state = Agent.State.CARRY
+	sm.dispatch(InputState.new(), null)
+	assert_eq(sm.get_state(), Agent.State.OFF_PUCK)
+
+
+func test_dispatch_null_puck_state_resets_off_puck() -> void:
+	sm._state = Agent.State.CARRY
+	sm.dispatch(InputState.new(), WorldSnapshot.new())  # puck_state stays null
+	assert_eq(sm.get_state(), Agent.State.OFF_PUCK)
+
+
+func test_dispatch_empty_skater_states_resets_off_puck() -> void:
+	sm._state = Agent.State.CARRY
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	sm.dispatch(InputState.new(), s)
+	assert_eq(sm.get_state(), Agent.State.OFF_PUCK)
+
+
+func test_dispatch_missing_self_resets_off_puck() -> void:
+	# Snapshot has skaters but not this bot (pre-dates its spawn) → freeze.
+	sm._state = Agent.State.CARRY
+	var s := _loose_puck_snap(Vector3.ZERO)
+	_add_skater(s, TEAMMATE_ID, Vector3.ZERO)
+	sm.dispatch(InputState.new(), s)
+	assert_eq(sm.get_state(), Agent.State.OFF_PUCK)
+
+
+func test_dispatch_throttled_tick_reuses_cached_decision() -> void:
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	_add_skater(s, SELF_ID, Vector3.ZERO)
+	sm._state = Agent.State.OFF_PUCK  # non-press → eligible to skip
+	sm._dispatch_skip_counter = 1
+	sm._cached_move_vector = Vector2(0.3, -0.4)
+	sm._cached_sprint_held = true
+	sm._has_cached_aim_target = true
+	sm._cached_aim_target = Vector3(1, 0, 2)
+	sm._cached_aim_uses_arc = false
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	assert_eq(input.move_vector, Vector2(0.3, -0.4), "throttled tick reuses cached move")
+	assert_true(input.sprint_held, "throttled tick reuses cached sprint")
+	assert_eq(sm._dispatch_skip_counter, 0, "skip counter decremented")
+	assert_eq(sm.get_state(), Agent.State.OFF_PUCK, "no re-decision on a skip tick")
+	# Mouse re-stepped toward the cached target (no-arc → first call snaps).
+	assert_almost_eq(input.mouse_world_pos.x, 1.0, 1e-6)
+	assert_almost_eq(input.mouse_world_pos.z, 2.0, 1e-6)
