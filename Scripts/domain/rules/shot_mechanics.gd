@@ -20,6 +20,7 @@ class WristerConfig:
 	var backhand_power_coefficient: float = 0.0
 	var quick_shot_power: float = 0.0
 	var quick_shot_threshold: float = 0.0
+	var quick_shot_blend_max: float = 0.0       # upper end of tap→wrister blend band (m)
 	var quick_shot_elevation: float = 0.0       # fixed Y for snap releases
 	var elevation_target_height: float = 0.0    # world Y to hit at the goal line
 	var elevation_blade_height: float = 0.0     # puck starting world Y
@@ -43,12 +44,18 @@ class SlapperConfig:
 	var toward_net_dot_threshold: float = 0.5
 	var away_from_net_y: float = 0.10
 
-# Wrister release. Quick shots (very short charge) aim along player→blade —
-# the blade tracks the cursor via IK but ROM constraints prevent it going
-# behind the player, so this direction is always valid. Full wristers aim
-# from the drag direction with power scaling over the charge distance.
-# Backhand is detected by blade X sign in upper-body-local space: positive X
-# is a backhand for a left-handed player, negative X for a right-handed player.
+# Wrister release. A tap (very short charge) and a charged wrister are blended
+# CONTINUOUSLY across the charge axis rather than switched at a hard threshold:
+#   - TAP aims player→blade (the blade tracks the cursor via ROM-clamped IK, so
+#     aim is accurate and can never point behind the player) at snap/pass power.
+#   - WRISTER aims along the drag (the swept blade direction) at charged power.
+# A smoothstep weight over [quick_shot_threshold, quick_shot_blend_max] blends
+# direction and power between them, with both endpoints matching at the seams.
+# This removes the categorical tap↔wrister flip: a sub-mm charge difference can
+# no longer redirect the puck (the dominant client/host shot-divergence and
+# "weird bounce" source, and the cause of charge-starved forehand shots veering
+# to the blade side). Backhand is detected by blade X sign in upper-body-local
+# space: positive X is a backhand for a left-handed player, negative for a righty.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,
@@ -60,44 +67,53 @@ static func release_wrister(
 		charge_direction: Vector3 = Vector3.ZERO) -> ShotResult:
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
 	var charge_t: float = clampf(charge_distance / cfg.max_wrister_charge_distance, 0.0, 1.0)
+	var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
 
-	if charge_distance < cfg.quick_shot_threshold:
-		# Quick shot — aim player→blade. The blade tracks the cursor via IK so
-		# aim is accurate, and ROM constraints mean the blade can never be behind
-		# the player, so this direction can't flip backward when the cursor is.
-		var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
-		var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)
-		var dir: Vector3 = (blade_xz - player_xz).normalized()
-		if dir.length_squared() < 0.0001:
-			dir = (target - player_xz).normalized()
-		var quick_y: float = cfg.quick_shot_elevation if is_elevated else 0.0
-		return ShotResult.make(
-				Vector3(dir.x, quick_y, dir.z).normalized(),
-				cfg.quick_shot_power)
+	# TAP component — aim player→blade, snap/pass power.
+	var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)
+	var tap_dir: Vector3 = (blade_xz - player_xz).normalized()
+	if tap_dir.length_squared() < 0.0001:
+		tap_dir = (target - player_xz).normalized()
+	var tap_power: float = cfg.quick_shot_power
 
-	# Full wrister — shot goes where the blade was dragged, power scales with charge.
-	# charge_direction is the world-space direction the blade was sweeping at release;
-	# fall back to player→mouse only when no drag direction is available.
-	var shot_dir: Vector3
+	# WRISTER component — aim along the drag, power scaling with charge. Falls back
+	# to player→mouse only when no drag direction was recorded.
+	var wrister_dir: Vector3
 	if charge_direction.length_squared() > 0.0001:
-		shot_dir = Vector3(charge_direction.x, 0.0, charge_direction.z).normalized()
+		wrister_dir = Vector3(charge_direction.x, 0.0, charge_direction.z).normalized()
 	else:
-		var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
-		shot_dir = (target - player_xz).normalized()
-	var power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, charge_t)
-
+		wrister_dir = (target - player_xz).normalized()
+	var wrister_power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, charge_t)
 	if is_backhand:
-		power *= cfg.backhand_power_coefficient
+		wrister_power *= cfg.backhand_power_coefficient
+
+	# Continuous blend: 0 below quick_shot_threshold (pure tap), 1 above
+	# quick_shot_blend_max (pure wrister), smooth (C1) between.
+	var w: float = smoothstep(cfg.quick_shot_threshold, cfg.quick_shot_blend_max, charge_distance)
+	var dir_xz: Vector3 = _blend_dir_xz(tap_dir, wrister_dir, w)
+	var power: float = lerpf(tap_power, wrister_power, w)
 
 	var y: float = 0.0
 	if is_elevated:
-		y = _elevation_y(player_pos, shot_dir, power, cfg.elevation_target_height,
-				cfg.elevation_blade_height, cfg.elevation_gravity, cfg.elevation_goal_line_z,
-				cfg.attacking_goal_z, cfg.max_apex_above_blade,
+		var tap_y: float = cfg.quick_shot_elevation
+		var wrister_y: float = _elevation_y(player_pos, wrister_dir, wrister_power,
+				cfg.elevation_target_height, cfg.elevation_blade_height, cfg.elevation_gravity,
+				cfg.elevation_goal_line_z, cfg.attacking_goal_z, cfg.max_apex_above_blade,
 				cfg.away_from_net_y, cfg.toward_net_dot_threshold)
+		y = lerpf(tap_y, wrister_y, w)
 	return ShotResult.make(
-			Vector3(shot_dir.x, y, shot_dir.z).normalized(),
+			Vector3(dir_xz.x, y, dir_xz.z).normalized(),
 			power)
+
+# Interpolate between two XZ unit directions along the shorter arc by eased t.
+# Endpoints return exactly a / b so the blend is seamless at w = 0 and w = 1.
+static func _blend_dir_xz(a: Vector3, b: Vector3, t: float) -> Vector3:
+	if t <= 0.0:
+		return a
+	if t >= 1.0:
+		return b
+	var ang: float = lerp_angle(atan2(a.x, a.z), atan2(b.x, b.z), t)
+	return Vector3(sin(ang), 0.0, cos(ang))
 
 # Slapper release — power scales linearly with charge time.
 #

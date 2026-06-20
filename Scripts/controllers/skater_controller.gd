@@ -182,6 +182,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # is a quick shot regardless of who's shooting. Above this, the wrister
 # lerps power between min and max based on charge ratio.
 @export var quick_shot_threshold: float = 0.15
+# Upper end (meters of charge) of the tap→wrister blend band. Below
+# quick_shot_threshold the release is a pure tap; above this a pure charged
+# wrister; between, direction and power blend continuously so a tiny charge
+# difference never flips the shot categorically. Flat (not attribute-scaled),
+# like quick_shot_threshold.
+@export var quick_shot_blend_max: float = 0.30
 @export var quick_shot_elevation: float = 0.10
 @export var wrister_elevation_target_height: float = 0.90
 # Apex cap for elevated shots — puck can't rise more than this above the blade.
@@ -937,7 +943,9 @@ func _get_charge_direction() -> Vector3:
 
 func _release_wrister(input: InputState) -> void:
 	if has_puck:
-		var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
+		# Tap-direction source is the ROM-clamped target (same deterministic point
+		# the charge read), not the smoothed blade.
+		var blade_world: Vector3 = _ik.last_target_blade_world
 		# _prev_blade_dir is the world-space direction the cursor was dragged
 		# (relative to the player, so skating velocity is already removed).
 		var is_backhand: bool = \
@@ -999,11 +1007,12 @@ func _update_wrister_charge(input: InputState) -> void:
 	# frame — pixel motion captures the player's mouse drag intent
 	# independent of camera lag, body rotation, or skater locomotion.
 	var intent_pos := Vector3(input.mouse_screen_pos.x, 0.0, input.mouse_screen_pos.y)
-	# Magnitude signal: blade world position with skater translation subtracted.
-	# ROM clamping inside apply_blade_from_mouse has already run this tick, so a
-	# cursor past the reach limit produces zero delta here — no charge growth
-	# from cursor motion that the blade physically didn't follow.
-	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
+	# Magnitude signal: the ROM-clamped blade TARGET (closed-form project_blade,
+	# computed in apply_blade_from_mouse this tick), skater translation subtracted.
+	# Reading the target rather than the speed-capped smoothed blade keeps charge
+	# gated by reachable space (a cursor past the reach limit pins the target →
+	# zero delta) while staying deterministic, so host and client agree on charge.
+	var blade_world: Vector3 = _ik.last_target_blade_world
 	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
 	blade_pos_rel_skater.y = 0.0
 	_aiming.tick_wrister_charge(
@@ -1180,6 +1189,7 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 	cfg.backhand_power_coefficient = backhand_power_coefficient
 	cfg.quick_shot_power = quick_shot_power
 	cfg.quick_shot_threshold = quick_shot_threshold
+	cfg.quick_shot_blend_max = quick_shot_blend_max
 	cfg.quick_shot_elevation = quick_shot_elevation
 	cfg.elevation_target_height = wrister_elevation_target_height
 	cfg.elevation_blade_height = 0.05

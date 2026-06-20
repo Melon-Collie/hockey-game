@@ -10,6 +10,7 @@ func _wrister_cfg() -> ShotMechanics.WristerConfig:
 	cfg.backhand_power_coefficient = 0.75
 	cfg.quick_shot_power = 12.0
 	cfg.quick_shot_threshold = 0.1
+	cfg.quick_shot_blend_max = 0.3
 	cfg.quick_shot_elevation = 0.10
 	cfg.elevation_target_height = 0.90
 	cfg.elevation_blade_height = 0.05
@@ -128,6 +129,27 @@ func test_wrister_charged_uses_drag_direction_not_player_to_mouse() -> void:
 		Vector3(0, 0, -1))      # charge_direction: dragged forward
 	assert_almost_eq(result.direction.z, -1.0, 0.05, "shot follows drag direction, not mouse position")
 	assert_almost_eq(result.direction.x, 0.0, 0.05, "shot does not veer toward mouse")
+
+func test_wrister_continuous_across_charge_band() -> void:
+	# No categorical tap↔wrister flip: power and direction vary continuously as
+	# charge sweeps across quick_shot_threshold and the blend band. Adjacent
+	# samples (0.01 m apart) must not jump — this is the property that stops a
+	# tiny client/host charge disagreement from redirecting the shot.
+	var cfg := _wrister_cfg()
+	var drag := Vector3(0, 0, -1)               # dragged forward
+	var prev: ShotMechanics.ShotResult = null
+	var c: float = 0.0
+	while c <= 0.6:
+		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+			Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+			false, false, c, cfg, drag)
+		if prev != null:
+			assert_lt(absf(r.power - prev.power), 1.0,
+				"power continuous across charge=%.3f" % c)
+			assert_lt(r.direction.distance_to(prev.direction), 0.15,
+				"direction continuous across charge=%.3f" % c)
+		prev = r
+		c += 0.01
 
 func test_wrister_charged_falls_back_to_mouse_when_no_drag_direction() -> void:
 	# No drag direction recorded — should fall back to player→mouse aim.
