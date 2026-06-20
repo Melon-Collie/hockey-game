@@ -63,11 +63,12 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var goalie_pos: Vector3 = AIRoleHelpers.resolve_opp_goalie_pos(ctx)
 
-	var opp_positions: Array[Vector3] = []
-	var opp_states: Array[SkaterNetworkState] = []
+	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 
-	var teammate_positions: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
+	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
+	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
 	var min_opp_time_home: float = _min_opp_time_home(opp_states, our_net)
 
 	# Search around the carrier. Polar samples cover the cycle space;

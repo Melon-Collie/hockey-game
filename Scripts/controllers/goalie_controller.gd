@@ -598,6 +598,9 @@ var _state_buffer: Array[BufferedGoalieState] = []
 # builders rewrite every field on each call, so no stale values leak).
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
 var _scratch_state := GoalieNetworkState.new()
+# Reused ShotResult for the per-tick detect_shot calls (reaction re-projection
+# and universal-reaction scan), so the host doesn't allocate one per tick/goalie.
+var _scratch_shot := GoalieBehaviorRules.ShotResult.new()
 # Per-physics-frame memo for _opposing_shooter_near_puck (host hot path).
 var _shooter_near_memo_frame: int = -1
 var _shooter_near_memo: bool = false
@@ -838,9 +841,9 @@ func _update_tracking(delta: float) -> void:
 	# trajectory). Does NOT clear the freeze if re-projection fails — that would
 	# release it mid-flight on shots that arc over the net or drift wide before
 	# any resolving event has fired.
-	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, puck.linear_velocity,
-			_goal_line_z, _goal_center_x, _shot_cfg)
+			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
 	if result.is_shot:
 		_reaction.update_impact(result.impact_x, result.impact_y)
 		# Elevated shot that's tipped low and tracking low — start the
@@ -1844,9 +1847,9 @@ func _check_universal_reaction() -> void:
 	# Use linear_velocity here (the puck is loose, not in the
 	# Jolt-frozen->dynamic transition that `_on_puck_released` has to
 	# handle via `get_release_velocity`).
-	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, puck.linear_velocity,
-			_goal_line_z, _goal_center_x, _shot_cfg)
+			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
 	if not result.is_shot:
 		return
 	if debug_goalie_reads:

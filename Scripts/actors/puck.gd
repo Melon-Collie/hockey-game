@@ -40,6 +40,10 @@ var pickup_locked: bool = false
 # its stale entry. Public API still takes a Skater; the int conversion is
 # internal.
 var _cooldown_timers: Dictionary[int, float] = {}
+# Reused scratch for the per-tick cooldown expiry sweep — cleared (capacity
+# retained) each tick instead of reallocated, since cooldowns are active through
+# most of live play (every touch arms a ~0.5s reattach window).
+var _expired_cooldowns: Array[int] = []
 var _is_server: bool = false
 var _pending_reset: bool = false
 var _pending_reset_xz: Vector2 = Vector2.ZERO
@@ -392,19 +396,20 @@ func _physics_process(delta: float) -> void:
 	# Tick per-skater cooldowns regardless of carrier state. Keys are int
 	# instance_ids; resolve back via instance_from_id and drop entries whose
 	# skater has been freed (puppet bot teardown, etc.) alongside the
-	# naturally-expired ones. The early-out + lazily-created expiry list keep
-	# this allocation-free in the common no-cooldowns case (per-tick path).
+	# naturally-expired ones. The early-out keeps this fully skipped in the
+	# no-cooldowns case; the reused _expired_cooldowns scratch avoids a per-tick
+	# allocation while cooldowns are active (per-tick path).
 	if not _cooldown_timers.is_empty():
-		var _expired: Array[int] = []
+		_expired_cooldowns.clear()
 		for id: int in _cooldown_timers:
 			var skater: Skater = instance_from_id(id) as Skater
 			if not is_instance_valid(skater):
-				_expired.append(id)
+				_expired_cooldowns.append(id)
 				continue
 			_cooldown_timers[id] -= delta
 			if _cooldown_timers[id] <= 0.0:
-				_expired.append(id)
-		for id: int in _expired:
+				_expired_cooldowns.append(id)
+		for id: int in _expired_cooldowns:
 			_cooldown_timers.erase(id)
 
 	if carrier != null:

@@ -55,13 +55,39 @@ class ThreatConfig:
 
 # Is a released puck on course to hit this goalie's net? Returns a ShotResult.
 # is_shot == false means not on net or below fake_threshold.
+#
+# Allocating convenience wrapper — for tests and non-hot-path callers. The
+# per-tick goalie path calls detect_shot_into with a reused scratch instead.
 static func detect_shot(
 		puck_position: Vector3,
 		puck_velocity: Vector3,
 		goal_line_z: float,
 		goal_center_x: float,
 		cfg: ShotDetectionConfig) -> ShotResult:
-	var result := ShotResult.new()
+	return detect_shot_into(
+			puck_position, puck_velocity, goal_line_z, goal_center_x, cfg,
+			ShotResult.new())
+
+# Scratch-filling variant: writes into `out` and returns it, so the goalie
+# controller (which calls this every tick while reacting / on a loose puck)
+# reuses one ShotResult instead of allocating one per tick (×2 goalies, and
+# re-run per replayed input in reconcile). All fields are reset up front since
+# the instance carries over between calls.
+static func detect_shot_into(
+		puck_position: Vector3,
+		puck_velocity: Vector3,
+		goal_line_z: float,
+		goal_center_x: float,
+		cfg: ShotDetectionConfig,
+		out: ShotResult) -> ShotResult:
+	out.is_shot = false
+	out.reaction_delay = 0.0
+	out.impact_x = 0.0
+	out.impact_y = 0.0
+	out.is_low = false
+	out.is_elevated = false
+	out.time_to_impact = 0.0
+	var result := out
 	if puck_velocity.length() < cfg.shot_speed_threshold:
 		return result
 	if abs(puck_velocity.z) < 0.001:

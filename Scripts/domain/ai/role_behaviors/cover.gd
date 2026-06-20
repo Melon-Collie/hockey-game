@@ -61,7 +61,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 
-	var opp_teammates: Array[Vector3] = AIRoleHelpers.collect_opp_team_excluding_carrier(ctx)
+	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
+	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates)
 	if opp_teammates.is_empty():
 		# No pass receivers — no pass threat. PRESSURE/ANCHOR cover
 		# the carrier's direct options.
@@ -70,7 +71,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
-	var our_team_excluding_self: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
+	var our_team_excluding_self: Array[Vector3] = ctx.scratch_teammates
+	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
 	# Search center: midpoint between puck and our net, shifted
 	# weak-side. Lives in the slot vicinity in DZONE.
