@@ -58,6 +58,12 @@ var _ghost_banner_root: Control = null
 var _ghost_reason_label: Label = null
 var _ghost_instr_label: Label = null
 var _ghost_pulse_t: float = 0.0
+# HUD-local mirror of the offside hold: set when the local skater is observed
+# offside during the current ghost spell, cleared when they tag up or the ghost
+# lifts. Lets the banner distinguish an offside (held until tag-up, even after
+# the puck enters the zone) from a pure crease violation deep in the attacking
+# zone, where no offside ever occurred.
+var _ghost_was_offside: bool = false
 
 const _STAMINA_W: float = 240.0
 const _STAMINA_H: float = 12.0
@@ -803,19 +809,34 @@ func _update_ghost_banner() -> void:
 	if skater == null or record.team == null or not skater.is_ghost:
 		if _ghost_banner_root.visible:
 			_ghost_banner_root.visible = false
+		_ghost_was_offside = false
 		return
 	var pos: Vector3 = skater.global_position
 	var team_id: int = record.team.team_id
 	var reason: String = ""
 	var instruction: String = ""
+	# Track whether an offside actually occurred during this ghost spell. An
+	# offside ghost is held until the player tags up (has_tagged_up), so once we
+	# see them offside we latch it and keep showing OFFSIDE until they cross back
+	# — even after the puck enters the zone (which makes is_offside read false).
+	# Tagging up clears the latch.
+	var tagged_up: bool = InfractionRules.has_tagged_up(pos.z, team_id)
+	if tagged_up:
+		_ghost_was_offside = false
+	elif GameManager.get_rule_set() == GameRules.RuleSet.ARCADE:
+		var puck: Puck = GameManager.get_puck()
+		if puck != null:
+			var is_carrier: bool = puck.carrier == skater
+			if InfractionRules.is_offside(pos.z, team_id, puck.global_position.z, is_carrier):
+				_ghost_was_offside = true
 	# Reason is derived from the local skater's position. Offside takes priority:
-	# a skater in the opponent crease is usually also offside, and the single
-	# correct action is to skate back to the blue line — which clears the crease
-	# violation incidentally on the way. (A defender camping their OWN crease is
-	# never offside — has_tagged_up holds in their own end — so that case falls
-	# through to the crease prompt regardless of ordering.)
-	if GameManager.get_rule_set() == GameRules.RuleSet.ARCADE \
-			and not InfractionRules.has_tagged_up(pos.z, team_id):
+	# a skater serving an offside in the opponent crease must skate back to the
+	# blue line, which clears the crease violation incidentally on the way. But a
+	# player who is merely camping the crease while ONSIDE never went offside, so
+	# the latch stays false and they get the crease prompt. (A defender camping
+	# their OWN crease is never offside either — has_tagged_up holds in their own
+	# end — so that case also falls through to the crease prompt.)
+	if _ghost_was_offside and not tagged_up:
 		reason = "OFFSIDE"
 		instruction = "Skate back to your blue line to tag up"
 	elif CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
