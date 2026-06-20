@@ -1036,6 +1036,14 @@ func _give_puck_to_player() -> void:
 	_puck.set_puck_position(Vector3(_skater.global_position.x, _ICE_Y, _skater.global_position.z))
 	_puck.linear_velocity = Vector3.ZERO
 	_puck.set_carrier(_skater)
+	# set_carrier only pins the puck to the blade; it does NOT tell the controller
+	# it now has the puck. Without this the controller's has_puck stays false, so
+	# _release_wrister / _release_slapper short-circuit and puck_release_requested
+	# never fires — the player physically can't shoot. The Basics shot steps avoid
+	# this by dropping the puck on the ice for a natural pickup (which routes
+	# through on_puck_picked_up_network); the shooting drill hands it over directly,
+	# so we replicate that notification here.
+	_local_controller.on_puck_picked_up_network()
 
 
 # Stash the puck off-rink (so a crossing can't re-trigger) and schedule the
