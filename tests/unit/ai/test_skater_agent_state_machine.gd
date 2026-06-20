@@ -178,3 +178,140 @@ func test_angle_intercept_biases_toward_center_when_wide() -> void:
 	var out_left: Vector3 = Agent._angle_intercept_inside(target, Vector3(-5.0, 0, 0))
 	assert_almost_eq(out_left.x, target.x + Agent.CHASE_ANGLE_BIAS_M, 0.0001)
 	assert_eq(out_right.z, target.z, "only X is biased")
+
+
+# ── Slice 2: mouse / aim motion geometry ─────────────────────────────────────
+# Pure motion model — no snapshot, no role state. The output carries no noise
+# (MOUSE_NOISE_STD_M == 0), so the returned point equals the smooth _mouse_pos
+# and exact assertions hold.
+
+func _self_state(facing: Vector2) -> SkaterNetworkState:
+	var st := SkaterNetworkState.new()
+	st.facing = facing
+	return st
+
+
+const ARC_MAX_STEP := Agent.MOUSE_ARC_RATE_RAD_S * Agent.MOUSE_TICK_DELTA
+const STEP_MAX := Agent.MOUSE_MAX_SPEED_M_S * Agent.MOUSE_TICK_DELTA
+
+
+func test_arc_step_degenerate_target_returns_target() -> void:
+	# final_target on top of self → no direction to define; return it as-is.
+	assert_eq(sm._arc_step_mouse_target(Vector3.ZERO, Vector3.ZERO, _self_state(Vector2(0, 1))),
+			Vector3.ZERO)
+
+
+func test_arc_step_result_lies_on_aim_ring() -> void:
+	sm._mouse_pos_initialized = false
+	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(10, 0, 0), _self_state(Vector2(0, 1)))
+	assert_almost_eq(r.distance_to(Vector3.ZERO), Agent.CARRY_BLADE_AIM_FORWARD_M, 0.0001)
+
+
+func test_arc_step_caps_angular_rate() -> void:
+	# Seed from facing +z (bearing 0), desired due east (bearing PI/2):
+	# the step is clamped to one tick of MOUSE_ARC_RATE_RAD_S.
+	sm._mouse_pos_initialized = false
+	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(10, 0, 0), _self_state(Vector2(0, 1)))
+	assert_almost_eq(atan2(r.x, r.z), ARC_MAX_STEP, 1e-5)
+
+
+func test_arc_step_seeds_from_mouse_when_initialized() -> void:
+	# Mouse parked due east; facing points +z; target points +z. If the seed
+	# came from facing the result would barely move from +z — instead it steps
+	# from the east seed, proving mouse-offset precedence.
+	sm._mouse_pos = Vector3(2, 0, 0)
+	sm._mouse_pos_initialized = true
+	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(0, 0, 10), _self_state(Vector2(0, 1)))
+	assert_almost_eq(atan2(r.x, r.z), PI / 2.0 - ARC_MAX_STEP, 1e-5)
+
+
+func test_arc_step_converges_within_cap() -> void:
+	# Desired bearing inside one tick of travel → reached exactly.
+	sm._mouse_pos_initialized = false
+	var desired := 0.03  # < ARC_MAX_STEP
+	var ft := Vector3(sin(desired), 0, cos(desired)) * 5.0
+	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, ft, _self_state(Vector2(0, 1)))
+	assert_almost_eq(atan2(r.x, r.z), desired, 1e-5)
+
+
+func test_step_toward_first_call_snaps_and_caches() -> void:
+	var r: Vector3 = sm._step_mouse_toward(Vector3(3, 0, 4))
+	assert_true(sm._mouse_pos_initialized, "first call initializes the mouse")
+	assert_almost_eq(sm._mouse_pos.x, 3.0, 1e-6)
+	assert_almost_eq(sm._mouse_pos.z, 4.0, 1e-6)
+	assert_eq(r, Vector3(3, 0, 4), "no noise → output equals mouse pos")
+	assert_true(sm._has_cached_aim_target)
+	assert_eq(sm._cached_aim_target, Vector3(3, 0, 4))
+	assert_false(sm._cached_aim_uses_arc, "_step_mouse_toward is the no-arc path")
+
+
+func test_step_toward_caps_travel_per_tick() -> void:
+	sm._mouse_pos = Vector3.ZERO
+	sm._mouse_pos_initialized = true
+	sm._step_mouse_toward(Vector3(100, 0, 0))  # far east
+	assert_almost_eq(sm._mouse_pos.x, STEP_MAX, 1e-5)
+	assert_almost_eq(sm._mouse_pos.z, 0.0, 1e-6)
+
+
+func test_step_toward_within_cap_snaps_to_target() -> void:
+	sm._mouse_pos = Vector3.ZERO
+	sm._mouse_pos_initialized = true
+	sm._step_mouse_toward(Vector3(0.2, 0, 0.1))  # ~0.22 m < STEP_MAX
+	assert_almost_eq(sm._mouse_pos.x, 0.2, 1e-6)
+	assert_almost_eq(sm._mouse_pos.z, 0.1, 1e-6)
+
+
+func test_step_aim_projects_target_onto_ring() -> void:
+	sm._current_self_pos = Vector3.ZERO
+	sm._current_self_state = _self_state(Vector2(0, 1))
+	sm._mouse_pos_initialized = false
+	sm._step_mouse_aim(Vector3(10, 0, 0))  # far east; arced onto the 2 m ring
+	assert_almost_eq(Vector2(sm._mouse_pos.x, sm._mouse_pos.z).length(),
+			Agent.CARRY_BLADE_AIM_FORWARD_M, 1e-4)
+	assert_true(sm._cached_aim_uses_arc, "_step_mouse_aim is the arc path")
+
+
+# ── Slice 3: shot wind-up geometry ───────────────────────────────────────────
+# Pure trig on the aim direction — no snapshot, no goalie. Right-handed bot
+# (is_left_handed = false → _handedness_perp_sign = 1.0).
+
+func test_compensated_aim_is_unit_rotation_by_theta() -> void:
+	var aim := Vector3(0, 0, 1)
+	var dist := 5.0
+	var c: Vector3 = sm._aim_dir_compensated_for_side_offset(aim, dist, 1.0)
+	var theta := asin(Agent.BOT_WRISTER_SIDE_OFFSET_M / dist)
+	assert_almost_eq(c.length(), 1.0, 1e-5, "compensation is a rotation, preserves length")
+	assert_almost_eq(c.dot(aim), cos(theta), 1e-5, "angle off aim == asin(offset/dist)")
+
+
+func test_compensated_aim_degenerate_returns_raw() -> void:
+	# aim_distance <= side offset → unreachable setup; return raw aim.
+	var aim := Vector3(0, 0, 1)
+	assert_eq(sm._aim_dir_compensated_for_side_offset(aim, 0.1, 1.0), aim)
+
+
+func test_compensated_aim_approaches_raw_at_long_range() -> void:
+	var aim := Vector3(0, 0, 1)
+	var c: Vector3 = sm._aim_dir_compensated_for_side_offset(aim, 1000.0, 1.0)
+	assert_almost_eq(c.dot(aim), 1.0, 1e-4, "theta → 0 as distance grows")
+
+
+func test_wind_up_sweep_length_equals_charge() -> void:
+	var ep: Dictionary = sm._wind_up_endpoint_offsets(Vector3(0, 0, 1), 15.0, 0.7, 1.0)
+	var sweep: Vector3 = ep["target"] - ep["start"]
+	assert_almost_eq(sweep.length(), 0.7, 1e-5, "blade travels target_charge_m end to end")
+
+
+func test_wind_up_midpoint_is_side_offset() -> void:
+	var ep: Dictionary = sm._wind_up_endpoint_offsets(Vector3(0, 0, 1), 15.0, 0.7, 1.0)
+	var mid: Vector3 = (ep["start"] + ep["target"]) * 0.5
+	assert_almost_eq(mid.length(), Agent.BOT_WRISTER_SIDE_OFFSET_M, 1e-5,
+			"both endpoints share the lateral release offset")
+
+
+func test_wind_up_sweep_is_parallel_to_compensated_aim() -> void:
+	var aim := Vector3(0, 0, 1)
+	var ep: Dictionary = sm._wind_up_endpoint_offsets(aim, 15.0, 0.7, 1.0)
+	var comp: Vector3 = sm._aim_dir_compensated_for_side_offset(aim, 15.0, 1.0)
+	var sweep_dir: Vector3 = (ep["target"] - ep["start"]).normalized()
+	assert_almost_eq(sweep_dir.dot(comp), 1.0, 1e-5)
