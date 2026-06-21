@@ -49,6 +49,30 @@ const SHOT_LANE_REPEL_RADIUS: float = 2.0
 # rather than snapping to an axis).
 const CREASE_REPEL_WEIGHT: float = 0.9
 const CREASE_REPEL_EXTENSION: float = 0.5
+# Net detour — route a bot that's behind a goal line back around the
+# post instead of letting the anchor pull drag its body straight
+# through the net frame. The potential field has no obstacle for the
+# net itself (crease repel zeroes out behind the goal line), so a
+# carrier that ends up behind a net — its own or the opponent's —
+# drives straight at it, jams the body, and (when it's the own net)
+# shoves the puck into the mesh. Bots never INTEND to be behind the
+# line: carry candidates are clamped to the goal-line buffer, so this
+# only ever fires on an overshoot or a loose-puck pickup, where the
+# correct play is to skate out past the post and come around the
+# front. While behind the line and laterally within the post span,
+# push hard toward the nearer post side (with a slight outward bias so
+# the body keeps its depth and rounds the post rather than pressing
+# into the frame as the inward anchor pull fights it). Releases the
+# instant the bot clears the post laterally, gets in front of the
+# line, or its target is itself behind the line (a deliberate
+# loose-puck retrieval needs no detour).
+const NET_DETOUR_LATERAL_WEIGHT: float = 1.5
+const NET_DETOUR_BACK_WEIGHT: float = 0.5
+# Lateral clearance past the post before the detour releases.
+const NET_DETOUR_POST_MARGIN: float = 0.4
+# How far in front of the goal line the detour still engages — the body
+# has depth, so start rounding a touch before the line, not only behind.
+const NET_DETOUR_FRONT_MARGIN: float = 0.3
 # Below this distance to anchor we stop attracting and let friction settle
 # the bot — prevents jittering across the anchor at high speed.
 const ANCHOR_DEADBAND: float = 0.5
@@ -160,6 +184,13 @@ static func compute_move_vector(
 	force_x += crease.x
 	force_z += crease.y
 
+	# Net detour — round the post when stuck behind a goal line. The
+	# crease repel above zeroes out behind the line, so without this the
+	# anchor pull drags the body straight through the net frame.
+	var detour: Vector2 = _net_detour(self_pos, anchor)
+	force_x += detour.x
+	force_z += detour.y
+
 	# Clamp to unit length so move_vector behaves like a joystick.
 	var v := Vector2(force_x, force_z)
 	if v.length() > 1.0:
@@ -220,6 +251,47 @@ static func _crease_repel(self_pos: Vector3) -> Vector2:
 	var dir: Vector2 = CreaseRules.outward_direction(xz)
 	var falloff: float = 1.0 - (d_to_center / threshold)
 	return dir * (CREASE_REPEL_WEIGHT * falloff)
+
+
+# Lateral "round the post" force for a bot pinned behind a goal line.
+# Returns ZERO unless the bot is at/behind a goal line AND laterally
+# within the net's post span AND its anchor is on the rink side of that
+# line (so it actually needs to come around). Otherwise pushes toward
+# the nearer post side — at dead-center, around the side the anchor is
+# on — with a small outward-Z bias so the body keeps depth and rounds
+# the post instead of pressing into the frame while the inward anchor
+# pull fights it. See NET_DETOUR_* constants for the rationale.
+static func _net_detour(self_pos: Vector3, anchor: Vector3) -> Vector2:
+	var goal_z_sign: float = signf(self_pos.z)
+	if goal_z_sign == 0.0:
+		return Vector2.ZERO
+	var goal_z: float = goal_z_sign * GameRules.GOAL_LINE_Z
+	# Inward distance from the goal line: positive in front of the net
+	# (toward center ice), negative behind it.
+	var inward: float = (self_pos.z - goal_z) * -goal_z_sign
+	# Only engage at/behind the line (a hair in front allowed for body depth).
+	if inward > NET_DETOUR_FRONT_MARGIN:
+		return Vector2.ZERO
+	# Already clear of the post laterally → let the anchor pull round the
+	# corner on its own.
+	var post_span: float = GameRules.NET_HALF_WIDTH + NET_DETOUR_POST_MARGIN
+	if absf(self_pos.x) >= post_span:
+		return Vector2.ZERO
+	# Only detour toward a target on the rink side of this line. A target
+	# also behind the line (a deliberate loose-puck retrieval / wraparound
+	# setup) needs no detour.
+	if (anchor.z - goal_z) * -goal_z_sign <= 0.0:
+		return Vector2.ZERO
+	# Push toward the nearer post side; at dead-center, go around the side
+	# the play (anchor) is on.
+	var side: float = signf(self_pos.x)
+	if side == 0.0:
+		side = signf(anchor.x)
+		if side == 0.0:
+			side = 1.0
+	return Vector2(
+			side * NET_DETOUR_LATERAL_WEIGHT,
+			goal_z_sign * NET_DETOUR_BACK_WEIGHT)
 
 
 # Decides between obeying the steering output or braking against current

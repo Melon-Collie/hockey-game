@@ -113,6 +113,59 @@ func test_ignores_teammates_outside_repel_radius() -> void:
 	assert_almost_eq(v_with.y, v_solo.y, 0.001)
 
 
+# net detour tests — route a bot pinned behind a goal line out around
+# the post. The +Z net sits at +GOAL_LINE_Z; "behind" it is z > GOAL_LINE_Z.
+# A post-span bot (|x| < NET_HALF_WIDTH + margin) with an anchor on the
+# rink side should be pushed laterally past the post.
+
+func test_net_detour_pushes_lateral_when_behind_own_net() -> void:
+	# Bot dead-behind the +Z net with the anchor up-ice (rink side). The
+	# straight pull is -Z (through the net); the detour should add a
+	# dominant lateral push so the body rounds the post.
+	var pos := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z + 0.5)
+	var anchor := Vector3(0.0, 0.0, 0.0)  # center ice, rink side
+	var v := _move(pos, anchor)
+	assert_gt(absf(v.x), absf(v.y), "lateral detour should dominate the inward pull behind the net")
+
+
+func test_net_detour_picks_side_toward_anchor_at_center() -> void:
+	# Dead-center behind the net, anchor offset to +X → go around the +X post.
+	var pos := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z + 0.5)
+	var anchor := Vector3(5.0, 0.0, 0.0)
+	var v := _move(pos, anchor)
+	assert_gt(v.x, 0.0, "should round the post on the side the anchor is on")
+
+
+func test_net_detour_releases_when_clear_of_post() -> void:
+	# Behind the line but already wide of the post (|x| past the span) →
+	# no detour; the anchor pull brings the bot around normally.
+	var clear_x: float = GameRules.NET_HALF_WIDTH + AISteering.NET_DETOUR_POST_MARGIN + 0.2
+	var pos := Vector3(clear_x, 0.0, GameRules.GOAL_LINE_Z + 1.0)
+	var anchor := Vector3(0.0, 0.0, 0.0)
+	var v := _move(pos, anchor)
+	# Pure anchor pull is toward (-x, -z); no lateral detour added, so the
+	# x-component stays negative (toward the anchor) rather than pushed +x.
+	assert_lt(v.x, 0.0, "wide of the post, the bot is pulled toward the anchor, not detoured")
+
+
+func test_net_detour_noop_when_anchor_behind_line() -> void:
+	# Loose-puck retrieval: bot behind the net, anchor ALSO behind the line
+	# (a real destination back there) → no detour, let it go.
+	var pos := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z + 0.3)
+	var anchor := Vector3(2.0, 0.0, GameRules.GOAL_LINE_Z + 1.0)  # deeper behind
+	var v := _move(pos, anchor)
+	assert_gt(v.y, 0.0, "anchor deeper behind the net pulls +Z; no lateral override")
+
+
+func test_net_detour_noop_in_front_of_line() -> void:
+	# Well in front of the goal line (slot) — detour must not engage; only
+	# the crease repel governs near the net front.
+	var pos := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 3.0)
+	var anchor := Vector3(0.0, 0.0, 0.0)
+	var v := _move(pos, anchor)
+	assert_almost_eq(v.x, 0.0, 0.05, "no lateral detour in front of the goal line")
+
+
 # brake_pivot tests — direction reversal helper layered on top of the
 # potential-field steering output.
 
