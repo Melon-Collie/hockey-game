@@ -29,11 +29,9 @@ func test_round_trip_preserves_all_fields() -> void:
 	s.block_held       = true
 	s.stick_lift_held  = true
 	s.sprint_held      = true
-	s.interp_delay_ms  = 75.0
 
 	var r := InputState.from_array(s.to_array())
 
-	assert_almost_eq(r.interp_delay_ms, s.interp_delay_ms, 0.00001)
 	assert_almost_eq(r.host_timestamp, s.host_timestamp, 0.00001)
 	assert_almost_eq(r.delta, s.delta, 0.00001)
 	assert_almost_eq(r.move_vector.x, s.move_vector.x, 0.00001)
@@ -58,7 +56,7 @@ func test_array_length_sentinel() -> void:
 	# Field count sentinel — if someone adds a field without updating
 	# to_array/from_array, this catches the mismatch.
 	var s := InputState.new()
-	assert_eq(s.to_array().size(), 20)
+	assert_eq(s.to_array().size(), 19)
 
 
 func test_stick_lift_back_compat_defaults_false() -> void:
@@ -101,11 +99,9 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	s.block_held       = true
 	s.stick_lift_held  = true
 	s.sprint_held      = true
-	s.interp_delay_ms  = 75.0
 
 	var r := InputState.from_bytes(s.to_bytes())
 
-	assert_almost_eq(r.interp_delay_ms,  s.interp_delay_ms,  1.0)  # u8 @ 1ms
 	assert_almost_eq(r.host_timestamp,   s.host_timestamp,   0.0001)
 	assert_almost_eq(r.delta,            s.delta,            0.00001)
 	assert_almost_eq(r.move_vector.x,    s.move_vector.x,    0.001)
@@ -127,7 +123,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 
 
 func test_bytes_size_sentinel() -> void:
-	assert_eq(InputState.BYTES_SIZE, 24)
+	assert_eq(InputState.BYTES_SIZE, 23)
 
 
 func test_from_bytes_supports_offset() -> void:

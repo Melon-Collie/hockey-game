@@ -144,15 +144,18 @@ fidelity. **Skip unless Step 4 testing shows input-cadence divergence.**
 **Status:** chose option **C** (input-stream-driven, RPC-free end state), landed in
 steps. **C-step 1 DONE** behind `HOST_AUTHORITATIVE_REMOTE_SHOTS` (default OFF):
 host fires its own derived shot from the RemoteController's input-stream release,
-live blade as origin. **C-step 2a DONE:** `interp_delay_ms` now rides in the input
-stream (`InputState` u8, `PROTOCOL_VERSION` 7→8), so the host-derived release is
-fully input-native — the C-step-1 RPC metadata cache is gone; the inbound release
-RPC is now suppressed entirely when the toggle is on. **C-step 2b PENDING (held for
-online validation):** delete the shot RPC + `send_puck_release` and retire the
-toggle — deferred deliberately because deleting the RPC removes the A/B fallback,
-which is the only way to validate this headless-untestable path. **Also pending:**
-one-timer release still on the legacy RPC path (needs the same input-stream
-treatment).
+live blade as origin. **C-step 2a DONE (no wire change):** the host-derived release
+is fully input-native — it **approximates** the shooter's interp_delay from the rtt
+it already measures plus one broadcast interval (the two dominant terms of
+`_compute_target_interpolation_delay`, dropping only the adaptive jitter cushion).
+interp_delay is *not* derivable from the timestamp (orthogonal: when-shot vs
+view-staleness), but the rtt approximation is close enough for beatable goalies and
+avoids threading metadata through the wire — so **no `PROTOCOL_VERSION` bump**. The
+inbound release RPC is suppressed entirely when the toggle is on. **C-step 2b PENDING
+(held for online validation):** delete the shot RPC + `send_puck_release` and retire
+the toggle — deferred because deleting the RPC removes the A/B fallback, the only way
+to validate this headless-untestable path. **Also pending:** one-timer release still
+on the legacy RPC path (needs the same input-stream treatment).
 
 **Finding:** the host *already* derives the authoritative shot. A remote human's
 `RemoteController` runs `_process_input` → shot state machine → `_release_wrister`,

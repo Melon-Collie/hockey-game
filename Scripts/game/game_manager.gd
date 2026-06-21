@@ -2142,12 +2142,18 @@ func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bo
 	if _registry.resolve_peer_id(puck.carrier) != shooter_peer_id:
 		return
 	# Origin: the host's authoritative blade contact at the release tick (not a
-	# client-sent point). Timestamp + interp delay: the release input the host just
-	# processed (interp_delay rides in the input stream). RTT: the host's own ping.
+	# client-sent point). Timestamp: the release input the host just processed.
 	var origin: Vector3 = record.skater.get_blade_contact_global()
 	var release_ts: float = record.controller.last_processed_host_timestamp
 	var rtt_ms: float = float(NetworkManager.get_peer_ping_ms(shooter_peer_id))
-	var interp_delay_ms: float = record.controller.last_processed_interp_delay_ms
+	# Approximate the shooter's interpolation delay from the rtt the host already
+	# measures plus one broadcast interval — the two dominant terms of the client's
+	# get_target_interpolation_delay. The dropped term is the client's adaptive jitter
+	# cushion (small except on jittery links); for beatable goalies it's close enough,
+	# and it keeps the host-derived release purely input-driven (nothing extra on the
+	# wire). Bounds mirror _compute_target_interpolation_delay's clamp.
+	var interp_delay_ms: float = clampf(
+			rtt_ms * 0.5 + 1000.0 / float(Constants.STATE_RATE), 16.0, 200.0)
 	_firing_derived_shot = true
 	on_remote_puck_release(
 			direction, power, is_slapper, shooter_peer_id, release_ts, rtt_ms, interp_delay_ms, origin)

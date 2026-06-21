@@ -76,9 +76,6 @@ func gather() -> InputState:
 	state.stick_lift_held = Input.is_action_pressed("stick_lift")
 	state.mouse_world_pos = _get_mouse_world_pos(_camera)
 	state.host_timestamp = NetworkManager.estimated_host_time()
-	# Carry our interpolation delay so the host can rewind the goalie to the view we
-	# shot against, at the input-stream release (no separate shot RPC needed).
-	state.interp_delay_ms = NetworkManager.get_target_interpolation_delay() * 1000.0
 	_last_mouse_world_pos = state.mouse_world_pos
 	_last_mouse_screen_pos = state.mouse_screen_pos
 	# Clear pending flags after gather
