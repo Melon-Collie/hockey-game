@@ -1,8 +1,10 @@
 class_name ShotReleaseRules
 
-# Host-side validation and clamping for client shot-release claims
-# (`release_puck` / `release_puck_one_timer` RPCs). The shot-release path is
-# the only client→host claim that doesn't go through a claim resolver, so the
+# Host-side validation and clamping for shot releases. Regular wrister/slapper
+# releases are now host-derived from the input stream (no RPC), but these clamps
+# still apply as defense-in-depth; the one-timer release (`release_puck_one_timer`
+# RPC) still flows from the client. The shot-release path is the only path that
+# doesn't go through a claim resolver, so the
 # same discipline the resolvers apply (PickupClaimResolver / PokeClaimResolver
 # / HitClaimResolver) lives here as pure rules: every client-supplied lag-comp
 # parameter is clamped to a bounded range, and one-timer eligibility is gated

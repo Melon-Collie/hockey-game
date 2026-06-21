@@ -150,12 +150,18 @@ it already measures plus one broadcast interval (the two dominant terms of
 `_compute_target_interpolation_delay`, dropping only the adaptive jitter cushion).
 interp_delay is *not* derivable from the timestamp (orthogonal: when-shot vs
 view-staleness), but the rtt approximation is close enough for beatable goalies and
-avoids threading metadata through the wire — so **no `PROTOCOL_VERSION` bump**. The
-inbound release RPC is suppressed entirely when the toggle is on. **C-step 2b PENDING
-(held for online validation):** delete the shot RPC + `send_puck_release` and retire
-the toggle — deferred because deleting the RPC removes the A/B fallback, the only way
-to validate this headless-untestable path. **Also pending:** one-timer release still
-on the legacy RPC path (needs the same input-stream treatment).
+avoids threading metadata through the wire — so **no `PROTOCOL_VERSION` bump**.
+**C-step 2b DONE (regular shots):** the `release_puck` RPC + `send_puck_release` +
+the `HOST_AUTHORITATIVE_REMOTE_SHOTS` toggle are **deleted**. `_on_remote_derived_release`
+→ `_fire_remote_shot` (renamed from the old RPC handler) is now the *only* path a
+remote human's wrister/slapper fires; the client predicts locally and sends nothing.
+Committed to the host-authoritative path (fix-forward, not revert).
+**STILL PENDING — one-timers** (left on the legacy `release_puck_one_timer` RPC on
+purpose): their wiring is ambiguous — `one_timer_release_requested` is connected for
+*all* controllers, so on the host the remote's RemoteController emit may already run
+the host firing branch *and* the RPC fires. Untangling that blind risks breaking a
+working path; the current behavior (does it double-path today?) must be confirmed
+before applying the same input-stream treatment.
 
 **Finding:** the host *already* derives the authoritative shot. A remote human's
 `RemoteController` runs `_process_input` → shot state machine → `_release_wrister`,

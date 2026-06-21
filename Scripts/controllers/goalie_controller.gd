@@ -574,7 +574,7 @@ var _slide_start_rotation_y: float = 0.0
 var _skater_getter: Callable = Callable()
 
 # Lag-comp back-date (seconds) consumed by the next release-triggered
-# reaction. Set by GameManager.on_remote_puck_release / one_timer when a
+# reaction. Set by GameManager._fire_remote_shot / one_timer when a
 # client RPC carries a host_timestamp older than now. Cleared on consumption
 # so it never bleeds into a later shot.
 var _pending_reaction_back_date: float = 0.0
