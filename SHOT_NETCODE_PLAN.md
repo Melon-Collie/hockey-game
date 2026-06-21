@@ -156,12 +156,20 @@ the `HOST_AUTHORITATIVE_REMOTE_SHOTS` toggle are **deleted**. `_on_remote_derive
 → `_fire_remote_shot` (renamed from the old RPC handler) is now the *only* path a
 remote human's wrister/slapper fires; the client predicts locally and sends nothing.
 Committed to the host-authoritative path (fix-forward, not revert).
-**STILL PENDING — one-timers** (left on the legacy `release_puck_one_timer` RPC on
-purpose): their wiring is ambiguous — `one_timer_release_requested` is connected for
-*all* controllers, so on the host the remote's RemoteController emit may already run
-the host firing branch *and* the RPC fires. Untangling that blind risks breaking a
-working path; the current behavior (does it double-path today?) must be confirmed
-before applying the same input-stream treatment.
+**One-timers RESOLVED.** Two distinct cases: (1) *puck-arrives-mid-charge* fires via
+`puck_release_requested` → already host-authoritative (covered by 2b); (2) *deflection*
+(release in `SLAPPER_CHARGE_WITHOUT_PUCK` at an unpossessed puck) fires via
+`one_timer_release_requested` → the `release_puck_one_timer` RPC. The deflection case
+is architecturally a **contested lag-comp claim** (range check against a moving puck
+the shooter never owned — like pickup/poke), so it correctly *stays* a server-arbitrated
+RPC (`on_remote_one_timer_release` rewinds the puck for the range gate); it is NOT
+host-derived like a possessed shot. The actual bug found: `one_timer_release_requested`
+was connected for *all* controllers, so the host's *remote* RemoteController also fired
+it from its **live-puck** sim emit (no lag-comp) — an intermittent double with the RPC,
+gated by whether the host's live puck was in range when its sim reached the release.
+**Fix:** gate that connect to `is_local`/`is_bot` (mirroring the regular-shot pattern),
+so a remote deflection one-timer fires only via the lag-comp RPC claim. The shooting
+work is now complete; everything is online-untested and needs a live session.
 
 **Finding:** the host *already* derives the authoritative shot. A remote human's
 `RemoteController` runs `_process_input` → shot state machine → `_release_wrister`,

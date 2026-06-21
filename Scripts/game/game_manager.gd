@@ -1644,8 +1644,16 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	if NetworkManager.is_host and not record.is_local and not record.is_bot:
 		record.controller.puck_release_requested.connect(
 				_on_remote_derived_release.bind(record.peer_id))
-	record.controller.one_timer_release_requested.connect(
-			_on_one_timer_release_requested.bind(record.skater))
+	# Deflection one-timer (release without possession) is a contested, lag-comp-
+	# arbitrated CLAIM — like pickup/poke — not a possessed shot, so for a remote human
+	# it fires ONLY via on_remote_one_timer_release (the RPC rewinds the puck for the
+	# range check). Connect the sim-emit firing only for the local player (whose client
+	# branch sends that claim RPC) and bots (host-local, no lag-comp needed). Connecting
+	# remote controllers here made the host ALSO fire from its live-puck sim emit — no
+	# lag-comp, and an intermittent double with the RPC.
+	if record.is_local or record.is_bot:
+		record.controller.one_timer_release_requested.connect(
+				_on_one_timer_release_requested.bind(record.skater))
 	var pid: int = record.peer_id
 	record.skater.body_checked_player.connect(
 		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
