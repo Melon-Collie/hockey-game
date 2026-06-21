@@ -313,6 +313,9 @@ var _shot_pose: SkaterShotPoseCoordinator = SkaterShotPoseCoordinator.new()
 var _skating: SkaterSkatingCoordinator = SkaterSkatingCoordinator.new()
 var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
+# interp_delay_ms of the input the host last drove this (remote) skater from. Read by
+# the host-authoritative shot release for the goalie rewind. Set in RemoteController.
+var last_processed_interp_delay_ms: float = 0.0
 var has_puck: bool = false
 var is_replaying: bool = false
 # Sprint stamina (0..1) and the exhaustion lockout latch. Updated deterministically

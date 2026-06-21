@@ -123,12 +123,8 @@ var _tutorial_offsides_active: bool = false
 # ── Subsystems ────────────────────────────────────────────────────────────────
 # Re-entrancy flag: set while _on_remote_derived_release calls back into
 # on_remote_puck_release so the latter actually FIRES the host-derived shot instead
-# of taking the metadata-cache-and-return branch meant for the inbound client RPC.
+# of taking the suppress-and-return branch meant for the inbound client RPC.
 var _firing_derived_shot: bool = false
-# Last lag-comp metadata seen on a shooter's release RPC (interp_delay / rtt), keyed
-# by peer_id. The host-derived release consumes it for the goalie rewind when the
-# RPC arrived before the input-stream release (the common, fast-link case).
-var _shooter_lagcomp_cache: Dictionary[int, Dictionary] = {}
 var _registry: PlayerRegistry = null
 var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
@@ -2016,15 +2012,11 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 
 func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
 	# Host-authoritative mode: don't fire from the client's params. The host fires its
-	# OWN derived shot from the input-stream release (_on_remote_derived_release); this
-	# inbound RPC only carries lag-comp metadata the goalie rewind needs — cache it and
-	# return. (Skipped when _firing_derived_shot, i.e. the derived handler re-entering
-	# here to actually fire.)
+	# OWN derived shot from the input-stream release (_on_remote_derived_release), which
+	# carries everything it needs (interp_delay now rides in the input stream). Suppress
+	# this inbound client RPC entirely. (Skipped when _firing_derived_shot, i.e. the
+	# derived handler re-entering here to actually fire.)
 	if NetworkManager.is_host and HOST_AUTHORITATIVE_REMOTE_SHOTS and not _firing_derived_shot:
-		_shooter_lagcomp_cache[shooter_peer_id] = {
-			"rtt_ms": rtt_ms,
-			"interp_delay_ms": interp_delay_ms,
-		}
 		return
 	# Sender must be the current carrier on the host. Without this check, any
 	# peer can send release_puck with arbitrary direction/power and the host
@@ -2150,13 +2142,12 @@ func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bo
 	if _registry.resolve_peer_id(puck.carrier) != shooter_peer_id:
 		return
 	# Origin: the host's authoritative blade contact at the release tick (not a
-	# client-sent point). Timestamp: the release input the host just processed.
+	# client-sent point). Timestamp + interp delay: the release input the host just
+	# processed (interp_delay rides in the input stream). RTT: the host's own ping.
 	var origin: Vector3 = record.skater.get_blade_contact_global()
 	var release_ts: float = record.controller.last_processed_host_timestamp
-	var meta: Dictionary = _shooter_lagcomp_cache.get(shooter_peer_id, {})
-	var rtt_ms: float = meta.get("rtt_ms", float(NetworkManager.get_peer_ping_ms(shooter_peer_id)))
-	var interp_delay_ms: float = meta.get(
-			"interp_delay_ms", NetworkManager.get_target_interpolation_delay() * 1000.0)
+	var rtt_ms: float = float(NetworkManager.get_peer_ping_ms(shooter_peer_id))
+	var interp_delay_ms: float = record.controller.last_processed_interp_delay_ms
 	_firing_derived_shot = true
 	on_remote_puck_release(
 			direction, power, is_slapper, shooter_peer_id, release_ts, rtt_ms, interp_delay_ms, origin)

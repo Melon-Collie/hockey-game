@@ -142,13 +142,17 @@ fidelity. **Skip unless Step 4 testing shows input-cadence divergence.**
 ### Step 4 — Host derives the shot (authority) — RESHAPED BY FINDINGS
 
 **Status:** chose option **C** (input-stream-driven, RPC-free end state), landed in
-two steps. **C-step 1 IMPLEMENTED** behind `HOST_AUTHORITATIVE_REMOTE_SHOTS`
-(default OFF): the host fires its own derived shot from the RemoteController's
-input-stream release, live blade as origin, reusing `on_remote_puck_release`'s
-firing + goalie-rewind via a re-entrancy flag; the inbound release RPC is demoted
-to a cached lag-comp metadata carrier. Needs online A/B (toggle off vs on).
-**C-step 2 PENDING:** move interp_delay into the input stream (`PROTOCOL_VERSION`
-bump) and delete the shot RPC. Plus: one-timer release still on the legacy RPC path.
+steps. **C-step 1 DONE** behind `HOST_AUTHORITATIVE_REMOTE_SHOTS` (default OFF):
+host fires its own derived shot from the RemoteController's input-stream release,
+live blade as origin. **C-step 2a DONE:** `interp_delay_ms` now rides in the input
+stream (`InputState` u8, `PROTOCOL_VERSION` 7→8), so the host-derived release is
+fully input-native — the C-step-1 RPC metadata cache is gone; the inbound release
+RPC is now suppressed entirely when the toggle is on. **C-step 2b PENDING (held for
+online validation):** delete the shot RPC + `send_puck_release` and retire the
+toggle — deferred deliberately because deleting the RPC removes the A/B fallback,
+which is the only way to validate this headless-untestable path. **Also pending:**
+one-timer release still on the legacy RPC path (needs the same input-stream
+treatment).
 
 **Finding:** the host *already* derives the authoritative shot. A remote human's
 `RemoteController` runs `_process_input` → shot state machine → `_release_wrister`,

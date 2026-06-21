@@ -119,6 +119,7 @@ func _drive_from_input(delta: float) -> void:
 	if input_due:
 		var input: InputState = _input_queue.pop_front()
 		last_processed_host_timestamp = input.host_timestamp
+		last_processed_interp_delay_ms = input.interp_delay_ms
 		NetworkTelemetry.record_input_lead(
 				NetworkManager.estimated_host_time() - input.host_timestamp)
 		if not _game_state.is_movement_locked():

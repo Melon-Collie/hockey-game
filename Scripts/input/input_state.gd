@@ -1,11 +1,14 @@
 class_name InputState
 
-const BYTES_SIZE: int = 23
+const BYTES_SIZE: int = 24
 # Layout: f32 timestamp(0) f32 delta(4) s16 move.x(8) s16 move.y(10)
 #         s16 mwp.x(12) s8 mwp.y(14) s16 mwp.z(15) u16 msp.x(17) u16 msp.y(19)
 #         u16 flags(21)  flags: shoot_pressed[0] shoot_held[1] slap_pressed[2]
 #         slap_held[3] sprint_held[4] brake[5] elevation_up[6] elevation_down[7]
 #         block_held[8] stick_lift_held[9]
+#         u8 interp_delay_ms(23) — the shooter's interpolation delay (ms), carried
+#         so the host can lag-comp the goalie rewind at the input-stream shot
+#         release without a separate RPC (host-authoritative shooting).
 
 var host_timestamp: float = 0.0
 var delta: float = 1.0 / 60.0
@@ -22,6 +25,10 @@ var elevation_down: bool = false
 var block_held: bool = false
 var stick_lift_held: bool = false
 var sprint_held: bool = false
+# Shooter's current interpolation delay (ms), stamped client-side. Read by the host
+# at the input-stream shot release to rewind the goalie to the shooter's view. 0 when
+# unknown / not applicable (e.g. host-local inputs).
+var interp_delay_ms: float = 0.0
 
 func to_array() -> Array:
 	return [
@@ -44,6 +51,7 @@ func to_array() -> Array:
 		mouse_screen_pos.y,
 		stick_lift_held,
 		sprint_held,
+		interp_delay_ms,
 	]
 
 func to_bytes() -> PackedByteArray:
@@ -68,6 +76,7 @@ func to_bytes() -> PackedByteArray:
 		(0x040 if elevation_up   else 0) | (0x080 if elevation_down else 0) |
 		(0x100 if block_held     else 0) | (0x200 if stick_lift_held else 0))
 	b.encode_u16(21, flags)
+	b.encode_u8(23, clampi(roundi(interp_delay_ms), 0, 255))
 	return b
 
 
@@ -98,6 +107,7 @@ static func from_bytes(b: PackedByteArray, offset: int = 0) -> InputState:
 	s.elevation_down     = (flags & 0x080) != 0
 	s.block_held         = (flags & 0x100) != 0
 	s.stick_lift_held    = (flags & 0x200) != 0
+	s.interp_delay_ms    = float(b.decode_u8(offset + 23))
 	return s
 
 
@@ -120,4 +130,6 @@ static func from_array(data: Array) -> InputState:
 		state.stick_lift_held = data[17]
 	if data.size() > 18:
 		state.sprint_held = data[18]
+	if data.size() > 19:
+		state.interp_delay_ms = data[19]
 	return state

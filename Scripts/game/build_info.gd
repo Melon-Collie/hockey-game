@@ -28,7 +28,9 @@ const VERSION: String = "dev"
 # v7: request_join carries the joiner's SteamID64 so the host can match a
 #     reconnecting peer (new peer_id) to a reserved slot and restore their
 #     team/slot/stats.
-const PROTOCOL_VERSION: int = 7
+# v8: InputState carries u8 interp_delay_ms (BYTES_SIZE 23->24) so the host can
+#     lag-comp the goalie at the input-stream shot release (host-authoritative shots).
+const PROTOCOL_VERSION: int = 8
 
 const RELEASE_TAG: String = "latest"
 const REPO: String = "Melon-Collie/mitts"
