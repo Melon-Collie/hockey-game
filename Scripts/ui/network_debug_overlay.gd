@@ -46,6 +46,14 @@ var _toast: Label
 var _toast_timer: float = 0.0
 const TOAST_SECONDS: float = 2.0
 
+# Always-on health dot: a small green/yellow/red ● in the top-left, live at all
+# times so a tester sees link state without opening the F3 panel. While the
+# panel is closed the verdict is re-evaluated on a throttle (telemetry refreshes
+# at 1 Hz, so 2 Hz keeps the dot current without per-frame string building).
+var _dot: Label
+var _dot_timer: float = 0.0
+const DOT_REFRESH_SECONDS: float = 0.5
+
 # Built fresh each frame: collected metric lines + the worst health seen, which
 # rolls up into the header verdict.
 var _lines: PackedStringArray = []
@@ -77,6 +85,17 @@ func _ready() -> void:
 	add_child(_panel)
 	_panel.hide()
 	_build_toast()
+	_build_dot()
+
+func _build_dot() -> void:
+	_dot = Label.new()
+	_dot.position = Vector2(10, 6)
+	_dot.text = DOT
+	_dot.add_theme_font_size_override("font_size", 18)
+	_dot.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_dot.add_theme_constant_override("outline_size", 4)
+	add_child(_dot)
+	_dot.hide()
 
 func _build_toast() -> void:
 	_toast = Label.new()
@@ -132,17 +151,29 @@ func _process(delta: float) -> void:
 		_toast_timer -= delta
 		if _toast_timer <= 0.0:
 			_toast.hide()
-	if not _showing:
-		return
+	# Panel open: rebuild every frame. Panel closed: still evaluate the verdict
+	# (for the always-on dot) but only on a throttle, since the full-text build
+	# isn't needed and telemetry only changes at 1 Hz.
+	if _showing:
+		_refresh()
+	else:
+		_dot_timer -= delta
+		if _dot_timer <= 0.0:
+			_dot_timer = DOT_REFRESH_SECONDS
+			_refresh()
+
+func _refresh() -> void:
 	_lines.clear()
 	_worst = Health.OK
 
 	var t: NetworkTelemetry = NetworkTelemetry.instance
 	if t == null:
-		_rt.text = (
-			"[b]Network Debug[/b]   [color=#%s](F3 to close)[/color]\n" % COL_DIM
-			+ "[color=#%s]Not in a session — start a game to see live metrics.[/color]" % COL_DIM
-		)
+		_dot.hide()
+		if _showing:
+			_rt.text = (
+				"[b]Network Debug[/b]   [color=#%s](F3 to close)[/color]\n" % COL_DIM
+				+ "[color=#%s]Not in a session — start a game to see live metrics.[/color]" % COL_DIM
+			)
 		return
 
 	var role: String
@@ -155,6 +186,12 @@ func _process(delta: float) -> void:
 	else:
 		role = "CLIENT"
 		_render_client(t)
+
+	# Verdict is known once all lines are collected; drive the always-on dot.
+	_dot.add_theme_color_override("font_color", Color("#" + _col(_worst)))
+	_dot.show()
+	if not _showing:
+		return
 
 	# Header is built last so the verdict reflects the worst line above it.
 	var verdict: String = ["● OK", "● WATCH", "● PROBLEM"][int(_worst)]
