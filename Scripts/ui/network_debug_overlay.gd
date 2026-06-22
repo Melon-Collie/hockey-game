@@ -36,7 +36,15 @@ const COL_VAL := "ececec"
 const DOT := "●"
 
 var _rt: RichTextLabel
+var _panel: PanelContainer
 var _showing: bool = false
+
+# Felt-lag toast: a transient confirmation shown when a tester presses F4 to
+# flag "this felt laggy." Rendered independently of the F3 panel (the panel may
+# be hidden), so the layer stays visible and only the panel toggles.
+var _toast: Label
+var _toast_timer: float = 0.0
+const TOAST_SECONDS: float = 2.0
 
 # Built fresh each frame: collected metric lines + the worst health seen, which
 # rolls up into the header verdict.
@@ -45,18 +53,18 @@ var _worst: Health = Health.OK
 
 func _ready() -> void:
 	layer = 100
-	var panel := PanelContainer.new()
-	panel.anchor_left = 1.0
-	panel.anchor_right = 1.0
-	panel.anchor_top = 0.0
-	panel.anchor_bottom = 0.0
-	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	panel.position = Vector2(-8, 8)
+	_panel = PanelContainer.new()
+	_panel.anchor_left = 1.0
+	_panel.anchor_right = 1.0
+	_panel.anchor_top = 0.0
+	_panel.anchor_bottom = 0.0
+	_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_panel.position = Vector2(-8, 8)
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.0, 0.0, 0.0, 0.78)
 	style.set_corner_radius_all(4)
 	style.set_content_margin_all(8.0)
-	panel.add_theme_stylebox_override("panel", style)
+	_panel.add_theme_stylebox_override("panel", style)
 	_rt = RichTextLabel.new()
 	_rt.bbcode_enabled = true
 	_rt.fit_content = true
@@ -65,16 +73,65 @@ func _ready() -> void:
 	_rt.custom_minimum_size = Vector2(580, 0)
 	_rt.add_theme_font_size_override("normal_font_size", 13)
 	_rt.add_theme_font_size_override("bold_font_size", 13)
-	panel.add_child(_rt)
-	add_child(panel)
-	hide()
+	_panel.add_child(_rt)
+	add_child(_panel)
+	_panel.hide()
+	_build_toast()
+
+func _build_toast() -> void:
+	_toast = Label.new()
+	_toast.anchor_left = 0.5
+	_toast.anchor_right = 0.5
+	_toast.anchor_top = 1.0
+	_toast.anchor_bottom = 1.0
+	_toast.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_toast.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_toast.position = Vector2(0, -48)
+	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toast.add_theme_font_size_override("font_size", 15)
+	_toast.add_theme_color_override("font_color", Color(0.60, 0.82, 0.49))
+	_toast.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_toast.add_theme_constant_override("outline_size", 4)
+	add_child(_toast)
+	_toast.hide()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.keycode == KEY_F3 and event.pressed and not event.echo:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return
+	if event.keycode == KEY_F3:
 		_showing = not _showing
-		visible = _showing
+		_panel.visible = _showing
+	elif event.keycode == KEY_F4:
+		_log_felt_lag()
 
-func _process(_delta: float) -> void:
+# A tester pressing F4 flags "this felt laggy right now." We snapshot the most
+# diagnostic LIVE values and append a marker to the session summary so the
+# subjective moment lands in the same Supabase row as the objective numbers —
+# the single best signal for "bad netcode experiences" that raw rates miss.
+func _log_felt_lag() -> void:
+	var t: NetworkTelemetry = NetworkTelemetry.instance
+	if t == null or NetworkManager.is_offline_mode:
+		return
+	var snapshot: Dictionary = {
+		"rtt_ms": NetworkManager.get_rtt_ms(),
+		"packet_loss_pct": t.packet_loss_pct,
+		"jitter_p95_ms": t.jitter_p95_ms,
+		"reconcile_per_sec": t.reconcile_per_sec,
+		"extrapolation_per_sec": t.extrapolation_per_sec,
+		"buffer_depth_skater": t.buffer_depth_skater,
+		"buffer_depth_puck": t.buffer_depth_puck,
+		"puck_mode": t.puck_mode,
+	}
+	t.session.record_felt_lag(float(t.session.seconds), snapshot)
+	_toast.text = "✓ Lag report logged (#%d) — thanks!" % t.session.felt_lag_count
+	_toast.show()
+	_toast_timer = TOAST_SECONDS
+
+func _process(delta: float) -> void:
+	if _toast_timer > 0.0:
+		_toast_timer -= delta
+		if _toast_timer <= 0.0:
+			_toast.hide()
 	if not _showing:
 		return
 	_lines.clear()
@@ -101,8 +158,11 @@ func _process(_delta: float) -> void:
 
 	# Header is built last so the verdict reflects the worst line above it.
 	var verdict: String = ["● OK", "● WATCH", "● PROBLEM"][int(_worst)]
-	var header := "[b]Network Debug[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]   [color=#%s](F3 to close)[/color]" % [
-		_col(_worst), verdict, COL_HEAD, role, COL_DIM]
+	var felt: String = ""
+	if t.session.felt_lag_count > 0:
+		felt = "   [color=#%s]%d lag report(s)[/color]" % [COL_WARN, t.session.felt_lag_count]
+	var header := "[b]Network Debug[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]%s   [color=#%s](F3 close · F4 report lag)[/color]" % [
+		_col(_worst), verdict, COL_HEAD, role, felt, COL_DIM]
 	_rt.text = header + "\n" + "\n".join(_lines)
 
 # ── Role renderers ───────────────────────────────────────────────────────────

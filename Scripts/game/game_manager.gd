@@ -140,6 +140,7 @@ var _prev_chase_by_team: Dictionary[int, int] = {}
 var _recorder: ReplayRecorder = null
 var _goal_replay_driver: GoalReplayDriver = null
 var _career_reporter: CareerStatsReporter = null
+var _net_session_reporter: NetworkSessionReporter = null
 # Streams broadcast frames to user://replays/<game_id>.mreplay on a worker
 # thread. Lives on every peer (host + client + spectator) for any session
 # with a non-empty _game_id and PlayerPrefs.replay_recording_enabled. Opens
@@ -203,6 +204,7 @@ func _ready() -> void:
 	# win since they're per-control theme overrides on top of the fallback.
 	ThemeDB.fallback_font = MenuStyle.UI_FONT
 	_career_reporter = CareerStatsReporter.new()
+	_net_session_reporter = NetworkSessionReporter.new()
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
 
@@ -2323,6 +2325,12 @@ func _observe_telemetry() -> void:
 	if puck_controller != null:
 		extrapolating = extrapolating or puck_controller.is_extrapolating
 	_telemetry.observe_actors(skater_buf, puck_buf, goalie_buf, extrapolating)
+	# Connection facts the static record_* path doesn't carry — sampled by the
+	# session fold at window rollover. RTT is the client's round-trip to host;
+	# the host folds its peer count instead (its own RTT is 0).
+	if not NetworkManager.is_offline_mode:
+		_telemetry.current_rtt_ms = NetworkManager.get_rtt_ms() if not NetworkManager.is_host else 0.0
+		_telemetry.current_peer_count = NetworkManager.connected_peer_ids().size() if NetworkManager.is_host else 0
 
 
 func _sync_stats_to_clients() -> void:
@@ -2432,6 +2440,12 @@ func _on_game_over() -> void:
 	# stay empty by the player's choice (see PlayerPrefs.share_gameplay_stats).
 	if not PlayerPrefs.share_gameplay_stats:
 		return
+	# Network-quality row: shares the offline + privacy gates above but not the
+	# career-specific team/score plumbing below, so report it here. Both roles
+	# are worth collecting (client = link quality, host = frame/input health).
+	if _telemetry != null and _net_session_reporter != null:
+		var role: String = "host" if NetworkManager.is_host else "client"
+		_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled)
 	var local: PlayerRecord = _registry.get_local()
 	if local == null or local.team == null:
 		return
