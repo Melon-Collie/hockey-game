@@ -37,6 +37,15 @@ var _smoothed_blade_initialized: bool = false
 # skating, and lag the cursor forever once skating speed exceeds the cap.)
 var _prev_skater_pos: Vector3 = Vector3.ZERO
 
+# World-XZ ROM-clamped blade TARGET for this tick — the closed-form
+# TopHandIK.project_blade result, captured BEFORE the speed-cap smoothing below.
+# Wrister charge (SkaterController._update_wrister_charge) and the tap-direction
+# release read this rather than the smoothed/capped blade: it stays gated by
+# reachable space (cursor past the reach limit pins the target → zero travel →
+# no charge) while being a deterministic closed-form clamp of (mouse, body, ROM),
+# so host and client agree on charge without replaying the stateful smoother. y = 0.
+var last_target_blade_world: Vector3 = Vector3.ZERO
+
 # ── Cached Solver Objects ─────────────────────────────────────────────────────
 # The IK configs read only controller @exports, which change exclusively in
 # SkaterController.apply_attributes — so they're built once and invalidated
@@ -114,6 +123,7 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 			_ik_config(blade_y_local()))
 	var target_blade_world: Vector3 = _skater.upper_body_to_global(target_blade_local)
 	target_blade_world.y = 0.0
+	last_target_blade_world = target_blade_world
 
 	# 2. Speed-cap the smoothed blade toward the resolved target, RELATIVE TO THE
 	#    SKATER. max_blade_speed bounds how fast the blade traverses its ROM in

@@ -221,7 +221,6 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_puck_pickup_confirmed.connect(on_local_player_picked_up_puck)
 	NetworkManager.local_puck_stolen.connect(on_local_player_puck_stolen)
 	NetworkManager.remote_carrier_changed.connect(_on_remote_carrier_changed)
-	NetworkManager.remote_puck_release_received.connect(on_remote_puck_release)
 	NetworkManager.one_timer_release_received.connect(on_remote_one_timer_release)
 	NetworkManager.carrier_puck_dropped.connect(on_carrier_puck_dropped)
 	NetworkManager.goal_received.connect(_on_goal_received)
@@ -1638,8 +1637,23 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# into the void.
 	if record.is_bot:
 		record.controller.puck_release_requested.connect(_on_puck_release_requested)
-	record.controller.one_timer_release_requested.connect(
-			_on_one_timer_release_requested.bind(record.skater))
+	# Remote human on the host: its RemoteController runs the shot state machine from
+	# the replayed input stream and computes a host-derived shot, emitting
+	# puck_release_requested. This is the ONLY path that fires a remote human's shot —
+	# there is no shot RPC; the host derives and fires it from the inputs it replays.
+	if NetworkManager.is_host and not record.is_local and not record.is_bot:
+		record.controller.puck_release_requested.connect(
+				_on_remote_derived_release.bind(record.peer_id))
+	# Deflection one-timer (release without possession) is a contested, lag-comp-
+	# arbitrated CLAIM — like pickup/poke — not a possessed shot, so for a remote human
+	# it fires ONLY via on_remote_one_timer_release (the RPC rewinds the puck for the
+	# range check). Connect the sim-emit firing only for the local player (whose client
+	# branch sends that claim RPC) and bots (host-local, no lag-comp needed). Connecting
+	# remote controllers here made the host ALSO fire from its live-puck sim emit — no
+	# lag-comp, and an intermittent double with the RPC.
+	if record.is_local or record.is_bot:
+		record.controller.one_timer_release_requested.connect(
+				_on_one_timer_release_requested.bind(record.skater))
 	var pid: int = record.peer_id
 	record.skater.body_checked_player.connect(
 		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
@@ -1853,11 +1867,10 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		if record != null:
 			record.controller.on_puck_released_network()
 		var shot_rtt_ms: float = NetworkManager.get_latest_rtt_ms()
-		# notify_local_release returns the release point (the client's predicted
-		# blade contact). Ship it so the host fires the authoritative puck from
-		# there instead of a stale buffer rewind.
-		var origin: Vector3 = puck_controller.notify_local_release(direction, power, shot_rtt_ms)
-		NetworkManager.send_puck_release(direction, power, is_slapper, origin)
+		# Seed local puck prediction only. The host fires the authoritative shot from
+		# THIS client's input-stream release (host-derived, _on_remote_derived_release),
+		# so there is no shot RPC — the inputs the host already replays carry it.
+		puck_controller.notify_local_release(direction, power, shot_rtt_ms)
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:
@@ -1924,7 +1937,7 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 			controller.slapper_zone_radius, puck_speed, controller.one_timer_leniency_time):
 		return
 	# Sound/replay event below the validation so a rejected RPC can't spam
-	# phantom shot sounds (mirrors on_remote_puck_release).
+	# phantom shot sounds (mirrors _fire_remote_shot).
 	var shot_pos: Vector3 = puck.get_puck_position()
 	SoundManager.play_world(SoundManager.Sound.SHOT_SLAPPER, shot_pos, 0.0, 0.04)
 	_record_replay_audio_event("shot", shot_pos, safe_power, {"is_slapper": true})
@@ -1942,7 +1955,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	# work — without this, get_last_toucher() returns the passer at goal time.
 	_shot_tracker.on_deflection(pid)
 	_shot_tracker.on_shot_started(pid)
-	# Lag-comp the goalie reaction trigger (see on_remote_puck_release for the
+	# Lag-comp the goalie reaction trigger (see _fire_remote_shot for the
 	# full rationale). One-timers go through the same RPC-back-date flow.
 	# clamp_back_date also zeroes the host's own path (host_timestamp = 0 →
 	# stale → 0) — previously that computed `now - 0` and back-dated the goalie
@@ -1956,7 +1969,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	var rewound_origin: Vector3 = Vector3.ZERO
 	var have_rewound_origin: bool = false
 	if rtt_ms > 0.0 and skater != null:
-		# Shot ORIGIN (SELF view) — see on_remote_puck_release for the full
+		# Shot ORIGIN (SELF view) — see _fire_remote_shot for the full
 		# rationale. Fire the one-timer from the redirect point the client sent,
 		# clamped to the shooter's stick reach, not from where the blade drifted
 		# to during RPC transit.
@@ -1993,17 +2006,15 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 			goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
 
 
-func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
-	# Sender must be the current carrier on the host. Without this check, any
-	# peer can send release_puck with arbitrary direction/power and the host
-	# obediently triggers puck.release on whoever is actually carrying — the
-	# parameters control the trajectory but puck.carrier picks the releaser.
-	# A `puck.carrier == null` here means a different code path already
-	# released the puck (raced RPCs); ignore the duplicate. The shot sound
-	# moves below the validation so a malicious peer can't spam phantom
-	# shot sounds on the host either. Only the host runs this function
-	# (release_puck.rpc_id(1, ...)), so the early return is benign for the
-	# (currently nonexistent) client path.
+# Fires a remote human's authoritative shot on the host. Called only from
+# _on_remote_derived_release (the input-stream release) — there is no shot RPC. The
+# direction/power are host-derived; origin is the host's live blade; rtt/interp_delay
+# drive the goalie lag-comp rewind. The carrier guard + sanitize/clamp stay as
+# defense-in-depth even though the host now sources all the params itself.
+func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
+	# Sender must be the current carrier on the host.
+	# A `puck.carrier == null` here means a different code path already released the
+	# puck; ignore the duplicate. The shot sound stays below the validation.
 	if NetworkManager.is_host:
 		if puck == null or _registry == null:
 			return
@@ -2098,6 +2109,39 @@ func on_remote_puck_release(direction: Vector3, power: float, is_slapper: bool, 
 				goalie_controllers[i].goalie.set_goalie_rotation_y(saved_goalie_rotations[i])
 		return
 	puck.release(direction, power)
+
+
+# Host-authoritative remote shot. The host's RemoteController reached the shooter's
+# release input and computed its OWN dir/power via _release_wrister, emitting
+# puck_release_requested. Fire the authoritative puck from that — host-derived params,
+# the host's LIVE blade as origin (no client origin), the release input's host_timestamp
+# and an rtt-derived interp_delay for the goalie rewind. This is the only path that
+# fires a remote human's shot (no shot RPC).
+func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	if puck == null or _registry == null or puck.carrier == null:
+		return
+	var record: PlayerRecord = _registry.get_record(shooter_peer_id)
+	if record == null or record.skater == null or record.controller == null:
+		return
+	if _registry.resolve_peer_id(puck.carrier) != shooter_peer_id:
+		return
+	# Origin: the host's authoritative blade contact at the release tick (not a
+	# client-sent point). Timestamp: the release input the host just processed.
+	var origin: Vector3 = record.skater.get_blade_contact_global()
+	var release_ts: float = record.controller.last_processed_host_timestamp
+	var rtt_ms: float = float(NetworkManager.get_peer_ping_ms(shooter_peer_id))
+	# Approximate the shooter's interpolation delay from the rtt the host already
+	# measures plus one broadcast interval — the two dominant terms of the client's
+	# get_target_interpolation_delay. The dropped term is the client's adaptive jitter
+	# cushion (small except on jittery links); for beatable goalies it's close enough,
+	# and it keeps the host-derived release purely input-driven (nothing extra on the
+	# wire). Bounds mirror _compute_target_interpolation_delay's clamp.
+	var interp_delay_ms: float = clampf(
+			rtt_ms * 0.5 + 1000.0 / float(Constants.STATE_RATE), 16.0, 200.0)
+	_fire_remote_shot(
+			direction, power, is_slapper, shooter_peer_id, release_ts, rtt_ms, interp_delay_ms, origin)
 
 
 func _start_pending_shot_from_carrier() -> void:

@@ -510,7 +510,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 			apply_server_shot_state = false
 	if apply_server_shot_state:
 		_sm.set_state(server_state.shot_state as SkaterStateMachine.State)
-	_aiming.charge_distance = server_state.shot_charge
+	# Wrister charge is a local control input (the player's precision sweep), not a
+	# server-owned consequence — importing the host's value here yanked the live
+	# charge to the host's lagged re-sim every broadcast (felt as rubber-banded
+	# charge, and starved forehand shots into the old quick-shot branch). The
+	# save/restore above already keeps replay from inflating it; leave the local
+	# prediction authoritative. (Determinism work will let the host re-derive the
+	# shot from inputs; charge does not round-trip through server state.)
 	skater.set_facing(_pose.facing)
 	skater.set_upper_body_rotation(_pose.upper_body_angle)
 	skater.set_lower_body_lag(_pose.lower_body_lag)
