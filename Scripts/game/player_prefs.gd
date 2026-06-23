@@ -168,6 +168,12 @@ var mute_when_unfocused: bool = true
 var window_mode: int = WINDOW_MODE_BORDERLESS
 var resolution: Vector2i = RESOLUTION_DEFAULT
 var display_monitor: int = -1  # -1 = follow the window (automatic); else target screen index
+# The monitor the window was last seen on, persisted so Automatic mode
+# (display_monitor < 0) re-opens on the same screen next launch instead of
+# wherever the OS drops it. Updated by the screen-change watcher below; an
+# explicit display_monitor pick still wins at launch (we don't silently
+# overwrite a deliberate Options selection).
+var last_window_screen: int = -1
 var vsync_mode: int = VSYNC_ENABLED
 var fps_cap_index: int = 5
 var show_fps: bool = false
@@ -343,6 +349,7 @@ func save() -> void:
 	cfg.set_value("video", "window_mode", window_mode)
 	cfg.set_value("video", "resolution", resolution)
 	cfg.set_value("video", "display_monitor", display_monitor)
+	cfg.set_value("video", "last_window_screen", last_window_screen)
 	cfg.set_value("video", "vsync_mode", vsync_mode)
 	cfg.set_value("video", "fps_cap_index", fps_cap_index)
 	cfg.set_value("video", "show_fps", show_fps)
@@ -518,11 +525,14 @@ func get_available_resolutions(screen: int = -1) -> Array[Vector2i]:
 	return out
 
 
-# The monitor fullscreen / windowed-centering should target: the saved override
-# when it points at a real screen, otherwise the screen the window lives on.
+# The monitor fullscreen / windowed-centering should target: the explicit
+# override when it points at a real screen; otherwise (Automatic) the monitor
+# the window was last remembered on; otherwise the screen the window lives on.
 func _target_screen() -> int:
 	if display_monitor >= 0 and display_monitor < DisplayServer.get_screen_count():
 		return display_monitor
+	if last_window_screen >= 0 and last_window_screen < DisplayServer.get_screen_count():
+		return last_window_screen
 	return DisplayServer.window_get_current_screen()
 
 
@@ -576,6 +586,63 @@ func _apply_window_mode() -> void:
 			var screen_pos: Vector2i = DisplayServer.screen_get_position(screen)
 			var screen_size: Vector2i = DisplayServer.screen_get_size(screen)
 			DisplayServer.window_set_position(screen_pos + (screen_size - size) / 2)
+	# Re-baseline the screen-change watcher: a deliberate apply just placed the
+	# window, so this screen is the new "no move yet" reference and the watcher
+	# shouldn't treat it as an OS-driven monitor change.
+	_last_seen_screen = DisplayServer.window_get_current_screen()
+
+
+# --- Multi-monitor follow ----------------------------------------------------
+# Godot emits no signal when the OS moves the window to another monitor
+# (Win+Shift+Arrow, drag, a different-resolution second screen, etc.), and a
+# Borderless/Exclusive Fullscreen window keeps the *old* monitor's pixel size
+# after such a move — so on a rig with mismatched-resolution monitors it renders
+# at the wrong size on the new screen. We poll the window's current screen at a
+# low rate; on a change we re-fit the fullscreen window to the new monitor and
+# remember it so the next launch opens there (Automatic monitor mode).
+const _SCREEN_POLL_INTERVAL: float = 0.25
+var _screen_poll_accum: float = 0.0
+var _last_seen_screen: int = -1
+
+
+func _process(delta: float) -> void:
+	_screen_poll_accum += delta
+	if _screen_poll_accum < _SCREEN_POLL_INTERVAL:
+		return
+	_screen_poll_accum = 0.0
+	var cur: int = DisplayServer.window_get_current_screen()
+	if cur == _last_seen_screen:
+		return
+	_last_seen_screen = cur
+	_on_window_screen_changed(cur)
+
+
+func _on_window_screen_changed(screen: int) -> void:
+	# Remember the monitor so Automatic mode re-opens here next launch. (An
+	# explicit Options "Monitor" pick still governs launch via _target_screen;
+	# we don't silently rewrite display_monitor here.)
+	if last_window_screen != screen:
+		last_window_screen = screen
+		save()
+	# Windowed mode is left as-is (respect OS half-screen snapping / manual
+	# drags); only the fullscreen modes need re-fitting to the new monitor's
+	# native resolution.
+	if window_mode == WINDOW_MODE_WINDOWED:
+		return
+	_refit_fullscreen_to_screen(screen)
+
+
+# Force a Borderless/Exclusive Fullscreen window to recompute its size against
+# the monitor the OS just moved it onto. Re-setting the same fullscreen mode is
+# a no-op in Godot, so we bounce through Windowed to make it re-fit.
+func _refit_fullscreen_to_screen(screen: int) -> void:
+	var mode: DisplayServer.WindowMode = (
+		DisplayServer.WINDOW_MODE_FULLSCREEN
+		if window_mode == WINDOW_MODE_BORDERLESS
+		else DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	DisplayServer.window_set_current_screen(screen)
+	DisplayServer.window_set_mode(mode)
 
 
 # Clamp a windowed resolution to the monitor so a size saved on a larger display
@@ -723,6 +790,7 @@ func _load() -> void:
 		var raw_resolution: Variant = cfg.get_value("video", "resolution", RESOLUTION_DEFAULT)
 		resolution = raw_resolution if raw_resolution is Vector2i else RESOLUTION_DEFAULT
 		display_monitor = int(cfg.get_value("video", "display_monitor", -1))
+		last_window_screen = int(cfg.get_value("video", "last_window_screen", -1))
 		vsync_mode = clampi(int(cfg.get_value("video", "vsync_mode", VSYNC_ENABLED)), 0, VSYNC_LABELS.size() - 1)
 		fps_cap_index = clamp(cfg.get_value("video", "fps_cap_index", 5), 0, FPS_CAP_VALUES.size() - 1)
 		show_fps = cfg.get_value("video", "show_fps", false)
