@@ -1,0 +1,20 @@
+// Linux content depot for Mitts.
+// In Steamworks, mark this depot's operating system as "Linux".
+"DepotBuild"
+{
+	// >>> REPLACE with the real Linux depot ID (must match app_build.vdf).
+	"DepotID"	"1230740"
+
+	// Staged Godot Linux export output. Resolved relative to the steam/ folder.
+	"ContentRoot"	"content/linux/"
+
+	"FileMapping"
+	{
+		"LocalPath"	"*"
+		"DepotPath"	"."
+		"recursive"	"1"
+	}
+
+	// See depot_windows.vdf — never ship steam_appid.txt.
+	"FileExclusion"	"steam_appid.txt"
+}
