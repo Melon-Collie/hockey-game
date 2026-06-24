@@ -16,9 +16,9 @@ extends Node
 ## pumps nothing, and every lobby call is a no-op. Offline / free-play /
 ## tutorial never reference this autoload, so they are wholly unaffected.
 
-# Dev App ID 480 = Valve's SpaceWar example. Swap to the real Steamworks App ID
-# here (one line) once the Steam backend exists.
-const APP_ID: int = 480
+# Mitts' Steamworks App ID. (Dev builds historically used 480 = Valve's
+# SpaceWar example before the real App ID was registered.)
+const APP_ID: int = 1230738
 
 # How long to wait for an async Steam lobby create/join callback before giving
 # up and surfacing a failure (so the menu spinner can't hang forever if
