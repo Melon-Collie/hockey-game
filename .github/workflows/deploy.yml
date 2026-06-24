@@ -126,7 +126,7 @@ jobs:
           tag: "latest"
           name: "${{ steps.version.outputs.version }}"
           body: |
-            3v3 arcade hockey — alpha build for playtesters. Windows and Linux (no macOS build yet).
+            3v3 hockey — alpha build for playtesters. Windows and Linux (no macOS build yet).
 
             **Online play needs Steam running** on every machine. Host a game or join from the in-game lobby browser (Esc → Online); Steam friend invites work too. No port forwarding required.
 

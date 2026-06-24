@@ -84,11 +84,11 @@ Period clock ticks only during `PLAYING`. On expiry: if periods remain → `END_
 
 ## Decisions
 
-**Authoritative host, no dedicated server.** One player hosts; the host runs all physics. Eliminates server costs and NAT complexity at the expense of host-advantage. Acceptable for a small-scale arcade game.
+**Authoritative host, no dedicated server.** One player hosts; the host runs all physics. Eliminates server costs and NAT complexity at the expense of host-advantage. Acceptable for a small-scale game like this.
 
 **No pickup prediction for *contested* plays; visual-only optimistic attach for *uncontested* ones.** Authority and arbitration stay server-side — pickup is detected via lag-compensated rewind and only the grant confirmation travels to the client; carry state (`has_puck`, the shot state machine) never engages until that grant lands. The original blanket "no prediction" rule existed because rolling back a *contested* pickup feels worse than the round-trip. That objection is spatial: a pickup is only contestable when another skater is near the same puck. So `PuckController.try_provisional_pickup` pins the puck to the local blade immediately (visual only) when the pickup is **uncontested** — no other skater's blade within `contest_danger_radius` of the puck on the rendered view, puck grounded and below `pickup_max_speed` (a guaranteed catch, not a deflect), and not inside the post-loss reattach lockout. On the host's confirming `notify_local_pickup` the pin promotes seamlessly; on timeout (RTT-scaled deadline) or a different carrier it rolls back to interpolation. The contest gate keeps the rollback-prone case on the conservative round-trip path while making the common open-ice grab feel instant.
 
-**Ghost mode over stoppages for offsides and icing.** Stoppages interrupt flow; ghost mode keeps the puck live and lets offending players correct their position. Downside: slightly less legible than a whistle. Acceptable for an arcade game that prioritizes momentum.
+**Ghost mode over stoppages for offsides and icing.** Stoppages interrupt flow; ghost mode keeps the puck live and lets offending players correct their position. Downside: slightly less legible than a whistle. Acceptable for a game that prioritizes momentum.
 
 **`_carrier_peer_id` managed by reliable RPCs, never world state.** Unreliable packets can arrive out of order relative to pickup/release RPCs, causing the puck to flicker between carried and loose. Reliable RPCs guarantee ordering; world state is ignored for carrier identity.
 
