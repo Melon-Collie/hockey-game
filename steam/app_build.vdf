@@ -28,7 +28,7 @@
 	{
 		// Real depot IDs from Steamworks -> SteamPipe -> Depots:
 		//   4892602 = "Mitts Windows" (OS: Windows)
-		//   4892603 = "Mitts Lunix"   (OS: Linux + SteamOS)
+		//   4892603 = "Mitts Linux"   (OS: Linux + SteamOS)
 		// These must match the DepotID in each depot_*.vdf below.
 		"4892602"	"depot_windows.vdf"
 		"4892603"	"depot_linux.vdf"

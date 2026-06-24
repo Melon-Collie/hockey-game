@@ -2,7 +2,7 @@
 // In Steamworks, mark this depot's operating system as "Linux".
 "DepotBuild"
 {
-	// "Mitts Lunix" depot (must match app_build.vdf).
+	// "Mitts Linux" depot (must match app_build.vdf).
 	"DepotID"	"4892603"
 
 	// Staged Godot Linux export output. Resolved relative to the steam/ folder.
