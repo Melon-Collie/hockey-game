@@ -6,8 +6,9 @@
 	"DepotID"	"4892602"
 
 	// Staged Godot Windows export output. Everything here ships, except the
-	// exclusions below. Resolved relative to the steam/ folder.
-	"ContentRoot"	"content/windows/"
+	// exclusions below. Resolved relative to app_build.vdf's contentroot
+	// (content/), so this is just the windows/ subfolder.
+	"ContentRoot"	"windows/"
 
 	"FileMapping"
 	{

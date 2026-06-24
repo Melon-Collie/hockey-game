@@ -5,8 +5,9 @@
 	// "Mitts Linux" depot (must match app_build.vdf).
 	"DepotID"	"4892603"
 
-	// Staged Godot Linux export output. Resolved relative to the steam/ folder.
-	"ContentRoot"	"content/linux/"
+	// Staged Godot Linux export output. Resolved relative to app_build.vdf's
+	// contentroot (content/), so this is just the linux/ subfolder.
+	"ContentRoot"	"linux/"
 
 	"FileMapping"
 	{
