@@ -2,8 +2,8 @@
 // In Steamworks, mark this depot's operating system as "Linux".
 "DepotBuild"
 {
-	// >>> REPLACE with the real Linux depot ID (must match app_build.vdf).
-	"DepotID"	"1230740"
+	// "Mitts Lunix" depot (must match app_build.vdf).
+	"DepotID"	"4892603"
 
 	// Staged Godot Linux export output. Resolved relative to the steam/ folder.
 	"ContentRoot"	"content/linux/"

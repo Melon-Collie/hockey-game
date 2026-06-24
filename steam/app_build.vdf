@@ -26,12 +26,11 @@
 
 	"depots"
 	{
-		// >>> REPLACE these depot IDs with the REAL ones from
-		//     Steamworks -> SteamPipe -> Depots. Steam assigns them when the
-		//     depots are created; they are not guessable (often AppID+1/+2,
-		//     but CONFIRM). The IDs here must match the DepotID in each
-		//     depot_*.vdf below.
-		"1230739"	"depot_windows.vdf"
-		"1230740"	"depot_linux.vdf"
+		// Real depot IDs from Steamworks -> SteamPipe -> Depots:
+		//   4892602 = "Mitts Windows" (OS: Windows)
+		//   4892603 = "Mitts Lunix"   (OS: Linux + SteamOS)
+		// These must match the DepotID in each depot_*.vdf below.
+		"4892602"	"depot_windows.vdf"
+		"4892603"	"depot_linux.vdf"
 	}
 }

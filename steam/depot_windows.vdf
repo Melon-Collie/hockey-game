@@ -2,8 +2,8 @@
 // In Steamworks, mark this depot's operating system as "Windows".
 "DepotBuild"
 {
-	// >>> REPLACE with the real Windows depot ID (must match app_build.vdf).
-	"DepotID"	"1230739"
+	// "Mitts Windows" depot (must match app_build.vdf).
+	"DepotID"	"4892602"
 
 	// Staged Godot Windows export output. Everything here ships, except the
 	// exclusions below. Resolved relative to the steam/ folder.
