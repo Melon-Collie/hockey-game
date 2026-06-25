@@ -84,6 +84,10 @@ func _try_init() -> void:
 	is_available = true
 	steam_id = Steam.getSteamID()
 	persona_name = Steam.getPersonaName()
+	# Ground-truth diagnostic: the App ID Steam actually initialised this process
+	# under (independent of the name Steam shows in the UI). For the Playtest
+	# build launched via Steam this must be 4893650, not the main app 4892600.
+	print("[SteamManager] Steam initialised under AppID %d" % Steam.getAppID())
 	_connect_steam_signals()
 	_check_launch_invite()
 
