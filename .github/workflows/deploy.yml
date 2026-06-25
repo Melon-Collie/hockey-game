@@ -11,7 +11,7 @@ jobs:
     uses: ./.github/workflows/test.yml
 
   export:
-    name: Export and Release
+    name: Build
     needs: test
     runs-on: ubuntu-latest
 
@@ -29,8 +29,8 @@ jobs:
           VERSION="0.1.${COMMITS}"
           echo "Computed VERSION=${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          # Bake version into the exported build so the in-game update
-          # checker can compare against the release name.
+          # Bake the version into the build for the in-game version display
+          # and bug-report telemetry.
           sed -i "s/^const VERSION: String = \"dev\"$/const VERSION: String = \"${VERSION}\"/" Scripts/game/build_info.gd
           grep '^const VERSION:' Scripts/game/build_info.gd
           # Stamp Windows exe version metadata (x.x.x.x format required by
@@ -95,46 +95,12 @@ jobs:
           done
           echo "All archives look good."
 
-      - name: Push tags (latest + versioned)
-        run: |
-          git tag -f latest
-          git push origin -f latest
-          # Immutable per-release tag so a bad build can be rolled back by
-          # pointing players at the previous version's release.
-          git tag -f "v${{ steps.version.outputs.version }}"
-          git push origin -f "v${{ steps.version.outputs.version }}"
-
-      # Versioned archive release (prerelease so the GitHub "Latest" badge
-      # and the in-game UpdateChecker — which fetches releases/tags/latest —
-      # keep pointing at the rolling release below). This is the rollback
-      # path: every build stays downloadable.
-      - name: Upload versioned release
-        uses: ncipollo/release-action@v1
+      # Builds are kept as private workflow artifacts (downloadable from the
+      # Actions run) rather than public GitHub Releases — distribution is via
+      # Steam now. Steam upload is a separate workflow (deploy-steam.yml).
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
-          artifacts: "/home/runner/.local/share/godot/archives/*.zip"
-          tag: "v${{ steps.version.outputs.version }}"
-          name: "${{ steps.version.outputs.version }}"
-          body: "Archived build ${{ steps.version.outputs.version }}. Most players want the [latest release](../../releases/tag/latest)."
-          prerelease: true
-          allowUpdates: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "/home/runner/.local/share/godot/archives/*.zip"
-          tag: "latest"
-          name: "${{ steps.version.outputs.version }}"
-          body: |
-            3v3 hockey — alpha build for playtesters. Windows and Linux (no macOS build yet).
-
-            **Online play needs Steam running** on every machine. Host a game or join from the in-game lobby browser (Esc → Online); Steam friend invites work too. No port forwarding required.
-
-            **Known alpha limitations:** if the host leaves, the match ends for everyone; there's no reconnect — if you drop, rejoin from the lobby browser (fresh slot and stats); no in-game chat; a team plays shorthanded if someone disconnects mid-match.
-
-            **Found a bug?** Use the in-game Report Bug button (bottom-right corner). If the game crashed, attach the newest log from `%APPDATA%\Godot\app_userdata\Mitts\logs` (Windows) or `~/.local/share/godot/app_userdata/Mitts/logs` (Linux).
-
-            Older builds are kept under [pre-releases](../../releases) if you need to roll back.
-          allowUpdates: true
-          removeArtifacts: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          name: mitts-${{ steps.version.outputs.version }}
+          path: /home/runner/.local/share/godot/archives/*.zip
+          retention-days: 30
