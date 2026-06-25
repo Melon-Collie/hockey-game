@@ -18,7 +18,7 @@ extends Node
 
 # Mitts' Steamworks App ID. (Dev builds historically used 480 = Valve's
 # SpaceWar example before the real App ID was registered.)
-const APP_ID: int = 1230738
+const APP_ID: int = 4892600
 
 # How long to wait for an async Steam lobby create/join callback before giving
 # up and surfacing a failure (so the menu spinner can't hang forever if

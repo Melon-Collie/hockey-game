@@ -4,7 +4,7 @@
 // with its working directory set to steam/ (see README.md) so they resolve.
 "appbuild"
 {
-	"appid"	"1230738"
+	"appid"	"4892600"
 
 	// Label shown in Steamworks -> SteamPipe -> Builds. Bump to match the
 	// release / build_info.gd VERSION so a build is identifiable at a glance.

@@ -4,7 +4,9 @@ How to hand-upload a Mitts build to Steam for the closed beta. This is the
 **manual** path — get it working end-to-end by hand first; automating it in CI
 comes later, once the cadence justifies it.
 
-App ID: **1230738**. Builds publish to a **private beta branch**, never to
+App ID: **4892600** (the technical App ID used by SteamPipe and the Steam API —
+distinct from store-item ID 1230738, which is a different identifier). Builds
+publish to a **private beta branch**, never to
 `default`/`public`, until launch.
 
 ```
@@ -24,7 +26,7 @@ The `.vdf` scripts are version-controlled; `content/` and `output/` are not.
 
 ## One-time setup (Steamworks website — can't be scripted)
 
-Do these once in the Steamworks app admin for App ID 1230738. The SDK can't do
+Do these once in the Steamworks app admin for App ID 4892600. The SDK can't do
 them for you:
 
 1. **Create two depots** (SteamPipe → Depots): one Windows, one Linux. Set each
@@ -102,7 +104,7 @@ cd /path/to/mitts/steam
     +quit
 ```
 
-Watch for `Successfully finished AppID 1230738 build` (or similar) and a build
+Watch for `Successfully finished AppID 4892600 build` (or similar) and a build
 number. If paths fail to resolve, make `buildoutput`/`contentroot`/`ContentRoot`
 absolute as a fallback.
 
@@ -123,7 +125,7 @@ This is the milestone that proves the AppID switch works in players' hands:
 2. Install Mitts through Steam on that account, opt into the `beta` branch with
    the password (right-click the game → Properties → Betas).
 3. Launch **through Steam** (not the raw exe) and confirm a P2P lobby connects
-   under App ID 1230738.
+   under App ID 4892600.
 
 If online works there, distribution is real.
 
