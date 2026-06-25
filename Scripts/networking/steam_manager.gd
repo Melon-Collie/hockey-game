@@ -62,11 +62,16 @@ func _try_init() -> void:
 		steam_unavailable.emit.call_deferred()
 		return
 
-	# Set the App ID via environment before init. This form is stable across
-	# GodotSteam versions (avoids steamInitEx's varying parameter order) and
-	# also covers the case where steam_appid.txt isn't found next to the binary.
-	OS.set_environment("SteamAppId", str(APP_ID))
-	OS.set_environment("SteamGameId", str(APP_ID))
+	# Only force the App ID when Steam hasn't already told us which app we are.
+	# Launched THROUGH the Steam client, Steam injects SteamAppId/SteamGameId for
+	# the app the user actually started — the main app, the Playtest child app, a
+	# future demo, etc. Overriding that would init under the wrong app and fail
+	# the ownership check for anyone who only owns the child app. When SteamAppId
+	# is absent (dev / raw launch outside Steam) fall back to our APP_ID (also
+	# covers steam_appid.txt not being next to the binary).
+	if OS.get_environment("SteamAppId").is_empty():
+		OS.set_environment("SteamAppId", str(APP_ID))
+		OS.set_environment("SteamGameId", str(APP_ID))
 
 	var result: Dictionary = Steam.steamInitEx()
 	# status 0 == STEAM_API_INIT_RESULT_OK across builds.
