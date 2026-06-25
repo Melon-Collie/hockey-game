@@ -562,7 +562,8 @@ func _on_connected_to_server() -> void:
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.speed, local_attrs.agility, local_attrs.hands,
 			local_attrs.size, local_attrs.physical, local_attrs.shot,
-			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION)
+			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
+			SteamManager.get_app_build_id())
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -855,7 +856,7 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM,
-		steam_id: int = 0, protocol_version: int = 0) -> void:
+		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -867,6 +868,18 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		push_warning("Rejected join from peer %d: protocol %d, host expects %d"
 				% [sender_id, protocol_version, BuildInfo.PROTOCOL_VERSION])
 		kick_peer(sender_id, "Game version mismatch (host is on v%s).\nUpdate to the latest build to play together." % BuildInfo.VERSION)
+		return
+	# Build gate: a matching protocol only proves the wire decodes. A physics or
+	# tuning change with the same wire format still desyncs the joiner's local
+	# prediction against host authority. The Steam BuildID bumps on every upload
+	# so it catches that automatically — no manual version discipline. Skipped
+	# when either side is a dev / non-Steam build (BuildID 0), which manages its
+	# own compatibility.
+	var host_build_id: int = SteamManager.get_app_build_id()
+	if build_id != 0 and host_build_id != 0 and build_id != host_build_id:
+		push_warning("Rejected join from peer %d: build %d, host on build %d"
+				% [sender_id, build_id, host_build_id])
+		kick_peer(sender_id, "Build mismatch — you and the host are on different builds.\nUpdate to the latest build to play together.")
 		return
 	# Duplicate request_join (lost-ack resend or forged repeat) would re-emit
 	# peer_joined and double-spawn the peer's skater — first join wins.

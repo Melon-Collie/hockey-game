@@ -45,16 +45,19 @@ func submit(description: String, telemetry: NetworkTelemetry) -> void:
 
 
 func _telemetry_snapshot(telemetry: NetworkTelemetry) -> Dictionary:
+	# build_id lives inside this telemetry JSON blob (not a top-level column) so
+	# it needs no bug_reports schema change. It pins the exact Steam build a
+	# report came from (0 for dev), and is always present even without net stats.
+	var snapshot: Dictionary = {"build_id": SteamManager.get_app_build_id()}
 	if telemetry == null:
-		return {}
-	return {
-		"world_state_hz": telemetry.world_state_hz,
-		"input_hz": telemetry.input_hz,
-		"reconcile_per_sec": telemetry.reconcile_per_sec,
-		"reconcile_magnitude_avg": telemetry.reconcile_magnitude_avg,
-		"packet_loss_pct": telemetry.packet_loss_pct,
-		"jitter_p95_ms": telemetry.jitter_p95_ms,
-	}
+		return snapshot
+	snapshot["world_state_hz"] = telemetry.world_state_hz
+	snapshot["input_hz"] = telemetry.input_hz
+	snapshot["reconcile_per_sec"] = telemetry.reconcile_per_sec
+	snapshot["reconcile_magnitude_avg"] = telemetry.reconcile_magnitude_avg
+	snapshot["packet_loss_pct"] = telemetry.packet_loss_pct
+	snapshot["jitter_p95_ms"] = telemetry.jitter_p95_ms
+	return snapshot
 
 
 func _post(url: String, body: Dictionary) -> void:

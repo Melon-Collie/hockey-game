@@ -28,7 +28,9 @@ const VERSION: String = "dev"
 # v7: request_join carries the joiner's SteamID64 so the host can match a
 #     reconnecting peer (new peer_id) to a reserved slot and restore their
 #     team/slot/stats.
-const PROTOCOL_VERSION: int = 7
-
-const RELEASE_TAG: String = "latest"
-const REPO: String = "Melon-Collie/mitts"
+# v8: request_join carries the joiner's Steam BuildID. Matching PROTOCOL_VERSION
+#     only proves the wire decodes; a physics/tuning change with the same wire
+#     format still desyncs client prediction against host authority. The Steam
+#     BuildID bumps on every upload, so the host rejects mismatched builds
+#     (skipped when either side is a dev / non-Steam build, BuildID 0).
+const PROTOCOL_VERSION: int = 8

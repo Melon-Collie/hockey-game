@@ -1,0 +1,22 @@
+// Windows content depot for the Mitts Playtest app.
+// In Steamworks, this depot's OS is "Windows".
+"DepotBuild"
+{
+	"DepotID"	"4893652"
+
+	// Resolved against this script's contentroot (../content/), so the Windows
+	// build is shared with the main app at steam/content/windows/.
+	"ContentRoot"	"windows/"
+
+	"FileMapping"
+	{
+		"LocalPath"	"*"
+		"DepotPath"	"."
+		"recursive"	"1"
+	}
+
+	// Never ship steam_appid.txt (lets a player bypass the ownership check) or
+	// the debug console wrapper.
+	"FileExclusion"	"steam_appid.txt"
+	"FileExclusion"	"*.console.exe"
+}
