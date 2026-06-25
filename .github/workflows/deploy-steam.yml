@@ -121,8 +121,8 @@ jobs:
       - name: Authenticate steamcmd
         uses: Lordfirespeed/auth-steamcmd@v1
         with:
-          username: ${{ secrets.STEAM_USERNAME }}
-          config-vdf: ${{ secrets.STEAM_CONFIG_VDF }}
+          steam_username: ${{ secrets.STEAM_USERNAME }}
+          steam_config_vdf: ${{ secrets.STEAM_CONFIG_VDF }}
 
       - name: Upload to Steam
         run: |

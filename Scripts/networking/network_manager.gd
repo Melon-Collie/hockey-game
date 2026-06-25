@@ -1027,9 +1027,9 @@ func receive_world_state(data: PackedByteArray) -> void:
 		func(s: PackedByteArray) -> void:
 			var now: float = local_time()
 			if _last_ws_arrival_time > 0.0:
-				const EXPECTED_INTERVAL: float = 1.0 / Constants.STATE_RATE
+				var expected_interval: float = 1.0 / Constants.STATE_RATE
 				var gap: float = now - _last_ws_arrival_time
-				var jitter: float = absf(gap - EXPECTED_INTERVAL)
+				var jitter: float = absf(gap - expected_interval)
 				_jitter_samples.append(jitter)
 				if _jitter_samples.size() > 40:
 					_jitter_samples.pop_front()
