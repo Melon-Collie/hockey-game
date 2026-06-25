@@ -44,6 +44,9 @@ signal lobby_joined(lobby_id: int, owner_steam_id: int)
 signal lobby_join_failed(reason: String)
 signal lobby_list_received(lobbies: Array)        # Array[Dictionary]
 signal lobby_invite_accepted(lobby_id: int)       # overlay "Join Game" / launch invite
+# Steam's Dynamic Cloud Sync pulled newer cloud files into the local cache
+# mid-session (Steam Deck suspend→resume). PlayerPrefs listens and re-reads.
+signal cloud_files_changed
 
 # 0 = idle, 1 = creating, 2 = joining. Drives the op-timeout in _process.
 var _pending_op: int = 0
@@ -97,6 +100,10 @@ func _connect_steam_signals() -> void:
 	Steam.lobby_joined.connect(_on_lobby_joined)
 	Steam.lobby_match_list.connect(_on_lobby_match_list)
 	Steam.join_requested.connect(_on_join_requested)
+	# Dynamic Cloud Sync: fires when Steam syncs newer cloud files into the local
+	# cache mid-session (Deck suspend/resume). The callback carries no payload —
+	# consumers re-read via the cloud_* API.
+	Steam.local_file_changed.connect(_on_local_file_changed)
 
 
 # Cold-launch via a friend invite passes `+connect_lobby <id>` on the command
@@ -298,11 +305,22 @@ func cloud_read(filename: String) -> PackedByteArray:
 
 # Writes bytes to Cloud under `filename`. Returns false (no-op) when Cloud is
 # unavailable. Steam syncs the bytes to the backend opportunistically; there is
-# nothing to flush here.
+# nothing to flush here. The write is bracketed in a file-write batch so Steam's
+# Dynamic Cloud Sync can never upload a half-written file if the system suspends
+# mid-write (Steam Deck) — required by the "Cloud sync on suspend/resume" feature.
 func cloud_write(filename: String, data: PackedByteArray) -> bool:
 	if not is_cloud_available():
 		return false
-	return Steam.fileWrite(filename, data, data.size())
+	Steam.beginFileWriteBatch()
+	var ok: bool = Steam.fileWrite(filename, data, data.size())
+	Steam.endFileWriteBatch()
+	return ok
+
+
+# Re-emit Steam's local-file-changed callback as a typed signal so PlayerPrefs
+# can adopt the freshly synced-down cloud copy mid-session.
+func _on_local_file_changed() -> void:
+	cloud_files_changed.emit()
 
 
 # ── Teardown ────────────────────────────────────────────────────────────────

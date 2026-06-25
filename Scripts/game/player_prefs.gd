@@ -415,6 +415,12 @@ func _push_to_cloud() -> void:
 func _sync_from_cloud() -> void:
 	if not SteamManager.is_cloud_available():
 		return
+	# Subscribe once to Dynamic Cloud Sync: on Deck suspend→resume Steam pulls a
+	# newer copy into the local cache mid-session, and re-running this reconcile
+	# adopts it. Connected here rather than in _ready because SteamManager is a
+	# later autoload and isn't constructed yet during _ready.
+	if not SteamManager.cloud_files_changed.is_connected(_sync_from_cloud):
+		SteamManager.cloud_files_changed.connect(_sync_from_cloud)
 	var cloud_name: String = _cloud_save_name()
 	var local_path: String = _get_save_path()
 	var has_local: bool = FileAccess.file_exists(local_path)
