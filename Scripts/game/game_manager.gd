@@ -98,6 +98,25 @@ var team_brains: Array[TeamBrain] = []
 # read from here instead of each fetching their own — saves redundant
 # interpolation work and per-tick allocations.
 var current_snapshot: WorldSnapshot = null
+# Bot difficulty knobs for this match, resolved from PlayerPrefs at match start
+# (on_host_started). Drives the carrier reaction delay applied to current_
+# snapshot below, and is read by PlayerRegistry.spawn_bot to wire each agent's
+# execution knobs. Defaults to Hard so any path that spawns bots before
+# resolution behaves close to the old perfect bot.
+var bot_skill_profile: BotSkillProfile = BotSkillProfile.hard()
+# Debounce state for the bots' discrete-event reaction delay (see
+# _apply_bot_carrier_reaction_delay). `_perceived_carrier_peer_id` is the
+# delayed belief written onto the AI snapshot; the others track the pending
+# real change. Reset at match start.
+var _perceived_carrier_peer_id: int = -1
+var _real_carrier_last: int = -1
+var _carrier_reaction_timer: float = 0.0
+# Private puck-state copy for the AI snapshot. The interpolated snapshot's
+# puck_state is frequently the live ring-buffer object (see
+# _apply_bot_carrier_reaction_delay), so the debounced carrier is written into
+# this reused scratch instead — never the buffer. Filled once per tick and
+# consumed synchronously by brains + agents within the same tick.
+var _ai_puck_scratch: PuckNetworkState = PuckNetworkState.new()
 var goals: Array[HockeyGoal] = []
 var goalies: Array[Goalie] = []
 var goalie_controllers: Array[GoalieController] = []
@@ -309,9 +328,15 @@ func _physics_process(delta: float) -> void:
 	# brains that's 8 redundant interpolation passes per frame, each
 	# allocating ~10 RefCounted state objects.
 	if _state_buffer_manager != null:
+		# Fresh ground-truth snapshot — bots track every position/velocity in
+		# real time (so a receiver aims at the puck's ACTUAL spot, not a stale
+		# one). The ONLY thing softened at lower difficulties is the discrete
+		# carrier signal, debounced below after enrichment so the delayed
+		# carrier reaches both the team brains and the agents.
 		current_snapshot = get_state_delayed(0.0)
 		if current_snapshot != null:
 			_enrich_snapshot_for_ai(current_snapshot)
+			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
 	if not team_brains.is_empty() and current_snapshot != null:
 		for brain: TeamBrain in team_brains:
 			brain.tick(delta, current_snapshot)
@@ -435,6 +460,14 @@ func _apply_ghost_state(delta: float) -> void:
 
 # ── Network Callbacks ─────────────────────────────────────────────────────────
 func on_host_started() -> void:
+	# Resolve the match's bot difficulty before any bot spawns or the first
+	# snapshot publishes. Host + offline + tutorial + free-play all enter here,
+	# and GameManager is an autoload that survives between matches, so this must
+	# re-read PlayerPrefs each match (not lazy-init-once).
+	bot_skill_profile = BotSkillProfile.for_difficulty(PlayerPrefs.bot_difficulty)
+	_perceived_carrier_peer_id = -1
+	_real_carrier_last = -1
+	_carrier_reaction_timer = 0.0
 	_spawn_world()
 	if not NetworkManager.pending_lobby_slots.is_empty():
 		var my_slot: Dictionary = NetworkManager.pending_lobby_slots.get(1, {})
@@ -2876,6 +2909,49 @@ func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
 		return null
 	var ts: float = NetworkManager.local_time() - delay_seconds
 	return _state_buffer_manager.get_state_at(ts)
+
+
+# Bots' discrete-event reaction delay. Positions/velocities on `snap` stay
+# real time; only the puck's CARRIER signal is debounced, so the AI keeps
+# acting on its prior read of who-controls-the-puck for carrier_reaction_delay
+# seconds after the puck actually changes hands (a pass release, reception, or
+# strip) before recognising it — the human "can't react to a pass within a
+# tick" model. Self-possession is exempted: the real carrier is stashed on the
+# snapshot so a bot reads its OWN possession instantly (see SkaterAgentState-
+# Machine have_puck).
+#
+# The debounce: a real carrier change (re)starts a timer; the perceived value
+# commits to the real one only after `delay` of no further change, so a blip
+# that reverts within the window (e.g. a puck grazing a stick) causes no
+# twitch. Shared across all bots — difficulty is a global match setting and a
+# possession change affects both teams symmetrically (matching how the team
+# brains are reticked together).
+func _apply_bot_carrier_reaction_delay(snap: WorldSnapshot, delta: float) -> void:
+	if snap.puck_state == null:
+		return
+	var real_carrier: int = snap.puck_state.carrier_peer_id
+	snap.real_puck_carrier_peer_id = real_carrier
+	# StateBufferManager._interpolate_puck returns the live ring-buffer object
+	# directly when the query is at/after the newest sample (the common case for
+	# get_state_delayed(0.0)). Writing the debounced carrier into it would
+	# corrupt the authoritative buffer that lag-comp rewind + reconcile read, so
+	# the AI snapshot points at a private scratch copy whose carrier we debounce.
+	_ai_puck_scratch.copy_from(snap.puck_state)
+	snap.puck_state = _ai_puck_scratch
+	var delay: float = bot_skill_profile.carrier_reaction_delay_s if bot_skill_profile != null else 0.0
+	if delay <= 0.0:
+		_perceived_carrier_peer_id = real_carrier
+		_real_carrier_last = real_carrier
+		_carrier_reaction_timer = 0.0
+		return
+	if real_carrier != _real_carrier_last:
+		_carrier_reaction_timer = delay
+		_real_carrier_last = real_carrier
+	if _perceived_carrier_peer_id != real_carrier:
+		_carrier_reaction_timer -= delta
+		if _carrier_reaction_timer <= 0.0:
+			_perceived_carrier_peer_id = real_carrier
+	snap.puck_state.carrier_peer_id = _perceived_carrier_peer_id
 
 
 func _collect_existing_player_data() -> Array[Array]:
