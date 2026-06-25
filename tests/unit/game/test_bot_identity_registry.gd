@@ -3,16 +3,16 @@ extends GutTest
 # BotIdentityRegistry — the curated AI roster loaded from
 # res://data/bot_identities.json. Bots spawn from these picks, so a malformed
 # or over-budget entry would either crash spawning or hand a bot an illegal
-# build that a human player could never make. These tests pin the contract on
-# the BUNDLED defaults (the registry also accepts a user:// override, which is
-# the player's own business and not validated here).
+# build that a human player could never make. The bundled file is the only
+# source (the user:// override was removed), and bots are host-authoritative
+# online, so these picks are exactly what every machine plays against.
 
 const _RES_JSON_PATH: String = "res://data/bot_identities.json"
 
 
 # Parse the bundled file directly rather than going through the registry's
-# static cache: ensure_loaded() prefers user://bot_identities.json if present,
-# and we specifically want to assert the shipped defaults.
+# static cache so a prior test that called ensure_loaded() can't mask a
+# malformed file behind a stale parse.
 func _bundled_entries() -> Array:
 	var file := FileAccess.open(_RES_JSON_PATH, FileAccess.READ)
 	assert_not_null(file, "bundled %s must exist" % _RES_JSON_PATH)

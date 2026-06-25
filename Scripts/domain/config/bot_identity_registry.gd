@@ -1,9 +1,18 @@
 class_name BotIdentityRegistry
 
 # Loads the curated list of bot identities used when spawning AI players.
-# Load order: user://bot_identities.json (player's editable copy) →
-#             res://data/bot_identities.json (bundled defaults) →
+# Load order: res://data/bot_identities.json (bundled roster) →
 #             empty list (bots fall back to generic "Bot N" / 80+id / slot-based handedness).
+#
+# Bots are host-authoritative online: only the host reads this file (via
+# pick_for_slot, gated behind NetworkManager.send_bot_slot's is_host check),
+# and the chosen attributes are replicated to clients through notify_bot_slot,
+# spawn_remote_skater, and sync_existing_players. Clients never consult their
+# own copy, so the roster can't diverge between machines. There used to be a
+# user://bot_identities.json override (a relic of an abandoned "rename your
+# bots" idea that predated attributes living in this file); it was removed
+# because a host-edited copy could field over-budget bots that bypassed the
+# is_within_budget gate human joiners pass.
 #
 # JSON schema:
 #   {
@@ -22,8 +31,7 @@ class_name BotIdentityRegistry
 # A well-formed file with zero entries is valid — the caller treats an empty
 # pool as "use the old deterministic defaults".
 
-const _USER_JSON_PATH: String = "user://bot_identities.json"
-const _RES_JSON_PATH:  String = "res://data/bot_identities.json"
+const _RES_JSON_PATH: String = "res://data/bot_identities.json"
 
 static var _identities: Array[Dictionary] = []
 static var _loaded: bool = false
@@ -33,9 +41,7 @@ static func ensure_loaded() -> void:
 	if _loaded:
 		return
 	_loaded = true
-	for path: String in [_USER_JSON_PATH, _RES_JSON_PATH]:
-		if _try_load_from(path):
-			return
+	_try_load_from(_RES_JSON_PATH)
 
 
 static func get_all() -> Array[Dictionary]:
