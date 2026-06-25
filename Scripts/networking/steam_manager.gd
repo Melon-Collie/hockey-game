@@ -153,6 +153,16 @@ func create_lobby(max_members: int, public: bool = true) -> void:
 	Steam.createLobby(lobby_type, max_members)
 
 
+# The Steam BuildID of the running install — a per-build identity that changes
+# on every upload, so it gates simulation parity (physics/tuning) the way
+# PROTOCOL_VERSION gates wire format. Returns 0 for dev / non-Steam builds, in
+# which case callers skip the build gate (dev manages its own compatibility).
+func get_app_build_id() -> int:
+	if not is_available:
+		return 0
+	return Steam.getAppBuildId()
+
+
 func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 	if _pending_op != 1:
 		return
@@ -164,9 +174,12 @@ func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 	# Advertise the host name so the public browser has something to show.
 	Steam.setLobbyData(lobby_id, "name", "%s's game" % Steam.getPersonaName())
 	Steam.setLobbyData(lobby_id, "game", "mitts")
-	# Stamped so the browser only lists wire-compatible games; the
-	# request_join handshake remains the authoritative version gate.
+	# Stamped so the browser only lists compatible games; the request_join
+	# handshake stays the authoritative gate. "protocol" guards the wire format;
+	# "build" guards simulation parity (same Steam build = same physics/tuning),
+	# so a tuning-only change that keeps the wire format still segregates.
 	Steam.setLobbyData(lobby_id, "protocol", str(BuildInfo.PROTOCOL_VERSION))
+	Steam.setLobbyData(lobby_id, "build", str(get_app_build_id()))
 	lobby_created.emit(lobby_id)
 
 
@@ -207,6 +220,8 @@ func request_lobby_list() -> void:
 			Steam.LOBBY_DISTANCE_FILTER_WORLDWIDE as Steam.LobbyDistanceFilter)
 	Steam.addRequestLobbyListStringFilter("game", "mitts", Steam.LOBBY_COMPARISON_EQUAL)
 	Steam.addRequestLobbyListStringFilter("protocol", str(BuildInfo.PROTOCOL_VERSION),
+			Steam.LOBBY_COMPARISON_EQUAL)
+	Steam.addRequestLobbyListStringFilter("build", str(get_app_build_id()),
 			Steam.LOBBY_COMPARISON_EQUAL)
 	Steam.requestLobbyList()
 

@@ -115,7 +115,14 @@ func _build_ui() -> void:
 	vbox.add_child(_loading_label)
 
 	var version_label := Label.new()
-	version_label.text = "v%s" % BuildInfo.VERSION
+	# Steam builds append their BuildID — a unique per-upload identifier that's
+	# useful in bug reports and unambiguous about which build is running. Dev /
+	# non-Steam builds (BuildID 0) just show the VERSION string.
+	var version_text: String = "v%s" % BuildInfo.VERSION
+	var build_id: int = SteamManager.get_app_build_id()
+	if build_id != 0:
+		version_text += " (build %d)" % build_id
+	version_label.text = version_text
 	version_label.add_theme_font_size_override("font_size", 14)
 	version_label.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
 	version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -125,16 +132,6 @@ func _build_ui() -> void:
 	version_label.offset_right = -16
 	version_label.offset_bottom = -12
 	add_child(version_label)
-
-	# Polls the GitHub Releases API once and shows an "update available" nudge
-	# when the running build is stale (no-op in dev builds). Boot is the one
-	# screen every launch passes through, so the check lives here.
-	var update_checker := UpdateChecker.new()
-	update_checker.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	update_checker.offset_top = -84
-	update_checker.offset_bottom = -36
-	update_checker.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(update_checker)
 
 	# Settings overlay sits on top of everything; hidden until Options is hit.
 	_build_settings_overlay()
