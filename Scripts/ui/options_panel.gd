@@ -1029,7 +1029,11 @@ func _export_user_file(src_path: String, dst_path: String, status_label: Label) 
 	dst_file.close()
 	var global_path: String = ProjectSettings.globalize_path(dst_path)
 	status_label.add_theme_color_override("font_color", _DIM)
-	status_label.text = "%s:\n%s" % ["Overwrote" if existed else "Saved", global_path]
+	# Both rosters are read once and cached for the process lifetime (the
+	# registries' static `_loaded` guard), so an edit only takes effect on the
+	# next launch — tell the player so they don't think their changes were lost.
+	status_label.text = "%s:\n%s\nEdit it, then restart the game to apply your changes." % [
+			"Overwrote" if existed else "Saved", global_path]
 
 func _on_sensitivity_changed(value: float) -> void:
 	if _sens_field != null:
