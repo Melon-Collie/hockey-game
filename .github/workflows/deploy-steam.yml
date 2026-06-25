@@ -1,0 +1,142 @@
+name: Steam Deploy
+
+# Builds the game and uploads it to Steam via SteamPipe, reusing the verified
+# VDF scripts in steam/ (correct depot IDs guaranteed — see steam/README.md).
+#
+# MANUAL trigger only: you choose when a Steam build happens and which app, so a
+# commit never silently ships to Steam. The upload does NOT set the build live —
+# you set it live by hand in Steamworks (SteamPipe -> Builds), matching the
+# manual flow. So this automates "create + upload a build", not "publish to
+# players".
+#
+# ── One-time setup: repository secrets ───────────────────────────────────────
+# Settings -> Secrets and variables -> Actions -> New repository secret:
+#   STEAM_USERNAME    - the Steam builder account username (a dedicated build
+#                       account is recommended, not your personal one).
+#   STEAM_CONFIG_VDF  - base64 of that account's steamcmd config.vdf, captured
+#                       AFTER one interactive login that cleared Steam Guard:
+#                         steamcmd +login <username>        # enter pw + Guard code
+#                         base64 -w0 ~/Steam/config/config.vdf   # Linux/WSL
+#                       (Windows: base64 the config.vdf under your steamcmd dir.)
+#                       If a run later fails auth because the session rotated,
+#                       regenerate config.vdf and update this secret.
+#
+# Auth CANNOT be verified from here — the first real run is the test. If login
+# hangs/fails, the config.vdf is stale or Steam Guard wasn't cleared when it was
+# generated; regenerate and re-encode.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Steam app to upload to"
+        type: choice
+        options:
+          - playtest
+          - main
+        default: playtest
+
+jobs:
+  test:
+    name: GUT Unit Tests
+    uses: ./.github/workflows/test.yml
+
+  steam:
+    name: Build and upload to Steam
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0  # full history so `git rev-list --count HEAD` works
+
+      - name: Compute version
+        id: version
+        run: |
+          COMMITS=$(git rev-list --count HEAD)
+          VERSION="0.1.${COMMITS}"
+          echo "Computed VERSION=${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Bake the version into the build (in-game display + bug reports).
+          sed -i "s/^const VERSION: String = \"dev\"$/const VERSION: String = \"${VERSION}\"/" Scripts/game/build_info.gd
+          # Stamp Windows exe version metadata (x.x.x.x for rcedit).
+          sed -i "s|^application/file_version=.*|application/file_version=\"${VERSION}.0\"|" export_presets.cfg
+          sed -i "s|^application/product_version=.*|application/product_version=\"${VERSION}.0\"|" export_presets.cfg
+
+      - name: Set up rcedit for Windows exe branding
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wine64
+          WINE_BIN=$(command -v wine64 || command -v wine)
+          curl -fsSL -o /usr/local/bin/rcedit.exe \
+            https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe
+          mkdir -p ~/.config/godot
+          cat > ~/.config/godot/editor_settings-4.6.tres <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/windows/rcedit = "/usr/local/bin/rcedit.exe"
+          export/windows/wine = "${WINE_BIN}"
+          EOF
+          echo "rcedit configured (wine: ${WINE_BIN})"
+
+      - name: Export with Godot
+        uses: firebelley/godot-export@v5.2.1
+        with:
+          godot_executable_download_url: "https://github.com/godotengine/godot-builds/releases/download/4.6.2-stable/Godot_v4.6.2-stable_linux.x86_64.zip"
+          godot_export_templates_download_url: "https://github.com/godotengine/godot-builds/releases/download/4.6.2-stable/Godot_v4.6.2-stable_export_templates.tpz"
+          relative_project_path: "./"
+          archive_output: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage content for SteamPipe
+        run: |
+          # Unzip each platform's export into the steam/content layout the VDF
+          # scripts expect. Route each archive by what's inside (the action names
+          # archives after the preset, so match on content, not filename).
+          mkdir -p steam/content/windows steam/content/linux
+          shopt -s nullglob
+          for zip in /home/runner/.local/share/godot/archives/*.zip; do
+            if unzip -l "$zip" | grep -q "\.exe"; then
+              unzip -o "$zip" -d steam/content/windows
+            elif unzip -l "$zip" | grep -q "\.x86_64"; then
+              unzip -o "$zip" -d steam/content/linux
+            fi
+          done
+          echo "=== windows ==="; ls -la steam/content/windows
+          echo "=== linux ==="; ls -la steam/content/linux
+          # The Steam libs must be present or the game won't init Steam on a
+          # clean machine — fail loudly here rather than ship a broken build.
+          test -f steam/content/windows/steam_api64.dll || { echo "ERROR: steam_api64.dll missing from Windows content"; exit 1; }
+          test -f steam/content/linux/libsteam_api.so || { echo "ERROR: libsteam_api.so missing from Linux content"; exit 1; }
+
+      - name: Install steamcmd
+        uses: CyberAndrii/setup-steamcmd@v1
+
+      - name: Authenticate steamcmd
+        uses: Lordfirespeed/auth-steamcmd@v1
+        with:
+          username: ${{ secrets.STEAM_USERNAME }}
+          config-vdf: ${{ secrets.STEAM_CONFIG_VDF }}
+
+      - name: Upload to Steam
+        run: |
+          # Reuse the committed VDFs (verified depot IDs). Run from the app's VDF
+          # directory so the relative content paths resolve, exactly like the
+          # manual flow. setlive stays empty in the VDF — set the build live by
+          # hand in Steamworks.
+          if [ "${{ inputs.app }}" = "playtest" ]; then
+            DIR=steam/playtest
+          else
+            DIR=steam
+          fi
+          # Stamp the version into the build description for the Steamworks list.
+          TAB="$(printf '\t')"
+          sed -i "s|\"desc\".*|\"desc\"${TAB}\"Mitts ${{ steps.version.outputs.version }} (${{ inputs.app }})\"|" "${DIR}/app_build.vdf"
+          cd "${DIR}"
+          steamcmd +login "${{ secrets.STEAM_USERNAME }}" +run_app_build "$(pwd)/app_build.vdf" +quit
