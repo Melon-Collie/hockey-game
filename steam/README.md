@@ -131,6 +131,38 @@ If online works there, distribution is real.
 
 ---
 
+## Playtest app (4893650)
+
+`playtest/` holds a parallel set of VDFs for the **Mitts Playtest** child app
+(4893650, depots 4893652 Windows / 4893653 Linux). It exists so the beta can go
+out *now*: Playtest keys aren't subject to the ~30-day wait the main app's keys
+have, and no live store page is required.
+
+It reuses the **same staged content** as the main app — one export works for both,
+because the game adopts whichever App ID Steam launches it under
+(`steam_manager.gd`). So the only differences from the main upload are the working
+directory and the App ID / depots.
+
+**One-time (Steamworks, app 4893650):** create + OS-tag the two depots, reference
+them in the Playtest package (done), and set **launch options** (`mitts.exe` /
+`mitts.x86_64`) so Steam knows what to run.
+
+**Per upload:**
+1. Stage the build into `content/windows` + `content/linux` as usual. If you just
+   did the main-app upload, it's the *same* content — nothing to re-export.
+2. Upload from the playtest folder:
+   ```
+   cd steam/playtest
+   steamcmd +login <acct> +run_app_build "$pwd/app_build.vdf" +quit
+   ```
+3. Set the build live (SteamPipe → Builds on app 4893650).
+4. Generate **Playtest keys** (Steamworks → the Playtest app → Manage Keys), hand
+   them to testers. They activate, install "Mitts Playtest", and launch through
+   Steam — the build initializes under 4893650, so P2P lobbies connect among
+   playtesters.
+
+---
+
 ## Notes
 
 - **Keys grant permanent ownership.** A Beta Testing key means that account

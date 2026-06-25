@@ -1,0 +1,18 @@
+// Linux content depot for the Mitts Playtest app.
+// In Steamworks, this depot's OS is "Linux + SteamOS".
+"DepotBuild"
+{
+	"DepotID"	"4893653"
+
+	// Shared with the main app at steam/content/linux/.
+	"ContentRoot"	"linux/"
+
+	"FileMapping"
+	{
+		"LocalPath"	"*"
+		"DepotPath"	"."
+		"recursive"	"1"
+	}
+
+	"FileExclusion"	"steam_appid.txt"
+}
