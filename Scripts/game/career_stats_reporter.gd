@@ -3,10 +3,11 @@ class_name CareerStatsReporter extends RefCounted
 func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: String,
 		game_id: String, team_id: int, period_scores: Array, num_periods: int) -> void:
 	var body: Dictionary = record.stats.to_dict()
-	body["uuid"] = PlayerPrefs.player_uuid
-	# steam_id is the career identity (cross-machine); uuid stays for legacy rows
-	# and bug reports. Career stats only write in online (Steam) sessions, so a
-	# valid SteamID64 is always available here.
+	# steam_id is the career identity (cross-machine). The uuid column is now
+	# derived from the same Steam id (no more per-install random uuid); it stays
+	# populated for schema/legacy-row compatibility. Career stats only write in
+	# online (Steam) sessions, so a valid SteamID64 is always available here.
+	body["uuid"] = PlayerPrefs.career_uuid()
 	body["steam_id"] = SteamManager.steam_id
 	body["player_name"] = record.display_name()
 	body["game_version"] = BuildInfo.VERSION

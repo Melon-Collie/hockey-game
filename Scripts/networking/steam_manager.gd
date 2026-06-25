@@ -253,6 +253,58 @@ func open_invite_overlay() -> void:
 		Steam.activateGameOverlayInviteDialog(current_lobby_id)
 
 
+# ── Steam Cloud (Remote Storage) ─────────────────────────────────────────────
+# Mitts mirrors one file to Steam Cloud — the player's preferences — so settings
+# follow the player across machines. All ISteamRemoteStorage access funnels
+# through here to keep the GodotSteam dependency confined to this file.
+#
+# Cloud is the cross-machine backup that retired the old per-install uuid sidecar
+# in PlayerPrefs. PlayerPrefs owns the reconcile policy (read at boot, push on
+# save); these are the thin transport wrappers.
+
+# Cloud writes silently no-op unless Cloud is enabled BOTH for the app (Steamworks
+# backend config) and the user's account (Steam → Settings → Cloud), so gate on
+# both. Without this guard a fileWrite would appear to succeed yet never sync.
+func is_cloud_available() -> bool:
+	return is_available and Steam.isCloudEnabledForApp() and Steam.isCloudEnabledForAccount()
+
+
+func cloud_file_exists(filename: String) -> bool:
+	return is_cloud_available() and Steam.fileExists(filename)
+
+
+# Unix-seconds timestamp of the cloud file (0 when Cloud is off / absent). Used
+# by PlayerPrefs to break a local-vs-cloud conflict in favour of the newer write.
+func cloud_file_timestamp(filename: String) -> int:
+	if not cloud_file_exists(filename):
+		return 0
+	return Steam.getFileTimestamp(filename)
+
+
+# Returns the cloud file's bytes, or an empty array when Cloud is off / the file
+# is absent / the read fails. Callers treat empty as "no cloud copy."
+func cloud_read(filename: String) -> PackedByteArray:
+	if not cloud_file_exists(filename):
+		return PackedByteArray()
+	var size: int = Steam.getFileSize(filename)
+	if size <= 0:
+		return PackedByteArray()
+	var result: Dictionary = Steam.fileRead(filename, size)
+	if not bool(result.get("ret", false)):
+		return PackedByteArray()
+	var buf: Variant = result.get("buf", PackedByteArray())
+	return buf if buf is PackedByteArray else PackedByteArray()
+
+
+# Writes bytes to Cloud under `filename`. Returns false (no-op) when Cloud is
+# unavailable. Steam syncs the bytes to the backend opportunistically; there is
+# nothing to flush here.
+func cloud_write(filename: String, data: PackedByteArray) -> bool:
+	if not is_cloud_available():
+		return false
+	return Steam.fileWrite(filename, data, data.size())
+
+
 # ── Teardown ────────────────────────────────────────────────────────────────
 # Idempotent: a no-op when not in a lobby, so offline/free-play teardown paths
 # (which funnel through NetworkManager._close) can call it unconditionally.
