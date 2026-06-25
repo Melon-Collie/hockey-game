@@ -80,9 +80,13 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 # after spawn to wire the agent. Separate from setup() because setup() is
 # called by ActorSpawner before the registry knows which slot it belongs to.
 func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
-		is_left_handed: bool) -> void:
+		is_left_handed: bool, profile: BotSkillProfile = null) -> void:
 	if _agent != null:
 		_agent.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
+		# Difficulty knobs (mouse slew / lerp / dispatch cadence). Null leaves
+		# the perfect-bot defaults. Perception delay is applied globally by
+		# GameManager, not here.
+		_agent.apply_profile(profile)
 	if SHOW_DEBUG_LABEL and skater != null:
 		_debug_label = Label3D.new()
 		_debug_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
