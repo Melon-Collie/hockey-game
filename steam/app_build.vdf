@@ -1,0 +1,36 @@
+// SteamPipe app build script for Mitts.
+// Run with:  steamcmd +login <builder_account> +run_app_build <abs path>/app_build.vdf +quit
+// Paths below are relative to THIS script's folder (steam/). Run steamcmd
+// with its working directory set to steam/ (see README.md) so they resolve.
+"appbuild"
+{
+	"appid"	"4892600"
+
+	// Label shown in Steamworks -> SteamPipe -> Builds. Bump to match the
+	// release / build_info.gd VERSION so a build is identifiable at a glance.
+	"desc"	"Mitts 0.1.x (beta)"
+
+	// Build logs + chunk cache (gitignored). Created on first run.
+	"buildoutput"	"output/"
+
+	// Root that the per-depot ContentRoots are resolved against.
+	"contentroot"	"content/"
+
+	// Branch to publish to automatically once the upload finishes.
+	// LEAVE EMPTY while learning the pipeline: upload, then Set Build Live by
+	// hand in Steamworks so you can sanity-check before anyone downloads it.
+	// When you trust it, set this to your private beta branch name (e.g.
+	// "beta"). NEVER hand-set this to "default" / "public" — that ships to
+	// every owner instantly.
+	"setlive"	""
+
+	"depots"
+	{
+		// Real depot IDs from Steamworks -> SteamPipe -> Depots:
+		//   4892602 = "Mitts Windows" (OS: Windows)
+		//   4892603 = "Mitts Linux"   (OS: Linux + SteamOS)
+		// These must match the DepotID in each depot_*.vdf below.
+		"4892602"	"depot_windows.vdf"
+		"4892603"	"depot_linux.vdf"
+	}
+}

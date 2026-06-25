@@ -19,18 +19,32 @@ const State = SkaterStateMachine.State
 var _skater: Skater = null
 var _controller: SkaterController = null  # tunables, _do_release, _game_state, has_puck
 
-# ── Aim Smoothing State ───────────────────────────────────────────────────────
-# World-XZ aim target after applying the per-tick speed cap. The IK consumes
-# this smoothed target instead of the raw mouse, so wraps across the back and
-# ROM-boundary pops swing at most max_blade_speed * delta per tick.
-var _smoothed_aim_world: Vector3 = Vector3.ZERO
-var _smoothed_aim_initialized: bool = false
-# Skater world position (XZ) at the previous aim-smoothing tick. The blade-speed
-# cap is applied RELATIVE to the skater: each tick the smoothed target is first
+# ── Blade Smoothing State ─────────────────────────────────────────────────────
+# World-XZ blade position after applying the per-tick speed cap. The cap is
+# applied to the RESOLVED (ROM-clamped) blade target, not the raw cursor: each
+# tick the cursor is first solved to the reachable blade position the player is
+# actually reaching for, then the smoothed blade steps toward that at most
+# max_blade_speed * delta. Capping the resolved blade (rather than the intent)
+# keeps blade traversal speed consistent regardless of how far past ROM the
+# cursor sits — a distant cursor no longer spends the dangle budget sliding the
+# intent point through unreachable space while the blade crawls.
+var _smoothed_blade_world: Vector3 = Vector3.ZERO
+var _smoothed_blade_initialized: bool = false
+# Skater world position (XZ) at the previous smoothing tick. The blade-speed cap
+# is applied RELATIVE to the skater: each tick the smoothed blade is first
 # carried along by the skater's own translation, so skating velocity doesn't eat
 # the dangle-speed budget. (A pure world-space cap makes the blade drag while
 # skating, and lag the cursor forever once skating speed exceeds the cap.)
 var _prev_skater_pos: Vector3 = Vector3.ZERO
+
+# World-XZ ROM-clamped blade TARGET for this tick — the closed-form
+# TopHandIK.project_blade result, captured BEFORE the speed-cap smoothing below.
+# Wrister charge (SkaterController._update_wrister_charge) and the tap-direction
+# release read this rather than the smoothed/capped blade: it stays gated by
+# reachable space (cursor past the reach limit pins the target → zero travel →
+# no charge) while being a deterministic closed-form clamp of (mouse, body, ROM),
+# so host and client agree on charge without replaying the stateful smoother. y = 0.
+var last_target_blade_world: Vector3 = Vector3.ZERO
 
 # ── Cached Solver Objects ─────────────────────────────────────────────────────
 # The IK configs read only controller @exports, which change exclusively in
@@ -54,18 +68,13 @@ func invalidate_configs() -> void:
 	_cached_top_cfg = null
 	_cached_bottom_cfg = null
 
-# Snap the smoothed aim to a known world-space target. Called by LocalController
-# at reconcile entry so replay starts deterministically from the first replayed
-# input rather than carrying the live smoothed value across the snap.
-func reset_aim_smoothing(target_world: Vector3) -> void:
-	target_world.y = 0.0
-	_smoothed_aim_world = target_world
-	# Anchor the translation baseline to the (already-snapped) server position so
-	# the per-tick carry-along starts deterministically from the replay baseline.
-	var sp: Vector3 = _skater.global_position
-	sp.y = 0.0
-	_prev_skater_pos = sp
-	_smoothed_aim_initialized = true
+# Drop the smoothed-blade baseline so the next solve re-seeds it deterministically
+# from the first replayed input (the init branch in apply_blade_from_mouse snaps
+# the smoothed blade to that input's ROM-clamped target). Called by
+# LocalController at reconcile entry so replay starts from a deterministic blade
+# baseline rather than carrying the live smoothed value across the snap.
+func reset_blade_smoothing() -> void:
+	_smoothed_blade_initialized = false
 
 # ── Blade From Mouse (Top-Hand IK) ────────────────────────────────────────────
 # Input is treated as a desired blade position. The top hand is solved as a
@@ -76,21 +85,62 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 
 	var skater_pos: Vector3 = _skater.global_position
 	skater_pos.y = 0.0
-	# Speed-cap the aim target RELATIVE TO THE SKATER. max_blade_speed bounds how
-	# fast the blade traverses its ROM in front of the player (dangle speed). The
-	# cursor's WORLD position drifts at the skater's skating velocity (the camera
-	# follows the player), so capping in world space would bleed skating speed into
-	# the budget — the blade would drag while skating and, once skating speed
-	# exceeds the cap, never catch the cursor. So carry the smoothed target along
-	# with the skater's translation first, then cap only the residual aim change
-	# relative to the player. The IK consumes the smoothed target.
-	if not _smoothed_aim_initialized:
-		_smoothed_aim_world = mouse_world
+
+	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+
+	# Advance the sticky carry-side state and its smoothed factor before
+	# reading the forehand factor. When not carrying the discrete side resets
+	# to 0 and the smoothed factor lerps back to center; when carrying it
+	# holds the current side until the blade crosses past
+	# carry_side_switch_threshold on the opposite side, then flips and lerps
+	# through center over carry_side_lerp_speed.
+	_skater.update_carry_side(_controller.has_puck, delta)
+
+	var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
+	shoulder_world.y = 0.0
+	if (mouse_world - shoulder_world).length() < 0.01:
+		return
+
+	# 1. Resolve the RAW cursor to the blade the player is actually reaching for:
+	#    convert to upper-body-local, apply the carry offset, then ROM-clamp via
+	#    the iterative top-hand IK. This is the TARGET the speed cap chases. ROM
+	#    clamping the target up front (rather than after the cap) is the whole
+	#    point: the cap then limits the speed of the REACHABLE blade, not the
+	#    intent point far out past ROM. A distant cursor maps to a point on the
+	#    ROM boundary, so sweeping it laterally slides the target along that
+	#    boundary at cursor speed — and the cap bounds the blade's actual travel
+	#    rather than being spent dragging the intent through unreachable space.
+	var mouse_local: Vector3 = _skater.upper_body_to_local(mouse_world)
+	var target_blade_xz := Vector2(mouse_local.x, mouse_local.z)
+	target_blade_xz = _apply_carry_offset(target_blade_xz)
+	# Closed-form ROM projection — no iteration, no hand work. Only the blade
+	# position is needed to cap against; the capped result is re-solved at full
+	# precision (hand + lean blade_y) below. Uses rest blade_y for the projection:
+	# the sub-cm lean refinement the iterative solve adds is irrelevant to a point
+	# that's about to be capped and re-solved.
+	var target_blade_local: Vector3 = TopHandIK.project_blade(
+			_skater.shoulder.position, target_blade_xz, blade_side_sign,
+			_ik_config(blade_y_local()))
+	var target_blade_world: Vector3 = _skater.upper_body_to_global(target_blade_local)
+	target_blade_world.y = 0.0
+	last_target_blade_world = target_blade_world
+
+	# 2. Speed-cap the smoothed blade toward the resolved target, RELATIVE TO THE
+	#    SKATER. max_blade_speed bounds how fast the blade traverses its ROM in
+	#    front of the player (dangle speed). The blade's WORLD position drifts at
+	#    the skater's skating velocity (the camera follows the player), so capping
+	#    in world space would bleed skating speed into the budget — the blade
+	#    would drag while skating and, once skating speed exceeds the cap, never
+	#    catch up. So carry the smoothed blade along with the skater's translation
+	#    first, then cap only the residual dangle relative to the player.
+	if not _smoothed_blade_initialized:
+		_smoothed_blade_world = target_blade_world
 		_prev_skater_pos = skater_pos
-		_smoothed_aim_initialized = true
-	_smoothed_aim_world += skater_pos - _prev_skater_pos
+		_smoothed_blade_initialized = true
+	_smoothed_blade_world += skater_pos - _prev_skater_pos
+	_smoothed_blade_world.y = 0.0
 	_prev_skater_pos = skater_pos
-	var step: Vector3 = mouse_world - _smoothed_aim_world
+	var step: Vector3 = target_blade_world - _smoothed_blade_world
 	step.y = 0.0
 	var max_step: float = _controller.max_blade_speed * delta
 	if max_step > 0.0:
@@ -99,14 +149,14 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 		# Hands — while keeping the PERPENDICULAR component capped at the normal
 		# dangle budget (max_step). Lateral blade sweep IS dangling; capping only
 		# that axis fixes low-Hands shot feel without letting "shoot mode" become
-		# a way to dangle at full blade speed. The axis is skater→smoothed-target
-		# (the current aim line). Reading the LAGGED smoothed target (not the raw
-		# cursor) self-stabilizes the split: a fast lateral whip can't drag the
+		# a way to dangle at full blade speed. The axis is skater→smoothed-blade
+		# (the current aim line). Reading the LAGGED smoothed blade (not the raw
+		# target) self-stabilizes the split: a fast lateral whip can't drag the
 		# axis along with it (off-axis is capped, so the axis can only rotate as
 		# fast as that cap allows), while a slow re-aim turns the axis naturally.
 		# The on-axis budget is flat (Hands-independent) so shooting feels the
 		# same for everyone — Hands still gates the off-axis dangle.
-		var axis_vec: Vector3 = _smoothed_aim_world - skater_pos
+		var axis_vec: Vector3 = _smoothed_blade_world - skater_pos
 		axis_vec.y = 0.0
 		if _controller.get_shot_state() == State.WRISTER_AIM and axis_vec.length_squared() > 0.0001:
 			var axis: Vector3 = axis_vec.normalized()
@@ -119,83 +169,30 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 			var off_len: float = off_axis.length()
 			if off_len > max_step:
 				off_axis *= max_step / off_len
-			_smoothed_aim_world += on_axis + off_axis
+			_smoothed_blade_world += on_axis + off_axis
 		else:
 			var step_len: float = step.length()
 			if step_len > max_step:
-				# Cursor is beyond the dangle-speed budget this tick — step toward it.
-				_smoothed_aim_world += step * (max_step / step_len)
+				# Target is beyond the dangle-speed budget this tick — step toward it.
+				_smoothed_blade_world += step * (max_step / step_len)
 			else:
-				# Within budget this tick — the blade can reach the cursor.
-				_smoothed_aim_world = mouse_world
+				# Within budget this tick — the blade can reach the target.
+				_smoothed_blade_world = target_blade_world
 	# else (delta == 0): no wall-clock elapsed, so the blade traverses no ROM.
 	# This is the reconcile final re-apply path (LocalController.reconcile passes
 	# delta 0.0 to re-place the blade in the post-snap body frame). Snapping to
-	# the cursor here would zero out the hands speed cap on every reconcile —
+	# the target here would zero out the hands speed cap on every reconcile —
 	# clients reconcile constantly, the host never does, so the host would feel
 	# the clamp at full strength while clients barely felt it. Keep the replayed
-	# (already clamped) smoothed aim instead of snapping.
-	mouse_world = _smoothed_aim_world
+	# (already clamped) smoothed blade instead of snapping.
 
-	var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
-	shoulder_world.y = 0.0
-	var to_mouse: Vector3 = mouse_world - shoulder_world
-
-	if to_mouse.length() < 0.01:
-		return
-
-	# Convert mouse world position into upper-body-local XZ for the solver.
-	var mouse_local: Vector3 = _skater.upper_body_to_local(mouse_world)
-	var desired_blade_xz := Vector2(mouse_local.x, mouse_local.z)
-
-	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
-
-	# Advance the sticky carry-side state and its smoothed factor before
-	# reading the forehand factor. When not carrying the discrete side resets
-	# to 0 and the smoothed factor lerps back to center; when carrying it
-	# holds the current side until the blade crosses past
-	# carry_side_switch_threshold on the opposite side, then flips and lerps
-	# through center over carry_side_lerp_speed.
-	_skater.update_carry_side(_controller.has_puck, delta)
-
-	# While carrying, offset the IK target perpendicular to the shoulder→target
-	# direction so the blade marker (and therefore the visible blade + stick
-	# attachment) sits on the forehand or backhand side of the cursor. The
-	# puck pins to Skater.get_carry_target_global() (contact − same offset),
-	# which lands at the cursor — visually: cursor = puck, blade beside it.
-	if _controller.has_puck:
-		var to_target: Vector2 = desired_blade_xz - Vector2(
-				_skater.shoulder.position.x, _skater.shoulder.position.z)
-		if to_target.length() > 0.001:
-			var stick_dir: Vector2 = to_target.normalized()
-			# 90° rotation in XZ: (X, Z) → (−Z, X). Sign matched in
-			# Skater.get_carry_target_global so subtraction inverts cleanly.
-			var face_normal_xz := Vector2(-stick_dir.y, stick_dir.x)
-			desired_blade_xz += face_normal_xz \
-					* _skater.get_carry_forehand_factor() * _skater.carry_blade_offset
-
-	# Iterative IK to land the blade on world-space ice while preserving stick
-	# length. The lean correction depends on blade_local_z (forward extension),
-	# which depends on stick_horiz_at_rest, which depends on blade_y, which is
-	# what we're solving for — a fixed-point in two variables. Three passes
-	# bring the residual world-Y error below ~3mm at max reach + max lean.
-	#
-	# Naive approach (use desired_blade_xz from raw mouse) overshoots wildly
-	# when the mouse is past ROM: lean correction is computed for a Z the blade
-	# never actually reaches, blade ends up far above the ice. Using the SOLVED
-	# blade XZ from each pass converges to the right answer. The final IK pass
-	# returns hand+blade consistent with stick_length, so no post-override is
-	# needed (the converged blade_y already produces blade-on-ice in world).
-	var blade_y: float = blade_y_local()
-	var ik: TopHandIK.Result = _ik_result
-	for i in 3:
-		TopHandIK.solve(
-				_skater.shoulder.position,
-				desired_blade_xz,
-				blade_side_sign,
-				_ik_config(blade_y),
-				ik)
-		blade_y = blade_y_lean_corrected(ik.blade.x, ik.blade.z)
+	# 3. Solve the hand (and lean-corrected blade_y) for the CAPPED blade. The
+	#    smoothed blade is already within ROM (it stepped from one in-ROM point
+	#    toward another), so this resolves the matching hand/stick pose at the
+	#    capped position rather than the raw target.
+	var capped_blade_local: Vector3 = _skater.upper_body_to_local(_smoothed_blade_world)
+	var capped_blade_xz := Vector2(capped_blade_local.x, capped_blade_local.z)
+	var ik: TopHandIK.Result = _solve_top_hand(capped_blade_xz, blade_side_sign)
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
 
@@ -269,6 +266,47 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	var bearing: Vector3 = wall_clamped - _skater.shoulder.position
 	if Vector2(bearing.x, bearing.z).length() > 0.001:
 		_controller._blade_relative_angle = atan2(bearing.x, -bearing.z)
+
+# While carrying, offset the IK target perpendicular to the shoulder→target
+# direction so the blade marker (and therefore the visible blade + stick
+# attachment) sits on the forehand or backhand side of the cursor. The puck
+# pins to Skater.get_carry_target_global() (contact − same offset), which lands
+# at the cursor — visually: cursor = puck, blade beside it. No-op when not
+# carrying.
+func _apply_carry_offset(desired_blade_xz: Vector2) -> Vector2:
+	if not _controller.has_puck:
+		return desired_blade_xz
+	var to_target: Vector2 = desired_blade_xz - Vector2(
+			_skater.shoulder.position.x, _skater.shoulder.position.z)
+	if to_target.length() > 0.001:
+		var stick_dir: Vector2 = to_target.normalized()
+		# 90° rotation in XZ: (X, Z) → (−Z, X). Sign matched in
+		# Skater.get_carry_target_global so subtraction inverts cleanly.
+		var face_normal_xz := Vector2(-stick_dir.y, stick_dir.x)
+		desired_blade_xz += face_normal_xz \
+				* _skater.get_carry_forehand_factor() * _skater.carry_blade_offset
+	return desired_blade_xz
+
+# Iterative IK to land the blade on world-space ice while preserving stick
+# length, ROM-clamped to the asymmetric envelope. The lean correction depends on
+# blade_local_z (forward extension), which depends on stick_horiz_at_rest, which
+# depends on blade_y, which is what we're solving for — a fixed-point in two
+# variables. Three passes bring the residual world-Y error below ~3mm at max
+# reach + max lean. Using the SOLVED blade XZ from each pass (not the raw target)
+# converges to the right answer even when the target is past ROM. Writes into and
+# returns the shared _ik_result — callers must consume it before the next solve.
+func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float) -> TopHandIK.Result:
+	var blade_y: float = blade_y_local()
+	var ik: TopHandIK.Result = _ik_result
+	for i in 3:
+		TopHandIK.solve(
+				_skater.shoulder.position,
+				desired_blade_xz,
+				blade_side_sign,
+				_ik_config(blade_y),
+				ik)
+		blade_y = blade_y_lean_corrected(ik.blade.x, ik.blade.z)
+	return ik
 
 # ── Bottom Hand ───────────────────────────────────────────────────────────────
 # Recompute the bottom hand pose from the current top_hand + blade positions.

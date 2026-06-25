@@ -190,6 +190,11 @@ func start(recorder: ReplayRecorder,
 		_inside_net_cam.set_booth(booth, 55.0, 0.15)
 		_inside_net_cam.snap_to_position()
 
+	# The hard cam is the far press-box shot; widen the 3D sound falloff so the
+	# recorded events stay audible from that distance (the inside-net cut below
+	# drops to the gentler near preset). Restored to LIVE in stop().
+	SoundManager.set_world_audio_range(SoundManager.AudioRange.REPLAY_FAR)
+
 	NetworkManager.start_replay_mode(_clip_start_ts)
 	replay_started.emit()
 
@@ -210,6 +215,9 @@ func stop() -> void:
 		_inside_net_cam.queue_free()
 		_inside_net_cam = null
 	_has_cut_to_inside_net = false
+
+	# Restore the live 3D sound falloff (widened for the replay cameras above).
+	SoundManager.set_world_audio_range(SoundManager.AudioRange.LIVE)
 
 	NetworkManager.stop_replay_mode()
 	_unfreeze_live_simulation()
@@ -283,6 +291,10 @@ func _process(delta: float) -> void:
 		_inside_net_cam.snap_to_position()
 		_inside_net_cam.make_current()
 		_has_cut_to_inside_net = true
+		# Behind-the-net cam is close to the puck — drop from the wide hard-cam
+		# falloff to the gentler near preset so the climax stays audible without
+		# over-amplifying at point-blank range.
+		SoundManager.set_world_audio_range(SoundManager.AudioRange.REPLAY_NEAR)
 
 	NetworkManager.set_replay_clock(_virtual_clock)
 

@@ -19,7 +19,18 @@ const STICK_LIFT_FORCED_LIFT_S: float = 0.4
 @export var trajectory_hard_snap_threshold: float = 1.5
 @export var trajectory_soft_blend_threshold: float = 0.3
 @export var position_correction_blend: float = 0.1
-@export var rejoin_blend_duration: float = 0.075
+# Loose-puck forward lead toward host-present, 0..1 (see _interpolate), mirroring
+# RemoteController so a chasing skater and the loose puck share a timeline — pickups
+# and pokes line up with where the host has the puck. The SmoothDamp below absorbs
+# the overshoot a led puck produces on bounces (boards/goalie velocity reversals).
+@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.5
+# Critically-damped smoothing time (s) for the loose-puck position. Slightly above
+# the skater's so bounce overshoot blends out cleanly.
+@export var position_smooth_time: float = 0.06
+# Smart extrapolation: when the forward dead-reckon would carry the puck across a
+# board within the lead window, stop leading for that frame and hold at the newest
+# authoritative position instead of projecting through the boards (see _interpolate).
+@export var stop_extrapolation_at_boards: bool = true
 # Extra friction applied during trajectory prediction to compensate for any
 # divergence between client and host Jolt friction. Set to 0 while both run
 # identical physics; tune upward if free-puck trajectories drift apart.
@@ -77,12 +88,18 @@ var is_extrapolating: bool = false
 # is_processing_stick_lift(); always reset immediately after apply_stick_lift_strip.
 var _processing_stick_lift: bool = false
 
-var _rejoin_blend_elapsed: float = -1.0  # < 0 means inactive
 var _post_contact_timer: float = -1.0    # >= 0 while suppressing reconcile after a bounce
 # Reused scratch objects for the per-tick interpolation lookup + output.
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
 var _scratch_interp := PuckNetworkState.new()
-var _rejoin_blend_from_pos: Vector3 = Vector3.ZERO
+# Critically-damped position smoother for the loose puck (see _interpolate).
+# Reseeded from the puck's live position on every fresh entry into interpolation
+# (carry / trajectory / extrap → loose), so it blends those seams instead of
+# snapping — subsumes the former rejoin-blend.
+var _smooth_pos: Vector3 = Vector3.ZERO
+var _smooth_vel: Vector3 = Vector3.ZERO
+var _smooth_initialized: bool = false
+const _SMOOTH_SNAP_DIST: float = 2.0  # pathological gap → snap rather than slide
 
 func get_buffer_depth() -> int:
 	return _state_buffer.size()
@@ -141,8 +158,6 @@ func _physics_process(delta: float) -> void:
 		_check_interactions()
 		_prev_puck_pos = puck.get_puck_position()
 		return
-	if _rejoin_blend_elapsed >= 0.0:
-		_rejoin_blend_elapsed += delta
 	# A despawned / demoted remote carrier drops the pin back to interpolation.
 	if _remote_carrier_skater != null and not is_instance_valid(_remote_carrier_skater):
 		_remote_carrier_skater = null
@@ -154,6 +169,7 @@ func _physics_process(delta: float) -> void:
 		_clear_provisional()
 	if _local_carrier_skater != null:
 		is_extrapolating = false
+		_smooth_initialized = false
 		_pin_puck_to_carrier(_local_carrier_skater, delta)
 		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "pinned"
 	elif _provisional_carrier_skater != null:
@@ -163,29 +179,31 @@ func _physics_process(delta: float) -> void:
 			# is seamless — and since we only pinned an uncontested catch, a denial
 			# this late is rare.
 			_clear_provisional()
-			_interpolate()
+			_interpolate(delta)
 			if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "interpolating"
 		else:
 			is_extrapolating = false
+			_smooth_initialized = false
 			_pin_puck_to_carrier(_provisional_carrier_skater, delta)
 			if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "pinned_provisional"
 	elif _remote_carrier_skater != null:
 		is_extrapolating = false
+		_smooth_initialized = false
 		_pin_puck_to_carrier(_remote_carrier_skater, delta)
 		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "pinned_remote"
 	elif not _predicting_trajectory:
-		_interpolate()
+		_interpolate(delta)
 		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "interpolating"
 	else:
 		is_extrapolating = false
+		_smooth_initialized = false
 		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "predicting"
 		if _post_contact_timer >= 0.0:
 			_post_contact_timer -= delta
 			if _post_contact_timer < 0.0:
-				# Suppression window expired: buffer has post-bounce data. Transition
-				# to interpolation with a rejoin blend from the Jolt-simulated position.
-				_rejoin_blend_from_pos = puck.get_puck_position()
-				_rejoin_blend_elapsed = 0.0
+				# Suppression window expired: buffer has post-bounce data. Hand back to
+				# interpolation; the next _interpolate reseeds the position smoother from
+				# the Jolt-simulated spot (fresh entry), blending the seam.
 				_predicting_trajectory = false
 				puck.set_client_prediction_mode(false)
 		if _predicting_trajectory and prediction_extra_friction > 0.0:
@@ -674,13 +692,15 @@ func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
 	return vel * (new_speed / speed)
 
 
-func _interpolate() -> void:
-	# Shared delay (NetworkManager) so the loose puck renders at the same instant
-	# as the skaters — relative timing (puck-vs-stick on a pass) stays exact.
-	var render_time: float = NetworkManager.estimated_host_time() - NetworkManager.get_interpolation_delay()
+func _interpolate(delta: float) -> void:
+	# Shared delay keeps the loose puck on the skaters' timeline; the lead below
+	# pushes it toward host-present so a chasing skater and the puck line up — and
+	# so the local pickup/poke proximity reads fire where the host has the puck.
+	var interp_delay: float = NetworkManager.get_interpolation_delay()
+	var render_time: float = NetworkManager.estimated_host_time() \
+			- interp_delay * (1.0 - extrapolation_lead_fraction)
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
 			_state_buffer, render_time, _scratch_bracket)
-	var prev_extrapolating: bool = is_extrapolating
 	is_extrapolating = bracket != null and bracket.is_extrapolating
 	if bracket == null:
 		return
@@ -693,28 +713,72 @@ func _interpolate() -> void:
 		# Decay velocity to approximate ice friction so the extrapolated position
 		# matches Jolt's deceleration rather than linear dead-reckoning overshoot.
 		var friction_vel: Vector3 = _ice_friction_velocity(newest.velocity, dt)
-		interpolated.position = newest.position + friction_vel * dt
-		interpolated.velocity = friction_vel
+		var projected: Vector3 = newest.position + friction_vel * dt
+		# Smart extrapolation: only dead-reckon forward when the puck won't cross a
+		# board this frame. Projecting THROUGH a board overshoots outside the rink,
+		# then snaps back when the host's reflected samples land. Predicting the
+		# bounce client-side would risk disagreeing with the host's authoritative
+		# restitution/angle, so instead we just stop leading when a board is in the
+		# way — hold at the newest authoritative position until the post-bounce
+		# trajectory streams in. Boards only; goalie/net/skater bounces still lean
+		# on the SmoothDamp below.
+		if stop_extrapolation_at_boards and _crosses_board(projected):
+			# Hold at the last authoritative spot and report zero velocity so the
+			# feed-forward smoother below doesn't nudge the held puck on toward the board.
+			interpolated.position = newest.position
+			interpolated.velocity = Vector3.ZERO
+		else:
+			interpolated.position = projected
+			interpolated.velocity = friction_vel
 	else:
 		var from_state: PuckNetworkState = bracket.from_state
 		var to_state: PuckNetworkState = bracket.to_state
 		interpolated.position = BufferedStateInterpolator.hermite(from_state.position, from_state.velocity,
 				to_state.position, to_state.velocity, bracket.t, bracket.bracket_dt)
 		interpolated.velocity = from_state.velocity.lerp(to_state.velocity, bracket.t)
-	if prev_extrapolating and not is_extrapolating:
-		_rejoin_blend_from_pos = puck.get_puck_position()
-		_rejoin_blend_elapsed = 0.0
-	if _rejoin_blend_elapsed >= 0.0:
-		var ease_t: float = clampf(_rejoin_blend_elapsed / rejoin_blend_duration, 0.0, 1.0)
-		# Smoothstep (C1) re-entry — see RemoteController._interpolate for the
-		# rationale: ramps the error-correction velocity in/out so the seam back
-		# into interpolation has no velocity kink.
-		var eased: float = smoothstep(0.0, 1.0, ease_t)
-		interpolated.position = _rejoin_blend_from_pos.lerp(interpolated.position, eased)
-		if ease_t >= 1.0:
-			_rejoin_blend_elapsed = -1.0
+	# Velocity-feed-forward error smoothing on the rendered puck position. Advancing
+	# by the target's own velocity gives zero steady-state lag (smoothing the absolute
+	# position trails a fast puck by ~velocity × smooth_time — metres on a shot/pass);
+	# only the residual error is critically damped. On a fresh entry into interpolation
+	# (carry / trajectory / extrap → loose) seed from the puck's live spot so the seam
+	# blends; a pathological gap snaps.
+	var target_pos: Vector3 = interpolated.position
+	if not _smooth_initialized:
+		_smooth_pos = puck.get_puck_position()
+		_smooth_vel = Vector3.ZERO
+		_smooth_initialized = true
+	if _smooth_pos.distance_to(target_pos) > _SMOOTH_SNAP_DIST:
+		_smooth_pos = target_pos
+		_smooth_vel = Vector3.ZERO
+	else:
+		_smooth_pos += interpolated.velocity * delta
+		_smooth_pos = _smooth_damp(_smooth_pos, target_pos, position_smooth_time, delta)
+	interpolated.position = _smooth_pos
 	_apply_state_to_puck(interpolated)
 	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
+
+
+# True when world position `p` (XZ) lies outside the inner board boundary — i.e.
+# a straight dead-reckon to here would have crossed a board (bounced). Uses the
+# same rounded-rect projection as the puck-OOB / blade-clamp callers, so the
+# corners are handled exactly.
+func _crosses_board(p: Vector3) -> bool:
+	var xz := Vector2(p.x, p.z)
+	return GameRules.clamp_to_rink_inner(xz).distance_squared_to(xz) > 1e-6
+
+
+# Unity-style critically damped smoothing toward a (possibly moving) target.
+# Mutates _smooth_vel; returns the new position. Pure value-type math — no alloc.
+# (Duplicated from RemoteController; hoist to a shared helper if a third caller
+# appears — kept inline to avoid a per-tick out-param allocation on the hot path.)
+func _smooth_damp(current: Vector3, target: Vector3, smooth_time: float, dt: float) -> Vector3:
+	var omega: float = 2.0 / maxf(smooth_time, 0.0001)
+	var x: float = omega * dt
+	var exp_factor: float = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+	var change: Vector3 = current - target
+	var temp: Vector3 = (_smooth_vel + change * omega) * dt
+	_smooth_vel = (_smooth_vel - temp * omega) * exp_factor
+	return target + (change + temp) * exp_factor
 
 func _apply_state_to_puck(state: PuckNetworkState) -> void:
 	# Position only — puck is frozen during interpolation, Jolt ignores velocity.

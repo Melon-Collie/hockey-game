@@ -445,11 +445,10 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# that carries across reconciles without a per-cycle resync — anchoring it
 	# to the server bounds drift to zero per cycle instead of accumulating.
 	_pose.upper_body_angle = server_state.upper_body_rotation_y
-	# Seed the IK aim smoother from the first replayed input so the blade speed
-	# cap operates against a deterministic baseline across reconcile — the live
-	# smoothed value would otherwise bias the replay's first tick.
-	var seed_aim: Vector3 = _input_history[0].mouse_world_pos if not _input_history.is_empty() else _current_input.mouse_world_pos
-	_ik.reset_aim_smoothing(seed_aim)
+	# Drop the IK blade smoother's baseline so it re-seeds deterministically from
+	# the first replayed input's ROM-clamped target — the live smoothed value
+	# would otherwise bias the replay's first tick.
+	_ik.reset_blade_smoothing()
 	is_replaying = true
 	# Per-impulse "applied" flags, indexed by position in _body_check_impulses.
 	# Each impulse fires once, on the first replay input whose host_timestamp
@@ -511,7 +510,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 			apply_server_shot_state = false
 	if apply_server_shot_state:
 		_sm.set_state(server_state.shot_state as SkaterStateMachine.State)
-	_aiming.charge_distance = server_state.shot_charge
+	# Wrister charge is a local control input (the player's precision sweep), not a
+	# server-owned consequence — importing the host's value here yanked the live
+	# charge to the host's lagged re-sim every broadcast (felt as rubber-banded
+	# charge, and starved forehand shots into the old quick-shot branch). The
+	# save/restore above already keeps replay from inflating it; leave the local
+	# prediction authoritative. (Determinism work will let the host re-derive the
+	# shot from inputs; charge does not round-trip through server state.)
 	skater.set_facing(_pose.facing)
 	skater.set_upper_body_rotation(_pose.upper_body_angle)
 	skater.set_lower_body_lag(_pose.lower_body_lag)

@@ -63,12 +63,14 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# Our team excluding self — the base list of "defenders" the
 	# carrier sees. We'll append our candidate position to this
 	# list when evaluating each candidate.
-	var our_team_excluding_self: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
+	var our_team_excluding_self: Array[Vector3] = ctx.scratch_teammates
+	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
 	# Opp peers other than the carrier — the carrier's potential
 	# pass receivers. PRESSURE scores how much each candidate
 	# deflates those pass options.
-	var opp_teammates: Array[Vector3] = AIRoleHelpers.collect_opp_team_excluding_carrier(ctx)
+	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
+	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates)
 
 	# Search center = "where the carrier will be at the next action
 	# horizon, shifted one stick-length back toward our net". Both

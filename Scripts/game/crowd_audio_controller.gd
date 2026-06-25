@@ -1,3 +1,4 @@
+class_name CrowdAudioController
 extends Node
 
 # Drives crowd audio: a looping ambient murmur plus cheer one-shots on goals
@@ -71,6 +72,13 @@ func _on_goal_scored(_scoring_team: Variant, _scorer: String, _a1: String, _a2: 
 func _on_phase_changed(new_phase: int) -> void:
 	if new_phase == GamePhase.Phase.END_OF_PERIOD or new_phase == GamePhase.Phase.GAME_OVER:
 		_cheer()
+
+
+# Public trigger for a crowd cheer + ambient duck. The replay viewer calls this
+# off recorded goal events, since the live GameManager.goal_scored signal that
+# normally drives _on_goal_scored doesn't fire during offline playback.
+func cheer() -> void:
+	_cheer()
 
 
 func _cheer() -> void:

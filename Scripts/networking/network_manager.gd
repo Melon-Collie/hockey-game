@@ -65,7 +65,6 @@ signal remote_skater_spawn_requested(peer_id: int, team_slot: int, team_id: int,
 signal existing_players_synced(player_data: Array)
 signal local_puck_pickup_confirmed
 signal local_puck_stolen(was_stick_lift: bool)
-signal remote_puck_release_received(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3)
 signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3)
 signal carrier_puck_dropped
 signal remote_carrier_changed(new_carrier_peer_id: int)
@@ -563,7 +562,8 @@ func _on_connected_to_server() -> void:
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.speed, local_attrs.agility, local_attrs.hands,
 			local_attrs.size, local_attrs.physical, local_attrs.shot,
-			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION)
+			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
+			SteamManager.get_app_build_id())
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -856,7 +856,7 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM,
-		steam_id: int = 0, protocol_version: int = 0) -> void:
+		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -868,6 +868,18 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		push_warning("Rejected join from peer %d: protocol %d, host expects %d"
 				% [sender_id, protocol_version, BuildInfo.PROTOCOL_VERSION])
 		kick_peer(sender_id, "Game version mismatch (host is on v%s).\nUpdate to the latest build to play together." % BuildInfo.VERSION)
+		return
+	# Build gate: a matching protocol only proves the wire decodes. A physics or
+	# tuning change with the same wire format still desyncs the joiner's local
+	# prediction against host authority. The Steam BuildID bumps on every upload
+	# so it catches that automatically — no manual version discipline. Skipped
+	# when either side is a dev / non-Steam build (BuildID 0), which manages its
+	# own compatibility.
+	var host_build_id: int = SteamManager.get_app_build_id()
+	if build_id != 0 and host_build_id != 0 and build_id != host_build_id:
+		push_warning("Rejected join from peer %d: build %d, host on build %d"
+				% [sender_id, build_id, host_build_id])
+		kick_peer(sender_id, "Build mismatch — you and the host are on different builds.\nUpdate to the latest build to play together.")
 		return
 	# Duplicate request_join (lost-ack resend or forged repeat) would re-emit
 	# peer_joined and double-spawn the peer's skater — first join wins.
@@ -1015,9 +1027,9 @@ func receive_world_state(data: PackedByteArray) -> void:
 		func(s: PackedByteArray) -> void:
 			var now: float = local_time()
 			if _last_ws_arrival_time > 0.0:
-				const EXPECTED_INTERVAL: float = 1.0 / Constants.STATE_RATE
+				var expected_interval: float = 1.0 / Constants.STATE_RATE
 				var gap: float = now - _last_ws_arrival_time
-				var jitter: float = absf(gap - EXPECTED_INTERVAL)
+				var jitter: float = absf(gap - expected_interval)
 				_jitter_samples.append(jitter)
 				if _jitter_samples.size() > 40:
 					_jitter_samples.pop_front()
@@ -1351,19 +1363,6 @@ func send_puck_stolen(victim_peer_id: int, was_stick_lift: bool = false) -> void
 @rpc("authority", "reliable")
 func notify_puck_stolen(was_stick_lift: bool) -> void:
 	NetworkSimManager.send(func(wsl: bool) -> void: local_puck_stolen.emit(wsl), [was_stick_lift], true)
-
-func send_puck_release(direction: Vector3, power: float, is_slapper: bool, origin: Vector3) -> void:
-	release_puck.rpc_id(1, direction, power, is_slapper,
-			estimated_host_time(), get_latest_rtt_ms(),
-			get_target_interpolation_delay() * 1000.0, origin)
-
-@rpc("any_peer", "reliable")
-func release_puck(direction: Vector3, power: float, is_slapper: bool, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
-	var sender: int = multiplayer.get_remote_sender_id()
-	NetworkSimManager.send(
-		func(d: Vector3, p: float, slap: bool, ts: float, rtt: float, idms: float, org: Vector3, sid: int) -> void:
-			remote_puck_release_received.emit(d, p, slap, sid, ts, rtt, idms, org),
-		[direction, power, is_slapper, host_timestamp, rtt_ms, interp_delay_ms, client_origin, sender], true)
 
 func send_one_timer_release(direction: Vector3, power: float, origin: Vector3) -> void:
 	release_puck_one_timer.rpc_id(1, direction, power,

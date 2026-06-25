@@ -308,6 +308,8 @@ extends Node
 # Drives the standing / paddle sweep pose too so the reach reads visually.
 @export var clear_reach: float = 1.4            # m — goalie-to-puck distance the stick can sweep
 @export var clear_max_puck_speed: float = 4.0   # m/s — above this it's a live shot/rebound, leave it
+@export var clear_max_height: float = 0.12      # m — puck must be on the ice; airborne pucks aren't swept
+@export var clear_dwell: float = 0.35           # s — the puck must sit clearable this long before the sweep
 @export var clear_speed: float = 7.0            # m/s imparted to the swept puck
 @export var clear_lateral_weight: float = 1.0   # corner-ward bias (lateral vs forward)
 @export var clear_forward_weight: float = 0.5   # out-of-crease bias
@@ -558,6 +560,10 @@ var _lunge_cooldown_timer: float = 0.0
 # Loose-puck sweep cooldown — counts down after each crease clear so the goalie
 # sweeps once and lets the puck travel instead of dribbling it tick-by-tick.
 var _clear_cooldown_timer: float = 0.0
+# Counts up while a loose puck sits clearable in front of the goalie; the sweep
+# only fires once it crosses `clear_dwell`. Resets the moment the puck leaves
+# the clearable window so the goalie doesn't bat live/airborne pucks on contact.
+var _clear_dwell_timer: float = 0.0
 # Blade velocity tracking for the goalie poke check. We need the BLADE's
 # world velocity (not the goalie body's) because the strip-velocity math
 # blends checker blade velocity with carrier blade velocity. Position-
@@ -574,7 +580,7 @@ var _slide_start_rotation_y: float = 0.0
 var _skater_getter: Callable = Callable()
 
 # Lag-comp back-date (seconds) consumed by the next release-triggered
-# reaction. Set by GameManager.on_remote_puck_release / one_timer when a
+# reaction. Set by GameManager._fire_remote_shot / one_timer when a
 # client RPC carries a host_timestamp older than now. Cleared on consumption
 # so it never bleeds into a later shot.
 var _pending_reaction_back_date: float = 0.0
@@ -598,6 +604,9 @@ var _state_buffer: Array[BufferedGoalieState] = []
 # builders rewrite every field on each call, so no stale values leak).
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
 var _scratch_state := GoalieNetworkState.new()
+# Reused ShotResult for the per-tick detect_shot calls (reaction re-projection
+# and universal-reaction scan), so the host doesn't allocate one per tick/goalie.
+var _scratch_shot := GoalieBehaviorRules.ShotResult.new()
 # Per-physics-frame memo for _opposing_shooter_near_puck (host hot path).
 var _shooter_near_memo_frame: int = -1
 var _shooter_near_memo: bool = false
@@ -838,9 +847,9 @@ func _update_tracking(delta: float) -> void:
 	# trajectory). Does NOT clear the freeze if re-projection fails — that would
 	# release it mid-flight on shots that arc over the net or drift wide before
 	# any resolving event has fired.
-	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, puck.linear_velocity,
-			_goal_line_z, _goal_center_x, _shot_cfg)
+			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
 	if result.is_shot:
 		_reaction.update_impact(result.impact_x, result.impact_y)
 		# Elevated shot that's tipped low and tracking low — start the
@@ -1219,6 +1228,14 @@ func _try_clear_loose_puck(delta: float) -> void:
 		_clear_cooldown_timer = maxf(_clear_cooldown_timer - delta, 0.0)
 		return
 	if not _is_loose_puck_clearable():
+		_clear_dwell_timer = 0.0
+		return
+	# The puck has to settle on the ice in front of the goalie for a beat before
+	# the sweep fires — otherwise the goalie bats pucks away the instant they
+	# drift into reach. Accumulate dwell while clearable; the predicate already
+	# reset it to zero the moment the puck left the window.
+	_clear_dwell_timer += delta
+	if _clear_dwell_timer < clear_dwell:
 		return
 	# Dead-centre pucks have no natural corner — sweep toward the stick side.
 	var default_side: float = 1.0 if catches_left else -1.0
@@ -1228,10 +1245,11 @@ func _try_clear_loose_puck(delta: float) -> void:
 			clear_center_deadband, default_side)
 	puck.apply_goalie_sweep(sweep_vel)
 	_clear_cooldown_timer = clear_cooldown
+	_clear_dwell_timer = 0.0
 
 
-# True when a loose puck is sitting in front of the goalie, slow and close
-# enough to sweep to the corner with the stick. Drives both the actual clear
+# True when a loose puck is sitting on the ice in front of the goalie, slow and
+# close enough to sweep to the corner with the stick. Drives both the actual clear
 # (_try_clear_loose_puck) and the standing / paddle sweep pose so the reach
 # reads visually. Loose pucks only — carried pucks go through the poke check.
 # Skipped while reacting to a shot (the goalie is reading a save, not poking at
@@ -1248,6 +1266,10 @@ func _is_loose_puck_clearable() -> bool:
 		return false
 	# In front of the goal line only — never sweep a puck behind the net.
 	if (puck.global_position.z - _goal_line_z) * _direction_sign <= 0.0:
+		return false
+	# On the ice only — a puck in the air is a live shot/deflection, not a loose
+	# puck to sweep. Without this the goalie bats airborne pucks out of the air.
+	if puck.global_position.y > clear_max_height:
 		return false
 	if puck.linear_velocity.length() > clear_max_puck_speed:
 		return false
@@ -1844,9 +1866,9 @@ func _check_universal_reaction() -> void:
 	# Use linear_velocity here (the puck is loose, not in the
 	# Jolt-frozen->dynamic transition that `_on_puck_released` has to
 	# handle via `get_release_velocity`).
-	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, puck.linear_velocity,
-			_goal_line_z, _goal_center_x, _shot_cfg)
+			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
 	if not result.is_shot:
 		return
 	if debug_goalie_reads:

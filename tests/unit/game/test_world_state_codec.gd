@@ -67,6 +67,21 @@ func test_stats_round_trip_preserves_per_player_counters() -> void:
 	assert_eq(sm.period_scores[1][0], 0)
 
 
+func test_decode_stats_preserves_locally_tracked_toi() -> void:
+	# Regression: TOI is tracked locally per-peer and never crosses the wire.
+	# Decoding must update the existing stats object in place, not replace it,
+	# or a client's accumulated time-on-ice is wiped to zero on every packet.
+	_add_player(10, 0, 1, 0, 2, 0, 0)
+	var encoded: Array = codec.encode_stats()
+	# Client has been accumulating TOI locally between packets.
+	registry._players[10].stats.toi_seconds = 42.5
+	codec.decode_stats(encoded)
+	assert_eq(registry._players[10].stats.toi_seconds, 42.5,
+			"decode_stats must not reset locally tracked toi_seconds")
+	assert_eq(registry._players[10].stats.shots_on_goal, 2,
+			"wire counters still apply through the in-place update")
+
+
 func test_decode_stats_skips_unknown_peer_ids() -> void:
 	_add_player(10, 0, 1, 0, 0, 0)
 	var encoded: Array = codec.encode_stats()

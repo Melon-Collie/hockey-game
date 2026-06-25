@@ -63,10 +63,11 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 
-	var opp_positions: Array[Vector3] = []
-	var opp_states: Array[SkaterNetworkState] = []
+	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	var teammate_positions: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
+	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
+	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
 
 	# Side this outlet works: strong outlet on the strong side, weak
 	# outlet on the opposite side.

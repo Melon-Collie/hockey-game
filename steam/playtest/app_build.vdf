@@ -1,0 +1,33 @@
+// SteamPipe app build script for the Mitts PLAYTEST app (child of 4892600).
+// Run from steam/playtest/ so the relative paths resolve:
+//   cd steam/playtest
+//   steamcmd +login <acct> +run_app_build "<abs path>/app_build.vdf" +quit
+//
+// Reuses the SAME staged content as the main app (../content/). One exported
+// build works for both apps because the game adopts whichever App ID Steam
+// launches it under (see steam_manager.gd) — no playtest-specific export.
+"appbuild"
+{
+	"appid"	"4893650"
+
+	"desc"	"Mitts Playtest 0.1.x"
+
+	// Shared with the main-app build (gitignored). "../" because we run from
+	// steam/playtest/ but the content + logs live under steam/.
+	"buildoutput"	"../output/"
+	"contentroot"	"../content/"
+
+	// Leave empty: upload, then Set Build Live by hand. When trusted, set to
+	// the playtest branch you distribute (often just "default" for a playtest,
+	// since access is already gated by who holds a key).
+	"setlive"	""
+
+	"depots"
+	{
+		// Playtest depots (Steamworks -> SteamPipe -> Depots on app 4893650):
+		//   4893652 = "Mitts Windows" (OS: Windows)
+		//   4893653 = "Mitts Linux"   (OS: Linux + SteamOS)
+		"4893652"	"depot_windows.vdf"
+		"4893653"	"depot_linux.vdf"
+	}
+}

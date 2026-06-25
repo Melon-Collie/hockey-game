@@ -218,6 +218,31 @@ func test_close_to_far_continuity_at_stick_horiz_at_rest() -> void:
 func shoulder_xz_from(shoulder: Vector3) -> Vector2:
 	return Vector2(shoulder.x, shoulder.z)
 
+# ── project_blade matches solve().blade ───────────────────────────────────
+
+func test_project_blade_matches_solve_blade_everywhere() -> void:
+	# project_blade is the closed-form ROM clamp that solve() builds the hand on
+	# top of. They must agree on the blade position across both regimes and both
+	# handedness signs, or the speed-cap target (which uses project_blade) would
+	# drift from the pose solve (which uses solve()).
+	for shoulder: Vector3 in [_lefty_shoulder(), _righty_shoulder()]:
+		var sign: float = -1.0 if shoulder.x > 0.0 else 1.0
+		for deg: int in range(-180, 180, 15):
+			for dist: float in [0.0, 0.2, 0.8, 1.16, 1.5, 2.5, 5.0]:
+				var angle: float = deg_to_rad(deg)
+				var target := Vector2(sin(angle) * dist, -cos(angle) * dist)
+				var projected: Vector3 = TopHandIK.project_blade(shoulder, target, sign, _cfg())
+				var solved: TopHandIK.Result = TopHandIK.solve(shoulder, target, sign, _cfg())
+				assert_almost_eq(
+						projected.x, solved.blade.x, 0.0001,
+						"blade X agree at deg=%d dist=%.2f sign=%.0f" % [deg, dist, sign])
+				assert_almost_eq(
+						projected.y, solved.blade.y, 0.0001,
+						"blade Y agree at deg=%d dist=%.2f sign=%.0f" % [deg, dist, sign])
+				assert_almost_eq(
+						projected.z, solved.blade.z, 0.0001,
+						"blade Z agree at deg=%d dist=%.2f sign=%.0f" % [deg, dist, sign])
+
 # ── Handedness mirror ─────────────────────────────────────────────────────
 
 func test_righty_mirrors_lefty_in_x() -> void:

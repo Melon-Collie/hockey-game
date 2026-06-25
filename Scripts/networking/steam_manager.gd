@@ -16,9 +16,9 @@ extends Node
 ## pumps nothing, and every lobby call is a no-op. Offline / free-play /
 ## tutorial never reference this autoload, so they are wholly unaffected.
 
-# Dev App ID 480 = Valve's SpaceWar example. Swap to the real Steamworks App ID
-# here (one line) once the Steam backend exists.
-const APP_ID: int = 480
+# Mitts' Steamworks App ID. (Dev builds historically used 480 = Valve's
+# SpaceWar example before the real App ID was registered.)
+const APP_ID: int = 4892600
 
 # How long to wait for an async Steam lobby create/join callback before giving
 # up and surfacing a failure (so the menu spinner can't hang forever if
@@ -62,11 +62,16 @@ func _try_init() -> void:
 		steam_unavailable.emit.call_deferred()
 		return
 
-	# Set the App ID via environment before init. This form is stable across
-	# GodotSteam versions (avoids steamInitEx's varying parameter order) and
-	# also covers the case where steam_appid.txt isn't found next to the binary.
-	OS.set_environment("SteamAppId", str(APP_ID))
-	OS.set_environment("SteamGameId", str(APP_ID))
+	# Dev-only: when running from the editor or a debug export (NOT launched
+	# through the Steam client) the SDK has no launch context, so tell it which
+	# app we are. In a shipped RELEASE build Steam launches the process and knows
+	# the App ID from its own launch context (main app, the Playtest child app, a
+	# future demo) — we must NOT set it here, or we'd force 4892600 and break the
+	# Playtest for testers who own the child app but not the main app. (Same
+	# reason steam_appid.txt is excluded from shipped depots.)
+	if OS.is_debug_build():
+		OS.set_environment("SteamAppId", str(APP_ID))
+		OS.set_environment("SteamGameId", str(APP_ID))
 
 	var result: Dictionary = Steam.steamInitEx()
 	# status 0 == STEAM_API_INIT_RESULT_OK across builds.
@@ -79,6 +84,10 @@ func _try_init() -> void:
 	is_available = true
 	steam_id = Steam.getSteamID()
 	persona_name = Steam.getPersonaName()
+	# Ground-truth diagnostic: the App ID Steam actually initialised this process
+	# under (independent of the name Steam shows in the UI). For the Playtest
+	# build launched via Steam this must be 4893650, not the main app 4892600.
+	print("[SteamManager] Steam initialised under AppID %d" % Steam.getAppID())
 	_connect_steam_signals()
 	_check_launch_invite()
 
@@ -144,6 +153,16 @@ func create_lobby(max_members: int, public: bool = true) -> void:
 	Steam.createLobby(lobby_type, max_members)
 
 
+# The Steam BuildID of the running install — a per-build identity that changes
+# on every upload, so it gates simulation parity (physics/tuning) the way
+# PROTOCOL_VERSION gates wire format. Returns 0 for dev / non-Steam builds, in
+# which case callers skip the build gate (dev manages its own compatibility).
+func get_app_build_id() -> int:
+	if not is_available:
+		return 0
+	return Steam.getAppBuildId()
+
+
 func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 	if _pending_op != 1:
 		return
@@ -155,9 +174,12 @@ func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 	# Advertise the host name so the public browser has something to show.
 	Steam.setLobbyData(lobby_id, "name", "%s's game" % Steam.getPersonaName())
 	Steam.setLobbyData(lobby_id, "game", "mitts")
-	# Stamped so the browser only lists wire-compatible games; the
-	# request_join handshake remains the authoritative version gate.
+	# Stamped so the browser only lists compatible games; the request_join
+	# handshake stays the authoritative gate. "protocol" guards the wire format;
+	# "build" guards simulation parity (same Steam build = same physics/tuning),
+	# so a tuning-only change that keeps the wire format still segregates.
 	Steam.setLobbyData(lobby_id, "protocol", str(BuildInfo.PROTOCOL_VERSION))
+	Steam.setLobbyData(lobby_id, "build", str(get_app_build_id()))
 	lobby_created.emit(lobby_id)
 
 
@@ -198,6 +220,8 @@ func request_lobby_list() -> void:
 			Steam.LOBBY_DISTANCE_FILTER_WORLDWIDE as Steam.LobbyDistanceFilter)
 	Steam.addRequestLobbyListStringFilter("game", "mitts", Steam.LOBBY_COMPARISON_EQUAL)
 	Steam.addRequestLobbyListStringFilter("protocol", str(BuildInfo.PROTOCOL_VERSION),
+			Steam.LOBBY_COMPARISON_EQUAL)
+	Steam.addRequestLobbyListStringFilter("build", str(get_app_build_id()),
 			Steam.LOBBY_COMPARISON_EQUAL)
 	Steam.requestLobbyList()
 

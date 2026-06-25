@@ -202,34 +202,34 @@ static func resolve_play_ref_velocity(ctx: RoleContext) -> Vector3:
 	return ctx.snapshot.puck_state.velocity
 
 
-# Returns positions of opp peers other than the puck carrier — i.e.,
-# the carrier's potential pass receivers. Defensive roles use this
-# to score "carrier's best pass" when evaluating how much a candidate
-# defender position deflates the carrier's options.
-static func collect_opp_team_excluding_carrier(ctx: RoleContext) -> Array[Vector3]:
+# Fills `out` with positions of opp peers other than the puck carrier — i.e.,
+# the carrier's potential pass receivers. Defensive roles use this to score
+# "carrier's best pass" when evaluating how much a candidate defender position
+# deflates the carrier's options. Caller-owned scratch (see collect_opponents).
+static func collect_opp_team_excluding_carrier(ctx: RoleContext,
+		out: Array[Vector3]) -> void:
+	out.clear()
 	var carrier_pid: int = -1
 	if ctx.snapshot != null and ctx.snapshot.puck_state != null:
 		carrier_pid = ctx.snapshot.puck_state.carrier_peer_id
-	var result: Array[Vector3] = []
 	for pid: int in ctx.snapshot.skater_states:
 		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
 			continue  # our team
 		if pid == carrier_pid:
 			continue
-		result.append(ctx.snapshot.skater_states[pid].position)
-	return result
+		out.append(ctx.snapshot.skater_states[pid].position)
 
 
-# Returns the positions of teammates excluding self. Used as the
-# anti-crowd filter input.
-static func collect_teammates_excluding_self(ctx: RoleContext) -> Array[Vector3]:
-	var result: Array[Vector3] = []
+# Fills `out` with the positions of teammates excluding self. Used as the
+# anti-crowd filter input. Caller-owned scratch (see collect_opponents).
+static func collect_teammates_excluding_self(ctx: RoleContext,
+		out: Array[Vector3]) -> void:
+	out.clear()
 	for pid: int in ctx.snapshot.skater_states:
 		if pid == ctx.peer_id:
 			continue
 		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
-			result.append(ctx.snapshot.skater_states[pid].position)
-	return result
+			out.append(ctx.snapshot.skater_states[pid].position)
 
 
 # Returns parallel arrays of opponent positions and full state refs.

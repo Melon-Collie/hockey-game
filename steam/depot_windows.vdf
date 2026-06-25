@@ -1,0 +1,28 @@
+// Windows content depot for Mitts.
+// In Steamworks, mark this depot's operating system as "Windows".
+"DepotBuild"
+{
+	// "Mitts Windows" depot (must match app_build.vdf).
+	"DepotID"	"4892602"
+
+	// Staged Godot Windows export output. Everything here ships, except the
+	// exclusions below. Resolved relative to app_build.vdf's contentroot
+	// (content/), so this is just the windows/ subfolder.
+	"ContentRoot"	"windows/"
+
+	"FileMapping"
+	{
+		"LocalPath"	"*"
+		"DepotPath"	"."
+		"recursive"	"1"
+	}
+
+	// steam_appid.txt is a LOCAL-DEV-ONLY file. Shipping it lets a player run
+	// the binary without owning the app on Steam (bypasses the ownership /
+	// P2P licence check) — never ship it.
+	"FileExclusion"	"steam_appid.txt"
+
+	// The debug console wrapper (export_console_wrapper=1) isn't needed in a
+	// shipping build. Drop it; remove this line if you want it for testing.
+	"FileExclusion"	"*.console.exe"
+}

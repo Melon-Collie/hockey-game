@@ -8,6 +8,10 @@
 *.pck
 build/
 
+# Steam build staging (SteamPipe content + logs; scripts are tracked)
+steam/content/
+steam/output/
+
 # OS
 .DS_Store
 Thumbs.db

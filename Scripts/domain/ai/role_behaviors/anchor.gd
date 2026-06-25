@@ -46,8 +46,8 @@ class_name AIRoleAnchor
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	var opp_positions: Array[Vector3] = []
-	var opp_states: Array[SkaterNetworkState] = []
+	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	if opp_positions.is_empty():
 		# No opps to defend against.
@@ -56,7 +56,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
-	var our_team_excluding_self: Array[Vector3] = AIRoleHelpers.collect_teammates_excluding_self(ctx)
+	var our_team_excluding_self: Array[Vector3] = ctx.scratch_teammates
+	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
 	# Search center: midpoint between puck and our net. Pure in-game
 	# refs — the search region naturally interpolates between TRANS_OD
