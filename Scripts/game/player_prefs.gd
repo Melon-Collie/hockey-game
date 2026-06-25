@@ -227,6 +227,13 @@ const BEACON_MODE_SMART: int = 1
 const BEACON_MODE_DISABLED: int = 2
 const BEACON_MODE_LABELS: Array[String] = ["Always On", "Smart", "Disabled"]
 var self_beacon_mode: int = BEACON_MODE_SMART
+
+# Bot difficulty. Index matches BotSkillProfile.Difficulty and the OptionButton
+# ordering wherever the menu exposes it.
+const BOT_DIFFICULTY_LABELS: Array[String] = [
+	"Normal",
+	"Hard",
+]
 # Accessibility: photosensitivity / motion options. screen_flash gates the
 # full-screen goal flash and hit vignette (FlashOverlay); screen_shake gates
 # camera trauma shake (GameCamera.shake). Both default on.
@@ -235,6 +242,7 @@ var screen_shake: bool = true
 var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
+var bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL  # see BotSkillProfile
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
 const CAMERA_DISTANCE_MIN: float = 0.6
@@ -377,6 +385,7 @@ func save() -> void:
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
+	cfg.set_value("game", "bot_difficulty", bot_difficulty)
 	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
@@ -822,6 +831,7 @@ func _load() -> void:
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
+		bot_difficulty = clampi(int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL)), 0, BOT_DIFFICULTY_LABELS.size() - 1)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
 		share_gameplay_stats = cfg.get_value("game", "share_gameplay_stats", true)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)

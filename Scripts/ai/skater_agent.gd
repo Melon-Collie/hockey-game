@@ -12,12 +12,16 @@ var _sm: SkaterAgentStateMachine = SkaterAgentStateMachine.new()
 
 # Mouse-world lerp factor — closes this fraction of the gap toward the
 # SM's desired mouse_world_pos each tick. 1.0 = snap (no smoothing).
-# Lower values add tracking lag: 0.75 gives a ~14 ms half-life so the
-# blade lags slightly behind its target, dekes don't immediately get
-# matched, and aim transitions read as a smooth swing rather than a
-# snap. Currently pinned to 1.0 for the "perfect bot" baseline; will
-# come down when difficulty tuning lands.
-const MOUSE_LERP_FACTOR: float = 1.0
+# Lower values add tracking lag: the blade lags slightly behind its target,
+# dekes don't immediately get matched, and aim transitions read as a smooth
+# swing rather than a snap. A second-stage softener on top of the state
+# machine's blade-slew cap (BotSkillProfile.mouse_max_speed_m_s) — that cap
+# does the heavy lifting; this is the exponential polish.
+#
+# DEFAULT is the perfect-bot baseline (1.0 = snap); the real per-tier value is
+# set from BotSkillProfile in apply_profile(). Difficulty tuning has landed.
+const MOUSE_LERP_FACTOR_DEFAULT: float = 1.0
+var _mouse_lerp_factor: float = MOUSE_LERP_FACTOR_DEFAULT
 var _prev_mouse_world_pos: Vector3 = Vector3.ZERO
 var _has_prev_mouse: bool = false
 
@@ -25,6 +29,17 @@ var _has_prev_mouse: bool = false
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
 		is_left_handed: bool) -> void:
 	_sm.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
+
+
+# Apply a difficulty skill profile. Called by AIController.setup_agent right
+# after setup(), before the first tick. Forwards the execution knobs to the
+# state machine; the perception-delay knob is consumed globally by GameManager,
+# not here. Null leaves the perfect-bot defaults in place (back-compat).
+func apply_profile(profile: BotSkillProfile) -> void:
+	if profile == null:
+		return
+	_mouse_lerp_factor = profile.mouse_lerp_factor
+	_sm.apply_profile(profile)
 
 
 func set_max_wrister_charge_distance(d: float) -> void:
@@ -43,7 +58,7 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 	# real aim).
 	if _has_prev_mouse and _scratch_input.mouse_world_pos != Vector3.ZERO:
 		_scratch_input.mouse_world_pos = _prev_mouse_world_pos.lerp(
-				_scratch_input.mouse_world_pos, MOUSE_LERP_FACTOR)
+				_scratch_input.mouse_world_pos, _mouse_lerp_factor)
 	_prev_mouse_world_pos = _scratch_input.mouse_world_pos
 	_has_prev_mouse = _scratch_input.mouse_world_pos != Vector3.ZERO
 	return _scratch_input
