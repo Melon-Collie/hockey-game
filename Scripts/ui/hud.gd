@@ -288,7 +288,7 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 	row.add_theme_constant_override("separation", 0)
 
 	var stripe_style := StyleBoxFlat.new()
-	stripe_style.bg_color = _initial_team_primary(team_id)
+	stripe_style.bg_color = _scorebug_stripe(team_id)
 	# Placeholder reserves the 6px column in the HBox; the visible stripe
 	# is anchored inside it so the caller can bleed it past the row bounds
 	# (offset_top / offset_bottom) to hug the scorebug panel's true edges
@@ -954,13 +954,24 @@ func _initial_team_primary(team_id: int) -> Color:
 		return TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id).primary
 	return Color(0.5, 0.5, 0.5)  # placeholder; team_colors_ready overwrites
 
-func _on_team_colors_ready(home_primary: Color, _home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
+# Scorebug stripe color for a team: home = its primary, away = whichever away
+# accent sits farthest from the home primary, so the two stripes stay distinct.
+func _scorebug_stripe(team_id: int) -> Color:
+	if GameManager.teams.size() > 1:
+		var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(
+				GameManager.teams[0].color_slot, GameManager.teams[1].color_slot)
+		return pair.home if team_id == 0 else pair.away
+	return Color(0.5, 0.5, 0.5)  # placeholder; team_colors_ready overwrites
+
+func _on_team_colors_ready(_home_primary: Color, _home_secondary: Color, _away_primary: Color, _away_secondary: Color) -> void:
 	# In the chyron layout the AWAY/HOME labels sit on the dark panel, not on
-	# the team color, so their text stays cream regardless of team palette.
+	# the team color, so their text stays cream regardless of team palette. The
+	# stripes follow the score-surface rule (home primary, away farthest accent)
+	# rather than the raw signal colors so home/away never wash together.
 	if _home_badge_style != null:
-		_home_badge_style.bg_color = home_primary
+		_home_badge_style.bg_color = _scorebug_stripe(0)
 	if _away_badge_style != null:
-		_away_badge_style.bg_color = away_primary
+		_away_badge_style.bg_color = _scorebug_stripe(1)
 
 func _on_replay_started() -> void:
 	# Lower-third chyron with goal data appears during replay. The labels were
@@ -1137,10 +1148,16 @@ func _on_period_synced(new_period: int) -> void:
 func _build_clock_warning() -> void:
 	_clock_warning_label = _lbl("", 150, _GOLD)
 	_clock_warning_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Sit slightly above screen center rather than dead-center: cap the band at
+	# 80% of the height so the vertical-centered text lands around 40% down —
+	# clear of the puck/action in the lower-middle of the rink. Resolution-
+	# independent (anchor fraction, not a pixel offset).
+	_clock_warning_label.anchor_bottom = 0.8
 	_clock_warning_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_clock_warning_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_clock_warning_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_clock_warning_label.modulate = Color(1.0, 1.0, 1.0, 0.9)
+	# Semi-transparent so the final seconds of play stay readable behind it.
+	_clock_warning_label.modulate = Color(1.0, 1.0, 1.0, 0.6)
 	_clock_warning_label.visible = false
 	add_child(_clock_warning_label)
 
@@ -1157,7 +1174,11 @@ func _flash_period_end() -> void:
 
 func _on_clock_updated(t: float) -> void:
 	_clock_label.text = _format_clock(t)
-	if NetworkManager.is_offline_mode:
+	# Untimed periods (free play / practice) count UP from zero — there's no
+	# end-of-period to warn about, and the count-up would otherwise trip the
+	# final-10 countdown during the first 10 seconds. Keep the clock plain. A
+	# TIMED offline match (real period length) still gets the full treatment.
+	if GameManager.get_period_duration() <= 0.0:
 		_clock_label.add_theme_color_override("font_color", _WHITE)
 		_last_clock_pulse_second = -1
 		_hide_clock_warning()

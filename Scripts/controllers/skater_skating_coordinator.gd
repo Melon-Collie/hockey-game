@@ -38,6 +38,18 @@ func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController)
 	_sm = sm
 	_controller = controller
 
+# Snaps the gait back to a clean standstill and plants the legs at their rest
+# pose. Called on faceoff / respawn teleports so a skater doesn't drop into the
+# dot mid-stride carrying the previous shift's leg swing.
+func reset_to_rest() -> void:
+	stride_phase = 0.0
+	_intensity = 0.0
+	_effort = 0.0
+	_prev_velocity = Vector3.ZERO
+	_have_prev_velocity = false
+	if _skater != null:
+		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
 # ── Per-Tick Application ──────────────────────────────────────────────────────
 # Three gait shapes — forward, backward, and lateral (crossover) — are computed
 # from the same stride phase and blended by the direction of travel expressed in

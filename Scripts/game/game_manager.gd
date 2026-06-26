@@ -64,6 +64,7 @@ var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 var _positions_scratch: Dictionary = {}
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
+var _puck_net_stuck_timer: float = 0.0
 # Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
 # we don't fire stray vote RPCs outside of the cinematic window.
 var _in_replay_locally: bool = false
@@ -342,6 +343,7 @@ func _physics_process(delta: float) -> void:
 			brain.tick(delta, current_snapshot)
 	_update_host_puck_tracking()
 	_check_puck_out_of_bounds(delta)
+	_check_puck_stuck_on_net(delta)
 	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
 	_pickup_claim.tick(delta)
@@ -377,6 +379,39 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 			_whistle_and_faceoff(dot)
 	else:
 		_puck_oob_timer = 0.0
+
+
+# Host-only: catch a puck that settled motionless on the net frame. It never
+# touches the ice, so the on-ice/airborne logic would leave it stuck forever. If
+# it's only on the low back/skirt frame (a few cm up) it's realistically
+# playable, so drop it to the ice; if it's perched up on the crossbar/crown it's
+# genuinely unplayable, so whistle it dead like an out-of-play puck.
+func _check_puck_stuck_on_net(delta: float) -> void:
+	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
+		_puck_net_stuck_timer = 0.0
+		return
+	if NetworkManager.is_tutorial_mode or puck.carrier != null:
+		_puck_net_stuck_timer = 0.0
+		return
+	var pos: Vector3 = puck.global_position
+	var settled: bool = puck.linear_velocity.length() < GameRules.NET_STUCK_MAX_SPEED
+	if not (puck.is_airborne() and settled and GameRules.is_over_net_footprint(Vector2(pos.x, pos.z))):
+		_puck_net_stuck_timer = 0.0
+		return
+	_puck_net_stuck_timer += delta
+	if _puck_net_stuck_timer < GameRules.NET_STUCK_GRACE_DURATION:
+		return
+	_puck_net_stuck_timer = 0.0
+	if pos.y - puck.ice_height <= GameRules.NET_STUCK_PLAYABLE_HEIGHT:
+		# Low on the frame — realistically reachable. Drop it to the ice so play
+		# continues instead of stopping for something a stick could poke free.
+		puck.settle_to_ice()
+		return
+	# Perched up on the crossbar/crown — unplayable. Whistle dead and face off.
+	var dot: Vector2 = GameRules.nearest_faceoff_dot(Vector2(pos.x, pos.z))
+	puck_out_of_play.emit()
+	NetworkManager.notify_puck_out_of_play_to_all()
+	_whistle_and_faceoff(dot)
 
 
 # Plays the whistle, transitions the state machine to FACEOFF_PREP at the
@@ -453,6 +488,12 @@ func _apply_ghost_state(delta: float) -> void:
 		if r != null:
 			var new_ghost: bool = ghosts[peer_id]
 			r.skater.set_ghost(new_ghost)
+			# A skater who ghosts (icing, etc.) while carrying must lose the puck —
+			# set_ghost only severs collision/interaction layers, so without this a
+			# ghosted carrier would keep the puck pinned to their blade and skate it
+			# around untouchable. Drop it loose so play continues.
+			if new_ghost and puck.carrier == r.skater:
+				puck.drop()
 			if new_ghost != _last_ghost_state.get(peer_id, false):
 				_last_ghost_state[peer_id] = new_ghost
 				NetworkManager.send_ghost_state_to_all(peer_id, new_ghost)
@@ -1095,6 +1136,7 @@ func _wire_sound_signals() -> void:
 			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
 			if puck != null:
 				puck.fire_stick_lift_vfx())
+	NetworkManager.nudge_received.connect(func(pos: Vector3) -> void: _play_nudge_cue(pos))
 	NetworkManager.shot_sound_received.connect(
 		func(pos: Vector3, is_slapper: bool) -> void:
 			var snd: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
@@ -1661,6 +1703,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
+		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 	# AI bots release shots through the same signal as humans, but they live
@@ -1670,6 +1713,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# into the void.
 	if record.is_bot:
 		record.controller.puck_release_requested.connect(_on_puck_release_requested)
+		record.controller.nudge_requested.connect(_on_nudge_requested)
 	# Remote human on the host: its RemoteController runs the shot state machine from
 	# the replayed input stream and computes a host-derived shot, emitting
 	# puck_release_requested. This is the ONLY path that fires a remote human's shot —
@@ -1677,6 +1721,8 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	if NetworkManager.is_host and not record.is_local and not record.is_bot:
 		record.controller.puck_release_requested.connect(
 				_on_remote_derived_release.bind(record.peer_id))
+		record.controller.nudge_requested.connect(
+				_on_remote_derived_nudge.bind(record.peer_id))
 	# Deflection one-timer (release without possession) is a contested, lag-comp-
 	# arbitrated CLAIM — like pickup/poke — not a possessed shot, so for a remote human
 	# it fires ONLY via on_remote_one_timer_release (the RPC rewinds the puck for the
@@ -1904,6 +1950,61 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		# THIS client's input-stream release (host-derived, _on_remote_derived_release),
 		# so there is no shot RPC — the inputs the host already replays carry it.
 		puck_controller.notify_local_release(direction, power, shot_rtt_ms)
+
+
+# Nudge (self-tap nutmeg setup). Mirrors the shot-release split — host fires the
+# authoritative tap, a client seeds local puck prediction — but it is NOT a
+# shot: no shot-on-goal tracking, no shot RPC, and a soft stick-lift cue rather
+# than a wrister/slapper crack. The host re-derives a remote player's nudge from
+# the replayed input stream via _on_remote_derived_nudge (no RPC), same as shots.
+func _on_nudge_requested(velocity: Vector3) -> void:
+	# The actor's own machine plays the cue immediately (this runs on the local
+	# player's client, or on the host for a host-local player / bot).
+	_play_nudge_cue(puck.get_puck_position())
+	if NetworkManager.is_host:
+		puck.nudge(velocity)
+		var pos: Vector3 = puck.get_puck_position()
+		_record_replay_audio_event("nudge", pos, velocity.length())
+		# Fan the cue to the clients — this host/bot already played it locally.
+		NetworkManager.send_nudge_to_all(pos)
+	else:
+		var record := _registry.get_local()
+		if record != null:
+			record.controller.on_puck_released_network()
+		puck_controller.notify_local_nudge(velocity, NetworkManager.get_latest_rtt_ms())
+
+
+# Host-side authoritative nudge derived from a remote player's replayed input.
+# The velocity arrives computed from the host's authoritative skater state (the
+# controller emitted it during live remote-input processing), so it's used
+# directly — no client trust. Guards mirror _on_remote_derived_release.
+func _on_remote_derived_nudge(velocity: Vector3, nudger_peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	if puck == null or _registry == null or puck.carrier == null:
+		return
+	var record: PlayerRecord = _registry.get_record(nudger_peer_id)
+	if record == null or record.skater == null:
+		return
+	if _registry.resolve_peer_id(puck.carrier) != nudger_peer_id:
+		return
+	puck.nudge(velocity)
+	var pos: Vector3 = puck.get_puck_position()
+	# The host plays the remote player's nudge, and every OTHER client hears it —
+	# the nudger already played it locally the instant they tapped.
+	_play_nudge_cue(pos)
+	_record_replay_audio_event("nudge", pos, velocity.length())
+	NetworkManager.send_nudge_to_all(pos, nudger_peer_id)
+
+
+# Single nudge cue path so the sound/VFX stays identical for everyone (local
+# play, host fan-out, and remote receivers all route here). Uses the quick-shot
+# (wrister) sound — a nudge is a soft self-pass — at a reduced fixed volume so it
+# reads as a quiet tap rather than a real shot.
+func _play_nudge_cue(pos: Vector3) -> void:
+	SoundManager.play_world(SoundManager.Sound.SHOT_WRISTER, pos, -6.0, 0.04)
+	if puck != null:
+		puck.fire_stick_lift_vfx()
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:

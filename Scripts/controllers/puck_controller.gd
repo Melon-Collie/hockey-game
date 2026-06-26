@@ -447,6 +447,30 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float) -> Ve
 	_state_buffer.clear()
 	return release_pos
 
+# Client-side prediction seed for a nudge — the self-tap counterpart to
+# notify_local_release. Same trajectory-prediction handoff, but the puck takes
+# the full controller-computed velocity (momentum + stick push) instead of
+# direction × power, and the post-nudge re-grab lockout uses the short
+# nudge_cooldown so the carrier can scoop it back up after the nutmeg.
+func notify_local_nudge(velocity: Vector3, rtt_ms: float) -> void:
+	var release_pos: Vector3 = puck.get_puck_position()
+	if _local_carrier_skater != null:
+		release_pos = _local_carrier_skater.get_blade_contact_global()
+		release_pos.y = puck.ice_height
+	_local_carrier_skater = null
+	_arm_provisional_lockout(puck.nudge_cooldown)
+	_predicting_trajectory = true
+	_pending_local_release = true
+	_pending_local_release_deadline = NetworkManager.local_time() + _PENDING_RELEASE_TIMEOUT_S
+	_shot_rtt_ms = rtt_ms
+	puck.set_client_prediction_mode(true)
+	puck.set_goal_line_clamp(true)
+	puck.set_puck_position(release_pos)
+	var v := velocity
+	v.y = 0.0
+	puck.apply_release_velocity(v)
+	_state_buffer.clear()
+
 func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	_pending_local_release = false
 	_pending_local_release_deadline = -1.0
@@ -534,8 +558,9 @@ func _clear_provisional() -> void:
 	_provisional_deadline = -1.0
 
 
-func _arm_provisional_lockout() -> void:
-	_provisional_lockout_until = NetworkManager.local_time() + puck.reattach_cooldown
+func _arm_provisional_lockout(duration: float = -1.0) -> void:
+	var d: float = duration if duration >= 0.0 else puck.reattach_cooldown
+	_provisional_lockout_until = NetworkManager.local_time() + d
 	_clear_provisional()
 
 func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:

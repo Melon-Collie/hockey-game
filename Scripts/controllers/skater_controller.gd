@@ -109,6 +109,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # call — can't be measured headless.)
 @export var max_blade_speed: float = 10.0
 
+# ── Nudge (self-tap, nutmeg setup) ────────────────────────────────────────────
+# Tap stick-lift (Q) while carrying in plain SKATING_WITH_PUCK to push the puck a
+# tiny amount off the blade — a self-pass for threading the puck between a
+# defender's legs (the body block only covers the torso now, so a grounded puck
+# slips under). The released puck inherits the skater's horizontal velocity plus
+# a small nudge along the blade's current motion direction, so RELATIVE to the
+# carrier it's just a soft tap in the stick's sweep direction — keep skating and
+# you re-collect it. nudge_speed is that relative tap speed (m/s).
+@export var nudge_speed: float = 2.2
+
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
 # down the stick shaft (from the top hand toward the blade). It releases toward
@@ -641,6 +651,13 @@ func _process_input(input: InputState, delta: float) -> void:
 	# PuckController._check_interactions for every skater it simulates.
 	skater.deflect_intent = _wants_deflect(input)
 
+	# Nudge: a stick-lift TAP while carrying pushes the puck off the blade as a
+	# soft self-pass (nutmeg setup). Edge-triggered and gated to plain carry so
+	# it never fires mid-charge; the is_replaying guard inside keeps it from
+	# re-emitting during reconcile (same discipline as _do_release).
+	if input.stick_lift_pressed and has_puck and _sm.get_state() == State.SKATING_WITH_PUCK:
+		_nudge()
+
 	_apply_movement(input, delta)
 	_pose.apply_velocity_lean(delta)
 	_pose.apply_facing(input, delta)
@@ -789,6 +806,26 @@ func _do_release(direction: Vector3, power: float) -> void:
 	var slapper: bool = _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK
 	puck_release_requested.emit(direction, power, slapper)
 
+# Nudge: the carrier taps the puck off the blade as a soft self-pass. The
+# released velocity is the skater's horizontal momentum plus a small push along
+# the blade's current sweep direction — so the puck keeps pace with the carrier
+# and only drifts a touch in the direction the stick was moving. Host-derived
+# from the carrier's authoritative velocity exactly like a shot (the signal
+# carries the host-computed velocity during remote-input replay, the
+# client-predicted velocity locally). Skips during reconcile replay.
+signal nudge_requested(velocity: Vector3)
+
+func _nudge() -> void:
+	if is_replaying:
+		return
+	var skater_vel := Vector3(skater.velocity.x, 0.0, skater.velocity.z)
+	var blade_dir := skater.blade_world_velocity
+	blade_dir.y = 0.0
+	var push := Vector3.ZERO
+	if blade_dir.length() > 0.01:
+		push = blade_dir.normalized() * nudge_speed
+	nudge_requested.emit(skater_vel + push)
+
 # ── Puck Signals ──────────────────────────────────────────────────────────────
 func on_puck_picked_up_network() -> void:
 	has_puck = true
@@ -839,6 +876,11 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	if facing != Vector2.ZERO:
 		skater.set_facing(facing)
 		_pose.facing = facing
+		# Square the body up to the dot and wipe carried-over animation state:
+		# clear the upper-body twist/lean/lag so the torso points forward, and
+		# plant the legs at their rest pose so the stride doesn't resume mid-swing.
+		_pose.reset_lean_and_lag()
+		_skating.reset_to_rest()
 
 # Cancels an in-progress wrister/slapper wind-up. No-op unless actually mid-
 # charge, so a routine teleport doesn't disturb skating state. Suppresses the

@@ -101,6 +101,10 @@ signal deflection_received(position: Vector3)
 signal body_block_received(position: Vector3)
 signal puck_strip_received(position: Vector3)
 signal stick_lift_received(position: Vector3)
+# Distinct from stick_lift_received on purpose: a nudge (self-tap) is its own
+# gameplay event, so it carries its own cue and can be re-sounded independently
+# later without disturbing the opponent stick-lift strip.
+signal nudge_received(position: Vector3)
 signal shot_sound_received(position: Vector3, is_slapper: bool)
 # Host-authoritative body-check impact (Lever A). Fired on every client (and
 # self-emitted on the host) when a hit is credited, so impact VFX/sound are
@@ -359,6 +363,10 @@ func start_free_play() -> void:
 	pending_away_color_slot = _pick_random_away_slot(pending_home_color_slot)
 	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
 	start_offline()
+	# Free play is a casual warmup/practice mode — no infraction whistles getting
+	# in the way. OFF disables offside + crease protection (icing is already off
+	# in the default ARCADE set). Overrides the rule_set start_offline seeded.
+	pending_game_config["rule_set"] = GameRules.RuleSet.OFF
 	is_free_play_mode = true
 
 
@@ -1930,6 +1938,20 @@ func send_stick_lift_to_all(position: Vector3) -> void:
 @rpc("authority", "unreliable")
 func notify_stick_lift(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: stick_lift_received.emit(pos), [position], false)
+
+# Nudge (self-tap) cue. Host-authoritative, like the shot cue: the nudger already
+# played it locally the instant they tapped, so the host excludes them and every
+# other peer hears it here. `except_peer_id` is the nudger (host's own nudges
+# and bots pass -1).
+func send_nudge_to_all(position: Vector3, except_peer_id: int = -1) -> void:
+	for peer_id: int in connected_peer_ids():
+		if peer_id == except_peer_id:
+			continue
+		notify_nudge.rpc_id(peer_id, position)
+
+@rpc("authority", "unreliable")
+func notify_nudge(position: Vector3) -> void:
+	NetworkSimManager.send(func(pos: Vector3) -> void: nudge_received.emit(pos), [position], false)
 
 # Shot SFX (wrister/slapper). Unlike puck-collision SFX, the shooter already
 # plays the cue locally the instant they release (LocalController path), so the
