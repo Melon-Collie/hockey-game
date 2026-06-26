@@ -193,6 +193,13 @@ extends Node
 # loose pucks have no carrier at all.
 @export var jam_puck_distance: float = 2.0    # m — puck-to-goalie threshold
 @export var jam_opponent_distance: float = 1.5 # m — opposing-skater-to-puck threshold
+# A net-front jam SEALS the ice (drops the goalie to butterfly) so a stick
+# battle can't be banged through the standing 5-hole. A loose-puck scramble
+# always qualifies; an opposing carrier qualifies only when jammed in tight and
+# moving slower than this — a faster carrier is driving the net (an attack), and
+# coaches teach staying up to force the release. Set to 0 to seal only on loose
+# pucks (never for a carried puck).
+@export var jam_carrier_max_speed: float = 3.0 # m/s — carrier above this is attacking, not jamming
 
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
@@ -525,6 +532,7 @@ var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
 var _screen_cfg: GoalieBehaviorRules.ScreenConfig
 var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
+var _crease_jam_cfg: GoalieBehaviorRules.CreaseJamConfig
 # Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
 # array. PackedVector3Array.clear() keeps capacity across shots.
 var _screen_positions: PackedVector3Array = PackedVector3Array()
@@ -731,6 +739,10 @@ func _build_rule_configs() -> void:
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
 	_move_read_cfg.reference_speed = move_read_reference_speed
 	_move_read_cfg.max_delay = move_read_max_delay
+	_crease_jam_cfg = GoalieBehaviorRules.CreaseJamConfig.new()
+	_crease_jam_cfg.puck_distance = jam_puck_distance
+	_crease_jam_cfg.opponent_distance = jam_opponent_distance
+	_crease_jam_cfg.carrier_max_speed = jam_carrier_max_speed
 	_universal_reaction_cfg = GoalieBehaviorRules.UniversalReactionConfig.new()
 	_universal_reaction_cfg.min_speed = universal_react_min_speed
 	_universal_reaction_cfg.max_time_to_impact = universal_react_max_time_to_impact
@@ -961,12 +973,15 @@ func _update_state(delta: float) -> void:
 			elif _is_carrier_at_doorstep() and not _reaction.reacting:
 				# Slapshot windup at point-blank range — close-range slapshots
 				# travel faster than the goalie can react after release, so the
-				# drop has to happen during the windup. This is the only
-				# proactive drop trigger from STANDING/READY; everything else
-				# (stickhandlers, loose pucks, scrambles) drops reactively via
-				# shot reaction or save contact. Crease scrambles still pin
-				# the goalie DOWN via _is_threat_pressing in _update_state's
-				# BUTTERFLY → RECOVERING gate.
+				# drop has to happen during the windup. A controlled stickhandler
+				# in space still keeps the goalie up (force the release); the
+				# net-front JAM below is the separate scramble trigger.
+				_enter_butterfly()
+			elif _should_seal_crease_jam() and not _reaction.reacting:
+				# Net-front jam: a loose-puck scramble or a slow carrier jammed
+				# at the doorstep. Seal the ice low so a stick battle can't be
+				# banged through the STANDING 5-hole. Distinct from a controlled
+				# carrier attacking with space (handled by the stay-up default).
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -1036,8 +1051,8 @@ func _is_ready_situation() -> bool:
 # goalie prematurely. The actual wrister release fires the existing reaction
 # pipeline, which drops on low projection.
 #
-# Crease scrambles (loose puck + multiple sticks) still drop via the
-# separate _is_jammed_at_crease check.
+# Crease scrambles (loose puck or a slow carrier jammed in tight) drop via the
+# separate _should_seal_crease_jam check.
 func _is_carrier_at_doorstep() -> bool:
 	# Lunge precedence — give the stick first.
 	if _lunge_active_timer > 0.0:
@@ -1056,35 +1071,49 @@ func _is_carrier_at_doorstep() -> bool:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
-# True when there's LOOSE-puck traffic in the crease — puck close to the
-# goalie with no carrier and at least one opposing skater within stick-poke
-# range of it. Used by the recovery gate (_is_threat_pressing) to hold
-# butterfly when the goalie is already down and a loose puck is rattling
-# around with opponents nearby (rebound scramble, tip attempt with the
-# puck loose, etc.).
-#
-# Does NOT trigger butterfly entry — proactive drops are now slapshot-
-# windup only (_is_carrier_at_doorstep) plus save contact and shot
-# reaction. A single stickhandler approaching the crease isn't a "jam"
-# and shouldn't force the goalie down; coaches teach staying up against
-# controlled carry. The carrier-near-goalie case is handled separately
-# by _is_threat_pressing's first condition.
-func _is_jammed_at_crease() -> bool:
+# True when there's a net-front JAM the goalie should seal by dropping to
+# butterfly: a loose-puck scramble in the crease (puck close, no carrier, an
+# opposing skater on it) OR a SLOW opposing carrier jammed at the doorstep. The
+# slow-carrier gate is the realism line — a fast carrier driving the net is an
+# attack (stay up, force the release), a slow one jamming in the paint is a
+# battle (seal the ice). Drives BOTH the proactive butterfly entry in
+# _update_state AND the recovery hold in _is_threat_pressing, so the same
+# conditions that warrant dropping also warrant staying down (no pop-up flicker
+# mid-scramble). The pure threshold decision lives in
+# GoalieBehaviorRules.is_crease_jam; this method gathers the scene inputs.
+func _should_seal_crease_jam() -> bool:
+	# Cheap reject before any skater scan — a jam only matters in the goalie's lap.
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
-	if puck.get_carrier() != null:
-		return false
+	var carrier: Skater = puck.get_carrier()
+	if carrier != null:
+		# Own-team carrier → no threat. Opposing carrier → jam only if slow.
+		if team_id != -1 and carrier.get_team_id() == team_id:
+			return false
+		return GoalieBehaviorRules.is_crease_jam(
+				puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
+				true, carrier.velocity.length(), INF, _crease_jam_cfg)
+	# Loose puck — needs an opponent close enough to whack it.
+	var nearest_opp: float = _nearest_opposing_skater_dist_to_puck()
+	return GoalieBehaviorRules.is_crease_jam(
+			puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
+			false, 0.0, nearest_opp, _crease_jam_cfg)
+
+# Distance from the nearest non-ghost opposing skater to the puck, or INF if
+# there are none (or no skater getter wired). Ghosted players (offside / icing)
+# can't play the puck, so they don't make a jam.
+func _nearest_opposing_skater_dist_to_puck() -> float:
 	if not _skater_getter.is_valid():
-		return false
+		return INF
 	var skaters: Array = _skater_getter.call()
+	var nearest: float = INF
 	for skater: Skater in skaters:
-		if skater == null:
+		if skater == null or skater.is_ghost:
 			continue
 		if team_id != -1 and skater.get_team_id() == team_id:
 			continue
-		if skater.global_position.distance_to(puck.global_position) < jam_opponent_distance:
-			return true
-	return false
+		nearest = minf(nearest, skater.global_position.distance_to(puck.global_position))
+	return nearest
 
 # True when an opposing shooter is close enough to the goalie that the stick
 # blade should actively point at the puck side. Carrier within
@@ -1382,11 +1411,11 @@ func _is_threat_pressing() -> bool:
 		var carrier: Skater = puck.get_carrier()
 		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
-	# Crease jam: hold butterfly while opponents are within poke range of the
-	# puck in the goalie's lap, even if the puck is loose and slow. Same gate
-	# as the entry trigger — if conditions still warrant butterfly entry, they
-	# warrant staying down.
-	if _is_jammed_at_crease():
+	# Crease jam: hold butterfly through a net-front scramble — the SAME gate that
+	# triggers the proactive drop in _update_state, so conditions that warrant
+	# dropping also keep the goalie sealed (no pop-up mid-battle). Covers a loose
+	# puck rattling in the lap and a slow carrier jamming at the doorstep.
+	if _should_seal_crease_jam():
 		return true
 	var speed_low: bool
 	var moving_away: bool

@@ -401,6 +401,44 @@ static func compute_clear_velocity(
 	return (dir / dlen) * clear_speed
 
 
+# ── Net-front jam (seal the ice) ─────────────────────────────────────────────
+# Should the goalie drop to butterfly to SEAL a net-front scramble? A doorstep
+# jam — a loose puck with an opponent on it, or a SLOW opposing carrier jammed in
+# tight — is sealed low so pucks don't go through the STANDING 5-hole during a
+# stick battle (Hockey Canada: a puck within ~2 stick lengths gets the blocking
+# butterfly). This is deliberately distinct from a controlled carrier ATTACKING
+# with space, where coaches teach staying up to force a release: a carrier above
+# `carrier_max_speed` is driving, not jamming, so it does NOT trigger the seal.
+#
+# `nearest_opponent_dist_to_puck` is only read for a loose puck (no carrier);
+# pass anything (e.g. INF) when `has_opposing_carrier` is true.
+class CreaseJamConfig:
+	var puck_distance: float = 2.0       # m — puck-to-goalie threshold
+	var opponent_distance: float = 1.5   # m — opposing-skater-to-loose-puck threshold
+	var carrier_max_speed: float = 3.0   # m/s — above this a carrier is attacking, not jamming
+
+static func is_crease_jam(
+		puck_position: Vector3,
+		goalie_position: Vector3,
+		goal_line_z: float,
+		direction_sign: int,
+		has_opposing_carrier: bool,
+		carrier_speed: float,
+		nearest_opponent_dist_to_puck: float,
+		cfg: CreaseJamConfig) -> bool:
+	# In front of the goal line only — behind-net plays are RVH's job.
+	if (puck_position.z - goal_line_z) * direction_sign <= 0.0:
+		return false
+	if goalie_position.distance_to(puck_position) > cfg.puck_distance:
+		return false
+	if has_opposing_carrier:
+		# A slow carrier is jamming/battling at the doorstep → seal. A fast one
+		# is driving the net → stay up and force the release.
+		return carrier_speed <= cfg.carrier_max_speed
+	# Loose puck — needs an opponent close enough to whack it for it to be a jam.
+	return nearest_opponent_dist_to_puck <= cfg.opponent_distance
+
+
 # ── Screen detection ─────────────────────────────────────────────────────────
 # A body between the puck and the goalie blocks the goalie's sightline, so they
 # pick up the shot late. Returns 0 (clear look) .. 1 (fully screened); the
