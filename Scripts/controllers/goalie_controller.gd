@@ -1071,29 +1071,36 @@ func _is_carrier_at_doorstep() -> bool:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
-# True when there's a net-front JAM the goalie should seal by dropping to
-# butterfly: a loose-puck scramble in the crease (puck close, no carrier, an
-# opposing skater on it) OR a SLOW opposing carrier jammed at the doorstep. The
-# slow-carrier gate is the realism line — a fast carrier driving the net is an
-# attack (stay up, force the release), a slow one jamming in the paint is a
-# battle (seal the ice). Drives BOTH the proactive butterfly entry in
-# _update_state AND the recovery hold in _is_threat_pressing, so the same
-# conditions that warrant dropping also warrant staying down (no pop-up flicker
-# mid-scramble). The pure threshold decision lives in
-# GoalieBehaviorRules.is_crease_jam; this method gathers the scene inputs.
-func _should_seal_crease_jam() -> bool:
+# True when there's a net-front JAM the goalie should seal: a loose-puck
+# scramble in the crease (puck close, no carrier, an opposing skater on it) OR a
+# SLOW opposing carrier jammed at the doorstep. The slow-carrier gate is the
+# realism line — a fast carrier driving the net is an attack (stay up, force the
+# release), a slow one jamming in the paint is a battle (seal the ice). The pure
+# threshold decision lives in GoalieBehaviorRules.is_crease_jam; this method
+# gathers the scene inputs.
+#
+# `hold` distinguishes the recovery gate (already down) from the entry gate
+# (deciding whether to drop). It only changes the TEAMMATE-carries-the-puck case:
+# the goalie does NOT proactively drop just because our team has the puck near
+# the net (let them play it out), but once already sealed it must NOT pop up the
+# instant a teammate corrals a CONTESTED puck (opponent within poke range) — that
+# puck gets stripped and banged in through a goalie standing back up. So entry
+# ignores a teammate's puck; the hold treats a contested teammate puck as a jam.
+func _should_seal_crease_jam(hold: bool = false) -> bool:
 	# Cheap reject before any skater scan — a jam only matters in the goalie's lap.
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
 	var carrier: Skater = puck.get_carrier()
-	if carrier != null:
-		# Own-team carrier → no threat. Opposing carrier → jam only if slow.
-		if team_id != -1 and carrier.get_team_id() == team_id:
-			return false
+	if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
+		# Opposing carrier → jam only if slow.
 		return GoalieBehaviorRules.is_crease_jam(
 				puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
 				true, carrier.velocity.length(), INF, _crease_jam_cfg)
-	# Loose puck — needs an opponent close enough to whack it.
+	if carrier != null and not hold:
+		# Teammate carries it and this is the ENTRY gate — don't drop, let them play.
+		return false
+	# Loose puck, or (hold only) a teammate-controlled puck: a jam when an
+	# opponent is within poke range of the puck in the goalie's lap.
 	var nearest_opp: float = _nearest_opposing_skater_dist_to_puck()
 	return GoalieBehaviorRules.is_crease_jam(
 			puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
@@ -1411,11 +1418,13 @@ func _is_threat_pressing() -> bool:
 		var carrier: Skater = puck.get_carrier()
 		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
-	# Crease jam: hold butterfly through a net-front scramble — the SAME gate that
-	# triggers the proactive drop in _update_state, so conditions that warrant
-	# dropping also keep the goalie sealed (no pop-up mid-battle). Covers a loose
-	# puck rattling in the lap and a slow carrier jamming at the doorstep.
-	if _should_seal_crease_jam():
+	# Crease jam: hold butterfly through a net-front scramble — the same gate that
+	# triggers the proactive drop in _update_state (no pop-up mid-battle). Passing
+	# hold=true also keeps the goalie sealed while a TEAMMATE corrals a contested
+	# puck on the doorstep: that puck can be poke-checked loose and banged in
+	# through a goalie standing back up. Covers a loose puck, a slow opposing
+	# carrier, and a contested teammate puck.
+	if _should_seal_crease_jam(true):
 		return true
 	var speed_low: bool
 	var moving_away: bool
