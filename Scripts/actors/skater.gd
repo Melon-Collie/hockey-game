@@ -773,15 +773,9 @@ func capture_prev_blade_contact() -> void:
 func get_blade_face_normal(reference_velocity: Vector3) -> Vector3:
 	if top_hand == null:
 		return -global_transform.basis.z
-	var stick_horiz: Vector3 = get_blade_contact_global() - top_hand.global_position
-	stick_horiz.y = 0.0
-	if stick_horiz.length() < 0.001:
-		stick_horiz = -global_transform.basis.z
-	stick_horiz = stick_horiz.normalized()
-	var face_normal := Vector3(-stick_horiz.z, 0.0, stick_horiz.x)
-	if face_normal.dot(reference_velocity) > 0.0:
-		face_normal = -face_normal
-	return face_normal
+	return PuckReceptionRules.blade_face_normal(
+			get_blade_contact_global(), top_hand.global_position,
+			reference_velocity, -global_transform.basis.z)
 
 
 # ── Top Hand ──────────────────────────────────────────────────────────────────
