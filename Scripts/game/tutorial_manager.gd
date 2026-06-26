@@ -331,6 +331,14 @@ func _current_step_id() -> int:
 
 # ── Step sequencing ───────────────────────────────────────────────────────────
 
+# The puckless movement steps (the puck is stashed far off-rink) frame best on
+# the player-locked camera, which centers on the skater rather than zooming out
+# to chase the stashed puck.
+func _step_uses_locked_camera(step_id: int) -> bool:
+	return step_id == STEP_SKATE or step_id == STEP_SPRINT \
+		or step_id == STEP_BRAKE or step_id == STEP_BLADE_LIFT
+
+
 func _begin_step(index: int) -> void:
 	_disconnect_all_signals()
 	_teardown_shooting()
@@ -350,6 +358,9 @@ func _begin_step(index: int) -> void:
 	var step_id: int = _current_step_id()
 	var step: TutorialStep = _step_defs[index]
 	_hud.set_step(index, _step_ids.size(), step.title, step.instruction, step.hint)
+	# Puckless movement steps stash the puck off-rink; force the player-locked
+	# camera so it sits centered on the skater instead of zooming out toward it.
+	_local_controller.set_camera_force_locked(_step_uses_locked_camera(step_id))
 	# Offsides detection runs only during the OFFSIDES step. Steps that put
 	# the player deep in the O-zone with the puck temporarily off-rink
 	# (one-timer, shot-block prefire) would otherwise trip offsides and

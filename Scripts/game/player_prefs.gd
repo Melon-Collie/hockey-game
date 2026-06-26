@@ -67,6 +67,18 @@ const CAMERA_TILT_DEFAULT: float = 75.0
 const CAMERA_TILT_MIN: float = 73.0
 const CAMERA_TILT_MAX: float = 77.0
 
+# Camera framing mode. DYNAMIC is the broadcast-style cam that frames the
+# midpoint of player + puck and biases toward the attacking zone. LOCKED pins
+# the center on the player and only zooms out to keep an in-play puck in frame
+# (used as the puckless fallback too). GameCamera reads camera_mode live each
+# tick. Index matches the OptionsPanel dropdown.
+const CAMERA_MODE_DYNAMIC: int = 0
+const CAMERA_MODE_LOCKED: int = 1
+const CAMERA_MODE_LABELS: Array[String] = [
+	"Dynamic",
+	"Locked",
+]
+
 # Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
 # Index matches OptionButton ordering in OptionsPanel.
 const COLOR_GRADE_NEUTRAL: int = 0
@@ -246,6 +258,7 @@ var screen_shake: bool = true
 var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
+var camera_mode: int = CAMERA_MODE_DYNAMIC  # GameCamera reads this each tick (see CAMERA_MODE_*)
 var bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL  # see BotSkillProfile
 var goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL  # see GoalieSkillProfile
 const FOV_MIN: float = 40.0
@@ -375,6 +388,7 @@ func save() -> void:
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
+	cfg.set_value("game", "camera_mode", camera_mode)
 	cfg.set_value("game", "bot_difficulty", bot_difficulty)
 	cfg.set_value("game", "goalie_difficulty", goalie_difficulty)
 	cfg.set_value("game", "hud_scale", hud_scale)
@@ -888,6 +902,7 @@ func _load() -> void:
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
+		camera_mode = clampi(int(cfg.get_value("game", "camera_mode", CAMERA_MODE_DYNAMIC)), 0, CAMERA_MODE_LABELS.size() - 1)
 		bot_difficulty = clampi(int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL)), 0, BOT_DIFFICULTY_LABELS.size() - 1)
 		goalie_difficulty = clampi(int(cfg.get_value("game", "goalie_difficulty", GoalieSkillProfile.Difficulty.NORMAL)), 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
