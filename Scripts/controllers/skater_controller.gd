@@ -823,6 +823,11 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	if facing != Vector2.ZERO:
 		skater.set_facing(facing)
 		_pose.facing = facing
+		# Square the body up to the dot and wipe carried-over animation state:
+		# clear the upper-body twist/lean/lag so the torso points forward, and
+		# plant the legs at their rest pose so the stride doesn't resume mid-swing.
+		_pose.reset_lean_and_lag()
+		_skating.reset_to_rest()
 
 # Cancels an in-progress wrister/slapper wind-up. No-op unless actually mid-
 # charge, so a routine teleport doesn't disturb skating state. Suppresses the

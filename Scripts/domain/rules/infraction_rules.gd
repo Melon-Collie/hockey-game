@@ -16,12 +16,16 @@ static func is_offside(
 		is_carrier: bool) -> bool:
 	if is_carrier:
 		return false
+	# Skater line is slacked a skate-length past the blue line (OFFSIDE_LINE_SLACK)
+	# so a toe over the line isn't offside; the puck line stays at the true blue
+	# line — the puck physically crossing it is what clears the zone.
+	var line: float = GameRules.BLUE_LINE_Z + GameRules.OFFSIDE_LINE_SLACK
 	if skater_team_id == 0:
 		# Team 0 attacking zone: z < -BlueLineZ
-		return skater_z < -GameRules.BLUE_LINE_Z and puck_z >= -GameRules.BLUE_LINE_Z
+		return skater_z < -line and puck_z >= -GameRules.BLUE_LINE_Z
 	else:
 		# Team 1 attacking zone: z > BlueLineZ
-		return skater_z > GameRules.BLUE_LINE_Z and puck_z <= GameRules.BLUE_LINE_Z
+		return skater_z > line and puck_z <= GameRules.BLUE_LINE_Z
 
 # Hybrid icing race: returns true if the defending team wins (icing confirmed).
 # icing_min_dist:     closest icing-team player's distance to the crossed goal line.
@@ -34,10 +38,15 @@ static func defending_wins_icing_race(
 # Returns true when a player who was serving an offside has crossed back into
 # the neutral zone or their own zone — i.e. they have "tagged up" at the line.
 static func has_tagged_up(skater_z: float, team_id: int) -> bool:
+	# Mirrors the slacked entry line so the player tags up as soon as their skate
+	# reaches the line — they need only get back to the same edge that ruled them
+	# offside, not drag their whole body across. The shared line keeps a dead-band
+	# with is_offside so a just-tagged skater isn't instantly re-ghosted.
+	var line: float = GameRules.BLUE_LINE_Z + GameRules.OFFSIDE_LINE_SLACK
 	if team_id == 0:
-		return skater_z >= -GameRules.BLUE_LINE_Z
+		return skater_z >= -line
 	else:
-		return skater_z <= GameRules.BLUE_LINE_Z
+		return skater_z <= line
 
 # Detects a potential icing crossing. Returns the offending team id (0 or 1),
 # or -1 if no icing condition is present. The caller applies the hybrid-icing

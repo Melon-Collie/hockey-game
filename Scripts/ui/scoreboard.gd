@@ -85,16 +85,23 @@ func _on_game_over() -> void:
 func _on_game_reset() -> void:
 	visible = false
 
-func _on_team_colors_ready(_home_primary: Color, home_secondary: Color, away_primary: Color, _away_secondary: Color) -> void:
+# Period-summary stripe color for a team, matching the scorebug's rule so the
+# two surfaces agree: home wears its primary, away wears whichever of its accents
+# is farthest from the home primary. Both sit against the dark panel here (white
+# label beside a color band), so home-primary reads cleanly.
+func _period_stripe(team_id: int) -> Color:
+	var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(
+			_team_color_slot(0), _team_color_slot(1))
+	return pair.home if team_id == 0 else pair.away
+
+func _on_team_colors_ready(_home_primary: Color, _home_secondary: Color, _away_primary: Color, _away_secondary: Color) -> void:
 	# Period-summary team identifiers use the scorebug's stripe+label treatment
 	# (white text next to a vertical color band), so only the stripe needs to
-	# follow team colors. The stripe is the team's canonical UI stripe
-	# (TeamColorRegistry.get_ui_colors): home = secondary, away = primary.
-	# Labels stay white.
+	# follow team colors. Labels stay white.
 	if _home_badge_style != null:
-		_home_badge_style.bg_color = home_secondary
+		_home_badge_style.bg_color = _period_stripe(0)
 	if _away_badge_style != null:
-		_away_badge_style.bg_color = away_primary
+		_away_badge_style.bg_color = _period_stripe(1)
 
 func _build_panel() -> void:
 	var root := Control.new()
@@ -230,8 +237,7 @@ func _rebuild_period_grid(num_periods: int) -> void:
 
 	for team_id: int in [1, 0]:
 		var label: String = "AWAY" if team_id == 1 else "HOME"
-		var stripe_color: Color = TeamColorRegistry.get_ui_colors(_team_color_slot(team_id), team_id).stripe
-		var badge := _team_badge(label, stripe_color)
+		var badge := _team_badge(label, _period_stripe(team_id))
 		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
 			_away_badge_style = badge_style

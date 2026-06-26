@@ -64,6 +64,7 @@ var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 var _positions_scratch: Dictionary = {}
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
+var _puck_net_stuck_timer: float = 0.0
 # Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
 # we don't fire stray vote RPCs outside of the cinematic window.
 var _in_replay_locally: bool = false
@@ -342,6 +343,7 @@ func _physics_process(delta: float) -> void:
 			brain.tick(delta, current_snapshot)
 	_update_host_puck_tracking()
 	_check_puck_out_of_bounds(delta)
+	_check_puck_stuck_on_net(delta)
 	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
 	_pickup_claim.tick(delta)
@@ -377,6 +379,39 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 			_whistle_and_faceoff(dot)
 	else:
 		_puck_oob_timer = 0.0
+
+
+# Host-only: catch a puck that settled motionless on the net frame. It never
+# touches the ice, so the on-ice/airborne logic would leave it stuck forever. If
+# it's only on the low back/skirt frame (a few cm up) it's realistically
+# playable, so drop it to the ice; if it's perched up on the crossbar/crown it's
+# genuinely unplayable, so whistle it dead like an out-of-play puck.
+func _check_puck_stuck_on_net(delta: float) -> void:
+	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
+		_puck_net_stuck_timer = 0.0
+		return
+	if NetworkManager.is_tutorial_mode or puck.carrier != null:
+		_puck_net_stuck_timer = 0.0
+		return
+	var pos: Vector3 = puck.global_position
+	var settled: bool = puck.linear_velocity.length() < GameRules.NET_STUCK_MAX_SPEED
+	if not (puck.is_airborne() and settled and GameRules.is_over_net_footprint(Vector2(pos.x, pos.z))):
+		_puck_net_stuck_timer = 0.0
+		return
+	_puck_net_stuck_timer += delta
+	if _puck_net_stuck_timer < GameRules.NET_STUCK_GRACE_DURATION:
+		return
+	_puck_net_stuck_timer = 0.0
+	if pos.y - puck.ice_height <= GameRules.NET_STUCK_PLAYABLE_HEIGHT:
+		# Low on the frame — realistically reachable. Drop it to the ice so play
+		# continues instead of stopping for something a stick could poke free.
+		puck.settle_to_ice()
+		return
+	# Perched up on the crossbar/crown — unplayable. Whistle dead and face off.
+	var dot: Vector2 = GameRules.nearest_faceoff_dot(Vector2(pos.x, pos.z))
+	puck_out_of_play.emit()
+	NetworkManager.notify_puck_out_of_play_to_all()
+	_whistle_and_faceoff(dot)
 
 
 # Plays the whistle, transitions the state machine to FACEOFF_PREP at the
@@ -453,6 +488,12 @@ func _apply_ghost_state(delta: float) -> void:
 		if r != null:
 			var new_ghost: bool = ghosts[peer_id]
 			r.skater.set_ghost(new_ghost)
+			# A skater who ghosts (icing, etc.) while carrying must lose the puck —
+			# set_ghost only severs collision/interaction layers, so without this a
+			# ghosted carrier would keep the puck pinned to their blade and skate it
+			# around untouchable. Drop it loose so play continues.
+			if new_ghost and puck.carrier == r.skater:
+				puck.drop()
 			if new_ghost != _last_ghost_state.get(peer_id, false):
 				_last_ghost_state[peer_id] = new_ghost
 				NetworkManager.send_ghost_state_to_all(peer_id, new_ghost)

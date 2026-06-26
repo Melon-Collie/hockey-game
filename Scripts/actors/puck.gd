@@ -338,6 +338,15 @@ func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 func is_airborne() -> bool:
 	return position.y > ice_height + 0.05
 
+# Drops a puck that settled on low net geometry (the back/skirt frame) straight
+# down to the ice so it becomes playable again — it was only a few cm up but
+# never touched the ice, so it read as airborne forever. Host-authoritative; the
+# new position replicates through the normal state buffer.
+func settle_to_ice() -> void:
+	global_position.y = ice_height
+	linear_velocity.y = 0.0
+	angular_velocity = Vector3.ZERO
+
 # One-shot spark burst at the puck for a stick-lift strip. Delegated to PuckVFX
 # (child "VFX"); the burst anchors to the puck, which sits at the dislodge point.
 func fire_stick_lift_vfx() -> void:

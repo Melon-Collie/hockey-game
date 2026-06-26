@@ -27,6 +27,15 @@ const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid 
 const NET_HEIGHT: float = 1.22           # crossbar height — must match HockeyGoal.NET_HEIGHT
 const NET_PUCK_BUFFER: float = 0.10      # exclusion zone expansion beyond the physical net boundary
 
+# Half the skater's body so the blue line keys off the body EDGE, not its
+# centre — matching real hockey. You tag up the instant any part of your body
+# reaches the line (centre still a body-width inside the zone), and you're only
+# ruled offside once your whole body is over it. Shared by is_offside (entry) and
+# has_tagged_up (clear) so the strict-< / ≥ split keeps a dead-band and the ghost
+# never oscillates at the boundary. Tracks the medium collision-cylinder radius
+# (Skater.tscn) — the canonical body half-width.
+const OFFSIDE_LINE_SLACK: float = 0.35
+
 # Rink dimensions (must match HockeyRink export values in the scene)
 const RINK_HALF_WIDTH: float     = 13.0   # half of 26 m
 const RINK_HALF_LENGTH: float    = 30.0   # half of 60 m
@@ -78,6 +87,15 @@ static func clamp_to_rink_inner(world_xz: Vector2, margin: float = 0.0) -> Vecto
 			return Vector2(world_xz.x, sign(world_xz.y) * half_l)
 	return world_xz
 
+# True if world_xz sits over a goal-net footprint — within the posts laterally
+# (widened to the trapezoid back + puck buffer) and between the goal line and the
+# back frame. Used to spot a puck stuck on the net frame.
+static func is_over_net_footprint(world_xz: Vector2) -> bool:
+	if absf(world_xz.x) > NET_BACK_HALF_WIDTH + NET_PUCK_BUFFER:
+		return false
+	var az: float = absf(world_xz.y)
+	return az >= GOAL_LINE_Z - NET_PUCK_BUFFER and az <= GOAL_LINE_Z + NET_DEPTH + NET_PUCK_BUFFER
+
 # ── Puck ──────────────────────────────────────────────────────────────────────
 const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
 const ICE_FRICTION: float = 0.01
@@ -98,6 +116,18 @@ const PUCK_BOARD_BOUNCE: float = 0.4
 # the stoppage feels responsive, long enough that pucks bouncing back in off
 # the boards don't get false-flagged.
 const PUCK_OOB_GRACE_DURATION: float = 1.0
+
+# Puck-stuck-on-net detection. A puck that settles motionless on the net frame
+# never touches the ice, so the normal on-ice/airborne logic leaves it
+# unplayable forever. We catch it: stationary (< NET_STUCK_MAX_SPEED) and
+# airborne over a net footprint for NET_STUCK_GRACE_DURATION. Resolution splits
+# on height — if it's only sitting on the low back/skirt frame (within
+# NET_STUCK_PLAYABLE_HEIGHT of the ice) it's realistically playable, so we drop
+# it straight to the ice; if it's perched up on the crossbar/crown it's genuinely
+# unplayable and gets whistled dead like an out-of-play puck.
+const NET_STUCK_GRACE_DURATION: float = 1.0
+const NET_STUCK_MAX_SPEED: float = 0.6       # m/s — below this the puck counts as settled
+const NET_STUCK_PLAYABLE_HEIGHT: float = 0.30  # m above ice; at/under → drop to ice, over → whistle
 
 # ── Infractions ───────────────────────────────────────────────────────────────
 const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icing (ARCADE/legacy path)
