@@ -266,16 +266,17 @@ static func pass_launch_speed(distance: float, max_launch: float) -> float:
 # blade), but defenders close to the passer (puck hasn't lofted yet) or
 # close to the receiver (puck has landed) still block normally.
 #
-# `t` is the fractional position along the pass segment (0 = passer,
-# 1 = receiver). The puck is treated as airborne — uninterceptable by a
-# grounded blade — for t in [SAUCER_AIRBORNE_T_MIN, SAUCER_AIRBORNE_T_MAX].
-# The window is deliberately conservative (not the full 0–1 span): the
-# loft takes a beat to clear stick height, and the puck is descending /
-# grounded by the time it reaches the receiver, so a defender draped over
-# the receiver still kills it. Matches the shared elevation mechanic —
-# the same low flip a human gets toggling elevation on a pass.
-const SAUCER_AIRBORNE_T_MIN: float = 0.20
-const SAUCER_AIRBORNE_T_MAX: float = 0.70
+# Airborne span as a fixed DISTANCE off the passer's blade, NOT a fraction
+# of the flight. A saucer is a low flip: it clears stick height for a short
+# stretch, lands, and slides the rest grounded — it does not stay aloft the
+# whole way (and we can't know the live loft, since the shared elevation
+# mechanic aims at the goal line, not the receiver). So the puck is treated
+# as airborne — clears a grounded stick, only a body blocks — only within
+# this distance of the passer; past it the puck has landed and a stick
+# intercepts normally. Modelling it as a distance (not a fraction) keeps
+# the grounded zone honest: a defender 7 m out blocks a saucer whether the
+# pass is 12 m or 25 m. Deliberately conservative.
+const SAUCER_AIRBORNE_DISTANCE_M: float = 4.0
 
 # Saucer only wins over a grounded pass when it clears the lane by at
 # least this much (lane_clear delta, 0..1). Below it the loft isn't worth
@@ -824,12 +825,11 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 
 
 # Lane-clear for a SAUCER (elevated) pass. Same closest-approach model as
-# lane_clear, except in the mid-lane airborne window (fraction of flight
-# in [SAUCER_AIRBORNE_T_MIN, SAUCER_AIRBORNE_T_MAX]) the puck is overhead,
-# so a defender's reach collapses to their BODY radius — sticks fly under
-# it, only a body in the lane stops it (see LANE_DEFENDER_BODY_RADIUS_M).
-# Defenders near the passer (puck not yet lofted) or near the receiver
-# (puck has landed) still block with full grounded stick reach.
+# lane_clear, except within SAUCER_AIRBORNE_DISTANCE_M of the passer the
+# puck is airborne, so a defender's reach collapses to their BODY radius —
+# sticks fly under it, only a body in the lane stops it (see
+# LANE_DEFENDER_BODY_RADIUS_M). Past that distance the puck has landed and
+# every defender blocks with full grounded stick reach.
 static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		puck_speed_m_s: float, opponent_vels: Array[Vector3] = []) -> float:
 	var dx: float = to.x - from.x
@@ -857,10 +857,12 @@ static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vecto
 		if t_raw > seg_time:
 			continue  # trailing the play — never closest in flight
 		var t: float = maxf(t_raw, 0.0)
-		var frac: float = t / seg_time
+		# Horizontal distance the puck has travelled off the blade at the
+		# defender's closest approach (puck rides the lane at `speed`).
+		var along_dist: float = speed * t
 		var block: float
-		if frac >= SAUCER_AIRBORNE_T_MIN and frac <= SAUCER_AIRBORNE_T_MAX:
-			# Airborne here — the puck flies over a grounded stick, so only
+		if along_dist <= SAUCER_AIRBORNE_DISTANCE_M:
+			# Still airborne — the puck flies over a grounded stick, so only
 			# the defender's body can block it: reach = body radius, no
 			# stick, no closing.
 			var miss: float = _lane_miss_at(
@@ -869,7 +871,7 @@ static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vecto
 					(LANE_DEFENDER_BODY_RADIUS_M - miss) / LANE_DEFENDER_BODY_RADIUS_M,
 					0.0, 1.0)
 		else:
-			# Grounded near the ends — full stick reach + closing.
+			# Puck has landed past the airborne span — full stick reach + closing.
 			block = _lane_block_at(
 					from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
 		if block > max_block:
