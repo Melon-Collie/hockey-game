@@ -31,12 +31,14 @@ class_name AIPassLead
 const MIN_SPEED_FOR_PROJECTION: float = 0.5
 
 
-# Lead a pass to a moving receiver. Returns [lead_point: Vector3,
-# flight_t: float] — the carrier needs the solved flight time downstream
-# (opponent projection, goalie prediction, time-decay), so it's returned
-# alongside the point rather than recomputed.
+# Lead a pass to a moving receiver. `launch_speed` is the puck's RELEASE speed;
+# the lead accounts for it bleeding off to ice friction in flight (see
+# effective_flight_speed). Returns [lead_point: Vector3, flight_t: float] — the
+# carrier needs the solved flight time downstream (opponent projection, goalie
+# prediction, time-decay), so it's returned alongside the point rather than
+# recomputed.
 static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
-		accel: Vector3, proj_speed: float, max_lead_s: float) -> Array:
+		accel: Vector3, launch_speed: float, max_lead_s: float) -> Array:
 	var blade_world: Vector3 = receiver.blade_contact_world
 	# Defensive fallback: blade_contact_world is a host-only field that
 	# should always be populated on the host, but aim at body center is
@@ -44,9 +46,16 @@ static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
 	if blade_world == Vector3.ZERO:
 		blade_world = receiver.position
 	var a: Vector3 = along_velocity_component(accel, receiver.velocity)
+	# Friction-aware: the intercept solver treats the puck as constant-speed, so
+	# feed it the puck's AVERAGE flight speed rather than the launch speed —
+	# otherwise a long pass under-leads (the puck arrives later than launch/dist
+	# implies). Distance to the receiver's current blade is a fine proxy for the
+	# pass length (the intercept iteration then refines against receiver motion).
+	var eff_speed: float = effective_flight_speed(
+			launch_speed, shooter_pos.distance_to(blade_world))
 	var flight_t: float = AITrajectory.intercept_time(
 			shooter_pos, blade_world, receiver.velocity, a,
-			proj_speed, max_lead_s)
+			eff_speed, max_lead_s)
 	var point: Vector3 = AITrajectory.predict_at(
 			blade_world, receiver.velocity, flight_t, 6, a)
 	return [point, flight_t]
@@ -54,8 +63,22 @@ static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
 
 # Convenience for callers that only need the aim point (the firing path).
 static func lead_point(shooter_pos: Vector3, receiver: SkaterNetworkState,
-		accel: Vector3, proj_speed: float, max_lead_s: float) -> Vector3:
-	return lead(shooter_pos, receiver, accel, proj_speed, max_lead_s)[0]
+		accel: Vector3, launch_speed: float, max_lead_s: float) -> Vector3:
+	return lead(shooter_pos, receiver, accel, launch_speed, max_lead_s)[0]
+
+
+# Average (time-mean) speed of a pass over `distance`, given it launches at
+# `launch_speed` and sheds speed to constant Coulomb ice friction. Under constant
+# deceleration velocity is linear in TIME, so the time-average is exactly
+# (launch + arrival)/2 — and distance = avg_speed × flight_time, so using this as
+# the intercept solver's constant speed reproduces the true flight time. Leading
+# at the raw launch speed instead under-leads a long pass (aims behind a cutting
+# receiver), since the puck is slower than launch for most of the flight.
+static func effective_flight_speed(launch_speed: float, distance: float) -> float:
+	var arrival_sq: float = launch_speed * launch_speed \
+			- 2.0 * GameRules.PUCK_ICE_DECEL_M_S2 * maxf(distance, 0.0)
+	var arrival: float = sqrt(arrival_sq) if arrival_sq > 0.0 else 0.0
+	return (launch_speed + arrival) * 0.5
 
 
 # Project `accel` onto the travel direction, keeping only the component
