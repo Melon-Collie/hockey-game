@@ -207,13 +207,13 @@ const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 # pace, shrinking a defender's reaction window. Continuous (smoothstep) rather
 # than the old binary cliff at a single distance.
 #
-# Why a direct distance ramp and not friction/arrival-speed math: the puck is
-# very nearly frictionless on the ice (GameRules.PUCK_ICE_DECEL_M_S2 ≈ 0.1 m/s²),
-# so it sheds almost no speed over a pass — arrival speed ≈ launch speed at any
-# realistic distance. Backing a launch out of a target arrival speed would
-# therefore collapse to a near-constant ~snap speed and leave long passes too
-# soft to beat interception. Distance is the right axis directly: a long pass
-# can be fast because its longer flight gives the receiver time to square up.
+# Why a direct distance ramp and not friction/arrival-speed math: the puck
+# sheds little speed over a pass (GameRules.PUCK_ICE_DECEL_M_S2 ≈ 1 m/s² — e.g. a
+# 26 m pass loses only ~1–2 m/s), so arrival speed ≈ launch speed at realistic
+# distances. Backing a launch out of a target arrival speed would therefore
+# collapse to a near-constant ~snap speed and leave long passes too soft to beat
+# interception. Distance is the right axis directly: a long pass can be fast
+# because its longer flight gives the receiver time to square up.
 const PASS_RAMP_SHORT_DISTANCE_M: float = 10.0   # ≤ this → soft snap pass
 const PASS_RAMP_LONG_DISTANCE_M: float = 26.0    # ≥ this → full long-pass pace
 const PASS_RAMP_LONG_SPEED_M_S: float = 20.0     # launch target for a long pass
