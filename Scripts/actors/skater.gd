@@ -118,6 +118,14 @@ var is_local_skater: bool = false
 @export var body_block_radius: float = 0.5
 @export var block_body_radius: float = 0.9
 @export var block_crouch_depth: float = 0.35
+# Vertical center of the body-block sphere, in skater-local space (origin sits at
+# the hips). Raised to torso height so the PASSIVE sphere (body_block_radius)
+# clears a grounded puck (top ≈ ice_height + radius ≈ 0.12) — loose pucks on the
+# ice slip under/between the legs, enabling nutmegs. The WIDER explicit-block
+# sphere (block_body_radius, Ctrl) still reaches the ice from this height, so an
+# active shot-block remains the way to stop a low puck. Mirrors the grounded-vs-
+# airborne split the blade already uses.
+@export var body_block_height: float = 0.7
 
 # ── Node References ───────────────────────────────────────────────────────────
 @onready var mesh_root: Node3D = $MeshRoot
@@ -333,6 +341,10 @@ func _ready() -> void:
 
 	_body_block_area = Area3D.new()
 	_body_block_area.name = "BodyBlockArea"
+	# Raised to torso height so grounded pucks pass under the passive sphere (see
+	# body_block_height). The explicit-block widening (set_block_stance) reaches
+	# back down to the ice from here.
+	_body_block_area.position.y = body_block_height
 	_body_block_area.collision_layer = 0
 	_body_block_area.collision_mask = Constants.LAYER_PUCK
 	var block_shape := CollisionShape3D.new()

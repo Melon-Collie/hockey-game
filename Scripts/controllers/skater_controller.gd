@@ -109,6 +109,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # call — can't be measured headless.)
 @export var max_blade_speed: float = 10.0
 
+# ── Baby Touch (nutmeg self-tap) ──────────────────────────────────────────────
+# Tap stick-lift (Q) while carrying in plain SKATING_WITH_PUCK to push the puck a
+# tiny amount off the blade — a self-pass for threading the puck between a
+# defender's legs (the body block only covers the torso now, so a grounded puck
+# slips under). The released puck inherits the skater's horizontal velocity plus
+# a small nudge along the blade's current motion direction, so RELATIVE to the
+# carrier it's just a soft tap in the stick's sweep direction — keep skating and
+# you re-collect it. baby_touch_nudge_speed is that relative tap speed (m/s).
+@export var baby_touch_nudge_speed: float = 2.2
+
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
 # down the stick shaft (from the top hand toward the blade). It releases toward
@@ -625,6 +635,13 @@ func _process_input(input: InputState, delta: float) -> void:
 	# dislodges the carried puck.
 	skater.blade_up = (input.stick_lift_held and not has_puck) or skater.is_forced_lift_active()
 
+	# Baby touch: a stick-lift TAP while carrying pushes the puck off the blade as
+	# a soft self-pass (nutmeg setup). Edge-triggered and gated to plain carry so
+	# it never fires mid-charge; the is_replaying guard inside keeps it from
+	# re-emitting during reconcile (same discipline as _do_release).
+	if input.stick_lift_pressed and has_puck and _sm.get_state() == State.SKATING_WITH_PUCK:
+		_baby_touch()
+
 	_apply_movement(input, delta)
 	_pose.apply_velocity_lean(delta)
 	_pose.apply_facing(input, delta)
@@ -772,6 +789,26 @@ func _do_release(direction: Vector3, power: float) -> void:
 		return
 	var slapper: bool = _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK
 	puck_release_requested.emit(direction, power, slapper)
+
+# Baby touch: the carrier taps the puck off the blade as a soft self-pass. The
+# released velocity is the skater's horizontal momentum plus a small nudge along
+# the blade's current sweep direction — so the puck keeps pace with the carrier
+# and only drifts a touch in the direction the stick was moving. Host-derived
+# from the carrier's authoritative velocity exactly like a shot (the signal
+# carries the host-computed velocity during remote-input replay, the
+# client-predicted velocity locally). Skips during reconcile replay.
+signal baby_touch_requested(velocity: Vector3)
+
+func _baby_touch() -> void:
+	if is_replaying:
+		return
+	var skater_vel := Vector3(skater.velocity.x, 0.0, skater.velocity.z)
+	var blade_dir := skater.blade_world_velocity
+	blade_dir.y = 0.0
+	var nudge := Vector3.ZERO
+	if blade_dir.length() > 0.01:
+		nudge = blade_dir.normalized() * baby_touch_nudge_speed
+	baby_touch_requested.emit(skater_vel + nudge)
 
 # ── Puck Signals ──────────────────────────────────────────────────────────────
 func on_puck_picked_up_network() -> void:
