@@ -90,6 +90,33 @@ static func too_close_to_teammate(c: Vector3,
 	return false
 
 
+# ── Defensive anticipation ───────────────────────────────────────────────────
+
+# How far ahead (seconds) defensive roles lead an opponent's position when
+# scoring threats, so they defend where the attack is GOING rather than the
+# freeze-frame. Mirrors how PRESSURE already leads its search center off the
+# carrier's velocity; this extends that anticipation to the receivers / men the
+# other defensive roles cover.
+const DEFENSIVE_ANTICIPATION_S: float = 0.3
+# Clamp on the lead distance so a fast skater — or a momentary velocity spike on
+# a curling route — can't drag a defender far off the man. Keeps anticipation a
+# half-step nudge, not a commit to a phantom.
+const DEFENSIVE_ANTICIPATION_MAX_M: float = 2.5
+
+
+# Leads a threat position by its velocity over DEFENSIVE_ANTICIPATION_S, clamped
+# to DEFENSIVE_ANTICIPATION_MAX_M. XZ only; y stays 0.
+static func lead_threat(pos: Vector3, vel: Vector3) -> Vector3:
+	var lead_x: float = vel.x * DEFENSIVE_ANTICIPATION_S
+	var lead_z: float = vel.z * DEFENSIVE_ANTICIPATION_S
+	var l: float = sqrt(lead_x * lead_x + lead_z * lead_z)
+	if l > DEFENSIVE_ANTICIPATION_MAX_M:
+		var s: float = DEFENSIVE_ANTICIPATION_MAX_M / l
+		lead_x *= s
+		lead_z *= s
+	return Vector3(pos.x + lead_x, 0.0, pos.z + lead_z)
+
+
 # ── Man-on-threat coverage ───────────────────────────────────────────────────
 
 # Shared "cover this assigned man" target for the backline defenders
@@ -274,7 +301,7 @@ static func resolve_play_ref_velocity(ctx: RoleContext) -> Vector3:
 # "carrier's best pass" when evaluating how much a candidate defender position
 # deflates the carrier's options. Caller-owned scratch (see collect_opponents).
 static func collect_opp_team_excluding_carrier(ctx: RoleContext,
-		out: Array[Vector3]) -> void:
+		out: Array[Vector3], anticipate: bool = false) -> void:
 	out.clear()
 	var carrier_pid: int = -1
 	if ctx.snapshot != null and ctx.snapshot.puck_state != null:
@@ -284,7 +311,9 @@ static func collect_opp_team_excluding_carrier(ctx: RoleContext,
 			continue  # our team
 		if pid == carrier_pid:
 			continue
-		out.append(ctx.snapshot.skater_states[pid].position)
+		var s: SkaterNetworkState = ctx.snapshot.skater_states[pid]
+		# Defensive anticipation: lead the receiver to where they're cutting.
+		out.append(lead_threat(s.position, s.velocity) if anticipate else s.position)
 
 
 # Fills `out` with the positions of teammates excluding self. Used as the
@@ -305,11 +334,14 @@ static func collect_teammates_excluding_self(ctx: RoleContext,
 # momentum-aware ETA).
 static func collect_opponents(ctx: RoleContext,
 		out_positions: Array[Vector3],
-		out_states: Array[SkaterNetworkState]) -> void:
+		out_states: Array[SkaterNetworkState],
+		anticipate: bool = false) -> void:
 	out_positions.clear()
 	out_states.clear()
 	for pid: int in ctx.snapshot.skater_states:
 		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[pid]
-			out_positions.append(s.position)
+			# Defensive anticipation: lead each opponent to where they're headed.
+			# States keep their raw velocity for any momentum-aware ETA caller.
+			out_positions.append(lead_threat(s.position, s.velocity) if anticipate else s.position)
 			out_states.append(s)

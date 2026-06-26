@@ -69,7 +69,8 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 		return d
 
 	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
-	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates)
+	# Anticipate: lead the breakout-pass receivers to where they're cutting.
+	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates, true)
 	if opp_teammates.is_empty():
 		# No outlet receivers to deny — sit at the high-zone read spot so
 		# F2 still pressures the breakout lane rather than freezing.

@@ -83,7 +83,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# pass receivers. PRESSURE scores how much each candidate
 	# deflates those pass options.
 	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
-	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates)
+	# Anticipate: lead the receivers so PRESSURE shades to where a feed is going.
+	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates, true)
 
 	# Search center = "where the carrier will be at the next action
 	# horizon, shifted one stick-length back toward our net". Both

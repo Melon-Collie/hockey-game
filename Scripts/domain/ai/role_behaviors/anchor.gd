@@ -56,13 +56,15 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			and ctx.snapshot.skater_states.has(man_pid):
 		var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
 		if carrier_pos.is_finite():
-			var man_pos: Vector3 = ctx.snapshot.skater_states[man_pid].position
+			# Anticipate: cover where the man is cutting, not his current spot.
+			var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
+			var man_pos: Vector3 = AIRoleHelpers.lead_threat(man.position, man.velocity)
 			d.target_position = AIRoleHelpers.cover_man_target(ctx, man_pos, carrier_pos)
 			return d
 
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
-	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
+	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states, true)
 	if opp_positions.is_empty():
 		# No opps to defend against.
 		d.target_position = ctx.self_pos
