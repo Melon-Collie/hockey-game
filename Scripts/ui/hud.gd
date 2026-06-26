@@ -1148,10 +1148,16 @@ func _on_period_synced(new_period: int) -> void:
 func _build_clock_warning() -> void:
 	_clock_warning_label = _lbl("", 150, _GOLD)
 	_clock_warning_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Sit slightly above screen center rather than dead-center: cap the band at
+	# 80% of the height so the vertical-centered text lands around 40% down —
+	# clear of the puck/action in the lower-middle of the rink. Resolution-
+	# independent (anchor fraction, not a pixel offset).
+	_clock_warning_label.anchor_bottom = 0.8
 	_clock_warning_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_clock_warning_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_clock_warning_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_clock_warning_label.modulate = Color(1.0, 1.0, 1.0, 0.9)
+	# Semi-transparent so the final seconds of play stay readable behind it.
+	_clock_warning_label.modulate = Color(1.0, 1.0, 1.0, 0.6)
 	_clock_warning_label.visible = false
 	add_child(_clock_warning_label)
 
@@ -1168,7 +1174,11 @@ func _flash_period_end() -> void:
 
 func _on_clock_updated(t: float) -> void:
 	_clock_label.text = _format_clock(t)
-	if NetworkManager.is_offline_mode:
+	# Untimed periods (free play / practice) count UP from zero — there's no
+	# end-of-period to warn about, and the count-up would otherwise trip the
+	# final-10 countdown during the first 10 seconds. Keep the clock plain. A
+	# TIMED offline match (real period length) still gets the full treatment.
+	if GameManager.get_period_duration() <= 0.0:
 		_clock_label.add_theme_color_override("font_color", _WHITE)
 		_last_clock_pulse_second = -1
 		_hide_clock_warning()

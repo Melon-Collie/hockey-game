@@ -27,14 +27,14 @@ const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid 
 const NET_HEIGHT: float = 1.22           # crossbar height — must match HockeyGoal.NET_HEIGHT
 const NET_PUCK_BUFFER: float = 0.10      # exclusion zone expansion beyond the physical net boundary
 
-# Body-reach slack on the blue line: offside entry and tag-up key off the
-# skater's leading edge rather than dead-center, so you're only ruled offside
-# once you're a skate-length PAST the line and you tag up the instant your skate
-# touches it on the way back (real-hockey "touch the line" feel — less strict
-# than centre-crossing). Shared by is_offside (entry) and has_tagged_up (clear)
-# so the strict-< / ≥ split keeps a dead-band and the ghost never oscillates at
-# the boundary.
-const OFFSIDE_LINE_SLACK: float = 0.5
+# Half the skater's body so the blue line keys off the body EDGE, not its
+# centre — matching real hockey. You tag up the instant any part of your body
+# reaches the line (centre still a body-width inside the zone), and you're only
+# ruled offside once your whole body is over it. Shared by is_offside (entry) and
+# has_tagged_up (clear) so the strict-< / ≥ split keeps a dead-band and the ghost
+# never oscillates at the boundary. Tracks the medium collision-cylinder radius
+# (Skater.tscn) — the canonical body half-width.
+const OFFSIDE_LINE_SLACK: float = 0.35
 
 # Rink dimensions (must match HockeyRink export values in the scene)
 const RINK_HALF_WIDTH: float     = 13.0   # half of 26 m
