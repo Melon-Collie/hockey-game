@@ -72,15 +72,25 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_agent = SkaterAgent.new()
 
 
-# Push the per-attribute wrister cap into the agent so its shot and pass
-# charge targets scale with the same Size + Strength multipliers as the
-# base controller's `max_wrister_charge_distance`. Called on every attribute
-# apply (initial spawn + free-play picker changes) so the agent never sees
-# a stale cap.
+# Push the bot's attribute-scaled capabilities into the agent so the AI plans
+# with the same numbers the controller drives the body with — top speed, thrust,
+# blade reach, shot / pass speed — instead of league defaults. Called on every
+# attribute apply (initial spawn + free-play picker changes) so the agent never
+# sees stale values. The base controller has already written the scaled values
+# to its own fields by the time super() returns; we just read them off.
 func apply_attributes(attrs: PlayerAttributes) -> void:
 	super.apply_attributes(attrs)
-	if _agent != null:
-		_agent.set_max_wrister_charge_distance(max_wrister_charge_distance)
+	if _agent == null:
+		return
+	_agent.set_max_wrister_charge_distance(max_wrister_charge_distance)
+	var caps := AISelfCapabilities.new()
+	caps.max_speed = max_speed
+	caps.max_accel = thrust
+	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
+	caps.wrister_shot_speed = max_wrister_power
+	caps.charged_pass_speed = min_wrister_power + (
+			max_wrister_power - min_wrister_power) * AIActionScoring.BOT_PASS_CHARGE_RATIO
+	_agent.apply_capabilities(caps)
 
 
 # Bots are spawned by PlayerRegistry.spawn_bot, which knows the bot's

@@ -122,6 +122,26 @@ const GOALIE_MAX_LATERAL_SPEED_MPS: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEE
 # just picks an aim point past the goalie for the segment check.
 const GOALIE_SHADOW_HALF_M: float = 0.3
 
+# ── Goalie-in-motion penalty (reward forcing the goalie to move) ──────────────
+# The squareness term models the goalie's POSITION at release but not its
+# degraded SAVE while still recovering. The real goalie reads the shot late when
+# caught moving / unset (GoalieController + goalie_behavior_rules) — a weakness
+# the position-only model misses, so the AI under-rates plays that keep the
+# goalie sliding (cross-seam one-timers especially, where the goalie can't
+# re-square inside the pass flight). goalie_unsettled() ramps 0→1 with how
+# mid-slide / just-arrived the predicted goalie is, and score_shoot scales
+# coverage down by GOALIE_MOTION_PENALTY × unsettled — so a shot that catches the
+# goalie moving rates higher, exactly as it does in real play. This imports the
+# goalie's EXISTING weakness into the bot's model; it does not change the goalie.
+#
+# Tuning: PENALTY up → bots hunt moving-goalie looks (cross-seam one-timers)
+# harder; down → closer to the old position-only model (0.0 = identical).
+# SETTLE_REF_S is how long the goalie must sit stopped at its target before the
+# model treats it as fully re-set — longer keeps motion credit alive briefly
+# after the slide, rewarding a quick follow-up.
+const GOALIE_MOTION_PENALTY: float = 0.6
+const GOALIE_SETTLE_REF_S: float = 0.20
+
 # Goalie pressure zone — narrow rectangle in front of the goalie's
 # CURRENT (squared-to-puck) position. Penalizes score_shoot when the
 # shooter sits inside it. Models the hockey intuition that shooting
@@ -330,7 +350,8 @@ static func score_shoot(
 		net_half_width: float,
 		opponents: Array[Vector3],
 		goalie_current_pos: Vector3 = Vector3.INF,
-		shot_speed_m_s: float = WRISTER_SHOT_SPEED_M_S) -> float:
+		shot_speed_m_s: float = WRISTER_SHOT_SPEED_M_S,
+		goalie_unsettled_factor: float = 0.0) -> float:
 	# Hard gate: shooter past (or on) the attacking goal line can't
 	# shoot in — wraparound territory, returns 0 immediately.
 	var net_normal_z: float = -signf(attacking_goal.z)
@@ -379,7 +400,12 @@ static func score_shoot(
 
 	var arc_offset: float = absf(puck_arc_angle - goalie_arc_angle)
 	var squareness: float = maxf(0.0, 1.0 - arc_offset / SQUARENESS_OFFSET_RAD)
-	var coverage: float = BASE_COVERAGE * squareness
+	# A goalie caught mid-slide / just-arrived saves worse than a set one even at
+	# the same angle (reads the shot late) — scale coverage down by how unsettled
+	# it is. Default 0.0 leaves the position-only model untouched for callers that
+	# don't pass it (existing tests, off-puck role scoring).
+	var coverage: float = (BASE_COVERAGE * squareness
+			* (1.0 - GOALIE_MOTION_PENALTY * goalie_unsettled_factor))
 	var shot_quality: float = dist_response * shot_angle_factor * (1.0 - coverage)
 
 	# Lane clear vs the actual aim point ShotAim would pick (past the
@@ -502,6 +528,39 @@ static func predict_goalie_pos(
 	return Vector3(goalie_now.x + signf(dx) * max_move, goalie_now.y, goalie_now.z)
 
 
+# Companion to predict_goalie_pos: how UNSETTLED [0, 1] the goalie is AT release.
+#   0 = set and square (already at its arc-match target, no forced motion)
+#   1 = still sliding (positionally behind) or only just arrived — reading late
+# Same react-then-slide kinematics as predict_goalie_pos, so the predicted
+# position and this motion estimate agree. score_shoot folds it into coverage
+# (see GOALIE_MOTION_PENALTY). A fast cross-seam one-timer leaves the goalie
+# mid-slide → near 1; a static shot at a set goalie → 0.
+static func goalie_unsettled(
+		goalie_now: Vector3,
+		attacking_goal: Vector3,
+		release_time_s: float,
+		puck_pos_at_release: Vector3) -> float:
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var puck_forward: float = (puck_pos_at_release.z - attacking_goal.z) * net_normal_z
+	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
+	var target_x: float
+	if puck_forward < 0.001 or goalie_depth < 0.001:
+		target_x = puck_pos_at_release.x
+	else:
+		target_x = attacking_goal.x + goalie_depth * (puck_pos_at_release.x - attacking_goal.x) / puck_forward
+	var need: float = absf(target_x - goalie_now.x)
+	if need < 0.001:
+		return 0.0  # already squared — no forced motion, fully set
+	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
+	var max_move: float = move_time * GOALIE_MAX_LATERAL_SPEED_MPS
+	if need >= max_move:
+		return 1.0  # still sliding at release (or hasn't even reacted) — caught moving
+	# Reached the target with time to spare; ramps back to 0 as it re-sets.
+	var slide_time: float = need / GOALIE_MAX_LATERAL_SPEED_MPS
+	var settled_for: float = move_time - slide_time
+	return clampf(1.0 - settled_for / GOALIE_SETTLE_REF_S, 0.0, 1.0)
+
+
 # Returns PASS score in [0, 1] for a specific receiver. Multiplicative:
 #   - pass_lane:             1.0 if no opponent in the shooter→receiver line
 #   - score_shoot(receiver): receiver's value as a shooter from where
@@ -522,7 +581,8 @@ static func score_pass(
 		net_half_width: float,
 		opponents: Array[Vector3],
 		goalie_current_pos: Vector3 = Vector3.INF,
-		pass_speed_m_s: float = PASS_SPEED_M_S) -> float:
+		pass_speed_m_s: float = PASS_SPEED_M_S,
+		goalie_unsettled_factor: float = 0.0) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
@@ -543,9 +603,14 @@ static func score_pass(
 	# carrier/puck holder) applies correctly for back-door receivers:
 	# they're off-axis from the carrier's lane → outside zone → no
 	# penalty, preserving back-door as a strong pass option.
+	# goalie_unsettled_factor lets the caller credit a feed that catches the
+	# goalie mid-slide (a cross-seam one-timer to an off-axis receiver) — the
+	# off-puck staging roles pass it so they prize the back-door spot. Default
+	# 0.0 keeps the position-only behaviour for callers that don't (SUPPORT).
+	# Receiver shot speed stays the league default (cross-player; no teammate caps).
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
-			goalie_current_pos)
+			goalie_current_pos, WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor)
 	return lane * receiver_shot
 
 
@@ -1120,8 +1185,13 @@ static func path_clearance(from: Vector3, to: Vector3,
 # need a momentum-aware ETA without inventing their own constants
 # (e.g., SUPPORT's foot-race-home exposure check uses this for the
 # threat opp's ETA back to our net).
+#
+# `ref_speed_m_s` is the actor's flat skating speed; it defaults to the league
+# reference so cross-player callers (opponent / teammate ETA, the loose-puck
+# election that must stay consistent across all bots) keep the shared baseline.
+# A bot estimating ITS OWN arrival passes its attribute-scaled top speed.
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
-		from_velocity: Vector3) -> float:
+		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S) -> float:
 	var dx: float = dest.x - from_pos.x
 	var dz: float = dest.z - from_pos.z
 	var dist: float = sqrt(dx * dx + dz * dz)
@@ -1130,7 +1200,7 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 	var inv: float = 1.0 / dist
 	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
 	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
-			SKATER_REF_SPEED_M_S + speed_along)
+			ref_speed_m_s + speed_along)
 	return dist / effective
 
 
