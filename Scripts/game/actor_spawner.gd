@@ -50,7 +50,7 @@ func spawn_puck_with_controller(is_server: bool) -> Dictionary:
 # }
 # Top defends the negative-Z goal (Team 1's end), bottom defends positive-Z
 # (Team 0's end).
-func spawn_goalie_pair(puck: Puck, is_server: bool) -> Dictionary:
+func spawn_goalie_pair(puck: Puck, is_server: bool, profile: GoalieSkillProfile = null) -> Dictionary:
 	var top: Goalie = GOALIE_SCENE.instantiate()
 	var bottom: Goalie = GOALIE_SCENE.instantiate()
 	_scene_root.add_child(top)
@@ -59,8 +59,8 @@ func spawn_goalie_pair(puck: Puck, is_server: bool) -> Dictionary:
 	var bottom_controller := GoalieController.new()
 	_scene_root.add_child(top_controller)
 	_scene_root.add_child(bottom_controller)
-	top_controller.setup(top, puck, -GameRules.GOAL_LINE_Z, is_server)
-	bottom_controller.setup(bottom, puck, GameRules.GOAL_LINE_Z, is_server)
+	top_controller.setup(top, puck, -GameRules.GOAL_LINE_Z, is_server, profile)
+	bottom_controller.setup(bottom, puck, GameRules.GOAL_LINE_Z, is_server, profile)
 	return {
 		"top_goalie": top,
 		"bottom_goalie": bottom,

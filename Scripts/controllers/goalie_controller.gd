@@ -648,7 +648,13 @@ func get_buffer_depth() -> int:
 	return _state_buffer.size()
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
-func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: float, assigned_is_server: bool) -> void:
+# `profile` selects the difficulty tuning (Normal vs Hard). Null = Hard, i.e.
+# the authored @export defaults unchanged — so tutorial / replay / single-goalie
+# spawns that don't pass one behave exactly as before. Applied BEFORE
+# _configure_collaborators() so the cached rule configs pick up the changed
+# values.
+func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: float, assigned_is_server: bool,
+		profile: GoalieSkillProfile = null) -> void:
 	goalie = assigned_goalie
 	puck = assigned_puck
 	is_server = assigned_is_server
@@ -660,6 +666,8 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	_current_depth = depth_defensive
 	_tracked_threat_position = puck.global_position
 	_prev_puck_position = puck.global_position
+	if profile != null:
+		_apply_skill_profile(profile)
 	_configure_collaborators()
 	_sm.transitioned.connect(_on_sm_transitioned)
 	_reaction.started.connect(_on_reaction_started)
@@ -676,6 +684,18 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 		puck.puck_hit_boards.connect(_on_reaction_resolved)
 		puck.puck_touched_post.connect(_on_reaction_resolved)
 		puck.puck_hit_goal_body.connect(_on_reaction_resolved)
+
+# Overwrite the difficulty-varying @exports from a skill profile. Only the knobs
+# the profile carries are touched; everything else keeps its authored default.
+# Deliberately does NOT touch reaction_delay or t_push_speed — AIActionScoring
+# mirrors those to predict the goalie, so they stay consistent across tiers (see
+# GoalieSkillProfile). Called from setup() before the cached configs are built.
+func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
+	arm_reaction_delay = profile.arm_reaction_delay_s
+	cross_crease_react_delay = profile.cross_crease_react_delay_s
+	goalie_poke_radius = profile.poke_radius_m
+	screen_max_extra_delay = profile.screen_max_extra_delay_s
+	move_read_max_delay = profile.move_read_max_delay_s
 
 # Wired by GameManager so the crease-jam check can scan opposing skaters
 # without the controller knowing about the registry / spawner.
