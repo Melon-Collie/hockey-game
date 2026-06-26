@@ -189,6 +189,14 @@ signal body_block_hit(body: Node3D)
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
 var current_shot_state: int = 0
+# Predicted world-space shot velocity (direction * speed) if the carrier
+# released the shot they're currently charging RIGHT NOW. Published each tick by
+# SkaterController while a WRISTER charge is live (host-controlled skaters only —
+# remote carriers leave it ZERO, since their aim isn't on the wire). The goalie
+# AI reads it to pre-lean toward a charging shot's predicted impact; it gates on
+# `current_shot_state` for freshness and on a non-zero length for "is this a
+# host-side read", so a stale value left after release is never trusted.
+var predicted_shot_velocity: Vector3 = Vector3.ZERO
 # Resolves the skater's current team_id by deferring to the registry. Set by
 # PlayerRegistry on spawn so the goalie / VFX / other Skater-holding code can
 # query team affiliation without growing a cached field that has to be

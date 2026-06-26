@@ -140,6 +140,19 @@ class Inputs:
 	# Lunge progress, sin-curved 0 → 1 → 0 over the active window. Pose
 	# builder scales the forward blocker extension by this value.
 	var lunge_progress: float = 0.0
+	# Pre-lean: the goalie reads a charging shot's windup and leans partway
+	# toward where it's currently aimed BEFORE release. `prelean_active` gates
+	# the whole thing; `prelean_directional` means a host-side predicted impact
+	# is available (host player / bots) so the relevant hand + body lean drift
+	# toward (`prelean_impact_x`, `prelean_impact_y`); otherwise (remote
+	# shooters) a non-directional hands-up `prelean_ready_lift` applies.
+	# `prelean_strength` is the 0..1 fraction of the full reach pre-committed.
+	var prelean_active: bool = false
+	var prelean_directional: bool = false
+	var prelean_impact_x: float = 0.0
+	var prelean_impact_y: float = 0.0
+	var prelean_strength: float = 0.0
+	var prelean_ready_lift: float = 0.0
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -156,11 +169,13 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			_set_standing_pose(c, inputs)
 			_apply_blade_intent_for_upright_state(c, inputs)
 			_apply_lunge(c, inputs)
+			_apply_prelean(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.READY, GoalieStateMachine.State.RECOVERING:
 			_set_ready_pose(c, inputs)
 			_apply_blade_intent_for_upright_state(c, inputs)
 			_apply_lunge(c, inputs)
+			_apply_prelean(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.BUTTERFLY, GoalieStateMachine.State.COILING:
 			# COILING shares the butterfly pose — pads on the ice, body
@@ -466,6 +481,44 @@ func _apply_lunge(c: GoalieBodyConfig, inputs: Inputs) -> void:
 			c.blocker_pos.x,
 			c.blocker_pos.y,
 			c.blocker_pos.z - lunge_extension * inputs.lunge_progress)
+
+
+# Pre-lean toward a charging shot's predicted impact — a PARTIAL version of the
+# elevated reach, applied while the goalie is still upright and reading the
+# windup (before any release / reaction). Skipped once reacting: the real
+# reaction reach runs next and owns the arms. Directional lean drifts the
+# relevant hand `prelean_strength` of the way to the predicted corner plus a
+# scaled body lean; the non-directional fallback (remote shooters, no aim on the
+# wire) just raises both hands toward a ready height. This only changes the
+# resting hand position — it never speeds up the actual save, so the reaction's
+# arm-delay / glove-speed caps still decide whether the corner is reachable.
+func _apply_prelean(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if not inputs.prelean_active or inputs.reacting_to_shot:
+		return
+	var s: float = clampf(inputs.prelean_strength, 0.0, 1.0)
+	if s <= 0.0:
+		return
+	if not inputs.prelean_directional:
+		# No predicted aim (remote shooter) — just get the hands up, ready.
+		c.glove_pos.y += inputs.prelean_ready_lift * s
+		c.blocker_pos.y += inputs.prelean_ready_lift * s
+		return
+	# Convert predicted world impact into goalie-local X (+Z-defending goalie is
+	# rotated PI in world, so local +X is global -X — same as the reach math).
+	var impact_local_x: float = (inputs.prelean_impact_x - inputs.current_x) * -inputs.direction_sign
+	var target_y: float = clampf(inputs.prelean_impact_y, react_hand_y_min, react_hand_y_max)
+	# Partial body lean toward the reach side (same sign convention as the reach).
+	var lean_factor: float = clampf(absf(impact_local_x) / maxf(body_lean_reach_norm, 0.001), 0.0, 1.0)
+	var lean_sign: float = signf(-impact_local_x)
+	c.body_rot = Vector3(c.body_rot.x, c.body_rot.y,
+			c.body_rot.z + lean_sign * lean_factor * body_lean_max_deg * s)
+	# Drift the relevant hand a fraction of the way toward the predicted corner.
+	if impact_local_x <= 0.0:
+		var full_x: float = clampf(impact_local_x, glove_max_x_outward, glove_max_x_inward)
+		c.glove_pos = c.glove_pos.lerp(Vector3(full_x, target_y, c.glove_pos.z), s)
+	else:
+		var full_x: float = clampf(impact_local_x, blocker_max_x_inward, blocker_max_x_outward)
+		c.blocker_pos = c.blocker_pos.lerp(Vector3(full_x, target_y, c.blocker_pos.z), s)
 
 
 func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
