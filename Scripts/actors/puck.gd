@@ -12,7 +12,7 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 
 @export var max_speed: float = 38.0
 @export var reattach_cooldown: float = 0.5
-@export var nudge_cooldown: float = 0.15  # short re-grab denial after a self nudge tap
+@export var nudge_cooldown: float = 0.30  # short re-grab denial after a self nudge tap
 @export var ice_height: float = 0.0175
 @export var pickup_max_speed: float = 8.0
 @export var deflect_min_speed: float = 14.0
