@@ -37,9 +37,7 @@ var blade_span: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLA
 
 # Charged wrister release speed (Shot). Feeds the bot's own shot-quality eval
 # (score_shoot) — a high-Shot bot's shot reaches the net faster, leaving
-# defenders less reaction time, so it correctly rates more shots as on.
+# defenders less reaction time, so it correctly rates more shots as on. Also the
+# upper clamp on the bot's distance-adaptive pass launch speed (its hardest
+# possible pass) — see AIActionScoring.pass_launch_speed.
 var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-
-# Charged-pass release speed (Shot). Feeds our own pass lead + lane-threat math
-# (the pass the bot actually fires). Default = the half-charge baseline.
-var charged_pass_speed: float = AIActionScoring.PASS_CHARGE_SPEED_M_S

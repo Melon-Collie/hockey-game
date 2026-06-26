@@ -47,6 +47,11 @@ const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~3
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
+# A pass only wrister-charges when its adaptive launch target exceeds the snap
+# floor (PASS_SPEED_M_S) by at least this much; nearer the floor the windup buys
+# too little pace to justify the commit, so the bot quick-releases instead.
+const PASS_CHARGE_MIN_DELTA_M_S: float = 1.0
+
 # Quick-shot blade ROM cone: passes within this half-angle of facing
 # don't pay rotation cost (blade can fire from current facing).
 # Outside the cone, only the OVERSHOOT (angle - ROM) costs time.
@@ -98,6 +103,12 @@ var pass_target_peer_id: int = -1
 # state machine consumes this when entering PASS_PRESSED to branch
 # between one-tick fire and ~250 ms wrister charge.
 var pass_should_charge: bool = false
+
+# Distance-adaptive LAUNCH speed for the chosen PASS (AIActionScoring.
+# pass_launch_speed): soft for short feeds, harder for long ones so they all
+# arrive at a comfortable pace. The state machine maps this to the wrister
+# charge fraction it winds up to, and leads the pass at this speed.
+var pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 
 # Set alongside pass_target_peer_id when the chosen PASS is a long
 # feed whose lane is contested by a mid-lane defender that a saucer
@@ -177,6 +188,7 @@ func reset() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
 	pass_should_charge = false
+	pass_target_speed = AIActionScoring.PASS_SPEED_M_S
 	pass_should_saucer = false
 	shot_is_elevated = false
 	last_carry_anchor = Vector3.ZERO
@@ -191,6 +203,7 @@ func clear_intent() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
 	pass_should_charge = false
+	pass_target_speed = AIActionScoring.PASS_SPEED_M_S
 	pass_should_saucer = false
 	_pick_action_cooldown = 0
 
@@ -354,12 +367,17 @@ func _pick_action(ctx: RoleContext) -> void:
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer
-			# Wrister-charge for long passes — more pace, smaller defender
-			# reaction window. Snap-pass for short feeds where the windup
-			# commit isn't worth it.
+			# Distance-adaptive launch speed: soft for short feeds, harder for
+			# long ones so they still arrive at a comfortable pace (capped at
+			# this bot's own max wrister). Wrister-charge only when the target
+			# is meaningfully above the snap floor; otherwise quick-release.
 			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
-			pass_should_charge = (receiver != null
-					and ctx.self_pos.distance_to(receiver.position) > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M)
+			if receiver != null:
+				pass_target_speed = AIActionScoring.pass_launch_speed(
+						ctx.self_pos.distance_to(receiver.position), ctx.self_wrister_shot_speed)
+			else:
+				pass_target_speed = AIActionScoring.PASS_SPEED_M_S
+			pass_should_charge = pass_target_speed > AIActionScoring.PASS_SPEED_M_S + PASS_CHARGE_MIN_DELTA_M_S
 			# Saucer it over a contested mid-lane defender (only ever true
 			# for long passes — see _compute_best_pass).
 			pass_should_saucer = best_pass_saucer
@@ -458,18 +476,15 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 			var receiver_in_oz: bool = -own_goal_dir * receiver_state.position.z > GameRules.BLUE_LINE_Z
 			if not receiver_in_oz:
 				continue
-		# Match the speed the state machine will actually fire at: long
-		# passes get the charged-wrister speed, short passes the quick-
-		# shot speed (see PASS_PRESSED branch on _pass_should_charge).
-		# Threading the actual speed here makes the lead and opponent
-		# projections match reality — without it, a 15 m pass scored
-		# at 14 m/s overestimates defender presence on the line and
-		# leads past the receiver, both of which depress long-pass
-		# scores below where they should be.
+		# Match the speed the state machine will actually fire at: the
+		# distance-adaptive launch speed (capped at this bot's own max
+		# wrister). Threading the actual speed here makes the lead and
+		# opponent projections match reality — without it, a 15 m pass
+		# scored at 14 m/s overestimates defender presence on the line and
+		# leads past the receiver, both of which depress long-pass scores
+		# below where they should be.
 		var dist: float = self_pos.distance_to(receiver_state.position)
-		var pass_speed: float = (ctx.self_charged_pass_speed
-				if dist > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M
-				else AIActionScoring.PASS_SPEED_M_S)
+		var pass_speed: float = AIActionScoring.pass_launch_speed(dist, ctx.self_wrister_shot_speed)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
 		# Intercept-aware lead, shared with the state machine's firing aim.
 		# flight_t is the SOLVED time (refined against the predicted
@@ -569,9 +584,9 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 			# stretch-pass tool) AND a mid-lane defender is in the way that
 			# the saucer flies over. Reuses the current-position opponents
 			# the grounded lane was scored against, so the two agree on the
-			# geometry. dist > threshold is exactly the charged-pass branch.
+			# geometry.
 			best_pass_saucer = (
-					dist > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M
+					dist > AIActionScoring.SAUCER_MIN_DISTANCE_M
 					and AIActionScoring.prefers_saucer(
 							self_pos, receiver, _scratch_opponents, pass_speed))
 	return [best_pass_peer, best_pass_score, best_pass_saucer]

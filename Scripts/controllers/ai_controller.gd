@@ -88,8 +88,6 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	caps.max_accel = thrust
 	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
 	caps.wrister_shot_speed = max_wrister_power
-	caps.charged_pass_speed = min_wrister_power + (
-			max_wrister_power - min_wrister_power) * AIActionScoring.BOT_PASS_CHARGE_RATIO
 	_agent.apply_capabilities(caps)
 
 
