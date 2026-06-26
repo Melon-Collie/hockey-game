@@ -2366,7 +2366,6 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var receiver: SkaterNetworkState = snapshot.skater_states.get(_pass_target_peer_id)
 	if receiver == null:
 		return _attacking_goal_pos
-	var dist: float = self_pos.distance_to(receiver.position)
 	# Speed-aware lead: charged passes arrive faster, so the receiver
 	# covers less ground in flight — leading at the quick-shot speed
 	# would over-lead by ~36% (19/14 - 1) and the puck would sail past.
@@ -2376,44 +2375,11 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var pass_speed: float = (AIActionScoring.PASS_CHARGE_SPEED_M_S
 			if _pass_should_charge
 			else AIActionScoring.PASS_SPEED_M_S)
-	var flight_t: float = clampf(
-			dist / pass_speed, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
 	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
-	return _predict_receiver(receiver, flight_t, accel)
-
-
-# Receiver position prediction — velocity extrapolation of the blade
-# contact (in world space), plus the blade-to-body world offset so
-# the puck aims at where the stick will be (not body center).
-#
-# An earlier version blended in the receiver's published steering
-# anchor, intending to lead bots cutting toward their slot. That
-# overshot dramatically (TRANS_DO OUTLET anchor is ~25 m up-ice).
-# Velocity + observed acceleration is the conservative middle
-# ground: project only as far as the receiver's current motion
-# implies (the ½·a·t² term picks up real turns / accels from the
-# physics body without committing to an aspirational anchor).
-#
-# IMPORTANT: `receiver.blade_position` is in upper-body-LOCAL space —
-# subtracting `receiver.position` (world) was nonsense and produced
-# offsets up to 25 m, leading to passes fired at empty ice on the far
-# side of the rink during D→O transition. Use `blade_contact_world`
-# (host-only field, populated by SkaterController.get_network_state)
-# which is the blade in world coordinates already.
-func _predict_receiver(receiver: SkaterNetworkState, flight_t: float,
-		accel: Vector3 = Vector3.ZERO) -> Vector3:
-	# Predict the blade position forward by flight_t along body
-	# velocity + acceleration (assumes blade moves with body — fine
-	# over a 0.6 s pass window).
-	var blade_world: Vector3 = receiver.blade_contact_world
-	# Defensive fallback: if blade_contact_world isn't populated
-	# (zero — shouldn't happen on host but guard anyway), fall back
-	# to body position. Aim at body center is worse than aim at
-	# blade, but vastly better than aim at center ice.
-	if blade_world == Vector3.ZERO:
-		blade_world = receiver.position
-	return AITrajectory.predict_at(
-			blade_world, receiver.velocity, flight_t, 6, accel)
+	# Intercept-aware lead, shared with the carrier's pass scoring so the
+	# fired aim matches the scored one (AIPassLead).
+	return AIPassLead.lead_point(
+			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S)
 
 
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
