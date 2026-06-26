@@ -105,6 +105,10 @@ var current_snapshot: WorldSnapshot = null
 # execution knobs. Defaults to Hard so any path that spawns bots before
 # resolution behaves close to the old perfect bot.
 var bot_skill_profile: BotSkillProfile = BotSkillProfile.hard()
+# Goalie difficulty for this match. Host-spawned AI (the host runs both nets),
+# so like bot difficulty it's a host-local PlayerPrefs preference re-read each
+# match. Defaults to Hard so any pre-resolution spawn matches today's goalie.
+var goalie_skill_profile: GoalieSkillProfile = GoalieSkillProfile.hard()
 # Debounce state for the bots' discrete-event reaction delay (see
 # _apply_bot_carrier_reaction_delay). `_perceived_carrier_peer_id` is the
 # delayed belief written onto the AI snapshot; the others track the pending
@@ -506,6 +510,7 @@ func on_host_started() -> void:
 	# and GameManager is an autoload that survives between matches, so this must
 	# re-read PlayerPrefs each match (not lazy-init-once).
 	bot_skill_profile = BotSkillProfile.for_difficulty(PlayerPrefs.bot_difficulty)
+	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.goalie_difficulty)
 	_perceived_carrier_peer_id = -1
 	_real_carrier_last = -1
 	_carrier_reaction_timer = 0.0
@@ -908,7 +913,7 @@ func _spawn_goalies() -> void:
 	if NetworkManager.is_tutorial_mode \
 			and not TutorialRegistry.wants_goalies(NetworkManager.tutorial_id):
 		return
-	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host)
+	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host, goalie_skill_profile)
 	goalies = [result.top_goalie as Goalie, result.bottom_goalie as Goalie]
 	goalie_controllers = [result.top_controller, result.bottom_controller]
 	result.top_controller.team_id = 1

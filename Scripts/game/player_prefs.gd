@@ -232,6 +232,12 @@ const BOT_DIFFICULTY_LABELS: Array[String] = [
 	"Normal",
 	"Hard",
 ]
+# Goalie difficulty. Index matches GoalieSkillProfile.Difficulty and the
+# OptionButton ordering wherever the menu exposes it.
+const GOALIE_DIFFICULTY_LABELS: Array[String] = [
+	"Normal",
+	"Hard",
+]
 # Accessibility: photosensitivity / motion options. screen_flash gates the
 # full-screen goal flash and hit vignette (FlashOverlay); screen_shake gates
 # camera trauma shake (GameCamera.shake). Both default on.
@@ -241,6 +247,7 @@ var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each t
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
 var bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL  # see BotSkillProfile
+var goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL  # see GoalieSkillProfile
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
 const CAMERA_DISTANCE_MIN: float = 0.6
@@ -369,6 +376,7 @@ func save() -> void:
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
 	cfg.set_value("game", "bot_difficulty", bot_difficulty)
+	cfg.set_value("game", "goalie_difficulty", goalie_difficulty)
 	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
@@ -881,6 +889,7 @@ func _load() -> void:
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		bot_difficulty = clampi(int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL)), 0, BOT_DIFFICULTY_LABELS.size() - 1)
+		goalie_difficulty = clampi(int(cfg.get_value("game", "goalie_difficulty", GoalieSkillProfile.Difficulty.NORMAL)), 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
 		share_gameplay_stats = cfg.get_value("game", "share_gameplay_stats", true)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)

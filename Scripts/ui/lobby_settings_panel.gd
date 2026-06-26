@@ -1,8 +1,8 @@
 class_name LobbySettingsPanel
 extends VBoxContainer
 
-# Compact match-settings column for the lobby. Renders five rows
-# (Periods, Period Length, Overtime, Rules, Bot Difficulty), each with a
+# Compact match-settings column for the lobby. Renders six rows
+# (Periods, Period Length, Overtime, Rules, Bot Difficulty, Goalie), each with a
 # label on the left and the control on the right. Hosts get editable
 # controls; clients see them dimmed and disabled. The "MATCH" column header
 # above this panel is rendered by LobbyManager so the same widget can drop
@@ -10,10 +10,11 @@ extends VBoxContainer
 #
 # The first four rows are NETWORK-SYNCED match rules — they emit
 # settings_changed and LobbyManager owns broadcasting them to clients. Bot
-# Difficulty is different: it's a host-LOCAL persisted preference (bots are
-# host-spawned, so clients never need it), so that row writes straight to
-# PlayerPrefs + saves and does NOT go through settings_changed. GameManager
-# reads PlayerPrefs.bot_difficulty at match start.
+# Difficulty and Goalie are different: they're host-LOCAL persisted preferences
+# (bots and both goalies are host-spawned AI, so clients never need them), so
+# those rows write straight to PlayerPrefs + save and do NOT go through
+# settings_changed. GameManager reads PlayerPrefs.bot_difficulty and
+# PlayerPrefs.goalie_difficulty at match start.
 
 signal settings_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int)
 
@@ -34,6 +35,7 @@ var _dur_value_label: Label = null
 var _ot_check: CheckButton = null
 var _rules_btn: OptionButton = null
 var _bot_difficulty_btn: OptionButton = null
+var _goalie_difficulty_btn: OptionButton = null
 var _periods_minus: Button = null
 var _periods_plus: Button = null
 var _dur_minus: Button = null
@@ -141,6 +143,25 @@ func _build() -> void:
 	b_row.add_child(_bot_difficulty_btn)
 	add_child(b_row)
 
+	# Row 6: Goalie Difficulty. Host-local preference like Bot Difficulty — the
+	# host runs both nets' AI, so clients never need it. Writes PlayerPrefs
+	# directly, no settings_changed emit. GameManager reads it at match start.
+	var g_row := _row("Goalie")
+	_goalie_difficulty_btn = OptionButton.new()
+	_goalie_difficulty_btn.custom_minimum_size = Vector2(120, 28)
+	_goalie_difficulty_btn.add_theme_font_size_override("font_size", 13)
+	for i: int in range(PlayerPrefs.GOALIE_DIFFICULTY_LABELS.size()):
+		_goalie_difficulty_btn.add_item(PlayerPrefs.GOALIE_DIFFICULTY_LABELS[i], i)
+	_goalie_difficulty_btn.select(PlayerPrefs.goalie_difficulty)
+	SoundManager.wire_button(_goalie_difficulty_btn)
+	_goalie_difficulty_btn.disabled = not _is_host
+	if _is_host:
+		_goalie_difficulty_btn.item_selected.connect(_on_goalie_difficulty_selected)
+	else:
+		_goalie_difficulty_btn.modulate = Color(1, 1, 1, 0.5)
+	g_row.add_child(_goalie_difficulty_btn)
+	add_child(g_row)
+
 	_update_stepper_enabled()
 
 
@@ -247,4 +268,11 @@ func _on_rule_set_selected(idx: int) -> void:
 # (see class doc) — GameManager reads PlayerPrefs.bot_difficulty at match start.
 func _on_bot_difficulty_selected(idx: int) -> void:
 	PlayerPrefs.bot_difficulty = idx
+	PlayerPrefs.save()
+
+
+# Host-local preference, persisted immediately. Not part of settings_changed
+# (see class doc) — GameManager reads PlayerPrefs.goalie_difficulty at match start.
+func _on_goalie_difficulty_selected(idx: int) -> void:
+	PlayerPrefs.goalie_difficulty = idx
 	PlayerPrefs.save()

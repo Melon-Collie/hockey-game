@@ -156,16 +156,22 @@ extends Node
 # (0.2-0.4 m), and the existing tracking-speed lerp smooths brief deke
 # velocity spikes so quick fakes don't drag the goalie out of position.
 @export var carrier_velocity_lead_time: float = 0.12
-# Puck velocity lead. Adds projection of where the PUCK itself is going (vs
-# just the carrier body), which catches cases the carrier-velocity lead misses:
+# Puck velocity lead — CARRIER-PRESENT (dangle) branch only. Projects where the
+# PUCK is going (vs just the carrier body), which catches what the carrier lead
+# misses and is what keeps the goalie in front of forehand-backhand dekes:
 #   - Forehand-backhand dekes: carrier body stationary, puck drags laterally
-#   - Loose-puck cross-creases: no carrier, only puck velocity exists
 #   - Carrier pivoting to shoot: body still, blade swings out for release
 # Shorter than the carrier lead because puck velocity is jittery during
-# stickhandling — the existing tracking-speed lerp + this shorter lead means
-# transient dangles don't drag the goalie out while sustained motion (real
-# dekes, cross-crease passes) does.
+# stickhandling — the tracking-speed lerp + this shorter lead means transient
+# dangles don't drag the goalie out while sustained motion does.
 @export var puck_velocity_lead_time: float = 0.08
+# Puck velocity lead — LOOSE-puck (no carrier) branch, i.e. a pass/rebound in
+# flight. Deliberately ~0: the goalie must NOT front-run a back-door pass, so he
+# tracks where the puck IS and loses the cross-crease race to a hard pass like a
+# real goalie. Kept separate from the dangle lead above so weakening the pass
+# read does not touch deke coverage. Raise slightly if he's too beatable on
+# slower cross-ice plays.
+@export var loose_puck_velocity_lead_time: float = 0.0
 
 # ── Lateral pressure depth retreat ───────────────────────────────────────────
 # When a lateral threat moves faster than the goalie can t-push, retreat
@@ -193,6 +199,13 @@ extends Node
 # loose pucks have no carrier at all.
 @export var jam_puck_distance: float = 2.0    # m — puck-to-goalie threshold
 @export var jam_opponent_distance: float = 1.5 # m — opposing-skater-to-puck threshold
+# A net-front jam SEALS the ice (drops the goalie to butterfly) so a stick
+# battle can't be banged through the standing 5-hole. A loose-puck scramble
+# always qualifies; an opposing carrier qualifies only when jammed in tight and
+# moving slower than this — a faster carrier is driving the net (an attack), and
+# coaches teach staying up to force the release. Set to 0 to seal only on loose
+# pucks (never for a carried puck).
+@export var jam_carrier_max_speed: float = 3.0 # m/s — carrier above this is attacking, not jamming
 
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
@@ -330,17 +343,24 @@ extends Node
 
 # ── Cross-crease detection (STANDING push only) ──────────────────────────────
 # A pass whipping across the slot is read off PUCK velocity, not the smoothed
-# threat (which lags toward the passer's body). When detected and the goalie
-# is STANDING, the goalie pushes hard on its feet toward the projected
-# crossing. (Butterfly slides are NOT triggered here — they come out of the
-# pad-coverage check in _try_commit_slide, which handles both this and dekes
-# uniformly.) This is the backdoor /
-# one-timer fix — the smoothed-threat threshold trigger fires too late on these.
+# threat (which lags toward the passer's body). When detected and the goalie is
+# STANDING, after a human reaction delay the goalie commits a hard but REALISTIC
+# T-push on its feet toward the projected crossing — at the normal t_push_speed,
+# accelerating from rest (no turbo, no instant-on). This is deliberately an
+# honest race the goalie LOSES to a clean hard cross-seam one-timer (he's still
+# mid-push / unset when the shot comes) and wins against slow / telegraphed /
+# long-developing feeds. (Butterfly slides are NOT triggered here — they come
+# out of the pad-coverage check in _try_commit_slide, which handles both this
+# and dekes uniformly.)
 @export var cross_crease_slot_depth: float = 5.0        # m in front of goal the pass window covers
 @export var cross_crease_lateral_ratio: float = 1.5     # |vx| must exceed |vz|*this to count as a pass
 @export var cross_crease_min_lateral_speed: float = 6.0 # m/s puck lateral speed to trigger
 @export var cross_crease_lead_time: float = 0.30        # s to project the puck forward for the target
-@export var cross_crease_push_speed: float = 6.0        # m/s standing desperation push toward crossing
+# Human read delay before the push engages — the goalie doesn't move for this
+# long after the pass releases. On a quick royal-road one-timer this delay alone
+# loses him the race; raise it to make the back door deadlier, lower it (toward
+# the dangle/shot reaction_delay) to give him a fighting chance on the cross.
+@export var cross_crease_react_delay: float = 0.12      # s before the standing drive engages
 @export var cross_crease_push_duration: float = 0.50    # s the standing push stays committed
 # When a slide commits toward a post (extreme lateral target), the goalie
 # also pulls deep so the sealing pad presses the post — backdoor /
@@ -525,6 +545,7 @@ var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
 var _screen_cfg: GoalieBehaviorRules.ScreenConfig
 var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
+var _crease_jam_cfg: GoalieBehaviorRules.CreaseJamConfig
 # Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
 # array. PackedVector3Array.clear() keeps capacity across shots.
 var _screen_positions: PackedVector3Array = PackedVector3Array()
@@ -549,8 +570,11 @@ var _prev_puck_position: Vector3 = Vector3.ZERO
 var _puck_approach_velocity: float = 0.0
 var _reading_slapper_tell: bool = false
 # Cross-crease push state (standing "push on feet" toward a detected pass).
-# `_cross_crease_timer` counts down while the push is committed; while > 0 the
-# standing movement drives toward `_cross_crease_target_x` at push speed.
+# `_cross_crease_react_timer` counts down the human read delay after the pass is
+# detected; when it expires the push engages and `_cross_crease_timer` counts
+# down while the drive is committed (drives toward `_cross_crease_target_x` at
+# the normal T-push speed, accelerating from rest — see _move_along_arc).
+var _cross_crease_react_timer: float = 0.0
 var _cross_crease_timer: float = 0.0
 var _cross_crease_target_x: float = 0.0
 # Lunge state: active timer counts down while the blocker is extended;
@@ -624,7 +648,13 @@ func get_buffer_depth() -> int:
 	return _state_buffer.size()
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
-func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: float, assigned_is_server: bool) -> void:
+# `profile` selects the difficulty tuning (Normal vs Hard). Null = Hard, i.e.
+# the authored @export defaults unchanged — so tutorial / replay / single-goalie
+# spawns that don't pass one behave exactly as before. Applied BEFORE
+# _configure_collaborators() so the cached rule configs pick up the changed
+# values.
+func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: float, assigned_is_server: bool,
+		profile: GoalieSkillProfile = null) -> void:
 	goalie = assigned_goalie
 	puck = assigned_puck
 	is_server = assigned_is_server
@@ -636,6 +666,8 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	_current_depth = depth_defensive
 	_tracked_threat_position = puck.global_position
 	_prev_puck_position = puck.global_position
+	if profile != null:
+		_apply_skill_profile(profile)
 	_configure_collaborators()
 	_sm.transitioned.connect(_on_sm_transitioned)
 	_reaction.started.connect(_on_reaction_started)
@@ -652,6 +684,18 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 		puck.puck_hit_boards.connect(_on_reaction_resolved)
 		puck.puck_touched_post.connect(_on_reaction_resolved)
 		puck.puck_hit_goal_body.connect(_on_reaction_resolved)
+
+# Overwrite the difficulty-varying @exports from a skill profile. Only the knobs
+# the profile carries are touched; everything else keeps its authored default.
+# Deliberately does NOT touch reaction_delay or t_push_speed — AIActionScoring
+# mirrors those to predict the goalie, so they stay consistent across tiers (see
+# GoalieSkillProfile). Called from setup() before the cached configs are built.
+func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
+	arm_reaction_delay = profile.arm_reaction_delay_s
+	cross_crease_react_delay = profile.cross_crease_react_delay_s
+	goalie_poke_radius = profile.poke_radius_m
+	screen_max_extra_delay = profile.screen_max_extra_delay_s
+	move_read_max_delay = profile.move_read_max_delay_s
 
 # Wired by GameManager so the crease-jam check can scan opposing skaters
 # without the controller knowing about the registry / spawner.
@@ -731,6 +775,10 @@ func _build_rule_configs() -> void:
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
 	_move_read_cfg.reference_speed = move_read_reference_speed
 	_move_read_cfg.max_delay = move_read_max_delay
+	_crease_jam_cfg = GoalieBehaviorRules.CreaseJamConfig.new()
+	_crease_jam_cfg.puck_distance = jam_puck_distance
+	_crease_jam_cfg.opponent_distance = jam_opponent_distance
+	_crease_jam_cfg.carrier_max_speed = jam_carrier_max_speed
 	_universal_reaction_cfg = GoalieBehaviorRules.UniversalReactionConfig.new()
 	_universal_reaction_cfg.min_speed = universal_react_min_speed
 	_universal_reaction_cfg.max_time_to_impact = universal_react_max_time_to_impact
@@ -764,6 +812,7 @@ func reset_to_crease() -> void:
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
 	_prev_puck_position = _tracked_threat_position
+	_cross_crease_react_timer = 0.0
 	_cross_crease_timer = 0.0
 	_cross_crease_target_x = 0.0
 	_lunge_active_timer = 0.0
@@ -867,10 +916,14 @@ func _compute_threat_position() -> Vector3:
 	if carrier == null or _reaction.reacting \
 			or _sm.is_rvh() \
 			or _sm.current == State.RECOVERING:
-		# Loose puck (or reaction-frozen / RVH / recovering): track raw puck
-		# position with PUCK velocity projection so cross-crease passes and
-		# loose-puck plays get the same lookahead carriers get.
-		var puck_lead: Vector3 = _puck_velocity_est * puck_velocity_lead_time
+		# Loose puck (or reaction-frozen / RVH / recovering): track the raw puck
+		# position. A SEPARATE, near-zero lead is used here (vs the dangle branch
+		# below) so the goalie does NOT front-run a back-door pass — he reads where
+		# the puck IS, not where it's headed, and so loses the race across the
+		# crease to a hard cross-seam pass exactly like a real goalie. The lead
+		# scales with puck speed, so it only ever mattered for FAST loose pucks
+		# (passes); a slow rebound is unaffected either way.
+		var puck_lead: Vector3 = _puck_velocity_est * loose_puck_velocity_lead_time
 		puck_lead.y = 0.0
 		return puck.global_position + puck_lead
 	# COILING and SLIDING share the down-state chest weight (they're part of
@@ -961,12 +1014,16 @@ func _update_state(delta: float) -> void:
 			elif _is_carrier_at_doorstep() and not _reaction.reacting:
 				# Slapshot windup at point-blank range — close-range slapshots
 				# travel faster than the goalie can react after release, so the
-				# drop has to happen during the windup. This is the only
-				# proactive drop trigger from STANDING/READY; everything else
-				# (stickhandlers, loose pucks, scrambles) drops reactively via
-				# shot reaction or save contact. Crease scrambles still pin
-				# the goalie DOWN via _is_threat_pressing in _update_state's
-				# BUTTERFLY → RECOVERING gate.
+				# drop has to happen during the windup. A controlled stickhandler
+				# in space still keeps the goalie up (force the release); the
+				# net-front JAM below is the separate scramble trigger.
+				_enter_butterfly()
+			elif _should_seal_crease_jam() and not _reaction.reacting:
+				# Net-front jam: a loose-puck scramble, a slow carrier jammed at
+				# the doorstep, or a teammate corralling a contested puck in the
+				# crease. Seal the ice low so a stick battle can't be banged
+				# through the STANDING 5-hole. Distinct from a controlled carrier
+				# attacking with space (handled by the stay-up default).
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -1036,8 +1093,8 @@ func _is_ready_situation() -> bool:
 # goalie prematurely. The actual wrister release fires the existing reaction
 # pipeline, which drops on low projection.
 #
-# Crease scrambles (loose puck + multiple sticks) still drop via the
-# separate _is_jammed_at_crease check.
+# Crease scrambles (loose puck or a slow carrier jammed in tight) drop via the
+# separate _should_seal_crease_jam check.
 func _is_carrier_at_doorstep() -> bool:
 	# Lunge precedence — give the stick first.
 	if _lunge_active_timer > 0.0:
@@ -1056,35 +1113,52 @@ func _is_carrier_at_doorstep() -> bool:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
 
-# True when there's LOOSE-puck traffic in the crease — puck close to the
-# goalie with no carrier and at least one opposing skater within stick-poke
-# range of it. Used by the recovery gate (_is_threat_pressing) to hold
-# butterfly when the goalie is already down and a loose puck is rattling
-# around with opponents nearby (rebound scramble, tip attempt with the
-# puck loose, etc.).
+# True when there's a net-front JAM the goalie should seal: a loose-puck
+# scramble in the crease (puck close, no carrier, an opposing skater on it) OR a
+# SLOW opposing carrier jammed at the doorstep. The slow-carrier gate is the
+# realism line — a fast carrier driving the net is an attack (stay up, force the
+# release), a slow one jamming in the paint is a battle (seal the ice). The pure
+# threshold decision lives in GoalieBehaviorRules.is_crease_jam; this method
+# gathers the scene inputs.
 #
-# Does NOT trigger butterfly entry — proactive drops are now slapshot-
-# windup only (_is_carrier_at_doorstep) plus save contact and shot
-# reaction. A single stickhandler approaching the crease isn't a "jam"
-# and shouldn't force the goalie down; coaches teach staying up against
-# controlled carry. The carrier-near-goalie case is handled separately
-# by _is_threat_pressing's first condition.
-func _is_jammed_at_crease() -> bool:
+# A jam is any of: a loose-puck scramble in the crease, a SLOW opposing carrier
+# jammed at the doorstep, or a teammate corralling a CONTESTED puck on the
+# doorstep (opponent within poke range — one strip from a goal). Drives both the
+# proactive butterfly entry in _update_state and the recovery hold in
+# _is_threat_pressing, so the goalie seals a contested crease and stays sealed
+# rather than popping up into a poke-check-and-bang-it-in.
+func _should_seal_crease_jam() -> bool:
+	# Cheap reject before any skater scan — a jam only matters in the goalie's lap.
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
-	if puck.get_carrier() != null:
-		return false
+	var carrier: Skater = puck.get_carrier()
+	if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
+		# Opposing carrier → jam only if slow.
+		return GoalieBehaviorRules.is_crease_jam(
+				puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
+				true, carrier.velocity.length(), INF, _crease_jam_cfg)
+	# Loose puck, or a teammate-controlled puck: a jam when an opponent is within
+	# poke range of the puck in the goalie's lap.
+	var nearest_opp: float = _nearest_opposing_skater_dist_to_puck()
+	return GoalieBehaviorRules.is_crease_jam(
+			puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
+			false, 0.0, nearest_opp, _crease_jam_cfg)
+
+# Distance from the nearest non-ghost opposing skater to the puck, or INF if
+# there are none (or no skater getter wired). Ghosted players (offside / icing)
+# can't play the puck, so they don't make a jam.
+func _nearest_opposing_skater_dist_to_puck() -> float:
 	if not _skater_getter.is_valid():
-		return false
+		return INF
 	var skaters: Array = _skater_getter.call()
+	var nearest: float = INF
 	for skater: Skater in skaters:
-		if skater == null:
+		if skater == null or skater.is_ghost:
 			continue
 		if team_id != -1 and skater.get_team_id() == team_id:
 			continue
-		if skater.global_position.distance_to(puck.global_position) < jam_opponent_distance:
-			return true
-	return false
+		nearest = minf(nearest, skater.global_position.distance_to(puck.global_position))
+	return nearest
 
 # True when an opposing shooter is close enough to the goalie that the stick
 # blade should actively point at the puck side. Carrier within
@@ -1382,11 +1456,12 @@ func _is_threat_pressing() -> bool:
 		var carrier: Skater = puck.get_carrier()
 		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
-	# Crease jam: hold butterfly while opponents are within poke range of the
-	# puck in the goalie's lap, even if the puck is loose and slow. Same gate
-	# as the entry trigger — if conditions still warrant butterfly entry, they
-	# warrant staying down.
-	if _is_jammed_at_crease():
+	# Crease jam: hold butterfly through a net-front scramble — the same gate that
+	# triggers the proactive drop in _update_state (no pop-up mid-battle). Covers a
+	# loose puck, a slow opposing carrier, and a teammate corralling a contested
+	# puck on the doorstep (poke-checked loose and banged in through a goalie
+	# standing back up).
+	if _should_seal_crease_jam():
 		return true
 	var speed_low: bool
 	var moving_away: bool
@@ -1524,10 +1599,13 @@ func _move_along_arc(delta: float) -> Vector2:
 			_five_hole_openness = lerpf(_five_hole_openness, five_hole_base, part_lerp_speed * delta)
 		return current
 	var target_xz: Vector2 = _arc_target_xz()
-	# Cross-crease "push on feet": a detected pass overrides the lateral target
-	# toward the projected crossing and drives at push speed — a desperation
-	# T-push to beat the puck to the far post while staying up to react high.
-	# Host-only (the timer is host-set; clients adopt position via broadcast).
+	# Cross-crease "push on feet": after the read delay (handled in
+	# _update_cross_crease), a detected pass overrides the lateral target toward
+	# the projected crossing and the goalie commits a hard T-push toward the far
+	# man — but at the NORMAL t_push_speed, accelerating from rest like any push.
+	# No turbo and no instant-on: it's an honest race the goalie loses to a quick
+	# cross-seam one-timer and wins against a slow feed. Host-only (the timer is
+	# host-set; clients adopt position via broadcast).
 	var cross_crease_push: bool = is_server and _cross_crease_timer > 0.0
 	if cross_crease_push:
 		target_xz.x = _cross_crease_target_x
@@ -1536,7 +1614,7 @@ func _move_along_arc(delta: float) -> Vector2:
 	var move_speed: float
 	var five_hole_target: float
 	if cross_crease_push:
-		move_speed = cross_crease_push_speed
+		move_speed = t_push_speed
 		five_hole_target = five_hole_t_push_max
 	elif delta_2d < 0.01:
 		move_speed = shuffle_speed
@@ -1548,16 +1626,11 @@ func _move_along_arc(delta: float) -> Vector2:
 		move_speed = shuffle_speed
 		five_hole_target = five_hole_shuffle_max
 	# Ramp the effective speed toward the desired so a push isn't instant — the
-	# goalie accelerates onto its edge. The cross-crease desperation push bypasses
-	# the ramp (it's already a committed all-out push); carry its speed into
-	# `_move_speed_current` so a normal track continuing afterward doesn't re-ramp.
-	var effective_speed: float
-	if cross_crease_push:
-		effective_speed = move_speed
-		_move_speed_current = move_speed
-	else:
-		_move_speed_current = move_toward(_move_speed_current, move_speed, lateral_accel * delta)
-		effective_speed = _move_speed_current
+	# goalie accelerates onto its edge. The cross-crease drive ramps the same way
+	# (a real push-off builds speed), which is part of why it loses the race to a
+	# hard pass.
+	_move_speed_current = move_toward(_move_speed_current, move_speed, lateral_accel * delta)
+	var effective_speed: float = _move_speed_current
 	var step: float = effective_speed * delta
 	var new_xz: Vector2
 	if delta_2d <= step or delta_2d < 0.0001:
@@ -1834,6 +1907,12 @@ func _update_body_parts(delta: float) -> void:
 func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	if _cross_crease_timer > 0.0:
 		_cross_crease_timer -= delta
+	# Tick the human read delay; when it expires the committed drive engages.
+	if _cross_crease_react_timer > 0.0:
+		_cross_crease_react_timer -= delta
+		if _cross_crease_react_timer <= 0.0:
+			_cross_crease_react_timer = 0.0
+			_cross_crease_timer = cross_crease_push_duration
 	if carrier != null:
 		return
 	if _reaction.reacting or _sm.is_rvh():
@@ -1844,14 +1923,22 @@ func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	if absf(cross_vx) < cross_crease_min_lateral_speed:
 		return
 	# Project the puck forward along its lateral motion. The slide consumer
-	# uses the sign to pick which post to seal; the standing "push on feet"
-	# consumer uses the value directly. Clamp to the seal extent so the
-	# standing push doesn't overshoot the sealing position.
+	# uses the sign to pick which post to seal; the standing drive consumer
+	# uses the value directly (where the receiver is). Clamp to the seal extent
+	# so the standing push doesn't overshoot the sealing position. Re-aimed each
+	# frame — an upright goalie can still adjust the drive on its feet (unlike a
+	# committed butterfly slide).
 	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
 	var target_x: float = puck.global_position.x + cross_vx * cross_crease_lead_time
 	target_x = _slide.clamp_lateral_target(target_x, _goal_center_x, net_half_width, pad_edge)
 	_cross_crease_target_x = target_x
-	_cross_crease_timer = cross_crease_push_duration
+	# Read the pass once, then commit a single delayed drive — don't restart the
+	# delay or re-arm while a read or drive is already in flight.
+	if _cross_crease_timer <= 0.0 and _cross_crease_react_timer <= 0.0:
+		if cross_crease_react_delay > 0.0:
+			_cross_crease_react_timer = cross_crease_react_delay
+		else:
+			_cross_crease_timer = cross_crease_push_duration
 
 # Universal puck-tracking trigger. Runs each host physics frame on loose
 # pucks; if the puck is fast and on track for the net within the
