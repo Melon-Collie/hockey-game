@@ -134,6 +134,29 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	return best_pos
 
 
+# ── Body check ───────────────────────────────────────────────────────────────
+
+# Evaluates whether the on-puck pressurer should commit to a body check on the
+# live OPPONENT carrier this tick (AIBodyCheck), resolving the carrier from the
+# snapshot. Returns a no-commit Result when the puck is loose, carried by a
+# teammate, or absent — so only a real opponent carrier is ever a hit target.
+# Used by PRESSURE (which also serves FORECHECK's F1), the pressurers that have
+# support behind them; the last-man gap defender never calls this.
+static func evaluate_body_check(ctx: RoleContext) -> AIBodyCheck.Result:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return AIBodyCheck.Result.new()
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	if carrier_pid == -1 or ctx.team_id_by_peer.get(carrier_pid, -1) == ctx.team_id:
+		return AIBodyCheck.Result.new()
+	if not ctx.snapshot.skater_states.has(carrier_pid):
+		return AIBodyCheck.Result.new()
+	var carrier: SkaterNetworkState = ctx.snapshot.skater_states[carrier_pid]
+	return AIBodyCheck.evaluate(
+			ctx.self_pos, ctx.self_max_speed, ctx.self_weight,
+			ctx.self_body_check_transfer, ctx.self_stagger_timer,
+			carrier.position, carrier.velocity)
+
+
 # ── Context resolution ──────────────────────────────────────────────────────
 
 # Returns the puck-carrying teammate's position, or Vector3.ZERO if

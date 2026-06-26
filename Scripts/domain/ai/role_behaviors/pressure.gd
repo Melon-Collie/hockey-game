@@ -57,6 +57,19 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 
+	# Commit to a body check on the carrier when it's a real, reachable,
+	# separating hit (AIBodyCheck). PRESSURE always has support behind it —
+	# ANCHOR/COVER in DZONE, F2/F3 on the forecheck (F1 dispatches here) — so
+	# the commit risk is acceptable; the last-man gap defender (CONTAIN) never
+	# hunts hits. When committed, drive at the body intercept; the state machine
+	# forces sprint so the closing collision delivers the hit.
+	var check: AIBodyCheck.Result = AIRoleHelpers.evaluate_body_check(ctx)
+	if check.commit:
+		d.commit_check = true
+		d.check_target = check.target
+		d.target_position = check.target
+		return d
+
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 

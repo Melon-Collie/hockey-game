@@ -685,6 +685,11 @@ var _max_wrister_charge_distance: float = 0.7
 # (opponent ETA/reach, the loose-puck election) stays on the shared defaults.
 var _self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 var _self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+# Body-check delivery (Size + Physical), so a defensive role can predict THIS
+# bot's hit strength before committing to a check. League baselines until
+# apply_capabilities runs.
+var _self_weight: float = 1.0
+var _self_body_check_transfer: float = 0.45
 
 # Sticky state for _carry_aim_track_fire's mode (shot-aim vs carry-
 # aim with stickhandle). Without it, when shoot vs carry scores are
@@ -834,6 +839,8 @@ func apply_capabilities(caps: AISelfCapabilities) -> void:
 	_receive_body_offset = caps.blade_span - RECEIVE_BODY_INSET_M
 	_poke_jab_reach = caps.blade_span + GameRules.POKE_RADIUS_M
 	_self_wrister_shot_speed = caps.wrister_shot_speed
+	_self_weight = caps.self_weight
+	_self_body_check_transfer = caps.self_body_check_transfer
 
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
@@ -1136,11 +1143,18 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
 		_apply_steering(input, snapshot, self_pos, decision.target_position)
-		# Sprint to close a long gap to the role's destination — backcheck
-		# racing home, forecheck closing from depth, breakout up-ice. The gap
-		# gate keeps a bot camped near its anchor (or a pre-aimed FINISHER) off
-		# the throttle; the turn gate keeps it from sprinting into a sharp cut.
-		_resolve_sprint(input, self_state, self_pos, decision.target_position, false, false)
+		if decision.commit_check:
+			# Body-check commit: drive THROUGH the carrier at max closing
+			# velocity. Force sprint even at short range — the gap gate would
+			# otherwise ease off near contact, softening the hit. Respect the
+			# hard exhaustion lockout.
+			input.sprint_held = self_state != null and not self_state.sprint_locked
+		else:
+			# Sprint to close a long gap to the role's destination — backcheck
+			# racing home, forecheck closing from depth, breakout up-ice. The gap
+			# gate keeps a bot camped near its anchor (or a pre-aimed FINISHER) off
+			# the throttle; the turn gate keeps it from sprinting into a sharp cut.
+			_resolve_sprint(input, self_state, self_pos, decision.target_position, false, false)
 		# Deflection routine: FINISHER raises its blade to tip an incoming
 		# ELEVATED on-net shot (a grounded blade flies under it). Off-puck
 		# only — the controller ignores voluntary lifts while carrying.
@@ -1223,6 +1237,9 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
+	ctx.self_weight = _self_weight
+	ctx.self_body_check_transfer = _self_body_check_transfer
+	ctx.self_stagger_timer = self_state.stagger_timer if self_state != null else 0.0
 	if _team_brain != null:
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
@@ -1867,6 +1884,17 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 					actual_travel.length(),
 					_pre_aim_ticks_observed, _shoot_charge_tick, total_ticks])
 		_set_state(_post_puck_lost_state(snapshot))
+		return
+
+	# Mid-charge bail on a body check: a hit landed while winding up knocks
+	# the bot off-balance (stagger_timer set), so cancel the charge rather
+	# than flail a shot through it. Any-direction (a hit from behind staggers
+	# too), unlike the forward-only opponent bail below.
+	var charge_self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if _shoot_charge_tick > 0 and charge_self_state != null \
+			and charge_self_state.stagger_timer > 0.0:
+		input.block_held = true
+		_set_state(State.CARRY)
 		return
 
 	# Mid-charge bail: opponent closing in from the front. block_held

@@ -88,6 +88,11 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	caps.max_accel = thrust
 	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
 	caps.wrister_shot_speed = max_wrister_power
+	# Scaled body-check delivery (set on the skater by super.apply_attributes
+	# above) so AIBodyCheck predicts THIS bot's hit strength.
+	if skater != null:
+		caps.self_weight = skater.weight
+		caps.self_body_check_transfer = skater.body_check_transfer
 	_agent.apply_capabilities(caps)
 
 

@@ -61,6 +61,12 @@ var acceleration_by_peer: Dictionary = {}
 var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # Also the upper clamp on this bot's distance-adaptive pass launch speed.
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+# This bot's body-check delivery (Size + Physical) and current stagger, so the
+# on-puck defensive roles (PRESSURE / FORECHECK F1) can decide whether a check
+# is worth committing to via AIBodyCheck. League baselines / 0 when unwired.
+var self_weight: float = 1.0
+var self_body_check_transfer: float = 0.45
+var self_stagger_timer: float = 0.0
 
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the

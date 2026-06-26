@@ -39,3 +39,13 @@ var pass_target_peer_id: int = -1
 # reward the pass via no-charge goalie prediction; and gates the
 # CHASE_PUCK fire-on-zone-entry transition when the puck arrives).
 var is_one_timer_ready: bool = false
+
+# Body-check commit — set by an on-puck defensive role (PRESSURE /
+# FORECHECK F1) when AIBodyCheck says a hit on the carrier is worth
+# committing to. When true, the state machine steers at `check_target`
+# (the body intercept) and forces sprint so the bot drives THROUGH the
+# carrier at max closing velocity — the emergent collision delivers the
+# hit. `target_position` is set to the same point so steering/sprint
+# agree even if a consumer ignores the flag.
+var commit_check: bool = false
+var check_target: Vector3 = Vector3.ZERO

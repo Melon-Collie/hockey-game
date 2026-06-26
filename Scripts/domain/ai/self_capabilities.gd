@@ -41,3 +41,14 @@ var blade_span: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLA
 # upper clamp on the bot's distance-adaptive pass launch speed (its hardest
 # possible pass) — see AIActionScoring.pass_launch_speed.
 var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+
+# Body-check delivery (Size + Physical), used by AIBodyCheck to predict how hard
+# a hit this bot would land before committing to it — the victim impulse is
+# `approach × (self_weight / victim_weight) × self_body_check_transfer` (see
+# Skater._resolve_player_collisions). A high-Size/Physical bot predicts harder
+# hits and so commits to checks more readily; a light/low-Physical bot rarely
+# clears the "real hit" bar and won't run around whiffing checks. Defaults are
+# the league baseline (Skater.weight / body_check_transfer defaults) so an
+# unwired caps reproduces an average checker.
+var self_weight: float = 1.0
+var self_body_check_transfer: float = 0.45

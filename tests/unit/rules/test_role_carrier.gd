@@ -83,6 +83,35 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
+# ─── stagger: don't wind up a shot off-balance ──────────────────────────────
+
+func test_staggered_carrier_holds_instead_of_firing() -> void:
+	# Reuse the pressured-breakout setup that reliably fires a PASS: carrier
+	# boxed by forecheckers with an open up-wall outlet.
+	var self_pos := Vector3(3, 0, 20)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(11, 0, 11)],     # open outlet
+			[3, 1, Vector3(1.5, 0, 18.0)],        # forechecker
+			[4, 1, Vector3(3.0, 0, 17.5)],        # forechecker
+	]
+
+	# Not staggered → commits the fire (the breakout pass).
+	var c1 := AIRoleCarrier.new()
+	c1.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c1.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"pressured carrier commits a fire (breakout pass) when not staggered")
+
+	# Staggered → holds the puck rather than flailing a release off-balance,
+	# even though the fire would otherwise win.
+	var ctx_staggered: RoleContext = _make_ctx(self_pos, skaters)
+	ctx_staggered.self_stagger_timer = 0.5
+	var c2 := AIRoleCarrier.new()
+	c2.decide(ctx_staggered)
+	assert_eq(c2.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"staggered carrier holds instead of committing the fire")
+
+
 # ─── reset() ──────────────────────────────────────────────────────────────
 
 func test_reset_clears_all_persistent_state() -> void:
