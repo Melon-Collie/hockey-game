@@ -7,13 +7,18 @@ class_name PuckReceptionRules
 # poorly-oriented blade.
 #
 #   pickup_max_speed:    absolute puck speed below which pickup always succeeds
-#   deflect_min_speed:   baseline relative-speed threshold (puck vs blade)
-#   alignment_bonus:     extra m/s of relative speed tolerated when the blade
+#   deflect_min_speed:   baseline closing-speed threshold. Set comfortably above
+#                        pass speed (snap 14 / charged 19 m/s) so any pass is
+#                        receivable at ANY blade angle — the alignment bonus only
+#                        extends the catch ceiling into genuine hard-shot range.
+#   alignment_bonus:     extra m/s of closing speed tolerated when the blade
 #                        face is pointed directly into the incoming puck
 #
-# Cushion (blade moving with the puck) is captured implicitly by using the
-# puck-relative-to-blade velocity for both the threshold check and the
-# alignment dot product.
+# Cushion is asymmetric: drawing the blade BACK with the puck lowers the closing
+# speed (the absorb-a-hard-pass skill), but skating INTO the puck must never make
+# a catch HARDER than a static blade would — otherwise meeting a pass (what bots
+# always do) fumbles catchable pucks. So the closing speed is capped at the
+# puck's own speed: blade motion can only ever help, never penalize.
 static func should_receive(
 		puck_velocity: Vector3,
 		blade_velocity: Vector3,
@@ -21,10 +26,15 @@ static func should_receive(
 		pickup_max_speed: float,
 		deflect_min_speed: float,
 		alignment_bonus: float) -> bool:
-	if puck_velocity.length() <= pickup_max_speed:
+	var puck_speed: float = puck_velocity.length()
+	if puck_speed <= pickup_max_speed:
 		return true
 	var rel_vel: Vector3 = puck_velocity - blade_velocity
 	var rel_speed: float = rel_vel.length()
+	# Cushion only ever helps. A retreating blade (rel_speed < puck_speed) lowers
+	# the closing speed; a blade closing on the puck (rel_speed > puck_speed) is
+	# clamped back to the puck's own speed so it's no worse than a static blade.
+	var closing_speed: float = minf(rel_speed, puck_speed)
 	var alignment: float = 0.0
 	if rel_speed > 0.001:
 		# -rel_vel points from puck toward blade; dot with face normal = how
@@ -32,7 +42,7 @@ static func should_receive(
 		# the blade face — no bonus.
 		alignment = maxf(0.0, -rel_vel.normalized().dot(blade_face_normal))
 	var threshold: float = deflect_min_speed + alignment_bonus * alignment
-	return rel_speed < threshold
+	return closing_speed < threshold
 
 
 # Pure: horizontal unit vector perpendicular to the stick shaft (top_hand →
