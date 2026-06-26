@@ -115,6 +115,33 @@ static func get_ui_colors(slot: int, team_id: int) -> Dictionary:
 	return {"base": light, "stripe": preset.primary, "text": preset.primary}
 
 
+# Stripe colors for score surfaces (scorebug + box-score period summary), where
+# the two teams' stripes sit close together and must read as clearly distinct.
+# Home always wears its primary. Away wears whichever of its primary/secondary
+# sits farther from the home primary in RGB space, so two same-family palettes
+# (e.g. two reds) still separate. Returns { home, away } as Colors.
+static func get_score_stripe_pair(home_slot: int, away_slot: int) -> Dictionary:
+	var home_primary: Color = get_preset(home_slot).primary
+	var away_preset: Dictionary = get_preset(away_slot)
+	return {
+		"home": home_primary,
+		"away": farther_color(home_primary, away_preset.primary, away_preset.secondary),
+	}
+
+
+# Returns whichever of `a` or `b` sits farther from `reference` in RGB space.
+# Ties favor `a`. Used to pick a team's most-distinct accent against an opponent.
+static func farther_color(reference: Color, a: Color, b: Color) -> Color:
+	return a if _color_distance_sq(reference, a) >= _color_distance_sq(reference, b) else b
+
+
+static func _color_distance_sq(a: Color, b: Color) -> float:
+	var dr: float = a.r - b.r
+	var dg: float = a.g - b.g
+	var db: float = a.b - b.b
+	return dr * dr + dg * dg + db * db
+
+
 static func get_all_slots() -> Array[int]:
 	ensure_loaded()
 	var result: Array[int] = []

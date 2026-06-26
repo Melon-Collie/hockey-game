@@ -508,12 +508,13 @@ func test_crease_ghost_clears_on_exit() -> void:
 		{1: Vector3(0, 1, 20.0)}, -1, Vector3.ZERO, 0.1)
 	assert_false(ghosts[1], "leaving the crease clears the ghost and resets the dwell")
 
-func test_crease_carrier_not_exempt() -> void:
+func test_crease_carrier_is_exempt() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)
 	var ghosts: Dictionary = sm.compute_ghost_state(
 		{1: Vector3(0, 1, 25.5)}, 1, Vector3.ZERO,  # peer 1 carries the puck
 		GameRules.CREASE_DWELL_DURATION)
-	assert_true(ghosts[1], "the carrier is not exempt — camping the crease still ghosts")
+	assert_false(ghosts[1],
+			"the puck carrier is exempt — net drives / wraparounds don't draw crease interference")
 
 func test_crease_protection_off_in_off_preset() -> void:
 	sm.rule_set = GameRules.RuleSet.OFF

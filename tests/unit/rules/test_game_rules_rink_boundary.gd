@@ -210,3 +210,23 @@ func test_offside_dot_team_1_at_positive_z_blue_line() -> void:
 	var z: float = GameRules.NEUTRAL_ZONE_FACEOFF_DOT_Z
 	assert_eq(GameRules.offside_faceoff_dot(1,  5.0), Vector2( x,  z))
 	assert_eq(GameRules.offside_faceoff_dot(1, -5.0), Vector2(-x,  z))
+
+
+# ── Net footprint (puck-stuck-on-net detection) ──────────────────────────────
+
+func test_over_net_footprint_at_each_goal() -> void:
+	# Centred on the crossbar at either goal line, and just behind it.
+	assert_true(GameRules.is_over_net_footprint(Vector2(0.0, GameRules.GOAL_LINE_Z)))
+	assert_true(GameRules.is_over_net_footprint(Vector2(0.0, -GameRules.GOAL_LINE_Z)))
+	assert_true(GameRules.is_over_net_footprint(
+			Vector2(0.0, GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH * 0.5)))
+
+func test_not_over_net_footprint_in_open_ice() -> void:
+	assert_false(GameRules.is_over_net_footprint(Vector2(0.0, 0.0)),
+			"centre ice is nowhere near a net")
+	assert_false(GameRules.is_over_net_footprint(
+			Vector2(3.0, GameRules.GOAL_LINE_Z)),
+			"wide of the posts is outside the footprint")
+	assert_false(GameRules.is_over_net_footprint(
+			Vector2(0.0, GameRules.GOAL_LINE_Z - 2.0)),
+			"out in front of the goal line is not the net frame")

@@ -265,6 +265,22 @@ func test_block_with_invalid_peer_is_noop() -> void:
 	assert_true(tracker.has_pending_shot())
 
 
+func test_block_only_counts_inside_the_block_window() -> void:
+	# A defender touch a beat after the release is a takeaway/rebound, not a
+	# blocked shot. The pending shot stays alive (5 s SOG window) but the block
+	# window has lapsed, so on_block no longer credits.
+	var shooter := _add_player(10, 0)
+	var blocker := _add_player(20, 1)
+	tracker.on_shot_started(10)
+	tracker.tick(ShotOnGoalTracker.BLOCK_WINDOW + 0.1)
+	var credited: bool = tracker.on_block(20)
+	assert_false(credited, "touch after the block window is not a blocked shot")
+	assert_eq(blocker.stats.shots_blocked, 0)
+	assert_eq(shooter.stats.shots_blocked, 0)
+	assert_true(tracker.has_pending_shot(),
+			"the shot itself is still pending for SOG — only the block window closed")
+
+
 # ── Reset ────────────────────────────────────────────────────────────────────
 
 func test_reset_all_clears_state_and_team_shots() -> void:

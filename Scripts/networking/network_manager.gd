@@ -359,6 +359,10 @@ func start_free_play() -> void:
 	pending_away_color_slot = _pick_random_away_slot(pending_home_color_slot)
 	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
 	start_offline()
+	# Free play is a casual warmup/practice mode — no infraction whistles getting
+	# in the way. OFF disables offside + crease protection (icing is already off
+	# in the default ARCADE set). Overrides the rule_set start_offline seeded.
+	pending_game_config["rule_set"] = GameRules.RuleSet.OFF
 	is_free_play_mode = true
 
 
