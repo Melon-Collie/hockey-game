@@ -223,49 +223,53 @@ func test_assign_forecheck_f1_pressures_puck_f3_is_high() -> void:
 	assert_eq(assignments[120], AIRoleSlots.Slot.F2_MID, "leftover bot reads the mid lane")
 
 
-func test_assign_trans_od_deepest_is_contain_others_backcheck() -> void:
-	# TRANS_OD: the DEEPEST peer (closest to our +Z net) takes CONTAIN and gap-
-	# controls the carrier; the other two sprint home as BACKCHECK to cover a
-	# man each. Exactly one peer (CONTAIN) engages the carrier.
+func test_assign_trans_od_gap_is_closest_goal_side_to_carrier() -> void:
+	# TRANS_OD: CONTAIN goes to the closest GOAL-SIDE peer (between carrier and
+	# our +Z net), not the deepest. Carrier at z=0; peer 110 (z=5) is goal-side
+	# and nearest the carrier, so it gaps; the deep peer (120) and the
+	# caught-up-ice peer (100, not goal-side) backcheck to a man each.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -10.0)], # up-ice (caught) → BACKCHECK
-			[110, 0, Vector3(0.0, 0.0, 1.5)],   # mid-ice → BACKCHECK
-			[120, 0, Vector3(0.0, 0.0, 21.0)],  # deep (nearest our net) → CONTAIN
+			[100, 0, Vector3(0.0, 0.0, -8.0)],  # up-ice, NOT goal-side → BACKCHECK
+			[110, 0, Vector3(0.0, 0.0, 5.0)],   # goal-side, closest to carrier → CONTAIN
+			[120, 0, Vector3(0.0, 0.0, 20.0)],  # goal-side but deep → BACKCHECK
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	assert_eq(assignments[120], AIRoleSlots.Slot.CONTAIN,
-			"deepest bot (nearest our net) gap-controls the carrier as CONTAIN")
+	assert_eq(assignments[110], AIRoleSlots.Slot.CONTAIN,
+			"closest goal-side peer gaps the carrier as CONTAIN")
 	assert_eq(assignments[100], AIRoleSlots.Slot.BACKCHECK,
-			"up-ice bot backchecks home to a man")
-	assert_eq(assignments[110], AIRoleSlots.Slot.BACKCHECK,
-			"mid-ice bot backchecks home to a man")
+			"caught-up-ice peer backchecks home to a man")
+	assert_eq(assignments[120], AIRoleSlots.Slot.BACKCHECK,
+			"deep peer backchecks (it's not the closest to the carrier)")
+	# Exactly one engager — no double-team.
+	var contain_count: int = 0
+	for pid: int in [100, 110, 120]:
+		if assignments[pid] == AIRoleSlots.Slot.CONTAIN:
+			contain_count += 1
+	assert_eq(contain_count, 1, "exactly one CONTAIN")
 
 
-func test_assign_trans_od_only_one_engager() -> void:
-	# Whoever is deepest is the sole CONTAIN; the rest are all BACKCHECK,
-	# regardless of who is closest to the puck — no two peers engage the
-	# carrier (the old PRESSURE+CONTAIN double-team is gone).
+func test_assign_trans_od_gap_falls_back_to_deepest_when_none_goal_side() -> void:
+	# The whole team caught up-ice on the turnover — nobody is goal-side of the
+	# carrier (all on the -Z side of it). CONTAIN falls back to the deepest peer
+	# (closest to our +Z net), who recovers into the gap fastest.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -15.0)], # up-ice AND closest to puck
-			[110, 0, Vector3(0.0, 0.0, -5.0)],  # mid-ice
-			[120, 0, Vector3(0.0, 0.0, 10.0)],  # deep → CONTAIN
-			[200, 1, Vector3(0.0, 0.0, -15.0)], # opp carrier at peer 100
+			[100, 0, Vector3(0.0, 0.0, -5.0)],  # deepest of the caught peers → CONTAIN
+			[110, 0, Vector3(0.0, 0.0, -10.0)],
+			[120, 0, Vector3(0.0, 0.0, -8.0)],
+			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier; all peers are up-ice of it
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	var contain_count: int = 0
-	for pid: int in [100, 110, 120]:
-		if assignments[pid] == AIRoleSlots.Slot.CONTAIN:
-			contain_count += 1
-	assert_eq(contain_count, 1, "exactly one CONTAIN (single carrier engager)")
-	assert_eq(assignments[120], AIRoleSlots.Slot.CONTAIN,
-			"deep peer is the engager even though peer 100 is on the puck")
+	assert_eq(assignments[100], AIRoleSlots.Slot.CONTAIN,
+			"no goal-side peer → deepest (nearest our net) recovers as the gapper")
+	assert_eq(assignments[110], AIRoleSlots.Slot.BACKCHECK)
+	assert_eq(assignments[120], AIRoleSlots.Slot.BACKCHECK)
 
 
 func test_assign_hysteresis_keeps_prev_when_close() -> void:
