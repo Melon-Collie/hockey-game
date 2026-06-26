@@ -209,6 +209,15 @@ var _blade_elevation_blend: float = 0.0
 # and replicated so remotes/AI can read it. A lifted blade only meets airborne
 # pucks (to tip them); it clears grounded pucks and sticks.
 var blade_up: bool = false
+# Deliberate-deflect intent: true while a human player holds the shoot button
+# (LMB) WITHOUT carrying the puck — a committed "redirect this, don't catch it."
+# Set each tick by the controller (see SkaterController._wants_deflect); read
+# host-side by PuckController's loose-puck interaction gate, which routes blade
+# contact into a deflect off the blade face instead of corralling the puck. A
+# transient per-tick flag, recomputed from replayed inputs during reconcile, so
+# it needs no replication or snapshot. AI bots never set it (they reuse the held
+# shoot button off-puck for wrister one-timers).
+var deflect_intent: bool = false
 # Eased 0→1 toward blade_up; drives the IK blade-lift offset (see
 # SkaterIKCoordinator.blade_y_local). Mirrors _blade_elevation_blend.
 var _blade_lift_blend: float = 0.0

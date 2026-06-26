@@ -18,6 +18,16 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var alignment_receive_bonus: float = 8.0
 @export var deflect_blend: float = 0.5
 @export var deflect_speed_retain: float = 0.7
+# Speed-dependent deflection energy loss (feel pass — tune to taste). A puck at
+# or below deflect_speed_retain_ref keeps deflect_speed_retain of its speed; at
+# or above it, retention eases down to deflect_speed_retain_min so hard shots
+# don't pinball around the rink. Set deflect_speed_retain_min < 0 to disable.
+@export var deflect_speed_retain_min: float = 0.5
+@export var deflect_speed_retain_ref: float = 28.0
+# Cap on how far a deflection can bend the puck off its incoming line. Tames the
+# wild caroms a near-perpendicular / jittery blade-face normal would otherwise
+# produce. 180 disables the clamp.
+@export var deflect_max_angle_deg: float = 80.0
 @export var deflect_cooldown: float = 0.3
 @export var deflect_elevation_angle: float = 35.0
 @export var poke_strip_speed: float = 6.0
@@ -164,7 +174,8 @@ func apply_blade_deflect(skater: Skater) -> void:
 	var contact_normal: Vector3 = skater.get_blade_face_normal(linear_velocity)
 
 	var new_vel: Vector3 = PuckCollisionRules.deflect_velocity(
-			linear_velocity, contact_normal, deflect_blend, deflect_speed_retain)
+			linear_velocity, contact_normal, deflect_blend, deflect_speed_retain,
+			deflect_max_angle_deg, deflect_speed_retain_min, deflect_speed_retain_ref)
 
 	if skater.is_elevated:
 		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(

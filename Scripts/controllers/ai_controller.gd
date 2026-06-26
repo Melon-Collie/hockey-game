@@ -16,6 +16,14 @@ var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
 
+
+# Bots never set deliberate-deflect intent. The agent holds the shoot button
+# off-puck to wind up wrister one-timers (SkaterAgentStateMachine._state_one_timer_pressed),
+# expecting to CATCH the incoming puck and fire — routing that into a deflect
+# would break it. Deliberate deflection is a human-only mechanic in v1.
+func _wants_deflect(_input: InputState) -> bool:
+	return false
+
 # Scratch InputState reused every FACEOFF_PREP tick so we don't allocate per
 # frame. All flags default to false; we only overwrite mouse_world_pos / time
 # / delta. Lifetime is the controller — bots aren't re-allocated mid-match.

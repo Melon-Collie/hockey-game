@@ -229,7 +229,11 @@ func _physics_process(delta: float) -> void:
 			var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
 			var in_range: bool = dist <= PuckController.PICKUP_RADIUS
 			var rising_edge: bool = in_range and not _was_in_pickup_range
-			if in_range and _pickup_claim_floor <= 0.0 and (rising_edge or _claim_cooldown <= 0.0):
+			# A deliberate deflect (holding LMB without the puck) is NOT a pickup —
+			# suppress the speculative claim + optimistic pin so we don't predict a
+			# catch the host will resolve as a deflect (which would roll back). The
+			# deflect itself comes back authoritatively through the puck sync.
+			if in_range and not skater.deflect_intent and _pickup_claim_floor <= 0.0 and (rising_edge or _claim_cooldown <= 0.0):
 				_pickup_claim_floor = _PICKUP_CLAIM_FLOOR_S
 				_claim_cooldown = _CLAIM_COOLDOWN_S
 				NetworkManager.send_pickup_claim(

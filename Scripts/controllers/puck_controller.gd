@@ -347,6 +347,14 @@ func _check_interactions() -> void:
 					# onto the stick. Redirect off the blade face and move on.
 					puck.apply_blade_deflect(skater)
 					break
+				# Deliberate deflect: the player is holding LMB without the puck to
+				# commit to a redirect. Force the deflect off the blade face — the
+				# SAME path a too-fast puck takes naturally — bypassing the catch
+				# decision so even an otherwise-catchable (slow) puck is tipped
+				# rather than corralled. Releasing LMB returns to normal reception.
+				if skater.deflect_intent:
+					puck.apply_blade_deflect(skater)
+					break
 				var puck_vel: Vector3 = puck.get_puck_velocity()
 				var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
 				if PuckReceptionRules.should_receive(
