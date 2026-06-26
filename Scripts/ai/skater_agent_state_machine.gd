@@ -1227,11 +1227,13 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
 		ctx.strong_x = _team_brain.strong_x()
+		ctx.assigned_threat_peer = _team_brain.assigned_threat(_peer_id)
 	else:
 		ctx.anchor = self_pos
 		# Match RoleContext.new()'s default when no brain is wired (tests),
 		# since the reused instance would otherwise carry a stale value.
 		ctx.strong_x = 1.0
+		ctx.assigned_threat_peer = -1
 	return ctx
 
 

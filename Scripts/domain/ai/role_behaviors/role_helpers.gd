@@ -90,6 +90,50 @@ static func too_close_to_teammate(c: Vector3,
 	return false
 
 
+# ── Man-on-threat coverage ───────────────────────────────────────────────────
+
+# Shared "cover this assigned man" target for the backline defenders
+# (ANCHOR / COVER) when TeamBrain's threat partition hands them a specific
+# opponent. Picks the position that most deflates the carrier→man pass-threat
+# surface (lane interception × the man's resulting shot), searching a candidate
+# set centered on the midpoint between the man and our net — i.e. set up
+# goal-side of him, in the feed lane, to kill the one-timer.
+#
+# This replaces the legacy "minimize the MAX threat over ALL opponents" scoring
+# for the assigned-man case: because each backline defender gets a DISTINCT man,
+# two defenders no longer collapse onto the single most dangerous opponent.
+# Roles fall back to their all-opponents behavior when unassigned (man_pid -1).
+static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
+		carrier_pos: Vector3) -> Vector3:
+	var our_net: Vector3 = ctx.defending_goal_pos
+	var our_goalie_pos: Vector3 = resolve_our_goalie_pos(ctx)
+	var teammates: Array[Vector3] = ctx.scratch_teammates
+	collect_teammates_excluding_self(ctx, teammates)
+
+	var search_center: Vector3 = (man_pos + our_net) * 0.5
+	var candidates: Array[Vector3] = generate_candidates_around(ctx.self_pos, search_center)
+
+	var best_pos: Vector3 = ctx.self_pos
+	var best_score: float = -INF
+	for c: Vector3 in candidates:
+		if not is_legal_position(c):
+			continue
+		if too_close_to_teammate(c, teammates):
+			continue
+		# Carrier's view of defenders: our team + us hypothetically at c.
+		var defenders: Array[Vector3] = teammates.duplicate()
+		defenders.append(c)
+		# Minimize the carrier's threat of feeding THIS man (lane × his shot).
+		var threat: float = AIActionScoring.threat_surface_pass(
+				carrier_pos, man_pos, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, defenders)
+		var score: float = -threat
+		if score > best_score:
+			best_score = score
+			best_pos = c
+	return best_pos
+
+
 # ── Context resolution ──────────────────────────────────────────────────────
 
 # Returns the puck-carrying teammate's position, or Vector3.ZERO if

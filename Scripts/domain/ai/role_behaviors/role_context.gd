@@ -27,6 +27,13 @@ var team_brain: TeamBrain = null
 # BREAKOUT outlet roles read this so their strong/weak side matches the
 # brain's slot assignment. Defaults to +1 when no brain is wired (tests).
 var strong_x: float = 1.0
+# Opponent peer_id this defender is assigned to cover ("man-on-threat"),
+# from TeamBrain's central threat partition. -1 = unassigned (no brain,
+# offensive/neutral state, or a defender outside the backline) — in that
+# case defensive roles fall back to their legacy all-opponents minimax.
+# Lets ANCHOR / COVER focus on a DISTINCT man so two defenders don't both
+# collapse onto the single most dangerous opponent.
+var assigned_threat_peer: int = -1
 # Peer -> team_id lookup for opponent / teammate filtering. Live dict
 # owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. Used to
 # be a `Callable`; downgraded to a Dictionary because role decide() and
