@@ -581,7 +581,8 @@ static func score_pass(
 		net_half_width: float,
 		opponents: Array[Vector3],
 		goalie_current_pos: Vector3 = Vector3.INF,
-		pass_speed_m_s: float = PASS_SPEED_M_S) -> float:
+		pass_speed_m_s: float = PASS_SPEED_M_S,
+		goalie_unsettled_factor: float = 0.0) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
@@ -602,9 +603,14 @@ static func score_pass(
 	# carrier/puck holder) applies correctly for back-door receivers:
 	# they're off-axis from the carrier's lane → outside zone → no
 	# penalty, preserving back-door as a strong pass option.
+	# goalie_unsettled_factor lets the caller credit a feed that catches the
+	# goalie mid-slide (a cross-seam one-timer to an off-axis receiver) — the
+	# off-puck staging roles pass it so they prize the back-door spot. Default
+	# 0.0 keeps the position-only behaviour for callers that don't (SUPPORT).
+	# Receiver shot speed stays the league default (cross-player; no teammate caps).
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
-			goalie_current_pos)
+			goalie_current_pos, WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor)
 	return lane * receiver_shot
 
 

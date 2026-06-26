@@ -87,3 +87,37 @@ func test_default_factor_is_back_compatible() -> void:
 			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
 			Vector3.INF, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
 	assert_almost_eq(implicit, explicit, 0.0001)
+
+
+# ── score_pass motion factor (off-puck staging consumes this) ────────────────
+
+func test_score_pass_credits_caught_moving_goalie() -> void:
+	# A cross-seam feed (shooter weak-side, receiver strong-side) to a goalie
+	# squared to the receiver. Same geometry, only the motion factor differs —
+	# the caught-moving case must score higher so off-puck roles stage the feed.
+	var shooter := Vector3(-2.0, 0, -20.0)
+	var receiver := Vector3(2.0, 0, -20.0)
+	var goalie := _goalie_at(_arc_match_x(receiver.x))
+	var opps: Array[Vector3] = []
+	var set_s := AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, 19.0, 0.0)
+	var moving_s := AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, 19.0, 1.0)
+	assert_gt(moving_s, set_s,
+			"a feed catching the goalie moving should out-score the same feed at a set goalie")
+
+
+func test_score_pass_default_factor_back_compatible() -> void:
+	var shooter := Vector3(-2.0, 0, -20.0)
+	var receiver := Vector3(2.0, 0, -20.0)
+	var goalie := _goalie_at(_arc_match_x(receiver.x))
+	var opps: Array[Vector3] = []
+	var implicit := AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, 19.0)
+	var explicit := AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, 19.0, 0.0)
+	assert_almost_eq(implicit, explicit, 0.0001)
