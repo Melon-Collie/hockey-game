@@ -1095,6 +1095,7 @@ func _wire_sound_signals() -> void:
 			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
 			if puck != null:
 				puck.fire_stick_lift_vfx())
+	NetworkManager.nudge_received.connect(func(pos: Vector3) -> void: _play_nudge_cue(pos))
 	NetworkManager.shot_sound_received.connect(
 		func(pos: Vector3, is_slapper: bool) -> void:
 			var snd: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
@@ -1916,10 +1917,15 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 # than a wrister/slapper crack. The host re-derives a remote player's nudge from
 # the replayed input stream via _on_remote_derived_nudge (no RPC), same as shots.
 func _on_nudge_requested(velocity: Vector3) -> void:
-	SoundManager.play_world(SoundManager.Sound.STICK_LIFT, puck.get_puck_position(), -6.0, 0.06)
-	puck.fire_stick_lift_vfx()
+	# The actor's own machine plays the cue immediately (this runs on the local
+	# player's client, or on the host for a host-local player / bot).
+	_play_nudge_cue(puck.get_puck_position())
 	if NetworkManager.is_host:
 		puck.nudge(velocity)
+		var pos: Vector3 = puck.get_puck_position()
+		_record_replay_audio_event("nudge", pos, velocity.length())
+		# Fan the cue to the clients — this host/bot already played it locally.
+		NetworkManager.send_nudge_to_all(pos)
 	else:
 		var record := _registry.get_local()
 		if record != null:
@@ -1942,6 +1948,21 @@ func _on_remote_derived_nudge(velocity: Vector3, nudger_peer_id: int) -> void:
 	if _registry.resolve_peer_id(puck.carrier) != nudger_peer_id:
 		return
 	puck.nudge(velocity)
+	var pos: Vector3 = puck.get_puck_position()
+	# The host plays the remote player's nudge, and every OTHER client hears it —
+	# the nudger already played it locally the instant they tapped.
+	_play_nudge_cue(pos)
+	_record_replay_audio_event("nudge", pos, velocity.length())
+	NetworkManager.send_nudge_to_all(pos, nudger_peer_id)
+
+
+# Single nudge cue path so the sound/VFX stays identical for everyone (local
+# play, host fan-out, and remote receivers all route here). The soft fixed
+# volume is intentional — a nudge is a quiet tap, not a shot.
+func _play_nudge_cue(pos: Vector3) -> void:
+	SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, -6.0, 0.06)
+	if puck != null:
+		puck.fire_stick_lift_vfx()
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:
