@@ -17,8 +17,21 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var pickup_max_speed: float = 8.0
 @export var deflect_min_speed: float = 14.0
 @export var alignment_receive_bonus: float = 8.0
-@export var deflect_blend: float = 0.5
-@export var deflect_speed_retain: float = 0.7
+# How reflective a deflection is: 0 = pass-through with a nudge, 1 = pure bounce
+# off the blade face. Higher = the puck follows your blade angle more directly,
+# so deliberate redirects are more aim-able (and the angle cap below keeps the
+# near-head-on caroms it would otherwise reintroduce in check).
+@export var deflect_blend: float = 0.75
+# Speed-dependent deflection feel (tune to taste). Both effects ease from their
+# soft-puck value toward their hard-puck value as puck speed climbs to
+# deflect_speed_ref — a soft pass is steerable, a hard shot only glances.
+#   retain: energy kept. Hard pucks shed more so deflections don't pinball.
+@export var deflect_speed_retain: float = 0.7       # soft-puck (low speed)
+@export var deflect_speed_retain_min: float = 0.5   # hard-puck (at/above ref); < 0 disables falloff
+#   angle: cap on how far the puck bends off its incoming line.
+@export var deflect_max_angle_deg: float = 70.0     # soft-puck — sharp, steerable redirect
+@export var deflect_max_angle_deg_min: float = 30.0 # hard-puck — shallow glancing tip; < 0 disables falloff
+@export var deflect_speed_ref: float = 30.0         # speed (m/s) at which both falloffs bottom out
 @export var deflect_cooldown: float = 0.3
 @export var deflect_elevation_angle: float = 35.0
 @export var poke_strip_speed: float = 6.0
@@ -165,7 +178,9 @@ func apply_blade_deflect(skater: Skater) -> void:
 	var contact_normal: Vector3 = skater.get_blade_face_normal(linear_velocity)
 
 	var new_vel: Vector3 = PuckCollisionRules.deflect_velocity(
-			linear_velocity, contact_normal, deflect_blend, deflect_speed_retain)
+			linear_velocity, contact_normal, deflect_blend,
+			deflect_speed_retain, deflect_speed_retain_min,
+			deflect_max_angle_deg, deflect_max_angle_deg_min, deflect_speed_ref)
 
 	if skater.is_elevated:
 		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(

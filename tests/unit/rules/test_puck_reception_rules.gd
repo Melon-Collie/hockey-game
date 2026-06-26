@@ -97,3 +97,26 @@ func test_lifted_blade_interacts_with_airborne_puck() -> void:
 	# Lifted blade only reaches airborne pucks (and may only tip them — the
 	# tip-vs-catch restriction is enforced at the call site, not here).
 	assert_true(PuckReceptionRules.blade_can_interact(true, true))
+
+
+# ── blade_face_normal ────────────────────────────────────────────────────────
+
+func test_blade_face_normal_opposes_incoming_puck() -> void:
+	# Shaft runs hand(origin) → blade(+X). The face perpendicular to it that
+	# opposes a +Z-moving puck is -Z.
+	var n: Vector3 = PuckReceptionRules.blade_face_normal(
+		Vector3(1, 0, 0), Vector3.ZERO, Vector3(0, 0, 5), Vector3(1, 0, 0))
+	assert_almost_eq(n, Vector3(0, 0, -1), Vector3(0.001, 0.001, 0.001))
+
+func test_blade_face_normal_is_horizontal_unit() -> void:
+	var n: Vector3 = PuckReceptionRules.blade_face_normal(
+		Vector3(2, 0.5, 1), Vector3(0, 0.3, 0), Vector3(-1, 0, -1), Vector3(1, 0, 0))
+	assert_almost_eq(n.length(), 1.0, 0.001, "result is a unit vector")
+	assert_almost_eq(n.y, 0.0, 0.001, "result is horizontal")
+
+func test_blade_face_normal_falls_back_when_shaft_degenerate() -> void:
+	# Hand and blade coincident → use the fallback shaft direction (+X here), so
+	# the face is along ±Z; the +Z reference flips it to -Z.
+	var n: Vector3 = PuckReceptionRules.blade_face_normal(
+		Vector3.ZERO, Vector3.ZERO, Vector3(0, 0, 1), Vector3(1, 0, 0))
+	assert_almost_eq(n, Vector3(0, 0, -1), Vector3(0.001, 0.001, 0.001))

@@ -615,6 +615,15 @@ func _on_body_block_hit(body: Node3D) -> void:
 	puck.on_body_block(skater, dampen)
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
+# Whether this skater is committing to a deliberate deflect this tick. Base
+# behaviour (human players, local and remote-on-host): holding the shoot button
+# without the puck. AIController overrides this to always-false — bots reuse the
+# held shoot button off-puck to set up wrister one-timers (catch + fire), which a
+# deflect would break.
+func _wants_deflect(input: InputState) -> bool:
+	return input.shoot_held and not has_puck
+
+
 func _process_input(input: InputState, delta: float) -> void:
 	# Snapshot the blade's current contact point before any IK mutation runs
 	# this tick. The host's swept-segment pickup/poke test (PuckController._check_interactions,
@@ -634,6 +643,13 @@ func _process_input(input: InputState, delta: float) -> void:
 	# hooked under your stick) overrides regardless of possession and is what
 	# dislodges the carried puck.
 	skater.blade_up = (input.stick_lift_held and not has_puck) or skater.is_forced_lift_active()
+
+	# Deliberate-deflect intent (see Skater.deflect_intent). Holding LMB without
+	# the puck commits to redirecting a loose puck off the blade rather than
+	# corralling it; carrying the puck means LMB is a wrister charge instead, so
+	# it's gated on NOT having the puck. The host reads this in
+	# PuckController._check_interactions for every skater it simulates.
+	skater.deflect_intent = _wants_deflect(input)
 
 	# Nudge: a stick-lift TAP while carrying pushes the puck off the blade as a
 	# soft self-pass (nutmeg setup). Edge-triggered and gated to plain carry so

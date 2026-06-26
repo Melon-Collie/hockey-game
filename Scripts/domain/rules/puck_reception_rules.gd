@@ -35,6 +35,28 @@ static func should_receive(
 	return rel_speed < threshold
 
 
+# Pure: horizontal unit vector perpendicular to the stick shaft (top_hand →
+# blade_contact), picking the face that opposes reference_velocity (i.e. faces
+# an incoming puck). `fallback_stick_dir` is used as the shaft direction when the
+# hand and blade are coincident (degenerate). Shared by Skater.get_blade_face_normal
+# (live geometry) and the lag-comp pickup resolver (rewound snapshot geometry) so
+# the catch-vs-deflect decision judges against ONE definition of "blade face".
+static func blade_face_normal(
+		blade_contact: Vector3,
+		top_hand: Vector3,
+		reference_velocity: Vector3,
+		fallback_stick_dir: Vector3) -> Vector3:
+	var stick_horiz: Vector3 = blade_contact - top_hand
+	stick_horiz.y = 0.0
+	if stick_horiz.length() < 0.001:
+		stick_horiz = fallback_stick_dir
+	stick_horiz = stick_horiz.normalized()
+	var face_normal := Vector3(-stick_horiz.z, 0.0, stick_horiz.x)
+	if face_normal.dot(reference_velocity) > 0.0:
+		face_normal = -face_normal
+	return face_normal
+
+
 # Pure on-ice/off-ice gate: a blade only interacts with pucks on its own
 # vertical plane. A lifted blade (off the ice) handles airborne pucks; a
 # grounded blade handles grounded pucks. This is what lets a saucer pass fly

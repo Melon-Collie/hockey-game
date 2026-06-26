@@ -220,6 +220,22 @@ func apply_lag_comp_pickup(skater: Skater) -> void:
 	_on_puck_picked_up(skater)
 
 
+# Lag-comp counterpart to apply_lag_comp_pickup for the deflect verdict: the
+# claim's rewound state ran PuckReceptionRules.should_receive and decided the
+# contact should redirect the puck, not corral it. Same idempotency philosophy —
+# skip if the puck is now carried/locked, and skip if the present-time
+# _check_interactions already deflected this contact (it sets deflect_cooldown,
+# which is_on_cooldown reads), so a contact never deflects twice. The deflect
+# itself recomputes from present puck velocity + blade pose, like every other
+# deflect, so it stays on the one shared apply_blade_deflect path.
+func apply_lag_comp_deflect(skater: Skater) -> void:
+	if not is_instance_valid(skater) or puck.carrier != null or puck.pickup_locked:
+		return
+	if puck.is_on_cooldown(skater):
+		return
+	puck.apply_blade_deflect(skater)
+
+
 # Called after PokeClaimResolver validates a client poke claim against the
 # state buffer. Idempotency guards:
 #   - carrier == null: a host-side _check_interactions detection beat us to
@@ -345,6 +361,14 @@ func _check_interactions() -> void:
 				if skater.blade_up:
 					# Lifted blade can only tip an airborne puck — never corral it
 					# onto the stick. Redirect off the blade face and move on.
+					puck.apply_blade_deflect(skater)
+					break
+				# Deliberate deflect: the player is holding LMB without the puck to
+				# commit to a redirect. Force the deflect off the blade face — the
+				# SAME path a too-fast puck takes naturally — bypassing the catch
+				# decision so even an otherwise-catchable (slow) puck is tipped
+				# rather than corralled. Releasing LMB returns to normal reception.
+				if skater.deflect_intent:
 					puck.apply_blade_deflect(skater)
 					break
 				var puck_vel: Vector3 = puck.get_puck_velocity()
