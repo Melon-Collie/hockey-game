@@ -122,6 +122,17 @@ jobs:
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Recreate the rolling "latest" release from scratch each build. Updating
+      # it in place (allowUpdates) leaves `published_at` frozen at the original
+      # 2026-04-07 publish, so the release date shown on GitHub never moves even
+      # though the assets do. Deleting first gives every build a fresh date. The
+      # `latest` tag is re-pushed above, so download links keep working.
+      - name: Delete previous "latest" release
+        continue-on-error: true  # first run / nothing to delete
+        run: gh release delete latest --yes --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload Release
         uses: ncipollo/release-action@v1
         with:
@@ -139,5 +150,4 @@ jobs:
 
             Older builds are kept under [pre-releases](../../releases) if you need to roll back.
           allowUpdates: true
-          removeArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
