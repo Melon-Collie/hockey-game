@@ -119,6 +119,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # you re-collect it. nudge_speed is that relative tap speed (m/s).
 @export var nudge_speed: float = 2.2
 
+# Fraction of the carrier's horizontal momentum the nudged puck inherits. Below
+# 1.0 the puck drifts back RELATIVE to the carrier while skating (faster skating
+# → bigger drift), opening the nutmeg gap instead of the puck keeping perfect
+# pace. Stationary it's a no-op (skater velocity ~ 0). Keep close to 1.0 so the
+# carrier can still re-collect after the gap opens.
+@export var nudge_velocity_retain: float = 0.85
+
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
 # down the stick shaft (from the top hand toward the blade). It releases toward
@@ -819,12 +826,19 @@ func _nudge() -> void:
 	if is_replaying:
 		return
 	var skater_vel := Vector3(skater.velocity.x, 0.0, skater.velocity.z)
-	var blade_dir := skater.blade_world_velocity
+	# Blade sweep RELATIVE to the carrier: the absolute blade world velocity minus
+	# the skater's own translation. Using the absolute velocity made the push
+	# collapse to the skating direction while moving (own velocity drowns out the
+	# sweep); subtracting it recovers the true stick-sweep direction so the cursor
+	# steers the nudge at speed exactly as it does standing still.
+	var blade_dir := skater.blade_world_velocity - Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 	blade_dir.y = 0.0
 	var push := Vector3.ZERO
 	if blade_dir.length() > 0.01:
 		push = blade_dir.normalized() * nudge_speed
-	nudge_requested.emit(skater_vel + push)
+	# Inherit slightly less than full momentum so the puck drifts back relative to
+	# the carrier while skating — that drift plus the sweep push is the nutmeg gap.
+	nudge_requested.emit(skater_vel * nudge_velocity_retain + push)
 
 # ── Puck Signals ──────────────────────────────────────────────────────────────
 func on_puck_picked_up_network() -> void:
