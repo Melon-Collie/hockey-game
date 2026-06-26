@@ -1,27 +1,25 @@
 class_name PuckReceptionRules
 
 # Pure decision: when a loose puck overlaps a blade, does the skater receive it
-# (set as carrier) or deflect it (bounce off via PuckCollisionRules)? Speed
-# alone is too coarse — a well-angled blade or a stick "giving" with the puck
-# (cushion) should let a player handle a harder pass than a stationary,
-# poorly-oriented blade.
+# (set as carrier) or deflect it (bounce off via PuckCollisionRules)?
 #
 #   pickup_max_speed:    absolute puck speed below which pickup always succeeds
-#   deflect_min_speed:   baseline closing-speed threshold. Set comfortably above
-#                        pass speed (snap 14 / charged 19 m/s) so any pass is
-#                        receivable at ANY blade angle — the alignment bonus only
-#                        extends the catch ceiling into genuine hard-shot range.
-#   alignment_bonus:     extra m/s of closing speed tolerated when the blade
-#                        face is pointed directly into the incoming puck
+#   deflect_min_speed:   speed threshold for a poorly-angled blade. Set above
+#                        charged-pass speed (~19 m/s) so any pass is receivable
+#                        at ANY blade angle.
+#   alignment_bonus:     extra m/s tolerated when the blade face is square to the
+#                        incoming puck — the only thing that lets a blade corral a
+#                        hard shot, and it's purely a function of where the blade
+#                        points at contact.
 #
-# Cushion is asymmetric: drawing the blade BACK with the puck lowers the closing
-# speed (the absorb-a-hard-pass skill), but skating INTO the puck must never make
-# a catch HARDER than a static blade would — otherwise meeting a pass (what bots
-# always do) fumbles catchable pucks. So the closing speed is capped at the
-# puck's own speed: blade motion can only ever help, never penalize.
+# Reception is REACTIVE, not preemptive: it reads the puck's absolute speed and
+# the blade angle at contact, nothing else. There is deliberately no cushion /
+# "give with the puck" term — a moving blade is treated no differently from a
+# static one — because timing a backswing into an incoming pass was fiddly and
+# unintuitive (you had to pre-load it before the puck arrived). Catching a hard
+# shot is now about squaring the blade, not winding up a cushion.
 static func should_receive(
 		puck_velocity: Vector3,
-		blade_velocity: Vector3,
 		blade_face_normal: Vector3,
 		pickup_max_speed: float,
 		deflect_min_speed: float,
@@ -29,20 +27,13 @@ static func should_receive(
 	var puck_speed: float = puck_velocity.length()
 	if puck_speed <= pickup_max_speed:
 		return true
-	var rel_vel: Vector3 = puck_velocity - blade_velocity
-	var rel_speed: float = rel_vel.length()
-	# Cushion only ever helps. A retreating blade (rel_speed < puck_speed) lowers
-	# the closing speed; a blade closing on the puck (rel_speed > puck_speed) is
-	# clamped back to the puck's own speed so it's no worse than a static blade.
-	var closing_speed: float = minf(rel_speed, puck_speed)
-	var alignment: float = 0.0
-	if rel_speed > 0.001:
-		# -rel_vel points from puck toward blade; dot with face normal = how
-		# head-on the approach is. Negative means the puck is moving away from
-		# the blade face — no bonus.
-		alignment = maxf(0.0, -rel_vel.normalized().dot(blade_face_normal))
+	# How head-on the approach is: -puck_dir points from puck toward the blade;
+	# dot with the face normal = squareness. Negative (puck moving away from the
+	# face) clamps to 0, no bonus. puck_speed > pickup_max_speed here, so the
+	# normalize is safe.
+	var alignment: float = maxf(0.0, -puck_velocity.normalized().dot(blade_face_normal))
 	var threshold: float = deflect_min_speed + alignment_bonus * alignment
-	return closing_speed < threshold
+	return puck_speed < threshold
 
 
 # Pure: horizontal unit vector perpendicular to the stick shaft (top_hand →

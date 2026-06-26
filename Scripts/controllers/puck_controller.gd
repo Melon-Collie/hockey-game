@@ -375,7 +375,6 @@ func _check_interactions() -> void:
 				var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
 				if PuckReceptionRules.should_receive(
 						puck_vel,
-						skater.blade_world_velocity,
 						blade_face_normal,
 						puck.pickup_max_speed,
 						puck.deflect_min_speed,
