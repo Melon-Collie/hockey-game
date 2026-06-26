@@ -423,18 +423,18 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float) -> Ve
 	_state_buffer.clear()
 	return release_pos
 
-# Client-side prediction seed for a baby touch — the self-tap counterpart to
+# Client-side prediction seed for a nudge — the self-tap counterpart to
 # notify_local_release. Same trajectory-prediction handoff, but the puck takes
-# the full controller-computed velocity (momentum + stick nudge) instead of
-# direction × power, and the post-touch re-grab lockout uses the short
-# baby_touch_cooldown so the carrier can scoop it back up after the nutmeg.
-func notify_local_baby_touch(velocity: Vector3, rtt_ms: float) -> void:
+# the full controller-computed velocity (momentum + stick push) instead of
+# direction × power, and the post-nudge re-grab lockout uses the short
+# nudge_cooldown so the carrier can scoop it back up after the nutmeg.
+func notify_local_nudge(velocity: Vector3, rtt_ms: float) -> void:
 	var release_pos: Vector3 = puck.get_puck_position()
 	if _local_carrier_skater != null:
 		release_pos = _local_carrier_skater.get_blade_contact_global()
 		release_pos.y = puck.ice_height
 	_local_carrier_skater = null
-	_arm_provisional_lockout(puck.baby_touch_cooldown)
+	_arm_provisional_lockout(puck.nudge_cooldown)
 	_predicting_trajectory = true
 	_pending_local_release = true
 	_pending_local_release_deadline = NetworkManager.local_time() + _PENDING_RELEASE_TIMEOUT_S

@@ -12,7 +12,7 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 
 @export var max_speed: float = 38.0
 @export var reattach_cooldown: float = 0.5
-@export var baby_touch_cooldown: float = 0.15  # short re-grab denial after a self baby-touch tap
+@export var nudge_cooldown: float = 0.15  # short re-grab denial after a self nudge tap
 @export var ice_height: float = 0.0175
 @export var pickup_max_speed: float = 8.0
 @export var deflect_min_speed: float = 14.0
@@ -318,14 +318,14 @@ func release(direction: Vector3, power: float) -> void:
 		_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_released.emit()
 
-# Baby touch: a soft self-pass off the carrier's own blade. Unlike release()
+# Nudge: a soft self-pass off the carrier's own blade. Unlike release()
 # (a shot, direction × power from the blade) the velocity is a full vector the
 # controller computed from the carrier's momentum + a small stick-direction
-# nudge. Grounded only (a nutmeg lives on the ice), and the ex-carrier gets only
-# the short baby_touch_cooldown so they can re-collect the puck after it slips
-# the gap. Reuses _pending_elevation_vel so Jolt's first dynamic step keeps the
+# push. Grounded only (a nutmeg lives on the ice), and the ex-carrier gets only
+# the short nudge_cooldown so they can re-collect the puck after it slips the
+# gap. Reuses _pending_elevation_vel so Jolt's first dynamic step keeps the
 # velocity (a frozen-body linear_velocity write is otherwise zeroed on unfreeze).
-func baby_touch(velocity: Vector3) -> void:
+func nudge(velocity: Vector3) -> void:
 	var ex_carrier: Skater = carrier
 	if ex_carrier != null:
 		global_position = ex_carrier.get_blade_contact_global()
@@ -336,7 +336,7 @@ func baby_touch(velocity: Vector3) -> void:
 	_pending_elevation_vel = v
 	clear_carrier()
 	if ex_carrier != null:
-		_set_cooldown(ex_carrier, baby_touch_cooldown)
+		_set_cooldown(ex_carrier, nudge_cooldown)
 	puck_released.emit()
 
 func drop() -> void:

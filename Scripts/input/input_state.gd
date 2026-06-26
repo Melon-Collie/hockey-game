@@ -23,7 +23,7 @@ var block_held: bool = false
 var stick_lift_held: bool = false
 # Edge: stick-lift pressed THIS tick. Latched in the gatherer like shoot_pressed
 # so it survives the physics-tick / input-frame cadence mismatch and replays
-# deterministically. Drives the baby-touch self-tap (Q while carrying).
+# deterministically. Drives the nudge self-tap (Q while carrying).
 var stick_lift_pressed: bool = false
 var sprint_held: bool = false
 

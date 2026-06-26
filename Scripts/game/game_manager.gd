@@ -1661,7 +1661,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
-		local_ctrl.baby_touch_requested.connect(_on_baby_touch_requested)
+		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 	# AI bots release shots through the same signal as humans, but they live
@@ -1671,7 +1671,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# into the void.
 	if record.is_bot:
 		record.controller.puck_release_requested.connect(_on_puck_release_requested)
-		record.controller.baby_touch_requested.connect(_on_baby_touch_requested)
+		record.controller.nudge_requested.connect(_on_nudge_requested)
 	# Remote human on the host: its RemoteController runs the shot state machine from
 	# the replayed input stream and computes a host-derived shot, emitting
 	# puck_release_requested. This is the ONLY path that fires a remote human's shot —
@@ -1679,8 +1679,8 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	if NetworkManager.is_host and not record.is_local and not record.is_bot:
 		record.controller.puck_release_requested.connect(
 				_on_remote_derived_release.bind(record.peer_id))
-		record.controller.baby_touch_requested.connect(
-				_on_remote_derived_baby_touch.bind(record.peer_id))
+		record.controller.nudge_requested.connect(
+				_on_remote_derived_nudge.bind(record.peer_id))
 	# Deflection one-timer (release without possession) is a contested, lag-comp-
 	# arbitrated CLAIM — like pickup/poke — not a possessed shot, so for a remote human
 	# it fires ONLY via on_remote_one_timer_release (the RPC rewinds the puck for the
@@ -1910,38 +1910,38 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		puck_controller.notify_local_release(direction, power, shot_rtt_ms)
 
 
-# Baby touch (self-tap nutmeg setup). Mirrors the shot-release split — host fires
-# the authoritative tap, a client seeds local puck prediction — but it is NOT a
+# Nudge (self-tap nutmeg setup). Mirrors the shot-release split — host fires the
+# authoritative tap, a client seeds local puck prediction — but it is NOT a
 # shot: no shot-on-goal tracking, no shot RPC, and a soft stick-lift cue rather
-# than a wrister/slapper crack. The host re-derives a remote player's tap from the
-# replayed input stream via _on_remote_derived_baby_touch (no RPC), same as shots.
-func _on_baby_touch_requested(velocity: Vector3) -> void:
+# than a wrister/slapper crack. The host re-derives a remote player's nudge from
+# the replayed input stream via _on_remote_derived_nudge (no RPC), same as shots.
+func _on_nudge_requested(velocity: Vector3) -> void:
 	SoundManager.play_world(SoundManager.Sound.STICK_LIFT, puck.get_puck_position(), -6.0, 0.06)
 	puck.fire_stick_lift_vfx()
 	if NetworkManager.is_host:
-		puck.baby_touch(velocity)
+		puck.nudge(velocity)
 	else:
 		var record := _registry.get_local()
 		if record != null:
 			record.controller.on_puck_released_network()
-		puck_controller.notify_local_baby_touch(velocity, NetworkManager.get_latest_rtt_ms())
+		puck_controller.notify_local_nudge(velocity, NetworkManager.get_latest_rtt_ms())
 
 
-# Host-side authoritative baby touch derived from a remote player's replayed
-# input. The velocity arrives computed from the host's authoritative skater
-# state (the controller emitted it during live remote-input processing), so it's
-# used directly — no client trust. Guards mirror _on_remote_derived_release.
-func _on_remote_derived_baby_touch(velocity: Vector3, toucher_peer_id: int) -> void:
+# Host-side authoritative nudge derived from a remote player's replayed input.
+# The velocity arrives computed from the host's authoritative skater state (the
+# controller emitted it during live remote-input processing), so it's used
+# directly — no client trust. Guards mirror _on_remote_derived_release.
+func _on_remote_derived_nudge(velocity: Vector3, nudger_peer_id: int) -> void:
 	if not NetworkManager.is_host:
 		return
 	if puck == null or _registry == null or puck.carrier == null:
 		return
-	var record: PlayerRecord = _registry.get_record(toucher_peer_id)
+	var record: PlayerRecord = _registry.get_record(nudger_peer_id)
 	if record == null or record.skater == null:
 		return
-	if _registry.resolve_peer_id(puck.carrier) != toucher_peer_id:
+	if _registry.resolve_peer_id(puck.carrier) != nudger_peer_id:
 		return
-	puck.baby_touch(velocity)
+	puck.nudge(velocity)
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:
