@@ -163,31 +163,53 @@ const GOALIE_ZONE_HALF_WIDTH_M: float = 1.0
 const GOALIE_ZONE_DEPTH_M: float = 3.5
 const GOALIE_ZONE_MAX_PENALTY: float = 0.8
 
-# Lane-clear: an opponent within this perpendicular distance of the
-# puck-flight segment can intercept. Roughly stick-blade reach of a
-# lane defender, plus a small margin since defenders move during the
-# puck-flight. Raise toward 2.2 if passes still get picked off
-# mid-lane; lower toward 1.4 if bots over-reject legitimate threading
-# passes.
-const LANE_CLEAR_RADIUS_M: float = 1.8
-
-# Lane-clear reaction window. A defender at fractional position `t`
-# along the puck path has time `t × flight_time` to read the release
-# and slide their stick into the lane. Below LANE_REACTION_DELAY_S they
-# can't react in time (puck is past them before they recognize the
-# play). LANE_REACTION_RAMP_S is the additional time over which the
-# block strength ramps from 0 to full. Defenders right at the shooter
-# (low t) get little weight; defenders mid-segment carry full weight.
-# Wristers (~24 m/s), slappers (~34 m/s), and passes / quick shots
-# (~14 m/s) use this same model with different speeds → defenders
-# close to shooter contribute more for slow passes than for fast
-# slappers.
+# ── Lane interception: closest-approach reachability model ───────────────────
+# A fired puck (shot or pass) travels the straight segment from→to at
+# `puck_speed`. A defender intercepts iff they can get a stick onto the
+# puck's PATH at the moment the puck is there. We solve this per defender
+# as a closest-approach problem between two moving points:
 #
-# 0.08 s is ~two ticks at 30 Hz — trusting defenders to read a
-# release at a competitive human level rather than the 0.15 s
-# "casual reaction" that let too many bot passes through.
+#   puck(τ)     = from + dir·speed·τ                 (τ ∈ [0, T], T = len/speed)
+#   defender(τ) = D + V·τ                            (dead-reckoned momentum)
+#   τ*          = argmin |puck(τ) − defender(τ)|     (closest approach, clamped)
+#   miss        = |puck(τ*) − defender(τ*)|
+#   reach(τ*)   = REACH + CLOSE_SPEED · max(0, τ* − REACTION)
+#   block       = clamp((reach − miss) / REACH, 0, 1)
+#
+# This REPLACES the old separable `perp_factor × reaction_factor` product,
+# which multiplied "how close to the line" by "how much flight time" — so a
+# defender draped on the carrier (dead on the line, but low flight-time
+# because they sit near the release) scored block ≈ 0, `lane_clear` read ≈ 1,
+# and the pass turnover cost collapsed to zero. Posing it as reachability
+# fixes that at the root: a defender already within a stick of the path
+# blocks fully regardless of timing (no closing required), while a defender
+# off the path must physically close the gap (CLOSE_SPEED × available time)
+# before the puck passes. It is also VELOCITY-AWARE — a defender bearing down
+# on the lane is dead-reckoned INTO it (higher block); one drifting away is
+# credited less — which the old position-only model could not express.
+#
+# Faster pucks still thread better for free: a shorter flight T leaves less
+# time to close, shrinking reach. All three parameters are physical, not
+# feel-tuned:
+#   REACH       — blade reach of a lane defender (stick length).
+#   REACTION    — competitive read delay before they start closing (~2 ticks
+#                 at 30 Hz; not the 0.15 s "casual" delay that let passes
+#                 leak through).
+#   CLOSE_SPEED — a defender's lateral adjustment pace. About half top skating
+#                 speed: they pivot / crossover into the lane, they do not
+#                 straight-line sprint at it.
+const LANE_DEFENDER_REACH_M: float = GameRules.DEFAULT_STICK_LENGTH_M
 const LANE_REACTION_DELAY_S: float = 0.08
-const LANE_REACTION_RAMP_S: float = 0.10
+const LANE_DEFENDER_CLOSE_SPEED_M_S: float = 0.5 * GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+
+# A saucer pass lifts over a grounded stick but NOT a body — it's hard to
+# react a blade up into a puck flying overhead, but you can't fly it
+# through a torso. So in the airborne stretch of a saucer's flight a
+# defender's reach collapses to their BODY radius: no stick extension, no
+# closing. A defender standing dead in the lane still blocks the saucer; a
+# stick-poke-range defender no longer does. Matches the skater collision-
+# cylinder radius (GameRules canonical body half-width).
+const LANE_DEFENDER_BODY_RADIUS_M: float = GameRules.OFFSIDE_LINE_SLACK
 
 # Puck release speed assumptions for lane-clear reaction-window math.
 # `puck.release(direction, power)` consumes `direction × power` as
@@ -244,16 +266,17 @@ static func pass_launch_speed(distance: float, max_launch: float) -> float:
 # blade), but defenders close to the passer (puck hasn't lofted yet) or
 # close to the receiver (puck has landed) still block normally.
 #
-# `t` is the fractional position along the pass segment (0 = passer,
-# 1 = receiver). The puck is treated as airborne — uninterceptable by a
-# grounded blade — for t in [SAUCER_AIRBORNE_T_MIN, SAUCER_AIRBORNE_T_MAX].
-# The window is deliberately conservative (not the full 0–1 span): the
-# loft takes a beat to clear stick height, and the puck is descending /
-# grounded by the time it reaches the receiver, so a defender draped over
-# the receiver still kills it. Matches the shared elevation mechanic —
-# the same low flip a human gets toggling elevation on a pass.
-const SAUCER_AIRBORNE_T_MIN: float = 0.20
-const SAUCER_AIRBORNE_T_MAX: float = 0.70
+# Airborne span as a fixed DISTANCE off the passer's blade, NOT a fraction
+# of the flight. A saucer is a low flip: it clears stick height for a short
+# stretch, lands, and slides the rest grounded — it does not stay aloft the
+# whole way (and we can't know the live loft, since the shared elevation
+# mechanic aims at the goal line, not the receiver). So the puck is treated
+# as airborne — clears a grounded stick, only a body blocks — only within
+# this distance of the passer; past it the puck has landed and a stick
+# intercepts normally. Modelling it as a distance (not a fraction) keeps
+# the grounded zone honest: a defender 7 m out blocks a saucer whether the
+# pass is 12 m or 25 m. Deliberately conservative.
+const SAUCER_AIRBORNE_DISTANCE_M: float = 4.0
 
 # Saucer only wins over a grounded pass when it clears the lane by at
 # least this much (lane_clear delta, 0..1). Below it the loft isn't worth
@@ -700,108 +723,157 @@ static func _opponent_density(target: Vector3, opponents: Array[Vector3],
 	return clampf(weighted / float(max_count), 0.0, 1.0)
 
 
-# Lane-clear factor in [0, 1] for a FIRED puck (shot or pass). This is
-# the reaction-window model: a defender near the lane reads the release
-# and steps in, with block strength scaled by how much flight time they
-# have before the puck reaches their segment position. Public because
-# the carrier's pass scoring uses it directly — a pass is a fired puck,
-# so it gets this model rather than the geometric carry-path
-# `path_clearance`. Per-defender block strength composes:
+# Unclamped closest-approach time τ* that minimises the distance between
+# the fired puck and a dead-reckoned defender. `pvx/pvz` are the puck's
+# velocity components (dir × speed); `vx/vz` the defender's. May be < 0
+# (closest approach already behind us — defender drifting off) or
+# > seg_time (closest approach only AFTER the puck reaches the receiver —
+# the defender is trailing the play and never intercepts it in flight).
+# Callers clamp the low end to 0 and skip the high end. Pure float math
+# (no allocation) — safe per defender on the lane hot path.
+static func _lane_closest_approach_t(
+		fx: float, fz: float, pvx: float, pvz: float,
+		px: float, pz: float, vx: float, vz: float) -> float:
+	# W(τ) = (from − D) + (puck_vel − defender_vel)·τ ; minimise |W(τ)|.
+	var w0x: float = fx - px
+	var w0z: float = fz - pz
+	var wdx: float = pvx - vx
+	var wdz: float = pvz - vz
+	var wd_sq: float = wdx * wdx + wdz * wdz
+	if wd_sq < 0.0001:
+		return 0.0  # no relative motion — closest approach is now
+	return -(w0x * wdx + w0z * wdz) / wd_sq
+
+
+# Miss distance: how far the puck passes from the dead-reckoned defender
+# at approach time `t`. Pure float math — shared by the flat-pass and
+# saucer (body-only) block calculations so the two agree on the geometry.
+static func _lane_miss_at(
+		fx: float, fz: float, pvx: float, pvz: float, t: float,
+		px: float, pz: float, vx: float, vz: float) -> float:
+	var wx: float = (fx - px) + (pvx - vx) * t
+	var wz: float = (fz - pz) + (pvz - vz) * t
+	return sqrt(wx * wx + wz * wz)
+
+
+# Flat per-defender block strength [0, 1] at a given approach time `t`:
+# reach = stick + closing they can do after the reaction delay; block is
+# how far the lane penetrates that reach, normalised by a stick length
+# (one full stick inside reach ⇒ certain block). Pure float math.
+static func _lane_block_at(
+		fx: float, fz: float, pvx: float, pvz: float, t: float,
+		px: float, pz: float, vx: float, vz: float) -> float:
+	var miss: float = _lane_miss_at(fx, fz, pvx, pvz, t, px, pz, vx, vz)
+	var reach: float = LANE_DEFENDER_REACH_M + LANE_DEFENDER_CLOSE_SPEED_M_S \
+			* maxf(0.0, t - LANE_REACTION_DELAY_S)
+	return clampf((reach - miss) / LANE_DEFENDER_REACH_M, 0.0, 1.0)
+
+
+# Lane-clear factor in [0, 1] for a FIRED puck (shot or pass) — the
+# closest-approach reachability model (see the doc-block above the lane
+# constants). Public because the carrier's pass scoring uses it directly:
+# a pass is a fired puck, so it gets this model rather than the geometric
+# carry-path `path_clearance`.
 #
-#   perp_factor     = 1 - perp/LANE_CLEAR_RADIUS_M    (1 on line, 0 at radius)
-#   reaction_factor = clamp((t × flight - REACTION) / RAMP, 0, 1)
-#                                                     (0 if no time, 1 if plenty)
-#   block_strength  = perp_factor × reaction_factor
+# `lane_clear = 1 − max(block) across all defenders` — single-blocker
+# model: the worst defender for the puck-flight defines the clearness.
+# Max (not sum) avoids double-counting two defenders side by side.
 #
-# Lane clear = 1 - max(block_strength) across all defenders. Single-
-# blocker model: the worst defender for the puck-flight defines the
-# lane clearness. Taking the max instead of summing avoids
-# double-counting two defenders standing next to each other.
+# `puck_speed_m_s` is the actual speed the puck travels the segment —
+# shots ~30 m/s, passes ~14–20 m/s. Faster pucks leave defenders less
+# time to close, so they contribute less (falls out of the geometry).
 #
-# `puck_speed_m_s` should be the actual speed the puck travels along
-# the segment — shots ~30 m/s, passes ~22 m/s. Faster pucks → less
-# reaction time → defenders contribute less.
-#
-# Only counts opponents whose projection onto the segment falls between
-# the endpoints (t ∈ [0, 1]).
+# `opponent_vels` is an OPTIONAL parallel array of defender velocities
+# (index-matched to `opponents`). When empty (or shorter), the missing
+# defenders are read as stationary — every position-only caller keeps
+# working; the carrier's pass scoring passes real velocities so a
+# defender bearing down on the lane is priced as the threat they are.
 static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
-		puck_speed_m_s: float) -> float:
+		puck_speed_m_s: float, opponent_vels: Array[Vector3] = []) -> float:
 	var dx: float = to.x - from.x
 	var dz: float = to.z - from.z
 	var line_len_sq: float = dx * dx + dz * dz
 	if line_len_sq < 0.01:
 		return 1.0  # degenerate (overlapping endpoints)
 	var line_len: float = sqrt(line_len_sq)
-	var flight_time: float = line_len / maxf(puck_speed_m_s, 1.0)
+	var speed: float = maxf(puck_speed_m_s, 1.0)
+	var seg_time: float = line_len / speed
+	var inv_len: float = 1.0 / line_len
+	var pvx: float = dx * inv_len * speed
+	var pvz: float = dz * inv_len * speed
+	var vel_count: int = opponent_vels.size()
 	var max_block: float = 0.0
-	for p: Vector3 in opponents:
-		var pdx: float = p.x - from.x
-		var pdz: float = p.z - from.z
-		var t: float = (pdx * dx + pdz * dz) / line_len_sq
-		if t <= 0.0 or t >= 1.0:
-			continue
-		var time_to_defender: float = t * flight_time
-		var reaction_factor: float = clampf(
-				(time_to_defender - LANE_REACTION_DELAY_S) / LANE_REACTION_RAMP_S,
-				0.0, 1.0)
-		if reaction_factor <= 0.0:
-			continue
-		var closest_x: float = from.x + t * dx
-		var closest_z: float = from.z + t * dz
-		var perp_x: float = p.x - closest_x
-		var perp_z: float = p.z - closest_z
-		var perp: float = sqrt(perp_x * perp_x + perp_z * perp_z)
-		if perp >= LANE_CLEAR_RADIUS_M:
-			continue
-		var perp_factor: float = 1.0 - perp / LANE_CLEAR_RADIUS_M
-		var block: float = perp_factor * reaction_factor
+	for i: int in opponents.size():
+		var p: Vector3 = opponents[i]
+		var vx: float = 0.0
+		var vz: float = 0.0
+		if i < vel_count:
+			vx = opponent_vels[i].x
+			vz = opponent_vels[i].z
+		var t_raw: float = _lane_closest_approach_t(
+				from.x, from.z, pvx, pvz, p.x, p.z, vx, vz)
+		if t_raw > seg_time:
+			continue  # trailing the play — never closest in flight
+		var t: float = maxf(t_raw, 0.0)
+		var block: float = _lane_block_at(
+				from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
 		if block > max_block:
 			max_block = block
+			if max_block >= 1.0:
+				break
 	return clampf(1.0 - max_block, 0.0, 1.0)
 
 
-# Lane-clear for a SAUCER (elevated) pass. Identical model to lane_clear
-# except defenders in the mid-lane airborne window (t in
-# [SAUCER_AIRBORNE_T_MIN, SAUCER_AIRBORNE_T_MAX]) are skipped — the puck
-# is over their grounded blade there and can't be picked off. Defenders
-# near the passer (puck not yet lofted) or near the receiver (puck has
-# landed) still block exactly as in the grounded model. MUST stay in sync
-# with lane_clear's per-defender block math.
+# Lane-clear for a SAUCER (elevated) pass. Same closest-approach model as
+# lane_clear, except within SAUCER_AIRBORNE_DISTANCE_M of the passer the
+# puck is airborne, so a defender's reach collapses to their BODY radius —
+# sticks fly under it, only a body in the lane stops it (see
+# LANE_DEFENDER_BODY_RADIUS_M). Past that distance the puck has landed and
+# every defender blocks with full grounded stick reach.
 static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vector3],
-		puck_speed_m_s: float) -> float:
+		puck_speed_m_s: float, opponent_vels: Array[Vector3] = []) -> float:
 	var dx: float = to.x - from.x
 	var dz: float = to.z - from.z
 	var line_len_sq: float = dx * dx + dz * dz
 	if line_len_sq < 0.01:
 		return 1.0  # degenerate (overlapping endpoints)
 	var line_len: float = sqrt(line_len_sq)
-	var flight_time: float = line_len / maxf(puck_speed_m_s, 1.0)
+	var speed: float = maxf(puck_speed_m_s, 1.0)
+	var seg_time: float = line_len / speed
+	var inv_len: float = 1.0 / line_len
+	var pvx: float = dx * inv_len * speed
+	var pvz: float = dz * inv_len * speed
+	var vel_count: int = opponent_vels.size()
 	var max_block: float = 0.0
-	for p: Vector3 in opponents:
-		var pdx: float = p.x - from.x
-		var pdz: float = p.z - from.z
-		var t: float = (pdx * dx + pdz * dz) / line_len_sq
-		if t <= 0.0 or t >= 1.0:
-			continue
-		# Airborne over this defender — the saucer flies the puck above
-		# their grounded blade, so they can't intercept.
-		if t >= SAUCER_AIRBORNE_T_MIN and t <= SAUCER_AIRBORNE_T_MAX:
-			continue
-		var time_to_defender: float = t * flight_time
-		var reaction_factor: float = clampf(
-				(time_to_defender - LANE_REACTION_DELAY_S) / LANE_REACTION_RAMP_S,
-				0.0, 1.0)
-		if reaction_factor <= 0.0:
-			continue
-		var closest_x: float = from.x + t * dx
-		var closest_z: float = from.z + t * dz
-		var perp_x: float = p.x - closest_x
-		var perp_z: float = p.z - closest_z
-		var perp: float = sqrt(perp_x * perp_x + perp_z * perp_z)
-		if perp >= LANE_CLEAR_RADIUS_M:
-			continue
-		var perp_factor: float = 1.0 - perp / LANE_CLEAR_RADIUS_M
-		var block: float = perp_factor * reaction_factor
+	for i: int in opponents.size():
+		var p: Vector3 = opponents[i]
+		var vx: float = 0.0
+		var vz: float = 0.0
+		if i < vel_count:
+			vx = opponent_vels[i].x
+			vz = opponent_vels[i].z
+		var t_raw: float = _lane_closest_approach_t(
+				from.x, from.z, pvx, pvz, p.x, p.z, vx, vz)
+		if t_raw > seg_time:
+			continue  # trailing the play — never closest in flight
+		var t: float = maxf(t_raw, 0.0)
+		# Horizontal distance the puck has travelled off the blade at the
+		# defender's closest approach (puck rides the lane at `speed`).
+		var along_dist: float = speed * t
+		var block: float
+		if along_dist <= SAUCER_AIRBORNE_DISTANCE_M:
+			# Still airborne — the puck flies over a grounded stick, so only
+			# the defender's body can block it: reach = body radius, no
+			# stick, no closing.
+			var miss: float = _lane_miss_at(
+					from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
+			block = clampf(
+					(LANE_DEFENDER_BODY_RADIUS_M - miss) / LANE_DEFENDER_BODY_RADIUS_M,
+					0.0, 1.0)
+		else:
+			# Puck has landed past the airborne span — full stick reach + closing.
+			block = _lane_block_at(
+					from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
 		if block > max_block:
 			max_block = block
 	return clampf(1.0 - max_block, 0.0, 1.0)
@@ -816,60 +888,58 @@ static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vecto
 # gates the DISTANCE (saucers are a long-pass tool); this judges only the
 # lane geometry.
 static func prefers_saucer(from: Vector3, to: Vector3, opponents: Array[Vector3],
-		puck_speed_m_s: float) -> bool:
-	var grounded: float = lane_clear(from, to, opponents, puck_speed_m_s)
+		puck_speed_m_s: float, opponent_vels: Array[Vector3] = []) -> bool:
+	var grounded: float = lane_clear(from, to, opponents, puck_speed_m_s, opponent_vels)
 	if grounded >= SAUCER_SKIP_WHEN_LANE_CLEAR:
 		return false
-	var saucer: float = lane_clear_saucer(from, to, opponents, puck_speed_m_s)
+	var saucer: float = lane_clear_saucer(from, to, opponents, puck_speed_m_s, opponent_vels)
 	return saucer > grounded + SAUCER_LANE_BENEFIT_MARGIN
 
 
-# Interceptor point for a fired-puck lane: the closest-point-on-segment
-# of the defender with the highest block strength — the spot where the
-# puck is most likely to be picked off. Returns Vector3.INF when no
-# defender blocks the lane (i.e. lane_clear would return 1.0).
+# Interceptor point for a fired-puck lane: where on the puck's path the
+# strongest-blocking defender reaches it (their closest-approach point) —
+# the spot the puck is most likely to be picked off. Returns Vector3.INF
+# when no defender blocks the lane (i.e. lane_clear would return 1.0).
 #
 # This is the loss location for the carrier's pass turnover-cost term
 # (turnover_cost): "if this pass is intercepted, the opponent gains the
-# puck HERE." Deliberately a separate loop from lane_clear rather than
-# folded into it — lane_clear sits on a hot path (every score_shoot /
-# score_pass eval) and must stay allocation- and branch-free. The
-# per-defender block math below MUST stay in sync with lane_clear.
+# puck HERE." Shares the per-defender block helpers with lane_clear, so
+# the two agree on which defender is worst by construction.
 static func lane_loss_point(from: Vector3, to: Vector3,
-		opponents: Array[Vector3], puck_speed_m_s: float) -> Vector3:
+		opponents: Array[Vector3], puck_speed_m_s: float,
+		opponent_vels: Array[Vector3] = []) -> Vector3:
 	var dx: float = to.x - from.x
 	var dz: float = to.z - from.z
 	var line_len_sq: float = dx * dx + dz * dz
 	if line_len_sq < 0.01:
 		return Vector3.INF
 	var line_len: float = sqrt(line_len_sq)
-	var flight_time: float = line_len / maxf(puck_speed_m_s, 1.0)
+	var speed: float = maxf(puck_speed_m_s, 1.0)
+	var seg_time: float = line_len / speed
+	var inv_len: float = 1.0 / line_len
+	var pvx: float = dx * inv_len * speed
+	var pvz: float = dz * inv_len * speed
+	var vel_count: int = opponent_vels.size()
 	var max_block: float = 0.0
 	var best_point: Vector3 = Vector3.INF
-	for p: Vector3 in opponents:
-		var pdx: float = p.x - from.x
-		var pdz: float = p.z - from.z
-		var t: float = (pdx * dx + pdz * dz) / line_len_sq
-		if t <= 0.0 or t >= 1.0:
-			continue
-		var time_to_defender: float = t * flight_time
-		var reaction_factor: float = clampf(
-				(time_to_defender - LANE_REACTION_DELAY_S) / LANE_REACTION_RAMP_S,
-				0.0, 1.0)
-		if reaction_factor <= 0.0:
-			continue
-		var closest_x: float = from.x + t * dx
-		var closest_z: float = from.z + t * dz
-		var perp_x: float = p.x - closest_x
-		var perp_z: float = p.z - closest_z
-		var perp: float = sqrt(perp_x * perp_x + perp_z * perp_z)
-		if perp >= LANE_CLEAR_RADIUS_M:
-			continue
-		var perp_factor: float = 1.0 - perp / LANE_CLEAR_RADIUS_M
-		var block: float = perp_factor * reaction_factor
+	for i: int in opponents.size():
+		var p: Vector3 = opponents[i]
+		var vx: float = 0.0
+		var vz: float = 0.0
+		if i < vel_count:
+			vx = opponent_vels[i].x
+			vz = opponent_vels[i].z
+		var t_raw: float = _lane_closest_approach_t(
+				from.x, from.z, pvx, pvz, p.x, p.z, vx, vz)
+		if t_raw > seg_time:
+			continue  # trailing the play — never closest in flight
+		var t: float = maxf(t_raw, 0.0)
+		var block: float = _lane_block_at(
+				from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
 		if block > max_block:
 			max_block = block
-			best_point = Vector3(closest_x, 0.0, closest_z)
+			# Puck position at the defender's closest approach = the pick spot.
+			best_point = Vector3(from.x + pvx * t, 0.0, from.z + pvz * t)
 	return best_point
 
 
@@ -1150,11 +1220,17 @@ static func carry_intercept_safety(
 	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, ramp_t)
 
 
+# Defender reach for the CARRY-path check below — stick-blade reach plus
+# a margin for the defender stepping in as the bot skates past. Distinct
+# from the fired-puck lane model (which derives reach from closing time);
+# a carry is a slow physical traverse, so it uses a flat poke radius.
+const CARRY_PATH_CLEAR_RADIUS_M: float = 1.8
+
 # Public lane-clearance check for CARRY candidates — the bot is
 # physically traveling along this segment, not firing a puck through
 # it, so the reaction-window math from `lane_clear` doesn't apply.
 # A defender anywhere on the path is in the way regardless of flight
-# time. Returns 1.0 if no opponent is within LANE_CLEAR_RADIUS_M of
+# time. Returns 1.0 if no opponent is within CARRY_PATH_CLEAR_RADIUS_M of
 # the segment, ramps linearly to 0.0 as defender approaches the line.
 # Caller should project opponents forward by the candidate's expected
 # arrival time so the check reflects where defenders WILL BE when
@@ -1183,7 +1259,7 @@ static func path_clearance(from: Vector3, to: Vector3,
 	if min_perp_sq == INF:
 		return 1.0
 	var perp: float = sqrt(min_perp_sq)
-	return clampf(perp / LANE_CLEAR_RADIUS_M, 0.0, 1.0)
+	return clampf(perp / CARRY_PATH_CLEAR_RADIUS_M, 0.0, 1.0)
 
 
 # Momentum-aware time to arrive at `dest` from `from_pos` carrying
