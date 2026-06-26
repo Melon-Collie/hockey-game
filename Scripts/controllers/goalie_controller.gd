@@ -200,6 +200,13 @@ extends Node
 # coaches teach staying up to force the release. Set to 0 to seal only on loose
 # pucks (never for a carried puck).
 @export var jam_carrier_max_speed: float = 3.0 # m/s — carrier above this is attacking, not jamming
+# Experimental: proactively DROP (not just stay down) when a TEAMMATE corrals a
+# CONTESTED puck on the doorstep — opponent within poke range, one strip from a
+# goal. Off → the goalie stays upright while our team has the puck near the net
+# and only refuses to pop up mid-scramble (the recovery hold). On → it seals
+# pre-emptively. The recovery hold treats a contested teammate puck as a jam
+# regardless of this flag; this only governs the proactive drop.
+@export var jam_drop_on_contested_teammate: bool = true
 
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
@@ -977,11 +984,13 @@ func _update_state(delta: float) -> void:
 				# in space still keeps the goalie up (force the release); the
 				# net-front JAM below is the separate scramble trigger.
 				_enter_butterfly()
-			elif _should_seal_crease_jam() and not _reaction.reacting:
-				# Net-front jam: a loose-puck scramble or a slow carrier jammed
-				# at the doorstep. Seal the ice low so a stick battle can't be
-				# banged through the STANDING 5-hole. Distinct from a controlled
-				# carrier attacking with space (handled by the stay-up default).
+			elif _should_seal_crease_jam(jam_drop_on_contested_teammate) and not _reaction.reacting:
+				# Net-front jam: a loose-puck scramble, a slow carrier jammed at
+				# the doorstep, or (when jam_drop_on_contested_teammate is on) a
+				# teammate corralling a contested puck in the crease. Seal the ice
+				# low so a stick battle can't be banged through the STANDING
+				# 5-hole. Distinct from a controlled carrier attacking with space
+				# (handled by the stay-up default).
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -1079,14 +1088,14 @@ func _is_carrier_at_doorstep() -> bool:
 # threshold decision lives in GoalieBehaviorRules.is_crease_jam; this method
 # gathers the scene inputs.
 #
-# `hold` distinguishes the recovery gate (already down) from the entry gate
-# (deciding whether to drop). It only changes the TEAMMATE-carries-the-puck case:
-# the goalie does NOT proactively drop just because our team has the puck near
-# the net (let them play it out), but once already sealed it must NOT pop up the
-# instant a teammate corrals a CONTESTED puck (opponent within poke range) — that
-# puck gets stripped and banged in through a goalie standing back up. So entry
-# ignores a teammate's puck; the hold treats a contested teammate puck as a jam.
-func _should_seal_crease_jam(hold: bool = false) -> bool:
+# `include_team_puck` decides whether a CONTESTED puck a teammate controls counts
+# as a jam. The recovery gate always passes true (once sealed, don't pop up the
+# instant a teammate corrals a contested puck — it gets stripped and banged in
+# through a goalie standing back up). The entry gate passes the
+# `jam_drop_on_contested_teammate` toggle: off → don't proactively drop just
+# because our team has the puck near the net; on → seal pre-emptively. A loose
+# puck and an opposing carrier are jams regardless of this flag.
+func _should_seal_crease_jam(include_team_puck: bool = false) -> bool:
 	# Cheap reject before any skater scan — a jam only matters in the goalie's lap.
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
@@ -1096,8 +1105,8 @@ func _should_seal_crease_jam(hold: bool = false) -> bool:
 		return GoalieBehaviorRules.is_crease_jam(
 				puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
 				true, carrier.velocity.length(), INF, _crease_jam_cfg)
-	if carrier != null and not hold:
-		# Teammate carries it and this is the ENTRY gate — don't drop, let them play.
+	if carrier != null and not include_team_puck:
+		# Teammate carries it and we're not counting team possession — let them play.
 		return false
 	# Loose puck, or (hold only) a teammate-controlled puck: a jam when an
 	# opponent is within poke range of the puck in the goalie's lap.
