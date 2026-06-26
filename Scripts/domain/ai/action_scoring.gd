@@ -202,30 +202,39 @@ const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 
-# Bot's charged-pass target as a fraction of max_wrister_charge_distance.
-# The agent state machine (skater_agent_state_machine.gd) imports this
-# directly via BOT_WRISTER_PASS_CHARGE_FRACTION, so changing it here
-# automatically retargets the bot's pass wind-up geometry and
-# PASS_CHARGE_SPEED_M_S derivation below stays in sync.
-const BOT_PASS_CHARGE_RATIO: float = 0.5
+# Distance ramp for pass LAUNCH speed. Short feeds stay soft (snap speed) so a
+# close pass isn't a rocket the receiver can't corral; longer passes ramp up for
+# pace, shrinking a defender's reaction window. Continuous (smoothstep) rather
+# than the old binary cliff at a single distance.
+#
+# Why a direct distance ramp and not friction/arrival-speed math: the puck
+# sheds little speed over a pass (GameRules.PUCK_ICE_DECEL_M_S2 ≈ 1 m/s² — e.g. a
+# 26 m pass loses only ~1–2 m/s), so arrival speed ≈ launch speed at realistic
+# distances. Backing a launch out of a target arrival speed would therefore
+# collapse to a near-constant ~snap speed and leave long passes too soft to beat
+# interception. Distance is the right axis directly: a long pass can be fast
+# because its longer flight gives the receiver time to square up.
+const PASS_RAMP_SHORT_DISTANCE_M: float = 10.0   # ≤ this → soft snap pass
+const PASS_RAMP_LONG_DISTANCE_M: float = 26.0    # ≥ this → full long-pass pace
+const PASS_RAMP_LONG_SPEED_M_S: float = 20.0     # launch target for a long pass
 
-# Charged wrister pass release speed. Bots fire long passes (distance
-# > LONG_PASS_DISTANCE_THRESHOLD_M) at this speed instead of the
-# quick-shot PASS_SPEED_M_S — see SkaterAgentStateMachine's
-# PASS_PRESSED branch. Defensive threat modeling assumes opponents
-# play the same way.
+# Reference charged-pass speed (~mid-ramp). No longer a fixed release target —
+# pass speed is distance-adaptive via pass_launch_speed — but kept as a
+# representative pass speed for lane/threat tests and any caller that wants a
+# single "typical charged pass" number.
 const PASS_CHARGE_SPEED_M_S: float = (
 		GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
 		+ (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-				- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
-		* BOT_PASS_CHARGE_RATIO)
+				- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S) * 0.5)
 
-# Pass distance threshold above which the carrier wrister-charges
-# (and threat modeling assumes opponents do the same). At 19 m/s vs
-# 14, the charged version meaningfully shrinks defender reaction
-# windows past ~10 m; below this, snap-passes are simpler and the
-# windup commit isn't worth it.
-const LONG_PASS_DISTANCE_THRESHOLD_M: float = 10.0
+# Distance-adaptive pass LAUNCH speed: snap-soft for short feeds, ramping to
+# PASS_RAMP_LONG_SPEED_M_S for long passes, smooth between. Clamped to max_launch
+# — the passer's own max wrister (its hardest possible pass), or the league
+# default for opponent threat modeling.
+static func pass_launch_speed(distance: float, max_launch: float) -> float:
+	var t: float = smoothstep(PASS_RAMP_SHORT_DISTANCE_M, PASS_RAMP_LONG_DISTANCE_M, distance)
+	var target: float = lerpf(PASS_SPEED_M_S, PASS_RAMP_LONG_SPEED_M_S, t)
+	return clampf(target, PASS_SPEED_M_S, max_launch)
 
 # ── Saucer pass ──────────────────────────────────────────────────────────────
 # A saucer (elevated) pass lofts the puck off the ice so it flies over a
@@ -255,17 +264,22 @@ const SAUCER_LANE_BENEFIT_MARGIN: float = 0.20
 # there's no defender worth lofting over.
 const SAUCER_SKIP_WHEN_LANE_CLEAR: float = 0.85
 
+# Minimum pass distance for a saucer. Saucers are a stretch-pass tool — lofting
+# over a mid-lane defender only makes sense when there's a real lane to clear;
+# short feeds stay grounded regardless of pace.
+const SAUCER_MIN_DISTANCE_M: float = 10.0
 
-# Returns the speed a pass from `shooter` to `receiver` will fire at.
-# Above LONG_PASS_DISTANCE_THRESHOLD_M, the carrier charges the
-# wrister (release ≈ PASS_CHARGE_SPEED_M_S); below it, snap-pass
-# (PASS_SPEED_M_S). Used by both offensive scoring (carrier picking
-# the right speed for lead / lane math) and defensive scoring
-# (threat_surface_pass assuming opponents play the same way).
+
+# Returns the LAUNCH speed a pass from `shooter` to `receiver` will fire at —
+# distance-adaptive (see pass_launch_speed): soft for short feeds, harder for
+# long passes so they still arrive at a comfortable pace. Capped at the league
+# default max wrister here; the passer's own scoring/execution uses its own max
+# (ctx.self_wrister_shot_speed). Used by both offensive scoring (lead / lane
+# math) and defensive scoring (threat_surface_pass assuming opponents play the
+# same way).
 static func expected_pass_speed(shooter: Vector3, receiver: Vector3) -> float:
-	if shooter.distance_to(receiver) > LONG_PASS_DISTANCE_THRESHOLD_M:
-		return PASS_CHARGE_SPEED_M_S
-	return PASS_SPEED_M_S
+	return pass_launch_speed(shooter.distance_to(receiver), GameRules.DEFAULT_WRISTER_POWER_MAX_M_S)
+
 
 # Reference top skating speed. Single source of truth shared with
 # SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.

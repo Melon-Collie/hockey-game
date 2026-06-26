@@ -52,8 +52,8 @@ var acceleration_by_peer: Dictionary = {}
 # shot, an opponent's ETA) deliberately stays on the default constants — see
 # AISelfCapabilities.
 var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+# Also the upper clamp on this bot's distance-adaptive pass launch speed.
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-var self_charged_pass_speed: float = AIActionScoring.PASS_CHARGE_SPEED_M_S
 
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the

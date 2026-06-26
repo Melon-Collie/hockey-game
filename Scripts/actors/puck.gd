@@ -15,7 +15,11 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var nudge_cooldown: float = 0.30  # short re-grab denial after a self nudge tap
 @export var ice_height: float = 0.0175
 @export var pickup_max_speed: float = 8.0
-@export var deflect_min_speed: float = 14.0
+# Closing-speed threshold for catch-vs-deflect. Set above charged-pass speed
+# (~19 m/s) so any pass is receivable at ANY blade angle; the alignment bonus
+# only extends the ceiling into hard-shot territory (wrister 24 / slap 34), which
+# still wants a square blade or a cushion. See PuckReceptionRules.should_receive.
+@export var deflect_min_speed: float = 20.0
 @export var alignment_receive_bonus: float = 8.0
 # How reflective a deflection is: 0 = pass-through with a nudge, 1 = pure bounce
 # off the blade face. Higher = the puck follows your blade angle more directly,

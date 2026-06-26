@@ -1,83 +1,83 @@
 extends GutTest
 
 # PuckReceptionRules — receive-vs-deflect decision.
+#
+# Reactive model: catch depends only on the puck's absolute speed and the blade
+# angle at contact. No blade-velocity / cushion term.
 
 const PICKUP_MAX: float = 8.0
-const DEFLECT_MIN: float = 14.0
+const DEFLECT_MIN: float = 20.0  # mirrors Puck.deflect_min_speed default
 const ALIGN_BONUS: float = 8.0
 
 func test_slow_puck_always_received() -> void:
-	# Below pickup_max_speed, alignment and blade velocity don't matter.
+	# Below pickup_max_speed, alignment doesn't matter.
 	var puck_vel := Vector3(5, 0, 0)
-	var blade_vel := Vector3.ZERO
 	var bad_normal := Vector3(0, 0, 1)  # perpendicular to puck travel
 	assert_true(PuckReceptionRules.should_receive(
-		puck_vel, blade_vel, bad_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
+		puck_vel, bad_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
 
-func test_fast_puck_dead_on_alignment_received() -> void:
-	# Puck moving +X at 20 m/s, blade face pointed back at puck (-X).
-	# rel_speed = 20, alignment = 1.0, threshold = 14 + 8 = 22 → 20 < 22, receive.
-	var puck_vel := Vector3(20, 0, 0)
-	var blade_vel := Vector3.ZERO
-	var face_normal := Vector3(-1, 0, 0)
+func test_quick_pass_received_at_any_angle() -> void:
+	# The core fix: a snap pass (14 m/s) lands on a blade angled the worst possible
+	# way (perpendicular, alignment 0). 14 < threshold 20 → receive, regardless of
+	# angle. Passes are no longer angle-gated.
+	var puck_vel := Vector3(14, 0, 0)
+	var perp_normal := Vector3(0, 0, 1)
 	assert_true(PuckReceptionRules.should_receive(
-		puck_vel, blade_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
+		puck_vel, perp_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS),
+		"a 14 m/s pass should receive even on a perpendicular blade")
 
-func test_fast_puck_glancing_alignment_deflected() -> void:
-	# Same puck speed, but blade face perpendicular to puck travel (alignment 0).
-	# Threshold stays at 14 → 20 >= 14, deflect.
-	var puck_vel := Vector3(20, 0, 0)
-	var blade_vel := Vector3.ZERO
+func test_charged_pass_received_at_any_angle() -> void:
+	# A charged "rocket" pass (19 m/s) also catches at any angle — 19 < 20.
+	var puck_vel := Vector3(19, 0, 0)
+	var perp_normal := Vector3(0, 0, 1)
+	assert_true(PuckReceptionRules.should_receive(
+		puck_vel, perp_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS),
+		"a 19 m/s charged pass should receive even on a perpendicular blade")
+
+func test_hard_shot_glancing_alignment_deflected() -> void:
+	# A hard shot (26 m/s) at a glancing blade (alignment 0). Threshold stays 20 →
+	# 26 >= 20, deflect. Fast pucks still need a square blade.
+	var puck_vel := Vector3(26, 0, 0)
 	var face_normal := Vector3(0, 0, 1)
 	assert_false(PuckReceptionRules.should_receive(
-		puck_vel, blade_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
+		puck_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
 
-func test_cushion_lets_fast_puck_be_received() -> void:
-	# Puck and blade both moving +X at 20 and 10 m/s — relative speed is 10,
-	# well under the 14 m/s threshold, so the puck is received regardless of
-	# alignment.
-	var puck_vel := Vector3(20, 0, 0)
-	var blade_vel := Vector3(10, 0, 0)
-	var bad_normal := Vector3(0, 0, 1)
+func test_hard_shot_dead_on_alignment_received() -> void:
+	# Same 26 m/s shot, but the blade face is pointed dead-on (alignment 1.0):
+	# threshold = 20 + 8 = 28 → 26 < 28, a clean square reception of a hard shot.
+	var puck_vel := Vector3(26, 0, 0)
+	var face_normal := Vector3(-1, 0, 0)
 	assert_true(PuckReceptionRules.should_receive(
-		puck_vel, blade_vel, bad_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
+		puck_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
 
-func test_hard_shot_at_unaware_blade_still_deflects() -> void:
-	# 30 m/s puck, blade stationary, face pointed dead-on. Even with the full
-	# alignment bonus the threshold is 22 m/s — 30 > 22, deflect. Guards
-	# against the change making everything sticky.
-	var puck_vel := Vector3(30, 0, 0)
-	var blade_vel := Vector3.ZERO
+func test_hard_slapshot_at_square_blade_still_deflects() -> void:
+	# 34 m/s slapshot, face pointed dead-on. Even with the full alignment bonus the
+	# threshold is 28 m/s — 34 > 28, deflect. Guards against the change making
+	# everything sticky: a rocket can't be corralled, square or not.
+	var puck_vel := Vector3(34, 0, 0)
 	var face_normal := Vector3(-1, 0, 0)
 	assert_false(PuckReceptionRules.should_receive(
-		puck_vel, blade_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
+		puck_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
 
-func test_blade_swinging_away_no_alignment_bonus() -> void:
-	# Blade moving away from puck (+X) faster than puck (+X slow) → puck moves
-	# away from blade in rel frame. alignment clamps to 0, threshold stays 14.
-	var puck_vel := Vector3(5, 0, 0)
-	var blade_vel := Vector3(-10, 0, 0)  # blade going -X, puck going +X
-	# rel_vel = puck - blade = (15, 0, 0); puck_speed = 5 (under pickup_max)
-	# So this short-circuits to received. Use a faster puck to exercise the
-	# alignment path:
-	puck_vel = Vector3(20, 0, 0)
-	# rel_vel = (30, 0, 0), rel_speed = 30, way over any threshold → deflect.
-	var face_normal := Vector3(-1, 0, 0)
-	assert_false(PuckReceptionRules.should_receive(
-		puck_vel, blade_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
-
-func test_zero_alignment_bonus_matches_baseline_behavior() -> void:
-	# With alignment_bonus = 0, behavior collapses to the old rel_speed check.
-	var puck_vel := Vector3(15, 0, 0)
-	var blade_vel := Vector3.ZERO
-	var face_normal := Vector3(-1, 0, 0)
-	assert_false(PuckReceptionRules.should_receive(
-		puck_vel, blade_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, 0.0),
-		"15 m/s puck with no alignment bonus should deflect at threshold 14")
-	puck_vel = Vector3(13, 0, 0)
+func test_partial_alignment_scales_threshold() -> void:
+	# Blade ~45° to the incoming puck → alignment ≈ 0.707, threshold ≈ 25.7.
+	# A 24 m/s puck catches (24 < 25.7); a 27 m/s puck deflects (27 > 25.7).
+	var face_normal := Vector3(-1, 0, 1).normalized()  # 45° off the -X incoming line
 	assert_true(PuckReceptionRules.should_receive(
-		puck_vel, blade_vel, face_normal, PICKUP_MAX, DEFLECT_MIN, 0.0),
-		"13 m/s puck under baseline threshold should still receive")
+		Vector3(24, 0, 0), face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
+	assert_false(PuckReceptionRules.should_receive(
+		Vector3(27, 0, 0), face_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS))
+
+func test_zero_alignment_bonus_is_flat_speed_gate() -> void:
+	# With alignment_bonus = 0, behavior collapses to a flat speed check at
+	# deflect_min_speed regardless of angle.
+	var face_normal := Vector3(-1, 0, 0)
+	assert_false(PuckReceptionRules.should_receive(
+		Vector3(22, 0, 0), face_normal, PICKUP_MAX, DEFLECT_MIN, 0.0),
+		"22 m/s puck with no alignment bonus should deflect at threshold 20")
+	assert_true(PuckReceptionRules.should_receive(
+		Vector3(18, 0, 0), face_normal, PICKUP_MAX, DEFLECT_MIN, 0.0),
+		"18 m/s puck under baseline threshold should still receive")
 
 
 # ── blade_can_interact — on-ice/off-ice gate ─────────────────────────────────

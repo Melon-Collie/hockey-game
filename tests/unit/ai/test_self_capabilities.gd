@@ -15,7 +15,6 @@ func test_caps_defaults_equal_league_baseline() -> void:
 	assert_almost_eq(caps.blade_span,
 			GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M, 0.001)
 	assert_almost_eq(caps.wrister_shot_speed, GameRules.DEFAULT_WRISTER_POWER_MAX_M_S, 0.001)
-	assert_almost_eq(caps.charged_pass_speed, AIActionScoring.PASS_CHARGE_SPEED_M_S, 0.001)
 
 
 func test_role_context_self_speeds_default_to_baseline() -> void:
@@ -24,7 +23,6 @@ func test_role_context_self_speeds_default_to_baseline() -> void:
 	var ctx := RoleContext.new()
 	assert_almost_eq(ctx.self_max_speed, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S, 0.001)
 	assert_almost_eq(ctx.self_wrister_shot_speed, GameRules.DEFAULT_WRISTER_POWER_MAX_M_S, 0.001)
-	assert_almost_eq(ctx.self_charged_pass_speed, AIActionScoring.PASS_CHARGE_SPEED_M_S, 0.001)
 
 
 # ── time_to_arrive ref-speed parameter ──────────────────────────────────────
@@ -68,19 +66,18 @@ func test_score_shoot_non_decreasing_in_shot_speed() -> void:
 # ── apply_capabilities wires the state machine ──────────────────────────────
 
 func _caps(span: float, max_speed: float, accel: float,
-		shot: float, pass_spd: float) -> AISelfCapabilities:
+		shot: float) -> AISelfCapabilities:
 	var c := AISelfCapabilities.new()
 	c.blade_span = span
 	c.max_speed = max_speed
 	c.max_accel = accel
 	c.wrister_shot_speed = shot
-	c.charged_pass_speed = pass_spd
 	return c
 
 
 func test_apply_capabilities_derives_reach_gates_and_speeds() -> void:
 	var sm := SkaterAgentStateMachine.new()
-	var caps := _caps(2.0, 10.5, 13.0, 27.0, 21.0)
+	var caps := _caps(2.0, 10.5, 13.0, 27.0)
 	sm.apply_capabilities(caps)
 	# Reach gates derive from blade_span + the SM's own buffers.
 	assert_almost_eq(sm._blade_reach,
@@ -92,7 +89,6 @@ func test_apply_capabilities_derives_reach_gates_and_speeds() -> void:
 	assert_almost_eq(sm._self_max_speed, 10.5, 0.001)
 	assert_almost_eq(sm._chase_max_accel, 13.0, 0.001)
 	assert_almost_eq(sm._self_wrister_shot_speed, 27.0, 0.001)
-	assert_almost_eq(sm._self_charged_pass_speed, 21.0, 0.001)
 
 
 func test_apply_capabilities_null_is_noop() -> void:

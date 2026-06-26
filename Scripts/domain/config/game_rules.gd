@@ -98,15 +98,25 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 
 # ── Puck ──────────────────────────────────────────────────────────────────────
 const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
-const ICE_FRICTION: float = 0.01
-# Standard gravity. Used by AI trajectory prediction to convert the
-# dimensionless ICE_FRICTION coefficient into a deceleration: a puck
-# on ice decelerates at roughly μ × g via Coulomb friction.
+# Effective puck-on-ice friction coefficient. MIRRORS Physics/ice.tres
+# (friction 0.1) — that material is what actually drives the host's Jolt glide;
+# this is the AI/client-prediction MODEL of it, so the two must stay in sync
+# (same pattern as PUCK_BOARD_BOUNCE ↔ boards.tres below). NOT fed to physics.
+# Why ice's coefficient is the effective μ (not a blend with the puck's): the
+# puck has no material override, and Godot's friction combine uses the `rough`
+# flag — ice.tres sets rough=true, so when one body is rough the combine takes
+# THAT body's friction. Hence μ_eff = ice friction = 0.1, independent of the
+# puck's default. (Was 0.01 — a 10× decimal error that never matched ice.tres,
+# so modelled pucks glided ~10× too far.)
+const ICE_FRICTION: float = 0.1
+# Standard gravity, for the Coulomb conversion below.
 const GRAVITY_M_S2: float = 9.81
-# Puck deceleration on ice — Coulomb model. Matches the physics
-# material's friction × gravity. Single source of truth so AI
-# trajectory math and any future analytic puck simulation stay in
-# sync with the actual rink physics.
+# Puck deceleration on ice — constant Coulomb model. The puck slides flat
+# (Puck.tscn locks angular X/Z), so friction force = μ·m·g and a = μ·g ≈ 0.98 m/s²,
+# independent of speed and mass. Single source of truth for the host's real glide
+# so AI trajectory prediction and client puck extrapolation decelerate the same
+# way Jolt does. Keep ICE_FRICTION in sync with Physics/ice.tres if the ice is
+# retuned.
 const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
 # Board restitution coefficient. Mirrors Physics/boards.tres bounce
 # value so AI prediction models post-bounce trajectories the same

@@ -782,20 +782,56 @@ func test_carry_intercept_safety_uses_worst_defender() -> void:
 			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
 
 
-# ─── expected_pass_speed ────────────────────────────────────────────────
+# ─── expected_pass_speed / pass_launch_speed (distance-adaptive) ─────────
 
-func test_expected_pass_speed_short_pass_is_quick_shot() -> void:
+func test_pass_launch_speed_short_feed_is_snap_soft() -> void:
+	# At/under the short threshold a pass fires at the soft snap speed — no rocket
+	# on a close feed.
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	assert_almost_eq(
+			AIActionScoring.pass_launch_speed(AIActionScoring.PASS_RAMP_SHORT_DISTANCE_M, maxw),
+			AIActionScoring.PASS_SPEED_M_S, 0.001)
+	assert_almost_eq(AIActionScoring.pass_launch_speed(2.0, maxw),
+			AIActionScoring.PASS_SPEED_M_S, 0.001)
+
+
+func test_pass_launch_speed_ramps_up_with_distance() -> void:
+	# Between the short and long thresholds, launch speed increases monotonically.
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	var near: float = AIActionScoring.pass_launch_speed(12.0, maxw)
+	var mid: float = AIActionScoring.pass_launch_speed(18.0, maxw)
+	var far: float = AIActionScoring.pass_launch_speed(24.0, maxw)
+	assert_gt(mid, near, "an 18 m pass must launch harder than a 12 m one")
+	assert_gt(far, mid, "a 24 m pass must launch harder than an 18 m one")
+	assert_gt(near, AIActionScoring.PASS_SPEED_M_S, "a 12 m pass is past the snap floor")
+
+
+func test_pass_launch_speed_long_pass_reaches_ramp_top() -> void:
+	# At/beyond the long threshold a pass fires at the long-pass pace (clamped by
+	# the passer's own max wrister).
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	assert_almost_eq(
+			AIActionScoring.pass_launch_speed(AIActionScoring.PASS_RAMP_LONG_DISTANCE_M, maxw),
+			AIActionScoring.PASS_RAMP_LONG_SPEED_M_S, 0.001)
+	assert_almost_eq(AIActionScoring.pass_launch_speed(60.0, maxw),
+			AIActionScoring.PASS_RAMP_LONG_SPEED_M_S, 0.001)
+
+
+func test_pass_launch_speed_clamps_to_passer_max() -> void:
+	# A low-Shot passer (low max wrister) can't reach the long-pass pace — the
+	# launch clamps to its own ceiling.
+	var weak_max: float = 16.0
+	assert_almost_eq(AIActionScoring.pass_launch_speed(40.0, weak_max), weak_max, 0.001)
+
+
+func test_expected_pass_speed_uses_distance_ramp() -> void:
+	# expected_pass_speed is just pass_launch_speed at the league cap.
 	var shooter := Vector3.ZERO
-	var nearby := Vector3(0.0, 0.0, AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M - 1.0)
-	assert_eq(AIActionScoring.expected_pass_speed(shooter, nearby),
-			AIActionScoring.PASS_SPEED_M_S)
-
-
-func test_expected_pass_speed_long_pass_is_charged() -> void:
-	var shooter := Vector3.ZERO
-	var far := Vector3(0.0, 0.0, AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M + 1.0)
-	assert_eq(AIActionScoring.expected_pass_speed(shooter, far),
-			AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	var far := Vector3(0.0, 0.0, 18.0)
+	assert_almost_eq(
+			AIActionScoring.expected_pass_speed(shooter, far),
+			AIActionScoring.pass_launch_speed(18.0, GameRules.DEFAULT_WRISTER_POWER_MAX_M_S),
+			0.001)
 
 
 # ─── score_pass: speed-aware lane clearance ─────────────────────────────

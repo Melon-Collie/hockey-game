@@ -379,16 +379,15 @@ var _blade_reach: float = BLADE_REACH_M
 # (start→target distance = target charge).
 const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4   # ~250 ms
 
-# Shot charge fractions of max_wrister_charge_distance:
-# - shots aim for full charge (the carry scorer assumes WRISTER_SHOT_SPEED_M_S
-#   = DEFAULT_WRISTER_POWER_MAX_M_S, so the bot should produce ~max)
-# - charged passes aim for half (matches AIActionScoring.BOT_PASS_CHARGE_RATIO
-#   which is consumed by PASS_CHARGE_SPEED_M_S for scoring)
+# Shot charge fraction of max_wrister_charge_distance: shots aim for full charge
+# (the carry scorer assumes WRISTER_SHOT_SPEED_M_S = DEFAULT_WRISTER_POWER_MAX_M_S,
+# so the bot should produce ~max). Charged PASSES instead derive their charge
+# fraction per-pass from the distance-adaptive _pass_target_speed (see
+# _state_pass_pressed) rather than a fixed fraction.
 # TODO(threat-aware): shots could vary their target by time-until-pressured
 # instead of always going full — the existing bail-on-close-opponent path
 # in _state_shoot_pressed is the safety hatch for now.
 const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
-const BOT_WRISTER_PASS_CHARGE_FRACTION: float = AIActionScoring.BOT_PASS_CHARGE_RATIO
 # Mid-charge bail radius. If an opponent gets inside this distance
 # while we're charging, cancel via block_held — getting blasted in the
 # slot mid-windup is worse than not shooting. The carry state can re-
@@ -654,15 +653,19 @@ var _handedness_perp_sign: float = 1.0
 # true; PASS_PRESSED then holds shoot_held through BOT_WRISTER_CHARGE_TICKS
 # instead of releasing on tick 0. See _state_pass_pressed.
 var _pass_should_charge: bool = false
+# Mirrored from _carrier.pass_target_speed: the distance-adaptive LAUNCH speed
+# the chosen pass should fire at. Drives both the pass lead (so the fired aim
+# matches the scored one) and the wrister charge fraction the wind-up targets.
+var _pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 # Mirrored from _carrier.pass_should_saucer. When true, PASS_PRESSED
 # toggles elevation on for the release so the puck lofts over a
 # contested mid-lane defender (saucer pass). Only set for long passes.
 var _pass_should_saucer: bool = false
 var _pass_charge_tick: int = 0
 # Wind-up endpoint OFFSETS (relative to self_pos) for the charged pass —
-# same geometry pattern as the SHOOT_PRESSED fields, but aim_dir points
-# at the receiver lead and the target charge is half of max so the puck
-# releases at PASS_CHARGE_SPEED_M_S instead of the wrister max.
+# same geometry pattern as the SHOOT_PRESSED fields, but aim_dir points at the
+# receiver lead and the target charge is derived from _pass_target_speed so the
+# puck releases at the distance-adaptive launch speed instead of the wrister max.
 var _pass_wind_up_start: Vector3 = Vector3.ZERO
 var _pass_aim_target: Vector3 = Vector3.ZERO
 
@@ -682,7 +685,6 @@ var _max_wrister_charge_distance: float = 0.7
 # (opponent ETA/reach, the loose-puck election) stays on the shared defaults.
 var _self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 var _self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-var _self_charged_pass_speed: float = AIActionScoring.PASS_CHARGE_SPEED_M_S
 
 # Sticky state for _carry_aim_track_fire's mode (shot-aim vs carry-
 # aim with stickhandle). Without it, when shoot vs carry scores are
@@ -832,7 +834,6 @@ func apply_capabilities(caps: AISelfCapabilities) -> void:
 	_receive_body_offset = caps.blade_span - RECEIVE_BODY_INSET_M
 	_poke_jab_reach = caps.blade_span + GameRules.POKE_RADIUS_M
 	_self_wrister_shot_speed = caps.wrister_shot_speed
-	_self_charged_pass_speed = caps.charged_pass_speed
 
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
@@ -1222,7 +1223,6 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
-	ctx.self_charged_pass_speed = _self_charged_pass_speed
 	if _team_brain != null:
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
@@ -1600,6 +1600,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	_last_carry_anchor = _carrier.last_carry_anchor
 	_pass_target_peer_id = _carrier.pass_target_peer_id
 	_pass_should_charge = _carrier.pass_should_charge
+	_pass_target_speed = _carrier.pass_target_speed
 	_pass_should_saucer = _carrier.pass_should_saucer
 	_shot_is_elevated = _carrier.shot_is_elevated
 	debug_shoot_score = _carrier.debug_shoot_score
@@ -2171,16 +2172,21 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	debug_last_decision = "PASS+→%s" % target_slot_label
 
 	if _pass_charge_tick == 0:
-		# Capture aim direction toward the receiver and build wind-up
-		# endpoint offsets (same helper as SHOOT_PRESSED, half the target
-		# charge so the puck releases at PASS_CHARGE_SPEED_M_S). aim_dir
-		# is taken from clean_pass_aim (the receiver's lead) rather than
-		# the stepped mouse so a single-tick mouse residual can't tilt it.
+		# Capture aim direction toward the receiver and build wind-up endpoint
+		# offsets (same helper as SHOOT_PRESSED). The target charge fraction is
+		# derived from _pass_target_speed: the wrister maps charge linearly from
+		# min→max power, so frac = (target − min) / (max − min). aim_dir is taken
+		# from clean_pass_aim (the receiver's lead) rather than the stepped mouse
+		# so a single-tick mouse residual can't tilt it.
 		var sweep: Vector3 = clean_pass_aim - self_pos
 		sweep.y = 0.0
 		var aim_distance: float = sweep.length()
 		var aim_dir_init: Vector3 = sweep.normalized() if aim_distance > 0.01 else Vector3(0.0, 0.0, 1.0)
-		var pass_target_charge: float = _max_wrister_charge_distance * BOT_WRISTER_PASS_CHARGE_FRACTION
+		var charge_frac: float = clampf(
+				(_pass_target_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
+				/ maxf(_self_wrister_shot_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, 0.001),
+				0.0, 1.0)
+		var pass_target_charge: float = _max_wrister_charge_distance * charge_frac
 		# Pass always sweeps on the forehand side — no defender-aware
 		# side flip like SHOOT_PRESSED (passes don't justify backhand power
 		# penalty trade-offs the same way).
@@ -2408,15 +2414,11 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var receiver: SkaterNetworkState = snapshot.skater_states.get(_pass_target_peer_id)
 	if receiver == null:
 		return _attacking_goal_pos
-	# Speed-aware lead: charged passes arrive faster, so the receiver
-	# covers less ground in flight — leading at the quick-shot speed
-	# would over-lead by ~36% (19/14 - 1) and the puck would sail past.
-	# Reads the captured _pass_should_charge flag rather than
-	# recomputing from distance: the speed locked in at intent
-	# commit is what the controller will actually fire at.
-	var pass_speed: float = (_self_charged_pass_speed
-			if _pass_should_charge
-			else AIActionScoring.PASS_SPEED_M_S)
+	# Speed-aware lead: a faster pass arrives sooner, so the receiver covers
+	# less ground in flight — leading at the quick-shot speed would over-lead
+	# and the puck would sail past. Use the distance-adaptive launch speed
+	# locked in at intent commit (what the controller will actually fire at).
+	var pass_speed: float = _pass_target_speed
 	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
 	# Intercept-aware lead, shared with the carrier's pass scoring so the
 	# fired aim matches the scored one (AIPassLead).

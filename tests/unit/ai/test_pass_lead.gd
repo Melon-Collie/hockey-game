@@ -143,3 +143,40 @@ func test_lead_turning_receiver_does_not_overshoot_sideways() -> void:
 	var point := AIPassLead.lead_point(Vector3.ZERO, receiver, turn_accel, 14.0, 0.6)
 	assert_almost_eq(point.x, 0.0, 0.05,
 			"centripetal accel must not push the lead point sideways")
+
+
+# ── effective_flight_speed: friction-aware lead ─────────────────────────────
+
+func test_effective_flight_speed_below_launch_and_drops_with_distance() -> void:
+	# The puck sheds speed in flight, so its average speed is below launch, and
+	# more so over a longer pass.
+	var launch := 20.0
+	var near: float = AIPassLead.effective_flight_speed(launch, 5.0)
+	var far: float = AIPassLead.effective_flight_speed(launch, 25.0)
+	assert_lt(near, launch, "average flight speed is below the launch speed")
+	assert_lt(far, near, "a longer pass averages even slower")
+	# Closed form at 25 m: arrival = √(20² − 2·a·25), avg = (20 + arrival)/2.
+	var arrival: float = sqrt(400.0 - 2.0 * GameRules.PUCK_ICE_DECEL_M_S2 * 25.0)
+	assert_almost_eq(far, (20.0 + arrival) * 0.5, 0.001)
+
+
+func test_effective_flight_speed_negligible_at_zero_distance() -> void:
+	# A point-blank pass hasn't decelerated yet → average ≈ launch.
+	assert_almost_eq(AIPassLead.effective_flight_speed(18.0, 0.0), 18.0, 0.001)
+
+
+func test_friction_leads_a_long_pass_further_than_constant_speed() -> void:
+	# A receiver cutting up-ice, led over a long pass. Because the puck slows in
+	# flight, the friction-aware lead must sit further ahead than a naive
+	# constant-launch-speed lead (longer flight time → receiver travels further).
+	var receiver := _receiver(Vector3(0, 0, 20), Vector3(0, 0, 6))
+	var launch := 20.0
+	var friction_aware: float = AIPassLead.lead_point(
+			Vector3.ZERO, receiver, Vector3.ZERO, launch, 1.5).z
+	# Constant-speed reference: feed intercept_time the raw launch speed.
+	var eff_t: float = AITrajectory.intercept_time(
+			Vector3.ZERO, Vector3(0, 0, 20), Vector3(0, 0, 6), Vector3.ZERO, launch, 1.5)
+	var constant_speed: float = AITrajectory.predict_at(
+			Vector3(0, 0, 20), Vector3(0, 0, 6), eff_t).z
+	assert_gt(friction_aware, constant_speed,
+			"friction-aware lead sits further ahead than the constant-speed lead")
