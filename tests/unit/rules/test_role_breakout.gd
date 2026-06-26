@@ -102,6 +102,52 @@ func test_weak_stays_goal_side_of_carrier() -> void:
 			"weak valve stays goal-side of (no further up-ice than) the carrier")
 
 
+func test_strong_stretches_up_wall_when_open() -> void:
+	# Carrier deep (z=24); the strong-side wall is open. STRONG should stretch
+	# well up-ice toward our blue line (z≈7.29), not settle for a short lead.
+	var carrier_z: float = 24.0
+	var self_pos := Vector3(11, 0, 22)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                 # us (STRONG)
+			[100, TEAM_ID, Vector3(0, 0, carrier_z)],   # carrier, deep
+			[200, 1, Vector3(-6, 0, 10)],           # opp, off the strong wall
+	]
+	var ctx := _make_ctx(self_pos, 100, skaters, 1.0)
+	var d: RoleDecision = AIRoleBreakout.decide(ctx, true)
+	# Stretches far up-ice — clearly more than the old ~4 m lead.
+	assert_lt(d.target_position.z, carrier_z - 8.0,
+			"open strong wall → STRONG stretches up-ice; got z=%f" % d.target_position.z)
+	# And lands near our blue line (the zone exit), within a sample step.
+	assert_lt(d.target_position.z, GameRules.BLUE_LINE_Z + 4.0,
+			"reaches toward the blue line; got z=%f" % d.target_position.z)
+
+
+func test_strong_drops_back_when_high_wall_covered() -> void:
+	# Same carrier, but a forechecker sits on the high strong wall near the
+	# blue line. STRONG can't thread the high lane, so it picks a lower (deeper)
+	# open spot — proves lane_clear gates the stretch.
+	var carrier_z: float = 24.0
+	var self_pos := Vector3(11, 0, 22)
+	var open_skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[100, TEAM_ID, Vector3(0, 0, carrier_z)],
+			[200, 1, Vector3(-6, 0, 10)],
+	]
+	var open_z: float = AIRoleBreakout.decide(
+			_make_ctx(self_pos, 100, open_skaters, 1.0), true).target_position.z
+
+	var covered_skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[100, TEAM_ID, Vector3(0, 0, carrier_z)],
+			[200, 1, Vector3(10, 0, 8.0)],          # parked on the high strong wall
+	]
+	var covered_z: float = AIRoleBreakout.decide(
+			_make_ctx(self_pos, 100, covered_skaters, 1.0), true).target_position.z
+
+	assert_gt(covered_z, open_z,
+			"covered high wall → STRONG drops to a deeper open spot; open z=%f covered z=%f" % [open_z, covered_z])
+
+
 func test_strong_follows_strong_x_flip() -> void:
 	# Flip strong side to -X: STRONG now works the -X half.
 	var self_pos := Vector3(-2, 0, 18)

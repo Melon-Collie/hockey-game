@@ -61,8 +61,21 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 
+	# Man-on-threat: when the brain assigns us a specific opponent, cover HIM
+	# (the carrier→man feed lane) instead of minimizing the max pass threat
+	# over all receivers — so COVER and ANCHOR partition the two men rather
+	# than both shading the single most dangerous one. Falls through to the
+	# legacy all-receivers minimax when unassigned.
+	var man_pid: int = ctx.assigned_threat_peer
+	if man_pid != -1 and ctx.snapshot.skater_states.has(man_pid):
+		# Anticipate: cover where the man is cutting, not his current spot.
+		var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
+		var man_pos: Vector3 = AIRoleHelpers.lead_threat(man.position, man.velocity)
+		d.target_position = AIRoleHelpers.cover_man_target(ctx, man_pos, carrier_pos)
+		return d
+
 	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
-	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates)
+	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates, true)
 	if opp_teammates.is_empty():
 		# No pass receivers — no pass threat. PRESSURE/ANCHOR cover
 		# the carrier's direct options.

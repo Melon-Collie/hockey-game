@@ -1,14 +1,12 @@
 extends GutTest
 
-# AIRoleContain — TRANS_OD-only second defender that engages
-# forward instead of camping the slot. Search center is the
-# midpoint of carrier→our-slot, so the role tracks the play
-# up-ice; exposure factor (foot-race-to-slot vs opps) penalises
-# candidates too far forward to recover from. Tests cover:
-#   - Bail-out (no carrier).
-#   - Target sits between carrier and slot (the defining geometry).
-#   - In NZ-puck TRANS_OD, CONTAIN sits meaningfully forward of
-#     where DZONE ANCHOR would sit (engages, doesn't camp).
+# AIRoleContain — TRANS_OD-only last man back: gap control on the carrier.
+# Target is goal-side of the carrier on the carrier→our-net line, at a gap
+# that tightens as the carrier nears the net. Tests cover:
+#   - Loose puck → contain its spot (don't freeze).
+#   - Target is goal-side of the carrier (between carrier and our net).
+#   - Gap tightens as the carrier closes on the net.
+#   - Never retreats behind our own goal line.
 
 const TEAM_ID: int = 0
 const OUR_NET_Z: float = 26.65
@@ -56,29 +54,25 @@ func _make_ctx(self_pos: Vector3, skaters: Array = [],
 	return ctx
 
 
-# ── Bail-outs ───────────────────────────────────────────────────────────────
+# ── Loose puck: contain its spot, don't freeze ─────────────────────────────
 
 func test_contains_loose_puck_instead_of_freezing() -> void:
-	# Loose puck — CONTAIN used to freeze at self_pos. It must now
-	# recover toward the puck→slot spine instead of standing flat-
-	# footed. Bot starts up-ice (offensive side); target pulls back
-	# toward our net, never self_pos.
+	# Loose puck at origin — CONTAIN holds a gap goal-side of the puck spot
+	# (toward our +Z net), not self_pos.
 	var self_pos := Vector3(0, 0, -6)   # up-ice (offensive side)
 	var ctx: RoleContext = _make_ctx(self_pos)   # loose puck at origin
 	var d: RoleDecision = AIRoleContain.decide(ctx)
 	assert_ne(d.target_position, self_pos,
-			"loose puck → recover toward the play, don't freeze")
-	assert_gt(d.target_position.z, self_pos.z,
-			"target pulls back toward our net (+Z); got z=%f" % d.target_position.z)
+			"loose puck → hold a gap toward our net, don't freeze")
+	assert_gt(d.target_position.z, 0.0,
+			"target is goal-side (+Z) of the loose puck; got z=%f" % d.target_position.z)
 
 
-# ── Target sits on the carrier→slot spine ──────────────────────────────────
+# ── Gap control geometry ───────────────────────────────────────────────────
 
-func test_target_lies_between_carrier_and_slot() -> void:
-	# Carrier in NZ at z=0. Our slot at z≈21.65. Search center is
-	# midpoint = z≈10.83. With one opp, CONTAIN's chosen target
-	# lands in the slot-side half-space of NZ — clearly between the
-	# carrier and the slot.
+func test_target_is_goal_side_of_carrier_on_net_line() -> void:
+	# Carrier in NZ at z=0; our net at +26.65. The gap target sits goal-side
+	# of the carrier (between carrier and net), on the carrier→net line (x≈0).
 	var carrier_pos := Vector3(0, 0, 0)
 	var skaters: Array = [
 		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],   # us, deep
@@ -86,37 +80,42 @@ func test_target_lies_between_carrier_and_slot() -> void:
 	]
 	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 18), skaters, 200)
 	var d: RoleDecision = AIRoleContain.decide(ctx)
-	# Carrier at z=0, slot at ~21.65 → target.z must be > carrier.z
-	# (toward slot) and < slot.z (still engaged forward).
 	assert_gt(d.target_position.z, carrier_pos.z,
-			"target must be on slot-side of carrier; got z=%f vs carrier.z=%f" % [d.target_position.z, carrier_pos.z])
-	assert_lt(d.target_position.z, OUR_NET_Z - GameRules.SLOT_DIST_M + 0.01,
-			"target must not pass the slot; got z=%f vs slot=%f" % [d.target_position.z, OUR_NET_Z - GameRules.SLOT_DIST_M])
+			"target is goal-side of carrier; got z=%f" % d.target_position.z)
+	assert_lt(d.target_position.z, OUR_NET_Z,
+			"target stays in front of the net; got z=%f" % d.target_position.z)
+	assert_almost_eq(d.target_position.x, 0.0, 0.01,
+			"target sits on the carrier→net line; got x=%f" % d.target_position.x)
 
 
-# ── CONTAIN engages forward of where DZONE ANCHOR would sit ────────────────
-
-func test_contain_engages_forward_of_dzone_anchor() -> void:
-	# TRANS_OD scenario: opp carrier in NZ at z=0, secondary opp also
-	# in NZ. Both roles see the same world. CONTAIN's search center
-	# is midpoint(carrier=0, slot=21.65) ≈ 10.83; ANCHOR's is
-	# midpoint(carrier=0, our_net=26.65) ≈ 13.33. So CONTAIN sits
-	# MEANINGFULLY further up-ice (lower z for Team 0) than ANCHOR.
-	#
-	# This is the role split — CONTAIN engages forward instead of
-	# camping the slot.
-	var carrier_pos := Vector3(0, 0, 0)
-	var skaters: Array = [
+func test_gap_tightens_as_carrier_nears_net() -> void:
+	# Far carrier → loose gap (stand off); near carrier → tight gap (on him).
+	var far_carrier := Vector3(0, 0, 0)
+	var near_carrier := Vector3(0, 0, 24)
+	var far_skaters: Array = [
 		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
+		[200, 1 - TEAM_ID, far_carrier, Vector3.ZERO],
+	]
+	var near_skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 22), Vector3.ZERO],
+		[200, 1 - TEAM_ID, near_carrier, Vector3.ZERO],
+	]
+	var far_t: Vector3 = AIRoleContain.decide(_make_ctx(Vector3(0, 0, 18), far_skaters, 200)).target_position
+	var near_t: Vector3 = AIRoleContain.decide(_make_ctx(Vector3(0, 0, 22), near_skaters, 200)).target_position
+	var far_gap: float = far_carrier.distance_to(far_t)
+	var near_gap: float = near_carrier.distance_to(near_t)
+	assert_lt(near_gap, far_gap,
+			"gap tightens as the carrier nears the net; near=%f far=%f" % [near_gap, far_gap])
+
+
+func test_never_retreats_behind_goal_line() -> void:
+	# Even with the carrier right at the net mouth, the gap target stays in
+	# front of (not past) our goal line.
+	var carrier_pos := Vector3(0, 0, 25.5)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 24), Vector3.ZERO],
 		[200, 1 - TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx_contain: RoleContext = _make_ctx(Vector3(0, 0, 18), skaters, 200)
-	var contain_target: Vector3 = AIRoleContain.decide(ctx_contain).target_position
-
-	var ctx_anchor: RoleContext = _make_ctx(Vector3(0, 0, 18), skaters, 200)
-	var anchor_target: Vector3 = AIRoleAnchor.decide(ctx_anchor).target_position
-
-	# Team 0 defends +Z, so "forward" = lower z. CONTAIN should sit at
-	# lower z than ANCHOR (further up-ice toward the puck).
-	assert_lt(contain_target.z, anchor_target.z,
-			"CONTAIN engages forward of ANCHOR in NZ-puck transition; got contain=%s anchor=%s" % [contain_target, anchor_target])
+	var d: RoleDecision = AIRoleContain.decide(_make_ctx(Vector3(0, 0, 24), skaters, 200))
+	assert_lt(d.target_position.z, OUR_NET_Z + 0.01,
+			"never projects behind our goal line; got z=%f" % d.target_position.z)

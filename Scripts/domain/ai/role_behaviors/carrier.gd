@@ -365,8 +365,15 @@ func _pick_action(ctx: RoleContext) -> void:
 	# not a tunable: "you need SOME expected value to justify giving up
 	# possession." In the offensive zone a real shot scores well above 0
 	# and still wins ties, so no behavior change there.
+	#
+	# ALSO: don't START a fire while staggered. A body check knocks the
+	# bot off-balance (thrust penalty on stagger_timer); winding up a
+	# shot/pass through it flails the release. Hold the puck and protect
+	# it until the brief stagger decays — carry still computes normally,
+	# this only blocks fire from winning the compete.
+	var staggered: bool = ctx.self_stagger_timer > 0.0
 	var new_intent: int
-	if fire_score >= carry_score and fire_score > 0.0:
+	if fire_score >= carry_score and fire_score > 0.0 and not staggered:
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer

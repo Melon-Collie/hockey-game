@@ -77,6 +77,87 @@ func test_natural_cadence_resumes_after_forced_tick() -> void:
 			"after natural tick fires, possession state reflects new carrier")
 
 
+# ── Man-on-threat partition (DZONE) ──────────────────────────────────────────
+
+# 3-on-3 in our DZONE: opp carrier (200) deep with two receivers (210, 220);
+# our three (100/110/120) fill PRESSURE/ANCHOR/COVER. The backline (ANCHOR +
+# COVER) should be partitioned across the two NON-carrier opponents — distinct
+# men, neither assigned the carrier, and PRESSURE left unassigned.
+func _make_dzone_3v3() -> WorldSnapshot:
+	var snap := WorldSnapshot.new()
+	for entry: Array in [
+			[100, 0, Vector3(0.0, 0.0, 18.0)],     # us
+			[110, 0, Vector3(-3.0, 0.0, 23.0)],    # us
+			[120, 0, Vector3(3.0, 0.0, 23.0)],     # us
+			[200, 1, Vector3(0.0, 0.0, 20.0)],     # opp carrier
+			[210, 1, Vector3(-6.0, 0.0, 18.0)],    # opp receiver
+			[220, 1, Vector3(6.0, 0.0, 18.0)]]:    # opp receiver
+		var s := SkaterNetworkState.new()
+		s.position = entry[2]
+		snap.skater_states[entry[0]] = s
+	var puck := PuckNetworkState.new()
+	puck.carrier_peer_id = 200
+	puck.position = Vector3(0.0, 0.0, 20.0)
+	snap.puck_state = puck
+	return snap
+
+
+func _make_brain_3v3() -> TeamBrain:
+	var team_map: Dictionary = {100: 0, 110: 0, 120: 0, 200: 1, 210: 1, 220: 1}
+	return TeamBrain.new(TEAM_ID, team_map)
+
+
+func test_threat_partition_assigns_distinct_men() -> void:
+	var brain: TeamBrain = _make_brain_3v3()
+	brain.force_retick()
+	brain.tick(0.001, _make_dzone_3v3())
+	assert_eq(brain.state, AIPossessionState.State.DZONE, "opp carrier deep → DZONE")
+
+	# Exactly the two backline defenders (ANCHOR + COVER) get a man.
+	assert_eq(brain.threat_assignments.size(), 2,
+			"two backline defenders are assigned; got %s" % str(brain.threat_assignments))
+	var men: Array = brain.threat_assignments.values()
+	assert_ne(men[0], men[1], "defenders cover distinct men")
+	assert_false(men.has(200), "no defender is assigned the carrier (PRESSURE owns it)")
+	assert_true(men.has(210) and men.has(220),
+			"both receivers are covered; got %s" % str(men))
+
+	# The covered defenders are exactly the non-PRESSURE backline peers.
+	for pid: int in brain.threat_assignments:
+		var slot: int = brain.get_slot(pid)
+		assert_true(slot == AIRoleSlots.Slot.ANCHOR or slot == AIRoleSlots.Slot.COVER,
+				"assigned peer %d is ANCHOR/COVER, got slot %d" % [pid, slot])
+
+
+func test_threat_partition_cleared_when_we_possess() -> void:
+	# When we carry the puck (OZONE/TRANS), there's no defensive man coverage.
+	var brain: TeamBrain = _make_brain_3v3()
+	brain.force_retick()
+	brain.tick(0.001, _make_dzone_3v3())
+	assert_false(brain.threat_assignments.is_empty(), "DZONE populates the partition")
+
+	# Now WE carry deep in the offensive end → no longer DZONE.
+	var snap := WorldSnapshot.new()
+	for entry: Array in [
+			[100, 0, Vector3(0.0, 0.0, -20.0)],
+			[110, 0, Vector3(-3.0, 0.0, -18.0)],
+			[120, 0, Vector3(3.0, 0.0, -18.0)],
+			[200, 1, Vector3(0.0, 0.0, 22.0)],
+			[210, 1, Vector3(-6.0, 0.0, 22.0)],
+			[220, 1, Vector3(6.0, 0.0, 22.0)]]:
+		var s := SkaterNetworkState.new()
+		s.position = entry[2]
+		snap.skater_states[entry[0]] = s
+	var puck := PuckNetworkState.new()
+	puck.carrier_peer_id = 100
+	puck.position = Vector3(0.0, 0.0, -20.0)
+	snap.puck_state = puck
+	brain.tick(0.2, snap)
+	assert_ne(brain.state, AIPossessionState.State.DZONE, "we possess → not DZONE")
+	assert_true(brain.threat_assignments.is_empty(),
+			"partition cleared outside defensive states")
+
+
 # Helper — GUT doesn't have assert_eq for Dictionary by default; do
 # a manual deep compare via string repr (sufficient for small dicts).
 func assert_eq_deep(a: Dictionary, b: Dictionary, msg: String = "") -> void:
