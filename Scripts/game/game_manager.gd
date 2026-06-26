@@ -1957,10 +1957,11 @@ func _on_remote_derived_nudge(velocity: Vector3, nudger_peer_id: int) -> void:
 
 
 # Single nudge cue path so the sound/VFX stays identical for everyone (local
-# play, host fan-out, and remote receivers all route here). The soft fixed
-# volume is intentional — a nudge is a quiet tap, not a shot.
+# play, host fan-out, and remote receivers all route here). Uses the quick-shot
+# (wrister) sound — a nudge is a soft self-pass — at a reduced fixed volume so it
+# reads as a quiet tap rather than a real shot.
 func _play_nudge_cue(pos: Vector3) -> void:
-	SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, -6.0, 0.06)
+	SoundManager.play_world(SoundManager.Sound.SHOT_WRISTER, pos, -6.0, 0.04)
 	if puck != null:
 		puck.fire_stick_lift_vfx()
 

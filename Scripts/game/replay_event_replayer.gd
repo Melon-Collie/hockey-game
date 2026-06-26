@@ -59,9 +59,9 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 		"stick_lift":
 			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, volume_db, 0.06)
 		"nudge":
-			# Own event kind so the cue can diverge from stick_lift later; soft
-			# fixed volume matches live play (a nudge is a quiet tap).
-			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, -6.0, 0.06)
+			# Own event kind so the cue can diverge later; quick-shot (wrister)
+			# sound at a soft fixed volume matches live play (a nudge is a quiet tap).
+			SoundManager.play_world(SoundManager.Sound.SHOT_WRISTER, pos, -6.0, 0.04)
 		"puck_goalie":
 			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, volume_db, 0.05)
 		"puck_post":
