@@ -152,20 +152,22 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	threat_assignments = _compute_threat_assignments(snapshot, threat_assignments)
 
 
-# Builds the backline man-on-threat partition for the current tick. Phase 1
-# covers DZONE only (TRANS_OD gap-control follows in a later phase); every
-# other state returns {} so no defender carries a stale assignment.
+# Builds the backline man-on-threat partition for the current tick. Defensive
+# states only (DZONE + TRANS_OD); every other state returns {} so no defender
+# carries a stale assignment.
 #
-# Backline = our peers slotted ANCHOR or COVER (PRESSURE owns the carrier, so
-# it's excluded). Men = the opposing carrier's potential receivers (every
-# opponent except the carrier). Each man's value is the raw pass-threat surface
-# (no defenders in the view), so AIThreatAssignment pairs the most dangerous men
-# with the best-positioned defenders. `prev` is last tick's partition, threaded
-# through for switch hysteresis.
+# Backline = our peers slotted ANCHOR / COVER (DZONE) or BACKCHECK (TRANS_OD).
+# The carrier is owned separately — PRESSURE in DZONE, the CONTAIN gap defender
+# in TRANS_OD — so it's excluded; the men are the opposing carrier's potential
+# receivers (every opponent except the carrier). Each man's value is the raw
+# pass-threat surface (no defenders in the view), so AIThreatAssignment pairs
+# the most dangerous men with the best-positioned defenders. `prev` is last
+# tick's partition, threaded through for switch hysteresis.
 func _compute_threat_assignments(snapshot: WorldSnapshot,
 		prev: Dictionary) -> Dictionary[int, int]:
 	var empty: Dictionary[int, int] = {}
-	if state != AIPossessionState.State.DZONE:
+	if state != AIPossessionState.State.DZONE \
+			and state != AIPossessionState.State.TRANS_OD:
 		return empty
 	if snapshot == null or snapshot.puck_state == null:
 		return empty
@@ -177,13 +179,15 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		return empty
 	var carrier_pos: Vector3 = snapshot.skater_states[carrier_pid].position
 
-	# Backline defenders (ANCHOR / COVER) and their kinematics.
+	# Backline defenders (ANCHOR / COVER / BACKCHECK) and their kinematics.
 	var defenders: Array[int] = []
 	var defender_pos: Dictionary = {}
 	var defender_vel: Dictionary = {}
 	for pid: int in slot_assignments:
 		var slot: int = slot_assignments[pid]
-		if slot != AIRoleSlots.Slot.ANCHOR and slot != AIRoleSlots.Slot.COVER:
+		if slot != AIRoleSlots.Slot.ANCHOR \
+				and slot != AIRoleSlots.Slot.COVER \
+				and slot != AIRoleSlots.Slot.BACKCHECK:
 			continue
 		if not snapshot.skater_states.has(pid):
 			continue

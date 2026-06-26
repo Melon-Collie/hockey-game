@@ -9,15 +9,18 @@ class_name AIRoleSlots
 #
 # DZONE uses {PRESSURE, ANCHOR, COVER}: classic in-zone defensive
 # triumvirate — pressurer on the carrier, net-front anchor, weak-
-# side cover. TRANS_OD uses {PRESSURE, BACKCHECK, CONTAIN}: the
-# same primary pressurer plus a Sprinting-Through pair — BACKCHECK
-# is the up-ice peer with the longest sprint home, CONTAIN is the
-# deeper peer who engages the puck forward instead of camping the
-# slot. The split is per-state because the two backline jobs are
-# genuinely different roles even though they sometimes look similar
-# from the outside; collapsing them onto ANCHOR/COVER made TRANS_OD
-# behavior misfire (deep peer camped the slot when they should have
-# been engaging forward).
+# side cover. ANCHOR + COVER are partitioned across the carrier's
+# receivers by TeamBrain's threat assignment (a distinct man each).
+#
+# TRANS_OD uses {CONTAIN, BACKCHECK×2}: defending a rush, the deepest
+# peer plays CONTAIN as gap control on the carrier (last man back —
+# stay goal-side, hold a controlled gap, don't lunge), and the other
+# two BACKCHECK home to pick up the carrier's receivers (a distinct
+# man each, same threat partition). This is the 3v3 "one contains,
+# two backcheck through" structure: exactly ONE peer engages the
+# carrier. Replaces the old PRESSURE+BACKCHECK+CONTAIN triad, where
+# TWO peers engaged the carrier forward (overcommit / bad angle /
+# breakaways) and the backchecker raced to an empty slot point.
 #
 # OZONE replaces OUTLET with SUPPORT; OUTLET stays a TRANS_DO-only
 # role. BACKDOOR was renamed to FINISHER (more descriptive of the
@@ -31,16 +34,17 @@ enum Slot {
 	NONE,
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
-	# Defensive: PRESSURE is shared across DZONE and TRANS_OD (close
-	# the carrier). ANCHOR + COVER are DZONE-only (net-front + weak-
-	# side cover). BACKCHECK + CONTAIN are TRANS_OD-only (sprint home
-	# + engage forward). NEUTRAL has no carrier and uses CHASE +
-	# FLANK_L + FLANK_R below.
-	PRESSURE,   # DZONE + TRANS_OD: puck pressurer, closes the carrier.
-	ANCHOR,     # DZONE: deep defender / net-front.
-	COVER,      # DZONE: weak-side support / pass-interception read.
-	BACKCHECK,  # TRANS_OD: up-ice peer sprinting home to the slot.
-	CONTAIN,    # TRANS_OD: deeper peer engaging the puck forward.
+	# Defensive: PRESSURE is DZONE (close the carrier; also reused as
+	# FORECHECK's F1). ANCHOR + COVER are DZONE-only (net-front + weak-
+	# side, each covering an assigned man). BACKCHECK + CONTAIN are
+	# TRANS_OD-only — CONTAIN is the deepest peer gap-controlling the
+	# carrier, BACKCHECK the two sprinting home to cover a man each.
+	# NEUTRAL has no carrier and uses CHASE + FLANK_L + FLANK_R below.
+	PRESSURE,   # DZONE: puck pressurer, closes the carrier.
+	ANCHOR,     # DZONE: net-front; covers an assigned man (threat partition).
+	COVER,      # DZONE: weak-side; covers an assigned man (threat partition).
+	BACKCHECK,  # TRANS_OD: sprints home to cover an assigned receiver.
+	CONTAIN,    # TRANS_OD: deepest peer; gap control on the carrier.
 	# Offensive roles.
 	FINISHER,   # OZONE: scoring threat near opp net. Roams the slot.
 	OUTLET,     # TRANS_DO: stretch-pass option at opp blue line.
@@ -103,7 +107,7 @@ static func slots_for_state(state: int) -> Array[int]:
 		AIPossessionState.State.FORECHECK:
 			return [Slot.F1_PRESSURE, Slot.F2_MID, Slot.F3_HIGH]
 		AIPossessionState.State.TRANS_OD:
-			return [Slot.PRESSURE, Slot.BACKCHECK, Slot.CONTAIN]
+			return [Slot.CONTAIN, Slot.BACKCHECK]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
@@ -126,16 +130,15 @@ static func slot_anchor(slot: Slot, carrier_pos: Vector3) -> Vector3:
 #   DZONE     PRESSURE = closest to puck;  ANCHOR = closest to our net;  COVER = remaining
 #   OZONE     CARRIER fixed;  FINISHER = closest to opp net;  SUPPORT = remaining
 #   TRANS_DO  CARRIER fixed;  OUTLET = closest to opp net;  SUPPORT = remaining
-#   TRANS_OD  BACKCHECK = closest to OPP net (Sprinting Through, gets first claim);
-#             PRESSURE = closest to puck of remaining;  CONTAIN = leftover
+#   TRANS_OD  CONTAIN = closest to OUR net (deepest = gap-control last man back);
+#             BACKCHECK = the remaining two (sprint home, cover a man each)
 #   NEUTRAL   CHASE = closest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
-# Sprinting Through is the 3v3 backcheck technique encoded in
-# TRANS_OD's BACKCHECK criterion: the up-ice peer (closest to opp
-# net) has the longest sprint home so they get BACKCHECK — their
-# role behavior (search center at our slot) pulls them home. The
-# deeper peer becomes CONTAIN and engages the play forward instead
-# of camping the slot.
+# TRANS_OD encodes the 3v3 "one contains, two backcheck through"
+# read: the deepest peer (closest to our net) takes CONTAIN and plays
+# gap control on the carrier; the other two BACKCHECK home and pick up
+# the carrier's receivers (a distinct man each, via TeamBrain's threat
+# partition). Exactly one peer engages the carrier — no double-team.
 #
 # Hysteresis: each closest-to-X query adds HYSTERESIS_PENALTY_M to
 # the effective distance for peers who didn't hold the slot last
@@ -186,19 +189,19 @@ static func assign(
 					Slot.COVER)
 
 		AIPossessionState.State.TRANS_OD:
-			# Sprinting Through: BACKCHECK is the longest-sprint-home
-			# role, so it gets first claim on the up-ice peer even when
-			# that peer also happens to be closest to the puck (caught
-			# F1 in a turnover). Assigning BACKCHECK before PRESSURE
-			# guarantees the up-ice peer commits to the sprint home;
-			# PRESSURE then goes to whichever of the two remaining
-			# peers is closest to the puck, and CONTAIN takes the
-			# leftover deep peer who engages the play forward.
-			_assign_pair_then_remainder(
+			# Defending a rush: the DEEPEST peer (closest to our net) is the
+			# last man back and plays CONTAIN as gap control on the carrier —
+			# stay goal-side, hold a controlled gap ahead of the net, never
+			# lunge. The other two are BACKCHECK: they sprint home and pick up
+			# the carrier's receivers (a distinct man each, via TeamBrain's
+			# threat partition). Replaces the old PRESSURE+BACKCHECK+CONTAIN
+			# triad, where TWO peers engaged the carrier forward (overcommit /
+			# bad angle / breakaways) and the backchecker raced to an empty
+			# slot point instead of a man.
+			_assign_one_then_remainder(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
-					Slot.BACKCHECK, opp_net,
-					Slot.PRESSURE, puck_pos,
-					Slot.CONTAIN)
+					Slot.CONTAIN, our_net,
+					Slot.BACKCHECK)
 
 		AIPossessionState.State.OZONE:
 			_assign_one_then_remainder(

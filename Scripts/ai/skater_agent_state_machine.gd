@@ -2931,8 +2931,8 @@ func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 
 # True if our current brain slot is an on-puck defensive pressurer —
-# the only roles that actively jab. (PRESSURE is shared by DZONE +
-# TRANS_OD; F1_PRESSURE is FORECHECK; CONTAIN is the TRANS_OD engager.)
+# the only roles that actively jab. (PRESSURE is DZONE; F1_PRESSURE is
+# FORECHECK; CONTAIN is the TRANS_OD gap defender on the carrier.)
 func _is_puck_pressurer_slot() -> bool:
 	if _team_brain == null:
 		return false
