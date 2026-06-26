@@ -1120,8 +1120,13 @@ static func path_clearance(from: Vector3, to: Vector3,
 # need a momentum-aware ETA without inventing their own constants
 # (e.g., SUPPORT's foot-race-home exposure check uses this for the
 # threat opp's ETA back to our net).
+#
+# `ref_speed_m_s` is the actor's flat skating speed; it defaults to the league
+# reference so cross-player callers (opponent / teammate ETA, the loose-puck
+# election that must stay consistent across all bots) keep the shared baseline.
+# A bot estimating ITS OWN arrival passes its attribute-scaled top speed.
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
-		from_velocity: Vector3) -> float:
+		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S) -> float:
 	var dx: float = dest.x - from_pos.x
 	var dz: float = dest.z - from_pos.z
 	var dist: float = sqrt(dx * dx + dz * dz)
@@ -1130,7 +1135,7 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 	var inv: float = 1.0 / dist
 	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
 	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
-			SKATER_REF_SPEED_M_S + speed_along)
+			ref_speed_m_s + speed_along)
 	return dist / effective
 
 

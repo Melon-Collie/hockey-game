@@ -46,6 +46,13 @@ func set_max_wrister_charge_distance(d: float) -> void:
 	_sm.set_max_wrister_charge_distance(d)
 
 
+# Forward this bot's attribute-scaled self-capabilities (speed, accel, reach,
+# shot / pass speed) to the state machine. Called by AIController.apply_attributes
+# on spawn and on free-play picker changes. Null is a no-op (baseline defaults).
+func apply_capabilities(caps: AISelfCapabilities) -> void:
+	_sm.apply_capabilities(caps)
+
+
 # Returns the InputState for this physics tick. Caller must not retain a
 # reference past the next tick — same scratch buffer is reused.
 func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> InputState:

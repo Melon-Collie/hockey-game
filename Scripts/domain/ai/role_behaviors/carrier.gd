@@ -251,7 +251,8 @@ func _pick_action(ctx: RoleContext) -> void:
 	# Top-level SHOOT.
 	var shoot_score: float = AIActionScoring.score_shoot(
 			wrister_release_pos, attacking_goal, wrister_goalie,
-			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot, goalie_now)
+			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot, goalie_now,
+			ctx.self_wrister_shot_speed)
 
 	# Top-level QUICK_SHOT — snap release at PASS_SPEED, no charge. The
 	# goalie can't slide during a zero-charge release, so a still-squared
@@ -464,7 +465,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# leads past the receiver, both of which depress long-pass
 		# scores below where they should be.
 		var dist: float = self_pos.distance_to(receiver_state.position)
-		var pass_speed: float = (AIActionScoring.PASS_CHARGE_SPEED_M_S
+		var pass_speed: float = (ctx.self_charged_pass_speed
 				if dist > AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M
 				else AIActionScoring.PASS_SPEED_M_S)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
@@ -629,7 +630,8 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 			continue
-		var local_time: float = AIActionScoring.time_to_arrive(self_pos, candidate, self_velocity)
+		var local_time: float = AIActionScoring.time_to_arrive(
+				self_pos, candidate, self_velocity, ctx.self_max_speed)
 		_project_opponents_to(ctx, local_time, _scratch_opponents_path)
 		var lane: float = AIActionScoring.path_clearance(
 				self_pos, candidate, _scratch_opponents_path)
@@ -639,7 +641,8 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var cand_release_t: float = local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 		var cand_goalie: Vector3 = _predict_goalie_at(ctx, cand_release_t, candidate)
 		var dest_score: float = _score_at(ctx, candidate, self_pos,
-				_scratch_opponents_path, cand_goalie, goalie_now)
+				_scratch_opponents_path, cand_goalie, goalie_now,
+				ctx.self_wrister_shot_speed)
 		var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 		# Omnidirectional poke-safety penalty — score_at uses a forward-
 		# cone pressure (right for shooting), but for possession we also
@@ -681,7 +684,8 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
 	# already cover it via local polar candidates.
-	var slot_time: float = AIActionScoring.time_to_arrive(self_pos, slot_pos, self_velocity)
+	var slot_time: float = AIActionScoring.time_to_arrive(
+			self_pos, slot_pos, self_velocity, ctx.self_max_speed)
 	_project_opponents_to(ctx, slot_time, _scratch_opponents_path)
 	var slot_lane: float = AIActionScoring.path_clearance(
 			self_pos, slot_pos, _scratch_opponents_path)
@@ -690,7 +694,8 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var slot_dest_goalie: Vector3 = _predict_goalie_at(
 				ctx, slot_release_t, slot_pos)
 		var slot_dest_score: float = _score_at(ctx, slot_pos, self_pos,
-				_scratch_opponents_path, slot_dest_goalie, goalie_now)
+				_scratch_opponents_path, slot_dest_goalie, goalie_now,
+				ctx.self_wrister_shot_speed)
 		var slot_decay: float = pow(
 				AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, slot_time)
 		var slot_puck_pos: Vector3 = _puck_pos_at(slot_pos, attacking_goal)
@@ -719,7 +724,8 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	var stand_goalie: Vector3 = _predict_goalie_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
-			_scratch_opponents, stand_goalie, goalie_now)
+			_scratch_opponents, stand_goalie, goalie_now,
+			ctx.self_wrister_shot_speed)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var stand_safety: float = AIActionScoring.carry_poke_safety(
 			stand_puck_pos, _scratch_opponents)
@@ -747,13 +753,18 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 # `opps` should already be projected to the time the actor will be
 # at `pos` (caller's responsibility — score_pass does this for
 # receivers, _best_carry does it for carry candidates).
+# `shot_speed_m_s` is the SHOOTER's charged-shot speed. Carry/stand candidates
+# evaluate THIS bot's future shot, so they pass its attribute-scaled speed; the
+# receiver eval (score from a teammate's spot) keeps the default since we don't
+# carry teammates' attributes — same cross-player boundary as elsewhere.
 func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		opps: Array[Vector3],
-		predicted_goalie_pos: Vector3, goalie_now: Vector3) -> float:
+		predicted_goalie_pos: Vector3, goalie_now: Vector3,
+		shot_speed_m_s: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,
-			GameRules.NET_HALF_WIDTH, opps, goalie_now)
+			GameRules.NET_HALF_WIDTH, opps, goalie_now, shot_speed_m_s)
 	var from_dist: float = from_pos.distance_to(attacking_goal)
 	if from_dist <= AIActionScoring.SHOT_RANGE_FALLOFF_M:
 		return shoot_s
