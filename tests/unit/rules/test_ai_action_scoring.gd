@@ -954,42 +954,66 @@ func test_lane_clear_defender_drifting_away_blocks_less() -> void:
 
 
 # ── lane_clear_saucer / prefers_saucer: lofting over mid-lane defenders ───────
-# A saucer pass flies the puck over a defender's grounded blade mid-lane,
-# so a mid-lane defender that blocks a flat pass does NOT block a saucer —
-# but a defender draped over the receiver (puck has landed) still does.
+# A saucer flies the puck over a grounded STICK but not a BODY. So a
+# stick-poke-range mid-lane defender that blocks a flat pass does NOT block
+# a saucer, but a defender standing dead in the lane (body in the way)
+# still does — and a defender at the receiver (puck landed) still does.
 
-func test_lane_clear_saucer_ignores_mid_lane_defender() -> void:
-	# Same mid-lane defender that drops the grounded lane below 1.0: the
-	# saucer flies over it, so the saucer lane stays fully clear.
+func test_lane_clear_saucer_clears_stick_range_mid_lane_defender() -> void:
+	# Defender mid-lane but off the line by more than a body radius (within
+	# stick + closing reach, so the grounded lane is contested). The saucer
+	# flies over their stick and their body is out of the way → clear.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
-	var mid_lane: Array[Vector3] = [Vector3(0.2, 0.0, 7.0)]  # t ≈ 0.5
+	var mid_lane: Array[Vector3] = [Vector3(0.7, 0.0, 7.0)]  # frac ≈ 0.5
 	var grounded: float = AIActionScoring.lane_clear(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S)
 	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S)
-	assert_lt(grounded, 1.0, "sanity: grounded lane is contested by the mid-lane defender")
-	assert_almost_eq(saucer, 1.0, 0.0001, "saucer flies over the mid-lane defender → lane clear")
+	assert_lt(grounded, 1.0, "sanity: grounded lane is contested by the stick-range defender")
+	assert_almost_eq(saucer, 1.0, 0.0001, "saucer flies over the stick → lane clear")
+
+
+func test_lane_clear_saucer_blocked_by_body_in_lane() -> void:
+	# Defender standing dead in the mid-lane (within a body radius of the
+	# line): the saucer can't fly over a torso, so it still blocks.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var body_in_lane: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]  # frac ≈ 0.5
+	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, body_in_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_lt(saucer, 0.1, "a body dead in the lane blocks a saucer")
 
 
 func test_lane_clear_saucer_still_blocked_near_receiver() -> void:
-	# Defender close to the receiver end (high t, past the airborne
-	# window): the saucer has landed by then, so it still blocks.
+	# Defender close to the receiver end (high frac, past the airborne
+	# window): the saucer has landed by then, so it still blocks with full
+	# grounded stick reach.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
-	# t ≈ 0.9 (> SAUCER_AIRBORNE_T_MAX) → puck grounded, defender blocks.
-	var near_receiver: Array[Vector3] = [Vector3(0.2, 0.0, 12.6)]
+	var near_receiver: Array[Vector3] = [Vector3(0.2, 0.0, 12.6)]  # frac ≈ 0.9
 	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, near_receiver, AIActionScoring.PASS_CHARGE_SPEED_M_S)
 	assert_lt(saucer, 1.0, "a defender at the receiver end still blocks a landed saucer")
 
 
-func test_prefers_saucer_true_for_contested_mid_lane() -> void:
-	# A long pass with a defender squarely mid-lane: grounded is contested,
-	# the saucer clears it by more than the margin → prefer the saucer.
+func test_prefers_saucer_true_for_stick_range_mid_lane() -> void:
+	# A long pass with a stick-range defender mid-lane: grounded is
+	# contested, the saucer clears their stick by more than the margin →
+	# prefer the saucer.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
-	var mid_lane: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]
+	var mid_lane: Array[Vector3] = [Vector3(0.7, 0.0, 7.0)]
 	assert_true(
 			AIActionScoring.prefers_saucer(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S),
-			"a mid-lane defender on a long pass should prompt a saucer")
+			"a stick-range mid-lane defender on a long pass should prompt a saucer")
+
+
+func test_prefers_saucer_false_when_body_blocks_lane() -> void:
+	# Defender standing dead in the lane: the saucer can't clear their body,
+	# so lofting buys nothing → don't prefer it.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var body_in_lane: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]
+	assert_false(
+			AIActionScoring.prefers_saucer(from, to, body_in_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S),
+			"a body dead in the lane can't be saucered over")
 
 
 func test_prefers_saucer_false_when_lane_open() -> void:

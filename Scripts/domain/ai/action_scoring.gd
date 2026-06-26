@@ -202,6 +202,15 @@ const LANE_DEFENDER_REACH_M: float = GameRules.DEFAULT_STICK_LENGTH_M
 const LANE_REACTION_DELAY_S: float = 0.08
 const LANE_DEFENDER_CLOSE_SPEED_M_S: float = 0.5 * GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
+# A saucer pass lifts over a grounded stick but NOT a body — it's hard to
+# react a blade up into a puck flying overhead, but you can't fly it
+# through a torso. So in the airborne stretch of a saucer's flight a
+# defender's reach collapses to their BODY radius: no stick extension, no
+# closing. A defender standing dead in the lane still blocks the saucer; a
+# stick-poke-range defender no longer does. Matches the skater collision-
+# cylinder radius (GameRules canonical body half-width).
+const LANE_DEFENDER_BODY_RADIUS_M: float = GameRules.OFFSIDE_LINE_SLACK
+
 # Puck release speed assumptions for lane-clear reaction-window math.
 # `puck.release(direction, power)` consumes `direction × power` as
 # linear velocity directly (see Puck.release), so "power" IS m/s.
@@ -735,17 +744,25 @@ static func _lane_closest_approach_t(
 	return -(w0x * wdx + w0z * wdz) / wd_sq
 
 
-# Per-defender block strength [0, 1] at a given approach time `t`: how
-# completely this defender can get a stick onto the puck's path there.
+# Miss distance: how far the puck passes from the dead-reckoned defender
+# at approach time `t`. Pure float math — shared by the flat-pass and
+# saucer (body-only) block calculations so the two agree on the geometry.
+static func _lane_miss_at(
+		fx: float, fz: float, pvx: float, pvz: float, t: float,
+		px: float, pz: float, vx: float, vz: float) -> float:
+	var wx: float = (fx - px) + (pvx - vx) * t
+	var wz: float = (fz - pz) + (pvz - vz) * t
+	return sqrt(wx * wx + wz * wz)
+
+
+# Flat per-defender block strength [0, 1] at a given approach time `t`:
 # reach = stick + closing they can do after the reaction delay; block is
 # how far the lane penetrates that reach, normalised by a stick length
 # (one full stick inside reach ⇒ certain block). Pure float math.
 static func _lane_block_at(
 		fx: float, fz: float, pvx: float, pvz: float, t: float,
 		px: float, pz: float, vx: float, vz: float) -> float:
-	var wx: float = (fx - px) + (pvx - vx) * t
-	var wz: float = (fz - pz) + (pvz - vz) * t
-	var miss: float = sqrt(wx * wx + wz * wz)
+	var miss: float = _lane_miss_at(fx, fz, pvx, pvz, t, px, pz, vx, vz)
 	var reach: float = LANE_DEFENDER_REACH_M + LANE_DEFENDER_CLOSE_SPEED_M_S \
 			* maxf(0.0, t - LANE_REACTION_DELAY_S)
 	return clampf((reach - miss) / LANE_DEFENDER_REACH_M, 0.0, 1.0)
@@ -807,11 +824,12 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 
 
 # Lane-clear for a SAUCER (elevated) pass. Same closest-approach model as
-# lane_clear, except a defender whose closest-approach falls in the mid-
-# lane airborne window (fraction of flight in [SAUCER_AIRBORNE_T_MIN,
-# SAUCER_AIRBORNE_T_MAX]) is skipped — the puck is over their grounded
-# blade there and can't be picked off. Defenders near the passer (puck not
-# yet lofted) or near the receiver (puck has landed) still block.
+# lane_clear, except in the mid-lane airborne window (fraction of flight
+# in [SAUCER_AIRBORNE_T_MIN, SAUCER_AIRBORNE_T_MAX]) the puck is overhead,
+# so a defender's reach collapses to their BODY radius — sticks fly under
+# it, only a body in the lane stops it (see LANE_DEFENDER_BODY_RADIUS_M).
+# Defenders near the passer (puck not yet lofted) or near the receiver
+# (puck has landed) still block with full grounded stick reach.
 static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		puck_speed_m_s: float, opponent_vels: Array[Vector3] = []) -> float:
 	var dx: float = to.x - from.x
@@ -839,13 +857,21 @@ static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vecto
 		if t_raw > seg_time:
 			continue  # trailing the play — never closest in flight
 		var t: float = maxf(t_raw, 0.0)
-		# Airborne over this defender — the saucer flies the puck above
-		# their grounded blade at this point in the flight.
 		var frac: float = t / seg_time
+		var block: float
 		if frac >= SAUCER_AIRBORNE_T_MIN and frac <= SAUCER_AIRBORNE_T_MAX:
-			continue
-		var block: float = _lane_block_at(
-				from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
+			# Airborne here — the puck flies over a grounded stick, so only
+			# the defender's body can block it: reach = body radius, no
+			# stick, no closing.
+			var miss: float = _lane_miss_at(
+					from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
+			block = clampf(
+					(LANE_DEFENDER_BODY_RADIUS_M - miss) / LANE_DEFENDER_BODY_RADIUS_M,
+					0.0, 1.0)
+		else:
+			# Grounded near the ends — full stick reach + closing.
+			block = _lane_block_at(
+					from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
 		if block > max_block:
 			max_block = block
 	return clampf(1.0 - max_block, 0.0, 1.0)
