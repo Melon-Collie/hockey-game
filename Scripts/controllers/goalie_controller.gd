@@ -156,16 +156,22 @@ extends Node
 # (0.2-0.4 m), and the existing tracking-speed lerp smooths brief deke
 # velocity spikes so quick fakes don't drag the goalie out of position.
 @export var carrier_velocity_lead_time: float = 0.12
-# Puck velocity lead. Adds projection of where the PUCK itself is going (vs
-# just the carrier body), which catches cases the carrier-velocity lead misses:
+# Puck velocity lead — CARRIER-PRESENT (dangle) branch only. Projects where the
+# PUCK is going (vs just the carrier body), which catches what the carrier lead
+# misses and is what keeps the goalie in front of forehand-backhand dekes:
 #   - Forehand-backhand dekes: carrier body stationary, puck drags laterally
-#   - Loose-puck cross-creases: no carrier, only puck velocity exists
 #   - Carrier pivoting to shoot: body still, blade swings out for release
 # Shorter than the carrier lead because puck velocity is jittery during
-# stickhandling — the existing tracking-speed lerp + this shorter lead means
-# transient dangles don't drag the goalie out while sustained motion (real
-# dekes, cross-crease passes) does.
+# stickhandling — the tracking-speed lerp + this shorter lead means transient
+# dangles don't drag the goalie out while sustained motion does.
 @export var puck_velocity_lead_time: float = 0.08
+# Puck velocity lead — LOOSE-puck (no carrier) branch, i.e. a pass/rebound in
+# flight. Deliberately ~0: the goalie must NOT front-run a back-door pass, so he
+# tracks where the puck IS and loses the cross-crease race to a hard pass like a
+# real goalie. Kept separate from the dangle lead above so weakening the pass
+# read does not touch deke coverage. Raise slightly if he's too beatable on
+# slower cross-ice plays.
+@export var loose_puck_velocity_lead_time: float = 0.0
 
 # ── Lateral pressure depth retreat ───────────────────────────────────────────
 # When a lateral threat moves faster than the goalie can t-push, retreat
@@ -337,17 +343,24 @@ extends Node
 
 # ── Cross-crease detection (STANDING push only) ──────────────────────────────
 # A pass whipping across the slot is read off PUCK velocity, not the smoothed
-# threat (which lags toward the passer's body). When detected and the goalie
-# is STANDING, the goalie pushes hard on its feet toward the projected
-# crossing. (Butterfly slides are NOT triggered here — they come out of the
-# pad-coverage check in _try_commit_slide, which handles both this and dekes
-# uniformly.) This is the backdoor /
-# one-timer fix — the smoothed-threat threshold trigger fires too late on these.
+# threat (which lags toward the passer's body). When detected and the goalie is
+# STANDING, after a human reaction delay the goalie commits a hard but REALISTIC
+# T-push on its feet toward the projected crossing — at the normal t_push_speed,
+# accelerating from rest (no turbo, no instant-on). This is deliberately an
+# honest race the goalie LOSES to a clean hard cross-seam one-timer (he's still
+# mid-push / unset when the shot comes) and wins against slow / telegraphed /
+# long-developing feeds. (Butterfly slides are NOT triggered here — they come
+# out of the pad-coverage check in _try_commit_slide, which handles both this
+# and dekes uniformly.)
 @export var cross_crease_slot_depth: float = 5.0        # m in front of goal the pass window covers
 @export var cross_crease_lateral_ratio: float = 1.5     # |vx| must exceed |vz|*this to count as a pass
 @export var cross_crease_min_lateral_speed: float = 6.0 # m/s puck lateral speed to trigger
 @export var cross_crease_lead_time: float = 0.30        # s to project the puck forward for the target
-@export var cross_crease_push_speed: float = 6.0        # m/s standing desperation push toward crossing
+# Human read delay before the push engages — the goalie doesn't move for this
+# long after the pass releases. On a quick royal-road one-timer this delay alone
+# loses him the race; raise it to make the back door deadlier, lower it (toward
+# the dangle/shot reaction_delay) to give him a fighting chance on the cross.
+@export var cross_crease_react_delay: float = 0.12      # s before the standing drive engages
 @export var cross_crease_push_duration: float = 0.50    # s the standing push stays committed
 # When a slide commits toward a post (extreme lateral target), the goalie
 # also pulls deep so the sealing pad presses the post — backdoor /
@@ -557,8 +570,11 @@ var _prev_puck_position: Vector3 = Vector3.ZERO
 var _puck_approach_velocity: float = 0.0
 var _reading_slapper_tell: bool = false
 # Cross-crease push state (standing "push on feet" toward a detected pass).
-# `_cross_crease_timer` counts down while the push is committed; while > 0 the
-# standing movement drives toward `_cross_crease_target_x` at push speed.
+# `_cross_crease_react_timer` counts down the human read delay after the pass is
+# detected; when it expires the push engages and `_cross_crease_timer` counts
+# down while the drive is committed (drives toward `_cross_crease_target_x` at
+# the normal T-push speed, accelerating from rest — see _move_along_arc).
+var _cross_crease_react_timer: float = 0.0
 var _cross_crease_timer: float = 0.0
 var _cross_crease_target_x: float = 0.0
 # Lunge state: active timer counts down while the blocker is extended;
@@ -776,6 +792,7 @@ func reset_to_crease() -> void:
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
 	_prev_puck_position = _tracked_threat_position
+	_cross_crease_react_timer = 0.0
 	_cross_crease_timer = 0.0
 	_cross_crease_target_x = 0.0
 	_lunge_active_timer = 0.0
@@ -879,10 +896,14 @@ func _compute_threat_position() -> Vector3:
 	if carrier == null or _reaction.reacting \
 			or _sm.is_rvh() \
 			or _sm.current == State.RECOVERING:
-		# Loose puck (or reaction-frozen / RVH / recovering): track raw puck
-		# position with PUCK velocity projection so cross-crease passes and
-		# loose-puck plays get the same lookahead carriers get.
-		var puck_lead: Vector3 = _puck_velocity_est * puck_velocity_lead_time
+		# Loose puck (or reaction-frozen / RVH / recovering): track the raw puck
+		# position. A SEPARATE, near-zero lead is used here (vs the dangle branch
+		# below) so the goalie does NOT front-run a back-door pass — he reads where
+		# the puck IS, not where it's headed, and so loses the race across the
+		# crease to a hard cross-seam pass exactly like a real goalie. The lead
+		# scales with puck speed, so it only ever mattered for FAST loose pucks
+		# (passes); a slow rebound is unaffected either way.
+		var puck_lead: Vector3 = _puck_velocity_est * loose_puck_velocity_lead_time
 		puck_lead.y = 0.0
 		return puck.global_position + puck_lead
 	# COILING and SLIDING share the down-state chest weight (they're part of
@@ -1558,10 +1579,13 @@ func _move_along_arc(delta: float) -> Vector2:
 			_five_hole_openness = lerpf(_five_hole_openness, five_hole_base, part_lerp_speed * delta)
 		return current
 	var target_xz: Vector2 = _arc_target_xz()
-	# Cross-crease "push on feet": a detected pass overrides the lateral target
-	# toward the projected crossing and drives at push speed — a desperation
-	# T-push to beat the puck to the far post while staying up to react high.
-	# Host-only (the timer is host-set; clients adopt position via broadcast).
+	# Cross-crease "push on feet": after the read delay (handled in
+	# _update_cross_crease), a detected pass overrides the lateral target toward
+	# the projected crossing and the goalie commits a hard T-push toward the far
+	# man — but at the NORMAL t_push_speed, accelerating from rest like any push.
+	# No turbo and no instant-on: it's an honest race the goalie loses to a quick
+	# cross-seam one-timer and wins against a slow feed. Host-only (the timer is
+	# host-set; clients adopt position via broadcast).
 	var cross_crease_push: bool = is_server and _cross_crease_timer > 0.0
 	if cross_crease_push:
 		target_xz.x = _cross_crease_target_x
@@ -1570,7 +1594,7 @@ func _move_along_arc(delta: float) -> Vector2:
 	var move_speed: float
 	var five_hole_target: float
 	if cross_crease_push:
-		move_speed = cross_crease_push_speed
+		move_speed = t_push_speed
 		five_hole_target = five_hole_t_push_max
 	elif delta_2d < 0.01:
 		move_speed = shuffle_speed
@@ -1582,16 +1606,11 @@ func _move_along_arc(delta: float) -> Vector2:
 		move_speed = shuffle_speed
 		five_hole_target = five_hole_shuffle_max
 	# Ramp the effective speed toward the desired so a push isn't instant — the
-	# goalie accelerates onto its edge. The cross-crease desperation push bypasses
-	# the ramp (it's already a committed all-out push); carry its speed into
-	# `_move_speed_current` so a normal track continuing afterward doesn't re-ramp.
-	var effective_speed: float
-	if cross_crease_push:
-		effective_speed = move_speed
-		_move_speed_current = move_speed
-	else:
-		_move_speed_current = move_toward(_move_speed_current, move_speed, lateral_accel * delta)
-		effective_speed = _move_speed_current
+	# goalie accelerates onto its edge. The cross-crease drive ramps the same way
+	# (a real push-off builds speed), which is part of why it loses the race to a
+	# hard pass.
+	_move_speed_current = move_toward(_move_speed_current, move_speed, lateral_accel * delta)
+	var effective_speed: float = _move_speed_current
 	var step: float = effective_speed * delta
 	var new_xz: Vector2
 	if delta_2d <= step or delta_2d < 0.0001:
@@ -1868,6 +1887,12 @@ func _update_body_parts(delta: float) -> void:
 func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	if _cross_crease_timer > 0.0:
 		_cross_crease_timer -= delta
+	# Tick the human read delay; when it expires the committed drive engages.
+	if _cross_crease_react_timer > 0.0:
+		_cross_crease_react_timer -= delta
+		if _cross_crease_react_timer <= 0.0:
+			_cross_crease_react_timer = 0.0
+			_cross_crease_timer = cross_crease_push_duration
 	if carrier != null:
 		return
 	if _reaction.reacting or _sm.is_rvh():
@@ -1878,14 +1903,22 @@ func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	if absf(cross_vx) < cross_crease_min_lateral_speed:
 		return
 	# Project the puck forward along its lateral motion. The slide consumer
-	# uses the sign to pick which post to seal; the standing "push on feet"
-	# consumer uses the value directly. Clamp to the seal extent so the
-	# standing push doesn't overshoot the sealing position.
+	# uses the sign to pick which post to seal; the standing drive consumer
+	# uses the value directly (where the receiver is). Clamp to the seal extent
+	# so the standing push doesn't overshoot the sealing position. Re-aimed each
+	# frame — an upright goalie can still adjust the drive on its feet (unlike a
+	# committed butterfly slide).
 	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
 	var target_x: float = puck.global_position.x + cross_vx * cross_crease_lead_time
 	target_x = _slide.clamp_lateral_target(target_x, _goal_center_x, net_half_width, pad_edge)
 	_cross_crease_target_x = target_x
-	_cross_crease_timer = cross_crease_push_duration
+	# Read the pass once, then commit a single delayed drive — don't restart the
+	# delay or re-arm while a read or drive is already in flight.
+	if _cross_crease_timer <= 0.0 and _cross_crease_react_timer <= 0.0:
+		if cross_crease_react_delay > 0.0:
+			_cross_crease_react_timer = cross_crease_react_delay
+		else:
+			_cross_crease_timer = cross_crease_push_duration
 
 # Universal puck-tracking trigger. Runs each host physics frame on loose
 # pucks; if the puck is fast and on track for the net within the
