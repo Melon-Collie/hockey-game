@@ -4,45 +4,52 @@ class_name AIRoleBreakout
 # our OWN defensive zone). Two outlet options for the carrier breaking
 # the puck out, asymmetric by job but scored with the same primitive:
 #
-#   strong (BREAKOUT_STRONG) — the strong-side-wall outlet. Free to
-#     advance up-ice toward the blue line on the puck's side. This is
-#     the primary "give me the puck and I'll carry it out" option.
+#   strong (BREAKOUT_STRONG) — the strong-side-wall outlet. Presents UP
+#     THE WALL: candidates are sampled along the strong-side boards from
+#     just ahead of the carrier all the way to our blue line, and the
+#     score picks the highest spot whose lane is still clean. So STRONG
+#     stretches to the blue line when the wall is open and drops to a
+#     lower open spot when the high wall is covered — a real up-the-wall
+#     breakout outlet, not a 4 m dump-off.
 #   weak   (BREAKOUT_WEAK)   — the weak-side reverse valve. Stays
 #     goal-side of (no further up-ice than) the carrier so a D-to-D
 #     reverse is always available and the carrier is never the last
 #     man back. Mirrors SUPPORT's safety-valve role, on the weak side.
 #
-# Scoring (both): argmax over a side-gated candidate set of
+# Scoring (both): argmax over each role's candidate set of
 #
 #     lane_clear(carrier → c, pass_speed) × position_potential(c)
 #
 # - lane_clear is the reaction-window PASS model (same one the carrier
 #   uses to decide the pass), so the outlet positions itself where the
 #   carrier actually has a clean lane — the two agree on "threadable."
+#   It also gates STRONG's stretch: a covered high-wall candidate scores
+#   ~0, so STRONG only advances as far as the lane stays open.
 # - position_potential is the open-ice / forward-progress value of the
-#   spot. Crucially it does NOT collapse to 0 deep in our own zone
-#   (its closeness ramp spans the whole rink), unlike score_pass /
-#   score_shoot which return 0 outside shooting range — so it gives a
-#   usable gradient for breakout positioning where score_pass can't.
+#   spot. Its `closeness` term ALREADY rewards up-ice progress (closer to
+#   the attacking net), so among equally-open wall candidates the more
+#   advanced one wins — no separate up-ice factor needed. It also doesn't
+#   collapse to 0 deep in our zone (its ramp spans the whole rink),
+#   unlike score_pass / score_shoot, so it gives a usable breakout
+#   gradient where those return 0.
 #
-# The asymmetry lives entirely in candidate generation + filtering, not
-# the score: STRONG searches up the strong-side wall and is free to
-# advance; WEAK searches the weak side and is hard-constrained
-# goal-side of the carrier. Search side comes from ctx.strong_x (the
-# brain's hysteretic strong side) so it matches the slot assignment.
+# The asymmetry lives in candidate generation: STRONG samples up the
+# strong-side wall (free to advance); WEAK searches the weak side and is
+# hard-constrained goal-side of the carrier. Search side comes from
+# ctx.strong_x (the brain's hysteretic strong side) so it matches the
+# slot assignment.
 
-# Search radius for the polar candidate ring around each role's search
-# center. Same scale as the other off-puck roles' SEARCH_STEP_M.
-const SEARCH_RADIUS_M: float = 4.0
-
-# How far up-ice (toward our blue line) the STRONG search center sits
-# from the carrier, along the breakout direction. One ring-radius of
-# lead so the strong outlet presents ahead of the puck on the wall.
-const STRONG_LEAD_M: float = 4.0
-
-# Lateral inset from the boards for the strong-side wall center, so the
-# polar ring doesn't all clamp against the wall.
+# Lateral inset from the boards for the strong-side wall, so candidates
+# don't sit hard against the glass. WEAK's ring uses AIRoleHelpers'
+# shared SEARCH_STEP_M via generate_candidates_around.
 const WALL_INSET_M: float = 2.0
+
+# STRONG wall sampling: how many points along the wall (carrier→blue line)
+# and how far ahead of the carrier the NEAREST one sits. The samples span
+# from STRONG_MIN_LEAD_M up-ice of the carrier to our blue line (the zone
+# exit); position_potential + lane_clear pick the best of them.
+const STRONG_WALL_SAMPLES: int = 5
+const STRONG_MIN_LEAD_M: float = 3.0
 
 # Weak-side safety-valve tolerance: WEAK may sit up to this far up-ice
 # of the carrier (roughly even) but no further — keeps it the reverse
@@ -72,15 +79,16 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	# Side this outlet works: strong outlet on the strong side, weak
 	# outlet on the opposite side.
 	var side_x: float = ctx.strong_x if is_strong else -ctx.strong_x
-	# Breakout direction: toward our blue line / up-ice (away from our
-	# net). own_goal_dir is +1 when our net is +Z, so up-ice is
-	# -own_goal_dir on Z.
-	var up_ice_z: float = -ctx.own_goal_dir
 
-	var search_center: Vector3 = _search_center(
-			ctx, carrier_pos, is_strong, side_x, up_ice_z)
-	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
-			ctx.self_pos, search_center)
+	var candidates: Array[Vector3]
+	if is_strong:
+		# Up the strong-side wall: carrier → our blue line.
+		candidates = _strong_wall_candidates(ctx, carrier_pos, side_x)
+	else:
+		# Weak-side reverse valve: a ring around a point level with the
+		# carrier on the weak wall.
+		var search_center: Vector3 = _weak_search_center(carrier_pos, side_x)
+		candidates = AIRoleHelpers.generate_candidates_around(ctx.self_pos, search_center)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -114,19 +122,38 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	return d
 
 
-# Search center for each outlet.
-#   STRONG: strong-side wall, led up-ice from the carrier toward our
-#     blue line — presents ahead of the puck on the boards.
-#   WEAK:   weak-side, level with the carrier on the depth axis — the
-#     reverse-valve release point.
-static func _search_center(_ctx: RoleContext, carrier_pos: Vector3,
-		is_strong: bool, side_x: float, up_ice_z: float) -> Vector3:
+# STRONG candidate set: points along the strong-side wall from just ahead
+# of the carrier (STRONG_MIN_LEAD_M up-ice) to our blue line (the zone
+# exit), plus self_pos as a stand-still fallback. Scoring picks the
+# highest open one — the wall is the role's identity, so candidates stay
+# on the boards rather than drifting to center.
+static func _strong_wall_candidates(ctx: RoleContext, carrier_pos: Vector3,
+		side_x: float) -> Array[Vector3]:
+	var result: Array[Vector3] = []
 	var wall_x: float = side_x * (GameRules.RINK_HALF_WIDTH - WALL_INSET_M)
-	if is_strong:
-		# Lead up-ice from the carrier's depth toward our blue line.
-		var z: float = carrier_pos.z + up_ice_z * STRONG_LEAD_M
-		return Vector3(wall_x, 0.0, z)
-	# Weak: level with the carrier (reverse option on the weak wall).
+	var own_dir: float = ctx.own_goal_dir
+	# Depth = own_dir * z grows toward our net; up-ice is SMALLER depth.
+	var carrier_depth: float = own_dir * carrier_pos.z
+	var blue_depth: float = GameRules.BLUE_LINE_Z
+	# Nearest sample sits a bit ahead of the carrier; farthest at the blue
+	# line. maxf keeps the range non-inverted when the carrier is already
+	# close to the line (then all samples collapse onto the blue line).
+	var bottom_depth: float = maxf(carrier_depth - STRONG_MIN_LEAD_M, blue_depth)
+	var top_depth: float = blue_depth
+	for i: int in STRONG_WALL_SAMPLES:
+		var t: float = 0.0
+		if STRONG_WALL_SAMPLES > 1:
+			t = float(i) / float(STRONG_WALL_SAMPLES - 1)
+		var depth: float = lerpf(bottom_depth, top_depth, t)
+		result.append(Vector3(wall_x, 0.0, own_dir * depth))
+	result.append(ctx.self_pos)
+	return result
+
+
+# WEAK search center: weak-side wall, level with the carrier on the depth
+# axis — the reverse-valve release point.
+static func _weak_search_center(carrier_pos: Vector3, side_x: float) -> Vector3:
+	var wall_x: float = side_x * (GameRules.RINK_HALF_WIDTH - WALL_INSET_M)
 	return Vector3(wall_x, 0.0, carrier_pos.z)
 
 

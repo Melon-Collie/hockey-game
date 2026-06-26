@@ -57,6 +57,32 @@ func _make_ctx(self_pos: Vector3, skaters: Array = []) -> RoleContext:
 	return ctx
 
 
+# ─── breakout: pressured carrier picks the open outlet ──────────────────────
+
+func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
+	# Carrier deep in our own zone, pressured by two forecheckers up-ice; a
+	# teammate is a wide-open outlet up the strong-side wall. With carry
+	# poke-safety collapsing under pressure, the carrier should rate that
+	# outlet as its best pass and choose PASS over carrying into the box.
+	# (Verifies the breakout outlet, once well-positioned, actually gets the
+	# puck out — no dump needed.)
+	var self_pos := Vector3(3, 0, 20)         # off-center, clear of our own slot
+	var outlet := Vector3(11, 0, 11)          # open up the strong wall
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],               # us, carrying
+			[2, TEAM_ID, outlet],                 # open outlet
+			[3, 1, Vector3(1.5, 0, 18.0)],        # forechecker pressuring us
+			[4, 1, Vector3(3.0, 0, 17.5)],        # second forechecker
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.debug_pass_peer_id, 2, "best pass targets the open up-wall outlet")
+	assert_gt(c.debug_pass_score, 0.0, "the breakout pass has positive value")
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"pressured carrier passes out rather than carrying into the box")
+
+
 # ─── reset() ──────────────────────────────────────────────────────────────
 
 func test_reset_clears_all_persistent_state() -> void:
