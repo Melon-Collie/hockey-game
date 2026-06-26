@@ -129,6 +129,9 @@ var _pick_action_cooldown: int = 0
 
 # ── Scratch buffers (reused across ticks, refilled per call) ────────────────
 var _scratch_opponents: Array[Vector3] = []
+# Velocities index-matched to _scratch_opponents, so the fired-puck lane
+# model can dead-reckon a defender bearing down on a passing lane.
+var _scratch_opponent_vels: Array[Vector3] = []
 var _scratch_opponents_shoot: Array[Vector3] = []
 var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
@@ -398,6 +401,7 @@ func _pick_action(ctx: RoleContext) -> void:
 # teammate.
 func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
+	_scratch_opponent_vels.clear()
 	_scratch_opponents_shoot.clear()
 	_scratch_our_defenders.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
@@ -406,6 +410,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 		var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
 		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id:
 			_scratch_opponents.append(s.position)
+			_scratch_opponent_vels.append(s.velocity)
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
 		else:
@@ -512,7 +517,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# off-puck roles' view of the same lane) evaluates it, so the
 		# carrier and its receivers agree on what's actually threadable.
 		var lane: float = AIActionScoring.lane_clear(
-				self_pos, receiver, _scratch_opponents, pass_speed)
+				self_pos, receiver, _scratch_opponents, pass_speed,
+				_scratch_opponent_vels)
 		if lane <= 0.0:
 			continue
 		# Predict goalie at the time the receiver fires: pass flight time
@@ -572,7 +578,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# interceptor's spot on the lane.
 		var benefit: float = receiver_value * lane * time_decay
 		var loss_point: Vector3 = AIActionScoring.lane_loss_point(
-				self_pos, receiver, _scratch_opponents, pass_speed)
+				self_pos, receiver, _scratch_opponents, pass_speed,
+				_scratch_opponent_vels)
 		var cost: float = AIActionScoring.turnover_cost(
 				loss_point, 1.0 - lane, ctx.defending_goal_pos, our_goalie,
 				GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -588,7 +595,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 			best_pass_saucer = (
 					dist > AIActionScoring.SAUCER_MIN_DISTANCE_M
 					and AIActionScoring.prefers_saucer(
-							self_pos, receiver, _scratch_opponents, pass_speed))
+							self_pos, receiver, _scratch_opponents, pass_speed,
+							_scratch_opponent_vels))
 	return [best_pass_peer, best_pass_score, best_pass_saucer]
 
 
