@@ -371,3 +371,28 @@ func test_dispatch_throttled_tick_reuses_cached_decision() -> void:
 	# Mouse re-stepped toward the cached target (no-arc → first call snaps).
 	assert_almost_eq(input.mouse_world_pos.x, 1.0, 1e-6)
 	assert_almost_eq(input.mouse_world_pos.z, 2.0, 1e-6)
+
+
+# ── wants_direct_aim: skip the second-stage cursor lerp during committed shot ──
+
+func test_wants_direct_aim_true_in_shot_states() -> void:
+	sm._state = Agent.State.SHOOT_PRESSED
+	assert_true(sm.wants_direct_aim(), "charging a wrister tracks the cursor directly")
+	sm._state = Agent.State.QUICK_SHOT_PRESSED
+	assert_true(sm.wants_direct_aim(), "quick shot tracks directly")
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	assert_true(sm.wants_direct_aim(), "one-timer tracks directly")
+
+
+func test_wants_direct_aim_true_when_pre_aiming_a_shot() -> void:
+	sm._state = Agent.State.CARRY
+	sm._intended_action = Agent.State.SHOOT_PRESSED
+	assert_true(sm.wants_direct_aim(), "shot pre-aim (still in CARRY) tracks directly")
+
+
+func test_wants_direct_aim_false_for_carry_and_pass() -> void:
+	sm._state = Agent.State.CARRY
+	sm._intended_action = Agent.State.CARRY
+	assert_false(sm.wants_direct_aim(), "plain carry keeps the second-stage lerp")
+	sm._intended_action = Agent.State.PASS_PRESSED
+	assert_false(sm.wants_direct_aim(), "pass pre-aim keeps the softening lerp")
