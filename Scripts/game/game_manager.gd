@@ -130,6 +130,11 @@ var goalie_controllers: Array[GoalieController] = []
 # rest of the rink wiring (team brains, goalie data cache) ignores it.
 var _tutorial_goalie: Goalie = null
 var _tutorial_goalie_controller: GoalieController = null
+# Single REACTIVE goalie for the penalty-shot drill — same single-net setup as
+# the tutorial goalie, but ticking AI (is_server, process enabled) so it plays
+# the breakaway. Also kept out of the `goalies` arrays.
+var _penalty_goalie: Goalie = null
+var _penalty_goalie_controller: GoalieController = null
 var puck_controller: PuckController = null
 
 # Cached snapshot of goalie pose for skater IK clamping. Refreshed once per
@@ -357,12 +362,11 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
 		_puck_oob_timer = 0.0
 		return
-	# Tutorial steps deliberately stash the puck far outside the rink (e.g.
-	# at (100, 100) during the SKATE step) and reposition it between steps —
-	# letting the OOB check fire a faceoff under the tutorial would derail
-	# the script. The tutorial owns puck placement; nothing else can move
-	# it OOB in tutorial mode anyway.
-	if NetworkManager.is_tutorial_mode:
+	# Scripted drills (tutorial, penalty shot) deliberately stash the puck far
+	# outside the rink (e.g. at (100, 100) between attempts) and reposition it —
+	# letting the OOB check fire a faceoff under a drill would derail the script.
+	# The drill manager owns puck placement; nothing else can move it OOB anyway.
+	if NetworkManager.is_drill_mode():
 		_puck_oob_timer = 0.0
 		return
 	if puck.carrier != null:
@@ -394,7 +398,7 @@ func _check_puck_stuck_on_net(delta: float) -> void:
 	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
 		_puck_net_stuck_timer = 0.0
 		return
-	if NetworkManager.is_tutorial_mode or puck.carrier != null:
+	if NetworkManager.is_drill_mode() or puck.carrier != null:
 		_puck_net_stuck_timer = 0.0
 		return
 	var pos: Vector3 = puck.global_position
@@ -536,7 +540,7 @@ func on_host_started() -> void:
 	# into PLAYING. Tutorial scripts its own intro; free play is a casual
 	# warmup that shouldn't gate the player behind a countdown — both stay
 	# in PLAYING from the start.
-	if not NetworkManager.is_tutorial_mode and not NetworkManager.is_free_play_mode:
+	if not NetworkManager.is_drill_mode() and not NetworkManager.is_free_play_mode:
 		_state_machine.begin_faceoff_prep()
 		_phase_coord.handle_phase_entered()
 
@@ -912,6 +916,10 @@ func _spawn_goalies() -> void:
 	# empty goalies / goalie_controllers arrays.
 	if NetworkManager.is_tutorial_mode \
 			and not TutorialRegistry.wants_goalies(NetworkManager.tutorial_id):
+		return
+	# The penalty drill spawns its own single reactive goalie (spawn_penalty_goalie)
+	# at the attacked net; no full pair.
+	if NetworkManager.is_penalty_drill_mode:
 		return
 	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host, goalie_skill_profile)
 	goalies = [result.top_goalie as Goalie, result.bottom_goalie as Goalie]
@@ -3235,6 +3243,43 @@ func despawn_tutorial_goalie() -> void:
 	if _tutorial_goalie != null:
 		_tutorial_goalie.queue_free()
 		_tutorial_goalie = null
+
+
+# Reactive goalie defending the -Z net (the one team 0 attacks) for the penalty
+# drill. Unlike the tutorial goalie, AI ticks normally so it challenges and
+# saves the breakaway. Difficulty follows the match goalie_skill_profile.
+# Idempotent: a second call while one exists is a no-op.
+func spawn_penalty_goalie() -> void:
+	if _penalty_goalie != null:
+		return
+	if _spawner == null or puck == null:
+		return
+	var result: Dictionary = _spawner.spawn_single_goalie(
+			puck, -GameRules.GOAL_LINE_Z, true, goalie_skill_profile)
+	_penalty_goalie = result.goalie as Goalie
+	_penalty_goalie_controller = result.controller as GoalieController
+	# The -Z net belongs to team 1 (the side team 0 attacks); match the pair's
+	# wiring so the AI's threat/facing logic reads the breakaway correctly.
+	_penalty_goalie_controller.team_id = 1
+	if teams.size() > 1:
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
+		_penalty_goalie.apply_uniform(colors)
+		_penalty_goalie.apply_jersey_info("WARD", 35)
+
+
+func despawn_penalty_goalie() -> void:
+	if _penalty_goalie_controller != null:
+		_penalty_goalie_controller.queue_free()
+		_penalty_goalie_controller = null
+	if _penalty_goalie != null:
+		_penalty_goalie.queue_free()
+		_penalty_goalie = null
+
+
+# Drops the penalty-drill goalie back into its crease between attempts.
+func reset_penalty_goalie() -> void:
+	if _penalty_goalie_controller != null:
+		_penalty_goalie_controller.reset_to_crease()
 
 
 func get_goalie_data() -> Array[Dictionary]:

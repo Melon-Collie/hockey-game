@@ -74,12 +74,13 @@ func spawn_goalie_pair(puck: Puck, is_server: bool, profile: GoalieSkillProfile 
 # (so no puck-reaction signals are wired) and disables the controller's process
 # afterward, leaving the goalie frozen in the crease as a shooting target.
 # Returns { "goalie": Goalie, "controller": GoalieController }.
-func spawn_single_goalie(puck: Puck, goal_line_z: float, is_server: bool) -> Dictionary:
+func spawn_single_goalie(puck: Puck, goal_line_z: float, is_server: bool,
+		profile: GoalieSkillProfile = null) -> Dictionary:
 	var goalie: Goalie = GOALIE_SCENE.instantiate()
 	_scene_root.add_child(goalie)
 	var controller := GoalieController.new()
 	_scene_root.add_child(controller)
-	controller.setup(goalie, puck, goal_line_z, is_server)
+	controller.setup(goalie, puck, goal_line_z, is_server, profile)
 	return {"goalie": goalie, "controller": controller}
 
 # ── Local player (skater + LocalController) ──────────────────────────────────

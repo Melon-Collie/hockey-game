@@ -165,6 +165,7 @@ func _build_panel() -> void:
 
 	_add_row(vbox, "Play Online", false, _on_play_online_pressed)
 	_add_row(vbox, "Play vs Bots", false, _on_play_vs_bots_pressed)
+	_add_row(vbox, "Penalty Shots", false, _on_penalty_shots_pressed)
 	_add_row(vbox, "Tutorial", false, _on_tutorial_pressed)
 	# Career reads only from uploaded stats, so it's disabled when the player has
 	# opted out of stat sharing (the disabled_check is evaluated live on hover/click).
@@ -648,6 +649,16 @@ func _on_play_vs_bots_pressed() -> void:
 	NetworkManager.reset()
 	NetworkManager.start_offline()
 	get_tree().change_scene_to_file(Constants.SCENE_LOBBY)
+
+
+func _on_penalty_shots_pressed() -> void:
+	# Offline "score X of 10" drill. Same teardown-then-launch shape as the
+	# tutorial; PenaltyDrillManager takes over once Hockey.tscn loads.
+	GameManager.on_scene_exit()
+	NetworkSimManager.clear_pending()
+	NetworkManager.reset()
+	NetworkManager.start_penalty_drill()
+	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 
 func _on_tutorial_pressed() -> void:
