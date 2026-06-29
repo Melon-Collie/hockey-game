@@ -947,7 +947,13 @@ func _shooting_tick(delta: float) -> void:
 	if TutorialShotRules.crossed_goal_line(pos.x, pos.z, _GOAL_PLANE_Z, -1.0, _NET_HALF_WIDTH):
 		_on_puck_crossed_net(pos)
 		return
-	if _puck.get_puck_velocity().length() < 0.3:
+	# Use the release-aware velocity: the frame a shot fires, the puck's carrier
+	# is already cleared but Jolt hasn't applied the release impulse yet, so raw
+	# linear_velocity reads zero. get_release_velocity() returns the pending shot
+	# vector in that window — without it the just-fired puck reads as "died short"
+	# and gets stashed off-rink on its first airborne frame (looks like it
+	# vanishes the instant you shoot).
+	if _puck.get_release_velocity().length() < 0.3:
 		_stash_and_restage()
 
 
