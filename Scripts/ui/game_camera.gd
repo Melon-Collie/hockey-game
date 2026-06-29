@@ -123,10 +123,16 @@ func _physics_process(delta: float) -> void:
 		puck_pos = puck.global_position
 		puck_pos.y = 0.0
 
-	# In locked mode only zoom out to include the puck when it's actually in
-	# play on the rink — a stashed (tutorial), out-of-bounds, or absent puck
-	# leaves the camera centered on the player. Dynamic mode always frames it.
-	var fit_puck: bool = has_puck and (not locked or _is_on_rink(puck_pos))
+	# Only frame the puck when it's actually in play on the rink. A stashed
+	# (tutorial), out-of-bounds, or absent puck is ignored in BOTH modes — the
+	# camera frames the player instead of lurching out toward it. (The tutorial
+	# parks the puck at (100, _, 100) between drill attempts; without this the
+	# dynamic cam would zoom to max and pan to center on every restage.) When the
+	# puck isn't in play, collapse its target onto the player so every downstream
+	# framing calc treats the fit set as "just the player".
+	var fit_puck: bool = has_puck and _is_on_rink(puck_pos)
+	if not fit_puck:
+		puck_pos = player_pos
 
 	# Pull FOV from prefs so the user-facing slider drives every downstream
 	# computation (zoom math, ortho size, tilt offset).
@@ -234,7 +240,7 @@ func _physics_process(delta: float) -> void:
 		# the attacking goal: lookahead and bias both push the same way; skating
 		# laterally with the puck: lookahead pushes sideways while bias keeps
 		# pulling toward the goal — net is a forward-and-sideways framing).
-		if puck.get_carrier() == skater:
+		if fit_puck and puck.get_carrier() == skater:
 			var carrier_vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 			var carrier_speed: float = carrier_vel_xz.length()
 			if carrier_speed > 0.5:
