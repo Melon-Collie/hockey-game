@@ -1,13 +1,13 @@
 extends GutTest
 
 # AIRoleBackcheck — TRANS_OD-only Sprinting-Through defender.
-# Search center is fixed at our slot regardless of puck position,
-# so the role behavior is "sprint to slot and shade laterally
-# toward the dominant shot threat as you arrive." Tests cover:
-#   - Bail-out (no opps).
-#   - Target lands in the slot area, NOT pushed up by puck position
-#     (the defining difference from CONTAIN).
-#   - Shot-lane shading toward the dominant threat.
+# Primary path: when the brain assigns a man (threat partition), cover that
+# receiver goal-side. Fallback (unassigned): sprint to the slot and shade
+# toward the dominant shot threat as you arrive. Tests cover:
+#   - Man-coverage: an assigned man drives coverage to that man's side.
+#   - Fallback bail-out (no opps) → slot.
+#   - Fallback target lands in the slot area, NOT pushed up by puck position.
+#   - Fallback shot-lane shading toward the dominant threat.
 
 const TEAM_ID: int = 0
 const OUR_NET_Z: float = 26.65   # Team 0 defends +Z
@@ -54,7 +54,28 @@ func _make_ctx(self_pos: Vector3, skaters: Array = [],
 	return ctx
 
 
-# ── Bail-outs ───────────────────────────────────────────────────────────────
+# ── Man coverage (brain assigned us a receiver) ────────────────────────────
+
+func test_assigned_man_drives_coverage_side() -> void:
+	# Carrier in NZ; a receiver wide on +X. Assigned that man, BACKCHECK
+	# covers his side (goal-side of him), not the fixed slot center.
+	var carrier := Vector3(0, 0, 0)
+	var man := Vector3(9, 0, 12)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 20), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier, Vector3.ZERO],
+		[210, 1 - TEAM_ID, man, Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 20), skaters, 200)
+	ctx.assigned_threat_peer = 210
+	var d: RoleDecision = AIRoleBackcheck.decide(ctx)
+	assert_gt(d.target_position.x, 0.0,
+			"assigned the +X man → cover his side; got x=%f" % d.target_position.x)
+	assert_gt(d.target_position.z, man.z - 0.01,
+			"coverage is goal-side of the man; got z=%f" % d.target_position.z)
+
+
+# ── Bail-outs (fallback path, unassigned) ──────────────────────────────────
 
 func test_falls_back_to_slot_when_no_opps() -> void:
 	# No opps means no threat to defend. BACKCHECK still wants to be

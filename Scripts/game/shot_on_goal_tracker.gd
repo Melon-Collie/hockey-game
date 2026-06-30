@@ -22,12 +22,19 @@ extends RefCounted
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 
 const SHOT_ON_GOAL_TIMEOUT: float = 5.0
+# A genuine blocked shot happens within a beat of the release — the puck travels
+# stick-to-blocker in a fraction of a second. The 5 s SOG window is far too wide
+# to gate blocks: a defender corralling a loose rebound in the corner three
+# seconds later isn't a "blocked shot." Blocks get their own short window so only
+# an interception of the shot itself counts.
+const BLOCK_WINDOW: float = 0.85
 const MAX_RECENT_CARRIERS: int = 3
 const MAX_ASSISTS: int = 2
 
 var _recent_carriers: Array[int] = []
 var _shooter_peer_id: int = -1
 var _pending_remaining: float = -1.0
+var _block_window_remaining: float = -1.0
 var _shot_on_goal_counted: bool = false
 
 var _registry: PlayerRegistry = null
@@ -68,6 +75,7 @@ func on_shot_started(shooter_peer_id: int) -> void:
 		return
 	_shooter_peer_id = shooter_peer_id
 	_pending_remaining = SHOT_ON_GOAL_TIMEOUT
+	_block_window_remaining = BLOCK_WINDOW
 	_shot_on_goal_counted = false
 
 
@@ -81,6 +89,10 @@ func on_block(blocker_peer_id: int) -> bool:
 	if blocker_peer_id == -1:
 		return false
 	if _shooter_peer_id == -1:
+		return false
+	# Only a touch within the short post-release window is a block — a later loose
+	# puck touch is just a takeaway/rebound, not a blocked shot.
+	if _block_window_remaining <= 0.0:
 		return false
 	var shooter_team: int = _registry.resolve_team_id_for_peer(_shooter_peer_id)
 	var blocker_team: int = _registry.resolve_team_id_for_peer(blocker_peer_id)
@@ -140,6 +152,8 @@ func credit_assists(scorer_peer_id: int) -> Array[String]:
 
 
 func tick(delta: float) -> void:
+	if _block_window_remaining > 0.0:
+		_block_window_remaining -= delta
 	if _pending_remaining < 0.0:
 		return
 	_pending_remaining -= delta
@@ -166,6 +180,7 @@ func has_pending_shot() -> bool:
 func clear_pending() -> void:
 	_shooter_peer_id = -1
 	_pending_remaining = -1.0
+	_block_window_remaining = -1.0
 	_shot_on_goal_counted = false
 
 

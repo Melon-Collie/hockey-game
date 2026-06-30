@@ -1,0 +1,123 @@
+extends GutTest
+
+# AIActionScoring.goalie_unsettled + the motion penalty in score_shoot. Models
+# the real goalie's caught-moving weakness so the AI values plays that beat the
+# goalie ACROSS (cross-seam one-timers) over static shots at a set goalie.
+#
+# Coordinates mirror real play: attacking goal at -GOAL_LINE_Z, shooter ~6.6 m
+# out, goalie ~0.6 m off its line (depth_base).
+
+const GOAL := Vector3(0, 0, -GameRules.GOAL_LINE_Z)   # z = -26.65
+const GOALIE_Z := -GameRules.GOAL_LINE_Z + 0.6        # 0.6 m off the line
+const SHOOTER := Vector3(2.0, 0, -20.0)               # 2 m lateral, ~6.65 m out
+
+
+func _goalie_at(x: float) -> Vector3:
+	return Vector3(x, 0, GOALIE_Z)
+
+
+# Arc-match x for a puck at puck_x (goalie tracks ~depth/forward of it).
+func _arc_match_x(puck_x: float) -> float:
+	var forward: float = SHOOTER.z - GOAL.z   # 6.65
+	return GOAL.x + 0.6 * (puck_x - GOAL.x) / forward
+
+
+# ── goalie_unsettled ────────────────────────────────────────────────────────
+
+func test_set_squared_goalie_is_fully_settled() -> void:
+	# Goalie already at its arc-match target for this shooter → no forced motion.
+	var goalie := _goalie_at(_arc_match_x(SHOOTER.x))
+	var u := AIActionScoring.goalie_unsettled(goalie, GOAL, 0.26, SHOOTER)
+	assert_almost_eq(u, 0.0, 0.001, "a set, square goalie reads as fully settled")
+
+
+func test_cross_seam_one_timer_catches_goalie_moving() -> void:
+	# Goalie was tracking the carrier on the far side (x = -0.18); the puck is
+	# one-timed from the near side (x = +2 → target +0.18). With only the pass
+	# flight to react (~0.21 s), it can't cover the 0.36 m → caught mid-slide.
+	var goalie := _goalie_at(_arc_match_x(-2.0))
+	var u := AIActionScoring.goalie_unsettled(goalie, GOAL, 0.21, SHOOTER)
+	assert_almost_eq(u, 1.0, 0.001,
+			"a cross-seam one-timer should leave the goalie fully unsettled")
+
+
+func test_goalie_resets_when_given_time() -> void:
+	# Same cross-ice swing, but a slow developing play (long release) lets the
+	# goalie reach its target and re-set before the shot → settled.
+	var goalie := _goalie_at(_arc_match_x(-2.0))
+	var u := AIActionScoring.goalie_unsettled(goalie, GOAL, 0.7, SHOOTER)
+	assert_almost_eq(u, 0.0, 0.001,
+			"with enough time the goalie re-squares and is no longer unsettled")
+
+
+func test_unsettled_ramps_between_moving_and_set() -> void:
+	# A mid-length release should sit strictly between fully-moving and fully-set.
+	var goalie := _goalie_at(_arc_match_x(-2.0))
+	var u := AIActionScoring.goalie_unsettled(goalie, GOAL, 0.33, SHOOTER)
+	assert_gt(u, 0.0)
+	assert_lt(u, 1.0)
+
+
+# ── score_shoot motion penalty ──────────────────────────────────────────────
+
+func test_moving_goalie_scores_higher_than_set_goalie() -> void:
+	# Same shot geometry against a square goalie; the only difference is whether
+	# the goalie is caught moving. The moving case must score higher (lower
+	# effective coverage), so bots prefer the play that gets the goalie sliding.
+	var goalie := _goalie_at(_arc_match_x(SHOOTER.x))
+	var opps: Array[Vector3] = []
+	var set_score := AIActionScoring.score_shoot(
+			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
+	var moving_score := AIActionScoring.score_shoot(
+			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
+	assert_gt(moving_score, set_score,
+			"a shot at a caught-moving goalie should rate above the same shot at a set one")
+
+
+func test_default_factor_is_back_compatible() -> void:
+	# Omitting the factor must equal passing 0.0 — guarantees the 700+ existing
+	# score_shoot tests and off-puck callers are unchanged.
+	var goalie := _goalie_at(_arc_match_x(SHOOTER.x))
+	var opps: Array[Vector3] = []
+	var implicit := AIActionScoring.score_shoot(
+			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps)
+	var explicit := AIActionScoring.score_shoot(
+			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
+	assert_almost_eq(implicit, explicit, 0.0001)
+
+
+# ── score_pass motion factor (off-puck staging consumes this) ────────────────
+
+func test_score_pass_credits_caught_moving_goalie() -> void:
+	# A cross-seam feed (shooter weak-side, receiver strong-side) to a goalie
+	# squared to the receiver. Same geometry, only the motion factor differs —
+	# the caught-moving case must score higher so off-puck roles stage the feed.
+	var shooter := Vector3(-2.0, 0, -20.0)
+	var receiver := Vector3(2.0, 0, -20.0)
+	var goalie := _goalie_at(_arc_match_x(receiver.x))
+	var opps: Array[Vector3] = []
+	var set_s := AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, 19.0, 0.0)
+	var moving_s := AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, 19.0, 1.0)
+	assert_gt(moving_s, set_s,
+			"a feed catching the goalie moving should out-score the same feed at a set goalie")
+
+
+func test_score_pass_default_factor_back_compatible() -> void:
+	var shooter := Vector3(-2.0, 0, -20.0)
+	var receiver := Vector3(2.0, 0, -20.0)
+	var goalie := _goalie_at(_arc_match_x(receiver.x))
+	var opps: Array[Vector3] = []
+	var implicit := AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, 19.0)
+	var explicit := AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			Vector3.INF, 19.0, 0.0)
+	assert_almost_eq(implicit, explicit, 0.0001)

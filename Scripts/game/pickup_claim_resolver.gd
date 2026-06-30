@@ -124,6 +124,25 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world
 	if not PuckInteractionRules.check_pickup(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.PICKUP_RADIUS):
 		return
+	# Catch vs deflect — run the SAME decision the present-time path uses
+	# (PuckController._check_interactions → PuckReceptionRules.should_receive),
+	# but against the rewound snapshot. Without it the claim path granted a
+	# pickup on blade overlap ALONE, so a remote player reaching for a too-fast /
+	# poorly-angled puck caught it magnetically where a local player would have
+	# deflected it. Puck velocity is stored on the snapshot; the blade face normal
+	# comes from the buffered blade/hand world points.
+	var puck_vel: Vector3 = puck_snap.puck_state.velocity
+	var face_normal: Vector3 = PuckReceptionRules.blade_face_normal(
+			blade_curr, skater_snap.top_hand_world, puck_vel,
+			Vector3(skater_snap.facing.x, 0.0, skater_snap.facing.y))
+	if not PuckReceptionRules.should_receive(
+			puck_vel, face_normal,
+			puck.pickup_max_speed, puck.deflect_min_speed, puck.alignment_receive_bonus):
+		# Deflect verdict: redirect the puck instead of granting possession. Not a
+		# contested action (no carrier change), so it fires immediately rather than
+		# arming the contest window.
+		pc.apply_lag_comp_deflect(record.skater)
+		return
 	if _pending_peer_id != -1:
 		# Gate the contest decision on claim timestamps, not RPC arrival order.
 		# Two RPCs can arrive within the 50ms host-arrival window despite their

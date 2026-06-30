@@ -85,6 +85,33 @@ func test_tag_up_clears_at_the_blue_line_team_1() -> void:
 	assert_true(InfractionRules.has_tagged_up(GameRules.BLUE_LINE_Z, 1))
 	assert_true(InfractionRules.has_tagged_up(0.0, 1))
 
+# ── Blue-line slack ───────────────────────────────────────────────────────────
+# Entry and tag-up key off the skater's leading edge (OFFSIDE_LINE_SLACK past
+# the line), so a toe over the line isn't offside and you tag up the moment your
+# skate touches it on the way back. Entry and tag-up share the slacked line so a
+# just-tagged skater isn't instantly re-ghosted.
+
+func test_toe_over_the_line_is_not_offside_team_0() -> void:
+	# Just barely into the attacking zone (inside the slack band) — not offside.
+	var z: float = -GameRules.BLUE_LINE_Z - GameRules.OFFSIDE_LINE_SLACK * 0.5
+	assert_false(InfractionRules.is_offside(z, 0, 0.0, false),
+			"a skate-length over the line is within the slack band — not offside")
+
+func test_clearly_past_the_slack_is_offside_team_0() -> void:
+	var z: float = -GameRules.BLUE_LINE_Z - GameRules.OFFSIDE_LINE_SLACK - 0.1
+	assert_true(InfractionRules.is_offside(z, 0, 0.0, false),
+			"past the full slack band is offside")
+
+func test_tag_up_at_the_slacked_line_team_0() -> void:
+	# A skater still a touch inside the zone (within the slack) counts as tagged
+	# up — they only need to bring their skate back to the line, not their body.
+	var z: float = -GameRules.BLUE_LINE_Z - GameRules.OFFSIDE_LINE_SLACK * 0.5
+	assert_true(InfractionRules.has_tagged_up(z, 0),
+			"skate back to the line tags up even with the body slightly inside")
+	# Just past the slack band is still serving offside.
+	assert_false(InfractionRules.has_tagged_up(
+			-GameRules.BLUE_LINE_Z - GameRules.OFFSIDE_LINE_SLACK - 0.1, 0))
+
 # ── Icing ────────────────────────────────────────────────────────────────────
 
 func test_no_icing_without_carrier() -> void:

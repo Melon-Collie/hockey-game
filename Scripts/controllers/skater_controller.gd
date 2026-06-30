@@ -109,6 +109,23 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # call — can't be measured headless.)
 @export var max_blade_speed: float = 10.0
 
+# ── Nudge (self-tap, nutmeg setup) ────────────────────────────────────────────
+# Tap stick-lift (Q) while carrying in plain SKATING_WITH_PUCK to push the puck a
+# tiny amount off the blade — a self-pass for threading the puck between a
+# defender's legs (the body block only covers the torso now, so a grounded puck
+# slips under). The released puck inherits the skater's horizontal velocity plus
+# a small nudge along the blade's current motion direction, so RELATIVE to the
+# carrier it's just a soft tap in the stick's sweep direction — keep skating and
+# you re-collect it. nudge_speed is that relative tap speed (m/s).
+@export var nudge_speed: float = 2.2
+
+# Fraction of the carrier's horizontal momentum the nudged puck inherits. Below
+# 1.0 the puck drifts back RELATIVE to the carrier while skating (faster skating
+# → bigger drift), opening the nutmeg gap instead of the puck keeping perfect
+# pace. Stationary it's a no-op (skater velocity ~ 0). Keep close to 1.0 so the
+# carrier can still re-collect after the gap opens.
+@export var nudge_velocity_retain: float = 0.85
+
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
 # down the stick shaft (from the top hand toward the blade). It releases toward
@@ -506,15 +523,18 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
 	rom_backhand_reach_max    = arm_total * _ROM_BACKHAND_OF_ARM
 	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
-	# (matches body-check feel), height with the realistic-proportions
-	# multiplier. Skater._ready() duplicated the shape so this mutation is
-	# per-instance and won't leak across skaters.
+	# (matches body-check feel). Height is held CONSTANT for every player — a
+	# taller Size-scaled cylinder grew tall enough to touch several faces of the
+	# concave net/goal geometry at once and wedge the body in a corner. The
+	# visual mesh still scales on Y (appearance coordinator), so big players
+	# still look tall; only the physics hitbox height is fixed. Skater._ready()
+	# duplicated the shape so this mutation is per-instance and won't leak.
 	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	if col != null:
 		var cyl: CylinderShape3D = col.shape as CylinderShape3D
 		if cyl != null:
 			cyl.radius = _base_skater_collision_radius * m_size
-			cyl.height = _base_skater_collision_height * m_height
+			cyl.height = _base_skater_collision_height
 	# Attribute scaling rewrote the exports the cached configs were built
 	# from — drop them so the next tick rebuilds with the new values.
 	_ik.invalidate_configs()
@@ -602,6 +622,15 @@ func _on_body_block_hit(body: Node3D) -> void:
 	puck.on_body_block(skater, dampen)
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
+# Whether this skater is committing to a deliberate deflect this tick. Base
+# behaviour (human players, local and remote-on-host): holding the shoot button
+# without the puck. AIController overrides this to always-false — bots reuse the
+# held shoot button off-puck to set up wrister one-timers (catch + fire), which a
+# deflect would break.
+func _wants_deflect(input: InputState) -> bool:
+	return input.shoot_held and not has_puck
+
+
 func _process_input(input: InputState, delta: float) -> void:
 	# Snapshot the blade's current contact point before any IK mutation runs
 	# this tick. The host's swept-segment pickup/poke test (PuckController._check_interactions,
@@ -621,6 +650,20 @@ func _process_input(input: InputState, delta: float) -> void:
 	# hooked under your stick) overrides regardless of possession and is what
 	# dislodges the carried puck.
 	skater.blade_up = (input.stick_lift_held and not has_puck) or skater.is_forced_lift_active()
+
+	# Deliberate-deflect intent (see Skater.deflect_intent). Holding LMB without
+	# the puck commits to redirecting a loose puck off the blade rather than
+	# corralling it; carrying the puck means LMB is a wrister charge instead, so
+	# it's gated on NOT having the puck. The host reads this in
+	# PuckController._check_interactions for every skater it simulates.
+	skater.deflect_intent = _wants_deflect(input)
+
+	# Nudge: a stick-lift TAP while carrying pushes the puck off the blade as a
+	# soft self-pass (nutmeg setup). Edge-triggered and gated to plain carry so
+	# it never fires mid-charge; the is_replaying guard inside keeps it from
+	# re-emitting during reconcile (same discipline as _do_release).
+	if input.stick_lift_pressed and has_puck and _sm.get_state() == State.SKATING_WITH_PUCK:
+		_nudge()
 
 	_apply_movement(input, delta)
 	_pose.apply_velocity_lean(delta)
@@ -770,6 +813,33 @@ func _do_release(direction: Vector3, power: float) -> void:
 	var slapper: bool = _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK
 	puck_release_requested.emit(direction, power, slapper)
 
+# Nudge: the carrier taps the puck off the blade as a soft self-pass. The
+# released velocity is the skater's horizontal momentum plus a small push along
+# the blade's current sweep direction — so the puck keeps pace with the carrier
+# and only drifts a touch in the direction the stick was moving. Host-derived
+# from the carrier's authoritative velocity exactly like a shot (the signal
+# carries the host-computed velocity during remote-input replay, the
+# client-predicted velocity locally). Skips during reconcile replay.
+signal nudge_requested(velocity: Vector3)
+
+func _nudge() -> void:
+	if is_replaying:
+		return
+	var skater_vel := Vector3(skater.velocity.x, 0.0, skater.velocity.z)
+	# Blade sweep RELATIVE to the carrier: the absolute blade world velocity minus
+	# the skater's own translation. Using the absolute velocity made the push
+	# collapse to the skating direction while moving (own velocity drowns out the
+	# sweep); subtracting it recovers the true stick-sweep direction so the cursor
+	# steers the nudge at speed exactly as it does standing still.
+	var blade_dir := skater.blade_world_velocity - Vector3(skater.velocity.x, 0.0, skater.velocity.z)
+	blade_dir.y = 0.0
+	var push := Vector3.ZERO
+	if blade_dir.length() > 0.01:
+		push = blade_dir.normalized() * nudge_speed
+	# Inherit slightly less than full momentum so the puck drifts back relative to
+	# the carrier while skating — that drift plus the sweep push is the nutmeg gap.
+	nudge_requested.emit(skater_vel * nudge_velocity_retain + push)
+
 # ── Puck Signals ──────────────────────────────────────────────────────────────
 func on_puck_picked_up_network() -> void:
 	has_puck = true
@@ -820,6 +890,11 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	if facing != Vector2.ZERO:
 		skater.set_facing(facing)
 		_pose.facing = facing
+		# Square the body up to the dot and wipe carried-over animation state:
+		# clear the upper-body twist/lean/lag so the torso points forward, and
+		# plant the legs at their rest pose so the stride doesn't resume mid-swing.
+		_pose.reset_lean_and_lag()
+		_skating.reset_to_rest()
 
 # Cancels an in-progress wrister/slapper wind-up. No-op unless actually mid-
 # charge, so a routine teleport doesn't disturb skating state. Suppresses the

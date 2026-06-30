@@ -9,15 +9,19 @@ class_name AIRoleSlots
 #
 # DZONE uses {PRESSURE, ANCHOR, COVER}: classic in-zone defensive
 # triumvirate — pressurer on the carrier, net-front anchor, weak-
-# side cover. TRANS_OD uses {PRESSURE, BACKCHECK, CONTAIN}: the
-# same primary pressurer plus a Sprinting-Through pair — BACKCHECK
-# is the up-ice peer with the longest sprint home, CONTAIN is the
-# deeper peer who engages the puck forward instead of camping the
-# slot. The split is per-state because the two backline jobs are
-# genuinely different roles even though they sometimes look similar
-# from the outside; collapsing them onto ANCHOR/COVER made TRANS_OD
-# behavior misfire (deep peer camped the slot when they should have
-# been engaging forward).
+# side cover. ANCHOR + COVER are partitioned across the carrier's
+# receivers by TeamBrain's threat assignment (a distinct man each).
+#
+# TRANS_OD uses {CONTAIN, BACKCHECK×2}: defending a rush, CONTAIN plays
+# gap control on the carrier (stay goal-side, hold a controlled gap,
+# don't lunge) and goes to the peer best placed to step up — the one
+# CLOSEST to the carrier that's already goal-side (deepest peer as a
+# caught-up-ice fallback). The other two BACKCHECK home to pick up the
+# carrier's receivers (a distinct man each, same threat partition). This
+# is the 3v3 "one contains, two backcheck through" structure: exactly
+# ONE peer engages the carrier. Replaces the old PRESSURE+BACKCHECK+
+# CONTAIN triad, where TWO peers engaged the carrier forward (overcommit
+# / bad angle / breakaways) and the backchecker raced to an empty spot.
 #
 # OZONE replaces OUTLET with SUPPORT; OUTLET stays a TRANS_DO-only
 # role. BACKDOOR was renamed to FINISHER (more descriptive of the
@@ -31,16 +35,17 @@ enum Slot {
 	NONE,
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
-	# Defensive: PRESSURE is shared across DZONE and TRANS_OD (close
-	# the carrier). ANCHOR + COVER are DZONE-only (net-front + weak-
-	# side cover). BACKCHECK + CONTAIN are TRANS_OD-only (sprint home
-	# + engage forward). NEUTRAL has no carrier and uses CHASE +
-	# FLANK_L + FLANK_R below.
-	PRESSURE,   # DZONE + TRANS_OD: puck pressurer, closes the carrier.
-	ANCHOR,     # DZONE: deep defender / net-front.
-	COVER,      # DZONE: weak-side support / pass-interception read.
-	BACKCHECK,  # TRANS_OD: up-ice peer sprinting home to the slot.
-	CONTAIN,    # TRANS_OD: deeper peer engaging the puck forward.
+	# Defensive: PRESSURE is DZONE (close the carrier; also reused as
+	# FORECHECK's F1). ANCHOR + COVER are DZONE-only (net-front + weak-
+	# side, each covering an assigned man). BACKCHECK + CONTAIN are
+	# TRANS_OD-only — CONTAIN is the closest goal-side peer gap-controlling
+	# the carrier, BACKCHECK the two sprinting home to cover a man each.
+	# NEUTRAL has no carrier and uses CHASE + FLANK_L + FLANK_R below.
+	PRESSURE,   # DZONE: puck pressurer, closes the carrier.
+	ANCHOR,     # DZONE: net-front; covers an assigned man (threat partition).
+	COVER,      # DZONE: weak-side; covers an assigned man (threat partition).
+	BACKCHECK,  # TRANS_OD: sprints home to cover an assigned receiver.
+	CONTAIN,    # TRANS_OD: closest goal-side peer; gap control on the carrier.
 	# Offensive roles.
 	FINISHER,   # OZONE: scoring threat near opp net. Roams the slot.
 	OUTLET,     # TRANS_DO: stretch-pass option at opp blue line.
@@ -103,7 +108,7 @@ static func slots_for_state(state: int) -> Array[int]:
 		AIPossessionState.State.FORECHECK:
 			return [Slot.F1_PRESSURE, Slot.F2_MID, Slot.F3_HIGH]
 		AIPossessionState.State.TRANS_OD:
-			return [Slot.PRESSURE, Slot.BACKCHECK, Slot.CONTAIN]
+			return [Slot.CONTAIN, Slot.BACKCHECK]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
@@ -126,16 +131,16 @@ static func slot_anchor(slot: Slot, carrier_pos: Vector3) -> Vector3:
 #   DZONE     PRESSURE = closest to puck;  ANCHOR = closest to our net;  COVER = remaining
 #   OZONE     CARRIER fixed;  FINISHER = closest to opp net;  SUPPORT = remaining
 #   TRANS_DO  CARRIER fixed;  OUTLET = closest to opp net;  SUPPORT = remaining
-#   TRANS_OD  BACKCHECK = closest to OPP net (Sprinting Through, gets first claim);
-#             PRESSURE = closest to puck of remaining;  CONTAIN = leftover
+#   TRANS_OD  CONTAIN = closest-to-carrier goal-side peer (deepest fallback);
+#             BACKCHECK = the remaining two (sprint home, cover a man each)
 #   NEUTRAL   CHASE = closest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
-# Sprinting Through is the 3v3 backcheck technique encoded in
-# TRANS_OD's BACKCHECK criterion: the up-ice peer (closest to opp
-# net) has the longest sprint home so they get BACKCHECK — their
-# role behavior (search center at our slot) pulls them home. The
-# deeper peer becomes CONTAIN and engages the play forward instead
-# of camping the slot.
+# TRANS_OD encodes the 3v3 "one contains, two backcheck through"
+# read: CONTAIN goes to the peer best placed to gap the carrier — the
+# closest one that's goal-side (between carrier and our net) — and the
+# other two BACKCHECK home to pick up the carrier's receivers (a distinct
+# man each, via TeamBrain's threat partition). Exactly one peer engages
+# the carrier — no double-team.
 #
 # Hysteresis: each closest-to-X query adds HYSTERESIS_PENALTY_M to
 # the effective distance for peers who didn't hold the slot last
@@ -186,19 +191,20 @@ static func assign(
 					Slot.COVER)
 
 		AIPossessionState.State.TRANS_OD:
-			# Sprinting Through: BACKCHECK is the longest-sprint-home
-			# role, so it gets first claim on the up-ice peer even when
-			# that peer also happens to be closest to the puck (caught
-			# F1 in a turnover). Assigning BACKCHECK before PRESSURE
-			# guarantees the up-ice peer commits to the sprint home;
-			# PRESSURE then goes to whichever of the two remaining
-			# peers is closest to the puck, and CONTAIN takes the
-			# leftover deep peer who engages the play forward.
-			_assign_pair_then_remainder(
+			# Defending a rush: CONTAIN gap-controls the carrier — stay
+			# goal-side, hold a controlled gap, never lunge. It goes to the peer
+			# best placed to step up: the CLOSEST to the carrier that's already
+			# goal-side (between the carrier and our net), with a fallback to the
+			# deepest peer when everyone's caught up-ice (they recover into the
+			# gap fastest). The other two are BACKCHECK: they sprint home and
+			# pick up the carrier's receivers (a distinct man each, via
+			# TeamBrain's threat partition). Replaces the old
+			# PRESSURE+BACKCHECK+CONTAIN triad, where TWO peers engaged the
+			# carrier forward (overcommit / bad angle / breakaways) and the
+			# backchecker raced to an empty slot point instead of a man.
+			_assign_gap_then_backcheck(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
-					Slot.BACKCHECK, opp_net,
-					Slot.PRESSURE, puck_pos,
-					Slot.CONTAIN)
+					puck_pos, our_net)
 
 		AIPossessionState.State.OZONE:
 			_assign_one_then_remainder(
@@ -310,6 +316,66 @@ static func _assign_pair_then_remainder(
 	for pid: int in teammates:
 		if not fixed_peers.has(pid):
 			result[pid] = slot_remainder
+
+
+# TRANS_OD: CONTAIN to the gap defender (see _pick_gap_defender), remainder to
+# BACKCHECK. Exactly one peer engages the carrier; the rest sprint home to a man.
+static func _assign_gap_then_backcheck(
+		snapshot: WorldSnapshot,
+		teammates: Array,
+		fixed_peers: Dictionary,
+		prev_assignments: Dictionary,
+		result: Dictionary,
+		carrier_pos: Vector3,
+		our_net: Vector3) -> void:
+	var gap_pid: int = _pick_gap_defender(
+			snapshot, teammates, fixed_peers, prev_assignments, carrier_pos, our_net)
+	if gap_pid != -1:
+		result[gap_pid] = Slot.CONTAIN
+		fixed_peers[gap_pid] = true
+
+	for pid: int in teammates:
+		if not fixed_peers.has(pid):
+			result[pid] = Slot.BACKCHECK
+
+
+# Picks the gap-control defender for TRANS_OD: the peer CLOSEST to the carrier
+# that is goal-side of it (between the carrier and our net), so the bot already
+# in the carrier's path steps up rather than the deepest bot skating out to it.
+# Hysteresis keeps a sticky gapper. When NO peer is goal-side (the whole team
+# caught up-ice on a turnover), falls back to the deepest peer (closest to our
+# net) — they recover into the gap fastest while the others chase.
+static func _pick_gap_defender(
+		snapshot: WorldSnapshot,
+		teammates: Array,
+		fixed_peers: Dictionary,
+		prev_assignments: Dictionary,
+		carrier_pos: Vector3,
+		our_net: Vector3) -> int:
+	var to_net_x: float = our_net.x - carrier_pos.x
+	var to_net_z: float = our_net.z - carrier_pos.z
+	var best_pid: int = -1
+	var best_score: float = INF
+	for pid: int in teammates:
+		if fixed_peers.has(pid):
+			continue
+		var pos: Vector3 = snapshot.skater_states[pid].position
+		var rel_x: float = pos.x - carrier_pos.x
+		var rel_z: float = pos.z - carrier_pos.z
+		# Goal-side: positive projection onto the carrier→our-net direction.
+		if rel_x * to_net_x + rel_z * to_net_z <= 0.0:
+			continue
+		var d: float = sqrt(rel_x * rel_x + rel_z * rel_z)
+		if prev_assignments.get(pid, Slot.NONE) != Slot.CONTAIN:
+			d += HYSTERESIS_PENALTY_M
+		if d < best_score or (d == best_score and (best_pid == -1 or pid < best_pid)):
+			best_score = d
+			best_pid = pid
+	if best_pid != -1:
+		return best_pid
+	# Caught: nobody goal-side. Deepest peer recovers to the gap fastest.
+	return _pick_closest_with_hysteresis(
+			snapshot, teammates, fixed_peers, prev_assignments, our_net, Slot.CONTAIN)
 
 
 # Assigns slot1 to closest-to-target1 peer, then dumps any remainder

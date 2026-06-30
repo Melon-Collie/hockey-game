@@ -331,6 +331,14 @@ func _current_step_id() -> int:
 
 # ── Step sequencing ───────────────────────────────────────────────────────────
 
+# The puckless movement steps (the puck is stashed far off-rink) frame best on
+# the player-locked camera, which centers on the skater rather than zooming out
+# to chase the stashed puck.
+func _step_uses_locked_camera(step_id: int) -> bool:
+	return step_id == STEP_SKATE or step_id == STEP_SPRINT \
+		or step_id == STEP_BRAKE or step_id == STEP_BLADE_LIFT
+
+
 func _begin_step(index: int) -> void:
 	_disconnect_all_signals()
 	_teardown_shooting()
@@ -350,6 +358,9 @@ func _begin_step(index: int) -> void:
 	var step_id: int = _current_step_id()
 	var step: TutorialStep = _step_defs[index]
 	_hud.set_step(index, _step_ids.size(), step.title, step.instruction, step.hint)
+	# Puckless movement steps stash the puck off-rink; force the player-locked
+	# camera so it sits centered on the skater instead of zooming out toward it.
+	_local_controller.set_camera_force_locked(_step_uses_locked_camera(step_id))
 	# Offsides detection runs only during the OFFSIDES step. Steps that put
 	# the player deep in the O-zone with the puck temporarily off-rink
 	# (one-timer, shot-block prefire) would otherwise trip offsides and
@@ -490,6 +501,8 @@ func _complete_step() -> void:
 	_disconnect_all_signals()
 	_complete_flash_timer = TutorialHUD._COMPLETE_FLASH_DURATION
 	_hud.flash_complete()
+	# Drop any corrective prompt so it doesn't linger over the completion flash.
+	_hud.clear_alert()
 	# Tear the puppet down after any step that used it so it doesn't linger
 	# into a step that doesn't need it (e.g. body-check → elevation in the
 	# advanced flow).
@@ -598,6 +611,7 @@ func _process(delta: float) -> void:
 		if shot_state == 2:
 			_wrist_peak_charge = maxf(_wrist_peak_charge, _skater.shot_charge)
 		_shooting_tick(delta)
+		_update_elevation_prompt()
 		if _current_step_id() == STEP_SHOOT_TARGETS and _targets_phase == 2 \
 				and not _skater.is_elevated:
 			_complete_step()
@@ -920,6 +934,41 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 	_wrist_peak_charge = 0.0
 
 
+# Elevation toggle the active drill expects, or _ELEV_ANY when it doesn't care
+# (the player picks per shot — e.g. the goalie drill, where the right answer
+# depends on which target they're going for). Drills that assume a flat shot
+# want it OFF; the high-targets wave wants it ON. Drives a corrective prompt
+# (never an auto-fix — managing the sticky toggle is part of the lesson).
+const _ELEV_ANY:    int = -1
+const _ELEV_FLAT:   int = 0
+const _ELEV_LIFTED: int = 1
+
+func _expected_elevation() -> int:
+	match _current_step_id():
+		STEP_SHOOT_WRIST, STEP_SHOOT_SLAP:
+			return _ELEV_FLAT
+		STEP_SHOOT_TARGETS:
+			# High wave needs a lifted shot; the low wave and the scroll-down beat
+			# need it flat.
+			return _ELEV_LIFTED if _targets_phase == 1 else _ELEV_FLAT
+	return _ELEV_ANY
+
+
+# Shows / clears the amber elevation prompt for the active drill. Called every
+# frame from the shooting branch so it tracks the toggle live.
+func _update_elevation_prompt() -> void:
+	var expected: int = _expected_elevation()
+	if expected == _ELEV_ANY:
+		_hud.clear_alert()
+		return
+	if expected == _ELEV_LIFTED and not _skater.is_elevated:
+		_hud.set_alert("Your shot is flat — scroll the wheel up to lift it.")
+	elif expected == _ELEV_FLAT and _skater.is_elevated:
+		_hud.set_alert("Your shot is set to lift — scroll the wheel down to go flat.")
+	else:
+		_hud.clear_alert()
+
+
 # Per-frame watch/restage loop for shooting drills. Waits out the re-stage
 # beat, then watches the loose puck for a goal-line crossing (handled by
 # _on_puck_crossed_net) or a shot that died short (→ re-stage and try again).
@@ -936,7 +985,13 @@ func _shooting_tick(delta: float) -> void:
 	if TutorialShotRules.crossed_goal_line(pos.x, pos.z, _GOAL_PLANE_Z, -1.0, _NET_HALF_WIDTH):
 		_on_puck_crossed_net(pos)
 		return
-	if _puck.get_puck_velocity().length() < 0.3:
+	# Use the release-aware velocity: the frame a shot fires, the puck's carrier
+	# is already cleared but Jolt hasn't applied the release impulse yet, so raw
+	# linear_velocity reads zero. get_release_velocity() returns the pending shot
+	# vector in that window — without it the just-fired puck reads as "died short"
+	# and gets stashed off-rink on its first airborne frame (looks like it
+	# vanishes the instant you shoot).
+	if _puck.get_release_velocity().length() < 0.3:
 		_stash_and_restage()
 
 

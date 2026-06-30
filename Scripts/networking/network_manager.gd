@@ -101,6 +101,10 @@ signal deflection_received(position: Vector3)
 signal body_block_received(position: Vector3)
 signal puck_strip_received(position: Vector3)
 signal stick_lift_received(position: Vector3)
+# Distinct from stick_lift_received on purpose: a nudge (self-tap) is its own
+# gameplay event, so it carries its own cue and can be re-sounded independently
+# later without disturbing the opponent stick-lift strip.
+signal nudge_received(position: Vector3)
 signal shot_sound_received(position: Vector3, is_slapper: bool)
 # Host-authoritative body-check impact (Lever A). Fired on every client (and
 # self-emitted on the host) when a hit is credited, so impact VFX/sound are
@@ -170,6 +174,10 @@ var pending_lobby_roster: Array = []
 var pending_join_slot: Dictionary = {}   # { team_slot, team_id, jersey_color, helmet_color, pants_color }
 var is_offline_mode: bool = false
 var is_tutorial_mode: bool = false
+# Offline penalty-shot drill ("score X of 10"). Like tutorial mode, it's a
+# single-local-player offline session whose flow is owned by a dedicated manager
+# (PenaltyDrillManager) rather than the normal match orchestration.
+var is_penalty_drill_mode: bool = false
 # Which tutorial to run. game_scene.gd reads this when instantiating
 # TutorialManager. Empty when not in tutorial mode.
 var tutorial_id: String = ""
@@ -359,6 +367,10 @@ func start_free_play() -> void:
 	pending_away_color_slot = _pick_random_away_slot(pending_home_color_slot)
 	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
 	start_offline()
+	# Free play is a casual warmup/practice mode — no infraction whistles getting
+	# in the way. OFF disables offside + crease protection (icing is already off
+	# in the default ARCADE set). Overrides the rule_set start_offline seeded.
+	pending_game_config["rule_set"] = GameRules.RuleSet.OFF
 	is_free_play_mode = true
 
 
@@ -418,6 +430,25 @@ func start_tutorial(id: String = TutorialRegistry.BASICS_ID) -> void:
 	# on_host_started reads pending_lobby_slots[1] and skips the random assignment path.
 	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
 	start_offline()
+
+
+# Offline penalty-shot drill. Mirrors start_tutorial: one local player on team 0,
+# no bots, no clock. PenaltyDrillManager (spawned by game_scene.gd) owns the
+# shooter staging, the lone reactive goalie, and the score-X-of-10 loop. Forces
+# RuleSet.OFF so offsides/crease whistles can't interrupt a breakaway.
+func start_penalty_drill() -> void:
+	is_penalty_drill_mode = true
+	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
+	start_offline()
+	pending_game_config["rule_set"] = GameRules.RuleSet.OFF
+
+
+# True for the single-local-player scripted offline modes (tutorial, penalty
+# drill) where a dedicated manager owns puck placement and scoring, so the
+# normal match machinery — out-of-bounds whistles, goal celebrations — must
+# stand down.
+func is_drill_mode() -> bool:
+	return is_tutorial_mode or is_penalty_drill_mode
 
 
 func local_time() -> float:
@@ -562,7 +593,8 @@ func _on_connected_to_server() -> void:
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.speed, local_attrs.agility, local_attrs.hands,
 			local_attrs.size, local_attrs.physical, local_attrs.shot,
-			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION)
+			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
+			SteamManager.get_app_build_id())
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -640,6 +672,7 @@ func reset() -> void:
 	is_offline_mode = false
 	is_free_play_mode = false
 	is_tutorial_mode = false
+	is_penalty_drill_mode = false
 	tutorial_id = ""
 	_input_batch_provider = Callable()
 	_pending_handshake.clear()
@@ -855,7 +888,7 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM,
-		steam_id: int = 0, protocol_version: int = 0) -> void:
+		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -867,6 +900,18 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		push_warning("Rejected join from peer %d: protocol %d, host expects %d"
 				% [sender_id, protocol_version, BuildInfo.PROTOCOL_VERSION])
 		kick_peer(sender_id, "Game version mismatch (host is on v%s).\nUpdate to the latest build to play together." % BuildInfo.VERSION)
+		return
+	# Build gate: a matching protocol only proves the wire decodes. A physics or
+	# tuning change with the same wire format still desyncs the joiner's local
+	# prediction against host authority. The Steam BuildID bumps on every upload
+	# so it catches that automatically — no manual version discipline. Skipped
+	# when either side is a dev / non-Steam build (BuildID 0), which manages its
+	# own compatibility.
+	var host_build_id: int = SteamManager.get_app_build_id()
+	if build_id != 0 and host_build_id != 0 and build_id != host_build_id:
+		push_warning("Rejected join from peer %d: build %d, host on build %d"
+				% [sender_id, build_id, host_build_id])
+		kick_peer(sender_id, "Build mismatch — you and the host are on different builds.\nUpdate to the latest build to play together.")
 		return
 	# Duplicate request_join (lost-ack resend or forged repeat) would re-emit
 	# peer_joined and double-spawn the peer's skater — first join wins.
@@ -1014,9 +1059,9 @@ func receive_world_state(data: PackedByteArray) -> void:
 		func(s: PackedByteArray) -> void:
 			var now: float = local_time()
 			if _last_ws_arrival_time > 0.0:
-				const EXPECTED_INTERVAL: float = 1.0 / Constants.STATE_RATE
+				var expected_interval: float = 1.0 / Constants.STATE_RATE
 				var gap: float = now - _last_ws_arrival_time
-				var jitter: float = absf(gap - EXPECTED_INTERVAL)
+				var jitter: float = absf(gap - expected_interval)
 				_jitter_samples.append(jitter)
 				if _jitter_samples.size() > 40:
 					_jitter_samples.pop_front()
@@ -1917,6 +1962,20 @@ func send_stick_lift_to_all(position: Vector3) -> void:
 @rpc("authority", "unreliable")
 func notify_stick_lift(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: stick_lift_received.emit(pos), [position], false)
+
+# Nudge (self-tap) cue. Host-authoritative, like the shot cue: the nudger already
+# played it locally the instant they tapped, so the host excludes them and every
+# other peer hears it here. `except_peer_id` is the nudger (host's own nudges
+# and bots pass -1).
+func send_nudge_to_all(position: Vector3, except_peer_id: int = -1) -> void:
+	for peer_id: int in connected_peer_ids():
+		if peer_id == except_peer_id:
+			continue
+		notify_nudge.rpc_id(peer_id, position)
+
+@rpc("authority", "unreliable")
+func notify_nudge(position: Vector3) -> void:
+	NetworkSimManager.send(func(pos: Vector3) -> void: nudge_received.emit(pos), [position], false)
 
 # Shot SFX (wrister/slapper). Unlike puck-collision SFX, the shooter already
 # plays the cue locally the instant they release (LocalController path), so the

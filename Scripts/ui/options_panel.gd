@@ -49,6 +49,7 @@ var _share_stats_check: CheckButton = null
 var _self_beacon_mode_btn: OptionButton = null
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
+var _camera_mode_btn: OptionButton = null
 var _tilt_slider: HSlider = null
 var _tilt_label: Label = null
 var _fov_slider: HSlider = null
@@ -62,6 +63,7 @@ var _pending_bindings: Dictionary = {}
 var _binding_btns: Dictionary = {}
 var _conflict_label: Label = null
 var _export_status_label: Label = null
+var _bot_export_status_label: Label = null
 
 const _WHITE  := MenuStyle.TEXT_BODY
 const _DIM    := MenuStyle.TEXT_DIM
@@ -179,6 +181,7 @@ func _snapshot() -> Dictionary:
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
+		"camera_mode": PlayerPrefs.camera_mode,
 		"hud_scale": PlayerPrefs.hud_scale,
 		"share_gameplay_stats": PlayerPrefs.share_gameplay_stats,
 		"bindings": PlayerPrefs.bindings.duplicate(true),
@@ -221,6 +224,7 @@ func _read_controls() -> Dictionary:
 		"camera_tilt_deg": _tilt_slider.value,
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
+		"camera_mode": _camera_mode_btn.selected,
 		"hud_scale": _hud_scale_slider.value,
 		"share_gameplay_stats": _share_stats_check.button_pressed,
 		"bindings": _pending_bindings.duplicate(true),
@@ -654,6 +658,15 @@ func _build_game_tab() -> Control:
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Camera"))
 
+	_camera_mode_btn = OptionButton.new()
+	_camera_mode_btn.custom_minimum_size = Vector2(160, 40)
+	_camera_mode_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.CAMERA_MODE_LABELS.size():
+		_camera_mode_btn.add_item(PlayerPrefs.CAMERA_MODE_LABELS[i], i)
+	_camera_mode_btn.selected = PlayerPrefs.camera_mode
+	_camera_mode_btn.item_selected.connect(_on_camera_mode_selected)
+	box.add_child(_field_row("Mode", _camera_mode_btn))
+
 	_tilt_slider = HSlider.new()
 	_tilt_slider.min_value = PlayerPrefs.CAMERA_TILT_MIN
 	_tilt_slider.max_value = PlayerPrefs.CAMERA_TILT_MAX
@@ -710,6 +723,31 @@ func _build_game_tab() -> Control:
 	_export_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_export_status_label.custom_minimum_size = Vector2(0, 0)
 	box.add_child(_export_status_label)
+
+	box.add_child(_section_spacer())
+	box.add_child(_section_header("Bot Roster"))
+
+	var bots_hint := Label.new()
+	bots_hint.add_theme_font_size_override("font_size", 12)
+	bots_hint.add_theme_color_override("font_color", _MUTED)
+	bots_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	bots_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bots_hint.text = "Edit AI bot names, numbers, and attributes. As host, your roster is used for the whole lobby. Builds over the point-buy budget reset to medium."
+	box.add_child(bots_hint)
+
+	var bots_export_btn := _make_button("Export Bots File...")
+	bots_export_btn.custom_minimum_size = Vector2(260, 40)
+	bots_export_btn.add_theme_font_size_override("font_size", 16)
+	bots_export_btn.pressed.connect(_on_export_bots_pressed)
+	box.add_child(_field_row("Custom bots", bots_export_btn))
+
+	_bot_export_status_label = Label.new()
+	_bot_export_status_label.add_theme_font_size_override("font_size", 12)
+	_bot_export_status_label.add_theme_color_override("font_color", _MUTED)
+	_bot_export_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_bot_export_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_bot_export_status_label.custom_minimum_size = Vector2(0, 0)
+	box.add_child(_bot_export_status_label)
 
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Data Sharing"))
@@ -974,27 +1012,43 @@ func _on_cam_dist_changed(value: float) -> void:
 		_cam_dist_label.text = "%.2fx" % value
 	_update_apply_state()
 
+func _on_camera_mode_selected(_idx: int) -> void:
+	_update_apply_state()
+
 func _on_export_colors_pressed() -> void:
-	const SRC: String = "res://data/team_colors.json"
-	const DST: String = "user://team_colors.json"
-	var src_file := FileAccess.open(SRC, FileAccess.READ)
+	_export_user_file("res://data/team_colors.json", "user://team_colors.json", _export_status_label)
+
+
+func _on_export_bots_pressed() -> void:
+	_export_user_file("res://data/bot_identities.json", "user://bot_identities.json", _bot_export_status_label)
+
+
+# Copies a bundled res:// data file to its editable user:// counterpart and
+# reports the absolute path (via the given status label) so the player can find
+# and edit it. Shared by the Team Colors and Bot Roster export buttons.
+func _export_user_file(src_path: String, dst_path: String, status_label: Label) -> void:
+	var src_file := FileAccess.open(src_path, FileAccess.READ)
 	if src_file == null:
-		_export_status_label.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3, 1.0))
-		_export_status_label.text = "Error: bundled colors file not found."
+		status_label.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3, 1.0))
+		status_label.text = "Error: bundled file not found."
 		return
 	var content: String = src_file.get_as_text()
 	src_file.close()
-	var existed: bool = FileAccess.file_exists(DST)
-	var dst_file := FileAccess.open(DST, FileAccess.WRITE)
+	var existed: bool = FileAccess.file_exists(dst_path)
+	var dst_file := FileAccess.open(dst_path, FileAccess.WRITE)
 	if dst_file == null:
-		_export_status_label.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3, 1.0))
-		_export_status_label.text = "Error: could not write to user data folder."
+		status_label.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3, 1.0))
+		status_label.text = "Error: could not write to user data folder."
 		return
 	dst_file.store_string(content)
 	dst_file.close()
-	var global_path: String = ProjectSettings.globalize_path(DST)
-	_export_status_label.add_theme_color_override("font_color", _DIM)
-	_export_status_label.text = "%s:\n%s" % ["Overwrote" if existed else "Saved", global_path]
+	var global_path: String = ProjectSettings.globalize_path(dst_path)
+	status_label.add_theme_color_override("font_color", _DIM)
+	# Both rosters are read once and cached for the process lifetime (the
+	# registries' static `_loaded` guard), so an edit only takes effect on the
+	# next launch — tell the player so they don't think their changes were lost.
+	status_label.text = "%s:\n%s\nEdit it, then restart the game to apply your changes." % [
+			"Overwrote" if existed else "Saved", global_path]
 
 func _on_sensitivity_changed(value: float) -> void:
 	if _sens_field != null:
@@ -1139,6 +1193,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
+	PlayerPrefs.camera_mode = c.camera_mode
 	PlayerPrefs.hud_scale = c.hud_scale
 	PlayerPrefs.share_gameplay_stats = c.share_gameplay_stats
 	PlayerPrefs.bindings = (_pending_bindings as Dictionary).duplicate(true)
@@ -1233,6 +1288,7 @@ func _defaults() -> Dictionary:
 		"camera_tilt_deg": PlayerPrefs.CAMERA_TILT_DEFAULT,
 		"fov": 50.0,
 		"camera_distance": 1.0,
+		"camera_mode": PlayerPrefs.CAMERA_MODE_DYNAMIC,
 		"hud_scale": 1.0,
 		"share_gameplay_stats": true,
 		"bindings": PlayerPrefs.default_bindings.duplicate(true),
@@ -1302,6 +1358,8 @@ func _apply_values_to_controls(v: Dictionary) -> void:
 		_fov_slider.value = v.fov
 	if _cam_dist_slider != null:
 		_cam_dist_slider.value = v.camera_distance
+	if _camera_mode_btn != null:
+		_camera_mode_btn.selected = v.camera_mode
 	if _hud_scale_slider != null:
 		_hud_scale_slider.value = v.hud_scale
 	if _share_stats_check != null:

@@ -118,6 +118,14 @@ var is_local_skater: bool = false
 @export var body_block_radius: float = 0.5
 @export var block_body_radius: float = 0.9
 @export var block_crouch_depth: float = 0.35
+# Vertical center of the body-block sphere, in skater-local space (origin sits at
+# the hips). Raised to torso height so the PASSIVE sphere (body_block_radius)
+# clears a grounded puck (top ≈ ice_height + radius ≈ 0.12) — loose pucks on the
+# ice slip under/between the legs, enabling nutmegs. The WIDER explicit-block
+# sphere (block_body_radius, Ctrl) still reaches the ice from this height, so an
+# active shot-block remains the way to stop a low puck. Mirrors the grounded-vs-
+# airborne split the blade already uses.
+@export var body_block_height: float = 0.7
 
 # ── Node References ───────────────────────────────────────────────────────────
 @onready var mesh_root: Node3D = $MeshRoot
@@ -209,6 +217,15 @@ var _blade_elevation_blend: float = 0.0
 # and replicated so remotes/AI can read it. A lifted blade only meets airborne
 # pucks (to tip them); it clears grounded pucks and sticks.
 var blade_up: bool = false
+# Deliberate-deflect intent: true while a human player holds the shoot button
+# (LMB) WITHOUT carrying the puck — a committed "redirect this, don't catch it."
+# Set each tick by the controller (see SkaterController._wants_deflect); read
+# host-side by PuckController's loose-puck interaction gate, which routes blade
+# contact into a deflect off the blade face instead of corralling the puck. A
+# transient per-tick flag, recomputed from replayed inputs during reconcile, so
+# it needs no replication or snapshot. AI bots never set it (they reuse the held
+# shoot button off-puck for wrister one-timers).
+var deflect_intent: bool = false
 # Eased 0→1 toward blade_up; drives the IK blade-lift offset (see
 # SkaterIKCoordinator.blade_y_local). Mirrors _blade_elevation_blend.
 var _blade_lift_blend: float = 0.0
@@ -333,6 +350,10 @@ func _ready() -> void:
 
 	_body_block_area = Area3D.new()
 	_body_block_area.name = "BodyBlockArea"
+	# Raised to torso height so grounded pucks pass under the passive sphere (see
+	# body_block_height). The explicit-block widening (set_block_stance) reaches
+	# back down to the ice from here.
+	_body_block_area.position.y = body_block_height
 	_body_block_area.collision_layer = 0
 	_body_block_area.collision_mask = Constants.LAYER_PUCK
 	var block_shape := CollisionShape3D.new()
@@ -764,15 +785,9 @@ func capture_prev_blade_contact() -> void:
 func get_blade_face_normal(reference_velocity: Vector3) -> Vector3:
 	if top_hand == null:
 		return -global_transform.basis.z
-	var stick_horiz: Vector3 = get_blade_contact_global() - top_hand.global_position
-	stick_horiz.y = 0.0
-	if stick_horiz.length() < 0.001:
-		stick_horiz = -global_transform.basis.z
-	stick_horiz = stick_horiz.normalized()
-	var face_normal := Vector3(-stick_horiz.z, 0.0, stick_horiz.x)
-	if face_normal.dot(reference_velocity) > 0.0:
-		face_normal = -face_normal
-	return face_normal
+	return PuckReceptionRules.blade_face_normal(
+			get_blade_contact_global(), top_hand.global_position,
+			reference_velocity, -global_transform.basis.z)
 
 
 # ── Top Hand ──────────────────────────────────────────────────────────────────

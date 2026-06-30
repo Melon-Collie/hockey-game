@@ -91,6 +91,29 @@ static func predict_at(pos: Vector3, vel: Vector3, lead_time_s: float,
 	return traj[traj.size() - 1]
 
 
+# Solve the lead time so a constant-speed projectile fired from
+# `shooter_pos` and a target moving at `target_vel` (+ optional `accel`)
+# arrive at the same point. The naive `dist_to_current / speed` is wrong
+# whenever the target moves radially: a receiver skating AWAY makes the
+# real intercept distance longer (puck under-leads, lands behind them);
+# skating toward shrinks it (over-leads). Two fixed-point iterations
+# refine the straight-line guess against the predicted intercept point —
+# converges fast and is trivial at the 6 Hz brain tick. Clamped to
+# `max_lead_s` so a target fleeing faster than the projectile doesn't
+# diverge. Returns 0 for a non-positive projectile speed.
+static func intercept_time(shooter_pos: Vector3, target_pos: Vector3,
+		target_vel: Vector3, accel: Vector3,
+		proj_speed: float, max_lead_s: float, steps: int = 6) -> float:
+	if proj_speed <= 0.0:
+		return 0.0
+	var t: float = clampf(
+			shooter_pos.distance_to(target_pos) / proj_speed, 0.0, max_lead_s)
+	for _i: int in range(2):
+		var pred: Vector3 = predict_at(target_pos, target_vel, t, steps, accel)
+		t = clampf(shooter_pos.distance_to(pred) / proj_speed, 0.0, max_lead_s)
+	return t
+
+
 # Puck-physics-aware forward simulation. Applies Coulomb ice friction
 # and board reflection so the projected trajectory matches Jolt's
 # actual resolution of a freely sliding puck. Use this for chase

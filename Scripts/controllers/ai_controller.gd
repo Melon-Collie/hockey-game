@@ -16,6 +16,14 @@ var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
 
+
+# Bots never set deliberate-deflect intent. The agent holds the shoot button
+# off-puck to wind up wrister one-timers (SkaterAgentStateMachine._state_one_timer_pressed),
+# expecting to CATCH the incoming puck and fire — routing that into a deflect
+# would break it. Deliberate deflection is a human-only mechanic in v1.
+func _wants_deflect(_input: InputState) -> bool:
+	return false
+
 # Scratch InputState reused every FACEOFF_PREP tick so we don't allocate per
 # frame. All flags default to false; we only overwrite mouse_world_pos / time
 # / delta. Lifetime is the controller — bots aren't re-allocated mid-match.
@@ -64,15 +72,28 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_agent = SkaterAgent.new()
 
 
-# Push the per-attribute wrister cap into the agent so its shot and pass
-# charge targets scale with the same Size + Strength multipliers as the
-# base controller's `max_wrister_charge_distance`. Called on every attribute
-# apply (initial spawn + free-play picker changes) so the agent never sees
-# a stale cap.
+# Push the bot's attribute-scaled capabilities into the agent so the AI plans
+# with the same numbers the controller drives the body with — top speed, thrust,
+# blade reach, shot / pass speed — instead of league defaults. Called on every
+# attribute apply (initial spawn + free-play picker changes) so the agent never
+# sees stale values. The base controller has already written the scaled values
+# to its own fields by the time super() returns; we just read them off.
 func apply_attributes(attrs: PlayerAttributes) -> void:
 	super.apply_attributes(attrs)
-	if _agent != null:
-		_agent.set_max_wrister_charge_distance(max_wrister_charge_distance)
+	if _agent == null:
+		return
+	_agent.set_max_wrister_charge_distance(max_wrister_charge_distance)
+	var caps := AISelfCapabilities.new()
+	caps.max_speed = max_speed
+	caps.max_accel = thrust
+	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
+	caps.wrister_shot_speed = max_wrister_power
+	# Scaled body-check delivery (set on the skater by super.apply_attributes
+	# above) so AIBodyCheck predicts THIS bot's hit strength.
+	if skater != null:
+		caps.self_weight = skater.weight
+		caps.self_body_check_transfer = skater.body_check_transfer
+	_agent.apply_capabilities(caps)
 
 
 # Bots are spawned by PlayerRegistry.spawn_bot, which knows the bot's
@@ -80,9 +101,13 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 # after spawn to wire the agent. Separate from setup() because setup() is
 # called by ActorSpawner before the registry knows which slot it belongs to.
 func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
-		is_left_handed: bool) -> void:
+		is_left_handed: bool, profile: BotSkillProfile = null) -> void:
 	if _agent != null:
 		_agent.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
+		# Difficulty knobs (mouse slew / lerp / dispatch cadence). Null leaves
+		# the perfect-bot defaults. Perception delay is applied globally by
+		# GameManager, not here.
+		_agent.apply_profile(profile)
 	if SHOW_DEBUG_LABEL and skater != null:
 		_debug_label = Label3D.new()
 		_debug_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED

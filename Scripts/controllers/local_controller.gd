@@ -89,6 +89,13 @@ func set_local_team_id(team_id: int) -> void:
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	camera.set_goal_context(goal_0, goal_1, carrier_team_getter)
 
+# Forces the player-locked camera framing regardless of the user's camera-mode
+# pref. Used by the tutorial for the puckless movement steps so the camera sits
+# centered on the player instead of zooming out toward the stashed puck.
+func set_camera_force_locked(locked: bool) -> void:
+	if camera != null:
+		camera.force_locked = locked
+
 # Team 0 defends the +Z goal → attacks -Z. Team 1 defends -Z → attacks +Z.
 # See GameManager._assign_goals_to_teams.
 func get_attacking_goal_z() -> float:
@@ -229,7 +236,11 @@ func _physics_process(delta: float) -> void:
 			var dist: float = puck.global_position.distance_to(blade_pos_for_claim)
 			var in_range: bool = dist <= PuckController.PICKUP_RADIUS
 			var rising_edge: bool = in_range and not _was_in_pickup_range
-			if in_range and _pickup_claim_floor <= 0.0 and (rising_edge or _claim_cooldown <= 0.0):
+			# A deliberate deflect (holding LMB without the puck) is NOT a pickup —
+			# suppress the speculative claim + optimistic pin so we don't predict a
+			# catch the host will resolve as a deflect (which would roll back). The
+			# deflect itself comes back authoritatively through the puck sync.
+			if in_range and not skater.deflect_intent and _pickup_claim_floor <= 0.0 and (rising_edge or _claim_cooldown <= 0.0):
 				_pickup_claim_floor = _PICKUP_CLAIM_FLOOR_S
 				_claim_cooldown = _CLAIM_COOLDOWN_S
 				NetworkManager.send_pickup_claim(

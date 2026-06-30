@@ -35,6 +35,18 @@ class_name AIRoleFinisher
 # Speed gate: pucks slower than this are passes / rolling, not shots.
 const INCOMING_SHOT_SPEED_M_S: float = 12.0
 
+# Weak-side staging bias: shift the positioning search center off-center to the
+# WEAK side (opposite the puck's strong side) so the FINISHER stages the
+# cross-seam one-timer option instead of stacking on the puck-side play. Modest —
+# the candidate spread (SEARCH_STEP_M) still reaches strong-side spots when the
+# scoring favours them. Tunable; 0 = centered (old behaviour).
+const WEAK_SIDE_BIAS_M: float = 2.0
+
+# Cap on the feed flight time used for the goalie-motion prediction. Bounds the
+# goalie's predicted slide so a far cross-ice candidate doesn't model an
+# unrealistically settled goalie. Mirrors the carrier's pass-lead horizon.
+const FEED_FLIGHT_MAX_S: float = 0.6
+
 # How far in front of the opp goal the positioning search center
 # sits. Sourced from GameRules.SLOT_DIST_M — the faceoff-hash slot,
 # the prime scoring area. Keeps every polar sample (radius
@@ -162,10 +174,13 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
 
-	# Search center: the slot, SLOT_DIST_M in front of opp goal at
-	# center ice. Pure in-game ref (opp net + slot depth).
+	# Search center: the slot, SLOT_DIST_M in front of opp goal, shifted to the
+	# WEAK side so the FINISHER stages the cross-seam one-timer rather than
+	# crowding the puck-side play. strong_x is the puck's hysteretic side; the
+	# weak side is its negation. The candidate spread still reaches strong-side
+	# spots when the scoring favours them.
 	var search_center := Vector3(
-			0.0,
+			-ctx.strong_x * WEAK_SIDE_BIAS_M,
 			0.0,
 			ctx.attacking_goal_pos.z + ctx.own_goal_dir * GameRules.SLOT_DIST_M)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
@@ -184,10 +199,21 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 		# universally and a 12 m feed scores as if defenders had 36%
 		# more reaction time than they actually do.
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
+		# Predict the goalie at the one-timer feed's release (flight only — the
+		# FINISHER fires on contact) and credit the motion: a weak-side candidate
+		# forces a goalie slide it can't finish inside the pass flight, so the
+		# cross-seam look scores above a static strong-side one. This is the
+		# off-puck mirror of the carrier's own feed scoring.
+		var flight_t: float = clampf(
+				carrier_pos.distance_to(c) / pass_speed, 0.0, FEED_FLIGHT_MAX_S)
+		var cand_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+				goalie_pos, ctx.attacking_goal_pos, flight_t, c)
+		var cand_unsettled: float = AIActionScoring.goalie_unsettled(
+				goalie_pos, ctx.attacking_goal_pos, flight_t, c)
 		var score: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
-				goalie_pos, GameRules.NET_HALF_WIDTH,
-				opp_positions, Vector3.INF, pass_speed)
+				cand_goalie, GameRules.NET_HALF_WIDTH,
+				opp_positions, Vector3.INF, pass_speed, cand_unsettled)
 		if score > best_score:
 			best_score = score
 			best_pos = c

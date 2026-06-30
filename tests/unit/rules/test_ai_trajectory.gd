@@ -55,8 +55,8 @@ func test_zero_velocity_yields_static_trajectory() -> void:
 func test_predict_puck_decelerates_with_ice_friction() -> void:
 	# A puck moving along +X should travel STRICTLY less far than the
 	# constant-velocity equivalent, because Coulomb friction (μ × g)
-	# decelerates it each step. With μ = 0.01 and g = 9.81 the deceleration
-	# is about 0.098 m/s² — small over short times but observable.
+	# decelerates it each step. With μ = ICE_FRICTION = 0.1 and g = 9.81 the
+	# deceleration is about 0.98 m/s² — observable over a couple seconds.
 	# Velocity / time chosen to stay well inside the rink (4 m/s × 2 s
 	# = 8 m, INNER_HALF_WIDTH ≈ 12.85 m) so the rink clamp / bounce
 	# doesn't confound the comparison.
@@ -66,9 +66,11 @@ func test_predict_puck_decelerates_with_ice_friction() -> void:
 	var with_friction: Vector3 = AITrajectory.predict_puck_at(pos, vel, 2.0)
 	assert_lt(with_friction.x, no_friction.x,
 			"puck prediction with friction must trail constant-velocity prediction")
-	# Sanity bound: at μg ≈ 0.098 over 2 s, loss is 0.5 × 0.098 × 4 ≈ 0.2 m.
-	assert_almost_eq(with_friction.x, no_friction.x - 0.2, 0.3,
-			"friction deceleration matches Coulomb model order-of-magnitude")
+	# Derive the expected loss from the constant so this can't drift out of sync:
+	# constant decel ⇒ distance loss = ½·a·t² (a = PUCK_ICE_DECEL_M_S2, t = 2 s).
+	var expected_loss: float = 0.5 * GameRules.PUCK_ICE_DECEL_M_S2 * 2.0 * 2.0
+	assert_almost_eq(with_friction.x, no_friction.x - expected_loss, 0.5,
+			"friction deceleration matches the Coulomb model (½·a·t²)")
 
 
 func test_predict_puck_bounces_off_boards() -> void:

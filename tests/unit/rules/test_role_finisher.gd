@@ -225,6 +225,40 @@ func test_positioning_picks_legal_position_when_carrier_present() -> void:
 	assert_false(d.has_aim_override)
 
 
+func _stage_x_for_strong_side(strong_x: float) -> float:
+	# Same carrier and skaters; only the strong-side sign differs, isolating the
+	# weak-side search bias.
+	var carrier_pos := Vector3(6.0, 0.0, -20.0)
+	var ctx: RoleContext = _make_ctx(
+			Vector3(0.0, 0.0, -20.0), Vector3.ZERO,
+			carrier_pos, Vector3.ZERO,
+			[
+				_make_skater(1, TEAM_ID, Vector3(0.0, 0.0, -20.0), false),
+				_make_skater(100, TEAM_ID, carrier_pos, false),
+			])
+	ctx.snapshot.puck_state.carrier_peer_id = 100
+	ctx.strong_x = strong_x
+	return AIRoleFinisher.decide(ctx).target_position.x
+
+
+func test_positioning_bias_follows_strong_side() -> void:
+	# The weak-side staging bias keys off strong_x: when the puck's strong side
+	# is +X the FINISHER stages further to the weak (-X) side than when it's -X.
+	# Validates the bias is wired without overfitting an absolute spot (the exact
+	# depth is a tuning matter — angle vs goalie-slide trade off).
+	var x_strong_plus: float = _stage_x_for_strong_side(1.0)
+	var x_strong_minus: float = _stage_x_for_strong_side(-1.0)
+	assert_lt(x_strong_plus, x_strong_minus,
+			"strong-side +X should stage weaker (lower x) than strong-side -X")
+
+
+func test_positioning_does_not_stack_on_carrier_side() -> void:
+	# With a strong-side carrier at x=6, the FINISHER should stage well across to
+	# the slot/weak side rather than crowding the puck-side wall.
+	var x: float = _stage_x_for_strong_side(1.0)
+	assert_lt(x, 3.0, "FINISHER stages cross-ice from a strong-side carrier, not stacked on it")
+
+
 func test_reactive_overrides_positioning_when_shot_incoming() -> void:
 	# Even with a teammate carrier (positioning would normally run),
 	# a fast incoming shot should trigger reactive TIP instead.

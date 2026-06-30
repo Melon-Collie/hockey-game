@@ -141,3 +141,73 @@ func test_argmax_shades_toward_dominant_threat() -> void:
 			"adding on-axis carrier should shade ANCHOR toward center; got both=%s off-only=%s" % [both_target, off_only_target])
 
 
+# ── Man-on-threat coverage (brain assigned us a specific opponent) ──────────
+
+func test_assigned_man_drives_coverage_side() -> void:
+	# Carrier at center, two receivers wide. When the brain assigns ANCHOR the
+	# LEFT receiver it covers the left side; the RIGHT receiver flips it right.
+	# Proves the central partition — not the global-max minimax — drives which
+	# man this defender takes.
+	var carrier := Vector3(0, 0, 20)
+	var left_man := Vector3(-7, 0, 19)
+	var right_man := Vector3(7, 0, 19)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 16), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier, Vector3.ZERO],
+		[210, 1 - TEAM_ID, left_man, Vector3.ZERO],
+		[220, 1 - TEAM_ID, right_man, Vector3.ZERO],
+	]
+
+	var ctx_left: RoleContext = _make_ctx(Vector3(0, 0, 16), skaters, 200)
+	ctx_left.assigned_threat_peer = 210
+	var left_target: Vector3 = AIRoleAnchor.decide(ctx_left).target_position
+	assert_lt(left_target.x, 0.0,
+			"assigned the left man → cover the left side; got x=%f" % left_target.x)
+
+	var ctx_right: RoleContext = _make_ctx(Vector3(0, 0, 16), skaters, 200)
+	ctx_right.assigned_threat_peer = 220
+	var right_target: Vector3 = AIRoleAnchor.decide(ctx_right).target_position
+	assert_gt(right_target.x, 0.0,
+			"assigned the right man → cover the right side; got x=%f" % right_target.x)
+
+	# Goal-side of the assigned man (between him and our net, not out past him).
+	assert_gt(left_target.z, left_man.z - 0.01,
+			"coverage is goal-side of the man; got z=%f" % left_target.z)
+
+
+# ── Defensive anticipation (lead the man) ──────────────────────────────────
+
+func test_man_coverage_anticipates_a_moving_man() -> void:
+	# Same assigned man, stationary vs cutting toward center (+x). Coverage
+	# should shade toward where he's GOING, not his current spot.
+	var carrier := Vector3(0, 0, 20)
+	var man := Vector3(-7, 0, 19)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 16), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier, Vector3.ZERO],
+		[210, 1 - TEAM_ID, man, Vector3.ZERO],
+	]
+	var ctx_still: RoleContext = _make_ctx(Vector3(0, 0, 16), skaters, 200)
+	ctx_still.assigned_threat_peer = 210
+	var still_x: float = AIRoleAnchor.decide(ctx_still).target_position.x
+
+	var ctx_move: RoleContext = _make_ctx(Vector3(0, 0, 16), skaters, 200)
+	ctx_move.assigned_threat_peer = 210
+	ctx_move.snapshot.skater_states[210].velocity = Vector3(10, 0, 0)  # cutting +x
+	var moved_x: float = AIRoleAnchor.decide(ctx_move).target_position.x
+
+	assert_gt(moved_x, still_x,
+			"coverage leads the man's cut toward center; still=%f moved=%f" % [still_x, moved_x])
+
+
+func test_lead_threat_clamps_long_lead() -> void:
+	var p := Vector3.ZERO
+	# Slow: leads along velocity (3 m/s × 0.3 s = 0.9 m), unclamped.
+	var slow: Vector3 = AIRoleHelpers.lead_threat(p, Vector3(3, 0, 0))
+	assert_almost_eq(slow.x, 0.9, 0.001, "slow lead is vel × horizon")
+	# Fast: 50 m/s × 0.3 = 15 m → clamped to the max.
+	var fast: Vector3 = AIRoleHelpers.lead_threat(p, Vector3(50, 0, 0))
+	assert_almost_eq(fast.x, AIRoleHelpers.DEFENSIVE_ANTICIPATION_MAX_M, 0.001,
+			"long lead clamps to DEFENSIVE_ANTICIPATION_MAX_M")
+
+

@@ -64,6 +64,7 @@ var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 var _positions_scratch: Dictionary = {}
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
+var _puck_net_stuck_timer: float = 0.0
 # Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
 # we don't fire stray vote RPCs outside of the cinematic window.
 var _in_replay_locally: bool = false
@@ -98,6 +99,29 @@ var team_brains: Array[TeamBrain] = []
 # read from here instead of each fetching their own — saves redundant
 # interpolation work and per-tick allocations.
 var current_snapshot: WorldSnapshot = null
+# Bot difficulty knobs for this match, resolved from PlayerPrefs at match start
+# (on_host_started). Drives the carrier reaction delay applied to current_
+# snapshot below, and is read by PlayerRegistry.spawn_bot to wire each agent's
+# execution knobs. Defaults to Hard so any path that spawns bots before
+# resolution behaves close to the old perfect bot.
+var bot_skill_profile: BotSkillProfile = BotSkillProfile.hard()
+# Goalie difficulty for this match. Host-spawned AI (the host runs both nets),
+# so like bot difficulty it's a host-local PlayerPrefs preference re-read each
+# match. Defaults to Hard so any pre-resolution spawn matches today's goalie.
+var goalie_skill_profile: GoalieSkillProfile = GoalieSkillProfile.hard()
+# Debounce state for the bots' discrete-event reaction delay (see
+# _apply_bot_carrier_reaction_delay). `_perceived_carrier_peer_id` is the
+# delayed belief written onto the AI snapshot; the others track the pending
+# real change. Reset at match start.
+var _perceived_carrier_peer_id: int = -1
+var _real_carrier_last: int = -1
+var _carrier_reaction_timer: float = 0.0
+# Private puck-state copy for the AI snapshot. The interpolated snapshot's
+# puck_state is frequently the live ring-buffer object (see
+# _apply_bot_carrier_reaction_delay), so the debounced carrier is written into
+# this reused scratch instead — never the buffer. Filled once per tick and
+# consumed synchronously by brains + agents within the same tick.
+var _ai_puck_scratch: PuckNetworkState = PuckNetworkState.new()
 var goals: Array[HockeyGoal] = []
 var goalies: Array[Goalie] = []
 var goalie_controllers: Array[GoalieController] = []
@@ -106,6 +130,11 @@ var goalie_controllers: Array[GoalieController] = []
 # rest of the rink wiring (team brains, goalie data cache) ignores it.
 var _tutorial_goalie: Goalie = null
 var _tutorial_goalie_controller: GoalieController = null
+# Single REACTIVE goalie for the penalty-shot drill — same single-net setup as
+# the tutorial goalie, but ticking AI (is_server, process enabled) so it plays
+# the breakaway. Also kept out of the `goalies` arrays.
+var _penalty_goalie: Goalie = null
+var _penalty_goalie_controller: GoalieController = null
 var puck_controller: PuckController = null
 
 # Cached snapshot of goalie pose for skater IK clamping. Refreshed once per
@@ -311,14 +340,21 @@ func _physics_process(delta: float) -> void:
 	# brains that's 8 redundant interpolation passes per frame, each
 	# allocating ~10 RefCounted state objects.
 	if _state_buffer_manager != null:
+		# Fresh ground-truth snapshot — bots track every position/velocity in
+		# real time (so a receiver aims at the puck's ACTUAL spot, not a stale
+		# one). The ONLY thing softened at lower difficulties is the discrete
+		# carrier signal, debounced below after enrichment so the delayed
+		# carrier reaches both the team brains and the agents.
 		current_snapshot = get_state_delayed(0.0)
 		if current_snapshot != null:
 			_enrich_snapshot_for_ai(current_snapshot)
+			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
 	if not team_brains.is_empty() and current_snapshot != null:
 		for brain: TeamBrain in team_brains:
 			brain.tick(delta, current_snapshot)
 	_update_host_puck_tracking()
 	_check_puck_out_of_bounds(delta)
+	_check_puck_stuck_on_net(delta)
 	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
 	_pickup_claim.tick(delta)
@@ -328,12 +364,11 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
 		_puck_oob_timer = 0.0
 		return
-	# Tutorial steps deliberately stash the puck far outside the rink (e.g.
-	# at (100, 100) during the SKATE step) and reposition it between steps —
-	# letting the OOB check fire a faceoff under the tutorial would derail
-	# the script. The tutorial owns puck placement; nothing else can move
-	# it OOB in tutorial mode anyway.
-	if NetworkManager.is_tutorial_mode:
+	# Scripted drills (tutorial, penalty shot) deliberately stash the puck far
+	# outside the rink (e.g. at (100, 100) between attempts) and reposition it —
+	# letting the OOB check fire a faceoff under a drill would derail the script.
+	# The drill manager owns puck placement; nothing else can move it OOB anyway.
+	if NetworkManager.is_drill_mode():
 		_puck_oob_timer = 0.0
 		return
 	if puck.carrier != null:
@@ -354,6 +389,39 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 			_whistle_and_faceoff(dot)
 	else:
 		_puck_oob_timer = 0.0
+
+
+# Host-only: catch a puck that settled motionless on the net frame. It never
+# touches the ice, so the on-ice/airborne logic would leave it stuck forever. If
+# it's only on the low back/skirt frame (a few cm up) it's realistically
+# playable, so drop it to the ice; if it's perched up on the crossbar/crown it's
+# genuinely unplayable, so whistle it dead like an out-of-play puck.
+func _check_puck_stuck_on_net(delta: float) -> void:
+	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
+		_puck_net_stuck_timer = 0.0
+		return
+	if NetworkManager.is_drill_mode() or puck.carrier != null:
+		_puck_net_stuck_timer = 0.0
+		return
+	var pos: Vector3 = puck.global_position
+	var settled: bool = puck.linear_velocity.length() < GameRules.NET_STUCK_MAX_SPEED
+	if not (puck.is_airborne() and settled and GameRules.is_over_net_footprint(Vector2(pos.x, pos.z))):
+		_puck_net_stuck_timer = 0.0
+		return
+	_puck_net_stuck_timer += delta
+	if _puck_net_stuck_timer < GameRules.NET_STUCK_GRACE_DURATION:
+		return
+	_puck_net_stuck_timer = 0.0
+	if pos.y - puck.ice_height <= GameRules.NET_STUCK_PLAYABLE_HEIGHT:
+		# Low on the frame — realistically reachable. Drop it to the ice so play
+		# continues instead of stopping for something a stick could poke free.
+		puck.settle_to_ice()
+		return
+	# Perched up on the crossbar/crown — unplayable. Whistle dead and face off.
+	var dot: Vector2 = GameRules.nearest_faceoff_dot(Vector2(pos.x, pos.z))
+	puck_out_of_play.emit()
+	NetworkManager.notify_puck_out_of_play_to_all()
+	_whistle_and_faceoff(dot)
 
 
 # Plays the whistle, transitions the state machine to FACEOFF_PREP at the
@@ -430,6 +498,12 @@ func _apply_ghost_state(delta: float) -> void:
 		if r != null:
 			var new_ghost: bool = ghosts[peer_id]
 			r.skater.set_ghost(new_ghost)
+			# A skater who ghosts (icing, etc.) while carrying must lose the puck —
+			# set_ghost only severs collision/interaction layers, so without this a
+			# ghosted carrier would keep the puck pinned to their blade and skate it
+			# around untouchable. Drop it loose so play continues.
+			if new_ghost and puck.carrier == r.skater:
+				puck.drop()
 			if new_ghost != _last_ghost_state.get(peer_id, false):
 				_last_ghost_state[peer_id] = new_ghost
 				NetworkManager.send_ghost_state_to_all(peer_id, new_ghost)
@@ -437,6 +511,15 @@ func _apply_ghost_state(delta: float) -> void:
 
 # ── Network Callbacks ─────────────────────────────────────────────────────────
 func on_host_started() -> void:
+	# Resolve the match's bot difficulty before any bot spawns or the first
+	# snapshot publishes. Host + offline + tutorial + free-play all enter here,
+	# and GameManager is an autoload that survives between matches, so this must
+	# re-read PlayerPrefs each match (not lazy-init-once).
+	bot_skill_profile = BotSkillProfile.for_difficulty(PlayerPrefs.bot_difficulty)
+	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.goalie_difficulty)
+	_perceived_carrier_peer_id = -1
+	_real_carrier_last = -1
+	_carrier_reaction_timer = 0.0
 	_spawn_world()
 	if not NetworkManager.pending_lobby_slots.is_empty():
 		var my_slot: Dictionary = NetworkManager.pending_lobby_slots.get(1, {})
@@ -459,7 +542,7 @@ func on_host_started() -> void:
 	# into PLAYING. Tutorial scripts its own intro; free play is a casual
 	# warmup that shouldn't gate the player behind a countdown — both stay
 	# in PLAYING from the start.
-	if not NetworkManager.is_tutorial_mode and not NetworkManager.is_free_play_mode:
+	if not NetworkManager.is_drill_mode() and not NetworkManager.is_free_play_mode:
 		_state_machine.begin_faceoff_prep()
 		_phase_coord.handle_phase_entered()
 
@@ -836,7 +919,11 @@ func _spawn_goalies() -> void:
 	if NetworkManager.is_tutorial_mode \
 			and not TutorialRegistry.wants_goalies(NetworkManager.tutorial_id):
 		return
-	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host)
+	# The penalty drill spawns its own single reactive goalie (spawn_penalty_goalie)
+	# at the attacked net; no full pair.
+	if NetworkManager.is_penalty_drill_mode:
+		return
+	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host, goalie_skill_profile)
 	goalies = [result.top_goalie as Goalie, result.bottom_goalie as Goalie]
 	goalie_controllers = [result.top_controller, result.bottom_controller]
 	result.top_controller.team_id = 1
@@ -1064,6 +1151,7 @@ func _wire_sound_signals() -> void:
 			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
 			if puck != null:
 				puck.fire_stick_lift_vfx())
+	NetworkManager.nudge_received.connect(func(pos: Vector3) -> void: _play_nudge_cue(pos))
 	NetworkManager.shot_sound_received.connect(
 		func(pos: Vector3, is_slapper: bool) -> void:
 			var snd: SoundManager.Sound = SoundManager.Sound.SHOT_SLAPPER if is_slapper else SoundManager.Sound.SHOT_WRISTER
@@ -1630,6 +1718,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
+		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 	# AI bots release shots through the same signal as humans, but they live
@@ -1639,6 +1728,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# into the void.
 	if record.is_bot:
 		record.controller.puck_release_requested.connect(_on_puck_release_requested)
+		record.controller.nudge_requested.connect(_on_nudge_requested)
 	# Remote human on the host: its RemoteController runs the shot state machine from
 	# the replayed input stream and computes a host-derived shot, emitting
 	# puck_release_requested. This is the ONLY path that fires a remote human's shot —
@@ -1646,6 +1736,8 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	if NetworkManager.is_host and not record.is_local and not record.is_bot:
 		record.controller.puck_release_requested.connect(
 				_on_remote_derived_release.bind(record.peer_id))
+		record.controller.nudge_requested.connect(
+				_on_remote_derived_nudge.bind(record.peer_id))
 	# Deflection one-timer (release without possession) is a contested, lag-comp-
 	# arbitrated CLAIM — like pickup/poke — not a possessed shot, so for a remote human
 	# it fires ONLY via on_remote_one_timer_release (the RPC rewinds the puck for the
@@ -1873,6 +1965,61 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		# THIS client's input-stream release (host-derived, _on_remote_derived_release),
 		# so there is no shot RPC — the inputs the host already replays carry it.
 		puck_controller.notify_local_release(direction, power, shot_rtt_ms)
+
+
+# Nudge (self-tap nutmeg setup). Mirrors the shot-release split — host fires the
+# authoritative tap, a client seeds local puck prediction — but it is NOT a
+# shot: no shot-on-goal tracking, no shot RPC, and a soft stick-lift cue rather
+# than a wrister/slapper crack. The host re-derives a remote player's nudge from
+# the replayed input stream via _on_remote_derived_nudge (no RPC), same as shots.
+func _on_nudge_requested(velocity: Vector3) -> void:
+	# The actor's own machine plays the cue immediately (this runs on the local
+	# player's client, or on the host for a host-local player / bot).
+	_play_nudge_cue(puck.get_puck_position())
+	if NetworkManager.is_host:
+		puck.nudge(velocity)
+		var pos: Vector3 = puck.get_puck_position()
+		_record_replay_audio_event("nudge", pos, velocity.length())
+		# Fan the cue to the clients — this host/bot already played it locally.
+		NetworkManager.send_nudge_to_all(pos)
+	else:
+		var record := _registry.get_local()
+		if record != null:
+			record.controller.on_puck_released_network()
+		puck_controller.notify_local_nudge(velocity, NetworkManager.get_latest_rtt_ms())
+
+
+# Host-side authoritative nudge derived from a remote player's replayed input.
+# The velocity arrives computed from the host's authoritative skater state (the
+# controller emitted it during live remote-input processing), so it's used
+# directly — no client trust. Guards mirror _on_remote_derived_release.
+func _on_remote_derived_nudge(velocity: Vector3, nudger_peer_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	if puck == null or _registry == null or puck.carrier == null:
+		return
+	var record: PlayerRecord = _registry.get_record(nudger_peer_id)
+	if record == null or record.skater == null:
+		return
+	if _registry.resolve_peer_id(puck.carrier) != nudger_peer_id:
+		return
+	puck.nudge(velocity)
+	var pos: Vector3 = puck.get_puck_position()
+	# The host plays the remote player's nudge, and every OTHER client hears it —
+	# the nudger already played it locally the instant they tapped.
+	_play_nudge_cue(pos)
+	_record_replay_audio_event("nudge", pos, velocity.length())
+	NetworkManager.send_nudge_to_all(pos, nudger_peer_id)
+
+
+# Single nudge cue path so the sound/VFX stays identical for everyone (local
+# play, host fan-out, and remote receivers all route here). Uses the quick-shot
+# (wrister) sound — a nudge is a soft self-pass — at a reduced fixed volume so it
+# reads as a quiet tap rather than a real shot.
+func _play_nudge_cue(pos: Vector3) -> void:
+	SoundManager.play_world(SoundManager.Sound.SHOT_WRISTER, pos, -6.0, 0.04)
+	if puck != null:
+		puck.fire_stick_lift_vfx()
 
 
 func _on_one_timer_release_requested(direction: Vector3, power: float, skater: Skater) -> void:
@@ -2892,6 +3039,49 @@ func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
 	return _state_buffer_manager.get_state_at(ts)
 
 
+# Bots' discrete-event reaction delay. Positions/velocities on `snap` stay
+# real time; only the puck's CARRIER signal is debounced, so the AI keeps
+# acting on its prior read of who-controls-the-puck for carrier_reaction_delay
+# seconds after the puck actually changes hands (a pass release, reception, or
+# strip) before recognising it — the human "can't react to a pass within a
+# tick" model. Self-possession is exempted: the real carrier is stashed on the
+# snapshot so a bot reads its OWN possession instantly (see SkaterAgentState-
+# Machine have_puck).
+#
+# The debounce: a real carrier change (re)starts a timer; the perceived value
+# commits to the real one only after `delay` of no further change, so a blip
+# that reverts within the window (e.g. a puck grazing a stick) causes no
+# twitch. Shared across all bots — difficulty is a global match setting and a
+# possession change affects both teams symmetrically (matching how the team
+# brains are reticked together).
+func _apply_bot_carrier_reaction_delay(snap: WorldSnapshot, delta: float) -> void:
+	if snap.puck_state == null:
+		return
+	var real_carrier: int = snap.puck_state.carrier_peer_id
+	snap.real_puck_carrier_peer_id = real_carrier
+	# StateBufferManager._interpolate_puck returns the live ring-buffer object
+	# directly when the query is at/after the newest sample (the common case for
+	# get_state_delayed(0.0)). Writing the debounced carrier into it would
+	# corrupt the authoritative buffer that lag-comp rewind + reconcile read, so
+	# the AI snapshot points at a private scratch copy whose carrier we debounce.
+	_ai_puck_scratch.copy_from(snap.puck_state)
+	snap.puck_state = _ai_puck_scratch
+	var delay: float = bot_skill_profile.carrier_reaction_delay_s if bot_skill_profile != null else 0.0
+	if delay <= 0.0:
+		_perceived_carrier_peer_id = real_carrier
+		_real_carrier_last = real_carrier
+		_carrier_reaction_timer = 0.0
+		return
+	if real_carrier != _real_carrier_last:
+		_carrier_reaction_timer = delay
+		_real_carrier_last = real_carrier
+	if _perceived_carrier_peer_id != real_carrier:
+		_carrier_reaction_timer -= delta
+		if _carrier_reaction_timer <= 0.0:
+			_perceived_carrier_peer_id = real_carrier
+	snap.puck_state.carrier_peer_id = _perceived_carrier_peer_id
+
+
 func _collect_existing_player_data() -> Array[Array]:
 	var existing: Array[Array] = []
 	for peer_id: int in _registry.all():
@@ -3067,6 +3257,43 @@ func despawn_tutorial_goalie() -> void:
 	if _tutorial_goalie != null:
 		_tutorial_goalie.queue_free()
 		_tutorial_goalie = null
+
+
+# Reactive goalie defending the -Z net (the one team 0 attacks) for the penalty
+# drill. Unlike the tutorial goalie, AI ticks normally so it challenges and
+# saves the breakaway. Difficulty follows the match goalie_skill_profile.
+# Idempotent: a second call while one exists is a no-op.
+func spawn_penalty_goalie() -> void:
+	if _penalty_goalie != null:
+		return
+	if _spawner == null or puck == null:
+		return
+	var result: Dictionary = _spawner.spawn_single_goalie(
+			puck, -GameRules.GOAL_LINE_Z, true, goalie_skill_profile)
+	_penalty_goalie = result.goalie as Goalie
+	_penalty_goalie_controller = result.controller as GoalieController
+	# The -Z net belongs to team 1 (the side team 0 attacks); match the pair's
+	# wiring so the AI's threat/facing logic reads the breakaway correctly.
+	_penalty_goalie_controller.team_id = 1
+	if teams.size() > 1:
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
+		_penalty_goalie.apply_uniform(colors)
+		_penalty_goalie.apply_jersey_info("WARD", 35)
+
+
+func despawn_penalty_goalie() -> void:
+	if _penalty_goalie_controller != null:
+		_penalty_goalie_controller.queue_free()
+		_penalty_goalie_controller = null
+	if _penalty_goalie != null:
+		_penalty_goalie.queue_free()
+		_penalty_goalie = null
+
+
+# Drops the penalty-drill goalie back into its crease between attempts.
+func reset_penalty_goalie() -> void:
+	if _penalty_goalie_controller != null:
+		_penalty_goalie_controller.reset_to_crease()
 
 
 func get_goalie_data() -> Array[Dictionary]:

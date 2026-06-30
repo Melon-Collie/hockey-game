@@ -18,14 +18,14 @@ run/pause_on_focus_loss=false
 
 [autoload]
 
-PlayerPrefs="*uid://bf25jinpey8td"
-Constants="*uid://dqhdah8fo6h2h"
+PlayerPrefs="*res://Scripts/game/player_prefs.gd"
+Constants="*res://Scripts/game/constants.gd"
 BuildInfo="*res://Scripts/game/build_info.gd"
 SoundManager="*res://Scripts/game/sound_manager.gd"
-NetworkManager="*uid://bko4mpa8jb0u2"
+NetworkManager="*res://Scripts/networking/network_manager.gd"
 NetworkSimManager="*res://Scripts/networking/network_sim.gd"
 SteamManager="*res://Scripts/networking/steam_manager.gd"
-GameManager="*uid://bpqctbi2qkaeo"
+GameManager="*res://Scripts/game/game_manager.gd"
 
 [debug]
 

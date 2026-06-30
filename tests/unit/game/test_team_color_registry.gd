@@ -48,3 +48,28 @@ func test_unknown_slot_still_returns_valid_ui_colors() -> void:
 	# Out-of-range slot falls back to default preset rather than crashing.
 	var ui: Dictionary = TeamColorRegistry.get_ui_colors(9999, 0)
 	assert_true(ui.has("base") and ui.has("stripe") and ui.has("text"))
+
+
+# ── Score-surface stripe pair (scorebug + period summary) ────────────────────
+# Home always wears its primary; away wears whichever of its accents is farther
+# from the home primary so the two stripes never wash together.
+
+func test_score_stripe_pair_home_is_primary() -> void:
+	var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(_PAPAYA, 1)
+	assert_eq(pair.home, TeamColorRegistry.get_preset(_PAPAYA).primary,
+			"home stripe is its primary")
+
+func test_score_stripe_pair_away_is_farthest_accent() -> void:
+	var home_primary: Color = TeamColorRegistry.get_preset(_PAPAYA).primary
+	var away: Dictionary = TeamColorRegistry.get_preset(1)
+	var expected: Color = TeamColorRegistry.farther_color(
+			home_primary, away.primary, away.secondary)
+	var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(_PAPAYA, 1)
+	assert_eq(pair.away, expected, "away stripe is the accent farthest from home primary")
+
+func test_farther_color_picks_the_more_distant() -> void:
+	var ref := Color(0, 0, 0)
+	var near := Color(0.1, 0.1, 0.1)
+	var far := Color(1, 1, 1)
+	assert_eq(TeamColorRegistry.farther_color(ref, near, far), far)
+	assert_eq(TeamColorRegistry.farther_color(ref, far, near), far)

@@ -35,6 +35,11 @@ const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 var team_id: int = 0
 var state: int = AIPossessionState.State.DZONE
 var slot_assignments: Dictionary[int, int] = {}      # peer_id -> AIRoleSlots.Slot
+# Central man-on-threat partition: backline defender peer_id -> the opponent
+# (carrier's receiver) it should cover. Computed per tick in defensive states
+# so ANCHOR / COVER each focus on a DISTINCT man instead of all collapsing on
+# the single most dangerous opponent. Empty in offensive / neutral states.
+var threat_assignments: Dictionary[int, int] = {}    # defender peer -> opp peer
 
 # Internal — sticky possession for loose-puck handling.
 var _last_carrier_team: int = -1
@@ -139,12 +144,108 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	for excluded_pid: int in _excluded_peers:
 		slot_assignments.erase(excluded_pid)
 
+	# 4. Man-on-threat partition for the backline (defensive states only).
+	#    Passes the prior assignment so AIThreatAssignment can apply switch
+	#    hysteresis; cleared to {} in non-defensive states so re-entry starts
+	#    fresh. Excluded peers are already absent from slot_assignments, so
+	#    they're never picked as defenders here.
+	threat_assignments = _compute_threat_assignments(snapshot, threat_assignments)
+
+
+# Builds the backline man-on-threat partition for the current tick. Defensive
+# states only (DZONE + TRANS_OD); every other state returns {} so no defender
+# carries a stale assignment.
+#
+# Backline = our peers slotted ANCHOR / COVER (DZONE) or BACKCHECK (TRANS_OD).
+# The carrier is owned separately — PRESSURE in DZONE, the CONTAIN gap defender
+# in TRANS_OD — so it's excluded; the men are the opposing carrier's potential
+# receivers (every opponent except the carrier). Each man's value is the raw
+# pass-threat surface (no defenders in the view), so AIThreatAssignment pairs
+# the most dangerous men with the best-positioned defenders. `prev` is last
+# tick's partition, threaded through for switch hysteresis.
+func _compute_threat_assignments(snapshot: WorldSnapshot,
+		prev: Dictionary) -> Dictionary[int, int]:
+	var empty: Dictionary[int, int] = {}
+	if state != AIPossessionState.State.DZONE \
+			and state != AIPossessionState.State.TRANS_OD:
+		return empty
+	if snapshot == null or snapshot.puck_state == null:
+		return empty
+	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
+	# Need a live OPPONENT carrier to define the receivers / score pass threats.
+	if carrier_pid == -1 or _team_id_by_peer.get(carrier_pid, -1) == team_id:
+		return empty
+	if not snapshot.skater_states.has(carrier_pid):
+		return empty
+	var carrier_pos: Vector3 = snapshot.skater_states[carrier_pid].position
+
+	# Backline defenders (ANCHOR / COVER / BACKCHECK) and their kinematics.
+	var defenders: Array[int] = []
+	var defender_pos: Dictionary = {}
+	var defender_vel: Dictionary = {}
+	for pid: int in slot_assignments:
+		var slot: int = slot_assignments[pid]
+		if slot != AIRoleSlots.Slot.ANCHOR \
+				and slot != AIRoleSlots.Slot.COVER \
+				and slot != AIRoleSlots.Slot.BACKCHECK:
+			continue
+		if not snapshot.skater_states.has(pid):
+			continue
+		var s: SkaterNetworkState = snapshot.skater_states[pid]
+		defenders.append(pid)
+		defender_pos[pid] = s.position
+		defender_vel[pid] = s.velocity
+	if defenders.is_empty():
+		return empty
+
+	# Men = non-carrier opponents; value = raw pass-threat surface.
+	var our_net := Vector3(0.0, 0.0, _own_goal_z)
+	var our_goalie_pos: Vector3 = _resolve_our_goalie_pos(snapshot)
+	var no_defenders: Array[Vector3] = []
+	var men: Array[int] = []
+	var man_pos: Dictionary = {}
+	var man_value: Dictionary = {}
+	for pid: int in snapshot.skater_states:
+		if _team_id_by_peer.get(pid, -1) == team_id:
+			continue
+		if pid == carrier_pid:
+			continue
+		var mp: Vector3 = snapshot.skater_states[pid].position
+		men.append(pid)
+		man_pos[pid] = mp
+		man_value[pid] = AIActionScoring.threat_surface_pass(
+				carrier_pos, mp, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, no_defenders)
+	if men.is_empty():
+		return empty
+
+	return AIThreatAssignment.assign(
+			defenders, defender_pos, defender_vel,
+			men, man_pos, man_value, our_net, prev)
+
+
+# Our goalie's current world position, or the goal mouth as a first-frame
+# fallback. Mirrors AIRoleHelpers.resolve_our_goalie_pos for the brain's own
+# threat scoring (the brain has no RoleContext).
+func _resolve_our_goalie_pos(snapshot: WorldSnapshot) -> Vector3:
+	var goalie: GoalieNetworkState = snapshot.goalie_states.get(team_id)
+	if goalie == null:
+		return Vector3(0.0, 0.0, _own_goal_z)
+	return Vector3(goalie.position_x, 0.0, goalie.position_z)
+
 
 # Returns the slot a peer is currently assigned to, or NONE if not
 # assigned (e.g., peer_id isn't on this team, or the brain hasn't
 # ticked yet).
 func get_slot(peer_id: int) -> int:
 	return slot_assignments.get(peer_id, AIRoleSlots.Slot.NONE)
+
+
+# The opponent a given backline defender is assigned to cover, or -1 if it has
+# no man-coverage assignment this tick (offensive/neutral state, or the peer
+# isn't a backline defender). Read by ANCHOR / COVER via RoleContext.
+func assigned_threat(peer_id: int) -> int:
+	return threat_assignments.get(peer_id, -1)
 
 
 # Hysteretic strong-side sign (+1 = +X, -1 = -X), updated per brain

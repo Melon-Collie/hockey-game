@@ -244,6 +244,7 @@ func compute_ghost_state(
 			continue
 		var slot: Dictionary = players[peer_id]
 		var pos_z: float = player_positions[peer_id].z
+		var is_carrier: bool = peer_id == puck_carrier_peer_id
 		var ghost: bool = false
 		if ghost_for_offside:
 			if _offside_peer_ids.has(peer_id):
@@ -253,19 +254,21 @@ func compute_ghost_state(
 				else:
 					ghost = true
 			else:
-				var is_carrier: bool = peer_id == puck_carrier_peer_id
 				if InfractionRules.is_offside(pos_z, slot.team_id, puck_position.z, is_carrier):
 					_offside_peer_ids[peer_id] = true
 					ghost = true
 		if icing_team_id == slot.team_id:
 			ghost = true
-		# Crease protection — no field skater (either team, carrier included) may
-		# camp in a goalie crease. Dwell-timed: a brief net drive passes through;
-		# lingering past CREASE_DWELL_DURATION ghosts you until you leave the paint
-		# (exit resets the timer, which un-ghosts next tick — the crease is the
-		# tag-up line). Independent of offside/icing so it stacks with them.
+		# Crease protection — no field skater may camp in a goalie crease. The
+		# puck CARRIER is exempt: net drives, wraparounds, and jam plays are the
+		# point of carrying the puck to the net, so a carrier never draws crease
+		# interference (their dwell is held at zero so they aren't ghosted the
+		# instant they release). Dwell-timed for everyone else: a brief net drive
+		# passes through; lingering past CREASE_DWELL_DURATION ghosts you until you
+		# leave the paint (exit resets the timer, which un-ghosts next tick — the
+		# crease is the tag-up line). Independent of offside/icing so it stacks.
 		var pos: Vector3 = player_positions[peer_id]
-		if CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
+		if not is_carrier and CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
 			var dwell: float = _crease_dwell.get(peer_id, 0.0) + delta
 			_crease_dwell[peer_id] = dwell
 			if dwell >= GameRules.CREASE_DWELL_DURATION:

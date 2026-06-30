@@ -67,6 +67,18 @@ const CAMERA_TILT_DEFAULT: float = 75.0
 const CAMERA_TILT_MIN: float = 73.0
 const CAMERA_TILT_MAX: float = 77.0
 
+# Camera framing mode. DYNAMIC is the broadcast-style cam that frames the
+# midpoint of player + puck and biases toward the attacking zone. LOCKED pins
+# the center on the player and only zooms out to keep an in-play puck in frame
+# (used as the puckless fallback too). GameCamera reads camera_mode live each
+# tick. Index matches the OptionsPanel dropdown.
+const CAMERA_MODE_DYNAMIC: int = 0
+const CAMERA_MODE_LOCKED: int = 1
+const CAMERA_MODE_LABELS: Array[String] = [
+	"Dynamic",
+	"Locked",
+]
+
 # Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
 # Index matches OptionButton ordering in OptionsPanel.
 const COLOR_GRADE_NEUTRAL: int = 0
@@ -140,8 +152,6 @@ const REBINDABLE_ACTIONS: PackedStringArray = [
 	"stick_lift",
 ]
 
-var player_uuid: String = ""
-
 var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
@@ -168,6 +178,12 @@ var mute_when_unfocused: bool = true
 var window_mode: int = WINDOW_MODE_BORDERLESS
 var resolution: Vector2i = RESOLUTION_DEFAULT
 var display_monitor: int = -1  # -1 = follow the window (automatic); else target screen index
+# The monitor the window was last seen on, persisted so Automatic mode
+# (display_monitor < 0) re-opens on the same screen next launch instead of
+# wherever the OS drops it. Updated by the screen-change watcher below; an
+# explicit display_monitor pick still wins at launch (we don't silently
+# overwrite a deliberate Options selection).
+var last_window_screen: int = -1
 var vsync_mode: int = VSYNC_ENABLED
 var fps_cap_index: int = 5
 var show_fps: bool = false
@@ -221,6 +237,19 @@ const BEACON_MODE_SMART: int = 1
 const BEACON_MODE_DISABLED: int = 2
 const BEACON_MODE_LABELS: Array[String] = ["Always On", "Smart", "Disabled"]
 var self_beacon_mode: int = BEACON_MODE_SMART
+
+# Bot difficulty. Index matches BotSkillProfile.Difficulty and the OptionButton
+# ordering wherever the menu exposes it.
+const BOT_DIFFICULTY_LABELS: Array[String] = [
+	"Normal",
+	"Hard",
+]
+# Goalie difficulty. Index matches GoalieSkillProfile.Difficulty and the
+# OptionButton ordering wherever the menu exposes it.
+const GOALIE_DIFFICULTY_LABELS: Array[String] = [
+	"Normal",
+	"Hard",
+]
 # Accessibility: photosensitivity / motion options. screen_flash gates the
 # full-screen goal flash and hit vignette (FlashOverlay); screen_shake gates
 # camera trauma shake (GameCamera.shake). Both default on.
@@ -229,6 +258,9 @@ var screen_shake: bool = true
 var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
+var camera_mode: int = CAMERA_MODE_DYNAMIC  # GameCamera reads this each tick (see CAMERA_MODE_*)
+var bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL  # see BotSkillProfile
+var goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL  # see GoalieSkillProfile
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
 const CAMERA_DISTANCE_MIN: float = 0.6
@@ -278,49 +310,34 @@ func _get_save_path() -> String:
 
 func _ready() -> void:
 	_load()
-	if player_uuid.is_empty():
-		# Prefer the backup over minting a fresh identity: ConfigFile.save
-		# isn't atomic, so a crash/power loss mid-write truncates the prefs
-		# file — regenerating the uuid then would permanently sever this
-		# player from their career stats and Steam-link row.
-		player_uuid = _load_uuid_backup()
-		if not player_uuid.is_empty():
-			save()
-	if player_uuid.is_empty():
-		player_uuid = generate_uuid()
-		save()
-	_store_uuid_backup()
+	# Steam Cloud reconcile is deferred: PlayerPrefs is autoload #1 and
+	# SteamManager #7, so Steam isn't initialised yet during the _load() above.
+	# A deferred call runs after every autoload's (synchronous) _ready, by which
+	# point Cloud availability is known. See _sync_from_cloud.
+	_sync_from_cloud.call_deferred()
 
 
-# The career uuid lives in the prefs file, but a torn prefs write must not be
-# able to destroy it — so it's mirrored to a tiny sidecar file that is only
-# rewritten when the uuid actually changes. Rides the same per-instance
-# suffixing as the prefs file (--config-suffix) so two local test instances
-# keep separate identities.
-func _uuid_backup_path() -> String:
-	return _get_save_path() + ".uuid"
+# A canonical-format UUID derived deterministically from the player's SteamID64,
+# so the backend rows that key on a uuid column stay valid AND stable across
+# machines now that identity comes from Steam (the random per-install uuid and
+# its sidecar backup are gone — Steam Cloud is the cross-machine backup, and
+# career stats already key on steam_id). Falls back to an ephemeral random uuid
+# in offline / dev sessions where no Steam id exists.
+func career_uuid() -> String:
+	var sid: int = SteamManager.steam_id
+	if sid == 0:
+		return generate_uuid()
+	# Left-pad the 64-bit id to 32 hex digits and shape it 8-4-4-4-12. Postgres'
+	# uuid type validates the dash layout, not RFC version/variant bits, so this
+	# is an accepted, stable identifier.
+	var h: String = "0000000000000000" + ("%016x" % sid)
+	return "%s-%s-%s-%s-%s" % [
+		h.substr(0, 8), h.substr(8, 4), h.substr(12, 4), h.substr(16, 4), h.substr(20, 12),
+	]
 
-
-func _load_uuid_backup() -> String:
-	var f := FileAccess.open(_uuid_backup_path(), FileAccess.READ)
-	if f == null:
-		return ""
-	var uuid: String = f.get_line().strip_edges()
-	# Canonical 36-char UUID or nothing — a corrupted backup must not become
-	# an identity.
-	return uuid if uuid.length() == 36 else ""
-
-
-func _store_uuid_backup() -> void:
-	if _load_uuid_backup() == player_uuid:
-		return
-	var f := FileAccess.open(_uuid_backup_path(), FileAccess.WRITE)
-	if f != null:
-		f.store_line(player_uuid)
 
 func save() -> void:
 	var cfg := ConfigFile.new()
-	cfg.set_value("identity", "player_uuid", player_uuid)
 	cfg.set_value("player", "name", player_name)
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
@@ -343,6 +360,7 @@ func save() -> void:
 	cfg.set_value("video", "window_mode", window_mode)
 	cfg.set_value("video", "resolution", resolution)
 	cfg.set_value("video", "display_monitor", display_monitor)
+	cfg.set_value("video", "last_window_screen", last_window_screen)
 	cfg.set_value("video", "vsync_mode", vsync_mode)
 	cfg.set_value("video", "fps_cap_index", fps_cap_index)
 	cfg.set_value("video", "show_fps", show_fps)
@@ -370,6 +388,9 @@ func save() -> void:
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
+	cfg.set_value("game", "camera_mode", camera_mode)
+	cfg.set_value("game", "bot_difficulty", bot_difficulty)
+	cfg.set_value("game", "goalie_difficulty", goalie_difficulty)
 	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
@@ -386,6 +407,69 @@ func save() -> void:
 		elif t == "mouse":
 			cfg.set_value("bindings", action + "_code", b.get("button_index", 0))
 	cfg.save(_get_save_path())
+	_push_to_cloud()
+
+
+# ── Steam Cloud sync ─────────────────────────────────────────────────────────
+# The prefs file is mirrored into Steam Cloud so settings follow the player to
+# any machine. Steam's own client sync resolves the remote copy into its local
+# cache before the game launches, so cloud_read returns the already-reconciled
+# bytes; we bridge that namespace to our user:// file. The cloud name mirrors the
+# local basename so --config-suffix dev instances stay separate in Cloud too.
+func _cloud_save_name() -> String:
+	return _get_save_path().get_file()
+
+
+# Push the on-disk prefs file up to Cloud. No-op when Cloud is unavailable.
+func _push_to_cloud() -> void:
+	if not SteamManager.is_cloud_available():
+		return
+	var bytes: PackedByteArray = FileAccess.get_file_as_bytes(_get_save_path())
+	if bytes.is_empty():
+		return
+	SteamManager.cloud_write(_cloud_save_name(), bytes)
+
+
+# Reconcile the local prefs file against Steam Cloud at boot. Cloud is the
+# cross-machine source of truth: when a cloud copy exists and differs we adopt
+# it (newer-write-wins on a genuine conflict) and re-load; when none exists we
+# seed Cloud from the local file. Deferred from _ready (see there).
+func _sync_from_cloud() -> void:
+	if not SteamManager.is_cloud_available():
+		return
+	# Subscribe once to Dynamic Cloud Sync: on Deck suspend→resume Steam pulls a
+	# newer copy into the local cache mid-session, and re-running this reconcile
+	# adopts it. Connected here rather than in _ready because SteamManager is a
+	# later autoload and isn't constructed yet during _ready.
+	if not SteamManager.cloud_files_changed.is_connected(_sync_from_cloud):
+		SteamManager.cloud_files_changed.connect(_sync_from_cloud)
+	var cloud_name: String = _cloud_save_name()
+	var local_path: String = _get_save_path()
+	var has_local: bool = FileAccess.file_exists(local_path)
+	if not SteamManager.cloud_file_exists(cloud_name):
+		if has_local:
+			_push_to_cloud()  # first run with Cloud on — seed it
+		return
+	var cloud_bytes: PackedByteArray = SteamManager.cloud_read(cloud_name)
+	if cloud_bytes.is_empty():
+		return
+	if has_local:
+		var local_bytes: PackedByteArray = FileAccess.get_file_as_bytes(local_path)
+		if cloud_bytes == local_bytes:
+			return  # already in sync — nothing to do
+		# Conflict: a copy was changed on another machine (cloud) and/or offline
+		# here (local). Keep whichever store was written most recently, and push
+		# a newer local back up so the other machine converges next launch.
+		if FileAccess.get_modified_time(local_path) > SteamManager.cloud_file_timestamp(cloud_name):
+			_push_to_cloud()
+			return
+	# Adopt the cloud copy: write it to the local file and re-load from it.
+	var f := FileAccess.open(local_path, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_buffer(cloud_bytes)
+	f = null
+	_load()
 
 func apply_bindings() -> void:
 	for action: String in bindings:
@@ -518,11 +602,14 @@ func get_available_resolutions(screen: int = -1) -> Array[Vector2i]:
 	return out
 
 
-# The monitor fullscreen / windowed-centering should target: the saved override
-# when it points at a real screen, otherwise the screen the window lives on.
+# The monitor fullscreen / windowed-centering should target: the explicit
+# override when it points at a real screen; otherwise (Automatic) the monitor
+# the window was last remembered on; otherwise the screen the window lives on.
 func _target_screen() -> int:
 	if display_monitor >= 0 and display_monitor < DisplayServer.get_screen_count():
 		return display_monitor
+	if last_window_screen >= 0 and last_window_screen < DisplayServer.get_screen_count():
+		return last_window_screen
 	return DisplayServer.window_get_current_screen()
 
 
@@ -576,6 +663,63 @@ func _apply_window_mode() -> void:
 			var screen_pos: Vector2i = DisplayServer.screen_get_position(screen)
 			var screen_size: Vector2i = DisplayServer.screen_get_size(screen)
 			DisplayServer.window_set_position(screen_pos + (screen_size - size) / 2)
+	# Re-baseline the screen-change watcher: a deliberate apply just placed the
+	# window, so this screen is the new "no move yet" reference and the watcher
+	# shouldn't treat it as an OS-driven monitor change.
+	_last_seen_screen = DisplayServer.window_get_current_screen()
+
+
+# --- Multi-monitor follow ----------------------------------------------------
+# Godot emits no signal when the OS moves the window to another monitor
+# (Win+Shift+Arrow, drag, a different-resolution second screen, etc.), and a
+# Borderless/Exclusive Fullscreen window keeps the *old* monitor's pixel size
+# after such a move — so on a rig with mismatched-resolution monitors it renders
+# at the wrong size on the new screen. We poll the window's current screen at a
+# low rate; on a change we re-fit the fullscreen window to the new monitor and
+# remember it so the next launch opens there (Automatic monitor mode).
+const _SCREEN_POLL_INTERVAL: float = 0.25
+var _screen_poll_accum: float = 0.0
+var _last_seen_screen: int = -1
+
+
+func _process(delta: float) -> void:
+	_screen_poll_accum += delta
+	if _screen_poll_accum < _SCREEN_POLL_INTERVAL:
+		return
+	_screen_poll_accum = 0.0
+	var cur: int = DisplayServer.window_get_current_screen()
+	if cur == _last_seen_screen:
+		return
+	_last_seen_screen = cur
+	_on_window_screen_changed(cur)
+
+
+func _on_window_screen_changed(screen: int) -> void:
+	# Remember the monitor so Automatic mode re-opens here next launch. (An
+	# explicit Options "Monitor" pick still governs launch via _target_screen;
+	# we don't silently rewrite display_monitor here.)
+	if last_window_screen != screen:
+		last_window_screen = screen
+		save()
+	# Windowed mode is left as-is (respect OS half-screen snapping / manual
+	# drags); only the fullscreen modes need re-fitting to the new monitor's
+	# native resolution.
+	if window_mode == WINDOW_MODE_WINDOWED:
+		return
+	_refit_fullscreen_to_screen(screen)
+
+
+# Force a Borderless/Exclusive Fullscreen window to recompute its size against
+# the monitor the OS just moved it onto. Re-setting the same fullscreen mode is
+# a no-op in Godot, so we bounce through Windowed to make it re-fit.
+func _refit_fullscreen_to_screen(screen: int) -> void:
+	var mode: DisplayServer.WindowMode = (
+		DisplayServer.WINDOW_MODE_FULLSCREEN
+		if window_mode == WINDOW_MODE_BORDERLESS
+		else DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	DisplayServer.window_set_current_screen(screen)
+	DisplayServer.window_set_mode(mode)
 
 
 # Clamp a windowed resolution to the monitor so a size saved on a larger display
@@ -666,16 +810,19 @@ func _apply_grade_broadcast(c: Color) -> Color:
 	return c
 
 func _load() -> void:
-	# InputMap still holds the untouched project defaults here (apply_bindings
-	# hasn't run yet), so snapshot them for Reset to Defaults before any saved
-	# override is read in below.
-	for action: String in REBINDABLE_ACTIONS:
-		var d: Dictionary = _read_current_input_event(action)
-		if not d.is_empty():
-			default_bindings[action] = d
+	# InputMap still holds the untouched project defaults on the FIRST load
+	# (apply_bindings hasn't run yet), so snapshot them for Reset to Defaults
+	# before any saved override is read in below. Guarded to first-call-only: a
+	# Steam Cloud adopt re-runs _load() after apply_bindings has rewritten the
+	# InputMap, and re-snapshotting then would capture the saved binds as
+	# "defaults".
+	if default_bindings.is_empty():
+		for action: String in REBINDABLE_ACTIONS:
+			var d: Dictionary = _read_current_input_event(action)
+			if not d.is_empty():
+				default_bindings[action] = d
 	var cfg := ConfigFile.new()
 	if cfg.load(_get_save_path()) == OK:
-		player_uuid = cfg.get_value("identity", "player_uuid", "")
 		player_name = cfg.get_value("player", "name", "Player").substr(0, 10)
 		jersey_number = clamp(cfg.get_value("player", "jersey_number", 10), 0, 99)
 		is_left_handed = cfg.get_value("player", "left_handed", true)
@@ -723,6 +870,7 @@ func _load() -> void:
 		var raw_resolution: Variant = cfg.get_value("video", "resolution", RESOLUTION_DEFAULT)
 		resolution = raw_resolution if raw_resolution is Vector2i else RESOLUTION_DEFAULT
 		display_monitor = int(cfg.get_value("video", "display_monitor", -1))
+		last_window_screen = int(cfg.get_value("video", "last_window_screen", -1))
 		vsync_mode = clampi(int(cfg.get_value("video", "vsync_mode", VSYNC_ENABLED)), 0, VSYNC_LABELS.size() - 1)
 		fps_cap_index = clamp(cfg.get_value("video", "fps_cap_index", 5), 0, FPS_CAP_VALUES.size() - 1)
 		show_fps = cfg.get_value("video", "show_fps", false)
@@ -754,6 +902,9 @@ func _load() -> void:
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
+		camera_mode = clampi(int(cfg.get_value("game", "camera_mode", CAMERA_MODE_DYNAMIC)), 0, CAMERA_MODE_LABELS.size() - 1)
+		bot_difficulty = clampi(int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL)), 0, BOT_DIFFICULTY_LABELS.size() - 1)
+		goalie_difficulty = clampi(int(cfg.get_value("game", "goalie_difficulty", GoalieSkillProfile.Difficulty.NORMAL)), 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
 		share_gameplay_stats = cfg.get_value("game", "share_gameplay_stats", true)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)

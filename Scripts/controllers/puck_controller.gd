@@ -220,6 +220,22 @@ func apply_lag_comp_pickup(skater: Skater) -> void:
 	_on_puck_picked_up(skater)
 
 
+# Lag-comp counterpart to apply_lag_comp_pickup for the deflect verdict: the
+# claim's rewound state ran PuckReceptionRules.should_receive and decided the
+# contact should redirect the puck, not corral it. Same idempotency philosophy —
+# skip if the puck is now carried/locked, and skip if the present-time
+# _check_interactions already deflected this contact (it sets deflect_cooldown,
+# which is_on_cooldown reads), so a contact never deflects twice. The deflect
+# itself recomputes from present puck velocity + blade pose, like every other
+# deflect, so it stays on the one shared apply_blade_deflect path.
+func apply_lag_comp_deflect(skater: Skater) -> void:
+	if not is_instance_valid(skater) or puck.carrier != null or puck.pickup_locked:
+		return
+	if puck.is_on_cooldown(skater):
+		return
+	puck.apply_blade_deflect(skater)
+
+
 # Called after PokeClaimResolver validates a client poke claim against the
 # state buffer. Idempotency guards:
 #   - carrier == null: a host-side _check_interactions detection beat us to
@@ -347,11 +363,18 @@ func _check_interactions() -> void:
 					# onto the stick. Redirect off the blade face and move on.
 					puck.apply_blade_deflect(skater)
 					break
+				# Deliberate deflect: the player is holding LMB without the puck to
+				# commit to a redirect. Force the deflect off the blade face — the
+				# SAME path a too-fast puck takes naturally — bypassing the catch
+				# decision so even an otherwise-catchable (slow) puck is tipped
+				# rather than corralled. Releasing LMB returns to normal reception.
+				if skater.deflect_intent:
+					puck.apply_blade_deflect(skater)
+					break
 				var puck_vel: Vector3 = puck.get_puck_velocity()
 				var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
 				if PuckReceptionRules.should_receive(
 						puck_vel,
-						skater.blade_world_velocity,
 						blade_face_normal,
 						puck.pickup_max_speed,
 						puck.deflect_min_speed,
@@ -422,6 +445,30 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float) -> Ve
 	puck.apply_release_velocity(direction * power)
 	_state_buffer.clear()
 	return release_pos
+
+# Client-side prediction seed for a nudge — the self-tap counterpart to
+# notify_local_release. Same trajectory-prediction handoff, but the puck takes
+# the full controller-computed velocity (momentum + stick push) instead of
+# direction × power, and the post-nudge re-grab lockout uses the short
+# nudge_cooldown so the carrier can scoop it back up after the nutmeg.
+func notify_local_nudge(velocity: Vector3, rtt_ms: float) -> void:
+	var release_pos: Vector3 = puck.get_puck_position()
+	if _local_carrier_skater != null:
+		release_pos = _local_carrier_skater.get_blade_contact_global()
+		release_pos.y = puck.ice_height
+	_local_carrier_skater = null
+	_arm_provisional_lockout(puck.nudge_cooldown)
+	_predicting_trajectory = true
+	_pending_local_release = true
+	_pending_local_release_deadline = NetworkManager.local_time() + _PENDING_RELEASE_TIMEOUT_S
+	_shot_rtt_ms = rtt_ms
+	puck.set_client_prediction_mode(true)
+	puck.set_goal_line_clamp(true)
+	puck.set_puck_position(release_pos)
+	var v := velocity
+	v.y = 0.0
+	puck.apply_release_velocity(v)
+	_state_buffer.clear()
 
 func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	_pending_local_release = false
@@ -510,8 +557,9 @@ func _clear_provisional() -> void:
 	_provisional_deadline = -1.0
 
 
-func _arm_provisional_lockout() -> void:
-	_provisional_lockout_until = NetworkManager.local_time() + puck.reattach_cooldown
+func _arm_provisional_lockout(duration: float = -1.0) -> void:
+	var d: float = duration if duration >= 0.0 else puck.reattach_cooldown
+	_provisional_lockout_until = NetworkManager.local_time() + d
 	_clear_provisional()
 
 func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:

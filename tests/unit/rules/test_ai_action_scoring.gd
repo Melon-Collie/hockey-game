@@ -54,31 +54,21 @@ func test_shoot_score_reduced_by_mid_lane_defender() -> void:
 	assert_lt(blocked, clear, "defender in shot lane with reaction time should reduce shoot score")
 
 
-func test_shoot_score_unaffected_by_low_t_defender() -> void:
-	# Lane physics: a defender on the segment but at low t (close
-	# to shooter, far from receiver) has no reaction time to position
-	# their stick before a fast puck blows past them. Lane clearance
-	# should pass through clean.
-	#
-	# Tested against lane_clear directly. Full-score equivalence is
-	# not possible to assert here: under LANE_REACTION_DELAY_S = 0.08
-	# and a 34 m/s slapper, any defender close enough to be low-t
-	# (within ~2.72 m along the shot path) is also inside the 4 m
-	# PRESSURE_RADIUS_M and drops the score through the separate
-	# pressure term. Pressure is intentional — a defender at your
-	# hip pressures the release even when they can't intercept the
-	# puck. This test isolates the lane reaction-time invariant.
+func test_shoot_blocked_by_close_on_line_defender() -> void:
+	# Lane physics: a defender 2 m in front of the shooter, dead on the
+	# shot line, is a shot-blocker — the puck's path runs straight through
+	# the space their stick already occupies, so it blocks even on a fast
+	# slapper. (The old reaction-window model wrongly let the puck "blow
+	# past" an unreacting low-t defender; the reachability model doesn't —
+	# they don't need to react, they're already there.)
 	var shooter := Vector3(0.0, 0.0, 15.0)
 	var aim := Vector3(0.0, 0.0, 26.65)
 	var slapper := AIActionScoring.SLAPPER_SHOT_SPEED_M_S
 	var clear: float = AIActionScoring.lane_clear(shooter, aim, [], slapper)
-	# Defender at z=17.0 — 2 m past shooter on the line.
-	# t ≈ 0.172, time_to_defender ≈ 0.059 s, below the 0.08 s reaction
-	# threshold → reaction_factor = 0 → zero contribution to block.
 	var close_blocker: Array[Vector3] = [Vector3(-0.1, 0.0, 17.0)]
 	var blocked: float = AIActionScoring.lane_clear(shooter, aim, close_blocker, slapper)
-	assert_almost_eq(blocked, clear, 0.001,
-			"low-t defender with no reaction time shouldn't reduce lane clearance")
+	assert_almost_eq(clear, 1.0, 0.0001, "sanity: the empty lane is clear")
+	assert_lt(blocked, 0.1, "a defender dead on the close shot line blocks the shot")
 
 
 func test_shoot_score_unaffected_by_defender_off_lane() -> void:
@@ -204,20 +194,25 @@ func test_shoot_pressure_ignores_perpendicular_defender() -> void:
 			"perpendicular defender should not pressure the shot")
 
 
-func test_pass_receiver_pressure_ignores_defender_behind_receiver() -> void:
+func test_pass_trailing_defender_pressures_reception_but_not_the_lane() -> void:
+	# A defender just GOAL-side of the receiver: their closest approach to
+	# the puck is only AFTER it reaches the receiver, so they're trailing
+	# the play and the lane model skips them (no in-flight interception).
+	# They DO pressure the reception, though — so the pass value drops via
+	# the receiver's shot score, not via the lane. This pins the clean
+	# separation the rework draws between in-flight interception (lane) and
+	# pressure at reception (receiver value).
 	var shooter := Vector3(0.0, 0.0, 10.0)
 	var receiver := Vector3(0.0, 0.0, 18.0)
 	var goalie := Vector3(0.0, 0.0, 26.0)
+	var trailing: Array[Vector3] = [Vector3(1.0, 0.0, 19.5)]
+	# Lane itself stays clear — the defender is past the receiver.
+	var lane: float = AIActionScoring.lane_clear(
+			shooter, receiver, trailing, AIActionScoring.PASS_SPEED_M_S)
+	assert_almost_eq(lane, 1.0, 0.0001, "a defender past the receiver isn't a lane interceptor")
 	var clean: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW,[])
-	# Defender 2 m lateral and 1.5 m behind the receiver (toward the
-	# shooter side). Within PRESSURE_RADIUS_M (2.5 m), but the cube
-	# falloff sees a negative dot relative to receiver→goal forward
-	# axis and weights it 0. Lane perp distance is also outside
-	# LANE_CLEAR_RADIUS_M, so neither pressure nor lane block fires.
-	var lateral_behind: Array[Vector3] = [Vector3(2.0, 0.0, 16.5)]
-	var pressured: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW,lateral_behind)
-	assert_almost_eq(pressured, clean, 0.001,
-			"defender behind the receiver should not pressure the pass (cube falloff zeros it)")
+	var pressured: float = AIActionScoring.score_pass(shooter, receiver, GOAL, goalie, NET_HW,trailing)
+	assert_lt(pressured, clean, "a defender on the receiver still pressures the reception")
 
 
 # pass_lane_blocked_by_net coverage. Nets are at z = ±GameRules.GOAL_LINE_Z
@@ -782,20 +777,56 @@ func test_carry_intercept_safety_uses_worst_defender() -> void:
 			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
 
 
-# ─── expected_pass_speed ────────────────────────────────────────────────
+# ─── expected_pass_speed / pass_launch_speed (distance-adaptive) ─────────
 
-func test_expected_pass_speed_short_pass_is_quick_shot() -> void:
+func test_pass_launch_speed_short_feed_is_snap_soft() -> void:
+	# At/under the short threshold a pass fires at the soft snap speed — no rocket
+	# on a close feed.
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	assert_almost_eq(
+			AIActionScoring.pass_launch_speed(AIActionScoring.PASS_RAMP_SHORT_DISTANCE_M, maxw),
+			AIActionScoring.PASS_SPEED_M_S, 0.001)
+	assert_almost_eq(AIActionScoring.pass_launch_speed(2.0, maxw),
+			AIActionScoring.PASS_SPEED_M_S, 0.001)
+
+
+func test_pass_launch_speed_ramps_up_with_distance() -> void:
+	# Between the short and long thresholds, launch speed increases monotonically.
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	var near: float = AIActionScoring.pass_launch_speed(12.0, maxw)
+	var mid: float = AIActionScoring.pass_launch_speed(18.0, maxw)
+	var far: float = AIActionScoring.pass_launch_speed(24.0, maxw)
+	assert_gt(mid, near, "an 18 m pass must launch harder than a 12 m one")
+	assert_gt(far, mid, "a 24 m pass must launch harder than an 18 m one")
+	assert_gt(near, AIActionScoring.PASS_SPEED_M_S, "a 12 m pass is past the snap floor")
+
+
+func test_pass_launch_speed_long_pass_reaches_ramp_top() -> void:
+	# At/beyond the long threshold a pass fires at the long-pass pace (clamped by
+	# the passer's own max wrister).
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	assert_almost_eq(
+			AIActionScoring.pass_launch_speed(AIActionScoring.PASS_RAMP_LONG_DISTANCE_M, maxw),
+			AIActionScoring.PASS_RAMP_LONG_SPEED_M_S, 0.001)
+	assert_almost_eq(AIActionScoring.pass_launch_speed(60.0, maxw),
+			AIActionScoring.PASS_RAMP_LONG_SPEED_M_S, 0.001)
+
+
+func test_pass_launch_speed_clamps_to_passer_max() -> void:
+	# A low-Shot passer (low max wrister) can't reach the long-pass pace — the
+	# launch clamps to its own ceiling.
+	var weak_max: float = 16.0
+	assert_almost_eq(AIActionScoring.pass_launch_speed(40.0, weak_max), weak_max, 0.001)
+
+
+func test_expected_pass_speed_uses_distance_ramp() -> void:
+	# expected_pass_speed is just pass_launch_speed at the league cap.
 	var shooter := Vector3.ZERO
-	var nearby := Vector3(0.0, 0.0, AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M - 1.0)
-	assert_eq(AIActionScoring.expected_pass_speed(shooter, nearby),
-			AIActionScoring.PASS_SPEED_M_S)
-
-
-func test_expected_pass_speed_long_pass_is_charged() -> void:
-	var shooter := Vector3.ZERO
-	var far := Vector3(0.0, 0.0, AIActionScoring.LONG_PASS_DISTANCE_THRESHOLD_M + 1.0)
-	assert_eq(AIActionScoring.expected_pass_speed(shooter, far),
-			AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	var far := Vector3(0.0, 0.0, 18.0)
+	assert_almost_eq(
+			AIActionScoring.expected_pass_speed(shooter, far),
+			AIActionScoring.pass_launch_speed(18.0, GameRules.DEFAULT_WRISTER_POWER_MAX_M_S),
+			0.001)
 
 
 # ─── score_pass: speed-aware lane clearance ─────────────────────────────
@@ -828,12 +859,14 @@ func test_score_pass_higher_at_charged_speed_with_in_lane_defender() -> void:
 			"charged pass scores higher than quick-shot when a defender sits in the lane (less reaction time)")
 
 
-# ── lane_clear: reaction-window pass model (now public) ──────────────────────
-# The carrier's pass scoring uses this directly, so cover the two
-# invariants that make a pass "less likely to get picked off": a
-# defender sitting mid-lane with time to react cuts the clearance, while
-# a defender right at the passer (no reaction time before the puck blows
-# past) does not.
+# ── lane_clear: closest-approach reachability model (now public) ─────────────
+# The carrier's pass scoring uses this directly. Covered invariants: a
+# defender who can get a stick onto the puck's path cuts the clearance; a
+# defender already ON the path blocks even when sitting right at the
+# release (the old reaction-window product zeroed these — the breakout
+# turnover bug); a faster puck threads better (less time to close); and a
+# defender bearing down on the lane (velocity-aware) blocks more than the
+# same defender standing still.
 
 func test_lane_clear_full_with_no_defenders() -> void:
 	var from := Vector3(0.0, 0.0, 0.0)
@@ -842,69 +875,148 @@ func test_lane_clear_full_with_no_defenders() -> void:
 	assert_almost_eq(s, 1.0, 0.0001, "empty lane is fully clear")
 
 
-func test_lane_clear_reduced_by_mid_lane_defender_with_reaction_time() -> void:
-	# Defender mid-segment (t ≈ 0.5) and on the line. At pass speed the
-	# puck takes long enough to reach them that they can step in →
-	# reaction_factor > 0 → clearance drops below 1.
+func test_lane_clear_reduced_by_mid_lane_defender() -> void:
+	# Defender mid-segment, dead on the line: the puck's path runs straight
+	# through their stick reach → full block → clearance drops below 1.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
 	var mid_lane: Array[Vector3] = [Vector3(0.2, 0.0, 7.0)]
 	var s: float = AIActionScoring.lane_clear(from, to, mid_lane, AIActionScoring.PASS_SPEED_M_S)
-	assert_lt(s, 1.0, "a defender mid-lane with reaction time reduces clearance")
+	assert_lt(s, 1.0, "a defender on the mid-lane reduces clearance")
+
+
+func test_lane_clear_blocks_close_on_line_defender() -> void:
+	# THE breakout-turnover regression. A defender 1 m in front of the
+	# passer, dead on the line — a man in the slot the pass would go
+	# straight through. The old reaction-window model treated them as
+	# unable to react (puck "blows past" before the delay) and read the
+	# lane as clear, so the turnover cost collapsed to zero. The
+	# reachability model sees the puck pass within a stick of where they
+	# already are → full block.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var close_on_line: Array[Vector3] = [Vector3(0.0, 0.0, 1.0)]
+	var s: float = AIActionScoring.lane_clear(from, to, close_on_line, AIActionScoring.PASS_SPEED_M_S)
+	assert_lt(s, 0.05, "a defender right on the line at the release fully blocks the lane")
 
 
 func test_lane_clear_charged_pass_threads_better_than_quick() -> void:
-	# A faster (charged) pass gives the defender less reaction time, so
-	# the lane reads as more open. This is why routing the carrier
-	# through the real pass speed matters for pickoff risk. Defender at
-	# low-t (z=2.5 on a 15 m pass) keeps time_to_defender inside the
-	# reaction ramp at BOTH speeds so they produce different block
-	# strengths — at high t both saturate the ramp and the speeds tie.
+	# A faster (charged) pass reaches the defender's closest-approach point
+	# sooner, leaving less time to close the gap → smaller reach → the lane
+	# reads as more open. This is why routing the carrier through the real
+	# pass speed matters for pickoff risk. Defender held off the line so
+	# both speeds give a partial (non-saturated) block that can differ.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 15.0)
-	var lane_def: Array[Vector3] = [Vector3(0.3, 0.0, 2.5)]
+	var lane_def: Array[Vector3] = [Vector3(1.0, 0.0, 2.5)]
 	var quick: float = AIActionScoring.lane_clear(from, to, lane_def, AIActionScoring.PASS_SPEED_M_S)
 	var charged: float = AIActionScoring.lane_clear(from, to, lane_def, AIActionScoring.PASS_CHARGE_SPEED_M_S)
-	assert_gt(charged, quick, "faster pass → less defender reaction time → cleaner lane")
+	assert_gt(charged, quick, "faster pass → less time for the defender to close → cleaner lane")
 
 
-# ── lane_clear_saucer / prefers_saucer: lofting over mid-lane defenders ───────
-# A saucer pass flies the puck over a defender's grounded blade mid-lane,
-# so a mid-lane defender that blocks a flat pass does NOT block a saucer —
-# but a defender draped over the receiver (puck has landed) still does.
+func test_lane_clear_clean_stretch_pass_stays_open() -> void:
+	# A long pass with the only defender 8 m off the lane: even with the
+	# whole flight to close, they can't reach the path → lane stays open.
+	# Guards against the model over-rejecting legitimate stretch passes.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 20.0)
+	var far_off: Array[Vector3] = [Vector3(8.0, 0.0, 10.0)]
+	var s: float = AIActionScoring.lane_clear(from, to, far_off, AIActionScoring.PASS_SPEED_M_S)
+	assert_almost_eq(s, 1.0, 0.0001, "a defender far off a stretch-pass lane doesn't block it")
 
-func test_lane_clear_saucer_ignores_mid_lane_defender() -> void:
-	# Same mid-lane defender that drops the grounded lane below 1.0: the
-	# saucer flies over it, so the saucer lane stays fully clear.
+
+func test_lane_clear_closing_defender_blocks_more_than_stationary() -> void:
+	# Same defender 2 m off the mid-lane. Standing still they only partly
+	# block; bearing down on the lane (−X velocity) they're dead-reckoned
+	# INTO it → strictly more block (lower clearance). The old position-
+	# only model could not tell these apart.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var pos: Array[Vector3] = [Vector3(2.0, 0.0, 6.0)]
+	var stationary: float = AIActionScoring.lane_clear(
+			from, to, pos, AIActionScoring.PASS_SPEED_M_S, [Vector3.ZERO])
+	var closing: float = AIActionScoring.lane_clear(
+			from, to, pos, AIActionScoring.PASS_SPEED_M_S, [Vector3(-4.0, 0.0, 0.0)])
+	assert_lt(closing, stationary, "a defender closing on the lane blocks more")
+
+
+func test_lane_clear_defender_drifting_away_blocks_less() -> void:
+	# Mirror image: the same defender drifting AWAY from the lane (+X)
+	# can't reach it → blocks less than standing still (higher clearance).
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var pos: Array[Vector3] = [Vector3(2.0, 0.0, 6.0)]
+	var stationary: float = AIActionScoring.lane_clear(
+			from, to, pos, AIActionScoring.PASS_SPEED_M_S, [Vector3.ZERO])
+	var drifting: float = AIActionScoring.lane_clear(
+			from, to, pos, AIActionScoring.PASS_SPEED_M_S, [Vector3(4.0, 0.0, 0.0)])
+	assert_gt(drifting, stationary, "a defender drifting off the lane blocks less")
+
+
+# ── lane_clear_saucer / prefers_saucer: a low flip over a near stick ─────────
+# A saucer is airborne only for a fixed distance off the blade
+# (SAUCER_AIRBORNE_DISTANCE_M, ~4 m): within it the puck flies over a
+# grounded STICK but not a BODY; past it the puck has landed and every
+# defender blocks with a stick. We can't know the live loft, so the model
+# is deliberately conservative — saucers only beat a stick that's close.
+
+func test_lane_clear_saucer_clears_near_stick_range_defender() -> void:
+	# Defender within the airborne span (~3 m out) and off the line by more
+	# than a body radius (within stick + closing reach, so the grounded lane
+	# is contested). The saucer flies over their stick, body out of the
+	# way → clear.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
-	var mid_lane: Array[Vector3] = [Vector3(0.2, 0.0, 7.0)]  # t ≈ 0.5
-	var grounded: float = AIActionScoring.lane_clear(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S)
-	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S)
-	assert_lt(grounded, 1.0, "sanity: grounded lane is contested by the mid-lane defender")
-	assert_almost_eq(saucer, 1.0, 0.0001, "saucer flies over the mid-lane defender → lane clear")
+	var near_stick: Array[Vector3] = [Vector3(0.7, 0.0, 3.0)]
+	var grounded: float = AIActionScoring.lane_clear(from, to, near_stick, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, near_stick, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_lt(grounded, 1.0, "sanity: grounded lane is contested by the stick-range defender")
+	assert_almost_eq(saucer, 1.0, 0.0001, "saucer flies over a near stick → lane clear")
 
 
-func test_lane_clear_saucer_still_blocked_near_receiver() -> void:
-	# Defender close to the receiver end (high t, past the airborne
-	# window): the saucer has landed by then, so it still blocks.
+func test_lane_clear_saucer_blocked_by_body_in_lane() -> void:
+	# Defender standing dead in the lane within the airborne span (within a
+	# body radius of the line): the saucer can't fly over a torso, blocks.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
-	# t ≈ 0.9 (> SAUCER_AIRBORNE_T_MAX) → puck grounded, defender blocks.
-	var near_receiver: Array[Vector3] = [Vector3(0.2, 0.0, 12.6)]
-	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, near_receiver, AIActionScoring.PASS_CHARGE_SPEED_M_S)
-	assert_lt(saucer, 1.0, "a defender at the receiver end still blocks a landed saucer")
+	var body_in_lane: Array[Vector3] = [Vector3(0.0, 0.0, 3.0)]
+	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, body_in_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_lt(saucer, 0.1, "a body dead in the lane blocks a saucer")
 
 
-func test_prefers_saucer_true_for_contested_mid_lane() -> void:
-	# A long pass with a defender squarely mid-lane: grounded is contested,
-	# the saucer clears it by more than the margin → prefer the saucer.
+func test_lane_clear_saucer_blocked_past_airborne_span() -> void:
+	# Stick-range defender BEYOND the airborne distance (~8 m out): the puck
+	# has landed by then, so it blocks the saucer with a full stick just
+	# like a flat pass. This is the key conservatism — a saucer doesn't
+	# clear a defender far down the lane.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
-	var mid_lane: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]
+	var far_stick: Array[Vector3] = [Vector3(0.5, 0.0, 8.0)]
+	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, far_stick, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_lt(saucer, 1.0, "a defender past the airborne span still blocks a landed saucer")
+
+
+func test_prefers_saucer_true_for_near_stick_range() -> void:
+	# A stick-range defender within the airborne span: grounded is
+	# contested, the saucer clears their stick by more than the margin →
+	# prefer the saucer.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var near_stick: Array[Vector3] = [Vector3(0.7, 0.0, 3.0)]
 	assert_true(
-			AIActionScoring.prefers_saucer(from, to, mid_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S),
-			"a mid-lane defender on a long pass should prompt a saucer")
+			AIActionScoring.prefers_saucer(from, to, near_stick, AIActionScoring.PASS_CHARGE_SPEED_M_S),
+			"a near stick-range defender should prompt a saucer")
+
+
+func test_prefers_saucer_false_when_body_blocks_lane() -> void:
+	# Defender standing dead in the lane: the saucer can't clear their body,
+	# so lofting buys nothing → don't prefer it.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var body_in_lane: Array[Vector3] = [Vector3(0.0, 0.0, 3.0)]
+	assert_false(
+			AIActionScoring.prefers_saucer(from, to, body_in_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S),
+			"a body dead in the lane can't be saucered over")
 
 
 func test_prefers_saucer_false_when_lane_open() -> void:
@@ -916,15 +1028,15 @@ func test_prefers_saucer_false_when_lane_open() -> void:
 			"an open lane never wants a saucer")
 
 
-func test_prefers_saucer_false_when_blocker_at_receiver() -> void:
-	# The only defender is at the receiver end, where the saucer has
-	# landed — lofting doesn't help, so don't saucer.
+func test_prefers_saucer_false_when_blocker_past_span() -> void:
+	# The only defender is past the airborne span — the saucer has landed
+	# and can't clear them, so lofting doesn't help. Don't saucer.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
-	var near_receiver: Array[Vector3] = [Vector3(0.0, 0.0, 12.6)]  # t ≈ 0.9
+	var far_blocker: Array[Vector3] = [Vector3(0.0, 0.0, 8.0)]
 	assert_false(
-			AIActionScoring.prefers_saucer(from, to, near_receiver, AIActionScoring.PASS_CHARGE_SPEED_M_S),
-			"a saucer doesn't clear a defender at the receiver, so don't loft")
+			AIActionScoring.prefers_saucer(from, to, far_blocker, AIActionScoring.PASS_CHARGE_SPEED_M_S),
+			"a saucer doesn't clear a defender past the airborne span, so don't loft")
 
 
 # ── lane_loss_point: interceptor location for the turnover-cost term ──────────
@@ -940,7 +1052,7 @@ func test_lane_loss_point_inf_when_no_blocker() -> void:
 
 
 func test_lane_loss_point_inf_when_defender_off_lane() -> void:
-	# Defender well outside LANE_CLEAR_RADIUS_M of the segment → no block.
+	# Defender far off the segment with no time to close → no block.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
 	var off_lane: Array[Vector3] = [Vector3(6.0, 0.0, 7.0)]
@@ -948,29 +1060,41 @@ func test_lane_loss_point_inf_when_defender_off_lane() -> void:
 	assert_false(p.is_finite(), "defender off the lane yields no interception point")
 
 
-func test_lane_loss_point_is_projection_onto_segment() -> void:
+func test_lane_loss_point_is_on_the_path() -> void:
 	# Single mid-lane defender at (0.4, 7.0) on a straight +Z lane: the
-	# loss point is its perpendicular projection onto the segment —
-	# x snaps to the lane (0), z stays at the defender's 7.0.
+	# loss point is where the puck is at the defender's closest approach —
+	# x on the lane (0), z at the defender's 7.0.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
 	var mid: Array[Vector3] = [Vector3(0.4, 0.0, 7.0)]
 	var p: Vector3 = AIActionScoring.lane_loss_point(from, to, mid, AIActionScoring.PASS_SPEED_M_S)
 	assert_true(p.is_finite(), "a blocking defender yields an interception point")
-	assert_almost_eq(p.x, 0.0, 0.001, "loss point projects onto the lane (x=0)")
+	assert_almost_eq(p.x, 0.0, 0.001, "loss point sits on the lane (x=0)")
 	assert_almost_eq(p.z, 7.0, 0.001, "loss point sits at the defender's position along the lane")
 
 
+func test_lane_loss_point_finite_for_close_release_defender() -> void:
+	# Companion to the lane_clear close-defender regression: a defender 1 m
+	# in front of the passer on the line now produces a finite loss point
+	# (the old model returned INF here, zeroing the turnover cost). The
+	# pick spot is right where they stand, ~1 m down the line.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var close_on_line: Array[Vector3] = [Vector3(0.0, 0.0, 1.0)]
+	var p: Vector3 = AIActionScoring.lane_loss_point(from, to, close_on_line, AIActionScoring.PASS_SPEED_M_S)
+	assert_true(p.is_finite(), "a close on-line defender yields a real interception point")
+	assert_almost_eq(p.z, 1.0, 0.1, "the pick happens right where the defender stands")
+
+
 func test_lane_loss_point_picks_worst_blocker() -> void:
-	# Two blockers; the one with higher block strength (closer to the
-	# line, mid-segment with reaction time) defines the loss point. The
-	# near-perfect mid-lane defender at z=7 outweighs a marginal one at
-	# z=11 that's near the radius edge — loss point should be at z≈7.
+	# Two blockers; the one with higher block strength defines the loss
+	# point. The dead-on mid-lane defender at z=7 outweighs one far off the
+	# line at z=11 (only a partial block) — loss point should be at z≈7.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
 	var blockers: Array[Vector3] = [
 			Vector3(0.05, 0.0, 7.0),   # dead-on, mid-lane → strong block
-			Vector3(1.6, 0.0, 11.0),   # near the radius edge → weak block
+			Vector3(4.0, 0.0, 11.0),   # well off the line → weak block
 	]
 	var p: Vector3 = AIActionScoring.lane_loss_point(from, to, blockers, AIActionScoring.PASS_SPEED_M_S)
 	assert_almost_eq(p.z, 7.0, 0.001, "loss point follows the strongest blocker")
