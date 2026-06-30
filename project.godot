@@ -26,6 +26,7 @@ NetworkManager="*res://Scripts/networking/network_manager.gd"
 NetworkSimManager="*res://Scripts/networking/network_sim.gd"
 SteamManager="*res://Scripts/networking/steam_manager.gd"
 GameManager="*res://Scripts/game/game_manager.gd"
+CrashWatch="*res://Scripts/game/crash_watch.gd"
 
 [debug]
 
