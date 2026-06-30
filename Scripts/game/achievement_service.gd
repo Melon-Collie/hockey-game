@@ -27,20 +27,14 @@ func evaluate_single_game(stats: PlayerStats, outcome: String,
 		unlock(id)
 
 
-# Career-threshold achievements. Lifetime totals live in Supabase, so fetch them
-# (async) and evaluate on the callback. Call only from the online, shared-stats
-# game-over path. `this_game` is merged into the fetched totals so crossing a
-# threshold unlocks on the game you cross it — the row CareerStatsReporter just
-# posted hasn't aggregated into career_totals yet.
-func evaluate_career(reporter: CareerStatsReporter, this_game: PlayerStats,
-		outcome: String) -> void:
-	if reporter == null or this_game == null or not SteamManager.is_available:
-		return
-	reporter.fetch_totals(func(totals: Dictionary) -> void:
-		var merged: Dictionary = _merge_game_into_career(totals, this_game, outcome)
-		for id in AchievementRules.earned_career(merged):
-			unlock(id)
-	)
+# Career-threshold achievements, evaluated against current lifetime totals.
+# `career_totals` comes from Steam User Stats (SteamStatRecorder.totals), already
+# updated with this game — so crossing a threshold unlocks on the game you cross
+# it, with no backend round-trip and no merge guesswork. Empty totals (Steam
+# unavailable) unlock nothing, which is correct.
+func evaluate_career(career_totals: Dictionary) -> void:
+	for id in AchievementRules.earned_career(career_totals):
+		unlock(id)
 
 
 # Live hook: the local player just landed a body check of `impulse` magnitude
@@ -61,20 +55,3 @@ func unlock(id: String) -> void:
 	if SteamManager.is_achievement_unlocked(id):
 		return
 	SteamManager.unlock_achievement(id)
-
-
-# Adds this game's contribution to the fetched lifetime totals. Only the columns
-# a career condition can target are summed; missing columns start at 0.
-func _merge_game_into_career(totals: Dictionary, this_game: PlayerStats,
-		outcome: String) -> Dictionary:
-	var merged: Dictionary = totals.duplicate()
-	merged["goals"] = int(totals.get("goals", 0)) + this_game.goals
-	merged["assists"] = int(totals.get("assists", 0)) + this_game.assists
-	merged["points"] = int(totals.get("points", 0)) + this_game.goals + this_game.assists
-	merged["shots_on_goal"] = int(totals.get("shots_on_goal", 0)) + this_game.shots_on_goal
-	merged["hits"] = int(totals.get("hits", 0)) + this_game.hits
-	merged["shots_blocked"] = int(totals.get("shots_blocked", 0)) + this_game.shots_blocked
-	merged["games_played"] = int(totals.get("games_played", 0)) + 1
-	if outcome == "win":
-		merged["wins"] = int(totals.get("wins", 0)) + 1
-	return merged

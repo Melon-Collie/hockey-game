@@ -171,6 +171,7 @@ var _goal_replay_driver: GoalReplayDriver = null
 var _career_reporter: CareerStatsReporter = null
 var _net_session_reporter: NetworkSessionReporter = null
 var _achievements: AchievementService = null
+var _stat_recorder: SteamStatRecorder = null
 # Streams broadcast frames to user://replays/<game_id>.mreplay on a worker
 # thread. Lives on every peer (host + client + spectator) for any session
 # with a non-empty _game_id and PlayerPrefs.replay_recording_enabled. Opens
@@ -240,6 +241,7 @@ func _ready() -> void:
 	_career_reporter = CareerStatsReporter.new()
 	_net_session_reporter = NetworkSessionReporter.new()
 	_achievements = AchievementService.new()
+	_stat_recorder = SteamStatRecorder.new()
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
 
@@ -2635,8 +2637,8 @@ func _on_game_over() -> void:
 	var local: PlayerRecord = _registry.get_local()
 	# Single-game + live-derived achievements need only this game's stats, so they
 	# unlock in any mode (incl. offline vs bots), before the career gates below.
-	# Career-threshold achievements (which need the Supabase totals) come later,
-	# in the online shared-stats path. SteamManager no-ops when Steam is absent.
+	# Career-threshold achievements are backed by Steam User Stats and handled in
+	# the online block below. SteamManager no-ops when Steam is absent.
 	var team_id: int = -1
 	var gf: int = 0
 	var ga: int = 0
@@ -2657,9 +2659,21 @@ func _on_game_over() -> void:
 	# (start_tutorial calls start_offline).
 	if NetworkManager.is_offline_mode:
 		return
-	# Privacy opt-out: with stat sharing off, no career row is uploaded. The
-	# Career screen and replay browser both read from this backend data, so they
-	# stay empty by the player's choice (see PlayerPrefs.share_gameplay_stats).
+	# Steam career stats + their achievements: online games only (so milestones
+	# can't be padded vs bots), but NOT gated on share_gameplay_stats — Steam Stats
+	# are the player's own data on their own account, and gating them on the
+	# Supabase-upload opt-out would re-couple achievements to a choice that's only
+	# about our backend. Increment first, then evaluate against the updated totals
+	# so a threshold unlocks on the game that crosses it. No Supabase dependency:
+	# this works even if the backend is down/paused.
+	if local != null and local.team != null and _stat_recorder != null:
+		_stat_recorder.record_game(local.stats, outcome)
+		if _achievements != null:
+			_achievements.evaluate_career(_stat_recorder.totals())
+	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
+	# The Career screen's history reads from that backend data, so it stays empty by
+	# the player's choice (see PlayerPrefs.share_gameplay_stats). Local replays and
+	# Steam achievements/stats above are unaffected — they never touch the backend.
 	if not PlayerPrefs.share_gameplay_stats:
 		return
 	# Network-quality row: shares the offline + privacy gates above but not the
@@ -2672,9 +2686,6 @@ func _on_game_over() -> void:
 		return
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
-	# Career-threshold achievements: fetch lifetime totals, merge this game, unlock.
-	if _achievements != null:
-		_achievements.evaluate_career(_career_reporter, local.stats, outcome)
 
 
 # Window-close hook — closes the replay file cleanly when the user clicks

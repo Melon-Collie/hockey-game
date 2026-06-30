@@ -30,8 +30,9 @@ For each app (4892600 and, for the playtest, 4893650):
 4. **Publish** the changes (Stats & Achievements changes need an explicit
    publish, like Store/build changes).
 
-No Steam Stats are used yet — every achievement is unlocked directly by game
-code, so there's nothing to configure under "Stats."
+The **game / special / event** achievements unlock directly from code. The
+**career** ones read Steam User Stats, which you must also define — see STATS.md
+for that checklist.
 
 ---
 
@@ -41,8 +42,9 @@ code, so there's nothing to configure under "Stats."
 - **game** — a single game's stat reached the bar (any mode, incl. vs bots).
 - **special** — a compound game-over condition.
 - **event** — fired live, the moment it happens, during a match.
-- **career** — a lifetime total (online + stat-sharing sessions only; the totals
-  live in Supabase).
+- **career** — a lifetime total backed by **Steam User Stats** (online games
+  only, so they can't be padded vs bots; NOT gated on stat-sharing, and no
+  Supabase dependency). The mirrored stats must be defined too — see STATS.md.
 
 | API Name (`id`)     | Name         | When    | Unlocks when…                                  |
 |---------------------|--------------|---------|------------------------------------------------|
