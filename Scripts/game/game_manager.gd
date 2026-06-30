@@ -170,6 +170,7 @@ var _recorder: ReplayRecorder = null
 var _goal_replay_driver: GoalReplayDriver = null
 var _career_reporter: CareerStatsReporter = null
 var _net_session_reporter: NetworkSessionReporter = null
+var _achievements: AchievementService = null
 # Streams broadcast frames to user://replays/<game_id>.mreplay on a worker
 # thread. Lives on every peer (host + client + spectator) for any session
 # with a non-empty _game_id and PlayerPrefs.replay_recording_enabled. Opens
@@ -234,6 +235,7 @@ func _ready() -> void:
 	ThemeDB.fallback_font = MenuStyle.UI_FONT
 	_career_reporter = CareerStatsReporter.new()
 	_net_session_reporter = NetworkSessionReporter.new()
+	_achievements = AchievementService.new()
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
 
@@ -2553,6 +2555,10 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 
 func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
+	# Live achievement: only the local player's own deliveries count, and this
+	# signal fires on the deliverer's machine, so gate on local peer.
+	if _achievements != null and hitter_peer_id == NetworkManager.local_peer_id():
+		_achievements.on_local_hit(impulse_magnitude)
 
 
 # Host-only (hit_credited fires only on the host, from the deduped credit path).
@@ -2600,6 +2606,25 @@ func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_times
 func _on_game_over() -> void:
 	if _state_machine == null or _registry == null or _career_reporter == null:
 		return
+	var local: PlayerRecord = _registry.get_local()
+	# Single-game + live-derived achievements need only this game's stats, so they
+	# unlock in any mode (incl. offline vs bots), before the career gates below.
+	# Career-threshold achievements (which need the Supabase totals) come later,
+	# in the online shared-stats path. SteamManager no-ops when Steam is absent.
+	var team_id: int = -1
+	var gf: int = 0
+	var ga: int = 0
+	var outcome: String = "draw"
+	if local != null and local.team != null:
+		team_id = local.team.team_id
+		gf = _state_machine.scores[team_id]
+		ga = _state_machine.scores[1 - team_id]
+		if gf > ga:
+			outcome = "win"
+		elif gf < ga:
+			outcome = "loss"
+		if _achievements != null:
+			_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
 	# Offline + tutorial don't count as career games — there's no opponent
 	# pool, the tutorial is replayed as practice, and a player shouldn't be
 	# able to pad stats by playing themselves. is_offline_mode covers both
@@ -2617,19 +2642,13 @@ func _on_game_over() -> void:
 	if _telemetry != null and _net_session_reporter != null:
 		var role: String = "host" if NetworkManager.is_host else "client"
 		_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled)
-	var local: PlayerRecord = _registry.get_local()
 	if local == null or local.team == null:
 		return
-	var team_id: int = local.team.team_id
-	var gf: int = _state_machine.scores[team_id]
-	var ga: int = _state_machine.scores[1 - team_id]
-	var outcome: String = "draw"
-	if gf > ga:
-		outcome = "win"
-	elif gf < ga:
-		outcome = "loss"
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
+	# Career-threshold achievements: fetch lifetime totals, merge this game, unlock.
+	if _achievements != null:
+		_achievements.evaluate_career(_career_reporter, local.stats, outcome)
 
 
 # Window-close hook — closes the replay file cleanly when the user clicks
