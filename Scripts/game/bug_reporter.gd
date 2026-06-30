@@ -57,7 +57,7 @@ func submit_crash(breadcrumb: Dictionary, log_tail: String) -> void:
 		breadcrumb.get("phase", "?"),
 		breadcrumb.get("version", BuildInfo.VERSION)]
 	var body: Dictionary = {
-		"uuid": PlayerPrefs.career_uuid(),
+		"steam_id": SteamManager.steam_id,
 		"player_name": PlayerPrefs.player_name,
 		"game_version": String(breadcrumb.get("version", BuildInfo.VERSION)),
 		"platform": OS.get_name(),
