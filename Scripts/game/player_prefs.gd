@@ -241,6 +241,7 @@ var self_beacon_mode: int = BEACON_MODE_SMART
 # Bot difficulty. Index matches BotSkillProfile.Difficulty and the OptionButton
 # ordering wherever the menu exposes it.
 const BOT_DIFFICULTY_LABELS: Array[String] = [
+	"Easy",
 	"Normal",
 	"Hard",
 ]
@@ -378,6 +379,9 @@ func save() -> void:
 	cfg.set_value("game", "camera_distance", camera_distance)
 	cfg.set_value("game", "camera_mode", camera_mode)
 	cfg.set_value("game", "bot_difficulty", bot_difficulty)
+	# Marks bot_difficulty as already on the 3-tier (Easy/Normal/Hard) scale so
+	# _load() doesn't re-run the 2-tier → 3-tier remap on a re-saved file.
+	cfg.set_value("game", "bot_difficulty_scale_version", 1)
 	cfg.set_value("game", "goalie_difficulty", goalie_difficulty)
 	cfg.set_value("game", "freeplay_goalie_difficulty", freeplay_goalie_difficulty)
 	# Marks goalie_difficulty as already on the 3-tier (Easy/Normal/Hard) scale so
@@ -895,7 +899,16 @@ func _load() -> void:
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		camera_mode = clampi(int(cfg.get_value("game", "camera_mode", CAMERA_MODE_DYNAMIC)), 0, CAMERA_MODE_LABELS.size() - 1)
-		bot_difficulty = clampi(int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL)), 0, BOT_DIFFICULTY_LABELS.size() - 1)
+		bot_difficulty = int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL))
+		# Easy was inserted at index 0, shifting the old 2-tier values up one
+		# (old 0=Normal → new 1=Normal, old 1=Hard → new 2=Hard). Remap once, but
+		# only a value actually persisted under the old scale (has the key, no
+		# version marker) — mirrors the goalie_difficulty remap above so a config
+		# predating bot_difficulty keeps the new default instead of bumping to Hard.
+		if cfg.has_section_key("game", "bot_difficulty") \
+				and int(cfg.get_value("game", "bot_difficulty_scale_version", 0)) < 1:
+			bot_difficulty += 1
+		bot_difficulty = clampi(bot_difficulty, 0, BOT_DIFFICULTY_LABELS.size() - 1)
 		goalie_difficulty = int(cfg.get_value("game", "goalie_difficulty", GoalieSkillProfile.Difficulty.NORMAL))
 		# Easy was inserted at index 0, shifting the old 2-tier values up one
 		# (old 0=Normal → new 1=Normal, old 1=Hard → new 2=Hard). Remap once, but

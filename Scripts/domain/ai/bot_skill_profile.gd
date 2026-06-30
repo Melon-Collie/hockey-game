@@ -50,8 +50,9 @@ extends RefCounted
 # reaction delay).
 
 enum Difficulty {
-	NORMAL = 0,   # clearly beatable — laggier reads, trailing blade, slower cadence
-	HARD = 1,     # the ceiling — "strong but human", a light humanising touch only
+	EASY = 0,     # the floor — well-late reads, swimmy blade, commits hard to stale reads
+	NORMAL = 1,   # clearly beatable — laggier reads, trailing blade, slower cadence
+	HARD = 2,     # the ceiling — "strong but human", a light humanising touch only
 }
 
 # How long (seconds) the bot keeps treating the previous carrier as the carrier
@@ -96,17 +97,34 @@ static func hard() -> BotSkillProfile:
 	return BotSkillProfile.new(0.05, 0.85, 30.0, 2)
 
 
-# Normal is the beatable tier: a ~150 ms reaction to possession changes (it
-# recognises a pass / turnover a clear beat late), a noticeably trailing blade,
-# and a slower decision cadence (4 ticks = half Hard's re-decide rate). Tune
-# carrier_reaction_delay UP toward 0.22 to make it more forgiving; DOWN toward
-# 0.10 if it feels a step slow rather than beatable.
+# Normal is the beatable tier, pushed firmly off the Hard ceiling so the gap
+# reads consistently in play: a ~220 ms reaction to possession changes (human-
+# or-slower — it recognises a pass / turnover a clear beat late, no longer
+# matching one-timers), a more trailing blade (lerp 0.5, slew 11) so snipes
+# spray by approach and dangles are slower to strip from, and a slower decision
+# cadence (6 ticks = a third of Hard's re-decide rate, ~50 ms). Tune
+# carrier_reaction_delay DOWN toward 0.18 if it feels a step slow rather than
+# beatable; mouse_max_speed UP toward 14 if its shots feel too wild.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.15, 0.6, 14.0, 4)
+	return BotSkillProfile.new(0.22, 0.5, 11.0, 6)
+
+
+# Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
+# reacts to a pass a beat and a half late — visibly human-slow), a swimmy blade
+# (lerp 0.38, slew 8) so its shots are imprecise and its carried puck is easy to
+# poke off, and a slow decision cadence (9 ticks ≈ 75 ms) so it commits hard to a
+# stale read and can be dragged out of position. Still plays positionally and
+# shoots / passes — a real but soft opponent, not a stationary one. First-pass
+# numbers — tune carrier_reaction_delay / mouse_max_speed against play if a
+# newcomer still can't string possessions together.
+static func easy() -> BotSkillProfile:
+	return BotSkillProfile.new(0.34, 0.38, 8.0, 9)
 
 
 static func for_difficulty(difficulty: int) -> BotSkillProfile:
 	match difficulty:
+		Difficulty.EASY:
+			return easy()
 		Difficulty.NORMAL:
 			return normal()
 		_:
