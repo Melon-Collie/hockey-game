@@ -696,6 +696,25 @@ func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
 	goalie_poke_radius = profile.poke_radius_m
 	screen_max_extra_delay = profile.screen_max_extra_delay_s
 	move_read_max_delay = profile.move_read_max_delay_s
+	depth_aggressive = profile.depth_aggressive_m
+	depth_base = profile.depth_base_m
+	glove_react_max_speed = profile.glove_react_max_speed_mps
+	blocker_react_max_speed = profile.blocker_react_max_speed_mps
+	pad_toe_out_butterfly_deg = profile.pad_toe_out_butterfly_deg
+	lateral_accel = profile.lateral_accel_mps2
+
+
+# Live re-apply of a difficulty profile onto a running goalie — used by free play,
+# which is effectively the main menu (no match reload) so the goalie tier can be
+# tuned without a respawn. Idempotent by construction: the profile sets ABSOLUTE
+# values, so re-applying any tier fully determines the exports with no compounding
+# (same contract as SkaterController.apply_attributes). Rebuilds the cached rule
+# configs so the new depth chart / pose tuning takes effect on the next tick.
+func apply_skill_profile(profile: GoalieSkillProfile) -> void:
+	if profile == null:
+		return
+	_apply_skill_profile(profile)
+	_configure_collaborators()
 
 # Wired by GameManager so the crease-jam check can scan opposing skaters
 # without the controller knowing about the registry / spawner.

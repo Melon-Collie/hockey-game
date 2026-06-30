@@ -510,7 +510,11 @@ func on_host_started() -> void:
 	# and GameManager is an autoload that survives between matches, so this must
 	# re-read PlayerPrefs each match (not lazy-init-once).
 	bot_skill_profile = BotSkillProfile.for_difficulty(PlayerPrefs.bot_difficulty)
-	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.goalie_difficulty)
+	# Free play has its own goalie difficulty (a personal-sandbox knob, default
+	# Easy) distinct from the hosted/lobby setting — see PlayerPrefs.
+	var goalie_diff: int = PlayerPrefs.freeplay_goalie_difficulty \
+			if NetworkManager.is_free_play_mode else PlayerPrefs.goalie_difficulty
+	goalie_skill_profile = GoalieSkillProfile.for_difficulty(goalie_diff)
 	_perceived_carrier_peer_id = -1
 	_real_carrier_last = -1
 	_carrier_reaction_timer = 0.0
@@ -2866,6 +2870,18 @@ func _build_lobby_roster_array() -> Array:
 				NetworkManager.get_peer_number(peer_id)])
 		spec_idx += 1
 	return result
+
+
+# Re-read the free-play goalie difficulty and push it onto the live crease
+# goalies without a match reload. Free play is effectively the main menu (no
+# reload path), so the options-panel goalie dropdown tunes the running goalies in
+# place. No-op outside free play and on peers with no host-side goalie controllers.
+func refresh_freeplay_goalie_difficulty() -> void:
+	if not NetworkManager.is_free_play_mode:
+		return
+	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.freeplay_goalie_difficulty)
+	for gc: GoalieController in goalie_controllers:
+		gc.apply_skill_profile(goalie_skill_profile)
 
 
 func return_to_free_play() -> void:
