@@ -174,6 +174,10 @@ var pending_lobby_roster: Array = []
 var pending_join_slot: Dictionary = {}   # { team_slot, team_id, jersey_color, helmet_color, pants_color }
 var is_offline_mode: bool = false
 var is_tutorial_mode: bool = false
+# Offline penalty-shot drill ("score X of 10"). Like tutorial mode, it's a
+# single-local-player offline session whose flow is owned by a dedicated manager
+# (PenaltyDrillManager) rather than the normal match orchestration.
+var is_penalty_drill_mode: bool = false
 # Which tutorial to run. game_scene.gd reads this when instantiating
 # TutorialManager. Empty when not in tutorial mode.
 var tutorial_id: String = ""
@@ -428,6 +432,25 @@ func start_tutorial(id: String = TutorialRegistry.BASICS_ID) -> void:
 	start_offline()
 
 
+# Offline penalty-shot drill. Mirrors start_tutorial: one local player on team 0,
+# no bots, no clock. PenaltyDrillManager (spawned by game_scene.gd) owns the
+# shooter staging, the lone reactive goalie, and the score-X-of-10 loop. Forces
+# RuleSet.OFF so offsides/crease whistles can't interrupt a breakaway.
+func start_penalty_drill() -> void:
+	is_penalty_drill_mode = true
+	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
+	start_offline()
+	pending_game_config["rule_set"] = GameRules.RuleSet.OFF
+
+
+# True for the single-local-player scripted offline modes (tutorial, penalty
+# drill) where a dedicated manager owns puck placement and scoring, so the
+# normal match machinery — out-of-bounds whistles, goal celebrations — must
+# stand down.
+func is_drill_mode() -> bool:
+	return is_tutorial_mode or is_penalty_drill_mode
+
+
 func local_time() -> float:
 	return (Time.get_ticks_msec() - _session_start_ms) / 1000.0
 
@@ -649,6 +672,7 @@ func reset() -> void:
 	is_offline_mode = false
 	is_free_play_mode = false
 	is_tutorial_mode = false
+	is_penalty_drill_mode = false
 	tutorial_id = ""
 	_input_batch_provider = Callable()
 	_pending_handshake.clear()
