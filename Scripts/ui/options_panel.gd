@@ -47,6 +47,7 @@ var _hud_scale_slider: HSlider = null
 var _hud_scale_label: Label = null
 var _share_stats_check: CheckButton = null
 var _self_beacon_mode_btn: OptionButton = null
+var _freeplay_goalie_btn: OptionButton = null
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
 var _camera_mode_btn: OptionButton = null
@@ -176,6 +177,7 @@ func _snapshot() -> Dictionary:
 		"ring_color_team": PlayerPrefs.ring_color_team,
 		"ring_color_enemy": PlayerPrefs.ring_color_enemy,
 		"self_beacon_mode": PlayerPrefs.self_beacon_mode,
+		"freeplay_goalie_difficulty": PlayerPrefs.freeplay_goalie_difficulty,
 		"screen_flash": PlayerPrefs.screen_flash,
 		"screen_shake": PlayerPrefs.screen_shake,
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
@@ -219,6 +221,7 @@ func _read_controls() -> Dictionary:
 		"ring_color_team": _ring_team_color_btn.color,
 		"ring_color_enemy": _ring_enemy_color_btn.color,
 		"self_beacon_mode": _self_beacon_mode_btn.selected,
+		"freeplay_goalie_difficulty": _freeplay_goalie_btn.selected,
 		"screen_flash": _screen_flash_check.button_pressed,
 		"screen_shake": _screen_shake_check.button_pressed,
 		"camera_tilt_deg": _tilt_slider.value,
@@ -603,6 +606,19 @@ func _build_game_tab() -> Control:
 	_self_beacon_mode_btn.item_selected.connect(_on_self_beacon_mode_selected)
 	box.add_child(_field_row("Self Marker", _self_beacon_mode_btn))
 
+	# Free-play goalie difficulty — a personal-sandbox knob, separate from the
+	# hosted/lobby goalie setting (which lives in the lobby settings panel). Applies
+	# live to the running free-play goalies on Apply (no match reload needed).
+	_freeplay_goalie_btn = OptionButton.new()
+	_freeplay_goalie_btn.custom_minimum_size = Vector2(160, 40)
+	_freeplay_goalie_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.GOALIE_DIFFICULTY_LABELS.size():
+		_freeplay_goalie_btn.add_item(PlayerPrefs.GOALIE_DIFFICULTY_LABELS[i], i)
+	_freeplay_goalie_btn.selected = PlayerPrefs.freeplay_goalie_difficulty
+	SoundManager.wire_button(_freeplay_goalie_btn)
+	_freeplay_goalie_btn.item_selected.connect(_on_freeplay_goalie_selected)
+	box.add_child(_field_row("Free Play Goalie", _freeplay_goalie_btn))
+
 	_screen_flash_check = CheckButton.new()
 	_screen_flash_check.set_pressed_no_signal(PlayerPrefs.screen_flash)
 	SoundManager.wire_button(_screen_flash_check)
@@ -920,6 +936,9 @@ func _on_ice_scratches_toggled(_pressed: bool) -> void:
 func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
+func _on_freeplay_goalie_selected(_idx: int) -> void:
+	_update_apply_state()
+
 func _on_ring_color_changed(_color: Color) -> void:
 	# A manual tweak (not a preset write) means the palette is no longer one of
 	# the curated sets — reflect that as "Custom".
@@ -1188,6 +1207,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.ring_color_team = c.ring_color_team
 	PlayerPrefs.ring_color_enemy = c.ring_color_enemy
 	PlayerPrefs.self_beacon_mode = c.self_beacon_mode
+	PlayerPrefs.freeplay_goalie_difficulty = c.freeplay_goalie_difficulty
 	PlayerPrefs.screen_flash = c.screen_flash
 	PlayerPrefs.screen_shake = c.screen_shake
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
@@ -1203,6 +1223,9 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.apply_cursor()
 	PlayerPrefs.apply_bindings()
 	PlayerPrefs.save()
+	# Live-apply the free-play goalie tier to the running goalies — free play has
+	# no match reload, so this is how the dropdown takes effect (no-op elsewhere).
+	GameManager.refresh_freeplay_goalie_difficulty()
 	_original = _snapshot()
 	_apply_btn.disabled = true
 	if display_changed:
@@ -1283,6 +1306,7 @@ func _defaults() -> Dictionary:
 		"ring_color_team": MenuStyle.HUD_RING_TEAM,
 		"ring_color_enemy": MenuStyle.HUD_RING_ENEMY,
 		"self_beacon_mode": PlayerPrefs.BEACON_MODE_SMART,
+		"freeplay_goalie_difficulty": GoalieSkillProfile.Difficulty.EASY,
 		"screen_flash": true,
 		"screen_shake": true,
 		"camera_tilt_deg": PlayerPrefs.CAMERA_TILT_DEFAULT,
@@ -1348,6 +1372,8 @@ func _apply_values_to_controls(v: Dictionary) -> void:
 	_sync_ring_preset_selection()
 	if _self_beacon_mode_btn != null:
 		_self_beacon_mode_btn.selected = v.self_beacon_mode
+	if _freeplay_goalie_btn != null:
+		_freeplay_goalie_btn.selected = v.freeplay_goalie_difficulty
 	if _screen_flash_check != null:
 		_screen_flash_check.set_pressed_no_signal(v.screen_flash)
 	if _screen_shake_check != null:

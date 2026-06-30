@@ -516,7 +516,11 @@ func on_host_started() -> void:
 	# and GameManager is an autoload that survives between matches, so this must
 	# re-read PlayerPrefs each match (not lazy-init-once).
 	bot_skill_profile = BotSkillProfile.for_difficulty(PlayerPrefs.bot_difficulty)
-	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.goalie_difficulty)
+	# Free play has its own goalie difficulty (a personal-sandbox knob, default
+	# Easy) distinct from the hosted/lobby setting — see PlayerPrefs.
+	var goalie_diff: int = PlayerPrefs.freeplay_goalie_difficulty \
+			if NetworkManager.is_free_play_mode else PlayerPrefs.goalie_difficulty
+	goalie_skill_profile = GoalieSkillProfile.for_difficulty(goalie_diff)
 	_perceived_carrier_peer_id = -1
 	_real_carrier_last = -1
 	_carrier_reaction_timer = 0.0
@@ -2890,6 +2894,18 @@ func _build_lobby_roster_array() -> Array:
 	return result
 
 
+# Re-read the free-play goalie difficulty and push it onto the live crease
+# goalies without a match reload. Free play is effectively the main menu (no
+# reload path), so the options-panel goalie dropdown tunes the running goalies in
+# place. No-op outside free play and on peers with no host-side goalie controllers.
+func refresh_freeplay_goalie_difficulty() -> void:
+	if not NetworkManager.is_free_play_mode:
+		return
+	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.freeplay_goalie_difficulty)
+	for gc: GoalieController in goalie_controllers:
+		gc.apply_skill_profile(goalie_skill_profile)
+
+
 func return_to_free_play() -> void:
 	# Free play is the new "home" — there is no main menu screen to land on.
 	# Tear down whatever activity the player was in (lobby, match, tutorial,
@@ -3228,22 +3244,31 @@ func despawn_tutorial_bot(record: PlayerRecord) -> void:
 	_registry.remove(record.peer_id)
 
 
-# Spawns a single STATIONARY goalie in the net the tutorial player attacks
-# (team 0 shoots toward -Z). is_server=false so it wires no puck-reaction
-# signals, and we disable its process so the AI never ticks — it freezes
-# standing in the crease (where setup() places it) as a shooting target. The
-# goalie's collision still saves shots, so the top corners and five-hole are
-# the only gaps. Idempotent: a second call while one exists is a no-op.
-func spawn_tutorial_goalie() -> void:
+# Spawns a single goalie in the net the tutorial player attacks (team 0 shoots
+# toward -Z). Two modes:
+#   live=false (default) — STATIONARY shooting target for the "Beat the Goalie"
+#     drill: is_server=false wires no puck-reaction signals and the AI tick is
+#     disabled, so it freezes in the crease (where setup() places it). Its
+#     collision still saves shots, so the corners and five-hole are the only gaps.
+#   live=true — the FINALE goalie: is_server=true wires the puck-reaction signals
+#     and the AI tick is left running, and it gets the beginner-tuned EASY profile
+#     so it tracks, positions, and saves like a real goalie while staying scorable.
+#     (The optional skater-getter is left unset — crease-jam / screen reads guard
+#     on is_valid() and simply no-op solo, which is correct in a 1-shooter drill.)
+# Idempotent: a second call while one exists is a no-op.
+func spawn_tutorial_goalie(live: bool = false) -> void:
 	if _tutorial_goalie != null:
 		return
 	if _spawner == null or puck == null:
 		return
-	var result: Dictionary = _spawner.spawn_single_goalie(puck, -GameRules.GOAL_LINE_Z, false)
+	var result: Dictionary = _spawner.spawn_single_goalie(puck, -GameRules.GOAL_LINE_Z, live)
 	_tutorial_goalie = result.goalie as Goalie
 	_tutorial_goalie_controller = result.controller as GoalieController
-	_tutorial_goalie_controller.set_physics_process(false)
-	_tutorial_goalie_controller.set_process(false)
+	if live:
+		_tutorial_goalie_controller.apply_skill_profile(GoalieSkillProfile.easy())
+	else:
+		_tutorial_goalie_controller.set_physics_process(false)
+		_tutorial_goalie_controller.set_process(false)
 	if teams.size() > 1:
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 		_tutorial_goalie.apply_uniform(colors)
