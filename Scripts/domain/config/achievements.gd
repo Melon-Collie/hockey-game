@@ -82,9 +82,13 @@ const ALL: Array[Dictionary] = [
 	{
 		"id": FREIGHT_TRAIN, "name": "Freight Train", "hidden": false,
 		"desc": "Land a bone-rattling body check.",
-		# `min` is the body-check impulse magnitude (the value fed to SkaterVFX /
-		# body_check_rules). Tuned near the high end so it reads as a big hit.
-		"cond": {"kind": "event", "key": "big_hit", "min": 6.0},
+		# `min` is the impact_force (weight x closing-speed) the body_checked_player
+		# signal carries — the SAME value SkaterVFX scales feedback by, where 3.0 is
+		# a glancing bump and 14.0 is a full-strength check (SkaterVFX._CHECK_FORCE_*).
+		# 11.0 is intensity ~0.73: a clearly hard hit, reachable on a fast closing
+		# check but not an everyday bump. Verify the feel in play and nudge if it
+		# fires too freely / never (dev: SteamManager.reset_all_achievements).
+		"cond": {"kind": "event", "key": "big_hit", "min": 11.0},
 	},
 	# ── Career milestones (online shared-stats sessions only) ────────────────
 	{
