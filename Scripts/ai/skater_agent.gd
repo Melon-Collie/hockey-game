@@ -62,8 +62,11 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 	# bit behind. Skipped on the first ever tick (no prev to lerp from)
 	# and after any tick where the SM left mouse at ZERO (state didn't
 	# explicitly aim — don't drag a stale lag value into a subsequent
-	# real aim).
-	if _has_prev_mouse and _scratch_input.mouse_world_pos != Vector3.ZERO:
+	# real aim). Also skipped while aiming a committed shot: the SM cursor
+	# is already slew-smoothed there, and the second-stage lerp on top
+	# makes the blade ring through the wind-up (see wants_direct_aim).
+	if _has_prev_mouse and _scratch_input.mouse_world_pos != Vector3.ZERO \
+			and not _sm.wants_direct_aim():
 		_scratch_input.mouse_world_pos = _prev_mouse_world_pos.lerp(
 				_scratch_input.mouse_world_pos, _mouse_lerp_factor)
 	_prev_mouse_world_pos = _scratch_input.mouse_world_pos

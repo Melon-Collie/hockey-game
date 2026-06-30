@@ -823,6 +823,23 @@ func set_max_wrister_charge_distance(d: float) -> void:
 	_max_wrister_charge_distance = d
 
 
+# True while the bot is aiming a committed SHOT (pre-aim or charge). In those
+# frames the cursor is already slew-smoothed by _step_mouse_aim; SkaterAgent's
+# second-stage exponential lerp on top makes the blade ring — a slow side-to-side
+# oscillation through the wind-up. The agent reads this to track the SM cursor
+# DIRECTLY during a shot (the SM slew still provides the humanizing lag), settling
+# the blade instead of wobbling. Passes keep the second-stage lerp (the back-pass
+# swing wants the extra softening). Convergence reads `_mouse_pos`, not the agent
+# output, so this never affects when a shot fires.
+func wants_direct_aim() -> bool:
+	if _state == State.SHOOT_PRESSED or _state == State.QUICK_SHOT_PRESSED \
+			or _state == State.ONE_TIMER_PRESSED:
+		return true
+	# Pre-aiming a shot while still in CARRY (intent committed, not yet pressed).
+	return _intended_action == State.SHOOT_PRESSED \
+			or _intended_action == State.QUICK_SHOT_PRESSED
+
+
 # Apply this bot's attribute-scaled self-capabilities. Called by
 # AIController.apply_attributes (via SkaterAgent) on spawn and on every
 # free-play picker change, so the AI's model of its own reach / speed / shot
