@@ -752,6 +752,17 @@ func _physics_process(_delta: float) -> void:
 		_state_tick_counter += 1
 
 func _process(delta: float) -> void:
+	# NetworkManager is an autoload, so _process fires every frame from launch —
+	# including before any session starts and in headless GUT runs. Every block
+	# below is session-only maintenance (connect timeout, clock sync, handshake /
+	# liveness, pings, input batches, loss telemetry); none of it is meaningful
+	# without a session, and game_initiated is set at the very start of every
+	# start path (offline / host / client) before _connect_timer arms, so this
+	# guard never suppresses the connection-timeout path. It also silences the
+	# headless-test log noise from NetworkTelemetry.* static calls firing with no
+	# active session. Cleared on leave (return to free play), so it re-gates.
+	if not game_initiated:
+		return
 	# Cap delta to avoid timer bursting on the first frame after an OS freeze
 	# (e.g. title bar right-click holding the message pump for several seconds).
 	var capped_delta: float = minf(delta, 0.5)
