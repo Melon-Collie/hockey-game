@@ -2,7 +2,7 @@ class_name InputState
 
 const BYTES_SIZE: int = 23
 # Layout: f32 timestamp(0) f32 delta(4) s16 move.x(8) s16 move.y(10)
-#         s16 mwp.x(12) s8 mwp.y(14) s16 mwp.z(15) u16 msp.x(17) u16 msp.y(19)
+#         s16 mwp.x(12) s8 mwp.y(14) s16 mwp.z(15) s16 msp.x(17) s16 msp.y(19)
 #         u16 flags(21)  flags: shoot_pressed[0] shoot_held[1] slap_pressed[2]
 #         slap_held[3] sprint_held[4] brake[5] elevation_up[6] elevation_down[7]
 #         block_held[8] stick_lift_held[9] stick_lift_pressed[10]
@@ -64,8 +64,13 @@ func to_bytes() -> PackedByteArray:
 	b.encode_s16(12, clampi(roundi(mouse_world_pos.x * 100.0), -32768, 32767))
 	b.encode_s8( 14, clampi(roundi(mouse_world_pos.y * 100.0), -128, 127))
 	b.encode_s16(15, clampi(roundi(mouse_world_pos.z * 100.0), -32768, 32767))
-	b.encode_u16(17, clampi(roundi(mouse_screen_pos.x), 0, 65535))
-	b.encode_u16(19, clampi(roundi(mouse_screen_pos.y), 0, 65535))
+	# SIGNED s16: attack_up team-1 players negate mouse_screen_pos in the gatherer
+	# to pre-align the cursor-drag frame to world XZ (see LocalInputGatherer.gather).
+	# A u16 clamp floored those negatives to 0, so the host saw a frozen (0,0)
+	# cursor — zero wrister charge + null charge direction — and fired every drag
+	# as a tap. Screen coords (even negated, even at 8K) fit in ±32767.
+	b.encode_s16(17, clampi(roundi(mouse_screen_pos.x), -32768, 32767))
+	b.encode_s16(19, clampi(roundi(mouse_screen_pos.y), -32768, 32767))
 	var flags: int = (
 		(0x001 if shoot_pressed  else 0) | (0x002 if shoot_held     else 0) |
 		(0x004 if slap_pressed   else 0) | (0x008 if slap_held      else 0) |
@@ -91,8 +96,8 @@ static func from_bytes(b: PackedByteArray, offset: int = 0) -> InputState:
 	s.mouse_world_pos.x  = b.decode_s16(offset + 12) / 100.0
 	s.mouse_world_pos.y  = b.decode_s8( offset + 14) / 100.0
 	s.mouse_world_pos.z  = b.decode_s16(offset + 15) / 100.0
-	s.mouse_screen_pos.x = float(b.decode_u16(offset + 17))
-	s.mouse_screen_pos.y = float(b.decode_u16(offset + 19))
+	s.mouse_screen_pos.x = float(b.decode_s16(offset + 17))
+	s.mouse_screen_pos.y = float(b.decode_s16(offset + 19))
 	var flags: int       = b.decode_u16(offset + 21)
 	s.shoot_pressed      = (flags & 0x001) != 0
 	s.shoot_held         = (flags & 0x002) != 0
