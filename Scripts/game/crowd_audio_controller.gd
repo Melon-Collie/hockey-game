@@ -12,9 +12,9 @@ extends Node
 
 @export var ambient_stream_path: String = "res://Sounds/crowd_ambient.wav"
 @export var cheer_stream_path: String = "res://Sounds/crowd_cheer.wav"
-@export var ambient_volume_db: float = -16.5
-@export var cheer_volume_db: float = 0.0
-@export var duck_volume_db: float = -4.0
+@export var ambient_volume_db: float = -22.0
+@export var cheer_volume_db: float = -7.0
+@export var duck_volume_db: float = -10.0
 @export var duck_recover_time: float = 4.0
 
 const _CHEER_POOL_SIZE: int = 3

@@ -1165,7 +1165,7 @@ func _wire_sound_signals() -> void:
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
 	phase_changed.connect(func(p: GamePhase.Phase) -> void:
 		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
-			SoundManager.play_sfx(SoundManager.Sound.PERIOD_BUZZER))
+			SoundManager.play_sfx(SoundManager.Sound.PERIOD_BUZZER, -10.0))
 
 
 func _on_local_pickup_sound() -> void:
