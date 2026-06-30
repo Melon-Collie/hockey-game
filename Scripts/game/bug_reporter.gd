@@ -14,6 +14,7 @@ class_name BugReporter extends RefCounted
 
 const RATE_LIMIT_SEC: float = 60.0
 const MAX_DESCRIPTION_CHARS: int = 2000
+const MAX_CRASH_LOG_CHARS: int = 8000  # cap on the previous-session log tail shipped with a crash report
 
 # Negative seed so the very first submission of a session goes through —
 # Time.get_ticks_msec() is non-negative, so any positive value would
@@ -42,6 +43,32 @@ func submit(description: String, telemetry: NetworkTelemetry) -> void:
 		"platform": OS.get_name(),
 		"description": trimmed,
 		"telemetry": _telemetry_snapshot(telemetry),
+	}
+	_post(SupabaseConfig.URL + "/rest/v1/bug_reports", body)
+
+
+# Auto-submitted by CrashWatch on the launch AFTER an unclean shutdown. Unlike
+# submit(): no human description, and it deliberately BYPASSES the manual-report
+# rate limit — it's a once-per-launch automated report we don't want suppressed
+# by a recent manual submit. The previous run's breadcrumb + log tail ride in the
+# telemetry blob (no bug_reports schema change — same trick as build_id).
+func submit_crash(breadcrumb: Dictionary, log_tail: String) -> void:
+	var summary: String = "scene=%s phase=%s v=%s" % [
+		breadcrumb.get("scene", "?"),
+		breadcrumb.get("phase", "?"),
+		breadcrumb.get("version", BuildInfo.VERSION)]
+	var body: Dictionary = {
+		"uuid": PlayerPrefs.career_uuid(),
+		"player_name": PlayerPrefs.player_name,
+		"game_version": String(breadcrumb.get("version", BuildInfo.VERSION)),
+		"platform": OS.get_name(),
+		"description": "[CRASH] " + summary,
+		"telemetry": {
+			"crash": true,
+			"build_id": SteamManager.get_app_build_id(),
+			"breadcrumb": breadcrumb,
+			"log_tail": log_tail.left(MAX_CRASH_LOG_CHARS),
+		},
 	}
 	_post(SupabaseConfig.URL + "/rest/v1/bug_reports", body)
 

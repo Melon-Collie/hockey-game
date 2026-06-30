@@ -26,10 +26,14 @@ NetworkManager="*res://Scripts/networking/network_manager.gd"
 NetworkSimManager="*res://Scripts/networking/network_sim.gd"
 SteamManager="*res://Scripts/networking/steam_manager.gd"
 GameManager="*res://Scripts/game/game_manager.gd"
+CrashWatch="*res://Scripts/game/crash_watch.gd"
 
 [debug]
 
 gdscript/warnings/integer_division=0
+file_logging/enable_file_logging=true
+file_logging/log_path="user://logs/mitts.log"
+file_logging/max_log_files=10
 
 [display]
 

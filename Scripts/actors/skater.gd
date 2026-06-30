@@ -242,6 +242,10 @@ var shot_charge: float = 0.0
 var slapper_aim_dir: Vector3 = Vector3.ZERO
 var blade_world_velocity: Vector3 = Vector3.ZERO
 var _prev_blade_world_pos: Vector3 = Vector3.ZERO
+# Last known-finite body position, cached each tick before move_and_slide so the
+# non-finite guard (_sanitize_physics_state) can restore a sane position if some
+# upstream bug ever feeds NaN/Inf into the body. Seeded from the spawn position.
+var _last_finite_position: Vector3 = Vector3.ZERO
 var _prev_blade_contact: Vector3 = Vector3.ZERO
 var _last_wall_normal: Vector3 = Vector3.ZERO
 var _collision_cyl: CylinderShape3D = null
@@ -306,6 +310,7 @@ func _ready() -> void:
 	_position_hand_markers()
 
 	_prev_blade_world_pos = upper_body.to_global(blade.position)
+	_last_finite_position = global_position
 	_default_upper_body_y = upper_body.position.y
 
 	collision_layer = Constants.LAYER_SKATER_BODIES
@@ -410,6 +415,10 @@ func _physics_process(delta: float) -> void:
 	var blade_world_pos: Vector3 = upper_body.to_global(blade.position)
 	blade_world_velocity = (blade_world_pos - _prev_blade_world_pos) / delta
 	_prev_blade_world_pos = blade_world_pos
+	# Backstop: never hand a NaN/Inf velocity or position to Jolt — a non-finite
+	# value there is a hard, uncatchable native crash. This should never fire;
+	# when it does it logs the offending state so the upstream source is findable.
+	_sanitize_physics_state()
 	var vel_before: Vector3 = velocity
 	# Y is axis-locked (see _ready): move_and_slide leaves global_position.y
 	# untouched, so live prediction, reconcile replay, and host authority all
@@ -431,6 +440,25 @@ func _physics_process(delta: float) -> void:
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
 	_hud.update(delta)
+
+
+# Sanitizes the body's velocity/position to finite values right before the Jolt
+# step. A NaN/Inf reaching move_and_slide() crashes the engine natively (no
+# GDScript try/catch can recover it), so we clamp at the seam and log where it
+# came from. Cheap value-type checks — hot-path safe at 120 Hz × skaters; the
+# string-formatting cost only ever runs on the (should-never) failure branch.
+func _sanitize_physics_state() -> void:
+	if not velocity.is_finite():
+		push_error("Skater '%s': non-finite velocity %s before move_and_slide — zeroing (state=%d pos=%s)."
+				% [name, velocity, current_shot_state, global_position])
+		velocity = Vector3.ZERO
+	if global_position.is_finite():
+		_last_finite_position = global_position
+	else:
+		push_error("Skater '%s': non-finite position %s before move_and_slide — restoring %s."
+				% [name, global_position, _last_finite_position])
+		global_position = _last_finite_position
+		velocity = Vector3.ZERO
 
 
 func _resolve_player_collisions(vel_before: Vector3) -> void:
