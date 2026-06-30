@@ -48,9 +48,10 @@ static func nearest_target(
 	return best_i
 
 
-# Whether a released wrister was a charged/dragged shot rather than a quick tap.
-# `charge_distance` is the blade-drag distance built up before release; below
-# `quick_threshold` the engine fires it as a fixed-power quick shot (which is
-# also the pass), so the Wrist Shot drill requires a drag past that line.
-static func is_dragged_wrister(charge_distance: float, quick_threshold: float) -> bool:
-	return charge_distance >= quick_threshold
+# Whether a released wrister was a charged/dragged shot rather than a flick.
+# `charge_distance` is the blade-drag distance built up before release. The engine
+# splits quick-vs-charged by hold time, not distance, but the Wrist Shot drill's
+# lesson is dragging to aim/charge, so it gates on a meaningful drag past
+# `drag_qualify` (a tutorial bar, not the engine's quick-shot rule).
+static func is_dragged_wrister(charge_distance: float, drag_qualify: float) -> bool:
+	return charge_distance >= drag_qualify

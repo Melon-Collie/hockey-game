@@ -2050,7 +2050,10 @@ func _on_one_timer_release_requested(direction: Vector3, power: float, skater: S
 	_host_release_one_timer(direction, power, skater, 0.0, 0.0, 0.0, Vector3.ZERO)
 
 
-func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
+# direction is kept as a fallback only (used if the host's own locked aim is
+# degenerate); _power is unused — the host always derives power itself (still on
+# the wire to avoid a PROTOCOL_VERSION bump for no saving).
+func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int,
 		host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
 	if not NetworkManager.is_host or puck == null or _registry == null:
 		return
@@ -2065,16 +2068,13 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	# teleport the puck off anyone's stick to the shooter's blade.
 	if puck.carrier != null or puck.pickup_locked or is_movement_locked() or record.skater.is_ghost:
 		return
-	var safe_direction: Vector3 = ShotReleaseRules.sanitize_direction(direction)
-	if safe_direction == Vector3.ZERO:
-		return
 	var controller: SkaterController = record.controller
-	var safe_power: float = ShotReleaseRules.clamp_power(power,
-			controller.max_slapper_power * (1.0 + controller.one_timer_center_power_bonus))
 	var safe_rtt_ms: float = ShotReleaseRules.clamp_rtt_ms(
 			rtt_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
 	# Range gate against the puck the shooter saw: rewind to their interpolated
-	# view when the stamp is fresh, otherwise use the live puck.
+	# view when the stamp is fresh, otherwise use the live puck. This is the ONLY
+	# part of the one-timer the client gets a say in — "did I connect with the
+	# puck I saw" — and it stays lag-comped. The shot itself (below) is host-derived.
 	var now: float = NetworkManager.estimated_host_time()
 	var view_puck_pos: Vector3 = puck.get_puck_position()
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() \
@@ -2084,11 +2084,31 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 		if snap != null and snap.puck_state != null:
 			view_puck_pos = snap.puck_state.position
 	var zone_world: Vector3 = record.skater.get_slapper_zone_global_position()
+	var zone_xz := Vector2(zone_world.x, zone_world.z)
+	var view_puck_xz := Vector2(view_puck_pos.x, view_puck_pos.z)
 	var puck_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
 	if not ShotReleaseRules.one_timer_in_range(
-			Vector2(zone_world.x, zone_world.z), Vector2(view_puck_pos.x, view_puck_pos.z),
+			zone_xz, view_puck_xz,
 			controller.slapper_zone_radius, puck_speed, controller.one_timer_leniency_time):
 		return
+	# HOST-AUTHORITATIVE direction: fire along the shooter's OWN locked slapper aim,
+	# which the host's RemoteController derived from the replayed wind-up — not the
+	# client-sent vector. Fall back to the (sanitized) client direction only if the
+	# host lock is degenerate (e.g. a snap release on a fast link before the input
+	# stream delivered the press).
+	var locked: Vector2 = controller.get_locked_slapper_dir()
+	var safe_direction: Vector3 = ShotReleaseRules.sanitize_direction(Vector3(locked.x, 0.0, locked.y))
+	if safe_direction == Vector3.ZERO:
+		safe_direction = ShotReleaseRules.sanitize_direction(direction)
+		if safe_direction == Vector3.ZERO:
+			return
+	# HOST-AUTHORITATIVE power: the shooter's max slapper power with the center bonus
+	# from the REWOUND puck the host arbitrated against — same formula the client
+	# predicted with, but off the host's puck read. Clamp as defense-in-depth.
+	var safe_power: float = ShotReleaseRules.clamp_power(
+			ShotReleaseRules.one_timer_power(controller.max_slapper_power,
+					controller.one_timer_center_power_bonus, zone_xz, view_puck_xz, controller.slapper_zone_radius),
+			controller.max_slapper_power * (1.0 + controller.one_timer_center_power_bonus))
 	# Sound/replay event below the validation so a rejected RPC can't spam
 	# phantom shot sounds (mirrors _fire_remote_shot).
 	var shot_pos: Vector3 = puck.get_puck_position()

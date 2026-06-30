@@ -128,6 +128,33 @@ func test_one_timer_fast_puck_gets_speed_leniency() -> void:
 			Vector2(0, 0), Vector2(2.8, 0), 0.5, 14.0, 0.08))
 
 
+# ── one_timer_power ───────────────────────────────────────────────────────────
+
+func test_one_timer_power_dead_center_gets_full_bonus() -> void:
+	# Puck on the zone center: proximity 1 → base * (1 + bonus).
+	assert_almost_eq(ShotReleaseRules.one_timer_power(
+			40.0, 0.15, Vector2(0, 0), Vector2(0, 0), 0.5), 40.0 * 1.15, 0.001)
+
+func test_one_timer_power_edge_gets_full_penalty() -> void:
+	# Puck at the radius edge: proximity 0 → base * (1 - bonus).
+	assert_almost_eq(ShotReleaseRules.one_timer_power(
+			40.0, 0.15, Vector2(0, 0), Vector2(0.5, 0), 0.5), 40.0 * 0.85, 0.001)
+
+func test_one_timer_power_half_radius_is_neutral() -> void:
+	# proximity 0.5 → 2*0.5 - 1 = 0 → no bonus or penalty.
+	assert_almost_eq(ShotReleaseRules.one_timer_power(
+			40.0, 0.15, Vector2(0, 0), Vector2(0.25, 0), 0.5), 40.0, 0.001)
+
+func test_one_timer_power_beyond_radius_clamps_to_full_penalty() -> void:
+	# Past the radius proximity clamps to 0 (not negative) → base * (1 - bonus).
+	assert_almost_eq(ShotReleaseRules.one_timer_power(
+			40.0, 0.15, Vector2(0, 0), Vector2(2.0, 0), 0.5), 40.0 * 0.85, 0.001)
+
+func test_one_timer_power_zero_radius_returns_base() -> void:
+	assert_almost_eq(ShotReleaseRules.one_timer_power(
+			40.0, 0.15, Vector2(0, 0), Vector2(0, 0), 0.0), 40.0, 0.001)
+
+
 # ── clamp_origin ──────────────────────────────────────────────────────────────
 
 func test_origin_within_reach_passes_through() -> void:

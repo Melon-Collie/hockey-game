@@ -33,7 +33,11 @@ const VERSION: String = "dev"
 #     format still desyncs client prediction against host authority. The Steam
 #     BuildID bumps on every upload, so the host rejects mismatched builds
 #     (skipped when either side is a dev / non-Steam build, BuildID 0).
-const PROTOCOL_VERSION: int = 8
+# v9: input mouse_screen_pos wire encoding u16 -> s16 (same 2 bytes). The u16
+#     clamp floored the attack_up team-1 negated cursor to (0,0), so the host
+#     derived zero wrister charge / null aim for those shooters and fired drags
+#     as taps. Signed encoding round-trips the negation.
+const PROTOCOL_VERSION: int = 9
 
 
 func _ready() -> void:

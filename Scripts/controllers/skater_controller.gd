@@ -193,18 +193,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # which stays capped at max_blade_speed. See SkaterIKCoordinator.apply_blade_from_mouse.
 @export var wrister_on_axis_blade_speed: float = 60.0
 @export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
-# Absolute charge_distance (in meters of blade travel) below which the
-# wrister releases as a quick shot. Independent of max_wrister_charge_distance
-# so the snap-tap feel is the same across attribute spreads — a 0.15m drag
-# is a quick shot regardless of who's shooting. Above this, the wrister
-# lerps power between min and max based on charge ratio.
-@export var quick_shot_threshold: float = 0.15
-# Upper end (meters of charge) of the tap→wrister blend band. Below
-# quick_shot_threshold the release is a pure tap; above this a pure charged
-# wrister; between, direction and power blend continuously so a tiny charge
-# difference never flips the shot categorically. Flat (not attribute-scaled),
-# like quick_shot_threshold.
-@export var quick_shot_blend_max: float = 0.30
+# Hold time (s) that splits a quick shot from a charged wrister — a HARD cutoff,
+# no blend. Release the shoot button before this and you fire a quick shot toward
+# the cursor (player→blade at fixed quick_shot_power); hold past it and the quick
+# shot is off the table — you're committed to a wrister that charges by drag
+# distance and aims along the drag. Time-based (not drag-distance) so the split is
+# deterministic across client/host: both count the same ticks, whereas a charge
+# threshold rides the body-dependent blade travel and could classify differently
+# on each machine. Flat (not attribute-scaled).
+@export var quick_shot_time: float = 0.1
 @export var quick_shot_elevation: float = 0.10
 @export var wrister_elevation_target_height: float = 0.90
 # Apex cap for elevated shots — puck can't rise more than this above the blade.
@@ -969,7 +966,21 @@ func _enter_slapper_charge(input: InputState) -> void:
 		input.mouse_world_pos.z - skater.global_position.z)
 	_pose.facing = to_mouse.normalized() if to_mouse.length() > move_deadzone else _pose.facing
 	skater.set_facing(_pose.facing)
-	# Lock aim direction from the actual blade-side release point → mouse.
+	# Square the stance BEFORE locking the aim. The slapper holds a squared upper
+	# body (zero twist/lean), so the locked direction must be measured from THAT
+	# pose. Measuring first (as it did) built the blade world point through the
+	# residual skating twist/lean that's zeroed one line later — aiming from a
+	# pose that lasts zero frames, and worse, twist/lean are only loosely synced
+	# (lean isn't networked; twist re-snaps only at reconcile), so client and host
+	# baked different transient poses into the lock and diverged. From the squared
+	# stance the lock depends only on facing + body position + the fixed blade
+	# offset, which both machines agree on.
+	_pose.reset_lean_and_lag()
+	skater.set_upper_body_rotation(0.0)
+	skater.set_upper_body_lean(0.0)
+	skater.set_lower_body_lean(0.0, 0.0)
+	skater.set_lower_body_lag(0.0)
+	# Lock aim direction from the squared blade-side release point → mouse.
 	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
 	var blade_local := Vector3(
 		skater.shoulder.position.x + blade_side_sign * slapper_blade_x,
@@ -981,11 +992,6 @@ func _enter_slapper_charge(input: InputState) -> void:
 		input.mouse_world_pos.z - blade_world.z)
 	_sm.locked_slapper_dir = to_mouse_from_blade.normalized() if to_mouse_from_blade.length() > move_deadzone else _pose.facing
 	skater.slapper_aim_dir = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
-	_pose.reset_lean_and_lag()
-	skater.set_upper_body_rotation(0.0)
-	skater.set_upper_body_lean(0.0)
-	skater.set_lower_body_lean(0.0, 0.0)
-	skater.set_lower_body_lag(0.0)
 	if has_puck:
 		skater.set_slapper_mode(true)
 		# Pin the carried puck to the slapper-zone ice spot for the duration of
@@ -1007,6 +1013,12 @@ func _enter_slapper_charge(input: InputState) -> void:
 		skater.set_slapshot_arrow(true, slapper_zone_offset_x, slapper_zone_offset_z, slapper_zone_radius)
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 
+# The slapper aim locked at press (XZ as Vector2). Persists from _enter_slapper_charge
+# until the next charge, so the host can read its OWN replayed value to fire a remote
+# player's one-timer authoritatively instead of trusting the client-sent direction.
+func get_locked_slapper_dir() -> Vector2:
+	return _sm.locked_slapper_dir
+
 func _get_charge_direction() -> Vector3:
 	# prev_blade_dir is the screen-space cursor drag direction packed
 	# (x, 0, y), already in world XZ frame: LocalInputGatherer negates
@@ -1025,6 +1037,10 @@ func _release_wrister(input: InputState) -> void:
 		# (relative to the player, so skating velocity is already removed).
 		var is_backhand: bool = \
 				_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
+		# Quick shot vs charged wrister is decided purely on hold time: a button tap
+		# released before quick_shot_time fires toward the cursor; holding past it
+		# commits to the drag-aimed wrister (no more quick shot).
+		var is_quick_shot: bool = _aiming.wrister_hold_timer < quick_shot_time
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -1033,7 +1049,8 @@ func _release_wrister(input: InputState) -> void:
 				_is_elevated,
 				_aiming.charge_distance,
 				_wrister_config(),
-				_get_charge_direction())
+				_get_charge_direction(),
+				is_quick_shot)
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
@@ -1077,6 +1094,11 @@ func _hide_slapshot_hud() -> void:
 func _update_wrister_charge(input: InputState) -> void:
 	if not has_puck:
 		return
+	# Accumulate hold time (the quick-shot vs wrister discriminator). input.delta
+	# is the fixed physics step on both client and host, and the reconcile loop
+	# replays through here, so LocalController saves/restores the timer like the
+	# slapper timer to keep it from inflating across replays.
+	_aiming.tick_wrister_hold(input.delta)
 	# Direction signal: cursor SCREEN position, packed (x, 0, y) for the
 	# tracker's Vector3 interface. Screen space is the camera-immune
 	# frame — pixel motion captures the player's mouse drag intent
@@ -1127,8 +1149,8 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	var result := ShotMechanics.release_slapper(
 			blade_world, input.mouse_world_pos,
 			_is_elevated, cfg.max_slapper_charge_time, cfg, locked_dir_3d)
-	var proximity: float = clampf(1.0 - dist / slapper_zone_radius, 0.0, 1.0)
-	result.power *= 1.0 + one_timer_center_power_bonus * (2.0 * proximity - 1.0)
+	result.power = ShotReleaseRules.one_timer_power(
+			result.power, one_timer_center_power_bonus, zone_xz, puck_xz, slapper_zone_radius)
 	if not is_replaying:
 		one_timer_release_requested.emit(result.direction, result.power)
 	# Same as _release_slapper — hide the HUD as soon as the shot fires so it
@@ -1263,8 +1285,6 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 	cfg.max_wrister_charge_distance = max_wrister_charge_distance
 	cfg.backhand_power_coefficient = backhand_power_coefficient
 	cfg.quick_shot_power = quick_shot_power
-	cfg.quick_shot_threshold = quick_shot_threshold
-	cfg.quick_shot_blend_max = quick_shot_blend_max
 	cfg.quick_shot_elevation = quick_shot_elevation
 	cfg.elevation_target_height = wrister_elevation_target_height
 	cfg.elevation_blade_height = 0.05

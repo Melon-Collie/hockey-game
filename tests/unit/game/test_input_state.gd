@@ -126,6 +126,19 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.stick_lift_pressed, s.stick_lift_pressed)
 
 
+func test_bytes_negative_mouse_screen_pos_round_trips() -> void:
+	# Attack-up team-1 players negate mouse_screen_pos in the gatherer to align the
+	# cursor-drag frame to world XZ. The old u16 wire encoding clamped those
+	# negatives to 0, so the host saw a frozen (0,0) cursor and derived zero
+	# wrister charge / null aim — firing every dragged shot as a tap. Signed s16
+	# must round-trip the negation so the host re-derives the same charged shot.
+	var s := InputState.new()
+	s.mouse_screen_pos = Vector2(-960.0, -540.0)
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_almost_eq(r.mouse_screen_pos.x, -960.0, 1.0)
+	assert_almost_eq(r.mouse_screen_pos.y, -540.0, 1.0)
+
+
 func test_bytes_size_sentinel() -> void:
 	assert_eq(InputState.BYTES_SIZE, 23)
 

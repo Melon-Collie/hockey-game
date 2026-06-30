@@ -9,8 +9,6 @@ func _wrister_cfg() -> ShotMechanics.WristerConfig:
 	cfg.max_wrister_charge_distance = 3.0
 	cfg.backhand_power_coefficient = 0.75
 	cfg.quick_shot_power = 12.0
-	cfg.quick_shot_threshold = 0.1
-	cfg.quick_shot_blend_max = 0.3
 	cfg.quick_shot_elevation = 0.10
 	cfg.elevation_target_height = 0.90
 	cfg.elevation_blade_height = 0.05
@@ -31,25 +29,31 @@ func _slapper_cfg() -> ShotMechanics.SlapperConfig:
 
 # ── Wrister: quick shot branch ───────────────────────────────────────────────
 
-func test_wrister_very_short_charge_uses_quick_shot_power() -> void:
+func test_wrister_quick_shot_uses_quick_shot_power() -> void:
+	# is_quick_shot=true (released before quick_shot_time) — fixed quick power
+	# regardless of any drag charge that may have accrued.
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,                   # player_pos
 		Vector3(10, 0, 0),              # mouse at (10, 0, 0)
 		Vector3(0.5, 0, 0),             # blade world pos
 		false, false,
-		0.01,                           # charge below threshold
-		_wrister_cfg())
+		0.01,
+		_wrister_cfg(),
+		Vector3.ZERO,
+		true)                           # is_quick_shot
 	assert_almost_eq(result.power, 12.0, 0.01, "quick shot uses fixed quick_shot_power")
 
 func test_wrister_quick_shot_direction_from_blade() -> void:
-	# Quick shot aims from the blade, not the player
+	# Quick shot aims from the player through the blade (toward the cursor)
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3(0, 0, 0),
 		Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, false,
 		0.01,
-		_wrister_cfg())
+		_wrister_cfg(),
+		Vector3.ZERO,
+		true)                           # is_quick_shot
 	assert_gt(result.direction.x, 0.0, "direction toward the target (+X)")
 
 # ── Wrister: full charge branch ──────────────────────────────────────────────
@@ -130,26 +134,40 @@ func test_wrister_charged_uses_drag_direction_not_player_to_mouse() -> void:
 	assert_almost_eq(result.direction.z, -1.0, 0.05, "shot follows drag direction, not mouse position")
 	assert_almost_eq(result.direction.x, 0.0, 0.05, "shot does not veer toward mouse")
 
-func test_wrister_continuous_across_charge_band() -> void:
-	# No categorical tap↔wrister flip: power and direction vary continuously as
-	# charge sweeps across quick_shot_threshold and the blend band. Adjacent
-	# samples (0.01 m apart) must not jump — this is the property that stops a
-	# tiny client/host charge disagreement from redirecting the shot.
+func test_wrister_hard_binary_quick_vs_charged() -> void:
+	# HARD BINARY (no blend): with the SAME charge + drag, is_quick_shot flips the
+	# shot categorically. Quick = aim player→blade (+X here, toward cursor) at
+	# quick_shot_power; charged = aim along the drag (-Z) at charged power. Mouse is
+	# +X, drag is -Z, so the aim axis itself flips between the two.
 	var cfg := _wrister_cfg()
-	var drag := Vector3(0, 0, -1)               # dragged forward
-	var prev: ShotMechanics.ShotResult = null
-	var c: float = 0.0
-	while c <= 0.6:
-		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-			Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
-			false, false, c, cfg, drag)
-		if prev != null:
-			assert_lt(absf(r.power - prev.power), 1.0,
-				"power continuous across charge=%.3f" % c)
-			assert_lt(r.direction.distance_to(prev.direction), 0.15,
-				"direction continuous across charge=%.3f" % c)
-		prev = r
-		c += 0.01
+	var drag := Vector3(0, 0, -1)
+	var quick: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, false, 0.5, cfg, drag, true)     # is_quick_shot
+	var charged: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, false, 0.5, cfg, drag, false)    # charged wrister
+	assert_gt(quick.direction.x, 0.9, "quick shot aims player→blade (+X), ignores drag")
+	assert_almost_eq(charged.direction.z, -1.0, 0.05, "charged wrister aims along drag (-Z)")
+	assert_almost_eq(quick.power, cfg.quick_shot_power, 0.01, "quick shot fires fixed quick_shot_power")
+	assert_gt(charged.power, 0.0, "charged wrister scales power with the (0.5/3.0) charge ratio")
+
+
+func test_wrister_charged_direction_independent_of_body_position() -> void:
+	# Netcode-critical: a charged wrister's aim is the drag vector, with NO blend
+	# of the body-relative tap direction. So the same drag yields the same shot
+	# direction regardless of where the shooter's body / blade sit — which is what
+	# lets the host's re-derived shot match the client's predicted one.
+	var cfg := _wrister_cfg()
+	var drag := Vector3(0, 0, -1)
+	var a: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, false, 1.5, cfg, drag)
+	var b: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3(3, 0, -2), Vector3(10, 0, 0), Vector3(-1.0, 0, 4),  # different body + blade
+		false, false, 1.5, cfg, drag)
+	assert_almost_eq(a.direction.x, b.direction.x, 0.001, "charged aim X independent of body")
+	assert_almost_eq(a.direction.z, b.direction.z, 0.001, "charged aim Z independent of body")
 
 func test_wrister_charged_falls_back_to_mouse_when_no_drag_direction() -> void:
 	# No drag direction recorded — should fall back to player→mouse aim.

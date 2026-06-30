@@ -20,6 +20,14 @@ var prev_intent_pos: Vector3 = Vector3.ZERO
 # contributes nothing.
 var prev_blade_pos_rel_skater: Vector3 = Vector3.ZERO
 var prev_blade_dir: Vector3 = Vector3.ZERO
+# Seconds the shoot button has been held since WRISTER_AIM entry. The quick-shot
+# vs charged-wrister split is decided on THIS (release before quick_shot_time =
+# quick shot toward the cursor; hold past it = committed wrister, drag-to-aim).
+# Time, not charge distance, so the split is deterministic across client/host
+# (both count the same ticks) instead of riding a body-dependent drag threshold.
+# Public: LocalController saves/restores it across reconcile replay (it ticks
+# inside the replay loop, exactly like slapper_charge_timer).
+var wrister_hold_timer: float = 0.0
 
 # ── Slapper charge state ──────────────────────────────────────────────────────
 var slapper_charge_timer: float = 0.0
@@ -29,9 +37,14 @@ var one_timer_window_timer: float = 0.0
 
 func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Vector3) -> void:
 	charge_distance = 0.0
+	wrister_hold_timer = 0.0
 	prev_blade_dir = Vector3.ZERO
 	prev_intent_pos = initial_intent_pos
 	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
+
+
+func tick_wrister_hold(delta: float) -> void:
+	wrister_hold_timer += delta
 
 
 func tick_wrister_charge(

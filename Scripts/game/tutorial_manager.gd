@@ -917,6 +917,12 @@ func _setup_shooting_drill(start_z: float) -> void:
 	_local_controller.puck_release_requested.connect(_on_shooting_shot_callable)
 
 
+# Minimum blade-drag (m) for the Wrist Shot drill to count the shot as a real
+# dragged wrister rather than a flick. The engine now splits quick-vs-charged by
+# hold TIME (not drag distance), but the drill's lesson is "drag to aim/charge,"
+# so it still gates on the player having dragged meaningfully.
+const _WRIST_DRAG_QUALIFY_M: float = 0.15
+
 # Records whether the just-released shot satisfies the active drill's required
 # type. Plain-goal drills (wrist, slap, finish) complete only when this is true;
 # the target/goalie drills clear via the target test, so they never complete on
@@ -926,7 +932,7 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 		STEP_SHOOT_WRIST:
 			var peak_dist: float = _wrist_peak_charge * _local_controller.max_wrister_charge_distance
 			_last_shot_qualifies = (not is_slapper) and TutorialShotRules.is_dragged_wrister(
-					peak_dist, _local_controller.quick_shot_threshold)
+					peak_dist, _WRIST_DRAG_QUALIFY_M)
 		STEP_SHOOT_SLAP:
 			_last_shot_qualifies = is_slapper
 		STEP_SHOOT_FINISH:
