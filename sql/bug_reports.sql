@@ -5,7 +5,7 @@
 --
 -- Source of truth for a fresh rebuild; live DB reconstructed from
 -- sql/dump_schema.sql. Identity is steam_id (0 = offline / free-play, i.e.
--- anonymous); the legacy uuid column was dropped (sql/migrate_drop_uuid.sql).
+-- anonymous); there is no per-player uuid.
 
 create table if not exists public.bug_reports (
     id            bigserial primary key,

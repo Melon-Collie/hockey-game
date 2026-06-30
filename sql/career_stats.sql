@@ -4,8 +4,8 @@
 -- the recent_games_for() RPC.
 --
 -- Source of truth for a fresh rebuild; the live DB was reconstructed from
--- sql/dump_schema.sql. Identity is steam_id (the legacy per-row uuid column was
--- dropped — see sql/migrate_drop_uuid.sql; rows key on steam_id everywhere).
+-- sql/dump_schema.sql. Identity is steam_id; there is no per-player uuid (rows
+-- key on steam_id everywhere).
 --
 -- Adding a career stat: new column here → add to career_totals below → add to
 -- PlayerStats.to_dict() → add a row in CareerStatsScreen._on_totals_received.
