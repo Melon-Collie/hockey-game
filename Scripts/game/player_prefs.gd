@@ -317,25 +317,6 @@ func _ready() -> void:
 	_sync_from_cloud.call_deferred()
 
 
-# A canonical-format UUID derived deterministically from the player's SteamID64,
-# so the backend rows that key on a uuid column stay valid AND stable across
-# machines now that identity comes from Steam (the random per-install uuid and
-# its sidecar backup are gone — Steam Cloud is the cross-machine backup, and
-# career stats already key on steam_id). Falls back to an ephemeral random uuid
-# in offline / dev sessions where no Steam id exists.
-func career_uuid() -> String:
-	var sid: int = SteamManager.steam_id
-	if sid == 0:
-		return generate_uuid()
-	# Left-pad the 64-bit id to 32 hex digits and shape it 8-4-4-4-12. Postgres'
-	# uuid type validates the dash layout, not RFC version/variant bits, so this
-	# is an accepted, stable identifier.
-	var h: String = "0000000000000000" + ("%016x" % sid)
-	return "%s-%s-%s-%s-%s" % [
-		h.substr(0, 8), h.substr(8, 4), h.substr(12, 4), h.substr(16, 4), h.substr(20, 12),
-	]
-
-
 func save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("player", "name", player_name)

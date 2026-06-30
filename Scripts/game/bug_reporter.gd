@@ -35,9 +35,8 @@ func submit(description: String, telemetry: NetworkTelemetry) -> void:
 
 	var trimmed: String = description.left(MAX_DESCRIPTION_CHARS)
 	var body: Dictionary = {
-		# Identity now derives from the Steam id (the per-install random uuid is
-		# gone); the uuid column stays populated for schema compatibility.
-		"uuid": PlayerPrefs.career_uuid(),
+		# Identity is the Steam id (0 in offline / free-play, i.e. anonymous).
+		"steam_id": SteamManager.steam_id,
 		"player_name": PlayerPrefs.player_name,
 		"game_version": BuildInfo.VERSION,
 		"platform": OS.get_name(),
@@ -58,7 +57,7 @@ func submit_crash(breadcrumb: Dictionary, log_tail: String) -> void:
 		breadcrumb.get("phase", "?"),
 		breadcrumb.get("version", BuildInfo.VERSION)]
 	var body: Dictionary = {
-		"uuid": PlayerPrefs.career_uuid(),
+		"steam_id": SteamManager.steam_id,
 		"player_name": PlayerPrefs.player_name,
 		"game_version": String(breadcrumb.get("version", BuildInfo.VERSION)),
 		"platform": OS.get_name(),

@@ -107,7 +107,7 @@ Before touching networking code (RPCs, reconcile, prediction, interpolation, lag
 | New pure stateless math or rule | New file in `domain/rules/` + GUT test |
 | New domain state type | New file in `domain/state/` + GUT test |
 | New per-player stat | `PlayerStats` → wire format → `WorldStateCodec` → `PlayerStats.to_dict()` for Supabase |
-| New career stat column | Add to `career_stats` table in Supabase SQL editor → add to `career_totals` view → add to `PlayerStats.to_dict()` → add row in `CareerStatsScreen._on_totals_received` |
+| New career stat column | Update `sql/career_stats.sql` (table + `career_totals` view) → apply it in the Supabase SQL editor → add to `PlayerStats.to_dict()` → add row in `CareerStatsScreen._on_totals_received` |
 | Submit bug report from UI | Instantiate `BugReportDialog`, `add_child` it, call `.open()` on button press |
 | New RPC | `NetworkManager` (define) → emit a signal → `GameManager._wire_network_signals()` (connect) |
 | New phase-entry side effect | `PhaseCoordinator` |
@@ -145,7 +145,7 @@ NetworkManager → GameManager communication is signal-based: every RPC / ENet c
 
 Playtester builds ship via GitHub Releases (`latest` tag). `deploy.yml` computes `VERSION=0.1.<git rev-list --count HEAD>`, rewrites the placeholder `"dev"` in `Scripts/game/build_info.gd` to that string before export, and publishes with the version as the release name (plus an immutable `v0.1.N` prerelease per build for rollback). Steam (SteamPipe) now handles distribution and auto-updates for the closed beta (`steam/` holds the upload scripts); the old GitHub-release `UpdateChecker` startup notifier has been removed since Steam owns updates. No in-game patching/downloader.
 
-**Supabase backend:** `Scripts/game/supabase_config.gd` holds the project URL and publishable (anon) key — safe to commit, RLS restricts it to INSERT/SELECT/UPDATE. `CareerStatsReporter` (`Scripts/game/career_stats_reporter.gd`) POSTs one row to `career_stats` at game-over and GETs from the `career_totals` view for the career screen. `BugReporter` (`Scripts/game/bug_reporter.gd`) POSTs to `bug_reports` with a telemetry snapshot. Both use fire-and-forget `HTTPRequest` nodes added to the scene tree root and fail silently. The secret key must never be committed — use only the publishable key in `SupabaseConfig`.
+**Supabase backend:** `Scripts/game/supabase_config.gd` holds the project URL and publishable (anon) key — safe to commit, RLS restricts it to INSERT/SELECT/UPDATE. `CareerStatsReporter` (`Scripts/game/career_stats_reporter.gd`) POSTs one row to `career_stats` at game-over and GETs from the `career_totals` view for the career screen. `BugReporter` (`Scripts/game/bug_reporter.gd`) POSTs to `bug_reports` with a telemetry snapshot. `NetworkSessionReporter` (`Scripts/game/network_session_reporter.gd`) POSTs one connection-quality row per online game to `network_sessions` at game-over — the playtesting telemetry pipeline (see `ARCHITECTURE.md` → **Playtesting telemetry**; schema + analysis view in `sql/network_sessions.sql`). All use fire-and-forget `HTTPRequest` nodes added to the scene tree root and fail silently. The secret key must never be committed — use only the publishable key in `SupabaseConfig`. **Table/view/RPC schemas are version-controlled in `sql/`** (one file per feature; `sql/dump_schema.sql` regenerates them from a live DB). All backend rows key on `steam_id` — there is no per-player `uuid` (`game_id` is still a UUID, minted by `PlayerPrefs.generate_uuid`).
 
 ## Backlog
 
