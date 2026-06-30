@@ -66,6 +66,9 @@ var _is_server: bool = false
 var _pending_reset: bool = false
 var _pending_reset_xz: Vector2 = Vector2.ZERO
 var _clamp_at_goal_line: bool = false
+# Last known-finite puck position, cached each physics step so the non-finite
+# guard in _integrate_forces can restore a sane position rather than crash Jolt.
+var _last_finite_position: Vector3 = Vector3.ZERO
 # Full velocity stored by release() for every shot, applied by _integrate_forces.
 # Jolt does not preserve linear_velocity set on a frozen body when it activates
 # as dynamic — state.linear_velocity on the first dynamic step is zero. Storing
@@ -93,6 +96,7 @@ func _ready() -> void:
 	contact_monitor = true
 	max_contacts_reported = 4
 	body_entered.connect(_on_body_entered)
+	_last_finite_position = global_position
 
 	var vfx := PuckVFX.new()
 	vfx.name = "VFX"
@@ -417,6 +421,21 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		state.angular_velocity = Vector3.ZERO
 		_pending_reset_xz = Vector2.ZERO
 		return
+	# Backstop: a non-finite velocity or position handed to Jolt is a hard native
+	# crash (the max_speed clamp below can't catch it — NaN > max_speed is false).
+	# Sanitize at the seam and log the source. Should never fire.
+	if not state.linear_velocity.is_finite():
+		push_error("Puck: non-finite velocity %s in _integrate_forces — zeroing." % state.linear_velocity)
+		state.linear_velocity = Vector3.ZERO
+	if state.transform.origin.is_finite():
+		_last_finite_position = state.transform.origin
+	else:
+		push_error("Puck: non-finite position %s — restoring %s." % [state.transform.origin, _last_finite_position])
+		var fixed: Transform3D = state.transform
+		fixed.origin = _last_finite_position
+		state.transform = fixed
+		state.linear_velocity = Vector3.ZERO
+		state.angular_velocity = Vector3.ZERO
 	if not _pending_elevation_vel.is_zero_approx():
 		# Write the full velocity vector directly into Jolt's physics state.
 		# Jolt zeros state.linear_velocity on the first dynamic step after a
