@@ -480,9 +480,11 @@ func _begin_step(index: int) -> void:
 			_show_target_set(_GOALIE_TARGETS)
 
 		STEP_SHOOT_FINISH:
-			# Deeper start so they skate in and finish however they like.
+			# Deeper start so they skate in and finish however they like — against a
+			# live, beginner-tuned (Easy) goalie, not the static target from the
+			# previous drill (the step text already says "walk him side to side").
 			_setup_shooting_drill(_FINISH_START_Z)
-			GameManager.spawn_tutorial_goalie()
+			GameManager.spawn_tutorial_goalie(true)
 			_hud.set_objective("Score.")
 
 
