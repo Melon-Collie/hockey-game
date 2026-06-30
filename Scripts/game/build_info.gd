@@ -38,3 +38,17 @@ const VERSION: String = "dev"
 #     derived zero wrister charge / null aim for those shooters and fired drags
 #     as taps. Signed encoding round-trips the negation.
 const PROTOCOL_VERSION: int = 9
+
+
+func _ready() -> void:
+	# Startup banner, printed once at boot. File logging is enabled in
+	# project.godot ([debug] file_logging → user://logs/mitts.log), so this line
+	# heads every persisted log — making a player's crash log self-identifying
+	# (which build, OS, and GPU produced it) without needing to ask. The engine's
+	# native crash handler appends its backtrace to the same log on a hard crash,
+	# which is the only "catch" available for a native (e.g. physics) abort.
+	print("=== Mitts %s (protocol v%d) | %s | %s | Godot %s ===" % [
+		VERSION, PROTOCOL_VERSION, OS.get_name(),
+		RenderingServer.get_video_adapter_name(),
+		String(Engine.get_version_info().get("string", "?")),
+	])

@@ -245,8 +245,9 @@ const BOT_DIFFICULTY_LABELS: Array[String] = [
 	"Hard",
 ]
 # Goalie difficulty. Index matches GoalieSkillProfile.Difficulty and the
-# OptionButton ordering wherever the menu exposes it.
+# OptionButton ordering wherever the menu exposes it (Easy → Normal → Hard).
 const GOALIE_DIFFICULTY_LABELS: Array[String] = [
+	"Easy",
 	"Normal",
 	"Hard",
 ]
@@ -260,7 +261,13 @@ var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
 var camera_mode: int = CAMERA_MODE_DYNAMIC  # GameCamera reads this each tick (see CAMERA_MODE_*)
 var bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL  # see BotSkillProfile
+# Goalie difficulty for HOSTED / lobby matches (set in the lobby settings panel).
 var goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL  # see GoalieSkillProfile
+# Goalie difficulty for FREE PLAY — a separate knob from the hosted one, since
+# free play is the personal sandbox / effective main menu (set in the options
+# panel). Defaults to Easy so a newcomer's first puck-drop is the forgiving
+# goalie; they opt up from there. GameManager branches on is_free_play_mode.
+var freeplay_goalie_difficulty: int = GoalieSkillProfile.Difficulty.EASY
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
 const CAMERA_DISTANCE_MIN: float = 0.6
@@ -315,25 +322,6 @@ func _ready() -> void:
 	# A deferred call runs after every autoload's (synchronous) _ready, by which
 	# point Cloud availability is known. See _sync_from_cloud.
 	_sync_from_cloud.call_deferred()
-
-
-# A canonical-format UUID derived deterministically from the player's SteamID64,
-# so the backend rows that key on a uuid column stay valid AND stable across
-# machines now that identity comes from Steam (the random per-install uuid and
-# its sidecar backup are gone — Steam Cloud is the cross-machine backup, and
-# career stats already key on steam_id). Falls back to an ephemeral random uuid
-# in offline / dev sessions where no Steam id exists.
-func career_uuid() -> String:
-	var sid: int = SteamManager.steam_id
-	if sid == 0:
-		return generate_uuid()
-	# Left-pad the 64-bit id to 32 hex digits and shape it 8-4-4-4-12. Postgres'
-	# uuid type validates the dash layout, not RFC version/variant bits, so this
-	# is an accepted, stable identifier.
-	var h: String = "0000000000000000" + ("%016x" % sid)
-	return "%s-%s-%s-%s-%s" % [
-		h.substr(0, 8), h.substr(8, 4), h.substr(12, 4), h.substr(16, 4), h.substr(20, 12),
-	]
 
 
 func save() -> void:
@@ -391,6 +379,10 @@ func save() -> void:
 	cfg.set_value("game", "camera_mode", camera_mode)
 	cfg.set_value("game", "bot_difficulty", bot_difficulty)
 	cfg.set_value("game", "goalie_difficulty", goalie_difficulty)
+	cfg.set_value("game", "freeplay_goalie_difficulty", freeplay_goalie_difficulty)
+	# Marks goalie_difficulty as already on the 3-tier (Easy/Normal/Hard) scale so
+	# _load() doesn't re-run the 2-tier → 3-tier remap on a re-saved file.
+	cfg.set_value("game", "goalie_difficulty_scale_version", 1)
 	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
@@ -904,7 +896,17 @@ func _load() -> void:
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		camera_mode = clampi(int(cfg.get_value("game", "camera_mode", CAMERA_MODE_DYNAMIC)), 0, CAMERA_MODE_LABELS.size() - 1)
 		bot_difficulty = clampi(int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL)), 0, BOT_DIFFICULTY_LABELS.size() - 1)
-		goalie_difficulty = clampi(int(cfg.get_value("game", "goalie_difficulty", GoalieSkillProfile.Difficulty.NORMAL)), 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
+		goalie_difficulty = int(cfg.get_value("game", "goalie_difficulty", GoalieSkillProfile.Difficulty.NORMAL))
+		# Easy was inserted at index 0, shifting the old 2-tier values up one
+		# (old 0=Normal → new 1=Normal, old 1=Hard → new 2=Hard). Remap once, but
+		# only a value that was actually persisted under the old scale (has the key,
+		# no version marker) — a config predating goalie_difficulty keeps the new
+		# default rather than being spuriously bumped to Hard.
+		if cfg.has_section_key("game", "goalie_difficulty") \
+				and int(cfg.get_value("game", "goalie_difficulty_scale_version", 0)) < 1:
+			goalie_difficulty += 1
+		goalie_difficulty = clampi(goalie_difficulty, 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
+		freeplay_goalie_difficulty = clampi(int(cfg.get_value("game", "freeplay_goalie_difficulty", GoalieSkillProfile.Difficulty.EASY)), 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
 		share_gameplay_stats = cfg.get_value("game", "share_gameplay_stats", true)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
