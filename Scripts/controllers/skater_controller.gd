@@ -193,14 +193,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # which stays capped at max_blade_speed. See SkaterIKCoordinator.apply_blade_from_mouse.
 @export var wrister_on_axis_blade_speed: float = 60.0
 @export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
-# Absolute charge_distance (in meters of blade travel) below which the
-# wrister releases as a quick shot. At or above it the release is a charged
-# wrister aimed along the drag — a HARD cutoff, no blend (the two shots are
-# distinct: a tap aims player→blade at fixed power, a wrister aims along the
-# drag at charged power). Independent of max_wrister_charge_distance so the
-# snap-tap feel is the same across attribute spreads — a 0.15m drag is a quick
-# shot regardless of who's shooting. Flat (not attribute-scaled).
-@export var quick_shot_threshold: float = 0.15
+# Hold time (s) that splits a quick shot from a charged wrister — a HARD cutoff,
+# no blend. Release the shoot button before this and you fire a quick shot toward
+# the cursor (player→blade at fixed quick_shot_power); hold past it and the quick
+# shot is off the table — you're committed to a wrister that charges by drag
+# distance and aims along the drag. Time-based (not drag-distance) so the split is
+# deterministic across client/host: both count the same ticks, whereas a charge
+# threshold rides the body-dependent blade travel and could classify differently
+# on each machine. Flat (not attribute-scaled).
+@export var quick_shot_time: float = 0.1
 @export var quick_shot_elevation: float = 0.10
 @export var wrister_elevation_target_height: float = 0.90
 # Apex cap for elevated shots — puck can't rise more than this above the blade.
@@ -1021,6 +1022,10 @@ func _release_wrister(input: InputState) -> void:
 		# (relative to the player, so skating velocity is already removed).
 		var is_backhand: bool = \
 				_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
+		# Quick shot vs charged wrister is decided purely on hold time: a button tap
+		# released before quick_shot_time fires toward the cursor; holding past it
+		# commits to the drag-aimed wrister (no more quick shot).
+		var is_quick_shot: bool = _aiming.wrister_hold_timer < quick_shot_time
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -1029,7 +1034,8 @@ func _release_wrister(input: InputState) -> void:
 				_is_elevated,
 				_aiming.charge_distance,
 				_wrister_config(),
-				_get_charge_direction())
+				_get_charge_direction(),
+				is_quick_shot)
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
@@ -1073,6 +1079,11 @@ func _hide_slapshot_hud() -> void:
 func _update_wrister_charge(input: InputState) -> void:
 	if not has_puck:
 		return
+	# Accumulate hold time (the quick-shot vs wrister discriminator). input.delta
+	# is the fixed physics step on both client and host, and the reconcile loop
+	# replays through here, so LocalController saves/restores the timer like the
+	# slapper timer to keep it from inflating across replays.
+	_aiming.tick_wrister_hold(input.delta)
 	# Direction signal: cursor SCREEN position, packed (x, 0, y) for the
 	# tracker's Vector3 interface. Screen space is the camera-immune
 	# frame — pixel motion captures the player's mouse drag intent
@@ -1259,7 +1270,6 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 	cfg.max_wrister_charge_distance = max_wrister_charge_distance
 	cfg.backhand_power_coefficient = backhand_power_coefficient
 	cfg.quick_shot_power = quick_shot_power
-	cfg.quick_shot_threshold = quick_shot_threshold
 	cfg.quick_shot_elevation = quick_shot_elevation
 	cfg.elevation_target_height = wrister_elevation_target_height
 	cfg.elevation_blade_height = 0.05

@@ -19,7 +19,6 @@ class WristerConfig:
 	var max_wrister_charge_distance: float = 0.0
 	var backhand_power_coefficient: float = 0.0
 	var quick_shot_power: float = 0.0
-	var quick_shot_threshold: float = 0.0       # charge (m) below which a release is a tap, at/above a charged wrister
 	var quick_shot_elevation: float = 0.0       # fixed Y for snap releases
 	var elevation_target_height: float = 0.0    # world Y to hit at the goal line
 	var elevation_blade_height: float = 0.0     # puck starting world Y
@@ -44,23 +43,23 @@ class SlapperConfig:
 	var away_from_net_y: float = 0.10
 
 # Wrister release. HARD BINARY — a tap and a charged wrister are two distinct
-# shots split at a single charge threshold, with NO blend between them:
-#   - TAP (charge_distance < quick_shot_threshold): aims player→blade (the blade
+# shots, with NO blend between them. The split is decided by HOLD TIME at the
+# call site (see SkaterController._release_wrister) and passed in as is_quick_shot:
+#   - QUICK SHOT (released before quick_shot_time): aims player→blade (the blade
 #     tracks the cursor via ROM-clamped IK, so aim is accurate and can never point
 #     behind the player) at the fixed quick/pass power.
-#   - WRISTER (charge_distance >= quick_shot_threshold): aims along the DRAG (the
-#     swept cursor direction) at charged power. The drag direction IS the aim —
-#     this is the defining mechanic of the shot, so it is never diluted.
+#   - WRISTER (held past quick_shot_time): aims along the DRAG (the swept cursor
+#     direction) at charged power. The drag direction IS the aim — this is the
+#     defining mechanic of the shot, so it is never diluted.
 # There is intentionally no blend band: dragging to aim is the core of the game,
 # and the old smoothstep seam mixed the body-relative tap direction into charged
-# shots, which both muddied the feel and — because tap_dir depends on the
-# predicted body position — was a client/host divergence source. Netcode upshot:
-# a charged wrister's aim (the drag vector) is body-independent and identical on
-# client and host, so any release both machines classify as charged is fully
-# deterministic; only a release whose charge lands right on the threshold can be
-# classified differently across machines. Backhand is detected by blade X sign in
-# upper-body-local space: positive X is a backhand for a left-handed player,
-# negative for a righty.
+# shots, which both muddied the feel and — because tap_dir depends on the predicted
+# body position — was a client/host divergence source. A time-based classifier is
+# also deterministic across machines (both count the same ticks), unlike the old
+# body-dependent drag-distance threshold. Netcode upshot: a charged wrister's aim
+# (the drag vector) is body-independent and identical on client and host.
+# Backhand is detected by blade X sign in upper-body-local space: positive X is a
+# backhand for a left-handed player, negative for a righty.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,
@@ -69,12 +68,13 @@ static func release_wrister(
 		is_elevated: bool,
 		charge_distance: float,
 		cfg: WristerConfig,
-		charge_direction: Vector3 = Vector3.ZERO) -> ShotResult:
+		charge_direction: Vector3 = Vector3.ZERO,
+		is_quick_shot: bool = false) -> ShotResult:
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
 	var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
 
-	if charge_distance < cfg.quick_shot_threshold:
-		# TAP — aim player→blade at fixed quick/pass power.
+	if is_quick_shot:
+		# QUICK SHOT — aim player→blade at fixed quick/pass power.
 		var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)
 		var tap_dir: Vector3 = (blade_xz - player_xz).normalized()
 		if tap_dir.length_squared() < 0.0001:
