@@ -64,6 +64,25 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal re-decides less often than Hard")
 	assert_gt(easy.dispatch_period_ticks, normal.dispatch_period_ticks,
 			"Easy re-decides less often than Normal")
+	# Pace — pursuit standoff: bigger sags further off the carrier (more time).
+	assert_gt(normal.pursuit_standoff_m, hard.pursuit_standoff_m,
+			"Normal sags further off the carrier than Hard")
+	assert_gt(easy.pursuit_standoff_m, normal.pursuit_standoff_m,
+			"Easy sags further off the carrier than Normal")
+	# Pace — pass speed: lower moves the puck slower around the zone.
+	assert_lt(normal.pass_speed_scale, hard.pass_speed_scale,
+			"Normal moves the puck slower than Hard")
+	assert_lt(easy.pass_speed_scale, normal.pass_speed_scale,
+			"Easy moves the puck slower than Normal")
+
+
+func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
+	# Hard must be EXACTLY today's pace by construction: zero extra standoff and
+	# full (1.0) pass speed, so the pace levers are a pure softening for the
+	# lower tiers and carry zero regression risk on the ceiling.
+	var hard: BotSkillProfile = BotSkillProfile.hard()
+	assert_eq(hard.pursuit_standoff_m, 0.0, "Hard adds no pursuit standoff")
+	assert_eq(hard.pass_speed_scale, 1.0, "Hard moves the puck at full pace")
 
 
 func test_lerp_factors_stay_in_unit_range() -> void:

@@ -829,6 +829,26 @@ func test_expected_pass_speed_uses_distance_ramp() -> void:
 			0.001)
 
 
+func test_pass_speed_scale_defaults_to_unchanged() -> void:
+	# The difficulty pace arg defaults to 1.0, so an unscaled call is identical to
+	# the two-arg form — the cross-player threat model is untouched by the knob.
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	assert_eq(
+			AIActionScoring.pass_launch_speed(18.0, maxw, 1.0),
+			AIActionScoring.pass_launch_speed(18.0, maxw))
+
+
+func test_pass_speed_scale_slows_the_puck_below_the_snap_floor() -> void:
+	# The pace knob applies AFTER the clamp, so an easier bot's short feed drops
+	# below the snap floor (PASS_SPEED_M_S) — a slow, readable puck by design.
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	var full: float = AIActionScoring.pass_launch_speed(4.0, maxw, 1.0)
+	var slowed: float = AIActionScoring.pass_launch_speed(4.0, maxw, 0.7)
+	assert_almost_eq(slowed, full * 0.7, 0.001)
+	assert_lt(slowed, AIActionScoring.PASS_SPEED_M_S,
+			"a scaled short feed is slower than the snap floor")
+
+
 # ─── score_pass: speed-aware lane clearance ─────────────────────────────
 
 func test_score_pass_higher_at_charged_speed_with_in_lane_defender() -> void:

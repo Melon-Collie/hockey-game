@@ -29,6 +29,25 @@ extends RefCounted
 #   • dispatch_period_ticks — how often the full decision dispatch re-runs;
 #     a slower cadence makes the bot commit to a read longer before adjusting.
 #
+# ── Pace knobs (a SEPARATE axis from the precision knobs above) ───────────────
+# The four knobs above tune how SHARP the bot is — its hands, its shots, its
+# reads. They do NOT change the PACE a human feels: how much time/space they get
+# on the puck and how fast the play comes at them. Those are identical across
+# tiers unless the levers below move, and pace is what a human feels on EVERY
+# possession (precision only shows up on the bot's finish). Two pace levers, both
+# the bot's OWN positioning/decision (no RNG, no AI-scoring-mirror — the goalie /
+# receiver threat model stays on league-default constants), so they're as
+# replay-safe as the precision knobs:
+#   • pursuit_standoff_m — how far the on-puck PRESSURE defender sets its cut-off
+#     line BACK toward its own net, beyond the one-stick-length baseline. Bigger
+#     → defenders sag off the carrier, so a human gets a beat to look up and make
+#     a play instead of the play collapsing on them. Consumed in pressure.gd.
+#   • pass_speed_scale — multiplies the bot's OWN pass launch speed (passes only,
+#     not shots). Lower → the puck travels slower tape-to-tape, so the offensive
+#     play develops in front of the human and is readable / interceptable rather
+#     than zipping around. 1.0 = today's pace. Consumed via AIActionScoring
+#     .pass_launch_speed at the carrier's own-pass sites (RoleContext carries it).
+#
 # The GOALIE is intentionally NOT represented here — it stays consistent across
 # difficulties (and the skater AI's goalie-slide prediction in AIActionScoring
 # stays in lockstep with the live goalie regardless of tier).
@@ -44,10 +63,11 @@ extends RefCounted
 # == (1 - f) ^ old_rate (equal residual per second).
 #
 # To add a tier: add a Difficulty enum value, a factory, and a for_difficulty
-# arm. To add a knob: add a field + _init param, set it in both factories, and
-# consume it where the relevant const used to be read (SkaterAgent for lerp,
-# SkaterAgentStateMachine for max_speed / dispatch, GameManager for the carrier
-# reaction delay).
+# arm. To add a knob: add a field + _init param, set it in ALL THREE factories,
+# and consume it where the relevant value is read (SkaterAgent for lerp,
+# SkaterAgentStateMachine for max_speed / dispatch / the pace knobs it copies
+# onto RoleContext, GameManager for the carrier reaction delay, and the role
+# behaviors — pressure.gd / carrier.gd — for the pace knobs via RoleContext).
 
 enum Difficulty {
 	EASY = 0,     # the floor — well-late reads, swimmy blade, commits hard to stale reads
@@ -77,13 +97,25 @@ var mouse_max_speed_m_s: float
 # Tick-denominated — tuned for 120 Hz (see tick-rate note above).
 var dispatch_period_ticks: int
 
+# PACE: extra metres the on-puck PRESSURE defender drops its cut-off line back
+# toward its own net (beyond the one-stick-length baseline). 0.0 = today's tight
+# gap. Bigger = more time/space for the carrier. Distance, tick-independent.
+var pursuit_standoff_m: float
+
+# PACE: multiplier on the bot's own pass launch speed (passes only, not shots).
+# 1.0 = today's pace; lower = slower puck around the zone, more readable. Unitless.
+var pass_speed_scale: float
+
 
 func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
-		p_mouse_max_speed_m_s: float, p_dispatch_period_ticks: int) -> void:
+		p_mouse_max_speed_m_s: float, p_dispatch_period_ticks: int,
+		p_pursuit_standoff_m: float, p_pass_speed_scale: float) -> void:
 	carrier_reaction_delay_s = p_carrier_reaction_delay_s
 	mouse_lerp_factor = p_mouse_lerp_factor
 	mouse_max_speed_m_s = p_mouse_max_speed_m_s
 	dispatch_period_ticks = p_dispatch_period_ticks
+	pursuit_standoff_m = p_pursuit_standoff_m
+	pass_speed_scale = p_pass_speed_scale
 
 
 # Hard ≈ today's bot, with a light humanising pass so it reads as a very strong
@@ -92,9 +124,10 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 # snipes spray slightly by approach geometry. Dispatch at PHYSICS_TICK/60 = 2
 # ticks matches the engine baseline cadence. Tune mouse_max_speed DOWN toward
 # Normal if Hard still feels robotic; carrier_reaction_delay UP if it still
-# matches passes too readily.
+# matches passes too readily. Pace knobs at their no-op baseline (standoff 0.0,
+# pass scale 1.0) — Hard keeps today's tight forecheck and full puck pace.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 0.85, 30.0, 2)
+	return BotSkillProfile.new(0.05, 0.85, 30.0, 2, 0.0, 1.0)
 
 
 # Normal is the beatable tier, pushed firmly off the Hard ceiling so the gap
@@ -105,8 +138,16 @@ static func hard() -> BotSkillProfile:
 # cadence (6 ticks = a third of Hard's re-decide rate, ~50 ms). Tune
 # carrier_reaction_delay DOWN toward 0.18 if it feels a step slow rather than
 # beatable; mouse_max_speed UP toward 14 if its shots feel too wild.
+#
+# Pace: defenders sag ~1.5 m off the cut-off line and the puck moves at 85% pace,
+# so a human gets a beat of time and the play develops more readably — the
+# difference a human feels every possession. The precision knobs above and these
+# pace knobs are INDEPENDENT dials: if Normal plays like a pushover, raise the
+# precision knobs back toward Hard (sharper hands/reads) and let these pace knobs
+# keep it beatable; if it still feels superhuman, soften the pace knobs further
+# (standoff UP, pass scale DOWN) before touching precision.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 0.5, 11.0, 6)
+	return BotSkillProfile.new(0.22, 0.5, 11.0, 6, 1.5, 0.85)
 
 
 # Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
@@ -117,8 +158,12 @@ static func normal() -> BotSkillProfile:
 # shoots / passes — a real but soft opponent, not a stationary one. First-pass
 # numbers — tune carrier_reaction_delay / mouse_max_speed against play if a
 # newcomer still can't string possessions together.
+#
+# Pace: defenders sag ~3 m off (lots of room to carry and look up) and the puck
+# moves at 70% pace (slow, readable, easy to pick off) — low-energy across the
+# board, which is most of what makes Easy feel easy.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 0.38, 8.0, 9)
+	return BotSkillProfile.new(0.34, 0.38, 8.0, 9, 3.0, 0.70)
 
 
 static func for_difficulty(difficulty: int) -> BotSkillProfile:

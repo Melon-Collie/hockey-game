@@ -253,10 +253,17 @@ const PASS_CHARGE_SPEED_M_S: float = (
 # PASS_RAMP_LONG_SPEED_M_S for long passes, smooth between. Clamped to max_launch
 # — the passer's own max wrister (its hardest possible pass), or the league
 # default for opponent threat modeling.
-static func pass_launch_speed(distance: float, max_launch: float) -> float:
+#
+# speed_scale is the difficulty pace knob (BotSkillProfile.pass_speed_scale),
+# applied AFTER the clamp so an easier bot's passes can drop below the snap floor
+# — that's the point: a slower puck the human can read and pick off. Defaults to
+# 1.0, so the cross-player threat model (expected_pass_speed) and all unscaled
+# callers are byte-for-byte unchanged.
+static func pass_launch_speed(distance: float, max_launch: float,
+		speed_scale: float = 1.0) -> float:
 	var t: float = smoothstep(PASS_RAMP_SHORT_DISTANCE_M, PASS_RAMP_LONG_DISTANCE_M, distance)
 	var target: float = lerpf(PASS_SPEED_M_S, PASS_RAMP_LONG_SPEED_M_S, t)
-	return clampf(target, PASS_SPEED_M_S, max_launch)
+	return clampf(target, PASS_SPEED_M_S, max_launch) * speed_scale
 
 # ── Saucer pass ──────────────────────────────────────────────────────────────
 # A saucer (elevated) pass lofts the puck off the ice so it flies over a
