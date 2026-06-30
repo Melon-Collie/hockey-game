@@ -41,6 +41,10 @@ const INTENT_QUICK_SHOT: int = 4
 # projections) would fire every tick per bot. ~30 Hz is plenty — pre-aim
 # convergence gates the actual transition, and humans react in 250 ms+.
 const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~30 Hz re-eval
+# Wall-clock seconds between re-evals (derived from the cadence above). Advances
+# the hold-elapsed clock that decays a developing play's value (see _pick_action).
+const PICK_ACTION_PERIOD_S: float = (
+		float(PICK_ACTION_PERIOD_TICKS) / float(_PhysicsConstants.PHYSICS_TICK))
 
 # Pass flight clamp. A 0.6 s lead lets the bot pass to a teammate up
 # to ~16 m away (PASS_SPEED_M_S × 0.6); longer leads suffer from
@@ -93,6 +97,11 @@ const _POLAR_ANGLES: Array[float] = [
 # fire intents persist across cooldown ticks so pre-aim keeps
 # driving toward the chosen action.
 var intended_action: int = INTENT_CARRY
+
+# Seconds we've been HOLDING the puck for a developing cross-seam (see
+# _pick_action). Feeds the existing carry decay so a wait that never pays off
+# self-extinguishes — the bot takes the available shot — with no fixed timeout.
+var _hold_elapsed_s: float = 0.0
 
 # Set when intent commits to PASS. Consumed by the state machine
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
@@ -195,6 +204,7 @@ func reset() -> void:
 	pass_should_saucer = false
 	shot_is_elevated = false
 	last_carry_anchor = Vector3.ZERO
+	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
 
 
@@ -372,8 +382,28 @@ func _pick_action(ctx: RoleContext) -> void:
 	# it until the brief stagger decays — carry still computes normally,
 	# this only blocks fire from winning the compete.
 	var staggered: bool = ctx.self_stagger_timer > 0.0
+
+	# Opportunity cost of firing NOW: the value of keeping the puck for a
+	# developing cross-seam one-timer a teammate is staging. Same EV currency as
+	# the shot/pass — P(keep the puck) × the feed's value — decayed by how long
+	# we've already held, via the SAME carry delay-discount the rest of the model
+	# uses. No bonus, no threshold, no fixed timeout: it just competes in the max.
+	#   - keep_prob from carry_poke_safety → under pressure the hold is risky and
+	#     loses, so the bot acts; in open ice it's ~1 and the hold can win.
+	#   - decay(elapsed) → a wait that never materialises self-extinguishes (the
+	#     developing value shrinks until the available shot wins).
+	# When the teammate flags ready, the developing feed drops to 0 here but the
+	# normal pass scoring jumps (one-timer), so PASS wins and feeds it.
+	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
+	var keep_prob: float = AIActionScoring.carry_poke_safety(cur_puck_pos, _scratch_opponents)
+	var hold_value: float = (_best_developing_feed(ctx, goalie_now)
+			* keep_prob * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, _hold_elapsed_s))
+
 	var new_intent: int
-	if fire_score >= carry_score and fire_score > 0.0 and not staggered:
+	# Fire only if it beats BOTH carrying and holding for the developing play.
+	if fire_score >= carry_score and fire_score >= hold_value \
+			and fire_score > 0.0 and not staggered:
+		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer
@@ -394,6 +424,13 @@ func _pick_action(ctx: RoleContext) -> void:
 		elif new_intent == INTENT_SHOOT:
 			shot_is_elevated = _should_elevate_shot(ctx, shoot_score)
 	else:
+		# Not firing. Advance the hold clock only while the developing play is the
+		# reason (it out-scores plain carrying); a normal carry resets it so the
+		# next genuine hold starts fresh at full value.
+		if hold_value > carry_score and hold_value > 0.0:
+			_hold_elapsed_s += PICK_ACTION_PERIOD_S
+		else:
+			_hold_elapsed_s = 0.0
 		new_intent = INTENT_CARRY
 
 	intended_action = new_intent
@@ -816,6 +853,49 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
 	return maxf(shoot_s, potential_s)
+
+
+# Value (EV) of the best cross-seam ONE-TIMER feed to a teammate STAGING one — a
+# FINISHER-slotted teammate in the OZ, not yet one-timer-ready, settling into its
+# spot. We score the feed to where they ARE now as a one-timer (release = pass
+# flight only, with goalie-motion): the value the feed gets the instant they flag
+# ready. Until then the normal pass scoring rates them mid-windup (goalie
+# re-squares) and under-values the play; this is the reason to keep the puck and
+# wait. Self-gating: a finisher still out of position scores a poor feed → no
+# reason to hold for it. Returns 0 if none is developing.
+func _best_developing_feed(ctx: RoleContext, goalie_now: Vector3) -> float:
+	if ctx.team_brain == null:
+		return 0.0
+	var self_pos: Vector3 = ctx.self_pos
+	var best: float = 0.0
+	for pid: int in _scratch_teammate_ids:
+		if ctx.team_brain.get_slot(pid) != AIRoleSlots.Slot.FINISHER:
+			continue
+		# Already flagged — the normal pass scoring feeds it; nothing to wait for.
+		if ctx.team_brain.is_one_timer_ready(pid):
+			continue
+		var tm: SkaterNetworkState = ctx.snapshot.skater_states.get(pid)
+		if tm == null:
+			continue
+		var spot: Vector3 = tm.position
+		# Must be staging an OZ cross-seam (slot_anchor returns ZERO for FINISHER,
+		# so we read the teammate's live position, not a brain anchor).
+		if -ctx.own_goal_dir * spot.z <= GameRules.BLUE_LINE_Z:
+			continue
+		var dist: float = self_pos.distance_to(spot)
+		var pass_speed: float = AIActionScoring.pass_launch_speed(
+				dist, ctx.self_wrister_shot_speed)
+		var flight_t: float = clampf(dist / pass_speed, 0.0, PASS_LEAD_MAX_S)
+		var feed_goalie: Vector3 = _predict_goalie_at(ctx, flight_t, spot)
+		var feed_unsettled: float = _goalie_unsettled_at(ctx, flight_t, spot)
+		_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)
+		var feed: float = AIActionScoring.score_pass(
+				self_pos, spot, ctx.attacking_goal_pos, feed_goalie,
+				GameRules.NET_HALF_WIDTH, _scratch_opponents_pass,
+				goalie_now, pass_speed, feed_unsettled)
+		if feed > best:
+			best = feed
+	return best
 
 
 # Approximate puck-rest position when the carrier is at `body_pos`.
