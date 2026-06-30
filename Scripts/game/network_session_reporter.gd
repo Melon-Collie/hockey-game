@@ -23,7 +23,6 @@ func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool) 
 	# column so adding a metric never requires an ALTER TABLE. Mirrors how
 	# bug_reports stores its telemetry blob.
 	var body: Dictionary = {
-		"uuid": PlayerPrefs.player_uuid,
 		"steam_id": SteamManager.steam_id,
 		"player_name": PlayerPrefs.player_name,
 		"game_version": BuildInfo.VERSION,

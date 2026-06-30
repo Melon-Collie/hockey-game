@@ -17,7 +17,6 @@
 create table if not exists public.network_sessions (
     id             bigint generated always as identity primary key,
     created_at     timestamptz not null default now(),
-    uuid           text,
     steam_id       int8,
     player_name    text,
     game_version   text,
