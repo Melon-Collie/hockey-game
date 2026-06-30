@@ -49,6 +49,7 @@ var _share_stats_check: CheckButton = null
 var _self_beacon_mode_btn: OptionButton = null
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
+var _camera_mode_btn: OptionButton = null
 var _tilt_slider: HSlider = null
 var _tilt_label: Label = null
 var _fov_slider: HSlider = null
@@ -180,6 +181,7 @@ func _snapshot() -> Dictionary:
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
+		"camera_mode": PlayerPrefs.camera_mode,
 		"hud_scale": PlayerPrefs.hud_scale,
 		"share_gameplay_stats": PlayerPrefs.share_gameplay_stats,
 		"bindings": PlayerPrefs.bindings.duplicate(true),
@@ -222,6 +224,7 @@ func _read_controls() -> Dictionary:
 		"camera_tilt_deg": _tilt_slider.value,
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
+		"camera_mode": _camera_mode_btn.selected,
 		"hud_scale": _hud_scale_slider.value,
 		"share_gameplay_stats": _share_stats_check.button_pressed,
 		"bindings": _pending_bindings.duplicate(true),
@@ -655,6 +658,15 @@ func _build_game_tab() -> Control:
 	box.add_child(_section_spacer())
 	box.add_child(_section_header("Camera"))
 
+	_camera_mode_btn = OptionButton.new()
+	_camera_mode_btn.custom_minimum_size = Vector2(160, 40)
+	_camera_mode_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.CAMERA_MODE_LABELS.size():
+		_camera_mode_btn.add_item(PlayerPrefs.CAMERA_MODE_LABELS[i], i)
+	_camera_mode_btn.selected = PlayerPrefs.camera_mode
+	_camera_mode_btn.item_selected.connect(_on_camera_mode_selected)
+	box.add_child(_field_row("Mode", _camera_mode_btn))
+
 	_tilt_slider = HSlider.new()
 	_tilt_slider.min_value = PlayerPrefs.CAMERA_TILT_MIN
 	_tilt_slider.max_value = PlayerPrefs.CAMERA_TILT_MAX
@@ -1000,6 +1012,9 @@ func _on_cam_dist_changed(value: float) -> void:
 		_cam_dist_label.text = "%.2fx" % value
 	_update_apply_state()
 
+func _on_camera_mode_selected(_idx: int) -> void:
+	_update_apply_state()
+
 func _on_export_colors_pressed() -> void:
 	_export_user_file("res://data/team_colors.json", "user://team_colors.json", _export_status_label)
 
@@ -1178,6 +1193,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
+	PlayerPrefs.camera_mode = c.camera_mode
 	PlayerPrefs.hud_scale = c.hud_scale
 	PlayerPrefs.share_gameplay_stats = c.share_gameplay_stats
 	PlayerPrefs.bindings = (_pending_bindings as Dictionary).duplicate(true)
@@ -1272,6 +1288,7 @@ func _defaults() -> Dictionary:
 		"camera_tilt_deg": PlayerPrefs.CAMERA_TILT_DEFAULT,
 		"fov": 50.0,
 		"camera_distance": 1.0,
+		"camera_mode": PlayerPrefs.CAMERA_MODE_DYNAMIC,
 		"hud_scale": 1.0,
 		"share_gameplay_stats": true,
 		"bindings": PlayerPrefs.default_bindings.duplicate(true),
@@ -1341,6 +1358,8 @@ func _apply_values_to_controls(v: Dictionary) -> void:
 		_fov_slider.value = v.fov
 	if _cam_dist_slider != null:
 		_cam_dist_slider.value = v.camera_distance
+	if _camera_mode_btn != null:
+		_camera_mode_btn.selected = v.camera_mode
 	if _hud_scale_slider != null:
 		_hud_scale_slider.value = v.hud_scale
 	if _share_stats_check != null:

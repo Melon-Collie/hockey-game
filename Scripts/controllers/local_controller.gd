@@ -89,6 +89,13 @@ func set_local_team_id(team_id: int) -> void:
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	camera.set_goal_context(goal_0, goal_1, carrier_team_getter)
 
+# Forces the player-locked camera framing regardless of the user's camera-mode
+# pref. Used by the tutorial for the puckless movement steps so the camera sits
+# centered on the player instead of zooming out toward the stashed puck.
+func set_camera_force_locked(locked: bool) -> void:
+	if camera != null:
+		camera.force_locked = locked
+
 # Team 0 defends the +Z goal → attacks -Z. Team 1 defends -Z → attacks +Z.
 # See GameManager._assign_goals_to_teams.
 func get_attacking_goal_z() -> float:
