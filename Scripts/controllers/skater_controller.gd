@@ -194,17 +194,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var wrister_on_axis_blade_speed: float = 60.0
 @export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 # Absolute charge_distance (in meters of blade travel) below which the
-# wrister releases as a quick shot. Independent of max_wrister_charge_distance
-# so the snap-tap feel is the same across attribute spreads — a 0.15m drag
-# is a quick shot regardless of who's shooting. Above this, the wrister
-# lerps power between min and max based on charge ratio.
+# wrister releases as a quick shot. At or above it the release is a charged
+# wrister aimed along the drag — a HARD cutoff, no blend (the two shots are
+# distinct: a tap aims player→blade at fixed power, a wrister aims along the
+# drag at charged power). Independent of max_wrister_charge_distance so the
+# snap-tap feel is the same across attribute spreads — a 0.15m drag is a quick
+# shot regardless of who's shooting. Flat (not attribute-scaled).
 @export var quick_shot_threshold: float = 0.15
-# Upper end (meters of charge) of the tap→wrister blend band. Below
-# quick_shot_threshold the release is a pure tap; above this a pure charged
-# wrister; between, direction and power blend continuously so a tiny charge
-# difference never flips the shot categorically. Flat (not attribute-scaled),
-# like quick_shot_threshold.
-@export var quick_shot_blend_max: float = 0.30
 @export var quick_shot_elevation: float = 0.10
 @export var wrister_elevation_target_height: float = 0.90
 # Apex cap for elevated shots — puck can't rise more than this above the blade.
@@ -1264,7 +1260,6 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 	cfg.backhand_power_coefficient = backhand_power_coefficient
 	cfg.quick_shot_power = quick_shot_power
 	cfg.quick_shot_threshold = quick_shot_threshold
-	cfg.quick_shot_blend_max = quick_shot_blend_max
 	cfg.quick_shot_elevation = quick_shot_elevation
 	cfg.elevation_target_height = wrister_elevation_target_height
 	cfg.elevation_blade_height = 0.05

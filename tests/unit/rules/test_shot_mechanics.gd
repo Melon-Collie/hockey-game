@@ -10,7 +10,6 @@ func _wrister_cfg() -> ShotMechanics.WristerConfig:
 	cfg.backhand_power_coefficient = 0.75
 	cfg.quick_shot_power = 12.0
 	cfg.quick_shot_threshold = 0.1
-	cfg.quick_shot_blend_max = 0.3
 	cfg.quick_shot_elevation = 0.10
 	cfg.elevation_target_height = 0.90
 	cfg.elevation_blade_height = 0.05
@@ -130,26 +129,43 @@ func test_wrister_charged_uses_drag_direction_not_player_to_mouse() -> void:
 	assert_almost_eq(result.direction.z, -1.0, 0.05, "shot follows drag direction, not mouse position")
 	assert_almost_eq(result.direction.x, 0.0, 0.05, "shot does not veer toward mouse")
 
-func test_wrister_continuous_across_charge_band() -> void:
-	# No categorical tap↔wrister flip: power and direction vary continuously as
-	# charge sweeps across quick_shot_threshold and the blend band. Adjacent
-	# samples (0.01 m apart) must not jump — this is the property that stops a
-	# tiny client/host charge disagreement from redirecting the shot.
+func test_wrister_hard_binary_at_threshold() -> void:
+	# HARD BINARY (no blend): just below quick_shot_threshold is a tap — aimed
+	# player→blade (+X here) at quick_shot_power; just at/above is a charged
+	# wrister — aimed along the drag (-Z) at charged power. The two are distinct
+	# shots, so direction and power switch categorically at the threshold rather
+	# than blending. Mouse is +X, drag is -Z, so the aim axis itself flips.
+	var cfg := _wrister_cfg()                   # quick_shot_threshold = 0.1
+	var drag := Vector3(0, 0, -1)
+	var tap: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, false, 0.099, cfg, drag)         # just below threshold
+	var wrist: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, false, 0.1, cfg, drag)           # at threshold
+	# Tap aims toward the blade/mouse (+X); wrister aims along the drag (-Z).
+	assert_gt(tap.direction.x, 0.9, "below threshold: tap aims player→blade (+X)")
+	assert_almost_eq(wrist.direction.z, -1.0, 0.05, "at threshold: wrister aims along drag (-Z)")
+	assert_almost_eq(tap.power, cfg.quick_shot_power, 0.01, "tap fires fixed quick_shot_power")
+	# min_wrister_power (8) at near-zero charge ratio is below quick_shot_power (12).
+	assert_lt(wrist.power, tap.power, "charged wrister at min charge starts below quick power")
+
+
+func test_wrister_charged_direction_independent_of_body_position() -> void:
+	# Netcode-critical: a charged wrister's aim is the drag vector, with NO blend
+	# of the body-relative tap direction. So the same drag yields the same shot
+	# direction regardless of where the shooter's body / blade sit — which is what
+	# lets the host's re-derived shot match the client's predicted one.
 	var cfg := _wrister_cfg()
-	var drag := Vector3(0, 0, -1)               # dragged forward
-	var prev: ShotMechanics.ShotResult = null
-	var c: float = 0.0
-	while c <= 0.6:
-		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-			Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
-			false, false, c, cfg, drag)
-		if prev != null:
-			assert_lt(absf(r.power - prev.power), 1.0,
-				"power continuous across charge=%.3f" % c)
-			assert_lt(r.direction.distance_to(prev.direction), 0.15,
-				"direction continuous across charge=%.3f" % c)
-		prev = r
-		c += 0.01
+	var drag := Vector3(0, 0, -1)
+	var a: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, false, 1.5, cfg, drag)
+	var b: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3(3, 0, -2), Vector3(10, 0, 0), Vector3(-1.0, 0, 4),  # different body + blade
+		false, false, 1.5, cfg, drag)
+	assert_almost_eq(a.direction.x, b.direction.x, 0.001, "charged aim X independent of body")
+	assert_almost_eq(a.direction.z, b.direction.z, 0.001, "charged aim Z independent of body")
 
 func test_wrister_charged_falls_back_to_mouse_when_no_drag_direction() -> void:
 	# No drag direction recorded — should fall back to player→mouse aim.

@@ -19,8 +19,7 @@ class WristerConfig:
 	var max_wrister_charge_distance: float = 0.0
 	var backhand_power_coefficient: float = 0.0
 	var quick_shot_power: float = 0.0
-	var quick_shot_threshold: float = 0.0
-	var quick_shot_blend_max: float = 0.0       # upper end of tap→wrister blend band (m)
+	var quick_shot_threshold: float = 0.0       # charge (m) below which a release is a tap, at/above a charged wrister
 	var quick_shot_elevation: float = 0.0       # fixed Y for snap releases
 	var elevation_target_height: float = 0.0    # world Y to hit at the goal line
 	var elevation_blade_height: float = 0.0     # puck starting world Y
@@ -44,18 +43,24 @@ class SlapperConfig:
 	var toward_net_dot_threshold: float = 0.5
 	var away_from_net_y: float = 0.10
 
-# Wrister release. A tap (very short charge) and a charged wrister are blended
-# CONTINUOUSLY across the charge axis rather than switched at a hard threshold:
-#   - TAP aims player→blade (the blade tracks the cursor via ROM-clamped IK, so
-#     aim is accurate and can never point behind the player) at snap/pass power.
-#   - WRISTER aims along the drag (the swept blade direction) at charged power.
-# A smoothstep weight over [quick_shot_threshold, quick_shot_blend_max] blends
-# direction and power between them, with both endpoints matching at the seams.
-# This removes the categorical tap↔wrister flip: a sub-mm charge difference can
-# no longer redirect the puck (the dominant client/host shot-divergence and
-# "weird bounce" source, and the cause of charge-starved forehand shots veering
-# to the blade side). Backhand is detected by blade X sign in upper-body-local
-# space: positive X is a backhand for a left-handed player, negative for a righty.
+# Wrister release. HARD BINARY — a tap and a charged wrister are two distinct
+# shots split at a single charge threshold, with NO blend between them:
+#   - TAP (charge_distance < quick_shot_threshold): aims player→blade (the blade
+#     tracks the cursor via ROM-clamped IK, so aim is accurate and can never point
+#     behind the player) at the fixed quick/pass power.
+#   - WRISTER (charge_distance >= quick_shot_threshold): aims along the DRAG (the
+#     swept cursor direction) at charged power. The drag direction IS the aim —
+#     this is the defining mechanic of the shot, so it is never diluted.
+# There is intentionally no blend band: dragging to aim is the core of the game,
+# and the old smoothstep seam mixed the body-relative tap direction into charged
+# shots, which both muddied the feel and — because tap_dir depends on the
+# predicted body position — was a client/host divergence source. Netcode upshot:
+# a charged wrister's aim (the drag vector) is body-independent and identical on
+# client and host, so any release both machines classify as charged is fully
+# deterministic; only a release whose charge lands right on the threshold can be
+# classified differently across machines. Backhand is detected by blade X sign in
+# upper-body-local space: positive X is a backhand for a left-handed player,
+# negative for a righty.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,
@@ -66,54 +71,40 @@ static func release_wrister(
 		cfg: WristerConfig,
 		charge_direction: Vector3 = Vector3.ZERO) -> ShotResult:
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
-	var charge_t: float = clampf(charge_distance / cfg.max_wrister_charge_distance, 0.0, 1.0)
 	var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
 
-	# TAP component — aim player→blade, snap/pass power.
-	var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)
-	var tap_dir: Vector3 = (blade_xz - player_xz).normalized()
-	if tap_dir.length_squared() < 0.0001:
-		tap_dir = (target - player_xz).normalized()
-	var tap_power: float = cfg.quick_shot_power
+	if charge_distance < cfg.quick_shot_threshold:
+		# TAP — aim player→blade at fixed quick/pass power.
+		var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)
+		var tap_dir: Vector3 = (blade_xz - player_xz).normalized()
+		if tap_dir.length_squared() < 0.0001:
+			tap_dir = (target - player_xz).normalized()
+		var tap_y: float = cfg.quick_shot_elevation if is_elevated else 0.0
+		return ShotResult.make(
+				Vector3(tap_dir.x, tap_y, tap_dir.z).normalized(),
+				cfg.quick_shot_power)
 
-	# WRISTER component — aim along the drag, power scaling with charge. Falls back
-	# to player→mouse only when no drag direction was recorded.
+	# WRISTER — aim along the drag, power scaling with charge. Falls back to
+	# player→mouse only when no drag direction was recorded.
+	var charge_t: float = clampf(charge_distance / cfg.max_wrister_charge_distance, 0.0, 1.0)
 	var wrister_dir: Vector3
 	if charge_direction.length_squared() > 0.0001:
 		wrister_dir = Vector3(charge_direction.x, 0.0, charge_direction.z).normalized()
 	else:
 		wrister_dir = (target - player_xz).normalized()
-	var wrister_power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, charge_t)
+	var power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, charge_t)
 	if is_backhand:
-		wrister_power *= cfg.backhand_power_coefficient
-
-	# Continuous blend: 0 below quick_shot_threshold (pure tap), 1 above
-	# quick_shot_blend_max (pure wrister), smooth (C1) between.
-	var w: float = smoothstep(cfg.quick_shot_threshold, cfg.quick_shot_blend_max, charge_distance)
-	var dir_xz: Vector3 = _blend_dir_xz(tap_dir, wrister_dir, w)
-	var power: float = lerpf(tap_power, wrister_power, w)
+		power *= cfg.backhand_power_coefficient
 
 	var y: float = 0.0
 	if is_elevated:
-		var tap_y: float = cfg.quick_shot_elevation
-		var wrister_y: float = _elevation_y(player_pos, wrister_dir, wrister_power,
+		y = _elevation_y(player_pos, wrister_dir, power,
 				cfg.elevation_target_height, cfg.elevation_blade_height, cfg.elevation_gravity,
 				cfg.elevation_goal_line_z, cfg.attacking_goal_z, cfg.max_apex_above_blade,
 				cfg.away_from_net_y, cfg.toward_net_dot_threshold)
-		y = lerpf(tap_y, wrister_y, w)
 	return ShotResult.make(
-			Vector3(dir_xz.x, y, dir_xz.z).normalized(),
+			Vector3(wrister_dir.x, y, wrister_dir.z).normalized(),
 			power)
-
-# Interpolate between two XZ unit directions along the shorter arc by eased t.
-# Endpoints return exactly a / b so the blend is seamless at w = 0 and w = 1.
-static func _blend_dir_xz(a: Vector3, b: Vector3, t: float) -> Vector3:
-	if t <= 0.0:
-		return a
-	if t >= 1.0:
-		return b
-	var ang: float = lerp_angle(atan2(a.x, a.z), atan2(b.x, b.z), t)
-	return Vector3(sin(ang), 0.0, cos(ang))
 
 # Slapper release — power scales linearly with charge time.
 #
