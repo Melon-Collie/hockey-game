@@ -36,6 +36,13 @@ const MASK_SKATER: int = LAYER_WALLS | LAYER_SKATER_BODIES   # goalie bodies/net
 const PORT: int = 7777
 const INPUT_RATE: int = 60
 const STATE_RATE: int = 120
+# Rate at which world-state snapshots are written to the .mreplay file, well
+# below STATE_RATE: the replay viewer interpolates between snapshots (see
+# ReplayPlaybackEngine), so recording every 120 Hz broadcast is ~4x redundant on
+# disk. 30 Hz keeps playback smooth at roughly a quarter the file size. Only the
+# steady PLAYING stream is throttled — phase-transition keyframes and the goal
+# moment are always recorded (GameManager._record_world_state_to_file).
+const REPLAY_FILE_RATE: int = 30
 # Client-side render delay when interpolating buffered snapshots. Shared default
 # for RemoteController / PuckController / GoalieController; each controller
 # still exposes it as @export so individual actors can be tuned independently.

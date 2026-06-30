@@ -177,6 +177,10 @@ var _achievements: AchievementService = null
 # once the registry has stabilized (post-_push_lobby_assignments_to_clients
 # on host, post-sync_existing_players on clients) and closes on scene exit.
 var _replay_file_writer: ReplayFileWriter = null
+# host_ts of the last world-state frame written to the .mreplay file. Drives the
+# REPLAY_FILE_RATE throttle in _record_world_state_to_file. -INF so the first
+# frame of each recording always writes; reset on writer open.
+var _last_file_frame_ts: float = -INF
 # Tracks the phase of the most recent .mreplay frame so movement-locked
 # phases (GOAL_SCORED, FACEOFF_PREP, END_OF_PERIOD, GAME_OVER) record their
 # first transition frame and skip the duplicate-static frames that follow.
@@ -1509,6 +1513,7 @@ func _open_replay_file_writer() -> void:
 	if not writer.open(path, _build_replay_header()):
 		return
 	_replay_file_writer = writer
+	_last_file_frame_ts = -INF
 
 
 func _close_replay_file_writer() -> void:
@@ -1596,6 +1601,31 @@ func _build_replay_footer() -> Dictionary:
 	if _state_machine != null:
 		footer["final_score_home"] = _state_machine.scores[0]
 		footer["final_score_away"] = _state_machine.scores[1]
+		# Period-by-period scores, same shape the scoreboard / career screen use:
+		# [[home p1, p2, …], [away p1, p2, …]]. Lets the local replay browser draw
+		# the period breakdown without any backend.
+		footer["period_scores"] = _state_machine.period_scores
+	# Per-player box score, keyed by peer_id so the browser can join it to the
+	# header roster for names. Every peer has all players' stats (the live
+	# scoreboard renders from the same broadcast), so this is complete on any
+	# recording peer. Mirrors career_stats columns minus the career-only fields.
+	var players: Array[Dictionary] = []
+	if _registry != null:
+		for peer_id: int in _registry.all():
+			var r: PlayerRecord = _registry.get_record(peer_id)
+			if r == null or r.stats == null:
+				continue
+			players.append({
+				"peer_id": peer_id,
+				"team_id": r.team.team_id if r.team != null else 0,
+				"goals": r.stats.goals,
+				"assists": r.stats.assists,
+				"shots_on_goal": r.stats.shots_on_goal,
+				"hits": r.stats.hits,
+				"shots_blocked": r.stats.shots_blocked,
+				"toi_seconds": roundi(r.stats.toi_seconds),
+			})
+	footer["players"] = players
 	footer["ended_at"] = Time.get_unix_time_from_system()
 	return footer
 
@@ -2433,14 +2463,10 @@ func _on_world_state_received(data: PackedByteArray) -> void:
 	if _recorder != null and not NetworkManager.is_replay_mode() \
 			and not _is_celebration_phase():
 		_recorder.record_frame(data, host_ts)
-	# Tee the broadcast into the local .mreplay file. Use the host_ts encoded
-	# in the packet so timestamps align across host + client recordings —
-	# local_time() differs per peer. Same dead-puck + replay-mode gate as
-	# the host's get_world_state path.
-	if _replay_file_writer != null and _should_record_to_file():
-		_replay_file_writer.enqueue_frame(host_ts, data)
-		if _state_machine != null:
-			_last_recorded_phase = _state_machine.current_phase
+	# Tee the broadcast into the local .mreplay file (throttled to
+	# REPLAY_FILE_RATE). Use the host_ts encoded in the packet so timestamps align
+	# across host + client recordings — local_time() differs per peer.
+	_record_world_state_to_file(host_ts, data)
 
 
 func _on_stats_received(data: Array) -> void:
@@ -3172,14 +3198,36 @@ func get_world_state() -> PackedByteArray:
 	if _recorder != null and not NetworkManager.is_replay_mode() \
 			and not _is_celebration_phase():
 		_recorder.record_frame(state, ts)
-	# File writer skips dead-puck phase ticks past the first one — see
-	# _should_record_to_file. The first frame on each phase transition
-	# captures the puck-in-net moment / faceoff snap / etc.
-	if _replay_file_writer != null and _should_record_to_file():
-		_replay_file_writer.enqueue_frame(ts, state)
-		if _state_machine != null:
-			_last_recorded_phase = _state_machine.current_phase
+	# File writer throttles to REPLAY_FILE_RATE and skips dead-puck phase ticks
+	# past the first one — see _record_world_state_to_file / _should_record_to_file.
+	# The first frame on each phase transition captures the puck-in-net moment /
+	# faceoff snap / etc.
+	_record_world_state_to_file(ts, state)
 	return state
+
+
+# Tee a broadcast world-state frame into the .mreplay file, throttled to
+# REPLAY_FILE_RATE. The viewer interpolates between snapshots, so the steady
+# PLAYING stream is decimated from STATE_RATE (120 Hz) to ~30 Hz — a ~4x file-
+# size cut at no perceptible playback cost. Phase-transition frames bypass the
+# throttle (the first frame of a new phase is a keyframe — faceoff snap, the
+# resume after a movement-locked gap — and must never be dropped). The goal
+# moment is recorded full-rate via force_record, which calls enqueue_frame
+# directly rather than this helper. Mirrors the old inline record block: also
+# advances _last_recorded_phase so _should_record_to_file's "first frame of a
+# locked phase only" gate keeps working.
+func _record_world_state_to_file(host_ts: float, data: PackedByteArray) -> void:
+	if _replay_file_writer == null or not _should_record_to_file():
+		return
+	var phase_changed: bool = _state_machine != null \
+			and _state_machine.current_phase != _last_recorded_phase
+	if not phase_changed \
+			and host_ts - _last_file_frame_ts < 1.0 / float(Constants.REPLAY_FILE_RATE):
+		return
+	_replay_file_writer.enqueue_frame(host_ts, data)
+	_last_file_frame_ts = host_ts
+	if _state_machine != null:
+		_last_recorded_phase = _state_machine.current_phase
 
 
 func _should_record_to_file() -> bool:
