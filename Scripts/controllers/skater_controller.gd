@@ -966,7 +966,21 @@ func _enter_slapper_charge(input: InputState) -> void:
 		input.mouse_world_pos.z - skater.global_position.z)
 	_pose.facing = to_mouse.normalized() if to_mouse.length() > move_deadzone else _pose.facing
 	skater.set_facing(_pose.facing)
-	# Lock aim direction from the actual blade-side release point → mouse.
+	# Square the stance BEFORE locking the aim. The slapper holds a squared upper
+	# body (zero twist/lean), so the locked direction must be measured from THAT
+	# pose. Measuring first (as it did) built the blade world point through the
+	# residual skating twist/lean that's zeroed one line later — aiming from a
+	# pose that lasts zero frames, and worse, twist/lean are only loosely synced
+	# (lean isn't networked; twist re-snaps only at reconcile), so client and host
+	# baked different transient poses into the lock and diverged. From the squared
+	# stance the lock depends only on facing + body position + the fixed blade
+	# offset, which both machines agree on.
+	_pose.reset_lean_and_lag()
+	skater.set_upper_body_rotation(0.0)
+	skater.set_upper_body_lean(0.0)
+	skater.set_lower_body_lean(0.0, 0.0)
+	skater.set_lower_body_lag(0.0)
+	# Lock aim direction from the squared blade-side release point → mouse.
 	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
 	var blade_local := Vector3(
 		skater.shoulder.position.x + blade_side_sign * slapper_blade_x,
@@ -978,11 +992,6 @@ func _enter_slapper_charge(input: InputState) -> void:
 		input.mouse_world_pos.z - blade_world.z)
 	_sm.locked_slapper_dir = to_mouse_from_blade.normalized() if to_mouse_from_blade.length() > move_deadzone else _pose.facing
 	skater.slapper_aim_dir = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
-	_pose.reset_lean_and_lag()
-	skater.set_upper_body_rotation(0.0)
-	skater.set_upper_body_lean(0.0)
-	skater.set_lower_body_lean(0.0, 0.0)
-	skater.set_lower_body_lag(0.0)
 	if has_puck:
 		skater.set_slapper_mode(true)
 		# Pin the carried puck to the slapper-zone ice spot for the duration of
@@ -1003,6 +1012,12 @@ func _enter_slapper_charge(input: InputState) -> void:
 		skater.set_charge_ring_visible(true)
 		skater.set_slapshot_arrow(true, slapper_zone_offset_x, slapper_zone_offset_z, slapper_zone_radius)
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
+
+# The slapper aim locked at press (XZ as Vector2). Persists from _enter_slapper_charge
+# until the next charge, so the host can read its OWN replayed value to fire a remote
+# player's one-timer authoritatively instead of trusting the client-sent direction.
+func get_locked_slapper_dir() -> Vector2:
+	return _sm.locked_slapper_dir
 
 func _get_charge_direction() -> Vector3:
 	# prev_blade_dir is the screen-space cursor drag direction packed
@@ -1134,8 +1149,8 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	var result := ShotMechanics.release_slapper(
 			blade_world, input.mouse_world_pos,
 			_is_elevated, cfg.max_slapper_charge_time, cfg, locked_dir_3d)
-	var proximity: float = clampf(1.0 - dist / slapper_zone_radius, 0.0, 1.0)
-	result.power *= 1.0 + one_timer_center_power_bonus * (2.0 * proximity - 1.0)
+	result.power = ShotReleaseRules.one_timer_power(
+			result.power, one_timer_center_power_bonus, zone_xz, puck_xz, slapper_zone_radius)
 	if not is_replaying:
 		one_timer_release_requested.emit(result.direction, result.power)
 	# Same as _release_slapper — hide the HUD as soon as the shot fires so it
