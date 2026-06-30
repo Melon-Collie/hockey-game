@@ -1230,13 +1230,12 @@ func _on_apply_pressed() -> void:
 	_apply_btn.disabled = true
 	if display_changed:
 		_show_display_revert_dialog(prev_mode, prev_res, prev_mon)
-	close_requested.emit()
 
 # Spawns a 15-second "Keep these display settings?" confirmation after a window
-# mode / resolution / monitor change. Lives at the scene-tree root so it
-# outlives the (closing) Options overlay; on timeout or "Revert" it restores the
-# prior display values, re-applies, and resyncs the panel so a later reopen
-# doesn't show stale settings.
+# mode / resolution / monitor change. Lives at the scene-tree root so it stays
+# reachable regardless of the Options overlay; on timeout or "Revert" it restores
+# the prior display values, re-applies, and resyncs the panel so the still-open
+# (or later reopened) panel doesn't show stale settings.
 func _show_display_revert_dialog(prev_mode: int, prev_res: Vector2i, prev_mon: int) -> void:
 	var dialog := DisplayRevertDialog.new()
 	var revert := func() -> void:
