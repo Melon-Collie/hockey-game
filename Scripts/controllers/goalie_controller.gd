@@ -721,6 +721,36 @@ func apply_skill_profile(profile: GoalieSkillProfile) -> void:
 func set_skater_getter(getter: Callable) -> void:
 	_skater_getter = getter
 
+# Snap the goalie into a neutral STANDING pose in a single apply (t = 1.0).
+# The tutorial's stationary "beat the goalie" drill freezes the controller
+# (physics + process off) so the AI never ticks — but that also means the pose
+# builder never runs, and the goalie holds the scene-default pose with its pads
+# together, closing the five-hole the drill tells the player to shoot at. Call
+# this after disabling processing so the static goalie reads as a proper upright
+# goalie: top corners open and a five-hole between the pads.
+func snap_to_standing_pose() -> void:
+	_sm.reset()
+	_five_hole_openness = 0.0
+	_pose_inputs.state = State.STANDING
+	_pose_inputs.five_hole_openness = 0.0
+	_pose_inputs.reading_slapper_tell = false
+	_pose_inputs.reacting_to_shot = false
+	_pose_inputs.shot_is_elevated = false
+	_pose_inputs.current_x = _current_x
+	_pose_inputs.goalie_z = goalie.global_position.z
+	_pose_inputs.direction_sign = _direction_sign
+	_pose_inputs.slide_velocity_x = 0.0
+	_pose_inputs.slide_dir = 0.0
+	_pose_inputs.arm_reaction_pending = false
+	_pose_inputs.puck_position = puck.global_position
+	_pose_inputs.puck_velocity_est = Vector3.ZERO
+	_pose_inputs.blade_intent_active = false
+	_pose_inputs.lunge_progress = 0.0
+	_pose_inputs.paddle_sweep_active = false
+	_pose_inputs.standing_sweep_active = false
+	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
+	goalie.apply_body_config(config, 1.0)
+
 # Push export tuning into each collaborator. Called from setup() and any time
 # exports change in the editor (only at game start in practice — runtime tuning
 # is the user's responsibility for now).

@@ -3289,6 +3289,10 @@ func spawn_tutorial_goalie(live: bool = false) -> void:
 	else:
 		_tutorial_goalie_controller.set_physics_process(false)
 		_tutorial_goalie_controller.set_process(false)
+		# Frozen AI never ticks the pose builder, so force the upright stance
+		# once — otherwise the goalie holds the scene-default pose with its pads
+		# together, hiding the five-hole the drill asks the player to shoot at.
+		_tutorial_goalie_controller.snap_to_standing_pose()
 	if teams.size() > 1:
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 		_tutorial_goalie.apply_uniform(colors)
