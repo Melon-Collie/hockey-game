@@ -2584,8 +2584,10 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
 	# Live achievement: only the local player's own deliveries count, and this
-	# signal fires on the deliverer's machine, so gate on local peer.
-	if _achievements != null and hitter_peer_id == NetworkManager.local_peer_id():
+	# signal fires on the deliverer's machine, so gate on local peer. Excluded in
+	# free play / drills (no achievements there — _achievements_active).
+	if _achievements != null and _achievements_active() \
+			and hitter_peer_id == NetworkManager.local_peer_id():
 		_achievements.on_local_hit(impulse_magnitude)
 
 
@@ -2635,10 +2637,6 @@ func _on_game_over() -> void:
 	if _state_machine == null or _registry == null or _career_reporter == null:
 		return
 	var local: PlayerRecord = _registry.get_local()
-	# Single-game + live-derived achievements need only this game's stats, so they
-	# unlock in any mode (incl. offline vs bots), before the career gates below.
-	# Career-threshold achievements are backed by Steam User Stats and handled in
-	# the online block below. SteamManager no-ops when Steam is absent.
 	var team_id: int = -1
 	var gf: int = 0
 	var ga: int = 0
@@ -2651,22 +2649,24 @@ func _on_game_over() -> void:
 			outcome = "win"
 		elif gf < ga:
 			outcome = "loss"
-		if _achievements != null:
-			_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
-	# Offline + tutorial don't record career games (no game_id, tutorial is
-	# practice); is_offline_mode covers both (start_tutorial calls start_offline).
+		# Achievements + Steam career stats count any real match — online OR a
+		# configured "Play vs Bots" game — but never free play or tutorial/drill
+		# practice (see _achievements_active). Steam Stats are the player's own
+		# account data, so they're NOT gated on share_gameplay_stats or online;
+		# increment first, then evaluate against the updated totals so a threshold
+		# unlocks on the game that crosses it. No Supabase dependency.
+		if _achievements_active():
+			if _achievements != null:
+				_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
+			if _stat_recorder != null:
+				_stat_recorder.record_game(local.stats, outcome)
+				if _achievements != null:
+					_achievements.evaluate_career(_stat_recorder.totals())
+	# Supabase career row + network telemetry: online, shared-stats games only.
+	# Offline (Play vs Bots + free play) and tutorial don't upload — no game_id,
+	# backend cost, and no cross-machine opponent pool worth ranking.
 	if NetworkManager.is_offline_mode:
 		return
-	# Steam career stats + their achievements. NOT gated on share_gameplay_stats —
-	# Steam Stats are the player's own data on their own account, and gating them on
-	# the Supabase-upload opt-out would re-couple achievements to a choice that's
-	# only about our backend. Increment first, then evaluate against the updated
-	# totals so a threshold unlocks on the game that crosses it. No Supabase
-	# dependency: this works even if the backend is down/paused.
-	if local != null and local.team != null and _stat_recorder != null:
-		_stat_recorder.record_game(local.stats, outcome)
-		if _achievements != null:
-			_achievements.evaluate_career(_stat_recorder.totals())
 	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
 	# The Career screen's history reads from that backend data, so it stays empty by
 	# the player's choice (see PlayerPrefs.share_gameplay_stats). Local replays and
@@ -2683,6 +2683,13 @@ func _on_game_over() -> void:
 		return
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
+
+
+# True for a real match that should award achievements + Steam career stats: any
+# online or "Play vs Bots" game, but never free play (a casual endless sandbox)
+# or tutorial / penalty-drill practice.
+func _achievements_active() -> bool:
+	return not NetworkManager.is_free_play_mode and not NetworkManager.is_drill_mode()
 
 
 # Window-close hook — closes the replay file cleanly when the user clicks
