@@ -396,3 +396,231 @@ func test_wants_direct_aim_false_for_carry_and_pass() -> void:
 	assert_false(sm.wants_direct_aim(), "plain carry keeps the second-stage lerp")
 	sm._intended_action = Agent.State.PASS_PRESSED
 	assert_false(sm.wants_direct_aim(), "pass pre-aim keeps the softening lerp")
+
+
+# ── Slice 5: press-state handlers + transitions ──────────────────────────────
+# The fire states (SHOOT_PRESSED / QUICK_SHOT_PRESSED / ONE_TIMER_PRESSED /
+# PASS_PRESSED) are entered by the carrier from CARRY, but once entered they run
+# to completion off pre-set fields — no carrier needed. They read only the
+# snapshot + this bot's identity, and every helper they touch (steering,
+# shot-aim, goalie prediction) has a headless fallback (empty per-team cache →
+# live partition, null goalie → aim at the net). So they're drivable through
+# dispatch() directly, which also exercises the press-state throttle bypass.
+#
+# have_puck is read from `snapshot.real_puck_carrier_peer_id == _peer_id`
+# (proprioception), NOT the reaction-delayed `puck_state.carrier_peer_id`.
+
+func _self_snap(self_pos: Vector3, have_puck: bool) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = self_pos
+	var owner: int = SELF_ID if have_puck else -1
+	s.puck_state.carrier_peer_id = owner
+	s.real_puck_carrier_peer_id = owner
+	_add_skater(s, SELF_ID, self_pos)
+	return s
+
+
+# ── QUICK_SHOT_PRESSED (one-tick release) ────────────────────────────────────
+
+func test_quick_shot_fires_and_returns_to_carry() -> void:
+	sm._state = Agent.State.QUICK_SHOT_PRESSED
+	var i := InputState.new()
+	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
+	assert_true(i.shoot_pressed, "quick shot fires the press edge")
+	assert_true(i.shoot_held, "quick shot holds so the controller reads a release next tick")
+	assert_eq(sm.get_state(), Agent.State.CARRY, "quick shot is a one-tick press")
+
+
+func test_quick_shot_without_puck_routes_to_lost_state() -> void:
+	sm._state = Agent.State.QUICK_SHOT_PRESSED
+	var s := _self_snap(Vector3.ZERO, false)
+	sm.dispatch(InputState.new(), s)
+	assert_ne(sm.get_state(), Agent.State.QUICK_SHOT_PRESSED, "no puck leaves the fire state")
+	assert_eq(sm.get_state(), sm._post_puck_lost_state(s), "routes to the puck-lost state")
+
+
+func test_press_state_ignores_dispatch_throttle() -> void:
+	# A non-press state with a pending skip counter would reuse its cached
+	# decision; a press state must always dispatch full (charge timing is
+	# tick-sensitive).
+	sm._state = Agent.State.QUICK_SHOT_PRESSED
+	sm._dispatch_skip_counter = 5
+	var i := InputState.new()
+	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
+	assert_true(i.shoot_pressed, "press states are never throttled")
+	assert_eq(sm.get_state(), Agent.State.CARRY)
+
+
+# ── SHOOT_PRESSED (multi-tick wrister charge) ────────────────────────────────
+
+func test_shoot_pressed_charges_then_releases_into_carry() -> void:
+	sm._state = Agent.State.SHOOT_PRESSED
+	var s := _self_snap(Vector3.ZERO, true)
+	# Tick 0 fires the shoot_pressed edge and begins holding the charge.
+	var i0 := InputState.new()
+	sm.dispatch(i0, s)
+	assert_true(i0.shoot_pressed, "tick 0 fires the shoot_pressed edge")
+	assert_true(i0.shoot_held, "tick 0 holds the charge")
+	assert_eq(sm.get_state(), Agent.State.SHOOT_PRESSED, "still charging after tick 0")
+	# The edge is a one-tick event — later charge ticks don't re-press.
+	var i1 := InputState.new()
+	sm.dispatch(i1, s)
+	assert_false(i1.shoot_pressed, "shoot_pressed is a tick-0-only edge")
+	assert_true(i1.shoot_held, "still holding the charge")
+	# Drive to release: shoot_held drops on the final tick and we return to CARRY.
+	var released := false
+	for _n in range(Agent.BOT_WRISTER_CHARGE_TICKS + 2):
+		var i := InputState.new()
+		sm.dispatch(i, s)
+		if sm.get_state() == Agent.State.CARRY:
+			assert_false(i.shoot_held, "release tick drops shoot_held for the wrister")
+			released = true
+			break
+		assert_true(i.shoot_held, "held high through the whole charge")
+	assert_true(released, "the charge releases into CARRY within the charge budget")
+
+
+func test_shoot_pressed_lost_puck_bails() -> void:
+	sm._state = Agent.State.SHOOT_PRESSED
+	var s := _self_snap(Vector3.ZERO, true)
+	sm.dispatch(InputState.new(), s)  # tick 0 → charge begins
+	assert_eq(sm.get_state(), Agent.State.SHOOT_PRESSED)
+	# Puck stripped mid-charge.
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	sm.dispatch(InputState.new(), s)
+	assert_ne(sm.get_state(), Agent.State.SHOOT_PRESSED, "lost puck bails out of the charge")
+	assert_eq(sm.get_state(), sm._post_puck_lost_state(s))
+
+
+func test_shoot_pressed_stagger_cancels_via_block() -> void:
+	# A body check mid-charge (stagger_timer set) cancels the wrister rather
+	# than flailing it through the hit. Cancel is via block_held, not a release.
+	sm._state = Agent.State.SHOOT_PRESSED
+	var s := _self_snap(Vector3.ZERO, true)
+	sm.dispatch(InputState.new(), s)  # tick 0 (bail only fires once charge_tick > 0)
+	s.skater_states[SELF_ID].stagger_timer = 0.5
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_eq(sm.get_state(), Agent.State.CARRY, "a check mid-charge cancels the wrister")
+	assert_true(i.block_held, "cancel routes through block_held, not a shot release")
+
+
+func test_shoot_pressed_front_pressure_cancels_via_block() -> void:
+	# An opponent closing from the front (toward the attacking goal) within the
+	# bail radius cancels the windup. Team 0 attacks −Z.
+	sm._state = Agent.State.SHOOT_PRESSED
+	var s := _self_snap(Vector3.ZERO, true)
+	sm.dispatch(InputState.new(), s)  # tick 0
+	_add_skater(s, OPP_ID, Vector3(0, 0, -1))  # 1 m ahead, inside BOT_WRISTER_BAIL_RADIUS_M
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_eq(sm.get_state(), Agent.State.CARRY, "front pressure cancels the windup")
+	assert_true(i.block_held)
+
+
+func test_shoot_pressed_ignores_rear_pressure() -> void:
+	# The bail is forward-only: a backchecker behind the shooter (toward our own
+	# net, +Z for team 0) can't disrupt the windup and must not cancel a clean shot.
+	sm._state = Agent.State.SHOOT_PRESSED
+	var s := _self_snap(Vector3.ZERO, true)
+	sm.dispatch(InputState.new(), s)  # tick 0
+	_add_skater(s, OPP_ID, Vector3(0, 0, 1))  # 1 m behind
+	sm.dispatch(InputState.new(), s)
+	assert_eq(sm.get_state(), Agent.State.SHOOT_PRESSED, "rear pressure does not cancel the charge")
+
+
+# ── ONE_TIMER_PRESSED (off-puck, fire on contact) ────────────────────────────
+
+func test_one_timer_holds_until_puck_arrives() -> void:
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var s := _self_snap(Vector3.ZERO, false)  # puck not here yet
+	var i0 := InputState.new()
+	sm.dispatch(i0, s)
+	assert_true(i0.shoot_pressed, "tick 0 fires the press edge")
+	assert_true(i0.shoot_held, "holds the charge while waiting for the puck")
+	assert_eq(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "keeps waiting off-puck")
+	# Puck contacts the blade → release fires.
+	s.real_puck_carrier_peer_id = SELF_ID
+	var i1 := InputState.new()
+	sm.dispatch(i1, s)
+	assert_false(i1.shoot_held, "release drops shoot_held on contact")
+	assert_eq(sm.get_state(), Agent.State.CARRY)
+
+
+func test_one_timer_safety_bail_after_timeout() -> void:
+	# If the puck never arrives within the press budget, release with no puck
+	# (no shot fires) and drop to the puck-lost state.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	sm._intent_max_wait_ticks = 2
+	var s := _self_snap(Vector3.ZERO, false)
+	var bailed := false
+	for _n in range(5):
+		var i := InputState.new()
+		sm.dispatch(i, s)
+		if sm.get_state() != Agent.State.ONE_TIMER_PRESSED:
+			assert_false(i.shoot_held, "timeout releases without holding")
+			assert_eq(sm.get_state(), sm._post_puck_lost_state(s))
+			bailed = true
+			break
+	assert_true(bailed, "the press times out and bails")
+
+
+func test_one_timer_seeks_moving_anchor() -> void:
+	# Mode-A reception sets a net-forward anchor; the bot skates to it while
+	# holding the shot (vs the FINISHER fast path, which brakes in place at INF).
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	sm._one_timer_anchor = Vector3(5, 0, 0)  # far to +X
+	var i := InputState.new()
+	sm.dispatch(i, _self_snap(Vector3.ZERO, false))
+	assert_gt(i.move_vector.x, 0.0, "seeks the moving one-timer anchor")
+
+
+# ── PASS_PRESSED ─────────────────────────────────────────────────────────────
+
+func test_pass_pressed_quick_fires_and_clears_target() -> void:
+	sm._state = Agent.State.PASS_PRESSED
+	sm._pass_should_charge = false
+	sm._pass_target_peer_id = TEAMMATE_ID
+	var s := _self_snap(Vector3.ZERO, true)
+	_add_skater(s, TEAMMATE_ID, Vector3(3, 0, 0))
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_true(i.shoot_pressed, "quick pass fires the edge")
+	assert_true(i.shoot_held)
+	assert_eq(sm.get_state(), Agent.State.CARRY, "quick pass is a one-tick press")
+	assert_eq(sm._pass_target_peer_id, -1, "quick pass clears its target for the next pick")
+
+
+func test_pass_pressed_lost_puck_bails_and_clears() -> void:
+	sm._state = Agent.State.PASS_PRESSED
+	sm._pass_should_charge = true
+	sm._pass_should_saucer = true
+	sm._pass_target_peer_id = TEAMMATE_ID
+	var s := _self_snap(Vector3.ZERO, false)  # no puck
+	sm.dispatch(InputState.new(), s)
+	assert_ne(sm.get_state(), Agent.State.PASS_PRESSED, "lost puck bails")
+	assert_eq(sm.get_state(), sm._post_puck_lost_state(s))
+	assert_eq(sm._pass_target_peer_id, -1, "bail clears the stale pass target")
+	assert_false(sm._pass_should_charge, "bail clears the charge flag")
+	assert_false(sm._pass_should_saucer, "bail clears the saucer flag")
+
+
+func test_pass_pressed_charged_releases_after_windup() -> void:
+	sm._state = Agent.State.PASS_PRESSED
+	sm._pass_should_charge = true
+	sm._pass_target_peer_id = TEAMMATE_ID
+	var s := _self_snap(Vector3.ZERO, true)
+	_add_skater(s, TEAMMATE_ID, Vector3(8, 0, 0))
+	var released := false
+	for _n in range(Agent.BOT_WRISTER_CHARGE_TICKS + 2):
+		var i := InputState.new()
+		sm.dispatch(i, s)
+		if sm.get_state() == Agent.State.CARRY:
+			assert_false(i.shoot_held, "charged pass releases by dropping shoot_held")
+			released = true
+			break
+		assert_true(i.shoot_held, "held high through the charge")
+	assert_true(released, "the charged pass releases within the charge budget")
+	assert_eq(sm._pass_target_peer_id, -1, "release clears the pass target")
