@@ -1032,6 +1032,43 @@ func apply_local_attributes(attrs: PlayerAttributes) -> void:
 	_peer_attributes[1] = attrs
 	local_attributes_changed.emit(attrs)
 
+
+# Lobby-time build change. Distinct from apply_local_attributes (free-play live
+# re-apply): here we're in the pre-match lobby, no skater exists yet, so this
+# only updates the value the host spawns from at game start. We stamp the local
+# peer's own entry (host = 1) so the local spawn path reads it directly; a
+# client also forwards the build to the host, which re-validates the point-buy
+# budget before storing it as authority. No live re-apply, no reconcile.
+func update_lobby_attributes(attrs: PlayerAttributes) -> void:
+	if attrs == null:
+		return
+	_peer_attributes[local_peer_id()] = attrs
+	if not is_host:
+		request_update_attributes.rpc_id(1, attrs.speed, attrs.agility, attrs.hands,
+				attrs.size, attrs.physical, attrs.shot)
+
+
+# Client → host: update the sender's locked build from the lobby. The host
+# re-validates the point-buy budget (a modified client can send an over-budget
+# spread) and ignores a peer that never completed the join handshake.
+#
+# No match-in-progress gate: _peer_attributes is consulted only at spawn, so a
+# stray mid-match edit can't perturb a live simulation, and a mid-match
+# reconnect restores the original build via set_peer_attributes regardless.
+# (game_initiated is unusable as a gate here — it's set true at start_host /
+# start_client_lobby, i.e. throughout the pre-match lobby, not just in-game.)
+@rpc("any_peer", "reliable")
+func request_update_attributes(attr_speed: int, attr_agility: int, attr_hands: int,
+		attr_size: int, attr_physical: int, attr_shot: int) -> void:
+	if not is_host:
+		return
+	var sender_id: int = multiplayer.get_remote_sender_id()
+	if not _peer_names.has(sender_id):
+		return
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
+			if PlayerAttributes.is_within_budget(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
+			else PlayerAttributes.all_medium()
+
 # Cap on inputs per RPC. Matches the host queue depth in RemoteController so a
 # malicious peer can't force the loop into hundreds of failed decode iterations
 # by claiming count=255 with a short payload.

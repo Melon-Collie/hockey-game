@@ -37,7 +37,10 @@ const VERSION: String = "dev"
 #     clamp floored the attack_up team-1 negated cursor to (0,0), so the host
 #     derived zero wrister charge / null aim for those shooters and fired drags
 #     as taps. Signed encoding round-trips the negation.
-const PROTOCOL_VERSION: int = 9
+# v10: added request_update_attributes RPC (lobby build changes) — a new @rpc
+#     method shifts the name-sorted RPC index of every method after it (see v3),
+#     so a bump is required even though request_join's wire format is unchanged.
+const PROTOCOL_VERSION: int = 10
 
 
 func _ready() -> void:
