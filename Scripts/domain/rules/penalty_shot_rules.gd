@@ -34,14 +34,23 @@ class Config:
 	# counts as stopped.
 	var rest_speed: float = 0.5
 	# How long (s) the puck must stay stopped before the attempt dies. A brief
-	# one-frame dip mid-dangle shouldn't end the rush.
-	var stall_grace: float = 0.35
+	# dip mid-dangle (or a stride reset while building speed) shouldn't end the
+	# rush.
+	var stall_grace: float = 0.5
 	# How far (m) the puck may retreat from its furthest point before "went
-	# backward" fires.
-	var backward_tolerance: float = 0.5
+	# backward" fires. A generous window so a deke that pulls the puck back to
+	# the hip before releasing reads as dangling, not a dead retreat.
+	var backward_tolerance: float = 0.75
 	# Forward progress (m) the shooter must make before the dead-puck rules arm,
 	# so the puck sitting at centre at the very start isn't read as stalled.
 	var start_progress: float = 0.4
+	# Running-start grace (s): once the shooter commits to the rush (`started`),
+	# suppress the dead-puck rules for this long so they can accelerate from a
+	# standstill and settle the puck before "keep it moving" is enforced. Without
+	# this, a skater still building speed just past the start line trips the stall
+	# timer the instant their forward progress dips — the attempt felt over before
+	# it began. This is the "get a running start" window.
+	var start_grace: float = 0.8
 	# Crossbar height (m); a puck crossing the line above this sailed over the net.
 	var crossbar_height: float = 1.22
 
@@ -82,7 +91,9 @@ static func is_goal(
 # the shooter skates it up the ice.
 # `max_progress` is the running maximum of `current_progress`; `started` latches
 # true once the shooter has advanced `start_progress`; `stall_time` is how long
-# `forward_speed` has stayed at or below `rest_speed` since starting.
+# `forward_speed` has stayed at or below `rest_speed` since starting;
+# `time_since_start` is how long the rush has been live (seconds since `started`
+# latched), used to hold the dead-puck rules off during the running-start grace.
 static func classify(
 		puck_x: float,
 		puck_y: float,
@@ -92,6 +103,7 @@ static func classify(
 		max_progress: float,
 		started: bool,
 		stall_time: float,
+		time_since_start: float,
 		attack_dir_z: float,
 		goal_line_z: float,
 		half_width: float,
@@ -103,6 +115,10 @@ static func classify(
 		return Outcome.MISS
 	# Dead-puck rules don't arm until the shooter has actually started the rush.
 	if not started:
+		return Outcome.LIVE
+	# Running-start grace: give the shooter time to accelerate off the mark and
+	# settle the puck before the keep-it-moving rules can end the attempt.
+	if time_since_start < cfg.start_grace:
 		return Outcome.LIVE
 	# Went backward — retreated from the furthest point reached.
 	if current_progress < max_progress - cfg.backward_tolerance:
