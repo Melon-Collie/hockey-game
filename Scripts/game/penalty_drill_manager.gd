@@ -150,14 +150,20 @@ func _tick_live(delta: float) -> void:
 		_started = true
 	if _started:
 		_attempt_time += delta
-		if fwd_speed <= _cfg.rest_speed:
+		# Only accumulate stall time once the running-start grace has elapsed —
+		# otherwise a slow accelerate-from-standstill would bank enough stall
+		# during the grace to die the instant it lifts, defeating the window.
+		if _attempt_time < _cfg.start_grace:
+			_stall_time = 0.0
+		elif fwd_speed <= _cfg.rest_speed:
 			_stall_time += delta
 		else:
 			_stall_time = 0.0
 
 	var outcome: PenaltyShotRules.Outcome = PenaltyShotRules.classify(
 			pos.x, pos.y, pos.z, fwd_speed, progress, _max_progress,
-			_started, _stall_time, _ATTACK_DIR_Z, _GOAL_LINE_Z, _NET_HALF_WIDTH, _cfg)
+			_started, _stall_time, _attempt_time,
+			_ATTACK_DIR_Z, _GOAL_LINE_Z, _NET_HALF_WIDTH, _cfg)
 
 	if outcome == PenaltyShotRules.Outcome.LIVE:
 		if _started and _attempt_time >= _MAX_ATTEMPT_TIME:
