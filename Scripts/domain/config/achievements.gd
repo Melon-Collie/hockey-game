@@ -72,11 +72,26 @@ const ALL: Array[Dictionary] = [
 		"desc": "Block 5 shots in a single game.",
 		"cond": {"kind": "game", "field": "shots_blocked", "min": 5},
 	},
+	{
+		# Onboarding: pops the first game you score in, any mode (incl. vs bots) —
+		# a single-game condition, not a career total, so a new player gets it in
+		# their first session without needing an online match.
+		"id": FIRST_GOAL, "name": "Lamp Lighter", "hidden": false,
+		"desc": "Score your first goal.",
+		"cond": {"kind": "game", "field": "goals", "min": 1},
+	},
 	# ── Compound game-over conditions ────────────────────────────────────────
 	{
 		"id": SHUTOUT, "name": "Shutout", "hidden": false,
 		"desc": "Win a game without conceding a goal.",
 		"cond": {"kind": "special", "key": "shutout"},
+	},
+	{
+		# Onboarding: pops your first win, any mode. Single-game (win the game),
+		# not a career total.
+		"id": FIRST_WIN, "name": "W", "hidden": false,
+		"desc": "Win your first game.",
+		"cond": {"kind": "special", "key": "win"},
 	},
 	# ── Live, in-the-moment events ───────────────────────────────────────────
 	{
@@ -90,17 +105,7 @@ const ALL: Array[Dictionary] = [
 		# fires too freely / never (dev: SteamManager.reset_all_achievements).
 		"cond": {"kind": "event", "key": "big_hit", "min": 11.0},
 	},
-	# ── Career milestones (online shared-stats sessions only) ────────────────
-	{
-		"id": FIRST_GOAL, "name": "Lamp Lighter", "hidden": false,
-		"desc": "Score your first career goal.",
-		"cond": {"kind": "career", "field": "goals", "min": 1},
-	},
-	{
-		"id": FIRST_WIN, "name": "W", "hidden": false,
-		"desc": "Win your first game.",
-		"cond": {"kind": "career", "field": "wins", "min": 1},
-	},
+	# ── Career milestones (competitive games only — see game_manager gate) ────
 	{
 		"id": SNIPER, "name": "Sniper", "hidden": false,
 		"desc": "Score 50 career goals.",

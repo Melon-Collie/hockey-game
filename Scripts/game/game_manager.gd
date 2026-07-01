@@ -2653,19 +2653,16 @@ func _on_game_over() -> void:
 			outcome = "loss"
 		if _achievements != null:
 			_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
-	# Offline + tutorial don't count as career games — there's no opponent
-	# pool, the tutorial is replayed as practice, and a player shouldn't be
-	# able to pad stats by playing themselves. is_offline_mode covers both
-	# (start_tutorial calls start_offline).
+	# Offline + tutorial don't record career games (no game_id, tutorial is
+	# practice); is_offline_mode covers both (start_tutorial calls start_offline).
 	if NetworkManager.is_offline_mode:
 		return
-	# Steam career stats + their achievements: online games only (so milestones
-	# can't be padded vs bots), but NOT gated on share_gameplay_stats — Steam Stats
-	# are the player's own data on their own account, and gating them on the
-	# Supabase-upload opt-out would re-couple achievements to a choice that's only
-	# about our backend. Increment first, then evaluate against the updated totals
-	# so a threshold unlocks on the game that crosses it. No Supabase dependency:
-	# this works even if the backend is down/paused.
+	# Steam career stats + their achievements. NOT gated on share_gameplay_stats —
+	# Steam Stats are the player's own data on their own account, and gating them on
+	# the Supabase-upload opt-out would re-couple achievements to a choice that's
+	# only about our backend. Increment first, then evaluate against the updated
+	# totals so a threshold unlocks on the game that crosses it. No Supabase
+	# dependency: this works even if the backend is down/paused.
 	if local != null and local.team != null and _stat_recorder != null:
 		_stat_recorder.record_game(local.stats, outcome)
 		if _achievements != null:

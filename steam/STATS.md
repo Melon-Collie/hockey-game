@@ -11,10 +11,10 @@ earnable offline / opted-out / while the backend is paused. Supabase remains the
 source for cross-machine history and dev telemetry; these stats are purely the
 progression counter (and the future basis for leaderboards).
 
-When they update: at game-over for **online games only** (so totals can't be
-padded vs bots). They are **not** gated on the "Share Gameplay Stats" toggle —
-that toggle is about uploading to *our* Supabase; Steam Stats are the player's
-own data on their own Steam account.
+When they update: at game-over for **online games** (same games as the Supabase
+career row). They are **not** gated on the "Share Gameplay Stats" toggle — that
+toggle is about uploading to *our* Supabase; Steam Stats are the player's own
+data on their own Steam account.
 
 > **Two apps.** Like achievements, stats are per-app. Define these on the main
 > app **4892600** and the **Playtest** child app **4893650** (same API Names),

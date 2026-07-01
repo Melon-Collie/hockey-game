@@ -67,11 +67,39 @@ func test_brick_wall_unlocks_at_five_blocks() -> void:
 	assert_has(ids, Achievements.BRICK_WALL)
 
 
+func test_first_goal_unlocks_on_scoring_any_game() -> void:
+	# Onboarding: single-game, so it fires the first game you score in (any mode).
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(1, 0, 2, 0, 0)), _ctx("loss", 1, 3))
+	assert_has(ids, Achievements.FIRST_GOAL)
+
+
+func test_first_goal_not_awarded_without_a_goal() -> void:
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(0, 2, 3, 1, 1)), _ctx("loss", 0, 2))
+	assert_does_not_have(ids, Achievements.FIRST_GOAL)
+
+
 # ── compound (special) ───────────────────────────────────────────────────────
 func test_shutout_requires_win_and_zero_against() -> void:
 	var ids := AchievementRules.earned_game(
 			AchievementRules.game_dict(_stats(1, 0, 3, 0, 0)), _ctx("win", 2, 0))
 	assert_has(ids, Achievements.SHUTOUT)
+
+
+func test_first_win_unlocks_on_any_win() -> void:
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(0, 0, 1, 0, 0)), _ctx("win", 1, 0))
+	assert_has(ids, Achievements.FIRST_WIN)
+
+
+func test_first_win_not_awarded_on_loss_or_draw() -> void:
+	var loss := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(0, 0, 1, 0, 0)), _ctx("loss", 0, 1))
+	assert_does_not_have(loss, Achievements.FIRST_WIN)
+	var draw := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(0, 0, 1, 0, 0)), _ctx("draw", 1, 1))
+	assert_does_not_have(draw, Achievements.FIRST_WIN)
 
 
 func test_shutout_not_awarded_on_a_win_that_conceded() -> void:
@@ -89,22 +117,24 @@ func test_shutout_not_awarded_on_a_scoreless_draw() -> void:
 
 # ── nothing earned ───────────────────────────────────────────────────────────
 func test_quiet_game_earns_nothing() -> void:
+	# No goal, no win — so no Lamp Lighter / W either.
 	var ids := AchievementRules.earned_game(
-			AchievementRules.game_dict(_stats(1, 1, 2, 1, 1)), _ctx("loss", 1, 4))
+			AchievementRules.game_dict(_stats(0, 1, 2, 1, 1)), _ctx("loss", 1, 4))
 	assert_eq(ids.size(), 0)
 
 
 # ── career thresholds ────────────────────────────────────────────────────────
-func test_first_goal_unlocks_at_one_career_goal() -> void:
-	var ids := AchievementRules.earned_career({"goals": 1, "wins": 0, "games_played": 1})
-	assert_has(ids, Achievements.FIRST_GOAL)
-	assert_does_not_have(ids, Achievements.SNIPER)
+func test_first_goal_is_not_a_career_achievement() -> void:
+	# Reclassified to single-game onboarding — a lone career goal must NOT grant it
+	# via the career path (it fires from the game instead).
+	var ids := AchievementRules.earned_career({"goals": 1, "wins": 1, "games_played": 1})
+	assert_does_not_have(ids, Achievements.FIRST_GOAL)
+	assert_does_not_have(ids, Achievements.FIRST_WIN)
 
 
 func test_sniper_unlocks_at_fifty_career_goals() -> void:
 	var ids := AchievementRules.earned_career({"goals": 50})
 	assert_has(ids, Achievements.SNIPER)
-	assert_has(ids, Achievements.FIRST_GOAL)
 
 
 func test_veteran_unlocks_at_twenty_five_games() -> void:
@@ -115,7 +145,7 @@ func test_veteran_unlocks_at_twenty_five_games() -> void:
 func test_missing_career_columns_count_as_zero() -> void:
 	# A partial fetch (no goals column) must not crash or false-unlock.
 	var ids := AchievementRules.earned_career({"games_played": 1})
-	assert_does_not_have(ids, Achievements.FIRST_GOAL)
+	assert_does_not_have(ids, Achievements.VETERAN)
 	assert_does_not_have(ids, Achievements.SNIPER)
 
 
