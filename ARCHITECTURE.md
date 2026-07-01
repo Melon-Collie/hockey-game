@@ -302,7 +302,7 @@ The `GameStateMachine` exposes `is_movement_locked()` — true during `GOAL_SCOR
 | 24 | MTU fix for input batch (PackedByteArray 23B/input, 279B at 12 inputs vs 1780B; InputState.to_bytes/from_bytes); puck release pos from current blade not stale pin (fixes 1-frame lag in snapback) | Done |
 | 25 | Netcode audit (40 Hz world state, 75ms interpolation, board collision in replay, goalie reliable RPCs, trajectory prediction exits on contact, pickup timestamp fix, adaptive delay, Hermite puck interpolation, goalie quantization 10→8B) | Done |
 | 26 | Netcode improvements (2-frame client input delay; hard-snap-only puck trajectory reconcile; full body check velocity delta capture via `body_check_impulse_applied`; input queue drain on locked/blocked phases) | Done |
-| 27 | Goalie reactive saves (glove, body, stick poke) | Planned |
+| 27 | Goalie reactive saves (butterfly drop, glove/blocker reach) + difficulty tiers | Done |
 
 ---
 
@@ -393,12 +393,12 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 ## Known Issues / Planned Work
 
 **Performance, deferred until profiling shows them mattering:**
-- **AI snapshot-level caching.** `GameManager._enrich_snapshot_for_ai` publishes `teammate_ids_by_team` + `closest_to_puck_by_team` on `current_snapshot` once per host physics frame; the per-physics-tick hotspots (`_apply_steering`, `_is_closest_teammate_to_puck_at`) read from the cache. **Per-tick allocation cleanup — DONE.** A hot-path audit found and fixed the remaining 120 Hz host allocations: goalie `detect_shot` now fills a reused `_scratch_shot` via `detect_shot_into` (the plain `detect_shot` is kept as an allocating wrapper for tests); the puck cooldown-expiry sweep reuses a cleared `_expired_cooldowns` member instead of allocating an `Array[int]` every tick a cooldown is active; `_apply_steering` replaced `teammate_ids_by_team.get(_team_id, [])` (eager default-literal alloc) with a `has()` + shared `_empty_ids`; the carry-path roster walks (`_carry_has_open_lane`, `_stickhandle_offset`) read the cached opponent list via `_opponent_ids()` instead of re-partitioning; and `_step_mouse_internal` skips its two `randf_range` calls under the zero-noise baseline.
-- **AI role-behavior dispatch allocation — DONE.** The role `decide()` path runs at the **~60 Hz dispatch rate** (full state handler every `DISPATCH_PERIOD_TICKS = PHYSICS_TICK/60 = 2` ticks), *not* the 6 Hz brain tick — the brain tick (`role_slots.assign`, `AIPossessionState.compute`) only chooses *which* slot each bot holds; the per-bot positioning math reruns at 60 Hz. That path used to allocate several `Array[Vector3]` plus a `RoleContext` per off-puck bot per dispatch. Now `SkaterAgentStateMachine` reuses one `RoleContext` (refilled each dispatch) carrying four scratch buffers, and `collect_teammates_excluding_self` / `collect_opp_team_excluding_carrier` fill caller-owned scratch like `collect_opponents` already did. Invariant the design relies on: each scratch buffer is consumed once per `decide()` and only value-type (`Vector3`) results escape — never a retained array reference — so reuse across dispatches is safe (see the `RoleContext` doc-comment). `RoleDecision.new()` is still allocated per dispatch (one small RefCounted; reusing it risks stale fields across the role files' early-returns for little gain).
 - **6 Hz brain-tick re-partition.** `TeamBrain._compute_tick` (role-slot assignment, possession state) still partitions `snapshot.skater_states` itself at ~6 Hz — wins there are ~30× smaller than the physics-tick paths, so deferred until profiling motivates it.
 
+The 120 Hz host per-tick allocation audit is otherwise complete: AI snapshot caching (`_enrich_snapshot_for_ai` publishes `teammate_ids_by_team` + `closest_to_puck_by_team`), role-behavior dispatch scratch reuse (`RoleContext` + caller-owned collect buffers), goalie `detect_shot_into`, and the puck cooldown-expiry sweep all reuse buffers rather than allocating. The invariants those changes rely on live in the relevant code doc-comments (e.g. the `RoleContext` doc-comment on scratch-buffer reuse) — don't undo them to "simplify."
+
 **Maintainability, address opportunistically (don't refactor for its own sake):**
-- **God classes.** `Scripts/game/game_manager.gd` (~2400 LOC), `Scripts/controllers/goalie_controller.gd` (~1100), `Scripts/ui/hud.gd` (~1000), `Scripts/ui/options_panel.gd` (~900). `PickupClaimResolver` and `GoalieBodyConfigBuilder` have already been extracted; per-popup splits from HUD remain a candidate. Refactor only when a concrete need arises.
+- **God classes.** `Scripts/game/game_manager.gd` (~3400 LOC), `Scripts/controllers/goalie_controller.gd` (~2300), `Scripts/ui/hud.gd` (~1370), `Scripts/ui/options_panel.gd` (~1500). `PickupClaimResolver` and `GoalieBodyConfigBuilder` have already been extracted; per-popup splits from HUD remain a candidate. Refactor only when a concrete need arises.
 - **Test coverage gaps.** Remaining: `FileReplayDriver` / `GoalReplayDriver` (both `extends Node`, drive live scene actors — integration-test territory, poor headless ROI), and `skater_agent_state_machine`'s **state handlers** (`_state_carry` / `_state_shoot_pressed` / … and the dispatch transitions between them — they run the `AIRoleCarrier` role behavior, so testing them headlessly needs a carrier intent stub). The agent SM's snapshot-driven predicates, mouse/aim + wind-up geometry, and dispatch guards/throttle are covered (`tests/unit/ai/`). `PhaseCoordinator`, `SlotSwapCoordinator` host paths, and `decode_for_replay` are covered. Domain rules remain well-covered.
 
 - **Steam ownership validation on lobby join (anti-piracy) — post-launch, only if it manifests:** Online runs on Steam P2P under the real AppID (4892600), and Steam blocks `steamInitEx` for accounts that don't own the app — so a pirate / self-compiled build **cannot init under 4892600 and cannot join the legitimate playerbase.** It *can*, however, init under Spacewar (480, universally owned) and run a parallel pirate-vs-pirate scene in the 480 lobby space (degraded: 480 lobbies are global shared noise filtered only by metadata). The init-time AppID gate protects *our* lobbies; it does not prevent a separate pirate ecosystem. If that parallel scene ever becomes a visible problem, the host (already authority) can require each joiner to present a valid Steam auth session ticket (`GetAuthSessionTicket` / `BeginAuthSession`, `UserHasLicenseForApp`) proving ownership of 4892600 before admission — closing even AppID-spoofing. Belt-and-suspenders, not load-bearing for the legit community; defer until post-launch and only if it actually surfaces.
@@ -410,11 +410,9 @@ Non-obvious constraints that cause subtle bugs if violated. Rates and wire forma
 
 ## Open Questions
 
-- Slapshot pre/post release buffer window for one-timer timing feel
-- Middle-zone puck reception: blade readiness check
 - Aim assist
 - Procedural skating animations
 - CharacterStats resource design (universal vs per-character exports)
-- Camera goal anchor flip speed on turnovers
-- Rink size tuning (possible 2/3 scale)
 - Extend visual-offset blend to remote skaters if/when remote prediction lands (today the blend is local-only because remotes are interpolated and never snap)
+
+(Feel/tuning knobs — one-timer buffer window, reception readiness, camera anchor flip speed, rink scale — are not tracked here; tuning is continuous and lives in the `@export`s / rule constants cited above.)
