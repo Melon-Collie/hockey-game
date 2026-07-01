@@ -170,12 +170,18 @@ var _recorder: ReplayRecorder = null
 var _goal_replay_driver: GoalReplayDriver = null
 var _career_reporter: CareerStatsReporter = null
 var _net_session_reporter: NetworkSessionReporter = null
+var _achievements: AchievementService = null
+var _stat_recorder: SteamStatRecorder = null
 # Streams broadcast frames to user://replays/<game_id>.mreplay on a worker
 # thread. Lives on every peer (host + client + spectator) for any session
 # with a non-empty _game_id and PlayerPrefs.replay_recording_enabled. Opens
 # once the registry has stabilized (post-_push_lobby_assignments_to_clients
 # on host, post-sync_existing_players on clients) and closes on scene exit.
 var _replay_file_writer: ReplayFileWriter = null
+# host_ts of the last world-state frame written to the .mreplay file. Drives the
+# REPLAY_FILE_RATE throttle in _record_world_state_to_file. -INF so the first
+# frame of each recording always writes; reset on writer open.
+var _last_file_frame_ts: float = -INF
 # Tracks the phase of the most recent .mreplay frame so movement-locked
 # phases (GOAL_SCORED, FACEOFF_PREP, END_OF_PERIOD, GAME_OVER) record their
 # first transition frame and skip the duplicate-static frames that follow.
@@ -234,6 +240,8 @@ func _ready() -> void:
 	ThemeDB.fallback_font = MenuStyle.UI_FONT
 	_career_reporter = CareerStatsReporter.new()
 	_net_session_reporter = NetworkSessionReporter.new()
+	_achievements = AchievementService.new()
+	_stat_recorder = SteamStatRecorder.new()
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
 
@@ -1507,6 +1515,7 @@ func _open_replay_file_writer() -> void:
 	if not writer.open(path, _build_replay_header()):
 		return
 	_replay_file_writer = writer
+	_last_file_frame_ts = -INF
 
 
 func _close_replay_file_writer() -> void:
@@ -1594,6 +1603,31 @@ func _build_replay_footer() -> Dictionary:
 	if _state_machine != null:
 		footer["final_score_home"] = _state_machine.scores[0]
 		footer["final_score_away"] = _state_machine.scores[1]
+		# Period-by-period scores, same shape the scoreboard / career screen use:
+		# [[home p1, p2, …], [away p1, p2, …]]. Lets the local replay browser draw
+		# the period breakdown without any backend.
+		footer["period_scores"] = _state_machine.period_scores
+	# Per-player box score, keyed by peer_id so the browser can join it to the
+	# header roster for names. Every peer has all players' stats (the live
+	# scoreboard renders from the same broadcast), so this is complete on any
+	# recording peer. Mirrors career_stats columns minus the career-only fields.
+	var players: Array[Dictionary] = []
+	if _registry != null:
+		for peer_id: int in _registry.all():
+			var r: PlayerRecord = _registry.get_record(peer_id)
+			if r == null or r.stats == null:
+				continue
+			players.append({
+				"peer_id": peer_id,
+				"team_id": r.team.team_id if r.team != null else 0,
+				"goals": r.stats.goals,
+				"assists": r.stats.assists,
+				"shots_on_goal": r.stats.shots_on_goal,
+				"hits": r.stats.hits,
+				"shots_blocked": r.stats.shots_blocked,
+				"toi_seconds": roundi(r.stats.toi_seconds),
+			})
+	footer["players"] = players
 	footer["ended_at"] = Time.get_unix_time_from_system()
 	return footer
 
@@ -2431,14 +2465,10 @@ func _on_world_state_received(data: PackedByteArray) -> void:
 	if _recorder != null and not NetworkManager.is_replay_mode() \
 			and not _is_celebration_phase():
 		_recorder.record_frame(data, host_ts)
-	# Tee the broadcast into the local .mreplay file. Use the host_ts encoded
-	# in the packet so timestamps align across host + client recordings —
-	# local_time() differs per peer. Same dead-puck + replay-mode gate as
-	# the host's get_world_state path.
-	if _replay_file_writer != null and _should_record_to_file():
-		_replay_file_writer.enqueue_frame(host_ts, data)
-		if _state_machine != null:
-			_last_recorded_phase = _state_machine.current_phase
+	# Tee the broadcast into the local .mreplay file (throttled to
+	# REPLAY_FILE_RATE). Use the host_ts encoded in the packet so timestamps align
+	# across host + client recordings — local_time() differs per peer.
+	_record_world_state_to_file(host_ts, data)
 
 
 func _on_stats_received(data: Array) -> void:
@@ -2553,6 +2583,10 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 
 func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
+	# Live achievement: only the local player's own deliveries count, and this
+	# signal fires on the deliverer's machine, so gate on local peer.
+	if _achievements != null and hitter_peer_id == NetworkManager.local_peer_id():
+		_achievements.on_local_hit(impulse_magnitude)
 
 
 # Host-only (hit_credited fires only on the host, from the deduped credit path).
@@ -2600,15 +2634,46 @@ func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_times
 func _on_game_over() -> void:
 	if _state_machine == null or _registry == null or _career_reporter == null:
 		return
+	var local: PlayerRecord = _registry.get_local()
+	# Single-game + live-derived achievements need only this game's stats, so they
+	# unlock in any mode (incl. offline vs bots), before the career gates below.
+	# Career-threshold achievements are backed by Steam User Stats and handled in
+	# the online block below. SteamManager no-ops when Steam is absent.
+	var team_id: int = -1
+	var gf: int = 0
+	var ga: int = 0
+	var outcome: String = "draw"
+	if local != null and local.team != null:
+		team_id = local.team.team_id
+		gf = _state_machine.scores[team_id]
+		ga = _state_machine.scores[1 - team_id]
+		if gf > ga:
+			outcome = "win"
+		elif gf < ga:
+			outcome = "loss"
+		if _achievements != null:
+			_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
 	# Offline + tutorial don't count as career games — there's no opponent
 	# pool, the tutorial is replayed as practice, and a player shouldn't be
 	# able to pad stats by playing themselves. is_offline_mode covers both
 	# (start_tutorial calls start_offline).
 	if NetworkManager.is_offline_mode:
 		return
-	# Privacy opt-out: with stat sharing off, no career row is uploaded. The
-	# Career screen and replay browser both read from this backend data, so they
-	# stay empty by the player's choice (see PlayerPrefs.share_gameplay_stats).
+	# Steam career stats + their achievements: online games only (so milestones
+	# can't be padded vs bots), but NOT gated on share_gameplay_stats — Steam Stats
+	# are the player's own data on their own account, and gating them on the
+	# Supabase-upload opt-out would re-couple achievements to a choice that's only
+	# about our backend. Increment first, then evaluate against the updated totals
+	# so a threshold unlocks on the game that crosses it. No Supabase dependency:
+	# this works even if the backend is down/paused.
+	if local != null and local.team != null and _stat_recorder != null:
+		_stat_recorder.record_game(local.stats, outcome)
+		if _achievements != null:
+			_achievements.evaluate_career(_stat_recorder.totals())
+	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
+	# The Career screen's history reads from that backend data, so it stays empty by
+	# the player's choice (see PlayerPrefs.share_gameplay_stats). Local replays and
+	# Steam achievements/stats above are unaffected — they never touch the backend.
 	if not PlayerPrefs.share_gameplay_stats:
 		return
 	# Network-quality row: shares the offline + privacy gates above but not the
@@ -2617,17 +2682,8 @@ func _on_game_over() -> void:
 	if _telemetry != null and _net_session_reporter != null:
 		var role: String = "host" if NetworkManager.is_host else "client"
 		_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled)
-	var local: PlayerRecord = _registry.get_local()
 	if local == null or local.team == null:
 		return
-	var team_id: int = local.team.team_id
-	var gf: int = _state_machine.scores[team_id]
-	var ga: int = _state_machine.scores[1 - team_id]
-	var outcome: String = "draw"
-	if gf > ga:
-		outcome = "win"
-	elif gf < ga:
-		outcome = "loss"
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
 
@@ -3153,14 +3209,36 @@ func get_world_state() -> PackedByteArray:
 	if _recorder != null and not NetworkManager.is_replay_mode() \
 			and not _is_celebration_phase():
 		_recorder.record_frame(state, ts)
-	# File writer skips dead-puck phase ticks past the first one — see
-	# _should_record_to_file. The first frame on each phase transition
-	# captures the puck-in-net moment / faceoff snap / etc.
-	if _replay_file_writer != null and _should_record_to_file():
-		_replay_file_writer.enqueue_frame(ts, state)
-		if _state_machine != null:
-			_last_recorded_phase = _state_machine.current_phase
+	# File writer throttles to REPLAY_FILE_RATE and skips dead-puck phase ticks
+	# past the first one — see _record_world_state_to_file / _should_record_to_file.
+	# The first frame on each phase transition captures the puck-in-net moment /
+	# faceoff snap / etc.
+	_record_world_state_to_file(ts, state)
 	return state
+
+
+# Tee a broadcast world-state frame into the .mreplay file, throttled to
+# REPLAY_FILE_RATE. The viewer interpolates between snapshots, so the steady
+# PLAYING stream is decimated from STATE_RATE (120 Hz) to ~30 Hz — a ~4x file-
+# size cut at no perceptible playback cost. Phase-transition frames bypass the
+# throttle (the first frame of a new phase is a keyframe — faceoff snap, the
+# resume after a movement-locked gap — and must never be dropped). The goal
+# moment is recorded full-rate via force_record, which calls enqueue_frame
+# directly rather than this helper. Mirrors the old inline record block: also
+# advances _last_recorded_phase so _should_record_to_file's "first frame of a
+# locked phase only" gate keeps working.
+func _record_world_state_to_file(host_ts: float, data: PackedByteArray) -> void:
+	if _replay_file_writer == null or not _should_record_to_file():
+		return
+	var phase_changed: bool = _state_machine != null \
+			and _state_machine.current_phase != _last_recorded_phase
+	if not phase_changed \
+			and host_ts - _last_file_frame_ts < 1.0 / float(Constants.REPLAY_FILE_RATE):
+		return
+	_replay_file_writer.enqueue_frame(host_ts, data)
+	_last_file_frame_ts = host_ts
+	if _state_machine != null:
+		_last_recorded_phase = _state_machine.current_phase
 
 
 func _should_record_to_file() -> bool:
