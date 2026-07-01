@@ -166,6 +166,20 @@ var attr_hands:    int = PlayerAttributes.LEVEL_MEDIUM
 var attr_size:     int = PlayerAttributes.LEVEL_MEDIUM
 var attr_physical: int = PlayerAttributes.LEVEL_MEDIUM
 var attr_shot:     int = PlayerAttributes.LEVEL_MEDIUM
+
+# Named attribute-build presets. The player keeps up to MAX_PRESETS builds and
+# switches which one is ACTIVE; the flat attr_* fields above always mirror the
+# active preset, so everything that reads get_player_attributes() (the online
+# join handshake, the free-play live apply) is unaffected by the presets layer —
+# it always sees the active build. Each entry is {"name": String,
+# "attrs": PlayerAttributes}. A save without a stored presets array (fresh
+# install or a pre-presets save) is migrated to a single "Default" preset
+# carrying the flat build, in _finalize_presets().
+const MAX_PRESETS: int = 4
+const PRESET_NAME_MAX_LEN: int = 16
+const DEFAULT_PRESET_NAME: String = "Default"
+var attr_presets: Array[Dictionary] = []
+var attr_active_preset: int = 0
 var master_volume: float = 0.5
 var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
@@ -339,6 +353,22 @@ func save() -> void:
 	# Marks the values above as already on the six-attribute scale so _load()
 	# doesn't re-run the 1..3 → 1..5 or the four → six migration on them.
 	cfg.set_value("player", "attr_scale_version", 3)
+	# Presets are stored in the same version-3 six-attribute format. The flat
+	# attr_* keys above remain the active build's mirror for backward compat.
+	var stored_presets: Array = []
+	for p: Dictionary in attr_presets:
+		var a: PlayerAttributes = p["attrs"]
+		stored_presets.append({
+			"name":     p["name"],
+			"speed":    a.speed,
+			"agility":  a.agility,
+			"hands":    a.hands,
+			"size":     a.size,
+			"physical": a.physical,
+			"shot":     a.shot,
+		})
+	cfg.set_value("player", "attr_presets", stored_presets)
+	cfg.set_value("player", "attr_active_preset", attr_active_preset)
 	cfg.set_value("audio", "master_volume", master_volume)
 	cfg.set_value("audio", "sfx_volume", sfx_volume)
 	cfg.set_value("audio", "ui_volume", ui_volume)
@@ -852,6 +882,12 @@ func _load() -> void:
 				sz = _migrate_legacy_level(int(cfg.get_value("player", "attr_size",     2)))
 				sk = _migrate_legacy_level(int(cfg.get_value("player", "attr_strength", 2)))
 			_migrate_four_to_six(sp, ag, sz, sk)
+		# Load the preset list (validated + clamped). If the save predates presets
+		# the array is empty here; _finalize_presets() seeds a Default from the flat
+		# build below. When presets ARE present they are authoritative for the
+		# active build, so _finalize_presets() re-syncs the flat fields from them.
+		attr_presets = _parse_stored_presets(cfg.get_value("player", "attr_presets", []))
+		attr_active_preset = int(cfg.get_value("player", "attr_active_preset", 0))
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 0.5), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
@@ -926,6 +962,10 @@ func _load() -> void:
 			var b: Dictionary = _read_current_input_event(action)
 			if not b.is_empty():
 				bindings[action] = b
+	# Runs whether or not a config file loaded (fresh installs skip the OK block
+	# above entirely), so there is always at least one preset and the flat build
+	# matches the active one.
+	_finalize_presets()
 	apply_audio()
 	apply_bindings()
 	call_deferred(&"apply_input")
@@ -946,10 +986,150 @@ func set_player_attributes(attrs: PlayerAttributes) -> void:
 	attr_size     = attrs.size
 	attr_physical = attrs.physical
 	attr_shot     = attrs.shot
+	# The active preset IS the flat build — editing the live build (free-play
+	# picker Apply) edits the active preset. Guarded for the pre-_finalize window.
+	if attr_active_preset >= 0 and attr_active_preset < attr_presets.size():
+		attr_presets[attr_active_preset]["attrs"] = _copy_attrs(attrs)
+
+
+# ── Presets API ──────────────────────────────────────────────────────────────
+# Mutators update in-memory state only; callers persist with save() afterward,
+# exactly like set_player_attributes (see the free-play picker Apply path). This
+# keeps the presets layer disk-side-effect-free and unit-testable.
+
+# The live preset list. Callers read entry["name"] / entry["attrs"]; they must
+# not mutate entries in place — use the mutators below.
+func get_presets() -> Array[Dictionary]:
+	return attr_presets
+
+
+func get_active_preset_index() -> int:
+	return attr_active_preset
+
+
+# Switch which preset is active. Copies its build into the flat fields so
+# get_player_attributes() (and thus the join handshake / free-play apply) sees it.
+func set_active_preset(index: int) -> void:
+	if index < 0 or index >= attr_presets.size() or index == attr_active_preset:
+		return
+	attr_active_preset = index
+	_sync_flat_from_active()
+
+
+# Overwrite the build (and optionally the name) of an existing preset. If it is
+# the active preset the flat mirror is refreshed too.
+func save_preset(index: int, attrs: PlayerAttributes, name: String = "") -> void:
+	if attrs == null or index < 0 or index >= attr_presets.size():
+		return
+	attr_presets[index]["attrs"] = _copy_attrs(attrs)
+	if name != "":
+		attr_presets[index]["name"] = _sanitize_preset_name(name)
+	if index == attr_active_preset:
+		_sync_flat_from_active()
+
+
+# Append a new preset (up to MAX_PRESETS). Defaults to a copy of the current
+# active build. Returns the new index, or -1 if the cap is reached.
+func add_preset(attrs: PlayerAttributes = null, name: String = "") -> int:
+	if attr_presets.size() >= MAX_PRESETS:
+		return -1
+	var a: PlayerAttributes = attrs if attrs != null else get_player_attributes()
+	var nm: String = name if name != "" else _default_preset_name()
+	attr_presets.append(_make_preset(nm, a))
+	return attr_presets.size() - 1
+
+
+# Remove a preset. The last surviving preset can't be deleted. Keeps the active
+# index pointing at a valid build and re-syncs the flat mirror if it moved.
+func delete_preset(index: int) -> void:
+	if attr_presets.size() <= 1 or index < 0 or index >= attr_presets.size():
+		return
+	attr_presets.remove_at(index)
+	if attr_active_preset >= attr_presets.size():
+		attr_active_preset = attr_presets.size() - 1
+	elif attr_active_preset > index:
+		attr_active_preset -= 1
+	_sync_flat_from_active()
+
+
+func rename_preset(index: int, name: String) -> void:
+	if index < 0 or index >= attr_presets.size():
+		return
+	attr_presets[index]["name"] = _sanitize_preset_name(name)
 
 
 func _clamp_attr(v: int) -> int:
 	return clampi(v, PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
+
+
+# Guarantees at least one preset exists and the flat build matches the active
+# one. When presets loaded from disk they are authoritative (flat ← active);
+# when none were stored (fresh / pre-presets save) seeds a Default from the flat
+# build (a no-op re-sync afterward).
+func _finalize_presets() -> void:
+	if attr_presets.is_empty():
+		attr_presets = [_make_preset(DEFAULT_PRESET_NAME, get_player_attributes())]
+		attr_active_preset = 0
+	attr_active_preset = clampi(attr_active_preset, 0, attr_presets.size() - 1)
+	_sync_flat_from_active()
+
+
+func _sync_flat_from_active() -> void:
+	if attr_active_preset < 0 or attr_active_preset >= attr_presets.size():
+		return
+	var a: PlayerAttributes = attr_presets[attr_active_preset]["attrs"]
+	attr_speed    = a.speed
+	attr_agility  = a.agility
+	attr_hands    = a.hands
+	attr_size     = a.size
+	attr_physical = a.physical
+	attr_shot     = a.shot
+
+
+func _make_preset(name: String, attrs: PlayerAttributes) -> Dictionary:
+	return {"name": _sanitize_preset_name(name), "attrs": _copy_attrs(attrs)}
+
+
+# Independent copy so a preset never shares a PlayerAttributes instance with a
+# caller (which could mutate it out from under us).
+func _copy_attrs(attrs: PlayerAttributes) -> PlayerAttributes:
+	return PlayerAttributes.from_levels(attrs.speed, attrs.agility, attrs.hands,
+			attrs.size, attrs.physical, attrs.shot)
+
+
+func _default_preset_name() -> String:
+	return "Build %d" % (attr_presets.size() + 1)
+
+
+func _sanitize_preset_name(name: String) -> String:
+	var n: String = name.strip_edges()
+	if n.is_empty():
+		n = DEFAULT_PRESET_NAME
+	return n.substr(0, PRESET_NAME_MAX_LEN)
+
+
+# Rebuilds the runtime preset list from the stored array-of-dicts, clamping each
+# level and capping at MAX_PRESETS. Tolerates malformed entries (skips non-dicts)
+# so a corrupt save degrades to fewer presets rather than crashing.
+func _parse_stored_presets(raw: Variant) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	if not (raw is Array):
+		return out
+	for entry: Variant in (raw as Array):
+		if not (entry is Dictionary):
+			continue
+		var d: Dictionary = entry
+		var attrs := PlayerAttributes.new(
+				_clamp_attr(int(d.get("speed",    PlayerAttributes.LEVEL_MEDIUM))),
+				_clamp_attr(int(d.get("agility",  PlayerAttributes.LEVEL_MEDIUM))),
+				_clamp_attr(int(d.get("hands",    PlayerAttributes.LEVEL_MEDIUM))),
+				_clamp_attr(int(d.get("size",     PlayerAttributes.LEVEL_MEDIUM))),
+				_clamp_attr(int(d.get("physical", PlayerAttributes.LEVEL_MEDIUM))),
+				_clamp_attr(int(d.get("shot",     PlayerAttributes.LEVEL_MEDIUM))))
+		out.append(_make_preset(String(d.get("name", DEFAULT_PRESET_NAME)), attrs))
+		if out.size() >= MAX_PRESETS:
+			break
+	return out
 
 
 # Remaps a legacy 1..3 attribute level onto the 1..5 scale (medium 2 → 3).
