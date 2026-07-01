@@ -201,7 +201,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # deterministic across client/host: both count the same ticks, whereas a charge
 # threshold rides the body-dependent blade travel and could classify differently
 # on each machine. Flat (not attribute-scaled).
-@export var quick_shot_time: float = 0.1
+@export var quick_shot_time: float = 0.06
 @export var quick_shot_elevation: float = 0.10
 @export var wrister_elevation_target_height: float = 0.90
 # Apex cap for elevated shots — puck can't rise more than this above the blade.
