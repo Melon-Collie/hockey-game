@@ -11,8 +11,6 @@ extends Control
 # host will spawn from (a client forwards it to the host for re-validation). No
 # skater exists yet in the lobby, so there's no live re-apply.
 
-signal build_committed(attrs: PlayerAttributes)
-
 var _panel: AttributePickerPanel = null
 var _apply_btn: Button = null
 
@@ -108,7 +106,6 @@ func _apply() -> void:
 	var new_attrs: PlayerAttributes = _panel.commit()
 	PlayerPrefs.save()
 	NetworkManager.update_lobby_attributes(new_attrs)
-	build_committed.emit(new_attrs)
 	visible = false
 
 

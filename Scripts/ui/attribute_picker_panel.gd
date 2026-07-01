@@ -212,12 +212,6 @@ func commit() -> PlayerAttributes:
 	return PlayerPrefs.get_player_attributes()
 
 
-# The active build as edited — for hosts that want it without committing.
-func active_attributes() -> PlayerAttributes:
-	var lv: Array = _working[_active]["levels"]
-	return PlayerAttributes.from_levels(lv[0], lv[1], lv[2], lv[3], lv[4], lv[5])
-
-
 func is_dirty() -> bool:
 	if _active != _snapshot_active or _working.size() != _snapshot_working.size():
 		return true
