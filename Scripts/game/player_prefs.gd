@@ -169,7 +169,7 @@ var attr_shot:     int = PlayerAttributes.LEVEL_MEDIUM
 var master_volume: float = 0.5
 var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
-var crowd_volume: float = 1.0
+var arena_volume: float = 1.0
 var master_muted: bool = false
 # Silence the game while another window has OS focus (alt-tabbed away). On by
 # default; streamers / second-monitor players can turn it off. SoundManager
@@ -342,7 +342,7 @@ func save() -> void:
 	cfg.set_value("audio", "master_volume", master_volume)
 	cfg.set_value("audio", "sfx_volume", sfx_volume)
 	cfg.set_value("audio", "ui_volume", ui_volume)
-	cfg.set_value("audio", "crowd_volume", crowd_volume)
+	cfg.set_value("audio", "arena_volume", arena_volume)
 	cfg.set_value("audio", "master_muted", master_muted)
 	cfg.set_value("audio", "mute_when_unfocused", mute_when_unfocused)
 	cfg.set_value("video", "window_mode", window_mode)
@@ -498,9 +498,9 @@ func apply_audio() -> void:
 	var ui_bus := AudioServer.get_bus_index("UI")
 	if ui_bus != -1:
 		AudioServer.set_bus_volume_db(ui_bus, linear_to_db(maxf(ui_volume, 0.0001)))
-	var crowd_bus := AudioServer.get_bus_index("Crowd")
-	if crowd_bus != -1:
-		AudioServer.set_bus_volume_db(crowd_bus, linear_to_db(maxf(crowd_volume, 0.0001)))
+	var arena_bus := AudioServer.get_bus_index("Arena")
+	if arena_bus != -1:
+		AudioServer.set_bus_volume_db(arena_bus, linear_to_db(maxf(arena_volume, 0.0001)))
 
 func apply_input() -> void:
 	# CONFINED keeps the cursor visible (the blade is aimed by the on-screen
@@ -855,7 +855,8 @@ func _load() -> void:
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 0.5), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
-		crowd_volume = clampf(cfg.get_value("audio", "crowd_volume", 1.0), 0.0, 1.0)
+		# Renamed from "crowd_volume"; fall back to the old key so existing saves keep their level.
+		arena_volume = clampf(cfg.get_value("audio", "arena_volume", cfg.get_value("audio", "crowd_volume", 1.0)), 0.0, 1.0)
 		master_muted = cfg.get_value("audio", "master_muted", false)
 		mute_when_unfocused = cfg.get_value("audio", "mute_when_unfocused", true)
 		window_mode = clampi(int(cfg.get_value("video", "window_mode", WINDOW_MODE_BORDERLESS)), 0, WINDOW_MODE_LABELS.size() - 1)

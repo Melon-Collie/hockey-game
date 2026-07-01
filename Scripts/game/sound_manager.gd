@@ -100,7 +100,7 @@ var _streams: Dictionary = {}
 var _pool_ui: Array[AudioStreamPlayer] = []      # UI bus — hover, click
 var _pool_sfx_2d: Array[AudioStreamPlayer] = []  # SFX bus — non-spatial gameplay cues
 var _pool_3d: Array[AudioStreamPlayer3D] = []    # SFX bus — all world sounds
-var _pool_crowd: Array[AudioStreamPlayer] = []   # Crowd bus — horn, buzzer, whistle
+var _pool_crowd: Array[AudioStreamPlayer] = []   # Arena bus — horn, buzzer, whistle
 
 
 func _ready() -> void:
@@ -114,7 +114,7 @@ func _ready() -> void:
 
 
 func _ensure_buses() -> void:
-	for bus_name: String in ["SFX", "UI", "Crowd"]:
+	for bus_name: String in ["SFX", "UI", "Arena"]:
 		if AudioServer.get_bus_index(bus_name) == -1:
 			var idx: int = AudioServer.bus_count
 			AudioServer.add_bus(idx)
@@ -150,7 +150,7 @@ func _build_pools() -> void:
 		_pool_3d.append(p)
 	for i: int in _CROWD_POOL_SIZE:
 		var p := AudioStreamPlayer.new()
-		p.bus = "Crowd"
+		p.bus = "Arena"
 		add_child(p)
 		_pool_crowd.append(p)
 
@@ -182,7 +182,7 @@ func play_sfx(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0)
 
 
 # Non-spatial arena venue one-shots (goal horn, period buzzer, faceoff whistle)
-# on the dedicated Crowd bus, so the Crowd volume slider controls all crowd/
+# on the dedicated Arena bus, so the Arena volume slider controls all crowd/
 # arena atmosphere together rather than mixing these into gameplay SFX.
 func play_crowd(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0) -> void:
 	var stream: AudioStream = _streams.get(sound)

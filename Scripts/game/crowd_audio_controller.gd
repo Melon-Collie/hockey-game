@@ -3,8 +3,9 @@ extends Node
 
 # Drives crowd audio: a looping ambient murmur plus cheer one-shots on goals
 # and period/game-end buzzers. Both stream types route through the dedicated
-# "Crowd" audio bus (created by SoundManager) so a single PlayerPrefs slider
-# controls overall crowd volume independently of SFX.
+# "Arena" audio bus (created by SoundManager, shared with the horn/buzzer/
+# whistle one-shots) so a single PlayerPrefs slider controls overall arena
+# atmosphere independently of gameplay SFX.
 #
 # SoundManager stays one-shot-only — the looping ambient player and the small
 # cheer pool both live here, mirroring how SkaterSoundController owns its own
@@ -18,7 +19,7 @@ extends Node
 @export var duck_recover_time: float = 4.0
 
 const _CHEER_POOL_SIZE: int = 3
-const _CROWD_BUS: StringName = &"Crowd"
+const _ARENA_BUS: StringName = &"Arena"
 
 var _ambient_player: AudioStreamPlayer = null
 var _cheer_pool: Array[AudioStreamPlayer] = []
@@ -28,7 +29,7 @@ var _tween: Tween = null
 
 func _ready() -> void:
 	_ambient_player = AudioStreamPlayer.new()
-	_ambient_player.bus = _CROWD_BUS
+	_ambient_player.bus = _ARENA_BUS
 	_ambient_player.volume_db = ambient_volume_db
 	add_child(_ambient_player)
 
@@ -46,7 +47,7 @@ func _ready() -> void:
 		_cheer_stream = load(cheer_stream_path)
 	for i: int in _CHEER_POOL_SIZE:
 		var p: AudioStreamPlayer = AudioStreamPlayer.new()
-		p.bus = _CROWD_BUS
+		p.bus = _ARENA_BUS
 		add_child(p)
 		_cheer_pool.append(p)
 

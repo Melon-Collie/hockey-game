@@ -108,7 +108,7 @@ func _resolve_attempt(made: bool) -> void:
 	# Park the puck out of the way so a settling rebound can't re-trigger.
 	_stash_puck()
 	_hud.flash_result(made, _session.makes, _session.attempts_taken)
-	SoundManager.play_ui(SoundManager.Sound.GOAL_HORN if made else SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN if made else SoundManager.Sound.FACEOFF_WHISTLE)
 
 
 func _advance() -> void:
