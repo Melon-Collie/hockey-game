@@ -12,7 +12,7 @@ var _mute_unfocused_check: CheckButton = null
 var _volume_slider: HSlider = null
 var _sfx_slider: HSlider = null
 var _ui_slider: HSlider = null
-var _crowd_slider: HSlider = null
+var _arena_slider: HSlider = null
 var _res_btn: OptionButton = null
 var _res_values: Array[Vector2i] = []   # parallel to _res_btn items
 var _windowed_res_idx: int = 0          # the committed windowed pick (survives fullscreen display swap)
@@ -164,7 +164,7 @@ func _snapshot() -> Dictionary:
 		"master_volume": PlayerPrefs.master_volume,
 		"sfx_volume": PlayerPrefs.sfx_volume,
 		"ui_volume": PlayerPrefs.ui_volume,
-		"crowd_volume": PlayerPrefs.crowd_volume,
+		"arena_volume": PlayerPrefs.arena_volume,
 		"master_muted": PlayerPrefs.master_muted,
 		"mute_when_unfocused": PlayerPrefs.mute_when_unfocused,
 		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
@@ -208,7 +208,7 @@ func _read_controls() -> Dictionary:
 		"master_volume": _volume_slider.value,
 		"sfx_volume": _sfx_slider.value,
 		"ui_volume": _ui_slider.value,
-		"crowd_volume": _crowd_slider.value,
+		"arena_volume": _arena_slider.value,
 		"master_muted": _mute_check.button_pressed,
 		"mute_when_unfocused": _mute_unfocused_check.button_pressed,
 		"mouse_sensitivity": _sens_slider.value,
@@ -465,10 +465,10 @@ func _build_audio_tab() -> Control:
 	_ui_slider.value_changed.connect(func(v: float) -> void: ui_val.text = "%d%%" % int(v * 100))
 	box.add_child(_slider_row("UI", _ui_slider, ui_val))
 
-	_crowd_slider = _make_volume_slider(PlayerPrefs.crowd_volume)
-	var crowd_val := _value_label("%d%%" % int(PlayerPrefs.crowd_volume * 100))
-	_crowd_slider.value_changed.connect(func(v: float) -> void: crowd_val.text = "%d%%" % int(v * 100))
-	box.add_child(_slider_row("Crowd", _crowd_slider, crowd_val))
+	_arena_slider = _make_volume_slider(PlayerPrefs.arena_volume)
+	var arena_val := _value_label("%d%%" % int(PlayerPrefs.arena_volume * 100))
+	_arena_slider.value_changed.connect(func(v: float) -> void: arena_val.text = "%d%%" % int(v * 100))
+	box.add_child(_slider_row("Arena", _arena_slider, arena_val))
 
 	box.add_child(_section_spacer())
 
@@ -1194,7 +1194,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.master_volume = c.master_volume
 	PlayerPrefs.sfx_volume = c.sfx_volume
 	PlayerPrefs.ui_volume = c.ui_volume
-	PlayerPrefs.crowd_volume = c.crowd_volume
+	PlayerPrefs.arena_volume = c.arena_volume
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mute_when_unfocused = c.mute_when_unfocused
 	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
@@ -1292,7 +1292,7 @@ func _defaults() -> Dictionary:
 		"master_volume": 0.5,
 		"sfx_volume": 1.0,
 		"ui_volume": 1.0,
-		"crowd_volume": 1.0,
+		"arena_volume": 1.0,
 		"master_muted": false,
 		"mute_when_unfocused": true,
 		"mouse_sensitivity": 1.0,
@@ -1348,7 +1348,7 @@ func _apply_values_to_controls(v: Dictionary) -> void:
 	_volume_slider.value = v.master_volume
 	_sfx_slider.value = v.sfx_volume
 	_ui_slider.value = v.ui_volume
-	_crowd_slider.value = v.crowd_volume
+	_arena_slider.value = v.arena_volume
 	_mute_check.set_pressed_no_signal(v.master_muted)
 	if _mute_unfocused_check != null:
 		_mute_unfocused_check.set_pressed_no_signal(v.mute_when_unfocused)
