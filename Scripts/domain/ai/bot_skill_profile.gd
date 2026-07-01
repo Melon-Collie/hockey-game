@@ -47,6 +47,21 @@ extends RefCounted
 #     play develops in front of the human and is readable / interceptable rather
 #     than zipping around. 1.0 = today's pace. Consumed via AIActionScoring
 #     .pass_launch_speed at the carrier's own-pass sites (RoleContext carries it).
+#   • check_aggression — how hard the on-puck pressurer hunts BODY CHECKS. 1.0 =
+#     today's hit-hunting; below 1.0 raises the required separating-hit impulse
+#     inversely so an easier bot only commits to the hardest hits; 0.0 = never
+#     commits a check, pure containment. The single biggest "scary vs relaxed"
+#     lever — getting lined up and staggered is the most intense moment in the
+#     game. Consumed in AIRoleHelpers.evaluate_body_check.
+#   • defensive_anticipation_scale — multiplies DEFENSIVE_ANTICIPATION_S, how far
+#     the backline LEADS a moving man. 1.0 = today; lower → defenders react to
+#     where you ARE, not where you're GOING, sitting a step behind so there's
+#     space everywhere (not just off the puck-carrier, which pursuit_standoff_m
+#     handles). Consumed in AIRoleHelpers.lead_threat via the cover roles.
+#
+# Note the pace knobs split by WHAT a lower tier concedes: pursuit_standoff_m and
+# defensive_anticipation_scale concede SPACE (positioning), pass_speed_scale
+# concedes TEMPO (puck speed), check_aggression concedes THREAT (physicality).
 #
 # The GOALIE is intentionally NOT represented here — it stays consistent across
 # difficulties (and the skater AI's goalie-slide prediction in AIActionScoring
@@ -106,16 +121,27 @@ var pursuit_standoff_m: float
 # 1.0 = today's pace; lower = slower puck around the zone, more readable. Unitless.
 var pass_speed_scale: float
 
+# PACE: how hard the on-puck pressurer hunts body checks. 1.0 = today; 0.0 =
+# never commits a check (pure containment). Unitless.
+var check_aggression: float
+
+# PACE: multiplier on the backline's defensive anticipation lead. 1.0 = today;
+# lower = defenders sit a step behind the play. Unitless.
+var defensive_anticipation_scale: float
+
 
 func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 		p_mouse_max_speed_m_s: float, p_dispatch_period_ticks: int,
-		p_pursuit_standoff_m: float, p_pass_speed_scale: float) -> void:
+		p_pursuit_standoff_m: float, p_pass_speed_scale: float,
+		p_check_aggression: float, p_defensive_anticipation_scale: float) -> void:
 	carrier_reaction_delay_s = p_carrier_reaction_delay_s
 	mouse_lerp_factor = p_mouse_lerp_factor
 	mouse_max_speed_m_s = p_mouse_max_speed_m_s
 	dispatch_period_ticks = p_dispatch_period_ticks
 	pursuit_standoff_m = p_pursuit_standoff_m
 	pass_speed_scale = p_pass_speed_scale
+	check_aggression = p_check_aggression
+	defensive_anticipation_scale = p_defensive_anticipation_scale
 
 
 # Hard ≈ today's bot, with a light humanising pass so it reads as a very strong
@@ -124,10 +150,11 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 # snipes spray slightly by approach geometry. Dispatch at PHYSICS_TICK/60 = 2
 # ticks matches the engine baseline cadence. Tune mouse_max_speed DOWN toward
 # Normal if Hard still feels robotic; carrier_reaction_delay UP if it still
-# matches passes too readily. Pace knobs at their no-op baseline (standoff 0.0,
-# pass scale 1.0) — Hard keeps today's tight forecheck and full puck pace.
+# matches passes too readily. Pace knobs all at their no-op baseline (standoff
+# 0.0, pass scale 1.0, check aggression 1.0, anticipation 1.0) — Hard keeps
+# today's tight forecheck, full puck pace, hit-hunting, and anticipating backline.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 0.85, 30.0, 2, 0.0, 1.0)
+	return BotSkillProfile.new(0.05, 0.85, 30.0, 2, 0.0, 1.0, 1.0, 1.0)
 
 
 # Normal is the beatable tier, pushed firmly off the Hard ceiling so the gap
@@ -139,15 +166,17 @@ static func hard() -> BotSkillProfile:
 # carrier_reaction_delay DOWN toward 0.18 if it feels a step slow rather than
 # beatable; mouse_max_speed UP toward 14 if its shots feel too wild.
 #
-# Pace: defenders sag ~1.5 m off the cut-off line and the puck moves at 85% pace,
-# so a human gets a beat of time and the play develops more readably — the
-# difference a human feels every possession. The precision knobs above and these
-# pace knobs are INDEPENDENT dials: if Normal plays like a pushover, raise the
-# precision knobs back toward Hard (sharper hands/reads) and let these pace knobs
-# keep it beatable; if it still feels superhuman, soften the pace knobs further
-# (standoff UP, pass scale DOWN) before touching precision.
+# Pace: defenders sag ~1.5 m off the cut-off line, lead the play ~60% as far,
+# the puck moves at 85% pace, and hit-hunting is dialed back (check_aggression
+# 0.65 → only the harder hits commit). A human gets a beat of time and the play
+# develops more readably — the difference felt every possession. The precision
+# knobs above and these pace knobs are INDEPENDENT dials: if Normal plays like a
+# pushover, raise the precision knobs back toward Hard (sharper hands/reads) and
+# let these pace knobs keep it beatable; if it still feels superhuman, soften the
+# pace knobs further (standoff UP, pass scale / anticipation / aggression DOWN)
+# before touching precision.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 0.5, 11.0, 6, 1.5, 0.85)
+	return BotSkillProfile.new(0.22, 0.5, 11.0, 6, 1.5, 0.85, 0.65, 0.6)
 
 
 # Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
@@ -159,11 +188,13 @@ static func normal() -> BotSkillProfile:
 # numbers — tune carrier_reaction_delay / mouse_max_speed against play if a
 # newcomer still can't string possessions together.
 #
-# Pace: defenders sag ~3 m off (lots of room to carry and look up) and the puck
-# moves at 70% pace (slow, readable, easy to pick off) — low-energy across the
-# board, which is most of what makes Easy feel easy.
+# Pace: defenders sag ~3 m off (lots of room to carry and look up), barely lead
+# the play (anticipation 0.2 → a step behind), the puck moves at 70% pace (slow,
+# readable, easy to pick off), and bots NEVER hunt body checks (check_aggression
+# 0.0 → pure containment, no getting lined up). Low-energy across the board,
+# which is most of what makes Easy feel easy.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 0.38, 8.0, 9, 3.0, 0.70)
+	return BotSkillProfile.new(0.34, 0.38, 8.0, 9, 3.0, 0.70, 0.0, 0.2)
 
 
 static func for_difficulty(difficulty: int) -> BotSkillProfile:

@@ -74,15 +74,35 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal moves the puck slower than Hard")
 	assert_lt(easy.pass_speed_scale, normal.pass_speed_scale,
 			"Easy moves the puck slower than Normal")
+	# Pace — check aggression: lower hunts fewer body checks.
+	assert_lt(normal.check_aggression, hard.check_aggression,
+			"Normal hunts fewer checks than Hard")
+	assert_lt(easy.check_aggression, normal.check_aggression,
+			"Easy hunts fewer checks than Normal")
+	# Pace — defensive anticipation: lower sits further behind the play.
+	assert_lt(normal.defensive_anticipation_scale, hard.defensive_anticipation_scale,
+			"Normal anticipates the play less than Hard")
+	assert_lt(easy.defensive_anticipation_scale, normal.defensive_anticipation_scale,
+			"Easy anticipates the play less than Normal")
+
+
+func test_easy_never_hunts_body_checks() -> void:
+	# Easy's floor: check_aggression 0.0 is the sentinel for "pure containment,
+	# never commit a hit" (evaluate_body_check short-circuits on <= 0.0).
+	assert_eq(BotSkillProfile.easy().check_aggression, 0.0,
+			"Easy never hunts body checks")
 
 
 func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
-	# Hard must be EXACTLY today's pace by construction: zero extra standoff and
-	# full (1.0) pass speed, so the pace levers are a pure softening for the
-	# lower tiers and carry zero regression risk on the ceiling.
+	# Hard must be EXACTLY today's pace by construction: zero extra standoff, full
+	# pass speed, full hit-hunting, full anticipation — so the pace levers are a
+	# pure softening for the lower tiers and carry zero regression risk on the
+	# ceiling.
 	var hard: BotSkillProfile = BotSkillProfile.hard()
 	assert_eq(hard.pursuit_standoff_m, 0.0, "Hard adds no pursuit standoff")
 	assert_eq(hard.pass_speed_scale, 1.0, "Hard moves the puck at full pace")
+	assert_eq(hard.check_aggression, 1.0, "Hard hunts checks as today")
+	assert_eq(hard.defensive_anticipation_scale, 1.0, "Hard anticipates as today")
 
 
 func test_lerp_factors_stay_in_unit_range() -> void:

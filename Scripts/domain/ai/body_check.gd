@@ -72,7 +72,8 @@ static func evaluate(
 		self_body_check_transfer: float,
 		self_stagger_timer: float,
 		carrier_pos: Vector3,
-		carrier_vel: Vector3) -> Result:
+		carrier_vel: Vector3,
+		commit_impulse_threshold: float = COMMIT_IMPULSE_M_S) -> Result:
 	var r := Result.new()
 
 	# Don't commit while staggered — off-balance, can't deliver a hit.
@@ -100,7 +101,7 @@ static func evaluate(
 	var approach: float = _predicted_approach(self_pos, self_max_speed, intercept, carrier_vel)
 	var weight_ratio: float = self_weight / maxf(LEAGUE_VICTIM_WEIGHT, 0.001)
 	var predicted_impulse: float = approach * weight_ratio * self_body_check_transfer
-	if predicted_impulse < COMMIT_IMPULSE_M_S:
+	if predicted_impulse < commit_impulse_threshold:
 		return r
 
 	r.commit = true

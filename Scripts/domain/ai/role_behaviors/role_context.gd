@@ -76,6 +76,12 @@ var self_stagger_timer: float = 0.0
 var pursuit_standoff_m: float = 0.0
 # Multiplier on this bot's own pass launch speed (carrier.gd own-pass sites).
 var pass_speed_scale: float = 1.0
+# How hard the on-puck pressurer hunts body checks. 1.0 = today; 0.0 = never
+# commits a check (pure containment). Consumed in evaluate_body_check.
+var check_aggression: float = 1.0
+# Multiplier on DEFENSIVE_ANTICIPATION_S — how much the backline leads a moving
+# man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
+var defensive_anticipation_scale: float = 1.0
 
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the
