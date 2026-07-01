@@ -1058,6 +1058,32 @@ func rename_preset(index: int, name: String) -> void:
 	attr_presets[index]["name"] = _sanitize_preset_name(name)
 
 
+# Bulk-replace the whole preset list and active index in one shot — the commit
+# path for the picker panel, which edits a working copy and pushes it back on
+# Apply. Each entry is {"name": String, "levels": Array[int]} in Attribute enum
+# order (Speed, Agility, Hands, Size, Physical, Shot). Ignores entries that
+# don't carry six levels and never leaves the list empty (a no-op if nothing
+# usable is supplied). Callers persist with save() afterward.
+func set_all_presets(entries: Array, active: int) -> void:
+	var out: Array[Dictionary] = []
+	for entry: Variant in entries:
+		if not (entry is Dictionary):
+			continue
+		var lv: Array = (entry as Dictionary).get("levels", [])
+		if lv.size() < 6:
+			continue
+		var attrs := PlayerAttributes.from_levels(
+				int(lv[0]), int(lv[1]), int(lv[2]), int(lv[3]), int(lv[4]), int(lv[5]))
+		out.append(_make_preset(String((entry as Dictionary).get("name", DEFAULT_PRESET_NAME)), attrs))
+		if out.size() >= MAX_PRESETS:
+			break
+	if out.is_empty():
+		return
+	attr_presets = out
+	attr_active_preset = clampi(active, 0, out.size() - 1)
+	_sync_flat_from_active()
+
+
 func _clamp_attr(v: int) -> int:
 	return clampi(v, PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
 
