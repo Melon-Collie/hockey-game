@@ -430,7 +430,7 @@ func _check_puck_stuck_on_net(delta: float) -> void:
 # caller is responsible for emitting its own pre-whistle signal + RPC so
 # clients can play their own whistle/toast.
 func _whistle_and_faceoff(dot: Vector2) -> void:
-	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 	_state_machine.begin_faceoff_prep(dot)
 	_phase_coord.handle_phase_entered()
 
@@ -1081,7 +1081,7 @@ func _wire_sound_signals() -> void:
 	# each match by _spawn_world, so these always get freshly wired here.
 	_phase_coord.goal_scored.connect(
 		func(_t: Team, _s: String, _a1: String, _a2: String) -> void:
-			SoundManager.play_sfx(SoundManager.Sound.GOAL_HORN, -6.0))
+			SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN, -6.0))
 	if NetworkManager.is_host:
 		puck.puck_hit_boards.connect(func() -> void:
 			var spd: float = puck.linear_velocity.length()
@@ -1138,7 +1138,7 @@ func _wire_sound_signals() -> void:
 	NetworkManager.remote_carrier_changed.connect(_on_remote_carrier_sound)
 	NetworkManager.goal_received.connect(
 		func(_tid: int, _s0: int, _s1: int, _sn: String, _a1: String, _a2: String) -> void:
-			SoundManager.play_sfx(SoundManager.Sound.GOAL_HORN, -6.0))
+			SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN, -6.0))
 	NetworkManager.board_hit_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_BOARDS, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.05))
 	NetworkManager.goal_body_hit_received.connect(
@@ -1165,7 +1165,7 @@ func _wire_sound_signals() -> void:
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
 	phase_changed.connect(func(p: GamePhase.Phase) -> void:
 		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
-			SoundManager.play_sfx(SoundManager.Sound.PERIOD_BUZZER, -10.0))
+			SoundManager.play_crowd(SoundManager.Sound.PERIOD_BUZZER, -10.0))
 
 
 func _on_local_pickup_sound() -> void:
@@ -2387,17 +2387,17 @@ func _on_puck_out_of_play_received() -> void:
 	# phase change still arrives via world state; this just lights up the
 	# whistle + toast for clients at the same beat the host plays them.
 	puck_out_of_play.emit()
-	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 
 
 func _on_icing_called_received() -> void:
 	icing_called.emit()
-	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 
 
 func _on_offside_called_received() -> void:
 	offside_called.emit()
-	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 
 
 # ── Input batches from peers (host only) ─────────────────────────────────────

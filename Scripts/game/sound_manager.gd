@@ -68,6 +68,11 @@ const _SOUND_PATHS: Dictionary = {
 const _UI_POOL_SIZE: int = 4
 const _SFX_2D_POOL_SIZE: int = 4
 const _SFX_3D_POOL_SIZE: int = 12
+# Arena venue one-shots (goal horn, period buzzer, faceoff whistle) route here
+# so the Crowd slider governs all crowd/arena atmosphere as one group, separate
+# from gameplay SFX. Sized for the game-over case where the goal horn and the
+# period buzzer can overlap.
+const _CROWD_POOL_SIZE: int = 4
 
 # 3D world-sound falloff presets, selected via set_world_audio_range.
 #
@@ -93,8 +98,9 @@ const _REPLAY_NEAR_MAX_DISTANCE: float = 60.0
 
 var _streams: Dictionary = {}
 var _pool_ui: Array[AudioStreamPlayer] = []      # UI bus — hover, click
-var _pool_sfx_2d: Array[AudioStreamPlayer] = []  # SFX bus — horn, buzzer
+var _pool_sfx_2d: Array[AudioStreamPlayer] = []  # SFX bus — non-spatial gameplay cues
 var _pool_3d: Array[AudioStreamPlayer3D] = []    # SFX bus — all world sounds
+var _pool_crowd: Array[AudioStreamPlayer] = []   # Crowd bus — horn, buzzer, whistle
 
 
 func _ready() -> void:
@@ -142,6 +148,11 @@ func _build_pools() -> void:
 		p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 		add_child(p)
 		_pool_3d.append(p)
+	for i: int in _CROWD_POOL_SIZE:
+		var p := AudioStreamPlayer.new()
+		p.bus = "Crowd"
+		add_child(p)
+		_pool_crowd.append(p)
 
 
 func play_ui(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0) -> void:
@@ -162,6 +173,22 @@ func play_sfx(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0)
 	if stream == null:
 		return
 	for p: AudioStreamPlayer in _pool_sfx_2d:
+		if not p.playing:
+			p.stream = stream
+			p.volume_db = volume_db
+			p.pitch_scale = randf_range(1.0 - pitch_variance, 1.0 + pitch_variance) if pitch_variance > 0.0 else 1.0
+			p.play()
+			return
+
+
+# Non-spatial arena venue one-shots (goal horn, period buzzer, faceoff whistle)
+# on the dedicated Crowd bus, so the Crowd volume slider controls all crowd/
+# arena atmosphere together rather than mixing these into gameplay SFX.
+func play_crowd(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0) -> void:
+	var stream: AudioStream = _streams.get(sound)
+	if stream == null:
+		return
+	for p: AudioStreamPlayer in _pool_crowd:
 		if not p.playing:
 			p.stream = stream
 			p.volume_db = volume_db

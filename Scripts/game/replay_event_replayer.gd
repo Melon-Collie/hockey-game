@@ -100,7 +100,7 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 			# case never fires from GoalReplayDriver. File replay does have
 			# goal entries in the .mreplay event stream (GameManager.
 			# _on_goal_for_replay_event), so they wake the horn here.
-			SoundManager.play_sfx(SoundManager.Sound.GOAL_HORN, -6.0)
+			SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN, -6.0)
 		_:
 			pass  # unknown kind — silently skip so future schema additions don't crash old viewers
 
