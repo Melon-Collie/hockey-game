@@ -11,7 +11,7 @@ extends MeshInstance3D
 # the puck's rendered global_position — never gameplay state, never _physics_process.
 
 const ICE_Y: float = 0.004            # just above the ice plane (y=0) to avoid z-fighting
-const BASE_RADIUS: float = 0.075      # grounded blob radius (a touch wider than the puck disc)
+const BASE_RADIUS: float = 0.05       # grounded blob radius (a touch wider than the 0.04 puck disc)
 const BASE_ALPHA: float = 0.42        # grounded darkness
 const AIR_GROW_PER_M: float = 0.55    # extra scale per meter of puck height
 const AIR_MAX_SCALE: float = 2.2      # cap so a high pop doesn't balloon the blob

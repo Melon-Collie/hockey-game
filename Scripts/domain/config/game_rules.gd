@@ -97,10 +97,10 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 	return az >= GOAL_LINE_Z - NET_PUCK_BUFFER and az <= GOAL_LINE_Z + NET_DEPTH + NET_PUCK_BUFFER
 
 # ── Puck ──────────────────────────────────────────────────────────────────────
-# Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.035/2),
+# Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.025/2),
 # so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with
 # Puck.gd `ice_height` and the Puck.tscn mesh/shape height.
-const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
+const PUCK_START_POS: Vector3 = Vector3(0, 0.0125, 0)
 # Effective puck-on-ice friction coefficient — the AI/client-prediction MODEL of
 # the host's glide, NOT fed to physics. Must mirror what the host actually
 # simulates: the ice StaticBody's PhysicsMaterial, which HockeyRink builds in code
