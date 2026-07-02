@@ -101,7 +101,13 @@ extends StaticBody3D
 	set(v):
 		blue_line_color = v
 		_rebuild()
-@export var ice_friction: float = 0.01:
+# Puck-on-ice kinetic friction for the live host glide. This is the value Jolt
+# actually uses (the ice StaticBody's code-built PhysicsMaterial in _add_ice()) —
+# there is no ice .tres. Real rubber-on-ice μ is ~0.05–0.10; 0.05 keeps the puck
+# lively (it still glides most of the rink) while giving loose pucks a realistic
+# settle. Keep GameRules.ICE_FRICTION in sync — it MODELS this for AI/client
+# prediction and must match what the host simulates.
+@export var ice_friction: float = 0.05:
 	set(v):
 		ice_friction = v
 		_rebuild()

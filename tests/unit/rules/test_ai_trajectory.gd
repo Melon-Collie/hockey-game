@@ -55,8 +55,8 @@ func test_zero_velocity_yields_static_trajectory() -> void:
 func test_predict_puck_decelerates_with_ice_friction() -> void:
 	# A puck moving along +X should travel STRICTLY less far than the
 	# constant-velocity equivalent, because Coulomb friction (μ × g)
-	# decelerates it each step. With μ = ICE_FRICTION = 0.1 and g = 9.81 the
-	# deceleration is about 0.98 m/s² — observable over a couple seconds.
+	# decelerates it each step. With μ = ICE_FRICTION = 0.05 and g = 9.81 the
+	# deceleration is about 0.49 m/s² — observable over a couple seconds.
 	# Velocity / time chosen to stay well inside the rink (4 m/s × 2 s
 	# = 8 m, INNER_HALF_WIDTH ≈ 12.85 m) so the rink clamp / bounce
 	# doesn't confound the comparison.

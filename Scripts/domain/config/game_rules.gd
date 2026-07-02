@@ -97,26 +97,27 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 	return az >= GOAL_LINE_Z - NET_PUCK_BUFFER and az <= GOAL_LINE_Z + NET_DEPTH + NET_PUCK_BUFFER
 
 # ── Puck ──────────────────────────────────────────────────────────────────────
+# Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.035/2),
+# so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with
+# Puck.gd `ice_height` and the Puck.tscn mesh/shape height.
 const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
-# Effective puck-on-ice friction coefficient. MIRRORS Physics/ice.tres
-# (friction 0.1) — that material is what actually drives the host's Jolt glide;
-# this is the AI/client-prediction MODEL of it, so the two must stay in sync
-# (same pattern as PUCK_BOARD_BOUNCE ↔ boards.tres below). NOT fed to physics.
-# Why ice's coefficient is the effective μ (not a blend with the puck's): the
-# puck has no material override, and Godot's friction combine uses the `rough`
-# flag — ice.tres sets rough=true, so when one body is rough the combine takes
-# THAT body's friction. Hence μ_eff = ice friction = 0.1, independent of the
-# puck's default. (Was 0.01 — a 10× decimal error that never matched ice.tres,
-# so modelled pucks glided ~10× too far.)
-const ICE_FRICTION: float = 0.1
+# Effective puck-on-ice friction coefficient — the AI/client-prediction MODEL of
+# the host's glide, NOT fed to physics. Must mirror what the host actually
+# simulates: the ice StaticBody's PhysicsMaterial, which HockeyRink builds in code
+# from its `ice_friction` export (currently 0.05). There is NO ice .tres driving
+# the sim — an orphaned Physics/ice.tres (friction 0.1) once misled this constant
+# to 0.1 while the live ice ran 0.01, so modelled pucks decelerated ~10× too fast
+# and prediction undershot long glides/rims. Keep this equal to
+# HockeyRink.ice_friction. (Same mirror pattern as PUCK_BOARD_BOUNCE ↔ boards.tres.)
+const ICE_FRICTION: float = 0.05
 # Standard gravity, for the Coulomb conversion below.
 const GRAVITY_M_S2: float = 9.81
 # Puck deceleration on ice — constant Coulomb model. The puck slides flat
-# (Puck.tscn locks angular X/Z), so friction force = μ·m·g and a = μ·g ≈ 0.98 m/s²,
+# (Puck.tscn locks angular X/Z), so friction force = μ·m·g and a = μ·g ≈ 0.49 m/s²,
 # independent of speed and mass. Single source of truth for the host's real glide
 # so AI trajectory prediction and client puck extrapolation decelerate the same
-# way Jolt does. Keep ICE_FRICTION in sync with Physics/ice.tres if the ice is
-# retuned.
+# way Jolt does. Keep ICE_FRICTION in sync with HockeyRink.ice_friction if the ice
+# is retuned.
 const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
 # Board restitution coefficient. Mirrors Physics/boards.tres bounce
 # value so AI prediction models post-bounce trajectories the same
