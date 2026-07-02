@@ -37,6 +37,10 @@ values via read-modify-write, not increments) — then **publish**.
 | `STAT_SHOTS_BLOCKED`   | INT  | shots blocked                   |
 | `STAT_WINS`            | INT  | games won                       |
 | `STAT_GAMES_PLAYED`    | INT  | games played                    |
+| `STAT_HITS_TAKEN`      | INT  | body checks absorbed            |
+| `STAT_TAKEAWAYS`       | INT  | pucks stripped from opponents   |
+| `STAT_GIVEAWAYS`       | INT  | self-inflicted turnovers        |
+| `STAT_FACEOFF_WINS`    | INT  | faceoffs won (as centre)        |
 
 These names must match `SteamStats.ALL` exactly. The GUT test
 `test_every_career_achievement_has_a_backing_stat` fails the build if a career

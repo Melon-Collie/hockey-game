@@ -29,8 +29,19 @@ create table if not exists public.career_stats (
     team_id        smallint,
     created_at     timestamptz not null default now(),
     period_scores  jsonb,
-    num_periods    smallint
+    num_periods    smallint,
+    hits_taken     integer default 0 not null,
+    takeaways      integer default 0 not null,
+    giveaways      integer default 0 not null,
+    faceoff_wins   integer default 0 not null
 );
+
+-- Migration for an existing DB (the create above is skipped once the table
+-- exists). Safe to re-run — IF NOT EXISTS makes each ADD idempotent.
+alter table public.career_stats add column if not exists hits_taken   integer default 0 not null;
+alter table public.career_stats add column if not exists takeaways    integer default 0 not null;
+alter table public.career_stats add column if not exists giveaways    integer default 0 not null;
+alter table public.career_stats add column if not exists faceoff_wins integer default 0 not null;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 
@@ -58,6 +69,10 @@ with (security_invoker = true) as
     sum(shots_on_goal) AS shots_on_goal,
     sum(hits) AS hits,
     sum(shots_blocked) AS shots_blocked,
+    sum(hits_taken) AS hits_taken,
+    sum(takeaways) AS takeaways,
+    sum(giveaways) AS giveaways,
+    sum(faceoff_wins) AS faceoff_wins,
     sum(toi_seconds) AS toi_seconds,
     sum(goals_for) AS goals_for,
     sum(goals_against) AS goals_against,
@@ -98,6 +113,10 @@ as $function$
         'shots_on_goal', cs.shots_on_goal,
         'hits',          cs.hits,
         'shots_blocked', cs.shots_blocked,
+        'hits_taken',    cs.hits_taken,
+        'takeaways',     cs.takeaways,
+        'giveaways',     cs.giveaways,
+        'faceoff_wins',  cs.faceoff_wins,
         'plus_minus',    cs.goals_for - cs.goals_against,
         'toi_seconds',   cs.toi_seconds,
         'outcome',       cs.outcome

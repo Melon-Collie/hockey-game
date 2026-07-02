@@ -31,6 +31,12 @@ func test_hit_on_opponent_credits_hitter() -> void:
 	tracker.on_hit(1, 2, 1)  # team 0 hits team 1
 	assert_eq(hitter.stats.hits, 1)
 
+func test_hit_credits_victim_a_hit_taken() -> void:
+	_add_player(1, 0)
+	var victim := _add_player(2, 1)
+	tracker.on_hit(1, 2, 1)
+	assert_eq(victim.stats.hits_taken, 1)
+
 func test_hit_on_teammate_does_not_credit() -> void:
 	var hitter := _add_player(1, 0)
 	_add_player(2, 0)

@@ -154,6 +154,7 @@ var _registry: PlayerRegistry = null
 var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
+var _turnover_tracker: TurnoverTracker = null
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
 var _stick_lift_claim: StickLiftClaimResolver = null
@@ -1008,6 +1009,12 @@ func _wire_subsystems() -> void:
 	_hit_tracker.setup(_registry)
 	_hit_tracker.hit_credited.connect(_on_hit_credited)
 
+	# Host-only takeaway / giveaway / faceoff-win attribution off possession
+	# changes. Fed by the pickup, strip, and shot-on-goal hooks below.
+	_turnover_tracker = TurnoverTracker.new()
+	_turnover_tracker.setup(_registry)
+	_shot_tracker.shot_on_goal_recorded.connect(_turnover_tracker.note_shot_on_goal)
+
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
@@ -1625,6 +1632,10 @@ func _build_replay_footer() -> Dictionary:
 				"shots_on_goal": r.stats.shots_on_goal,
 				"hits": r.stats.hits,
 				"shots_blocked": r.stats.shots_blocked,
+				"hits_taken": r.stats.hits_taken,
+				"takeaways": r.stats.takeaways,
+				"giveaways": r.stats.giveaways,
+				"faceoff_wins": r.stats.faceoff_wins,
 				"toi_seconds": roundi(r.stats.toi_seconds),
 			})
 	footer["players"] = players
@@ -1874,8 +1885,14 @@ func _on_server_puck_picked_up_by(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
+	# Read the phase BEFORE on_pickup transitions FACEOFF -> PLAYING, so the
+	# tracker knows this pickup won the draw.
+	var was_faceoff: bool = _state_machine != null \
+			and _state_machine.current_phase == GamePhase.Phase.FACEOFF
 	_shot_tracker.on_pickup(peer_id)
 	_phase_coord.on_pickup(peer_id)
+	if _turnover_tracker != null:
+		_turnover_tracker.on_carrier_gained(peer_id, was_faceoff)
 	record.controller.on_puck_picked_up_network()
 	if not record.is_local:
 		NetworkManager.send_puck_picked_up(peer_id)
@@ -1948,6 +1965,8 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
+	if _turnover_tracker != null:
+		_turnover_tracker.note_strip(peer_id)
 	_state_machine.notify_icing_contact()
 	if not record.is_local:
 		# Tell the victim's client whether this was a stick lift so it can pop
@@ -2810,6 +2829,8 @@ func _apply_reset() -> void:
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()
+	if _turnover_tracker != null:
+		_turnover_tracker.reset()
 	stats_updated.emit()
 
 

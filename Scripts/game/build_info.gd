@@ -37,7 +37,9 @@ const VERSION: String = "dev"
 #     clamp floored the attack_up team-1 negated cursor to (0,0), so the host
 #     derived zero wrister charge / null aim for those shooters and fired drags
 #     as taps. Signed encoding round-trips the negation.
-const PROTOCOL_VERSION: int = 9
+# v10: stats packet grew — PlayerStats.to_array() 5 -> 9 (hits_taken, takeaways,
+#      giveaways, faceoff_wins), so STATS_PLAYER_RECORD_SIZE 6 -> 10.
+const PROTOCOL_VERSION: int = 10
 
 
 func _ready() -> void:
