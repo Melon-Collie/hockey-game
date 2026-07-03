@@ -198,3 +198,61 @@ func test_poke_uses_fallback_when_everything_is_zero() -> void:
 		0.5, 3.0, 9.0, fallback)
 	assert_almost_eq(result.length(), 3.0, 0.01, "fallback strip uses min_speed")
 	assert_gt(result.z, 0.0, "should use fallback direction (+Z)")
+
+
+# ── contested_pickup_velocity ────────────────────────────────────────────────
+# Two blades on the same loose puck. Never awards possession — always squirts —
+# but biased toward the stronger blade (vector sum of blade momenta); a true
+# deadlock pops perpendicular. Args: (a_vel, b_vel, a_pos, b_pos, min, max,
+# deadlock_speed, deadlock_threshold, perp_sign, fallback_dir).
+
+func test_contested_biases_toward_stronger_blade() -> void:
+	# A sweeps hard +X, B drifts gently +Z → net (6,0,1): puck goes mostly A's way.
+	var result: Vector3 = PuckCollisionRules.contested_pickup_velocity(
+		Vector3(6, 0, 0), Vector3(0, 0, 1),
+		Vector3(0, 0, 1), Vector3(0, 0, -1),
+		3.0, 9.0, 3.0, 0.5, 1.0, Vector3(1, 0, 0))
+	assert_gt(result.x, 0.0, "goes toward the stronger blade's push (+X)")
+	assert_gt(result.x, absf(result.z), "stronger blade dominates the heading")
+	assert_almost_eq(result.length(), sqrt(37.0), 0.01, "speed = combined momentum magnitude")
+
+func test_contested_speed_scales_and_clamps() -> void:
+	var hard: Vector3 = PuckCollisionRules.contested_pickup_velocity(
+		Vector3(10, 0, 0), Vector3(5, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1),
+		3.0, 9.0, 3.0, 0.5, 1.0, Vector3(1, 0, 0))
+	var moderate: Vector3 = PuckCollisionRules.contested_pickup_velocity(
+		Vector3(4, 0, 0), Vector3.ZERO, Vector3(0, 0, 1), Vector3(0, 0, -1),
+		3.0, 9.0, 3.0, 0.5, 1.0, Vector3(1, 0, 0))
+	var weak: Vector3 = PuckCollisionRules.contested_pickup_velocity(
+		Vector3(1, 0, 0), Vector3.ZERO, Vector3(0, 0, 1), Vector3(0, 0, -1),
+		3.0, 9.0, 3.0, 0.5, 1.0, Vector3(1, 0, 0))
+	assert_almost_eq(hard.length(), 9.0, 0.01, "big combined sweep clamps to max")
+	assert_almost_eq(moderate.length(), 4.0, 0.01, "moderate contest → its own momentum")
+	assert_almost_eq(weak.length(), 3.0, 0.01, "weak-but-directional clamps up to min")
+
+func test_contested_deadlock_pops_perpendicular() -> void:
+	# Blades cancel (net 0) → pop perpendicular to the blade-to-blade line (Z axis
+	# here), at deadlock_speed, on the perp_sign side.
+	var result: Vector3 = PuckCollisionRules.contested_pickup_velocity(
+		Vector3(3, 0, 0), Vector3(-3, 0, 0),
+		Vector3(0, 0, 1), Vector3(0, 0, -1),
+		3.0, 9.0, 3.0, 0.5, 1.0, Vector3(1, 0, 0))
+	assert_almost_eq(result.length(), 3.0, 0.01, "deadlock uses deadlock_speed")
+	assert_almost_eq(result.z, 0.0, 0.01, "pops perpendicular to the blade line (no Z)")
+	assert_ne(result.x, 0.0, "squirts sideways along X")
+
+func test_contested_deadlock_perp_sign_flips_side() -> void:
+	var pos: Vector3 = PuckCollisionRules.contested_pickup_velocity(
+		Vector3(3, 0, 0), Vector3(-3, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1),
+		3.0, 9.0, 3.0, 0.5, 1.0, Vector3(1, 0, 0))
+	var neg: Vector3 = PuckCollisionRules.contested_pickup_velocity(
+		Vector3(3, 0, 0), Vector3(-3, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1),
+		3.0, 9.0, 3.0, 0.5, -1.0, Vector3(1, 0, 0))
+	assert_almost_eq(pos.x, -neg.x, 0.01, "perp_sign flips the squirt side")
+
+func test_contested_deadlock_coincident_blades_uses_fallback() -> void:
+	# Net 0 AND blades at the same point → no blade-line, use the fallback dir.
+	var result: Vector3 = PuckCollisionRules.contested_pickup_velocity(
+		Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
+		3.0, 9.0, 3.0, 0.5, 1.0, Vector3(0, 0, 1))
+	assert_almost_eq(result.length(), 3.0, 0.01, "coincident deadlock still squirts at deadlock_speed")

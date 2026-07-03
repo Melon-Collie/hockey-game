@@ -122,3 +122,32 @@ static func poke_strip_velocity(
 	else:
 		strip_dir = fallback_direction.normalized()
 	return strip_dir * speed
+
+
+# Contested pickup: two blades reach the same loose puck at once. Neither player
+# ever gets possession off this path — the puck squirts free — but its HEADING is
+# biased toward the stronger blade: the exit is the vector sum of the two blade
+# momenta, so a harder/faster sweep dominates the sum and the puck goes that
+# player's way (blade speed already reflects Hands, so no attribute term is needed
+# here). Speed is that combined momentum, clamped to [min_speed, max_speed]. When
+# the two blades roughly cancel (net below deadlock_threshold — a true 50/50), the
+# puck instead pops out PERPENDICULAR to the line between the blade contact points
+# (the "pinched seed" behavior) at deadlock_speed; the caller supplies the ± side
+# and a degenerate fallback direction so the rule stays deterministic under test.
+static func contested_pickup_velocity(
+		blade_a_vel: Vector3, blade_b_vel: Vector3,
+		blade_a_pos: Vector3, blade_b_pos: Vector3,
+		min_speed: float, max_speed: float,
+		deadlock_speed: float, deadlock_threshold: float,
+		perp_sign: float, fallback_dir: Vector3) -> Vector3:
+	var net := Vector3(blade_a_vel.x + blade_b_vel.x, 0.0, blade_a_vel.z + blade_b_vel.z)
+	if net.length() > deadlock_threshold:
+		return net.normalized() * clampf(net.length(), min_speed, max_speed)
+	# Deadlock — blades cancel. Pop perpendicular to the blade-to-blade line.
+	var along := Vector3(blade_a_pos.x - blade_b_pos.x, 0.0, blade_a_pos.z - blade_b_pos.z)
+	if along.length() < 0.001:
+		along = Vector3(fallback_dir.x, 0.0, fallback_dir.z)
+		if along.length() < 0.001:
+			along = Vector3(1.0, 0.0, 0.0)
+	var perp := Vector3(-along.z, 0.0, along.x).normalized()
+	return perp * perp_sign * deadlock_speed

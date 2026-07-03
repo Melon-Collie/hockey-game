@@ -132,7 +132,7 @@ All puck contact logic runs on the host via `PuckController._check_interactions`
 
 ### Why Not Predict Pickup?
 
-Server-side collision detection + contested-claim arbitration is never predicted; only the **visual** attach on an **uncontested** grab is (`try_provisional_pickup` optimistic pin, with the carry state machine still waiting for the host grant so a rollback is at most a brief visual pop). Full gate detail in the "No pickup prediction…" decision above.
+Server-side collision detection + contested-claim arbitration is never predicted; only the **visual** attach on an **uncontested** grab is (`try_provisional_pickup` optimistic pin, with the carry state machine still waiting for the host grant so a rollback is at most a brief visual pop). Full gate detail in the "No pickup prediction…" decision above. **The contest resolution** (`PuckController.apply_contested_pickup` → `PuckCollisionRules.contested_pickup_velocity`) never awards possession — it squirts the puck free **biased toward the stronger blade's momentum** (vector sum of the two blade velocities, clamped; a true 50/50 pops perpendicular). Both entry points share it: the networked claim path (two claims within 50 ms) and the host present-time pickup tick, where `_find_contesting_corraller` detects a same-tick second corraller and routes it through the same call. So faceoff draws and board scrambles resolve identically. (Residual host/client asymmetry — the host commits present-time without holding for in-flight client claims — is unchanged; see the "cost of not adding a fixed pickup latency" note below.)
 
 ---
 
