@@ -937,6 +937,9 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	_phase_label.visible = false
 	_scorer_label.text = scorer_name
 	_scorer_label.add_theme_color_override("font_color", team_secondary)
+	# Restore the goal-chyron tag — game over borrows this label for
+	# "STAR OF THE GAME", so re-stamp it on every goal preload.
+	_assist_tag_label.text = "ASSISTED BY"
 	_assist_tag_label.add_theme_color_override("font_color", team_secondary)
 	_assist_label.add_theme_color_override("font_color", team_secondary)
 	_phase_style.bg_color = team_primary
@@ -1241,11 +1244,38 @@ func _on_game_over() -> void:
 	else:
 		_phase_label.text = "TIE"
 		_phase_label.add_theme_color_override("font_color", _WHITE)
+	# Star of the Game on the chyron's spare rows (the goal-scorer rows are
+	# hidden at game over). One star only — scarcity keeps it meaningful at 3v3.
+	var star: PlayerRecord = GameManager.get_star_of_game()
+	if star != null:
+		_assist_tag_label.text = "STAR OF THE GAME"
+		_assist_tag_label.add_theme_color_override("font_color", _GOLD)
+		_assist_tag_label.visible = true
+		_assist_label.text = "%s  ·  %s" % [star.display_name(), _star_stat_line(star.stats)]
+		_assist_label.add_theme_color_override("font_color", _GOLD)
+		_assist_label.visible = true
 	_show_phase_banner_at_rest()
 	_rematch_votes.clear()
 	_local_voted = false
 	_update_rematch_ui()
 	_game_over_popup.show_popup()
+
+# Compact stat line for the star card. Scorers show goals/assists; a star who
+# earned it on volume/defense (a 0-point grinder game) shows those instead.
+func _star_stat_line(stats: PlayerStats) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	if stats.goals > 0:
+		parts.append("%dG" % stats.goals)
+	if stats.assists > 0:
+		parts.append("%dA" % stats.assists)
+	if parts.is_empty():
+		if stats.shots_on_goal > 0:
+			parts.append("%d SOG" % stats.shots_on_goal)
+		if stats.shots_blocked > 0:
+			parts.append("%d BLK" % stats.shots_blocked)
+		if stats.hits > 0:
+			parts.append("%d HITS" % stats.hits)
+	return " · ".join(parts)
 
 func _on_game_reset() -> void:
 	_game_over_popup.hide_popup()

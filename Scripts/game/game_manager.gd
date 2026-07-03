@@ -2647,6 +2647,29 @@ func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_times
 	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
 
 
+# Star of the Game, computed locally from the replicated stat counters. Every
+# machine sees the same counters and the same sorted-peer-id candidate order,
+# and StarOfGameRules breaks ties explicitly, so selection is deterministic
+# without an RPC. Returns null when nobody registered a counting stat.
+func get_star_of_game() -> PlayerRecord:
+	if _registry == null:
+		return null
+	var peer_ids: Array[int] = []
+	for pid: int in _registry.all().keys():
+		peer_ids.append(pid)
+	peer_ids.sort()
+	var scores: Array[float] = []
+	var is_human: Array[bool] = []
+	for pid: int in peer_ids:
+		var rec: PlayerRecord = _registry.get_record(pid)
+		scores.append(StarOfGameRules.score(rec.stats))
+		is_human.append(not rec.is_bot)
+	var star_idx: int = StarOfGameRules.pick_star(scores, is_human)
+	if star_idx == -1:
+		return null
+	return _registry.get_record(peer_ids[star_idx])
+
+
 # ── Scene exit & reset ───────────────────────────────────────────────────────
 func _on_game_over() -> void:
 	if _state_machine == null or _registry == null or _career_reporter == null:
