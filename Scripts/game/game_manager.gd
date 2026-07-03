@@ -33,6 +33,9 @@ signal stats_updated
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color)
 signal local_player_hit(magnitude: float)
+# The local player released a possessed shot. `power` is release speed in m/s.
+# HUD listens for the shot-speed toast on hard shots.
+signal local_shot_released(power: float, is_slapper: bool)
 # Host-authoritative body-check impact, re-emitted for cosmetic listeners
 # (crowd reaction in ArenaStands) after the burst/sound fire in
 # _on_body_check_landed. `force` is the same VFX-scale impact force.
@@ -1766,6 +1769,9 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
+		local_ctrl.puck_release_requested.connect(
+				func(_dir: Vector3, power: float, is_slapper: bool) -> void:
+					local_shot_released.emit(power, is_slapper))
 		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)

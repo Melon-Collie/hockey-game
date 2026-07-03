@@ -151,6 +151,7 @@ func _ready() -> void:
 	GameManager.icing_called.connect(_on_icing_called)
 	GameManager.offside_called.connect(_on_offside_called)
 	GameManager.local_player_hit.connect(_on_local_player_hit)
+	GameManager.local_shot_released.connect(_on_local_shot_released)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
@@ -1316,6 +1317,19 @@ func _on_local_player_hit(magnitude: float) -> void:
 		return
 	var strength := clampf(magnitude / 12.0, 0.2, 0.55)
 	_flash_overlay.vignette_pulse(strength)
+
+# Shot-speed toast for the local player's hard shots. 22 m/s sits above every
+# pass/quick-snap (14) and below only near-max charged releases (wrister tops
+# at 24, slapper at 34 before the Shot attribute), so the toast stays a
+# brag-worthy event, not release-by-release noise.
+const _SHOT_SPEED_TOAST_MIN_M_S: float = 22.0
+const _M_S_TO_MPH: float = 2.23694
+
+func _on_local_shot_released(power: float, is_slapper: bool) -> void:
+	if power < _SHOT_SPEED_TOAST_MIN_M_S or _toast_stack == null:
+		return
+	var label: String = "SLAP SHOT" if is_slapper else "WRISTER"
+	_toast_stack.push("%s · %d MPH" % [label, roundi(power * _M_S_TO_MPH)], _GOLD)
 
 func _on_shots_on_goal_changed(sog_0: int, sog_1: int) -> void:
 	if _home_sog_label != null:
