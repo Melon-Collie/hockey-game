@@ -101,16 +101,6 @@ extends StaticBody3D
 	set(v):
 		blue_line_color = v
 		_rebuild()
-# Puck-on-ice kinetic friction for the live host glide. This is the value Jolt
-# actually uses (the ice StaticBody's code-built PhysicsMaterial in _add_ice()) —
-# there is no ice .tres. Real rubber-on-ice μ is ~0.05–0.10; 0.05 keeps the puck
-# lively (it still glides most of the rink) while giving loose pucks a realistic
-# settle. Keep GameRules.ICE_FRICTION in sync — it MODELS this for AI/client
-# prediction and must match what the host simulates.
-@export var ice_friction: float = 0.05:
-	set(v):
-		ice_friction = v
-		_rebuild()
 @export_group("Ice Shader")
 @export var ice_fog_color: Color = Color(0.84, 0.91, 1.0):
 	set(v):
@@ -419,8 +409,12 @@ func _add_ice() -> void:
 	# perimeter boards move to LAYER_BOARDS; the ice is a flat slab and never
 	# produces the concave-corner crease that wedged the skater.
 	ice_body.collision_layer = Constants.LAYER_WALLS
+	# Single source of truth: the live ice friction the host simulates IS
+	# GameRules.ICE_FRICTION (realistic puck-on-ice μ ~0.05). The AI/client
+	# prediction model reads the same constant, so the two can never drift — no
+	# hand-sync, no ice .tres. (Puck-on-ice glide only; boards own the rim feel.)
 	var phys_mat := PhysicsMaterial.new()
-	phys_mat.friction = ice_friction
+	phys_mat.friction = GameRules.ICE_FRICTION
 	phys_mat.bounce = 0.0
 	ice_body.physics_material_override = phys_mat
 	add_child(ice_body)
