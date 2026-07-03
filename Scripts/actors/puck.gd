@@ -399,6 +399,18 @@ func fire_stick_lift_vfx() -> void:
 	if vfx != null:
 		vfx.fire_stick_lift_burst()
 
+# Ice-chip puff for a board hit; PuckVFX gates on speed and coalesces grinds.
+func fire_board_impact_vfx(speed: float) -> void:
+	var vfx := get_node_or_null("VFX") as PuckVFX
+	if vfx != null:
+		vfx.fire_board_impact_burst(speed)
+
+# Spark snap for a shot off the post; PuckVFX skips soft touches.
+func fire_post_ping_vfx(speed: float) -> void:
+	var vfx := get_node_or_null("VFX") as PuckVFX
+	if vfx != null:
+		vfx.fire_post_ping_burst(speed)
+
 func _on_body_entered(body: Node3D) -> void:
 	if carrier != null:
 		return
