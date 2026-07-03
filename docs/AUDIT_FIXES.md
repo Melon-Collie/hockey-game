@@ -71,14 +71,19 @@ one-timer — the goalie should drive toward the far post, not park at net-cente
 2P test: reconnect into a held slot after a teammate changed position (no double-spawn on a dot);
 promote a spectator whose peer just left (no phantom skater); spam Return-to-Free-Play/Exit (single teardown).
 
-## Batch 6 — Wire + reconcile determinism · verify: 2P · ONE PROTOCOL_VERSION bump
-- [ ] P0-1  `stagger_timer` wire field + codec completeness test
-- [ ] Part1-P2 goalie glove/blocker offsets s8→s16
-- [ ] Part1-P2 goalie `rotation_y` wrap-not-clamp on encode
+## Batch 6 — Wire + reconcile determinism · verify: 2P · PROTOCOL_VERSION 9→10
+Sub-batch 6a (wire/codec — landed, round-trip tested headless):
+- [x] P0-1  `stagger_timer` on the wire (u8 @0.01s), skater block 38→39B + test
+- [x] Part1-P2 goalie glove/blocker offsets s8→s16 (goalie block 35→41B) + test
+- [x] Part1-P2 goalie `rotation_y` wrapped into (-π,π] before quantize + test
+- [x] Also fixed the hardcoded 38B skater-state slices in decode_world_state/decode_for_replay
+
+Sub-batch 6b (reconcile/lag-comp determinism — NO wire change, needs 2P validation):
 - [ ] P1-5  Lead-aware lag-comp rewind (report delay × (1 − lead_fraction))
 - [ ] P1-7  Reconcile replay determinism holes (snapshot live puck/goalie reads)
 - [ ] P1-6  Host-measured ping for claim-stamp plausibility (or bounds-clamp report_ping)
 - [ ] Part1-P2 body-check impulse replay phasing + contested-pickup present-time state
+- [ ] P2-17b telemetry 5 Hz dead-puck phase-gate (folded here)
 
 ## Batch 7 — Game flow & docs · verify: SOLO + doc-only
 - [x] P2-2  Faceoff goal void — `on_faceoff_puck_touched` ends the faceoff on deflect/loose-touch/one-timer (+ test)

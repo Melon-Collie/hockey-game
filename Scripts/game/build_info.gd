@@ -37,7 +37,13 @@ const VERSION: String = "dev"
 #     clamp floored the attack_up team-1 negated cursor to (0,0), so the host
 #     derived zero wrister charge / null aim for those shooters and fired drags
 #     as taps. Signed encoding round-trips the negation.
-const PROTOCOL_VERSION: int = 9
+# v10: world-state wire fixes. Skater block 38->39B: adds stagger_timer (u8 @0.01s)
+#     — it was never serialized, so a client victim's predicted body-check stagger
+#     was wiped to 0 on the next reconcile (full-thrust replay vs penalised host).
+#     Goalie block 35->41B: glove/blocker offsets s8->s16 (Y reach 1.55m exceeded
+#     the s8 ±1.27m range, clipping above-crossbar reaches ~28cm low), and rotation_y
+#     is wrapped into (-PI,PI] before quantizing (the -Z goalie's facing pinned flat).
+const PROTOCOL_VERSION: int = 10
 
 
 func _ready() -> void:
