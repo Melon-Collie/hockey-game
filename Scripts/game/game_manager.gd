@@ -402,7 +402,15 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	var pos := puck.global_position
 	var pos2d := Vector2(pos.x, pos.z)
 	var clamped := GameRules.clamp_to_rink_inner(pos2d)
-	if pos2d.distance_to(clamped) > 0.2:
+	var xz_outside: float = pos2d.distance_to(clamped)
+	# Out of play if the puck is clearly outside the boundary (XZ), OR it is at/past
+	# the boundary while elevated above the boards — the latter catches a puck that
+	# went over the glass or perched on the boards, which the flat 0.2 m XZ check
+	# alone would miss (soft-lock). A legitimate high deflection is INSIDE the rink,
+	# so its xz_outside is ~0 and it doesn't trip the height branch.
+	var over_boards: bool = xz_outside > 0.01 \
+			and (pos.y - puck.ice_height) > GameRules.PUCK_OVER_BOARDS_HEIGHT
+	if xz_outside > 0.2 or over_boards:
 		_puck_oob_timer += delta
 		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0

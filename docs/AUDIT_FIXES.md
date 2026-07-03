@@ -36,12 +36,17 @@ editing scripts — a stale cache was silently skipping ~68 test scripts (showed
 1253 instead of the true 1321). Regenerated; keep an eye out after bulk edits.
 
 ## Batch 3 — Puck physics & geometry · verify: SOLO
-- [ ] P2-1  Puck altitude clamp vs glass collision top (the escape) — raise collision ceiling
-- [ ] P2-9  Height-aware out-of-bounds whistle
-- [ ] P2-10 Clear `_pending_elevation_vel`/`_pending_elevation` in reset()/drop()
-- [ ] P2-13 Stop classifying ice contacts as board hits
-- [ ] P3    Wake sleeping puck in reset()
-- [ ] P3    Goal-frame PhysicsMaterial (author trivial .tres) — decide dead-post vs bouncy
+- [x] P2-1  Perimeter collision now extends to COLLISION_OVERGLASS_TOP (3.2) above the puck clamp — closes the escape
+- [x] P2-9  Height-aware OOB whistle (over-boards term) as defense-in-depth
+- [x] P2-10 Clear `_pending_elevation_vel`/`_pending_elevation` in reset()/drop()
+- [x] P2-13 Board-hit fires only on `body is HockeyRink`, not the ice StaticBody
+- [x] P3    Wake sleeping puck in reset() (`sleeping = false`)
+- [»] P3    Goal-frame PhysicsMaterial — DEFERRED: dead-post vs bouncy is a feel call for you.
+      Real posts ping hard; boards are 0.4. Say the word and I'll author the trivial .tres + mirror test.
+
+SOLO test after pulling: (1) toggle elevation, tip/deflect a hard shot near the boards repeatedly —
+puck must never leave the rink; (2) pass/shoot and confirm the board thud/chip VFX no longer fires on
+release or on the puck landing on open ice; (3) faceoffs after a shot-into-whistle drop cleanly.
 
 ## Batch 4 — Goalie · verify: SOLO
 - [ ] P0-2  Not-upright reaction-timer zeroing (scope the clear to its intent)

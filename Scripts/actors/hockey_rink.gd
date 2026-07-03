@@ -145,6 +145,11 @@ const CAP_RAIL_HEIGHT: float = 0.05
 # (renders both sides), and coplanar opaque-vs-double-sided-transparent
 # z-fights along the seam.
 const GLASS_LIFT: float = 0.001
+# Collision-only perimeter height. Must stay above the puck's vertical clamp
+# (Puck.max_height 3.0 + ice half-height 0.0125 ≈ 3.01 m) so an elevated
+# deflection that pegs the clamp can't slip over the visible glass and out of the
+# rink. Purely a collider extent — the glass mesh stops at glass_y_top.
+const COLLISION_OVERGLASS_TOP: float = 3.2
 # Recess the kickplate's bottom this far below the ice plane. The merged
 # perimeter band uses cull_disabled (renders both sides of every face), so
 # the bottom cap would z-fight the ice plane at y=0 if they were coplanar.
@@ -239,13 +244,20 @@ func _rebuild() -> void:
 			glass_y_bot, glass_y_top, _make_glass_material())
 
 	# Single collision around the entire perimeter at the boards' inner
-	# radius. Covers the full wall + glass height. Replaces the BoxShape3D /
-	# ConcavePolygonShape3D pair that previously caught fast pucks at the
-	# straight↔corner seam. Collision uses its own (much higher) corner
-	# tessellation so rim-around contact loss stays under 1% per corner.
+	# radius. Replaces the BoxShape3D / ConcavePolygonShape3D pair that
+	# previously caught fast pucks at the straight↔corner seam. Collision uses
+	# its own (much higher) corner tessellation so rim-around contact loss stays
+	# under 1% per corner.
+	#
+	# The collision extends ABOVE the visible glass (glass_y_top ≈ 2.90 m) up to
+	# COLLISION_OVERGLASS_TOP: the puck's vertical clamp (Puck.max_height + its
+	# ice half-height ≈ 3.01 m) sits above the glass, so without this an elevated
+	# deflection that pegs the clamp cruised through the gap between the glass top
+	# and the clamp and escaped the rink. Collision-only — the visual glass stays
+	# at glass_y_top. Keep COLLISION_OVERGLASS_TOP comfortably above Puck.max_height.
 	var collision_stations: Array = _build_perimeter_stations(corner_collision_segments)
 	_add_perimeter_collision(collision_stations, board_half_thick, board_half_thick,
-			0.0, glass_y_top)
+			0.0, maxf(glass_y_top, COLLISION_OVERGLASS_TOP))
 
 	# --- Painted stripes ---
 	# Goal-line stripes on each corner's white-board zone, drawn where the line
