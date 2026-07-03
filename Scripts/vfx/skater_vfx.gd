@@ -35,29 +35,12 @@ const BLADE_TRAIL_COLOR: Color = Color(0.95, 0.93, 0.88, 0.5)
 const BLADE_X_OFFSET: float = 0.12       # left/right blade separation from center
 const ICE_Y: float = 0.005              # world Y for trail dots (just above ice)
 
-# Shot-charge glow — heat at the blade that grows with charge (wrister drag
-# or slapper wind-up). Driven from skater.shot_charge, which is replicated,
-# so an opponent's wind-up is a readable tell on every machine. Emission
-# clears the WorldEnvironment glow threshold (1.3) near full charge so a
-# fully-loaded bomb visibly blooms.
-const _CHARGE_GLOW_COLOR: Color = Color(1.0, 0.55, 0.15)
-const _CHARGE_GLOW_MIN_ENERGY: float = 0.8
-const _CHARGE_GLOW_MAX_ENERGY: float = 4.0
-const _CHARGE_GLOW_MIN_SCALE: float = 1.0
-const _CHARGE_GLOW_MAX_SCALE: float = 2.2
-const _CHARGE_LIGHT_MAX_ENERGY: float = 2.2
-const _CHARGE_FULL_PULSE_HZ: float = 6.0
-
 # Two GPU trail systems: index 0 = left blade, 1 = right blade
 var _blade_trail_emitters: Array[GPUParticles3D] = []
 var _blade_trail_particles: Array[GPUParticles3D] = []
 var _stop_spray_emitter: CPUParticles3D = null  # forward fan spray on brake
 var _speed_lines: CPUParticles3D = null
 var _body_check_burst: CPUParticles3D = null
-var _charge_glow: MeshInstance3D = null
-var _charge_glow_mat: StandardMaterial3D = null
-var _charge_light: OmniLight3D = null
-var _last_charge_glow_t: float = -1.0
 var _prev_pos: Vector3 = Vector3.ZERO
 var _prev_vel: Vector3 = Vector3.ZERO
 
@@ -86,9 +69,6 @@ func _ready() -> void:
 
 	_body_check_burst = _make_body_check_emitter()
 	add_child(_body_check_burst)
-
-	_charge_glow = _make_charge_glow()
-	add_child(_charge_glow)
 
 	# Body-check burst + sound are driven by the host-authoritative broadcast
 	# (GameManager._on_body_check_landed → fire_body_check_burst), not by the local
@@ -124,10 +104,7 @@ func _process(_delta: float) -> void:
 	if skater.is_ghost:
 		_set_blade_trails_emitting(false)
 		_speed_lines.emitting = false
-		_hide_charge_glow()
 		return
-
-	_update_charge_glow(skater)
 
 	# Pin blade trail emitters to ice level (skater origin is ~1m above ice).
 	var ice_local_y: float = ICE_Y - curr_pos.y
@@ -152,66 +129,6 @@ func _process(_delta: float) -> void:
 	else:
 		_speed_lines.emitting = false
 
-
-
-# Blade charge-glow update, render rate. Hidden and skipped entirely while not
-# charging (the common case); while visible it's value-type math + a change-
-# gated material write, no allocation.
-func _update_charge_glow(skater: Skater) -> void:
-	var charge: float = clampf(skater.shot_charge, 0.0, 1.0)
-	if charge <= 0.01:
-		_hide_charge_glow()
-		return
-	if not _charge_glow.visible:
-		_charge_glow.visible = true
-	_charge_glow.global_position = skater.get_blade_contact_global() + Vector3(0.0, 0.04, 0.0)
-	# At full charge the glow pulses so "ready" reads distinctly from "almost".
-	var pulse: float = 0.0
-	if charge >= 0.999:
-		pulse = 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.001 * TAU * _CHARGE_FULL_PULSE_HZ)
-	var glow_t: float = charge + pulse * 0.25
-	if is_equal_approx(glow_t, _last_charge_glow_t):
-		return
-	_last_charge_glow_t = glow_t
-	var s: float = lerpf(_CHARGE_GLOW_MIN_SCALE, _CHARGE_GLOW_MAX_SCALE, charge)
-	_charge_glow.scale = Vector3(s, s, s)
-	_charge_glow_mat.emission_energy_multiplier = lerpf(
-			_CHARGE_GLOW_MIN_ENERGY, _CHARGE_GLOW_MAX_ENERGY, glow_t)
-	_charge_light.light_energy = lerpf(0.3, _CHARGE_LIGHT_MAX_ENERGY, glow_t)
-
-
-func _hide_charge_glow() -> void:
-	if _charge_glow != null and _charge_glow.visible:
-		_charge_glow.visible = false
-		_charge_light.light_energy = 0.0
-		_last_charge_glow_t = -1.0
-
-
-# Small emissive orb + a warm no-shadow light so the wind-up washes the ice
-# around the blade. Hidden until a charge starts.
-func _make_charge_glow() -> MeshInstance3D:
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.05
-	sphere.height = 0.10
-	sphere.radial_segments = 8
-	sphere.rings = 4
-	_charge_glow_mat = StandardMaterial3D.new()
-	_charge_glow_mat.albedo_color = Color(0.05, 0.02, 0.0)
-	_charge_glow_mat.emission_enabled = true
-	_charge_glow_mat.emission = _CHARGE_GLOW_COLOR
-	_charge_glow_mat.emission_energy_multiplier = _CHARGE_GLOW_MIN_ENERGY
-	sphere.material = _charge_glow_mat
-	var mi := MeshInstance3D.new()
-	mi.name = "ChargeGlow"
-	mi.mesh = sphere
-	mi.visible = false
-	mi.top_level = true  # positioned in world space at the blade each frame
-	_charge_light = OmniLight3D.new()
-	_charge_light.omni_range = 1.6
-	_charge_light.light_color = _CHARGE_GLOW_COLOR
-	_charge_light.light_energy = 0.0
-	mi.add_child(_charge_light)
-	return mi
 
 
 # 0..1 hit hardness from the impact_force the body_checked_player signal carries.

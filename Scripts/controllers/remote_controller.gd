@@ -206,7 +206,6 @@ func _interpolate(delta: float) -> void:
 		interpolated.is_elevated = newest.is_elevated
 		interpolated.blade_up = newest.blade_up
 		interpolated.shot_state = newest.shot_state
-		interpolated.shot_charge = newest.shot_charge
 	else:
 		var from_state: SkaterNetworkState = bracket.from_state
 		var to_state: SkaterNetworkState = bracket.to_state
@@ -234,8 +233,6 @@ func _interpolate(delta: float) -> void:
 		interpolated.is_elevated = to_state.is_elevated
 		interpolated.blade_up = to_state.blade_up
 		interpolated.shot_state = to_state.shot_state
-		# Smooth float: lerped so the remote charge-glow ramps like the local one.
-		interpolated.shot_charge = lerpf(from_state.shot_charge, to_state.shot_charge, t)
 		# render_time is led toward present by extrapolation_lead_fraction, so the
 		# hermite result already sits close to the host's live pose (or, past the
 		# newest sample, the is_extrapolating branch dead-reckons it). The position
@@ -309,9 +306,6 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# any reader (AI off-puck, VFX) on spectated remotes.
 	skater.blade_up = state.blade_up
 	skater.current_shot_state = state.shot_state
-	# Cosmetic: drives the blade charge-glow (SkaterVFX) on remote skaters, so
-	# an opponent's wind-up is a readable tell everywhere, not just locally.
-	skater.shot_charge = state.shot_charge
 	# Bottom hand is purely reactive to top_hand + blade (both already set
 	# above) and needs no network state of its own. Arm/stick meshes derive
 	# from the markers once per rendered frame in Skater._process.
