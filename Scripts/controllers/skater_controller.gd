@@ -751,7 +751,11 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	# is upper-body-local and can't be used for host-side world geometry.
 	state.top_hand_world = skater.upper_body_to_global(skater.get_top_hand_position())
 	state.shot_state = _sm.get_state() as int
-	state.shot_charge = _aiming.charge_distance
+	# The normalized 0..1 charge (skater.shot_charge covers wrister drag AND
+	# slapper wind-up), not _aiming.charge_distance — the raw wrister meters
+	# would mis-scale in the u8 codec and never reflect a slapshot at all.
+	# Consumed by remote skaters for the blade charge-glow VFX.
+	state.shot_charge = skater.shot_charge
 	state.stamina = stamina
 	state.sprint_locked = _sprint_locked
 	state.stagger_timer = stagger_timer
