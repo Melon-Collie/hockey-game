@@ -41,10 +41,11 @@ const INTENT_QUICK_SHOT: int = 4
 # projections) would fire every tick per bot. ~30 Hz is plenty — pre-aim
 # convergence gates the actual transition, and humans react in 250 ms+.
 const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~30 Hz re-eval
-# Wall-clock seconds between re-evals (derived from the cadence above). Advances
-# the hold-elapsed clock that decays a developing play's value (see _pick_action).
-const PICK_ACTION_PERIOD_S: float = (
-		float(PICK_ACTION_PERIOD_TICKS) / float(_PhysicsConstants.PHYSICS_TICK))
+# The hold-elapsed clock (see _pick_action) advances by the REAL physics ticks
+# that elapsed since the previous re-eval (`_ticks_since_pick`), not a fixed
+# per-call constant — decide() is called once per AI dispatch, so at lower
+# difficulty tiers each call spans several physics ticks and a fixed increment
+# would run the hold-decay clock several times too slow.
 
 # Pass flight clamp. A 0.6 s lead lets the bot pass to a teammate up
 # to ~16 m away (PASS_SPEED_M_S × 0.6); longer leads suffer from
@@ -135,6 +136,10 @@ var last_carry_anchor: Vector3 = Vector3.ZERO
 
 # ── Throttle ─────────────────────────────────────────────────────────────────
 var _pick_action_cooldown: int = 0
+# Physics ticks elapsed since the last _pick_action re-eval (accumulated per
+# decide() call by ctx.dispatch_period_ticks), so the hold clock advances in
+# real time regardless of the AI dispatch cadence. Reset when _pick_action runs.
+var _ticks_since_pick: int = 0
 
 # ── Scratch buffers (reused across ticks, refilled per call) ────────────────
 var _scratch_opponents: Array[Vector3] = []
@@ -174,11 +179,18 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 #     current persistent intent (so the state machine can read these
 #     uniformly across roles in future phases).
 func decide(ctx: RoleContext) -> RoleDecision:
+	# decide() is called once per AI dispatch; each call spans this many physics
+	# ticks (1 at the perfect-bot default). Draining the cooldown by the real span
+	# keeps the re-eval cadence ~PICK_ACTION_PERIOD_TICKS of wall time at every
+	# difficulty tier instead of stretching it by the dispatch period.
+	var step_ticks: int = maxi(1, ctx.dispatch_period_ticks)
+	_ticks_since_pick += step_ticks
 	if _pick_action_cooldown <= 0:
-		_pick_action(ctx)
+		_pick_action(ctx)  # reads _ticks_since_pick for the hold-clock advance
 		_pick_action_cooldown = PICK_ACTION_PERIOD_TICKS
+		_ticks_since_pick = 0
 	else:
-		_pick_action_cooldown -= 1
+		_pick_action_cooldown -= step_ticks
 
 	var d := RoleDecision.new()
 	d.target_position = last_carry_anchor
@@ -206,6 +218,7 @@ func reset() -> void:
 	last_carry_anchor = Vector3.ZERO
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
+	_ticks_since_pick = 0
 
 
 # Clear just the persistent intent (not last_carry_anchor / debug).
@@ -219,6 +232,7 @@ func clear_intent() -> void:
 	pass_target_speed = AIActionScoring.PASS_SPEED_M_S
 	pass_should_saucer = false
 	_pick_action_cooldown = 0
+	_ticks_since_pick = 0
 
 
 # ── Implementation ──────────────────────────────────────────────────────────
@@ -429,7 +443,7 @@ func _pick_action(ctx: RoleContext) -> void:
 		# reason (it out-scores plain carrying); a normal carry resets it so the
 		# next genuine hold starts fresh at full value.
 		if hold_value > carry_score and hold_value > 0.0:
-			_hold_elapsed_s += PICK_ACTION_PERIOD_S
+			_hold_elapsed_s += float(_ticks_since_pick) / float(_PhysicsConstants.PHYSICS_TICK)
 		else:
 			_hold_elapsed_s = 0.0
 		new_intent = INTENT_CARRY

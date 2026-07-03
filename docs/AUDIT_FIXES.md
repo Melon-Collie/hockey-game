@@ -20,11 +20,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[»]` deferred by deci
 - [»] P2-15 Kick-ban by SteamID (pre-launch; depends on P2-4)
 
 ## Batch 2 — Pure-logic, GUT-verifiable · verify: GUT
-- [ ] P1-3  Bot wrister wind-up handedness sign + test
-- [ ] P1-4  AI dispatch-throttle counter units (decrement by period)
+- [x] P1-3  Bot wrister wind-up handedness sign + test
+- [x] P1-4  AI dispatch-throttle counter units (evade/jab/pre-aim step by period; carrier cooldown+hold clock in real ticks)
 - [ ] P2-6  Migration budget enforcement (round-robin trim) + host self-attr validation + test
 - [ ] P2-16 AI trajectory bounce model uses the corner arcs
 - [ ] Part1-P2 finisher lift cache, one-timer-ready bound, one-timer power model
+
+Note: deleting `.godot/global_script_class_cache.cfg` + reimport was needed after
+editing scripts — a stale cache was silently skipping ~68 test scripts (showed
+1253 instead of the true 1321). Regenerated; keep an eye out after bulk edits.
 
 ## Batch 3 — Puck physics & geometry · verify: SOLO
 - [ ] P2-1  Puck altitude clamp vs glass collision top (the escape) — raise collision ceiling

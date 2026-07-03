@@ -882,10 +882,15 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 	_team_id_by_peer = team_id_by_peer
 	_is_left_handed = is_left_handed
 	# Perpendicular sign derived from handedness — used by _wind_up_endpoint_offsets
-	# to put the wind-up on the bot's forehand side (right-handed: stick on left of
-	# body, forehand sweeps from right-back to right-front in body frame, so perp
-	# points toward +X in skater-local = +1). Set at setup, never changes.
-	_handedness_perp_sign = -1.0 if _is_left_handed else 1.0
+	# to put the wind-up on the bot's forehand side. Must match the codebase's
+	# forehand convention: the release classifier (skater_controller.gd) treats
+	# RH forehand as skater-local +X, and _try_shot_reception (this file, ~:1581)
+	# defines RH forehand = -left_dir. With that convention the wind-up perp for a
+	# right-hander is Vector3(-aim.z, 0, aim.x), i.e. _handedness_perp_sign = -1;
+	# left-handers mirror to +1. (The old +1/-1 was inverted, so every bot charged
+	# its wrister/pass on the backhand side and paid the backhand power penalty.)
+	# Set at setup, never changes.
+	_handedness_perp_sign = 1.0 if _is_left_handed else -1.0
 	# Seed the per-bot RNG. peer_id × prime spreads the bot id range
 	# (10000+) across the seed space; XOR with NetworkManager.host_tick
 	# at spawn salts the seed per-session, still deterministic for
@@ -1273,6 +1278,9 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.pass_speed_scale = _pass_speed_scale
 	ctx.check_aggression = _check_aggression
 	ctx.defensive_anticipation_scale = _defensive_anticipation_scale
+	# The carrier runs its cooldown / hold-decay clock in real time, but decide()
+	# is only called on dispatch ticks — hand it the span so it can compensate.
+	ctx.dispatch_period_ticks = _dispatch_period_ticks
 	if _team_brain != null:
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
@@ -1795,7 +1803,10 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			# the moment we re-enter CARRY.
 			_carrier.clear_intent()
 		else:
-			_intent_wait_ticks += 1
+			# Advance by the dispatch span, not 1: this runs once per dispatch but
+			# _intent_max_wait_ticks is sized in physics ticks, so a per-run +1 would
+			# stretch the pre-aim bail timeout by the dispatch period at low tiers.
+			_intent_wait_ticks += _dispatch_period_ticks
 
 
 # Maps the carrier's INTENT_* enum (intentionally decoupled from
@@ -2847,12 +2858,16 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	if _poke_evade_active_ticks > 0:
 		_apply_poke_evade_cut(input, snapshot, self_pos)
-		_poke_evade_active_ticks -= 1
-		if _poke_evade_active_ticks == 0:
+		# Decrement by the dispatch span (this runs once per dispatch, but the
+		# window is sized in physics ticks) so the cut lasts its intended wall time
+		# instead of dispatch_period× longer at Normal/Easy.
+		_poke_evade_active_ticks -= _dispatch_period_ticks
+		if _poke_evade_active_ticks <= 0:
+			_poke_evade_active_ticks = 0
 			_poke_evade_cooldown_ticks = POKE_EVADE_COOLDOWN_TICKS
 		return
 	if _poke_evade_cooldown_ticks > 0:
-		_poke_evade_cooldown_ticks -= 1
+		_poke_evade_cooldown_ticks = maxi(0, _poke_evade_cooldown_ticks - _dispatch_period_ticks)
 		return
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	if self_state == null:
@@ -2967,12 +2982,15 @@ func _apply_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos:
 # two bots onto the puck.
 func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	if _poke_jab_active_ticks > 0:
-		_poke_jab_active_ticks -= 1
-		if _poke_jab_active_ticks == 0:
+		# Dispatch-span decrement (see _poke_evade_modulate_steering): the ~80 ms
+		# jab window is in physics ticks but this runs once per dispatch.
+		_poke_jab_active_ticks -= _dispatch_period_ticks
+		if _poke_jab_active_ticks <= 0:
+			_poke_jab_active_ticks = 0
 			_poke_jab_cooldown_ticks = POKE_JAB_COOLDOWN_TICKS
 		return _carrier_puck_pos(snapshot)
 	if _poke_jab_cooldown_ticks > 0:
-		_poke_jab_cooldown_ticks -= 1
+		_poke_jab_cooldown_ticks = maxi(0, _poke_jab_cooldown_ticks - _dispatch_period_ticks)
 		return Vector3.INF
 	if not _is_puck_pressurer_slot():
 		return Vector3.INF
