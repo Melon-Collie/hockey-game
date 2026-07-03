@@ -346,3 +346,270 @@ cached configs, alloc-free `_smooth_damp`). It does **not** cover:
    misleads exactly the work it exists to protect.
 10. Codec + AI allocation cleanups when profiling motivates (wire path first —
     it's 120 Hz on every machine).
+
+---
+---
+
+# Part Two — Game Flow, Physics, Backend, Lobby (July 2026, follow-up)
+
+Second sweep covering the systems the first audit deliberately left out: host
+game-flow orchestration (the full 3,568-line `GameManager` + phase machinery),
+goal detection / rink geometry / puck physics, the Supabase backend + prefs
+persistence, and the lobby / session-lifecycle distributed flows. Same method —
+docs treated as claims, four independent passes, every P0/P1 re-verified by a
+second read of the cited code. This sweep was chartered specifically to look
+where the first one's pattern predicted bugs would hide (stateful orchestration
+glue and serialization, not the pure domain layer) and to hunt the standing
+"puck escapes the rink" mystery. It found the escape's mechanism.
+
+Same severity legend as Part One.
+
+---
+
+## P0 — Critical
+
+### P2-1. The puck-escape mystery: the altitude clamp sits ~10 cm above the top of the glass
+`Scripts/actors/puck.gd:60, 487-490` vs `Scripts/actors/hockey_rink.gd:203-206, 246-248` · `puck.gd:209-212` + `Scripts/domain/rules/puck_collision_rules.gd`
+
+Verified arithmetic: the perimeter collision (boards + glass) tops out at
+`wall_height 1.07 + GLASS_LIFT 0.001 + glass_height 1.83 = 2.901 m`
+(`_add_perimeter_collision(..., 0.0, glass_y_top)`). The puck's vertical clamp is
+`ice_height 0.0125 + max_height 3.0 = 3.0125 m`, and it doesn't merely permit that
+height — it *pins* the puck there and zeroes upward velocity, creating a flat
+cruise ~10 cm above the highest collision triangle:
+
+```gdscript
+if state.transform.origin.y > ice_height + max_height:
+    state.transform.origin.y = ice_height + max_height
+    if state.linear_velocity.y > 0.0:
+        state.linear_velocity.y = 0.0
+```
+
+Elevated **deflections** have no apex cap (shots do, via `max_apex_above_blade`).
+A 35° tip (`apply_deflection_elevation`, speed-preserving) of a hard shot reaches
+v_y ≈ 9.6 m/s → natural apex ~4.7 m, so it pegs the ceiling; a tip within ~2–3.5 m
+of the boards heading outward crosses the perimeter in the 2.901–3.0125 m gap
+where **no collision geometry exists**. CCD is irrelevant — there's nothing to
+collide with. This is the standing "puck occasionally escapes" bug, and it
+**falsifies the CLAUDE.md "velocity/reflection compounding or Jolt edge case"
+theory**: the auditor confirmed every reflection path is strictly energy-losing
+(deflect retain ≤ 0.7/0.5 multiplicative — chains *cannot* compound; poke/squirt/
+strip clamped ≤ 9 m/s), the 38 m/s speed clamp runs every `_integrate_forces`
+substep on host and client, and the corner collision is a seamless backface-
+enabled 256-segment loop (no tunneling seam). The escape is pure geometry.
+
+**Fix:** raise the collision `y_top` above `ice_height + max_height` (e.g. 3.2), or
+lower `max_height` so the clamp acts below the glass line. Pair it with a
+height-aware out-of-bounds whistle (see P2-9) to also catch the soft-lock variant
+where the puck rests *on top* of the boards.
+
+### P2-2. Any goal scored during the FACEOFF phase is silently and permanently voided
+`Scripts/domain/state/game_state_machine.gd:129-131` · `Scripts/game/game_manager.gd:1906-1907, 2185-2245` · `Scripts/game/phase_coordinator.gd:166-168`
+
+`on_goal_scored` hard-gates on phase:
+
+```gdscript
+func on_goal_scored(defending_team_id: int) -> int:
+    if current_phase != GamePhase.Phase.PLAYING:
+        return -1
+```
+
+FACEOFF exits to PLAYING only through `on_faceoff_puck_picked_up`, which fires
+solely from `PhaseCoordinator.on_pickup` — the normal `_on_puck_picked_up` carry
+path. But several scoring paths never produce a pickup and so never leave FACEOFF:
+one-timers (`_host_release_one_timer` calls `puck.set_carrier` + `puck.release`
+directly, bypassing the pickup flow entirely), deliberate deflects/redirects, and
+a **contested draw** (`apply_contested_pickup` awards no possession by design —
+the puck squirts free). A puck that crosses the line while the FSM is still in
+FACEOFF returns −1: no horn, no score, and because the goal sensor is
+edge-triggered `body_entered`, the puck then rests inside the net un-awarded; the
+10 s timeout flips to PLAYING without re-triggering it. Players see a clean score
+that doesn't count with the puck lying in the goal.
+
+Calibration note: the *most common* draw outcome is a normal pickup, which does
+exit FACEOFF, so this is a latent edge case rather than an every-faceoff event —
+but "win the draw and one-time it," a set play the docs celebrate, is exactly the
+possession-less path that hits it, and end-zone faceoff dots sit close enough to
+the net to make it reachable. **Fix:** advance FACEOFF→PLAYING on any puck contact
+(touch/deflect/one-timer), or accept goals during FACEOFF in `on_goal_scored`.
+
+### P2-3. `career_stats` is world-rewritable by every shipped client — and the dangerous grant is dead code
+`sql/career_stats.sql:44-47` · client: `Scripts/game/career_stats_reporter.gd` (POST/GET only)
+
+The anon (publishable) key ships as a constant in every export
+(`supabase_config.gd:5-6`) and the RLS policies grant it, on the full player
+table keyed by unauthenticated client-supplied `steam_id`:
+
+```sql
+create policy "anon select" on public.career_stats for select to anon using (true);
+create policy "anon update" on public.career_stats for update to anon using (true);
+```
+
+`UPDATE using(true)` with no `WITH CHECK` lets any key holder `PATCH` any column of
+any row — inflate their own career, zero a rival's, reassign rows to their own
+steam_id (career theft), or set `steam_id = null` on every row, which the
+`career_totals` view (`WHERE steam_id IS NOT NULL`) reads as a **total wipe of
+everyone's career screen** (UPDATE is delete-equivalent; DELETE isn't even
+needed). The kicker verified by grep: **no client code issues any PATCH/PUT** —
+`CareerStatsReporter` only POSTs and GETs. The single most dangerous policy in the
+schema guards a slot-swap-merge feature that was never built. `anon select
+using(true)` separately exposes every player's steam_id + name + game history to
+anyone with the key.
+
+**Fix (zero product impact):** drop the UPDATE policy outright. Decide
+deliberately whether career data is public (if not, move reads behind an RPC that
+returns only rostered/aggregate shapes). Add server-side CHECK/size constraints
+(P2-11). Correct the "restricts to INSERT/SELECT/UPDATE" comments in
+`supabase_config.gd:4` and `bug_reporter.gd:10` (bug_reports/network_sessions are
+INSERT-only — their PII posture is actually correct; the problem is career_stats
+specifically). This is survivable for a closed test with known testers; fix before
+any wider release.
+
+---
+
+## P1 — High
+
+### P2-4. Reconnect SteamID64 is client-supplied and never authenticated
+`Scripts/networking/network_manager.gd:902, 933` · `Scripts/game/game_manager.gd:647-650`
+
+`request_join` carries `steam_id` as an ordinary RPC argument; the host stores it
+verbatim (`_peer_steam_ids[sender_id] = steam_id`) and keys the reservation
+restore on it. Nothing cross-checks it against the SteamMultiplayerPeer's
+authenticated identity — `getSteam64*` is never called anywhere in the codebase
+(the only Steam-identity call is `getLobbyOwner`, used client-side to find the
+host). A modified client can put any SteamID64 in the payload: within the 60 s
+reservation window it hijacks a dropped player's held slot — inheriting their
+team, slot, **locked attributes, and carried-forward stats** — and erases the
+reservation so the real player is auto-balanced elsewhere on reconnect. The same
+forgery lets a client impersonate any steam_id in every backend row (compounding
+P2-3). **Fix:** resolve the peer's real SteamID64 from the transport host-side;
+treat the RPC value only as a non-Steam fallback.
+
+### P2-5. Reserved reconnect slots are ignored by slot-swap and spectator-promote → two skaters in one slot
+`Scripts/domain/state/game_state_machine.gd:458-476` · `Scripts/game/game_manager.gd:1412-1435`
+
+`is_slot_reserved` exists (game_state_machine.gd:441) but `try_swap_slot`'s
+collision scan loops only `players`, and `_promote_spectator_to_player` checks
+only `players` + aggregate `count_players_on_team` — neither consults it.
+Auto-balance and the roster gate honor reservations; swap and promote don't (3 of
+5 slot-granting paths respect the invariant, 2 don't; rematch is the third — see
+P2-8). Reproduces with no malice: player B drops from HOME/C (slot reserved) → a
+teammate change-positions into HOME/C (allowed) → B reconnects within 60 s →
+`_restore_reserved_player` force-registers B into HOME/C, so two records claim the
+same `(team_id, team_slot)`. Both then teleport to the identical `FACEOFF_OFFSETS`
+dot each faceoff (physics shoves them apart) and slot-keyed logic aliases them.
+**Fix:** reject a swap/promote target where `is_slot_reserved(team_id, slot)`.
+
+### P2-6. Migration can leave a player over the attribute budget, and the host never validates its own build
+`Scripts/game/player_prefs.gd:978-990` · `Scripts/networking/network_manager.gd:343/353/468/592/686 vs 940-942`
+
+`_migrate_four_to_six` only trims Hands then Physical (max 4 points removable), so
+a legacy all-3s save migrates to 5/5/5/5 (four-attr) + 3/3 seed = 26 and the trim
+loop exits at **22 > BUDGET(18)** — falsifying CLAUDE.md's "trimmed to fit
+BUDGET." Worse, `is_within_budget` is only checked for *remote joiners*
+(network_manager.gd:941); the host's own `_peer_attributes[1] =
+PlayerPrefs.get_player_attributes()` is assigned at five sites with no budget
+check, so that over-budget player *hosting* plays a 22-point build all match,
+while the same player *joining* is silently reset to all-medium. A hand-edited cfg
+(5/5/5/5/5/5) survives identically — per-level clamped on load but never
+budget-checked. **Fix:** budget-enforce in `_load()` (trim all attrs round-robin so
+it always terminates at budget) and validate `_peer_attributes[1]` through the
+same path as joiners. (No migration test exists — a pure-function extraction +
+budget-invariant assert would have caught this.)
+
+---
+
+## P2 — Medium
+
+### P2-7. Icing team-wide ghost is dead code in every ruleset — the documented mechanic does not exist
+`game_state_machine.gd:184-216, 522` · `game_manager.gd:483-493`. `icing_team_id` is set only in `check_icing_for_loose_puck` (NHL-only), and the caller runs `check_icing → _consume_pending_faceoff → _whistle_and_faceoff → begin_faceoff_prep` **in one synchronous call stack**; `begin_faceoff_prep`'s first line is `icing_team_id = -1`, clearing it before `_apply_ghost_state` (now in FACEOFF_PREP) ever reads it. So `ICING_GHOST_DURATION`, `_tick_icing`, and the opponent-pickup clear are all unreachable, and ARCADE/OFF never detect icing at all. CLAUDE.md's "Icing ghosts the whole offending team briefly" is false everywhere. The domain SM test passes because it drives the SM without the orchestration — the project's signature failure pattern. **Fix:** persist `icing_team_id` through `begin_faceoff_prep`, or delete the dead ghost path and the doc claim.
+
+### P2-8. Rematch desyncs the two reservation stores and carries stale stats forward
+`game_state_machine.gd:500` (`reset_all` clears domain `reserved_slots`) vs `game_manager.gd:2807` (`_reserved_slots` cleared only on scene exit). After a rematch the slot is genuinely free (retakeable), yet a reconnecting peer still matches `_reserved_slots` and is force-registered — and `rec.stats = res.stats` injects the **previous match's** goals/assists into a fresh 0-0 game while everyone else was reset. **Fix:** clear `_reserved_slots` in `_apply_reset`.
+
+### P2-9. Puck resting on top of the boards soft-locks — OOB whistle is XZ-only
+`game_manager.gd:402-416`. `_check_puck_out_of_bounds` whistles only when the XZ projection is > 0.2 m outside `clamp_to_rink_inner`; a puck settled on the 0.3 m-thick wall cap (from a P2-1 ceiling-window trajectory) is within that band and never whistled, and the net-stuck check doesn't cover it. The puck floats untouchable at glass-top height until the period clock forces a faceoff (up to 4 min). **Fix:** add a height term (`pos.y > wall_height` while outside/atop the band ⇒ whistle) — also cleanly whistles P2-1's escapees the instant they clear the glass.
+
+### P2-10. `_pending_elevation_vel` survives `reset()`/`drop()` — a faceoff puck can inherit a full shot velocity
+`puck.gd:347-368, 391-407, 453-461, 477-484`. If `release()` and a phase-change `drop()`/`reset()` land in the same tick (shot fired the instant a whistle processes — both run in `_physics_process` before the physics step, so `_integrate_forces` never consumed the pending vector), the reset teleports the puck to the dot and the *next* step writes the stored shot velocity (up to 38 m/s) into it — the faceoff puck rockets off the dot, elevated if the shot was. One-tick race, rare, but a "puck did something inexplicable" generator. **Fix:** zero `_pending_elevation_vel`/`_pending_elevation` in `reset()` and `drop()`.
+
+### P2-11. INSERT `with check(true)` + zero server-side constraints on all three tables
+`career_stats.sql:43`, `bug_reports.sql:28`, `network_sessions.sql:40`. No CHECK constraints (`goals integer` accepts −2^31), no length/size caps (the 2000-char/8000-char limits live only in `bug_reporter.gd` where a hostile client deletes them by definition), no rate limiting, and career rows insertable for *any* steam_id (forging a victim's games corrupts their totals as effectively as UPDATE). A griefer floods any table until the free tier pauses and all telemetry silently 4xx's. **Fix:** CHECK + `pg_column_size` constraints; a usage alert at minimum.
+
+### P2-12. Crash auto-report bypasses the privacy opt-out
+`crash_watch.gd:56-58, 145-148` · `bug_reporter.gd:54-72`. `share_gameplay_stats = false` suppresses career + network-session rows, but CrashWatch POSTs steam_id, player name, breadcrumb, and a 6 KB log tail (whatever was printed — peer names, lobby ids) on the launch after any unclean shutdown, including routine force-kills, with no gate and no user-visible indication. Manual reports being ungated is fine (explicit action); the crash path is non-consensual telemetry. **Fix:** gate on `share_gameplay_stats` or give it its own opt-out.
+
+### P2-13. Every pass/shot release fires the *board-hit* sound, VFX, and an RPC — the ice is classified as "boards"
+`puck.gd:440-451`. The ice collision body is a plain `StaticBody3D` child of `HockeyRink`, so it falls through to `elif body is StaticBody3D and linear_velocity.length() >= 1.0: puck_hit_boards.emit()`. A carried puck is frozen (no contact pairs), so every release re-enters the ice contact and fires — `game_manager.gd:1114` then plays the board thud, spawns board-chip VFX, **RPCs `send_board_hit_to_all`**, and logs a `"puck_boards"` replay event, on every pass and every landing, network-replicated, at the wrong place. **Fix:** exclude the ice body (parent-is-HockeyRink-root, name, group, or meta check).
+
+### P2-14. Promote-of-departed-peer race spawns a phantom skater
+`game_manager.gd:1412-1435`. `_promote_spectator_to_player` has no `peer_id in connected_peer_ids()` guard. A spectator's `request_slot_swap` RPC in flight when they disconnect can be processed the same frame `on_player_disconnected` erased them, spawning + broadcasting a full skater for a gone peer — an uncontrolled phantom on all clients until match end (no disconnect will clean it; the registry add happened after the disconnect handler). **Fix:** gate promote on connection liveness.
+
+### P2-15. Kicked player can rejoin immediately — no SteamID ban
+`network_manager.gd:959-964, 578`. `kick_peer` marks `_kicked_peers[peer_id]` purely to gate that one disconnect's reservation, then erases it; there's no persistent ban. The kicked griefer re-joins the still-open lobby seconds later with a fresh peer_id and is re-seated by auto-balance. **Fix:** a host-side kicked-SteamID set for the session (depends on P2-4 for a spoof-proof id).
+
+### P2-16. AI trajectory bounce model treats the rink as a rectangle — up to ~3.5 m of phantom corner ice
+`Scripts/domain/ai/trajectory.gd:48-54`. With `bounce_factor > 0` (the puck path) reflection fires only at `|x| > INNER_HALF_WIDTH` / `|z| > INNER_HALF_LENGTH` — flat walls — while the real rink and the model's own non-bounce branch four lines down (and the client `_crosses_board`) use the 8.37 m corner arcs. The model routes predicted pucks through ~3.47 m of non-existent corner ice and predicts bounces off absent walls, and ignores the boards' μ=0.3 capstan loss on rim-arounds. AI-only, and worst exactly in the corners where dump-and-chase reads happen. **Fix:** reuse the rounded-rect the same file already has.
+
+### P2-17. Double-transition / re-entrancy in the online entry points
+`side_menu.gd:711-758` · `pause_menu.gd:244-256` · `hud.gd:1337-1350`. `_on_host_pressed` runs `reset()` + `start_host()` unconditionally with no "op in progress" flag; a Steam invite accepted mid-host-flow re-enters and races `SteamManager` state (the first host's `lobby_created` one-shot gets disconnected by the second `reset()`). Separately, the "Return to Free Play" / "Exit Game" confirms `await announce_match_end()` (0.5 s) while staying interactive, so a double-click fires two overlapping teardown chains and can double-`change_scene`. **Fix:** a single `_lobby_op_pending` gate; disable confirm buttons before the await.
+
+---
+
+## P3 — Low / latent / hygiene
+
+- **`reset()` never wakes a sleeping puck** — `puck.gd:399-407` defers the faceoff teleport to `_integrate_forces`, which doesn't run on a slept body; `can_sleep` is never disabled, and the code already knows this hazard (`apply_goalie_sweep` sets `sleeping = false` first). A puck slept in a corner through a long celebration may ignore the faceoff teleport. One `sleeping = false` line removes the ambiguity.
+- **Goal sensor safety is implicit** — detection window (~0.56 m) is 1.8× max per-tick displacement (0.317 m at 38 m/s / 120 Hz), so no phantom-miss *today*, but there's no swept/backup goal-line check: raising `max_speed` past ~60 or dropping to 60 Hz silently breaks it. Document/assert the invariant. (The margin partly rests on the accidentally AABB-inflated net-back collision — P3 below.)
+- **Goal fires on leading-edge line-touch, and entry is one-shot with a strict `> 0` gate** — `hockey_goal.gd:617-632`: sensor front is exactly on the goal line, so a puck held half-over counts; conversely a puck dead-stopped exactly at entry (`vel.z == 0`) or sliding laterally along the line scores nothing and sits live in the net. Goal-mouth-scramble edge cases; common case correct. (No double-signal risk — goal signal is host-only wired.)
+- **Net-back collision is AABB-inflated** — `hockey_goal.gd:585-606` collides each net panel by its bounding box, so a puck along the ice dies ~0.46 m short of the visible mesh (shots visibly stop in mid-air inside the net). Cosmetic (goal counted 0.56 m earlier), but the most visible physics/visual mismatch in the game.
+- **Goal frame has no PhysicsMaterial → dead posts** — restitution 0 (ADD combine, `game_rules.gd:138`), so a post hit drops dead instead of pinging out, inconsistent with the boards' 0.4 and with `fire_post_ping_vfx` playing over a flopped puck. If intended, comment it; if not, a 3-line `.tres` + mirror test.
+- **Slot swap teleports to the center-ice faceoff layout regardless of active dot/phase** — `slot_swap_coordinator.gd:121-123` uses the default (center) dot; a swap during an end-zone FACEOFF_PREP parks the skater center-relative, possibly wrong side, for the draw.
+- **Restored reconnect stats never sync to clients** — `game_manager.gd:766-775` assigns `rec.stats` *after* the spawn-time stat sync and issues no further RPC (the comment's "world state carries stats" is false — stats ride only the reliable event RPC), so scoreboards show the reconnected player as zeros until the next goal/hit anywhere.
+- **Unanimous skip-vote broadcasts (0, N) instead of (N, N)** — `game_manager.gd:1502` reads the count *after* `register_skip_vote` already `stop()`-cleared it; the documented client "(current ≥ total)" teardown path is dead and the HUD flashes "(0/N)" at unanimity. Read the count first.
+- **Replay footer TOI wrong for everyone but the recording peer** — `toi_seconds` accrues only for the local record, but `_build_replay_footer` writes it for all under a "complete on any peer" comment (career reporting unaffected).
+- **Reporter HTTPRequests have no timeout; `CareerStatsScreen` fetch callbacks lack a liveness guard** — a scene change mid-fetch calls a Callable on a freed Control (error spam); `BugReportDialog` got the `is_inside_tree()` guard right — mirror it.
+- **NaN/inf in a telemetry metric silently 400s the row** — `JSON.stringify` emits bare `nan`/`inf`; realistic vector is an upstream physics NaN feeding a metric — exactly the sessions you most want. Sanitize in `NetworkSessionSummary.observe`.
+- **`cfg.save()` result ignored** (`player_prefs.gd:405`) — disk-full/read-only loses settings silently and `_push_to_cloud` then propagates the stale file; non-atomic writes corrupt to all-defaults on power loss. **Hand-edited cfg with wrong *types*** (not ranges — those clamp) aborts `_load()` mid-function, leaving everything after the bad key at defaults.
+- **`request_color_vote` accepts any slot int** (`network_manager.gd:1660`) — resolves to default on unknown, so low blast radius, but add a membership check.
+- **Cross-session field bleed** (consistent with Part One's `reset()`-under-covers theme): `_peer_ping_ms`, `pending_num_periods`/`pending_period_duration`/`pending_ot_enabled`/`pending_rule_set` (last-match lobby settings pre-fill), and `_in_replay_locally` are not cleared by `reset()`/`on_scene_exit`; `_crease_dwell` and `_reservation_token` leak on disconnect. Recommend one audited "reset every session-scoped field" pass.
+- **`reset_game()` lacks an `is_host` guard** (`game_manager.gd:2851`) — a stray client call forks its local SM from the host (the RPC itself is authority-gated, so no remote harm). Cheap symmetry fix.
+- **`deploy.yml` version-rewrite failure is non-fatal** — a reformatted `build_info.gd:9` no-ops the anchored sed and the follow-up grep still exits 0, shipping a build stamped `dev` (pollutes cohort analysis; join-gating is unaffected — it keys on Steam BuildID).
+- **`GameStateMachine.compute_ghost_state` returns a fresh Dictionary every 120 Hz tick** (`game_state_machine.gd:219`), and `_enrich_snapshot_for_ai` allocates two `[]` per tick (`game_manager.gd:1860`) — both have caller-owned-scratch fixes demonstrated elsewhere in the same files.
+
+---
+
+## Documentation drift (Part Two)
+
+| Doc says | Code does |
+|---|---|
+| Phase FSM table: `FACEOFF_PREP` = 0.5 s | 2.0 s (+4.0 s opening intro) — `game_rules.gd:13,17` |
+| `GOAL_SCORED` 2 s celebration freeze | table omits `GOAL_CELEBRATION`; GOAL_SCORED duration is the replay-clip length (2 s only as no-replay fallback) |
+| "if last period → GAME_OVER" | omits the OT branch (tied + ot_enabled → extra period, repeats) |
+| "Icing ghosts the whole offending team briefly" | dead code in every ruleset (P2-7) |
+| "Client world spawn triggered by `client_connected`" | `on_connected_to_server` is `pass`; spawn is driven by `assign_player_slot` → `on_slot_assigned` |
+| Reconnect invariant "counts toward totals so not backfilled" | honored by auto-balance + roster gate; **bypassed** by swap, promote, rematch (P2-5, P2-8) |
+| `_restore_reserved_player` "next world-state broadcast propagates stats" | stats ride only the reliable stat RPC; none sent after restore (P2-7 low) |
+| PhaseCoordinator "nothing here reaches NetworkManager" | `NetworkManager.is_drill_mode()` at `phase_coordinator.gd:177` |
+| `supabase_config.gd` / `bug_reporter.gd` "authorizes INSERT/SELECT/UPDATE" | bug_reports/network_sessions are INSERT-only; career_stats UPDATE is unused dead grant (P2-3) |
+| CLAUDE.md "puck escape = velocity/reflection compounding or Jolt edge case" | falsified — it's the altitude-clamp/glass geometry gap (P2-1) |
+| `GameRules.NET_BACK_HALF_WIDTH` "trapezoid wider end" | skirt is built rectangular at ±0.915 (geometry drift, ~10 cm slack, no live bug) |
+| prefs "trimmed to fit BUDGET" | can exit 4 points over budget (P2-6) |
+
+## What checked out (Part Two)
+
+- **Signal-lifecycle sweep of `GameManager`: clean** — a notable divergence from Part One. Every `.connect(` reachable more than once per process was checked; no double-connect or leak. Persistent vs per-match sound sets are guard-flagged; per-world collaborators are freshly `new()`ed so old connections die with the RefCounted; goal-node and per-skater signals are freed with their scene nodes; teardown ordering in `on_scene_exit` (writer → registry → phase-coord SM-null before driver stop) is correct as commented.
+- **Goal pipeline ordering** (carrier captured before drop; carrier_changed(-1) → notify_puck_dropped → notify_goal, all reliable; host-only sensor wiring; phase-machine dedup on re-entry) — confirmed.
+- **Rink geometry is genuinely single-sourced** — GameRules ↔ builder defaults ↔ scene (scene overrides colors only); goal line, blue lines, faceoff dots, corner-clamp margin-invariance all check out. `ICE_FRICTION` / `PUCK_BOARD_BOUNCE` single-sourced and CI-mirrored.
+- **Puck speed is genuinely bounded** — 38 m/s clamp every substep on host *and* client-prediction; no injector (deflect/poke/squirt/strip/sweep) exceeds it; deflect chains are strictly energy-losing.
+- **Backend reporter/consumer layer is well built** — correct fire-and-forget lifecycle (queue_free on completion *and* request error), null-tolerant readers (`_safe_int`, jsonb `->>`), single edge-triggered game-over (rematch resets stats + mints a fresh game_id — no double-count), consistent offline/privacy gating for career + net-session rows, sound steam_id=0 semantics, jsonb-metrics design avoiding ALTER churn. `bug_reports` / `network_sessions` are INSERT-only — **no player can read another's reports or telemetry** (their PII posture is correct).
+- **Prefs migration is crash-safe** — pure in-memory, file untouched until next `save()`, deterministic re-run from source keys; `new = 2·old − 1` mapping and Hands-first trim order verified; future-version downgrade clamps without crashing; well-formed v4 game UUIDs.
+- **Steam achievements/stats** are client-side and mode-gated as documented — fine within Steam's own trust model (any Steam client can call setAchievement directly regardless).
+- **Dead-puck enforcement, spectator invariant, promote/demote-before-free ordering, join validation order (version/build/duplicate/budget), token-guarded reservation expiry** — all verified as documented.
+
+## Combined fix priority (both parts)
+
+1. **P0s, in order of player impact:** stagger wire field (Part One #1) · goalie not-upright timer zeroing (Part One #2) · puck altitude-clamp/glass gap + height-aware OOB whistle (P2-1/P2-9) · faceoff-phase goal void (P2-2) · drop the `career_stats` UPDATE policy (P2-3, one line).
+2. **Security/integrity cluster:** authenticate SteamID64 host-side (P2-4) — unblocks kick-ban (P2-15) and de-spoofs backend rows · reserved-slot check in swap/promote + `_reserved_slots` clear on rematch (P2-5/P2-8) · host self-attribute + migration budget enforcement (P2-6) · backend CHECK/size constraints (P2-11) · crash-report privacy gate (P2-12).
+3. **Part One P1s:** bot handedness sign · dispatch-throttle units · lead-aware lag-comp rewind · host-measured ping · replay determinism holes.
+4. **Feel/correctness mediums:** icing ghost decision (implement or delete P2-7) · pending-elevation-vel clear (P2-10) · ice-as-boards misclassification (P2-13) · promote liveness guard (P2-14) · online double-transition gates (P2-17) · AI corner bounce model (P2-16) · the Part One P2 batch.
+5. **Hygiene sweep:** one audited session-field reset pass; the two documentation-drift tables; codec + per-tick allocation cleanups (wire path first).
