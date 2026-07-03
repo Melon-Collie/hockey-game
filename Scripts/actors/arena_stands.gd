@@ -134,6 +134,13 @@ const _CROWD_SHADER_PATH: String = "res://Shaders/crowd.gdshader"
 const _EXCITE_RISE_TIME: float = 0.25
 const _EXCITE_HOLD_TIME: float = 3.5
 const _EXCITE_DECAY_TIME: float = 3.0
+# Player benches: two team benches on the +X side straddling center ice,
+# carved out of the first rows of crowd. 3v3 fields no reserves, so they're
+# empty furniture — the break in the crowd wall is what sells the rink.
+const _BENCH_CENTER_Z: float = 4.4    # bench centers at ±this along the boards
+const _BENCH_HALF_LEN: float = 3.0    # half-length of each bench along Z
+const _BENCH_CLEAR_ROWS: int = 2      # spectator rows cleared behind the glass
+const _BENCH_CLEAR_MARGIN: float = 0.3
 # Spectator body dimensions — stacked boxes matching the skater art style.
 const _BODY_SIZE: Vector3 = Vector3(0.28, 0.45, 0.28)
 const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
@@ -212,6 +219,7 @@ func _rebuild() -> void:
 		child.queue_free()
 	_build_terraces()
 	_build_spectators()
+	_build_benches()
 
 
 # ── Terrace geometry ─────────────────────────────────────────────────────────
@@ -388,6 +396,8 @@ func _build_spectators() -> void:
 		var samples: PackedVector2Array = _sample_offset_path(spectator_off)
 		var resampled: PackedVector2Array = _resample_uniform(samples, spectator_spacing)
 		for p: Vector2 in resampled:
+			if _in_bench_zone(i, p):
+				continue
 			var pos: Vector3 = Vector3(p.x, y + rng.randf_range(-spectator_y_jitter, spectator_y_jitter), p.y)
 			# Face the rink: local forward (-Z) should point from p toward XZ
 			# origin. With Basis(Y, yaw), forward_world = (-sin yaw, 0, -cos yaw);
@@ -497,6 +507,55 @@ func _spectator_material() -> ShaderMaterial:
 		_crowd_material.shader = load(_CROWD_SHADER_PATH)
 		_crowd_material.set_shader_parameter("excitement", _excitement)
 	return _crowd_material
+
+
+# True when a spectator slot falls inside a player-bench cutout: the first
+# _BENCH_CLEAR_ROWS rows on the bench (+X) side, along each bench span.
+# Sample points are (x, z) packed as Vector2(x, y).
+func _in_bench_zone(row: int, p: Vector2) -> bool:
+	if row >= _BENCH_CLEAR_ROWS:
+		return false
+	if p.x < 0.0:
+		return false
+	return absf(absf(p.y) - _BENCH_CENTER_Z) < _BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
+
+
+# ── Player benches ───────────────────────────────────────────────────────────
+
+# One solid team-colored bench block + a charcoal backrest per team, sitting
+# on the first-row tread where the crowd was cleared. Rebuilt with the bowl,
+# so bench colors re-tint when team_colors_ready re-runs setup().
+func _build_benches() -> void:
+	var x_inner: float = rink_width / 2.0 + base_outward_offset
+	var tread_y: float = stands_base_y
+	for side: float in [-1.0, 1.0]:
+		var center_z: float = side * _BENCH_CENTER_Z
+		# Home (team 0) defends +Z, so its bench sits on the +Z half.
+		var team_color: Color = home_color if side > 0.0 else away_color
+
+		var seat := MeshInstance3D.new()
+		seat.name = "BenchSeatHome" if side > 0.0 else "BenchSeatAway"
+		var seat_mesh := BoxMesh.new()
+		seat_mesh.size = Vector3(0.42, 0.46, _BENCH_HALF_LEN * 2.0)
+		var seat_mat := StandardMaterial3D.new()
+		seat_mat.albedo_color = team_color.darkened(0.25)
+		seat_mat.roughness = 0.8
+		seat_mesh.material = seat_mat
+		seat.mesh = seat_mesh
+		seat.position = Vector3(x_inner + 0.33, tread_y + 0.23, center_z)
+		add_child(seat)
+
+		var backrest := MeshInstance3D.new()
+		backrest.name = "BenchBackHome" if side > 0.0 else "BenchBackAway"
+		var back_mesh := BoxMesh.new()
+		back_mesh.size = Vector3(0.06, 0.5, _BENCH_HALF_LEN * 2.0)
+		var back_mat := StandardMaterial3D.new()
+		back_mat.albedo_color = Color(0.20, 0.20, 0.22)
+		back_mat.roughness = 0.9
+		back_mesh.material = back_mat
+		backrest.mesh = back_mesh
+		backrest.position = Vector3(x_inner + 0.57, tread_y + 0.55, center_z)
+		add_child(backrest)
 
 
 # ── Crowd excitement ─────────────────────────────────────────────────────────

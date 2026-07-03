@@ -264,6 +264,48 @@ func _rebuild() -> void:
 
 	_add_side_board_stripes(half_w)
 
+	_add_zamboni_door(half_l, board_half_thick, board_top)
+
+
+# Zamboni door on the +Z end boards, centered behind the net: a framed
+# double-door panel sitting just proud of the boards' inner face. Purely
+# cosmetic (no collision change) — it breaks up the featureless white oval
+# and gives the behind-net replay camera something real to frame.
+func _add_zamboni_door(half_l: float, board_half_thick: float, board_top: float) -> void:
+	var inner_z: float = half_l - board_half_thick
+	var door_w: float = 2.4
+	var door_h: float = board_top - 0.02
+	var door_y: float = 0.02 + door_h / 2.0
+
+	var frame := MeshInstance3D.new()
+	frame.name = "ZamboniDoorFrame"
+	var frame_mesh := BoxMesh.new()
+	frame_mesh.size = Vector3(door_w + 0.12, door_h + 0.04, 0.03)
+	frame_mesh.material = _make_solid_material(Color(0.22, 0.23, 0.25), 0.0)
+	frame.mesh = frame_mesh
+	frame.position = Vector3(0.0, door_y, inner_z - 0.02)
+	add_child(frame)
+
+	# Panel tinted a step off the board white so the seam reads at a glance.
+	var panel := MeshInstance3D.new()
+	panel.name = "ZamboniDoorPanel"
+	var panel_mesh := BoxMesh.new()
+	panel_mesh.size = Vector3(door_w, door_h, 0.03)
+	panel_mesh.material = _make_solid_material(wall_color.darkened(0.08), 0.0)
+	panel.mesh = panel_mesh
+	panel.position = Vector3(0.0, door_y, inner_z - 0.035)
+	add_child(panel)
+
+	# Center seam between the two door leaves.
+	var seam := MeshInstance3D.new()
+	seam.name = "ZamboniDoorSeam"
+	var seam_mesh := BoxMesh.new()
+	seam_mesh.size = Vector3(0.03, door_h, 0.032)
+	seam_mesh.material = _make_solid_material(Color(0.22, 0.23, 0.25), 0.0)
+	seam.mesh = seam_mesh
+	seam.position = Vector3(0.0, door_y, inner_z - 0.036)
+	add_child(seam)
+
 func _add_ice() -> void:
 	var img_w = int(rink_width * _px_per_meter)
 	var img_h = int(rink_length * _px_per_meter)
