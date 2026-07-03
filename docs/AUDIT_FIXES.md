@@ -22,8 +22,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[»]` deferred by deci
 ## Batch 2 — Pure-logic, GUT-verifiable · verify: GUT
 - [x] P1-3  Bot wrister wind-up handedness sign + test
 - [x] P1-4  AI dispatch-throttle counter units (evade/jab/pre-aim step by period; carrier cooldown+hold clock in real ticks)
-- [ ] P2-6  Migration budget enforcement (round-robin trim) + host self-attr validation + test
-- [ ] P2-16 AI trajectory bounce model uses the corner arcs
+- [x] P2-6  Migration budget enforcement (pure `trimmed_to_budget` + one choke point) + host self-attr fallback + tests
+- [x] P2-16 AI trajectory bounce model reflects off the rounded corners + test
 - [ ] Part1-P2 finisher lift cache, one-timer-ready bound, one-timer power model
 
 Note: deleting `.godot/global_script_class_cache.cfg` + reimport was needed after

@@ -349,3 +349,43 @@ func test_level_for_each_attribute() -> void:
 
 func _uniform(level: int) -> PlayerAttributes:
 	return PlayerAttributes.new(level, level, level, level, level, level)
+
+
+# ── trimmed_to_budget (migration + hand-edit / corrupt-cfg repair) ────────────
+# Migration priority: shed the non-identity axes (Hands=2, Physical=4) first.
+# (A PackedInt32Array ctor isn't a constant expression, so this is a var.)
+var MIGRATE_ORDER := PackedInt32Array([2, 4, 0, 1, 3, 5])
+
+func test_trim_leaves_in_budget_builds_untouched() -> void:
+	# An all-medium build (sum 18 = BUDGET) is already legal — no change.
+	var a: PlayerAttributes = PlayerAttributes.trimmed_to_budget(3, 3, 3, 3, 3, 3, MIGRATE_ORDER)
+	assert_eq(a.total_spend(), 18)
+	assert_eq([a.speed, a.agility, a.hands, a.size, a.physical, a.shot], [3, 3, 3, 3, 3, 3])
+
+func test_trim_legacy_max_split_reaches_budget() -> void:
+	# The finding's case: legacy 5/5/5/5 four-attr → 5/5/3/5/3/5 = 26 after seeding.
+	# The old Hands/Physical-only trim floored at 22; this must land exactly at 18.
+	var a: PlayerAttributes = PlayerAttributes.trimmed_to_budget(5, 5, 3, 5, 3, 5, MIGRATE_ORDER)
+	assert_eq(a.total_spend(), PlayerAttributes.BUDGET, "trims all the way to budget")
+	assert_true(PlayerAttributes.is_within_budget(a.speed, a.agility, a.hands, a.size, a.physical, a.shot))
+
+func test_trim_sheds_non_identity_axes_first() -> void:
+	# Hands (2) and Physical (4) lead the order, so they floor before the expressed
+	# axes get gutted — the 5/5/5/5 identity survives as an even 4/4/1/4/1/4 spread.
+	var a: PlayerAttributes = PlayerAttributes.trimmed_to_budget(5, 5, 3, 5, 3, 5, MIGRATE_ORDER)
+	assert_eq(a.hands, 1, "Hands shed first")
+	assert_eq(a.physical, 1, "Physical shed first")
+	assert_true(a.speed >= 4 and a.agility >= 4 and a.size >= 4 and a.shot >= 4,
+			"expressed axes stay high")
+
+func test_trim_always_terminates_at_extreme_over_budget() -> void:
+	# A forged/corrupt 5/5/5/5/5/5 (30) must resolve to a legal build, never hang.
+	var a: PlayerAttributes = PlayerAttributes.trimmed_to_budget(5, 5, 5, 5, 5, 5, MIGRATE_ORDER)
+	assert_lte(a.total_spend(), PlayerAttributes.BUDGET)
+	assert_true(a.speed >= 1 and a.hands >= 1, "every axis floored at LEVEL_MIN, none below")
+
+func test_trim_clamps_out_of_range_inputs() -> void:
+	# Out-of-range levels (hand-edited garbage) are clamped into [1,5] first.
+	var a: PlayerAttributes = PlayerAttributes.trimmed_to_budget(99, -4, 3, 3, 3, 3, MIGRATE_ORDER)
+	assert_true(a.speed <= 5 and a.agility >= 1)
+	assert_lte(a.total_spend(), PlayerAttributes.BUDGET)
