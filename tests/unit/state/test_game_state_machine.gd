@@ -718,3 +718,21 @@ func test_clock_does_not_tick_during_dead_puck_phase() -> void:
 	sm.tick(GameRules.GOAL_CELEBRATION_DURATION + 0.01)  # → GOAL_SCORED
 	sm.tick(GameRules.GOAL_PAUSE_DURATION + 0.01)        # → FACEOFF_PREP
 	assert_eq(sm.time_remaining, time_before, "clock must not tick during dead-puck phases")
+
+
+func test_swap_into_reserved_slot_is_rejected() -> void:
+	# P2-5: a slot held for a reconnecting player is invisible to the occupancy
+	# scan (no live player there), so try_swap_slot must consult is_slot_reserved —
+	# otherwise a teammate swaps in and the reconnect double-books the slot.
+	sm.register_remote_assigned_player(1, 0, 0)   # peer 1 on team 0 slot 0
+	sm.reserve_slot(0, 1)                          # slot 1 held for a dropped player
+	var result: Dictionary = sm.try_swap_slot(1, 0, 1)  # try to swap into the reserved slot
+	assert_true(result.is_empty(), "swap into a reserved slot is rejected")
+	assert_eq(sm.players[1].team_slot, 0, "peer stays in its original slot")
+
+func test_swap_into_free_slot_still_works() -> void:
+	# Regression guard: the reserved check must not block ordinary swaps.
+	sm.register_remote_assigned_player(1, 0, 0)
+	var result: Dictionary = sm.try_swap_slot(1, 0, 2)  # slot 2 is free + unreserved
+	assert_false(result.is_empty(), "swap into a free unreserved slot succeeds")
+	assert_eq(sm.players[1].team_slot, 2)

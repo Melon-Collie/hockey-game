@@ -59,12 +59,17 @@ beatable again (goalie no longer reaches instantly while down); (2) run a royal-
 one-timer — the goalie should drive toward the far post, not park at net-center.
 
 ## Batch 5 — Slot / reservation / lobby integrity · verify: 2P
-- [ ] P2-5  `is_slot_reserved` check in try_swap_slot + _promote_spectator_to_player
-- [ ] P2-8  Clear `_reserved_slots` on rematch (_apply_reset)
-- [ ] P2-14 Promote liveness guard (peer still connected)
-- [ ] P2-17 Online double-transition gate + disable confirm buttons before await
-- [ ] Session-scoped field-reset sweep (`_peer_ping_ms`, lobby settings, `_in_replay_locally`, …)
-- [ ] P3    `reset_game()` is_host guard
+- [x] P2-5  `is_slot_reserved` check in try_swap_slot (+ test) and _promote_spectator_to_player
+- [x] P2-8  Clear `_reserved_slots` on rematch (_apply_reset)
+- [x] P2-14 Promote liveness guard (peer still in connected_peer_ids)
+- [~] P2-17 Confirm-button `_leaving` guard added (double-teardown). Op-pending host/join
+      re-entrancy gate DEFERRED to the 2P/Steam testing pass — needs live async-callback validation.
+- [x] Session field-reset sweep: `_peer_ping_ms` (reset + prepare + per-peer disconnect), the
+      other per-peer telemetry dicts on disconnect, lobby period/rule settings in reset(), `_in_replay_locally` in on_scene_exit
+- [x] P3    `reset_game()` is_host guard
+
+2P test: reconnect into a held slot after a teammate changed position (no double-spawn on a dot);
+promote a spectator whose peer just left (no phantom skater); spam Return-to-Free-Play/Exit (single teardown).
 
 ## Batch 6 — Wire + reconcile determinism · verify: 2P · ONE PROTOCOL_VERSION bump
 - [ ] P0-1  `stagger_timer` wire field + codec completeness test

@@ -12,6 +12,10 @@ var _change_position_btn: Button = null
 var _spectate_btn: Button = null
 var _confirm: ConfirmDialog = null
 var _confirm_callback: Callable = Callable()
+# Latches once a leave/exit teardown starts: the confirm dialog closes before the
+# 0.5s announce_match_end() await completes, leaving the leave menu interactive, so
+# a second click would start an overlapping teardown (double scene change). One-way.
+var _leaving: bool = false
 
 
 func _ready() -> void:
@@ -242,6 +246,9 @@ func _build_leave_overlay() -> void:
 		if NetworkManager.is_host and not NetworkManager.is_offline_mode:
 			msg = "Return to free play? This ends the match for everyone."
 		_show_confirm(msg, func() -> void:
+			if _leaving:
+				return
+			_leaving = true
 			await NetworkManager.announce_match_end()
 			GameManager.return_to_free_play()))
 	vbox.add_child(free_play_btn)
@@ -249,6 +256,9 @@ func _build_leave_overlay() -> void:
 	var exit_btn := MenuStyle.popup_button("Exit Game")
 	exit_btn.pressed.connect(func() -> void:
 		_show_confirm("Exit game?", func() -> void:
+			if _leaving:
+				return
+			_leaving = true
 			await NetworkManager.announce_match_end()
 			GameManager.on_scene_exit()
 			NetworkManager.reset()

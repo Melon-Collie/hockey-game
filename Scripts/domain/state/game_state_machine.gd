@@ -468,6 +468,12 @@ func try_swap_slot(peer_id: int, new_team_id: int, new_slot: int) -> Dictionary:
 			continue
 		if players[other_id].team_id == new_team_id and players[other_id].team_slot == new_slot:
 			return {}
+	# Reject a slot being held for a reconnecting player: the occupancy scan above
+	# only sees LIVE players, so without this a teammate could swap into a reserved
+	# slot and _restore_reserved_player would then double-book it (two skaters on
+	# one dot at the next faceoff).
+	if is_slot_reserved(new_team_id, new_slot):
+		return {}
 	var old_team_id: int = current.team_id
 	var old_slot: int   = current.team_slot
 	players[peer_id].team_id       = new_team_id

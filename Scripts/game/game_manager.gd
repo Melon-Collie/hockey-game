@@ -1424,10 +1424,18 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 		return
 	if new_slot < 0 or new_slot >= PlayerRules.MAX_PER_TEAM:
 		return
+	# Liveness guard: a swap-request RPC can still be in flight when the requesting
+	# spectator disconnects. Without this the host would spawn + broadcast a skater
+	# for a gone peer that no disconnect will ever clean up (phantom on all clients).
+	if peer_id != NetworkManager.local_peer_id() and peer_id not in NetworkManager.connected_peer_ids():
+		return
 	for other_id: int in _state_machine.players:
 		var p: Dictionary = _state_machine.players[other_id]
 		if p.team_id == new_team_id and p.team_slot == new_slot:
 			return
+	# Don't promote into a slot held for a reconnecting player (see try_swap_slot).
+	if _state_machine.is_slot_reserved(new_team_id, new_slot):
+		return
 	if _state_machine.count_players_on_team(new_team_id) >= PlayerRules.MAX_PER_TEAM:
 		return
 	_spectator_peers.erase(peer_id)
@@ -2801,6 +2809,10 @@ func on_scene_exit() -> void:
 	# (used to build the footer) is still intact.
 	_close_replay_file_writer()
 	_last_recorded_phase = -1
+	# Session-scoped — a scene exit mid goal-replay must not carry a stale
+	# "in replay" flag into the next session (a fresh driver is created there, so
+	# a leftover true would let a skip vote fire before any replay is running).
+	_in_replay_locally = false
 	if _shot_tracker != null:
 		_shot_tracker.clear_state()
 	if _registry != null:
@@ -2857,6 +2869,12 @@ func on_scene_exit() -> void:
 
 
 func reset_game() -> void:
+	# Host-authoritative (offline/free-play are is_host too). A stray client call
+	# would reset only that client's SM/stats and fork it from the host; the
+	# notify_reset_to_all RPC below is authority-gated so no remote harm, but guard
+	# for symmetry with return_to_lobby.
+	if not NetworkManager.is_host:
+		return
 	_drop_puck_if_carried()
 	_apply_reset()
 	# Each rematch gets its own .mreplay so the viewer doesn't render two
@@ -2891,7 +2909,14 @@ func on_game_reset(new_game_id: String = "") -> void:
 
 
 func _apply_reset() -> void:
-	_state_machine.reset_all()
+	_state_machine.reset_all()  # also clears the domain-side reserved_slots mirror
+	# Clear the host-side reservation store in lockstep with the domain mirror.
+	# reset_all() frees the domain slots, so a leftover _reserved_slots entry would
+	# force a reconnecting peer into a slot that a rematch joiner/swapper can now
+	# retake (double-booking) AND carry the PREVIOUS match's stats into the fresh
+	# 0-0 game. Host-only dict; a no-op on clients. Pending expiry timers are token-
+	# guarded, so they harmlessly no-op after the clear.
+	_reserved_slots.clear()
 	_seen_first_prep = false  # next prep is a rematch's opening faceoff
 	_last_emitted_clock_secs = -1
 	_last_ghost_state.clear()
