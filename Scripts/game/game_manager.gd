@@ -40,6 +40,11 @@ signal local_shot_released(power: float, is_slapper: bool)
 # (crowd reaction in ArenaStands) after the burst/sound fire in
 # _on_body_check_landed. `force` is the same VFX-scale impact force.
 signal body_check_broadcast(force: float)
+# Fired (before faceoff_prep_announced) on the opening faceoff of a match —
+# game start and rematch, never mid-game stoppages. The opening prep window is
+# host-extended by `duration`, so listeners (camera sweep, HUD matchup card,
+# crowd buzz) have that long before the normal faceoff countdown begins.
+signal pregame_intro_started(duration: float)
 signal replay_started
 signal replay_stopped
 # Live tally of unanimous skip-replay votes (emitted on every accepted vote and
@@ -64,6 +69,11 @@ signal offside_called()
 # ── Domain state ──────────────────────────────────────────────────────────────
 var _state_machine: GameStateMachine = null
 var _last_emitted_clock_secs: int = -1
+# True once any faceoff prep has been announced this match. The first prep
+# after world setup / a reset is the OPENING faceoff — the only one that gets
+# the pre-game intro. Tracked here (not in the domain SM) because clients
+# never tick the SM but still need to fire their local intro cosmetics.
+var _seen_first_prep: bool = false
 var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 # Reused peer_id -> position scratch for the per-tick ghost-state and icing
 # checks (host only). The domain calls read it synchronously and never retain
@@ -560,9 +570,11 @@ func on_host_started() -> void:
 	# Open the match with a faceoff countdown rather than dropping straight
 	# into PLAYING. Tutorial scripts its own intro; free play is a casual
 	# warmup that shouldn't gate the player behind a countdown — both stay
-	# in PLAYING from the start.
+	# in PLAYING from the start. The opening prep is extended so the pre-game
+	# intro (camera sweep + matchup card) plays before the countdown.
 	if not NetworkManager.is_drill_mode() and not NetworkManager.is_free_play_mode:
-		_state_machine.begin_faceoff_prep()
+		_state_machine.begin_faceoff_prep(GameRules.CENTER_ICE_DOT,
+				GameRules.PREGAME_INTRO_DURATION if _pregame_intro_eligible() else 0.0)
 		_phase_coord.handle_phase_entered()
 
 
@@ -857,6 +869,7 @@ func _spawn_world() -> void:
 	# scene change records a huge gap (whatever wall time elapsed during the
 	# scene transition) and pollutes the p95/p99 for the first second.
 	_last_phys_tick_us = 0
+	_seen_first_prep = false  # fresh world → next prep is the opening faceoff
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -1061,7 +1074,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
-	_phase_coord.faceoff_prep_announced.connect(faceoff_prep_announced.emit)
+	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
 	_phase_coord.period_synced.connect(period_synced.emit)
@@ -2647,6 +2660,38 @@ func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_times
 	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
 
 
+# Relay for PhaseCoordinator.faceoff_prep_announced that recognizes the
+# OPENING faceoff (first prep since world setup / reset) and fires the
+# pre-game intro signal first, so HUD/camera/crowd listeners can set up
+# before the countdown wiring reacts. Runs on host and clients alike —
+# both sides' prep announcement funnels through here.
+func _on_faceoff_prep_announced_from_coord() -> void:
+	var opening: bool = not _seen_first_prep
+	_seen_first_prep = true
+	if opening and _pregame_intro_eligible():
+		pregame_intro_started.emit(GameRules.PREGAME_INTRO_DURATION)
+	faceoff_prep_announced.emit()
+
+
+# Whether the opening-faceoff pre-game intro should play. Beyond the mode
+# gates, the fresh-match check keeps a mid-game joiner's FIRST prep (some
+# later stoppage, normal-length window) from playing a 4 s intro over a 2 s
+# prep. The clock counts up in infinite-time mode, down otherwise.
+func _pregame_intro_eligible() -> bool:
+	if NetworkManager.is_free_play_mode or NetworkManager.is_drill_mode() \
+			or NetworkManager.is_replay_mode():
+		return false
+	if _state_machine == null:
+		return false
+	if _state_machine.current_period != 1:
+		return false
+	if _state_machine.scores[0] != 0 or _state_machine.scores[1] != 0:
+		return false
+	if _state_machine.infinite_time:
+		return _state_machine.time_remaining <= 0.01
+	return _state_machine.time_remaining >= _state_machine.period_duration - 0.01
+
+
 # Star of the Game, computed locally from the replicated stat counters. Every
 # machine sees the same counters and the same sorted-peer-id candidate order,
 # and StarOfGameRules breaks ties explicitly, so selection is deterministic
@@ -2815,7 +2860,9 @@ func reset_game() -> void:
 		new_id = PlayerPrefs.generate_uuid()
 	NetworkManager.notify_reset_to_all(new_id)
 	_rollover_replay_file_to(new_id)
-	_state_machine.begin_faceoff_prep()
+	# A rematch is a fresh match — its opening faceoff gets the intro too.
+	_state_machine.begin_faceoff_prep(GameRules.CENTER_ICE_DOT,
+			GameRules.PREGAME_INTRO_DURATION if _pregame_intro_eligible() else 0.0)
 	_phase_coord.handle_phase_entered()
 	game_reset.emit()
 
@@ -2837,6 +2884,7 @@ func on_game_reset(new_game_id: String = "") -> void:
 
 func _apply_reset() -> void:
 	_state_machine.reset_all()
+	_seen_first_prep = false  # next prep is a rematch's opening faceoff
 	_last_emitted_clock_secs = -1
 	_last_ghost_state.clear()
 	_hit_claim.reset_throttle()

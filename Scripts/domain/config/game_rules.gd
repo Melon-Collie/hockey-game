@@ -11,6 +11,10 @@ const GOAL_PAUSE_DURATION: float        = 2.0  # fallback for GOAL_SCORED auto-a
 const GOAL_CELEBRATION_DURATION: float  = 1.5  # post-goal beat: movement allowed, puck pickup-locked,
 												# banner + VFX play; auto-advances to GOAL_SCORED (replay)
 const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdown before puck unlocks
+# Extra hold on the OPENING faceoff of a match (game start + rematch) so the
+# pre-game intro can play: camera sweep, matchup card, crowd buzz. The normal
+# countdown runs in the final FACEOFF_PREP_DURATION of the extended window.
+const PREGAME_INTRO_DURATION: float = 4.0
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3

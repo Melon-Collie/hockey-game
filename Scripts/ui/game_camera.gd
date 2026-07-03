@@ -66,6 +66,22 @@ var _shake_trauma: float = 0.0
 const _SHAKE_DECAY: float = 4.0
 const _SHAKE_MAG: float = 0.25
 
+# ── Pre-game intro sweep ──────────────────────────────────────────────────────
+# Opening-faceoff crane shot: hold a high wide view of the rink and descend
+# onto the live gameplay framing. Triggered by GameManager.pregame_intro_started
+# (the opening prep window is host-extended by the same duration, so play
+# never starts while the crane is still in the air).
+const _INTRO_HEIGHT: float = 36.0
+var _intro_duration: float = 0.0
+var _intro_time_left: float = 0.0
+var _intro_start: Transform3D = Transform3D.IDENTITY
+var _intro_start_captured: bool = false
+
+func play_intro(duration: float) -> void:
+	_intro_duration = maxf(duration, 0.1)
+	_intro_time_left = _intro_duration
+	_intro_start_captured = false
+
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	_goal_0 = goal_0
 	_goal_1 = goal_1
@@ -99,6 +115,7 @@ func shake(trauma: float) -> void:
 
 func _ready() -> void:
 	make_current()
+	GameManager.pregame_intro_started.connect(play_intro)
 	GameManager.goal_scored.connect(func(_t, _n, _a1, _a2) -> void: shake(1.0))
 	GameManager.local_player_hit.connect(func(mag: float) -> void:
 		if mag >= 3.0:
@@ -287,3 +304,19 @@ func _physics_process(delta: float) -> void:
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG,
 			0.0,
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG)
+
+	# ── Step 7: Pre-game intro sweep ──────────────────────────────────────────
+	# Crane down from a high wide shot onto the live gameplay framing computed
+	# above. The blend target is re-sampled every frame, so at full weight the
+	# handoff is seamless wherever the normal camera settled; the start shares
+	# the live rotation (pitch/yaw prefs, attack-up flip), making the blend a
+	# pure position glide.
+	if _intro_time_left > 0.0:
+		if not _intro_start_captured:
+			_intro_start_captured = true
+			_intro_start = global_transform
+			_intro_start.origin = Vector3(0.0, _INTRO_HEIGHT, global_position.z)
+		_intro_time_left = maxf(_intro_time_left - delta, 0.0)
+		var w: float = 1.0 - _intro_time_left / _intro_duration
+		var eased: float = w * w * (3.0 - 2.0 * w)
+		global_transform = _intro_start.interpolate_with(global_transform, eased)

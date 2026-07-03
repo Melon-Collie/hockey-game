@@ -193,6 +193,8 @@ func _ready() -> void:
 		gm.phase_changed.connect(_on_phase_changed)
 	if gm.has_signal("body_check_broadcast"):
 		gm.body_check_broadcast.connect(_on_body_check_broadcast)
+	if gm.has_signal("pregame_intro_started"):
+		gm.pregame_intro_started.connect(_on_pregame_intro_started)
 
 
 # Called from GameManager.team_colors_ready once TeamColorRegistry resolves
@@ -592,6 +594,11 @@ func _on_phase_changed(new_phase: int) -> void:
 # the impact burst/sound use. Soft contact barely registers.
 func _on_body_check_broadcast(force: float) -> void:
 	excite(SkaterVFX.check_intensity(force) * 0.45)
+
+
+# Pre-game buzz: the bowl comes alive under the opening camera sweep.
+func _on_pregame_intro_started(_duration: float) -> void:
+	excite(0.55)
 
 
 func _emit_box(st: SurfaceTool, center: Vector3, size: Vector3) -> void:

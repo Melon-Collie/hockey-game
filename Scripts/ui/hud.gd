@@ -152,6 +152,10 @@ func _ready() -> void:
 	GameManager.offside_called.connect(_on_offside_called)
 	GameManager.local_player_hit.connect(_on_local_player_hit)
 	GameManager.local_shot_released.connect(_on_local_shot_released)
+	# Arrives just before faceoff_prep_announced on the opening faceoff; the
+	# countdown builder consumes it to lead with the matchup card.
+	GameManager.pregame_intro_started.connect(
+			func(duration: float) -> void: _pending_intro_secs = duration)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
@@ -1098,11 +1102,30 @@ func _on_faceoff_prep_announced() -> void:
 # Drives a "2 → 1 → DROP!" countdown on the phase banner during FACEOFF_PREP.
 # Pure cosmetic: the puck unlock is gated by the authoritative phase change to
 # FACEOFF, so a client running a frame or two behind still sees the right beat.
+# On the opening faceoff (pregame_intro_started arrived just before this), the
+# banner leads with a matchup card for the intro window — the camera sweep
+# plays over it — then hands off to the normal countdown.
+var _pending_intro_secs: float = 0.0
+
 func _start_faceoff_countdown() -> void:
 	_stop_faceoff_countdown()
-	_phase_label.text = "FACEOFF IN 2"
+	var intro: float = _pending_intro_secs
+	_pending_intro_secs = 0.0
 	var prep: float = GameRules.FACEOFF_PREP_DURATION
 	var t := create_tween()
+	if intro > 0.0:
+		_tagline_label.text = "TONIGHT'S MATCHUP"
+		_tagline_label.add_theme_color_override("font_color", _WHITE)
+		_tagline_label.visible = true
+		_phase_label.text = "HOME  vs  AWAY"
+		t.tween_interval(intro)
+		t.tween_callback(func() -> void:
+			if _tagline_label != null:
+				_tagline_label.visible = false
+			if _phase_label != null:
+				_phase_label.text = "FACEOFF IN 2")
+	else:
+		_phase_label.text = "FACEOFF IN 2"
 	# Half-second tween to "1" mid-window if prep >= 2s; final "DROP!" sits in
 	# the FACEOFF phase entry. Steps are evenly split so 2.0s → ~1.0s per beat.
 	t.tween_interval(prep * 0.5)
