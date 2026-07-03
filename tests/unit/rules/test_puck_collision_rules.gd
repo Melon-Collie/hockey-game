@@ -134,39 +134,67 @@ func test_body_check_strip_scales_direction() -> void:
 
 # ── poke_strip_velocity ──────────────────────────────────────────────────────
 
+# Signature: (checker_vel, carrier_vel, carrier_pos, checker_pos, blend,
+# min_speed, max_speed, fallback). Exit SPEED now scales with the blended contest
+# momentum, clamped to [min_speed, max_speed]; a still checker floors at min.
+
 func test_poke_blends_checker_and_carrier_momentum() -> void:
-	# Checker moving fast in +X, carrier moving slightly in +Z
+	# Checker moving fast in +X, carrier slightly in +Z. Blended = (5,0,1),
+	# length ~5.10 → in [3,9], so the exit speed is the momentum magnitude itself.
 	var result: Vector3 = PuckCollisionRules.poke_strip_velocity(
-		Vector3(2, 0, 0),          # checker_blade_vel
-		Vector3(0, 0, 1),          # carrier_blade_vel
+		Vector3(5, 0, 0),          # checker_blade_vel
+		Vector3(0, 0, 2),          # carrier_blade_vel
 		Vector3.ZERO,              # carrier_pos (unused when checker vel dominates)
 		Vector3.ZERO,              # checker_pos
-		0.5,                       # blend
-		6.0,                       # strip_speed
+		0.5,                       # blend → adds (0,0,1)
+		3.0, 9.0,                  # min / max speed
 		Vector3(1, 0, 0))          # fallback unused
-	assert_almost_eq(result.length(), 6.0, 0.01)
+	assert_almost_eq(result.length(), sqrt(26.0), 0.01, "speed = blended momentum magnitude")
 	assert_gt(result.x, 0.0, "should move along checker's +X")
 	assert_gt(result.z, 0.0, "should pick up some of carrier's +Z")
 
-func test_poke_uses_position_delta_when_checker_still() -> void:
-	# Checker blade not moving — strip direction is carrier_pos - checker_pos
+func test_poke_speed_scales_with_contest_momentum() -> void:
+	# A harder poke (faster blade sweep) sends the puck faster — the whole point.
+	var soft: Vector3 = PuckCollisionRules.poke_strip_velocity(
+		Vector3(4, 0, 0), Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
+		0.5, 3.0, 9.0, Vector3(1, 0, 0))
+	var hard: Vector3 = PuckCollisionRules.poke_strip_velocity(
+		Vector3(8, 0, 0), Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
+		0.5, 3.0, 9.0, Vector3(1, 0, 0))
+	assert_almost_eq(soft.length(), 4.0, 0.01, "moderate poke → its own momentum")
+	assert_almost_eq(hard.length(), 8.0, 0.01, "hard poke → faster exit")
+	assert_gt(hard.length(), soft.length(), "harder poke squirts the puck faster")
+
+func test_poke_clamps_speed_to_min_and_max() -> void:
+	# Weak sweep floors at min_speed; overpowered sweep caps at max_speed.
+	var weak: Vector3 = PuckCollisionRules.poke_strip_velocity(
+		Vector3(1, 0, 0), Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
+		0.5, 3.0, 9.0, Vector3(1, 0, 0))
+	var huge: Vector3 = PuckCollisionRules.poke_strip_velocity(
+		Vector3(20, 0, 0), Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
+		0.5, 3.0, 9.0, Vector3(1, 0, 0))
+	assert_almost_eq(weak.length(), 3.0, 0.01, "weak poke clamps up to min_speed")
+	assert_almost_eq(huge.length(), 9.0, 0.01, "huge sweep clamps down to max_speed")
+
+func test_poke_uses_position_delta_at_min_speed_when_checker_still() -> void:
+	# Checker blade not moving — positional strip: push away at min_speed.
 	var result: Vector3 = PuckCollisionRules.poke_strip_velocity(
 		Vector3.ZERO,              # checker not moving
 		Vector3.ZERO,              # carrier not moving
 		Vector3(3, 0, 0),          # carrier at +X
 		Vector3(0, 0, 0),          # checker at origin
 		0.5,
-		6.0,
+		3.0, 9.0,
 		Vector3(1, 0, 0))
-	assert_almost_eq(result.length(), 6.0, 0.01)
+	assert_almost_eq(result.length(), 3.0, 0.01, "positional strip uses min_speed")
 	assert_gt(result.x, 0.0, "push puck away from checker (+X)")
 
 func test_poke_uses_fallback_when_everything_is_zero() -> void:
-	# Nothing moving, same positions — fall back to provided direction
+	# Nothing moving, same positions — fall back to provided direction at min_speed.
 	var fallback := Vector3(0, 0, 1)
 	var result: Vector3 = PuckCollisionRules.poke_strip_velocity(
 		Vector3.ZERO, Vector3.ZERO,
 		Vector3.ZERO, Vector3.ZERO,
-		0.5, 6.0, fallback)
-	assert_almost_eq(result.length(), 6.0, 0.01)
+		0.5, 3.0, 9.0, fallback)
+	assert_almost_eq(result.length(), 3.0, 0.01, "fallback strip uses min_speed")
 	assert_gt(result.z, 0.0, "should use fallback direction (+Z)")

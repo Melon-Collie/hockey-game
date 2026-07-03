@@ -38,7 +38,12 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var deflect_speed_ref: float = 30.0         # speed (m/s) at which both falloffs bottom out
 @export var deflect_cooldown: float = 0.3
 @export var deflect_elevation_angle: float = 35.0
-@export var poke_strip_speed: float = 6.0
+# Poke exit speed now scales with the blade-contest momentum (see
+# PuckCollisionRules.poke_strip_velocity): a soft poke floors at min, a hard sweep
+# squirts the puck up to max. Old behavior was a flat 6.0 regardless of how hard
+# the poke was.
+@export var poke_strip_min_speed: float = 3.0
+@export var poke_strip_max_speed: float = 9.0
 @export var poke_carrier_vel_blend: float = 0.5
 @export var poke_checker_cooldown: float = 0.1
 # Delivered victim-impulse (BodyCheckRules.puck_strip_impulse: attacker transfer ×
@@ -277,7 +282,8 @@ func apply_poke_check(checker_skater: Skater) -> void:
 			ex_carrier.global_position,
 			checker_skater.global_position,
 			poke_carrier_vel_blend,
-			poke_strip_speed,
+			poke_strip_min_speed,
+			poke_strip_max_speed,
 			fallback_dir)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	_set_cooldown(checker_skater, poke_checker_cooldown)
@@ -316,7 +322,8 @@ func apply_goalie_poke_check(blade_pos: Vector3, blade_vel: Vector3) -> void:
 			ex_carrier.global_position,
 			blade_pos,
 			poke_carrier_vel_blend,
-			poke_strip_speed,
+			poke_strip_min_speed,
+			poke_strip_max_speed,
 			fallback_dir)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_stripped.emit(ex_carrier)
