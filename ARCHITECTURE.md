@@ -275,7 +275,7 @@ The `GameStateMachine` exposes `is_movement_locked()` — true during `GOAL_SCOR
 | 6 | Full game flow (goals, faceoffs, score) | Done |
 | 7 | Testable domain layer (rules extraction, state machine, GUT tests, CI) | Done |
 | 8 | Period-based game loop (clock, period transitions, game over) | Done |
-| 9 | Visual polish (puck trail, ice spray, skate trails, goal burst, wall impact, body check, shot charge glow, speed lines) | Done |
+| 9 | Visual polish (puck trail, ice spray, skate trails, goal burst, wall impact, body check, speed lines) | Done — a blade shot-charge glow was tried and **cut by design**: charge feedback is the local on-ice charge ring only, so don't re-add a world-space charge tell |
 | 10 | Playtester distribution (auto-versioned GitHub Releases + in-game update notifier) | Done |
 | 11 | In-game team/position swap | Done |
 | 12 | Pre-game lobby (slot picking + rule config) + in-game "Return to Lobby" | Done |
@@ -309,7 +309,7 @@ The `GameStateMachine` exposes `is_movement_locked()` — true during `GOAL_SCOR
 
 **`GameManager` wires six collaborators:** `PlayerRegistry`, `WorldStateCodec`, `ShotOnGoalTracker`, `HitTracker`, `PhaseCoordinator`, `SlotSwapCoordinator`.
 
-**`SkaterController`'s five `RefCounted` collaborators live in `Scripts/controllers/`, not `domain/`.** `SkaterStateMachine` (current shot state, follow-through timer, locked aim direction), `SkaterAimingBehavior` (charge distance, sweep history, one-timer window), `SkaterPoseCoordinator` (facing, upper-body twist/lean, velocity lean, lower-body lag, head angle, angular-velocity bookkeeping), `SkaterShotPoseCoordinator` (slapper wind-up blade pose, wrister/slapper follow-through), and `SkaterIKCoordinator` (mouse → top-hand IK, bottom-hand IK, net/goalie/butterfly clamps, blade-Y geometry helpers) all carry controller-local mutable state that is tightly coupled to per-tick input processing. Domain rules are stateless static methods; these classes are stateful collaborators owned by `SkaterController` and set up in its `setup()`. The pose and shot-pose coordinators expose public state fields (`facing`, `upper_body_angle`, `lower_body_lag`, `ik_locked_side`) so `LocalController.reconcile` can snap them on replay entry/exit; `_blade_relative_angle` and `_do_release` stay on the controller because they cross multiple coordinator boundaries.
+**`SkaterController`'s six `RefCounted` collaborators live in `Scripts/controllers/`, not `domain/`.** `SkaterStateMachine` (current shot state, follow-through timer, locked aim direction), `SkaterAimingBehavior` (charge distance, sweep history, one-timer window), `SkaterPoseCoordinator` (facing, upper-body twist/lean, velocity lean, lower-body lag, head angle, angular-velocity bookkeeping), `SkaterShotPoseCoordinator` (slapper wind-up blade pose, wrister/slapper follow-through), `SkaterIKCoordinator` (mouse → top-hand IK, bottom-hand IK, net/goalie/butterfly clamps, blade-Y geometry helpers), and `SkaterSkatingCoordinator` (the procedural skating stride — velocity-derived gait with forward/backward/crossover blends, cadence saturation, glide-vs-push effort; purely cosmetic and derived from velocity alone, so remotes and replays animate identically with zero network state) all carry controller-local mutable state that is tightly coupled to per-tick input processing. Domain rules are stateless static methods; these classes are stateful collaborators owned by `SkaterController` and set up in its `setup()`. The pose and shot-pose coordinators expose public state fields (`facing`, `upper_body_angle`, `lower_body_lag`, `ik_locked_side`) so `LocalController.reconcile` can snap them on replay entry/exit; `_blade_relative_angle` and `_do_release` stay on the controller because they cross multiple coordinator boundaries.
 
 ---
 
@@ -402,7 +402,6 @@ The 120 Hz host per-tick allocation audit is otherwise complete: AI snapshot cac
 ## Open Questions
 
 - Aim assist
-- Procedural skating animations
 - CharacterStats resource design (universal vs per-character exports)
 - Extend visual-offset blend to remote skaters if/when remote prediction lands (today the blend is local-only because remotes are interpolated and never snap)
 

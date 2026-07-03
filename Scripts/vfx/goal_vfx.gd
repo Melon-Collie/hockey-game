@@ -1,8 +1,25 @@
 class_name GoalVFX
 extends Node3D
 
+# Goal lamp strobe: energy of the red wash light, emission of the dome
+# fixture, flash count/timing. The lamp reads as the classic behind-the-glass
+# red light — no shadows on the light, so the wash reaches the end-zone ice
+# through the boards.
+const LAMP_COLOR := Color(1.0, 0.07, 0.07)
+const LAMP_MAX_ENERGY: float = 5.0
+const DOME_MAX_EMISSION: float = 4.5
+const LAMP_FLASHES: int = 6
+const LAMP_RISE_TIME: float = 0.10
+const LAMP_FALL_TIME: float = 0.24
+const LAMP_FADE_TIME: float = 0.6
+const NET_RIPPLE_PEAK: float = 0.22
+
 var _particles: GPUParticles3D = null
 var _light: OmniLight3D = null
+var _lamp_light: OmniLight3D = null
+var _dome_mat: StandardMaterial3D = null
+var _net_material: ShaderMaterial = null
+var _lamp_tween: Tween = null
 
 func _ready() -> void:
 	_particles = GPUParticles3D.new()
@@ -50,8 +67,84 @@ func _ready() -> void:
 	_light.light_color = Color(1.0, 0.85, 0.3)
 	add_child(_light)
 
+
+# Called by HockeyGoal after this node is in the tree (game runtime only, not
+# in the editor). net_material is the shared ShaderMaterial on the net panels
+# (for the goal ripple); lamp_local_pos places the lamp fixture above the
+# glass behind this net, expressed relative to this node.
+func setup(net_material: ShaderMaterial, lamp_local_pos: Vector3) -> void:
+	_net_material = net_material
+	_build_lamp(lamp_local_pos)
+
+
 func celebrate() -> void:
 	_particles.restart()
 	_light.light_energy = 2.5
 	var tween := create_tween()
 	tween.tween_property(_light, "light_energy", 0.0, 1.8)
+	_strobe_lamp()
+	_ripple_net()
+
+
+func _build_lamp(lamp_local_pos: Vector3) -> void:
+	_lamp_light = OmniLight3D.new()
+	_lamp_light.omni_range = 13.0
+	_lamp_light.light_energy = 0.0
+	_lamp_light.light_color = LAMP_COLOR
+	_lamp_light.position = lamp_local_pos
+	add_child(_lamp_light)
+
+	var base_mesh := CylinderMesh.new()
+	base_mesh.height = 0.10
+	base_mesh.top_radius = 0.11
+	base_mesh.bottom_radius = 0.11
+	var base_mat := StandardMaterial3D.new()
+	base_mat.albedo_color = Color(0.15, 0.15, 0.17)
+	base_mesh.material = base_mat
+	var base_inst := MeshInstance3D.new()
+	base_inst.mesh = base_mesh
+	base_inst.position = lamp_local_pos
+	add_child(base_inst)
+
+	var dome_mesh := SphereMesh.new()
+	dome_mesh.radius = 0.10
+	dome_mesh.height = 0.10
+	dome_mesh.is_hemisphere = true
+	_dome_mat = StandardMaterial3D.new()
+	_dome_mat.albedo_color = Color(0.45, 0.03, 0.03)
+	_dome_mat.emission_enabled = true
+	_dome_mat.emission = LAMP_COLOR
+	_dome_mat.emission_energy_multiplier = 0.0
+	dome_mesh.material = _dome_mat
+	var dome_inst := MeshInstance3D.new()
+	dome_inst.mesh = dome_mesh
+	dome_inst.position = lamp_local_pos + Vector3(0.0, 0.05, 0.0)
+	add_child(dome_inst)
+
+
+func _strobe_lamp() -> void:
+	if _lamp_light == null:
+		return
+	if _lamp_tween != null and _lamp_tween.is_valid():
+		_lamp_tween.kill()
+	_lamp_tween = create_tween()
+	for _i in range(LAMP_FLASHES):
+		_lamp_tween.tween_method(_apply_lamp, 0.25, 1.0, LAMP_RISE_TIME)
+		_lamp_tween.tween_method(_apply_lamp, 1.0, 0.25, LAMP_FALL_TIME)
+	_lamp_tween.tween_method(_apply_lamp, 0.25, 0.0, LAMP_FADE_TIME)
+
+
+func _apply_lamp(intensity: float) -> void:
+	_lamp_light.light_energy = intensity * LAMP_MAX_ENERGY
+	_dome_mat.emission_energy_multiplier = intensity * DOME_MAX_EMISSION
+
+
+func _ripple_net() -> void:
+	if _net_material == null:
+		return
+	_net_material.set_shader_parameter("ripple_amount", 0.0)
+	var tween := create_tween()
+	tween.tween_property(_net_material, "shader_parameter/ripple_amount", NET_RIPPLE_PEAK, 0.06)
+	var settle := tween.tween_property(_net_material, "shader_parameter/ripple_amount", 0.0, 0.9)
+	settle.set_trans(Tween.TRANS_CUBIC)
+	settle.set_ease(Tween.EASE_OUT)

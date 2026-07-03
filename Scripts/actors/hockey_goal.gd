@@ -36,8 +36,18 @@ const PIPE_RADIAL_SEGMENTS: int = 8
 const NET_TEXTURE_PATH: String    = "res://Assets/textures/net_diamond.png"
 const NET_TEXTURE_TILE_SIZE: float = 0.164  # 4 diamonds × 41mm each
 
+# All net panels share one ShaderMaterial (goal_net.gdshader) so GoalVFX can
+# drive a single ripple uniform on goal. Rebuilt per _rebuild().
+const NET_SHADER_PATH: String = "res://Shaders/goal_net.gdshader"
+
+# Goal lamp fixture placement: above the glass on the end boards behind this
+# net (glass tops out around 2.9 m — wall 1.07 + glass 1.83).
+const LAMP_HEIGHT: float = 3.2
+const LAMP_BEHIND_BOARDS: float = 0.35
+
 var defending_team_id: int = -1  # set by GameManager when goals are assigned to teams
 var _net_body: StaticBody3D = null  # holds net-panel collision shapes; kept separate so puck can distinguish pipe vs net contact
+var _net_material: ShaderMaterial = null  # shared across all net panels; GoalVFX tweens its ripple uniform
 
 
 # The actual world-Z of this goal's goal line. The HockeyGoal *node* sits at
@@ -100,6 +110,7 @@ func _rebuild() -> void:
 	add_child(_net_body)
 
 	var goal_z: float = facing * (rink_length / 2.0 - distance_from_end)
+	_net_material = _make_net_material(goal_z)
 	_build_mouth(goal_z)
 	_build_skirt(goal_z)
 	_build_crown(goal_z)
@@ -112,6 +123,10 @@ func _rebuild() -> void:
 	goal_vfx.position = Vector3(0.0, NET_HEIGHT / 2.0, goal_z)
 	add_child(goal_vfx)
 	vfx = goal_vfx
+	# GoalVFX is not a @tool script, so only drive it at game runtime.
+	if not Engine.is_editor_hint():
+		var lamp_world := Vector3(0.0, LAMP_HEIGHT, facing * (rink_length / 2.0 + LAMP_BEHIND_BOARDS))
+		goal_vfx.setup(_net_material, lamp_world - goal_vfx.position)
 
 
 # --------------------------------------------------------------------------
@@ -624,16 +639,22 @@ func _apply_mat(mesh_inst: MeshInstance3D, color: Color) -> void:
 
 
 func _apply_mat_net(mesh_inst: MeshInstance3D) -> void:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = net_color
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	# Load the diamond mesh texture. ResourceLoader.exists checks at runtime
-	# in case the asset isn't present yet — in that case we just render the
-	# flat translucent color as before.
+	mesh_inst.material_override = _net_material
+
+
+# One ShaderMaterial shared by every net panel of this goal, so the goal
+# ripple is a single uniform write. ripple_origin sits at the goal mouth —
+# the wave radiates back through the net from there.
+func _make_net_material(goal_z: float) -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = load(NET_SHADER_PATH)
+	mat.set_shader_parameter("tint", net_color)
+	mat.set_shader_parameter("ripple_origin", Vector3(0.0, NET_HEIGHT / 2.0, goal_z))
+	mat.set_shader_parameter("ripple_amount", 0.0)
+	# ResourceLoader.exists checks at runtime in case the asset isn't present
+	# yet — in that case we just render the flat translucent color as before.
 	if ResourceLoader.exists(NET_TEXTURE_PATH):
 		var tex: Texture2D = load(NET_TEXTURE_PATH)
-		mat.albedo_texture = tex
-		# Keep crisp diamond edges; avoid blurring at distance.
-		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mesh_inst.material_override = mat
+		mat.set_shader_parameter("albedo_tex", tex)
+		mat.set_shader_parameter("use_texture", true)
+	return mat

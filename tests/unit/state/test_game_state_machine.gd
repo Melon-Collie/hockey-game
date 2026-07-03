@@ -48,6 +48,24 @@ func test_faceoff_prep_expires_to_faceoff() -> void:
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)
 	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
 
+func test_extended_prep_holds_past_normal_duration() -> void:
+	sm.begin_faceoff_prep(GameRules.CENTER_ICE_DOT, GameRules.PREGAME_INTRO_DURATION)
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF_PREP,
+			"opening prep holds through the intro window")
+	sm.tick(GameRules.PREGAME_INTRO_DURATION)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
+
+func test_prep_extension_is_one_shot() -> void:
+	sm.begin_faceoff_prep(GameRules.CENTER_ICE_DOT, GameRules.PREGAME_INTRO_DURATION)
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + GameRules.PREGAME_INTRO_DURATION + 0.01)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
+	# The next prep (a mid-game stoppage) runs at the normal duration.
+	sm.begin_faceoff_prep()
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF,
+			"extension must not leak into later preps")
+
 func test_puck_pickup_during_faceoff_resumes_playing() -> void:
 	sm.begin_faceoff_prep()
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)  # → FACEOFF

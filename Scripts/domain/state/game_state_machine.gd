@@ -19,6 +19,9 @@ extends RefCounted
 # ── Phase + timer ────────────────────────────────────────────────────────────
 var current_phase: int = GamePhase.Phase.PLAYING
 var _phase_timer: float = 0.0
+# One-shot extension of the current FACEOFF_PREP window (opening-faceoff
+# pre-game intro). Set by begin_faceoff_prep, cleared on every phase entry.
+var _prep_extra_time: float = 0.0
 
 # XZ dot where the next/current faceoff is held. Set by begin_faceoff_prep
 # (default center ice); read by PhaseCoordinator to position puck + players.
@@ -511,7 +514,11 @@ func apply_config(p_num_periods: int, p_period_duration: float, p_ot_enabled: bo
 # Used by manual reset (default center), the OOB path, and the NHL stoppage
 # paths (icing / offside, both pass the rule-specific dot). The post-goal
 # pipeline is driven automatically by the tick timer in advance_post_goal.
-func begin_faceoff_prep(dot_xz: Vector2 = GameRules.CENTER_ICE_DOT) -> void:
+# `extra_prep_time` extends THIS prep only (the opening faceoff of a match
+# holds longer so the pre-game intro presentation can play out); mid-game
+# stoppages leave it at 0 and every phase entry resets it.
+func begin_faceoff_prep(dot_xz: Vector2 = GameRules.CENTER_ICE_DOT,
+		extra_prep_time: float = 0.0) -> void:
 	icing_team_id = -1
 	_icing_timer = 0.0
 	last_carrier_team_id = -1
@@ -521,6 +528,7 @@ func begin_faceoff_prep(dot_xz: Vector2 = GameRules.CENTER_ICE_DOT) -> void:
 	pending_faceoff_reason = FaceoffReason.NONE
 	active_faceoff_dot = dot_xz
 	_set_phase(GamePhase.Phase.FACEOFF_PREP)
+	_prep_extra_time = maxf(extra_prep_time, 0.0)
 
 
 # ── Remote state application (clients) ──────────────────────────────────────
@@ -596,6 +604,9 @@ func get_faceoff_positions() -> Dictionary:
 func _set_phase(phase: int) -> void:
 	current_phase = phase
 	_phase_timer = 0.0
+	# Any phase entry clears the one-shot prep extension; begin_faceoff_prep
+	# re-applies it after this call when the caller asked for one.
+	_prep_extra_time = 0.0
 
 func _tick_phase(delta: float) -> bool:
 	if current_phase == GamePhase.Phase.PLAYING:
@@ -621,7 +632,7 @@ func _tick_phase(delta: float) -> bool:
 				advance_post_goal()
 				return true
 		GamePhase.Phase.FACEOFF_PREP:
-			if _phase_timer >= GameRules.FACEOFF_PREP_DURATION:
+			if _phase_timer >= GameRules.FACEOFF_PREP_DURATION + _prep_extra_time:
 				_set_phase(GamePhase.Phase.FACEOFF)
 				return true
 		GamePhase.Phase.FACEOFF:

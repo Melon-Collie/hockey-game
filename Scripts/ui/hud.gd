@@ -151,6 +151,11 @@ func _ready() -> void:
 	GameManager.icing_called.connect(_on_icing_called)
 	GameManager.offside_called.connect(_on_offside_called)
 	GameManager.local_player_hit.connect(_on_local_player_hit)
+	GameManager.local_shot_released.connect(_on_local_shot_released)
+	# Arrives just before faceoff_prep_announced on the opening faceoff; the
+	# countdown builder consumes it to lead with the matchup card.
+	GameManager.pregame_intro_started.connect(
+			func(duration: float) -> void: _pending_intro_secs = duration)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
@@ -936,6 +941,9 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 	_phase_label.visible = false
 	_scorer_label.text = scorer_name
 	_scorer_label.add_theme_color_override("font_color", team_secondary)
+	# Restore the goal-chyron tag — game over borrows this label for
+	# "STAR OF THE GAME", so re-stamp it on every goal preload.
+	_assist_tag_label.text = "ASSISTED BY"
 	_assist_tag_label.add_theme_color_override("font_color", team_secondary)
 	_assist_label.add_theme_color_override("font_color", team_secondary)
 	_phase_style.bg_color = team_primary
@@ -1094,11 +1102,30 @@ func _on_faceoff_prep_announced() -> void:
 # Drives a "2 → 1 → DROP!" countdown on the phase banner during FACEOFF_PREP.
 # Pure cosmetic: the puck unlock is gated by the authoritative phase change to
 # FACEOFF, so a client running a frame or two behind still sees the right beat.
+# On the opening faceoff (pregame_intro_started arrived just before this), the
+# banner leads with a matchup card for the intro window — the camera sweep
+# plays over it — then hands off to the normal countdown.
+var _pending_intro_secs: float = 0.0
+
 func _start_faceoff_countdown() -> void:
 	_stop_faceoff_countdown()
-	_phase_label.text = "FACEOFF IN 2"
+	var intro: float = _pending_intro_secs
+	_pending_intro_secs = 0.0
 	var prep: float = GameRules.FACEOFF_PREP_DURATION
 	var t := create_tween()
+	if intro > 0.0:
+		_tagline_label.text = "TONIGHT'S MATCHUP"
+		_tagline_label.add_theme_color_override("font_color", _WHITE)
+		_tagline_label.visible = true
+		_phase_label.text = "HOME  vs  AWAY"
+		t.tween_interval(intro)
+		t.tween_callback(func() -> void:
+			if _tagline_label != null:
+				_tagline_label.visible = false
+			if _phase_label != null:
+				_phase_label.text = "FACEOFF IN 2")
+	else:
+		_phase_label.text = "FACEOFF IN 2"
 	# Half-second tween to "1" mid-window if prep >= 2s; final "DROP!" sits in
 	# the FACEOFF phase entry. Steps are evenly split so 2.0s → ~1.0s per beat.
 	t.tween_interval(prep * 0.5)
@@ -1240,11 +1267,38 @@ func _on_game_over() -> void:
 	else:
 		_phase_label.text = "TIE"
 		_phase_label.add_theme_color_override("font_color", _WHITE)
+	# Star of the Game on the chyron's spare rows (the goal-scorer rows are
+	# hidden at game over). One star only — scarcity keeps it meaningful at 3v3.
+	var star: PlayerRecord = GameManager.get_star_of_game()
+	if star != null:
+		_assist_tag_label.text = "STAR OF THE GAME"
+		_assist_tag_label.add_theme_color_override("font_color", _GOLD)
+		_assist_tag_label.visible = true
+		_assist_label.text = "%s  ·  %s" % [star.display_name(), _star_stat_line(star.stats)]
+		_assist_label.add_theme_color_override("font_color", _GOLD)
+		_assist_label.visible = true
 	_show_phase_banner_at_rest()
 	_rematch_votes.clear()
 	_local_voted = false
 	_update_rematch_ui()
 	_game_over_popup.show_popup()
+
+# Compact stat line for the star card. Scorers show goals/assists; a star who
+# earned it on volume/defense (a 0-point grinder game) shows those instead.
+func _star_stat_line(stats: PlayerStats) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	if stats.goals > 0:
+		parts.append("%dG" % stats.goals)
+	if stats.assists > 0:
+		parts.append("%dA" % stats.assists)
+	if parts.is_empty():
+		if stats.shots_on_goal > 0:
+			parts.append("%d SOG" % stats.shots_on_goal)
+		if stats.shots_blocked > 0:
+			parts.append("%d BLK" % stats.shots_blocked)
+		if stats.hits > 0:
+			parts.append("%d HITS" % stats.hits)
+	return " · ".join(parts)
 
 func _on_game_reset() -> void:
 	_game_over_popup.hide_popup()
@@ -1316,6 +1370,19 @@ func _on_local_player_hit(magnitude: float) -> void:
 		return
 	var strength := clampf(magnitude / 12.0, 0.2, 0.55)
 	_flash_overlay.vignette_pulse(strength)
+
+# Shot-speed toast for the local player's hard shots. 22 m/s sits above every
+# pass/quick-snap (14) and below only near-max charged releases (wrister tops
+# at 24, slapper at 34 before the Shot attribute), so the toast stays a
+# brag-worthy event, not release-by-release noise.
+const _SHOT_SPEED_TOAST_MIN_M_S: float = 22.0
+const _M_S_TO_MPH: float = 2.23694
+
+func _on_local_shot_released(power: float, is_slapper: bool) -> void:
+	if power < _SHOT_SPEED_TOAST_MIN_M_S or _toast_stack == null:
+		return
+	var label: String = "SLAP SHOT" if is_slapper else "WRISTER"
+	_toast_stack.push("%s · %d MPH" % [label, roundi(power * _M_S_TO_MPH)], _GOLD)
 
 func _on_shots_on_goal_changed(sog_0: int, sog_1: int) -> void:
 	if _home_sog_label != null:
