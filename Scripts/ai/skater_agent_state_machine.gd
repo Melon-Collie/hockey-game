@@ -770,6 +770,14 @@ const DISPATCH_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 60   # ~60 H
 var _dispatch_period_ticks: int = DISPATCH_PERIOD_TICKS
 var _dispatch_skip_counter: int = 0
 var _cached_move_vector: Vector2 = Vector2.ZERO
+
+# Difficulty PACE knobs (from BotSkillProfile via apply_profile). Copied onto the
+# RoleContext each tick so the role behaviors read them. No-op baselines (0.0 /
+# 1.0) keep the perfect-bot default when no profile is applied.
+var _pursuit_standoff_m: float = 0.0
+var _pass_speed_scale: float = 1.0
+var _check_aggression: float = 1.0
+var _defensive_anticipation_scale: float = 1.0
 # Sprint is decided alongside move_vector on full-dispatch ticks; skipped
 # throttle ticks reuse this cached value so sprint_held doesn't flicker off at
 # 60 Hz (which would halve the burst and strobe the facing turn-rate penalty).
@@ -895,6 +903,10 @@ func apply_profile(profile: BotSkillProfile) -> void:
 		return
 	_mouse_max_speed_m_s = profile.mouse_max_speed_m_s
 	_dispatch_period_ticks = maxi(1, profile.dispatch_period_ticks)
+	_pursuit_standoff_m = profile.pursuit_standoff_m
+	_pass_speed_scale = profile.pass_speed_scale
+	_check_aggression = profile.check_aggression
+	_defensive_anticipation_scale = profile.defensive_anticipation_scale
 	# Arc rate: lesser of the IK-gate ceiling and the linear slew cap projected
 	# onto the carry ring radius — above either, the arc-step chord-cuts the
 	# back-pass swing or the body-facing lag trips the pose IK gate.
@@ -1257,6 +1269,10 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
 	ctx.self_stagger_timer = self_state.stagger_timer if self_state != null else 0.0
+	ctx.pursuit_standoff_m = _pursuit_standoff_m
+	ctx.pass_speed_scale = _pass_speed_scale
+	ctx.check_aggression = _check_aggression
+	ctx.defensive_anticipation_scale = _defensive_anticipation_scale
 	if _team_brain != null:
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos

@@ -68,6 +68,21 @@ var self_weight: float = 1.0
 var self_body_check_transfer: float = 0.45
 var self_stagger_timer: float = 0.0
 
+# ── Difficulty pace knobs (from BotSkillProfile, this bot only) ───────────────
+# Set by SkaterAgentStateMachine each tick from the applied skill profile.
+# Defaults are the no-op baseline, so unwired contexts (unit tests, perfect bot)
+# behave exactly as before these existed.
+# Extra metres PRESSURE drops its cut-off line back toward our net (pressure.gd).
+var pursuit_standoff_m: float = 0.0
+# Multiplier on this bot's own pass launch speed (carrier.gd own-pass sites).
+var pass_speed_scale: float = 1.0
+# How hard the on-puck pressurer hunts body checks. 1.0 = today; 0.0 = never
+# commits a check (pure containment). Consumed in evaluate_body_check.
+var check_aggression: float = 1.0
+# Multiplier on DEFENSIVE_ANTICIPATION_S — how much the backline leads a moving
+# man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
+var defensive_anticipation_scale: float = 1.0
+
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the
 # collect_* helpers fill these buffers instead of allocating fresh arrays at AI

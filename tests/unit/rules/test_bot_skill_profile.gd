@@ -2,13 +2,16 @@ extends GutTest
 
 # BotSkillProfile is a pure deterministic value bundle. Tests pin the tier
 # factories, the difficulty dispatch + fallback, and the key invariants the
-# rest of the system relies on: Hard reacts with no perception delay, Normal
-# is strictly softer on every axis, and no profile introduces RNG.
+# rest of the system relies on: Hard reacts with a light human touch, the tiers
+# form a strictly-softening ladder (Hard → Normal → Easy) on every axis, and no
+# profile introduces RNG.
 
 
 func test_for_difficulty_dispatches_to_tiers() -> void:
+	var easy: BotSkillProfile = BotSkillProfile.for_difficulty(BotSkillProfile.Difficulty.EASY)
 	var normal: BotSkillProfile = BotSkillProfile.for_difficulty(BotSkillProfile.Difficulty.NORMAL)
 	var hard: BotSkillProfile = BotSkillProfile.for_difficulty(BotSkillProfile.Difficulty.HARD)
+	assert_eq(easy.carrier_reaction_delay_s, BotSkillProfile.easy().carrier_reaction_delay_s)
 	assert_eq(normal.carrier_reaction_delay_s, BotSkillProfile.normal().carrier_reaction_delay_s)
 	assert_eq(hard.carrier_reaction_delay_s, BotSkillProfile.hard().carrier_reaction_delay_s)
 
@@ -35,26 +38,80 @@ func test_hard_blade_is_capped_not_teleporting() -> void:
 	assert_lt(BotSkillProfile.hard().mouse_max_speed_m_s, 100.0)
 
 
-func test_normal_is_strictly_softer_than_hard_on_every_axis() -> void:
+func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
+	# Easy softer than Normal softer than Hard on all four knobs — the property
+	# every consumer relies on (a tier is never harder than the one above it).
+	var easy: BotSkillProfile = BotSkillProfile.easy()
 	var normal: BotSkillProfile = BotSkillProfile.normal()
 	var hard: BotSkillProfile = BotSkillProfile.hard()
+	# Reaction delay: later is softer.
 	assert_gt(normal.carrier_reaction_delay_s, hard.carrier_reaction_delay_s,
 			"Normal reacts to possession changes later than Hard")
+	assert_gt(easy.carrier_reaction_delay_s, normal.carrier_reaction_delay_s,
+			"Easy reacts to possession changes later than Normal")
+	# Blade slew: slower is softer.
 	assert_lt(normal.mouse_max_speed_m_s, hard.mouse_max_speed_m_s,
 			"Normal's blade slews slower than Hard's")
+	assert_lt(easy.mouse_max_speed_m_s, normal.mouse_max_speed_m_s,
+			"Easy's blade slews slower than Normal's")
+	# Aim lerp: lower lags more.
 	assert_lt(normal.mouse_lerp_factor, hard.mouse_lerp_factor,
 			"Normal's aim lags more than Hard's")
+	assert_lt(easy.mouse_lerp_factor, normal.mouse_lerp_factor,
+			"Easy's aim lags more than Normal's")
+	# Dispatch cadence: more ticks re-decides less often.
 	assert_gt(normal.dispatch_period_ticks, hard.dispatch_period_ticks,
 			"Normal re-decides less often than Hard")
+	assert_gt(easy.dispatch_period_ticks, normal.dispatch_period_ticks,
+			"Easy re-decides less often than Normal")
+	# Pace — pursuit standoff: bigger sags further off the carrier (more time).
+	assert_gt(normal.pursuit_standoff_m, hard.pursuit_standoff_m,
+			"Normal sags further off the carrier than Hard")
+	assert_gt(easy.pursuit_standoff_m, normal.pursuit_standoff_m,
+			"Easy sags further off the carrier than Normal")
+	# Pace — pass speed: lower moves the puck slower around the zone.
+	assert_lt(normal.pass_speed_scale, hard.pass_speed_scale,
+			"Normal moves the puck slower than Hard")
+	assert_lt(easy.pass_speed_scale, normal.pass_speed_scale,
+			"Easy moves the puck slower than Normal")
+	# Pace — check aggression: lower hunts fewer body checks.
+	assert_lt(normal.check_aggression, hard.check_aggression,
+			"Normal hunts fewer checks than Hard")
+	assert_lt(easy.check_aggression, normal.check_aggression,
+			"Easy hunts fewer checks than Normal")
+	# Pace — defensive anticipation: lower sits further behind the play.
+	assert_lt(normal.defensive_anticipation_scale, hard.defensive_anticipation_scale,
+			"Normal anticipates the play less than Hard")
+	assert_lt(easy.defensive_anticipation_scale, normal.defensive_anticipation_scale,
+			"Easy anticipates the play less than Normal")
+
+
+func test_easy_never_hunts_body_checks() -> void:
+	# Easy's floor: check_aggression 0.0 is the sentinel for "pure containment,
+	# never commit a hit" (evaluate_body_check short-circuits on <= 0.0).
+	assert_eq(BotSkillProfile.easy().check_aggression, 0.0,
+			"Easy never hunts body checks")
+
+
+func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
+	# Hard must be EXACTLY today's pace by construction: zero extra standoff, full
+	# pass speed, full hit-hunting, full anticipation — so the pace levers are a
+	# pure softening for the lower tiers and carry zero regression risk on the
+	# ceiling.
+	var hard: BotSkillProfile = BotSkillProfile.hard()
+	assert_eq(hard.pursuit_standoff_m, 0.0, "Hard adds no pursuit standoff")
+	assert_eq(hard.pass_speed_scale, 1.0, "Hard moves the puck at full pace")
+	assert_eq(hard.check_aggression, 1.0, "Hard hunts checks as today")
+	assert_eq(hard.defensive_anticipation_scale, 1.0, "Hard anticipates as today")
 
 
 func test_lerp_factors_stay_in_unit_range() -> void:
-	for profile: BotSkillProfile in [BotSkillProfile.normal(), BotSkillProfile.hard()]:
+	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
 		assert_gt(profile.mouse_lerp_factor, 0.0)
 		assert_lte(profile.mouse_lerp_factor, 1.0)
 
 
 func test_dispatch_period_is_at_least_one_tick() -> void:
 	# A zero/negative cadence would stall the throttle (dispatch_period - 1).
-	for profile: BotSkillProfile in [BotSkillProfile.normal(), BotSkillProfile.hard()]:
+	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
 		assert_gte(profile.dispatch_period_ticks, 1)

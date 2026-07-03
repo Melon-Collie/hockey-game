@@ -414,9 +414,10 @@ func _pick_action(ctx: RoleContext) -> void:
 			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
 			if receiver != null:
 				pass_target_speed = AIActionScoring.pass_launch_speed(
-						ctx.self_pos.distance_to(receiver.position), ctx.self_wrister_shot_speed)
+						ctx.self_pos.distance_to(receiver.position),
+						ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 			else:
-				pass_target_speed = AIActionScoring.PASS_SPEED_M_S
+				pass_target_speed = AIActionScoring.PASS_SPEED_M_S * ctx.pass_speed_scale
 			pass_should_charge = pass_target_speed > AIActionScoring.PASS_SPEED_M_S + PASS_CHARGE_MIN_DELTA_M_S
 			# Saucer it over a contested mid-lane defender (only ever true
 			# for long passes — see _compute_best_pass).
@@ -533,7 +534,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# leads past the receiver, both of which depress long-pass scores
 		# below where they should be.
 		var dist: float = self_pos.distance_to(receiver_state.position)
-		var pass_speed: float = AIActionScoring.pass_launch_speed(dist, ctx.self_wrister_shot_speed)
+		var pass_speed: float = AIActionScoring.pass_launch_speed(
+				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
 		# Intercept-aware lead, shared with the state machine's firing aim.
 		# flight_t is the SOLVED time (refined against the predicted
@@ -884,7 +886,7 @@ func _best_developing_feed(ctx: RoleContext, goalie_now: Vector3) -> float:
 			continue
 		var dist: float = self_pos.distance_to(spot)
 		var pass_speed: float = AIActionScoring.pass_launch_speed(
-				dist, ctx.self_wrister_shot_speed)
+				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 		var flight_t: float = clampf(dist / pass_speed, 0.0, PASS_LEAD_MAX_S)
 		var feed_goalie: Vector3 = _predict_goalie_at(ctx, flight_t, spot)
 		var feed_unsettled: float = _goalie_unsettled_at(ctx, flight_t, spot)

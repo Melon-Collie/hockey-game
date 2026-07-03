@@ -105,7 +105,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var to_net: Vector3 = our_net - lead
 	var search_center: Vector3 = lead
 	if to_net.length_squared() > 0.0001:
-		search_center += to_net.normalized() * SkaterAgentStateMachine.BLADE_REACH_M
+		# Difficulty pace knob: ctx.pursuit_standoff_m drops the cut-off line
+		# further back toward our net so easier bots sag off the carrier and
+		# concede time/space (0.0 = today's tight one-stick-length gap).
+		search_center += to_net.normalized() * (
+				SkaterAgentStateMachine.BLADE_REACH_M + ctx.pursuit_standoff_m)
 
 	# Search around the cut-off point; goal-side filter rejects the
 	# half-disc on the wrong side of the carrier (toward opp net).

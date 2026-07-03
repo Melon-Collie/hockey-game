@@ -70,7 +70,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	if man_pid != -1 and ctx.snapshot.skater_states.has(man_pid):
 		# Anticipate: cover where the man is cutting, not his current spot.
 		var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
-		var man_pos: Vector3 = AIRoleHelpers.lead_threat(man.position, man.velocity)
+		var man_pos: Vector3 = AIRoleHelpers.lead_threat(
+				man.position, man.velocity, ctx.defensive_anticipation_scale)
 		d.target_position = AIRoleHelpers.cover_man_target(ctx, man_pos, carrier_pos)
 		return d
 
