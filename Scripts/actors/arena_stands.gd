@@ -128,6 +128,12 @@ extends Node3D
 
 # Deterministic seed so the editor preview matches the runtime build.
 const _SEED: int = 31337
+# Crowd animation (Shaders/crowd.gdshader): how long a burst of excitement
+# holds at peak and how long it takes to settle back to the idle murmur sway.
+const _CROWD_SHADER_PATH: String = "res://Shaders/crowd.gdshader"
+const _EXCITE_RISE_TIME: float = 0.25
+const _EXCITE_HOLD_TIME: float = 3.5
+const _EXCITE_DECAY_TIME: float = 3.0
 # Spectator body dimensions — stacked boxes matching the skater art style.
 const _BODY_SIZE: Vector3 = Vector3(0.28, 0.45, 0.28)
 const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
@@ -162,11 +168,24 @@ var _head_palette: Array[Color] = [
 ]
 
 
+var _crowd_material: ShaderMaterial = null  # shared by both crowd MultiMeshes; survives rebuilds
+var _excitement: float = 0.0
+var _excite_tween: Tween = null
+
+
 func _ready() -> void:
 	_rebuild()
 	var gm: Node = get_node_or_null("/root/GameManager")
-	if gm != null and gm.has_signal("team_colors_ready"):
+	if gm == null:
+		return
+	if gm.has_signal("team_colors_ready"):
 		gm.team_colors_ready.connect(setup)
+	if gm.has_signal("goal_scored"):
+		gm.goal_scored.connect(_on_goal_scored)
+	if gm.has_signal("phase_changed"):
+		gm.phase_changed.connect(_on_phase_changed)
+	if gm.has_signal("body_check_broadcast"):
+		gm.body_check_broadcast.connect(_on_body_check_broadcast)
 
 
 # Called from GameManager.team_colors_ready once TeamColorRegistry resolves
@@ -346,15 +365,18 @@ func _build_spectators() -> void:
 	var body_mm: MultiMesh = MultiMesh.new()
 	body_mm.transform_format = MultiMesh.TRANSFORM_3D
 	body_mm.use_colors = true
+	body_mm.use_custom_data = true
 	body_mm.mesh = body_mesh
 	var head_mm: MultiMesh = MultiMesh.new()
 	head_mm.transform_format = MultiMesh.TRANSFORM_3D
 	head_mm.use_colors = true
+	head_mm.use_custom_data = true
 	head_mm.mesh = head_mesh
 
 	var transforms: Array[Transform3D] = []
 	var body_colors: Array[Color] = []
 	var head_colors: Array[Color] = []
+	var anim_data: Array[Color] = []
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = _SEED
 	for i: int in num_terraces:
@@ -377,6 +399,14 @@ func _build_spectators() -> void:
 			var picked: Array[Color] = _pick_spectator_colors(rng)
 			body_colors.append(picked[0])
 			head_colors.append(picked[1])
+			# Animation roll (crowd.gdshader INSTANCE_CUSTOM): phase de-sync,
+			# sway amplitude, hop amplitude. Same data on body and head so the
+			# two draw calls move as one person.
+			anim_data.append(Color(
+					rng.randf(),
+					rng.randf_range(0.6, 1.4),
+					rng.randf_range(0.2, 1.0),
+					0.0))
 
 	var n: int = transforms.size()
 	body_mm.instance_count = n
@@ -384,8 +414,10 @@ func _build_spectators() -> void:
 	for i: int in n:
 		body_mm.set_instance_transform(i, transforms[i])
 		body_mm.set_instance_color(i, body_colors[i])
+		body_mm.set_instance_custom_data(i, anim_data[i])
 		head_mm.set_instance_transform(i, transforms[i])
 		head_mm.set_instance_color(i, head_colors[i])
+		head_mm.set_instance_custom_data(i, anim_data[i])
 
 	# Godot's auto-AABB for MultiMesh is unreliable when transforms are pushed
 	# via set_instance_transform individually (vs. a single `buffer` set), and
@@ -413,11 +445,13 @@ func _spectator_bowl_aabb() -> AABB:
 	var outer_extent: float = base_outward_offset \
 			+ (num_terraces - 1) * tread_depth \
 			+ spectator_inset_from_riser
-	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) * 0.71 + 0.05
+	# Margins cover the shader animation (crowd.gdshader): up to ~0.18 m of
+	# celebration hop on top, ~0.1 m of sway sideways.
+	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) * 0.71 + 0.15
 	var half_x: float = rink_width * 0.5 + outer_extent + horizontal_margin
 	var half_z: float = rink_length * 0.5 + outer_extent + horizontal_margin
 	var top_y: float = stands_base_y + (num_terraces - 1) * riser_height \
-			+ spectator_y_jitter + _BODY_SIZE.y + _HEAD_SIZE.y + 0.1
+			+ spectator_y_jitter + _BODY_SIZE.y + _HEAD_SIZE.y + 0.35
 	var bot_y: float = stands_base_y - spectator_y_jitter - 0.1
 	return AABB(
 			Vector3(-half_x, bot_y, -half_z),
@@ -448,19 +482,57 @@ func _build_head_mesh() -> ArrayMesh:
 	return st.commit()
 
 
-# Shared material — vertex color (white) multiplied by the per-instance
-# MultiMesh color produces the final albedo. Both bodies and heads use it.
-# Cull disabled matches the terrace material: back-face culling on individual
-# spectators was leaving rink-facing faces invisible at certain camera angles
-# (the boxes looked hollow), and the extra triangles are cheap on a few
-# thousand instances of an 8-vert mesh.
-func _spectator_material() -> StandardMaterial3D:
-	var mat: StandardMaterial3D = StandardMaterial3D.new()
-	mat.albedo_color = Color.WHITE
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.85
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	return mat
+# Shared material — crowd.gdshader reads the per-instance MultiMesh color
+# for albedo (matching the old vertex_color_use_as_albedo look) and animates
+# sway/hop from INSTANCE_CUSTOM + the excitement uniform. One material across
+# both MultiMeshes and across rebuilds, so excitement state persists and a
+# single uniform write drives the whole bowl. Cull disabled matches the
+# terrace material: back-face culling on individual spectators was leaving
+# rink-facing faces invisible at certain camera angles (the boxes looked
+# hollow), and the extra triangles are cheap on a few thousand instances of
+# an 8-vert mesh.
+func _spectator_material() -> ShaderMaterial:
+	if _crowd_material == null:
+		_crowd_material = ShaderMaterial.new()
+		_crowd_material.shader = load(_CROWD_SHADER_PATH)
+		_crowd_material.set_shader_parameter("excitement", _excitement)
+	return _crowd_material
+
+
+# ── Crowd excitement ─────────────────────────────────────────────────────────
+
+# Ramp the bowl to at least `level` (0..1), hold, then settle back to the idle
+# sway. A stronger burst always wins over a fading weaker one.
+func excite(level: float) -> void:
+	var target: float = clampf(maxf(level, _excitement), 0.0, 1.0)
+	if target <= 0.0:
+		return
+	if _excite_tween != null and _excite_tween.is_valid():
+		_excite_tween.kill()
+	_excite_tween = create_tween()
+	_excite_tween.tween_method(_set_excitement, _excitement, target, _EXCITE_RISE_TIME)
+	_excite_tween.tween_interval(_EXCITE_HOLD_TIME * target)
+	_excite_tween.tween_method(_set_excitement, target, 0.0, _EXCITE_DECAY_TIME)
+
+
+func _set_excitement(v: float) -> void:
+	_excitement = v
+	_spectator_material().set_shader_parameter("excitement", v)
+
+
+func _on_goal_scored(_team: Variant, _scorer: String, _a1: String, _a2: String) -> void:
+	excite(1.0)
+
+
+func _on_phase_changed(new_phase: int) -> void:
+	if new_phase == GamePhase.Phase.END_OF_PERIOD or new_phase == GamePhase.Phase.GAME_OVER:
+		excite(0.7)
+
+
+# Big hits get a rumble out of the crowd, scaled by the same intensity curve
+# the impact burst/sound use. Soft contact barely registers.
+func _on_body_check_broadcast(force: float) -> void:
+	excite(SkaterVFX.check_intensity(force) * 0.45)
 
 
 func _emit_box(st: SurfaceTool, center: Vector3, size: Vector3) -> void:

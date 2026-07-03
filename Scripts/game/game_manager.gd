@@ -33,6 +33,10 @@ signal stats_updated
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color)
 signal local_player_hit(magnitude: float)
+# Host-authoritative body-check impact, re-emitted for cosmetic listeners
+# (crowd reaction in ArenaStands) after the burst/sound fire in
+# _on_body_check_landed. `force` is the same VFX-scale impact force.
+signal body_check_broadcast(force: float)
 signal replay_started
 signal replay_stopped
 # Live tally of unanimous skip-replay votes (emitted on every accepted vote and
@@ -2616,6 +2620,7 @@ func _on_body_check_landed(victim_peer_id: int, force: float, hit_dir: Vector3) 
 		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
 	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
 			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
+	body_check_broadcast.emit(force)
 	# Lever B: lead the knockback on a remotely-interpolated victim so the hit reads
 	# punchy instead of mushy-late. No-op for the local (predicted) victim — its
 	# controller isn't a RemoteController — and on the host (guarded inside).
