@@ -490,6 +490,9 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 			var effective_transfer: float = body_check_transfer * (other.body_check_brace_resistance if other.is_braced else 1.0)
 			var other_vel_before: Vector3 = other.velocity
 			var weight_ratio: float = weight / maxf(other.weight, 0.001)
+			# This delivered-impulse magnitude (approach × weight_ratio × effective_
+			# transfer) also drives the puck strip, reconstructed from impact_force in
+			# BodyCheckRules.puck_strip_impulse — keep the two in sync if this changes.
 			other.velocity -= normal * approach * weight_ratio * effective_transfer
 			var other_delta: Vector3 = other.velocity - other_vel_before
 			if other_delta.length_squared() > 0.0001:

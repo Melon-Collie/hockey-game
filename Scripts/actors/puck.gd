@@ -41,10 +41,15 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var poke_strip_speed: float = 6.0
 @export var poke_carrier_vel_blend: float = 0.5
 @export var poke_checker_cooldown: float = 0.1
-@export var body_check_strip_threshold: float = 6.0  # weight × approach_speed needed to strip
+# Delivered victim-impulse (BodyCheckRules.puck_strip_impulse: attacker transfer ×
+# both masses × closing speed) needed to knock the puck off the carrier. 2.7 keeps
+# the pre-Physical baseline strip point (~6 m/s closing, medium build) while now
+# letting Physical/mass move it: an enforcer strips at lower closing speed, a
+# low-Physical hit needs much more.
+@export var body_check_strip_threshold: float = 2.7
 @export var body_check_puck_speed: float = 5.0
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
-@export var hit_pickup_cooldown_threshold: float = 6.0    # weight × approach needed to apply hit pickup cooldown
+@export var hit_pickup_cooldown_threshold: float = 2.7    # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
 @export var body_block_cooldown: float = 0.1
 @export var max_height: float = 3.0
@@ -233,7 +238,15 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 		return
 	if checker.is_ghost or victim.is_ghost:
 		return
-	if impact_force < hit_pickup_cooldown_threshold:
+	# Gate on the impulse actually DELIVERED to the victim (folds in the attacker's
+	# Physical/transfer, both skaters' mass, and the closing speed) rather than the
+	# raw attacker-weight × speed impact_force — so the same hit dislodges the puck
+	# for an enforcer but not for a low-Physical player. Matches the stagger's
+	# hardness measure; see BodyCheckRules.puck_strip_impulse.
+	var strip_impulse: float = BodyCheckRules.puck_strip_impulse(
+			impact_force, checker.body_check_transfer,
+			victim.weight, victim.body_check_brace_resistance, victim.is_braced)
+	if strip_impulse < hit_pickup_cooldown_threshold:
 		return
 	# Hard hits temporarily deny the victim a pickup, even if they weren't carrying.
 	_set_cooldown(victim, hit_pickup_cooldown)
@@ -241,7 +254,7 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 		return
 	if pickup_locked:
 		return
-	if impact_force < body_check_strip_threshold:
+	if strip_impulse < body_check_strip_threshold:
 		return
 	_body_check_strip(checker, hit_direction)
 
