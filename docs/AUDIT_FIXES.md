@@ -24,7 +24,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[»]` deferred by deci
 - [x] P1-4  AI dispatch-throttle counter units (evade/jab/pre-aim step by period; carrier cooldown+hold clock in real ticks)
 - [x] P2-6  Migration budget enforcement (pure `trimmed_to_budget` + one choke point) + host self-attr fallback + tests
 - [x] P2-16 AI trajectory bounce model reflects off the rounded corners + test
-- [ ] Part1-P2 finisher lift cache, one-timer-ready bound, one-timer power model
+- [x] Part1-P2 finisher lift cache (stick_lift_held cached across skip ticks)
+- [x] Part1-P2 one-timer-ready preserve now bounded (~1.5s) so a dead pass doesn't pin the finisher
+- [»] Part1-P2 one-timer power model — DEFERRED: line carrier.gd:610 deliberately scores the
+      receiver at league-default wrister speed (documented "we don't carry teammates' attributes"),
+      and the unsettled-goalie term already partly justifies the high value. Correcting it changes
+      bot pass-selection feel; needs a playtest + your call, not a blind headless edit.
 
 Note: deleting `.godot/global_script_class_cache.cfg` + reimport was needed after
 editing scripts — a stale cache was silently skipping ~68 test scripts (showed

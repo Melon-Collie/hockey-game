@@ -329,6 +329,12 @@ const POKE_JAB_ACTIVE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 12   # ~80 m
 # attempts instead of mashing the carrier's puck every tick.
 const POKE_JAB_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 8   # ~375 ms
 
+# Longest a one-timer-ready stance is held across a carrier gap (pass/shot in
+# flight) before it's dropped so the FINISHER resumes normal play. A real pass
+# flight is well under this; the cap only catches passes that die / deflect and
+# leave the puck loose, which would otherwise pin the bot camped forever (P2-13).
+const ONE_TIMER_PRESERVE_MAX_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 2   # ~1.5 s
+
 # Offsides hold / tag-up: how far on the NZ side of the OZ blue line
 # the carrier holds (waiting for teammates to clear) and the offside
 # tag-up target sits. Slightly past the line so the host's
@@ -718,6 +724,11 @@ var _poke_jab_cooldown_ticks: int = 0
 # when scoring passes). Drives the fire-on-zone-entry transition in
 # OFF_PUCK / CHASE_PUCK.
 var _is_one_timer_ready: bool = false
+# Physics ticks the ready flag has been PRESERVED across a carrier gap (pass/shot
+# in flight). Bounded by ONE_TIMER_PRESERVE_MAX_TICKS so a pass that dies or
+# deflects doesn't leave the FINISHER camped-and-ready forever, refusing to chase
+# the now-loose puck. Reset whenever the flag is genuinely (re-)confirmed ready.
+var _one_timer_preserve_ticks: int = 0
 
 # Moving-one-timer target. When finite, ONE_TIMER_PRESSED skates to this
 # net-forward anchor (set by the shot-aware reception, Mode A) while holding
@@ -783,6 +794,11 @@ var _defensive_anticipation_scale: float = 1.0
 # 60 Hz (which would halve the burst and strobe the facing turn-rate penalty).
 # Also serves as the `was_sprinting` hysteresis input to BotSprintRules.
 var _cached_sprint_held: bool = false
+# The FINISHER raises the blade (stick_lift_held) to tip an elevated incoming
+# shot, but that flag is only set on dispatch ticks. Cache + replay it on skipped
+# ticks or blade_up strobes at 1-in-dispatch_period and never reaches the raised
+# pose at Normal/Easy (the lift blend never leaves ~0).
+var _cached_stick_lift_held: bool = false
 # Updated inside `_step_mouse_toward` so skipped ticks can re-step
 # toward the most recently decided target without re-running the
 # state handler. ZERO sentinel suppresses stepping until the first
@@ -1125,6 +1141,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 		_dispatch_skip_counter -= 1
 		input.move_vector = _cached_move_vector
 		input.sprint_held = _cached_sprint_held
+		input.stick_lift_held = _cached_stick_lift_held
 		if _has_cached_aim_target:
 			input.mouse_world_pos = _step_mouse_internal(
 					_cached_aim_target, _cached_aim_uses_arc)
@@ -1152,6 +1169,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	# each tick by SkaterAgent), so a shot/charge cleanly drops the cache to
 	# false and the next OFF_PUCK/CARRY tick re-engages from a fresh state.
 	_cached_sprint_held = input.sprint_held
+	_cached_stick_lift_held = input.stick_lift_held
 
 
 # ── State handlers ───────────────────────────────────────────────────────────
@@ -1208,9 +1226,17 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# the flag drops the instant the carrier releases the pass,
 		# and the zone-entry transition never sees ready=true.
 		var would_be_ready: bool = decision.is_one_timer_ready
-		if (not would_be_ready) and _is_one_timer_ready \
+		if would_be_ready:
+			# Genuinely (re-)confirmed ready — reset the preserve budget.
+			_one_timer_preserve_ticks = 0
+		elif _is_one_timer_ready \
 				and snapshot.puck_state != null \
-				and snapshot.puck_state.carrier_peer_id == -1:
+				and snapshot.puck_state.carrier_peer_id == -1 \
+				and _one_timer_preserve_ticks < ONE_TIMER_PRESERVE_MAX_TICKS:
+			# Preserve ready across the brief carrier gap of a pass/shot in flight,
+			# but only for a bounded window — a pass that dies or deflects must not
+			# leave the bot camped-and-ready forever, refusing to chase the puck.
+			_one_timer_preserve_ticks += _dispatch_period_ticks
 			would_be_ready = true
 		_set_one_timer_ready(would_be_ready)
 		# Defensive poke jab: a puck-pressurer within reach of the
@@ -3483,6 +3509,7 @@ func _set_state(s: State) -> void:
 		if s == State.CARRY:
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
+			_one_timer_preserve_ticks = 0
 			_carry_tracking_fire = false
 			_poke_evade_active_ticks = 0
 			_poke_evade_cooldown_ticks = 0
