@@ -2208,10 +2208,11 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		# bizarre release directions on long charged passes.
 		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 		debug_last_decision = "PASS→%s" % target_slot_label
-		input.shoot_pressed = true
-		input.shoot_held = true
-		# Same one-tick-then-exit pattern as before. Clear target so
-		# a future PASS picks a fresh one.
+		# Instant quick shot via the dedicated button flag — fires this tick from
+		# carry (player→blade snap at the fixed pass power), same semantics the
+		# one-tick shoot release used to produce before the timing classifier was
+		# removed. Clear target so a future PASS picks a fresh one.
+		input.quick_shot_pressed = true
 		_pass_target_peer_id = -1
 		_set_state(State.CARRY)
 		return

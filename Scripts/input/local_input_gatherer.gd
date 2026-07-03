@@ -8,6 +8,7 @@ var _pending_slap_pressed: bool = false
 var _pending_elevation_up: bool = false
 var _pending_elevation_down: bool = false
 var _pending_stick_lift_pressed: bool = false
+var _pending_quick_shot_pressed: bool = false
 # Last mouse world position. Returned in place of a fresh sample when input
 # is blocked so the stick IK doesn't swing to the rink origin every frame
 # the menu is open. Both client and host see the same value (it goes out in
@@ -37,6 +38,8 @@ func _process(_delta: float) -> void:
 		_pending_elevation_down = true
 	if Input.is_action_just_pressed("stick_lift"):
 		_pending_stick_lift_pressed = true
+	if Input.is_action_just_pressed("quick_shot"):
+		_pending_quick_shot_pressed = true
 
 func gather() -> InputState:
 	# Input blocked → return a neutral state so the skater decelerates
@@ -78,6 +81,7 @@ func gather() -> InputState:
 	state.block_held = Input.is_action_pressed("block")
 	state.stick_lift_held = Input.is_action_pressed("stick_lift")
 	state.stick_lift_pressed = _pending_stick_lift_pressed
+	state.quick_shot_pressed = _pending_quick_shot_pressed
 	state.mouse_world_pos = _get_mouse_world_pos(_camera)
 	state.host_timestamp = NetworkManager.estimated_host_time()
 	_last_mouse_world_pos = state.mouse_world_pos
@@ -88,6 +92,7 @@ func gather() -> InputState:
 	_pending_elevation_up = false
 	_pending_elevation_down = false
 	_pending_stick_lift_pressed = false
+	_pending_quick_shot_pressed = false
 	return state
 
 func _get_mouse_world_pos(camera: Camera3D) -> Vector3:

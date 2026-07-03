@@ -5,7 +5,7 @@ const BYTES_SIZE: int = 23
 #         s16 mwp.x(12) s8 mwp.y(14) s16 mwp.z(15) s16 msp.x(17) s16 msp.y(19)
 #         u16 flags(21)  flags: shoot_pressed[0] shoot_held[1] slap_pressed[2]
 #         slap_held[3] sprint_held[4] brake[5] elevation_up[6] elevation_down[7]
-#         block_held[8] stick_lift_held[9] stick_lift_pressed[10]
+#         block_held[8] stick_lift_held[9] stick_lift_pressed[10] quick_shot_pressed[11]
 
 var host_timestamp: float = 0.0
 var delta: float = 1.0 / 60.0
@@ -26,6 +26,11 @@ var stick_lift_held: bool = false
 # deterministically. Drives the nudge self-tap (Q while carrying).
 var stick_lift_pressed: bool = false
 var sprint_held: bool = false
+# Edge: quick-shot / pass button pressed THIS tick. Fires an instant quick shot
+# (the fixed-power player→blade snap that doubles as a pass) without entering
+# wrister aim — LMB is now always a charged wrister, so the quick shot lives on
+# its own button to remove the tap-vs-hold ambiguity.
+var quick_shot_pressed: bool = false
 
 func to_array() -> Array:
 	return [
@@ -49,6 +54,7 @@ func to_array() -> Array:
 		stick_lift_held,
 		sprint_held,
 		stick_lift_pressed,
+		quick_shot_pressed,
 	]
 
 func to_bytes() -> PackedByteArray:
@@ -77,7 +83,7 @@ func to_bytes() -> PackedByteArray:
 		(0x010 if sprint_held    else 0) | (0x020 if brake          else 0) |
 		(0x040 if elevation_up   else 0) | (0x080 if elevation_down else 0) |
 		(0x100 if block_held     else 0) | (0x200 if stick_lift_held else 0) |
-		(0x400 if stick_lift_pressed else 0))
+		(0x400 if stick_lift_pressed else 0) | (0x800 if quick_shot_pressed else 0))
 	b.encode_u16(21, flags)
 	return b
 
@@ -110,6 +116,7 @@ static func from_bytes(b: PackedByteArray, offset: int = 0) -> InputState:
 	s.block_held         = (flags & 0x100) != 0
 	s.stick_lift_held    = (flags & 0x200) != 0
 	s.stick_lift_pressed = (flags & 0x400) != 0
+	s.quick_shot_pressed = (flags & 0x800) != 0
 	return s
 
 
@@ -134,4 +141,6 @@ static func from_array(data: Array) -> InputState:
 		state.sprint_held = data[18]
 	if data.size() > 19:
 		state.stick_lift_pressed = data[19]
+	if data.size() > 20:
+		state.quick_shot_pressed = data[20]
 	return state

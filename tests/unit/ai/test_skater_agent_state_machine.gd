@@ -587,8 +587,7 @@ func test_pass_pressed_quick_fires_and_clears_target() -> void:
 	_add_skater(s, TEAMMATE_ID, Vector3(3, 0, 0))
 	var i := InputState.new()
 	sm.dispatch(i, s)
-	assert_true(i.shoot_pressed, "quick pass fires the edge")
-	assert_true(i.shoot_held)
+	assert_true(i.quick_shot_pressed, "quick pass fires the dedicated quick-shot edge")
 	assert_eq(sm.get_state(), Agent.State.CARRY, "quick pass is a one-tick press")
 	assert_eq(sm._pass_target_peer_id, -1, "quick pass clears its target for the next pick")
 

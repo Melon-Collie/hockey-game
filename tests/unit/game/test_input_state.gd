@@ -30,6 +30,7 @@ func test_round_trip_preserves_all_fields() -> void:
 	s.stick_lift_held  = true
 	s.sprint_held      = true
 	s.stick_lift_pressed = true
+	s.quick_shot_pressed = true
 
 	var r := InputState.from_array(s.to_array())
 
@@ -52,13 +53,14 @@ func test_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.stick_lift_held, s.stick_lift_held)
 	assert_eq(r.sprint_held,     s.sprint_held)
 	assert_eq(r.stick_lift_pressed, s.stick_lift_pressed)
+	assert_eq(r.quick_shot_pressed, s.quick_shot_pressed)
 
 
 func test_array_length_sentinel() -> void:
 	# Field count sentinel — if someone adds a field without updating
 	# to_array/from_array, this catches the mismatch.
 	var s := InputState.new()
-	assert_eq(s.to_array().size(), 20)
+	assert_eq(s.to_array().size(), 21)
 
 
 func test_stick_lift_back_compat_defaults_false() -> void:
@@ -102,6 +104,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	s.stick_lift_held  = true
 	s.sprint_held      = true
 	s.stick_lift_pressed = true
+	s.quick_shot_pressed = true
 
 	var r := InputState.from_bytes(s.to_bytes())
 
@@ -124,6 +127,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.stick_lift_held, s.stick_lift_held)
 	assert_eq(r.sprint_held,     s.sprint_held)
 	assert_eq(r.stick_lift_pressed, s.stick_lift_pressed)
+	assert_eq(r.quick_shot_pressed, s.quick_shot_pressed)
 
 
 func test_bytes_negative_mouse_screen_pos_round_trips() -> void:

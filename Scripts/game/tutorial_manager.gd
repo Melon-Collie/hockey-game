@@ -46,8 +46,6 @@ const _SPRINT_HOLD:          float = 1.0
 const _BLADE_LIFT_HOLD:      float = 0.75
 const _BLOCK_HOLD:           float = 2.0
 const _SHOT_BLOCK_HOLD:      float = 1.0
-# Quick shot: must release WRISTER_AIM within this window (else counts as wrist shot)
-const _WRIST_HOLD_MIN:       float = 0.4
 # Shot block: puck comes from the offensive zone toward the player's goal.
 # 14 m/s is a paced-down "wrister" feel — fast enough to feel like a shot,
 # slow enough that a learner has time to read it and crouch into the lane.
@@ -249,8 +247,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_QUICK_SHOT:
 			return TutorialStep.new(
 				"Quick Shot",
-				"Skate over the puck to pick it up, then click the left mouse button to snap a quick shot into the net.",
-				"Just click — don't hold. Aim at the open net ahead of you.")
+				"Skate over the puck to pick it up, then press F to snap a quick shot into the net. This is also your pass.",
+				"Tap F — the quick shot fires instantly toward your cursor. Aim at the open net ahead of you.")
 		STEP_WRIST_SHOT:
 			return TutorialStep.new(
 				"Wrist Shot",
@@ -720,14 +718,13 @@ func _on_shot_released(dir: Vector3, _power: float, is_slapper: bool) -> void:
 	var type_correct := false
 	match _current_step_id():
 		STEP_QUICK_SHOT:
-			if not is_slapper:
-				var elapsed: float = 0.0
-				if _wrister_aim_start >= 0.0:
-					elapsed = Time.get_ticks_msec() / 1000.0 - _wrister_aim_start
-				if elapsed < _WRIST_HOLD_MIN:
-					type_correct = true
+			# The quick shot (F) fires straight from carry without entering
+			# WRISTER_AIM, so a never-aimed non-slapper release is the quick shot.
+			if not is_slapper and _wrister_aim_start < 0.0:
+				type_correct = true
 		STEP_WRIST_SHOT:
-			if not is_slapper:
+			# The wrist shot goes through WRISTER_AIM (LMB), so it has an aim start.
+			if not is_slapper and _wrister_aim_start >= 0.0:
 				type_correct = true
 		STEP_SLAPSHOT:
 			if is_slapper:

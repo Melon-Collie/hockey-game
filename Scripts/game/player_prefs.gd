@@ -148,7 +148,7 @@ const AA_LABELS: Array[String] = [
 
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "sprint", "brake",
-	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
+	"shoot", "quick_shot", "slapshot", "block", "elevation_up", "elevation_down",
 	"stick_lift",
 ]
 
