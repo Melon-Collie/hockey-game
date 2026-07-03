@@ -155,6 +155,17 @@ func advance_post_goal() -> void:
 # Called when a puck is picked up during FACEOFF phase. Returns true if it
 # caused the transition back to PLAYING.
 func on_faceoff_puck_picked_up() -> bool:
+	return _end_faceoff_if_active()
+
+# Any OTHER host-side puck engagement during FACEOFF — a deflect, body redirect,
+# or a one-timer release — also makes the puck live and ends the faceoff. Without
+# this, a goal off a possession-less faceoff play (win the draw and one-time it, a
+# contested-draw squirt into the net) was VOIDED: on_goal_scored gates on PLAYING
+# and only a clean pickup advanced the phase, so the puck sat un-awarded in the net.
+func on_faceoff_puck_touched() -> bool:
+	return _end_faceoff_if_active()
+
+func _end_faceoff_if_active() -> bool:
 	if current_phase != GamePhase.Phase.FACEOFF:
 		return false
 	_set_phase(GamePhase.Phase.PLAYING)
@@ -260,8 +271,13 @@ func compute_ghost_state(
 				if InfractionRules.is_offside(pos_z, slot.team_id, puck_position.z, is_carrier):
 					_offside_peer_ids[peer_id] = true
 					ghost = true
-		if icing_team_id == slot.team_id:
-			ghost = true
+		# NOTE: icing does NOT ghost the offending team. `icing_team_id` is set in
+		# check_icing_for_loose_puck and drives the whistle + faceoff via
+		# pending_faceoff_dot/reason, but begin_faceoff_prep clears it in the SAME
+		# host tick the icing is called — before this ghost pass runs — so the old
+		# `if icing_team_id == slot.team_id: ghost = true` here never fired. Icing is
+		# a whistle-and-faceoff rule (NHL only), not a ghost. (`_icing_timer` stays as
+		# a fallback clear and is unit-tested at the SM level.)
 		# Crease protection — no field skater may camp in a goalie crease. The
 		# puck CARRIER is exempt: net drives, wraparounds, and jam plays are the
 		# point of carrying the puck to the net, so a carrier never draws crease

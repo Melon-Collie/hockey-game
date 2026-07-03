@@ -2001,6 +2001,9 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
+	# A loose-puck touch during FACEOFF (deflect / body redirect) makes the puck
+	# live — end the faceoff so a goal off the deflection counts (see P2-2).
+	_phase_coord.on_puck_touched_live()
 	_state_machine.notify_icing_contact()
 	# Deflection or body-block by an offending-team attacker also counts as a
 	# touch that whistles a delayed offside.
@@ -2200,6 +2203,9 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 
 func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
+	# A one-timer is a possession-less engagement — if it fires during FACEOFF it
+	# makes the puck live, so end the faceoff or the resulting goal is voided (P2-2).
+	_phase_coord.on_puck_touched_live()
 	var pid: int = _registry.resolve_peer_id(skater)
 	# One-timers skip the normal pickup flow, so the shooter is never recorded
 	# in the carrier history. Record them as a deflection (the shooter redirects

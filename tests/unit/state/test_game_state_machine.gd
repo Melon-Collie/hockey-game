@@ -78,6 +78,24 @@ func test_puck_pickup_outside_faceoff_noop() -> void:
 	assert_false(resumed)
 	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
 
+func test_faceoff_puck_touch_ends_faceoff_so_goal_counts() -> void:
+	# P2-2: a possession-less faceoff play (deflect / one-timer / contested draw)
+	# must end the faceoff — otherwise on_goal_scored (PLAYING-gated) voids the goal.
+	sm.begin_faceoff_prep()
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)  # → FACEOFF
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
+	# A goal during FACEOFF would be voided...
+	assert_eq(sm.on_goal_scored(1), -1, "goal is voided while still in FACEOFF")
+	# ...but a puck touch first makes it live.
+	var resumed: bool = sm.on_faceoff_puck_touched()
+	assert_true(resumed)
+	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
+	assert_ne(sm.on_goal_scored(1), -1, "goal now counts after the touch ended the faceoff")
+
+func test_faceoff_puck_touch_outside_faceoff_noop() -> void:
+	assert_false(sm.on_faceoff_puck_touched())  # still PLAYING
+	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
+
 func test_faceoff_timeout_resumes_playing() -> void:
 	sm.begin_faceoff_prep()
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)  # → FACEOFF
@@ -445,15 +463,20 @@ func test_carrier_not_ghosted_by_offside() -> void:
 		Vector3(0, 0, 0))
 	assert_false(ghosts[1])
 
-func test_icing_team_all_ghosted() -> void:
+func test_icing_does_not_ghost_the_team() -> void:
+	# P2-7: icing is a whistle-and-faceoff rule, NOT a team ghost. Even with an
+	# active icing_team_id, compute_ghost_state must not ghost the offending team —
+	# in the real game begin_faceoff_prep clears icing_team_id in the same tick, so
+	# the old team-wide ghost never applied. This asserts the corrected behavior.
 	sm.rule_set = GameRules.RuleSet.NHL
 	sm.register_remote_assigned_player(1, 0, 0)  # team 0
 	sm.notify_puck_carried(0, 5.0)
 	sm.check_icing_for_loose_puck(-30.0)
+	assert_eq(sm.icing_team_id, 0, "icing is still detected (drives the whistle + faceoff)")
 	var ghosts: Dictionary = sm.compute_ghost_state(
 		{1: Vector3(0, 1, 0)},      # position that wouldn't be offside
 		-1, Vector3.ZERO)
-	assert_true(ghosts[1])
+	assert_false(ghosts[1], "icing does not ghost the offending team")
 
 func test_off_mode_disables_offside_ghost() -> void:
 	sm.rule_set = GameRules.RuleSet.OFF

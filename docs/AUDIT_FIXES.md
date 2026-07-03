@@ -81,10 +81,12 @@ promote a spectator whose peer just left (no phantom skater); spam Return-to-Fre
 - [ ] Part1-P2 body-check impulse replay phasing + contested-pickup present-time state
 
 ## Batch 7 — Game flow & docs · verify: SOLO + doc-only
-- [ ] P2-2  Faceoff-phase goal void — advance FACEOFF→PLAYING on any puck contact
-- [ ] P2-7  Remove dead icing-ghost path + correct CLAUDE.md claim
-- [ ] P2-17b (telemetry) phase-gate 5 Hz dead-puck jitter/extrapolation accounting
-- [ ] Docs  Rewrite both drift tables in ARCHITECTURE.md / CLAUDE.md
+- [x] P2-2  Faceoff goal void — `on_faceoff_puck_touched` ends the faceoff on deflect/loose-touch/one-timer (+ test)
+- [x] P2-7  Removed the dead icing-ghost application + corrected the CLAUDE.md claim (icing test rewritten to assert no-ghost)
+- [→] P2-17b telemetry 5 Hz dead-puck phase-gate → folded into Batch 6 (same receive_world_state / interp accounting code)
+- [→] Docs  Full ARCHITECTURE.md/CLAUDE.md drift-table rewrite → final pass AFTER Batch 6 so docs reflect the fixed wire format
+
+SOLO test: win a faceoff draw and one-time it (or deflect it in) — the goal must count and the horn fire.
 
 ## Deferred to a pre-launch pass
 - [»] P2-4 / P2-15 SteamID64 auth + kick-ban
