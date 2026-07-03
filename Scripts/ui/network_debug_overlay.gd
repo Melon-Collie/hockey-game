@@ -46,7 +46,7 @@ var _toast: Label
 var _toast_timer: float = 0.0
 const TOAST_SECONDS: float = 2.0
 
-# Always-on health dot: a small green/yellow/red ● in the top-left, live at all
+# Always-on health dot: a small green/yellow/red ● in the top-right, live at all
 # times so a tester sees link state without opening the F3 panel. While the
 # panel is closed the verdict is re-evaluated on a throttle (telemetry refreshes
 # at 1 Hz, so 2 Hz keeps the dot current without per-frame string building).
@@ -89,7 +89,12 @@ func _ready() -> void:
 
 func _build_dot() -> void:
 	_dot = Label.new()
-	_dot.position = Vector2(10, 6)
+	_dot.anchor_left = 1.0
+	_dot.anchor_right = 1.0
+	_dot.anchor_top = 0.0
+	_dot.anchor_bottom = 0.0
+	_dot.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_dot.position = Vector2(-22, 4)
 	_dot.text = DOT
 	_dot.add_theme_font_size_override("font_size", 18)
 	_dot.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
@@ -188,8 +193,10 @@ func _refresh() -> void:
 		_render_client(t)
 
 	# Verdict is known once all lines are collected; drive the always-on dot.
+	# Hide it while the F3 panel is open — they share the top-right corner and the
+	# panel header already carries the verdict.
 	_dot.add_theme_color_override("font_color", Color("#" + _col(_worst)))
-	_dot.show()
+	_dot.visible = not _showing
 	if not _showing:
 		return
 

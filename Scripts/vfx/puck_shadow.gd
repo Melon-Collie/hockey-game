@@ -11,7 +11,7 @@ extends MeshInstance3D
 # the puck's rendered global_position — never gameplay state, never _physics_process.
 
 const ICE_Y: float = 0.004            # just above the ice plane (y=0) to avoid z-fighting
-const BASE_RADIUS: float = 0.05       # grounded blob radius (a touch wider than the 0.04 puck disc)
+const BASE_RADIUS: float = 0.11       # grounded blob radius — meaningfully wider than the puck disc so it reads as a pool of shadow you can track (not a tight rim that hides under the puck)
 const BASE_ALPHA: float = 0.42        # grounded darkness
 const AIR_GROW_PER_M: float = 0.55    # extra scale per meter of puck height
 const AIR_MAX_SCALE: float = 2.2      # cap so a high pop doesn't balloon the blob
@@ -60,6 +60,12 @@ func _make_material() -> StandardMaterial3D:
 func _process(_delta: float) -> void:
 	if _puck == null:
 		return
+	# Player-toggleable (Options → Video). Read the live pref each frame so the
+	# toggle applies instantly; the read is a single autoload property (no alloc).
+	if not PlayerPrefs.puck_shadow_enabled:
+		visible = false
+		return
+	visible = true
 	var puck_pos: Vector3 = _puck.global_position
 	# Height of the puck above its resting height (0 when grounded).
 	var height: float = maxf(0.0, puck_pos.y - _puck.ice_height)

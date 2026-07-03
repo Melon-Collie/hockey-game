@@ -192,6 +192,7 @@ var color_grade_preset: int = COLOR_GRADE_BROADCAST
 var gi_mode: int = GI_MODE_OFF
 var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
+var puck_shadow_enabled: bool = true
 var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
@@ -358,6 +359,7 @@ func save() -> void:
 	cfg.set_value("video", "gi_mode", gi_mode)
 	cfg.set_value("video", "crowd_density", crowd_density)
 	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
+	cfg.set_value("video", "puck_shadow_enabled", puck_shadow_enabled)
 	cfg.set_value("video", "scaling_3d_mode", scaling_3d_mode)
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
@@ -876,6 +878,7 @@ func _load() -> void:
 		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
+		puck_shadow_enabled = cfg.get_value("video", "puck_shadow_enabled", true)
 		scaling_3d_mode = clamp(cfg.get_value("video", "scaling_3d_mode", SCALING_3D_BILINEAR), 0, SCALING_3D_LABELS.size() - 1)
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)

@@ -12,6 +12,7 @@ const _DIM := Color(0.62, 0.62, 0.68, 1.0)
 var _rematch_btn: Button = null
 var _vote_label: Label = null
 var _host_btn: Button = null
+var _star_label: Label = null
 
 
 func _ready() -> void:
@@ -42,6 +43,16 @@ func _build_ui() -> void:
 	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", _GOLD)
 	vbox.add_child(title)
+
+	# Star of the Game, shown here on the popup (layer 5) rather than the phase
+	# banner behind it — the banner sits at the same bottom-center spot and the
+	# popup would occlude it. One star only; scarcity keeps it meaningful at 3v3.
+	_star_label = Label.new()
+	_star_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_star_label.add_theme_font_size_override("font_size", 15)
+	_star_label.add_theme_color_override("font_color", _GOLD)
+	_star_label.visible = false
+	vbox.add_child(_star_label)
 
 	var rematch_box := VBoxContainer.new()
 	rematch_box.add_theme_constant_override("separation", 4)
@@ -84,6 +95,18 @@ func _build_ui() -> void:
 
 func show_popup() -> void:
 	visible = true
+
+
+# Populate the Star of the Game line. Pass "" to hide it (a nothing game with no
+# counting stats has no star).
+func set_star(text: String) -> void:
+	if _star_label == null:
+		return
+	if text.is_empty():
+		_star_label.visible = false
+		return
+	_star_label.text = "★ STAR OF THE GAME ★\n%s" % text
+	_star_label.visible = true
 
 
 func set_spectator(is_spec: bool) -> void:
