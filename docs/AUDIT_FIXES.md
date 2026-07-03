@@ -49,9 +49,14 @@ puck must never leave the rink; (2) pass/shoot and confirm the board thud/chip V
 release or on the puck landing on open ice; (3) faceoffs after a shot-into-whistle drop cleanly.
 
 ## Batch 4 — Goalie · verify: SOLO
-- [ ] P0-2  Not-upright reaction-timer zeroing (scope the clear to its intent)
-- [ ] Part1-P2 cross-crease clamp constant (net-center → far post)
-- [ ] Part1-P2 goalie mechanism fixes (glove-reach range, etc. — non-wire)
+- [x] P0-2  Not-upright reaction-timer zeroing now guarded by `not reacting` — down/moving reactions keep their delay
+- [x] Part1-P2 cross-crease standing drive clamps by `cross_crease_drive_edge` (0.42), not the butterfly pad edge → seals the far post instead of net-center
+- [→] Part1-P2 goalie glove/blocker s8→s16 clip + `rotation_y` wrap are WIRE changes → moved to Batch 6 (protocol bump)
+- [»] P3 slide body-lean sign (cosmetic, ~6°) — low priority, can fold into a later pass
+
+SOLO test: (1) shoot high/rebound at a butterflied or recovering goalie — top corners should be
+beatable again (goalie no longer reaches instantly while down); (2) run a royal-road cross-crease
+one-timer — the goalie should drive toward the far post, not park at net-center.
 
 ## Batch 5 — Slot / reservation / lobby integrity · verify: 2P
 - [ ] P2-5  `is_slot_reserved` check in try_swap_slot + _promote_spectator_to_player
