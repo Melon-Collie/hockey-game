@@ -247,8 +247,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_QUICK_SHOT:
 			return TutorialStep.new(
 				"Quick Shot",
-				"Skate over the puck to pick it up, then press F to snap a quick shot into the net. This is also your pass.",
-				"Tap F — the quick shot fires instantly toward your cursor. Aim at the open net ahead of you.")
+				"Skate over the puck to pick it up, then press E to snap a quick shot into the net. This is also your pass.",
+				"Tap E — the quick shot fires instantly toward your cursor. Aim at the open net ahead of you.")
 		STEP_WRIST_SHOT:
 			return TutorialStep.new(
 				"Wrist Shot",
