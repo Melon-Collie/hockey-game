@@ -38,10 +38,10 @@ const RTT_MEASURED_HEADROOM: float = 1.5
 const RTT_MEASURED_SLACK_MS: float = 30.0
 
 # Legit lofted shots cap the pre-normalization Y/XZ ratio at
-# ShotMechanics.MAX_LOFT_RATIO (0.6), i.e. a normalized direction y of
-# 0.6/sqrt(1.36) ≈ 0.51. 0.6 here leaves headroom for tuning while blocking
+# ShotMechanics.MAX_LOFT_RATIO (1.0 = 45°), i.e. a normalized direction y of
+# ~0.707. 0.75 leaves headroom for float noise while still blocking
 # near-vertical forged directions.
-const MAX_DIRECTION_Y: float = 0.6
+const MAX_DIRECTION_Y: float = 0.75
 
 # Slack added to the one-timer range gate: covers shooter drift between the
 # client's stamp and host processing, plus interpolation error on the rewound

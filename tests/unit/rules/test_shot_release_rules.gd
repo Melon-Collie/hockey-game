@@ -73,8 +73,9 @@ func test_direction_unnormalized_input_normalized() -> void:
 	assert_almost_eq(out.x, 1.0, 0.001)
 
 func test_direction_legit_elevation_preserved() -> void:
-	# ~0.46 vertical ratio is the steepest legit elevated shot.
-	var dir := Vector3(1, 0.5, 0).normalized()
+	# The steepest legit lofted shot is a 45° soft flip (MAX_LOFT_RATIO), a
+	# normalized y of ~0.707 — it must pass through the clamp untouched.
+	var dir := Vector3(1, 1, 0).normalized()
 	var out: Vector3 = ShotReleaseRules.sanitize_direction(dir)
 	assert_almost_eq(out.y, dir.y, 0.001, "below the y cap → untouched")
 

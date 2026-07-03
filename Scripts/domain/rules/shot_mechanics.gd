@@ -31,13 +31,16 @@ const ELEVATION_FLAT: int = 0
 const ELEVATION_LOW: int = 1
 const ELEVATION_HIGH: int = 2
 
-# Cap on the pre-normalization Y/XZ ratio of a lofted direction (~31°). Binds
-# only when shot power barely exceeds the level's launch speed (a soft flip):
-# instead of the angle running away toward vertical, the flip flattens to this
-# ceiling. Keeps every legit direction under ShotReleaseRules.MAX_DIRECTION_Y
-# (normalized y 0.6 ⇔ ratio 0.75) so the host's forged-direction clamp never
-# touches an honest shot.
-const MAX_LOFT_RATIO: float = 0.6
+# Cap on the pre-normalization Y/XZ ratio of a lofted direction: 1.0 = 45°.
+# This is a degenerate-input guard, not a feel lever — it stops y from running
+# toward vertical as power approaches the level's launch speed. At 45° it
+# binds only below ~7.6 m/s at HIGH loft, which no legit release reaches (the
+# softest is a min-charge backhand wrister ~8.4 m/s), so every real shot gets
+# its full level v_y and steep soft flips (chip over a sprawled goalie, a
+# rainbow flip clear) stay possible. Keeps every legit direction under
+# ShotReleaseRules.MAX_DIRECTION_Y (normalized y at 45° is ~0.707 vs the 0.75
+# clamp) so the host's forged-direction clamp never touches an honest shot.
+const MAX_LOFT_RATIO: float = 1.0
 
 class WristerConfig:
 	var min_wrister_power: float = 0.0
