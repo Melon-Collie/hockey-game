@@ -86,29 +86,68 @@ static func body_block_velocity(
 static func body_check_strip_velocity(hit_direction: Vector3, puck_speed: float) -> Vector3:
 	return hit_direction * puck_speed
 
-# Poke-check strip velocity. If the checker's blade has meaningful horizontal
-# motion, the strip direction is the checker's momentum plus a fraction of the
-# carrier's. Otherwise the puck is pushed away from the checker (carrier_pos -
-# checker_pos). If both collapse to zero, the caller-supplied fallback_direction
-# is used so the rule stays deterministic under test.
+# Poke-check strip velocity — a stick-on-stick momentum contest. The checker's
+# blade sweep plus a fraction of the carrier's (carrier_vel_blend) form the blended
+# contest momentum: its heading AIMS the loose puck and its MAGNITUDE PACES it — a
+# hard poke squirts the puck away fast, a soft one barely nudges it, clamped to
+# [min_speed, max_speed]. When the checker's blade is near-still it's a positional
+# strip with no sweep momentum, so the puck is pushed off the carrier
+# (carrier_pos - checker_pos) at min_speed. If both collapse to zero the
+# caller-supplied fallback_direction keeps the rule deterministic under test.
 static func poke_strip_velocity(
 		checker_blade_vel: Vector3,
 		carrier_blade_vel: Vector3,
 		carrier_pos: Vector3,
 		checker_pos: Vector3,
 		carrier_vel_blend: float,
-		strip_speed: float,
+		min_speed: float,
+		max_speed: float,
 		fallback_direction: Vector3) -> Vector3:
 	var checker_horiz := Vector3(checker_blade_vel.x, 0.0, checker_blade_vel.z)
 	var carrier_horiz := Vector3(carrier_blade_vel.x, 0.0, carrier_blade_vel.z)
 	var strip_dir: Vector3
+	var speed: float
 	if checker_horiz.length() > 0.5:
-		strip_dir = checker_horiz + carrier_horiz * carrier_vel_blend
+		# Active poke: heading and pace both come from the blended contest momentum.
+		var blended: Vector3 = checker_horiz + carrier_horiz * carrier_vel_blend
+		strip_dir = blended
+		speed = clampf(blended.length(), min_speed, max_speed)
 	else:
+		# Positional stick-on-puck: no sweep to pace it, so floor speed, pushed away.
 		strip_dir = Vector3(carrier_pos.x - checker_pos.x, 0.0, carrier_pos.z - checker_pos.z)
+		speed = min_speed
 	strip_dir.y = 0.0
 	if strip_dir.length() > 0.001:
 		strip_dir = strip_dir.normalized()
 	else:
 		strip_dir = fallback_direction.normalized()
-	return strip_dir * strip_speed
+	return strip_dir * speed
+
+
+# Contested pickup: two blades reach the same loose puck at once. Neither player
+# ever gets possession off this path — the puck squirts free — but its HEADING is
+# biased toward the stronger blade: the exit is the vector sum of the two blade
+# momenta, so a harder/faster sweep dominates the sum and the puck goes that
+# player's way (blade speed already reflects Hands, so no attribute term is needed
+# here). Speed is that combined momentum, clamped to [min_speed, max_speed]. When
+# the two blades roughly cancel (net below deadlock_threshold — a true 50/50), the
+# puck instead pops out PERPENDICULAR to the line between the blade contact points
+# (the "pinched seed" behavior) at deadlock_speed; the caller supplies the ± side
+# and a degenerate fallback direction so the rule stays deterministic under test.
+static func contested_pickup_velocity(
+		blade_a_vel: Vector3, blade_b_vel: Vector3,
+		blade_a_pos: Vector3, blade_b_pos: Vector3,
+		min_speed: float, max_speed: float,
+		deadlock_speed: float, deadlock_threshold: float,
+		perp_sign: float, fallback_dir: Vector3) -> Vector3:
+	var net := Vector3(blade_a_vel.x + blade_b_vel.x, 0.0, blade_a_vel.z + blade_b_vel.z)
+	if net.length() > deadlock_threshold:
+		return net.normalized() * clampf(net.length(), min_speed, max_speed)
+	# Deadlock — blades cancel. Pop perpendicular to the blade-to-blade line.
+	var along := Vector3(blade_a_pos.x - blade_b_pos.x, 0.0, blade_a_pos.z - blade_b_pos.z)
+	if along.length() < 0.001:
+		along = Vector3(fallback_dir.x, 0.0, fallback_dir.z)
+		if along.length() < 0.001:
+			along = Vector3(1.0, 0.0, 0.0)
+	var perp := Vector3(-along.z, 0.0, along.x).normalized()
+	return perp * perp_sign * deadlock_speed

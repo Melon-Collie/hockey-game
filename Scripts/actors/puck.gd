@@ -13,7 +13,7 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var max_speed: float = 38.0
 @export var reattach_cooldown: float = 0.5
 @export var nudge_cooldown: float = 0.30  # short re-grab denial after a self nudge tap
-@export var ice_height: float = 0.0175
+@export var ice_height: float = 0.0125  # = Puck.tscn cylinder half-height (0.025/2); disc bottom rests on y=0
 @export var pickup_max_speed: float = 8.0
 # Closing-speed threshold for catch-vs-deflect. Set above charged-pass speed
 # (~19 m/s) so any pass is receivable at ANY blade angle; the alignment bonus
@@ -38,13 +38,23 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var deflect_speed_ref: float = 30.0         # speed (m/s) at which both falloffs bottom out
 @export var deflect_cooldown: float = 0.3
 @export var deflect_elevation_angle: float = 35.0
-@export var poke_strip_speed: float = 6.0
+# Poke exit speed now scales with the blade-contest momentum (see
+# PuckCollisionRules.poke_strip_velocity): a soft poke floors at min, a hard sweep
+# squirts the puck up to max. Old behavior was a flat 6.0 regardless of how hard
+# the poke was.
+@export var poke_strip_min_speed: float = 3.0
+@export var poke_strip_max_speed: float = 9.0
 @export var poke_carrier_vel_blend: float = 0.5
 @export var poke_checker_cooldown: float = 0.1
-@export var body_check_strip_threshold: float = 6.0  # weight × approach_speed needed to strip
+# Delivered victim-impulse (BodyCheckRules.puck_strip_impulse: attacker transfer ×
+# both masses × closing speed) needed to knock the puck off the carrier. 2.7 keeps
+# the pre-Physical baseline strip point (~6 m/s closing, medium build) while now
+# letting Physical/mass move it: an enforcer strips at lower closing speed, a
+# low-Physical hit needs much more.
+@export var body_check_strip_threshold: float = 2.7
 @export var body_check_puck_speed: float = 5.0
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
-@export var hit_pickup_cooldown_threshold: float = 6.0    # weight × approach needed to apply hit pickup cooldown
+@export var hit_pickup_cooldown_threshold: float = 2.7    # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
 @export var body_block_cooldown: float = 0.1
 @export var max_height: float = 3.0
@@ -101,6 +111,12 @@ func _ready() -> void:
 	var vfx := PuckVFX.new()
 	vfx.name = "VFX"
 	add_child(vfx)
+
+	# Ice-pinned tracking shadow so the small disc stays readable and airborne
+	# pucks show their landing spot. Cosmetic; renders on every peer.
+	var shadow := PuckShadow.new()
+	shadow.name = "Shadow"
+	add_child(shadow)
 
 # ── Server Mode ───────────────────────────────────────────────────────────────
 func set_server_mode(is_server: bool) -> void:
@@ -227,7 +243,15 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 		return
 	if checker.is_ghost or victim.is_ghost:
 		return
-	if impact_force < hit_pickup_cooldown_threshold:
+	# Gate on the impulse actually DELIVERED to the victim (folds in the attacker's
+	# Physical/transfer, both skaters' mass, and the closing speed) rather than the
+	# raw attacker-weight × speed impact_force — so the same hit dislodges the puck
+	# for an enforcer but not for a low-Physical player. Matches the stagger's
+	# hardness measure; see BodyCheckRules.puck_strip_impulse.
+	var strip_impulse: float = BodyCheckRules.puck_strip_impulse(
+			impact_force, checker.body_check_transfer,
+			victim.weight, victim.body_check_brace_resistance, victim.is_braced)
+	if strip_impulse < hit_pickup_cooldown_threshold:
 		return
 	# Hard hits temporarily deny the victim a pickup, even if they weren't carrying.
 	_set_cooldown(victim, hit_pickup_cooldown)
@@ -235,7 +259,7 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 		return
 	if pickup_locked:
 		return
-	if impact_force < body_check_strip_threshold:
+	if strip_impulse < body_check_strip_threshold:
 		return
 	_body_check_strip(checker, hit_direction)
 
@@ -258,7 +282,8 @@ func apply_poke_check(checker_skater: Skater) -> void:
 			ex_carrier.global_position,
 			checker_skater.global_position,
 			poke_carrier_vel_blend,
-			poke_strip_speed,
+			poke_strip_min_speed,
+			poke_strip_max_speed,
 			fallback_dir)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	_set_cooldown(checker_skater, poke_checker_cooldown)
@@ -297,7 +322,8 @@ func apply_goalie_poke_check(blade_pos: Vector3, blade_vel: Vector3) -> void:
 			ex_carrier.global_position,
 			blade_pos,
 			poke_carrier_vel_blend,
-			poke_strip_speed,
+			poke_strip_min_speed,
+			poke_strip_max_speed,
 			fallback_dir)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_stripped.emit(ex_carrier)
