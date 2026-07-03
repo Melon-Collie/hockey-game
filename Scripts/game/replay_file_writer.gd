@@ -44,7 +44,10 @@ static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89,
 #     puck block grew 12 -> 13 bytes.
 # v4: skater wire block grew 37->38 bytes (sprint stamina) — the embedded
 #     world-state packets carry the wider block (PROTOCOL_VERSION 5).
-const FORMAT_VERSION: int = 4
+# v5: skater flags byte repacked (shot_state 4 -> 3 bits, 2-bit elevation_level
+#     at bits [3..4], ghost/blade_up/sprint_locked shifted) — PROTOCOL_VERSION 10.
+#     Same block size; old replays would decode the flag bits wrong, so bump.
+const FORMAT_VERSION: int = 5
 const KIND_WORLD_STATE: int = 0
 const KIND_EVENT: int = 1
 const FRAME_INNER_HEADER_SIZE: int = 5  # host_ts (4) + kind (1)

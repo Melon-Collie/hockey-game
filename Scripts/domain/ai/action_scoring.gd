@@ -276,8 +276,9 @@ static func pass_launch_speed(distance: float, max_launch: float,
 # Airborne span as a fixed DISTANCE off the passer's blade, NOT a fraction
 # of the flight. A saucer is a low flip: it clears stick height for a short
 # stretch, lands, and slides the rest grounded — it does not stay aloft the
-# whole way (and we can't know the live loft, since the shared elevation
-# mechanic aims at the goal line, not the receiver). So the puck is treated
+# whole way. (LOW loft launches at a fixed vertical speed, so the true
+# airborne carry is hang time × pass speed ≈ 6 m at quick-shot power; this
+# constant sits deliberately under that.) So the puck is treated
 # as airborne — clears a grounded stick, only a body blocks — only within
 # this distance of the passer; past it the puck has landed and a stick
 # intercepts normally. Modelling it as a distance (not a fraction) keeps

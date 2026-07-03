@@ -209,29 +209,29 @@ func test_puck_round_trip_preserves_elevated_y() -> void:
 	assert_almost_eq(decoded.velocity.z, orig.velocity.z, 0.021)
 
 
-# ── Skater flags byte: shot_state | ghost | elevated | blade_up | sprint_lock ─
-# All share the single flags byte (shot_state low nibble, the rest are bits
-# 0x10/0x20/0x40/0x80). This exercises every combination so a new bit can't
-# silently clobber a neighbour.
+# ── Skater flags byte: shot_state | elevation_level | ghost | blade_up | lock ─
+# All share the single flags byte (bits 0-2 shot_state, bits 3-4 the 2-bit
+# elevation_level, then 0x20/0x40/0x80). This exercises every combination so a
+# new bit can't silently clobber a neighbour.
 
 func test_skater_flags_round_trip_all_combinations() -> void:
-	for shot_state: int in [0, 5, 15]:
-		for ghost: bool in [false, true]:
-			for elevated: bool in [false, true]:
+	for shot_state: int in [0, 3, 6]:
+		for elevation_level: int in [0, 1, 2]:
+			for ghost: bool in [false, true]:
 				for blade_up: bool in [false, true]:
 					for sprint_locked: bool in [false, true]:
 						var s := SkaterNetworkState.new()
-						s.shot_state    = shot_state
-						s.is_ghost      = ghost
-						s.is_elevated   = elevated
-						s.blade_up      = blade_up
-						s.sprint_locked = sprint_locked
+						s.shot_state      = shot_state
+						s.elevation_level = elevation_level
+						s.is_ghost        = ghost
+						s.blade_up        = blade_up
+						s.sprint_locked   = sprint_locked
 						var enc: PackedByteArray = WorldStateCodec._encode_skater_quantized(s)
 						var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(enc)
-						var ctx := "shot=%d ghost=%s elev=%s up=%s lock=%s" % [shot_state, ghost, elevated, blade_up, sprint_locked]
+						var ctx := "shot=%d elev=%d ghost=%s up=%s lock=%s" % [shot_state, elevation_level, ghost, blade_up, sprint_locked]
 						assert_eq(dec.shot_state, shot_state, ctx)
+						assert_eq(dec.elevation_level, elevation_level, ctx)
 						assert_eq(dec.is_ghost, ghost, ctx)
-						assert_eq(dec.is_elevated, elevated, ctx)
 						assert_eq(dec.blade_up, blade_up, ctx)
 						assert_eq(dec.sprint_locked, sprint_locked, ctx)
 

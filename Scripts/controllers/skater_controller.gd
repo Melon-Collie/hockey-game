@@ -202,20 +202,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # threshold rides the body-dependent blade travel and could classify differently
 # on each machine. Flat (not attribute-scaled).
 @export var quick_shot_time: float = 0.06
-@export var quick_shot_elevation: float = 0.10
-@export var wrister_elevation_target_height: float = 0.90
-# Apex cap for elevated shots — puck can't rise more than this above the blade.
-# 1.5 m is just under the glass, well above crossbar (1.22 m). On-net shots
-# arrive at goal line at ≤ target_height; missed shots can't fly over boards.
-@export var max_apex_above_blade: float = 1.5
-# Cosine of the half-angle cone within which a shot counts as "toward the net".
-# 0.5 = 60° cone. Shots outside this cone use `away_from_net_elevation` instead
-# of the ballistic-targeting math.
-@export var toward_net_dot_threshold: float = 0.5
-# Fixed Y direction for elevated shots not aimed at the offensive net (passes,
-# clears, backward dumps). Small positive value so the puck still lifts off ice
-# without trying to arc toward an irrelevant target height.
-@export var away_from_net_elevation: float = 0.10
+# Loft-level vertical launch speeds (m/s), shared by quick shots, wristers, and
+# slappers in every direction — one elevation mechanic for shots AND passes
+# (see ShotMechanics loft-level doc). Apex above the blade is v_y²/2g:
+#   LOW  2.2 → ~0.25 m — the saucer: clears stick blades, lands and slides.
+#   HIGH 5.4 → ~1.5 m — just under the glass, above the crossbar (1.22 m), so
+#   a high shot can genuinely miss over the bar but never leaves the rink.
+# Where the arc sits at the net is emergent from distance + power — that read
+# is the skill (the old ballistic solve auto-arrived at a target height).
+@export var loft_vertical_speed_low: float = 2.2
+@export var loft_vertical_speed_high: float = 5.4
 
 # ── Head Tracking Tuning ─────────────────────────────────────────────────────
 @export var head_track_speed: float = 12.0
@@ -269,7 +265,6 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # is tuned for gentle aim-tracking and only reaches ~85% of an 80° target
 # inside the 0.3s wind-up window, which reads as a half-finished coil.
 @export var slapper_wind_up_lerp_speed: float = 18.0
-@export var slapper_elevation_target_height: float = 0.65
 @export var one_timer_window_duration: float = 0.45  # seconds after puck arrives to release
 @export var one_timer_leniency_time: float = 0.08   # seconds of puck travel added to zone radius as leniency
 @export var one_timer_center_power_bonus: float = 0.10  # ±10%: edge of zone = −10%, dead centre = +10%
@@ -320,7 +315,10 @@ var _is_host: bool = false
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var _blade_relative_angle: float = 0.0
-var _is_elevated: bool = false
+# Per-tick mirror of input.elevation_level (0 flat / 1 low / 2 high) — NOT
+# sticky state: overwritten from the frame every tick, so reconcile replay
+# re-derives it from the replayed inputs with nothing to snap.
+var _elevation_level: int = 0
 var _aiming: SkaterAimingBehavior = SkaterAimingBehavior.new()
 var _pose: SkaterPoseCoordinator = SkaterPoseCoordinator.new()
 var _shot_pose: SkaterShotPoseCoordinator = SkaterShotPoseCoordinator.new()
@@ -636,11 +634,8 @@ func _process_input(input: InputState, delta: float) -> void:
 	# sweep and the body motion. Capturing here in every controller path
 	# (Local / Remote / AI) keeps the test consistent across input sources.
 	skater.capture_prev_blade_contact()
-	if input.elevation_up:
-		_is_elevated = true
-	if input.elevation_down:
-		_is_elevated = false
-	skater.is_elevated = _is_elevated
+	_elevation_level = input.elevation_level
+	skater.elevation_level = _elevation_level
 
 	# Stick lift (Q). Voluntary lift is gated on NOT carrying — you can't raise
 	# your own blade off the puck while stickhandling. A forced lift (an opponent
@@ -744,7 +739,7 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.upper_body_angular_velocity = _pose.upper_body_angular_velocity
 	state.last_processed_host_timestamp = last_processed_host_timestamp
 	state.is_ghost = skater.is_ghost
-	state.is_elevated = skater.is_elevated
+	state.elevation_level = skater.elevation_level
 	state.blade_up = skater.blade_up
 	# Host-only shaft segment for stick-lift claim resolution (paired with
 	# blade_contact_world). World-space grip point — the wire top_hand_position
@@ -1052,7 +1047,7 @@ func _release_wrister(input: InputState) -> void:
 				input.mouse_world_pos,
 				blade_world,
 				is_backhand,
-				_is_elevated,
+				_elevation_level,
 				_aiming.charge_distance,
 				_wrister_config(),
 				_get_charge_direction(),
@@ -1074,7 +1069,7 @@ func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 		var result := ShotMechanics.release_slapper(
 				skater.upper_body_to_global(skater.get_blade_position()),
 				input.mouse_world_pos,
-				_is_elevated,
+				_elevation_level,
 				charge,
 				cfg,
 				locked_dir_3d)
@@ -1154,7 +1149,7 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	var cfg: ShotMechanics.SlapperConfig = _slapper_config()
 	var result := ShotMechanics.release_slapper(
 			blade_world, input.mouse_world_pos,
-			_is_elevated, cfg.max_slapper_charge_time, cfg, locked_dir_3d)
+			_elevation_level, cfg.max_slapper_charge_time, cfg, locked_dir_3d)
 	result.power = ShotReleaseRules.one_timer_power(
 			result.power, one_timer_center_power_bonus, zone_xz, puck_xz, slapper_zone_radius)
 	if not is_replaying:
@@ -1291,15 +1286,8 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 	cfg.max_wrister_charge_distance = max_wrister_charge_distance
 	cfg.backhand_power_coefficient = backhand_power_coefficient
 	cfg.quick_shot_power = quick_shot_power
-	cfg.quick_shot_elevation = quick_shot_elevation
-	cfg.elevation_target_height = wrister_elevation_target_height
-	cfg.elevation_blade_height = 0.05
-	cfg.elevation_gravity = 9.8
-	cfg.elevation_goal_line_z = GameRules.GOAL_LINE_Z
-	cfg.max_apex_above_blade = max_apex_above_blade
-	cfg.attacking_goal_z = get_attacking_goal_z()
-	cfg.toward_net_dot_threshold = toward_net_dot_threshold
-	cfg.away_from_net_y = away_from_net_elevation
+	cfg.loft_vy_low = loft_vertical_speed_low
+	cfg.loft_vy_high = loft_vertical_speed_high
 	return cfg
 
 func _slapper_config() -> ShotMechanics.SlapperConfig:
@@ -1307,18 +1295,6 @@ func _slapper_config() -> ShotMechanics.SlapperConfig:
 	cfg.min_slapper_power = min_slapper_power
 	cfg.max_slapper_power = max_slapper_power
 	cfg.max_slapper_charge_time = max_slapper_charge_time
-	cfg.elevation_target_height = slapper_elevation_target_height
-	cfg.elevation_blade_height = 0.05
-	cfg.elevation_gravity = 9.8
-	cfg.elevation_goal_line_z = GameRules.GOAL_LINE_Z
-	cfg.max_apex_above_blade = max_apex_above_blade
-	cfg.attacking_goal_z = get_attacking_goal_z()
-	cfg.toward_net_dot_threshold = toward_net_dot_threshold
-	cfg.away_from_net_y = away_from_net_elevation
+	cfg.loft_vy_low = loft_vertical_speed_low
+	cfg.loft_vy_high = loft_vertical_speed_high
 	return cfg
-
-# Signed Z of the goal this skater is attacking. Default 0.0 means "team
-# unknown" — the elevation math falls back to picking a goal by shot_dir.z
-# sign. LocalController overrides this once team_id is set.
-func get_attacking_goal_z() -> float:
-	return 0.0

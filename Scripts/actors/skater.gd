@@ -23,10 +23,10 @@ extends CharacterBody3D
 # on opposite sides for L/R) is a tiny resting cup.
 const _BLADE_TOE_LIFT_DEG: float = 4.0
 const _BLADE_FACE_OPEN_DEG: float = 4.0
-# Blended in while elevation mode is on (scroll-wheel ballistic aim): the loft
-# opens the face upward to "scoop" the puck, so elevation keys off the Z loft
-# far more than the X toe-lift. Eased via _blade_elevation_blend in
-# _physics_process so it doesn't snap.
+# Blended in with the scroll-wheel loft level (half strength at LOW, full at
+# HIGH): the loft opens the face upward to "scoop" the puck, so elevation keys
+# off the Z loft far more than the X toe-lift. Eased via _blade_elevation_blend
+# in _physics_process so it doesn't snap.
 const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
 const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
 const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
@@ -207,9 +207,11 @@ func get_team_id() -> int:
 	return _team_id_resolver.call() as int
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _facing: Vector2 = Vector2.DOWN
-var is_elevated: bool = false
-# Eased 0→1 toward is_elevated; drives the extra blade toe-lift (see
-# _update_blade_elevation / _apply_blade_tilt).
+# Loft mode (0 flat / 1 low saucer / 2 high). Set each tick by the controller
+# from the input frame; replicated so remotes/AI read it directly.
+var elevation_level: int = 0
+# Eased 0→1 toward elevation_level/2 (half scoop at LOW, full at HIGH); drives
+# the extra blade toe-lift (see _update_blade_elevation / _apply_blade_tilt).
 var _blade_elevation_blend: float = 0.0
 # True when the blade is lifted off the ice — own stick-lift (Q held while not
 # carrying) or a forced pop from an opponent hooking under this stick. Set each
@@ -575,11 +577,11 @@ func _apply_blade_tilt() -> void:
 	blade_mesh.transform.basis = rot.scaled(keep_scale)
 
 
-# Eases the elevation blend toward is_elevated each tick and re-tilts the blade
-# only while transitioning (move_toward lands exactly on the target, after which
-# the early-out stops the per-tick basis churn). Called from _physics_process.
+# Eases the elevation blend toward the loft level each tick and re-tilts the
+# blade only while transitioning (move_toward lands exactly on the target, after
+# which the early-out stops the per-tick basis churn). Called from _physics_process.
 func _update_blade_elevation(delta: float) -> void:
-	var target: float = 1.0 if is_elevated else 0.0
+	var target: float = float(elevation_level) * 0.5
 	if is_equal_approx(_blade_elevation_blend, target):
 		return
 	_blade_elevation_blend = move_toward(

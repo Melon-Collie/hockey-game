@@ -17,6 +17,8 @@ const _CHARGE_LOST_FLASH_DURATION: float = 0.35
 const _NAME_RADIUS: float   = RING_OUTER_R + 0.10
 const _CHEVRON_RADIUS: float = RING_OUTER_R + 0.10
 const _CHEVRON_OFFSET_DEG: float = 60.0
+# Screen-up gap between the stacked chevrons: one "^" = LOW loft, "^^" = HIGH.
+const _CHEVRON_STACK_GAP: float = 0.11
 
 # Overhead self-beacon. A billboarded downward-arrow that floats above ONLY the
 # local player's own skater so "which one is me" is answered pre-attentively
@@ -104,6 +106,8 @@ var _ring_mesh: MeshInstance3D
 var _charge_ring_mesh: MeshInstance3D
 var _charge_ring_mat: ShaderMaterial
 var _chevron_mesh: MeshInstance3D
+# Second stacked chevron, visible only at HIGH loft (level 2).
+var _chevron_mesh2: MeshInstance3D
 var _name_label: Label3D
 
 # Overhead self-beacon. `_self_beacon` is top_level (world transform rewritten
@@ -209,6 +213,14 @@ func setup(skater: Skater) -> void:
 	_chevron_mesh.visible = false
 	_skater.add_child(_chevron_mesh)
 
+	_chevron_mesh2 = MeshInstance3D.new()
+	_chevron_mesh2.name = "ElevatedChevronHigh"
+	_chevron_mesh2.top_level = true
+	_chevron_mesh2.mesh = _chevron_mesh.mesh
+	_chevron_mesh2.material_override = _chevron_mesh.material_override
+	_chevron_mesh2.visible = false
+	_skater.add_child(_chevron_mesh2)
+
 	# Player name. Single billboarded Label3D, top-level so its world
 	# transform isn't tied to the skater's rotation. Position is rewritten
 	# each tick from camera screen-down so it always sits below the ring.
@@ -297,6 +309,7 @@ func update(delta: float) -> void:
 			if _ring_mesh != null: _ring_mesh.visible = false
 			if _charge_ring_mesh != null: _charge_ring_mesh.visible = false
 			if _chevron_mesh != null: _chevron_mesh.visible = false
+			if _chevron_mesh2 != null: _chevron_mesh2.visible = false
 			if _name_label != null: _name_label.visible = false
 			if _slapper_indicator != null: _slapper_indicator.visible = false
 			if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
@@ -344,14 +357,24 @@ func update(delta: float) -> void:
 		_self_beacon.scale = Vector3(s, s, s)
 
 	if _chevron_mesh != null:
-		var chevron_should_show: bool = _skater.is_elevated and not _skater.is_ghost
+		var chevron_should_show: bool = _skater.elevation_level > 0 and not _skater.is_ghost
+		var chevron2_should_show: bool = _skater.elevation_level >= 2 and not _skater.is_ghost
 		if _chevron_mesh.visible != chevron_should_show:
 			_chevron_mesh.visible = chevron_should_show
+		if _chevron_mesh2.visible != chevron2_should_show:
+			_chevron_mesh2.visible = chevron2_should_show
 		if chevron_should_show:
 			_chevron_mesh.global_position = Vector3(
 					_skater.global_position.x + _cached_chevron_dir.x * _CHEVRON_RADIUS,
 					0.05,
 					_skater.global_position.z + _cached_chevron_dir.z * _CHEVRON_RADIUS)
+		if chevron2_should_show:
+			# Stack the second "^" screen-up from the first (the chevron points
+			# screen-up, so -screen_down is "above" it on screen).
+			_chevron_mesh2.global_position = Vector3(
+					_chevron_mesh.global_position.x - _cached_screen_down.x * _CHEVRON_STACK_GAP,
+					0.05,
+					_chevron_mesh.global_position.z - _cached_screen_down.y * _CHEVRON_STACK_GAP)
 
 	if _charge_ring_mesh != null and _charge_ring_mesh.visible:
 		var fill_val: float = clampf(_skater.shot_charge, 0.0, 1.0)
@@ -416,6 +439,7 @@ func _refresh_screen_down_cache_if_camera_changed() -> void:
 	_cached_chevron_dir = Vector3(sin(chevron_angle), 0.0, cos(chevron_angle))
 	if _chevron_mesh != null:
 		_chevron_mesh.rotation = Vector3(0.0, _cached_arc_base_angle, 0.0)
+		_chevron_mesh2.rotation = _chevron_mesh.rotation
 
 
 func set_player_name(p_name: String) -> void:
@@ -543,6 +567,7 @@ func set_world_hud_hidden(hidden: bool) -> void:
 		if _ring_mesh != null: _ring_mesh.visible = false
 		if _charge_ring_mesh != null: _charge_ring_mesh.visible = false
 		if _chevron_mesh != null: _chevron_mesh.visible = false
+		if _chevron_mesh2 != null: _chevron_mesh2.visible = false
 		if _name_label != null: _name_label.visible = false
 		if _slapper_indicator != null: _slapper_indicator.visible = false
 		if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false

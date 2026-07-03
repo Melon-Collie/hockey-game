@@ -37,7 +37,11 @@ const VERSION: String = "dev"
 #     clamp floored the attack_up team-1 negated cursor to (0,0), so the host
 #     derived zero wrister charge / null aim for those shooters and fired drags
 #     as taps. Signed encoding round-trips the negation.
-const PROTOCOL_VERSION: int = 9
+# v10: elevation binary -> 3-level loft. Input flags bits [6..7] (were the
+#     elevation_up/down edges) now carry an absolute 2-bit elevation_level;
+#     skater world-state flags byte repacked (shot_state 4 -> 3 bits,
+#     elevation_level 2 bits at [3..4], ghost/blade_up/sprint_locked shifted).
+const PROTOCOL_VERSION: int = 10
 
 
 func _ready() -> void:

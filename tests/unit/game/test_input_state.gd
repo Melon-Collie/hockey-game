@@ -24,8 +24,7 @@ func test_round_trip_preserves_all_fields() -> void:
 	s.slap_pressed     = false
 	s.slap_held        = true
 	s.brake            = false
-	s.elevation_up     = true
-	s.elevation_down   = false
+	s.elevation_level  = 2
 	s.block_held       = true
 	s.stick_lift_held  = true
 	s.sprint_held      = true
@@ -46,8 +45,7 @@ func test_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.slap_pressed,    s.slap_pressed)
 	assert_eq(r.slap_held,       s.slap_held)
 	assert_eq(r.brake,           s.brake)
-	assert_eq(r.elevation_up,    s.elevation_up)
-	assert_eq(r.elevation_down,  s.elevation_down)
+	assert_eq(r.elevation_level, s.elevation_level)
 	assert_eq(r.block_held,      s.block_held)
 	assert_eq(r.stick_lift_held, s.stick_lift_held)
 	assert_eq(r.sprint_held,     s.sprint_held)
@@ -58,7 +56,7 @@ func test_array_length_sentinel() -> void:
 	# Field count sentinel — if someone adds a field without updating
 	# to_array/from_array, this catches the mismatch.
 	var s := InputState.new()
-	assert_eq(s.to_array().size(), 20)
+	assert_eq(s.to_array().size(), 19)
 
 
 func test_stick_lift_back_compat_defaults_false() -> void:
@@ -67,7 +65,7 @@ func test_stick_lift_back_compat_defaults_false() -> void:
 	var s := InputState.new()
 	s.stick_lift_held = true
 	var short_array: Array = s.to_array()
-	short_array.resize(17)  # drop stick_lift_held + sprint_held
+	short_array.resize(16)  # drop stick_lift_held + sprint_held
 	var r := InputState.from_array(short_array)
 	assert_false(r.stick_lift_held, "missing stick_lift_held index should default false")
 
@@ -77,7 +75,7 @@ func test_sprint_back_compat_defaults_false() -> void:
 	var s := InputState.new()
 	s.sprint_held = true
 	var short_array: Array = s.to_array()
-	short_array.resize(18)  # drop sprint_held, keep stick_lift_held
+	short_array.resize(17)  # drop sprint_held, keep stick_lift_held
 	var r := InputState.from_array(short_array)
 	assert_false(r.sprint_held, "missing sprint_held index should default false")
 
@@ -96,8 +94,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	s.slap_pressed     = false
 	s.slap_held        = true
 	s.brake            = false
-	s.elevation_up     = true
-	s.elevation_down   = false
+	s.elevation_level  = 1
 	s.block_held       = true
 	s.stick_lift_held  = true
 	s.sprint_held      = true
@@ -118,8 +115,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.slap_pressed,    s.slap_pressed)
 	assert_eq(r.slap_held,       s.slap_held)
 	assert_eq(r.brake,           s.brake)
-	assert_eq(r.elevation_up,    s.elevation_up)
-	assert_eq(r.elevation_down,  s.elevation_down)
+	assert_eq(r.elevation_level, s.elevation_level)
 	assert_eq(r.block_held,      s.block_held)
 	assert_eq(r.stick_lift_held, s.stick_lift_held)
 	assert_eq(r.sprint_held,     s.sprint_held)
@@ -203,3 +199,21 @@ func test_bytes_legit_move_vector_unchanged() -> void:
 	var r := InputState.from_bytes(s.to_bytes())
 	assert_almost_eq(r.move_vector.x, 0.6, 0.01)
 	assert_almost_eq(r.move_vector.y, -0.8, 0.01)
+
+
+# ── elevation_level trust boundary ───────────────────────────────────────────
+
+func test_bytes_elevation_level_round_trips_each_level() -> void:
+	for level: int in [0, 1, 2]:
+		var s := InputState.new()
+		s.elevation_level = level
+		var r := InputState.from_bytes(s.to_bytes())
+		assert_eq(r.elevation_level, level, "level %d round-trips" % level)
+
+
+func test_bytes_forged_elevation_level_clamped() -> void:
+	# The 2-bit wire field admits 3; both encode and decode clamp to MAX (2).
+	var s := InputState.new()
+	s.elevation_level = 7
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_eq(r.elevation_level, InputState.MAX_ELEVATION_LEVEL)

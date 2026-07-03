@@ -403,9 +403,13 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	b.encode_s16(o, clampi(roundi(s.facing_angular_velocity / (PI * 10.0) * 32767.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.upper_body_angular_velocity / (PI * 10.0) * 32767.0), -32768, 32767)); o += 2
 	b.encode_u32(o, roundi(maxf(s.last_processed_host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE)); o += 4
-	var flags: int = (s.shot_state & 0x0F) \
-			| (0x10 if s.is_ghost else 0) \
-			| (0x20 if s.is_elevated else 0) \
+	# Flags byte: bits 0-2 shot_state (7 SkaterStateMachine.State values),
+	# bits 3-4 elevation_level (0..2), bit 5 ghost, bit 6 blade_up,
+	# bit 7 sprint_locked. Repacked at PROTOCOL_VERSION 10 (shot_state gave a
+	# bit to the 2-bit loft level).
+	var flags: int = (s.shot_state & 0x07) \
+			| ((clampi(s.elevation_level, 0, 3) & 0x3) << 3) \
+			| (0x20 if s.is_ghost else 0) \
 			| (0x40 if s.blade_up else 0) \
 			| (0x80 if s.sprint_locked else 0)
 	b.encode_u8(o, flags); o += 1
@@ -439,9 +443,9 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	s.upper_body_angular_velocity = b.decode_s16(o) / 32767.0 * (PI * 10.0); o += 2
 	s.last_processed_host_timestamp = float(b.decode_u32(o)) / Constants.TIME_WIRE_SCALE; o += 4
 	var flags: int = b.decode_u8(o); o += 1
-	s.shot_state = flags & 0x0F
-	s.is_ghost = (flags & 0x10) != 0
-	s.is_elevated = (flags & 0x20) != 0
+	s.shot_state = flags & 0x07
+	s.elevation_level = (flags >> 3) & 0x3
+	s.is_ghost = (flags & 0x20) != 0
 	s.blade_up = (flags & 0x40) != 0
 	s.sprint_locked = (flags & 0x80) != 0
 	s.shot_charge = b.decode_u8(o) / 255.0; o += 1

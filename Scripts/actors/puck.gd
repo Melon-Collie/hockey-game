@@ -206,9 +206,12 @@ func apply_blade_deflect(skater: Skater) -> void:
 			deflect_speed_retain, deflect_speed_retain_min,
 			deflect_max_angle_deg, deflect_max_angle_deg_min, deflect_speed_ref)
 
-	if skater.is_elevated:
+	# Deliberate-deflect tips ride the loft mode too: half the tip angle at
+	# LOW, full at HIGH — same scaling as the blade-scoop visual.
+	if skater.elevation_level > 0:
 		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(
-				new_vel.normalized(), deflect_elevation_angle)
+				new_vel.normalized(),
+				deflect_elevation_angle * float(skater.elevation_level) * 0.5)
 		new_vel = new_dir * new_vel.length()
 
 	linear_velocity = new_vel

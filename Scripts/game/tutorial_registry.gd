@@ -26,7 +26,7 @@ const STEP_BLADE_LIFT: int = 12
 const STEP_STICK_LIFT: int = 13
 # Shooting module — deeper, drill-based shot teaching. Separate IDs from the
 # Basics wrist/slap steps because the behaviour differs (target waves, the
-# elevation toggle, a stationary goalie), so TutorialManager dispatches them
+# loft levels, a stationary goalie), so TutorialManager dispatches them
 # distinctly rather than overloading the Basics steps.
 const STEP_SHOOT_WRIST:   int = 14   # charged wrist shot into the open net
 const STEP_SHOOT_TARGETS: int = 15   # pick-your-spot: low wave, high wave, toggle off
