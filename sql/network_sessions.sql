@@ -43,6 +43,20 @@ create policy network_sessions_anon_insert
     to anon
     with check (true);
 
+-- Anti-abuse caps: INSERT is public via the anon key, so bound the numeric fields
+-- and the metrics blob against forged / oversized rows. Generous ranges — reject
+-- garbage, not real sessions. Drop-then-add for idempotent re-runs.
+alter table public.network_sessions drop constraint if exists network_sessions_sane_sizes;
+alter table public.network_sessions add constraint network_sessions_sane_sizes check (
+    (duration_sec   is null or duration_sec   between 0 and 100000) and
+    (felt_lag_count is null or felt_lag_count between 0 and 100000) and
+    (player_name    is null or length(player_name)  <= 64) and
+    (game_version   is null or length(game_version) <= 64) and
+    (platform       is null or length(platform)     <= 64) and
+    (role           is null or length(role)         <= 16) and
+    pg_column_size(metrics) < 65536
+);
+
 -- ── Analysis view ────────────────────────────────────────────────────────────
 -- Flattens the headline metrics out of the jsonb into typed columns so you can
 -- sort/aggregate without json casts everywhere. Excludes dev (net_sim) rows.

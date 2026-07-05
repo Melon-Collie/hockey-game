@@ -576,6 +576,13 @@ func _on_peer_disconnected(id: int) -> void:
 	peer_disconnected.emit(id)
 	_peer_steam_ids.erase(id)
 	_kicked_peers.erase(id)
+	# Per-peer telemetry books, else the host's 1 Hz loss loop iterates a stale
+	# peer forever and its ping lingers on scoreboards.
+	_peer_ping_ms.erase(id)
+	_peer_last_echoed.erase(id)
+	_peer_echo_drop_window.erase(id)
+	_peer_echo_recv_window.erase(id)
+	_peer_loss_rates.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
 	# attempting this authority RPC would just be refused with error spam.
@@ -631,6 +638,7 @@ func _close() -> void:
 
 func prepare_for_new_game() -> void:
 	_input_batch_provider = Callable()
+	_peer_ping_ms.clear()
 	_peer_last_echoed.clear()
 	_peer_echo_drop_window.clear()
 	_peer_echo_recv_window.clear()
@@ -695,6 +703,12 @@ func reset() -> void:
 	pending_color_votes = {}
 	pending_bot_slots.clear()
 	pending_bot_identities.clear()
+	# Lobby match settings are session-scoped — reset to defaults so a new host
+	# session doesn't pre-fill the previous match's period/rule config.
+	pending_num_periods = GameRules.NUM_PERIODS
+	pending_period_duration = GameRules.PERIOD_DURATION
+	pending_ot_enabled = GameRules.OT_ENABLED
+	pending_rule_set = GameRules.DEFAULT_RULE_SET
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -710,6 +724,7 @@ func reset() -> void:
 	_ws_recv_window = 0
 	_ws_loss_window_timer = 0.0
 	packet_loss_pct = 0.0
+	_peer_ping_ms.clear()
 	_peer_last_echoed.clear()
 	_peer_echo_drop_window.clear()
 	_peer_echo_recv_window.clear()

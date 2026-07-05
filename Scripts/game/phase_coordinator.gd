@@ -168,6 +168,13 @@ func on_pickup(_peer_id: int) -> void:
 		phase_changed.emit(_state_machine.current_phase)
 
 
+# A non-pickup puck engagement during FACEOFF (deflect / body redirect /
+# one-timer) — ends the faceoff so a goal off the play is not voided.
+func on_puck_touched_live() -> void:
+	if _state_machine.on_faceoff_puck_touched():
+		phase_changed.emit(_state_machine.current_phase)
+
+
 # ── Host: goal scoring pipeline ──────────────────────────────────────────────
 
 func on_goal_scored_into(defending_team: Team) -> void:
