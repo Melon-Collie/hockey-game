@@ -105,10 +105,13 @@ const DEFENSIVE_ANTICIPATION_MAX_M: float = 2.5
 
 
 # Leads a threat position by its velocity over DEFENSIVE_ANTICIPATION_S, clamped
-# to DEFENSIVE_ANTICIPATION_MAX_M. XZ only; y stays 0.
-static func lead_threat(pos: Vector3, vel: Vector3) -> Vector3:
-	var lead_x: float = vel.x * DEFENSIVE_ANTICIPATION_S
-	var lead_z: float = vel.z * DEFENSIVE_ANTICIPATION_S
+# to DEFENSIVE_ANTICIPATION_MAX_M. XZ only; y stays 0. `scale` is the difficulty
+# pace knob (ctx.defensive_anticipation_scale): 1.0 = today, lower leads less so
+# the defender sits a step behind the play (more space for the carrier).
+static func lead_threat(pos: Vector3, vel: Vector3, scale: float = 1.0) -> Vector3:
+	var anticipation_s: float = DEFENSIVE_ANTICIPATION_S * scale
+	var lead_x: float = vel.x * anticipation_s
+	var lead_z: float = vel.z * anticipation_s
 	var l: float = sqrt(lead_x * lead_x + lead_z * lead_z)
 	if l > DEFENSIVE_ANTICIPATION_MAX_M:
 		var s: float = DEFENSIVE_ANTICIPATION_MAX_M / l
@@ -177,11 +180,18 @@ static func evaluate_body_check(ctx: RoleContext) -> AIBodyCheck.Result:
 		return AIBodyCheck.Result.new()
 	if not ctx.snapshot.skater_states.has(carrier_pid):
 		return AIBodyCheck.Result.new()
+	# Difficulty pace knob: check_aggression gates hit-hunting. 0.0 = never
+	# commit (pure containment — the easiest, least intimidating tier); below 1.0
+	# raises the required separating-hit impulse inversely, so an easier bot only
+	# commits to the hardest hits and mostly just contains. 1.0 = today's gate.
+	if ctx.check_aggression <= 0.0:
+		return AIBodyCheck.Result.new()
+	var commit_threshold: float = AIBodyCheck.COMMIT_IMPULSE_M_S / ctx.check_aggression
 	var carrier: SkaterNetworkState = ctx.snapshot.skater_states[carrier_pid]
 	return AIBodyCheck.evaluate(
 			ctx.self_pos, ctx.self_max_speed, ctx.self_weight,
 			ctx.self_body_check_transfer, ctx.self_stagger_timer,
-			carrier.position, carrier.velocity)
+			carrier.position, carrier.velocity, commit_threshold)
 
 
 # ── Context resolution ──────────────────────────────────────────────────────
@@ -313,7 +323,8 @@ static func collect_opp_team_excluding_carrier(ctx: RoleContext,
 			continue
 		var s: SkaterNetworkState = ctx.snapshot.skater_states[pid]
 		# Defensive anticipation: lead the receiver to where they're cutting.
-		out.append(lead_threat(s.position, s.velocity) if anticipate else s.position)
+		out.append(lead_threat(s.position, s.velocity, ctx.defensive_anticipation_scale) \
+				if anticipate else s.position)
 
 
 # Fills `out` with the positions of teammates excluding self. Used as the
@@ -343,5 +354,6 @@ static func collect_opponents(ctx: RoleContext,
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[pid]
 			# Defensive anticipation: lead each opponent to where they're headed.
 			# States keep their raw velocity for any momentum-aware ETA caller.
-			out_positions.append(lead_threat(s.position, s.velocity) if anticipate else s.position)
+			out_positions.append(lead_threat(s.position, s.velocity, ctx.defensive_anticipation_scale) \
+					if anticipate else s.position)
 			out_states.append(s)

@@ -46,8 +46,6 @@ const _SPRINT_HOLD:          float = 1.0
 const _BLADE_LIFT_HOLD:      float = 0.75
 const _BLOCK_HOLD:           float = 2.0
 const _SHOT_BLOCK_HOLD:      float = 1.0
-# Quick shot: must release WRISTER_AIM within this window (else counts as wrist shot)
-const _WRIST_HOLD_MIN:       float = 0.4
 # Shot block: puck comes from the offensive zone toward the player's goal.
 # 14 m/s is a paced-down "wrister" feel — fast enough to feel like a shot,
 # slow enough that a learner has time to read it and crouch into the lane.
@@ -249,8 +247,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_QUICK_SHOT:
 			return TutorialStep.new(
 				"Quick Shot",
-				"Skate over the puck to pick it up, then click the left mouse button to snap a quick shot into the net.",
-				"Just click — don't hold. Aim at the open net ahead of you.")
+				"Skate over the puck to pick it up, then press E to snap a quick shot into the net. This is also your pass.",
+				"Tap E — the quick shot fires instantly toward your cursor. Aim at the open net ahead of you.")
 		STEP_WRIST_SHOT:
 			return TutorialStep.new(
 				"Wrist Shot",
@@ -284,8 +282,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_ELEVATION:
 			return TutorialStep.new(
 				"Lifting the Puck",
-				"With the puck, scroll the mouse wheel up, then shoot to lift the puck off the ice.",
-				"Scroll up first, then left- or right-click to shoot — the puck flies up off the ground.")
+				"With the puck, scroll the mouse wheel up to add loft — one notch for a low saucer, two for a high shot — then shoot.",
+				"Scroll up first, then left- or right-click to shoot. Scroll down to flatten back out.")
 		STEP_OFFSIDES:
 			return TutorialStep.new(
 				"Offsides",
@@ -615,7 +613,7 @@ func _process(delta: float) -> void:
 		_shooting_tick(delta)
 		_update_elevation_prompt()
 		if _current_step_id() == STEP_SHOOT_TARGETS and _targets_phase == 2 \
-				and not _skater.is_elevated:
+				and _skater.elevation_level == 0:
 			_complete_step()
 		return
 
@@ -720,20 +718,21 @@ func _on_shot_released(dir: Vector3, _power: float, is_slapper: bool) -> void:
 	var type_correct := false
 	match _current_step_id():
 		STEP_QUICK_SHOT:
-			if not is_slapper:
-				var elapsed: float = 0.0
-				if _wrister_aim_start >= 0.0:
-					elapsed = Time.get_ticks_msec() / 1000.0 - _wrister_aim_start
-				if elapsed < _WRIST_HOLD_MIN:
-					type_correct = true
+			# The quick shot (F) fires straight from carry without entering
+			# WRISTER_AIM, so a never-aimed non-slapper release is the quick shot.
+			if not is_slapper and _wrister_aim_start < 0.0:
+				type_correct = true
 		STEP_WRIST_SHOT:
-			if not is_slapper:
+			# The wrist shot goes through WRISTER_AIM (LMB), so it has an aim start.
+			if not is_slapper and _wrister_aim_start >= 0.0:
 				type_correct = true
 		STEP_SLAPSHOT:
 			if is_slapper:
 				type_correct = true
 		STEP_ELEVATION:
-			if dir.y > 0.1:
+			# Any loft counts. The lowest legit lofted release (LOW at full
+			# slapper power) has a normalized y of ~0.065; flat shots are 0.
+			if dir.y > 0.05:
 				type_correct = true
 	if not type_correct:
 		_restage_timer = _REATTEMPT_DELAY
@@ -942,36 +941,35 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 	_wrist_peak_charge = 0.0
 
 
-# Elevation toggle the active drill expects, or _ELEV_ANY when it doesn't care
+# Loft level the active drill expects, or _ELEV_ANY when it doesn't care
 # (the player picks per shot — e.g. the goalie drill, where the right answer
 # depends on which target they're going for). Drills that assume a flat shot
-# want it OFF; the high-targets wave wants it ON. Drives a corrective prompt
-# (never an auto-fix — managing the sticky toggle is part of the lesson).
-const _ELEV_ANY:    int = -1
-const _ELEV_FLAT:   int = 0
-const _ELEV_LIFTED: int = 1
+# want level 0; the high-targets wave wants full loft (2). Drives a corrective
+# prompt (never an auto-fix — managing the loft mode is part of the lesson).
+const _ELEV_ANY: int = -1
 
 func _expected_elevation() -> int:
 	match _current_step_id():
 		STEP_SHOOT_WRIST, STEP_SHOOT_SLAP:
-			return _ELEV_FLAT
+			return ShotMechanics.ELEVATION_FLAT
 		STEP_SHOOT_TARGETS:
-			# High wave needs a lifted shot; the low wave and the scroll-down beat
+			# High wave needs full loft; the low wave and the scroll-down beat
 			# need it flat.
-			return _ELEV_LIFTED if _targets_phase == 1 else _ELEV_FLAT
+			return ShotMechanics.ELEVATION_HIGH if _targets_phase == 1 \
+					else ShotMechanics.ELEVATION_FLAT
 	return _ELEV_ANY
 
 
 # Shows / clears the amber elevation prompt for the active drill. Called every
-# frame from the shooting branch so it tracks the toggle live.
+# frame from the shooting branch so it tracks the loft mode live.
 func _update_elevation_prompt() -> void:
 	var expected: int = _expected_elevation()
 	if expected == _ELEV_ANY:
 		_hud.clear_alert()
 		return
-	if expected == _ELEV_LIFTED and not _skater.is_elevated:
-		_hud.set_alert("Your shot is flat — scroll the wheel up to lift it.")
-	elif expected == _ELEV_FLAT and _skater.is_elevated:
+	if _skater.elevation_level < expected:
+		_hud.set_alert("Your shot is too flat — scroll the wheel up for more loft.")
+	elif _skater.elevation_level > expected:
 		_hud.set_alert("Your shot is set to lift — scroll the wheel down to go flat.")
 	else:
 		_hud.clear_alert()
@@ -1042,9 +1040,9 @@ func _on_targets_wave_cleared() -> bool:
 				_target_node.clear()
 			_hud.set_step(_step_index, _step_ids.size(),
 				"Pick Your Spot",
-				"Nice. Your lifted shot is still on, though — scroll the wheel DOWN to switch back to a flat shot, or your next one sails high too.",
-				"Elevation is a toggle you manage: up to lift, down to flatten.")
-			_hud.set_objective("Scroll down to go flat.")
+				"Nice. Your loft is still on full, though — scroll the wheel DOWN twice to switch back to a flat shot, or your next one sails high too.",
+				"Loft is a mode you manage: scroll up for more, down for less.")
+			_hud.set_objective("Scroll down until the loft is off.")
 			return false
 		STEP_SHOOT_GOALIE:
 			return true
@@ -1064,8 +1062,8 @@ func _show_targets_wave(phase: int) -> void:
 	else:
 		_hud.set_step(_step_index, _step_ids.size(),
 			"Pick Your Spot",
-			"Now two up high. Scroll the wheel UP to switch to a lifted shot — it's a toggle, so it stays on. Put both in the top corners.",
-			"Scroll up first; you'll see the puck rise off the ice when you shoot.")
+			"Now two up high. Scroll the wheel UP TWICE for full loft — it's a mode, it stays on. Put both in the top corners.",
+			"Charge the shot too — from this close a soft lifted shot is still rising and sails over the net.")
 		_show_target_set(_HIGH_TARGETS)
 
 

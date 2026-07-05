@@ -152,12 +152,9 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	# doesn't touch it (e.g. a press state). The SM re-decides it each full
 	# dispatch via _resolve_sprint and restores the cache on throttled ticks.
 	input.sprint_held = false
-	# Default elevation_down high so the SkaterController's sticky
-	# _is_elevated flag is reset every tick the bot isn't actively
-	# firing an elevated shot. Press states override with
-	# elevation_up=true / elevation_down=false on the tick they want
-	# the controller to raise the flag.
-	input.elevation_up = false
-	input.elevation_down = true
+	# Loft defaults flat every tick — the level is absolute per input frame
+	# (no sticky controller state), so press states just set the level they
+	# want on the ticks they want it.
+	input.elevation_level = 0
 	input.block_held = false
 	input.stick_lift_held = false

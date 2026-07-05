@@ -33,6 +33,18 @@ signal stats_updated
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color)
 signal local_player_hit(magnitude: float)
+# The local player released a possessed shot. `power` is release speed in m/s.
+# HUD listens for the shot-speed toast on hard shots.
+signal local_shot_released(power: float, is_slapper: bool)
+# Host-authoritative body-check impact, re-emitted for cosmetic listeners
+# (crowd reaction in ArenaStands) after the burst/sound fire in
+# _on_body_check_landed. `force` is the same VFX-scale impact force.
+signal body_check_broadcast(force: float)
+# Fired (before faceoff_prep_announced) on the opening faceoff of a match —
+# game start and rematch, never mid-game stoppages. The opening prep window is
+# host-extended by `duration`, so listeners (camera sweep, HUD matchup card,
+# crowd buzz) have that long before the normal faceoff countdown begins.
+signal pregame_intro_started(duration: float)
 signal replay_started
 signal replay_stopped
 # Live tally of unanimous skip-replay votes (emitted on every accepted vote and
@@ -57,6 +69,11 @@ signal offside_called()
 # ── Domain state ──────────────────────────────────────────────────────────────
 var _state_machine: GameStateMachine = null
 var _last_emitted_clock_secs: int = -1
+# True once any faceoff prep has been announced this match. The first prep
+# after world setup / a reset is the OPENING faceoff — the only one that gets
+# the pre-game intro. Tracked here (not in the domain SM) because clients
+# never tick the SM but still need to fire their local intro cosmetics.
+var _seen_first_prep: bool = false
 var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 # Reused peer_id -> position scratch for the per-tick ghost-state and icing
 # checks (host only). The domain calls read it synchronously and never retain
@@ -386,7 +403,15 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	var pos := puck.global_position
 	var pos2d := Vector2(pos.x, pos.z)
 	var clamped := GameRules.clamp_to_rink_inner(pos2d)
-	if pos2d.distance_to(clamped) > 0.2:
+	var xz_outside: float = pos2d.distance_to(clamped)
+	# Out of play if the puck is clearly outside the boundary (XZ), OR it is at/past
+	# the boundary while elevated above the boards — the latter catches a puck that
+	# went over the glass or perched on the boards, which the flat 0.2 m XZ check
+	# alone would miss (soft-lock). A legitimate high deflection is INSIDE the rink,
+	# so its xz_outside is ~0 and it doesn't trip the height branch.
+	var over_boards: bool = xz_outside > 0.01 \
+			and (pos.y - puck.ice_height) > GameRules.PUCK_OVER_BOARDS_HEIGHT
+	if xz_outside > 0.2 or over_boards:
 		_puck_oob_timer += delta
 		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
@@ -554,9 +579,11 @@ func on_host_started() -> void:
 	# Open the match with a faceoff countdown rather than dropping straight
 	# into PLAYING. Tutorial scripts its own intro; free play is a casual
 	# warmup that shouldn't gate the player behind a countdown — both stay
-	# in PLAYING from the start.
+	# in PLAYING from the start. The opening prep is extended so the pre-game
+	# intro (camera sweep + matchup card) plays before the countdown.
 	if not NetworkManager.is_drill_mode() and not NetworkManager.is_free_play_mode:
-		_state_machine.begin_faceoff_prep()
+		_state_machine.begin_faceoff_prep(GameRules.CENTER_ICE_DOT,
+				GameRules.PREGAME_INTRO_DURATION if _pregame_intro_eligible() else 0.0)
 		_phase_coord.handle_phase_entered()
 
 
@@ -851,6 +878,7 @@ func _spawn_world() -> void:
 	# scene change records a huge gap (whatever wall time elapsed during the
 	# scene transition) and pollutes the p95/p99 for the first second.
 	_last_phys_tick_us = 0
+	_seen_first_prep = false  # fresh world → next prep is the opening faceoff
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -1061,7 +1089,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
-	_phase_coord.faceoff_prep_announced.connect(faceoff_prep_announced.emit)
+	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
 	_phase_coord.period_synced.connect(period_synced.emit)
@@ -1101,6 +1129,7 @@ func _wire_sound_signals() -> void:
 		puck.puck_hit_boards.connect(func() -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_BOARDS, puck.get_puck_position(), _puck_speed_volume(spd), 0.05)
+			puck.fire_board_impact_vfx(spd)
 			NetworkManager.send_board_hit_to_all(puck.get_puck_position())
 			_record_replay_audio_event("puck_boards", puck.get_puck_position(), spd))
 		puck.puck_hit_goal_body.connect(func() -> void:
@@ -1141,6 +1170,7 @@ func _wire_sound_signals() -> void:
 		func() -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd), 0.04)
+			puck.fire_post_ping_vfx(spd)
 			if NetworkManager.is_host:
 				_record_replay_audio_event("puck_post", puck.get_puck_position(), spd))
 
@@ -1155,7 +1185,11 @@ func _wire_sound_signals() -> void:
 		func(_tid: int, _s0: int, _s1: int, _sn: String, _a1: String, _a2: String) -> void:
 			SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN, -6.0))
 	NetworkManager.board_hit_received.connect(
-		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_BOARDS, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.05))
+		func(pos: Vector3) -> void:
+			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
+			SoundManager.play_world(SoundManager.Sound.PUCK_BOARDS, pos, _puck_speed_volume(spd), 0.05)
+			if puck != null:
+				puck.fire_board_impact_vfx(spd))
 	NetworkManager.goal_body_hit_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
 	NetworkManager.deflection_received.connect(
@@ -1397,10 +1431,18 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 		return
 	if new_slot < 0 or new_slot >= PlayerRules.MAX_PER_TEAM:
 		return
+	# Liveness guard: a swap-request RPC can still be in flight when the requesting
+	# spectator disconnects. Without this the host would spawn + broadcast a skater
+	# for a gone peer that no disconnect will ever clean up (phantom on all clients).
+	if peer_id != NetworkManager.local_peer_id() and peer_id not in NetworkManager.connected_peer_ids():
+		return
 	for other_id: int in _state_machine.players:
 		var p: Dictionary = _state_machine.players[other_id]
 		if p.team_id == new_team_id and p.team_slot == new_slot:
 			return
+	# Don't promote into a slot held for a reconnecting player (see try_swap_slot).
+	if _state_machine.is_slot_reserved(new_team_id, new_slot):
+		return
 	if _state_machine.count_players_on_team(new_team_id) >= PlayerRules.MAX_PER_TEAM:
 		return
 	_spectator_peers.erase(peer_id)
@@ -1767,6 +1809,9 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.set_goal_context(
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
+		local_ctrl.puck_release_requested.connect(
+				func(_dir: Vector3, power: float, is_slapper: bool) -> void:
+					local_shot_released.emit(power, is_slapper))
 		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
@@ -1975,6 +2020,9 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
+	# A loose-puck touch during FACEOFF (deflect / body redirect) makes the puck
+	# live — end the faceoff so a goal off the deflection counts (see P2-2).
+	_phase_coord.on_puck_touched_live()
 	_state_machine.notify_icing_contact()
 	# Deflection or body-block by an offending-team attacker also counts as a
 	# touch that whistles a delayed offside.
@@ -2174,6 +2222,9 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 
 func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
+	# A one-timer is a possession-less engagement — if it fires during FACEOFF it
+	# makes the puck live, so end the faceoff or the resulting goal is voided (P2-2).
+	_phase_coord.on_puck_touched_live()
 	var pid: int = _registry.resolve_peer_id(skater)
 	# One-timers skip the normal pickup flow, so the shooter is never recorded
 	# in the carrier history. Record them as a deflection (the shooter redirects
@@ -2637,6 +2688,7 @@ func _on_body_check_landed(victim_peer_id: int, force: float, hit_dir: Vector3) 
 		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
 	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
 			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
+	body_check_broadcast.emit(force)
 	# Lever B: lead the knockback on a remotely-interpolated victim so the hit reads
 	# punchy instead of mushy-late. No-op for the local (predicted) victim — its
 	# controller isn't a RemoteController — and on the host (guarded inside).
@@ -2649,6 +2701,61 @@ func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_times
 	if not NetworkManager.is_host:
 		return
 	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
+
+
+# Relay for PhaseCoordinator.faceoff_prep_announced that recognizes the
+# OPENING faceoff (first prep since world setup / reset) and fires the
+# pre-game intro signal first, so HUD/camera/crowd listeners can set up
+# before the countdown wiring reacts. Runs on host and clients alike —
+# both sides' prep announcement funnels through here.
+func _on_faceoff_prep_announced_from_coord() -> void:
+	var opening: bool = not _seen_first_prep
+	_seen_first_prep = true
+	if opening and _pregame_intro_eligible():
+		pregame_intro_started.emit(GameRules.PREGAME_INTRO_DURATION)
+	faceoff_prep_announced.emit()
+
+
+# Whether the opening-faceoff pre-game intro should play. Beyond the mode
+# gates, the fresh-match check keeps a mid-game joiner's FIRST prep (some
+# later stoppage, normal-length window) from playing a 4 s intro over a 2 s
+# prep. The clock counts up in infinite-time mode, down otherwise.
+func _pregame_intro_eligible() -> bool:
+	if NetworkManager.is_free_play_mode or NetworkManager.is_drill_mode() \
+			or NetworkManager.is_replay_mode():
+		return false
+	if _state_machine == null:
+		return false
+	if _state_machine.current_period != 1:
+		return false
+	if _state_machine.scores[0] != 0 or _state_machine.scores[1] != 0:
+		return false
+	if _state_machine.infinite_time:
+		return _state_machine.time_remaining <= 0.01
+	return _state_machine.time_remaining >= _state_machine.period_duration - 0.01
+
+
+# Star of the Game, computed locally from the replicated stat counters. Every
+# machine sees the same counters and the same sorted-peer-id candidate order,
+# and StarOfGameRules breaks ties explicitly, so selection is deterministic
+# without an RPC. Returns null when nobody registered a counting stat.
+func get_star_of_game() -> PlayerRecord:
+	if _registry == null:
+		return null
+	var peer_ids: Array[int] = []
+	for pid: int in _registry.all().keys():
+		peer_ids.append(pid)
+	peer_ids.sort()
+	var scores: Array[float] = []
+	var is_human: Array[bool] = []
+	for pid: int in peer_ids:
+		var rec: PlayerRecord = _registry.get_record(pid)
+		scores.append(StarOfGameRules.score(rec.stats))
+		is_human.append(not rec.is_bot)
+	var star_idx: int = StarOfGameRules.pick_star(scores, is_human)
+	if star_idx == -1:
+		return null
+	return _registry.get_record(peer_ids[star_idx])
 
 
 # ── Scene exit & reset ───────────────────────────────────────────────────────
@@ -2731,6 +2838,10 @@ func on_scene_exit() -> void:
 	# (used to build the footer) is still intact.
 	_close_replay_file_writer()
 	_last_recorded_phase = -1
+	# Session-scoped — a scene exit mid goal-replay must not carry a stale
+	# "in replay" flag into the next session (a fresh driver is created there, so
+	# a leftover true would let a skip vote fire before any replay is running).
+	_in_replay_locally = false
 	if _shot_tracker != null:
 		_shot_tracker.clear_state()
 	if _registry != null:
@@ -2787,6 +2898,12 @@ func on_scene_exit() -> void:
 
 
 func reset_game() -> void:
+	# Host-authoritative (offline/free-play are is_host too). A stray client call
+	# would reset only that client's SM/stats and fork it from the host; the
+	# notify_reset_to_all RPC below is authority-gated so no remote harm, but guard
+	# for symmetry with return_to_lobby.
+	if not NetworkManager.is_host:
+		return
 	_drop_puck_if_carried()
 	_apply_reset()
 	# Each rematch gets its own .mreplay so the viewer doesn't render two
@@ -2798,7 +2915,9 @@ func reset_game() -> void:
 		new_id = PlayerPrefs.generate_uuid()
 	NetworkManager.notify_reset_to_all(new_id)
 	_rollover_replay_file_to(new_id)
-	_state_machine.begin_faceoff_prep()
+	# A rematch is a fresh match — its opening faceoff gets the intro too.
+	_state_machine.begin_faceoff_prep(GameRules.CENTER_ICE_DOT,
+			GameRules.PREGAME_INTRO_DURATION if _pregame_intro_eligible() else 0.0)
 	_phase_coord.handle_phase_entered()
 	game_reset.emit()
 
@@ -2819,7 +2938,15 @@ func on_game_reset(new_game_id: String = "") -> void:
 
 
 func _apply_reset() -> void:
-	_state_machine.reset_all()
+	_state_machine.reset_all()  # also clears the domain-side reserved_slots mirror
+	# Clear the host-side reservation store in lockstep with the domain mirror.
+	# reset_all() frees the domain slots, so a leftover _reserved_slots entry would
+	# force a reconnecting peer into a slot that a rematch joiner/swapper can now
+	# retake (double-booking) AND carry the PREVIOUS match's stats into the fresh
+	# 0-0 game. Host-only dict; a no-op on clients. Pending expiry timers are token-
+	# guarded, so they harmlessly no-op after the clear.
+	_reserved_slots.clear()
+	_seen_first_prep = false  # next prep is a rematch's opening faceoff
 	_last_emitted_clock_secs = -1
 	_last_ghost_state.clear()
 	_hit_claim.reset_throttle()

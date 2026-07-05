@@ -48,6 +48,24 @@ func test_faceoff_prep_expires_to_faceoff() -> void:
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)
 	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
 
+func test_extended_prep_holds_past_normal_duration() -> void:
+	sm.begin_faceoff_prep(GameRules.CENTER_ICE_DOT, GameRules.PREGAME_INTRO_DURATION)
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF_PREP,
+			"opening prep holds through the intro window")
+	sm.tick(GameRules.PREGAME_INTRO_DURATION)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
+
+func test_prep_extension_is_one_shot() -> void:
+	sm.begin_faceoff_prep(GameRules.CENTER_ICE_DOT, GameRules.PREGAME_INTRO_DURATION)
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + GameRules.PREGAME_INTRO_DURATION + 0.01)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
+	# The next prep (a mid-game stoppage) runs at the normal duration.
+	sm.begin_faceoff_prep()
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF,
+			"extension must not leak into later preps")
+
 func test_puck_pickup_during_faceoff_resumes_playing() -> void:
 	sm.begin_faceoff_prep()
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)  # → FACEOFF
@@ -58,6 +76,24 @@ func test_puck_pickup_during_faceoff_resumes_playing() -> void:
 func test_puck_pickup_outside_faceoff_noop() -> void:
 	var resumed: bool = sm.on_faceoff_puck_picked_up()  # still PLAYING
 	assert_false(resumed)
+	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
+
+func test_faceoff_puck_touch_ends_faceoff_so_goal_counts() -> void:
+	# P2-2: a possession-less faceoff play (deflect / one-timer / contested draw)
+	# must end the faceoff — otherwise on_goal_scored (PLAYING-gated) voids the goal.
+	sm.begin_faceoff_prep()
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)  # → FACEOFF
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
+	# A goal during FACEOFF would be voided...
+	assert_eq(sm.on_goal_scored(1), -1, "goal is voided while still in FACEOFF")
+	# ...but a puck touch first makes it live.
+	var resumed: bool = sm.on_faceoff_puck_touched()
+	assert_true(resumed)
+	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
+	assert_ne(sm.on_goal_scored(1), -1, "goal now counts after the touch ended the faceoff")
+
+func test_faceoff_puck_touch_outside_faceoff_noop() -> void:
+	assert_false(sm.on_faceoff_puck_touched())  # still PLAYING
 	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
 
 func test_faceoff_timeout_resumes_playing() -> void:
@@ -427,15 +463,20 @@ func test_carrier_not_ghosted_by_offside() -> void:
 		Vector3(0, 0, 0))
 	assert_false(ghosts[1])
 
-func test_icing_team_all_ghosted() -> void:
+func test_icing_does_not_ghost_the_team() -> void:
+	# P2-7: icing is a whistle-and-faceoff rule, NOT a team ghost. Even with an
+	# active icing_team_id, compute_ghost_state must not ghost the offending team —
+	# in the real game begin_faceoff_prep clears icing_team_id in the same tick, so
+	# the old team-wide ghost never applied. This asserts the corrected behavior.
 	sm.rule_set = GameRules.RuleSet.NHL
 	sm.register_remote_assigned_player(1, 0, 0)  # team 0
 	sm.notify_puck_carried(0, 5.0)
 	sm.check_icing_for_loose_puck(-30.0)
+	assert_eq(sm.icing_team_id, 0, "icing is still detected (drives the whistle + faceoff)")
 	var ghosts: Dictionary = sm.compute_ghost_state(
 		{1: Vector3(0, 1, 0)},      # position that wouldn't be offside
 		-1, Vector3.ZERO)
-	assert_true(ghosts[1])
+	assert_false(ghosts[1], "icing does not ghost the offending team")
 
 func test_off_mode_disables_offside_ghost() -> void:
 	sm.rule_set = GameRules.RuleSet.OFF
@@ -700,3 +741,21 @@ func test_clock_does_not_tick_during_dead_puck_phase() -> void:
 	sm.tick(GameRules.GOAL_CELEBRATION_DURATION + 0.01)  # → GOAL_SCORED
 	sm.tick(GameRules.GOAL_PAUSE_DURATION + 0.01)        # → FACEOFF_PREP
 	assert_eq(sm.time_remaining, time_before, "clock must not tick during dead-puck phases")
+
+
+func test_swap_into_reserved_slot_is_rejected() -> void:
+	# P2-5: a slot held for a reconnecting player is invisible to the occupancy
+	# scan (no live player there), so try_swap_slot must consult is_slot_reserved —
+	# otherwise a teammate swaps in and the reconnect double-books the slot.
+	sm.register_remote_assigned_player(1, 0, 0)   # peer 1 on team 0 slot 0
+	sm.reserve_slot(0, 1)                          # slot 1 held for a dropped player
+	var result: Dictionary = sm.try_swap_slot(1, 0, 1)  # try to swap into the reserved slot
+	assert_true(result.is_empty(), "swap into a reserved slot is rejected")
+	assert_eq(sm.players[1].team_slot, 0, "peer stays in its original slot")
+
+func test_swap_into_free_slot_still_works() -> void:
+	# Regression guard: the reserved check must not block ordinary swaps.
+	sm.register_remote_assigned_player(1, 0, 0)
+	var result: Dictionary = sm.try_swap_slot(1, 0, 2)  # slot 2 is free + unreserved
+	assert_false(result.is_empty(), "swap into a free unreserved slot succeeds")
+	assert_eq(sm.players[1].team_slot, 2)

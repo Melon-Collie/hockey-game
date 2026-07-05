@@ -71,3 +71,19 @@ func test_no_commit_while_staggered() -> void:
 	# Even a perfect hit setup is declined while we're off-balance.
 	var r: AIBodyCheck.Result = _eval(Vector3(4, 0, 0), Vector3.ZERO, HIGH_TRANSFER, 0.3)
 	assert_false(r.commit, "a staggered checker can't deliver a hit")
+
+
+# ── Difficulty commit-threshold (check_aggression pace knob) ─────────────────
+
+func test_raised_commit_threshold_suppresses_a_marginal_hit() -> void:
+	# The same high-Physical head-on hit that commits at the default threshold
+	# (impulse ≈ 5.5) is declined once an easier tier raises the required impulse
+	# above it — the bot only commits to harder hits, or (at the extreme) none.
+	var default_commit: AIBodyCheck.Result = AIBodyCheck.evaluate(
+			SELF_POS, SELF_SPEED, WEIGHT, HIGH_TRANSFER, 0.0,
+			Vector3(4, 0, 0), Vector3.ZERO)
+	assert_true(default_commit.commit, "commits at the default threshold")
+	var raised: AIBodyCheck.Result = AIBodyCheck.evaluate(
+			SELF_POS, SELF_SPEED, WEIGHT, HIGH_TRANSFER, 0.0,
+			Vector3(4, 0, 0), Vector3.ZERO, 7.0)
+	assert_false(raised.commit, "declines the same hit once the threshold is raised")

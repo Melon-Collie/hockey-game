@@ -41,10 +41,11 @@ const INTENT_QUICK_SHOT: int = 4
 # projections) would fire every tick per bot. ~30 Hz is plenty — pre-aim
 # convergence gates the actual transition, and humans react in 250 ms+.
 const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~30 Hz re-eval
-# Wall-clock seconds between re-evals (derived from the cadence above). Advances
-# the hold-elapsed clock that decays a developing play's value (see _pick_action).
-const PICK_ACTION_PERIOD_S: float = (
-		float(PICK_ACTION_PERIOD_TICKS) / float(_PhysicsConstants.PHYSICS_TICK))
+# The hold-elapsed clock (see _pick_action) advances by the REAL physics ticks
+# that elapsed since the previous re-eval (`_ticks_since_pick`), not a fixed
+# per-call constant — decide() is called once per AI dispatch, so at lower
+# difficulty tiers each call spans several physics ticks and a fixed increment
+# would run the hold-decay clock several times too slow.
 
 # Pass flight clamp. A 0.6 s lead lets the bot pass to a teammate up
 # to ~16 m away (PASS_SPEED_M_S × 0.6); longer leads suffer from
@@ -121,12 +122,12 @@ var pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 
 # Set alongside pass_target_peer_id when the chosen PASS is a long
 # feed whose lane is contested by a mid-lane defender that a saucer
-# (elevated) pass would fly over. The state machine consumes this when
-# entering PASS_PRESSED to toggle elevation on for the release.
+# (LOW-loft) pass would fly over. The state machine consumes this when
+# entering PASS_PRESSED to set the loft level for the release.
 var pass_should_saucer: bool = false
 
 # Set when intent commits to SHOOT. Consumed by the state machine's
-# press-state handlers to drive elevation.
+# press-state handlers to drive the loft level (HIGH when true).
 var shot_is_elevated: bool = false
 
 # Cached carry destination from the most recent re-eval. Read by the
@@ -135,6 +136,10 @@ var last_carry_anchor: Vector3 = Vector3.ZERO
 
 # ── Throttle ─────────────────────────────────────────────────────────────────
 var _pick_action_cooldown: int = 0
+# Physics ticks elapsed since the last _pick_action re-eval (accumulated per
+# decide() call by ctx.dispatch_period_ticks), so the hold clock advances in
+# real time regardless of the AI dispatch cadence. Reset when _pick_action runs.
+var _ticks_since_pick: int = 0
 
 # ── Scratch buffers (reused across ticks, refilled per call) ────────────────
 var _scratch_opponents: Array[Vector3] = []
@@ -174,11 +179,18 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 #     current persistent intent (so the state machine can read these
 #     uniformly across roles in future phases).
 func decide(ctx: RoleContext) -> RoleDecision:
+	# decide() is called once per AI dispatch; each call spans this many physics
+	# ticks (1 at the perfect-bot default). Draining the cooldown by the real span
+	# keeps the re-eval cadence ~PICK_ACTION_PERIOD_TICKS of wall time at every
+	# difficulty tier instead of stretching it by the dispatch period.
+	var step_ticks: int = maxi(1, ctx.dispatch_period_ticks)
+	_ticks_since_pick += step_ticks
 	if _pick_action_cooldown <= 0:
-		_pick_action(ctx)
+		_pick_action(ctx)  # reads _ticks_since_pick for the hold-clock advance
 		_pick_action_cooldown = PICK_ACTION_PERIOD_TICKS
+		_ticks_since_pick = 0
 	else:
-		_pick_action_cooldown -= 1
+		_pick_action_cooldown -= step_ticks
 
 	var d := RoleDecision.new()
 	d.target_position = last_carry_anchor
@@ -206,6 +218,7 @@ func reset() -> void:
 	last_carry_anchor = Vector3.ZERO
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
+	_ticks_since_pick = 0
 
 
 # Clear just the persistent intent (not last_carry_anchor / debug).
@@ -219,6 +232,7 @@ func clear_intent() -> void:
 	pass_target_speed = AIActionScoring.PASS_SPEED_M_S
 	pass_should_saucer = false
 	_pick_action_cooldown = 0
+	_ticks_since_pick = 0
 
 
 # ── Implementation ──────────────────────────────────────────────────────────
@@ -414,9 +428,10 @@ func _pick_action(ctx: RoleContext) -> void:
 			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
 			if receiver != null:
 				pass_target_speed = AIActionScoring.pass_launch_speed(
-						ctx.self_pos.distance_to(receiver.position), ctx.self_wrister_shot_speed)
+						ctx.self_pos.distance_to(receiver.position),
+						ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 			else:
-				pass_target_speed = AIActionScoring.PASS_SPEED_M_S
+				pass_target_speed = AIActionScoring.PASS_SPEED_M_S * ctx.pass_speed_scale
 			pass_should_charge = pass_target_speed > AIActionScoring.PASS_SPEED_M_S + PASS_CHARGE_MIN_DELTA_M_S
 			# Saucer it over a contested mid-lane defender (only ever true
 			# for long passes — see _compute_best_pass).
@@ -428,7 +443,7 @@ func _pick_action(ctx: RoleContext) -> void:
 		# reason (it out-scores plain carrying); a normal carry resets it so the
 		# next genuine hold starts fresh at full value.
 		if hold_value > carry_score and hold_value > 0.0:
-			_hold_elapsed_s += PICK_ACTION_PERIOD_S
+			_hold_elapsed_s += float(_ticks_since_pick) / float(_PhysicsConstants.PHYSICS_TICK)
 		else:
 			_hold_elapsed_s = 0.0
 		new_intent = INTENT_CARRY
@@ -533,7 +548,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# leads past the receiver, both of which depress long-pass scores
 		# below where they should be.
 		var dist: float = self_pos.distance_to(receiver_state.position)
-		var pass_speed: float = AIActionScoring.pass_launch_speed(dist, ctx.self_wrister_shot_speed)
+		var pass_speed: float = AIActionScoring.pass_launch_speed(
+				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
 		# Intercept-aware lead, shared with the state machine's firing aim.
 		# flight_t is the SOLVED time (refined against the predicted
@@ -884,7 +900,7 @@ func _best_developing_feed(ctx: RoleContext, goalie_now: Vector3) -> float:
 			continue
 		var dist: float = self_pos.distance_to(spot)
 		var pass_speed: float = AIActionScoring.pass_launch_speed(
-				dist, ctx.self_wrister_shot_speed)
+				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 		var flight_t: float = clampf(dist / pass_speed, 0.0, PASS_LEAD_MAX_S)
 		var feed_goalie: Vector3 = _predict_goalie_at(ctx, flight_t, spot)
 		var feed_unsettled: float = _goalie_unsettled_at(ctx, flight_t, spot)

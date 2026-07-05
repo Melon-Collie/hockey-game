@@ -11,6 +11,10 @@ const GOAL_PAUSE_DURATION: float        = 2.0  # fallback for GOAL_SCORED auto-a
 const GOAL_CELEBRATION_DURATION: float  = 1.5  # post-goal beat: movement allowed, puck pickup-locked,
 												# banner + VFX play; auto-advances to GOAL_SCORED (replay)
 const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdown before puck unlocks
+# Extra hold on the OPENING faceoff of a match (game start + rematch) so the
+# pre-game intro can play: camera sweep, matchup card, crowd buzz. The normal
+# countdown runs in the final FACEOFF_PREP_DURATION of the extended window.
+const PREGAME_INTRO_DURATION: float = 4.0
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
@@ -97,35 +101,56 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 	return az >= GOAL_LINE_Z - NET_PUCK_BUFFER and az <= GOAL_LINE_Z + NET_DEPTH + NET_PUCK_BUFFER
 
 # ── Puck ──────────────────────────────────────────────────────────────────────
+# Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.035/2),
+# so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with
+# Puck.gd `ice_height` and the Puck.tscn mesh/shape height.
 const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
-# Effective puck-on-ice friction coefficient. MIRRORS Physics/ice.tres
-# (friction 0.1) — that material is what actually drives the host's Jolt glide;
-# this is the AI/client-prediction MODEL of it, so the two must stay in sync
-# (same pattern as PUCK_BOARD_BOUNCE ↔ boards.tres below). NOT fed to physics.
-# Why ice's coefficient is the effective μ (not a blend with the puck's): the
-# puck has no material override, and Godot's friction combine uses the `rough`
-# flag — ice.tres sets rough=true, so when one body is rough the combine takes
-# THAT body's friction. Hence μ_eff = ice friction = 0.1, independent of the
-# puck's default. (Was 0.01 — a 10× decimal error that never matched ice.tres,
-# so modelled pucks glided ~10× too far.)
-const ICE_FRICTION: float = 0.1
-# Standard gravity, for the Coulomb conversion below.
-const GRAVITY_M_S2: float = 9.81
+# Puck-on-ice kinetic friction coefficient (realistic μ ~0.05–0.10). SINGLE
+# SOURCE OF TRUTH: HockeyRink._add_ice() builds the live ice PhysicsMaterial
+# directly from this constant, and the AI/client-prediction model below reads it
+# too — so the sim and the model can't drift. (This replaces the old hand-synced
+# mirror that once ran the model at 0.1 while the live ice was 0.01 → pucks
+# modelled ~10× too draggy. There is no ice .tres.)
+#
+# Why the puck feels EXACTLY the surface friction (not a blend with its own):
+# Godot's PhysicsMaterial combine (per godot-proposals #11715, documenting current
+# behavior) keys off the `rough` flag — when both bodies are smooth (rough=false)
+# it takes the MINIMUM of the two frictions. The puck has no material → engine
+# default friction 1.0 (rough=false); every surface here is < 1.0 and smooth, so
+# min(1.0, surface) = the surface value. Hence ICE_FRICTION (and boards' 0.3) is
+# the effective μ the puck actually experiences. Holds while the puck's friction
+# stays ≥ every surface's.
+const ICE_FRICTION: float = 0.05
+# Gravity used for the Coulomb conversion below. Matches Godot's engine default
+# (physics/3d/default_gravity = 9.8, un-overridden) rather than textbook 9.81, so
+# the modelled decel equals what Jolt's contact solver actually applies.
+const GRAVITY_M_S2: float = 9.8
 # Puck deceleration on ice — constant Coulomb model. The puck slides flat
-# (Puck.tscn locks angular X/Z), so friction force = μ·m·g and a = μ·g ≈ 0.98 m/s²,
+# (Puck.tscn locks angular X/Z), so friction force = μ·m·g and a = μ·g ≈ 0.49 m/s²,
 # independent of speed and mass. Single source of truth for the host's real glide
 # so AI trajectory prediction and client puck extrapolation decelerate the same
-# way Jolt does. Keep ICE_FRICTION in sync with Physics/ice.tres if the ice is
-# retuned.
+# way Jolt does — derived from ICE_FRICTION, which the live ice is also built from.
 const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
-# Board restitution coefficient. Mirrors Physics/boards.tres bounce
-# value so AI prediction models post-bounce trajectories the same
-# way Jolt resolves them.
+# Board restitution coefficient. Mirrors Physics/boards.tres `bounce` so AI
+# prediction models post-bounce trajectories the way Jolt resolves them. Unlike
+# ICE_FRICTION this can't be single-sourced — boards.tres is a static resource a
+# const can't reach — so tests/unit/rules/test_physics_material_mirrors.gd guards
+# the pair: change one, CI fails until the other matches. (Restitution is safe
+# whatever the combine does: Godot's non-absorbent bounce combine ADDS the two,
+# and the puck's side is 0, so 0 + 0.4 = 0.4 regardless.)
 const PUCK_BOARD_BOUNCE: float = 0.4
 # Silent grace before an out-of-play puck is whistled dead. Short enough that
 # the stoppage feels responsive, long enough that pucks bouncing back in off
 # the boards don't get false-flagged.
 const PUCK_OOB_GRACE_DURATION: float = 1.0
+# Defense-in-depth height term for the OOB check: a puck this far above the ice
+# while at/beyond the rink boundary has gone over the glass or perched on the
+# boards — the flat XZ check tolerates 0.2 m and would miss it, soft-locking play.
+# Above the boards (~1.07 m) but below any legitimate in-rink deflection apex
+# (those are INSIDE, so their XZ distance-to-boundary is ~0 and they don't trip
+# this). The raised perimeter collision should prevent the escape outright; this
+# is the backstop if a puck gets outside some other way.
+const PUCK_OVER_BOARDS_HEIGHT: float = 1.2
 
 # Puck-stuck-on-net detection. A puck that settles motionless on the net frame
 # never touches the ice, so the normal on-ice/airborne logic leaves it

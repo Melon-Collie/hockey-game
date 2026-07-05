@@ -19,6 +19,9 @@ extends RefCounted
 # ── Phase + timer ────────────────────────────────────────────────────────────
 var current_phase: int = GamePhase.Phase.PLAYING
 var _phase_timer: float = 0.0
+# One-shot extension of the current FACEOFF_PREP window (opening-faceoff
+# pre-game intro). Set by begin_faceoff_prep, cleared on every phase entry.
+var _prep_extra_time: float = 0.0
 
 # XZ dot where the next/current faceoff is held. Set by begin_faceoff_prep
 # (default center ice); read by PhaseCoordinator to position puck + players.
@@ -152,6 +155,17 @@ func advance_post_goal() -> void:
 # Called when a puck is picked up during FACEOFF phase. Returns true if it
 # caused the transition back to PLAYING.
 func on_faceoff_puck_picked_up() -> bool:
+	return _end_faceoff_if_active()
+
+# Any OTHER host-side puck engagement during FACEOFF — a deflect, body redirect,
+# or a one-timer release — also makes the puck live and ends the faceoff. Without
+# this, a goal off a possession-less faceoff play (win the draw and one-time it, a
+# contested-draw squirt into the net) was VOIDED: on_goal_scored gates on PLAYING
+# and only a clean pickup advanced the phase, so the puck sat un-awarded in the net.
+func on_faceoff_puck_touched() -> bool:
+	return _end_faceoff_if_active()
+
+func _end_faceoff_if_active() -> bool:
 	if current_phase != GamePhase.Phase.FACEOFF:
 		return false
 	_set_phase(GamePhase.Phase.PLAYING)
@@ -257,8 +271,13 @@ func compute_ghost_state(
 				if InfractionRules.is_offside(pos_z, slot.team_id, puck_position.z, is_carrier):
 					_offside_peer_ids[peer_id] = true
 					ghost = true
-		if icing_team_id == slot.team_id:
-			ghost = true
+		# NOTE: icing does NOT ghost the offending team. `icing_team_id` is set in
+		# check_icing_for_loose_puck and drives the whistle + faceoff via
+		# pending_faceoff_dot/reason, but begin_faceoff_prep clears it in the SAME
+		# host tick the icing is called — before this ghost pass runs — so the old
+		# `if icing_team_id == slot.team_id: ghost = true` here never fired. Icing is
+		# a whistle-and-faceoff rule (NHL only), not a ghost. (`_icing_timer` stays as
+		# a fallback clear and is unit-tested at the SM level.)
 		# Crease protection — no field skater may camp in a goalie crease. The
 		# puck CARRIER is exempt: net drives, wraparounds, and jam plays are the
 		# point of carrying the puck to the net, so a carrier never draws crease
@@ -465,6 +484,12 @@ func try_swap_slot(peer_id: int, new_team_id: int, new_slot: int) -> Dictionary:
 			continue
 		if players[other_id].team_id == new_team_id and players[other_id].team_slot == new_slot:
 			return {}
+	# Reject a slot being held for a reconnecting player: the occupancy scan above
+	# only sees LIVE players, so without this a teammate could swap into a reserved
+	# slot and _restore_reserved_player would then double-book it (two skaters on
+	# one dot at the next faceoff).
+	if is_slot_reserved(new_team_id, new_slot):
+		return {}
 	var old_team_id: int = current.team_id
 	var old_slot: int   = current.team_slot
 	players[peer_id].team_id       = new_team_id
@@ -511,7 +536,11 @@ func apply_config(p_num_periods: int, p_period_duration: float, p_ot_enabled: bo
 # Used by manual reset (default center), the OOB path, and the NHL stoppage
 # paths (icing / offside, both pass the rule-specific dot). The post-goal
 # pipeline is driven automatically by the tick timer in advance_post_goal.
-func begin_faceoff_prep(dot_xz: Vector2 = GameRules.CENTER_ICE_DOT) -> void:
+# `extra_prep_time` extends THIS prep only (the opening faceoff of a match
+# holds longer so the pre-game intro presentation can play out); mid-game
+# stoppages leave it at 0 and every phase entry resets it.
+func begin_faceoff_prep(dot_xz: Vector2 = GameRules.CENTER_ICE_DOT,
+		extra_prep_time: float = 0.0) -> void:
 	icing_team_id = -1
 	_icing_timer = 0.0
 	last_carrier_team_id = -1
@@ -521,6 +550,7 @@ func begin_faceoff_prep(dot_xz: Vector2 = GameRules.CENTER_ICE_DOT) -> void:
 	pending_faceoff_reason = FaceoffReason.NONE
 	active_faceoff_dot = dot_xz
 	_set_phase(GamePhase.Phase.FACEOFF_PREP)
+	_prep_extra_time = maxf(extra_prep_time, 0.0)
 
 
 # ── Remote state application (clients) ──────────────────────────────────────
@@ -596,6 +626,9 @@ func get_faceoff_positions() -> Dictionary:
 func _set_phase(phase: int) -> void:
 	current_phase = phase
 	_phase_timer = 0.0
+	# Any phase entry clears the one-shot prep extension; begin_faceoff_prep
+	# re-applies it after this call when the caller asked for one.
+	_prep_extra_time = 0.0
 
 func _tick_phase(delta: float) -> bool:
 	if current_phase == GamePhase.Phase.PLAYING:
@@ -621,7 +654,7 @@ func _tick_phase(delta: float) -> bool:
 				advance_post_goal()
 				return true
 		GamePhase.Phase.FACEOFF_PREP:
-			if _phase_timer >= GameRules.FACEOFF_PREP_DURATION:
+			if _phase_timer >= GameRules.FACEOFF_PREP_DURATION + _prep_extra_time:
 				_set_phase(GamePhase.Phase.FACEOFF)
 				return true
 		GamePhase.Phase.FACEOFF:

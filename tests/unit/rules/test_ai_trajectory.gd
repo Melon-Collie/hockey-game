@@ -55,8 +55,8 @@ func test_zero_velocity_yields_static_trajectory() -> void:
 func test_predict_puck_decelerates_with_ice_friction() -> void:
 	# A puck moving along +X should travel STRICTLY less far than the
 	# constant-velocity equivalent, because Coulomb friction (μ × g)
-	# decelerates it each step. With μ = ICE_FRICTION = 0.1 and g = 9.81 the
-	# deceleration is about 0.98 m/s² — observable over a couple seconds.
+	# decelerates it each step. With μ = ICE_FRICTION = 0.05 and g = 9.81 the
+	# deceleration is about 0.49 m/s² — observable over a couple seconds.
 	# Velocity / time chosen to stay well inside the rink (4 m/s × 2 s
 	# = 8 m, INNER_HALF_WIDTH ≈ 12.85 m) so the rink clamp / bounce
 	# doesn't confound the comparison.
@@ -98,3 +98,20 @@ func test_predict_puck_friction_stops_a_slow_puck() -> void:
 	# It must NOT have negative x (would mean velocity reversed).
 	assert_gte(lead.x, -0.001, "slow puck must stop, not reverse; got x=%f" % lead.x)
 	assert_lte(lead.x, 0.1, "slow puck stops within a small distance")
+
+
+func test_predict_puck_bounces_off_rounded_corner() -> void:
+	# Regression (P2-16): the bounce model used to reflect off an axis-aligned
+	# RECTANGLE, letting a corner-bound puck travel into ~3.5 m of phantom corner
+	# ice past the rounded boards. Fire a puck diagonally into a corner; after the
+	# carom its final position must be a valid in-rink point — i.e. the rounded-
+	# corner clamp leaves it unchanged. With the old rectangle model the puck ends
+	# up in the phantom corner and the clamp would move it.
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0, GameRules.INNER_HALF_LENGTH - 1.0)
+	var vel := Vector3(25, 0, 25)  # straight at the corner, blows past it in < 0.1 s
+	var lead: Vector3 = AITrajectory.predict_puck_at(pos, vel, 0.5)
+	var reclamped: Vector2 = GameRules.clamp_to_rink_inner(Vector2(lead.x, lead.z))
+	assert_almost_eq(reclamped.x, lead.x, 0.02,
+			"corner carom leaves the puck on/inside the rounded boards (x)")
+	assert_almost_eq(reclamped.y, lead.z, 0.02,
+			"corner carom leaves the puck on/inside the rounded boards (z); got (%f, %f)" % [lead.x, lead.z])

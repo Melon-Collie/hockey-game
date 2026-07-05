@@ -45,17 +45,47 @@ alter table public.career_stats add column if not exists faceoff_wins integer de
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 
--- RLS: the publishable (anon) key inserts rows, selects its own career, and
--- updates (slot-swap stat merges). The career_totals view runs security_invoker,
--- so anon's SELECT is gated by the anon-select policy below.
+-- RLS: the publishable (anon) key may INSERT and SELECT only. There is NO update
+-- policy — the anon key ships in every client binary, so an anon UPDATE grant let
+-- any player rewrite (or, via steam_id = null, wipe) every row's career. No client
+-- code ever issued an UPDATE; if slot-swap stat merges are ever needed they must
+-- go through a service-role RPC, not the anon key. SELECT is intentionally open —
+-- career data is leaderboard-grade public (rosters surface in recent_games_for).
+-- The career_totals view runs security_invoker, so it re-checks the select policy.
 alter table public.career_stats enable row level security;
 
 drop policy if exists "anon insert" on public.career_stats;
 create policy "anon insert" on public.career_stats for insert to anon with check (true);
 drop policy if exists "anon select" on public.career_stats;
 create policy "anon select" on public.career_stats for select to anon using (true);
+-- The former "anon update" policy is intentionally removed — do NOT re-add it.
 drop policy if exists "anon update" on public.career_stats;
-create policy "anon update" on public.career_stats for update to anon using (true);
+
+-- Anti-abuse constraints: the anon key is public, so these are the only
+-- server-side guard against forged / oversized inserts (client-side caps live in
+-- a binary a hostile client controls). Bounds are generous — they reject garbage
+-- (negative counts, megabyte blobs), not legitimate blowouts. Drop-then-add for
+-- idempotent re-runs, matching the policy pattern above.
+alter table public.career_stats drop constraint if exists career_stats_sane_ranges;
+alter table public.career_stats add constraint career_stats_sane_ranges check (
+    goals         between 0 and 1000  and
+    assists       between 0 and 1000  and
+    shots_on_goal between 0 and 5000  and
+    hits          between 0 and 5000  and
+    shots_blocked between 0 and 5000  and
+    hits_taken    between 0 and 5000  and
+    takeaways     between 0 and 5000  and
+    giveaways     between 0 and 5000  and
+    faceoff_wins  between 0 and 5000  and
+    toi_seconds   between 0 and 100000 and
+    goals_for     between 0 and 1000  and
+    goals_against between 0 and 1000  and
+    (num_periods  is null or num_periods  between 1 and 20) and
+    (player_name  is null or length(player_name)  <= 64) and
+    (game_version is null or length(game_version) <= 64) and
+    (outcome      is null or length(outcome)      <= 16) and
+    pg_column_size(period_scores) < 4096
+);
 
 -- ── Lifetime totals (career screen, Career Totals tab) ───────────────────────
 create or replace view public.career_totals

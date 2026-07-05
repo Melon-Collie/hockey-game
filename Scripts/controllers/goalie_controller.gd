@@ -362,6 +362,13 @@ extends Node
 # the dangle/shot reaction_delay) to give him a fighting chance on the cross.
 @export var cross_crease_react_delay: float = 0.12      # s before the standing drive engages
 @export var cross_crease_push_duration: float = 0.50    # s the standing push stays committed
+# Lateral coverage half-extent used to clamp the STANDING cross-crease drive so
+# the goalie stays inside the net. This is the standing (pads-together) coverage,
+# NOT the splayed butterfly pad edge (pad_local_offset + butterfly_pad_half_width
+# = 0.84): clamping the standing push by the butterfly extent left only ±0.075 m
+# of travel, T-pushing the goalie to net CENTER — the opposite of sealing the far
+# post. Default = pad_local_offset (goalie can drive its near pad toward the post).
+@export var cross_crease_drive_edge: float = 0.42
 # When a slide commits toward a post (extreme lateral target), the goalie
 # also pulls deep so the sealing pad presses the post — backdoor /
 # wraparound coverage. Depth target = lerp(current_depth, post_seal_depth)
@@ -1038,10 +1045,15 @@ func _puck_time_to_goal_line() -> float:
 #                              the threat persists, else fully STANDING.
 #   RVH_* → READY/STANDING   ─ puck leaves defensive zone; same READY check.
 func _update_state(delta: float) -> void:
-	# Shot timer is only meaningful in upright stances (STANDING / READY) — drop
-	# triggers come from there. Clear it as soon as we enter any other state so
-	# a returning RECOVERING/RVH transition doesn't immediately re-fire butterfly.
-	if not _sm.is_upright():
+	# Clear leftover reaction timers only when we're down with NO active reaction —
+	# the stale-state case this guard was written for (a returning RECOVERING/RVH
+	# transition must not instantly re-fire butterfly; low_drop_ready's own
+	# `reacting` gate also covers that). Do NOT clear them for an ACTIVE reaction
+	# that legitimately started while down (an elevated shot during butterfly/slide,
+	# a rebound scramble): zeroing arm_timer there deleted the entire arm reaction
+	# delay + screen/caught-moving penalties, making the goalie INSTANT exactly in
+	# the down/moving scoring windows the design opens on purpose.
+	if not _sm.is_upright() and not _reaction.reacting:
 		_reaction.shot_timer = 0.0
 		_reaction.arm_timer = 0.0
 	_slide.tick_cooldown(delta)
@@ -1977,9 +1989,12 @@ func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	# so the standing push doesn't overshoot the sealing position. Re-aimed each
 	# frame — an upright goalie can still adjust the drive on its feet (unlike a
 	# committed butterfly slide).
-	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
+	# Standing drive: clamp with the standing coverage extent, NOT the splayed
+	# butterfly pad edge — the latter pinned the goalie to net-center (see
+	# cross_crease_drive_edge). Keeps the near pad inside the post while letting
+	# the goalie actually drive across to seal the far side.
 	var target_x: float = puck.global_position.x + cross_vx * cross_crease_lead_time
-	target_x = _slide.clamp_lateral_target(target_x, _goal_center_x, net_half_width, pad_edge)
+	target_x = _slide.clamp_lateral_target(target_x, _goal_center_x, net_half_width, cross_crease_drive_edge)
 	_cross_crease_target_x = target_x
 	# Read the pass once, then commit a single delayed drive — don't restart the
 	# delay or re-arm while a read or drive is already in flight.

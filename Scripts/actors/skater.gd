@@ -23,10 +23,10 @@ extends CharacterBody3D
 # on opposite sides for L/R) is a tiny resting cup.
 const _BLADE_TOE_LIFT_DEG: float = 4.0
 const _BLADE_FACE_OPEN_DEG: float = 4.0
-# Blended in while elevation mode is on (scroll-wheel ballistic aim): the loft
-# opens the face upward to "scoop" the puck, so elevation keys off the Z loft
-# far more than the X toe-lift. Eased via _blade_elevation_blend in
-# _physics_process so it doesn't snap.
+# Blended in with the scroll-wheel loft level (half strength at LOW, full at
+# HIGH): the loft opens the face upward to "scoop" the puck, so elevation keys
+# off the Z loft far more than the X toe-lift. Eased via _blade_elevation_blend
+# in _physics_process so it doesn't snap.
 const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
 const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
 const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
@@ -207,9 +207,11 @@ func get_team_id() -> int:
 	return _team_id_resolver.call() as int
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _facing: Vector2 = Vector2.DOWN
-var is_elevated: bool = false
-# Eased 0→1 toward is_elevated; drives the extra blade toe-lift (see
-# _update_blade_elevation / _apply_blade_tilt).
+# Loft mode (0 flat / 1 low saucer / 2 high). Set each tick by the controller
+# from the input frame; replicated so remotes/AI read it directly.
+var elevation_level: int = 0
+# Eased 0→1 toward elevation_level/2 (half scoop at LOW, full at HIGH); drives
+# the extra blade toe-lift (see _update_blade_elevation / _apply_blade_tilt).
 var _blade_elevation_blend: float = 0.0
 # True when the blade is lifted off the ice — own stick-lift (Q held while not
 # carrying) or a forced pop from an opponent hooking under this stick. Set each
@@ -255,6 +257,13 @@ var _blade_area: Area3D = null
 var _slapper_zone_area: Area3D = null
 var _slapper_zone_sphere: SphereShape3D = null
 var _default_upper_body_y: float = 0.0
+var _default_lower_body_y: float = 0.0
+# Cosmetic vertical drop of the whole visible body (torso + hips) while in
+# the bent-knee skating stance, so the flexed legs keep the skates on the
+# ice. Driven by SkaterSkatingCoordinator; composes with the shot-block
+# crouch through _apply_body_height (the single writer of both body Ys).
+var _skating_crouch_drop: float = 0.0
+var _block_stance_active: bool = false
 # Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
 # Advanced by update_carry_side() each tick from the IK pipeline.
 var _carry_side: int = 0
@@ -312,6 +321,7 @@ func _ready() -> void:
 	_prev_blade_world_pos = upper_body.to_global(blade.position)
 	_last_finite_position = global_position
 	_default_upper_body_y = upper_body.position.y
+	_default_lower_body_y = lower_body.position.y
 
 	collision_layer = Constants.LAYER_SKATER_BODIES
 	collision_mask  = Constants.MASK_SKATER
@@ -490,6 +500,9 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 			var effective_transfer: float = body_check_transfer * (other.body_check_brace_resistance if other.is_braced else 1.0)
 			var other_vel_before: Vector3 = other.velocity
 			var weight_ratio: float = weight / maxf(other.weight, 0.001)
+			# This delivered-impulse magnitude (approach × weight_ratio × effective_
+			# transfer) also drives the puck strip, reconstructed from impact_force in
+			# BodyCheckRules.puck_strip_impulse — keep the two in sync if this changes.
 			other.velocity -= normal * approach * weight_ratio * effective_transfer
 			var other_delta: Vector3 = other.velocity - other_vel_before
 			if other_delta.length_squared() > 0.0001:
@@ -572,11 +585,11 @@ func _apply_blade_tilt() -> void:
 	blade_mesh.transform.basis = rot.scaled(keep_scale)
 
 
-# Eases the elevation blend toward is_elevated each tick and re-tilts the blade
-# only while transitioning (move_toward lands exactly on the target, after which
-# the early-out stops the per-tick basis churn). Called from _physics_process.
+# Eases the elevation blend toward the loft level each tick and re-tilts the
+# blade only while transitioning (move_toward lands exactly on the target, after
+# which the early-out stops the per-tick basis churn). Called from _physics_process.
 func _update_blade_elevation(delta: float) -> void:
-	var target: float = 1.0 if is_elevated else 0.0
+	var target: float = float(elevation_level) * 0.5
 	if is_equal_approx(_blade_elevation_blend, target):
 		return
 	_blade_elevation_blend = move_toward(
@@ -673,6 +686,24 @@ func _resolve_leg_pivots() -> void:
 	_shin_l = lower_body.get_node_or_null("LegL/ShinL") as Node3D
 	_shin_r = lower_body.get_node_or_null("LegR/ShinR") as Node3D
 	_legs_resolved = true
+
+
+# Sets the skating-stance body drop (metres). The stance flexes hips/knees,
+# which shortens the legs' vertical span; lowering the torso AND the hips by
+# the deficit keeps the skates planted instead of floating. Cosmetic only —
+# the collision body and every gameplay read are unaffected; the blade IK
+# re-lands the blade at ice height from upper_body.global_position each tick.
+func set_skating_crouch_drop(drop: float) -> void:
+	if is_equal_approx(_skating_crouch_drop, drop):
+		return
+	_skating_crouch_drop = drop
+	_apply_body_height()
+
+
+func _apply_body_height() -> void:
+	var block_depth: float = block_crouch_depth if _block_stance_active else 0.0
+	upper_body.position.y = _default_upper_body_y - block_depth - _skating_crouch_drop
+	lower_body.position.y = _default_lower_body_y - _skating_crouch_drop
 
 
 # ── Blade ─────────────────────────────────────────────────────────────────────
@@ -1100,7 +1131,8 @@ func set_ghost(ghost: bool) -> void:
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
 func set_block_stance(active: bool) -> void:
 	_body_block_sphere.radius = block_body_radius if active else body_block_radius
-	upper_body.position.y = _default_upper_body_y - block_crouch_depth if active else _default_upper_body_y
+	_block_stance_active = active
+	_apply_body_height()
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
 
 

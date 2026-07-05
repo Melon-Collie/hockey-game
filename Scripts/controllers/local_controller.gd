@@ -96,15 +96,6 @@ func set_camera_force_locked(locked: bool) -> void:
 	if camera != null:
 		camera.force_locked = locked
 
-# Team 0 defends the +Z goal → attacks -Z. Team 1 defends -Z → attacks +Z.
-# See GameManager._assign_goals_to_teams.
-func get_attacking_goal_z() -> float:
-	if _team_id == 0:
-		return -GameRules.GOAL_LINE_Z
-	if _team_id == 1:
-		return GameRules.GOAL_LINE_Z
-	return 0.0
-
 func get_current_input() -> InputState:
 	return _current_input
 
@@ -173,8 +164,8 @@ func _physics_process(delta: float) -> void:
 			prep_input.slap_held = false
 			prep_input.brake = false
 			prep_input.sprint_held = false
-			prep_input.elevation_up = false
-			prep_input.elevation_down = false
+			# elevation_level passes through untouched — it's a mode, not an
+			# action, so the faceoff freeze shouldn't flatten the chosen loft.
 			prep_input.block_held = false
 			prep_input.stick_lift_held = false
 			_current_input = prep_input
@@ -420,9 +411,6 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# save/restore each reconcile re-ticks the unconfirmed inputs and the timer
 	# inflates O(N) per broadcast, popping the blade above slapper_wind_up_height.
 	var pre_slapper_charge_timer: float = _aiming.slapper_charge_timer
-	# wrister_hold_timer ticks inside _update_wrister_charge during replay (same
-	# shape as slapper_charge_timer) — save/restore so it isn't re-accumulated.
-	var pre_wrister_hold_timer: float = _aiming.wrister_hold_timer
 	var pre_wrister_start_blade_x: float = _aiming.wrister_start_blade_local_x
 	# Same shape of problem as the slapper timer: tick_wrister_charge accumulates
 	# inside _update_wrister_charge during replay, so without save/restore each
@@ -492,7 +480,6 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_sm.follow_through_is_slapper = pre_follow_through_is_slapper
 	_aiming.one_timer_window_timer = pre_one_timer_window_timer
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
-	_aiming.wrister_hold_timer = pre_wrister_hold_timer
 	_aiming.wrister_start_blade_local_x = pre_wrister_start_blade_x
 	_aiming.charge_distance = pre_charge_distance
 	_aiming.prev_intent_pos = pre_charge_prev_intent_pos
