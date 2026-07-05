@@ -88,7 +88,14 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
 );
 
 -- ── Lifetime totals (career screen, Career Totals tab) ───────────────────────
-create or replace view public.career_totals
+-- DROP + CREATE (not CREATE OR REPLACE): replacing a view can only APPEND
+-- trailing columns, never reorder, so adding columns anywhere but the very end
+-- of the live view's existing order errors ("cannot change name of view column
+-- ..."). Dropping first sidesteps that regardless of the current column order.
+-- Nothing depends on career_totals (the anon client just SELECTs it), so no
+-- cascade; the grant below restores the anon read the drop removes.
+drop view if exists public.career_totals;
+create view public.career_totals
 with (security_invoker = true) as
  SELECT steam_id,
     (array_agg(player_name ORDER BY played_at DESC NULLS LAST))[1] AS player_name,
