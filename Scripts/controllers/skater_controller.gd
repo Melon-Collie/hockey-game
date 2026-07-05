@@ -181,6 +181,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_knee_deg: float = 18.0         # recovery tuck depth of the swinging (unloaded) knee
 @export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
 @export var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)
+# Shifts the leg-pitch stroke behind the body: the push extends (1+bias)× the
+# amplitude back while the recovery reaches only (1−bias)× ahead, so the
+# returning skate lands under the hips instead of kicking out in front.
+# 0 = symmetric metronome (the old forward-kick look).
+@export var stride_rear_bias: float = 0.45
 @export var stride_abduction_deg: float = 10.0    # outward flare of the extending leg (the skating "V" push)
 @export var stride_bob_m: float = 0.02            # vertical body bob per half-stride (weight transfer)
 @export var stride_sway_deg: float = 3.0          # torso weight-shift roll oscillating with the stride
@@ -286,10 +291,31 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 var show_one_timer_indicator: bool = false
 
 # ── Follow Through Tuning ─────────────────────────────────────────────────────
-@export var follow_through_duration: float = 0.25
+# Durations are per shot type: the wrister carries a real finish, the quick
+# shot / pass stays snappy (the blade is choreographed for the whole timer, so
+# this is also how long the blade ignores the cursor after a pass), and the
+# slapper swings biggest. Every amplitude below additionally scales with the
+# shot's follow_through_power, set at release (wrister by charge, quick shot
+# fixed low, slapper full) — a soft pass flicks, a full-charge bomb finishes
+# high. Shapes ride sin(PI · t^arc_skew): 1.0 is a symmetric up-down arc, <1
+# peaks earlier so the finish snaps up with the release and settles slowly.
+@export var follow_through_duration: float = 0.35             # wrister
+@export var quick_shot_follow_through_duration: float = 0.18  # snap pass flick
+@export var slapper_follow_through_duration: float = 0.5
+@export var follow_through_arc_skew: float = 0.7
+@export var wrister_follow_through_min_power: float = 0.55  # amplitude floor at zero charge
+@export var quick_shot_follow_through_power: float = 0.5
 @export var wrister_follow_through_hand_y: float = 0.35
-@export var wrister_follow_through_blade_lift: float = 0.20
-@export var slapper_follow_through_arc_dist: float = 0.4  # blade XZ travel along shot_dir during follow-through
+@export var wrister_follow_through_blade_lift: float = 0.55  # high-finish blade height off the ice
+@export var wrister_follow_through_twist_deg: float = 22.0   # shoulders rotate through the shot
+@export var slapper_follow_through_twist_deg: float = 50.0   # full uncoil past the shot line
+@export var follow_through_lean_deg: float = 8.0             # trunk drives forward over the front foot
+@export var follow_through_twist_lerp_speed: float = 9.0
+@export var slapper_follow_through_arc_dist: float = 0.75  # blade XZ travel along the shot line through the finish
+@export var slapper_follow_through_height: float = 0.85    # high-finish blade height off the ice
+@export var slapper_follow_through_hand_y: float = 0.4     # hands rise through the finish
+@export var slapper_follow_through_hand_follow: float = 0.4  # fraction of blade travel the hands follow (limits shaft stretch)
+@export var slapper_follow_through_contact_frac: float = 0.22  # first fraction of the timer spent on the downswing
 
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
 # Movement speed while blocking (unused while the stance is fully planted; kept for tuning).
@@ -1066,8 +1092,12 @@ func _release_wrister(input: InputState) -> void:
 		_do_release(result.direction, result.power)
 
 	_sm.follow_through_is_slapper = false
+	# Finish size follows the charge: a bare tap flicks, a full drag finishes high.
+	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0,
+			clampf(_aiming.charge_distance / max_wrister_charge_distance, 0.0, 1.0))
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
+	_sm.follow_through_duration_total = follow_through_duration
 
 # Instant quick shot / pass — the fixed-power player→blade snap, fired straight
 # from carry by the dedicated quick_shot button (no wrister aim/charge). Backhand
@@ -1091,8 +1121,10 @@ func _fire_quick_shot(input: InputState) -> void:
 		_do_release(result.direction, result.power)
 
 	_sm.follow_through_is_slapper = false
+	_sm.follow_through_power = quick_shot_follow_through_power
 	_sm.set_state(State.FOLLOW_THROUGH)
-	_sm.follow_through_timer = follow_through_duration
+	_sm.follow_through_timer = quick_shot_follow_through_duration
+	_sm.follow_through_duration_total = quick_shot_follow_through_duration
 
 func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 	if has_puck:
@@ -1112,8 +1144,11 @@ func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 		_do_release(result.direction, result.power)
 
 	_sm.follow_through_is_slapper = true
+	# A slap swing is always full-bodied — power gates the finish only for wristers.
+	_sm.follow_through_power = 1.0
 	_sm.set_state(State.FOLLOW_THROUGH)
-	_sm.follow_through_timer = follow_through_duration
+	_sm.follow_through_timer = slapper_follow_through_duration
+	_sm.follow_through_duration_total = slapper_follow_through_duration
 	# Hide the slapshot HUD the moment the shot fires. Follow-through is body
 	# animation only — leaving the ring/arrow visible during that ~0.5s makes
 	# them appear to rotate with the skater, which reads as weird.
@@ -1185,9 +1220,11 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	if not is_replaying:
 		one_timer_release_requested.emit(result.direction, result.power)
 	# Same as _release_slapper — hide the HUD as soon as the shot fires so it
-	# doesn't ride along through the follow-through.
+	# doesn't ride along through the follow-through. The state machine copies the
+	# returned duration into follow_through_duration_total; power is set here.
+	_sm.follow_through_power = 1.0
 	_hide_slapshot_hud()
-	return {fired = true, direction = result.direction, follow_through_duration = follow_through_duration}
+	return {fired = true, direction = result.direction, follow_through_duration = slapper_follow_through_duration}
 
 func _apply_block_movement(_input: InputState, delta: float) -> void:
 	# Committed stance: no directional thrust. Whatever momentum you carried in

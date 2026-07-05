@@ -43,6 +43,12 @@ var _state: State = State.SKATING_WITHOUT_PUCK
 # No underscore: LocalController accesses these directly in reconcile().
 var follow_through_timer: float = 0.0
 var follow_through_is_slapper: bool = false
+# Total the timer started from (normalizes follow-through progress — durations
+# differ per shot type) and the amplitude scale of this follow-through (set at
+# release: wrister by charge, quick shot fixed low, slapper full). Saved and
+# restored through reconcile in LocalController alongside the timer.
+var follow_through_duration_total: float = 0.25
+var follow_through_power: float = 1.0
 var shot_dir: Vector3 = Vector3.ZERO
 var locked_slapper_dir: Vector2 = Vector2.ZERO
 
@@ -164,6 +170,7 @@ func _state_slapper_charge_without_puck(_skater: Skater, input: InputState, delt
 			follow_through_is_slapper = true
 			_state = State.FOLLOW_THROUGH
 			follow_through_timer = result.get("follow_through_duration", 0.5)
+			follow_through_duration_total = follow_through_timer
 		else:
 			_cancel_slapper_internal()
 

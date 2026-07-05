@@ -406,6 +406,8 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_state: State = _sm.get_state()
 	var pre_follow_through_timer: float = _sm.follow_through_timer
 	var pre_follow_through_is_slapper: bool = _sm.follow_through_is_slapper
+	var pre_follow_through_total: float = _sm.follow_through_duration_total
+	var pre_follow_through_power: float = _sm.follow_through_power
 	var pre_one_timer_window_timer: float = _aiming.one_timer_window_timer
 	# slapper_charge_timer ticks inside _update_slapper_charge during replay; without
 	# save/restore each reconcile re-ticks the unconfirmed inputs and the timer
@@ -478,6 +480,8 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_sm.set_state(pre_state)
 	_sm.follow_through_timer = pre_follow_through_timer
 	_sm.follow_through_is_slapper = pre_follow_through_is_slapper
+	_sm.follow_through_duration_total = pre_follow_through_total
+	_sm.follow_through_power = pre_follow_through_power
 	_aiming.one_timer_window_timer = pre_one_timer_window_timer
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.wrister_start_blade_local_x = pre_wrister_start_blade_x

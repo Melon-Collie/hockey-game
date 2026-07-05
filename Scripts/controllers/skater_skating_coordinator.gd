@@ -206,8 +206,17 @@ func apply(delta: float) -> void:
 	var push_deg: float = _controller.stride_pitch_deg if fwd >= 0.0 else _controller.stride_back_pitch_deg
 	var push_dir: float = 1.0 if fwd >= 0.0 else -1.0
 	var push_amp: float = deg_to_rad(push_deg) * _intensity * push_dir * push_scale
-	l_pitch += fb_w * s * push_amp
-	r_pitch += fb_w * s_opp * push_amp
+	# Rear-bias the pitch stroke so the stride pushes BACK instead of kicking
+	# forward: subtracting bias·s² (smooth, always toward extension) stretches
+	# the back half of the swing to (1+bias)·amp while the recovery reaches only
+	# (1−bias)·amp ahead — the returning skate lands under the hips the way a
+	# real stride does, rather than marching out in front. Pitch channel only;
+	# the edge-rock roll and the abduction gate keep the symmetric wave. For the
+	# backward gait push_amp is negated, which flips the bias toward the forward
+	# reach — the C-cut's long pull happens out front, which is also correct.
+	var bias: float = _controller.stride_rear_bias
+	l_pitch += fb_w * (s - bias * s * s) * push_amp
+	r_pitch += fb_w * (s_opp - bias * s_opp * s_opp) * push_amp
 	l_roll += fb_w * s * roll_amp
 	r_roll += fb_w * s * roll_amp
 

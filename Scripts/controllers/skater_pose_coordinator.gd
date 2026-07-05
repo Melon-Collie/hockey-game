@@ -202,6 +202,41 @@ func apply_upper_body(delta: float) -> void:
 			_skater.set_upper_body_rotation(upper_body_angle)
 		return
 
+	if charge_state == State.FOLLOW_THROUGH:
+		# Rotate the shoulders THROUGH the shot: the torso squares to the shot
+		# line and uncoils past it (opposite sign to the wind-up coil — the back
+		# shoulder comes through), riding the same asymmetric arc as the blade so
+		# the body snaps through the release and settles out of the finish. The
+		# trunk also drives forward over the front foot. Both targets decay to
+		# the neutral aim pose by the end of the timer, handing the generic
+		# blade-tracking branch a torso it can pick up without a pop. Whiffed
+		# wristers (no shot_dir) fall through to blade tracking.
+		var dir_world: Vector3 = _sm.shot_dir
+		if dir_world.length_squared() <= 0.0001 and _sm.follow_through_is_slapper:
+			dir_world = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
+		if dir_world.length_squared() > 0.0001:
+			var total: float = maxf(_sm.follow_through_duration_total, 0.001)
+			var t: float = clampf(1.0 - _sm.follow_through_timer / total, 0.0, 1.0)
+			var env: float = sin(PI * pow(t, _controller.follow_through_arc_skew)) \
+					* _sm.follow_through_power
+			var shot_local: Vector3 = _skater.global_transform.basis.inverse() * dir_world
+			var shot_angle: float = atan2(shot_local.x, -shot_local.z)
+			var ft_max_twist: float = deg_to_rad(_controller.upper_body_max_twist_deg)
+			var ft_aim: float = clampf(
+					-shot_angle * _controller.upper_body_twist_ratio, -ft_max_twist, ft_max_twist)
+			var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+			var through_deg: float = _controller.slapper_follow_through_twist_deg \
+					if _sm.follow_through_is_slapper else _controller.wrister_follow_through_twist_deg
+			var through: float = blade_side_sign * deg_to_rad(through_deg) * env
+			upper_body_angle = lerp_angle(upper_body_angle, ft_aim + through,
+					_controller.follow_through_twist_lerp_speed * delta)
+			_skater.set_upper_body_rotation(upper_body_angle)
+			upper_body_lean = lerpf(upper_body_lean,
+					-deg_to_rad(_controller.follow_through_lean_deg) * env,
+					_controller.follow_through_twist_lerp_speed * delta)
+			_apply_lean()
+			return
+
 	var target_angle: float = 0.0
 	var target_lean: float = 0.0
 	var hand_vec := Vector2(
