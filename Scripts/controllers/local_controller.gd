@@ -408,6 +408,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_follow_through_is_slapper: bool = _sm.follow_through_is_slapper
 	var pre_follow_through_total: float = _sm.follow_through_duration_total
 	var pre_follow_through_power: float = _sm.follow_through_power
+	# shot_dir feeds the follow-through pose (blade sweep target + torso
+	# uncoil). Replay can overwrite it with a re-derived direction, or zero it
+	# outright when the replayed window walks the timer through
+	# _transition_to_skating / re-enters a slapper charge — without restore the
+	# rest of the live follow-through animates toward Vector3.ZERO and the
+	# blade pops off the shot line.
+	var pre_shot_dir: Vector3 = _sm.shot_dir
 	var pre_one_timer_window_timer: float = _aiming.one_timer_window_timer
 	# slapper_charge_timer ticks inside _update_slapper_charge during replay; without
 	# save/restore each reconcile re-ticks the unconfirmed inputs and the timer
@@ -482,6 +489,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_sm.follow_through_is_slapper = pre_follow_through_is_slapper
 	_sm.follow_through_duration_total = pre_follow_through_total
 	_sm.follow_through_power = pre_follow_through_power
+	_sm.shot_dir = pre_shot_dir
 	_aiming.one_timer_window_timer = pre_one_timer_window_timer
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.wrister_start_blade_local_x = pre_wrister_start_blade_x
