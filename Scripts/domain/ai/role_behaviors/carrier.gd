@@ -122,12 +122,12 @@ var pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 
 # Set alongside pass_target_peer_id when the chosen PASS is a long
 # feed whose lane is contested by a mid-lane defender that a saucer
-# (elevated) pass would fly over. The state machine consumes this when
-# entering PASS_PRESSED to toggle elevation on for the release.
+# (LOW-loft) pass would fly over. The state machine consumes this when
+# entering PASS_PRESSED to set the loft level for the release.
 var pass_should_saucer: bool = false
 
 # Set when intent commits to SHOOT. Consumed by the state machine's
-# press-state handlers to drive elevation.
+# press-state handlers to drive the loft level (HIGH when true).
 var shot_is_elevated: bool = false
 
 # Cached carry destination from the most recent re-eval. Read by the

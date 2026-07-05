@@ -43,7 +43,11 @@ const VERSION: String = "dev"
 #     Goalie block 35->41B: glove/blocker offsets s8->s16 (Y reach 1.55m exceeded
 #     the s8 ±1.27m range, clipping above-crossbar reaches ~28cm low), and rotation_y
 #     is wrapped into (-PI,PI] before quantizing (the -Z goalie's facing pinned flat).
-const PROTOCOL_VERSION: int = 10
+# v11: elevation binary -> 3-level loft. Input flags bits [6..7] (were the
+#     elevation_up/down edges) now carry an absolute 2-bit elevation_level;
+#     skater world-state flags byte repacked (shot_state 4 -> 3 bits,
+#     elevation_level 2 bits at [3..4], ghost/blade_up/sprint_locked shifted).
+const PROTOCOL_VERSION: int = 11
 
 
 func _ready() -> void:

@@ -42,7 +42,7 @@ Use the in-game **Report Bug** button (bottom-right corner) — it attaches your
 | **Space** | Brake (hard friction) |
 | **Ctrl (hold, no puck)** | Shot-block stance — crouch, widen block area, slow movement, face puck |
 | **Ctrl (during wind-up)** | Cancel shot — abort a wrister or slapshot wind-up without firing |
-| **Scroll up / down** | Toggle elevated shot |
+| **Scroll up / down** | Step shot loft up / down (flat → saucer → high) |
 | **Tab** | Toggle scoreboard |
 
 ---

@@ -10,29 +10,30 @@ extends RefCounted
 #
 # 1. World state  (120 Hz, unreliable_ordered) — single flat PackedByteArray:
 #      u16 ws_sequence, u32 host_capture_time (0.1ms units), u8 num_skaters
-#      [u32 peer_id, skater_bytes(38), u8 queue_depth] × num_skaters
+#      [u32 peer_id, skater_bytes(39), u8 queue_depth] × num_skaters
 #      puck_bytes(13)
-#      u8 num_goalies, [goalie_bytes(35)] × num_goalies
+#      u8 num_goalies, [goalie_bytes(41)] × num_goalies
 #      u8 score0, u8 score1, u8 phase, u8 period, u16 time_remaining
 #
-#    Total for 6 players + 2 goalies: 355 bytes — stays in a single packet, well
+#    Total for 6 players + 2 goalies: 373 bytes — stays in a single packet, well
 #    under Steam's ~1200-byte unreliable cap. This matters: Steam (unlike ENet)
 #    does NOT fragment unreliable messages, so an oversized snapshot would be
 #    dropped at send rather than split across datagrams.
 #
 #    Quantization layout:
-#      Skater  (38 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s,
+#      Skater  (39 B): pos s16/s8/s16@1cm, vel 3×s16@0.02m/s,
 #                      blade 3×s16@1cm, top_hand 3×s16@1cm,
 #                      facing u16 (0–TAU→0–65535), upper_body_rot s16 (−π–π→−32767–32767),
 #                      facing_angular_velocity s16@PI*10 rad/s, upper_body_angular_velocity s16@PI*10 rad/s,
-#                      last_processed_ts f32, flags u8 (shot_state[3:0]+ghost[4]+elevated[5]+blade_up[6]+sprint_locked[7]),
-#                      shot_charge u8, stamina u8
+#                      last_processed_ts f32,
+#                      flags u8 (shot_state[2:0]+elevation_level[4:3]+ghost[5]+blade_up[6]+sprint_locked[7]),
+#                      shot_charge u8, stamina u8, stagger_timer u8@0.01s
 #      Puck    (13 B): pos s16/s16/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
-#      Goalie  (35 B): root (12 B) + pose (23 B). Root:
+#      Goalie  (41 B): root (12 B) + pose (29 B). Root:
 #                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
 #                      vel_x/z s16@0.02m/s.
 #                      Pose: body_pitch/roll s8@π/127; left_pad offset (s8×3@1cm)
-#                      + pitch/roll s8@π/127; right_pad same; glove offset s8×3
+#                      + pitch/roll s8@π/127; right_pad same; glove offset s16×3
 #                      + yaw/pitch s8@π/127; blocker same; head_yaw s8@π/127.
 #                      Stick rides the blocker socket (rigid IRL attachment),
 #                      so no separate stick fields on the wire. The broadcast
@@ -404,9 +405,13 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	b.encode_s16(o, clampi(roundi(s.facing_angular_velocity / (PI * 10.0) * 32767.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.upper_body_angular_velocity / (PI * 10.0) * 32767.0), -32768, 32767)); o += 2
 	b.encode_u32(o, roundi(maxf(s.last_processed_host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE)); o += 4
-	var flags: int = (s.shot_state & 0x0F) \
-			| (0x10 if s.is_ghost else 0) \
-			| (0x20 if s.is_elevated else 0) \
+	# Flags byte: bits 0-2 shot_state (7 SkaterStateMachine.State values),
+	# bits 3-4 elevation_level (0..2), bit 5 ghost, bit 6 blade_up,
+	# bit 7 sprint_locked. Repacked at PROTOCOL_VERSION 11 (shot_state gave a
+	# bit to the 2-bit loft level).
+	var flags: int = (s.shot_state & 0x07) \
+			| ((clampi(s.elevation_level, 0, 3) & 0x3) << 3) \
+			| (0x20 if s.is_ghost else 0) \
 			| (0x40 if s.blade_up else 0) \
 			| (0x80 if s.sprint_locked else 0)
 	b.encode_u8(o, flags); o += 1
@@ -445,9 +450,9 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	s.upper_body_angular_velocity = b.decode_s16(o) / 32767.0 * (PI * 10.0); o += 2
 	s.last_processed_host_timestamp = float(b.decode_u32(o)) / Constants.TIME_WIRE_SCALE; o += 4
 	var flags: int = b.decode_u8(o); o += 1
-	s.shot_state = flags & 0x0F
-	s.is_ghost = (flags & 0x10) != 0
-	s.is_elevated = (flags & 0x20) != 0
+	s.shot_state = flags & 0x07
+	s.elevation_level = (flags >> 3) & 0x3
+	s.is_ghost = (flags & 0x20) != 0
 	s.blade_up = (flags & 0x40) != 0
 	s.sprint_locked = (flags & 0x80) != 0
 	s.shot_charge = b.decode_u8(o) / 255.0; o += 1

@@ -15,7 +15,8 @@ const TEAM_ID: int = 0
 
 func _make_skater(pid: int, team: int, pos: Vector3,
 		is_elevated: bool = false) -> Array:
-	return [pid, team, pos, is_elevated]
+	# is_elevated maps to loft level: true -> HIGH (2), false -> flat (0).
+	return [pid, team, pos, 2 if is_elevated else 0]
 
 
 func _make_ctx(self_pos: Vector3, anchor: Vector3,
@@ -28,13 +29,13 @@ func _make_ctx(self_pos: Vector3, anchor: Vector3,
 	if skaters.is_empty():
 		var s := SkaterNetworkState.new()
 		s.position = self_pos
-		s.is_elevated = false
+		s.elevation_level = 0
 		snap.skater_states[1] = s
 	else:
 		for entry: Array in skaters:
 			var sk := SkaterNetworkState.new()
 			sk.position = entry[2]
-			sk.is_elevated = entry[3]
+			sk.elevation_level = entry[3]
 			snap.skater_states[entry[0]] = sk
 	var puck := PuckNetworkState.new()
 	puck.position = puck_pos

@@ -528,7 +528,7 @@ var _ticks_in_state: int = 0
 var _peer_id: int = 0
 var _team_id: int = 0
 # +1 if own goal is at +GOAL_LINE_Z (Team 0), -1 for Team 1.
-# See LocalController.get_attacking_goal_z for the source of truth.
+# See GameManager._assign_goals_to_teams for the source of truth.
 var _own_goal_dir: float = 1.0
 var _attacking_goal_pos: Vector3 = Vector3.ZERO
 var _team_brain: TeamBrain = null
@@ -1996,16 +1996,11 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
 		release_target = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
 	_apply_steering(input, snapshot, self_pos, release_target)
-	# Elevation: only RAISE the controller's sticky `_is_elevated`
-	# flag during an actively elevated shot. The default
-	# elevation_down=true in _zero_input keeps the flag low at all
-	# other times, so a previous elevated shot doesn't leak into the
-	# next pass / shot. Both up + down in the same input frame would
-	# end up DOWN (controller's two if-blocks run in order), so clear
-	# elevation_down on the elevated tick.
+	# Elevated shot → HIGH loft (top-corner height). The level is absolute
+	# per input frame (flat default in _zero_input), so just set it on
+	# every charge tick through the release.
 	if _shot_is_elevated:
-		input.elevation_up = true
-		input.elevation_down = false
+		input.elevation_level = ShotMechanics.ELEVATION_HIGH
 
 	# First tick: capture aim, compute wind-up start (forehand side,
 	# behind bot), fire shoot_pressed edge so SkaterStateMachine enters
@@ -2216,14 +2211,11 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		return
 
 	_apply_brake_steering(input, snapshot, self_pos)
-	# Saucer: loft the release so the puck flies over a contested mid-lane
-	# defender. Set every tick we're in PASS_PRESSED (the controller's
-	# _is_elevated flag is sticky and reset by the default elevation_down,
-	# so we must keep raising it through the charge until release). Both up
-	# and down in one frame ends DOWN on the controller, so clear down here.
+	# Saucer: LOW loft so the pass flies over a contested mid-lane defender's
+	# stick, lands, and slides to the receiver. Set every PASS_PRESSED tick
+	# through the release (the level is absolute per frame, flat default).
 	if _pass_should_saucer:
-		input.elevation_up = true
-		input.elevation_down = false
+		input.elevation_level = ShotMechanics.ELEVATION_LOW
 	# Resolve the receiver's slot label NOW for the debug readout —
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
 	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").

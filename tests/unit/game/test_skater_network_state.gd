@@ -17,7 +17,7 @@ func test_round_trip_preserves_all_wire_fields() -> void:
 	s.upper_body_angular_velocity = -0.8
 	s.last_processed_host_timestamp = 12.345
 	s.is_ghost                    = true
-	s.is_elevated                 = true
+	s.elevation_level             = 2
 	s.blade_up                    = true
 	s.shot_state                  = 2
 	s.shot_charge                 = 0.75
@@ -37,9 +37,9 @@ func test_round_trip_preserves_all_wire_fields() -> void:
 	assert_almost_eq(r.facing_angular_velocity,      s.facing_angular_velocity,      0.00001)
 	assert_almost_eq(r.upper_body_angular_velocity,  s.upper_body_angular_velocity,  0.00001)
 	assert_almost_eq(r.last_processed_host_timestamp, s.last_processed_host_timestamp, 0.00001)
-	assert_eq(r.is_ghost,    s.is_ghost)
-	assert_eq(r.is_elevated, s.is_elevated)
-	assert_eq(r.blade_up,    s.blade_up)
+	assert_eq(r.is_ghost,        s.is_ghost)
+	assert_eq(r.elevation_level, s.elevation_level)
+	assert_eq(r.blade_up,        s.blade_up)
 	assert_eq(r.shot_state,  s.shot_state)
 	assert_almost_eq(r.shot_charge, s.shot_charge, 0.00001)
 	assert_almost_eq(r.stamina, s.stamina, 0.00001)
@@ -53,7 +53,7 @@ func test_array_length_sentinel() -> void:
 	# 17: position, velocity, blade_position, top_hand_position,
 	# upper_body_rotation_y, facing, last_processed_host_timestamp,
 	# is_ghost, shot_state, shot_charge, facing_angular_velocity,
-	# upper_body_angular_velocity, is_elevated, blade_up, stamina, sprint_locked,
+	# upper_body_angular_velocity, elevation_level, blade_up, stamina, sprint_locked,
 	# stagger_timer.
 	var s := SkaterNetworkState.new()
 	assert_eq(s.to_array().size(), 17)
