@@ -99,10 +99,6 @@ with (security_invoker = true) as
     sum(shots_on_goal) AS shots_on_goal,
     sum(hits) AS hits,
     sum(shots_blocked) AS shots_blocked,
-    sum(hits_taken) AS hits_taken,
-    sum(takeaways) AS takeaways,
-    sum(giveaways) AS giveaways,
-    sum(faceoff_wins) AS faceoff_wins,
     sum(toi_seconds) AS toi_seconds,
     sum(goals_for) AS goals_for,
     sum(goals_against) AS goals_against,
@@ -111,7 +107,13 @@ with (security_invoker = true) as
     sum(CASE WHEN outcome = 'loss'::text THEN 1 ELSE 0 END) AS losses,
     round(sum(goals)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS goals_per_60,
     round(sum(assists)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS assists_per_60,
-    round(sum(goals + assists)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS points_per_60
+    round(sum(goals + assists)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS points_per_60,
+    -- New sums appended at the END: CREATE OR REPLACE VIEW can only add trailing
+    -- columns, never reorder existing ones (else it errors renaming a column).
+    sum(hits_taken) AS hits_taken,
+    sum(takeaways) AS takeaways,
+    sum(giveaways) AS giveaways,
+    sum(faceoff_wins) AS faceoff_wins
    FROM career_stats
   WHERE steam_id IS NOT NULL
   GROUP BY steam_id;
