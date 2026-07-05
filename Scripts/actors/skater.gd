@@ -40,8 +40,10 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # the torso (near the top of the upper body mesh) so the visible arm spans
 # from the shoulder down to the hand. Vertical drop from shoulder to hand at
 # rest = shoulder_height − hand_rest_y (currently 0.35 − (−0.17) = 0.52 m).
-# If rom_backhand_reach_max is raised, verify sqrt(drop² + reach²) stays
-# under upper_arm_length + forearm_length to avoid visible arm stretch.
+# That drop is subtracted inside the derived backhand ROM
+# (SkaterController.apply_attributes: reach = sqrt(arm_eff² − drop²)), so the
+# hand can never be placed beyond the arm's length — raising this shrinks
+# reach rather than stretching the forearm.
 @export var shoulder_height: float = 0.35
 # Blade length (heel to toe). The Blade Marker3D represents the heel (where
 # the shaft meets the blade); the blade mesh extends forward by this distance.
@@ -74,13 +76,16 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. ROM is derived from these
-# values in SkaterController.apply_attributes (rom_backhand = arm × 0.875,
-# rom_forehand = arm × 0.5625), so the IK margin is constant across sizes
-# regardless of how aggressively arm length scales.
-# Baseline lengths give one-arm = 0.75m, wingspan ≈ 1.94m on a 1.78m body
-# (~108% of height, matching real-life NHL anthropometry).
-@export var upper_arm_length: float = 0.37
-@export var forearm_length: float = 0.38
+# values in SkaterController.apply_attributes: the forehand cap is anatomical
+# (cross-body reach, arm × 0.5625) and the backhand cap is chain-derived
+# (sqrt(arm_eff² − shoulder-to-hand drop²)), so no reachable hand target ever
+# exceeds the arm's length — the forearm never draws stretched.
+# Baseline lengths give one-arm = 0.70m, wingspan ≈ 1.84m on a 1.78m body
+# (~103% of height — arm span runs 100–104% of height in real athletes; the
+# segments split evenly because the distal bone ends at the gloved-fist
+# center, and elbow→fist really is about humerus-length).
+@export var upper_arm_length: float = 0.35
+@export var forearm_length: float = 0.35
 # Pole direction for the elbow (upper-body local).
 @export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's

@@ -95,8 +95,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # — these values assume that twist is active.
 @export var rom_forehand_angle_max_deg: float = 90.0
 @export var rom_backhand_angle_max_deg: float = 90.0
-@export var rom_forehand_reach_max: float = 0.45
-@export var rom_backhand_reach_max: float = 0.70
+# Reach caps are DERIVED in apply_attributes — forehand from the anatomical
+# cross-body ratio, backhand from the arm chain (sqrt(arm_eff² − drop²), the
+# farthest a rest-height hand can sit without out-reaching the arm). These
+# defaults just mirror the baseline-size derivation for any skater that has
+# not had attributes applied yet.
+@export var rom_forehand_reach_max: float = 0.39
+@export var rom_backhand_reach_max: float = 0.44
+# Fraction of full arm extension the backhand ROM rim uses. 1.0 solves the
+# reach with a ramrod-straight arm; slightly under keeps a hint of elbow bend
+# at max extension so the rim pose stays organic.
+@export var rom_arm_extension: float = 0.97
 # Cap on how fast the aim target can move in world XZ per second. The IK consumes
 # the smoothed target, so the blade visibly inherits the cap. Originally a high
 # (60 m/s) smoothing cap that only bound on fast mouse wraps; now lowered into
@@ -417,14 +426,17 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_pose.setup(skater, _sm, _aiming, self, _skating)
 	_skating.setup(skater, _sm, self)
 
-# Reach ROM is derived from arm length, not an independent tunable. These
-# ratios reflect anatomy: forehand reach is shoulder-joint-limited (about
-# 56% of arm length, can't cross the body very far); backhand reach is
-# arm-extension-limited (about 87.5% of arm length, near-full extension
-# out to the same side). Constant ratios mean the arm-bend at the ROM cap
-# looks the same on every player, big or small.
+# Reach ROM is derived from arm length, not an independent tunable. The
+# forehand side is shoulder-joint-limited (about 56% of arm length — the top
+# hand can't cross the body very far), a simple anatomical ratio. The
+# backhand side is arm-EXTENSION-limited and solved from the chain geometry
+# in apply_attributes: the hand rides at hand_rest_y (a fixed drop below the
+# shoulder), so the farthest it can sit is sqrt(arm_eff² − drop²) with
+# arm_eff = arm × rom_arm_extension. Deriving it this way guarantees no
+# reachable pose out-reaches the arm (the forearm never draws stretched) and
+# gives tall players disproportionately more reach than short ones — long
+# arms matter most at full extension, which is the realistic shape.
 const _ROM_FOREHAND_OF_ARM: float = 0.5625
-const _ROM_BACKHAND_OF_ARM: float = 0.875
 
 
 # ── Player Attributes ─────────────────────────────────────────────────────────
@@ -549,15 +561,19 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	stick_length              = _base_stick_length              * attrs.stick_len_mult()
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
-	# Reach ROM is a derived property of arm length — the ratios reflect
-	# fixed anatomy (forehand is shoulder-limited, backhand uses near-full
-	# extension), so they stay constant across sizes. Bigger arms naturally
-	# yield more reach without being an independent attribute axis. The
-	# arm-bend at the ROM cap is consistent (~87.5% extension on backhand)
-	# for every player, so small skaters don't look rigid at full reach.
+	# Reach ROM is a derived property of arm length — forehand from the
+	# anatomical cross-body ratio, backhand from the chain geometry (see the
+	# _ROM_FOREHAND_OF_ARM doc block). Bigger arms naturally yield more reach
+	# without being an independent attribute axis, and the backhand solve
+	# amplifies the spread: the fixed shoulder-to-hand drop eats a constant
+	# bite of every arm, so a tall player's extra length converts to reach at
+	# better than 1:1 while a small player gives some back — long arms matter
+	# most at full extension.
 	var arm_total: float = skater.upper_arm_length + skater.forearm_length
 	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
-	rom_backhand_reach_max    = arm_total * _ROM_BACKHAND_OF_ARM
+	var arm_eff: float = arm_total * rom_arm_extension
+	var reach_drop: float = skater.shoulder_height - hand_rest_y
+	rom_backhand_reach_max    = sqrt(maxf(arm_eff * arm_eff - reach_drop * reach_drop, 0.0))
 	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
 	# (matches body-check feel). Height is held CONSTANT for every player — a
 	# taller Size-scaled cylinder grew tall enough to touch several faces of the
