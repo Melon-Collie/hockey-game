@@ -42,9 +42,9 @@ for that checklist.
 - **game** — a single game's stat reached the bar (any mode, incl. vs bots).
 - **special** — a compound game-over condition.
 - **event** — fired live, the moment it happens, during a match.
-- **career** — a lifetime total backed by **Steam User Stats** (online games
-  only, so they can't be padded vs bots; NOT gated on stat-sharing, and no
-  Supabase dependency). The mirrored stats must be defined too — see STATS.md.
+- **career** — a lifetime total backed by **Steam User Stats** (online games;
+  NOT gated on stat-sharing, and no Supabase dependency). The mirrored stats must
+  be defined too — see STATS.md.
 
 | API Name (`id`)     | Name         | When    | Unlocks when…                                  |
 |---------------------|--------------|---------|------------------------------------------------|
@@ -52,10 +52,10 @@ for that checklist.
 | `ACH_PLAYMAKER`     | Playmaker    | game    | 3 assists in a single game                     |
 | `ACH_BIG_NIGHT`     | Big Night    | game    | 5 points (G+A) in a single game                |
 | `ACH_BRICK_WALL`    | Brick Wall   | game    | 5 blocked shots in a single game               |
+| `ACH_FIRST_GOAL`    | Lamp Lighter | game    | score your first goal (any mode)               |
 | `ACH_SHUTOUT`       | Shutout      | special | win a game conceding 0 goals                   |
+| `ACH_FIRST_WIN`     | W            | special | win your first game (any mode)                 |
 | `ACH_FREIGHT_TRAIN` | Freight Train| event   | land a body check above the big-hit threshold  |
-| `ACH_FIRST_GOAL`    | Lamp Lighter | career  | 1st career goal                                |
-| `ACH_FIRST_WIN`     | W            | career  | 1st career win                                 |
 | `ACH_SNIPER`        | Sniper       | career  | 50 career goals                                |
 | `ACH_SETUP_ARTIST`  | Setup Artist | career  | 50 career assists                              |
 | `ACH_ENFORCER`      | Enforcer     | career  | 100 career hits                                |

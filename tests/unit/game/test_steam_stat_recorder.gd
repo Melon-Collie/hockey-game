@@ -23,6 +23,19 @@ func test_increments_map_per_game_stat_fields() -> void:
 	assert_eq(d[SteamStats.BLOCKS], 1)
 
 
+func test_increments_map_extended_stat_fields() -> void:
+	var s := _stats(0, 0, 0, 0, 0)
+	s.hits_taken = 5
+	s.takeaways = 6
+	s.giveaways = 7
+	s.faceoff_wins = 8
+	var d := SteamStatRecorder.increments(s, "loss")
+	assert_eq(d[SteamStats.HITS_TAKEN], 5)
+	assert_eq(d[SteamStats.TAKEAWAYS], 6)
+	assert_eq(d[SteamStats.GIVEAWAYS], 7)
+	assert_eq(d[SteamStats.FACEOFF_WINS], 8)
+
+
 func test_games_played_always_increments_by_one() -> void:
 	assert_eq(SteamStatRecorder.increments(_stats(0, 0, 0, 0, 0), "loss")[SteamStats.GAMES], 1)
 	assert_eq(SteamStatRecorder.increments(_stats(9, 9, 9, 9, 9), "win")[SteamStats.GAMES], 1)

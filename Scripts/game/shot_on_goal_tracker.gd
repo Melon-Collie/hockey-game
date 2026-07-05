@@ -20,6 +20,9 @@ extends RefCounted
 # shots counter). Emits `shots_on_goal_changed(sog_0, sog_1)` for UI.
 
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
+# Fires once per counted shot on goal, carrying the shooter. TurnoverTracker uses
+# it to treat a rebound recovered by the other team as a shot (not a giveaway).
+signal shot_on_goal_recorded(peer_id: int)
 
 const SHOT_ON_GOAL_TIMEOUT: float = 5.0
 # A genuine blocked shot happens within a beat of the release — the puck travels
@@ -222,5 +225,6 @@ func _confirm(peer_id: int) -> void:
 	_shot_on_goal_counted = true
 	record.stats.shots_on_goal += 1
 	_state_machine.team_shots[record.team.team_id] += 1
+	shot_on_goal_recorded.emit(peer_id)
 	shots_on_goal_changed.emit(
 		_state_machine.team_shots[0], _state_machine.team_shots[1])

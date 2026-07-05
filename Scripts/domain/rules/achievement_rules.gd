@@ -16,6 +16,10 @@ static func game_dict(stats: PlayerStats) -> Dictionary:
 		"shots_on_goal": stats.shots_on_goal,
 		"hits": stats.hits,
 		"shots_blocked": stats.shots_blocked,
+		"hits_taken": stats.hits_taken,
+		"takeaways": stats.takeaways,
+		"giveaways": stats.giveaways,
+		"faceoff_wins": stats.faceoff_wins,
 	}
 
 
@@ -54,6 +58,8 @@ static func earned_career(career: Dictionary) -> Array[String]:
 # uses cond.kind == "special".
 static func _special_met(key: String, _game: Dictionary, ctx: Dictionary) -> bool:
 	match key:
+		"win":
+			return String(ctx.get("outcome", "")) == "win"
 		"shutout":
 			return String(ctx.get("outcome", "")) == "win" \
 					and int(ctx.get("goals_against", 1)) == 0

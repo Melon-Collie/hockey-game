@@ -6,9 +6,10 @@ class_name SteamStats
 ## Why mirror at all when career_stats already lives in Supabase: Steam Stats
 ## back the career-threshold achievements (Achievements.ALL with cond.kind ==
 ## "career") WITHOUT depending on a reachable Supabase — so those achievements
-## keep working offline / opted-out / while the backend is paused. Supabase
-## stays the source for cross-machine history + dev telemetry; Steam Stats are
-## the progression counter.
+## keep working stat-sharing-opted-out / while the backend is paused. Counted for
+## the same games as the Supabase career row (see the gate in GameManager
+## _on_game_over). Supabase stays the source for cross-machine history + dev
+## telemetry; Steam Stats are the progression counter.
 ##
 ## Each entry's `id` is the Steamworks "API Name" of an INT stat that MUST be
 ## defined + published for the app (both 4892600 and the 4893650 Playtest), or
@@ -34,6 +35,10 @@ const HITS := "STAT_HITS"
 const BLOCKS := "STAT_SHOTS_BLOCKED"
 const WINS := "STAT_WINS"
 const GAMES := "STAT_GAMES_PLAYED"
+const HITS_TAKEN := "STAT_HITS_TAKEN"
+const TAKEAWAYS := "STAT_TAKEAWAYS"
+const GIVEAWAYS := "STAT_GIVEAWAYS"
+const FACEOFF_WINS := "STAT_FACEOFF_WINS"
 
 # `key` is the career-totals column name these map to — the SAME names
 # AchievementRules.earned_career reads, so a "career" achievement on `goals`
@@ -46,4 +51,8 @@ const ALL: Array[Dictionary] = [
 	{"id": BLOCKS, "key": "shots_blocked", "inc": {"kind": "stat", "field": "shots_blocked"}},
 	{"id": WINS, "key": "wins", "inc": {"kind": "win"}},
 	{"id": GAMES, "key": "games_played", "inc": {"kind": "game"}},
+	{"id": HITS_TAKEN, "key": "hits_taken", "inc": {"kind": "stat", "field": "hits_taken"}},
+	{"id": TAKEAWAYS, "key": "takeaways", "inc": {"kind": "stat", "field": "takeaways"}},
+	{"id": GIVEAWAYS, "key": "giveaways", "inc": {"kind": "stat", "field": "giveaways"}},
+	{"id": FACEOFF_WINS, "key": "faceoff_wins", "inc": {"kind": "stat", "field": "faceoff_wins"}},
 ]

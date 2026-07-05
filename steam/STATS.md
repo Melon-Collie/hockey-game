@@ -11,10 +11,10 @@ earnable offline / opted-out / while the backend is paused. Supabase remains the
 source for cross-machine history and dev telemetry; these stats are purely the
 progression counter (and the future basis for leaderboards).
 
-When they update: at game-over for **online games only** (so totals can't be
-padded vs bots). They are **not** gated on the "Share Gameplay Stats" toggle —
-that toggle is about uploading to *our* Supabase; Steam Stats are the player's
-own data on their own Steam account.
+When they update: at game-over for **online games** (same games as the Supabase
+career row). They are **not** gated on the "Share Gameplay Stats" toggle — that
+toggle is about uploading to *our* Supabase; Steam Stats are the player's own
+data on their own Steam account.
 
 > **Two apps.** Like achievements, stats are per-app. Define these on the main
 > app **4892600** and the **Playtest** child app **4893650** (same API Names),
@@ -37,6 +37,10 @@ values via read-modify-write, not increments) — then **publish**.
 | `STAT_SHOTS_BLOCKED`   | INT  | shots blocked                   |
 | `STAT_WINS`            | INT  | games won                       |
 | `STAT_GAMES_PLAYED`    | INT  | games played                    |
+| `STAT_HITS_TAKEN`      | INT  | body checks absorbed            |
+| `STAT_TAKEAWAYS`       | INT  | pucks stripped from opponents   |
+| `STAT_GIVEAWAYS`       | INT  | self-inflicted turnovers        |
+| `STAT_FACEOFF_WINS`    | INT  | faceoffs won (as centre)        |
 
 These names must match `SteamStats.ALL` exactly. The GUT test
 `test_every_career_achievement_has_a_backing_stat` fails the build if a career
