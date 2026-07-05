@@ -402,7 +402,15 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	var pos := puck.global_position
 	var pos2d := Vector2(pos.x, pos.z)
 	var clamped := GameRules.clamp_to_rink_inner(pos2d)
-	if pos2d.distance_to(clamped) > 0.2:
+	var xz_outside: float = pos2d.distance_to(clamped)
+	# Out of play if the puck is clearly outside the boundary (XZ), OR it is at/past
+	# the boundary while elevated above the boards — the latter catches a puck that
+	# went over the glass or perched on the boards, which the flat 0.2 m XZ check
+	# alone would miss (soft-lock). A legitimate high deflection is INSIDE the rink,
+	# so its xz_outside is ~0 and it doesn't trip the height branch.
+	var over_boards: bool = xz_outside > 0.01 \
+			and (pos.y - puck.ice_height) > GameRules.PUCK_OVER_BOARDS_HEIGHT
+	if xz_outside > 0.2 or over_boards:
 		_puck_oob_timer += delta
 		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
@@ -1416,10 +1424,18 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 		return
 	if new_slot < 0 or new_slot >= PlayerRules.MAX_PER_TEAM:
 		return
+	# Liveness guard: a swap-request RPC can still be in flight when the requesting
+	# spectator disconnects. Without this the host would spawn + broadcast a skater
+	# for a gone peer that no disconnect will ever clean up (phantom on all clients).
+	if peer_id != NetworkManager.local_peer_id() and peer_id not in NetworkManager.connected_peer_ids():
+		return
 	for other_id: int in _state_machine.players:
 		var p: Dictionary = _state_machine.players[other_id]
 		if p.team_id == new_team_id and p.team_slot == new_slot:
 			return
+	# Don't promote into a slot held for a reconnecting player (see try_swap_slot).
+	if _state_machine.is_slot_reserved(new_team_id, new_slot):
+		return
 	if _state_machine.count_players_on_team(new_team_id) >= PlayerRules.MAX_PER_TEAM:
 		return
 	_spectator_peers.erase(peer_id)
@@ -1985,6 +2001,9 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
+	# A loose-puck touch during FACEOFF (deflect / body redirect) makes the puck
+	# live — end the faceoff so a goal off the deflection counts (see P2-2).
+	_phase_coord.on_puck_touched_live()
 	_state_machine.notify_icing_contact()
 	# Deflection or body-block by an offending-team attacker also counts as a
 	# touch that whistles a delayed offside.
@@ -2184,6 +2203,9 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 
 func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
+	# A one-timer is a possession-less engagement — if it fires during FACEOFF it
+	# makes the puck live, so end the faceoff or the resulting goal is voided (P2-2).
+	_phase_coord.on_puck_touched_live()
 	var pid: int = _registry.resolve_peer_id(skater)
 	# One-timers skip the normal pickup flow, so the shooter is never recorded
 	# in the carrier history. Record them as a deflection (the shooter redirects
@@ -2793,6 +2815,10 @@ func on_scene_exit() -> void:
 	# (used to build the footer) is still intact.
 	_close_replay_file_writer()
 	_last_recorded_phase = -1
+	# Session-scoped — a scene exit mid goal-replay must not carry a stale
+	# "in replay" flag into the next session (a fresh driver is created there, so
+	# a leftover true would let a skip vote fire before any replay is running).
+	_in_replay_locally = false
 	if _shot_tracker != null:
 		_shot_tracker.clear_state()
 	if _registry != null:
@@ -2849,6 +2875,12 @@ func on_scene_exit() -> void:
 
 
 func reset_game() -> void:
+	# Host-authoritative (offline/free-play are is_host too). A stray client call
+	# would reset only that client's SM/stats and fork it from the host; the
+	# notify_reset_to_all RPC below is authority-gated so no remote harm, but guard
+	# for symmetry with return_to_lobby.
+	if not NetworkManager.is_host:
+		return
 	_drop_puck_if_carried()
 	_apply_reset()
 	# Each rematch gets its own .mreplay so the viewer doesn't render two
@@ -2883,7 +2915,14 @@ func on_game_reset(new_game_id: String = "") -> void:
 
 
 func _apply_reset() -> void:
-	_state_machine.reset_all()
+	_state_machine.reset_all()  # also clears the domain-side reserved_slots mirror
+	# Clear the host-side reservation store in lockstep with the domain mirror.
+	# reset_all() frees the domain slots, so a leftover _reserved_slots entry would
+	# force a reconnecting peer into a slot that a rematch joiner/swapper can now
+	# retake (double-booking) AND carry the PREVIOUS match's stats into the fresh
+	# 0-0 game. Host-only dict; a no-op on clients. Pending expiry timers are token-
+	# guarded, so they harmlessly no-op after the clear.
+	_reserved_slots.clear()
 	_seen_first_prep = false  # next prep is a rematch's opening faceoff
 	_last_emitted_clock_secs = -1
 	_last_ghost_state.clear()

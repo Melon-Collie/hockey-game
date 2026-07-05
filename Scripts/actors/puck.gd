@@ -57,6 +57,11 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var hit_pickup_cooldown_threshold: float = 2.7    # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
 @export var body_block_cooldown: float = 0.1
+# Vertical clamp: the puck's Y is capped at ice_height + max_height in
+# _integrate_forces. Must stay BELOW the rink's collision top
+# (HockeyRink.COLLISION_OVERGLASS_TOP, 3.2 m) — otherwise an elevated deflection
+# that pegs this clamp sits above the boards and escapes the rink. If you raise
+# this, raise COLLISION_OVERGLASS_TOP to keep the margin.
 @export var max_height: float = 3.0
 
 var carrier: Skater = null
@@ -206,9 +211,12 @@ func apply_blade_deflect(skater: Skater) -> void:
 			deflect_speed_retain, deflect_speed_retain_min,
 			deflect_max_angle_deg, deflect_max_angle_deg_min, deflect_speed_ref)
 
-	if skater.is_elevated:
+	# Deliberate-deflect tips ride the loft mode too: half the tip angle at
+	# LOW, full at HIGH — same scaling as the blade-scoop visual.
+	if skater.elevation_level > 0:
 		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(
-				new_vel.normalized(), deflect_elevation_angle)
+				new_vel.normalized(),
+				deflect_elevation_angle * float(skater.elevation_level) * 0.5)
 		new_vel = new_dir * new_vel.length()
 
 	linear_velocity = new_vel
@@ -392,6 +400,11 @@ func drop() -> void:
 	var ex_carrier: Skater = carrier
 	clear_carrier()
 	linear_velocity = Vector3.ZERO
+	# A shot fired the same tick as a stoppage could leave a release velocity
+	# queued (release() runs before the physics step); clear it so the dropped
+	# puck doesn't inherit it and rocket off on the next _integrate_forces.
+	_pending_elevation_vel = Vector3.ZERO
+	_pending_elevation = false
 	if ex_carrier != null:
 		_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_released.emit()
@@ -399,9 +412,14 @@ func drop() -> void:
 func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 	carrier = null
 	freeze = false  # ensure _integrate_forces is called on the next step
+	sleeping = false  # a slept body skips _integrate_forces, so it would ignore the teleport
 	_cooldown_timers.clear()
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
+	# Discard any release velocity queued this frame — a faceoff / whistle reset
+	# must not inherit a shot fired on the same tick (would launch the dot puck).
+	_pending_elevation_vel = Vector3.ZERO
+	_pending_elevation = false
 	_pending_reset = true
 	_pending_reset_xz = at_xz
 	puck_released.emit()
@@ -447,7 +465,11 @@ func _on_body_entered(body: Node3D) -> void:
 	elif body.get_parent() is HockeyGoal:
 		if linear_velocity.length() >= 1.0:
 			puck_hit_goal_body.emit()
-	elif body is StaticBody3D and linear_velocity.length() >= 1.0:
+	elif body is HockeyRink and linear_velocity.length() >= 1.0:
+		# Only the rink's perimeter boards (HockeyRink's own collider) fire the
+		# board-hit thud / chip VFX / RPC. The ice surface is a SEPARATE
+		# StaticBody3D child, so the old `body is StaticBody3D` also fired on every
+		# grounded release and every landing — a board hit at the wrong spot.
 		puck_hit_boards.emit()
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:

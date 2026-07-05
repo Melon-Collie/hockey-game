@@ -53,7 +53,12 @@ func _ready() -> void:
 	if GameManager.has_signal("phase_changed"):
 		GameManager.phase_changed.connect(_on_phase_changed)
 	_write_breadcrumb()
-	if crashed:
+	# Respect the telemetry opt-out: a crash report ships steam_id, player name, a
+	# breadcrumb, and a log tail (which may contain peer names / lobby ids), so it's
+	# gated on the same PlayerPrefs.share_gameplay_stats flag as career + network
+	# session rows. Opting out still detects the crash (sentinel logic above) — it
+	# just doesn't phone home. Autoload order guarantees PlayerPrefs is ready here.
+	if crashed and PlayerPrefs.share_gameplay_stats:
 		get_tree().create_timer(CRASH_REPORT_DELAY_SEC).timeout.connect(
 				_report_previous_crash.bind(prev_breadcrumb))
 

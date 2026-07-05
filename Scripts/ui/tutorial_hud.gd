@@ -122,7 +122,7 @@ func _build() -> void:
 
 	# Row 4b: corrective alert (amber). Unlike the hint, this shows the instant
 	# it's set — used to flag a wrong setup the player should fix now (e.g. the
-	# elevation toggle left in the wrong position for the current drill).
+	# loft mode left at the wrong level for the current drill).
 	_alert_label = Label.new()
 	_alert_label.add_theme_font_size_override("font_size", 13)
 	_alert_label.add_theme_color_override("font_color", MenuStyle.GOLD)

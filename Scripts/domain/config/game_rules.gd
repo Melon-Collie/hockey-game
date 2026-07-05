@@ -143,6 +143,14 @@ const PUCK_BOARD_BOUNCE: float = 0.4
 # the stoppage feels responsive, long enough that pucks bouncing back in off
 # the boards don't get false-flagged.
 const PUCK_OOB_GRACE_DURATION: float = 1.0
+# Defense-in-depth height term for the OOB check: a puck this far above the ice
+# while at/beyond the rink boundary has gone over the glass or perched on the
+# boards — the flat XZ check tolerates 0.2 m and would miss it, soft-locking play.
+# Above the boards (~1.07 m) but below any legitimate in-rink deflection apex
+# (those are INSIDE, so their XZ distance-to-boundary is ~0 and they don't trip
+# this). The raised perimeter collision should prevent the escape outright; this
+# is the backstop if a puck gets outside some other way.
+const PUCK_OVER_BOARDS_HEIGHT: float = 1.2
 
 # Puck-stuck-on-net detection. A puck that settles motionless on the net frame
 # never touches the ice, so the normal on-ice/airborne logic leaves it

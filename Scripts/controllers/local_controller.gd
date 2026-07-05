@@ -96,15 +96,6 @@ func set_camera_force_locked(locked: bool) -> void:
 	if camera != null:
 		camera.force_locked = locked
 
-# Team 0 defends the +Z goal → attacks -Z. Team 1 defends -Z → attacks +Z.
-# See GameManager._assign_goals_to_teams.
-func get_attacking_goal_z() -> float:
-	if _team_id == 0:
-		return -GameRules.GOAL_LINE_Z
-	if _team_id == 1:
-		return GameRules.GOAL_LINE_Z
-	return 0.0
-
 func get_current_input() -> InputState:
 	return _current_input
 
@@ -173,8 +164,8 @@ func _physics_process(delta: float) -> void:
 			prep_input.slap_held = false
 			prep_input.brake = false
 			prep_input.sprint_held = false
-			prep_input.elevation_up = false
-			prep_input.elevation_down = false
+			# elevation_level passes through untouched — it's a mode, not an
+			# action, so the faceoff freeze shouldn't flatten the chosen loft.
 			prep_input.block_held = false
 			prep_input.stick_lift_held = false
 			_current_input = prep_input

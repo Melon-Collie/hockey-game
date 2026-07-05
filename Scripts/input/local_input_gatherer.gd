@@ -5,10 +5,13 @@ var _camera: Camera3D
 var _local_team_id: int = -1
 var _pending_shoot_pressed: bool = false
 var _pending_slap_pressed: bool = false
-var _pending_elevation_up: bool = false
-var _pending_elevation_down: bool = false
 var _pending_stick_lift_pressed: bool = false
 var _pending_quick_shot_pressed: bool = false
+# Loft mode (0 flat / 1 low saucer / 2 high), stepped by scroll-wheel events in
+# _process and stamped ABSOLUTE into every gathered frame. Living here — not as
+# sticky controller state — makes it plain input: reconcile replay and the
+# host's input-derived releases both read the level off the frame itself.
+var _elevation_level: int = 0
 # Last mouse world position. Returned in place of a fresh sample when input
 # is blocked so the stick IK doesn't swing to the rink origin every frame
 # the menu is open. Both client and host see the same value (it goes out in
@@ -32,10 +35,12 @@ func _process(_delta: float) -> void:
 		_pending_shoot_pressed = true
 	if Input.is_action_just_pressed("slapshot"):
 		_pending_slap_pressed = true
+	# Each scroll click steps the loft mode one notch, applied immediately so
+	# multiple clicks between physics ticks all land (no pending-flag coalescing).
 	if Input.is_action_just_pressed("elevation_up"):
-		_pending_elevation_up = true
+		_elevation_level = mini(_elevation_level + 1, InputState.MAX_ELEVATION_LEVEL)
 	if Input.is_action_just_pressed("elevation_down"):
-		_pending_elevation_down = true
+		_elevation_level = maxi(_elevation_level - 1, 0)
 	if Input.is_action_just_pressed("stick_lift"):
 		_pending_stick_lift_pressed = true
 	if Input.is_action_just_pressed("quick_shot"):
@@ -52,6 +57,9 @@ func gather() -> InputState:
 		blocked.host_timestamp = NetworkManager.estimated_host_time()
 		blocked.mouse_world_pos = _last_mouse_world_pos
 		blocked.mouse_screen_pos = _last_mouse_screen_pos
+		# Loft is a mode, not a held action — carry it through the block so
+		# opening a menu doesn't flatten the player's chosen elevation.
+		blocked.elevation_level = _elevation_level
 		return blocked
 	var state := InputState.new()
 	state.move_vector = Input.get_vector("move_left", "move_right", "move_up", "move_down")
@@ -76,8 +84,7 @@ func gather() -> InputState:
 	state.slap_pressed = _pending_slap_pressed
 	state.brake = Input.is_action_pressed("brake")
 	state.sprint_held = Input.is_action_pressed("sprint")
-	state.elevation_up = _pending_elevation_up
-	state.elevation_down = _pending_elevation_down
+	state.elevation_level = _elevation_level
 	state.block_held = Input.is_action_pressed("block")
 	state.stick_lift_held = Input.is_action_pressed("stick_lift")
 	state.stick_lift_pressed = _pending_stick_lift_pressed
@@ -89,8 +96,6 @@ func gather() -> InputState:
 	# Clear pending flags after gather
 	_pending_shoot_pressed = false
 	_pending_slap_pressed = false
-	_pending_elevation_up = false
-	_pending_elevation_down = false
 	_pending_stick_lift_pressed = false
 	_pending_quick_shot_pressed = false
 	return state
