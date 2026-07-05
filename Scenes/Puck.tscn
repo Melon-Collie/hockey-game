@@ -7,13 +7,13 @@ albedo_color = Color(0.201527, 0.201527, 0.201527, 1)
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_kln2b"]
 material = SubResource("StandardMaterial3D_idj7w")
-top_radius = 0.04
-bottom_radius = 0.04
-height = 0.025
+top_radius = 0.065
+bottom_radius = 0.065
+height = 0.035
 
 [sub_resource type="CylinderShape3D" id="CylinderShape3D_rgh2o"]
-height = 0.025
-radius = 0.04
+height = 0.035
+radius = 0.065
 
 [node name="Puck" type="RigidBody3D" unique_id=1611395284]
 collision_layer = 0

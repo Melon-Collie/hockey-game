@@ -427,8 +427,7 @@ func test_quick_shot_fires_and_returns_to_carry() -> void:
 	sm._state = Agent.State.QUICK_SHOT_PRESSED
 	var i := InputState.new()
 	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
-	assert_true(i.shoot_pressed, "quick shot fires the press edge")
-	assert_true(i.shoot_held, "quick shot holds so the controller reads a release next tick")
+	assert_true(i.quick_shot_pressed, "quick shot fires the dedicated quick-shot edge")
 	assert_eq(sm.get_state(), Agent.State.CARRY, "quick shot is a one-tick press")
 
 
@@ -448,7 +447,7 @@ func test_press_state_ignores_dispatch_throttle() -> void:
 	sm._dispatch_skip_counter = 5
 	var i := InputState.new()
 	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
-	assert_true(i.shoot_pressed, "press states are never throttled")
+	assert_true(i.quick_shot_pressed, "press states are never throttled")
 	assert_eq(sm.get_state(), Agent.State.CARRY)
 
 
@@ -587,8 +586,7 @@ func test_pass_pressed_quick_fires_and_clears_target() -> void:
 	_add_skater(s, TEAMMATE_ID, Vector3(3, 0, 0))
 	var i := InputState.new()
 	sm.dispatch(i, s)
-	assert_true(i.shoot_pressed, "quick pass fires the edge")
-	assert_true(i.shoot_held)
+	assert_true(i.quick_shot_pressed, "quick pass fires the dedicated quick-shot edge")
 	assert_eq(sm.get_state(), Agent.State.CARRY, "quick pass is a one-tick press")
 	assert_eq(sm._pass_target_peer_id, -1, "quick pass clears its target for the next pick")
 

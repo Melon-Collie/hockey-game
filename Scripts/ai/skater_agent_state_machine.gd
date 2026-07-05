@@ -2237,10 +2237,11 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		# bizarre release directions on long charged passes.
 		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 		debug_last_decision = "PASS→%s" % target_slot_label
-		input.shoot_pressed = true
-		input.shoot_held = true
-		# Same one-tick-then-exit pattern as before. Clear target so
-		# a future PASS picks a fresh one.
+		# Instant quick shot via the dedicated button flag — fires this tick from
+		# carry (player→blade snap at the fixed pass power), same semantics the
+		# one-tick shoot release used to produce before the timing classifier was
+		# removed. Clear target so a future PASS picks a fresh one.
+		input.quick_shot_pressed = true
 		_pass_target_peer_id = -1
 		_set_state(State.CARRY)
 		return
@@ -2332,11 +2333,11 @@ func _state_quick_shot_pressed(input: InputState, snapshot: WorldSnapshot, self_
 	_apply_brake_steering(input, snapshot, self_pos)
 	debug_last_decision = "QUICK"
 	# No-charge shot — score the goalie at his current position
-	# (release_lookahead_s = 0).
+	# (release_lookahead_s = 0). Fires the instant quick shot via the dedicated
+	# button flag; LMB no longer has a tap-to-quick-shot path.
 	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos, 0.0)
 	input.mouse_world_pos = _step_mouse_toward(clean_aim)
-	input.shoot_pressed = true
-	input.shoot_held = true
+	input.quick_shot_pressed = true
 	if not have_puck:
 		_set_state(_post_puck_lost_state(snapshot))
 	else:

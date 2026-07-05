@@ -27,6 +27,7 @@ class Callbacks:
 	var transition_to_skating: Callable           # ()
 	# Shot releases
 	var release_wrister: Callable                 # (input: InputState)
+	var fire_quick_shot: Callable                 # (input: InputState) — instant quick shot / pass
 	var release_slapper: Callable                 # (input: InputState, one_timer: bool)
 	# puck distance check + ShotMechanics + signal.
 	# Returns { fired: bool, direction: Vector3, follow_through_duration: float }
@@ -98,6 +99,12 @@ func _state_skating_without_puck(_skater: Skater, input: InputState, delta: floa
 
 func _state_skating_with_puck(skater: Skater, input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:
 	_cb.apply_blade_from_mouse.call(input, delta)
+	# Quick shot / pass: dedicated button, fires instantly (no aim state). Checked
+	# before the wrister so the blade target computed above is this tick's, and
+	# returns so a same-tick shoot/slap press can't stack on top.
+	if input.quick_shot_pressed:
+		_cb.fire_quick_shot.call(input)
+		return
 	if input.shoot_pressed:
 		_enter_wrister_aim(skater, input)
 	if input.slap_pressed:

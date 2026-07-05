@@ -6,6 +6,7 @@ var _local_team_id: int = -1
 var _pending_shoot_pressed: bool = false
 var _pending_slap_pressed: bool = false
 var _pending_stick_lift_pressed: bool = false
+var _pending_quick_shot_pressed: bool = false
 # Loft mode (0 flat / 1 low saucer / 2 high), stepped by scroll-wheel events in
 # _process and stamped ABSOLUTE into every gathered frame. Living here — not as
 # sticky controller state — makes it plain input: reconcile replay and the
@@ -42,6 +43,8 @@ func _process(_delta: float) -> void:
 		_elevation_level = maxi(_elevation_level - 1, 0)
 	if Input.is_action_just_pressed("stick_lift"):
 		_pending_stick_lift_pressed = true
+	if Input.is_action_just_pressed("quick_shot"):
+		_pending_quick_shot_pressed = true
 
 func gather() -> InputState:
 	# Input blocked → return a neutral state so the skater decelerates
@@ -85,6 +88,7 @@ func gather() -> InputState:
 	state.block_held = Input.is_action_pressed("block")
 	state.stick_lift_held = Input.is_action_pressed("stick_lift")
 	state.stick_lift_pressed = _pending_stick_lift_pressed
+	state.quick_shot_pressed = _pending_quick_shot_pressed
 	state.mouse_world_pos = _get_mouse_world_pos(_camera)
 	state.host_timestamp = NetworkManager.estimated_host_time()
 	_last_mouse_world_pos = state.mouse_world_pos
@@ -93,6 +97,7 @@ func gather() -> InputState:
 	_pending_shoot_pressed = false
 	_pending_slap_pressed = false
 	_pending_stick_lift_pressed = false
+	_pending_quick_shot_pressed = false
 	return state
 
 func _get_mouse_world_pos(camera: Camera3D) -> Vector3:

@@ -28,6 +28,7 @@ var _color_grade_btn: OptionButton = null
 var _gi_mode_btn: OptionButton = null
 var _crowd_density_btn: OptionButton = null
 var _ice_scratches_check: CheckButton = null
+var _puck_shadow_check: CheckButton = null
 var _render_scale_slider: HSlider = null
 var _scaling_3d_btn: OptionButton = null
 var _aa_btn: OptionButton = null
@@ -94,6 +95,7 @@ const _REBINDABLE_ACTIONS: Array = [
 	{"action": "sprint",         "label": "Sprint"},
 	{"action": "brake",          "label": "Brake"},
 	{"action": "shoot",          "label": "Shoot"},
+	{"action": "quick_shot",     "label": "Quick Shot / Pass"},
 	{"action": "slapshot",       "label": "Slapshot"},
 	{"action": "block",          "label": "Block"},
 	{"action": "elevation_up",   "label": "Elevation Up"},
@@ -158,6 +160,7 @@ func _snapshot() -> Dictionary:
 		"gi_mode": PlayerPrefs.gi_mode,
 		"crowd_density": PlayerPrefs.crowd_density,
 		"ice_scratches_enabled": PlayerPrefs.ice_scratches_enabled,
+		"puck_shadow_enabled": PlayerPrefs.puck_shadow_enabled,
 		"render_scale": PlayerPrefs.render_scale,
 		"scaling_3d_mode": PlayerPrefs.scaling_3d_mode,
 		"anti_aliasing_mode": PlayerPrefs.anti_aliasing_mode,
@@ -202,6 +205,7 @@ func _read_controls() -> Dictionary:
 		"gi_mode": _gi_mode_btn.selected,
 		"crowd_density": _crowd_density_btn.selected,
 		"ice_scratches_enabled": _ice_scratches_check.button_pressed,
+		"puck_shadow_enabled": _puck_shadow_check.button_pressed,
 		"render_scale": _render_scale_slider.value,
 		"scaling_3d_mode": _scaling_3d_btn.selected,
 		"anti_aliasing_mode": _aa_btn.selected,
@@ -442,6 +446,12 @@ func _build_video_tab() -> Control:
 	SoundManager.wire_button(_ice_scratches_check)
 	_ice_scratches_check.toggled.connect(_on_ice_scratches_toggled)
 	box.add_child(_field_row("Ice Scratches", _ice_scratches_check))
+
+	_puck_shadow_check = CheckButton.new()
+	_puck_shadow_check.set_pressed_no_signal(PlayerPrefs.puck_shadow_enabled)
+	SoundManager.wire_button(_puck_shadow_check)
+	_puck_shadow_check.toggled.connect(_on_puck_shadow_toggled)
+	box.add_child(_field_row("Puck Shadow", _puck_shadow_check))
 
 	return box
 
@@ -933,6 +943,9 @@ func _on_crowd_density_selected(_idx: int) -> void:
 func _on_ice_scratches_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
+func _on_puck_shadow_toggled(_pressed: bool) -> void:
+	_update_apply_state()
+
 func _on_attack_up_toggled(_pressed: bool) -> void:
 	_update_apply_state()
 
@@ -1188,6 +1201,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.gi_mode = c.gi_mode
 	PlayerPrefs.crowd_density = c.crowd_density
 	PlayerPrefs.ice_scratches_enabled = c.ice_scratches_enabled
+	PlayerPrefs.puck_shadow_enabled = c.puck_shadow_enabled
 	PlayerPrefs.render_scale = c.render_scale
 	PlayerPrefs.scaling_3d_mode = c.scaling_3d_mode
 	PlayerPrefs.anti_aliasing_mode = c.anti_aliasing_mode
@@ -1286,6 +1300,7 @@ func _defaults() -> Dictionary:
 		"gi_mode": PlayerPrefs.GI_MODE_OFF,
 		"crowd_density": PlayerPrefs.CROWD_DENSITY_HIGH,
 		"ice_scratches_enabled": true,
+		"puck_shadow_enabled": true,
 		"render_scale": 1.0,
 		"scaling_3d_mode": PlayerPrefs.SCALING_3D_BILINEAR,
 		"anti_aliasing_mode": PlayerPrefs.AA_MSAA_2X,
@@ -1338,6 +1353,8 @@ func _apply_values_to_controls(v: Dictionary) -> void:
 		_crowd_density_btn.selected = v.crowd_density
 	if _ice_scratches_check != null:
 		_ice_scratches_check.set_pressed_no_signal(v.ice_scratches_enabled)
+	if _puck_shadow_check != null:
+		_puck_shadow_check.set_pressed_no_signal(v.puck_shadow_enabled)
 	if _render_scale_slider != null:
 		_render_scale_slider.value = v.render_scale
 	if _scaling_3d_btn != null:

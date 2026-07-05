@@ -1267,16 +1267,15 @@ func _on_game_over() -> void:
 	else:
 		_phase_label.text = "TIE"
 		_phase_label.add_theme_color_override("font_color", _WHITE)
-	# Star of the Game on the chyron's spare rows (the goal-scorer rows are
-	# hidden at game over). One star only — scarcity keeps it meaningful at 3v3.
+	# Star of the Game, shown on the Game Over popup (see GameOverPopup.set_star):
+	# the popup sits on a higher CanvasLayer over the phase banner, so the star
+	# has to live there to be seen. One star only — scarcity keeps it meaningful
+	# at 3v3; a nothing game with no counting stats has no star.
 	var star: PlayerRecord = GameManager.get_star_of_game()
 	if star != null:
-		_assist_tag_label.text = "STAR OF THE GAME"
-		_assist_tag_label.add_theme_color_override("font_color", _GOLD)
-		_assist_tag_label.visible = true
-		_assist_label.text = "%s  ·  %s" % [star.display_name(), _star_stat_line(star.stats)]
-		_assist_label.add_theme_color_override("font_color", _GOLD)
-		_assist_label.visible = true
+		_game_over_popup.set_star("%s  ·  %s" % [star.display_name(), _star_stat_line(star.stats)])
+	else:
+		_game_over_popup.set_star("")
 	_show_phase_banner_at_rest()
 	_rematch_votes.clear()
 	_local_voted = false

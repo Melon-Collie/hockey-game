@@ -58,22 +58,23 @@ class SlapperConfig:
 	var loft_vy_low: float = 0.0
 	var loft_vy_high: float = 0.0
 
-# Wrister release. HARD BINARY — a tap and a charged wrister are two distinct
-# shots, with NO blend between them. The split is decided by HOLD TIME at the
-# call site (see SkaterController._release_wrister) and passed in as is_quick_shot:
-#   - QUICK SHOT (released before quick_shot_time): aims player→blade (the blade
-#     tracks the cursor via ROM-clamped IK, so aim is accurate and can never point
-#     behind the player) at the fixed quick/pass power.
-#   - WRISTER (held past quick_shot_time): aims along the DRAG (the swept cursor
-#     direction) at charged power. The drag direction IS the aim — this is the
-#     defining mechanic of the shot, so it is never diluted.
-# There is intentionally no blend band: dragging to aim is the core of the game,
-# and the old smoothstep seam mixed the body-relative tap direction into charged
-# shots, which both muddied the feel and — because tap_dir depends on the predicted
-# body position — was a client/host divergence source. A time-based classifier is
-# also deterministic across machines (both count the same ticks), unlike the old
-# body-dependent drag-distance threshold. Netcode upshot: a charged wrister's aim
-# (the drag vector) is body-independent and identical on client and host.
+# Wrister release. HARD BINARY — a quick shot and a charged wrister are two
+# distinct shots, with NO blend between them. Which one fires is decided by the
+# INPUT at the call site (not any threshold in here) and passed in as is_quick_shot:
+#   - QUICK SHOT (the dedicated quick_shot button, via _fire_quick_shot): aims
+#     player→blade (the blade tracks the cursor via ROM-clamped IK, so aim is
+#     accurate and can never point behind the player) at the fixed quick/pass power.
+#   - WRISTER (the LMB shoot button, via _release_wrister): aims along the DRAG
+#     (the swept cursor direction) at charged power. The drag direction IS the aim —
+#     this is the defining mechanic of the shot, so it is never diluted.
+# The two live on separate buttons precisely so there's no tap-vs-hold guess: the
+# old hold-time classifier made an ordinary tap that lingered a few ticks fire a
+# wrister when the player expected a snap. There is intentionally no blend band:
+# dragging to aim is the core of the game, and mixing the body-relative tap
+# direction into charged shots both muddies the feel and — because tap_dir depends
+# on the predicted body position — is a client/host divergence source. Netcode
+# upshot: a charged wrister's aim (the drag vector) is body-independent and
+# identical on client and host.
 # Backhand is detected by blade X sign in upper-body-local space: positive X is a
 # backhand for a left-handed player, negative for a righty.
 static func release_wrister(

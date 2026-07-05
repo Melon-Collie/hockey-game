@@ -13,7 +13,7 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var max_speed: float = 38.0
 @export var reattach_cooldown: float = 0.5
 @export var nudge_cooldown: float = 0.30  # short re-grab denial after a self nudge tap
-@export var ice_height: float = 0.0125  # = Puck.tscn cylinder half-height (0.025/2); disc bottom rests on y=0
+@export var ice_height: float = 0.0175  # = Puck.tscn cylinder half-height (0.035/2); disc bottom rests on y=0
 @export var pickup_max_speed: float = 8.0
 # Closing-speed threshold for catch-vs-deflect. Set above charged-pass speed
 # (~19 m/s) so any pass is receivable at ANY blade angle; the alignment bonus

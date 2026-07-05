@@ -11,7 +11,7 @@ const ICE_Y: float = 0.005               # world Y for grounded trail dots (just
 #   _trail_particles — the sub-emitter that actually renders each trail dot. Receives
 #                      world-space positions from the parent shader and fades them out
 #                      over TRAIL_LIFETIME seconds.
-const TRAIL_SPACING: float = 0.045  # meters between trail dots (~puck diameter); trail appears above ~4 m/s
+const TRAIL_SPACING: float = 0.07   # meters between trail dots (~puck diameter); trail appears above ~4 m/s
 const TRAIL_LIFETIME: float = 0.25  # seconds each dot lingers
 const TRAIL_AMOUNT: int = 150       # max concurrent trail dots (covers ~25 m/s at 60 fps with 0.25 s lifetime)
 
@@ -185,8 +185,8 @@ func _make_trail_sub_emitter() -> GPUParticles3D:
 	# Flat disk lying on the ice. CylinderMesh with negligible height gives a
 	# circular scrape mark; cull_mode disabled so it's visible from above.
 	var disk := CylinderMesh.new()
-	disk.top_radius = 0.04
-	disk.bottom_radius = 0.04
+	disk.top_radius = 0.055
+	disk.bottom_radius = 0.055
 	disk.height = 0.003
 	disk.radial_segments = 10
 	disk.rings = 1
