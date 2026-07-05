@@ -633,8 +633,13 @@ func _close() -> void:
 	# Close P2P sessions (above) before leaving the lobby that owns them.
 	# Idempotent — a no-op in offline/free-play/tutorial where no lobby exists.
 	# Every teardown path (reset, _exit_tree, return_to_free_play, join-cancel)
-	# funnels through here, so this one call covers them all.
-	SteamManager.leave_lobby()
+	# funnels through here, so this one call covers them all. The validity
+	# guard matters only on process quit: autoloads free in reverse
+	# registration order, so SteamManager (registered after us) is already
+	# gone when our _exit_tree fires — SteamManager._exit_tree owns the
+	# quit-path leave instead.
+	if is_instance_valid(SteamManager):
+		SteamManager.leave_lobby()
 
 func prepare_for_new_game() -> void:
 	_input_batch_provider = Callable()

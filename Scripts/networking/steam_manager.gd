@@ -57,6 +57,17 @@ func _ready() -> void:
 	_try_init()
 
 
+# Leave the lobby on process quit. Autoloads free in REVERSE registration
+# order, so by the time NetworkManager (registered earlier) tears down, this
+# singleton is already gone and its guarded leave_lobby call no-ops — the
+# quit-path leave has to happen here, while the Steam GDExtension is still
+# loaded. An explicit leave tells the other members immediately instead of
+# making them wait out Steam's disconnect timeout. Idempotent with the
+# session-teardown paths that already funnel through NetworkManager._close().
+func _exit_tree() -> void:
+	leave_lobby()
+
+
 func _try_init() -> void:
 	# A build exported without the GDExtension (e.g. headless CI) has no Steam
 	# singleton at all — bail before referencing it.
