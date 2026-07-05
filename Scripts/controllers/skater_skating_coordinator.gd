@@ -4,7 +4,12 @@ extends RefCounted
 # Procedural skating stride — no skeleton, no animation clips. Advances a stride
 # phase by ground speed and swings each leg about its hip via Skater.set_leg_swing(),
 # matching the same per-frame "write the transforms" idiom the arm-bone IK already
-# uses. Purely cosmetic and derived entirely from the skater's velocity, so it
+# uses. Beyond the leg swing it owns the skating STANCE: a speed-engaged crouch
+# (hip + knee flex with a matching whole-body drop via Skater.set_skating_crouch_drop
+# so the skates stay planted), a per-stride body bob, and the trunk texture the
+# pose coordinator layers into the torso lean (trunk_pitch_add / trunk_roll_add —
+# effort dig and weight-shift sway; this class never writes torso rotations
+# itself). Purely cosmetic and derived entirely from the skater's velocity, so it
 # costs zero network state: remote skaters animate identically from the velocity
 # that interpolation already hands them.
 #
@@ -16,12 +21,25 @@ extends RefCounted
 
 const State = SkaterStateMachine.State
 
+# Leg segment spans from Scenes/Skater.tscn — hip pivot to knee pivot (LegL →
+# ShinL) and knee pivot to skate sole (ShinL → FootL). Used to derive the
+# stance knee flex and body drop from the hip flex so the crouch keeps the
+# skates planted. Keep in sync with the scene if the leg pivots move.
+const _THIGH_LEN: float = 0.31
+const _SHIN_LEN: float = 0.45
+
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var stride_phase: float = 0.0
+# Per-stride trunk texture, read by SkaterPoseCoordinator when it applies the
+# torso lean (this coordinator never writes torso rotations itself — the pose
+# pass stays the single writer). Radians; updated on real ticks only, so it
+# holds steady through reconcile replay like the rest of the gait.
+var trunk_pitch_add: float = 0.0
+var trunk_roll_add: float = 0.0
 # Smoothed [0,1] stride intensity so the legs ease in/out of motion at the
 # start/end of a stride instead of snapping to full amplitude.
 var _intensity: float = 0.0
@@ -45,10 +63,13 @@ func reset_to_rest() -> void:
 	stride_phase = 0.0
 	_intensity = 0.0
 	_effort = 0.0
+	trunk_pitch_add = 0.0
+	trunk_roll_add = 0.0
 	_prev_velocity = Vector3.ZERO
 	_have_prev_velocity = false
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+		_skater.set_skating_crouch_drop(0.0)
 
 # ── Per-Tick Application ──────────────────────────────────────────────────────
 # Three gait shapes — forward, backward, and lateral (crossover) — are computed
@@ -126,6 +147,26 @@ func apply(delta: float) -> void:
 		fb_w = absf(fwd) / denom
 		lr_w = absf(lat) / denom
 
+	# ── Stance: the speed-engaged crouch ───────────────────────────────────────
+	# Real skaters sit into flexed hips and knees as soon as they're moving with
+	# intent — the seated posture is most of what separates skating from walking
+	# on blades. Engagement saturates well below top speed (stance_full_speed_
+	# fraction) so even a cruise carries bent knees; effort then deepens the sit
+	# when driving and lets it rise toward a taller glide when coasting. From
+	# the hip flex alone, the knee flex that keeps the skate under the hip
+	# (knee = hip + asin(thigh/shin · sin(hip))) and the vertical deficit of the
+	# bent leg both follow from the leg geometry, so one export drives an
+	# anatomically consistent crouch. The deficit is applied as a whole-body
+	# drop (Skater.set_skating_crouch_drop) so the skates stay on the ice.
+	var stance: float = clampf(
+			_intensity / maxf(_controller.stance_full_speed_fraction, 0.01), 0.0, 1.0)
+	stance *= clampf(1.0 + _effort * _controller.stance_push_gain, 0.0, 1.35)
+	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
+	var stance_knee: float = stance_hip + asin(
+			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
+	var drop: float = _THIGH_LEN * (1.0 - cos(stance_hip)) \
+			+ _SHIN_LEN * (1.0 - cos(stance_knee - stance_hip))
+
 	# Asymmetric stroke: warp the phase before sampling the sine so each leg's swing
 	# eases out to the push and snaps back, reading as skating rather than a
 	# metronome tick-tock. The two legs are half a cycle apart, so the right leg
@@ -141,11 +182,19 @@ func apply(delta: float) -> void:
 	var s: float = sin(stride_phase - skew * sin(stride_phase))
 	var phase_opp: float = stride_phase + PI
 	var s_opp: float = sin(phase_opp - skew * sin(phase_opp))
+	# Swing-direction sample — d/dθ of the warped sine, positive while the leg
+	# swings forward (its recovery). Normalized by (1 + skew), the derivative's
+	# peak magnitude, so the tuck amplitude below is skew-independent.
+	var c: float = cos(stride_phase - skew * sin(stride_phase)) \
+			* (1.0 - skew * cos(stride_phase)) / (1.0 + skew)
+	var c_opp: float = cos(phase_opp - skew * sin(phase_opp)) \
+			* (1.0 - skew * cos(phase_opp)) / (1.0 + skew)
 	var roll_amp: float = deg_to_rad(_controller.stride_roll_deg) * _intensity * push_scale
 
-	var l_pitch: float = 0.0
+	# Stance hip flex applies in every gait — thighs pitch forward into the sit.
+	var l_pitch: float = stance_hip
 	var l_roll: float = 0.0
-	var r_pitch: float = 0.0
+	var r_pitch: float = stance_hip
 	var r_roll: float = 0.0
 
 	# Forward / backward gait. Shared side-to-side roll rocks the lower body onto
@@ -162,6 +211,16 @@ func apply(delta: float) -> void:
 	l_roll += fb_w * s * roll_amp
 	r_roll += fb_w * s * roll_amp
 
+	# Abduction: the extending leg flares OUT to the side as it drives back —
+	# the V-shaped hockey push — half-wave rectified (max(-s, 0) is that leg's
+	# back-extension) so only the push half of each cycle flares while the
+	# recovery returns under the body. Left leg flares toward -X: negative roll.
+	var l_ext: float = maxf(-s, 0.0)
+	var r_ext: float = maxf(-s_opp, 0.0)
+	var abduct_amp: float = deg_to_rad(_controller.stride_abduction_deg) * _intensity * push_scale
+	l_roll -= fb_w * abduct_amp * l_ext
+	r_roll += fb_w * abduct_amp * r_ext
+
 	# Crossover gait. Lean into the travel direction (static bias toward the inside
 	# of the turn) plus a scissoring roll 180° out of phase between the legs so
 	# they cross over one another laterally.
@@ -170,12 +229,28 @@ func apply(delta: float) -> void:
 	l_roll += lr_w * (lean + s * scissor)
 	r_roll += lr_w * (lean + s_opp * scissor)
 
-	# Knee flex. Each knee tucks on the recovery half of its stroke and extends on
-	# the push, 180° out of phase between legs. Direction-agnostic — the recovery
-	# tuck reads the same whichever way the skater is travelling. Negative so the
-	# shin folds back under the body (flip stride_knee_deg's sign to invert).
-	var knee_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale
-	var l_knee: float = -knee_amp * (0.5 - 0.5 * s)
-	var r_knee: float = -knee_amp * (0.5 - 0.5 * s_opp)
+	# Knee flex — three layers that read as one leg working. (1) The stance flex,
+	# the seated base both knees carry. (2) Push extension: the loaded leg
+	# straightens as it extends back (stance_knee_release of the stance flex gone
+	# at full extension) — the power stroke. (3) Recovery tuck: the unloaded leg
+	# folds as it swings back under the body (direction-gated on `c`, not
+	# position, so the tuck rides the return swing and not the push-out through
+	# the same spot). Negative folds the shin back under the body.
+	var tuck_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale
+	var release: float = _controller.stance_knee_release
+	var l_knee: float = -(stance_knee * (1.0 - release * l_ext) + tuck_amp * maxf(c, 0.0))
+	var r_knee: float = -(stance_knee * (1.0 - release * r_ext) + tuck_amp * maxf(c_opp, 0.0))
+
+	# Body bob: the body rides highest at full extension (|s| = 1) and sits
+	# deepest mid-transfer (s = 0) — a subtle vertical pulse at twice the leg
+	# cadence that sells the weight moving from skate to skate.
+	drop += _controller.stride_bob_m * _intensity * (1.0 - s * s)
+
+	# Trunk texture, consumed by SkaterPoseCoordinator's next lean application:
+	# effort digs the shoulders forward when driving (and tips them back on a
+	# hard brake), and the torso rolls over the loaded leg with the weight shift.
+	trunk_pitch_add = -deg_to_rad(_controller.stride_dig_lean_deg) * _effort
+	trunk_roll_add = deg_to_rad(_controller.stride_sway_deg) * _intensity * fb_w * s
 
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
+	_skater.set_skating_crouch_drop(drop)

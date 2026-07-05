@@ -856,6 +856,10 @@ func _load() -> void:
 				sz = _migrate_legacy_level(int(cfg.get_value("player", "attr_size",     2)))
 				sk = _migrate_legacy_level(int(cfg.get_value("player", "attr_strength", 2)))
 			_migrate_four_to_six(sp, ag, sz, sk)
+		# One choke point: whichever branch ran above, the resulting build must be
+		# a legal point-buy spread before anything reads it (free play, hosting,
+		# the picker). Legacy migration and hand-edited cfgs can both exceed BUDGET.
+		_enforce_attr_budget()
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 0.5), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
@@ -947,6 +951,13 @@ func _load() -> void:
 
 
 func get_player_attributes() -> PlayerAttributes:
+	# Mirror the host-side joiner validation (NetworkManager.request_join): a build
+	# that somehow exceeds the point-buy budget falls back to all-medium rather
+	# than handing the sim an illegal spread. _load()/_enforce_attr_budget already
+	# trims, so this is a defensive net covering any other mutation path.
+	if not PlayerAttributes.is_within_budget(
+			attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot):
+		return PlayerAttributes.all_medium()
 	return PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot)
 
 
@@ -972,9 +983,9 @@ func _migrate_legacy_level(old: int) -> int:
 
 # Splits a legacy four-attribute build (Speed/Agility/Size/Skill on the 1..5
 # scale) into the six-attribute scale. Skill is the scoring heir → Shot; Hands
-# and Physical are new axes seeded at medium, then trimmed (Hands first, then
-# Physical) so the migrated build fits the new BUDGET without disturbing the
-# player's expressed identity. Persisted as version 3 on the next save().
+# and Physical are new axes seeded at medium. The result can exceed BUDGET (a
+# 5/5/5/5 legacy build → 5/5/3/5/3/5 = 26); _enforce_attr_budget() (called once
+# after the load/migrate branch) trims it. Persisted as version 3 on next save().
 func _migrate_four_to_six(sp: int, ag: int, sz: int, sk: int) -> void:
 	attr_speed    = sp
 	attr_agility  = ag
@@ -982,12 +993,18 @@ func _migrate_four_to_six(sp: int, ag: int, sz: int, sk: int) -> void:
 	attr_shot     = sk
 	attr_hands    = PlayerAttributes.LEVEL_MEDIUM
 	attr_physical = PlayerAttributes.LEVEL_MEDIUM
-	while attr_speed + attr_agility + attr_hands + attr_size + attr_physical + attr_shot > PlayerAttributes.BUDGET \
-			and (attr_hands > PlayerAttributes.LEVEL_MIN or attr_physical > PlayerAttributes.LEVEL_MIN):
-		if attr_hands > PlayerAttributes.LEVEL_MIN:
-			attr_hands -= 1
-		else:
-			attr_physical -= 1
+
+
+# Guarantee the loaded/migrated build respects the point-buy budget. Per-level
+# clamping bounds each axis but not the sum, so a legacy 4→6 split (two new axes
+# seeded at medium) or a hand-edited / corrupt cfg can exceed BUDGET — which,
+# unchecked, let an offline or HOSTING player carry an over-budget build (the
+# joiner gate in NetworkManager only validates REMOTE peers). Trim deterministically,
+# shedding the non-identity axes (Hands=2, Physical=4) first.
+func _enforce_attr_budget() -> void:
+	set_player_attributes(PlayerAttributes.trimmed_to_budget(
+			attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot,
+			PackedInt32Array([2, 4, 0, 1, 3, 5])))
 
 
 func is_tutorial_complete(id: String) -> bool:

@@ -279,13 +279,13 @@ func _build_ws(
 	buf.append_array(header)
 	for entry: Dictionary in skaters:
 		_append_s32(buf, entry.id)
-		buf.append_array(WorldStateCodec._encode_skater_quantized(entry.state))  # 38 B
+		buf.append_array(WorldStateCodec._encode_skater_quantized(entry.state))  # 39 B
 		buf.append(0)  # queue_depth (ignored by replay decode)
 	buf.append_array(WorldStateCodec._encode_puck_quantized(puck))  # 12 B
 	buf.append(carrier_idx & 0xFF)
 	buf.append(goalies.size())
 	for g: GoalieNetworkState in goalies:
-		buf.append_array(WorldStateCodec._encode_goalie_quantized(g))  # 35 B
+		buf.append_array(WorldStateCodec._encode_goalie_quantized(g))  # 41 B
 	var gs := PackedByteArray()
 	gs.resize(WorldStateCodec.GAME_STATE_BLOCK_SIZE)
 	gs.encode_u8(0, game_state.score0)
@@ -391,3 +391,38 @@ func test_decode_for_replay_rejects_overrun_goalie_count() -> void:
 	# num_goalies sits just before the 6-byte game-state tail.
 	buf.encode_u8(buf.size() - WorldStateCodec.GAME_STATE_BLOCK_SIZE - 1, 255)
 	assert_true(codec.decode_for_replay(buf).is_empty(), "overrun goalie count rejected")
+
+
+# ── v10 wire additions ────────────────────────────────────────────────────────
+
+func test_skater_stagger_round_trips() -> void:
+	# stagger_timer was never on the wire, so a client victim's predicted stagger
+	# was wiped to 0 on the next reconcile. u8 @0.01s must now round-trip it.
+	for v: float in [0.0, 0.3, 1.0, 2.5]:
+		var s := SkaterNetworkState.new()
+		s.stagger_timer = v
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		assert_almost_eq(dec.stagger_timer, v, 0.01, "stagger %f round-trips within u8 @0.01s" % v)
+
+func test_goalie_glove_above_crossbar_not_clipped() -> void:
+	# Regression: glove/blocker Y reach (react_hand_y_max 1.55) exceeded the old s8
+	# ±1.27 m range and clipped ~28 cm low. The s16-wide encoding preserves it.
+	var s := GoalieNetworkState.new()
+	s.glove_offset = Vector3(-0.6, 1.55, -0.1)
+	s.blocker_offset = Vector3(0.6, 1.50, -0.1)
+	var dec: GoalieNetworkState = WorldStateCodec._decode_goalie_quantized(
+			WorldStateCodec._encode_goalie_quantized(s))
+	assert_almost_eq(dec.glove_offset.y, 1.55, 0.011, "glove Y above crossbar preserved")
+	assert_almost_eq(dec.blocker_offset.y, 1.50, 0.011, "blocker Y above crossbar preserved")
+
+func test_goalie_rotation_y_wraps_past_pi() -> void:
+	# The -Z goalie's facing lerps around base PI past +PI; the old raw clamp pinned
+	# it flat at PI. wrapf must fold it to the equivalent (-PI,PI] before quantizing,
+	# so the decoded facing points the SAME way (cos/sin match), not straight out.
+	var s := GoalieNetworkState.new()
+	s.rotation_y = PI + 1.0   # ~4.14 rad; wraps to ~-2.14
+	var dec: GoalieNetworkState = WorldStateCodec._decode_goalie_quantized(
+			WorldStateCodec._encode_goalie_quantized(s))
+	assert_almost_eq(cos(dec.rotation_y), cos(PI + 1.0), 0.002, "wrapped facing same direction (cos)")
+	assert_almost_eq(sin(dec.rotation_y), sin(PI + 1.0), 0.002, "wrapped facing same direction (sin)")

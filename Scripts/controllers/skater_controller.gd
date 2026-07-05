@@ -151,9 +151,18 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var upper_body_lean_max_deg: float = 15.0
 @export var upper_body_lean_return_speed: float = 8.0
 
-# ── Velocity Lean Tuning ──────────────────────────────────────────────────────
-@export var velocity_lean_max_deg: float = 10.0
+# ── Velocity Lean / Skating Posture Tuning ────────────────────────────────────
+# Trunk lean INTO travel, re-derived from velocity on every machine (never
+# networked — see SkaterPoseCoordinator.compute_velocity_lean_target). Forward
+# skating folds the torso forward into the attack posture that makes skating
+# read as skating; backward skating sits slightly back; lateral travel banks
+# into the carve. The lower body banks fully but follows the forward pitch
+# only fractionally — the legs stay under the hips while the trunk folds.
+@export var velocity_lean_forward_max_deg: float = 20.0
+@export var velocity_lean_back_max_deg: float = 6.0
+@export var velocity_lean_lateral_max_deg: float = 12.0
 @export var velocity_lean_speed: float = 6.0
+@export var lower_body_pitch_follow: float = 0.35
 
 # ── Lower Body Lag Tuning ─────────────────────────────────────────────────────
 @export var lower_body_lag_max_deg: float = 20.0
@@ -169,9 +178,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)
 @export var crossover_lean_deg: float = 6.0       # static lean into the crossover direction
 @export var crossover_scissor_deg: float = 8.0    # legs scissor laterally across each other
-@export var stride_knee_deg: float = 18.0         # knee flex depth on the recovery half-stroke
+@export var stride_knee_deg: float = 18.0         # recovery tuck depth of the swinging (unloaded) knee
 @export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
 @export var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)
+@export var stride_abduction_deg: float = 10.0    # outward flare of the extending leg (the skating "V" push)
+@export var stride_bob_m: float = 0.02            # vertical body bob per half-stride (weight transfer)
+@export var stride_sway_deg: float = 3.0          # torso weight-shift roll oscillating with the stride
+@export var stride_dig_lean_deg: float = 8.0      # extra trunk pitch from effort: forward driving, back braking
 # Glide-vs-push: stride amplitude scales above/below the speed baseline by the
 # sign of tangential acceleration — driving digs in, coasting settles to a glide.
 @export var stride_effort_ref_accel: float = 9.0  # m/s^2 of tangential accel mapping to full push effort
@@ -179,6 +192,14 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_push_gain: float = 0.7         # how far effort drives amplitude off the speed baseline
 @export var stride_glide_floor: float = 0.35      # min amplitude scale when coasting (the glide)
 @export var stride_push_ceiling: float = 1.5      # max amplitude scale when driving hard
+# Stance — the speed-engaged crouch. The skater sits into flexed hips/knees as
+# soon as they're moving with intent; SkaterSkatingCoordinator derives the
+# matching knee flex and body drop from the leg geometry so one export drives
+# an anatomically consistent crouch that keeps the skates planted on the ice.
+@export var stance_hip_deg: float = 22.0            # static hip flex at full stance
+@export var stance_full_speed_fraction: float = 0.45  # fraction of max_speed at which the crouch fully engages
+@export var stance_push_gain: float = 0.35          # effort deepens (push) / shallows (glide) the stance
+@export var stance_knee_release: float = 0.85       # fraction of stance knee flex released at full push extension
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
@@ -373,7 +394,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.apply_slapper_velocity_drag = _apply_slapper_velocity_drag
 	_cb.apply_block_movement = _apply_block_movement
 	_sm.setup(_cb, _aiming)
-	_pose.setup(skater, _sm, _aiming, self)
+	_pose.setup(skater, _sm, _aiming, self, _skating)
 	_skating.setup(skater, _sm, self)
 
 # Reach ROM is derived from arm length, not an independent tunable. These

@@ -257,6 +257,13 @@ var _blade_area: Area3D = null
 var _slapper_zone_area: Area3D = null
 var _slapper_zone_sphere: SphereShape3D = null
 var _default_upper_body_y: float = 0.0
+var _default_lower_body_y: float = 0.0
+# Cosmetic vertical drop of the whole visible body (torso + hips) while in
+# the bent-knee skating stance, so the flexed legs keep the skates on the
+# ice. Driven by SkaterSkatingCoordinator; composes with the shot-block
+# crouch through _apply_body_height (the single writer of both body Ys).
+var _skating_crouch_drop: float = 0.0
+var _block_stance_active: bool = false
 # Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
 # Advanced by update_carry_side() each tick from the IK pipeline.
 var _carry_side: int = 0
@@ -314,6 +321,7 @@ func _ready() -> void:
 	_prev_blade_world_pos = upper_body.to_global(blade.position)
 	_last_finite_position = global_position
 	_default_upper_body_y = upper_body.position.y
+	_default_lower_body_y = lower_body.position.y
 
 	collision_layer = Constants.LAYER_SKATER_BODIES
 	collision_mask  = Constants.MASK_SKATER
@@ -678,6 +686,24 @@ func _resolve_leg_pivots() -> void:
 	_shin_l = lower_body.get_node_or_null("LegL/ShinL") as Node3D
 	_shin_r = lower_body.get_node_or_null("LegR/ShinR") as Node3D
 	_legs_resolved = true
+
+
+# Sets the skating-stance body drop (metres). The stance flexes hips/knees,
+# which shortens the legs' vertical span; lowering the torso AND the hips by
+# the deficit keeps the skates planted instead of floating. Cosmetic only —
+# the collision body and every gameplay read are unaffected; the blade IK
+# re-lands the blade at ice height from upper_body.global_position each tick.
+func set_skating_crouch_drop(drop: float) -> void:
+	if is_equal_approx(_skating_crouch_drop, drop):
+		return
+	_skating_crouch_drop = drop
+	_apply_body_height()
+
+
+func _apply_body_height() -> void:
+	var block_depth: float = block_crouch_depth if _block_stance_active else 0.0
+	upper_body.position.y = _default_upper_body_y - block_depth - _skating_crouch_drop
+	lower_body.position.y = _default_lower_body_y - _skating_crouch_drop
 
 
 # ── Blade ─────────────────────────────────────────────────────────────────────
@@ -1105,7 +1131,8 @@ func set_ghost(ghost: bool) -> void:
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
 func set_block_stance(active: bool) -> void:
 	_body_block_sphere.radius = block_body_radius if active else body_block_radius
-	upper_body.position.y = _default_upper_body_y - block_crouch_depth if active else _default_upper_body_y
+	_block_stance_active = active
+	_apply_body_height()
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
 
 

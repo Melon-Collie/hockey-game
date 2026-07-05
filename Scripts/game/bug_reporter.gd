@@ -8,9 +8,10 @@ class_name BugReporter extends RefCounted
 # Rate-limit and length-cap state lives at class scope so multiple dialog
 # instances (or rapid open/close cycles) share one window. Both are
 # defense-in-depth against a buggy build or a hostile client spamming the
-# table — the publishable Supabase key only authorizes INSERT/SELECT/UPDATE,
-# not DELETE, so spam can't be cleaned up server-side. RLS still has to be
-# correctly configured on the bug_reports table (verify in dashboard).
+# table — the publishable Supabase key only authorizes INSERT on bug_reports
+# (no SELECT/UPDATE/DELETE), so spam can't be cleaned up server-side. A
+# server-side CHECK constraint (sql/bug_reports.sql) caps row size as a backstop;
+# RLS still has to be correctly configured on the table (verify in dashboard).
 
 const RATE_LIMIT_SEC: float = 60.0
 const MAX_DESCRIPTION_CHARS: int = 2000

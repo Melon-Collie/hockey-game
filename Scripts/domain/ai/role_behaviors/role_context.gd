@@ -83,6 +83,12 @@ var check_aggression: float = 1.0
 # man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
 var defensive_anticipation_scale: float = 1.0
 
+# Physics ticks per AI dispatch (decide() call). 1 = the perfect-bot default /
+# every-physics-tick; higher at lower difficulty tiers. Roles that track real
+# time (e.g. the carrier's re-eval cadence + hold-decay clock) must scale their
+# per-call tick math by this so wall-clock durations don't stretch with the tier.
+var dispatch_period_ticks: int = 1
+
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the
 # collect_* helpers fill these buffers instead of allocating fresh arrays at AI

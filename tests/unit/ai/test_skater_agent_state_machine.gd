@@ -766,3 +766,45 @@ func test_carry_pre_aim_times_out_and_fires() -> void:
 	sm._mouse_pos_initialized = true
 	sm.dispatch(InputState.new(), _self_snap(Vector3.ZERO, true))
 	assert_eq(sm.get_state(), Agent.State.SHOOT_PRESSED, "timeout commits the shot anyway")
+
+
+# ── Wrister wind-up handedness (regression: the perp sign was inverted, so bots
+# charged every wrister/pass on the backhand side and paid the backhand penalty).
+# Authoritative reference: _try_shot_reception (~:1581) defines RH forehand as
+# -left_dir where left_dir = Vector3(aim.z, 0, -aim.x); LH mirrors. The wind-up
+# midpoint offset = perp * SIDE_OFFSET (the ±aim*half endpoints cancel), so its
+# projection onto the forehand direction must be positive on the forehand side. ─
+
+func _windup_midpoint(agent: SkaterAgentStateMachine, aim_dir: Vector3, side_sign: float) -> Vector3:
+	# aim_distance well past SIDE_OFFSET so the compensation tilt is tiny and the
+	# degenerate guard doesn't fire; target_charge arbitrary positive.
+	var e: Dictionary = agent._wind_up_endpoint_offsets(aim_dir, 10.0, 0.5, side_sign)
+	return (e.start as Vector3 + e.target as Vector3) * 0.5
+
+func _forehand_dir(aim_dir: Vector3, is_left_handed: bool) -> Vector3:
+	var left_dir := Vector3(aim_dir.z, 0.0, -aim_dir.x)
+	return left_dir if is_left_handed else -left_dir
+
+func test_windup_forehand_side_right_handed() -> void:
+	# sm from before_each is right-handed. For several aim directions the wind-up
+	# must sit on the forehand side (positive dot with the reception forehand dir).
+	for aim: Vector3 in [Vector3(0, 0, -1), Vector3(1, 0, -1).normalized(), Vector3(-1, 0, -1).normalized()]:
+		var mid: Vector3 = _windup_midpoint(sm, aim, 1.0)
+		assert_gt(mid.dot(_forehand_dir(aim, false)), 0.0,
+				"RH wind-up on the forehand side for aim %s" % aim)
+
+func test_windup_forehand_side_left_handed() -> void:
+	var lh := Agent.new()
+	lh.setup(SELF_ID, 0, TeamBrain.new(0, _team_map), _team_map, true)  # left-handed
+	for aim: Vector3 in [Vector3(0, 0, -1), Vector3(1, 0, -1).normalized(), Vector3(-1, 0, -1).normalized()]:
+		var mid: Vector3 = _windup_midpoint(lh, aim, 1.0)
+		assert_gt(mid.dot(_forehand_dir(aim, true)), 0.0,
+				"LH wind-up on the forehand side for aim %s" % aim)
+
+func test_windup_side_flip_moves_to_backhand() -> void:
+	# The defender-driven side flip (side_sign = -1) must move the wind-up to the
+	# opposite (backhand) side, i.e. negative dot with the forehand dir.
+	var aim := Vector3(0, 0, -1)
+	var mid: Vector3 = _windup_midpoint(sm, aim, -1.0)
+	assert_lt(mid.dot(_forehand_dir(aim, false)), 0.0,
+			"side-flip moves the RH wind-up to the backhand side")

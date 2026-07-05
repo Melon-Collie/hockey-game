@@ -34,21 +34,28 @@ var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _aiming: SkaterAimingBehavior = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
+# Read-only source of the per-stride trunk texture (dig pitch / weight-shift
+# sway). The gait computes those values but never writes torso rotations —
+# this coordinator stays the single writer of the upper/lower-body lean.
+var _skating: SkaterSkatingCoordinator = null
 
 func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
-		controller: SkaterController) -> void:
+		controller: SkaterController, skating: SkaterSkatingCoordinator) -> void:
 	_skater = skater
 	_sm = sm
 	_aiming = aiming
 	_controller = controller
+	_skating = skating
 	_prev_facing_angle = atan2(facing.x, facing.y)
 	_prev_upper_body_angle = upper_body_angle
 
 # ── Per-Tick Application ──────────────────────────────────────────────────────
 func apply_velocity_lean(delta: float) -> void:
 	var target: Vector2 = compute_velocity_lean_target(
-			_skater.velocity, _skater.global_transform.basis,
-			_controller.max_speed, _controller.velocity_lean_max_deg)
+			_skater.velocity, _skater.global_transform.basis, _controller.max_speed,
+			_controller.velocity_lean_forward_max_deg,
+			_controller.velocity_lean_back_max_deg,
+			_controller.velocity_lean_lateral_max_deg)
 	velocity_lean_x = lerpf(velocity_lean_x, target.x, _controller.velocity_lean_speed * delta)
 	velocity_lean_z = lerpf(velocity_lean_z, target.y, _controller.velocity_lean_speed * delta)
 
@@ -58,15 +65,25 @@ func apply_velocity_lean(delta: float) -> void:
 # and by snap_lean_to_state below (remote / replay path snaps directly). Means
 # lean isn't transmitted over the wire — receivers re-derive it from the
 # velocity and hand position they already have.
+#
+# The lean is INTO travel: forward skating folds the trunk forward (the
+# skating posture — negative rotation.x pitches the torso top toward local
+# −Z), backward skating sits slightly back, and lateral travel banks into the
+# carve (negative rotation.z rolls the torso top toward local +X, the
+# skater's right). Returned as Vector2(x = pitch, y = roll), radians.
 static func compute_velocity_lean_target(
-		world_velocity: Vector3, body_basis: Basis,
-		max_speed: float, lean_max_deg: float) -> Vector2:
+		world_velocity: Vector3, body_basis: Basis, max_speed: float,
+		fwd_lean_max_deg: float, back_lean_max_deg: float,
+		lateral_lean_max_deg: float) -> Vector2:
 	if max_speed <= 0.0:
 		return Vector2.ZERO
 	var local_vel: Vector3 = body_basis.inverse() * world_velocity
-	var lean_max: float = deg_to_rad(lean_max_deg)
-	var target_x: float = -clampf(local_vel.z / max_speed, -1.0, 1.0) * lean_max
-	var target_z: float =  clampf(local_vel.x / max_speed, -1.0, 1.0) * lean_max
+	# −Z is the body's forward axis, so negate for a "how forward" fraction.
+	var fwd_t: float = clampf(-local_vel.z / max_speed, -1.0, 1.0)
+	var pitch_max_deg: float = fwd_lean_max_deg if fwd_t >= 0.0 else back_lean_max_deg
+	var target_x: float = -fwd_t * deg_to_rad(pitch_max_deg)
+	var lat_t: float = clampf(local_vel.x / max_speed, -1.0, 1.0)
+	var target_z: float = -lat_t * deg_to_rad(lateral_lean_max_deg)
 	return Vector2(target_x, target_z)
 
 
@@ -88,16 +105,34 @@ static func compute_upper_body_lean_target(
 # marker lands at the correct world Y under the leaning upper body.
 func snap_lean_to_state() -> void:
 	var v_target: Vector2 = compute_velocity_lean_target(
-			_skater.velocity, _skater.global_transform.basis,
-			_controller.max_speed, _controller.velocity_lean_max_deg)
+			_skater.velocity, _skater.global_transform.basis, _controller.max_speed,
+			_controller.velocity_lean_forward_max_deg,
+			_controller.velocity_lean_back_max_deg,
+			_controller.velocity_lean_lateral_max_deg)
 	velocity_lean_x = v_target.x
 	velocity_lean_z = v_target.y
 	upper_body_lean = compute_upper_body_lean_target(
 			Vector2(_skater.top_hand.position.x, _skater.top_hand.position.z),
 			Vector2(_skater.shoulder.position.x, _skater.shoulder.position.z),
 			_controller.rom_backhand_reach_max, _controller.upper_body_lean_max_deg)
-	_skater.set_upper_body_lean(upper_body_lean + velocity_lean_x, velocity_lean_z)
-	_skater.set_lower_body_lean(velocity_lean_x, velocity_lean_z)
+	_apply_lean()
+
+
+# Single writer for the torso/leg lean rotations. Layers, in order: the reach
+# lean (blade-reach forward fold), the velocity lean (skating posture pitch +
+# carve bank), and the per-stride trunk texture the gait computes (effort dig
+# pitch + weight-shift sway roll — see SkaterSkatingCoordinator). The lower
+# body banks fully with the carve but follows the forward pitch only
+# fractionally, so the legs stay planted under the hips while the trunk folds
+# forward over them.
+func _apply_lean() -> void:
+	var stride_pitch: float = _skating.trunk_pitch_add if _skating != null else 0.0
+	var stride_roll: float = _skating.trunk_roll_add if _skating != null else 0.0
+	_skater.set_upper_body_lean(
+			upper_body_lean + velocity_lean_x + stride_pitch,
+			velocity_lean_z + stride_roll)
+	_skater.set_lower_body_lean(
+			velocity_lean_x * _controller.lower_body_pitch_follow, velocity_lean_z)
 
 func apply_facing(input: InputState, delta: float) -> void:
 	var s: SkaterStateMachine.State = _sm.get_state()
@@ -197,8 +232,7 @@ func apply_upper_body(delta: float) -> void:
 	upper_body_angle = lerp_angle(upper_body_angle, target_angle, _controller.upper_body_return_speed * delta)
 	upper_body_lean = lerpf(upper_body_lean, target_lean, _controller.upper_body_lean_return_speed * delta)
 	_skater.set_upper_body_rotation(upper_body_angle)
-	_skater.set_upper_body_lean(upper_body_lean + velocity_lean_x, velocity_lean_z)
-	_skater.set_lower_body_lean(velocity_lean_x, velocity_lean_z)
+	_apply_lean()
 
 func apply_head_tracking(input: InputState, delta: float) -> void:
 	var mouse_local: Vector3 = _skater.upper_body_to_local(input.mouse_world_pos)
