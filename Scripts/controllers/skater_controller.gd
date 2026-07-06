@@ -1306,6 +1306,20 @@ func _update_wrister_charge(input: InputState) -> void:
 			intent_pos, blade_pos_rel_skater,
 			max_charge_direction_variance, max_wrister_charge_distance)
 	skater.shot_charge = _aiming.charge_distance / max_wrister_charge_distance
+	# Publish where this charge would go if released NOW, so the host-side goalie
+	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
+	# release math in _release_wrister (same inputs), and re-solves every tick — so
+	# a player who drags one way then flicks the other at release moves the real
+	# impact off the goalie's lean (a tricky release beats the read). Host-only:
+	# remote carriers don't run this path, so their predicted velocity stays ZERO
+	# and the goalie falls back to a non-directional readiness tell.
+	var is_backhand: bool = \
+			_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
+	var pred := ShotMechanics.release_wrister(
+			skater.global_position, input.mouse_world_pos, blade_world,
+			is_backhand, _elevation_level, _aiming.charge_distance,
+			_wrister_config(), _get_charge_direction())
+	skater.predicted_shot_velocity = pred.direction * pred.power
 	# Charge ring is local-only; gate on the same flag as the one-timer reticle.
 	if show_one_timer_indicator:
 		skater.set_charge_ring_visible(true)

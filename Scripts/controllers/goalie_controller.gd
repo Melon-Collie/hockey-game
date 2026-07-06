@@ -419,6 +419,32 @@ extends Node
 # Wrist shots have no comparable tell — react on release only.
 @export var slapper_tell_depth_pull: float = 0.10   # m deeper while reading windup
 
+# ── Shot anticipation (pre-lean) ──────────────────────────────────────────────
+# A charging shot has a visible windup. The goalie reads it and pre-leans toward
+# where the shot is *currently* aimed (predicted via the carrier's published
+# `predicted_shot_velocity`), so a clean shot into the top corner has a shorter
+# arm trip on release. Crucially the lean tracks the LIVE aim every tick — a
+# player who drags one way then flicks the other at release moves the real
+# impact off the lean, so a tricky release still beats the goalie (read vs
+# counter-read, not a flat buff). The lean is PARTIAL (`prelean_strength` of the
+# way to the predicted reach) and never adds save speed — it only changes the
+# resting hand position, so the arm-delay / glove-speed caps on the actual
+# reaction still hold. Directional pre-lean needs the shooter's aim, which is
+# only host-side for host-controlled shooters (host player + bots); remote
+# shooters fall back to a non-directional "hands up, ready" tell. Host-only like
+# all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
+@export var prelean_strength: float = 0.35          # 0 = off, 1 = full reach pre-committed
+@export var prelean_max_distance: float = 9.0       # m — goalie→shooter range the read fires within
+@export var prelean_ready_lift: float = 0.06        # m — non-directional hands-up lift (remote shooters)
+# Commit window (s): while the goalie is reading a charging shot from a slot
+# shooter — and briefly after — it has committed to that shot and can't also
+# anticipate a new lateral threat. The cross-crease desperation push is
+# suppressed during this window, so a genuine last-second pass beats the
+# committed goalie to the back door (the realism the slide-commit math already
+# wants, but which the standing push undercut by pre-jumping the pass). A slow,
+# telegraphed cross-pass made before/after the window still gets tracked.
+@export var prelean_commit_window: float = 0.25
+
 # Recovery proximity: while in BUTTERFLY, the goalie holds whenever the puck
 # is within this Euclidean distance — covers genuine jam plays, post-save
 # rebounds bouncing in front, and slow follow-ups. Only when the puck has
@@ -584,6 +610,10 @@ var _reading_slapper_tell: bool = false
 var _cross_crease_react_timer: float = 0.0
 var _cross_crease_timer: float = 0.0
 var _cross_crease_target_x: float = 0.0
+# Shot-commit window: counts down after the goalie last read a charging shot
+# from a slot shooter. While > 0 the cross-crease desperation push is suppressed
+# (the goalie committed to the shot and is late on the back door).
+var _shot_commit_timer: float = 0.0
 # Lunge state: active timer counts down while the blocker is extended;
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
@@ -638,6 +668,9 @@ var _scratch_state := GoalieNetworkState.new()
 # Reused ShotResult for the per-tick detect_shot calls (reaction re-projection
 # and universal-reaction scan), so the host doesn't allocate one per tick/goalie.
 var _scratch_shot := GoalieBehaviorRules.ShotResult.new()
+# Separate scratch for the per-tick pre-lean prediction so it never races the
+# reaction re-projection scratch within a tick (both can run the same frame).
+var _scratch_prelean_shot := GoalieBehaviorRules.ShotResult.new()
 # Per-physics-frame memo for _opposing_shooter_near_puck (host hot path).
 var _shooter_near_memo_frame: int = -1
 var _shooter_near_memo: bool = false
@@ -871,6 +904,7 @@ func reset_to_crease() -> void:
 	_cross_crease_react_timer = 0.0
 	_cross_crease_timer = 0.0
 	_cross_crease_target_x = 0.0
+	_shot_commit_timer = 0.0
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
 	_clear_cooldown_timer = 0.0
@@ -932,6 +966,7 @@ func _update_tracking(delta: float) -> void:
 	else:
 		_tracked_threat_position = target_threat
 	if is_server:
+		_update_shot_commit(delta, carrier)
 		_update_cross_crease(delta, carrier)
 		_update_lunge(delta)
 	# Universal puck tracking: trigger a reaction for any loose puck above the
@@ -1909,6 +1944,7 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.lunge_progress = _lunge_progress()
 	_pose_inputs.paddle_sweep_active = _is_paddle_sweep_active()
 	_pose_inputs.standing_sweep_active = _is_standing_sweep_active()
+	_set_prelean_inputs()
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
 	var lerp_t: float
 	if _sm.is_down():
@@ -1955,6 +1991,35 @@ func _update_body_parts(delta: float) -> void:
 			blocker_max_step = blocker_react_max_speed * delta
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
 
+# Populate the pose builder's pre-lean fields. The goalie leans toward a charging
+# shot's predicted impact while reading the windup (see _is_reading_shot_threat).
+# Directional lean needs the shooter's live predicted velocity, which is only
+# published host-side for host-controlled shooters (host player + bots); remote
+# shooters leave it ZERO and get the non-directional readiness tell. Re-solved
+# every tick off the LIVE aim, so a late release moves the impact off the lean.
+func _set_prelean_inputs() -> void:
+	_pose_inputs.prelean_active = false
+	_pose_inputs.prelean_directional = false
+	_pose_inputs.prelean_strength = prelean_strength
+	_pose_inputs.prelean_ready_lift = prelean_ready_lift
+	if prelean_strength <= 0.0:
+		return
+	var carrier: Skater = puck.get_carrier()
+	if not _is_reading_shot_threat(carrier):
+		return
+	_pose_inputs.prelean_active = true
+	var vel: Vector3 = carrier.predicted_shot_velocity
+	if vel.length_squared() < 0.01:
+		return  # remote shooter (no aim on the wire) — non-directional tell only
+	var res: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
+			puck.global_position, vel, _goal_line_z, _goal_center_x,
+			_shot_cfg, _scratch_prelean_shot)
+	if not res.is_shot:
+		return  # current aim isn't on net — nothing to lean toward
+	_pose_inputs.prelean_directional = true
+	_pose_inputs.prelean_impact_x = res.impact_x
+	_pose_inputs.prelean_impact_y = res.impact_y
+
 # ── Cross-crease detection (STANDING push only) ───────────────────────────────
 
 # Read a cross-crease pass off PUCK velocity. The STANDING goalie arms its
@@ -1977,6 +2042,13 @@ func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	if carrier != null:
 		return
 	if _reaction.reacting or _sm.is_rvh():
+		return
+	# Committed to a shot the goalie just read — don't pre-jump a new lateral
+	# threat. A genuine last-second pass beats the committed goalie to the back
+	# door (the realism the committed-slide math already wants). The goalie still
+	# tracks the loose puck via normal arc movement, just without the desperation
+	# push that used to anticipate the pass and beat it to the far post.
+	if _shot_commit_timer > 0.0:
 		return
 	var cross_vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
 			puck.global_position, puck.linear_velocity, _goal_line_z,
@@ -2003,6 +2075,37 @@ func _update_cross_crease(delta: float, carrier: Skater) -> void:
 			_cross_crease_react_timer = cross_crease_react_delay
 		else:
 			_cross_crease_timer = cross_crease_push_duration
+
+# Maintain the shot-commit window. The goalie is "committed" while it reads a
+# charging shot from an opposing slot shooter; the timer lingers
+# `prelean_commit_window` seconds after the read so a pass fired at the very end
+# of the windup still lands inside it. Consumed by _update_cross_crease.
+func _update_shot_commit(delta: float, carrier: Skater) -> void:
+	if _shot_commit_timer > 0.0:
+		_shot_commit_timer = maxf(_shot_commit_timer - delta, 0.0)
+	if _is_reading_shot_threat(carrier):
+		_shot_commit_timer = prelean_commit_window
+
+# True when an opposing carrier in the slot is winding up a shot (wrister drag or
+# slapshot charge) close enough that the goalie respects it. Drives both the
+# pre-lean pose and the shot-commit window. Upright-only and not while already
+# reacting — once a shot is in flight the reaction pipeline owns the read. Reads
+# only `current_shot_state` (replicated) so it fires for remote shooters too;
+# the DIRECTIONAL lean additionally needs the host-side predicted velocity.
+func _is_reading_shot_threat(carrier: Skater) -> bool:
+	if carrier == null:
+		return false
+	if _reaction.reacting or not _sm.is_upright():
+		return false
+	if team_id != -1 and carrier.get_team_id() == team_id:
+		return false
+	if carrier.current_shot_state != SkaterStateMachine.State.WRISTER_AIM \
+			and carrier.current_shot_state != SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
+		return false
+	# In front of the goalie (slot side), within read range — not behind the net.
+	if (carrier.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
+		return false
+	return goalie.global_position.distance_to(carrier.global_position) <= prelean_max_distance
 
 # Universal puck-tracking trigger. Runs each host physics frame on loose
 # pucks; if the puck is fast and on track for the net within the
