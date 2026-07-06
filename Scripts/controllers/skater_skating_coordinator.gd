@@ -21,16 +21,25 @@ extends RefCounted
 
 const State = SkaterStateMachine.State
 
-# Leg segment spans from Scenes/Skater.tscn — hip pivot to knee pivot (LegL →
-# ShinL) and knee pivot to skate sole (ShinL → FootL). Used to derive the
-# stance knee flex and body drop from the hip flex so the crouch keeps the
-# skates planted. Keep in sync with the scene if the leg pivots move.
+# MESH-NATIVE leg segment spans from Scenes/Skater.tscn — hip pivot to knee
+# pivot (LegL → ShinL) and knee pivot to skate sole (ShinL → FootL). Used to
+# derive the stance knee flex and body drop from the hip flex so the crouch
+# keeps the skates planted. Keep in sync with the scene if the leg pivots
+# move. The knee-flex math only reads their RATIO, so it is build-independent;
+# the vertical drop is a length and rides `leg_scale` below.
 const _THIGH_LEN: float = 0.31
 const _SHIN_LEN: float = 0.45
 
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
+
+# Height multiplier for this build's legs, set by SkaterController
+# .apply_attributes alongside the skeleton scaling (the appearance pass
+# lengthens the actual leg pivot chain by the same factor). Scales the
+# crouch's vertical body drop so the flexed legs' deficit matches the longer
+# segments; the knee ANGLES are ratio-derived and stay build-independent.
+var leg_scale: float = 1.0
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var stride_phase: float = 0.0
@@ -397,8 +406,8 @@ func apply(delta: float) -> void:
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
-	var drop: float = _THIGH_LEN * (1.0 - cos(stance_hip)) \
-			+ _SHIN_LEN * (1.0 - cos(stance_knee - stance_hip))
+	var drop: float = leg_scale * (_THIGH_LEN * (1.0 - cos(stance_hip)) \
+			+ _SHIN_LEN * (1.0 - cos(stance_knee - stance_hip)))
 
 	# Asymmetric stroke: warp the phase before sampling the sine so each leg's swing
 	# eases out to the push and snaps back, reading as skating rather than a

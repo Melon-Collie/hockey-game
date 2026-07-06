@@ -41,8 +41,9 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # Shoulder Y in upper-body-local space. Matches the ShoulderL/R ball centers
 # in the scene (keep in sync) so the drawn arm hangs from the visible
 # shoulder rather than a point 5 cm below it. Vertical drop from shoulder to
-# hand at rest = shoulder_height − hand_rest_y (currently 0.40 − (−0.10) =
-# 0.50 m). That drop is subtracted inside the derived backhand ROM
+# hand at rest = shoulder_height − hand_rest_y (mesh-native 0.40 − (−0.10) =
+# 0.50 m; both scale with build height in apply_attributes, so the drop is
+# 0.50 m × height_mult). That drop is subtracted inside the derived backhand ROM
 # (SkaterController.apply_attributes: reach = sqrt(arm_eff² − drop²)), so the
 # hand can never be placed beyond the arm's length — raising this shrinks
 # flat-footed reach; the directional reach lean (SkaterPoseCoordinator) buys
@@ -325,6 +326,7 @@ var _default_lower_body_y: float = 0.0
 # crouch through _apply_body_height (the single writer of both body Ys).
 var _skating_crouch_drop: float = 0.0
 var _block_stance_active: bool = false
+var _skeleton_root_offset: float = 0.0  # see set_skeleton_root_offset
 # Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
 # Advanced by update_carry_side() each tick from the IK pipeline.
 var _carry_side: int = 0
@@ -784,10 +786,27 @@ func set_skating_crouch_drop(drop: float) -> void:
 	_apply_body_height()
 
 
+# Skeleton height offset (m), set by SkaterAppearanceCoordinator.apply:
+# (height_mult − 1) × the roots' ice height. Raising the UpperBody/LowerBody
+# roots by this while every offset below them scales by height_mult makes the
+# whole mesh skeleton scale about the ICE PLANE — skate contact at y=0 is a
+# fixed point of that scaling, so skates stay planted and the physics origin
+# (FACEOFF_SPAWN_HEIGHT, Y-axis-locked) never has to move. Routed through
+# _apply_body_height so this composes with the crouch/block drops instead of
+# fighting them for the same property.
+func set_skeleton_root_offset(offset: float) -> void:
+	if is_equal_approx(_skeleton_root_offset, offset):
+		return
+	_skeleton_root_offset = offset
+	_apply_body_height()
+
+
 func _apply_body_height() -> void:
 	var block_depth: float = block_crouch_depth if _block_stance_active else 0.0
-	upper_body.position.y = _default_upper_body_y - block_depth - _skating_crouch_drop
-	lower_body.position.y = _default_lower_body_y - _skating_crouch_drop
+	upper_body.position.y = _default_upper_body_y + _skeleton_root_offset \
+			- block_depth - _skating_crouch_drop
+	lower_body.position.y = _default_lower_body_y + _skeleton_root_offset \
+			- _skating_crouch_drop
 
 
 # ── Blade ─────────────────────────────────────────────────────────────────────

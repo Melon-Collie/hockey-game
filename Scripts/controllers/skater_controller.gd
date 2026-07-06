@@ -82,25 +82,29 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # FAR regime). In the CLOSE regime the hand rises toward `hand_y_max` so the
 # stick tilts more vertical and the blade can tuck in close to the body.
 # This export is the MESH-NATIVE (Size L2, 5'10") value; apply_attributes
-# rescales it per build so the shoulder-to-hand drop stays at its mesh-native
-# 0.50 m — the hand rides the shoulder up on tall builds instead of pinning
-# to one absolute height (which left Size-5 hands hanging visibly low).
-# The upper body rides at 1.0 m world Y for every build (FACEOFF_SPAWN_HEIGHT,
-# Y-axis-locked; the cosmetic skating crouch lowers it up to ~7 cm at speed)
-# and the blade at blade_height (~ice), so -0.10 gives a hand world Y of
-# ~0.90 m at L2 (hip height; 0.88 m at Size 1 → 0.94 m at Size 5) and a rest
-# stick angle of ~42° — approaching a real lie-5 address (~45°), up from the
-# ~38° reach-cheat this used to run (hand_rest_y -0.17). The steeper stick
-# pulls the rest carry circle in ~6 cm (stick_horiz 1.03 → 0.97), but the
-# shallower shoulder-to-hand drop re-aims the arm budget sideways (derived
-# backhand ROM 0.37 → 0.46 m of hand displacement), so rim reach is roughly
-# preserved and the directional reach lean stays pure bonus on top.
+# scales it by height_mult, matching the appearance pass scaling the whole
+# skeleton about the ice plane — so the hand sits at the same body point
+# (0.50 m × height below the shoulder) on every build instead of pinning to
+# one absolute height (which left Size-5 hands hanging visibly low).
+# The upper body rides at height_mult × 1.0 m world Y (FACEOFF_SPAWN_HEIGHT
+# is the physics origin for every build — only the mesh skeleton scales; the
+# cosmetic skating crouch lowers it up to ~7 cm at speed) and the blade at
+# blade_height (~ice), so -0.10 gives a hand world Y of 0.90 m × height (hip
+# height on each frame) and a rest stick angle of ~42° at L2 — approaching a
+# real lie-5 address (~45°), up from the ~38° reach-cheat this used to run
+# (hand_rest_y -0.17). The steeper stick pulls the rest carry circle in
+# ~6 cm (stick_horiz 1.03 → 0.97), but the shallower shoulder-to-hand drop
+# re-aims the arm budget sideways (derived backhand ROM 0.37 → 0.46 m of
+# hand displacement), so rim reach is roughly preserved and the directional
+# reach lean stays pure bonus on top.
 @export var hand_rest_y: float = -0.10
 # Ceiling for hand Y in the CLOSE regime. When aiming very close to the
 # skater, the hand rises to shorten the stick's horizontal projection; this
-# cap keeps the pose anatomical (0.30 local = 1.30 m world — the hand won't
-# climb past chest level). With default stick_length = 1.30 m and the blade
-# on the ice (blade_y ≈ -0.97 local), hand_y_max = 0.30 → hand-to-blade drop
+# cap keeps the pose anatomical (0.30 local = 1.30 m world at L2 — the hand
+# won't climb past chest level). Mesh-native like hand_rest_y; apply_
+# attributes scales it by height_mult so the ceiling stays chest-height on
+# every frame. With default stick_length = 1.30 m and the blade on the ice
+# (blade_y ≈ -0.97 local at L2), hand_y_max = 0.30 → hand-to-blade drop
 # 1.27 → min horizontal stick reach ≈ 0.28 m.
 @export var hand_y_max: float = 0.30
 # Asymmetric ROM for the top hand (measured from shoulder in upper-body-local
@@ -635,6 +639,7 @@ var _base_backhand_power_coefficient:   float = 0.0
 var _base_sprint_drain_per_sec:         float = 0.0
 var _base_stamina_regen_per_sec:        float = 0.0
 var _base_hand_rest_y:                  float = 0.0
+var _base_hand_y_max:                   float = 0.0
 
 
 # Modulates the controller and skater tuning fields from a PlayerAttributes
@@ -732,26 +737,26 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	skater.set_shoulder_anchor(
 			_base_skater_shoulder_offset * attrs.torso_bulk_mult(),
 			_base_skater_shoulder_height * m_height)
-	# Hands ride WITH the shoulder: the shoulder-to-hand drop is held at its
-	# mesh-native value (0.50 m) for every build, so the resting hand sits at
-	# the same point on each body instead of at one absolute height over the
-	# ice. An absolute hand height made big builds read wrong — all their
-	# extra height went into the torso while the hands stayed at 0.90 m, so
-	# the shoulder-to-hand gap grew and a Size-5's hands hung visibly low.
-	# Near-zero gameplay cost: raising the hand shortens the stick's
-	# horizontal footprint but lengthens the derived backhand ROM below at
-	# almost exactly 1:1, so total blade rim reach moves under ±2 cm across
-	# the Size range.
-	hand_rest_y = skater.shoulder_height \
-			- (_base_skater_shoulder_height - _base_hand_rest_y)
+	# Hand heights scale with the skeleton: the appearance pass scales the
+	# whole mesh rig about the ice plane (legs included — the upper body
+	# rides at height_mult × 1.0 m world), so the hand's LOCAL rest height
+	# scales by the same factor to keep the hand at the same point on every
+	# body (shoulder-to-hand drop = 0.50 m × height). Same for the CLOSE-
+	# regime ceiling. Near-zero gameplay cost: raising the hand shortens the
+	# stick's horizontal footprint but lengthens the derived backhand ROM
+	# below at almost exactly 1:1, so blade rim reach barely moves.
+	hand_rest_y = _base_hand_rest_y * m_height
+	hand_y_max  = _base_hand_y_max  * m_height
+	# The gait's crouch drop rides the same leg scale the appearance pass
+	# applies to the leg pivot chain, so flexed knees sink a tall build
+	# proportionally deeper.
+	_skating.leg_scale = m_height
 	# Reach ROM is a derived property of arm length — forehand from the
 	# anatomical cross-body ratio, backhand from the chain geometry (see the
 	# _ROM_FOREHAND_OF_ARM doc block). Bigger arms naturally yield more reach
-	# without being an independent attribute axis, and the backhand solve
-	# amplifies the spread: the shoulder-to-hand drop is a constant, so it
-	# eats proportionally more of a short arm — a tall player converts extra
-	# length to reach at better than 1:1 while a small player gives some
-	# back. Long arms matter most at full extension.
+	# without being an independent attribute axis: with the whole chain
+	# (arm and shoulder-to-hand drop) scaling by height, the derived reach
+	# scales by height too. Long arms matter most at full extension.
 	var arm_total: float = skater.upper_arm_length + skater.forearm_length
 	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
 	var arm_eff: float = arm_total * rom_arm_extension
@@ -800,6 +805,7 @@ func _capture_attribute_bases() -> void:
 	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
 	_base_stick_length                 = stick_length
 	_base_hand_rest_y                  = hand_rest_y
+	_base_hand_y_max                   = hand_y_max
 	_base_skater_upper_arm_length      = skater.upper_arm_length
 	_base_skater_forearm_length        = skater.forearm_length
 	_base_skater_shoulder_offset       = skater.shoulder_offset
