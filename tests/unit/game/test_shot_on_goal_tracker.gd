@@ -124,6 +124,62 @@ func test_sog_counted_once_per_shot() -> void:
 	assert_eq(shooter.stats.shots_on_goal, 1)
 
 
+# ── On-net gating (NHL: only a puck that would go in counts when stopped) ────
+
+func test_goalie_touch_on_off_net_trajectory_is_not_sog() -> void:
+	var shooter := _add_player(10, 0)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)  # wide shot / cross-crease pass
+	tracker.on_goalie_touch(1)
+	assert_eq(shooter.stats.shots_on_goal, 0)
+	assert_eq(sm.team_shots[0], 0)
+
+
+func test_post_hit_turns_shot_into_miss() -> void:
+	var shooter := _add_player(10, 0)
+	tracker.on_shot_started(10)
+	tracker.on_post_hit()
+	tracker.on_goalie_touch(1)  # goalie covers the ricochet
+	assert_eq(shooter.stats.shots_on_goal, 0)
+
+
+func test_goal_after_post_still_counts_sog() -> void:
+	var shooter := _add_player(10, 0)
+	tracker.on_shot_started(10)
+	tracker.on_post_hit()
+	tracker.on_goal_confirmed(10)  # bar-down anyway — goals credit unconditionally
+	assert_eq(shooter.stats.shots_on_goal, 1)
+
+
+func test_wide_shot_tipped_on_net_counts_for_tipper() -> void:
+	var shooter := _add_player(10, 0)
+	var tipper := _add_player(11, 0)
+	tracker.on_pickup(10)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)  # wide off the blade...
+	tracker.on_deflection(11)
+	tracker.note_trajectory(true)   # ...redirected on net by the tip
+	tracker.on_goalie_touch(1)
+	assert_eq(tipper.stats.shots_on_goal, 1)
+	assert_eq(shooter.stats.shots_on_goal, 0)
+
+
+func test_note_trajectory_without_pending_shot_is_noop() -> void:
+	tracker.note_trajectory(true)
+	assert_false(tracker.has_pending_shot())
+
+
+func test_block_of_off_net_release_is_not_credited() -> void:
+	_add_player(10, 0)
+	var blocker := _add_player(20, 1)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)  # errant shot / pass
+	assert_false(tracker.on_block(20))
+	assert_eq(blocker.stats.shots_blocked, 0)
+	assert_true(tracker.has_pending_shot(),
+			"intercepting an off-net puck is a takeaway — pending shot untouched")
+
+
 # ── Tip attribution (NHL: a saved teammate tip is the TIPPER's shot) ─────────
 
 func test_saved_teammate_tip_credits_tipper_not_shooter() -> void:

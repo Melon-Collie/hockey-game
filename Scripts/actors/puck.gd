@@ -458,8 +458,9 @@ func fire_post_ping_vfx(speed: float) -> void:
 func _on_body_entered(body: Node3D) -> void:
 	if carrier != null:
 		return
-	if body.get_parent() is Goalie:
-		puck_touched_goalie.emit(body.get_parent() as Goalie)
+	var goalie: Goalie = _goalie_ancestor(body)
+	if goalie != null:
+		puck_touched_goalie.emit(goalie)
 	elif body is HockeyGoal:
 		puck_touched_post.emit()
 	elif body.get_parent() is HockeyGoal:
@@ -471,6 +472,21 @@ func _on_body_entered(body: Node3D) -> void:
 		# StaticBody3D child, so the old `body is StaticBody3D` also fired on every
 		# grounded release and every landing — a board hit at the wrong spot.
 		puck_hit_boards.emit()
+
+
+# The goalie's save surfaces are StaticBody3D parts at different scene depths —
+# pads/body/head/glove sit directly under the Goalie root, but the stick and
+# blocker hang off the BlockArm rig. Walk ancestors so a paddle or blocker save
+# reads as a goalie touch too (a single get_parent() check silently dropped
+# those saves from SOG tracking and goalie reaction resets). Contact-frequency
+# only, never per-tick.
+func _goalie_ancestor(node: Node) -> Goalie:
+	var n: Node = node.get_parent()
+	while n != null:
+		if n is Goalie:
+			return n as Goalie
+		n = n.get_parent()
+	return null
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if _pending_reset:

@@ -948,6 +948,10 @@ func _spawn_puck() -> void:
 	puck_controller.puck_stripped_from.connect(_on_server_puck_stripped_from)
 	puck_controller.puck_touched_while_loose.connect(_on_server_puck_touched_while_loose)
 	puck_controller.puck_touched_by_goalie.connect(_on_puck_touched_by_goalie)
+	if NetworkManager.is_host:
+		# Pipes = miss for SOG purposes (NHL). Sound/VFX for the ping are wired
+		# separately in _wire_sound_signals.
+		puck.puck_touched_post.connect(_on_host_puck_touched_post)
 
 
 func _spawn_goalies() -> void:
@@ -2045,6 +2049,10 @@ func _on_server_puck_touched_while_loose(peer_id: int) -> void:
 		_sync_stats_to_clients()
 		return
 	_shot_tracker.on_deflection(peer_id)
+	# The deflect/body-block handlers set the puck's redirected velocity before
+	# emitting, so this reads the NEW flight — a tip can put a wide shot on net
+	# (or take an on-net shot wide).
+	_note_shot_trajectory()
 
 
 func _on_puck_touched_by_goalie(goalie: Goalie) -> void:
@@ -2074,6 +2082,7 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		NetworkManager.send_shot_to_all(puck.get_puck_position(), is_slapper)
 		_start_pending_shot_from_carrier()
 		puck.release(direction, power)
+		_note_shot_trajectory()
 	else:
 		var record := _registry.get_local()
 		if record != null:
@@ -2290,6 +2299,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		origin.x = rewound_origin.x
 		origin.z = rewound_origin.z
 		puck.set_puck_position(origin)
+	_note_shot_trajectory()
 	if not saved_goalie_positions.is_empty():
 		for i: int in goalie_controllers.size():
 			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -2393,6 +2403,7 @@ func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shoot
 			origin.x = rewound_origin.x
 			origin.z = rewound_origin.z
 			puck.set_puck_position(origin)
+		_note_shot_trajectory()
 		if not saved_goalie_positions.is_empty():
 			for i: int in goalie_controllers.size():
 				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -2438,6 +2449,32 @@ func _start_pending_shot_from_carrier() -> void:
 	if puck == null or puck.carrier == null:
 		return
 	_shot_tracker.on_shot_started(_registry.resolve_peer_id(puck.carrier))
+
+
+# Re-reads the pending shot's on-net flag from the puck's live ballistic
+# trajectory (ShotOnNetRules against both goal mouths — on_goalie_touch's
+# own-team gate sorts out direction). Called right after every authoritative
+# release (post origin-rewind, so the projection starts from the true fire
+# point) and after each mid-flight deflection, whose handlers emit with the
+# post-redirect velocity already applied.
+func _note_shot_trajectory() -> void:
+	if puck == null or _shot_tracker == null or not _shot_tracker.has_pending_shot():
+		return
+	var pos: Vector3 = puck.get_puck_position()
+	var vel: Vector3 = puck.linear_velocity
+	var on_net: bool = false
+	for goal: HockeyGoal in goals:
+		if ShotOnNetRules.is_on_net(pos, vel, goal.goal_line_z()):
+			on_net = true
+			break
+	_shot_tracker.note_trajectory(on_net)
+
+
+# Host-side: a shot off the pipes is a miss in NHL scoring — drop the pending
+# shot's on-net read so a goalie touch on the ricochet doesn't confirm a SOG.
+func _on_host_puck_touched_post() -> void:
+	if _shot_tracker != null:
+		_shot_tracker.on_post_hit()
 
 
 # ── Puck network events ──────────────────────────────────────────────────────
