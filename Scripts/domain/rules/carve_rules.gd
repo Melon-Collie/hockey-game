@@ -34,3 +34,22 @@ static func carve_target(p_turn_rate: float, ground_speed: float,
 	if ground_speed < min_speed:
 		return 0.0
 	return clampf(p_turn_rate / maxf(ref_turn_rate, 0.001), -1.0, 1.0)
+
+
+# Signed carve INTENT from held movement input across the travel line — "I'm
+# trying to turn" fires the crossovers before the path visibly bends, while
+# curvature (above) sustains them once the arc is real; the gait combines the
+# two by larger magnitude. Same sign convention as turn_rate (positive =
+# toward the traveller's right). The squared response keeps near-parallel
+# input — ordinary drive corrections — from flickering the gait, and a fully
+# perpendicular hold reads as a full carve.
+static func intent_carve(travel_xz: Vector2, intent_xz: Vector2,
+		ground_speed: float, min_speed: float) -> float:
+	if ground_speed < min_speed:
+		return 0.0
+	if travel_xz.length_squared() < 0.01 or intent_xz.length_squared() < 0.0025:
+		return 0.0
+	var t_dir: Vector2 = travel_xz.normalized()
+	var i_dir: Vector2 = intent_xz.normalized()
+	var cross: float = t_dir.x * i_dir.y - t_dir.y * i_dir.x
+	return cross * absf(cross)

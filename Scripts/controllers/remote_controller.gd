@@ -206,6 +206,8 @@ func _interpolate(delta: float) -> void:
 		interpolated.elevation_level = newest.elevation_level
 		interpolated.blade_up = newest.blade_up
 		interpolated.shot_state = newest.shot_state
+		interpolated.move_intent = newest.move_intent
+		interpolated.brake_intent = newest.brake_intent
 	else:
 		var from_state: SkaterNetworkState = bracket.from_state
 		var to_state: SkaterNetworkState = bracket.to_state
@@ -233,6 +235,8 @@ func _interpolate(delta: float) -> void:
 		interpolated.elevation_level = to_state.elevation_level
 		interpolated.blade_up = to_state.blade_up
 		interpolated.shot_state = to_state.shot_state
+		interpolated.move_intent = to_state.move_intent
+		interpolated.brake_intent = to_state.brake_intent
 		# render_time is led toward present by extrapolation_lead_fraction, so the
 		# hermite result already sits close to the host's live pose (or, past the
 		# newest sample, the is_extrapolating branch dead-reckons it). The position
@@ -306,6 +310,11 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# any reader (AI off-puck, VFX) on spectated remotes.
 	skater.blade_up = state.blade_up
 	skater.current_shot_state = state.shot_state
+	# Movement intent for the gait's input-driven reads (glide, intent
+	# crossovers, brake-gated hockey stop) — the client-rendered remote's
+	# equivalent of the per-tick stamp in SkaterController._process_input.
+	skater.move_intent = state.move_intent
+	skater.brake_intent = state.brake_intent
 	# Bottom hand is purely reactive to top_hand + blade (both already set
 	# above) and needs no network state of its own. Arm/stick meshes derive
 	# from the markers once per rendered frame in Skater._process.

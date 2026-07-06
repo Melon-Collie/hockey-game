@@ -55,7 +55,10 @@ const VERSION: String = "dev"
 # v14: added request_update_attributes RPC (lobby build changes) — a new @rpc
 #     method shifts the name-sorted RPC index of every method after it (see v3),
 #     so a bump is required even though request_join's wire format is unchanged.
-const PROTOCOL_VERSION: int = 14
+# v15: skater block 39 -> 40 B — movement-intent byte (8-way move octant +
+#     moving + brake bits) so client-rendered remotes play the input-driven
+#     gait reads (glide on no keys, intent crossovers, brake-gated stop).
+const PROTOCOL_VERSION: int = 15
 
 
 func _ready() -> void:

@@ -33,6 +33,12 @@ var sprint_locked: bool = false
 # (see BodyCheckRules / SkaterController._apply_movement). Host-authoritative: only
 # the host sets it on a hit; clients receive the resolved value off the wire.
 var stagger_timer: float = 0.0
+# Movement INTENT: the raw WASD vector (world frame, 8-way quantized on the
+# wire) and the brake hold. Cosmetic-only — the gait reads what the player is
+# TRYING to do (crossover intent, deliberate hockey stop, no-keys glide) a
+# beat before velocity responds. One byte on the wire (v15).
+var move_intent: Vector2 = Vector2.ZERO
+var brake_intent: bool = false
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 # World-space top-hand (grip) point. host-only, not serialized — paired with
@@ -60,6 +66,8 @@ func to_array() -> Array:
 		stamina,
 		sprint_locked,
 		stagger_timer,
+		move_intent,
+		brake_intent,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -80,6 +88,8 @@ func copy_from(s: SkaterNetworkState) -> void:
 	stamina = s.stamina
 	sprint_locked = s.sprint_locked
 	stagger_timer = s.stagger_timer
+	move_intent = s.move_intent
+	brake_intent = s.brake_intent
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
 	top_hand_world = s.top_hand_world
@@ -107,4 +117,7 @@ static func from_array(data: Array) -> SkaterNetworkState:
 		state.sprint_locked = data[15]
 	if data.size() > 16:
 		state.stagger_timer = data[16]
+	if data.size() > 18:
+		state.move_intent = data[17]
+		state.brake_intent = data[18]
 	return state

@@ -57,3 +57,37 @@ func test_target_gates_below_min_speed() -> void:
 
 func test_target_preserves_sign() -> void:
 	assert_lt(CarveRules.carve_target(-0.8, 6.0, REF, MIN_SPEED), 0.0)
+
+
+# ── intent_carve ──────────────────────────────────────────────────────────────
+
+func test_intent_right_of_travel_is_positive_full() -> void:
+	# Travelling up-ice, holding pure right: full carve toward the right.
+	var ic: float = CarveRules.intent_carve(
+			Vector2(0.0, -6.0), Vector2(1.0, 0.0), 6.0, MIN_SPEED)
+	assert_almost_eq(ic, 1.0, 0.0001)
+
+
+func test_intent_left_of_travel_is_negative() -> void:
+	assert_lt(CarveRules.intent_carve(
+			Vector2(0.0, -6.0), Vector2(-1.0, 0.0), 6.0, MIN_SPEED), 0.0)
+
+
+func test_intent_along_travel_is_zero() -> void:
+	assert_eq(CarveRules.intent_carve(
+			Vector2(0.0, -6.0), Vector2(0.0, -1.0), 6.0, MIN_SPEED), 0.0)
+
+
+func test_intent_squared_response_suppresses_small_angles() -> void:
+	# 22.5° off travel: cross ≈ 0.38 → squared ≈ 0.15 — drive corrections
+	# barely tickle the carve.
+	var ic: float = CarveRules.intent_carve(
+			Vector2(0.0, -6.0), Vector2(sin(PI / 8.0), -cos(PI / 8.0)), 6.0, MIN_SPEED)
+	assert_between(ic, 0.1, 0.2)
+
+
+func test_intent_gates_on_speed_and_empty_input() -> void:
+	assert_eq(CarveRules.intent_carve(
+			Vector2(0.0, -1.0), Vector2(1.0, 0.0), 1.0, MIN_SPEED), 0.0)
+	assert_eq(CarveRules.intent_carve(
+			Vector2(0.0, -6.0), Vector2.ZERO, 6.0, MIN_SPEED), 0.0)

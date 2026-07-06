@@ -219,6 +219,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var carve_over_pitch_deg: float = 8.0  # crossing leg also steps AHEAD
 @export var carve_clearance_knee_deg: float = 28.0  # lift while crossing the planted leg
 @export var carve_stride_fade: float = 0.7     # fraction of fore/aft stride removed at full carve
+# Gliding — releasing all movement keys settles the legs to rest (the stride
+# is input-gated, v15 intent byte) while this floor keeps working knees under
+# a coasting skater, scaled by speed.
+@export var glide_stance: float = 0.5
 @export var stride_knee_deg: float = 18.0         # recovery tuck depth of the swinging (unloaded) knee
 @export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
 @export var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)
@@ -798,6 +802,12 @@ func _wants_deflect(input: InputState) -> bool:
 
 
 func _process_input(input: InputState, delta: float) -> void:
+	# Stamp movement intent for the cosmetic layers (gait glide / intent
+	# crossovers / brake-gated hockey stop). Local, bot, and host-side client
+	# simulation all funnel through here with real inputs; client-rendered
+	# remotes get the same fields off the wire in RemoteController.
+	skater.move_intent = input.move_vector
+	skater.brake_intent = input.brake
 	# Snapshot the blade's current contact point before any IK mutation runs
 	# this tick. The host's swept-segment pickup/poke test (PuckController._check_interactions,
 	# priority 1) reads this later in the tick as `blade_prev`; combined with the
@@ -885,6 +895,9 @@ func _process_input(input: InputState, delta: float) -> void:
 # Callers must already have confirmed the phase allows blade aim during a
 # locked phase.
 func apply_blade_aim_only(input: InputState, delta: float) -> void:
+	# Movement is locked — whatever keys are down, nothing is being tried.
+	skater.move_intent = Vector2.ZERO
+	skater.brake_intent = false
 	_ik.apply_blade_from_mouse(input, delta)
 	# Preserve blade/hand world positions across the upper-body rotation —
 	# same dance as _process_input. Without it the blade slides sideways as
@@ -944,6 +957,8 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.stamina = stamina
 	state.sprint_locked = _sprint_locked
 	state.stagger_timer = stagger_timer
+	state.move_intent = skater.move_intent
+	state.brake_intent = skater.brake_intent
 
 func get_shot_state() -> int:
 	return _sm.get_state()

@@ -113,9 +113,14 @@ func apply(delta: float) -> void:
 	var speed_t: float = clampf(ground_speed / maxf(_controller.max_speed, 0.001), 0.0, 1.0)
 
 	# Plant the legs while shot-blocking (the skater is crouched, knees together);
-	# otherwise drive intensity from speed. Lerp so the envelope eases.
+	# otherwise drive intensity from speed — GATED BY INTENT: no movement keys
+	# means a glide, so the legs settle to rest and ride the edges even at full
+	# speed. The stride is something the player DOES, not something speed does
+	# to them. (Velocity lean, the carve/faceoff/stop stance floors, and the
+	# glide stance floor below keep the posture alive while coasting.)
 	var planted: bool = _sm.get_state() == State.SHOT_BLOCKING
-	var target_intensity: float = 0.0 if planted else speed_t
+	var has_move_intent: bool = _skater.move_intent.length_squared() > 0.0025
+	var target_intensity: float = speed_t if (has_move_intent and not planted) else 0.0
 	_intensity = lerpf(_intensity, target_intensity, _controller.stride_intensity_speed * delta)
 
 	# Advance the stride phase. The naive law — rate = ground_speed × cadence — is
@@ -163,6 +168,15 @@ func apply(delta: float) -> void:
 				ground_speed, _controller.carve_ref_turn_rate, _controller.carve_min_speed)
 	_prev_velocity = vel
 	_have_prev_velocity = true
+	# Intent carve: holding ACROSS the travel line anticipates the turn —
+	# crossovers fire to show what the player is TRYING to do, before the
+	# path visibly bends. Combined with the curvature signal by larger
+	# magnitude so the two never double-count.
+	var intent_carve: float = CarveRules.intent_carve(
+			Vector2(vel.x, vel.z), _skater.move_intent,
+			ground_speed, _controller.carve_min_speed)
+	if absf(intent_carve) > absf(carve_target):
+		carve_target = intent_carve
 	_effort = lerpf(_effort, effort_target, _controller.stride_effort_speed * delta)
 	_carve = lerpf(_carve, carve_target, _controller.carve_engage_speed * delta)
 	# Push-amplitude scale around the speed baseline: >1 driving, easing toward
@@ -196,10 +210,12 @@ func apply(delta: float) -> void:
 	# stride) and the stop stance below takes over the legs.
 	if _stop_engaged:
 		if HockeyStopRules.should_release(_effort, ground_speed,
-				_controller.hockey_stop_effort, _controller.hockey_stop_min_speed):
+				_controller.hockey_stop_effort, _controller.hockey_stop_min_speed,
+				_skater.brake_intent):
 			_stop_engaged = false
 	elif HockeyStopRules.should_engage(_effort, ground_speed,
-			_controller.hockey_stop_effort, _controller.hockey_stop_min_speed):
+			_controller.hockey_stop_effort, _controller.hockey_stop_min_speed,
+			_skater.brake_intent):
 		_stop_engaged = true
 		_stop_side = HockeyStopRules.latch_side(local_vel)
 	_stop_blend = lerpf(_stop_blend, 1.0 if _stop_engaged else 0.0,
@@ -277,6 +293,10 @@ func apply(delta: float) -> void:
 	# Hockey stop sits DEEP — the edges only bite under bent knees.
 	if _stop_blend > 0.001:
 		stance = maxf(stance, _controller.hockey_stop_stance * _stop_blend)
+	# Gliding (no movement keys) keeps working knees at speed — the intensity
+	# gate zeroed the stride, but a coasting skater still rides bent edges.
+	if not has_move_intent:
+		stance = maxf(stance, _controller.glide_stance * speed_t)
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))

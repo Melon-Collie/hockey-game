@@ -213,6 +213,15 @@ signal body_block_hit(body: Node3D)
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
 var current_shot_state: int = 0
+
+# Movement INTENT — the raw WASD vector (world frame) and brake hold, stamped
+# per tick by whichever controller simulates this skater (local input, bot AI,
+# host-side client sim) and decoded from the wire for client-rendered remotes;
+# same pattern as current_shot_state. Cosmetic-only consumers (the gait) read
+# what the player is TRYING to do — crossover intent, deliberate hockey stop,
+# no-keys glide — a beat before velocity responds.
+var move_intent: Vector2 = Vector2.ZERO
+var brake_intent: bool = false
 # Predicted world-space shot velocity (direction * speed) if the carrier
 # released the shot they're currently charging RIGHT NOW. Published each tick by
 # SkaterController while a WRISTER charge is live (host-controlled skaters only —
