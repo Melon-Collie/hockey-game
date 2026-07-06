@@ -49,6 +49,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
 @export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
 @export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
+# Cosmetic stumble while staggered: a decaying trunk wobble layered into the
+# gait's trunk texture (SkaterSkatingCoordinator). Amplitude tracks the time
+# left on stagger_timer, and the wobble phase is derived FROM the timer, so
+# every machine renders the identical stumble from the replicated value.
+@export var stagger_wobble_deg: float = 9.0   # peak trunk wobble at full stagger
+@export var stagger_wobble_hz: float = 3.0    # wobble frequency
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -75,11 +81,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Hand Y in upper-body-local space. Baseline resting position (used in the
 # FAR regime). In the CLOSE regime the hand rises toward `hand_y_max` so the
 # stick tilts more vertical and the blade can tuck in close to the body.
-# With the upper body at ~0.95 m world Y and blade at 0.0 (ice), -0.17 gives
-# a hand world Y of ~0.78 m and a stick angle of ~37° — shallower than the
-# previous ~47° and closer to a real hockey address position. Horizontal reach
-# at rest rises from ~0.89 m to ~1.04 m.
-@export var hand_rest_y: float = -0.17
+# With the upper body at ~0.95 m world Y and blade at 0.0 (ice), -0.10 gives
+# a hand world Y of ~0.85 m (hip height on the 1.78 m baseline body) and a
+# rest stick angle of ~39° — close to a real lie-5 address, up from the ~35°
+# reach-cheat this used to run. The steeper stick pulls the rest carry
+# circle in ~5 cm (stick_horiz 1.06 → 1.01), but the shallower shoulder-to-
+# hand drop re-aims the arm budget sideways (derived backhand ROM 0.37 →
+# 0.46 m of hand displacement), so rim reach is roughly preserved and the
+# directional reach lean stays pure bonus on top.
+@export var hand_rest_y: float = -0.10
 # Ceiling for hand Y in the CLOSE regime. When aiming very close to the
 # skater, the hand rises to shorten the stick's horizontal projection; this
 # cap keeps the pose anatomical (hand won't climb past chin level). With
@@ -101,7 +111,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # defaults just mirror the baseline-size derivation for any skater that has
 # not had attributes applied yet.
 @export var rom_forehand_reach_max: float = 0.39
-@export var rom_backhand_reach_max: float = 0.44
+@export var rom_backhand_reach_max: float = 0.46
 # Fraction of full arm extension the backhand ROM rim uses. 1.0 solves the
 # reach with a ramrod-straight arm; slightly under keeps a hint of elbow bend
 # at max extension so the rim pose stays organic.
@@ -157,7 +167,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var upper_body_twist_ratio: float = 0.8
 @export var upper_body_max_twist_deg: float = 67.0   # caps rotation so extreme angles don't over-rotate
 @export var upper_body_return_speed: float = 6.0
-@export var upper_body_lean_max_deg: float = 15.0
+# Reach lean — the torso tips TOWARD the blade's reach direction (pitch +
+# roll, see SkaterPoseCoordinator.compute_upper_body_lean_target). Because
+# the blade IK solves in the leaned frame, this lean genuinely extends world
+# reach at the ROM rim (~sin(lean) × shoulder height of shoulder travel plus
+# the longer stick footprint from the dropped hands) — the honest way a real
+# player buys reach. engage_power > 1 keeps the torso quiet through mid-ROM
+# stickhandling and commits the lean near full extension.
+@export var upper_body_lean_max_deg: float = 18.0
+@export var upper_body_lean_engage_power: float = 1.6
 @export var upper_body_lean_return_speed: float = 8.0
 
 # ── Velocity Lean / Skating Posture Tuning ────────────────────────────────────
@@ -214,6 +232,27 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stance_full_speed_fraction: float = 0.45  # fraction of max_speed at which the crouch fully engages
 @export var stance_push_gain: float = 0.35          # effort deepens (push) / shallows (glide) the stance
 @export var stance_knee_release: float = 0.85       # fraction of stance knee flex released at full push extension
+# Faceoff ready stance — during the FACEOFF_PREP countdown the speed-driven
+# crouch is floored at faceoff_stance (players are at a standstill, so the
+# intensity envelope alone would leave them bolt upright) and the feet
+# stagger fore/aft (stick-side foot back, braced for the draw). Phase is
+# replicated, so every machine poses its skaters identically.
+@export var faceoff_stance: float = 0.85       # stance engagement floor at the dot
+@export var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
+# Hockey stop — braking hard at speed turns the lower body across the travel
+# direction (legs sideways, torso still on the play) with a scissored,
+# edge-rolled stance. Engagement derives from the velocity-based effort
+# signal (HockeyStopRules — hysteresis + side latch), so remotes/bots read
+# the identical stop with no wire state. All cosmetic; brake physics and the
+# skid VFX are untouched.
+@export var hockey_stop_effort: float = 0.55     # braking-effort fraction that engages
+@export var hockey_stop_min_speed: float = 3.0   # m/s floor — no stop pose from a shuffle
+@export var hockey_stop_max_yaw_deg: float = 70.0  # lower-body turn cap across travel
+@export var hockey_stop_split_deg: float = 14.0  # leading/trailing leg scissor
+@export var hockey_stop_edge_deg: float = 12.0   # shared leg roll — edges biting
+@export var hockey_stop_stance: float = 0.9      # stance floor while stopping (deep knees)
+@export var hockey_stop_trunk_roll_deg: float = 6.0  # trunk bank over the skid
+@export var hockey_stop_blend_speed: float = 9.0 # pose ease-in/out rate
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
@@ -326,6 +365,12 @@ var show_one_timer_indicator: bool = false
 @export var slapper_follow_through_hand_follow: float = 0.4  # fraction of blade travel the hands follow (limits shaft stretch)
 @export var slapper_follow_through_contact_frac: float = 0.22  # first fraction of the timer spent on the downswing
 
+# ── Celebration Tuning ────────────────────────────────────────────────────────
+# Cosmetic raised-stick goal celebration (SkaterShotPoseCoordinator.
+# apply_celebration_pose) — heights in upper-body-local metres.
+@export var celebration_hand_y: float = 0.45     # raised top-hand height
+@export var celebration_stick_rise: float = 0.5  # blade height above the raised hand
+
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
 # Movement speed while blocking (unused while the stance is fully planted; kept for tuning).
 @export var block_speed_multiplier: float = 0.45
@@ -340,7 +385,7 @@ var show_one_timer_indicator: bool = false
 @export var block_blade_x: float = 0.2       # lateral blade offset to the stick side (m)
 @export var block_hand_forward: float = 0.3  # forward push of the top hand (m, local −Z)
 @export var block_hand_x: float = 0.1        # lateral top-hand offset to the stick side (m)
-@export var block_hand_y: float = -0.17      # top-hand height while blocking (m, local; matches hand_rest_y)
+@export var block_hand_y: float = -0.10      # top-hand height while blocking (m, local; matches hand_rest_y)
 
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
 # XZ cylinder radius used to push the blade (and carried puck) away from a
@@ -393,12 +438,37 @@ var stagger_timer: float = 0.0
 # can read it without a getter.
 var sprint_active: bool = false
 
+var _game_state_has_faceoff_prep: bool = false
+# Cosmetic goal-celebration window (seconds remaining / total). Set by
+# GameManager on the machine that simulates the scorer; the raised-stick pose
+# rides the normal hand/blade wire state to everyone else.
+var _celebration_timer: float = 0.0
+var _celebration_total: float = 1.0
+
+
+# True during the FACEOFF_PREP countdown — the gait floors its stance crouch
+# and staggers the feet (see faceoff_stance / faceoff_split_deg).
+func is_faceoff_ready() -> bool:
+	return _game_state_has_faceoff_prep and _game_state.is_faceoff_prep()
+
+
+func start_celebration(duration: float) -> void:
+	_celebration_total = maxf(duration, 0.001)
+	_celebration_timer = _celebration_total
+
+
+func is_celebrating() -> bool:
+	return _celebration_timer > 0.0
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
 	skater = assigned_skater
 	puck = assigned_puck
 	_game_state = game_state
 	_is_host = game_state.is_host()
+	# Cached so the per-tick gait can ask about the faceoff phase without a
+	# has_method() call at 120 Hz (test stubs may not implement it).
+	_game_state_has_faceoff_prep = game_state.has_method("is_faceoff_prep")
 	process_physics_priority = -1  # Run before Skater.move_and_slide
 	skater.body_checked_player.connect(_on_body_checked_player)
 	skater.body_check_received.connect(_on_body_check_received)
@@ -464,6 +534,8 @@ var _base_puck_carry_speed_multiplier:  float = 0.0
 var _base_stick_length:                 float = 0.0
 var _base_skater_upper_arm_length:      float = 0.0
 var _base_skater_forearm_length:        float = 0.0
+var _base_skater_shoulder_offset:       float = 0.0
+var _base_skater_shoulder_height:       float = 0.0
 var _base_skater_weight:                float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
 var _base_skater_body_check_transfer:   float = 0.0
@@ -561,14 +633,25 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	stick_length              = _base_stick_length              * attrs.stick_len_mult()
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
+	# Shoulder anchors track the visual shoulder balls, which the appearance
+	# pass repositions from the same multipliers (y rides height, x rides
+	# torso bulk) — the drawn arm and the IK stay rooted at the same point on
+	# every build. Must run BEFORE the ROM derivation below reads
+	# shoulder_height. hand_rest_y deliberately does NOT height-scale: the
+	# hands keep their absolute working height over the ice, so the stick
+	# geometry keeps its tuned relationship with the puck plane.
+	skater.set_shoulder_anchor(
+			_base_skater_shoulder_offset * attrs.torso_bulk_mult(),
+			_base_skater_shoulder_height * m_height)
 	# Reach ROM is a derived property of arm length — forehand from the
 	# anatomical cross-body ratio, backhand from the chain geometry (see the
 	# _ROM_FOREHAND_OF_ARM doc block). Bigger arms naturally yield more reach
 	# without being an independent attribute axis, and the backhand solve
-	# amplifies the spread: the fixed shoulder-to-hand drop eats a constant
-	# bite of every arm, so a tall player's extra length converts to reach at
-	# better than 1:1 while a small player gives some back — long arms matter
-	# most at full extension.
+	# amplifies the spread: the shoulder-to-hand drop grows only at the
+	# shoulder end (hand_rest_y is fixed), so it eats proportionally more of
+	# a short arm — a tall player converts extra length to reach at better
+	# than 1:1 while a small player gives some back. Long arms matter most
+	# at full extension.
 	var arm_total: float = skater.upper_arm_length + skater.forearm_length
 	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
 	var arm_eff: float = arm_total * rom_arm_extension
@@ -618,6 +701,8 @@ func _capture_attribute_bases() -> void:
 	_base_stick_length                 = stick_length
 	_base_skater_upper_arm_length      = skater.upper_arm_length
 	_base_skater_forearm_length        = skater.forearm_length
+	_base_skater_shoulder_offset       = skater.shoulder_offset
+	_base_skater_shoulder_height       = skater.shoulder_height
 	_base_skater_weight                       = skater.weight
 	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
@@ -751,6 +836,17 @@ func _process_input(input: InputState, delta: float) -> void:
 		# Cosmetic leg gait — derived from velocity, so it's skipped during replay
 		# (reconcile re-simulates many ticks per frame and would over-spin the phase).
 		_skating.apply(delta)
+		# Goal celebration: the scorer raises the stick. Overrides the hand/
+		# blade pose the tick just placed — cosmetic-only (pickup is locked
+		# through GOAL_CELEBRATION), real ticks only (the timer must not
+		# re-decrement through reconcile replay), and gated to plain skating
+		# so a whiffed shot's follow-through isn't fought over.
+		if _celebration_timer > 0.0:
+			_celebration_timer = maxf(_celebration_timer - delta, 0.0)
+			var cel_state: SkaterStateMachine.State = _sm.get_state()
+			if cel_state == SkaterStateMachine.State.SKATING_WITH_PUCK \
+					or cel_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK:
+				_shot_pose.apply_celebration_pose(1.0 - _celebration_timer / _celebration_total)
 
 
 # Aim-only blade update for FACEOFF_PREP: drives the blade target from the
@@ -770,6 +866,12 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	_pose.apply_head_tracking(input, delta)
 	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
+	# The gait normally ticks at the end of _process_input, which this path
+	# replaces — run it here too so the faceoff ready-stance (crouch + foot
+	# stagger) engages during the countdown. At a locked standstill the
+	# stride terms are inert (intensity is speed-driven), so this is purely
+	# the stance layer. Callers are real-frame only (no reconcile replay).
+	_skating.apply(delta)
 	_ik.update_bottom_hand()
 
 

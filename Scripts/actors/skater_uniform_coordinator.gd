@@ -22,6 +22,10 @@ extends RefCounted
 #   - Helmet / gloves / cuffs / elbow / hand spheres / hips / knees / skates →
 #     solid materials.
 
+# Stick-flex vertex shader — the shaft's per-skater ShaderMaterial wraps it
+# (see _make_stick_shaft_mat); Skater drives the flex_m uniform per frame.
+const _STICK_FLEX_SHADER: Shader = preload("res://Shaders/stick_flex.gdshader")
+
 var _skater: Skater
 var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
@@ -188,9 +192,14 @@ func apply_uniform(colors: Dictionary) -> void:
 	# the team accent onto the tape) plus the cosmetic handed tilt.
 	_rebuild_blade(colors.primary)
 
-	# Stick shaft — near-black composite, satin finish. Set explicitly so ghost
-	# mode doesn't leave behind a stale gray material_override when ghost ends.
-	_skater.stick_mesh.material_override = _make_solid_mat(_STICK_SHAFT_COLOR, _ROUGH_STICK)
+	# Stick shaft — near-black composite, satin finish, on the flex vertex
+	# shader (Shaders/stick_flex.gdshader). A ShaderMaterial PER SKATER, so
+	# one player's shot doesn't bend every stick on the ice;
+	# Skater._update_stick_flex drives its flex_m uniform at render rate.
+	# Set explicitly so ghost mode doesn't leave behind a stale gray
+	# material_override when ghost ends (while ghosted the override isn't a
+	# ShaderMaterial and the flex driver quietly no-ops).
+	_skater.stick_mesh.material_override = _make_stick_shaft_mat()
 
 	# Butt-end knob — team accent, recreated here so the color tracks the kit.
 	_rebuild_stick_knob(colors.primary)
@@ -380,6 +389,14 @@ func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardM
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.roughness = roughness
+	return mat
+
+
+func _make_stick_shaft_mat() -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = _STICK_FLEX_SHADER
+	mat.set_shader_parameter(&"albedo", _STICK_SHAFT_COLOR)
+	mat.set_shader_parameter(&"roughness", _ROUGH_STICK)
 	return mat
 
 

@@ -106,6 +106,40 @@ func apply_block_blade_position() -> void:
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_local)
 
+# ── Goal Celebration Pose ─────────────────────────────────────────────────────
+# Cosmetic raised-stick celebration for the scorer: top hand punches up with
+# the stick held overhead (blade above the hand, tilted so the shaft never
+# goes dead vertical — the stick/blade look_at needs a horizontal component),
+# off hand pumps up on the free side. t runs [0,1] across the celebration
+# window; a fast smoothstep ramp raises the arms, then the pose holds with a
+# gentle bob (no ease-out — the faceoff teleport's pose reset ends it).
+# Applied AFTER the tick's normal hand/blade placement, so it simply wins;
+# runs only on the scorer's own machine and rides the hand/blade wire state
+# to everyone else like every other pose.
+func apply_celebration_pose(t: float) -> void:
+	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+	var ramp: float = clampf(t / 0.2, 0.0, 1.0)
+	ramp = ramp * ramp * (3.0 - 2.0 * ramp)
+	var bob: float = sin(t * TAU * 1.5) * 0.03 * ramp
+	var hand_pos := Vector3(
+			_skater.shoulder.position.x,
+			lerpf(_controller.hand_rest_y, _controller.celebration_hand_y, ramp) + bob,
+			_skater.shoulder.position.z - 0.10)
+	var blade_pos := Vector3(
+			_skater.shoulder.position.x + blade_side_sign * 0.18,
+			hand_pos.y + _controller.celebration_stick_rise * ramp,
+			_skater.shoulder.position.z - 0.28)
+	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
+	_skater.set_top_hand_position(hand_pos)
+	_skater.set_blade_position(blade_pos)
+	# Off hand: fist pump on the free side (normally it rides the shaft —
+	# this override runs after update_bottom_hand, so it wins the tick).
+	_skater.set_bottom_hand_position(Vector3(
+			_skater.bottom_shoulder.position.x,
+			lerpf(0.0, _controller.celebration_hand_y, ramp) + bob * 1.4,
+			_skater.bottom_shoulder.position.z - 0.12))
+
+
 # ── Wrister Follow-Through ────────────────────────────────────────────────────
 # The release swing continued: the blade sweeps from wherever the release left
 # it onto the shot line while the stick climbs to a high finish pointed at the

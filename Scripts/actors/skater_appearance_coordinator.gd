@@ -6,9 +6,19 @@ extends RefCounted
 # leaf MeshInstance3D nodes (not Node3D parents) so the procedural
 # arm-bone IK and reconcile-driven MeshRoot.position stay untouched.
 #
-# Idempotent: captures baseline scales / mesh radii on the first apply()
-# call; every subsequent call recomputes from those baselines so mid-game
-# attribute changes never compound multipliers.
+# Upper-body PART POSITIONS scale too (scale alone stretches each mesh about
+# its own origin, so a tall build's torso grew upward while its shoulder
+# balls and helmet stayed at baseline height — sunken shoulders, low head):
+# shoulder balls and helmet ride m_height on Y, and the shoulder balls ride
+# the torso-bulk multiplier on X so a thick torso doesn't swallow them. The
+# logical arm anchors mirror the same ball positions gameplay-side —
+# SkaterController.apply_attributes calls Skater.set_shoulder_anchor with
+# the identical multipliers, keeping the drawn arm and the IK rooted at the
+# same point (keep the two in sync).
+#
+# Idempotent: captures baseline scales / positions / mesh radii on the first
+# apply() call; every subsequent call recomputes from those baselines so
+# mid-game attribute changes never compound multipliers.
 #
 # All multipliers come from PlayerAttributes — see that file for the
 # tuning tables and how to add new scalings.
@@ -40,7 +50,8 @@ const _CALF_PATHS: Array[String] = [
 
 var _skater: Skater = null
 var _captured: bool = false
-var _base_scales: Dictionary = {}  # mesh_root-relative path -> Vector3
+var _base_scales: Dictionary = {}     # mesh_root-relative path -> Vector3
+var _base_positions: Dictionary = {}  # mesh_root-relative path -> Vector3
 var _base_arm_radius: float = 0.0
 var _base_elbow_sphere_radius: float = 0.0
 var _base_hand_sphere_radius: float = 0.0
@@ -70,6 +81,17 @@ func apply(attrs: PlayerAttributes) -> void:
 		_apply_scale(path, m_thigh, m_height, m_thigh)
 	for path: String in _CALF_PATHS:
 		_apply_scale(path, m_calf, m_height, m_calf)
+	# Positions: keep the upper-body parts assembled across builds. Y rides
+	# height for everything (the torso cylinder's center rises with its
+	# stretch, the shoulder balls sit at its top, the helmet above them).
+	# Shoulder-ball X rides TORSO bulk — the deltoid sits on the torso
+	# surface, so it's the torso's width (Size) that pushes it out, while
+	# the ball's own size keeps reading Physical via _apply_scale above.
+	for path: String in _TORSO_PATHS:
+		_apply_position(path, 1.0, m_height)
+	for path: String in _SHOULDER_PATHS:
+		_apply_position(path, m_torso, m_height)
+	_apply_position(_HELMET_PATH, 1.0, m_height)
 	_apply_arm_thickness(attrs.forearm_bulk_mult(), attrs.upper_arm_bulk_mult())
 
 
@@ -99,6 +121,7 @@ func _capture_scale(path: String) -> void:
 	var node: Node3D = _skater.mesh_root.get_node_or_null(path) as Node3D
 	if node != null:
 		_base_scales[path] = node.scale
+		_base_positions[path] = node.position
 
 
 func _apply_scale(path: String, x_mult: float, y_mult: float, z_mult: float) -> void:
@@ -107,6 +130,14 @@ func _apply_scale(path: String, x_mult: float, y_mult: float, z_mult: float) -> 
 		return
 	var base: Vector3 = _base_scales.get(path, Vector3.ONE)
 	node.scale = Vector3(base.x * x_mult, base.y * y_mult, base.z * z_mult)
+
+
+func _apply_position(path: String, x_mult: float, y_mult: float) -> void:
+	var node: Node3D = _skater.mesh_root.get_node_or_null(path) as Node3D
+	if node == null:
+		return
+	var base: Vector3 = _base_positions.get(path, Vector3.ZERO)
+	node.position = Vector3(base.x * x_mult, base.y * y_mult, base.z)
 
 
 # Arm bulk is split at the elbow so two stats read off one limb: Hands drives the
