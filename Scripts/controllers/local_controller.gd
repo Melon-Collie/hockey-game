@@ -562,7 +562,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		State.SHOT_BLOCKING:
 			pass  # block stance owns the pose; no per-frame blade write
 		_:
-			_ik.apply_blade_from_mouse(_current_input, 0.0)
+			# During the celebration the raised-stick pose owns the hands;
+			# re-IKing to the mouse here would pop the blade down for a frame
+			# on every reconcile. Skip — the next real tick re-applies it.
+			if not is_celebrating():
+				_ik.apply_blade_from_mouse(_current_input, 0.0)
 	var blade_reconcile_delta: float = skater.get_blade_contact_global().distance_to(pre_reconcile_blade)
 	NetworkTelemetry.record_blade_reconcile(blade_reconcile_delta)
 	if blade_reconcile_delta > _BLADE_JUMP_THRESHOLD:

@@ -49,6 +49,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
 @export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
 @export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
+# Cosmetic stumble while staggered: a decaying trunk wobble layered into the
+# gait's trunk texture (SkaterSkatingCoordinator). Amplitude tracks the time
+# left on stagger_timer, and the wobble phase is derived FROM the timer, so
+# every machine renders the identical stumble from the replicated value.
+@export var stagger_wobble_deg: float = 9.0   # peak trunk wobble at full stagger
+@export var stagger_wobble_hz: float = 3.0    # wobble frequency
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -226,6 +232,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stance_full_speed_fraction: float = 0.45  # fraction of max_speed at which the crouch fully engages
 @export var stance_push_gain: float = 0.35          # effort deepens (push) / shallows (glide) the stance
 @export var stance_knee_release: float = 0.85       # fraction of stance knee flex released at full push extension
+# Faceoff ready stance — during the FACEOFF_PREP countdown the speed-driven
+# crouch is floored at faceoff_stance (players are at a standstill, so the
+# intensity envelope alone would leave them bolt upright) and the feet
+# stagger fore/aft (stick-side foot back, braced for the draw). Phase is
+# replicated, so every machine poses its skaters identically.
+@export var faceoff_stance: float = 0.85       # stance engagement floor at the dot
+@export var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
@@ -338,6 +351,12 @@ var show_one_timer_indicator: bool = false
 @export var slapper_follow_through_hand_follow: float = 0.4  # fraction of blade travel the hands follow (limits shaft stretch)
 @export var slapper_follow_through_contact_frac: float = 0.22  # first fraction of the timer spent on the downswing
 
+# ── Celebration Tuning ────────────────────────────────────────────────────────
+# Cosmetic raised-stick goal celebration (SkaterShotPoseCoordinator.
+# apply_celebration_pose) — heights in upper-body-local metres.
+@export var celebration_hand_y: float = 0.45     # raised top-hand height
+@export var celebration_stick_rise: float = 0.5  # blade height above the raised hand
+
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
 # Movement speed while blocking (unused while the stance is fully planted; kept for tuning).
 @export var block_speed_multiplier: float = 0.45
@@ -405,12 +424,37 @@ var stagger_timer: float = 0.0
 # can read it without a getter.
 var sprint_active: bool = false
 
+var _game_state_has_faceoff_prep: bool = false
+# Cosmetic goal-celebration window (seconds remaining / total). Set by
+# GameManager on the machine that simulates the scorer; the raised-stick pose
+# rides the normal hand/blade wire state to everyone else.
+var _celebration_timer: float = 0.0
+var _celebration_total: float = 1.0
+
+
+# True during the FACEOFF_PREP countdown — the gait floors its stance crouch
+# and staggers the feet (see faceoff_stance / faceoff_split_deg).
+func is_faceoff_ready() -> bool:
+	return _game_state_has_faceoff_prep and _game_state.is_faceoff_prep()
+
+
+func start_celebration(duration: float) -> void:
+	_celebration_total = maxf(duration, 0.001)
+	_celebration_timer = _celebration_total
+
+
+func is_celebrating() -> bool:
+	return _celebration_timer > 0.0
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
 	skater = assigned_skater
 	puck = assigned_puck
 	_game_state = game_state
 	_is_host = game_state.is_host()
+	# Cached so the per-tick gait can ask about the faceoff phase without a
+	# has_method() call at 120 Hz (test stubs may not implement it).
+	_game_state_has_faceoff_prep = game_state.has_method("is_faceoff_prep")
 	process_physics_priority = -1  # Run before Skater.move_and_slide
 	skater.body_checked_player.connect(_on_body_checked_player)
 	skater.body_check_received.connect(_on_body_check_received)
@@ -778,6 +822,17 @@ func _process_input(input: InputState, delta: float) -> void:
 		# Cosmetic leg gait — derived from velocity, so it's skipped during replay
 		# (reconcile re-simulates many ticks per frame and would over-spin the phase).
 		_skating.apply(delta)
+		# Goal celebration: the scorer raises the stick. Overrides the hand/
+		# blade pose the tick just placed — cosmetic-only (pickup is locked
+		# through GOAL_CELEBRATION), real ticks only (the timer must not
+		# re-decrement through reconcile replay), and gated to plain skating
+		# so a whiffed shot's follow-through isn't fought over.
+		if _celebration_timer > 0.0:
+			_celebration_timer = maxf(_celebration_timer - delta, 0.0)
+			var cel_state: SkaterStateMachine.State = _sm.get_state()
+			if cel_state == SkaterStateMachine.State.SKATING_WITH_PUCK \
+					or cel_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK:
+				_shot_pose.apply_celebration_pose(1.0 - _celebration_timer / _celebration_total)
 
 
 # Aim-only blade update for FACEOFF_PREP: drives the blade target from the
@@ -797,6 +852,12 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	_pose.apply_head_tracking(input, delta)
 	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
+	# The gait normally ticks at the end of _process_input, which this path
+	# replaces — run it here too so the faceoff ready-stance (crouch + foot
+	# stagger) engages during the countdown. At a locked standstill the
+	# stride terms are inert (intensity is speed-driven), so this is purely
+	# the stance layer. Callers are real-frame only (no reconcile replay).
+	_skating.apply(delta)
 	_ik.update_bottom_hand()
 
 

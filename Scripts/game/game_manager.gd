@@ -1087,6 +1087,7 @@ func _wire_subsystems() -> void:
 			get_tree(), NetworkManager.is_host, force_record)
 	_phase_coord.goal_scored.connect(goal_scored.emit)
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
+	_phase_coord.goal_scored.connect(_trigger_scorer_celebration)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
 	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
@@ -3419,6 +3420,32 @@ func is_movement_locked() -> bool:
 	if _state_machine == null:
 		return false
 	return _state_machine.is_movement_locked()
+
+
+# True during the FACEOFF_PREP countdown. Read by SkaterController's gait
+# (via the game_state interface) to pose the faceoff ready stance — phase is
+# replicated, so every machine answers identically.
+func is_faceoff_prep() -> bool:
+	if _state_machine == null:
+		return false
+	return _state_machine.current_phase == GamePhase.Phase.FACEOFF_PREP
+
+
+# Cosmetic: the scorer raises the stick through the GOAL_CELEBRATION beat.
+# goal_scored is emitted locally on every machine (host detects, clients get
+# notify_goal), but the trigger fires only where the scorer is SIMULATED —
+# their own client, or the host for bots. The raised hands then ride the
+# existing hand/blade wire state to every other machine like any other pose.
+func _trigger_scorer_celebration(_team: Team, scorer_name: String,
+		_assist1: String, _assist2: String) -> void:
+	if scorer_name.is_empty():
+		return
+	for record: PlayerRecord in _registry.all().values():
+		if record.player_name != scorer_name or record.controller == null:
+			continue
+		if record.is_local or (NetworkManager.is_host and record.is_bot):
+			record.controller.start_celebration(GameRules.GOAL_CELEBRATION_DURATION)
+		return
 
 
 func allows_blade_aim_during_lock() -> bool:

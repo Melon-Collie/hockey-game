@@ -50,6 +50,9 @@ var _intensity: float = 0.0
 var _effort: float = 0.0
 var _prev_velocity: Vector3 = Vector3.ZERO
 var _have_prev_velocity: bool = false
+# Smoothed faceoff ready-stance engagement, so the crouch eases in over the
+# countdown and releases into the draw instead of popping on the phase flip.
+var _faceoff_blend: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -63,6 +66,7 @@ func reset_to_rest() -> void:
 	stride_phase = 0.0
 	_intensity = 0.0
 	_effort = 0.0
+	_faceoff_blend = 0.0
 	trunk_pitch_add = 0.0
 	trunk_roll_add = 0.0
 	_prev_velocity = Vector3.ZERO
@@ -161,6 +165,15 @@ func apply(delta: float) -> void:
 	var stance: float = clampf(
 			_intensity / maxf(_controller.stance_full_speed_fraction, 0.01), 0.0, 1.0)
 	stance *= clampf(1.0 + _effort * _controller.stance_push_gain, 0.0, 1.35)
+	# Faceoff ready stance: at the dot the skater is at a standstill, so the
+	# speed-driven envelope leaves them bolt upright — floor the engagement
+	# through the countdown instead. Eased both ways: the crouch settles in
+	# over the prep and releases into the draw as the players explode out.
+	_faceoff_blend = lerpf(_faceoff_blend,
+			1.0 if _controller.is_faceoff_ready() else 0.0,
+			_controller.stride_intensity_speed * delta)
+	if _faceoff_blend > 0.001:
+		stance = maxf(stance, _controller.faceoff_stance * _faceoff_blend)
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
@@ -196,6 +209,13 @@ func apply(delta: float) -> void:
 	var l_roll: float = 0.0
 	var r_pitch: float = stance_hip
 	var r_roll: float = 0.0
+
+	# Faceoff foot stagger: stick-side foot drops back, braced for the draw.
+	if _faceoff_blend > 0.001:
+		var split: float = deg_to_rad(_controller.faceoff_split_deg) * _faceoff_blend \
+				* (-1.0 if _skater.is_left_handed else 1.0)
+		l_pitch += split
+		r_pitch -= split
 
 	# Forward / backward gait. Shared side-to-side roll rocks the lower body onto
 	# alternating edges (each leg pivots about its own hip, so the same roll
@@ -260,6 +280,21 @@ func apply(delta: float) -> void:
 	# hard brake), and the torso rolls over the loaded leg with the weight shift.
 	trunk_pitch_add = -deg_to_rad(_controller.stride_dig_lean_deg) * _effort
 	trunk_roll_add = deg_to_rad(_controller.stride_sway_deg) * _intensity * fb_w * s
+
+	# Stagger stumble: a checked player visibly fights for balance. The wobble
+	# phase is derived FROM stagger_timer (a uniform countdown), so every
+	# machine — and reconcile replay, which snaps the timer from the host —
+	# renders the identical stumble with zero new network state. Amplitude
+	# tracks the time left, so the wobble eases out with the recovery window;
+	# the two axes run at incommensurate frequencies so it reads as a stumble,
+	# not a metronome.
+	var stagger_t: float = clampf(
+			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
+	if stagger_t > 0.0:
+		var wobble_amp: float = deg_to_rad(_controller.stagger_wobble_deg) * stagger_t
+		var wobble_phase: float = _controller.stagger_timer * TAU * _controller.stagger_wobble_hz
+		trunk_pitch_add += wobble_amp * sin(wobble_phase)
+		trunk_roll_add += wobble_amp * 0.7 * sin(wobble_phase * 1.31)
 
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
 	_skater.set_skating_crouch_drop(drop)
