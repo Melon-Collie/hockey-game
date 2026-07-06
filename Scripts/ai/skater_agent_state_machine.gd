@@ -967,11 +967,12 @@ func debug_role() -> String:
 # of commit (intent) — purely the live winner.
 func debug_winner() -> String:
 	# Wrister wins ties over quick-shot (matches the carrier's
-	# tie-break logic: quick must beat wrister by ACTION_HYSTERESIS_MARGIN
-	# to be chosen).
+	# tie-break logic: quick must beat wrister by the hysteresis
+	# fraction to be chosen).
 	var best_shot_score: float = debug_shoot_score
 	var best_shot_label: String = "SHOOT"
-	if debug_quick_shot_score > debug_shoot_score + AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+	if debug_quick_shot_score > debug_shoot_score \
+			* (1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC):
 		best_shot_score = debug_quick_shot_score
 		best_shot_label = "QUICK"
 	var fire_score: float = best_shot_score if best_shot_score >= debug_pass_score else debug_pass_score
@@ -2718,6 +2719,13 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 # past INTENT_MAX_WAIT_TICKS and timing out pre-aim entirely.
 func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	const FIRE_AIM_THRESHOLD: float = 0.05
+	# Debounce band for the aim-mode flip below. ABSOLUTE, deliberately
+	# not AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC (the proportional
+	# intent hysteresis): this band filters per-re-eval score wobble
+	# around the fixed FIRE_AIM_THRESHOLD, so its width is anchored to
+	# that threshold's scale — a fraction of a near-zero score would be
+	# a near-zero band and the blade would wobble at ~30 Hz again.
+	const FIRE_AIM_HYSTERESIS_BAND: float = 0.05
 	# Either wrister OR quick-shot dominance triggers the pre-track —
 	# both aim at the goalie shadow, so the aim direction is close
 	# enough that picking the wrister lookahead (default) for the
@@ -2732,7 +2740,7 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 	# to shoot. Margin direction is signed by _carry_tracking_fire so
 	# entry requires being CLEARLY past the thresholds; exit requires
 	# being CLEARLY below them.
-	var margin: float = AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	var margin: float = FIRE_AIM_HYSTERESIS_BAND
 	var threshold_gate: float
 	var pass_gate: float
 	if _carry_tracking_fire:

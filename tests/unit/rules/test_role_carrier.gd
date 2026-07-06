@@ -107,6 +107,32 @@ func test_risky_backpass_deep_in_own_zone_loses_to_keeping_the_puck() -> void:
 			"a low-upside backpass toward our own net must not beat keeping the puck")
 
 
+# ─── stand-still pays turnover cost: pressured carrier never freezes ─────────
+
+func test_pressured_carrier_skates_clear_instead_of_freezing() -> void:
+	# Carrier deep in our zone with a forechecker charging straight at it
+	# and flankers denying the easy lateral steps. Stand-still used to be
+	# the only carry candidate that paid NO turnover cost, so in exactly
+	# this spot every escape route went EV-negative while freezing stayed
+	# positive — the bot planted itself and ate the check. With the strip
+	# probability (1 - poke_safety) now feeding turnover_cost, freezing
+	# under a converging forechecker prices its own turnover and loses to
+	# the least-bad skating route.
+	var self_pos := Vector3(2, 0, 21)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(2, 0, 18), false, Vector3(0, 0, 5)],  # charging forechecker
+			[4, 1, Vector3(6, 0, 19)],                           # right flanker
+			[5, 1, Vector3(-2, 0, 19)],                          # left flanker
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"nothing worth firing — this is a carry read")
+	assert_ne(c.last_carry_anchor, self_pos,
+			"a carrier with a forechecker bearing down must skate clear, not freeze")
+
+
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────
 
 func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:
@@ -403,6 +429,23 @@ func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
 	carrier._scratch_teammate_ids = [2]
 	assert_gt(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
 			"a staging cross-seam finisher gives a positive developing feed")
+
+
+func test_developing_feed_zero_for_ghosted_finisher() -> void:
+	# An offside (ghosted) finisher can't legally receive — the live pass
+	# scoring skips ghosts, so the hold must too, or the carrier waits
+	# for a feed it's never allowed to make.
+	var self_pos := Vector3(4, 0, -18)
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-3, 0, -19), true]])  # staging spot, but ghosted
+	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
+	brain.slot_assignments[2] = AIRoleSlots.Slot.FINISHER
+	ctx.team_brain = brain
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+			"a ghosted finisher isn't a developing play — nothing to hold for")
 
 
 func test_developing_feed_zero_when_finisher_out_of_offensive_zone() -> void:

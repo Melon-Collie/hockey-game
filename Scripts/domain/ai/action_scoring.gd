@@ -357,15 +357,25 @@ const MIN_TRAVEL_SPEED_M_S: float = 1.0
 # plans; lower toward 0.55 to prioritise immediate actions over
 # distant ones more aggressively.
 #
-# ACTION_HYSTERESIS_MARGIN — once a fire intent is set, that intent
-# gets this bonus when re-scored. Prevents flicker between two
-# close-scoring fire options during pre-aim. Only applies to fire
-# intents (SHOOT, SLAPPER, PASS) — CARRY doesn't get a bonus, so the
-# bot is free to switch to fire as soon as fire scores higher.
-# Raise toward 0.10 if intent flickers visibly; lower toward 0.02 if
-# intent feels too sticky.
+# ACTION_HYSTERESIS_MARGIN_FRAC — once a fire intent is set, that
+# intent's (positive) score is scaled by (1 + this) when re-scored: a
+# challenger must beat the committed intent by 15%, not by a flat
+# margin. Prevents flicker between two close-scoring fire options
+# during pre-aim. PROPORTIONAL rather than additive because utility
+# scores span ~0.02 (deep-DZ escape reads) to ~0.7 (slot chances): the
+# old flat +0.05 was ~10% of a typical OZ score but could exceed the
+# ENTIRE gap between options in the defensive zone, making stale
+# intents disproportionately sticky exactly where scores are small.
+# Matches the proportional pattern already used by
+# AIThreatAssignment.HYSTERESIS_MARGIN_FRAC. Applied only to POSITIVE
+# scores — a committed intent that has decayed to worthless (or
+# negative EV) earns no stickiness. Only applies to fire intents
+# (SHOOT, QUICK_SHOT, PASS) — CARRY doesn't get a bonus, so the bot is
+# free to switch to fire as soon as fire scores higher. Raise toward
+# 0.30 if intent flickers visibly; lower toward 0.05 if intent feels
+# too sticky.
 const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
-const ACTION_HYSTERESIS_MARGIN: float = 0.05
+const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
 
 
 # Returns SHOOT score in [0, 1] using the two-angle coverage model:

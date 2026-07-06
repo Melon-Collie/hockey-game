@@ -351,18 +351,22 @@ func _pick_action(ctx: RoleContext) -> void:
 	last_carry_anchor = carry_result[1]
 
 	# Hysteresis on FIRE intents only — prevents flicker between two
-	# close-scoring fire options during pre-aim. CARRY does NOT get a
-	# hysteresis bonus: stand-still always ties with the best fire
-	# option from the same position by construction (score_at(self) >=
-	# score_shoot(self)), and we want fire to win those ties (see
-	# tiebreak below). A CARRY hysteresis bonus would push stand-still
-	# above fire on every re-eval and the bot would never fire.
-	if intended_action == INTENT_SHOOT:
-		shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
-	elif intended_action == INTENT_QUICK_SHOT:
-		quick_shoot_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
-	elif intended_action == INTENT_PASS:
-		best_pass_score += AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	# close-scoring fire options during pre-aim. Proportional (×(1 +
+	# FRAC), positive scores only — see ACTION_HYSTERESIS_MARGIN_FRAC)
+	# so stickiness scales with the score's magnitude instead of
+	# swamping the small-score defensive-zone regime. CARRY does NOT
+	# get a hysteresis bonus: stand-still always ties with the best
+	# fire option from the same position by construction
+	# (score_at(self) >= score_shoot(self)), and we want fire to win
+	# those ties (see tiebreak below). A CARRY hysteresis bonus would
+	# push stand-still above fire on every re-eval and the bot would
+	# never fire.
+	if intended_action == INTENT_SHOOT and shoot_score > 0.0:
+		shoot_score *= 1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC
+	elif intended_action == INTENT_QUICK_SHOT and quick_shoot_score > 0.0:
+		quick_shoot_score *= 1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC
+	elif intended_action == INTENT_PASS and best_pass_score > 0.0:
+		best_pass_score *= 1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC
 
 	# Debug snapshot of the per-tick scores for the floating label.
 	# State machine forwards these to its own debug_* fields; AIController
@@ -376,13 +380,13 @@ func _pick_action(ctx: RoleContext) -> void:
 
 	# Pick the better shot type first. Wrister wins ties — the
 	# higher-power option is the default. Quick-shot has to beat
-	# wrister by ACTION_HYSTERESIS_MARGIN to be chosen, which
-	# captures "only snap-shoot when the no-charge release is
-	# distinctly better than charging." Margin reuse keeps the
-	# behaviour consistent with the other fire-intent stickiness.
+	# wrister by the hysteresis fraction to be chosen, which captures
+	# "only snap-shoot when the no-charge release is distinctly better
+	# than charging." Margin reuse keeps the behaviour consistent with
+	# the other fire-intent stickiness.
 	var best_shot_score: float = shoot_score
 	var best_shot_intent: int = INTENT_SHOOT
-	if quick_shoot_score > shoot_score + AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+	if quick_shoot_score > shoot_score * (1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC):
 		best_shot_score = quick_shoot_score
 		best_shot_intent = INTENT_QUICK_SHOT
 
@@ -819,9 +823,15 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	# Stand-still last. Only wins on STRICTLY greater than the best
 	# movement candidate — patience must be earned. Score uses
 	# current opponents (time = 0 → no projection). Goalie predicted
-	# at the wrister window from current position. Poke-safety applied
-	# here too: if we're standing still in poke range of a defender,
-	# the bot should prefer to skate clear.
+	# at the wrister window from current position. Same EV shape as the
+	# movement candidates: poke-safety discounts the benefit AND its
+	# complement is the strip probability feeding turnover_cost.
+	# Without the cost term stand-still was the only candidate that
+	# didn't price losing the puck, so under a converging forechecker
+	# every escape route went EV-negative while freezing stayed
+	# positive — the bot planted itself at exactly the moment it
+	# should skate clear. (No intercept term: standing still has no
+	# route to intercept, so keep_prob is the destination safety alone.)
 	var stand_goalie: Vector3 = _predict_goalie_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_unsettled: float = _goalie_unsettled_at(
@@ -832,9 +842,12 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var stand_safety: float = AIActionScoring.carry_poke_safety(
 			stand_puck_pos, _scratch_opponents)
-	stand_score *= stand_safety
-	if stand_score > best_score:
-		best_score = stand_score
+	var stand_cost: float = AIActionScoring.turnover_cost(
+			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
+			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	var stand_total: float = stand_score * stand_safety - stand_cost
+	if stand_total > best_score:
+		best_score = stand_total
 		best_pos = self_pos
 
 	return [maxf(best_score, 0.0), best_pos]
@@ -974,12 +987,15 @@ func _best_developing_feed(ctx: RoleContext, goalie_now: Vector3) -> float:
 			continue
 		var feed: float = 0.0
 		if slot == AIRoleSlots.Slot.FINISHER:
-			# Already flagged — the normal pass scoring feeds it; nothing to
-			# wait for. Must be staging an OZ cross-seam (slot_anchor returns
-			# ZERO for FINISHER, so we read the teammate's live position, not
-			# a brain anchor).
+			# Ghosted (offside) finisher can't receive — the live pass
+			# scoring skips ghosts, so holding for one would be waiting
+			# for a feed we're never allowed to make. Already-flagged —
+			# the normal pass scoring feeds it; nothing to wait for. Must
+			# be staging an OZ cross-seam (slot_anchor returns ZERO for
+			# FINISHER, so we read the teammate's live position, not a
+			# brain anchor).
 			var spot: Vector3 = tm.position
-			if ctx.team_brain.is_one_timer_ready(pid) \
+			if tm.is_ghost or ctx.team_brain.is_one_timer_ready(pid) \
 					or -ctx.own_goal_dir * spot.z <= GameRules.BLUE_LINE_Z:
 				continue
 			var dist: float = self_pos.distance_to(spot)
