@@ -58,7 +58,18 @@ const VERSION: String = "dev"
 # v15: skater block 39 -> 40 B — movement-intent byte (8-way move octant +
 #     moving + brake bits) so client-rendered remotes play the input-driven
 #     gait reads (glide on no keys, intent crossovers, brake-gated stop).
-const PROTOCOL_VERSION: int = 15
+# v16: latency pass. (a) Input batching 60 -> 120 Hz; ClockSync.BATCH_INTERVAL
+#     now derives from Constants.INPUT_RATE, shrinking INPUT_LEAD_SEC
+#     33.3 -> 25 ms — the lead is a host/client convention baked into every
+#     lag-comp rewind (LagCompRewind.self_view_time), so mixed builds would
+#     skew claim arbitration by 8.3 ms. (b) World-state packets carry a
+#     trailing carrier-event block (SnapshotEventLog: u8 count last, 13 B
+#     records before it) so carrier events survive reliable-packet loss
+#     without a retransmit-RTT stall; the four carrier RPCs
+#     (notify_carrier_changed / notify_puck_picked_up / notify_puck_stolen /
+#     notify_puck_dropped) gained a leading event_seq arg for cross-channel
+#     dedupe.
+const PROTOCOL_VERSION: int = 16
 
 
 func _ready() -> void:
