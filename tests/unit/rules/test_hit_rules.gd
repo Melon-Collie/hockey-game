@@ -1,42 +1,52 @@
 extends GutTest
 
-# HitRules — gates for crediting a body check as a hit.
+# HitRules — NHL-style classification of a body-check contact into a hit.
+# CREDIT = victim just lost/released the puck (finished check, stat lands now);
+# CREDIT_PENDING = victim carries, stat waits for a possession loss;
+# REJECT = soft contact, attacker carrying, or victim nowhere near possession.
 
-# ── is_valid_hit ─────────────────────────────────────────────────────────────
+const IMPULSE_OK: float = HitRules.MIN_HIT_IMPULSE + 1.0
 
-func test_valid_hit_passes_all_gates() -> void:
-	assert_true(HitRules.is_valid_hit(HitRules.MIN_HIT_IMPULSE + 1.0, false, true))
+# ── Impulse gate ─────────────────────────────────────────────────────────────
 
 func test_below_impulse_threshold_rejected() -> void:
-	assert_false(HitRules.is_valid_hit(HitRules.MIN_HIT_IMPULSE - 0.01, false, true))
+	assert_eq(HitRules.classify_contact(HitRules.MIN_HIT_IMPULSE - 0.01, false, true, INF),
+			HitRules.Verdict.REJECT)
 
 func test_at_impulse_threshold_passes() -> void:
-	assert_true(HitRules.is_valid_hit(HitRules.MIN_HIT_IMPULSE, false, true))
+	assert_eq(HitRules.classify_contact(HitRules.MIN_HIT_IMPULSE, false, true, INF),
+			HitRules.Verdict.CREDIT_PENDING)
+
+# ── Attacker gate ────────────────────────────────────────────────────────────
 
 func test_attacker_carrying_puck_rejected() -> void:
-	assert_false(HitRules.is_valid_hit(HitRules.MIN_HIT_IMPULSE + 5.0, true, true))
+	assert_eq(HitRules.classify_contact(IMPULSE_OK, true, false, 0.0),
+			HitRules.Verdict.REJECT)
 
-func test_victim_not_puck_relevant_rejected() -> void:
-	assert_false(HitRules.is_valid_hit(HitRules.MIN_HIT_IMPULSE + 5.0, false, false))
+# ── Possession gates ─────────────────────────────────────────────────────────
 
-# ── is_victim_puck_relevant ──────────────────────────────────────────────────
+func test_contact_on_carrier_is_pending() -> void:
+	assert_eq(HitRules.classify_contact(IMPULSE_OK, false, true, INF),
+			HitRules.Verdict.CREDIT_PENDING)
 
-func test_victim_is_puck_carrier() -> void:
-	assert_true(HitRules.is_victim_puck_relevant(
-			2, 2, Vector3(10.0, 0.0, 10.0), Vector3(50.0, 0.0, 50.0)))
+func test_contact_within_grace_after_release_credits() -> void:
+	assert_eq(HitRules.classify_contact(
+			IMPULSE_OK, false, false, HitRules.JUST_RELEASED_GRACE_S - 0.01),
+			HitRules.Verdict.CREDIT)
 
-func test_victim_within_proximity_radius() -> void:
-	# Puck offset by less than PUCK_PROXIMITY_RADIUS on the XZ plane.
-	var offset: float = HitRules.PUCK_PROXIMITY_RADIUS - 0.1
-	assert_true(HitRules.is_victim_puck_relevant(
-			2, 99, Vector3.ZERO, Vector3(offset, 0.0, 0.0)))
+func test_contact_after_grace_expires_rejected() -> void:
+	assert_eq(HitRules.classify_contact(
+			IMPULSE_OK, false, false, HitRules.JUST_RELEASED_GRACE_S + 0.01),
+			HitRules.Verdict.REJECT)
 
-func test_victim_outside_proximity_radius() -> void:
-	var offset: float = HitRules.PUCK_PROXIMITY_RADIUS + 0.1
-	assert_false(HitRules.is_victim_puck_relevant(
-			2, 99, Vector3.ZERO, Vector3(offset, 0.0, 0.0)))
+func test_victim_never_possessed_rejected() -> void:
+	# Open-ice bump on a player who never had the puck — no hit, however hard.
+	assert_eq(HitRules.classify_contact(IMPULSE_OK + 10.0, false, false, INF),
+			HitRules.Verdict.REJECT)
 
-func test_proximity_ignores_y_axis() -> void:
-	# Y differences (e.g. puck airborne) must not push us outside the radius.
-	assert_true(HitRules.is_victim_puck_relevant(
-			2, 99, Vector3.ZERO, Vector3(0.0, 100.0, 0.0)))
+func test_grace_wins_over_stale_carrier_flag() -> void:
+	# A lag-comp claim can present a snapshot where the victim still carried,
+	# after the host already saw the puck come loose — the live possession loss
+	# must credit immediately instead of pending on a loss already in the past.
+	assert_eq(HitRules.classify_contact(IMPULSE_OK, false, true, 0.0),
+			HitRules.Verdict.CREDIT)

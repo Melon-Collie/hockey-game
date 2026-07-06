@@ -380,6 +380,7 @@ func _physics_process(delta: float) -> void:
 	_check_puck_stuck_on_net(delta)
 	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
+	_hit_tracker.tick(delta)
 	_pickup_claim.tick(delta)
 
 
@@ -1032,6 +1033,7 @@ func _wire_subsystems() -> void:
 
 	_hit_tracker = HitTracker.new()
 	_hit_tracker.setup(_registry)
+	_hit_tracker.impact_landed.connect(_on_impact_landed)
 	_hit_tracker.hit_credited.connect(_on_hit_credited)
 
 	# Host-only takeaway / giveaway / faceoff-win attribution off possession
@@ -1050,7 +1052,7 @@ func _wire_subsystems() -> void:
 	_stick_lift_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
 	_hit_claim = HitClaimResolver.new()
-	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
+	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, _get_puck_controller)
 
 	_phase_coord = PhaseCoordinator.new()
 	# Every peer captures a goal frame of its own POV at goal time —
@@ -1842,9 +1844,10 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
 	)
 	# Impact burst + sound are NOT played here — they fire from the host-authoritative
-	# body_check_landed broadcast (_on_body_check_landed) once a hit is credited, so
-	# they read identically on every client. This closure only routes the contact
-	# into the credit/claim path (_on_hit_landed → HitClaimResolver).
+	# body_check_landed broadcast (_on_body_check_landed) once the contact validates
+	# (HitTracker.impact_landed), so they read identically on every client. This
+	# closure only routes the contact into the credit/claim path
+	# (_on_hit_landed → HitClaimResolver).
 	if NetworkManager.is_host:
 		record.skater.body_checked_player.connect(
 			func(v: Skater, f: float, d: Vector3) -> void:
@@ -1930,6 +1933,10 @@ func _on_server_puck_picked_up_by(peer_id: int) -> void:
 	var was_faceoff: bool = _state_machine != null \
 			and _state_machine.current_phase == GamePhase.Phase.FACEOFF
 	_shot_tracker.on_pickup(peer_id)
+	# Carrying again — a hit landing now must wait for a FRESH possession loss,
+	# not credit off the stale just-released grace from their last touch.
+	if _hit_tracker != null:
+		_hit_tracker.note_possession_gained(peer_id)
 	_phase_coord.on_pickup(peer_id)
 	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
 	# (and client scoreboards) see it now, not on the next unrelated stat event.
@@ -1985,6 +1992,10 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
+	# Possession lost — a pending body check on this carrier (or one landing
+	# within the just-released grace) now credits as a hit (see HitTracker).
+	if _hit_tracker != null:
+		_hit_tracker.note_possession_lost(peer_id)
 	record.controller.on_puck_released_network()
 	NetworkManager.send_carrier_changed_to_all(-1)
 	# Carrier released — possession state likely flips (TRANS_DO →
@@ -2008,6 +2019,10 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
+	# Possession lost — resolves any pending body check on this carrier into a
+	# credited hit (the strip path a check-knocked-loose puck goes through).
+	if _hit_tracker != null:
+		_hit_tracker.note_possession_lost(peer_id)
 	if _turnover_tracker != null:
 		_turnover_tracker.note_strip(peer_id)
 	_state_machine.notify_icing_contact()
@@ -2659,14 +2674,21 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 		_achievements.on_local_hit(impulse_magnitude)
 
 
-# Host-only (hit_credited fires only on the host, from the deduped credit path).
-# Sync stats as before, then broadcast the authoritative impact so every client
-# renders one consistent burst/thud; self-fire locally since the RPC reaches only
-# remote peers (and so offline/free-play still gets the impact).
-func _on_hit_credited(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
-	_sync_stats_to_clients()
+# Host-only (impact_landed fires only on the host, from the deduped contact
+# path). Broadcast the authoritative impact at CONTACT time — the burst/thud
+# can't wait on the possession-loss verdict that gates the stat — and self-fire
+# locally since the RPC reaches only remote peers (and so offline/free-play
+# still gets the impact).
+func _on_impact_landed(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
 	NetworkManager.send_body_check_to_all(victim_peer_id, force, hit_dir)
 	_on_body_check_landed(victim_peer_id, force, hit_dir)
+
+
+# Host-only. The hit stat may land up to POSSESSION_LOSS_WINDOW_S after the
+# contact (it waits for the victim to lose the puck — see HitTracker), so this
+# only syncs stats; the impact broadcast already fired from _on_impact_landed.
+func _on_hit_credited(_victim_peer_id: int, _force: float, _hit_dir: Vector3) -> void:
+	_sync_stats_to_clients()
 
 
 # Drives the body-check VFX + sound on every machine (clients via the RPC signal,
