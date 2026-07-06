@@ -81,20 +81,23 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Hand Y in upper-body-local space. Baseline resting position (used in the
 # FAR regime). In the CLOSE regime the hand rises toward `hand_y_max` so the
 # stick tilts more vertical and the blade can tuck in close to the body.
-# With the upper body at ~0.95 m world Y and blade at 0.0 (ice), -0.10 gives
-# a hand world Y of ~0.85 m (hip height on the 1.78 m baseline body) and a
-# rest stick angle of ~39° — close to a real lie-5 address, up from the ~35°
-# reach-cheat this used to run. The steeper stick pulls the rest carry
-# circle in ~5 cm (stick_horiz 1.06 → 1.01), but the shallower shoulder-to-
-# hand drop re-aims the arm budget sideways (derived backhand ROM 0.37 →
-# 0.46 m of hand displacement), so rim reach is roughly preserved and the
-# directional reach lean stays pure bonus on top.
+# The upper body rides at 1.0 m world Y for every build (FACEOFF_SPAWN_HEIGHT,
+# Y-axis-locked; the cosmetic skating crouch lowers it up to ~7 cm at speed)
+# and the blade at blade_height (~ice), so -0.10 gives a hand world Y of
+# ~0.90 m standing (hip height on the 1.78 m baseline body) and a rest stick
+# angle of ~42° — approaching a real lie-5 address (~45°), up from the ~38°
+# reach-cheat this used to run (hand_rest_y -0.17). The steeper stick pulls
+# the rest carry circle in ~6 cm (stick_horiz 1.03 → 0.97), but the shallower
+# shoulder-to-hand drop re-aims the arm budget sideways (derived backhand ROM
+# 0.37 → 0.46 m of hand displacement), so rim reach is roughly preserved and
+# the directional reach lean stays pure bonus on top.
 @export var hand_rest_y: float = -0.10
 # Ceiling for hand Y in the CLOSE regime. When aiming very close to the
 # skater, the hand rises to shorten the stick's horizontal projection; this
-# cap keeps the pose anatomical (hand won't climb past chin level). With
-# default stick_length = 1.30 m, hand_y_max = 0.30 → min horizontal stick
-# reach ≈ 0.36 m.
+# cap keeps the pose anatomical (0.30 local = 1.30 m world — the hand won't
+# climb past chest level). With default stick_length = 1.30 m and the blade
+# on the ice (blade_y ≈ -0.97 local), hand_y_max = 0.30 → hand-to-blade drop
+# 1.27 → min horizontal stick reach ≈ 0.28 m.
 @export var hand_y_max: float = 0.30
 # Asymmetric ROM for the top hand (measured from shoulder in upper-body-local
 # horizontal plane, expressed in "forehand side = positive angle" convention).
@@ -154,7 +157,9 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Fraction along the shaft (0 = top hand, 1 = blade heel) that the bottom hand
 # grips. ~0.25 on a 1.30 m shaft ≈ a typical hockey grip width.
 @export var bottom_hand_grip_fraction: float = 0.25
-# Bottom hand resting Y in upper-body-local. Same height as top hand rest.
+# Fine-tune Y offset added to the bottom hand's shaft-derived grip height
+# (SkaterIKCoordinator.update_bottom_hand lerps top-hand Y toward blade Y at
+# the grip fraction, then adds this). 0.0 = grip sits exactly on the shaft.
 @export var bh_hand_y: float = 0.0
 # Blade world angle (from skater forward, toward backhand) at which the bottom
 # hand starts releasing toward the shoulder rest. Match upper_body_max_twist_deg

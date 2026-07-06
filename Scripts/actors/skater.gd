@@ -83,10 +83,11 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # (cross-body reach, arm × 0.5625) and the backhand cap is chain-derived
 # (sqrt(arm_eff² − shoulder-to-hand drop²)), so no reachable hand target ever
 # exceeds the arm's length — the forearm never draws stretched.
-# Baseline lengths give one-arm = 0.70m, wingspan ≈ 1.84m on a 1.78m body
-# (~103% of height — arm span runs 100–104% of height in real athletes; the
-# segments split evenly because the distal bone ends at the gloved-fist
-# center, and elbow→fist really is about humerus-length).
+# Baseline lengths give one-arm = 0.70m; with the shoulder balls at ±0.24
+# that's a wingspan ≈ 1.88m on a 1.78m body (~106% of height — a touch rangy
+# vs the 100–104% real athletes run, which reads fine in-game; the segments
+# split evenly because the distal bone ends at the gloved-fist center, and
+# elbow→fist really is about humerus-length).
 @export var upper_arm_length: float = 0.35
 @export var forearm_length: float = 0.35
 # Pole direction for the elbow (upper-body local). Mostly down with a real
