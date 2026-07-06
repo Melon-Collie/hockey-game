@@ -1163,3 +1163,40 @@ func test_turnover_cost_self_localizes_by_geometry() -> void:
 			far_out, 0.5, OUR_NET, OUR_GOALIE, NET_HW, [])
 	assert_gt(slot_cost, far_cost,
 			"own-zone turnover costs more than a neutral-ice one at equal probability")
+
+
+# ── pass_miss_loss_point: execution-miss loss location ────────────────────────
+# A lane-clear pass can still miss on execution (PASS_MISS_PROB); the
+# puck dies PASS_MISS_OVERSHOOT_M past the receiver on the pass line.
+
+func test_pass_miss_loss_point_overshoots_past_receiver() -> void:
+	var from := Vector3(0.0, 0.0, 20.0)
+	var receiver := Vector3(0.0, 0.0, 24.0)  # straight backpass toward our net
+	var loss: Vector3 = AIActionScoring.pass_miss_loss_point(from, receiver)
+	assert_almost_eq(loss.z, 24.0 + AIActionScoring.PASS_MISS_OVERSHOOT_M, 0.001,
+			"miss point sits the overshoot distance past the receiver on the pass line")
+	assert_almost_eq(loss.x, 0.0, 0.001)
+
+
+func test_pass_miss_loss_point_degenerate_falls_back_to_receiver() -> void:
+	var p := Vector3(3.0, 0.0, 10.0)
+	assert_eq(AIActionScoring.pass_miss_loss_point(p, p), p,
+			"overlapping endpoints → miss point is the receiver itself")
+
+
+func test_pass_miss_cost_self_localizes_by_rink_end() -> void:
+	# The property the miss mode exists for: the identical pass shape,
+	# missed in our own end, costs far more than missed in the opponent's
+	# end — because the overshoot loss point lands in front of OUR net in
+	# one case and a full rink away in the other. This is what lets the
+	# risk term punish own-zone touch-passes without taxing OZ passing.
+	var own_end_loss: Vector3 = AIActionScoring.pass_miss_loss_point(
+			Vector3(2.0, 0.0, 20.0), Vector3(-2.0, 0.0, 23.0))
+	var opp_end_loss: Vector3 = AIActionScoring.pass_miss_loss_point(
+			Vector3(2.0, 0.0, -20.0), Vector3(-2.0, 0.0, -23.0))
+	var own_end_cost: float = AIActionScoring.turnover_cost(
+			own_end_loss, AIActionScoring.PASS_MISS_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
+	var opp_end_cost: float = AIActionScoring.turnover_cost(
+			opp_end_loss, AIActionScoring.PASS_MISS_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
+	assert_gt(own_end_cost, opp_end_cost * 4.0,
+			"a missed pass in our own end costs multiples of the same miss in theirs")
