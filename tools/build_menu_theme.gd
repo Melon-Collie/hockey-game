@@ -30,6 +30,7 @@ func _build_theme() -> Theme:
 	_apply_check_button(theme)
 	_apply_panel_container(theme)
 	_apply_popup_menu(theme)
+	_apply_tooltip(theme)
 	_apply_scroll_bar(theme, "VScrollBar")
 	_apply_scroll_bar(theme, "HScrollBar")
 	_apply_tab_inactive_variation(theme)
@@ -198,6 +199,24 @@ func _apply_popup_menu(theme: Theme) -> void:
 	theme.set_icon("unchecked",                TYPE, _check_square(false))
 	theme.set_icon("checked_disabled",         TYPE, _check_square(true))
 	theme.set_icon("unchecked_disabled",       TYPE, _check_square(false))
+
+
+# Hover tooltips (attribute picker, etc.). TooltipPanel is the bubble,
+# TooltipLabel the text inside it — styled to match PopupMenu's dark panel
+# rather than Godot's stock light-grey bubble.
+func _apply_tooltip(theme: Theme) -> void:
+	var panel := StyleBoxFlat.new()
+	panel.bg_color = MenuStyle.PANEL_BG
+	panel.set_corner_radius_all(4)
+	panel.border_color = MenuStyle.TEAL_DIM
+	panel.set_border_width_all(1)
+	panel.set_content_margin(SIDE_LEFT,   10)
+	panel.set_content_margin(SIDE_RIGHT,  10)
+	panel.set_content_margin(SIDE_TOP,    6)
+	panel.set_content_margin(SIDE_BOTTOM, 6)
+	theme.set_stylebox("panel", "TooltipPanel", panel)
+	theme.set_color("font_color", "TooltipLabel", MenuStyle.TEXT_BODY)
+	theme.set_font_size("font_size", "TooltipLabel", 14)
 
 
 # Track + grabber for V/HScrollBar. Used by ScrollContainer in the input
