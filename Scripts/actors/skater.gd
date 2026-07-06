@@ -192,6 +192,15 @@ var bottom_hand_sphere: MeshInstance3D = null
 # they stay perpendicular to the forearm bone as the arm moves.
 var top_cuff_mesh: MeshInstance3D = null
 var bot_cuff_mesh: MeshInstance3D = null
+# Visual forearm-bulk multiplier (the Hands attribute's arm tell), stamped by
+# SkaterAppearanceCoordinator.apply. The glove cuffs must stay proud of the
+# scaled forearm cylinder: with a fixed cuff radius, Hands 4's forearm
+# (0.055 × 1.20) landed EXACTLY on the cuff's 0.11 × 0.6 — two coaxial
+# cylinders with identical radii, z-fighting along the whole wrist — and
+# Hands 5 poked clean through it. Both writers read this: the appearance pass
+# resizes live cuffs when attributes change, and _rebuild_glove_cuffs sizes
+# fresh ones on uniform apply (either order works).
+var forearm_visual_mult: float = 1.0
 
 # Butt-end knob cylinder at the top of the shaft (just past the top hand).
 # Created by SkaterUniformCoordinator on uniform apply; positioned per-tick by

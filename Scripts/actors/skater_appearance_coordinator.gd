@@ -141,9 +141,9 @@ func _apply_position(path: String, x_mult: float, y_mult: float) -> void:
 
 
 # Arm bulk is split at the elbow so two stats read off one limb: Hands drives the
-# forearms (+ the hand spheres on that side), Shot drives the upper arms (+ the
-# elbow joints on that side). A thick-forearm / normal-bicep reads as "hands";
-# the reverse reads as "shot".
+# forearms (+ the hand spheres and glove cuffs on that side), Shot drives the
+# upper arms (+ the elbow joints on that side). A thick-forearm / normal-bicep
+# reads as "hands"; the reverse reads as "shot".
 func _apply_arm_thickness(forearm_mult: float, upper_mult: float) -> void:
 	var fore_radius:  float = _base_arm_radius * forearm_mult
 	var upper_radius: float = _base_arm_radius * upper_mult
@@ -151,10 +151,25 @@ func _apply_arm_thickness(forearm_mult: float, upper_mult: float) -> void:
 	_set_bone_radius(_skater.bottom_upper_arm_mesh, upper_radius)
 	_set_bone_radius(_skater.forearm_mesh,          fore_radius)
 	_set_bone_radius(_skater.bottom_forearm_mesh,   fore_radius)
-	_set_sphere_radius(_skater.top_elbow_sphere,    _base_elbow_sphere_radius * upper_mult)
-	_set_sphere_radius(_skater.bottom_elbow_sphere, _base_elbow_sphere_radius * upper_mult)
+	# The elbow ball is Shot's joint, but it must stay proud of BOTH adjoining
+	# cylinders — a thick-forearm / thin-bicep build (high Hands, low Shot)
+	# otherwise leaves the forearm cylinder's flat end cap poking out around a
+	# smaller sphere. maxf keeps the joint reading as a bulge on every combo.
+	var elbow_mult: float = maxf(upper_mult, forearm_mult)
+	_set_sphere_radius(_skater.top_elbow_sphere,    _base_elbow_sphere_radius * elbow_mult)
+	_set_sphere_radius(_skater.bottom_elbow_sphere, _base_elbow_sphere_radius * elbow_mult)
 	_set_sphere_radius(_skater.top_hand_sphere,     _base_hand_sphere_radius * forearm_mult)
 	_set_sphere_radius(_skater.bottom_hand_sphere,  _base_hand_sphere_radius * forearm_mult)
+	# Glove cuffs ride the forearm coaxially, so their radius must scale with
+	# it — at Hands 4 the fixed cuff radius exactly equaled the scaled forearm
+	# radius (coaxial cylinders, identical radii → z-fighting at the wrist).
+	# Stamp the mult on the skater so _rebuild_glove_cuffs (uniform re-applies
+	# recreate the cuffs) sizes fresh cuffs the same way, then resize any live
+	# ones for the attrs-after-uniform order.
+	_skater.forearm_visual_mult = forearm_mult
+	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6 * forearm_mult
+	_set_cuff_radius(_skater.top_cuff_mesh, cuff_radius)
+	_set_cuff_radius(_skater.bot_cuff_mesh, cuff_radius)
 
 
 func _set_bone_radius(bone: Node3D, radius: float) -> void:
@@ -162,6 +177,16 @@ func _set_bone_radius(bone: Node3D, radius: float) -> void:
 		return
 	var mi: MeshInstance3D = _skater.bone_visual(bone)
 	if mi == null:
+		return
+	var cyl: CylinderMesh = mi.mesh as CylinderMesh
+	if cyl == null:
+		return
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+
+
+func _set_cuff_radius(mi: MeshInstance3D, radius: float) -> void:
+	if mi == null or not is_instance_valid(mi):
 		return
 	var cyl: CylinderMesh = mi.mesh as CylinderMesh
 	if cyl == null:
