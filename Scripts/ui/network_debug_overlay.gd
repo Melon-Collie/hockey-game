@@ -46,11 +46,17 @@ var _toast: Label
 var _toast_timer: float = 0.0
 const TOAST_SECONDS: float = 2.0
 
-# Always-on health dot: a small green/yellow/red ● in the top-right, live at all
-# times so a tester sees link state without opening the F3 panel. While the
-# panel is closed the verdict is re-evaluated on a throttle (telemetry refreshes
-# at 1 Hz, so 2 Hz keeps the dot current without per-frame string building).
+# Always-on diagnostics row, top-right: [FPS: 144] [●]. The health dot is a
+# small green/yellow/red ● live at all times so a tester sees link state without
+# opening the F3 panel; the FPS readout (Options → Video → Show FPS) slots in to
+# its LEFT so the two never overlap and the dot keeps one consistent corner spot
+# whether or not FPS is shown. While the panel is closed the verdict is
+# re-evaluated on a throttle (telemetry refreshes at 1 Hz, so 2 Hz keeps the dot
+# current without per-frame string building); the row hides while the panel is
+# open — they share the corner and the header carries the verdict.
+var _diag_row: HBoxContainer
 var _dot: Label
+var _fps_label: Label
 var _dot_timer: float = 0.0
 const DOT_REFRESH_SECONDS: float = 0.5
 
@@ -85,21 +91,40 @@ func _ready() -> void:
 	add_child(_panel)
 	_panel.hide()
 	_build_toast()
-	_build_dot()
+	_build_diag_row()
 
-func _build_dot() -> void:
+func _build_diag_row() -> void:
+	_diag_row = HBoxContainer.new()
+	_diag_row.anchor_left = 1.0
+	_diag_row.anchor_right = 1.0
+	_diag_row.anchor_top = 0.0
+	_diag_row.anchor_bottom = 0.0
+	_diag_row.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_diag_row.position = Vector2(-8, 4)
+	_diag_row.add_theme_constant_override("separation", 6)
+	_diag_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_diag_row)
+
+	_fps_label = Label.new()
+	_fps_label.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	_fps_label.add_theme_font_size_override("font_size", 14)
+	_fps_label.add_theme_color_override("font_color", MenuStyle.BROADCAST_CREAM)
+	_fps_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_fps_label.add_theme_constant_override("outline_size", 4)
+	_fps_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_diag_row.add_child(_fps_label)
+	_fps_label.hide()
+
+	# Last child = rightmost slot, so the dot holds the same corner position
+	# whether the FPS readout is on or off.
 	_dot = Label.new()
-	_dot.anchor_left = 1.0
-	_dot.anchor_right = 1.0
-	_dot.anchor_top = 0.0
-	_dot.anchor_bottom = 0.0
-	_dot.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_dot.position = Vector2(-22, 4)
 	_dot.text = DOT
 	_dot.add_theme_font_size_override("font_size", 18)
 	_dot.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	_dot.add_theme_constant_override("outline_size", 4)
-	add_child(_dot)
+	_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_diag_row.add_child(_dot)
 	_dot.hide()
 
 func _build_toast() -> void:
@@ -156,6 +181,13 @@ func _process(delta: float) -> void:
 		_toast_timer -= delta
 		if _toast_timer <= 0.0:
 			_toast.hide()
+	# FPS readout, gated by the Options → Video pref. Hidden while the F3 panel
+	# is open (the panel owns the corner and reports Render FPS itself).
+	var fps_on: bool = PlayerPrefs.show_fps and not _showing
+	if _fps_label.visible != fps_on:
+		_fps_label.visible = fps_on
+	if fps_on:
+		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
 	# Panel open: rebuild every frame. Panel closed: still evaluate the verdict
 	# (for the always-on dot) but only on a throttle, since the full-text build
 	# isn't needed and telemetry only changes at 1 Hz.
@@ -255,6 +287,10 @@ func _render_client(t: NetworkTelemetry) -> void:
 
 	_info("Bandwidth", "%.1f KB/s down" % (t.bytes_received_per_sec / 1024.0),
 		"game data received per second (payload only, excludes Steam framing)")
+	# The always-on FPS readout hides while this panel owns the corner, so carry
+	# the number here (host/solo already get it via _frame_health).
+	_info("Render FPS", "%d" % int(Engine.get_frames_per_second()),
+		"your draw rate; server tick health is host-side")
 
 	_render_watch(t)
 
