@@ -109,6 +109,19 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # pullback exposes the hand sphere as a distinct ball at the wrist.
 @export var cuff_wrist_offset: float = 0.05
 
+# ── Stick Flex Tuning (cosmetic) ──────────────────────────────────────────────
+# Vertex-shader shaft bow (Shaders/stick_flex.gdshader), driven entirely from
+# replicated fields (current_shot_state + shot_charge + carry side), so every
+# machine renders identical flex with no controller plumbing and no network
+# state. The shader displaces vertices BETWEEN the pinned endpoints — the
+# hand and blade anchors (gameplay) never move. Negative maxima flip the bow
+# side globally if a build reads inverted.
+@export var stick_flex_max_m: float = 0.07       # mid-shaft bow at full wrister charge
+@export var stick_flex_slap_m: float = 0.10      # contact-spike bow of the slapshot downswing
+@export var stick_flex_load_speed: float = 10.0  # how fast the bow tracks the charge
+@export var stick_whip_hz: float = 9.0           # release-whip oscillation frequency
+@export var stick_whip_damping: float = 14.0     # release-whip decay rate
+
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
 @export var body_check_restitution: float = 0.25
@@ -200,6 +213,16 @@ signal body_block_hit(body: Node3D)
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
 var current_shot_state: int = 0
+
+# ── Stick Flex Runtime State (see Stick Flex Tuning exports) ──────────────────
+const _STICK_FLEX_SEGMENTS: int = 12   # shaft subdivisions the bend shader needs
+const _SLAP_SPIKE_SECONDS: float = 0.1 # downswing load time before the whip
+var _stick_flex: float = 0.0           # smoothed signed load bow (metres)
+var _stick_whip_amp: float = 0.0       # release-whip starting amplitude (signed)
+var _stick_whip_t: float = -1.0        # seconds since whip start; <0 = idle
+var _slap_spike_t: float = -1.0        # seconds into the slap contact spike; <0 = idle
+var _flex_prev_state: int = 0
+var _flex_sent: float = 0.0            # last uniform written (dirty guard)
 # Resolves the skater's current team_id by deferring to the registry. Set by
 # PlayerRegistry on spawn so the goalie / VFX / other Skater-holding code can
 # query team affiliation without growing a cached field that has to be
@@ -309,6 +332,16 @@ func _ready() -> void:
 		col.shape = col.shape.duplicate()
 		_collision_cyl = col.shape as CylinderShape3D
 
+	# Stick-flex prep: the shaft BoxMesh is a scene sub-resource shared by
+	# every skater — duplicate it before subdividing (the flex shader needs
+	# vertices along the length to bend), same discipline as the collision
+	# shape above so instances don't share the mutation.
+	var shaft: BoxMesh = stick_mesh.mesh as BoxMesh
+	if shaft != null:
+		shaft = shaft.duplicate() as BoxMesh
+		shaft.subdivide_depth = _STICK_FLEX_SEGMENTS
+		stick_mesh.mesh = shaft
+
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
 		top_hand = Marker3D.new()
@@ -414,7 +447,7 @@ func _ready() -> void:
 	add_child(vfx)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	# Cosmetic mesh pass at render rate. The stick and arm meshes are pure
 	# write-only functions of the marker positions (top_hand, blade, shoulder,
 	# bottom_hand) that the physics-rate controllers and interpolators
@@ -427,6 +460,7 @@ func _process(_delta: float) -> void:
 	update_stick_mesh()
 	update_arm_mesh()
 	update_bottom_arm_mesh()
+	_update_stick_flex(delta)
 
 
 func _physics_process(delta: float) -> void:
@@ -985,6 +1019,75 @@ func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
 	stick_knob_mesh.position = upper_body.to_local(knob_center_w)
 	stick_knob_mesh.look_at(knob_center_w + up_shaft_w, _up_for_look_at(up_shaft_w))
 	stick_knob_mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+
+
+# ── Stick Flex (cosmetic) ─────────────────────────────────────────────────────
+# Render-rate driver for the shaft-bow shader uniform. Load: the shaft bows
+# with wrister charge while aiming (side follows the carry face, so a
+# backhand load bows the other way). Release: the bow springs through
+# straight with a damped cosine oscillation — cos starts AT the loaded value,
+# so the whip is continuous at the release instant. Slapshot: straight
+# through the wind-up (real shafts load at CONTACT, not at the top of the
+# swing), then a quick contact spike at the start of the follow-through's
+# downswing that converts into the same whip. Every input is replicated
+# (current_shot_state, shot_charge, carry side), so local, bot, and remote
+# skaters render the identical flex with zero network additions.
+func _update_stick_flex(delta: float) -> void:
+	var state: int = current_shot_state
+	var side: float = (1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
+			* (-1.0 if is_left_handed else 1.0)
+	if state != _flex_prev_state:
+		if state == SkaterStateMachine.State.FOLLOW_THROUGH:
+			if _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
+					or _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK:
+				_slap_spike_t = 0.0
+			else:
+				# Wrister / quick release: whip from the loaded bow, with a
+				# minimum pop so uncharged snaps and passes still read.
+				var amp: float = _stick_flex
+				var min_pop: float = stick_flex_max_m * 0.35
+				if absf(amp) < min_pop:
+					amp = min_pop * side
+				_start_stick_whip(amp)
+		_flex_prev_state = state
+
+	var display: float
+	if _slap_spike_t >= 0.0:
+		# Downswing contact spike: ramp the bow in fast, then let it go.
+		_slap_spike_t += delta
+		if _slap_spike_t < _SLAP_SPIKE_SECONDS:
+			_stick_flex = stick_flex_slap_m * (_slap_spike_t / _SLAP_SPIKE_SECONDS) * side
+		else:
+			_start_stick_whip(_stick_flex)
+			_slap_spike_t = -1.0
+		display = _stick_flex
+	elif _stick_whip_t >= 0.0:
+		_stick_whip_t += delta
+		var envelope: float = exp(-stick_whip_damping * _stick_whip_t)
+		display = _stick_whip_amp * envelope * cos(TAU * stick_whip_hz * _stick_whip_t)
+		if absf(_stick_whip_amp) * envelope < 0.002:
+			_stick_whip_t = -1.0
+			display = 0.0
+		_stick_flex = display
+	else:
+		var target: float = 0.0
+		if state == SkaterStateMachine.State.WRISTER_AIM:
+			target = shot_charge * stick_flex_max_m * side
+		_stick_flex = lerpf(_stick_flex, target, minf(stick_flex_load_speed * delta, 1.0))
+		display = _stick_flex
+
+	if is_equal_approx(display, _flex_sent):
+		return
+	_flex_sent = display
+	var mat: ShaderMaterial = stick_mesh.material_override as ShaderMaterial
+	if mat != null:
+		mat.set_shader_parameter(&"flex_m", display)
+
+
+func _start_stick_whip(amp: float) -> void:
+	_stick_whip_amp = amp
+	_stick_whip_t = 0.0
+	_stick_flex = amp
 
 
 # ── Arm Mesh ──────────────────────────────────────────────────────────────────
