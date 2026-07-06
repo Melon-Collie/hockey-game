@@ -260,6 +260,19 @@ func test_positioning_does_not_stack_on_carrier_side() -> void:
 	assert_lt(x, 3.0, "FINISHER stages cross-ice from a strong-side carrier, not stacked on it")
 
 
+func test_positioning_stages_past_the_far_post_on_odd_man_rush() -> void:
+	# 2-on-0 read: wide strong-side carrier, no defenders. score_shoot's
+	# angle factor always outweighs its capped goalie-coverage penalty, so
+	# without the hard weak-side line the argmax drifted the FINISHER to
+	# the dead-center slot — crashing the front of the net instead of
+	# staging the far side where the cross-seam feed is a tap-in. The
+	# staging spot must sit at least MIN_CROSS_SEAM_OFFSET_M past center
+	# on the weak side.
+	var x: float = _stage_x_for_strong_side(1.0)
+	assert_lte(x, -AIRoleFinisher.MIN_CROSS_SEAM_OFFSET_M,
+			"FINISHER stages past the far post, opposite the carrier; got x=%f" % x)
+
+
 func test_reactive_overrides_positioning_when_shot_incoming() -> void:
 	# Even with a teammate carrier (positioning would normally run),
 	# a fast incoming shot should trigger reactive TIP instead.

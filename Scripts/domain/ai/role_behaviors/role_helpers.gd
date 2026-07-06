@@ -122,12 +122,29 @@ static func lead_threat(pos: Vector3, vel: Vector3, scale: float = 1.0) -> Vecto
 
 # ── Man-on-threat coverage ───────────────────────────────────────────────────
 
+# Slack on cover_man_target's goal-side filter: candidates may sit up to
+# this far up-ice of the man (roughly even with him) but no further.
+# Tight coverage must never trade the defensive side for lane denial — a
+# defender ahead of his man is one burst from being beaten to the net.
+const COVER_GOAL_SIDE_TOLERANCE_M: float = 0.5
+
 # Shared "cover this assigned man" target for the backline defenders
 # (ANCHOR / COVER) when TeamBrain's threat partition hands them a specific
 # opponent. Picks the position that most deflates the carrier→man pass-threat
 # surface (lane interception × the man's resulting shot), searching a candidate
-# set centered on the midpoint between the man and our net — i.e. set up
-# goal-side of him, in the feed lane, to kill the one-timer.
+# set centered on the threat partition's own cover anchor — a stick into the
+# man→net lane (AIThreatAssignment.cover_anchor, COVER_DEPTH_M goal-side of
+# him) — i.e. set up ON the man, in the feed lane, to kill the one-timer.
+#
+# The search center used to be the midpoint between the man and our net,
+# which sagged the whole candidate set: a man 12 m out was "covered" from
+# ~6 m away, and because a midpoint moves at HALF the man's speed, a
+# cutting man walked away from his check every time ("bots lose their
+# man"). Anchoring on cover_anchor keeps the defender attached (it tracks
+# the man 1:1) and matches the anchor the partition already scored
+# reachability against, so the pairing and the coverage agree. The ±3 m
+# candidate ring still lets the argmax shade off the body and into the
+# carrier→man lane when that deflates the threat more.
 #
 # This replaces the legacy "minimize the MAX threat over ALL opponents" scoring
 # for the assigned-man case: because each backline defender gets a DISTINCT man,
@@ -140,11 +157,17 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	var teammates: Array[Vector3] = ctx.scratch_teammates
 	collect_teammates_excluding_self(ctx, teammates)
 
-	var search_center: Vector3 = (man_pos + our_net) * 0.5
+	var search_center: Vector3 = AIThreatAssignment.cover_anchor(man_pos, our_net)
 	var candidates: Array[Vector3] = generate_candidates_around(ctx.self_pos, search_center)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
+	# Fallback across candidates that failed ONLY the goal-side filter —
+	# used when a man parked against our goal line leaves no legal
+	# goal-side spot (goal-line buffer + crease eat the ring), so the
+	# defender still covers from the front instead of freezing.
+	var fallback_pos: Vector3 = ctx.self_pos
+	var fallback_score: float = -INF
 	for c: Vector3 in candidates:
 		if not is_legal_position(c):
 			continue
@@ -158,9 +181,19 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 				carrier_pos, man_pos, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, defenders)
 		var score: float = -threat
-		if score > best_score:
-			best_score = score
-			best_pos = c
+		# Stay on the defensive side of the man (see
+		# COVER_GOAL_SIDE_TOLERANCE_M). own_goal_dir * z grows toward our
+		# net, so goal-side is the LARGER value.
+		if ctx.own_goal_dir * c.z \
+				>= ctx.own_goal_dir * man_pos.z - COVER_GOAL_SIDE_TOLERANCE_M:
+			if score > best_score:
+				best_score = score
+				best_pos = c
+		elif score > fallback_score:
+			fallback_score = score
+			fallback_pos = c
+	if best_score == -INF and fallback_score > -INF:
+		return fallback_pos
 	return best_pos
 
 

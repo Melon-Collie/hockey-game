@@ -564,6 +564,39 @@ func test_potential_drops_with_pressure() -> void:
 	assert_lt(pressured, clean, "forward-cone defender drops position potential")
 
 
+# ── potential_realization_discount ───────────────────────────────────────────
+# Potential is future value — it still has to be skated to the slot — so
+# the carrier's compete discounts it over that remaining travel time.
+
+func test_realization_discount_full_at_slot() -> void:
+	# Inside the slot platform the promise is already real — no discount.
+	var slot := Vector3(0.0, 0.0, 21.65)  # 5 m from goal, inside SLOT_RADIUS_M
+	assert_eq(AIActionScoring.potential_realization_discount(slot, GOAL), 1.0)
+
+
+func test_realization_discount_decays_with_distance() -> void:
+	# Further from the slot = longer to realize = deeper discount.
+	var near := Vector3(0.0, 0.0, 12.0)   # ~14.7 m from goal
+	var far := Vector3(0.0, 0.0, -5.0)    # ~31.7 m from goal
+	var near_d: float = AIActionScoring.potential_realization_discount(near, GOAL)
+	var far_d: float = AIActionScoring.potential_realization_discount(far, GOAL)
+	assert_lt(near_d, 1.0, "outside the slot the discount is real")
+	assert_lt(far_d, near_d, "deeper positions pay a deeper discount")
+
+
+func test_realization_discount_matches_delay_discount_currency() -> void:
+	# The discount IS the standard per-second delay discount over the
+	# remaining travel time at reference speed — same currency as every
+	# other future action in the carrier's EV model.
+	var pos := Vector3(0.0, 0.0, 8.65)  # 18 m from goal → 12 m past slot edge
+	var expected: float = pow(
+			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+			12.0 / AIActionScoring.SKATER_REF_SPEED_M_S)
+	assert_almost_eq(
+			AIActionScoring.potential_realization_discount(pos, GOAL),
+			expected, 0.0001)
+
+
 # ── time_to_arrive ───────────────────────────────────────────────────────────
 
 func test_time_to_arrive_zero_at_destination() -> void:

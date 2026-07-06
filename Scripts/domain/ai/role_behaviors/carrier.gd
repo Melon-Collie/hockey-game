@@ -927,6 +927,15 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 # entering shooting range. The cross-boundary case (from outside,
 # to inside) uses max so entry is naturally rewarded.
 #
+# The potential branch pays the realization discount (see
+# AIActionScoring.potential_realization_discount): potential is future
+# value that still has to be skated to the slot, so it decays over that
+# remaining travel exactly like every other future action. This is what
+# stops stand-still (whose potential used to be undecayed) from
+# strictly beating a step toward the net in open ice — the blue-line
+# freeze. Applied uniformly here so carry candidates, stand-still, and
+# pass receivers all price potential in the same currency.
+#
 # `opps` should already be projected to the time the actor will be
 # at `pos` (caller's responsibility — score_pass does this for
 # receivers, _best_carry does it for carry candidates).
@@ -949,7 +958,9 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
-	return maxf(shoot_s, potential_s)
+	var realization: float = AIActionScoring.potential_realization_discount(
+			pos, attacking_goal)
+	return maxf(shoot_s, potential_s * realization)
 
 
 # Value (EV) of the best DEVELOPING feed — a play a teammate is still

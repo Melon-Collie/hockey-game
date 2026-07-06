@@ -1004,6 +1004,32 @@ static func position_potential(
 	return closeness * angle_factor * openness
 
 
+# Realization discount for position_potential when it prices a CARRY /
+# receiver destination in the carrier's expected-value compete: potential
+# is FUTURE value — its promise (a real shot) is only cashed by skating
+# from `pos` to the slot — so it must pay the same per-second delay
+# discount (CARRY_DELAY_DISCOUNT_PER_SEC) that every other future action
+# in the model pays, over that remaining travel time.
+#
+# Without this, the carrier's stand-still candidate held its potential
+# UNDECAYED while every movement candidate paid decay over its travel
+# time; outside shooting range the potential gradient (~3%/m) is
+# shallower than that decay (~4%/m at rest), so standing still strictly
+# beat stepping toward the net and an open carrier PLANTED at the blue
+# line ("hesitant to take space that's clearly theirs"). With the
+# discount, an on-route step trades travel decay for realization decay
+# one-for-one (triangle equality), the decays cancel, and the compete
+# reduces to the pure positional gradient — open ice ahead always wins.
+#
+# Travel time is measured to the slot platform edge (SLOT_RADIUS_M — the
+# ring where potential's promise becomes a real shot) at the league
+# reference speed (cross-player boundary: receivers use it too).
+static func potential_realization_discount(pos: Vector3,
+		attacking_goal: Vector3) -> float:
+	var travel_dist: float = maxf(0.0, pos.distance_to(attacking_goal) - SLOT_RADIUS_M)
+	return pow(CARRY_DELAY_DISCOUNT_PER_SEC, travel_dist / SKATER_REF_SPEED_M_S)
+
+
 # "Threat surface" — the value an opp can extract from their current
 # position from a defender's perspective. score_shoot returns 0 when
 # the opp is outside SHOT_RANGE_FALLOFF_M; that's correct for a
