@@ -50,7 +50,9 @@ static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89,
 #     10, and the skater flags byte repacked (shot_state 4 -> 3 bits, 2-bit
 #     elevation_level at bits [3..4], ghost/blade_up/sprint_locked shifted)
 #     from PROTOCOL_VERSION 11.
-const FORMAT_VERSION: int = 5
+# v6: goalie block 41 -> 43 B (pad toe-out yaw on the wire) from
+#     PROTOCOL_VERSION 13.
+const FORMAT_VERSION: int = 6
 const KIND_WORLD_STATE: int = 0
 const KIND_EVENT: int = 1
 const FRAME_INNER_HEADER_SIZE: int = 5  # host_ts (4) + kind (1)

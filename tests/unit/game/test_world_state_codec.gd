@@ -131,9 +131,11 @@ func _make_goalie_state() -> GoalieNetworkState:
 	s.left_pad_offset = Vector3(-0.42, 0.14, -0.05)
 	s.left_pad_pitch = -1.57
 	s.left_pad_roll = 0.21
+	s.left_pad_yaw = 0.31   # toe-out (v13)
 	s.right_pad_offset = Vector3(0.40, 0.16, -0.04)
 	s.right_pad_pitch = -1.50
 	s.right_pad_roll = -0.18
+	s.right_pad_yaw = -0.28  # toe-out (v13)
 	s.glove_offset = Vector3(-0.55, 0.49, -0.10)
 	s.glove_yaw = 0.78
 	s.glove_pitch = -0.30
@@ -166,8 +168,10 @@ func test_goalie_round_trip_preserves_fields_within_quantization() -> void:
 	assert_almost_eq(decoded.left_pad_offset.z, orig.left_pad_offset.z, 0.011)
 	assert_almost_eq(decoded.left_pad_pitch, orig.left_pad_pitch, 0.03)
 	assert_almost_eq(decoded.left_pad_roll, orig.left_pad_roll, 0.03)
+	assert_almost_eq(decoded.left_pad_yaw, orig.left_pad_yaw, 0.03)
 	assert_almost_eq(decoded.right_pad_offset.x, orig.right_pad_offset.x, 0.011)
 	assert_almost_eq(decoded.right_pad_pitch, orig.right_pad_pitch, 0.03)
+	assert_almost_eq(decoded.right_pad_yaw, orig.right_pad_yaw, 0.03)
 	assert_almost_eq(decoded.glove_offset.x, orig.glove_offset.x, 0.011)
 	assert_almost_eq(decoded.glove_yaw, orig.glove_yaw, 0.03)
 	assert_almost_eq(decoded.glove_pitch, orig.glove_pitch, 0.03)
@@ -285,7 +289,7 @@ func _build_ws(
 	buf.append(carrier_idx & 0xFF)
 	buf.append(goalies.size())
 	for g: GoalieNetworkState in goalies:
-		buf.append_array(WorldStateCodec._encode_goalie_quantized(g))  # 41 B
+		buf.append_array(WorldStateCodec._encode_goalie_quantized(g))  # 43 B
 	var gs := PackedByteArray()
 	gs.resize(WorldStateCodec.GAME_STATE_BLOCK_SIZE)
 	gs.encode_u8(0, game_state.score0)
