@@ -60,6 +60,12 @@ static func apply_interpolated_snapshot(
 		interp.blade_position = fs.blade_position.lerp(ts.blade_position, t)
 		interp.top_hand_position = fs.top_hand_position.lerp(ts.top_hand_position, t)
 		interp.is_ghost = ts.is_ghost
+		# Discrete reads take the newest bracket end, like is_ghost. The gait's
+		# input-intent reads (glide gate / dig-in / crossovers / brake stop)
+		# need these in playback exactly as in live play — a default-ZERO
+		# intent would render every replayed skater as a rigid coasting glide.
+		interp.move_intent = ts.move_intent
+		interp.brake_intent = ts.brake_intent
 		record.controller.apply_replay_state(interp, sim_delta)
 
 	var fp: PuckNetworkState = from_snap.puck

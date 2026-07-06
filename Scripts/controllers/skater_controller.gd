@@ -1024,6 +1024,12 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	skater.visual_offset = Vector3.ZERO
 	skater.velocity = state.velocity
 	skater.blade_up = state.blade_up
+	# Intent feeds the gait's input-driven reads below (glide / dig-in /
+	# crossovers / brake stop) — stamp it like the live controllers do, so
+	# playback strides match live play instead of reading zero (file viewer)
+	# or stale live-play intent (goal replay on live actors).
+	skater.move_intent = state.move_intent
+	skater.brake_intent = state.brake_intent
 	stamina = state.stamina
 	_sprint_locked = state.sprint_locked
 	stagger_timer = state.stagger_timer
