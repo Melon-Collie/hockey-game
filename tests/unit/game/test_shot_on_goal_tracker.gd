@@ -243,13 +243,14 @@ func test_credit_assists_up_to_two_same_team_carriers() -> void:
 	assert_eq(scorer.stats.assists, 0)
 
 
-func test_credit_assists_stops_at_opposing_possession() -> void:
+func test_credit_assists_stops_at_opposing_established_possession() -> void:
 	var team_assist := _add_player(10, 0, "TeamA1")
-	_add_player(11, 1, "Opponent")          # opposing PICKUP interrupts chain
+	_add_player(11, 1, "Opponent")  # opposing ESTABLISHED possession breaks chain
 	var team_assist_2 := _add_player(12, 0, "TeamA2")
 	var scorer := _add_player(13, 0, "Scorer")
 	tracker.on_pickup(10)
 	tracker.on_pickup(11)
+	tracker.on_possession_established(11)  # held it / made a play — control
 	tracker.on_pickup(12)
 	tracker.on_pickup(13)
 	var assists: Array[String] = tracker.credit_assists(13)
@@ -258,6 +259,22 @@ func test_credit_assists_stops_at_opposing_possession() -> void:
 	assert_eq(team_assist.stats.assists, 0, "chain stopped at opponent — no credit")
 	assert_eq(team_assist_2.stats.assists, 1)
 	assert_eq(scorer.stats.assists, 0)
+
+
+func test_assist_survives_momentary_opposing_pickup() -> void:
+	# A dangerous puck sent into traffic, briefly proximity-attached to a
+	# defender who never controls it, knocked in by a teammate — the sender
+	# keeps the assist because no opponent ESTABLISHED possession.
+	var passer := _add_player(10, 0, "Passer")
+	_add_player(20, 1, "Defender")
+	var scorer := _add_player(11, 0, "Scorer")
+	tracker.on_pickup(10)
+	tracker.on_pickup(20)  # scramble attach — never establishes
+	tracker.on_pickup(11)
+	var assists: Array[String] = tracker.credit_assists(11)
+	assert_eq(assists.size(), 1, "unestablished opposing touch skipped")
+	assert_eq(assists[0], "Passer")
+	assert_eq(passer.stats.assists, 1)
 
 
 func test_assist_survives_opposing_deflection() -> void:
@@ -293,16 +310,17 @@ func test_two_assists_survive_multiple_opposing_touches() -> void:
 	assert_eq(a2.stats.assists, 1)
 
 
-func test_deflection_then_pickup_upgrades_to_possession_and_breaks_chain() -> void:
-	# The defender tips the pass AND then corrals it — the collapsed history
-	# entry upgrades to possession, which breaks the assist chain.
+func test_deflection_then_established_pickup_breaks_chain() -> void:
+	# The defender tips the pass, corrals it AND establishes control — the
+	# collapsed history entry upgrades to possession, breaking the chain.
 	var passer := _add_player(10, 0, "Passer")
 	_add_player(20, 1, "Defender")
 	var scorer := _add_player(11, 0, "Scorer")
 	tracker.on_pickup(10)
-	tracker.on_deflection(20)  # tip...
-	tracker.on_pickup(20)      # ...then full possession (collapses into one entry)
-	tracker.on_pickup(11)      # scorer steals it back and scores
+	tracker.on_deflection(20)              # tip...
+	tracker.on_pickup(20)                  # ...corral (collapses into one entry)...
+	tracker.on_possession_established(20)  # ...held long enough — control
+	tracker.on_pickup(11)                  # scorer steals it back and scores
 	var assists: Array[String] = tracker.credit_assists(11)
 	assert_eq(assists.size(), 0, "opposing possession broke the chain")
 	assert_eq(passer.stats.assists, 0)

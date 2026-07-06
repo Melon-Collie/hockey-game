@@ -12,9 +12,12 @@ class_name HitRules
 #   • the victim just lost/released the puck within JUST_RELEASED_GRACE_S —
 #     a finished check; NHL scorers credit a hit that lands right after the
 #     pass → CREDIT
-#   • the victim is carrying → CREDIT_PENDING: the stat lands only if they
-#     lose the puck (strip, knock-loose, forced release) within
-#     POSSESSION_LOSS_WINDOW_S of the contact
+#   • the victim is carrying → CREDIT_PENDING: the stat lands only if the
+#     check DISPOSSESSES them (strip / knock-loose) within
+#     POSSESSION_LOSS_WINDOW_S of the contact. A deliberate pass or shot in
+#     that window cancels the pending instead — they played through the
+#     check, so the contact didn't cost possession (HitTracker resolves
+#     the pending via note_possession_stripped vs note_possession_released)
 #   • otherwise (victim nowhere near possession) → REJECT
 
 enum Verdict { REJECT, CREDIT, CREDIT_PENDING }

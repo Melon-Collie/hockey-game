@@ -6,7 +6,9 @@ extends RefCounted
 # goal → credit) can be reasoned about and unit-tested in isolation.
 #
 # Flow:
-#   on_pickup(peer_id)              → records carrier, clears any pending shot
+#   on_pickup(peer_id)              → records toucher, clears any pending shot
+#   on_possession_established(peer_id) → upgrades the toucher to ESTABLISHED
+#                                     possession (breaks opposing assist chains)
 #   on_deflection(peer_id)          → records toucher in carrier history, keeps pending shot alive
 #   on_shot_started(peer_id)        → arms pending-shot timer (on net until told otherwise)
 #   note_trajectory(on_net)         → live ballistic read (ShotOnNetRules) after
@@ -40,9 +42,11 @@ const MAX_RECENT_CARRIERS: int = 5
 const MAX_ASSISTS: int = 2
 
 # Parallel arrays: the recent puck touchers (most recent first) and whether
-# each touch was full POSSESSION (pickup) or a mere deflection. The distinction
-# drives the NHL assist chain — opposing possession breaks it, an opposing
-# touch doesn't.
+# each touch became ESTABLISHED possession (held long enough / made a play —
+# see PossessionTracker) or stayed a mere touch (deflection, momentary
+# scramble attach). The distinction drives the NHL assist chain — opposing
+# ESTABLISHED possession breaks it, an opposing touch doesn't. A pickup
+# starts as a touch and upgrades via on_possession_established.
 var _recent_carriers: Array[int] = []
 var _recent_carrier_possession: Array[bool] = []
 var _shooter_peer_id: int = -1
@@ -67,7 +71,18 @@ func setup(registry: PlayerRegistry, state_machine: GameStateMachine) -> void:
 
 func on_pickup(peer_id: int) -> void:
 	clear_pending()
-	_record_toucher(peer_id, true)
+	# A pickup alone is only a touch — a momentary attach in a scramble must
+	# not break the opposing assist chain. on_possession_established upgrades.
+	_record_toucher(peer_id, false)
+
+
+# The current carrier ESTABLISHED possession (PossessionTracker). Upgrade
+# their history entry so an opposing goal's assist chain breaks on it.
+func on_possession_established(peer_id: int) -> void:
+	for i: int in _recent_carriers.size():
+		if _recent_carriers[i] == peer_id:
+			_recent_carrier_possession[i] = true
+			return
 
 
 # Called when a loose puck is deflected or body-blocked by a skater. Records the
@@ -81,8 +96,8 @@ func on_deflection(peer_id: int) -> void:
 
 func _record_toucher(peer_id: int, possession: bool) -> void:
 	if not _recent_carriers.is_empty() and _recent_carriers[0] == peer_id:
-		# Consecutive touches by the same player collapse into one entry; a
-		# pickup upgrades an earlier deflection to full possession.
+		# Consecutive touches by the same player collapse into one entry; an
+		# established flag already earned on the entry survives further touches.
 		_recent_carrier_possession[0] = _recent_carrier_possession[0] or possession
 		return
 	_recent_carriers.push_front(peer_id)
@@ -198,9 +213,10 @@ func on_goal_confirmed(scorer_peer_id: int) -> void:
 
 # Returns up to 2 assist names for same-team recent carriers preceding scorer.
 # Mutates PlayerStats.assists on each credited player. NHL chain rule: an
-# opposing POSSESSION (pickup) breaks the chain, but a mere opposing touch
-# (a pass deflecting off a defender's blade or body) does not — the passer
-# still earns the assist.
+# opposing ESTABLISHED possession breaks the chain, but a mere opposing touch
+# (a pass deflecting off a defender's blade or body, or a momentary attach in
+# a goal-mouth scramble) does not — the player who sent the puck in still
+# earns the assist when no opponent ever controlled it.
 func credit_assists(scorer_peer_id: int) -> Array[String]:
 	var names: Array[String] = []
 	var scorer_team_id: int = _registry.resolve_team_id_for_peer(scorer_peer_id)
