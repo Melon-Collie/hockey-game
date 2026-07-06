@@ -151,6 +151,31 @@ func test_strong_drops_back_when_high_lanes_covered() -> void:
 			"covered high lanes → STRONG drops to a deeper open spot; open z=%f covered z=%f" % [open_z, covered_z])
 
 
+func test_strong_offers_mid_seam_when_carrier_wheels_the_wall_unpressured() -> void:
+	# Carrier wheeling up the strong-side boards with no coverage on
+	# either column. The wall spots offer no lane advantage over the
+	# mid-seam ones (the wall lane is the carrier's own route), and the
+	# mid-seam wins on position_potential (better angle, closer to
+	# center) whenever lanes are equal — so the outlet gives the carrier
+	# a diagonal give-option in the middle instead of camping in his
+	# skating lane. The wall column only wins when the middle is
+	# contested and the wall is the genuinely open seam.
+	var self_pos := Vector3(10, 0, 18)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                                 # us (STRONG), on the wall
+			[100, TEAM_ID, Vector3(11, 0, 22), Vector3(0, 0, -6)],  # carrier wheeling the wall
+			[200, 1, Vector3(-6, 0, 10)],                           # opp far off both columns
+	]
+	var ctx := _make_ctx(self_pos, 100, skaters, 1.0)
+	var d: RoleDecision = AIRoleBreakout.decide(ctx, true)
+	assert_gt(d.target_position.x, 0.0, "still works the strong side")
+	assert_lt(d.target_position.x,
+			GameRules.RINK_HALF_WIDTH - AIRoleBreakout.WALL_INSET_M - 1.0,
+			"…but off the carrier's wall lane, into the mid-seam; got x=%f" % d.target_position.x)
+	assert_lt(d.target_position.z, GameRules.BLUE_LINE_Z + 4.0,
+			"and stretches toward the zone exit; got z=%f" % d.target_position.z)
+
+
 func test_strong_swings_mid_seam_when_wall_route_is_covered() -> void:
 	# Carrier wheeling up the strong-side boards himself, with an NZ
 	# forechecker parked on the high strong wall. The wall column is dead
