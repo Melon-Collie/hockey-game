@@ -3,7 +3,13 @@ extends Node
 
 const PICKUP_RADIUS: float = 0.5
 const POKE_RADIUS: float = GameRules.POKE_RADIUS_M
-const CONTEST_SQUIRT_SPEED: float = 3.0
+# Contested-pickup squirt tuning (see PuckCollisionRules.contested_pickup_velocity).
+# The exit is biased toward the stronger blade and paced by the combined blade
+# momentum, clamped here; a true deadlock pops out sideways at contest_deadlock_speed.
+@export var contest_min_speed: float = 3.0
+@export var contest_max_speed: float = 9.0
+@export var contest_deadlock_speed: float = 3.0
+@export var contest_deadlock_threshold: float = 0.5  # net blade momentum (m/s) below which it's a 50/50
 # Stick-lift geometry: how close the attacker's (lifted) blade must be to the
 # carrier's hand→blade shaft, and how far below it, to hook under and pop it up.
 # Slightly wider than POKE_RADIUS — the lifted blade meets the shaft up off the
@@ -277,23 +283,56 @@ func is_processing_stick_lift() -> bool:
 	return _processing_stick_lift
 
 
-# Two valid pickup claims arrived within the contest window. Neither player
-# wins — the puck squirts perpendicular to the line between the two blade
-# contact points (both blades pressing inward pinch the puck like a seed
-# between two fingers; it exits sideways, randomised left or right).
+# Two blades reach the same loose puck at once (near-simultaneous client claims,
+# or two would-be corrallers on the host's present-time tick). Neither ever gets
+# possession — the puck squirts free — but its heading is biased toward the
+# stronger blade (the vector sum of the two blade momenta) and paced by that
+# momentum; a true 50/50 pops out sideways like a pinched seed. All the math is in
+# PuckCollisionRules.contested_pickup_velocity; the randomness (deadlock side +
+# degenerate fallback) is supplied here so the rule stays deterministic/testable.
 func apply_contested_pickup(skater_a: Skater, skater_b: Skater) -> void:
 	if not is_instance_valid(skater_a) or not is_instance_valid(skater_b):
 		return
-	var along := skater_a.get_blade_contact_global() - skater_b.get_blade_contact_global()
-	along.y = 0.0
-	if along.length() < 0.001:
-		along = Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
-	var perp := Vector3(-along.z, 0.0, along.x)
-	if randf() > 0.5:
-		perp = -perp
-	puck.set_puck_velocity(perp.normalized() * CONTEST_SQUIRT_SPEED)
+	var perp_sign: float = 1.0 if randf() > 0.5 else -1.0
+	var fallback := Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
+	puck.set_puck_velocity(PuckCollisionRules.contested_pickup_velocity(
+			skater_a.blade_world_velocity, skater_b.blade_world_velocity,
+			skater_a.get_blade_contact_global(), skater_b.get_blade_contact_global(),
+			contest_min_speed, contest_max_speed,
+			contest_deadlock_speed, contest_deadlock_threshold,
+			perp_sign, fallback))
 	puck.set_skater_cooldown(skater_a, puck.reattach_cooldown)
 	puck.set_skater_cooldown(skater_b, puck.reattach_cooldown)
+
+
+# Scans for a SECOND skater that would corral the same loose puck this tick — the
+# other half of a contest. Returns the first such skater (excluding `first`), or
+# null. Same eligibility gauntlet as the main pickup loop, minus the deflect
+# branches: a blade that would only tip the puck (lifted / deflect intent /
+# too-fast-or-poorly-angled) isn't corralling, so it isn't a possession contest.
+# Host present-time only, and only invoked at the rare instant a pickup is about
+# to be granted, so it adds no per-tick cost on the common no-pickup path.
+func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector3, puck_airborne: bool) -> Skater:
+	for skater: Skater in skaters:
+		if skater == first or skater.is_ghost or puck.is_on_cooldown(skater):
+			continue
+		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+			continue
+		if skater.blade_up or skater.deflect_intent:
+			continue
+		if not PuckReceptionRules.blade_can_interact(skater.blade_up, puck_airborne):
+			continue
+		var blade_curr: Vector3 = skater.get_blade_contact_global()
+		var blade_prev: Vector3 = skater.get_prev_blade_contact_global()
+		if not PuckInteractionRules.check_pickup(_prev_puck_pos, puck_curr,
+				blade_prev, blade_curr, PICKUP_RADIUS):
+			continue
+		var puck_vel: Vector3 = puck.get_puck_velocity()
+		var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
+		if PuckReceptionRules.should_receive(puck_vel, blade_face_normal,
+				puck.pickup_max_speed, puck.deflect_min_speed, puck.alignment_receive_bonus):
+			return skater
+	return null
 
 
 # ── Server Interaction Detection ─────────────────────────────────────────────
@@ -379,8 +418,17 @@ func _check_interactions() -> void:
 						puck.pickup_max_speed,
 						puck.deflect_min_speed,
 						puck.alignment_receive_bonus):
-					puck.set_carrier(skater)
-					_on_puck_picked_up(skater)
+					# If a second blade would ALSO corral this same tick (a faceoff
+					# draw or a board scramble), it's a contest - nobody gets it, the
+					# puck squirts free biased toward the stronger blade. Otherwise this
+					# skater takes it. Mirrors the client-claim contest window; the scan
+					# only runs at the rare moment a pickup would actually happen.
+					var contender: Skater = _find_contesting_corraller(skater, skaters, puck_curr, puck_airborne)
+					if contender != null:
+						apply_contested_pickup(skater, contender)
+					else:
+						puck.set_carrier(skater)
+						_on_puck_picked_up(skater)
 				else:
 					puck.apply_blade_deflect(skater)
 				break

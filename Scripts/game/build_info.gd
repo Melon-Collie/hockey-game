@@ -33,4 +33,37 @@ const VERSION: String = "dev"
 #     format still desyncs client prediction against host authority. The Steam
 #     BuildID bumps on every upload, so the host rejects mismatched builds
 #     (skipped when either side is a dev / non-Steam build, BuildID 0).
-const PROTOCOL_VERSION: int = 8
+# v9: input mouse_screen_pos wire encoding u16 -> s16 (same 2 bytes). The u16
+#     clamp floored the attack_up team-1 negated cursor to (0,0), so the host
+#     derived zero wrister charge / null aim for those shooters and fired drags
+#     as taps. Signed encoding round-trips the negation.
+# v10: world-state wire fixes. Skater block 38->39B: adds stagger_timer (u8 @0.01s)
+#     — it was never serialized, so a client victim's predicted body-check stagger
+#     was wiped to 0 on the next reconcile (full-thrust replay vs penalised host).
+#     Goalie block 35->41B: glove/blocker offsets s8->s16 (Y reach 1.55m exceeded
+#     the s8 ±1.27m range, clipping above-crossbar reaches ~28cm low), and rotation_y
+#     is wrapped into (-PI,PI] before quantizing (the -Z goalie's facing pinned flat).
+# v11: elevation binary -> 3-level loft. Input flags bits [6..7] (were the
+#     elevation_up/down edges) now carry an absolute 2-bit elevation_level;
+#     skater world-state flags byte repacked (shot_state 4 -> 3 bits,
+#     elevation_level 2 bits at [3..4], ghost/blade_up/sprint_locked shifted).
+# v12: stats packet grew — PlayerStats.to_array() 5 -> 9 (hits_taken, takeaways,
+#      giveaways, faceoff_wins), so STATS_PLAYER_RECORD_SIZE 6 -> 10.
+# v13: goalie block 41 -> 43 B — pad yaw (the rebound-steering toe-out) joins
+#      the wire so remote clients render the angled pads the host's rebound
+#      physics actually plays off.
+const PROTOCOL_VERSION: int = 13
+
+
+func _ready() -> void:
+	# Startup banner, printed once at boot. File logging is enabled in
+	# project.godot ([debug] file_logging → user://logs/mitts.log), so this line
+	# heads every persisted log — making a player's crash log self-identifying
+	# (which build, OS, and GPU produced it) without needing to ask. The engine's
+	# native crash handler appends its backtrace to the same log on a hard crash,
+	# which is the only "catch" available for a native (e.g. physics) abort.
+	print("=== Mitts %s (protocol v%d) | %s | %s | Godot %s ===" % [
+		VERSION, PROTOCOL_VERSION, OS.get_name(),
+		RenderingServer.get_video_adapter_name(),
+		String(Engine.get_version_info().get("string", "?")),
+	])

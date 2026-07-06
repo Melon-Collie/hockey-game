@@ -62,8 +62,11 @@ func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> Input
 	# bit behind. Skipped on the first ever tick (no prev to lerp from)
 	# and after any tick where the SM left mouse at ZERO (state didn't
 	# explicitly aim — don't drag a stale lag value into a subsequent
-	# real aim).
-	if _has_prev_mouse and _scratch_input.mouse_world_pos != Vector3.ZERO:
+	# real aim). Also skipped while aiming a committed shot: the SM cursor
+	# is already slew-smoothed there, and the second-stage lerp on top
+	# makes the blade ring through the wind-up (see wants_direct_aim).
+	if _has_prev_mouse and _scratch_input.mouse_world_pos != Vector3.ZERO \
+			and not _sm.wants_direct_aim():
 		_scratch_input.mouse_world_pos = _prev_mouse_world_pos.lerp(
 				_scratch_input.mouse_world_pos, _mouse_lerp_factor)
 	_prev_mouse_world_pos = _scratch_input.mouse_world_pos
@@ -149,12 +152,13 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	# doesn't touch it (e.g. a press state). The SM re-decides it each full
 	# dispatch via _resolve_sprint and restores the cache on throttled ticks.
 	input.sprint_held = false
-	# Default elevation_down high so the SkaterController's sticky
-	# _is_elevated flag is reset every tick the bot isn't actively
-	# firing an elevated shot. Press states override with
-	# elevation_up=true / elevation_down=false on the tick they want
-	# the controller to raise the flag.
-	input.elevation_up = false
-	input.elevation_down = true
+	# Loft defaults flat every tick — the level is absolute per input frame
+	# (no sticky controller state), so press states just set the level they
+	# want on the ticks they want it.
+	input.elevation_level = 0
 	input.block_held = false
 	input.stick_lift_held = false
+	# Fire-once edge: PASS_PRESSED / QUICK_SHOT_PRESSED set it on their release
+	# tick and nothing else clears it, so a latched true would fire an instant
+	# quick shot on every subsequent carry tick.
+	input.quick_shot_pressed = false

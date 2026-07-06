@@ -174,6 +174,10 @@ var pending_lobby_roster: Array = []
 var pending_join_slot: Dictionary = {}   # { team_slot, team_id, jersey_color, helmet_color, pants_color }
 var is_offline_mode: bool = false
 var is_tutorial_mode: bool = false
+# Offline penalty-shot drill ("score X of 10"). Like tutorial mode, it's a
+# single-local-player offline session whose flow is owned by a dedicated manager
+# (PenaltyDrillManager) rather than the normal match orchestration.
+var is_penalty_drill_mode: bool = false
 # Which tutorial to run. game_scene.gd reads this when instantiating
 # TutorialManager. Empty when not in tutorial mode.
 var tutorial_id: String = ""
@@ -428,6 +432,25 @@ func start_tutorial(id: String = TutorialRegistry.BASICS_ID) -> void:
 	start_offline()
 
 
+# Offline penalty-shot drill. Mirrors start_tutorial: one local player on team 0,
+# no bots, no clock. PenaltyDrillManager (spawned by game_scene.gd) owns the
+# shooter staging, the lone reactive goalie, and the score-X-of-10 loop. Forces
+# RuleSet.OFF so offsides/crease whistles can't interrupt a breakaway.
+func start_penalty_drill() -> void:
+	is_penalty_drill_mode = true
+	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
+	start_offline()
+	pending_game_config["rule_set"] = GameRules.RuleSet.OFF
+
+
+# True for the single-local-player scripted offline modes (tutorial, penalty
+# drill) where a dedicated manager owns puck placement and scoring, so the
+# normal match machinery — out-of-bounds whistles, goal celebrations — must
+# stand down.
+func is_drill_mode() -> bool:
+	return is_tutorial_mode or is_penalty_drill_mode
+
+
 func local_time() -> float:
 	return (Time.get_ticks_msec() - _session_start_ms) / 1000.0
 
@@ -553,6 +576,13 @@ func _on_peer_disconnected(id: int) -> void:
 	peer_disconnected.emit(id)
 	_peer_steam_ids.erase(id)
 	_kicked_peers.erase(id)
+	# Per-peer telemetry books, else the host's 1 Hz loss loop iterates a stale
+	# peer forever and its ping lingers on scoreboards.
+	_peer_ping_ms.erase(id)
+	_peer_last_echoed.erase(id)
+	_peer_echo_drop_window.erase(id)
+	_peer_echo_recv_window.erase(id)
+	_peer_loss_rates.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
 	# attempting this authority RPC would just be refused with error spam.
@@ -603,11 +633,17 @@ func _close() -> void:
 	# Close P2P sessions (above) before leaving the lobby that owns them.
 	# Idempotent — a no-op in offline/free-play/tutorial where no lobby exists.
 	# Every teardown path (reset, _exit_tree, return_to_free_play, join-cancel)
-	# funnels through here, so this one call covers them all.
-	SteamManager.leave_lobby()
+	# funnels through here, so this one call covers them all. The validity
+	# guard matters only on process quit: autoloads free in reverse
+	# registration order, so SteamManager (registered after us) is already
+	# gone when our _exit_tree fires — SteamManager._exit_tree owns the
+	# quit-path leave instead.
+	if is_instance_valid(SteamManager):
+		SteamManager.leave_lobby()
 
 func prepare_for_new_game() -> void:
 	_input_batch_provider = Callable()
+	_peer_ping_ms.clear()
 	_peer_last_echoed.clear()
 	_peer_echo_drop_window.clear()
 	_peer_echo_recv_window.clear()
@@ -649,6 +685,7 @@ func reset() -> void:
 	is_offline_mode = false
 	is_free_play_mode = false
 	is_tutorial_mode = false
+	is_penalty_drill_mode = false
 	tutorial_id = ""
 	_input_batch_provider = Callable()
 	_pending_handshake.clear()
@@ -671,6 +708,12 @@ func reset() -> void:
 	pending_color_votes = {}
 	pending_bot_slots.clear()
 	pending_bot_identities.clear()
+	# Lobby match settings are session-scoped — reset to defaults so a new host
+	# session doesn't pre-fill the previous match's period/rule config.
+	pending_num_periods = GameRules.NUM_PERIODS
+	pending_period_duration = GameRules.PERIOD_DURATION
+	pending_ot_enabled = GameRules.OT_ENABLED
+	pending_rule_set = GameRules.DEFAULT_RULE_SET
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -686,6 +729,7 @@ func reset() -> void:
 	_ws_recv_window = 0
 	_ws_loss_window_timer = 0.0
 	packet_loss_pct = 0.0
+	_peer_ping_ms.clear()
 	_peer_last_echoed.clear()
 	_peer_echo_drop_window.clear()
 	_peer_echo_recv_window.clear()
@@ -728,6 +772,17 @@ func _physics_process(_delta: float) -> void:
 		_state_tick_counter += 1
 
 func _process(delta: float) -> void:
+	# NetworkManager is an autoload, so _process fires every frame from launch —
+	# including before any session starts and in headless GUT runs. Every block
+	# below is session-only maintenance (connect timeout, clock sync, handshake /
+	# liveness, pings, input batches, loss telemetry); none of it is meaningful
+	# without a session, and game_initiated is set at the very start of every
+	# start path (offline / host / client) before _connect_timer arms, so this
+	# guard never suppresses the connection-timeout path. It also silences the
+	# headless-test log noise from NetworkTelemetry.* static calls firing with no
+	# active session. Cleared on leave (return to free play), so it re-gates.
+	if not game_initiated:
+		return
 	# Cap delta to avoid timer bursting on the first frame after an OS freeze
 	# (e.g. title bar right-click holding the message pump for several seconds).
 	var capped_delta: float = minf(delta, 0.5)

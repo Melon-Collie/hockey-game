@@ -248,6 +248,47 @@ func total_spend() -> int:
 	return speed + agility + hands + size + physical + shot
 
 
+# Deterministically reduce a six-level build to within BUDGET by shedding one
+# point at a time from the axes in `trim_order` (indices into the Attribute enum:
+# 0 Speed, 1 Agility, 2 Hands, 3 Size, 4 Physical, 5 Shot), cycling through the
+# order and stopping the instant the total is at or under BUDGET. Round-robin
+# (one point per axis per pass) spreads the loss so a high all-rounder trims
+# evenly rather than gutting one axis; leading `trim_order` entries floor soonest,
+# so pass the non-identity axes first. Per-level values are clamped into range
+# first, and it ALWAYS terminates — every axis floors at LEVEL_MIN and
+# 6×LEVEL_MIN = 6 ≤ BUDGET. Used by prefs migration + hand-edit / corrupt-cfg
+# repair so an over-budget spread (a legacy 4→6 split that seeds two new axes, or
+# a forged cfg) becomes a legal build instead of granting unearned power.
+static func trimmed_to_budget(p_speed: int, p_agility: int, p_hands: int,
+		p_size: int, p_physical: int, p_shot: int,
+		trim_order: PackedInt32Array) -> PlayerAttributes:
+	var levels: PackedInt32Array = [
+		clampi(p_speed, LEVEL_MIN, LEVEL_MAX), clampi(p_agility, LEVEL_MIN, LEVEL_MAX),
+		clampi(p_hands, LEVEL_MIN, LEVEL_MAX), clampi(p_size, LEVEL_MIN, LEVEL_MAX),
+		clampi(p_physical, LEVEL_MIN, LEVEL_MAX), clampi(p_shot, LEVEL_MIN, LEVEL_MAX),
+	]
+	var guard: int = 0
+	while _sum_levels(levels) > BUDGET and guard < 256:
+		guard += 1
+		var reduced: bool = false
+		for idx: int in trim_order:
+			if idx >= 0 and idx < levels.size() and levels[idx] > LEVEL_MIN:
+				levels[idx] -= 1
+				reduced = true
+				if _sum_levels(levels) <= BUDGET:
+					break
+		if not reduced:
+			break  # every axis in trim_order already at the floor
+	return PlayerAttributes.new(levels[0], levels[1], levels[2], levels[3], levels[4], levels[5])
+
+
+static func _sum_levels(levels: PackedInt32Array) -> int:
+	var total: int = 0
+	for v: int in levels:
+		total += v
+	return total
+
+
 func level_for(attr: int) -> int:
 	match attr:
 		Attribute.SPEED:    return speed

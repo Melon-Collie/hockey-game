@@ -29,6 +29,7 @@ var _player_card_callout_tween: Tween = null
 var _player_popup: PlayerSettingsPopup = null
 var _online_popup: OnlinePopup = null
 var _career_screen: CareerStatsScreen = null
+var _replay_browser: ReplayBrowser = null
 var _options_container: Control = null
 var _career_row: Control = null
 var _exit_container: Control = null
@@ -78,6 +79,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif _career_screen != null and _career_screen.visible:
 		# CareerStatsScreen handles its own ui_cancel — let it through.
 		return
+	elif _replay_browser != null and _replay_browser.visible:
+		# ReplayBrowser handles its own ui_cancel — let it through.
+		return
 	else:
 		close()
 	get_viewport().set_input_as_handled()
@@ -92,8 +96,9 @@ func open() -> void:
 
 
 # Greys the Career row and gives it an explanatory tooltip when stat sharing is
-# off (Career + replays have no data to show); restores it otherwise. Called on
-# open and whenever the Options overlay closes (where the toggle is flipped).
+# off (career totals have no data to show); restores it otherwise. Called on open
+# and whenever the Options overlay closes (where the toggle is flipped). Replays
+# are deliberately NOT gated here — they read local files regardless.
 func _refresh_career_row() -> void:
 	if _career_row == null:
 		return
@@ -102,7 +107,7 @@ func _refresh_career_row() -> void:
 	_career_row.mouse_default_cursor_shape = \
 		Control.CURSOR_POINTING_HAND if enabled else Control.CURSOR_FORBIDDEN
 	_career_row.tooltip_text = "" if enabled else \
-		"Career & replays need stat sharing.\nEnable “Share Gameplay Stats” in Options → Game."
+		"Career stats need stat sharing.\nEnable “Share Gameplay Stats” in Options → Game."
 
 
 func close() -> void:
@@ -165,11 +170,15 @@ func _build_panel() -> void:
 
 	_add_row(vbox, "Play Online", false, _on_play_online_pressed)
 	_add_row(vbox, "Play vs Bots", false, _on_play_vs_bots_pressed)
+	_add_row(vbox, "Penalty Shots", false, _on_penalty_shots_pressed)
 	_add_row(vbox, "Tutorial", false, _on_tutorial_pressed)
 	# Career reads only from uploaded stats, so it's disabled when the player has
 	# opted out of stat sharing (the disabled_check is evaluated live on hover/click).
 	_career_row = _add_row(vbox, "Career", false, _on_career_pressed,
 		func() -> bool: return not PlayerPrefs.share_gameplay_stats)
+	# Replays read local .mreplay files off disk — never gated on stat sharing or
+	# online. Opting out of uploading stats doesn't hide games you already have.
+	_add_row(vbox, "Replays", false, _on_replays_pressed)
 	_add_row(vbox, "Options", false, _on_options_pressed)
 	_add_row(vbox, "Exit Game", true, _on_exit_pressed)
 	_refresh_career_row()
@@ -409,6 +418,9 @@ func _build_popups() -> void:
 
 	_career_screen = CareerStatsScreen.new()
 	add_child(_career_screen)
+
+	_replay_browser = ReplayBrowser.new()
+	add_child(_replay_browser)
 
 	_build_options_overlay()
 	_build_exit_overlay()
@@ -650,6 +662,16 @@ func _on_play_vs_bots_pressed() -> void:
 	get_tree().change_scene_to_file(Constants.SCENE_LOBBY)
 
 
+func _on_penalty_shots_pressed() -> void:
+	# Offline "score X of 10" drill. Same teardown-then-launch shape as the
+	# tutorial; PenaltyDrillManager takes over once Hockey.tscn loads.
+	GameManager.on_scene_exit()
+	NetworkSimManager.clear_pending()
+	NetworkManager.reset()
+	NetworkManager.start_penalty_drill()
+	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
+
+
 func _on_tutorial_pressed() -> void:
 	# Opens the tutorial submenu so the player can pick between Basics,
 	# Advanced, and any future tutorials. Selection routes through
@@ -672,6 +694,10 @@ func _on_career_pressed() -> void:
 	if not PlayerPrefs.share_gameplay_stats:
 		return
 	_career_screen.open()
+
+
+func _on_replays_pressed() -> void:
+	_replay_browser.open()
 
 
 func _on_options_pressed() -> void:

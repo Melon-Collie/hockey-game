@@ -42,4 +42,9 @@ func on_hit(hitter_peer_id: int, victim_peer_id: int, victim_team_id: int,
 		return  # already credited this contact
 	_last_hit_time[key] = now
 	record.stats.hits += 1
+	# Mirror onto the victim: a "hit taken" for every credited check. Same
+	# cross-team + per-pair cooldown gate as the delivered hit (we're inside both).
+	var victim: PlayerRecord = _registry.get_record(victim_peer_id)
+	if victim != null and victim.stats != null:
+		victim.stats.hits_taken += 1
 	hit_credited.emit(victim_peer_id, force, hit_dir)

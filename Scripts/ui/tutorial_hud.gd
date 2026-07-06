@@ -8,6 +8,7 @@ var _step_label: Label = null
 var _title_label: Label = null
 var _instruction_label: Label = null
 var _objective_label: Label = null
+var _alert_label: Label = null
 var _hint_label: Label = null
 var _reset_btn: Button = null
 var _skip_btn: Button = null
@@ -118,6 +119,16 @@ func _build() -> void:
 	_objective_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_objective_label.visible = false
 	vbox.add_child(_objective_label)
+
+	# Row 4b: corrective alert (amber). Unlike the hint, this shows the instant
+	# it's set — used to flag a wrong setup the player should fix now (e.g. the
+	# loft mode left at the wrong level for the current drill).
+	_alert_label = Label.new()
+	_alert_label.add_theme_font_size_override("font_size", 13)
+	_alert_label.add_theme_color_override("font_color", MenuStyle.GOLD)
+	_alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_alert_label.visible = false
+	vbox.add_child(_alert_label)
 
 	# Row 5: hint (hidden until hint delay expires)
 	_hint_label = Label.new()
@@ -308,6 +319,7 @@ func set_step(index: int, total: int, title: String, instruction: String, hint: 
 	_complete_flash.visible = false
 	_complete_label.visible = false
 	clear_objective()
+	clear_alert()
 
 
 # Drill steps set a progress / goal line under the instruction (e.g.
@@ -323,6 +335,22 @@ func clear_objective() -> void:
 	if _objective_label != null:
 		_objective_label.text = ""
 		_objective_label.visible = false
+
+
+# Amber corrective prompt shown immediately (vs. the time-delayed hint). Setting
+# the same text repeatedly is a no-op-ish cheap write; pass "" / call clear_alert
+# to hide it.
+func set_alert(text: String) -> void:
+	if _alert_label == null:
+		return
+	_alert_label.text = text
+	_alert_label.visible = text != ""
+
+
+func clear_alert() -> void:
+	if _alert_label != null:
+		_alert_label.text = ""
+		_alert_label.visible = false
 
 
 func show_hint() -> void:

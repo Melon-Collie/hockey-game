@@ -223,7 +223,7 @@ func get_camera_director() -> CameraDirector:
 
 # Live play instances CrowdAudio as a node in Hockey.tscn; the offline viewer
 # scene has no such node, so mount the same controller in code. Its _ready
-# starts the ambient murmur loop on the Crowd bus (the same bus + PlayerPrefs
+# starts the ambient murmur loop on the Arena bus (the same bus + PlayerPrefs
 # volume slider live play uses). Goal cheers are driven from _on_replay_event
 # instead of the GameManager signals, which don't fire offline.
 func _mount_crowd_audio() -> void:

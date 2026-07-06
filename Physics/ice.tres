@@ -1,5 +1,0 @@
-[gd_resource type="PhysicsMaterial" format=3 uid="uid://061dsec0rqcu"]
-
-[resource]
-friction = 0.1
-rough = true

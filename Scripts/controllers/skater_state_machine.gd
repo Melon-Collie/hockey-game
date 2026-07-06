@@ -27,6 +27,7 @@ class Callbacks:
 	var transition_to_skating: Callable           # ()
 	# Shot releases
 	var release_wrister: Callable                 # (input: InputState)
+	var fire_quick_shot: Callable                 # (input: InputState) — instant quick shot / pass
 	var release_slapper: Callable                 # (input: InputState, one_timer: bool)
 	# puck distance check + ShotMechanics + signal.
 	# Returns { fired: bool, direction: Vector3, follow_through_duration: float }
@@ -42,6 +43,12 @@ var _state: State = State.SKATING_WITHOUT_PUCK
 # No underscore: LocalController accesses these directly in reconcile().
 var follow_through_timer: float = 0.0
 var follow_through_is_slapper: bool = false
+# Total the timer started from (normalizes follow-through progress — durations
+# differ per shot type) and the amplitude scale of this follow-through (set at
+# release: wrister by charge, quick shot fixed low, slapper full). Saved and
+# restored through reconcile in LocalController alongside the timer.
+var follow_through_duration_total: float = 0.25
+var follow_through_power: float = 1.0
 var shot_dir: Vector3 = Vector3.ZERO
 var locked_slapper_dir: Vector2 = Vector2.ZERO
 
@@ -98,6 +105,12 @@ func _state_skating_without_puck(_skater: Skater, input: InputState, delta: floa
 
 func _state_skating_with_puck(skater: Skater, input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:
 	_cb.apply_blade_from_mouse.call(input, delta)
+	# Quick shot / pass: dedicated button, fires instantly (no aim state). Checked
+	# before the wrister so the blade target computed above is this tick's, and
+	# returns so a same-tick shoot/slap press can't stack on top.
+	if input.quick_shot_pressed:
+		_cb.fire_quick_shot.call(input)
+		return
 	if input.shoot_pressed:
 		_enter_wrister_aim(skater, input)
 	if input.slap_pressed:
@@ -157,6 +170,7 @@ func _state_slapper_charge_without_puck(_skater: Skater, input: InputState, delt
 			follow_through_is_slapper = true
 			_state = State.FOLLOW_THROUGH
 			follow_through_timer = result.get("follow_through_duration", 0.5)
+			follow_through_duration_total = follow_through_timer
 		else:
 			_cancel_slapper_internal()
 

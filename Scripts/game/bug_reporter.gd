@@ -8,12 +8,14 @@ class_name BugReporter extends RefCounted
 # Rate-limit and length-cap state lives at class scope so multiple dialog
 # instances (or rapid open/close cycles) share one window. Both are
 # defense-in-depth against a buggy build or a hostile client spamming the
-# table — the publishable Supabase key only authorizes INSERT/SELECT/UPDATE,
-# not DELETE, so spam can't be cleaned up server-side. RLS still has to be
-# correctly configured on the bug_reports table (verify in dashboard).
+# table — the publishable Supabase key only authorizes INSERT on bug_reports
+# (no SELECT/UPDATE/DELETE), so spam can't be cleaned up server-side. A
+# server-side CHECK constraint (sql/bug_reports.sql) caps row size as a backstop;
+# RLS still has to be correctly configured on the table (verify in dashboard).
 
 const RATE_LIMIT_SEC: float = 60.0
 const MAX_DESCRIPTION_CHARS: int = 2000
+const MAX_CRASH_LOG_CHARS: int = 8000  # cap on the previous-session log tail shipped with a crash report
 
 # Negative seed so the very first submission of a session goes through —
 # Time.get_ticks_msec() is non-negative, so any positive value would
@@ -34,14 +36,39 @@ func submit(description: String, telemetry: NetworkTelemetry) -> void:
 
 	var trimmed: String = description.left(MAX_DESCRIPTION_CHARS)
 	var body: Dictionary = {
-		# Identity now derives from the Steam id (the per-install random uuid is
-		# gone); the uuid column stays populated for schema compatibility.
-		"uuid": PlayerPrefs.career_uuid(),
+		# Identity is the Steam id (0 in offline / free-play, i.e. anonymous).
+		"steam_id": SteamManager.steam_id,
 		"player_name": PlayerPrefs.player_name,
 		"game_version": BuildInfo.VERSION,
 		"platform": OS.get_name(),
 		"description": trimmed,
 		"telemetry": _telemetry_snapshot(telemetry),
+	}
+	_post(SupabaseConfig.URL + "/rest/v1/bug_reports", body)
+
+
+# Auto-submitted by CrashWatch on the launch AFTER an unclean shutdown. Unlike
+# submit(): no human description, and it deliberately BYPASSES the manual-report
+# rate limit — it's a once-per-launch automated report we don't want suppressed
+# by a recent manual submit. The previous run's breadcrumb + log tail ride in the
+# telemetry blob (no bug_reports schema change — same trick as build_id).
+func submit_crash(breadcrumb: Dictionary, log_tail: String) -> void:
+	var summary: String = "scene=%s phase=%s v=%s" % [
+		breadcrumb.get("scene", "?"),
+		breadcrumb.get("phase", "?"),
+		breadcrumb.get("version", BuildInfo.VERSION)]
+	var body: Dictionary = {
+		"steam_id": SteamManager.steam_id,
+		"player_name": PlayerPrefs.player_name,
+		"game_version": String(breadcrumb.get("version", BuildInfo.VERSION)),
+		"platform": OS.get_name(),
+		"description": "[CRASH] " + summary,
+		"telemetry": {
+			"crash": true,
+			"build_id": SteamManager.get_app_build_id(),
+			"breadcrumb": breadcrumb,
+			"log_tail": log_tail.left(MAX_CRASH_LOG_CHARS),
+		},
 	}
 	_post(SupabaseConfig.URL + "/rest/v1/bug_reports", body)
 

@@ -1,17 +1,39 @@
 class_name ToastStack
 extends VBoxContainer
 
+# Transient event ticker, top-right under the diagnostics row (FPS + network
+# health dot live above at y≈8, so the stack starts below them).
+
+const _TOAST_WIDTH: float = 240.0
+# Bound the stack so an event burst (stat feed + clock warning + join) can't
+# crawl down the screen; oldest toasts drop first.
+const _MAX_TOASTS: int = 5
+
 
 func _init() -> void:
 	anchor_left = 1.0
 	anchor_right = 1.0
-	offset_left = -240.0
-	offset_top = 8.0
+	offset_left = -_TOAST_WIDTH
+	offset_top = 32.0
 	add_theme_constant_override("separation", 6)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
-func push(text: String, name_color: Color) -> void:
+# Single-part toast: the whole text in `color`.
+func push(text: String, color: Color) -> void:
+	_push_labels([_make_label(text, 16, color)])
+
+
+# Two-part toast: `subject` (e.g. a player name — may contain spaces) in
+# `subject_color`, `detail` dimmed after it.
+func push_pair(subject: String, detail: String, subject_color: Color) -> void:
+	_push_labels([
+		_make_label(subject, 16, subject_color),
+		_make_label(detail, 16, MenuStyle.BROADCAST_DIM),
+	])
+
+
+func _push_labels(labels: Array[Label]) -> void:
 	var style := StyleBoxFlat.new()
 	style.bg_color = MenuStyle.BROADCAST_BG
 	style.set_corner_radius_all(4)
@@ -27,23 +49,25 @@ func push(text: String, name_color: Color) -> void:
 	panel.add_theme_stylebox_override("panel", style)
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	var parts := text.split(" ", false, 1)
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 5)
 	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var name_lbl := _make_label(parts[0], 16, name_color)
-	hbox.add_child(name_lbl)
-	if parts.size() > 1:
-		var action_lbl := _make_label(parts[1], 16, MenuStyle.BROADCAST_DIM)
-		hbox.add_child(action_lbl)
+	for lbl: Label in labels:
+		hbox.add_child(lbl)
 	panel.add_child(hbox)
 
 	var wrapper := MenuStyle.wrap_drop_shadow(panel, Vector2(3, 3))
+	while get_child_count() >= _MAX_TOASTS:
+		var oldest: Node = get_child(0)
+		remove_child(oldest)
+		oldest.queue_free()
 	add_child(wrapper)
 
 	_slide_in(wrapper)
 
-	var tween := create_tween()
+	# Bound to the wrapper (not the stack) so early eviction by _MAX_TOASTS
+	# kills the fade tween instead of leaving it poking a freed node.
+	var tween := wrapper.create_tween()
 	tween.tween_interval(2.5)
 	tween.tween_method(func(a: float) -> void: wrapper.modulate.a = a, 1.0, 0.0, 0.5)
 	tween.tween_callback(wrapper.queue_free)
@@ -63,7 +87,7 @@ func _slide_in(node: Control) -> void:
 	await get_tree().process_frame
 	if not is_instance_valid(node):
 		return
-	node.position.x += 240.0
-	var st := create_tween()
-	st.tween_property(node, "position:x", node.position.x - 240.0, 0.18) \
+	node.position.x += _TOAST_WIDTH
+	var st := node.create_tween()
+	st.tween_property(node, "position:x", node.position.x - _TOAST_WIDTH, 0.18) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)

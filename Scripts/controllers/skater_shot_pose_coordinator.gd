@@ -106,17 +106,79 @@ func apply_block_blade_position() -> void:
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_local)
 
+# ── Goal Celebration Pose ─────────────────────────────────────────────────────
+# Cosmetic raised-stick celebration for the scorer: top hand punches up with
+# the stick held overhead (blade above the hand, tilted so the shaft never
+# goes dead vertical — the stick/blade look_at needs a horizontal component),
+# off hand pumps up on the free side. t runs [0,1] across the celebration
+# window; a fast smoothstep ramp raises the arms, then the pose holds with a
+# gentle bob (no ease-out — the faceoff teleport's pose reset ends it).
+# Applied AFTER the tick's normal hand/blade placement, so it simply wins;
+# runs only on the scorer's own machine and rides the hand/blade wire state
+# to everyone else like every other pose.
+func apply_celebration_pose(t: float) -> void:
+	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+	var ramp: float = clampf(t / 0.2, 0.0, 1.0)
+	ramp = ramp * ramp * (3.0 - 2.0 * ramp)
+	var bob: float = sin(t * TAU * 1.5) * 0.03 * ramp
+	var hand_pos := Vector3(
+			_skater.shoulder.position.x,
+			lerpf(_controller.hand_rest_y, _controller.celebration_hand_y, ramp) + bob,
+			_skater.shoulder.position.z - 0.10)
+	var blade_pos := Vector3(
+			_skater.shoulder.position.x + blade_side_sign * 0.18,
+			hand_pos.y + _controller.celebration_stick_rise * ramp,
+			_skater.shoulder.position.z - 0.28)
+	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
+	_skater.set_top_hand_position(hand_pos)
+	_skater.set_blade_position(blade_pos)
+	# Off hand: fist pump on the free side (normally it rides the shaft —
+	# this override runs after update_bottom_hand, so it wins the tick).
+	_skater.set_bottom_hand_position(Vector3(
+			_skater.bottom_shoulder.position.x,
+			lerpf(0.0, _controller.celebration_hand_y, ramp) + bob * 1.4,
+			_skater.bottom_shoulder.position.z - 0.12))
+
+
 # ── Wrister Follow-Through ────────────────────────────────────────────────────
+# The release swing continued: the blade sweeps from wherever the release left
+# it onto the shot line while the stick climbs to a high finish pointed at the
+# target, then settles back to the ice by the end of the timer (a clean handoff
+# to the aim IK). Heights ride the shared asymmetric arc — fast rise through
+# the release, slow settle — scaled by follow_through_power so a full-charge
+# wrister finishes high while a snap pass barely flicks. The blade stays a
+# rigid stick_length from the top hand (the horizontal reach re-solves as the
+# blade climbs), so the finish reads as the stick swinging up about the hands
+# rather than the shaft stretching.
 func apply_wrister_follow_through() -> void:
-	var t: float = 1.0 - (_sm.follow_through_timer / _controller.follow_through_duration)
-	var arc: float = sin(t * PI)
-	var stick_horiz: float = _ik.stick_horiz()
-	var local_dir := Vector3(sin(_controller._blade_relative_angle), 0.0, -cos(_controller._blade_relative_angle))
+	var total: float = maxf(_sm.follow_through_duration_total, 0.001)
+	var t: float = clampf(1.0 - _sm.follow_through_timer / total, 0.0, 1.0)
+	var env: float = sin(PI * pow(t, _controller.follow_through_arc_skew)) \
+			* _sm.follow_through_power
+	# Blade direction: ease from the release angle onto the shot line (fast
+	# ease-out, so the sweep-through happens in the front half of the timer).
+	# shot_dir is world-space; re-derive its body-local angle each frame so the
+	# finish stays pointed at the target while the torso uncoils underneath.
+	# Whiffed releases (shot_dir zero) hold the release angle.
+	var dir_angle: float = _controller._blade_relative_angle
+	var shot_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * _sm.shot_dir
+	shot_local.y = 0.0
+	if shot_local.length_squared() > 0.0001:
+		var sweep: float = 1.0 - (1.0 - t) * (1.0 - t)
+		dir_angle = lerp_angle(dir_angle, atan2(shot_local.x, -shot_local.z), sweep)
+	var local_dir := Vector3(sin(dir_angle), 0.0, -cos(dir_angle))
 	var hand_pos := _skater.shoulder.position
-	hand_pos.y = _controller.hand_rest_y + arc * _controller.wrister_follow_through_hand_y
-	var intended_target: Vector3 = hand_pos + local_dir * stick_horiz
-	intended_target.y = _ik.blade_y_lean_corrected(intended_target.x, intended_target.z) \
-			+ arc * _controller.wrister_follow_through_blade_lift
+	hand_pos.y = _controller.hand_rest_y + env * _controller.wrister_follow_through_hand_y
+	# Sample the ice height at the rest reach, lift the blade off it, then
+	# re-solve the horizontal reach so hand→blade stays one stick long.
+	var probe: Vector3 = hand_pos + local_dir * _ik.stick_horiz()
+	var blade_y: float = _ik.blade_y_lean_corrected(probe.x, probe.z) \
+			+ env * _controller.wrister_follow_through_blade_lift
+	var drop: float = hand_pos.y - blade_y
+	var horiz: float = sqrt(maxf(
+			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
+	var intended_target: Vector3 = hand_pos + local_dir * horiz
+	intended_target.y = blade_y
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
 	var clamp_delta_xz := Vector3(
 		local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
@@ -132,23 +194,82 @@ func apply_wrister_follow_through() -> void:
 	_skater.set_blade_position(local_target)
 
 # ── Slapper Follow-Through ────────────────────────────────────────────────────
+# A real swing in two phases. Downswing (the first slapper_follow_through_
+# contact_frac of the timer): the blade falls from wherever the wind-up
+# actually left it — re-derived from the charge timer so an early release
+# starts from the half-coiled pose instead of popping to full wind-up — down to
+# the contact point, accelerating like a swing under gravity, hands riding down
+# from the wind-up grip. Finish (the rest): the blade releases through contact,
+# arcs out along the shot line and up into a high finish, hands rising with it,
+# then settles back to the ice by the end of the timer for a clean handoff to
+# the aim IK. The shot line is re-derived body-local each frame so the finish
+# stays on target while the torso rotates through the swing.
 func apply_slapper_follow_through() -> void:
-	var t: float = 1.0 - (_sm.follow_through_timer / _controller.follow_through_duration)
+	var total: float = maxf(_sm.follow_through_duration_total, 0.001)
+	var t: float = clampf(1.0 - _sm.follow_through_timer / total, 0.0, 1.0)
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
-	var shot_xz := Vector2(_sm.shot_dir.x, _sm.shot_dir.z)
-	if shot_xz.length() > 0.001:
-		shot_xz = shot_xz.normalized()
-	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x + shot_xz.x * t * _controller.slapper_follow_through_arc_dist
-	var blade_z: float = _skater.shoulder.position.z + _controller.slapper_blade_z + shot_xz.y * t * _controller.slapper_follow_through_arc_dist
-	var blade_pos := Vector3(
-		blade_x,
-		lerpf(_controller.slapper_wind_up_height, _ik.blade_y_lean_corrected(blade_x, blade_z), smoothstep(0.0, 1.0, t)),
-		blade_z)
+	# Whiffed swings (shot never fired) follow the direction locked at charge.
+	var dir_world: Vector3 = _sm.shot_dir
+	if dir_world.length_squared() <= 0.0001:
+		dir_world = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
+	var dir_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * dir_world
+	dir_local.y = 0.0
+	if dir_local.length_squared() > 0.0001:
+		dir_local = dir_local.normalized()
+	else:
+		dir_local = Vector3.FORWARD
+	var contact := Vector3(
+			_skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x,
+			0.0,
+			_skater.shoulder.position.z + _controller.slapper_blade_z)
+	var hand_pos := Vector3(
+			_skater.shoulder.position.x, _controller.hand_rest_y, _skater.shoulder.position.z)
+	var blade_pos: Vector3
+	var cf: float = clampf(_controller.slapper_follow_through_contact_frac, 0.05, 0.9)
+	if t < cf:
+		# Downswing: quadratic ease-in — the blade accelerates into the ice.
+		var u: float = t / cf
+		u *= u
+		# Where the wind-up actually was at release (mirrors
+		# apply_slapper_blade_position: eased XZ/hand, raw-t height).
+		var wind_up_t: float = clampf(
+				_aiming.slapper_charge_timer / _controller.slapper_wind_up_time, 0.0, 1.0)
+		var wind_up_eased: float = sqrt(wind_up_t)
+		var start_x: float = _skater.shoulder.position.x + blade_side_sign * lerpf(
+				_controller.slapper_blade_x, _controller.slapper_wind_up_blade_x, wind_up_eased)
+		var start_z: float = _skater.shoulder.position.z + lerpf(
+				_controller.slapper_blade_z, _controller.slapper_wind_up_blade_z, wind_up_eased)
+		var start_y: float = lerpf(
+				_ik.blade_y_lean_corrected(start_x, start_z),
+				_controller.slapper_wind_up_height, wind_up_t)
+		blade_pos = Vector3(
+				lerpf(start_x, contact.x, u),
+				lerpf(start_y, _ik.blade_y_lean_corrected(contact.x, contact.z), u),
+				lerpf(start_z, contact.z, u))
+		var wind_hand := Vector3(
+				_skater.shoulder.position.x
+					- blade_side_sign * _controller.slapper_wind_up_hand_inward * wind_up_eased,
+				_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased,
+				_skater.shoulder.position.z
+					+ _controller.slapper_wind_up_hand_back * wind_up_eased
+					- _controller.slapper_wind_up_hand_forward * wind_up_eased)
+		hand_pos = wind_hand.lerp(hand_pos, u)
+	else:
+		# Finish: out along the shot line and up into the high finish, then
+		# settle. Shares the wrister's asymmetric arc so both shots snap
+		# through contact and relax out of the pose.
+		var v: float = (t - cf) / (1.0 - cf)
+		var env: float = sin(PI * pow(v, _controller.follow_through_arc_skew)) \
+				* _sm.follow_through_power
+		var reach: float = env * _controller.slapper_follow_through_arc_dist
+		blade_pos = contact + dir_local * reach
+		blade_pos.y = _ik.blade_y_lean_corrected(blade_pos.x, blade_pos.z) \
+				+ env * _controller.slapper_follow_through_height
+		hand_pos.y += env * _controller.slapper_follow_through_hand_y
+		var hand_follow: float = reach * _controller.slapper_follow_through_hand_follow
+		hand_pos.x += dir_local.x * hand_follow
+		hand_pos.z += dir_local.z * hand_follow
 	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
 	blade_pos = _skater.upper_body_to_local(_ik.clamp_blade_from_net(_skater.upper_body_to_global(blade_pos)))
-	var hand_pos := Vector3(
-		_skater.shoulder.position.x,
-		_controller.hand_rest_y + t * _controller.wrister_follow_through_hand_y,
-		_skater.shoulder.position.z)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_pos)

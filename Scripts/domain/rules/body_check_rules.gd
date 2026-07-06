@@ -64,3 +64,27 @@ static func thrust_mult(stagger_timer: float, cfg: Config) -> float:
 		return 1.0
 	var frac: float = clampf(stagger_timer / cfg.max_stagger_seconds, 0.0, 1.0)
 	return 1.0 - frac * cfg.max_thrust_penalty
+
+
+# The victim transfer-impulse the puck-strip / pickup-denial decision keys off —
+# the SAME "how hard did it land on the victim" magnitude the stagger uses, so a
+# hit's Physical (transfer), both skaters' Size (attacker + victim mass), and the
+# closing Speed all decide whether the puck comes loose. A low-Physical shove
+# barely jars it; an enforcer strips it clean.
+#
+# Reconstructed from impact_force = attacker_weight × approach (what the
+# body_checked_player signal carries) so the attacker-weight term cancels:
+#     delivered = approach × (att_weight / vic_weight) × effective_transfer
+#               = (impact_force / att_weight) × (att_weight / vic_weight) × eff
+#               = impact_force × effective_transfer / vic_weight
+# MUST stay equal to the knockback magnitude in
+# Skater._resolve_player_collisions (`other.velocity -= normal × approach ×
+# weight_ratio × effective_transfer`); test_body_check_rules locks the identity.
+static func puck_strip_impulse(
+		impact_force: float,
+		attacker_transfer: float,
+		victim_weight: float,
+		victim_brace_resistance: float,
+		victim_braced: bool) -> float:
+	var effective_transfer: float = attacker_transfer * (victim_brace_resistance if victim_braced else 1.0)
+	return impact_force * effective_transfer / maxf(victim_weight, 0.001)

@@ -37,10 +37,11 @@ const MAX_RTT_MS: float = 300.0
 const RTT_MEASURED_HEADROOM: float = 1.5
 const RTT_MEASURED_SLACK_MS: float = 30.0
 
-# Legit elevated shots cap the apex at max_apex_above_blade = 1.5 m, giving a
-# max vertical ratio of ~0.46 at minimum backhand wrister power. 0.6 leaves
-# headroom for tuning while blocking near-vertical forged directions.
-const MAX_DIRECTION_Y: float = 0.6
+# Legit lofted shots cap the pre-normalization Y/XZ ratio at
+# ShotMechanics.MAX_LOFT_RATIO (1.0 = 45°), i.e. a normalized direction y of
+# ~0.707. 0.75 leaves headroom for float noise while still blocking
+# near-vertical forged directions.
+const MAX_DIRECTION_Y: float = 0.75
 
 # Slack added to the one-timer range gate: covers shooter drift between the
 # client's stamp and host processing, plus interpolation error on the rewound
@@ -137,3 +138,18 @@ static func one_timer_in_range(zone_xz: Vector2, puck_xz: Vector2,
 		zone_radius: float, puck_speed: float, leniency_time: float) -> bool:
 	var max_dist: float = zone_radius + puck_speed * leniency_time + ONE_TIMER_RANGE_SLACK_M
 	return zone_xz.distance_to(puck_xz) <= max_dist
+
+
+# One-timer power: max slapper power scaled by a center-proximity bonus — a puck
+# struck dead-center in the slapper zone gets +center_bonus, one at the edge gets
+# -center_bonus, lerping linearly through 0 at half-radius. Shared by the client's
+# local prediction (_try_one_timer_release) and the host's authoritative re-derive
+# (on_remote_one_timer_release) so both compute the identical power from their
+# respective puck reads — host authority over the shot, one source of truth for
+# the formula.
+static func one_timer_power(base_power: float, center_bonus: float,
+		zone_xz: Vector2, puck_xz: Vector2, zone_radius: float) -> float:
+	if zone_radius <= 0.0:
+		return base_power
+	var proximity: float = clampf(1.0 - zone_xz.distance_to(puck_xz) / zone_radius, 0.0, 1.0)
+	return base_power * (1.0 + center_bonus * (2.0 * proximity - 1.0))

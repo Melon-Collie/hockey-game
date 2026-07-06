@@ -155,3 +155,80 @@ static func read_header_only(path: String) -> Dictionary:
 	if not parsed is Dictionary:
 		return {"ok": false, "header": {}, "error": "header parse failed"}
 	return {"ok": true, "header": parsed as Dictionary, "error": ""}
+
+
+# Reads the header AND footer without loading any frame payloads — walks the
+# frame stream by seeking past each record (no allocation) to reach the footer.
+# This is what the local replay browser uses to render a card (roster from the
+# header, score + box score + period_scores from the footer) cheaply across many
+# files. A 30-min game is ~21K frames of pure seeks here, vs the multi-MB
+# allocation read() would do.
+#
+# Returns { ok, header, footer, truncated, error }. `truncated` is true (and
+# footer empty) when the file has no END_OF_RECORDS sentinel — a recording that
+# crashed mid-game; the header is still valid, so the browser can list it.
+static func read_meta(path: String) -> Dictionary:
+	var failure := func(msg: String) -> Dictionary:
+		return {"ok": false, "header": {}, "footer": {}, "truncated": false, "error": msg}
+
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return failure.call("failed to open: %s (err %d)" % [path, FileAccess.get_open_error()])
+	if file.get_length() > _MAX_FILE_BYTES:
+		file.close()
+		return failure.call("file too large: %d bytes (cap %d)" % [file.get_length(), _MAX_FILE_BYTES])
+	var magic: PackedByteArray = file.get_buffer(ReplayFileWriter.MAGIC.size())
+	if magic != ReplayFileWriter.MAGIC:
+		file.close()
+		return failure.call("magic mismatch (not a .mreplay file?)")
+	var version: int = file.get_8()
+	if version != ReplayFileWriter.FORMAT_VERSION:
+		file.close()
+		return failure.call("unsupported format version %d (expected %d)" % [version, ReplayFileWriter.FORMAT_VERSION])
+	var header_size: int = file.get_32()
+	if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
+		file.close()
+		return failure.call("header size out of range: %d" % header_size)
+	var header_bytes: PackedByteArray = file.get_buffer(header_size)
+	if header_bytes.size() != header_size:
+		file.close()
+		return failure.call("header truncated")
+	var header_parsed: Variant = JSON.parse_string(header_bytes.get_string_from_utf8())
+	if not header_parsed is Dictionary:
+		file.close()
+		return failure.call("header JSON parse failed")
+
+	# Walk frame records by seeking past each payload — never reads frame bytes.
+	var truncated: bool = true
+	var file_len: int = file.get_length()
+	while file.get_position() + 4 <= file_len:
+		var frame_len: int = file.get_32()
+		if frame_len == ReplayFileWriter.END_OF_RECORDS:
+			truncated = false
+			break
+		if frame_len < ReplayFileWriter.FRAME_INNER_HEADER_SIZE:
+			break  # corrupt or unexpected; treat as EOF
+		if frame_len > _MAX_FRAME_BYTES:
+			break  # malformed length claim
+		if file.get_position() + frame_len > file_len:
+			break  # partial trailing record (writer crashed)
+		file.seek(file.get_position() + frame_len)
+
+	var footer: Dictionary = {}
+	if not truncated and file.get_position() + 4 <= file_len:
+		var footer_size: int = file.get_32()
+		if footer_size > 0 and footer_size <= _MAX_HEADER_BYTES \
+				and file.get_position() + footer_size <= file_len:
+			var footer_bytes: PackedByteArray = file.get_buffer(footer_size)
+			var footer_parsed: Variant = JSON.parse_string(footer_bytes.get_string_from_utf8())
+			if footer_parsed is Dictionary:
+				footer = footer_parsed
+
+	file.close()
+	return {
+		"ok": true,
+		"header": header_parsed as Dictionary,
+		"footer": footer,
+		"truncated": truncated,
+		"error": "",
+	}

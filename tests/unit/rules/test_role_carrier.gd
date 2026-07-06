@@ -57,6 +57,61 @@ func _make_ctx(self_pos: Vector3, skaters: Array = []) -> RoleContext:
 	return ctx
 
 
+# ─── breakout: pressured carrier picks the open outlet ──────────────────────
+
+func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
+	# Carrier deep in our own zone, pressured by two forecheckers up-ice; a
+	# teammate is a wide-open outlet up the strong-side wall. With carry
+	# poke-safety collapsing under pressure, the carrier should rate that
+	# outlet as its best pass and choose PASS over carrying into the box.
+	# (Verifies the breakout outlet, once well-positioned, actually gets the
+	# puck out — no dump needed.)
+	var self_pos := Vector3(3, 0, 20)         # off-center, clear of our own slot
+	var outlet := Vector3(11, 0, 11)          # open up the strong wall
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],               # us, carrying
+			[2, TEAM_ID, outlet],                 # open outlet
+			[3, 1, Vector3(1.5, 0, 18.0)],        # forechecker pressuring us
+			[4, 1, Vector3(3.0, 0, 17.5)],        # second forechecker
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.debug_pass_peer_id, 2, "best pass targets the open up-wall outlet")
+	assert_gt(c.debug_pass_score, 0.0, "the breakout pass has positive value")
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"pressured carrier passes out rather than carrying into the box")
+
+
+# ─── stagger: don't wind up a shot off-balance ──────────────────────────────
+
+func test_staggered_carrier_holds_instead_of_firing() -> void:
+	# Reuse the pressured-breakout setup that reliably fires a PASS: carrier
+	# boxed by forecheckers with an open up-wall outlet.
+	var self_pos := Vector3(3, 0, 20)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(11, 0, 11)],     # open outlet
+			[3, 1, Vector3(1.5, 0, 18.0)],        # forechecker
+			[4, 1, Vector3(3.0, 0, 17.5)],        # forechecker
+	]
+
+	# Not staggered → commits the fire (the breakout pass).
+	var c1 := AIRoleCarrier.new()
+	c1.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c1.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"pressured carrier commits a fire (breakout pass) when not staggered")
+
+	# Staggered → holds the puck rather than flailing a release off-balance,
+	# even though the fire would otherwise win.
+	var ctx_staggered: RoleContext = _make_ctx(self_pos, skaters)
+	ctx_staggered.self_stagger_timer = 0.5
+	var c2 := AIRoleCarrier.new()
+	c2.decide(ctx_staggered)
+	assert_eq(c2.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"staggered carrier holds instead of committing the fire")
+
+
 # ─── reset() ──────────────────────────────────────────────────────────────
 
 func test_reset_clears_all_persistent_state() -> void:
@@ -244,3 +299,66 @@ func test_positive_shot_scores_above_zero_in_slot() -> void:
 	c.decide(ctx)
 	assert_gt(c.debug_shoot_score, 0.0,
 			"a slot shot scores positive, so the >0 gate never blocks it")
+
+
+# ─── principled hold: the developing cross-seam EV (no magic numbers) ────────
+# _best_developing_feed is the value the carrier weighs against firing now —
+# P(keep) × this × decay(held) competes directly in the action max.
+
+func _ctx_with_finisher(fin_pos: Vector3, ready: bool) -> RoleContext:
+	# Carrier strong-side in the OZ; a FINISHER-slotted teammate staging at fin_pos.
+	var self_pos := Vector3(4, 0, -18)
+	var ctx := _make_ctx(self_pos, [[1, TEAM_ID, self_pos], [2, TEAM_ID, fin_pos]])
+	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
+	brain.slot_assignments[2] = AIRoleSlots.Slot.FINISHER
+	if ready:
+		brain.set_one_timer_ready(2, true)
+	ctx.team_brain = brain
+	return ctx
+
+
+func test_developing_feed_zero_without_brain() -> void:
+	var ctx := _make_ctx(Vector3(4, 0, -18))
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_eq(carrier._best_developing_feed(ctx, Vector3.INF), 0.0,
+			"no team brain → nothing to wait for")
+
+
+func test_developing_feed_zero_when_finisher_already_ready() -> void:
+	# Already-flagged finisher is fed by normal scoring — not something to hold for.
+	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), true)
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0)
+
+
+func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
+	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_gt(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+			"a staging cross-seam finisher gives a positive developing feed")
+
+
+func test_developing_feed_zero_when_finisher_out_of_offensive_zone() -> void:
+	# Finisher back in the neutral zone (z = -5 > -BLUE_LINE_Z) → not a cross-seam.
+	var ctx := _ctx_with_finisher(Vector3(-3, 0, -5), false)
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+			"a finisher outside the OZ isn't a developing cross-seam")
+
+
+func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:
+	# Smoke: the principled hold (developing feed × keep_prob × decay) executes
+	# end-to-end in decide() with a staging-finisher brain and yields a valid intent.
+	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	var carrier := AIRoleCarrier.new()
+	var d := carrier.decide(ctx)
+	assert_not_null(d)
+	assert_true(carrier.intended_action == AIRoleCarrier.INTENT_CARRY \
+			or carrier.intended_action == AIRoleCarrier.INTENT_SHOOT \
+			or carrier.intended_action == AIRoleCarrier.INTENT_PASS \
+			or carrier.intended_action == AIRoleCarrier.INTENT_QUICK_SHOT,
+			"decide() yields a valid intent with a staging finisher in play")

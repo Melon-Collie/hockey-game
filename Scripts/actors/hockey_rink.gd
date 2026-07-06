@@ -30,9 +30,17 @@ extends StaticBody3D
 # along the inner face of a triangulated arc, and every facet transition leaks
 # a sliver of energy through bounce restitution (puck velocity isn't tangent
 # to the next facet's normal). Energy retained per corner ≈ exp(-(1-e²)·π²/(4N))
-# for restitution e and N segments — at N=256 with e=0.4 the loss per corner is
-# under 1%, so rim-arounds feel near-lossless while square hits still bounce.
-# Visual mesh stays at corner_segments for cheap rendering.
+# for restitution e and N segments — at N=256 with e=0.4 the restitution loss
+# per corner is under 1%. Visual mesh stays at corner_segments for cheap rendering.
+#
+# Restitution is only half the corner-loss story, and NOT the half that made
+# rim-arounds feel dead: the puck also slides the curve under sustained normal
+# (centripetal) load, so board FRICTION bleeds tangential speed capstan-style —
+# retained speed ≈ exp(-μ·π/2) per 90° corner, independent of N (tessellation
+# fixes only the restitution facet loss above). At the engine-default μ≈1.0 a
+# rim shed ~80% of its speed per corner; Physics/boards.tres now sets a realistic
+# puck-on-board friction (~0.3) so a hard rim keeps most of its speed. Tune the
+# rim feel there, not by raising segment count.
 @export var corner_collision_segments: int = 256:
 	set(v):
 		corner_collision_segments = v
@@ -93,10 +101,6 @@ extends StaticBody3D
 	set(v):
 		blue_line_color = v
 		_rebuild()
-@export var ice_friction: float = 0.01:
-	set(v):
-		ice_friction = v
-		_rebuild()
 @export_group("Ice Shader")
 @export var ice_fog_color: Color = Color(0.84, 0.91, 1.0):
 	set(v):
@@ -141,6 +145,11 @@ const CAP_RAIL_HEIGHT: float = 0.05
 # (renders both sides), and coplanar opaque-vs-double-sided-transparent
 # z-fights along the seam.
 const GLASS_LIFT: float = 0.001
+# Collision-only perimeter height. Must stay above the puck's vertical clamp
+# (Puck.max_height 3.0 + ice half-height 0.0125 ≈ 3.01 m) so an elevated
+# deflection that pegs the clamp can't slip over the visible glass and out of the
+# rink. Purely a collider extent — the glass mesh stops at glass_y_top.
+const COLLISION_OVERGLASS_TOP: float = 3.2
 # Recess the kickplate's bottom this far below the ice plane. The merged
 # perimeter band uses cull_disabled (renders both sides of every face), so
 # the bottom cap would z-fight the ice plane at y=0 if they were coplanar.
@@ -235,13 +244,20 @@ func _rebuild() -> void:
 			glass_y_bot, glass_y_top, _make_glass_material())
 
 	# Single collision around the entire perimeter at the boards' inner
-	# radius. Covers the full wall + glass height. Replaces the BoxShape3D /
-	# ConcavePolygonShape3D pair that previously caught fast pucks at the
-	# straight↔corner seam. Collision uses its own (much higher) corner
-	# tessellation so rim-around contact loss stays under 1% per corner.
+	# radius. Replaces the BoxShape3D / ConcavePolygonShape3D pair that
+	# previously caught fast pucks at the straight↔corner seam. Collision uses
+	# its own (much higher) corner tessellation so rim-around contact loss stays
+	# under 1% per corner.
+	#
+	# The collision extends ABOVE the visible glass (glass_y_top ≈ 2.90 m) up to
+	# COLLISION_OVERGLASS_TOP: the puck's vertical clamp (Puck.max_height + its
+	# ice half-height ≈ 3.01 m) sits above the glass, so without this an elevated
+	# deflection that pegs the clamp cruised through the gap between the glass top
+	# and the clamp and escaped the rink. Collision-only — the visual glass stays
+	# at glass_y_top. Keep COLLISION_OVERGLASS_TOP comfortably above Puck.max_height.
 	var collision_stations: Array = _build_perimeter_stations(corner_collision_segments)
 	_add_perimeter_collision(collision_stations, board_half_thick, board_half_thick,
-			0.0, glass_y_top)
+			0.0, maxf(glass_y_top, COLLISION_OVERGLASS_TOP))
 
 	# --- Painted stripes ---
 	# Goal-line stripes on each corner's white-board zone, drawn where the line
@@ -263,6 +279,48 @@ func _rebuild() -> void:
 			_add_corner_stripe(cs.center, cs.a0, cs.a1, st)
 
 	_add_side_board_stripes(half_w)
+
+	_add_zamboni_door(half_l, board_half_thick, board_top)
+
+
+# Zamboni door on the +Z end boards, centered behind the net: a framed
+# double-door panel sitting just proud of the boards' inner face. Purely
+# cosmetic (no collision change) — it breaks up the featureless white oval
+# and gives the behind-net replay camera something real to frame.
+func _add_zamboni_door(half_l: float, board_half_thick: float, board_top: float) -> void:
+	var inner_z: float = half_l - board_half_thick
+	var door_w: float = 2.4
+	var door_h: float = board_top - 0.02
+	var door_y: float = 0.02 + door_h / 2.0
+
+	var frame := MeshInstance3D.new()
+	frame.name = "ZamboniDoorFrame"
+	var frame_mesh := BoxMesh.new()
+	frame_mesh.size = Vector3(door_w + 0.12, door_h + 0.04, 0.03)
+	frame_mesh.material = _make_solid_material(Color(0.22, 0.23, 0.25), 0.0)
+	frame.mesh = frame_mesh
+	frame.position = Vector3(0.0, door_y, inner_z - 0.02)
+	add_child(frame)
+
+	# Panel tinted a step off the board white so the seam reads at a glance.
+	var panel := MeshInstance3D.new()
+	panel.name = "ZamboniDoorPanel"
+	var panel_mesh := BoxMesh.new()
+	panel_mesh.size = Vector3(door_w, door_h, 0.03)
+	panel_mesh.material = _make_solid_material(wall_color.darkened(0.08), 0.0)
+	panel.mesh = panel_mesh
+	panel.position = Vector3(0.0, door_y, inner_z - 0.035)
+	add_child(panel)
+
+	# Center seam between the two door leaves.
+	var seam := MeshInstance3D.new()
+	seam.name = "ZamboniDoorSeam"
+	var seam_mesh := BoxMesh.new()
+	seam_mesh.size = Vector3(0.03, door_h, 0.032)
+	seam_mesh.material = _make_solid_material(Color(0.22, 0.23, 0.25), 0.0)
+	seam.mesh = seam_mesh
+	seam.position = Vector3(0.0, door_y, inner_z - 0.036)
+	add_child(seam)
 
 func _add_ice() -> void:
 	var img_w = int(rink_width * _px_per_meter)
@@ -405,8 +463,12 @@ func _add_ice() -> void:
 	# perimeter boards move to LAYER_BOARDS; the ice is a flat slab and never
 	# produces the concave-corner crease that wedged the skater.
 	ice_body.collision_layer = Constants.LAYER_WALLS
+	# Single source of truth: the live ice friction the host simulates IS
+	# GameRules.ICE_FRICTION (realistic puck-on-ice μ ~0.05). The AI/client
+	# prediction model reads the same constant, so the two can never drift — no
+	# hand-sync, no ice .tres. (Puck-on-ice glide only; boards own the rim feel.)
 	var phys_mat := PhysicsMaterial.new()
-	phys_mat.friction = ice_friction
+	phys_mat.friction = GameRules.ICE_FRICTION
 	phys_mat.bounce = 0.0
 	ice_body.physics_material_override = phys_mat
 	add_child(ice_body)

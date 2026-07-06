@@ -22,6 +22,10 @@ extends RefCounted
 #   - Helmet / gloves / cuffs / elbow / hand spheres / hips / knees / skates →
 #     solid materials.
 
+# Stick-flex vertex shader — the shaft's per-skater ShaderMaterial wraps it
+# (see _make_stick_shaft_mat); Skater drives the flex_m uniform per frame.
+const _STICK_FLEX_SHADER: Shader = preload("res://Shaders/stick_flex.gdshader")
+
 var _skater: Skater
 var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
@@ -188,9 +192,13 @@ func apply_uniform(colors: Dictionary) -> void:
 	# the team accent onto the tape) plus the cosmetic handed tilt.
 	_rebuild_blade(colors.primary)
 
-	# Stick shaft — near-black composite, satin finish. Set explicitly so ghost
-	# mode doesn't leave behind a stale gray material_override when ghost ends.
-	_skater.stick_mesh.material_override = _make_solid_mat(_STICK_SHAFT_COLOR, _ROUGH_STICK)
+	# Stick shaft — near-black composite, satin finish, on the flex vertex
+	# shader (Shaders/stick_flex.gdshader). A ShaderMaterial PER SKATER, so
+	# one player's shot doesn't bend every stick on the ice;
+	# Skater._update_stick_flex drives its flex_m uniform at render rate.
+	# Ghost mode swaps this override for a translucent standard mat and
+	# rebuilds it on un-ghost — see apply_ghost's stick special case.
+	_skater.stick_mesh.material_override = _make_stick_shaft_mat()
 
 	# Butt-end knob — team accent, recreated here so the color tracks the kit.
 	_rebuild_stick_knob(colors.primary)
@@ -383,6 +391,14 @@ func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardM
 	return mat
 
 
+func _make_stick_shaft_mat() -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = _STICK_FLEX_SHADER
+	mat.set_shader_parameter(&"albedo", _STICK_SHAFT_COLOR)
+	mat.set_shader_parameter(&"roughness", _ROUGH_STICK)
+	return mat
+
+
 # Paints the blade matte black and (re)builds the team-colored tape band wrapped
 # around the heel→mid of the blade, leaving the toe end bare black. The cosmetic
 # handed tilt lives on the rig (Skater._apply_blade_tilt) so it tracks live
@@ -457,8 +473,23 @@ func _make_glove_cuff_mesh(radius: float, height: float, color: Color, mesh_name
 
 
 func apply_ghost(ghost: bool) -> void:
+	# The stick shaft is handled apart from the loop: its override is the flex
+	# ShaderMaterial, which the StandardMaterial3D cast below can't see — the
+	# loop would replace it with a default (WHITE) material and the un-ghost
+	# pass would then restore that white mat to full alpha, leaving the stick
+	# white forever after the first offside. Swap in a shaft-colored
+	# translucent standard mat while ghosted (the flex driver no-ops on a
+	# non-ShaderMaterial override by design) and rebuild the flex material on
+	# un-ghost.
+	if ghost:
+		var stick_ghost: StandardMaterial3D = _make_solid_mat(_STICK_SHAFT_COLOR, _ROUGH_STICK)
+		stick_ghost.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		stick_ghost.albedo_color.a = 0.3
+		_skater.stick_mesh.material_override = stick_ghost
+	else:
+		_skater.stick_mesh.material_override = _make_stick_shaft_mat()
 	var meshes: Array[MeshInstance3D] = [
-			_upper_body_mesh, _blade_mesh, _blade_tape, _skater.stick_mesh,
+			_upper_body_mesh, _blade_mesh, _blade_tape,
 			_skater.stick_knob_mesh,
 			_skater.bone_visual(_skater.upper_arm_mesh),
 			_skater.bone_visual(_skater.forearm_mesh),

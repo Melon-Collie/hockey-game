@@ -131,9 +131,11 @@ func _make_goalie_state() -> GoalieNetworkState:
 	s.left_pad_offset = Vector3(-0.42, 0.14, -0.05)
 	s.left_pad_pitch = -1.57
 	s.left_pad_roll = 0.21
+	s.left_pad_yaw = 0.31   # toe-out (v13)
 	s.right_pad_offset = Vector3(0.40, 0.16, -0.04)
 	s.right_pad_pitch = -1.50
 	s.right_pad_roll = -0.18
+	s.right_pad_yaw = -0.28  # toe-out (v13)
 	s.glove_offset = Vector3(-0.55, 0.49, -0.10)
 	s.glove_yaw = 0.78
 	s.glove_pitch = -0.30
@@ -166,8 +168,10 @@ func test_goalie_round_trip_preserves_fields_within_quantization() -> void:
 	assert_almost_eq(decoded.left_pad_offset.z, orig.left_pad_offset.z, 0.011)
 	assert_almost_eq(decoded.left_pad_pitch, orig.left_pad_pitch, 0.03)
 	assert_almost_eq(decoded.left_pad_roll, orig.left_pad_roll, 0.03)
+	assert_almost_eq(decoded.left_pad_yaw, orig.left_pad_yaw, 0.03)
 	assert_almost_eq(decoded.right_pad_offset.x, orig.right_pad_offset.x, 0.011)
 	assert_almost_eq(decoded.right_pad_pitch, orig.right_pad_pitch, 0.03)
+	assert_almost_eq(decoded.right_pad_yaw, orig.right_pad_yaw, 0.03)
 	assert_almost_eq(decoded.glove_offset.x, orig.glove_offset.x, 0.011)
 	assert_almost_eq(decoded.glove_yaw, orig.glove_yaw, 0.03)
 	assert_almost_eq(decoded.glove_pitch, orig.glove_pitch, 0.03)
@@ -209,29 +213,29 @@ func test_puck_round_trip_preserves_elevated_y() -> void:
 	assert_almost_eq(decoded.velocity.z, orig.velocity.z, 0.021)
 
 
-# ── Skater flags byte: shot_state | ghost | elevated | blade_up | sprint_lock ─
-# All share the single flags byte (shot_state low nibble, the rest are bits
-# 0x10/0x20/0x40/0x80). This exercises every combination so a new bit can't
-# silently clobber a neighbour.
+# ── Skater flags byte: shot_state | elevation_level | ghost | blade_up | lock ─
+# All share the single flags byte (bits 0-2 shot_state, bits 3-4 the 2-bit
+# elevation_level, then 0x20/0x40/0x80). This exercises every combination so a
+# new bit can't silently clobber a neighbour.
 
 func test_skater_flags_round_trip_all_combinations() -> void:
-	for shot_state: int in [0, 5, 15]:
-		for ghost: bool in [false, true]:
-			for elevated: bool in [false, true]:
+	for shot_state: int in [0, 3, 6]:
+		for elevation_level: int in [0, 1, 2]:
+			for ghost: bool in [false, true]:
 				for blade_up: bool in [false, true]:
 					for sprint_locked: bool in [false, true]:
 						var s := SkaterNetworkState.new()
-						s.shot_state    = shot_state
-						s.is_ghost      = ghost
-						s.is_elevated   = elevated
-						s.blade_up      = blade_up
-						s.sprint_locked = sprint_locked
+						s.shot_state      = shot_state
+						s.elevation_level = elevation_level
+						s.is_ghost        = ghost
+						s.blade_up        = blade_up
+						s.sprint_locked   = sprint_locked
 						var enc: PackedByteArray = WorldStateCodec._encode_skater_quantized(s)
 						var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(enc)
-						var ctx := "shot=%d ghost=%s elev=%s up=%s lock=%s" % [shot_state, ghost, elevated, blade_up, sprint_locked]
+						var ctx := "shot=%d elev=%d ghost=%s up=%s lock=%s" % [shot_state, elevation_level, ghost, blade_up, sprint_locked]
 						assert_eq(dec.shot_state, shot_state, ctx)
+						assert_eq(dec.elevation_level, elevation_level, ctx)
 						assert_eq(dec.is_ghost, ghost, ctx)
-						assert_eq(dec.is_elevated, elevated, ctx)
 						assert_eq(dec.blade_up, blade_up, ctx)
 						assert_eq(dec.sprint_locked, sprint_locked, ctx)
 
@@ -279,13 +283,13 @@ func _build_ws(
 	buf.append_array(header)
 	for entry: Dictionary in skaters:
 		_append_s32(buf, entry.id)
-		buf.append_array(WorldStateCodec._encode_skater_quantized(entry.state))  # 38 B
+		buf.append_array(WorldStateCodec._encode_skater_quantized(entry.state))  # 39 B
 		buf.append(0)  # queue_depth (ignored by replay decode)
 	buf.append_array(WorldStateCodec._encode_puck_quantized(puck))  # 12 B
 	buf.append(carrier_idx & 0xFF)
 	buf.append(goalies.size())
 	for g: GoalieNetworkState in goalies:
-		buf.append_array(WorldStateCodec._encode_goalie_quantized(g))  # 35 B
+		buf.append_array(WorldStateCodec._encode_goalie_quantized(g))  # 43 B
 	var gs := PackedByteArray()
 	gs.resize(WorldStateCodec.GAME_STATE_BLOCK_SIZE)
 	gs.encode_u8(0, game_state.score0)
@@ -391,3 +395,38 @@ func test_decode_for_replay_rejects_overrun_goalie_count() -> void:
 	# num_goalies sits just before the 6-byte game-state tail.
 	buf.encode_u8(buf.size() - WorldStateCodec.GAME_STATE_BLOCK_SIZE - 1, 255)
 	assert_true(codec.decode_for_replay(buf).is_empty(), "overrun goalie count rejected")
+
+
+# ── v10 wire additions ────────────────────────────────────────────────────────
+
+func test_skater_stagger_round_trips() -> void:
+	# stagger_timer was never on the wire, so a client victim's predicted stagger
+	# was wiped to 0 on the next reconcile. u8 @0.01s must now round-trip it.
+	for v: float in [0.0, 0.3, 1.0, 2.5]:
+		var s := SkaterNetworkState.new()
+		s.stagger_timer = v
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		assert_almost_eq(dec.stagger_timer, v, 0.01, "stagger %f round-trips within u8 @0.01s" % v)
+
+func test_goalie_glove_above_crossbar_not_clipped() -> void:
+	# Regression: glove/blocker Y reach (react_hand_y_max 1.55) exceeded the old s8
+	# ±1.27 m range and clipped ~28 cm low. The s16-wide encoding preserves it.
+	var s := GoalieNetworkState.new()
+	s.glove_offset = Vector3(-0.6, 1.55, -0.1)
+	s.blocker_offset = Vector3(0.6, 1.50, -0.1)
+	var dec: GoalieNetworkState = WorldStateCodec._decode_goalie_quantized(
+			WorldStateCodec._encode_goalie_quantized(s))
+	assert_almost_eq(dec.glove_offset.y, 1.55, 0.011, "glove Y above crossbar preserved")
+	assert_almost_eq(dec.blocker_offset.y, 1.50, 0.011, "blocker Y above crossbar preserved")
+
+func test_goalie_rotation_y_wraps_past_pi() -> void:
+	# The -Z goalie's facing lerps around base PI past +PI; the old raw clamp pinned
+	# it flat at PI. wrapf must fold it to the equivalent (-PI,PI] before quantizing,
+	# so the decoded facing points the SAME way (cos/sin match), not straight out.
+	var s := GoalieNetworkState.new()
+	s.rotation_y = PI + 1.0   # ~4.14 rad; wraps to ~-2.14
+	var dec: GoalieNetworkState = WorldStateCodec._decode_goalie_quantized(
+			WorldStateCodec._encode_goalie_quantized(s))
+	assert_almost_eq(cos(dec.rotation_y), cos(PI + 1.0), 0.002, "wrapped facing same direction (cos)")
+	assert_almost_eq(sin(dec.rotation_y), sin(PI + 1.0), 0.002, "wrapped facing same direction (sin)")

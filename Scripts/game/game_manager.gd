@@ -33,6 +33,15 @@ signal stats_updated
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color)
 signal local_player_hit(magnitude: float)
+# Host-authoritative body-check impact, re-emitted for cosmetic listeners
+# (crowd reaction in ArenaStands) after the burst/sound fire in
+# _on_body_check_landed. `force` is the same VFX-scale impact force.
+signal body_check_broadcast(force: float)
+# Fired (before faceoff_prep_announced) on the opening faceoff of a match —
+# game start and rematch, never mid-game stoppages. The opening prep window is
+# host-extended by `duration`, so listeners (camera sweep, HUD matchup card,
+# crowd buzz) have that long before the normal faceoff countdown begins.
+signal pregame_intro_started(duration: float)
 signal replay_started
 signal replay_stopped
 # Live tally of unanimous skip-replay votes (emitted on every accepted vote and
@@ -57,6 +66,11 @@ signal offside_called()
 # ── Domain state ──────────────────────────────────────────────────────────────
 var _state_machine: GameStateMachine = null
 var _last_emitted_clock_secs: int = -1
+# True once any faceoff prep has been announced this match. The first prep
+# after world setup / a reset is the OPENING faceoff — the only one that gets
+# the pre-game intro. Tracked here (not in the domain SM) because clients
+# never tick the SM but still need to fire their local intro cosmetics.
+var _seen_first_prep: bool = false
 var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 # Reused peer_id -> position scratch for the per-tick ghost-state and icing
 # checks (host only). The domain calls read it synchronously and never retain
@@ -105,6 +119,10 @@ var current_snapshot: WorldSnapshot = null
 # execution knobs. Defaults to Hard so any path that spawns bots before
 # resolution behaves close to the old perfect bot.
 var bot_skill_profile: BotSkillProfile = BotSkillProfile.hard()
+# Goalie difficulty for this match. Host-spawned AI (the host runs both nets),
+# so like bot difficulty it's a host-local PlayerPrefs preference re-read each
+# match. Defaults to Hard so any pre-resolution spawn matches today's goalie.
+var goalie_skill_profile: GoalieSkillProfile = GoalieSkillProfile.hard()
 # Debounce state for the bots' discrete-event reaction delay (see
 # _apply_bot_carrier_reaction_delay). `_perceived_carrier_peer_id` is the
 # delayed belief written onto the AI snapshot; the others track the pending
@@ -126,6 +144,11 @@ var goalie_controllers: Array[GoalieController] = []
 # rest of the rink wiring (team brains, goalie data cache) ignores it.
 var _tutorial_goalie: Goalie = null
 var _tutorial_goalie_controller: GoalieController = null
+# Single REACTIVE goalie for the penalty-shot drill — same single-net setup as
+# the tutorial goalie, but ticking AI (is_server, process enabled) so it plays
+# the breakaway. Also kept out of the `goalies` arrays.
+var _penalty_goalie: Goalie = null
+var _penalty_goalie_controller: GoalieController = null
 var puck_controller: PuckController = null
 
 # Cached snapshot of goalie pose for skater IK clamping. Refreshed once per
@@ -145,6 +168,7 @@ var _registry: PlayerRegistry = null
 var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
+var _turnover_tracker: TurnoverTracker = null
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
 var _stick_lift_claim: StickLiftClaimResolver = null
@@ -160,12 +184,19 @@ var _prev_chase_by_team: Dictionary[int, int] = {}
 var _recorder: ReplayRecorder = null
 var _goal_replay_driver: GoalReplayDriver = null
 var _career_reporter: CareerStatsReporter = null
+var _net_session_reporter: NetworkSessionReporter = null
+var _achievements: AchievementService = null
+var _stat_recorder: SteamStatRecorder = null
 # Streams broadcast frames to user://replays/<game_id>.mreplay on a worker
 # thread. Lives on every peer (host + client + spectator) for any session
 # with a non-empty _game_id and PlayerPrefs.replay_recording_enabled. Opens
 # once the registry has stabilized (post-_push_lobby_assignments_to_clients
 # on host, post-sync_existing_players on clients) and closes on scene exit.
 var _replay_file_writer: ReplayFileWriter = null
+# host_ts of the last world-state frame written to the .mreplay file. Drives the
+# REPLAY_FILE_RATE throttle in _record_world_state_to_file. -INF so the first
+# frame of each recording always writes; reset on writer open.
+var _last_file_frame_ts: float = -INF
 # Tracks the phase of the most recent .mreplay frame so movement-locked
 # phases (GOAL_SCORED, FACEOFF_PREP, END_OF_PERIOD, GAME_OVER) record their
 # first transition frame and skip the duplicate-static frames that follow.
@@ -223,6 +254,9 @@ func _ready() -> void:
 	# win since they're per-control theme overrides on top of the fallback.
 	ThemeDB.fallback_font = MenuStyle.UI_FONT
 	_career_reporter = CareerStatsReporter.new()
+	_net_session_reporter = NetworkSessionReporter.new()
+	_achievements = AchievementService.new()
+	_stat_recorder = SteamStatRecorder.new()
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
 
@@ -353,12 +387,11 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
 		_puck_oob_timer = 0.0
 		return
-	# Tutorial steps deliberately stash the puck far outside the rink (e.g.
-	# at (100, 100) during the SKATE step) and reposition it between steps —
-	# letting the OOB check fire a faceoff under the tutorial would derail
-	# the script. The tutorial owns puck placement; nothing else can move
-	# it OOB in tutorial mode anyway.
-	if NetworkManager.is_tutorial_mode:
+	# Scripted drills (tutorial, penalty shot) deliberately stash the puck far
+	# outside the rink (e.g. at (100, 100) between attempts) and reposition it —
+	# letting the OOB check fire a faceoff under a drill would derail the script.
+	# The drill manager owns puck placement; nothing else can move it OOB anyway.
+	if NetworkManager.is_drill_mode():
 		_puck_oob_timer = 0.0
 		return
 	if puck.carrier != null:
@@ -367,7 +400,15 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	var pos := puck.global_position
 	var pos2d := Vector2(pos.x, pos.z)
 	var clamped := GameRules.clamp_to_rink_inner(pos2d)
-	if pos2d.distance_to(clamped) > 0.2:
+	var xz_outside: float = pos2d.distance_to(clamped)
+	# Out of play if the puck is clearly outside the boundary (XZ), OR it is at/past
+	# the boundary while elevated above the boards — the latter catches a puck that
+	# went over the glass or perched on the boards, which the flat 0.2 m XZ check
+	# alone would miss (soft-lock). A legitimate high deflection is INSIDE the rink,
+	# so its xz_outside is ~0 and it doesn't trip the height branch.
+	var over_boards: bool = xz_outside > 0.01 \
+			and (pos.y - puck.ice_height) > GameRules.PUCK_OVER_BOARDS_HEIGHT
+	if xz_outside > 0.2 or over_boards:
 		_puck_oob_timer += delta
 		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
@@ -390,7 +431,7 @@ func _check_puck_stuck_on_net(delta: float) -> void:
 	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
 		_puck_net_stuck_timer = 0.0
 		return
-	if NetworkManager.is_tutorial_mode or puck.carrier != null:
+	if NetworkManager.is_drill_mode() or puck.carrier != null:
 		_puck_net_stuck_timer = 0.0
 		return
 	var pos: Vector3 = puck.global_position
@@ -420,7 +461,7 @@ func _check_puck_stuck_on_net(delta: float) -> void:
 # caller is responsible for emitting its own pre-whistle signal + RPC so
 # clients can play their own whistle/toast.
 func _whistle_and_faceoff(dot: Vector2) -> void:
-	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 	_state_machine.begin_faceoff_prep(dot)
 	_phase_coord.handle_phase_entered()
 
@@ -506,6 +547,11 @@ func on_host_started() -> void:
 	# and GameManager is an autoload that survives between matches, so this must
 	# re-read PlayerPrefs each match (not lazy-init-once).
 	bot_skill_profile = BotSkillProfile.for_difficulty(PlayerPrefs.bot_difficulty)
+	# Free play has its own goalie difficulty (a personal-sandbox knob, default
+	# Easy) distinct from the hosted/lobby setting — see PlayerPrefs.
+	var goalie_diff: int = PlayerPrefs.freeplay_goalie_difficulty \
+			if NetworkManager.is_free_play_mode else PlayerPrefs.goalie_difficulty
+	goalie_skill_profile = GoalieSkillProfile.for_difficulty(goalie_diff)
 	_perceived_carrier_peer_id = -1
 	_real_carrier_last = -1
 	_carrier_reaction_timer = 0.0
@@ -530,9 +576,11 @@ func on_host_started() -> void:
 	# Open the match with a faceoff countdown rather than dropping straight
 	# into PLAYING. Tutorial scripts its own intro; free play is a casual
 	# warmup that shouldn't gate the player behind a countdown — both stay
-	# in PLAYING from the start.
-	if not NetworkManager.is_tutorial_mode and not NetworkManager.is_free_play_mode:
-		_state_machine.begin_faceoff_prep()
+	# in PLAYING from the start. The opening prep is extended so the pre-game
+	# intro (camera sweep + matchup card) plays before the countdown.
+	if not NetworkManager.is_drill_mode() and not NetworkManager.is_free_play_mode:
+		_state_machine.begin_faceoff_prep(GameRules.CENTER_ICE_DOT,
+				GameRules.PREGAME_INTRO_DURATION if _pregame_intro_eligible() else 0.0)
 		_phase_coord.handle_phase_entered()
 
 
@@ -827,6 +875,7 @@ func _spawn_world() -> void:
 	# scene change records a huge gap (whatever wall time elapsed during the
 	# scene transition) and pollutes the p95/p99 for the first second.
 	_last_phys_tick_us = 0
+	_seen_first_prep = false  # fresh world → next prep is the opening faceoff
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -908,7 +957,11 @@ func _spawn_goalies() -> void:
 	if NetworkManager.is_tutorial_mode \
 			and not TutorialRegistry.wants_goalies(NetworkManager.tutorial_id):
 		return
-	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host)
+	# The penalty drill spawns its own single reactive goalie (spawn_penalty_goalie)
+	# at the attacked net; no full pair.
+	if NetworkManager.is_penalty_drill_mode:
+		return
+	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host, goalie_skill_profile)
 	goalies = [result.top_goalie as Goalie, result.bottom_goalie as Goalie]
 	goalie_controllers = [result.top_controller, result.bottom_controller]
 	result.top_controller.team_id = 1
@@ -981,6 +1034,12 @@ func _wire_subsystems() -> void:
 	_hit_tracker.setup(_registry)
 	_hit_tracker.hit_credited.connect(_on_hit_credited)
 
+	# Host-only takeaway / giveaway / faceoff-win attribution off possession
+	# changes. Fed by the pickup, strip, and shot-on-goal hooks below.
+	_turnover_tracker = TurnoverTracker.new()
+	_turnover_tracker.setup(_registry)
+	_shot_tracker.shot_on_goal_recorded.connect(_turnover_tracker.note_shot_on_goal)
+
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
@@ -1025,9 +1084,10 @@ func _wire_subsystems() -> void:
 			get_tree(), NetworkManager.is_host, force_record)
 	_phase_coord.goal_scored.connect(goal_scored.emit)
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
+	_phase_coord.goal_scored.connect(_trigger_scorer_celebration)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
-	_phase_coord.faceoff_prep_announced.connect(faceoff_prep_announced.emit)
+	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
 	_phase_coord.period_synced.connect(period_synced.emit)
@@ -1062,11 +1122,12 @@ func _wire_sound_signals() -> void:
 	# each match by _spawn_world, so these always get freshly wired here.
 	_phase_coord.goal_scored.connect(
 		func(_t: Team, _s: String, _a1: String, _a2: String) -> void:
-			SoundManager.play_sfx(SoundManager.Sound.GOAL_HORN, -6.0))
+			SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN, -6.0))
 	if NetworkManager.is_host:
 		puck.puck_hit_boards.connect(func() -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_BOARDS, puck.get_puck_position(), _puck_speed_volume(spd), 0.05)
+			puck.fire_board_impact_vfx(spd)
 			NetworkManager.send_board_hit_to_all(puck.get_puck_position())
 			_record_replay_audio_event("puck_boards", puck.get_puck_position(), spd))
 		puck.puck_hit_goal_body.connect(func() -> void:
@@ -1107,6 +1168,7 @@ func _wire_sound_signals() -> void:
 		func() -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd), 0.04)
+			puck.fire_post_ping_vfx(spd)
 			if NetworkManager.is_host:
 				_record_replay_audio_event("puck_post", puck.get_puck_position(), spd))
 
@@ -1119,9 +1181,13 @@ func _wire_sound_signals() -> void:
 	NetworkManager.remote_carrier_changed.connect(_on_remote_carrier_sound)
 	NetworkManager.goal_received.connect(
 		func(_tid: int, _s0: int, _s1: int, _sn: String, _a1: String, _a2: String) -> void:
-			SoundManager.play_sfx(SoundManager.Sound.GOAL_HORN, -6.0))
+			SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN, -6.0))
 	NetworkManager.board_hit_received.connect(
-		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_BOARDS, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.05))
+		func(pos: Vector3) -> void:
+			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
+			SoundManager.play_world(SoundManager.Sound.PUCK_BOARDS, pos, _puck_speed_volume(spd), 0.05)
+			if puck != null:
+				puck.fire_board_impact_vfx(spd))
 	NetworkManager.goal_body_hit_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
 	NetworkManager.deflection_received.connect(
@@ -1146,7 +1212,7 @@ func _wire_sound_signals() -> void:
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
 	phase_changed.connect(func(p: GamePhase.Phase) -> void:
 		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
-			SoundManager.play_sfx(SoundManager.Sound.PERIOD_BUZZER))
+			SoundManager.play_crowd(SoundManager.Sound.PERIOD_BUZZER, -10.0))
 
 
 func _on_local_pickup_sound() -> void:
@@ -1363,10 +1429,18 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 		return
 	if new_slot < 0 or new_slot >= PlayerRules.MAX_PER_TEAM:
 		return
+	# Liveness guard: a swap-request RPC can still be in flight when the requesting
+	# spectator disconnects. Without this the host would spawn + broadcast a skater
+	# for a gone peer that no disconnect will ever clean up (phantom on all clients).
+	if peer_id != NetworkManager.local_peer_id() and peer_id not in NetworkManager.connected_peer_ids():
+		return
 	for other_id: int in _state_machine.players:
 		var p: Dictionary = _state_machine.players[other_id]
 		if p.team_id == new_team_id and p.team_slot == new_slot:
 			return
+	# Don't promote into a slot held for a reconnecting player (see try_swap_slot).
+	if _state_machine.is_slot_reserved(new_team_id, new_slot):
+		return
 	if _state_machine.count_players_on_team(new_team_id) >= PlayerRules.MAX_PER_TEAM:
 		return
 	_spectator_peers.erase(peer_id)
@@ -1488,6 +1562,7 @@ func _open_replay_file_writer() -> void:
 	if not writer.open(path, _build_replay_header()):
 		return
 	_replay_file_writer = writer
+	_last_file_frame_ts = -INF
 
 
 func _close_replay_file_writer() -> void:
@@ -1575,6 +1650,35 @@ func _build_replay_footer() -> Dictionary:
 	if _state_machine != null:
 		footer["final_score_home"] = _state_machine.scores[0]
 		footer["final_score_away"] = _state_machine.scores[1]
+		# Period-by-period scores, same shape the scoreboard / career screen use:
+		# [[home p1, p2, …], [away p1, p2, …]]. Lets the local replay browser draw
+		# the period breakdown without any backend.
+		footer["period_scores"] = _state_machine.period_scores
+	# Per-player box score, keyed by peer_id so the browser can join it to the
+	# header roster for names. Every peer has all players' stats (the live
+	# scoreboard renders from the same broadcast), so this is complete on any
+	# recording peer. Mirrors career_stats columns minus the career-only fields.
+	var players: Array[Dictionary] = []
+	if _registry != null:
+		for peer_id: int in _registry.all():
+			var r: PlayerRecord = _registry.get_record(peer_id)
+			if r == null or r.stats == null:
+				continue
+			players.append({
+				"peer_id": peer_id,
+				"team_id": r.team.team_id if r.team != null else 0,
+				"goals": r.stats.goals,
+				"assists": r.stats.assists,
+				"shots_on_goal": r.stats.shots_on_goal,
+				"hits": r.stats.hits,
+				"shots_blocked": r.stats.shots_blocked,
+				"hits_taken": r.stats.hits_taken,
+				"takeaways": r.stats.takeaways,
+				"giveaways": r.stats.giveaways,
+				"faceoff_wins": r.stats.faceoff_wins,
+				"toi_seconds": roundi(r.stats.toi_seconds),
+			})
+	footer["players"] = players
 	footer["ended_at"] = Time.get_unix_time_from_system()
 	return footer
 
@@ -1821,8 +1925,17 @@ func _on_server_puck_picked_up_by(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
+	# Read the phase BEFORE on_pickup transitions FACEOFF -> PLAYING, so the
+	# tracker knows this pickup won the draw.
+	var was_faceoff: bool = _state_machine != null \
+			and _state_machine.current_phase == GamePhase.Phase.FACEOFF
 	_shot_tracker.on_pickup(peer_id)
 	_phase_coord.on_pickup(peer_id)
+	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
+	# (and client scoreboards) see it now, not on the next unrelated stat event.
+	if _turnover_tracker != null \
+			and _turnover_tracker.on_carrier_gained(peer_id, was_faceoff):
+		_sync_stats_to_clients()
 	record.controller.on_puck_picked_up_network()
 	if not record.is_local:
 		NetworkManager.send_puck_picked_up(peer_id)
@@ -1895,6 +2008,8 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
+	if _turnover_tracker != null:
+		_turnover_tracker.note_strip(peer_id)
 	_state_machine.notify_icing_contact()
 	if not record.is_local:
 		# Tell the victim's client whether this was a stick lift so it can pop
@@ -1903,6 +2018,9 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
+	# A loose-puck touch during FACEOFF (deflect / body redirect) makes the puck
+	# live — end the faceoff so a goal off the deflection counts (see P2-2).
+	_phase_coord.on_puck_touched_live()
 	_state_machine.notify_icing_contact()
 	# Deflection or body-block by an offending-team attacker also counts as a
 	# touch that whistles a delayed offside.
@@ -2031,7 +2149,10 @@ func _on_one_timer_release_requested(direction: Vector3, power: float, skater: S
 	_host_release_one_timer(direction, power, skater, 0.0, 0.0, 0.0, Vector3.ZERO)
 
 
-func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
+# direction is kept as a fallback only (used if the host's own locked aim is
+# degenerate); _power is unused — the host always derives power itself (still on
+# the wire to avoid a PROTOCOL_VERSION bump for no saving).
+func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int,
 		host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
 	if not NetworkManager.is_host or puck == null or _registry == null:
 		return
@@ -2046,16 +2167,13 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 	# teleport the puck off anyone's stick to the shooter's blade.
 	if puck.carrier != null or puck.pickup_locked or is_movement_locked() or record.skater.is_ghost:
 		return
-	var safe_direction: Vector3 = ShotReleaseRules.sanitize_direction(direction)
-	if safe_direction == Vector3.ZERO:
-		return
 	var controller: SkaterController = record.controller
-	var safe_power: float = ShotReleaseRules.clamp_power(power,
-			controller.max_slapper_power * (1.0 + controller.one_timer_center_power_bonus))
 	var safe_rtt_ms: float = ShotReleaseRules.clamp_rtt_ms(
 			rtt_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
 	# Range gate against the puck the shooter saw: rewind to their interpolated
-	# view when the stamp is fresh, otherwise use the live puck.
+	# view when the stamp is fresh, otherwise use the live puck. This is the ONLY
+	# part of the one-timer the client gets a say in — "did I connect with the
+	# puck I saw" — and it stays lag-comped. The shot itself (below) is host-derived.
 	var now: float = NetworkManager.estimated_host_time()
 	var view_puck_pos: Vector3 = puck.get_puck_position()
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() \
@@ -2065,11 +2183,31 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 		if snap != null and snap.puck_state != null:
 			view_puck_pos = snap.puck_state.position
 	var zone_world: Vector3 = record.skater.get_slapper_zone_global_position()
+	var zone_xz := Vector2(zone_world.x, zone_world.z)
+	var view_puck_xz := Vector2(view_puck_pos.x, view_puck_pos.z)
 	var puck_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
 	if not ShotReleaseRules.one_timer_in_range(
-			Vector2(zone_world.x, zone_world.z), Vector2(view_puck_pos.x, view_puck_pos.z),
+			zone_xz, view_puck_xz,
 			controller.slapper_zone_radius, puck_speed, controller.one_timer_leniency_time):
 		return
+	# HOST-AUTHORITATIVE direction: fire along the shooter's OWN locked slapper aim,
+	# which the host's RemoteController derived from the replayed wind-up — not the
+	# client-sent vector. Fall back to the (sanitized) client direction only if the
+	# host lock is degenerate (e.g. a snap release on a fast link before the input
+	# stream delivered the press).
+	var locked: Vector2 = controller.get_locked_slapper_dir()
+	var safe_direction: Vector3 = ShotReleaseRules.sanitize_direction(Vector3(locked.x, 0.0, locked.y))
+	if safe_direction == Vector3.ZERO:
+		safe_direction = ShotReleaseRules.sanitize_direction(direction)
+		if safe_direction == Vector3.ZERO:
+			return
+	# HOST-AUTHORITATIVE power: the shooter's max slapper power with the center bonus
+	# from the REWOUND puck the host arbitrated against — same formula the client
+	# predicted with, but off the host's puck read. Clamp as defense-in-depth.
+	var safe_power: float = ShotReleaseRules.clamp_power(
+			ShotReleaseRules.one_timer_power(controller.max_slapper_power,
+					controller.one_timer_center_power_bonus, zone_xz, view_puck_xz, controller.slapper_zone_radius),
+			controller.max_slapper_power * (1.0 + controller.one_timer_center_power_bonus))
 	# Sound/replay event below the validation so a rejected RPC can't spam
 	# phantom shot sounds (mirrors _fire_remote_shot).
 	var shot_pos: Vector3 = puck.get_puck_position()
@@ -2082,6 +2220,9 @@ func on_remote_one_timer_release(direction: Vector3, power: float, peer_id: int,
 
 func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
+	# A one-timer is a possession-less engagement — if it fires during FACEOFF it
+	# makes the puck live, so end the faceoff or the resulting goal is voided (P2-2).
+	_phase_coord.on_puck_touched_live()
 	var pid: int = _registry.resolve_peer_id(skater)
 	# One-timers skip the normal pickup flow, so the shooter is never recorded
 	# in the carrier history. Record them as a deflection (the shooter redirects
@@ -2348,17 +2489,17 @@ func _on_puck_out_of_play_received() -> void:
 	# phase change still arrives via world state; this just lights up the
 	# whistle + toast for clients at the same beat the host plays them.
 	puck_out_of_play.emit()
-	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 
 
 func _on_icing_called_received() -> void:
 	icing_called.emit()
-	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 
 
 func _on_offside_called_received() -> void:
 	offside_called.emit()
-	SoundManager.play_sfx(SoundManager.Sound.FACEOFF_WHISTLE)
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 
 
 # ── Input batches from peers (host only) ─────────────────────────────────────
@@ -2392,14 +2533,10 @@ func _on_world_state_received(data: PackedByteArray) -> void:
 	if _recorder != null and not NetworkManager.is_replay_mode() \
 			and not _is_celebration_phase():
 		_recorder.record_frame(data, host_ts)
-	# Tee the broadcast into the local .mreplay file. Use the host_ts encoded
-	# in the packet so timestamps align across host + client recordings —
-	# local_time() differs per peer. Same dead-puck + replay-mode gate as
-	# the host's get_world_state path.
-	if _replay_file_writer != null and _should_record_to_file():
-		_replay_file_writer.enqueue_frame(host_ts, data)
-		if _state_machine != null:
-			_last_recorded_phase = _state_machine.current_phase
+	# Tee the broadcast into the local .mreplay file (throttled to
+	# REPLAY_FILE_RATE). Use the host_ts encoded in the packet so timestamps align
+	# across host + client recordings — local_time() differs per peer.
+	_record_world_state_to_file(host_ts, data)
 
 
 func _on_stats_received(data: Array) -> void:
@@ -2457,6 +2594,12 @@ func _observe_telemetry() -> void:
 	if puck_controller != null:
 		extrapolating = extrapolating or puck_controller.is_extrapolating
 	_telemetry.observe_actors(skater_buf, puck_buf, goalie_buf, extrapolating)
+	# Connection facts the static record_* path doesn't carry — sampled by the
+	# session fold at window rollover. RTT is the client's round-trip to host;
+	# the host folds its peer count instead (its own RTT is 0).
+	if not NetworkManager.is_offline_mode:
+		_telemetry.current_rtt_ms = NetworkManager.get_rtt_ms() if not NetworkManager.is_host else 0.0
+		_telemetry.current_peer_count = NetworkManager.connected_peer_ids().size() if NetworkManager.is_host else 0
 
 
 func _sync_stats_to_clients() -> void:
@@ -2508,6 +2651,12 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 
 func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
+	# Live achievement: only the local player's own deliveries count, and this
+	# signal fires on the deliverer's machine, so gate on local peer. Excluded in
+	# free play / drills (no achievements there — _achievements_active).
+	if _achievements != null and _achievements_active() \
+			and hitter_peer_id == NetworkManager.local_peer_id():
+		_achievements.on_local_hit(impulse_magnitude)
 
 
 # Host-only (hit_credited fires only on the host, from the deduped credit path).
@@ -2537,6 +2686,7 @@ func _on_body_check_landed(victim_peer_id: int, force: float, hit_dir: Vector3) 
 		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
 	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
 			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
+	body_check_broadcast.emit(force)
 	# Lever B: lead the knockback on a remotely-interpolated victim so the hit reads
 	# punchy instead of mushy-late. No-op for the local (predicted) victim — its
 	# controller isn't a RemoteController — and on the host (guarded inside).
@@ -2551,34 +2701,119 @@ func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_times
 	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
 
 
+# Relay for PhaseCoordinator.faceoff_prep_announced that recognizes the
+# OPENING faceoff (first prep since world setup / reset) and fires the
+# pre-game intro signal first, so HUD/camera/crowd listeners can set up
+# before the countdown wiring reacts. Runs on host and clients alike —
+# both sides' prep announcement funnels through here.
+func _on_faceoff_prep_announced_from_coord() -> void:
+	var opening: bool = not _seen_first_prep
+	_seen_first_prep = true
+	if opening and _pregame_intro_eligible():
+		pregame_intro_started.emit(GameRules.PREGAME_INTRO_DURATION)
+	faceoff_prep_announced.emit()
+
+
+# Whether the opening-faceoff pre-game intro should play. Beyond the mode
+# gates, the fresh-match check keeps a mid-game joiner's FIRST prep (some
+# later stoppage, normal-length window) from playing a 4 s intro over a 2 s
+# prep. The clock counts up in infinite-time mode, down otherwise.
+func _pregame_intro_eligible() -> bool:
+	if NetworkManager.is_free_play_mode or NetworkManager.is_drill_mode() \
+			or NetworkManager.is_replay_mode():
+		return false
+	if _state_machine == null:
+		return false
+	if _state_machine.current_period != 1:
+		return false
+	if _state_machine.scores[0] != 0 or _state_machine.scores[1] != 0:
+		return false
+	if _state_machine.infinite_time:
+		return _state_machine.time_remaining <= 0.01
+	return _state_machine.time_remaining >= _state_machine.period_duration - 0.01
+
+
+# Star of the Game, computed locally from the replicated stat counters. Every
+# machine sees the same counters and the same sorted-peer-id candidate order,
+# and StarOfGameRules breaks ties explicitly, so selection is deterministic
+# without an RPC. Returns null when nobody registered a counting stat.
+func get_star_of_game() -> PlayerRecord:
+	if _registry == null:
+		return null
+	var peer_ids: Array[int] = []
+	for pid: int in _registry.all().keys():
+		peer_ids.append(pid)
+	peer_ids.sort()
+	var scores: Array[float] = []
+	var is_human: Array[bool] = []
+	for pid: int in peer_ids:
+		var rec: PlayerRecord = _registry.get_record(pid)
+		scores.append(StarOfGameRules.score(rec.stats))
+		is_human.append(not rec.is_bot)
+	var star_idx: int = StarOfGameRules.pick_star(scores, is_human)
+	if star_idx == -1:
+		return null
+	return _registry.get_record(peer_ids[star_idx])
+
+
 # ── Scene exit & reset ───────────────────────────────────────────────────────
 func _on_game_over() -> void:
 	if _state_machine == null or _registry == null or _career_reporter == null:
 		return
-	# Offline + tutorial don't count as career games — there's no opponent
-	# pool, the tutorial is replayed as practice, and a player shouldn't be
-	# able to pad stats by playing themselves. is_offline_mode covers both
-	# (start_tutorial calls start_offline).
+	var local: PlayerRecord = _registry.get_local()
+	var team_id: int = -1
+	var gf: int = 0
+	var ga: int = 0
+	var outcome: String = "draw"
+	if local != null and local.team != null:
+		team_id = local.team.team_id
+		gf = _state_machine.scores[team_id]
+		ga = _state_machine.scores[1 - team_id]
+		if gf > ga:
+			outcome = "win"
+		elif gf < ga:
+			outcome = "loss"
+		# Achievements + Steam career stats count any real match — online OR a
+		# configured "Play vs Bots" game — but never free play or tutorial/drill
+		# practice (see _achievements_active). Steam Stats are the player's own
+		# account data, so they're NOT gated on share_gameplay_stats or online;
+		# increment first, then evaluate against the updated totals so a threshold
+		# unlocks on the game that crosses it. No Supabase dependency.
+		if _achievements_active():
+			if _achievements != null:
+				_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
+			if _stat_recorder != null:
+				_stat_recorder.record_game(local.stats, outcome)
+				if _achievements != null:
+					_achievements.evaluate_career(_stat_recorder.totals())
+	# Supabase career row + network telemetry: online, shared-stats games only.
+	# Offline (Play vs Bots + free play) and tutorial don't upload — no game_id,
+	# backend cost, and no cross-machine opponent pool worth ranking.
 	if NetworkManager.is_offline_mode:
 		return
-	# Privacy opt-out: with stat sharing off, no career row is uploaded. The
-	# Career screen and replay browser both read from this backend data, so they
-	# stay empty by the player's choice (see PlayerPrefs.share_gameplay_stats).
+	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
+	# The Career screen's history reads from that backend data, so it stays empty by
+	# the player's choice (see PlayerPrefs.share_gameplay_stats). Local replays and
+	# Steam achievements/stats above are unaffected — they never touch the backend.
 	if not PlayerPrefs.share_gameplay_stats:
 		return
-	var local: PlayerRecord = _registry.get_local()
+	# Network-quality row: shares the offline + privacy gates above but not the
+	# career-specific team/score plumbing below, so report it here. Both roles
+	# are worth collecting (client = link quality, host = frame/input health).
+	if _telemetry != null and _net_session_reporter != null:
+		var role: String = "host" if NetworkManager.is_host else "client"
+		_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled)
 	if local == null or local.team == null:
 		return
-	var team_id: int = local.team.team_id
-	var gf: int = _state_machine.scores[team_id]
-	var ga: int = _state_machine.scores[1 - team_id]
-	var outcome: String = "draw"
-	if gf > ga:
-		outcome = "win"
-	elif gf < ga:
-		outcome = "loss"
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
+
+
+# True for a real match that should award achievements + Steam career stats: any
+# online or "Play vs Bots" game, but never free play (a casual endless sandbox)
+# or tutorial / penalty-drill practice.
+func _achievements_active() -> bool:
+	return not NetworkManager.is_free_play_mode and not NetworkManager.is_drill_mode()
 
 
 # Window-close hook — closes the replay file cleanly when the user clicks
@@ -2601,6 +2836,10 @@ func on_scene_exit() -> void:
 	# (used to build the footer) is still intact.
 	_close_replay_file_writer()
 	_last_recorded_phase = -1
+	# Session-scoped — a scene exit mid goal-replay must not carry a stale
+	# "in replay" flag into the next session (a fresh driver is created there, so
+	# a leftover true would let a skip vote fire before any replay is running).
+	_in_replay_locally = false
 	if _shot_tracker != null:
 		_shot_tracker.clear_state()
 	if _registry != null:
@@ -2657,6 +2896,12 @@ func on_scene_exit() -> void:
 
 
 func reset_game() -> void:
+	# Host-authoritative (offline/free-play are is_host too). A stray client call
+	# would reset only that client's SM/stats and fork it from the host; the
+	# notify_reset_to_all RPC below is authority-gated so no remote harm, but guard
+	# for symmetry with return_to_lobby.
+	if not NetworkManager.is_host:
+		return
 	_drop_puck_if_carried()
 	_apply_reset()
 	# Each rematch gets its own .mreplay so the viewer doesn't render two
@@ -2668,7 +2913,9 @@ func reset_game() -> void:
 		new_id = PlayerPrefs.generate_uuid()
 	NetworkManager.notify_reset_to_all(new_id)
 	_rollover_replay_file_to(new_id)
-	_state_machine.begin_faceoff_prep()
+	# A rematch is a fresh match — its opening faceoff gets the intro too.
+	_state_machine.begin_faceoff_prep(GameRules.CENTER_ICE_DOT,
+			GameRules.PREGAME_INTRO_DURATION if _pregame_intro_eligible() else 0.0)
 	_phase_coord.handle_phase_entered()
 	game_reset.emit()
 
@@ -2689,7 +2936,15 @@ func on_game_reset(new_game_id: String = "") -> void:
 
 
 func _apply_reset() -> void:
-	_state_machine.reset_all()
+	_state_machine.reset_all()  # also clears the domain-side reserved_slots mirror
+	# Clear the host-side reservation store in lockstep with the domain mirror.
+	# reset_all() frees the domain slots, so a leftover _reserved_slots entry would
+	# force a reconnecting peer into a slot that a rematch joiner/swapper can now
+	# retake (double-booking) AND carry the PREVIOUS match's stats into the fresh
+	# 0-0 game. Host-only dict; a no-op on clients. Pending expiry timers are token-
+	# guarded, so they harmlessly no-op after the clear.
+	_reserved_slots.clear()
+	_seen_first_prep = false  # next prep is a rematch's opening faceoff
 	_last_emitted_clock_secs = -1
 	_last_ghost_state.clear()
 	_hit_claim.reset_throttle()
@@ -2699,6 +2954,8 @@ func _apply_reset() -> void:
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()
+	if _turnover_tracker != null:
+		_turnover_tracker.reset()
 	stats_updated.emit()
 
 
@@ -2861,6 +3118,18 @@ func _build_lobby_roster_array() -> Array:
 				NetworkManager.get_peer_number(peer_id)])
 		spec_idx += 1
 	return result
+
+
+# Re-read the free-play goalie difficulty and push it onto the live crease
+# goalies without a match reload. Free play is effectively the main menu (no
+# reload path), so the options-panel goalie dropdown tunes the running goalies in
+# place. No-op outside free play and on peers with no host-side goalie controllers.
+func refresh_freeplay_goalie_difficulty() -> void:
+	if not NetworkManager.is_free_play_mode:
+		return
+	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.freeplay_goalie_difficulty)
+	for gc: GoalieController in goalie_controllers:
+		gc.apply_skill_profile(goalie_skill_profile)
 
 
 func return_to_free_play() -> void:
@@ -3090,14 +3359,36 @@ func get_world_state() -> PackedByteArray:
 	if _recorder != null and not NetworkManager.is_replay_mode() \
 			and not _is_celebration_phase():
 		_recorder.record_frame(state, ts)
-	# File writer skips dead-puck phase ticks past the first one — see
-	# _should_record_to_file. The first frame on each phase transition
-	# captures the puck-in-net moment / faceoff snap / etc.
-	if _replay_file_writer != null and _should_record_to_file():
-		_replay_file_writer.enqueue_frame(ts, state)
-		if _state_machine != null:
-			_last_recorded_phase = _state_machine.current_phase
+	# File writer throttles to REPLAY_FILE_RATE and skips dead-puck phase ticks
+	# past the first one — see _record_world_state_to_file / _should_record_to_file.
+	# The first frame on each phase transition captures the puck-in-net moment /
+	# faceoff snap / etc.
+	_record_world_state_to_file(ts, state)
 	return state
+
+
+# Tee a broadcast world-state frame into the .mreplay file, throttled to
+# REPLAY_FILE_RATE. The viewer interpolates between snapshots, so the steady
+# PLAYING stream is decimated from STATE_RATE (120 Hz) to ~30 Hz — a ~4x file-
+# size cut at no perceptible playback cost. Phase-transition frames bypass the
+# throttle (the first frame of a new phase is a keyframe — faceoff snap, the
+# resume after a movement-locked gap — and must never be dropped). The goal
+# moment is recorded full-rate via force_record, which calls enqueue_frame
+# directly rather than this helper. Mirrors the old inline record block: also
+# advances _last_recorded_phase so _should_record_to_file's "first frame of a
+# locked phase only" gate keeps working.
+func _record_world_state_to_file(host_ts: float, data: PackedByteArray) -> void:
+	if _replay_file_writer == null or not _should_record_to_file():
+		return
+	var phase_changed: bool = _state_machine != null \
+			and _state_machine.current_phase != _last_recorded_phase
+	if not phase_changed \
+			and host_ts - _last_file_frame_ts < 1.0 / float(Constants.REPLAY_FILE_RATE):
+		return
+	_replay_file_writer.enqueue_frame(host_ts, data)
+	_last_file_frame_ts = host_ts
+	if _state_machine != null:
+		_last_recorded_phase = _state_machine.current_phase
 
 
 func _should_record_to_file() -> bool:
@@ -3126,6 +3417,32 @@ func is_movement_locked() -> bool:
 	if _state_machine == null:
 		return false
 	return _state_machine.is_movement_locked()
+
+
+# True during the FACEOFF_PREP countdown. Read by SkaterController's gait
+# (via the game_state interface) to pose the faceoff ready stance — phase is
+# replicated, so every machine answers identically.
+func is_faceoff_prep() -> bool:
+	if _state_machine == null:
+		return false
+	return _state_machine.current_phase == GamePhase.Phase.FACEOFF_PREP
+
+
+# Cosmetic: the scorer raises the stick through the GOAL_CELEBRATION beat.
+# goal_scored is emitted locally on every machine (host detects, clients get
+# notify_goal), but the trigger fires only where the scorer is SIMULATED —
+# their own client, or the host for bots. The raised hands then ride the
+# existing hand/blade wire state to every other machine like any other pose.
+func _trigger_scorer_celebration(_team: Team, scorer_name: String,
+		_assist1: String, _assist2: String) -> void:
+	if scorer_name.is_empty():
+		return
+	for record: PlayerRecord in _registry.all().values():
+		if record.player_name != scorer_name or record.controller == null:
+			continue
+		if record.is_local or (NetworkManager.is_host and record.is_bot):
+			record.controller.start_celebration(GameRules.GOAL_CELEBRATION_DURATION)
+		return
 
 
 func allows_blade_aim_during_lock() -> bool:
@@ -3201,22 +3518,35 @@ func despawn_tutorial_bot(record: PlayerRecord) -> void:
 	_registry.remove(record.peer_id)
 
 
-# Spawns a single STATIONARY goalie in the net the tutorial player attacks
-# (team 0 shoots toward -Z). is_server=false so it wires no puck-reaction
-# signals, and we disable its process so the AI never ticks — it freezes
-# standing in the crease (where setup() places it) as a shooting target. The
-# goalie's collision still saves shots, so the top corners and five-hole are
-# the only gaps. Idempotent: a second call while one exists is a no-op.
-func spawn_tutorial_goalie() -> void:
+# Spawns a single goalie in the net the tutorial player attacks (team 0 shoots
+# toward -Z). Two modes:
+#   live=false (default) — STATIONARY shooting target for the "Beat the Goalie"
+#     drill: is_server=false wires no puck-reaction signals and the AI tick is
+#     disabled, so it freezes in the crease (where setup() places it). Its
+#     collision still saves shots, so the corners and five-hole are the only gaps.
+#   live=true — the FINALE goalie: is_server=true wires the puck-reaction signals
+#     and the AI tick is left running, and it gets the beginner-tuned EASY profile
+#     so it tracks, positions, and saves like a real goalie while staying scorable.
+#     (The optional skater-getter is left unset — crease-jam / screen reads guard
+#     on is_valid() and simply no-op solo, which is correct in a 1-shooter drill.)
+# Idempotent: a second call while one exists is a no-op.
+func spawn_tutorial_goalie(live: bool = false) -> void:
 	if _tutorial_goalie != null:
 		return
 	if _spawner == null or puck == null:
 		return
-	var result: Dictionary = _spawner.spawn_single_goalie(puck, -GameRules.GOAL_LINE_Z, false)
+	var result: Dictionary = _spawner.spawn_single_goalie(puck, -GameRules.GOAL_LINE_Z, live)
 	_tutorial_goalie = result.goalie as Goalie
 	_tutorial_goalie_controller = result.controller as GoalieController
-	_tutorial_goalie_controller.set_physics_process(false)
-	_tutorial_goalie_controller.set_process(false)
+	if live:
+		_tutorial_goalie_controller.apply_skill_profile(GoalieSkillProfile.easy())
+	else:
+		_tutorial_goalie_controller.set_physics_process(false)
+		_tutorial_goalie_controller.set_process(false)
+		# Frozen AI never ticks the pose builder, so force the upright stance
+		# once — otherwise the goalie holds the scene-default pose with its pads
+		# together, hiding the five-hole the drill asks the player to shoot at.
+		_tutorial_goalie_controller.snap_to_standing_pose()
 	if teams.size() > 1:
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 		_tutorial_goalie.apply_uniform(colors)
@@ -3230,6 +3560,43 @@ func despawn_tutorial_goalie() -> void:
 	if _tutorial_goalie != null:
 		_tutorial_goalie.queue_free()
 		_tutorial_goalie = null
+
+
+# Reactive goalie defending the -Z net (the one team 0 attacks) for the penalty
+# drill. Unlike the tutorial goalie, AI ticks normally so it challenges and
+# saves the breakaway. Difficulty follows the match goalie_skill_profile.
+# Idempotent: a second call while one exists is a no-op.
+func spawn_penalty_goalie() -> void:
+	if _penalty_goalie != null:
+		return
+	if _spawner == null or puck == null:
+		return
+	var result: Dictionary = _spawner.spawn_single_goalie(
+			puck, -GameRules.GOAL_LINE_Z, true, goalie_skill_profile)
+	_penalty_goalie = result.goalie as Goalie
+	_penalty_goalie_controller = result.controller as GoalieController
+	# The -Z net belongs to team 1 (the side team 0 attacks); match the pair's
+	# wiring so the AI's threat/facing logic reads the breakaway correctly.
+	_penalty_goalie_controller.team_id = 1
+	if teams.size() > 1:
+		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
+		_penalty_goalie.apply_uniform(colors)
+		_penalty_goalie.apply_jersey_info("WARD", 35)
+
+
+func despawn_penalty_goalie() -> void:
+	if _penalty_goalie_controller != null:
+		_penalty_goalie_controller.queue_free()
+		_penalty_goalie_controller = null
+	if _penalty_goalie != null:
+		_penalty_goalie.queue_free()
+		_penalty_goalie = null
+
+
+# Drops the penalty-drill goalie back into its crease between attempts.
+func reset_penalty_goalie() -> void:
+	if _penalty_goalie_controller != null:
+		_penalty_goalie_controller.reset_to_crease()
 
 
 func get_goalie_data() -> Array[Dictionary]:

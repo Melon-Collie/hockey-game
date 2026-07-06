@@ -7,6 +7,16 @@ static var instance: NetworkTelemetry = null
 
 const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 
+# Session-long aggregation of the per-second metrics below, folded once per 1 s
+# window in tick(). Read by NetworkSessionReporter at game-over. Fresh per
+# session (NetworkTelemetry itself is rebuilt each world spawn).
+var session := NetworkSessionSummary.new()
+# Live connection facts the overlay reads from NetworkManager directly but that
+# aren't pushed through the static record_* path. GameManager refreshes these
+# each frame so the session fold can sample them at window rollover.
+var current_rtt_ms: float = 0.0
+var current_peer_count: int = 0
+
 # ── Window counters (reset each second) ──────────────────────────────────────
 var _world_state_count: int = 0
 var _input_count: int = 0
@@ -395,6 +405,7 @@ func tick(delta: float) -> void:
 		_bcast_interval_samples_us.clear()
 	else:
 		broadcast_interval_p95_ms = 0.0
+	_fold_session_sample()
 	_world_state_count = 0
 	_input_count = 0
 	_reconcile_count = 0
@@ -427,3 +438,32 @@ func tick(delta: float) -> void:
 	_input_lead_n = 0
 	_starvation_count = 0
 	_window_timer = 0.0
+
+# Fold this window's published metrics into the session summary. Keys here are
+# the column prefixes the network_sessions table expects (see
+# network_session_summary.gd). Role-degenerate metrics (e.g. loss/jitter on a
+# host, reconciles on a host) fold as their natural 0/100 — the row's `role`
+# disambiguates them at query time. sim_rate is the one exception: it's only
+# meaningful when ticks were sampled (host/solo), so a client's structural 0 is
+# omitted to keep its session-min honest.
+func _fold_session_sample() -> void:
+	var sample: Dictionary = {
+		"rtt_ms": current_rtt_ms,
+		"packet_loss_pct": packet_loss_pct,
+		"jitter_p95_ms": jitter_p95_ms,
+		"reconcile_per_sec": reconcile_per_sec,
+		"reconcile_mag_m": reconcile_magnitude_avg,
+		"reconcile_match_pct": reconcile_match_pct,
+		"extrapolation_per_sec": extrapolation_per_sec,
+		"ooo_drops_per_sec": ooo_drops_per_sec,
+		"bytes_recv_per_sec": bytes_received_per_sec,
+		"bytes_sent_per_sec": bytes_sent_per_sec,
+		"input_starvations_per_sec": input_starvations_per_sec,
+		"input_queue_depth": float(input_queue_depth_median),
+		"input_lead_ms": input_lead_avg_ms,
+		"worst_stall_ms": host_physics_tick_max_ms,
+		"peer_count": float(current_peer_count),
+	}
+	if host_effective_tick_hz > 0.0:
+		sample["sim_rate_hz"] = host_effective_tick_hz
+	session.observe(sample)

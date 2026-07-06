@@ -1,34 +1,48 @@
 class_name AIRoleBackcheck
 
-# BACKCHECK role behavior — TRANS_OD only. The Sprinting-Through
-# defender: the up-ice peer with the longest sprint home. Job:
-# get to the slot fast and deny the highest-threat shot as the
-# play closes on our net.
+# BACKCHECK role behavior — TRANS_OD only. The Sprinting-Through defender: one
+# of the two forward peers racing home as a rush develops. Job: get goal-side
+# of the receiver it's assigned and deny the carrier's feed to him — pick up a
+# MAN, not an empty patch of ice.
 #
-# Same scoring shape as DZONE ANCHOR (inverse-threat-minimax over
-# polar samples), but the search center is fixed at our slot
-# instead of midpoint(puck, our_net). In TRANS_OD the puck is on
-# the opp's side, so midpoint would land at center ice or further
-# up — the wrong target for a backchecker whose explicit job is
-# to defend the slot first and worry about engagement second.
+# Primary path (assigned a man via TeamBrain's threat partition): cover that
+# specific opponent — set up goal-side of him in the carrier→man feed lane
+# (AIRoleHelpers.cover_man_target, shared with DZONE ANCHOR/COVER). The deepest
+# peer (CONTAIN) gap-controls the carrier; the two BACKCHECKs split the two
+# receivers, so the rush is met by a man on every threat instead of everyone
+# collapsing on the puck. Sprint-home to the assigned man is emergent from the
+# state machine's _resolve_sprint on this (typically distant) target.
 #
-# Algorithm: argmax over polar candidates centered on our slot of
+# Fallback (unassigned — no brain, loose puck, or fewer men than backcheckers):
+# the legacy "sprint to slot and shade toward the dominant shot threat" —
+# argmax over polar candidates centered on our slot of
 #
 #     -max over opps of threat_surface_shoot(
 #         opp, our_net, our_goalie, our_team_with_us_at_c)
 #
-# threat_surface_shoot = max(score_shoot, position_potential). The
-# position_potential floor keeps the gradient non-zero when no opp
-# is in immediate shooting range, so BACKCHECK still pulls into the
-# most threatening opp's pressure cone instead of sitting flat at
-# slot during the long sprint home.
+# so an extra backchecker with no man still races home and helps at the net.
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
+	# Man-on-threat: cover the receiver the brain assigned us. Needs a live
+	# carrier (the feed source) — resolve_defensive_play_ref returns INF when
+	# there's no puck, which drops us to the slot fallback below.
+	var man_pid: int = ctx.assigned_threat_peer
+	if man_pid != -1 and ctx.snapshot != null \
+			and ctx.snapshot.skater_states.has(man_pid):
+		var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
+		if carrier_pos.is_finite():
+			# Anticipate: backcheck to where the man is cutting, not his current spot.
+			var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
+			var man_pos: Vector3 = AIRoleHelpers.lead_threat(
+					man.position, man.velocity, ctx.defensive_anticipation_scale)
+			d.target_position = AIRoleHelpers.cover_man_target(ctx, man_pos, carrier_pos)
+			return d
+
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
-	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
+	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states, true)
 	if opp_positions.is_empty():
 		# No opps to defend against. Hold at slot.
 		d.target_position = Vector3(0.0, 0.0,

@@ -89,14 +89,12 @@ func set_local_team_id(team_id: int) -> void:
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	camera.set_goal_context(goal_0, goal_1, carrier_team_getter)
 
-# Team 0 defends the +Z goal → attacks -Z. Team 1 defends -Z → attacks +Z.
-# See GameManager._assign_goals_to_teams.
-func get_attacking_goal_z() -> float:
-	if _team_id == 0:
-		return -GameRules.GOAL_LINE_Z
-	if _team_id == 1:
-		return GameRules.GOAL_LINE_Z
-	return 0.0
+# Forces the player-locked camera framing regardless of the user's camera-mode
+# pref. Used by the tutorial for the puckless movement steps so the camera sits
+# centered on the player instead of zooming out toward the stashed puck.
+func set_camera_force_locked(locked: bool) -> void:
+	if camera != null:
+		camera.force_locked = locked
 
 func get_current_input() -> InputState:
 	return _current_input
@@ -166,8 +164,8 @@ func _physics_process(delta: float) -> void:
 			prep_input.slap_held = false
 			prep_input.brake = false
 			prep_input.sprint_held = false
-			prep_input.elevation_up = false
-			prep_input.elevation_down = false
+			# elevation_level passes through untouched — it's a mode, not an
+			# action, so the faceoff freeze shouldn't flatten the chosen loft.
 			prep_input.block_held = false
 			prep_input.stick_lift_held = false
 			_current_input = prep_input
@@ -408,6 +406,15 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_state: State = _sm.get_state()
 	var pre_follow_through_timer: float = _sm.follow_through_timer
 	var pre_follow_through_is_slapper: bool = _sm.follow_through_is_slapper
+	var pre_follow_through_total: float = _sm.follow_through_duration_total
+	var pre_follow_through_power: float = _sm.follow_through_power
+	# shot_dir feeds the follow-through pose (blade sweep target + torso
+	# uncoil). Replay can overwrite it with a re-derived direction, or zero it
+	# outright when the replayed window walks the timer through
+	# _transition_to_skating / re-enters a slapper charge — without restore the
+	# rest of the live follow-through animates toward Vector3.ZERO and the
+	# blade pops off the shot line.
+	var pre_shot_dir: Vector3 = _sm.shot_dir
 	var pre_one_timer_window_timer: float = _aiming.one_timer_window_timer
 	# slapper_charge_timer ticks inside _update_slapper_charge during replay; without
 	# save/restore each reconcile re-ticks the unconfirmed inputs and the timer
@@ -480,6 +487,9 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_sm.set_state(pre_state)
 	_sm.follow_through_timer = pre_follow_through_timer
 	_sm.follow_through_is_slapper = pre_follow_through_is_slapper
+	_sm.follow_through_duration_total = pre_follow_through_total
+	_sm.follow_through_power = pre_follow_through_power
+	_sm.shot_dir = pre_shot_dir
 	_aiming.one_timer_window_timer = pre_one_timer_window_timer
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.wrister_start_blade_local_x = pre_wrister_start_blade_x
@@ -552,7 +562,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		State.SHOT_BLOCKING:
 			pass  # block stance owns the pose; no per-frame blade write
 		_:
-			_ik.apply_blade_from_mouse(_current_input, 0.0)
+			# During the celebration the raised-stick pose owns the hands;
+			# re-IKing to the mouse here would pop the blade down for a frame
+			# on every reconcile. Skip — the next real tick re-applies it.
+			if not is_celebrating():
+				_ik.apply_blade_from_mouse(_current_input, 0.0)
 	var blade_reconcile_delta: float = skater.get_blade_contact_global().distance_to(pre_reconcile_blade)
 	NetworkTelemetry.record_blade_reconcile(blade_reconcile_delta)
 	if blade_reconcile_delta > _BLADE_JUMP_THRESHOLD:

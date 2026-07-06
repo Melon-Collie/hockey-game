@@ -88,6 +88,11 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	caps.max_accel = thrust
 	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
 	caps.wrister_shot_speed = max_wrister_power
+	# Scaled body-check delivery (set on the skater by super.apply_attributes
+	# above) so AIBodyCheck predicts THIS bot's hit strength.
+	if skater != null:
+		caps.self_weight = skater.weight
+		caps.self_body_check_transfer = skater.body_check_transfer
 	_agent.apply_capabilities(caps)
 
 
@@ -318,10 +323,8 @@ func _zero_script_input(delta: float) -> void:
 	_script_input.slap_pressed = false
 	_script_input.slap_held = false
 	_script_input.brake = false
-	# Same elevation_down=true default as SkaterAgent._zero_input so the
-	# controller's sticky _is_elevated flag resets each tick we're not
-	# explicitly firing an elevated shot.
-	_script_input.elevation_up = false
-	_script_input.elevation_down = true
+	# Same flat default as SkaterAgent._zero_input — the loft level is
+	# absolute per input frame, so scripted shots set it on their own ticks.
+	_script_input.elevation_level = 0
 	_script_input.block_held = false
 	_script_input.stick_lift_held = false

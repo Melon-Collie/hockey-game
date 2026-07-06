@@ -136,11 +136,11 @@ func _drive_from_input(delta: float) -> void:
 			if _game_state.allows_blade_aim_during_lock():
 				apply_blade_aim_only(input, delta)
 		# Clear just_pressed flags before saving as fallback so they don't
-		# re-fire on subsequent ticks while the queue is empty.
+		# re-fire on subsequent ticks while the queue is empty. elevation_level
+		# stays — it's an absolute mode, and holding the last known level
+		# through an input gap is exactly right.
 		input.shoot_pressed = false
 		input.slap_pressed = false
-		input.elevation_up = false
-		input.elevation_down = false
 		_fallback_input = input
 	else:
 		if _game_state.is_movement_locked():
@@ -203,7 +203,7 @@ func _interpolate(delta: float) -> void:
 		interpolated.facing_angular_velocity = newest.facing_angular_velocity
 		interpolated.upper_body_angular_velocity = newest.upper_body_angular_velocity
 		interpolated.is_ghost = newest.is_ghost
-		interpolated.is_elevated = newest.is_elevated
+		interpolated.elevation_level = newest.elevation_level
 		interpolated.blade_up = newest.blade_up
 		interpolated.shot_state = newest.shot_state
 	else:
@@ -225,12 +225,12 @@ func _interpolate(delta: float) -> void:
 		interpolated.facing = Vector2(sin(interp_fa), cos(interp_fa))
 		# Boolean/enum fields can't be lerped; take the freshest value so
 		# ghost-mode and shot-pose toggles flow through to remote skaters
-		# without a one-broadcast delay. (shot_state / is_elevated were
+		# without a one-broadcast delay. (shot_state / elevation were
 		# previously never copied onto the interpolated object at all, so
 		# _apply_state_to_skater wrote type defaults to the skater every tick
 		# and the elevated-blade replication had no effect on remotes.)
 		interpolated.is_ghost = to_state.is_ghost
-		interpolated.is_elevated = to_state.is_elevated
+		interpolated.elevation_level = to_state.elevation_level
 		interpolated.blade_up = to_state.blade_up
 		interpolated.shot_state = to_state.shot_state
 		# render_time is led toward present by extrapolation_lead_fraction, so the
@@ -298,9 +298,9 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	_pose.snap_lean_to_state()
 	skater.set_blade_position(state.blade_position)
 	skater.set_ghost(state.is_ghost)
-	# Replicated from the host so the elevated-shot blade lift (Skater
+	# Replicated from the host so the loft-level blade scoop (Skater
 	# ._update_blade_elevation) shows on spectated remotes, not just locally.
-	skater.is_elevated = state.is_elevated
+	skater.elevation_level = state.elevation_level
 	# Resolved stick-lift state. The lifted blade pose already rides in via the
 	# replicated blade_position above; this keeps skater.blade_up correct for
 	# any reader (AI off-puck, VFX) on spectated remotes.

@@ -23,10 +23,10 @@ extends CharacterBody3D
 # on opposite sides for L/R) is a tiny resting cup.
 const _BLADE_TOE_LIFT_DEG: float = 4.0
 const _BLADE_FACE_OPEN_DEG: float = 4.0
-# Blended in while elevation mode is on (scroll-wheel ballistic aim): the loft
-# opens the face upward to "scoop" the puck, so elevation keys off the Z loft
-# far more than the X toe-lift. Eased via _blade_elevation_blend in
-# _physics_process so it doesn't snap.
+# Blended in with the scroll-wheel loft level (half strength at LOW, full at
+# HIGH): the loft opens the face upward to "scoop" the puck, so elevation keys
+# off the Z loft far more than the X toe-lift. Eased via _blade_elevation_blend
+# in _physics_process so it doesn't snap.
 const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
 const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
 const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
@@ -34,15 +34,20 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
 # (blade on −X) has the top hand on the right shoulder (+X), and vice versa.
-# Baseline ~0.22 m (half of adult shoulder-to-shoulder breadth).
-@export var shoulder_offset: float = 0.22
-# Shoulder Y in upper-body-local space. Positions the arm's anchor high on
-# the torso (near the top of the upper body mesh) so the visible arm spans
-# from the shoulder down to the hand. Vertical drop from shoulder to hand at
-# rest = shoulder_height − hand_rest_y (currently 0.35 − (−0.17) = 0.52 m).
-# If rom_backhand_reach_max is raised, verify sqrt(drop² + reach²) stays
-# under upper_arm_length + forearm_length to avoid visible arm stretch.
-@export var shoulder_height: float = 0.35
+# Matches the ShoulderL/R ball origins in Scenes/Skater.tscn (keep in sync) —
+# just clear of the torso cylinder (radius ~0.20-0.22 at shoulder height) so
+# the arm bone roots at the deltoid ball instead of half-buried in the chest.
+@export var shoulder_offset: float = 0.24
+# Shoulder Y in upper-body-local space. Matches the ShoulderL/R ball centers
+# in the scene (keep in sync) so the drawn arm hangs from the visible
+# shoulder rather than a point 5 cm below it. Vertical drop from shoulder to
+# hand at rest = shoulder_height − hand_rest_y (currently 0.40 − (−0.10) =
+# 0.50 m). That drop is subtracted inside the derived backhand ROM
+# (SkaterController.apply_attributes: reach = sqrt(arm_eff² − drop²)), so the
+# hand can never be placed beyond the arm's length — raising this shrinks
+# flat-footed reach; the directional reach lean (SkaterPoseCoordinator) buys
+# it back by tilting the whole frame toward the target.
+@export var shoulder_height: float = 0.40
 # Blade length (heel to toe). The Blade Marker3D represents the heel (where
 # the shaft meets the blade); the blade mesh extends forward by this distance.
 # The puck plays at the contact point, which is blade_length * 0.5 forward
@@ -74,15 +79,21 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. ROM is derived from these
-# values in SkaterController.apply_attributes (rom_backhand = arm × 0.875,
-# rom_forehand = arm × 0.5625), so the IK margin is constant across sizes
-# regardless of how aggressively arm length scales.
-# Baseline lengths give one-arm = 0.75m, wingspan ≈ 1.94m on a 1.78m body
-# (~108% of height, matching real-life NHL anthropometry).
-@export var upper_arm_length: float = 0.37
-@export var forearm_length: float = 0.38
-# Pole direction for the elbow (upper-body local).
-@export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
+# values in SkaterController.apply_attributes: the forehand cap is anatomical
+# (cross-body reach, arm × 0.5625) and the backhand cap is chain-derived
+# (sqrt(arm_eff² − shoulder-to-hand drop²)), so no reachable hand target ever
+# exceeds the arm's length — the forearm never draws stretched.
+# Baseline lengths give one-arm = 0.70m, wingspan ≈ 1.84m on a 1.78m body
+# (~103% of height — arm span runs 100–104% of height in real athletes; the
+# segments split evenly because the distal bone ends at the gloved-fist
+# center, and elbow→fist really is about humerus-length).
+@export var upper_arm_length: float = 0.35
+@export var forearm_length: float = 0.35
+# Pole direction for the elbow (upper-body local). Mostly down with a real
+# outward flare (+X is away from the body; the sign flips per side in
+# update_arm_mesh) and a touch backward — a hockey top-hand elbow rides out
+# and slightly behind the chest line, not pinned against the ribs.
+@export var arm_pole_local: Vector3 = Vector3(0.55, -1.0, 0.1)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
 # actual length; X/Y control arm thickness.
 @export var arm_mesh_thickness: float = 0.11
@@ -97,6 +108,19 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # cuff sits flush against the hand sphere and visually swallows it; a small
 # pullback exposes the hand sphere as a distinct ball at the wrist.
 @export var cuff_wrist_offset: float = 0.05
+
+# ── Stick Flex Tuning (cosmetic) ──────────────────────────────────────────────
+# Vertex-shader shaft bow (Shaders/stick_flex.gdshader), driven entirely from
+# replicated fields (current_shot_state + shot_charge + carry side), so every
+# machine renders identical flex with no controller plumbing and no network
+# state. The shader displaces vertices BETWEEN the pinned endpoints — the
+# hand and blade anchors (gameplay) never move. Negative maxima flip the bow
+# side globally if a build reads inverted.
+@export var stick_flex_max_m: float = 0.07       # mid-shaft bow at full wrister charge
+@export var stick_flex_slap_m: float = 0.10      # contact-spike bow of the slapshot downswing
+@export var stick_flex_load_speed: float = 10.0  # how fast the bow tracks the charge
+@export var stick_whip_hz: float = 9.0           # release-whip oscillation frequency
+@export var stick_whip_damping: float = 14.0     # release-whip decay rate
 
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
@@ -197,6 +221,16 @@ var current_shot_state: int = 0
 # `current_shot_state` for freshness and on a non-zero length for "is this a
 # host-side read", so a stale value left after release is never trusted.
 var predicted_shot_velocity: Vector3 = Vector3.ZERO
+
+# ── Stick Flex Runtime State (see Stick Flex Tuning exports) ──────────────────
+const _STICK_FLEX_SEGMENTS: int = 12   # shaft subdivisions the bend shader needs
+const _SLAP_SPIKE_SECONDS: float = 0.1 # downswing load time before the whip
+var _stick_flex: float = 0.0           # smoothed signed load bow (metres)
+var _stick_whip_amp: float = 0.0       # release-whip starting amplitude (signed)
+var _stick_whip_t: float = -1.0        # seconds since whip start; <0 = idle
+var _slap_spike_t: float = -1.0        # seconds into the slap contact spike; <0 = idle
+var _flex_prev_state: int = 0
+var _flex_sent: float = 0.0            # last uniform written (dirty guard)
 # Resolves the skater's current team_id by deferring to the registry. Set by
 # PlayerRegistry on spawn so the goalie / VFX / other Skater-holding code can
 # query team affiliation without growing a cached field that has to be
@@ -215,9 +249,11 @@ func get_team_id() -> int:
 	return _team_id_resolver.call() as int
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _facing: Vector2 = Vector2.DOWN
-var is_elevated: bool = false
-# Eased 0→1 toward is_elevated; drives the extra blade toe-lift (see
-# _update_blade_elevation / _apply_blade_tilt).
+# Loft mode (0 flat / 1 low saucer / 2 high). Set each tick by the controller
+# from the input frame; replicated so remotes/AI read it directly.
+var elevation_level: int = 0
+# Eased 0→1 toward elevation_level/2 (half scoop at LOW, full at HIGH); drives
+# the extra blade toe-lift (see _update_blade_elevation / _apply_blade_tilt).
 var _blade_elevation_blend: float = 0.0
 # True when the blade is lifted off the ice — own stick-lift (Q held while not
 # carrying) or a forced pop from an opponent hooking under this stick. Set each
@@ -250,6 +286,10 @@ var shot_charge: float = 0.0
 var slapper_aim_dir: Vector3 = Vector3.ZERO
 var blade_world_velocity: Vector3 = Vector3.ZERO
 var _prev_blade_world_pos: Vector3 = Vector3.ZERO
+# Last known-finite body position, cached each tick before move_and_slide so the
+# non-finite guard (_sanitize_physics_state) can restore a sane position if some
+# upstream bug ever feeds NaN/Inf into the body. Seeded from the spawn position.
+var _last_finite_position: Vector3 = Vector3.ZERO
 var _prev_blade_contact: Vector3 = Vector3.ZERO
 var _last_wall_normal: Vector3 = Vector3.ZERO
 var _collision_cyl: CylinderShape3D = null
@@ -259,6 +299,13 @@ var _blade_area: Area3D = null
 var _slapper_zone_area: Area3D = null
 var _slapper_zone_sphere: SphereShape3D = null
 var _default_upper_body_y: float = 0.0
+var _default_lower_body_y: float = 0.0
+# Cosmetic vertical drop of the whole visible body (torso + hips) while in
+# the bent-knee skating stance, so the flexed legs keep the skates on the
+# ice. Driven by SkaterSkatingCoordinator; composes with the shot-block
+# crouch through _apply_body_height (the single writer of both body Ys).
+var _skating_crouch_drop: float = 0.0
+var _block_stance_active: bool = false
 # Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
 # Advanced by update_carry_side() each tick from the IK pipeline.
 var _carry_side: int = 0
@@ -293,6 +340,16 @@ func _ready() -> void:
 		col.shape = col.shape.duplicate()
 		_collision_cyl = col.shape as CylinderShape3D
 
+	# Stick-flex prep: the shaft BoxMesh is a scene sub-resource shared by
+	# every skater — duplicate it before subdividing (the flex shader needs
+	# vertices along the length to bend), same discipline as the collision
+	# shape above so instances don't share the mutation.
+	var shaft: BoxMesh = stick_mesh.mesh as BoxMesh
+	if shaft != null:
+		shaft = shaft.duplicate() as BoxMesh
+		shaft.subdivide_depth = _STICK_FLEX_SEGMENTS
+		stick_mesh.mesh = shaft
+
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
 		top_hand = Marker3D.new()
@@ -314,7 +371,9 @@ func _ready() -> void:
 	_position_hand_markers()
 
 	_prev_blade_world_pos = upper_body.to_global(blade.position)
+	_last_finite_position = global_position
 	_default_upper_body_y = upper_body.position.y
+	_default_lower_body_y = lower_body.position.y
 
 	collision_layer = Constants.LAYER_SKATER_BODIES
 	collision_mask  = Constants.MASK_SKATER
@@ -396,7 +455,7 @@ func _ready() -> void:
 	add_child(vfx)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	# Cosmetic mesh pass at render rate. The stick and arm meshes are pure
 	# write-only functions of the marker positions (top_hand, blade, shoulder,
 	# bottom_hand) that the physics-rate controllers and interpolators
@@ -409,6 +468,7 @@ func _process(_delta: float) -> void:
 	update_stick_mesh()
 	update_arm_mesh()
 	update_bottom_arm_mesh()
+	_update_stick_flex(delta)
 
 
 func _physics_process(delta: float) -> void:
@@ -418,6 +478,10 @@ func _physics_process(delta: float) -> void:
 	var blade_world_pos: Vector3 = upper_body.to_global(blade.position)
 	blade_world_velocity = (blade_world_pos - _prev_blade_world_pos) / delta
 	_prev_blade_world_pos = blade_world_pos
+	# Backstop: never hand a NaN/Inf velocity or position to Jolt — a non-finite
+	# value there is a hard, uncatchable native crash. This should never fire;
+	# when it does it logs the offending state so the upstream source is findable.
+	_sanitize_physics_state()
 	var vel_before: Vector3 = velocity
 	# Y is axis-locked (see _ready): move_and_slide leaves global_position.y
 	# untouched, so live prediction, reconcile replay, and host authority all
@@ -439,6 +503,25 @@ func _physics_process(delta: float) -> void:
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
 	_hud.update(delta)
+
+
+# Sanitizes the body's velocity/position to finite values right before the Jolt
+# step. A NaN/Inf reaching move_and_slide() crashes the engine natively (no
+# GDScript try/catch can recover it), so we clamp at the seam and log where it
+# came from. Cheap value-type checks — hot-path safe at 120 Hz × skaters; the
+# string-formatting cost only ever runs on the (should-never) failure branch.
+func _sanitize_physics_state() -> void:
+	if not velocity.is_finite():
+		push_error("Skater '%s': non-finite velocity %s before move_and_slide — zeroing (state=%d pos=%s)."
+				% [name, velocity, current_shot_state, global_position])
+		velocity = Vector3.ZERO
+	if global_position.is_finite():
+		_last_finite_position = global_position
+	else:
+		push_error("Skater '%s': non-finite position %s before move_and_slide — restoring %s."
+				% [name, global_position, _last_finite_position])
+		global_position = _last_finite_position
+		velocity = Vector3.ZERO
 
 
 func _resolve_player_collisions(vel_before: Vector3) -> void:
@@ -470,6 +553,9 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 			var effective_transfer: float = body_check_transfer * (other.body_check_brace_resistance if other.is_braced else 1.0)
 			var other_vel_before: Vector3 = other.velocity
 			var weight_ratio: float = weight / maxf(other.weight, 0.001)
+			# This delivered-impulse magnitude (approach × weight_ratio × effective_
+			# transfer) also drives the puck strip, reconstructed from impact_force in
+			# BodyCheckRules.puck_strip_impulse — keep the two in sync if this changes.
 			other.velocity -= normal * approach * weight_ratio * effective_transfer
 			var other_delta: Vector3 = other.velocity - other_vel_before
 			if other_delta.length_squared() > 0.0001:
@@ -518,6 +604,18 @@ func clamp_body_to_rink() -> void:
 # (free-play picker → free-play skater follows without a respawn). Safe
 # to call before _ready() — exits early if the markers haven't been
 # created yet.
+# Attribute-scaled shoulder anchor placement. Called from
+# SkaterController.apply_attributes BEFORE the ROM derivation reads
+# shoulder_height — the logical anchors mirror the visual shoulder-ball
+# positions the appearance pass computes from the same multipliers (y rides
+# height, x rides torso bulk), so the drawn arm and the IK stay rooted at
+# the same point on every build.
+func set_shoulder_anchor(offset: float, height: float) -> void:
+	shoulder_offset = offset
+	shoulder_height = height
+	_position_hand_markers()
+
+
 func _position_hand_markers() -> void:
 	if shoulder == null or top_hand == null or bottom_shoulder == null or bottom_hand == null:
 		return
@@ -552,11 +650,11 @@ func _apply_blade_tilt() -> void:
 	blade_mesh.transform.basis = rot.scaled(keep_scale)
 
 
-# Eases the elevation blend toward is_elevated each tick and re-tilts the blade
-# only while transitioning (move_toward lands exactly on the target, after which
-# the early-out stops the per-tick basis churn). Called from _physics_process.
+# Eases the elevation blend toward the loft level each tick and re-tilts the
+# blade only while transitioning (move_toward lands exactly on the target, after
+# which the early-out stops the per-tick basis churn). Called from _physics_process.
 func _update_blade_elevation(delta: float) -> void:
-	var target: float = 1.0 if is_elevated else 0.0
+	var target: float = float(elevation_level) * 0.5
 	if is_equal_approx(_blade_elevation_blend, target):
 		return
 	_blade_elevation_blend = move_toward(
@@ -653,6 +751,24 @@ func _resolve_leg_pivots() -> void:
 	_shin_l = lower_body.get_node_or_null("LegL/ShinL") as Node3D
 	_shin_r = lower_body.get_node_or_null("LegR/ShinR") as Node3D
 	_legs_resolved = true
+
+
+# Sets the skating-stance body drop (metres). The stance flexes hips/knees,
+# which shortens the legs' vertical span; lowering the torso AND the hips by
+# the deficit keeps the skates planted instead of floating. Cosmetic only —
+# the collision body and every gameplay read are unaffected; the blade IK
+# re-lands the blade at ice height from upper_body.global_position each tick.
+func set_skating_crouch_drop(drop: float) -> void:
+	if is_equal_approx(_skating_crouch_drop, drop):
+		return
+	_skating_crouch_drop = drop
+	_apply_body_height()
+
+
+func _apply_body_height() -> void:
+	var block_depth: float = block_crouch_depth if _block_stance_active else 0.0
+	upper_body.position.y = _default_upper_body_y - block_depth - _skating_crouch_drop
+	lower_body.position.y = _default_lower_body_y - _skating_crouch_drop
 
 
 # ── Blade ─────────────────────────────────────────────────────────────────────
@@ -913,6 +1029,75 @@ func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
 	stick_knob_mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
 
 
+# ── Stick Flex (cosmetic) ─────────────────────────────────────────────────────
+# Render-rate driver for the shaft-bow shader uniform. Load: the shaft bows
+# with wrister charge while aiming (side follows the carry face, so a
+# backhand load bows the other way). Release: the bow springs through
+# straight with a damped cosine oscillation — cos starts AT the loaded value,
+# so the whip is continuous at the release instant. Slapshot: straight
+# through the wind-up (real shafts load at CONTACT, not at the top of the
+# swing), then a quick contact spike at the start of the follow-through's
+# downswing that converts into the same whip. Every input is replicated
+# (current_shot_state, shot_charge, carry side), so local, bot, and remote
+# skaters render the identical flex with zero network additions.
+func _update_stick_flex(delta: float) -> void:
+	var state: int = current_shot_state
+	var side: float = (1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
+			* (-1.0 if is_left_handed else 1.0)
+	if state != _flex_prev_state:
+		if state == SkaterStateMachine.State.FOLLOW_THROUGH:
+			if _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
+					or _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK:
+				_slap_spike_t = 0.0
+			else:
+				# Wrister / quick release: whip from the loaded bow, with a
+				# minimum pop so uncharged snaps and passes still read.
+				var amp: float = _stick_flex
+				var min_pop: float = stick_flex_max_m * 0.35
+				if absf(amp) < min_pop:
+					amp = min_pop * side
+				_start_stick_whip(amp)
+		_flex_prev_state = state
+
+	var display: float
+	if _slap_spike_t >= 0.0:
+		# Downswing contact spike: ramp the bow in fast, then let it go.
+		_slap_spike_t += delta
+		if _slap_spike_t < _SLAP_SPIKE_SECONDS:
+			_stick_flex = stick_flex_slap_m * (_slap_spike_t / _SLAP_SPIKE_SECONDS) * side
+		else:
+			_start_stick_whip(_stick_flex)
+			_slap_spike_t = -1.0
+		display = _stick_flex
+	elif _stick_whip_t >= 0.0:
+		_stick_whip_t += delta
+		var envelope: float = exp(-stick_whip_damping * _stick_whip_t)
+		display = _stick_whip_amp * envelope * cos(TAU * stick_whip_hz * _stick_whip_t)
+		if absf(_stick_whip_amp) * envelope < 0.002:
+			_stick_whip_t = -1.0
+			display = 0.0
+		_stick_flex = display
+	else:
+		var target: float = 0.0
+		if state == SkaterStateMachine.State.WRISTER_AIM:
+			target = shot_charge * stick_flex_max_m * side
+		_stick_flex = lerpf(_stick_flex, target, minf(stick_flex_load_speed * delta, 1.0))
+		display = _stick_flex
+
+	if is_equal_approx(display, _flex_sent):
+		return
+	_flex_sent = display
+	var mat: ShaderMaterial = stick_mesh.material_override as ShaderMaterial
+	if mat != null:
+		mat.set_shader_parameter(&"flex_m", display)
+
+
+func _start_stick_whip(amp: float) -> void:
+	_stick_whip_amp = amp
+	_stick_whip_t = 0.0
+	_stick_flex = amp
+
+
 # ── Arm Mesh ──────────────────────────────────────────────────────────────────
 func update_arm_mesh() -> void:
 	var shoulder_w: Vector3 = upper_body.to_global(shoulder.position)
@@ -1080,7 +1265,8 @@ func set_ghost(ghost: bool) -> void:
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
 func set_block_stance(active: bool) -> void:
 	_body_block_sphere.radius = block_body_radius if active else body_block_radius
-	upper_body.position.y = _default_upper_body_y - block_crouch_depth if active else _default_upper_body_y
+	_block_stance_active = active
+	_apply_body_height()
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
 
 

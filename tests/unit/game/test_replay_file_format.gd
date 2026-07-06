@@ -110,6 +110,58 @@ func test_partial_trailing_record_is_skipped() -> void:
 	assert_true(result.truncated)
 
 
+func test_read_meta_returns_header_and_footer_without_frames() -> void:
+	var writer := ReplayFileWriter.new()
+	var header := {"game_id": "meta-1", "roster": [{"player_name": "Alice"}]}
+	assert_true(writer.open(TEST_PATH, header))
+	var payload := PackedByteArray()
+	payload.resize(250)
+	for i: int in 50:
+		writer.enqueue_frame(float(i) * 0.033, payload)
+	writer.close_async({"final_score_home": 3, "final_score_away": 2,
+			"period_scores": [[1, 2], [0, 2]]})
+
+	var meta: Dictionary = ReplayFileReader.read_meta(TEST_PATH)
+	assert_true(meta.ok, "read_meta failed: %s" % meta.error)
+	assert_false(meta.truncated)
+	assert_eq(meta.header.game_id, "meta-1")
+	assert_eq((meta.header.roster as Array)[0].player_name, "Alice")
+	assert_eq(int(meta.footer.final_score_home), 3)
+	assert_eq(int(meta.footer.final_score_away), 2)
+	assert_eq((meta.footer.period_scores as Array).size(), 2)
+	# read_meta carries no frames key — it never reads the stream.
+	assert_false(meta.has("frames"))
+
+
+func test_read_meta_on_truncated_file_yields_header_no_footer() -> void:
+	# A recording with no END_OF_RECORDS (crash) still lists: header valid,
+	# footer empty, truncated true.
+	var writer := ReplayFileWriter.new()
+	assert_true(writer.open(TEST_PATH, {"game_id": "trunc-meta"}))
+	writer.enqueue_frame(0.0, PackedByteArray([1, 2, 3]))
+	writer.close_async({"final_score_home": 1, "final_score_away": 0})
+
+	# Chop the file just past the last frame payload so the sentinel/footer are gone.
+	var f: FileAccess = FileAccess.open(TEST_PATH, FileAccess.READ)
+	var head_len: int = ReplayFileWriter.MAGIC.size() + 1 + 4
+	f.seek(ReplayFileWriter.MAGIC.size() + 1)
+	var header_size: int = f.get_32()
+	f.seek(head_len + header_size)
+	var frame_len: int = f.get_32()
+	var cut: int = f.get_position() + frame_len
+	f.close()
+	var bytes: PackedByteArray = FileAccess.get_file_as_bytes(TEST_PATH).slice(0, cut)
+	var w: FileAccess = FileAccess.open(TEST_PATH, FileAccess.WRITE)
+	w.store_buffer(bytes)
+	w.close()
+
+	var meta: Dictionary = ReplayFileReader.read_meta(TEST_PATH)
+	assert_true(meta.ok)
+	assert_true(meta.truncated)
+	assert_eq(meta.header.game_id, "trunc-meta")
+	assert_eq((meta.footer as Dictionary).size(), 0)
+
+
 func test_magic_mismatch_returns_error() -> void:
 	var f: FileAccess = FileAccess.open(TEST_PATH, FileAccess.WRITE)
 	f.store_buffer("NOT_MREPLAY".to_utf8_buffer())

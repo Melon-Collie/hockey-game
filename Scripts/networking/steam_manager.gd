@@ -57,6 +57,17 @@ func _ready() -> void:
 	_try_init()
 
 
+# Leave the lobby on process quit. Autoloads free in REVERSE registration
+# order, so by the time NetworkManager (registered earlier) tears down, this
+# singleton is already gone and its guarded leave_lobby call no-ops — the
+# quit-path leave has to happen here, while the Steam GDExtension is still
+# loaded. An explicit leave tells the other members immediately instead of
+# making them wait out Steam's disconnect timeout. Idempotent with the
+# session-teardown paths that already funnel through NetworkManager._close().
+func _exit_tree() -> void:
+	leave_lobby()
+
+
 func _try_init() -> void:
 	# A build exported without the GDExtension (e.g. headless CI) has no Steam
 	# singleton at all — bail before referencing it.
@@ -87,6 +98,12 @@ func _try_init() -> void:
 	is_available = true
 	steam_id = Steam.getSteamID()
 	persona_name = Steam.getPersonaName()
+	# Prime the local achievement/stat cache from Steam's servers so the first
+	# setAchievement of the session persists. (GodotSteam 4.x dropped the old
+	# requestCurrentStats(); requesting our own SteamID is the current-user form.)
+	# The result lands asynchronously via run_callbacks; we don't block on it —
+	# unlocks only happen at game-over, long after this returns.
+	Steam.requestUserStats(steam_id)
 	# Ground-truth diagnostic: the App ID Steam actually initialised this process
 	# under (independent of the name Steam shows in the UI). For the Playtest
 	# build launched via Steam this must be 4893650, not the main app 4892600.
@@ -321,6 +338,76 @@ func cloud_write(filename: String, data: PackedByteArray) -> bool:
 # can adopt the freshly synced-down cloud copy mid-session.
 func _on_local_file_changed() -> void:
 	cloud_files_changed.emit()
+
+
+# ── Achievements / Stats (User Stats) ────────────────────────────────────────
+# The thin Steam-side surface for achievements. Conditions live in the domain
+# (Achievements / AchievementRules); AchievementService decides what to unlock
+# and calls in here. Every call is a no-op when Steam is unavailable, so the
+# whole feature is inert in headless CI and non-Steam builds.
+#
+# Each achievement's `api_name` MUST exist + be published in the Steamworks
+# partner site, or setAchievement silently does nothing. setAchievement is
+# idempotent: re-unlocking an already-earned achievement won't re-toast, so
+# callers can report freely without tracking prior state.
+
+# Unlock an achievement by its Steamworks API Name and flush to Steam. storeStats
+# is what actually triggers the overlay toast and the server write.
+func unlock_achievement(api_name: String) -> void:
+	if not is_available or api_name.is_empty():
+		return
+	if not Steam.setAchievement(api_name):
+		push_warning("SteamManager: setAchievement('%s') failed (not defined in Steamworks?)" % api_name)
+		return
+	Steam.storeStats()
+
+
+# True if the local user has already earned `api_name`. False when Steam is
+# unavailable or the achievement isn't defined. Lets callers skip redundant work.
+func is_achievement_unlocked(api_name: String) -> bool:
+	if not is_available or api_name.is_empty():
+		return false
+	var result: Dictionary = Steam.getAchievement(api_name)
+	return bool(result.get("achieved", false))
+
+
+# Dev-only: clears every registered achievement and resets stats so a tester can
+# re-earn them. Guarded to debug builds — never reachable in a shipped release.
+func reset_all_achievements() -> void:
+	if not is_available or not OS.is_debug_build():
+		return
+	for entry in Achievements.ALL:
+		Steam.clearAchievement(String(entry["id"]))
+	for entry in SteamStats.ALL:
+		Steam.setStatInt(String(entry["id"]), 0)
+	Steam.storeStats()
+
+
+# Steam User Stats (integer). These are per-user career counters stored on
+# Steam's servers, synced across the player's machines — the mirror that backs
+# the career-threshold achievements without a reachable backend. SteamStatRecorder
+# owns the read-modify-write; this is the thin transport. Each `name` must be a
+# published INT stat in Steamworks, or get/set silently no-op.
+func get_stat_int(name: String) -> int:
+	if not is_available or name.is_empty():
+		return 0
+	return Steam.getStatInt(name)
+
+
+# Buffers a stat value locally; nothing persists until store_stats() flushes the
+# whole batch to Steam's servers.
+func set_stat_int(name: String, value: int) -> void:
+	if not is_available or name.is_empty():
+		return
+	Steam.setStatInt(name, value)
+
+
+# Flushes buffered stat/achievement writes to Steam. One call covers a batch of
+# set_stat_int / unlock — call it once after a group of changes.
+func store_stats() -> void:
+	if not is_available:
+		return
+	Steam.storeStats()
 
 
 # ── Teardown ────────────────────────────────────────────────────────────────

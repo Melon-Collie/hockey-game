@@ -46,9 +46,26 @@ class_name AIRoleAnchor
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
+	# Man-on-threat: when the brain assigns us a specific opponent, cover
+	# HIM (deny the carrier's feed to him) rather than minimizing the global
+	# max over all opps — that's what kept two defenders stacking on the
+	# single most dangerous shooter. Falls through to the legacy all-opp
+	# minimax when unassigned (no brain / loose puck / not a backline peer).
+	var man_pid: int = ctx.assigned_threat_peer
+	if man_pid != -1 and ctx.snapshot != null \
+			and ctx.snapshot.skater_states.has(man_pid):
+		var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
+		if carrier_pos.is_finite():
+			# Anticipate: cover where the man is cutting, not his current spot.
+			var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
+			var man_pos: Vector3 = AIRoleHelpers.lead_threat(
+					man.position, man.velocity, ctx.defensive_anticipation_scale)
+			d.target_position = AIRoleHelpers.cover_man_target(ctx, man_pos, carrier_pos)
+			return d
+
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
-	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
+	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states, true)
 	if opp_positions.is_empty():
 		# No opps to defend against.
 		d.target_position = ctx.self_pos

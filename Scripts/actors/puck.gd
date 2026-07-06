@@ -13,7 +13,7 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var max_speed: float = 38.0
 @export var reattach_cooldown: float = 0.5
 @export var nudge_cooldown: float = 0.30  # short re-grab denial after a self nudge tap
-@export var ice_height: float = 0.0175
+@export var ice_height: float = 0.0175  # = Puck.tscn cylinder half-height (0.035/2); disc bottom rests on y=0
 @export var pickup_max_speed: float = 8.0
 # Closing-speed threshold for catch-vs-deflect. Set above charged-pass speed
 # (~19 m/s) so any pass is receivable at ANY blade angle; the alignment bonus
@@ -38,15 +38,30 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var deflect_speed_ref: float = 30.0         # speed (m/s) at which both falloffs bottom out
 @export var deflect_cooldown: float = 0.3
 @export var deflect_elevation_angle: float = 35.0
-@export var poke_strip_speed: float = 6.0
+# Poke exit speed now scales with the blade-contest momentum (see
+# PuckCollisionRules.poke_strip_velocity): a soft poke floors at min, a hard sweep
+# squirts the puck up to max. Old behavior was a flat 6.0 regardless of how hard
+# the poke was.
+@export var poke_strip_min_speed: float = 3.0
+@export var poke_strip_max_speed: float = 9.0
 @export var poke_carrier_vel_blend: float = 0.5
 @export var poke_checker_cooldown: float = 0.1
-@export var body_check_strip_threshold: float = 6.0  # weight × approach_speed needed to strip
+# Delivered victim-impulse (BodyCheckRules.puck_strip_impulse: attacker transfer ×
+# both masses × closing speed) needed to knock the puck off the carrier. 2.7 keeps
+# the pre-Physical baseline strip point (~6 m/s closing, medium build) while now
+# letting Physical/mass move it: an enforcer strips at lower closing speed, a
+# low-Physical hit needs much more.
+@export var body_check_strip_threshold: float = 2.7
 @export var body_check_puck_speed: float = 5.0
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
-@export var hit_pickup_cooldown_threshold: float = 6.0    # weight × approach needed to apply hit pickup cooldown
+@export var hit_pickup_cooldown_threshold: float = 2.7    # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
 @export var body_block_cooldown: float = 0.1
+# Vertical clamp: the puck's Y is capped at ice_height + max_height in
+# _integrate_forces. Must stay BELOW the rink's collision top
+# (HockeyRink.COLLISION_OVERGLASS_TOP, 3.2 m) — otherwise an elevated deflection
+# that pegs this clamp sits above the boards and escapes the rink. If you raise
+# this, raise COLLISION_OVERGLASS_TOP to keep the margin.
 @export var max_height: float = 3.0
 
 var carrier: Skater = null
@@ -66,6 +81,9 @@ var _is_server: bool = false
 var _pending_reset: bool = false
 var _pending_reset_xz: Vector2 = Vector2.ZERO
 var _clamp_at_goal_line: bool = false
+# Last known-finite puck position, cached each physics step so the non-finite
+# guard in _integrate_forces can restore a sane position rather than crash Jolt.
+var _last_finite_position: Vector3 = Vector3.ZERO
 # Full velocity stored by release() for every shot, applied by _integrate_forces.
 # Jolt does not preserve linear_velocity set on a frozen body when it activates
 # as dynamic — state.linear_velocity on the first dynamic step is zero. Storing
@@ -93,10 +111,17 @@ func _ready() -> void:
 	contact_monitor = true
 	max_contacts_reported = 4
 	body_entered.connect(_on_body_entered)
+	_last_finite_position = global_position
 
 	var vfx := PuckVFX.new()
 	vfx.name = "VFX"
 	add_child(vfx)
+
+	# Ice-pinned tracking shadow so the small disc stays readable and airborne
+	# pucks show their landing spot. Cosmetic; renders on every peer.
+	var shadow := PuckShadow.new()
+	shadow.name = "Shadow"
+	add_child(shadow)
 
 # ── Server Mode ───────────────────────────────────────────────────────────────
 func set_server_mode(is_server: bool) -> void:
@@ -186,9 +211,12 @@ func apply_blade_deflect(skater: Skater) -> void:
 			deflect_speed_retain, deflect_speed_retain_min,
 			deflect_max_angle_deg, deflect_max_angle_deg_min, deflect_speed_ref)
 
-	if skater.is_elevated:
+	# Deliberate-deflect tips ride the loft mode too: half the tip angle at
+	# LOW, full at HIGH — same scaling as the blade-scoop visual.
+	if skater.elevation_level > 0:
 		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(
-				new_vel.normalized(), deflect_elevation_angle)
+				new_vel.normalized(),
+				deflect_elevation_angle * float(skater.elevation_level) * 0.5)
 		new_vel = new_dir * new_vel.length()
 
 	linear_velocity = new_vel
@@ -223,7 +251,15 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 		return
 	if checker.is_ghost or victim.is_ghost:
 		return
-	if impact_force < hit_pickup_cooldown_threshold:
+	# Gate on the impulse actually DELIVERED to the victim (folds in the attacker's
+	# Physical/transfer, both skaters' mass, and the closing speed) rather than the
+	# raw attacker-weight × speed impact_force — so the same hit dislodges the puck
+	# for an enforcer but not for a low-Physical player. Matches the stagger's
+	# hardness measure; see BodyCheckRules.puck_strip_impulse.
+	var strip_impulse: float = BodyCheckRules.puck_strip_impulse(
+			impact_force, checker.body_check_transfer,
+			victim.weight, victim.body_check_brace_resistance, victim.is_braced)
+	if strip_impulse < hit_pickup_cooldown_threshold:
 		return
 	# Hard hits temporarily deny the victim a pickup, even if they weren't carrying.
 	_set_cooldown(victim, hit_pickup_cooldown)
@@ -231,7 +267,7 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 		return
 	if pickup_locked:
 		return
-	if impact_force < body_check_strip_threshold:
+	if strip_impulse < body_check_strip_threshold:
 		return
 	_body_check_strip(checker, hit_direction)
 
@@ -254,7 +290,8 @@ func apply_poke_check(checker_skater: Skater) -> void:
 			ex_carrier.global_position,
 			checker_skater.global_position,
 			poke_carrier_vel_blend,
-			poke_strip_speed,
+			poke_strip_min_speed,
+			poke_strip_max_speed,
 			fallback_dir)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	_set_cooldown(checker_skater, poke_checker_cooldown)
@@ -293,7 +330,8 @@ func apply_goalie_poke_check(blade_pos: Vector3, blade_vel: Vector3) -> void:
 			ex_carrier.global_position,
 			blade_pos,
 			poke_carrier_vel_blend,
-			poke_strip_speed,
+			poke_strip_min_speed,
+			poke_strip_max_speed,
 			fallback_dir)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_stripped.emit(ex_carrier)
@@ -362,6 +400,11 @@ func drop() -> void:
 	var ex_carrier: Skater = carrier
 	clear_carrier()
 	linear_velocity = Vector3.ZERO
+	# A shot fired the same tick as a stoppage could leave a release velocity
+	# queued (release() runs before the physics step); clear it so the dropped
+	# puck doesn't inherit it and rocket off on the next _integrate_forces.
+	_pending_elevation_vel = Vector3.ZERO
+	_pending_elevation = false
 	if ex_carrier != null:
 		_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_released.emit()
@@ -369,9 +412,14 @@ func drop() -> void:
 func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 	carrier = null
 	freeze = false  # ensure _integrate_forces is called on the next step
+	sleeping = false  # a slept body skips _integrate_forces, so it would ignore the teleport
 	_cooldown_timers.clear()
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
+	# Discard any release velocity queued this frame — a faceoff / whistle reset
+	# must not inherit a shot fired on the same tick (would launch the dot puck).
+	_pending_elevation_vel = Vector3.ZERO
+	_pending_elevation = false
 	_pending_reset = true
 	_pending_reset_xz = at_xz
 	puck_released.emit()
@@ -395,6 +443,18 @@ func fire_stick_lift_vfx() -> void:
 	if vfx != null:
 		vfx.fire_stick_lift_burst()
 
+# Ice-chip puff for a board hit; PuckVFX gates on speed and coalesces grinds.
+func fire_board_impact_vfx(speed: float) -> void:
+	var vfx := get_node_or_null("VFX") as PuckVFX
+	if vfx != null:
+		vfx.fire_board_impact_burst(speed)
+
+# Spark snap for a shot off the post; PuckVFX skips soft touches.
+func fire_post_ping_vfx(speed: float) -> void:
+	var vfx := get_node_or_null("VFX") as PuckVFX
+	if vfx != null:
+		vfx.fire_post_ping_burst(speed)
+
 func _on_body_entered(body: Node3D) -> void:
 	if carrier != null:
 		return
@@ -405,7 +465,11 @@ func _on_body_entered(body: Node3D) -> void:
 	elif body.get_parent() is HockeyGoal:
 		if linear_velocity.length() >= 1.0:
 			puck_hit_goal_body.emit()
-	elif body is StaticBody3D and linear_velocity.length() >= 1.0:
+	elif body is HockeyRink and linear_velocity.length() >= 1.0:
+		# Only the rink's perimeter boards (HockeyRink's own collider) fire the
+		# board-hit thud / chip VFX / RPC. The ice surface is a SEPARATE
+		# StaticBody3D child, so the old `body is StaticBody3D` also fired on every
+		# grounded release and every landing — a board hit at the wrong spot.
 		puck_hit_boards.emit()
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
@@ -417,6 +481,21 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		state.angular_velocity = Vector3.ZERO
 		_pending_reset_xz = Vector2.ZERO
 		return
+	# Backstop: a non-finite velocity or position handed to Jolt is a hard native
+	# crash (the max_speed clamp below can't catch it — NaN > max_speed is false).
+	# Sanitize at the seam and log the source. Should never fire.
+	if not state.linear_velocity.is_finite():
+		push_error("Puck: non-finite velocity %s in _integrate_forces — zeroing." % state.linear_velocity)
+		state.linear_velocity = Vector3.ZERO
+	if state.transform.origin.is_finite():
+		_last_finite_position = state.transform.origin
+	else:
+		push_error("Puck: non-finite position %s — restoring %s." % [state.transform.origin, _last_finite_position])
+		var fixed: Transform3D = state.transform
+		fixed.origin = _last_finite_position
+		state.transform = fixed
+		state.linear_velocity = Vector3.ZERO
+		state.angular_velocity = Vector3.ZERO
 	if not _pending_elevation_vel.is_zero_approx():
 		# Write the full velocity vector directly into Jolt's physics state.
 		# Jolt zeros state.linear_velocity on the first dynamic step after a

@@ -42,19 +42,26 @@ static func predict(pos: Vector3, vel: Vector3,
 			v += accel * dt
 		p += v * dt
 
-		# Board interaction. With a bounce factor, REFLECT perpendicular
-		# velocity (puck caroms off boards). Without, CLAMP position to
-		# the rink (skater approximation — no reflection).
+		# Board interaction. With a bounce factor, REFLECT velocity off the boards
+		# (puck caroms). Without, CLAMP position to the rink (skater approximation
+		# — no reflection). Both use clamp_to_rink_inner so the rounded corners are
+		# honoured: the old bounce path reflected off an axis-aligned RECTANGLE,
+		# giving predicted pucks up to ~3.5 m of phantom corner ice and caroms off
+		# walls that aren't there. Reflecting about the inward normal at the contact
+		# point reduces to the exact old `v.x = -v.x·bounce` on a straight wall and
+		# reflects radially in the corners.
+		var clamped_xz: Vector2 = GameRules.clamp_to_rink_inner(Vector2(p.x, p.z))
 		if bounce_factor > 0.0:
-			if absf(p.x) > GameRules.INNER_HALF_WIDTH:
-				p.x = signf(p.x) * GameRules.INNER_HALF_WIDTH
-				v.x = -v.x * bounce_factor
-			if absf(p.z) > GameRules.INNER_HALF_LENGTH:
-				p.z = signf(p.z) * GameRules.INNER_HALF_LENGTH
-				v.z = -v.z * bounce_factor
-		else:
-			var clamped_xz: Vector2 = GameRules.clamp_to_rink_inner(Vector2(p.x, p.z))
-			p = Vector3(clamped_xz.x, p.y, clamped_xz.y)
+			var outward := Vector2(p.x - clamped_xz.x, p.z - clamped_xz.y)
+			if outward.length_squared() > 1e-9:
+				var n := outward.normalized()
+				var v_xz := Vector2(v.x, v.z)
+				var vn: float = v_xz.dot(n)
+				if vn > 0.0:  # moving outward into the boards
+					v_xz -= (1.0 + bounce_factor) * vn * n
+					v.x = v_xz.x
+					v.z = v_xz.y
+		p = Vector3(clamped_xz.x, p.y, clamped_xz.y)
 
 		# Coulomb friction — decelerate XZ speed opposite to its
 		# direction, clamping at zero so a slow puck eventually stops

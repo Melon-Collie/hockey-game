@@ -111,7 +111,7 @@ static func _try_reactive_decision(ctx: RoleContext) -> RoleDecision:
 	d.target_position = Vector3(path_x_at_my_z, 0.0, ctx.self_pos.z)
 	d.aim_world_pos = Vector3(0.0, 0.0, opp_goal_z)
 	d.has_aim_override = true
-	# Elevated check: read the most-recent shooter's `is_elevated` flag
+	# Elevated check: read the most-recent shooter's loft level
 	# directly from their network state (cleaner than projecting puck y
 	# velocity through gravity math). Closest teammate to the puck is the
 	# proxy for "shooter" since once the puck is in flight there's no
@@ -123,9 +123,9 @@ static func _try_reactive_decision(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
-# Returns the is_elevated flag of the most recent likely shooter on
-# our team. Used to detect elevated shots without doing gravity math
-# on the puck. We pick the closest teammate to the puck as the proxy
+# True when the most recent likely shooter on our team released with any
+# loft (level > 0). Used to detect airborne shots without doing gravity
+# math on the puck. We pick the closest teammate to the puck as the proxy
 # — once the puck is in flight there's no carrier, but the bot that
 # just released is typically still nearby.
 static func _last_shooter_is_elevated(ctx: RoleContext) -> bool:
@@ -146,7 +146,7 @@ static func _last_shooter_is_elevated(ctx: RoleContext) -> bool:
 			best_pid = pid
 	if best_pid == 0:
 		return false
-	return ctx.snapshot.skater_states[best_pid].is_elevated
+	return ctx.snapshot.skater_states[best_pid].elevation_level > 0
 
 
 # ── Positioning (no incoming shot) ──────────────────────────────────────────

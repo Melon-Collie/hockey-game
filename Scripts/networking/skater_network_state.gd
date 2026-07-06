@@ -12,11 +12,10 @@ var shot_state: int = 0
 var shot_charge: float = 0.0
 var last_processed_host_timestamp: float = 0.0
 var is_ghost: bool = false
-# True when the skater is in elevated-shot mode (PlayerInput
-# elevation_up held). Replicated so AI off-puck bots (e.g., FINISHER)
-# can read teammate flags directly instead of inferring from puck
-# physics.
-var is_elevated: bool = false
+# Loft mode (0 flat / 1 low saucer / 2 high), from the skater's input frame.
+# Replicated so AI off-puck bots (e.g., FINISHER) can read teammate loft
+# directly instead of inferring from puck physics.
+var elevation_level: int = 0
 # True when the blade is lifted off the ice (own Q held, or involuntarily
 # popped up by an opponent's stick lift). Effective value: the receiver only
 # needs the resolved "is the blade up" answer for rendering and the
@@ -56,7 +55,7 @@ func to_array() -> Array:
 		shot_charge,
 		facing_angular_velocity,
 		upper_body_angular_velocity,
-		is_elevated,
+		elevation_level,
 		blade_up,
 		stamina,
 		sprint_locked,
@@ -74,7 +73,7 @@ func copy_from(s: SkaterNetworkState) -> void:
 	upper_body_angular_velocity = s.upper_body_angular_velocity
 	last_processed_host_timestamp = s.last_processed_host_timestamp
 	is_ghost = s.is_ghost
-	is_elevated = s.is_elevated
+	elevation_level = s.elevation_level
 	blade_up = s.blade_up
 	shot_state = s.shot_state
 	shot_charge = s.shot_charge
@@ -100,7 +99,7 @@ static func from_array(data: Array) -> SkaterNetworkState:
 	state.facing_angular_velocity = data[10]
 	state.upper_body_angular_velocity = data[11]
 	if data.size() > 12:
-		state.is_elevated = data[12]
+		state.elevation_level = data[12]
 	if data.size() > 13:
 		state.blade_up = data[13]
 	if data.size() > 15:

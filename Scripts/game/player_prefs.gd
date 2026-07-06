@@ -67,6 +67,18 @@ const CAMERA_TILT_DEFAULT: float = 75.0
 const CAMERA_TILT_MIN: float = 73.0
 const CAMERA_TILT_MAX: float = 77.0
 
+# Camera framing mode. DYNAMIC is the broadcast-style cam that frames the
+# midpoint of player + puck and biases toward the attacking zone. LOCKED pins
+# the center on the player and only zooms out to keep an in-play puck in frame
+# (used as the puckless fallback too). GameCamera reads camera_mode live each
+# tick. Index matches the OptionsPanel dropdown.
+const CAMERA_MODE_DYNAMIC: int = 0
+const CAMERA_MODE_LOCKED: int = 1
+const CAMERA_MODE_LABELS: Array[String] = [
+	"Dynamic",
+	"Locked",
+]
+
 # Color-grade presets baked into the runtime 3D LUT alongside the gamma curve.
 # Index matches OptionButton ordering in OptionsPanel.
 const COLOR_GRADE_NEUTRAL: int = 0
@@ -136,7 +148,7 @@ const AA_LABELS: Array[String] = [
 
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "sprint", "brake",
-	"shoot", "slapshot", "block", "elevation_up", "elevation_down",
+	"shoot", "quick_shot", "slapshot", "block", "elevation_up", "elevation_down",
 	"stick_lift",
 ]
 
@@ -157,7 +169,7 @@ var attr_shot:     int = PlayerAttributes.LEVEL_MEDIUM
 var master_volume: float = 0.5
 var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
-var crowd_volume: float = 1.0
+var arena_volume: float = 1.0
 var master_muted: bool = false
 # Silence the game while another window has OS focus (alt-tabbed away). On by
 # default; streamers / second-monitor players can turn it off. SoundManager
@@ -180,6 +192,7 @@ var color_grade_preset: int = COLOR_GRADE_BROADCAST
 var gi_mode: int = GI_MODE_OFF
 var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
+var puck_shadow_enabled: bool = true
 var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
@@ -229,6 +242,14 @@ var self_beacon_mode: int = BEACON_MODE_SMART
 # Bot difficulty. Index matches BotSkillProfile.Difficulty and the OptionButton
 # ordering wherever the menu exposes it.
 const BOT_DIFFICULTY_LABELS: Array[String] = [
+	"Easy",
+	"Normal",
+	"Hard",
+]
+# Goalie difficulty. Index matches GoalieSkillProfile.Difficulty and the
+# OptionButton ordering wherever the menu exposes it (Easy → Normal → Hard).
+const GOALIE_DIFFICULTY_LABELS: Array[String] = [
+	"Easy",
 	"Normal",
 	"Hard",
 ]
@@ -240,7 +261,15 @@ var screen_shake: bool = true
 var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
+var camera_mode: int = CAMERA_MODE_DYNAMIC  # GameCamera reads this each tick (see CAMERA_MODE_*)
 var bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL  # see BotSkillProfile
+# Goalie difficulty for HOSTED / lobby matches (set in the lobby settings panel).
+var goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL  # see GoalieSkillProfile
+# Goalie difficulty for FREE PLAY — a separate knob from the hosted one, since
+# free play is the personal sandbox / effective main menu (set in the options
+# panel). Defaults to Easy so a newcomer's first puck-drop is the forgiving
+# goalie; they opt up from there. GameManager branches on is_free_play_mode.
+var freeplay_goalie_difficulty: int = GoalieSkillProfile.Difficulty.EASY
 const FOV_MIN: float = 40.0
 const FOV_MAX: float = 90.0
 const CAMERA_DISTANCE_MIN: float = 0.6
@@ -297,25 +326,6 @@ func _ready() -> void:
 	_sync_from_cloud.call_deferred()
 
 
-# A canonical-format UUID derived deterministically from the player's SteamID64,
-# so the backend rows that key on a uuid column stay valid AND stable across
-# machines now that identity comes from Steam (the random per-install uuid and
-# its sidecar backup are gone — Steam Cloud is the cross-machine backup, and
-# career stats already key on steam_id). Falls back to an ephemeral random uuid
-# in offline / dev sessions where no Steam id exists.
-func career_uuid() -> String:
-	var sid: int = SteamManager.steam_id
-	if sid == 0:
-		return generate_uuid()
-	# Left-pad the 64-bit id to 32 hex digits and shape it 8-4-4-4-12. Postgres'
-	# uuid type validates the dash layout, not RFC version/variant bits, so this
-	# is an accepted, stable identifier.
-	var h: String = "0000000000000000" + ("%016x" % sid)
-	return "%s-%s-%s-%s-%s" % [
-		h.substr(0, 8), h.substr(8, 4), h.substr(12, 4), h.substr(16, 4), h.substr(20, 12),
-	]
-
-
 func save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("player", "name", player_name)
@@ -334,7 +344,7 @@ func save() -> void:
 	cfg.set_value("audio", "master_volume", master_volume)
 	cfg.set_value("audio", "sfx_volume", sfx_volume)
 	cfg.set_value("audio", "ui_volume", ui_volume)
-	cfg.set_value("audio", "crowd_volume", crowd_volume)
+	cfg.set_value("audio", "arena_volume", arena_volume)
 	cfg.set_value("audio", "master_muted", master_muted)
 	cfg.set_value("audio", "mute_when_unfocused", mute_when_unfocused)
 	cfg.set_value("video", "window_mode", window_mode)
@@ -349,6 +359,7 @@ func save() -> void:
 	cfg.set_value("video", "gi_mode", gi_mode)
 	cfg.set_value("video", "crowd_density", crowd_density)
 	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
+	cfg.set_value("video", "puck_shadow_enabled", puck_shadow_enabled)
 	cfg.set_value("video", "scaling_3d_mode", scaling_3d_mode)
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
@@ -368,7 +379,16 @@ func save() -> void:
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
+	cfg.set_value("game", "camera_mode", camera_mode)
 	cfg.set_value("game", "bot_difficulty", bot_difficulty)
+	# Marks bot_difficulty as already on the 3-tier (Easy/Normal/Hard) scale so
+	# _load() doesn't re-run the 2-tier → 3-tier remap on a re-saved file.
+	cfg.set_value("game", "bot_difficulty_scale_version", 1)
+	cfg.set_value("game", "goalie_difficulty", goalie_difficulty)
+	cfg.set_value("game", "freeplay_goalie_difficulty", freeplay_goalie_difficulty)
+	# Marks goalie_difficulty as already on the 3-tier (Easy/Normal/Hard) scale so
+	# _load() doesn't re-run the 2-tier → 3-tier remap on a re-saved file.
+	cfg.set_value("game", "goalie_difficulty_scale_version", 1)
 	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
@@ -484,9 +504,9 @@ func apply_audio() -> void:
 	var ui_bus := AudioServer.get_bus_index("UI")
 	if ui_bus != -1:
 		AudioServer.set_bus_volume_db(ui_bus, linear_to_db(maxf(ui_volume, 0.0001)))
-	var crowd_bus := AudioServer.get_bus_index("Crowd")
-	if crowd_bus != -1:
-		AudioServer.set_bus_volume_db(crowd_bus, linear_to_db(maxf(crowd_volume, 0.0001)))
+	var arena_bus := AudioServer.get_bus_index("Arena")
+	if arena_bus != -1:
+		AudioServer.set_bus_volume_db(arena_bus, linear_to_db(maxf(arena_volume, 0.0001)))
 
 func apply_input() -> void:
 	# CONFINED keeps the cursor visible (the blade is aimed by the on-screen
@@ -838,10 +858,15 @@ func _load() -> void:
 				sz = _migrate_legacy_level(int(cfg.get_value("player", "attr_size",     2)))
 				sk = _migrate_legacy_level(int(cfg.get_value("player", "attr_strength", 2)))
 			_migrate_four_to_six(sp, ag, sz, sk)
+		# One choke point: whichever branch ran above, the resulting build must be
+		# a legal point-buy spread before anything reads it (free play, hosting,
+		# the picker). Legacy migration and hand-edited cfgs can both exceed BUDGET.
+		_enforce_attr_budget()
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 0.5), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
-		crowd_volume = clampf(cfg.get_value("audio", "crowd_volume", 1.0), 0.0, 1.0)
+		# Renamed from "crowd_volume"; fall back to the old key so existing saves keep their level.
+		arena_volume = clampf(cfg.get_value("audio", "arena_volume", cfg.get_value("audio", "crowd_volume", 1.0)), 0.0, 1.0)
 		master_muted = cfg.get_value("audio", "master_muted", false)
 		mute_when_unfocused = cfg.get_value("audio", "mute_when_unfocused", true)
 		window_mode = clampi(int(cfg.get_value("video", "window_mode", WINDOW_MODE_BORDERLESS)), 0, WINDOW_MODE_LABELS.size() - 1)
@@ -857,6 +882,7 @@ func _load() -> void:
 		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
+		puck_shadow_enabled = cfg.get_value("video", "puck_shadow_enabled", true)
 		scaling_3d_mode = clamp(cfg.get_value("video", "scaling_3d_mode", SCALING_3D_BILINEAR), 0, SCALING_3D_LABELS.size() - 1)
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
@@ -880,7 +906,28 @@ func _load() -> void:
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
-		bot_difficulty = clampi(int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL)), 0, BOT_DIFFICULTY_LABELS.size() - 1)
+		camera_mode = clampi(int(cfg.get_value("game", "camera_mode", CAMERA_MODE_DYNAMIC)), 0, CAMERA_MODE_LABELS.size() - 1)
+		bot_difficulty = int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL))
+		# Easy was inserted at index 0, shifting the old 2-tier values up one
+		# (old 0=Normal → new 1=Normal, old 1=Hard → new 2=Hard). Remap once, but
+		# only a value actually persisted under the old scale (has the key, no
+		# version marker) — mirrors the goalie_difficulty remap above so a config
+		# predating bot_difficulty keeps the new default instead of bumping to Hard.
+		if cfg.has_section_key("game", "bot_difficulty") \
+				and int(cfg.get_value("game", "bot_difficulty_scale_version", 0)) < 1:
+			bot_difficulty += 1
+		bot_difficulty = clampi(bot_difficulty, 0, BOT_DIFFICULTY_LABELS.size() - 1)
+		goalie_difficulty = int(cfg.get_value("game", "goalie_difficulty", GoalieSkillProfile.Difficulty.NORMAL))
+		# Easy was inserted at index 0, shifting the old 2-tier values up one
+		# (old 0=Normal → new 1=Normal, old 1=Hard → new 2=Hard). Remap once, but
+		# only a value that was actually persisted under the old scale (has the key,
+		# no version marker) — a config predating goalie_difficulty keeps the new
+		# default rather than being spuriously bumped to Hard.
+		if cfg.has_section_key("game", "goalie_difficulty") \
+				and int(cfg.get_value("game", "goalie_difficulty_scale_version", 0)) < 1:
+			goalie_difficulty += 1
+		goalie_difficulty = clampi(goalie_difficulty, 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
+		freeplay_goalie_difficulty = clampi(int(cfg.get_value("game", "freeplay_goalie_difficulty", GoalieSkillProfile.Difficulty.EASY)), 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
 		share_gameplay_stats = cfg.get_value("game", "share_gameplay_stats", true)
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
@@ -907,6 +954,13 @@ func _load() -> void:
 
 
 func get_player_attributes() -> PlayerAttributes:
+	# Mirror the host-side joiner validation (NetworkManager.request_join): a build
+	# that somehow exceeds the point-buy budget falls back to all-medium rather
+	# than handing the sim an illegal spread. _load()/_enforce_attr_budget already
+	# trims, so this is a defensive net covering any other mutation path.
+	if not PlayerAttributes.is_within_budget(
+			attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot):
+		return PlayerAttributes.all_medium()
 	return PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot)
 
 
@@ -932,9 +986,9 @@ func _migrate_legacy_level(old: int) -> int:
 
 # Splits a legacy four-attribute build (Speed/Agility/Size/Skill on the 1..5
 # scale) into the six-attribute scale. Skill is the scoring heir → Shot; Hands
-# and Physical are new axes seeded at medium, then trimmed (Hands first, then
-# Physical) so the migrated build fits the new BUDGET without disturbing the
-# player's expressed identity. Persisted as version 3 on the next save().
+# and Physical are new axes seeded at medium. The result can exceed BUDGET (a
+# 5/5/5/5 legacy build → 5/5/3/5/3/5 = 26); _enforce_attr_budget() (called once
+# after the load/migrate branch) trims it. Persisted as version 3 on next save().
 func _migrate_four_to_six(sp: int, ag: int, sz: int, sk: int) -> void:
 	attr_speed    = sp
 	attr_agility  = ag
@@ -942,12 +996,18 @@ func _migrate_four_to_six(sp: int, ag: int, sz: int, sk: int) -> void:
 	attr_shot     = sk
 	attr_hands    = PlayerAttributes.LEVEL_MEDIUM
 	attr_physical = PlayerAttributes.LEVEL_MEDIUM
-	while attr_speed + attr_agility + attr_hands + attr_size + attr_physical + attr_shot > PlayerAttributes.BUDGET \
-			and (attr_hands > PlayerAttributes.LEVEL_MIN or attr_physical > PlayerAttributes.LEVEL_MIN):
-		if attr_hands > PlayerAttributes.LEVEL_MIN:
-			attr_hands -= 1
-		else:
-			attr_physical -= 1
+
+
+# Guarantee the loaded/migrated build respects the point-buy budget. Per-level
+# clamping bounds each axis but not the sum, so a legacy 4→6 split (two new axes
+# seeded at medium) or a hand-edited / corrupt cfg can exceed BUDGET — which,
+# unchecked, let an offline or HOSTING player carry an over-budget build (the
+# joiner gate in NetworkManager only validates REMOTE peers). Trim deterministically,
+# shedding the non-identity axes (Hands=2, Physical=4) first.
+func _enforce_attr_budget() -> void:
+	set_player_attributes(PlayerAttributes.trimmed_to_budget(
+			attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot,
+			PackedInt32Array([2, 4, 0, 1, 3, 5])))
 
 
 func is_tutorial_complete(id: String) -> bool:
