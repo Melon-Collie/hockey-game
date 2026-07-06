@@ -5,22 +5,23 @@ extends RefCounted
 # host (receive) sides because body-check physics is local-authoritative — only
 # the local skater's body fires `body_checked_player`. The host can't directly
 # observe the contact, so it accepts a claim from the client and rewinds state
-# to validate the gates (impulse threshold, attacker-doesn't-have-puck,
-# victim-is-puck-relevant) before crediting via HitTracker.
+# to gather the contact facts (impulse, who carried the puck) before routing to
+# HitTracker.on_contact, which owns the crediting rules (HitRules).
 #
 # Flow:
 #   notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
-#     host  : runs HitRules.is_valid_hit against live state, credits directly
+#     host  : reads live carrier state, routes to HitTracker.on_contact
 #     client: pre-filters (impulse, local-carry), throttles per (hitter,victim),
-#             sends NetworkManager.send_hit_claim. The host re-validates the
-#             rule gates from rewound snapshots on receipt.
+#             sends NetworkManager.send_hit_claim. The host re-derives the
+#             contact facts from rewound snapshots on receipt.
 #   receive_claim(hitter, victim, host_ts, interp_delay_ms) [host]
 #     → reject if claim stale, peers unknown, or rewound positions out of range
 #     → rewind hitter to host_ts + INPUT_LEAD_SEC (their own predicted body)
 #       and victim to host_ts - interp_delay (the remote body they saw)
-#     → re-derive impulse from rewound velocities along hitter→victim normal
-#     → reject if HitRules.is_valid_hit fails
-#     → otherwise credit via HitTracker.on_hit
+#     → re-derive impulse from rewound velocities along hitter→victim normal,
+#       scaled by the hitter's weight (the same magnitude the host-observed
+#       path validates)
+#     → route to HitTracker.on_contact (HitRules classifies + credits)
 #
 # Throttle: body_checked_player fires every physics tick during sustained contact;
 # unthrottled claim RPCs flood the host. The throttle window matches
@@ -28,7 +29,8 @@ extends RefCounted
 #
 # `receive_claim` is host-only by contract — caller gates on NetworkManager.is_host.
 # `notify_local_hit` does its own host/client branch since that's the whole point.
-# Emits no signals; HitTracker.hit_credited fires when credit lands.
+# Emits no signals; HitTracker.impact_landed / hit_credited fire when the
+# contact / stat land.
 
 const MAX_CLAIM_AGE_S: float = 0.2
 const MAX_RANGE_M: float = 2.0
@@ -36,7 +38,6 @@ const MAX_RANGE_M: float = 2.0
 var _registry: PlayerRegistry = null
 var _state_buffer: StateBufferManager = null
 var _hit_tracker: HitTracker = null
-var _puck_getter: Callable = Callable()             # () -> Puck
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 
 var _last_claim_sent: Dictionary[String, float] = {}  # client only: "hitter:victim" -> time
@@ -46,12 +47,10 @@ func setup(
 		registry: PlayerRegistry,
 		state_buffer: StateBufferManager,
 		hit_tracker: HitTracker,
-		puck_getter: Callable,
 		puck_controller_getter: Callable) -> void:
 	_registry = registry
 	_state_buffer = state_buffer
 	_hit_tracker = hit_tracker
-	_puck_getter = puck_getter
 	_puck_controller_getter = puck_controller_getter
 
 
@@ -66,18 +65,12 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 	if victim_peer_id == -1:
 		return
 	if NetworkManager.is_host:
-		if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
+		if not _puck_controller_getter.is_valid():
 			return
-		var puck: Puck = _puck_getter.call() as Puck
 		var puck_ctrl: PuckController = _puck_controller_getter.call() as PuckController
-		if puck == null or puck_ctrl == null:
+		if puck_ctrl == null:
 			return
 		var puck_carrier: int = puck_ctrl.get_carrier_peer_id()
-		var attacker_has_puck: bool = (puck_carrier == hitter_peer_id)
-		var victim_relevant: bool = HitRules.is_victim_puck_relevant(
-				victim_peer_id, puck_carrier, victim.global_position, puck.global_position)
-		if not HitRules.is_valid_hit(impulse_magnitude, attacker_has_puck, victim_relevant):
-			return
 		# Direction for the impact burst — hitter → victim on the horizontal plane,
 		# the same vector the lag-comp claim path derives from rewound positions.
 		var hitter_rec: PlayerRecord = _registry.get_record(hitter_peer_id)
@@ -86,8 +79,9 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 			hit_dir = victim.global_position - hitter_rec.skater.global_position
 			hit_dir.y = 0.0
 			hit_dir = hit_dir.normalized()
-		_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, _registry.resolve_team_id(victim),
-				impulse_magnitude, hit_dir)
+		_hit_tracker.on_contact(hitter_peer_id, victim_peer_id,
+				_registry.resolve_team_id(victim), impulse_magnitude, hit_dir,
+				puck_carrier == hitter_peer_id, puck_carrier == victim_peer_id)
 		return
 	# Client: pre-filter on impulse and local puck state so we don't spam the
 	# host with claims for trivial bumps or while the local player is carrying
@@ -135,19 +129,17 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 		return
 	if hitter_snap.position.distance_to(victim_snap.position) > MAX_RANGE_M:
 		return
-	# Puck pulled from the victim's rewind snapshot — when the attacker isn't
-	# the carrier, the puck they saw was interpolated at host_time - interp_delay
-	# alongside the victim. When the attacker IS the carrier (which the
-	# is_valid_hit gate rejects anyway), the puck would be at their blade in
-	# the hitter snapshot, but the rejection comes from the carrier_peer_id
-	# check that doesn't depend on the puck's position, so either snapshot works.
+	# Puck carrier read from the victim's rewind snapshot — that's the world the
+	# attacker saw when they committed to the check. The tracker's grace path
+	# (HitRules.classify_contact) covers the skew: if the host already saw the
+	# victim lose the puck by the time this claim arrives, the live possession
+	# loss wins over the snapshot's stale carrier flag.
 	var puck_snap: PuckNetworkState = victim_snapshot.puck_state
 	if puck_snap == null:
 		return
 	# Re-derive impulse from rewound velocities along the hitter→victim normal.
 	# Each velocity is read from its own rewound snapshot so the closing speed
 	# reflects what the attacker actually saw, not a single mid-time slice.
-	# Skater weight is uniform (1.0) so impulse ≈ approach.
 	var to_victim: Vector3 = victim_snap.position - hitter_snap.position
 	to_victim.y = 0.0
 	if to_victim.length_squared() < 0.0001:
@@ -156,14 +148,14 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	var rel_vel: Vector3 = hitter_snap.velocity - victim_snap.velocity
 	rel_vel.y = 0.0
 	var impulse: float = rel_vel.dot(normal)
-	var attacker_has_puck: bool = (puck_snap.carrier_peer_id == hitter_peer_id)
-	var victim_relevant: bool = HitRules.is_victim_puck_relevant(
-			victim_peer_id, puck_snap.carrier_peer_id,
-			victim_snap.position, puck_snap.position)
-	if not HitRules.is_valid_hit(impulse, attacker_has_puck, victim_relevant):
-		return
-	# `impulse` is the rewound closing speed; scale by the hitter's weight to match
-	# the VFX-scale impact force the host path passes (body_checked_player carries
-	# weight * approach). `normal` is the hitter → victim direction for the burst.
+	# Scale by the hitter's weight BEFORE the tracker validates so the claim
+	# path meets the same weight-scaled bar as the host-observed path
+	# (body_checked_player carries weight × approach) — validating the raw
+	# closing speed here made remote hitters need more closing speed than
+	# hosted ones. Weight spreads ±18% with Size. `normal` is the
+	# hitter → victim direction for the burst.
 	var hit_force: float = impulse * (hitter_rec.skater.weight if hitter_rec.skater != null else 1.0)
-	_hit_tracker.on_hit(hitter_peer_id, victim_peer_id, victim_rec.team.team_id, hit_force, normal)
+	_hit_tracker.on_contact(hitter_peer_id, victim_peer_id, victim_rec.team.team_id,
+			hit_force, normal,
+			puck_snap.carrier_peer_id == hitter_peer_id,
+			puck_snap.carrier_peer_id == victim_peer_id)

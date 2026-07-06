@@ -8,10 +8,13 @@ extends RefCounted
 # Flow:
 #   on_pickup(peer_id)              → records carrier, clears any pending shot
 #   on_deflection(peer_id)          → records toucher in carrier history, keeps pending shot alive
-#   on_shot_started(peer_id)        → arms pending-shot timer
-#   on_goalie_touch(defending_tid)  → confirms SOG if eligible
+#   on_shot_started(peer_id)        → arms pending-shot timer (on net until told otherwise)
+#   note_trajectory(on_net)         → live ballistic read (ShotOnNetRules) after
+#                                     the release and after each deflection
+#   on_post_hit()                   → pipes = a miss; pending shot no longer on net
+#   on_goalie_touch(defending_tid)  → confirms SOG if eligible AND the shot was on net
 #   on_goal_confirmed(scorer_id)    → confirms SOG (non-own-goal only)
-#   on_block(blocker_peer_id)       → credits shots_blocked if defender intercepts a pending shot
+#   on_block(blocker_peer_id)       → credits shots_blocked if defender intercepts a pending ON-NET shot
 #   credit_assists(scorer_id)       → reads recent_carriers for 2 assists
 #   tick(delta)                     → clears pending after timeout
 #
@@ -31,14 +34,25 @@ const SHOT_ON_GOAL_TIMEOUT: float = 5.0
 # seconds later isn't a "blocked shot." Blocks get their own short window so only
 # an interception of the shot itself counts.
 const BLOCK_WINDOW: float = 0.85
-const MAX_RECENT_CARRIERS: int = 3
+# Deep enough that the scorer + two assist candidates survive even when
+# opposing deflections (which credit_assists skips, NHL-style) occupy slots.
+const MAX_RECENT_CARRIERS: int = 5
 const MAX_ASSISTS: int = 2
 
+# Parallel arrays: the recent puck touchers (most recent first) and whether
+# each touch was full POSSESSION (pickup) or a mere deflection. The distinction
+# drives the NHL assist chain — opposing possession breaks it, an opposing
+# touch doesn't.
 var _recent_carriers: Array[int] = []
+var _recent_carrier_possession: Array[bool] = []
 var _shooter_peer_id: int = -1
 var _pending_remaining: float = -1.0
 var _block_window_remaining: float = -1.0
 var _shot_on_goal_counted: bool = false
+# Whether the pending shot's current trajectory would enter the net (NHL: only
+# such a puck stopped by the goalie is a shot on goal). Armed true at release,
+# then kept current by note_trajectory / on_post_hit.
+var _pending_on_net: bool = false
 
 var _registry: PlayerRegistry = null
 var _state_machine: GameStateMachine = null
@@ -53,10 +67,7 @@ func setup(registry: PlayerRegistry, state_machine: GameStateMachine) -> void:
 
 func on_pickup(peer_id: int) -> void:
 	clear_pending()
-	if _recent_carriers.is_empty() or _recent_carriers[0] != peer_id:
-		_recent_carriers.push_front(peer_id)
-		if _recent_carriers.size() > MAX_RECENT_CARRIERS:
-			_recent_carriers.resize(MAX_RECENT_CARRIERS)
+	_record_toucher(peer_id, true)
 
 
 # Called when a loose puck is deflected or body-blocked by a skater. Records the
@@ -65,10 +76,20 @@ func on_pickup(peer_id: int) -> void:
 func on_deflection(peer_id: int) -> void:
 	if peer_id == -1:
 		return
-	if _recent_carriers.is_empty() or _recent_carriers[0] != peer_id:
-		_recent_carriers.push_front(peer_id)
-		if _recent_carriers.size() > MAX_RECENT_CARRIERS:
-			_recent_carriers.resize(MAX_RECENT_CARRIERS)
+	_record_toucher(peer_id, false)
+
+
+func _record_toucher(peer_id: int, possession: bool) -> void:
+	if not _recent_carriers.is_empty() and _recent_carriers[0] == peer_id:
+		# Consecutive touches by the same player collapse into one entry; a
+		# pickup upgrades an earlier deflection to full possession.
+		_recent_carrier_possession[0] = _recent_carrier_possession[0] or possession
+		return
+	_recent_carriers.push_front(peer_id)
+	_recent_carrier_possession.push_front(possession)
+	if _recent_carriers.size() > MAX_RECENT_CARRIERS:
+		_recent_carriers.resize(MAX_RECENT_CARRIERS)
+		_recent_carrier_possession.resize(MAX_RECENT_CARRIERS)
 
 
 # Call when a carrier releases the puck as a normal shot. The carrier was
@@ -80,6 +101,30 @@ func on_shot_started(shooter_peer_id: int) -> void:
 	_pending_remaining = SHOT_ON_GOAL_TIMEOUT
 	_block_window_remaining = BLOCK_WINDOW
 	_shot_on_goal_counted = false
+	# Assume on net until the caller's ballistic read (note_trajectory, run
+	# right after the authoritative release) says otherwise — a missed read
+	# should over-credit, not swallow saves.
+	_pending_on_net = true
+
+
+# Updates the pending shot's on-net read (computed by the caller from the live
+# puck trajectory — ShotOnNetRules). Called after the authoritative release and
+# again after every mid-flight deflection, so a wide shot tipped on net (or an
+# on-net shot tipped wide) re-reads correctly. No-op without a pending shot.
+func note_trajectory(on_net: bool) -> void:
+	if _shooter_peer_id == -1:
+		return
+	_pending_on_net = on_net
+
+
+# A shot off the pipes is a MISS in NHL scoring — it was never "on goal", so a
+# goalie touch on the ricochet must not confirm a SOG. The pending shot stays
+# alive for goal attribution: a carom that still crosses the line counts via
+# on_goal_confirmed, which credits unconditionally.
+func on_post_hit() -> void:
+	if _shooter_peer_id == -1:
+		return
+	_pending_on_net = false
 
 
 # Called when a skater (blade or body) intercepts a loose puck while a shot is
@@ -96,6 +141,10 @@ func on_block(blocker_peer_id: int) -> bool:
 	# Only a touch within the short post-release window is a block — a later loose
 	# puck touch is just a takeaway/rebound, not a blocked shot.
 	if _block_window_remaining <= 0.0:
+		return false
+	# NHL: a blocked SHOT must have been directed on net — intercepting a wide
+	# cross-crease pass or an errant shot is a takeaway, not a blocked shot.
+	if not _pending_on_net:
 		return false
 	var shooter_team: int = _registry.resolve_team_id_for_peer(_shooter_peer_id)
 	var blocker_team: int = _registry.resolve_team_id_for_peer(blocker_peer_id)
@@ -121,7 +170,23 @@ func on_goalie_touch(defending_team_id: int) -> void:
 	var shooter_team: int = _registry.resolve_team_id_for_peer(_shooter_peer_id)
 	if shooter_team == defending_team_id:
 		return  # own-goal attempt — not a shot on their own net
-	_confirm(_shooter_peer_id)
+	# NHL: only a puck that would have gone in counts when the goalie stops it.
+	# The goalie playing a wide pass, corralling an errant shot, or covering a
+	# post ricochet is not a save of a shot on goal.
+	if not _pending_on_net:
+		return
+	# NHL tip attribution: a shot redirected by an attacking teammate is the
+	# TIPPER's shot on goal (matching goal attribution, which credits the last
+	# toucher when a tip goes in). A deflection off a defender stays the
+	# shooter's shot. The only way the front of the carrier history differs
+	# from the shooter mid-flight is an on_deflection touch — a pickup would
+	# have cleared the pending shot.
+	var credit_pid: int = _shooter_peer_id
+	var last_toucher: int = get_last_toucher()
+	if last_toucher != -1 and last_toucher != _shooter_peer_id \
+			and _registry.resolve_team_id_for_peer(last_toucher) == shooter_team:
+		credit_pid = last_toucher
+	_confirm(credit_pid)
 	# Keep _shooter_peer_id for post-save goal attribution; stop the timeout.
 	_pending_remaining = -1.0
 
@@ -132,7 +197,10 @@ func on_goal_confirmed(scorer_peer_id: int) -> void:
 
 
 # Returns up to 2 assist names for same-team recent carriers preceding scorer.
-# Mutates PlayerStats.assists on each credited player.
+# Mutates PlayerStats.assists on each credited player. NHL chain rule: an
+# opposing POSSESSION (pickup) breaks the chain, but a mere opposing touch
+# (a pass deflecting off a defender's blade or body) does not — the passer
+# still earns the assist.
 func credit_assists(scorer_peer_id: int) -> Array[String]:
 	var names: Array[String] = []
 	var scorer_team_id: int = _registry.resolve_team_id_for_peer(scorer_peer_id)
@@ -146,7 +214,9 @@ func credit_assists(scorer_peer_id: int) -> Array[String]:
 		if record == null:
 			continue
 		if record.team.team_id != scorer_team_id:
-			break
+			if _recent_carrier_possession[i]:
+				break  # opponent possessed the puck — chain broken
+			continue  # opponent only touched it — skip, keep walking
 		record.stats.assists += 1
 		names.append(record.display_name())
 		if names.size() >= MAX_ASSISTS:
@@ -185,12 +255,14 @@ func clear_pending() -> void:
 	_pending_remaining = -1.0
 	_block_window_remaining = -1.0
 	_shot_on_goal_counted = false
+	_pending_on_net = false
 
 
 # Called on full game reset. Clears carrier history plus pending state, and
 # zeroes the team shots counters (emitting the change signal).
 func reset_all() -> void:
 	_recent_carriers.clear()
+	_recent_carrier_possession.clear()
 	clear_pending()
 	if _state_machine != null:
 		_state_machine.team_shots[0] = 0
@@ -201,6 +273,7 @@ func reset_all() -> void:
 # Called on scene exit.
 func clear_state() -> void:
 	_recent_carriers.clear()
+	_recent_carrier_possession.clear()
 	clear_pending()
 
 
