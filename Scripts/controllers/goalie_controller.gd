@@ -2179,10 +2179,12 @@ func fill_state(s: GoalieNetworkState) -> void:
 	var lp_rot: Vector3 = goalie.get_left_pad_rotation()
 	s.left_pad_pitch = lp_rot.x
 	s.left_pad_roll = lp_rot.z
+	s.left_pad_yaw = lp_rot.y
 	s.right_pad_offset = goalie.get_right_pad_position()
 	var rp_rot: Vector3 = goalie.get_right_pad_rotation()
 	s.right_pad_pitch = rp_rot.x
 	s.right_pad_roll = rp_rot.z
+	s.right_pad_yaw = rp_rot.y
 	s.glove_offset = goalie.get_glove_position()
 	var g_rot: Vector3 = goalie.get_glove_rotation()
 	s.glove_yaw = g_rot.y
@@ -2270,9 +2272,11 @@ func _lerp_goalie_state(from_s: GoalieNetworkState, to_s: GoalieNetworkState, t:
 	r.left_pad_offset = from_s.left_pad_offset.lerp(to_s.left_pad_offset, t)
 	r.left_pad_pitch = lerp_angle(from_s.left_pad_pitch, to_s.left_pad_pitch, t)
 	r.left_pad_roll = lerp_angle(from_s.left_pad_roll, to_s.left_pad_roll, t)
+	r.left_pad_yaw = lerp_angle(from_s.left_pad_yaw, to_s.left_pad_yaw, t)
 	r.right_pad_offset = from_s.right_pad_offset.lerp(to_s.right_pad_offset, t)
 	r.right_pad_pitch = lerp_angle(from_s.right_pad_pitch, to_s.right_pad_pitch, t)
 	r.right_pad_roll = lerp_angle(from_s.right_pad_roll, to_s.right_pad_roll, t)
+	r.right_pad_yaw = lerp_angle(from_s.right_pad_yaw, to_s.right_pad_yaw, t)
 	r.glove_offset = from_s.glove_offset.lerp(to_s.glove_offset, t)
 	r.glove_yaw = lerp_angle(from_s.glove_yaw, to_s.glove_yaw, t)
 	r.glove_pitch = lerp_angle(from_s.glove_pitch, to_s.glove_pitch, t)

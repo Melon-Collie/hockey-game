@@ -49,7 +49,10 @@ const VERSION: String = "dev"
 #     elevation_level 2 bits at [3..4], ghost/blade_up/sprint_locked shifted).
 # v12: stats packet grew — PlayerStats.to_array() 5 -> 9 (hits_taken, takeaways,
 #      giveaways, faceoff_wins), so STATS_PLAYER_RECORD_SIZE 6 -> 10.
-const PROTOCOL_VERSION: int = 12
+# v13: goalie block 41 -> 43 B — pad yaw (the rebound-steering toe-out) joins
+#      the wire so remote clients render the angled pads the host's rebound
+#      physics actually plays off.
+const PROTOCOL_VERSION: int = 13
 
 
 func _ready() -> void:

@@ -12,10 +12,10 @@ extends RefCounted
 #      u16 ws_sequence, u32 host_capture_time (0.1ms units), u8 num_skaters
 #      [u32 peer_id, skater_bytes(39), u8 queue_depth] × num_skaters
 #      puck_bytes(13)
-#      u8 num_goalies, [goalie_bytes(41)] × num_goalies
+#      u8 num_goalies, [goalie_bytes(43)] × num_goalies
 #      u8 score0, u8 score1, u8 phase, u8 period, u16 time_remaining
 #
-#    Total for 6 players + 2 goalies: 373 bytes — stays in a single packet, well
+#    Total for 6 players + 2 goalies: 377 bytes — stays in a single packet, well
 #    under Steam's ~1200-byte unreliable cap. This matters: Steam (unlike ENet)
 #    does NOT fragment unreliable messages, so an oversized snapshot would be
 #    dropped at send rather than split across datagrams.
@@ -29,11 +29,12 @@ extends RefCounted
 #                      flags u8 (shot_state[2:0]+elevation_level[4:3]+ghost[5]+blade_up[6]+sprint_locked[7]),
 #                      shot_charge u8, stamina u8, stagger_timer u8@0.01s
 #      Puck    (13 B): pos s16/s16/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
-#      Goalie  (41 B): root (12 B) + pose (29 B). Root:
+#      Goalie  (43 B): root (12 B) + pose (31 B). Root:
 #                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
 #                      vel_x/z s16@0.02m/s.
 #                      Pose: body_pitch/roll s8@π/127; left_pad offset (s8×3@1cm)
-#                      + pitch/roll s8@π/127; right_pad same; glove offset s16×3
+#                      + pitch/roll/yaw s8@π/127 (yaw = rebound-steering toe-out,
+#                      v13); right_pad same; glove offset s16×3
 #                      + yaw/pitch s8@π/127; blocker same; head_yaw s8@π/127.
 #                      Stick rides the blocker socket (rigid IRL attachment),
 #                      so no separate stick fields on the wire. The broadcast
@@ -60,7 +61,7 @@ signal queue_depth_feedback(depth: int)
 const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + f32 host_capture_time (4) + u8 num_skaters (1)
 const SKATER_BLOCK_SIZE: int = 44  # u32 peer_id (4) + 39B skater state + u8 queue_depth (1)
 const PUCK_BLOCK_SIZE: int = 13    # 12B pos+vel + 1B carrier_idx
-const GOALIE_BLOCK_SIZE: int = 41  # 12 root + 29 pose (glove/blocker offsets are s16-wide)
+const GOALIE_BLOCK_SIZE: int = 43  # 12 root + 31 pose (glove/blocker offsets are s16-wide)
 const GAME_STATE_BLOCK_SIZE: int = 6  # 4×u8 + u16 time_remaining
 const STATS_PLAYER_RECORD_SIZE: int = 10  # peer_id + PlayerStats.to_array() (9)
 
@@ -131,7 +132,7 @@ func encode_world_state() -> PackedByteArray:
 		if idx >= 0:
 			carrier_idx = idx
 	b.append(carrier_idx)
-	# Goalies: u8 count + n × GOALIE_BLOCK_SIZE (41B)
+	# Goalies: u8 count + n × GOALIE_BLOCK_SIZE (43B)
 	b.append(goalie_controllers.size())
 	for gc: GoalieController in goalie_controllers:
 		b.append_array(_encode_goalie_quantized(_state_buffer.latest_goalie_state(gc.team_id)))
@@ -493,14 +494,14 @@ static func _decode_puck_quantized(b: PackedByteArray) -> PuckNetworkState:
 	return s
 
 
-# Goalie: 41 bytes — 12 root + 29 pose. See top-of-file layout comment.
+# Goalie: 43 bytes — 12 root + 31 pose. See top-of-file layout comment.
 # Root offsets:   pos_x(0..1) pos_z(2..3) rot_y(4..5) state(6) fho(7) vel_x(8..9) vel_z(10..11)
 # Pose offsets:   body_pitch(12) body_roll(13)
-#                 left_pad_offset(14..16) left_pad_pitch(17) left_pad_roll(18)
-#                 right_pad_offset(19..21) right_pad_pitch(22) right_pad_roll(23)
-#                 glove_offset s16(24..29) glove_yaw(30) glove_pitch(31)
-#                 blocker_offset s16(32..37) blocker_yaw(38) blocker_pitch(39)
-#                 head_yaw(40)
+#                 left_pad_offset(14..16) left_pad_pitch(17) left_pad_roll(18) left_pad_yaw(19)
+#                 right_pad_offset(20..22) right_pad_pitch(23) right_pad_roll(24) right_pad_yaw(25)
+#                 glove_offset s16(26..31) glove_yaw(32) glove_pitch(33)
+#                 blocker_offset s16(34..39) blocker_yaw(40) blocker_pitch(41)
+#                 head_yaw(42)
 # Pad offsets: s8 @1cm (±1.27m, ample near the ice). Glove/blocker offsets: s16
 # @1cm (±327m) — their Y reach (react_hand_y_max 1.55m) exceeds the s8 range.
 # Angle quantization:  s8 @π/127 (~1.43° precision, full ±π range).
@@ -527,9 +528,11 @@ static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
 	o = _encode_offset(b, o, s.left_pad_offset)
 	b.encode_s8(o, _quant_angle(s.left_pad_pitch)); o += 1
 	b.encode_s8(o, _quant_angle(s.left_pad_roll)); o += 1
+	b.encode_s8(o, _quant_angle(s.left_pad_yaw)); o += 1
 	o = _encode_offset(b, o, s.right_pad_offset)
 	b.encode_s8(o, _quant_angle(s.right_pad_pitch)); o += 1
 	b.encode_s8(o, _quant_angle(s.right_pad_roll)); o += 1
+	b.encode_s8(o, _quant_angle(s.right_pad_yaw)); o += 1
 	# Glove/blocker offsets use the WIDE (s16) encoding: their Y reach goes to
 	# react_hand_y_max (1.55 m), above the s8 ±1.27 m range, so above-crossbar
 	# reaches clipped ~28 cm low on clients. Pads stay s8 (they never leave the ice).
@@ -562,9 +565,11 @@ static func _decode_goalie_quantized(b: PackedByteArray) -> GoalieNetworkState:
 	s.left_pad_offset = _decode_offset(b, o); o += 3
 	s.left_pad_pitch = _dequant_angle(b.decode_s8(o)); o += 1
 	s.left_pad_roll = _dequant_angle(b.decode_s8(o)); o += 1
+	s.left_pad_yaw = _dequant_angle(b.decode_s8(o)); o += 1
 	s.right_pad_offset = _decode_offset(b, o); o += 3
 	s.right_pad_pitch = _dequant_angle(b.decode_s8(o)); o += 1
 	s.right_pad_roll = _dequant_angle(b.decode_s8(o)); o += 1
+	s.right_pad_yaw = _dequant_angle(b.decode_s8(o)); o += 1
 	s.glove_offset = _decode_offset_wide(b, o); o += 6
 	s.glove_yaw = _dequant_angle(b.decode_s8(o)); o += 1
 	s.glove_pitch = _dequant_angle(b.decode_s8(o)); o += 1

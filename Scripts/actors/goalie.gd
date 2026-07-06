@@ -180,7 +180,9 @@ func get_blade_world_position() -> Vector3:
 # straight onto the scene nodes. Skips the body_config_builder entirely.
 # Rotations come in radians (matching the wire format); axes we don't carry on
 # the wire (body yaw, blocker/glove roll) are left intact so whatever was last
-# set survives.
+# set survives. Pad yaw (the rebound-steering toe-out) IS carried as of v13 —
+# before that, remote clients rendered square pads whose rebounds appeared to
+# kick toward the corners for no visible reason.
 func apply_network_pose(state: GoalieNetworkState) -> void:
 	# Body + head positions are state-dependent (the pose builder hardcodes
 	# different y-heights per state — body 0.40 in butterfly, 1.22 standing
@@ -193,9 +195,9 @@ func apply_network_pose(state: GoalieNetworkState) -> void:
 	_head.position = GoalieBodyConfigBuilder.resting_head_position_for_state(state.state_enum)
 	_head.rotation = Vector3(_head.rotation.x, state.head_yaw, _head.rotation.z)
 	_left_pad.position = state.left_pad_offset
-	_left_pad.rotation = Vector3(state.left_pad_pitch, _left_pad.rotation.y, state.left_pad_roll)
+	_left_pad.rotation = Vector3(state.left_pad_pitch, state.left_pad_yaw, state.left_pad_roll)
 	_right_pad.position = state.right_pad_offset
-	_right_pad.rotation = Vector3(state.right_pad_pitch, _right_pad.rotation.y, state.right_pad_roll)
+	_right_pad.rotation = Vector3(state.right_pad_pitch, state.right_pad_yaw, state.right_pad_roll)
 	_glove.position = state.glove_offset
 	_glove.rotation = Vector3(state.glove_pitch, state.glove_yaw, _glove.rotation.z)
 	_block_arm.position = state.blocker_offset
