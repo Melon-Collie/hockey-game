@@ -51,6 +51,9 @@ var _skip_vote_current: int = 0
 var _skip_vote_total: int = 0
 var _spectator_banner: PanelContainer = null
 var _spectator_wrapper: Control = null
+# Parent of all scalable HUD chrome — see _update_hud_scale. Popups/menus (own
+# CanvasLayers) and the off-screen indicators live outside it.
+var _scale_root: Control = null
 var _stamina_root: Control = null
 var _stamina_fill: ColorRect = null
 var _ghost_banner_root: Control = null
@@ -78,7 +81,19 @@ const _SEP_COLOR  := MenuStyle.BROADCAST_SEP
 
 func _ready() -> void:
 	GameManager.team_colors_ready.connect(_on_team_colors_ready)
+	# Indicators stay a direct child (added before the scale root so the chrome
+	# still draws over them): they render at unprojected screen coordinates,
+	# which must not go through the HUD-scale transform.
 	_build_offscreen_indicators()
+	# All HUD chrome hangs off this root; _update_hud_scale sizes it to a
+	# virtual viewport of (vp / s) and scales it up by s, so edge-anchored
+	# widgets stay glued to the true screen edges at any scale.
+	_scale_root = Control.new()
+	_scale_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_scale_root)
+	# Size the root before the builders run so their anchors resolve against
+	# the virtual viewport immediately, not on the first _process.
+	_update_hud_scale()
 	_build_scorebug()
 	_build_phase_banner()
 	_build_clock_warning()
@@ -117,7 +132,7 @@ func _ready() -> void:
 	_confirm_dialog.cancelled.connect(_on_confirm_dialog_cancelled)
 	add_child(_confirm_dialog)
 	_toast_stack = ToastStack.new()
-	add_child(_toast_stack)
+	_scale_root.add_child(_toast_stack)
 	# Surface the connection error from whatever session dumped us back here
 	# (host quit, join failed, timed out, kicked). pending_error is written
 	# right before return_to_free_play() and was previously read by nothing —
@@ -209,7 +224,7 @@ func _build_scorebug() -> void:
 	_scorebug_panel = panel
 	var shadow_wrap := MenuStyle.wrap_drop_shadow(panel, Vector2(4, 4))
 	shadow_wrap.position = Vector2(8, 8)
-	add_child(shadow_wrap)
+	_scale_root.add_child(shadow_wrap)
 
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 0)
@@ -347,7 +362,7 @@ func _build_phase_banner() -> void:
 	root.offset_bottom = -50.0
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_phase_banner_root = root
-	add_child(root)
+	_scale_root.add_child(root)
 
 	var centering := CenterContainer.new()
 	centering.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -447,7 +462,7 @@ func _build_top_goal_banner() -> void:
 	_top_goal_banner = MenuStyle.wrap_drop_shadow(panel, Vector2(4, 4))
 	_top_goal_banner.position = Vector2(8, 8)
 	_top_goal_banner.visible = false
-	add_child(_top_goal_banner)
+	_scale_root.add_child(_top_goal_banner)
 
 func _play_top_goal_banner(primary: Color, secondary: Color) -> void:
 	if _top_goal_tween != null and _top_goal_tween.is_running():
@@ -503,7 +518,7 @@ func _build_spectator_banner() -> void:
 	root.add_child(centering)
 	centering.add_child(_spectator_wrapper)
 
-	add_child(root)
+	_scale_root.add_child(root)
 	_spectator_wrapper.visible = false
 
 # Hides local-only menu options (Rematch, Change Position) when the local peer
@@ -558,7 +573,7 @@ func _build_bug_icon() -> void:
 	btn.offset_top = -52.0
 	btn.offset_bottom = -24.0
 	btn.pressed.connect(_on_bug_report_pressed)
-	add_child(btn)
+	_scale_root.add_child(btn)
 
 # Bottom-right "[SPACE] TO SKIP" prompt shown during goal replays. Lives outside
 # the chyron because the skip-UX is a player affordance, not broadcast chrome —
@@ -579,7 +594,7 @@ func _build_skip_replay_prompt() -> void:
 	_skip_prompt_label.offset_top = -52.0
 	_skip_prompt_label.offset_bottom = -24.0
 	_skip_prompt_label.visible = false
-	add_child(_skip_prompt_label)
+	_scale_root.add_child(_skip_prompt_label)
 
 func _build_menu_hint() -> void:
 	_menu_hint_label = _lbl("[ESC] MENU", 16, _WHITE)
@@ -598,7 +613,7 @@ func _build_menu_hint() -> void:
 	# Starts hidden — _ready opens the menu right away, which fires the opened
 	# signal and keeps the hint down until the player first closes the menu.
 	_menu_hint_label.visible = false
-	add_child(_menu_hint_label)
+	_scale_root.add_child(_menu_hint_label)
 
 func _show_menu_hint() -> void:
 	if _menu_hint_label == null:
@@ -677,7 +692,7 @@ func _build_version_tag() -> void:
 	label.offset_bottom = -4.0
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(label)
+	_scale_root.add_child(label)
 
 # The FPS readout lives in NetworkDebugOverlay's top-right diagnostics row
 # (next to the always-on network health dot) so the two can't overlap.
@@ -718,7 +733,7 @@ func _build_stamina_bar() -> void:
 	_stamina_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_stamina_root.add_child(_stamina_fill)
 
-	add_child(_stamina_root)
+	_scale_root.add_child(_stamina_root)
 
 func _update_stamina_bar() -> void:
 	if _stamina_root == null:
@@ -754,7 +769,7 @@ func _build_ghost_banner() -> void:
 	root.offset_bottom = 220.0
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ghost_banner_root = root
-	add_child(root)
+	_scale_root.add_child(root)
 
 	var centering := CenterContainer.new()
 	centering.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -858,11 +873,17 @@ func _process(_delta: float) -> void:
 	_update_ghost_banner()
 
 
-# Applies PlayerPrefs.hud_scale to this CanvasLayer about the viewport center,
-# so edge-anchored widgets pull inward as the scale drops. Re-applies only when
-# the scale or the viewport size actually changes (dirty-check), so the steady
-# state costs one float + one Vector2i compare per frame. Child CanvasLayers
-# (menus, dialogs, toasts) render on their own layers and are unaffected.
+# Applies PlayerPrefs.hud_scale by sizing _scale_root to a virtual viewport of
+# (vp / s) and scaling it up by s about the top-left: (vp/s)·s always fills the
+# screen exactly, so edge-anchored widgets stay glued to the true screen edges
+# at ANY scale. (The old approach scaled the whole CanvasLayer about the
+# viewport center, which pushed edge widgets off-screen for s > 1 — a scaled
+# canvas is wider than the screen, so no offset can keep both edges visible.)
+# Re-applies only when the scale or the viewport size actually changes
+# (dirty-check), so the steady state costs one float + one Vector2i compare
+# per frame. Menus/dialogs (own CanvasLayers) and the off-screen player
+# indicators (drawn at unprojected screen coordinates) sit outside the root
+# and are unaffected.
 func _update_hud_scale() -> void:
 	var s: float = PlayerPrefs.hud_scale
 	var vp: Vector2i = Vector2i(get_viewport().get_visible_rect().size)
@@ -870,10 +891,8 @@ func _update_hud_scale() -> void:
 		return
 	_hud_scale_applied = s
 	_hud_scale_viewport = vp
-	scale = Vector2(s, s)
-	# Keep the viewport center fixed: a point p maps to s*p + offset, so the
-	# center stays put when offset = center * (1 - s).
-	offset = Vector2(vp) * 0.5 * (1.0 - s)
+	_scale_root.scale = Vector2(s, s)
+	_scale_root.size = Vector2(vp) / s
 
 
 # ---------------------------------------------------------------------------
@@ -1167,7 +1186,7 @@ func _build_clock_warning() -> void:
 	# Semi-transparent so the final seconds of play stay readable behind it.
 	_clock_warning_label.modulate = Color(1.0, 1.0, 1.0, 0.6)
 	_clock_warning_label.visible = false
-	add_child(_clock_warning_label)
+	_scale_root.add_child(_clock_warning_label)
 
 func _hide_clock_warning() -> void:
 	if _clock_warning_label != null:
