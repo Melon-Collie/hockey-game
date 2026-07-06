@@ -108,6 +108,10 @@ jobs:
               unzip -o "$zip" -d steam/content/linux
             fi
           done
+          # Third-party license notices ship next to the binary on Steam too
+          # (they're not in the .pck — see the same step in deploy.yml).
+          cp LICENSES.txt steam/content/windows/
+          cp LICENSES.txt steam/content/linux/
           echo "=== windows ==="; ls -la steam/content/windows
           echo "=== linux ==="; ls -la steam/content/linux
           # The Steam libs must be present or the game won't init Steam on a
