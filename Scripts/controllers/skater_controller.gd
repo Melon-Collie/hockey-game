@@ -201,8 +201,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_cadence: float = 1.4          # low-speed slope: radians of stride phase per metre skated
 @export var stride_cadence_max_rate: float = 6.5  # rad/s ceiling the cadence saturates toward (caps sprint leg turnover)
 @export var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
-@export var stride_pitch_deg: float = 6.0         # forward push amplitude (fore/aft)
-@export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)
+# Forward push amplitude (fore/aft). Raised 6 → 10 when the knee fore-aft
+# compensation landed: the old visible "reach" was mostly the knee-release
+# artifact kicking the skate forward mid-stroke, so once the foot started
+# tracking the thigh-design curve the honest stride needed a bigger wave to
+# cover the same ground (with the correct slow-recovery / fast-push timing).
+@export var stride_pitch_deg: float = 10.0
+@export var stride_back_pitch_deg: float = 6.0    # backward C-cut amplitude (reaches forward)
 @export var crossover_lean_deg: float = 6.0       # static lean into the strafe direction
 @export var crossover_scissor_deg: float = 8.0    # aim-locked strafe: legs scissor laterally
 # Carve crossovers — engaged by path curvature (CarveRules), not lateral

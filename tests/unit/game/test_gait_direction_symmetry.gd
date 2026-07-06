@@ -28,6 +28,9 @@ func _run_direction(travel: Vector2) -> Array:
 
 	skater.set_facing(travel)
 	skater.velocity = Vector3(travel.x, 0.0, travel.y) * 6.0
+	# The stride is input-gated (v15 intent byte) — stamp held movement
+	# intent so this guards the real stride, not the no-keys glide pose.
+	skater.move_intent = travel
 
 	var leg_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
 	var leg_r: Node3D = skater.get_node("MeshRoot/LowerBody/LegR") as Node3D
