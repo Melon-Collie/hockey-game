@@ -10,10 +10,6 @@ signal handedness_changed(is_left: bool)
 signal preferred_color_changed(color_slot: int)
 signal attributes_changed(attrs: PlayerAttributes)
 
-# Order must match PlayerAttributes.Attribute (Speed, Agility, Hands, Size,
-# Physical, Shot) — _pending_levels is indexed by that enum.
-const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Hands", "Size", "Physical", "Shot"]
-
 # Controls — kept as refs so Cancel can restore them from the snapshot.
 var _name_field: LineEdit = null
 var _name_warning: Label = null
@@ -23,18 +19,16 @@ var _left_btn: Button = null
 var _right_btn: Button = null
 var _color_dropdown: PaletteDropdown = null
 var _apply_btn: Button = null
-var _attr_sliders: Array[HSlider] = []
-var _attr_value_labels: Array[Label] = []
-var _points_label: Label = null
-var _attribute_lock_label: Label = null
+# Attribute editing + presets live in a reusable child panel that self-manages
+# its own snapshot/restore/commit; the popup just wires its `changed` signal
+# into _update_apply_state and gates Apply on its is_dirty()/is_valid().
+var _attr_panel: AttributePickerPanel = null
 
 # Pending state — what Apply will commit.
 var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
-# Six attribute levels indexed by PlayerAttributes.Attribute (SPEED..SHOT).
-var _pending_levels: Array[int] = []
 var _name_valid: bool = true
 var _number_valid: bool = true
 
@@ -81,7 +75,9 @@ func _build() -> void:
 	_build_number_section(vbox)
 	_build_handedness_section(vbox)
 	_build_team_section(vbox)
-	_build_attributes_section(vbox)
+	_attr_panel = AttributePickerPanel.new()
+	_attr_panel.changed.connect(_update_apply_state)
+	vbox.add_child(_attr_panel)
 	_build_action_row(vbox)
 
 
@@ -276,106 +272,6 @@ func _build_team_section(vbox: VBoxContainer) -> void:
 		_update_apply_state())
 
 
-func _build_attributes_section(vbox: VBoxContainer) -> void:
-	# Point-buy: one 1..5 slider per attribute, total spend bounded by
-	# PlayerAttributes.BUDGET. The "Points" readout tracks the running spend and
-	# turns red until exactly BUDGET is allocated; Apply gates on the full spend
-	# (see _update_apply_state). Online play locks the sliders.
-	var heading := Label.new()
-	heading.text = "Attributes"
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.add_theme_font_size_override("font_size", 20)
-	heading.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
-	vbox.add_child(heading)
-
-	_points_label = Label.new()
-	_points_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_points_label.add_theme_font_size_override("font_size", 14)
-	vbox.add_child(_points_label)
-
-	_attribute_lock_label = Label.new()
-	_attribute_lock_label.text = "Locked during online play."
-	_attribute_lock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_attribute_lock_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	_attribute_lock_label.add_theme_font_size_override("font_size", 13)
-	_attribute_lock_label.visible = false
-	vbox.add_child(_attribute_lock_label)
-
-	_attr_sliders = []
-	_attr_value_labels = []
-	for attr_idx: int in _ATTR_LABELS.size():
-		_build_attribute_slider_row(vbox, attr_idx)
-
-
-func _build_attribute_slider_row(vbox: VBoxContainer, attr_idx: int) -> void:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
-	vbox.add_child(row)
-
-	var label := Label.new()
-	label.text = _ATTR_LABELS[attr_idx]
-	label.custom_minimum_size = Vector2(80, 0)
-	label.add_theme_font_size_override("font_size", 18)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
-
-	var slider := HSlider.new()
-	slider.min_value = PlayerAttributes.LEVEL_MIN
-	slider.max_value = PlayerAttributes.LEVEL_MAX
-	slider.step = 1
-	slider.custom_minimum_size = Vector2(200, 36)
-	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	# Seed a valid value and connect last so the min_value clamp during setup
-	# can't fire the handler before _pending_levels is populated.
-	slider.set_value_no_signal(PlayerAttributes.LEVEL_MEDIUM)
-	slider.value_changed.connect(_on_attribute_slider_changed.bind(attr_idx))
-	row.add_child(slider)
-	_attr_sliders.append(slider)
-
-	var value_label := Label.new()
-	value_label.custom_minimum_size = Vector2(24, 0)
-	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	value_label.add_theme_font_size_override("font_size", 18)
-	value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(value_label)
-	_attr_value_labels.append(value_label)
-
-
-func _on_attribute_slider_changed(value: float, attr_idx: int) -> void:
-	_pending_levels[attr_idx] = int(value)
-	_refresh_attribute_controls()
-	_update_apply_state()
-
-
-# Pushes _pending_levels into the sliders + value labels and refreshes the points
-# readout (normal color when the full budget is spent, danger otherwise).
-func _refresh_attribute_controls() -> void:
-	for i: int in _attr_sliders.size():
-		_attr_sliders[i].set_value_no_signal(_pending_levels[i])
-		_attr_value_labels[i].text = str(_pending_levels[i])
-	var spent: int = _pending_total_spend()
-	_points_label.text = "Points: %d / %d" % [spent, PlayerAttributes.BUDGET]
-	_points_label.add_theme_color_override("font_color",
-			MenuStyle.TEXT_BODY if spent == PlayerAttributes.BUDGET else MenuStyle.DANGER)
-
-
-func _pending_total_spend() -> int:
-	var total: int = 0
-	for level: int in _pending_levels:
-		total += level
-	return total
-
-
-func _set_attribute_controls_disabled(disabled: bool) -> void:
-	for slider: HSlider in _attr_sliders:
-		slider.editable = not disabled
-	if _attribute_lock_label != null:
-		_attribute_lock_label.visible = disabled
-
-
 func _build_action_row(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -404,16 +300,15 @@ func _build_action_row(vbox: VBoxContainer) -> void:
 func _update_apply_state() -> void:
 	if _apply_btn == null:
 		return
-	var levels_changed: bool = _pending_levels != (_snapshot.get("levels", []) as Array)
+	var attrs_dirty: bool = _attr_panel != null and _attr_panel.is_dirty()
 	var changed: bool = (_pending_name != _snapshot.get("name", "")
 		or _pending_number != _snapshot.get("number", 0)
 		or _pending_is_left != _snapshot.get("is_left", false)
 		or _pending_color_slot != _snapshot.get("color_slot", -1)
-		or levels_changed)
-	# Attribute edits only commit at exactly the full budget; name/number/etc.
-	# can apply on their own. So require full spend only when levels changed —
-	# a migrated/fresh build under budget never blocks a pure name edit.
-	var attrs_ok: bool = not levels_changed or _pending_total_spend() == PlayerAttributes.BUDGET
+		or attrs_dirty)
+	# The picker panel owns attribute validity (full budget on any touched build);
+	# name/number/etc. can apply on their own.
+	var attrs_ok: bool = _attr_panel == null or _attr_panel.is_valid()
 	_apply_btn.disabled = not changed or not _name_valid or not _number_valid or not attrs_ok
 
 
@@ -444,16 +339,10 @@ func _apply() -> void:
 		# the home team's actors and re-roll away if the new home collides.
 		NetworkManager.apply_preferred_color(_pending_color_slot)
 		preferred_color_changed.emit(_pending_color_slot)
-	var attrs_changed_b: bool = _pending_levels != (_snapshot.get("levels", []) as Array)
-	if attrs_changed_b:
-		var new_attrs := PlayerAttributes.from_levels(
-				_pending_levels[PlayerAttributes.Attribute.SPEED],
-				_pending_levels[PlayerAttributes.Attribute.AGILITY],
-				_pending_levels[PlayerAttributes.Attribute.HANDS],
-				_pending_levels[PlayerAttributes.Attribute.SIZE],
-				_pending_levels[PlayerAttributes.Attribute.PHYSICAL],
-				_pending_levels[PlayerAttributes.Attribute.SHOT])
-		PlayerPrefs.set_player_attributes(new_attrs)
+	if _attr_panel != null and _attr_panel.is_dirty():
+		# commit() writes the working presets + active index back into PlayerPrefs
+		# (which syncs the flat build) and returns the active PlayerAttributes.
+		var new_attrs: PlayerAttributes = _attr_panel.commit()
 		# Update NetworkManager._peer_attributes[1] so the next spawn picks
 		# the new values up. The emitted signal also re-applies the multipliers
 		# to the live local skater when allowed (offline / free-play only —
@@ -467,6 +356,8 @@ func _apply() -> void:
 # Cancel restores form controls to snapshot values so re-opening shows the
 # saved state, not the abandoned edits.
 func _cancel() -> void:
+	if _attr_panel != null:
+		_attr_panel.restore()
 	_restore_from_snapshot()
 	visible = false
 
@@ -476,17 +367,12 @@ func _restore_from_snapshot() -> void:
 	_pending_number = _snapshot.get("number", 0)
 	_pending_is_left = _snapshot.get("is_left", false)
 	_pending_color_slot = _snapshot.get("color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
-	_pending_levels = []
-	for lvl: int in (_snapshot.get("levels", []) as Array):
-		_pending_levels.append(int(lvl))
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
 	_right_btn.button_pressed = not _pending_is_left
 	if _color_dropdown != null:
 		_color_dropdown.set_selected(_pending_color_slot)
-	_refresh_attribute_controls()
-	_set_attribute_controls_disabled(NetworkManager.is_in_online_match())
 	_name_warning.visible = false
 	_number_warning.visible = false
 	_name_valid = true
@@ -503,15 +389,15 @@ func open() -> void:
 	var saved_slot: int = PlayerPrefs.preferred_color_slot
 	if saved_slot < 0:
 		saved_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
-	var a: PlayerAttributes = PlayerPrefs.get_player_attributes()
-	var levels: Array[int] = [a.speed, a.agility, a.hands, a.size, a.physical, a.shot]
 	_snapshot = {
 		"name": PlayerPrefs.player_name,
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
 		"color_slot": saved_slot,
-		"levels": levels,
 	}
+	if _attr_panel != null:
+		_attr_panel.set_locked(NetworkManager.is_in_online_match())
+		_attr_panel.snapshot()
 	_restore_from_snapshot()
 	visible = true
 
