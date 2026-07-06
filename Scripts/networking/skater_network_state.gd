@@ -39,6 +39,12 @@ var stagger_timer: float = 0.0
 # beat before velocity responds. One byte on the wire (v15).
 var move_intent: Vector2 = Vector2.ZERO
 var brake_intent: bool = false
+# Resolved sprint-boost state (held + moving + stamina available), from
+# SkaterController.sprint_active on the simulating machine. Cosmetic-only —
+# drives the sprint gait read (longer strides, deeper sit, forward lean) on
+# client-rendered remotes, which never resolve sprint themselves. Bit 5 of
+# the intent byte (v16).
+var sprint_active: bool = false
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 # World-space top-hand (grip) point. host-only, not serialized — paired with
@@ -68,6 +74,7 @@ func to_array() -> Array:
 		stagger_timer,
 		move_intent,
 		brake_intent,
+		sprint_active,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -90,6 +97,7 @@ func copy_from(s: SkaterNetworkState) -> void:
 	stagger_timer = s.stagger_timer
 	move_intent = s.move_intent
 	brake_intent = s.brake_intent
+	sprint_active = s.sprint_active
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
 	top_hand_world = s.top_hand_world
@@ -120,4 +128,6 @@ static func from_array(data: Array) -> SkaterNetworkState:
 	if data.size() > 18:
 		state.move_intent = data[17]
 		state.brake_intent = data[18]
+	if data.size() > 19:
+		state.sprint_active = data[19]
 	return state

@@ -321,6 +321,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var glide_sway_hz: float = 0.4           # sway frequency — far below stride cadence
 @export var glide_carve_lean_deg: float = 10.0   # legs lean into the arc gliding out of a turn
 @export var glide_inside_tuck_deg: float = 10.0  # inside-leg knee tuck — weight on the outside edge
+# Sprint read: sprint_active (resolved where the skater is simulated; bit 5 of
+# the v16 intent byte for client-rendered remotes) drives a visibly committed
+# gait — LONGER, more powerful strides (the cadence ceiling already keeps leg
+# turnover flat, so sprint reads as reach, not churn), a deeper sit, and the
+# shoulders driving forward. Doubles as the opponent-stamina tell: a skater
+# who stops striding like this has run out of sprint.
+@export var sprint_stride_gain: float = 0.35     # stride amplitude boost at full sprint
+@export var sprint_stance_gain: float = 0.18     # extra crouch depth while sprinting
+@export var sprint_lean_deg: float = 7.0         # extra forward trunk pitch while sprinting
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
@@ -1004,6 +1013,7 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.stagger_timer = stagger_timer
 	state.move_intent = skater.move_intent
 	state.brake_intent = skater.brake_intent
+	state.sprint_active = sprint_active
 
 func get_shot_state() -> int:
 	return _sm.get_state()
@@ -1048,6 +1058,10 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	skater.is_braking = state.brake_intent
 	stamina = state.stamina
 	_sprint_locked = state.sprint_locked
+	# The gait's sprint read (longer strides, deeper sit, forward lean) keys
+	# off the controller's resolved sprint state — stamp it from the recorded
+	# bit so replayed sprints stride like live ones.
+	sprint_active = state.sprint_active
 	stagger_timer = state.stagger_timer
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)

@@ -79,6 +79,12 @@ var _shuffle: float = 0.0
 var _backpedal: float = 0.0
 var _glide: float = 0.0
 var _glide_phase: float = 0.0
+# Smoothed sprint engagement [0, 1], from the controller's resolved
+# sprint_active (replicated for remotes, v16 intent byte). Sprint reads as
+# LONGER strides — amplitude on top of push_scale, a deeper sit, and the
+# shoulders driving — never faster leg turnover (the cadence tanh ceiling
+# above stride_cadence_max_rate already owns that plateau).
+var _sprint: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -109,6 +115,7 @@ func reset_to_rest() -> void:
 	_backpedal = 0.0
 	_glide = 0.0
 	_glide_phase = 0.0
+	_sprint = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
@@ -165,6 +172,8 @@ func apply(delta: float) -> void:
 	_backpedal = lerpf(_backpedal, back_t, intent_ease)
 	_glide = lerpf(_glide, 0.0 if (has_move_intent or planted or _skater.brake_intent) else 1.0,
 			intent_ease)
+	_sprint = lerpf(_sprint,
+			1.0 if (_controller.sprint_active and not planted) else 0.0, intent_ease)
 
 	var target_intensity: float = speed_t if (has_move_intent and not planted) else 0.0
 	# Dig-in / shuffle floors: the legs work from a standstill when the player
@@ -245,6 +254,11 @@ func apply(delta: float) -> void:
 	# through a turn while gliding.
 	var push_scale: float = clampf(1.0 + _effort * _controller.stride_push_gain,
 			_controller.stride_glide_floor, _controller.stride_push_ceiling)
+	# Sprint lengthens every stroke channel that rides push_scale (push, roll,
+	# abduction, tuck, scissor) — applied OUTSIDE the effort clamp because the
+	# effort signal is tangential accel, which decays to zero once the sprint
+	# reaches its raised speed cap: exactly when the sprint should still read.
+	push_scale *= 1.0 + _sprint * _controller.sprint_stride_gain
 
 	# Decompose travel into the body frame: -Z is forward, +X is the skater's right.
 	var local_vel: Vector3 = basis_inv * vel
@@ -356,6 +370,10 @@ func apply(delta: float) -> void:
 	var stance: float = clampf(
 			_intensity / maxf(_controller.stance_full_speed_fraction, 0.01), 0.0, 1.0)
 	stance *= clampf(1.0 + _effort * _controller.stance_push_gain, 0.0, 1.35)
+	# Sprint sits DOWN into the burst — same rationale as the push_scale gain
+	# above: the effort deepening fades once the sprint tops out, but a
+	# sprinting skater stays low the whole way.
+	stance *= 1.0 + _sprint * _controller.sprint_stance_gain
 	# Faceoff ready stance: at the dot the skater is at a standstill, so the
 	# speed-driven envelope leaves them bolt upright — floor the engagement
 	# through the countdown instead. Eased both ways: the crouch settles in
@@ -610,6 +628,10 @@ func apply(delta: float) -> void:
 	trunk_pitch_add += -deg_to_rad(_controller.dig_in_lean_deg) * _dig \
 			+ deg_to_rad(_controller.reversal_lean_deg) * rev_amt \
 			+ deg_to_rad(_controller.backpedal_chest_deg) * ccut
+	# Sprint drives the shoulders forward for the whole burst (the effort dig
+	# above fades once the sprint tops out). gait_scale keeps it from fighting
+	# the hockey-stop / reversal trunk reads on their shared channel.
+	trunk_pitch_add += -deg_to_rad(_controller.sprint_lean_deg) * _sprint * gait_scale
 	# Glide sway: a coasting skater shifts weight lazily edge-to-edge — a slow
 	# roll (trunk plus a touch of shared leg roll) far below stride cadence.
 	# The phase is local-only; at ~2° amplitude machines needn't agree on it.
