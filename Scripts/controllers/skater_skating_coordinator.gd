@@ -68,6 +68,17 @@ var _hip_align_yaw: float = 0.0
 # Smoothed signed carve engagement [−1, +1] (CarveRules): path curvature
 # drives the crossover gait. Sign = turn direction (+ = toward local +X).
 var _carve: float = 0.0
+# Smoothed input-intent signals (GaitIntentRules) — what the player is TRYING
+# to do, read from the replicated v15 intent byte. Eased so the 8-way octant
+# flips remotes decode never pop the pose. _shuffle is SIGNED (+ = toward the
+# body's +X); _glide is the no-keys coast engagement with its own slow sway
+# phase (local-only — at sway amplitudes machines don't need to agree on it).
+var _dig: float = 0.0
+var _reversal: float = 0.0
+var _shuffle: float = 0.0
+var _backpedal: float = 0.0
+var _glide: float = 0.0
+var _glide_phase: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -92,6 +103,12 @@ func reset_to_rest() -> void:
 	travel_align_yaw = 0.0
 	_hip_align_yaw = 0.0
 	_carve = 0.0
+	_dig = 0.0
+	_reversal = 0.0
+	_shuffle = 0.0
+	_backpedal = 0.0
+	_glide = 0.0
+	_glide_phase = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
@@ -120,7 +137,43 @@ func apply(delta: float) -> void:
 	# glide stance floor below keep the posture alive while coasting.)
 	var planted: bool = _sm.get_state() == State.SHOT_BLOCKING
 	var has_move_intent: bool = _skater.move_intent.length_squared() > 0.0025
+
+	# ── Intent signals ─────────────────────────────────────────────────────────
+	# What the player is TRYING to do (GaitIntentRules), read from the same
+	# replicated intent as the stride gate, decomposed into the body frame
+	# where the read is facing-relative (forward = (0, −1)). All smoothed at
+	# intent_signal_speed so the 8-way octant flips remotes decode never pop.
+	var mi: Vector2 = _skater.move_intent
+	var basis_inv: Basis = _skater.global_transform.basis.inverse()
+	var local_intent3: Vector3 = basis_inv * Vector3(mi.x, 0.0, mi.y)
+	var local_intent: Vector2 = Vector2(local_intent3.x, local_intent3.z)
+	var dig_t: float = 0.0
+	var rev_t: float = 0.0
+	var shuf_t: float = 0.0
+	var back_t: float = 0.0
+	if not planted:
+		dig_t = GaitIntentRules.dig_in(has_move_intent, ground_speed, _controller.dig_in_fade_speed)
+		rev_t = GaitIntentRules.reversal(Vector2(vel.x, vel.z), mi, ground_speed,
+				_controller.reversal_min_speed, _controller.reversal_start_opposition)
+		shuf_t = GaitIntentRules.shuffle(local_intent, ground_speed,
+				_controller.shuffle_fade_speed, _controller.shuffle_start_lateral)
+		back_t = GaitIntentRules.backpedal(local_intent, _controller.backpedal_start)
+	var intent_ease: float = _controller.intent_signal_speed * delta
+	_dig = lerpf(_dig, dig_t, intent_ease)
+	_reversal = lerpf(_reversal, rev_t, intent_ease)
+	_shuffle = lerpf(_shuffle, shuf_t, intent_ease)
+	_backpedal = lerpf(_backpedal, back_t, intent_ease)
+	_glide = lerpf(_glide, 0.0 if (has_move_intent or planted or _skater.brake_intent) else 1.0,
+			intent_ease)
+
 	var target_intensity: float = speed_t if (has_move_intent and not planted) else 0.0
+	# Dig-in / shuffle floors: the legs work from a standstill when the player
+	# is ASKING for movement, before there's speed to drive them — the choppy
+	# first strides and the net-front side-step.
+	if not planted:
+		target_intensity = maxf(target_intensity, maxf(
+				_dig * _controller.dig_in_intensity,
+				absf(_shuffle) * _controller.shuffle_intensity))
 	_intensity = lerpf(_intensity, target_intensity, _controller.stride_intensity_speed * delta)
 
 	# Advance the stride phase. The naive law — rate = ground_speed × cadence — is
@@ -136,10 +189,17 @@ func apply(delta: float) -> void:
 	var cadence_ceiling: float = maxf(_controller.stride_cadence_max_rate, 0.001)
 	var linear_rate: float = ground_speed * _controller.stride_cadence
 	var phase_rate: float = cadence_ceiling * tanh(linear_rate / cadence_ceiling)
-	# The hockey-stop blend (previous frame's value — it's computed below,
-	# and the one-frame lag is invisible through the smoothing) freezes the
-	# stride: scraping blades don't stride.
-	stride_phase = wrapf(stride_phase + phase_rate * (1.0 - _stop_blend) * delta, 0.0, TAU)
+	# Dig-in chop / shuffle steps put leg turnover UNDER the speed law: quick
+	# first strides and side-steps cycle before the body is moving fast enough
+	# to advance the phase on its own.
+	phase_rate = maxf(phase_rate, maxf(_dig * _controller.dig_in_cadence_rate,
+			absf(_shuffle) * _controller.shuffle_cadence_rate))
+	# The stop/reversal plant (previous frame's values — computed below, and
+	# the one-frame lag is invisible through the smoothing) freezes the
+	# stride: scraping and planted blades don't stride.
+	stride_phase = wrapf(stride_phase + phase_rate
+			* (1.0 - maxf(_stop_blend, _reversal * _controller.reversal_stride_fade)) * delta,
+			0.0, TAU)
 
 	# ── Effort: glide vs. push ─────────────────────────────────────────────────
 	# Velocity-only skating pumps the legs purely by speed, so a skater coasting at
@@ -187,7 +247,7 @@ func apply(delta: float) -> void:
 			_controller.stride_glide_floor, _controller.stride_push_ceiling)
 
 	# Decompose travel into the body frame: -Z is forward, +X is the skater's right.
-	var local_vel: Vector3 = _skater.global_transform.basis.inverse() * vel
+	var local_vel: Vector3 = basis_inv * vel
 	var fwd: float = -local_vel.z   # >0 skating forward, <0 skating backward
 	var lat: float = local_vel.x    # >0 strafing right, <0 strafing left (crossover)
 	# Blend weights — fore/aft gait vs. lateral crossover gait — summing to 1.
@@ -225,8 +285,12 @@ func apply(delta: float) -> void:
 				deg_to_rad(_controller.hockey_stop_max_yaw_deg)) * _stop_blend
 	else:
 		stop_yaw_offset = 0.0
-	# Stride suppression factor: 1 = normal gait, 0 = full stop pose.
-	var gait_scale: float = 1.0 - _stop_blend
+	# Stride suppression factor: 1 = normal gait, 0 = fully planted (stop pose
+	# or the reversal plant — fighting momentum is edges, not strides).
+	var gait_scale: float = 1.0 - maxf(_stop_blend, _reversal * _controller.reversal_stride_fade)
+	# Reversal engagement for the plant/lean adds below. The hockey stop wins
+	# the shared channels when both fire (brake held while holding opposite).
+	var rev_amt: float = _reversal * (1.0 - _stop_blend)
 
 	# ── Hip-to-travel alignment ────────────────────────────────────────────────
 	# Real skaters' hips align with the direction of MOTION while the torso
@@ -251,6 +315,11 @@ func apply(delta: float) -> void:
 		align_target = clampf(-travel_angle,
 				-deg_to_rad(_controller.hip_align_max_deg),
 				deg_to_rad(_controller.hip_align_max_deg)) * align_engage
+	# A deliberate backpedal or sidestep is an AIM-LOCKED stance — the
+	# defender back-skates and the net-front shuffler side-steps with hips
+	# square to the chest, so intent suppresses the travel alignment and the
+	# body-frame backward / lateral gaits play in full.
+	align_target *= 1.0 - maxf(_backpedal, absf(_shuffle))
 	_hip_align_yaw = lerpf(_hip_align_yaw, align_target, _controller.hip_align_speed * delta)
 	travel_align_yaw = _hip_align_yaw * (1.0 - _stop_blend)
 	# Velocity in the yawed hip frame: v_hip = RotY(−ψ) · v_local.
@@ -266,6 +335,12 @@ func apply(delta: float) -> void:
 	if denom > 0.001:
 		fb_w = absf(fwd) / denom
 		lr_w = absf(lat) / denom
+	# At a near-standstill velocity can't vote on the gait blend (fb_w
+	# defaults to 1), so lateral INTENT biases the mix toward the scissor
+	# gait the side-step needs.
+	if absf(_shuffle) > 0.001:
+		lr_w = maxf(lr_w, absf(_shuffle))
+		fb_w = 1.0 - lr_w
 
 	# ── Stance: the speed-engaged crouch ───────────────────────────────────────
 	# Real skaters sit into flexed hips and knees as soon as they're moving with
@@ -297,6 +372,10 @@ func apply(delta: float) -> void:
 	# gate zeroed the stride, but a coasting skater still rides bent edges.
 	if not has_move_intent:
 		stance = maxf(stance, _controller.glide_stance * speed_t)
+	# Dig-in and the reversal plant both sit DOWN — the power position for the
+	# first strides, and the edges only kill momentum under bent knees.
+	stance = maxf(stance, _controller.dig_in_stance * _dig)
+	stance = maxf(stance, _controller.reversal_stance * rev_amt)
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
@@ -354,6 +433,15 @@ func apply(delta: float) -> void:
 		l_roll += stop_edge
 		r_roll += stop_edge
 
+	# Reversal plant: fighting to go the other way plants both legs in a wide
+	# outward V while the stride is suppressed (gait_scale) — edges killing
+	# momentum, knees down (stance floor above), trunk tipped back (trunk add
+	# below) until the velocity flips and the dig-in takes over the restart.
+	if rev_amt > 0.001:
+		var plant: float = deg_to_rad(_controller.reversal_plant_deg) * rev_amt
+		l_roll -= plant
+		r_roll += plant
+
 	# Forward / backward gait. Shared side-to-side roll rocks the lower body onto
 	# alternating edges (each leg pivots about its own hip, so the same roll
 	# extends the outer leg while the inner one tucks under — the skating weight
@@ -362,11 +450,19 @@ func apply(delta: float) -> void:
 	# shallower amplitude.
 	var push_deg: float = _controller.stride_pitch_deg if fwd >= 0.0 else _controller.stride_back_pitch_deg
 	var push_dir: float = 1.0 if fwd >= 0.0 else -1.0
+	# Deliberate backpedal (intent behind the facing) widens the edge rock
+	# into real C-cuts — the legs sweep out-and-in while the chest stays up
+	# (trunk add below). Faded in over the first m/s of backward travel so
+	# the read never pops on the fwd sign flip.
+	var ccut: float = _backpedal * clampf(-fwd, 0.0, 1.0)
+	roll_amp += deg_to_rad(_controller.backpedal_ccut_roll_deg) * ccut * _intensity * gait_scale
 	# A hard carve IS the stride — the fore/aft push bleeds out as the
 	# crossover gait takes over (carve_stride_fade), instead of striding
-	# straight ahead while the legs cross.
+	# straight ahead while the legs cross. The dig-in chop shortens the push
+	# the same way: quick feet out of the start, not full extensions.
 	var push_amp: float = deg_to_rad(push_deg) * _intensity * push_dir * push_scale * gait_scale \
-			* (1.0 - absf(_carve) * _controller.carve_stride_fade)
+			* (1.0 - absf(_carve) * _controller.carve_stride_fade) \
+			* (1.0 - _dig * _controller.dig_in_chop)
 	# Rear-bias the pitch stroke so the stride pushes BACK instead of kicking
 	# forward: a CONSTANT offset shifts the whole swing rearward — the back
 	# extension reaches (1+bias)·amp while the recovery lands only
@@ -403,7 +499,10 @@ func apply(delta: float) -> void:
 	# is the AIM-LOCKED lateral shuffle — genuine crossovers (turning at
 	# speed) are the carve block below, keyed off path curvature instead of
 	# hip-frame lateral velocity (which hip alignment mostly removes anyway).
-	var lean: float = signf(lat) * deg_to_rad(_controller.crossover_lean_deg) * _intensity * gait_scale
+	# Lean sign: velocity votes when there's meaningful travel; a standstill
+	# side-step leans by INTENT instead (lat is noise at near-zero speed).
+	var strafe_sign: float = signf(_shuffle) if absf(_shuffle) > 0.3 else signf(lat)
+	var lean: float = strafe_sign * deg_to_rad(_controller.crossover_lean_deg) * _intensity * gait_scale
 	var scissor: float = deg_to_rad(_controller.crossover_scissor_deg) * _intensity * push_scale * gait_scale
 	l_roll += lr_w * (lean + s * scissor)
 	r_roll += lr_w * (lean + s_opp * scissor)
@@ -444,6 +543,24 @@ func apply(delta: float) -> void:
 			l_roll += under_roll
 			l_ext = maxf(l_ext, stroke)
 
+	# ── Glide reads ────────────────────────────────────────────────────────────
+	# Releasing the keys mid-turn glides OUT of the carve on the edges: while
+	# the smoothed carve decays, both legs hold a static lean into the arc and
+	# the INSIDE knee tucks light — weight on the outside leg, the one-foot-
+	# glide read — instead of pumping crossovers (the stroke gaits above are
+	# intensity-gated to zero without intent, so this replaces, not stacks).
+	var glide_amt: float = _glide * speed_t * gait_scale
+	if glide_amt > 0.001 and absf(_carve) > 0.001:
+		var glide_lean: float = deg_to_rad(_controller.glide_carve_lean_deg) * _carve * glide_amt
+		l_roll += glide_lean
+		r_roll += glide_lean
+		var inside_tuck: float = deg_to_rad(_controller.glide_inside_tuck_deg) \
+				* absf(_carve) * glide_amt
+		if _carve > 0.0:
+			r_tuck_extra += inside_tuck
+		else:
+			l_tuck_extra += inside_tuck
+
 	# Knee flex — three layers that read as one leg working. (1) The stance flex,
 	# the seated base both knees carry. (2) Push extension: the loaded leg
 	# straightens as it extends back (stance_knee_release of the stance flex gone
@@ -466,6 +583,23 @@ func apply(delta: float) -> void:
 	# hard brake), and the torso rolls over the loaded leg with the weight shift.
 	trunk_pitch_add = -deg_to_rad(_controller.stride_dig_lean_deg) * _effort
 	trunk_roll_add = deg_to_rad(_controller.stride_sway_deg) * _intensity * fb_w * s * gait_scale
+	# Intent trunk reads: dig-in drives the shoulders over the first strides,
+	# a reversal tips them BACK against the travel it's fighting, and a
+	# deliberate backpedal keeps the chest up over the C-cuts.
+	trunk_pitch_add += -deg_to_rad(_controller.dig_in_lean_deg) * _dig \
+			+ deg_to_rad(_controller.reversal_lean_deg) * rev_amt \
+			+ deg_to_rad(_controller.backpedal_chest_deg) * ccut
+	# Glide sway: a coasting skater shifts weight lazily edge-to-edge — a slow
+	# roll (trunk plus a touch of shared leg roll) far below stride cadence.
+	# The phase is local-only; at ~2° amplitude machines needn't agree on it.
+	if _glide > 0.01:
+		_glide_phase = wrapf(_glide_phase
+				+ TAU * _controller.glide_sway_hz * _glide * delta, 0.0, TAU)
+	if glide_amt > 0.001:
+		var sway: float = sin(_glide_phase) * deg_to_rad(_controller.glide_sway_deg) * glide_amt
+		trunk_roll_add += sway
+		l_roll += sway * 0.5
+		r_roll += sway * 0.5
 	# Hockey stop: the trunk banks over the skid (the dig-lean above already
 	# tips the shoulders back against the braking effort).
 	if _stop_blend > 0.001:

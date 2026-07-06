@@ -282,6 +282,40 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the backward C-cut / crossover gaits on the residual, as designed.
 @export var hip_align_max_deg: float = 50.0  # cap on the hips' turn toward travel
 @export var hip_align_speed: float = 6.0     # how fast the hips settle onto the travel line
+# Input-intent gait reads (GaitIntentRules, v15 intent byte) — signals for
+# what the player is TRYING to do, layered over the velocity-derived gait.
+# All cosmetic; every signal derives from replicated state, so local, bot,
+# and remote skaters read identically.
+@export var intent_signal_speed: float = 6.0     # ease rate of the smoothed intent signals
+# Dig-in: intent held at low speed — explosive, choppy first strides.
+@export var dig_in_fade_speed: float = 4.0       # m/s where the dig hands off to the speed gait
+@export var dig_in_intensity: float = 0.85       # stride intensity floor while digging in
+@export var dig_in_cadence_rate: float = 4.5     # rad/s stride-phase floor — quick chop from a standstill
+@export var dig_in_chop: float = 0.35            # push-amplitude cut at full dig (short strides)
+@export var dig_in_stance: float = 0.7           # stance floor — power comes from bent knees
+@export var dig_in_lean_deg: float = 6.0         # extra forward trunk pitch driving out of the start
+# Reversal: intent opposing travel at speed — the stop-and-go weight shift.
+@export var reversal_min_speed: float = 2.5      # m/s floor — a slow reversal is just a step
+@export var reversal_start_opposition: float = 0.5  # travel·intent opposition where the shift begins
+@export var reversal_stride_fade: float = 0.8    # stride suppression at full reversal (legs plant)
+@export var reversal_stance: float = 0.85        # stance floor — sits down hard into the plant
+@export var reversal_lean_deg: float = 7.0       # trunk tips BACK against the travel it fights
+@export var reversal_plant_deg: float = 8.0      # wide-V outward leg plant
+# Shuffle: lateral intent at low speed — hips stay square, legs side-step.
+@export var shuffle_fade_speed: float = 4.0      # m/s where crossovers take over from the shuffle
+@export var shuffle_start_lateral: float = 0.6   # lateral intent fraction where the shuffle begins
+@export var shuffle_intensity: float = 0.6       # stride intensity floor while side-stepping
+@export var shuffle_cadence_rate: float = 3.0    # rad/s stride-phase floor for the steps
+# Backpedal: intent held behind the facing — a defender's deliberate back-skate.
+@export var backpedal_start: float = 0.35        # backward intent fraction where the read begins
+@export var backpedal_ccut_roll_deg: float = 6.0 # extra out-and-in leg sweep (real C-cuts)
+@export var backpedal_chest_deg: float = 4.0     # chest-up trunk pitch over the C-cuts
+# Glide enrichment: coasting (no keys) sways weight edge-to-edge, and a carve
+# released into a glide exits the turn on its edges (one-foot-glide read).
+@export var glide_sway_deg: float = 2.5          # lazy edge-to-edge roll amplitude
+@export var glide_sway_hz: float = 0.4           # sway frequency — far below stride cadence
+@export var glide_carve_lean_deg: float = 10.0   # legs lean into the arc gliding out of a turn
+@export var glide_inside_tuck_deg: float = 10.0  # inside-leg knee tuck — weight on the outside edge
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
