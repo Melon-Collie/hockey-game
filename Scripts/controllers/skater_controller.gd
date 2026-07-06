@@ -839,8 +839,14 @@ func _process_input(input: InputState, delta: float) -> void:
 	# Stamp movement intent for the cosmetic layers (gait glide / intent
 	# crossovers / brake-gated hockey stop). Local, bot, and host-side client
 	# simulation all funnel through here with real inputs; client-rendered
-	# remotes get the same fields off the wire in RemoteController.
-	skater.move_intent = input.move_vector
+	# remotes get the same fields off the wire in RemoteController. Gated by
+	# the SAME deadzone the movement physics uses, so "trying to move" means
+	# the same thing to the animation as to the thrust — bot steering emits
+	# small residual vectors at rest (potential-field repels never fully
+	# cancel) that would otherwise read as a perpetual dig-in chop, and the
+	# wire octant would inflate them to unit length on remote clients.
+	skater.move_intent = input.move_vector \
+			if input.move_vector.length() > move_deadzone else Vector2.ZERO
 	skater.brake_intent = input.brake
 	# Snapshot the blade's current contact point before any IK mutation runs
 	# this tick. The host's swept-segment pickup/poke test (PuckController._check_interactions,
