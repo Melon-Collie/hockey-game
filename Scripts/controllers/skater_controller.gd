@@ -1052,6 +1052,12 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 		# plant the legs at their rest pose so the stride doesn't resume mid-swing.
 		_pose.reset_lean_and_lag()
 		_skating.reset_to_rest()
+		# Kill any celebration remainder. The timer only ticks in
+		# _process_input, which doesn't run through the goal replay or the
+		# faceoff-prep aim-only path — so the leftover slice (goal_scored
+		# signal latency; larger on clients) would otherwise freeze through
+		# the replay and fire the raised-stick pose AT the next faceoff.
+		_celebration_timer = 0.0
 
 # Cancels an in-progress wrister/slapper wind-up. No-op unless actually mid-
 # charge, so a routine teleport doesn't disturb skating state. Suppresses the
