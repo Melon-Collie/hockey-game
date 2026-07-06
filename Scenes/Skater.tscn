@@ -128,11 +128,11 @@ mesh = SubResource("BoxMesh_bmxlf")
 [node name="Shoulder" type="Marker3D" parent="MeshRoot/UpperBody" unique_id=1764989628]
 
 [node name="ShoulderL" type="MeshInstance3D" parent="MeshRoot/UpperBody" unique_id=439054198]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.22, 0.4, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.24, 0.4, 0)
 mesh = SubResource("SphereMesh_novki")
 
 [node name="ShoulderR" type="MeshInstance3D" parent="MeshRoot/UpperBody" unique_id=10469362]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.22, 0.4, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.24, 0.4, 0)
 mesh = SubResource("SphereMesh_novki")
 
 [node name="LowerBody" type="Node3D" parent="MeshRoot" unique_id=2124479063]

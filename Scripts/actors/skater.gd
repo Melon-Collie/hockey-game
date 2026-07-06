@@ -34,17 +34,20 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
 # (blade on −X) has the top hand on the right shoulder (+X), and vice versa.
-# Baseline ~0.22 m (half of adult shoulder-to-shoulder breadth).
-@export var shoulder_offset: float = 0.22
-# Shoulder Y in upper-body-local space. Positions the arm's anchor high on
-# the torso (near the top of the upper body mesh) so the visible arm spans
-# from the shoulder down to the hand. Vertical drop from shoulder to hand at
-# rest = shoulder_height − hand_rest_y (currently 0.35 − (−0.17) = 0.52 m).
-# That drop is subtracted inside the derived backhand ROM
+# Matches the ShoulderL/R ball origins in Scenes/Skater.tscn (keep in sync) —
+# just clear of the torso cylinder (radius ~0.20-0.22 at shoulder height) so
+# the arm bone roots at the deltoid ball instead of half-buried in the chest.
+@export var shoulder_offset: float = 0.24
+# Shoulder Y in upper-body-local space. Matches the ShoulderL/R ball centers
+# in the scene (keep in sync) so the drawn arm hangs from the visible
+# shoulder rather than a point 5 cm below it. Vertical drop from shoulder to
+# hand at rest = shoulder_height − hand_rest_y (currently 0.40 − (−0.17) =
+# 0.57 m). That drop is subtracted inside the derived backhand ROM
 # (SkaterController.apply_attributes: reach = sqrt(arm_eff² − drop²)), so the
 # hand can never be placed beyond the arm's length — raising this shrinks
-# reach rather than stretching the forearm.
-@export var shoulder_height: float = 0.35
+# flat-footed reach; the directional reach lean (SkaterPoseCoordinator) buys
+# it back by tilting the whole frame toward the target.
+@export var shoulder_height: float = 0.40
 # Blade length (heel to toe). The Blade Marker3D represents the heel (where
 # the shaft meets the blade); the blade mesh extends forward by this distance.
 # The puck plays at the contact point, which is blade_length * 0.5 forward
@@ -86,8 +89,11 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # center, and elbow→fist really is about humerus-length).
 @export var upper_arm_length: float = 0.35
 @export var forearm_length: float = 0.35
-# Pole direction for the elbow (upper-body local).
-@export var arm_pole_local: Vector3 = Vector3(0.2, -1.0, 0.0)
+# Pole direction for the elbow (upper-body local). Mostly down with a real
+# outward flare (+X is away from the body; the sign flips per side in
+# update_arm_mesh) and a touch backward — a hockey top-hand elbow rides out
+# and slightly behind the chest line, not pinned against the ribs.
+@export var arm_pole_local: Vector3 = Vector3(0.55, -1.0, 0.1)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
 # actual length; X/Y control arm thickness.
 @export var arm_mesh_thickness: float = 0.11

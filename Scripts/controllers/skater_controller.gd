@@ -157,7 +157,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var upper_body_twist_ratio: float = 0.8
 @export var upper_body_max_twist_deg: float = 67.0   # caps rotation so extreme angles don't over-rotate
 @export var upper_body_return_speed: float = 6.0
-@export var upper_body_lean_max_deg: float = 15.0
+# Reach lean — the torso tips TOWARD the blade's reach direction (pitch +
+# roll, see SkaterPoseCoordinator.compute_upper_body_lean_target). Because
+# the blade IK solves in the leaned frame, this lean genuinely extends world
+# reach at the ROM rim (~sin(lean) × shoulder height of shoulder travel plus
+# the longer stick footprint from the dropped hands) — the honest way a real
+# player buys reach. engage_power > 1 keeps the torso quiet through mid-ROM
+# stickhandling and commits the lean near full extension.
+@export var upper_body_lean_max_deg: float = 18.0
+@export var upper_body_lean_engage_power: float = 1.6
 @export var upper_body_lean_return_speed: float = 8.0
 
 # ── Velocity Lean / Skating Posture Tuning ────────────────────────────────────
