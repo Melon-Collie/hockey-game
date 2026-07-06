@@ -207,6 +207,7 @@ func _interpolate(delta: float) -> void:
 		interpolated.blade_up = newest.blade_up
 		interpolated.shot_state = newest.shot_state
 		interpolated.shot_charge = newest.shot_charge
+		interpolated.stagger_timer = newest.stagger_timer
 		interpolated.move_intent = newest.move_intent
 		interpolated.brake_intent = newest.brake_intent
 	else:
@@ -239,6 +240,7 @@ func _interpolate(delta: float) -> void:
 		# Charge is a scalar — lerp it so the remote's stick-flex load bow
 		# grows smoothly through the drag instead of stepping per broadcast.
 		interpolated.shot_charge = lerpf(from_state.shot_charge, to_state.shot_charge, t)
+		interpolated.stagger_timer = lerpf(from_state.stagger_timer, to_state.stagger_timer, t)
 		interpolated.move_intent = to_state.move_intent
 		interpolated.brake_intent = to_state.brake_intent
 		# render_time is led toward present by extrapolation_lead_fraction, so the
@@ -324,6 +326,16 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# equivalent of the per-tick stamp in SkaterController._process_input.
 	skater.move_intent = state.move_intent
 	skater.brake_intent = state.brake_intent
+	# The skid VFX (SkaterVFX trail marks + spray) keys off skater.is_braking,
+	# which only _process_input stamps — mirror it from the replicated brake
+	# bit so another player's hockey stop actually sprays on this machine.
+	skater.is_braking = state.brake_intent
+	# The stagger-stumble wobble reads the CONTROLLER's stagger_timer (the
+	# gait derives its phase from the countdown). It was replicated since v10
+	# for the local victim's reconcile, but never applied to client-rendered
+	# remotes — so a checked opponent stumbled on the host and stood rock-
+	# steady on everyone else's screen.
+	stagger_timer = state.stagger_timer
 	# Bottom hand is purely reactive to top_hand + blade (both already set
 	# above) and needs no network state of its own. Arm/stick meshes derive
 	# from the markers once per rendered frame in Skater._process.

@@ -1038,6 +1038,9 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	skater.current_shot_state = state.shot_state
 	skater.shot_charge = state.shot_charge
 	skater.elevation_level = state.elevation_level
+	# Skid VFX (SkaterVFX trail marks + spray) keys off is_braking — stamp it
+	# from the recorded brake bit so replayed hockey stops spray like live ones.
+	skater.is_braking = state.brake_intent
 	stamina = state.stamina
 	_sprint_locked = state.sprint_locked
 	stagger_timer = state.stagger_timer
