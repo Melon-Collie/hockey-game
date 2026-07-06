@@ -27,6 +27,31 @@ func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
 	_ik = ik
 	_controller = controller
 
+
+# ── Follow-Through Start Capture ──────────────────────────────────────────────
+# The wrister/quick-shot pose at the release instant is wherever the aim left
+# it — hands dragged back, blade wound up. The authored follow-through curve
+# starts from the REST pose, so without a bridge the stick teleported to a
+# near-rest pose on the first FT frame (which looks like the follow-through's
+# END, since the envelopes finish at rest) and then played the arc — "the
+# animation runs twice". Capture the live pose at release; the FT blends from
+# it onto the authored swing over the first follow_through_takeover_frac of
+# the timer, so release reads as ONE continuous motion. Live ticks only:
+# reconcile replay re-runs releases against replayed poses and must not
+# clobber the visual capture. (The slapper doesn't need this — its downswing
+# already starts from the captured wind-up pose.)
+var _ft_start_hand: Vector3 = Vector3.ZERO
+var _ft_start_blade: Vector3 = Vector3.ZERO
+var _ft_start_valid: bool = false
+
+
+func begin_follow_through() -> void:
+	if _controller.is_replaying:
+		return
+	_ft_start_hand = _skater.get_top_hand_position()
+	_ft_start_blade = _skater.get_blade_position()
+	_ft_start_valid = true
+
 # ── Slapper Charge Pose ───────────────────────────────────────────────────────
 # Slapper has a fixed blade pose offset from the shoulder — separate from
 # the IK flow (this is a charged pre-shot pose, not player-aimed). Hand
@@ -179,6 +204,17 @@ func apply_wrister_follow_through() -> void:
 			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
 	var intended_target: Vector3 = hand_pos + local_dir * horiz
 	intended_target.y = blade_y
+	# Bridge from the captured release pose onto the authored swing (see
+	# begin_follow_through) — smoothstepped over the takeover window so the
+	# wound-up stick flows into the sweep instead of teleporting to rest.
+	# Blended BEFORE the wall/net clamps so the clamps see the final pose.
+	if _ft_start_valid:
+		var takeover: float = clampf(
+				t / maxf(_controller.follow_through_takeover_frac, 0.001), 0.0, 1.0)
+		takeover = takeover * takeover * (3.0 - 2.0 * takeover)
+		if takeover < 1.0:
+			hand_pos = _ft_start_hand.lerp(hand_pos, takeover)
+			intended_target = _ft_start_blade.lerp(intended_target, takeover)
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
 	var clamp_delta_xz := Vector3(
 		local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)

@@ -148,8 +148,14 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 	var positions: Array = []
 	for peer_id: int in _registry.all():
 		var record: PlayerRecord = _registry.get_record(peer_id)
+		# Centers spawn at their own reach-derived distance from the dot
+		# (Size scales stick + arms, so the fixed 1.5 m offset left small
+		# builds unable to touch the puck). Wingers ignore the argument.
+		var reach: float = -1.0
+		if record.team_slot == 0 and record.controller != null:
+			reach = record.controller.faceoff_center_distance()
 		var pos: Vector3 = PlayerRules.faceoff_position(
-				record.team.team_id, record.team_slot, dot)
+				record.team.team_id, record.team_slot, dot, reach)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
 		record.controller.teleport_to(pos, facing)
 		positions.append_array([peer_id, pos.x, pos.y, pos.z])

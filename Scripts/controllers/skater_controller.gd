@@ -239,6 +239,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # replicated, so every machine poses its skaters identically.
 @export var faceoff_stance: float = 0.85       # stance engagement floor at the dot
 @export var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
+# Fraction of the rest blade radius at which this skater's CENTER spawns from
+# the faceoff dot — reach-derived so a Size-1 center (short stick + arms) can
+# play the drop as comfortably as a Size-5 (see faceoff_center_distance).
+@export var faceoff_center_reach_fraction: float = 0.9
 # Hockey stop — braking hard at speed turns the lower body across the travel
 # direction (legs sideways, torso still on the play) with a scissored,
 # edge-rolled stance. Engagement derives from the velocity-based effort
@@ -358,6 +362,10 @@ var show_one_timer_indicator: bool = false
 @export var quick_shot_follow_through_duration: float = 0.18  # snap pass flick
 @export var slapper_follow_through_duration: float = 0.5
 @export var follow_through_arc_skew: float = 0.7
+# First fraction of the wrister/quick FT spent blending from the captured
+# release pose onto the authored swing (kills the release-instant teleport
+# to a near-rest pose — the "animation played twice" read).
+@export var follow_through_takeover_frac: float = 0.28
 @export var wrister_follow_through_min_power: float = 0.55  # amplitude floor at zero charge
 @export var quick_shot_follow_through_power: float = 0.5
 @export var wrister_follow_through_hand_y: float = 0.35
@@ -1110,6 +1118,31 @@ func _transition_to_skating(suppress_lost_flash: bool = false) -> void:
 	if show_one_timer_indicator and was_charging and not suppress_lost_flash:
 		skater.trigger_charge_lost_flash()
 
+# Aligns BOTH facing stores at spawn: the Skater node's root rotation and the
+# pose coordinator's smoothed facing. The spawn path used to set only the
+# skater side, leaving _pose.facing at its Vector2.DOWN default — the first
+# input tick then re-asserted the stale pose facing, snapping the root up to
+# 180° and dumping the whole turn into lower_body_lag: the player spawned
+# visibly twisted. (The faceoff teleport already syncs both; this is the
+# spawn-time equivalent.)
+func set_spawn_facing(facing: Vector2) -> void:
+	if facing == Vector2.ZERO:
+		return
+	skater.set_facing(facing)
+	_pose.facing = facing
+	_pose.reset_lean_and_lag()
+	skater.set_lower_body_lag(0.0)
+
+
+# This skater's center-slot distance from the faceoff dot: the rest-pose blade
+# radius (stick horizontal footprint at rest) scaled by faceoff_center_reach_
+# fraction, so the puck sits comfortably inside every build's reach at the
+# drop — no hand displacement or lean needed. Host-computed by the phase
+# coordinator and broadcast with the rest of the faceoff positions.
+func faceoff_center_distance() -> float:
+	return _ik.stick_horiz() * faceoff_center_reach_fraction
+
+
 func _enter_shot_block() -> void:
 	_sm.set_state(State.SHOT_BLOCKING)
 	skater.set_block_stance(true)
@@ -1226,6 +1259,7 @@ func _release_wrister(input: InputState) -> void:
 	# Finish size follows the charge: a bare tap flicks, a full drag finishes high.
 	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0,
 			clampf(_aiming.charge_distance / max_wrister_charge_distance, 0.0, 1.0))
+	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
 	_sm.follow_through_duration_total = follow_through_duration
@@ -1253,6 +1287,7 @@ func _fire_quick_shot(input: InputState) -> void:
 
 	_sm.follow_through_is_slapper = false
 	_sm.follow_through_power = quick_shot_follow_through_power
+	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = quick_shot_follow_through_duration
 	_sm.follow_through_duration_total = quick_shot_follow_through_duration

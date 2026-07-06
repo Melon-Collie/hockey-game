@@ -117,8 +117,13 @@ func apply_confirmed_swap(
 	if record.is_local and record.controller is LocalController:
 		(record.controller as LocalController).set_local_team_id(new_team_id)
 	# Square up to the new attacking goal — without facing, a cross-team
-	# swap leaves the skater pointing backwards on their first frame.
+	# swap leaves the skater pointing backwards on their first frame. Centers
+	# use their reach-derived dot distance, same as the faceoff-prep teleport.
+	var reach: float = -1.0
+	if new_slot == 0 and record.controller != null:
+		reach = record.controller.faceoff_center_distance()
 	record.controller.teleport_to(
-			PlayerRules.faceoff_position(new_team_id, new_slot),
+			PlayerRules.faceoff_position(new_team_id, new_slot,
+					GameRules.CENTER_ICE_DOT, reach),
 			PlayerRules.faceoff_facing(new_team_id))
 	stats_updated.emit()

@@ -1042,7 +1042,9 @@ func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
 # skaters render the identical flex with zero network additions.
 func _update_stick_flex(delta: float) -> void:
 	var state: int = current_shot_state
-	var side: float = (1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
+	# Sign verified in play: the shaft bows AWAY from the loaded blade face —
+	# the paper-derived convention read inverted, hence the leading negation.
+	var side: float = -(1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
 			* (-1.0 if is_left_handed else 1.0)
 	if state != _flex_prev_state:
 		if state == SkaterStateMachine.State.FOLLOW_THROUGH:

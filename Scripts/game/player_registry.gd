@@ -136,7 +136,10 @@ func spawn(
 	spawned.skater.set_jersey_info(player_name, jersey_number)
 	# Square the skater up to the puck on initial spawn — without this they
 	# default to Vector2.DOWN (+Z) which leaves team 0 spawning backwards.
-	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
+	# Through the CONTROLLER, not the skater directly: both facing stores
+	# (root rotation + pose coordinator) must agree, or the first input tick
+	# snaps the root back to the pose default and the player spawns twisted.
+	spawned.controller.set_spawn_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
 	team_id_by_skater[spawned.skater] = team.team_id
