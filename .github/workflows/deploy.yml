@@ -72,6 +72,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Ship the third-party license notices next to the binary. The repo-root
+      # LICENSES.txt isn't a Godot resource, so it never lands in the .pck —
+      # it has to be added to each archive here.
+      - name: Bundle license notices into archives
+        run: |
+          shopt -s nullglob
+          for zip in /home/runner/.local/share/godot/archives/*.zip; do
+            zip -j "$zip" LICENSES.txt
+          done
+
       - name: Verify export artifacts
         run: |
           echo "=== Archive directory contents ==="
@@ -92,6 +102,7 @@ jobs:
               exit 1
             fi
             unzip -l "$zip" | grep -qE "\.(exe|x86_64)" || { echo "ERROR: No .exe or .x86_64 found in $zip"; exit 1; }
+            unzip -l "$zip" | grep -q "LICENSES.txt" || { echo "ERROR: LICENSES.txt missing from $zip"; exit 1; }
           done
           echo "All archives look good."
 

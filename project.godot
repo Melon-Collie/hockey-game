@@ -15,6 +15,8 @@ run/main_scene="uid://dmfu1ghyuqn67"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="uid://bjkpew4n5um13"
 run/pause_on_focus_loss=false
+boot_splash/bg_color=Color(0.067, 0.094, 0.141, 1)
+boot_splash/show_image=false
 
 [autoload]
 

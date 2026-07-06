@@ -63,6 +63,15 @@ Stage the **entire** export output, not hand-picked files — Godot places the
 GDExtension libraries and their Steam dependency next to the binary, and you
 want all of it.
 
+Then copy the repo-root `LICENSES.txt` (third-party license notices — it's not
+a Godot resource, so the export doesn't include it) into **both** platform
+folders:
+
+```
+cp LICENSES.txt steam/content/windows/
+cp LICENSES.txt steam/content/linux/
+```
+
 ### 2. Verify the Steam libraries are present
 
 The game won't initialize Steam on a clean machine without these. Confirm:
