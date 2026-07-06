@@ -51,7 +51,6 @@ var _skip_vote_current: int = 0
 var _skip_vote_total: int = 0
 var _spectator_banner: PanelContainer = null
 var _spectator_wrapper: Control = null
-var _fps_label: Label = null
 var _stamina_root: Control = null
 var _stamina_fill: ColorRect = null
 var _ghost_banner_root: Control = null
@@ -85,7 +84,6 @@ func _ready() -> void:
 	_build_clock_warning()
 	_build_top_goal_banner()
 	_build_version_tag()
-	_build_fps_label()
 	_build_stamina_bar()
 	_build_ghost_banner()
 	_build_bug_icon()
@@ -145,13 +143,13 @@ func _ready() -> void:
 	NetworkManager.rematch_vote_changed.connect(_on_rematch_vote_changed)
 	NetworkManager.peer_disconnected.connect(_on_rematch_peer_disconnected)
 	GameManager.shots_on_goal_changed.connect(_on_shots_on_goal_changed)
-	GameManager.player_joined.connect(func(n: String, c: Color) -> void: _toast_stack.push(n + " joined", c))
-	GameManager.player_left.connect(func(n: String, c: Color) -> void: _toast_stack.push(n + " left", c))
+	GameManager.stats_updated.connect(_on_stats_updated_for_feed)
+	GameManager.player_joined.connect(func(n: String, c: Color) -> void: _toast_stack.push_pair(n, "joined", c))
+	GameManager.player_left.connect(func(n: String, c: Color) -> void: _toast_stack.push_pair(n, "left", c))
 	GameManager.puck_out_of_play.connect(_on_puck_out_of_play)
 	GameManager.icing_called.connect(_on_icing_called)
 	GameManager.offside_called.connect(_on_offside_called)
 	GameManager.local_player_hit.connect(_on_local_player_hit)
-	GameManager.local_shot_released.connect(_on_local_shot_released)
 	# Arrives just before faceoff_prep_announced on the opening faceoff; the
 	# countdown builder consumes it to lead with the matchup card.
 	GameManager.pregame_intro_started.connect(
@@ -681,20 +679,8 @@ func _build_version_tag() -> void:
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(label)
 
-func _build_fps_label() -> void:
-	_fps_label = _lbl("", 14, _WHITE)
-	_fps_label.anchor_left = 1.0
-	_fps_label.anchor_right = 1.0
-	_fps_label.anchor_top = 0.0
-	_fps_label.anchor_bottom = 0.0
-	_fps_label.offset_left = -88.0
-	_fps_label.offset_right = -8.0
-	_fps_label.offset_top = 8.0
-	_fps_label.offset_bottom = 28.0
-	_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_fps_label.visible = PlayerPrefs.show_fps
-	add_child(_fps_label)
+# The FPS readout lives in NetworkDebugOverlay's top-right diagnostics row
+# (next to the always-on network health dot) so the two can't overlap.
 
 # Sprint stamina bar — a thin gauge centred along the bottom edge. Only the
 # local player's stamina is shown; it's driven each frame from the local
@@ -868,11 +854,6 @@ var _hud_scale_viewport: Vector2i = Vector2i.ZERO
 
 func _process(_delta: float) -> void:
 	_update_hud_scale()
-	var enabled: bool = PlayerPrefs.show_fps
-	if _fps_label.visible != enabled:
-		_fps_label.visible = enabled
-	if enabled:
-		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
 	_update_stamina_bar()
 	_update_ghost_banner()
 
@@ -1250,6 +1231,13 @@ func _on_clock_updated(t: float) -> void:
 		_last_clock_pulse_second = -1
 		_hide_clock_warning()
 
+# The final-horn beat plays on the ice first (gold flash + "HOME WINS" chyron
+# via _on_phase_changed / here), then the full end-of-game screen takes over.
+# This delay is that breath; the presentation tween is killed by _on_game_reset
+# if a rematch fires inside the window.
+const _GAME_OVER_PRESENT_DELAY: float = 2.2
+var _game_over_present_tween: Tween = null
+
 func _on_game_over() -> void:
 	_phase_style.bg_color = MenuStyle.BROADCAST_BG  # clear any residual goal tint
 	_tagline_label.text = "FINAL"
@@ -1258,29 +1246,47 @@ func _on_game_over() -> void:
 	_scorer_label.visible = false
 	_assist_tag_label.visible = false
 	_assist_label.visible = false
+	var result_text: String
+	var result_color: Color
 	if _score_0 > _score_1:
-		_phase_label.text = "HOME WINS"
-		_phase_label.add_theme_color_override("font_color", _initial_team_primary(0))
+		result_text = "HOME WINS"
+		result_color = _initial_team_primary(0)
 	elif _score_1 > _score_0:
-		_phase_label.text = "AWAY WINS"
-		_phase_label.add_theme_color_override("font_color", _initial_team_primary(1))
+		result_text = "AWAY WINS"
+		result_color = _initial_team_primary(1)
 	else:
-		_phase_label.text = "TIE"
-		_phase_label.add_theme_color_override("font_color", _WHITE)
-	# Star of the Game, shown on the Game Over popup (see GameOverPopup.set_star):
-	# the popup sits on a higher CanvasLayer over the phase banner, so the star
-	# has to live there to be seen. One star only — scarcity keeps it meaningful
-	# at 3v3; a nothing game with no counting stats has no star.
-	var star: PlayerRecord = GameManager.get_star_of_game()
-	if star != null:
-		_game_over_popup.set_star("%s  ·  %s" % [star.display_name(), _star_stat_line(star.stats)])
-	else:
-		_game_over_popup.set_star("")
+		result_text = "TIE GAME"
+		result_color = _WHITE
+	_phase_label.text = result_text
+	_phase_label.add_theme_color_override("font_color", result_color)
 	_show_phase_banner_at_rest()
 	_rematch_votes.clear()
 	_local_voted = false
 	_update_rematch_ui()
-	_game_over_popup.show_popup()
+	if _game_over_present_tween != null and _game_over_present_tween.is_running():
+		_game_over_present_tween.kill()
+	_game_over_present_tween = create_tween()
+	_game_over_present_tween.tween_interval(_GAME_OVER_PRESENT_DELAY)
+	_game_over_present_tween.tween_callback(
+			_present_game_over_screen.bind(result_text, result_color))
+
+func _present_game_over_screen(result_text: String, result_color: Color) -> void:
+	# The screen carries the same FINAL info, so the chyron behind it retires.
+	_phase_wrapper.visible = false
+	# One star only — scarcity keeps it meaningful at 3v3; a nothing game with
+	# no counting stats has no star and the card stays hidden.
+	var star: PlayerRecord = GameManager.get_star_of_game()
+	var star_name: String = ""
+	var star_line: String = ""
+	var star_stripe: Color = _WHITE
+	if star != null:
+		star_name = star.display_name()
+		star_line = _star_stat_line(star.stats)
+		star_stripe = _scorebug_stripe(star.team.team_id)
+	_game_over_popup.present(_score_0, _score_1,
+			_scorebug_stripe(0), _scorebug_stripe(1),
+			result_text, result_color,
+			star_name, star_line, star_stripe)
 
 # Compact stat line for the star card. Scorers show goals/assists; a star who
 # earned it on volume/defense (a 0-point grinder game) shows those instead.
@@ -1300,6 +1306,9 @@ func _star_stat_line(stats: PlayerStats) -> String:
 	return " · ".join(parts)
 
 func _on_game_reset() -> void:
+	if _game_over_present_tween != null and _game_over_present_tween.is_running():
+		_game_over_present_tween.kill()
+	_game_over_present_tween = null
 	_game_over_popup.hide_popup()
 	if _pause_menu != null:
 		_pause_menu.close()
@@ -1370,18 +1379,52 @@ func _on_local_player_hit(magnitude: float) -> void:
 	var strength := clampf(magnitude / 12.0, 0.2, 0.55)
 	_flash_overlay.vignette_pulse(strength)
 
-# Shot-speed toast for the local player's hard shots. 22 m/s sits above every
-# pass/quick-snap (14) and below only near-max charged releases (wrister tops
-# at 24, slapper at 34 before the Shot attribute), so the toast stays a
-# brag-worthy event, not release-by-release noise.
-const _SHOT_SPEED_TOAST_MIN_M_S: float = 22.0
-const _M_S_TO_MPH: float = 2.23694
+# ── Stat feed ────────────────────────────────────────────────────────────────
+# Ticker toast per recorded counting stat ("JONES · BLOCKED SHOT"), derived by
+# diffing each player's replicated stat counters against the last snapshot —
+# the same numbers on every peer, so host and clients see identical toasts
+# with no extra RPC. Goals/assists are excluded (the goal banner + chyron own
+# that moment); see StatFeedRules for the full exclusion rationale.
 
-func _on_local_shot_released(power: float, is_slapper: bool) -> void:
-	if power < _SHOT_SPEED_TOAST_MIN_M_S or _toast_stack == null:
+const _STAT_FEED_LABELS: Dictionary[StringName, String] = {
+	StatFeedRules.EVENT_SHOT_ON_GOAL: "SHOT ON GOAL",
+	StatFeedRules.EVENT_BLOCKED_SHOT: "BLOCKED SHOT",
+	StatFeedRules.EVENT_HIT: "HIT",
+	StatFeedRules.EVENT_TAKEAWAY: "TAKEAWAY",
+	StatFeedRules.EVENT_FACEOFF_WIN: "FACEOFF WON",
+}
+
+# peer_id -> PlayerStats snapshot from the previous stats_updated.
+var _stat_feed_baseline: Dictionary[int, PlayerStats] = {}
+
+func _on_stats_updated_for_feed() -> void:
+	if _toast_stack == null:
 		return
-	var label: String = "SLAP SHOT" if is_slapper else "WRISTER"
-	_toast_stack.push("%s · %d MPH" % [label, roundi(power * _M_S_TO_MPH)], _GOLD)
+	var players: Dictionary = GameManager.get_players()
+	for pid: int in players:
+		var record: PlayerRecord = players[pid] as PlayerRecord
+		if record == null or record.stats == null:
+			continue
+		var snapshot: PlayerStats = PlayerStats.from_array(record.stats.to_array())
+		var prev: PlayerStats = _stat_feed_baseline.get(pid)
+		# First sight of a player just establishes the baseline — joining
+		# mid-game must not replay their whole stat line as toasts.
+		if prev != null:
+			for event: StringName in StatFeedRules.feed_events(prev, snapshot):
+				_toast_stack.push_pair(record.display_name(),
+						"· %s" % _STAT_FEED_LABELS[event], _stat_feed_color(record))
+		_stat_feed_baseline[pid] = snapshot
+	# Drop baselines for departed players so a reused peer id starts fresh.
+	for pid: int in _stat_feed_baseline.keys():
+		if not players.has(pid):
+			_stat_feed_baseline.erase(pid)
+
+# Same color the join/leave toasts use for this player's team.
+func _stat_feed_color(record: PlayerRecord) -> Color:
+	if record.team == null:
+		return _WHITE
+	return TeamColorRegistry.get_colors(
+			record.team.color_slot, record.team.team_id).primary
 
 func _on_shots_on_goal_changed(sog_0: int, sog_1: int) -> void:
 	if _home_sog_label != null:

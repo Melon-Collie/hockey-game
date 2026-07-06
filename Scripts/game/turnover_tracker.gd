@@ -30,37 +30,42 @@ func setup(registry: PlayerRegistry) -> void:
 
 # Possession gained by `peer_id`. `was_faceoff` = this pickup ended a faceoff
 # (won the draw), which is credited to the winning team's centre and never
-# counts as a turnover.
-func on_carrier_gained(peer_id: int, was_faceoff: bool) -> void:
+# counts as a turnover. Returns true when a stat was credited, so the caller
+# knows to broadcast the stats now rather than on the next unrelated event.
+func on_carrier_gained(peer_id: int, was_faceoff: bool) -> bool:
 	if _registry == null:
-		return
+		return false
 	var rec: PlayerRecord = _registry.get_record(peer_id)
 	if rec == null or rec.team == null:
-		return
+		return false
 	var new_team: int = rec.team.team_id
 	if was_faceoff:
-		_credit_faceoff_win(new_team)
+		var credited: bool = _credit_faceoff_win(new_team)
 		# A faceoff is a fresh start — clear stale turnover context.
 		_last_carrier_peer = peer_id
 		_last_carrier_team = new_team
 		_strip_time = -INF
 		_shot_time = -INF
-		return
+		return credited
 	var now: float = _now()
 	var recent_strip: bool = _strip_time + STRIP_WINDOW_S > now \
 			and _strip_victim_team == _last_carrier_team
 	var recent_shot: bool = _shot_time + SHOT_WINDOW_S > now \
 			and _shot_team == _last_carrier_team
+	var stat_credited: bool = false
 	match TurnoverRules.classify(_last_carrier_team, new_team, recent_strip, recent_shot):
 		TurnoverRules.TAKEAWAY:
 			if rec.stats != null:
 				rec.stats.takeaways += 1
+				stat_credited = true
 		TurnoverRules.GIVEAWAY:
 			var prev: PlayerRecord = _registry.get_record(_last_carrier_peer)
 			if prev != null and prev.stats != null:
 				prev.stats.giveaways += 1
+				stat_credited = true
 	_last_carrier_peer = peer_id
 	_last_carrier_team = new_team
+	return stat_credited
 
 
 # A poke / stick-lift stripped the puck from `victim_peer_id`.
@@ -85,7 +90,7 @@ func reset() -> void:
 	_shot_team = -1
 
 
-func _credit_faceoff_win(winning_team: int) -> void:
+func _credit_faceoff_win(winning_team: int) -> bool:
 	# The centre (team_slot 0) takes the draw, so the win is theirs regardless of
 	# which linemate actually corralled the loose puck.
 	for pid: int in _registry.all():
@@ -93,7 +98,8 @@ func _credit_faceoff_win(winning_team: int) -> void:
 		if r != null and r.team != null and r.team.team_id == winning_team \
 				and r.team_slot == 0 and r.stats != null:
 			r.stats.faceoff_wins += 1
-			return
+			return true
+	return false
 
 
 func _team_of(peer_id: int) -> int:

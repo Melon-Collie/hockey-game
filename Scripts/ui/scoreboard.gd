@@ -32,7 +32,6 @@ func _ready() -> void:
 	visible = false
 	if not _external_control:
 		GameManager.stats_updated.connect(_refresh)
-		GameManager.game_over.connect(_on_game_over)
 		GameManager.game_reset.connect(_on_game_reset)
 		GameManager.team_colors_ready.connect(_on_team_colors_ready)
 		var ping_timer := Timer.new()
@@ -76,9 +75,9 @@ func toggle_board() -> void:
 	else:
 		show_board()
 
-func _on_game_over() -> void:
-	visible = true
-	_refresh()
+# No auto-show at game over: the GameOverPopup end-of-game screen owns that
+# moment now, with a "TAB · BOX SCORE" hint. This board renders on a higher
+# layer, so Tab still brings the full numbers up over it.
 
 # A new game/rematch auto-closes the end-of-game box score. The player can
 # still re-open it with Tab during play.
