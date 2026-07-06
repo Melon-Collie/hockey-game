@@ -26,6 +26,9 @@ var _driver: FileReplayDriver = null
 var _camera_director: CameraDirector = null
 var _hud: ReplayViewerHUD = null
 var _crowd: CrowdAudioController = null
+# Recorded game phase of the currently-applied frame (GamePhase.Phase; −1
+# before the first frame lands). Backs the is_faceoff_prep() stub.
+var _replay_phase: int = -1
 # Cached so the player_joined event handler can spawn mid-game arrivals
 # without re-deriving them from header.
 var _home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
@@ -240,7 +243,15 @@ func _start_playback(frames: Array) -> void:
 	_driver.setup(_codec, _records, _puck, _goalie_controllers, frames)
 	_driver.event_emitted.connect(_on_replay_event)
 	_driver.roster_rebuild_requested.connect(_on_roster_rebuild)
+	# Track the recorded phase for the is_faceoff_prep() stub below — the
+	# skater gait's faceoff ready-stance reads it through the game_state
+	# interface, so replayed faceoffs crouch at the dot like live ones.
+	_driver.game_state_changed.connect(_on_replay_game_state)
 	_driver.play()
+
+
+func _on_replay_game_state(gs: Dictionary) -> void:
+	_replay_phase = int(gs.get("phase", -1))
 
 
 # Dispatch on event kind so the viewer stays in sync with mid-game roster
@@ -392,6 +403,14 @@ func is_host() -> bool:
 
 func is_movement_locked() -> bool:
 	return true
+
+
+# Recorded phase, updated from the driver's game_state_changed as frames
+# apply (seeks included — a paused scrub re-applies the frame). The gait's
+# faceoff ready-stance polls this through the game_state interface, exactly
+# as it polls GameManager in live play.
+func is_faceoff_prep() -> bool:
+	return _replay_phase == GamePhase.Phase.FACEOFF_PREP
 
 
 # Replay never wants stick wiggle — the recorded skater poses own the blade.

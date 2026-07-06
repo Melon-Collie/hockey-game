@@ -213,6 +213,15 @@ signal body_block_hit(body: Node3D)
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
 var current_shot_state: int = 0
+
+# Movement INTENT — the raw WASD vector (world frame) and brake hold, stamped
+# per tick by whichever controller simulates this skater (local input, bot AI,
+# host-side client sim) and decoded from the wire for client-rendered remotes;
+# same pattern as current_shot_state. Cosmetic-only consumers (the gait) read
+# what the player is TRYING to do — crossover intent, deliberate hockey stop,
+# no-keys glide — a beat before velocity responds.
+var move_intent: Vector2 = Vector2.ZERO
+var brake_intent: bool = false
 # Predicted world-space shot velocity (direction * speed) if the carrier
 # released the shot they're currently charging RIGHT NOW. Published each tick by
 # SkaterController while a WRISTER charge is live (host-controlled skaters only —
@@ -1042,7 +1051,9 @@ func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
 # skaters render the identical flex with zero network additions.
 func _update_stick_flex(delta: float) -> void:
 	var state: int = current_shot_state
-	var side: float = (1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
+	# Sign verified in play: the shaft bows AWAY from the loaded blade face —
+	# the paper-derived convention read inverted, hence the leading negation.
+	var side: float = -(1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
 			* (-1.0 if is_left_handed else 1.0)
 	if state != _flex_prev_state:
 		if state == SkaterStateMachine.State.FOLLOW_THROUGH:

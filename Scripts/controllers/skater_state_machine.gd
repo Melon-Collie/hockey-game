@@ -167,12 +167,16 @@ func _state_slapper_charge_without_puck(_skater: Skater, input: InputState, delt
 		var result: Dictionary = _cb.try_one_timer_release.call(input)
 		if result.get("fired", false):
 			shot_dir = result.direction
-			follow_through_is_slapper = true
-			_state = State.FOLLOW_THROUGH
-			follow_through_timer = result.get("follow_through_duration", 0.5)
-			follow_through_duration_total = follow_through_timer
 		else:
-			_cancel_slapper_internal()
+			# Whiffed one-timer: the swing is already committed — play the
+			# full follow-through through empty air (shot_dir stays zero;
+			# the pose falls back to locked_slapper_dir) instead of the old
+			# instant cancel, which snapped the wind-up away with no swing.
+			shot_dir = Vector3.ZERO
+		follow_through_is_slapper = true
+		_state = State.FOLLOW_THROUGH
+		follow_through_timer = result.get("follow_through_duration", 0.5)
+		follow_through_duration_total = follow_through_timer
 
 
 func _state_follow_through(_skater: Skater, _input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:

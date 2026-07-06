@@ -77,16 +77,18 @@ const NET_DETOUR_FRONT_MARGIN: float = 0.3
 # the bot — prevents jittering across the anchor at high speed.
 const ANCHOR_DEADBAND: float = 0.5
 
-# Brake-pivot threshold. When the bot wants to head one direction but is
+# Brake-pivot thresholds. When the bot wants to head one direction but is
 # carrying meaningful speed in roughly the opposite direction (angle
 # between velocity and desired direction exceeds BRAKE_PIVOT_ANGLE_DEG),
-# the steering output flips to push opposite the velocity — i.e. brake
-# first, then accelerate toward the new direction once speed has dropped
-# below BRAKE_PIVOT_MIN_SPEED. Cuts the wide arcs bots used to trace on
-# near-180° transitions (puck flip, opp turnover) down to a tight pivot.
-# Threshold is well past 90° so normal course corrections (a defender
-# stepping to angle, anchor drifting cross-ice) don't trigger it.
+# it presses the BRAKE input — stop hard first, then accelerate toward the
+# new direction once speed has dropped below BRAKE_PIVOT_MIN_SPEED. Cuts
+# the wide arcs bots used to trace on near-180° transitions (puck flip,
+# opp turnover) down to a tight pivot. The engage threshold is well past
+# 90° so normal course corrections (a defender stepping to angle, anchor
+# drifting cross-ice) don't trigger it; the release threshold sits below
+# it as hysteresis so a wobbling steering field can't strobe the brake.
 const BRAKE_PIVOT_ANGLE_DEG: float = 120.0
+const BRAKE_PIVOT_RELEASE_ANGLE_DEG: float = 100.0
 const BRAKE_PIVOT_MIN_SPEED: float = 3.0
 
 # Offside brake. In ARCADE an attacking non-carrier whose body-center
@@ -294,29 +296,31 @@ static func _net_detour(self_pos: Vector3, anchor: Vector3) -> Vector2:
 			goal_z_sign * NET_DETOUR_BACK_WEIGHT)
 
 
-# Decides between obeying the steering output or braking against current
-# velocity. When the desired direction is roughly opposite (>=
-# BRAKE_PIVOT_ANGLE_DEG) the current heading and we're carrying speed
-# (>= BRAKE_PIVOT_MIN_SPEED), it's faster to plant and reverse than to
-# carve a wide arc. Returns the original desired vector when no brake is
-# needed; otherwise returns a vector opposite to velocity at the same
-# magnitude as desired so the controller treats it like a normal joystick
-# input. Once the brake drops speed below BRAKE_PIVOT_MIN_SPEED on a
-# subsequent tick, this returns desired again and the bot accelerates
-# normally toward the new direction.
-static func brake_pivot(desired: Vector2, velocity_xz: Vector2) -> Vector2:
+# Decides whether to press the actual BRAKE input for a pivot. When the
+# desired direction is roughly opposite (>= BRAKE_PIVOT_ANGLE_DEG) the
+# current heading and we're carrying speed (>= BRAKE_PIVOT_MIN_SPEED),
+# braking beats carving a wide arc: brake friction decelerates at least as
+# hard as reverse thrust across the speed band (and unlike thrust it isn't
+# scaled down by facing misalignment), and the caller keeps move_vector on
+# the NEW direction — the same input shape a human uses (brake held + the
+# exit direction on the stick), so the cosmetic layer reads a genuine
+# hockey stop into a dig-in restart. This replaced the old `brake_pivot`
+# reverse-thrust flip when bots learned the real brake key.
+#
+# `was_braking` is the previous tick's decision: once braking, the brake
+# holds until the opposition relaxes past BRAKE_PIVOT_RELEASE_ANGLE_DEG
+# (or speed drops below the pivot floor), so a steering wobble on the
+# engage threshold can't strobe the brake key — a strobing brake bit
+# would flicker the replicated stop pose on every client.
+static func should_brake(desired: Vector2, velocity_xz: Vector2, was_braking: bool) -> bool:
 	var speed: float = velocity_xz.length()
 	if speed < BRAKE_PIVOT_MIN_SPEED:
-		return desired
+		return false
 	var desired_len: float = desired.length()
 	if desired_len < 0.01:
-		return desired
-	var vel_dir: Vector2 = velocity_xz / speed
-	var desired_dir: Vector2 = desired / desired_len
-	var threshold_dot: float = cos(deg_to_rad(BRAKE_PIVOT_ANGLE_DEG))
-	if vel_dir.dot(desired_dir) >= threshold_dot:
-		return desired
-	return -vel_dir * desired_len
+		return false
+	var angle_deg: float = BRAKE_PIVOT_RELEASE_ANGLE_DEG if was_braking else BRAKE_PIVOT_ANGLE_DEG
+	return velocity_xz.dot(desired) / (speed * desired_len) < cos(deg_to_rad(angle_deg))
 
 
 # Hard body-level guard against skating offside. Returns `desired`

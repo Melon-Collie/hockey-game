@@ -206,6 +206,10 @@ func _interpolate(delta: float) -> void:
 		interpolated.elevation_level = newest.elevation_level
 		interpolated.blade_up = newest.blade_up
 		interpolated.shot_state = newest.shot_state
+		interpolated.shot_charge = newest.shot_charge
+		interpolated.stagger_timer = newest.stagger_timer
+		interpolated.move_intent = newest.move_intent
+		interpolated.brake_intent = newest.brake_intent
 	else:
 		var from_state: SkaterNetworkState = bracket.from_state
 		var to_state: SkaterNetworkState = bracket.to_state
@@ -233,6 +237,12 @@ func _interpolate(delta: float) -> void:
 		interpolated.elevation_level = to_state.elevation_level
 		interpolated.blade_up = to_state.blade_up
 		interpolated.shot_state = to_state.shot_state
+		# Charge is a scalar — lerp it so the remote's stick-flex load bow
+		# grows smoothly through the drag instead of stepping per broadcast.
+		interpolated.shot_charge = lerpf(from_state.shot_charge, to_state.shot_charge, t)
+		interpolated.stagger_timer = lerpf(from_state.stagger_timer, to_state.stagger_timer, t)
+		interpolated.move_intent = to_state.move_intent
+		interpolated.brake_intent = to_state.brake_intent
 		# render_time is led toward present by extrapolation_lead_fraction, so the
 		# hermite result already sits close to the host's live pose (or, past the
 		# newest sample, the is_extrapolating branch dead-reckons it). The position
@@ -306,6 +316,26 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# any reader (AI off-puck, VFX) on spectated remotes.
 	skater.blade_up = state.blade_up
 	skater.current_shot_state = state.shot_state
+	# Charge drives the stick-flex load bow (Skater._update_stick_flex reads
+	# it in WRISTER_AIM every rendered frame). It was replicated and decoded
+	# but never applied here, so remote wristers always bowed at zero charge
+	# — only the release whip's minimum pop showed on other machines.
+	skater.shot_charge = state.shot_charge
+	# Movement intent for the gait's input-driven reads (glide, intent
+	# crossovers, brake-gated hockey stop) — the client-rendered remote's
+	# equivalent of the per-tick stamp in SkaterController._process_input.
+	skater.move_intent = state.move_intent
+	skater.brake_intent = state.brake_intent
+	# The skid VFX (SkaterVFX trail marks + spray) keys off skater.is_braking,
+	# which only _process_input stamps — mirror it from the replicated brake
+	# bit so another player's hockey stop actually sprays on this machine.
+	skater.is_braking = state.brake_intent
+	# The stagger-stumble wobble reads the CONTROLLER's stagger_timer (the
+	# gait derives its phase from the countdown). It was replicated since v10
+	# for the local victim's reconcile, but never applied to client-rendered
+	# remotes — so a checked opponent stumbled on the host and stood rock-
+	# steady on everyone else's screen.
+	stagger_timer = state.stagger_timer
 	# Bottom hand is purely reactive to top_hand + blade (both already set
 	# above) and needs no network state of its own. Arm/stick meshes derive
 	# from the markers once per rendered frame in Skater._process.

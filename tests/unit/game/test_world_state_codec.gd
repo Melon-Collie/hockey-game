@@ -240,6 +240,31 @@ func test_skater_flags_round_trip_all_combinations() -> void:
 						assert_eq(dec.sprint_locked, sprint_locked, ctx)
 
 
+func test_skater_move_intent_round_trips_all_octants() -> void:
+	# The intent byte (v15) quantizes the WASD vector to 8 directions —
+	# lossless for keyboard input. Every octant + brake + idle round-trips.
+	for oct: int in range(8):
+		var a: float = float(oct) * (PI / 4.0)
+		var s := SkaterNetworkState.new()
+		s.move_intent = Vector2(sin(a), cos(a))
+		s.brake_intent = (oct % 2 == 0)
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		assert_almost_eq(dec.move_intent.x, s.move_intent.x, 0.001, "octant %d x" % oct)
+		assert_almost_eq(dec.move_intent.y, s.move_intent.y, 0.001, "octant %d y" % oct)
+		assert_eq(dec.brake_intent, s.brake_intent, "octant %d brake" % oct)
+
+
+func test_skater_idle_intent_round_trips_zero() -> void:
+	var s := SkaterNetworkState.new()
+	s.move_intent = Vector2.ZERO
+	s.brake_intent = true
+	var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+			WorldStateCodec._encode_skater_quantized(s))
+	assert_eq(dec.move_intent, Vector2.ZERO)
+	assert_true(dec.brake_intent)
+
+
 func test_skater_stamina_quantizes_within_tolerance() -> void:
 	# Stamina rides as a u8 (0..1 → 0..255), so worst-case quantization error is
 	# ~1/255. Round-trip a spread of values through the real wire path.
@@ -283,7 +308,7 @@ func _build_ws(
 	buf.append_array(header)
 	for entry: Dictionary in skaters:
 		_append_s32(buf, entry.id)
-		buf.append_array(WorldStateCodec._encode_skater_quantized(entry.state))  # 39 B
+		buf.append_array(WorldStateCodec._encode_skater_quantized(entry.state))  # 40 B
 		buf.append(0)  # queue_depth (ignored by replay decode)
 	buf.append_array(WorldStateCodec._encode_puck_quantized(puck))  # 12 B
 	buf.append(carrier_idx & 0xFF)

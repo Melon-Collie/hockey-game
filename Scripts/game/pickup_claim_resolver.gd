@@ -115,10 +115,13 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 		return
 	if skater_snap.is_ghost:
 		return
-	# A crouched shot-blocker can't corral the puck with their stick. Checked
-	# from the rewound snapshot (like is_ghost) so the verdict matches the
-	# stance the claimant actually held at send time.
-	if skater_snap.shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+	# A crouched shot-blocker can't corral the puck with their stick, and
+	# neither can a shooter mid follow-through (the stick is whipping through
+	# a finish — this also closes the instant self-rebound re-attach after a
+	# shot). Checked from the rewound snapshot (like is_ghost) so the verdict
+	# matches the stance the claimant actually held at send time.
+	if skater_snap.shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
+			or skater_snap.shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 		return
 	var blade_curr: Vector3 = skater_snap.blade_contact_world
 	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world

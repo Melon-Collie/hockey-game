@@ -166,59 +166,57 @@ func test_net_detour_noop_in_front_of_line() -> void:
 	assert_almost_eq(v.x, 0.0, 0.05, "no lateral detour in front of the goal line")
 
 
-# brake_pivot tests — direction reversal helper layered on top of the
-# potential-field steering output.
+# should_brake tests — the brake-pivot decision (real brake key) layered on
+# top of the potential-field steering output. Angular hysteresis: engages
+# past BRAKE_PIVOT_ANGLE_DEG, holds until BRAKE_PIVOT_RELEASE_ANGLE_DEG.
 
-func test_brake_pivot_passes_through_when_below_min_speed() -> void:
-	var desired := Vector2(1.0, 0.0)
-	var slow_velocity := Vector2(-(AISteering.BRAKE_PIVOT_MIN_SPEED - 0.5), 0.0)
-	var v := AISteering.brake_pivot(desired, slow_velocity)
-	assert_almost_eq(v.x, desired.x, 0.001, "below min speed, return desired unchanged")
-	assert_almost_eq(v.y, desired.y, 0.001)
+func _dir_at(angle_deg: float) -> Vector2:
+	# Desired direction at angle_deg from +X (the velocity direction used below).
+	return Vector2(cos(deg_to_rad(angle_deg)), sin(deg_to_rad(angle_deg)))
 
 
-func test_brake_pivot_passes_through_for_small_angle() -> void:
-	# Velocity and desired both forward — small angle, no brake.
-	var desired := Vector2(1.0, 0.0)
-	var velocity := Vector2(8.0, 0.0)  # well above min speed
-	var v := AISteering.brake_pivot(desired, velocity)
-	assert_almost_eq(v.x, desired.x, 0.001, "aligned velocity does not trigger brake")
-	assert_almost_eq(v.y, desired.y, 0.001)
+func test_should_brake_off_below_min_speed() -> void:
+	var slow_velocity := Vector2(AISteering.BRAKE_PIVOT_MIN_SPEED - 0.5, 0.0)
+	assert_false(AISteering.should_brake(Vector2(-1.0, 0.0), slow_velocity, false),
+			"below min speed, never brake")
+	assert_false(AISteering.should_brake(Vector2(-1.0, 0.0), slow_velocity, true),
+			"speed floor also releases a held brake")
 
 
-func test_brake_pivot_inverts_to_velocity_on_reversal() -> void:
-	# Velocity strongly forward, desired strongly backward (180°). Brake
-	# fires — output should oppose velocity at the same magnitude as desired.
-	var desired := Vector2(-1.0, 0.0)
+func test_should_brake_off_for_small_angle() -> void:
+	assert_false(AISteering.should_brake(Vector2(1.0, 0.0), Vector2(8.0, 0.0), false),
+			"aligned velocity does not trigger brake")
+
+
+func test_should_brake_on_reversal() -> void:
+	assert_true(AISteering.should_brake(Vector2(-1.0, 0.0), Vector2(8.0, 0.0), false),
+			"180° opposition brakes")
+
+
+func test_should_brake_off_at_perpendicular() -> void:
+	assert_false(AISteering.should_brake(Vector2(0.0, 1.0), Vector2(8.0, 0.0), false),
+			"90° is below the 120° engage threshold")
+
+
+func test_should_brake_hysteresis_band() -> void:
+	# 110° sits between release (100°) and engage (120°): not enough to
+	# start a brake, enough to keep one held.
+	var desired: Vector2 = _dir_at(110.0)
 	var velocity := Vector2(8.0, 0.0)
-	var v := AISteering.brake_pivot(desired, velocity)
-	# -velocity_dir * desired.length() = (-1, 0) * 1.0 = (-1, 0).
-	assert_almost_eq(v.x, -1.0, 0.001, "brake pushes opposite to velocity")
-	assert_almost_eq(v.y, 0.0, 0.001)
+	assert_false(AISteering.should_brake(desired, velocity, false),
+			"110° does not engage a fresh brake")
+	assert_true(AISteering.should_brake(desired, velocity, true),
+			"110° holds an already-engaged brake")
 
 
-func test_brake_pivot_passes_through_at_perpendicular() -> void:
-	# 90° angle is below the 120° threshold — should pass through.
-	var desired := Vector2(0.0, 1.0)
-	var velocity := Vector2(8.0, 0.0)
-	var v := AISteering.brake_pivot(desired, velocity)
-	assert_almost_eq(v.x, desired.x, 0.001)
-	assert_almost_eq(v.y, desired.y, 0.001)
+func test_should_brake_releases_past_release_angle() -> void:
+	assert_false(AISteering.should_brake(_dir_at(95.0), Vector2(8.0, 0.0), true),
+			"opposition relaxed below 100° releases the brake")
 
 
-func test_brake_pivot_preserves_desired_magnitude() -> void:
-	# Half-magnitude desired should produce half-magnitude brake output.
-	var desired := Vector2(-0.5, 0.0)
-	var velocity := Vector2(8.0, 0.0)
-	var v := AISteering.brake_pivot(desired, velocity)
-	assert_almost_eq(v.length(), 0.5, 0.001, "brake matches desired magnitude")
-
-
-func test_brake_pivot_handles_zero_desired() -> void:
-	var desired := Vector2.ZERO
-	var velocity := Vector2(8.0, 0.0)
-	var v := AISteering.brake_pivot(desired, velocity)
-	assert_almost_eq(v.length(), 0.0, 0.001, "zero desired stays zero")
+func test_should_brake_off_for_zero_desired() -> void:
+	assert_false(AISteering.should_brake(Vector2.ZERO, Vector2(8.0, 0.0), false),
+			"no desired direction, no brake")
 
 
 # offside_brake tests — body-level guard against skating across the

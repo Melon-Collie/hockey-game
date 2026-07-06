@@ -203,8 +203,26 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
 @export var stride_pitch_deg: float = 6.0         # forward push amplitude (fore/aft)
 @export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)
-@export var crossover_lean_deg: float = 6.0       # static lean into the crossover direction
-@export var crossover_scissor_deg: float = 8.0    # legs scissor laterally across each other
+@export var crossover_lean_deg: float = 6.0       # static lean into the strafe direction
+@export var crossover_scissor_deg: float = 8.0    # aim-locked strafe: legs scissor laterally
+# Carve crossovers — engaged by path curvature (CarveRules), not lateral
+# velocity: crossovers are how a skater TURNS at speed. Roles are fixed by
+# the turn direction: the outside leg lifts and steps across (over_*,
+# clearance), the inside leg extends beneath the body (under_roll).
+# carve_stride_fade bleeds the fore/aft stride out as the carve engages —
+# in a hard carve the crossovers ARE the stride.
+@export var carve_ref_turn_rate: float = 1.6   # rad/s of travel-direction turn = full carve
+@export var carve_min_speed: float = 2.5       # m/s floor — slow pivots are steps, not crossovers
+@export var carve_engage_speed: float = 5.0    # carve blend ease rate
+@export var carve_over_roll_deg: float = 24.0  # crossing (outside) leg roll across the body
+@export var carve_under_roll_deg: float = 16.0 # inside leg under-push roll
+@export var carve_over_pitch_deg: float = 8.0  # crossing leg also steps AHEAD
+@export var carve_clearance_knee_deg: float = 28.0  # lift while crossing the planted leg
+@export var carve_stride_fade: float = 0.7     # fraction of fore/aft stride removed at full carve
+# Gliding — releasing all movement keys settles the legs to rest (the stride
+# is input-gated, v15 intent byte) while this floor keeps working knees under
+# a coasting skater, scaled by speed.
+@export var glide_stance: float = 0.5
 @export var stride_knee_deg: float = 18.0         # recovery tuck depth of the swinging (unloaded) knee
 @export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
 @export var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)
@@ -239,6 +257,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # replicated, so every machine poses its skaters identically.
 @export var faceoff_stance: float = 0.85       # stance engagement floor at the dot
 @export var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
+# Fraction of the rest blade radius at which this skater's CENTER spawns from
+# the faceoff dot — reach-derived so a Size-1 center (short stick + arms) can
+# play the drop as comfortably as a Size-5 (see faceoff_center_distance).
+@export var faceoff_center_reach_fraction: float = 0.9
 # Hockey stop — braking hard at speed turns the lower body across the travel
 # direction (legs sideways, torso still on the play) with a scissored,
 # edge-rolled stance. Engagement derives from the velocity-based effort
@@ -253,6 +275,47 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var hockey_stop_stance: float = 0.9      # stance floor while stopping (deep knees)
 @export var hockey_stop_trunk_roll_deg: float = 6.0  # trunk bank over the skid
 @export var hockey_stop_blend_speed: float = 9.0 # pose ease-in/out rate
+# Hip-to-travel alignment — the lower body yaws toward the direction of
+# MOTION (torso keeps facing the cursor) so the legs stride along travel
+# instead of flailing through the crossover/backward blends whenever cursor
+# and movement disagree. Clamped: misalignment beyond the cap still plays
+# the backward C-cut / crossover gaits on the residual, as designed.
+@export var hip_align_max_deg: float = 50.0  # cap on the hips' turn toward travel
+@export var hip_align_speed: float = 6.0     # how fast the hips settle onto the travel line
+# Input-intent gait reads (GaitIntentRules, v15 intent byte) — signals for
+# what the player is TRYING to do, layered over the velocity-derived gait.
+# All cosmetic; every signal derives from replicated state, so local, bot,
+# and remote skaters read identically.
+@export var intent_signal_speed: float = 6.0     # ease rate of the smoothed intent signals
+# Dig-in: intent held at low speed — explosive, choppy first strides.
+@export var dig_in_fade_speed: float = 4.0       # m/s where the dig hands off to the speed gait
+@export var dig_in_intensity: float = 0.85       # stride intensity floor while digging in
+@export var dig_in_cadence_rate: float = 4.5     # rad/s stride-phase floor — quick chop from a standstill
+@export var dig_in_chop: float = 0.35            # push-amplitude cut at full dig (short strides)
+@export var dig_in_stance: float = 0.7           # stance floor — power comes from bent knees
+@export var dig_in_lean_deg: float = 6.0         # extra forward trunk pitch driving out of the start
+# Reversal: intent opposing travel at speed — the stop-and-go weight shift.
+@export var reversal_min_speed: float = 2.5      # m/s floor — a slow reversal is just a step
+@export var reversal_start_opposition: float = 0.5  # travel·intent opposition where the shift begins
+@export var reversal_stride_fade: float = 0.8    # stride suppression at full reversal (legs plant)
+@export var reversal_stance: float = 0.85        # stance floor — sits down hard into the plant
+@export var reversal_lean_deg: float = 7.0       # trunk tips BACK against the travel it fights
+@export var reversal_plant_deg: float = 8.0      # wide-V outward leg plant
+# Shuffle: lateral intent at low speed — hips stay square, legs side-step.
+@export var shuffle_fade_speed: float = 4.0      # m/s where crossovers take over from the shuffle
+@export var shuffle_start_lateral: float = 0.6   # lateral intent fraction where the shuffle begins
+@export var shuffle_intensity: float = 0.6       # stride intensity floor while side-stepping
+@export var shuffle_cadence_rate: float = 3.0    # rad/s stride-phase floor for the steps
+# Backpedal: intent held behind the facing — a defender's deliberate back-skate.
+@export var backpedal_start: float = 0.35        # backward intent fraction where the read begins
+@export var backpedal_ccut_roll_deg: float = 6.0 # extra out-and-in leg sweep (real C-cuts)
+@export var backpedal_chest_deg: float = 4.0     # chest-up trunk pitch over the C-cuts
+# Glide enrichment: coasting (no keys) sways weight edge-to-edge, and a carve
+# released into a glide exits the turn on its edges (one-foot-glide read).
+@export var glide_sway_deg: float = 2.5          # lazy edge-to-edge roll amplitude
+@export var glide_sway_hz: float = 0.4           # sway frequency — far below stride cadence
+@export var glide_carve_lean_deg: float = 10.0   # legs lean into the arc gliding out of a turn
+@export var glide_inside_tuck_deg: float = 10.0  # inside-leg knee tuck — weight on the outside edge
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
@@ -351,6 +414,10 @@ var show_one_timer_indicator: bool = false
 @export var quick_shot_follow_through_duration: float = 0.18  # snap pass flick
 @export var slapper_follow_through_duration: float = 0.5
 @export var follow_through_arc_skew: float = 0.7
+# First fraction of the wrister/quick FT spent blending from the captured
+# release pose onto the authored swing (kills the release-instant teleport
+# to a near-rest pose — the "animation played twice" read).
+@export var follow_through_takeover_frac: float = 0.28
 @export var wrister_follow_through_min_power: float = 0.55  # amplitude floor at zero charge
 @export var quick_shot_follow_through_power: float = 0.5
 @export var wrister_follow_through_hand_y: float = 0.35
@@ -769,6 +836,18 @@ func _wants_deflect(input: InputState) -> bool:
 
 
 func _process_input(input: InputState, delta: float) -> void:
+	# Stamp movement intent for the cosmetic layers (gait glide / intent
+	# crossovers / brake-gated hockey stop). Local, bot, and host-side client
+	# simulation all funnel through here with real inputs; client-rendered
+	# remotes get the same fields off the wire in RemoteController. Gated by
+	# the SAME deadzone the movement physics uses, so "trying to move" means
+	# the same thing to the animation as to the thrust — bot steering emits
+	# small residual vectors at rest (potential-field repels never fully
+	# cancel) that would otherwise read as a perpetual dig-in chop, and the
+	# wire octant would inflate them to unit length on remote clients.
+	skater.move_intent = input.move_vector \
+			if input.move_vector.length() > move_deadzone else Vector2.ZERO
+	skater.brake_intent = input.brake
 	# Snapshot the blade's current contact point before any IK mutation runs
 	# this tick. The host's swept-segment pickup/poke test (PuckController._check_interactions,
 	# priority 1) reads this later in the tick as `blade_prev`; combined with the
@@ -856,6 +935,9 @@ func _process_input(input: InputState, delta: float) -> void:
 # Callers must already have confirmed the phase allows blade aim during a
 # locked phase.
 func apply_blade_aim_only(input: InputState, delta: float) -> void:
+	# Movement is locked — whatever keys are down, nothing is being tried.
+	skater.move_intent = Vector2.ZERO
+	skater.brake_intent = false
 	_ik.apply_blade_from_mouse(input, delta)
 	# Preserve blade/hand world positions across the upper-body rotation —
 	# same dance as _process_input. Without it the blade slides sideways as
@@ -915,6 +997,8 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.stamina = stamina
 	state.sprint_locked = _sprint_locked
 	state.stagger_timer = stagger_timer
+	state.move_intent = skater.move_intent
+	state.brake_intent = skater.brake_intent
 
 func get_shot_state() -> int:
 	return _sm.get_state()
@@ -940,6 +1024,23 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	skater.visual_offset = Vector3.ZERO
 	skater.velocity = state.velocity
 	skater.blade_up = state.blade_up
+	# Intent feeds the gait's input-driven reads below (glide / dig-in /
+	# crossovers / brake stop) — stamp it like the live controllers do, so
+	# playback strides match live play instead of reading zero (file viewer)
+	# or stale live-play intent (goal replay on live actors).
+	skater.move_intent = state.move_intent
+	skater.brake_intent = state.brake_intent
+	# Same for the shot-state renders Skater._process drives every frame:
+	# stick flex (shot_state transitions fire the release whip, shot_charge
+	# sets the load bow) and the loft-level blade scoop. Goal replays run on
+	# LIVE actors, so without these stamps the fields freeze at whatever the
+	# live tick last wrote and the replayed shot plays with the wrong stick.
+	skater.current_shot_state = state.shot_state
+	skater.shot_charge = state.shot_charge
+	skater.elevation_level = state.elevation_level
+	# Skid VFX (SkaterVFX trail marks + spray) keys off is_braking — stamp it
+	# from the recorded brake bit so replayed hockey stops spray like live ones.
+	skater.is_braking = state.brake_intent
 	stamina = state.stamina
 	_sprint_locked = state.sprint_locked
 	stagger_timer = state.stagger_timer
@@ -1103,6 +1204,31 @@ func _transition_to_skating(suppress_lost_flash: bool = false) -> void:
 	if show_one_timer_indicator and was_charging and not suppress_lost_flash:
 		skater.trigger_charge_lost_flash()
 
+# Aligns BOTH facing stores at spawn: the Skater node's root rotation and the
+# pose coordinator's smoothed facing. The spawn path used to set only the
+# skater side, leaving _pose.facing at its Vector2.DOWN default — the first
+# input tick then re-asserted the stale pose facing, snapping the root up to
+# 180° and dumping the whole turn into lower_body_lag: the player spawned
+# visibly twisted. (The faceoff teleport already syncs both; this is the
+# spawn-time equivalent.)
+func set_spawn_facing(facing: Vector2) -> void:
+	if facing == Vector2.ZERO:
+		return
+	skater.set_facing(facing)
+	_pose.facing = facing
+	_pose.reset_lean_and_lag()
+	skater.set_lower_body_lag(0.0)
+
+
+# This skater's center-slot distance from the faceoff dot: the rest-pose blade
+# radius (stick horizontal footprint at rest) scaled by faceoff_center_reach_
+# fraction, so the puck sits comfortably inside every build's reach at the
+# drop — no hand displacement or lean needed. Host-computed by the phase
+# coordinator and broadcast with the rest of the faceoff positions.
+func faceoff_center_distance() -> float:
+	return _ik.stick_horiz() * faceoff_center_reach_fraction
+
+
 func _enter_shot_block() -> void:
 	_sm.set_state(State.SHOT_BLOCKING)
 	skater.set_block_stance(true)
@@ -1219,6 +1345,7 @@ func _release_wrister(input: InputState) -> void:
 	# Finish size follows the charge: a bare tap flicks, a full drag finishes high.
 	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0,
 			clampf(_aiming.charge_distance / max_wrister_charge_distance, 0.0, 1.0))
+	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
 	_sm.follow_through_duration_total = follow_through_duration
@@ -1246,6 +1373,7 @@ func _fire_quick_shot(input: InputState) -> void:
 
 	_sm.follow_through_is_slapper = false
 	_sm.follow_through_power = quick_shot_follow_through_power
+	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = quick_shot_follow_through_duration
 	_sm.follow_through_duration_total = quick_shot_follow_through_duration
@@ -1346,7 +1474,12 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
 	var dist: float = zone_xz.distance_to(puck_xz)
 	if dist > _effective_one_timer_leniency():
-		return {fired = false}
+		# Whiff: no shot fires, but the state machine still commits the swing
+		# to a full follow-through — hand it the same duration/power and drop
+		# the HUD now, exactly like a connected release.
+		_sm.follow_through_power = 1.0
+		_hide_slapshot_hud()
+		return {fired = false, follow_through_duration = slapper_follow_through_duration}
 	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
 	var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 	var cfg: ShotMechanics.SlapperConfig = _slapper_config()

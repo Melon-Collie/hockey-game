@@ -316,7 +316,8 @@ func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector
 	for skater: Skater in skaters:
 		if skater == first or skater.is_ghost or puck.is_on_cooldown(skater):
 			continue
-		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
+				or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 			continue
 		if skater.blade_up or skater.deflect_intent:
 			continue
@@ -383,9 +384,13 @@ func _check_interactions() -> void:
 				if skater.is_ghost or puck.is_on_cooldown(skater):
 					continue
 				# A crouched shot-blocker can't corral the puck with their stick —
-				# the blade is committed to the block. Let it ride past (body-block
+				# the blade is committed to the block. Same for a shooter mid
+				# follow-through: the stick is whipping through a finish, not
+				# playing the puck (also closes the instant self-rebound
+				# re-attach right after a shot). Let it ride past (body-block
 				# dampening still applies via the body collision path).
-				if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+				if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
+						or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 					continue
 				# Grounded blade ↔ grounded puck, lifted blade ↔ airborne puck.
 				# A stationary grounded blade lets a saucer pass fly over; a lifted
@@ -564,6 +569,10 @@ func try_provisional_pickup(local_skater: Skater) -> void:
 	if _provisional_lockout_until > 0.0 and NetworkManager.local_time() < _provisional_lockout_until:
 		return
 	if puck.is_airborne() or _estimated_puck_speed() >= puck.pickup_max_speed:
+		return
+	# Mid follow-through the stick can't corral (mirrors the host's pickup
+	# gate) — don't pin a puck the host is guaranteed not to grant.
+	if local_skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 		return
 	if _is_pickup_contested(local_skater):
 		return

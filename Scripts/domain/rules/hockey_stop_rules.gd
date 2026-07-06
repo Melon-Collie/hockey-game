@@ -18,23 +18,26 @@ class_name HockeyStopRules
 # POSITIVE rotation.y turns the legs toward −X (left).
 
 
-# Engage when braking hard at real speed. `effort_threshold` is the fraction
-# of full braking effort required (0..1); coasting friction never reaches it,
-# so only a deliberate brake (or a wall) triggers the stop.
+# Engage when the BRAKE IS HELD and the body is actually braking hard at
+# real speed. The brake input (replicated as the skater's intent byte, v15)
+# makes the stop deliberate: hitting a wall or a body decelerates just as
+# hard, but nobody chose a hockey stop — the effort term then confirms the
+# brake is actually biting (holding Space at a standstill isn't a stop).
 static func should_engage(
 		effort: float, ground_speed: float,
-		effort_threshold: float, min_speed: float) -> bool:
-	return effort <= -effort_threshold and ground_speed >= min_speed
+		effort_threshold: float, min_speed: float, brake_held: bool) -> bool:
+	return brake_held and effort <= -effort_threshold and ground_speed >= min_speed
 
 
 # Release with hysteresis — well inside the engage bounds, so the pose never
-# chatters at the threshold: the brake easing off (effort recovering past
-# 40% of the engage bar) or the stop completing (speed collapsing below 40%
-# of the engage floor) both end it.
+# chatters at the threshold: dropping the brake key, the brake easing off
+# physically (effort recovering past 40% of the engage bar), or the stop
+# completing (speed collapsing below 40% of the engage floor) all end it.
 static func should_release(
 		effort: float, ground_speed: float,
-		effort_threshold: float, min_speed: float) -> bool:
-	return effort > -effort_threshold * 0.4 or ground_speed < min_speed * 0.4
+		effort_threshold: float, min_speed: float, brake_held: bool) -> bool:
+	return not brake_held or effort > -effort_threshold * 0.4 \
+			or ground_speed < min_speed * 0.4
 
 
 # Which hip leads the stop, latched ONCE at engagement (travel direction

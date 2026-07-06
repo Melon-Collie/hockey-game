@@ -18,9 +18,20 @@ static func assign_team(team0_count: int, team1_count: int) -> int:
 # Computes the faceoff start position for a team and within-team slot around
 # the given dot. Defaults to center ice when no dot is supplied — covers
 # default-arg callers (tests, tutorial) without forcing them to know the dot.
+#
+# center_reach: the CENTER slot's distance from the dot, in metres. The static
+# FACEOFF_OFFSETS distance (1.5 m) predates attribute-scaled reach — a Size-1
+# center's maximum blade radius (~1.3 m) physically cannot touch the puck from
+# there. Callers that know the player pass their reach-derived distance
+# (SkaterController.faceoff_center_distance: rest blade radius × fraction) so
+# every build can play the drop; ≤ 0 keeps the legacy offset (tests, tutorial,
+# callers without a controller). Wingers are unaffected.
 static func faceoff_position(team_id: int, team_slot: int,
-		dot_xz: Vector2 = GameRules.CENTER_ICE_DOT) -> Vector3:
+		dot_xz: Vector2 = GameRules.CENTER_ICE_DOT,
+		center_reach: float = -1.0) -> Vector3:
 	var off: Vector2 = GameRules.FACEOFF_OFFSETS[team_id][team_slot]
+	if team_slot == 0 and center_reach > 0.0:
+		off.y = signf(off.y) * center_reach
 	return Vector3(dot_xz.x + off.x, GameRules.FACEOFF_SPAWN_HEIGHT, dot_xz.y + off.y)
 
 

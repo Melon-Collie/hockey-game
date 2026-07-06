@@ -21,7 +21,7 @@ The Rocket League freeplay ceiling is a guiding star: the stickhandling-to-shot 
 | Channel | Rate | Transport |
 |---------|------|-----------|
 | Input (client → host) | 60 Hz | Unreliable, last 12 frames per packet |
-| World state (host → clients) | 120 Hz | Unreliable, ~349 bytes at 6 players + 2 goalies (single flat PackedByteArray, well under 1392-byte ENet MTU) |
+| World state (host → clients) | 120 Hz | Unreliable, ~383 bytes at 6 players + 2 goalies (single flat PackedByteArray, well under 1392-byte ENet MTU) |
 | Events (pickup, spawn, goal, goalie transitions) | On event | Reliable |
 | Stats sync | On change | Reliable |
 
