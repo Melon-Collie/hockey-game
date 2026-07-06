@@ -91,6 +91,33 @@ const BRAKE_PIVOT_ANGLE_DEG: float = 120.0
 const BRAKE_PIVOT_RELEASE_ANGLE_DEG: float = 100.0
 const BRAKE_PIVOT_MIN_SPEED: float = 3.0
 
+# Arrival brake. Station-keeping bots (off-puck role destinations: a
+# FINISHER staging spot, a cover point, CONTAIN's gap point) approach a
+# POINT that can stop moving — and nothing in the field slowed them
+# down: the anchor attraction is full-strength until a 0.5 m deadband,
+# and at 9 m/s friction alone needs ~11 m to stop, so a bot whose
+# target decelerated blew straight through it, then the 120° brake-
+# pivot fired on the far side and it doubled back. Overshoot-and-return
+# on every station change.
+#
+# Same stopping-distance idea as the offside brake, applied to a point:
+# when the CLOSING speed toward the anchor can no longer be shed inside
+# the remaining distance, press the real brake. Evaluated fresh every
+# tick, so a target that keeps moving away never engages it (dist stays
+# ahead of stop_dist), while a target that stops engages it exactly one
+# stopping-distance out. Hysteresis: once braking, the release margin is
+# larger than the engage margin, so shedding speed (which collapses
+# stop_dist quadratically) doesn't strobe the brake key.
+#
+# Deliberately NOT applied to waypoint-style anchors — carry steps
+# re-picked every re-eval, loose-puck chases (arrive at speed; momentum
+# wins contested pickups), body-check commits (drive THROUGH the man) —
+# the caller opts in per call site.
+const ARRIVAL_BRAKE_DECEL_M_S2: float = 10.0
+const ARRIVAL_BRAKE_ENGAGE_MARGIN_M: float = 0.5
+const ARRIVAL_BRAKE_RELEASE_MARGIN_M: float = 1.5
+const ARRIVAL_BRAKE_MIN_SPEED_M_S: float = 3.0
+
 # Offside brake. In ARCADE an attacking non-carrier whose body-center
 # crosses the attacking blue line before the puck is ghosted instantly
 # (single tick, no tolerance). The role-level target filter
@@ -321,6 +348,31 @@ static func should_brake(desired: Vector2, velocity_xz: Vector2, was_braking: bo
 		return false
 	var angle_deg: float = BRAKE_PIVOT_RELEASE_ANGLE_DEG if was_braking else BRAKE_PIVOT_ANGLE_DEG
 	return velocity_xz.dot(desired) / (speed * desired_len) < cos(deg_to_rad(angle_deg))
+
+
+# Should the bot press the brake to ARRIVE at `anchor` instead of
+# overshooting it? See the ARRIVAL_BRAKE_* doc above. `was_braking` is
+# the previous tick's decision (hysteresis). Pure and stateless beyond
+# that flag.
+static func should_arrival_brake(self_pos: Vector3, anchor: Vector3,
+		velocity_xz: Vector2, was_braking: bool) -> bool:
+	var speed: float = velocity_xz.length()
+	if speed < ARRIVAL_BRAKE_MIN_SPEED_M_S:
+		return false  # slow enough that friction + the deadband settle it
+	var to_anchor := Vector2(anchor.x - self_pos.x, anchor.z - self_pos.z)
+	var dist: float = to_anchor.length()
+	if dist < 0.001:
+		return true  # on top of the target at speed — stop
+	# Closing speed: the velocity component toward the anchor. Moving away
+	# or tangential → nothing to overshoot (reversals are the pivot
+	# brake's job).
+	var closing: float = velocity_xz.dot(to_anchor) / dist
+	if closing <= 0.0:
+		return false
+	var stop_dist: float = (closing * closing) / (2.0 * ARRIVAL_BRAKE_DECEL_M_S2)
+	var margin: float = ARRIVAL_BRAKE_RELEASE_MARGIN_M if was_braking \
+			else ARRIVAL_BRAKE_ENGAGE_MARGIN_M
+	return stop_dist + margin >= dist
 
 
 # Hard body-level guard against skating offside. Returns `desired`

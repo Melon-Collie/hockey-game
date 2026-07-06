@@ -44,6 +44,16 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 
+	# Lead the carrier the same clamped half-step the backline leads its
+	# men (lead_threat) — the gap point is defined off where the rush is
+	# GOING, not the freeze-frame. Without this, a carrier cutting
+	# laterally had CONTAIN back-pedalling along a stale carrier→net line
+	# and re-correcting every tick. Velocity-based, so it shrinks to
+	# nothing the moment the carrier slows — no phantom to overshoot.
+	carrier_pos = AIRoleHelpers.lead_threat(
+			carrier_pos, AIRoleHelpers.resolve_play_ref_velocity(ctx),
+			ctx.defensive_anticipation_scale)
+
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var to_net: Vector3 = our_net - carrier_pos
 	var dist: float = to_net.length()

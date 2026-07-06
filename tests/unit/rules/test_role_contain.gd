@@ -108,6 +108,29 @@ func test_gap_tightens_as_carrier_nears_net() -> void:
 			"gap tightens as the carrier nears the net; near=%f far=%f" % [near_gap, far_gap])
 
 
+func test_leads_a_laterally_cutting_carrier() -> void:
+	# A carrier cutting hard across the ice: the gap point is defined off
+	# where the rush is GOING (lead_threat), not the freeze-frame — so a
+	# lateral cut shifts CONTAIN's target toward the cut side instead of
+	# leaving it back-pedalling on a stale carrier→net line.
+	var carrier_pos := Vector3(0, 0, 4)
+	var still_skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier_pos, Vector3.ZERO],
+	]
+	var cutting_skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier_pos, Vector3(7, 0, 0)],   # cutting toward +X
+	]
+	var still_t: Vector3 = AIRoleContain.decide(
+			_make_ctx(Vector3(0, 0, 18), still_skaters, 200)).target_position
+	var cutting_t: Vector3 = AIRoleContain.decide(
+			_make_ctx(Vector3(0, 0, 18), cutting_skaters, 200)).target_position
+	assert_gt(cutting_t.x, still_t.x + 0.3,
+			"a +X cut shifts the gap point toward +X; still x=%f cutting x=%f" \
+			% [still_t.x, cutting_t.x])
+
+
 func test_never_retreats_behind_goal_line() -> void:
 	# Even with the carrier right at the net mouth, the gap target stays in
 	# front of (not past) our goal line.
