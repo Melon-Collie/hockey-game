@@ -203,8 +203,22 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
 @export var stride_pitch_deg: float = 6.0         # forward push amplitude (fore/aft)
 @export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)
-@export var crossover_lean_deg: float = 6.0       # static lean into the crossover direction
-@export var crossover_scissor_deg: float = 8.0    # legs scissor laterally across each other
+@export var crossover_lean_deg: float = 6.0       # static lean into the strafe direction
+@export var crossover_scissor_deg: float = 8.0    # aim-locked strafe: legs scissor laterally
+# Carve crossovers — engaged by path curvature (CarveRules), not lateral
+# velocity: crossovers are how a skater TURNS at speed. Roles are fixed by
+# the turn direction: the outside leg lifts and steps across (over_*,
+# clearance), the inside leg extends beneath the body (under_roll).
+# carve_stride_fade bleeds the fore/aft stride out as the carve engages —
+# in a hard carve the crossovers ARE the stride.
+@export var carve_ref_turn_rate: float = 1.6   # rad/s of travel-direction turn = full carve
+@export var carve_min_speed: float = 2.5       # m/s floor — slow pivots are steps, not crossovers
+@export var carve_engage_speed: float = 5.0    # carve blend ease rate
+@export var carve_over_roll_deg: float = 24.0  # crossing (outside) leg roll across the body
+@export var carve_under_roll_deg: float = 16.0 # inside leg under-push roll
+@export var carve_over_pitch_deg: float = 8.0  # crossing leg also steps AHEAD
+@export var carve_clearance_knee_deg: float = 28.0  # lift while crossing the planted leg
+@export var carve_stride_fade: float = 0.7     # fraction of fore/aft stride removed at full carve
 @export var stride_knee_deg: float = 18.0         # recovery tuck depth of the swinging (unloaded) knee
 @export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
 @export var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)

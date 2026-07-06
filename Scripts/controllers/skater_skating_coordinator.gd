@@ -65,6 +65,9 @@ var _stop_blend: float = 0.0
 # coordinator's lower-body write, same contract as stop_yaw_offset.
 var travel_align_yaw: float = 0.0
 var _hip_align_yaw: float = 0.0
+# Smoothed signed carve engagement [−1, +1] (CarveRules): path curvature
+# drives the crossover gait. Sign = turn direction (+ = toward local +X).
+var _carve: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -88,6 +91,7 @@ func reset_to_rest() -> void:
 	_stop_blend = 0.0
 	travel_align_yaw = 0.0
 	_hip_align_yaw = 0.0
+	_carve = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
@@ -142,6 +146,7 @@ func apply(delta: float) -> void:
 	# falls out of the velocity remotes and replays already have — so they inherit
 	# the glide/push texture for free, exactly like the rest of the gait.
 	var effort_target: float = 0.0
+	var carve_target: float = 0.0
 	if _have_prev_velocity:
 		var accel: Vector3 = (vel - _prev_velocity) / delta
 		var travel: Vector2 = Vector2(vel.x, vel.z)
@@ -149,9 +154,17 @@ func apply(delta: float) -> void:
 			var tangential: float = Vector2(accel.x, accel.z).dot(travel.normalized())
 			effort_target = clampf(
 					tangential / maxf(_controller.stride_effort_ref_accel, 0.001), -1.0, 1.0)
+		# Path curvature off the same velocity history — the carve/crossover
+		# trigger (see CarveRules and the carve block below).
+		carve_target = CarveRules.carve_target(
+				CarveRules.turn_rate(
+						Vector2(_prev_velocity.x, _prev_velocity.z),
+						Vector2(vel.x, vel.z), delta, _controller.carve_min_speed),
+				ground_speed, _controller.carve_ref_turn_rate, _controller.carve_min_speed)
 	_prev_velocity = vel
 	_have_prev_velocity = true
 	_effort = lerpf(_effort, effort_target, _controller.stride_effort_speed * delta)
+	_carve = lerpf(_carve, carve_target, _controller.carve_engage_speed * delta)
 	# Push-amplitude scale around the speed baseline: >1 driving, easing toward
 	# stride_glide_floor when coasting so the legs settle instead of churning. The
 	# static crossover lean is intentionally left off this scale — you still lean
@@ -329,7 +342,11 @@ func apply(delta: float) -> void:
 	# shallower amplitude.
 	var push_deg: float = _controller.stride_pitch_deg if fwd >= 0.0 else _controller.stride_back_pitch_deg
 	var push_dir: float = 1.0 if fwd >= 0.0 else -1.0
-	var push_amp: float = deg_to_rad(push_deg) * _intensity * push_dir * push_scale * gait_scale
+	# A hard carve IS the stride — the fore/aft push bleeds out as the
+	# crossover gait takes over (carve_stride_fade), instead of striding
+	# straight ahead while the legs cross.
+	var push_amp: float = deg_to_rad(push_deg) * _intensity * push_dir * push_scale * gait_scale \
+			* (1.0 - absf(_carve) * _controller.carve_stride_fade)
 	# Rear-bias the pitch stroke so the stride pushes BACK instead of kicking
 	# forward: a CONSTANT offset shifts the whole swing rearward — the back
 	# extension reaches (1+bias)·amp while the recovery lands only
@@ -361,13 +378,51 @@ func apply(delta: float) -> void:
 	l_roll -= fb_w * abduct_amp * l_ext
 	r_roll += fb_w * abduct_amp * r_ext
 
-	# Crossover gait. Lean into the travel direction (static bias toward the inside
-	# of the turn) plus a scissoring roll 180° out of phase between the legs so
-	# they cross over one another laterally.
+	# Strafe scissor. Lean into the travel direction (static bias toward the
+	# inside) plus a scissoring roll 180° out of phase between the legs. This
+	# is the AIM-LOCKED lateral shuffle — genuine crossovers (turning at
+	# speed) are the carve block below, keyed off path curvature instead of
+	# hip-frame lateral velocity (which hip alignment mostly removes anyway).
 	var lean: float = signf(lat) * deg_to_rad(_controller.crossover_lean_deg) * _intensity * gait_scale
 	var scissor: float = deg_to_rad(_controller.crossover_scissor_deg) * _intensity * push_scale * gait_scale
 	l_roll += lr_w * (lean + s * scissor)
 	r_roll += lr_w * (lean + s_opp * scissor)
+
+	# ── Carve crossovers ──────────────────────────────────────────────────────
+	# Turning at speed plays real crossovers, with FIXED roles set by the turn
+	# direction (they never alternate): the OUTSIDE leg lifts and steps across
+	# in front while the INSIDE leg extends in an under-push beneath the body.
+	# Both act on the same half of the shared stride phase — the simultaneous
+	# power stroke — and the wave's idle half is the glide between crossovers.
+	# The clearance knee rides the RISE of the stroke (same derivative gate as
+	# the recovery tuck) so the crossing skate lifts OVER the planted leg and
+	# extends as it lands; the under-push leg feeds the existing knee-release
+	# path through its ext value, so the extension stays anatomically
+	# consistent with the stance geometry.
+	var l_tuck_extra: float = 0.0
+	var r_tuck_extra: float = 0.0
+	var carve_amt: float = absf(_carve) * _intensity * gait_scale
+	if carve_amt > 0.001:
+		var stroke: float = maxf(s, 0.0)
+		var over_roll: float = deg_to_rad(_controller.carve_over_roll_deg) * carve_amt * stroke
+		var under_roll: float = deg_to_rad(_controller.carve_under_roll_deg) * carve_amt * stroke
+		var over_pitch: float = deg_to_rad(_controller.carve_over_pitch_deg) * carve_amt * stroke
+		var clearance: float = deg_to_rad(_controller.carve_clearance_knee_deg) \
+				* carve_amt * maxf(c, 0.0)
+		if _carve > 0.0:
+			# Turning toward +X: left leg crosses over, right leg under-pushes.
+			l_roll += over_roll
+			l_pitch += over_pitch
+			l_tuck_extra = clearance
+			r_roll -= under_roll
+			r_ext = maxf(r_ext, stroke)
+		else:
+			# Turning toward −X: mirrored roles.
+			r_roll -= over_roll
+			r_pitch += over_pitch
+			r_tuck_extra = clearance
+			l_roll += under_roll
+			l_ext = maxf(l_ext, stroke)
 
 	# Knee flex — three layers that read as one leg working. (1) The stance flex,
 	# the seated base both knees carry. (2) Push extension: the loaded leg
@@ -378,8 +433,8 @@ func apply(delta: float) -> void:
 	# the same spot). Negative folds the shin back under the body.
 	var tuck_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale * gait_scale
 	var release: float = _controller.stance_knee_release
-	var l_knee: float = -(stance_knee * (1.0 - release * l_ext) + tuck_amp * maxf(c, 0.0))
-	var r_knee: float = -(stance_knee * (1.0 - release * r_ext) + tuck_amp * maxf(c_opp, 0.0))
+	var l_knee: float = -(stance_knee * (1.0 - release * l_ext) + tuck_amp * maxf(c, 0.0) + l_tuck_extra)
+	var r_knee: float = -(stance_knee * (1.0 - release * r_ext) + tuck_amp * maxf(c_opp, 0.0) + r_tuck_extra)
 
 	# Body bob: the body rides highest at full extension (|s| = 1) and sits
 	# deepest mid-transfer (s = 0) — a subtle vertical pulse at twice the leg
