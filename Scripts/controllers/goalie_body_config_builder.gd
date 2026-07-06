@@ -14,6 +14,14 @@ extends RefCounted
 # ── Tuning (set by controller from exports in setup()) ───────────────────────
 var catches_left: bool = true
 var rvh_post_pad_angle: float = 15.0
+# RVH torso roll into the post (degrees). A real goalie pours the shoulder
+# into the post rather than sitting dead vertical. Positive Z roll tips the
+# torso top toward local −X — the post side in the RVH_LEFT pose — and the
+# RVH_RIGHT pose negates it. Roll rides the wire as body_roll, so remotes
+# match. (A matching yaw toward the slot would be nice but body yaw is NOT
+# in the network state — apply_network_pose preserves whatever is local —
+# so a builder-side yaw would desync host and remote silhouettes.)
+var rvh_body_lean_deg: float = 8.0
 
 # Glove arm reach (in goalie-local coordinates, glove side = -X for
 # `catches_left = true`).
@@ -204,7 +212,7 @@ static func resting_body_position_for_state(state: int) -> Vector3:
 
 static func resting_head_position_for_state(state: int) -> Vector3:
 	match state:
-		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.79,  0.08)
+		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.79,  0.12)
 		GoalieStateMachine.State.READY:                           return Vector3(0.0,  1.62, -0.22)
 		GoalieStateMachine.State.RECOVERING:                      return Vector3(0.0,  1.62, -0.22)
 		GoalieStateMachine.State.BUTTERFLY:                       return Vector3(0.0,  0.97, -0.06)
@@ -212,7 +220,7 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.97, -0.06)
 		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 1.17, 0.08)
 		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 1.17, 0.08)
-	return Vector3(0.0, 1.79, 0.08)
+	return Vector3(0.0, 1.79, 0.12)
 
 
 # Vertical anatomy (matches the 0.52 × 0.72 torso box and 0.26 head in
@@ -229,8 +237,10 @@ func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.right_pad_pos = Vector3( 0.22 + inputs.five_hole_openness, 0.44, -0.20)
 	c.right_pad_rot = Vector3(0.0, -pad_toe_out_standing,  12.0)
 	c.body_pos      = Vector3(0.0,  1.22,  0.0)
-	c.body_rot      = Vector3.ZERO
-	c.head_pos      = Vector3(0.0,  1.79,  0.08)
+	# Slight resting flex — a goalie never fully stacks the spine, even
+	# relaxed. The head nudges forward to sit over the leaning chest.
+	c.body_rot      = Vector3(-4.0, 0.0, 0.0)
+	c.head_pos      = Vector3(0.0,  1.79,  0.12)
 	c.head_rot      = Vector3.ZERO
 	c.blocker_pos   = Vector3( 0.38, 0.85, -0.18)
 	c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, -20.0)
@@ -250,9 +260,12 @@ func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 # it persists the body is already at READY — single smooth rising motion,
 # no up-then-back-down overshoot.
 func _set_ready_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
-	c.left_pad_pos  = Vector3(-0.22 - inputs.five_hole_openness, 0.44, -0.16)
+	# Engaged stance widens the base past the standing ±0.22 — a real goalie
+	# drops AND spreads. The wider gap is a deliberate scoring window (beatable
+	# realism: the stance opens the five-hole, the paddle-down stick guards it).
+	c.left_pad_pos  = Vector3(-0.26 - inputs.five_hole_openness, 0.44, -0.16)
 	c.left_pad_rot  = Vector3(0.0,  pad_toe_out_standing, -10.0)
-	c.right_pad_pos = Vector3( 0.22 + inputs.five_hole_openness, 0.44, -0.16)
+	c.right_pad_pos = Vector3( 0.26 + inputs.five_hole_openness, 0.44, -0.16)
 	c.right_pad_rot = Vector3(0.0, -pad_toe_out_standing,  10.0)
 	c.body_pos      = Vector3(0.0,  1.06, -0.05)
 	c.body_rot      = Vector3(-14.0, 0.0, 0.0)
@@ -321,7 +334,7 @@ func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	c.right_pad_pos = Vector3( 0.45, 0.33, 0.0)
 	c.right_pad_rot = Vector3(0.0, 0.0,  60.0)
 	c.body_pos      = Vector3(-0.02, 0.60,  0.05)
-	c.body_rot      = Vector3.ZERO
+	c.body_rot      = Vector3(0.0, 0.0,  rvh_body_lean_deg)
 	c.head_pos      = Vector3(-0.02, 1.17,  0.08)
 	c.head_rot      = Vector3.ZERO
 	c.glove_pos     = Vector3(-0.12, 0.69, -0.18)
@@ -335,7 +348,7 @@ func _set_rvh_right_pose(c: GoalieBodyConfig) -> void:
 	c.left_pad_pos  = Vector3(-0.45, 0.33, 0.0)
 	c.left_pad_rot  = Vector3(0.0, 0.0, -60.0)
 	c.body_pos      = Vector3( 0.02, 0.60,  0.05)
-	c.body_rot      = Vector3.ZERO
+	c.body_rot      = Vector3(0.0, 0.0, -rvh_body_lean_deg)
 	c.head_pos      = Vector3( 0.02, 1.17,  0.08)
 	c.head_rot      = Vector3.ZERO
 	c.blocker_pos   = Vector3( 0.12, 0.69, -0.18)
