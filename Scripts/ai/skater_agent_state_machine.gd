@@ -523,6 +523,12 @@ var _mouse_arc_rate_rad_s: float = MOUSE_ARC_RATE_RAD_S
 # ── Owned state ──────────────────────────────────────────────────────────────
 var _state: State = State.OFF_PUCK
 var _ticks_in_state: int = 0
+# Previous tick's brake-pivot decision — the hysteresis memory for
+# AISteering.should_brake (engage at BRAKE_PIVOT_ANGLE_DEG, hold until
+# BRAKE_PIVOT_RELEASE_ANGLE_DEG or the speed floor). Self-corrects within a
+# tick of any teleport (the speed gate releases it at a standstill), so it
+# needs no faceoff reset.
+var _pivot_braking: bool = false
 
 # Identity / orientation
 var _peer_id: int = 0
@@ -2469,8 +2475,9 @@ func _apply_hold_steering(input: InputState, snapshot: WorldSnapshot, self_pos: 
 
 
 # Brake steering — actively decelerate by pointing the steering anchor
-# behind the bot's current velocity. The opposed direction triggers
-# `AISteering.brake_pivot` which returns full reverse thrust, much
+# behind the bot's current velocity. The opposed direction trips the
+# brake-pivot in _apply_steering (`AISteering.should_brake` → the real
+# brake key above the pivot speed floor, reverse thrust below it), much
 # faster deceleration than passive friction during coast (hold).
 # Falls back to hold once velocity drops below BRAKE_MIN_SPEED so the
 # bot doesn't start gliding backward after stopping. Used during
@@ -2579,16 +2586,22 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			opp_repel)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
-	# direction (~180° transition), it's faster to brake and reverse than
-	# to carve a wide arc. AISteering.brake_pivot returns the original
-	# desired vector when no brake is needed.
+	# direction (~180° transition), stopping hard beats carving a wide arc.
+	# The bot presses the REAL brake key and keeps move_vector on the exit
+	# direction — the input shape a human uses — so the physics gets the
+	# heavy brake friction and the cosmetic layer reads a genuine hockey
+	# stop into a dig-in restart. While brake is held the movement rules
+	# ignore move_vector, so the exit direction costs nothing until the
+	# brake releases (hysteresis + speed floor in AISteering.should_brake)
+	# and thrust resumes toward it instantly.
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	if self_state != null:
 		var v: Vector3 = self_state.velocity
-		desired = AISteering.brake_pivot(desired, Vector2(v.x, v.z))
+		_pivot_braking = AISteering.should_brake(desired, Vector2(v.x, v.z), _pivot_braking)
+		input.brake = _pivot_braking
 		# Body-level offside guard: keep an attacking non-carrier from
 		# skating its body across the attacking blue line before the puck
-		# (instant ghost in ARCADE). Applied after brake_pivot so the
+		# (instant ghost in ARCADE). Applied after the brake-pivot so the
 		# hard constraint wins. The role-level target filter can't hold a
 		# momentum-driven body to the line on its own.
 		desired = AISteering.offside_brake(
