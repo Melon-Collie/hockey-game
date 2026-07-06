@@ -2461,7 +2461,12 @@ func _note_shot_trajectory() -> void:
 	if puck == null or _shot_tracker == null or not _shot_tracker.has_pending_shot():
 		return
 	var pos: Vector3 = puck.get_puck_position()
-	var vel: Vector3 = puck.linear_velocity
+	# get_release_velocity, NOT linear_velocity: release() queues the launch
+	# vector for Jolt's next dynamic step, so linear_velocity reads ZERO in the
+	# same-frame window this runs in (every shot would project as off-net).
+	# Mid-flight (deflection re-reads) the pending vector is spent and this
+	# returns live linear_velocity.
+	var vel: Vector3 = puck.get_release_velocity()
 	var on_net: bool = false
 	for goal: HockeyGoal in goals:
 		if ShotOnNetRules.is_on_net(pos, vel, goal.goal_line_z()):

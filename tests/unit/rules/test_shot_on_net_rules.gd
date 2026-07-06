@@ -55,3 +55,11 @@ func test_negative_end_goal_respects_direction() -> void:
 			Vector3(0.0, ICE_Y, -20.0), Vector3(0.0, 0.0, -15.0), -GOAL_Z))
 	assert_false(ShotOnNetRules.is_on_net(
 			Vector3(0.0, ICE_Y, -20.0), Vector3(0.0, 0.0, 15.0), -GOAL_Z))
+
+
+func test_feed_from_behind_the_net_is_off_net() -> void:
+	# Centering pass from behind the goal line, threaded across the mouth's
+	# x-range toward the slot — it crosses the plane from the back side, so it
+	# can never enter the net.
+	assert_false(ShotOnNetRules.is_on_net(
+			Vector3(0.5, ICE_Y, GOAL_Z + 1.5), Vector3(-0.5, 0.0, -14.0), GOAL_Z))
