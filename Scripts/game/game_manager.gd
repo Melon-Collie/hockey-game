@@ -169,6 +169,7 @@ var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _turnover_tracker: TurnoverTracker = null
+var _possession_tracker: PossessionTracker = null
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
 var _stick_lift_claim: StickLiftClaimResolver = null
@@ -381,6 +382,7 @@ func _physics_process(delta: float) -> void:
 	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
 	_hit_tracker.tick(delta)
+	_possession_tracker.tick(delta)
 	_pickup_claim.tick(delta)
 
 
@@ -463,8 +465,27 @@ func _check_puck_stuck_on_net(delta: float) -> void:
 # clients can play their own whistle/toast.
 func _whistle_and_faceoff(dot: Vector2) -> void:
 	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
+	# Whistle with the previous draw's winner still unresolved (nobody
+	# established after the drop) — fall back so every faceoff has a winner,
+	# and restart the possession model from neutral for the new draw.
+	_flush_pending_faceoff_win()
+	if _possession_tracker != null:
+		_possession_tracker.reset()
 	_state_machine.begin_faceoff_prep(dot)
 	_phase_coord.handle_phase_entered()
+
+
+# Host: play stopped before anyone established possession off a faceoff, so
+# the NHL fallback applies — the draw goes to the team of the last toucher
+# (the scoring team when the stoppage is a goal, via _on_goal_resolve_faceoff).
+func _flush_pending_faceoff_win() -> void:
+	if _turnover_tracker == null or not _turnover_tracker.has_pending_faceoff():
+		return
+	var team_id: int = -1
+	if _registry != null and _shot_tracker != null:
+		team_id = _registry.resolve_team_id_for_peer(_shot_tracker.get_last_toucher())
+	if _turnover_tracker.resolve_pending_faceoff(team_id):
+		_sync_stats_to_clients()
 
 
 # Host-only: drain a domain-flagged stoppage (icing race confirmed, offside
@@ -1046,6 +1067,14 @@ func _wire_subsystems() -> void:
 	_turnover_tracker.setup(_registry)
 	_shot_tracker.shot_on_goal_recorded.connect(_turnover_tracker.note_shot_on_goal)
 
+	# Host-only established-possession model (PossessionRules): turnover /
+	# faceoff-win crediting and assist-chain breaks key off ESTABLISHMENT
+	# (held the puck, or made a deliberate play), never off momentary
+	# scramble touches. Fed by the pickup/release/strip hooks below.
+	_possession_tracker = PossessionTracker.new()
+	_possession_tracker.setup(_registry)
+	_possession_tracker.possession_established.connect(_on_possession_established)
+
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
@@ -1091,6 +1120,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(goal_scored.emit)
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.goal_scored.connect(_trigger_scorer_celebration)
+	_phase_coord.goal_scored.connect(_on_goal_resolve_faceoff)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
 	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
@@ -1942,11 +1972,13 @@ func _on_server_puck_picked_up_by(peer_id: int) -> void:
 	if _hit_tracker != null:
 		_hit_tracker.note_possession_gained(peer_id)
 	_phase_coord.on_pickup(peer_id)
-	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
-	# (and client scoreboards) see it now, not on the next unrelated stat event.
-	if _turnover_tracker != null \
-			and _turnover_tracker.on_carrier_gained(peer_id, was_faceoff):
-		_sync_stats_to_clients()
+	# Compute the turnover/faceoff candidate now (context is freshest at the
+	# pickup) — the stat credits later, when this carrier ESTABLISHES
+	# possession (_on_possession_established). Scramble touches credit nothing.
+	if _turnover_tracker != null:
+		_turnover_tracker.on_carrier_gained(peer_id, was_faceoff)
+	if _possession_tracker != null:
+		_possession_tracker.on_pickup(peer_id)
 	record.controller.on_puck_picked_up_network()
 	if not record.is_local:
 		NetworkManager.send_puck_picked_up(peer_id)
@@ -1996,10 +2028,15 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
-	# Possession lost — a pending body check on this carrier (or one landing
-	# within the just-released grace) now credits as a hit (see HitTracker).
+	# Deliberate release (pass/shot) or whistle drop — a pending body check on
+	# this carrier did NOT dispossess them (they played through it), so it
+	# cancels; the just-released grace still starts so a check finishing
+	# through the release credits (see HitTracker). Involuntary losses arrive
+	# via _on_server_puck_stripped_from, which runs first on a strip.
 	if _hit_tracker != null:
-		_hit_tracker.note_possession_lost(peer_id)
+		_hit_tracker.note_possession_released(peer_id)
+	if _possession_tracker != null:
+		_possession_tracker.on_puck_lost(peer_id)
 	record.controller.on_puck_released_network()
 	NetworkManager.send_carrier_changed_to_all(-1)
 	# Carrier released — possession state likely flips (TRANS_DO →
@@ -2023,17 +2060,47 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
-	# Possession lost — resolves any pending body check on this carrier into a
+	# Dispossessed — resolves any pending body check on this carrier into a
 	# credited hit (the strip path a check-knocked-loose puck goes through).
 	if _hit_tracker != null:
-		_hit_tracker.note_possession_lost(peer_id)
+		_hit_tracker.note_possession_stripped(peer_id)
 	if _turnover_tracker != null:
 		_turnover_tracker.note_strip(peer_id)
+	if _possession_tracker != null:
+		_possession_tracker.on_puck_lost(peer_id)
 	_state_machine.notify_icing_contact()
 	if not record.is_local:
 		# Tell the victim's client whether this was a stick lift so it can pop
 		# their own blade up locally (their prediction never saw the host force).
 		NetworkManager.send_puck_stolen(peer_id, puck_controller.is_processing_stick_lift())
+
+
+# Host: the carrier ESTABLISHED possession (held it, or made a deliberate
+# play) — land the stat credits that key off establishment: the pending
+# turnover / faceoff win, and the assist-chain possession upgrade.
+func _on_possession_established(peer_id: int, _team_id: int) -> void:
+	if _shot_tracker != null:
+		_shot_tracker.on_possession_established(peer_id)
+	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
+	# (and client scoreboards) see it now, not on the next unrelated stat event.
+	if _turnover_tracker != null \
+			and _turnover_tracker.on_possession_established(peer_id):
+		_sync_stats_to_clients()
+
+
+# Host: a goal ends any still-unresolved draw scramble — the draw goes to the
+# scoring team (they won the scramble emphatically). Clients no-op: their
+# trackers are never fed, so has_pending_faceoff is always false there.
+func _on_goal_resolve_faceoff(scoring_team: Team,
+		_scorer: String, _assist1: String, _assist2: String) -> void:
+	if not NetworkManager.is_host:
+		return
+	if _turnover_tracker != null \
+			and _turnover_tracker.resolve_pending_faceoff(scoring_team.team_id):
+		_sync_stats_to_clients()
+	# Post-goal play restarts at a faceoff — neutral possession.
+	if _possession_tracker != null:
+		_possession_tracker.reset()
 
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
@@ -2448,7 +2515,13 @@ func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bo
 func _start_pending_shot_from_carrier() -> void:
 	if puck == null or puck.carrier == null:
 		return
-	_shot_tracker.on_shot_started(_registry.resolve_peer_id(puck.carrier))
+	var shooter_peer_id: int = _registry.resolve_peer_id(puck.carrier)
+	# A pass/shot from carry is a deliberate play — instant possession
+	# establishment (PossessionRules), even off a one-touch. Runs while the
+	# carrier is still set, before release() fires the generic release signal.
+	if _possession_tracker != null:
+		_possession_tracker.on_deliberate_release(shooter_peer_id)
+	_shot_tracker.on_shot_started(shooter_peer_id)
 
 
 # Re-reads the pending shot's on-net flag from the puck's live ballistic
@@ -3020,6 +3093,8 @@ func _apply_reset() -> void:
 	_shot_tracker.reset_all()
 	if _turnover_tracker != null:
 		_turnover_tracker.reset()
+	if _possession_tracker != null:
+		_possession_tracker.reset()
 	stats_updated.emit()
 
 

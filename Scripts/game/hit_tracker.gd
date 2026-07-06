@@ -7,6 +7,14 @@ extends RefCounted
 # authoritative contacts (direct host physics or the lag-comp claim path) plus
 # the possession-change hooks it already observes.
 #
+# HOW the puck leaves the victim decides a pending hit — the resolution is
+# order-dependent, NHL-style:
+#   contact → STRIPPED/knocked loose within the window  = hit (dispossession)
+#   contact → deliberate PASS/SHOT within the window    = NO hit (they made a
+#             play through the check — the contact didn't cost possession)
+#   pass/shot or strip → contact within the grace       = hit (finishing the
+#             check through the release — NHL scorers credit this)
+#
 # Flow:
 #   on_contact(hitter, victim, victim_team, force, dir,
 #              attacker_has_puck, victim_is_carrier)
@@ -14,12 +22,15 @@ extends RefCounted
 #       CREDIT         → stat lands now (victim just lost the puck — a
 #                        finished check)
 #       CREDIT_PENDING → impact fires now; the stat waits for the victim to
-#                        lose possession within POSSESSION_LOSS_WINDOW_S
+#                        be DISPOSSESSED within POSSESSION_LOSS_WINDOW_S
 #       REJECT         → nothing
-#   note_possession_lost(peer_id)   → credits any pending hits on that victim
-#                                     and starts their just-released grace
-#   note_possession_gained(peer_id) → clears the victim's just-released grace
-#   tick(delta)                     → ages grace timers, expires pendings
+#   note_possession_stripped(peer_id) → involuntary loss: credits any pending
+#                                       hits on that victim + starts grace
+#   note_possession_released(peer_id) → deliberate release (pass/shot/drop):
+#                                       CANCELS pendings on that victim, but
+#                                       still starts grace (finish-the-check)
+#   note_possession_gained(peer_id)   → clears the victim's just-released grace
+#   tick(delta)                       → ages grace timers, expires pendings
 #
 # Signals: `impact_landed` fires at CONTACT time for any credited-or-pending
 # contact and drives the authoritative impact broadcast (Lever A) — the burst /
@@ -92,9 +103,10 @@ func on_contact(hitter_peer_id: int, victim_peer_id: int, victim_team_id: int,
 	_pending.append(pending)
 
 
-# The puck left `victim_peer_id` (strip, knock-loose, or release) — any pending
-# hit on them was a check that cost them possession, so it credits now.
-func note_possession_lost(victim_peer_id: int) -> void:
+# The puck was TAKEN from `victim_peer_id` (poke, stick-lift, check knocked it
+# loose) — any pending hit on them was a check that cost them possession, so
+# it credits now. Also starts the just-released grace for late contact.
+func note_possession_stripped(victim_peer_id: int) -> void:
 	_possession_lost_ago[victim_peer_id] = 0.0
 	var i: int = _pending.size() - 1
 	while i >= 0:
@@ -103,6 +115,19 @@ func note_possession_lost(victim_peer_id: int) -> void:
 			_pending.remove_at(i)
 			_credit(pending.hitter_peer_id, pending.victim_peer_id,
 					pending.force, pending.hit_dir)
+		i -= 1
+
+
+# `victim_peer_id` released the puck deliberately (pass, shot, whistle drop) —
+# a pending check on them did NOT dispossess them (they made a play through
+# it), so pendings cancel. The grace still starts: a contact landing just
+# AFTER the release is a finished check, which NHL scorers credit.
+func note_possession_released(victim_peer_id: int) -> void:
+	_possession_lost_ago[victim_peer_id] = 0.0
+	var i: int = _pending.size() - 1
+	while i >= 0:
+		if _pending[i].victim_peer_id == victim_peer_id:
+			_pending.remove_at(i)  # played through the check — no hit
 		i -= 1
 
 
