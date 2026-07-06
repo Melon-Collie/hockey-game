@@ -836,7 +836,11 @@ func _ensure_puppet(position: Vector3) -> void:
 			_skater.global_position.x - _puppet_record.skater.global_position.x,
 			_skater.global_position.z - _puppet_record.skater.global_position.z)
 	if to_player.length() > 0.01:
-		_puppet_record.skater.set_facing(to_player.normalized())
+		# Through the controller so BOTH facing stores update (root rotation +
+		# pose coordinator) — setting only the skater desyncs them and the
+		# next input tick snaps the puppet back to the stale pose facing.
+		# Also resets lean/lag/gait, which a step teleport wants anyway.
+		_puppet_record.controller.set_spawn_facing(to_player.normalized())
 	var ai_ctrl: AIController = _puppet_record.controller as AIController
 	if ai_ctrl != null:
 		ai_ctrl.script_hold()

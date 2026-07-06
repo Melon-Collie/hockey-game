@@ -569,9 +569,30 @@ func apply(delta: float) -> void:
 	# position, so the tuck rides the return swing and not the push-out through
 	# the same spot). Negative folds the shin back under the body.
 	var tuck_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale * gait_scale
-	var release: float = _controller.stance_knee_release
+	# The release is stride work, so it rides the stride intensity envelope
+	# like every other stroke channel (tuck/push/roll already do via their
+	# amps). Ungated, the phase — which advances with SPEED, not intent —
+	# kept pumping the knees at full amplitude through a no-keys glide.
+	var release: float = _controller.stance_knee_release * _intensity * gait_scale
 	var l_knee: float = -(stance_knee * (1.0 - release * l_ext) + tuck_amp * maxf(c, 0.0) + l_tuck_extra)
 	var r_knee: float = -(stance_knee * (1.0 - release * r_ext) + tuck_amp * maxf(c_opp, 0.0) + r_tuck_extra)
+
+	# ── Knee fore-aft compensation ────────────────────────────────────────────
+	# The dynamic knee layers (push extension, recovery tuck, carve clearance)
+	# exist for LIFT and leg-length texture, but each also drags the FOOT
+	# fore-aft: unfolding mid-push shoved the skate forward against the
+	# thigh's backward sweep, and the tuck's mid-recovery release added to the
+	# forward swing — measured at the skate, the stride's fast phase came out
+	# FORWARD (recovery), the inverse of a real push (test_gait_stroke_profile
+	# pins the corrected profile). Counter-pitch the thigh by the small-angle
+	# FK term (Δpitch = −Δknee · L_shin / L_leg) so the foot tracks the
+	# thigh-design curve — slow recovery, fast push — while the knee keeps its
+	# full fold/extend range and vertical travel. Anatomically this reads
+	# right: a folded shin needs more hip flex for the same skate position,
+	# and the compensated full extension sits the knee joint farther back.
+	var shin_frac: float = _SHIN_LEN / (_THIGH_LEN + _SHIN_LEN)
+	l_pitch += -(l_knee + stance_knee) * shin_frac
+	r_pitch += -(r_knee + stance_knee) * shin_frac
 
 	# Body bob: the body rides highest at full extension (|s| = 1) and sits
 	# deepest mid-transfer (s = 0) — a subtle vertical pulse at twice the leg

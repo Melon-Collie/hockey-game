@@ -223,8 +223,12 @@ func spawn_bot(
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number)
-	# Same initial-facing fix as spawn() — see comment there.
-	spawned.skater.set_facing(PlayerRules.faceoff_facing(team.team_id))
+	# Same initial-facing fix as spawn() — and through the CONTROLLER for the
+	# same reason: setting only the skater leaves the pose coordinator's
+	# facing store at its default, and the first input tick snaps the root
+	# back to it — the bot spawns twisted π off and the gait plays in the
+	# wrong body frame until its aim re-tracks.
+	spawned.controller.set_spawn_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
 	team_id_by_skater[spawned.skater] = team.team_id
