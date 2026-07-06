@@ -1388,7 +1388,12 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
 	var dist: float = zone_xz.distance_to(puck_xz)
 	if dist > _effective_one_timer_leniency():
-		return {fired = false}
+		# Whiff: no shot fires, but the state machine still commits the swing
+		# to a full follow-through — hand it the same duration/power and drop
+		# the HUD now, exactly like a connected release.
+		_sm.follow_through_power = 1.0
+		_hide_slapshot_hud()
+		return {fired = false, follow_through_duration = slapper_follow_through_duration}
 	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
 	var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 	var cfg: ShotMechanics.SlapperConfig = _slapper_config()
