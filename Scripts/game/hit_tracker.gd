@@ -135,6 +135,17 @@ func note_possession_gained(peer_id: int) -> void:
 	_possession_lost_ago.erase(peer_id)
 
 
+# Whistle / goal / period horn — play stopped. Nothing carries across a
+# stoppage: pending hits die (the check can no longer finish a play that no
+# longer exists) and the just-released grace clears (a post-whistle shove is
+# not a finished check). The per-pair cooldown table is kept — it dedups the
+# impact broadcast, and re-arming it at a stoppage would let one sustained
+# grind fire a second burst right after the whistle.
+func on_play_stopped() -> void:
+	_pending.clear()
+	_possession_lost_ago.clear()
+
+
 func tick(delta: float) -> void:
 	for pid: int in _possession_lost_ago:
 		_possession_lost_ago[pid] += delta

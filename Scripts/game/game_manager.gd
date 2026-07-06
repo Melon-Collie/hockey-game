@@ -465,14 +465,30 @@ func _check_puck_stuck_on_net(delta: float) -> void:
 # clients can play their own whistle/toast.
 func _whistle_and_faceoff(dot: Vector2) -> void:
 	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
-	# Whistle with the previous draw's winner still unresolved (nobody
-	# established after the drop) — fall back so every faceoff has a winner,
-	# and restart the possession model from neutral for the new draw.
-	_flush_pending_faceoff_win()
-	if _possession_tracker != null:
-		_possession_tracker.reset()
+	# Flush the stat trackers BEFORE the phase-entry side effects run — the
+	# puck drop they trigger must not arm hit grace off a dead-ball release.
+	_on_stoppage_flush_stat_trackers(GamePhase.Phase.FACEOFF_PREP)
 	_state_machine.begin_faceoff_prep(dot)
 	_phase_coord.handle_phase_entered()
+
+
+# Host: any transition out of live play (whistle prep, goal, period horn,
+# game over) is a stoppage for stat attribution — resolve a still-pending
+# draw via the last-toucher fallback and clear pending hits + release grace
+# (nothing carries across dead play). The goal path resolved the draw to the
+# scoring team already (more precise than last-toucher when a defender tips
+# one in), so this finds nothing pending there. Idempotent with the explicit
+# flush in _whistle_and_faceoff.
+func _on_stoppage_flush_stat_trackers(phase: GamePhase.Phase) -> void:
+	if not NetworkManager.is_host:
+		return
+	if phase == GamePhase.Phase.PLAYING or phase == GamePhase.Phase.FACEOFF:
+		return
+	_flush_pending_faceoff_win()
+	if _hit_tracker != null:
+		_hit_tracker.on_play_stopped()
+	if _possession_tracker != null:
+		_possession_tracker.reset()
 
 
 # Host: play stopped before anyone established possession off a faceoff, so
@@ -1074,6 +1090,10 @@ func _wire_subsystems() -> void:
 	_possession_tracker = PossessionTracker.new()
 	_possession_tracker.setup(_registry)
 	_possession_tracker.possession_established.connect(_on_possession_established)
+	# Catch-all stoppage flush: any phase that isn't live play resolves a
+	# still-pending draw and drops pending hits/grace. Covers the paths that
+	# don't go through _whistle_and_faceoff — the period horn and game over.
+	phase_changed.connect(_on_stoppage_flush_stat_trackers)
 
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
@@ -2028,12 +2048,15 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
-	# Deliberate release (pass/shot) or whistle drop — a pending body check on
-	# this carrier did NOT dispossess them (they played through it), so it
-	# cancels; the just-released grace still starts so a check finishing
-	# through the release credits (see HitTracker). Involuntary losses arrive
-	# via _on_server_puck_stripped_from, which runs first on a strip.
-	if _hit_tracker != null:
+	# Deliberate release (pass/shot) — a pending body check on this carrier
+	# did NOT dispossess them (they played through it), so it cancels; the
+	# just-released grace still starts so a check finishing through the
+	# release credits (see HitTracker). Involuntary losses arrive via
+	# _on_server_puck_stripped_from, which runs first on a strip. Gated to
+	# live play: a whistle drop() also lands here, and arming the grace off
+	# it would score a post-whistle shove as a finished check.
+	if _hit_tracker != null and _state_machine != null \
+			and _state_machine.current_phase == GamePhase.Phase.PLAYING:
 		_hit_tracker.note_possession_released(peer_id)
 	if _possession_tracker != null:
 		_possession_tracker.on_puck_lost(peer_id)

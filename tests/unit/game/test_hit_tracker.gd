@@ -142,6 +142,25 @@ func test_regaining_possession_clears_grace() -> void:
 	assert_eq(hitter.stats.hits, 0)
 
 
+# ── Stoppages: nothing carries across dead play ──────────────────────────────
+
+func test_play_stopped_kills_pending_hit() -> void:
+	var hitter := _add_player(1, 0)
+	_add_player(2, 1)
+	_contact_on_carrier()
+	tracker.on_play_stopped()  # whistle before any dispossession
+	tracker.note_possession_stripped(2)
+	assert_eq(hitter.stats.hits, 0, "the play the check would finish is dead")
+
+func test_play_stopped_clears_release_grace() -> void:
+	var hitter := _add_player(1, 0)
+	_add_player(2, 1)
+	tracker.note_possession_released(2)
+	tracker.on_play_stopped()
+	tracker.on_contact(1, 2, 1, IMPULSE, Vector3.FORWARD, false, false)
+	assert_eq(hitter.stats.hits, 0, "a post-whistle shove is not a finished check")
+
+
 # ── Rejection gates ──────────────────────────────────────────────────────────
 
 func test_contact_on_non_carrier_does_not_credit() -> void:
