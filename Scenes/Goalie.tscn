@@ -25,24 +25,25 @@ material = SubResource("StandardMaterial3D_g4lw1")
 size = Vector3(0.28, 0.84, 0.2)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_e8rcv"]
-size = Vector3(0.48, 0.6, 0.28)
+size = Vector3(0.52, 0.72, 0.28)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fpcta"]
 albedo_color = Color(0.276417, 0.60769, 0.408357, 1)
 
 [sub_resource type="BoxMesh" id="BoxMesh_cwmwh"]
 material = SubResource("StandardMaterial3D_fpcta")
-size = Vector3(0.48, 0.6, 0.28)
+size = Vector3(0.52, 0.72, 0.28)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_cdb6r"]
-size = Vector3(0.22, 0.22, 0.2)
+size = Vector3(0.26, 0.26, 0.24)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fbmg1"]
 albedo_color = Color(0.41590622, 0.37959418, 0.80166274, 1)
 
-[sub_resource type="BoxMesh" id="BoxMesh_jpvxq"]
+[sub_resource type="SphereMesh" id="SphereMesh_cdb6r"]
 material = SubResource("StandardMaterial3D_fbmg1")
-size = Vector3(0.22, 0.22, 0.2)
+radius = 0.17
+height = 0.26
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_8k2b8"]
 size = Vector3(0.25, 0.25, 0.2)
@@ -135,7 +136,7 @@ physics_material_override = ExtResource("2_168ps")
 shape = SubResource("BoxShape3D_cdb6r")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Head" unique_id=967665458]
-mesh = SubResource("BoxMesh_jpvxq")
+mesh = SubResource("SphereMesh_cdb6r")
 
 [node name="Glove" type="StaticBody3D" parent="." unique_id=304258065]
 physics_material_override = ExtResource("2_168ps")

@@ -30,6 +30,10 @@ extends Node3D
 @onready var blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
 @onready var blocker_hand_mesh: MeshInstance3D = $BlockArm/BlockerHand
 
+# Arm-to-glove segments. 0.76 per side is ~104% wingspan-equivalent on the
+# ~1.92 m frame (torso box + standing pose in goalie_body_config_builder) —
+# same anthropometry target as the skaters. Cosmetic only: glove/blocker
+# positions are pose-driven, the arm just draws to them.
 const _ARM_UPPER_LEN: float = 0.38
 const _ARM_FOREARM_LEN: float = 0.38
 const _ARM_RADIUS: float = 0.16
@@ -68,7 +72,6 @@ func _ready() -> void:
 	# includes that layer so shots still rebound off the stick, but the skater
 	# mask omits it so players pass through instead of getting caught.
 	_stick.collision_layer = Constants.LAYER_GOALIE_STICK
-	_init_head_mesh()
 	_init_connectors()
 	_init_arm_bones()
 	_setup_uniform_coordinator()
@@ -180,7 +183,7 @@ func get_blade_world_position() -> Vector3:
 # set survives.
 func apply_network_pose(state: GoalieNetworkState) -> void:
 	# Body + head positions are state-dependent (the pose builder hardcodes
-	# different y-heights per state — body 0.46 in butterfly, 1.16 standing
+	# different y-heights per state — body 0.40 in butterfly, 1.22 standing
 	# etc.). The wire format doesn't carry them, so derive from state_enum
 	# via the pose builder's lookup. Without this the chest/head freeze at
 	# the scene-default standing height while the legs animate, which reads
@@ -220,13 +223,6 @@ static func _lerp_euler_deg(from: Vector3, to: Vector3, t: float) -> Vector3:
 static func _shortest_deg_delta(from: float, to: float) -> float:
 	var delta: float = fmod(to - from + 540.0, 360.0) - 180.0
 	return delta
-
-
-func _init_head_mesh() -> void:
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.15
-	sphere.height = 0.22
-	head_mesh.mesh = sphere
 
 
 func _setup_uniform_coordinator() -> void:
@@ -356,15 +352,18 @@ func _update_connectors() -> void:
 		return
 	if not _connectors_pose_changed():
 		return
+	# Anchor offsets are body-local against the 0.52 × 0.72 torso box in
+	# Goalie.tscn (half-height 0.36): hips near the box bottom, shoulders a
+	# hand's width below the box top — keep in sync if the box resizes.
 	_point_connector(left_hip_connector,
-		_body.position + _body.basis * Vector3(-0.10, -0.24, 0.0),
+		_body.position + _body.basis * Vector3(-0.10, -0.30, 0.0),
 		_left_pad.position)
 	_point_connector(right_hip_connector,
-		_body.position + _body.basis * Vector3(0.10, -0.24, 0.0),
+		_body.position + _body.basis * Vector3(0.10, -0.30, 0.0),
 		_right_pad.position)
 	# Shoulder spheres follow the body pivot each frame.
-	var glove_shoulder: Vector3 = _body.position + _body.basis * Vector3(-0.23, 0.12, 0.0)
-	var blocker_shoulder: Vector3 = _body.position + _body.basis * Vector3(0.23, 0.12, 0.0)
+	var glove_shoulder: Vector3 = _body.position + _body.basis * Vector3(-0.23, 0.24, 0.0)
+	var blocker_shoulder: Vector3 = _body.position + _body.basis * Vector3(0.23, 0.24, 0.0)
 	glove_shoulder_sphere.position = glove_shoulder
 	blocker_shoulder_sphere.position = blocker_shoulder
 	# Glove arm: shoulder on body's left side (goalie's catch hand), elbow drops down.
