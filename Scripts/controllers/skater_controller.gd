@@ -239,6 +239,20 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # replicated, so every machine poses its skaters identically.
 @export var faceoff_stance: float = 0.85       # stance engagement floor at the dot
 @export var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
+# Hockey stop — braking hard at speed turns the lower body across the travel
+# direction (legs sideways, torso still on the play) with a scissored,
+# edge-rolled stance. Engagement derives from the velocity-based effort
+# signal (HockeyStopRules — hysteresis + side latch), so remotes/bots read
+# the identical stop with no wire state. All cosmetic; brake physics and the
+# skid VFX are untouched.
+@export var hockey_stop_effort: float = 0.55     # braking-effort fraction that engages
+@export var hockey_stop_min_speed: float = 3.0   # m/s floor — no stop pose from a shuffle
+@export var hockey_stop_max_yaw_deg: float = 70.0  # lower-body turn cap across travel
+@export var hockey_stop_split_deg: float = 14.0  # leading/trailing leg scissor
+@export var hockey_stop_edge_deg: float = 12.0   # shared leg roll — edges biting
+@export var hockey_stop_stance: float = 0.9      # stance floor while stopping (deep knees)
+@export var hockey_stop_trunk_roll_deg: float = 6.0  # trunk bank over the skid
+@export var hockey_stop_blend_speed: float = 9.0 # pose ease-in/out rate
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S

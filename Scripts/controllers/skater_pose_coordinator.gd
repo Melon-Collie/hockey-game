@@ -194,9 +194,13 @@ func apply_facing(input: InputState, delta: float) -> void:
 			-deg_to_rad(_controller.lower_body_lag_max_deg),
 			deg_to_rad(_controller.lower_body_lag_max_deg))
 
-	# Always decay and apply — even during locked states.
+	# Always decay and apply — even during locked states. The hockey-stop yaw
+	# (legs turned across travel while the torso keeps facing the play) rides
+	# the same lower-body channel: the gait computes stop_yaw_offset, this
+	# coordinator stays the single writer of the rotation.
 	lower_body_lag = lerpf(lower_body_lag, 0.0, _controller.lower_body_lag_speed * delta)
-	_skater.set_lower_body_lag(lower_body_lag)
+	var stop_yaw: float = _skating.stop_yaw_offset if _skating != null else 0.0
+	_skater.set_lower_body_lag(lower_body_lag + stop_yaw)
 
 func apply_upper_body(delta: float) -> void:
 	if _sm.get_state() == State.SHOT_BLOCKING:
