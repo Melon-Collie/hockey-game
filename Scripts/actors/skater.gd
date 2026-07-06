@@ -562,6 +562,18 @@ func clamp_body_to_rink() -> void:
 # (free-play picker → free-play skater follows without a respawn). Safe
 # to call before _ready() — exits early if the markers haven't been
 # created yet.
+# Attribute-scaled shoulder anchor placement. Called from
+# SkaterController.apply_attributes BEFORE the ROM derivation reads
+# shoulder_height — the logical anchors mirror the visual shoulder-ball
+# positions the appearance pass computes from the same multipliers (y rides
+# height, x rides torso bulk), so the drawn arm and the IK stay rooted at
+# the same point on every build.
+func set_shoulder_anchor(offset: float, height: float) -> void:
+	shoulder_offset = offset
+	shoulder_height = height
+	_position_hand_markers()
+
+
 func _position_hand_markers() -> void:
 	if shoulder == null or top_hand == null or bottom_shoulder == null or bottom_hand == null:
 		return

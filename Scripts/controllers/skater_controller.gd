@@ -472,6 +472,8 @@ var _base_puck_carry_speed_multiplier:  float = 0.0
 var _base_stick_length:                 float = 0.0
 var _base_skater_upper_arm_length:      float = 0.0
 var _base_skater_forearm_length:        float = 0.0
+var _base_skater_shoulder_offset:       float = 0.0
+var _base_skater_shoulder_height:       float = 0.0
 var _base_skater_weight:                float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
 var _base_skater_body_check_transfer:   float = 0.0
@@ -569,14 +571,25 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	stick_length              = _base_stick_length              * attrs.stick_len_mult()
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
+	# Shoulder anchors track the visual shoulder balls, which the appearance
+	# pass repositions from the same multipliers (y rides height, x rides
+	# torso bulk) — the drawn arm and the IK stay rooted at the same point on
+	# every build. Must run BEFORE the ROM derivation below reads
+	# shoulder_height. hand_rest_y deliberately does NOT height-scale: the
+	# hands keep their absolute working height over the ice, so the stick
+	# geometry keeps its tuned relationship with the puck plane.
+	skater.set_shoulder_anchor(
+			_base_skater_shoulder_offset * attrs.torso_bulk_mult(),
+			_base_skater_shoulder_height * m_height)
 	# Reach ROM is a derived property of arm length — forehand from the
 	# anatomical cross-body ratio, backhand from the chain geometry (see the
 	# _ROM_FOREHAND_OF_ARM doc block). Bigger arms naturally yield more reach
 	# without being an independent attribute axis, and the backhand solve
-	# amplifies the spread: the fixed shoulder-to-hand drop eats a constant
-	# bite of every arm, so a tall player's extra length converts to reach at
-	# better than 1:1 while a small player gives some back — long arms matter
-	# most at full extension.
+	# amplifies the spread: the shoulder-to-hand drop grows only at the
+	# shoulder end (hand_rest_y is fixed), so it eats proportionally more of
+	# a short arm — a tall player converts extra length to reach at better
+	# than 1:1 while a small player gives some back. Long arms matter most
+	# at full extension.
 	var arm_total: float = skater.upper_arm_length + skater.forearm_length
 	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
 	var arm_eff: float = arm_total * rom_arm_extension
@@ -626,6 +639,8 @@ func _capture_attribute_bases() -> void:
 	_base_stick_length                 = stick_length
 	_base_skater_upper_arm_length      = skater.upper_arm_length
 	_base_skater_forearm_length        = skater.forearm_length
+	_base_skater_shoulder_offset       = skater.shoulder_offset
+	_base_skater_shoulder_height       = skater.shoulder_height
 	_base_skater_weight                       = skater.weight
 	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
