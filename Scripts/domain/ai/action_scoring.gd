@@ -1086,6 +1086,43 @@ static func turnover_cost(
 			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders)
 
 
+# ── Pass execution risk ──────────────────────────────────────────────────────
+# Even a clear-lane pass isn't a sure thing: leads run long, receptions
+# fumble off an unsquared blade, a bouncing puck skips the tape. The lane
+# model prices INTERCEPTION only, so before this constant existed a 5 m
+# clear-lane backpass deep in our own zone scored as risk-free — and since
+# fire wins ties against carry, bots eagerly dumped the puck backward for
+# near-zero gain, and the occasional real-world miss surrendered all the
+# ice behind them. PASS_MISS_PROB is the residual chance a lane-clear pass
+# still fails on execution; the puck ends up loose PAST the receiver
+# (overled / through the blade), PASS_MISS_OVERSHOOT_M beyond them along
+# the pass line. Feeding that loss point to turnover_cost makes the risk
+# self-localize exactly like interception risk does: an OZ miss costs ~0
+# (loose puck in their end), a DZ backpass miss prices the opponent's
+# chance in front of our net. No zone flag, no backpass heuristic — the
+# geometry does it.
+#
+# Tuning: PROB up → bots demand more upside before passing anywhere the
+# loss would hurt (fewer own-zone touch-passes); down → closer to the old
+# interception-only model (0.0 = identical). OVERSHOOT is the physical
+# "how far past the receiver does a missed pass die" scale, not a knob.
+const PASS_MISS_PROB: float = 0.1
+const PASS_MISS_OVERSHOOT_M: float = 3.0
+
+
+# Loss point for the execution-miss mode of a pass: the puck sails past
+# the receiver and dies PASS_MISS_OVERSHOOT_M beyond them on the pass
+# line. Degenerate (overlapping endpoints) falls back to the receiver.
+static func pass_miss_loss_point(from: Vector3, receiver: Vector3) -> Vector3:
+	var dx: float = receiver.x - from.x
+	var dz: float = receiver.z - from.z
+	var len_sq: float = dx * dx + dz * dz
+	if len_sq < 0.0001:
+		return receiver
+	var inv: float = PASS_MISS_OVERSHOOT_M / sqrt(len_sq)
+	return Vector3(receiver.x + dx * inv, 0.0, receiver.z + dz * inv)
+
+
 # Omnidirectional poke-threat penalty for CARRY destinations. Returns
 # a multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0]: full safety (1.0)
 # when no opponent's body is within CARRY_POKE_SAFE_RADIUS_M of the
