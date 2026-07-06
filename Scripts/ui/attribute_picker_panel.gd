@@ -26,6 +26,18 @@ signal changed
 # Physical, Shot); the per-preset "levels" arrays are indexed by that enum.
 const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Hands", "Size", "Physical", "Shot"]
 
+# Hover tooltips, one per attribute (same enum order). Headline effects only —
+# what the player feels — not the multiplier tables (those live on
+# PlayerAttributes and shift with tuning).
+const _ATTR_TOOLTIPS: Array[String] = [
+	"Top skating speed.\nAlso raises the sprint ceiling — sprint multiplies this.",
+	"Acceleration, turn rate, braking, and edge glide.",
+	"Faster blade for dangles and catching hard passes,\nless slowdown carrying the puck, stronger backhand.",
+	"Height, reach, and mass — longer stick, harder to\nknock off the puck, and your hits carry more momentum.",
+	"Deliver bigger checks that stagger and strip the puck,\nbrace against hits, and burn/recover stamina better.",
+	"Higher charged-shot power ceiling and a faster wrister\ncharge. Quick shot & pass speed stay equal for everyone.",
+]
+
 # Working copy: Array of {"name": String, "levels": Array[int]} (six levels).
 var _working: Array[Dictionary] = []
 var _active: int = 0
@@ -152,6 +164,9 @@ func _build_attribute_slider_row(attr_idx: int) -> void:
 	label.add_theme_font_size_override("font_size", 18)
 	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	# Labels ignore the mouse by default, which suppresses tooltips.
+	label.mouse_filter = Control.MOUSE_FILTER_STOP
+	label.tooltip_text = _ATTR_TOOLTIPS[attr_idx]
 	row.add_child(label)
 
 	var slider := HSlider.new()
@@ -161,6 +176,7 @@ func _build_attribute_slider_row(attr_idx: int) -> void:
 	slider.custom_minimum_size = Vector2(200, 36)
 	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	slider.set_value_no_signal(PlayerAttributes.LEVEL_MEDIUM)
+	slider.tooltip_text = _ATTR_TOOLTIPS[attr_idx]
 	slider.value_changed.connect(_on_slider_changed.bind(attr_idx))
 	row.add_child(slider)
 	_attr_sliders.append(slider)
