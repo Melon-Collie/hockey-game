@@ -1218,6 +1218,11 @@ func set_spawn_facing(facing: Vector2) -> void:
 	_pose.facing = facing
 	_pose.reset_lean_and_lag()
 	skater.set_lower_body_lag(0.0)
+	# Plant the legs too, matching the faceoff teleport. A no-op at initial
+	# spawn (the gait starts at rest), but mid-session callers — the tutorial
+	# puppet repositioning between steps — would otherwise drop into the new
+	# spot carrying the previous shift's mid-stride leg swing.
+	_skating.reset_to_rest()
 
 
 # This skater's center-slot distance from the faceoff dot: the rest-pose blade
