@@ -61,6 +61,10 @@ var stop_yaw_offset: float = 0.0
 var _stop_engaged: bool = false
 var _stop_side: float = 1.0
 var _stop_blend: float = 0.0
+# Hip-to-travel alignment (see the block in apply()). Published for the pose
+# coordinator's lower-body write, same contract as stop_yaw_offset.
+var travel_align_yaw: float = 0.0
+var _hip_align_yaw: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -82,6 +86,8 @@ func reset_to_rest() -> void:
 	stop_yaw_offset = 0.0
 	_stop_engaged = false
 	_stop_blend = 0.0
+	travel_align_yaw = 0.0
+	_hip_align_yaw = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
@@ -192,6 +198,45 @@ func apply(delta: float) -> void:
 		stop_yaw_offset = 0.0
 	# Stride suppression factor: 1 = normal gait, 0 = full stop pose.
 	var gait_scale: float = 1.0 - _stop_blend
+
+	# ── Hip-to-travel alignment ────────────────────────────────────────────────
+	# Real skaters' hips align with the direction of MOTION while the torso
+	# twists toward the play; the legs stride along travel, not along the
+	# chest. Facing follows the cursor here (twin-stick), so without this any
+	# cursor-vs-movement misalignment bled the stride into the crossover /
+	# backward blends and read as leg flail — systematically worse in the
+	# rink direction where the tilted camera makes leading the cursor
+	# awkward. The hips yaw toward travel (speed-gated so they settle back
+	# under the torso at rest, clamped so genuinely backward/lateral skating
+	# still plays the C-cut/crossover gaits on the residual), and the gait
+	# below re-decomposes velocity in the HIP frame the legs actually occupy.
+	# The hockey stop overrides alignment while blended in — perpendicular
+	# beats parallel on the same lower-body channel.
+	var align_target: float = 0.0
+	if ground_speed > 0.1:
+		var travel_angle: float = atan2(lat, fwd)
+		var align_engage: float = clampf(
+				_intensity / maxf(_controller.stance_full_speed_fraction, 0.01), 0.0, 1.0)
+		# rotation.y positive turns the legs toward −X, i.e. toward NEGATIVE
+		# body-frame angles — hence the negation.
+		align_target = clampf(-travel_angle,
+				-deg_to_rad(_controller.hip_align_max_deg),
+				deg_to_rad(_controller.hip_align_max_deg)) * align_engage
+	_hip_align_yaw = lerpf(_hip_align_yaw, align_target, _controller.hip_align_speed * delta)
+	travel_align_yaw = _hip_align_yaw * (1.0 - _stop_blend)
+	# Velocity in the yawed hip frame: v_hip = RotY(−ψ) · v_local.
+	var hip_cos: float = cos(travel_align_yaw)
+	var hip_sin: float = sin(travel_align_yaw)
+	var hip_x: float = local_vel.x * hip_cos - local_vel.z * hip_sin
+	var hip_z: float = local_vel.x * hip_sin + local_vel.z * hip_cos
+	fwd = -hip_z
+	lat = hip_x
+	denom = absf(fwd) + absf(lat)
+	fb_w = 1.0
+	lr_w = 0.0
+	if denom > 0.001:
+		fb_w = absf(fwd) / denom
+		lr_w = absf(lat) / denom
 
 	# ── Stance: the speed-engaged crouch ───────────────────────────────────────
 	# Real skaters sit into flexed hips and knees as soon as they're moving with

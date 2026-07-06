@@ -253,6 +253,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var hockey_stop_stance: float = 0.9      # stance floor while stopping (deep knees)
 @export var hockey_stop_trunk_roll_deg: float = 6.0  # trunk bank over the skid
 @export var hockey_stop_blend_speed: float = 9.0 # pose ease-in/out rate
+# Hip-to-travel alignment — the lower body yaws toward the direction of
+# MOTION (torso keeps facing the cursor) so the legs stride along travel
+# instead of flailing through the crossover/backward blends whenever cursor
+# and movement disagree. Clamped: misalignment beyond the cap still plays
+# the backward C-cut / crossover gaits on the residual, as designed.
+@export var hip_align_max_deg: float = 50.0  # cap on the hips' turn toward travel
+@export var hip_align_speed: float = 6.0     # how fast the hips settle onto the travel line
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
