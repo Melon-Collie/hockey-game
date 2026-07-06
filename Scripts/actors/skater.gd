@@ -41,8 +41,8 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # Shoulder Y in upper-body-local space. Matches the ShoulderL/R ball centers
 # in the scene (keep in sync) so the drawn arm hangs from the visible
 # shoulder rather than a point 5 cm below it. Vertical drop from shoulder to
-# hand at rest = shoulder_height − hand_rest_y (currently 0.40 − (−0.17) =
-# 0.57 m). That drop is subtracted inside the derived backhand ROM
+# hand at rest = shoulder_height − hand_rest_y (currently 0.40 − (−0.10) =
+# 0.50 m). That drop is subtracted inside the derived backhand ROM
 # (SkaterController.apply_attributes: reach = sqrt(arm_eff² − drop²)), so the
 # hand can never be placed beyond the arm's length — raising this shrinks
 # flat-footed reach; the directional reach lean (SkaterPoseCoordinator) buys

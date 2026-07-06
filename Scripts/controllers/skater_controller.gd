@@ -75,11 +75,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Hand Y in upper-body-local space. Baseline resting position (used in the
 # FAR regime). In the CLOSE regime the hand rises toward `hand_y_max` so the
 # stick tilts more vertical and the blade can tuck in close to the body.
-# With the upper body at ~0.95 m world Y and blade at 0.0 (ice), -0.17 gives
-# a hand world Y of ~0.78 m and a stick angle of ~37° — shallower than the
-# previous ~47° and closer to a real hockey address position. Horizontal reach
-# at rest rises from ~0.89 m to ~1.04 m.
-@export var hand_rest_y: float = -0.17
+# With the upper body at ~0.95 m world Y and blade at 0.0 (ice), -0.10 gives
+# a hand world Y of ~0.85 m (hip height on the 1.78 m baseline body) and a
+# rest stick angle of ~39° — close to a real lie-5 address, up from the ~35°
+# reach-cheat this used to run. The steeper stick pulls the rest carry
+# circle in ~5 cm (stick_horiz 1.06 → 1.01), but the shallower shoulder-to-
+# hand drop re-aims the arm budget sideways (derived backhand ROM 0.37 →
+# 0.46 m of hand displacement), so rim reach is roughly preserved and the
+# directional reach lean stays pure bonus on top.
+@export var hand_rest_y: float = -0.10
 # Ceiling for hand Y in the CLOSE regime. When aiming very close to the
 # skater, the hand rises to shorten the stick's horizontal projection; this
 # cap keeps the pose anatomical (hand won't climb past chin level). With
@@ -101,7 +105,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # defaults just mirror the baseline-size derivation for any skater that has
 # not had attributes applied yet.
 @export var rom_forehand_reach_max: float = 0.39
-@export var rom_backhand_reach_max: float = 0.44
+@export var rom_backhand_reach_max: float = 0.46
 # Fraction of full arm extension the backhand ROM rim uses. 1.0 solves the
 # reach with a ramrod-straight arm; slightly under keeps a hint of elbow bend
 # at max extension so the rim pose stays organic.
@@ -348,7 +352,7 @@ var show_one_timer_indicator: bool = false
 @export var block_blade_x: float = 0.2       # lateral blade offset to the stick side (m)
 @export var block_hand_forward: float = 0.3  # forward push of the top hand (m, local −Z)
 @export var block_hand_x: float = 0.1        # lateral top-hand offset to the stick side (m)
-@export var block_hand_y: float = -0.17      # top-hand height while blocking (m, local; matches hand_rest_y)
+@export var block_hand_y: float = -0.10      # top-hand height while blocking (m, local; matches hand_rest_y)
 
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
 # XZ cylinder radius used to push the blade (and carried puck) away from a
