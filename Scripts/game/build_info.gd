@@ -52,7 +52,10 @@ const VERSION: String = "dev"
 # v13: goalie block 41 -> 43 B — pad yaw (the rebound-steering toe-out) joins
 #      the wire so remote clients render the angled pads the host's rebound
 #      physics actually plays off.
-const PROTOCOL_VERSION: int = 13
+# v14: added request_update_attributes RPC (lobby build changes) — a new @rpc
+#     method shifts the name-sorted RPC index of every method after it (see v3),
+#     so a bump is required even though request_join's wire format is unchanged.
+const PROTOCOL_VERSION: int = 14
 
 
 func _ready() -> void:

@@ -12,6 +12,7 @@ var _kick_confirm: ConfirmDialog = null
 var _kick_pending_peer: int = -1
 var _start_btn: Button = null
 var _ready_btn: Button = null
+var _build_popup: LobbyBuildPopup = null
 var _settings_panel: LobbySettingsPanel = null
 var _spectator_list_label: Label = null
 var _spectator_join_btn: Button = null
@@ -152,6 +153,10 @@ func _build_ui() -> void:
 	back_btn.pressed.connect(_on_back_pressed)
 	btn_box.add_child(back_btn)
 
+	var build_btn := _btn("Edit Build")
+	build_btn.pressed.connect(_on_edit_build_pressed)
+	btn_box.add_child(build_btn)
+
 	if NetworkManager.is_host:
 		_start_btn = _btn("Start Game")
 		_start_btn.theme_type_variation = &"ButtonPrimary"
@@ -165,8 +170,16 @@ func _build_ui() -> void:
 		_ready_btn.pressed.connect(_on_ready_pressed)
 		btn_box.add_child(_ready_btn)
 
+	_build_popup = LobbyBuildPopup.new()
+	root.add_child(_build_popup)
+
 	_refresh_grid()
 	_refresh_spectator_panel()
+
+
+func _on_edit_build_pressed() -> void:
+	if _build_popup != null:
+		_build_popup.open()
 
 
 # Lay out the bottom of the lobby as three vertical columns aligned with the
