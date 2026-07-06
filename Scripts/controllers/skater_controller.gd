@@ -1030,6 +1030,14 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	# or stale live-play intent (goal replay on live actors).
 	skater.move_intent = state.move_intent
 	skater.brake_intent = state.brake_intent
+	# Same for the shot-state renders Skater._process drives every frame:
+	# stick flex (shot_state transitions fire the release whip, shot_charge
+	# sets the load bow) and the loft-level blade scoop. Goal replays run on
+	# LIVE actors, so without these stamps the fields freeze at whatever the
+	# live tick last wrote and the replayed shot plays with the wrong stick.
+	skater.current_shot_state = state.shot_state
+	skater.shot_charge = state.shot_charge
+	skater.elevation_level = state.elevation_level
 	stamina = state.stamina
 	_sprint_locked = state.sprint_locked
 	stagger_timer = state.stagger_timer
