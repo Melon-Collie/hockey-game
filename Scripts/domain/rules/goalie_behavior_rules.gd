@@ -269,6 +269,34 @@ static func threat_distance_to_goal(
 	return sqrt(dx * dx + dz * dz)
 
 
+# ── Distance-scaled chest tracking ───────────────────────────────────────────
+# A real goalie plays the shooter's CHEST at range — the puck-on-a-string is
+# irrelevant until it's in tight — and only tracks the PUCK itself at the
+# doorstep. Returns 0 at/under `near` (full puck tracking) ramping to 1 at/over
+# `far` (play the chest). Callers lerp `shooter_weight` toward its chest ceiling
+# by this factor AND fade the jittery puck-velocity lead out by it, so a
+# stickhandle at the point stops wobbling the goalie's body.
+static func chest_tracking_factor(carrier_dist_to_goal: float, near: float, far: float) -> float:
+	if far <= near:
+		return 0.0
+	return clampf((carrier_dist_to_goal - near) / (far - near), 0.0, 1.0)
+
+
+# ── Sealing-pad squaring ─────────────────────────────────────────────────────
+# The butterfly toe-out (pads yawed so the toes point outward) steers rebounds
+# to the corners, but that same yaw angles a pad off the goal-line plane — so
+# when a pad is pressed to its post, the angle opens a seam the puck slips
+# through beside the post. This kills the toe-out on a pad as it reaches its
+# post: `shortfall_to_post` is how far the pad's outer edge still is from the
+# post (0 = edge on the post), and within `square_range` of the post the toe-out
+# ramps to 0 (flat, square seal). Pads still steering the slot keep full toe-out.
+static func sealed_pad_toe_out(shortfall_to_post: float, base_toe_out: float, square_range: float) -> float:
+	if square_range <= 0.0:
+		return base_toe_out
+	var seal_t: float = clampf((square_range - shortfall_to_post) / square_range, 0.0, 1.0)
+	return base_toe_out * (1.0 - seal_t)
+
+
 # ── Butterfly slide commit ───────────────────────────────────────────────────
 # Once a goalie drops to butterfly they cannot stand-skate — lateral movement
 # is exclusively via butterfly slide: plant outside leg, push off, slide on

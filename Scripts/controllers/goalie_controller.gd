@@ -147,6 +147,15 @@ extends Node
 # pressures the carrier into committing rather than the body chasing dangles.
 @export var shooter_weight_standing: float = 0.40
 @export var shooter_weight_butterfly: float = 0.60
+# Distance-scaled chest tracking. A real goalie plays the shooter's chest at
+# range and only tracks the puck itself in tight, so a stickhandle at the point
+# doesn't wobble the body. Between `chest_track_near_distance` (full puck
+# tracking) and `chest_track_far_distance` (play the chest) the effective
+# shooter_weight lerps toward `shooter_weight_far` and the jittery puck-velocity
+# lead fades to zero. Distances are Euclidean carrier→goal-center.
+@export var chest_track_near_distance: float = 2.5
+@export var chest_track_far_distance: float = 7.0
+@export var shooter_weight_far: float = 0.90
 # Lead-the-target time. Threat position projects forward by
 # `carrier.velocity * carrier_velocity_lead_time` so the goalie pre-positions
 # toward where the carrier WILL be — the realistic answer to "skater is
@@ -223,8 +232,12 @@ extends Node
 # Destination is committed at slide-start; mid-slide can't correct. That's the
 # realism win — fast cross-passes can beat the slide because the goalie already
 # committed the read.
-@export var slide_initial_speed: float = 2.0        # m/s push-off speed (visible glide, not teleport)
-@export var slide_friction: float = 1.5             # m/s² decay (gentle so the slide reads as motion)
+@export var slide_initial_speed: float = 2.8        # m/s push-off speed (visible glide, not teleport)
+@export var slide_friction: float = 2.6             # m/s² decay — brisk enough to read as a discrete
+                                                    # plant-push-seal, not a long floaty glide, while
+                                                    # still carrying far enough to complete a full
+                                                    # post-to-post span before the min-speed snap
+
 @export var slide_min_speed: float = 0.3            # m/s — slide ends below this
 @export var slide_cooldown: float = 0.20            # s between committed slides
 # Slide trigger is a pad-coverage check: slide when the puck (projected forward
@@ -309,6 +322,15 @@ extends Node
 # dangerous. Pushed into the pose builder in _configure_collaborators.
 @export var pad_toe_out_standing_deg: float = 12.0
 @export var pad_toe_out_butterfly_deg: float = 18.0
+# Sealing-pad squaring range (m). The toe-out steers rebounds but angles a pad
+# off the goal-line plane; pressed to a post that angle opens a seam beside the
+# post. When a butterfly pad's outer edge comes within this distance of its post
+# the toe-out ramps to 0 so the pad seals flat and square. Only the sealing pad
+# squares — the slot-side pad keeps full toe-out for rebound control. A centred
+# butterfly sits `net_half_width - pad_edge` (~0.075 m) short of each post, so
+# keep this under that or a centred drop squares both pads and loses all rebound
+# steering. Set 0 to disable (pads always toed out).
+@export var post_seal_square_range: float = 0.06
 
 # ── Loose-puck clear (sweep the crease) ──────────────────────────────────────
 # The stick poke check only strips a CARRIED puck — a loose puck sitting at the
@@ -1039,16 +1061,27 @@ func _compute_threat_position() -> Vector3:
 		return puck.global_position + puck_lead
 	# COILING and SLIDING share the down-state chest weight (they're part of
 	# the butterfly cycle, just at different points in the motion).
-	var w: float = shooter_weight_butterfly if _sm.is_down() else shooter_weight_standing
+	var base_w: float = shooter_weight_butterfly if _sm.is_down() else shooter_weight_standing
+	# Distance-scaled chest tracking: far out, play the shooter's chest almost
+	# entirely (the dangle is irrelevant until it's in tight) and fade the puck
+	# lead to zero so forehand-backhand jitter stops wobbling the body; in tight,
+	# restore full puck tracking. Keyed off the carrier's distance to the goal.
+	var carrier_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
+			carrier.global_position, _goal_line_z, _goal_center_x)
+	var chest_t: float = GoalieBehaviorRules.chest_tracking_factor(
+			carrier_dist, chest_track_near_distance, chest_track_far_distance)
+	var w: float = lerpf(base_w, shooter_weight_far, chest_t)
 	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
-	# Two leads: CARRIER velocity captures body motion (sustained skating);
-	# PUCK velocity captures dangle / dragged-across motion (forehand-backhand
-	# dekes, pivot-to-shoot blade swings) that the carrier body wouldn't show.
-	# Both contribute to the projection. Y is zeroed because skaters don't
-	# move vertically — leading height noise would drift the threat off ice.
+	# Two leads: CARRIER velocity captures body motion (sustained skating) and is
+	# smooth, so it always contributes. PUCK velocity captures dangle / dragged-
+	# across motion (forehand-backhand dekes, pivot-to-shoot blade swings) — it's
+	# the jitter source, so it's faded out with distance (×(1-chest_t)): kept in
+	# tight where it keeps the goalie in front of a walkout deke, gone at range
+	# where it only chased stickhandling wiggle. Y is zeroed because skaters
+	# don't move vertically — leading height noise would drift the threat off ice.
 	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time \
-			+ _puck_velocity_est * puck_velocity_lead_time
+			+ _puck_velocity_est * puck_velocity_lead_time * (1.0 - chest_t)
 	lead.y = 0.0
 	return blended + lead
 
@@ -1811,17 +1844,23 @@ func _try_commit_slide() -> void:
 			puck.global_position, _goal_line_z, _goal_center_x)
 	if puck_dist_to_goal > slide_threat_max_distance:
 		return
-	# Pad-coverage check: project the puck forward via its position-derived
-	# velocity (works for carried + loose pucks; linear_velocity is zero
-	# while frozen on a carrier's blade). If the projected puck is past the
-	# goalie's pad reach by more than slide_coverage_buffer, the goalie
-	# can't seal that side from butterfly without sliding. Captures both
-	# spec'd scenarios — F-B deke (puck pulled past the pads while carrier
-	# stays put) and cross-crease pass (puck flies into pad-edge territory
-	# on the far side) — uniformly.
-	var projected_puck_x: float = puck.global_position.x \
-			+ _puck_velocity_est.x * slide_anticipation_time
-	var lateral_offset: float = projected_puck_x - _current_x
+	# Pad-coverage check. The lateral reference differs by whether the puck is
+	# carried or loose:
+	#   Carried — use the chest-weighted, distance-damped tracked threat, NOT the
+	#     raw dangled puck. A stickhandle wiggle swings the puck past the pad edge
+	#     on every deke; keying the slide off it made the goalie re-commit little
+	#     slides and skate back and forth across the crease chasing jitter. The
+	#     tracked threat only crosses the pad edge when the carrier genuinely
+	#     moves the chest across (a real cross-crease drive), which is the slide
+	#     we actually want.
+	#   Loose — project the puck forward via its velocity so a cross-crease pass /
+	#     rebound in flight commits the slide early (the back-door seal).
+	var coverage_x: float
+	if puck.get_carrier() != null:
+		coverage_x = _tracked_threat_position.x
+	else:
+		coverage_x = puck.global_position.x + _puck_velocity_est.x * slide_anticipation_time
+	var lateral_offset: float = coverage_x - _current_x
 	if absf(lateral_offset) <= pad_edge + slide_coverage_buffer:
 		return
 	var puck_side: float = signf(lateral_offset)
@@ -1964,6 +2003,7 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.lunge_progress = _lunge_progress()
 	_pose_inputs.paddle_sweep_active = _is_paddle_sweep_active()
 	_pose_inputs.standing_sweep_active = _is_standing_sweep_active()
+	_set_pad_toe_out_inputs()
 	_set_prelean_inputs()
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
 	var lerp_t: float
@@ -2010,6 +2050,26 @@ func _update_body_parts(delta: float) -> void:
 			glove_max_step = glove_react_max_speed * delta
 			blocker_max_step = blocker_react_max_speed * delta
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
+
+# Square each butterfly pad flat to its post as it seals, killing the rebound-
+# steering toe-out only on the pad that's actually pressed to a post (the seam
+# fix). `shortfall` is how far a pad's outer edge still is from its post: a
+# centred butterfly sits `net_half_width - pad_edge` short of both, and as the
+# goalie shifts toward a post that pad's shortfall drops to 0 and it squares.
+# Both pads are set every tick (cheap value math); only butterfly / sliding
+# poses read them.
+func _set_pad_toe_out_inputs() -> void:
+	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
+	var center_short: float = net_half_width - pad_edge
+	# Local-left pad seals the post on the +direction_sign world side; local-right
+	# seals the -direction_sign side. Derived from the pose's ±0.42 pad offsets
+	# and the world mapping world_x = current_x - direction_sign * local_x.
+	var shortfall_left: float = center_short - _direction_sign * _current_x
+	var shortfall_right: float = center_short + _direction_sign * _current_x
+	_pose_inputs.left_pad_toe_out = GoalieBehaviorRules.sealed_pad_toe_out(
+			shortfall_left, pad_toe_out_butterfly_deg, post_seal_square_range)
+	_pose_inputs.right_pad_toe_out = GoalieBehaviorRules.sealed_pad_toe_out(
+			shortfall_right, pad_toe_out_butterfly_deg, post_seal_square_range)
 
 # Populate the pose builder's pre-lean fields. The goalie leans toward a charging
 # shot's predicted impact while reading the windup (see _is_reading_shot_threat).

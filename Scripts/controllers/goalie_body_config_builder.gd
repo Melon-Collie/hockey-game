@@ -161,6 +161,14 @@ class Inputs:
 	var prelean_impact_y: float = 0.0
 	var prelean_strength: float = 0.0
 	var prelean_ready_lift: float = 0.0
+	# Per-pad butterfly toe-out (degrees). The controller squares the sealing
+	# pad flat to its post (ramps toe-out toward 0) so the rebound-steering
+	# angle doesn't open a seam beside the post; the slot-side pad keeps full
+	# toe-out. < 0 is a sentinel meaning "not set" — the pose builder falls
+	# back to its `pad_toe_out_butterfly` for both pads (tutorial snap /
+	# tests that don't populate these).
+	var left_pad_toe_out: float = -1.0
+	var right_pad_toe_out: float = -1.0
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -294,11 +302,23 @@ func _set_ready_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 		c.glove_pos.y += 0.06
 		c.blocker_pos.y += 0.06
 
+# Resolve a per-pad toe-out against the sentinel: a value < 0 means the caller
+# didn't populate it (tutorial snap, tests) — fall back to the full butterfly
+# toe-out for that pad.
+func _resolved_toe_out(pad_toe: float) -> float:
+	return pad_toe if pad_toe >= 0.0 else pad_toe_out_butterfly
+
+
 func _set_butterfly_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	# Per-pad toe-out: the sealing pad squares flat to its post (toe-out ramped
+	# toward 0 by the controller) so the angled pad face doesn't leave a seam
+	# beside the post; the slot-side pad keeps full toe-out for rebound steering.
+	var left_toe: float = _resolved_toe_out(inputs.left_pad_toe_out)
+	var right_toe: float = _resolved_toe_out(inputs.right_pad_toe_out)
 	c.left_pad_pos  = Vector3(-0.42 - inputs.five_hole_openness, 0.14, -0.20)
-	c.left_pad_rot  = Vector3(0.0,  pad_toe_out_butterfly, -90.0)
+	c.left_pad_rot  = Vector3(0.0,  left_toe, -90.0)
 	c.right_pad_pos = Vector3( 0.42 + inputs.five_hole_openness, 0.14, -0.20)
-	c.right_pad_rot = Vector3(0.0, -pad_toe_out_butterfly,  90.0)
+	c.right_pad_rot = Vector3(0.0, -right_toe,  90.0)
 	c.body_pos      = Vector3(0.0,  0.40,  0.0)
 	c.body_rot      = Vector3(-10.0, 0.0, 0.0)
 	c.head_pos      = Vector3(0.0,  0.97, -0.06)
@@ -327,18 +347,23 @@ func _set_sliding_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.blocker_rot = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
 	c.glove_pos   = Vector3(-0.42, 0.44, -0.18)
 	c.glove_rot   = Vector3.ZERO
+	# Per-pad toe-out: the sealing pad (toward the post) squares flat as it
+	# reaches the post so the angled face doesn't open a seam; the push-off pad
+	# keeps its toe-out. Controller supplies both; sentinel falls back to full.
+	var left_toe: float = _resolved_toe_out(inputs.left_pad_toe_out)
+	var right_toe: float = _resolved_toe_out(inputs.right_pad_toe_out)
 	if inputs.slide_dir * -inputs.direction_sign > 0.0:
 		# Sliding right: right pad seals the post, left pad pushes off.
 		c.right_pad_pos = Vector3( 0.42 + inputs.five_hole_openness, 0.14, -0.20)
-		c.right_pad_rot = Vector3(0.0, -pad_toe_out_butterfly,  90.0)
+		c.right_pad_rot = Vector3(0.0, -right_toe,  90.0)
 		c.left_pad_pos  = Vector3(-0.42, 0.14 + push_lift, -0.20)
-		c.left_pad_rot  = Vector3(0.0,  pad_toe_out_butterfly, -(90.0 - push_rot))
+		c.left_pad_rot  = Vector3(0.0,  left_toe, -(90.0 - push_rot))
 	else:
 		# Sliding left: left pad seals the post, right pad pushes off.
 		c.left_pad_pos  = Vector3(-0.42 - inputs.five_hole_openness, 0.14, -0.20)
-		c.left_pad_rot  = Vector3(0.0,  pad_toe_out_butterfly, -90.0)
+		c.left_pad_rot  = Vector3(0.0,  left_toe, -90.0)
 		c.right_pad_pos = Vector3( 0.42, 0.14 + push_lift, -0.20)
-		c.right_pad_rot = Vector3(0.0, -pad_toe_out_butterfly,  90.0 - push_rot)
+		c.right_pad_rot = Vector3(0.0, -right_toe,  90.0 - push_rot)
 
 func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	# RVH stick swings toward the post. Z rotation rolls the stick laterally
