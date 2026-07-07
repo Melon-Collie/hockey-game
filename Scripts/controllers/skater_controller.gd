@@ -363,12 +363,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # slappers in every direction — one elevation mechanic for shots AND passes
 # (see ShotMechanics loft-level doc). Apex above the blade is v_y²/2g:
 #   LOW  2.2 → ~0.25 m — the saucer: clears stick blades, lands and slides.
-#   HIGH 5.4 → ~1.5 m — just under the glass, above the crossbar (1.22 m), so
-#   a high shot can genuinely miss over the bar but never leaves the rink.
+#   HIGH 4.9 → ~1.22 m — apex sits right at the crossbar (1.22 m). A HIGH shot
+#   only clears the bar while it's still rising, so from the slot (apex is
+#   reached in close) it stays in the net rather than floating over; you can
+#   still sail one high on a soft/floaty loft from range, but the easy
+#   over-the-net miss from the slot is gone. Never leaves the rink (glass).
 # Where the arc sits at the net is emergent from distance + power — that read
 # is the skill (the old ballistic solve auto-arrived at a target height).
 @export var loft_vertical_speed_low: float = 2.2
-@export var loft_vertical_speed_high: float = 5.4
+@export var loft_vertical_speed_high: float = 4.9
 
 # ── Head Tracking Tuning ─────────────────────────────────────────────────────
 @export var head_track_speed: float = 12.0
