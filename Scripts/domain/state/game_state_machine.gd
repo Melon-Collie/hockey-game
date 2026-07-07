@@ -90,7 +90,7 @@ var _last_puck_x: float = 0.0
 # GameRules.CREASE_DWELL_DURATION the skater is ghosted until they leave — the
 # crease boundary is the "tag-up line". Advanced inside compute_ghost_state
 # (the one per-tick path that has every player's position). Active in ARCADE
-# and NHL; cleared on OFF and during dead-puck phases like the offside set.
+# only; cleared on OFF/NHL and during dead-puck phases like the offside set.
 var _crease_dwell: Dictionary[int, float] = {}
 
 # ── Pending faceoff ──────────────────────────────────────────────────────────
@@ -278,16 +278,22 @@ func compute_ghost_state(
 		# `if icing_team_id == slot.team_id: ghost = true` here never fired. Icing is
 		# a whistle-and-faceoff rule (NHL only), not a ghost. (`_icing_timer` stays as
 		# a fallback clear and is unit-tested at the SM level.)
-		# Crease protection — no field skater may camp in a goalie crease. The
-		# puck CARRIER is exempt: net drives, wraparounds, and jam plays are the
-		# point of carrying the puck to the net, so a carrier never draws crease
-		# interference (their dwell is held at zero so they aren't ghosted the
-		# instant they release). Dwell-timed for everyone else: a brief net drive
-		# passes through; lingering past CREASE_DWELL_DURATION ghosts you until you
-		# leave the paint (exit resets the timer, which un-ghosts next tick — the
-		# crease is the tag-up line). Independent of offside/icing so it stacks.
+		# Crease protection — ARCADE-only anti-camp mechanic, not a real NHL rule.
+		# Real goaltender interference is contact-based (Rule 69) and screening
+		# (standing in the crease with no contact) is legal, so a dwell-timer
+		# ghost has no NHL equivalent — dropped from NHL until a real contact-based
+		# interference system exists. No field skater may camp in a goalie crease
+		# in ARCADE. The puck CARRIER is exempt: net drives, wraparounds, and jam
+		# plays are the point of carrying the puck to the net, so a carrier never
+		# draws crease interference (their dwell is held at zero so they aren't
+		# ghosted the instant they release). Dwell-timed for everyone else: a
+		# brief net drive passes through; lingering past CREASE_DWELL_DURATION
+		# ghosts you until you leave the paint (exit resets the timer, which
+		# un-ghosts next tick — the crease is the tag-up line). Independent of
+		# offside/icing so it stacks.
+		var crease_protection_active: bool = rule_set == GameRules.RuleSet.ARCADE
 		var pos: Vector3 = player_positions[peer_id]
-		if not is_carrier and CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
+		if crease_protection_active and not is_carrier and CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
 			var dwell: float = _crease_dwell.get(peer_id, 0.0) + delta
 			_crease_dwell[peer_id] = dwell
 			if dwell >= GameRules.CREASE_DWELL_DURATION:

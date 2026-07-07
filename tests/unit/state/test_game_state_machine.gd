@@ -564,12 +564,14 @@ func test_crease_protection_off_in_off_preset() -> void:
 		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, GameRules.CREASE_DWELL_DURATION)
 	assert_false(ghosts[1], "OFF disables crease protection")
 
-func test_crease_protection_active_in_nhl() -> void:
+func test_crease_protection_off_in_nhl() -> void:
+	# Not a real NHL rule (goaltender interference is contact-based, and
+	# screening without contact is legal) — dropped from the NHL preset.
 	sm.rule_set = GameRules.RuleSet.NHL
 	sm.register_remote_assigned_player(1, 0, 0)
 	var ghosts: Dictionary = sm.compute_ghost_state(
 		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, GameRules.CREASE_DWELL_DURATION)
-	assert_true(ghosts[1], "crease protection runs in NHL as well as ARCADE")
+	assert_false(ghosts[1], "NHL has no dwell-based crease protection")
 
 func test_crease_no_ghost_during_dead_puck_phase() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)
