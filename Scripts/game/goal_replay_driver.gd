@@ -242,6 +242,19 @@ func is_active() -> bool:
 	return _active
 
 
+# Snapshot of the clip currently being replayed, for GoalReplayStore to keep a
+# copy that outlives the ~9 s recorder ring. start_ts is the TRIMMED start (the
+# play that scored) so the post-game loop begins where the live cinematic did,
+# not at the raw 8 s clip head. Valid between replay_started and replay_stopped.
+func get_active_clip() -> Dictionary:
+	return {
+		"frames": _frames,
+		"timestamps": _timestamps,
+		"start_ts": _clip_start_ts,
+		"end_ts": _clip_end_ts,
+	}
+
+
 # Host-only: record a vote-to-skip. Returns the new vote count (0 if rejected
 # because the replay isn't active). Each peer can only vote once per clip;
 # duplicate votes are no-ops. When the tally reaches total_voters, the driver
