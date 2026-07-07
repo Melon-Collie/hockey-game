@@ -326,16 +326,24 @@ var _prev_blade_world_pos: Vector3 = Vector3.ZERO
 # Faceoff draw tracking (host-only; the two centers, only during a faceoff). While
 # active, retain a decaying peak of the horizontal blade velocity so the contested
 # pickup reads the SWIPE'S CREST rather than the raw per-tick velocity at contact —
-# a well-aimed sweep lands even if it peaks a few ticks off the drop. All times are
-# in a private "seconds since begin_draw_tracking" base so the timing bonus needs
-# no external clock and stays deterministic. Zero cost unless begin_draw_tracking
-# is called: FaceoffDrawRules.decay_peak_speed and the timing weight are pure.
+# a well-aimed sweep lands even if it peaks a few ticks off the drop. The crest and
+# drop are timed in shared host-clock time (see the _draw_*_host_time block below)
+# so ping doesn't tax the bonus. Zero cost unless begin_draw_tracking is called:
+# FaceoffDrawRules.decay_peak_speed and the timing weight are pure.
 var _draw_tracking: bool = false
-var _draw_elapsed: float = 0.0
+var _draw_elapsed: float = 0.0               # real host physics time, for auto-expire only
+var _draw_drop_elapsed: float = -1.0         # _draw_elapsed at the drop (auto-expire pin)
 var _draw_peak_vel: Vector3 = Vector3.ZERO   # heading × retained crest speed
 var _draw_peak_speed: float = 0.0
-var _draw_peak_time: float = 0.0             # elapsed at the retained crest
-var _draw_drop_time: float = -1.0            # elapsed at the drop, -1 until marked
+# Timing is judged in SHARED host-clock time (the input's host_timestamp), NOT host
+# physics elapsed: a client's draw is scored by WHEN IT INTENDED to swing (its
+# stamped host-time of effect), not when its input happened to land on the host. So
+# ping no longer taxes the timing bonus — only clock-sync accuracy does — and every
+# client is judged on the same clock, an equal shot regardless of ping. (The host's
+# own player / bots stamp host-now, so they're unchanged.)
+var _draw_input_host_time: float = 0.0       # current input's host_timestamp (fed by the controller)
+var _draw_peak_host_time: float = 0.0        # shared host-time of the retained crest
+var _draw_drop_host_time: float = -1.0       # shared host-time of the drop, -1 until marked
 var _draw_peak_decay: float = 0.0            # m/s per second (set by begin_draw_tracking)
 var _draw_valid_window_s: float = 0.0        # auto-end this long after the drop
 # Last known-finite body position, cached each tick before move_and_slide so the
@@ -999,17 +1007,28 @@ func get_prev_blade_contact_global() -> Vector3:
 func begin_draw_tracking(peak_decay: float, valid_window_s: float) -> void:
 	_draw_tracking = true
 	_draw_elapsed = 0.0
+	_draw_drop_elapsed = -1.0
 	_draw_peak_vel = Vector3.ZERO
 	_draw_peak_speed = 0.0
-	_draw_peak_time = 0.0
-	_draw_drop_time = -1.0
+	_draw_input_host_time = 0.0
+	_draw_peak_host_time = 0.0
+	_draw_drop_host_time = -1.0
 	_draw_peak_decay = peak_decay
 	_draw_valid_window_s = valid_window_s
 
 
-# Stamp the drop instant (FACEOFF entry). The timing bonus is measured from here.
-func mark_draw_drop() -> void:
-	_draw_drop_time = _draw_elapsed
+# Feed the current input's shared host-clock stamp so the crest is timed by when
+# the swing was INTENDED (ping-neutral), not when it landed. Called by the
+# controller each tick a draw is tracked.
+func set_draw_input_time(host_time: float) -> void:
+	_draw_input_host_time = host_time
+
+
+# Stamp the drop instant (FACEOFF entry). host_time is the shared-clock drop time
+# the timing bonus measures from; _draw_elapsed pins the real-time auto-expire.
+func mark_draw_drop(host_time: float) -> void:
+	_draw_drop_elapsed = _draw_elapsed
+	_draw_drop_host_time = host_time
 
 
 func end_draw_tracking() -> void:
@@ -1025,17 +1044,18 @@ func draw_peak_velocity() -> Vector3:
 	return _draw_peak_vel
 
 
-# Seconds from the drop to the retained crest; negative if the crest predates the
-# drop (an early swing) or the drop hasn't been marked → treated as neutral timing.
+# Seconds from the drop to the retained crest, in shared host-clock time; negative
+# if the crest predates the drop (an early swing) or the drop hasn't been marked →
+# treated as neutral timing.
 func draw_since_drop() -> float:
-	if _draw_drop_time < 0.0:
+	if _draw_drop_host_time < 0.0:
 		return -1.0
-	return _draw_peak_time - _draw_drop_time
+	return _draw_peak_host_time - _draw_drop_host_time
 
 
 func _update_draw_peak(delta: float) -> void:
 	_draw_elapsed += delta
-	if _draw_drop_time >= 0.0 and _draw_elapsed - _draw_drop_time > _draw_valid_window_s:
+	if _draw_drop_elapsed >= 0.0 and _draw_elapsed - _draw_drop_elapsed > _draw_valid_window_s:
 		_draw_tracking = false
 		return
 	var horiz := Vector3(blade_world_velocity.x, 0.0, blade_world_velocity.z)
@@ -1043,10 +1063,10 @@ func _update_draw_peak(delta: float) -> void:
 	var new_peak: float = FaceoffDrawRules.decay_peak_speed(
 			_draw_peak_speed, cur_speed, _draw_peak_decay, delta)
 	if cur_speed >= new_peak - 0.0001:
-		# Current sweep is the crest — capture its heading and time.
+		# Current sweep is the crest — capture its heading and shared-clock time.
 		if cur_speed > 0.0001:
 			_draw_peak_vel = horiz
-			_draw_peak_time = _draw_elapsed
+			_draw_peak_host_time = _draw_input_host_time
 	elif _draw_peak_vel.length() > 0.0001:
 		# Decaying — hold the crest heading, shed magnitude to the decayed peak.
 		_draw_peak_vel = _draw_peak_vel.normalized() * new_peak

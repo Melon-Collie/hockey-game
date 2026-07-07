@@ -963,6 +963,10 @@ func _process_input(input: InputState, delta: float) -> void:
 	# sweep and the body motion. Capturing here in every controller path
 	# (Local / Remote / AI) keeps the test consistent across input sources.
 	skater.capture_prev_blade_contact()
+	# Feed the shared host-clock stamp to an active faceoff draw so its timing is
+	# judged ping-neutrally (see Skater.set_draw_input_time). Only during a draw.
+	if skater.is_draw_tracking():
+		skater.set_draw_input_time(input.host_timestamp)
 	_elevation_level = input.elevation_level
 	skater.elevation_level = _elevation_level
 
@@ -1046,6 +1050,10 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	# Movement is locked — whatever keys are down, nothing is being tried.
 	skater.move_intent = Vector2.ZERO
 	skater.brake_intent = false
+	# Feed the shared host-clock stamp to the faceoff draw (this is the countdown
+	# wind-up/rip path), so its timing is judged ping-neutrally.
+	if skater.is_draw_tracking():
+		skater.set_draw_input_time(input.host_timestamp)
 	_ik.apply_blade_from_mouse(input, delta)
 	# Preserve blade/hand world positions across the upper-body rotation —
 	# same dance as _process_input. Without it the blade slides sideways as
