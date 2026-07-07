@@ -517,6 +517,22 @@ func _flush_pending_faceoff_win() -> void:
 		_sync_stats_to_clients()
 
 
+# Host-only: any skater-skater contact can end an active NHL delayed offside
+# (Rule 83.3 — an offside attacker touching, or about to touch, the defending
+# puck carrier ends the delay; contact is the deterministic stand-in for the
+# linesman's "about to" judgment, applied to any defender, not just the
+# carrier). Resolves the victim's peer_id and hands both off to the domain,
+# which no-ops unless one side is the currently-flagged offending team.
+func _on_skater_contact_for_offside(attacker_peer_id: int, victim: Skater) -> void:
+	if _state_machine == null or _registry == null:
+		return
+	var victim_peer_id: int = _registry.resolve_peer_id(victim)
+	if victim_peer_id == -1:
+		return
+	_state_machine.notify_offside_contact(attacker_peer_id, victim_peer_id)
+	_consume_pending_faceoff()
+
+
 # Host-only: drain a domain-flagged stoppage (icing race confirmed, offside
 # touch). Called after every event that can set pending_faceoff_reason —
 # loose-puck tick, pickups, deflections.
@@ -2009,6 +2025,14 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 			func(v: Skater, f: float, d: Vector3) -> void:
 				_record_body_check_replay_event(record.peer_id, v, f, d)
 		)
+		# NHL delayed offside: any skater-skater contact can end it (Rule 83.3),
+		# not just a puck touch — see notify_offside_contact. Host-only: the host
+		# simulates every skater, so this fires reliably for any pair regardless
+		# of who's local, unlike prediction-only contact events.
+		record.skater.body_checked_player.connect(
+			func(v: Skater, _f: float, _d: Vector3) -> void:
+				_on_skater_contact_for_offside(pid, v)
+		)
 	var snd := SkaterSoundController.new()
 	record.skater.add_child(snd)
 	snd.setup(record.skater)
@@ -2203,7 +2227,7 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 # Host: the carrier ESTABLISHED possession (held it, or made a deliberate
 # play) — land the stat credits that key off establishment: the pending
 # turnover / faceoff win, and the assist-chain possession upgrade.
-func _on_possession_established(peer_id: int, _team_id: int) -> void:
+func _on_possession_established(peer_id: int, team_id: int) -> void:
 	if _shot_tracker != null:
 		_shot_tracker.on_possession_established(peer_id)
 	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
@@ -2211,6 +2235,14 @@ func _on_possession_established(peer_id: int, _team_id: int) -> void:
 	if _turnover_tracker != null \
 			and _turnover_tracker.on_possession_established(peer_id):
 		_sync_stats_to_clients()
+	# NHL/ARCADE offside: the defending team ESTABLISHING possession (this
+	# same signal — held it or made a deliberate play, not a raw touch) voids
+	# an active offside in their own zone. Reuses the identical "control"
+	# standard stat attribution already uses rather than a looser one keyed
+	# off a bare puck.carrier assignment.
+	if _state_machine != null and puck != null:
+		_state_machine.notify_possession_established(team_id, puck.global_position.z)
+		_consume_pending_faceoff()
 
 
 # Host: a goal ends any still-unresolved draw scramble — the draw goes to the

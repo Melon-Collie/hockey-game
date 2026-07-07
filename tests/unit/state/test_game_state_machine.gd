@@ -389,6 +389,127 @@ func test_offside_touch_by_defender_does_not_whistle() -> void:
 	sm.notify_puck_touch(100)  # defender touches the puck — defenders clearing
 	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE)
 
+# ── Skater-skater contact also ends a delayed offside ────────────────────────
+# Rule 83.3 ends the delay not just on a puck touch but also when an
+# offending-team player "forces the defending puck carrier further back" or
+# "is about to make physical contact" with them — both linesman judgment
+# calls. notify_offside_contact collapses them into one deterministic
+# trigger: any contact between the two teams while the delay is active.
+
+func test_offside_contact_whistles_when_offending_team_involved() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)    # offside attacker (team 0)
+	sm.register_remote_assigned_player(100, 0, 1)  # defender (team 1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+	sm.notify_offside_contact(1, 100)  # attacker checks (or is checked by) the defender
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.OFFSIDE)
+	assert_eq(sm.delayed_offside_team_id, -1, "contact whistle clears the delayed offside")
+
+func test_offside_contact_direction_does_not_matter() -> void:
+	# Same as above but with the peer args swapped — which peer "hit" which
+	# doesn't matter, only that the two teams made contact.
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.register_remote_assigned_player(100, 0, 1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	sm.notify_offside_contact(100, 1)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.OFFSIDE)
+
+func test_offside_contact_between_teammates_does_not_whistle() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)   # offside attacker (team 0)
+	sm.register_remote_assigned_player(2, 1, 0)   # teammate (team 0)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+	sm.notify_offside_contact(1, 2)  # accidental bump between teammates
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE,
+			"contact between teammates must never whistle")
+	assert_eq(sm.delayed_offside_team_id, 0, "no active delayed offside must be cleared by it either")
+
+func test_offside_contact_without_active_delayed_offside_is_noop() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.register_remote_assigned_player(100, 0, 1)
+	sm.notify_offside_contact(1, 100)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE)
+
+func test_offside_contact_ignored_outside_nhl() -> void:
+	sm.rule_set = GameRules.RuleSet.ARCADE
+	sm.register_remote_assigned_player(1, 0, 0)
+	sm.register_remote_assigned_player(100, 0, 1)
+	sm.notify_offside_contact(1, 100)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE,
+			"ARCADE's offside is a ghost, not a whistle — contact has nothing to end")
+
+# ── Defending-team possession voids the delayed offside ──────────────────────
+# Real NHL rule: a delayed off-side is voided not only when the puck fully
+# clears the zone, but also the instant the DEFENDING team ESTABLISHES
+# possession and control of the puck — even while it's still deep in the
+# zone. The previously offside attacker becomes fully onside without ever
+# physically tagging up. A mere touch/deflection/blocked shot does NOT
+# establish "possession and control" (see test_offside_touch_by_defender_does_not_whistle,
+# which only proves a defender's touch doesn't whistle — not that the
+# violation is voided); only PossessionTracker's ESTABLISHED signal — the
+# same "control" standard used for stat attribution, not a raw pickup — does.
+
+func test_defending_possession_voids_delayed_offside_even_if_attacker_never_tags_up() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)  # offside attacker (team 0), stays deep throughout
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0, "delayed offside active once the puck enters the zone")
+
+	# Team 1 (defending) ESTABLISHES possession, still deep in the zone (not
+	# cleared out) — real hockey voids the whole delayed off-side right here.
+	sm.notify_possession_established(1, -10.0)
+	assert_eq(sm.delayed_offside_team_id, -1,
+			"defending team's established possession voids the delayed offside")
+
+	# The still-un-tagged attacker (peer 1) can now legally touch the puck.
+	sm.notify_puck_touch(1)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE,
+			"previously offside attacker no longer whistles after the void")
+
+	# Re-running update_delayed_offside with the attacker still parked and the
+	# puck still deep confirms the peer itself was cleared, not just the
+	# team-level flag — otherwise stale membership would silently re-flag it.
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, -1,
+			"cleared peer must not be silently re-flagged while the puck stays in the zone")
+
+func test_own_team_possession_does_not_void_delayed_offside() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)  # offside attacker (team 0)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+
+	# A team-0 teammate establishing possession (still the offending team)
+	# must NOT void it — only the defending team's possession does.
+	sm.notify_possession_established(0, -10.0)
+	assert_eq(sm.delayed_offside_team_id, 0,
+			"the offending team's own possession does not void the delayed offside")
+
+func test_mere_touch_does_not_void_delayed_offside() -> void:
+	# A bare puck.carrier assignment (notify_puck_carried) — a scramble touch
+	# that hasn't been ESTABLISHED — must NOT void it; only
+	# notify_possession_established (fired after PossessionRules.ESTABLISH_HOLD_S
+	# or a deliberate play) does. Guards against reverting to the looser
+	# "any carry" check this used to run on.
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)  # offside attacker (team 0)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+
+	sm.notify_puck_carried(1, -10.0, 0.0)  # team 1 merely carries — not established
+	assert_eq(sm.delayed_offside_team_id, 0,
+			"a bare carry must not void the delayed offside — only established possession does")
+
 func test_arcade_does_not_track_delayed_offside() -> void:
 	sm.rule_set = GameRules.RuleSet.ARCADE
 	sm.register_remote_assigned_player(1, 0, 0)
@@ -462,6 +583,46 @@ func test_carrier_not_ghosted_by_offside() -> void:
 		1,                          # peer 1 is the carrier
 		Vector3(0, 0, 0))
 	assert_false(ghosts[1])
+
+# ARCADE's instant ghost is meant to emulate the same NHL delayed-offside
+# rule, it just never produces a stoppage — so the same defending-possession
+# void applies to it, not just NHL's pending whistle state (see the
+# equivalent test_defending_possession_voids_delayed_offside_* tests above).
+
+func test_defending_possession_voids_arcade_ghost_even_without_tagging_up() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)  # team 0, offside attacker
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, 0))  # team 0 attacking zone, puck in neutral
+	assert_true(ghosts[1], "offside ghost applied")
+
+	# Team 1 (defending) ESTABLISHES possession, still deep in the zone (not
+	# cleared out) — voids the ghost even though peer 1 never retreated.
+	sm.notify_possession_established(1, -10.0)
+	var ghosts_after: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, -10))
+	assert_false(ghosts_after[1],
+			"defending team's established possession voids the ARCADE ghost outright")
+
+func test_own_team_possession_does_not_void_arcade_ghost() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)  # team 0, offside attacker
+	sm.compute_ghost_state({1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, 0))
+
+	# A team-0 teammate establishing possession (still the offending team)
+	# must NOT void it — only the defending team's possession does.
+	sm.notify_possession_established(0, -10.0)
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, -10))
+	assert_true(ghosts[1], "the offending team's own possession does not void the ghost")
+
+func test_mere_carry_does_not_void_arcade_ghost() -> void:
+	# A bare puck.carrier assignment must not void it — only ESTABLISHED
+	# possession does (see test_mere_touch_does_not_void_delayed_offside).
+	sm.register_remote_assigned_player(1, 0, 0)  # team 0, offside attacker
+	sm.compute_ghost_state({1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, 0))
+	sm.notify_puck_carried(1, -10.0, 0.0)  # team 1 merely carries — not established
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, -10))
+	assert_true(ghosts[1], "a bare carry must not void the ghost — only established possession does")
 
 func test_icing_does_not_ghost_the_team() -> void:
 	# P2-7: icing is a whistle-and-faceoff rule, NOT a team ghost. Even with an
@@ -564,12 +725,14 @@ func test_crease_protection_off_in_off_preset() -> void:
 		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, GameRules.CREASE_DWELL_DURATION)
 	assert_false(ghosts[1], "OFF disables crease protection")
 
-func test_crease_protection_active_in_nhl() -> void:
+func test_crease_protection_off_in_nhl() -> void:
+	# Not a real NHL rule (goaltender interference is contact-based, and
+	# screening without contact is legal) — dropped from the NHL preset.
 	sm.rule_set = GameRules.RuleSet.NHL
 	sm.register_remote_assigned_player(1, 0, 0)
 	var ghosts: Dictionary = sm.compute_ghost_state(
 		{1: Vector3(0, 1, 25.5)}, -1, Vector3.ZERO, GameRules.CREASE_DWELL_DURATION)
-	assert_true(ghosts[1], "crease protection runs in NHL as well as ARCADE")
+	assert_false(ghosts[1], "NHL has no dwell-based crease protection")
 
 func test_crease_no_ghost_during_dead_puck_phase() -> void:
 	sm.register_remote_assigned_player(1, 0, 0)
