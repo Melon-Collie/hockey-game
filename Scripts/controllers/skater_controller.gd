@@ -55,6 +55,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # every machine renders the identical stumble from the replicated value.
 @export var stagger_wobble_deg: float = 9.0   # peak trunk wobble at full stagger
 @export var stagger_wobble_hz: float = 3.0    # wobble frequency
+# Directional recoil: on top of the wobble, the whole torso reels the way the
+# hit shoved it (pitch + roll), easing out as stagger_timer decays — a body
+# absorbing the check, not just shaking. Direction is the transfer impulse
+# (stagger_recoil_dir); remotes recoil generically backward (they get the timer
+# off the wire, not the direction). Applied in SkaterPoseCoordinator._apply_lean.
+@export var stagger_recoil_deg: float = 13.0  # peak torso recoil lean at full stagger
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -180,6 +186,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var upper_body_twist_ratio: float = 0.8
 @export var upper_body_max_twist_deg: float = 67.0   # caps rotation so extreme angles don't over-rotate
 @export var upper_body_return_speed: float = 6.0
+# Upper-body twist follow-through (secondary motion) — a damped spring trails
+# the tracked twist so the shoulders whip through a fast cut and settle instead
+# of tracking rigidly. Renders the tracked angle plus the spring's lag; zero at
+# steady state. follow_gain 0 restores rigid tracking.
+@export var upper_body_follow_gain: float = 0.4        # how far the shoulders overshoot the whip
+@export var upper_body_follow_stiffness: float = 110.0  # spring constant (higher = quicker catch-up)
+@export var upper_body_follow_damping: float = 18.0     # damping (near-critical — a clean settle)
 # Reach lean — the torso tips TOWARD the blade's reach direction (pitch +
 # roll, see SkaterPoseCoordinator.compute_upper_body_lean_target). Because
 # the blade IK solves in the leaned frame, this lean genuinely extends world
@@ -546,6 +559,12 @@ var _sprint_locked: bool = false
 # decayed each tick in _apply_movement, and replicated so the local player's
 # reconcile snaps it to the host baseline before replay (same as stamina).
 var stagger_timer: float = 0.0
+# Body-frame direction the last check shoved this skater (x = right, y = forward
+# in the (x, z) plane). Drives the recoil lean in SkaterPoseCoordinator; set on
+# the local victim / host from the transfer impulse, left at the default (0, 1 =
+# straight back) for remotes, which only receive the timer. Cosmetic, so it does
+# not need replicating or reconciling — the timer that gates it already does.
+var stagger_recoil_dir: Vector2 = Vector2(0.0, 1.0)
 # Resolved sprint-boost state for this tick. Written in _apply_movement (which
 # runs before _pose.apply_facing in _process_input) and read by the pose
 # coordinator to apply the turn-rate penalty. Public so the pose collaborator
@@ -861,7 +880,16 @@ func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction:
 # stagger_timer to the server value and re-derives decay, so a misprediction
 # self-heals in one reconcile — exactly how the host-set stagger is already
 # treated. Remote bodies on a client still defer to the snapshot (early return).
-func _on_body_check_received(impulse_magnitude: float) -> void:
+func _on_body_check_received(impulse: Vector3) -> void:
+	var impulse_magnitude: float = impulse.length()
+	# Capture the recoil direction (body frame) so the torso reels the way the
+	# hit shoved it — see SkaterPoseCoordinator._apply_lean. Set on the local
+	# victim AND the host (both drive the stagger); remotes keep the default
+	# backward recoil (they get stagger_timer off the wire, not the direction).
+	var local_impulse: Vector3 = skater.global_transform.basis.inverse() * impulse
+	var recoil_xz: Vector2 = Vector2(local_impulse.x, local_impulse.z)
+	if recoil_xz.length() > 0.001:
+		stagger_recoil_dir = recoil_xz.normalized()
 	if not _is_host:
 		if skater.is_local_skater:
 			stagger_timer = maxf(stagger_timer,
