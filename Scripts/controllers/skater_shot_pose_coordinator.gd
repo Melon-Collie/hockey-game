@@ -167,14 +167,18 @@ func apply_celebration_pose(t: float) -> void:
 
 # ── Wrister Follow-Through ────────────────────────────────────────────────────
 # The release swing continued: the blade sweeps from wherever the release left
-# it onto the shot line while the stick climbs to a high finish pointed at the
-# target, then settles back to the ice by the end of the timer (a clean handoff
-# to the aim IK). Heights ride the shared asymmetric arc — fast rise through
-# the release, slow settle — scaled by follow_through_power so a full-charge
-# wrister finishes high while a snap pass barely flicks. The blade stays a
-# rigid stick_length from the top hand (the horizontal reach re-solves as the
-# blade climbs), so the finish reads as the stick swinging up about the hands
-# rather than the shaft stretching.
+# it onto the shot line while the stick carries FORWARD along that line and
+# climbs to a high finish pointed at the target, then settles back to the ice
+# by the end of the timer (a clean handoff to the aim IK). The forward carry
+# (wrister_follow_through_reach) is what makes the finish read as the player
+# reaching THROUGH the shot rather than the blade bobbing up and down over the
+# release spot — a genuine continuation, not a canned pump. Reach and heights
+# ride the shared asymmetric arc — fast rise through the release, slow settle —
+# scaled by follow_through_power so a full-charge wrister finishes extended and
+# high while a snap pass barely flicks. The blade stays a rigid stick_length
+# from the top hand (the horizontal reach re-solves as the blade climbs), so
+# the finish reads as the stick swinging up about the hands rather than the
+# shaft stretching.
 func apply_wrister_follow_through() -> void:
 	var total: float = maxf(_sm.follow_through_duration_total, 0.001)
 	var t: float = clampf(1.0 - _sm.follow_through_timer / total, 0.0, 1.0)
@@ -193,6 +197,14 @@ func apply_wrister_follow_through() -> void:
 		dir_angle = lerp_angle(dir_angle, atan2(shot_local.x, -shot_local.z), sweep)
 	var local_dir := Vector3(sin(dir_angle), 0.0, -cos(dir_angle))
 	var hand_pos := _skater.shoulder.position
+	# Carry the whole stick FORWARD along the shot line as it climbs — the
+	# hands reach through the shot instead of the blade bobbing in place. Both
+	# endpoints translate by the same offset so the rigid stick_length solve
+	# below is untouched; env scales it so a snap pass barely reaches while a
+	# full-charge wrister finishes extended out over the shot line.
+	var carry: float = env * _controller.wrister_follow_through_reach
+	hand_pos.x += local_dir.x * carry
+	hand_pos.z += local_dir.z * carry
 	hand_pos.y = _controller.hand_rest_y + env * _controller.wrister_follow_through_hand_y
 	# Sample the ice height at the rest reach, lift the blade off it, then
 	# re-solve the horizontal reach so hand→blade stays one stick long.

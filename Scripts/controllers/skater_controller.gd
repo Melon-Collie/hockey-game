@@ -449,6 +449,7 @@ var show_one_timer_indicator: bool = false
 @export var quick_shot_follow_through_power: float = 0.5
 @export var wrister_follow_through_hand_y: float = 0.35
 @export var wrister_follow_through_blade_lift: float = 0.55  # high-finish blade height off the ice
+@export var wrister_follow_through_reach: float = 0.4  # forward carry along the shot line (the "through the shot" continuation)
 @export var wrister_follow_through_twist_deg: float = 22.0   # shoulders rotate through the shot
 @export var slapper_follow_through_twist_deg: float = 50.0   # full uncoil past the shot line
 @export var follow_through_lean_deg: float = 8.0             # trunk drives forward over the front foot
