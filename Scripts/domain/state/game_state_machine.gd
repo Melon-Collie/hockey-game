@@ -401,6 +401,39 @@ func _void_offside_for_team(team_id: int) -> void:
 # puck (pickup or loose-puck touch). If a delayed offside is active for that
 # player's team, stash the faceoff dot so GameManager whistles the play.
 func notify_puck_touch(peer_id: int) -> void:
+	_whistle_delayed_offside_if_offending_team(peer_id)
+
+
+# Host-side (NHL only): called on any meaningful skater-skater contact
+# (closing-velocity collision — see Skater._resolve_player_collisions).
+# Real hockey ends a delayed off-side not just on a puck touch but also when
+# an attacking player "forces the defending puck carrier further back" or
+# "is about to make physical contact" with them (Rule 83.3) — both are
+# linesman judgment calls with no clean deterministic equivalent, so this
+# collapses them to one concrete, no-intent-reading trigger: any contact
+# between the offending team and the defending team while the delayed
+# offside is active whistles it, same as a puck touch. Deliberately broader
+# than "the puck carrier specifically" — an offside attacker throwing their
+# body around shouldn't be free to do so just because they haven't touched
+# the puck yet. Requires two DIFFERENT teams (a same-team bump never
+# whistles); which peer is which within the pair doesn't matter.
+func notify_offside_contact(peer_a: int, peer_b: int) -> void:
+	if rule_set != GameRules.RuleSet.NHL:
+		return
+	if delayed_offside_team_id == -1:
+		return
+	if not players.has(peer_a) or not players.has(peer_b):
+		return
+	var team_a: int = players[peer_a].team_id
+	var team_b: int = players[peer_b].team_id
+	if team_a == team_b:
+		return
+	if team_a != delayed_offside_team_id and team_b != delayed_offside_team_id:
+		return
+	_fire_offside_whistle()
+
+
+func _whistle_delayed_offside_if_offending_team(peer_id: int) -> void:
 	if rule_set != GameRules.RuleSet.NHL:
 		return
 	if delayed_offside_team_id == -1:
@@ -409,6 +442,10 @@ func notify_puck_touch(peer_id: int) -> void:
 		return
 	if players[peer_id].team_id != delayed_offside_team_id:
 		return
+	_fire_offside_whistle()
+
+
+func _fire_offside_whistle() -> void:
 	pending_faceoff_dot = GameRules.offside_faceoff_dot(delayed_offside_team_id, _last_puck_x)
 	pending_faceoff_reason = FaceoffReason.OFFSIDE
 	_delayed_offside_peer_ids.clear()
