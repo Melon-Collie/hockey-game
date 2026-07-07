@@ -389,6 +389,55 @@ func test_offside_touch_by_defender_does_not_whistle() -> void:
 	sm.notify_puck_touch(100)  # defender touches the puck — defenders clearing
 	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE)
 
+# ── Defending-team possession voids the delayed offside ──────────────────────
+# Real NHL rule: a delayed off-side is voided not only when the puck fully
+# clears the zone, but also the instant the DEFENDING team gains full
+# possession and control of the puck — even while it's still deep in the
+# zone. The previously offside attacker becomes fully onside without ever
+# physically tagging up. A mere touch/deflection/blocked shot does NOT
+# establish "possession and control" (see test_offside_touch_by_defender_does_not_whistle,
+# which only proves a defender's touch doesn't whistle — not that the
+# violation is voided); only a genuine carry does, tracked via
+# notify_puck_carried.
+
+func test_defending_possession_voids_delayed_offside_even_if_attacker_never_tags_up() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)  # offside attacker (team 0), stays deep throughout
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0, "delayed offside active once the puck enters the zone")
+
+	# Team 1 (defending) gains a genuine carry, still deep in the zone (not
+	# cleared out) — real hockey voids the whole delayed off-side right here.
+	sm.notify_puck_carried(1, -10.0, 0.0)
+	assert_eq(sm.delayed_offside_team_id, -1,
+			"defending team's clean possession voids the delayed offside")
+
+	# The still-un-tagged attacker (peer 1) can now legally touch the puck.
+	sm.notify_puck_touch(1)
+	assert_eq(sm.consume_pending_faceoff(), GameStateMachine.FaceoffReason.NONE,
+			"previously offside attacker no longer whistles after the void")
+
+	# Re-running update_delayed_offside with the attacker still parked and the
+	# puck still deep confirms the peer itself was cleared, not just the
+	# team-level flag — otherwise stale membership would silently re-flag it.
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, -1,
+			"cleared peer must not be silently re-flagged while the puck stays in the zone")
+
+func test_own_team_possession_does_not_void_delayed_offside() -> void:
+	sm.rule_set = GameRules.RuleSet.NHL
+	sm.register_remote_assigned_player(1, 0, 0)  # offside attacker (team 0)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, 0), -1)
+	sm.update_delayed_offside({1: Vector3(0, 1, -10)}, Vector3(0, 0, -10), -1)
+	assert_eq(sm.delayed_offside_team_id, 0)
+
+	# A team-0 teammate carrying the puck (still the offending team) must NOT
+	# void it — only the defending team's possession does.
+	sm.notify_puck_carried(0, -10.0, 0.0)
+	assert_eq(sm.delayed_offside_team_id, 0,
+			"the offending team's own possession does not void the delayed offside")
+
 func test_arcade_does_not_track_delayed_offside() -> void:
 	sm.rule_set = GameRules.RuleSet.ARCADE
 	sm.register_remote_assigned_player(1, 0, 0)

@@ -75,6 +75,8 @@ var _icing_timer: float = 0.0
 var _offside_peer_ids: Dictionary = {}
 # NHL delayed-offside path: peers who entered their attacking zone before the
 # puck and have not yet tagged up. Tracked separately so we don't ghost them.
+# Cleared per-peer by tagging up, or team-wide by _void_delayed_offside_for_team
+# when the defending team gains clean possession (notify_puck_carried).
 var _delayed_offside_peer_ids: Dictionary = {}
 # Set to a team_id when there is at least one offside peer on that team AND
 # the puck is in their attacking zone — i.e. an NHL delayed-offside is active
@@ -181,6 +183,15 @@ func notify_puck_carried(carrier_team_id: int, carrier_z: float, carrier_x: floa
 	if icing_team_id != -1 and carrier_team_id != icing_team_id:
 		icing_team_id = -1
 		_icing_timer = 0.0
+	# NHL delayed offside: the defending team gaining full possession/control of
+	# the puck — a genuine carry, not just a deflection or blocked shot, neither
+	# of which establish "possession and control" — voids the delayed offside
+	# entirely, same as the real rule. Previously-flagged attackers become fully
+	# onside without needing to tag up; a fresh violation can only occur off a
+	# later, genuine new zone entry (see update_delayed_offside).
+	if rule_set == GameRules.RuleSet.NHL and delayed_offside_team_id != -1 \
+			and carrier_team_id != delayed_offside_team_id:
+		_void_delayed_offside_for_team(delayed_offside_team_id)
 
 # Host-side: called when a loose puck is touched by any player (deflection,
 # body block, poke check, body check strip). Clears the icing tracker so the
@@ -354,6 +365,21 @@ static func _puck_in_attacking_zone(team_id: int, puck_z: float) -> bool:
 		return puck_z < -GameRules.BLUE_LINE_Z
 	else:
 		return puck_z > GameRules.BLUE_LINE_Z
+
+
+# Clears every peer flagged offside for team_id and drops the active flag if
+# it belonged to that team. Called from notify_puck_carried when the
+# defending team gains clean possession — real hockey voids the whole
+# delayed off-side then, not just the current instant, so previously-flagged
+# players don't need to physically tag up anymore; a later genuine zone
+# clear-and-reentry is a fresh violation, tracked independently by
+# update_delayed_offside re-adding them if still positioned in the zone.
+func _void_delayed_offside_for_team(team_id: int) -> void:
+	for peer_id in _delayed_offside_peer_ids.keys():
+		if _delayed_offside_peer_ids[peer_id] == team_id:
+			_delayed_offside_peer_ids.erase(peer_id)
+	if delayed_offside_team_id == team_id:
+		delayed_offside_team_id = -1
 
 
 # Host-side (NHL only): called when any player gains control of / touches the
