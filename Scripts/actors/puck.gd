@@ -64,6 +64,21 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # this, raise COLLISION_OVERGLASS_TOP to keep the margin.
 @export var max_height: float = 3.0
 
+# ── Save-rebound control (host-authoritative) ─────────────────────────────────
+# A real goalie controls rebounds instead of caroming every shot back into the
+# slot. On a controlled save (chest/glove catch at any speed, or an easy pad/
+# blocker save) the rebound is deadened to a crawl the goalie's crease-sweep then
+# clears; hard pad saves and stick contacts keep the live restitution rebound
+# (the beatable scramble chance). See GoalieSaveRules. Deadening is pose-neutral
+# rebound control, correct under every ruleset — a whistle-on-cover would be a
+# separate, ruleset-gated layer on top. Tunable so feel can be dialed in-editor.
+@export var save_deaden_pad_max_speed: float = 22.0  # pad/blocker saves faster than this stay live
+@export var save_deaden_drop_speed: float = 1.2      # deadened exit-speed ceiling (m/s)
+@export var save_deaden_glove_retain: float = 0.0    # glove catch — kill it dead
+@export var save_deaden_chest_retain: float = 0.12
+@export var save_deaden_pad_retain: float = 0.35
+@export var save_deaden_blocker_retain: float = 0.45
+
 var carrier: Skater = null
 var pickup_locked: bool = false
 # Per-skater puck pickup cooldowns. Keyed by Skater.get_instance_id() rather
@@ -93,6 +108,19 @@ var _pending_elevation_vel: Vector3 = Vector3.ZERO
 # Belt-and-suspenders for _physics_process: skip is_airborne() zeroing the
 # same frame as release() so _pending_elevation_vel reaches _integrate_forces.
 var _pending_elevation: bool = false
+# Velocity the puck carried into this physics step (cached at the end of
+# _integrate_forces), read by the save-deaden classifier as the pre-bounce
+# incoming velocity — linear_velocity in _on_body_entered may already reflect the
+# restitution response for the step.
+var _pre_contact_velocity: Vector3 = Vector3.ZERO
+# Queued controlled-save deaden, applied on the next _integrate_forces step so it
+# definitively overrides the engine's restitution rebound (host-only; set in
+# _on_body_entered). Mirrors the _pending_elevation_vel apply pattern.
+var _pending_save_deaden: Vector3 = Vector3.ZERO
+var _pending_save_deaden_active: bool = false
+# Built once from the save-deaden exports (rebuilt only on demand — exports don't
+# change at runtime), so the per-save classification allocates nothing.
+var _deaden_cfg: GoalieSaveRules.DeadenConfig = null
 # Callable (Skater) -> int team_id, or -1 if the skater isn't registered. Set
 # by GameManager at spawn time so Puck doesn't reach upward for team checks.
 var _team_resolver: Callable = Callable()
@@ -112,6 +140,7 @@ func _ready() -> void:
 	max_contacts_reported = 4
 	body_entered.connect(_on_body_entered)
 	_last_finite_position = global_position
+	_build_deaden_cfg()
 
 	var vfx := PuckVFX.new()
 	vfx.name = "VFX"
@@ -461,6 +490,11 @@ func _on_body_entered(body: Node3D) -> void:
 	var goalie: Goalie = _goalie_ancestor(body)
 	if goalie != null:
 		puck_touched_goalie.emit(goalie)
+		# Host-authoritative rebound control: deaden a controlled save so it
+		# doesn't carom into the slot. The deadened velocity replicates to clients
+		# through the normal puck sync / reconciliation, same as pokes and sweeps.
+		if _is_server:
+			_resolve_save_rebound(body)
 	elif body is HockeyGoal:
 		puck_touched_post.emit()
 	elif body.get_parent() is HockeyGoal:
@@ -487,6 +521,49 @@ func _goalie_ancestor(node: Node) -> Goalie:
 			return n as Goalie
 		n = n.get_parent()
 	return null
+
+
+# Build the cached deaden config from the exports. Called from _ready; the
+# exports don't change at runtime so it never needs rebuilding mid-play.
+func _build_deaden_cfg() -> void:
+	_deaden_cfg = GoalieSaveRules.DeadenConfig.new()
+	_deaden_cfg.pad_max_incoming_speed = save_deaden_pad_max_speed
+	_deaden_cfg.drop_speed = save_deaden_drop_speed
+	_deaden_cfg.glove_retain = save_deaden_glove_retain
+	_deaden_cfg.chest_retain = save_deaden_chest_retain
+	_deaden_cfg.pad_retain = save_deaden_pad_retain
+	_deaden_cfg.blocker_retain = save_deaden_blocker_retain
+
+
+# Classify a save surface by its StaticBody3D node name (LeftPad / RightPad /
+# Body / Head / Glove / Blocker / Stick under Goalie.tscn). Unknown parts fall
+# back to PAD (a live-on-hard, deaden-on-easy surface — the safe default).
+func _classify_save_part(part_body: Node3D) -> int:
+	match part_body.name:
+		"Glove":
+			return GoalieSaveRules.SavePart.GLOVE
+		"Body", "Head":
+			return GoalieSaveRules.SavePart.CHEST
+		"Blocker":
+			return GoalieSaveRules.SavePart.BLOCKER
+		"Stick":
+			return GoalieSaveRules.SavePart.STICK
+	return GoalieSaveRules.SavePart.PAD
+
+
+# Host-only: on a controlled save, queue a deadened rebound so the puck dies in
+# the paint instead of caroming into the slot. The crease-sweep then clears it.
+# Live saves (hard pad shots, stick redirects) return without queueing anything,
+# so the engine's restitution rebound stands.
+func _resolve_save_rebound(part_body: Node3D) -> void:
+	if _deaden_cfg == null:
+		return
+	var part: int = _classify_save_part(part_body)
+	var incoming: Vector3 = _pre_contact_velocity
+	if not GoalieSaveRules.is_controlled_save(incoming.length(), part, _deaden_cfg):
+		return
+	_pending_save_deaden = GoalieSaveRules.deadened_velocity(incoming, part, _deaden_cfg)
+	_pending_save_deaden_active = true
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if _pending_reset:
@@ -520,6 +597,14 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		if _pending_elevation_vel.y > 0.0:
 			state.transform.origin.y = ice_height + 0.1
 		_pending_elevation_vel = Vector3.ZERO
+	if _pending_save_deaden_active:
+		# Controlled-save deaden queued last step in _on_body_entered — override
+		# the engine's restitution rebound so the puck dies in the paint. Applied
+		# a step late (invisible ~8 ms) so it wins over the collision response.
+		state.linear_velocity = _pending_save_deaden
+		state.angular_velocity = Vector3.ZERO
+		_pending_save_deaden = Vector3.ZERO
+		_pending_save_deaden_active = false
 	if state.linear_velocity.length() > max_speed:
 		state.linear_velocity = state.linear_velocity.normalized() * max_speed
 	if state.transform.origin.y > ice_height + max_height:
@@ -533,6 +618,11 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 				and abs(state.transform.origin.x) <= GameRules.NET_HALF_WIDTH:
 			state.transform.origin.z = goal_z * sign(z)
 			state.linear_velocity = Vector3.ZERO
+	# Cache the velocity the puck carries out of this step — the save-deaden
+	# classifier reads it as the pre-bounce incoming velocity, since
+	# linear_velocity in _on_body_entered may already carry the restitution
+	# response. Taken after all writes so it reflects a same-step release too.
+	_pre_contact_velocity = state.linear_velocity
 
 func _physics_process(delta: float) -> void:
 	if not _is_server:

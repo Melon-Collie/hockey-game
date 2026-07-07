@@ -619,3 +619,45 @@ func test_jam_carrier_max_speed_zero_never_seals_for_carrier() -> void:
 	assert_false(GoalieBehaviorRules.is_crease_jam(
 		Vector3(0, 0, 25.0), Vector3(0, 0, 26.0), _JAM_GOAL_LINE_Z, _JAM_DIR,
 		true, 0.1, INF, cfg))
+
+# ── chest_tracking_factor ─────────────────────────────────────────────────────
+
+func test_chest_tracking_zero_in_tight() -> void:
+	# At/under the near distance the goalie tracks the puck fully (factor 0).
+	assert_almost_eq(GoalieBehaviorRules.chest_tracking_factor(2.5, 2.5, 7.0), 0.0, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.chest_tracking_factor(1.0, 2.5, 7.0), 0.0, 0.0001)
+
+func test_chest_tracking_full_at_range() -> void:
+	# At/over the far distance the goalie plays the chest (factor 1).
+	assert_almost_eq(GoalieBehaviorRules.chest_tracking_factor(7.0, 2.5, 7.0), 1.0, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.chest_tracking_factor(12.0, 2.5, 7.0), 1.0, 0.0001)
+
+func test_chest_tracking_ramps_linearly() -> void:
+	# Midway between near and far → half.
+	assert_almost_eq(GoalieBehaviorRules.chest_tracking_factor(4.75, 2.5, 7.0), 0.5, 0.0001)
+
+func test_chest_tracking_degenerate_range_is_zero() -> void:
+	# far <= near → no ramp, stay on full puck tracking.
+	assert_almost_eq(GoalieBehaviorRules.chest_tracking_factor(10.0, 5.0, 5.0), 0.0, 0.0001)
+
+# ── sealed_pad_toe_out ────────────────────────────────────────────────────────
+
+func test_sealed_pad_full_toe_out_when_off_post() -> void:
+	# Pad edge well short of the post → keep full toe-out for rebound steering.
+	assert_almost_eq(GoalieBehaviorRules.sealed_pad_toe_out(0.20, 18.0, 0.06), 18.0, 0.0001)
+
+func test_sealed_pad_squares_flat_on_post() -> void:
+	# Edge on the post (shortfall 0) → toe-out fully squared to 0.
+	assert_almost_eq(GoalieBehaviorRules.sealed_pad_toe_out(0.0, 18.0, 0.06), 0.0, 0.0001)
+
+func test_sealed_pad_squares_past_post() -> void:
+	# Edge past the post (negative shortfall) still fully squared, not negative.
+	assert_almost_eq(GoalieBehaviorRules.sealed_pad_toe_out(-0.05, 18.0, 0.06), 0.0, 0.0001)
+
+func test_sealed_pad_ramps_within_range() -> void:
+	# Halfway into the square range → half the toe-out.
+	assert_almost_eq(GoalieBehaviorRules.sealed_pad_toe_out(0.03, 18.0, 0.06), 9.0, 0.0001)
+
+func test_sealed_pad_disabled_range_keeps_toe_out() -> void:
+	# square_range 0 disables squaring entirely.
+	assert_almost_eq(GoalieBehaviorRules.sealed_pad_toe_out(0.0, 18.0, 0.0), 18.0, 0.0001)
