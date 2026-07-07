@@ -28,7 +28,7 @@ extends RefCounted
 #                      last_processed_ts f32,
 #                      flags u8 (shot_state[2:0]+elevation_level[4:3]+ghost[5]+blade_up[6]+sprint_locked[7]),
 #                      shot_charge u8, stamina u8, stagger_timer u8@0.01s,
-#                      intent u8 (move octant[2:0]+moving[3]+brake[4], v15)
+#                      intent u8 (move octant[2:0]+moving[3]+brake[4] v15, sprint[5] v16)
 #      Puck    (13 B): pos s16/s16/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
 #      Goalie  (43 B): root (12 B) + pose (31 B). Root:
 #                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
@@ -427,15 +427,18 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	# vs the host's penalised sim → a reconcile storm for the whole stagger window.
 	b.encode_u8(o, clampi(roundi(s.stagger_timer * 100.0), 0, 255)); o += 1
 	# Movement-intent byte (v15): bits [0..2] move-direction octant, bit [3]
-	# moving, bit [4] brake held. WASD is 8-way, so the octant quantization is
-	# lossless; the gait reads intent (glide / crossover anticipation / brake-
-	# gated hockey stop) on client-rendered remotes from this.
+	# moving, bit [4] brake held, bit [5] sprint active (v16). WASD is 8-way,
+	# so the octant quantization is lossless; the gait reads intent (glide /
+	# crossover anticipation / brake-gated hockey stop / sprint stride) on
+	# client-rendered remotes from this.
 	var intent: int = 0
 	if s.move_intent.length_squared() > 0.0025:
 		var oct: int = wrapi(roundi(atan2(s.move_intent.x, s.move_intent.y) / (PI / 4.0)), 0, 8)
 		intent = oct | 0x08
 	if s.brake_intent:
 		intent |= 0x10
+	if s.sprint_active:
+		intent |= 0x20
 	b.encode_u8(o, intent)
 	return b
 
@@ -480,6 +483,7 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	else:
 		s.move_intent = Vector2.ZERO
 	s.brake_intent = (intent & 0x10) != 0
+	s.sprint_active = (intent & 0x20) != 0
 	return s
 
 

@@ -452,7 +452,9 @@ func _rebuild_glove_cuffs(gloves_color: Color) -> void:
 		_skater.upper_body.remove_child(_skater.bot_cuff_mesh)
 		_skater.bot_cuff_mesh.queue_free()
 	_skater.bot_cuff_mesh = null
-	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6
+	# Scaled by the Hands forearm bulk so the cuff stays proud of the forearm
+	# cylinder it wraps — equal radii z-fight (see Skater.forearm_visual_mult).
+	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6 * _skater.forearm_visual_mult
 	_skater.top_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, 0.06, gloves_color, "CuffTop")
 	_skater.upper_body.add_child(_skater.top_cuff_mesh)
 	_skater.bot_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, 0.06, gloves_color, "CuffBot")

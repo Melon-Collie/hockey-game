@@ -242,27 +242,32 @@ func test_skater_flags_round_trip_all_combinations() -> void:
 
 func test_skater_move_intent_round_trips_all_octants() -> void:
 	# The intent byte (v15) quantizes the WASD vector to 8 directions —
-	# lossless for keyboard input. Every octant + brake + idle round-trips.
+	# lossless for keyboard input. Every octant + brake + sprint (v16) + idle
+	# round-trips, and the three flag bits can't clobber each other.
 	for oct: int in range(8):
 		var a: float = float(oct) * (PI / 4.0)
 		var s := SkaterNetworkState.new()
 		s.move_intent = Vector2(sin(a), cos(a))
 		s.brake_intent = (oct % 2 == 0)
+		s.sprint_active = (oct % 3 == 0)
 		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
 				WorldStateCodec._encode_skater_quantized(s))
 		assert_almost_eq(dec.move_intent.x, s.move_intent.x, 0.001, "octant %d x" % oct)
 		assert_almost_eq(dec.move_intent.y, s.move_intent.y, 0.001, "octant %d y" % oct)
 		assert_eq(dec.brake_intent, s.brake_intent, "octant %d brake" % oct)
+		assert_eq(dec.sprint_active, s.sprint_active, "octant %d sprint" % oct)
 
 
 func test_skater_idle_intent_round_trips_zero() -> void:
 	var s := SkaterNetworkState.new()
 	s.move_intent = Vector2.ZERO
 	s.brake_intent = true
+	s.sprint_active = true
 	var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
 			WorldStateCodec._encode_skater_quantized(s))
 	assert_eq(dec.move_intent, Vector2.ZERO)
 	assert_true(dec.brake_intent)
+	assert_true(dec.sprint_active)
 
 
 func test_skater_stamina_quantizes_within_tolerance() -> void:

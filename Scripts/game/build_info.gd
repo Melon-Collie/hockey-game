@@ -58,7 +58,10 @@ const VERSION: String = "dev"
 # v15: skater block 39 -> 40 B — movement-intent byte (8-way move octant +
 #     moving + brake bits) so client-rendered remotes play the input-driven
 #     gait reads (glide on no keys, intent crossovers, brake-gated stop).
-const PROTOCOL_VERSION: int = 15
+# v16: intent byte gains bit [5] — resolved sprint_active, so client-rendered
+#     remotes play the sprint gait (longer strides, deeper sit, forward lean —
+#     the on-screen opponent-stamina tell). Block size unchanged.
+const PROTOCOL_VERSION: int = 16
 
 
 func _ready() -> void:

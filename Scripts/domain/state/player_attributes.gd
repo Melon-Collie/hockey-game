@@ -110,8 +110,10 @@ const _PHYSICAL_CHECK_MULTS: Array[float] = [0.64, 0.82,  1.00, 1.18,  1.36]
 const _SHOT_POWER_MULTS:     Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
 
 # Specialized gameplay — extra effects layered on top of the canonical ones.
-# HEIGHT: every "proportional to actual body height" measurement (arms,
-#   mesh Y-scale, hitbox height, and reach/ROM derived from arm length). Heights
+# HEIGHT: every "proportional to actual body height" measurement (arms, the
+#   mesh skeleton scaled about the ice plane — roots, leg pivot chain, part
+#   positions, mesh Y-scale — hand heights, and reach/ROM derived from arm
+#   length; the physics hitbox HEIGHT deliberately stays constant). Heights
 #   on the 1.78 m (5'10") mesh: L1 5'7", L2 5'10", L3 6'0", L4 6'3", L5 6'5" —
 #   a deliberately tall, modern-NHL-skewed league. NOTE the exception to the
 #   medium=1.0 convention: because medium-Size is 6'0", the 1.0 identity (the

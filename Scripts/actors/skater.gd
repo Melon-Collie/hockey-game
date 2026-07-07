@@ -41,8 +41,9 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # Shoulder Y in upper-body-local space. Matches the ShoulderL/R ball centers
 # in the scene (keep in sync) so the drawn arm hangs from the visible
 # shoulder rather than a point 5 cm below it. Vertical drop from shoulder to
-# hand at rest = shoulder_height − hand_rest_y (currently 0.40 − (−0.10) =
-# 0.50 m). That drop is subtracted inside the derived backhand ROM
+# hand at rest = shoulder_height − hand_rest_y (mesh-native 0.40 − (−0.10) =
+# 0.50 m; both scale with build height in apply_attributes, so the drop is
+# 0.50 m × height_mult). That drop is subtracted inside the derived backhand ROM
 # (SkaterController.apply_attributes: reach = sqrt(arm_eff² − drop²)), so the
 # hand can never be placed beyond the arm's length — raising this shrinks
 # flat-footed reach; the directional reach lean (SkaterPoseCoordinator) buys
@@ -83,10 +84,11 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # (cross-body reach, arm × 0.5625) and the backhand cap is chain-derived
 # (sqrt(arm_eff² − shoulder-to-hand drop²)), so no reachable hand target ever
 # exceeds the arm's length — the forearm never draws stretched.
-# Baseline lengths give one-arm = 0.70m, wingspan ≈ 1.84m on a 1.78m body
-# (~103% of height — arm span runs 100–104% of height in real athletes; the
-# segments split evenly because the distal bone ends at the gloved-fist
-# center, and elbow→fist really is about humerus-length).
+# Baseline lengths give one-arm = 0.70m; with the shoulder balls at ±0.24
+# that's a wingspan ≈ 1.88m on a 1.78m body (~106% of height — a touch rangy
+# vs the 100–104% real athletes run, which reads fine in-game; the segments
+# split evenly because the distal bone ends at the gloved-fist center, and
+# elbow→fist really is about humerus-length).
 @export var upper_arm_length: float = 0.35
 @export var forearm_length: float = 0.35
 # Pole direction for the elbow (upper-body local). Mostly down with a real
@@ -192,6 +194,15 @@ var bottom_hand_sphere: MeshInstance3D = null
 # they stay perpendicular to the forearm bone as the arm moves.
 var top_cuff_mesh: MeshInstance3D = null
 var bot_cuff_mesh: MeshInstance3D = null
+# Visual forearm-bulk multiplier (the Hands attribute's arm tell), stamped by
+# SkaterAppearanceCoordinator.apply. The glove cuffs must stay proud of the
+# scaled forearm cylinder: with a fixed cuff radius, Hands 4's forearm
+# (0.055 × 1.20) landed EXACTLY on the cuff's 0.11 × 0.6 — two coaxial
+# cylinders with identical radii, z-fighting along the whole wrist — and
+# Hands 5 poked clean through it. Both writers read this: the appearance pass
+# resizes live cuffs when attributes change, and _rebuild_glove_cuffs sizes
+# fresh ones on uniform apply (either order works).
+var forearm_visual_mult: float = 1.0
 
 # Butt-end knob cylinder at the top of the shaft (just past the top hand).
 # Created by SkaterUniformCoordinator on uniform apply; positioned per-tick by
@@ -315,6 +326,7 @@ var _default_lower_body_y: float = 0.0
 # crouch through _apply_body_height (the single writer of both body Ys).
 var _skating_crouch_drop: float = 0.0
 var _block_stance_active: bool = false
+var _skeleton_root_offset: float = 0.0  # see set_skeleton_root_offset
 # Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
 # Advanced by update_carry_side() each tick from the IK pipeline.
 var _carry_side: int = 0
@@ -774,10 +786,27 @@ func set_skating_crouch_drop(drop: float) -> void:
 	_apply_body_height()
 
 
+# Skeleton height offset (m), set by SkaterAppearanceCoordinator.apply:
+# (height_mult − 1) × the roots' ice height. Raising the UpperBody/LowerBody
+# roots by this while every offset below them scales by height_mult makes the
+# whole mesh skeleton scale about the ICE PLANE — skate contact at y=0 is a
+# fixed point of that scaling, so skates stay planted and the physics origin
+# (FACEOFF_SPAWN_HEIGHT, Y-axis-locked) never has to move. Routed through
+# _apply_body_height so this composes with the crouch/block drops instead of
+# fighting them for the same property.
+func set_skeleton_root_offset(offset: float) -> void:
+	if is_equal_approx(_skeleton_root_offset, offset):
+		return
+	_skeleton_root_offset = offset
+	_apply_body_height()
+
+
 func _apply_body_height() -> void:
 	var block_depth: float = block_crouch_depth if _block_stance_active else 0.0
-	upper_body.position.y = _default_upper_body_y - block_depth - _skating_crouch_drop
-	lower_body.position.y = _default_lower_body_y - _skating_crouch_drop
+	upper_body.position.y = _default_upper_body_y + _skeleton_root_offset \
+			- block_depth - _skating_crouch_drop
+	lower_body.position.y = _default_lower_body_y + _skeleton_root_offset \
+			- _skating_crouch_drop
 
 
 # ── Blade ─────────────────────────────────────────────────────────────────────
