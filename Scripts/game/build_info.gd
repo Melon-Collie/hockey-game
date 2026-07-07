@@ -58,7 +58,10 @@ const VERSION: String = "dev"
 # v15: skater block 39 -> 40 B — movement-intent byte (8-way move octant +
 #     moving + brake bits) so client-rendered remotes play the input-driven
 #     gait reads (glide on no keys, intent crossovers, brake-gated stop).
-# v16: latency pass. (a) Input batching 60 -> 120 Hz; ClockSync.BATCH_INTERVAL
+# v16: intent byte gains bit [5] — resolved sprint_active, so client-rendered
+#     remotes play the sprint gait (longer strides, deeper sit, forward lean —
+#     the on-screen opponent-stamina tell). Block size unchanged.
+# v17: latency pass. (a) Input batching 60 -> 120 Hz; ClockSync.BATCH_INTERVAL
 #     now derives from Constants.INPUT_RATE, shrinking INPUT_LEAD_SEC
 #     33.3 -> 25 ms — the lead is a host/client convention baked into every
 #     lag-comp rewind (LagCompRewind.self_view_time), so mixed builds would
@@ -69,7 +72,7 @@ const VERSION: String = "dev"
 #     (notify_carrier_changed / notify_puck_picked_up / notify_puck_stolen /
 #     notify_puck_dropped) gained a leading event_seq arg for cross-channel
 #     dedupe.
-const PROTOCOL_VERSION: int = 16
+const PROTOCOL_VERSION: int = 17
 
 
 func _ready() -> void:

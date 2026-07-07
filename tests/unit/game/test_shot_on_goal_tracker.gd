@@ -39,21 +39,17 @@ func test_pickup_records_carrier() -> void:
 	assert_eq(tracker.find_scorer_on_team(0), 10)
 
 
-func test_pickup_limits_to_three_carriers() -> void:
+func test_pickup_limits_to_max_recent_carriers() -> void:
+	# One team-0 pickup followed by MAX_RECENT_CARRIERS opposing pickups — the
+	# team-0 entry rotates out of the bounded history.
 	_add_player(10, 0)
-	_add_player(11, 0)
-	_add_player(12, 0)
-	_add_player(13, 0)
+	for pid: int in range(20, 20 + ShotOnGoalTracker.MAX_RECENT_CARRIERS):
+		_add_player(pid, 1)
 	tracker.on_pickup(10)
-	tracker.on_pickup(11)
-	tracker.on_pickup(12)
-	tracker.on_pickup(13)
-	# Only the 3 most recent carriers are kept; 10 should be dropped.
-	_add_player(20, 1, "Opponent")
-	tracker.on_pickup(20)  # push unique to verify recency
-	# 13 is now 2nd most recent, 10 shouldn't be in the list
-	var scorer_team0: int = tracker.find_scorer_on_team(0)
-	assert_eq(scorer_team0, 13, "most recent team-0 carrier is 13 (10 rotated out)")
+	for pid: int in range(20, 20 + ShotOnGoalTracker.MAX_RECENT_CARRIERS):
+		tracker.on_pickup(pid)
+	assert_eq(tracker.find_scorer_on_team(0), -1,
+			"10 rotated out of the %d-entry history" % ShotOnGoalTracker.MAX_RECENT_CARRIERS)
 
 
 func test_pickup_dedupes_consecutive_same_peer() -> void:
@@ -128,6 +124,90 @@ func test_sog_counted_once_per_shot() -> void:
 	assert_eq(shooter.stats.shots_on_goal, 1)
 
 
+# ── On-net gating (NHL: only a puck that would go in counts when stopped) ────
+
+func test_goalie_touch_on_off_net_trajectory_is_not_sog() -> void:
+	var shooter := _add_player(10, 0)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)  # wide shot / cross-crease pass
+	tracker.on_goalie_touch(1)
+	assert_eq(shooter.stats.shots_on_goal, 0)
+	assert_eq(sm.team_shots[0], 0)
+
+
+func test_post_hit_turns_shot_into_miss() -> void:
+	var shooter := _add_player(10, 0)
+	tracker.on_shot_started(10)
+	tracker.on_post_hit()
+	tracker.on_goalie_touch(1)  # goalie covers the ricochet
+	assert_eq(shooter.stats.shots_on_goal, 0)
+
+
+func test_goal_after_post_still_counts_sog() -> void:
+	var shooter := _add_player(10, 0)
+	tracker.on_shot_started(10)
+	tracker.on_post_hit()
+	tracker.on_goal_confirmed(10)  # bar-down anyway — goals credit unconditionally
+	assert_eq(shooter.stats.shots_on_goal, 1)
+
+
+func test_wide_shot_tipped_on_net_counts_for_tipper() -> void:
+	var shooter := _add_player(10, 0)
+	var tipper := _add_player(11, 0)
+	tracker.on_pickup(10)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)  # wide off the blade...
+	tracker.on_deflection(11)
+	tracker.note_trajectory(true)   # ...redirected on net by the tip
+	tracker.on_goalie_touch(1)
+	assert_eq(tipper.stats.shots_on_goal, 1)
+	assert_eq(shooter.stats.shots_on_goal, 0)
+
+
+func test_note_trajectory_without_pending_shot_is_noop() -> void:
+	tracker.note_trajectory(true)
+	assert_false(tracker.has_pending_shot())
+
+
+func test_block_of_off_net_release_is_not_credited() -> void:
+	_add_player(10, 0)
+	var blocker := _add_player(20, 1)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)  # errant shot / pass
+	assert_false(tracker.on_block(20))
+	assert_eq(blocker.stats.shots_blocked, 0)
+	assert_true(tracker.has_pending_shot(),
+			"intercepting an off-net puck is a takeaway — pending shot untouched")
+
+
+# ── Tip attribution (NHL: a saved teammate tip is the TIPPER's shot) ─────────
+
+func test_saved_teammate_tip_credits_tipper_not_shooter() -> void:
+	var shooter := _add_player(10, 0)
+	var tipper := _add_player(11, 0)
+	tracker.on_pickup(10)
+	tracker.on_shot_started(10)
+	tracker.on_deflection(11)  # teammate redirects mid-flight
+	tracker.on_goalie_touch(1)
+	assert_eq(tipper.stats.shots_on_goal, 1, "the tip is the tipper's shot")
+	assert_eq(shooter.stats.shots_on_goal, 0)
+	assert_eq(sm.team_shots[0], 1)
+
+
+func test_saved_defender_deflection_stays_shooters_shot() -> void:
+	var shooter := _add_player(10, 0)
+	var defender := _add_player(20, 1)
+	tracker.on_pickup(10)
+	tracker.on_shot_started(10)
+	# Late graze off a defender (past the block window, so it reaches here as a
+	# deflection, not a block) — NHL keeps this the original shooter's shot.
+	tracker.tick(ShotOnGoalTracker.BLOCK_WINDOW + 0.1)
+	tracker.on_deflection(20)
+	tracker.on_goalie_touch(1)
+	assert_eq(shooter.stats.shots_on_goal, 1)
+	assert_eq(defender.stats.shots_on_goal, 0)
+
+
 # ── Deflection keeps pending shot alive ──────────────────────────────────────
 
 func test_deflection_keeps_pending_shot_alive() -> void:
@@ -163,13 +243,14 @@ func test_credit_assists_up_to_two_same_team_carriers() -> void:
 	assert_eq(scorer.stats.assists, 0)
 
 
-func test_credit_assists_stops_at_opposing_team() -> void:
+func test_credit_assists_stops_at_opposing_established_possession() -> void:
 	var team_assist := _add_player(10, 0, "TeamA1")
-	_add_player(11, 1, "Opponent")          # opposing carrier interrupts chain
+	_add_player(11, 1, "Opponent")  # opposing ESTABLISHED possession breaks chain
 	var team_assist_2 := _add_player(12, 0, "TeamA2")
 	var scorer := _add_player(13, 0, "Scorer")
 	tracker.on_pickup(10)
 	tracker.on_pickup(11)
+	tracker.on_possession_established(11)  # held it / made a play — control
 	tracker.on_pickup(12)
 	tracker.on_pickup(13)
 	var assists: Array[String] = tracker.credit_assists(13)
@@ -177,6 +258,72 @@ func test_credit_assists_stops_at_opposing_team() -> void:
 	assert_eq(assists[0], "TeamA2")
 	assert_eq(team_assist.stats.assists, 0, "chain stopped at opponent — no credit")
 	assert_eq(team_assist_2.stats.assists, 1)
+	assert_eq(scorer.stats.assists, 0)
+
+
+func test_assist_survives_momentary_opposing_pickup() -> void:
+	# A dangerous puck sent into traffic, briefly proximity-attached to a
+	# defender who never controls it, knocked in by a teammate — the sender
+	# keeps the assist because no opponent ESTABLISHED possession.
+	var passer := _add_player(10, 0, "Passer")
+	_add_player(20, 1, "Defender")
+	var scorer := _add_player(11, 0, "Scorer")
+	tracker.on_pickup(10)
+	tracker.on_pickup(20)  # scramble attach — never establishes
+	tracker.on_pickup(11)
+	var assists: Array[String] = tracker.credit_assists(11)
+	assert_eq(assists.size(), 1, "unestablished opposing touch skipped")
+	assert_eq(assists[0], "Passer")
+	assert_eq(passer.stats.assists, 1)
+
+
+func test_assist_survives_opposing_deflection() -> void:
+	# NHL: a mere opposing TOUCH (pass grazing a defender) doesn't break the
+	# assist chain — only opposing possession does.
+	var passer := _add_player(10, 0, "Passer")
+	_add_player(20, 1, "Defender")
+	var scorer := _add_player(11, 0, "Scorer")
+	tracker.on_pickup(10)      # passer possesses
+	tracker.on_deflection(20)  # pass deflects off a defender
+	tracker.on_pickup(11)      # scorer corrals it and scores
+	var assists: Array[String] = tracker.credit_assists(11)
+	assert_eq(assists.size(), 1, "opposing touch skipped, passer keeps the assist")
+	assert_eq(assists[0], "Passer")
+	assert_eq(passer.stats.assists, 1)
+
+
+func test_two_assists_survive_multiple_opposing_touches() -> void:
+	var a1 := _add_player(10, 0, "A1")
+	var a2 := _add_player(11, 0, "A2")
+	_add_player(20, 1, "Defender")
+	var scorer := _add_player(12, 0, "Scorer")
+	tracker.on_pickup(10)      # A1 carries
+	tracker.on_deflection(20)  # pass tips off the defender
+	tracker.on_pickup(11)      # A2 carries
+	tracker.on_deflection(20)  # second pass tips off the defender again
+	tracker.on_pickup(12)      # scorer
+	var assists: Array[String] = tracker.credit_assists(12)
+	assert_eq(assists.size(), 2)
+	assert_eq(assists[0], "A2")
+	assert_eq(assists[1], "A1")
+	assert_eq(a1.stats.assists, 1)
+	assert_eq(a2.stats.assists, 1)
+
+
+func test_deflection_then_established_pickup_breaks_chain() -> void:
+	# The defender tips the pass, corrals it AND establishes control — the
+	# collapsed history entry upgrades to possession, breaking the chain.
+	var passer := _add_player(10, 0, "Passer")
+	_add_player(20, 1, "Defender")
+	var scorer := _add_player(11, 0, "Scorer")
+	tracker.on_pickup(10)
+	tracker.on_deflection(20)              # tip...
+	tracker.on_pickup(20)                  # ...corral (collapses into one entry)...
+	tracker.on_possession_established(20)  # ...held long enough — control
+	tracker.on_pickup(11)                  # scorer steals it back and scores
+	var assists: Array[String] = tracker.credit_assists(11)
+	assert_eq(assists.size(), 0, "opposing possession broke the chain")
+	assert_eq(passer.stats.assists, 0)
 	assert_eq(scorer.stats.assists, 0)
 
 

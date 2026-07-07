@@ -30,6 +30,19 @@ static func skater_needs_reconcile(
 			return true
 	return false
 
+# LocalController stale-ack gate: is this broadcast's ack (the host's
+# last_processed_host_timestamp) newer than the last one a reconcile already
+# consumed? The host broadcasts world state every tick but only advances the
+# ack when it pops a due input, so consecutive broadcasts routinely repeat the
+# same ack. A reconcile at ack T matches its prediction and then trims that
+# prediction away, so re-running the comparison for a repeated ack finds no
+# match, falls back to the live (prediction-lead-ahead) position, and fires a
+# spurious snap. Only a strictly-newer ack carries a fresh confirmed input to
+# compare against. Epsilon absorbs the 0.1ms wire-grid quantization of the ack
+# so a re-sent value never reads as "advanced" by a rounding hair.
+static func ack_is_new(ack_ts: float, last_ack_ts: float, epsilon: float) -> bool:
+	return ack_ts > last_ack_ts + epsilon
+
 # PuckController: has the client-predicted puck drifted so far from the
 # server's position that we need a hard snap (teleport / physics-glitch
 # level)? Below this threshold, the caller runs a softer velocity+position

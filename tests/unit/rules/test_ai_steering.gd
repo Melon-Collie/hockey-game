@@ -298,3 +298,56 @@ func test_offside_brake_preserves_lateral_intent() -> void:
 	var v := AISteering.offside_brake(desired, pos, vel, TEAM0_DIR, NEAR_PUCK_Z, false)
 	assert_gt(v.x, 0.0, "lateral intent is preserved through the brake")
 	assert_gt(v.y, 0.0, "depth component still brakes back from the line")
+
+
+# ── Arrival brake (station-keeping overshoot guard) ─────────────────────────
+# When the closing speed toward a point anchor can no longer be shed
+# inside the remaining distance, press the real brake — a bot whose
+# station target slowed down must stop AT it, not blow through and
+# double back off the brake-pivot.
+
+func test_arrival_brake_engages_inside_stopping_distance() -> void:
+	# 9 m/s at an anchor 3 m ahead: stopping distance ≈ 4.05 m > 3 m.
+	assert_true(AISteering.should_arrival_brake(
+			Vector3.ZERO, Vector3(0, 0, 3), Vector2(0, 9), false),
+			"cannot stop in 3 m from 9 m/s — brake now")
+
+
+func test_arrival_brake_stays_off_with_room_to_stop() -> void:
+	# Same speed, anchor 12 m out: plenty of room — keep skating.
+	assert_false(AISteering.should_arrival_brake(
+			Vector3.ZERO, Vector3(0, 0, 12), Vector2(0, 9), false),
+			"12 m of room from 9 m/s — no brake")
+
+
+func test_arrival_brake_ignores_slow_speeds() -> void:
+	# Below the speed floor, friction + the anchor deadband settle it.
+	assert_false(AISteering.should_arrival_brake(
+			Vector3.ZERO, Vector3(0, 0, 0.4), Vector2(0, 2), false),
+			"slow arrivals settle on friction, no brake key")
+
+
+func test_arrival_brake_ignores_receding_motion() -> void:
+	# Moving AWAY from the anchor — reversals are the pivot brake's job.
+	assert_false(AISteering.should_arrival_brake(
+			Vector3.ZERO, Vector3(0, 0, 3), Vector2(0, -9), false),
+			"no closing speed toward the anchor — nothing to overshoot")
+
+
+func test_arrival_brake_uses_closing_component_not_raw_speed() -> void:
+	# Fast but tangential: the closing component toward the anchor is
+	# small, so there is no overshoot to brake for.
+	assert_false(AISteering.should_arrival_brake(
+			Vector3.ZERO, Vector3(0, 0, 4), Vector2(9, 1), false),
+			"tangential speed doesn't overshoot the point")
+
+
+func test_arrival_brake_hysteresis_holds_the_brake_longer() -> void:
+	# Borderline geometry sits between the engage and release margins:
+	# not braking → stays off; already braking → holds on.
+	var vel := Vector2(0, 8)           # stop_dist = 3.2 m
+	var anchor := Vector3(0, 0, 4.0)   # engage needs 3.7 ≥ 4 (no); release needs 4.7 ≥ 4 (yes)
+	assert_false(AISteering.should_arrival_brake(Vector3.ZERO, anchor, vel, false),
+			"outside the engage margin — don't start braking")
+	assert_true(AISteering.should_arrival_brake(Vector3.ZERO, anchor, vel, true),
+			"inside the release margin — hold an in-progress brake")

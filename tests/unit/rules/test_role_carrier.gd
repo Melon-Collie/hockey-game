@@ -29,6 +29,7 @@ func _make_ctx(self_pos: Vector3, skaters: Array = []) -> RoleContext:
 			sk.position = entry[2]
 			sk.facing = Vector2(0.0, -1.0)
 			sk.is_ghost = entry[3] if entry.size() > 3 else false
+			sk.velocity = entry[4] if entry.size() > 4 else Vector3.ZERO
 			snap.skater_states[entry[0]] = sk
 
 	var puck := PuckNetworkState.new()
@@ -81,6 +82,118 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 	assert_gt(c.debug_pass_score, 0.0, "the breakout pass has positive value")
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
 			"pressured carrier passes out rather than carrying into the box")
+
+
+# ─── breakout: the risky ground-losing backpass loses to keeping the puck ────
+
+func test_risky_backpass_deep_in_own_zone_loses_to_keeping_the_puck() -> void:
+	# Carrier deep in our own zone with a forechecker charging at it. The
+	# only pass option is a teammate even DEEPER — a low-upside backpass
+	# whose execution-miss mode (PASS_MISS_PROB, loss point past the
+	# receiver, right in front of our net) makes its EV worse than just
+	# keeping the puck and skating. Before the miss-risk term this
+	# backpass scored as risk-free (clear lane → zero cost) and won the
+	# fire-vs-carry tiebreak; the occasional real miss surrendered all
+	# the ice behind the carrier.
+	var self_pos := Vector3(2, 0, 21)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-3, 0, 24)],                          # deep valve (backpass bait)
+			[3, 1, Vector3(2, 0, 17.5), false, Vector3(0, 0, 5)],      # forechecker charging us
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"a low-upside backpass toward our own net must not beat keeping the puck")
+
+
+# ─── stand-still pays turnover cost: pressured carrier never freezes ─────────
+
+func test_pressured_carrier_skates_clear_instead_of_freezing() -> void:
+	# Carrier deep in our zone with a forechecker charging straight at it
+	# and flankers denying the easy lateral steps. Stand-still used to be
+	# the only carry candidate that paid NO turnover cost, so in exactly
+	# this spot every escape route went EV-negative while freezing stayed
+	# positive — the bot planted itself and ate the check. With the strip
+	# probability (1 - poke_safety) now feeding turnover_cost, freezing
+	# under a converging forechecker prices its own turnover and loses to
+	# the least-bad skating route.
+	var self_pos := Vector3(2, 0, 21)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(2, 0, 18), false, Vector3(0, 0, 5)],  # charging forechecker
+			[4, 1, Vector3(6, 0, 19)],                           # right flanker
+			[5, 1, Vector3(-2, 0, 19)],                          # left flanker
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"nothing worth firing — this is a carry read")
+	assert_ne(c.last_carry_anchor, self_pos,
+			"a carrier with a forechecker bearing down must skate clear, not freeze")
+
+
+# ─── zone entry: open ice at the blue line must beat standing still ──────────
+
+func test_open_carrier_at_blue_line_drives_in_instead_of_freezing() -> void:
+	# Carrier at REST just outside the offensive blue line, wide open —
+	# no opponents, clear path to the net. Before the potential-
+	# realization discount, stand-still held its position_potential
+	# undecayed while every movement candidate paid travel decay; the
+	# potential gradient out here is shallower than that decay, so
+	# stand-still strictly won and the bot PLANTED at the blue line
+	# instead of attacking. Now potential pays its realization decay
+	# uniformly and open ice ahead always wins the carry argmax.
+	var self_pos := Vector3(0.0, 0.0, -6.5)  # ~20 m from opp goal, just outside shot range
+	var ctx: RoleContext = _make_ctx(self_pos)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"nothing to fire from out here — this is a carry read")
+	assert_ne(c.last_carry_anchor, self_pos,
+			"a wide-open carrier at the blue line must take the space, not freeze")
+	assert_lt(c.last_carry_anchor.z, self_pos.z,
+			"…and take it TOWARD the attacking net")
+
+
+# ─── breakout: wall-exit carry route when the middle is clogged ──────────────
+
+func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:
+	# Carrier wheeling up the weak-side wall with momentum, forecheck set
+	# up through the middle (one opponent pinching the local up-ice steps,
+	# another in the center lane). No teammates → no pass bailout. The
+	# zone-exit wall candidate — a real "skate it out along the boards"
+	# plan — should win the carry argmax over the myopic 3 m steps and
+	# the through-the-middle slot drive.
+	var self_pos := Vector3(-10.5, 0, 21)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos, false, Vector3(0, 0, -5)],  # us, skating up-ice
+			[3, 1, Vector3(-7.5, 0, 16.5)],                    # pinching the up-ice step
+			[4, 1, Vector3(0, 0, 13)],                         # center-lane forechecker
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.self_velocity = Vector3(0, 0, -5)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"nothing to shoot at or pass to — this is a carry read")
+	assert_gt(absf(c.last_carry_anchor.x), 10.0,
+			"the winning carry anchor hugs the boards (wall-exit route)")
+	assert_lt(c.last_carry_anchor.z, GameRules.BLUE_LINE_Z,
+			"the wall-exit anchor sits past our blue line — a completed zone exit")
+
+
+func test_wall_exit_candidates_absent_in_offensive_half() -> void:
+	# Wall exits are own-half candidates only. An OZ carrier's anchor must
+	# come from the local steps / slot anchor — never a point back at our
+	# blue line (own_goal_dir * z > 0 for team 0 is z > 0; the exit z sits
+	# at +(BLUE_LINE_Z - lead), which would be BEHIND an OZ carrier).
+	var self_pos := Vector3(-8, 0, -15)  # offensive half, wide
+	var ctx := _make_ctx(self_pos)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_lt(c.last_carry_anchor.z, 0.0,
+			"an offensive-half carrier never targets the own-half wall-exit point")
 
 
 # ─── stagger: don't wind up a shot off-balance ──────────────────────────────
@@ -341,6 +454,23 @@ func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
 			"a staging cross-seam finisher gives a positive developing feed")
 
 
+func test_developing_feed_zero_for_ghosted_finisher() -> void:
+	# An offside (ghosted) finisher can't legally receive — the live pass
+	# scoring skips ghosts, so the hold must too, or the carrier waits
+	# for a feed it's never allowed to make.
+	var self_pos := Vector3(4, 0, -18)
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-3, 0, -19), true]])  # staging spot, but ghosted
+	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
+	brain.slot_assignments[2] = AIRoleSlots.Slot.FINISHER
+	ctx.team_brain = brain
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+			"a ghosted finisher isn't a developing play — nothing to hold for")
+
+
 func test_developing_feed_zero_when_finisher_out_of_offensive_zone() -> void:
 	# Finisher back in the neutral zone (z = -5 > -BLUE_LINE_Z) → not a cross-seam.
 	var ctx := _ctx_with_finisher(Vector3(-3, 0, -5), false)
@@ -348,6 +478,108 @@ func test_developing_feed_zero_when_finisher_out_of_offensive_zone() -> void:
 	carrier._scratch_teammate_ids = [2]
 	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
 			"a finisher outside the OZ isn't a developing cross-seam")
+
+
+# ─── developing breakout outlet: hold instead of forcing the backpass ────────
+# A BREAKOUT_STRONG / OUTLET teammate skating its route is a developing
+# feed: _developing_outlet_feed projects it OUTLET_DEVELOP_WINDOW_S along
+# its velocity and prices the pass to that spot through the same _pass_ev
+# as the live scoring.
+
+func _ctx_with_outlet(outlet_pos: Vector3, outlet_vel: Vector3,
+		ghost: bool = false) -> RoleContext:
+	# Carrier deep in our own zone; teammate 2 slotted BREAKOUT_STRONG.
+	var self_pos := Vector3(2, 0, 20)
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet_pos, ghost, outlet_vel]])
+	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
+	brain.slot_assignments[2] = AIRoleSlots.Slot.BREAKOUT_STRONG
+	ctx.team_brain = brain
+	return ctx
+
+
+func test_developing_feed_positive_for_outlet_skating_its_route() -> void:
+	# Outlet on the strong wall, skating hard up-ice toward the blue line.
+	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6))
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_gt(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+			"an outlet skating up its route is a developing feed worth holding for")
+
+
+func test_developing_feed_zero_for_stationary_outlet() -> void:
+	# A parked outlet offers exactly the spot it's at — the live pass
+	# scoring already prices that; nothing is developing.
+	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3.ZERO)
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+			"a stationary outlet isn't developing anything")
+
+
+func test_developing_feed_zero_for_ghosted_outlet() -> void:
+	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6), true)
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+			"a ghosted outlet can't receive — no developing feed")
+
+
+func test_developing_outlet_beats_the_spot_it_left_behind() -> void:
+	# The whole point of the hold: the pass the outlet is CREATING
+	# (projected up its route, toward open ice) out-values the pass to
+	# where it currently stands. Compare the developing feed of a moving
+	# outlet against one parked at the same spot but projected nowhere.
+	var moving := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6))
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	var developing: float = carrier._best_developing_feed(moving, moving.attacking_goal_pos)
+
+	# The same feed valued AT the outlet's current spot: reuse _pass_ev
+	# directly so both sides run identical pricing.
+	var spot := Vector3(9, 0, 16)
+	var dist: float = moving.self_pos.distance_to(spot)
+	var pass_speed: float = AIActionScoring.pass_launch_speed(
+			dist, moving.self_wrister_shot_speed, moving.pass_speed_scale)
+	var flight_t: float = clampf(dist / pass_speed, 0.0, AIRoleCarrier.PASS_LEAD_MAX_S)
+	var carrier2 := AIRoleCarrier.new()
+	carrier2._scratch_teammate_ids = [2]
+	var stay_put: float = carrier2._pass_ev(
+			moving, spot, pass_speed, flight_t,
+			flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, flight_t,
+			moving.attacking_goal_pos, moving.defending_goal_pos)
+
+	assert_gt(developing, stay_put,
+			"the projected up-ice spot out-values the spot the outlet is leaving")
+
+
+func test_pressured_carrier_never_forces_the_backpass_when_outlet_develops() -> void:
+	# The user-facing behavior: carrier pressured deep in our zone, a
+	# close backpass valve available, and the strong-side outlet skating
+	# its route. Acceptable reads are "keep the puck while the breakout
+	# develops" or "headman it up-ice to the outlet" — what must never
+	# happen is forcing the ground-losing backpass to the deep valve.
+	var self_pos := Vector3(2, 0, 20)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(9, 0, 16), false, Vector3(1.2, 0, -6)],  # outlet en route
+			[5, TEAM_ID, Vector3(-3, 0, 24)],                             # deep valve (bait)
+			[3, 1, Vector3(2, 0, 17.5), false, Vector3(0, 0, 5)],         # forechecker charging
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
+	brain.slot_assignments[2] = AIRoleSlots.Slot.BREAKOUT_STRONG
+	brain.slot_assignments[5] = AIRoleSlots.Slot.BREAKOUT_WEAK
+	ctx.team_brain = brain
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	if c.intended_action == AIRoleCarrier.INTENT_PASS:
+		assert_eq(c.pass_target_peer_id, 2,
+				"if the carrier passes under pressure, it's up-ice to the outlet — never the deep valve")
+	else:
+		assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+				"otherwise the carrier keeps the puck while the breakout develops")
 
 
 func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:

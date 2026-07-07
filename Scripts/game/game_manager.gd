@@ -169,6 +169,7 @@ var _codec: WorldStateCodec = null
 var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _turnover_tracker: TurnoverTracker = null
+var _possession_tracker: PossessionTracker = null
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
 var _stick_lift_claim: StickLiftClaimResolver = null
@@ -380,6 +381,8 @@ func _physics_process(delta: float) -> void:
 	_check_puck_stuck_on_net(delta)
 	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
+	_hit_tracker.tick(delta)
+	_possession_tracker.tick(delta)
 	_pickup_claim.tick(delta)
 
 
@@ -462,8 +465,43 @@ func _check_puck_stuck_on_net(delta: float) -> void:
 # clients can play their own whistle/toast.
 func _whistle_and_faceoff(dot: Vector2) -> void:
 	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
+	# Flush the stat trackers BEFORE the phase-entry side effects run — the
+	# puck drop they trigger must not arm hit grace off a dead-ball release.
+	_on_stoppage_flush_stat_trackers(GamePhase.Phase.FACEOFF_PREP)
 	_state_machine.begin_faceoff_prep(dot)
 	_phase_coord.handle_phase_entered()
+
+
+# Host: any transition out of live play (whistle prep, goal, period horn,
+# game over) is a stoppage for stat attribution — resolve a still-pending
+# draw via the last-toucher fallback and clear pending hits + release grace
+# (nothing carries across dead play). The goal path resolved the draw to the
+# scoring team already (more precise than last-toucher when a defender tips
+# one in), so this finds nothing pending there. Idempotent with the explicit
+# flush in _whistle_and_faceoff.
+func _on_stoppage_flush_stat_trackers(phase: GamePhase.Phase) -> void:
+	if not NetworkManager.is_host:
+		return
+	if phase == GamePhase.Phase.PLAYING or phase == GamePhase.Phase.FACEOFF:
+		return
+	_flush_pending_faceoff_win()
+	if _hit_tracker != null:
+		_hit_tracker.on_play_stopped()
+	if _possession_tracker != null:
+		_possession_tracker.reset()
+
+
+# Host: play stopped before anyone established possession off a faceoff, so
+# the NHL fallback applies — the draw goes to the team of the last toucher
+# (the scoring team when the stoppage is a goal, via _on_goal_resolve_faceoff).
+func _flush_pending_faceoff_win() -> void:
+	if _turnover_tracker == null or not _turnover_tracker.has_pending_faceoff():
+		return
+	var team_id: int = -1
+	if _registry != null and _shot_tracker != null:
+		team_id = _registry.resolve_team_id_for_peer(_shot_tracker.get_last_toucher())
+	if _turnover_tracker.resolve_pending_faceoff(team_id):
+		_sync_stats_to_clients()
 
 
 # Host-only: drain a domain-flagged stoppage (icing race confirmed, offside
@@ -947,6 +985,10 @@ func _spawn_puck() -> void:
 	puck_controller.puck_stripped_from.connect(_on_server_puck_stripped_from)
 	puck_controller.puck_touched_while_loose.connect(_on_server_puck_touched_while_loose)
 	puck_controller.puck_touched_by_goalie.connect(_on_puck_touched_by_goalie)
+	if NetworkManager.is_host:
+		# Pipes = miss for SOG purposes (NHL). Sound/VFX for the ping are wired
+		# separately in _wire_sound_signals.
+		puck.puck_touched_post.connect(_on_host_puck_touched_post)
 
 
 func _spawn_goalies() -> void:
@@ -1032,6 +1074,7 @@ func _wire_subsystems() -> void:
 
 	_hit_tracker = HitTracker.new()
 	_hit_tracker.setup(_registry)
+	_hit_tracker.impact_landed.connect(_on_impact_landed)
 	_hit_tracker.hit_credited.connect(_on_hit_credited)
 
 	# Host-only takeaway / giveaway / faceoff-win attribution off possession
@@ -1039,6 +1082,26 @@ func _wire_subsystems() -> void:
 	_turnover_tracker = TurnoverTracker.new()
 	_turnover_tracker.setup(_registry)
 	_shot_tracker.shot_on_goal_recorded.connect(_turnover_tracker.note_shot_on_goal)
+
+	# Host-only established-possession model (PossessionRules): turnover /
+	# faceoff-win crediting and assist-chain breaks key off ESTABLISHMENT
+	# (held the puck, or made a deliberate play), never off momentary
+	# scramble touches. Fed by the pickup/release/strip hooks below.
+	_possession_tracker = PossessionTracker.new()
+	_possession_tracker.setup(_registry)
+	_possession_tracker.possession_established.connect(_on_possession_established)
+	# Catch-all stoppage flush: any phase that isn't live play resolves a
+	# still-pending draw and drops pending hits/grace. Covers the paths that
+	# don't go through _whistle_and_faceoff — the period horn and game over.
+	# `phase_changed` is GameManager's own signal and GameManager is a
+	# persistent autoload, so this connection survives across matches — unlike
+	# the fresh-per-match collaborator signals wired above. `_wire_subsystems`
+	# re-runs on every `_spawn_world` (boot free-play → hosted match, rematch,
+	# offline restart), so guard against the duplicate connect. The handler
+	# reads GameManager's live `_*_tracker` fields, which the surrounding
+	# re-wire refreshes, so one persistent connection stays correct.
+	if not phase_changed.is_connected(_on_stoppage_flush_stat_trackers):
+		phase_changed.connect(_on_stoppage_flush_stat_trackers)
 
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
@@ -1050,7 +1113,7 @@ func _wire_subsystems() -> void:
 	_stick_lift_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
 
 	_hit_claim = HitClaimResolver.new()
-	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, get_puck, _get_puck_controller)
+	_hit_claim.setup(_registry, _state_buffer_manager, _hit_tracker, _get_puck_controller)
 
 	_phase_coord = PhaseCoordinator.new()
 	# Every peer captures a goal frame of its own POV at goal time —
@@ -1085,6 +1148,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(goal_scored.emit)
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.goal_scored.connect(_trigger_scorer_celebration)
+	_phase_coord.goal_scored.connect(_on_goal_resolve_faceoff)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
 	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
@@ -1842,9 +1906,10 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
 	)
 	# Impact burst + sound are NOT played here — they fire from the host-authoritative
-	# body_check_landed broadcast (_on_body_check_landed) once a hit is credited, so
-	# they read identically on every client. This closure only routes the contact
-	# into the credit/claim path (_on_hit_landed → HitClaimResolver).
+	# body_check_landed broadcast (_on_body_check_landed) once the contact validates
+	# (HitTracker.impact_landed), so they read identically on every client. This
+	# closure only routes the contact into the credit/claim path
+	# (_on_hit_landed → HitClaimResolver).
 	if NetworkManager.is_host:
 		record.skater.body_checked_player.connect(
 			func(v: Skater, f: float, d: Vector3) -> void:
@@ -1930,12 +1995,18 @@ func _on_server_puck_picked_up_by(peer_id: int) -> void:
 	var was_faceoff: bool = _state_machine != null \
 			and _state_machine.current_phase == GamePhase.Phase.FACEOFF
 	_shot_tracker.on_pickup(peer_id)
+	# Carrying again — a hit landing now must wait for a FRESH possession loss,
+	# not credit off the stale just-released grace from their last touch.
+	if _hit_tracker != null:
+		_hit_tracker.note_possession_gained(peer_id)
 	_phase_coord.on_pickup(peer_id)
-	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
-	# (and client scoreboards) see it now, not on the next unrelated stat event.
-	if _turnover_tracker != null \
-			and _turnover_tracker.on_carrier_gained(peer_id, was_faceoff):
-		_sync_stats_to_clients()
+	# Compute the turnover/faceoff candidate now (context is freshest at the
+	# pickup) — the stat credits later, when this carrier ESTABLISHES
+	# possession (_on_possession_established). Scramble touches credit nothing.
+	if _turnover_tracker != null:
+		_turnover_tracker.on_carrier_gained(peer_id, was_faceoff)
+	if _possession_tracker != null:
+		_possession_tracker.on_pickup(peer_id)
 	record.controller.on_puck_picked_up_network()
 	if not record.is_local:
 		NetworkManager.send_puck_picked_up(peer_id)
@@ -1985,6 +2056,18 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
+	# Deliberate release (pass/shot) — a pending body check on this carrier
+	# did NOT dispossess them (they played through it), so it cancels; the
+	# just-released grace still starts so a check finishing through the
+	# release credits (see HitTracker). Involuntary losses arrive via
+	# _on_server_puck_stripped_from, which runs first on a strip. Gated to
+	# live play: a whistle drop() also lands here, and arming the grace off
+	# it would score a post-whistle shove as a finished check.
+	if _hit_tracker != null and _state_machine != null \
+			and _state_machine.current_phase == GamePhase.Phase.PLAYING:
+		_hit_tracker.note_possession_released(peer_id)
+	if _possession_tracker != null:
+		_possession_tracker.on_puck_lost(peer_id)
 	record.controller.on_puck_released_network()
 	NetworkManager.send_carrier_changed_to_all(-1)
 	# Carrier released — possession state likely flips (TRANS_DO →
@@ -2008,13 +2091,47 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
+	# Dispossessed — resolves any pending body check on this carrier into a
+	# credited hit (the strip path a check-knocked-loose puck goes through).
+	if _hit_tracker != null:
+		_hit_tracker.note_possession_stripped(peer_id)
 	if _turnover_tracker != null:
 		_turnover_tracker.note_strip(peer_id)
+	if _possession_tracker != null:
+		_possession_tracker.on_puck_lost(peer_id)
 	_state_machine.notify_icing_contact()
 	if not record.is_local:
 		# Tell the victim's client whether this was a stick lift so it can pop
 		# their own blade up locally (their prediction never saw the host force).
 		NetworkManager.send_puck_stolen(peer_id, puck_controller.is_processing_stick_lift())
+
+
+# Host: the carrier ESTABLISHED possession (held it, or made a deliberate
+# play) — land the stat credits that key off establishment: the pending
+# turnover / faceoff win, and the assist-chain possession upgrade.
+func _on_possession_established(peer_id: int, _team_id: int) -> void:
+	if _shot_tracker != null:
+		_shot_tracker.on_possession_established(peer_id)
+	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
+	# (and client scoreboards) see it now, not on the next unrelated stat event.
+	if _turnover_tracker != null \
+			and _turnover_tracker.on_possession_established(peer_id):
+		_sync_stats_to_clients()
+
+
+# Host: a goal ends any still-unresolved draw scramble — the draw goes to the
+# scoring team (they won the scramble emphatically). Clients no-op: their
+# trackers are never fed, so has_pending_faceoff is always false there.
+func _on_goal_resolve_faceoff(scoring_team: Team,
+		_scorer: String, _assist1: String, _assist2: String) -> void:
+	if not NetworkManager.is_host:
+		return
+	if _turnover_tracker != null \
+			and _turnover_tracker.resolve_pending_faceoff(scoring_team.team_id):
+		_sync_stats_to_clients()
+	# Post-goal play restarts at a faceoff — neutral possession.
+	if _possession_tracker != null:
+		_possession_tracker.reset()
 
 
 func _on_server_puck_touched_while_loose(peer_id: int) -> void:
@@ -2030,6 +2147,10 @@ func _on_server_puck_touched_while_loose(peer_id: int) -> void:
 		_sync_stats_to_clients()
 		return
 	_shot_tracker.on_deflection(peer_id)
+	# The deflect/body-block handlers set the puck's redirected velocity before
+	# emitting, so this reads the NEW flight — a tip can put a wide shot on net
+	# (or take an on-net shot wide).
+	_note_shot_trajectory()
 
 
 func _on_puck_touched_by_goalie(goalie: Goalie) -> void:
@@ -2059,6 +2180,7 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		NetworkManager.send_shot_to_all(puck.get_puck_position(), is_slapper)
 		_start_pending_shot_from_carrier()
 		puck.release(direction, power)
+		_note_shot_trajectory()
 	else:
 		var record := _registry.get_local()
 		if record != null:
@@ -2275,6 +2397,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		origin.x = rewound_origin.x
 		origin.z = rewound_origin.z
 		puck.set_puck_position(origin)
+	_note_shot_trajectory()
 	if not saved_goalie_positions.is_empty():
 		for i: int in goalie_controllers.size():
 			goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -2378,6 +2501,7 @@ func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shoot
 			origin.x = rewound_origin.x
 			origin.z = rewound_origin.z
 			puck.set_puck_position(origin)
+		_note_shot_trajectory()
 		if not saved_goalie_positions.is_empty():
 			for i: int in goalie_controllers.size():
 				goalie_controllers[i].goalie.global_position = saved_goalie_positions[i]
@@ -2422,7 +2546,44 @@ func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bo
 func _start_pending_shot_from_carrier() -> void:
 	if puck == null or puck.carrier == null:
 		return
-	_shot_tracker.on_shot_started(_registry.resolve_peer_id(puck.carrier))
+	var shooter_peer_id: int = _registry.resolve_peer_id(puck.carrier)
+	# A pass/shot from carry is a deliberate play — instant possession
+	# establishment (PossessionRules), even off a one-touch. Runs while the
+	# carrier is still set, before release() fires the generic release signal.
+	if _possession_tracker != null:
+		_possession_tracker.on_deliberate_release(shooter_peer_id)
+	_shot_tracker.on_shot_started(shooter_peer_id)
+
+
+# Re-reads the pending shot's on-net flag from the puck's live ballistic
+# trajectory (ShotOnNetRules against both goal mouths — on_goalie_touch's
+# own-team gate sorts out direction). Called right after every authoritative
+# release (post origin-rewind, so the projection starts from the true fire
+# point) and after each mid-flight deflection, whose handlers emit with the
+# post-redirect velocity already applied.
+func _note_shot_trajectory() -> void:
+	if puck == null or _shot_tracker == null or not _shot_tracker.has_pending_shot():
+		return
+	var pos: Vector3 = puck.get_puck_position()
+	# get_release_velocity, NOT linear_velocity: release() queues the launch
+	# vector for Jolt's next dynamic step, so linear_velocity reads ZERO in the
+	# same-frame window this runs in (every shot would project as off-net).
+	# Mid-flight (deflection re-reads) the pending vector is spent and this
+	# returns live linear_velocity.
+	var vel: Vector3 = puck.get_release_velocity()
+	var on_net: bool = false
+	for goal: HockeyGoal in goals:
+		if ShotOnNetRules.is_on_net(pos, vel, goal.goal_line_z()):
+			on_net = true
+			break
+	_shot_tracker.note_trajectory(on_net)
+
+
+# Host-side: a shot off the pipes is a miss in NHL scoring — drop the pending
+# shot's on-net read so a goalie touch on the ricochet doesn't confirm a SOG.
+func _on_host_puck_touched_post() -> void:
+	if _shot_tracker != null:
+		_shot_tracker.on_post_hit()
 
 
 # ── Puck network events ──────────────────────────────────────────────────────
@@ -2574,18 +2735,15 @@ func _observe_telemetry() -> void:
 	if _registry != null:
 		for peer_id: int in _registry.all():
 			var r: PlayerRecord = _registry.get_record(peer_id)
-			if r == null:
+			if r == null or r.is_local:
+				# The local skater's reconciles are counted at their per-world-state
+				# source (LocalController.reconcile), not sampled here per rendered
+				# frame — per-frame sampling undercounted on sub-120fps clients.
 				continue
-			if r.is_local:
-				var lc := r.controller as LocalController
-				if lc != null and lc.last_reconcile_error > 0.0:
-					NetworkTelemetry.record_reconcile(lc.last_reconcile_error)
-					lc.last_reconcile_error = 0.0
-			else:
-				var rc := r.controller as RemoteController
-				if rc != null:
-					skater_buf = rc.get_buffer_depth()
-					extrapolating = extrapolating or rc.is_extrapolating
+			var rc := r.controller as RemoteController
+			if rc != null:
+				skater_buf = rc.get_buffer_depth()
+				extrapolating = extrapolating or rc.is_extrapolating
 	var puck_buf: int = puck_controller.get_buffer_depth() if puck_controller != null else 0
 	var goalie_buf: int = 0
 	for gc: GoalieController in goalie_controllers:
@@ -2659,14 +2817,21 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 		_achievements.on_local_hit(impulse_magnitude)
 
 
-# Host-only (hit_credited fires only on the host, from the deduped credit path).
-# Sync stats as before, then broadcast the authoritative impact so every client
-# renders one consistent burst/thud; self-fire locally since the RPC reaches only
-# remote peers (and so offline/free-play still gets the impact).
-func _on_hit_credited(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
-	_sync_stats_to_clients()
+# Host-only (impact_landed fires only on the host, from the deduped contact
+# path). Broadcast the authoritative impact at CONTACT time — the burst/thud
+# can't wait on the possession-loss verdict that gates the stat — and self-fire
+# locally since the RPC reaches only remote peers (and so offline/free-play
+# still gets the impact).
+func _on_impact_landed(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
 	NetworkManager.send_body_check_to_all(victim_peer_id, force, hit_dir)
 	_on_body_check_landed(victim_peer_id, force, hit_dir)
+
+
+# Host-only. The hit stat may land up to POSSESSION_LOSS_WINDOW_S after the
+# contact (it waits for the victim to lose the puck — see HitTracker), so this
+# only syncs stats; the impact broadcast already fired from _on_impact_landed.
+func _on_hit_credited(_victim_peer_id: int, _force: float, _hit_dir: Vector3) -> void:
+	_sync_stats_to_clients()
 
 
 # Drives the body-check VFX + sound on every machine (clients via the RPC signal,
@@ -2956,6 +3121,8 @@ func _apply_reset() -> void:
 	_shot_tracker.reset_all()
 	if _turnover_tracker != null:
 		_turnover_tracker.reset()
+	if _possession_tracker != null:
+		_possession_tracker.reset()
 	stats_updated.emit()
 
 

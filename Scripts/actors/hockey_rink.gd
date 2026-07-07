@@ -170,6 +170,12 @@ var _px_per_meter: float = 80.0
 # Persistent skate-scratch overlay. Created at runtime only (not in editor)
 # and bound to the ice shader's scratch_tex.
 var _scratch_map: IceScratchMap = null
+# The center-ice decal SubViewport and the ice material, held so exit teardown
+# can release the ViewportTexture shader bindings and free the render targets
+# before the RenderingServer is finalized — see _teardown_render_targets().
+var _decal_vp: SubViewport = null
+var _ice_material: ShaderMaterial = null
+var _render_targets_freed: bool = false
 
 func _ready() -> void:
 	# Boards live on their own collision layer (puck masks it, skaters don't) so a
@@ -183,10 +189,44 @@ func _ready() -> void:
 		# ("Expected 0 arguments, got 1") and the ice never resets.
 		GameManager.period_synced.connect(_scratch_map.clear.unbind(1))
 
+# Release the SubViewport render targets and their ViewportTexture shader
+# bindings explicitly, before Godot finalizes the RenderingServer on quit. The
+# ice material holds ViewportTextures for the scratch and center-ice decal
+# overlays; left bound at exit, those viewports — plus the canvas items and
+# text-shaping RIDs from their Node2D painters — are torn down after the server
+# and reported as leaked RIDs / "resources still in use at exit". Clearing the
+# params drops the material's references and freeing the viewports releases the
+# RIDs in order. WM_CLOSE fires on the OS window close; _exit_tree covers the
+# menu Quit / scene-change paths. Guarded so the two paths can't double-free.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_teardown_render_targets()
+
+func _exit_tree() -> void:
+	_teardown_render_targets()
+
+func _teardown_render_targets() -> void:
+	if _render_targets_freed:
+		return
+	_render_targets_freed = true
+	if _ice_material != null:
+		_ice_material.set_shader_parameter("scratch_tex", null)
+		_ice_material.set_shader_parameter("decal_tex", null)
+	_ice_material = null
+	if is_instance_valid(_scratch_map):
+		_scratch_map.free()
+	_scratch_map = null
+	if is_instance_valid(_decal_vp):
+		_decal_vp.free()
+	_decal_vp = null
+
 func _rebuild() -> void:
 	if rink_length <= 0 or rink_width <= 0:
 		return
 
+	# A prior _exit_tree (e.g. a reparent) may have latched the teardown guard;
+	# clear it so a genuine later teardown still frees the freshly built targets.
+	_render_targets_freed = false
 	for child in get_children():
 		child.queue_free()
 
@@ -406,6 +446,7 @@ func _add_ice() -> void:
 	mat.set_shader_parameter("roughness_head_on", ice_roughness_head_on)
 	mat.set_shader_parameter("roughness_grazing", ice_roughness_grazing)
 	mesh_instance.material_override = mat
+	_ice_material = mat
 	add_child(mesh_instance)
 
 	# Persistent skate scratches — runtime only. The SubViewport renders into
@@ -437,6 +478,7 @@ func _add_ice() -> void:
 	decal_vp.handle_input_locally = false
 	decal_vp.gui_disable_input = true
 	add_child(decal_vp)
+	_decal_vp = decal_vp
 
 	var decals: CenterIceDecals = CenterIceDecals.new()
 	decals.img_size = Vector2(DECAL_VIEWPORT_SIZE, DECAL_VIEWPORT_SIZE)

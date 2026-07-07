@@ -21,16 +21,25 @@ extends RefCounted
 
 const State = SkaterStateMachine.State
 
-# Leg segment spans from Scenes/Skater.tscn — hip pivot to knee pivot (LegL →
-# ShinL) and knee pivot to skate sole (ShinL → FootL). Used to derive the
-# stance knee flex and body drop from the hip flex so the crouch keeps the
-# skates planted. Keep in sync with the scene if the leg pivots move.
+# MESH-NATIVE leg segment spans from Scenes/Skater.tscn — hip pivot to knee
+# pivot (LegL → ShinL) and knee pivot to skate sole (ShinL → FootL). Used to
+# derive the stance knee flex and body drop from the hip flex so the crouch
+# keeps the skates planted. Keep in sync with the scene if the leg pivots
+# move. The knee-flex math only reads their RATIO, so it is build-independent;
+# the vertical drop is a length and rides `leg_scale` below.
 const _THIGH_LEN: float = 0.31
 const _SHIN_LEN: float = 0.45
 
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
+
+# Height multiplier for this build's legs, set by SkaterController
+# .apply_attributes alongside the skeleton scaling (the appearance pass
+# lengthens the actual leg pivot chain by the same factor). Scales the
+# crouch's vertical body drop so the flexed legs' deficit matches the longer
+# segments; the knee ANGLES are ratio-derived and stay build-independent.
+var leg_scale: float = 1.0
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var stride_phase: float = 0.0
@@ -79,6 +88,12 @@ var _shuffle: float = 0.0
 var _backpedal: float = 0.0
 var _glide: float = 0.0
 var _glide_phase: float = 0.0
+# Smoothed sprint engagement [0, 1], from the controller's resolved
+# sprint_active (replicated for remotes, v16 intent byte). Sprint reads as
+# LONGER strides — amplitude on top of push_scale, a deeper sit, and the
+# shoulders driving — never faster leg turnover (the cadence tanh ceiling
+# above stride_cadence_max_rate already owns that plateau).
+var _sprint: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -109,6 +124,7 @@ func reset_to_rest() -> void:
 	_backpedal = 0.0
 	_glide = 0.0
 	_glide_phase = 0.0
+	_sprint = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
@@ -165,6 +181,8 @@ func apply(delta: float) -> void:
 	_backpedal = lerpf(_backpedal, back_t, intent_ease)
 	_glide = lerpf(_glide, 0.0 if (has_move_intent or planted or _skater.brake_intent) else 1.0,
 			intent_ease)
+	_sprint = lerpf(_sprint,
+			1.0 if (_controller.sprint_active and not planted) else 0.0, intent_ease)
 
 	var target_intensity: float = speed_t if (has_move_intent and not planted) else 0.0
 	# Dig-in / shuffle floors: the legs work from a standstill when the player
@@ -245,6 +263,11 @@ func apply(delta: float) -> void:
 	# through a turn while gliding.
 	var push_scale: float = clampf(1.0 + _effort * _controller.stride_push_gain,
 			_controller.stride_glide_floor, _controller.stride_push_ceiling)
+	# Sprint lengthens every stroke channel that rides push_scale (push, roll,
+	# abduction, tuck, scissor) — applied OUTSIDE the effort clamp because the
+	# effort signal is tangential accel, which decays to zero once the sprint
+	# reaches its raised speed cap: exactly when the sprint should still read.
+	push_scale *= 1.0 + _sprint * _controller.sprint_stride_gain
 
 	# Decompose travel into the body frame: -Z is forward, +X is the skater's right.
 	var local_vel: Vector3 = basis_inv * vel
@@ -356,6 +379,10 @@ func apply(delta: float) -> void:
 	var stance: float = clampf(
 			_intensity / maxf(_controller.stance_full_speed_fraction, 0.01), 0.0, 1.0)
 	stance *= clampf(1.0 + _effort * _controller.stance_push_gain, 0.0, 1.35)
+	# Sprint sits DOWN into the burst — same rationale as the push_scale gain
+	# above: the effort deepening fades once the sprint tops out, but a
+	# sprinting skater stays low the whole way.
+	stance *= 1.0 + _sprint * _controller.sprint_stance_gain
 	# Faceoff ready stance: at the dot the skater is at a standstill, so the
 	# speed-driven envelope leaves them bolt upright — floor the engagement
 	# through the countdown instead. Eased both ways: the crouch settles in
@@ -379,8 +406,8 @@ func apply(delta: float) -> void:
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
-	var drop: float = _THIGH_LEN * (1.0 - cos(stance_hip)) \
-			+ _SHIN_LEN * (1.0 - cos(stance_knee - stance_hip))
+	var drop: float = leg_scale * (_THIGH_LEN * (1.0 - cos(stance_hip)) \
+			+ _SHIN_LEN * (1.0 - cos(stance_knee - stance_hip)))
 
 	# Asymmetric stroke: warp the phase before sampling the sine so each leg's swing
 	# eases out to the push and snaps back, reading as skating rather than a
@@ -569,9 +596,30 @@ func apply(delta: float) -> void:
 	# position, so the tuck rides the return swing and not the push-out through
 	# the same spot). Negative folds the shin back under the body.
 	var tuck_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale * gait_scale
-	var release: float = _controller.stance_knee_release
+	# The release is stride work, so it rides the stride intensity envelope
+	# like every other stroke channel (tuck/push/roll already do via their
+	# amps). Ungated, the phase — which advances with SPEED, not intent —
+	# kept pumping the knees at full amplitude through a no-keys glide.
+	var release: float = _controller.stance_knee_release * _intensity * gait_scale
 	var l_knee: float = -(stance_knee * (1.0 - release * l_ext) + tuck_amp * maxf(c, 0.0) + l_tuck_extra)
 	var r_knee: float = -(stance_knee * (1.0 - release * r_ext) + tuck_amp * maxf(c_opp, 0.0) + r_tuck_extra)
+
+	# ── Knee fore-aft compensation ────────────────────────────────────────────
+	# The dynamic knee layers (push extension, recovery tuck, carve clearance)
+	# exist for LIFT and leg-length texture, but each also drags the FOOT
+	# fore-aft: unfolding mid-push shoved the skate forward against the
+	# thigh's backward sweep, and the tuck's mid-recovery release added to the
+	# forward swing — measured at the skate, the stride's fast phase came out
+	# FORWARD (recovery), the inverse of a real push (test_gait_stroke_profile
+	# pins the corrected profile). Counter-pitch the thigh by the small-angle
+	# FK term (Δpitch = −Δknee · L_shin / L_leg) so the foot tracks the
+	# thigh-design curve — slow recovery, fast push — while the knee keeps its
+	# full fold/extend range and vertical travel. Anatomically this reads
+	# right: a folded shin needs more hip flex for the same skate position,
+	# and the compensated full extension sits the knee joint farther back.
+	var shin_frac: float = _SHIN_LEN / (_THIGH_LEN + _SHIN_LEN)
+	l_pitch += -(l_knee + stance_knee) * shin_frac
+	r_pitch += -(r_knee + stance_knee) * shin_frac
 
 	# Body bob: the body rides highest at full extension (|s| = 1) and sits
 	# deepest mid-transfer (s = 0) — a subtle vertical pulse at twice the leg
@@ -589,6 +637,10 @@ func apply(delta: float) -> void:
 	trunk_pitch_add += -deg_to_rad(_controller.dig_in_lean_deg) * _dig \
 			+ deg_to_rad(_controller.reversal_lean_deg) * rev_amt \
 			+ deg_to_rad(_controller.backpedal_chest_deg) * ccut
+	# Sprint drives the shoulders forward for the whole burst (the effort dig
+	# above fades once the sprint tops out). gait_scale keeps it from fighting
+	# the hockey-stop / reversal trunk reads on their shared channel.
+	trunk_pitch_add += -deg_to_rad(_controller.sprint_lean_deg) * _sprint * gait_scale
 	# Glide sway: a coasting skater shifts weight lazily edge-to-edge — a slow
 	# roll (trunk plus a touch of shared leg roll) far below stride cadence.
 	# The phase is local-only; at ~2° amplitude machines needn't agree on it.

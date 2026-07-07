@@ -6,11 +6,13 @@ class_name AIRoleBreakout
 #
 #   strong (BREAKOUT_STRONG) — the strong-side-wall outlet. Presents UP
 #     THE WALL: candidates are sampled along the strong-side boards from
-#     just ahead of the carrier all the way to our blue line, and the
-#     score picks the highest spot whose lane is still clean. So STRONG
-#     stretches to the blue line when the wall is open and drops to a
-#     lower open spot when the high wall is covered — a real up-the-wall
-#     breakout outlet, not a 4 m dump-off.
+#     just ahead of the carrier all the way to our blue line (plus a
+#     mid-seam column — see MID_SEAM_FRACTION), and the score picks the
+#     highest spot whose lane is still clean. So STRONG stretches to the
+#     blue line when the wall is open, drops to a lower open spot when
+#     the high wall is covered, and swings inside when the wall lane is
+#     the carrier's own wheel route — a real up-the-wall breakout
+#     outlet, not a 4 m dump-off.
 #   weak   (BREAKOUT_WEAK)   — the weak-side reverse valve. Stays
 #     goal-side of (no further up-ice than) the carrier so a D-to-D
 #     reverse is always available and the carrier is never the last
@@ -24,7 +26,9 @@ class_name AIRoleBreakout
 #   uses to decide the pass), so the outlet positions itself where the
 #   carrier actually has a clean lane — the two agree on "threadable."
 #   It also gates STRONG's stretch: a covered high-wall candidate scores
-#   ~0, so STRONG only advances as far as the lane stays open.
+#   near the BLOCKED_LANE_FLOOR, so STRONG only advances as far as the
+#   lane stays open (the floor keeps dead-lane candidates ranked by
+#   potential instead of erased — see BLOCKED_LANE_FLOOR).
 # - position_potential is the open-ice / forward-progress value of the
 #   spot. Its `closeness` term ALREADY rewards up-ice progress (closer to
 #   the attacking net), so among equally-open wall candidates the more
@@ -50,6 +54,29 @@ const WALL_INSET_M: float = 2.0
 # exit); position_potential + lane_clear pick the best of them.
 const STRONG_WALL_SAMPLES: int = 5
 const STRONG_MIN_LEAD_M: float = 3.0
+
+# STRONG's second column: a mid-seam lane at this fraction of the wall
+# offset (≈ the dot lane), same depth samples. One column pinned to the
+# wall left the outlet with no move when the wall lane died — most
+# visibly when the CARRIER wheels up the strong boards himself and the
+# wall is his route, or when a forechecker camps the half-wall. With
+# both columns the same lane × potential argmax picks the wall when the
+# middle is contested (the classic breakout) and swings inside when the
+# wall lane is occupied or covered.
+const MID_SEAM_FRACTION: float = 0.5
+
+# Floor on the lane term so dead pass lanes rank candidates instead of
+# erasing them. lane_clear reads ~0 for EVERY candidate while a
+# forechecker is draped on the carrier (a defender within a stick of the
+# release blocks all lanes at the origin) or parked on the outlet's own
+# route (closing reach over a long flight blankets the whole 3 m-spaced
+# column) — with the old hard `lane <= 0 → skip`, all candidates
+# vanished, best_pos fell back to self_pos, and the outlet froze in
+# place ("the outlet is just stuck there"). The floor keeps
+# position_potential's gradient alive so the route keeps developing;
+# the moment any real lane opens (floor × potential « lane × potential)
+# it dominates the argmax again.
+const BLOCKED_LANE_FLOOR: float = 0.15
 
 # Weak-side safety-valve tolerance: WEAK may sit up to this far up-ice
 # of the carrier (roughly even) but no further — keeps it the reverse
@@ -109,11 +136,12 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
 		var lane: float = AIActionScoring.lane_clear(
 				carrier_pos, c, opp_positions, pass_speed)
-		if lane <= 0.0:
-			continue
 		var potential: float = AIActionScoring.position_potential(
 				c, ctx.attacking_goal_pos, opp_positions)
-		var score: float = lane * potential
+		# Floored lane (see BLOCKED_LANE_FLOOR): dead lanes still rank by
+		# potential so the outlet keeps skating its route instead of
+		# freezing when the carrier is draped / the column is covered.
+		var score: float = maxf(lane, BLOCKED_LANE_FLOOR) * potential
 		if score > best_score:
 			best_score = score
 			best_pos = c
@@ -122,15 +150,19 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	return d
 
 
-# STRONG candidate set: points along the strong-side wall from just ahead
-# of the carrier (STRONG_MIN_LEAD_M up-ice) to our blue line (the zone
-# exit), plus self_pos as a stand-still fallback. Scoring picks the
-# highest open one — the wall is the role's identity, so candidates stay
-# on the boards rather than drifting to center.
+# STRONG candidate set: two columns of depth samples from just ahead of
+# the carrier (STRONG_MIN_LEAD_M up-ice) to our blue line (the zone
+# exit) — one on the strong-side wall (the role's classic station) and
+# one at the mid-seam (MID_SEAM_FRACTION of the wall offset) — plus
+# self_pos as a stand-still fallback. The lane × potential argmax picks
+# the wall when the middle is contested and swings inside when the wall
+# lane is the carrier's own route or covered by the forecheck, so the
+# outlet is never pinned to a lane that's already dead.
 static func _strong_wall_candidates(ctx: RoleContext, carrier_pos: Vector3,
 		side_x: float) -> Array[Vector3]:
 	var result: Array[Vector3] = []
 	var wall_x: float = side_x * (GameRules.RINK_HALF_WIDTH - WALL_INSET_M)
+	var mid_x: float = wall_x * MID_SEAM_FRACTION
 	var own_dir: float = ctx.own_goal_dir
 	# Depth = own_dir * z grows toward our net; up-ice is SMALLER depth.
 	var carrier_depth: float = own_dir * carrier_pos.z
@@ -146,6 +178,7 @@ static func _strong_wall_candidates(ctx: RoleContext, carrier_pos: Vector3,
 			t = float(i) / float(STRONG_WALL_SAMPLES - 1)
 		var depth: float = lerpf(bottom_depth, top_depth, t)
 		result.append(Vector3(wall_x, 0.0, own_dir * depth))
+		result.append(Vector3(mid_x, 0.0, own_dir * depth))
 	result.append(ctx.self_pos)
 	return result
 

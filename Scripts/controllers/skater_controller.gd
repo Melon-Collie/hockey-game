@@ -81,20 +81,31 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Hand Y in upper-body-local space. Baseline resting position (used in the
 # FAR regime). In the CLOSE regime the hand rises toward `hand_y_max` so the
 # stick tilts more vertical and the blade can tuck in close to the body.
-# With the upper body at ~0.95 m world Y and blade at 0.0 (ice), -0.10 gives
-# a hand world Y of ~0.85 m (hip height on the 1.78 m baseline body) and a
-# rest stick angle of ~39° — close to a real lie-5 address, up from the ~35°
-# reach-cheat this used to run. The steeper stick pulls the rest carry
-# circle in ~5 cm (stick_horiz 1.06 → 1.01), but the shallower shoulder-to-
-# hand drop re-aims the arm budget sideways (derived backhand ROM 0.37 →
-# 0.46 m of hand displacement), so rim reach is roughly preserved and the
-# directional reach lean stays pure bonus on top.
+# This export is the MESH-NATIVE (Size L2, 5'10") value; apply_attributes
+# scales it by height_mult, matching the appearance pass scaling the whole
+# skeleton about the ice plane — so the hand sits at the same body point
+# (0.50 m × height below the shoulder) on every build instead of pinning to
+# one absolute height (which left Size-5 hands hanging visibly low).
+# The upper body rides at height_mult × 1.0 m world Y (FACEOFF_SPAWN_HEIGHT
+# is the physics origin for every build — only the mesh skeleton scales; the
+# cosmetic skating crouch lowers it up to ~7 cm at speed) and the blade at
+# blade_height (~ice), so -0.10 gives a hand world Y of 0.90 m × height (hip
+# height on each frame) and a rest stick angle of ~42° at L2 — approaching a
+# real lie-5 address (~45°), up from the ~38° reach-cheat this used to run
+# (hand_rest_y -0.17). The steeper stick pulls the rest carry circle in
+# ~6 cm (stick_horiz 1.03 → 0.97), but the shallower shoulder-to-hand drop
+# re-aims the arm budget sideways (derived backhand ROM 0.37 → 0.46 m of
+# hand displacement), so rim reach is roughly preserved and the directional
+# reach lean stays pure bonus on top.
 @export var hand_rest_y: float = -0.10
 # Ceiling for hand Y in the CLOSE regime. When aiming very close to the
 # skater, the hand rises to shorten the stick's horizontal projection; this
-# cap keeps the pose anatomical (hand won't climb past chin level). With
-# default stick_length = 1.30 m, hand_y_max = 0.30 → min horizontal stick
-# reach ≈ 0.36 m.
+# cap keeps the pose anatomical (0.30 local = 1.30 m world at L2 — the hand
+# won't climb past chest level). Mesh-native like hand_rest_y; apply_
+# attributes scales it by height_mult so the ceiling stays chest-height on
+# every frame. With default stick_length = 1.30 m and the blade on the ice
+# (blade_y ≈ -0.97 local at L2), hand_y_max = 0.30 → hand-to-blade drop
+# 1.27 → min horizontal stick reach ≈ 0.28 m.
 @export var hand_y_max: float = 0.30
 # Asymmetric ROM for the top hand (measured from shoulder in upper-body-local
 # horizontal plane, expressed in "forehand side = positive angle" convention).
@@ -154,7 +165,9 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Fraction along the shaft (0 = top hand, 1 = blade heel) that the bottom hand
 # grips. ~0.25 on a 1.30 m shaft ≈ a typical hockey grip width.
 @export var bottom_hand_grip_fraction: float = 0.25
-# Bottom hand resting Y in upper-body-local. Same height as top hand rest.
+# Fine-tune Y offset added to the bottom hand's shaft-derived grip height
+# (SkaterIKCoordinator.update_bottom_hand lerps top-hand Y toward blade Y at
+# the grip fraction, then adds this). 0.0 = grip sits exactly on the shaft.
 @export var bh_hand_y: float = 0.0
 # Blade world angle (from skater forward, toward backhand) at which the bottom
 # hand starts releasing toward the shoulder rest. Match upper_body_max_twist_deg
@@ -201,8 +214,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_cadence: float = 1.4          # low-speed slope: radians of stride phase per metre skated
 @export var stride_cadence_max_rate: float = 6.5  # rad/s ceiling the cadence saturates toward (caps sprint leg turnover)
 @export var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
-@export var stride_pitch_deg: float = 6.0         # forward push amplitude (fore/aft)
-@export var stride_back_pitch_deg: float = 4.0    # backward C-cut amplitude (reaches forward)
+# Forward push amplitude (fore/aft). Raised 6 → 10 when the knee fore-aft
+# compensation landed: the old visible "reach" was mostly the knee-release
+# artifact kicking the skate forward mid-stroke, so once the foot started
+# tracking the thigh-design curve the honest stride needed a bigger wave to
+# cover the same ground (with the correct slow-recovery / fast-push timing).
+@export var stride_pitch_deg: float = 10.0
+@export var stride_back_pitch_deg: float = 6.0    # backward C-cut amplitude (reaches forward)
 @export var crossover_lean_deg: float = 6.0       # static lean into the strafe direction
 @export var crossover_scissor_deg: float = 8.0    # aim-locked strafe: legs scissor laterally
 # Carve crossovers — engaged by path curvature (CarveRules), not lateral
@@ -316,6 +334,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var glide_sway_hz: float = 0.4           # sway frequency — far below stride cadence
 @export var glide_carve_lean_deg: float = 10.0   # legs lean into the arc gliding out of a turn
 @export var glide_inside_tuck_deg: float = 10.0  # inside-leg knee tuck — weight on the outside edge
+# Sprint read: sprint_active (resolved where the skater is simulated; bit 5 of
+# the v16 intent byte for client-rendered remotes) drives a visibly committed
+# gait — LONGER, more powerful strides (the cadence ceiling already keeps leg
+# turnover flat, so sprint reads as reach, not churn), a deeper sit, and the
+# shoulders driving forward. Doubles as the opponent-stamina tell: a skater
+# who stops striding like this has run out of sprint.
+@export var sprint_stride_gain: float = 0.35     # stride amplitude boost at full sprint
+@export var sprint_stance_gain: float = 0.18     # extra crouch depth while sprinting
+@export var sprint_lean_deg: float = 7.0         # extra forward trunk pitch while sprinting
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
@@ -452,7 +479,7 @@ var show_one_timer_indicator: bool = false
 @export var block_blade_x: float = 0.2       # lateral blade offset to the stick side (m)
 @export var block_hand_forward: float = 0.3  # forward push of the top hand (m, local −Z)
 @export var block_hand_x: float = 0.1        # lateral top-hand offset to the stick side (m)
-@export var block_hand_y: float = -0.10      # top-hand height while blocking (m, local; matches hand_rest_y)
+@export var block_hand_y: float = -0.10      # top-hand height while blocking (m, local; matches mesh-native hand_rest_y)
 
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
 # XZ cylinder radius used to push the blade (and carried puck) away from a
@@ -611,6 +638,8 @@ var _base_skater_collision_height:      float = 0.0
 var _base_backhand_power_coefficient:   float = 0.0
 var _base_sprint_drain_per_sec:         float = 0.0
 var _base_stamina_regen_per_sec:        float = 0.0
+var _base_hand_rest_y:                  float = 0.0
+var _base_hand_y_max:                   float = 0.0
 
 
 # Modulates the controller and skater tuning fields from a PlayerAttributes
@@ -703,22 +732,31 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# Shoulder anchors track the visual shoulder balls, which the appearance
 	# pass repositions from the same multipliers (y rides height, x rides
 	# torso bulk) — the drawn arm and the IK stay rooted at the same point on
-	# every build. Must run BEFORE the ROM derivation below reads
-	# shoulder_height. hand_rest_y deliberately does NOT height-scale: the
-	# hands keep their absolute working height over the ice, so the stick
-	# geometry keeps its tuned relationship with the puck plane.
+	# every build. Must run BEFORE the hand/ROM derivation below reads
+	# shoulder_height.
 	skater.set_shoulder_anchor(
 			_base_skater_shoulder_offset * attrs.torso_bulk_mult(),
 			_base_skater_shoulder_height * m_height)
+	# Hand heights scale with the skeleton: the appearance pass scales the
+	# whole mesh rig about the ice plane (legs included — the upper body
+	# rides at height_mult × 1.0 m world), so the hand's LOCAL rest height
+	# scales by the same factor to keep the hand at the same point on every
+	# body (shoulder-to-hand drop = 0.50 m × height). Same for the CLOSE-
+	# regime ceiling. Near-zero gameplay cost: raising the hand shortens the
+	# stick's horizontal footprint but lengthens the derived backhand ROM
+	# below at almost exactly 1:1, so blade rim reach barely moves.
+	hand_rest_y = _base_hand_rest_y * m_height
+	hand_y_max  = _base_hand_y_max  * m_height
+	# The gait's crouch drop rides the same leg scale the appearance pass
+	# applies to the leg pivot chain, so flexed knees sink a tall build
+	# proportionally deeper.
+	_skating.leg_scale = m_height
 	# Reach ROM is a derived property of arm length — forehand from the
 	# anatomical cross-body ratio, backhand from the chain geometry (see the
 	# _ROM_FOREHAND_OF_ARM doc block). Bigger arms naturally yield more reach
-	# without being an independent attribute axis, and the backhand solve
-	# amplifies the spread: the shoulder-to-hand drop grows only at the
-	# shoulder end (hand_rest_y is fixed), so it eats proportionally more of
-	# a short arm — a tall player converts extra length to reach at better
-	# than 1:1 while a small player gives some back. Long arms matter most
-	# at full extension.
+	# without being an independent attribute axis: with the whole chain
+	# (arm and shoulder-to-hand drop) scaling by height, the derived reach
+	# scales by height too. Long arms matter most at full extension.
 	var arm_total: float = skater.upper_arm_length + skater.forearm_length
 	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
 	var arm_eff: float = arm_total * rom_arm_extension
@@ -766,6 +804,8 @@ func _capture_attribute_bases() -> void:
 	_base_stamina_regen_per_sec        = stamina_regen_per_sec
 	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
 	_base_stick_length                 = stick_length
+	_base_hand_rest_y                  = hand_rest_y
+	_base_hand_y_max                   = hand_y_max
 	_base_skater_upper_arm_length      = skater.upper_arm_length
 	_base_skater_forearm_length        = skater.forearm_length
 	_base_skater_shoulder_offset       = skater.shoulder_offset
@@ -999,6 +1039,7 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.stagger_timer = stagger_timer
 	state.move_intent = skater.move_intent
 	state.brake_intent = skater.brake_intent
+	state.sprint_active = sprint_active
 
 func get_shot_state() -> int:
 	return _sm.get_state()
@@ -1043,6 +1084,10 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	skater.is_braking = state.brake_intent
 	stamina = state.stamina
 	_sprint_locked = state.sprint_locked
+	# The gait's sprint read (longer strides, deeper sit, forward lean) keys
+	# off the controller's resolved sprint state — stamp it from the recorded
+	# bit so replayed sprints stride like live ones.
+	sprint_active = state.sprint_active
 	stagger_timer = state.stagger_timer
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
@@ -1218,6 +1263,11 @@ func set_spawn_facing(facing: Vector2) -> void:
 	_pose.facing = facing
 	_pose.reset_lean_and_lag()
 	skater.set_lower_body_lag(0.0)
+	# Plant the legs too, matching the faceoff teleport. A no-op at initial
+	# spawn (the gait starts at rest), but mid-session callers — the tutorial
+	# puppet repositioning between steps — would otherwise drop into the new
+	# spot carrying the previous shift's mid-stride leg swing.
+	_skating.reset_to_rest()
 
 
 # This skater's center-slot distance from the faceoff dot: the rest-pose blade

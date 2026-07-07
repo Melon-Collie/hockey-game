@@ -529,6 +529,9 @@ var _ticks_in_state: int = 0
 # tick of any teleport (the speed gate releases it at a standstill), so it
 # needs no faceoff reset.
 var _pivot_braking: bool = false
+# Arrival-brake hysteresis (AISteering.should_arrival_brake) — held across
+# ticks so the brake key doesn't strobe while speed sheds on approach.
+var _arrival_braking: bool = false
 
 # Identity / orientation
 var _peer_id: int = 0
@@ -967,11 +970,12 @@ func debug_role() -> String:
 # of commit (intent) — purely the live winner.
 func debug_winner() -> String:
 	# Wrister wins ties over quick-shot (matches the carrier's
-	# tie-break logic: quick must beat wrister by ACTION_HYSTERESIS_MARGIN
-	# to be chosen).
+	# tie-break logic: quick must beat wrister by the hysteresis
+	# fraction to be chosen).
 	var best_shot_score: float = debug_shoot_score
 	var best_shot_label: String = "SHOOT"
-	if debug_quick_shot_score > debug_shoot_score + AIActionScoring.ACTION_HYSTERESIS_MARGIN:
+	if debug_quick_shot_score > debug_shoot_score \
+			* (1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC):
 		best_shot_score = debug_quick_shot_score
 		best_shot_label = "QUICK"
 	var fire_score: float = best_shot_score if best_shot_score >= debug_pass_score else debug_pass_score
@@ -1200,7 +1204,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# fallback (AIRoleAnchorFollow) just steers to the brain anchor.
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
-		_apply_steering(input, snapshot, self_pos, decision.target_position)
+		# Station-keeping: arrive AT the role destination (arrival brake)
+		# instead of overshooting a spot that stopped moving — EXCEPT on a
+		# body-check commit, which wants maximum closing velocity through
+		# the target.
+		_apply_steering(input, snapshot, self_pos, decision.target_position,
+				not decision.commit_check)
 		if decision.commit_check:
 			# Body-check commit: drive THROUGH the carrier at max closing
 			# velocity. Force sprint even at short range — the gap gate would
@@ -2526,7 +2535,13 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S)
 
 
-func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
+# `arrive` opts into the arrival brake (AISteering.should_arrival_brake):
+# station-keeping callers (off-puck role destinations) brake to STOP at the
+# anchor instead of overshooting a target that slowed down. Waypoint-style
+# callers (carry steps, puck chase, check commits, tag-up) leave it false —
+# they either re-pick the anchor continuously or WANT to arrive at speed.
+func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
+		anchor: Vector3, arrive: bool = false) -> void:
 	# Standard potential-field steering with brake-pivot.
 	# Use the per-team roster published by GameManager._enrich_snapshot_for_ai
 	# instead of re-partitioning snapshot.skater_states every physics tick.
@@ -2598,7 +2613,16 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	if self_state != null:
 		var v: Vector3 = self_state.velocity
 		_pivot_braking = AISteering.should_brake(desired, Vector2(v.x, v.z), _pivot_braking)
-		input.brake = _pivot_braking
+		# Arrival brake (opt-in per call site): stop AT a station target
+		# instead of overshooting one that slowed down and doubling back.
+		# The pivot brake wins when both would fire (it already implies
+		# maximal braking).
+		if arrive and not _pivot_braking:
+			_arrival_braking = AISteering.should_arrival_brake(
+					self_pos, anchor, Vector2(v.x, v.z), _arrival_braking)
+		else:
+			_arrival_braking = false
+		input.brake = _pivot_braking or _arrival_braking
 		# Body-level offside guard: keep an attacking non-carrier from
 		# skating its body across the attacking blue line before the puck
 		# (instant ghost in ARCADE). Applied after the brake-pivot so the
@@ -2718,6 +2742,13 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 # past INTENT_MAX_WAIT_TICKS and timing out pre-aim entirely.
 func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	const FIRE_AIM_THRESHOLD: float = 0.05
+	# Debounce band for the aim-mode flip below. ABSOLUTE, deliberately
+	# not AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC (the proportional
+	# intent hysteresis): this band filters per-re-eval score wobble
+	# around the fixed FIRE_AIM_THRESHOLD, so its width is anchored to
+	# that threshold's scale — a fraction of a near-zero score would be
+	# a near-zero band and the blade would wobble at ~30 Hz again.
+	const FIRE_AIM_HYSTERESIS_BAND: float = 0.05
 	# Either wrister OR quick-shot dominance triggers the pre-track —
 	# both aim at the goalie shadow, so the aim direction is close
 	# enough that picking the wrister lookahead (default) for the
@@ -2732,7 +2763,7 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 	# to shoot. Margin direction is signed by _carry_tracking_fire so
 	# entry requires being CLEARLY past the thresholds; exit requires
 	# being CLEARLY below them.
-	var margin: float = AIActionScoring.ACTION_HYSTERESIS_MARGIN
+	var margin: float = FIRE_AIM_HYSTERESIS_BAND
 	var threshold_gate: float
 	var pass_gate: float
 	if _carry_tracking_fire:
