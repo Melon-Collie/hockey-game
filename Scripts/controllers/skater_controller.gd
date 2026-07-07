@@ -250,6 +250,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var carve_over_pitch_deg: float = 8.0  # crossing leg also steps AHEAD
 @export var carve_clearance_knee_deg: float = 28.0  # lift while crossing the planted leg
 @export var carve_stride_fade: float = 0.7     # fraction of fore/aft stride removed at full carve
+# Crossover rhythm + cadence (see the carve block in SkaterSkatingCoordinator):
+# the over-step and under-push alternate halves of the stride cycle (two-beat
+# push-push), the legs hold a static lean into the turn, and while the path is
+# actually bending the stride frequency follows the ARC — steps per radian of
+# heading change — instead of straight-line speed. Forward-gated: a backward
+# turn keeps its C-cuts (forward crossover roles mirror wrong through the flip).
+@export var crossover_phase_per_turn: float = 7.0  # stride-phase rad per rad of heading change at full carve
+@export var carve_forward_ramp: float = 1.0    # m/s of forward travel over which crossovers fade in
+@export var carve_base_lean_deg: float = 7.0   # static both-leg lean into the turn while striding a carve
+@export var carve_rock_fade: float = 0.85      # edge-rock/abduction/scissor faded out at full carve
 # Gliding — releasing all movement keys settles the legs to rest (the stride
 # is input-gated, v15 intent byte) while this floor keeps working knees under
 # a coasting skater, scaled by speed.
