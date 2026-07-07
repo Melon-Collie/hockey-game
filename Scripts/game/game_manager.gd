@@ -1093,7 +1093,15 @@ func _wire_subsystems() -> void:
 	# Catch-all stoppage flush: any phase that isn't live play resolves a
 	# still-pending draw and drops pending hits/grace. Covers the paths that
 	# don't go through _whistle_and_faceoff — the period horn and game over.
-	phase_changed.connect(_on_stoppage_flush_stat_trackers)
+	# `phase_changed` is GameManager's own signal and GameManager is a
+	# persistent autoload, so this connection survives across matches — unlike
+	# the fresh-per-match collaborator signals wired above. `_wire_subsystems`
+	# re-runs on every `_spawn_world` (boot free-play → hosted match, rematch,
+	# offline restart), so guard against the duplicate connect. The handler
+	# reads GameManager's live `_*_tracker` fields, which the surrounding
+	# re-wire refreshes, so one persistent connection stays correct.
+	if not phase_changed.is_connected(_on_stoppage_flush_stat_trackers):
+		phase_changed.connect(_on_stoppage_flush_stat_trackers)
 
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
