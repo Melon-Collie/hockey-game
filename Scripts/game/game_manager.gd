@@ -2195,7 +2195,7 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 # Host: the carrier ESTABLISHED possession (held it, or made a deliberate
 # play) — land the stat credits that key off establishment: the pending
 # turnover / faceoff win, and the assist-chain possession upgrade.
-func _on_possession_established(peer_id: int, _team_id: int) -> void:
+func _on_possession_established(peer_id: int, team_id: int) -> void:
 	if _shot_tracker != null:
 		_shot_tracker.on_possession_established(peer_id)
 	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
@@ -2203,6 +2203,14 @@ func _on_possession_established(peer_id: int, _team_id: int) -> void:
 	if _turnover_tracker != null \
 			and _turnover_tracker.on_possession_established(peer_id):
 		_sync_stats_to_clients()
+	# NHL/ARCADE offside: the defending team ESTABLISHING possession (this
+	# same signal — held it or made a deliberate play, not a raw touch) voids
+	# an active offside in their own zone. Reuses the identical "control"
+	# standard stat attribution already uses rather than a looser one keyed
+	# off a bare puck.carrier assignment.
+	if _state_machine != null and puck != null:
+		_state_machine.notify_possession_established(team_id, puck.global_position.z)
+		_consume_pending_faceoff()
 
 
 # Host: a goal ends any still-unresolved draw scramble — the draw goes to the

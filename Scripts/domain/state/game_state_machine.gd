@@ -73,13 +73,14 @@ var _icing_timer: float = 0.0
 # ARCADE path: peer IDs currently serving an offside ghost. Cleared per-peer
 # by tagging up (crossing back into neutral zone) or a dead-puck phase, or
 # team-wide by _void_offside_for_team when the defending team gains clean
-# possession (notify_puck_carried) — ARCADE's ghost emulates the same NHL
-# rule as the delayed-offside path below, it just never produces a stoppage.
+# possession (notify_possession_established) — ARCADE's ghost emulates the
+# same NHL rule as the delayed-offside path below, it just never produces a
+# stoppage.
 var _offside_peer_ids: Dictionary = {}
 # NHL delayed-offside path: peers who entered their attacking zone before the
 # puck and have not yet tagged up. Tracked separately so we don't ghost them.
 # Cleared per-peer by tagging up, or team-wide by _void_offside_for_team when
-# the defending team gains clean possession (notify_puck_carried).
+# the defending team gains clean possession (notify_possession_established).
 var _delayed_offside_peer_ids: Dictionary = {}
 # Set to a team_id when there is at least one offside peer on that team AND
 # the puck is in their attacking zone — i.e. an NHL delayed-offside is active
@@ -186,21 +187,28 @@ func notify_puck_carried(carrier_team_id: int, carrier_z: float, carrier_x: floa
 	if icing_team_id != -1 and carrier_team_id != icing_team_id:
 		icing_team_id = -1
 		_icing_timer = 0.0
-	# Defending team gaining full possession/control of the puck — a genuine
-	# carry, not just a deflection or blocked shot, neither of which establish
-	# "possession and control" — voids an active offside in the carrier's own
-	# (defensive) zone, same as the real NHL rule. Applies to both rulesets:
-	# NHL clears the pending delayed-offside/whistle state; ARCADE clears the
-	# ghost outright — ARCADE's instant ghost is meant to emulate the same
-	# underlying rule, it just never produces a stoppage, so it voids the same
-	# way. Previously-flagged attackers become fully onside without needing to
-	# tag up; a fresh violation can only occur off a later, genuine new zone
-	# entry. Cheap emptiness check first — this runs every tick a puck is
-	# carried, and it's carried far more often than anyone is flagged offside.
-	if not _offside_peer_ids.is_empty() or not _delayed_offside_peer_ids.is_empty():
-		var offending_team_id: int = 1 - carrier_team_id
-		if _puck_in_attacking_zone(offending_team_id, carrier_z):
-			_void_offside_for_team(offending_team_id)
+
+
+# Host-side: called when PossessionTracker fires possession_established for
+# team_id — the SAME "held it past PossessionRules.ESTABLISH_HOLD_S, or made
+# a deliberate play with it" standard already used for stat attribution
+# (turnover/faceoff-win crediting, assist-chain breaks), not a raw carrier
+# pickup. A momentary scramble touch that gets stripped before establishing
+# must NOT void an offside — real hockey requires the defending team to gain
+# genuine "possession and control," not just touch the puck, and this reuses
+# the codebase's one existing notion of "control" rather than inventing a
+# looser one. Voids an active offside in team_id's own (defensive) zone —
+# same rule for both presets: NHL clears the pending delayed-offside/whistle
+# state; ARCADE clears the ghost outright, since its instant ghost emulates
+# the same underlying rule and just never produces a stoppage.
+# Previously-flagged attackers become fully onside without needing to tag up;
+# a fresh violation can only occur off a later, genuine new zone entry.
+func notify_possession_established(team_id: int, puck_z: float) -> void:
+	if _offside_peer_ids.is_empty() and _delayed_offside_peer_ids.is_empty():
+		return
+	var offending_team_id: int = 1 - team_id
+	if _puck_in_attacking_zone(offending_team_id, puck_z):
+		_void_offside_for_team(offending_team_id)
 
 # Host-side: called when a loose puck is touched by any player (deflection,
 # body block, poke check, body check strip). Clears the icing tracker so the
@@ -380,9 +388,10 @@ static func _puck_in_attacking_zone(team_id: int, puck_z: float) -> bool:
 # ghost dicts the active ruleset uses (only one is ever populated at a time)
 # — ARCADE's instant per-player ghost or NHL's delayed-offside set — and
 # drops the active NHL flag if it belonged to that team. Called from
-# notify_puck_carried when the defending team gains clean possession — real
-# hockey voids the whole offside then, not just the current instant, so
-# previously-flagged players don't need to physically tag up anymore; a
+# notify_possession_established when the defending team gains clean
+# possession — real hockey voids the whole offside then, not just the
+# current instant, so previously-flagged players don't need to physically
+# tag up anymore; a
 # later genuine zone clear-and-reentry is a fresh violation, tracked
 # independently by compute_ghost_state / update_delayed_offside re-flagging
 # them if still positioned in the zone.
