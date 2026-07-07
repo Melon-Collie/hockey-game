@@ -13,6 +13,9 @@
 set -euo pipefail
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Keep the POSIX form for local filesystem work (find/cache mtime below); the
+# cygpath'd form is only for handing paths to the native Godot .exe.
+POSIX_DIR="$PROJECT_DIR"
 
 # On Windows/MSYS the Godot binary is a native .exe, so it needs a Windows-style
 # path; passing the MSYS '/c/...' form makes it miss the import cache and
@@ -29,6 +32,23 @@ if [ -z "$GODOT" ]; then
   echo "[run-gut] Godot not found. Set GODOT_BIN, or add 'godot' to PATH." >&2
   echo "[run-gut] (web sessions: run .claude/hooks/wait-for-godot.sh first)" >&2
   exit 1
+fi
+
+# Rebuild the global class cache when it's stale. Headless runs read
+# .godot/global_script_class_cache.cfg instead of rescanning the tree, so a
+# `class_name` added since the cache was last built resolves as "not declared"
+# and cascades into false failures (game-layer autoloads fail to compile, taking
+# their dependents' tests down with them). Two ways the cache goes stale: a
+# reused web container carrying a cache older than the checkout (session-start's
+# import runs only on a fresh Godot install, not the already-present path), or a
+# new class_name added mid-session. A `find` for any Scripts/*.gd newer than the
+# cache is cheap on the common (fresh-cache) path; the editor import runs only
+# when something actually changed. CI does its own --import, so it never hits this.
+CACHE="$POSIX_DIR/.godot/global_script_class_cache.cfg"
+if [ ! -f "$CACHE" ] \
+    || [ -n "$(find "$POSIX_DIR/Scripts" -name '*.gd' -newer "$CACHE" -print -quit 2>/dev/null)" ]; then
+  echo "[run-gut] class cache stale — reimporting (one-time per script change)..." >&2
+  "$GODOT" --headless --path "$PROJECT_DIR" --import --quit >/dev/null 2>&1 || true
 fi
 
 exec "$GODOT" --headless --path "$PROJECT_DIR" \
