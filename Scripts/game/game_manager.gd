@@ -3695,6 +3695,14 @@ func is_faceoff_prep() -> bool:
 	return _state_machine.current_phase == GamePhase.Phase.FACEOFF_PREP
 
 
+# Seconds until the puck drops during FACEOFF_PREP (0 otherwise). Read by the AI
+# center to time its draw swing to crest on the drop (AIController).
+func faceoff_time_until_drop() -> float:
+	if _state_machine == null:
+		return 0.0
+	return _state_machine.faceoff_prep_time_until_drop()
+
+
 # Cosmetic: the scorer raises the stick through the GOAL_CELEBRATION beat.
 # goal_scored is emitted locally on every machine (host detects, clients get
 # notify_goal), but the trigger fires only where the scorer is SIMULATED —

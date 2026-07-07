@@ -48,6 +48,25 @@ func test_faceoff_prep_expires_to_faceoff() -> void:
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)
 	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF)
 
+func test_time_until_drop_counts_down_during_prep() -> void:
+	sm.begin_faceoff_prep()
+	assert_almost_eq(sm.faceoff_prep_time_until_drop(), GameRules.FACEOFF_PREP_DURATION, 0.001,
+			"full prep duration remains at the start")
+	sm.tick(0.5)
+	assert_almost_eq(sm.faceoff_prep_time_until_drop(), GameRules.FACEOFF_PREP_DURATION - 0.5, 0.001)
+
+func test_time_until_drop_includes_opening_extension() -> void:
+	sm.begin_faceoff_prep(GameRules.CENTER_ICE_DOT, GameRules.PREGAME_INTRO_DURATION)
+	assert_almost_eq(sm.faceoff_prep_time_until_drop(),
+			GameRules.FACEOFF_PREP_DURATION + GameRules.PREGAME_INTRO_DURATION, 0.001,
+			"opening prep counts the intro window toward the drop")
+
+func test_time_until_drop_zero_outside_prep() -> void:
+	assert_eq(sm.faceoff_prep_time_until_drop(), 0.0, "PLAYING has no pending drop")
+	sm.begin_faceoff_prep()
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)  # → FACEOFF
+	assert_eq(sm.faceoff_prep_time_until_drop(), 0.0, "no pending drop once the puck is live")
+
 func test_extended_prep_holds_past_normal_duration() -> void:
 	sm.begin_faceoff_prep(GameRules.CENTER_ICE_DOT, GameRules.PREGAME_INTRO_DURATION)
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)

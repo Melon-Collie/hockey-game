@@ -29,6 +29,17 @@ func _wants_deflect(_input: InputState) -> bool:
 # / delta. Lifetime is the controller — bots aren't re-allocated mid-match.
 var _faceoff_input: InputState = InputState.new()
 
+# Bot draw swing. A center bot loads its blade on the dot through the countdown,
+# then in the final bot_draw_swing_time before the drop yanks the blade-aim target
+# back toward its own zone by bot_draw_pull_distance. The blade IK saturates at
+# max_blade_speed chasing that yank, so the crest is a real draw sweep (Hands sets
+# how hard) that the draw buffer retains into the live contest — instead of the
+# old "hold the blade on the puck" that produced a zero-momentum coin-flip. Timed
+# to crest just before the drop (bots are movement-locked until then and can't
+# react on the drop like a human), so a well-timed human still out-draws a bot.
+@export var bot_draw_swing_time: float = 0.18   # s before the drop the rip fires
+@export var bot_draw_pull_distance: float = 0.6  # m the target yanks back (rate = dist/time)
+
 # ── Scripted mode ─────────────────────────────────────────────────────────────
 # When set_scripted_mode(true) is called the agent is bypassed entirely and
 # the controller synthesizes its own InputState from script_* commands. Used
@@ -150,7 +161,12 @@ func _physics_process(delta: float) -> void:
 		if _game_state.allows_blade_aim_during_lock():
 			_faceoff_input.delta = delta
 			_faceoff_input.host_timestamp = NetworkManager.estimated_host_time()
-			_faceoff_input.mouse_world_pos = puck.global_position
+			# Only the two centers are draw-tracking (armed by PhaseCoordinator);
+			# they rip a real draw, everyone else just reaches toward the dot.
+			if skater.is_draw_tracking():
+				_faceoff_input.mouse_world_pos = _center_draw_target(puck.global_position)
+			else:
+				_faceoff_input.mouse_world_pos = puck.global_position
 			apply_blade_aim_only(_faceoff_input, delta)
 		return
 	if _game_state.is_in_goal_celebration():
@@ -169,6 +185,23 @@ func _physics_process(delta: float) -> void:
 	_process_input(input, delta)
 	skater.current_shot_state = _sm.get_state() as int
 	_refresh_debug_label()
+
+
+# Blade-aim target for a center's draw during FACEOFF_PREP. Loads on the dot
+# through the countdown, then in the final bot_draw_swing_time rips the target
+# back toward our own zone so the blade sweeps hard in that direction and crests
+# near the drop. The crest is what the draw buffer carries into the contest.
+func _center_draw_target(dot: Vector3) -> Vector3:
+	var t_drop: float = _game_state.faceoff_time_until_drop()
+	if t_drop > bot_draw_swing_time:
+		return dot  # wind-up: blade loaded on the dot, ready to rip
+	var draw_dir: Vector3 = skater.global_position - dot
+	draw_dir.y = 0.0
+	if draw_dir.length() < 0.01:
+		return dot
+	draw_dir = draw_dir.normalized()
+	var progress: float = 1.0 - clampf(t_drop / maxf(bot_draw_swing_time, 0.0001), 0.0, 1.0)
+	return dot + draw_dir * (bot_draw_pull_distance * progress)
 
 
 func _refresh_debug_label() -> void:
