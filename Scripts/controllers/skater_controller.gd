@@ -55,6 +55,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # every machine renders the identical stumble from the replicated value.
 @export var stagger_wobble_deg: float = 9.0   # peak trunk wobble at full stagger
 @export var stagger_wobble_hz: float = 3.0    # wobble frequency
+# Directional recoil: on top of the wobble, the whole torso reels the way the
+# hit shoved it (pitch + roll), easing out as stagger_timer decays — a body
+# absorbing the check, not just shaking. Direction is the transfer impulse
+# (stagger_recoil_dir); remotes recoil generically backward (they get the timer
+# off the wire, not the direction). Applied in SkaterPoseCoordinator._apply_lean.
+@export var stagger_recoil_deg: float = 13.0  # peak torso recoil lean at full stagger
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -180,6 +186,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var upper_body_twist_ratio: float = 0.8
 @export var upper_body_max_twist_deg: float = 67.0   # caps rotation so extreme angles don't over-rotate
 @export var upper_body_return_speed: float = 6.0
+# Upper-body twist follow-through (secondary motion) — a damped spring trails
+# the tracked twist so the shoulders whip through a fast cut and settle instead
+# of tracking rigidly. Renders the tracked angle plus the spring's lag; zero at
+# steady state. follow_gain 0 restores rigid tracking.
+@export var upper_body_follow_gain: float = 0.4        # how far the shoulders overshoot the whip
+@export var upper_body_follow_stiffness: float = 110.0  # spring constant (higher = quicker catch-up)
+@export var upper_body_follow_damping: float = 18.0     # damping (near-critical — a clean settle)
 # Reach lean — the torso tips TOWARD the blade's reach direction (pitch +
 # roll, see SkaterPoseCoordinator.compute_upper_body_lean_target). Because
 # the blade IK solves in the leaned frame, this lean genuinely extends world
@@ -237,6 +250,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var carve_over_pitch_deg: float = 8.0  # crossing leg also steps AHEAD
 @export var carve_clearance_knee_deg: float = 28.0  # lift while crossing the planted leg
 @export var carve_stride_fade: float = 0.7     # fraction of fore/aft stride removed at full carve
+# Crossover rhythm + cadence (see the carve block in SkaterSkatingCoordinator):
+# the over-step and under-push alternate halves of the stride cycle (two-beat
+# push-push), the legs hold a static lean into the turn, and while the path is
+# actually bending the stride frequency follows the ARC — steps per radian of
+# heading change — instead of straight-line speed. Forward-gated: a backward
+# turn keeps its C-cuts (forward crossover roles mirror wrong through the flip).
+@export var crossover_phase_per_turn: float = 7.0  # stride-phase rad per rad of heading change at full carve
+@export var carve_forward_ramp: float = 1.0    # m/s of forward travel over which crossovers fade in
+@export var carve_base_lean_deg: float = 7.0   # static both-leg lean into the turn while striding a carve
+@export var carve_rock_fade: float = 0.85      # edge-rock/abduction/scissor faded out at full carve
 # Gliding — releasing all movement keys settles the legs to rest (the stride
 # is input-gated, v15 intent byte) while this floor keeps working knees under
 # a coasting skater, scaled by speed.
@@ -343,6 +366,22 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var sprint_stride_gain: float = 0.35     # stride amplitude boost at full sprint
 @export var sprint_stance_gain: float = 0.18     # extra crouch depth while sprinting
 @export var sprint_lean_deg: float = 7.0         # extra forward trunk pitch while sprinting
+# Cadence "gears" — grounded in on-ice biomechanics: from acceleration to
+# sustained max velocity real skaters DROP stride frequency and lengthen the
+# glide (speed is power per stride, not faster turnover). cruise_gear (fast AND
+# not still accelerating) eases the stride rate down, deepens the sit, and warps
+# the stroke toward a longer glide dwell. All zero while accelerating/digging,
+# so the start/chop feel is untouched; set these to 0 to restore the prior gait.
+@export var cadence_cruise_falloff: float = 0.28    # max fraction the stride rate eases down at sustained cruise
+@export var glide_hold_skew: float = 0.25           # extra stroke skew at cruise — snappier push, longer glide dwell
+@export var cadence_glide_stance_gain: float = 0.12 # extra sit depth at sustained top speed
+# Spring weight transfer (Rosen-style secondary motion) — a damped spring lags
+# the lateral weight shift behind the stride so the body rides over the loaded
+# leg and settles with follow-through instead of rolling rigidly with it. Adds
+# "weight" for almost nothing. weight_shift_deg 0 restores the prior gait.
+@export var weight_shift_deg: float = 2.5           # amplitude of the springy lateral body lean
+@export var weight_spring_stiffness: float = 90.0   # spring constant (higher = snappier follow)
+@export var weight_spring_damping: float = 14.0     # damping (near-critical — a clean settle with slight overshoot)
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
@@ -530,6 +569,12 @@ var _sprint_locked: bool = false
 # decayed each tick in _apply_movement, and replicated so the local player's
 # reconcile snaps it to the host baseline before replay (same as stamina).
 var stagger_timer: float = 0.0
+# Body-frame direction the last check shoved this skater (x = right, y = forward
+# in the (x, z) plane). Drives the recoil lean in SkaterPoseCoordinator; set on
+# the local victim / host from the transfer impulse, left at the default (0, 1 =
+# straight back) for remotes, which only receive the timer. Cosmetic, so it does
+# not need replicating or reconciling — the timer that gates it already does.
+var stagger_recoil_dir: Vector2 = Vector2(0.0, 1.0)
 # Resolved sprint-boost state for this tick. Written in _apply_movement (which
 # runs before _pose.apply_facing in _process_input) and read by the pose
 # coordinator to apply the turn-rate penalty. Public so the pose collaborator
@@ -845,7 +890,16 @@ func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction:
 # stagger_timer to the server value and re-derives decay, so a misprediction
 # self-heals in one reconcile — exactly how the host-set stagger is already
 # treated. Remote bodies on a client still defer to the snapshot (early return).
-func _on_body_check_received(impulse_magnitude: float) -> void:
+func _on_body_check_received(impulse: Vector3) -> void:
+	var impulse_magnitude: float = impulse.length()
+	# Capture the recoil direction (body frame) so the torso reels the way the
+	# hit shoved it — see SkaterPoseCoordinator._apply_lean. Set on the local
+	# victim AND the host (both drive the stagger); remotes keep the default
+	# backward recoil (they get stagger_timer off the wire, not the direction).
+	var local_impulse: Vector3 = skater.global_transform.basis.inverse() * impulse
+	var recoil_xz: Vector2 = Vector2(local_impulse.x, local_impulse.z)
+	if recoil_xz.length() > 0.001:
+		stagger_recoil_dir = recoil_xz.normalized()
 	if not _is_host:
 		if skater.is_local_skater:
 			stagger_timer = maxf(stagger_timer,

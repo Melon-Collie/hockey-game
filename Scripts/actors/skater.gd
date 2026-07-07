@@ -211,14 +211,15 @@ var stick_knob_mesh: MeshInstance3D = null
 
 signal body_checked_player(victim: Skater, impact_force: float, hit_direction: Vector3)
 signal body_check_impulse_applied(impulse: Vector3)
-# Fired ON THE VICTIM with the magnitude (m/s) of the transfer impulse it just
-# absorbed. Distinct from body_check_impulse_applied (which fires for BOTH roles —
+# Fired ON THE VICTIM with the transfer impulse (m/s, world space) it just
+# absorbed — magnitude for the stagger/stamina debuff, direction for the recoil
+# lean. Distinct from body_check_impulse_applied (which fires for BOTH roles —
 # the attacker's restitution bounce and the victim's transfer — and feeds the
 # reconcile velocity buffer): this one is victim-only, so the controller can apply
 # the stagger/stamina debuff without mistaking a delivered hit's bounce-back for
 # being hit. Host-authoritative consumers gate on is_host; see
 # SkaterController._on_body_check_received.
-signal body_check_received(impulse_magnitude: float)
+signal body_check_received(impulse: Vector3)
 signal body_block_hit(body: Node3D)
 # Mirrors SkaterStateMachine.State for the current carrier. Updated each tick
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
@@ -625,7 +626,7 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 			var other_delta: Vector3 = other.velocity - other_vel_before
 			if other_delta.length_squared() > 0.0001:
 				other.body_check_impulse_applied.emit(other_delta)
-				other.body_check_received.emit(other_delta.length())
+				other.body_check_received.emit(other_delta)
 		# body_checked_player drives the host's credit/claim path and is NOT gated:
 		# it must fire on the attacker's own machine (local skater) and on the host
 		# so the hit can be lag-comp validated and broadcast (Lever A).

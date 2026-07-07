@@ -77,6 +77,13 @@ var _hip_align_yaw: float = 0.0
 # Smoothed signed carve engagement [−1, +1] (CarveRules): path curvature
 # drives the crossover gait. Sign = turn direction (+ = toward local +X).
 var _carve: float = 0.0
+# Curvature-only carve (no intent anticipation) and the smoothed travel turn
+# rate (rad/s), for the crossover CADENCE: stride frequency during a carve
+# follows the arc — crossovers per radian of heading change — not straight-line
+# speed. Cadence keys off real curvature only, so an anticipatory intent-carve
+# poses the legs without re-timing them until the path actually bends.
+var _carve_curve: float = 0.0
+var _turn_rate: float = 0.0
 # Smoothed input-intent signals (GaitIntentRules) — what the player is TRYING
 # to do, read from the replicated v15 intent byte. Eased so the 8-way octant
 # flips remotes decode never pop the pose. _shuffle is SIGNED (+ = toward the
@@ -94,6 +101,13 @@ var _glide_phase: float = 0.0
 # shoulders driving — never faster leg turnover (the cadence tanh ceiling
 # above stride_cadence_max_rate already owns that plateau).
 var _sprint: float = 0.0
+# Spring-damped lateral weight shift (Rosen-style secondary motion): the body
+# RIDES over the loaded leg and settles with follow-through instead of rolling
+# rigidly with the stride. Local integrator state, advanced only on real ticks
+# and small in amplitude — machines needn't agree exactly (same contract as
+# _glide_phase). Position + velocity of the critically-ish damped spring.
+var _weight_shift: float = 0.0
+var _weight_shift_vel: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -118,6 +132,8 @@ func reset_to_rest() -> void:
 	travel_align_yaw = 0.0
 	_hip_align_yaw = 0.0
 	_carve = 0.0
+	_carve_curve = 0.0
+	_turn_rate = 0.0
 	_dig = 0.0
 	_reversal = 0.0
 	_shuffle = 0.0
@@ -125,6 +141,8 @@ func reset_to_rest() -> void:
 	_glide = 0.0
 	_glide_phase = 0.0
 	_sprint = 0.0
+	_weight_shift = 0.0
+	_weight_shift_vel = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
@@ -207,6 +225,32 @@ func apply(delta: float) -> void:
 	var cadence_ceiling: float = maxf(_controller.stride_cadence_max_rate, 0.001)
 	var linear_rate: float = ground_speed * _controller.stride_cadence
 	var phase_rate: float = cadence_ceiling * tanh(linear_rate / cadence_ceiling)
+	# Cadence "gears" (grounded in on-ice biomechanics: stride frequency DROPS
+	# from acceleration to sustained max velocity while the glide phase and
+	# ground-contact time lengthen — speed comes from power per stride, not
+	# faster turnover). cruise_gear is high when the skater is FAST but not still
+	# driving to gain speed (prior-frame _effort — the one-frame lag is invisible
+	# through the smoothing, same as the stop/reversal reads below). It eases the
+	# stride rate down here, deepens the sit and lengthens the glide dwell (extra
+	# stroke skew) further down — all zero while accelerating/digging, so the
+	# start and chop feel is unchanged. Set the tunables to 0 to restore the
+	# prior cadence exactly.
+	var cruise_gear: float = speed_t * (1.0 - clampf(_effort, 0.0, 1.0))
+	phase_rate *= 1.0 - _controller.cadence_cruise_falloff * cruise_gear
+	# Crossover cadence: while the path is actually bending (curvature-only
+	# carve + smoothed turn rate — prior-frame values, the same documented
+	# one-frame lag as the stop/reversal reads below), stride frequency follows
+	# the ARC instead of straight-line speed: the feet step per radian of
+	# heading change (crossover_phase_per_turn), so a hard tight turn quickens
+	# the crossovers while a wide arc at speed glides between steps. Gated to
+	# forward travel — backward turning keeps its C-cuts on the speed law (the
+	# carve overlay below is gated by the same forwardness).
+	var carve_fwd_gate: float = clampf(-(basis_inv * vel).z
+			/ maxf(_controller.carve_forward_ramp, 0.001), 0.0, 1.0)
+	var carve_cadence: float = absf(_carve_curve) * carve_fwd_gate
+	if carve_cadence > 0.001:
+		phase_rate = lerpf(phase_rate,
+				absf(_turn_rate) * _controller.crossover_phase_per_turn, carve_cadence)
 	# Dig-in chop / shuffle steps put leg turnover UNDER the speed law: quick
 	# first strides and side-steps cycle before the body is moving fast enough
 	# to advance the phase on its own.
@@ -230,6 +274,7 @@ func apply(delta: float) -> void:
 	# the glide/push texture for free, exactly like the rest of the gait.
 	var effort_target: float = 0.0
 	var carve_target: float = 0.0
+	var raw_turn: float = 0.0
 	if _have_prev_velocity:
 		var accel: Vector3 = (vel - _prev_velocity) / delta
 		var travel: Vector2 = Vector2(vel.x, vel.z)
@@ -238,14 +283,18 @@ func apply(delta: float) -> void:
 			effort_target = clampf(
 					tangential / maxf(_controller.stride_effort_ref_accel, 0.001), -1.0, 1.0)
 		# Path curvature off the same velocity history — the carve/crossover
-		# trigger (see CarveRules and the carve block below).
-		carve_target = CarveRules.carve_target(
-				CarveRules.turn_rate(
-						Vector2(_prev_velocity.x, _prev_velocity.z),
-						Vector2(vel.x, vel.z), delta, _controller.carve_min_speed),
+		# trigger (see CarveRules and the carve block below). The raw turn
+		# rate is kept for the crossover cadence law above.
+		raw_turn = CarveRules.turn_rate(
+				Vector2(_prev_velocity.x, _prev_velocity.z),
+				Vector2(vel.x, vel.z), delta, _controller.carve_min_speed)
+		carve_target = CarveRules.carve_target(raw_turn,
 				ground_speed, _controller.carve_ref_turn_rate, _controller.carve_min_speed)
 	_prev_velocity = vel
 	_have_prev_velocity = true
+	# Curvature-only engagement for the cadence law, smoothed BEFORE intent is
+	# folded in — anticipation poses the legs, only a real arc re-times them.
+	var curve_only: float = carve_target
 	# Intent carve: holding ACROSS the travel line anticipates the turn —
 	# crossovers fire to show what the player is TRYING to do, before the
 	# path visibly bends. Combined with the curvature signal by larger
@@ -257,6 +306,8 @@ func apply(delta: float) -> void:
 		carve_target = intent_carve
 	_effort = lerpf(_effort, effort_target, _controller.stride_effort_speed * delta)
 	_carve = lerpf(_carve, carve_target, _controller.carve_engage_speed * delta)
+	_carve_curve = lerpf(_carve_curve, curve_only, _controller.carve_engage_speed * delta)
+	_turn_rate = lerpf(_turn_rate, raw_turn, _controller.carve_engage_speed * delta)
 	# Push-amplitude scale around the speed baseline: >1 driving, easing toward
 	# stride_glide_floor when coasting so the legs settle instead of churning. The
 	# static crossover lean is intentionally left off this scale — you still lean
@@ -383,6 +434,9 @@ func apply(delta: float) -> void:
 	# above: the effort deepening fades once the sprint tops out, but a
 	# sprinting skater stays low the whole way.
 	stance *= 1.0 + _sprint * _controller.sprint_stance_gain
+	# Cadence gear: a skater cruising at max velocity sits into a deeper glide
+	# (joint angles shift from extended toward deeper as frequency drops).
+	stance *= 1.0 + _controller.cadence_glide_stance_gain * cruise_gear
 	# Faceoff ready stance: at the dot the skater is at a standstill, so the
 	# speed-driven envelope leaves them bolt upright — floor the engagement
 	# through the countdown instead. Eased both ways: the crouch settles in
@@ -420,7 +474,13 @@ func apply(delta: float) -> void:
 	# 0 collapses both back to the pure sine (s_opp == -s). The fore/aft roll below
 	# stays in-phase (`s` for both legs) on purpose — it's the shared weight-shift
 	# edge rock, not a per-leg stroke.
-	var skew: float = _controller.stride_skew
+	# Cadence gear also warps the stroke: at sustained cruise the push compresses
+	# and the glide/recovery stretches (the 80/20 glide-to-propulsion split of a
+	# top-speed stride) by adding to the stroke skew. Flows through s/s_opp/c/c_opp
+	# and their (1 + skew) derivative normalization below automatically; clamped
+	# under 1 so the warp stays well-defined.
+	var skew: float = clampf(
+			_controller.stride_skew + _controller.glide_hold_skew * cruise_gear, 0.0, 0.95)
 	var s: float = sin(stride_phase - skew * sin(stride_phase))
 	var phase_opp: float = stride_phase + PI
 	var s_opp: float = sin(phase_opp - skew * sin(phase_opp))
@@ -508,8 +568,14 @@ func apply(delta: float) -> void:
 	var bias: float = _controller.stride_rear_bias
 	l_pitch += fb_w * (s - bias) * push_amp
 	r_pitch += fb_w * (s_opp - bias) * push_amp
-	l_roll += fb_w * s * roll_amp
-	r_roll += fb_w * s * roll_amp
+	# A committed carve HOLDS its lean — fade the shared edge rock, the V-flare
+	# abduction, and the strafe scissor as the crossover overlay takes over
+	# their roll channels. At partial blends all three kept writing against the
+	# overlay's fixed-role over/under rolls, which read as leg flail at odd
+	# travel angles. Forward-gated like the overlay itself.
+	var rock_fade: float = 1.0 - absf(_carve) * carve_fwd_gate * _controller.carve_rock_fade
+	l_roll += fb_w * s * roll_amp * rock_fade
+	r_roll += fb_w * s * roll_amp * rock_fade
 
 	# Abduction: the extending leg flares OUT to the side as it drives back —
 	# the V-shaped hockey push — half-wave rectified (max(-s, 0) is that leg's
@@ -518,8 +584,8 @@ func apply(delta: float) -> void:
 	var l_ext: float = maxf(-s, 0.0)
 	var r_ext: float = maxf(-s_opp, 0.0)
 	var abduct_amp: float = deg_to_rad(_controller.stride_abduction_deg) * _intensity * push_scale * gait_scale
-	l_roll -= fb_w * abduct_amp * l_ext
-	r_roll += fb_w * abduct_amp * r_ext
+	l_roll -= fb_w * abduct_amp * l_ext * rock_fade
+	r_roll += fb_w * abduct_amp * r_ext * rock_fade
 
 	# Strafe scissor. Lean into the travel direction (static bias toward the
 	# inside) plus a scissoring roll 180° out of phase between the legs. This
@@ -531,28 +597,41 @@ func apply(delta: float) -> void:
 	var strafe_sign: float = signf(_shuffle) if absf(_shuffle) > 0.3 else signf(lat)
 	var lean: float = strafe_sign * deg_to_rad(_controller.crossover_lean_deg) * _intensity * gait_scale
 	var scissor: float = deg_to_rad(_controller.crossover_scissor_deg) * _intensity * push_scale * gait_scale
-	l_roll += lr_w * (lean + s * scissor)
-	r_roll += lr_w * (lean + s_opp * scissor)
+	# rock_fade: on diagonal travel the residual lr_w double-fired the scissor
+	# against the carve overlay — turning at speed, the crossovers win.
+	l_roll += lr_w * (lean + s * scissor) * rock_fade
+	r_roll += lr_w * (lean + s_opp * scissor) * rock_fade
 
 	# ── Carve crossovers ──────────────────────────────────────────────────────
 	# Turning at speed plays real crossovers, with FIXED roles set by the turn
 	# direction (they never alternate): the OUTSIDE leg lifts and steps across
 	# in front while the INSIDE leg extends in an under-push beneath the body.
-	# Both act on the same half of the shared stride phase — the simultaneous
-	# power stroke — and the wave's idle half is the glide between crossovers.
-	# The clearance knee rides the RISE of the stroke (same derivative gate as
-	# the recovery tuck) so the crossing skate lifts OVER the planted leg and
-	# extends as it lands; the under-push leg feeds the existing knee-release
-	# path through its ext value, so the extension stays anatomically
-	# consistent with the stance geometry.
+	# TWO-BEAT rhythm — the strokes alternate halves of the shared stride
+	# phase (over-step on the positive half, under-push on the negative half),
+	# the continuous push-push that runs a skater around a corner, instead of
+	# both firing simultaneously with an idle half between. On top of the
+	# alternating strokes both legs HOLD a static lean into the turn
+	# (carve_base_lean_deg) so the turn read never pulses to zero between
+	# steps. The clearance knee rides the RISE of the stroke (same derivative
+	# gate as the recovery tuck) so the crossing skate lifts OVER the planted
+	# leg and extends as it lands; the under-push leg feeds the existing
+	# knee-release path through its ext value, so the extension stays
+	# anatomically consistent with the stance geometry. Forward-gated
+	# (carve_fwd_gate): a backward turn keeps its C-cuts and edges — forward
+	# crossover roles mirror wrong when travel flips.
 	var l_tuck_extra: float = 0.0
 	var r_tuck_extra: float = 0.0
-	var carve_amt: float = absf(_carve) * _intensity * gait_scale
+	var carve_amt: float = absf(_carve) * _intensity * gait_scale * carve_fwd_gate
 	if carve_amt > 0.001:
-		var stroke: float = maxf(s, 0.0)
-		var over_roll: float = deg_to_rad(_controller.carve_over_roll_deg) * carve_amt * stroke
-		var under_roll: float = deg_to_rad(_controller.carve_under_roll_deg) * carve_amt * stroke
-		var over_pitch: float = deg_to_rad(_controller.carve_over_pitch_deg) * carve_amt * stroke
+		var over_stroke: float = maxf(s, 0.0)
+		var under_stroke: float = maxf(-s, 0.0)
+		var base_lean: float = deg_to_rad(_controller.carve_base_lean_deg) \
+				* signf(_carve) * carve_amt
+		l_roll += base_lean
+		r_roll += base_lean
+		var over_roll: float = deg_to_rad(_controller.carve_over_roll_deg) * carve_amt * over_stroke
+		var under_roll: float = deg_to_rad(_controller.carve_under_roll_deg) * carve_amt * under_stroke
+		var over_pitch: float = deg_to_rad(_controller.carve_over_pitch_deg) * carve_amt * over_stroke
 		var clearance: float = deg_to_rad(_controller.carve_clearance_knee_deg) \
 				* carve_amt * maxf(c, 0.0)
 		if _carve > 0.0:
@@ -561,14 +640,14 @@ func apply(delta: float) -> void:
 			l_pitch += over_pitch
 			l_tuck_extra = clearance
 			r_roll -= under_roll
-			r_ext = maxf(r_ext, stroke)
+			r_ext = maxf(r_ext, under_stroke)
 		else:
 			# Turning toward −X: mirrored roles.
 			r_roll -= over_roll
 			r_pitch += over_pitch
 			r_tuck_extra = clearance
 			l_roll += under_roll
-			l_ext = maxf(l_ext, stroke)
+			l_ext = maxf(l_ext, under_stroke)
 
 	# ── Glide reads ────────────────────────────────────────────────────────────
 	# Releasing the keys mid-turn glides OUT of the carve on the edges: while
@@ -631,6 +710,18 @@ func apply(delta: float) -> void:
 	# hard brake), and the torso rolls over the loaded leg with the weight shift.
 	trunk_pitch_add = -deg_to_rad(_controller.stride_dig_lean_deg) * _effort
 	trunk_roll_add = deg_to_rad(_controller.stride_sway_deg) * _intensity * fb_w * s * gait_scale
+	# Spring weight transfer (Rosen-style secondary motion): a damped spring lags
+	# the lateral weight shift behind the stride so the body settles OVER the
+	# loaded leg with follow-through instead of the roll tracking the leg rigidly.
+	# Semi-implicit Euler (update velocity, then position) for stability; local
+	# integrator state, advanced only on real ticks like the rest of the gait.
+	# weight_shift_deg 0 restores the prior gait.
+	var shift_target: float = fb_w * s * _intensity * gait_scale
+	var shift_accel: float = _controller.weight_spring_stiffness * (shift_target - _weight_shift) \
+			- _controller.weight_spring_damping * _weight_shift_vel
+	_weight_shift_vel += shift_accel * delta
+	_weight_shift += _weight_shift_vel * delta
+	trunk_roll_add += deg_to_rad(_controller.weight_shift_deg) * _weight_shift
 	# Intent trunk reads: dig-in drives the shoulders over the first strides,
 	# a reversal tips them BACK against the travel it's fighting, and a
 	# deliberate backpedal keeps the chest up over the C-cuts.

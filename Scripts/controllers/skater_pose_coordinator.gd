@@ -30,6 +30,13 @@ var velocity_lean_z: float = 0.0
 var lower_body_lag: float = 0.0
 var head_angle: float = 0.0
 var ik_locked_side: int = 0  # +1 = exited right, -1 = exited left, 0 = unlocked
+# Upper-body twist follow-through (secondary motion): a damped spring trails the
+# tracked twist so the shoulders whip through a fast cut and settle, instead of
+# tracking rigidly. Converges to the tracked angle at steady state (adds nothing
+# to a settled pose), so the cosmetic-rig dirty-gate still skips it. Advanced
+# only on the local-sim path (apply_upper_body) like the rest of that pass.
+var _twist_follow: float = 0.0
+var _twist_follow_vel: float = 0.0
 
 # ── Angular-Velocity Tracking ─────────────────────────────────────────────────
 var facing_angular_velocity: float = 0.0
@@ -149,9 +156,23 @@ func snap_lean_to_state() -> void:
 func _apply_lean() -> void:
 	var stride_pitch: float = _skating.trunk_pitch_add if _skating != null else 0.0
 	var stride_roll: float = _skating.trunk_roll_add if _skating != null else 0.0
+	# Body-check recoil: while staggered, the torso reels the way the hit shoved
+	# it, easing out as the timer decays (same directional pitch/roll decomposition
+	# as the reach lean). Runs on every path — local, bot, and remote (which reels
+	# generically backward off the replicated timer) — since _apply_lean is the
+	# single torso writer both the live pass and snap_lean_to_state go through.
+	var recoil_pitch: float = 0.0
+	var recoil_roll: float = 0.0
+	var recoil_t: float = clampf(
+			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
+	if recoil_t > 0.0:
+		var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t
+		var d: Vector2 = _controller.stagger_recoil_dir
+		recoil_pitch = mag * d.y
+		recoil_roll = -mag * d.x
 	_skater.set_upper_body_lean(
-			upper_body_lean + velocity_lean_x + stride_pitch,
-			upper_body_lean_roll + velocity_lean_z + stride_roll)
+			upper_body_lean + velocity_lean_x + stride_pitch + recoil_pitch,
+			upper_body_lean_roll + velocity_lean_z + stride_roll + recoil_roll)
 	_skater.set_lower_body_lean(
 			velocity_lean_x * _controller.lower_body_pitch_follow, velocity_lean_z)
 
@@ -307,7 +328,18 @@ func apply_upper_body(delta: float) -> void:
 	upper_body_angle = lerp_angle(upper_body_angle, target_angle, _controller.upper_body_return_speed * delta)
 	upper_body_lean = lerpf(upper_body_lean, target_lean.x, _controller.upper_body_lean_return_speed * delta)
 	upper_body_lean_roll = lerpf(upper_body_lean_roll, target_lean.y, _controller.upper_body_lean_return_speed * delta)
-	_skater.set_upper_body_rotation(upper_body_angle)
+	# Follow-through: a damped spring trails the tracked twist so the shoulders
+	# whip through a fast cut and settle. We RENDER the tracked angle plus the
+	# spring's lag (whip in the direction of motion), but keep upper_body_angle
+	# itself the rigidly-tracked value so the network angular-velocity export and
+	# next-frame lerp are unaffected. Converges to zero lag at steady state.
+	var tw_accel: float = _controller.upper_body_follow_stiffness * (upper_body_angle - _twist_follow) \
+			- _controller.upper_body_follow_damping * _twist_follow_vel
+	_twist_follow_vel += tw_accel * delta
+	_twist_follow += _twist_follow_vel * delta
+	var rendered_twist: float = upper_body_angle \
+			+ (upper_body_angle - _twist_follow) * _controller.upper_body_follow_gain
+	_skater.set_upper_body_rotation(rendered_twist)
 	_apply_lean()
 
 func apply_head_tracking(input: InputState, delta: float) -> void:
@@ -344,3 +376,5 @@ func reset_lean_and_lag() -> void:
 	velocity_lean_x = 0.0
 	velocity_lean_z = 0.0
 	lower_body_lag = 0.0
+	_twist_follow = 0.0
+	_twist_follow_vel = 0.0
