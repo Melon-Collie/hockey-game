@@ -30,6 +30,15 @@ var _input_history: Array[InputState] = []
 # comparing current client position (which is ahead by prediction lead).
 var _prediction_history: Array[PredictedState] = []
 const _PREDICTION_HISTORY_CAP: int = _PhysicsConstants.PHYSICS_TICK * 2  # ~2 s, matches the reconcile input cap
+# Highest ack (last_processed_host_timestamp) a reconcile has already consumed.
+# The host broadcasts world state every tick but only advances the ack when it
+# pops a due input, so consecutive broadcasts often repeat the same ack. The
+# first reconcile at ack T matches its prediction and then trims it away, so a
+# repeated ack would find_at-miss, fall back to the live (prediction-lead-ahead)
+# position, and fire a spurious snap. Gate on this so a stale ack is skipped —
+# a genuine desync is still caught on the next *advanced* ack. Reset wherever
+# _prediction_history is cleared (teleport / dead-puck lock).
+var _last_reconcile_ack_ts: float = 0.0
 var _team_id: int = -1  # set at setup; needed for client-side offside prediction
 var last_reconcile_error: float = 0.0
 var _claim_cooldown: float = 0.0
@@ -126,6 +135,7 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	super.teleport_to(pos, facing)
 	_input_history.clear()
 	_prediction_history.clear()
+	_last_reconcile_ack_ts = 0.0
 	_body_check_impulses.clear()
 	if skater != null:
 		skater.visual_offset = Vector3.ZERO
@@ -183,6 +193,7 @@ func _physics_process(delta: float) -> void:
 			# can't replay stale inputs once the phase lifts.
 			_input_history.clear()
 			_prediction_history.clear()
+			_last_reconcile_ack_ts = 0.0
 		return
 	# When input is blocked (menu open) the gatherer returns a neutral
 	# InputState — zero movement, no held buttons. We still run the full
@@ -343,6 +354,18 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# unacked input. find_at below uses the pure ack (its own epsilon match
 	# handles the grid error symmetrically).
 	var ack_ts: float = server_state.last_processed_host_timestamp
+	# Stale-ack gate: the host broadcasts every tick but only advances the ack when
+	# it pops a due input, so consecutive broadcasts routinely repeat the same ack.
+	# The first reconcile at ack T matches its prediction and then trims it away
+	# (below), so a repeated ack would find_at-miss, fall back to the live position
+	# (which leads the server by prediction lead), and fire a spurious snap — the
+	# false corrections that dominate reconcile churn on a clean connection. There
+	# is no new confirmed input to compare against, so skip: a real desync is still
+	# caught on the next advanced ack, at the normal cadence. Ghost state above is
+	# authoritative every broadcast and has already been applied.
+	if not ReconciliationRules.ack_is_new(ack_ts, _last_reconcile_ack_ts, PredictedState.TS_MATCH_EPSILON):
+		return
+	_last_reconcile_ack_ts = ack_ts
 	var trim_ts: float = ack_ts + PredictedState.TS_MATCH_EPSILON
 	while not _input_history.is_empty() and _input_history[0].host_timestamp <= trim_ts:
 		_input_history.pop_front()
