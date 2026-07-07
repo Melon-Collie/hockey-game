@@ -331,45 +331,40 @@ func update_bottom_hand() -> void:
 
 # ── Net Exclusion Clamp ───────────────────────────────────────────────────────
 # Clamps `point` (either the puck contact point or the blade heel during
-# follow-through) out of the net exclusion zone. The zone is NET_HALF_WIDTH +
-# NET_PUCK_BUFFER wide on each side and NET_DEPTH + NET_PUCK_BUFFER deep from
-# the goal line. The buffer applies uniformly to both the side posts and the
-# back board. The point always escapes through the nearest face — never the
-# front mouth.
+# follow-through) out of the net exclusion zone (NetClampRules). The point always
+# escapes through the nearest side/back face — never the front mouth.
+#
+# Tuck-in: while CARRYING and the carrier isn't parked deep behind the net, the
+# clamp opens the shallow front slice of the mouth so the blade can carry the
+# puck across the line (wraparounds / jams). Because a legal tuck leaves the
+# contact UNCLAMPED, the caller's "clamp moved the contact → auto-release" path
+# (see apply_blade_from_mouse) doesn't fire, so the puck rides in instead of
+# being ejected. Follow-through / non-carry calls pass allow_tuck = false and
+# behave exactly as before.
 func clamp_blade_from_net(point: Vector3) -> Vector3:
-	if point.y > GameRules.NET_HEIGHT:
-		return point
-	var result: Vector3 = point
-	var gl: float           = GameRules.GOAL_LINE_Z
-	var eff_depth: float    = GameRules.NET_DEPTH + GameRules.NET_PUCK_BUFFER
-	var hw: float           = GameRules.NET_HALF_WIDTH + GameRules.NET_PUCK_BUFFER
-	# +Z net
-	if result.z >= gl and result.z < gl + eff_depth:
-		var local_depth: float = result.z - gl
-		if abs(result.x) < hw:
-			var d_back: float  = eff_depth - local_depth
-			var d_left: float  = result.x + hw
-			var d_right: float = hw - result.x
-			if d_back <= d_left and d_back <= d_right:
-				result.z = gl + eff_depth
-			elif d_left <= d_right:
-				result.x = -hw
-			else:
-				result.x = hw
-	# -Z net
-	elif result.z <= -gl and result.z > -gl - eff_depth:
-		var local_depth: float = -gl - result.z
-		if abs(result.x) < hw:
-			var d_back: float  = eff_depth - local_depth
-			var d_left: float  = result.x + hw
-			var d_right: float = hw - result.x
-			if d_back <= d_left and d_back <= d_right:
-				result.z = -gl - eff_depth
-			elif d_left <= d_right:
-				result.x = -hw
-			else:
-				result.x = hw
-	return result
+	return NetClampRules.clamp_out_of_net(
+			point,
+			GameRules.GOAL_LINE_Z,
+			GameRules.NET_HALF_WIDTH,
+			GameRules.NET_PUCK_BUFFER,
+			GameRules.NET_DEPTH,
+			GameRules.NET_HEIGHT,
+			_tuck_allowed(point),
+			GameRules.NET_TUCK_DEPTH)
+
+
+# Whether a front-of-mouth tuck is permitted right now: the skater is carrying
+# and its body isn't more than NET_CARRY_BEHIND_TOLERANCE behind the nearest goal
+# line (so a side-of-mouth wraparound tucks, but a reach-through from deep behind
+# the net does not). Keyed off the net nearest `point` (the blade), which is the
+# net being worked.
+func _tuck_allowed(point: Vector3) -> bool:
+	if not _controller.has_puck:
+		return false
+	var gl: float = GameRules.GOAL_LINE_Z
+	var near_gl: float = gl if point.z >= 0.0 else -gl
+	var carrier_depth: float = (_skater.global_position.z - near_gl) * signf(near_gl)
+	return carrier_depth <= GameRules.NET_CARRY_BEHIND_TOLERANCE
 
 # ── Goalie Body / Butterfly Clamp ─────────────────────────────────────────────
 # Pushes blade_world out of every goalie's collision zone and strips the puck

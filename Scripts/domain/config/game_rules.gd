@@ -31,6 +31,17 @@ const NET_DEPTH: float = 1.02            # goal depth from goal line to back fra
 const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid wider end)
 const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
 const NET_PUCK_BUFFER: float = 0.10      # exclusion zone expansion beyond the physical net boundary
+# Stick tuck-in: a carrier may push the puck across the goal line on the blade
+# from the front/side of the mouth (wraparounds, jams). NET_TUCK_DEPTH is how far
+# past the line the blade may carry it — a shallow front slice of the net; deeper
+# than this stays excluded so you can't reach the puck through the back mesh. Must
+# clear the puck-radius "whole disc across" threshold (0.065) with margin so the
+# tuck actually registers as a goal. NET_CARRY_BEHIND_TOLERANCE is how far behind
+# the line the carrier's BODY may be and still tuck — generous enough for a
+# side-of-mouth wraparound, tight enough to deny a reach-through from deep behind
+# the net. Tuning knobs; widen/narrow from playtest.
+const NET_TUCK_DEPTH: float = 0.15
+const NET_CARRY_BEHIND_TOLERANCE: float = 0.5
 
 # Half the skater's body so the blue line keys off the body EDGE, not its
 # centre — matching real hockey. You tag up the instant any part of your body
