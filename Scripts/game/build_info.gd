@@ -61,7 +61,18 @@ const VERSION: String = "dev"
 # v16: intent byte gains bit [5] — resolved sprint_active, so client-rendered
 #     remotes play the sprint gait (longer strides, deeper sit, forward lean —
 #     the on-screen opponent-stamina tell). Block size unchanged.
-const PROTOCOL_VERSION: int = 16
+# v17: latency pass. (a) Input batching 60 -> 120 Hz; ClockSync.BATCH_INTERVAL
+#     now derives from Constants.INPUT_RATE, shrinking INPUT_LEAD_SEC
+#     33.3 -> 25 ms — the lead is a host/client convention baked into every
+#     lag-comp rewind (LagCompRewind.self_view_time), so mixed builds would
+#     skew claim arbitration by 8.3 ms. (b) World-state packets carry a
+#     trailing carrier-event block (SnapshotEventLog: u8 count last, 13 B
+#     records before it) so carrier events survive reliable-packet loss
+#     without a retransmit-RTT stall; the four carrier RPCs
+#     (notify_carrier_changed / notify_puck_picked_up / notify_puck_stolen /
+#     notify_puck_dropped) gained a leading event_seq arg for cross-channel
+#     dedupe.
+const PROTOCOL_VERSION: int = 17
 
 
 func _ready() -> void:

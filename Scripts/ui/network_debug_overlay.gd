@@ -270,7 +270,20 @@ func _render_client(t: NetworkTelemetry) -> void:
 	_info("Updates in", "%.0f/s" % t.world_state_hz, "world snapshots received; matches host send rate")
 	_sim_line(t)
 
-	_section("Prediction (your view of remote players & puck)")
+	# End-to-end latency decomposed into its named terms, so a netcode change
+	# is judged by numbers instead of "does it feel snappier". All facts
+	# (_info): each term is either by-design or already colored elsewhere.
+	if NetworkManager.is_clock_ready():
+		_section("Latency budget (action → screen)")
+		var lead_ms := NetworkManager.INPUT_LEAD_SEC * 1000.0
+		var interp_ms := NetworkManager.get_interpolation_delay() * 1000.0
+		var bcast_ms := NetworkManager.state_delta * 1000.0
+		_info("You → host sim", "%.0f ms" % lead_ms,
+			"input stamp lead, by design — your input is scheduled this far ahead so it's on the host before its tick (transit rides inside the synced clock); host-side overdue shows on the host's Input lead line")
+		_info("Host → your screen", "%.0f ms (½rtt %.0f · tick %.0f · cushion %.0f)" % [interp_ms, rtt_avg / 2.0, bcast_ms, pdv],
+			"render age of the authoritative world (remote skaters, loose puck, goalie) — the live smoothing delay; decomposition shows its target terms")
+		_info("Round trip you → you", "%.0f ms" % (lead_ms + interp_ms),
+			"your action reaching the host + its authoritative result reaching your screen. Your own skater feels instant (prediction) — this is the staleness of the world you're reacting to")
 	var rec := _worse(_band(t.reconcile_per_sec, 1.0, 5.0), _band(t.reconcile_magnitude_avg, 0.05, 0.2))
 	_metric(rec, "Corrections", "%.1f/s, %.3f m avg" % [t.reconcile_per_sec, t.reconcile_magnitude_avg],
 		"server snapping your prediction back; want <1/s and <5 cm")
@@ -309,7 +322,7 @@ func _render_host(t: NetworkTelemetry) -> void:
 			var ping := NetworkManager.get_peer_ping_ms(pid)
 			_context(_band(float(ping), 80.0, 150.0), NetworkManager.get_peer_name(pid),
 				"%d ms" % ping, "this client's round-trip to you — distance, not a bug (doesn't flag the header)")
-	_info("Snapshots out", "%.0f/s" % t.world_state_hz, "world states broadcast per tick (varies by phase)")
+	_info("Snapshots out", "%.0f/s" % t.world_state_hz, "world states broadcast per tick (constant 120/s in every phase)")
 	_sim_line(t)
 
 	if not peers.is_empty():
@@ -323,13 +336,14 @@ func _render_host(t: NetworkTelemetry) -> void:
 
 	_section("Host frame health")
 	_frame_health(t)
-	# The host throttles the broadcast rate to 5Hz during dead-puck phases
-	# (faceoff prep, goal, period breaks), so judge the gap against the live
-	# target interval rather than a fixed 120Hz, or every stoppage reads red.
+	# Judge the gap against the live target interval (state_delta) rather than
+	# a hardcoded 120Hz, so a future runtime rate change (congestion response)
+	# doesn't read red by default. The per-phase dead-puck downshift is gone —
+	# the rate is constant across stoppages now.
 	var bcast_target_ms := NetworkManager.state_delta * 1000.0
 	_metric(_band(t.broadcast_interval_p95_ms, bcast_target_ms * 1.4, bcast_target_ms * 2.0),
 		"Broadcast gap", "p95 %.1f ms (target ~%.0f)" % [t.broadcast_interval_p95_ms, bcast_target_ms],
-		"gap between snapshots; tracks the current send rate, which drops to 5Hz during stoppages")
+		"gap between snapshots vs the send-rate target; sustained high = host stalling or send path backed up")
 
 	_info("Bandwidth", "%.1f KB/s up" % (t.bytes_sent_per_sec / 1024.0),
 		"total game data sent to all clients (payload only, excludes Steam framing)")

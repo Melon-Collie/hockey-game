@@ -34,7 +34,11 @@ const MASK_SKATER: int = LAYER_WALLS | LAYER_SKATER_BODIES   # goalie bodies/net
 
 # ── Network (transport-level) ─────────────────────────────────────────────────
 const PORT: int = 7777
-const INPUT_RATE: int = 60
+# Client input batches are sent once per physics tick. Matching PHYSICS_TICK
+# minimizes the batch-send wait folded into ClockSync.INPUT_LEAD_SEC (which
+# derives BATCH_INTERVAL from this constant) — at 60 Hz the worst-case wait was
+# a full 16.7 ms of client→host latency on every input.
+const INPUT_RATE: int = 120
 const STATE_RATE: int = 120
 # Rate at which world-state snapshots are written to the .mreplay file, well
 # below STATE_RATE: the replay viewer interpolates between snapshots (see

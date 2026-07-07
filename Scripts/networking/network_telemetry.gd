@@ -76,7 +76,7 @@ var _window_timer: float = 0.0
 # structural problem (non-determinism, divergence channel, wire-format bug)
 # regardless of whether the symptom is visible on screen yet.
 var world_state_hz: float = 0.0          # ~120/s on host, matches send rate on clients
-var input_hz: float = 0.0                # ~60/s — input batch send rate
+var input_hz: float = 0.0                # ~120/s — input batch send rate (Constants.INPUT_RATE)
 # reconcile_per_sec: how often the threshold check actually snapped the skater.
 # Expected: <1/s during normal play. Sustained higher rate means either real
 # non-determinism in _process_input or a divergence channel the threshold

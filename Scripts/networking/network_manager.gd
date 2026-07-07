@@ -261,6 +261,17 @@ var _world_state_provider: Callable = Callable()
 # holding a controller reference.
 var _input_batch_provider: Callable = Callable()
 var _clock_sync: RefCounted = null  # ClockSync instance, client only
+# Carrier-event redundancy (see SnapshotEventLog): the host records each carrier
+# event and appends the recent set to every unreliable world-state packet in
+# `_broadcast_state`; clients apply the block in `receive_world_state` and gate
+# the reliable backstop RPCs through the same seq watermark. Connection-scoped:
+# replaced only in reset() — deliberately NOT in prepare_for_new_game(), because
+# a rematch keeps client connections (and their watermarks) alive, and a seq
+# restart would make them silently drop every event of the next match.
+var _event_log: SnapshotEventLog = SnapshotEventLog.new()
+# Stored once so the 120 Hz client receive path doesn't allocate a bound
+# Callable per packet.
+var _snapshot_event_dispatch: Callable = _dispatch_snapshot_event
 var _session_start_ms: int = 0
 var _replay_mode: bool = false
 var _replay_clock: float = 0.0
@@ -316,8 +327,12 @@ var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
-# (120/120 = 1 at the default rate; 120/5 = 24 during dead-puck phases via
-# set_broadcast_rate). Recomputed by `set_broadcast_rate`. Stall resilience:
+# (120/120 = 1 — every tick). Recomputed by `set_broadcast_rate`, a runtime
+# knob with no callers today (the per-phase dead-puck downshift was removed:
+# stoppage phases are seconds long so it saved nothing meaningful, starved
+# client interpolation buffers right before the faceoff drop, and polluted
+# the client jitter window, which assumes STATE_RATE packet spacing); kept
+# for future congestion response. Stall resilience:
 # on a host main-thread freeze, Godot's physics catch-up fires multiple
 # back-to-back physics ticks. The counter increments in NetworkManager._physics_process
 # for each, and GameManager._physics_process invokes try_broadcast() per tick,
@@ -741,6 +756,7 @@ func reset() -> void:
 	_pdv_mean = 0.0
 	_pdv_dev = 0.0
 	_interp_delay = Constants.NETWORK_INTERPOLATION_DELAY
+	_event_log = SnapshotEventLog.new()
 	NetworkSimManager.clear_pending()
 
 # ── Process ───────────────────────────────────────────────────────────────────
@@ -866,12 +882,15 @@ func _process(delta: float) -> void:
 				_peer_echo_recv_window[pid] = 0
 			_peer_loss_timer = 0.0
 
+# Runtime broadcast-rate knob. No callers today — see the `_state_tick_divisor`
+# doc-comment for why the per-phase dead-puck downshift was removed — retained
+# as the hook for future congestion response.
 func set_broadcast_rate(hz: float) -> void:
 	state_delta = 1.0 / maxf(hz, 1.0)
 	# `_physics_process` fires the broadcast every Nth physics tick. Round to
 	# the nearest integer so any hz that doesn't divide PHYSICS_TICK evenly
 	# (5, 10, 20, 30, 40, 48, 60, 80, 120) still produces the closest cadence.
-	# At 120Hz → 2 ticks; at 5Hz (dead-puck phase) → 48 ticks.
+	# At 120 Hz → every tick; at 60 Hz → every 2nd tick.
 	_state_tick_divisor = maxi(int(round(float(Constants.PHYSICS_TICK) / maxf(hz, 1.0))), 1)
 	# Reset the counter so the new cadence starts cleanly from the next tick.
 	_state_tick_counter = 0
@@ -909,6 +928,11 @@ func _broadcast_state() -> void:
 		return
 	if is_offline_mode:
 		return
+	# Redundant carrier events ride the tail of every snapshot (SnapshotEventLog).
+	# PackedByteArray is copy-on-write, so this append can't mutate the replay
+	# recorder/file-writer copies taken inside get_world_state — replay frames
+	# stay event-free and decode_for_replay never sees the block.
+	_event_log.append_block(state, local_time())
 	for peer_id in connected_peer_ids():
 		receive_world_state.rpc_id(peer_id, state)
 		NetworkTelemetry.record_bytes_sent(state.size())
@@ -1149,6 +1173,11 @@ func receive_world_state(data: PackedByteArray) -> void:
 			# decode applies state to actors — so every interpolator this frame
 			# reads the same freshly-adapted value.
 			advance_interpolation_delay()
+			# Apply the snapshot's trailing carrier-event block BEFORE the
+			# world-state decode below, so a carrier change and the state it
+			# corresponds to land in the same frame (a stronger ordering
+			# guarantee than the reliable-RPC-vs-unreliable-snapshot race).
+			_event_log.apply_block(s, multiplayer.get_unique_id(), _snapshot_event_dispatch)
 			NetworkTelemetry.record_world_state()
 			NetworkTelemetry.record_bytes_received(s.size())
 			world_state_received.emit(s),
@@ -1430,11 +1459,17 @@ func send_puck_picked_up(peer_id: int) -> void:
 	# is needed.
 	if not is_real_peer(peer_id):
 		return
-	notify_puck_picked_up.rpc_id(peer_id)
+	var seq: int = _event_log.record(
+			SnapshotEventLog.EventType.PICKED_UP, peer_id, 0, local_time())
+	notify_puck_picked_up.rpc_id(peer_id, seq)
 
 @rpc("authority", "reliable")
-func notify_puck_picked_up() -> void:
-	NetworkSimManager.send(func() -> void: local_puck_pickup_confirmed.emit(), [], true)
+func notify_puck_picked_up(event_seq: int) -> void:
+	NetworkSimManager.send(
+		func(seq: int) -> void:
+			if _event_log.try_apply_reliable(seq):
+				local_puck_pickup_confirmed.emit(),
+		[event_seq], true)
 
 func send_ghost_state_to_all(peer_id: int, is_ghost: bool) -> void:
 	for remote_id: int in connected_peer_ids():
@@ -1447,22 +1482,36 @@ func notify_ghost_state(peer_id: int, is_ghost: bool) -> void:
 		[peer_id, is_ghost], true)
 
 func send_carrier_changed_to_all(new_carrier_peer_id: int) -> void:
+	var seq: int = _event_log.record(
+			SnapshotEventLog.EventType.CARRIER_CHANGED, SnapshotEventLog.TARGET_ALL,
+			new_carrier_peer_id, local_time())
 	for peer_id: int in connected_peer_ids():
-		notify_carrier_changed.rpc_id(peer_id, new_carrier_peer_id)
+		notify_carrier_changed.rpc_id(peer_id, seq, new_carrier_peer_id)
 	remote_carrier_changed.emit(new_carrier_peer_id)
 
 @rpc("authority", "reliable")
-func notify_carrier_changed(new_carrier_peer_id: int) -> void:
-	NetworkSimManager.send(func(id: int) -> void: remote_carrier_changed.emit(id), [new_carrier_peer_id], true)
+func notify_carrier_changed(event_seq: int, new_carrier_peer_id: int) -> void:
+	NetworkSimManager.send(
+		func(seq: int, id: int) -> void:
+			if _event_log.try_apply_reliable(seq):
+				remote_carrier_changed.emit(id),
+		[event_seq, new_carrier_peer_id], true)
 
 func send_puck_stolen(victim_peer_id: int, was_stick_lift: bool = false) -> void:
 	if not is_real_peer(victim_peer_id):
 		return  # AI bot or sentinel — see send_puck_picked_up rationale.
-	notify_puck_stolen.rpc_id(victim_peer_id, was_stick_lift)
+	var seq: int = _event_log.record(
+			SnapshotEventLog.EventType.STOLEN, victim_peer_id,
+			1 if was_stick_lift else 0, local_time())
+	notify_puck_stolen.rpc_id(victim_peer_id, seq, was_stick_lift)
 
 @rpc("authority", "reliable")
-func notify_puck_stolen(was_stick_lift: bool) -> void:
-	NetworkSimManager.send(func(wsl: bool) -> void: local_puck_stolen.emit(wsl), [was_stick_lift], true)
+func notify_puck_stolen(event_seq: int, was_stick_lift: bool) -> void:
+	NetworkSimManager.send(
+		func(seq: int, wsl: bool) -> void:
+			if _event_log.try_apply_reliable(seq):
+				local_puck_stolen.emit(wsl),
+		[event_seq, was_stick_lift], true)
 
 func send_one_timer_release(direction: Vector3, power: float, origin: Vector3) -> void:
 	release_puck_one_timer.rpc_id(1, direction, power,
@@ -1484,11 +1533,32 @@ func notify_goal_to_all(scoring_team_id: int, score0: int, score1: int, scorer_n
 func notify_puck_dropped_to_carrier(carrier_peer_id: int) -> void:
 	if not is_real_peer(carrier_peer_id):
 		return  # AI bot or sentinel — see send_puck_picked_up rationale.
-	notify_puck_dropped.rpc_id(carrier_peer_id)
+	var seq: int = _event_log.record(
+			SnapshotEventLog.EventType.DROPPED, carrier_peer_id, 0, local_time())
+	notify_puck_dropped.rpc_id(carrier_peer_id, seq)
 
 @rpc("authority", "reliable")
-func notify_puck_dropped() -> void:
-	NetworkSimManager.send(func() -> void: carrier_puck_dropped.emit(), [], true)
+func notify_puck_dropped(event_seq: int) -> void:
+	NetworkSimManager.send(
+		func(seq: int) -> void:
+			if _event_log.try_apply_reliable(seq):
+				carrier_puck_dropped.emit(),
+		[event_seq], true)
+
+# Snapshot-path twin of the four reliable handlers above: SnapshotEventLog
+# dispatches each fresh, targeted event from a packet's trailing block here.
+# Emits the exact same signals, so the application layer can't tell (and
+# doesn't care) which channel won the race.
+func _dispatch_snapshot_event(type: int, arg: int) -> void:
+	match type:
+		SnapshotEventLog.EventType.CARRIER_CHANGED:
+			remote_carrier_changed.emit(arg)
+		SnapshotEventLog.EventType.PICKED_UP:
+			local_puck_pickup_confirmed.emit()
+		SnapshotEventLog.EventType.STOLEN:
+			local_puck_stolen.emit(arg != 0)
+		SnapshotEventLog.EventType.DROPPED:
+			carrier_puck_dropped.emit()
 
 @rpc("authority", "reliable")
 func notify_player_disconnected(peer_id: int) -> void:

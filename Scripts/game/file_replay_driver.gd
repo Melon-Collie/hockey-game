@@ -20,8 +20,9 @@ extends Node
 # the interpolator would drift actors smoothly across the gap; instead we
 # hold the FROM frame for _GAP_DWELL_S of virtual time so the moment that
 # triggered the gap registers, then jump straight to the post-gap timestamp.
-# Normal-play brackets are well under this (120 Hz = ~8.3 ms; 5 Hz dead-puck
-# phase = 200 ms; jitter adds tens of ms on top).
+# Normal-play brackets are well under this (120 Hz = ~8.3 ms, throttled to
+# REPLAY_FILE_RATE ~33 ms on disk; jitter adds tens of ms on top). Dead-puck
+# phases record only their first frame, so their brackets ARE gaps by design.
 const _GAP_THRESHOLD_S: float = 0.5
 # Dwell scales with playback_speed (uses virtual clock, not wall time) so
 # at 4× the dwell flies by — consistent with the rest of playback where
