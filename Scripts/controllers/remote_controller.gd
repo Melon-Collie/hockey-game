@@ -2,10 +2,17 @@ class_name RemoteController
 extends SkaterController
 
 @export var extrapolation_max_ms: float = 50.0
-# Forward-projection toward host-present, 0..1 (see _interpolate). 0 reproduces
-# the legacy interpolate-in-the-past behaviour; higher values close the chase and
-# body-check contact gap. Tune up by feel; the SmoothDamp stage absorbs the error.
-@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.5
+# Forward-projection toward host-present, 0..1 (see _interpolate). Held at 0:
+# pure interpolate-in-the-past renders remote bodies a FULL interp_delay behind
+# host-present, which is exactly what the lag-comp rewind assumes
+# (LagCompRewind.remote_view_time subtracts the full interp_delay). A non-zero
+# lead renders closer to present but DESYNCS render from that rewind — the host
+# then validates hit/pickup/poke claims against a remote position up to
+# interp_delay/2 behind where the claimant actually saw it, so contested plays
+# miss (worst during jitter, when interp_delay spikes). 0 keeps render == rewind:
+# the standard predict-self / interpolate-remote / server-lag-comp model. The
+# SmoothDamp stage still absorbs correction error.
+@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.0
 # Critically-damped smoothing time (s) for the remote body position. Larger =
 # smoother corrections, more chase lag; smaller = snappier, jumpier.
 @export var position_smooth_time: float = 0.05

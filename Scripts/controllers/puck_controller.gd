@@ -26,10 +26,14 @@ const STICK_LIFT_FORCED_LIFT_S: float = 0.4
 @export var trajectory_soft_blend_threshold: float = 0.3
 @export var position_correction_blend: float = 0.1
 # Loose-puck forward lead toward host-present, 0..1 (see _interpolate), mirroring
-# RemoteController so a chasing skater and the loose puck share a timeline — pickups
-# and pokes line up with where the host has the puck. The SmoothDamp below absorbs
-# the overshoot a led puck produces on bounces (boards/goalie velocity reversals).
-@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.5
+# RemoteController so a chasing skater and the loose puck share a timeline. Held
+# at 0 so the puck renders a FULL interp_delay behind host-present — matching the
+# lag-comp pickup/poke rewind (LagCompRewind.remote_view_time subtracts the full
+# interp_delay). A non-zero lead renders the puck closer to present but makes the
+# host validate grabs against a puck up to interp_delay/2 behind where the
+# claimant reached for it, so pickups miss — badly during jitter, when
+# interp_delay spikes. The SmoothDamp below still absorbs bounce overshoot.
+@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.0
 # Critically-damped smoothing time (s) for the loose-puck position. Slightly above
 # the skater's so bounce overshoot blends out cleanly.
 @export var position_smooth_time: float = 0.06

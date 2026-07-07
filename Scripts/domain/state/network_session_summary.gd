@@ -24,7 +24,7 @@ class_name NetworkSessionSummary extends RefCounted
 
 # Metrics where a LOWER value is the bad direction, so the session minimum is
 # the diagnostic extreme worth keeping (everything else keeps the maximum).
-const MIN_KEYS: Array[String] = ["sim_rate_hz", "reconcile_match_pct"]
+const MIN_KEYS: Array[String] = ["sim_rate_hz", "reconcile_match_pct", "client_fps"]
 
 # Cap on felt-lag markers per session — defense against a tester leaning on the
 # key. Beyond the cap we keep a count so the total is still visible.
