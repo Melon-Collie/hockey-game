@@ -1,37 +1,55 @@
 extends GutTest
 
 # TutorialShotRules — pure detection for the Shooting tutorial. These pin the
-# success criteria the drills depend on: a goal only counts inside the posts and
-# past the line, a target only clears when the puck crosses within its radius,
-# and a quick tap doesn't satisfy the "charged wrist shot" drill.
+# success criteria the drills depend on: a goal only counts inside the posts,
+# under the bar, and past the line (the posts/bar test is shared with live play
+# and penalty shots via GoalDetectionRules.point_in_mouth), a target only clears
+# when the puck crosses within its radius, and a quick tap doesn't satisfy the
+# "charged wrist shot" drill.
 
 const GOAL_LINE_Z: float = -26.65   # team 0 attacks toward -Z
 const ATTACK_DIR: float = -1.0
-const HALF_WIDTH: float = 0.915
+const HALF_WIDTH: float = 0.915     # post centerline
+const NET_H: float = 1.22           # crossbar centerline
+const LOW_Y: float = 0.4            # a puck comfortably under the bar
 
 
 func test_crossed_goal_line_true_past_line_inside_posts() -> void:
 	assert_true(TutorialShotRules.crossed_goal_line(
-			0.0, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH))
+			0.0, LOW_Y, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH, NET_H))
 
 
 func test_crossed_goal_line_false_before_line() -> void:
 	assert_false(TutorialShotRules.crossed_goal_line(
-			0.0, -26.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH))
+			0.0, LOW_Y, -26.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH, NET_H))
 
 
 func test_crossed_goal_line_false_wide_of_post() -> void:
 	assert_false(TutorialShotRules.crossed_goal_line(
-			1.5, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH),
+			1.5, LOW_Y, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH, NET_H),
 			"a puck wide of the posts is not a goal even if past the line")
+
+
+func test_crossed_goal_line_false_on_a_post_graze() -> void:
+	# x = 0.90 is inside the post centerline (0.915) but the disc is on the pipe —
+	# not a goal, the same shared mouth as live play and penalty shots.
+	assert_false(TutorialShotRules.crossed_goal_line(
+			0.90, LOW_Y, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH, NET_H))
+
+
+func test_crossed_goal_line_false_over_the_bar() -> void:
+	# Past the line, inside the posts, but sailing over the crossbar — now gated
+	# (the old width-only tutorial test wrongly counted this).
+	assert_false(TutorialShotRules.crossed_goal_line(
+			0.0, 1.5, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH, NET_H))
 
 
 func test_crossed_goal_line_handles_positive_attack_dir() -> void:
 	# Sanity: the helper is direction-agnostic for the +Z net too.
 	assert_true(TutorialShotRules.crossed_goal_line(
-			0.0, 27.0, 26.65, 1.0, HALF_WIDTH))
+			0.0, LOW_Y, 27.0, 26.65, 1.0, HALF_WIDTH, NET_H))
 	assert_false(TutorialShotRules.crossed_goal_line(
-			0.0, 26.0, 26.65, 1.0, HALF_WIDTH))
+			0.0, LOW_Y, 26.0, 26.65, 1.0, HALF_WIDTH, NET_H))
 
 
 func test_crossed_goal_plane_true_wide_of_post() -> void:
@@ -39,7 +57,7 @@ func test_crossed_goal_plane_true_wide_of_post() -> void:
 	# depth — the drill should retire it rather than wait for it to trickle dead.
 	assert_true(TutorialShotRules.crossed_goal_plane(-27.0, GOAL_LINE_Z, ATTACK_DIR))
 	assert_false(TutorialShotRules.crossed_goal_line(
-			1.5, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH),
+			1.5, LOW_Y, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH, NET_H),
 			"same puck is not a goal — it's wide")
 
 

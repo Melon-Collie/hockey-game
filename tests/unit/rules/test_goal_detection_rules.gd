@@ -11,16 +11,19 @@ extends GutTest
 # are |x| <= 0.820, y <= 1.1725, and "fully across" = center >= 0.065 past the line.
 
 const GOAL_Z: float = GameRules.GOAL_LINE_Z          # 26.65
-const HALF_W: float = 0.885   # POST_HALF_WIDTH (0.915) - POST_RADIUS (0.030)
-const NET_H: float = 1.190    # NET_HEIGHT (1.220) - POST_RADIUS (0.030)
+const HALF_W: float = 0.915   # POST_HALF_WIDTH (post centerline)
+const NET_H: float = 1.220    # NET_HEIGHT (crossbar centerline)
+const POST_R: float = 0.030   # POST_RADIUS
 const R: float = 0.065        # GameRules.PUCK_COLLISION_RADIUS
 const HH: float = 0.0175      # GameRules.PUCK_COLLISION_HALF_HEIGHT
 const ICE_Y: float = 0.0175
+# Effective whole-disc mouth after post + puck insets: |x| <= 0.820, y <= 1.1725.
 
 
 func _crossed(prev: Vector3, curr: Vector3, facing: float = 1.0) -> bool:
 	return GoalDetectionRules.crossed_into_net(
-			prev, curr, GOAL_Z * signf(facing), facing, HALF_W, NET_H, R, HH)
+			prev, curr, GOAL_Z * signf(facing), facing,
+			HALF_W, NET_H, POST_R, R, HH)
 
 
 # ── The good case ─────────────────────────────────────────────────────────────
@@ -135,13 +138,40 @@ func test_approaching_but_short_of_the_line_is_no_goal() -> void:
 
 func test_crossing_at_the_x_clearance_boundary() -> void:
 	# Center exactly on the 0.82 boundary counts (<=); a hair outside does not.
-	var on_edge: float = HALF_W - R  # 0.820
+	var on_edge: float = HALF_W - POST_R - R  # 0.820
 	assert_true(_crossed(
 			Vector3(on_edge, ICE_Y, GOAL_Z - 0.2),
 			Vector3(on_edge, ICE_Y, GOAL_Z + 0.2)))
 	assert_false(_crossed(
 			Vector3(on_edge + 0.01, ICE_Y, GOAL_Z - 0.2),
 			Vector3(on_edge + 0.01, ICE_Y, GOAL_Z + 0.2)))
+
+
+# ── Shared mouth predicate (used by live, penalty, tutorial) ──────────────────
+
+func _in_mouth(x: float, y: float) -> bool:
+	return GoalDetectionRules.point_in_mouth(x, y, HALF_W, NET_H, POST_R, R, HH)
+
+
+func test_point_in_mouth_center() -> void:
+	assert_true(_in_mouth(0.0, ICE_Y))
+
+
+func test_point_in_mouth_rejects_post_graze() -> void:
+	# x = 0.85 is inside the post centerline (0.915) but the disc is on the pipe.
+	assert_false(_in_mouth(0.85, ICE_Y))
+
+
+func test_point_in_mouth_accepts_tight_post_and_in() -> void:
+	assert_true(_in_mouth(0.81, ICE_Y))
+
+
+func test_point_in_mouth_rejects_over_the_bar() -> void:
+	assert_false(_in_mouth(0.0, 1.25))
+
+
+func test_point_in_mouth_accepts_just_under_the_bar() -> void:
+	assert_true(_in_mouth(0.0, 1.17))
 
 
 func test_diagonal_entry_uses_the_interpolated_crossing_point() -> void:

@@ -27,10 +27,11 @@ class_name GoalDetectionRules
 # tunnel straight through.
 #
 # `facing` is +1 for the +Z net, -1 for the -Z net (matches HockeyGoal.facing).
-# `half_width` / `net_height` are the INNER mouth bounds (post inner face, under
-# the crossbar) — pass POST_HALF_WIDTH - POST_RADIUS and NET_HEIGHT - POST_RADIUS.
-# `puck_radius` is the disc's horizontal extent; `puck_half_height` its vertical
-# extent (the puck is angular-locked flat, so these differ — 0.065 vs 0.0175).
+# `half_width` / `net_height` are the post-centerline / crossbar-centerline
+# geometry (POST_HALF_WIDTH, NET_HEIGHT); `post_radius` and the puck extents
+# tighten them to the whole-disc clear opening inside `point_in_mouth`. The puck
+# is angular-locked flat, so its horizontal reach (puck_radius) differs from its
+# vertical reach (puck_half_height) — 0.065 vs 0.0175.
 static func crossed_into_net(
 		prev_center: Vector3,
 		curr_center: Vector3,
@@ -38,6 +39,7 @@ static func crossed_into_net(
 		facing: float,
 		half_width: float,
 		net_height: float,
+		post_radius: float,
 		puck_radius: float,
 		puck_half_height: float) -> bool:
 	# Signed depth past the goal line, positive = deeper into the net.
@@ -62,12 +64,32 @@ static func crossed_into_net(
 		t = clampf((0.0 - prev_depth) / span, 0.0, 1.0)
 	var cross_x: float = prev_center.x + (curr_center.x - prev_center.x) * t
 	var cross_y: float = prev_center.y + (curr_center.y - prev_center.y) * t
-	# Mouth tightened by the puck's own extent: the whole disc must be inside the
-	# posts and under the bar. A puck ringing a post crosses (if it crosses at
-	# all) outside this tightened mouth and is correctly rejected.
-	if absf(cross_x) > half_width - puck_radius:
+	return point_in_mouth(cross_x, cross_y, half_width, net_height,
+			post_radius, puck_radius, puck_half_height)
+
+
+# Whether a puck CENTER at (cross_x, cross_y) on the goal-line plane sits fully
+# inside the mouth: the whole disc between the post INNER faces and under the
+# crossbar pipe. This is THE shared definition of "between the posts, under the
+# bar" — live play (crossed_into_net), penalty shots (PenaltyShotRules.is_goal),
+# and the tutorial (TutorialShotRules.crossed_goal_line) all route through it, so
+# a post graze is never a goal in any mode.
+#
+# `half_width` / `net_height` are the post-centerline / crossbar-centerline
+# geometry; the pipe `post_radius` steps in to the clear opening, and the puck's
+# own extent (`puck_radius` horizontal, `puck_half_height` vertical) tightens it
+# further so no part of the disc is on a pipe.
+static func point_in_mouth(
+		cross_x: float,
+		cross_y: float,
+		half_width: float,
+		net_height: float,
+		post_radius: float,
+		puck_radius: float,
+		puck_half_height: float) -> bool:
+	if absf(cross_x) > half_width - post_radius - puck_radius:
 		return false
-	if cross_y > net_height - puck_half_height:
+	if cross_y > net_height - post_radius - puck_half_height:
 		return false
 	if cross_y < 0.0:
 		return false

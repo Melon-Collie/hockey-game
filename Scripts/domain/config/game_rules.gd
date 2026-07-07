@@ -25,10 +25,11 @@ const OT_DURATION: float           = 4.0 * 60.0   # 240 s per OT period
 # ── Rink Geometry ─────────────────────────────────────────────────────────────
 const GOAL_LINE_Z: float = 26.65  # rink_length / 2 - distance_from_end (30 - 3.35)
 const BLUE_LINE_Z: float = 7.29  # 64 ft from goal line to near edge + 0.15m to center
-const NET_HALF_WIDTH: float = 0.915      # half of goal opening — must match HockeyGoal post positions
+const NET_HALF_WIDTH: float = 0.915      # half of goal opening (post centerline) — must match HockeyGoal post positions
+const NET_POST_RADIUS: float = 0.030     # goal-pipe radius — must match HockeyGoal.POST_RADIUS
 const NET_DEPTH: float = 1.02            # goal depth from goal line to back frame
 const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid wider end)
-const NET_HEIGHT: float = 1.22           # crossbar height — must match HockeyGoal.NET_HEIGHT
+const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
 const NET_PUCK_BUFFER: float = 0.10      # exclusion zone expansion beyond the physical net boundary
 
 # Half the skater's body so the blue line keys off the body EDGE, not its

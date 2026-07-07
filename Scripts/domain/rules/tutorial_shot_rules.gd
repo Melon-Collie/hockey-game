@@ -7,24 +7,35 @@ class_name TutorialShotRules
 # file only answers questions about a single sampled frame.
 
 
-# Whether the puck has crossed the goal line into the net mouth.
+# Whether the puck has crossed the goal line into the net mouth — a real goal.
 #
 # `attack_dir_z` is the sign of the attacking team's shooting direction along Z
 # (the Shooting tutorial is always team 0, attacking toward -Z, so this is -1).
 # A goal counts only when the puck is past the line in the attack direction AND
-# laterally inside the posts (|x| within `half_width`). Height isn't gated here —
-# crossing-height classification is the target test's job.
+# the whole disc is inside the mouth — between the posts, under the bar. The
+# posts/bar test is shared with live play and penalty shots via GoalDetection-
+# Rules.point_in_mouth (`half_width` / `net_height` are the post-centerline /
+# crossbar-centerline geometry, tightened by the pipe radius + puck extent), so a
+# post graze is not a goal here either. (Target drills use `nearest_target`
+# instead — those deliberately reward rough aim and don't call this.)
 static func crossed_goal_line(
 		puck_x: float,
+		puck_y: float,
 		puck_z: float,
 		goal_line_z: float,
 		attack_dir_z: float,
-		half_width: float) -> bool:
-	if absf(puck_x) > half_width:
-		return false
+		half_width: float,
+		net_height: float) -> bool:
 	if attack_dir_z < 0.0:
-		return puck_z <= goal_line_z
-	return puck_z >= goal_line_z
+		if puck_z > goal_line_z:
+			return false
+	elif puck_z < goal_line_z:
+		return false
+	return GoalDetectionRules.point_in_mouth(
+			puck_x, puck_y, half_width, net_height,
+			GameRules.NET_POST_RADIUS,
+			GameRules.PUCK_COLLISION_RADIUS,
+			GameRules.PUCK_COLLISION_HALF_HEIGHT)
 
 
 # Whether the puck has reached the goal-line DEPTH, ignoring width and height.

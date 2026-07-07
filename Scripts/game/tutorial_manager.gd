@@ -1078,7 +1078,8 @@ func _shooting_tick(delta: float) -> void:
 	else:
 		# Plain-goal drills (wrist / slap / finish): a real goal inside the posts.
 		if TutorialShotRules.crossed_goal_line(
-				pos.x, pos.z, _GOAL_PLANE_Z, _ATTACK_DIR_Z, _NET_HALF_WIDTH):
+				pos.x, pos.y, pos.z, _GOAL_PLANE_Z, _ATTACK_DIR_Z,
+				_NET_HALF_WIDTH, GameRules.NET_HEIGHT):
 			_shot_live = false
 			if _last_shot_qualifies:
 				_complete_step()  # scored puck stays in the net through the flash
