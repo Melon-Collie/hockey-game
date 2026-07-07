@@ -473,6 +473,17 @@ func _fold_session_sample() -> void:
 		"reconcile_per_sec": reconcile_per_sec,
 		"reconcile_mag_m": reconcile_magnitude_avg,
 		"reconcile_match_pct": reconcile_match_pct,
+		# Which channel tripped the snap — the attribution for diagnosing residual
+		# reconcile churn on a clean link (pos vs velocity vs upper-body pose). Plus
+		# the phase-mismatch shape: pos_offset_ticks ≈ ±1 = a clean one-tick
+		# capture/integration offset (benign), noisy/large = real non-determinism;
+		# post_replay_residual ≈ 0 = the snap converged, persistent = replay leaves
+		# the body off-server so the offset rebuilds every cycle.
+		"recon_pos_per_sec": recon_pos_per_sec,
+		"recon_vel_per_sec": recon_vel_per_sec,
+		"recon_ubody_per_sec": recon_ubody_per_sec,
+		"recon_pos_offset_ticks": pos_offset_ticks_avg,
+		"recon_post_replay_residual_m": post_replay_residual_avg,
 		"extrapolation_per_sec": extrapolation_per_sec,
 		"extrapolation_pct": extrapolation_pct,
 		"client_fps": client_fps,

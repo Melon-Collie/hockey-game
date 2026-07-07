@@ -91,6 +91,13 @@ select
     (metrics->>'extrapolation_pct_avg')::float        as guessing_ahead_pct_avg,  -- % of frames extrapolating (framerate-independent)
     (metrics->>'extrapolation_pct_max')::float        as guessing_ahead_pct_peak,
     (metrics->>'client_fps_avg')::float               as client_fps_avg,          -- effective render rate; contextualizes the raw per-sec rates
-    (metrics->>'client_fps_min')::float               as client_fps_min
+    (metrics->>'client_fps_min')::float               as client_fps_min,
+    -- Reconcile-cause attribution: which channel drives residual reconcile churn
+    -- on a clean link (see #4 / the trajectory-reconcile diagnosis).
+    (metrics->>'recon_pos_per_sec_avg')::float          as recon_pos_avg,
+    (metrics->>'recon_vel_per_sec_avg')::float          as recon_vel_avg,
+    (metrics->>'recon_ubody_per_sec_avg')::float        as recon_ubody_avg,
+    (metrics->>'recon_pos_offset_ticks_avg')::float     as recon_pos_offset_ticks_avg,
+    (metrics->>'recon_post_replay_residual_m_avg')::float as recon_post_replay_residual_avg
 from public.network_sessions
 where net_sim_active is not true;
