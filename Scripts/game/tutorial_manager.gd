@@ -137,11 +137,12 @@ const _HIGH_TARGETS: Array[Vector2] = [
 	Vector2(-0.62, 0.95), Vector2(0.62, 0.95)]
 const _GOALIE_TARGETS: Array[Vector2] = [
 	Vector2(-0.62, 0.95), Vector2(0.62, 0.95), Vector2(0.0, 0.22)]
-# Hit tolerance (m) around a target's centre. The drill rewards ROUGH aim, not
-# threading the puck through a ring — a shot that reaches the net-plane anywhere
-# within this radius of the bullseye counts, whether or not it technically ends
-# up in the net. Deliberately generous (wider than the bullseye's drawn radius).
-const _TARGET_RADIUS:       float = 0.55
+# Hit tolerance (m) around a target's centre — matched to the bullseye's drawn
+# outer radius (TutorialTargets._BANDS), so hitting the target you SEE gives
+# credit. The change from the old drill is WHAT counts, not how big the target
+# is: credit lands when the puck reaches the net-plane on the bullseye, instead
+# of requiring it to cross cleanly through into the net.
+const _TARGET_RADIUS:       float = 0.34
 const _TARGET_FRONT_OFFSET: float = 0.10  # float the bullseyes just in front of the net
 
 # Team 0 attacks toward -Z; the shot-resolution helpers project puck travel onto
