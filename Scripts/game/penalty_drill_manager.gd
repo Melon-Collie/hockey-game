@@ -105,8 +105,12 @@ func _resolve_attempt(made: bool) -> void:
 	_session.record(made)
 	_stage = Stage.RESULT
 	_result_timer = _RESULT_HOLD
-	# Park the puck out of the way so a settling rebound can't re-trigger.
-	_stash_puck()
+	# Leave the puck where the attempt ended (in the net on a goal, out wide on a
+	# miss) so the shooter actually SEES the result during the hold, instead of it
+	# vanishing off-rink the instant it crosses. Detection is off now (_stage is
+	# RESULT, so _tick_live won't run) and re-pickup is locked, so a settling
+	# rebound can't re-trigger or be re-collected before the next attempt stages.
+	_puck.set_skater_cooldown(_skater, _RESULT_HOLD + 1.0)
 	_hud.flash_result(made, _session.makes, _session.attempts_taken)
 	SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN if made else SoundManager.Sound.FACEOFF_WHISTLE)
 
@@ -195,14 +199,9 @@ func _on_exit() -> void:
 func _give_puck_to_player() -> void:
 	if _puck.carrier != null:
 		_puck.drop()
+	# Clear any pickup lock left from the previous attempt's result hold.
+	_puck.remove_skater_cooldown(_skater)
 	_puck.set_puck_position(Vector3(_skater.global_position.x, _ICE_Y, _skater.global_position.z))
 	_puck.linear_velocity = Vector3.ZERO
 	_puck.set_carrier(_skater)
 	_local_controller.on_puck_picked_up_network()
-
-
-func _stash_puck() -> void:
-	if _puck.carrier != null:
-		_puck.drop()
-	_puck.set_puck_position(Vector3(100.0, _ICE_Y, 100.0))
-	_puck.linear_velocity = Vector3.ZERO

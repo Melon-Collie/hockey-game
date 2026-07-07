@@ -137,8 +137,30 @@ const _HIGH_TARGETS: Array[Vector2] = [
 	Vector2(-0.62, 0.95), Vector2(0.62, 0.95)]
 const _GOALIE_TARGETS: Array[Vector2] = [
 	Vector2(-0.62, 0.95), Vector2(0.62, 0.95), Vector2(0.0, 0.22)]
-const _TARGET_RADIUS:       float = 0.33
-const _TARGET_FRONT_OFFSET: float = 0.10  # float the rings just in front of the net
+# Hit tolerance (m) around a target's centre — matched to the bullseye's drawn
+# outer radius (TutorialTargets._BANDS), so hitting the target you SEE gives
+# credit. The change from the old drill is WHAT counts, not how big the target
+# is: credit lands when the puck reaches the net-plane on the bullseye, instead
+# of requiring it to cross cleanly through into the net.
+const _TARGET_RADIUS:       float = 0.34
+const _TARGET_FRONT_OFFSET: float = 0.10  # float the bullseyes just in front of the net
+
+# Team 0 attacks toward -Z; the shot-resolution helpers project puck travel onto
+# this axis (matches PenaltyShotRules' attack_dir convention).
+const _ATTACK_DIR_Z: float = -1.0
+# Dead-puck detection for a shot in flight. A shot is retired the instant it
+# passes the net (a goal, a wide miss, or over the bar) OR goes dead — stops
+# advancing toward the net for _SHOT_STALL_GRACE after the release settles. This
+# is what makes a wide miss (or a save that stops the puck) reset promptly
+# instead of waiting for the puck to trickle to a halt in the corner.
+const _SHOT_REST_SPEED:  float = 0.5   # m/s of forward progress that counts as stopped
+const _SHOT_STALL_GRACE: float = 0.4   # s stopped before the shot is called dead
+const _SHOT_START_GRACE: float = 0.35  # s after release before the dead-puck rules arm
+const _SHOT_BACKWARD_TOL: float = 0.75 # m the puck may retreat from its furthest point before a rebound is called dead
+const _SHOT_MAX_TIME:    float = 3.0   # s safety cap — retire a wedged shot no matter what
+# Long per-skater pickup cooldown applied at release so the loose puck can't be
+# re-collected mid-flight. Removed the moment the drill hands the puck back.
+const _PICKUP_LOCK_S:    float = 999.0
 # Player's shooting spot for the slot drills, and the deeper start for Finish.
 const _FINISH_START_Z: float = -10.0
 
@@ -146,6 +168,17 @@ var _shooting_active:     bool  = false
 var _last_shot_qualifies: bool  = false   # did the last shot match the drill's required type
 var _wrist_peak_charge:   float = 0.0     # peak normalised wrister charge this aim
 var _shoot_restage_timer: float = -1.0    # countdown to re-stage the puck on the stick
+# Shot-in-flight tracking. Once the player releases, the attempt is LIVE and the
+# puck is locked from re-pickup (via a skater cooldown) until it resolves and
+# restages — so mashing the shoot button can't just re-collect a rebound and
+# keep possession. Resolution watches forward progress toward the net to call a
+# wide/dead miss promptly (see TutorialShotRules.shot_missed).
+var _shot_live:          bool  = false
+var _shot_start_z:       float = 0.0
+var _shot_max_progress:  float = 0.0
+var _shot_last_progress: float = 0.0
+var _shot_stall_time:    float = 0.0
+var _shot_air_time:      float = 0.0
 var _targets:          Array[Vector2] = []
 var _target_hit:       Array[bool]    = []
 var _targets_remaining: int = 0
@@ -911,6 +944,7 @@ func _setup_shooting_drill(start_z: float) -> void:
 	_shoot_restage_timer = -1.0
 	_wrist_peak_charge   = 0.0
 	_last_shot_qualifies = false
+	_shot_live           = false
 	_targets_phase       = 0
 	_target_noun         = "Targets hit"
 	_local_controller.teleport_to(Vector3(0.0, 1.0, start_z), Vector2(0.0, -1.0))
@@ -943,6 +977,19 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 		_:
 			_last_shot_qualifies = false
 	_wrist_peak_charge = 0.0
+	# Arm the in-flight watch and lock the puck from re-pickup until it resolves
+	# and restages. Without the lock, a shot that rebounds off the goalie (or is
+	# fired wide) slides back and the player just skates onto it / mashes the
+	# button to re-collect — "keep clicking and you always have the puck". The
+	# cooldown blocks the loose-puck proximity pickup (see PuckController); it's
+	# cleared in _give_puck_to_player / _teardown_shooting.
+	_shot_live          = true
+	_shot_start_z       = _skater.global_position.z
+	_shot_max_progress  = 0.0
+	_shot_last_progress = 0.0
+	_shot_stall_time    = 0.0
+	_shot_air_time      = 0.0
+	_puck.set_skater_cooldown(_skater, _PICKUP_LOCK_S)
 
 
 # Loft level the active drill expects, or _ELEV_ANY when it doesn't care
@@ -979,9 +1026,11 @@ func _update_elevation_prompt() -> void:
 		_hud.clear_alert()
 
 
-# Per-frame watch/restage loop for shooting drills. Waits out the re-stage
-# beat, then watches the loose puck for a goal-line crossing (handled by
-# _on_puck_crossed_net) or a shot that died short (→ re-stage and try again).
+# Per-frame watch/restage loop for shooting drills. Waits out the re-stage beat,
+# then watches the loose in-flight puck: a target hit / goal resolves the
+# attempt, a wide-or-dead shot retires it and restages. The scored/missed puck
+# is deliberately LEFT in play (not teleported off-rink) so the player watches it
+# reach the net — pickup stays locked so it can't be re-collected in the meantime.
 func _shooting_tick(delta: float) -> void:
 	if _shoot_restage_timer >= 0.0:
 		_shoot_restage_timer -= delta
@@ -991,41 +1040,99 @@ func _shooting_tick(delta: float) -> void:
 		return
 	if _puck.carrier != null:
 		return  # puck on a stick — nothing in flight
+	if not _shot_live:
+		return  # loose puck already resolved; waiting for the restage beat
+
 	var pos: Vector3 = _puck.get_puck_position()
-	if TutorialShotRules.crossed_goal_line(pos.x, pos.z, _GOAL_PLANE_Z, -1.0, _NET_HALF_WIDTH):
-		_on_puck_crossed_net(pos)
-		return
-	# Use the release-aware velocity: the frame a shot fires, the puck's carrier
-	# is already cleared but Jolt hasn't applied the release impulse yet, so raw
-	# linear_velocity reads zero. get_release_velocity() returns the pending shot
-	# vector in that window — without it the just-fired puck reads as "died short"
-	# and gets stashed off-rink on its first airborne frame (looks like it
-	# vanishes the instant you shoot).
-	if _puck.get_release_velocity().length() < 0.3:
-		_stash_and_restage()
-
-
-# Resolve a puck that just crossed the goal line. Target drills clear the
-# nearest lit target; plain-goal drills complete if the shot type matched.
-func _on_puck_crossed_net(pos: Vector3) -> void:
-	if not _targets.is_empty():
-		var idx: int = TutorialShotRules.nearest_target(pos.x, pos.y, _targets, _TARGET_RADIUS)
-		if idx >= 0 and not _target_hit[idx]:
-			_target_hit[idx] = true
-			_targets_remaining -= 1
-			if _target_node != null and is_instance_valid(_target_node):
-				_target_node.hide_target(idx)
-			SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
-			_update_target_objective()
-			if _targets_remaining <= 0 and _on_targets_wave_cleared():
-				_complete_step()
-				return
-		_stash_and_restage()
-		return
-	if _last_shot_qualifies:
-		_complete_step()
+	# Forward progress toward the net, and its rate. A carried puck reports ~0
+	# rigidbody velocity, but by here the puck is loose, so the progress delta is
+	# a clean forward-speed read that also goes negative on a rebound.
+	var progress: float = (pos.z - _shot_start_z) * _ATTACK_DIR_Z
+	var fwd_speed: float = (progress - _shot_last_progress) / delta if delta > 0.0 else 0.0
+	_shot_last_progress = progress
+	_shot_max_progress = maxf(_shot_max_progress, progress)
+	_shot_air_time += delta
+	# Only arm the dead-puck test after the release has settled, so a shot still
+	# leaving the blade isn't read as stalled on its first frames.
+	if _shot_air_time < _SHOT_START_GRACE:
+		_shot_stall_time = 0.0
+	elif fwd_speed <= _SHOT_REST_SPEED:
+		_shot_stall_time += delta
 	else:
-		_stash_and_restage()
+		_shot_stall_time = 0.0
+
+	var crossed_plane: bool = TutorialShotRules.crossed_goal_plane(
+			pos.z, _GOAL_PLANE_Z, _ATTACK_DIR_Z)
+
+	if not _targets.is_empty():
+		# Target drills: reward ROUGH aim. When the puck reaches the net-plane,
+		# credit the nearest bullseye within tolerance — it need not go cleanly in.
+		if crossed_plane:
+			var idx: int = TutorialShotRules.nearest_target(
+					pos.x, pos.y, _targets, _TARGET_RADIUS)
+			if idx >= 0 and not _target_hit[idx]:
+				_on_target_hit(idx)
+				return
+			_resolve_shot_miss()
+			return
+	else:
+		# Plain-goal drills (wrist / slap / finish): a real goal inside the posts.
+		if TutorialShotRules.crossed_goal_line(
+				pos.x, pos.z, _GOAL_PLANE_Z, _ATTACK_DIR_Z, _NET_HALF_WIDTH):
+			_shot_live = false
+			if _last_shot_qualifies:
+				_complete_step()  # scored puck stays in the net through the flash
+			else:
+				_begin_restage()
+			return
+
+	# Rebound off the goalie: the puck retreats past its furthest point back
+	# toward the shooter. Retire it promptly rather than waiting out the stall.
+	if _shot_air_time >= _SHOT_START_GRACE \
+			and progress < _shot_max_progress - _SHOT_BACKWARD_TOL:
+		_resolve_shot_miss()
+		return
+	# Not scored / no target hit yet — retire the shot if it has clearly missed
+	# (crossed the plane wide/high) or gone dead (stopped advancing).
+	if TutorialShotRules.shot_missed(false, pos.z, _GOAL_PLANE_Z, _ATTACK_DIR_Z,
+			fwd_speed, _SHOT_REST_SPEED, _shot_stall_time, _SHOT_STALL_GRACE):
+		_resolve_shot_miss()
+		return
+	# Safety: a wedged puck that never resolves any other way.
+	if _shot_air_time >= _SHOT_MAX_TIME:
+		_resolve_shot_miss()
+
+
+# Credit a hit on target `idx`: pop the bullseye, tick the counter, and either
+# finish the wave/step or restage for the next shot. The puck is left in play so
+# the player sees it reach the net.
+func _on_target_hit(idx: int) -> void:
+	_shot_live = false
+	_target_hit[idx] = true
+	_targets_remaining -= 1
+	if _target_node != null and is_instance_valid(_target_node):
+		_target_node.hide_target(idx)
+	SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
+	_update_target_objective()
+	if _targets_remaining <= 0 and _on_targets_wave_cleared():
+		_complete_step()
+		return
+	_begin_restage()
+
+
+# Retire a shot that missed and schedule the next attempt. The puck is NOT
+# teleported off-rink — it stays where the miss took it (a wide shot slides
+# past, a save trickles away) so the miss reads honestly; pickup stays locked
+# (from the release) so it can't be re-collected before the restage.
+func _resolve_shot_miss() -> void:
+	_shot_live = false
+	_begin_restage()
+
+
+# Schedule handing the puck back to the player after the standard between-attempts
+# beat. Leaves the loose puck visible in the meantime (pickup already locked).
+func _begin_restage() -> void:
+	_shoot_restage_timer = _REATTEMPT_DELAY
 
 
 # Called when the active wave's targets are all cleared. Returns true if the
@@ -1098,6 +1205,10 @@ func _ensure_target_node() -> void:
 func _give_puck_to_player() -> void:
 	if _puck.carrier != null:
 		_puck.drop()
+	# Lift the in-flight pickup lock set at release so the handed-back puck
+	# carries and shoots normally.
+	_puck.remove_skater_cooldown(_skater)
+	_shot_live = false
 	_puck.set_puck_position(Vector3(_skater.global_position.x, _ICE_Y, _skater.global_position.z))
 	_puck.linear_velocity = Vector3.ZERO
 	_puck.set_carrier(_skater)
@@ -1111,18 +1222,16 @@ func _give_puck_to_player() -> void:
 	_local_controller.on_puck_picked_up_network()
 
 
-# Stash the puck off-rink (so a crossing can't re-trigger) and schedule the
-# re-stage that hands it back to the player.
-func _stash_and_restage() -> void:
-	_place_puck(Vector3(100.0, _ICE_Y, 100.0))
-	_shoot_restage_timer = _REATTEMPT_DELAY
-
-
 # Clears all shooting-drill state: targets, the stationary goalie, the watch
 # loop. Safe to call on any step (no-op when no shooting drill is active).
 func _teardown_shooting() -> void:
+	# Release the in-flight pickup lock if a shot was mid-resolution when the
+	# drill tore down (skip / reset / step advance).
+	if _shot_live and is_instance_valid(_skater) and is_instance_valid(_puck):
+		_puck.remove_skater_cooldown(_skater)
 	_shooting_active     = false
 	_shoot_restage_timer = -1.0
+	_shot_live           = false
 	_targets             = []
 	_target_hit          = []
 	_targets_remaining   = 0
