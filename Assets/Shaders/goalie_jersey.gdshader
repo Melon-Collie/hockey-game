@@ -69,10 +69,12 @@ void fragment() {
 
 	// Project text decal onto the back (+Z) face only. The goalie faces -Z
 	// toward the shooter, so +Z is the back of the jersey — where the name
-	// plate and number live. U: 0 at left, 1 at right from behind. V reuses
-	// norm_y (0=collar, 1=waist) which already matches the texture convention.
+	// plate and number live. A viewer standing behind (on +Z, looking -Z) sees
+	// world +X on their right, so face_u must INCREASE with v_obj_x to read
+	// left-to-right; the reversed form mirror-flips the text. V reuses norm_y
+	// (0=collar, 1=waist) which already matches the texture convention.
 	if (v_obj_normal.z > 0.9) {
-		float face_u = (HALF_W - v_obj_x) / (HALF_W * 2.0);
+		float face_u = (v_obj_x + HALF_W) / (HALF_W * 2.0);
 		vec4 decal = texture(text_decal, vec2(face_u, norm_y));
 		col = mix(col, decal.rgb, decal.a);
 	}

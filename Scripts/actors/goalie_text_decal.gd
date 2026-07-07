@@ -10,20 +10,20 @@ extends Node2D
 # text is undistorted after projection.
 #
 # Text is horizontally centred at x = IMG_W / 2 = 128. Vertical positions
-# target the upper-chest region (face_v ≈ 0.20–0.45, i.e. body y ≈ 0.09–0.18 m
-# above body centre) — same nameplate area as the skater jersey.
+# target the upper-chest region (face_v ≈ 0.14–0.60) — the enlarged number
+# reads clearly on the goalie's back in post-goal replays.
 
 const FONT: Font = preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")
 const IMG_W: int = 256
 const IMG_H: int = 320
 const CENTER_X: int = IMG_W / 2
 
-const NAME_FONT_SIZE: int = 32
-const NUMBER_FONT_SIZE: int = 72
-const NAME_Y_TOP: int = 52
+const NAME_FONT_SIZE: int = 40
+const NUMBER_FONT_SIZE: int = 100
+const NAME_Y_TOP: int = 44
 const NUMBER_Y_TOP: int = 92
-const NAME_OUTLINE_PX: int = 4
-const NUMBER_OUTLINE_PX: int = 7
+const NAME_OUTLINE_PX: int = 5
+const NUMBER_OUTLINE_PX: int = 9
 
 var player_name: String = ""
 var jersey_number: int = 0
