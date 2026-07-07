@@ -80,14 +80,17 @@ select
     (metrics->>'reconcile_mag_m_max')::float         as reconcile_mag_peak,
     (metrics->>'reconcile_match_pct_min')::float     as reconcile_match_min,
     (metrics->>'extrapolation_per_sec_max')::float   as guessing_ahead_peak,   -- RAW /s, scales with client fps; prefer the _pct fields below
-    (metrics->>'extrapolation_pct_avg')::float        as guessing_ahead_pct_avg,  -- % of frames extrapolating (framerate-independent)
-    (metrics->>'extrapolation_pct_max')::float        as guessing_ahead_pct_peak,
-    (metrics->>'client_fps_avg')::float               as client_fps_avg,          -- effective render rate; contextualizes the raw per-sec rates
-    (metrics->>'client_fps_min')::float               as client_fps_min,
     (metrics->>'sim_rate_hz_min')::float             as sim_rate_min,        -- host only
     (metrics->>'worst_stall_ms_max')::float          as worst_stall_ms,      -- host only
     (metrics->>'input_starvations_per_sec_max')::float as starvations_peak,  -- host only
     (metrics->>'bytes_recv_per_sec_avg')::float / 1024.0 as down_kbps_avg,
-    (metrics->>'bytes_sent_per_sec_avg')::float / 1024.0 as up_kbps_avg
+    (metrics->>'bytes_sent_per_sec_avg')::float / 1024.0 as up_kbps_avg,
+    -- Appended after the original columns: `create or replace view` can only ADD
+    -- trailing columns, never reorder/rename existing ones (a mid-list insert
+    -- errors with "cannot change name of view column"). Keep new columns here.
+    (metrics->>'extrapolation_pct_avg')::float        as guessing_ahead_pct_avg,  -- % of frames extrapolating (framerate-independent)
+    (metrics->>'extrapolation_pct_max')::float        as guessing_ahead_pct_peak,
+    (metrics->>'client_fps_avg')::float               as client_fps_avg,          -- effective render rate; contextualizes the raw per-sec rates
+    (metrics->>'client_fps_min')::float               as client_fps_min
 from public.network_sessions
 where net_sim_active is not true;
