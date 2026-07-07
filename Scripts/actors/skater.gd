@@ -251,6 +251,22 @@ var _stick_whip_t: float = -1.0        # seconds since whip start; <0 = idle
 var _slap_spike_t: float = -1.0        # seconds into the slap contact spike; <0 = idle
 var _flex_prev_state: int = 0
 var _flex_sent: float = 0.0            # last uniform written (dirty guard)
+
+# ── Cosmetic Rig Dirty-Flag (mirrors Goalie._connectors_pose_changed) ─────────
+# The stick/arm/cuff/sphere rebuild in update_stick_mesh / update_arm_mesh /
+# update_bottom_arm_mesh is a pure function of five marker LOCAL positions — the
+# to_global → IK solve → to_local round-trip cancels the body transform, so the
+# resulting bone local transforms depend only on these markers (and handedness,
+# which re-runs _position_hand_markers on flip). A settled skater (idle, or a
+# converged interpolation/reconcile pose) leaves the markers bit-identical tick
+# over tick, so the whole render-rate rig pass can be skipped. Seeded to NAN so
+# the first frame always rebuilds. Stick flex is time/state-driven, not
+# marker-driven, so it runs every frame regardless (own shader-write guard).
+var _rig_last_top_hand: Vector3 = Vector3(NAN, NAN, NAN)
+var _rig_last_blade: Vector3 = Vector3(NAN, NAN, NAN)
+var _rig_last_shoulder: Vector3 = Vector3(NAN, NAN, NAN)
+var _rig_last_bottom_shoulder: Vector3 = Vector3(NAN, NAN, NAN)
+var _rig_last_bottom_hand: Vector3 = Vector3(NAN, NAN, NAN)
 # Resolves the skater's current team_id by deferring to the registry. Set by
 # PlayerRegistry on spawn so the goalie / VFX / other Skater-holding code can
 # query team affiliation without growing a cached field that has to be
@@ -486,10 +502,38 @@ func _process(delta: float) -> void:
 	# network was already degraded). One pass per rendered frame, after all
 	# physics ticks for the frame have finalized the markers, is exactly the
 	# work the screen consumes.
-	update_stick_mesh()
-	update_arm_mesh()
-	update_bottom_arm_mesh()
+	# Skip the marker-driven rig rebuild when hidden or when nothing moved since
+	# the last frame (dirty-flag, same pattern as Goalie._update_connectors).
+	# Stick flex is time/state-driven — it runs every frame regardless (it has
+	# its own shader-write guard) so a mid-shot whip never freezes on an
+	# otherwise-static pose.
+	if is_visible_in_tree() and _rig_pose_changed():
+		update_stick_mesh()
+		update_arm_mesh()
+		update_bottom_arm_mesh()
 	_update_stick_flex(delta)
+
+
+# Returns true (and refreshes the snapshot) when any marker feeding the cosmetic
+# rig moved since the last rebuild. Exact equality is sufficient: a converged
+# pose reproduces bit-identical local marker positions, and any real motion trips
+# the compare. Handedness flips move the shoulder/hand markers via
+# _position_hand_markers, so they trip it too. Markers are guaranteed non-null by
+# the time _process runs (created in _ready / setup), matching the unguarded
+# access the rig functions already rely on.
+func _rig_pose_changed() -> bool:
+	if top_hand.position == _rig_last_top_hand \
+			and blade.position == _rig_last_blade \
+			and shoulder.position == _rig_last_shoulder \
+			and bottom_shoulder.position == _rig_last_bottom_shoulder \
+			and bottom_hand.position == _rig_last_bottom_hand:
+		return false
+	_rig_last_top_hand = top_hand.position
+	_rig_last_blade = blade.position
+	_rig_last_shoulder = shoulder.position
+	_rig_last_bottom_shoulder = bottom_shoulder.position
+	_rig_last_bottom_hand = bottom_hand.position
+	return true
 
 
 func _physics_process(delta: float) -> void:
