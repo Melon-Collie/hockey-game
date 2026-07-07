@@ -34,6 +34,50 @@ func test_crossed_goal_line_handles_positive_attack_dir() -> void:
 			0.0, 26.0, 26.65, 1.0, HALF_WIDTH))
 
 
+func test_crossed_goal_plane_true_wide_of_post() -> void:
+	# Past the line but wide of the posts: not a goal, but it HAS reached the net
+	# depth — the drill should retire it rather than wait for it to trickle dead.
+	assert_true(TutorialShotRules.crossed_goal_plane(-27.0, GOAL_LINE_Z, ATTACK_DIR))
+	assert_false(TutorialShotRules.crossed_goal_line(
+			1.5, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH),
+			"same puck is not a goal — it's wide")
+
+
+func test_crossed_goal_plane_false_before_line() -> void:
+	assert_false(TutorialShotRules.crossed_goal_plane(-26.0, GOAL_LINE_Z, ATTACK_DIR))
+
+
+func test_shot_missed_when_puck_crosses_plane_wide() -> void:
+	# Wide of the post, still moving fast toward the end boards — retire it now.
+	assert_true(TutorialShotRules.shot_missed(
+			false, -27.0, GOAL_LINE_Z, ATTACK_DIR, 8.0, 0.5, 0.0, 0.4))
+
+
+func test_shot_missed_when_puck_goes_dead() -> void:
+	# Short of the net, stopped for longer than the stall grace: dead puck.
+	assert_true(TutorialShotRules.shot_missed(
+			false, -20.0, GOAL_LINE_Z, ATTACK_DIR, 0.1, 0.5, 0.6, 0.4))
+
+
+func test_shot_missed_when_puck_rebounds_backward() -> void:
+	# A save that kicks the puck back toward the shooter reads as negative
+	# forward speed → dead immediately (no need to wait for it to stop).
+	assert_true(TutorialShotRules.shot_missed(
+			false, -18.0, GOAL_LINE_Z, ATTACK_DIR, -5.0, 0.5, 0.5, 0.4))
+
+
+func test_shot_not_missed_while_still_travelling() -> void:
+	# In front of the net, moving toward it, not stalled: still live.
+	assert_false(TutorialShotRules.shot_missed(
+			false, -20.0, GOAL_LINE_Z, ATTACK_DIR, 12.0, 0.5, 0.0, 0.4))
+
+
+func test_shot_not_missed_when_it_is_a_goal() -> void:
+	# The goal path owns a scored shot — shot_missed never retires it as a miss.
+	assert_false(TutorialShotRules.shot_missed(
+			true, -27.0, GOAL_LINE_Z, ATTACK_DIR, 0.0, 0.5, 5.0, 0.4))
+
+
 func test_nearest_target_returns_index_within_radius() -> void:
 	var targets: Array[Vector2] = [Vector2(-0.62, 0.30), Vector2(0.0, 0.30), Vector2(0.62, 0.30)]
 	assert_eq(TutorialShotRules.nearest_target(0.60, 0.32, targets, 0.33), 2)

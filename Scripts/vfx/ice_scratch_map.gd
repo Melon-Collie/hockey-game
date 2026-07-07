@@ -41,6 +41,9 @@ var _pending_segments: PackedVector2Array = PackedVector2Array()
 # a skater (e.g. a tutorial puppet bot) gets queue_freed before the per-tick
 # cleanup drops its stale entry. Plain int keys sidestep the validator.
 var _prev_state: Dictionary[int, Array] = {}
+# Reusable scratch for stale-key sweep — cleared (capacity kept) each frame so
+# the per-frame cleanup allocates nothing in steady state (see _process).
+var _stale_ids: Array[int] = []
 
 func _init() -> void:
 	# Instantiate the SubViewport up front so get_texture() is safe to call
@@ -111,11 +114,16 @@ func _process(_delta: float) -> void:
 	# freed keys — instance_from_id returns null once the object is gone,
 	# is_instance_valid filters the null, and erase(int) bypasses the
 	# typed-Object-key validator that the previous Dictionary[Skater, Array]
-	# shape ran into.
-	for id: int in _prev_state.keys():
+	# shape ran into. Iterate the dict directly (no per-frame .keys() Array
+	# alloc) and defer erase() to a reusable scratch — mutating a Dictionary
+	# mid-iteration is unsafe.
+	_stale_ids.clear()
+	for id: int in _prev_state:
 		var tracked: Skater = instance_from_id(id) as Skater
 		if not is_instance_valid(tracked):
-			_prev_state.erase(id)
+			_stale_ids.push_back(id)
+	for id: int in _stale_ids:
+		_prev_state.erase(id)
 
 	for node: Node in skaters:
 		var skater: Skater = node as Skater
@@ -146,21 +154,36 @@ func _process(_delta: float) -> void:
 		)
 
 		var id: int = skater.get_instance_id()
-		var prev: Variant = _prev_state.get(id, null)
-		# Always update prev state so next frame has a baseline, even if we
-		# skip painting this frame (ghost / teleport / too-slow).
-		_prev_state[id] = [pos, left_px, right_px]
+		var entry: Array = _prev_state.get(id, null)
+		var had_prev: bool = entry != null
+		# Capture the previous baseline before overwriting it. Always update the
+		# baseline so next frame has one, even if we skip painting this frame
+		# (ghost / teleport / too-slow).
+		var prev_pos: Vector3
+		var prev_left: Vector2
+		var prev_right: Vector2
+		if had_prev:
+			prev_pos = entry[0]
+			prev_left = entry[1]
+			prev_right = entry[2]
+			# Reuse the existing 3-slot Array in place — Vector2/Vector3 are
+			# inline value-type Variants, so this allocates nothing. Replaces the
+			# per-skater, per-frame [pos, left_px, right_px] literal that was the
+			# dominant heap-churn source here.
+			entry[0] = pos
+			entry[1] = left_px
+			entry[2] = right_px
+		else:
+			entry = [pos, left_px, right_px]
+			_prev_state[id] = entry
 
-		if skater.is_ghost or prev == null:
+		if skater.is_ghost or not had_prev:
 			continue
-		var prev_pos: Vector3 = prev[0]
 		if (pos - prev_pos).length() > TELEPORT_THRESHOLD:
 			continue
 		var flat_vel: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 		if flat_vel.length() < TRAIL_MIN_SPEED:
 			continue
-		var prev_left: Vector2 = prev[1]
-		var prev_right: Vector2 = prev[2]
 		_pending_segments.push_back(prev_left)
 		_pending_segments.push_back(left_px)
 		_pending_segments.push_back(prev_right)

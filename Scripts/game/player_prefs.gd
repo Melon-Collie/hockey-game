@@ -98,6 +98,29 @@ const GI_MODE_LABELS: Array[String] = [
 	"SDFGI",
 ]
 
+# Shadow quality. The arena ceiling carries 8 downward SpotLight3Ds
+# (SpotLight3D / SpotLight3D2..8 in RinkArena.tscn), and every shadow-casting
+# light renders a full shadow map each frame — the arena's dominant shadow
+# cost. This picks how many of them cast shadows, trading softer/denser
+# overlapping shadows for fewer per-frame shadow passes. High = all 8 (the
+# shipped look); Medium = 4; Low = 2. The kept lights are spatially interleaved
+# so a reduced count still shadows the whole sheet — see SHADOW_LIGHTS_*.
+const SHADOW_QUALITY_LOW: int = 0
+const SHADOW_QUALITY_MEDIUM: int = 1
+const SHADOW_QUALITY_HIGH: int = 2
+const SHADOW_QUALITY_LABELS: Array[String] = [
+	"Low",
+	"Medium",
+	"High",
+]
+# Which of the 8 name-sorted ceiling spotlights keep shadows at Medium / Low.
+# Indices are into the SpotLight3D..SpotLight3D8 rig sorted by name; idx 0..3 are
+# the x=-6 row (z = -22/-7/7/22), idx 4..7 the x=6 row. The sets interleave both
+# sides and the rink length so the reduced count still lights the whole ice.
+# High keeps them all, so it needs no set. Tweak in-editor to taste.
+const SHADOW_LIGHTS_MEDIUM: PackedInt32Array = [0, 2, 5, 7]
+const SHADOW_LIGHTS_LOW: PackedInt32Array = [1, 6]
+
 # Spectator bowl density. Off hides the stands entirely; Low / High set the
 # terrace row count on ArenaStands.
 const CROWD_DENSITY_OFF: int = 0
@@ -209,6 +232,7 @@ var show_fps: bool = false
 var gamma: float = 1.0
 var color_grade_preset: int = COLOR_GRADE_BROADCAST
 var gi_mode: int = GI_MODE_OFF
+var shadow_quality: int = SHADOW_QUALITY_HIGH
 var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
 var puck_shadow_enabled: bool = true
@@ -392,6 +416,7 @@ func save() -> void:
 	cfg.set_value("video", "gamma", gamma)
 	cfg.set_value("video", "color_grade_preset", color_grade_preset)
 	cfg.set_value("video", "gi_mode", gi_mode)
+	cfg.set_value("video", "shadow_quality", shadow_quality)
 	cfg.set_value("video", "crowd_density", crowd_density)
 	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
 	cfg.set_value("video", "puck_shadow_enabled", puck_shadow_enabled)
@@ -662,6 +687,7 @@ func apply_video() -> void:
 		we.environment.adjustment_enabled = true
 		we.environment.adjustment_color_correction = _build_color_correction_lut(gamma, color_grade_preset)
 		we.environment.sdfgi_enabled = (gi_mode == GI_MODE_SDFGI)
+	_apply_shadow_quality(scene)
 	var stands := scene.find_child("ArenaStands", true, false) as Node3D
 	if stands != null:
 		stands.visible = (crowd_density != CROWD_DENSITY_OFF)
@@ -673,6 +699,26 @@ func apply_video() -> void:
 	var scratch := scene.find_child("IceScratchMap", true, false)
 	if scratch != null and scratch.has_method("set_enabled"):
 		scratch.call("set_enabled", ice_scratches_enabled)
+
+# Enables shadow casting on a subset of the arena's ceiling spotlights per the
+# shadow_quality level. The lights are matched by name ("SpotLight3D*", which
+# excludes the DasherSpotLights) and sorted by name so the SHADOW_LIGHTS_* index
+# sets are stable. High keeps every light casting (the shipped look); Medium/Low
+# disable the rest, cutting per-frame shadow-map passes. Degrades gracefully if
+# the rig's light count ever changes (out-of-range keep indices just no-op).
+func _apply_shadow_quality(scene: Node) -> void:
+	var lights: Array[Node] = scene.find_children("SpotLight3D*", "SpotLight3D", true, false)
+	if lights.is_empty():
+		return
+	lights.sort_custom(func(a: Node, b: Node) -> bool: return String(a.name) < String(b.name))
+	if shadow_quality == SHADOW_QUALITY_HIGH:
+		for node: Node in lights:
+			(node as SpotLight3D).shadow_enabled = true
+		return
+	var keep: PackedInt32Array = SHADOW_LIGHTS_MEDIUM \
+		if shadow_quality == SHADOW_QUALITY_MEDIUM else SHADOW_LIGHTS_LOW
+	for i: int in lights.size():
+		(lights[i] as SpotLight3D).shadow_enabled = keep.has(i)
 
 # Routes window_mode + display_monitor + resolution into DisplayServer. The
 # monitor is selected first so a fullscreen mode lands on the right screen.
@@ -924,6 +970,7 @@ func _load() -> void:
 		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
 		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_NEUTRAL), 0, COLOR_GRADE_LABELS.size() - 1)
 		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
+		shadow_quality = clamp(cfg.get_value("video", "shadow_quality", SHADOW_QUALITY_HIGH), 0, SHADOW_QUALITY_LABELS.size() - 1)
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
 		puck_shadow_enabled = cfg.get_value("video", "puck_shadow_enabled", true)

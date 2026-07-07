@@ -184,6 +184,13 @@ var _state_buffer_manager: StateBufferManager = null
 var _prev_chase_by_team: Dictionary[int, int] = {}
 var _recorder: ReplayRecorder = null
 var _goal_replay_driver: GoalReplayDriver = null
+# Every goal's trimmed clip, kept for the whole match so the post-game screen
+# can loop all of them (the recorder ring only holds the last few seconds).
+var _goal_replay_store: GoalReplayStore = null
+var _post_game_replay_driver: PostGameReplayDriver = null
+# One-shot timer that starts the post-game highlight loop after the final-horn
+# beat plays on the ice, roughly when the HUD reveals the final-score card.
+var _post_game_replay_timer: SceneTreeTimer = null
 var _career_reporter: CareerStatsReporter = null
 var _net_session_reporter: NetworkSessionReporter = null
 var _achievements: AchievementService = null
@@ -1057,6 +1064,12 @@ func _wire_subsystems() -> void:
 	_recorder.setup()
 	_goal_replay_driver = GoalReplayDriver.new()
 	add_child(_goal_replay_driver)
+	# Shadow each goal's clip as its live cinematic starts so the post-game
+	# highlight loop has all of them (the recorder ring only holds ~9 s).
+	_goal_replay_store = GoalReplayStore.new()
+	_goal_replay_driver.replay_started.connect(_on_goal_replay_started_capture)
+	_post_game_replay_driver = PostGameReplayDriver.new()
+	add_child(_post_game_replay_driver)
 
 	_codec = WorldStateCodec.new()
 	_codec.setup(_registry, _state_machine,
@@ -1364,6 +1377,57 @@ func _on_remote_replay_mode_changed(active: bool) -> void:
 		_phase_coord.start_goal_replay()
 	elif _goal_replay_driver != null:
 		_goal_replay_driver.stop()
+
+
+# ── Post-game highlight reel ──────────────────────────────────────────────────
+# Delay from game-over to the highlight loop kicking in — matches the HUD's
+# final-horn beat so the reel is already rolling behind the score card as it
+# fades in (HUD._GAME_OVER_PRESENT_DELAY is 2.2 s).
+const _POST_GAME_REPLAY_DELAY: float = 2.0
+
+# Copy the just-started goal cinematic's clip into the persistent store so the
+# post-game loop can replay every goal, not just the last few in the ring
+# buffer. Fires on every peer (each runs its own GoalReplayDriver).
+func _on_goal_replay_started_capture() -> void:
+	if _goal_replay_store == null or _goal_replay_driver == null:
+		return
+	# Free play is an endless sandbox with no game-over screen — capturing its
+	# goals would just grow the store for a reel that never plays. Drills route
+	# around the cinematic entirely, but guard both for clarity.
+	if NetworkManager.is_free_play_mode or NetworkManager.is_drill_mode():
+		return
+	_goal_replay_store.add(_goal_replay_driver.get_active_clip())
+
+
+func _schedule_post_game_replay() -> void:
+	if _post_game_replay_driver == null or _goal_replay_store == null:
+		return
+	# Nothing scored (0-0) — leave the frozen final frame behind the card.
+	if _goal_replay_store.is_empty():
+		return
+	_post_game_replay_timer = get_tree().create_timer(_POST_GAME_REPLAY_DELAY)
+	_post_game_replay_timer.timeout.connect(_start_post_game_replay)
+
+
+func _start_post_game_replay() -> void:
+	_post_game_replay_timer = null
+	# The game may have been reset (rematch / leave) during the delay.
+	if _post_game_replay_driver == null or _goal_replay_store == null \
+			or _goal_replay_store.is_empty():
+		return
+	if _codec == null or puck == null or _registry == null:
+		return
+	_post_game_replay_driver.setup(_codec, _registry, puck, goalie_controllers)
+	_post_game_replay_driver.start(_goal_replay_store.clips())
+
+
+func _stop_post_game_replay() -> void:
+	if _post_game_replay_timer != null:
+		if _post_game_replay_timer.timeout.is_connected(_start_post_game_replay):
+			_post_game_replay_timer.timeout.disconnect(_start_post_game_replay)
+		_post_game_replay_timer = null
+	if _post_game_replay_driver != null:
+		_post_game_replay_driver.stop()
 
 
 # Recorder-recording gate. During GOAL_CELEBRATION we skip writing to the
@@ -2914,6 +2978,9 @@ func get_star_of_game() -> PlayerRecord:
 
 # ── Scene exit & reset ───────────────────────────────────────────────────────
 func _on_game_over() -> void:
+	# Highlight reel runs for every game-over (online + Play vs Bots), so it's
+	# scheduled before the career/telemetry early-returns below.
+	_schedule_post_game_replay()
 	if _state_machine == null or _registry == null or _career_reporter == null:
 		return
 	var local: PlayerRecord = _registry.get_local()
@@ -3030,6 +3097,11 @@ func on_scene_exit() -> void:
 		_goal_replay_driver.stop()
 		_goal_replay_driver.queue_free()
 		_goal_replay_driver = null
+	_stop_post_game_replay()
+	if _post_game_replay_driver != null:
+		_post_game_replay_driver.queue_free()
+		_post_game_replay_driver = null
+	_goal_replay_store = null
 	_recorder = null
 	_shot_tracker = null
 	_pickup_claim = null
@@ -3092,6 +3164,11 @@ func on_game_reset(new_game_id: String = "") -> void:
 
 
 func _apply_reset() -> void:
+	# End any post-game highlight loop and drop the previous match's clips so a
+	# rematch's screen only reels its own goals.
+	_stop_post_game_replay()
+	if _goal_replay_store != null:
+		_goal_replay_store.clear()
 	_state_machine.reset_all()  # also clears the domain-side reserved_slots mirror
 	# Clear the host-side reservation store in lockstep with the domain mirror.
 	# reset_all() frees the domain slots, so a leftover _reserved_slots entry would
@@ -3704,7 +3781,9 @@ func spawn_tutorial_goalie(live: bool = false) -> void:
 		# Frozen AI never ticks the pose builder, so force the upright stance
 		# once — otherwise the goalie holds the scene-default pose with its pads
 		# together, hiding the five-hole the drill asks the player to shoot at.
-		_tutorial_goalie_controller.snap_to_standing_pose()
+		# open_five_hole widens the pads and lifts the paddle off the ice so the
+		# low centre shot the drill teaches has a real lane through.
+		_tutorial_goalie_controller.snap_to_standing_pose(true)
 	if teams.size() > 1:
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[1].color_slot, 1)
 		_tutorial_goalie.apply_uniform(colors)

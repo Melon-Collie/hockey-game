@@ -443,10 +443,17 @@ func _build_spectators() -> void:
 	var body_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 	body_mmi.multimesh = body_mm
 	body_mmi.name = "SpectatorBodies"
+	# The crowd casts no shadows. Thousands of instances × the 8 shadow-casting
+	# ceiling spotlights (RinkArena.tscn) is the arena's biggest shadow-map cost,
+	# and crowd-on-crowd shadows up in the stands are never visible from the
+	# rink-focused camera — a shimmer at best, given the sway/hop animation.
+	# (The goalie disables shadow casting on its own parts the same way.)
+	body_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(body_mmi)
 	var head_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 	head_mmi.multimesh = head_mm
 	head_mmi.name = "SpectatorHeads"
+	head_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(head_mmi)
 
 
