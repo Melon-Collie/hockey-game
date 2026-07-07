@@ -36,3 +36,22 @@ static func timing_weight(since_drop: float, miss_window_s: float,
 		return min_weight
 	var t: float = clampf(since_drop / miss_window_s, 0.0, 1.0)
 	return lerpf(1.0 + bonus, min_weight, t)
+
+# Draw heading for a bot center: pull toward its own zone, angled to the backhand
+# side so the puck goes to the backhand winger (who lines up back and to that
+# side). back_dir is the horizontal vector from the dot toward the center's own
+# zone (typically skater_pos - dot); is_left_handed picks the backhand side (a
+# lefty's backhand is on their right, a righty's on their left); lateral_bias > 0
+# scales how far off straight-back it angles (0 = straight back). Returns a unit
+# heading, or ZERO if back_dir is degenerate.
+static func bot_draw_heading(back_dir: Vector3, is_left_handed: bool,
+		lateral_bias: float) -> Vector3:
+	var back := Vector3(back_dir.x, 0.0, back_dir.z)
+	if back.length() < 0.0001:
+		return Vector3.ZERO
+	back = back.normalized()
+	# Player's right when facing the dot (rotate forward -90° about +Y).
+	var fwd: Vector3 = -back
+	var right := Vector3(-fwd.z, 0.0, fwd.x)
+	var backhand: Vector3 = right * (1.0 if is_left_handed else -1.0)
+	return (back + backhand * lateral_bias).normalized()

@@ -53,3 +53,33 @@ func test_timing_decays_monotonically_after_drop() -> void:
 func test_zero_miss_window_falls_to_min() -> void:
 	# Degenerate config guard: no window means any post-drop crest is a floor weight.
 	assert_almost_eq(FaceoffDrawRules.timing_weight(0.01, 0.0, 0.4, 0.7), 0.7, 0.001)
+
+# ── bot_draw_heading ─────────────────────────────────────────────────────────
+
+func test_zero_lateral_bias_is_straight_back() -> void:
+	# Team 0 center behind the dot pulls toward +Z (own zone); no angle applied.
+	var h: Vector3 = FaceoffDrawRules.bot_draw_heading(Vector3(0, 0, 2), true, 0.0)
+	assert_almost_eq(h.x, 0.0, 0.001, "no lateral component at zero bias")
+	assert_almost_eq(h.z, 1.0, 0.001, "pure straight-back toward own zone")
+
+func test_lefty_angles_to_backhand_right() -> void:
+	# Team 0 center (own zone +Z, faces -Z). A lefty's backhand is on their right,
+	# which is +X when facing -Z, so the draw carries a +X component.
+	var h: Vector3 = FaceoffDrawRules.bot_draw_heading(Vector3(0, 0, 2), true, 0.7)
+	assert_true(h.x > 0.0, "left-handed center draws to its right (backhand)")
+	assert_true(h.z > 0.0, "still pulls back toward own zone")
+
+func test_righty_angles_to_backhand_left() -> void:
+	var h: Vector3 = FaceoffDrawRules.bot_draw_heading(Vector3(0, 0, 2), false, 0.7)
+	assert_true(h.x < 0.0, "right-handed center draws to its left (backhand)")
+	assert_true(h.z > 0.0, "still pulls back toward own zone")
+
+func test_backhand_side_mirrors_with_team_facing() -> void:
+	# Team 1 center sits on -Z and faces +Z, so its right is -X. A lefty there
+	# draws to -X — the mirror of the team 0 lefty, as it should on the other dot.
+	var h: Vector3 = FaceoffDrawRules.bot_draw_heading(Vector3(0, 0, -2), true, 0.7)
+	assert_true(h.x < 0.0, "team 1 lefty backhand is -X (mirror of team 0)")
+	assert_true(h.z < 0.0, "pulls back toward its own zone (-Z)")
+
+func test_degenerate_back_dir_returns_zero() -> void:
+	assert_eq(FaceoffDrawRules.bot_draw_heading(Vector3.ZERO, true, 0.7), Vector3.ZERO)
