@@ -38,7 +38,8 @@ var _faceoff_input: InputState = InputState.new()
 # to crest just before the drop (bots are movement-locked until then and can't
 # react on the drop like a human), so a well-timed human still out-draws a bot.
 @export var bot_draw_swing_time: float = 0.18   # s before the drop the rip fires
-@export var bot_draw_pull_distance: float = 0.6  # m the target yanks back (rate = dist/time)
+@export var bot_draw_windup_distance: float = 0.3  # m the blade loads on the far side of the puck
+@export var bot_draw_pull_distance: float = 0.6  # m past the dot the rip follows through
 @export var bot_draw_lateral_bias: float = 0.7   # angle off straight-back toward the backhand winger
 
 # ── Scripted mode ─────────────────────────────────────────────────────────────
@@ -188,21 +189,25 @@ func _physics_process(delta: float) -> void:
 	_refresh_debug_label()
 
 
-# Blade-aim target for a center's draw during FACEOFF_PREP. Loads on the dot
-# through the countdown, then in the final bot_draw_swing_time rips the target
-# back toward our own zone and angled to the backhand winger, so the blade sweeps
-# hard that way and crests near the drop. The crest is what the draw buffer
+# Blade-aim target for a center's draw during FACEOFF_PREP. Loads the blade on the
+# side of the puck OPPOSITE the rip (bot_draw_windup_distance past the dot) through
+# the countdown, then in the final bot_draw_swing_time sweeps it through the dot and
+# out the far side, angled back toward our own zone / the backhand winger. Sweeping
+# THROUGH the puck (not just pulling off it) gives the rip a real runway, so the
+# blade is at full pace as it meets the puck; the crest is what the draw buffer
 # carries into the contest.
 func _center_draw_target(dot: Vector3) -> Vector3:
-	var t_drop: float = _game_state.faceoff_time_until_drop()
-	if t_drop > bot_draw_swing_time:
-		return dot  # wind-up: blade loaded on the dot, ready to rip
 	var draw_dir: Vector3 = FaceoffDrawRules.bot_draw_heading(
 			skater.global_position - dot, skater.is_left_handed, bot_draw_lateral_bias)
 	if draw_dir.length() < 0.01:
 		return dot
+	var windup: Vector3 = dot - draw_dir * bot_draw_windup_distance
+	var t_drop: float = _game_state.faceoff_time_until_drop()
+	if t_drop > bot_draw_swing_time:
+		return windup  # loaded on the far side, ready to rip through
+	var follow_through: Vector3 = dot + draw_dir * bot_draw_pull_distance
 	var progress: float = 1.0 - clampf(t_drop / maxf(bot_draw_swing_time, 0.0001), 0.0, 1.0)
-	return dot + draw_dir * (bot_draw_pull_distance * progress)
+	return windup.lerp(follow_through, progress)
 
 
 func _refresh_debug_label() -> void:
