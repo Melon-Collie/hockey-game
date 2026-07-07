@@ -302,6 +302,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the faceoff dot — reach-derived so a Size-1 center (short stick + arms) can
 # play the drop as comfortably as a Size-5 (see faceoff_center_distance).
 @export var faceoff_center_reach_fraction: float = 0.9
+# Faceoff-draw swipe capture (see Skater.begin_draw_tracking / FaceoffDrawRules).
+# A center's blade-swipe crest is retained through the draw so the contest reads
+# the sweep, not the raw tick-at-contact velocity — this is what lets a well-aimed
+# swipe actually land. faceoff_draw_peak_decay (m/s per second) sets how long a
+# crest lingers (~crest/decay seconds), giving a natural pre-roll while forgetting
+# an early guess; faceoff_draw_window auto-ends tracking that long after the drop.
+# The timing REWARD curve lives with the contest resolver (PuckController.contest_
+# draw_timing_*). Read by PhaseCoordinator when it arms the two centers.
+@export var faceoff_draw_peak_decay: float = 12.0
+@export var faceoff_draw_window: float = 1.0
 # Hockey stop — braking hard at speed turns the lower body across the travel
 # direction (legs sideways, torso still on the play) with a scissored,
 # edge-rolled stance. Engagement derives from the velocity-based effort
