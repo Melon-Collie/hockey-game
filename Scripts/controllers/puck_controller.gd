@@ -6,10 +6,26 @@ const POKE_RADIUS: float = GameRules.POKE_RADIUS_M
 # Contested-pickup squirt tuning (see PuckCollisionRules.contested_pickup_velocity).
 # The exit is biased toward the stronger blade and paced by the combined blade
 # momentum, clamped here; a true deadlock pops out sideways at contest_deadlock_speed.
-@export var contest_min_speed: float = 3.0
+# Speeds are kept gentle so faceoffs read as doable rather than a coin flip:
+# winning a draw should deliver the puck toward your target at a pace you can skate
+# onto (contest_min_speed), while a hard committed sweep still snaps it out toward
+# contest_max_speed. A true 50/50 only trickles off the dot (contest_deadlock_speed)
+# and stays a live loose puck to keep battling for, instead of firing to a random side.
+@export var contest_min_speed: float = 1.5
 @export var contest_max_speed: float = 9.0
-@export var contest_deadlock_speed: float = 3.0
+@export var contest_deadlock_speed: float = 1.2
 @export var contest_deadlock_threshold: float = 0.5  # net blade momentum (m/s) below which it's a 50/50
+# Faceoff-draw timing REWARD (see FaceoffDrawRules.timing_weight). When a center is
+# draw-tracking (armed by PhaseCoordinator), its contest momentum is the retained
+# swipe crest (SkaterController.faceoff_draw_*) scaled by this timing weight, so a
+# blade crest landing on the drop wins decisively and a late stab is discounted.
+# contest_draw_timing_bonus is the peak multiplier added for a crest right on the
+# drop; it eases to contest_draw_timing_min_weight by contest_draw_timing_miss_
+# window seconds later. Off a faceoff (board scrambles) no center is tracking, so
+# the contest keeps reading the raw blade velocity — these don't apply.
+@export var contest_draw_timing_bonus: float = 0.4
+@export var contest_draw_timing_miss_window: float = 0.35
+@export var contest_draw_timing_min_weight: float = 0.7
 # Stick-lift geometry: how close the attacker's (lifted) blade must be to the
 # carrier's hand→blade shaft, and how far below it, to hook under and pop it up.
 # Slightly wider than POKE_RADIUS — the lifted blade meets the shaft up off the
@@ -300,13 +316,31 @@ func apply_contested_pickup(skater_a: Skater, skater_b: Skater) -> void:
 	var perp_sign: float = 1.0 if randf() > 0.5 else -1.0
 	var fallback := Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
 	puck.set_puck_velocity(PuckCollisionRules.contested_pickup_velocity(
-			skater_a.blade_world_velocity, skater_b.blade_world_velocity,
+			_contest_blade_velocity(skater_a), _contest_blade_velocity(skater_b),
 			skater_a.get_blade_contact_global(), skater_b.get_blade_contact_global(),
 			contest_min_speed, contest_max_speed,
 			contest_deadlock_speed, contest_deadlock_threshold,
 			perp_sign, fallback))
 	puck.set_skater_cooldown(skater_a, puck.reattach_cooldown)
 	puck.set_skater_cooldown(skater_b, puck.reattach_cooldown)
+	# The draw is resolved — stop retaining the swipe crest so it can't leak into a
+	# later contest (self-expiry backs this up if a center never reaches the puck).
+	skater_a.end_draw_tracking()
+	skater_b.end_draw_tracking()
+
+
+# The blade momentum this skater contributes to a contested pickup. At a faceoff a
+# center is draw-tracking, so we use its retained swipe crest scaled by how well the
+# crest landed on the drop (a well-timed sweep wins decisively; a late stab is
+# discounted). Anywhere else — a board scramble — nobody is tracking, so it's the
+# raw per-tick blade velocity, unchanged.
+func _contest_blade_velocity(skater: Skater) -> Vector3:
+	if not skater.is_draw_tracking():
+		return skater.blade_world_velocity
+	var weight: float = FaceoffDrawRules.timing_weight(
+			skater.draw_since_drop(), contest_draw_timing_miss_window,
+			contest_draw_timing_bonus, contest_draw_timing_min_weight)
+	return skater.draw_peak_velocity() * weight
 
 
 # Scans for a SECOND skater that would corral the same loose puck this tick — the

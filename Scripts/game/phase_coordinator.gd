@@ -154,6 +154,12 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		var reach: float = -1.0
 		if record.team_slot == 0 and record.controller != null:
 			reach = record.controller.faceoff_center_distance()
+			# Arm the center's swipe capture for the draw (host-only). A swing
+			# during the countdown pre-rolls in; the crest feeds the contest.
+			if record.skater != null:
+				record.skater.begin_draw_tracking(
+						record.controller.faceoff_draw_peak_decay,
+						record.controller.faceoff_draw_window)
 		var pos: Vector3 = PlayerRules.faceoff_position(
 				record.team.team_id, record.team_slot, dot, reach)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
@@ -167,6 +173,16 @@ func _enter_faceoff(puck: Puck) -> void:
 	if puck == null:
 		return
 	puck.pickup_locked = false
+	# The drop: stamp it on the centers so the draw's timing bonus is measured from
+	# here (see FaceoffDrawRules.timing_weight). The stamp is the shared host clock
+	# (== local_time on the host) so a remote center's crest, timed by its own
+	# host_timestamp, is judged against the drop in the same base — ping-neutral.
+	# The puck is now live and contests resolve within a few hundred ms.
+	var drop_host_time: float = NetworkManager.estimated_host_time()
+	for peer_id: int in _registry.all():
+		var record: PlayerRecord = _registry.get_record(peer_id)
+		if record.team_slot == 0 and record.skater != null:
+			record.skater.mark_draw_drop(drop_host_time)
 
 
 func on_pickup(_peer_id: int) -> void:

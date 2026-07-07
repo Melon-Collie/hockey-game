@@ -302,6 +302,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the faceoff dot — reach-derived so a Size-1 center (short stick + arms) can
 # play the drop as comfortably as a Size-5 (see faceoff_center_distance).
 @export var faceoff_center_reach_fraction: float = 0.9
+# Faceoff-draw swipe capture (see Skater.begin_draw_tracking / FaceoffDrawRules).
+# A center's blade-swipe crest is retained through the draw so the contest reads
+# the sweep, not the raw tick-at-contact velocity — this is what lets a well-aimed
+# swipe actually land. faceoff_draw_peak_decay (m/s per second) sets how long a
+# crest lingers (~crest/decay seconds), giving a natural pre-roll while forgetting
+# an early guess; faceoff_draw_window auto-ends tracking that long after the drop.
+# The timing REWARD curve lives with the contest resolver (PuckController.contest_
+# draw_timing_*). Read by PhaseCoordinator when it arms the two centers.
+@export var faceoff_draw_peak_decay: float = 12.0
+@export var faceoff_draw_window: float = 1.0
 # Hockey stop — braking hard at speed turns the lower body across the travel
 # direction (legs sideways, torso still on the play) with a scissored,
 # edge-rolled stance. Engagement derives from the velocity-based effort
@@ -953,6 +963,10 @@ func _process_input(input: InputState, delta: float) -> void:
 	# sweep and the body motion. Capturing here in every controller path
 	# (Local / Remote / AI) keeps the test consistent across input sources.
 	skater.capture_prev_blade_contact()
+	# Feed the shared host-clock stamp to an active faceoff draw so its timing is
+	# judged ping-neutrally (see Skater.set_draw_input_time). Only during a draw.
+	if skater.is_draw_tracking():
+		skater.set_draw_input_time(input.host_timestamp)
 	_elevation_level = input.elevation_level
 	skater.elevation_level = _elevation_level
 
@@ -1036,6 +1050,10 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	# Movement is locked — whatever keys are down, nothing is being tried.
 	skater.move_intent = Vector2.ZERO
 	skater.brake_intent = false
+	# Feed the shared host-clock stamp to the faceoff draw (this is the countdown
+	# wind-up/rip path), so its timing is judged ping-neutrally.
+	if skater.is_draw_tracking():
+		skater.set_draw_input_time(input.host_timestamp)
 	_ik.apply_blade_from_mouse(input, delta)
 	# Preserve blade/hand world positions across the upper-body rotation —
 	# same dance as _process_input. Without it the blade slides sideways as

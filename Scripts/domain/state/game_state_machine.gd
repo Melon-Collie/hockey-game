@@ -703,6 +703,14 @@ func is_movement_locked() -> bool:
 func allows_blade_aim_during_lock() -> bool:
 	return PhaseRules.allows_blade_aim_during_lock(current_phase)
 
+# Seconds until the puck drops (FACEOFF_PREP → FACEOFF). Only meaningful during
+# FACEOFF_PREP — 0 otherwise. Host-side (the phase timer only advances on the
+# host); lets a bot center time its draw swing to crest on the drop.
+func faceoff_prep_time_until_drop() -> float:
+	if current_phase != GamePhase.Phase.FACEOFF_PREP:
+		return 0.0
+	return maxf(GameRules.FACEOFF_PREP_DURATION + _prep_extra_time - _phase_timer, 0.0)
+
 # Returns { peer_id: Vector3 } — each player's faceoff position derived from
 # their slot/team around the active dot. PlayerRules.faceoff_position is the
 # single source of truth; we hold no cached positions ourselves.
