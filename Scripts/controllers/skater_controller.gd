@@ -344,6 +344,24 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var sprint_stance_gain: float = 0.18     # extra crouch depth while sprinting
 @export var sprint_lean_deg: float = 7.0         # extra forward trunk pitch while sprinting
 
+# ── Foot Lock (prototype) ─────────────────────────────────────────────────────
+# Conveyor foot-planting on the FORWARD gait — kills the body-frame foot slide
+# ("moonwalk") the pure-FK stride produces at speed. The skate snaps back on a
+# short, fast, PLANTED push (world-locked, the drive that gains speed), then
+# lifts and swings slowly forward through a long recovery. Sagittal IK
+# (LegIKRules) solves the hip/knee to hit the conveyor target; the result is
+# BLENDED over the FK gait by foot_lock_blend, so 0 == today's gait exactly.
+# Forward straight-line only for now — the lock fades out through turns, stops,
+# backskate, shuffle and the faceoff stance. All cosmetic and derived purely
+# from velocity + stride phase, so remotes and reconcile reproduce it with no
+# wire state, same as the rest of the gait. Tune by feel in a local build.
+@export_range(0.0, 1.0) var foot_lock_blend: float = 0.6  # 0 = FK gait, 1 = full conveyor lock
+@export var foot_lock_stride_gain: float = 0.14   # metres of foot reach per m/s (stride length ∝ speed), reach-capped
+@export var foot_lock_reach_max: float = 0.24     # cap on fore/aft foot travel from neutral (leg reach limit)
+@export_range(0.05, 0.5) var foot_lock_push_frac: float = 0.35  # cycle fraction spent in the fast push (< 0.5)
+@export var foot_lock_swing_lift_m: float = 0.05  # how high the recovering skate lifts off the ice
+@export var foot_lock_speed_ref: float = 1.5      # m/s over which the lock fully engages (fades in from a standstill)
+
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
 @export var max_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S

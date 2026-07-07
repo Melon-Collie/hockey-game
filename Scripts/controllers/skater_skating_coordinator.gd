@@ -621,6 +621,56 @@ func apply(delta: float) -> void:
 	l_pitch += -(l_knee + stance_knee) * shin_frac
 	r_pitch += -(r_knee + stance_knee) * shin_frac
 
+	# ── Foot lock (prototype conveyor) ─────────────────────────────────────────
+	# Blend the FORWARD gait's sagittal foot pose toward an ice-tracking conveyor
+	# (LegIKRules): a short PLANTED push (the skate drives back while the edge
+	# holds, so the body gains speed off a fixed point instead of sliding) then a
+	# slow LIFTED recovery. Kills the body-frame foot slide the pure-FK stride
+	# leaves at speed. Engages only skating forward and fades out through every
+	# other read (stop / carve / backpedal / shuffle / faceoff / reversal),
+	# scaled by foot_lock_blend so 0 leaves the gait untouched. The neutral foot
+	# (fore0/down0) is the stance's own rest pose, so this rides the crouch drop
+	# rather than fighting it; only the sagittal pitch/knee are blended, the edge
+	# roll / abduction stay FK. Derived from stride_phase + speed with no latch,
+	# so remotes and reconcile replay it identically.
+	if _controller.foot_lock_blend > 0.001 and fb_w > 0.001 and fwd > 0.0:
+		# Intent gate SATURATES — the lock reaches full authority once the skater
+		# is genuinely striding (intensity ≳ 0.25), not proportionally to speed:
+		# the slip we're killing peaks at cruise, where the raw intensity envelope
+		# (which tracks speed / max_speed) is only mid-range. Still fades to zero
+		# at a standstill / glide so it never injects a stride where there is none.
+		var lock_w: float = _controller.foot_lock_blend * fb_w \
+				* clampf(_intensity * 4.0, 0.0, 1.0) \
+				* clampf(ground_speed / maxf(_controller.foot_lock_speed_ref, 0.001), 0.0, 1.0) \
+				* (1.0 - _stop_blend) * (1.0 - absf(_carve)) * (1.0 - _backpedal) \
+				* (1.0 - absf(_shuffle)) * (1.0 - _faceoff_blend) * (1.0 - rev_amt)
+		if lock_w > 0.001:
+			# Neutral (rest-stance) foot in the sagittal plane — the conveyor
+			# perturbs fore/aft around it and the recovery lifts it off down0.
+			var neutral_knee: float = -stance_knee
+			var fore0: float = _THIGH_LEN * sin(stance_hip) \
+					+ _SHIN_LEN * sin(stance_hip + neutral_knee)
+			var down0: float = _THIGH_LEN * cos(stance_hip) \
+					+ _SHIN_LEN * cos(stance_hip + neutral_knee)
+			# Stride length grows with speed (longer reach, not faster turnover),
+			# capped at the leg's reach so the IK never has to over-extend.
+			var amp: float = clampf(_controller.foot_lock_stride_gain * ground_speed,
+					0.0, _controller.foot_lock_reach_max)
+			var lift: float = _controller.foot_lock_swing_lift_m
+			var pf: float = _controller.foot_lock_push_frac
+			# Legs half a cycle apart; phase-shifted so each foot's fast push
+			# lands on the FK stride's own back-extension (front-most at s = +1).
+			var cl: Vector2 = LegIKRules.foot_conveyor(stride_phase - PI * 0.5, pf)
+			var cr: Vector2 = LegIKRules.foot_conveyor(stride_phase + PI * 0.5, pf)
+			var ik_l: Vector2 = LegIKRules.solve_sagittal(
+					fore0 + amp * cl.x, down0 - lift * cl.y, _THIGH_LEN, _SHIN_LEN)
+			var ik_r: Vector2 = LegIKRules.solve_sagittal(
+					fore0 + amp * cr.x, down0 - lift * cr.y, _THIGH_LEN, _SHIN_LEN)
+			l_pitch = lerpf(l_pitch, ik_l.x, lock_w)
+			l_knee = lerpf(l_knee, ik_l.y, lock_w)
+			r_pitch = lerpf(r_pitch, ik_r.x, lock_w)
+			r_knee = lerpf(r_knee, ik_r.y, lock_w)
+
 	# Body bob: the body rides highest at full extension (|s| = 1) and sits
 	# deepest mid-transfer (s = 0) — a subtle vertical pulse at twice the leg
 	# cadence that sells the weight moving from skate to skate.
