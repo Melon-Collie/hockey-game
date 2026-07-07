@@ -350,6 +350,17 @@ extends Node
 @export var clear_forward_weight: float = 0.5   # out-of-crease bias
 @export var clear_center_deadband: float = 0.15 # m — |puck.x| under this picks the stick side
 @export var clear_cooldown: float = 0.45        # s between sweeps (anti-dribble)
+# Clear-sweep animation. The sweep imparts the clearing velocity instantly; on
+# its own the puck just shoots to the corner with no stick motion, which reads
+# oddly. This is a short timed follow-through — the blocker/paddle swings across
+# in the send direction over `sweep_anim_duration` (sin-eased 0→1→0), so the
+# blade visibly shoves the puck out. Mirrors the lunge animation idiom. Purely
+# cosmetic (the clear velocity is already applied); magnitudes pushed to the pose
+# builder in _configure_collaborators.
+@export var sweep_anim_duration: float = 0.22       # s — swing-through window
+@export var sweep_anim_x_extension: float = 0.14    # m — lateral push toward the send corner at peak
+@export var sweep_anim_z_extension: float = 0.18    # m — forward (out-of-crease) push at peak
+@export var sweep_anim_max_yaw_deg: float = 40.0    # blade yaw toward the send side at peak
 
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
@@ -652,6 +663,12 @@ var _clear_cooldown_timer: float = 0.0
 # only fires once it crosses `clear_dwell`. Resets the moment the puck leaves
 # the clearable window so the goalie doesn't bat live/airborne pucks on contact.
 var _clear_dwell_timer: float = 0.0
+# Clear-sweep follow-through animation. `_sweep_anim_timer` counts down while the
+# blade swings through after a clear fires; `_sweep_anim_dir` is the goalie-local
+# lateral sign of the send (which way the paddle swings). Cosmetic — the clear
+# velocity is applied at trigger time; this only drives the pose.
+var _sweep_anim_timer: float = 0.0
+var _sweep_anim_dir: float = 0.0
 # Blade velocity tracking for the goalie poke check. We need the BLADE's
 # world velocity (not the goalie body's) because the strip-velocity math
 # blends checker blade velocity with carrier blade velocity. Position-
@@ -827,6 +844,8 @@ func snap_to_standing_pose(open_five_hole: bool = false) -> void:
 	_pose_inputs.puck_velocity_est = Vector3.ZERO
 	_pose_inputs.blade_intent_active = false
 	_pose_inputs.lunge_progress = 0.0
+	_pose_inputs.sweep_anim_progress = 0.0
+	_pose_inputs.sweep_anim_dir = 0.0
 	_pose_inputs.paddle_sweep_active = false
 	_pose_inputs.standing_sweep_active = false
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
@@ -879,6 +898,9 @@ func _configure_collaborators() -> void:
 	_pose.standing_sweep_max_yaw_deg = standing_sweep_max_yaw_deg
 	_pose.standing_sweep_y_drop = standing_sweep_y_drop
 	_pose.standing_sweep_x_extension = standing_sweep_x_extension
+	_pose.sweep_anim_x_extension = sweep_anim_x_extension
+	_pose.sweep_anim_z_extension = sweep_anim_z_extension
+	_pose.sweep_anim_max_yaw_deg = sweep_anim_max_yaw_deg
 	_pose.body_lean_max_deg = body_lean_max_deg
 	_pose.body_lean_reach_norm = body_lean_reach_norm
 	_pose.shoulder_pitch_y_neutral = shoulder_pitch_y_neutral
@@ -956,6 +978,8 @@ func reset_to_crease() -> void:
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
 	_clear_cooldown_timer = 0.0
+	_sweep_anim_timer = 0.0
+	_sweep_anim_dir = 0.0
 	_move_speed_current = 0.0
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
@@ -1461,6 +1485,8 @@ func _update_goalie_poke(delta: float) -> void:
 		_prev_blade_world_pos = current_blade_pos
 	_blade_world_velocity = (current_blade_pos - _prev_blade_world_pos) / maxf(delta, 0.0001)
 	_prev_blade_world_pos = current_blade_pos
+	if _sweep_anim_timer > 0.0:
+		_sweep_anim_timer = maxf(_sweep_anim_timer - delta, 0.0)
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
 		# No carrier to strip — instead sweep a loose puck out of the crease.
@@ -1509,6 +1535,13 @@ func _try_clear_loose_puck(delta: float) -> void:
 	puck.apply_goalie_sweep(sweep_vel)
 	_clear_cooldown_timer = clear_cooldown
 	_clear_dwell_timer = 0.0
+	# Kick off the follow-through swing so the blade visibly shoves the puck out.
+	# Send direction in goalie-local X: world +X maps to local -direction_sign.
+	var send_sign: float = signf(sweep_vel.x)
+	if send_sign == 0.0:
+		send_sign = 1.0 if catches_left else -1.0
+	_sweep_anim_dir = send_sign * -_direction_sign
+	_sweep_anim_timer = sweep_anim_duration
 
 
 # True when a loose puck is sitting on the ice in front of the goalie, slow and
@@ -1546,6 +1579,16 @@ func _lunge_progress() -> float:
 	if _lunge_active_timer <= 0.0 or lunge_duration <= 0.0:
 		return 0.0
 	var elapsed: float = clampf((lunge_duration - _lunge_active_timer) / lunge_duration, 0.0, 1.0)
+	return sin(PI * elapsed)
+
+
+# Clear-sweep follow-through, sin-curved 0 → 1 (peak) → 0 over sweep_anim_duration.
+# The pose builder scales the blade swing-through by this value. Same shape as
+# the lunge; distinct timer so a clear and a lunge don't fight over one window.
+func _sweep_anim_progress() -> float:
+	if _sweep_anim_timer <= 0.0 or sweep_anim_duration <= 0.0:
+		return 0.0
+	var elapsed: float = clampf((sweep_anim_duration - _sweep_anim_timer) / sweep_anim_duration, 0.0, 1.0)
 	return sin(PI * elapsed)
 
 
@@ -2041,6 +2084,8 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.puck_velocity_est = _puck_velocity_est
 	_pose_inputs.blade_intent_active = _is_blade_intent_active()
 	_pose_inputs.lunge_progress = _lunge_progress()
+	_pose_inputs.sweep_anim_progress = _sweep_anim_progress()
+	_pose_inputs.sweep_anim_dir = _sweep_anim_dir
 	_pose_inputs.paddle_sweep_active = _is_paddle_sweep_active()
 	_pose_inputs.standing_sweep_active = _is_standing_sweep_active()
 	_set_pad_toe_out_inputs()

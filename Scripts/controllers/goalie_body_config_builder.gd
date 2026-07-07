@@ -104,6 +104,12 @@ var standing_sweep_x_extension: float = 0.06
 var paddle_sweep_max_yaw_deg: float = 65.0
 var paddle_sweep_y_drop: float = 0.08
 var paddle_sweep_x_extension: float = 0.10
+# Clear-sweep follow-through magnitudes (set from controller). The blade swings
+# laterally toward the send corner + forward out of the crease, yawing to face
+# the follow-through, scaled by the sin-curved sweep_anim_progress.
+var sweep_anim_x_extension: float = 0.14
+var sweep_anim_z_extension: float = 0.18
+var sweep_anim_max_yaw_deg: float = 40.0
 
 # Per-tick input bundle. Controller scratches one instance and overwrites all
 # fields before each `build()` call.
@@ -148,6 +154,12 @@ class Inputs:
 	# Lunge progress, sin-curved 0 → 1 → 0 over the active window. Pose
 	# builder scales the forward blocker extension by this value.
 	var lunge_progress: float = 0.0
+	# Clear-sweep follow-through: sin-curved 0 → 1 → 0 while the blade swings
+	# through after a crease clear. `sweep_anim_dir` is the goalie-local lateral
+	# sign of the send; the builder swings the blocker/paddle that way so the clear
+	# reads as a stick shove instead of the puck teleporting to the corner.
+	var sweep_anim_progress: float = 0.0
+	var sweep_anim_dir: float = 0.0
 	# Pre-lean: the goalie reads a charging shot's windup and leans partway
 	# toward where it's currently aimed BEFORE release. `prelean_active` gates
 	# the whole thing; `prelean_directional` means a host-side predicted impact
@@ -185,12 +197,14 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			_set_standing_pose(c, inputs)
 			_apply_blade_intent_for_upright_state(c, inputs)
 			_apply_lunge(c, inputs)
+			_apply_sweep_anim(c, inputs)
 			_apply_prelean(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.READY, GoalieStateMachine.State.RECOVERING:
 			_set_ready_pose(c, inputs)
 			_apply_blade_intent_for_upright_state(c, inputs)
 			_apply_lunge(c, inputs)
+			_apply_sweep_anim(c, inputs)
 			_apply_prelean(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.BUTTERFLY, GoalieStateMachine.State.COILING:
@@ -202,11 +216,13 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			_set_butterfly_pose(c, inputs)
 			_apply_blade_intent_for_down_state(c, inputs)
 			_apply_lunge(c, inputs)
+			_apply_sweep_anim(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.SLIDING:
 			_set_sliding_pose(c, inputs)
 			_apply_blade_intent_for_down_state(c, inputs)
 			_apply_lunge(c, inputs)
+			_apply_sweep_anim(c, inputs)
 			_apply_elevated_shot_reaction(c, inputs)
 		GoalieStateMachine.State.RVH_LEFT:
 			_set_rvh_left_pose(c)
@@ -527,6 +543,27 @@ func _apply_lunge(c: GoalieBodyConfig, inputs: Inputs) -> void:
 			c.blocker_pos.x,
 			c.blocker_pos.y,
 			c.blocker_pos.z - lunge_extension * inputs.lunge_progress)
+
+
+# Clear-sweep follow-through: swing the blocker/paddle assembly laterally toward
+# the send corner (goalie-local `sweep_anim_dir`) and forward out of the crease,
+# yawing the blade to face the follow-through, scaled by the sin-curved progress.
+# Purely cosmetic — the clear velocity was already imparted to the puck; this just
+# makes the stick visibly shove it. Skipped during a shot reaction (the reach owns
+# the blocker). Yaw sign matches the reach convention (local +X → negative yaw).
+func _apply_sweep_anim(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	if inputs.sweep_anim_progress <= 0.0:
+		return
+	if inputs.reacting_to_shot:
+		return
+	var p: float = inputs.sweep_anim_progress
+	var dir: float = inputs.sweep_anim_dir
+	c.blocker_pos = Vector3(
+			c.blocker_pos.x + dir * sweep_anim_x_extension * p,
+			c.blocker_pos.y,
+			c.blocker_pos.z - sweep_anim_z_extension * p)
+	var yaw: float = c.blocker_rot.y - dir * sweep_anim_max_yaw_deg * p
+	c.blocker_rot = Vector3(c.blocker_rot.x, clampf(yaw, -90.0, 90.0), c.blocker_rot.z)
 
 
 # Pre-lean toward a charging shot's predicted impact — a PARTIAL version of the
