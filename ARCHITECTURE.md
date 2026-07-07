@@ -296,7 +296,7 @@ The `GameStateMachine` exposes `is_movement_locked()` — true during `GOAL_SCOR
 | 25 | Netcode audit (40 Hz world state, 75ms interpolation, board collision in replay, goalie reliable RPCs, trajectory prediction exits on contact, pickup timestamp fix, adaptive delay, Hermite puck interpolation, goalie quantization 10→8B) | Done |
 | 26 | Netcode improvements (2-frame client input delay; hard-snap-only puck trajectory reconcile; full body check velocity delta capture via `body_check_impulse_applied`; input queue drain on locked/blocked phases) | Done |
 | 27 | Goalie reactive saves (butterfly drop, glove/blocker reach) + difficulty tiers | Done |
-| 28 | Latency pass I (input batching 60→120 Hz + INPUT_LEAD_SEC 33.3→25 ms; carrier events piggybacked on world-state packets via `SnapshotEventLog` with seq-deduped reliable backstop) | Done |
+| 28 | Latency pass I (input batching 60→120 Hz + INPUT_LEAD_SEC 33.3→25 ms; carrier events piggybacked on world-state packets via `SnapshotEventLog` with seq-deduped reliable backstop; F3 latency-budget readout; dead-puck 5 Hz broadcast downshift removed — constant 120 Hz keeps faceoff prep watchable and interpolation buffers warm across stoppages) | Done |
 
 ---
 

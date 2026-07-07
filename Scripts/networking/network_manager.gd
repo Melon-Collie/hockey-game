@@ -327,8 +327,12 @@ var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
-# (120/120 = 1 at the default rate; 120/5 = 24 during dead-puck phases via
-# set_broadcast_rate). Recomputed by `set_broadcast_rate`. Stall resilience:
+# (120/120 = 1 — every tick). Recomputed by `set_broadcast_rate`, a runtime
+# knob with no callers today (the per-phase dead-puck downshift was removed:
+# stoppage phases are seconds long so it saved nothing meaningful, starved
+# client interpolation buffers right before the faceoff drop, and polluted
+# the client jitter window, which assumes STATE_RATE packet spacing); kept
+# for future congestion response. Stall resilience:
 # on a host main-thread freeze, Godot's physics catch-up fires multiple
 # back-to-back physics ticks. The counter increments in NetworkManager._physics_process
 # for each, and GameManager._physics_process invokes try_broadcast() per tick,
@@ -878,12 +882,15 @@ func _process(delta: float) -> void:
 				_peer_echo_recv_window[pid] = 0
 			_peer_loss_timer = 0.0
 
+# Runtime broadcast-rate knob. No callers today — see the `_state_tick_divisor`
+# doc-comment for why the per-phase dead-puck downshift was removed — retained
+# as the hook for future congestion response.
 func set_broadcast_rate(hz: float) -> void:
 	state_delta = 1.0 / maxf(hz, 1.0)
 	# `_physics_process` fires the broadcast every Nth physics tick. Round to
 	# the nearest integer so any hz that doesn't divide PHYSICS_TICK evenly
 	# (5, 10, 20, 30, 40, 48, 60, 80, 120) still produces the closest cadence.
-	# At 120Hz → 2 ticks; at 5Hz (dead-puck phase) → 48 ticks.
+	# At 120 Hz → every tick; at 60 Hz → every 2nd tick.
 	_state_tick_divisor = maxi(int(round(float(Constants.PHYSICS_TICK) / maxf(hz, 1.0))), 1)
 	# Reset the counter so the new cadence starts cleanly from the next tick.
 	_state_tick_counter = 0

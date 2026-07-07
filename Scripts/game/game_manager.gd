@@ -1118,8 +1118,9 @@ func _wire_subsystems() -> void:
 	_phase_coord = PhaseCoordinator.new()
 	# Every peer captures a goal frame of its own POV at goal time —
 	# host-authoritative on the host; client-interpolated on clients.
-	# Without the client side, client .mreplay files waited up to 200 ms
-	# for the next 5 Hz dead-puck broadcast.
+	# Without the client side, client .mreplay files waited for the next
+	# dead-puck broadcast (up to 200 ms back when dead-puck phases
+	# broadcast at 5 Hz).
 	var force_record: Callable = func() -> void:
 		var goal_frame: PackedByteArray = _codec.encode_world_state()
 		if goal_frame.is_empty():
@@ -1132,9 +1133,9 @@ func _wire_subsystems() -> void:
 		_recorder.record_frame(goal_frame, ts)
 		# Also enqueue to the .mreplay file so the puck-in-net moment
 		# lands in the recording deterministically. Without this, the
-		# next 5 Hz dead-puck broadcast (the only frame `_should_record_to_file`
+		# first dead-puck broadcast (the only frame `_should_record_to_file`
 		# admits while movement-locked) is what represents "goal" in the
-		# file — up to 200 ms after the actual entry. Update
+		# file — a tick after the actual entry. Update
 		# `_last_recorded_phase` so the natural broadcast pipeline doesn't
 		# duplicate this frame on its next tick.
 		if _replay_file_writer != null and _should_record_to_file():
@@ -1165,9 +1166,6 @@ func _wire_subsystems() -> void:
 	_swap_coord.setup(_registry, _state_machine, teams)
 	_swap_coord.stats_updated.connect(stats_updated.emit)
 	_swap_coord.carrier_swap_needs_drop.connect(_drop_puck_if_carried)
-
-	if NetworkManager.is_host:
-		_phase_coord.phase_changed.connect(_on_phase_for_broadcast_rate)
 
 	_telemetry = NetworkTelemetry.new()
 	NetworkTelemetry.instance = _telemetry
@@ -2704,13 +2702,6 @@ func _on_stats_received(data: Array) -> void:
 	if _codec != null:
 		_codec.decode_stats(data)
 	stats_updated.emit()
-
-
-func _on_phase_for_broadcast_rate(new_phase: GamePhase.Phase) -> void:
-	# Drop to 5 Hz during dead-puck phases (goal, prep, end-of-period, game-over)
-	# where positions don't change, recovering ~40% of session broadcast bandwidth.
-	var hz: float = 5.0 if PhaseRules.is_movement_locked(new_phase) else float(Constants.STATE_RATE)
-	NetworkManager.set_broadcast_rate(hz)
 
 
 func _on_remote_phase_changed(new_phase: GamePhase.Phase) -> void:

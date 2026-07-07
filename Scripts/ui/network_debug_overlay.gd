@@ -322,7 +322,7 @@ func _render_host(t: NetworkTelemetry) -> void:
 			var ping := NetworkManager.get_peer_ping_ms(pid)
 			_context(_band(float(ping), 80.0, 150.0), NetworkManager.get_peer_name(pid),
 				"%d ms" % ping, "this client's round-trip to you — distance, not a bug (doesn't flag the header)")
-	_info("Snapshots out", "%.0f/s" % t.world_state_hz, "world states broadcast per tick (varies by phase)")
+	_info("Snapshots out", "%.0f/s" % t.world_state_hz, "world states broadcast per tick (constant 120/s in every phase)")
 	_sim_line(t)
 
 	if not peers.is_empty():
@@ -336,13 +336,14 @@ func _render_host(t: NetworkTelemetry) -> void:
 
 	_section("Host frame health")
 	_frame_health(t)
-	# The host throttles the broadcast rate to 5Hz during dead-puck phases
-	# (faceoff prep, goal, period breaks), so judge the gap against the live
-	# target interval rather than a fixed 120Hz, or every stoppage reads red.
+	# Judge the gap against the live target interval (state_delta) rather than
+	# a hardcoded 120Hz, so a future runtime rate change (congestion response)
+	# doesn't read red by default. The per-phase dead-puck downshift is gone —
+	# the rate is constant across stoppages now.
 	var bcast_target_ms := NetworkManager.state_delta * 1000.0
 	_metric(_band(t.broadcast_interval_p95_ms, bcast_target_ms * 1.4, bcast_target_ms * 2.0),
 		"Broadcast gap", "p95 %.1f ms (target ~%.0f)" % [t.broadcast_interval_p95_ms, bcast_target_ms],
-		"gap between snapshots; tracks the current send rate, which drops to 5Hz during stoppages")
+		"gap between snapshots vs the send-rate target; sustained high = host stalling or send path backed up")
 
 	_info("Bandwidth", "%.1f KB/s up" % (t.bytes_sent_per_sec / 1024.0),
 		"total game data sent to all clients (payload only, excludes Steam framing)")
