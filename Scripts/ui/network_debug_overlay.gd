@@ -167,6 +167,8 @@ func _log_felt_lag() -> void:
 		"jitter_p95_ms": t.jitter_p95_ms,
 		"reconcile_per_sec": t.reconcile_per_sec,
 		"extrapolation_per_sec": t.extrapolation_per_sec,
+		"extrapolation_pct": t.extrapolation_pct,
+		"client_fps": t.client_fps,
 		"buffer_depth_skater": t.buffer_depth_skater,
 		"buffer_depth_puck": t.buffer_depth_puck,
 		"puck_mode": t.puck_mode,
@@ -272,8 +274,8 @@ func _render_client(t: NetworkTelemetry) -> void:
 	if t.reconcile_per_sec > 0.5:
 		_info("Reconcile cause", "pos %.0f · vel %.0f · rot %.0f /s · off %+.1ft · resid %.0fcm" % [t.recon_pos_per_sec, t.recon_vel_per_sec, t.recon_ubody_per_sec, t.pos_offset_ticks_avg, t.post_replay_residual_avg * 100.0],
 			"resid = distance from server AFTER the snap+replay. At rest it should be ~0; if resid stays ~9cm the replay isn't converging (offset rebuilds), vs ~0 = rebuild is in normal physics")
-	_metric(_band(t.extrapolation_per_sec, 1.0, 5.0), "Guessing ahead", "%.1f/s" % t.extrapolation_per_sec,
-		"frames guessed past the buffer; want <1/s. If this climbs on a clumpy link, the jitter cushion is too thin — see Smoothing delay")
+	_metric(_band(t.extrapolation_pct, 25.0, 60.0), "Guessing ahead", "%.0f%% of frames (%.0f fps)" % [t.extrapolation_pct, t.client_fps],
+		"share of rendered frames dead-reckoning a remote past the buffer (framerate-independent). If high on a clumpy link, the jitter cushion is too thin — see Smoothing delay")
 	_info("Puck mode", t.puck_mode, "interp = smoothed, trajectory = predicted flight, carried = on a stick")
 
 	_section("Smoothing buffers")

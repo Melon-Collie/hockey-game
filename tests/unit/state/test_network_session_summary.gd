@@ -47,6 +47,16 @@ func test_reconcile_match_pct_is_a_min_key() -> void:
 	var d := s.to_dict()
 	assert_eq(d["reconcile_match_pct_min"], 70.0)
 
+func test_client_fps_is_a_min_key() -> void:
+	# Lower fps is the bad direction (worse felt smoothness), so keep the session
+	# minimum — the worst framerate a tester dropped to.
+	var s := _make()
+	s.observe({"client_fps": 144.0})
+	s.observe({"client_fps": 58.0})
+	var d := s.to_dict()
+	assert_eq(d["client_fps_min"], 58.0)
+	assert_eq(d["client_fps_max"], 144.0)
+
 func test_duration_counts_observed_windows() -> void:
 	var s := _make()
 	for _i in 5:

@@ -2727,18 +2727,15 @@ func _observe_telemetry() -> void:
 	if _registry != null:
 		for peer_id: int in _registry.all():
 			var r: PlayerRecord = _registry.get_record(peer_id)
-			if r == null:
+			if r == null or r.is_local:
+				# The local skater's reconciles are counted at their per-world-state
+				# source (LocalController.reconcile), not sampled here per rendered
+				# frame — per-frame sampling undercounted on sub-120fps clients.
 				continue
-			if r.is_local:
-				var lc := r.controller as LocalController
-				if lc != null and lc.last_reconcile_error > 0.0:
-					NetworkTelemetry.record_reconcile(lc.last_reconcile_error)
-					lc.last_reconcile_error = 0.0
-			else:
-				var rc := r.controller as RemoteController
-				if rc != null:
-					skater_buf = rc.get_buffer_depth()
-					extrapolating = extrapolating or rc.is_extrapolating
+			var rc := r.controller as RemoteController
+			if rc != null:
+				skater_buf = rc.get_buffer_depth()
+				extrapolating = extrapolating or rc.is_extrapolating
 	var puck_buf: int = puck_controller.get_buffer_depth() if puck_controller != null else 0
 	var goalie_buf: int = 0
 	for gc: GoalieController in goalie_controllers:

@@ -564,6 +564,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		last_reconcile_error = predicted.position.distance_to(server_state.position)
 	else:
 		last_reconcile_error = (skater.global_position - server_state.position).length()
+	# Count the reconcile HERE, at the per-world-state source, not once per rendered
+	# frame in GameManager._observe_telemetry. The old deferral sampled at render
+	# rate, so a client below the ~120 Hz world-state rate coalesced multiple
+	# reconciles into one and undercounted reconcile_per_sec (a 60fps client capped
+	# the metric at 60/s no matter the true rate). This runs only past the snap
+	# threshold, so it still counts real corrections only.
+	NetworkTelemetry.record_reconcile(last_reconcile_error)
 	# Post-replay residual: distance from the server AFTER snap+replay. At rest
 	# (no unacked movement to predict) this should be ~0 if the snap converged; a
 	# persistently non-zero value means the replay itself leaves the body

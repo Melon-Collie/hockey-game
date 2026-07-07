@@ -22,6 +22,12 @@ var _world_state_count: int = 0
 var _input_count: int = 0
 var _reconcile_count: int = 0
 var _extrapolation_count: int = 0
+# Frames observed this window (one per observe_actors call = one per rendered
+# frame). Denominator for the framerate-INDEPENDENT extrapolation fraction:
+# _extrapolation_count is sampled once per rendered frame, so its raw per-sec
+# rate scales with the client's fps (a 240fps client counts 4x a 60fps client
+# for the same buffer health). extrapolation_pct normalizes that out.
+var _frame_count: int = 0
 var _reconcile_mag_sum: float = 0.0
 var _reconcile_mag_n: int = 0
 var _reconcile_lookup_count: int = 0
@@ -100,7 +106,16 @@ var pos_offset_ticks_avg: float = 0.0
 # Distance from the server AFTER snap+replay (m). ~0 = the snap converged; a
 # persistent value = the replay leaves the body off-server (offset rebuilds).
 var post_replay_residual_avg: float = 0.0
-var extrapolation_per_sec: float = 0.0   # bracket extrapolation count; expect <1/s
+var extrapolation_per_sec: float = 0.0   # bracket extrapolation count; expect <1/s. RAW rate — scales with fps.
+# Framerate-independent version of the above: what SHARE of rendered frames were
+# dead-reckoning a remote entity past its buffer. Comparable across machines with
+# different render rates (extrapolation_per_sec is not — see _frame_count). This
+# is the honest "how dry is the remote buffer" signal.
+var extrapolation_pct: float = 0.0       # 0..100
+# Effective client render rate (frames observed / window). Surfaces the framerate
+# that otherwise silently confounds every per-frame-sampled rate here
+# (extrapolation, reconcile). Lower is worse for felt smoothness.
+var client_fps: float = 0.0
 var buffer_depth_skater: int = 0
 var buffer_depth_puck: int = 0
 var buffer_depth_goalie: int = 0
@@ -336,6 +351,7 @@ func observe_actors(skater_buf: int, puck_buf: int, goalie_buf: int, extrapolati
 	buffer_depth_skater = skater_buf
 	buffer_depth_puck = puck_buf
 	buffer_depth_goalie = goalie_buf
+	_frame_count += 1
 	if extrapolating:
 		_extrapolation_count += 1
 
@@ -348,6 +364,8 @@ func tick(delta: float) -> void:
 	input_hz = _input_count / _window_timer
 	reconcile_per_sec = _reconcile_count / _window_timer
 	extrapolation_per_sec = _extrapolation_count / _window_timer
+	client_fps = _frame_count / _window_timer
+	extrapolation_pct = (100.0 * _extrapolation_count / _frame_count) if _frame_count > 0 else 0.0
 	reconcile_magnitude_avg = _reconcile_mag_sum / _reconcile_mag_n if _reconcile_mag_n > 0 else 0.0
 	reconcile_match_pct = (100.0 * _reconcile_match_count / _reconcile_lookup_count) if _reconcile_lookup_count > 0 else 100.0
 	recon_pos_per_sec = _recon_pos_trips / _window_timer
@@ -410,6 +428,7 @@ func tick(delta: float) -> void:
 	_input_count = 0
 	_reconcile_count = 0
 	_extrapolation_count = 0
+	_frame_count = 0
 	_reconcile_mag_sum = 0.0
 	_reconcile_mag_n = 0
 	_reconcile_lookup_count = 0
@@ -455,6 +474,8 @@ func _fold_session_sample() -> void:
 		"reconcile_mag_m": reconcile_magnitude_avg,
 		"reconcile_match_pct": reconcile_match_pct,
 		"extrapolation_per_sec": extrapolation_per_sec,
+		"extrapolation_pct": extrapolation_pct,
+		"client_fps": client_fps,
 		"ooo_drops_per_sec": ooo_drops_per_sec,
 		"bytes_recv_per_sec": bytes_received_per_sec,
 		"bytes_sent_per_sec": bytes_sent_per_sec,
