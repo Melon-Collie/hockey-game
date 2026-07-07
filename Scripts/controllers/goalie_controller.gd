@@ -480,6 +480,11 @@ extends Node
 # clears — `reaction_clear_delay`. The goalie isn't simultaneously
 # processing the resolution AND deciding the next move; gives them a beat.
 @export var reaction_clear_delay: float = 0.25
+# Faster freeze-clear when the puck contacts this goalie (a save) — the read is
+# resolved the instant the save lands, so the goalie lifts the freeze quickly and
+# can track / slide to the rebound instead of standing frozen while it sits in the
+# slot. Non-save resolutions keep the longer `reaction_clear_delay` beat.
+@export var save_clear_delay: float = 0.08
 # Hard cap on `_reacting_to_shot` duration as a safety net only. The freeze
 # is supposed to end via a resolving event; this catches edge cases where
 # none of the expected events fire (puck stuck somewhere, signal missed).
@@ -852,6 +857,7 @@ func _configure_collaborators() -> void:
 	_reaction.arm_reaction_delay = arm_reaction_delay
 	_reaction.max_reaction_duration = max_reaction_duration
 	_reaction.reaction_clear_delay = reaction_clear_delay
+	_reaction.save_clear_delay = save_clear_delay
 	_pose.catches_left = catches_left
 	_pose.rvh_post_pad_angle = rvh_post_pad_angle
 	_pose.pad_toe_out_standing = pad_toe_out_standing_deg
@@ -1030,7 +1036,7 @@ func _update_tracking(delta: float) -> void:
 	# release it mid-flight on shots that arc over the net or drift wide before
 	# any resolving event has fired.
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
-			puck.global_position, puck.linear_velocity,
+			puck.global_position, _loose_puck_velocity(),
 			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
 	if result.is_shot:
 		_reaction.update_impact(result.impact_x, result.impact_y)
@@ -1039,6 +1045,14 @@ func _update_tracking(delta: float) -> void:
 		# are the body reactions the freeze permits).
 		if result.is_low:
 			_reaction.tip_to_low(reaction_delay)
+	elif _puck_past_save_plane():
+		# The shot has passed the save point (or is a weak deflection wandering
+		# off slowly): the read the freeze was holding is resolved. Arm the clear
+		# so a puck that never contacts a resolving surface can't pin the goalie
+		# for the full max_reaction_duration safety cap. Narrow on purpose — a
+		# still-live shot drifting wide but fast holds the freeze until it hits
+		# the boards, exactly as before.
+		_reaction.arm_clear()
 
 # Threat = blend of carrier body and puck. While reacting to a shot in flight
 # the puck IS the threat (no chest to chase — react to trajectory). RVH and
@@ -1111,11 +1125,37 @@ func _update_shot_timer(delta: float) -> void:
 # linear_velocity, reliable on the host. Drives the imminence gate on the
 # low-shot butterfly drop in _update_shot_timer.
 func _puck_time_to_goal_line() -> float:
-	var vz: float = puck.linear_velocity.z
+	var vz: float = _loose_puck_velocity().z
 	if absf(vz) < 0.001:
 		return -1.0
 	var t: float = (_goal_line_z - puck.global_position.z) / vz
 	return t if t > 0.0 else -1.0
+
+# Velocity for reading a LOOSE puck's trajectory (a shot / pass / rebound in
+# flight). On the host the authoritative Jolt `linear_velocity` is the cleanest
+# signal; the position-derived estimate is the fallback for clients (where
+# `linear_velocity` is unreliable during interpolation) and for the brief
+# frozen→dynamic release transition where it momentarily reads zero. Callers must
+# already know the puck is loose — a CARRIED puck is frozen on the blade so its
+# `linear_velocity` is meaningless; those reads use the tracked chest instead.
+# One intentional accessor so the linear_velocity / estimate choice lives in a
+# single place rather than being re-decided (inconsistently) at each call site.
+func _loose_puck_velocity() -> Vector3:
+	if is_server and not puck.linear_velocity.is_zero_approx():
+		return puck.linear_velocity
+	return _puck_velocity_est
+
+# True when a shot the goalie is frozen-reading has resolved without contacting a
+# surface: the puck is past the save point (goal-side of the goalie), or it's a
+# weak deflection loitering slowly and moving away. Lets `_update_tracking` lift
+# the freeze so a puck that never fires a boards/post/net event can't pin the
+# goalie for the full `max_reaction_duration` safety cap.
+func _puck_past_save_plane() -> bool:
+	var perp: float = (puck.global_position.z - goalie.global_position.z) * _direction_sign
+	if perp < 0.0:
+		return true
+	var approaching: float = -_loose_puck_velocity().z * _direction_sign
+	return approaching < 0.0 and puck.linear_velocity.length() < shot_speed_threshold
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 # Entry rules:
@@ -1859,7 +1899,7 @@ func _try_commit_slide() -> void:
 	if puck.get_carrier() != null:
 		coverage_x = _tracked_threat_position.x
 	else:
-		coverage_x = puck.global_position.x + _puck_velocity_est.x * slide_anticipation_time
+		coverage_x = puck.global_position.x + _loose_puck_velocity().x * slide_anticipation_time
 	var lateral_offset: float = coverage_x - _current_x
 	if absf(lateral_offset) <= pad_edge + slide_coverage_buffer:
 		return
@@ -2131,7 +2171,7 @@ func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	if _shot_commit_timer > 0.0:
 		return
 	var cross_vx: float = GoalieBehaviorRules.lateral_puck_velocity_in_slot(
-			puck.global_position, puck.linear_velocity, _goal_line_z,
+			puck.global_position, _loose_puck_velocity(), _goal_line_z,
 			_direction_sign, cross_crease_slot_depth, cross_crease_lateral_ratio)
 	if absf(cross_vx) < cross_crease_min_lateral_speed:
 		return
@@ -2193,15 +2233,18 @@ func _is_reading_shot_threat(carrier: Skater) -> bool:
 # event. The release-event path (`_on_puck_released`) handles the
 # carrier-just-let-go case; this handles everything else.
 func _check_universal_reaction() -> void:
+	# Loose-puck read (this path is gated to a null carrier), so the authoritative
+	# linear_velocity is the right signal — routed through _loose_puck_velocity so
+	# the choice matches every other loose read and degrades to the estimate if the
+	# puck is momentarily frozen→dynamic. `_on_puck_released` still owns the actual
+	# release transition via get_release_velocity().
+	var vel: Vector3 = _loose_puck_velocity()
 	if not GoalieBehaviorRules.should_react_to_puck(
-			puck.global_position, puck.linear_velocity,
+			puck.global_position, vel,
 			_goal_line_z, _goal_center_x, _universal_reaction_cfg):
 		return
-	# Use linear_velocity here (the puck is loose, not in the
-	# Jolt-frozen->dynamic transition that `_on_puck_released` has to
-	# handle via `get_release_velocity`).
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
-			puck.global_position, puck.linear_velocity,
+			puck.global_position, vel,
 			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
 	if not result.is_shot:
 		return
@@ -2313,7 +2356,11 @@ func _on_puck_contact(contacted: Goalie) -> void:
 	if contacted != goalie:
 		return
 	_slide.arm_event_lockout()
-	_reaction.arm_clear()
+	# A save resolves the read immediately — clear the freeze fast so the goalie
+	# can track / slide to the rebound rather than sit frozen while it's in the
+	# slot. (The slide event-lockout above still gives a beat before a committed
+	# slide, so the goalie doesn't chase an unpredictable fresh deflection.)
+	_reaction.arm_clear(true)
 	if is_server and _sm.is_upright():
 		_enter_butterfly()
 

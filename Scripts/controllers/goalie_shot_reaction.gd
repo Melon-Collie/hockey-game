@@ -19,6 +19,12 @@ var reaction_delay: float = 0.13
 var arm_reaction_delay: float = 0.18
 var max_reaction_duration: float = 1.5
 var reaction_clear_delay: float = 0.25
+# Faster clear used when the puck actually CONTACTS this goalie (a save). The
+# read is over the instant the goalie feels the save, so the freeze lifts quickly
+# and the goalie can play the rebound — a slow full `reaction_clear_delay` left
+# the goalie frozen in the crease while a rebound sat in the slot. Non-save
+# resolutions (boards / post / net / pickup) keep the deliberate longer beat.
+var save_clear_delay: float = 0.08
 
 # ── Runtime state ────────────────────────────────────────────────────────────
 var reacting: bool = false
@@ -114,12 +120,14 @@ func tick_freeze(delta: float, carrier_present: bool) -> bool:
 
 # Arm the post-event clear timer (puck contact / boards / post / net hit).
 # No-op if not currently reacting, or if the clear timer is already armed
-# (first event wins).
-func arm_clear() -> void:
+# (first event wins). `fast` uses the shorter `save_clear_delay` — passed by the
+# save-contact path so the goalie unfreezes quickly to play the rebound; other
+# resolving events keep the longer `reaction_clear_delay` beat.
+func arm_clear(fast: bool = false) -> void:
 	if not reacting:
 		return
 	if clear_timer < 0.0:
-		clear_timer = reaction_clear_delay
+		clear_timer = save_clear_delay if fast else reaction_clear_delay
 
 # Centralised reaction-clear. Every host-side cleanup path goes through here.
 func finish() -> void:
