@@ -26,6 +26,7 @@ var _show_fps_check: CheckButton = null
 var _gamma_slider: HSlider = null
 var _color_grade_btn: OptionButton = null
 var _gi_mode_btn: OptionButton = null
+var _shadow_quality_btn: OptionButton = null
 var _crowd_density_btn: OptionButton = null
 var _ice_scratches_check: CheckButton = null
 var _puck_shadow_check: CheckButton = null
@@ -158,6 +159,7 @@ func _snapshot() -> Dictionary:
 		"gamma": PlayerPrefs.gamma,
 		"color_grade_preset": PlayerPrefs.color_grade_preset,
 		"gi_mode": PlayerPrefs.gi_mode,
+		"shadow_quality": PlayerPrefs.shadow_quality,
 		"crowd_density": PlayerPrefs.crowd_density,
 		"ice_scratches_enabled": PlayerPrefs.ice_scratches_enabled,
 		"puck_shadow_enabled": PlayerPrefs.puck_shadow_enabled,
@@ -203,6 +205,7 @@ func _read_controls() -> Dictionary:
 		"gamma": _gamma_slider.value,
 		"color_grade_preset": _color_grade_btn.selected,
 		"gi_mode": _gi_mode_btn.selected,
+		"shadow_quality": _shadow_quality_btn.selected,
 		"crowd_density": _crowd_density_btn.selected,
 		"ice_scratches_enabled": _ice_scratches_check.button_pressed,
 		"puck_shadow_enabled": _puck_shadow_check.button_pressed,
@@ -431,6 +434,15 @@ func _build_video_tab() -> Control:
 	_gi_mode_btn.selected = PlayerPrefs.gi_mode
 	_gi_mode_btn.item_selected.connect(_on_gi_mode_selected)
 	box.add_child(_field_row("Global Illumination", _gi_mode_btn))
+
+	_shadow_quality_btn = OptionButton.new()
+	_shadow_quality_btn.custom_minimum_size = Vector2(180, 40)
+	_shadow_quality_btn.add_theme_font_size_override("font_size", 15)
+	for i: int in PlayerPrefs.SHADOW_QUALITY_LABELS.size():
+		_shadow_quality_btn.add_item(PlayerPrefs.SHADOW_QUALITY_LABELS[i], i)
+	_shadow_quality_btn.selected = PlayerPrefs.shadow_quality
+	_shadow_quality_btn.item_selected.connect(_on_shadow_quality_selected)
+	box.add_child(_field_row("Shadow Quality", _shadow_quality_btn))
 
 	_crowd_density_btn = OptionButton.new()
 	_crowd_density_btn.custom_minimum_size = Vector2(180, 40)
@@ -937,6 +949,9 @@ func _update_aa_compatibility() -> void:
 func _on_gi_mode_selected(_idx: int) -> void:
 	_update_apply_state()
 
+func _on_shadow_quality_selected(_idx: int) -> void:
+	_update_apply_state()
+
 func _on_crowd_density_selected(_idx: int) -> void:
 	_update_apply_state()
 
@@ -1199,6 +1214,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.gamma = c.gamma
 	PlayerPrefs.color_grade_preset = c.color_grade_preset
 	PlayerPrefs.gi_mode = c.gi_mode
+	PlayerPrefs.shadow_quality = c.shadow_quality
 	PlayerPrefs.crowd_density = c.crowd_density
 	PlayerPrefs.ice_scratches_enabled = c.ice_scratches_enabled
 	PlayerPrefs.puck_shadow_enabled = c.puck_shadow_enabled
@@ -1298,6 +1314,7 @@ func _defaults() -> Dictionary:
 		"gamma": 1.0,
 		"color_grade_preset": PlayerPrefs.COLOR_GRADE_BROADCAST,
 		"gi_mode": PlayerPrefs.GI_MODE_OFF,
+		"shadow_quality": PlayerPrefs.SHADOW_QUALITY_HIGH,
 		"crowd_density": PlayerPrefs.CROWD_DENSITY_HIGH,
 		"ice_scratches_enabled": true,
 		"puck_shadow_enabled": true,
@@ -1349,6 +1366,8 @@ func _apply_values_to_controls(v: Dictionary) -> void:
 		_color_grade_btn.selected = v.color_grade_preset
 	if _gi_mode_btn != null:
 		_gi_mode_btn.selected = v.gi_mode
+	if _shadow_quality_btn != null:
+		_shadow_quality_btn.selected = v.shadow_quality
 	if _crowd_density_btn != null:
 		_crowd_density_btn.selected = v.crowd_density
 	if _ice_scratches_check != null:
