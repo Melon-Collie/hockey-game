@@ -7,7 +7,11 @@ const _DIM     := MenuStyle.BROADCAST_DIM
 const _HEADER  := MenuStyle.BROADCAST_DIM
 const _SEP     := MenuStyle.BROADCAST_SEP
 
-const _POSITION_LABEL := ["C", "L", "R"]   # indexed by team_slot
+# Away's slot 1/2 are its own RW/LW — the mirror image of home's LW/RW in the
+# same slots, since the away team attacks the opposite direction. See
+# slot_grid_panel.gd's _DISPLAY_ORDER comment for the full explanation.
+const _POSITION_LABEL      := ["C", "L", "R"]   # indexed by team_slot, home
+const _POSITION_LABEL_AWAY := ["C", "R", "L"]   # indexed by team_slot, away
 
 var _rows_container: VBoxContainer = null
 var _period_score_labels: Array = []  # [team_id][period_index, then total]
@@ -85,9 +89,7 @@ func _on_game_reset() -> void:
 	visible = false
 
 # Period-summary stripe color for a team, matching the scorebug's rule so the
-# two surfaces agree: home wears its primary, away wears whichever of its accents
-# is farthest from the home primary. Both sit against the dark panel here (white
-# label beside a color band), so home-primary reads cleanly.
+# two surfaces agree: always the team's own primary.
 func _period_stripe(team_id: int) -> Color:
 	var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(
 			_team_color_slot(0), _team_color_slot(1))
@@ -296,7 +298,8 @@ func _refresh() -> void:
 		var pts := s.goals + s.assists
 		var display_name: String = record.display_name()
 		var ping_str: String = _ping_label(record.peer_id)
-		var pos_str: String = _POSITION_LABEL[record.team_slot]
+		var labels: Array = _POSITION_LABEL_AWAY if record.team.team_id == 1 else _POSITION_LABEL
+		var pos_str: String = labels[record.team_slot]
 		var num_str: String = str(record.jersey_number)
 		_fill_row(row,
 			[ping_str, num_str, pos_str, display_name, str(s.goals), str(s.assists), str(pts), str(s.shots_on_goal), str(s.hits), str(s.shots_blocked)],

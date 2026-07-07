@@ -1058,8 +1058,8 @@
     },
     {
       "name": "Watermelon",
-      "primary": "#E8455A",
-      "secondary": "#21643A",
+      "primary": "#21643A",
+      "secondary": "#E8455A",
       "light": "#FFFFFF",
       "home": {
         "helmet": "#21643A",

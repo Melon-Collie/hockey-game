@@ -36,10 +36,17 @@ signal slot_selected(team_id: int, slot: int)
 signal bot_toggled(team_id: int, slot: int, is_bot: bool)
 signal kick_requested(peer_id: int, player_name: String)
 
-# Column display order: Left Wing (slot 1), Center (slot 0), Right Wing (slot 2)
+# Column display order: Left Wing (slot 1), Center (slot 0), Right Wing (slot 2).
+# Both team rows share this physical column layout so the grid reads like a
+# faceoff lineup (wingers facing each other across the dot) — but since the
+# away team attacks the opposite direction, its slot 1/2 are its own RW/LW,
+# the mirror image of home's LW/RW in the same columns. The _AWAY label sets
+# reflect that; the slot→column layout itself (_DISPLAY_ORDER) does not change.
 const _DISPLAY_ORDER  := [1, 0, 2]
-const _POSITION_LABEL := ["C", "L", "R"]   # indexed by slot
-const _POSITION_HEADER := ["LEFT WING", "CENTER", "RIGHT WING"]
+const _POSITION_LABEL      := ["C", "L", "R"]              # indexed by slot, home
+const _POSITION_LABEL_AWAY := ["C", "R", "L"]               # indexed by slot, away
+const _POSITION_HEADER      := ["LEFT WING", "CENTER", "RIGHT WING"]   # indexed by col, home
+const _POSITION_HEADER_AWAY := ["RIGHT WING", "CENTER", "LEFT WING"]   # indexed by col, away
 
 const _CARD_HEIGHT: int = 96
 const _STRIPE_WIDTH: int = 6
@@ -108,27 +115,13 @@ func _build_grid() -> void:
 	add_theme_constant_override("separation", 8)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	# Column header row: AWAY/HOME spacer + LW / C / RW labels.
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 12)
-	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_child(header)
-
-	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(56, 0)
-	header.add_child(spacer)
-
-	for col: int in _DISPLAY_ORDER.size():
-		var lbl := Label.new()
-		lbl.text = _POSITION_HEADER[col]
-		lbl.add_theme_font_size_override("font_size", 11)
-		lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		header.add_child(lbl)
-
 	# Away on top (team 1), Home on bottom (team 0) — matches rink perspective.
+	# Each row gets its own column header (LW/C/RW vs. the away-mirrored
+	# RW/C/LW) since the two teams' true wing labels are swapped in the same
+	# physical columns — see the _DISPLAY_ORDER comment above.
 	for team_id: int in [1, 0]:
+		_build_header(team_id)
+
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 12)
 		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -162,6 +155,29 @@ func _build_grid() -> void:
 		for col: int in _DISPLAY_ORDER.size():
 			var s: int = _DISPLAY_ORDER[col]
 			row.add_child(_build_card(team_id, s))
+
+
+# Column header row for one team: AWAY/HOME spacer + LW / C / RW labels (or
+# the away-mirrored RW / C / LW), matching that row's card badges.
+func _build_header(team_id: int) -> void:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_child(header)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(56, 0)
+	header.add_child(spacer)
+
+	var labels: Array = _POSITION_HEADER_AWAY if team_id == 1 else _POSITION_HEADER
+	for col: int in _DISPLAY_ORDER.size():
+		var lbl := Label.new()
+		lbl.text = labels[col]
+		lbl.add_theme_font_size_override("font_size", 11)
+		lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		header.add_child(lbl)
 
 
 # Build a single slot card. The card root is a PanelContainer whose stylebox
@@ -280,7 +296,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	_right_cols[team_id][slot] = right_col
 
 	var pos_lbl := Label.new()
-	pos_lbl.text = _POSITION_LABEL[slot]
+	pos_lbl.text = _POSITION_LABEL_AWAY[slot] if team_id == 1 else _POSITION_LABEL[slot]
 	pos_lbl.add_theme_font_size_override("font_size", 13)
 	pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	pos_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
