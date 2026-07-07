@@ -17,7 +17,9 @@ class ShotResult:
 # Elevation is a player-selected LOFT LEVEL (scroll wheel), not a computed arc:
 #   0 = FLAT  — puck stays on the ice
 #   1 = LOW   — a saucer flip (~0.25 m apex): clears stick blades, lands and slides
-#   2 = HIGH  — a rising shot (~1.5 m apex): top-corner height, can miss over the bar
+#   2 = HIGH  — a rising shot (~1.22 m apex): apex sits at the crossbar, so it
+#               only clears the bar while still rising (miss high only on a soft
+#               floaty loft from range, not an easy sail-over from the slot)
 # Each level maps to a FIXED VERTICAL LAUNCH SPEED (m/s), independent of shot
 # power and shot direction. Where the puck sits on its arc when it reaches the
 # net is therefore emergent from loft × power × distance — range and charge
@@ -34,7 +36,7 @@ const ELEVATION_HIGH: int = 2
 # Cap on the pre-normalization Y/XZ ratio of a lofted direction: 1.0 = 45°.
 # This is a degenerate-input guard, not a feel lever — it stops y from running
 # toward vertical as power approaches the level's launch speed. At 45° it
-# binds only below ~7.6 m/s at HIGH loft, which no legit release reaches (the
+# binds only below ~6.9 m/s at HIGH loft, which no legit release reaches (the
 # softest is a min-charge backhand wrister ~8.4 m/s), so every real shot gets
 # its full level v_y and steep soft flips (chip over a sprawled goalie, a
 # rainbow flip clear) stay possible. Keeps every legit direction under
