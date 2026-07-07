@@ -48,6 +48,12 @@ func test_is_goal_false_over_crossbar() -> void:
 	assert_false(PenaltyShotRules.is_goal(0.0, 1.5, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH, 1.22))
 
 
+func test_is_goal_false_on_a_post_graze() -> void:
+	# x = 0.90 is inside the post centerline (0.915) but the disc is on the pipe —
+	# not a goal, same shared mouth as live play (GoalDetectionRules.point_in_mouth).
+	assert_false(PenaltyShotRules.is_goal(0.90, 0.4, -27.0, GOAL_LINE_Z, ATTACK_DIR, HALF_WIDTH, 1.22))
+
+
 # ── classify ──────────────────────────────────────────────────────────────────
 
 func test_classify_live_while_skating_in() -> void:

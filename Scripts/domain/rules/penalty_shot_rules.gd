@@ -70,6 +70,11 @@ static func crossed_goal_plane(puck_z: float, goal_line_z: float, attack_dir_z: 
 
 
 # Whether the puck is a goal: across the line, inside the posts, under the bar.
+# The "between the posts, under the bar" test is shared with live play and the
+# tutorial via GoalDetectionRules.point_in_mouth, so `half_width` / `crossbar_
+# height` are the post-centerline / crossbar-centerline geometry and the pipe
+# radius + puck extent tighten them to the whole-disc clear opening — a puck
+# grazing the inside of a post is not a goal here, exactly as in a live game.
 static func is_goal(
 		puck_x: float,
 		puck_y: float,
@@ -80,7 +85,11 @@ static func is_goal(
 		crossbar_height: float) -> bool:
 	if not crossed_goal_plane(puck_z, goal_line_z, attack_dir_z):
 		return false
-	return absf(puck_x) <= half_width and puck_y <= crossbar_height
+	return GoalDetectionRules.point_in_mouth(
+			puck_x, puck_y, half_width, crossbar_height,
+			GameRules.NET_POST_RADIUS,
+			GameRules.PUCK_COLLISION_RADIUS,
+			GameRules.PUCK_COLLISION_HALF_HEIGHT)
 
 
 # Classify one sampled frame of an attempt.

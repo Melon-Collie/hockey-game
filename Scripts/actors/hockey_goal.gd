@@ -116,7 +116,6 @@ func _rebuild() -> void:
 	_build_crown(goal_z)
 	_build_back_support(goal_z)
 	_build_net_panels(goal_z)
-	_build_goal_sensor(goal_z)
 
 	var goal_vfx := GoalVFX.new()
 	goal_vfx.name = "GoalVFX"
@@ -606,30 +605,25 @@ func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	_net_body.add_child(col)
 
 
-func _build_goal_sensor(goal_z: float) -> void:
-	var area := Area3D.new()
-	area.collision_layer = 0
-	area.collision_mask = Constants.LAYER_PUCK
-	area.monitoring = true
-
-	var shape := CollisionShape3D.new()
-	var box := BoxShape3D.new()
-	var inner_hw: float = POST_HALF_WIDTH - POST_RADIUS
-	var inner_height: float = NET_HEIGHT - POST_RADIUS
-	var sensor_depth: float = TOP_DEPTH - POST_RADIUS  # use shorter dim to stay well inside
-	box.size = Vector3(inner_hw * 2.0, inner_height, sensor_depth)
-	shape.shape = box
-	area.add_child(shape)
-	area.position = Vector3(0.0, inner_height / 2.0, goal_z + facing * (sensor_depth / 2.0))
-	add_child(area)
-	area.body_entered.connect(_on_goal_area_body_entered)
-
-
-func _on_goal_area_body_entered(body: Node3D) -> void:
-	if body is Puck:
-		var vel: Vector3 = (body as Puck).linear_velocity
-		if vel.z * float(facing) > 0.0:
-			goal_scored.emit()
+# Host-only swept goal test, driven once per physics tick by GameManager (which
+# owns the authoritative puck and its previous position). Emits `goal_scored` the
+# tick the WHOLE puck crosses the goal line inside the mouth. Replaces the old
+# Area3D `body_entered` sensor: an Area3D fires on shape-edge overlap from any
+# face and never accounted for the puck's radius, so post grazes and side-net
+# entries scored. The center-based swept crossing here (see GoalDetectionRules)
+# rejects both and reliably catches fast shots the sensor could tunnel through.
+func check_goal_crossing(prev_center: Vector3, curr_center: Vector3) -> void:
+	if GoalDetectionRules.crossed_into_net(
+			prev_center,
+			curr_center,
+			goal_line_z(),
+			float(facing),
+			POST_HALF_WIDTH,  # post centerline; the rule steps in by POST_RADIUS
+			NET_HEIGHT,       # crossbar centerline
+			POST_RADIUS,
+			GameRules.PUCK_COLLISION_RADIUS,
+			GameRules.PUCK_COLLISION_HALF_HEIGHT):
+		goal_scored.emit()
 
 
 func _apply_mat(mesh_inst: MeshInstance3D, color: Color) -> void:

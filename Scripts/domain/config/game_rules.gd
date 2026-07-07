@@ -25,10 +25,11 @@ const OT_DURATION: float           = 4.0 * 60.0   # 240 s per OT period
 # ── Rink Geometry ─────────────────────────────────────────────────────────────
 const GOAL_LINE_Z: float = 26.65  # rink_length / 2 - distance_from_end (30 - 3.35)
 const BLUE_LINE_Z: float = 7.29  # 64 ft from goal line to near edge + 0.15m to center
-const NET_HALF_WIDTH: float = 0.915      # half of goal opening — must match HockeyGoal post positions
+const NET_HALF_WIDTH: float = 0.915      # half of goal opening (post centerline) — must match HockeyGoal post positions
+const NET_POST_RADIUS: float = 0.030     # goal-pipe radius — must match HockeyGoal.POST_RADIUS
 const NET_DEPTH: float = 1.02            # goal depth from goal line to back frame
 const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid wider end)
-const NET_HEIGHT: float = 1.22           # crossbar height — must match HockeyGoal.NET_HEIGHT
+const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
 const NET_PUCK_BUFFER: float = 0.10      # exclusion zone expansion beyond the physical net boundary
 
 # Half the skater's body so the blue line keys off the body EDGE, not its
@@ -105,6 +106,13 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 # so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with
 # Puck.gd `ice_height` and the Puck.tscn mesh/shape height.
 const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
+# Puck collision cylinder extents (Puck.tscn CylinderShape3D: radius 0.065,
+# height 0.035). The puck is angular-locked flat (axis_lock_angular_x/z), so its
+# horizontal reach is the radius and its vertical reach the half-height — the two
+# differ and GoalDetectionRules needs both to size the goal mouth to the whole
+# disc. Keep in sync with Puck.tscn.
+const PUCK_COLLISION_RADIUS: float = 0.065
+const PUCK_COLLISION_HALF_HEIGHT: float = 0.0175
 # Puck-on-ice kinetic friction coefficient (realistic μ ~0.05–0.10). SINGLE
 # SOURCE OF TRUTH: HockeyRink._add_ice() builds the live ice PhysicsMaterial
 # directly from this constant, and the AI/client-prediction model below reads it
