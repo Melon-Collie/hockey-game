@@ -6,9 +6,14 @@ const POKE_RADIUS: float = GameRules.POKE_RADIUS_M
 # Contested-pickup squirt tuning (see PuckCollisionRules.contested_pickup_velocity).
 # The exit is biased toward the stronger blade and paced by the combined blade
 # momentum, clamped here; a true deadlock pops out sideways at contest_deadlock_speed.
-@export var contest_min_speed: float = 3.0
+# Speeds are kept gentle so faceoffs read as doable rather than a coin flip:
+# winning a draw should deliver the puck toward your target at a pace you can skate
+# onto (contest_min_speed), while a hard committed sweep still snaps it out toward
+# contest_max_speed. A true 50/50 only trickles off the dot (contest_deadlock_speed)
+# and stays a live loose puck to keep battling for, instead of firing to a random side.
+@export var contest_min_speed: float = 1.5
 @export var contest_max_speed: float = 9.0
-@export var contest_deadlock_speed: float = 3.0
+@export var contest_deadlock_speed: float = 1.2
 @export var contest_deadlock_threshold: float = 0.5  # net blade momentum (m/s) below which it's a 50/50
 # Stick-lift geometry: how close the attacker's (lifted) blade must be to the
 # carrier's hand→blade shaft, and how far below it, to hook under and pop it up.
