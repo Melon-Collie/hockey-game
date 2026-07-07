@@ -761,6 +761,16 @@ func apply_skill_profile(profile: GoalieSkillProfile) -> void:
 func set_skater_getter(getter: Callable) -> void:
 	_skater_getter = getter
 
+# Static-drill five-hole opening (only the frozen "beat the goalie" tutorial
+# goalie uses these — zero blast radius on real gameplay). A real standing goalie
+# rests the paddle on the ice in front of the pads, which sits right over the
+# five-hole and blocks the low centre shot the drill asks for. So for the static
+# target we widen the pad gap AND lift the blade up off the ice so a dead-centre
+# low shot has a real lane. Tunable; the exact look wants an in-editor check.
+const _DRILL_FIVE_HOLE_OPEN: float = 0.10   # extra pad separation each side (m)
+const _DRILL_STICK_LIFT_DEG: float = 26.0   # reduce the forward blade tilt by this to raise the blade off the ice
+const _DRILL_BLOCKER_LIFT:   float = 0.06   # raise the whole blocker assembly (m) so the blade clears the low lane
+
 # Snap the goalie into a neutral STANDING pose in a single apply (t = 1.0).
 # The tutorial's stationary "beat the goalie" drill freezes the controller
 # (physics + process off) so the AI never ticks — but that also means the pose
@@ -768,11 +778,15 @@ func set_skater_getter(getter: Callable) -> void:
 # together, closing the five-hole the drill tells the player to shoot at. Call
 # this after disabling processing so the static goalie reads as a proper upright
 # goalie: top corners open and a five-hole between the pads.
-func snap_to_standing_pose() -> void:
+#
+# `open_five_hole` additionally widens the pad gap and lifts the paddle off the
+# ice so the low centre shot the drill teaches actually has somewhere to go.
+func snap_to_standing_pose(open_five_hole: bool = false) -> void:
 	_sm.reset()
-	_five_hole_openness = 0.0
+	var pad_open: float = _DRILL_FIVE_HOLE_OPEN if open_five_hole else 0.0
+	_five_hole_openness = pad_open
 	_pose_inputs.state = State.STANDING
-	_pose_inputs.five_hole_openness = 0.0
+	_pose_inputs.five_hole_openness = pad_open
 	_pose_inputs.reading_slapper_tell = false
 	_pose_inputs.reacting_to_shot = false
 	_pose_inputs.shot_is_elevated = false
@@ -789,6 +803,12 @@ func snap_to_standing_pose() -> void:
 	_pose_inputs.paddle_sweep_active = false
 	_pose_inputs.standing_sweep_active = false
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
+	if open_five_hole:
+		# Lift the paddle up off the ice so it no longer guards the five-hole.
+		# (Direction is hand-agnostic: less forward tilt = blade higher; the pad
+		# widening above is symmetric.)
+		config.blocker_pos.y += _DRILL_BLOCKER_LIFT
+		config.blocker_rot.x -= _DRILL_STICK_LIFT_DEG
 	goalie.apply_body_config(config, 1.0)
 
 # Push export tuning into each collaborator. Called from setup() and any time
