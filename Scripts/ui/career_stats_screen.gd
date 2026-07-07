@@ -423,15 +423,17 @@ func _grid_cell(text: String, min_size: Vector2, is_header: bool,
 	return l
 
 
-# Compact 7-column grid: HOME/AWAY tag · player name · G · A · P · SOG · +/-.
+# Compact grid: HOME/AWAY tag · player name · G · A · P · SOG · +/- · HIT · TK · GV · FOW.
 # Header row uses dim text; player rows use body text.
 func _build_player_table(players: Array, side_label: String) -> Control:
 	var grid := GridContainer.new()
-	grid.columns = 7
+	grid.columns = 11
 	grid.add_theme_constant_override("h_separation", 14)
 	grid.add_theme_constant_override("v_separation", 2)
 
-	var headers: PackedStringArray = PackedStringArray([side_label, "Player", "G", "A", "P", "SOG", "+/-"])
+	var headers: PackedStringArray = PackedStringArray([
+		side_label, "Player", "G", "A", "P", "SOG", "+/-", "HIT", "TK", "GV", "FOW",
+	])
 	for h: String in headers:
 		grid.add_child(_table_cell(h, true))
 
@@ -446,6 +448,10 @@ func _build_player_table(players: Array, side_label: String) -> Control:
 		grid.add_child(_table_cell(str(goals + assists)))
 		grid.add_child(_table_cell(str(_safe_int(p.get("shots_on_goal", 0)))))
 		grid.add_child(_table_cell("%+d" % _safe_int(p.get("plus_minus", 0))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("hits", 0)))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("takeaways", 0)))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("giveaways", 0)))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("faceoff_wins", 0)))))
 
 	return grid
 
