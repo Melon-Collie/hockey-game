@@ -1391,6 +1391,11 @@ const _POST_GAME_REPLAY_DELAY: float = 2.0
 func _on_goal_replay_started_capture() -> void:
 	if _goal_replay_store == null or _goal_replay_driver == null:
 		return
+	# Free play is an endless sandbox with no game-over screen — capturing its
+	# goals would just grow the store for a reel that never plays. Drills route
+	# around the cinematic entirely, but guard both for clarity.
+	if NetworkManager.is_free_play_mode or NetworkManager.is_drill_mode():
+		return
 	_goal_replay_store.add(_goal_replay_driver.get_active_clip())
 
 
