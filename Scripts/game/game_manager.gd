@@ -1833,6 +1833,7 @@ func _build_replay_footer() -> Dictionary:
 				"takeaways": r.stats.takeaways,
 				"giveaways": r.stats.giveaways,
 				"faceoff_wins": r.stats.faceoff_wins,
+				"faceoff_losses": r.stats.faceoff_losses,
 				"toi_seconds": roundi(r.stats.toi_seconds),
 			})
 	footer["players"] = players
