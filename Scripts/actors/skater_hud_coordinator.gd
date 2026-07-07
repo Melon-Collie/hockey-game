@@ -638,10 +638,19 @@ func update_slapper_indicator_window(_t: float) -> void:
 
 
 func apply_ghost(ghost: bool) -> void:
+	# While the per-skater HUD is force-hidden (replay viewer / spectator) or
+	# latched off for a replay cinematic, an un-ghost must NOT re-show the ring or
+	# name label. Replay playback re-applies is_ghost every frame, and update() —
+	# which would otherwise re-hide and re-anchor these — either returns early
+	# (goal/post-game replay, spectator) or never runs at all (offline viewer,
+	# physics disabled). A leaked ring then floats at the skater's body-centre
+	# origin instead of on the ice. The beacon below is already gated the same way
+	# via _update_beacon_visibility().
+	var hud_hidden: bool = _force_world_hud_hidden or _hidden_for_replay
 	if _ring_mesh != null:
-		_ring_mesh.visible = not ghost
+		_ring_mesh.visible = not ghost and not hud_hidden
 	if _name_label != null:
-		_name_label.visible = not ghost
+		_name_label.visible = not ghost and not hud_hidden
 	if _charge_ring_mesh != null and ghost:
 		_charge_ring_mesh.visible = false
 	if ghost:
