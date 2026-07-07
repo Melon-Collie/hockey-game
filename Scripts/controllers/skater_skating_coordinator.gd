@@ -94,6 +94,13 @@ var _glide_phase: float = 0.0
 # shoulders driving — never faster leg turnover (the cadence tanh ceiling
 # above stride_cadence_max_rate already owns that plateau).
 var _sprint: float = 0.0
+# Spring-damped lateral weight shift (Rosen-style secondary motion): the body
+# RIDES over the loaded leg and settles with follow-through instead of rolling
+# rigidly with the stride. Local integrator state, advanced only on real ticks
+# and small in amplitude — machines needn't agree exactly (same contract as
+# _glide_phase). Position + velocity of the critically-ish damped spring.
+var _weight_shift: float = 0.0
+var _weight_shift_vel: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -125,6 +132,8 @@ func reset_to_rest() -> void:
 	_glide = 0.0
 	_glide_phase = 0.0
 	_sprint = 0.0
+	_weight_shift = 0.0
+	_weight_shift_vel = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
@@ -207,6 +216,18 @@ func apply(delta: float) -> void:
 	var cadence_ceiling: float = maxf(_controller.stride_cadence_max_rate, 0.001)
 	var linear_rate: float = ground_speed * _controller.stride_cadence
 	var phase_rate: float = cadence_ceiling * tanh(linear_rate / cadence_ceiling)
+	# Cadence "gears" (grounded in on-ice biomechanics: stride frequency DROPS
+	# from acceleration to sustained max velocity while the glide phase and
+	# ground-contact time lengthen — speed comes from power per stride, not
+	# faster turnover). cruise_gear is high when the skater is FAST but not still
+	# driving to gain speed (prior-frame _effort — the one-frame lag is invisible
+	# through the smoothing, same as the stop/reversal reads below). It eases the
+	# stride rate down here, deepens the sit and lengthens the glide dwell (extra
+	# stroke skew) further down — all zero while accelerating/digging, so the
+	# start and chop feel is unchanged. Set the tunables to 0 to restore the
+	# prior cadence exactly.
+	var cruise_gear: float = speed_t * (1.0 - clampf(_effort, 0.0, 1.0))
+	phase_rate *= 1.0 - _controller.cadence_cruise_falloff * cruise_gear
 	# Dig-in chop / shuffle steps put leg turnover UNDER the speed law: quick
 	# first strides and side-steps cycle before the body is moving fast enough
 	# to advance the phase on its own.
@@ -383,6 +404,9 @@ func apply(delta: float) -> void:
 	# above: the effort deepening fades once the sprint tops out, but a
 	# sprinting skater stays low the whole way.
 	stance *= 1.0 + _sprint * _controller.sprint_stance_gain
+	# Cadence gear: a skater cruising at max velocity sits into a deeper glide
+	# (joint angles shift from extended toward deeper as frequency drops).
+	stance *= 1.0 + _controller.cadence_glide_stance_gain * cruise_gear
 	# Faceoff ready stance: at the dot the skater is at a standstill, so the
 	# speed-driven envelope leaves them bolt upright — floor the engagement
 	# through the countdown instead. Eased both ways: the crouch settles in
@@ -420,7 +444,13 @@ func apply(delta: float) -> void:
 	# 0 collapses both back to the pure sine (s_opp == -s). The fore/aft roll below
 	# stays in-phase (`s` for both legs) on purpose — it's the shared weight-shift
 	# edge rock, not a per-leg stroke.
-	var skew: float = _controller.stride_skew
+	# Cadence gear also warps the stroke: at sustained cruise the push compresses
+	# and the glide/recovery stretches (the 80/20 glide-to-propulsion split of a
+	# top-speed stride) by adding to the stroke skew. Flows through s/s_opp/c/c_opp
+	# and their (1 + skew) derivative normalization below automatically; clamped
+	# under 1 so the warp stays well-defined.
+	var skew: float = clampf(
+			_controller.stride_skew + _controller.glide_hold_skew * cruise_gear, 0.0, 0.95)
 	var s: float = sin(stride_phase - skew * sin(stride_phase))
 	var phase_opp: float = stride_phase + PI
 	var s_opp: float = sin(phase_opp - skew * sin(phase_opp))
@@ -631,6 +661,18 @@ func apply(delta: float) -> void:
 	# hard brake), and the torso rolls over the loaded leg with the weight shift.
 	trunk_pitch_add = -deg_to_rad(_controller.stride_dig_lean_deg) * _effort
 	trunk_roll_add = deg_to_rad(_controller.stride_sway_deg) * _intensity * fb_w * s * gait_scale
+	# Spring weight transfer (Rosen-style secondary motion): a damped spring lags
+	# the lateral weight shift behind the stride so the body settles OVER the
+	# loaded leg with follow-through instead of the roll tracking the leg rigidly.
+	# Semi-implicit Euler (update velocity, then position) for stability; local
+	# integrator state, advanced only on real ticks like the rest of the gait.
+	# weight_shift_deg 0 restores the prior gait.
+	var shift_target: float = fb_w * s * _intensity * gait_scale
+	var shift_accel: float = _controller.weight_spring_stiffness * (shift_target - _weight_shift) \
+			- _controller.weight_spring_damping * _weight_shift_vel
+	_weight_shift_vel += shift_accel * delta
+	_weight_shift += _weight_shift_vel * delta
+	trunk_roll_add += deg_to_rad(_controller.weight_shift_deg) * _weight_shift
 	# Intent trunk reads: dig-in drives the shoulders over the first strides,
 	# a reversal tips them BACK against the travel it's fighting, and a
 	# deliberate backpedal keeps the chest up over the C-cuts.

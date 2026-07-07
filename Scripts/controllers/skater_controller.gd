@@ -343,6 +343,22 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var sprint_stride_gain: float = 0.35     # stride amplitude boost at full sprint
 @export var sprint_stance_gain: float = 0.18     # extra crouch depth while sprinting
 @export var sprint_lean_deg: float = 7.0         # extra forward trunk pitch while sprinting
+# Cadence "gears" — grounded in on-ice biomechanics: from acceleration to
+# sustained max velocity real skaters DROP stride frequency and lengthen the
+# glide (speed is power per stride, not faster turnover). cruise_gear (fast AND
+# not still accelerating) eases the stride rate down, deepens the sit, and warps
+# the stroke toward a longer glide dwell. All zero while accelerating/digging,
+# so the start/chop feel is untouched; set these to 0 to restore the prior gait.
+@export var cadence_cruise_falloff: float = 0.28    # max fraction the stride rate eases down at sustained cruise
+@export var glide_hold_skew: float = 0.25           # extra stroke skew at cruise — snappier push, longer glide dwell
+@export var cadence_glide_stance_gain: float = 0.12 # extra sit depth at sustained top speed
+# Spring weight transfer (Rosen-style secondary motion) — a damped spring lags
+# the lateral weight shift behind the stride so the body rides over the loaded
+# leg and settles with follow-through instead of rolling rigidly with it. Adds
+# "weight" for almost nothing. weight_shift_deg 0 restores the prior gait.
+@export var weight_shift_deg: float = 2.5           # amplitude of the springy lateral body lean
+@export var weight_spring_stiffness: float = 90.0   # spring constant (higher = snappier follow)
+@export var weight_spring_damping: float = 14.0     # damping (near-critical — a clean settle with slight overshoot)
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
