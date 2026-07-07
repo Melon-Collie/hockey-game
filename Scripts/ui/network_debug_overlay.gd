@@ -270,7 +270,20 @@ func _render_client(t: NetworkTelemetry) -> void:
 	_info("Updates in", "%.0f/s" % t.world_state_hz, "world snapshots received; matches host send rate")
 	_sim_line(t)
 
-	_section("Prediction (your view of remote players & puck)")
+	# End-to-end latency decomposed into its named terms, so a netcode change
+	# is judged by numbers instead of "does it feel snappier". All facts
+	# (_info): each term is either by-design or already colored elsewhere.
+	if NetworkManager.is_clock_ready():
+		_section("Latency budget (action → screen)")
+		var lead_ms := NetworkManager.INPUT_LEAD_SEC * 1000.0
+		var interp_ms := NetworkManager.get_interpolation_delay() * 1000.0
+		var bcast_ms := NetworkManager.state_delta * 1000.0
+		_info("You → host sim", "%.0f ms" % lead_ms,
+			"input stamp lead, by design — your input is scheduled this far ahead so it's on the host before its tick (transit rides inside the synced clock); host-side overdue shows on the host's Input lead line")
+		_info("Host → your screen", "%.0f ms (½rtt %.0f · tick %.0f · cushion %.0f)" % [interp_ms, rtt_avg / 2.0, bcast_ms, pdv],
+			"render age of the authoritative world (remote skaters, loose puck, goalie) — the live smoothing delay; decomposition shows its target terms")
+		_info("Round trip you → you", "%.0f ms" % (lead_ms + interp_ms),
+			"your action reaching the host + its authoritative result reaching your screen. Your own skater feels instant (prediction) — this is the staleness of the world you're reacting to")
 	var rec := _worse(_band(t.reconcile_per_sec, 1.0, 5.0), _band(t.reconcile_magnitude_avg, 0.05, 0.2))
 	_metric(rec, "Corrections", "%.1f/s, %.3f m avg" % [t.reconcile_per_sec, t.reconcile_magnitude_avg],
 		"server snapping your prediction back; want <1/s and <5 cm")

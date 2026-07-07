@@ -40,6 +40,7 @@ Wire format: Skater 37B · Puck 13B · Goalie 35B (12 B root + 23 B pose). Quant
 - **Header verdict** — `● OK / ● WATCH / ● PROBLEM` rolls up the worst single metric on screen. Green header = nothing needs attention.
 - **Per-line dots** — green / yellow / red, thresholded against the documented healthy ranges. Each line also carries a plain-English label and its target range inline, so no separate legend is needed.
 - **Info lines** (grey `·`) — context with no health judgment (clock offset, bandwidth, puck mode, buffer depths).
+- **Latency budget** (client-only, clock-synced) — end-to-end latency decomposed into named terms so netcode changes are judged by numbers, not feel: `You → host sim` (`INPUT_LEAD_SEC`, by design), `Host → your screen` (live interp delay, with its `½rtt · tick · cushion` target decomposition inline), and the summed `Round trip you → you` (staleness of the authoritative world you react to — your own skater is predicted and feels instant). All info lines: each term is either by-design or health-colored elsewhere.
 
 **Role-gated** — only the sections that apply to your role render, so you never read a misleading zero:
 
