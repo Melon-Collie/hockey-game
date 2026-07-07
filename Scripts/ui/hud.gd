@@ -962,8 +962,8 @@ func _initial_team_primary(team_id: int) -> Color:
 		return TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id).primary
 	return Color(0.5, 0.5, 0.5)  # placeholder; team_colors_ready overwrites
 
-# Scorebug stripe color for a team: home = its primary, away = whichever away
-# accent sits farthest from the home primary, so the two stripes stay distinct.
+# Scorebug stripe color for a team: always its own primary, so a team's color
+# is consistent regardless of who it's playing.
 func _scorebug_stripe(team_id: int) -> Color:
 	if GameManager.teams.size() > 1:
 		var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(
@@ -974,8 +974,8 @@ func _scorebug_stripe(team_id: int) -> Color:
 func _on_team_colors_ready(_home_primary: Color, _home_secondary: Color, _away_primary: Color, _away_secondary: Color) -> void:
 	# In the chyron layout the AWAY/HOME labels sit on the dark panel, not on
 	# the team color, so their text stays cream regardless of team palette. The
-	# stripes follow the score-surface rule (home primary, away farthest accent)
-	# rather than the raw signal colors so home/away never wash together.
+	# stripes are each team's own primary color (see _scorebug_stripe) rather
+	# than the raw signal colors.
 	if _home_badge_style != null:
 		_home_badge_style.bg_color = _scorebug_stripe(0)
 	if _away_badge_style != null:

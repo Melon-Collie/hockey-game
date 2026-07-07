@@ -85,9 +85,7 @@ func _on_game_reset() -> void:
 	visible = false
 
 # Period-summary stripe color for a team, matching the scorebug's rule so the
-# two surfaces agree: home wears its primary, away wears whichever of its accents
-# is farthest from the home primary. Both sit against the dark panel here (white
-# label beside a color band), so home-primary reads cleanly.
+# two surfaces agree: always the team's own primary.
 func _period_stripe(team_id: int) -> Color:
 	var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(
 			_team_color_slot(0), _team_color_slot(1))
