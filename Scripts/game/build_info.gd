@@ -72,7 +72,10 @@ const VERSION: String = "dev"
 #     (notify_carrier_changed / notify_puck_picked_up / notify_puck_stolen /
 #     notify_puck_dropped) gained a leading event_seq arg for cross-channel
 #     dedupe.
-const PROTOCOL_VERSION: int = 17
+# v18: stats packet grew — PlayerStats.to_array() 9 -> 10 (faceoff_losses,
+#     the opposing centre's charge on a draw, so faceoff win % has a real
+#     denominator), so STATS_PLAYER_RECORD_SIZE 10 -> 11.
+const PROTOCOL_VERSION: int = 18
 
 
 func _ready() -> void:

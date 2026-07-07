@@ -131,12 +131,13 @@ func test_no_stats_before_any_established_owner() -> void:
 	assert_eq(first.stats.giveaways, 0)
 
 
-# ── Faceoff wins ─────────────────────────────────────────────────────────────
+# ── Faceoff wins / losses ────────────────────────────────────────────────────
 
 func test_draw_win_goes_to_first_team_to_establish() -> void:
 	# Winger touches first, loses it, the OPPOSING side comes out of the
 	# scramble with control — their centre gets the win (NHL: the draw is won
-	# by the team that first gains possession, credited to the centre).
+	# by the team that first gains possession, credited to the centre). The
+	# beaten centre is charged a loss so faceoff % has a real denominator.
 	var centre0 := _add_player(10, 0, 0)
 	_add_player(11, 0, 1)
 	var centre1 := _add_player(20, 1, 0)
@@ -148,6 +149,9 @@ func test_draw_win_goes_to_first_team_to_establish() -> void:
 	assert_eq(centre1.stats.faceoff_wins, 1, "centre credited, not the winner")
 	assert_eq(winger1.stats.faceoff_wins, 0)
 	assert_eq(centre0.stats.faceoff_wins, 0)
+	assert_eq(centre0.stats.faceoff_losses, 1, "beaten centre charged a loss")
+	assert_eq(centre1.stats.faceoff_losses, 0)
+	assert_eq(winger1.stats.faceoff_losses, 0, "loss goes to the centre, not the winger")
 	assert_false(tracker.has_pending_faceoff())
 
 
@@ -163,6 +167,7 @@ func test_no_turnover_charged_on_the_draw() -> void:
 	assert_eq(centre1.stats.takeaways, 0)
 	assert_eq(centre0.stats.giveaways, 0)
 	assert_eq(centre1.stats.faceoff_wins, 1)
+	assert_eq(centre0.stats.faceoff_losses, 1)
 
 
 func test_turnovers_resume_after_the_draw_resolves() -> void:
@@ -173,31 +178,35 @@ func test_turnovers_resume_after_the_draw_resolves() -> void:
 	tracker.on_carrier_gained(20, false)   # then coughs it up
 	tracker.on_possession_established(20)
 	assert_eq(centre0.stats.faceoff_wins, 1)
+	assert_eq(centre1.stats.faceoff_losses, 1)
 	assert_eq(centre0.stats.giveaways, 1, "post-draw play classifies normally")
 	assert_eq(centre1.stats.takeaways, 0, "interception without a strip")
 
 
 func test_stoppage_fallback_resolves_pending_draw() -> void:
 	var centre1 := _add_player(20, 1, 0)
-	_add_player(10, 0, 0)
+	var centre0 := _add_player(10, 0, 0)
 	tracker.on_carrier_gained(10, true)
 	assert_true(tracker.has_pending_faceoff())
 	assert_true(tracker.resolve_pending_faceoff(1))  # last toucher was team 1
 	assert_eq(centre1.stats.faceoff_wins, 1)
+	assert_eq(centre0.stats.faceoff_losses, 1)
 	assert_false(tracker.has_pending_faceoff())
 
 
 func test_fallback_with_unknown_team_clears_without_credit() -> void:
-	_add_player(10, 0, 0)
+	var centre0 := _add_player(10, 0, 0)
 	tracker.on_carrier_gained(10, true)
 	assert_false(tracker.resolve_pending_faceoff(-1))
 	assert_false(tracker.has_pending_faceoff())
+	assert_eq(centre0.stats.faceoff_losses, 0, "unknown-team fallback credits nothing")
 
 
 func test_resolve_without_pending_is_noop() -> void:
 	var centre0 := _add_player(10, 0, 0)
 	assert_false(tracker.resolve_pending_faceoff(0))
 	assert_eq(centre0.stats.faceoff_wins, 0)
+	assert_eq(centre0.stats.faceoff_losses, 0)
 
 
 # ── Reset ────────────────────────────────────────────────────────────────────

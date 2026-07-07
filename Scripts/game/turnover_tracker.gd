@@ -171,15 +171,20 @@ func _clear_candidate() -> void:
 
 
 func _credit_faceoff_win(winning_team: int) -> bool:
-	# The centre (team_slot 0) takes the draw, so the win is theirs regardless of
-	# which linemate actually corralled the loose puck.
+	# The centre (team_slot 0) takes the draw, so the win/loss is theirs
+	# regardless of which linemate actually corralled the loose puck. The
+	# opposing centre is charged a loss so faceoff % has a real denominator.
+	var credited: bool = false
 	for pid: int in _registry.all():
 		var r: PlayerRecord = _registry.get_record(pid)
-		if r != null and r.team != null and r.team.team_id == winning_team \
-				and r.team_slot == 0 and r.stats != null:
+		if r == null or r.team == null or r.team_slot != 0 or r.stats == null:
+			continue
+		if r.team.team_id == winning_team:
 			r.stats.faceoff_wins += 1
-			return true
-	return false
+			credited = true
+		else:
+			r.stats.faceoff_losses += 1
+	return credited
 
 
 func _team_of(peer_id: int) -> int:

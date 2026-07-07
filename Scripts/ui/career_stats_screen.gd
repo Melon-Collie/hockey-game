@@ -172,7 +172,8 @@ func _on_totals_received(totals: Dictionary) -> void:
 	_add_totals_row("Shots Blocked", str(_safe_int(totals.get("shots_blocked", 0))))
 	_add_totals_row("Takeaways",     str(_safe_int(totals.get("takeaways", 0))))
 	_add_totals_row("Giveaways",     str(_safe_int(totals.get("giveaways", 0))))
-	_add_totals_row("Faceoff Wins",  str(_safe_int(totals.get("faceoff_wins", 0))))
+	var faceoff_taken: int = _safe_int(totals.get("faceoff_wins", 0)) + _safe_int(totals.get("faceoff_losses", 0))
+	_add_totals_row("Faceoff %", "%.1f%%" % _safe_float(totals.get("faceoff_pct", 0.0)) if faceoff_taken > 0 else "—")
 	_add_totals_separator()
 	_add_totals_row("+/-",           "%+d" % _safe_int(totals.get("plus_minus", 0)))
 	_add_totals_row("Goals For",     str(_safe_int(totals.get("goals_for", 0))))
@@ -423,17 +424,15 @@ func _grid_cell(text: String, min_size: Vector2, is_header: bool,
 	return l
 
 
-# Compact grid: HOME/AWAY tag · player name · G · A · P · SOG · +/- · HIT · TK · GV · FOW.
+# Compact 7-column grid: HOME/AWAY tag · player name · G · A · P · SOG · +/-.
 # Header row uses dim text; player rows use body text.
 func _build_player_table(players: Array, side_label: String) -> Control:
 	var grid := GridContainer.new()
-	grid.columns = 11
+	grid.columns = 7
 	grid.add_theme_constant_override("h_separation", 14)
 	grid.add_theme_constant_override("v_separation", 2)
 
-	var headers: PackedStringArray = PackedStringArray([
-		side_label, "Player", "G", "A", "P", "SOG", "+/-", "HIT", "TK", "GV", "FOW",
-	])
+	var headers: PackedStringArray = PackedStringArray([side_label, "Player", "G", "A", "P", "SOG", "+/-"])
 	for h: String in headers:
 		grid.add_child(_table_cell(h, true))
 
@@ -448,10 +447,6 @@ func _build_player_table(players: Array, side_label: String) -> Control:
 		grid.add_child(_table_cell(str(goals + assists)))
 		grid.add_child(_table_cell(str(_safe_int(p.get("shots_on_goal", 0)))))
 		grid.add_child(_table_cell("%+d" % _safe_int(p.get("plus_minus", 0))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("hits", 0)))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("takeaways", 0)))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("giveaways", 0)))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("faceoff_wins", 0)))))
 
 	return grid
 

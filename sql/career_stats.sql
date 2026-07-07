@@ -33,15 +33,17 @@ create table if not exists public.career_stats (
     hits_taken     integer default 0 not null,
     takeaways      integer default 0 not null,
     giveaways      integer default 0 not null,
-    faceoff_wins   integer default 0 not null
+    faceoff_wins   integer default 0 not null,
+    faceoff_losses integer default 0 not null
 );
 
 -- Migration for an existing DB (the create above is skipped once the table
 -- exists). Safe to re-run — IF NOT EXISTS makes each ADD idempotent.
-alter table public.career_stats add column if not exists hits_taken   integer default 0 not null;
-alter table public.career_stats add column if not exists takeaways    integer default 0 not null;
-alter table public.career_stats add column if not exists giveaways    integer default 0 not null;
-alter table public.career_stats add column if not exists faceoff_wins integer default 0 not null;
+alter table public.career_stats add column if not exists hits_taken     integer default 0 not null;
+alter table public.career_stats add column if not exists takeaways      integer default 0 not null;
+alter table public.career_stats add column if not exists giveaways      integer default 0 not null;
+alter table public.career_stats add column if not exists faceoff_wins   integer default 0 not null;
+alter table public.career_stats add column if not exists faceoff_losses integer default 0 not null;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 
@@ -77,6 +79,7 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
     takeaways     between 0 and 5000  and
     giveaways     between 0 and 5000  and
     faceoff_wins  between 0 and 5000  and
+    faceoff_losses between 0 and 5000  and
     toi_seconds   between 0 and 100000 and
     goals_for     between 0 and 1000  and
     goals_against between 0 and 1000  and
@@ -120,7 +123,9 @@ with (security_invoker = true) as
     sum(hits_taken) AS hits_taken,
     sum(takeaways) AS takeaways,
     sum(giveaways) AS giveaways,
-    sum(faceoff_wins) AS faceoff_wins
+    sum(faceoff_wins) AS faceoff_wins,
+    sum(faceoff_losses) AS faceoff_losses,
+    round(sum(faceoff_wins)::numeric / NULLIF(sum(faceoff_wins) + sum(faceoff_losses), 0)::numeric * 100::numeric, 1) AS faceoff_pct
    FROM career_stats
   WHERE steam_id IS NOT NULL
   GROUP BY steam_id;
@@ -156,6 +161,7 @@ as $function$
         'takeaways',     cs.takeaways,
         'giveaways',     cs.giveaways,
         'faceoff_wins',  cs.faceoff_wins,
+        'faceoff_losses', cs.faceoff_losses,
         'plus_minus',    cs.goals_for - cs.goals_against,
         'toi_seconds',   cs.toi_seconds,
         'outcome',       cs.outcome

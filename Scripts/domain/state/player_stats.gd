@@ -12,12 +12,15 @@ var shots_blocked: int = 0
 #   takeaways    — puck actively stripped from an opponent (poke / stick-lift).
 #   giveaways    — self-inflicted turnover: lost the puck to the other team in
 #                  open play WITHOUT being stripped/hit (fumble / bad pass).
-#   faceoff_wins — credited to a team's centre (slot 0) when that team wins the
-#                  draw (first to recover the puck off the drop).
+#   faceoff_wins   — credited to a team's centre (slot 0) when that team wins
+#                    the draw (first to recover the puck off the drop).
+#   faceoff_losses — credited to the OPPOSING centre on the same draw, so
+#                    faceoff win % has a real denominator.
 var hits_taken: int = 0
 var takeaways: int = 0
 var giveaways: int = 0
 var faceoff_wins: int = 0
+var faceoff_losses: int = 0
 # Tracked locally on every peer (game_manager._physics_process) rather than
 # host-authoritative + broadcast like the counters above. Each peer's own
 # value is what ships to Supabase, since report() runs per-peer at game-over.
@@ -30,7 +33,7 @@ var toi_seconds: float = 0.0
 # and PROTOCOL_VERSION is bumped whenever this grows.
 func to_array() -> Array:
 	return [goals, assists, shots_on_goal, hits, shots_blocked,
-			hits_taken, takeaways, giveaways, faceoff_wins]
+			hits_taken, takeaways, giveaways, faceoff_wins, faceoff_losses]
 
 static func from_array(a: Array) -> PlayerStats:
 	var s := PlayerStats.new()
@@ -52,6 +55,7 @@ func update_from_array(a: Array) -> void:
 	takeaways = a[6]
 	giveaways = a[7]
 	faceoff_wins = a[8]
+	faceoff_losses = a[9]
 
 func to_dict() -> Dictionary:
 	return {
@@ -64,5 +68,6 @@ func to_dict() -> Dictionary:
 		"takeaways": takeaways,
 		"giveaways": giveaways,
 		"faceoff_wins": faceoff_wins,
+		"faceoff_losses": faceoff_losses,
 		"toi_seconds": roundi(toi_seconds),
 	}
