@@ -37,10 +37,22 @@ const INCOMING_SHOT_SPEED_M_S: float = 12.0
 
 # Weak-side staging bias: shift the positioning search center off-center to the
 # WEAK side (opposite the puck's strong side) so the FINISHER stages the
-# cross-seam one-timer option instead of stacking on the puck-side play. Modest —
-# the candidate spread (SEARCH_STEP_M) still reaches strong-side spots when the
-# scoring favours them. Tunable; 0 = centered (old behaviour).
-const WEAK_SIDE_BIAS_M: float = 2.0
+# cross-seam one-timer option instead of stacking on the puck-side play.
+# Sized so the candidate ring (±SEARCH_STEP_M) spans the far-post/back-door
+# region rather than straddling center ice. Tunable; 0 = centered.
+const WEAK_SIDE_BIAS_M: float = 4.0
+
+# Hard weak-side constraint: positioning candidates closer to center than
+# this (measured toward the weak side) are rejected outright. score_shoot's
+# quadratic angle factor always outweighs its capped goalie-coverage
+# penalty, so without the hard line the argmax drifted every open FINISHER
+# to the dead-center slot — "crashing the front of the net" on a 2-on-1
+# instead of staging past the far post where the cross-seam feed is a
+# tap-in. Mirrors SUPPORT's hard goal-side constraint: the role IS the
+# cross-seam option, so being it isn't left to a soft bias. Sits ~1 m past
+# the far post (NET_HALF_WIDTH 0.915); the net-front battle stays the
+# carrier's drive / the reactive tip, not the staging spot.
+const MIN_CROSS_SEAM_OFFSET_M: float = 2.0
 
 # Cap on the feed flight time used for the goalie-motion prediction. Bounds the
 # goalie's predicted slide so a far cross-ice candidate doesn't model an
@@ -190,6 +202,10 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	var best_score: float = -INF
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):
+			continue
+		# Hard weak-side line (see MIN_CROSS_SEAM_OFFSET_M): the FINISHER
+		# stages the far side of the seam, never the front of the net.
+		if -ctx.strong_x * c.x < MIN_CROSS_SEAM_OFFSET_M:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue

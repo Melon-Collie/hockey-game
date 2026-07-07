@@ -7,8 +7,10 @@ extends GutTest
 #   - Argmax produces a legal pick.
 #   - Anti-crowding filter respected.
 #   - Offside filter rejects OZ candidates (past opp blue line).
+#   - Covered stretch spot → stage somewhere open (live argmax).
 #
-# The geometric guts (score_pass) are covered in test_ai_action_scoring.
+# The geometric guts (lane_clear / position_potential) are covered in
+# test_ai_action_scoring.
 
 const TEAM_ID: int = 0
 const OUR_NET_Z: float = 26.65   # Team 0 defends +Z, attacks -Z
@@ -154,6 +156,34 @@ func test_velocity_buffer_pushes_target_back_at_speed() -> void:
 	# the filter accounts for.
 	assert_gt(moving_target.z, stationary_target.z - 0.01,
 			"moving bot's target should be at least as far NZ-side; got moving=%s stationary=%s" % [moving_target, stationary_target])
+
+
+# ── Covered stretch spot ─────────────────────────────────────────────────────
+
+func test_avoids_defender_camped_on_the_stretch_spot() -> void:
+	# A defender parked right on the OUTLET search center. Every legal
+	# candidate out here is past SHOT_RANGE_FALLOFF_M, where score_shoot
+	# is 0 by definition — so the old score_pass argmax scored every
+	# candidate 0 and degenerated to "first in the list", sending the
+	# outlet to the raw search center, straight into the defender. The
+	# lane × potential scoring keeps a live gradient, so the outlet
+	# stages an open spot instead.
+	var carrier_pos := Vector3(5, 0, 0)
+	# Search center: weak-side mirror of carrier X, BLUE_LINE_BUFFER_M
+	# NZ-side of the opp blue line. Defender sits on it, half a metre
+	# net-side (inside the candidate's forward pressure cone).
+	var center := Vector3(-5, 0, -GameRules.BLUE_LINE_Z + AIRoleOutlet.BLUE_LINE_BUFFER_M)
+	var defender := Vector3(center.x, 0, center.z - 0.5)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(-3, 0, 3), Vector3.ZERO],   # us, trailing the play
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
+		[200, 1 - TEAM_ID, defender, Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(-3, 0, 3), Vector3.ZERO, 100, skaters)
+	var d: RoleDecision = AIRoleOutlet.decide(ctx)
+	assert_gt(d.target_position.distance_to(defender), 2.0,
+			"outlet must stage clear of a defender camped on the stretch spot; got %s vs defender %s" \
+			% [d.target_position, defender])
 
 
 # ── Anti-crowding ───────────────────────────────────────────────────────────

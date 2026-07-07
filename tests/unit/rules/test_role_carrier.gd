@@ -133,6 +133,29 @@ func test_pressured_carrier_skates_clear_instead_of_freezing() -> void:
 			"a carrier with a forechecker bearing down must skate clear, not freeze")
 
 
+# ─── zone entry: open ice at the blue line must beat standing still ──────────
+
+func test_open_carrier_at_blue_line_drives_in_instead_of_freezing() -> void:
+	# Carrier at REST just outside the offensive blue line, wide open —
+	# no opponents, clear path to the net. Before the potential-
+	# realization discount, stand-still held its position_potential
+	# undecayed while every movement candidate paid travel decay; the
+	# potential gradient out here is shallower than that decay, so
+	# stand-still strictly won and the bot PLANTED at the blue line
+	# instead of attacking. Now potential pays its realization decay
+	# uniformly and open ice ahead always wins the carry argmax.
+	var self_pos := Vector3(0.0, 0.0, -6.5)  # ~20 m from opp goal, just outside shot range
+	var ctx: RoleContext = _make_ctx(self_pos)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"nothing to fire from out here — this is a carry read")
+	assert_ne(c.last_carry_anchor, self_pos,
+			"a wide-open carrier at the blue line must take the space, not freeze")
+	assert_lt(c.last_carry_anchor.z, self_pos.z,
+			"…and take it TOWARD the attacking net")
+
+
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────
 
 func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:

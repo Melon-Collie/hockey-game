@@ -301,19 +301,23 @@ func test_breakout_pass_not_blocked() -> void:
 
 
 # ── Calibration: shot quality formula sanity checks ───────────────────────────
-# Targets from SHOT_QUALITY_SPEC.md. These are the canonical scenarios
-# the formula was designed around — if the implementation produces these
-# (within rounding) the formula is correct. Any drift here means a tuning
-# constant moved.
+# Canonical scenarios the formula is calibrated around — if the
+# implementation produces these (within rounding) the formula is correct.
+# Any drift here means a tuning constant moved. Squared-goalie targets
+# reflect the reaction-time coverage model (coverage cap ramps with shot
+# flight time — see GOALIE_SET_COVERAGE_MAX); open-net/delayed targets
+# are coverage-free and unchanged from the original spec.
 
 # Slot, centered, goalie squared. Monotone dist_response from goal:
-# 5 m / 19.36 m = 0.258, dist_response = 1 - 0.258² = 0.93. Combined
-# with shot_angle_factor 1.0 × (1 - BASE_COVERAGE 0.28) = 0.67.
+# 5 m / 19.36 m = 0.258, dist_response = 1 - 0.258² = 0.93. The 5 m
+# flight (~0.21 s) only starts ramping the reaction-time coverage cap
+# (≈ 0.39), so: 0.93 × shot_angle_factor 1.0 × (1 - 0.39) ≈ 0.58 —
+# the canonical "clean slot wrister ~0.55" on the recalibrated scale.
 func test_shot_quality_slot_5m_squared() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.65)  # 5 m from goal line
 	var goalie := Vector3(0.0, 0.0, 26.0)    # squared (matches puck arc)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.67, 0.02, "slot 5m centered, goalie squared")
+	assert_almost_eq(s, 0.58, 0.02, "slot 5m centered, squared SET goalie")
 
 
 # Same shot but goalie has slid out of position (~30° arc offset).
@@ -340,8 +344,11 @@ func test_shot_quality_60deg_goalie_delayed() -> void:
 	assert_almost_eq(s, 0.43, 0.05, "half-wall 60° vs delayed goalie ≈ 0.43")
 
 
-# 60° half-wall vs squared goalie. Coverage knocks the open-net score
-# down to ≈ 0.43 × (1 - 0.28) ≈ 0.31.
+# 60° half-wall vs squared goalie. A ~9.25 m shot gives a set squared
+# goalie most of the reaction window, so the coverage cap ramps well
+# above the point-blank floor: cap ≈ 0.59 → ≈ 0.43 × (1 - 0.59) ≈ 0.18.
+# The half-wall bomb into a set goalie is a LOW-value shot — the exact
+# "far shot from outside the slot" the coverage model exists to kill.
 func test_shot_quality_60deg_goalie_squared() -> void:
 	var shooter := Vector3(8.0, 0.0, 22.025)
 	# Squared goalie: goalie_arc matches puck_arc (60°). Place goalie
@@ -349,21 +356,23 @@ func test_shot_quality_60deg_goalie_squared() -> void:
 	# the goal. tan(60°) × forward(0.65) = 1.126 lateral.
 	var goalie := Vector3(1.126, 0.0, 26.0)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.31, 0.05, "half-wall 60° vs squared goalie ≈ 0.31")
+	assert_almost_eq(s, 0.18, 0.05, "half-wall 60° vs squared SET goalie ≈ 0.18")
 
 
 # Slightly off-center 5 m shot, squared goalie. The "great chance"
 # scenario the user calls out — should score comfortably above the
-# bar a typical CARRY candidate clears. Quadratic angle softens 11°
-# off-center to ~0.98, × 0.93 dist × (1 - 0.28 squared) = ~0.66.
+# bar a typical CARRY candidate clears. At 5 m the flight only starts
+# ramping the coverage cap (≈ 0.39), so the slot shot stays a great
+# chance: ~0.98 angle × 0.93 dist × (1 - 0.39 squared) ≈ 0.57 — on the
+# recalibrated scale where a clean slot wrister is ~0.55.
 func test_shot_quality_slightly_off_center_5m_squared() -> void:
 	var shooter := Vector3(1.0, 0.0, 21.65)  # ~11° off-axis, dist ~5.1 m
 	# Goalie squared to the puck: goalie_arc matches puck_arc.
 	# tan(11°) × goalie_forward(0.65) = 0.126 lateral.
 	var goalie := Vector3(0.126, 0.0, 26.0)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_gt(s, 0.6,
-			"slightly off-center 5 m slot shot vs squared goalie should score > 0.6 (great chance)")
+	assert_gt(s, 0.5,
+			"slightly off-center 5 m slot shot vs squared goalie stays a great chance (> 0.5)")
 
 
 # Quadratic angle ordering. Three shots at the same close distance,
@@ -502,6 +511,59 @@ func test_goalie_zone_default_is_no_op() -> void:
 			"shooter inside zone with goalie supplied should score lower")
 
 
+# ── Reaction-time goalie coverage ────────────────────────────────────────────
+# coverage_cap ramps from BASE_COVERAGE (point-blank: flight <= reaction)
+# to GOALIE_SET_COVERAGE_MAX as the shot's flight time gives a set goalie
+# room to react — what beats the goalie is getting close, catching it
+# moving, or catching it off-angle; not clean wristers from range.
+
+func test_set_goalie_coverage_grows_with_flight_time() -> void:
+	# Same geometry, slower release → longer flight → the set square
+	# goalie covers more. No opponents, so the lane term can't be the
+	# cause (under the old flat coverage these scored identical).
+	var shooter := Vector3(0.0, 0.0, 16.0)  # ~10.7 m out
+	var goalie := Vector3(0.0, 0.0, 25.5)   # squared, set
+	var fast: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], Vector3.INF,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S)
+	var slow: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], Vector3.INF,
+			AIActionScoring.PASS_SPEED_M_S)
+	assert_lt(slow, fast,
+			"a slower release gives the set goalie more flight to react — lower score")
+
+
+func test_far_shot_at_set_goalie_covered_beyond_distance_falloff() -> void:
+	# The range shot must lose MORE than dist_response alone explains —
+	# the extra is the reaction-time coverage. Both shots dead-center at
+	# a squared set goalie, no opponents, same speed.
+	var close := Vector3(0.0, 0.0, 23.0)   # 3.65 m — inside the reaction window
+	var far := Vector3(0.0, 0.0, 14.0)     # 12.65 m — a "just outside the slot" bomb
+	var goalie := Vector3(0.0, 0.0, 25.5)
+	var s_close: float = AIActionScoring.score_shoot(close, GOAL, goalie, NET_HW, [])
+	var s_far: float = AIActionScoring.score_shoot(far, GOAL, goalie, NET_HW, [])
+	var resp_close: float = 1.0 - pow(3.65 / AIActionScoring.SHOT_RANGE_FALLOFF_M, 2.0)
+	var resp_far: float = 1.0 - pow(12.65 / AIActionScoring.SHOT_RANGE_FALLOFF_M, 2.0)
+	assert_lt(s_far / s_close, (resp_far / resp_close) * 0.75,
+			"range shots into a set goalie must pay real coverage on top of distance falloff")
+
+
+func test_point_blank_coverage_keeps_base_floor() -> void:
+	# Flight <= reaction delay → readiness 0 → coverage cap stays at
+	# BASE_COVERAGE, preserving the old point-blank scoring exactly.
+	var dist: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S \
+			* AIActionScoring.GOALIE_REACTION_DELAY_S * 0.9
+	var shooter := Vector3(0.0, 0.0, GOAL.z - dist)
+	var goalie := Vector3(0.0, 0.0, 25.9)  # squared, set
+	# goalie_current_pos deliberately left at the INF default so the zone
+	# penalty stays out of the expectation — this isolates coverage.
+	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+	var dist_response: float = 1.0 - pow(dist / AIActionScoring.SHOT_RANGE_FALLOFF_M, 2.0)
+	var expected: float = dist_response * (1.0 - AIActionScoring.BASE_COVERAGE)
+	assert_almost_eq(s, expected, 0.001,
+			"point-blank shots keep the BASE_COVERAGE floor (old model preserved)")
+
+
 # ── position_potential ───────────────────────────────────────────────────────
 # position_potential models "value of being at this position" — used
 # only when the evaluator is OUTSIDE shooting range (the regime rule
@@ -562,6 +624,39 @@ func test_potential_drops_with_pressure() -> void:
 	var pressured_opps: Array[Vector3] = [Vector3(0.0, 0.0, 7.0)]
 	var pressured: float = AIActionScoring.position_potential(pos, GOAL, pressured_opps)
 	assert_lt(pressured, clean, "forward-cone defender drops position potential")
+
+
+# ── potential_realization_discount ───────────────────────────────────────────
+# Potential is future value — it still has to be skated to the slot — so
+# the carrier's compete discounts it over that remaining travel time.
+
+func test_realization_discount_full_at_slot() -> void:
+	# Inside the slot platform the promise is already real — no discount.
+	var slot := Vector3(0.0, 0.0, 21.65)  # 5 m from goal, inside SLOT_RADIUS_M
+	assert_eq(AIActionScoring.potential_realization_discount(slot, GOAL), 1.0)
+
+
+func test_realization_discount_decays_with_distance() -> void:
+	# Further from the slot = longer to realize = deeper discount.
+	var near := Vector3(0.0, 0.0, 12.0)   # ~14.7 m from goal
+	var far := Vector3(0.0, 0.0, -5.0)    # ~31.7 m from goal
+	var near_d: float = AIActionScoring.potential_realization_discount(near, GOAL)
+	var far_d: float = AIActionScoring.potential_realization_discount(far, GOAL)
+	assert_lt(near_d, 1.0, "outside the slot the discount is real")
+	assert_lt(far_d, near_d, "deeper positions pay a deeper discount")
+
+
+func test_realization_discount_matches_delay_discount_currency() -> void:
+	# The discount IS the standard per-second delay discount over the
+	# remaining travel time at reference speed — same currency as every
+	# other future action in the carrier's EV model.
+	var pos := Vector3(0.0, 0.0, 8.65)  # 18 m from goal → 12 m past slot edge
+	var expected: float = pow(
+			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+			12.0 / AIActionScoring.SKATER_REF_SPEED_M_S)
+	assert_almost_eq(
+			AIActionScoring.potential_realization_discount(pos, GOAL),
+			expected, 0.0001)
 
 
 # ── time_to_arrive ───────────────────────────────────────────────────────────

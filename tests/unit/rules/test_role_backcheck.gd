@@ -71,8 +71,36 @@ func test_assigned_man_drives_coverage_side() -> void:
 	var d: RoleDecision = AIRoleBackcheck.decide(ctx)
 	assert_gt(d.target_position.x, 0.0,
 			"assigned the +X man → cover his side; got x=%f" % d.target_position.x)
-	assert_gt(d.target_position.z, man.z - 0.01,
+	assert_gt(d.target_position.z,
+			man.z - AIRoleHelpers.COVER_GOAL_SIDE_TOLERANCE_M - 0.01,
 			"coverage is goal-side of the man; got z=%f" % d.target_position.z)
+
+
+func test_assigned_man_is_covered_tight_not_from_the_slot() -> void:
+	# Rush receiver still high in the NZ. Coverage must be ATTACHED to
+	# the man — the search centers on the threat partition's cover
+	# anchor (COVER_DEPTH_M goal-side of him), so the target sits within
+	# the anchor + one candidate ring of his body. The old midpoint-to-
+	# net centering "covered" this man from ~11 m away (and tracked his
+	# cuts at half speed), which is how bots kept losing their man.
+	var carrier := Vector3(-3, 0, -2)
+	var man := Vector3(5, 0, 2)   # ~25 m from our net
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(2, 0, 8), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier, Vector3.ZERO],
+		[210, 1 - TEAM_ID, man, Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(2, 0, 8), skaters, 200)
+	ctx.assigned_threat_peer = 210
+	var d: RoleDecision = AIRoleBackcheck.decide(ctx)
+	var max_attach: float = AIThreatAssignment.COVER_DEPTH_M \
+			+ AIRoleHelpers.SEARCH_STEP_M + 0.5
+	assert_lt(d.target_position.distance_to(man), max_attach,
+			"man coverage stays attached to the man; got %s for man at %s" \
+			% [d.target_position, man])
+	assert_gt(d.target_position.z,
+			man.z - AIRoleHelpers.COVER_GOAL_SIDE_TOLERANCE_M - 0.01,
+			"…and on the defensive side of him; got z=%f" % d.target_position.z)
 
 
 # ── Bail-outs (fallback path, unassigned) ──────────────────────────────────

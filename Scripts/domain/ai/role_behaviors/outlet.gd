@@ -2,14 +2,25 @@ class_name AIRoleOutlet
 
 # OUTLET role behavior — TRANS_DO only. Stretch-pass option waiting
 # at the opp blue line (NZ-side) for the breakout pass. Same
-# candidate-set / score_pass argmax pattern as AIRoleSupport,
-# minus the exposure half — OUTLET is intentionally up-ice and
-# accepts being past the play. Defensive responsibility falls to
-# SUPPORT (trail) on this team's strong-side rotation.
+# candidate-set argmax pattern as AIRoleSupport, minus the exposure
+# half — OUTLET is intentionally up-ice and accepts being past the
+# play. Defensive responsibility falls to SUPPORT (trail) on this
+# team's strong-side rotation.
 #
 # Algorithm: argmax over the candidate set of
 #
-#     score_pass(carrier, candidate)
+#     max(lane_clear(carrier → c), BLOCKED_LANE_FLOOR)
+#         × position_potential(c)
+#
+# — the same primitive pair the BREAKOUT outlets use, for the same
+# reason: every legal OUTLET candidate is NZ-side of the opp blue
+# line, which is ≥ SHOT_RANGE_FALLOFF_M from the opp goal, where
+# score_shoot ≡ 0 — so a score_pass argmax (lane × score_shoot) was
+# 0 for EVERY candidate and degenerated to "first in the list": the
+# outlet went to the raw search center every tick, blind to a
+# defender standing right on the stretch spot or in the feed lane.
+# lane × potential keeps a live gradient out here: reachable-by-the-
+# carrier gates the spot, open-ice/up-ice value ranks it.
 #
 # Adds an offside filter: TRANS_DO is defined as "puck NZ-side of
 # opp blue line" — any candidate past that line would ghost the
@@ -31,6 +42,14 @@ const BLUE_LINE_BUFFER_M: float = 2.5
 # all clamp against the wall.
 const WEAK_SIDE_INSET_M: float = 2.0
 
+# Floor on the lane term so dead pass lanes rank candidates instead of
+# erasing them — a stretch pass is long enough that one defender's
+# closing reach can blanket the whole candidate ring, and without the
+# floor the argmax loses all signal exactly when positioning matters
+# most. Mirrors AIRoleBreakout.BLOCKED_LANE_FLOOR (duplicated so each
+# role file stays self-contained, per the role-module convention).
+const BLOCKED_LANE_FLOOR: float = 0.15
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -42,8 +61,6 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
 		return d
-
-	var goalie_pos: Vector3 = AIRoleHelpers.resolve_opp_goalie_pos(ctx)
 
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
@@ -68,12 +85,13 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# Match the speed our carrier would actually fire at — outlet
 		# candidates are the long-pass receivers by definition (stretch
 		# passes across zones), so this is exactly where the charged-
-		# pass scoring matters most.
+		# pass lane math matters most.
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
-		var score: float = AIActionScoring.score_pass(
-				carrier_pos, c, ctx.attacking_goal_pos,
-				goalie_pos, GameRules.NET_HALF_WIDTH,
-				opp_positions, Vector3.INF, pass_speed)
+		var lane: float = AIActionScoring.lane_clear(
+				carrier_pos, c, opp_positions, pass_speed)
+		var potential: float = AIActionScoring.position_potential(
+				c, ctx.attacking_goal_pos, opp_positions)
+		var score: float = maxf(lane, BLOCKED_LANE_FLOOR) * potential
 		if score > best_score:
 			best_score = score
 			best_pos = c

@@ -8,7 +8,7 @@ class_name AIActionScoring
 # probability that a given shot becomes a goal given its geometry and the
 # defensive context. It is xG-SHAPED (peak in the slot, drops with
 # distance / angle / coverage / pressure / lane traffic) but NOT magnitude-
-# calibrated against real-world data: a clean slot wrister scores ~0.7
+# calibrated against real-world data: a clean slot wrister scores ~0.55
 # here; the real-world xG would be closer to 0.30. Treat the outputs as
 # RELATIVE shot quality, not actual goal probability.
 #
@@ -87,20 +87,40 @@ const SHOT_RANGE_FALLOFF_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_
 # pull bots from further out; down (4 m) tightens the sweet spot.
 const SLOT_RADIUS_M: float = 6.0
 
-# Shot-quality coverage knobs. The two-angle model:
-#   coverage   = BASE_COVERAGE × squareness
-#   squareness = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
+# Shot-quality coverage knobs. The two-angle model with reaction-time
+# scaling:
+#   coverage     = coverage_cap(flight) × squareness
+#   coverage_cap = lerp(BASE_COVERAGE, GOALIE_SET_COVERAGE_MAX,
+#                       (flight_time − reaction) / SET_SAVE_WINDOW)
+#   squareness   = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
 # where arc_offset is |puck_arc_angle - goalie_arc_angle| at shot
-# release. A squared goalie blocks BASE_COVERAGE of the visible net;
-# arc_offset >= SQUARENESS_OFFSET_RAD = goalie fully exposed (open
-# net). Replaces the legacy shadow-projection openness + linear
-# angle-ramp pair.
+# release and flight_time = shot distance / shot speed. arc_offset >=
+# SQUARENESS_OFFSET_RAD = goalie fully exposed (open net). Replaces the
+# legacy shadow-projection openness + linear angle-ramp pair.
 #
-# Tuning: BASE_COVERAGE down (e.g., 0.30) → bots take more shots vs
-# squared goalies; up (0.45) → bots pass/cycle more. SQUARENESS_OFFSET
-# down (e.g., 25°) → cross-seam plays score higher (goalie reads as
-# "exposed" sooner); up (40°) → only severe slides expose the goalie.
+# Why coverage scales with flight time: the live goalie is REACTIVE —
+# a fixed reaction delay, then it blocks what it can track. A shot from
+# range gives a set goalie the whole flight to read and get behind it
+# (the real goalie saves those), while a point-blank release beats the
+# reaction window entirely. The old flat BASE_COVERAGE priced both the
+# same, so a set square goalie only ever cost 28% and bots happily
+# fired from just outside the slot all game. With the cap ramping to
+# GOALIE_SET_COVERAGE_MAX over SET_SAVE_WINDOW of post-reaction flight,
+# range shots into a set goalie collapse, and what beats the goalie in
+# the model is what beats it on the ice: getting close, catching it
+# moving (goalie_unsettled), or catching it off-angle (squareness).
+#
+# Tuning: BASE_COVERAGE is the point-blank floor (down → more net-mouth
+# finishing). GOALIE_SET_COVERAGE_MAX down (e.g., 0.55) → bots respect
+# range shots more / shoot from distance more; up (0.8) → almost never.
+# SET_SAVE_WINDOW down (e.g., 0.25) → the "must get inside" radius
+# tightens toward the crease; up (0.5) → even mid-slot shots read as
+# coverable. SQUARENESS_OFFSET down (e.g., 25°) → cross-seam plays
+# score higher (goalie reads as "exposed" sooner); up (40°) → only
+# severe slides expose the goalie.
 const BASE_COVERAGE: float = 0.28
+const GOALIE_SET_COVERAGE_MAX: float = 0.7
+const GOALIE_SET_SAVE_WINDOW_S: float = 0.35
 const SQUARENESS_OFFSET_RAD: float = 0.5235988  # deg_to_rad(30)
 
 # Goalie position prediction. Replaces velocity-extrapolation with a
@@ -455,11 +475,21 @@ static func score_shoot(
 
 	var arc_offset: float = absf(puck_arc_angle - goalie_arc_angle)
 	var squareness: float = maxf(0.0, 1.0 - arc_offset / SQUARENESS_OFFSET_RAD)
+	# Reaction-time coverage cap (see the doc above BASE_COVERAGE): the
+	# longer this shot's flight gives the goalie past its reaction delay,
+	# the more of the net a set goalie takes away. Point-blank shots
+	# (flight <= reaction) keep the BASE_COVERAGE floor.
+	var flight_time: float = dist / maxf(shot_speed_m_s, 1.0)
+	var goalie_readiness: float = clampf(
+			(flight_time - GOALIE_REACTION_DELAY_S) / GOALIE_SET_SAVE_WINDOW_S,
+			0.0, 1.0)
+	var coverage_cap: float = lerpf(
+			BASE_COVERAGE, GOALIE_SET_COVERAGE_MAX, goalie_readiness)
 	# A goalie caught mid-slide / just-arrived saves worse than a set one even at
 	# the same angle (reads the shot late) — scale coverage down by how unsettled
 	# it is. Default 0.0 leaves the position-only model untouched for callers that
 	# don't pass it (existing tests, off-puck role scoring).
-	var coverage: float = (BASE_COVERAGE * squareness
+	var coverage: float = (coverage_cap * squareness
 			* (1.0 - GOALIE_MOTION_PENALTY * goalie_unsettled_factor))
 	var shot_quality: float = dist_response * shot_angle_factor * (1.0 - coverage)
 
@@ -1002,6 +1032,32 @@ static func position_potential(
 	var angle_factor: float = clampf(1.0 - shot_angle / (PI * 0.5), 0.0, 1.0)
 	var openness: float = 1.0 - _pressure(pos, opponents, attacking_goal - pos)
 	return closeness * angle_factor * openness
+
+
+# Realization discount for position_potential when it prices a CARRY /
+# receiver destination in the carrier's expected-value compete: potential
+# is FUTURE value — its promise (a real shot) is only cashed by skating
+# from `pos` to the slot — so it must pay the same per-second delay
+# discount (CARRY_DELAY_DISCOUNT_PER_SEC) that every other future action
+# in the model pays, over that remaining travel time.
+#
+# Without this, the carrier's stand-still candidate held its potential
+# UNDECAYED while every movement candidate paid decay over its travel
+# time; outside shooting range the potential gradient (~3%/m) is
+# shallower than that decay (~4%/m at rest), so standing still strictly
+# beat stepping toward the net and an open carrier PLANTED at the blue
+# line ("hesitant to take space that's clearly theirs"). With the
+# discount, an on-route step trades travel decay for realization decay
+# one-for-one (triangle equality), the decays cancel, and the compete
+# reduces to the pure positional gradient — open ice ahead always wins.
+#
+# Travel time is measured to the slot platform edge (SLOT_RADIUS_M — the
+# ring where potential's promise becomes a real shot) at the league
+# reference speed (cross-player boundary: receivers use it too).
+static func potential_realization_discount(pos: Vector3,
+		attacking_goal: Vector3) -> float:
+	var travel_dist: float = maxf(0.0, pos.distance_to(attacking_goal) - SLOT_RADIUS_M)
+	return pow(CARRY_DELAY_DISCOUNT_PER_SEC, travel_dist / SKATER_REF_SPEED_M_S)
 
 
 # "Threat surface" — the value an opp can extract from their current

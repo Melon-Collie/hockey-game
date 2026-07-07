@@ -529,6 +529,9 @@ var _ticks_in_state: int = 0
 # tick of any teleport (the speed gate releases it at a standstill), so it
 # needs no faceoff reset.
 var _pivot_braking: bool = false
+# Arrival-brake hysteresis (AISteering.should_arrival_brake) — held across
+# ticks so the brake key doesn't strobe while speed sheds on approach.
+var _arrival_braking: bool = false
 
 # Identity / orientation
 var _peer_id: int = 0
@@ -1201,7 +1204,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# fallback (AIRoleAnchorFollow) just steers to the brain anchor.
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
-		_apply_steering(input, snapshot, self_pos, decision.target_position)
+		# Station-keeping: arrive AT the role destination (arrival brake)
+		# instead of overshooting a spot that stopped moving — EXCEPT on a
+		# body-check commit, which wants maximum closing velocity through
+		# the target.
+		_apply_steering(input, snapshot, self_pos, decision.target_position,
+				not decision.commit_check)
 		if decision.commit_check:
 			# Body-check commit: drive THROUGH the carrier at max closing
 			# velocity. Force sprint even at short range — the gap gate would
@@ -2527,7 +2535,13 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S)
 
 
-func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, anchor: Vector3) -> void:
+# `arrive` opts into the arrival brake (AISteering.should_arrival_brake):
+# station-keeping callers (off-puck role destinations) brake to STOP at the
+# anchor instead of overshooting a target that slowed down. Waypoint-style
+# callers (carry steps, puck chase, check commits, tag-up) leave it false —
+# they either re-pick the anchor continuously or WANT to arrive at speed.
+func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
+		anchor: Vector3, arrive: bool = false) -> void:
 	# Standard potential-field steering with brake-pivot.
 	# Use the per-team roster published by GameManager._enrich_snapshot_for_ai
 	# instead of re-partitioning snapshot.skater_states every physics tick.
@@ -2599,7 +2613,16 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	if self_state != null:
 		var v: Vector3 = self_state.velocity
 		_pivot_braking = AISteering.should_brake(desired, Vector2(v.x, v.z), _pivot_braking)
-		input.brake = _pivot_braking
+		# Arrival brake (opt-in per call site): stop AT a station target
+		# instead of overshooting one that slowed down and doubling back.
+		# The pivot brake wins when both would fire (it already implies
+		# maximal braking).
+		if arrive and not _pivot_braking:
+			_arrival_braking = AISteering.should_arrival_brake(
+					self_pos, anchor, Vector2(v.x, v.z), _arrival_braking)
+		else:
+			_arrival_braking = false
+		input.brake = _pivot_braking or _arrival_braking
 		# Body-level offside guard: keep an attacking non-carrier from
 		# skating its body across the attacking blue line before the puck
 		# (instant ghost in ARCADE). Applied after the brake-pivot so the
