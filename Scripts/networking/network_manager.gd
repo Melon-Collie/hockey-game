@@ -1294,6 +1294,18 @@ func stop_replay_mode() -> void:
 			notify_replay_mode.rpc_id(peer_id, false)
 
 
+# Toggle replay mode on THIS peer only, with no RPC mirror. The networked
+# start/stop_replay_mode pair drives the live goal cinematic in lockstep across
+# peers (host stops broadcasting, clients spin up their own GoalReplayDriver).
+# The post-game background replay is different: the game is already over, each
+# peer loops its OWN captured goals purely cosmetically, and there's nothing to
+# synchronize — so it just needs the local flag (host: stop broadcasting/
+# capturing; client: skip applying any stray frame in decode_world_state).
+func set_replay_mode_local(active: bool, initial_ts: float = 0.0) -> void:
+	_replay_mode = active
+	_replay_clock = initial_ts if active else 0.0
+
+
 @rpc("authority", "reliable")
 func notify_replay_mode(active: bool) -> void:
 	# Mirror other authority RPCs (receive_world_state, receive_pong, …)
