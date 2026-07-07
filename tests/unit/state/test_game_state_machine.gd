@@ -512,6 +512,36 @@ func test_carrier_not_ghosted_by_offside() -> void:
 		Vector3(0, 0, 0))
 	assert_false(ghosts[1])
 
+# ARCADE's instant ghost is meant to emulate the same NHL delayed-offside
+# rule, it just never produces a stoppage — so the same defending-possession
+# void applies to it, not just NHL's pending whistle state (see the
+# equivalent test_defending_possession_voids_delayed_offside_* tests above).
+
+func test_defending_possession_voids_arcade_ghost_even_without_tagging_up() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)  # team 0, offside attacker
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, 0))  # team 0 attacking zone, puck in neutral
+	assert_true(ghosts[1], "offside ghost applied")
+
+	# Team 1 (defending) gains a genuine carry, still deep in the zone (not
+	# cleared out) — voids the ghost even though peer 1 never retreated.
+	sm.notify_puck_carried(1, -10.0, 0.0)
+	var ghosts_after: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, -10))
+	assert_false(ghosts_after[1],
+			"defending team's clean possession voids the ARCADE ghost outright")
+
+func test_own_team_possession_does_not_void_arcade_ghost() -> void:
+	sm.register_remote_assigned_player(1, 0, 0)  # team 0, offside attacker
+	sm.compute_ghost_state({1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, 0))
+
+	# A team-0 teammate carrying the puck (still the offending team) must NOT
+	# void it — only the defending team's possession does.
+	sm.notify_puck_carried(0, -10.0, 0.0)
+	var ghosts: Dictionary = sm.compute_ghost_state(
+		{1: Vector3(0, 1, -10)}, -1, Vector3(0, 0, -10))
+	assert_true(ghosts[1], "the offending team's own possession does not void the ghost")
+
 func test_icing_does_not_ghost_the_team() -> void:
 	# P2-7: icing is a whistle-and-faceoff rule, NOT a team ghost. Even with an
 	# active icing_team_id, compute_ghost_state must not ghost the offending team —
