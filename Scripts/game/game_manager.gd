@@ -79,6 +79,11 @@ var _positions_scratch: Dictionary = {}
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
 var _puck_net_stuck_timer: float = 0.0
+# Swept goal detection (host): the puck's center last physics tick, so the goals
+# can test the segment prev -> curr for a full goal-line crossing. Invalid until
+# the first loose-puck tick of a live period (see _check_goal_crossing).
+var _prev_puck_pos: Vector3 = Vector3.ZERO
+var _has_prev_puck_pos: bool = false
 # Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
 # we don't fire stray vote RPCs outside of the cinematic window.
 var _in_replay_locally: bool = false
@@ -384,6 +389,7 @@ func _physics_process(delta: float) -> void:
 		for brain: TeamBrain in team_brains:
 			brain.tick(delta, current_snapshot)
 	_update_host_puck_tracking()
+	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)
 	_check_puck_stuck_on_net(delta)
 	_apply_ghost_state(delta)
@@ -542,6 +548,31 @@ func _update_host_puck_tracking() -> void:
 		_state_machine.check_icing_for_loose_puck(
 				puck.global_position.z, _positions_scratch)
 		_consume_pending_faceoff()
+
+
+# Host-only swept goal detection. Feeds each goal the puck-center segment from
+# last tick to this tick; the goal emits `goal_scored` when the whole puck fully
+# crosses its line inside the mouth (GoalDetectionRules). Runs BEFORE the OOB /
+# stuck-on-net checks so a scored puck flips the phase out of PLAYING first and
+# those checks early-return rather than whistling the goal dead.
+func _check_goal_crossing() -> void:
+	# Only live play with a loose puck can score. A carried puck is frozen to the
+	# blade, and non-PLAYING phases never award goals — reset the tracker so the
+	# next loose tick starts a fresh segment instead of spanning the gap (which
+	# could fabricate a crossing from a stale pre-freeze position).
+	if _state_machine.current_phase != GamePhase.Phase.PLAYING \
+			or puck.carrier != null \
+			or NetworkManager.is_drill_mode():
+		_has_prev_puck_pos = false
+		return
+	var curr: Vector3 = puck.global_position
+	if not _has_prev_puck_pos:
+		_prev_puck_pos = curr
+		_has_prev_puck_pos = true
+		return
+	for goal: HockeyGoal in goals:
+		goal.check_goal_crossing(_prev_puck_pos, curr)
+	_prev_puck_pos = curr
 
 
 func _apply_ghost_state(delta: float) -> void:
