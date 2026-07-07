@@ -36,6 +36,16 @@ const PIPE_RADIAL_SEGMENTS: int = 8
 const NET_TEXTURE_PATH: String    = "res://Assets/textures/net_diamond.png"
 const NET_TEXTURE_TILE_SIZE: float = 0.164  # 4 diamonds × 41mm each
 
+# Physics materials split by surface. The main HockeyGoal body carries the pipe
+# frame (posts/crossbar/bends → lively steel ping); _net_body carries the net
+# panels + skirt (twine → absorbs, puck drops). Neither existed before, so the
+# whole goal ran on the engine default (friction 1.0, bounce 0.0) — pipe pinged
+# dead and the net had no distinct feel. See the .tres files for the numbers and
+# the combine reasoning (the puck carries no material, so each collapses to the
+# surface value).
+const PIPE_MATERIAL: PhysicsMaterial = preload("res://Physics/goal_pipe.tres")
+const NET_MATERIAL: PhysicsMaterial = preload("res://Physics/goal_net.tres")
+
 # All net panels share one ShaderMaterial (goal_net.gdshader) so GoalVFX can
 # drive a single ripple uniform on goal. Rebuilt per _rebuild().
 const NET_SHADER_PATH: String = "res://Shaders/goal_net.gdshader"
@@ -88,6 +98,10 @@ func goal_line_z() -> float:
 		_rebuild()
 
 func _ready() -> void:
+	# Pipe frame (posts/crossbar/bends live directly on this StaticBody3D).
+	# _rebuild() only frees children, never touches self's material, so setting
+	# it once here survives every rebuild.
+	physics_material_override = PIPE_MATERIAL
 	_rebuild()
 
 func _rebuild() -> void:
@@ -107,6 +121,7 @@ func _rebuild() -> void:
 
 	_net_body = StaticBody3D.new()
 	_net_body.collision_layer = Constants.LAYER_WALLS  # puck must still bounce off net panels
+	_net_body.physics_material_override = NET_MATERIAL  # twine absorbs; puck drops instead of pinging
 	add_child(_net_body)
 
 	var goal_z: float = facing * (rink_length / 2.0 - distance_from_end)
