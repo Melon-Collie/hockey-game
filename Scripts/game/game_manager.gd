@@ -2941,9 +2941,10 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 # can't wait on the possession-loss verdict that gates the stat — and self-fire
 # locally since the RPC reaches only remote peers (and so offline/free-play
 # still gets the impact).
-func _on_impact_landed(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
-	NetworkManager.send_body_check_to_all(victim_peer_id, force, hit_dir)
-	_on_body_check_landed(victim_peer_id, force, hit_dir)
+func _on_impact_landed(hitter_peer_id: int, victim_peer_id: int,
+		force: float, hit_dir: Vector3) -> void:
+	NetworkManager.send_body_check_to_all(hitter_peer_id, victim_peer_id, force, hit_dir)
+	_on_body_check_landed(hitter_peer_id, victim_peer_id, force, hit_dir)
 
 
 # Host-only. The hit stat may land up to POSSESSION_LOSS_WINDOW_S after the
@@ -2959,7 +2960,8 @@ func _on_hit_credited(_victim_peer_id: int, _force: float, _hit_dir: Vector3) ->
 # straight into SkaterVFX.check_* — the same path the replay system uses. Local
 # victim camera shake is NOT driven here: it already fires immediately off the
 # predicted body_check_impulse_applied → local_player_hit path.
-func _on_body_check_landed(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
+func _on_body_check_landed(hitter_peer_id: int, victim_peer_id: int,
+		force: float, hit_dir: Vector3) -> void:
 	if _registry == null:
 		return
 	var victim_rec: PlayerRecord = _registry.get_record(victim_peer_id)
@@ -2971,6 +2973,12 @@ func _on_body_check_landed(victim_peer_id: int, force: float, hit_dir: Vector3) 
 	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
 			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
 	body_check_broadcast.emit(force)
+	# The hitter's check-delivery body pose (shoulder drive through the contact)
+	# rides the same broadcast as the burst/thud so all three land the identical
+	# frame on every machine. Intensity shares the VFX hardness curve.
+	var hitter_rec: PlayerRecord = _registry.get_record(hitter_peer_id)
+	if hitter_rec != null and hitter_rec.controller != null:
+		hitter_rec.controller.start_check_drive(hit_dir, SkaterVFX.check_intensity(force))
 	# Lever B: lead the knockback on a remotely-interpolated victim so the hit reads
 	# punchy instead of mushy-late. No-op for the local (predicted) victim — its
 	# controller isn't a RemoteController — and on the host (guarded inside).
@@ -3735,11 +3743,15 @@ func faceoff_time_until_drop() -> float:
 	return _state_machine.faceoff_prep_time_until_drop()
 
 
-# Cosmetic: the scorer raises the stick through the GOAL_CELEBRATION beat.
-# goal_scored is emitted locally on every machine (host detects, clients get
-# notify_goal), but the trigger fires only where the scorer is SIMULATED —
-# their own client, or the host for bots. The raised hands then ride the
-# existing hand/blade wire state to every other machine like any other pose.
+# Cosmetic: the scorer raises the stick and bounces through the
+# GOAL_CELEBRATION beat. goal_scored is emitted locally on every machine (host
+# detects, clients get notify_goal), so the timer starts EVERYWHERE for the
+# scorer's record: machines that simulate the skater apply the raised-stick
+# pose (which rides the hand/blade wire state outward — including the host's
+# sim of a remote human scorer, which previously never fired, leaving their
+# celebration invisible to everyone else), and every machine's gait reads the
+# same timer for the celebration leg bounce (legs are computed locally per
+# machine and never ride the wire).
 func _trigger_scorer_celebration(_team: Team, scorer_name: String,
 		_assist1: String, _assist2: String) -> void:
 	if scorer_name.is_empty():
@@ -3747,8 +3759,7 @@ func _trigger_scorer_celebration(_team: Team, scorer_name: String,
 	for record: PlayerRecord in _registry.all().values():
 		if record.player_name != scorer_name or record.controller == null:
 			continue
-		if record.is_local or (NetworkManager.is_host and record.is_bot):
-			record.controller.start_celebration(GameRules.GOAL_CELEBRATION_DURATION)
+		record.controller.start_celebration(GameRules.GOAL_CELEBRATION_DURATION)
 		return
 
 

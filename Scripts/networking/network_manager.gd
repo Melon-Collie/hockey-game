@@ -107,10 +107,11 @@ signal stick_lift_received(position: Vector3)
 signal nudge_received(position: Vector3)
 signal shot_sound_received(position: Vector3, is_slapper: bool)
 # Host-authoritative body-check impact (Lever A). Fired on every client (and
-# self-emitted on the host) when a hit is credited, so impact VFX/sound are
-# consistent everywhere instead of relying on each client's non-authoritative
-# local collision detection. `force` is the VFX-scale impact force.
-signal body_check_landed(victim_peer_id: int, force: float, hit_dir: Vector3)
+# self-emitted on the host) when a hit is credited, so impact VFX/sound — and
+# the hitter's check-delivery body pose — are consistent everywhere instead of
+# relying on each client's non-authoritative local collision detection.
+# `force` is the VFX-scale impact force.
+signal body_check_landed(hitter_peer_id: int, victim_peer_id: int, force: float, hit_dir: Vector3)
 signal input_batch_received(peer_id: int, inputs: Array[InputState])
 # Mid-game player → spectator transition. Host broadcasts to all peers; every
 # receiver despawns the demoted peer's skater locally (registry.remove handles
@@ -2095,15 +2096,21 @@ func send_puck_strip_to_all(position: Vector3) -> void:
 func notify_puck_strip(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: puck_strip_received.emit(pos), [position], false)
 
-func send_body_check_to_all(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
+func send_body_check_to_all(hitter_peer_id: int, victim_peer_id: int,
+		force: float, hit_dir: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
-		notify_body_check.rpc_id(peer_id, victim_peer_id, force, hit_dir)
+		notify_body_check.rpc_id(peer_id, hitter_peer_id, victim_peer_id, force, hit_dir)
 
+# hitter_peer_id on the wire since PROTOCOL_VERSION 19: the check-delivery
+# body pose (the hitter's shoulder drive) fires from this same broadcast so it
+# lands the identical frame as the burst/thud on every machine.
 @rpc("authority", "unreliable")
-func notify_body_check(victim_peer_id: int, force: float, hit_dir: Vector3) -> void:
+func notify_body_check(hitter_peer_id: int, victim_peer_id: int,
+		force: float, hit_dir: Vector3) -> void:
 	NetworkSimManager.send(
-			func(vid: int, f: float, d: Vector3) -> void: body_check_landed.emit(vid, f, d),
-			[victim_peer_id, force, hit_dir], false)
+			func(hid: int, vid: int, f: float, d: Vector3) -> void:
+				body_check_landed.emit(hid, vid, f, d),
+			[hitter_peer_id, victim_peer_id, force, hit_dir], false)
 
 func send_stick_lift_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():

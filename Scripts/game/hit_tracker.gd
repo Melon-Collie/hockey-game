@@ -43,7 +43,7 @@ extends RefCounted
 # contact, and coalesces sustained-contact re-fires. It arms at contact time,
 # so an expired pending still consumed the pair's window.
 
-signal impact_landed(victim_peer_id: int, force: float, hit_dir: Vector3)
+signal impact_landed(hitter_peer_id: int, victim_peer_id: int, force: float, hit_dir: Vector3)
 signal hit_credited(victim_peer_id: int, force: float, hit_dir: Vector3)
 
 const HIT_COOLDOWN_S: float = 1.5
@@ -90,7 +90,7 @@ func on_contact(hitter_peer_id: int, victim_peer_id: int, victim_team_id: int,
 	if _last_hit_time.get(key, -INF) + HIT_COOLDOWN_S > now:
 		return  # already fired for this contact
 	_last_hit_time[key] = now
-	impact_landed.emit(victim_peer_id, force, hit_dir)
+	impact_landed.emit(hitter_peer_id, victim_peer_id, force, hit_dir)
 	if verdict == HitRules.Verdict.CREDIT:
 		_credit(hitter_peer_id, victim_peer_id, force, hit_dir)
 		return

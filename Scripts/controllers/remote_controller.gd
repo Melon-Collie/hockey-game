@@ -82,6 +82,15 @@ func _physics_process(delta: float) -> void:
 		# network state. (Host-driven remotes animate via _process_input above.
 		# Stick/arm meshes update once per rendered frame in Skater._process.)
 		_skating.apply(delta)
+		# Lower-body yaw channels the gait publishes (hockey-stop skid,
+		# hip-to-travel alignment, wrist-shot hip coil). On the simulating
+		# machine the pose coordinator writes these in apply_facing, which never
+		# runs for a client-rendered remote — without this mirror the channels
+		# were computed and dropped, so a remote's hockey stop never turned
+		# their legs on this machine. (lower_body_lag itself is a facing-turn
+		# artifact that doesn't exist on this path.)
+		skater.set_lower_body_lag(
+				_skating.stop_yaw_offset + _skating.travel_align_yaw + _skating.shot_hip_yaw)
 
 func receive_input_batch(batch: Array[InputState]) -> void:
 	# Reject inputs whose timestamps fall outside a plausible window around the

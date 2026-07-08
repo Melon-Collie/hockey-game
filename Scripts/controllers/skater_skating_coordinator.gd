@@ -108,6 +108,36 @@ var _sprint: float = 0.0
 # _glide_phase). Position + velocity of the critically-ish damped spring.
 var _weight_shift: float = 0.0
 var _weight_shift_vel: float = 0.0
+# Shot body animation (see the Shot block in apply()). Driven from the
+# replicated current_shot_state + shot_charge, exactly like the stick flex:
+# the wrister load tracks the drag-charge through WRISTER_AIM, the slapper
+# load tracks the wind-up through the charge states, and the transition into
+# FOLLOW_THROUGH latches the smoothed load as the release kick's power (the
+# raw charge may already be zeroed by then), with the kick's amplitude set
+# picked by which charge it came from. shot_hip_yaw (radians, lower-body
+# rotation.y) is PUBLISHED for the pose coordinator's lower-body write — same
+# contract as stop_yaw_offset.
+var shot_hip_yaw: float = 0.0
+var _shot_prev_state: int = 0
+var _wrister_load: float = 0.0      # smoothed 0..1 drag-charge engagement
+var _slap_load: float = 0.0         # smoothed 0..1 wind-up engagement
+var _shot_kick_t: float = -1.0      # seconds into the release kick; <0 = idle
+var _shot_kick_power: float = 0.0   # load latched at release (min-pop floored)
+var _shot_kick_is_slap: bool = false
+# Smoothed shot-block engagement: the braced wall pose (deep sit, wide V legs)
+# snaps in with the committed plant and eases back out on release. Keyed off
+# the replicated current_shot_state like the shot signals above.
+var _block_blend: float = 0.0
+# Check-delivery drive: the hitter's shoulder finishing through the contact.
+# Started by SkaterController.start_check_drive off the host-authoritative
+# body_check_landed broadcast (and the replay event dispatcher), so every
+# machine plays the identical drive the same frame as the burst/thud.
+var _drive_dir: Vector3 = Vector3.ZERO  # world-space, attacker → victim
+var _drive_t: float = -1.0              # seconds into the drive; <0 = idle
+var _drive_intensity: float = 0.0       # 0..1 VFX hit hardness
+# Smoothed stick-lift engagement — the working posture while jabbing under an
+# opponent's stick. Keyed off the replicated blade_up.
+var _lift_blend: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -143,9 +173,38 @@ func reset_to_rest() -> void:
 	_sprint = 0.0
 	_weight_shift = 0.0
 	_weight_shift_vel = 0.0
+	shot_hip_yaw = 0.0
+	_shot_prev_state = 0
+	_wrister_load = 0.0
+	_slap_load = 0.0
+	_shot_kick_t = -1.0
+	_shot_kick_power = 0.0
+	_shot_kick_is_slap = false
+	_block_blend = 0.0
+	_drive_dir = Vector3.ZERO
+	_drive_t = -1.0
+	_drive_intensity = 0.0
+	_lift_blend = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
+
+
+# Arms the check-delivery drive (see the runtime state above). During
+# sustained contact or a quick follow-up hit inside an active drive the
+# broadcast can re-fire: harden the intensity but never restart the clock —
+# a re-zeroed envelope would pin the pose at its rise for as long as the
+# contact grinds.
+func start_check_drive(hit_dir: Vector3, intensity: float) -> void:
+	var flat := Vector3(hit_dir.x, 0.0, hit_dir.z)
+	if flat.length_squared() < 0.0001 or intensity <= 0.0:
+		return
+	if _drive_t >= 0.0:
+		_drive_intensity = maxf(_drive_intensity, intensity)
+		return
+	_drive_dir = flat.normalized()
+	_drive_intensity = intensity
+	_drive_t = 0.0
 
 # ── Per-Tick Application ──────────────────────────────────────────────────────
 # Three gait shapes — forward, backward, and lateral (crossover) — are computed
@@ -163,13 +222,15 @@ func apply(delta: float) -> void:
 	var ground_speed: float = Vector2(vel.x, vel.z).length()
 	var speed_t: float = clampf(ground_speed / maxf(_controller.max_speed, 0.001), 0.0, 1.0)
 
-	# Plant the legs while shot-blocking (the skater is crouched, knees together);
+	# Plant the legs while shot-blocking (the braced wall pose below owns them);
 	# otherwise drive intensity from speed — GATED BY INTENT: no movement keys
 	# means a glide, so the legs settle to rest and ride the edges even at full
 	# speed. The stride is something the player DOES, not something speed does
 	# to them. (Velocity lean, the carve/faceoff/stop stance floors, and the
-	# glide stance floor below keep the posture alive while coasting.)
-	var planted: bool = _sm.get_state() == State.SHOT_BLOCKING
+	# glide stance floor below keep the posture alive while coasting.) Read off
+	# the REPLICATED shot state, not the state machine — a wire-fed remote's
+	# state machine is never ticked, so its blocks previously didn't plant.
+	var planted: bool = _skater.current_shot_state == State.SHOT_BLOCKING
 	var has_move_intent: bool = _skater.move_intent.length_squared() > 0.0025
 
 	# ── Intent signals ─────────────────────────────────────────────────────────
@@ -201,6 +262,97 @@ func apply(delta: float) -> void:
 			intent_ease)
 	_sprint = lerpf(_sprint,
 			1.0 if (_controller.sprint_active and not planted) else 0.0, intent_ease)
+
+	# ── Shots: load + release kick signals ─────────────────────────────────────
+	# The wrister load tracks the drag-charge through WRISTER_AIM; the slapper
+	# load tracks the wind-up through the charge states. Entering FOLLOW_THROUGH
+	# latches the smoothed load as the kick's power (floored by the min pop so
+	# an uncharged snap still reads and a short-wind slap still commits), with
+	# the amplitude set picked by which charge it came from — a quick-shot pass
+	# (no charge state at all) rides the wrister set, the same split the stick
+	# flex uses. The kick then rides the shared asymmetric arc (fast weight
+	# transfer through the release, slow settle) on its own cosmetic timer —
+	# remotes don't see the state machine's follow-through timer, only the
+	# state flip.
+	var shot_state: int = _skater.current_shot_state
+	var in_slap_charge: bool = shot_state == State.SLAPPER_CHARGE_WITH_PUCK \
+			or shot_state == State.SLAPPER_CHARGE_WITHOUT_PUCK
+	if shot_state != _shot_prev_state:
+		if shot_state == State.FOLLOW_THROUGH:
+			_shot_kick_t = 0.0
+			_shot_kick_is_slap = _shot_prev_state == State.SLAPPER_CHARGE_WITH_PUCK \
+					or _shot_prev_state == State.SLAPPER_CHARGE_WITHOUT_PUCK
+			if _shot_kick_is_slap:
+				_shot_kick_power = maxf(_slap_load, _controller.slapper_kick_min_power)
+			else:
+				_shot_kick_power = maxf(_wrister_load, _controller.wrister_kick_min_power)
+		_shot_prev_state = shot_state
+	var wrister_target: float = _skater.shot_charge if shot_state == State.WRISTER_AIM else 0.0
+	_wrister_load = lerpf(_wrister_load, wrister_target,
+			minf(_controller.wrister_load_blend_speed * delta, 1.0))
+	# Slapper wind-up engagement, re-derived from the replicated charge the way
+	# every machine can: shot_charge fills over max_slapper_charge_time while
+	# the wind-up pose fills over the (shorter) slapper_wind_up_time, so
+	# rescale, clamp, and sqrt-ease to match the torso coil's front-loaded snap
+	# (SkaterPoseCoordinator.apply_upper_body).
+	var slap_target: float = 0.0
+	if in_slap_charge:
+		slap_target = sqrt(clampf(
+				_skater.shot_charge * _controller.max_slapper_charge_time
+					/ maxf(_controller.slapper_wind_up_time, 0.001),
+				0.0, 1.0))
+	_slap_load = lerpf(_slap_load, slap_target,
+			minf(_controller.wrister_load_blend_speed * delta, 1.0))
+	var kick_env: float = 0.0
+	if _shot_kick_t >= 0.0:
+		_shot_kick_t += delta
+		var kick_total: float = _controller.slapper_kick_time if _shot_kick_is_slap \
+				else _controller.wrister_kick_time
+		var kt: float = _shot_kick_t / maxf(kick_total, 0.001)
+		if kt >= 1.0:
+			_shot_kick_t = -1.0
+		else:
+			kick_env = sin(PI * pow(kt, _controller.follow_through_arc_skew)) * _shot_kick_power
+	# Shot-block engagement: fast into the committed plant, eased back out on
+	# release so the wall doesn't pop back to a stride.
+	_block_blend = lerpf(_block_blend, 1.0 if planted else 0.0,
+			minf(_controller.block_pose_blend_speed * delta, 1.0))
+	# Check-delivery drive envelope: an explosive rise (peaks ~15% in) easing
+	# out over check_drive_time — the shoulder finishing through the contact.
+	var drive_env: float = 0.0
+	if _drive_t >= 0.0:
+		_drive_t += delta
+		var du: float = _drive_t / maxf(_controller.check_drive_time, 0.001)
+		if du >= 1.0:
+			_drive_t = -1.0
+		else:
+			drive_env = sin(PI * pow(du, 0.35)) * _drive_intensity
+	# Stick-lift read, off the replicated blade_up (own lift or a forced pop —
+	# either way the body reacts).
+	_lift_blend = lerpf(_lift_blend, 1.0 if _skater.blade_up else 0.0,
+			minf(_controller.stick_lift_blend_speed * delta, 1.0))
+	# Celebration window: this pass runs on EVERY path (local sim, host-driven
+	# remote, wire-fed remote, replay), so it owns aging the controller's timer
+	# — see SkaterController.tick_celebration.
+	_controller.tick_celebration(delta)
+	var celebr_p: float = _controller.celebration_progress()
+	# Combined engagement, for the stride suppression below — shooting is a
+	# glide (the feet set through the load and drive through the release), and
+	# a landed check plants through the finish.
+	var shot_body: float = maxf(maxf(_wrister_load, _slap_load), maxf(kick_env, drive_env))
+	var stick_side: float = -1.0 if _skater.is_left_handed else 1.0
+	# Hips coil with the load (stick-side hip pulls back, riding the torso coil
+	# — the wrister's blade-tracking twist or the slapper's authored wind-up
+	# coil) and uncoil THROUGH the release — the stick-side hip drives forward
+	# past square, mirroring the follow-through's torso `through` term.
+	# Positive lower-body yaw turns the legs toward −X, i.e. pulls the +X hip
+	# forward, hence the signs.
+	var kick_hip_yaw_deg: float = _controller.slapper_kick_hip_yaw_deg if _shot_kick_is_slap \
+			else _controller.wrister_kick_hip_yaw_deg
+	shot_hip_yaw = -stick_side * (
+				deg_to_rad(_controller.wrister_load_hip_coil_deg) * _wrister_load
+				+ deg_to_rad(_controller.slapper_load_hip_coil_deg) * _slap_load) \
+			+ stick_side * deg_to_rad(kick_hip_yaw_deg) * kick_env
 
 	var target_intensity: float = speed_t if (has_move_intent and not planted) else 0.0
 	# Dig-in / shuffle floors: the legs work from a standstill when the player
@@ -362,6 +514,10 @@ func apply(delta: float) -> void:
 	# Stride suppression factor: 1 = normal gait, 0 = fully planted (stop pose
 	# or the reversal plant — fighting momentum is edges, not strides).
 	var gait_scale: float = 1.0 - maxf(_stop_blend, _reversal * _controller.reversal_stride_fade)
+	# Shooting is a glide: while a shot load or the release kick is live the
+	# stride blends out — a shooter sets their feet, they don't keep striding
+	# through the shot.
+	gait_scale *= 1.0 - shot_body * _controller.shot_stride_fade
 	# Reversal engagement for the plant/lean adds below. The hockey stop wins
 	# the shared channels when both fire (brake held while holding opposite).
 	var rev_amt: float = _reversal * (1.0 - _stop_blend)
@@ -457,6 +613,34 @@ func apply(delta: float) -> void:
 	# first strides, and the edges only kill momentum under bent knees.
 	stance = maxf(stance, _controller.dig_in_stance * _dig)
 	stance = maxf(stance, _controller.reversal_stance * rev_amt)
+	# Shot loads sit INTO the shot as the charge builds (the slapper wind-up
+	# deepest — the power position), and the release keeps the front leg seated
+	# through the drive (the back knee is pulled out of this flex by the kick
+	# extension below — that asymmetry IS the weight transfer read).
+	stance = maxf(stance, _controller.wrister_load_stance * _wrister_load)
+	stance = maxf(stance, _controller.slapper_load_stance * _slap_load)
+	var kick_stance: float = _controller.slapper_kick_stance if _shot_kick_is_slap \
+			else _controller.wrister_kick_stance
+	stance = maxf(stance, kick_stance * kick_env)
+	# The shot block sits DEEP — the wall is low, knees bent under the dropped
+	# torso (Skater's block_crouch_depth lowers the chest; this bends the legs
+	# to match instead of leaving them straight).
+	stance = maxf(stance, _controller.block_stance * _block_blend)
+	# A landed check drives with the LEGS — the finishing base under the
+	# shoulder — and a stick lift works from a light coil.
+	stance = maxf(stance, _controller.check_drive_stance * drive_env)
+	stance = maxf(stance, _controller.stick_lift_stance * _lift_blend)
+	# Celebration bounce: knee pumps between straight and seated (the body
+	# drop follows, so it reads as a hop bob) — 3 pumps across the window,
+	# double the raised-stick pose's bob rate. Gated to plain skating like the
+	# pose (SkaterController's celebration block) so it never fights a
+	# follow-through kick, and ramped in over the same first 20%.
+	if celebr_p > 0.0 and (shot_state == State.SKATING_WITH_PUCK
+			or shot_state == State.SKATING_WITHOUT_PUCK):
+		var cel_ramp: float = clampf(celebr_p / 0.2, 0.0, 1.0)
+		cel_ramp = cel_ramp * cel_ramp * (3.0 - 2.0 * cel_ramp)
+		var pump: float = 0.5 - 0.5 * cos(celebr_p * TAU * 3.0)
+		stance = maxf(stance, _controller.celebration_leg_stance * cel_ramp * pump)
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
@@ -528,6 +712,49 @@ func apply(delta: float) -> void:
 		var plant: float = deg_to_rad(_controller.reversal_plant_deg) * rev_amt
 		l_roll -= plant
 		r_roll += plant
+
+	# Shot stance. Load: the shooting base — stick-side foot staggers back and
+	# both legs roll toward it, settling the weight over the back leg while the
+	# charge builds (same shared-roll idiom as the strafe lean: a common roll
+	# rides the body over that side's leg); wrister and slapper loads sum, but
+	# their charge states are exclusive so only the decay tails ever overlap.
+	# Release: the roll flips to land the weight over the FRONT foot while the
+	# back leg drives into extension behind — the kick pitch here; the knee
+	# straighten below frees the shin into it.
+	var shot_load_split_deg: float = _controller.wrister_load_split_deg * _wrister_load \
+			+ _controller.slapper_load_split_deg * _slap_load
+	var shot_load_lean_deg: float = _controller.wrister_load_lean_deg * _wrister_load \
+			+ _controller.slapper_load_lean_deg * _slap_load
+	if shot_load_split_deg > 0.001 or shot_load_lean_deg > 0.001:
+		var load_split: float = deg_to_rad(shot_load_split_deg) * stick_side
+		l_pitch += load_split
+		r_pitch -= load_split
+		var load_lean: float = deg_to_rad(shot_load_lean_deg) * stick_side
+		l_roll += load_lean
+		r_roll += load_lean
+	if kick_env > 0.001:
+		var kick_lean_deg: float = _controller.slapper_kick_lean_deg if _shot_kick_is_slap \
+				else _controller.wrister_kick_lean_deg
+		var kick_lean: float = deg_to_rad(kick_lean_deg) * kick_env * stick_side
+		l_roll -= kick_lean
+		r_roll -= kick_lean
+		var kick_back_deg: float = _controller.slapper_kick_back_deg if _shot_kick_is_slap \
+				else _controller.wrister_kick_back_deg
+		var kick_back: float = deg_to_rad(kick_back_deg) * kick_env
+		if stick_side > 0.0:
+			r_pitch -= kick_back
+		else:
+			l_pitch -= kick_back
+
+	# Shot-block wall: both legs splay outward into a wide braced V under the
+	# deep sit (the reversal-plant idiom, held instead of momentary). Splayed
+	# legs shorten their vertical span, so fold the small-angle deficit into
+	# the body drop — the skates stay planted instead of floating.
+	if _block_blend > 0.001:
+		var block_spread: float = deg_to_rad(_controller.block_spread_deg) * _block_blend
+		l_roll -= block_spread
+		r_roll += block_spread
+		drop += leg_scale * (_THIGH_LEN + _SHIN_LEN) * (1.0 - cos(block_spread))
 
 	# Forward / backward gait. Shared side-to-side roll rocks the lower body onto
 	# alternating edges (each leg pivots about its own hip, so the same roll
@@ -683,6 +910,20 @@ func apply(delta: float) -> void:
 	var l_knee: float = -(stance_knee * (1.0 - release * l_ext) + tuck_amp * maxf(c, 0.0) + l_tuck_extra)
 	var r_knee: float = -(stance_knee * (1.0 - release * r_ext) + tuck_amp * maxf(c_opp, 0.0) + r_tuck_extra)
 
+	# Shot release: the back (stick-side) knee straightens through the kick —
+	# extension toward 0, never past straight — while the front knee keeps the
+	# full stance flex (the kick_stance floor above). Applied before the
+	# fore-aft compensation so the freed shin carries into the kick's rearward
+	# reach, same anatomical bookkeeping as the stride's knee layers.
+	if kick_env > 0.001:
+		var kick_extend_deg: float = _controller.slapper_kick_knee_extend_deg \
+				if _shot_kick_is_slap else _controller.wrister_kick_knee_extend_deg
+		var kick_extend: float = deg_to_rad(kick_extend_deg) * kick_env
+		if stick_side > 0.0:
+			r_knee = minf(r_knee + kick_extend, 0.0)
+		else:
+			l_knee = minf(l_knee + kick_extend, 0.0)
+
 	# ── Knee fore-aft compensation ────────────────────────────────────────────
 	# The dynamic knee layers (push extension, recovery tuck, carve clearance)
 	# exist for LIFT and leg-length texture, but each also drags the FOOT
@@ -732,6 +973,19 @@ func apply(delta: float) -> void:
 	# above fades once the sprint tops out). gait_scale keeps it from fighting
 	# the hockey-stop / reversal trunk reads on their shared channel.
 	trunk_pitch_add += -deg_to_rad(_controller.sprint_lean_deg) * _sprint * gait_scale
+	# Check-delivery drive: the trunk drives INTO the hit — the shoulder
+	# finishing through the contact. Same directional decomposition as the
+	# reach lean (pitch = mag·local.z folds toward local −Z, roll = −mag·local.x),
+	# re-derived body-local each tick so the lean stays on the victim line
+	# while the body carries through.
+	if drive_env > 0.0:
+		var drive_local: Vector3 = basis_inv * _drive_dir
+		var drive_mag: float = deg_to_rad(_controller.check_drive_lean_deg) * drive_env
+		trunk_pitch_add += drive_mag * drive_local.z
+		trunk_roll_add += -drive_mag * drive_local.x
+	# Stick lift: a slight chest-up pop while jabbing under the opponent's
+	# stick (positive pitch tips the shoulders back).
+	trunk_pitch_add += deg_to_rad(_controller.stick_lift_trunk_deg) * _lift_blend
 	# Glide sway: a coasting skater shifts weight lazily edge-to-edge — a slow
 	# roll (trunk plus a touch of shared leg roll) far below stride cadence.
 	# The phase is local-only; at ~2° amplitude machines needn't agree on it.
