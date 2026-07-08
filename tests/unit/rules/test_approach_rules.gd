@@ -38,6 +38,61 @@ func test_position_is_monotonic_toward_target() -> void:
 		assert_true(d <= prev + 0.0001, "distance to target must not increase at step %d" % i)
 		prev = d
 
+# ── path_position: momentum (Hermite launch) ─────────────────────────────────
+
+func test_zero_velocity_matches_smoothstep() -> void:
+	# Default v0 = 0 must reduce exactly to the plain smoothstep ease.
+	for i: int in range(0, 11):
+		var t: float = i / 10.0
+		var hermite: Vector3 = ApproachRules.path_position(START, TARGET, t, Vector3.ZERO, 2.0)
+		var smooth: Vector3 = START.lerp(TARGET, smoothstep(0.0, 1.0, t))
+		assert_almost_eq(hermite, smooth, Vector3(0.001, 0.001, 0.001))
+
+func test_momentum_endpoints_are_still_exact() -> void:
+	var v0 := Vector3(5.0, 0.0, 0.0)
+	assert_almost_eq(ApproachRules.path_position(START, TARGET, 0.0, v0, 2.0), START,
+			Vector3(0.001, 0.001, 0.001))
+	assert_almost_eq(ApproachRules.path_position(START, TARGET, 1.0, v0, 2.0), TARGET,
+			Vector3(0.001, 0.001, 0.001))
+
+func test_momentum_launches_along_initial_velocity() -> void:
+	# Start at origin, dot 10 m away in -Z, but moving +X at the whistle: the
+	# early path should travel mostly along +X (carried momentum), not straight
+	# at the dot — that's the anti-snap.
+	var s := Vector3(0.0, 1.0, 0.0)
+	var e := Vector3(0.0, 1.0, -10.0)
+	var v0 := Vector3(5.0, 0.0, 0.0)
+	var p: Vector3 = ApproachRules.path_position(s, e, 0.06, v0, 2.0)
+	assert_gt(absf(p.x), absf(p.z), "early travel follows the launch velocity, not the chord")
+
+func test_momentum_tangent_is_clamped_to_chord_no_overshoot() -> void:
+	# A huge v0 straight at the dot must not overshoot past it (arrival stays at
+	# rest); distance to the dot is monotonically non-increasing.
+	var s := Vector3(0.0, 1.0, 0.0)
+	var e := Vector3(0.0, 1.0, -5.0)
+	var v0 := Vector3(0.0, 0.0, -50.0)  # 50 m/s straight in
+	var prev: float = s.distance_to(e)
+	for i: int in range(1, 11):
+		var d: float = ApproachRules.path_position(s, e, i / 10.0, v0, 2.0).distance_to(e)
+		assert_true(d <= prev + 0.0001, "no overshoot past the dot at step %d" % i)
+		prev = d
+
+# ── facing_along ─────────────────────────────────────────────────────────────
+
+func test_facing_along_early_holds_travel_dir() -> void:
+	var travel := Vector2(1.0, 0.0)
+	assert_almost_eq(ApproachRules.facing_along(travel, 0.1, Vector2(0.0, -1.0)),
+			travel, Vector2(0.001, 0.001))
+
+func test_facing_along_end_is_settle() -> void:
+	var settle := Vector2(0.0, -1.0)
+	assert_almost_eq(ApproachRules.facing_along(Vector2(1.0, 0.0), 1.0, settle), settle,
+			Vector2(0.001, 0.001))
+
+func test_facing_along_stationary_returns_settle() -> void:
+	var settle := Vector2(0.0, 1.0)
+	assert_eq(ApproachRules.facing_along(Vector2.ZERO, 0.3, settle), settle)
+
 # ── path_facing ──────────────────────────────────────────────────────────────
 
 func test_facing_early_points_along_travel() -> void:

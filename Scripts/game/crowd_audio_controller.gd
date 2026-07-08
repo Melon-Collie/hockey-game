@@ -17,6 +17,12 @@ extends Node
 @export var cheer_volume_db: float = -7.0
 @export var duck_volume_db: float = -10.0
 @export var duck_recover_time: float = 4.0
+# Stoppage "settle": a brief murmur swell above ambient when the whistle blows,
+# easing back to baseline — so a whistle doesn't drop into dead air. Smaller and
+# gentler than a goal cheer (no separate one-shot; just rides the ambient bed).
+@export var settle_swell_db: float = 6.0
+@export var settle_rise_time: float = 0.2
+@export var settle_recover_time: float = 2.5
 
 const _CHEER_POOL_SIZE: int = 3
 const _ARENA_BUS: StringName = &"Arena"
@@ -57,6 +63,10 @@ func _ready() -> void:
 			gm.goal_scored.connect(_on_goal_scored)
 		if gm.has_signal("phase_changed"):
 			gm.phase_changed.connect(_on_phase_changed)
+		# Whistle stoppages — a small crowd murmur so the dead-play beat has life.
+		for sig: String in ["icing_called", "offside_called", "puck_out_of_play"]:
+			if gm.has_signal(sig):
+				gm.connect(sig, settle)
 
 
 # Safety net: a properly-looping AudioStream won't emit `finished`, but this
@@ -102,3 +112,19 @@ func _duck_ambient() -> void:
 	_tween = create_tween()
 	_tween.tween_property(_ambient_player, "volume_db", duck_volume_db, 0.15)
 	_tween.tween_property(_ambient_player, "volume_db", ambient_volume_db, duck_recover_time)
+
+
+# Brief crowd murmur swell on a whistle stoppage, easing back to baseline. Rides
+# the ambient bed (no cheer one-shot) so it reads as the crowd reacting to the
+# stop rather than celebrating. Shares _tween with the duck — last trigger wins,
+# which is fine since a stoppage and a goal cheer never overlap.
+func settle() -> void:
+	if _ambient_player == null:
+		return
+	if _tween != null and _tween.is_valid():
+		_tween.kill()
+	_tween = create_tween()
+	_tween.tween_property(_ambient_player, "volume_db",
+			ambient_volume_db + settle_swell_db, settle_rise_time)
+	_tween.tween_property(_ambient_player, "volume_db",
+			ambient_volume_db, settle_recover_time)

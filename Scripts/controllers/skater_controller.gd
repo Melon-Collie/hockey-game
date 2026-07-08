@@ -681,6 +681,13 @@ var _approach_facing: Vector2 = Vector2.ZERO   # squared-up dot facing at arriva
 var _approach_elapsed: float = 0.0
 var _approach_duration: float = 1.0
 var _approach_prev_pos: Vector3 = Vector3.ZERO
+# Live planar velocity the skate-in launches from (period / stoppage faceoffs) so
+# the glide flows out of the player's momentum instead of hard-stopping at the
+# whistle. Zero for snap-from-rest starts (bench intro / post-goal staging).
+var _approach_v0: Vector3 = Vector3.ZERO
+# Below this planar speed a skate-in is treated as a snap-from-rest start (reset
+# gait + square up to the path); at or above it, momentum is preserved.
+const _APPROACH_CARRY_MIN: float = 0.3
 # Reused so the per-tick skate-in render doesn't allocate an InputState.
 var _approach_input: InputState = InputState.new()
 
@@ -1416,21 +1423,33 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 
 # ── Faceoff / intro skate-in approach ─────────────────────────────────────────
 
-# Begins the deterministic skate-in used during FACEOFF_PREP. The body is placed
-# at `start` (reusing teleport_to's fresh-legs resets) and then apply_approach
-# glides it to `target` over `duration`, squaring up to `settle_facing` on
-# arrival. `start` is the skater's bench door for the opening intro, else its
-# current position; `target` is the faceoff dot. Deterministic on every machine
-# from (start, target, elapsed) so the glide agrees with reconcile off.
+# Begins the deterministic skate-in used during FACEOFF_PREP. apply_approach
+# glides the body from `start` to `target` (the faceoff dot) over `duration`,
+# squaring up to `settle_facing` on arrival. `initial_velocity` is the skater's
+# live velocity: pass it for a period / stoppage skate-in (start == current
+# position) so the glide flows out of the player's momentum instead of snapping
+# to a stop at the whistle; pass zero (default) for a snap-from-rest start (the
+# bench intro or post-goal staging, where the body relocates to `start` anyway).
+# Deterministic per machine from (start, target, v0, elapsed) with reconcile off.
 func begin_approach(start: Vector3, target: Vector3, settle_facing: Vector2,
-		duration: float) -> void:
-	# Face the travel direction to begin with (path_facing at t=0), so the skater
-	# leaves the bench pointed where it's going rather than at the dot facing.
-	teleport_to(start, ApproachRules.path_facing(start, target, 0.0, settle_facing))
+		duration: float, initial_velocity: Vector3 = Vector3.ZERO) -> void:
+	var carry := Vector3(initial_velocity.x, 0.0, initial_velocity.z)
+	if carry.length() < _APPROACH_CARRY_MIN:
+		# Snap-from-rest: relocate to `start`, reset the gait, and point down the
+		# path (teleport_to squares up when given a non-zero facing).
+		teleport_to(start, ApproachRules.path_facing(start, target, 0.0, settle_facing))
+		carry = Vector3.ZERO
+	else:
+		# Momentum-preserving: clear stamina / charge and drop reconcile history
+		# (teleport_to with a zero facing skips the gait reset + facing snap), then
+		# re-seed the live velocity so the stride carries through the whistle.
+		teleport_to(start, Vector2.ZERO)
+		skater.velocity = carry
 	_approach_active = true
 	_approach_start = start
 	_approach_target = target
 	_approach_facing = settle_facing
+	_approach_v0 = carry
 	_approach_elapsed = 0.0
 	_approach_duration = maxf(duration, 0.001)
 	_approach_prev_pos = start
@@ -1475,7 +1494,7 @@ func apply_approach(delta: float) -> bool:
 		clear_approach()
 		return false
 	var new_pos: Vector3 = ApproachRules.path_position(
-			_approach_start, _approach_target, t)
+			_approach_start, _approach_target, t, _approach_v0, _approach_duration)
 	var vel: Vector3 = (new_pos - _approach_prev_pos) / maxf(delta, 0.0001)
 	_approach_prev_pos = new_pos
 	# Clamp the gait-facing velocity (planar) so a long glide doesn't over-spin
@@ -1485,8 +1504,11 @@ func apply_approach(delta: float) -> bool:
 		planar = planar.normalized() * approach_max_gait_speed
 	skater.global_position = new_pos
 	skater.velocity = planar
-	var facing: Vector2 = ApproachRules.path_facing(
-			_approach_start, _approach_target, t, _approach_facing)
+	# Facing follows the actual per-tick travel (the momentum path curves), then
+	# settles to the dot facing near the end — so a stoppage skater keeps its
+	# heading through the whistle instead of snapping toward the dot.
+	var facing: Vector2 = ApproachRules.facing_along(
+			Vector2(planar.x, planar.z), t, _approach_facing)
 	_render_approach_pose(facing, delta)
 	return true
 

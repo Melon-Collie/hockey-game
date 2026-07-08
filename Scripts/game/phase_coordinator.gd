@@ -205,7 +205,11 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		var start: Vector3 = _approach_start_for(record, pos, is_intro, staged)
 		var duration: float = _skate_in_duration(start, pos) if skate_in \
 				else _approach_duration(is_intro)
-		record.controller.begin_approach(start, pos, facing, duration)
+		# Skate-in flows out of live momentum (start == current position); intro /
+		# staged relocate to a fresh start, so they snap from rest.
+		var v0: Vector3 = record.skater.velocity if skate_in and record.skater != null \
+				else Vector3.ZERO
+		record.controller.begin_approach(start, pos, facing, duration, v0)
 		positions.append_array([peer_id, pos.x, pos.y, pos.z])
 	faceoff_positions_ready.emit(positions)
 	faceoff_prep_announced.emit()
@@ -346,7 +350,9 @@ func on_faceoff_positions(positions: Array) -> void:
 			var start: Vector3 = _approach_start_for(record, pos, is_intro, staged)
 			var duration: float = _skate_in_duration(start, pos) if skate_in \
 					else _approach_duration(is_intro)
-			record.controller.begin_approach(start, pos, facing, duration)
+			var v0: Vector3 = record.skater.velocity if skate_in and record.skater != null \
+					else Vector3.ZERO
+			record.controller.begin_approach(start, pos, facing, duration, v0)
 	# Drive the client's phase entry off this reliable RPC rather than leaving
 	# it to the unreliable world-state phase byte — see apply_remote_faceoff_prep.
 	if _state_machine != null and _state_machine.apply_remote_faceoff_prep():
