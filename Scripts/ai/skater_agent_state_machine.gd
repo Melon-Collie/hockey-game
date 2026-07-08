@@ -399,6 +399,13 @@ const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
 # slot mid-windup is worse than not shooting. The carry state can re-
 # evaluate next tick (probably picks PASS or stays in CARRY).
 const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
+# Committed speed (m/s) at charge start below which the wind-up PLANTS (brakes
+# in place) instead of steering to the projected release anchor. A near-still
+# bot has no release spot to skate to, so steering it anywhere just lets the
+# repulsion fields wander the body — the wind-up wobble. Above this it's a rush
+# wrister that should arrive at the locked anchor in stride. Mirrors the plant
+# that PASS_PRESSED already does from a held spot.
+const BOT_WRISTER_PLANT_SPEED_M_S: float = 1.5
 # Lookahead used to score a wrister at COMMIT time — total time
 # from the carrier picking SHOOT to the puck actually leaving the
 # blade. Two phases:
@@ -655,6 +662,15 @@ var _shoot_aim_target: Vector3 = Vector3.ZERO
 # charge so the swing doesn't flip mid-press if a defender shuffles in
 # and out of stick reach. PASS_PRESSED hardcodes +1 (no backhand passes).
 var _shoot_side_sign: float = 1.0
+# Locked steering destination for the wind-up. Captured ONCE at charge tick 0
+# (projected release position) and held for the charge so the body has a STABLE
+# anchor to settle toward. Recomputing it per tick from live velocity made the
+# steer target self-referential — nothing fixed to settle on, so the repulsion
+# fields wandered the body (the wind-up wobble). Locked exactly like the aim
+# direction / wind-up side above. _shoot_wind_up_moving records whether it was a
+# rush wrister (steer to the anchor) or a near-still one (plant / brake).
+var _shoot_release_anchor: Vector3 = Vector3.ZERO
+var _shoot_wind_up_moving: bool = false
 
 # Handedness perpendicular sign — +1 for right-handed (top hand on right
 # shoulder, blade on left), -1 for left-handed. Set once at setup from
@@ -1999,20 +2015,30 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 		return
 
-	# Steer toward the projected release position so the bot actually
-	# arrives at the spot the carrier scorer assumed. The projection
-	# (current + velocity × wrister_lookahead) is what won SHOOT over
-	# CARRY; if we steered toward _last_carry_anchor instead (often
-	# stand-still = self_pos), the steering would brake the bot back
-	# to current pos and the puck would release ~1-2 m short of the
-	# scored spot. Rush wristers should fire from the projected spot,
-	# not be braked back to commit position.
+	# Lock the steering destination ONCE at charge start. The projected
+	# release position (current + velocity × wrister_lookahead) is the spot
+	# the carrier scorer assumed and what won SHOOT over CARRY, so a rush
+	# wrister should arrive THERE rather than braking back to commit pos.
+	# Capturing it once (not recomputing from live velocity every tick) gives
+	# the body a STABLE anchor for the wind-up — the per-tick recompute was
+	# self-referential (the target moved with the bot's own heading), so the
+	# repulsion fields had nothing fixed to settle against and wandered the
+	# body: the wind-up wobble. See _shoot_release_anchor.
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	var release_target: Vector3 = self_pos
-	if self_state != null:
-		var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
-		release_target = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
-	_apply_steering(input, snapshot, self_pos, release_target)
+	if _shoot_charge_tick == 0:
+		var hv0: Vector3 = Vector3.ZERO
+		if self_state != null:
+			hv0 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+		_shoot_release_anchor = self_pos + hv0 * BOT_WRISTER_LOOKAHEAD_S
+		_shoot_wind_up_moving = hv0.length() > BOT_WRISTER_PLANT_SPEED_M_S
+	# Moving (rush) wrister: steer to the locked anchor so it fires from the
+	# scored spot in stride. Near-still wrister: plant (brake in place) like a
+	# charged pass — a stationary bot has no release spot to skate to, so any
+	# steering just invites the repulsion-field wobble.
+	if _shoot_wind_up_moving:
+		_apply_steering(input, snapshot, self_pos, _shoot_release_anchor)
+	else:
+		_apply_brake_steering(input, snapshot, self_pos)
 	# Elevated shot → HIGH loft (top-corner height). The level is absolute
 	# per input frame (flat default in _zero_input), so just set it on
 	# every charge tick through the release.
@@ -2041,10 +2067,9 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# easily missing past the post on a corner shot. Goalie prediction
 		# inside `_shoot_aim_dir` already used the wrister lookahead, so
 		# anchoring the aim_dir lookup on the projected release matches.
-		var release_pos: Vector3 = self_pos
-		if self_state != null:
-			var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
-			release_pos = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
+		# Same projected release the steering anchor uses — captured just above
+		# this tick, so reuse it rather than recomputing the projection.
+		var release_pos: Vector3 = _shoot_release_anchor
 		# Read aim_point directly (not just direction) so we can pass aim
 		# distance into _wind_up_endpoint_offsets for side-offset compensation.
 		var aim_point: Vector3 = _shot_aim_point(snapshot, release_pos)
