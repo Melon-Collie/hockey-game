@@ -310,14 +310,15 @@ func test_breakout_pass_not_blocked() -> void:
 
 # Slot, centered, goalie squared. Monotone dist_response from goal:
 # 5 m / 19.36 m = 0.258, dist_response = 1 - 0.258² = 0.93. The 5 m
-# flight (~0.21 s) only starts ramping the reaction-time coverage cap
-# (≈ 0.39), so: 0.93 × shot_angle_factor 1.0 × (1 - 0.39) ≈ 0.58 —
-# the canonical "clean slot wrister ~0.55" on the recalibrated scale.
+# flight (~0.21 s) only lightly ramps the reaction-time coverage cap
+# (raised to 0.88 over a 0.30 s window), so: 0.93 × angle 1.0 ×
+# (1 - 0.44) ≈ 0.53 — still clearly the best DIRECT shot (well above any
+# carry candidate), the "get in close" chance we want bots to hunt.
 func test_shot_quality_slot_5m_squared() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.65)  # 5 m from goal line
 	var goalie := Vector3(0.0, 0.0, 26.0)    # squared (matches puck arc)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.58, 0.02, "slot 5m centered, squared SET goalie")
+	assert_almost_eq(s, 0.53, 0.02, "slot 5m centered, squared SET goalie")
 
 
 # Same shot but goalie has slid out of position (~30° arc offset).
@@ -345,10 +346,10 @@ func test_shot_quality_60deg_goalie_delayed() -> void:
 
 
 # 60° half-wall vs squared goalie. A ~9.25 m shot gives a set squared
-# goalie most of the reaction window, so the coverage cap ramps well
-# above the point-blank floor: cap ≈ 0.59 → ≈ 0.43 × (1 - 0.59) ≈ 0.18.
-# The half-wall bomb into a set goalie is a LOW-value shot — the exact
-# "far shot from outside the slot" the coverage model exists to kill.
+# goalie nearly the full reaction window, so the coverage cap ramps near
+# its 0.88 ceiling: ≈ 0.43 × (1 - 0.79) ≈ 0.09. The half-wall bomb into a
+# set goalie is a NON-play — the exact "far shot from outside the slot"
+# the coverage model exists to kill.
 func test_shot_quality_60deg_goalie_squared() -> void:
 	var shooter := Vector3(8.0, 0.0, 22.025)
 	# Squared goalie: goalie_arc matches puck_arc (60°). Place goalie
@@ -356,7 +357,7 @@ func test_shot_quality_60deg_goalie_squared() -> void:
 	# the goal. tan(60°) × forward(0.65) = 1.126 lateral.
 	var goalie := Vector3(1.126, 0.0, 26.0)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_almost_eq(s, 0.18, 0.05, "half-wall 60° vs squared SET goalie ≈ 0.18")
+	assert_almost_eq(s, 0.09, 0.04, "half-wall 60° vs squared SET goalie ≈ 0.09")
 
 
 # Slightly off-center 5 m shot, squared goalie. The "great chance"
@@ -520,8 +521,11 @@ func test_goalie_zone_default_is_no_op() -> void:
 func test_set_goalie_coverage_grows_with_flight_time() -> void:
 	# Same geometry, slower release → longer flight → the set square
 	# goalie covers more. No opponents, so the lane term can't be the
-	# cause (under the old flat coverage these scored identical).
-	var shooter := Vector3(0.0, 0.0, 16.0)  # ~10.7 m out
+	# cause (under the old flat coverage these scored identical). Shooter
+	# at ~7 m so the fast release sits below the coverage-cap saturation
+	# point (both clamp to the ceiling further out, where the window can
+	# no longer discriminate).
+	var shooter := Vector3(0.0, 0.0, 19.65)  # ~7 m out
 	var goalie := Vector3(0.0, 0.0, 25.5)   # squared, set
 	var fast: float = AIActionScoring.score_shoot(
 			shooter, GOAL, goalie, NET_HW, [], Vector3.INF,
@@ -531,6 +535,24 @@ func test_set_goalie_coverage_grows_with_flight_time() -> void:
 			AIActionScoring.PASS_SPEED_M_S)
 	assert_lt(slow, fast,
 			"a slower release gives the set goalie more flight to react — lower score")
+
+
+# Regression guard for the exact behaviour that made bot offense repetitive:
+# a straight-on shot from the top of the circle (~9 m) at a SQUARE, SET goalie
+# used to score ~0.33 — a "good play" the carrier picked over skating laterally
+# / waiting for support. It must now read as a non-play: low in absolute terms
+# and a small fraction of the in-tight slot chance, so the carrier keeps the
+# puck and looks for a better look instead of firing into a set goalie.
+func test_above_circle_straight_on_square_shot_is_a_non_play() -> void:
+	var above_circle := Vector3(0.0, 0.0, 26.65 - 9.0)  # ~9 m, straight on
+	var slot := Vector3(0.0, 0.0, 26.65 - 5.0)          # 5 m, straight on
+	var goalie := Vector3(0.0, 0.0, 26.0)               # squared, set
+	var s_above: float = AIActionScoring.score_shoot(above_circle, GOAL, goalie, NET_HW, [])
+	var s_slot: float = AIActionScoring.score_shoot(slot, GOAL, goalie, NET_HW, [])
+	assert_lt(s_above, 0.22,
+			"top-of-circle shot at a square set goalie is a non-play, got %.3f" % s_above)
+	assert_lt(s_above, s_slot * 0.45,
+			"the range shot must be a small fraction of the in-tight slot chance")
 
 
 func test_far_shot_at_set_goalie_covered_beyond_distance_falloff() -> void:

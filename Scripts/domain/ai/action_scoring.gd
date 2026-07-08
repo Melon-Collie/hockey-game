@@ -118,9 +118,18 @@ const SLOT_RADIUS_M: float = 6.0
 # coverable. SQUARENESS_OFFSET down (e.g., 25°) → cross-seam plays
 # score higher (goalie reads as "exposed" sooner); up (40°) → only
 # severe slides expose the goalie.
+# GOALIE_SET_COVERAGE_MAX raised to 0.88 and SET_SAVE_WINDOW shortened to
+# 0.30 so a SET, SQUARE goalie reads as a near-wall from range: a straight-on
+# shot from the top of the circle (~9 m) drops from ~0.33 to ~0.18, and from
+# above the circle (~11 m) from ~0.22 to ~0.08 — no longer a "good play" the
+# carrier picks over skating laterally / waiting for support. Because coverage
+# = cap × squareness, this ONLY bites square looks: the slot stays a great
+# chance (~0.53), point-blank is unchanged (still under its reaction floor),
+# and off-angle / cross-seam / caught-moving looks (low squareness or high
+# goalie_unsettled) are untouched — exactly the shots that beat a real goalie.
 const BASE_COVERAGE: float = 0.28
-const GOALIE_SET_COVERAGE_MAX: float = 0.7
-const GOALIE_SET_SAVE_WINDOW_S: float = 0.35
+const GOALIE_SET_COVERAGE_MAX: float = 0.88
+const GOALIE_SET_SAVE_WINDOW_S: float = 0.30
 const SQUARENESS_OFFSET_RAD: float = 0.5235988  # deg_to_rad(30)
 
 # Goalie position prediction. Replaces velocity-extrapolation with a
