@@ -512,20 +512,25 @@ var show_one_timer_indicator: bool = false
 @export var slapper_follow_through_hand_follow: float = 0.4  # fraction of blade travel the hands follow (limits shaft stretch)
 @export var slapper_follow_through_contact_frac: float = 0.22  # first fraction of the timer spent on the downswing
 
-# ── Wrister Body Animation Tuning ─────────────────────────────────────────────
-# Cosmetic lower-body work for the wrist shot (SkaterSkatingCoordinator): the
-# load sinks the weight onto the stick-side back leg while the drag-charge
-# builds, and the release drives it over the front foot with the back leg
-# kicking into extension behind — the classic wrister weight transfer. Driven
-# entirely from the replicated fields (current_shot_state + shot_charge), so
-# local, bot, and remote skaters play the identical animation with zero new
-# network state (same contract as the stick flex). First-pass numbers — tune
-# in the editor.
+# ── Shot Body Animation Tuning ────────────────────────────────────────────────
+# Cosmetic lower-body work for the shots (SkaterSkatingCoordinator): the load
+# sinks the weight onto the stick-side back leg while the charge builds, and
+# the release drives it over the front foot with the back leg kicking into
+# extension behind — the weight transfer that sells a shot. Wrister and
+# slapper share the machinery with their own amplitude sets: the wrister load
+# tracks the drag-charge, the slapper load tracks the wind-up (re-derived from
+# the replicated charge — see the gait), sits deeper, and coils the hips
+# harder under the 80° torso coil; the slapper kick swings bigger and always
+# commits (higher min power — the swing is full-body even off a short
+# wind-up). Driven entirely from the replicated fields (current_shot_state +
+# shot_charge), so local, bot, and remote skaters play the identical animation
+# with zero new network state (same contract as the stick flex). First-pass
+# numbers — tune in the editor.
 @export var wrister_load_stance: float = 0.55          # crouch floor at full charge (fraction of stance_hip_deg)
 @export var wrister_load_lean_deg: float = 5.0         # shared leg roll: weight over the stick-side back leg
 @export var wrister_load_split_deg: float = 8.0        # foot stagger: stick-side foot drops back
 @export var wrister_load_hip_coil_deg: float = 8.0     # hips coil with the torso, stick-side hip back
-@export var wrister_load_blend_speed: float = 6.0      # how fast the load pose tracks the charge
+@export var wrister_load_blend_speed: float = 6.0      # how fast the load pose tracks the charge (both shots)
 @export var wrister_kick_time: float = 0.5             # seconds of weight transfer/kick after release
 @export var wrister_kick_min_power: float = 0.35       # amplitude floor so snaps and passes still read
 @export var wrister_kick_back_deg: float = 26.0        # back (stick-side) leg drives into extension behind
@@ -533,7 +538,18 @@ var show_one_timer_indicator: bool = false
 @export var wrister_kick_lean_deg: float = 7.0         # shared leg roll: weight lands over the front foot
 @export var wrister_kick_stance: float = 0.5           # front-leg sit through the drive
 @export var wrister_kick_hip_yaw_deg: float = 12.0     # hips uncoil through the shot line
-@export var wrister_shot_stride_fade: float = 0.8      # stride suppression while loading/kicking (glide through the shot)
+@export var slapper_load_stance: float = 0.75          # the wind-up sits DEEP — the power position
+@export var slapper_load_lean_deg: float = 7.0         # harder weight-back than the wrister load
+@export var slapper_load_split_deg: float = 11.0       # wider shooting base for the full swing
+@export var slapper_load_hip_coil_deg: float = 16.0    # hips coil under the wound-up torso
+@export var slapper_kick_time: float = 0.6             # spans downswing + contact + finish
+@export var slapper_kick_min_power: float = 0.6        # a slap swing commits the body even off a short wind-up
+@export var slapper_kick_back_deg: float = 34.0        # full back-leg extension through the finish
+@export var slapper_kick_knee_extend_deg: float = 38.0 # back knee straightens hard
+@export var slapper_kick_lean_deg: float = 9.0         # weight lands hard over the front foot
+@export var slapper_kick_stance: float = 0.6           # front-leg sit through the drive
+@export var slapper_kick_hip_yaw_deg: float = 20.0     # hips uncoil hard through the shot line
+@export var shot_stride_fade: float = 0.8              # stride suppression while loading/kicking (glide through the shot)
 
 # ── Celebration Tuning ────────────────────────────────────────────────────────
 # Cosmetic raised-stick goal celebration (SkaterShotPoseCoordinator.

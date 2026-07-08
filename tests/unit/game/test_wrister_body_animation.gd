@@ -1,11 +1,11 @@
 extends GutTest
 
-# Wrist-shot body animation (SkaterSkatingCoordinator) — the load settles the
-# weight over the stick-side back leg while the charge builds, and the release
-# transfers it over the front foot with the back leg kicking into extension
-# behind. Driven purely from the replicated current_shot_state + shot_charge
-# (the stick-flex contract), so these tests drive those fields directly the
-# way a wire-fed remote would.
+# Shot body animation (SkaterSkatingCoordinator) — the load settles the weight
+# over the stick-side back leg while the charge builds (wrister drag-charge,
+# slapper wind-up), and the release transfers it over the front foot with the
+# back leg kicking into extension behind. Driven purely from the replicated
+# current_shot_state + shot_charge (the stick-flex contract), so these tests
+# drive those fields directly the way a wire-fed remote would.
 #
 # Default handedness is LEFT (Skater.is_left_handed = true), so the stick side
 # — the back leg — is the LEFT leg throughout.
@@ -120,19 +120,61 @@ func test_quick_shot_release_still_flicks() -> void:
 			"an uncharged snap should still flick the back leg (split %.3f rad)" % max_split)
 
 
-func test_slapper_release_does_not_kick() -> void:
+func test_slapper_wind_up_loads_back_leg() -> void:
+	var rest_body_y: float = _skater.upper_body.position.y
+	# A full wind-up: shot_charge fills over max_slapper_charge_time (0.7 s)
+	# while the wind-up completes in slapper_wind_up_time (0.3 s), so charge
+	# 1.0 is well past a complete wind-up.
 	_skater.current_shot_state = State.SLAPPER_CHARGE_WITH_PUCK
 	_skater.shot_charge = 1.0
-	_tick(60)
+	_tick(180)
+	assert_lt(_leg_l.rotation.x, _leg_r.rotation.x - 0.08,
+			"stick-side foot should stagger back through the wind-up (l %.3f, r %.3f)"
+			% [_leg_l.rotation.x, _leg_r.rotation.x])
+	assert_lt(_leg_l.rotation.z, -0.02, "legs should roll the weight to the stick side")
+	assert_gt(_coord.shot_hip_yaw, 0.05, "hips should coil under the wound-up torso")
+	assert_lt(_skater.upper_body.position.y, rest_body_y - 0.01,
+			"the wind-up should sit deep — the power position")
+
+
+func test_slapper_release_kicks_through_contact() -> void:
+	_skater.current_shot_state = State.SLAPPER_CHARGE_WITH_PUCK
+	_skater.shot_charge = 1.0
+	_tick(180)
 	_skater.current_shot_state = State.FOLLOW_THROUGH
 	_skater.shot_charge = 0.0
 	var max_split: float = 0.0
-	var max_hip_yaw: float = 0.0
-	for _i: int in 60:
+	var split_l_knee: float = 0.0
+	var split_r_knee: float = 0.0
+	var min_hip_yaw: float = INF
+	for _i: int in 80:  # 0.67 s — spans slapper_kick_time
 		_coord.apply(DT)
-		max_split = maxf(max_split, absf(_leg_r.rotation.x - _leg_l.rotation.x))
-		max_hip_yaw = maxf(max_hip_yaw, absf(_coord.shot_hip_yaw))
-	assert_lt(max_split, 0.03,
-			"the slapper follow-through must not fire the wrister kick (split %.3f)" % max_split)
-	assert_lt(max_hip_yaw, 0.005,
-			"the slapper follow-through must not fire the wrister hip uncoil")
+		var split: float = _leg_r.rotation.x - _leg_l.rotation.x
+		min_hip_yaw = minf(min_hip_yaw, _coord.shot_hip_yaw)
+		if split > max_split:
+			max_split = split
+			split_l_knee = _shin_l.rotation.x
+			split_r_knee = _shin_r.rotation.x
+	assert_gt(max_split, 0.4,
+			"the slap swing should drive the back leg into full extension (split %.3f rad)"
+			% max_split)
+	assert_gt(split_l_knee, split_r_knee + 0.03,
+			"kicking knee should straighten past the seated front knee (l %.3f, r %.3f)"
+			% [split_l_knee, split_r_knee])
+	assert_lt(min_hip_yaw, -0.05, "hips should uncoil hard through the slap release")
+
+
+func test_short_wind_up_slap_still_commits() -> void:
+	# A one-timer released off a barely-started wind-up: the swing is still a
+	# full-body motion, so the kick must fire at the slapper's min-power floor.
+	_skater.current_shot_state = State.SLAPPER_CHARGE_WITHOUT_PUCK
+	_skater.shot_charge = 0.02
+	_tick(12)
+	_skater.current_shot_state = State.FOLLOW_THROUGH
+	_skater.shot_charge = 0.0
+	var max_split: float = 0.0
+	for _i: int in 80:
+		_coord.apply(DT)
+		max_split = maxf(max_split, _leg_r.rotation.x - _leg_l.rotation.x)
+	assert_gt(max_split, 0.2,
+			"a short-wind slap should still commit the body (split %.3f rad)" % max_split)
