@@ -3,7 +3,10 @@ extends SkaterController
 
 const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 
-signal hit_received(magnitude: float)
+# Carries the victim knockback impulse (its length is the hit magnitude, its
+# horizontal heading the direction the local player was shoved — used to aim the
+# camera impact kick).
+signal hit_received(impulse: Vector3)
 
 # Trajectory-based reconcile: thresholds compare the client's prediction *at
 # host_timestamp T* against the server's authoritative state at T, looked up
@@ -85,7 +88,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 			})
 			if _body_check_impulses.size() > _BODY_CHECK_IMPULSE_CAP:
 				_body_check_impulses.pop_front()
-			hit_received.emit(impulse.length()))
+			hit_received.emit(impulse))
 
 # Called after setup() to provide the local player's team — needed for
 # client-side offside prediction. Separate from setup() because GDScript
