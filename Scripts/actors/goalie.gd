@@ -135,6 +135,14 @@ func get_goalie_rotation_y() -> float:
 func get_glove_position() -> Vector3:
 	return _glove.position
 
+# Clear-sweep follow-through moves the BlockArm (and its child Stick, whose
+# collider is real — puck bounces off LAYER_GOALIE_STICK during saves) through
+# the puck's exit path. Without this, that "cosmetic" swing can re-strike the
+# puck moments after the clear velocity was imparted and deflect it anywhere,
+# including back into the goalie's own net. Disabled for the swing's duration.
+func set_stick_collision_enabled(enabled: bool) -> void:
+	_stick.collision_layer = Constants.LAYER_GOALIE_STICK if enabled else 0
+
 func get_blocker_position() -> Vector3:
 	return _block_arm.position
 

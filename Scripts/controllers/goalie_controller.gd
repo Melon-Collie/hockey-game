@@ -981,6 +981,7 @@ func reset_to_crease() -> void:
 	_sweep_anim_timer = 0.0
 	_sweep_anim_dir = 0.0
 	_move_speed_current = 0.0
+	goalie.set_stick_collision_enabled(true)
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 
@@ -1487,6 +1488,9 @@ func _update_goalie_poke(delta: float) -> void:
 	_prev_blade_world_pos = current_blade_pos
 	if _sweep_anim_timer > 0.0:
 		_sweep_anim_timer = maxf(_sweep_anim_timer - delta, 0.0)
+		if _sweep_anim_timer <= 0.0:
+			# Sweep window over — restore the stick's normal save collision.
+			goalie.set_stick_collision_enabled(true)
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
 		# No carrier to strip — instead sweep a loose puck out of the crease.
@@ -1532,6 +1536,13 @@ func _try_clear_loose_puck(delta: float) -> void:
 			puck.global_position, _goal_center_x, _direction_sign,
 			clear_lateral_weight, clear_forward_weight, clear_speed,
 			clear_center_deadband, default_side)
+	# Disable the stick's own collision before imparting velocity: the puck
+	# has been dwelling right next to the blade (it actively tracks toward
+	# the puck's side while loose — see _apply_active_blade_intent /
+	# _apply_standing_sweep), and the swept puck's exit line often runs
+	# straight through that resting blade. Re-enabled once the sweep window
+	# (_sweep_anim_timer) elapses, in _update_goalie_poke's countdown.
+	goalie.set_stick_collision_enabled(false)
 	puck.apply_goalie_sweep(sweep_vel)
 	_clear_cooldown_timer = clear_cooldown
 	_clear_dwell_timer = 0.0
