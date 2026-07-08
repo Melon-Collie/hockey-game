@@ -1206,10 +1206,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
 		# Station-keeping: arrive AT the role destination (arrival brake)
 		# instead of overshooting a spot that stopped moving — EXCEPT on a
-		# body-check commit, which wants maximum closing velocity through
-		# the target.
+		# body-check commit (wants maximum closing velocity through the
+		# target) or when the role is pacing a MOVING waypoint and asks to
+		# arrive at speed (OUTLET timing its rush entry — braking to a stop
+		# at the advancing target would park it short of the line).
 		_apply_steering(input, snapshot, self_pos, decision.target_position,
-				not decision.commit_check)
+				not decision.commit_check and not decision.arrive_at_speed)
 		if decision.commit_check:
 			# Body-check commit: drive THROUGH the carrier at max closing
 			# velocity. Force sprint even at short range — the gap gate would

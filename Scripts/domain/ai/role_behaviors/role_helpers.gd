@@ -246,6 +246,26 @@ static func resolve_teammate_carrier_pos(ctx: RoleContext) -> Vector3:
 	return ctx.snapshot.skater_states[carrier_pid].position
 
 
+# Our carrier's CLOSING speed (m/s) toward the attacking net — the forward
+# (toward-attacking-goal) component of the carrier's velocity, floored at 0.
+# The "is this a rush?" primitive: a carrier driving up-ice at speed reads
+# high; one cycling laterally, stalled, or retreating reads ~0. Returns 0.0
+# when there's no teammate carrier to read (loose puck / opp possession), so
+# roles default to their non-rush shape. Lateral velocity is deliberately
+# ignored — only driving AT the net counts as a rush.
+static func carrier_closing_speed(ctx: RoleContext) -> float:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return 0.0
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	if carrier_pid == -1 or not ctx.snapshot.skater_states.has(carrier_pid):
+		return 0.0
+	if ctx.team_id_by_peer.get(carrier_pid, -1) != ctx.team_id:
+		return 0.0
+	var vel: Vector3 = ctx.snapshot.skater_states[carrier_pid].velocity
+	# Forward = toward the attacking goal along Z (-own_goal_dir).
+	return maxf(-ctx.own_goal_dir * vel.z, 0.0)
+
+
 # Returns the opposing goalie's CURRENT world position. Falls back
 # to the attacking goal mouth when goalie state isn't buffered yet
 # (first-frame edge case). Used as the `predicted_goalie_pos` arg

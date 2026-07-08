@@ -50,6 +50,43 @@ const WEAK_SIDE_INSET_M: float = 2.0
 # role file stays self-contained, per the role-module convention).
 const BLOCKED_LANE_FLOOR: float = 0.15
 
+# ── In-stride rush entry ─────────────────────────────────────────────────────
+# On a live rush the OUTLET used to drive to the blue line and PARK there
+# (station-keeping arrival brake), so when the carrier finally crossed, the
+# OUTLET was standing still and had to accelerate from zero — no second
+# attacker arriving in stride. Instead, on a rush, PACE the staging depth to
+# the carrier: stage a fixed lead ahead of the carrier's depth (capped at the
+# line) so the OUTLET reaches the line as the carrier crosses, moving. The
+# depth blends from the line (set play / stretch option) to the paced spot
+# (full rush) by the carrier's closing speed, and arrive_at_speed is set so
+# the state machine treats the advancing target as a waypoint, not a station.
+# The offside filter + body-level offside brake still keep it onside.
+
+# Carrier closing-speed band (m/s, toward the opp net) mapping to the rush
+# blend. Below LO reads as a set play (stretch option at the line); at/above
+# HI as a full rush (pace the carrier). Matches AIRoleFinisher's band so the
+# two offensive roles read the same rush the same way.
+const RUSH_SPEED_LO_M_S: float = 2.5
+const RUSH_SPEED_HI_M_S: float = 6.5
+
+# How far ahead of the carrier's depth (toward the opp net) the OUTLET stages
+# on a rush — enough to be the advanced entry option without stretching so far
+# it parks at the line. Capped so the staging never crosses to the OZ side of
+# the line (offside).
+const RUSH_ENTRY_LEAD_M: float = 4.0
+
+# Rush blend above which the OUTLET arrives at speed (skips the arrival brake)
+# AND the pace cap engages. Below it the OUTLET is a set-play stretch option:
+# it holds the line and brakes to a stop, exactly as before.
+const ARRIVE_AT_SPEED_RUSH: float = 0.25
+
+# Pace cap slack (m). On a rush, candidates more than this far net-ward of the
+# paced depth are rejected — position_potential's pull toward the net would
+# otherwise stretch the OUTLET straight up to the line to park, defeating the
+# pacing. The small slack lets it take an open lane a touch ahead of the pace
+# without running away from the carrier.
+const PACE_TOLERANCE_M: float = 1.0
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -69,7 +106,24 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
 
-	var search_center: Vector3 = _compute_search_center(ctx, carrier_pos)
+	# Rush blend: how hard our carrier is driving the net. Paces the staging
+	# depth (line -> lead-the-carrier) and gates arriving at speed so the
+	# OUTLET reaches the line in stride rather than parked (see doc above).
+	var rush: float = clampf(
+			(AIRoleHelpers.carrier_closing_speed(ctx) - RUSH_SPEED_LO_M_S)
+					/ (RUSH_SPEED_HI_M_S - RUSH_SPEED_LO_M_S),
+			0.0, 1.0)
+	var rushing: bool = rush > ARRIVE_AT_SPEED_RUSH
+	d.arrive_at_speed = rushing
+
+	# Paced depth: the "don't advance past here yet" line. Blends line ->
+	# lead-the-carrier by rush (continuous, so it eases in). It's both the
+	# search-center Z and, on a rush, a hard pace cap in the loop below.
+	var paced_z: float = _paced_depth_z(ctx, carrier_pos, rush)
+	var weak_x: float = clampf(-carrier_pos.x,
+			-GameRules.RINK_HALF_WIDTH + WEAK_SIDE_INSET_M,
+			GameRules.RINK_HALF_WIDTH - WEAK_SIDE_INSET_M)
+	var search_center := Vector3(weak_x, 0.0, paced_z)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
 
@@ -79,6 +133,13 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
 		if _is_offside(c, ctx):
+			continue
+		# Pace cap (rush only): reject candidates net-ward of the paced depth
+		# so the OUTLET stays level with the carrier's rush instead of being
+		# dragged up to park at the line. own_goal_dir * z is SMALLER on the
+		# net-ward (OZ) side, so "too far net-ward" is a strict-less-than.
+		if rushing and ctx.own_goal_dir * c.z \
+				< ctx.own_goal_dir * paced_z - PACE_TOLERANCE_M:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue
@@ -100,21 +161,22 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
-# Search center for OUTLET: weak-side of carrier on the X axis,
-# NZ-side of opp blue line on the Z axis. Pure in-game refs:
-#   X = mirror of carrier X (weak-side stretch wing), clamped off
-#       the boards by WEAK_SIDE_INSET_M.
-#   Z = opp blue line offset toward our net by BLUE_LINE_BUFFER_M
-#       (NZ-side, offside-safe by sampling).
-# The polar samples around this point + the offside filter handle
-# the actual positioning; this is just a sensible search center.
-static func _compute_search_center(ctx: RoleContext,
-		carrier_pos: Vector3) -> Vector3:
-	var weak_x: float = clampf(-carrier_pos.x,
-			-GameRules.RINK_HALF_WIDTH + WEAK_SIDE_INSET_M,
-			GameRules.RINK_HALF_WIDTH - WEAK_SIDE_INSET_M)
-	var z: float = -ctx.own_goal_dir * (GameRules.BLUE_LINE_Z - BLUE_LINE_BUFFER_M)
-	return Vector3(weak_x, 0.0, z)
+# Paced staging depth (Z) for the OUTLET, blending line -> lead-the-carrier
+# by `rush`:
+#   set play (rush 0)  → BLUE_LINE_BUFFER_M NZ-side of the opp blue line
+#                        (the stretch option waits at the line).
+#   full rush (rush 1) → RUSH_ENTRY_LEAD_M ahead of the carrier's depth
+#                        (toward the opp net), so the OUTLET paces the rush.
+# The lead spot is capped NZ-side of the line (own_goal_dir * z is smaller on
+# the OZ side) so it never stages offside; the lerp keeps the transition
+# continuous as the carrier winds up.
+static func _paced_depth_z(ctx: RoleContext, carrier_pos: Vector3,
+		rush: float) -> float:
+	var line_z: float = -ctx.own_goal_dir * (GameRules.BLUE_LINE_Z - BLUE_LINE_BUFFER_M)
+	var lead_z: float = carrier_pos.z - ctx.own_goal_dir * RUSH_ENTRY_LEAD_M
+	if ctx.own_goal_dir * lead_z < ctx.own_goal_dir * line_z:
+		lead_z = line_z
+	return lerpf(line_z, lead_z, rush)
 
 
 # Offside filter: in TRANS_DO the puck is NZ-side of opp blue line
