@@ -65,15 +65,24 @@ static func bench_start_position(team_id: int, team_slot: int) -> Vector3:
 	return Vector3(GameRules.BENCH_DOOR_X, GameRules.FACEOFF_SPAWN_HEIGHT, center_z + dz)
 
 
-# Post-goal skate-in start: the final faceoff slot pushed back toward the team's
-# own end (team 0 defends +Z, team 1 -Z) by FACEOFF_STAGING_SETBACK. Derived from
-# the already-resolved target so it inherits the center's reach offset; the skater
-# then glides this fixed short distance straight in to the dot. Only used when a
-# goal replay just played, whose camera cut hides the jump to this staging point.
-static func faceoff_staging_position(target: Vector3, team_id: int) -> Vector3:
-	var own_side_sign: float = -1.0 if team_id == 1 else 1.0
-	return Vector3(target.x, target.y,
-			target.z + own_side_sign * GameRules.FACEOFF_STAGING_SETBACK)
+# Post-goal skate-in start: the final faceoff slot pushed radially OUTWARD from
+# the dot by FACEOFF_STAGING_SETBACK, so the skate-in runs back along the ray
+# toward the dot — every player converging on the circle instead of skating in
+# parallel. Derived from the already-resolved target (inherits the center's reach
+# offset). A player sitting on the dot has no radial direction, so it falls back
+# to a straight push toward the team's own end (team 0 defends +Z, team 1 -Z).
+# Only used post-goal, whose replay camera cut hides the jump to this point.
+static func faceoff_staging_position(target: Vector3, dot_xz: Vector2, team_id: int) -> Vector3:
+	var radial: Vector2 = Vector2(target.x - dot_xz.x, target.z - dot_xz.y)
+	if radial.length() < 0.01:
+		var own_side_sign: float = -1.0 if team_id == 1 else 1.0
+		return Vector3(target.x, target.y,
+				target.z + own_side_sign * GameRules.FACEOFF_STAGING_SETBACK)
+	var dir: Vector2 = radial.normalized()
+	return Vector3(
+			target.x + dir.x * GameRules.FACEOFF_STAGING_SETBACK,
+			target.y,
+			target.z + dir.y * GameRules.FACEOFF_STAGING_SETBACK)
 
 
 # Glide time for a skater covering `distance` metres to its dot at the target

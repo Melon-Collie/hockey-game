@@ -202,7 +202,7 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		var pos: Vector3 = PlayerRules.faceoff_position(
 				record.team.team_id, record.team_slot, dot, reach)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
-		var start: Vector3 = _approach_start_for(record, pos, is_intro, staged)
+		var start: Vector3 = _approach_start_for(record, pos, dot, is_intro, staged)
 		var duration: float = _skate_in_duration(start, pos) if skate_in \
 				else _approach_duration(is_intro)
 		# Skate-in flows out of live momentum (start == current position); intro /
@@ -347,7 +347,10 @@ func on_faceoff_positions(positions: Array) -> void:
 			# team after a mid-game switch.
 			var record: PlayerRecord = _registry.get_record(peer_id)
 			var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
-			var start: Vector3 = _approach_start_for(record, pos, is_intro, staged)
+			# Staged faceoffs are always post-goal at center ice, so the dot the
+			# radial staging is measured from is CENTER_ICE_DOT (unused otherwise).
+			var start: Vector3 = _approach_start_for(
+					record, pos, GameRules.CENTER_ICE_DOT, is_intro, staged)
 			var duration: float = _skate_in_duration(start, pos) if skate_in \
 					else _approach_duration(is_intro)
 			var v0: Vector3 = record.skater.velocity if skate_in and record.skater != null \
@@ -384,15 +387,15 @@ func _consume_staged_faceoff(is_intro: bool) -> bool:
 #                             short, consistent glide regardless of the goal.
 #   - otherwise             → the skater's current position (skate from where
 #                             play stopped — period / stoppage faceoffs).
-func _approach_start_for(record: PlayerRecord, target: Vector3,
+func _approach_start_for(record: PlayerRecord, target: Vector3, dot_xz: Vector2,
 		is_intro: bool, staged: bool) -> Vector3:
 	if is_intro:
 		return PlayerRules.bench_start_position(record.team.team_id, record.team_slot)
 	if staged:
-		return PlayerRules.faceoff_staging_position(target, record.team.team_id)
+		return PlayerRules.faceoff_staging_position(target, dot_xz, record.team.team_id)
 	if record.skater != null:
 		return record.skater.global_position
-	return PlayerRules.faceoff_staging_position(target, record.team.team_id)
+	return PlayerRules.faceoff_staging_position(target, dot_xz, record.team.team_id)
 
 
 func _approach_duration(is_intro: bool) -> float:

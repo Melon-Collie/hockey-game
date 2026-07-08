@@ -101,27 +101,39 @@ func test_bench_slots_do_not_stack() -> void:
 	assert_ne(z1, z2)
 
 # ── faceoff_staging_position ─────────────────────────────────────────────────
-# Post-goal skate-in start: the dot slot pushed back toward the team's own end.
+# Post-goal skate-in start: the slot pushed radially OUT from the dot, so the
+# skate-in runs back along the ray toward the dot (players converge on it).
 
-func test_staging_keeps_x_and_y() -> void:
-	var target := Vector3(5.0, 1.0, 1.5)
-	var s: Vector3 = PlayerRules.faceoff_staging_position(target, 0)
-	assert_eq(s.x, target.x)
-	assert_eq(s.y, target.y)
+const CENTER := Vector2.ZERO
 
-func test_team_0_staging_is_further_positive_z_than_dot() -> void:
-	# Team 0 defends +Z, so it stages further +Z (behind its slot) and skates -Z in.
-	var target := Vector3(0.0, 1.0, 1.5)
-	assert_gt(PlayerRules.faceoff_staging_position(target, 0).z, target.z)
+func test_staging_preserves_y() -> void:
+	var target := Vector3(4.0, 1.0, 2.8)
+	assert_eq(PlayerRules.faceoff_staging_position(target, CENTER, 0).y, target.y)
 
-func test_team_1_staging_is_further_negative_z_than_dot() -> void:
-	var target := Vector3(0.0, 1.0, -1.5)
-	assert_lt(PlayerRules.faceoff_staging_position(target, 1).z, target.z)
+func test_staging_is_setback_metres_out_along_the_radial() -> void:
+	# A winger slot: staging sits exactly the setback further from the dot, on the
+	# dot→slot ray, so the skate-in vector points straight at the dot.
+	var target := Vector3(4.0, 1.0, 2.8)
+	var s: Vector3 = PlayerRules.faceoff_staging_position(target, CENTER, 0)
+	var d_target: float = Vector2(target.x, target.z).length()
+	var d_staging: float = Vector2(s.x, s.z).length()
+	assert_almost_eq(d_staging - d_target, GameRules.FACEOFF_STAGING_SETBACK, 0.001)
+	# Colinear with the dot: staging, slot, dot all on one ray.
+	var cross: float = target.x * s.z - target.z * s.x
+	assert_almost_eq(cross, 0.0, 0.001, "staging is on the dot→slot ray")
 
-func test_staging_setback_matches_constant() -> void:
-	var target := Vector3(0.0, 1.0, 1.5)
-	var s: Vector3 = PlayerRules.faceoff_staging_position(target, 0)
-	assert_almost_eq(s.z - target.z, GameRules.FACEOFF_STAGING_SETBACK, 0.001)
+func test_staging_pushes_a_winger_wider_in_x() -> void:
+	# The radial push widens X for an off-axis slot (was straight-back before).
+	var target := Vector3(4.0, 1.0, 2.8)
+	assert_gt(PlayerRules.faceoff_staging_position(target, CENTER, 0).x, target.x)
+
+func test_center_on_dot_falls_back_to_straight_back() -> void:
+	# A player sitting exactly on the dot has no radial — push toward its own end.
+	var target := Vector3(0.0, 1.0, 0.0)
+	var s0: Vector3 = PlayerRules.faceoff_staging_position(target, CENTER, 0)
+	assert_almost_eq(s0.z, GameRules.FACEOFF_STAGING_SETBACK, 0.001)
+	var s1: Vector3 = PlayerRules.faceoff_staging_position(target, CENTER, 1)
+	assert_almost_eq(s1.z, -GameRules.FACEOFF_STAGING_SETBACK, 0.001)
 
 # ── skate_in_duration ────────────────────────────────────────────────────────
 # Distance-scaled glide time for period / stoppage skate-ins, clamped to a range.

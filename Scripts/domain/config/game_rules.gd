@@ -328,10 +328,13 @@ const NEUTRAL_ZONE_FACEOFF_DOTS: Array[Vector2] = [
 
 # Per-team, per-slot XZ offsets from whichever dot is active. Team 0 stands on
 # the +Z side of the dot, team 1 on -Z (preserves team 0 = +Z half convention).
-# Indexed by [team_id][team_slot].
+# Indexed by [team_id][team_slot]. Center on the dot line (slot 0); wingers sit
+# on a ~4.9 m circle around the dot (±4.0 wide, 2.8 back) — tighter than the old
+# ±5.0/3.0 spread so the formation reads like a faceoff circle and the post-goal
+# radial skate-in converges cleanly instead of running in parallel.
 const FACEOFF_OFFSETS: Array = [
-	[Vector2( 0.0,  1.5), Vector2(-5.0,  3.0), Vector2( 5.0,  3.0)],  # team 0
-	[Vector2( 0.0, -1.5), Vector2(-5.0, -3.0), Vector2( 5.0, -3.0)],  # team 1
+	[Vector2( 0.0,  1.5), Vector2(-4.0,  2.8), Vector2( 4.0,  2.8)],  # team 0
+	[Vector2( 0.0, -1.5), Vector2(-4.0, -2.8), Vector2( 4.0, -2.8)],  # team 1
 ]
 
 # ── Bench-Door Start Points (pre-game intro skate-in) ─────────────────────────
