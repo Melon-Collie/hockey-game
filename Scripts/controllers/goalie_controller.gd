@@ -981,6 +981,7 @@ func reset_to_crease() -> void:
 	_sweep_anim_timer = 0.0
 	_sweep_anim_dir = 0.0
 	_move_speed_current = 0.0
+	goalie.set_stick_collision_enabled(true)
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
 
@@ -1487,6 +1488,11 @@ func _update_goalie_poke(delta: float) -> void:
 	_prev_blade_world_pos = current_blade_pos
 	if _sweep_anim_timer > 0.0:
 		_sweep_anim_timer = maxf(_sweep_anim_timer - delta, 0.0)
+	# The follow-through swing moves the real Stick collider through the
+	# puck's exit path; keep it out of the puck's collision mask for the
+	# swing's duration so it can't re-strike (and possibly deflect the puck
+	# back into the net) after the clear velocity was already imparted.
+	goalie.set_stick_collision_enabled(_sweep_anim_timer <= 0.0)
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
 		# No carrier to strip — instead sweep a loose puck out of the crease.
