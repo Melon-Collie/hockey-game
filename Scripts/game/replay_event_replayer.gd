@@ -88,10 +88,16 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 			var victim_rec: PlayerRecord = records.get(victim_peer_id)
 			if checker_rec != null and checker_rec.skater != null \
 					and victim_rec != null and victim_rec.skater != null:
+				var hit_dir: Vector3 = _pos_from_array(event.get("hit_dir", []))
 				var vfx: SkaterVFX = checker_rec.skater.get_node_or_null("VFX") as SkaterVFX
 				if vfx != null:
-					var hit_dir: Vector3 = _pos_from_array(event.get("hit_dir", []))
 					vfx.fire_body_check_burst(victim_rec.skater, check_force, hit_dir)
+				# The hitter's check-delivery body pose, driven directly for the
+				# same reason as the burst — the replayed actor's gait runs via
+				# apply_replay_state, so the drive plays out in playback too.
+				if checker_rec.controller != null:
+					checker_rec.controller.start_check_drive(
+							hit_dir, SkaterVFX.check_intensity(check_force))
 		"goal":
 			# Goal horn fires only via the file-replay path. The in-game goal
 			# cinematic relies on the live goal_scored closure that already

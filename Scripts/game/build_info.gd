@@ -75,7 +75,10 @@ const VERSION: String = "dev"
 # v18: stats packet grew — PlayerStats.to_array() 9 -> 10 (faceoff_losses,
 #     the opposing centre's charge on a draw, so faceoff win % has a real
 #     denominator), so STATS_PLAYER_RECORD_SIZE 10 -> 11.
-const PROTOCOL_VERSION: int = 18
+# v19: notify_body_check carries hitter_peer_id ahead of the victim, so every
+#     machine fires the hitter's check-delivery body pose off the same
+#     broadcast that drives the burst/thud.
+const PROTOCOL_VERSION: int = 19
 
 
 func _ready() -> void:

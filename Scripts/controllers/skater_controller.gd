@@ -551,6 +551,21 @@ var show_one_timer_indicator: bool = false
 @export var slapper_kick_hip_yaw_deg: float = 20.0     # hips uncoil hard through the shot line
 @export var shot_stride_fade: float = 0.8              # stride suppression while loading/kicking (glide through the shot)
 
+# ── Body Language Tuning ──────────────────────────────────────────────────────
+# Remaining cosmetic body reads (all in SkaterSkatingCoordinator). Check
+# delivery fires from the host-authoritative body_check_landed broadcast
+# (start_check_drive), so the hitter's drive lands the same frame as the
+# burst/thud on every machine; the stick-lift read keys off the replicated
+# blade_up; the celebration bounce reads the same timer the raised-stick pose
+# uses (started on every machine — see GameManager._trigger_scorer_celebration).
+@export var check_drive_time: float = 0.45        # seconds of shoulder-drive after a landed hit
+@export var check_drive_lean_deg: float = 14.0    # trunk drives INTO the hit at full hardness
+@export var check_drive_stance: float = 0.6       # legs drive under the hit — the finishing base
+@export var stick_lift_trunk_deg: float = 3.0     # slight chest-up pop while working under a stick
+@export var stick_lift_stance: float = 0.2        # coiled working posture while the blade is up
+@export var stick_lift_blend_speed: float = 10.0  # how fast the lift read engages/releases
+@export var celebration_leg_stance: float = 0.6   # knee-pump depth of the celebration bounce
+
 # ── Celebration Tuning ────────────────────────────────────────────────────────
 # Cosmetic raised-stick goal celebration (SkaterShotPoseCoordinator.
 # apply_celebration_pose) — heights in upper-body-local metres.
@@ -660,6 +675,33 @@ func start_celebration(duration: float) -> void:
 
 func is_celebrating() -> bool:
 	return _celebration_timer > 0.0
+
+
+# 0..1 progress through the celebration window (0 when idle). Read by the gait
+# for the leg bounce, matching the `t` the raised-stick pose runs on.
+func celebration_progress() -> float:
+	if _celebration_timer <= 0.0:
+		return 0.0
+	return 1.0 - _celebration_timer / _celebration_total
+
+
+# Ages the celebration window. Called from SkaterSkatingCoordinator.apply —
+# the one per-tick pass that runs on EVERY path (local sim, host-driven
+# remote, wire-fed remote, replay) — so the timer counts down even for
+# skaters this machine doesn't simulate (the timer starts on every machine;
+# see GameManager._trigger_scorer_celebration).
+func tick_celebration(delta: float) -> void:
+	if _celebration_timer > 0.0:
+		_celebration_timer = maxf(_celebration_timer - delta, 0.0)
+
+
+# Check-delivery body pose: the hitter drives the shoulder through the contact.
+# Fired from the host-authoritative body_check_landed broadcast (and the replay
+# event dispatcher), so it reads identically on every machine — same contract
+# as the burst/thud. `hit_dir` is the world-space direction the victim was
+# shoved (attacker → victim); `intensity` is the 0..1 VFX hardness.
+func start_check_drive(hit_dir: Vector3, intensity: float) -> void:
+	_skating.start_check_drive(hit_dir, intensity)
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
@@ -1087,9 +1129,11 @@ func _process_input(input: InputState, delta: float) -> void:
 		# blade pose the tick just placed — cosmetic-only (pickup is locked
 		# through GOAL_CELEBRATION), real ticks only (the timer must not
 		# re-decrement through reconcile replay), and gated to plain skating
-		# so a whiffed shot's follow-through isn't fought over.
+		# so a whiffed shot's follow-through isn't fought over. The timer
+		# itself is aged in tick_celebration (called by the gait pass above,
+		# which runs on every path — wire-fed remotes included, since their
+		# timers now start too for the celebration leg bounce).
 		if _celebration_timer > 0.0:
-			_celebration_timer = maxf(_celebration_timer - delta, 0.0)
 			var cel_state: SkaterStateMachine.State = _sm.get_state()
 			if cel_state == SkaterStateMachine.State.SKATING_WITH_PUCK \
 					or cel_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK:

@@ -210,7 +210,9 @@ func test_impact_fires_at_contact_time_for_pending_hit() -> void:
 	watch_signals(tracker)
 	var dir := Vector3(0.0, 0.0, 1.0)
 	_contact_on_carrier(1, 2, 1, 7.5, dir)
-	assert_signal_emitted_with_parameters(tracker, "impact_landed", [2, 7.5, dir])
+	# Hitter peer id leads the payload (v19): the broadcast drives the hitter's
+	# check-delivery pose as well as the victim-side burst/thud.
+	assert_signal_emitted_with_parameters(tracker, "impact_landed", [1, 2, 7.5, dir])
 	assert_signal_not_emitted(tracker, "hit_credited",
 			"stat waits for the dispossession")
 

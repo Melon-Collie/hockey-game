@@ -128,6 +128,16 @@ var _shot_kick_is_slap: bool = false
 # snaps in with the committed plant and eases back out on release. Keyed off
 # the replicated current_shot_state like the shot signals above.
 var _block_blend: float = 0.0
+# Check-delivery drive: the hitter's shoulder finishing through the contact.
+# Started by SkaterController.start_check_drive off the host-authoritative
+# body_check_landed broadcast (and the replay event dispatcher), so every
+# machine plays the identical drive the same frame as the burst/thud.
+var _drive_dir: Vector3 = Vector3.ZERO  # world-space, attacker → victim
+var _drive_t: float = -1.0              # seconds into the drive; <0 = idle
+var _drive_intensity: float = 0.0       # 0..1 VFX hit hardness
+# Smoothed stick-lift engagement — the working posture while jabbing under an
+# opponent's stick. Keyed off the replicated blade_up.
+var _lift_blend: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -171,9 +181,30 @@ func reset_to_rest() -> void:
 	_shot_kick_power = 0.0
 	_shot_kick_is_slap = false
 	_block_blend = 0.0
+	_drive_dir = Vector3.ZERO
+	_drive_t = -1.0
+	_drive_intensity = 0.0
+	_lift_blend = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
+
+
+# Arms the check-delivery drive (see the runtime state above). During
+# sustained contact or a quick follow-up hit inside an active drive the
+# broadcast can re-fire: harden the intensity but never restart the clock —
+# a re-zeroed envelope would pin the pose at its rise for as long as the
+# contact grinds.
+func start_check_drive(hit_dir: Vector3, intensity: float) -> void:
+	var flat := Vector3(hit_dir.x, 0.0, hit_dir.z)
+	if flat.length_squared() < 0.0001 or intensity <= 0.0:
+		return
+	if _drive_t >= 0.0:
+		_drive_intensity = maxf(_drive_intensity, intensity)
+		return
+	_drive_dir = flat.normalized()
+	_drive_intensity = intensity
+	_drive_t = 0.0
 
 # ── Per-Tick Application ──────────────────────────────────────────────────────
 # Three gait shapes — forward, backward, and lateral (crossover) — are computed
@@ -286,9 +317,29 @@ func apply(delta: float) -> void:
 	# release so the wall doesn't pop back to a stride.
 	_block_blend = lerpf(_block_blend, 1.0 if planted else 0.0,
 			minf(_controller.block_pose_blend_speed * delta, 1.0))
+	# Check-delivery drive envelope: an explosive rise (peaks ~15% in) easing
+	# out over check_drive_time — the shoulder finishing through the contact.
+	var drive_env: float = 0.0
+	if _drive_t >= 0.0:
+		_drive_t += delta
+		var du: float = _drive_t / maxf(_controller.check_drive_time, 0.001)
+		if du >= 1.0:
+			_drive_t = -1.0
+		else:
+			drive_env = sin(PI * pow(du, 0.35)) * _drive_intensity
+	# Stick-lift read, off the replicated blade_up (own lift or a forced pop —
+	# either way the body reacts).
+	_lift_blend = lerpf(_lift_blend, 1.0 if _skater.blade_up else 0.0,
+			minf(_controller.stick_lift_blend_speed * delta, 1.0))
+	# Celebration window: this pass runs on EVERY path (local sim, host-driven
+	# remote, wire-fed remote, replay), so it owns aging the controller's timer
+	# — see SkaterController.tick_celebration.
+	_controller.tick_celebration(delta)
+	var celebr_p: float = _controller.celebration_progress()
 	# Combined engagement, for the stride suppression below — shooting is a
-	# glide: the feet set through the load and drive through the release.
-	var shot_body: float = maxf(maxf(_wrister_load, _slap_load), kick_env)
+	# glide (the feet set through the load and drive through the release), and
+	# a landed check plants through the finish.
+	var shot_body: float = maxf(maxf(_wrister_load, _slap_load), maxf(kick_env, drive_env))
 	var stick_side: float = -1.0 if _skater.is_left_handed else 1.0
 	# Hips coil with the load (stick-side hip pulls back, riding the torso coil
 	# — the wrister's blade-tracking twist or the slapper's authored wind-up
@@ -575,6 +626,21 @@ func apply(delta: float) -> void:
 	# torso (Skater's block_crouch_depth lowers the chest; this bends the legs
 	# to match instead of leaving them straight).
 	stance = maxf(stance, _controller.block_stance * _block_blend)
+	# A landed check drives with the LEGS — the finishing base under the
+	# shoulder — and a stick lift works from a light coil.
+	stance = maxf(stance, _controller.check_drive_stance * drive_env)
+	stance = maxf(stance, _controller.stick_lift_stance * _lift_blend)
+	# Celebration bounce: knee pumps between straight and seated (the body
+	# drop follows, so it reads as a hop bob) — 3 pumps across the window,
+	# double the raised-stick pose's bob rate. Gated to plain skating like the
+	# pose (SkaterController's celebration block) so it never fights a
+	# follow-through kick, and ramped in over the same first 20%.
+	if celebr_p > 0.0 and (shot_state == State.SKATING_WITH_PUCK
+			or shot_state == State.SKATING_WITHOUT_PUCK):
+		var cel_ramp: float = clampf(celebr_p / 0.2, 0.0, 1.0)
+		cel_ramp = cel_ramp * cel_ramp * (3.0 - 2.0 * cel_ramp)
+		var pump: float = 0.5 - 0.5 * cos(celebr_p * TAU * 3.0)
+		stance = maxf(stance, _controller.celebration_leg_stance * cel_ramp * pump)
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
@@ -907,6 +973,19 @@ func apply(delta: float) -> void:
 	# above fades once the sprint tops out). gait_scale keeps it from fighting
 	# the hockey-stop / reversal trunk reads on their shared channel.
 	trunk_pitch_add += -deg_to_rad(_controller.sprint_lean_deg) * _sprint * gait_scale
+	# Check-delivery drive: the trunk drives INTO the hit — the shoulder
+	# finishing through the contact. Same directional decomposition as the
+	# reach lean (pitch = mag·local.z folds toward local −Z, roll = −mag·local.x),
+	# re-derived body-local each tick so the lean stays on the victim line
+	# while the body carries through.
+	if drive_env > 0.0:
+		var drive_local: Vector3 = basis_inv * _drive_dir
+		var drive_mag: float = deg_to_rad(_controller.check_drive_lean_deg) * drive_env
+		trunk_pitch_add += drive_mag * drive_local.z
+		trunk_roll_add += -drive_mag * drive_local.x
+	# Stick lift: a slight chest-up pop while jabbing under the opponent's
+	# stick (positive pitch tips the shoulders back).
+	trunk_pitch_add += deg_to_rad(_controller.stick_lift_trunk_deg) * _lift_blend
 	# Glide sway: a coasting skater shifts weight lazily edge-to-edge — a slow
 	# roll (trunk plus a touch of shared leg roll) far below stride cadence.
 	# The phase is local-only; at ~2° amplitude machines needn't agree on it.
