@@ -63,3 +63,14 @@ static func bench_start_position(team_id: int, team_slot: int) -> Vector3:
 		# center ice rather than toward the end boards.
 		dz = side * GameRules.BENCH_DOOR_SLOT_DZ[team_slot]
 	return Vector3(GameRules.BENCH_DOOR_X, GameRules.FACEOFF_SPAWN_HEIGHT, center_z + dz)
+
+
+# Post-goal skate-in start: the final faceoff slot pushed back toward the team's
+# own end (team 0 defends +Z, team 1 -Z) by FACEOFF_STAGING_SETBACK. Derived from
+# the already-resolved target so it inherits the center's reach offset; the skater
+# then glides this fixed short distance straight in to the dot. Only used when a
+# goal replay just played, whose camera cut hides the jump to this staging point.
+static func faceoff_staging_position(target: Vector3, team_id: int) -> Vector3:
+	var own_side_sign: float = -1.0 if team_id == 1 else 1.0
+	return Vector3(target.x, target.y,
+			target.z + own_side_sign * GameRules.FACEOFF_STAGING_SETBACK)

@@ -23,6 +23,13 @@ const PREGAME_INTRO_DURATION: float = 4.0
 # skate happens under the camera sweep during the PREGAME_INTRO_DURATION hold).
 const FACEOFF_APPROACH_DURATION: float = 1.25
 const INTRO_APPROACH_DURATION: float   = 3.6
+# Post-goal faceoffs stage the skate-in from this far behind the dot (toward the
+# team's own end) instead of the player's scattered goal-moment position. The
+# replay-to-live camera cut hides the reposition, so the visible result is a
+# short, consistent skate into the dot no matter where the goal happened — the
+# long "skate back" is elided into the replay's dead time. See
+# PhaseCoordinator._approach_start_for / PlayerRules.faceoff_staging_position.
+const FACEOFF_STAGING_SETBACK: float   = 6.0
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3

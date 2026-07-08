@@ -99,3 +99,26 @@ func test_bench_slots_do_not_stack() -> void:
 	assert_ne(z0, z1)
 	assert_ne(z0, z2)
 	assert_ne(z1, z2)
+
+# ── faceoff_staging_position ─────────────────────────────────────────────────
+# Post-goal skate-in start: the dot slot pushed back toward the team's own end.
+
+func test_staging_keeps_x_and_y() -> void:
+	var target := Vector3(5.0, 1.0, 1.5)
+	var s: Vector3 = PlayerRules.faceoff_staging_position(target, 0)
+	assert_eq(s.x, target.x)
+	assert_eq(s.y, target.y)
+
+func test_team_0_staging_is_further_positive_z_than_dot() -> void:
+	# Team 0 defends +Z, so it stages further +Z (behind its slot) and skates -Z in.
+	var target := Vector3(0.0, 1.0, 1.5)
+	assert_gt(PlayerRules.faceoff_staging_position(target, 0).z, target.z)
+
+func test_team_1_staging_is_further_negative_z_than_dot() -> void:
+	var target := Vector3(0.0, 1.0, -1.5)
+	assert_lt(PlayerRules.faceoff_staging_position(target, 1).z, target.z)
+
+func test_staging_setback_matches_constant() -> void:
+	var target := Vector3(0.0, 1.0, 1.5)
+	var s: Vector3 = PlayerRules.faceoff_staging_position(target, 0)
+	assert_almost_eq(s.z - target.z, GameRules.FACEOFF_STAGING_SETBACK, 0.001)
