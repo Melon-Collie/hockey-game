@@ -729,169 +729,113 @@ func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
 	assert_almost_eq(t, 10.0 / AIActionScoring.MIN_TRAVEL_SPEED_M_S, 0.001)
 
 
-# ─── carry_poke_safety ─────────────────────────────────────────────────
+# ─── puck_safety (unified velocity-aware, body-shielded) ────────────────
 
-func test_carry_poke_safety_full_when_no_opponents() -> void:
-	var puck_pos := Vector3.ZERO
-	var empty: Array[Vector3] = []
-	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, empty), 1.0)
-
-
-func test_carry_poke_safety_full_when_opponent_beyond_safe_radius() -> void:
-	var puck_pos := Vector3.ZERO
-	var far: Array[Vector3] = [Vector3(AIActionScoring.CARRY_POKE_SAFE_RADIUS_M + 1.0, 0.0, 0.0)]
-	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, far), 1.0)
+func _vels(n: int) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	for _i: int in n:
+		out.append(Vector3.ZERO)
+	return out
 
 
-func test_carry_poke_safety_floor_when_opponent_inside_danger_radius() -> void:
-	var puck_pos := Vector3.ZERO
-	var close: Array[Vector3] = [Vector3(0.5, 0.0, 0.0)]
-	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, close),
+func test_puck_safety_full_when_no_opponents() -> void:
+	var empty_p: Array[Vector3] = []
+	var empty_v: Array[Vector3] = []
+	assert_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, empty_p, empty_v), 1.0)
+
+
+func test_puck_safety_full_when_stationary_opponent_beyond_safe_radius() -> void:
+	var p: Array[Vector3] = [Vector3(AIActionScoring.CARRY_POKE_SAFE_RADIUS_M + 1.0, 0.0, 0.0)]
+	assert_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, p, _vels(1)), 1.0)
+
+
+func test_puck_safety_floor_when_stationary_opponent_inside_danger() -> void:
+	var p: Array[Vector3] = [Vector3(0.5, 0.0, 0.0)]
+	assert_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, p, _vels(1)),
 			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
 
 
-func test_carry_poke_safety_ramps_between_radii() -> void:
-	# Opponent at the midpoint between danger and safe radii → safety
-	# sits midway between floor and 1.0.
-	var puck_pos := Vector3.ZERO
+func test_puck_safety_ramps_between_radii() -> void:
+	# Forward ZERO disables the body shield, so this is pure distance ramp.
 	var mid_r: float = 0.5 * (
 			AIActionScoring.CARRY_POKE_DANGER_RADIUS_M
 			+ AIActionScoring.CARRY_POKE_SAFE_RADIUS_M)
-	var mid: Array[Vector3] = [Vector3(mid_r, 0.0, 0.0)]
+	var p: Array[Vector3] = [Vector3(mid_r, 0.0, 0.0)]
 	var expected: float = 0.5 * (AIActionScoring.CARRY_POKE_SAFETY_FLOOR + 1.0)
-	assert_almost_eq(AIActionScoring.carry_poke_safety(puck_pos, mid), expected, 0.01)
+	assert_almost_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, p, _vels(1)), expected, 0.01)
 
 
-func test_carry_poke_safety_uses_nearest_opponent() -> void:
-	# Two opponents — one far, one inside danger. Nearest dominates,
-	# so the result is the floor regardless of the second opponent.
-	var puck_pos := Vector3.ZERO
-	var opps: Array[Vector3] = [
-			Vector3(10.0, 0.0, 0.0),
-			Vector3(0.5, 0.0, 0.0),
-	]
-	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, opps),
+func test_puck_safety_uses_worst_opponent() -> void:
+	var p: Array[Vector3] = [Vector3(10.0, 0.0, 0.0), Vector3(0.5, 0.0, 0.0)]
+	assert_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, p, _vels(2)),
 			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
 
 
-func test_carry_poke_safety_asymmetric_for_in_front_vs_behind() -> void:
-	# Geometric demonstration that opp-to-PUCK (not opp-to-body) is the
-	# right thing to measure. Carrier body at origin, attacking dir +X,
-	# so puck rides at (CARRY_OFFSET, 0, 0). An opponent at (CARRY_OFFSET,
-	# 0, 0) is on top of the puck — full poke threat. An opponent at
-	# (-CARRY_OFFSET, 0, 0) is 2*CARRY_OFFSET away from the puck and
-	# almost certainly outside the safe radius — no threat. Both
-	# opponents sit the SAME body-to-body distance; a body-to-body
-	# implementation would treat them identically.
-	const CARRY_OFFSET := 2.0  # matches SkaterAgentStateMachine.CARRY_BLADE_AIM_FORWARD_M
-	var puck_pos := Vector3(CARRY_OFFSET, 0.0, 0.0)
-	var in_front: Array[Vector3] = [Vector3(CARRY_OFFSET, 0.0, 0.0)]
-	var behind: Array[Vector3] = [Vector3(-CARRY_OFFSET, 0.0, 0.0)]
-	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, in_front),
-			AIActionScoring.CARRY_POKE_SAFETY_FLOOR,
-			"opponent on the puck = full danger")
-	assert_eq(AIActionScoring.carry_poke_safety(puck_pos, behind), 1.0,
-			"opponent two carry-arms behind = safe")
+func test_puck_safety_shields_a_behind_defender() -> void:
+	# Same distance in front vs behind; forward = +X. The behind defender must
+	# reach past the body (BODY_SHIELD_M added), so it reads as safer.
+	var d: float = AIActionScoring.CARRY_POKE_DANGER_RADIUS_M + 0.3
+	var in_front: Array[Vector3] = [Vector3(d, 0.0, 0.0)]
+	var behind: Array[Vector3] = [Vector3(-d, 0.0, 0.0)]
+	var fwd := Vector3(1.0, 0.0, 0.0)
+	var s_front: float = AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.5, fwd, in_front, _vels(1))
+	var s_behind: float = AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.5, fwd, behind, _vels(1))
+	assert_gt(s_behind, s_front,
+			"a defender behind the carrier is shielded → safer than one in front")
 
 
-# ─── carry_intercept_safety ─────────────────────────────────────────────
-
-func test_carry_intercept_safety_returns_one_with_no_opponents() -> void:
-	var self_pos := Vector3.ZERO
-	var candidate := Vector3(5.0, 0.0, 0.0)
-	var empty: Array[Vector3] = []
-	assert_eq(AIActionScoring.carry_intercept_safety(
-			self_pos, candidate, 1.0, empty, empty), 1.0)
-
-
-func test_carry_intercept_safety_returns_one_at_zero_arrival_time() -> void:
-	# local_time ≈ 0 means bot has no path. Helper should short-
-	# circuit to 1.0 so stand-still candidates don't get a spurious
-	# penalty from this check (carry_poke_safety covers them).
-	var self_pos := Vector3.ZERO
-	var opps_now: Array[Vector3] = [Vector3(2.0, 0.0, 0.0)]
-	var opps_then: Array[Vector3] = [Vector3(2.0, 0.0, 0.0)]
-	assert_eq(AIActionScoring.carry_intercept_safety(
-			self_pos, self_pos, 0.0, opps_now, opps_then), 1.0)
+func test_puck_safety_sees_a_closing_defender_before_it_arrives() -> void:
+	# The pincer case: a defender starts BEYOND the safe radius (stationary = no
+	# threat) but closes fast; over the window its stick reaches the puck, so
+	# safety drops below 1. This is the velocity awareness the old snapshot
+	# model lacked.
+	var start_x: float = AIActionScoring.CARRY_POKE_SAFE_RADIUS_M + 3.0
+	var p: Array[Vector3] = [Vector3(start_x, 0.0, 0.0)]
+	var closing: Array[Vector3] = [Vector3(-10.0, 0.0, 0.0)]  # toward the puck
+	var s: float = AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.6, Vector3(1.0, 0.0, 0.0), p, closing)
+	assert_lt(s, 1.0, "a defender closing into poke range within the window is a threat")
 
 
-func test_carry_intercept_safety_safe_for_parallel_same_speed_chase() -> void:
-	# Defender starts 4 m to the side, parallel velocity, same speed.
-	# Relative motion is zero → constant distance over the window →
-	# fallback to distance at t=0. 4 m is outside CARRY_POKE_SAFE_RADIUS
-	# (3.0 m), so safety = 1.0.
-	var self_pos := Vector3.ZERO
-	var candidate := Vector3(0.0, 0.0, 10.0)  # bot moves +Z 10 m
-	var opps_now: Array[Vector3] = [Vector3(4.0, 0.0, 0.0)]
-	# Defender ends 4 m to the side of CANDIDATE → same +Z motion at
-	# the same speed.
-	var opps_then: Array[Vector3] = [Vector3(4.0, 0.0, 10.0)]
-	assert_eq(AIActionScoring.carry_intercept_safety(
-			self_pos, candidate, 1.0, opps_now, opps_then), 1.0)
+func test_puck_safety_ignores_a_defender_moving_away() -> void:
+	var start_x: float = AIActionScoring.CARRY_POKE_SAFE_RADIUS_M + 0.5
+	var p: Array[Vector3] = [Vector3(start_x, 0.0, 0.0)]
+	var fleeing: Array[Vector3] = [Vector3(10.0, 0.0, 0.0)]  # away from the puck
+	assert_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3.ZERO, 0.6, Vector3.ZERO, p, fleeing), 1.0)
 
 
-func test_carry_intercept_safety_floor_when_path_crosses_defender_in_window() -> void:
-	# Bot drives +Z 10 m over 1 s. Defender starts ahead and to the
-	# left, cuts across to the bot's path mid-window — defender ends
-	# ON the bot's line at t = 0.5. Closest approach is ~0 → floor.
-	var self_pos := Vector3.ZERO
-	var candidate := Vector3(0.0, 0.0, 10.0)
-	# At t=0: bot at (0,0,0), opp at (-3, 0, 5).
-	# At t=1: bot at (0,0,10), opp at (3, 0, 5).
-	# At t=0.5: bot at (0,0,5), opp at (0,0,5). Distance = 0.
-	var opps_now: Array[Vector3] = [Vector3(-3.0, 0.0, 5.0)]
-	var opps_then: Array[Vector3] = [Vector3(3.0, 0.0, 5.0)]
-	assert_eq(AIActionScoring.carry_intercept_safety(
-			self_pos, candidate, 1.0, opps_now, opps_then),
+func test_puck_safety_floor_when_defender_crosses_the_carry_path() -> void:
+	# Moving puck ZERO→(0,0,10) over 1 s. Defender crosses onto the puck line at
+	# t = 0.5 (puck and defender both at (0,0,5)) → closest approach ~0 → floor.
+	var p: Array[Vector3] = [Vector3(-3.0, 0.0, 5.0)]
+	var v: Array[Vector3] = [Vector3(6.0, 0.0, 0.0)]  # reaches (0,0,5) at t=0.5
+	assert_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3(0.0, 0.0, 10.0), 1.0, Vector3(0.0, 0.0, 1.0), p, v),
 			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
 
 
-func test_carry_intercept_safety_safe_when_defender_moves_away_from_path() -> void:
-	# Bot drives +Z 10 m. Defender at same start position as the
-	# crossing case but moving AWAY (-X to -X further). Closest
-	# approach stays far from the path → safety = 1.0.
-	# Demonstrates intercept-safety is direction-aware: it's about
-	# convergence, not just "are there opponents around."
-	var self_pos := Vector3.ZERO
-	var candidate := Vector3(0.0, 0.0, 10.0)
-	var opps_now: Array[Vector3] = [Vector3(-3.0, 0.0, 5.0)]
-	var opps_then: Array[Vector3] = [Vector3(-8.0, 0.0, 5.0)]
-	assert_eq(AIActionScoring.carry_intercept_safety(
-			self_pos, candidate, 1.0, opps_now, opps_then), 1.0)
+func test_puck_safety_safe_when_defender_diverges_from_the_carry_path() -> void:
+	var p: Array[Vector3] = [Vector3(-3.0, 0.0, 5.0)]
+	var v: Array[Vector3] = [Vector3(-8.0, 0.0, 0.0)]  # away from the path
+	assert_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3(0.0, 0.0, 10.0), 1.0, Vector3(0.0, 0.0, 1.0), p, v), 1.0)
 
 
-func test_carry_intercept_safety_ignores_closest_approach_outside_window() -> void:
-	# Bot drives +Z 10 m over 1 s. Defender starts ahead of where
-	# the bot will arrive (z=15) and creeps lateral toward the path,
-	# so analytical closest approach t* ≈ 1.54 — OUTSIDE [0, 1].
-	# Clamp to t=1 (end of window) → distance at endpoint governs.
-	# Endpoint geometry: bot at (0,0,10), opp at (-4, 0, 15), d≈6.4
-	# well outside SAFE_RADIUS → safety = 1.0.
-	var self_pos := Vector3.ZERO
-	var candidate := Vector3(0.0, 0.0, 10.0)
-	var opps_now: Array[Vector3] = [Vector3(-5.0, 0.0, 15.0)]
-	var opps_then: Array[Vector3] = [Vector3(-4.0, 0.0, 15.0)]
-	assert_eq(AIActionScoring.carry_intercept_safety(
-			self_pos, candidate, 1.0, opps_now, opps_then), 1.0)
-
-
-func test_carry_intercept_safety_uses_worst_defender() -> void:
-	# Two defenders: one converging onto the path (dangerous), one
-	# moving away (safe). Result should track the dangerous one
-	# (worst-case dominates).
-	var self_pos := Vector3.ZERO
-	var candidate := Vector3(0.0, 0.0, 10.0)
-	var opps_now: Array[Vector3] = [
-			Vector3(-3.0, 0.0, 5.0),  # converger (crosses path at t=0.5)
-			Vector3(8.0, 0.0, 5.0),   # mover-away
-	]
-	var opps_then: Array[Vector3] = [
-			Vector3(3.0, 0.0, 5.0),
-			Vector3(15.0, 0.0, 5.0),
-	]
-	assert_eq(AIActionScoring.carry_intercept_safety(
-			self_pos, candidate, 1.0, opps_now, opps_then),
-			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
+func test_puck_safety_safe_for_parallel_same_speed_chase() -> void:
+	# Defender 4 m to the side, matching the puck's +Z motion. Relative motion
+	# is zero → constant 4 m gap (> safe radius) → safe.
+	var p: Array[Vector3] = [Vector3(4.0, 0.0, 0.0)]
+	var v: Array[Vector3] = [Vector3(0.0, 0.0, 10.0)]
+	assert_eq(AIActionScoring.puck_safety(
+			Vector3.ZERO, Vector3(0.0, 0.0, 10.0), 1.0, Vector3(0.0, 0.0, 1.0), p, v), 1.0)
 
 
 # ─── expected_pass_speed / pass_launch_speed (distance-adaptive) ─────────

@@ -1198,27 +1198,7 @@ static func pass_miss_loss_point(from: Vector3, receiver: Vector3) -> Vector3:
 	return Vector3(receiver.x + dx * inv, 0.0, receiver.z + dz * inv)
 
 
-# Omnidirectional poke-threat penalty for CARRY destinations. Returns
-# a multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0]: full safety (1.0)
-# when no opponent's body is within CARRY_POKE_SAFE_RADIUS_M of the
-# carrier's PUCK position, clamped to the floor when an opponent is
-# inside the inner danger radius, linear ramp in between.
-#
-# Layered ON TOP of `score_shoot` / `position_potential`, both of
-# which already penalize defenders — but those use a FORWARD-CONE
-# pressure (defenders behind/beside don't matter for a shot lane).
-# For possession protection, a defender at ANY angle within stick
-# reach of the puck is a poke threat. This penalty captures that
-# gap so carriers pick destinations that are safe to BE AT, not just
-# safe to shoot from.
-#
-# Caller passes the projected PUCK position (carrier body + carry-arm
-# offset toward attacking goal) and projected opponent body positions
-# at the candidate's arrival time. Measuring opp-body → our-puck
-# (rather than body-to-body) captures the asymmetry that a defender
-# in FRONT of the carrier is much more dangerous than one BEHIND,
-# at the same body-to-body distance — because the puck rides forward.
-#
+# ── Possession safety (poke-threat) — physical constants ─────────────────────
 # Radii are derived from the physical poke geometry:
 #   DANGER = STICK_REACH + POKE_RADIUS — opp body this close to our
 #     puck and their stick CAN reach it.
@@ -1236,108 +1216,104 @@ const CARRY_POKE_SAFE_RADIUS_M: float = (
 # with equal shot quality — committed offensive plays still fire,
 # defensive carry candidates still get a real penalty.
 const CARRY_POKE_SAFETY_FLOOR: float = 0.35
+# How far a BEHIND defender must reach around the carrier's body to touch the
+# puck — a physical body-width added to their effective distance. A poke from
+# the defensive side is screened by the carrier, so a backside checker reads as
+# less of a threat than one in front (a discount, not a wall). Grounded in body
+# geometry, not a tuned weight.
+const BODY_SHIELD_M: float = 0.7
+# Reaction window (s) for reading the safety of a STATIC puck spot (a hold, or
+# a carry DESTINATION): how far ahead we look for a closing defender to reach
+# poke range. Long enough that a converging pincer registers before it arrives,
+# short enough that a distant skater isn't a threat yet. A MOVING carry read
+# passes the arrival time instead.
+const SAFETY_WINDOW_S: float = 0.5
 
-static func carry_poke_safety(puck_pos: Vector3, projected_opponents: Array[Vector3]) -> float:
-	var nearest_sq: float = INF
-	for p: Vector3 in projected_opponents:
-		var dx: float = p.x - puck_pos.x
-		var dz: float = p.z - puck_pos.z
-		var d_sq: float = dx * dx + dz * dz
-		if d_sq < nearest_sq:
-			nearest_sq = d_sq
-	if nearest_sq == INF:
+
+# Maps a defender's closest-approach distance to the puck (already body-shield
+# adjusted) to a safety multiplier: FLOOR at/inside the danger radius (stick
+# CAN reach), 1.0 at/outside the safe radius (time to move clear), linear in
+# between. One definition shared by every safety read.
+static func reach_to_safety(reach_dist: float) -> float:
+	if reach_dist >= CARRY_POKE_SAFE_RADIUS_M:
 		return 1.0
-	var d: float = sqrt(nearest_sq)
-	if d >= CARRY_POKE_SAFE_RADIUS_M:
-		return 1.0
-	if d <= CARRY_POKE_DANGER_RADIUS_M:
+	if reach_dist <= CARRY_POKE_DANGER_RADIUS_M:
 		return CARRY_POKE_SAFETY_FLOOR
-	var t: float = (d - CARRY_POKE_DANGER_RADIUS_M) / (
+	var t: float = (reach_dist - CARRY_POKE_DANGER_RADIUS_M) / (
 			CARRY_POKE_SAFE_RADIUS_M - CARRY_POKE_DANGER_RADIUS_M)
 	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, t)
 
 
-# Time-synced interception penalty for CARRY destinations. Returns a
-# multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0] driven by the worst
-# (closest) defender intercept across the bot's projected path to
-# `candidate`. Unlike carry_poke_safety (which only checks the
-# destination) and path_clearance (which checks whether a projected
-# opponent STANDS on the line), this asks: as the bot skates along
-# its path over [0, local_time], does any defender's projected
-# position pass within poke range of the bot's position AT THE SAME
-# TIME?
+# Unified possession-safety model: how safe the puck is over a short window,
+# given where the defenders are AND where they're going. Replaces the old
+# split of carry_poke_safety (a static snapshot at a spot) and
+# carry_intercept_safety (convergence along a path) with ONE closest-approach:
 #
-# Modeling defender CONVERGENCE on the bot's route lets _best_carry
-# pick lateral candidates earlier — the body bends away from a
-# closing defender before they arrive, instead of driving toward
-# them and relying on the discrete deke at the last moment.
+#   puck(t) = lerp(puck_from, puck_to, t / window)      t in [0, window]
+#   def(t)  = opp + opp_vel * t                         (dead-reckoned)
+#   miss    = min over t of |def(t) - puck(t)|          (closest approach)
 #
-# Math: bot and defender both modeled as constant-velocity over
-# [0, local_time]. |B(t) - D(t)|² is quadratic in t; closest
-# approach has a closed form (perpendicular of relative motion).
-# Clamp t* to [0, local_time] so closest-approach OUTSIDE the
-# window (defender passes through after we've already arrived)
-# doesn't penalize.
+# A STATIC read (hold / carry destination) passes puck_from == puck_to with a
+# reaction window (SAFETY_WINDOW_S); a MOVING read (carry candidate) passes the
+# puck's start and end with the arrival time. Either way it's the defenders'
+# VELOCITY that surfaces a closing pincer — the bot "sees it coming" from the
+# motion, with no separate look-ahead term.
 #
-# Same radii / floor as carry_poke_safety — same poke geometry.
-# Caller responsibility: `opponents_current` and `opponents_at_arrival`
-# must be parallel arrays (i = same defender); a defender's velocity
-# is derived as (at_arrival - current) / local_time.
+# `forward` is the direction the puck is carried (toward the attacking goal). A
+# defender reaching the puck from BEHIND that line is screened by the carrier's
+# body (BODY_SHIELD_M added to its effective distance), so a backside checker
+# reads as less of a poke threat than one in front — the physical front/behind
+# asymmetry, modelled directly. Pass Vector3.ZERO to disable the shield.
 #
-# Edge cases:
-#   - local_time ≈ 0 → bot has no path. Caller should skip (use
-#     carry_poke_safety alone for stand-still candidates).
-#   - |delta_vel|² ≈ 0 (defender and bot moving parallel-and-same-
-#     speed) → t* clamps to 0, result is distance at t=0. Falls
-#     back to "do they start in poke range?" — correct, since a
-#     parallel-pace chase isn't a poke setup, it's a continuous
-#     threat.
-static func carry_intercept_safety(
-		self_pos: Vector3,
-		candidate: Vector3,
-		local_time: float,
-		opponents_current: Array[Vector3],
-		opponents_at_arrival: Array[Vector3]) -> float:
-	if local_time <= 0.0001:
+# Returns the WORST (min) per-defender safety in [FLOOR, 1.0]; 1.0 when there
+# are no defenders. `opponents` and `opponent_vels` must be parallel arrays.
+static func puck_safety(
+		puck_from: Vector3, puck_to: Vector3, window_s: float,
+		forward: Vector3,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> float:
+	var n: int = opponents.size()
+	if n == 0 or opponent_vels.size() != n:
 		return 1.0
-	var n: int = opponents_current.size()
-	if n == 0 or n != opponents_at_arrival.size():
-		return 1.0
-	var inv_t: float = 1.0 / local_time
-	var bot_vx: float = (candidate.x - self_pos.x) * inv_t
-	var bot_vz: float = (candidate.z - self_pos.z) * inv_t
-	var min_d: float = INF
+	var w: float = maxf(window_s, 0.0001)
+	var inv_w: float = 1.0 / w
+	var puck_vx: float = (puck_to.x - puck_from.x) * inv_w
+	var puck_vz: float = (puck_to.z - puck_from.z) * inv_w
+	var fwd_x: float = 0.0
+	var fwd_z: float = 0.0
+	var f_len: float = sqrt(forward.x * forward.x + forward.z * forward.z)
+	if f_len > 0.0001:
+		fwd_x = forward.x / f_len
+		fwd_z = forward.z / f_len
+	var worst: float = 1.0
 	for i: int in n:
-		var opp_now: Vector3 = opponents_current[i]
-		var opp_then: Vector3 = opponents_at_arrival[i]
-		var opp_vx: float = (opp_then.x - opp_now.x) * inv_t
-		var opp_vz: float = (opp_then.z - opp_now.z) * inv_t
-		var dp_x: float = opp_now.x - self_pos.x
-		var dp_z: float = opp_now.z - self_pos.z
-		var dv_x: float = opp_vx - bot_vx
-		var dv_z: float = opp_vz - bot_vz
+		var opp: Vector3 = opponents[i]
+		var vel: Vector3 = opponent_vels[i]
+		var dp_x: float = opp.x - puck_from.x
+		var dp_z: float = opp.z - puck_from.z
+		var dv_x: float = vel.x - puck_vx
+		var dv_z: float = vel.z - puck_vz
 		var dv_sq: float = dv_x * dv_x + dv_z * dv_z
 		var t_star: float
 		if dv_sq < 0.0001:
-			# Parallel-velocity case: relative motion is zero. Distance
-			# is constant across the window; pick t=0.
-			t_star = 0.0
+			t_star = 0.0  # parallel motion: distance constant, sample t=0
 		else:
-			t_star = clampf(
-					-(dp_x * dv_x + dp_z * dv_z) / dv_sq,
-					0.0, local_time)
-		var dx_at_t: float = dp_x + dv_x * t_star
-		var dz_at_t: float = dp_z + dv_z * t_star
-		var d: float = sqrt(dx_at_t * dx_at_t + dz_at_t * dz_at_t)
-		if d < min_d:
-			min_d = d
-	if min_d == INF or min_d >= CARRY_POKE_SAFE_RADIUS_M:
-		return 1.0
-	if min_d <= CARRY_POKE_DANGER_RADIUS_M:
-		return CARRY_POKE_SAFETY_FLOOR
-	var ramp_t: float = (min_d - CARRY_POKE_DANGER_RADIUS_M) / (
-			CARRY_POKE_SAFE_RADIUS_M - CARRY_POKE_DANGER_RADIUS_M)
-	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, ramp_t)
+			t_star = clampf(-(dp_x * dv_x + dp_z * dv_z) / dv_sq, 0.0, w)
+		# Relative position (def - puck) at closest approach.
+		var mx: float = dp_x + dv_x * t_star
+		var mz: float = dp_z + dv_z * t_star
+		var miss: float = sqrt(mx * mx + mz * mz)
+		# Body shield: a defender on the DEFENSIVE side of the puck (miss vector
+		# opposite forward) reaches past the carrier — add effective distance
+		# scaled by how directly behind it is.
+		if miss > 0.0001 and (fwd_x != 0.0 or fwd_z != 0.0):
+			var behind: float = -(mx * fwd_x + mz * fwd_z) / miss
+			if behind > 0.0:
+				miss += BODY_SHIELD_M * behind
+		var s: float = reach_to_safety(miss)
+		if s < worst:
+			worst = s
+	return worst
+
 
 
 # Defender reach for the CARRY-path check below — stick-blade reach plus

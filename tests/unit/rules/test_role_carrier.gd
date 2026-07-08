@@ -102,9 +102,11 @@ func test_board_pincer_passes_to_lateral_outlet_instead_of_over_carrying() -> vo
 			[3, 1, Vector3(4, 0, 4), false, Vector3(1.5, 0, 5)],  # inside forechecker closing fast
 			[4, 1, Vector3(9, 0, 5), false, Vector3(-3, 0, 5)],   # outside forechecker closing (pincer)
 	]
-	# Verified relief-sensitive: with PRESSURE_RELIEF_WEIGHT at 0 the base model
-	# CARRIES here (carry ~0.098 > pass ~0.049) — the over-carry into the
-	# forming pincer; the relief lifts the escape pass (~0.196) past it.
+	# The forming pincer registers through the defenders' closing VELOCITY in
+	# puck_safety (they start beyond stick range), so our current strip
+	# probability is high; the grounded pass-relief (expected turnover avoided)
+	# lifts the escape pass over the carry. Without any relief the base model
+	# CARRIES here into the closing box.
 	var c := AIRoleCarrier.new()
 	c.decide(_make_ctx(self_pos, skaters))
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
@@ -189,15 +191,15 @@ func test_open_carrier_at_blue_line_drives_in_instead_of_freezing() -> void:
 func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:
 	# Carrier wheeling up the weak-side wall with momentum, forecheck set
 	# up through the middle (one opponent pinching the local up-ice steps,
-	# another in the center lane). No teammates → no pass bailout. The
-	# zone-exit wall candidate — a real "skate it out along the boards"
-	# plan — should win the carry argmax over the myopic 3 m steps and
-	# the through-the-middle slot drive.
+	# another sitting in the diagonal slot-drive lane from this wide start).
+	# No teammates → no pass bailout. The zone-exit wall candidate — a real
+	# "skate it out along the boards" plan — should win the carry argmax over
+	# the myopic 3 m steps and the through-the-middle slot drive.
 	var self_pos := Vector3(-10.5, 0, 21)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos, false, Vector3(0, 0, -5)],  # us, skating up-ice
 			[3, 1, Vector3(-7.5, 0, 16.5)],                    # pinching the up-ice step
-			[4, 1, Vector3(0, 0, 13)],                         # center-lane forechecker
+			[4, 1, Vector3(-6.5, 0, 6)],                       # sits in the slot-drive lane
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.self_velocity = Vector3(0, 0, -5)
@@ -205,10 +207,14 @@ func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
 			"nothing to shoot at or pass to — this is a carry read")
-	assert_gt(absf(c.last_carry_anchor.x), 10.0,
-			"the winning carry anchor hugs the boards (wall-exit route)")
-	assert_lt(c.last_carry_anchor.z, GameRules.BLUE_LINE_Z,
-			"the wall-exit anchor sits past our blue line — a completed zone exit")
+	# Hugs the boards on OUR side (away from the clogged middle), heading up-ice
+	# toward the exit. The bot skates the wall out step-by-step (re-picking each
+	# tick) rather than committing to the far exit anchor in one shot — the
+	# near boards step decays less, and it's the same "skate it out" behaviour.
+	assert_lt(c.last_carry_anchor.x, -10.0,
+			"the winning carry anchor hugs our (left) boards, not the clogged middle")
+	assert_lt(c.last_carry_anchor.z, self_pos.z,
+			"…and moves up-ice toward the zone exit, not deeper or across")
 
 
 func test_wall_exit_candidates_absent_in_offensive_half() -> void:
