@@ -1,101 +1,125 @@
 extends GutTest
 
-# NetClampRules — the blade net-exclusion clamp (IK-driven blades aren't physics-
-# collided against the net, so this math is what keeps a stick out of the goal),
-# plus the stick tuck-in front-slice exception.
+# NetClampRules — the net treated as a solid object for the IK blade: five solid
+# faces, only the front mouth open. Non-carry calls (allow_front=false) get pure
+# exclusion; carry calls open the front so a blade whose PATH came through the
+# mouth carries the puck across, while side/back entry stays blocked regardless
+# of where the skater's body is.
 #
-# Geometry (GameRules): goal line at ±26.65, mouth half-width 0.915, buffer 0.10
-# (so the exclusion box is 1.015 wide / 1.12 deep), crossbar 1.22, tuck depth 0.15.
+# Geometry (GameRules): goal line ±26.65, mouth half-width 0.915, buffer 0.10 (so
+# the box is 1.015 wide / 1.12 deep), crossbar 1.22.
 
 const GL: float = 26.65
 const HW: float = 0.915
 const BUF: float = 0.10
 const DEPTH: float = 1.02
 const NET_H: float = 1.22
-const TUCK: float = 0.15
 const EFF_HW: float = 1.015   # HW + BUF
 const BACK_Z: float = 27.77   # GL + DEPTH + BUF
 
 
-func _clamp(p: Vector3, allow_tuck: bool = false) -> Vector3:
-	return NetClampRules.clamp_out_of_net(p, GL, HW, BUF, DEPTH, NET_H, allow_tuck, TUCK)
+func _clamp(point: Vector3, prev: Vector3, allow_front: bool) -> Vector3:
+	return NetClampRules.clamp_out_of_net(point, prev, GL, HW, BUF, DEPTH, NET_H, allow_front)
 
 
-# ── Exclusion (unchanged behavior, no tuck) ───────────────────────────────────
+# ── Pure exclusion (non-carry, allow_front=false) ─────────────────────────────
 
 func test_point_in_front_of_line_unchanged() -> void:
 	var p := Vector3(0.0, 0.1, 20.0)
-	assert_eq(_clamp(p), p)
+	assert_eq(_clamp(p, p, false), p)
 
 
 func test_point_above_crossbar_unchanged() -> void:
 	var p := Vector3(0.0, 1.5, 27.0)
-	assert_eq(_clamp(p), p)
+	assert_eq(_clamp(p, p, false), p)
 
 
 func test_front_center_escapes_out_the_side_not_the_mouth() -> void:
-	# Just inside the front, centered: nearest faces are the two sides — it must
-	# be pushed sideways out of the posts, never back out the front toward center.
-	var r := _clamp(Vector3(0.0, 0.1, 26.70))
+	var r := _clamp(Vector3(0.0, 0.1, 26.70), Vector3(0.0, 0.1, 20.0), false)
 	assert_almost_eq(absf(r.x), EFF_HW, 0.001)
 	assert_almost_eq(r.z, 26.70, 0.001, "never escapes through the front face")
 
 
 func test_deep_center_escapes_out_the_back() -> void:
-	var r := _clamp(Vector3(0.0, 0.1, 27.60))
+	var r := _clamp(Vector3(0.0, 0.1, 27.60), Vector3(0.0, 0.1, 20.0), false)
 	assert_almost_eq(r.z, BACK_Z, 0.001)
 
 
-func test_negative_net_excludes() -> void:
-	var r := _clamp(Vector3(0.0, 0.1, -26.70))
-	assert_almost_eq(absf(r.x), EFF_HW, 0.001)
-
-
-# ── Tuck-in front slice ───────────────────────────────────────────────────────
-
-func test_tuck_allows_shallow_front_of_mouth() -> void:
-	# Carrier bringing the puck a few cm over the line, between the posts: allowed.
+func test_non_carry_still_excludes_even_from_the_front() -> void:
+	# Follow-through (allow_front=false): the mouth is NOT open, so even a
+	# front-approaching point is pushed out — old behavior preserved exactly.
 	var p := Vector3(0.0, 0.1, GL + 0.07)
-	assert_eq(_clamp(p, true), p)
+	var prev := Vector3(0.0, 0.1, GL - 0.2)  # in front
+	assert_ne(_clamp(p, prev, false), p)
 
 
-func test_tuck_allows_side_of_mouth() -> void:
-	# A sharp-angle tuck near a post (|x| < 0.915) still rides in.
-	var p := Vector3(0.80, 0.1, GL + 0.05)
-	assert_eq(_clamp(p, true), p)
+# ── Front-face entry (carry, allow_front=true) ────────────────────────────────
+
+func test_front_entry_rides_in() -> void:
+	# Blade came from in front of the line, crossing the mouth: allowed.
+	var p := Vector3(0.0, 0.1, GL + 0.07)
+	var prev := Vector3(0.0, 0.1, GL - 0.10)
+	assert_eq(_clamp(p, prev, true), p)
 
 
-func test_tuck_blocked_beyond_tuck_depth() -> void:
-	# Deeper than the shallow front slice: still excluded (can't reach the puck
-	# through the back mesh).
-	var r := _clamp(Vector3(0.0, 0.1, GL + 0.30), true)
-	assert_almost_eq(r.z, BACK_Z, 0.001, "deep point escapes out the back even with tuck allowed")
+func test_front_entry_allowed_deep() -> void:
+	# Reaching deep through the mouth is still a front entry — physical (a stick
+	# in through the opening). The back face still contains it.
+	var p := Vector3(0.0, 0.1, GL + 0.6)
+	var prev := Vector3(0.0, 0.1, GL - 0.05)
+	assert_eq(_clamp(p, prev, true), p)
 
 
-func test_tuck_blocked_outside_the_posts() -> void:
-	# In the shallow slice by depth, but wide of the post line (in the buffer
-	# band): not the mouth opening — clamp it (no tucking through the side mesh).
-	var p := Vector3(0.97, 0.1, GL + 0.05)
-	var r := _clamp(p, true)
+func test_prev_inside_stays_inside() -> void:
+	# Inductive: already legally inside last tick → stays allowed this tick.
+	var p := Vector3(0.1, 0.1, GL + 0.30)
+	var prev := Vector3(0.0, 0.1, GL + 0.20)
+	assert_eq(_clamp(p, prev, true), p)
+
+
+# ── Blocked entries (carry, but not through the mouth) ────────────────────────
+
+func test_side_entry_blocked() -> void:
+	# Blade beside the net (outside the post line) sweeping in: it would cross a
+	# SIDE face, not the mouth — blocked, pushed back out the near side.
+	var p := Vector3(0.80, 0.1, GL + 0.15)
+	var prev := Vector3(1.20, 0.1, GL + 0.15)
+	var r := _clamp(p, prev, true)
 	assert_ne(r, p)
-	assert_almost_eq(r.x, EFF_HW, 0.001, "pushed out the near side")
+	assert_almost_eq(r.x, EFF_HW, 0.001)
 
 
-func test_tuck_flag_off_still_excludes_the_slice() -> void:
-	# Follow-through / non-carry calls pass allow_tuck = false — the front slice
-	# is NOT opened, so the old behavior is preserved exactly.
-	var p := Vector3(0.0, 0.1, GL + 0.07)
-	assert_ne(_clamp(p, false), p)
+func test_back_entry_blocked() -> void:
+	# Blade behind the net reaching forward: crosses the BACK face — blocked,
+	# regardless of how close the body is. This is the wraparound-from-behind
+	# case the solid-net model must deny.
+	var p := Vector3(0.0, 0.1, GL + 0.9)
+	var prev := Vector3(0.0, 0.1, BACK_Z + 0.3)  # behind the back mesh
+	var r := _clamp(p, prev, true)
+	assert_ne(r, p)
+	assert_almost_eq(r.z, BACK_Z, 0.001)
 
 
-func test_tuck_allows_negative_net_front_slice() -> void:
+func test_front_but_wide_of_the_mouth_blocked() -> void:
+	# Came from in front but wide of the post line: the segment crosses the mouth
+	# plane OUTSIDE the opening (it clips a side), so it isn't a front entry.
+	var p := Vector3(0.90, 0.1, GL + 0.10)
+	var prev := Vector3(1.20, 0.1, GL - 0.10)
+	var r := _clamp(p, prev, true)
+	assert_ne(r, p)
+
+
+# ── Negative-Z net mirrors ────────────────────────────────────────────────────
+
+func test_negative_net_front_entry_rides_in() -> void:
 	var p := Vector3(0.0, 0.1, -GL - 0.07)
-	assert_eq(_clamp(p, true), p)
+	var prev := Vector3(0.0, 0.1, -GL + 0.10)
+	assert_eq(_clamp(p, prev, true), p)
 
 
-func test_tuck_depth_boundary() -> void:
-	# Exactly at the tuck depth counts (<=); a hair past does not.
-	var on_edge := Vector3(0.0, 0.1, GL + TUCK)
-	assert_eq(_clamp(on_edge, true), on_edge)
-	var past := Vector3(0.0, 0.1, GL + TUCK + 0.01)
-	assert_ne(_clamp(past, true), past)
+func test_negative_net_back_entry_blocked() -> void:
+	var p := Vector3(0.0, 0.1, -GL - 0.9)
+	var prev := Vector3(0.0, 0.1, -BACK_Z - 0.3)
+	var r := _clamp(p, prev, true)
+	assert_ne(r, p)
+	assert_almost_eq(r.z, -BACK_Z, 0.001)
