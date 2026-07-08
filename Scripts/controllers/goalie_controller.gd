@@ -1488,11 +1488,9 @@ func _update_goalie_poke(delta: float) -> void:
 	_prev_blade_world_pos = current_blade_pos
 	if _sweep_anim_timer > 0.0:
 		_sweep_anim_timer = maxf(_sweep_anim_timer - delta, 0.0)
-	# The follow-through swing moves the real Stick collider through the
-	# puck's exit path; keep it out of the puck's collision mask for the
-	# swing's duration so it can't re-strike (and possibly deflect the puck
-	# back into the net) after the clear velocity was already imparted.
-	goalie.set_stick_collision_enabled(_sweep_anim_timer <= 0.0)
+		if _sweep_anim_timer <= 0.0:
+			# Sweep window over — restore the stick's normal save collision.
+			goalie.set_stick_collision_enabled(true)
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
 		# No carrier to strip — instead sweep a loose puck out of the crease.
@@ -1538,6 +1536,13 @@ func _try_clear_loose_puck(delta: float) -> void:
 			puck.global_position, _goal_center_x, _direction_sign,
 			clear_lateral_weight, clear_forward_weight, clear_speed,
 			clear_center_deadband, default_side)
+	# Disable the stick's own collision before imparting velocity: the puck
+	# has been dwelling right next to the blade (it actively tracks toward
+	# the puck's side while loose — see _apply_active_blade_intent /
+	# _apply_standing_sweep), and the swept puck's exit line often runs
+	# straight through that resting blade. Re-enabled once the sweep window
+	# (_sweep_anim_timer) elapses, in _update_goalie_poke's countdown.
+	goalie.set_stick_collision_enabled(false)
 	puck.apply_goalie_sweep(sweep_vel)
 	_clear_cooldown_timer = clear_cooldown
 	_clear_dwell_timer = 0.0
