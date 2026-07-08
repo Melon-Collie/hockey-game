@@ -512,6 +512,29 @@ var show_one_timer_indicator: bool = false
 @export var slapper_follow_through_hand_follow: float = 0.4  # fraction of blade travel the hands follow (limits shaft stretch)
 @export var slapper_follow_through_contact_frac: float = 0.22  # first fraction of the timer spent on the downswing
 
+# ── Wrister Body Animation Tuning ─────────────────────────────────────────────
+# Cosmetic lower-body work for the wrist shot (SkaterSkatingCoordinator): the
+# load sinks the weight onto the stick-side back leg while the drag-charge
+# builds, and the release drives it over the front foot with the back leg
+# kicking into extension behind — the classic wrister weight transfer. Driven
+# entirely from the replicated fields (current_shot_state + shot_charge), so
+# local, bot, and remote skaters play the identical animation with zero new
+# network state (same contract as the stick flex). First-pass numbers — tune
+# in the editor.
+@export var wrister_load_stance: float = 0.55          # crouch floor at full charge (fraction of stance_hip_deg)
+@export var wrister_load_lean_deg: float = 5.0         # shared leg roll: weight over the stick-side back leg
+@export var wrister_load_split_deg: float = 8.0        # foot stagger: stick-side foot drops back
+@export var wrister_load_hip_coil_deg: float = 8.0     # hips coil with the torso, stick-side hip back
+@export var wrister_load_blend_speed: float = 6.0      # how fast the load pose tracks the charge
+@export var wrister_kick_time: float = 0.5             # seconds of weight transfer/kick after release
+@export var wrister_kick_min_power: float = 0.35       # amplitude floor so snaps and passes still read
+@export var wrister_kick_back_deg: float = 26.0        # back (stick-side) leg drives into extension behind
+@export var wrister_kick_knee_extend_deg: float = 30.0 # back knee straightens through the kick
+@export var wrister_kick_lean_deg: float = 7.0         # shared leg roll: weight lands over the front foot
+@export var wrister_kick_stance: float = 0.5           # front-leg sit through the drive
+@export var wrister_kick_hip_yaw_deg: float = 12.0     # hips uncoil through the shot line
+@export var wrister_shot_stride_fade: float = 0.8      # stride suppression while loading/kicking (glide through the shot)
+
 # ── Celebration Tuning ────────────────────────────────────────────────────────
 # Cosmetic raised-stick goal celebration (SkaterShotPoseCoordinator.
 # apply_celebration_pose) — heights in upper-body-local metres.
@@ -994,6 +1017,14 @@ func _process_input(input: InputState, delta: float) -> void:
 	_pose.apply_velocity_lean(delta)
 	_pose.apply_facing(input, delta)
 	_apply_state(input, delta)
+	# Mirror the state machine into the replicated field on every simulated
+	# tick, AFTER _apply_state so same-tick transitions are visible to the
+	# cosmetic consumers below (gait shot stance) and to Skater._process (stick
+	# flex). Local and AI controllers also stamp this after their tick, but the
+	# host-side client-simulation path (RemoteController._drive_from_input)
+	# previously never stamped it, so host-rendered client skaters froze at a
+	# stale shot state.
+	skater.current_shot_state = _sm.get_state() as int
 	# Save blade/hand world positions before upper body rotation. After the body
 	# rotates toward the blade, re-expressing these in the new local frame gives
 	# the bottom-hand IK the post-rotation geometry — so arm reach is evaluated
@@ -1179,6 +1210,13 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	# the replay's virtual-clock advance this frame (slow-mo-scaled, 0 on a paused
 	# scrub) so the stride cadence tracks the visible motion rather than wall time.
 	_skating.apply(delta)
+	# Lower-body yaw channels the gait publishes (hockey-stop skid, hip-to-travel
+	# alignment, wrist-shot hip coil). On the simulating machine the pose
+	# coordinator writes these in apply_facing, which never runs on this path —
+	# mirror the write (lower_body_lag itself is a facing-turn artifact that
+	# doesn't exist here).
+	skater.set_lower_body_lag(
+			_skating.stop_yaw_offset + _skating.travel_align_yaw + _skating.shot_hip_yaw)
 
 signal puck_release_requested(direction: Vector3, power: float, is_slapper: bool)
 # Fired when the player releases slap while the puck is nearby but not yet

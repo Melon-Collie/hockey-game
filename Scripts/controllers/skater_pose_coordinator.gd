@@ -223,7 +223,8 @@ func apply_facing(input: InputState, delta: float) -> void:
 	lower_body_lag = lerpf(lower_body_lag, 0.0, _controller.lower_body_lag_speed * delta)
 	var gait_yaw: float = 0.0
 	if _skating != null:
-		gait_yaw = _skating.stop_yaw_offset + _skating.travel_align_yaw
+		gait_yaw = _skating.stop_yaw_offset + _skating.travel_align_yaw \
+				+ _skating.shot_hip_yaw
 	_skater.set_lower_body_lag(lower_body_lag + gait_yaw)
 
 func apply_upper_body(delta: float) -> void:
