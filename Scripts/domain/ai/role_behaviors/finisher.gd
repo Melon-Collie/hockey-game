@@ -40,7 +40,22 @@ const INCOMING_SHOT_SPEED_M_S: float = 12.0
 # cross-seam one-timer option instead of stacking on the puck-side play.
 # Sized so the candidate ring (±SEARCH_STEP_M) spans the far-post/back-door
 # region rather than straddling center ice. Tunable; 0 = centered.
+#
+# This far-post staging is the SET-UP-CYCLE shape — the right spot when the
+# carrier has controlled possession low/on the wall and the defense is set,
+# where the cross-seam feed is the highest-value look. On a RUSH (carrier
+# driving the net at speed) that same spot leaves the FINISHER stranded far
+# from the play — not a threat when the odd-man chance is developing NOW. The
+# _rush_factor() blend below pulls the staging toward a genuine net-crash as
+# the carrier's closing speed rises, so the FINISHER is a real second attacker
+# on the rush and reverts to the cross-seam park once the play settles.
 const WEAK_SIDE_BIAS_M: float = 4.0
+
+# Rush-mode weak-side bias — the staging offset at FULL rush. Still opposite
+# the carrier (a backdoor/give-and-go option), but tight enough that the
+# FINISHER drives a lane it can actually finish from rather than parking past
+# the far post. Blended toward WEAK_SIDE_BIAS_M as the rush cools.
+const RUSH_WEAK_SIDE_BIAS_M: float = 2.0
 
 # Hard weak-side constraint: positioning candidates closer to center than
 # this (measured toward the weak side) are rejected outright. score_shoot's
@@ -53,6 +68,27 @@ const WEAK_SIDE_BIAS_M: float = 4.0
 # the far post (NET_HALF_WIDTH 0.915); the net-front battle stays the
 # carrier's drive / the reactive tip, not the staging spot.
 const MIN_CROSS_SEAM_OFFSET_M: float = 2.0
+
+# Rush-mode weak-side constraint — relaxed to 0 at full rush so the argmax is
+# free to pick the net-front drive lane when that's the higher-value crash.
+# On a rush the "crash the front of the net" behaviour the hard line exists to
+# suppress is exactly what we WANT; the line only earns its keep on a set cycle.
+const RUSH_MIN_CROSS_SEAM_OFFSET_M: float = 0.0
+
+# Rush-mode staging depth in front of the opp goal (metres). At full rush the
+# search center pulls in from SLOT_DIST_M to here so the FINISHER crashes the
+# net — a rebound / backdoor tap-in threat — instead of hanging at the slot.
+# The is_legal_position crease/goal-line filters keep candidates off the goal
+# line, so this can sit tight to the net safely.
+const RUSH_NET_DRIVE_DIST_M: float = 2.5
+
+# Carrier closing-speed band (m/s, toward the opp net) that maps to the
+# rush blend. At/below LO the play reads as a set cycle (full cross-seam
+# staging); at/above HI it reads as a full rush (net-crash). Between, the
+# staging lerps. Keyed on the carrier's forward speed specifically — lateral
+# cycling in the zone is not a rush, only driving at the net is.
+const RUSH_SPEED_LO_M_S: float = 2.5
+const RUSH_SPEED_HI_M_S: float = 6.5
 
 # Cap on the feed flight time used for the goalie-motion prediction. Bounds the
 # goalie's predicted slide so a far cross-ice candidate doesn't model an
@@ -186,15 +222,27 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
 
-	# Search center: the slot, SLOT_DIST_M in front of opp goal, shifted to the
+	# Rush blend: how hard the carrier is driving the net right now. 0 = set
+	# cycle (full cross-seam staging), 1 = full rush (net-crash). Pulls the
+	# staging in from the far-post slot to a genuine second-attacker threat
+	# so the FINISHER isn't stranded off the play when the odd-man chance is
+	# developing NOW (see the constant doc-blocks above).
+	var rush: float = _rush_factor(ctx)
+	var weak_bias: float = lerpf(WEAK_SIDE_BIAS_M, RUSH_WEAK_SIDE_BIAS_M, rush)
+	var min_cross_seam: float = lerpf(
+			MIN_CROSS_SEAM_OFFSET_M, RUSH_MIN_CROSS_SEAM_OFFSET_M, rush)
+	var stage_dist: float = lerpf(GameRules.SLOT_DIST_M, RUSH_NET_DRIVE_DIST_M, rush)
+
+	# Search center: the slot, stage_dist in front of opp goal, shifted to the
 	# WEAK side so the FINISHER stages the cross-seam one-timer rather than
 	# crowding the puck-side play. strong_x is the puck's hysteretic side; the
 	# weak side is its negation. The candidate spread still reaches strong-side
-	# spots when the scoring favours them.
+	# spots when the scoring favours them. On a rush stage_dist/weak_bias pull
+	# the whole search toward a net-crash.
 	var search_center := Vector3(
-			-ctx.strong_x * WEAK_SIDE_BIAS_M,
+			-ctx.strong_x * weak_bias,
 			0.0,
-			ctx.attacking_goal_pos.z + ctx.own_goal_dir * GameRules.SLOT_DIST_M)
+			ctx.attacking_goal_pos.z + ctx.own_goal_dir * stage_dist)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
 
@@ -204,8 +252,9 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
 		# Hard weak-side line (see MIN_CROSS_SEAM_OFFSET_M): the FINISHER
-		# stages the far side of the seam, never the front of the net.
-		if -ctx.strong_x * c.x < MIN_CROSS_SEAM_OFFSET_M:
+		# stages the far side of the seam, never the front of the net —
+		# relaxed toward 0 on a rush so it can drive the net-front lane.
+		if -ctx.strong_x * c.x < min_cross_seam:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue
@@ -248,3 +297,28 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	if ctx.self_pos.distance_to(best_pos) < AIRoleHelpers.SEARCH_STEP_M * 0.5:
 		d.is_one_timer_ready = true
 	return d
+
+
+# Rush blend in [0, 1] from the carrier's CLOSING speed toward the opp net.
+# 0 below RUSH_SPEED_LO_M_S (set cycle), 1 at/above RUSH_SPEED_HI_M_S (full
+# rush), lerped between. Only the forward (toward-attacking-goal) component
+# counts — a carrier cycling laterally at speed is not rushing the net, so it
+# shouldn't collapse the cross-seam staging. Returns 0 when the carrier's
+# state isn't resolvable (no carrier / not buffered) so staging defaults to
+# the set-cycle shape.
+static func _rush_factor(ctx: RoleContext) -> float:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return 0.0
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	if carrier_pid == -1 or not ctx.snapshot.skater_states.has(carrier_pid):
+		return 0.0
+	if ctx.team_id_by_peer.get(carrier_pid, -1) != ctx.team_id:
+		return 0.0
+	var carrier_vel: Vector3 = ctx.snapshot.skater_states[carrier_pid].velocity
+	# Forward = toward the attacking goal along Z (-own_goal_dir). Negative
+	# (skating away from the net) floors at 0 — never a rush.
+	var closing_speed: float = maxf(-ctx.own_goal_dir * carrier_vel.z, 0.0)
+	return clampf(
+			(closing_speed - RUSH_SPEED_LO_M_S)
+					/ (RUSH_SPEED_HI_M_S - RUSH_SPEED_LO_M_S),
+			0.0, 1.0)

@@ -273,6 +273,58 @@ func test_positioning_stages_past_the_far_post_on_odd_man_rush() -> void:
 			"FINISHER stages past the far post, opposite the carrier; got x=%f" % x)
 
 
+# ─── RUSH-AWARE STAGING ───────────────────────────────────────────────────
+
+func _rush_ctx(carrier_vel: Vector3) -> RoleContext:
+	# Stationary finisher at center-ice depth; a wide strong-side teammate
+	# carrier with the given velocity. Slow puck so reactive stays off and
+	# positioning runs. strong_x = +1 so the weak side is -X.
+	var carrier_pos := Vector3(6.0, 0.0, -18.0)
+	var ctx: RoleContext = _make_ctx(
+			Vector3(0.0, 0.0, -18.0), Vector3.ZERO,
+			carrier_pos, Vector3.ZERO,
+			[
+				_make_skater(1, TEAM_ID, Vector3(0.0, 0.0, -18.0), false),
+				_make_skater(100, TEAM_ID, carrier_pos, false),
+			])
+	ctx.snapshot.puck_state.carrier_peer_id = 100
+	ctx.snapshot.skater_states[100].velocity = carrier_vel
+	ctx.strong_x = 1.0
+	return ctx
+
+
+func test_rush_factor_zero_for_stationary_carrier() -> void:
+	assert_almost_eq(AIRoleFinisher._rush_factor(_rush_ctx(Vector3.ZERO)), 0.0, 0.001)
+
+
+func test_rush_factor_zero_for_carrier_skating_away_from_net() -> void:
+	# Team 0 attacks -Z; a +Z carrier velocity is away from the opp net,
+	# which is never a rush.
+	assert_almost_eq(
+			AIRoleFinisher._rush_factor(_rush_ctx(Vector3(0.0, 0.0, 8.0))), 0.0, 0.001)
+
+
+func test_rush_factor_one_for_fast_closing_carrier() -> void:
+	# A -Z carrier velocity above RUSH_SPEED_HI_M_S is a full rush.
+	assert_almost_eq(
+			AIRoleFinisher._rush_factor(_rush_ctx(Vector3(0.0, 0.0, -8.0))), 1.0, 0.001)
+
+
+func test_rush_stages_finisher_less_weak_side_than_set_cycle() -> void:
+	# Same wide strong-side (+X) carrier; only its velocity differs. On a set
+	# cycle the FINISHER is forced past the far post (weak/-X side). On a rush
+	# the hard cross-seam line relaxes and the weak-side bias tightens, so the
+	# FINISHER stages more centrally to crash the net as a second attacker —
+	# a strictly less negative X than the far-post park.
+	var set_x: float = AIRoleFinisher.decide(_rush_ctx(Vector3.ZERO)).target_position.x
+	var rush_x: float = AIRoleFinisher.decide(
+			_rush_ctx(Vector3(0.0, 0.0, -8.0))).target_position.x
+	assert_lte(set_x, -AIRoleFinisher.MIN_CROSS_SEAM_OFFSET_M,
+			"set cycle stages past the far post")
+	assert_gt(rush_x, set_x,
+			"a rushing carrier stages the FINISHER more centrally (net-crash)")
+
+
 func test_reactive_overrides_positioning_when_shot_incoming() -> void:
 	# Even with a teammate carrier (positioning would normally run),
 	# a fast incoming shot should trigger reactive TIP instead.
