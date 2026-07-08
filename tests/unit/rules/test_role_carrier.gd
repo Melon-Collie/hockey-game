@@ -84,6 +84,34 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
+# ─── pass out of a board pincer (pressure relief) ───────────────────────────
+
+func test_board_pincer_passes_to_lateral_outlet_instead_of_over_carrying() -> void:
+	# Carrier pinned on the right-wall in the neutral zone, two defenders
+	# pincering (one closing off the inside, one sealing the up-ice lane). The
+	# only safe out is a lateral feed to a teammate in the middle — LOW up-ice
+	# value, so without the pass-out-of-pressure relief the carrier rates
+	# carrying (higher position potential up the wall) over the escape pass and
+	# gets stripped. With the relief, getting the puck off the pinned carrier
+	# wins. This is the "see the pincer, move it" read.
+	var self_pos := Vector3(6, 0, 9)                    # right-center, NZ, space ahead
+	var outlet := Vector3(-3, 0, 6)                     # left-center, forward, open
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                         # us, carrying
+			[2, TEAM_ID, outlet],                           # open outlet
+			[3, 1, Vector3(4, 0, 4), false, Vector3(1.5, 0, 5)],  # inside forechecker closing fast
+			[4, 1, Vector3(9, 0, 5), false, Vector3(-3, 0, 5)],   # outside forechecker closing (pincer)
+	]
+	# Verified relief-sensitive: with PRESSURE_RELIEF_WEIGHT at 0 the base model
+	# CARRIES here (carry ~0.098 > pass ~0.049) — the over-carry into the
+	# forming pincer; the relief lifts the escape pass (~0.196) past it.
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a carrier reading a forming pincer moves the puck instead of over-carrying")
+	assert_eq(c.debug_pass_peer_id, 2, "the escape pass targets the open middle outlet")
+
+
 # ─── breakout: the risky ground-losing backpass loses to keeping the puck ────
 
 func test_risky_backpass_deep_in_own_zone_loses_to_keeping_the_puck() -> void:

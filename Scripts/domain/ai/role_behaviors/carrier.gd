@@ -57,6 +57,28 @@ const PASS_LEAD_MAX_S: float = 0.6
 # too little pace to justify the commit, so the bot quick-releases instead.
 const PASS_CHARGE_MIN_DELTA_M_S: float = 1.0
 
+# ── Pass-out-of-pressure relief ──────────────────────────────────────────────
+# The pass EV values a pass purely by the RECEIVER's future (their shot / carry
+# potential). It carries no term for the value of getting the puck OFF a
+# pressured carrier — so a safe pass to open ice, whose receiver sits at modest
+# position potential, loses to carrying up the boards (higher potential) right
+# up until a pincer is on top of the puck, and the bot over-carries into the
+# strip. This term adds the escape value: a COMPLETING pass is worth more the
+# more boxed-in we are right now. Self-limiting — pressure ~0 in open ice, so it
+# never causes hot-potato passing there; it only tips pass over carry when we're
+# genuinely trapped. Only the carrier's real passes get it (developing-feed
+# HOLDs pass 0.0, since under pressure the answer is to release, not to wait).
+#
+# Tuning: WEIGHT up → bots bail out of pressure sooner (toward hot-potato at the
+# extreme); down → back toward the old carry-happy behaviour (0.0 = identical).
+# ANTICIPATION_S is how far defenders are dead-reckoned when reading our
+# pressure, so a CLOSING pincer registers before it arrives ("see it coming");
+# up → reads pressure earlier / from further out (risks reacting to a distant
+# backchecker), down toward 0 → purely reactive (only feels a defender already
+# at poke range).
+const PRESSURE_RELIEF_WEIGHT: float = 0.25
+const PRESSURE_ANTICIPATION_S: float = 0.35
+
 # Quick-shot blade ROM cone: passes within this half-angle of facing
 # don't pay rotation cost (blade can fire from current facing).
 # Outside the cone, only the OVERSHOOT (angle - ROM) costs time.
@@ -128,6 +150,13 @@ var intended_action: int = INTENT_CARRY
 # _pick_action). Feeds the existing carry decay so a wait that never pays off
 # self-extinguishes — the bot takes the available shot — with no fixed timeout.
 var _hold_elapsed_s: float = 0.0
+
+# How pressured [0,1] the carrier is THIS tick — 1 = a defender is right on the
+# puck (boxed in). Computed once per _pick_action from anticipatory poke safety
+# and fed to the real-pass EV as the pass-out-of-pressure relief (see
+# PRESSURE_RELIEF_WEIGHT). Reset to 0 each pick so an unpressured tick carries
+# no stale relief.
+var _carrier_pressure: float = 0.0
 
 # Set when intent commits to PASS. Consumed by the state machine
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
@@ -275,6 +304,16 @@ func _pick_action(ctx: RoleContext) -> void:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 
 	_build_action_opponents_lists(ctx)
+
+	# How boxed-in we are THIS tick: omnidirectional poke safety at our puck
+	# spot, read against defenders dead-reckoned PRESSURE_ANTICIPATION_S forward
+	# so a closing pincer registers before it arrives ("see it coming"). Fed to
+	# the real-pass EV as the pass-out-of-pressure relief. _scratch_opponents_path
+	# is free here (carry candidates refill it later).
+	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
+	_project_opponents_to(ctx, PRESSURE_ANTICIPATION_S, _scratch_opponents_path)
+	_carrier_pressure = 1.0 - AIActionScoring.carry_poke_safety(
+			cur_puck_pos, _scratch_opponents_path)
 
 	# Teammate ids — used by every score_at evaluation (top + inner).
 	# Reused scratch buffer; receivers only read from it.
@@ -438,7 +477,9 @@ func _pick_action(ctx: RoleContext) -> void:
 	#     developing value shrinks until the available shot wins).
 	# When the teammate flags ready, the developing feed drops to 0 here but the
 	# normal pass scoring jumps (one-timer), so PASS wins and feeds it.
-	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
+	# cur_puck_pos computed once at the top of _pick_action (reused here).
+	# keep_prob reads CURRENT opponents (the hold's live strip risk), distinct
+	# from _carrier_pressure's anticipatory read used for pass relief.
 	var keep_prob: float = AIActionScoring.carry_poke_safety(cur_puck_pos, _scratch_opponents)
 	var hold_value: float = (_best_developing_feed(ctx, goalie_now)
 			* keep_prob * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, _hold_elapsed_s))
@@ -605,7 +646,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 				self_facing_xz, self_pos, receiver)
 		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
 				receiver_release_t, flight_t + rotation_time, goalie_now,
-				our_goalie)
+				our_goalie, _carrier_pressure)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
@@ -664,7 +705,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
-		goalie_now: Vector3, our_goalie: Vector3) -> float:
+		goalie_now: Vector3, our_goalie: Vector3,
+		pressure_relief: float = 0.0) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# Hard zeros: net-blocker (segment crosses a net body) and own-DZ
 	# slot crossing (intercepted = goal-against).
@@ -690,6 +732,12 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
 	var benefit: float = receiver_value * completion * time_decay
+	# Pass-out-of-pressure relief: a COMPLETING pass off a pressured carrier is
+	# worth more than the receiver's raw position value — it's the escape from a
+	# strip. Scales with how boxed-in we are (pressure_relief, 0 when the caller
+	# doesn't pass it — e.g. developing-feed holds). Gated by completion so an
+	# uncompleteable "escape" earns nothing. See PRESSURE_RELIEF_WEIGHT.
+	benefit += pressure_relief * completion * PRESSURE_RELIEF_WEIGHT
 	var loss_point: Vector3 = AIActionScoring.lane_loss_point(
 			self_pos, receiver_spot, _scratch_opponents, pass_speed,
 			_scratch_opponent_vels)
