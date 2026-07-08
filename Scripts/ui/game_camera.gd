@@ -120,6 +120,12 @@ func _ready() -> void:
 	GameManager.local_player_hit.connect(func(mag: float) -> void:
 		if mag >= 3.0:
 			shake(clampf(mag / 12.0, 0.2, 0.4)))
+	# Landing a check punches a touch harder than taking one — the hit you deliver
+	# should read as the bigger moment. Same ~14 impact-force full-check scale the
+	# VFX burst uses (SkaterVFX._CHECK_FORCE_REF), gated above incidental bumps.
+	GameManager.local_player_landed_hit.connect(func(mag: float) -> void:
+		if mag >= 3.0:
+			shake(clampf(mag / 14.0, 0.25, 0.55)))
 
 func _physics_process(delta: float) -> void:
 	if not skater:

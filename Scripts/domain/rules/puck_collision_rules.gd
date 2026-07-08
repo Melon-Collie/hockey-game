@@ -81,10 +81,19 @@ static func body_block_velocity(
 		reflected = contact_normal
 	return reflected.normalized() * horiz.length() * dampen
 
-# Body-check strip: transfers the checker's horizontal momentum into the puck,
-# scaled by the strip speed. Trivial but extracted for consistency.
-static func body_check_strip_velocity(hit_direction: Vector3, puck_speed: float) -> Vector3:
-	return hit_direction * puck_speed
+# Body-check strip: the puck comes loose along the hit line, but a HARD hit jars it
+# nearly dead at the point of contact rather than launching it downice with the
+# victim. `trickle_speed` is the soft-strip pace; as `intensity` (0..1 hit hardness)
+# rises the forward carry falls toward `loose_speed`, so a squared-up check drops
+# the puck at the hitter's feet — they drive through the check (reduced attacker
+# restitution) and skate onto it, instead of the puck flying off with the body.
+static func body_check_strip_velocity(
+		hit_direction: Vector3,
+		trickle_speed: float,
+		loose_speed: float,
+		intensity: float) -> Vector3:
+	var speed: float = lerpf(trickle_speed, loose_speed, clampf(intensity, 0.0, 1.0))
+	return hit_direction * speed
 
 # Poke-check strip velocity — a stick-on-stick momentum contest. The checker's
 # blade sweep plus a fraction of the carrier's (carrier_vel_blend) form the blended

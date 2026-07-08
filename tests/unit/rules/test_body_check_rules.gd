@@ -92,6 +92,39 @@ func test_thrust_mult_clamps_overlong_timer() -> void:
 	assert_almost_eq(BodyCheckRules.thrust_mult(5.0, _cfg), 0.5, 0.0001, "over-window timer caps at peak penalty")
 
 
+# ── attacker_restitution ──────────────────────────────────────────────────────
+# The attacker's rebound eases from base (glancing) down to floor (drive through)
+# as the delivered impulse rises between min_impulse and ref_impulse.
+
+func test_restitution_full_below_min() -> void:
+	assert_almost_eq(BodyCheckRules.attacker_restitution(4.0, 0.25, 0.0, 4.0, 11.0), 0.25, 0.0001,
+			"at/below min impulse → full base rebound")
+	assert_almost_eq(BodyCheckRules.attacker_restitution(1.0, 0.25, 0.0, 4.0, 11.0), 0.25, 0.0001,
+			"below min clamps to base")
+
+func test_restitution_floor_at_or_above_ref() -> void:
+	assert_almost_eq(BodyCheckRules.attacker_restitution(11.0, 0.25, 0.0, 4.0, 11.0), 0.0, 0.0001,
+			"full-strength hit drives through → floor rebound")
+	assert_almost_eq(BodyCheckRules.attacker_restitution(20.0, 0.25, 0.0, 4.0, 11.0), 0.0, 0.0001,
+			"above ref clamps to floor")
+
+func test_restitution_lerps_between() -> void:
+	# midpoint 7.5 between 4 and 11 → halfway from 0.25 to 0.0 = 0.125
+	assert_almost_eq(BodyCheckRules.attacker_restitution(7.5, 0.25, 0.0, 4.0, 11.0), 0.125, 0.0001,
+			"midpoint impulse → half the rebound")
+	assert_lt(BodyCheckRules.attacker_restitution(9.0, 0.25, 0.0, 4.0, 11.0),
+			BodyCheckRules.attacker_restitution(6.0, 0.25, 0.0, 4.0, 11.0),
+			"harder hit → less rebound (more drive-through)")
+
+func test_restitution_degenerate_band_is_safe() -> void:
+	assert_almost_eq(BodyCheckRules.attacker_restitution(10.0, 0.25, 0.0, 11.0, 11.0), 0.25, 0.0001,
+			"ref<=min never divides by zero — falls back to base")
+
+func test_restitution_honors_nonzero_floor() -> void:
+	assert_almost_eq(BodyCheckRules.attacker_restitution(11.0, 0.25, 0.1, 4.0, 11.0), 0.1, 0.0001,
+			"a full hit eases to the configured floor, not necessarily zero")
+
+
 # ── puck_strip_impulse ──────────────────────────────────────────────────────────
 # The strip decision must key off the SAME delivered impulse as the stagger, so
 # Physical (transfer), both masses, and closing speed all move it.

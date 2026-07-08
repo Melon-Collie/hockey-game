@@ -33,6 +33,10 @@ signal stats_updated
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color)
 signal local_player_hit(magnitude: float)
+# Local player DELIVERED a check (fires immediately off the predicted
+# body_checked_player signal on the deliverer's machine — no host round-trip), so
+# the camera can punch on the hit you land, not just the ones you take.
+signal local_player_landed_hit(magnitude: float)
 # Host-authoritative body-check impact, re-emitted for cosmetic listeners
 # (crowd reaction in ArenaStands) after the burst/sound fire in
 # _on_body_check_landed. `force` is the same VFX-scale impact force.
@@ -2935,12 +2939,13 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 
 func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
-	# Live achievement: only the local player's own deliveries count, and this
-	# signal fires on the deliverer's machine, so gate on local peer. Excluded in
-	# free play / drills (no achievements there — _achievements_active).
-	if _achievements != null and _achievements_active() \
-			and hitter_peer_id == NetworkManager.local_peer_id():
-		_achievements.on_local_hit(impulse_magnitude)
+	# Only the local player's own deliveries drive the "you landed a hit" feedback,
+	# and this signal fires on the deliverer's machine, so gate on local peer.
+	if hitter_peer_id == NetworkManager.local_peer_id():
+		local_player_landed_hit.emit(impulse_magnitude)
+		# Live achievement — excluded in free play / drills (no achievements there).
+		if _achievements != null and _achievements_active():
+			_achievements.on_local_hit(impulse_magnitude)
 
 
 # Host-only (impact_landed fires only on the host, from the deduped contact

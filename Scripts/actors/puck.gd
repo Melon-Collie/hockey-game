@@ -52,7 +52,9 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # letting Physical/mass move it: an enforcer strips at lower closing speed, a
 # low-Physical hit needs much more.
 @export var body_check_strip_threshold: float = 2.7
-@export var body_check_puck_speed: float = 5.0
+@export var body_check_puck_speed: float = 3.0           # soft-strip trickle pace along the hit line
+@export var body_check_loose_speed: float = 0.8          # forward carry a full-strength hit leaves (puck drops loose at contact)
+@export var body_check_strip_ref_impulse: float = 11.0   # delivered impulse that fully deadens the strip (puck jarred dead)
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
 @export var hit_pickup_cooldown_threshold: float = 2.7    # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
@@ -298,12 +300,19 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 		return
 	if strip_impulse < body_check_strip_threshold:
 		return
-	_body_check_strip(checker, hit_direction)
+	# 0..1 hardness from the strip threshold (barely strips) up to ref (jarred dead),
+	# so a bigger hit deadens the loose puck more — see body_check_strip_velocity.
+	var strip_intensity: float = clampf(
+			(strip_impulse - body_check_strip_threshold)
+			/ maxf(body_check_strip_ref_impulse - body_check_strip_threshold, 0.001),
+			0.0, 1.0)
+	_body_check_strip(checker, hit_direction, strip_intensity)
 
-func _body_check_strip(checker: Skater, hit_direction: Vector3) -> void:
+func _body_check_strip(checker: Skater, hit_direction: Vector3, strip_intensity: float) -> void:
 	var ex_carrier: Skater = carrier
 	clear_carrier()
-	linear_velocity = PuckCollisionRules.body_check_strip_velocity(hit_direction, body_check_puck_speed)
+	linear_velocity = PuckCollisionRules.body_check_strip_velocity(
+			hit_direction, body_check_puck_speed, body_check_loose_speed, strip_intensity)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	_set_cooldown(checker, poke_checker_cooldown)
 	puck_stripped.emit(ex_carrier)
