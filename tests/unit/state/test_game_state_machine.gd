@@ -67,6 +67,25 @@ func test_time_until_drop_zero_outside_prep() -> void:
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)  # → FACEOFF
 	assert_eq(sm.faceoff_prep_time_until_drop(), 0.0, "no pending drop once the puck is live")
 
+func test_set_faceoff_prep_extra_extends_the_drop() -> void:
+	# Period / stoppage skate-in: PhaseCoordinator measures distances after entry
+	# and pushes the drop out so a far player can skate in rather than dash.
+	sm.begin_faceoff_prep()
+	sm.set_faceoff_prep_extra(GameRules.FACEOFF_SKATE_PREP_EXTRA)
+	assert_almost_eq(sm.faceoff_prep_time_until_drop(),
+			GameRules.FACEOFF_PREP_DURATION + GameRules.FACEOFF_SKATE_PREP_EXTRA, 0.001,
+			"the skate-in extra defers the drop")
+	# And the window actually holds that long before the puck goes live.
+	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF_PREP,
+			"still prepping — the extra keeps the puck locked")
+	sm.tick(GameRules.FACEOFF_SKATE_PREP_EXTRA)
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF, "drops after the extended window")
+
+func test_set_faceoff_prep_extra_is_noop_outside_prep() -> void:
+	sm.set_faceoff_prep_extra(5.0)  # PLAYING — no prep to extend
+	assert_eq(sm.faceoff_prep_time_until_drop(), 0.0)
+
 func test_extended_prep_holds_past_normal_duration() -> void:
 	sm.begin_faceoff_prep(GameRules.CENTER_ICE_DOT, GameRules.PREGAME_INTRO_DURATION)
 	sm.tick(GameRules.FACEOFF_PREP_DURATION + 0.01)

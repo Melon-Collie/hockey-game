@@ -30,6 +30,19 @@ const INTRO_APPROACH_DURATION: float   = 3.6
 # long "skate back" is elided into the replay's dead time. See
 # PhaseCoordinator._approach_start_for / PlayerRules.faceoff_staging_position.
 const FACEOFF_STAGING_SETBACK: float   = 6.0
+# Period / stoppage faceoffs have no replay camera cut to hide a staging snap,
+# so players skate in honestly from where play stopped. The prep window is
+# extended by FACEOFF_SKATE_PREP_EXTRA (added before the "2 → 1 → DROP"
+# countdown) so a far player covers the distance at ~FACEOFF_SKATE_IN_SPEED
+# instead of a teleport-fast dash; per-player glide time scales with distance
+# and is capped so everyone is set before the drop. Both host (prep timer) and
+# client (cosmetic countdown) apply the same fixed extra, derived locally from
+# the faceoff kind — no wire change. Icing (nearly the whole rink to cover)
+# still skates briskly since the window can't stretch to the full length, but
+# it reads as a hard skate rather than a snap.
+const FACEOFF_SKATE_IN_SPEED: float    = 9.0   # m/s target skate pace
+const FACEOFF_SKATE_PREP_EXTRA: float  = 1.5   # s added to the prep before the countdown
+const FACEOFF_SKATE_SETTLE: float      = 0.4   # s a skater should be set before the drop
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3

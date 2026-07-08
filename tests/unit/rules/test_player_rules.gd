@@ -122,3 +122,19 @@ func test_staging_setback_matches_constant() -> void:
 	var target := Vector3(0.0, 1.0, 1.5)
 	var s: Vector3 = PlayerRules.faceoff_staging_position(target, 0)
 	assert_almost_eq(s.z - target.z, GameRules.FACEOFF_STAGING_SETBACK, 0.001)
+
+# ── skate_in_duration ────────────────────────────────────────────────────────
+# Distance-scaled glide time for period / stoppage skate-ins, clamped to a range.
+
+func test_skate_in_duration_scales_with_distance() -> void:
+	# A mid-range distance at the target pace, inside the clamp band.
+	var d: float = PlayerRules.skate_in_duration(
+			GameRules.FACEOFF_SKATE_IN_SPEED * 2.0, 0.5, 5.0)
+	assert_almost_eq(d, 2.0, 0.001)
+
+func test_skate_in_duration_floors_close_distance() -> void:
+	assert_eq(PlayerRules.skate_in_duration(0.0, 1.25, 3.0), 1.25)
+
+func test_skate_in_duration_caps_far_distance() -> void:
+	# 100 m would need ~11 s; the cap keeps everyone set before the drop.
+	assert_eq(PlayerRules.skate_in_duration(100.0, 1.25, 3.0), 3.0)
