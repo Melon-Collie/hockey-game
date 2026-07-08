@@ -154,8 +154,8 @@ func _process(_delta: float) -> void:
 		)
 
 		var id: int = skater.get_instance_id()
-		var entry: Array = _prev_state.get(id, null)
-		var had_prev: bool = entry != null
+		var had_prev: bool = _prev_state.has(id)
+		var entry: Array = _prev_state[id] if had_prev else []
 		# Capture the previous baseline before overwriting it. Always update the
 		# baseline so next frame has one, even if we skip painting this frame
 		# (ghost / teleport / too-slow).
