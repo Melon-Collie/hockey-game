@@ -152,6 +152,12 @@ func _physics_process(delta: float) -> void:
 		skater.current_shot_state = _sm.get_state() as int
 		return
 	if _game_state.is_movement_locked():
+		# Faceoff / intro skate-in: the bot glides from its bench / current spot
+		# to the dot while an approach is active, then hands back to the draw-aim
+		# freeze below on arrival (see SkaterController.begin_approach).
+		if tick_faceoff_approach(delta):
+			skater.current_shot_state = _sm.get_state() as int
+			return
 		# Mirror LocalController/RemoteController: zero velocity during dead
 		# phases so residual inertia from before the lock can't drift the bot.
 		skater.velocity = Vector3.ZERO

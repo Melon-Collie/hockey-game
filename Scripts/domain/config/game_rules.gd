@@ -15,6 +15,14 @@ const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdo
 # pre-game intro can play: camera sweep, matchup card, crowd buzz. The normal
 # countdown runs in the final FACEOFF_PREP_DURATION of the extended window.
 const PREGAME_INTRO_DURATION: float = 4.0
+# Skate-in glide durations (see SkaterController.begin_approach). Players skate
+# from a start point to the faceoff dot instead of teleport-snapping. Each stays
+# comfortably shorter than its prep window so everyone is set on the dot before
+# the drop: a normal faceoff arrives with ~0.75 s of countdown to settle + aim;
+# the opening intro arrives just as the "2 → 1 → DROP" countdown begins (the
+# skate happens under the camera sweep during the PREGAME_INTRO_DURATION hold).
+const FACEOFF_APPROACH_DURATION: float = 1.25
+const INTRO_APPROACH_DURATION: float   = 3.6
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
@@ -305,6 +313,21 @@ const FACEOFF_OFFSETS: Array = [
 	[Vector2( 0.0,  1.5), Vector2(-5.0,  3.0), Vector2( 5.0,  3.0)],  # team 0
 	[Vector2( 0.0, -1.5), Vector2(-5.0, -3.0), Vector2( 5.0, -3.0)],  # team 1
 ]
+
+# ── Bench-Door Start Points (pre-game intro skate-in) ─────────────────────────
+# Where each skater begins the opening/rematch intro before skating out to its
+# faceoff slot. Both team benches sit on the +X boards (see arena_stands.gd:
+# _BENCH_CENTER_Z = 4.4); team 0 (the +Z-half team) takes the +Z bench, team 1
+# the -Z bench. Skaters emerge just off the boards and fan out from a small
+# per-slot stagger along the bench span. Only used for the center-ice opening
+# faceoff — every other faceoff skates in from the player's current position.
+# BENCH_DOOR_X is pulled a little in from the inner boards (INNER_HALF_WIDTH
+# 12.84) so skaters start on the ice, not clipping the kickplate.
+const BENCH_DOOR_X: float          = 11.5
+const BENCH_DOOR_CENTER_Z: float   = 4.4   # mirrors arena_stands.gd _BENCH_CENTER_Z
+# Per-slot fan-out along the bench span (index = team_slot). Center leaves from
+# the middle of the bench; wingers from either side so the three don't stack.
+const BENCH_DOOR_SLOT_DZ: Array[float] = [0.0, 2.4, -2.4]
 
 # Returns the faceoff dot closest to the given XZ point — picks among centre
 # ice, the four end-zone dots, and the four neutral-zone dots. Used to pick

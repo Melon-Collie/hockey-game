@@ -1205,7 +1205,8 @@ func _wire_subsystems() -> void:
 	_phase_coord.setup(_state_machine, _registry, teams,
 			get_puck, _get_goalie_controllers, _shot_tracker, _drop_puck_if_carried,
 			_recorder, _goal_replay_driver, _codec,
-			get_tree(), NetworkManager.is_host, force_record)
+			get_tree(), NetworkManager.is_host, force_record,
+			_is_pregame_intro_faceoff)
 	_phase_coord.goal_scored.connect(goal_scored.emit)
 	_phase_coord.goal_scored.connect(_on_goal_for_replay_event)
 	_phase_coord.goal_scored.connect(_trigger_scorer_celebration)
@@ -3004,6 +3005,16 @@ func _on_faceoff_prep_announced_from_coord() -> void:
 	if opening and _pregame_intro_eligible():
 		pregame_intro_started.emit(GameRules.PREGAME_INTRO_DURATION)
 	faceoff_prep_announced.emit()
+
+
+# Whether the faceoff PhaseCoordinator is currently placing is the opening/
+# rematch intro — the one where skaters skate out from their benches. Same
+# condition that fires the pre-game intro, evaluated BEFORE this prep's announce
+# flips _seen_first_prep (placement runs first on both host and client). Injected
+# into PhaseCoordinator as a Callable so it can pick bench vs current-position
+# skate-in starts without reaching back into GameManager's flags directly.
+func _is_pregame_intro_faceoff() -> bool:
+	return (not _seen_first_prep) and _pregame_intro_eligible()
 
 
 # Whether the opening-faceoff pre-game intro should play. Beyond the mode

@@ -69,3 +69,33 @@ func test_unknown_team_returns_zero_facing() -> void:
 	# overriding facing — used by tutorial / test paths that don't want
 	# the helper to flip the skater.
 	assert_eq(PlayerRules.faceoff_facing(-1), Vector2.ZERO)
+
+# ── bench_start_position ─────────────────────────────────────────────────────
+# Intro skate-in start points. Both benches on the +X boards; team 0 (+Z half)
+# uses the +Z bench, team 1 the -Z bench, staggered per slot toward center.
+
+func test_bench_start_is_on_positive_x_boards() -> void:
+	for team_id: int in [0, 1]:
+		for slot: int in [0, 1, 2]:
+			assert_eq(PlayerRules.bench_start_position(team_id, slot).x,
+					GameRules.BENCH_DOOR_X)
+
+func test_bench_start_height_matches_faceoff_spawn_height() -> void:
+	assert_eq(PlayerRules.bench_start_position(0, 0).y, GameRules.FACEOFF_SPAWN_HEIGHT)
+
+func test_team_0_bench_is_on_positive_z() -> void:
+	for slot: int in [0, 1, 2]:
+		assert_gt(PlayerRules.bench_start_position(0, slot).z, 0.0)
+
+func test_team_1_bench_is_on_negative_z() -> void:
+	for slot: int in [0, 1, 2]:
+		assert_lt(PlayerRules.bench_start_position(1, slot).z, 0.0)
+
+func test_bench_slots_do_not_stack() -> void:
+	# The three team-0 skaters leave from distinct points along the bench.
+	var z0: float = PlayerRules.bench_start_position(0, 0).z
+	var z1: float = PlayerRules.bench_start_position(0, 1).z
+	var z2: float = PlayerRules.bench_start_position(0, 2).z
+	assert_ne(z0, z1)
+	assert_ne(z0, z2)
+	assert_ne(z1, z2)

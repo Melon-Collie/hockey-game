@@ -42,6 +42,12 @@ var _registry: PlayerRegistry = null
 var _teams: Array[Team] = []
 var _puck_getter: Callable = Callable()
 var _goalie_controllers_getter: Callable = Callable()
+# Returns true when the faceoff being entered is the opening/rematch intro (the
+# only one skaters skate out from their benches for; every other faceoff skates
+# from the player's current position). Evaluated at placement time, before the
+# prep-announce flips GameManager's _seen_first_prep. Both host (_enter_faceoff_prep)
+# and client (on_faceoff_positions) call it. Defaults invalid → no intro.
+var _is_pregame_intro_getter: Callable = Callable()
 var _shot_tracker: ShotOnGoalTracker = null
 # Drops a carried puck (host-only). Returns carrier peer_id or -1.
 var _puck_drop_requester: Callable = Callable()
@@ -81,12 +87,14 @@ func setup(
 		codec: WorldStateCodec,
 		scene_tree: SceneTree,
 		is_host: bool,
-		force_record_goal_frame: Callable) -> void:
+		force_record_goal_frame: Callable,
+		is_pregame_intro_getter: Callable = Callable()) -> void:
 	_state_machine = state_machine
 	_registry = registry
 	_teams = teams
 	_puck_getter = puck_getter
 	_goalie_controllers_getter = goalie_controllers_getter
+	_is_pregame_intro_getter = is_pregame_intro_getter
 	_shot_tracker = shot_tracker
 	_puck_drop_requester = puck_drop_requester
 	_recorder = recorder
@@ -145,6 +153,12 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		puck.pickup_locked = true
 	for gc: GoalieController in _goalie_controllers_getter.call():
 		gc.reset_to_crease()
+	# Skaters skate in to the dot instead of teleport-snapping: from their bench
+	# for the opening/rematch intro, else from where play stopped. Deterministic
+	# so clients (which interpolate host-driven remotes and run their own local
+	# skater's approach) land on the same dot; the drop finds everyone set.
+	var is_intro: bool = _is_pregame_intro()
+	var duration: float = _approach_duration(is_intro)
 	var positions: Array = []
 	for peer_id: int in _registry.all():
 		var record: PlayerRecord = _registry.get_record(peer_id)
@@ -163,7 +177,8 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		var pos: Vector3 = PlayerRules.faceoff_position(
 				record.team.team_id, record.team_slot, dot, reach)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
-		record.controller.teleport_to(pos, facing)
+		var start: Vector3 = _approach_start_for(record, is_intro)
+		record.controller.begin_approach(start, pos, facing, duration)
 		positions.append_array([peer_id, pos.x, pos.y, pos.z])
 	faceoff_positions_ready.emit(positions)
 	faceoff_prep_announced.emit()
@@ -279,6 +294,11 @@ func on_goal_received(
 
 func on_faceoff_positions(positions: Array) -> void:
 	var local_peer_id: int = _registry.get_local().peer_id if _registry.get_local() != null else -1
+	# Remote skaters skate in via interpolation of the host's approach motion; the
+	# client only drives its OWN skater's skate-in locally. Same intro test as the
+	# host, so a bench start matches the host's for the opening faceoff.
+	var is_intro: bool = _is_pregame_intro()
+	var duration: float = _approach_duration(is_intro)
 	var i: int = 0
 	while i < positions.size():
 		var peer_id: int = positions[i]
@@ -291,7 +311,8 @@ func on_faceoff_positions(positions: Array) -> void:
 			# team after a mid-game switch.
 			var record: PlayerRecord = _registry.get_record(peer_id)
 			var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
-			record.controller.teleport_to(pos, facing)
+			var start: Vector3 = _approach_start_for(record, is_intro)
+			record.controller.begin_approach(start, pos, facing, duration)
 	# Drive the client's phase entry off this reliable RPC rather than leaving
 	# it to the unreliable world-state phase byte — see apply_remote_faceoff_prep.
 	if _state_machine != null and _state_machine.apply_remote_faceoff_prep():
@@ -300,6 +321,25 @@ func on_faceoff_positions(positions: Array) -> void:
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────
+
+# True when the faceoff being placed is the opening/rematch intro — the only
+# one skaters skate out from their benches for.
+func _is_pregame_intro() -> bool:
+	return _is_pregame_intro_getter.is_valid() and bool(_is_pregame_intro_getter.call())
+
+
+# Skate-in start point: the team's bench door for the opening intro, else the
+# skater's current position (skate in from where play stopped). Falls back to
+# the bench if the skater node is somehow missing.
+func _approach_start_for(record: PlayerRecord, is_intro: bool) -> Vector3:
+	if not is_intro and record.skater != null:
+		return record.skater.global_position
+	return PlayerRules.bench_start_position(record.team.team_id, record.team_slot)
+
+
+func _approach_duration(is_intro: bool) -> float:
+	return GameRules.INTRO_APPROACH_DURATION if is_intro else GameRules.FACEOFF_APPROACH_DURATION
+
 
 func _get_puck() -> Puck:
 	if not _puck_getter.is_valid():

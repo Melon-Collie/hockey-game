@@ -143,7 +143,10 @@ func _drive_from_input(delta: float) -> void:
 				NetworkManager.estimated_host_time() - input.host_timestamp)
 		if not _game_state.is_movement_locked():
 			_process_input(input, delta)
-		else:
+		elif not tick_faceoff_approach(delta):
+			# Faceoff / intro skate-in glides the body to the dot (host-authoritative;
+			# broadcasts to clients like any other motion). On arrival it returns
+			# false and we fall back to the frozen aim-only sync below.
 			skater.velocity = Vector3.ZERO
 			# FACEOFF_PREP: keep the host's view of this remote peer's stick in
 			# sync with their mouse so world state broadcasts the right blade
@@ -160,11 +163,12 @@ func _drive_from_input(delta: float) -> void:
 		_fallback_input = input
 	else:
 		if _game_state.is_movement_locked():
-			skater.velocity = Vector3.ZERO
-			if _game_state.allows_blade_aim_during_lock():
-				# Keep the stick on the most recent mouse aim we have — stale
-				# but better than freezing mid-swing while the input queue gaps.
-				apply_blade_aim_only(_fallback_input, delta)
+			if not tick_faceoff_approach(delta):
+				skater.velocity = Vector3.ZERO
+				if _game_state.allows_blade_aim_during_lock():
+					# Keep the stick on the most recent mouse aim we have — stale
+					# but better than freezing mid-swing while the input queue gaps.
+					apply_blade_aim_only(_fallback_input, delta)
 			return
 		if _input_queue.is_empty():
 			NetworkTelemetry.record_input_starvation()
