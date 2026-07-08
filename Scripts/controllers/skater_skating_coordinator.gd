@@ -124,6 +124,10 @@ var _slap_load: float = 0.0         # smoothed 0..1 wind-up engagement
 var _shot_kick_t: float = -1.0      # seconds into the release kick; <0 = idle
 var _shot_kick_power: float = 0.0   # load latched at release (min-pop floored)
 var _shot_kick_is_slap: bool = false
+# Smoothed shot-block engagement: the braced wall pose (deep sit, wide V legs)
+# snaps in with the committed plant and eases back out on release. Keyed off
+# the replicated current_shot_state like the shot signals above.
+var _block_blend: float = 0.0
 
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
@@ -166,6 +170,7 @@ func reset_to_rest() -> void:
 	_shot_kick_t = -1.0
 	_shot_kick_power = 0.0
 	_shot_kick_is_slap = false
+	_block_blend = 0.0
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
@@ -186,13 +191,15 @@ func apply(delta: float) -> void:
 	var ground_speed: float = Vector2(vel.x, vel.z).length()
 	var speed_t: float = clampf(ground_speed / maxf(_controller.max_speed, 0.001), 0.0, 1.0)
 
-	# Plant the legs while shot-blocking (the skater is crouched, knees together);
+	# Plant the legs while shot-blocking (the braced wall pose below owns them);
 	# otherwise drive intensity from speed — GATED BY INTENT: no movement keys
 	# means a glide, so the legs settle to rest and ride the edges even at full
 	# speed. The stride is something the player DOES, not something speed does
 	# to them. (Velocity lean, the carve/faceoff/stop stance floors, and the
-	# glide stance floor below keep the posture alive while coasting.)
-	var planted: bool = _sm.get_state() == State.SHOT_BLOCKING
+	# glide stance floor below keep the posture alive while coasting.) Read off
+	# the REPLICATED shot state, not the state machine — a wire-fed remote's
+	# state machine is never ticked, so its blocks previously didn't plant.
+	var planted: bool = _skater.current_shot_state == State.SHOT_BLOCKING
 	var has_move_intent: bool = _skater.move_intent.length_squared() > 0.0025
 
 	# ── Intent signals ─────────────────────────────────────────────────────────
@@ -275,6 +282,10 @@ func apply(delta: float) -> void:
 			_shot_kick_t = -1.0
 		else:
 			kick_env = sin(PI * pow(kt, _controller.follow_through_arc_skew)) * _shot_kick_power
+	# Shot-block engagement: fast into the committed plant, eased back out on
+	# release so the wall doesn't pop back to a stride.
+	_block_blend = lerpf(_block_blend, 1.0 if planted else 0.0,
+			minf(_controller.block_pose_blend_speed * delta, 1.0))
 	# Combined engagement, for the stride suppression below — shooting is a
 	# glide: the feet set through the load and drive through the release.
 	var shot_body: float = maxf(maxf(_wrister_load, _slap_load), kick_env)
@@ -560,6 +571,10 @@ func apply(delta: float) -> void:
 	var kick_stance: float = _controller.slapper_kick_stance if _shot_kick_is_slap \
 			else _controller.wrister_kick_stance
 	stance = maxf(stance, kick_stance * kick_env)
+	# The shot block sits DEEP — the wall is low, knees bent under the dropped
+	# torso (Skater's block_crouch_depth lowers the chest; this bends the legs
+	# to match instead of leaving them straight).
+	stance = maxf(stance, _controller.block_stance * _block_blend)
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
@@ -664,6 +679,16 @@ func apply(delta: float) -> void:
 			r_pitch -= kick_back
 		else:
 			l_pitch -= kick_back
+
+	# Shot-block wall: both legs splay outward into a wide braced V under the
+	# deep sit (the reversal-plant idiom, held instead of momentary). Splayed
+	# legs shorten their vertical span, so fold the small-angle deficit into
+	# the body drop — the skates stay planted instead of floating.
+	if _block_blend > 0.001:
+		var block_spread: float = deg_to_rad(_controller.block_spread_deg) * _block_blend
+		l_roll -= block_spread
+		r_roll += block_spread
+		drop += leg_scale * (_THIGH_LEN + _SHIN_LEN) * (1.0 - cos(block_spread))
 
 	# Forward / backward gait. Shared side-to-side roll rocks the lower body onto
 	# alternating edges (each leg pivots about its own hip, so the same roll

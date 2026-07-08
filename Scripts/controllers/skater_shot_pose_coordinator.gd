@@ -113,10 +113,10 @@ func apply_slapper_blade_position() -> void:
 # forward (toward the shooter the stance snapped to on entry) and slightly to
 # the stick side, with the top hand dropped low and pushed forward so the shaft
 # lies across the lane. Authored in upper-body-local space like the slapper
-# pose; the torso doesn't rotate during the block (SkaterPoseCoordinator's
-# apply_upper_body early-returns for SHOT_BLOCKING and _enter_shot_block zeroes
-# lean), so blade_y_lean_corrected reduces to a flat ice height and the pose
-# holds steady relative to the snapped facing.
+# pose; the torso stays yaw-locked at the snapped facing for the duration
+# (SkaterPoseCoordinator's block branch only pitches the chest over the knees
+# — blade_y_lean_corrected re-lands the blade on the ice under that pitch), so
+# the pose holds steady relative to the snapped facing.
 func apply_block_blade_position() -> void:
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 	var blade_x: float = _skater.shoulder.position.x + blade_side_sign * _controller.block_blade_x

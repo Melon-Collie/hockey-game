@@ -572,6 +572,15 @@ var show_one_timer_indicator: bool = false
 @export var block_hand_forward: float = 0.3  # forward push of the top hand (m, local −Z)
 @export var block_hand_x: float = 0.1        # lateral top-hand offset to the stick side (m)
 @export var block_hand_y: float = -0.10      # top-hand height while blocking (m, local; matches mesh-native hand_rest_y)
+# Cosmetic block BODY pose (gait + pose coordinator): the blocker drops into a
+# low, wide wall — deep knee bend with the matching whole-body sink, both legs
+# spread into a braced V, and the chest folds over the knees — instead of the
+# old bolt-upright mannequin with straight legs. Keyed off the replicated
+# current_shot_state, so remote blockers read identically.
+@export var block_stance: float = 0.9            # stance-crouch floor while blocking (fraction of stance_hip_deg)
+@export var block_spread_deg: float = 16.0       # both legs splay outward — the braced wall base
+@export var block_trunk_pitch_deg: float = 14.0  # chest folds forward over the knees
+@export var block_pose_blend_speed: float = 12.0 # snap-in speed of the body pose (the plant is committed)
 
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
 # XZ cylinder radius used to push the blade (and carried puck) away from a
@@ -1414,9 +1423,9 @@ func _enter_shot_block() -> void:
 	skater.set_block_stance(true)
 	# Square the upper body and clear lean/lag so the choreographed block pose
 	# (authored in upper-body-local space) points straight along the snapped
-	# facing instead of inheriting residual twist from the prior state. The torso
-	# pose pipeline early-returns during SHOT_BLOCKING, so these stay put for the
-	# duration of the stance.
+	# facing instead of inheriting residual twist from the prior state. The
+	# torso pipeline's block branch holds the yaw square for the duration and
+	# eases only the chest-over-knees pitch in from this cleared baseline.
 	_pose.reset_lean_and_lag()
 	skater.set_upper_body_rotation(0.0)
 	skater.set_upper_body_lean(0.0)

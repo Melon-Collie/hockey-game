@@ -1,11 +1,13 @@
 extends GutTest
 
-# Shot body animation (SkaterSkatingCoordinator) — the load settles the weight
-# over the stick-side back leg while the charge builds (wrister drag-charge,
-# slapper wind-up), and the release transfers it over the front foot with the
-# back leg kicking into extension behind. Driven purely from the replicated
-# current_shot_state + shot_charge (the stick-flex contract), so these tests
-# drive those fields directly the way a wire-fed remote would.
+# Shot body animation (SkaterSkatingCoordinator + the pose coordinator's
+# block branch) — the load settles the weight over the stick-side back leg
+# while the charge builds (wrister drag-charge, slapper wind-up), the release
+# transfers it over the front foot with the back leg kicking into extension
+# behind, and the shot block drops into a low wide braced wall. Driven purely
+# from the replicated current_shot_state + shot_charge (the stick-flex
+# contract), so these tests drive those fields directly the way a wire-fed
+# remote would.
 #
 # Default handedness is LEFT (Skater.is_left_handed = true), so the stick side
 # — the back leg — is the LEFT leg throughout.
@@ -178,3 +180,43 @@ func test_short_wind_up_slap_still_commits() -> void:
 		max_split = maxf(max_split, _leg_r.rotation.x - _leg_l.rotation.x)
 	assert_gt(max_split, 0.2,
 			"a short-wind slap should still commit the body (split %.3f rad)" % max_split)
+
+
+func test_block_plants_wide_and_low() -> void:
+	var rest_hips_y: float = _skater.lower_body.position.y
+	_skater.current_shot_state = State.SHOT_BLOCKING
+	_tick(120)
+	# Wide braced V: legs splay outward (left toward −X = negative roll).
+	assert_lt(_leg_l.rotation.z, -0.15,
+			"legs should splay into the braced V (l roll %.3f)" % _leg_l.rotation.z)
+	assert_gt(_leg_r.rotation.z, 0.15,
+			"legs should splay into the braced V (r roll %.3f)" % _leg_r.rotation.z)
+	# Deep sit: knees bent, whole body dropped so the skates stay planted.
+	assert_lt(_shin_l.rotation.x, -0.15, "knees should bend under the block")
+	assert_lt(_skater.lower_body.position.y, rest_hips_y - 0.03,
+			"the block should sink the body (hips %.3f, rest %.3f)"
+			% [_skater.lower_body.position.y, rest_hips_y])
+	# Releasing the block eases the wall back out to a neutral stance.
+	_skater.current_shot_state = State.SKATING_WITHOUT_PUCK
+	_tick(240)
+	assert_almost_eq(_leg_l.rotation.z, 0.0, 0.02, "leg splay should release to rest")
+	assert_almost_eq(_skater.lower_body.position.y, rest_hips_y, 0.01,
+			"body drop should release to rest")
+
+
+func test_block_folds_chest_over_knees() -> void:
+	# The torso branch runs on the simulating machine via the pose coordinator;
+	# wire it the way SkaterController.setup does and hold SHOT_BLOCKING.
+	var controller: SkaterController = SkaterController.new()
+	autofree(controller)
+	var sm := SkaterStateMachine.new()
+	var pose := SkaterPoseCoordinator.new()
+	pose.setup(_skater, sm, SkaterAimingBehavior.new(), controller, _coord)
+	sm.set_state(State.SHOT_BLOCKING)
+	for _i: int in 120:
+		pose.apply_upper_body(DT)
+	assert_lt(_skater.upper_body.rotation.x, -0.15,
+			"the chest should fold forward over the knees (pitch %.3f rad)"
+			% _skater.upper_body.rotation.x)
+	assert_almost_eq(_skater.upper_body.rotation.z, 0.0, 0.01,
+			"the block torso should stay square, no roll")
