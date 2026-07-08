@@ -43,6 +43,12 @@ const FACEOFF_STAGING_SETBACK: float   = 6.0
 const FACEOFF_SKATE_IN_SPEED: float    = 9.0   # m/s target skate pace
 const FACEOFF_SKATE_PREP_EXTRA: float  = 1.5   # s added to the prep before the countdown
 const FACEOFF_SKATE_SETTLE: float      = 0.4   # s a skater should be set before the drop
+# Post-goal staged skate-ins all cover the same setback, so a fixed duration made
+# everyone move in eerie lockstep. Vary each player's glide time by ±this
+# fraction (deterministically, per player + goal count) so they arrive staggered
+# at slightly different speeds. Kept small enough that the slowest still lands
+# before the drop (base 1.25 s × 1.3 = 1.6 s < the 2 s post-goal prep).
+const FACEOFF_STAGGER_FRACTION: float  = 0.3
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3

@@ -150,3 +150,26 @@ func test_skate_in_duration_floors_close_distance() -> void:
 func test_skate_in_duration_caps_far_distance() -> void:
 	# 100 m would need ~11 s; the cap keeps everyone set before the drop.
 	assert_eq(PlayerRules.skate_in_duration(100.0, 1.25, 3.0), 3.0)
+
+# ── stagger01 ────────────────────────────────────────────────────────────────
+# Deterministic per-player skate-in stagger seed.
+
+func test_stagger01_is_in_unit_range() -> void:
+	for a: int in range(1, 8):
+		for b: int in range(0, 6):
+			var v: float = PlayerRules.stagger01(a, b)
+			assert_between(v, 0.0, 1.0)
+
+func test_stagger01_is_deterministic() -> void:
+	assert_eq(PlayerRules.stagger01(3, 2), PlayerRules.stagger01(3, 2))
+
+func test_stagger01_varies_by_player() -> void:
+	# The three faceoff peers at the same goal count shouldn't all match.
+	var a: float = PlayerRules.stagger01(1, 0)
+	var b: float = PlayerRules.stagger01(2, 0)
+	var c: float = PlayerRules.stagger01(3, 0)
+	assert_false(a == b and b == c, "per-player stagger must not collapse to one value")
+
+func test_stagger01_varies_by_goal_count() -> void:
+	# Same player, different faceoff (goal count) → generally a different stagger.
+	assert_ne(PlayerRules.stagger01(1, 0), PlayerRules.stagger01(1, 1))

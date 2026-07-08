@@ -92,3 +92,13 @@ static func faceoff_staging_position(target: Vector3, dot_xz: Vector2, team_id: 
 static func skate_in_duration(distance: float, min_dur: float, max_dur: float) -> float:
 	var raw: float = distance / maxf(GameRules.FACEOFF_SKATE_IN_SPEED, 0.01)
 	return clampf(raw, min_dur, max_dur)
+
+
+# Deterministic pseudo-random value in [0, 1) from two int seeds — a spatial-hash
+# mix, so the same (a, b) yields the same value on every machine (no RNG state to
+# sync). Used to stagger the post-goal skate-in per player without the arrivals
+# looking machine-generated: seed with (peer_id, goals-so-far) and they vary by
+# player and by faceoff while host and clients agree.
+static func stagger01(a: int, b: int) -> float:
+	var h: int = ((a + 1) * 73856093) ^ ((b + 1) * 19349663)
+	return float(absi(h) % 100003) / 100003.0

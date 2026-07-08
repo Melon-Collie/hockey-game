@@ -203,8 +203,7 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 				record.team.team_id, record.team_slot, dot, reach)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
 		var start: Vector3 = _approach_start_for(record, pos, dot, is_intro, staged)
-		var duration: float = _skate_in_duration(start, pos) if skate_in \
-				else _approach_duration(is_intro)
+		var duration: float = _faceoff_approach_duration(peer_id, start, pos, is_intro, skate_in, staged)
 		# Skate-in flows out of live momentum (start == current position); intro /
 		# staged relocate to a fresh start, so they snap from rest.
 		var v0: Vector3 = record.skater.velocity if skate_in and record.skater != null \
@@ -351,8 +350,8 @@ func on_faceoff_positions(positions: Array) -> void:
 			# radial staging is measured from is CENTER_ICE_DOT (unused otherwise).
 			var start: Vector3 = _approach_start_for(
 					record, pos, GameRules.CENTER_ICE_DOT, is_intro, staged)
-			var duration: float = _skate_in_duration(start, pos) if skate_in \
-					else _approach_duration(is_intro)
+			var duration: float = _faceoff_approach_duration(
+					peer_id, start, pos, is_intro, skate_in, staged)
 			var v0: Vector3 = record.skater.velocity if skate_in and record.skater != null \
 					else Vector3.ZERO
 			record.controller.begin_approach(start, pos, facing, duration, v0)
@@ -400,6 +399,24 @@ func _approach_start_for(record: PlayerRecord, target: Vector3, dot_xz: Vector2,
 
 func _approach_duration(is_intro: bool) -> float:
 	return GameRules.INTRO_APPROACH_DURATION if is_intro else GameRules.FACEOFF_APPROACH_DURATION
+
+
+# Glide time for one skater's approach:
+#   - skate_in (period / stoppage) → distance-scaled from current position.
+#   - staged (post-goal)           → base faceoff duration ± a deterministic
+#                                     per-player stagger so the fan doesn't arrive
+#                                     in lockstep (seeded by peer + goals so far).
+#   - otherwise (intro / default)  → the fixed intro / faceoff duration.
+func _faceoff_approach_duration(peer_id: int, start: Vector3, target: Vector3,
+		is_intro: bool, skate_in: bool, staged: bool) -> float:
+	if skate_in:
+		return _skate_in_duration(start, target)
+	if staged:
+		var goals: int = _state_machine.scores[0] + _state_machine.scores[1]
+		var frac: float = PlayerRules.stagger01(peer_id, goals)  # [0, 1)
+		var mult: float = 1.0 + (frac * 2.0 - 1.0) * GameRules.FACEOFF_STAGGER_FRACTION
+		return GameRules.FACEOFF_APPROACH_DURATION * mult
+	return _approach_duration(is_intro)
 
 
 # Distance-scaled glide time for a period / stoppage skate-in: the planar start→
