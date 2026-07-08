@@ -169,6 +169,10 @@ func _ready() -> void:
 	# countdown builder consumes it to lead with the matchup card.
 	GameManager.pregame_intro_started.connect(
 			func(duration: float) -> void: _pending_intro_secs = duration)
+	# Same idea for period / stoppage skate-ins: hold the countdown for the skate
+	# window (no matchup card) so "2 → 1 → DROP" lands on the extended drop.
+	GameManager.faceoff_skate_in_started.connect(
+			func(delay: float) -> void: _pending_skate_secs = delay)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
@@ -1106,11 +1110,14 @@ func _on_faceoff_prep_announced() -> void:
 # banner leads with a matchup card for the intro window — the camera sweep
 # plays over it — then hands off to the normal countdown.
 var _pending_intro_secs: float = 0.0
+var _pending_skate_secs: float = 0.0
 
 func _start_faceoff_countdown() -> void:
 	_stop_faceoff_countdown()
 	var intro: float = _pending_intro_secs
 	_pending_intro_secs = 0.0
+	var skate: float = _pending_skate_secs
+	_pending_skate_secs = 0.0
 	var prep: float = GameRules.FACEOFF_PREP_DURATION
 	var t := create_tween()
 	if intro > 0.0:
@@ -1122,6 +1129,14 @@ func _start_faceoff_countdown() -> void:
 		t.tween_callback(func() -> void:
 			if _tagline_label != null:
 				_tagline_label.visible = false
+			if _phase_label != null:
+				_phase_label.text = "FACEOFF IN 2")
+	elif skate > 0.0:
+		# Players are skating in — hold on a plain banner, then start the numbered
+		# countdown so it ends on the extended drop.
+		_phase_label.text = "FACEOFF"
+		t.tween_interval(skate)
+		t.tween_callback(func() -> void:
 			if _phase_label != null:
 				_phase_label.text = "FACEOFF IN 2")
 	else:

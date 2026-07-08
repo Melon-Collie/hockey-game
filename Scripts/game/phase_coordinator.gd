@@ -42,6 +42,12 @@ var _registry: PlayerRegistry = null
 var _teams: Array[Team] = []
 var _puck_getter: Callable = Callable()
 var _goalie_controllers_getter: Callable = Callable()
+# Returns true when the faceoff being entered is the opening/rematch intro (the
+# only one skaters skate out from their benches for; every other faceoff skates
+# from the player's current position). Evaluated at placement time, before the
+# prep-announce flips GameManager's _seen_first_prep. Both host (_enter_faceoff_prep)
+# and client (on_faceoff_positions) call it. Defaults invalid → no intro.
+var _is_pregame_intro_getter: Callable = Callable()
 var _shot_tracker: ShotOnGoalTracker = null
 # Drops a carried puck (host-only). Returns carrier peer_id or -1.
 var _puck_drop_requester: Callable = Callable()
@@ -67,6 +73,24 @@ var _force_record_goal_frame: Callable = Callable()
 # behind when GOAL_CELEBRATION transitions to GOAL_SCORED and the replay starts.
 var _pending_defending_goal_z: float = 0.0
 
+# Set the moment a goal replay starts (host and client both call start_goal_replay);
+# consumed by the next faceoff so post-goal skate-ins stage from behind the dot
+# instead of the player's scattered goal-moment position. Setting it at replay
+# START (not stop) keeps it independent of signal-connection order, and a replay
+# always precedes exactly one post-goal faceoff. Only a replay having played
+# arms it, so it triggers exactly when the replay-to-live camera cut exists to
+# hide the reposition; period / stoppage faceoffs (no replay) skate from where
+# play stopped.
+var _staged_faceoff_pending: bool = false
+
+# Cosmetic countdown pre-roll (seconds) the HUD should wait before the "2 → 1 →
+# DROP" beat for the faceoff just placed — the skate-in window extension for
+# period / stoppage faceoffs, 0 otherwise (the opening intro's pre-roll rides
+# its own pregame_intro_started path). Set in _enter_faceoff_prep / on_faceoff_
+# positions before faceoff_prep_announced fires; GameManager reads it there and
+# relays it to the HUD. Both host and client derive it identically.
+var last_prep_preroll: float = 0.0
+
 
 func setup(
 		state_machine: GameStateMachine,
@@ -81,12 +105,14 @@ func setup(
 		codec: WorldStateCodec,
 		scene_tree: SceneTree,
 		is_host: bool,
-		force_record_goal_frame: Callable) -> void:
+		force_record_goal_frame: Callable,
+		is_pregame_intro_getter: Callable = Callable()) -> void:
 	_state_machine = state_machine
 	_registry = registry
 	_teams = teams
 	_puck_getter = puck_getter
 	_goalie_controllers_getter = goalie_controllers_getter
+	_is_pregame_intro_getter = is_pregame_intro_getter
 	_shot_tracker = shot_tracker
 	_puck_drop_requester = puck_drop_requester
 	_recorder = recorder
@@ -145,6 +171,19 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		puck.pickup_locked = true
 	for gc: GoalieController in _goalie_controllers_getter.call():
 		gc.reset_to_crease()
+	# Skaters skate in to the dot instead of teleport-snapping: from their bench
+	# for the opening/rematch intro, else from where play stopped. Deterministic
+	# so clients (which interpolate host-driven remotes and run their own local
+	# skater's approach) land on the same dot; the drop finds everyone set.
+	var is_intro: bool = _is_pregame_intro()
+	var staged: bool = _consume_staged_faceoff(is_intro)
+	# Period / stoppage faceoffs (no bench intro, no post-goal replay cut) skate
+	# in from where play stopped over a distance-scaled window; extend the prep
+	# so a far player isn't forced into a dash, and pre-roll the HUD countdown.
+	var skate_in: bool = not is_intro and not staged
+	if skate_in:
+		_state_machine.set_faceoff_prep_extra(GameRules.FACEOFF_SKATE_PREP_EXTRA)
+	last_prep_preroll = GameRules.FACEOFF_SKATE_PREP_EXTRA if skate_in else 0.0
 	var positions: Array = []
 	for peer_id: int in _registry.all():
 		var record: PlayerRecord = _registry.get_record(peer_id)
@@ -163,7 +202,13 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		var pos: Vector3 = PlayerRules.faceoff_position(
 				record.team.team_id, record.team_slot, dot, reach)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
-		record.controller.teleport_to(pos, facing)
+		var start: Vector3 = _approach_start_for(record, pos, dot, is_intro, staged)
+		var duration: float = _faceoff_approach_duration(peer_id, start, pos, is_intro, skate_in, staged)
+		# Skate-in flows out of live momentum (start == current position); intro /
+		# staged relocate to a fresh start, so they snap from rest.
+		var v0: Vector3 = record.skater.velocity if skate_in and record.skater != null \
+				else Vector3.ZERO
+		record.controller.begin_approach(start, pos, facing, duration, v0)
 		positions.append_array([peer_id, pos.x, pos.y, pos.z])
 	faceoff_positions_ready.emit(positions)
 	faceoff_prep_announced.emit()
@@ -279,6 +324,16 @@ func on_goal_received(
 
 func on_faceoff_positions(positions: Array) -> void:
 	var local_peer_id: int = _registry.get_local().peer_id if _registry.get_local() != null else -1
+	# Remote skaters skate in via interpolation of the host's approach motion; the
+	# client only drives its OWN skater's skate-in locally. Same intro / staged
+	# tests as the host (both derived deterministically), so the local player's
+	# start matches the host's view of it for the opening and post-goal faceoffs.
+	var is_intro: bool = _is_pregame_intro()
+	var staged: bool = _consume_staged_faceoff(is_intro)
+	var skate_in: bool = not is_intro and not staged
+	# The host owns the drop timer; the client only needs the same pre-roll for
+	# its cosmetic countdown (derived from the same fixed extra, so it matches).
+	last_prep_preroll = GameRules.FACEOFF_SKATE_PREP_EXTRA if skate_in else 0.0
 	var i: int = 0
 	while i < positions.size():
 		var peer_id: int = positions[i]
@@ -291,7 +346,15 @@ func on_faceoff_positions(positions: Array) -> void:
 			# team after a mid-game switch.
 			var record: PlayerRecord = _registry.get_record(peer_id)
 			var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
-			record.controller.teleport_to(pos, facing)
+			# Staged faceoffs are always post-goal at center ice, so the dot the
+			# radial staging is measured from is CENTER_ICE_DOT (unused otherwise).
+			var start: Vector3 = _approach_start_for(
+					record, pos, GameRules.CENTER_ICE_DOT, is_intro, staged)
+			var duration: float = _faceoff_approach_duration(
+					peer_id, start, pos, is_intro, skate_in, staged)
+			var v0: Vector3 = record.skater.velocity if skate_in and record.skater != null \
+					else Vector3.ZERO
+			record.controller.begin_approach(start, pos, facing, duration, v0)
 	# Drive the client's phase entry off this reliable RPC rather than leaving
 	# it to the unreliable world-state phase byte — see apply_remote_faceoff_prep.
 	if _state_machine != null and _state_machine.apply_remote_faceoff_prep():
@@ -300,6 +363,72 @@ func on_faceoff_positions(positions: Array) -> void:
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────
+
+# True when the faceoff being placed is the opening/rematch intro — the only
+# one skaters skate out from their benches for.
+func _is_pregame_intro() -> bool:
+	return _is_pregame_intro_getter.is_valid() and bool(_is_pregame_intro_getter.call())
+
+
+# Reads and clears the post-goal staged-faceoff flag. The intro overrides it
+# (bench start wins) and clears any stale flag left by an OT-winning goal whose
+# replay never led to a faceoff.
+func _consume_staged_faceoff(is_intro: bool) -> bool:
+	var staged: bool = _staged_faceoff_pending and not is_intro
+	_staged_faceoff_pending = false
+	return staged
+
+
+# Skate-in start point for a skater's approach to `target` (its faceoff dot):
+#   - opening/rematch intro → the team's bench door (long cinematic skate-out).
+#   - post-goal (staged)    → a fixed short setback behind the dot; the replay's
+#                             camera cut hides the jump here, so the skate is a
+#                             short, consistent glide regardless of the goal.
+#   - otherwise             → the skater's current position (skate from where
+#                             play stopped — period / stoppage faceoffs).
+func _approach_start_for(record: PlayerRecord, target: Vector3, dot_xz: Vector2,
+		is_intro: bool, staged: bool) -> Vector3:
+	if is_intro:
+		return PlayerRules.bench_start_position(record.team.team_id, record.team_slot)
+	if staged:
+		return PlayerRules.faceoff_staging_position(target, dot_xz, record.team.team_id)
+	if record.skater != null:
+		return record.skater.global_position
+	return PlayerRules.faceoff_staging_position(target, dot_xz, record.team.team_id)
+
+
+func _approach_duration(is_intro: bool) -> float:
+	return GameRules.INTRO_APPROACH_DURATION if is_intro else GameRules.FACEOFF_APPROACH_DURATION
+
+
+# Glide time for one skater's approach:
+#   - skate_in (period / stoppage) → distance-scaled from current position.
+#   - staged (post-goal)           → base faceoff duration ± a deterministic
+#                                     per-player stagger so the fan doesn't arrive
+#                                     in lockstep (seeded by peer + goals so far).
+#   - otherwise (intro / default)  → the fixed intro / faceoff duration.
+func _faceoff_approach_duration(peer_id: int, start: Vector3, target: Vector3,
+		is_intro: bool, skate_in: bool, staged: bool) -> float:
+	if skate_in:
+		return _skate_in_duration(start, target)
+	if staged:
+		var goals: int = _state_machine.scores[0] + _state_machine.scores[1]
+		var frac: float = PlayerRules.stagger01(peer_id, goals)  # [0, 1)
+		var mult: float = 1.0 + (frac * 2.0 - 1.0) * GameRules.FACEOFF_STAGGER_FRACTION
+		return GameRules.FACEOFF_APPROACH_DURATION * mult
+	return _approach_duration(is_intro)
+
+
+# Distance-scaled glide time for a period / stoppage skate-in: the planar start→
+# dot distance at the target skate pace, floored at the base faceoff duration and
+# capped so the skater is set FACEOFF_SKATE_SETTLE before the drop (the extended
+# window's skate room). Everyone thus arrives before the puck drops.
+func _skate_in_duration(start: Vector3, target: Vector3) -> float:
+	var dist: float = Vector2(start.x - target.x, start.z - target.z).length()
+	var max_dur: float = GameRules.FACEOFF_PREP_DURATION \
+			+ GameRules.FACEOFF_SKATE_PREP_EXTRA - GameRules.FACEOFF_SKATE_SETTLE
+	return PlayerRules.skate_in_duration(dist, GameRules.FACEOFF_APPROACH_DURATION, max_dur)
+
 
 func _get_puck() -> Puck:
 	if not _puck_getter.is_valid():
@@ -334,6 +463,9 @@ func _capture_goal_moment_frame() -> void:
 func start_goal_replay() -> void:
 	if _recorder == null or _goal_replay_driver == null or _codec == null:
 		return
+	# Arm the post-goal staged skate-in: the replay's camera cut will hide the
+	# jump to a staging point near the dot so the ensuing faceoff is a short skate.
+	_staged_faceoff_pending = true
 	_goal_replay_driver.start(_recorder, _codec, _registry,
 			_puck_getter.call() as Puck, _goalie_controllers_getter.call(),
 			_pending_defending_goal_z)

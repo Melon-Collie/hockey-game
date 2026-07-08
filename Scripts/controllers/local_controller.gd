@@ -155,6 +155,12 @@ func _physics_process(delta: float) -> void:
 		var new_offset: Vector3 = skater.visual_offset * decay
 		skater.visual_offset = new_offset if new_offset.length_squared() > 0.000001 else Vector3.ZERO
 	if _game_state.is_movement_locked():
+		# Faceoff / intro skate-in: while an approach is active the body glides to
+		# the dot (see SkaterController.begin_approach) instead of freezing. On
+		# arrival tick_faceoff_approach returns false and we fall through to the
+		# normal prep freeze so the player can pre-aim the draw.
+		if tick_faceoff_approach(delta):
+			return
 		skater.velocity = Vector3.ZERO
 		if _game_state.allows_blade_aim_during_lock() and _gatherer != null:
 			# FACEOFF_PREP: keep the stick alive so centers can pre-angle the draw

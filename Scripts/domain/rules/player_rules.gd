@@ -47,3 +47,58 @@ static func faceoff_facing(team_id: int) -> Vector2:
 	if team_id == 1:
 		return Vector2(0.0, 1.0)
 	return Vector2.ZERO
+
+
+# Bench-door start point for the pre-game intro skate-in. Both benches are on
+# the +X boards; team 0 (the +Z-half team) uses the +Z bench, team 1 the -Z
+# bench, with a per-slot stagger along the bench so the three skaters don't
+# stack. Y matches FACEOFF_SPAWN_HEIGHT so the intro path stays level with the
+# dot placement. Unknown team_id (-1, tests) falls back to the +Z bench.
+static func bench_start_position(team_id: int, team_slot: int) -> Vector3:
+	var side: float = -1.0 if team_id == 1 else 1.0
+	var center_z: float = side * GameRules.BENCH_DOOR_CENTER_Z
+	var dz: float = 0.0
+	if team_slot >= 0 and team_slot < GameRules.BENCH_DOOR_SLOT_DZ.size():
+		# Mirror the stagger with the team side so both benches fan toward
+		# center ice rather than toward the end boards.
+		dz = side * GameRules.BENCH_DOOR_SLOT_DZ[team_slot]
+	return Vector3(GameRules.BENCH_DOOR_X, GameRules.FACEOFF_SPAWN_HEIGHT, center_z + dz)
+
+
+# Post-goal skate-in start: the final faceoff slot pushed radially OUTWARD from
+# the dot by FACEOFF_STAGING_SETBACK, so the skate-in runs back along the ray
+# toward the dot — every player converging on the circle instead of skating in
+# parallel. Derived from the already-resolved target (inherits the center's reach
+# offset). A player sitting on the dot has no radial direction, so it falls back
+# to a straight push toward the team's own end (team 0 defends +Z, team 1 -Z).
+# Only used post-goal, whose replay camera cut hides the jump to this point.
+static func faceoff_staging_position(target: Vector3, dot_xz: Vector2, team_id: int) -> Vector3:
+	var radial: Vector2 = Vector2(target.x - dot_xz.x, target.z - dot_xz.y)
+	if radial.length() < 0.01:
+		var own_side_sign: float = -1.0 if team_id == 1 else 1.0
+		return Vector3(target.x, target.y,
+				target.z + own_side_sign * GameRules.FACEOFF_STAGING_SETBACK)
+	var dir: Vector2 = radial.normalized()
+	return Vector3(
+			target.x + dir.x * GameRules.FACEOFF_STAGING_SETBACK,
+			target.y,
+			target.z + dir.y * GameRules.FACEOFF_STAGING_SETBACK)
+
+
+# Glide time for a skater covering `distance` metres to its dot at the target
+# skate pace, clamped to [min_dur, max_dur]. A close player skates in briefly
+# and settles; a far one takes the full window. max_dur is set by the caller
+# from the extended prep window so everyone arrives before the drop.
+static func skate_in_duration(distance: float, min_dur: float, max_dur: float) -> float:
+	var raw: float = distance / maxf(GameRules.FACEOFF_SKATE_IN_SPEED, 0.01)
+	return clampf(raw, min_dur, max_dur)
+
+
+# Deterministic pseudo-random value in [0, 1) from two int seeds — a spatial-hash
+# mix, so the same (a, b) yields the same value on every machine (no RNG state to
+# sync). Used to stagger the post-goal skate-in per player without the arrivals
+# looking machine-generated: seed with (peer_id, goals-so-far) and they vary by
+# player and by faceoff while host and clients agree.
+static func stagger01(a: int, b: int) -> float:
+	var h: int = ((a + 1) * 73856093) ^ ((b + 1) * 19349663)
+	return float(absi(h) % 100003) / 100003.0

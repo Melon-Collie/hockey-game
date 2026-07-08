@@ -15,6 +15,40 @@ const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdo
 # pre-game intro can play: camera sweep, matchup card, crowd buzz. The normal
 # countdown runs in the final FACEOFF_PREP_DURATION of the extended window.
 const PREGAME_INTRO_DURATION: float = 4.0
+# Skate-in glide durations (see SkaterController.begin_approach). Players skate
+# from a start point to the faceoff dot instead of teleport-snapping. Each stays
+# comfortably shorter than its prep window so everyone is set on the dot before
+# the drop: a normal faceoff arrives with ~0.75 s of countdown to settle + aim;
+# the opening intro arrives just as the "2 → 1 → DROP" countdown begins (the
+# skate happens under the camera sweep during the PREGAME_INTRO_DURATION hold).
+const FACEOFF_APPROACH_DURATION: float = 1.25
+const INTRO_APPROACH_DURATION: float   = 3.6
+# Post-goal faceoffs stage the skate-in from this far behind the dot (toward the
+# team's own end) instead of the player's scattered goal-moment position. The
+# replay-to-live camera cut hides the reposition, so the visible result is a
+# short, consistent skate into the dot no matter where the goal happened — the
+# long "skate back" is elided into the replay's dead time. See
+# PhaseCoordinator._approach_start_for / PlayerRules.faceoff_staging_position.
+const FACEOFF_STAGING_SETBACK: float   = 6.0
+# Period / stoppage faceoffs have no replay camera cut to hide a staging snap,
+# so players skate in honestly from where play stopped. The prep window is
+# extended by FACEOFF_SKATE_PREP_EXTRA (added before the "2 → 1 → DROP"
+# countdown) so a far player covers the distance at ~FACEOFF_SKATE_IN_SPEED
+# instead of a teleport-fast dash; per-player glide time scales with distance
+# and is capped so everyone is set before the drop. Both host (prep timer) and
+# client (cosmetic countdown) apply the same fixed extra, derived locally from
+# the faceoff kind — no wire change. Icing (nearly the whole rink to cover)
+# still skates briskly since the window can't stretch to the full length, but
+# it reads as a hard skate rather than a snap.
+const FACEOFF_SKATE_IN_SPEED: float    = 9.0   # m/s target skate pace
+const FACEOFF_SKATE_PREP_EXTRA: float  = 1.5   # s added to the prep before the countdown
+const FACEOFF_SKATE_SETTLE: float      = 0.4   # s a skater should be set before the drop
+# Post-goal staged skate-ins all cover the same setback, so a fixed duration made
+# everyone move in eerie lockstep. Vary each player's glide time by ±this
+# fraction (deterministically, per player + goal count) so they arrive staggered
+# at slightly different speeds. Kept small enough that the slowest still lands
+# before the drop (base 1.25 s × 1.3 = 1.6 s < the 2 s post-goal prep).
+const FACEOFF_STAGGER_FRACTION: float  = 0.3
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
@@ -300,11 +334,29 @@ const NEUTRAL_ZONE_FACEOFF_DOTS: Array[Vector2] = [
 
 # Per-team, per-slot XZ offsets from whichever dot is active. Team 0 stands on
 # the +Z side of the dot, team 1 on -Z (preserves team 0 = +Z half convention).
-# Indexed by [team_id][team_slot].
+# Indexed by [team_id][team_slot]. Center on the dot line (slot 0); wingers sit
+# on a ~4.9 m circle around the dot (±4.0 wide, 2.8 back) — tighter than the old
+# ±5.0/3.0 spread so the formation reads like a faceoff circle and the post-goal
+# radial skate-in converges cleanly instead of running in parallel.
 const FACEOFF_OFFSETS: Array = [
-	[Vector2( 0.0,  1.5), Vector2(-5.0,  3.0), Vector2( 5.0,  3.0)],  # team 0
-	[Vector2( 0.0, -1.5), Vector2(-5.0, -3.0), Vector2( 5.0, -3.0)],  # team 1
+	[Vector2( 0.0,  1.5), Vector2(-4.0,  2.8), Vector2( 4.0,  2.8)],  # team 0
+	[Vector2( 0.0, -1.5), Vector2(-4.0, -2.8), Vector2( 4.0, -2.8)],  # team 1
 ]
+
+# ── Bench-Door Start Points (pre-game intro skate-in) ─────────────────────────
+# Where each skater begins the opening/rematch intro before skating out to its
+# faceoff slot. Both team benches sit on the +X boards (see arena_stands.gd:
+# _BENCH_CENTER_Z = 4.4); team 0 (the +Z-half team) takes the +Z bench, team 1
+# the -Z bench. Skaters emerge just off the boards and fan out from a small
+# per-slot stagger along the bench span. Only used for the center-ice opening
+# faceoff — every other faceoff skates in from the player's current position.
+# BENCH_DOOR_X is pulled a little in from the inner boards (INNER_HALF_WIDTH
+# 12.84) so skaters start on the ice, not clipping the kickplate.
+const BENCH_DOOR_X: float          = 11.5
+const BENCH_DOOR_CENTER_Z: float   = 4.4   # mirrors arena_stands.gd _BENCH_CENTER_Z
+# Per-slot fan-out along the bench span (index = team_slot). Center leaves from
+# the middle of the bench; wingers from either side so the three don't stack.
+const BENCH_DOOR_SLOT_DZ: Array[float] = [0.0, 2.4, -2.4]
 
 # Returns the faceoff dot closest to the given XZ point — picks among centre
 # ice, the four end-zone dots, and the four neutral-zone dots. Used to pick

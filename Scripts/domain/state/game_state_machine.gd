@@ -711,6 +711,17 @@ func faceoff_prep_time_until_drop() -> float:
 		return 0.0
 	return maxf(GameRules.FACEOFF_PREP_DURATION + _prep_extra_time - _phase_timer, 0.0)
 
+
+# Extends the CURRENT prep's window (host-side) so a distance-based skate-in has
+# time to finish before the drop. Unlike begin_faceoff_prep's extra_prep_time
+# (set at entry), this is applied by PhaseCoordinator._enter_faceoff_prep after
+# it has measured how far players are — period / stoppage faceoffs enter via the
+# tick timer with a 0 extra, then get this. No-op outside FACEOFF_PREP.
+func set_faceoff_prep_extra(extra: float) -> void:
+	if current_phase != GamePhase.Phase.FACEOFF_PREP:
+		return
+	_prep_extra_time = maxf(extra, 0.0)
+
 # Returns { peer_id: Vector3 } — each player's faceoff position derived from
 # their slot/team around the active dot. PlayerRules.faceoff_position is the
 # single source of truth; we hold no cached positions ourselves.

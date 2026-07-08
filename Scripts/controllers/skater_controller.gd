@@ -17,6 +17,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var puck_carry_speed_multiplier: float = 0.86
 @export var backward_thrust_multiplier: float = 0.80
 @export var crossover_thrust_multiplier: float = 0.90
+# Ceiling on the velocity fed to the gait during the faceoff / intro skate-in
+# (see begin_approach / apply_approach). The glide always completes in a fixed
+# duration, so a far start implies a high velocity — clamp it here so the stride
+# animation reads as a hard skate rather than over-spinning past its range.
+@export var approach_max_gait_speed: float = 9.0
 # ── Sprint / Stamina Tuning ───────────────────────────────────────────────────
 # Sprint (Shift) burns a stamina pool for a top-speed burst. Boost is primarily
 # the speed cap; a smaller thrust bump lets you actually reach it. Stamina is a
@@ -660,6 +665,31 @@ var _game_state_has_faceoff_prep: bool = false
 # rides the normal hand/blade wire state to everyone else.
 var _celebration_timer: float = 0.0
 var _celebration_total: float = 1.0
+
+# ── Faceoff / intro skate-in approach ─────────────────────────────────────────
+# During FACEOFF_PREP the skater glides from a start point (its bench for the
+# opening intro, else its current position) to the faceoff dot along a
+# deterministic eased path instead of teleport-snapping — the existing
+# velocity-driven gait rides on top. Position is a pure function of (start,
+# target, elapsed/duration) so host and every client agree with reconcile off;
+# the skater lands exactly on the dot at t=1 and hands back to the normal prep
+# freeze for the rest of the countdown. See begin_approach / apply_approach.
+var _approach_active: bool = false
+var _approach_start: Vector3 = Vector3.ZERO
+var _approach_target: Vector3 = Vector3.ZERO
+var _approach_facing: Vector2 = Vector2.ZERO   # squared-up dot facing at arrival
+var _approach_elapsed: float = 0.0
+var _approach_duration: float = 1.0
+var _approach_prev_pos: Vector3 = Vector3.ZERO
+# Live planar velocity the skate-in launches from (period / stoppage faceoffs) so
+# the glide flows out of the player's momentum instead of hard-stopping at the
+# whistle. Zero for snap-from-rest starts (bench intro / post-goal staging).
+var _approach_v0: Vector3 = Vector3.ZERO
+# Below this planar speed a skate-in is treated as a snap-from-rest start (reset
+# gait + square up to the path); at or above it, momentum is preserved.
+const _APPROACH_CARRY_MIN: float = 0.3
+# Reused so the per-tick skate-in render doesn't allocate an InputState.
+var _approach_input: InputState = InputState.new()
 
 
 # True during the FACEOFF_PREP countdown — the gait floors its stance crouch
@@ -1357,6 +1387,9 @@ func on_puck_released_network() -> void:
 	_transition_to_skating()
 
 func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
+	# A hard teleport (respawn / slot swap) overrides any in-progress skate-in.
+	# begin_approach re-arms this immediately after its own teleport_to(start).
+	_approach_active = false
 	skater.global_position = pos
 	skater.velocity = Vector3.ZERO
 	# Fresh legs out of a faceoff / respawn — refill the stamina pool and clear
@@ -1387,6 +1420,131 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 		# signal latency; larger on clients) would otherwise freeze through
 		# the replay and fire the raised-stick pose AT the next faceoff.
 		_celebration_timer = 0.0
+
+# ── Faceoff / intro skate-in approach ─────────────────────────────────────────
+
+# Begins the deterministic skate-in used during FACEOFF_PREP. apply_approach
+# glides the body from `start` to `target` (the faceoff dot) over `duration`,
+# squaring up to `settle_facing` on arrival. `initial_velocity` is the skater's
+# live velocity: pass it for a period / stoppage skate-in (start == current
+# position) so the glide flows out of the player's momentum instead of snapping
+# to a stop at the whistle; pass zero (default) for a snap-from-rest start (the
+# bench intro or post-goal staging, where the body relocates to `start` anyway).
+# Deterministic per machine from (start, target, v0, elapsed) with reconcile off.
+func begin_approach(start: Vector3, target: Vector3, settle_facing: Vector2,
+		duration: float, initial_velocity: Vector3 = Vector3.ZERO) -> void:
+	var carry := Vector3(initial_velocity.x, 0.0, initial_velocity.z)
+	if carry.length() < _APPROACH_CARRY_MIN:
+		# Snap-from-rest: relocate to `start`, reset the gait, and point down the
+		# path (teleport_to squares up when given a non-zero facing).
+		teleport_to(start, ApproachRules.path_facing(start, target, 0.0, settle_facing))
+		carry = Vector3.ZERO
+	else:
+		# Momentum-preserving: clear stamina / charge and drop reconcile history
+		# (teleport_to with a zero facing skips the gait reset + facing snap), then
+		# re-seed the live velocity so the stride carries through the whistle.
+		teleport_to(start, Vector2.ZERO)
+		skater.velocity = carry
+	_approach_active = true
+	_approach_start = start
+	_approach_target = target
+	_approach_facing = settle_facing
+	_approach_v0 = carry
+	_approach_elapsed = 0.0
+	_approach_duration = maxf(duration, 0.001)
+	_approach_prev_pos = start
+
+
+func is_approaching() -> bool:
+	return _approach_active
+
+
+func clear_approach() -> void:
+	_approach_active = false
+
+
+# Runs one skate-in tick if an approach is active for the live faceoff prep.
+# Returns true while the skater is still gliding (caller skips its locked-phase
+# freeze); false when there's no approach or the skater has arrived / prep has
+# ended (caller runs its normal freeze / aim-only handling). Real frames only —
+# the skate-in is cosmetic and not part of the reconcile input-replay chain.
+func tick_faceoff_approach(delta: float) -> bool:
+	if not _approach_active:
+		return false
+	if not (_game_state_has_faceoff_prep and _game_state.is_faceoff_prep()):
+		# Left FACEOFF_PREP (the drop, or an abandoned prep) with an approach
+		# still set — drop it so it can't leak into a later locked phase.
+		clear_approach()
+		return false
+	return apply_approach(delta)
+
+
+# Advances the eased path one tick, moves the body, and renders the gait from a
+# path-derived velocity. Returns true while gliding; on arrival (t >= 1) it snaps
+# exactly onto the dot, clears the approach, and returns false so the caller
+# hands back to the normal prep freeze (letting humans pre-aim the draw).
+func apply_approach(delta: float) -> bool:
+	_approach_elapsed += delta
+	var t: float = clampf(_approach_elapsed / _approach_duration, 0.0, 1.0)
+	if t >= 1.0:
+		skater.global_position = _approach_target
+		skater.velocity = Vector3.ZERO
+		skater.set_facing(_approach_facing)
+		_pose.facing = _approach_facing
+		clear_approach()
+		return false
+	var new_pos: Vector3 = ApproachRules.path_position(
+			_approach_start, _approach_target, t, _approach_v0, _approach_duration)
+	var vel: Vector3 = (new_pos - _approach_prev_pos) / maxf(delta, 0.0001)
+	_approach_prev_pos = new_pos
+	# Clamp the gait-facing velocity (planar) so a long glide doesn't over-spin
+	# the stride; the body still translates the full path distance this tick.
+	var planar := Vector3(vel.x, 0.0, vel.z)
+	if planar.length() > approach_max_gait_speed:
+		planar = planar.normalized() * approach_max_gait_speed
+	skater.global_position = new_pos
+	skater.velocity = planar
+	# Facing follows the actual per-tick travel (the momentum path curves), then
+	# settles to the dot facing near the end — so a stoppage skater keeps its
+	# heading through the whistle instead of snapping toward the dot.
+	var facing: Vector2 = ApproachRules.facing_along(
+			Vector2(planar.x, planar.z), t, _approach_facing)
+	_render_approach_pose(facing, delta)
+	return true
+
+
+# Cosmetic pose pass for a skate-in tick: drives facing directly (the path owns
+# heading, not mouse aim), carries the blade out front, and runs the same gait /
+# upper-body / IK passes _process_input's tail runs — so the skater strides,
+# leans, and settles into the faceoff ready stance exactly like normal skating.
+func _render_approach_pose(facing: Vector2, delta: float) -> void:
+	_pose.facing = facing
+	skater.set_facing(facing)
+	skater.move_intent = facing
+	skater.brake_intent = false
+	_approach_input.delta = delta
+	# Aim the blade / head a few metres ahead along travel — a neutral carry that
+	# flows into the draw aim once the skater arrives and the prep freeze resumes.
+	_approach_input.mouse_world_pos = skater.global_position \
+			+ Vector3(facing.x, 0.0, facing.y) * 6.0
+	_pose.apply_velocity_lean(delta)
+	_ik.apply_blade_from_mouse(_approach_input, delta)
+	# Preserve blade/hand world positions across the upper-body rotation — same
+	# dance as _process_input, so the stick doesn't slide sideways as the torso
+	# tracks travel.
+	var blade_world_pre: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
+	var hand_world_pre: Vector3 = skater.upper_body_to_global(skater.get_top_hand_position())
+	_pose.apply_upper_body(delta)
+	_pose.apply_head_tracking(_approach_input, delta)
+	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
+	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
+	_skating.apply(delta)
+	# Publish the gait's lower-body yaw (hip-to-travel alignment) — normally
+	# written inside _pose.apply_facing, which this path replaces.
+	skater.set_lower_body_lag(
+			_skating.stop_yaw_offset + _skating.travel_align_yaw + _skating.shot_hip_yaw)
+	_ik.update_bottom_hand()
+
 
 # Cancels an in-progress wrister/slapper wind-up. No-op unless actually mid-
 # charge, so a routine teleport doesn't disturb skating state. Suppresses the
