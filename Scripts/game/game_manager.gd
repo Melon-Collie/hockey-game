@@ -1043,6 +1043,7 @@ func _spawn_puck() -> void:
 	puck_controller.puck_picked_up_by.connect(_on_server_puck_picked_up_by)
 	puck_controller.puck_released_by_carrier.connect(_on_server_puck_released_by_carrier)
 	puck_controller.puck_stripped_from.connect(_on_server_puck_stripped_from)
+	puck_controller.puck_poke_checked_by.connect(_on_server_puck_poke_checked_by)
 	puck_controller.puck_touched_while_loose.connect(_on_server_puck_touched_while_loose)
 	puck_controller.puck_touched_by_goalie.connect(_on_puck_touched_by_goalie)
 	if NetworkManager.is_host:
@@ -2229,6 +2230,15 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 		# Tell the victim's client whether this was a stick lift so it can pop
 		# their own blade up locally (their prediction never saw the host force).
 		NetworkManager.send_puck_stolen(peer_id, puck_controller.is_processing_stick_lift())
+
+
+# Host: a defender poke-checked the carrier. Record the poker as the most recent
+# toucher so a puck poked straight off the carrier's stick into the net is
+# credited to the poker (get_last_toucher) rather than resolving to the victim
+# as an own goal. The shot tracker flags it a poke so it never earns an assist.
+func _on_server_puck_poke_checked_by(peer_id: int) -> void:
+	if _shot_tracker != null:
+		_shot_tracker.on_poke_check(peer_id)
 
 
 # Host: the carrier ESTABLISHED possession (held it, or made a deliberate
