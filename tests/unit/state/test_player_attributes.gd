@@ -52,13 +52,16 @@ func test_medium_multipliers_are_one() -> void:
 
 func test_endpoints_preserved_from_three_step_scale() -> void:
 	# The 5-step tables keep the old 3-step endpoints: new level 5 == old "good",
-	# new level 1 == old "bad". Spot-check Speed (±7%) and Shot power (±15%).
+	# new level 1 == old "bad". Spot-check Speed (±7%). Shot power is the
+	# deliberate EXCEPTION: it was retuned (±18%) so L5 lands an elite NHL
+	# release against the GameRules base maxes (~87 mph wrister / ~106 mph
+	# slapper) — see the _SHOT_POWER_MULTS doc.
 	var lo := _uniform(PlayerAttributes.LEVEL_MIN)
 	var hi := _uniform(PlayerAttributes.LEVEL_MAX)
 	assert_almost_eq(lo.speed_mult(),      0.93, 0.0001)
 	assert_almost_eq(hi.speed_mult(),      1.07, 0.0001)
-	assert_almost_eq(lo.shot_power_mult(), 0.85, 0.0001)
-	assert_almost_eq(hi.shot_power_mult(), 1.15, 0.0001)
+	assert_almost_eq(lo.shot_power_mult(), 0.83, 0.0001)
+	assert_almost_eq(hi.shot_power_mult(), 1.18, 0.0001)
 
 
 func test_intermediate_steps_monotonic() -> void:

@@ -278,13 +278,19 @@ const POKE_RADIUS_M: float = 0.5
 # (ShotMechanics.wrister_power_t — sweep speed × drag distance, feel-curve
 # shaped). The min sits BELOW the quick-shot/pass speed on purpose: a slow
 # deliberate sweep is a soft touch pass, softer than the fixed snap pass.
-# The max is a genuine NHL-weight wrister (~30 m/s ≈ 67 mph) — reception
-# already gates hard shots (deflect_min_speed ~20 m/s needs a squared
-# blade), so the top half of the band is catch-with-care territory.
+# The maxes are the LEAGUE-AVERAGE (Shot L3) anchors, calibrated so the
+# _SHOT_POWER_MULTS spread (+/-18%, see PlayerAttributes) puts Shot L5 at an
+# elite top-of-the-NHL release:
+#   wrister 33 m/s ≈ 74 mph  (L5 ~38.9 ≈ 87 mph, L1 ~27.4 ≈ 61 mph)
+#   slapper 40 m/s ≈ 89 mph  (L5 ~47.2 ≈ 106 mph, L1 ~33.2 ≈ 74 mph)
+# Reception already gates hard shots (deflect_min_speed ~20 m/s needs a
+# squared blade), so most of the wrister band is catch-with-care territory.
+# The slapper min is a hurried, barely-wound release — still a heavy shot
+# (~45 mph); one-timers always fire at max regardless of charge.
 const DEFAULT_WRISTER_POWER_MIN_M_S: float = 10.0
-const DEFAULT_WRISTER_POWER_MAX_M_S: float = 30.0
-const DEFAULT_SLAPPER_POWER_MIN_M_S: float = 17.0
-const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 34.0
+const DEFAULT_WRISTER_POWER_MAX_M_S: float = 33.0
+const DEFAULT_SLAPPER_POWER_MIN_M_S: float = 20.0
+const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
 # Quick-shot is the no-charge release — also used by AI as the typical
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0

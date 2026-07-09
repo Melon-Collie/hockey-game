@@ -102,12 +102,20 @@ const BUDGET: int = 18
 # moderate-speed hit falls under the stagger threshold entirely, so they bump
 # people rather than rock them. Size still contributes delivery through mass
 # (weight_ratio), but Physical is the stat that says "I hit people."
+# SHOT_POWER (+/-18%) is anchored to real NHL shot speeds against the GameRules
+# base maxes (wrister 33 m/s, slapper 40 m/s = a league-average L3 shooter):
+#   L5 → wrister ~38.9 m/s (~87 mph) and slapper ~47.2 m/s (~106 mph) — an
+#        elite, top-of-the-league release (Ovechkin wrister / Weber slapper);
+#   L1 → ~27.4 / ~33.2 m/s (61 / 74 mph) — a weak-for-pro shot that still
+#        stings. The hierarchy stays honest across builds: a maxed sniper's
+#        wrister (38.9) beats a min-Shot slapper (33.2) but never a same-level
+#        slapper.
 const _SPEED_MULTS:          Array[float] = [0.93, 0.965, 1.00, 1.035, 1.07]
 const _AGILITY_MULTS:        Array[float] = [0.90, 0.95,  1.00, 1.05,  1.10]
 const _HANDS_BLADE_MULTS:    Array[float] = [0.85, 0.925, 1.00, 1.125, 1.25]
 const _SIZE_MULTS:           Array[float] = [0.82, 0.91,  1.00, 1.09,  1.18]
 const _PHYSICAL_CHECK_MULTS: Array[float] = [0.64, 0.82,  1.00, 1.18,  1.36]
-const _SHOT_POWER_MULTS:     Array[float] = [0.85, 0.925, 1.00, 1.075, 1.15]
+const _SHOT_POWER_MULTS:     Array[float] = [0.83, 0.91,  1.00, 1.09,  1.18]
 
 # Specialized gameplay — extra effects layered on top of the canonical ones.
 # HEIGHT: every "proportional to actual body height" measurement (arms, the

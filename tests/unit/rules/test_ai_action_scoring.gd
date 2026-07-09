@@ -395,13 +395,13 @@ func test_shot_danger_range_closes_the_top_corner() -> void:
 	# glove has flight time to reach the corner, so the same set-goalie top-corner
 	# shrinks. (This is why range doesn't help vs a set goalie — the corners shut.)
 	# Distances are calibrated to the shot speed: full glove extension needs
-	# flight >= arm delay + deploy (0.18 + 0.20 s) ≈ 11 m at the 30 m/s wrister,
-	# so the mid-slot corner that used to shut at 6 m (24 m/s) now stays open —
-	# a real consequence of the hotter shot, not a model change.
+	# flight >= arm delay + deploy (0.18 + 0.20 s) ≈ 12.5 m at the 33 m/s
+	# wrister, so the mid-slot corner that used to shut at 6 m (24 m/s) now
+	# stays open — a real consequence of the hotter shot, not a model change.
 	var near: float = AIActionScoring.score_shoot(
 			Vector3(0.0, 0.0, 23.65), GOAL, Vector3(0.0, 0.0, 25.15), NET_HW, [])   # 3 m
 	var far: float = AIActionScoring.score_shoot(
-			Vector3(0.0, 0.0, 15.65), GOAL, Vector3(0.0, 0.0, 25.15), NET_HW, [])   # 10 m
+			Vector3(0.0, 0.0, 11.65), GOAL, Vector3(0.0, 0.0, 25.15), NET_HW, [])   # 14 m
 	assert_gt(near, far, "in tight the glove can't reach the top corner; at range it does")
 
 
