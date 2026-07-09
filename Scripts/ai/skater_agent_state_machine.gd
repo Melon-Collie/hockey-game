@@ -1729,8 +1729,16 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	_pass_should_charge = _carrier.pass_should_charge
 	_pass_target_speed = _carrier.pass_target_speed
 	_pass_should_saucer = _carrier.pass_should_saucer
-	_shot_loft_level = _carrier.shot_loft_level
-	_shot_aim_locked = _carrier.shot_aim_point
+	# Shot params are the ONE thing that must NOT keep tracking the carrier once a
+	# fire intent is latched. The intent gate below already holds the INTENT through
+	# pre-aim (a jagged score can't flip it back to CARRY); freezing the aim + loft
+	# the moment we commit does the same for the SHOT itself, so the bot performs the
+	# exact shot that won the compete, not whatever a later re-eval would have
+	# picked. Only refresh while still deliberating (_intended_action == CARRY);
+	# after commit the last-written values ride through pre-aim and the charge.
+	if _intended_action == State.CARRY:
+		_shot_loft_level = _carrier.shot_loft_level
+		_shot_aim_locked = _carrier.shot_aim_point
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
 	debug_pass_score = _carrier.debug_pass_score

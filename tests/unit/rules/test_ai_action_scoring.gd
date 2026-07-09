@@ -423,13 +423,26 @@ func test_shot_danger_unsettled_goalie_scores_higher() -> void:
 
 
 func test_shot_danger_caught_moving_goalie_opens_the_five_hole() -> void:
-	# A head-on shot at a goalie caught mid-slide: his legs are splayed, so the
-	# five-hole is the opening — a FLAT shot between the pads, not a roof.
-	var shooter := Vector3(0.0, 0.0, 19.65)
-	var goalie := Vector3(0.0, 0.0, 25.15)
+	# A head-on shot IN TIGHT at a goalie caught mid-slide: his legs are splayed,
+	# so the five-hole is the opening — a FLAT shot between the pads, not a roof.
+	# The five-hole is a physical gap, so it's only a real target up close; from
+	# range it foreshortens away (and the goalie re-settles mid-flight).
+	var shooter := Vector3(0.0, 0.0, 24.65)   # ~2 m — point blank
+	var goalie := Vector3(0.0, 0.0, 25.65)    # 1 m out, squared
 	var loft: int = AIActionScoring.best_shot_loft(
-			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.9)
-	assert_eq(loft, ShotMechanics.ELEVATION_FLAT, "shoot the five-hole flat on a sliding goalie")
+			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
+	assert_eq(loft, ShotMechanics.ELEVATION_FLAT, "shoot the five-hole flat on a sliding goalie in tight")
+
+
+func test_shot_danger_cross_ice_shot_at_moving_goalie_collapses() -> void:
+	# The bug the flight-fade + five-hole foreshortening fix: a bot must NOT rate a
+	# long cross-ice shot at a caught-moving goalie as a chance. By the time a 12 m
+	# shot arrives the goalie has re-settled, and a 12 m five-hole is a sliver.
+	var shooter := Vector3(0.0, 0.0, 14.65)   # ~12 m out
+	var goalie := Vector3(0.0, 0.0, 25.65)
+	var s: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
+	assert_lt(s, 0.1, "a long shot at a mid-slide goalie is not a real chance — he recovers")
 
 
 func test_shot_aim_targets_the_open_side() -> void:
@@ -456,6 +469,69 @@ func test_shot_aim_roofs_toward_a_post() -> void:
 	assert_gt(absf(aim.x), 0.4, "...so the aim is a top corner, not the goalie's chest")
 
 
+# ── in_offensive_zone ─────────────────────────────────────────────────────────
+# The value-map regime boundary: the attacking blue line. Attacking GOAL at +Z, so
+# the O-zone is z > BLUE_LINE_Z.
+
+func test_in_offensive_zone_past_blue_line() -> void:
+	var deep := Vector3(0.0, 0.0, 20.0)          # well inside the zone
+	var just_in := Vector3(0.0, 0.0, GameRules.BLUE_LINE_Z + 0.5)
+	assert_true(AIActionScoring.in_offensive_zone(deep, GOAL))
+	assert_true(AIActionScoring.in_offensive_zone(just_in, GOAL))
+
+
+func test_not_in_offensive_zone_at_or_before_blue_line() -> void:
+	var just_out := Vector3(0.0, 0.0, GameRules.BLUE_LINE_Z - 0.5)
+	var nz := Vector3(0.0, 0.0, 0.0)
+	var own_end := Vector3(0.0, 0.0, -20.0)
+	assert_false(AIActionScoring.in_offensive_zone(just_out, GOAL))
+	assert_false(AIActionScoring.in_offensive_zone(nz, GOAL))
+	assert_false(AIActionScoring.in_offensive_zone(own_end, GOAL))
+
+
+func test_in_offensive_zone_folds_for_negative_z_attack() -> void:
+	# Attacking toward -Z: the O-zone is z < -BLUE_LINE_Z.
+	var neg_goal := Vector3(0.0, 0.0, -26.65)
+	assert_true(AIActionScoring.in_offensive_zone(Vector3(0, 0, -20.0), neg_goal))
+	assert_false(AIActionScoring.in_offensive_zone(Vector3(0, 0, -5.0), neg_goal))
+	assert_false(AIActionScoring.in_offensive_zone(Vector3(0, 0, 20.0), neg_goal))
+
+
+# ── release_ahead_of_goalie / no phantom open net ─────────────────────────────
+# GOAL is at +Z, so "in front of the goalie" = farther out = smaller z.
+
+func test_release_clamped_when_behind_goalie() -> void:
+	var goalie := Vector3(0.0, 0.0, 24.65)          # 2 m out from GOAL (z 26.65)
+	var behind := Vector3(0.5, 0.0, 25.5)           # in the crease, past the goalie
+	var clamped: Vector3 = AIActionScoring.release_ahead_of_goalie(behind, GOAL, goalie)
+	assert_almost_eq(clamped.z, 24.65 - AIActionScoring.GOALIE_JAM_DISTANCE_M, 1e-4,
+			"pushed out to the jam distance in front of the goalie")
+	assert_almost_eq(clamped.x, 0.5, 1e-6, "lateral offset is untouched")
+
+
+func test_release_untouched_when_in_front_of_goalie() -> void:
+	var goalie := Vector3(0.0, 0.0, 24.65)
+	var in_front := Vector3(1.0, 0.0, 20.0)         # out in the slot, well in front
+	var out: Vector3 = AIActionScoring.release_ahead_of_goalie(in_front, GOAL, goalie)
+	assert_eq(out, in_front, "a normal in-front shot is not clamped")
+
+
+func test_shot_from_behind_goalie_is_not_a_phantom_open_net() -> void:
+	# A shooter jammed dead-center just past the goalie used to read as an open net
+	# (keeper modelled behind the shooter → danger 1.0). Clamped in front of him,
+	# it's a point-blank jam into a set keeper — near zero, and far below a real
+	# slot shot from the same centered line.
+	var goalie := Vector3(0.0, 0.0, 24.65)
+	var behind := Vector3(0.0, 0.0, 25.8)           # crease, dead center, past goalie
+	var behind_danger: float = AIActionScoring.score_shoot(behind, GOAL, goalie, NET_HW, [])
+	var slot := Vector3(0.0, 0.0, 20.65)            # real slot look, same line
+	var slot_danger: float = AIActionScoring.score_shoot(slot, GOAL, goalie, NET_HW, [])
+	assert_lt(behind_danger, slot_danger,
+			"a jam from behind the goalie is not more dangerous than a slot shot")
+	assert_lt(behind_danger, 0.2,
+			"…it's a near-nothing point-blank jam, not a phantom open net")
+
+
 # ── position_potential ───────────────────────────────────────────────────────
 # position_potential models "value of being at this position" — used
 # only when the evaluator is OUTSIDE shooting range (the regime rule
@@ -463,7 +539,9 @@ func test_shot_aim_roofs_toward_a_post() -> void:
 # goal mouth (inside) and at the goal-to-goal rink length (outside).
 
 func test_potential_zero_behind_goal_line() -> void:
-	# Past the attacking goal line — no shooting potential.
+	# Past the attacking goal line — no shooting potential. position_potential is
+	# the raw geometric progression (no possession floor — that floor lives in the
+	# offensive _score_at path, so the shared defensive threat_surface stays clean).
 	var pos := Vector3(0.0, 0.0, 27.5)
 	assert_eq(AIActionScoring.position_potential(pos, GOAL, []), 0.0)
 
@@ -611,115 +689,6 @@ func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
 	var t: float = AIActionScoring.time_to_arrive(
 			from, dest, Vector3(-50.0, 0.0, 0.0))
 	assert_almost_eq(t, 10.0 / AIActionScoring.MIN_TRAVEL_SPEED_M_S, 0.001)
-
-
-# ─── puck_safety (unified velocity-aware, body-shielded) ────────────────
-
-func _vels(n: int) -> Array[Vector3]:
-	var out: Array[Vector3] = []
-	for _i: int in n:
-		out.append(Vector3.ZERO)
-	return out
-
-
-func test_puck_safety_full_when_no_opponents() -> void:
-	var empty_p: Array[Vector3] = []
-	var empty_v: Array[Vector3] = []
-	assert_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, empty_p, empty_v), 1.0)
-
-
-func test_puck_safety_full_when_stationary_opponent_beyond_safe_radius() -> void:
-	var p: Array[Vector3] = [Vector3(AIActionScoring.CARRY_POKE_SAFE_RADIUS_M + 1.0, 0.0, 0.0)]
-	assert_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, p, _vels(1)), 1.0)
-
-
-func test_puck_safety_floor_when_stationary_opponent_inside_danger() -> void:
-	var p: Array[Vector3] = [Vector3(0.5, 0.0, 0.0)]
-	assert_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, p, _vels(1)),
-			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
-
-
-func test_puck_safety_ramps_between_radii() -> void:
-	# Forward ZERO disables the body shield, so this is pure distance ramp.
-	var mid_r: float = 0.5 * (
-			AIActionScoring.CARRY_POKE_DANGER_RADIUS_M
-			+ AIActionScoring.CARRY_POKE_SAFE_RADIUS_M)
-	var p: Array[Vector3] = [Vector3(mid_r, 0.0, 0.0)]
-	var expected: float = 0.5 * (AIActionScoring.CARRY_POKE_SAFETY_FLOOR + 1.0)
-	assert_almost_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, p, _vels(1)), expected, 0.01)
-
-
-func test_puck_safety_uses_worst_opponent() -> void:
-	var p: Array[Vector3] = [Vector3(10.0, 0.0, 0.0), Vector3(0.5, 0.0, 0.0)]
-	assert_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.5, Vector3.ZERO, p, _vels(2)),
-			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
-
-
-func test_puck_safety_shields_a_behind_defender() -> void:
-	# Same distance in front vs behind; forward = +X. The behind defender must
-	# reach past the body (BODY_SHIELD_M added), so it reads as safer.
-	var d: float = AIActionScoring.CARRY_POKE_DANGER_RADIUS_M + 0.3
-	var in_front: Array[Vector3] = [Vector3(d, 0.0, 0.0)]
-	var behind: Array[Vector3] = [Vector3(-d, 0.0, 0.0)]
-	var fwd := Vector3(1.0, 0.0, 0.0)
-	var s_front: float = AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.5, fwd, in_front, _vels(1))
-	var s_behind: float = AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.5, fwd, behind, _vels(1))
-	assert_gt(s_behind, s_front,
-			"a defender behind the carrier is shielded → safer than one in front")
-
-
-func test_puck_safety_sees_a_closing_defender_before_it_arrives() -> void:
-	# The pincer case: a defender starts BEYOND the safe radius (stationary = no
-	# threat) but closes fast; over the window its stick reaches the puck, so
-	# safety drops below 1. This is the velocity awareness the old snapshot
-	# model lacked.
-	var start_x: float = AIActionScoring.CARRY_POKE_SAFE_RADIUS_M + 3.0
-	var p: Array[Vector3] = [Vector3(start_x, 0.0, 0.0)]
-	var closing: Array[Vector3] = [Vector3(-10.0, 0.0, 0.0)]  # toward the puck
-	var s: float = AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.6, Vector3(1.0, 0.0, 0.0), p, closing)
-	assert_lt(s, 1.0, "a defender closing into poke range within the window is a threat")
-
-
-func test_puck_safety_ignores_a_defender_moving_away() -> void:
-	var start_x: float = AIActionScoring.CARRY_POKE_SAFE_RADIUS_M + 0.5
-	var p: Array[Vector3] = [Vector3(start_x, 0.0, 0.0)]
-	var fleeing: Array[Vector3] = [Vector3(10.0, 0.0, 0.0)]  # away from the puck
-	assert_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3.ZERO, 0.6, Vector3.ZERO, p, fleeing), 1.0)
-
-
-func test_puck_safety_floor_when_defender_crosses_the_carry_path() -> void:
-	# Moving puck ZERO→(0,0,10) over 1 s. Defender crosses onto the puck line at
-	# t = 0.5 (puck and defender both at (0,0,5)) → closest approach ~0 → floor.
-	var p: Array[Vector3] = [Vector3(-3.0, 0.0, 5.0)]
-	var v: Array[Vector3] = [Vector3(6.0, 0.0, 0.0)]  # reaches (0,0,5) at t=0.5
-	assert_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3(0.0, 0.0, 10.0), 1.0, Vector3(0.0, 0.0, 1.0), p, v),
-			AIActionScoring.CARRY_POKE_SAFETY_FLOOR)
-
-
-func test_puck_safety_safe_when_defender_diverges_from_the_carry_path() -> void:
-	var p: Array[Vector3] = [Vector3(-3.0, 0.0, 5.0)]
-	var v: Array[Vector3] = [Vector3(-8.0, 0.0, 0.0)]  # away from the path
-	assert_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3(0.0, 0.0, 10.0), 1.0, Vector3(0.0, 0.0, 1.0), p, v), 1.0)
-
-
-func test_puck_safety_safe_for_parallel_same_speed_chase() -> void:
-	# Defender 4 m to the side, matching the puck's +Z motion. Relative motion
-	# is zero → constant 4 m gap (> safe radius) → safe.
-	var p: Array[Vector3] = [Vector3(4.0, 0.0, 0.0)]
-	var v: Array[Vector3] = [Vector3(0.0, 0.0, 10.0)]
-	assert_eq(AIActionScoring.puck_safety(
-			Vector3.ZERO, Vector3(0.0, 0.0, 10.0), 1.0, Vector3(0.0, 0.0, 1.0), p, v), 1.0)
 
 
 # ─── expected_pass_speed / pass_launch_speed (distance-adaptive) ─────────

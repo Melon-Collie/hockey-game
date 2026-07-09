@@ -35,6 +35,13 @@ const INTENT_SHOOT: int = 1
 const INTENT_PASS: int = 3
 const INTENT_QUICK_SHOT: int = 4
 
+# Least fire value (shot/pass EV) worth giving up possession for — the noise floor
+# below which "firing" is really a giveaway, so the bot keeps the puck instead.
+# A tactical floor, not an evaluation curve: it exists because the geometric shot
+# model has no range cliff (a hopeless long shot leaves a tiny residual rather
+# than exactly 0). A real in-range shot scores far above it.
+const FIRE_MIN_VALUE: float = 0.02
+
 # ── Scoring constants ────────────────────────────────────────────────────────
 # Re-evaluation cadence. CARRY runs every physics tick; without throttling the
 # scoring (10 carry candidates × per-teammate pass × opponent
@@ -114,18 +121,6 @@ var intended_action: int = INTENT_CARRY
 # _pick_action). Feeds the existing carry decay so a wait that never pays off
 # self-extinguishes — the bot takes the available shot — with no fixed timeout.
 var _hold_elapsed_s: float = 0.0
-
-# The expected turnover a completing pass AVOIDS by relieving the carrier's
-# CURRENT pressure — the pass-out-of-pressure value. Grounded, not a tuned
-# weight: it's the same turnover_cost the carry model pays, evaluated at our
-# current spot with our live strip probability (1 - puck_safety). A carry that
-# dances out of a pincer only DEFERS that danger (the pincer follows, and the
-# per-step model can't see the box forming); a completing pass truly resolves
-# it, so we credit the pass with the loss avoided. Naturally self-scaling: ~0 in
-# open ice (no strip prob) and larger deep in our own end (a giveaway there
-# costs more) — every term a perception. Fed to the real-pass EV only;
-# developing-feed HOLDs get 0 (under pressure the answer is release, not wait).
-var _pass_relief_value: float = 0.0
 
 # Set when intent commits to PASS. Consumed by the state machine
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
@@ -282,24 +277,19 @@ func _pick_action(ctx: RoleContext) -> void:
 
 	_build_action_opponents_lists(ctx)
 
-	# Our current possession safety, read from the unified puck_safety model:
-	# how close a defender's stick gets to the puck at our spot over the next
-	# reaction window, given their motion (a closing pincer registers from its
-	# velocity) and the body shield. Reused for the hold's keep-probability
-	# below, and its complement (strip probability) grounds the pass-relief.
+	# Our current possession safety, from the reachable-set evasion model: can we
+	# retain the puck against the defenders' momentum-reach? We read it as our
+	# EVADABILITY — the clearance at the best seam we could handle the puck into —
+	# so pressure we can dance out of (a committed charger) doesn't read as danger,
+	# while a stick actually on the puck does. Feeds the hold's keep-probability.
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
-	var cur_forward: Vector3 = attacking_goal - cur_puck_pos
-	var current_safety: float = AIActionScoring.puck_safety(
-			cur_puck_pos, cur_puck_pos, AIActionScoring.SAFETY_WINDOW_S,
-			cur_forward, _scratch_opponents, _scratch_opponent_vels)
-	# Pass-out-of-pressure value: the expected turnover a completing pass AVOIDS
-	# by relieving this pressure — the SAME turnover_cost the carry model pays,
-	# at our current spot with our live strip probability. Grounded, not a
-	# weight; ~0 when safe, larger deep in our own end. See _pass_relief_value.
+	var evade_seam: Vector3 = AIActionScoring.best_evade_point(
+			cur_puck_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
+			AIActionScoring.EVADE_CARRY_HANDLE_M)
+	var current_safety: float = AIActionScoring.clearance_to_safety(
+			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
+					_scratch_opponents, _scratch_opponent_vels))
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
-	_pass_relief_value = AIActionScoring.turnover_cost(
-			cur_puck_pos, 1.0 - current_safety, ctx.defending_goal_pos,
-			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
 
 	# Teammate ids — used by every score_at evaluation (top + inner).
 	# Reused scratch buffer; receivers only read from it.
@@ -319,8 +309,14 @@ func _pick_action(ctx: RoleContext) -> void:
 	# charge completes, the bot has skated into it.
 	var self_velocity: Vector3 = ctx.self_velocity
 	var horizontal_velocity: Vector3 = Vector3(self_velocity.x, 0.0, self_velocity.z)
-	var wrister_release_pos: Vector3 = (
-			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)
+	# Goalie's CURRENT position (squared to whoever currently holds the puck —
+	# that's us as the carrier). This is where the goalie actually is, used by the
+	# QUICK_SHOT scoring below (a no-charge snap gives him no time to slide) and to
+	# clamp the wrister release, since the goalie is a body the release can't cross.
+	var goalie_now: Vector3 = _goalie_now(ctx)
+	var wrister_release_pos: Vector3 = AIActionScoring.release_ahead_of_goalie(
+			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
+			attacking_goal, goalie_now)
 
 	# Goalie prediction at the wrister release time. Pass-receiver and
 	# carry-candidate cases get their own predictions inside
@@ -331,11 +327,6 @@ func _pick_action(ctx: RoleContext) -> void:
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
 	var wrister_unsettled: float = _goalie_unsettled_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
-	# Goalie's CURRENT position (squared to whoever currently holds the puck —
-	# that's us as the carrier). This is where the goalie actually is, used by the
-	# QUICK_SHOT scoring below: a no-charge snap gives him no time to slide, so the
-	# geometry sees him where he stands right now.
-	var goalie_now: Vector3 = _goalie_now(ctx)
 
 	# Top-level SHOOT.
 	var shoot_score: float = AIActionScoring.score_shoot(
@@ -432,15 +423,15 @@ func _pick_action(ctx: RoleContext) -> void:
 	# future-action value, which means there's a real reason to keep
 	# moving instead of firing now.
 	#
-	# EXCEPT: fire must have POSITIVE value to win. Firing surrenders the
-	# puck (shot up-ice, or a pass); holding/carrying retains it and its
-	# optionality. So a zero-value fire must not beat a zero-value hold —
-	# otherwise a carrier swarmed deep in its own zone (shoot = 0 out of
-	# range, pass = 0 all lanes covered, carry collapsing toward 0) flings
-	# a worthless shot away on the 0-0 tie. The threshold is exactly 0,
-	# not a tunable: "you need SOME expected value to justify giving up
-	# possession." In the offensive zone a real shot scores well above 0
-	# and still wins ties, so no behavior change there.
+	# EXCEPT: fire must clear a NOISE FLOOR to win. Firing surrenders the puck
+	# (shot up-ice, or a pass); holding/carrying retains it and its optionality. So
+	# a near-worthless fire must not beat a collapsing hold — a carrier swarmed deep
+	# in its own zone (pass = 0 all lanes covered, carry collapsing toward 0) must
+	# skate clear, not fling a hopeless shot away. This used to be a hard `> 0`:
+	# score_shoot returned exactly 0 out of range. The geometric shot model has no
+	# range cliff — a 47 m shot leaves a ~0.002 residual — so the gate is now a
+	# small tactical floor (FIRE_MIN_VALUE), the least shot value worth giving up
+	# possession for. A real in-range shot scores well above it and still wins ties.
 	#
 	# ALSO: don't START a fire while staggered. A body check knocks the
 	# bot off-balance (thrust penalty on stagger_timer); winding up a
@@ -454,14 +445,14 @@ func _pick_action(ctx: RoleContext) -> void:
 	# the shot/pass — P(keep the puck) × the feed's value — decayed by how long
 	# we've already held, via the SAME carry delay-discount the rest of the model
 	# uses. No bonus, no threshold, no fixed timeout: it just competes in the max.
-	#   - keep_prob from puck_safety → under pressure the hold is risky and
-	#     loses, so the bot acts; in open ice it's ~1 and the hold can win.
+	#   - keep_prob from the reachable evadability → under pressure we can't dance
+	#     out of, the hold is risky and loses; in open ice it's ~1 and can win.
 	#   - decay(elapsed) → a wait that never materialises self-extinguishes (the
 	#     developing value shrinks until the available shot wins).
 	# When the teammate flags ready, the developing feed drops to 0 here but the
 	# normal pass scoring jumps (one-timer), so PASS wins and feeds it.
 	# keep_prob is our current possession safety, computed once at the top of
-	# _pick_action (same read that grounds the pass-relief).
+	# _pick_action — the hold only holds its value while we can actually keep it.
 	var keep_prob: float = current_safety
 	var hold_value: float = (_best_developing_feed(ctx)
 			* keep_prob * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, _hold_elapsed_s))
@@ -469,7 +460,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	var new_intent: int
 	# Fire only if it beats BOTH carrying and holding for the developing play.
 	if fire_score >= carry_score and fire_score >= hold_value \
-			and fire_score > 0.0 and not staggered:
+			and fire_score > FIRE_MIN_VALUE and not staggered:
 		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
@@ -594,15 +585,17 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 	# Our goalie + defenders feed the turnover-cost term: how much an
 	# interception would help the opponent, dampened by our coverage.
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
-	var carrier_in_oz: bool = -own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
+	var attacking_goal: Vector3 = ctx.attacking_goal_pos
+	# One-way valve: a carrier already in the offensive zone won't pass the puck
+	# back out of it (mirrors the carry-side exclusion in _score_move_candidate).
+	var carrier_in_oz: bool = AIActionScoring.in_offensive_zone(self_pos, attacking_goal)
 	for peer_id: int in teammate_ids:
 		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		if receiver_state.is_ghost:
 			continue
-		if carrier_in_oz:
-			var receiver_in_oz: bool = -own_goal_dir * receiver_state.position.z > GameRules.BLUE_LINE_Z
-			if not receiver_in_oz:
-				continue
+		if carrier_in_oz and not AIActionScoring.in_offensive_zone(
+				receiver_state.position, attacking_goal):
+			continue
 		# Match the speed the state machine will actually fire at: the
 		# distance-adaptive launch speed (capped at this bot's own max
 		# wrister). Threading the actual speed here makes the lead and
@@ -638,8 +631,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var rotation_time: float = _facing_rotation_time(
 				self_facing_xz, self_pos, receiver)
 		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
-				receiver_release_t, flight_t + rotation_time,
-				our_goalie, _pass_relief_value)
+				receiver_release_t, flight_t + rotation_time, our_goalie)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
@@ -697,8 +689,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # league default (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
-		our_goalie: Vector3,
-		relief_value: float = 0.0) -> float:
+		our_goalie: Vector3) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# Hard zeros: net-blocker (segment crosses a net body) and own-DZ
 	# slot crossing (intercepted = goal-against).
@@ -723,14 +714,12 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
+	# Clean per-action EV: prob(complete) × value(teammate has puck at receiver)
+	# minus the turnover cost if it's intercepted or missed. The pressure the
+	# carrier is under is priced by the CARRY/HOLD alternatives' own strip cost
+	# (they lose value under pressure) — the pass wins when it out-EVs them, with
+	# no separate "escape" bonus (that double-counted the pressure).
 	var benefit: float = receiver_value * completion * time_decay
-	# Pass-out-of-pressure relief: a COMPLETING pass off a pressured carrier is
-	# worth the expected turnover it AVOIDS — the escape from a strip the carry
-	# only defers. relief_value is that expected loss (strip prob × turnover
-	# cost at our spot), already in EV currency; gated by completion so an
-	# uncompleteable "escape" earns nothing, and 0 when the caller doesn't pass
-	# it (developing-feed holds). See _pass_relief_value.
-	benefit += relief_value * completion
 	var loss_point: Vector3 = AIActionScoring.lane_loss_point(
 			self_pos, receiver_spot, _scratch_opponents, pass_speed,
 			_scratch_opponent_vels)
@@ -861,6 +850,20 @@ func _best_carry(ctx: RoleContext) -> Array:
 			best_score = exit_left_total
 			best_pos = exit_left
 
+	# Evasion seam — the reachable-set escape (best_evade_point): the spot in our
+	# handling envelope with the most clearance from the defenders' momentum-reach.
+	# Adding it as a carry candidate is what turns the safety model into PLAYMAKING
+	# — the bot cuts into the space a committed defender vacates instead of only
+	# surviving pressure. Scored like any candidate, so it only wins when the space
+	# it opens is actually worth carrying to.
+	var seam: Vector3 = AIActionScoring.best_evade_point(
+			self_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
+			AIActionScoring.EVADE_CARRY_HANDLE_M)
+	var seam_total: float = _score_move_candidate(ctx, seam, our_goalie)
+	if seam_total > best_score:
+		best_score = seam_total
+		best_pos = seam
+
 	# Stand-still last. Only wins on STRICTLY greater than the best
 	# movement candidate — patience must be earned. Score uses
 	# current opponents (time = 0 → no projection). Goalie predicted
@@ -871,8 +874,8 @@ func _best_carry(ctx: RoleContext) -> Array:
 	# didn't price losing the puck, so under a converging forechecker
 	# every escape route went EV-negative while freezing stayed
 	# positive — the bot planted itself at exactly the moment it
-	# should skate clear. Safety is the static puck_safety read (a closing
-	# defender still registers from its velocity over the reaction window).
+	# should skate clear. Safety is the static reachable-clearance read (a closing
+	# defender still registers from its momentum over the reaction window).
 	var stand_goalie: Vector3 = _predict_goalie_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_unsettled: float = _goalie_unsettled_at(
@@ -881,10 +884,10 @@ func _best_carry(ctx: RoleContext) -> Array:
 			_scratch_opponents, stand_goalie,
 			ctx.self_wrister_shot_speed, stand_unsettled)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
-	var stand_safety: float = AIActionScoring.puck_safety(
-			stand_puck_pos, stand_puck_pos, AIActionScoring.SAFETY_WINDOW_S,
-			attacking_goal - stand_puck_pos,
-			_scratch_opponents, _scratch_opponent_vels)
+	var stand_safety: float = AIActionScoring.clearance_to_safety(
+			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
+					AIActionScoring.EVADE_HORIZON_S,
+					_scratch_opponents, _scratch_opponent_vels))
 	var stand_cost: float = AIActionScoring.turnover_cost(
 			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -907,12 +910,11 @@ func _best_carry(ctx: RoleContext) -> Array:
 # self-discount via longer arrival. Returns -INF when the path is
 # fully blocked (candidate unusable, matching the old skip).
 #
-# `safety` is the unified puck_safety over the PUCK's path from our current
-# spot to the candidate spot across the arrival time: one closest-approach
-# that captures both a defender converging on the ROUTE and one waiting at the
-# DESTINATION, velocity-aware and body-shielded. (This replaces the old
-# separate poke-at-destination × intercept-along-route product — same idea,
-# one honest model.)
+# `safety` is the reachable carry_clearance over the PUCK's path from our current
+# spot to the candidate spot across the arrival time: the tightest point where a
+# defender's momentum-reach could get a stick to it, capturing both a defender
+# converging on the ROUTE and one waiting at the DESTINATION. A committed charger
+# whose momentum carries him past reads as clear; a stick on the line does not.
 #
 # Expected-value shape: benefit (offensive upside) minus the turnover cost.
 # keep_prob = safety is the possession-protection probability; (1 - keep_prob)
@@ -924,6 +926,14 @@ func _best_carry(ctx: RoleContext) -> Array:
 func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 		our_goalie: Vector3) -> float:
 	var self_pos: Vector3 = ctx.self_pos
+	# One-way valve: once the puck is in the offensive zone, don't carry it back
+	# out. Establishing the zone is worth keeping — a carry that surrenders it (a
+	# retreat past the blue line) is pruned so it can never win. Stand-still (self,
+	# in-zone) never trips this, so the candidate set is never empty. Mirrors the
+	# receiver-side exclusion in _compute_best_pass.
+	if AIActionScoring.in_offensive_zone(self_pos, ctx.attacking_goal_pos) \
+			and not AIActionScoring.in_offensive_zone(candidate, ctx.attacking_goal_pos):
+		return -INF
 	var local_time: float = AIActionScoring.time_to_arrive(
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed)
 	_project_opponents_to(ctx, local_time, _scratch_opponents_path)
@@ -941,10 +951,9 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
-	var safety: float = AIActionScoring.puck_safety(
-			cur_puck_pos, cand_puck_pos, local_time,
-			ctx.attacking_goal_pos - cand_puck_pos,
-			_scratch_opponents, _scratch_opponent_vels)
+	var safety: float = AIActionScoring.clearance_to_safety(
+			AIActionScoring.carry_clearance(cur_puck_pos, cand_puck_pos, local_time,
+					_scratch_opponents, _scratch_opponent_vels))
 	var benefit: float = dest_score * lane * decay * safety
 	var keep_prob: float = safety
 	var cost: float = AIActionScoring.turnover_cost(
@@ -953,18 +962,23 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	return benefit - cost
 
 
-# Position-value scorer at `pos`, evaluated from `from_pos`.
+# Position-value scorer at `pos`, evaluated from the carrier at `from_pos`.
 #
-#   from inside shot range:  score_shoot(pos) only
-#   from outside shot range: max(score_shoot(pos), position_potential(pos))
+#   carrier in the offensive zone:  score_shoot(pos) only
+#   carrier outside the zone:        max(score_shoot(pos), position_potential(pos))
 #
-# Rationale: once the evaluator is in shooting range it's committed
-# to finding a shot — only real shot value counts, so the bot drives
-# toward the slot rather than bailing out to a "high potential"
-# spot that doesn't actually score goals. Outside the range, the
-# bot is positioning, and potential drives the gradient toward
-# entering shooting range. The cross-boundary case (from outside,
-# to inside) uses max so entry is naturally rewarded.
+# The regime is gated on the CARRIER (from_pos), not on `pos`. This is the whole
+# trick that lets the two value scales coexist without a bridging floor: a carrier
+# already in the zone reads real, goalie-aware shot danger for every (in-zone,
+# valve-guaranteed) candidate — the O-zone is xG's domain, a strictly better read
+# than any positional proxy, and it drives the bot to the slot rather than a
+# "high-potential" spot that doesn't score. A carrier OUTSIDE prices every
+# candidate — including an entry target across the blue line — on the position_
+# potential scale, whose closeness gradient climbs toward the slot, so driving into
+# the zone out-scores staying out. Because of offsides the two never need to be
+# compared: the only in-vs-out choice is the carry into the zone, made entirely in
+# potential currency. The max with score_shoot lets a genuinely open entry look
+# (a breakaway) still register its shot value on the way in.
 #
 # The potential branch pays the realization discount (see
 # AIActionScoring.potential_realization_discount): potential is future
@@ -992,8 +1006,7 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 			pos, attacking_goal, predicted_goalie_pos,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
 			goalie_unsettled_factor)
-	var from_dist: float = from_pos.distance_to(attacking_goal)
-	if from_dist <= AIActionScoring.SHOT_RANGE_FALLOFF_M:
+	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
