@@ -1,6 +1,16 @@
 class_name HUD
 extends CanvasLayer
 
+# Playtest aid: toast the local player's released shot speed as
+# "SHOT · 74 MPH · 89%". The % is of the shot family's own attribute-scaled
+# ceiling (wrister/quick → max_wrister_power, slapper → max_slapper_power),
+# so it reads as "where in my band did that release land" — the feedback loop
+# for learning to hit in-between wrister speeds on the sweep model. Backhands
+# can't reach 100% by design (the penalty is real power loss). Flip off here
+# once the wrister/goalie tuning settles.
+@export var debug_shot_speed_toast: bool = true
+var _shot_toast_controller: SkaterController = null
+
 var _period_label: Label
 var _clock_label: Label
 var _home_score_label: Label
@@ -874,7 +884,43 @@ var _hud_scale_viewport: Vector2i = Vector2i.ZERO
 func _process(_delta: float) -> void:
 	_update_hud_scale()
 	_update_stamina_bar()
+	_update_shot_speed_toast_hook()
 	_update_ghost_banner()
+
+
+# Keeps puck_release_requested from the CURRENT local controller connected.
+# Polled per frame (same lifecycle dodge as the stamina bar) because the local
+# controller changes across respawns, session changes, and spectator swaps —
+# the comparison is a no-op except on the frame it actually changes.
+func _update_shot_speed_toast_hook() -> void:
+	if not debug_shot_speed_toast:
+		return
+	var record: PlayerRecord = GameManager.get_local_player()
+	var controller: SkaterController = record.controller if record != null else null
+	if controller == _shot_toast_controller:
+		return
+	if _shot_toast_controller != null and is_instance_valid(_shot_toast_controller):
+		_shot_toast_controller.puck_release_requested.disconnect(_on_local_shot_released)
+		_shot_toast_controller.one_timer_release_requested.disconnect(_on_local_one_timer_released)
+	_shot_toast_controller = controller
+	if controller != null:
+		controller.puck_release_requested.connect(_on_local_shot_released)
+		controller.one_timer_release_requested.connect(_on_local_one_timer_released)
+
+
+# The leniency one-timer releases through its own signal; it's a slapper.
+func _on_local_one_timer_released(direction: Vector3, power: float) -> void:
+	_on_local_shot_released(direction, power, true)
+
+
+func _on_local_shot_released(_direction: Vector3, power: float, is_slapper: bool) -> void:
+	if _toast_stack == null or _shot_toast_controller == null:
+		return
+	var family_max: float = _shot_toast_controller.max_slapper_power if is_slapper \
+			else _shot_toast_controller.max_wrister_power
+	var mph: float = power * 2.23694
+	var pct: float = 100.0 * power / maxf(family_max, 0.001)
+	_toast_stack.push("SHOT · %.0f MPH · %.0f%%" % [mph, pct], _WHITE)
 
 
 # Applies PlayerPrefs.hud_scale by sizing _scale_root to a virtual viewport of
