@@ -127,6 +127,12 @@ var _hold_elapsed_s: float = 0.0
 # developing-feed HOLDs get 0 (under pressure the answer is release, not wait).
 var _pass_relief_value: float = 0.0
 
+# Our current possession safety (puck_safety at our spot). Paired with
+# _pass_relief_value: the relief only pays out to the extent a pass moves the
+# puck to a SAFER receiver, so a clean-lane backpass to an equally-pressured
+# teammate earns none of it. Set alongside _pass_relief_value in _pick_action.
+var _current_safety: float = 1.0
+
 # Set when intent commits to PASS. Consumed by the state machine
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
 var pass_target_peer_id: int = -1
@@ -297,6 +303,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# at our current spot with our live strip probability. Grounded, not a
 	# weight; ~0 when safe, larger deep in our own end. See _pass_relief_value.
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
+	_current_safety = current_safety
 	_pass_relief_value = AIActionScoring.turnover_cost(
 			cur_puck_pos, 1.0 - current_safety, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -725,12 +732,23 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
 	var benefit: float = receiver_value * completion * time_decay
 	# Pass-out-of-pressure relief: a COMPLETING pass off a pressured carrier is
-	# worth the expected turnover it AVOIDS — the escape from a strip the carry
-	# only defers. relief_value is that expected loss (strip prob × turnover
-	# cost at our spot), already in EV currency; gated by completion so an
-	# uncompleteable "escape" earns nothing, and 0 when the caller doesn't pass
-	# it (developing-feed holds). See _pass_relief_value.
-	benefit += relief_value * completion
+	# worth the expected turnover it AVOIDS — but only to the extent it moves the
+	# puck somewhere SAFER. A pass that lands on an equally- (or more-) pressured
+	# teammate hasn't escaped anything; it just relocated the strip. So scale the
+	# relief by the receiver's safety GAIN over our current spot — a clean-lane
+	# backpass to a covered/deep teammate (receiver no safer) earns ~none of it,
+	# an outlet to open ice earns it in full. Uses the same puck_safety read at
+	# the receiver's arrival (opponents projected to flight_t). relief_value is the
+	# expected loss at our spot (strip prob × turnover cost), gated by completion
+	# so an uncompleteable escape earns nothing; 0 when the caller doesn't pass it.
+	var recv_forward: Vector3 = ctx.attacking_goal_pos - receiver_spot
+	var receiver_safety: float = AIActionScoring.puck_safety(
+			receiver_spot, receiver_spot, AIActionScoring.SAFETY_WINDOW_S,
+			recv_forward, _scratch_opponents_pass, _scratch_opponent_vels)
+	var safety_gain: float = clampf(
+			(receiver_safety - _current_safety) / maxf(1.0 - _current_safety, 0.05),
+			0.0, 1.0)
+	benefit += relief_value * completion * safety_gain
 	var loss_point: Vector3 = AIActionScoring.lane_loss_point(
 			self_pos, receiver_spot, _scratch_opponents, pass_speed,
 			_scratch_opponent_vels)

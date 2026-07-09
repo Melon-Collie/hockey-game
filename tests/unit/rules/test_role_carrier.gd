@@ -114,6 +114,27 @@ func test_board_pincer_passes_to_lateral_outlet_instead_of_over_carrying() -> vo
 	assert_eq(c.debug_pass_peer_id, 2, "the escape pass targets the open middle outlet")
 
 
+func test_light_pressure_does_not_force_a_backpass_to_a_covered_teammate() -> void:
+	# Carrier LIGHTLY pressured (one defender a few metres off, closing slowly)
+	# with space ahead. The only pass option is a deeper teammate who is himself
+	# covered — the pass wouldn't move the puck anywhere safer, so the pressure-
+	# relief must NOT pay out (its safety_gain is ~0). Without the gain gate the
+	# clean-lane backpass collected full relief and won; now the carrier keeps the
+	# puck and skates. This is the "don't panic-backpass under light pressure" read.
+	var self_pos := Vector3(2, 0, 12)                    # NZ, our side, space ahead (toward -Z)
+	var covered := Vector3(0, 0, 19)                     # deeper teammate, in our end
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                          # us, carrying
+			[2, TEAM_ID, covered],                           # deeper outlet — but covered
+			[3, 1, Vector3(2, 0, 8), false, Vector3(0, 0, 2)],   # light pressure, slow close
+			[4, 1, Vector3(0.6, 0, 19.5)],                       # defender sitting on the outlet
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"light pressure + a covered backpass is not an escape — keep the puck")
+
+
 # ─── breakout: the risky ground-losing backpass loses to keeping the puck ────
 
 func test_risky_backpass_deep_in_own_zone_loses_to_keeping_the_puck() -> void:
