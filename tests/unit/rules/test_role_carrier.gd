@@ -294,6 +294,42 @@ func test_carrier_entering_ozone_drives_the_slot_over_a_long_shot() -> void:
 			"…and the drive heads toward the net")
 
 
+# ─── O-zone shot selection: get the shot off before running the goalie over ──
+
+func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
+	# 1-on-1 drive at the net: as a bot carries straight in on a challenging goalie,
+	# there must be a distance at which it commits to the shot — and it must be clear
+	# of the goalie, out in the slot, not point-blank in the crease where it would
+	# just run the goalie over and get dispossessed. xG peaks around the slot and
+	# falls as the goalie's shadow eats the angle point-blank, so carrying closer
+	# stops paying and the bot fires. Sweep the drive inward and require a shot
+	# commit somewhere in real scoring range (every sample below is clear of the
+	# goalie, which challenges 2 m off the line).
+	var goalie_out: float = 2.0                          # goalie challenges 2 m off the line
+	var goalie_z: float = -GameRules.GOAL_LINE_Z + goalie_out
+	var shot_distance: float = -1.0
+	for dist: float in [10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0]:
+		var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + dist)
+		var ctx := _make_ctx(self_pos)
+		ctx.self_velocity = Vector3(0.0, 0.0, -6.0)      # driving hard at the net
+		var g := GoalieNetworkState.new()
+		g.position_x = 0.0
+		g.position_z = goalie_z
+		ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+		var c := AIRoleCarrier.new()
+		c.decide(ctx)
+		if c.intended_action == AIRoleCarrier.INTENT_SHOOT \
+				or c.intended_action == AIRoleCarrier.INTENT_QUICK_SHOT:
+			shot_distance = dist
+			break
+	# The first (farthest) commit is the release distance on the drive. It must be
+	# clear of the goalie — out in the slot, not carrying point-blank into the crease
+	# where the bot would collide with the goalie and get dispossessed.
+	assert_gt(shot_distance, goalie_out + 1.0,
+			"a bot driving the net 1-on-1 gets its shot off clear of the goalie, "
+			+ "not by carrying into it")
+
+
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────
 
 func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:
