@@ -1240,9 +1240,13 @@ func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
 # skaters render the identical flex with zero network additions.
 func _update_stick_flex(delta: float) -> void:
 	var state: int = current_shot_state
-	# Sign verified in play: the shaft bows AWAY from the loaded blade face —
-	# the paper-derived convention read inverted, hence the leading negation.
-	var side: float = -(1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
+	# The shaft bows TOWARD the loaded blade face — the side the puck is on,
+	# in the direction it's being pushed (three-point bend: puck pins the
+	# blade back, top hand pulls back, bottom hand drives the middle forward,
+	# so the belly of the C points at the target and the blade trails). An
+	# earlier tuning pass negated this after a mis-read of the in-game bow;
+	# playtest confirmed the negation had it backward.
+	var side: float = (1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
 			* (-1.0 if is_left_handed else 1.0)
 	if state != _flex_prev_state:
 		if state == SkaterStateMachine.State.FOLLOW_THROUGH:
