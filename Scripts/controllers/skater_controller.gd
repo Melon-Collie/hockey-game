@@ -2138,10 +2138,20 @@ func is_ai_controlled() -> bool:
 func _use_mouse_speed() -> bool:
 	return wrister_pure_mouse_speed and not is_ai_controlled()
 
+# True only for the local human's own controller (LocalController overrides).
+# Used to gate reading LOCAL player prefs — a host-side RemoteController or a
+# bot must not read the host machine's prefs for another player's shot.
+func uses_local_input_prefs() -> bool:
+	return false
+
 # The speed signal fed to the wrister power model: the raw cursor speed under the
-# pure-mouse experiment, else the blade's on-axis average sweep speed.
+# pure-mouse experiment (scaled by the player's Shot Power Sensitivity so it's
+# calibrated to their mouse DPI), else the blade's on-axis average sweep speed.
 func _wrister_sweep_speed() -> float:
-	return _aiming.cursor_speed_ema if _use_mouse_speed() else _aiming.avg_sweep_speed()
+	if not _use_mouse_speed():
+		return _aiming.avg_sweep_speed()
+	var sens: float = PlayerPrefs.shot_power_sensitivity if uses_local_input_prefs() else 1.0
+	return _aiming.cursor_speed_ema * sens
 
 func _slapper_config() -> ShotMechanics.SlapperConfig:
 	var cfg := ShotMechanics.SlapperConfig.new()

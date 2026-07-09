@@ -1,6 +1,11 @@
 class_name LocalController
 extends SkaterController
 
+# This is the player's own controller on their own machine — the one path that
+# should read local input prefs (e.g. Shot Power Sensitivity) for shot feel.
+func uses_local_input_prefs() -> bool:
+	return true
+
 const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 
 # Carries the victim knockback impulse (its length is the hit magnitude, its

@@ -240,6 +240,12 @@ var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
 var mouse_sensitivity: float = 1.0
+# Shot Power Sensitivity: scales the raw cursor speed the wrister power model
+# reads (SkaterController._wrister_sweep_speed), so a player calibrates how hard
+# they must flick for a full-power shot to their own mouse DPI/sensitivity.
+# Higher = shots reach full power with a gentler flick. Local-only (applied by
+# LocalController); does not affect bots or the aim direction.
+var shot_power_sensitivity: float = 1.0
 # First-run onboarding: false until the player opens the player-settings popup
 # for the first time. Drives the one-time "edit your player here" callout on
 # the SideMenu player card.
@@ -424,6 +430,7 @@ func save() -> void:
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "mouse_sensitivity", mouse_sensitivity)
+	cfg.set_value("input", "shot_power_sensitivity", shot_power_sensitivity)
 	cfg.set_value("input", "confine_mouse", confine_mouse)
 	cfg.set_value("input", "cursor_style", cursor_style)
 	cfg.set_value("input", "cursor_color", cursor_color)
@@ -978,6 +985,7 @@ func _load() -> void:
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		mouse_sensitivity = clampf(cfg.get_value("input", "mouse_sensitivity", 1.0), 0.5, 3.0)
+		shot_power_sensitivity = clampf(cfg.get_value("input", "shot_power_sensitivity", 1.0), 0.25, 4.0)
 		confine_mouse = cfg.get_value("input", "confine_mouse", true)
 		cursor_style = clampi(int(cfg.get_value("input", "cursor_style", CURSOR_STYLE_DOT)), 0, CURSOR_STYLE_LABELS.size() - 1)
 		var raw_cursor_color: Variant = cfg.get_value("input", "cursor_color", cursor_color)
