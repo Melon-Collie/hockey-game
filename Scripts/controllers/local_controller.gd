@@ -460,6 +460,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_charge_distance: float = _aiming.charge_distance
 	var pre_charge_sweep_time: float = _aiming.sweep_time
 	var pre_charge_swing_rotation: float = _aiming.swing_rotation
+	var pre_charge_cursor_speed: float = _aiming.cursor_speed_ema
 	var pre_charge_prev_intent_pos: Vector3 = _aiming.prev_intent_pos
 	var pre_charge_prev_blade_pos: Vector3 = _aiming.prev_blade_pos_rel_skater
 	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
@@ -528,6 +529,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.charge_distance = pre_charge_distance
 	_aiming.sweep_time = pre_charge_sweep_time
 	_aiming.swing_rotation = pre_charge_swing_rotation
+	_aiming.cursor_speed_ema = pre_charge_cursor_speed
 	_aiming.prev_intent_pos = pre_charge_prev_intent_pos
 	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
 	_aiming.prev_blade_dir = pre_charge_prev_blade_dir

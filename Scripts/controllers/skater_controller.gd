@@ -422,6 +422,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var wrister_max_counted_sweep_speed: float = GameRules.DEFAULT_WRISTER_MAX_COUNTED_SWEEP_SPEED_M_S
 @export var wrister_snap_power_fraction: float = GameRules.DEFAULT_WRISTER_SNAP_POWER_FRACTION
 @export var wrister_power_curve: float = GameRules.DEFAULT_WRISTER_POWER_CURVE
+# ── EXPERIMENT: pure mouse-speed wrister ──
+# When true, power ignores drag distance and the blade entirely: it's a curve
+# over the raw SCREEN-space cursor speed (px/s) — flick fast = hard, sweep slow
+# = soft. Direction is still the drag vector. Flip false to restore the
+# sweep-speed × distance model above.
+# wrister_mouse_speed_full is the cursor speed (px/s) that reads as full power —
+# PER-SETUP: it scales with mouse sensitivity / DPI / resolution, so it needs
+# calibrating against the shot-speed toast on the actual machine.
+@export var wrister_pure_mouse_speed: bool = true
+@export var wrister_mouse_speed_full: float = 2500.0
+@export var wrister_mouse_speed_smoothing: float = 14.0
 # Blade-speed budget ALONG the shot axis during a wrister aim (m/s of blade
 # travel, applied relative to the skater like max_blade_speed). High and FLAT
 # (not Hands-scaled) so the wind-back-and-snap of a wrister tracks responsively
@@ -1791,19 +1802,19 @@ func _release_wrister(input: InputState) -> void:
 				_wrister_config(),
 				_get_charge_direction(),
 				false,
-				_aiming.avg_sweep_speed())
+				_wrister_sweep_speed())
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
 	_sm.follow_through_is_slapper = false
-	# Finish size follows the released POWER (the sweep-speed × distance model,
-	# pre-backhand — the body swing is the same, the blade contact is what's
-	# weaker): a soft touch pass flicks, a ripped full sweep finishes high.
-	# Computed from the aiming state (not `result`) so a whiff still animates.
+	# Finish size follows the released POWER (pre-backhand — the body swing is the
+	# same, the blade contact is what's weaker): a soft touch pass flicks, a
+	# ripped full sweep finishes high. Computed from the aiming state (not
+	# `result`) so a whiff still animates.
 	var release_charge_t: float = clampf(
 			_aiming.charge_distance / max_wrister_charge_distance, 0.0, 1.0)
 	var release_power_t: float = ShotMechanics.wrister_power_t(
-			_aiming.avg_sweep_speed(), release_charge_t, _wrister_config())
+			_wrister_sweep_speed(), release_charge_t, _wrister_config())
 	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0, release_power_t)
 	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
@@ -1895,7 +1906,8 @@ func _update_wrister_charge(input: InputState) -> void:
 	_aiming.tick_wrister_charge(
 			intent_pos, blade_pos_rel_skater,
 			max_charge_direction_variance,
-			input.delta, wrister_max_counted_sweep_speed)
+			input.delta, wrister_max_counted_sweep_speed,
+			wrister_mouse_speed_smoothing)
 	# Publish where this charge would go if released NOW, so the host-side goalie
 	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
 	# release math in _release_wrister (same inputs), and re-solves every tick — so
@@ -1908,7 +1920,7 @@ func _update_wrister_charge(input: InputState) -> void:
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level, _aiming.charge_distance,
 			_wrister_config(), _get_charge_direction(), false,
-			_aiming.avg_sweep_speed())
+			_wrister_sweep_speed())
 	skater.predicted_shot_velocity = pred.direction * pred.power
 	# The charge ring shows the release-now SPEED, not the raw drag distance:
 	# normalized predicted power over the min→max band. Under the sweep-speed
@@ -2102,10 +2114,34 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 		_cached_wrister_cfg.quick_shot_power = quick_shot_power
 		_cached_wrister_cfg.loft_vy_low = loft_vertical_speed_low
 		_cached_wrister_cfg.loft_vy_high = loft_vertical_speed_high
-		_cached_wrister_cfg.full_sweep_speed = wrister_full_sweep_speed
-		_cached_wrister_cfg.snap_power_fraction = wrister_snap_power_fraction
 		_cached_wrister_cfg.power_curve = wrister_power_curve
+		if _use_mouse_speed():
+			# EXPERIMENT: power is a pure curve over the cursor speed (fed as
+			# sweep_speed by _wrister_sweep_speed) — no distance. snap_fraction
+			# 1.0 flattens the distance/flex term so dist_t drops out, and the
+			# full-speed reference is the cursor-speed one.
+			_cached_wrister_cfg.full_sweep_speed = wrister_mouse_speed_full
+			_cached_wrister_cfg.snap_power_fraction = 1.0
+		else:
+			_cached_wrister_cfg.full_sweep_speed = wrister_full_sweep_speed
+			_cached_wrister_cfg.snap_power_fraction = wrister_snap_power_fraction
 	return _cached_wrister_cfg
+
+# True for bot controllers (AIController overrides). Bots synthesize a crude
+# screen cursor, so the pure-mouse-speed experiment must not apply to them —
+# they stay on the blade-speed × distance model (which their gesture + the
+# carry scorer are calibrated to).
+func is_ai_controlled() -> bool:
+	return false
+
+# Whether the pure-mouse-speed wrister experiment is active for THIS controller.
+func _use_mouse_speed() -> bool:
+	return wrister_pure_mouse_speed and not is_ai_controlled()
+
+# The speed signal fed to the wrister power model: the raw cursor speed under the
+# pure-mouse experiment, else the blade's on-axis average sweep speed.
+func _wrister_sweep_speed() -> float:
+	return _aiming.cursor_speed_ema if _use_mouse_speed() else _aiming.avg_sweep_speed()
 
 func _slapper_config() -> ShotMechanics.SlapperConfig:
 	var cfg := ShotMechanics.SlapperConfig.new()

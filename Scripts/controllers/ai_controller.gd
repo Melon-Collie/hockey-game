@@ -3,6 +3,11 @@ extends SkaterController
 
 const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 
+# Bots synthesize inputs (no real mouse) — keep them on the blade-speed × distance
+# wrister model regardless of the pure-mouse-speed experiment flag.
+func is_ai_controlled() -> bool:
+	return true
+
 # Host-only controller for AI bots. Owns one SkaterAgent and forwards its
 # per-tick InputState to SkaterController._process_input. Clients see the
 # bot through the existing SkaterNetworkState broadcast (no input

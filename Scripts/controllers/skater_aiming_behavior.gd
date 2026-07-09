@@ -35,6 +35,12 @@ var prev_intent_pos: Vector3 = Vector3.ZERO
 # contributes nothing.
 var prev_blade_pos_rel_skater: Vector3 = Vector3.ZERO
 var prev_blade_dir: Vector3 = Vector3.ZERO
+# EMA of the raw SCREEN-space cursor speed (px/s) — the pure-mouse-speed power
+# signal (experiment). Unlike avg_sweep_speed (the ROM-clamped, speed-capped
+# blade) this is the unfiltered hand motion: flick fast = hard, sweep slow =
+# soft, with nothing else in the way. Saved/restored across reconcile like the
+# rest of the charge state.
+var cursor_speed_ema: float = 0.0
 
 # ── Slapper charge state ──────────────────────────────────────────────────────
 var slapper_charge_timer: float = 0.0
@@ -46,6 +52,7 @@ func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Ve
 	charge_distance = 0.0
 	sweep_time = 0.0
 	swing_rotation = 0.0
+	cursor_speed_ema = 0.0
 	prev_blade_dir = Vector3.ZERO
 	prev_intent_pos = initial_intent_pos
 	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
@@ -56,7 +63,16 @@ func tick_wrister_charge(
 		blade_pos_rel_skater: Vector3,
 		max_charge_direction_variance: float,
 		delta: float,
-		max_counted_sweep_speed: float) -> void:
+		max_counted_sweep_speed: float,
+		cursor_speed_smoothing: float) -> void:
+	# Raw screen-space cursor speed (px/s), EMA-smoothed — computed against the
+	# OLD prev_intent_pos before ChargeTracking's result overwrites it below.
+	if delta > 0.0:
+		var screen_delta := intent_pos - prev_intent_pos
+		screen_delta.y = 0.0
+		var inst_speed: float = screen_delta.length() / delta
+		var a: float = clampf(cursor_speed_smoothing * delta, 0.0, 1.0)
+		cursor_speed_ema = lerpf(cursor_speed_ema, inst_speed, a)
 	var result: Dictionary = ChargeTracking.accumulate(
 			prev_intent_pos, intent_pos,
 			prev_blade_pos_rel_skater, blade_pos_rel_skater,
