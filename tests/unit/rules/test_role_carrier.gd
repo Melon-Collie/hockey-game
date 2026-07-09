@@ -270,6 +270,30 @@ func test_carrier_in_ozone_never_passes_out_to_a_neutral_zone_teammate() -> void
 			"an in-zone teammate on the same kind of lane IS a legal pass target")
 
 
+# ─── O-zone shot selection: don't fire the long shot on entry ────────────────
+
+func test_carrier_entering_ozone_drives_the_slot_over_a_long_shot() -> void:
+	# Carrier just inside the blue line, wide open, with a defending goalie set at a
+	# realistic challenge depth. The long shot from the top of the zone is
+	# low-danger (foreshortened net, long flight the goalie has time to react to),
+	# while driving to the slot is a real look. In the O-zone the bot prices
+	# positions by pure xG — there is NO establishment floor inflating a weak shot —
+	# so it must CARRY toward the net, not fire from range the moment it crosses the
+	# line. This is the guard on "don't shoot as soon as you enter the zone."
+	var self_pos := Vector3(0, 0, -9)              # ~2 m inside the blue line
+	var ctx := _make_ctx(self_pos)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = -24.65                          # challenging ~2 m off the goal line
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"a long shot from the top of the zone loses to driving the slot")
+	assert_lt(c.last_carry_anchor.z, self_pos.z,
+			"…and the drive heads toward the net")
+
+
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────
 
 func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:

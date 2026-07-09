@@ -54,34 +54,26 @@ const PRESSURE_RADIUS_M: float = 4.0
 # lower toward 1 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 2
 
-# Value-map regime boundary: the attacking BLUE LINE. `_score_at` prices a
-# position by real shot danger (score_shoot) once the puck is in the offensive
-# zone, and by position_potential (the progression value map) everywhere outside
-# it. The two never mix — the O-zone is xG's domain (goalie-aware, better than any
-# positional proxy there), the rest of the ice is the progression gradient's. The
-# hole geometry (open_net_danger) already fades danger to ~0 with range on its own
-# (a far shot foreshortens the net and the goalie has flight time to the corners),
-# so no distance curve is needed; the blue line just says WHICH map governs.
-#
-# OZONE_ESTABLISH_VALUE — a TACTICAL floor (hand-set, not a perception model): the
-# value of having the puck ESTABLISHED in the offensive zone, on TOP of the shot
-# danger from there. Out here in the O-zone there is no more geometry to ground it
-# — it prices zone CONTROL, not a specific shot — so it is a chosen potential (à la
-# staging offsets), applied in the OFFENSIVE path only. It makes crossing the blue
-# line a value GAIN rather than a cliff (in-zone value = establish + xG, which
-# clears the outside progression value), so a carrier drives in instead of freezing
-# at the line, and — with the one-way-valve exclusions — won't carry or pass back
-# out. Added symmetrically to the shot scores in _pick_action so it cancels in the
-# shoot-vs-carry compete (it prices being in the zone, not the shot), leaving xG to
-# decide WHERE to go once inside.
-const OZONE_ESTABLISH_VALUE: float = 0.50
+# Value-map regime boundary: the attacking BLUE LINE. `_score_at` prices positions
+# by real shot danger (score_shoot) once the CARRIER is in the offensive zone, and
+# by position_potential (the progression value map) while the carrier is outside
+# it. The two scales never have to be compared: because of offsides a bot in the
+# O-zone never evaluates an out-of-zone spot (the valve prunes them), and a carrier
+# outside prices EVERY candidate — including the entry target — on the position_
+# potential scale. So the O-zone is pure xG's domain (goalie-aware, better than any
+# positional proxy there), and it needs no establishment floor: entry is driven by
+# position_potential, which already climbs from the blue line toward the slot, so an
+# in-zone target out-scores staying outside on that one shared scale. The only
+# in-vs-out decision is the choice to CARRY into the zone (there is no dump-and-
+# chase), and it is made entirely in position_potential currency.
 
 # Position-potential closeness ramp. position_potential is only used
-# by `_score_at` when the position is OUTSIDE the offensive zone —
-# inside the zone the bot prices real shot danger (score_shoot) alone.
+# by `_score_at` while the CARRIER is OUTSIDE the offensive zone —
+# once in the zone the bot prices real shot danger (score_shoot) alone.
 # So closeness only needs to give a sensible "anywhere on the
 # rink toward the slot is better than further away" gradient for
-# positioning bots.
+# positioning bots — and, since it climbs monotonically toward the slot,
+# it is also what pulls a carrier across the blue line into the zone.
 #
 # Closeness ramps linearly: 1.0 at the slot (peak), 0.0 at the
 # goal-to-goal distance (rink length, derived from
