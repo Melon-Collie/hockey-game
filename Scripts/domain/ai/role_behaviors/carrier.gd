@@ -327,11 +327,21 @@ func _pick_action(ctx: RoleContext) -> void:
 	# geometry sees him where he stands right now.
 	var goalie_now: Vector3 = _goalie_now(ctx)
 
+	# Offensive-zone establishment value (see OZONE_ESTABLISH_VALUE). Baked into
+	# every in-zone action's score — carry/pass receive it inside _score_at, and the
+	# shot scores below get it here — so it CANCELS in the shoot-vs-carry-vs-pass
+	# compete (all of them keep the puck in the zone), leaving xG to decide. It only
+	# stands in the in-zone-vs-out-of-zone compete, which is what rewards entry and
+	# holding the zone. Zero outside the zone, so deep-own-end shot gating is
+	# unchanged (a hopeless full-court shot stays below FIRE_MIN_VALUE).
+	var establish: float = (AIActionScoring.OZONE_ESTABLISH_VALUE
+			if AIActionScoring.in_offensive_zone(self_pos, attacking_goal) else 0.0)
+
 	# Top-level SHOOT.
 	var shoot_score: float = AIActionScoring.score_shoot(
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
-			ctx.self_wrister_shot_speed, wrister_unsettled)
+			ctx.self_wrister_shot_speed, wrister_unsettled) + establish
 
 	# Top-level QUICK_SHOT — snap release at PASS_SPEED, no charge. The
 	# goalie can't slide during a zero-charge release, so a still-squared
@@ -342,7 +352,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# (no charge motion). Opponents at current positions (no projection).
 	var quick_shoot_score: float = AIActionScoring.score_quick_shot(
 			self_pos, attacking_goal, goalie_now,
-			GameRules.NET_HALF_WIDTH, _scratch_opponents)
+			GameRules.NET_HALF_WIDTH, _scratch_opponents) + establish
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -584,15 +594,17 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 	# Our goalie + defenders feed the turnover-cost term: how much an
 	# interception would help the opponent, dampened by our coverage.
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
-	var carrier_in_oz: bool = -own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
+	var attacking_goal: Vector3 = ctx.attacking_goal_pos
+	# One-way valve: a carrier already in the offensive zone won't pass the puck
+	# back out of it (mirrors the carry-side exclusion in _score_move_candidate).
+	var carrier_in_oz: bool = AIActionScoring.in_offensive_zone(self_pos, attacking_goal)
 	for peer_id: int in teammate_ids:
 		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		if receiver_state.is_ghost:
 			continue
-		if carrier_in_oz:
-			var receiver_in_oz: bool = -own_goal_dir * receiver_state.position.z > GameRules.BLUE_LINE_Z
-			if not receiver_in_oz:
-				continue
+		if carrier_in_oz and not AIActionScoring.in_offensive_zone(
+				receiver_state.position, attacking_goal):
+			continue
 		# Match the speed the state machine will actually fire at: the
 		# distance-adaptive launch speed (capped at this bot's own max
 		# wrister). Threading the actual speed here makes the lead and
@@ -705,7 +717,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			ctx, receiver_release_t, receiver_spot)
 	var receiver_unsettled: float = _goalie_unsettled_at(
 			ctx, receiver_release_t, receiver_spot)
-	var receiver_value: float = _score_at(ctx, receiver_spot, self_pos,
+	var receiver_value: float = _score_at(ctx, receiver_spot,
 			_scratch_opponents_pass, receiver_goalie,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, receiver_unsettled)
 	var time_decay: float = pow(
@@ -877,7 +889,7 @@ func _best_carry(ctx: RoleContext) -> Array:
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_unsettled: float = _goalie_unsettled_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
-	var stand_score: float = _score_at(ctx, self_pos, self_pos,
+	var stand_score: float = _score_at(ctx, self_pos,
 			_scratch_opponents, stand_goalie,
 			ctx.self_wrister_shot_speed, stand_unsettled)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
@@ -923,6 +935,14 @@ func _best_carry(ctx: RoleContext) -> Array:
 func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 		our_goalie: Vector3) -> float:
 	var self_pos: Vector3 = ctx.self_pos
+	# One-way valve: once the puck is in the offensive zone, don't carry it back
+	# out. Establishing the zone is worth keeping — a carry that surrenders it (a
+	# retreat past the blue line) is pruned so it can never win. Stand-still (self,
+	# in-zone) never trips this, so the candidate set is never empty. Mirrors the
+	# receiver-side exclusion in _compute_best_pass.
+	if AIActionScoring.in_offensive_zone(self_pos, ctx.attacking_goal_pos) \
+			and not AIActionScoring.in_offensive_zone(candidate, ctx.attacking_goal_pos):
+		return -INF
 	var local_time: float = AIActionScoring.time_to_arrive(
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed)
 	_project_opponents_to(ctx, local_time, _scratch_opponents_path)
@@ -934,7 +954,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var cand_release_t: float = local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 	var cand_goalie: Vector3 = _predict_goalie_at(ctx, cand_release_t, candidate)
 	var cand_unsettled: float = _goalie_unsettled_at(ctx, cand_release_t, candidate)
-	var dest_score: float = _score_at(ctx, candidate, self_pos,
+	var dest_score: float = _score_at(ctx, candidate,
 			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, cand_unsettled)
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
@@ -951,18 +971,19 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	return benefit - cost
 
 
-# Position-value scorer at `pos`, evaluated from `from_pos`.
+# Position-value scorer at `pos` — the value of the puck being there.
 #
-#   from inside shot range:  score_shoot(pos) only
-#   from outside shot range: max(score_shoot(pos), position_potential(pos))
+#   pos in the offensive zone:  OZONE_ESTABLISH_VALUE + score_shoot(pos)
+#   pos outside the offensive zone: max(score_shoot(pos), position_potential(pos))
 #
-# Rationale: once the evaluator is in shooting range it's committed
-# to finding a shot — only real shot value counts, so the bot drives
-# toward the slot rather than bailing out to a "high potential"
-# spot that doesn't actually score goals. Outside the range, the
-# bot is positioning, and potential drives the gradient toward
-# entering shooting range. The cross-boundary case (from outside,
-# to inside) uses max so entry is naturally rewarded.
+# Rationale: the O-zone is xG's domain — real, goalie-aware shot danger is a
+# strictly better read there than any positional proxy, and pricing an in-zone
+# spot by its shot value drives the bot toward the slot rather than bailing to a
+# "high potential" spot that doesn't score. Outside the zone the bot is
+# positioning: position_potential is the progression value map (possession floor +
+# up-ice gradient), and the max with score_shoot rewards the cross-boundary case —
+# a candidate that crosses into the zone is priced by its shot value, so entry is
+# naturally rewarded.
 #
 # The potential branch pays the realization discount (see
 # AIActionScoring.potential_realization_discount): potential is future
@@ -980,7 +1001,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 # evaluate THIS bot's future shot, so they pass its attribute-scaled speed; the
 # receiver eval (score from a teammate's spot) keeps the default since we don't
 # carry teammates' attributes — same cross-player boundary as elsewhere.
-func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
+func _score_at(ctx: RoleContext, pos: Vector3,
 		opps: Array[Vector3],
 		predicted_goalie_pos: Vector3,
 		shot_speed_m_s: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S,
@@ -990,9 +1011,15 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 			pos, attacking_goal, predicted_goalie_pos,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
 			goalie_unsettled_factor)
-	var from_dist: float = from_pos.distance_to(attacking_goal)
-	if from_dist <= AIActionScoring.SHOT_RANGE_FALLOFF_M:
-		return shoot_s
+	if AIActionScoring.in_offensive_zone(pos, attacking_goal):
+		# In the zone: establishment floor + real shot danger. The floor makes
+		# holding the zone worth something even from a bad-angle spot (so entry is a
+		# gain, not a cliff — see OZONE_ESTABLISH_VALUE); xG shapes where to go.
+		return AIActionScoring.OZONE_ESTABLISH_VALUE + shoot_s
+	# Outside the zone: the discounted progression promise. position_potential
+	# already gradients smoothly to the net across the whole rink (non-zero even
+	# deep in our own end), so no flat floor is needed — and a flat floor would
+	# fight the up-ice gradient (a decayed constant makes standing beat stepping).
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
 	var realization: float = AIActionScoring.potential_realization_discount(

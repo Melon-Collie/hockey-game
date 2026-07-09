@@ -469,6 +469,34 @@ func test_shot_aim_roofs_toward_a_post() -> void:
 	assert_gt(absf(aim.x), 0.4, "...so the aim is a top corner, not the goalie's chest")
 
 
+# ── in_offensive_zone ─────────────────────────────────────────────────────────
+# The value-map regime boundary: the attacking blue line. Attacking GOAL at +Z, so
+# the O-zone is z > BLUE_LINE_Z.
+
+func test_in_offensive_zone_past_blue_line() -> void:
+	var deep := Vector3(0.0, 0.0, 20.0)          # well inside the zone
+	var just_in := Vector3(0.0, 0.0, GameRules.BLUE_LINE_Z + 0.5)
+	assert_true(AIActionScoring.in_offensive_zone(deep, GOAL))
+	assert_true(AIActionScoring.in_offensive_zone(just_in, GOAL))
+
+
+func test_not_in_offensive_zone_at_or_before_blue_line() -> void:
+	var just_out := Vector3(0.0, 0.0, GameRules.BLUE_LINE_Z - 0.5)
+	var nz := Vector3(0.0, 0.0, 0.0)
+	var own_end := Vector3(0.0, 0.0, -20.0)
+	assert_false(AIActionScoring.in_offensive_zone(just_out, GOAL))
+	assert_false(AIActionScoring.in_offensive_zone(nz, GOAL))
+	assert_false(AIActionScoring.in_offensive_zone(own_end, GOAL))
+
+
+func test_in_offensive_zone_folds_for_negative_z_attack() -> void:
+	# Attacking toward -Z: the O-zone is z < -BLUE_LINE_Z.
+	var neg_goal := Vector3(0.0, 0.0, -26.65)
+	assert_true(AIActionScoring.in_offensive_zone(Vector3(0, 0, -20.0), neg_goal))
+	assert_false(AIActionScoring.in_offensive_zone(Vector3(0, 0, -5.0), neg_goal))
+	assert_false(AIActionScoring.in_offensive_zone(Vector3(0, 0, 20.0), neg_goal))
+
+
 # ── position_potential ───────────────────────────────────────────────────────
 # position_potential models "value of being at this position" — used
 # only when the evaluator is OUTSIDE shooting range (the regime rule
@@ -476,7 +504,9 @@ func test_shot_aim_roofs_toward_a_post() -> void:
 # goal mouth (inside) and at the goal-to-goal rink length (outside).
 
 func test_potential_zero_behind_goal_line() -> void:
-	# Past the attacking goal line — no shooting potential.
+	# Past the attacking goal line — no shooting potential. position_potential is
+	# the raw geometric progression (no possession floor — that floor lives in the
+	# offensive _score_at path, so the shared defensive threat_surface stays clean).
 	var pos := Vector3(0.0, 0.0, 27.5)
 	assert_eq(AIActionScoring.position_potential(pos, GOAL, []), 0.0)
 

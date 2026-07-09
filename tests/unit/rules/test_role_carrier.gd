@@ -206,6 +206,68 @@ func test_open_carrier_at_blue_line_drives_in_instead_of_freezing() -> void:
 			"a wide-open carrier at the blue line must take the space, not freeze")
 	assert_lt(c.last_carry_anchor.z, self_pos.z,
 			"…and take it TOWARD the attacking net")
+	assert_true(
+			AIActionScoring.in_offensive_zone(c.last_carry_anchor, ctx.attacking_goal_pos),
+			"…all the way across the blue line, entering the offensive zone")
+
+
+# ─── zone valve: once in the O-zone, don't carry back out ────────────────────
+
+func test_carrier_in_ozone_never_carries_back_out() -> void:
+	# Carrier just inside the offensive blue line, swarmed from the front and
+	# sides so the safest escape is a RETREAT back across the line. That exit is
+	# exactly what the one-way valve forbids: establishing the zone is worth
+	# keeping. Every carry candidate that leaves the O-zone is pruned, so the best
+	# carry (worst case, stand-still) stays inside it.
+	var self_pos := Vector3(0, 0, -9)                      # in the O-zone, near the line
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                           # us, carrying
+			[3, 1, Vector3(0, 0, -11), false, Vector3(0, 0, -3)],  # forechecker in front
+			[4, 1, Vector3(3, 0, -10)],                       # right pincer
+			[5, 1, Vector3(-3, 0, -10)],                      # left pincer
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_true(
+			AIActionScoring.in_offensive_zone(c.last_carry_anchor, ctx.attacking_goal_pos),
+			"the best carry keeps the puck in the offensive zone, never retreats out")
+
+
+# ─── zone valve: once in the O-zone, don't pass back out ─────────────────────
+
+func test_carrier_in_ozone_never_passes_out_to_a_neutral_zone_teammate() -> void:
+	# Carrier in the O-zone with its shot screened, and the only pass option is a
+	# teammate back in the neutral zone on a wide-open lane — tempting bait. The
+	# valve excludes any receiver outside the zone, so that pass is never on the
+	# board: the carrier holds/cycles rather than surrendering the blue line.
+	var self_pos := Vector3(0, 0, -12)                     # in the O-zone
+	var nz_mate := Vector3(6, 0, 0)                        # neutral zone, open lane
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                           # us, carrying
+			[2, TEAM_ID, nz_mate],                            # NZ teammate — bait
+			[3, 1, Vector3(0, 0, -15)],                       # screens our shot to the net
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a carrier in the O-zone won't pass the puck back out to the neutral zone")
+	assert_eq(c.debug_pass_score, 0.0,
+			"the out-of-zone teammate is excluded, so there is no pass on the board")
+
+	# Contrast: the SAME teammate, moved INTO the zone on a comparable lane, is a
+	# legal receiver again — confirming it was the zone exclusion suppressing the
+	# pass, not a bad lane.
+	var oz_mate := Vector3(6, 0, -14)                      # now in the O-zone
+	var skaters_in: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, oz_mate],
+			[3, 1, Vector3(0, 0, -15)],
+	]
+	var c2 := AIRoleCarrier.new()
+	c2.decide(_make_ctx(self_pos, skaters_in))
+	assert_gt(c2.debug_pass_score, 0.0,
+			"an in-zone teammate on the same kind of lane IS a legal pass target")
 
 
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────

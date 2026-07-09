@@ -54,22 +54,32 @@ const PRESSURE_RADIUS_M: float = 4.0
 # lower toward 1 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 2
 
-# Shot-range regime boundary — NOT a scoring falloff. The hole geometry
-# (open_net_danger) already handles distance on its own: a far shot foreshortens
-# the net and the goalie's glove has flight time to reach the corners, so danger
-# fades to ~0 with range without any distance curve. This constant only marks the
-# in/out-of-range REGIME switch for `_score_at`: inside it the bot commits to a
-# real shot (score_shoot alone); outside it the bot prices the position via
-# position_potential instead. Geometrically rooted at the attacking-zone span
-# (blue line to opposing goal line) — a shot from the attacking blue line is the
-# longest realistic in-possession shot; anything from the neutral zone is a
-# dump-in, not a shot. Tracks rink resizes automatically.
-const SHOT_RANGE_FALLOFF_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z
+# Value-map regime boundary: the attacking BLUE LINE. `_score_at` prices a
+# position by real shot danger (score_shoot) once the puck is in the offensive
+# zone, and by position_potential (the progression value map) everywhere outside
+# it. The two never mix — the O-zone is xG's domain (goalie-aware, better than any
+# positional proxy there), the rest of the ice is the progression gradient's. The
+# hole geometry (open_net_danger) already fades danger to ~0 with range on its own
+# (a far shot foreshortens the net and the goalie has flight time to the corners),
+# so no distance curve is needed; the blue line just says WHICH map governs.
+#
+# OZONE_ESTABLISH_VALUE — a TACTICAL floor (hand-set, not a perception model): the
+# value of having the puck ESTABLISHED in the offensive zone, on TOP of the shot
+# danger from there. Out here in the O-zone there is no more geometry to ground it
+# — it prices zone CONTROL, not a specific shot — so it is a chosen potential (à la
+# staging offsets), applied in the OFFENSIVE path only. It makes crossing the blue
+# line a value GAIN rather than a cliff (in-zone value = establish + xG, which
+# clears the outside progression value), so a carrier drives in instead of freezing
+# at the line, and — with the one-way-valve exclusions — won't carry or pass back
+# out. Added symmetrically to the shot scores in _pick_action so it cancels in the
+# shoot-vs-carry compete (it prices being in the zone, not the shot), leaving xG to
+# decide WHERE to go once inside.
+const OZONE_ESTABLISH_VALUE: float = 0.50
 
 # Position-potential closeness ramp. position_potential is only used
-# by `_score_at` when the EVALUATOR is outside SHOT_RANGE_FALLOFF_M —
-# inside that range the bot is committed to a shot and uses score_shoot
-# alone. So closeness only needs to give a sensible "anywhere on the
+# by `_score_at` when the position is OUTSIDE the offensive zone —
+# inside the zone the bot prices real shot danger (score_shoot) alone.
+# So closeness only needs to give a sensible "anywhere on the
 # rink toward the slot is better than further away" gradient for
 # positioning bots.
 #
@@ -1097,6 +1107,15 @@ static func lane_loss_point(from: Vector3, to: Vector3,
 # into shooting range is rewarded by the higher of the two.
 #
 # Behind the attacking goal line: returns 0 (no shooting potential).
+# True when `pos` is on the attacking side of the attacking blue line — the
+# offensive zone. The value-map regime boundary (see POSSESSION_BASELINE):
+# `_score_at` prices in-zone positions by shot danger and out-of-zone positions by
+# position_potential, and a carrier already in the zone won't carry or pass back
+# out of it. Sign-folded so it works for either attacking direction.
+static func in_offensive_zone(pos: Vector3, attacking_goal: Vector3) -> bool:
+	return pos.z * signf(attacking_goal.z) > GameRules.BLUE_LINE_Z
+
+
 static func position_potential(
 		pos: Vector3,
 		attacking_goal: Vector3,
@@ -1157,9 +1176,9 @@ static func potential_realization_discount(pos: Vector3,
 
 
 # "Threat surface" — the value an opp can extract from their current
-# position from a defender's perspective. score_shoot returns 0 when
-# the opp is outside SHOT_RANGE_FALLOFF_M; that's correct for a
-# carrier choosing whether to release, but useless for a defender
+# position from a defender's perspective. score_shoot fades to ~0 as the
+# opp gets far from our net (the hole geometry foreshortens); that's fine
+# for a carrier choosing whether to release, but useless for a defender
 # trying to position relative to a far-but-still-dangerous opp.
 # Falling back to position_potential gives a non-zero gradient over
 # any legal opp position, so ANCHOR/COVER pull toward the opp's
