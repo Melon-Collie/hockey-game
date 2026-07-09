@@ -425,9 +425,9 @@ func test_zero_value_fire_does_not_win_in_own_zone() -> void:
 	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 22.0))
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"a zero-value fire must not beat holding the puck deep in our own zone")
-	assert_eq(c.debug_shoot_score, 0.0,
-			"sanity: shoot really is 0 from the own zone (out of range)")
+			"a negligible-value fire must not beat holding the puck deep in our own zone")
+	assert_lt(c.debug_shoot_score, 0.02,
+			"sanity: shoot is negligible from ~48 m (net subtends almost nothing)")
 
 
 func test_positive_shot_scores_above_zero_in_slot() -> void:
