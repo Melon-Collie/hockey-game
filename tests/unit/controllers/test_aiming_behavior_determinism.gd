@@ -14,7 +14,10 @@ extends GutTest
 # should have a determinism test like this.
 
 
-# ── Wrister charge — same input sequence yields same state ───────────────────
+# ── Wrister swing — same input sequence yields same state ────────────────────
+
+const DT: float = 1.0 / 120.0
+const SMOOTHING: float = 14.0
 
 func test_wrister_charge_deterministic_from_neutral_start() -> void:
 	var a := SkaterAimingBehavior.new()
@@ -28,10 +31,12 @@ func test_wrister_charge_deterministic_from_neutral_start() -> void:
 		Vector3(0.4, 0.0, 0.12), Vector3(0.35, 0.0, 0.15), Vector3(0.45, 0.0, 0.18), Vector3(0.55, 0.0, 0.2),
 	]
 	for p: Vector3 in sweep:
-		a.tick_wrister_charge(p, p, 35.0, 2.0)
-		b.tick_wrister_charge(p, p, 35.0, 2.0)
-	assert_eq(a.charge_distance, b.charge_distance,
-			"charge_distance must be deterministic from identical input sequence")
+		a.tick_wrister_charge(p, p, 35.0, DT, SMOOTHING)
+		b.tick_wrister_charge(p, p, 35.0, DT, SMOOTHING)
+	assert_eq(a.cursor_speed_ema, b.cursor_speed_ema,
+			"cursor_speed_ema (the power signal) must be deterministic from identical inputs")
+	assert_eq(a.swing_rotation, b.swing_rotation,
+			"swing_rotation must be deterministic from identical inputs")
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir,
 			"prev_blade_dir must match")
 	assert_eq(a.prev_intent_pos, b.prev_intent_pos,
@@ -43,14 +48,16 @@ func test_wrister_charge_deterministic_from_neutral_start() -> void:
 func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 	# Mimics reconcile: save state, replay same inputs from the saved state,
 	# expect identical end state. The "saved state" here is a partially-built
-	# charge that two instances inherit identically.
+	# swing that two instances inherit identically.
 	var a := SkaterAimingBehavior.new()
 	var b := SkaterAimingBehavior.new()
-	a.charge_distance = 0.4
+	a.cursor_speed_ema = 700.0
+	a.swing_rotation = 0.3
 	a.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
 	a.prev_intent_pos = Vector3(0.3, 0.0, 0.2)
 	a.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
-	b.charge_distance = 0.4
+	b.cursor_speed_ema = 700.0
+	b.swing_rotation = 0.3
 	b.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
 	b.prev_intent_pos = Vector3(0.3, 0.0, 0.2)
 	b.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
@@ -58,9 +65,10 @@ func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 		Vector3(0.35, 0.0, 0.22), Vector3(0.4, 0.0, 0.25), Vector3(0.45, 0.0, 0.28), Vector3(0.5, 0.0, 0.32),
 	]
 	for p: Vector3 in sweep:
-		a.tick_wrister_charge(p, p, 35.0, 2.0)
-		b.tick_wrister_charge(p, p, 35.0, 2.0)
-	assert_eq(a.charge_distance, b.charge_distance)
+		a.tick_wrister_charge(p, p, 35.0, DT, SMOOTHING)
+		b.tick_wrister_charge(p, p, 35.0, DT, SMOOTHING)
+	assert_eq(a.cursor_speed_ema, b.cursor_speed_ema)
+	assert_eq(a.swing_rotation, b.swing_rotation)
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir)
 	assert_eq(a.prev_intent_pos, b.prev_intent_pos)
 	assert_eq(a.prev_blade_pos_rel_skater, b.prev_blade_pos_rel_skater)
@@ -138,9 +146,10 @@ func test_wrister_charge_differs_for_different_sequences() -> void:
 	var b := SkaterAimingBehavior.new()
 	a.reset_wrister(Vector3.ZERO, Vector3.ZERO)
 	b.reset_wrister(Vector3.ZERO, Vector3.ZERO)
-	a.tick_wrister_charge(Vector3(1.0, 0, 0), Vector3(1.0, 0, 0), 35.0, 2.0)
-	a.tick_wrister_charge(Vector3(2.0, 0, 0), Vector3(2.0, 0, 0), 35.0, 2.0)
-	b.tick_wrister_charge(Vector3(0.5, 0, 0), Vector3(0.5, 0, 0), 35.0, 2.0)
-	b.tick_wrister_charge(Vector3(0.75, 0, 0), Vector3(0.75, 0, 0), 35.0, 2.0)
-	assert_ne(a.charge_distance, b.charge_distance,
-			"different sweep magnitudes must produce different charge")
+	# Faster per-tick cursor travel → higher cursor_speed_ema (more power).
+	a.tick_wrister_charge(Vector3(10.0, 0, 0), Vector3(10.0, 0, 0), 35.0, DT, SMOOTHING)
+	a.tick_wrister_charge(Vector3(20.0, 0, 0), Vector3(20.0, 0, 0), 35.0, DT, SMOOTHING)
+	b.tick_wrister_charge(Vector3(1.0, 0, 0), Vector3(1.0, 0, 0), 35.0, DT, SMOOTHING)
+	b.tick_wrister_charge(Vector3(2.0, 0, 0), Vector3(2.0, 0, 0), 35.0, DT, SMOOTHING)
+	assert_ne(a.cursor_speed_ema, b.cursor_speed_ema,
+			"different sweep speeds must produce different power")

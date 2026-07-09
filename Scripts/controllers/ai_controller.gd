@@ -103,7 +103,6 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	super.apply_attributes(attrs)
 	if _agent == null:
 		return
-	_agent.set_max_wrister_charge_distance(max_wrister_charge_distance)
 	var caps := AISelfCapabilities.new()
 	caps.max_speed = max_speed
 	caps.max_accel = thrust

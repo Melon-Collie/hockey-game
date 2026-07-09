@@ -295,27 +295,14 @@ const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0
 
-# ── Wrister power-model defaults (ShotMechanics.wrister_power_t) ──────────────
-# Feel tunables — live editor tuning isn't the workflow, but they're @exports
-# on SkaterController; these are the shared defaults so the bot AI's gesture
-# synthesis and inverse power solve stay calibrated to the live shot.
-# Average on-axis blade sweep speed (m/s) that reads as a full-speed sweep.
-# Raised from 7 after playtest: soft catchable passes (< deflect_min_speed)
-# needed a sweep under ~2.6 m/s, too narrow a gesture window to hit
-# consistently. A higher reference makes every sweep read as a smaller
-# fraction of full, widening the soft half; a full rip now needs real intent.
-const DEFAULT_WRISTER_FULL_SWEEP_SPEED_M_S: float = 8.0
-# Per-tick counted-travel cap for charge accumulation (m/s). The blade
-# target is an ROM-clamped cursor projection, so without this a single-tick
-# cursor yank banks the whole reachable arc as charge; with it, a yank reads
-# as a fast sweep with short runway — a snap shot. Must stay above the
-# fastest legit bot sweep: the largest attribute-scaled charge cap
-# (~1.04 m, low-Shot × tall) swept over BOT_WRISTER_CHARGE_TICKS (~50 ms)
-# is ~20.8 m/s. No human blade-frame sweep gets near this — it's bot headroom.
-const DEFAULT_WRISTER_MAX_COUNTED_SWEEP_SPEED_M_S: float = 22.0
-# Power fraction a zero-runway sweep can reach — the snap-shot ceiling.
-const DEFAULT_WRISTER_SNAP_POWER_FRACTION: float = 0.62
-# Feel-curve exponent on the combined power parameter. Slightly above linear
+# ── Wrister power-model default (ShotMechanics.wrister_power_t) ──────────────
+# Feel tunable — live editor tuning isn't the workflow, but it's an @export on
+# SkaterController; this is the shared default so the bot AI stays calibrated to
+# the live shot. Wrister power is now the pure mouse-speed model: power is a
+# curve over the raw cursor speed (scaled by the player's Shot Power
+# Sensitivity), distance-independent. The full-power cursor-speed reference is a
+# per-setup export (wrister_mouse_speed_full), not shared here.
+# Feel-curve exponent on the 0..1 power parameter. Slightly above linear
 # (low-end compressive): the catchable touch-pass window spans a comfortable
 # slice of gesture space instead of rounding up toward the middle, and the
 # raised 33 m/s ceiling supplies the top-end pop that a sub-1.0 exponent

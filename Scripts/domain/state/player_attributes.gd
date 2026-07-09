@@ -57,9 +57,8 @@ extends RefCounted
 #   1. Add a `_FOO_MULTS: Array[float] = [L1, L2, MEDIUM, L4, L5]` const. MEDIUM
 #      (index 2) should be 1.0; usually L1 < 1.0 < L5 (or "inverted" if a higher
 #      attribute should yield a smaller value, like _SHOT_CHARGE_MULTS).
-#      (Exception: _HEIGHT_MULTS / _STICK_LEN_MULTS / _SIZE_CHARGE_MULTS put
-#      their 1.0 at L2 — the mesh-native 5'10" — because medium-Size height is
-#      intentionally 6'0".)
+#      (Exception: _HEIGHT_MULTS / _STICK_LEN_MULTS put their 1.0 at L2 — the
+#      mesh-native 5'10" — because medium-Size height is intentionally 6'0".)
 #   2. Add an accessor `func foo_mult() -> float` returning
 #      `_lookup(_FOO_MULTS, <relevant attribute field>)`.
 #   3. In the consumer (SkaterController.apply_attributes or
@@ -140,10 +139,6 @@ const _SHOT_POWER_MULTS:     Array[float] = [0.83, 0.91,  1.00, 1.09,  1.18]
 #   small-vs-large mass differential, which makes both delivered and received
 #   checks read clearly across sizes. (Physical adds the transfer/brace coefficients
 #   on top — see _PHYSICAL_CHECK_MULTS / _PHYSICAL_BRACE_MULTS.)
-# SIZE_CHARGE: coupled 1:1 to HEIGHT (arm length → ROM) — keeps the charge cap a
-#   constant fraction of each player's reach so all sizes fill the bar with equal
-#   effort. MUST stay equal to _HEIGHT_MULTS (test_size_charge_tracks_height
-#   locks this), so it inherits the same L2-identity exception.
 # HANDS_CARRY: how little the puck slows you while carrying (widened from the old
 #   trivial ±4% to ±10% now that it's a headline Hands lever — "carries it like
 #   it's not even there").
@@ -152,9 +147,6 @@ const _SHOT_POWER_MULTS:     Array[float] = [0.83, 0.91,  1.00, 1.09,  1.18]
 #   is 0.75, so L5 (×1.24 → 0.93) stays safely below a forehand — a backhand
 #   never beats the forehand it's penalizing.
 # AGILITY_GLIDE: inverted (lower = less drag during cuts) — the "good edges" feel.
-# SHOT_WRISTER_CHARGE: inverted, WIDER than SHOT_CHARGE — low Shot must drag a lot
-#   farther to reach its charged ceiling (charging is real effort); high Shot fills
-#   the bar with a short drag. Multiplied by SIZE_CHARGE so the cap still tracks reach.
 # SHOT_CHARGE: inverted (lower = slower ramp). The SLAPPER wind-up time. High Shot
 #   threatens at close range with a quick release.
 # PHYSICAL_BRACE: inverted (lower = better resistance) — Physical is the active
@@ -171,11 +163,9 @@ const _SHOT_POWER_MULTS:     Array[float] = [0.83, 0.91,  1.00, 1.09,  1.18]
 const _HEIGHT_MULTS:          Array[float] = [0.957, 1.000, 1.029, 1.071, 1.100]
 const _STICK_LEN_MULTS:       Array[float] = [0.972, 1.000, 1.019, 1.046, 1.065]
 const _SIZE_WEIGHT_MULTS:     Array[float] = [0.82,  0.91,  1.00, 1.09,  1.18]
-const _SIZE_CHARGE_MULTS:     Array[float] = [0.957, 1.000, 1.029, 1.071, 1.100]
 const _HANDS_CARRY_MULTS:     Array[float] = [0.90,  0.95,  1.00, 1.05,  1.10]
 const _HANDS_BACKHAND_MULTS:  Array[float] = [0.85,  0.93,  1.00, 1.12,  1.24]
 const _AGILITY_GLIDE_MULTS:   Array[float] = [1.10,  1.05,  1.00, 0.95,  0.90]
-const _SHOT_WRISTER_CHARGE_MULTS: Array[float] = [1.35, 1.17,  1.00, 0.86, 0.72]
 const _SHOT_CHARGE_MULTS:     Array[float] = [1.12,  1.06,  1.00, 0.94,  0.88]
 const _PHYSICAL_BRACE_MULTS:  Array[float] = [1.18,  1.09,  1.00, 0.91,  0.82]
 const _PHYSICAL_DRAIN_MULTS:  Array[float] = [0.85,  0.925, 1.00, 1.075, 1.15]
@@ -323,11 +313,9 @@ func shot_power_mult()  -> float: return _lookup(_SHOT_POWER_MULTS,     shot)
 func height_mult()         -> float: return _lookup(_HEIGHT_MULTS,         size)
 func stick_len_mult()      -> float: return _lookup(_STICK_LEN_MULTS,      size)
 func size_weight_mult()    -> float: return _lookup(_SIZE_WEIGHT_MULTS,    size)
-func size_charge_mult()    -> float: return _lookup(_SIZE_CHARGE_MULTS,    size)
 func hands_carry_mult()    -> float: return _lookup(_HANDS_CARRY_MULTS,    hands)
 func hands_backhand_mult() -> float: return _lookup(_HANDS_BACKHAND_MULTS, hands)
 func agility_glide_mult()  -> float: return _lookup(_AGILITY_GLIDE_MULTS,  agility)
-func shot_wrister_charge_mult() -> float: return _lookup(_SHOT_WRISTER_CHARGE_MULTS, shot)
 func shot_charge_mult()    -> float: return _lookup(_SHOT_CHARGE_MULTS,    shot)
 func physical_brace_mult() -> float: return _lookup(_PHYSICAL_BRACE_MULTS, physical)
 func physical_drain_mult() -> float: return _lookup(_PHYSICAL_DRAIN_MULTS, physical)

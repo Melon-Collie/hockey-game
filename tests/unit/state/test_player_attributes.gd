@@ -135,17 +135,6 @@ func test_hands_backhand_scales_and_stays_under_forehand() -> void:
 			"L5 backhand must not lift the 0.75 base coefficient to/above a forehand")
 
 
-func test_shot_wrister_charge_wider_than_slapper_charge() -> void:
-	# Both inverted (higher Shot = less effort), but the wrister drag-distance
-	# spread is wider than the slapper wind-up spread.
-	var lo := PlayerAttributes.new(2, 2, 2, 2, 2, PlayerAttributes.LEVEL_MIN)
-	var hi := PlayerAttributes.new(2, 2, 2, 2, 2, PlayerAttributes.LEVEL_MAX)
-	assert_gt(lo.shot_wrister_charge_mult(), hi.shot_wrister_charge_mult(), "wrister charge effort is inverted")
-	var wrister_spread: float = lo.shot_wrister_charge_mult() - hi.shot_wrister_charge_mult()
-	var slapper_spread: float = lo.shot_charge_mult() - hi.shot_charge_mult()
-	assert_gt(wrister_spread, slapper_spread, "wrister charge effort spread wider than slapper")
-
-
 func test_shot_charge_is_inverted() -> void:
 	# Higher Shot = faster charge ramp = smaller multiplier (quick release).
 	var lo := PlayerAttributes.new(2, 2, 2, 2, 2, PlayerAttributes.LEVEL_MIN)
@@ -195,15 +184,6 @@ func test_height_identity_at_level_two() -> void:
 	var lvl2 := PlayerAttributes.new(2, 2, 2, 2, 2, 2)
 	assert_almost_eq(lvl2.height_mult(), 1.0, 0.0001)
 	assert_gt(PlayerAttributes.all_medium().height_mult(), 1.0, "medium Size is 6'0\", taller than the mesh")
-
-
-func test_size_charge_tracks_height() -> void:
-	# Charge cap must stay a constant fraction of reach/ROM, so size_charge_mult
-	# is coupled 1:1 to height_mult. Lock it so the two can't silently drift.
-	for level: int in range(PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX + 1):
-		var a := PlayerAttributes.new(2, 2, 2, level, 2, 2)
-		assert_almost_eq(a.size_charge_mult(), a.height_mult(), 0.0001,
-				"size_charge must equal height at level %d" % level)
 
 
 func test_stick_len_identity_at_level_two() -> void:

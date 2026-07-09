@@ -954,11 +954,12 @@ func _setup_shooting_drill(start_z: float) -> void:
 	_local_controller.puck_release_requested.connect(_on_shooting_shot_callable)
 
 
-# Minimum blade-drag (m) for the Wrist Shot drill to count the shot as a real
-# dragged wrister rather than a flick. The engine now splits quick-vs-charged by
-# hold TIME (not drag distance), but the drill's lesson is "drag to aim/charge,"
-# so it still gates on the player having dragged meaningfully.
-const _WRIST_DRAG_QUALIFY_M: float = 0.15
+# Minimum normalized charge (0..1 predicted release power) for the Wrist Shot
+# drill to count the shot as a real charged wrister rather than a soft flick.
+# Wrister power is the pure mouse-speed model — a genuine sweep reads as real
+# power on the charge ring — so the drill's "drag to aim and rip it" lesson
+# gates on the player having built meaningful power, not a drag distance.
+const _WRIST_CHARGE_QUALIFY: float = 0.2
 
 # Records whether the just-released shot satisfies the active drill's required
 # type. Plain-goal drills (wrist, slap, finish) complete only when this is true;
@@ -967,9 +968,8 @@ const _WRIST_DRAG_QUALIFY_M: float = 0.15
 func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 	match _current_step_id():
 		STEP_SHOOT_WRIST:
-			var peak_dist: float = _wrist_peak_charge * _local_controller.max_wrister_charge_distance
 			_last_shot_qualifies = (not is_slapper) and TutorialShotRules.is_dragged_wrister(
-					peak_dist, _WRIST_DRAG_QUALIFY_M)
+					_wrist_peak_charge, _WRIST_CHARGE_QUALIFY)
 		STEP_SHOOT_SLAP:
 			_last_shot_qualifies = is_slapper
 		STEP_SHOOT_FINISH:
