@@ -345,6 +345,68 @@ func test_credit_assists_scorer_without_team_returns_empty() -> void:
 	assert_eq(assists.size(), 0)
 
 
+func test_teammate_touching_twice_earns_only_one_assist() -> void:
+	# A1 carries, the pass tips off a defender (a touch, not possession), A1
+	# regains it and feeds the scorer. A1 appears at two non-consecutive history
+	# slots but must earn a single assist, not two.
+	var a1 := _add_player(10, 0, "A1")
+	_add_player(20, 1, "Defender")
+	var scorer := _add_player(12, 0, "Scorer")
+	tracker.on_pickup(10)      # A1 carries
+	tracker.on_deflection(20)  # pass tips off a defender (unestablished touch)
+	tracker.on_pickup(10)      # A1 regains — second, non-consecutive entry
+	tracker.on_pickup(12)      # scorer finishes
+	var assists: Array[String] = tracker.credit_assists(12)
+	assert_eq(assists.size(), 1, "A1 touched twice but earns one assist")
+	assert_eq(assists[0], "A1")
+	assert_eq(a1.stats.assists, 1, "no double-credit for the repeat touch")
+	assert_eq(scorer.stats.assists, 0)
+
+
+# ── Poke-check attribution ───────────────────────────────────────────────────
+# A poke-check records the poker as the most recent toucher so a puck poked
+# straight off the carrier's stick into the net is credited to the poker, but
+# the entry is flagged so it never earns an assist (a strip isn't a play that
+# feeds the goal).
+
+func test_poke_check_makes_poker_the_last_toucher() -> void:
+	_add_player(20, 1, "Defender")
+	_add_player(10, 0, "Poker")
+	tracker.on_pickup(20)      # defender carries near their own net
+	tracker.on_poke_check(10)  # attacker pokes it loose — straight into the net
+	assert_eq(tracker.get_last_toucher(), 10,
+			"a puck poked directly into the net is the poker's goal")
+
+
+func test_poke_check_does_not_earn_the_poker_an_assist() -> void:
+	var poker := _add_player(10, 0, "Poker")
+	_add_player(20, 1, "Defender")
+	var scorer := _add_player(11, 0, "Scorer")
+	tracker.on_pickup(20)      # defender carries
+	tracker.on_poke_check(10)  # attacker pokes it off the defender
+	tracker.on_pickup(11)      # a teammate corrals the loose puck and scores
+	var assists: Array[String] = tracker.credit_assists(11)
+	assert_eq(assists.size(), 0, "a poke strip isn't a play that set up the goal")
+	assert_eq(poker.stats.assists, 0)
+
+
+func test_poke_then_own_pickup_clears_poke_flag_and_earns_assist() -> void:
+	# The poker strips it, corrals the loose puck themselves, then feeds a
+	# teammate — now they made a genuine play, so the assist counts.
+	var poker := _add_player(10, 0, "Poker")
+	_add_player(20, 1, "Defender")
+	var scorer := _add_player(11, 0, "Scorer")
+	tracker.on_pickup(20)      # defender carries
+	tracker.on_poke_check(10)  # poke → entry flagged poke
+	tracker.on_pickup(10)      # poker picks it up (collapses, clears the poke flag)
+	tracker.on_pickup(11)      # feeds the teammate who scores
+	var assists: Array[String] = tracker.credit_assists(11)
+	assert_eq(assists.size(), 1)
+	assert_eq(assists[0], "Poker")
+	assert_eq(poker.stats.assists, 1)
+	assert_eq(scorer.stats.assists, 0)
+
+
 # ── One-timer attribution ────────────────────────────────────────────────────
 # Mirrors the host call sequence in GameManager._host_release_one_timer:
 # the passer picks up + shoots, then the receiver redirects the moving puck

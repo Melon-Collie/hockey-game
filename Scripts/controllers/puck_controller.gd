@@ -149,6 +149,7 @@ var _team_id_by_skater: Dictionary = {}
 signal puck_picked_up_by(peer_id: int)
 signal puck_released_by_carrier(peer_id: int)
 signal puck_stripped_from(peer_id: int)
+signal puck_poke_checked_by(peer_id: int)  # defender who poke-stripped the carrier
 signal puck_touched_while_loose(peer_id: int)  # deflection or body block — peer who touched
 signal puck_touched_by_goalie(goalie: Goalie)  # puck contacted a goalie body while a shot was in flight
 
@@ -280,6 +281,7 @@ func apply_lag_comp_poke(checker: Skater, expected_ex_carrier: Skater) -> void:
 	if puck.carrier != expected_ex_carrier:
 		return
 	puck.apply_poke_check(checker)
+	puck_poke_checked_by.emit(_peer_id_resolver.call(checker))
 
 
 # Called after StickLiftClaimResolver validates a client stick-lift claim
@@ -413,6 +415,7 @@ func _check_interactions() -> void:
 				if PuckInteractionRules.check_poke(_prev_puck_pos, puck_curr,
 						blade_prev, blade_curr, POKE_RADIUS):
 					puck.apply_poke_check(skater)
+					puck_poke_checked_by.emit(_peer_id_resolver.call(skater))
 					break
 	else:
 		if not puck.pickup_locked:
