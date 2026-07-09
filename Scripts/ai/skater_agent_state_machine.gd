@@ -380,13 +380,17 @@ var _blade_reach: float = BLADE_REACH_M
 # ── Wrister charge ───────────────────────────────────────────────────────────
 # SHOOT_PRESSED and the charged PASS_PRESSED variant hold shoot_held for this
 # many ticks while the blade sweeps from wind_up_start to aim_target, then
-# release. This is purely the wind-up ANIMATION window now — bots set their
-# release power directly via input.bot_wrister_power_t (the controller converts
-# it to the equivalent cursor speed), so the gesture's geometry only sizes the
-# visible draw and no longer determines power. ~50 ms is a crisp, readable
-# wind-up that still gives the charge tracker enough ticks to classify the
-# forehand/backhand swing chirality.
-const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 20   # ~50 ms
+# release. Power no longer rides this window — bots set release power directly
+# via input.bot_wrister_power_t (the controller converts it to the equivalent
+# cursor speed) — so the geometry is a cosmetic wind-up. BUT the DURATION is not
+# free: it IS the real commit→release delay, and the offensive scorer feeds it
+# forward as BOT_WRISTER_LOOKAHEAD_S to predict where the goalie will be when the
+# shot actually leaves the blade. Keep it a realistic wrister wind-up (~250 ms):
+# shortening it desyncs the goalie prediction from reality and collapses shoot
+# scoring (the goalie is modelled as barely having moved, so every shot reads as
+# already-covered and the bot never commits). 30 ticks is also ample for the
+# charge tracker to classify the forehand/backhand swing chirality.
+const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4   # ~250 ms
 
 # Shot target power fraction (0..1): shots aim for full power (the carry scorer
 # assumes WRISTER_SHOT_SPEED_M_S = DEFAULT_WRISTER_POWER_MAX_M_S, so the bot
@@ -424,7 +428,7 @@ const BOT_WRISTER_PLANT_SPEED_M_S: float = 1.5
 #      (_carry_aim_track_fire keeps facing pre-tracked toward the
 #      best fire option during CARRY), this is typically 0-50 ms.
 #      The buffer accounts for typical mouse residual convergence.
-#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / PHYSICS_TICK ≈ 67 ms.
+#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / PHYSICS_TICK = 250 ms.
 #
 # Used both for projecting the shooter's release-pos AND for
 # predicting where the goalie / opponents will be at release.
