@@ -113,7 +113,7 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 # the controller so applying Hard is a true no-op (the ceiling we've tuned).
 static func hard() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.30, 0.12,
-			1.75, 1.30, 2.0, 2.0, 18.0, 14.0)
+			1.75, 1.30, 5.0, 5.0, 18.0, 14.0)
 
 
 # Normal is the middle tier: it keeps Hard's read knobs eased AND takes
@@ -123,7 +123,7 @@ static func hard() -> GoalieSkillProfile:
 # deke.
 static func normal() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.28, 0.20, 0.16, 0.42, 0.20,
-			1.45, 1.05, 1.65, 1.65, 12.0, 11.0)
+			1.45, 1.05, 4.1, 4.1, 12.0, 11.0)
 
 
 # Easy is the newcomer floor: positionally deep (gives up the net), slow arms
@@ -133,7 +133,7 @@ static func normal() -> GoalieSkillProfile:
 # a skilled human scores on any tier and can't feel this one by playing it.
 static func easy() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.36, 0.28, 0.11, 0.55, 0.28,
-			1.15, 0.80, 1.3, 1.3, 6.0, 8.0)
+			1.15, 0.80, 3.25, 3.25, 6.0, 8.0)
 
 
 static func for_difficulty(difficulty: int) -> GoalieSkillProfile:

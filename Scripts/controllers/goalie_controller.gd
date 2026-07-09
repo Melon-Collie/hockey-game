@@ -585,18 +585,24 @@ extends Node
 @export var shoulder_pitch_forward_max_deg: float = 8.0
 @export var shoulder_pitch_back_max_deg: float = 5.0
 @export var shoulder_pitch_y_range: float = 0.55  # y-distance from neutral that maps to full back lean
-# Hard cap on glove linear speed during shot reactions, in m/s. Lerp-based
-# tracking made the math vague (asymptotic convergence); a velocity cap is
-# exact: max per-frame travel = speed * delta. Real glove speeds are
-# 2-3 m/s for a full extension. At 2.0 m/s with a typical 250 ms flight
-# time on a close-range wrister, the glove can travel 0.5 m — enough for
-# body / mid-net shots but not the 0.6-0.7 m needed for a top-corner pull.
-# Big reaches don't make it; small reaches still close in time.
-@export var glove_react_max_speed: float = 2.0
+# Hard cap on glove linear speed during shot reactions, in m/s. A velocity cap is
+# exact: max per-frame travel = speed * delta. GROUNDED in explosive human hand
+# speed: a reactive glove save flashes ~0.6-0.75 m in ~0.13 s ≈ ~5 m/s effective,
+# and boxing measures peak hand speed at ~7 m/s (jab) to ~10 m/s (rear straight),
+# accelerating rest→full in 50-100 ms. Since this cap is FLAT (the glove moves at
+# it from t=0, no ramp) it should sit at the average over the stroke, not the peak
+# — hence 5.0, well below the 7-10 peak. The old 2.0 was less than half a real
+# hand and, against the raised shot speeds (shorter flight), left the glove unable
+# to reach corners it should on mid/long shots. Close top-corner snipes still beat
+# the ARM DELAY (arm_reaction_delay 0.18 s > a slot shot's flight), so this only
+# shuts the range shots a real goalie gloves — it doesn't touch the in-tight window.
+# NOTE: AIActionScoring.GOALIE_ARM_DEPLOY_S mirrors this (= HIGH-band EXT / speed);
+# change both together.
+@export var glove_react_max_speed: float = 5.0
 # Blocker (entire BlockArm assembly) reach speed cap, mirroring the glove.
 # Same magnitude — both arms have similar reach speed; if blocker should be
 # faster (some real goalies' dominant hand), bump this up.
-@export var blocker_react_max_speed: float = 2.0
+@export var blocker_react_max_speed: float = 5.0
 
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 

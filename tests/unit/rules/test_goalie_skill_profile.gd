@@ -36,8 +36,8 @@ func test_hard_matches_controller_defaults() -> void:
 	assert_eq(hard.move_read_max_delay_s, 0.12)
 	assert_eq(hard.depth_aggressive_m, 1.75)
 	assert_eq(hard.depth_base_m, 1.30)
-	assert_eq(hard.glove_react_max_speed_mps, 2.0)
-	assert_eq(hard.blocker_react_max_speed_mps, 2.0)
+	assert_eq(hard.glove_react_max_speed_mps, 5.0)
+	assert_eq(hard.blocker_react_max_speed_mps, 5.0)
 	assert_eq(hard.pad_toe_out_butterfly_deg, 18.0)
 	assert_eq(hard.lateral_accel_mps2, 14.0)
 
