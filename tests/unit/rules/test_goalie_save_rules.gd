@@ -4,7 +4,7 @@ extends GutTest
 
 func _cfg() -> GoalieSaveRules.DeadenConfig:
 	var cfg := GoalieSaveRules.DeadenConfig.new()
-	cfg.pad_max_incoming_speed = 22.0
+	cfg.pad_max_incoming_speed = 28.0
 	cfg.drop_speed = 1.2
 	cfg.glove_retain = 0.0
 	cfg.chest_retain = 0.12
@@ -30,12 +30,12 @@ func test_chest_controlled_at_any_speed() -> void:
 func test_pad_controlled_only_under_threshold() -> void:
 	# Easy pad save deadens; a hard shot beats the pad and kicks out a rebound.
 	assert_true(GoalieSaveRules.is_controlled_save(12.0, GoalieSaveRules.SavePart.PAD, _cfg()))
-	assert_true(GoalieSaveRules.is_controlled_save(22.0, GoalieSaveRules.SavePart.PAD, _cfg()))
-	assert_false(GoalieSaveRules.is_controlled_save(28.0, GoalieSaveRules.SavePart.PAD, _cfg()))
+	assert_true(GoalieSaveRules.is_controlled_save(28.0, GoalieSaveRules.SavePart.PAD, _cfg()))
+	assert_false(GoalieSaveRules.is_controlled_save(34.0, GoalieSaveRules.SavePart.PAD, _cfg()))
 
 func test_blocker_controlled_only_under_threshold() -> void:
 	assert_true(GoalieSaveRules.is_controlled_save(15.0, GoalieSaveRules.SavePart.BLOCKER, _cfg()))
-	assert_false(GoalieSaveRules.is_controlled_save(30.0, GoalieSaveRules.SavePart.BLOCKER, _cfg()))
+	assert_false(GoalieSaveRules.is_controlled_save(40.0, GoalieSaveRules.SavePart.BLOCKER, _cfg()))
 
 # ── deadened_velocity ─────────────────────────────────────────────────────────
 

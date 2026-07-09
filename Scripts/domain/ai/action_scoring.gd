@@ -133,7 +133,10 @@ const HOLE_BAND_LOFT: Array[int] = [                       # loft the band's hol
 		ShotMechanics.ELEVATION_FLAT,   # LOW  → flat
 		ShotMechanics.ELEVATION_HIGH,   # HIGH → roof it
 ]
-const GOALIE_ARM_DEPLOY_S: float = 0.20   # reaction ramp width — time to extend to the placement
+const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to extend to the placement.
+                                          # Mirrors the live goalie: HIGH-band EXT (0.45) / glove_react_
+                                          # max_speed (5.0) ≈ 0.09 s to cover the reaction-gated reach.
+                                          # Change with GoalieController.glove_react_max_speed.
 
 # Loft choice prefers the LOWEST-risk shot among comparable openings: a flat shot
 # is easier to execute than roofing it (you can sail a high shot over the bar). So

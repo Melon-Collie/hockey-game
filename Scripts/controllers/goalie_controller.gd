@@ -13,10 +13,27 @@ extends Node
 # ── Tuning ────────────────────────────────────────────────────────────────────
 @export var catches_left: bool = true
 
-@export var depth_aggressive: float = 1.2
-@export var depth_base: float = 0.6
-@export var depth_conservative: float = 0.3
-@export var depth_defensive: float = 0.1
+# Depth chart = the Buckley Positioning System (BPS) A/B/C/D zones, measured as a
+# RADIUS from goal center (the arc-positioning radius consumed by
+# GoalieBehaviorRules.target_arc_position). BPS anchors, grounded in real crease
+# geometry — the NHL crease top is ~4.5 ft ≈ 1.37 m, matching this project's
+# CreaseRules.STRAIGHT_DEPTH:
+#   A Aggressive   — ~2 ft outside the crease top; challenge a rush / breakaway /
+#                    clean look and force the shooter to beat you.
+#   B Base         — heels at the crease top; where MOST shots are faced (covers a
+#                    lot of net while still leaving reaction time).
+#   C Conservative — middle of the blue paint; anticipating a lateral play (2-on-1).
+#   D Defensive    — on the post / tracking behind the net.
+# Bumped OUT from the old (compressed ~half-a-crease-too-deep) values to real BPS
+# depths: at the raised shot speeds a slot shot leaves almost no lateral reaction
+# window (~0.04 m of travel in flight), so cutting the angle by challenging is what
+# makes the save, not reflexes. The BPS "play conservative on a lateral threat"
+# read is handled dynamically by lateral_pressure_depth_pull + close_crease_
+# butterfly rather than baked into the distance curve, so the chart keeps its shape.
+@export var depth_aggressive: float = 1.75
+@export var depth_base: float = 1.30
+@export var depth_conservative: float = 0.70
+@export var depth_defensive: float = 0.10
 @export var zone_post_z: float = 2.0
 @export var zone_aggressive_z: float = 8.0
 @export var zone_base_z: float = 12.0
@@ -73,17 +90,19 @@ extends Node
 @export var react_max_time_to_impact: float = 0.9
 
 # ── Screening ─────────────────────────────────────────────────────────────────
-# A body between the puck and the goalie blocks the sightline, so the goalie
-# reads the shot late — both the leg drop and the arm reach are delayed by up to
-# `screen_max_extra_delay` for a full screen, scaled by how badly the look is
-# blocked (see GoalieBehaviorRules.screen_intensity). Makes net-front traffic
-# and point shots through a screen a real threat. Evaluated once at the read
-# (the goalie loses the beat the moment they can't see the puck leave the
-# stick); re-checking mid-flight would hand the time back. Host-only like all
+# A body between the shooter and the goalie hides the puck, so the goalie can't
+# start their read until the puck emerges from behind the screen. The delay is
+# GROUNDED, not a flat fudge: GoalieBehaviorRules.screen_occlusion_delay returns
+# how long the worst screener actually hides the puck given the shot's speed and
+# geometry (a dead-on point screen hides it far longer than a body at the door-
+# step), and `screen_max_extra_delay` is only the CAP on that so a perfect screen
+# still leaves a last-instant chance. Both the leg drop and the arm reach are held
+# by it. Makes net-front traffic and point shots through a screen a real threat.
+# Evaluated once at the read (the goalie loses the beat the moment the puck is
+# hidden; re-checking mid-flight would hand the time back). Host-only like all
 # goalie AI, so it costs nothing on the wire and never diverges on clients.
-@export var screen_max_extra_delay: float = 0.15  # s added to the read for a full screen
+@export var screen_max_extra_delay: float = 0.30  # s — CAP on the screen-occlusion pickup delay
 @export var screener_radius: float = 0.6          # m — body half-width that blocks sight
-@export var screen_proximity_bias: float = 0.5    # how much a goalie-side body out-screens a shooter-side one
 
 # ── Caught moving ─────────────────────────────────────────────────────────────
 # A goalie is only sharp when SET — square and stopped. Caught mid-push, sliding,
@@ -566,18 +585,24 @@ extends Node
 @export var shoulder_pitch_forward_max_deg: float = 8.0
 @export var shoulder_pitch_back_max_deg: float = 5.0
 @export var shoulder_pitch_y_range: float = 0.55  # y-distance from neutral that maps to full back lean
-# Hard cap on glove linear speed during shot reactions, in m/s. Lerp-based
-# tracking made the math vague (asymptotic convergence); a velocity cap is
-# exact: max per-frame travel = speed * delta. Real glove speeds are
-# 2-3 m/s for a full extension. At 2.0 m/s with a typical 250 ms flight
-# time on a close-range wrister, the glove can travel 0.5 m — enough for
-# body / mid-net shots but not the 0.6-0.7 m needed for a top-corner pull.
-# Big reaches don't make it; small reaches still close in time.
-@export var glove_react_max_speed: float = 2.0
+# Hard cap on glove linear speed during shot reactions, in m/s. A velocity cap is
+# exact: max per-frame travel = speed * delta. GROUNDED in explosive human hand
+# speed: a reactive glove save flashes ~0.6-0.75 m in ~0.13 s ≈ ~5 m/s effective,
+# and boxing measures peak hand speed at ~7 m/s (jab) to ~10 m/s (rear straight),
+# accelerating rest→full in 50-100 ms. Since this cap is FLAT (the glove moves at
+# it from t=0, no ramp) it should sit at the average over the stroke, not the peak
+# — hence 5.0, well below the 7-10 peak. The old 2.0 was less than half a real
+# hand and, against the raised shot speeds (shorter flight), left the glove unable
+# to reach corners it should on mid/long shots. Close top-corner snipes still beat
+# the ARM DELAY (arm_reaction_delay 0.18 s > a slot shot's flight), so this only
+# shuts the range shots a real goalie gloves — it doesn't touch the in-tight window.
+# NOTE: AIActionScoring.GOALIE_ARM_DEPLOY_S mirrors this (= HIGH-band EXT / speed);
+# change both together.
+@export var glove_react_max_speed: float = 5.0
 # Blocker (entire BlockArm assembly) reach speed cap, mirroring the glove.
 # Same magnitude — both arms have similar reach speed; if blocker should be
 # faster (some real goalies' dominant hand), bump this up.
-@export var blocker_react_max_speed: float = 2.0
+@export var blocker_react_max_speed: float = 5.0
 
 @export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
@@ -930,7 +955,6 @@ func _build_rule_configs() -> void:
 	_shot_cfg.elevated_threshold = elevated_threshold
 	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
 	_screen_cfg.screener_radius = screener_radius
-	_screen_cfg.goalie_proximity_bias = screen_proximity_bias
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
 	_move_read_cfg.reference_speed = move_read_reference_speed
 	_move_read_cfg.max_delay = move_read_max_delay
@@ -2310,21 +2334,24 @@ func _check_universal_reaction() -> void:
 				puck.linear_velocity.length(), result.impact_x,
 				"ELEVATED" if result.is_elevated else "low"])
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
-			result.reaction_delay, 0.0, _read_extra_delay())
+			result.reaction_delay, 0.0, _read_extra_delay(vel))
 
 
-# Total extra latency before the goalie picks up the shot: a screen blocking the
-# sightline PLUS being caught moving / unset at the read. Both push the leg drop
-# and arm reach back. Computed once per shot (event-driven), off the hot path.
-func _read_extra_delay() -> float:
-	return _screen_delay() + _movement_read_delay()
+# Total extra latency before the goalie picks up the shot: a screen hiding the
+# puck PLUS being caught moving / unset at the read. Both push the leg drop and
+# arm reach back. Computed once per shot (event-driven), off the hot path.
+# `shot_velocity` is the release velocity — the occlusion delay needs the shot's
+# speed and heading to know how long a screener hides the puck.
+func _read_extra_delay(shot_velocity: Vector3) -> float:
+	return _screen_delay(shot_velocity) + _movement_read_delay()
 
 
-# Screen contribution: gather every body that could block the goalie's sightline
-# (both teams — a D-man screens his own goalie too; ghosted players don't), and
-# scale the worst single screen by `screen_max_extra_delay`. The shooter
-# self-excludes geometrically (they sit at the puck end of the sightline).
-func _screen_delay() -> float:
+# Screen contribution: gather every body that could hide the puck from the goalie
+# (both teams — a D-man screens his own goalie too; ghosted players don't), take
+# the grounded occlusion delay for the worst screener, and clamp it to
+# `screen_max_extra_delay`. The shooter self-excludes geometrically (they sit at
+# the release point, along ≈ 0 < min_along).
+func _screen_delay(shot_velocity: Vector3) -> float:
 	if screen_max_extra_delay <= 0.0 or not _skater_getter.is_valid():
 		return 0.0
 	var skaters: Array = _skater_getter.call()
@@ -2335,9 +2362,10 @@ func _screen_delay() -> float:
 		_screen_positions.append(skater.global_position)
 	if _screen_positions.is_empty():
 		return 0.0
-	var intensity: float = GoalieBehaviorRules.screen_intensity(
-			puck.global_position, goalie.global_position, _screen_positions, _screen_cfg)
-	return intensity * screen_max_extra_delay
+	var delay: float = GoalieBehaviorRules.screen_occlusion_delay(
+			puck.global_position, shot_velocity, goalie.global_position,
+			_screen_positions, _screen_cfg)
+	return minf(delay, screen_max_extra_delay)
 
 
 # Caught-moving contribution: how unset the goalie is at the read. Planar speed
@@ -2397,7 +2425,7 @@ func _on_puck_released() -> void:
 	# `back_date` lag-comps client-initiated releases so the goalie gets the
 	# same effective reaction window the shooter perceived.
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
-			result.reaction_delay, back_date, _read_extra_delay())
+			result.reaction_delay, back_date, _read_extra_delay(puck.get_release_velocity()))
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
 # don't trigger spurious slides, starts the reaction clear delay, and drops

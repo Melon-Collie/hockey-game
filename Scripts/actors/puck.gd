@@ -78,7 +78,7 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # (the beatable scramble chance). See GoalieSaveRules. Deadening is pose-neutral
 # rebound control, correct under every ruleset — a whistle-on-cover would be a
 # separate, ruleset-gated layer on top. Tunable so feel can be dialed in-editor.
-@export var save_deaden_pad_max_speed: float = 22.0  # pad/blocker saves faster than this stay live
+@export var save_deaden_pad_max_speed: float = 28.0  # pad/blocker saves faster than this stay live (≈63 mph — above a solid wrister, below hard shots/slappers)
 @export var save_deaden_drop_speed: float = 1.2      # deadened exit-speed ceiling (m/s)
 @export var save_deaden_glove_retain: float = 0.0    # glove catch — kill it dead
 @export var save_deaden_chest_retain: float = 0.12

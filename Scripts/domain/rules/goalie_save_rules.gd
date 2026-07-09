@@ -24,7 +24,12 @@ class DeadenConfig:
 	# Pad / blocker saves above this incoming speed kick out a LIVE rebound (a
 	# hard shot beats the pad). At/under it they deaden. Chest / glove ABSORB or
 	# CATCH, so they deaden at any speed. Stick never deadens.
-	var pad_max_incoming_speed: float = 22.0
+	# Grounded in the shot-speed distribution: ~28 m/s (≈63 mph) sits above a solid
+	# wrister but below hard wristers / slappers, so pads control the medium stuff
+	# and kick live rebounds only on genuinely hard shots — the beatable-realism
+	# scramble chance. Re-anchored up from 22 when the wrister/slapper maxes rose
+	# (24→33 / 34→40 m/s); at 22 nearly every shot was now beating the pad.
+	var pad_max_incoming_speed: float = 28.0
 	# Deadened exit-speed ceiling (m/s). Even a firm controlled save leaves the
 	# puck crawling so the crease sweep can whisk it to the corner.
 	var drop_speed: float = 1.2
