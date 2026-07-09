@@ -76,6 +76,18 @@ func invalidate_configs() -> void:
 func reset_blade_smoothing() -> void:
 	_smoothed_blade_initialized = false
 
+# Seed the smoothed-blade baseline to a specific world position so the next solve
+# steps toward the cursor FROM there rather than from a stale value. Called by
+# SkaterController when handing off from the follow-through to normal skating:
+# the blade smoother was frozen at the wound-back release position while the FT
+# choreographed the blade directly, so without re-seeding the blade would snap
+# back to that stale spot and dangle forward again. Seeding it to the FT's final
+# blade lets the normal dangle continue from where the finish left it.
+func seed_blade_smoothing(world_pos: Vector3) -> void:
+	_smoothed_blade_world = Vector3(world_pos.x, 0.0, world_pos.z)
+	_prev_skater_pos = Vector3(_skater.global_position.x, 0.0, _skater.global_position.z)
+	_smoothed_blade_initialized = true
+
 # ── Blade From Mouse (Top-Hand IK) ────────────────────────────────────────────
 # Input is treated as a desired blade position. The top hand is solved as a
 # consequence, clamped to an asymmetric ROM. See domain/rules/top_hand_ik.gd.

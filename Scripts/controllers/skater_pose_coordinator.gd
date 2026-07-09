@@ -288,6 +288,15 @@ func apply_upper_body(delta: float) -> void:
 			var t: float = clampf(1.0 - _sm.follow_through_timer / total, 0.0, 1.0)
 			var env: float = sin(PI * pow(t, _controller.follow_through_arc_skew)) \
 					* _sm.follow_through_power
+			# Ease the finish aim from the shot line back to the live cursor over
+			# the tail (follow_through_return_frac), so the shoulders end squared
+			# to where the mouse now is and the generic tracker picks the torso up
+			# without a re-rotate. Meat of the timer keeps the shot-line uncoil.
+			var cursor_dir: Vector3 = _controller._current_aim_world - _skater.global_position
+			var aim_world: Vector3 = ShotMechanics.follow_through_aim(
+					dir_world, cursor_dir, t, _controller.follow_through_return_frac)
+			if aim_world.length_squared() > 0.0001:
+				dir_world = aim_world
 			var shot_local: Vector3 = _skater.global_transform.basis.inverse() * dir_world
 			var shot_angle: float = atan2(shot_local.x, -shot_local.z)
 			var ft_max_twist: float = deg_to_rad(_controller.upper_body_max_twist_deg)
@@ -300,6 +309,13 @@ func apply_upper_body(delta: float) -> void:
 			upper_body_angle = lerp_angle(upper_body_angle, ft_aim + through,
 					_controller.follow_through_twist_lerp_speed * delta)
 			_skater.set_upper_body_rotation(upper_body_angle)
+			# Keep the twist-follow spring glued to the tracked angle through the
+			# FT (it isn't advanced on this branch): the handoff preserves the
+			# pose instead of zeroing it (see SkaterController._transition_to_skating),
+			# so the first skating tick must find the spring already settled or it
+			# whips off the stale pre-shot value.
+			_twist_follow = upper_body_angle
+			_twist_follow_vel = 0.0
 			# Trunk drives TOWARD the shot line (pitch + roll, same directional
 			# decomposition as the reach lean) — a cross-body finish tips the
 			# shoulders over the front foot toward the target, not just forward.

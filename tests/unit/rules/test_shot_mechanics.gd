@@ -320,3 +320,51 @@ func test_wall_pin_ignored_below_threshold() -> void:
 
 func test_wall_pin_ignored_at_threshold() -> void:
 	assert_false(ShotMechanics.should_release_on_wall_pin(0.3, 0.3), "equal is not above")
+
+
+# ── Follow-through aim blend ──────────────────────────────────────────────────
+
+func test_follow_through_aim_holds_shot_line_before_tail() -> void:
+	# Below the tail (return_frac=0.4 → tail starts at t=0.6) the aim is the shot
+	# line unchanged, however far the cursor has drifted.
+	var shot_dir := Vector3(0, 0, -1)         # straight ahead
+	var cursor_dir := Vector3(1, 0, 0)        # 90° to the right
+	var aim: Vector3 = ShotMechanics.follow_through_aim(shot_dir, cursor_dir, 0.3, 0.4)
+	assert_almost_eq(aim.x, 0.0, 0.0001, "still on the shot line")
+	assert_almost_eq(aim.z, -1.0, 0.0001, "still on the shot line")
+
+func test_follow_through_aim_lands_on_cursor_at_end() -> void:
+	# At t=1 the finish has fully eased onto the live cursor direction.
+	var shot_dir := Vector3(0, 0, -1)
+	var cursor_dir := Vector3(1, 0, 0)
+	var aim: Vector3 = ShotMechanics.follow_through_aim(shot_dir, cursor_dir, 1.0, 0.4)
+	assert_almost_eq(aim.x, 1.0, 0.0001, "ends pointed at the cursor")
+	assert_almost_eq(aim.z, 0.0, 0.0001, "ends pointed at the cursor")
+
+func test_follow_through_aim_blends_partway_in_tail() -> void:
+	# Mid-tail the aim sits strictly between the shot line and the cursor.
+	var shot_dir := Vector3(0, 0, -1)
+	var cursor_dir := Vector3(1, 0, 0)
+	var aim: Vector3 = ShotMechanics.follow_through_aim(shot_dir, cursor_dir, 0.8, 0.4)
+	assert_gt(aim.x, 0.0, "rotated toward the cursor")
+	assert_lt(aim.x, 1.0, "not all the way yet")
+	assert_almost_eq(aim.length(), 1.0, 0.0001, "stays a unit direction")
+
+func test_follow_through_aim_zero_return_frac_keeps_shot_line() -> void:
+	var shot_dir := Vector3(0, 0, -1)
+	var cursor_dir := Vector3(1, 0, 0)
+	var aim: Vector3 = ShotMechanics.follow_through_aim(shot_dir, cursor_dir, 1.0, 0.0)
+	assert_almost_eq(aim.x, 0.0, 0.0001, "no blend with return_frac 0")
+	assert_almost_eq(aim.z, -1.0, 0.0001, "no blend with return_frac 0")
+
+func test_follow_through_aim_whiff_returns_zero() -> void:
+	# Degenerate shot_dir (whiff) → ZERO so callers keep their release-angle hold.
+	var aim: Vector3 = ShotMechanics.follow_through_aim(
+			Vector3.ZERO, Vector3(1, 0, 0), 1.0, 0.4)
+	assert_almost_eq(aim.length(), 0.0, 0.0001, "whiff yields no aim")
+
+func test_follow_through_aim_ignores_degenerate_cursor() -> void:
+	# No cursor direction (mouse on top of the skater) → hold the shot line.
+	var shot_dir := Vector3(0, 0, -1)
+	var aim: Vector3 = ShotMechanics.follow_through_aim(shot_dir, Vector3.ZERO, 1.0, 0.4)
+	assert_almost_eq(aim.z, -1.0, 0.0001, "degenerate cursor holds shot line")
