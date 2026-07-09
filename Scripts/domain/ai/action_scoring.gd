@@ -1198,6 +1198,77 @@ static func potential_realization_discount(pos: Vector3,
 	return pow(CARRY_DELAY_DISCOUNT_PER_SEC, travel_dist / SKATER_REF_SPEED_M_S)
 
 
+# ── Dumping ───────────────────────────────────────────────────────────────────
+# Dumping is a deliberate LAST-RESORT giveaway at a SAFE location, in two spots:
+#   - DZ clear: pinned in our own end with no play, rim it out to the neutral zone.
+#   - NZ dump-and-chase: past centre (so it isn't icing) but contained before the
+#     blue line with no outlet, flip it into the offensive corner and race for it.
+# It never needs an "if no options" gate — its EV rides the same turnover_cost the
+# rest of the model uses (≈0 for a giveaway in the offensive end, large in front of
+# our net), so it only wins when every real play (carry/pass/shoot) prices worse
+# than conceding at the dump spot. The pieces below are the grounded terms the
+# carrier assembles into that EV (see _best_dump).
+
+# Corner depth from the goal line for a dump-in target (a corner retrieval, not a
+# behind-the-net wrap). Distance a stride's head-start turns a 50/50 loose-puck
+# race into a near-sure recovery — a physical contest band, not a tuning curve.
+const DUMP_CORNER_DEPTH_M: float = 3.0
+const DUMP_RINK_INSET_M: float = 0.5
+const CHASE_CONTEST_MARGIN_M: float = 2.0
+
+
+# True when `pos` is on the attacking side of centre ice (z = 0) — past the red
+# line, where a dump-in to the offensive zone can't be icing.
+static func past_center_toward_attack(pos: Vector3, attacking_goal: Vector3) -> bool:
+	return pos.z * signf(attacking_goal.z) > 0.0
+
+
+# DZ clear target: the neutral-zone strong-side boards (the side the carrier is on),
+# at centre ice — hard rim to get the puck out of our end without crossing into a
+# middle-of-the-ice giveaway. Centre (z = 0) is the neutral zone from either end,
+# so the target keys only off the carrier's side.
+static func dump_clear_target(carrier_pos: Vector3) -> Vector3:
+	var side: float = signf(carrier_pos.x)
+	if side == 0.0:
+		side = 1.0
+	return Vector3(side * (GameRules.RINK_HALF_WIDTH - DUMP_RINK_INSET_M), 0.0, 0.0)
+
+
+# Dump-in target: the FAR offensive corner (opposite the carrier's side), near the
+# goal line — forces the defence to turn and retrieve with their back to the play.
+static func dump_in_target(carrier_pos: Vector3, attacking_goal: Vector3) -> Vector3:
+	var far_side: float = -signf(carrier_pos.x)
+	if far_side == 0.0:
+		far_side = 1.0
+	var goal_dir: float = signf(attacking_goal.z)
+	return Vector3(
+			far_side * (GameRules.RINK_HALF_WIDTH - DUMP_RINK_INSET_M),
+			0.0,
+			attacking_goal.z - goal_dir * DUMP_CORNER_DEPTH_M)
+
+
+# Probability our team wins the race to a dumped puck: a distance race to the dump
+# `target` between our nearest chaser and their nearest, with a contest band around
+# a tie (CHASE_CONTEST_MARGIN_M — a stride's head-start). 1.0 uncontested, 0.0 if
+# we have no chaser. This is what makes a dump-in worth it ONLY when the chase is
+# winnable — outnumbered in a 3v3, it self-suppresses.
+static func chase_recovery(
+		target: Vector3,
+		our_chasers: Array[Vector3],
+		opp_chasers: Array[Vector3]) -> float:
+	if our_chasers.is_empty():
+		return 0.0
+	var our_dist: float = INF
+	for p: Vector3 in our_chasers:
+		our_dist = minf(our_dist, p.distance_to(target))
+	if opp_chasers.is_empty():
+		return 1.0
+	var opp_dist: float = INF
+	for p: Vector3 in opp_chasers:
+		opp_dist = minf(opp_dist, p.distance_to(target))
+	return clampf(0.5 + (opp_dist - our_dist) / (2.0 * CHASE_CONTEST_MARGIN_M), 0.0, 1.0)
+
+
 # "Threat surface" — the value an opp can extract from their current
 # position from a defender's perspective. score_shoot fades to ~0 as the
 # opp gets far from our net (the hole geometry foreshortens); that's fine
