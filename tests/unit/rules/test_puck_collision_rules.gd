@@ -127,10 +127,28 @@ func test_body_block_falls_back_to_normal_when_reflection_zero() -> void:
 
 # ── body_check_strip_velocity ────────────────────────────────────────────────
 
-func test_body_check_strip_scales_direction() -> void:
+func test_body_check_strip_soft_hit_trickles_at_full_speed() -> void:
+	# intensity 0 (barely stripped) → puck keeps the full trickle pace along the hit line.
 	var dir := Vector3(1, 0, 0)
-	var result: Vector3 = PuckCollisionRules.body_check_strip_velocity(dir, 5.0)
-	assert_eq(result, Vector3(5, 0, 0))
+	var result: Vector3 = PuckCollisionRules.body_check_strip_velocity(dir, 3.0, 0.8, 0.0)
+	assert_eq(result, Vector3(3, 0, 0))
+
+func test_body_check_strip_hard_hit_drops_loose() -> void:
+	# intensity 1 (monster hit) → puck jarred nearly dead at contact (loose_speed).
+	var dir := Vector3(1, 0, 0)
+	var result: Vector3 = PuckCollisionRules.body_check_strip_velocity(dir, 3.0, 0.8, 1.0)
+	assert_almost_eq(result.length(), 0.8, 0.0001, "hard hit deadens the strip to loose_speed")
+
+func test_body_check_strip_lerps_with_intensity() -> void:
+	# halfway → midpoint between trickle and loose pace.
+	var dir := Vector3(1, 0, 0)
+	var result: Vector3 = PuckCollisionRules.body_check_strip_velocity(dir, 3.0, 0.8, 0.5)
+	assert_almost_eq(result.length(), 1.9, 0.0001, "intensity 0.5 → (3.0+0.8)/2")
+
+func test_body_check_strip_clamps_intensity() -> void:
+	var dir := Vector3(1, 0, 0)
+	var over: Vector3 = PuckCollisionRules.body_check_strip_velocity(dir, 3.0, 0.8, 2.0)
+	assert_almost_eq(over.length(), 0.8, 0.0001, "intensity >1 clamps to loose_speed")
 
 # ── poke_strip_velocity ──────────────────────────────────────────────────────
 

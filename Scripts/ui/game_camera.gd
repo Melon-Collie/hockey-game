@@ -66,6 +66,20 @@ var _shake_trauma: float = 0.0
 const _SHAKE_DECAY: float = 4.0
 const _SHAKE_MAG: float = 0.25
 
+# ── Impact kick ───────────────────────────────────────────────────────────────
+# A directional camera lurch on a hard body check — a coherent shove along the hit
+# line that springs back, distinct from the random jitter of shake, so a check
+# reads as body-meets-body recoil rather than a symmetric rumble. Modelled as an
+# under-damped spring toward zero: the hit injects VELOCITY (an impulse), the
+# camera swings out, overshoots once, and settles. Purely a per-frame offset on
+# global_position (like shake) — no gameplay state, decoupled from the physics
+# body and blade anchors.
+var _impact_kick: Vector3 = Vector3.ZERO      # current lurch offset (m), added to global_position
+var _impact_kick_vel: Vector3 = Vector3.ZERO  # spring velocity (m/s)
+const _KICK_IMPULSE_MAX: float = 8.0          # spring velocity injected at a full-intensity hit
+const _KICK_STIFFNESS: float = 200.0          # spring pull toward rest (higher = snappier)
+const _KICK_DAMPING: float = 17.0             # < 2·sqrt(stiffness) ≈ 28.3 → one recoil overshoot
+
 # ── Pre-game intro sweep ──────────────────────────────────────────────────────
 # Opening-faceoff crane shot: hold a high wide view of the rink and descend
 # onto the live gameplay framing. Triggered by GameManager.pregame_intro_started
@@ -120,6 +134,27 @@ func _ready() -> void:
 	GameManager.local_player_hit.connect(func(mag: float) -> void:
 		if mag >= 3.0:
 			shake(clampf(mag / 12.0, 0.2, 0.4)))
+	# Landing a check punches a touch harder than taking one — the hit you deliver
+	# should read as the bigger moment. Same ~14 impact-force full-check scale the
+	# VFX burst uses (SkaterVFX._CHECK_FORCE_REF), gated above incidental bumps.
+	GameManager.local_player_landed_hit.connect(func(mag: float) -> void:
+		if mag >= 3.0:
+			shake(clampf(mag / 14.0, 0.25, 0.55)))
+	# Directional recoil on a hard hit (delivered or taken), layered on the shake.
+	GameManager.local_player_impact.connect(impact_kick)
+
+# Inject a directional recoil impulse. `intensity` is a normalized 0..1 hit
+# hardness (each emit site maps its own hit scale), `direction` the world heading
+# to lurch toward — horizontal only. Silent no-op when screen shake is disabled or
+# the hit is too soft / directionless.
+func impact_kick(direction: Vector3, intensity: float) -> void:
+	if not PlayerPrefs.screen_shake or intensity <= 0.01:
+		return
+	var dir: Vector3 = Vector3(direction.x, 0.0, direction.z)
+	if dir.length_squared() < 0.0001:
+		return
+	_impact_kick_vel += dir.normalized() * _KICK_IMPULSE_MAX * clampf(intensity, 0.0, 1.0)
+
 
 func _physics_process(delta: float) -> void:
 	if not skater:
@@ -304,6 +339,19 @@ func _physics_process(delta: float) -> void:
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG,
 			0.0,
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG)
+
+	# ── Step 6b: Impact kick ──────────────────────────────────────────────────
+	# Under-damped spring toward rest; the injected velocity swings the offset out
+	# and back. Added as a per-frame offset (global_position is re-derived from the
+	# framing each tick, so it never compounds).
+	if _impact_kick.length_squared() > 1e-7 or _impact_kick_vel.length_squared() > 1e-7:
+		var accel: Vector3 = -_KICK_STIFFNESS * _impact_kick - _KICK_DAMPING * _impact_kick_vel
+		_impact_kick_vel += accel * delta
+		_impact_kick += _impact_kick_vel * delta
+		global_position += _impact_kick
+	else:
+		_impact_kick = Vector3.ZERO
+		_impact_kick_vel = Vector3.ZERO
 
 	# ── Step 7: Pre-game intro sweep ──────────────────────────────────────────
 	# Crane down from a high wide shot onto the live gameplay framing computed

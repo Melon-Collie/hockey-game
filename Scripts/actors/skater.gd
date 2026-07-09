@@ -126,7 +126,10 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
-@export var body_check_restitution: float = 0.25
+@export var body_check_restitution: float = 0.25         # attacker rebound on a glancing hit
+@export var body_check_restitution_floor: float = 0.0    # rebound on a full-strength hit (drive through the check)
+@export var body_check_drive_min_impulse: float = 4.0    # delivered impulse where drive-through starts easing in
+@export var body_check_drive_ref_impulse: float = 11.0   # delivered impulse of a full plow-through hit
 @export var body_check_transfer: float = 0.45
 @export var body_check_brace_resistance: float = 0.4
 
@@ -634,7 +637,20 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		var approach: float = (vel_horiz - other_vel_horiz).dot(-normal)
 		if approach <= 0.0:
 			continue
-		velocity += normal * approach * body_check_restitution
+		# Attacker rebound scales DOWN as the hit hardens: a glancing shoulder bounces
+		# back at body_check_restitution, a squared-up hit drives THROUGH (rebound →
+		# body_check_restitution_floor) so the attacker keeps forward momentum and
+		# arrives on the loose puck. Keyed off the attacker-side impulse (own transfer
+		# × masses × closing speed, brace-independent — driving through reflects the
+		# attacker's commitment, not the victim's defense), so it's deterministic and
+		# runs identically on every machine (not gated), keeping prediction/reconcile
+		# consistent. Value-type math only — hot-path safe.
+		var weight_ratio: float = weight / maxf(other.weight, 0.001)
+		var attacker_impulse: float = approach * weight_ratio * body_check_transfer
+		var restitution: float = BodyCheckRules.attacker_restitution(
+				attacker_impulse, body_check_restitution, body_check_restitution_floor,
+				body_check_drive_min_impulse, body_check_drive_ref_impulse)
+		velocity += normal * approach * restitution
 		# Victim-side transfer + emits only when `other` is authoritative on this
 		# machine (host owns all; a client owns only its local skater). Skipping it
 		# for remote-vs-remote contact on a client removes non-authoritative churn
@@ -643,7 +659,6 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		if is_host_machine or other.is_local_skater:
 			var effective_transfer: float = body_check_transfer * (other.body_check_brace_resistance if other.is_braced else 1.0)
 			var other_vel_before: Vector3 = other.velocity
-			var weight_ratio: float = weight / maxf(other.weight, 0.001)
 			# This delivered-impulse magnitude (approach × weight_ratio × effective_
 			# transfer) also drives the puck strip, reconstructed from impact_force in
 			# BodyCheckRules.puck_strip_impulse — keep the two in sync if this changes.

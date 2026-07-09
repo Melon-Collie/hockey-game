@@ -55,6 +55,26 @@ static func incremental_stamina_drain(prev_stagger_timer: float, impulse_mag: fl
 	return ((add - prev_stagger_timer) / cfg.max_stagger_seconds) * cfg.max_stamina_drain
 
 
+# Attacker rebound (restitution) for a hit, scaled DOWN as the delivered impulse
+# rises: a glancing shoulder bounces the attacker back at base_restitution, a
+# squared-up monster hit falls toward floor_restitution (~0) so the attacker
+# "drives through" the check and keeps their forward momentum to arrive on the
+# loose puck instead of rebounding off the victim. Keyed off the same delivered
+# impulse magnitude the puck strip and stagger use, so a harder hit reads harder
+# everywhere. Pure floats (no Config) to keep the hot-path collision resolver in
+# skater.gd decoupled from the stagger Config.
+static func attacker_restitution(
+		delivered_impulse: float,
+		base_restitution: float,
+		floor_restitution: float,
+		min_impulse: float,
+		ref_impulse: float) -> float:
+	if ref_impulse <= min_impulse:
+		return base_restitution
+	var t: float = clampf((delivered_impulse - min_impulse) / (ref_impulse - min_impulse), 0.0, 1.0)
+	return lerpf(base_restitution, floor_restitution, t)
+
+
 # Thrust multiplier (<= 1.0) for the stagger remaining this tick. The penalty is
 # proportional to the fraction of a full-strength window still on the clock, so a
 # harder hit (longer timer) both starts deeper and takes longer to ease back to

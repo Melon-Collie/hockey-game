@@ -33,6 +33,16 @@ signal stats_updated
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal team_colors_ready(home_primary: Color, home_secondary: Color, away_primary: Color, away_secondary: Color)
 signal local_player_hit(magnitude: float)
+# Local player DELIVERED a check (fires immediately off the predicted
+# body_checked_player signal on the deliverer's machine — no host round-trip), so
+# the camera can punch on the hit you land, not just the ones you take.
+signal local_player_landed_hit(magnitude: float)
+# Local player was involved in a hard hit (delivered OR taken), carrying the
+# horizontal heading to lurch the camera and a 0..1 intensity. Separate from the
+# magnitude-only signals above because the two hit scales differ (impact_force vs
+# delivered impulse), so intensity is normalized at each emit site; the camera
+# just consumes 0..1. Drives the directional impact kick.
+signal local_player_impact(direction: Vector3, intensity: float)
 # Host-authoritative body-check impact, re-emitted for cosmetic listeners
 # (crowd reaction in ArenaStands) after the burst/sound fire in
 # _on_body_check_landed. `force` is the same VFX-scale impact force.
@@ -2008,7 +2018,11 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
 		local_ctrl.nudge_requested.connect(_on_nudge_requested)
-		local_ctrl.hit_received.connect(func(mag: float) -> void: local_player_hit.emit(mag))
+		local_ctrl.hit_received.connect(func(impulse: Vector3) -> void:
+			local_player_hit.emit(impulse.length())
+			# Delivered-impulse scale (≈11 at a full hit, matching the stagger ref).
+			# Kicks in above a firm 5.0; the camera aims along the shove.
+			local_player_impact.emit(impulse, clampf((impulse.length() - 5.0) / 6.0, 0.0, 1.0)))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 	# AI bots release shots through the same signal as humans, but they live
 	# only on the host (record.is_local is false). Without this connection
@@ -2039,7 +2053,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 				_on_one_timer_release_requested.bind(record.skater))
 	var pid: int = record.peer_id
 	record.skater.body_checked_player.connect(
-		func(v: Skater, f: float, _d: Vector3) -> void: _on_hit_landed(pid, v, f)
+		func(v: Skater, f: float, d: Vector3) -> void: _on_hit_landed(pid, v, f, d)
 	)
 	# Impact burst + sound are NOT played here — they fire from the host-authoritative
 	# body_check_landed broadcast (_on_body_check_landed) once the contact validates
@@ -2961,14 +2975,19 @@ func _on_slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int,
 				local_ctrl.set_local_team_id(new_team_id)
 
 
-func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float) -> void:
+func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: float,
+		hit_dir: Vector3) -> void:
 	_hit_claim.notify_local_hit(hitter_peer_id, victim, impulse_magnitude)
-	# Live achievement: only the local player's own deliveries count, and this
-	# signal fires on the deliverer's machine, so gate on local peer. Excluded in
-	# free play / drills (no achievements there — _achievements_active).
-	if _achievements != null and _achievements_active() \
-			and hitter_peer_id == NetworkManager.local_peer_id():
-		_achievements.on_local_hit(impulse_magnitude)
+	# Only the local player's own deliveries drive the "you landed a hit" feedback,
+	# and this signal fires on the deliverer's machine, so gate on local peer.
+	if hitter_peer_id == NetworkManager.local_peer_id():
+		local_player_landed_hit.emit(impulse_magnitude)
+		# impact_force scale (weight × approach, ≈14 at a full check). Kick the
+		# camera along the direction you drove the hit (follow-through).
+		local_player_impact.emit(hit_dir, clampf((impulse_magnitude - 6.0) / 8.0, 0.0, 1.0))
+		# Live achievement — excluded in free play / drills (no achievements there).
+		if _achievements != null and _achievements_active():
+			_achievements.on_local_hit(impulse_magnitude)
 
 
 # Host-only (impact_landed fires only on the host, from the deduped contact
