@@ -385,16 +385,17 @@ var _blade_reach: float = BLADE_REACH_M
 # charge), so the SWEEP SPEED — the wrister power model's primary signal
 # (ShotMechanics.wrister_power_t) — is distance / this window.
 #
-# ~67 ms is sized so every attribute-scaled charge cap saturates the speed
-# axis: the smallest cap (~0.48 m, high-Shot × short) sweeps at ~7.2 m/s
-# (>= DEFAULT_WRISTER_FULL_SWEEP_SPEED_M_S = 7), the largest (~1.04 m) at
-# ~15.6 m/s (< the counted cap, 18) — a full-distance bot sweep reads as a
-# full-power sweep for every build, matching the carry scorer's max-power
-# assumption. (The old 250 ms window swept ~2.8 m/s, which under the speed
-# model would read as a soft pass.) Sub-max targets (charged passes) sweep
-# proportionally slower across the same window, which the inverse solve in
+# ~50 ms is sized so every attribute-scaled charge cap saturates the speed
+# axis with margin: the smallest cap (~0.48 m, high-Shot × short) sweeps at
+# ~9.7 m/s (>= DEFAULT_WRISTER_FULL_SWEEP_SPEED_M_S = 8, ~20% headroom for
+# blade-target tracking slop), the largest (~1.04 m) at ~20.8 m/s (< the
+# counted cap, 22) — a full-distance bot sweep reads as a full-power sweep
+# for every build, matching the carry scorer's max-power assumption. (The
+# old 250 ms window swept ~2.8 m/s, which under the speed model would read
+# as a soft pass.) Sub-max targets (charged passes) sweep proportionally
+# slower across the same window, which the inverse solve in
 # _state_pass_pressed accounts for.
-const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 15   # ~67 ms
+const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 20   # ~50 ms
 
 # Shot charge fraction of max_wrister_charge_distance: shots aim for full charge
 # (the carry scorer assumes WRISTER_SHOT_SPEED_M_S = DEFAULT_WRISTER_POWER_MAX_M_S,
