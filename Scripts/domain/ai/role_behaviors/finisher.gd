@@ -57,24 +57,6 @@ const WEAK_SIDE_BIAS_M: float = 4.0
 # the far post. Blended toward WEAK_SIDE_BIAS_M as the rush cools.
 const RUSH_WEAK_SIDE_BIAS_M: float = 2.0
 
-# Hard weak-side constraint: positioning candidates closer to center than
-# this (measured toward the weak side) are rejected outright. score_shoot's
-# quadratic angle factor always outweighs its capped goalie-coverage
-# penalty, so without the hard line the argmax drifted every open FINISHER
-# to the dead-center slot — "crashing the front of the net" on a 2-on-1
-# instead of staging past the far post where the cross-seam feed is a
-# tap-in. Mirrors SUPPORT's hard goal-side constraint: the role IS the
-# cross-seam option, so being it isn't left to a soft bias. Sits ~1 m past
-# the far post (NET_HALF_WIDTH 0.915); the net-front battle stays the
-# carrier's drive / the reactive tip, not the staging spot.
-const MIN_CROSS_SEAM_OFFSET_M: float = 2.0
-
-# Rush-mode weak-side constraint — relaxed to 0 at full rush so the argmax is
-# free to pick the net-front drive lane when that's the higher-value crash.
-# On a rush the "crash the front of the net" behaviour the hard line exists to
-# suppress is exactly what we WANT; the line only earns its keep on a set cycle.
-const RUSH_MIN_CROSS_SEAM_OFFSET_M: float = 0.0
-
 # Rush-mode staging depth in front of the opp goal (metres). At full rush the
 # search center pulls in from SLOT_DIST_M to here so the FINISHER crashes the
 # net — a rebound / backdoor tap-in threat — instead of hanging at the slot.
@@ -229,8 +211,6 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	# developing NOW (see the constant doc-blocks above).
 	var rush: float = _rush_factor(ctx)
 	var weak_bias: float = lerpf(WEAK_SIDE_BIAS_M, RUSH_WEAK_SIDE_BIAS_M, rush)
-	var min_cross_seam: float = lerpf(
-			MIN_CROSS_SEAM_OFFSET_M, RUSH_MIN_CROSS_SEAM_OFFSET_M, rush)
 	var stage_dist: float = lerpf(GameRules.SLOT_DIST_M, RUSH_NET_DRIVE_DIST_M, rush)
 
 	# Search center: the slot, stage_dist in front of opp goal, shifted to the
@@ -250,11 +230,6 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	var best_score: float = -INF
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):
-			continue
-		# Hard weak-side line (see MIN_CROSS_SEAM_OFFSET_M): the FINISHER
-		# stages the far side of the seam, never the front of the net —
-		# relaxed toward 0 on a rush so it can drive the net-front lane.
-		if -ctx.strong_x * c.x < min_cross_seam:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue
