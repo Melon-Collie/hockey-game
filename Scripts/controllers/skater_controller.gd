@@ -411,16 +411,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ShotMechanics.is_backhand_from_swing. 0.35 rad ≈ 20°.
 @export var wrister_backhand_deadband: float = 0.35
 # ── Wrister power model (ShotMechanics.wrister_power_t) ──
-# Power = sweep speed × drag distance, feel-curve shaped: the average on-axis
-# sweep speed is the primary signal (slow sweep = soft touch pass), drag
-# distance gates the ceiling (short runway caps at the snap fraction — the
-# snap shot), and the curve shapes where an ordinary flick lands in the band.
-# Feel tunables, deliberately NOT attribute-scaled (Shot already scales the
-# ceiling and the charge-distance effort). Defaults shared with the bot AI's
-# gesture synthesis via GameRules so bot shots stay calibrated.
-@export var wrister_full_sweep_speed: float = GameRules.DEFAULT_WRISTER_FULL_SWEEP_SPEED_M_S
+# Power is a feel-curve over the release speed signal (cursor speed for humans,
+# a committed target for bots — see _wrister_sweep_speed). power_curve shapes
+# where an ordinary flick lands in the band. Feel tunable, NOT attribute-scaled
+# (Shot scales the ceiling). max_counted_sweep_speed caps per-tick charge travel
+# — vestigial (distance no longer feeds power); slated for removal with the rest
+# of the distance machinery.
 @export var wrister_max_counted_sweep_speed: float = GameRules.DEFAULT_WRISTER_MAX_COUNTED_SWEEP_SPEED_M_S
-@export var wrister_snap_power_fraction: float = GameRules.DEFAULT_WRISTER_SNAP_POWER_FRACTION
 @export var wrister_power_curve: float = GameRules.DEFAULT_WRISTER_POWER_CURVE
 # ── Pure mouse-speed wrister ──
 # Wrister power is a curve over the raw SCREEN-space cursor speed (px/s) — flick

@@ -2,16 +2,11 @@ class_name SkaterAimingBehavior
 extends RefCounted
 
 # ── Wrister charge state ──────────────────────────────────────────────────────
-# Cumulative counted sweep distance, UNCLAMPED — consumers normalize against
-# max_wrister_charge_distance at use (release/pred clamp dist_t to 0..1).
-# Keeping the raw total is what keeps avg_sweep_speed() honest when a long
-# hard sweep runs past the charge cap: distance and time keep counting
-# together, so the average doesn't decay just because the bar is full.
+# VESTIGIAL: the old blade-speed × distance power model read charge_distance /
+# sweep_time (the average on-axis sweep speed). Power is now the pure cursor
+# speed (cursor_speed_ema), so these accumulate but no longer feed power —
+# slated for removal with the rest of the distance machinery.
 var charge_distance: float = 0.0
-# Seconds the sweep actively spent moving (ChargeTracking adds delta only on
-# counted ticks). charge_distance / sweep_time is the average sweep speed —
-# the wrister power model's primary signal. Saved/restored across reconcile
-# replay alongside charge_distance (LocalController), same shape of problem.
 var sweep_time: float = 0.0
 # Net signed angular sweep of the blade around the player (radians), over the
 # current stroke. Its SIGN is the forehand/backhand chirality
@@ -35,11 +30,10 @@ var prev_intent_pos: Vector3 = Vector3.ZERO
 # contributes nothing.
 var prev_blade_pos_rel_skater: Vector3 = Vector3.ZERO
 var prev_blade_dir: Vector3 = Vector3.ZERO
-# EMA of the raw SCREEN-space cursor speed (px/s) — the pure-mouse-speed power
-# signal (experiment). Unlike avg_sweep_speed (the ROM-clamped, speed-capped
-# blade) this is the unfiltered hand motion: flick fast = hard, sweep slow =
-# soft, with nothing else in the way. Saved/restored across reconcile like the
-# rest of the charge state.
+# EMA of the raw SCREEN-space cursor speed (px/s) — THE wrister power signal.
+# Unfiltered hand motion (unlike the old ROM-clamped, speed-capped blade
+# speed): flick fast = hard, sweep slow = soft. Saved/restored across reconcile
+# like the rest of the charge state.
 var cursor_speed_ema: float = 0.0
 
 # ── Slapper charge state ──────────────────────────────────────────────────────
@@ -86,13 +80,6 @@ func tick_wrister_charge(
 	prev_blade_pos_rel_skater = blade_pos_rel_skater
 
 
-# Average on-axis sweep speed (m/s) of the accumulated drag — the wrister
-# power model's speed signal (ShotMechanics.wrister_power_t). Zero until a
-# sweep has actually counted motion.
-func avg_sweep_speed() -> float:
-	if charge_distance <= 0.0 or sweep_time <= 0.0:
-		return 0.0
-	return charge_distance / sweep_time
 
 # ── Slapper ───────────────────────────────────────────────────────────────────
 
