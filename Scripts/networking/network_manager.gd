@@ -236,6 +236,10 @@ var _kicked_peers: Dictionary[int, bool] = {}
 # own entry (key 1) is seeded from PlayerPrefs at startup and updated when
 # the local player edits attributes in offline play.
 var _peer_attributes: Dictionary[int, PlayerAttributes] = {}
+# peer_id -> Shot Power Sensitivity (0.25..4.0), from request_join. The host
+# reads it for a remote human's RemoteController so their authoritative wrister
+# power matches what the client predicted with its own sensitivity.
+var _peer_shot_sensitivity: Dictionary[int, float] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
 
 # Host: peers that have connected but not yet sent request_join, keyed to
@@ -617,7 +621,7 @@ func _on_connected_to_server() -> void:
 			local_attrs.speed, local_attrs.agility, local_attrs.hands,
 			local_attrs.size, local_attrs.physical, local_attrs.shot,
 			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
-			SteamManager.get_app_build_id())
+			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -944,7 +948,8 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
 		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM,
-		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0) -> void:
+		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0,
+		shot_power_sensitivity: float = 1.0) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -985,6 +990,7 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
 			if PlayerAttributes.is_within_budget(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
 			else PlayerAttributes.all_medium()
+	_peer_shot_sensitivity[sender_id] = clampf(shot_power_sensitivity, 0.25, 4.0)
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
 	peer_joined.emit(sender_id)
@@ -1053,6 +1059,11 @@ func get_peer_attributes(peer_id: int) -> PlayerAttributes:
 	if attrs == null:
 		return PlayerAttributes.all_medium()
 	return attrs
+
+# A peer's replicated Shot Power Sensitivity (host-side). Defaults to 1.0 for a
+# peer that predates the setting or hasn't sent one.
+func get_peer_shot_sensitivity(peer_id: int) -> float:
+	return _peer_shot_sensitivity.get(peer_id, 1.0)
 
 # Host-side override of a peer's locked attributes. Used by the reconnect path
 # to restore the build the player held at their original join, so a mid-match

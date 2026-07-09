@@ -922,8 +922,7 @@ func get_blade_contact_global() -> Vector3:
 # Smoothed rendered factor in [−1, +1]. Discrete _carry_side is sticky
 # (forehand/backhand never centered while carrying); this lerps toward it
 # so flips animate through center over carry_side_lerp_speed instead of
-# teleporting. Public so future work (e.g. replacing the
-# wrister_start_blade_local_x heuristic for shot bias) can consume it directly.
+# teleporting.
 #
 # Sign convention is mirrored between handednesses so the visual offset
 # direction (applied by SkaterIKCoordinator and get_carry_target_global)
@@ -1240,9 +1239,13 @@ func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
 # skaters render the identical flex with zero network additions.
 func _update_stick_flex(delta: float) -> void:
 	var state: int = current_shot_state
-	# Sign verified in play: the shaft bows AWAY from the loaded blade face —
-	# the paper-derived convention read inverted, hence the leading negation.
-	var side: float = -(1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
+	# The shaft bows TOWARD the loaded blade face — the side the puck is on,
+	# in the direction it's being pushed (three-point bend: puck pins the
+	# blade back, top hand pulls back, bottom hand drives the middle forward,
+	# so the belly of the C points at the target and the blade trails). An
+	# earlier tuning pass negated this after a mis-read of the in-game bow;
+	# playtest confirmed the negation had it backward.
+	var side: float = (1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
 			* (-1.0 if is_left_handed else 1.0)
 	if state != _flex_prev_state:
 		if state == SkaterStateMachine.State.FOLLOW_THROUGH:

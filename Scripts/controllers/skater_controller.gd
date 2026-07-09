@@ -401,9 +401,29 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
 @export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
 @export var max_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-@export var max_wrister_charge_distance: float = 0.7
 @export var backhand_power_coefficient: float = 0.75
 @export var max_charge_direction_variance: float = 35.0
+# Forehand-default deadband (RADIANS of net swing rotation) for the
+# forehand/backhand read: a stroke whose blade sweeps less than this net angle
+# around the player — a near-straight push — defaults to forehand. A backhand
+# is the deliberate rotational commit past it. See
+# ShotMechanics.is_backhand_from_swing. 0.35 rad ≈ 20°.
+@export var wrister_backhand_deadband: float = 0.35
+# ── Wrister power model (ShotMechanics.wrister_power_t) ──
+# Power is a feel-curve over the release speed signal (cursor speed for humans,
+# a committed target for bots — see _wrister_sweep_speed). power_curve shapes
+# where an ordinary flick lands in the band. Feel tunable, NOT attribute-scaled
+# (Shot scales the ceiling).
+@export var wrister_power_curve: float = GameRules.DEFAULT_WRISTER_POWER_CURVE
+# ── Pure mouse-speed wrister ──
+# Wrister power is a curve over the raw SCREEN-space cursor speed (px/s) — flick
+# fast = hard, sweep slow = soft — distance-independent. Direction is still the
+# drag vector; power_curve (above) shapes where a flick lands.
+# wrister_mouse_speed_full is the cursor speed (px/s) that reads as full power.
+# It's PER-SETUP (scales with DPI/resolution), so players calibrate via the
+# Shot Power Sensitivity setting rather than this raw reference.
+@export var wrister_mouse_speed_full: float = 2500.0
+@export var wrister_mouse_speed_smoothing: float = 14.0
 # Blade-speed budget ALONG the shot axis during a wrister aim (m/s of blade
 # travel, applied relative to the skater like max_blade_speed). High and FLAT
 # (not Hands-scaled) so the wind-back-and-snap of a wrister tracks responsively
@@ -813,7 +833,6 @@ var _base_max_wrister_power:            float = 0.0
 var _base_quick_shot_power:             float = 0.0
 var _base_min_slapper_power:            float = 0.0
 var _base_max_slapper_power:            float = 0.0
-var _base_max_wrister_charge_distance:  float = 0.0
 var _base_max_slapper_charge_time:      float = 0.0
 var _base_max_blade_speed:              float = 0.0
 var _base_puck_carry_speed_multiplier:  float = 0.0
@@ -877,19 +896,18 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
 	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_shot
 	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
-	# min_wrister is held at baseline too so the charge curve starts at the snap
-	# value and only climbs (no "winding up made it weaker" dead zone for low Shot).
-	# So Shot = "what a charge buys you, and how fast you can charge it."
+	# min_wrister is held at baseline too — it's the soft-touch floor (a slow
+	# sweep is a touch pass, deliberately BELOW the snap speed), and everyone's
+	# touch should be equally soft. So Shot = "what a charge buys you, and how
+	# fast you can charge it."
 	var m_shot_ceil: float = attrs.shot_power_mult()
 	min_wrister_power = _base_min_wrister_power              # baseline floor (= snap)
 	max_wrister_power = _base_max_wrister_power * m_shot_ceil
 	quick_shot_power  = _base_quick_shot_power               # baseline — also the pass speed
 	min_slapper_power = _base_min_slapper_power * m_shot_ceil
 	max_slapper_power = _base_max_slapper_power * m_shot_ceil
-	# Wrister charge effort is WIDER than the slapper's (low Shot must drag far to
-	# reach its charged ceiling) and stays coupled to Size so the cap tracks reach.
-	# Slapper wind-up time keeps the gentler shot_charge curve.
-	max_wrister_charge_distance = _base_max_wrister_charge_distance * attrs.shot_wrister_charge_mult() * attrs.size_charge_mult()
+	# Slapper wind-up time keeps the gentler shot_charge curve. (Wrister power is
+	# pure mouse speed — no charge distance — so Shot only scales its ceiling.)
 	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
 	# Body checks read two attributes on different axes (so they compose, not
 	# double-count): Size sets `weight` (the weight_ratio — a heavy player is hard
@@ -973,6 +991,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	_cached_move_cfg = null
 	_cached_block_move_cfg = null
 	_cached_stamina_cfg = null
+	_cached_wrister_cfg = null
 	skater.apply_appearance(attrs)
 
 
@@ -988,7 +1007,6 @@ func _capture_attribute_bases() -> void:
 	_base_quick_shot_power             = quick_shot_power
 	_base_min_slapper_power            = min_slapper_power
 	_base_max_slapper_power            = max_slapper_power
-	_base_max_wrister_charge_distance  = max_wrister_charge_distance
 	_base_max_slapper_charge_time      = max_slapper_charge_time
 	_base_max_blade_speed              = max_blade_speed
 	_base_backhand_power_coefficient   = backhand_power_coefficient
@@ -1247,9 +1265,8 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	# is upper-body-local and can't be used for host-side world geometry.
 	state.top_hand_world = skater.upper_body_to_global(skater.get_top_hand_position())
 	state.shot_state = _sm.get_state() as int
-	# The normalized 0..1 charge (skater.shot_charge covers wrister drag AND
-	# slapper wind-up), not _aiming.charge_distance — the raw wrister meters
-	# would mis-scale in the u8 codec and never reflect a slapshot at all.
+	# The normalized 0..1 charge (skater.shot_charge covers the wrister's
+	# predicted release power AND slapper wind-up), in the u8 codec range.
 	# Currently unconsumed on the receive side: the blade charge-glow VFX that
 	# read it was cut by design (see ARCHITECTURE.md — charge feedback is the
 	# local on-ice charge ring, no world-space glow).
@@ -1332,6 +1349,12 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 			_skating.stop_yaw_offset + _skating.travel_align_yaw + _skating.shot_hip_yaw)
 
 signal puck_release_requested(direction: Vector3, power: float, is_slapper: bool)
+# Debug/HUD annotation for the most recent release: "FH"/"BH" for wristers
+# (the classification that drove the backhand power penalty), "" for quick
+# shots and slappers (no backhand concept — quick takes no penalty, there is
+# no backhand slapper). Set just before puck_release_requested fires; the
+# shot-speed toast reads it alongside the signal.
+var last_release_hand: String = ""
 # Fired when the player releases slap while the puck is nearby but not yet
 # carried — the leniency one-timer. GameManager acquires + releases the puck;
 # the controller transitions to follow-through immediately.
@@ -1569,15 +1592,11 @@ func _cancel_active_charge() -> void:
 			and s != State.SLAPPER_CHARGE_WITHOUT_PUCK:
 		return
 	_aiming.reset_slapper()
-	_aiming.charge_distance = 0.0
 	_transition_to_skating(true)
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 func _apply_state(input: InputState, delta: float) -> void:
-	var prev_state: int = _sm.get_state()
 	_sm.dispatch(skater, input, delta, has_puck, _game_state.is_movement_locked())
-	if prev_state != State.WRISTER_AIM and _sm.get_state() == State.WRISTER_AIM:
-		_aiming.wrister_start_blade_local_x = skater.get_blade_position().x
 
 # ── State Helpers ─────────────────────────────────────────────────────────────
 func _transition_to_skating(suppress_lost_flash: bool = false) -> void:
@@ -1736,31 +1755,48 @@ func _get_charge_direction() -> Vector3:
 	# Don't re-flip here — that would invert correct shots.
 	return _aiming.prev_blade_dir
 
+# Forehand/backhand for the wrister, from the swing CHIRALITY — the net
+# rotational sense of the blade's sweep around the player over the stroke
+# (SkaterAimingBehavior.swing_rotation, accumulated by ChargeTracking). Shared
+# by the release path and the every-tick goalie-prediction path so both agree.
+# The accumulator is player-relative blade motion and is saved/restored across
+# reconcile alongside charge, so the classification is deterministic.
+func _classify_backhand() -> bool:
+	return ShotMechanics.is_backhand_from_swing(
+			_aiming.swing_rotation,
+			skater.is_left_handed,
+			wrister_backhand_deadband)
+
 func _release_wrister(input: InputState) -> void:
 	if has_puck:
 		var blade_world: Vector3 = _ik.last_target_blade_world
-		# _prev_blade_dir is the world-space direction the cursor was dragged
-		# (relative to the player, so skating velocity is already removed).
-		var is_backhand: bool = \
-				_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
+		# Forehand/backhand from the sweep intent — which side of the body the
+		# drag went toward (see _classify_backhand / ShotMechanics.is_backhand_shot).
+		var is_backhand: bool = _classify_backhand()
 		# LMB is always a charged wrister now — the quick shot lives on its own
 		# button (_fire_quick_shot). A bare tap here fires a min-charge wrister.
+		last_release_hand = "BH" if is_backhand else "FH"
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
 				blade_world,
 				is_backhand,
 				_elevation_level,
-				_aiming.charge_distance,
 				_wrister_config(),
-				_get_charge_direction())
+				_get_charge_direction(),
+				false,
+				_wrister_sweep_speed(input))
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
 	_sm.follow_through_is_slapper = false
-	# Finish size follows the charge: a bare tap flicks, a full drag finishes high.
-	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0,
-			clampf(_aiming.charge_distance / max_wrister_charge_distance, 0.0, 1.0))
+	# Finish size follows the released POWER (pre-backhand — the body swing is the
+	# same, the blade contact is what's weaker): a soft touch pass flicks, a
+	# ripped full sweep finishes high. Computed from the aiming state (not
+	# `result`) so a whiff still animates.
+	var release_power_t: float = ShotMechanics.wrister_power_t(
+			_wrister_sweep_speed(input), _wrister_config())
+	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0, release_power_t)
 	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
@@ -1774,13 +1810,13 @@ func _release_wrister(input: InputState) -> void:
 func _fire_quick_shot(input: InputState) -> void:
 	if has_puck:
 		var blade_world: Vector3 = _ik.last_target_blade_world
+		last_release_hand = ""
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
 				blade_world,
 				false,
 				_elevation_level,
-				0.0,
 				_wrister_config(),
 				Vector3.ZERO,
 				true)
@@ -1797,6 +1833,7 @@ func _fire_quick_shot(input: InputState) -> void:
 func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 	if has_puck:
 		# Direction is locked at the moment slap was pressed — no mid-swing steering.
+		last_release_hand = ""
 		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 		var cfg: ShotMechanics.SlapperConfig = _slapper_config()
 		# One-timers always fire at max power regardless of actual charge built.
@@ -1848,8 +1885,9 @@ func _update_wrister_charge(input: InputState) -> void:
 	blade_pos_rel_skater.y = 0.0
 	_aiming.tick_wrister_charge(
 			intent_pos, blade_pos_rel_skater,
-			max_charge_direction_variance, max_wrister_charge_distance)
-	skater.shot_charge = _aiming.charge_distance / max_wrister_charge_distance
+			max_charge_direction_variance,
+			input.delta,
+			wrister_mouse_speed_smoothing)
 	# Publish where this charge would go if released NOW, so the host-side goalie
 	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
 	# release math in _release_wrister (same inputs), and re-solves every tick — so
@@ -1857,13 +1895,19 @@ func _update_wrister_charge(input: InputState) -> void:
 	# impact off the goalie's lean (a tricky release beats the read). Host-only:
 	# remote carriers don't run this path, so their predicted velocity stays ZERO
 	# and the goalie falls back to a non-directional readiness tell.
-	var is_backhand: bool = \
-			_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
+	var is_backhand: bool = _classify_backhand()
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
-			is_backhand, _elevation_level, _aiming.charge_distance,
-			_wrister_config(), _get_charge_direction())
+			is_backhand, _elevation_level,
+			_wrister_config(), _get_charge_direction(), false,
+			_wrister_sweep_speed(input))
 	skater.predicted_shot_velocity = pred.direction * pred.power
+	# The charge ring shows the release-now SPEED (normalized predicted power over
+	# the min→max band) — the pure mouse-speed model, so it always matches the
+	# shot that would come out this tick. This is the honest readout the goalie
+	# leans on and what the stick-flex pose keys off.
+	var power_span: float = maxf(max_wrister_power - min_wrister_power, 0.001)
+	skater.shot_charge = clampf((pred.power - min_wrister_power) / power_span, 0.0, 1.0)
 	# Charge ring is local-only; gate on the same flag as the one-timer reticle.
 	if show_one_timer_indicator:
 		skater.set_charge_ring_visible(true)
@@ -2033,16 +2077,52 @@ func _body_check_config() -> BodyCheckRules.Config:
 		_cached_body_check_cfg.max_thrust_penalty = stagger_max_thrust_penalty
 	return _cached_body_check_cfg
 
+# Cached — _update_wrister_charge reads it every aim tick (120 Hz, replayed
+# again per input through reconcile), so a per-call .new() is hot-path churn.
+# Rebuilt lazily after apply_attributes nulls it (same pattern as the
+# movement/stamina configs above).
+var _cached_wrister_cfg: ShotMechanics.WristerConfig = null
+
 func _wrister_config() -> ShotMechanics.WristerConfig:
-	var cfg := ShotMechanics.WristerConfig.new()
-	cfg.min_wrister_power = min_wrister_power
-	cfg.max_wrister_power = max_wrister_power
-	cfg.max_wrister_charge_distance = max_wrister_charge_distance
-	cfg.backhand_power_coefficient = backhand_power_coefficient
-	cfg.quick_shot_power = quick_shot_power
-	cfg.loft_vy_low = loft_vertical_speed_low
-	cfg.loft_vy_high = loft_vertical_speed_high
-	return cfg
+	if _cached_wrister_cfg == null:
+		_cached_wrister_cfg = ShotMechanics.WristerConfig.new()
+		_cached_wrister_cfg.min_wrister_power = min_wrister_power
+		_cached_wrister_cfg.max_wrister_power = max_wrister_power
+		_cached_wrister_cfg.backhand_power_coefficient = backhand_power_coefficient
+		_cached_wrister_cfg.quick_shot_power = quick_shot_power
+		_cached_wrister_cfg.loft_vy_low = loft_vertical_speed_low
+		_cached_wrister_cfg.loft_vy_high = loft_vertical_speed_high
+		_cached_wrister_cfg.power_curve = wrister_power_curve
+		# Pure mouse-speed model: power is a curve over the cursor speed (fed as
+		# sweep_speed by _wrister_sweep_speed). full_sweep_speed is the cursor
+		# speed (px/s) that reads as full power.
+		_cached_wrister_cfg.full_sweep_speed = wrister_mouse_speed_full
+	return _cached_wrister_cfg
+
+# True for bot controllers (AIController overrides). Bots have no real cursor, so
+# they drive the pure-mouse power model via a committed target fraction
+# (InputState.bot_wrister_power_t) rather than a measured cursor speed.
+func is_ai_controlled() -> bool:
+	return false
+
+# Shot Power Sensitivity for THIS controller. Base (bots / unknown) = 1.0;
+# LocalController reads the local pref; a host-side RemoteController reads the
+# value the host replicated from the remote client's join (set below), so the
+# client's predicted shot power matches the host's authoritative shot.
+var net_shot_power_sensitivity: float = 1.0
+
+func shot_power_sensitivity() -> float:
+	return 1.0
+
+# The speed signal fed to the wrister power model:
+#   - Bots: the cursor speed equivalent to their committed target power fraction
+#     (deterministic — bots have no measured cursor).
+#   - Humans: the raw cursor speed, scaled by that player's Shot Power
+#     Sensitivity (calibrates the flick-for-power feel to their mouse DPI).
+func _wrister_sweep_speed(input: InputState) -> float:
+	if is_ai_controlled():
+		return ShotMechanics.wrister_speed_for_power_t(input.bot_wrister_power_t, _wrister_config())
+	return _aiming.cursor_speed_ema * shot_power_sensitivity()
 
 func _slapper_config() -> ShotMechanics.SlapperConfig:
 	var cfg := ShotMechanics.SlapperConfig.new()

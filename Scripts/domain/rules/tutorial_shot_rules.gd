@@ -102,10 +102,10 @@ static func nearest_target(
 	return best_i
 
 
-# Whether a released wrister was a charged/dragged shot rather than a flick.
-# `charge_distance` is the blade-drag distance built up before release. The engine
-# splits quick-vs-charged by hold time, not distance, but the Wrist Shot drill's
-# lesson is dragging to aim/charge, so it gates on a meaningful drag past
-# `drag_qualify` (a tutorial bar, not the engine's quick-shot rule).
-static func is_dragged_wrister(charge_distance: float, drag_qualify: float) -> bool:
-	return charge_distance >= drag_qualify
+# Whether a released wrister was a charged shot rather than a soft flick.
+# `charge` is the peak normalized release power (0..1) built up before release —
+# the pure mouse-speed model reads a genuine sweep as real power. The Wrist Shot
+# drill's lesson is dragging to aim and ripping it, so it gates on the player
+# having built power past `qualify` (a tutorial bar, not an engine rule).
+static func is_dragged_wrister(charge: float, qualify: float) -> bool:
+	return charge >= qualify

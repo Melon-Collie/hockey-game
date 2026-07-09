@@ -2037,6 +2037,10 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# puck_release_requested. This is the ONLY path that fires a remote human's shot —
 	# there is no shot RPC; the host derives and fires it from the inputs it replays.
 	if NetworkManager.is_host and not record.is_local and not record.is_bot:
+		# Shot Power Sensitivity the client sent at join — the host fires this
+		# player's wrister at the same power their own client predicted.
+		record.controller.net_shot_power_sensitivity = \
+				NetworkManager.get_peer_shot_sensitivity(record.peer_id)
 		record.controller.puck_release_requested.connect(
 				_on_remote_derived_release.bind(record.peer_id))
 		record.controller.nudge_requested.connect(

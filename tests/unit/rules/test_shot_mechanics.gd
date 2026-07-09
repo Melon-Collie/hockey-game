@@ -6,12 +6,16 @@ func _wrister_cfg() -> ShotMechanics.WristerConfig:
 	var cfg := ShotMechanics.WristerConfig.new()
 	cfg.min_wrister_power = 8.0
 	cfg.max_wrister_power = 25.0
-	cfg.max_wrister_charge_distance = 3.0
 	cfg.backhand_power_coefficient = 0.75
 	cfg.quick_shot_power = 12.0
 	cfg.loft_vy_low = 2.2
 	cfg.loft_vy_high = 5.4
+	cfg.full_sweep_speed = 7.0
+	cfg.power_curve = 0.85
 	return cfg
+
+# Cursor/sweep speed that saturates the power model for _wrister_cfg() (> full_sweep_speed).
+const FULL_SWEEP: float = 10.0
 
 func _slapper_cfg() -> ShotMechanics.SlapperConfig:
 	var cfg := ShotMechanics.SlapperConfig.new()
@@ -25,14 +29,12 @@ func _slapper_cfg() -> ShotMechanics.SlapperConfig:
 # ── Wrister: quick shot branch ───────────────────────────────────────────────
 
 func test_wrister_quick_shot_uses_quick_shot_power() -> void:
-	# is_quick_shot=true (released before quick_shot_time) — fixed quick power
-	# regardless of any drag charge that may have accrued.
+	# is_quick_shot=true — fixed quick power regardless of any sweep speed.
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,                   # player_pos
 		Vector3(10, 0, 0),              # mouse at (10, 0, 0)
 		Vector3(0.5, 0, 0),             # blade world pos
 		false, 0,
-		0.01,
 		_wrister_cfg(),
 		Vector3.ZERO,
 		true)                           # is_quick_shot
@@ -45,51 +47,47 @@ func test_wrister_quick_shot_direction_from_blade() -> void:
 		Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, 0,
-		0.01,
 		_wrister_cfg(),
 		Vector3.ZERO,
 		true)                           # is_quick_shot
 	assert_gt(result.direction.x, 0.0, "direction toward the target (+X)")
 
-# ── Wrister: full charge branch ──────────────────────────────────────────────
+# ── Wrister: charged branch ──────────────────────────────────────────────────
 
-func test_wrister_full_charge_maxes_power() -> void:
+func test_wrister_full_speed_sweep_maxes_power() -> void:
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,
 		Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, 0,
-		5.0,                            # over max_wrister_charge_distance
-		_wrister_cfg())
-	assert_almost_eq(result.power, 25.0, 0.01, "over-full charge clamps to max_wrister_power")
+		_wrister_cfg(),
+		Vector3.ZERO, false, FULL_SWEEP)  # sweep over full_sweep_speed
+	assert_almost_eq(result.power, 25.0, 0.01, "over-full sweep speed clamps to max_wrister_power")
 
 func test_wrister_backhand_penalty() -> void:
 	var cfg := _wrister_cfg()
-	# is_backhand is computed by the controller from the blade's upper-body-local X
-	# at WRISTER_AIM entry. These calls directly express the classification result.
+	# is_backhand is computed by the controller from the swing chirality
+	# (ShotMechanics.is_backhand_from_swing) at release time. These calls
+	# directly express the classification result.
 	var rh_forehand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
-		false, 0,                # is_backhand=false (righty forehand)
-		3.0, cfg)
+		false, 0, cfg)          # is_backhand=false (righty forehand)
 	var rh_backhand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(-0.5, 0, 0),
-		true, 0,                 # is_backhand=true (righty backhand)
-		3.0, cfg)
+		true, 0, cfg)           # is_backhand=true (righty backhand)
 	assert_lt(rh_backhand.power, rh_forehand.power, "right-handed backhand penalised")
 
 	# Left-handed: natural blade side is -X. Forehand = blade at negative X, backhand = positive X.
 	var lh_forehand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(-0.5, 0, 0),
-		false, 0,                # is_backhand=false (lefty forehand)
-		3.0, cfg)
+		false, 0, cfg)          # is_backhand=false (lefty forehand)
 	var lh_backhand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
-		true, 0,                 # is_backhand=true (lefty backhand)
-		3.0, cfg)
+		true, 0, cfg)           # is_backhand=true (lefty backhand)
 	assert_lt(lh_backhand.power, lh_forehand.power, "left-handed backhand penalised")
 
 	# A lefty who starts with blade at +0.1 (cross-body, inside old shoulder threshold
@@ -97,8 +95,7 @@ func test_wrister_backhand_penalty() -> void:
 	var lh_slight_backhand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.1, 0, 0),
-		true, 0,                 # is_backhand=true (lefty slight backhand)
-		3.0, cfg)
+		true, 0, cfg)           # is_backhand=true (lefty slight backhand)
 	assert_lt(lh_slight_backhand.power, lh_forehand.power,
 		"left-handed slight backhand also penalised — threshold is body center")
 
@@ -107,15 +104,15 @@ func test_wrister_loft_levels_order_y_component() -> void:
 	var flat: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
-		false, 0, 3.0, cfg)
+		false, 0, cfg)
 	var low: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
-		false, 1, 3.0, cfg)
+		false, 1, cfg)
 	var high: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
-		false, 2, 3.0, cfg)
+		false, 2, cfg)
 	assert_almost_eq(flat.direction.y, 0.0, 0.001)
 	assert_gt(low.direction.y, 0.0)
 	assert_gt(high.direction.y, low.direction.y, "HIGH lofts more than LOW")
@@ -128,29 +125,28 @@ func test_wrister_charged_uses_drag_direction_not_player_to_mouse() -> void:
 		Vector3(10, 0, 0),      # mouse far to the right
 		Vector3(0.5, 0, 0),     # blade world pos
 		false, 0,
-		3.0,                    # full charge
 		_wrister_cfg(),
 		Vector3(0, 0, -1))      # charge_direction: dragged forward
 	assert_almost_eq(result.direction.z, -1.0, 0.05, "shot follows drag direction, not mouse position")
 	assert_almost_eq(result.direction.x, 0.0, 0.05, "shot does not veer toward mouse")
 
 func test_wrister_hard_binary_quick_vs_charged() -> void:
-	# HARD BINARY (no blend): with the SAME charge + drag, is_quick_shot flips the
-	# shot categorically. Quick = aim player→blade (+X here, toward cursor) at
+	# HARD BINARY (no blend): with the SAME drag, is_quick_shot flips the shot
+	# categorically. Quick = aim player→blade (+X here, toward cursor) at
 	# quick_shot_power; charged = aim along the drag (-Z) at charged power. Mouse is
 	# +X, drag is -Z, so the aim axis itself flips between the two.
 	var cfg := _wrister_cfg()
 	var drag := Vector3(0, 0, -1)
 	var quick: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
-		false, 0, 0.5, cfg, drag, true)     # is_quick_shot
+		false, 0, cfg, drag, true)          # is_quick_shot
 	var charged: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
-		false, 0, 0.5, cfg, drag, false)    # charged wrister
+		false, 0, cfg, drag, false, FULL_SWEEP)  # charged wrister
 	assert_gt(quick.direction.x, 0.9, "quick shot aims player→blade (+X), ignores drag")
 	assert_almost_eq(charged.direction.z, -1.0, 0.05, "charged wrister aims along drag (-Z)")
 	assert_almost_eq(quick.power, cfg.quick_shot_power, 0.01, "quick shot fires fixed quick_shot_power")
-	assert_gt(charged.power, 0.0, "charged wrister scales power with the (0.5/3.0) charge ratio")
+	assert_almost_eq(charged.power, cfg.max_wrister_power, 0.01, "charged wrister scales power with sweep speed")
 
 
 func test_wrister_charged_direction_independent_of_body_position() -> void:
@@ -162,10 +158,10 @@ func test_wrister_charged_direction_independent_of_body_position() -> void:
 	var drag := Vector3(0, 0, -1)
 	var a: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
-		false, 0, 1.5, cfg, drag)
+		false, 0, cfg, drag)
 	var b: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3(3, 0, -2), Vector3(10, 0, 0), Vector3(-1.0, 0, 4),  # different body + blade
-		false, 0, 1.5, cfg, drag)
+		false, 0, cfg, drag)
 	assert_almost_eq(a.direction.x, b.direction.x, 0.001, "charged aim X independent of body")
 	assert_almost_eq(a.direction.z, b.direction.z, 0.001, "charged aim Z independent of body")
 
@@ -176,10 +172,99 @@ func test_wrister_charged_falls_back_to_mouse_when_no_drag_direction() -> void:
 		Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, 0,
-		3.0,
 		_wrister_cfg(),
 		Vector3.ZERO)           # no drag direction
 	assert_gt(result.direction.x, 0.9, "falls back to player→mouse direction (+X)")
+
+# ── Wrister power model: pure cursor speed, feel-curve shaped ─────────────────
+
+func test_wrister_slow_sweep_is_soft() -> void:
+	# A slow deliberate sweep is a touch pass, not a full shot — the cursor speed
+	# is the whole power signal (distance-independent).
+	var cfg := _wrister_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, 1.0)  # 1 m/s sweep
+	var midpoint: float = (cfg.min_wrister_power + cfg.max_wrister_power) * 0.5
+	assert_lt(r.power, midpoint, "slow sweep stays in the soft half")
+	assert_gt(r.power, cfg.min_wrister_power, "still above the bare floor")
+
+func test_wrister_power_monotonic_in_sweep_speed() -> void:
+	var cfg := _wrister_cfg()
+	var prev_power: float = -1.0
+	for sweep: float in [0.0, 2.0, 4.0, 6.0, 8.0]:
+		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+			Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+			false, 0, cfg, Vector3(1, 0, 0), false, sweep)
+		assert_gt(r.power, prev_power, "power never decreases as the sweep speeds up")
+		prev_power = r.power
+
+func test_wrister_zero_full_sweep_speed_floors_power() -> void:
+	# Uncalibrated config: full_sweep_speed <= 0 disables the wrister power axis,
+	# so power_t is zero and the release floors at min_wrister_power.
+	var cfg := _wrister_cfg()
+	cfg.full_sweep_speed = 0.0
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, 5.0)
+	assert_almost_eq(r.power, cfg.min_wrister_power, 0.01,
+		"disabled speed axis floors the release power")
+
+func test_wrister_quick_shot_ignores_sweep_speed() -> void:
+	var cfg := _wrister_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3.ZERO, true, FULL_SWEEP)
+	assert_almost_eq(r.power, cfg.quick_shot_power, 0.01,
+		"quick shot stays at fixed pass power whatever the sweep did")
+
+func test_wrister_speed_for_power_t_round_trip() -> void:
+	# The bot inverse: a target power fraction → a cursor speed that, run forward
+	# through the pure-speed model, releases at that fraction.
+	var cfg := _wrister_cfg()
+	for target: float in [0.0, 0.3, 0.62, 1.0]:
+		var speed: float = ShotMechanics.wrister_speed_for_power_t(target, cfg)
+		var t: float = ShotMechanics.wrister_power_t(speed, cfg)
+		assert_almost_eq(t, target, 0.001, "speed_for_power_t inverts to %.2f" % target)
+
+func test_wrister_speed_for_power_t_clamps() -> void:
+	var cfg := _wrister_cfg()
+	assert_almost_eq(ShotMechanics.wrister_speed_for_power_t(0.0, cfg), 0.0, 0.001)
+	assert_almost_eq(ShotMechanics.wrister_speed_for_power_t(1.5, cfg),
+			cfg.full_sweep_speed, 0.001, "over-1 target clamps to the full-speed reference")
+
+# ── Forehand/backhand from swing chirality ───────────────────────────────────
+# Convention (empirically flippable): a POSITIVE net swing rotation is a
+# forehand for a right-handed shooter, mirrored for lefties. The classifier
+# reads only the accumulated rotation sign — the sweep geometry that produced
+# it is tested against ChargeTracking.swing_step in test_charge_tracking.
+
+func test_swing_positive_is_forehand_righty_backhand_lefty() -> void:
+	assert_false(ShotMechanics.is_backhand_from_swing(0.8, false),
+		"positive swing is a RH forehand")
+	assert_true(ShotMechanics.is_backhand_from_swing(0.8, true),
+		"positive swing is a LH backhand (mirrored)")
+
+func test_swing_negative_is_backhand_righty_forehand_lefty() -> void:
+	assert_true(ShotMechanics.is_backhand_from_swing(-0.8, false),
+		"negative swing is a RH backhand")
+	assert_false(ShotMechanics.is_backhand_from_swing(-0.8, true),
+		"negative swing is a LH forehand (mirrored)")
+
+func test_swing_deadband_defaults_forehand() -> void:
+	# A small net rotation (a near-straight push) stays forehand for either hand.
+	assert_false(ShotMechanics.is_backhand_from_swing(-0.2, false, 0.35),
+		"RH: rotation inside the deadband defaults forehand")
+	assert_false(ShotMechanics.is_backhand_from_swing(0.2, true, 0.35),
+		"LH: rotation inside the deadband defaults forehand")
+	assert_true(ShotMechanics.is_backhand_from_swing(-0.5, false, 0.35),
+		"RH: rotation past the deadband is a backhand")
+
+func test_swing_zero_is_forehand() -> void:
+	assert_false(ShotMechanics.is_backhand_from_swing(0.0, false),
+		"no rotation → forehand default")
+	assert_false(ShotMechanics.is_backhand_from_swing(0.0, true),
+		"no rotation → forehand default (LH)")
 
 # ── Slapper ──────────────────────────────────────────────────────────────────
 
@@ -222,17 +307,17 @@ func test_slapper_loft() -> void:
 # The defining property of the loft system: a level's vertical launch speed is
 # CONSTANT across shot power — charge buys pace, not height, so the apex is the
 # same for a soft and a hard shot at the same level.
-func test_loft_vertical_speed_fixed_across_charge() -> void:
+func test_loft_vertical_speed_fixed_across_power() -> void:
 	var cfg := _wrister_cfg()
-	for charge: float in [1.0, 3.0]:
+	for sweep: float in [2.0, FULL_SWEEP]:
 		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 			Vector3.ZERO, Vector3(0, 0, 10),
 			Vector3(0.5, 0, 0),
-			false, 2, charge, cfg,
-			Vector3(0, 0, 1))
+			false, 2, cfg,
+			Vector3(0, 0, 1), false, sweep)
 		var v_y: float = r.power * r.direction.y
 		assert_almost_eq(v_y, cfg.loft_vy_high, 0.01,
-			"vertical launch speed is the level constant at charge %.1f" % charge)
+			"vertical launch speed is the level constant at sweep %.1f" % sweep)
 
 
 func test_loft_low_level_uses_low_vy() -> void:
@@ -240,8 +325,8 @@ func test_loft_low_level_uses_low_vy() -> void:
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(0, 0, 10),
 		Vector3(0.5, 0, 0),
-		false, 1, 3.0, cfg,
-		Vector3(0, 0, 1))
+		false, 1, cfg,
+		Vector3(0, 0, 1), false, FULL_SWEEP)
 	assert_almost_eq(r.power * r.direction.y, cfg.loft_vy_low, 0.01)
 
 
@@ -253,13 +338,13 @@ func test_loft_direction_agnostic() -> void:
 	var toward: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(0, 0, 10),
 		Vector3(0.5, 0, 0),
-		false, 1, 3.0, cfg,
-		Vector3(0, 0, 1))
+		false, 1, cfg,
+		Vector3(0, 0, 1), false, FULL_SWEEP)
 	var away: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(0, 0, 10),
 		Vector3(0.5, 0, 0),
-		false, 1, 3.0, cfg,
-		Vector3(0, 0, -1))
+		false, 1, cfg,
+		Vector3(0, 0, -1), false, FULL_SWEEP)
 	assert_almost_eq(toward.direction.y, away.direction.y, 0.0001,
 		"same loft level and power -> same y, regardless of direction")
 
@@ -272,7 +357,7 @@ func test_quick_shot_loft_uses_level_table() -> void:
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, 1,
-		0.01, cfg,
+		cfg,
 		Vector3.ZERO,
 		true)                           # is_quick_shot
 	var v_y: float = r.power * r.direction.y
@@ -288,7 +373,7 @@ func test_loft_ratio_capped_for_soft_shot() -> void:
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(0, 0, 10),
 		Vector3(0.5, 0, 0),
-		true, 2, 0.0, cfg,
+		true, 2, cfg,
 		Vector3(0, 0, 1))
 	var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
 	assert_almost_eq(r.direction.y / xz_len, ShotMechanics.MAX_LOFT_RATIO, 0.001,

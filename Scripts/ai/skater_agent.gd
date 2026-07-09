@@ -42,10 +42,6 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_sm.apply_profile(profile)
 
 
-func set_max_wrister_charge_distance(d: float) -> void:
-	_sm.set_max_wrister_charge_distance(d)
-
-
 # Forward this bot's attribute-scaled self-capabilities (speed, accel, reach,
 # shot / pass speed) to the state machine. Called by AIController.apply_attributes
 # on spawn and on free-play picker changes. Null is a no-op (baseline defaults).

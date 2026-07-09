@@ -279,14 +279,40 @@ const POKE_RADIUS_M: float = 0.5
 
 # Wrister/slapper/quick-shot puck release speeds. The puck consumes
 # `direction × power` directly as linear velocity (see Puck.release),
-# so "power" IS m/s. Min and max bracket the charge curve.
-const DEFAULT_WRISTER_POWER_MIN_M_S: float = 14.0
-const DEFAULT_WRISTER_POWER_MAX_M_S: float = 24.0
-const DEFAULT_SLAPPER_POWER_MIN_M_S: float = 17.0
-const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 34.0
+# so "power" IS m/s. Min and max bracket the wrister power model
+# (ShotMechanics.wrister_power_t — sweep speed × drag distance, feel-curve
+# shaped). The min sits BELOW the quick-shot/pass speed on purpose: a slow
+# deliberate sweep is a soft touch pass, softer than the fixed snap pass.
+# The maxes are the LEAGUE-AVERAGE (Shot L3) anchors, calibrated so the
+# _SHOT_POWER_MULTS spread (+/-18%, see PlayerAttributes) puts Shot L5 at an
+# elite top-of-the-NHL release:
+#   wrister 33 m/s ≈ 74 mph  (L5 ~38.9 ≈ 87 mph, L1 ~27.4 ≈ 61 mph)
+#   slapper 40 m/s ≈ 89 mph  (L5 ~47.2 ≈ 106 mph, L1 ~33.2 ≈ 74 mph)
+# Reception already gates hard shots (deflect_min_speed ~20 m/s needs a
+# squared blade), so most of the wrister band is catch-with-care territory.
+# The slapper min is a hurried, barely-wound release — still a heavy shot
+# (~45 mph); one-timers always fire at max regardless of charge.
+const DEFAULT_WRISTER_POWER_MIN_M_S: float = 10.0
+const DEFAULT_WRISTER_POWER_MAX_M_S: float = 33.0
+const DEFAULT_SLAPPER_POWER_MIN_M_S: float = 20.0
+const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
 # Quick-shot is the no-charge release — also used by AI as the typical
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0
+
+# ── Wrister power-model default (ShotMechanics.wrister_power_t) ──────────────
+# Feel tunable — live editor tuning isn't the workflow, but it's an @export on
+# SkaterController; this is the shared default so the bot AI stays calibrated to
+# the live shot. Wrister power is now the pure mouse-speed model: power is a
+# curve over the raw cursor speed (scaled by the player's Shot Power
+# Sensitivity), distance-independent. The full-power cursor-speed reference is a
+# per-setup export (wrister_mouse_speed_full), not shared here.
+# Feel-curve exponent on the 0..1 power parameter. Slightly above linear
+# (low-end compressive): the catchable touch-pass window spans a comfortable
+# slice of gesture space instead of rounding up toward the middle, and the
+# raised 33 m/s ceiling supplies the top-end pop that a sub-1.0 exponent
+# used to fake. (< 1.0 inflates the low end — it made soft passes HARDER.)
+const DEFAULT_WRISTER_POWER_CURVE: float = 1.1
 
 # ── Goalie Defaults ───────────────────────────────────────────────────────────
 # Shared between GoalieController @export and AIActionScoring's goalie

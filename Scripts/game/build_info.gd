@@ -78,7 +78,10 @@ const VERSION: String = "dev"
 # v19: notify_body_check carries hitter_peer_id ahead of the victim, so every
 #     machine fires the hitter's check-delivery body pose off the same
 #     broadcast that drives the burst/thud.
-const PROTOCOL_VERSION: int = 19
+# v20: request_join carries the joiner's Shot Power Sensitivity (trailing f32),
+#     so the host fires a remote human's pure-mouse wrister at the same power
+#     their own client predicted with its local sensitivity.
+const PROTOCOL_VERSION: int = 20
 
 
 func _ready() -> void:

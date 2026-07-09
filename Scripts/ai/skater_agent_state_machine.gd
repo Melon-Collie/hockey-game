@@ -378,22 +378,36 @@ const BLADE_REACH_M: float = (
 var _blade_reach: float = BLADE_REACH_M
 
 # ── Wrister charge ───────────────────────────────────────────────────────────
-# SHOOT_PRESSED and the charged PASS_PRESSED variant hold shoot_held
-# for this many ticks while the blade sweeps from wind_up_start to
-# aim_target, then release. ~250 ms (derived from PHYSICS_TICK). Total time is fixed;
-# how much CHARGE accumulates over those ticks is set by the geometry
-# (start→target distance = target charge).
+# SHOOT_PRESSED and the charged PASS_PRESSED variant hold shoot_held for this
+# many ticks while the blade sweeps from wind_up_start to aim_target, then
+# release. Power no longer rides this window — bots set release power directly
+# via input.bot_wrister_power_t (the controller converts it to the equivalent
+# cursor speed) — so the geometry is a cosmetic wind-up. BUT the DURATION is not
+# free: it IS the real commit→release delay, and the offensive scorer feeds it
+# forward as BOT_WRISTER_LOOKAHEAD_S to predict where the goalie will be when the
+# shot actually leaves the blade. Keep it a realistic wrister wind-up (~250 ms):
+# shortening it desyncs the goalie prediction from reality and collapses shoot
+# scoring (the goalie is modelled as barely having moved, so every shot reads as
+# already-covered and the bot never commits). 30 ticks is also ample for the
+# charge tracker to classify the forehand/backhand swing chirality.
 const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4   # ~250 ms
 
-# Shot charge fraction of max_wrister_charge_distance: shots aim for full charge
-# (the carry scorer assumes WRISTER_SHOT_SPEED_M_S = DEFAULT_WRISTER_POWER_MAX_M_S,
-# so the bot should produce ~max). Charged PASSES instead derive their charge
-# fraction per-pass from the distance-adaptive _pass_target_speed (see
-# _state_pass_pressed) rather than a fixed fraction.
+# Shot target power fraction (0..1): shots aim for full power (the carry scorer
+# assumes WRISTER_SHOT_SPEED_M_S = DEFAULT_WRISTER_POWER_MAX_M_S, so the bot
+# should produce ~max). Fed to input.bot_wrister_power_t, which the controller
+# converts to the equivalent cursor speed (pure mouse-speed model). Charged
+# PASSES instead derive their power fraction per-pass from the distance-adaptive
+# _pass_target_speed (see _state_pass_pressed) rather than a fixed fraction.
 # TODO(threat-aware): shots could vary their target by time-until-pressured
 # instead of always going full — the existing bail-on-close-opponent path
 # in _state_shoot_pressed is the safety hatch for now.
 const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
+# Straight-line span (m) of the synthesized wind-up gesture — how far the bot's
+# fake cursor sweeps from wind-up start to release. Purely COSMETIC now that
+# power rides bot_wrister_power_t (not sweep distance): it sizes the visible
+# blade draw. A full-power shot uses the whole span; a soft pass scales it down
+# so the gesture reads as gentle. Matches the old per-bot charge cap default.
+const BOT_WRISTER_WIND_UP_SPAN_M: float = 0.7
 # Mid-charge bail radius. If an opponent gets inside this distance
 # while we're charging, cancel via block_held — getting blasted in the
 # slot mid-windup is worse than not shooting. The carry state can re-
@@ -436,10 +450,12 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 # line is offset perpendicular to aim_dir). 0.15 m is small enough to
 # stay inside ROM even at the bot's max charge target, but large enough
 # that the wind-up reads as a forehand pose rather than a straight
-# back-to-front jab through the body's centerline. Forces the entry
-# blade pose to the forehand side, so wrister_start_blade_local_x
-# captured at WRISTER_AIM entry classifies the shot as forehand (no
-# backhand_power_coefficient penalty).
+# back-to-front jab through the body's centerline. The forehand/backhand
+# classifier reads the SWING CHIRALITY (the rotational sense of the blade
+# sweep — ShotMechanics.is_backhand_from_swing): a bot windup that sweeps
+# from this forehand-side offset in toward the aim line rotates in the
+# forehand sense, so the shot scores forehand and takes no penalty. A
+# flipped (backhand-side) windup sweeps the other way and reads backhand.
 const BOT_WRISTER_SIDE_OFFSET_M: float = 0.15
 
 # Side-selection for wrister wind-up — defender within this radius
@@ -650,9 +666,8 @@ var _agent_tick: int = 0
 
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
 # one-tick quick-shot — the bot holds shoot_held for BOT_WRISTER_CHARGE_TICKS
-# while sweeping mouse_screen_pos, so SkaterAimingBehavior accumulates
-# charge_distance and SkaterStateMachine fires a real wrister at release
-# (direction = sweep direction, power = lerp(min, max, charge_t)).
+# while sweeping mouse_screen_pos, so SkaterStateMachine fires a real wrister at
+# release (direction = sweep direction, power = the committed bot_wrister_power_t).
 var _shoot_charge_tick: int = 0
 # Wind-up endpoint OFFSETS (relative to self_pos) — captured ONCE at
 # SHOOT_PRESSED entry (tick 0) and held for the charge. Each tick the
@@ -706,14 +721,6 @@ var _pass_charge_tick: int = 0
 # puck releases at the distance-adaptive launch speed instead of the wrister max.
 var _pass_wind_up_start: Vector3 = Vector3.ZERO
 var _pass_aim_target: Vector3 = Vector3.ZERO
-
-# Per-bot wrister charge cap, mirroring SkaterController.max_wrister_
-# charge_distance. Set by AIController.apply_attributes after the base
-# controller computes its attribute-scaled value, so the agent's shot
-# and pass targets scale with Size + Strength alongside the controller's
-# cap. Default matches the controller's @export default so unset bots
-# still work; the setter overrides on first attribute apply.
-var _max_wrister_charge_distance: float = 0.7
 
 # This bot's own attribute-scaled capabilities, set by apply_capabilities (from
 # AIController.apply_attributes). Used wherever the bot reasons about ITSELF —
@@ -875,10 +882,6 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
-func set_max_wrister_charge_distance(d: float) -> void:
-	_max_wrister_charge_distance = d
-
-
 # True while the bot is aiming a committed SHOT (pre-aim or charge). In those
 # frames the cursor is already slew-smoothed by _step_mouse_aim; SkaterAgent's
 # second-stage exponential lerp on top makes the blade ring — a slow side-to-side
@@ -914,6 +917,19 @@ func apply_capabilities(caps: AISelfCapabilities) -> void:
 	_self_wrister_shot_speed = caps.wrister_shot_speed
 	_self_weight = caps.self_weight
 	_self_body_check_transfer = caps.self_body_check_transfer
+
+
+# This bot's target power fraction (0..1) for a charged pass at _pass_target_speed,
+# over its own wrister band [DEFAULT_WRISTER_POWER_MIN_M_S, _self_wrister_shot_speed].
+# Fed to input.bot_wrister_power_t; the controller converts it to the equivalent
+# cursor speed (pure mouse-speed model). min power is the league baseline: the
+# controller holds min_wrister at base for every build (soft-touch floor is
+# universal).
+func _pass_power_t() -> float:
+	return clampf(
+			(_pass_target_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
+			/ maxf(_self_wrister_shot_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, 0.001),
+			0.0, 1.0)
 
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
@@ -2067,12 +2083,12 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 
 	# First tick: capture aim, compute wind-up start (forehand side,
 	# behind bot), fire shoot_pressed edge so SkaterStateMachine enters
-	# WRISTER_AIM. wrister_start_blade_local_x is captured by
-	# SkaterController at the moment of WRISTER_AIM entry from the
-	# blade's CURRENT pose — which means we need mouse_world_pos to be
-	# at the wind-up position THIS tick so apply_blade_from_mouse (still
-	# running in SKATING_WITH_PUCK before the transition) puts the blade
-	# on the forehand side.
+	# WRISTER_AIM. The forehand/backhand read is the sticky carry face
+	# (Skater._carry_side), advanced every tick from the blade pose — so
+	# mouse_world_pos must be at the wind-up position THIS tick so
+	# apply_blade_from_mouse (still running in SKATING_WITH_PUCK before
+	# the transition) keeps the blade — and the carried face — on the
+	# forehand side through the wind-up.
 	if _shoot_charge_tick == 0:
 		debug_last_decision = "SHOOT"
 		# Project the release position forward by BOT_WRISTER_LOOKAHEAD_S
@@ -2133,14 +2149,14 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 				break
 
 		# Wind-up endpoint OFFSETS captured at tick 0 (relative to self_pos)
-		# and held constant for the charge. Sized so the straight-line
-		# distance between endpoints equals the bot's per-attribute charge
-		# cap (Size + Strength scaled). Each tick the lerp is anchored at
-		# CURRENT self_pos so the endpoints float with the bot — both world
-		# positions move forward at the bot's locomotion speed, leaving the
-		# blade's rel-skater motion as pure aim_dir lerp at the target rate.
-		var shot_target_charge: float = _max_wrister_charge_distance * BOT_WRISTER_SHOT_CHARGE_FRACTION
-		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, shot_target_charge, _shoot_side_sign)
+		# and held constant for the charge. Sized to the COSMETIC wind-up span
+		# (power rides bot_wrister_power_t, not this distance) — a full-power
+		# shot draws the whole span. Each tick the lerp is anchored at CURRENT
+		# self_pos so the endpoints float with the bot — both world positions
+		# move forward at the bot's locomotion speed, leaving the blade's
+		# rel-skater motion as pure aim_dir lerp at the target rate.
+		var shot_span: float = BOT_WRISTER_WIND_UP_SPAN_M * BOT_WRISTER_SHOT_CHARGE_FRACTION
+		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, shot_span, _shoot_side_sign)
 		_shoot_wind_up_start = endpoints.start
 		_shoot_aim_target = endpoints.target
 		# Snap the smoothed cursor straight to the wind-up start world pos.
@@ -2170,6 +2186,9 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# we just need consecutive ticks to differ by a consistent direction.
 	var sweep_dir_3d: Vector3 = (_shoot_aim_target - _shoot_wind_up_start).normalized()
 	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_shoot_charge_tick)
+	# Shot power: full. The controller reads this (not the synthesized sweep
+	# speed) so the bot deterministically fires at the wrister ceiling.
+	input.bot_wrister_power_t = BOT_WRISTER_SHOT_CHARGE_FRACTION
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		# Still charging — keep shoot_held high.
@@ -2178,7 +2197,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	else:
 		# Release this tick: shoot_held drops, SkaterStateMachine's
 		# _state_wrister_aim sees not shoot_held → release_wrister fires
-		# with accumulated charge_distance and sweep direction.
+		# with the committed power and sweep direction.
 		input.shoot_held = false
 		# Debug: print release vs projection so we can see if the puck
 		# fired from where the projection promised.
@@ -2221,15 +2240,15 @@ func _shoot_aim_dir(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # exactly through the aim point instead of flying parallel-offset to it.
 #
 # Endpoint offsets (in the compensated frame):
-#   start  = -aim_dir' * (target/2) + forehand_perp' * side_sign * SIDE_OFFSET
-#   target = +aim_dir' * (target/2) + forehand_perp' * side_sign * SIDE_OFFSET
-# Both lie inside ROM (target ≤ max_wrister_charge_distance ≈ 0.7 m,
+#   start  = -aim_dir' * (span/2) + forehand_perp' * side_sign * SIDE_OFFSET
+#   target = +aim_dir' * (span/2) + forehand_perp' * side_sign * SIDE_OFFSET
+# Both lie inside ROM (span ≤ BOT_WRISTER_WIND_UP_SPAN_M ≈ 0.7 m,
 # half ≤ 0.35 m, side ≤ 0.15 m), so the blade IK chases the mouse 1:1
 # without clamping. Per-tick delta in rel-skater frame = +aim_dir' *
-# (target/ticks), so accumulated charge = target exactly and
+# (span/ticks), so the gesture sweeps cleanly along aim_dir' and
 # prev_blade_dir at release = aim_dir' (the tilt-compensated direction).
-func _wind_up_endpoint_offsets(aim_dir: Vector3, aim_distance_m: float, target_charge_m: float, side_sign: float) -> Dictionary:
-	var half: float = target_charge_m * 0.5
+func _wind_up_endpoint_offsets(aim_dir: Vector3, aim_distance_m: float, wind_up_span_m: float, side_sign: float) -> Dictionary:
+	var half: float = wind_up_span_m * 0.5
 	var compensated: Vector3 = _aim_dir_compensated_for_side_offset(aim_dir, aim_distance_m, side_sign)
 	var forehand_perp: Vector3 = Vector3(
 			compensated.z * _handedness_perp_sign, 0.0, -compensated.x * _handedness_perp_sign)
@@ -2335,24 +2354,21 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 
 	if _pass_charge_tick == 0:
 		# Capture aim direction toward the receiver and build wind-up endpoint
-		# offsets (same helper as SHOOT_PRESSED). The target charge fraction is
-		# derived from _pass_target_speed: the wrister maps charge linearly from
-		# min→max power, so frac = (target − min) / (max − min). aim_dir is taken
-		# from clean_pass_aim (the receiver's lead) rather than the stepped mouse
-		# so a single-tick mouse residual can't tilt it.
+		# offsets (same helper as SHOOT_PRESSED). The wind-up span is COSMETIC —
+		# power rides bot_wrister_power_t (set below) — so a softer pass scales
+		# the visible draw down by its power fraction, keeping a gentle gesture
+		# reading gentle. aim_dir is taken from clean_pass_aim (the receiver's
+		# lead) rather than the stepped mouse so a single-tick mouse residual
+		# can't tilt it.
 		var sweep: Vector3 = clean_pass_aim - self_pos
 		sweep.y = 0.0
 		var aim_distance: float = sweep.length()
 		var aim_dir_init: Vector3 = sweep.normalized() if aim_distance > 0.01 else Vector3(0.0, 0.0, 1.0)
-		var charge_frac: float = clampf(
-				(_pass_target_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
-				/ maxf(_self_wrister_shot_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, 0.001),
-				0.0, 1.0)
-		var pass_target_charge: float = _max_wrister_charge_distance * charge_frac
+		var pass_span: float = BOT_WRISTER_WIND_UP_SPAN_M * maxf(_pass_power_t(), 0.35)
 		# Pass always sweeps on the forehand side — no defender-aware
 		# side flip like SHOOT_PRESSED (passes don't justify backhand power
 		# penalty trade-offs the same way).
-		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, pass_target_charge, +1.0)
+		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, pass_span, +1.0)
 		_pass_wind_up_start = endpoints.start
 		_pass_aim_target = endpoints.target
 		# Snap the smoothed cursor to the wind-up start — same reasoning as
@@ -2376,14 +2392,17 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# direction from screen-pos delta; we fake it from the lerp endpoints.
 	var sweep_dir_3d: Vector3 = (_pass_aim_target - _pass_wind_up_start).normalized()
 	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_pass_charge_tick)
+	# Pass power: the fraction of the bot's own wrister band that hits the
+	# distance-adaptive target speed. The controller reads this directly.
+	input.bot_wrister_power_t = _pass_power_t()
 
 	if _pass_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		input.shoot_held = true
 		_pass_charge_tick += 1
 	else:
 		# Release: shoot_held drops, controller's wrister_aim sees the
-		# falling edge and fires release_wrister with accumulated
-		# charge_distance and sweep direction.
+		# falling edge and fires release_wrister with the committed power
+		# and sweep direction.
 		input.shoot_held = false
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
@@ -2392,9 +2411,9 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 
 
 # Quick-shot release at goal. Mechanically identical to PASS_PRESSED
-# (one-tick shoot_pressed+held, controller picks up the short
-# charge_distance as a quick-shot release at PASS_SPEED_M_S) but
-# aimed past the goalie shadow instead of at a receiver. Used when
+# (one-tick quick_shot_pressed, controller fires a quick-shot release at
+# PASS_SPEED_M_S) but aimed past the goalie shadow instead of at a receiver.
+# Used when
 # the carrier's `score_quick_shot` beats `score_shoot` by margin —
 # typically against a still-squared goalie at close range where a
 # wrister charge would give the goalie time to slide.
@@ -2424,8 +2443,9 @@ func _state_quick_shot_pressed(input: InputState, snapshot: WorldSnapshot, self_
 #
 # Charge accumulates from mouse_screen_pos motion only; mouse stays
 # locked on the goal aim point, so `update_wrister_charge` accrues
-# almost no charge → release fires at quick-shot speed
-# (PASS_SPEED_M_S). The receiver one-time fires a snap.
+# almost no charge or sweep speed → release fires at the wrister
+# floor (DEFAULT_WRISTER_POWER_MIN_M_S — the soft-touch speed, a bit
+# under the snap pass). The receiver one-time fires a soft redirect.
 func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	# Moving one-timer (Mode A reception): skate to the net-forward anchor while
 	# holding the shot, so the puck arrives on the waiting blade. Once parked,
