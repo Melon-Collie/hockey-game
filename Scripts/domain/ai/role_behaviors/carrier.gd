@@ -34,6 +34,9 @@ const INTENT_CARRY: int = 0
 const INTENT_SHOOT: int = 1
 const INTENT_PASS: int = 3
 const INTENT_QUICK_SHOT: int = 4
+# Last-resort DUMP — fire the puck to a location (no receiver). The state machine
+# maps it onto a PASS_PRESSED release aimed at `dump_target`.
+const INTENT_DUMP: int = 5
 
 # Least fire value (shot/pass EV) worth giving up possession for — the noise floor
 # below which "firing" is really a giveaway, so the bot keeps the puck instead.
@@ -159,6 +162,12 @@ var shot_aim_point: Vector3 = Vector3.INF
 # state machine to drive steering during CARRY.
 var last_carry_anchor: Vector3 = Vector3.ZERO
 
+# Set when intent commits to DUMP: the world spot to fire the puck at (no
+# receiver), and whether it's a soft flip (dump-and-chase into the OZ corner) vs a
+# hard rim (clearing our own zone). Read by the state machine's dump release.
+var dump_target: Vector3 = Vector3.INF
+var dump_is_soft: bool = false
+
 # ── Throttle ─────────────────────────────────────────────────────────────────
 var _pick_action_cooldown: int = 0
 # Physics ticks elapsed since the last _pick_action re-eval (accumulated per
@@ -179,6 +188,9 @@ var _scratch_teammate_ids: Array[int] = []
 # opponent's threat in the turnover-cost term (the carrier just got
 # beat, so they don't count). Rebuilt once per _pick_action.
 var _scratch_our_defenders: Array[Vector3] = []
+# Our chasers for a dump race: our defenders plus ourselves (we dump and chase).
+# Rebuilt inside _best_dump.
+var _scratch_our_chasers: Array[Vector3] = []
 
 # ── Debug readout ────────────────────────────────────────────────────────────
 # Populated every re-eval; the state machine forwards these to its
@@ -189,6 +201,7 @@ var debug_pass_score: float = 0.0
 var debug_pass_peer_id: int = 0
 var debug_carry_score: float = 0.0
 var debug_carry_pos: Vector3 = Vector3.ZERO
+var debug_dump_score: float = 0.0
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -242,6 +255,8 @@ func reset() -> void:
 	shot_loft_level = ShotMechanics.ELEVATION_FLAT
 	shot_aim_point = Vector3.INF
 	last_carry_anchor = Vector3.ZERO
+	dump_target = Vector3.INF
+	dump_is_soft = false
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
@@ -257,6 +272,8 @@ func clear_intent() -> void:
 	pass_should_charge = false
 	pass_target_speed = AIActionScoring.PASS_SPEED_M_S
 	pass_should_saucer = false
+	dump_target = Vector3.INF
+	dump_is_soft = false
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
 
@@ -362,6 +379,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	var carry_result: Array = _best_carry(ctx)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
+	var raw_carry_score: float = carry_result[2]
 
 	# Hysteresis on FIRE intents only — prevents flicker between two
 	# close-scoring fire options during pre-aim. Proportional (×(1 +
@@ -457,6 +475,15 @@ func _pick_action(ctx: RoleContext) -> void:
 	var hold_value: float = (_best_developing_feed(ctx)
 			* keep_prob * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, _hold_elapsed_s))
 
+	# Last-resort DUMP (zone-gated; -INF where none applies). It wins only over the
+	# honest expected-KEEP value it returns — negative when we're pinned in danger,
+	# so a real escape or developing play always beats it.
+	var dump_result: Array = _best_dump(
+			ctx, our_goalie, cur_puck_pos, raw_carry_score, hold_value)
+	var dump_score: float = dump_result[0]
+	var dump_keep_value: float = dump_result[3]
+	debug_dump_score = dump_score
+
 	var new_intent: int
 	# Fire only if it beats BOTH carrying and holding for the developing play.
 	if fire_score >= carry_score and fire_score >= hold_value \
@@ -493,6 +520,13 @@ func _pick_action(ctx: RoleContext) -> void:
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
 					wrister_unsettled)
+	elif dump_score > dump_keep_value and not staggered:
+		# Last resort: trying to keep the puck is doomed in a bad spot (expected-keep
+		# below the safe giveaway). Clear our zone, or dump-and-chase.
+		_hold_elapsed_s = 0.0
+		new_intent = INTENT_DUMP
+		dump_target = dump_result[1]
+		dump_is_soft = dump_result[2]
 	else:
 		# Not firing. Advance the hold clock only while the developing play is the
 		# reason (it out-scores plain carrying); a normal carry resets it so the
@@ -896,7 +930,104 @@ func _best_carry(ctx: RoleContext) -> Array:
 		best_score = stand_total
 		best_pos = self_pos
 
-	return [maxf(best_score, 0.0), best_pos]
+	# [floored, best_pos, RAW]. Floored is the "keep the puck" floor for the fire
+	# compete; raw keeps the honest sign for the dump's expected-keep (a pinned
+	# carry that will be stripped must read negative, not clamped to 0).
+	return [maxf(best_score, 0.0), best_pos, best_score]
+
+
+# Last-resort DUMP, zone-gated. Returns [dump_value, target, is_soft, keep_value];
+# -INF/INF when no dump applies here (own-side neutral zone, or already in the OZ):
+#   - In our own DZ → clear out to the neutral-zone strong-side boards (hard rim).
+#   - Past centre (non-icing) but short of the blue line → dump-and-chase into the
+#     far offensive corner (soft flip), when the chase is winnable.
+#
+# The dump wins the compete only when dump_value > keep_value — two honest
+# alternatives in one currency:
+#   - dump_value = gain − concede. concede = turnover_cost(target, 1−recovery), the
+#     danger handed over at the safe dump spot (≈0 deep in their end); gain is the
+#     offensive upside, dump-in ONLY (recovery × position_potential(corner) ×
+#     chase_decay — winning the zone). A clear gains nothing, so its value is just
+#     −concede, a small negative.
+#   - keep_value = −strip_prob × threat_here + (1−strip_prob) × max(raw_carry, hold):
+#     with prob strip_prob we lose the puck RIGHT HERE (cost threat_here), else we
+#     escape (best of a real carry or a developing hold). strip_prob reads the
+#     clearance AT the puck (a stick on it now), NOT the evade-seam evadability,
+#     which reads "safe" off a dead-end seam toward our own net. keep_value goes
+#     honestly negative only when we're pinned AND the spot is dangerous — exactly
+#     when even a small-negative clear beats it — and stays above the clear on any
+#     real escape, developing play, or mild pressure. No threshold, no magic number.
+func _best_dump(ctx: RoleContext, our_goalie: Vector3,
+		current_puck_pos: Vector3, raw_carry: float, hold_value: float) -> Array:
+	var self_pos: Vector3 = ctx.self_pos
+	var attacking_goal: Vector3 = ctx.attacking_goal_pos
+	var defending_goal: Vector3 = ctx.defending_goal_pos
+	var target: Vector3
+	var is_soft: bool
+	if AIActionScoring.in_offensive_zone(self_pos, defending_goal):
+		target = AIActionScoring.dump_clear_target(self_pos)
+		is_soft = false
+	elif AIActionScoring.past_center_toward_attack(self_pos, attacking_goal) \
+			and not AIActionScoring.in_offensive_zone(self_pos, attacking_goal):
+		target = AIActionScoring.dump_in_target(self_pos, attacking_goal)
+		is_soft = true
+	else:
+		return [-INF, Vector3.INF, false, INF]
+
+	# DZ clear PARKED for now. Firing it only when genuinely pinned (not merely
+	# pressured) needs an honest "can I skate out of this" signal: the puck is
+	# carried AHEAD of the skater, so a forechecker reads as a stick on the puck
+	# exactly in the spots the tuned "skate clear / don't panic-backpass" behavior
+	# wants us to keep it. Distinguishing pinned-vs-pressured cleanly is the open
+	# problem — the clear waits on it. The dump-and-chase below has no such conflict
+	# (up-ice contained ≠ about to be stripped in our slot) and ships.
+	if not is_soft:
+		return [-INF, target, false, INF]
+
+	# Our chasers = teammates + ourselves; theirs = the opponents already gathered.
+	_scratch_our_chasers.clear()
+	for d: Vector3 in _scratch_our_defenders:
+		_scratch_our_chasers.append(d)
+	_scratch_our_chasers.append(self_pos)
+	var recovery: float = AIActionScoring.chase_recovery(
+			target, _scratch_our_chasers, _scratch_opponents)
+
+	# DUMP value (absolute): give up the puck at a SAFE spot. concede = the danger
+	# handed over there; gain = offensive upside (dump-in only: win the zone).
+	var concede: float = AIActionScoring.turnover_cost(
+			target, 1.0 - recovery, defending_goal, our_goalie,
+			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	var gain: float = 0.0
+	if is_soft:
+		var nearest_our: float = INF
+		for c: Vector3 in _scratch_our_chasers:
+			nearest_our = minf(nearest_our, c.distance_to(target))
+		var chase_decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+				nearest_our / AIActionScoring.SKATER_REF_SPEED_M_S)
+		var value: float = AIActionScoring.position_potential(
+				target, attacking_goal, _scratch_opponents)
+		gain = recovery * value * chase_decay
+	var dump_value: float = gain - concede
+
+	# KEEP value (honest): try to hold the puck. With prob strip_prob we lose it
+	# RIGHT HERE (cost threat_here); otherwise we escape (best of raw carry / a
+	# developing hold). strip_prob reads the clearance AT the puck — a stick on it
+	# NOW — not the evade-seam evadability, which reads "safe" off a dead-end seam
+	# toward our own net. This bar goes honestly negative only when we're pinned AND
+	# the spot is dangerous, so the dump beats it exactly then — never over a real
+	# escape (raw carry) or a developing play (hold), and never on mild pressure.
+	# Short horizon (reaction only → no maneuver term, just stick reach), so this is
+	# "a stick can reach the puck NOW", not "a defender could close over 0.4 s" — the
+	# latter's ~3-4 m radius reads mild pressure as a pin.
+	var strip_prob: float = 1.0 - AIActionScoring.clearance_to_safety(
+			AIActionScoring.reach_clearance(current_puck_pos, AIActionScoring.EVADE_REACTION_S,
+					_scratch_opponents, _scratch_opponent_vels))
+	var threat_here: float = AIActionScoring.threat_surface_shoot(
+			current_puck_pos, defending_goal, our_goalie,
+			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	var keep_value: float = (-strip_prob * threat_here
+			+ (1.0 - strip_prob) * maxf(raw_carry, hold_value))
+	return [dump_value, target, is_soft, keep_value]
 
 
 # EV of one movement carry candidate — the uniform scoring every

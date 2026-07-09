@@ -772,3 +772,94 @@ func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:
 			or carrier.intended_action == AIRoleCarrier.INTENT_PASS \
 			or carrier.intended_action == AIRoleCarrier.INTENT_QUICK_SHOT,
 			"decide() yields a valid intent with a staging finisher in play")
+
+
+# ─── dumping: last-resort relief in two specific spots ───────────────────────
+
+func test_dz_clear_is_parked_no_dump_from_own_zone() -> void:
+	# The DZ clear is PARKED (see _best_dump): firing it only when truly pinned
+	# (not merely pressured) needs an honest skate-out signal we don't have yet, and
+	# a puck-ahead pin read would collide with tuned "skate clear" behavior. Until
+	# that's resolved, a pinned own-zone carrier never dumps — it keeps the puck.
+	# Guards against the clear silently un-parking.
+	var self_pos := Vector3(6, 0, 24)                      # deep slot, swarmed
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(6, 0, 21), false, Vector3(0, 0, 5)],
+			[4, 1, Vector3(3, 0, 22.5)],
+			[5, 1, Vector3(9, 0, 22.5)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"the DZ clear is parked — no dump from our own zone yet")
+
+
+func test_contained_past_center_with_no_outlet_dumps_in() -> void:
+	# Carrier past centre, walled off short of the blue line with no outlet. Can't
+	# carry in, nothing to pass — dump-and-chase into the far corner.
+	var self_pos := Vector3(2, 0, -4)                      # attacking half (attack -Z), pre-blue
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(2, 0, -5), false, Vector3(0, 0, -4)],  # D stepping up on us
+			[4, 1, Vector3(-1, 0, -5.5)],                      # D sealing the lane across
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"dumps in when the zone entry is walled off")
+	assert_true(c.dump_is_soft, "a dump-in is a soft flip to the corner")
+	assert_true(
+			AIActionScoring.in_offensive_zone(c.dump_target, ctx.attacking_goal_pos),
+			"the dump target is in the offensive zone")
+	assert_lt(c.dump_target.x, 0.0, "the FAR corner, opposite the carrier's side")
+
+
+func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
+	# Same pinned DZ spot, but now a teammate is wide open up the strong wall. A
+	# real breakout out-scores conceding — pass, don't dump.
+	var self_pos := Vector3(8, 0, 20)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(11, 0, 11)],                  # open outlet up the wall
+			[3, 1, Vector3(8, 0, 17), false, Vector3(0, 0, 4)],
+			[4, 1, Vector3(5.5, 0, 19)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"a clean breakout outlet beats a dump")
+
+
+func test_no_dump_in_own_side_neutral_zone() -> void:
+	# Between our own blue line and centre — not our DZ, not past the red line. No
+	# dump applies here even under pressure (it would be icing to fire it in, and
+	# there's no need to clear from mid-ice).
+	var self_pos := Vector3(0, 0, 4)                       # own-side NZ (own net +Z)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(0, 0, 1), false, Vector3(0, 0, 4)],
+			[4, 1, Vector3(3, 0, 2)],
+			[5, 1, Vector3(-3, 0, 2)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"no dump from the own-side neutral zone")
+
+
+func test_no_dump_once_in_the_offensive_zone() -> void:
+	# Already established in the OZ — the valve keeps the puck in, and there's no
+	# dump. Even swarmed, it cycles/holds rather than dumping it away.
+	var self_pos := Vector3(0, 0, -12)                     # in the OZ (attack -Z)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(0, 0, -14), false, Vector3(0, 0, -4)],
+			[4, 1, Vector3(3, 0, -13)],
+			[5, 1, Vector3(-3, 0, -13)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"no dumping once the zone is established")
