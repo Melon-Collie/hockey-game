@@ -648,6 +648,19 @@ var _shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 # the continuous _shot_aim_point geometry.
 var _shot_aim_locked: Vector3 = Vector3.INF
 
+# Last-resort DUMP target, mirrored from `_carrier.dump_target` at commit and
+# frozen through pre-aim + release (like the shot aim/loft above). INF → not
+# dumping; a normal PASS aims at its receiver lead. The dump reuses the
+# PASS_PRESSED plumbing (see _state_from_carrier_intent), so this sentinel is
+# what tells that state to aim at a LOCATION and skip the receiver-close bail.
+# `_dump_is_soft` picks the loft: false = HIGH chip to clear the zone into the
+# neutral ice, true = soft LOW flip to the corner (dump-in). Both fire as a
+# one-tick quick release at the fixed quick-shot pace — a dump is a last resort
+# under pressure, so getting the puck gone fast beats a 0.5 s charged wind-up
+# that gets stripped mid-swing, and the moderate fixed pace stays short of icing.
+var _dump_target: Vector3 = Vector3.INF
+var _dump_is_soft: bool = false
+
 # Debug: print one line at SHOOT commit and one line at wrister
 # release so the user can compare what the projection promised vs.
 # where the puck actually fired from. Toggle off for shipping.
@@ -1724,6 +1737,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_shot_loft_level = ShotMechanics.ELEVATION_FLAT
 		_shot_aim_locked = Vector3.INF
 		_locked_pre_aim_point = Vector3.INF
+		_dump_target = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
@@ -1755,6 +1769,16 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	if _intended_action == State.CARRY:
 		_shot_loft_level = _carrier.shot_loft_level
 		_shot_aim_locked = _carrier.shot_aim_point
+		# Freeze the dump target the same way — captured at commit, held through
+		# pre-aim and the release. (The always-fresh mirror above resets the pass
+		# fields every tick; the dump carries its aim in _dump_target instead, so
+		# a stale _pass_target_peer_id can't hijack a dump — _pass_aim_point reads
+		# _dump_target first.)
+		if _carrier.intended_action == AIRoleCarrier.INTENT_DUMP:
+			_dump_target = _carrier.dump_target
+			_dump_is_soft = _carrier.dump_is_soft
+		else:
+			_dump_target = Vector3.INF
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
 	debug_pass_score = _carrier.debug_pass_score
@@ -1912,6 +1936,10 @@ func _state_from_carrier_intent(intent: int) -> State:
 		AIRoleCarrier.INTENT_SHOOT:
 			return State.SHOOT_PRESSED
 		AIRoleCarrier.INTENT_PASS:
+			return State.PASS_PRESSED
+		AIRoleCarrier.INTENT_DUMP:
+			# A dump is a pass to a LOCATION (no receiver) — reuse the PASS_PRESSED
+			# release path; _dump_target (finite) redirects the aim and the bail.
 			return State.PASS_PRESSED
 		AIRoleCarrier.INTENT_QUICK_SHOT:
 			return State.QUICK_SHOT_PRESSED
@@ -2295,8 +2323,24 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
 		_pass_should_saucer = false
+		_dump_target = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
 		return
+
+	# Dump override: a last-resort fling at a LOCATION, not a receiver. Force the
+	# one-tick quick release (fixed ~14 m/s — well short of the ~50 m an icing
+	# clear needs, so it settles in the neutral zone, not down the ice) and lift
+	# it by kind: HIGH to chip the DZ clear over sticks into the neutral zone, LOW
+	# to flip a dump-in into the corner. Elevation is set directly here (not via
+	# the saucer flag) so the quick release below reads it; done in the press
+	# state, after _state_carry has stopped clobbering the pass fields.
+	var is_dump: bool = _dump_target.is_finite()
+	if is_dump:
+		_pass_should_charge = false
+		_pass_should_saucer = false
+		_pass_target_peer_id = -1
+		input.elevation_level = (ShotMechanics.ELEVATION_LOW if _dump_is_soft
+				else ShotMechanics.ELEVATION_HIGH)
 
 	_apply_brake_steering(input, snapshot, self_pos)
 	# Saucer: LOW loft so the pass flies over a contested mid-lane defender's
@@ -2324,13 +2368,15 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		# produces noisy cursor deltas, which the charge tracker reads as
 		# bizarre release directions on long charged passes.
 		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
-		debug_last_decision = "PASS→%s" % target_slot_label
+		debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft else "↝out")) \
+				if is_dump else "PASS→%s" % target_slot_label
 		# Instant quick shot via the dedicated button flag — fires this tick from
 		# carry (player→blade snap at the fixed pass power), same semantics the
 		# one-tick shoot release used to produce before the timing classifier was
-		# removed. Clear target so a future PASS picks a fresh one.
+		# removed. Clear target so a future PASS/DUMP picks a fresh one.
 		input.quick_shot_pressed = true
 		_pass_target_peer_id = -1
+		_dump_target = Vector3.INF
 		_set_state(State.CARRY)
 		return
 
@@ -2594,6 +2640,10 @@ func _apply_brake_steering(input: InputState, snapshot: WorldSnapshot, self_pos:
 # the target slot disappeared between picking and pressing (rare —
 # bot demoted, peer disconnected, etc.).
 func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	# Dump: aim at the fixed location, not a receiver lead. Checked first so a
+	# stale _pass_target_peer_id (never cleared for a dump) can't override it.
+	if _dump_target.is_finite():
+		return _dump_target
 	var receiver: SkaterNetworkState = snapshot.skater_states.get(_pass_target_peer_id)
 	if receiver == null:
 		return _attacking_goal_pos
