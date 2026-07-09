@@ -448,10 +448,10 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 # line is offset perpendicular to aim_dir). 0.15 m is small enough to
 # stay inside ROM even at the bot's max charge target, but large enough
 # that the wind-up reads as a forehand pose rather than a straight
-# back-to-front jab through the body's centerline. Forces the entry
-# blade pose to the forehand side, so wrister_start_blade_local_x
-# captured at WRISTER_AIM entry classifies the shot as forehand (no
-# backhand_power_coefficient penalty).
+# back-to-front jab through the body's centerline. Keeping the blade on
+# the forehand side keeps the sticky carry face (Skater._carry_side, the
+# forehand/backhand classifier) on forehand, so the shot takes no
+# backhand_power_coefficient penalty.
 const BOT_WRISTER_SIDE_OFFSET_M: float = 0.15
 
 # Side-selection for wrister wind-up — defender within this radius
@@ -2094,12 +2094,12 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 
 	# First tick: capture aim, compute wind-up start (forehand side,
 	# behind bot), fire shoot_pressed edge so SkaterStateMachine enters
-	# WRISTER_AIM. wrister_start_blade_local_x is captured by
-	# SkaterController at the moment of WRISTER_AIM entry from the
-	# blade's CURRENT pose — which means we need mouse_world_pos to be
-	# at the wind-up position THIS tick so apply_blade_from_mouse (still
-	# running in SKATING_WITH_PUCK before the transition) puts the blade
-	# on the forehand side.
+	# WRISTER_AIM. The forehand/backhand read is the sticky carry face
+	# (Skater._carry_side), advanced every tick from the blade pose — so
+	# mouse_world_pos must be at the wind-up position THIS tick so
+	# apply_blade_from_mouse (still running in SKATING_WITH_PUCK before
+	# the transition) keeps the blade — and the carried face — on the
+	# forehand side through the wind-up.
 	if _shoot_charge_tick == 0:
 		debug_last_decision = "SHOOT"
 		# Project the release position forward by BOT_WRISTER_LOOKAHEAD_S

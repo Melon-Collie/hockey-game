@@ -922,8 +922,7 @@ func get_blade_contact_global() -> Vector3:
 # Smoothed rendered factor in [−1, +1]. Discrete _carry_side is sticky
 # (forehand/backhand never centered while carrying); this lerps toward it
 # so flips animate through center over carry_side_lerp_speed instead of
-# teleporting. Public so future work (e.g. replacing the
-# wrister_start_blade_local_x heuristic for shot bias) can consume it directly.
+# teleporting.
 #
 # Sign convention is mirrored between handednesses so the visual offset
 # direction (applied by SkaterIKCoordinator and get_carry_target_global)
@@ -934,6 +933,18 @@ func get_blade_contact_global() -> Vector3:
 func get_carry_forehand_factor() -> float:
 	var handedness_sign: float = 1.0 if is_left_handed else -1.0
 	return _carry_side_smoothed * handedness_sign
+
+
+# The discrete sticky carry face: +1 forehand, -1 backhand (handedness
+# already folded in by update_carry_side), 0 only when not carrying. This is
+# the puck's ACTUAL loading face — hysteresis-gated (the blade must cross
+# carry_side_switch_threshold past center to flip), so it can't be faked by
+# transient blade geometry mid-dangle. The wrister forehand/backhand
+# classification reads this at release/prediction time; the flex bow and the
+# puck's rendered face already key off the same state, so what the shot pays
+# is always what the player sees.
+func get_carry_side() -> int:
+	return _carry_side
 
 
 # Called once per tick from SkaterIKCoordinator.apply_blade_from_mouse —

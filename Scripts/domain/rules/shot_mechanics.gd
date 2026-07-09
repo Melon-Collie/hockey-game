@@ -140,8 +140,10 @@ static func wrister_charge_for_power(
 # on the predicted body position — is a client/host divergence source. Netcode
 # upshot: a charged wrister's aim (the drag vector) is body-independent and
 # identical on client and host.
-# Backhand is detected by blade X sign in upper-body-local space: positive X is a
-# backhand for a left-handed player, negative for a righty.
+# Backhand is the caller's call: the controller passes is_backhand from the
+# puck's sticky carried face (Skater.get_carry_side(), hysteresis-gated and
+# handedness-normalized) at release/prediction time — the face actually pushing
+# the puck, not a snapshot of blade geometry.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,

@@ -56,10 +56,11 @@ class_name ChargeTracking
 #     "no direction yet recorded" (first frame or negligible cursor
 #     motion).
 #   - reset: true when the direction-variance break fired this tick — a NEW
-#     power stroke started. Callers that classify the shot by where the
-#     stroke began (the forehand/backhand read) re-capture on this flag so
-#     the classification belongs to the live sweep, not to a stale snapshot
-#     from aim entry.
+#     power stroke started. No live consumer today (the forehand/backhand
+#     read that once keyed off it now uses the puck's sticky carried face
+#     instead); kept because it makes the variance-break part of the
+#     function's explicit contract for any stroke-scoped state a caller
+#     wants to refresh.
 static func accumulate(
 		prev_intent_pos: Vector3,
 		current_intent_pos: Vector3,

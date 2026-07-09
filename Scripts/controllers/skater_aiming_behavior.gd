@@ -13,7 +13,6 @@ var charge_distance: float = 0.0
 # the wrister power model's primary signal. Saved/restored across reconcile
 # replay alongside charge_distance (LocalController), same shape of problem.
 var sweep_time: float = 0.0
-var wrister_start_blade_local_x: float = 0.0
 # Cursor (intent) position in SCREEN-space, packed into a Vector3 as
 # (screen.x, 0, screen.y). The charge tracker reads its DIRECTION from
 # the delta of this position frame-over-frame. Screen space is the
@@ -45,16 +44,12 @@ func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Ve
 	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
 
 
-# Returns true when the direction-variance break reset the sweep this tick —
-# the start of a NEW power stroke. The controller re-captures the
-# forehand/backhand read (wrister_start_blade_local_x) on that flag, so the
-# classification always belongs to the stroke that actually fires.
 func tick_wrister_charge(
 		intent_pos: Vector3,
 		blade_pos_rel_skater: Vector3,
 		max_charge_direction_variance: float,
 		delta: float,
-		max_counted_sweep_speed: float) -> bool:
+		max_counted_sweep_speed: float) -> void:
 	var result: Dictionary = ChargeTracking.accumulate(
 			prev_intent_pos, intent_pos,
 			prev_blade_pos_rel_skater, blade_pos_rel_skater,
@@ -65,7 +60,6 @@ func tick_wrister_charge(
 	prev_blade_dir = result.direction
 	prev_intent_pos = intent_pos
 	prev_blade_pos_rel_skater = blade_pos_rel_skater
-	return result.reset
 
 
 # Average on-axis sweep speed (m/s) of the accumulated drag — the wrister

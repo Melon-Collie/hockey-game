@@ -1595,15 +1595,7 @@ func _cancel_active_charge() -> void:
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 func _apply_state(input: InputState, delta: float) -> void:
-	var prev_state: int = _sm.get_state()
 	_sm.dispatch(skater, input, delta, has_puck, _game_state.is_movement_locked())
-	if prev_state != State.WRISTER_AIM and _sm.get_state() == State.WRISTER_AIM:
-		# Forehand/backhand read: the loading face is the one behind the puck
-		# when the power stroke begins — captured here at aim entry, and
-		# RE-captured whenever the charge tracker's variance break starts a
-		# new stroke (see _update_wrister_charge), so it never goes stale
-		# across an in-aim reposition.
-		_aiming.wrister_start_blade_local_x = skater.get_blade_position().x
 
 # ── State Helpers ─────────────────────────────────────────────────────────────
 func _transition_to_skating(suppress_lost_flash: bool = false) -> void:
@@ -1765,10 +1757,12 @@ func _get_charge_direction() -> Vector3:
 func _release_wrister(input: InputState) -> void:
 	if has_puck:
 		var blade_world: Vector3 = _ik.last_target_blade_world
-		# _prev_blade_dir is the world-space direction the cursor was dragged
-		# (relative to the player, so skating velocity is already removed).
-		var is_backhand: bool = \
-				_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
+		# Forehand/backhand = the puck's sticky carried face (Skater._carry_side,
+		# hysteresis-gated, handedness-normalized) at the release tick — the face
+		# that is actually pushing the puck. Replaced the old aim-entry blade-X
+		# snapshot, which mis-read toe-drags (blade past center, puck still on
+		# the forehand face) and cross-body repositions both ways.
+		var is_backhand: bool = skater.get_carry_side() < 0
 		# LMB is always a charged wrister now — the quick shot lives on its own
 		# button (_fire_quick_shot). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
@@ -1883,17 +1877,10 @@ func _update_wrister_charge(input: InputState) -> void:
 	var blade_world: Vector3 = _ik.last_target_blade_world
 	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
 	blade_pos_rel_skater.y = 0.0
-	var sweep_reset: bool = _aiming.tick_wrister_charge(
+	_aiming.tick_wrister_charge(
 			intent_pos, blade_pos_rel_skater,
 			max_charge_direction_variance,
 			input.delta, wrister_max_counted_sweep_speed)
-	if sweep_reset:
-		# The variance break started a NEW power stroke — re-capture the
-		# forehand/backhand read from where the blade sits NOW. Without this
-		# the classification is a stale snapshot from WRISTER_AIM entry: drift
-		# the cursor across the body and sweep, and a true forehand stroke
-		# would eat the backhand penalty (or the reverse gain forehand power).
-		_aiming.wrister_start_blade_local_x = skater.get_blade_position().x
 	# Publish where this charge would go if released NOW, so the host-side goalie
 	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
 	# release math in _release_wrister (same inputs), and re-solves every tick — so
@@ -1901,8 +1888,7 @@ func _update_wrister_charge(input: InputState) -> void:
 	# impact off the goalie's lean (a tricky release beats the read). Host-only:
 	# remote carriers don't run this path, so their predicted velocity stays ZERO
 	# and the goalie falls back to a non-directional readiness tell.
-	var is_backhand: bool = \
-			_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
+	var is_backhand: bool = skater.get_carry_side() < 0
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level, _aiming.charge_distance,

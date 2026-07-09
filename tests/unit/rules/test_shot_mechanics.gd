@@ -72,8 +72,9 @@ func test_wrister_full_charge_full_sweep_maxes_power() -> void:
 
 func test_wrister_backhand_penalty() -> void:
 	var cfg := _wrister_cfg()
-	# is_backhand is computed by the controller from the blade's upper-body-local X
-	# at WRISTER_AIM entry. These calls directly express the classification result.
+	# is_backhand is computed by the controller from the puck's sticky carried
+	# face (Skater.get_carry_side()) at release time. These calls directly
+	# express the classification result.
 	var rh_forehand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
