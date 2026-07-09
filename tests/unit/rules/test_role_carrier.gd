@@ -84,43 +84,44 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
-# ─── pass out of a board pincer (pressure relief) ───────────────────────────
+# ─── pressure: make a safe play, don't drive into the box ───────────────────
 
-func test_board_pincer_passes_to_lateral_outlet_instead_of_over_carrying() -> void:
-	# Carrier pinned on the right-wall in the neutral zone, two defenders
-	# pincering (one closing off the inside, one sealing the up-ice lane). The
-	# only safe out is a lateral feed to a teammate in the middle — LOW up-ice
-	# value, so without the pass-out-of-pressure relief the carrier rates
-	# carrying (higher position potential up the wall) over the escape pass and
-	# gets stripped. With the relief, getting the puck off the pinned carrier
-	# wins. This is the "see the pincer, move it" read.
-	var self_pos := Vector3(6, 0, 9)                    # right-center, NZ, space ahead
+func test_board_pincer_makes_a_safe_play_not_a_turnover() -> void:
+	# Carrier pinned on the right wall, two forecheckers converging. There's no
+	# separate pass-out-of-pressure bonus: the clean per-action EV resolves this by
+	# the carry/pass alternatives' OWN strip cost (carrying into the box goes
+	# negative). The bot makes a possession-preserving play — either the lateral
+	# outlet pass or a safe evade-carry AWAY from the closing box. What it must NOT
+	# do is drive up the wall into the pincer and cough it up. (Pre-removal this
+	# asserted the specific outlet pass a relief bonus forced; the evade-carry is an
+	# equally valid resolution and what the clean EV prefers here.)
+	var self_pos := Vector3(6, 0, 9)                    # right-center, NZ
 	var outlet := Vector3(-3, 0, 6)                     # left-center, forward, open
+	var d3 := Vector3(4, 0, 4)
+	var d4 := Vector3(9, 0, 5)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],                         # us, carrying
 			[2, TEAM_ID, outlet],                           # open outlet
-			[3, 1, Vector3(4, 0, 4), false, Vector3(1.5, 0, 5)],  # inside forechecker closing fast
-			[4, 1, Vector3(9, 0, 5), false, Vector3(-3, 0, 5)],   # outside forechecker closing (pincer)
+			[3, 1, d3, false, Vector3(1.5, 0, 5)],          # inside forechecker closing fast
+			[4, 1, d4, false, Vector3(-3, 0, 5)],           # outside forechecker closing (pincer)
 	]
-	# The forming pincer registers through the defenders' closing VELOCITY in
-	# puck_safety (they start beyond stick range), so our current strip
-	# probability is high; the grounded pass-relief (expected turnover avoided)
-	# lifts the escape pass over the carry. Without any relief the base model
-	# CARRIES here into the closing box.
 	var c := AIRoleCarrier.new()
 	c.decide(_make_ctx(self_pos, skaters))
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
-			"a carrier reading a forming pincer moves the puck instead of over-carrying")
-	assert_eq(c.debug_pass_peer_id, 2, "the escape pass targets the open middle outlet")
+	if c.intended_action == AIRoleCarrier.INTENT_PASS:
+		assert_eq(c.debug_pass_peer_id, 2, "if it passes, it feeds the open outlet")
+	else:
+		# Evade-carry: the destination backs away from the converging pincer rather
+		# than driving up-ice into it.
+		var pincer_mid: Vector3 = (d3 + d4) * 0.5
+		assert_gt(c.debug_carry_pos.distance_to(pincer_mid), self_pos.distance_to(pincer_mid),
+				"an evade-carry moves away from the pincer, not into it")
 
 
-func test_light_pressure_does_not_force_a_backpass_to_a_covered_teammate() -> void:
-	# Carrier LIGHTLY pressured (one defender a few metres off, closing slowly)
-	# with space ahead. The only pass option is a deeper teammate who is himself
-	# covered — the pass wouldn't move the puck anywhere safer, so the pressure-
-	# relief must NOT pay out (its safety_gain is ~0). Without the gain gate the
-	# clean-lane backpass collected full relief and won; now the carrier keeps the
-	# puck and skates. This is the "don't panic-backpass under light pressure" read.
+func test_light_pressure_keeps_the_puck_over_a_covered_backpass() -> void:
+	# Carrier LIGHTLY pressured with space ahead; the only pass option is a deeper,
+	# covered teammate. With no pass-out-of-pressure bonus, the backpass is just its
+	# own weak EV (low receiver value, real turnover cost) and loses to keeping the
+	# puck and skating. The "don't panic-backpass under light pressure" read.
 	var self_pos := Vector3(2, 0, 12)                    # NZ, our side, space ahead (toward -Z)
 	var covered := Vector3(0, 0, 19)                     # deeper teammate, in our end
 	var skaters: Array = [

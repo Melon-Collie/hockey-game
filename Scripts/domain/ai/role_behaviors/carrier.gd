@@ -115,24 +115,6 @@ var intended_action: int = INTENT_CARRY
 # self-extinguishes — the bot takes the available shot — with no fixed timeout.
 var _hold_elapsed_s: float = 0.0
 
-# The expected turnover a completing pass AVOIDS by relieving the carrier's
-# CURRENT pressure — the pass-out-of-pressure value. Grounded, not a tuned
-# weight: it's the same turnover_cost the carry model pays, evaluated at our
-# current spot with our live strip probability (1 - puck_safety). A carry that
-# dances out of a pincer only DEFERS that danger (the pincer follows, and the
-# per-step model can't see the box forming); a completing pass truly resolves
-# it, so we credit the pass with the loss avoided. Naturally self-scaling: ~0 in
-# open ice (no strip prob) and larger deep in our own end (a giveaway there
-# costs more) — every term a perception. Fed to the real-pass EV only;
-# developing-feed HOLDs get 0 (under pressure the answer is release, not wait).
-var _pass_relief_value: float = 0.0
-
-# Our current possession safety (puck_safety at our spot). Paired with
-# _pass_relief_value: the relief only pays out to the extent a pass moves the
-# puck to a SAFER receiver, so a clean-lane backpass to an equally-pressured
-# teammate earns none of it. Set alongside _pass_relief_value in _pick_action.
-var _current_safety: float = 1.0
-
 # Set when intent commits to PASS. Consumed by the state machine
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
 var pass_target_peer_id: int = -1
@@ -291,22 +273,13 @@ func _pick_action(ctx: RoleContext) -> void:
 	# Our current possession safety, read from the unified puck_safety model:
 	# how close a defender's stick gets to the puck at our spot over the next
 	# reaction window, given their motion (a closing pincer registers from its
-	# velocity) and the body shield. Reused for the hold's keep-probability
-	# below, and its complement (strip probability) grounds the pass-relief.
+	# velocity) and the body shield. Feeds the hold's keep-probability below.
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var cur_forward: Vector3 = attacking_goal - cur_puck_pos
 	var current_safety: float = AIActionScoring.puck_safety(
 			cur_puck_pos, cur_puck_pos, AIActionScoring.SAFETY_WINDOW_S,
 			cur_forward, _scratch_opponents, _scratch_opponent_vels)
-	# Pass-out-of-pressure value: the expected turnover a completing pass AVOIDS
-	# by relieving this pressure — the SAME turnover_cost the carry model pays,
-	# at our current spot with our live strip probability. Grounded, not a
-	# weight; ~0 when safe, larger deep in our own end. See _pass_relief_value.
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
-	_current_safety = current_safety
-	_pass_relief_value = AIActionScoring.turnover_cost(
-			cur_puck_pos, 1.0 - current_safety, ctx.defending_goal_pos,
-			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
 
 	# Teammate ids — used by every score_at evaluation (top + inner).
 	# Reused scratch buffer; receivers only read from it.
@@ -468,7 +441,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# When the teammate flags ready, the developing feed drops to 0 here but the
 	# normal pass scoring jumps (one-timer), so PASS wins and feeds it.
 	# keep_prob is our current possession safety, computed once at the top of
-	# _pick_action (same read that grounds the pass-relief).
+	# _pick_action — the hold only holds its value while we can actually keep it.
 	var keep_prob: float = current_safety
 	var hold_value: float = (_best_developing_feed(ctx)
 			* keep_prob * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, _hold_elapsed_s))
@@ -645,8 +618,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var rotation_time: float = _facing_rotation_time(
 				self_facing_xz, self_pos, receiver)
 		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
-				receiver_release_t, flight_t + rotation_time,
-				our_goalie, _pass_relief_value)
+				receiver_release_t, flight_t + rotation_time, our_goalie)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
@@ -704,8 +676,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # league default (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
-		our_goalie: Vector3,
-		relief_value: float = 0.0) -> float:
+		our_goalie: Vector3) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# Hard zeros: net-blocker (segment crosses a net body) and own-DZ
 	# slot crossing (intercepted = goal-against).
@@ -730,25 +701,12 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
+	# Clean per-action EV: prob(complete) × value(teammate has puck at receiver)
+	# minus the turnover cost if it's intercepted or missed. The pressure the
+	# carrier is under is priced by the CARRY/HOLD alternatives' own strip cost
+	# (they lose value under pressure) — the pass wins when it out-EVs them, with
+	# no separate "escape" bonus (that double-counted the pressure).
 	var benefit: float = receiver_value * completion * time_decay
-	# Pass-out-of-pressure relief: a COMPLETING pass off a pressured carrier is
-	# worth the expected turnover it AVOIDS — but only to the extent it moves the
-	# puck somewhere SAFER. A pass that lands on an equally- (or more-) pressured
-	# teammate hasn't escaped anything; it just relocated the strip. So scale the
-	# relief by the receiver's safety GAIN over our current spot — a clean-lane
-	# backpass to a covered/deep teammate (receiver no safer) earns ~none of it,
-	# an outlet to open ice earns it in full. Uses the same puck_safety read at
-	# the receiver's arrival (opponents projected to flight_t). relief_value is the
-	# expected loss at our spot (strip prob × turnover cost), gated by completion
-	# so an uncompleteable escape earns nothing; 0 when the caller doesn't pass it.
-	var recv_forward: Vector3 = ctx.attacking_goal_pos - receiver_spot
-	var receiver_safety: float = AIActionScoring.puck_safety(
-			receiver_spot, receiver_spot, AIActionScoring.SAFETY_WINDOW_S,
-			recv_forward, _scratch_opponents_pass, _scratch_opponent_vels)
-	var safety_gain: float = clampf(
-			(receiver_safety - _current_safety) / maxf(1.0 - _current_safety, 0.05),
-			0.0, 1.0)
-	benefit += relief_value * completion * safety_gain
 	var loss_point: Vector3 = AIActionScoring.lane_loss_point(
 			self_pos, receiver_spot, _scratch_opponents, pass_speed,
 			_scratch_opponent_vels)
