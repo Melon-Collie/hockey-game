@@ -1403,6 +1403,92 @@ static func puck_safety(
 
 
 
+# ── Reachable-set evasion (pursuit-evasion possession safety) ────────────────
+# Whether a defender threatens the puck is not "how close is he" but "can he get
+# a stick to it given his MOMENTUM and reaction." Each skater is a bounded-accel
+# body: over a short horizon its body rides its velocity to (pos + vel·T) and can
+# deviate from that line by at most ½·A·(T−reaction)² (a double integrator's
+# reachable set), with the stick reaching further. So a defender's stick can
+# touch anywhere within (maneuver + stick) of his MOMENTUM-projected position.
+#
+# This is what the old proximity model (puck_safety) can't see: a hard charger's
+# disk rides downrange to where you WERE, leaving the space he vacated wide open
+# (beat him by letting him overshoot); a contained/jockeying defender's disk stays
+# on you (real containment); a stick on the puck stays a strip threat. The carrier
+# evades by placing the puck in his own handling envelope at a point outside every
+# defender disk — the SEAM (best_evade_point), which doubles as a carry candidate.
+const MANEUVER_ACCEL_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
+const EVADE_HORIZON_S: float = 0.40    # a deke/cut's length — the evasion look-ahead
+const EVADE_REACTION_S: float = 0.15   # a defender reads a cut before he can redirect to it
+const EVADE_STICK_REACH_M: float = (   # how far a defender's stick touches from his body
+		GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M)
+# A full stick of clear room reads as fully safe; inside the reach reads as 0.
+const EVADE_SAFE_MARGIN_M: float = EVADE_STICK_REACH_M
+# Envelope sampling for the seam search (rings × angles). Coarse is fine — the
+# seam is a broad region, not a point.
+const EVADE_SAMPLE_RINGS: Array[float] = [0.4, 0.8, 1.0]
+const EVADE_SAMPLE_ANGLES: int = 12
+
+
+# Clearance (metres) of a puck point from every defender's reachable stick at
+# `time` — >0 means no defender can reach it (that much room), <0 means covered.
+# Pure float math, no allocation. Defenders are momentum-projected; the maneuver
+# term is reaction-gated (they must read the puck's move before redirecting).
+static func reach_clearance(
+		puck_point: Vector3, time: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> float:
+	var n: int = opponents.size()
+	if n == 0 or opponent_vels.size() != n:
+		return EVADE_SAFE_MARGIN_M   # nothing to evade — fully clear
+	var maneuver: float = 0.5 * MANEUVER_ACCEL_M_S2 \
+			* pow(maxf(0.0, time - EVADE_REACTION_S), 2.0)
+	var reach: float = maneuver + EVADE_STICK_REACH_M
+	var worst: float = INF
+	for i: int in n:
+		var proj_x: float = opponents[i].x + opponent_vels[i].x * time
+		var proj_z: float = opponents[i].z + opponent_vels[i].z * time
+		var dx: float = puck_point.x - proj_x
+		var dz: float = puck_point.z - proj_z
+		var clear: float = sqrt(dx * dx + dz * dz) - reach
+		if clear < worst:
+			worst = clear
+	return worst
+
+
+# Map clearance (metres) to a [0, 1] possession safety: 0 inside a defender's
+# reach, ramping to 1 at a full stick of clear room.
+static func clearance_to_safety(clearance: float) -> float:
+	return clampf(clearance / EVADE_SAFE_MARGIN_M, 0.0, 1.0)
+
+
+# The carrier's best evasion target — the point in his handling envelope (where he
+# can put/protect the puck over EVADE_HORIZON_S) with the most clearance from
+# every defender: the SEAM. `handle_reach` is how far he holds the puck off his
+# body (Hands-scaled), so a better handler threads a tighter seam. Returned as a
+# world point (y = 0); used both as the carrier's evadability read (reach_clearance
+# at this point) and as a carry candidate. Value-type math; allocation-free.
+static func best_evade_point(
+		carrier_pos: Vector3, carrier_vel: Vector3,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		handle_reach: float) -> Vector3:
+	var proj_x: float = carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S
+	var proj_z: float = carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S
+	var env: float = 0.5 * MANEUVER_ACCEL_M_S2 * EVADE_HORIZON_S * EVADE_HORIZON_S \
+			+ handle_reach
+	var best: Vector3 = Vector3(proj_x, 0.0, proj_z)
+	var best_clear: float = reach_clearance(best, EVADE_HORIZON_S, opponents, opponent_vels)
+	for ring: float in EVADE_SAMPLE_RINGS:
+		var radius: float = env * ring
+		for k: int in EVADE_SAMPLE_ANGLES:
+			var ang: float = TAU * float(k) / float(EVADE_SAMPLE_ANGLES)
+			var p := Vector3(proj_x + cos(ang) * radius, 0.0, proj_z + sin(ang) * radius)
+			var c: float = reach_clearance(p, EVADE_HORIZON_S, opponents, opponent_vels)
+			if c > best_clear:
+				best_clear = c
+				best = p
+	return best
+
+
 # Defender reach for the CARRY-path check below — stick-blade reach plus
 # a margin for the defender stepping in as the bot skates past. Distinct
 # from the fired-puck lane model (which derives reach from closing time);
