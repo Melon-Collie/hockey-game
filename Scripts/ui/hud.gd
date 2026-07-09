@@ -5,9 +5,9 @@ extends CanvasLayer
 # "SHOT · 74 MPH · 89%". The % is of the shot family's own attribute-scaled
 # ceiling (wrister/quick → max_wrister_power, slapper → max_slapper_power),
 # so it reads as "where in my band did that release land" — the feedback loop
-# for learning to hit in-between wrister speeds on the sweep model. Backhands
-# can't reach 100% by design (the penalty is real power loss). Flip off here
-# once the wrister/goalie tuning settles.
+# for learning to hit in-between wrister speeds. DEBUG-BUILD ONLY: the hook
+# below also gates on OS.is_debug_build(), so it never appears in a shipped
+# (release-export) build. Flip this off to silence it in the editor too.
 @export var debug_shot_speed_toast: bool = true
 var _shot_toast_controller: SkaterController = null
 
@@ -893,7 +893,8 @@ func _process(_delta: float) -> void:
 # controller changes across respawns, session changes, and spectator swaps —
 # the comparison is a no-op except on the frame it actually changes.
 func _update_shot_speed_toast_hook() -> void:
-	if not debug_shot_speed_toast:
+	# Debug-build only — never connects (and so never toasts) in a release export.
+	if not debug_shot_speed_toast or not OS.is_debug_build():
 		return
 	var record: PlayerRecord = GameManager.get_local_player()
 	var controller: SkaterController = record.controller if record != null else null
