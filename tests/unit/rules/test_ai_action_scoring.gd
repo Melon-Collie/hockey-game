@@ -423,13 +423,26 @@ func test_shot_danger_unsettled_goalie_scores_higher() -> void:
 
 
 func test_shot_danger_caught_moving_goalie_opens_the_five_hole() -> void:
-	# A head-on shot at a goalie caught mid-slide: his legs are splayed, so the
-	# five-hole is the opening — a FLAT shot between the pads, not a roof.
-	var shooter := Vector3(0.0, 0.0, 19.65)
-	var goalie := Vector3(0.0, 0.0, 25.15)
+	# A head-on shot IN TIGHT at a goalie caught mid-slide: his legs are splayed,
+	# so the five-hole is the opening — a FLAT shot between the pads, not a roof.
+	# The five-hole is a physical gap, so it's only a real target up close; from
+	# range it foreshortens away (and the goalie re-settles mid-flight).
+	var shooter := Vector3(0.0, 0.0, 24.65)   # ~2 m — point blank
+	var goalie := Vector3(0.0, 0.0, 25.65)    # 1 m out, squared
 	var loft: int = AIActionScoring.best_shot_loft(
-			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.9)
-	assert_eq(loft, ShotMechanics.ELEVATION_FLAT, "shoot the five-hole flat on a sliding goalie")
+			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
+	assert_eq(loft, ShotMechanics.ELEVATION_FLAT, "shoot the five-hole flat on a sliding goalie in tight")
+
+
+func test_shot_danger_cross_ice_shot_at_moving_goalie_collapses() -> void:
+	# The bug the flight-fade + five-hole foreshortening fix: a bot must NOT rate a
+	# long cross-ice shot at a caught-moving goalie as a chance. By the time a 12 m
+	# shot arrives the goalie has re-settled, and a 12 m five-hole is a sliver.
+	var shooter := Vector3(0.0, 0.0, 14.65)   # ~12 m out
+	var goalie := Vector3(0.0, 0.0, 25.65)
+	var s: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
+	assert_lt(s, 0.1, "a long shot at a mid-slide goalie is not a real chance — he recovers")
 
 
 func test_shot_aim_targets_the_open_side() -> void:
