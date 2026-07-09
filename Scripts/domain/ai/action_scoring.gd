@@ -1475,6 +1475,26 @@ static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 	return minf(c_mid, c_end)
 
 
+# WHERE a carry gets stripped, if it does: the EARLIEST covered point on the path.
+# The turnover cost of a carry is priced HERE, not at the destination — a strip
+# surrenders the puck where you were caught, in the traffic you were skating
+# through, not the safe spot you were headed for. Chronological, not tightest: the
+# reach balloons with time (maneuver ∝ time²), so a far destination reads as
+# "more covered", but a puck stripped mid-route never reaches it — the mid-point
+# strip happens first. Mirrors lane_loss_point for passes; from == to is a stand.
+static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> Vector3:
+	var mid: Vector3 = from.lerp(to, 0.5)
+	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents, opponent_vels)
+	if c_mid < 0.0:
+		return mid   # covered mid-route — stripped there, before the destination
+	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels)
+	if c_end < 0.0:
+		return to    # clear mid-route, covered at the destination
+	# Neither covered (a low strip probability anyway): the tighter of the two.
+	return mid if c_mid <= c_end else to
+
+
 # The carrier's best evasion target — the point in his handling envelope (where he
 # can put/protect the puck over EVADE_HORIZON_S) with the most clearance from
 # every defender: the SEAM. `handle_reach` is how far he holds the puck off his

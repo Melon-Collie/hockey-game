@@ -475,13 +475,10 @@ func _pick_action(ctx: RoleContext) -> void:
 	var hold_value: float = (_best_developing_feed(ctx)
 			* keep_prob * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, _hold_elapsed_s))
 
-	# Last-resort DUMP (zone-gated; -INF where none applies). It wins only over the
-	# honest expected-KEEP value it returns — negative when we're pinned in danger,
-	# so a real escape or developing play always beats it.
-	var dump_result: Array = _best_dump(
-			ctx, our_goalie, cur_puck_pos, raw_carry_score, hold_value)
+	# Last-resort DUMP (zone-gated; -INF where none applies). It competes against the
+	# RAW (honest, strip-point-priced) carry — see _best_dump.
+	var dump_result: Array = _best_dump(ctx, our_goalie)
 	var dump_score: float = dump_result[0]
-	var dump_keep_value: float = dump_result[3]
 	debug_dump_score = dump_score
 
 	var new_intent: int
@@ -520,9 +517,9 @@ func _pick_action(ctx: RoleContext) -> void:
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
 					wrister_unsettled)
-	elif dump_score > dump_keep_value and not staggered:
-		# Last resort: trying to keep the puck is doomed in a bad spot (expected-keep
-		# below the safe giveaway). Clear our zone, or dump-and-chase.
+	elif dump_score > raw_carry_score and not staggered:
+		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
+		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.
 		_hold_elapsed_s = 0.0
 		new_intent = INTENT_DUMP
 		dump_target = dump_result[1]
@@ -936,29 +933,24 @@ func _best_carry(ctx: RoleContext) -> Array:
 	return [maxf(best_score, 0.0), best_pos, best_score]
 
 
-# Last-resort DUMP, zone-gated. Returns [dump_value, target, is_soft, keep_value];
-# -INF/INF when no dump applies here (own-side neutral zone, or already in the OZ):
+# Last-resort DUMP, zone-gated. Returns [dump_value, target, is_soft]; -INF when no
+# dump applies here (own-side neutral zone, or already in the OZ):
 #   - In our own DZ → clear out to the neutral-zone strong-side boards (hard rim).
 #   - Past centre (non-icing) but short of the blue line → dump-and-chase into the
 #     far offensive corner (soft flip), when the chase is winnable.
 #
-# The dump wins the compete only when dump_value > keep_value — two honest
-# alternatives in one currency:
-#   - dump_value = gain − concede. concede = turnover_cost(target, 1−recovery), the
-#     danger handed over at the safe dump spot (≈0 deep in their end); gain is the
-#     offensive upside, dump-in ONLY (recovery × position_potential(corner) ×
-#     chase_decay — winning the zone). A clear gains nothing, so its value is just
+# dump_value (absolute, same currency as carry) = gain − concede:
+#   - concede = turnover_cost(target, 1−recovery), the danger handed over at the safe
+#     dump spot (≈0 deep in their end, small at centre). recovery is the race to the
+#     dumped puck, so a dump self-suppresses when the chase isn't winnable.
+#   - gain = offensive upside, dump-in ONLY: recovery × position_potential(corner) ×
+#     chase_decay (winning the zone). A clear gains nothing, so its value is just
 #     −concede, a small negative.
-#   - keep_value = −strip_prob × threat_here + (1−strip_prob) × max(raw_carry, hold):
-#     with prob strip_prob we lose the puck RIGHT HERE (cost threat_here), else we
-#     escape (best of a real carry or a developing hold). strip_prob reads the
-#     clearance AT the puck (a stick on it now), NOT the evade-seam evadability,
-#     which reads "safe" off a dead-end seam toward our own net. keep_value goes
-#     honestly negative only when we're pinned AND the spot is dangerous — exactly
-#     when even a small-negative clear beats it — and stays above the clear on any
-#     real escape, developing play, or mild pressure. No threshold, no magic number.
-func _best_dump(ctx: RoleContext, our_goalie: Vector3,
-		current_puck_pos: Vector3, raw_carry: float, hold_value: float) -> Array:
+# It competes against the RAW carry — now honest, since carry candidates price their
+# strip at the tight point ON the route (carry_strip_point), so a doomed carry reads
+# honestly negative and an escapable one positive. The dump wins exactly when even
+# the best carry is worse than conceding at a safe spot: a last resort, no threshold.
+func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var defending_goal: Vector3 = ctx.defending_goal_pos
@@ -972,17 +964,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3,
 		target = AIActionScoring.dump_in_target(self_pos, attacking_goal)
 		is_soft = true
 	else:
-		return [-INF, Vector3.INF, false, INF]
-
-	# DZ clear PARKED for now. Firing it only when genuinely pinned (not merely
-	# pressured) needs an honest "can I skate out of this" signal: the puck is
-	# carried AHEAD of the skater, so a forechecker reads as a stick on the puck
-	# exactly in the spots the tuned "skate clear / don't panic-backpass" behavior
-	# wants us to keep it. Distinguishing pinned-vs-pressured cleanly is the open
-	# problem — the clear waits on it. The dump-and-chase below has no such conflict
-	# (up-ice contained ≠ about to be stripped in our slot) and ships.
-	if not is_soft:
-		return [-INF, target, false, INF]
+		return [-INF, Vector3.INF, false]
 
 	# Our chasers = teammates + ourselves; theirs = the opponents already gathered.
 	_scratch_our_chasers.clear()
@@ -991,9 +973,6 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3,
 	_scratch_our_chasers.append(self_pos)
 	var recovery: float = AIActionScoring.chase_recovery(
 			target, _scratch_our_chasers, _scratch_opponents)
-
-	# DUMP value (absolute): give up the puck at a SAFE spot. concede = the danger
-	# handed over there; gain = offensive upside (dump-in only: win the zone).
 	var concede: float = AIActionScoring.turnover_cost(
 			target, 1.0 - recovery, defending_goal, our_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -1007,27 +986,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3,
 		var value: float = AIActionScoring.position_potential(
 				target, attacking_goal, _scratch_opponents)
 		gain = recovery * value * chase_decay
-	var dump_value: float = gain - concede
-
-	# KEEP value (honest): try to hold the puck. With prob strip_prob we lose it
-	# RIGHT HERE (cost threat_here); otherwise we escape (best of raw carry / a
-	# developing hold). strip_prob reads the clearance AT the puck — a stick on it
-	# NOW — not the evade-seam evadability, which reads "safe" off a dead-end seam
-	# toward our own net. This bar goes honestly negative only when we're pinned AND
-	# the spot is dangerous, so the dump beats it exactly then — never over a real
-	# escape (raw carry) or a developing play (hold), and never on mild pressure.
-	# Short horizon (reaction only → no maneuver term, just stick reach), so this is
-	# "a stick can reach the puck NOW", not "a defender could close over 0.4 s" — the
-	# latter's ~3-4 m radius reads mild pressure as a pin.
-	var strip_prob: float = 1.0 - AIActionScoring.clearance_to_safety(
-			AIActionScoring.reach_clearance(current_puck_pos, AIActionScoring.EVADE_REACTION_S,
-					_scratch_opponents, _scratch_opponent_vels))
-	var threat_here: float = AIActionScoring.threat_surface_shoot(
-			current_puck_pos, defending_goal, our_goalie,
-			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
-	var keep_value: float = (-strip_prob * threat_here
-			+ (1.0 - strip_prob) * maxf(raw_carry, hold_value))
-	return [dump_value, target, is_soft, keep_value]
+	return [gain - concede, target, is_soft]
 
 
 # EV of one movement carry candidate — the uniform scoring every
@@ -1051,9 +1010,11 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3,
 # keep_prob = safety is the possession-protection probability; (1 - keep_prob)
 # is the strip probability, so the loss-probability lives in exactly one place
 # (no double-count with the benefit, whose safety multiplier is the "value of
-# arriving with the puck" discount). Loss point = the destination puck position
-# — where a converging defender would strip it. Cost self-localizes: ~0 driving
-# into the OZ, large driving into our own slot.
+# arriving with the puck" discount). Loss point = the EARLIEST covered point on the
+# route (carry_strip_point) — where the strip actually happens — NOT the
+# destination: a carry that ends in open ice but threads our own slot must pay the
+# slot's turnover cost. Cost self-localizes: ~0 driving into the OZ, large when the
+# route drags the puck through our own slot.
 func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 		our_goalie: Vector3) -> float:
 	var self_pos: Vector3 = ctx.self_pos
@@ -1087,8 +1048,15 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 					_scratch_opponents, _scratch_opponent_vels))
 	var benefit: float = dest_score * lane * decay * safety
 	var keep_prob: float = safety
+	# Price the loss where the strip actually happens — the earliest covered point on
+	# the route — not the (often safe) destination. A candidate that ends in open ice
+	# but threads a defender through our own slot must pay the slot's turnover cost,
+	# not the destination's. This is what keeps a doomed carry honestly negative.
+	var strip_point: Vector3 = AIActionScoring.carry_strip_point(
+			cur_puck_pos, cand_puck_pos, local_time,
+			_scratch_opponents, _scratch_opponent_vels)
 	var cost: float = AIActionScoring.turnover_cost(
-			cand_puck_pos, 1.0 - keep_prob, ctx.defending_goal_pos,
+			strip_point, 1.0 - keep_prob, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
 	return benefit - cost
 
