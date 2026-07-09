@@ -404,6 +404,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var max_wrister_charge_distance: float = 0.7
 @export var backhand_power_coefficient: float = 0.75
 @export var max_charge_direction_variance: float = 35.0
+# Forehand-default cone half-width (dot units ≈ sin of the angle) for the
+# forehand/backhand read: a sweep within ~asin(this) of straight-ahead is a
+# forehand. Backhands are the deliberate commit to the off side. See
+# ShotMechanics.is_backhand_shot.
+@export var wrister_backhand_deadband: float = 0.15
 # ── Wrister power model (ShotMechanics.wrister_power_t) ──
 # Power = sweep speed × drag distance, feel-curve shaped: the average on-axis
 # sweep speed is the primary signal (slow sweep = soft touch pass), drag
@@ -1754,15 +1759,27 @@ func _get_charge_direction() -> Vector3:
 	# Don't re-flip here — that would invert correct shots.
 	return _aiming.prev_blade_dir
 
+# Forehand/backhand for the wrister, from the sweep INTENT relative to the
+# shooter's facing (which side of the body you dragged toward). Shared by the
+# release path and the every-tick goalie-prediction path so both agree. The
+# drag vector and facing are both world-XZ and both survive reconcile (facing
+# is snapped from the host, the drag is saved/restored), so the classification
+# is deterministic. Degenerate no-drag falls through to forehand inside
+# is_backhand_shot.
+func _classify_backhand() -> bool:
+	var facing: Vector2 = skater.get_facing()
+	return ShotMechanics.is_backhand_shot(
+			_get_charge_direction(),
+			Vector3(facing.x, 0.0, facing.y),
+			skater.is_left_handed,
+			wrister_backhand_deadband)
+
 func _release_wrister(input: InputState) -> void:
 	if has_puck:
 		var blade_world: Vector3 = _ik.last_target_blade_world
-		# Forehand/backhand = the puck's sticky carried face (Skater._carry_side,
-		# hysteresis-gated, handedness-normalized) at the release tick — the face
-		# that is actually pushing the puck. Replaced the old aim-entry blade-X
-		# snapshot, which mis-read toe-drags (blade past center, puck still on
-		# the forehand face) and cross-body repositions both ways.
-		var is_backhand: bool = skater.get_carry_side() < 0
+		# Forehand/backhand from the sweep intent — which side of the body the
+		# drag went toward (see _classify_backhand / ShotMechanics.is_backhand_shot).
+		var is_backhand: bool = _classify_backhand()
 		# LMB is always a charged wrister now — the quick shot lives on its own
 		# button (_fire_quick_shot). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
@@ -1888,7 +1905,7 @@ func _update_wrister_charge(input: InputState) -> void:
 	# impact off the goalie's lean (a tricky release beats the read). Host-only:
 	# remote carriers don't run this path, so their predicted velocity stays ZERO
 	# and the goalie falls back to a non-directional readiness tell.
-	var is_backhand: bool = skater.get_carry_side() < 0
+	var is_backhand: bool = _classify_backhand()
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level, _aiming.charge_distance,

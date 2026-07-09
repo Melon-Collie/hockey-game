@@ -935,18 +935,6 @@ func get_carry_forehand_factor() -> float:
 	return _carry_side_smoothed * handedness_sign
 
 
-# The discrete sticky carry face: +1 forehand, -1 backhand (handedness
-# already folded in by update_carry_side), 0 only when not carrying. This is
-# the puck's ACTUAL loading face — hysteresis-gated (the blade must cross
-# carry_side_switch_threshold past center to flip), so it can't be faked by
-# transient blade geometry mid-dangle. The wrister forehand/backhand
-# classification reads this at release/prediction time; the flex bow and the
-# puck's rendered face already key off the same state, so what the shot pays
-# is always what the player sees.
-func get_carry_side() -> int:
-	return _carry_side
-
-
 # Called once per tick from SkaterIKCoordinator.apply_blade_from_mouse —
 # advances the sticky carry-side state and lerps the rendered factor.
 # Hysteresis prevents flip-flopping near center; on first carry frame the

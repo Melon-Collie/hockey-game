@@ -122,6 +122,39 @@ static func wrister_charge_for_power(
 			hi = mid
 	return (lo + hi) * 0.5
 
+# Forehand vs backhand from the SHOT INTENT direction. This game collapses aim
+# and sweep into one vector — the charged wrister fires along the drag — so
+# which face loads the puck is decided by which side of the body you swept
+# toward: toward your stick (forehand) side is a forehand, toward your off side
+# is a backhand. This is what the player actually feels ("I flicked to my
+# backhand → I got a backhand"), and unlike a blade-position read it doesn't
+# misfire on cross-body carries. Intrinsically body-relative, hence body_forward
+# (the shooter's frozen facing during the aim).
+#
+# backhand_deadband widens the FOREHAND cone around straight-ahead: a shot
+# within ~asin(deadband) of dead-center defaults to forehand (the strong side
+# you square up on). A backhand is the deliberate commit to the off side — an
+# asymmetry that matches how a real player has to open up for one.
+#
+# SIGN: forehand is the shooter's LEFT for a right-handed shot (RH shooters play
+# the puck on their left — an RH sniper one-times forehand from the left
+# circle), mirrored for lefties. Absolute FH/BH sign is empirical, not reliably
+# derivable through the facing/handedness/coordinate conventions — if playtest
+# shows it inverted, flip the `handed` sign here and nowhere else.
+static func is_backhand_shot(
+		shot_dir: Vector3, body_forward: Vector3, is_left_handed: bool,
+		backhand_deadband: float = 0.0) -> bool:
+	var d := Vector3(shot_dir.x, 0.0, shot_dir.z)
+	var f := Vector3(body_forward.x, 0.0, body_forward.z)
+	if d.length_squared() < 0.0001 or f.length_squared() < 0.0001:
+		return false
+	d = d.normalized()
+	f = f.normalized()
+	var left_vec := Vector3.UP.cross(f)            # unit vector to the shooter's left
+	var lat_left: float = d.dot(left_vec)          # + = swept toward the left
+	var handed: float = 1.0 if is_left_handed else -1.0
+	return lat_left * handed > backhand_deadband
+
 # Wrister release. HARD BINARY — a quick shot and a charged wrister are two
 # distinct shots, with NO blend between them. Which one fires is decided by the
 # INPUT at the call site (not any threshold in here) and passed in as is_quick_shot:
@@ -140,10 +173,9 @@ static func wrister_charge_for_power(
 # on the predicted body position — is a client/host divergence source. Netcode
 # upshot: a charged wrister's aim (the drag vector) is body-independent and
 # identical on client and host.
-# Backhand is the caller's call: the controller passes is_backhand from the
-# puck's sticky carried face (Skater.get_carry_side(), hysteresis-gated and
-# handedness-normalized) at release/prediction time — the face actually pushing
-# the puck, not a snapshot of blade geometry.
+# Backhand is the caller's call: the controller passes is_backhand from
+# is_backhand_shot (above) — the shot INTENT direction relative to the
+# shooter's facing, i.e. which side you swept the puck toward.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,

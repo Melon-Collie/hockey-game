@@ -72,8 +72,8 @@ func test_wrister_full_charge_full_sweep_maxes_power() -> void:
 
 func test_wrister_backhand_penalty() -> void:
 	var cfg := _wrister_cfg()
-	# is_backhand is computed by the controller from the puck's sticky carried
-	# face (Skater.get_carry_side()) at release time. These calls directly
+	# is_backhand is computed by the controller from the sweep intent direction
+	# (ShotMechanics.is_backhand_shot) at release time. These calls directly
 	# express the classification result.
 	var rh_forehand: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
@@ -275,6 +275,57 @@ func test_wrister_charge_for_power_clamps_to_range() -> void:
 	assert_almost_eq(ShotMechanics.wrister_charge_for_power(999.0, 0.067, cfg),
 			cfg.max_wrister_charge_distance, 0.001,
 			"unreachable target solves to the full charge cap")
+
+# ── Forehand/backhand from sweep intent ──────────────────────────────────────
+# Facing NORTH (-Z): the shooter's left is -X, right is +X. Forehand is the
+# shooter's LEFT for a right-handed shot (RH plays the puck on the left),
+# mirrored for lefties. Deadband defaults 0 unless a test sets one.
+const _FWD_NORTH: Vector3 = Vector3(0, 0, -1)
+
+func test_backhand_straight_shot_defaults_forehand() -> void:
+	assert_false(ShotMechanics.is_backhand_shot(_FWD_NORTH, _FWD_NORTH, false),
+		"straight-ahead RH shot is a forehand")
+	assert_false(ShotMechanics.is_backhand_shot(_FWD_NORTH, _FWD_NORTH, true),
+		"straight-ahead LH shot is a forehand")
+
+func test_backhand_righty_sweep_sides() -> void:
+	# RH forehand = toward the left (-X); backhand = toward the right (+X).
+	assert_false(ShotMechanics.is_backhand_shot(Vector3(-1, 0, 0), _FWD_NORTH, false),
+		"RH sweep to the left is a forehand")
+	assert_true(ShotMechanics.is_backhand_shot(Vector3(1, 0, 0), _FWD_NORTH, false),
+		"RH sweep to the right is a backhand")
+
+func test_backhand_lefty_is_mirrored() -> void:
+	# LH forehand = toward the right (+X); backhand = toward the left (-X).
+	assert_false(ShotMechanics.is_backhand_shot(Vector3(1, 0, 0), _FWD_NORTH, true),
+		"LH sweep to the right is a forehand")
+	assert_true(ShotMechanics.is_backhand_shot(Vector3(-1, 0, 0), _FWD_NORTH, true),
+		"LH sweep to the left is a backhand")
+
+func test_backhand_deadband_keeps_near_straight_forehand() -> void:
+	# A shot 8° off straight toward the RH backhand side, inside a 0.15 (~8.6°)
+	# deadband, still reads forehand; well past it flips.
+	var slight := Vector3(sin(deg_to_rad(8.0)), 0.0, -cos(deg_to_rad(8.0)))
+	assert_false(ShotMechanics.is_backhand_shot(slight, _FWD_NORTH, false, 0.15),
+		"inside the forehand cone stays forehand")
+	var wide := Vector3(sin(deg_to_rad(30.0)), 0.0, -cos(deg_to_rad(30.0)))
+	assert_true(ShotMechanics.is_backhand_shot(wide, _FWD_NORTH, false, 0.15),
+		"well past the cone is a backhand")
+
+func test_backhand_relative_to_facing_not_world() -> void:
+	# Same world-ward shot (+X), two facings: it's forehand or backhand
+	# depending on which way the RH shooter's body points.
+	var shot := Vector3(1, 0, 0)
+	assert_true(ShotMechanics.is_backhand_shot(shot, Vector3(0, 0, -1), false),
+		"facing north, +X shot is to the right → RH backhand")
+	assert_false(ShotMechanics.is_backhand_shot(shot, Vector3(0, 0, 1), false),
+		"facing south, +X shot is to the left → RH forehand")
+
+func test_backhand_degenerate_inputs_default_forehand() -> void:
+	assert_false(ShotMechanics.is_backhand_shot(Vector3.ZERO, _FWD_NORTH, false),
+		"no sweep direction → forehand default")
+	assert_false(ShotMechanics.is_backhand_shot(Vector3(1, 0, 0), Vector3.ZERO, false),
+		"no facing → forehand default")
 
 # ── Slapper ──────────────────────────────────────────────────────────────────
 
