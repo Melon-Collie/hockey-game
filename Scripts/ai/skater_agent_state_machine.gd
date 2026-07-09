@@ -448,12 +448,12 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 # line is offset perpendicular to aim_dir). 0.15 m is small enough to
 # stay inside ROM even at the bot's max charge target, but large enough
 # that the wind-up reads as a forehand pose rather than a straight
-# back-to-front jab through the body's centerline. This is now purely
-# cosmetic: the forehand/backhand classifier reads the SWEEP direction
-# (ShotMechanics.is_backhand_shot), so a shot swept toward the net scores
-# forehand regardless of the wind-up pose — a bot ripping at the goal
-# takes no backhand penalty, and only a genuinely off-side sweep (e.g. a
-# cross-body pass to a backhand-side teammate) reads as a backhand.
+# back-to-front jab through the body's centerline. The forehand/backhand
+# classifier reads the SWING CHIRALITY (the rotational sense of the blade
+# sweep — ShotMechanics.is_backhand_from_swing): a bot windup that sweeps
+# from this forehand-side offset in toward the aim line rotates in the
+# forehand sense, so the shot scores forehand and takes no penalty. A
+# flipped (backhand-side) windup sweeps the other way and reads backhand.
 const BOT_WRISTER_SIDE_OFFSET_M: float = 0.15
 
 # Side-selection for wrister wind-up — defender within this radius

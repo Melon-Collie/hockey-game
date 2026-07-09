@@ -45,22 +45,33 @@ class_name ChargeTracking
 # release as snaps, not full wristers. Pass <= 0.0 to disable (legacy
 # behavior).
 #
+# SWING ROTATION: the signed angular sweep of the blade AROUND THE PLAYER,
+# accumulated in radians over the stroke (blade positions are passed relative
+# to the skater, so the player is the rotation center). Each tick adds the
+# signed angle from the previous blade bearing to the current one
+# (atan2(cross.y, dot) — the standard clockwise-vs-counter-clockwise test).
+# The SIGN of the accumulated total is the forehand/backhand chirality: a
+# forehand and a backhand sweep the blade in opposite rotational senses, and
+# unlike a travel-direction read this correctly classifies a cross-body
+# backhand (off-side start, stick-side finish) by the net rotation. Resets to
+# zero on a variance break, so the live stroke's rotation classifies. A purely
+# radial push (straight out from the body) contributes ~0 — the ambiguous
+# straight-ahead shot, which the caller's deadband defaults to forehand.
+#
 # Caller owns the per-frame state (prev_intent_pos, prev_blade_pos,
-# prev_direction, charge, sweep_time). Each tick it calls accumulate()
-# with the current positions and stores back the returned values.
+# prev_direction, charge, sweep_time, rotation). Each tick it calls
+# accumulate() with the current positions and stores back the returned values.
 #
 # Returns { "charge": float, "direction": Vector3, "sweep_time": float,
-#           "reset": bool }.
+#           "reset": bool, "rotation": float }.
 #   - direction: the most recent meaningful cursor-motion unit vector.
 #     Caller passes this as prev_direction next tick. Vector3.ZERO means
 #     "no direction yet recorded" (first frame or negligible cursor
 #     motion).
 #   - reset: true when the direction-variance break fired this tick — a NEW
-#     power stroke started. No live consumer today (the forehand/backhand
-#     read that once keyed off it now uses the puck's sticky carried face
-#     instead); kept because it makes the variance-break part of the
-#     function's explicit contract for any stroke-scoped state a caller
-#     wants to refresh.
+#     power stroke started.
+#   - rotation: accumulated signed angular sweep (radians); classify FH/BH by
+#     its sign at release (ShotMechanics.is_backhand_from_swing).
 static func accumulate(
 		prev_intent_pos: Vector3,
 		current_intent_pos: Vector3,
@@ -71,28 +82,32 @@ static func accumulate(
 		max_direction_variance_deg: float,
 		current_sweep_time: float = 0.0,
 		delta: float = 0.0,
-		max_counted_speed: float = 0.0) -> Dictionary:
+		max_counted_speed: float = 0.0,
+		current_rotation: float = 0.0) -> Dictionary:
 	var intent_delta := current_intent_pos - prev_intent_pos
 	intent_delta.y = 0.0
 	var intent_dist: float = intent_delta.length()
 	if intent_dist <= 0.001:
 		# Cursor not moving — no drag intent this tick. Hold direction,
-		# charge, and sweep time unchanged regardless of what the blade
-		# did (e.g., locomotion-induced blade motion doesn't pump charge
+		# charge, sweep time, and rotation unchanged regardless of what the
+		# blade did (e.g., locomotion-induced blade motion doesn't pump charge
 		# without intent). Holding time too is what lets a player draw
 		# the shot and wait for a lane without the average speed decaying.
 		return {"charge": current_charge, "direction": prev_direction,
-				"sweep_time": current_sweep_time, "reset": false}
+				"sweep_time": current_sweep_time, "reset": false,
+				"rotation": current_rotation}
 
 	var current_dir: Vector3 = intent_delta.normalized()
 	var new_charge: float = current_charge
 	var new_sweep_time: float = current_sweep_time
+	var new_rotation: float = current_rotation
 	var was_reset: bool = false
 	if prev_direction != Vector3.ZERO:
 		var angle_deg: float = rad_to_deg(prev_direction.angle_to(current_dir))
 		if angle_deg > max_direction_variance_deg:
 			new_charge = 0.0
 			new_sweep_time = 0.0
+			new_rotation = 0.0
 			was_reset = true
 
 	# Magnitude from blade travel PROJECTED onto the intent direction.
@@ -109,5 +124,23 @@ static func accumulate(
 		new_charge += aligned_magnitude
 		new_sweep_time += delta
 
+	# Signed angular step of the blade around the player (radians). Both
+	# positions are player-relative (translation removed), so a near-zero
+	# bearing (blade over the player — never happens in practice) is guarded.
+	new_rotation += swing_step(prev_blade_pos, current_blade_pos)
+
 	return {"charge": new_charge, "direction": current_dir,
-			"sweep_time": new_sweep_time, "reset": was_reset}
+			"sweep_time": new_sweep_time, "reset": was_reset,
+			"rotation": new_rotation}
+
+
+# Signed angle (radians, +/-) swept from bearing `prev_rel` to `curr_rel`
+# about the vertical axis — the per-tick clockwise/counter-clockwise step.
+# Pure XZ (y ignored). Zero when either bearing is degenerate.
+static func swing_step(prev_rel: Vector3, curr_rel: Vector3) -> float:
+	var a := Vector3(prev_rel.x, 0.0, prev_rel.z)
+	var b := Vector3(curr_rel.x, 0.0, curr_rel.z)
+	if a.length_squared() < 0.0001 or b.length_squared() < 0.0001:
+		return 0.0
+	var cross_y: float = a.z * b.x - a.x * b.z
+	return atan2(cross_y, a.dot(b))

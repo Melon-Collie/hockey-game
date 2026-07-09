@@ -13,6 +13,12 @@ var charge_distance: float = 0.0
 # the wrister power model's primary signal. Saved/restored across reconcile
 # replay alongside charge_distance (LocalController), same shape of problem.
 var sweep_time: float = 0.0
+# Net signed angular sweep of the blade around the player (radians), over the
+# current stroke. Its SIGN is the forehand/backhand chirality
+# (ShotMechanics.is_backhand_from_swing). Accumulated by ChargeTracking, reset
+# with the rest of the stroke on a variance break, and saved/restored across
+# reconcile like charge_distance / sweep_time.
+var swing_rotation: float = 0.0
 # Cursor (intent) position in SCREEN-space, packed into a Vector3 as
 # (screen.x, 0, screen.y). The charge tracker reads its DIRECTION from
 # the delta of this position frame-over-frame. Screen space is the
@@ -39,6 +45,7 @@ var one_timer_window_timer: float = 0.0
 func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Vector3) -> void:
 	charge_distance = 0.0
 	sweep_time = 0.0
+	swing_rotation = 0.0
 	prev_blade_dir = Vector3.ZERO
 	prev_intent_pos = initial_intent_pos
 	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
@@ -54,9 +61,10 @@ func tick_wrister_charge(
 			prev_intent_pos, intent_pos,
 			prev_blade_pos_rel_skater, blade_pos_rel_skater,
 			prev_blade_dir, charge_distance, max_charge_direction_variance,
-			sweep_time, delta, max_counted_sweep_speed)
+			sweep_time, delta, max_counted_sweep_speed, swing_rotation)
 	charge_distance = result.charge
 	sweep_time = result.sweep_time
+	swing_rotation = result.rotation
 	prev_blade_dir = result.direction
 	prev_intent_pos = intent_pos
 	prev_blade_pos_rel_skater = blade_pos_rel_skater

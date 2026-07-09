@@ -404,11 +404,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var max_wrister_charge_distance: float = 0.7
 @export var backhand_power_coefficient: float = 0.75
 @export var max_charge_direction_variance: float = 35.0
-# Forehand-default cone half-width (dot units ≈ sin of the angle) for the
-# forehand/backhand read: a sweep within ~asin(this) of straight-ahead is a
-# forehand. Backhands are the deliberate commit to the off side. See
-# ShotMechanics.is_backhand_shot.
-@export var wrister_backhand_deadband: float = 0.15
+# Forehand-default deadband (RADIANS of net swing rotation) for the
+# forehand/backhand read: a stroke whose blade sweeps less than this net angle
+# around the player — a near-straight push — defaults to forehand. A backhand
+# is the deliberate rotational commit past it. See
+# ShotMechanics.is_backhand_from_swing. 0.35 rad ≈ 20°.
+@export var wrister_backhand_deadband: float = 0.35
 # ── Wrister power model (ShotMechanics.wrister_power_t) ──
 # Power = sweep speed × drag distance, feel-curve shaped: the average on-axis
 # sweep speed is the primary signal (slow sweep = soft touch pass), drag
@@ -1759,18 +1760,15 @@ func _get_charge_direction() -> Vector3:
 	# Don't re-flip here — that would invert correct shots.
 	return _aiming.prev_blade_dir
 
-# Forehand/backhand for the wrister, from the sweep INTENT relative to the
-# shooter's facing (which side of the body you dragged toward). Shared by the
-# release path and the every-tick goalie-prediction path so both agree. The
-# drag vector and facing are both world-XZ and both survive reconcile (facing
-# is snapped from the host, the drag is saved/restored), so the classification
-# is deterministic. Degenerate no-drag falls through to forehand inside
-# is_backhand_shot.
+# Forehand/backhand for the wrister, from the swing CHIRALITY — the net
+# rotational sense of the blade's sweep around the player over the stroke
+# (SkaterAimingBehavior.swing_rotation, accumulated by ChargeTracking). Shared
+# by the release path and the every-tick goalie-prediction path so both agree.
+# The accumulator is player-relative blade motion and is saved/restored across
+# reconcile alongside charge, so the classification is deterministic.
 func _classify_backhand() -> bool:
-	var facing: Vector2 = skater.get_facing()
-	return ShotMechanics.is_backhand_shot(
-			_get_charge_direction(),
-			Vector3(facing.x, 0.0, facing.y),
+	return ShotMechanics.is_backhand_from_swing(
+			_aiming.swing_rotation,
 			skater.is_left_handed,
 			wrister_backhand_deadband)
 

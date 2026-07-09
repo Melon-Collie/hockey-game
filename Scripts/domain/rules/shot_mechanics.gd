@@ -122,38 +122,28 @@ static func wrister_charge_for_power(
 			hi = mid
 	return (lo + hi) * 0.5
 
-# Forehand vs backhand from the SHOT INTENT direction. This game collapses aim
-# and sweep into one vector — the charged wrister fires along the drag — so
-# which face loads the puck is decided by which side of the body you swept
-# toward: toward your stick (forehand) side is a forehand, toward your off side
-# is a backhand. This is what the player actually feels ("I flicked to my
-# backhand → I got a backhand"), and unlike a blade-position read it doesn't
-# misfire on cross-body carries. Intrinsically body-relative, hence body_forward
-# (the shooter's frozen facing during the aim).
+# Forehand vs backhand from the SWING CHIRALITY — the net rotational sense of
+# the blade's sweep around the player over the stroke (ChargeTracking.rotation,
+# radians; + / - is counter-/clockwise about the vertical axis). A forehand and
+# a backhand curl the blade in opposite rotational directions — that IS the
+# distinction (mirror-image wrist rolls) — so the sign of the accumulated swing
+# classifies it. Unlike a travel-direction read this handles a cross-body
+# backhand correctly: an off-side start swept to the stick side nets to the
+# backhand rotation even though it finishes stick-ward.
 #
-# backhand_deadband widens the FOREHAND cone around straight-ahead: a shot
-# within ~asin(deadband) of dead-center defaults to forehand (the strong side
-# you square up on). A backhand is the deliberate commit to the off side — an
-# asymmetry that matches how a real player has to open up for one.
+# deadband (radians) keeps a near-radial push — a straight-out shot with almost
+# no angular sweep — defaulting to FOREHAND (the strong side you square up on);
+# a backhand is the deliberate rotational commit.
 #
-# SIGN: forehand is the shooter's LEFT for a right-handed shot (RH shooters play
-# the puck on their left — an RH sniper one-times forehand from the left
-# circle), mirrored for lefties. Absolute FH/BH sign is empirical, not reliably
-# derivable through the facing/handedness/coordinate conventions — if playtest
+# SIGN: a positive swing is a forehand for a right-handed shooter, mirrored for
+# lefties (is_left_handed flips it). Absolute chirality sign is empirical, not
+# reliably derivable through the handedness/coordinate conventions — if playtest
 # shows it inverted, flip the `handed` sign here and nowhere else.
-static func is_backhand_shot(
-		shot_dir: Vector3, body_forward: Vector3, is_left_handed: bool,
-		backhand_deadband: float = 0.0) -> bool:
-	var d := Vector3(shot_dir.x, 0.0, shot_dir.z)
-	var f := Vector3(body_forward.x, 0.0, body_forward.z)
-	if d.length_squared() < 0.0001 or f.length_squared() < 0.0001:
-		return false
-	d = d.normalized()
-	f = f.normalized()
-	var left_vec := Vector3.UP.cross(f)            # unit vector to the shooter's left
-	var lat_left: float = d.dot(left_vec)          # + = swept toward the left
-	var handed: float = 1.0 if is_left_handed else -1.0
-	return lat_left * handed > backhand_deadband
+static func is_backhand_from_swing(
+		swing_rotation: float, is_left_handed: bool,
+		deadband: float = 0.0) -> bool:
+	var handed: float = -1.0 if is_left_handed else 1.0
+	return swing_rotation * handed < -deadband
 
 # Wrister release. HARD BINARY — a quick shot and a charged wrister are two
 # distinct shots, with NO blend between them. Which one fires is decided by the
@@ -174,8 +164,8 @@ static func is_backhand_shot(
 # upshot: a charged wrister's aim (the drag vector) is body-independent and
 # identical on client and host.
 # Backhand is the caller's call: the controller passes is_backhand from
-# is_backhand_shot (above) — the shot INTENT direction relative to the
-# shooter's facing, i.e. which side you swept the puck toward.
+# is_backhand_from_swing (above) — the rotational sense of the blade's sweep
+# around the player over the stroke.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,

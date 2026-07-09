@@ -144,3 +144,65 @@ func test_reset_flag_false_on_continuation_idle_and_first_tick() -> void:
 		Vector3.ZERO, Vector3(0.3, 0, 0), Vector3.ZERO, Vector3(0.3, 0, 0),
 		Vector3.ZERO, 0.0, VARIANCE_DEG, 0.0, DT, 0.0)
 	assert_false(first.reset, "first motion after entry is not a variance break")
+
+# ── Swing rotation (the forehand/backhand chirality signal) ──────────────────
+
+func test_swing_step_signed_angle() -> void:
+	# Quarter turn of the blade bearing +X → +Z is one rotational sense; the
+	# reverse is the opposite sign; identical bearings are zero.
+	assert_almost_eq(ChargeTracking.swing_step(Vector3(1, 0, 0), Vector3(0, 0, 1)),
+		-PI / 2.0, 0.001, "+X → +Z is a signed quarter turn")
+	assert_almost_eq(ChargeTracking.swing_step(Vector3(0, 0, 1), Vector3(1, 0, 0)),
+		PI / 2.0, 0.001, "the reverse sweep is the opposite sign")
+	assert_almost_eq(ChargeTracking.swing_step(Vector3(1, 0, 0), Vector3(1, 0, 0)),
+		0.0, 0.001, "no bearing change → no rotation")
+
+func test_swing_step_ignores_height_and_degenerate() -> void:
+	assert_almost_eq(ChargeTracking.swing_step(Vector3(1, 0, 0), Vector3(0, 5, 1)),
+		-PI / 2.0, 0.001, "vertical component ignored")
+	assert_almost_eq(ChargeTracking.swing_step(Vector3.ZERO, Vector3(1, 0, 0)),
+		0.0, 0.001, "degenerate bearing → zero")
+
+func test_rotation_accumulates_one_step() -> void:
+	# First tick (no prev direction, cursor moving): rotation = the blade's
+	# angular step around the player.
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.5, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, 1),
+		Vector3.ZERO, 0.0, VARIANCE_DEG, 0.0, DT, 0.0, 0.0)
+	assert_almost_eq(result.rotation, -PI / 2.0, 0.001, "one quarter-turn step accumulated")
+
+func test_rotation_idle_tick_holds() -> void:
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(0.5, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, 1),
+		Vector3(1, 0, 0), 0.5, VARIANCE_DEG, 0.1, DT, 0.0, 2.5)
+	assert_almost_eq(result.rotation, 2.5, 0.001, "idle cursor holds rotation")
+
+func test_rotation_resets_on_variance_break() -> void:
+	# A variance break starts a fresh stroke: prior rotation is discarded and
+	# only this tick's step counts — so a deke-then-shoot classifies off the
+	# shot's own rotation, not the deke's.
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(0.3, 0, 0),          # cursor reverses → break
+		Vector3(1, 0, 0), Vector3(0, 0, 1),
+		Vector3(1, 0, 0), 1.0, VARIANCE_DEG, 0.5, DT, 0.0, 5.0)
+	assert_true(result.reset)
+	assert_almost_eq(result.rotation, -PI / 2.0, 0.001, "rotation reset then this step counted")
+
+func test_swing_direction_classifies_forehand_vs_backhand() -> void:
+	# End-to-end: a two-tick arc one way vs the other yields opposite net
+	# rotation, which ShotMechanics.is_backhand_from_swing reads as FH vs BH.
+	# Cursor drags a constant +X the whole time (no variance break); only the
+	# blade bearing rotates.
+	var s1: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.5, 0, 0),
+		Vector3(1, 0, 0), Vector3(0.707, 0, 0.707),
+		Vector3.ZERO, 0.0, VARIANCE_DEG, 0.0, DT, 0.0, 0.0)
+	var s2: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(1.0, 0, 0),
+		Vector3(0.707, 0, 0.707), Vector3(0, 0, 1),
+		s1.direction, s1.charge, VARIANCE_DEG, s1.sweep_time, DT, 0.0, s1.rotation)
+	assert_almost_eq(s2.rotation, -PI / 2.0, 0.01, "consistent arc sums its steps")
+	assert_true(ShotMechanics.is_backhand_from_swing(s2.rotation, false),
+		"negative net rotation is a RH backhand")
+	assert_false(ShotMechanics.is_backhand_from_swing(-s2.rotation, false),
+		"the mirror arc is a RH forehand")
