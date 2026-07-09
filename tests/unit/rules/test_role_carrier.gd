@@ -84,34 +84,56 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
-# ─── pass out of a board pincer (pressure relief) ───────────────────────────
+# ─── pressure: make a safe play, don't drive into the box ───────────────────
 
-func test_board_pincer_passes_to_lateral_outlet_instead_of_over_carrying() -> void:
-	# Carrier pinned on the right-wall in the neutral zone, two defenders
-	# pincering (one closing off the inside, one sealing the up-ice lane). The
-	# only safe out is a lateral feed to a teammate in the middle — LOW up-ice
-	# value, so without the pass-out-of-pressure relief the carrier rates
-	# carrying (higher position potential up the wall) over the escape pass and
-	# gets stripped. With the relief, getting the puck off the pinned carrier
-	# wins. This is the "see the pincer, move it" read.
-	var self_pos := Vector3(6, 0, 9)                    # right-center, NZ, space ahead
+func test_board_pincer_makes_a_safe_play_not_a_turnover() -> void:
+	# Carrier pinned on the right wall, two forecheckers converging. There's no
+	# separate pass-out-of-pressure bonus: the clean per-action EV resolves this by
+	# the carry/pass alternatives' OWN strip cost (carrying into the box goes
+	# negative). The bot makes a possession-preserving play — either the lateral
+	# outlet pass or a safe evade-carry AWAY from the closing box. What it must NOT
+	# do is drive up the wall into the pincer and cough it up. (Pre-removal this
+	# asserted the specific outlet pass a relief bonus forced; the evade-carry is an
+	# equally valid resolution and what the clean EV prefers here.)
+	var self_pos := Vector3(6, 0, 9)                    # right-center, NZ
 	var outlet := Vector3(-3, 0, 6)                     # left-center, forward, open
+	var d3 := Vector3(4, 0, 4)
+	var d4 := Vector3(9, 0, 5)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],                         # us, carrying
 			[2, TEAM_ID, outlet],                           # open outlet
-			[3, 1, Vector3(4, 0, 4), false, Vector3(1.5, 0, 5)],  # inside forechecker closing fast
-			[4, 1, Vector3(9, 0, 5), false, Vector3(-3, 0, 5)],   # outside forechecker closing (pincer)
+			[3, 1, d3, false, Vector3(1.5, 0, 5)],          # inside forechecker closing fast
+			[4, 1, d4, false, Vector3(-3, 0, 5)],           # outside forechecker closing (pincer)
 	]
-	# The forming pincer registers through the defenders' closing VELOCITY in
-	# puck_safety (they start beyond stick range), so our current strip
-	# probability is high; the grounded pass-relief (expected turnover avoided)
-	# lifts the escape pass over the carry. Without any relief the base model
-	# CARRIES here into the closing box.
 	var c := AIRoleCarrier.new()
 	c.decide(_make_ctx(self_pos, skaters))
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
-			"a carrier reading a forming pincer moves the puck instead of over-carrying")
-	assert_eq(c.debug_pass_peer_id, 2, "the escape pass targets the open middle outlet")
+	if c.intended_action == AIRoleCarrier.INTENT_PASS:
+		assert_eq(c.debug_pass_peer_id, 2, "if it passes, it feeds the open outlet")
+	else:
+		# Evade-carry: the destination backs away from the converging pincer rather
+		# than driving up-ice into it.
+		var pincer_mid: Vector3 = (d3 + d4) * 0.5
+		assert_gt(c.debug_carry_pos.distance_to(pincer_mid), self_pos.distance_to(pincer_mid),
+				"an evade-carry moves away from the pincer, not into it")
+
+
+func test_light_pressure_keeps_the_puck_over_a_covered_backpass() -> void:
+	# Carrier LIGHTLY pressured with space ahead; the only pass option is a deeper,
+	# covered teammate. With no pass-out-of-pressure bonus, the backpass is just its
+	# own weak EV (low receiver value, real turnover cost) and loses to keeping the
+	# puck and skating. The "don't panic-backpass under light pressure" read.
+	var self_pos := Vector3(2, 0, 12)                    # NZ, our side, space ahead (toward -Z)
+	var covered := Vector3(0, 0, 19)                     # deeper teammate, in our end
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                          # us, carrying
+			[2, TEAM_ID, covered],                           # deeper outlet — but covered
+			[3, 1, Vector3(2, 0, 8), false, Vector3(0, 0, 2)],   # light pressure, slow close
+			[4, 1, Vector3(0.6, 0, 19.5)],                       # defender sitting on the outlet
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"light pressure + a covered backpass is not an escape — keep the puck")
 
 
 # ─── breakout: the risky ground-losing backpass loses to keeping the puck ────
@@ -184,6 +206,128 @@ func test_open_carrier_at_blue_line_drives_in_instead_of_freezing() -> void:
 			"a wide-open carrier at the blue line must take the space, not freeze")
 	assert_lt(c.last_carry_anchor.z, self_pos.z,
 			"…and take it TOWARD the attacking net")
+	assert_true(
+			AIActionScoring.in_offensive_zone(c.last_carry_anchor, ctx.attacking_goal_pos),
+			"…all the way across the blue line, entering the offensive zone")
+
+
+# ─── zone valve: once in the O-zone, don't carry back out ────────────────────
+
+func test_carrier_in_ozone_never_carries_back_out() -> void:
+	# Carrier just inside the offensive blue line, swarmed from the front and
+	# sides so the safest escape is a RETREAT back across the line. That exit is
+	# exactly what the one-way valve forbids: establishing the zone is worth
+	# keeping. Every carry candidate that leaves the O-zone is pruned, so the best
+	# carry (worst case, stand-still) stays inside it.
+	var self_pos := Vector3(0, 0, -9)                      # in the O-zone, near the line
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                           # us, carrying
+			[3, 1, Vector3(0, 0, -11), false, Vector3(0, 0, -3)],  # forechecker in front
+			[4, 1, Vector3(3, 0, -10)],                       # right pincer
+			[5, 1, Vector3(-3, 0, -10)],                      # left pincer
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_true(
+			AIActionScoring.in_offensive_zone(c.last_carry_anchor, ctx.attacking_goal_pos),
+			"the best carry keeps the puck in the offensive zone, never retreats out")
+
+
+# ─── zone valve: once in the O-zone, don't pass back out ─────────────────────
+
+func test_carrier_in_ozone_never_passes_out_to_a_neutral_zone_teammate() -> void:
+	# Carrier in the O-zone with its shot screened, and the only pass option is a
+	# teammate back in the neutral zone on a wide-open lane — tempting bait. The
+	# valve excludes any receiver outside the zone, so that pass is never on the
+	# board: the carrier holds/cycles rather than surrendering the blue line.
+	var self_pos := Vector3(0, 0, -12)                     # in the O-zone
+	var nz_mate := Vector3(6, 0, 0)                        # neutral zone, open lane
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                           # us, carrying
+			[2, TEAM_ID, nz_mate],                            # NZ teammate — bait
+			[3, 1, Vector3(0, 0, -15)],                       # screens our shot to the net
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a carrier in the O-zone won't pass the puck back out to the neutral zone")
+	assert_eq(c.debug_pass_score, 0.0,
+			"the out-of-zone teammate is excluded, so there is no pass on the board")
+
+	# Contrast: the SAME teammate, moved INTO the zone on a comparable lane, is a
+	# legal receiver again — confirming it was the zone exclusion suppressing the
+	# pass, not a bad lane.
+	var oz_mate := Vector3(6, 0, -14)                      # now in the O-zone
+	var skaters_in: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, oz_mate],
+			[3, 1, Vector3(0, 0, -15)],
+	]
+	var c2 := AIRoleCarrier.new()
+	c2.decide(_make_ctx(self_pos, skaters_in))
+	assert_gt(c2.debug_pass_score, 0.0,
+			"an in-zone teammate on the same kind of lane IS a legal pass target")
+
+
+# ─── O-zone shot selection: don't fire the long shot on entry ────────────────
+
+func test_carrier_entering_ozone_drives_the_slot_over_a_long_shot() -> void:
+	# Carrier just inside the blue line, wide open, with a defending goalie set at a
+	# realistic challenge depth. The long shot from the top of the zone is
+	# low-danger (foreshortened net, long flight the goalie has time to react to),
+	# while driving to the slot is a real look. In the O-zone the bot prices
+	# positions by pure xG — there is NO establishment floor inflating a weak shot —
+	# so it must CARRY toward the net, not fire from range the moment it crosses the
+	# line. This is the guard on "don't shoot as soon as you enter the zone."
+	var self_pos := Vector3(0, 0, -9)              # ~2 m inside the blue line
+	var ctx := _make_ctx(self_pos)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = -24.65                          # challenging ~2 m off the goal line
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"a long shot from the top of the zone loses to driving the slot")
+	assert_lt(c.last_carry_anchor.z, self_pos.z,
+			"…and the drive heads toward the net")
+
+
+# ─── O-zone shot selection: get the shot off before running the goalie over ──
+
+func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
+	# 1-on-1 drive at the net: as a bot carries straight in on a challenging goalie,
+	# there must be a distance at which it commits to the shot — and it must be clear
+	# of the goalie, out in the slot, not point-blank in the crease where it would
+	# just run the goalie over and get dispossessed. xG peaks around the slot and
+	# falls as the goalie's shadow eats the angle point-blank, so carrying closer
+	# stops paying and the bot fires. Sweep the drive inward and require a shot
+	# commit somewhere in real scoring range (every sample below is clear of the
+	# goalie, which challenges 2 m off the line).
+	var goalie_out: float = 2.0                          # goalie challenges 2 m off the line
+	var goalie_z: float = -GameRules.GOAL_LINE_Z + goalie_out
+	var shot_distance: float = -1.0
+	for dist: float in [10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0]:
+		var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + dist)
+		var ctx := _make_ctx(self_pos)
+		ctx.self_velocity = Vector3(0.0, 0.0, -6.0)      # driving hard at the net
+		var g := GoalieNetworkState.new()
+		g.position_x = 0.0
+		g.position_z = goalie_z
+		ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+		var c := AIRoleCarrier.new()
+		c.decide(ctx)
+		if c.intended_action == AIRoleCarrier.INTENT_SHOOT \
+				or c.intended_action == AIRoleCarrier.INTENT_QUICK_SHOT:
+			shot_distance = dist
+			break
+	# The first (farthest) commit is the release distance on the drive. It must be
+	# clear of the goalie — out in the slot, not carrying point-blank into the crease
+	# where the bot would collide with the goalie and get dispossessed.
+	assert_gt(shot_distance, goalie_out + 1.0,
+			"a bot driving the net 1-on-1 gets its shot off clear of the goalie, "
+			+ "not by carrying into it")
 
 
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────

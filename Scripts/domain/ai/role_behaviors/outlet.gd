@@ -14,11 +14,11 @@ class_name AIRoleOutlet
 #
 # — the same primitive pair the BREAKOUT outlets use, for the same
 # reason: every legal OUTLET candidate is NZ-side of the opp blue
-# line, which is ≥ SHOT_RANGE_FALLOFF_M from the opp goal, where
-# score_shoot ≡ 0 — so a score_pass argmax (lane × score_shoot) was
-# 0 for EVERY candidate and degenerated to "first in the list": the
-# outlet went to the raw search center every tick, blind to a
-# defender standing right on the stretch spot or in the feed lane.
+# line, far enough from the opp goal that score_shoot foreshortens to
+# ~0 — so a score_pass argmax (lane × score_shoot) was ~0 for EVERY
+# candidate and degenerated to "first in the list": the outlet went to
+# the raw search center every tick, blind to a defender standing right
+# on the stretch spot or in the feed lane.
 # lane × potential keeps a live gradient out here: reachable-by-the-
 # carrier gates the spot, open-ice/up-ice value ranks it.
 #

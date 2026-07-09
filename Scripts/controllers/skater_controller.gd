@@ -8,7 +8,7 @@ const State = SkaterStateMachine.State
 var _sm: SkaterStateMachine = SkaterStateMachine.new()
 
 # ── Movement Tuning ───────────────────────────────────────────────────────────
-@export var thrust: float = 10.5
+@export var thrust: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 @export var friction: float = 0.8
 @export var friction_drag: float = 0.27
 @export var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
