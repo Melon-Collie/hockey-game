@@ -1,6 +1,12 @@
 class_name RemoteController
 extends SkaterController
 
+# Host-side: the remote client's Shot Power Sensitivity, replicated at join and
+# set by GameManager._on_player_spawned, so the host fires this player's wrister
+# at the same power their own client predicted.
+func shot_power_sensitivity() -> float:
+	return net_shot_power_sensitivity
+
 @export var extrapolation_max_ms: float = 50.0
 # Forward-projection toward host-present, 0..1 (see _interpolate). Held at 0:
 # pure interpolate-in-the-past renders remote bodies a FULL interp_delay behind

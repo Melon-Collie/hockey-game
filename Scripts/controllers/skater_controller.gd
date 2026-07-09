@@ -2124,22 +2124,24 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 func is_ai_controlled() -> bool:
 	return false
 
-# True only for the local human's own controller (LocalController overrides).
-# Used to gate reading LOCAL player prefs — a host-side RemoteController or a
-# bot must not read the host machine's prefs for another player's shot.
-func uses_local_input_prefs() -> bool:
-	return false
+# Shot Power Sensitivity for THIS controller. Base (bots / unknown) = 1.0;
+# LocalController reads the local pref; a host-side RemoteController reads the
+# value the host replicated from the remote client's join (set below), so the
+# client's predicted shot power matches the host's authoritative shot.
+var net_shot_power_sensitivity: float = 1.0
+
+func shot_power_sensitivity() -> float:
+	return 1.0
 
 # The speed signal fed to the wrister power model:
 #   - Bots: the cursor speed equivalent to their committed target power fraction
 #     (deterministic — bots have no measured cursor).
-#   - Humans: the raw cursor speed, scaled by the local player's Shot Power
+#   - Humans: the raw cursor speed, scaled by that player's Shot Power
 #     Sensitivity (calibrates the flick-for-power feel to their mouse DPI).
 func _wrister_sweep_speed(input: InputState) -> float:
 	if is_ai_controlled():
 		return ShotMechanics.wrister_speed_for_power_t(input.bot_wrister_power_t, _wrister_config())
-	var sens: float = PlayerPrefs.shot_power_sensitivity if uses_local_input_prefs() else 1.0
-	return _aiming.cursor_speed_ema * sens
+	return _aiming.cursor_speed_ema * shot_power_sensitivity()
 
 func _slapper_config() -> ShotMechanics.SlapperConfig:
 	var cfg := ShotMechanics.SlapperConfig.new()
