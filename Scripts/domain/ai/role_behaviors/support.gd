@@ -93,7 +93,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		var pass_value: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
 				goalie_pos, GameRules.NET_HALF_WIDTH,
-				opp_positions, Vector3.INF, pass_speed)
+				opp_positions, pass_speed)
 		var exposure: float = _exposure(c, our_net, min_opp_time_home)
 		var score: float = pass_value * (1.0 - exposure)
 		if score > best_score:

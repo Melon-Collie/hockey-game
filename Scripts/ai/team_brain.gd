@@ -262,7 +262,8 @@ func strong_x() -> float:
 # The carrier reads via is_one_timer_ready(peer_id) when scoring
 # passes — a ready receiver gets a no-charge goalie prediction (since
 # they fire on contact, the goalie can't react to a wind-up), which
-# inflates the squareness term and naturally rewards passes to them.
+# leaves the goalie less settled in the seven-hole geometry and naturally
+# rewards passes to them.
 # Stored host-side on the brain, not in SkaterNetworkState — this is
 # pure AI bookkeeping that the network doesn't need to see.
 var _one_timer_ready_by_peer: Dictionary = {}   # peer_id -> bool

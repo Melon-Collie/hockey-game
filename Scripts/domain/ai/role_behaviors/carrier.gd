@@ -331,19 +331,16 @@ func _pick_action(ctx: RoleContext) -> void:
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
 	var wrister_unsettled: float = _goalie_unsettled_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
-	# Goalie's CURRENT position (squared to whoever currently holds the
-	# puck — that's us as the carrier). Threaded into score_shoot /
-	# score_pass so the goalie pressure zone penalises shots from
-	# inside the goalie's current set-up line. Back-door receivers
-	# (off-axis from this position) pass through unpenalised. Anchored
-	# on current self_pos rather than release_pos because that's the
-	# goalie's actual current setup line.
+	# Goalie's CURRENT position (squared to whoever currently holds the puck —
+	# that's us as the carrier). This is where the goalie actually is, used by the
+	# QUICK_SHOT scoring below: a no-charge snap gives him no time to slide, so the
+	# geometry sees him where he stands right now.
 	var goalie_now: Vector3 = _goalie_now(ctx)
 
 	# Top-level SHOOT.
 	var shoot_score: float = AIActionScoring.score_shoot(
 			wrister_release_pos, attacking_goal, wrister_goalie,
-			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot, goalie_now,
+			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
 			ctx.self_wrister_shot_speed, wrister_unsettled)
 
 	# Top-level QUICK_SHOT — snap release at PASS_SPEED, no charge. The
@@ -360,7 +357,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
 	var best_pass: Array = _compute_best_pass(
-			ctx, self_state.facing, _scratch_teammate_ids, goalie_now)
+			ctx, self_state.facing, _scratch_teammate_ids)
 	var best_pass_peer: int = best_pass[0]
 	var best_pass_score: float = best_pass[1]
 	var best_pass_saucer: bool = best_pass[2]
@@ -371,7 +368,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# score_at(candidate, projected_opps) × path_clear × time_decay.
 	# Time uses momentum-aware effective speed so reverse candidates
 	# self-discount via longer arrival time.
-	var carry_result: Array = _best_carry(ctx, goalie_now)
+	var carry_result: Array = _best_carry(ctx)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 
@@ -466,7 +463,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# keep_prob is our current possession safety, computed once at the top of
 	# _pick_action (same read that grounds the pass-relief).
 	var keep_prob: float = current_safety
-	var hold_value: float = (_best_developing_feed(ctx, goalie_now)
+	var hold_value: float = (_best_developing_feed(ctx)
 			* keep_prob * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, _hold_elapsed_s))
 
 	var new_intent: int
@@ -584,7 +581,7 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 #   - Hard zero for net-blocker (segment crosses net body) and
 #     own-DZ slot crossing (intercepted = goal-against).
 func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
-		teammate_ids: Array[int], goalie_now: Vector3) -> Array:
+		teammate_ids: Array[int]) -> Array:
 	var snapshot: WorldSnapshot = ctx.snapshot
 	var self_pos: Vector3 = ctx.self_pos
 	var own_goal_dir: float = ctx.own_goal_dir
@@ -641,7 +638,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var rotation_time: float = _facing_rotation_time(
 				self_facing_xz, self_pos, receiver)
 		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
-				receiver_release_t, flight_t + rotation_time, goalie_now,
+				receiver_release_t, flight_t + rotation_time,
 				our_goalie, _pass_relief_value)
 		if s > best_pass_score:
 			best_pass_score = s
@@ -694,14 +691,13 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 #
 # Predicts the goalie at `receiver_release_t` (flight + the receiver's
 # wrister charge, or flight alone for one-timer-ready receivers — the
-# caller decides). The squareness term in score_shoot rewards passes
-# that catch the goalie sliding cross-seam; a cross-seam feed also
-# leaves the goalie mid-slide, so the receiver's shot is scored against
-# that unsettled goalie. Receiver shot speed stays the league default
-# (we don't carry teammates' attributes).
+# caller decides). A cross-seam feed leaves the goalie mid-slide, so the
+# receiver's shot is scored against that unsettled goalie (the seven-hole
+# geometry opens up when he's caught moving). Receiver shot speed stays the
+# league default (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
-		goalie_now: Vector3, our_goalie: Vector3,
+		our_goalie: Vector3,
 		relief_value: float = 0.0) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# Hard zeros: net-blocker (segment crosses a net body) and own-DZ
@@ -722,7 +718,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	var receiver_unsettled: float = _goalie_unsettled_at(
 			ctx, receiver_release_t, receiver_spot)
 	var receiver_value: float = _score_at(ctx, receiver_spot, self_pos,
-			_scratch_opponents_pass, receiver_goalie, goalie_now,
+			_scratch_opponents_pass, receiver_goalie,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, receiver_unsettled)
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
@@ -781,7 +777,7 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 # Each movement candidate scored uniformly via _score_move_candidate;
 # time uses momentum-aware effective speed (backward candidates
 # self-discount via longer arrival).
-func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
+func _best_carry(ctx: RoleContext) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var own_goal_dir: float = ctx.own_goal_dir
@@ -832,7 +828,7 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 			continue
-		var s_total: float = _score_move_candidate(ctx, candidate, goalie_now, our_goalie)
+		var s_total: float = _score_move_candidate(ctx, candidate, our_goalie)
 		if s_total > best_score:
 			best_score = s_total
 			best_pos = candidate
@@ -840,7 +836,7 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
 	# already cover it via local polar candidates.
-	var slot_total: float = _score_move_candidate(ctx, slot_pos, goalie_now, our_goalie)
+	var slot_total: float = _score_move_candidate(ctx, slot_pos, our_goalie)
 	if slot_total > best_score:
 		best_score = slot_total
 		best_pos = slot_pos
@@ -854,13 +850,13 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 		var exit_z: float = own_goal_dir * (GameRules.BLUE_LINE_Z - CARRY_EXIT_NZ_LEAD_M)
 		var exit_right := Vector3(exit_x, 0.0, exit_z)
 		var exit_right_total: float = _score_move_candidate(
-				ctx, exit_right, goalie_now, our_goalie)
+				ctx, exit_right, our_goalie)
 		if exit_right_total > best_score:
 			best_score = exit_right_total
 			best_pos = exit_right
 		var exit_left := Vector3(-exit_x, 0.0, exit_z)
 		var exit_left_total: float = _score_move_candidate(
-				ctx, exit_left, goalie_now, our_goalie)
+				ctx, exit_left, our_goalie)
 		if exit_left_total > best_score:
 			best_score = exit_left_total
 			best_pos = exit_left
@@ -882,7 +878,7 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 	var stand_unsettled: float = _goalie_unsettled_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
-			_scratch_opponents, stand_goalie, goalie_now,
+			_scratch_opponents, stand_goalie,
 			ctx.self_wrister_shot_speed, stand_unsettled)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var stand_safety: float = AIActionScoring.puck_safety(
@@ -926,7 +922,7 @@ func _best_carry(ctx: RoleContext, goalie_now: Vector3) -> Array:
 # — where a converging defender would strip it. Cost self-localizes: ~0 driving
 # into the OZ, large driving into our own slot.
 func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
-		goalie_now: Vector3, our_goalie: Vector3) -> float:
+		our_goalie: Vector3) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	var local_time: float = AIActionScoring.time_to_arrive(
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed)
@@ -940,7 +936,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var cand_goalie: Vector3 = _predict_goalie_at(ctx, cand_release_t, candidate)
 	var cand_unsettled: float = _goalie_unsettled_at(ctx, cand_release_t, candidate)
 	var dest_score: float = _score_at(ctx, candidate, self_pos,
-			_scratch_opponents_path, cand_goalie, goalie_now,
+			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, cand_unsettled)
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
@@ -988,13 +984,13 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 # carry teammates' attributes — same cross-player boundary as elsewhere.
 func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		opps: Array[Vector3],
-		predicted_goalie_pos: Vector3, goalie_now: Vector3,
+		predicted_goalie_pos: Vector3,
 		shot_speed_m_s: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,
-			GameRules.NET_HALF_WIDTH, opps, goalie_now, shot_speed_m_s,
+			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
 			goalie_unsettled_factor)
 	var from_dist: float = from_pos.distance_to(attacking_goal)
 	if from_dist <= AIActionScoring.SHOT_RANGE_FALLOFF_M:
@@ -1026,7 +1022,7 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 #     outlet is CREATING out-values everything available right now.
 #
 # Returns 0 if nothing is developing.
-func _best_developing_feed(ctx: RoleContext, goalie_now: Vector3) -> float:
+func _best_developing_feed(ctx: RoleContext) -> float:
 	if ctx.team_brain == null:
 		return 0.0
 	var self_pos: Vector3 = ctx.self_pos
@@ -1062,10 +1058,10 @@ func _best_developing_feed(ctx: RoleContext, goalie_now: Vector3) -> float:
 			feed = AIActionScoring.score_pass(
 					self_pos, spot, ctx.attacking_goal_pos, feed_goalie,
 					GameRules.NET_HALF_WIDTH, _scratch_opponents_pass,
-					goalie_now, pass_speed, feed_unsettled)
+					pass_speed, feed_unsettled)
 		elif slot == AIRoleSlots.Slot.BREAKOUT_STRONG \
 				or slot == AIRoleSlots.Slot.OUTLET:
-			feed = _developing_outlet_feed(ctx, tm, goalie_now, our_goalie, self_facing)
+			feed = _developing_outlet_feed(ctx, tm, our_goalie, self_facing)
 		if feed > best:
 			best = feed
 	return best
@@ -1087,7 +1083,7 @@ func _best_developing_feed(ctx: RoleContext, goalie_now: Vector3) -> float:
 # hold exists to avoid forcing. The valve is an escape hatch the live
 # pass scoring prices on its own.
 func _developing_outlet_feed(ctx: RoleContext, tm: SkaterNetworkState,
-		goalie_now: Vector3, our_goalie: Vector3, self_facing_xz: Vector2) -> float:
+		our_goalie: Vector3, self_facing_xz: Vector2) -> float:
 	if tm.is_ghost:
 		return 0.0
 	var vel: Vector3 = tm.velocity
@@ -1109,7 +1105,7 @@ func _developing_outlet_feed(ctx: RoleContext, tm: SkaterNetworkState,
 	var release_t: float = flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 	var rotation_time: float = _facing_rotation_time(self_facing_xz, ctx.self_pos, spot)
 	return _pass_ev(ctx, spot, pass_speed, flight_t, release_t,
-			flight_t + rotation_time, goalie_now, our_goalie)
+			flight_t + rotation_time, our_goalie)
 
 
 # Approximate puck-rest position when the carrier is at `body_pos`.

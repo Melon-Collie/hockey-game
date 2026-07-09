@@ -468,7 +468,7 @@ func test_developing_feed_zero_without_brain() -> void:
 	var ctx := _make_ctx(Vector3(4, 0, -18))
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, Vector3.INF), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"no team brain → nothing to wait for")
 
 
@@ -477,14 +477,14 @@ func test_developing_feed_zero_when_finisher_already_ready() -> void:
 	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), true)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0)
+	assert_eq(carrier._best_developing_feed(ctx), 0.0)
 
 
 func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
 	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_gt(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_gt(carrier._best_developing_feed(ctx), 0.0,
 			"a staging cross-seam finisher gives a positive developing feed")
 
 
@@ -501,7 +501,7 @@ func test_developing_feed_zero_for_ghosted_finisher() -> void:
 	ctx.team_brain = brain
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"a ghosted finisher isn't a developing play — nothing to hold for")
 
 
@@ -510,7 +510,7 @@ func test_developing_feed_zero_when_finisher_out_of_offensive_zone() -> void:
 	var ctx := _ctx_with_finisher(Vector3(-3, 0, -5), false)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"a finisher outside the OZ isn't a developing cross-seam")
 
 
@@ -538,7 +538,7 @@ func test_developing_feed_positive_for_outlet_skating_its_route() -> void:
 	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6))
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_gt(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_gt(carrier._best_developing_feed(ctx), 0.0,
 			"an outlet skating up its route is a developing feed worth holding for")
 
 
@@ -548,7 +548,7 @@ func test_developing_feed_zero_for_stationary_outlet() -> void:
 	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3.ZERO)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"a stationary outlet isn't developing anything")
 
 
@@ -556,7 +556,7 @@ func test_developing_feed_zero_for_ghosted_outlet() -> void:
 	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6), true)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"a ghosted outlet can't receive — no developing feed")
 
 
@@ -568,7 +568,7 @@ func test_developing_outlet_beats_the_spot_it_left_behind() -> void:
 	var moving := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6))
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	var developing: float = carrier._best_developing_feed(moving, moving.attacking_goal_pos)
+	var developing: float = carrier._best_developing_feed(moving)
 
 	# The same feed valued AT the outlet's current spot: reuse _pass_ev
 	# directly so both sides run identical pricing.
@@ -582,7 +582,7 @@ func test_developing_outlet_beats_the_spot_it_left_behind() -> void:
 	var stay_put: float = carrier2._pass_ev(
 			moving, spot, pass_speed, flight_t,
 			flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, flight_t,
-			moving.attacking_goal_pos, moving.defending_goal_pos)
+			moving.defending_goal_pos)
 
 	assert_gt(developing, stay_put,
 			"the projected up-ice spot out-values the spot the outlet is leaving")

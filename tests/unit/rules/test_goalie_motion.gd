@@ -68,10 +68,10 @@ func test_moving_goalie_scores_higher_than_set_goalie() -> void:
 	var opps: Array[Vector3] = []
 	var set_score := AIActionScoring.score_shoot(
 			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
-			Vector3.INF, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
 	var moving_score := AIActionScoring.score_shoot(
 			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
-			Vector3.INF, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
 	assert_gt(moving_score, set_score,
 			"a shot at a caught-moving goalie should rate above the same shot at a set one")
 
@@ -85,7 +85,7 @@ func test_default_factor_is_back_compatible() -> void:
 			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps)
 	var explicit := AIActionScoring.score_shoot(
 			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
-			Vector3.INF, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
 	assert_almost_eq(implicit, explicit, 0.0001)
 
 
@@ -101,10 +101,10 @@ func test_score_pass_credits_caught_moving_goalie() -> void:
 	var opps: Array[Vector3] = []
 	var set_s := AIActionScoring.score_pass(
 			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
-			Vector3.INF, 19.0, 0.0)
+			19.0, 0.0)
 	var moving_s := AIActionScoring.score_pass(
 			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
-			Vector3.INF, 19.0, 1.0)
+			19.0, 1.0)
 	assert_gt(moving_s, set_s,
 			"a feed catching the goalie moving should out-score the same feed at a set goalie")
 
@@ -116,8 +116,8 @@ func test_score_pass_default_factor_back_compatible() -> void:
 	var opps: Array[Vector3] = []
 	var implicit := AIActionScoring.score_pass(
 			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
-			Vector3.INF, 19.0)
+			19.0)
 	var explicit := AIActionScoring.score_pass(
 			shooter, receiver, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
-			Vector3.INF, 19.0, 0.0)
+			19.0, 0.0)
 	assert_almost_eq(implicit, explicit, 0.0001)

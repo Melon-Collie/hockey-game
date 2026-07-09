@@ -253,7 +253,7 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 		var score: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
 				cand_goalie, GameRules.NET_HALF_WIDTH,
-				opp_positions, Vector3.INF, pass_speed, cand_unsettled)
+				opp_positions, pass_speed, cand_unsettled)
 		if score > best_score:
 			best_score = score
 			best_pos = c

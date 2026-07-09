@@ -3,13 +3,15 @@ class_name AIActionScoring
 # Pure-function utility scoring for on-puck actions. Each score is a
 # multiplicative composition of factors in [0, 1].
 #
-# ── Design intent: heuristic xG ──────────────────────────────────────────────
-# `score_shoot` is a hand-coded approximation of expected goals (xG) — the
-# probability that a given shot becomes a goal given its geometry and the
-# defensive context. It is xG-SHAPED (peak in the slot, drops with
-# distance / angle / coverage / pressure / lane traffic) but NOT magnitude-
-# calibrated against real-world data: a clean slot wrister scores ~0.55
-# here; the real-world xG would be closer to 0.30. Treat the outputs as
+# ── Design intent: geometric xG ──────────────────────────────────────────────
+# `score_shoot` approximates expected goals (xG) — the probability a shot beats
+# the goalie given its geometry and the defensive context. It is a GEOMETRIC
+# model, not a curve fit: it scores the best of the seven goalie holes (the net
+# each clears past the goalie's reaction-gated, height-appropriate cover — see
+# the seven-hole block below), then multiplies by lane clearance and forward-cone
+# pressure. Distance, angle, and coverage all EMERGE from that geometry; there
+# are no hand-tuned distance/angle curves. It is xG-SHAPED (peak in the slot,
+# fades with range/angle) but NOT magnitude-calibrated: treat the outputs as
 # RELATIVE shot quality, not actual goal probability.
 #
 # Everything else cascades from xG-shape:
@@ -52,21 +54,16 @@ const PRESSURE_RADIUS_M: float = 4.0
 # lower toward 1 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 2
 
-# Distance scaler for the dist_response curve. Beyond this distance,
-# shot quality from distance alone is 0 — geometrically rooted at the
-# attacking-zone span (blue line to opposing goal line). A shot from
-# the attacking blue line is the longest realistic in-possession shot
-# in hockey; anything from the neutral zone is a dump-in, not a shot.
-# Tracks rink resizes automatically.
-#
-# The dist_response is monotone (closer = always better) and quadratic
-# from goal: 1.0 at the goal mouth, 0.0 at SHOT_RANGE_FALLOFF_M. There
-# is no "ideal distance" peak — the goalie pressure zone (below)
-# penalises shots from inside the goalie's setup line, which is what
-# stops bots from grinding into the crease. The shooter-position
-# projection in carrier.gd (release-pos = current + velocity × charge
-# lookahead) handles the in-motion case. Together those two mechanics
-# replace the bidirectional peak that earlier versions had.
+# Shot-range regime boundary — NOT a scoring falloff. The seven-hole geometry
+# (open_net_danger) already handles distance on its own: a far shot foreshortens
+# the net and the goalie's glove has flight time to reach the corners, so danger
+# fades to ~0 with range without any distance curve. This constant only marks the
+# in/out-of-range REGIME switch for `_score_at`: inside it the bot commits to a
+# real shot (score_shoot alone); outside it the bot prices the position via
+# position_potential instead. Geometrically rooted at the attacking-zone span
+# (blue line to opposing goal line) — a shot from the attacking blue line is the
+# longest realistic in-possession shot; anything from the neutral zone is a
+# dump-in, not a shot. Tracks rink resizes automatically.
 const SHOT_RANGE_FALLOFF_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z
 
 # Position-potential closeness ramp. position_potential is only used
@@ -627,18 +624,16 @@ static func _hole_open_angle(
 
 # Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance
 # × forward-cone pressure. `predicted_goalie_pos` is the goalie at shot release
-# (use `predict_goalie_pos`). `_goalie_current_pos` is vestigial — the old
-# goalie-pressure-zone patch it fed is gone (the geometry handles "too close"
-# on its own); retained only so callers/threaders don't churn. `shot_speed_m_s`
-# sets the flight time (goalie reaction) and the lane math; `goalie_unsettled_
-# factor` cuts his reaction (a mid-slide goalie reads the shot late).
+# (use `predict_goalie_pos`); the seven-hole geometry handles "too close" on its
+# own. `shot_speed_m_s` sets the flight time (goalie reaction) and the lane math;
+# `goalie_unsettled_factor` cuts his reaction (a mid-slide goalie reads the shot
+# late).
 static func score_shoot(
 		shooter: Vector3,
 		attacking_goal: Vector3,
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
 		opponents: Array[Vector3],
-		_goalie_current_pos: Vector3 = Vector3.INF,
 		shot_speed_m_s: float = WRISTER_SHOT_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0) -> float:
 	var shot_quality: float = open_net_danger(
@@ -672,7 +667,7 @@ static func score_quick_shot(
 		net_half_width: float,
 		opponents: Array[Vector3]) -> float:
 	return score_shoot(shooter, attacking_goal, goalie_now,
-			net_half_width, opponents, goalie_now, PASS_SPEED_M_S)
+			net_half_width, opponents, PASS_SPEED_M_S)
 
 
 # Predicts the goalie's position at a future moment (shot release).
@@ -774,7 +769,6 @@ static func score_pass(
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
 		opponents: Array[Vector3],
-		goalie_current_pos: Vector3 = Vector3.INF,
 		pass_speed_m_s: float = PASS_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
@@ -792,11 +786,6 @@ static func score_pass(
 	# Receiver's value as a shooter from where they are. Caller is
 	# responsible for predicting the goalie at the receiver's release
 	# time (flight + receiver wrister charge) — see predict_goalie_pos.
-	# goalie_current_pos threads through so the goalie pressure zone
-	# (anchored on the goalie's CURRENT position, squared to the
-	# carrier/puck holder) applies correctly for back-door receivers:
-	# they're off-axis from the carrier's lane → outside zone → no
-	# penalty, preserving back-door as a strong pass option.
 	# goalie_unsettled_factor lets the caller credit a feed that catches the
 	# goalie mid-slide (a cross-seam one-timer to an off-axis receiver) — the
 	# off-puck staging roles pass it so they prize the back-door spot. Default
@@ -804,7 +793,7 @@ static func score_pass(
 	# Receiver shot speed stays the league default (cross-player; no teammate caps).
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
-			goalie_current_pos, WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor)
+			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor)
 	return lane * receiver_shot
 
 
@@ -1217,7 +1206,7 @@ static func threat_surface_pass(
 	var pass_speed: float = expected_pass_speed(carrier_pos, receiver_pos)
 	var pass_score: float = score_pass(
 			carrier_pos, receiver_pos, our_net, our_goalie_pos,
-			net_half_width, defenders, Vector3.INF, pass_speed)
+			net_half_width, defenders, pass_speed)
 	var lane: float = lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
 	var positional: float = position_potential(receiver_pos, our_net, defenders)
 	return maxf(pass_score, lane * positional)

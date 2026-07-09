@@ -414,10 +414,10 @@ func test_shot_danger_unsettled_goalie_scores_higher() -> void:
 	var shooter := Vector3(0.0, 0.0, 19.65)   # ~7 m
 	var goalie := Vector3(0.0, 0.0, 25.15)
 	var set_s: float = AIActionScoring.score_shoot(
-			shooter, GOAL, goalie, NET_HW, [], Vector3.INF,
+			shooter, GOAL, goalie, NET_HW, [],
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
 	var unsettled: float = AIActionScoring.score_shoot(
-			shooter, GOAL, goalie, NET_HW, [], Vector3.INF,
+			shooter, GOAL, goalie, NET_HW, [],
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
 	assert_gt(unsettled, set_s, "a mid-slide goalie reads the shot late → higher danger")
 
@@ -802,10 +802,10 @@ func test_score_pass_higher_at_charged_speed_with_in_lane_defender() -> void:
 	var in_lane: Array[Vector3] = [Vector3(0.5, 0.0, 2.5)]
 	var slow: float = AIActionScoring.score_pass(
 			shooter, receiver, GOAL, goalie, NET_HW, in_lane,
-			Vector3.INF, AIActionScoring.PASS_SPEED_M_S)
+			AIActionScoring.PASS_SPEED_M_S)
 	var fast: float = AIActionScoring.score_pass(
 			shooter, receiver, GOAL, goalie, NET_HW, in_lane,
-			Vector3.INF, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+			AIActionScoring.PASS_CHARGE_SPEED_M_S)
 	assert_gt(fast, slow,
 			"charged pass scores higher than quick-shot when a defender sits in the lane (less reaction time)")
 
