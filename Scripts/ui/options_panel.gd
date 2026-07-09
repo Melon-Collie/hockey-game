@@ -33,8 +33,6 @@ var _puck_shadow_check: CheckButton = null
 var _render_scale_slider: HSlider = null
 var _scaling_3d_btn: OptionButton = null
 var _aa_btn: OptionButton = null
-var _sens_slider: HSlider = null
-var _sens_field: LineEdit = null
 var _shot_power_slider: HSlider = null
 var _shot_power_field: LineEdit = null
 var _confine_mouse_check: CheckButton = null
@@ -174,7 +172,6 @@ func _snapshot() -> Dictionary:
 		"arena_volume": PlayerPrefs.arena_volume,
 		"master_muted": PlayerPrefs.master_muted,
 		"mute_when_unfocused": PlayerPrefs.mute_when_unfocused,
-		"mouse_sensitivity": PlayerPrefs.mouse_sensitivity,
 		"shot_power_sensitivity": PlayerPrefs.shot_power_sensitivity,
 		"confine_mouse": PlayerPrefs.confine_mouse,
 		"cursor_style": PlayerPrefs.cursor_style,
@@ -221,7 +218,6 @@ func _read_controls() -> Dictionary:
 		"arena_volume": _arena_slider.value,
 		"master_muted": _mute_check.button_pressed,
 		"mute_when_unfocused": _mute_unfocused_check.button_pressed,
-		"mouse_sensitivity": _sens_slider.value,
 		"shot_power_sensitivity": _shot_power_slider.value,
 		"confine_mouse": _confine_mouse_check.button_pressed,
 		"cursor_style": _cursor_style_btn.selected,
@@ -528,21 +524,6 @@ func _build_input_tab() -> Control:
 	var box := _tab_box()
 
 	box.add_child(_section_header("Mouse"))
-
-	_sens_slider = HSlider.new()
-	_sens_slider.min_value = 0.5
-	_sens_slider.max_value = 3.0
-	_sens_slider.step = 0.05
-	_sens_slider.value = PlayerPrefs.mouse_sensitivity
-	_sens_slider.value_changed.connect(_on_sensitivity_changed)
-	_sens_field = LineEdit.new()
-	_sens_field.text = "%.2f" % PlayerPrefs.mouse_sensitivity
-	_sens_field.custom_minimum_size = Vector2(_VALUE_COL_WIDTH, 32)
-	_sens_field.add_theme_font_size_override("font_size", _VALUE_FONT_SIZE)
-	_sens_field.alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_sens_field.text_submitted.connect(_on_sensitivity_typed)
-	_sens_field.focus_exited.connect(func() -> void: _on_sensitivity_typed(_sens_field.text))
-	box.add_child(_slider_row("Sensitivity", _sens_slider, _sens_field))
 
 	# Shot Power Sensitivity — calibrates how hard you flick for a full-power
 	# wrister to your mouse DPI (higher = full power from a gentler flick).
@@ -1118,16 +1099,6 @@ func _export_user_file(src_path: String, dst_path: String, status_label: Label) 
 	status_label.text = "%s:\n%s\nEdit it, then restart the game to apply your changes." % [
 			"Overwrote" if existed else "Saved", global_path]
 
-func _on_sensitivity_changed(value: float) -> void:
-	if _sens_field != null:
-		_sens_field.text = "%.2f" % value
-	_update_apply_state()
-
-func _on_sensitivity_typed(text: String) -> void:
-	var value: float = clampf(text.to_float(), 0.5, 3.0)
-	if _sens_slider != null:
-		_sens_slider.value = value
-
 func _on_shot_power_changed(value: float) -> void:
 	if _shot_power_field != null:
 		_shot_power_field.text = "%.2f" % value
@@ -1258,7 +1229,6 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.arena_volume = c.arena_volume
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mute_when_unfocused = c.mute_when_unfocused
-	PlayerPrefs.mouse_sensitivity = c.mouse_sensitivity
 	PlayerPrefs.shot_power_sensitivity = c.shot_power_sensitivity
 	PlayerPrefs.confine_mouse = c.confine_mouse
 	PlayerPrefs.cursor_style = c.cursor_style
@@ -1359,7 +1329,6 @@ func _defaults() -> Dictionary:
 		"arena_volume": 1.0,
 		"master_muted": false,
 		"mute_when_unfocused": true,
-		"mouse_sensitivity": 1.0,
 		"shot_power_sensitivity": 1.0,
 		"confine_mouse": true,
 		"cursor_style": PlayerPrefs.CURSOR_STYLE_DOT,
@@ -1421,7 +1390,6 @@ func _apply_values_to_controls(v: Dictionary) -> void:
 	_mute_check.set_pressed_no_signal(v.master_muted)
 	if _mute_unfocused_check != null:
 		_mute_unfocused_check.set_pressed_no_signal(v.mute_when_unfocused)
-	_sens_slider.value = v.mouse_sensitivity
 	if _shot_power_slider != null:
 		_shot_power_slider.value = v.shot_power_sensitivity
 	if _confine_mouse_check != null:
