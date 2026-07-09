@@ -508,6 +508,20 @@ func test_potential_drops_with_far_distance() -> void:
 			"closer to goal scores higher")
 
 
+func test_potential_angle_is_goalmouth_projection() -> void:
+	# The angle term is the goal mouth's projected width (cos of the bearing off
+	# the goal normal), not a linear taper. Two positions the SAME distance (5 m)
+	# from the goal — one head-on, one ~53° off (forward 3, lateral 4 → cos = 0.6)
+	# — so closeness and openness match; only the projection differs. The off-axis
+	# value must be the head-on value scaled by cos ≈ 0.6.
+	var head_on := Vector3(0.0, 0.0, GOAL.z - 5.0)          # dist 5, cos 1
+	var off_axis := Vector3(4.0, 0.0, GOAL.z - 3.0)         # dist 5, cos 0.6
+	var head_v: float = AIActionScoring.position_potential(head_on, GOAL, [])
+	var off_v: float = AIActionScoring.position_potential(off_axis, GOAL, [])
+	assert_almost_eq(off_v, head_v * 0.6, 0.02,
+			"off-axis value is the head-on value foreshortened by cos(θ)")
+
+
 func test_potential_drops_with_pressure() -> void:
 	# Forward-cone pressure cuts openness, dropping potential.
 	var pos := Vector3(0.0, 0.0, 5.0)  # ~22 m from goal — outside shoot range

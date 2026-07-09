@@ -1095,7 +1095,9 @@ static func lane_loss_point(from: Vector3, to: Vector3,
 #
 #   closeness    = 1 at slot, ramps to 0 at goal mouth (inside) and
 #                  to 0 at the rink length (outside).
-#   shot_angle   = 1 - shot_angle / (PI/2)          (linear, 0 at 90° wide)
+#   angle_factor = the goal mouth's projected width from this bearing
+#                  (cos of the angle off the goal normal = forward/dist);
+#                  1 head-on, 0 along the goal line — real foreshortening.
 #   openness     = 1 - skater_pressure (forward-cone, distance-weighted)
 #
 # Used by `_score_at` only when the evaluator is OUTSIDE shooting
@@ -1126,8 +1128,14 @@ static func position_potential(
 		closeness = clampf(
 				1.0 - (dist - SLOT_RADIUS_M) / (rink_length - SLOT_RADIUS_M),
 				0.0, 1.0)
-	var shot_angle: float = absf(atan2(pos.x - attacking_goal.x, forward))
-	var angle_factor: float = clampf(1.0 - shot_angle / (PI * 0.5), 0.0, 1.0)
+	# Angle quality = the goal mouth's PROJECTED width from this bearing. A goal
+	# viewed off its face-normal presents cos(θ) of its width (a door seen at an
+	# angle), and cos(θ) = forward / horizontal_distance — the real foreshortening,
+	# not a hand-picked taper. 1 head-on, → 0 along the goal line. Same projection
+	# geometry the seven-hole shot model reasons in.
+	var lateral: float = pos.x - attacking_goal.x
+	var horiz_dist: float = sqrt(forward * forward + lateral * lateral)
+	var angle_factor: float = forward / horiz_dist
 	var openness: float = 1.0 - _pressure(pos, opponents, attacking_goal - pos)
 	return closeness * angle_factor * openness
 
