@@ -1461,6 +1461,25 @@ static func clearance_to_safety(clearance: float) -> float:
 	return clampf(clearance / EVADE_SAFE_MARGIN_M, 0.0, 1.0)
 
 
+# Base puck-protect reach: how far a carrier holds the puck off his body while
+# handling. Hands scales it (a better handler protects it further out / threads a
+# tighter seam) — callers pass the scaled value; this is the league default.
+const EVADE_CARRY_HANDLE_M: float = 0.9
+
+
+# Worst reachable clearance along a carry from→to reached at `arrival_time`.
+# Samples the mid-point and the destination (each at its own time, defenders
+# momentum-projected) and returns the tightest — so a carry that ends in a seam
+# but threads a defender mid-route is still penalised. from == to gives the
+# static hold read (is this spot clear over the window).
+static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> float:
+	var c_mid: float = reach_clearance(
+			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels)
+	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels)
+	return minf(c_mid, c_end)
+
+
 # The carrier's best evasion target — the point in his handling envelope (where he
 # can put/protect the puck over EVADE_HORIZON_S) with the most clearance from
 # every defender: the SEAM. `handle_reach` is how far he holds the puck off his
