@@ -432,6 +432,30 @@ func test_shot_danger_caught_moving_goalie_opens_the_five_hole() -> void:
 	assert_eq(loft, ShotMechanics.ELEVATION_FLAT, "shoot the five-hole flat on a sliding goalie")
 
 
+func test_shot_aim_targets_the_open_side() -> void:
+	# Off the strong side (+x) vs a centred goalie: the open net is the near side,
+	# so the aim resolves to a point on that side of the net.
+	var aim: Vector3 = AIActionScoring.best_shot_aim(
+			Vector3(3.0, 0.0, 22.0), GOAL, Vector3(0.0, 0.0, 25.15),
+			NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S)
+	assert_gt(aim.x, 0.0, "aim resolves to the open near side")
+	assert_lt(absf(aim.x), NET_HW + 0.001, "aim stays inside the posts")
+	assert_almost_eq(aim.z, GOAL.z, 0.001, "aim sits on the net plane")
+
+
+func test_shot_aim_roofs_toward_a_post() -> void:
+	# Set-goalie slot: loft is HIGH and the aim is a top CORNER (near a post), not
+	# dead centre — aim and loft describe the same hole.
+	var shooter := Vector3(0.0, 0.0, 21.65)
+	var goalie := Vector3(0.0, 0.0, 25.05)
+	var loft: int = AIActionScoring.best_shot_loft(
+			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S)
+	var aim: Vector3 = AIActionScoring.best_shot_aim(
+			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S)
+	assert_eq(loft, ShotMechanics.ELEVATION_HIGH, "the slot's only opening is up high")
+	assert_gt(absf(aim.x), 0.4, "...so the aim is a top corner, not the goalie's chest")
+
+
 # ── position_potential ───────────────────────────────────────────────────────
 # position_potential models "value of being at this position" — used
 # only when the evaluator is OUTSIDE shooting range (the regime rule

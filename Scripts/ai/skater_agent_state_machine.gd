@@ -626,6 +626,12 @@ var _prev_carrier_peer_id: int = -1
 # `_carrier.shot_loft_level` — the elevation of the best goalie hole aimed at.
 var _shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 
+# Mirrored from `_carrier.shot_aim_point` — the world aim point of that same best
+# hole. When finite, the wrister locks its aim here at charge start so the shot
+# goes exactly where it was scored (loft + aim from one hole). INF → fall back to
+# the continuous _shot_aim_point geometry.
+var _shot_aim_locked: Vector3 = Vector3.INF
+
 # Debug: print one line at SHOOT commit and one line at wrister
 # release so the user can compare what the projection promised vs.
 # where the puck actually fired from. Toggle off for shipping.
@@ -1700,6 +1706,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_pass_should_charge = false
 		_pass_should_saucer = false
 		_shot_loft_level = ShotMechanics.ELEVATION_FLAT
+		_shot_aim_locked = Vector3.INF
 		_locked_pre_aim_point = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
 		return
@@ -1723,6 +1730,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	_pass_target_speed = _carrier.pass_target_speed
 	_pass_should_saucer = _carrier.pass_should_saucer
 	_shot_loft_level = _carrier.shot_loft_level
+	_shot_aim_locked = _carrier.shot_aim_point
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
 	debug_pass_score = _carrier.debug_pass_score
@@ -1749,7 +1757,11 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			# mouse target jump and the bot's stick wiggle.
 			match new_intent:
 				State.SHOOT_PRESSED:
-					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos)
+					# Prefer the carrier's locked hole aim so pre-aim faces the
+					# exact hole the charge will shoot at (no side-flip wiggle).
+					_locked_pre_aim_point = (_shot_aim_locked
+							if _shot_aim_locked.is_finite()
+							else _shot_aim_point(snapshot, self_pos))
 				State.QUICK_SHOT_PRESSED:
 					# No-charge release — score the goalie at his current
 					# position, not the wrister-window projection.
@@ -2072,7 +2084,14 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		var release_pos: Vector3 = _shoot_release_anchor
 		# Read aim_point directly (not just direction) so we can pass aim
 		# distance into _wind_up_endpoint_offsets for side-offset compensation.
-		var aim_point: Vector3 = _shot_aim_point(snapshot, release_pos)
+		# Prefer the carrier's locked hole aim — the exact hole the shot's score
+		# and loft were picked for — so the shot goes where it was evaluated. The
+		# aim POINT is fixed on the net plane; the direction is still taken from
+		# the current release_pos, so it tracks the bot's own locomotion. Falls
+		# back to the continuous geometry aim if no hole was locked.
+		var aim_point: Vector3 = (_shot_aim_locked
+				if _shot_aim_locked.is_finite()
+				else _shot_aim_point(snapshot, release_pos))
 		var aim_vec: Vector3 = Vector3(aim_point.x - release_pos.x, 0.0, aim_point.z - release_pos.z)
 		var aim_dir_init: Vector3 = aim_vec.normalized() if aim_vec.length_squared() > 0.0001 else Vector3(0.0, 0.0, 1.0)
 		var aim_distance: float = aim_vec.length()

@@ -441,35 +441,114 @@ static func open_net_danger(
 
 
 # The LOFT the bot should shoot with, from the same seven-hole geometry that
-# open_net_danger scores: the elevation class of the BEST hole. A slot shot into
-# a set goalie whose only opening is over the shoulder returns HIGH; a five-hole
-# off a caught-moving goalie returns FLAT; a body-side seam returns LOW. Called
-# once when SHOOT commits (not per candidate), so the re-scan is free.
+# open_net_danger scores: the elevation class of the CHOSEN hole (see
+# _choose_shot_hole). A slot shot whose only opening is over the shoulder returns
+# HIGH; a five-hole off a caught-moving goalie returns FLAT; a body-side seam
+# returns LOW. Called once when SHOOT commits, so the re-scan is free.
 static func best_shot_loft(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float,
 		goalie_unsettled_factor: float = 0.0) -> int:
 	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
+	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
+			net_half_width, flight, goalie_unsettled_factor)
+	if hole < 0:
+		return ShotMechanics.ELEVATION_FLAT
+	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
+
+
+# The world aim POINT (on the net plane, y = 0) of the CHOSEN hole — the exact
+# target the loft was picked for, so aim and loft always describe the same hole.
+# The state machine locks this as the wrister aim at charge start. Falls back to
+# the goal centre if the goalie leaves nothing (defensive — SHOOT only commits
+# when there's an opening).
+static func best_shot_aim(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0) -> Vector3:
+	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
+	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
+			net_half_width, flight, goalie_unsettled_factor)
+	if hole < 0:
+		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
+	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
+			net_half_width, flight, goalie_unsettled_factor)
+	return Vector3(aim_x, 0.0, attacking_goal.z)
+
+
+# Picks the shot hole the bot commits to: the widest opening, then tie-broken
+# toward the FLATTEST loft within LOFT_TIE_FRAC of it (bury it low if you can,
+# roof it only when the top corner is the real way in), and within that flattest
+# tier the widest opening. Returns the hole index, or -1 if nothing is open. One
+# chooser shared by best_shot_loft and best_shot_aim so they never disagree.
+static func _choose_shot_hole(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, flight: float, unsettled: float) -> int:
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
-				net_half_width, flight, goalie_unsettled_factor)
+				net_half_width, flight, unsettled)
 		if a > best_angle:
 			best_angle = a
 	if best_angle <= 0.0:
-		return ShotMechanics.ELEVATION_FLAT
-	# The flattest hole that's within LOFT_TIE_FRAC of the widest opening — bury it
-	# low if you can, roof it only when the top corner is the real way in.
+		return -1
 	var threshold: float = best_angle * LOFT_TIE_FRAC
-	var loft: int = ShotMechanics.ELEVATION_HIGH
+	var chosen: int = -1
+	var chosen_loft: int = ShotMechanics.ELEVATION_HIGH + 1
+	var chosen_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
-				net_half_width, flight, goalie_unsettled_factor)
-		if a >= threshold:
-			var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
-			if band_loft < loft:
-				loft = band_loft
-	return loft
+				net_half_width, flight, unsettled)
+		if a < threshold:
+			continue
+		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
+		if band_loft < chosen_loft or (band_loft == chosen_loft and a > chosen_angle):
+			chosen_loft = band_loft
+			chosen_angle = a
+			chosen = i
+	return chosen
+
+
+# The net-plane aim x for a chosen hole. Corners aim at the open segment's
+# midpoint biased toward the post (matching AIShotAim's tuned corner bias); the
+# five-hole aims at the goalie's centre (between the legs); an armpit aims at the
+# body-side seam. Reuses the same shadow projection as _hole_open_angle.
+static func _hole_aim_x(
+		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, flight: float, unsettled: float) -> float:
+	var kind: int = HOLE_KIND[i]
+	var side: int = HOLE_SIDE[i]
+	var net_z: float = attacking_goal.z
+	var post_lo_x: float = attacking_goal.x - net_half_width
+	var post_hi_x: float = attacking_goal.x + net_half_width
+
+	if kind == HOLE_KIND_FIVE:
+		return clampf(_shadow_x(shooter, goalie_pos.x, goalie_pos.z, net_z),
+				post_lo_x, post_hi_x)
+	if kind == HOLE_KIND_ARMPIT:
+		return clampf(
+				_shadow_x(shooter, goalie_pos.x + side * ARMPIT_OFFSET_M,
+						goalie_pos.z, net_z),
+				post_lo_x, post_hi_x)
+
+	# Corner: aim at the open segment [post ↔ cover edge] on the hole's side,
+	# midpoint biased toward the post.
+	var band: int = HOLE_BAND[i]
+	var reaction: float = clampf(
+			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
+	reaction *= 1.0 - clampf(unsettled, 0.0, 1.0)
+	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
+	if side < 0:
+		var cov_lo_x: float = clampf(
+				_shadow_x(shooter, goalie_pos.x - cover, goalie_pos.z, net_z),
+				post_lo_x, post_hi_x)
+		var mid_lo: float = (post_lo_x + cov_lo_x) * 0.5
+		return lerpf(mid_lo, post_lo_x, AIShotAim.DEFAULT_CORNER_BIAS)
+	var cov_hi_x: float = clampf(
+			_shadow_x(shooter, goalie_pos.x + cover, goalie_pos.z, net_z),
+			post_lo_x, post_hi_x)
+	var mid_hi: float = (cov_hi_x + post_hi_x) * 0.5
+	return lerpf(mid_hi, post_hi_x, AIShotAim.DEFAULT_CORNER_BIAS)
 
 
 # Projects a point (px at depth pz) onto the net plane (z = net_z) along the

@@ -155,6 +155,11 @@ var pass_should_saucer: bool = false
 # Consumed by the state machine's press-state handlers to drive the release loft.
 var shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 
+# Set alongside shot_loft_level: the world aim POINT of that same best hole (on
+# the net plane), so the state machine aims the wrister exactly at the hole the
+# loft was chosen for. INF until a SHOOT commit picks one.
+var shot_aim_point: Vector3 = Vector3.INF
+
 # Cached carry destination from the most recent re-eval. Read by the
 # state machine to drive steering during CARRY.
 var last_carry_anchor: Vector3 = Vector3.ZERO
@@ -240,6 +245,7 @@ func reset() -> void:
 	pass_target_speed = AIActionScoring.PASS_SPEED_M_S
 	pass_should_saucer = false
 	shot_loft_level = ShotMechanics.ELEVATION_FLAT
+	shot_aim_point = Vector3.INF
 	last_carry_anchor = Vector3.ZERO
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
@@ -487,10 +493,15 @@ func _pick_action(ctx: RoleContext) -> void:
 			# for long passes — see _compute_best_pass).
 			pass_should_saucer = best_pass_saucer
 		elif new_intent == INTENT_SHOOT:
-			# Loft from the same seven-hole geometry score_shoot used — the best
-			# hole's elevation class, scored at the projected release. Roofs a set
-			# goalie (top-corner window), stays flat on a five-hole / low corner.
+			# Loft AND aim from the same seven-hole geometry score_shoot used — the
+			# chosen hole's elevation and net-plane target, scored at the projected
+			# release. Roofs a set goalie (top-corner window), stays flat on a
+			# five-hole / low corner, and aims exactly at that hole.
 			shot_loft_level = AIActionScoring.best_shot_loft(
+					wrister_release_pos, attacking_goal, wrister_goalie,
+					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
+					wrister_unsettled)
+			shot_aim_point = AIActionScoring.best_shot_aim(
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
 					wrister_unsettled)
