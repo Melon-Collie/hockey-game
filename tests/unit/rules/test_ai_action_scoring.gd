@@ -497,6 +497,41 @@ func test_in_offensive_zone_folds_for_negative_z_attack() -> void:
 	assert_false(AIActionScoring.in_offensive_zone(Vector3(0, 0, 20.0), neg_goal))
 
 
+# ── release_ahead_of_goalie / no phantom open net ─────────────────────────────
+# GOAL is at +Z, so "in front of the goalie" = farther out = smaller z.
+
+func test_release_clamped_when_behind_goalie() -> void:
+	var goalie := Vector3(0.0, 0.0, 24.65)          # 2 m out from GOAL (z 26.65)
+	var behind := Vector3(0.5, 0.0, 25.5)           # in the crease, past the goalie
+	var clamped: Vector3 = AIActionScoring.release_ahead_of_goalie(behind, GOAL, goalie)
+	assert_almost_eq(clamped.z, 24.65 - AIActionScoring.GOALIE_JAM_DISTANCE_M, 1e-4,
+			"pushed out to the jam distance in front of the goalie")
+	assert_almost_eq(clamped.x, 0.5, 1e-6, "lateral offset is untouched")
+
+
+func test_release_untouched_when_in_front_of_goalie() -> void:
+	var goalie := Vector3(0.0, 0.0, 24.65)
+	var in_front := Vector3(1.0, 0.0, 20.0)         # out in the slot, well in front
+	var out: Vector3 = AIActionScoring.release_ahead_of_goalie(in_front, GOAL, goalie)
+	assert_eq(out, in_front, "a normal in-front shot is not clamped")
+
+
+func test_shot_from_behind_goalie_is_not_a_phantom_open_net() -> void:
+	# A shooter jammed dead-center just past the goalie used to read as an open net
+	# (keeper modelled behind the shooter → danger 1.0). Clamped in front of him,
+	# it's a point-blank jam into a set keeper — near zero, and far below a real
+	# slot shot from the same centered line.
+	var goalie := Vector3(0.0, 0.0, 24.65)
+	var behind := Vector3(0.0, 0.0, 25.8)           # crease, dead center, past goalie
+	var behind_danger: float = AIActionScoring.score_shoot(behind, GOAL, goalie, NET_HW, [])
+	var slot := Vector3(0.0, 0.0, 20.65)            # real slot look, same line
+	var slot_danger: float = AIActionScoring.score_shoot(slot, GOAL, goalie, NET_HW, [])
+	assert_lt(behind_danger, slot_danger,
+			"a jam from behind the goalie is not more dangerous than a slot shot")
+	assert_lt(behind_danger, 0.2,
+			"…it's a near-nothing point-blank jam, not a phantom open net")
+
+
 # ── position_potential ───────────────────────────────────────────────────────
 # position_potential models "value of being at this position" — used
 # only when the evaluator is OUTSIDE shooting range (the regime rule

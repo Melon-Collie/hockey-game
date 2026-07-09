@@ -309,8 +309,14 @@ func _pick_action(ctx: RoleContext) -> void:
 	# charge completes, the bot has skated into it.
 	var self_velocity: Vector3 = ctx.self_velocity
 	var horizontal_velocity: Vector3 = Vector3(self_velocity.x, 0.0, self_velocity.z)
-	var wrister_release_pos: Vector3 = (
-			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)
+	# Goalie's CURRENT position (squared to whoever currently holds the puck —
+	# that's us as the carrier). This is where the goalie actually is, used by the
+	# QUICK_SHOT scoring below (a no-charge snap gives him no time to slide) and to
+	# clamp the wrister release, since the goalie is a body the release can't cross.
+	var goalie_now: Vector3 = _goalie_now(ctx)
+	var wrister_release_pos: Vector3 = AIActionScoring.release_ahead_of_goalie(
+			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
+			attacking_goal, goalie_now)
 
 	# Goalie prediction at the wrister release time. Pass-receiver and
 	# carry-candidate cases get their own predictions inside
@@ -321,11 +327,6 @@ func _pick_action(ctx: RoleContext) -> void:
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
 	var wrister_unsettled: float = _goalie_unsettled_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
-	# Goalie's CURRENT position (squared to whoever currently holds the puck —
-	# that's us as the carrier). This is where the goalie actually is, used by the
-	# QUICK_SHOT scoring below: a no-charge snap gives him no time to slide, so the
-	# geometry sees him where he stands right now.
-	var goalie_now: Vector3 = _goalie_now(ctx)
 
 	# Top-level SHOOT.
 	var shoot_score: float = AIActionScoring.score_shoot(

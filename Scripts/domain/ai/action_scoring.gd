@@ -628,6 +628,11 @@ static func score_shoot(
 		opponents: Array[Vector3],
 		shot_speed_m_s: float = WRISTER_SHOT_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0) -> float:
+	# The puck can't be shot from behind the goalie — clamp the shooter to the jam
+	# distance in front of him. Without this a hard drive's projected release, or a
+	# carry candidate placed in the crease, reads as a phantom open net (keeper
+	# modelled behind the shooter). No-op for any normal in-front shot.
+	shooter = release_ahead_of_goalie(shooter, attacking_goal, predicted_goalie_pos)
 	var shot_quality: float = open_net_danger(
 			shooter, attacking_goal, predicted_goalie_pos, net_half_width,
 			shot_speed_m_s, goalie_unsettled_factor)
@@ -660,6 +665,32 @@ static func score_quick_shot(
 		opponents: Array[Vector3]) -> float:
 	return score_shoot(shooter, attacking_goal, goalie_now,
 			net_half_width, opponents, PASS_SPEED_M_S)
+
+
+# Point-blank jam distance: the closest the puck realistically gets to a set goalie
+# before his body/pads stop it. A physical measurement (skate + pad depth), not a
+# tuning knob — it just keeps the shooter strictly in FRONT of the keeper so the
+# shadow geometry stays well-defined (a shooter coincident with the goalie is a
+# degenerate projection).
+const GOALIE_JAM_DISTANCE_M: float = 0.4
+
+# A shot's release point can't sit CLOSER to the goal than the goalie: the goalie
+# is a body in the way, so the puck leaves the blade in FRONT of him, never behind
+# (and no nearer than the jam distance). Clamps a shooter/release so its distance
+# out from the goal is at least the goalie's + the jam margin — killing the
+# "shooter past the goalie → phantom open net" read, where a hard drive's projected
+# release (or a carry candidate placed in the crease) overshoots the goalie's depth
+# and the shot scores as if the keeper were behind the shooter. Only the goalward
+# axis is clamped; lateral offset (a cut across the slot) is untouched.
+static func release_ahead_of_goalie(
+		release: Vector3, attacking_goal: Vector3, goalie_pos: Vector3) -> Vector3:
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var release_fwd: float = (release.z - attacking_goal.z) * net_normal_z
+	var goalie_fwd: float = (goalie_pos.z - attacking_goal.z) * net_normal_z
+	var min_fwd: float = goalie_fwd + GOALIE_JAM_DISTANCE_M
+	if release_fwd >= min_fwd:
+		return release
+	return Vector3(release.x, release.y, attacking_goal.z + min_fwd * net_normal_z)
 
 
 # Predicts the goalie's position at a future moment (shot release).
