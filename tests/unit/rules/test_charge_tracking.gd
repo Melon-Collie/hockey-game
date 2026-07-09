@@ -125,3 +125,22 @@ func test_variance_reset_zeroes_sweep_time_with_charge() -> void:
 		Vector3(1, 0, 0), 1.0, VARIANCE_DEG, 0.5, DT, 0.0)
 	assert_almost_eq(result.charge, 0.2, 0.001, "charge reset then reversal tick counted")
 	assert_almost_eq(result.sweep_time, DT, 0.00001, "sweep time reset with charge")
+	assert_true(result.reset, "variance break reports the new stroke")
+
+func test_reset_flag_false_on_continuation_idle_and_first_tick() -> void:
+	# Straight continuation — no reset.
+	var cont: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.3, 0, 0), Vector3.ZERO, Vector3(0.3, 0, 0),
+		Vector3(1, 0, 0), 0.5, VARIANCE_DEG, 0.1, DT, 0.0)
+	assert_false(cont.reset, "same-direction motion is the same stroke")
+	# Idle tick — no reset.
+	var idle: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(0.5, 0, 0), Vector3(0.5, 0, 0), Vector3(0.5, 0, 0),
+		Vector3(1, 0, 0), 0.5, VARIANCE_DEG, 0.1, DT, 0.0)
+	assert_false(idle.reset, "holding still is not a new stroke")
+	# First meaningful motion (no prev direction) — a stroke STARTS but nothing
+	# was broken; callers already capture the hand read at aim entry.
+	var first: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.3, 0, 0), Vector3.ZERO, Vector3(0.3, 0, 0),
+		Vector3.ZERO, 0.0, VARIANCE_DEG, 0.0, DT, 0.0)
+	assert_false(first.reset, "first motion after entry is not a variance break")

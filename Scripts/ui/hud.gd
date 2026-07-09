@@ -920,7 +920,13 @@ func _on_local_shot_released(_direction: Vector3, power: float, is_slapper: bool
 			else _shot_toast_controller.max_wrister_power
 	var mph: float = power * 2.23694
 	var pct: float = 100.0 * power / maxf(family_max, 0.001)
-	_toast_stack.push("SHOT · %.0f MPH · %.0f%%" % [mph, pct], _WHITE)
+	var text: String = "SHOT · %.0f MPH · %.0f%%" % [mph, pct]
+	# FH/BH is a wrister-only concept (quick shots take no penalty, there is
+	# no backhand slapper) — gate on !is_slapper so a leniency one-timer can't
+	# surface a stale hand from an earlier wrister.
+	if not is_slapper and _shot_toast_controller.last_release_hand != "":
+		text += " · " + _shot_toast_controller.last_release_hand
+	_toast_stack.push(text, _WHITE)
 
 
 # Applies PlayerPrefs.hud_scale by sizing _scale_root to a virtual viewport of

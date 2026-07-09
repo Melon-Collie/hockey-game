@@ -49,11 +49,17 @@ class_name ChargeTracking
 # prev_direction, charge, sweep_time). Each tick it calls accumulate()
 # with the current positions and stores back the returned values.
 #
-# Returns { "charge": float, "direction": Vector3, "sweep_time": float }.
+# Returns { "charge": float, "direction": Vector3, "sweep_time": float,
+#           "reset": bool }.
 #   - direction: the most recent meaningful cursor-motion unit vector.
 #     Caller passes this as prev_direction next tick. Vector3.ZERO means
 #     "no direction yet recorded" (first frame or negligible cursor
 #     motion).
+#   - reset: true when the direction-variance break fired this tick — a NEW
+#     power stroke started. Callers that classify the shot by where the
+#     stroke began (the forehand/backhand read) re-capture on this flag so
+#     the classification belongs to the live sweep, not to a stale snapshot
+#     from aim entry.
 static func accumulate(
 		prev_intent_pos: Vector3,
 		current_intent_pos: Vector3,
@@ -75,16 +81,18 @@ static func accumulate(
 		# without intent). Holding time too is what lets a player draw
 		# the shot and wait for a lane without the average speed decaying.
 		return {"charge": current_charge, "direction": prev_direction,
-				"sweep_time": current_sweep_time}
+				"sweep_time": current_sweep_time, "reset": false}
 
 	var current_dir: Vector3 = intent_delta.normalized()
 	var new_charge: float = current_charge
 	var new_sweep_time: float = current_sweep_time
+	var was_reset: bool = false
 	if prev_direction != Vector3.ZERO:
 		var angle_deg: float = rad_to_deg(prev_direction.angle_to(current_dir))
 		if angle_deg > max_direction_variance_deg:
 			new_charge = 0.0
 			new_sweep_time = 0.0
+			was_reset = true
 
 	# Magnitude from blade travel PROJECTED onto the intent direction.
 	# Only motion the player intended counts — tangential blade motion
@@ -100,4 +108,5 @@ static func accumulate(
 		new_charge += aligned_magnitude
 		new_sweep_time += delta
 
-	return {"charge": new_charge, "direction": current_dir, "sweep_time": new_sweep_time}
+	return {"charge": new_charge, "direction": current_dir,
+			"sweep_time": new_sweep_time, "reset": was_reset}

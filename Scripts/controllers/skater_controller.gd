@@ -1346,6 +1346,12 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 			_skating.stop_yaw_offset + _skating.travel_align_yaw + _skating.shot_hip_yaw)
 
 signal puck_release_requested(direction: Vector3, power: float, is_slapper: bool)
+# Debug/HUD annotation for the most recent release: "FH"/"BH" for wristers
+# (the classification that drove the backhand power penalty), "" for quick
+# shots and slappers (no backhand concept — quick takes no penalty, there is
+# no backhand slapper). Set just before puck_release_requested fires; the
+# shot-speed toast reads it alongside the signal.
+var last_release_hand: String = ""
 # Fired when the player releases slap while the puck is nearby but not yet
 # carried — the leniency one-timer. GameManager acquires + releases the puck;
 # the controller transitions to follow-through immediately.
@@ -1592,6 +1598,11 @@ func _apply_state(input: InputState, delta: float) -> void:
 	var prev_state: int = _sm.get_state()
 	_sm.dispatch(skater, input, delta, has_puck, _game_state.is_movement_locked())
 	if prev_state != State.WRISTER_AIM and _sm.get_state() == State.WRISTER_AIM:
+		# Forehand/backhand read: the loading face is the one behind the puck
+		# when the power stroke begins — captured here at aim entry, and
+		# RE-captured whenever the charge tracker's variance break starts a
+		# new stroke (see _update_wrister_charge), so it never goes stale
+		# across an in-aim reposition.
 		_aiming.wrister_start_blade_local_x = skater.get_blade_position().x
 
 # ── State Helpers ─────────────────────────────────────────────────────────────
@@ -1760,6 +1771,7 @@ func _release_wrister(input: InputState) -> void:
 				_aiming.wrister_start_blade_local_x * (1.0 if skater.is_left_handed else -1.0) > 0.0
 		# LMB is always a charged wrister now — the quick shot lives on its own
 		# button (_fire_quick_shot). A bare tap here fires a min-charge wrister.
+		last_release_hand = "BH" if is_backhand else "FH"
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -1797,6 +1809,7 @@ func _release_wrister(input: InputState) -> void:
 func _fire_quick_shot(input: InputState) -> void:
 	if has_puck:
 		var blade_world: Vector3 = _ik.last_target_blade_world
+		last_release_hand = ""
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -1820,6 +1833,7 @@ func _fire_quick_shot(input: InputState) -> void:
 func _release_slapper(input: InputState, one_timer: bool = false) -> void:
 	if has_puck:
 		# Direction is locked at the moment slap was pressed — no mid-swing steering.
+		last_release_hand = ""
 		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 		var cfg: ShotMechanics.SlapperConfig = _slapper_config()
 		# One-timers always fire at max power regardless of actual charge built.
@@ -1869,10 +1883,17 @@ func _update_wrister_charge(input: InputState) -> void:
 	var blade_world: Vector3 = _ik.last_target_blade_world
 	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
 	blade_pos_rel_skater.y = 0.0
-	_aiming.tick_wrister_charge(
+	var sweep_reset: bool = _aiming.tick_wrister_charge(
 			intent_pos, blade_pos_rel_skater,
 			max_charge_direction_variance,
 			input.delta, wrister_max_counted_sweep_speed)
+	if sweep_reset:
+		# The variance break started a NEW power stroke — re-capture the
+		# forehand/backhand read from where the blade sits NOW. Without this
+		# the classification is a stale snapshot from WRISTER_AIM entry: drift
+		# the cursor across the body and sweep, and a true forehand stroke
+		# would eat the backhand penalty (or the reverse gain forehand power).
+		_aiming.wrister_start_blade_local_x = skater.get_blade_position().x
 	# Publish where this charge would go if released NOW, so the host-side goalie
 	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
 	# release math in _release_wrister (same inputs), and re-solves every tick — so
