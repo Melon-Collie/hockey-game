@@ -96,14 +96,31 @@ const SLOT_RADIUS_M: float = 6.0
 # The goalie FREEZES on the shot (he can't slide into it), so the only thing
 # range buys him is glove/blocker REACTION time to the placement. His lateral
 # reach is his body plus arms, and the arms only count once the flight beats his
-# reaction delay:
+# ARM reaction delay (glove/blocker read slower than legs — see
+# GOALIE_ARM_REACTION_DELAY_S):
 #   cover_half = GOALIE_BODY_HALF_M + GOALIE_ARM_REACH_M × reaction
-#   reaction   = clamp((flight − REACTION_DELAY) / ARM_DEPLOY, 0, 1)
+#   reaction   = clamp((flight − ARM_REACTION_DELAY) / ARM_DEPLOY, 0, 1)
 # Aggressive angle-challenging (the goalie plays OUT for a longer shot) is not a
 # constant — it's just where the goalie actually is, fed in as goalie_pos.
-const GOALIE_BODY_HALF_M: float = 0.40   # torso/pads lateral half-width, always covered
-const GOALIE_ARM_REACH_M: float = 0.60   # extra glove/blocker extension, reaction-gated
+#
+# Total lateral reach (BODY_HALF + ARM_REACH = 0.85 m) mirrors the live goalie's
+# glove_max_x_outward (0.85). The split abstracts the goalie's true collider: the
+# bare torso half-width (~0.26) badly understates a squared butterfly's coverage,
+# so BODY_HALF reads as the reliably-sealed core — pads dropped + body, the band
+# a SET goalie covers low without ever reacting his glove to the placement — and
+# ARM_REACH as the reaction-gated glove/blocker stretch from that core out to the
+# post. This is what keeps a clean slot shot into a set goalie low-percentage:
+# his flight time (~0.16 s at 5 m) is under the arm reaction (0.18 s), so the
+# glove never deploys and the only open net is over the shoulder — but the pad
+# core still walls off the low lateral net.
+const GOALIE_BODY_HALF_M: float = 0.55   # pad+body lateral half-width, always covered
+const GOALIE_ARM_REACH_M: float = 0.30   # extra glove/blocker extension, reaction-gated
 const GOALIE_ARM_DEPLOY_S: float = 0.20  # time after reacting to get the glove/blocker there
+# Arms read the shot slower than legs — the glove/blocker reach AND the
+# over-the-shoulder window gate on this, while the lateral slide prediction
+# (predict_goalie_pos) uses the faster leg reaction. Lockstep with the live
+# goalie via GameRules (GoalieController.arm_reaction_delay).
+const GOALIE_ARM_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S
 
 # Over-the-shoulder window: a standing goalie doesn't cover the top of the net,
 # so even a laterally-covered shot has a top-corner target (needs elevation +
@@ -374,8 +391,11 @@ static func open_net_danger(
 	if forward < 0.001:
 		return 0.0  # on/behind the goal line — no shot in
 	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
+	# Arm/glove reach (lateral cover + over-the-shoulder window) gates on the
+	# slower ARM reaction — legs seal low fast, but the glove is late to the
+	# placement, which is exactly what a longer shot's flight time buys back.
 	var reaction: float = clampf(
-			(flight - GOALIE_REACTION_DELAY_S) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
+			(flight - GOALIE_ARM_REACTION_DELAY_S) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
 	reaction *= 1.0 - clampf(goalie_unsettled_factor, 0.0, 1.0)
 	var cover: float = GOALIE_BODY_HALF_M + GOALIE_ARM_REACH_M * reaction
 	# Net posts as bearings from the shooter.

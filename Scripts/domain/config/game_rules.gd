@@ -254,6 +254,12 @@ const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0
 # react-then-slide model. Calibrate together — the AI's prediction must
 # match the live goalie's reflex.
 const DEFAULT_GOALIE_REACTION_DELAY_S: float = 0.13
+# Arms (glove/blocker) read a shot slower than legs — legs drop reflexively on a
+# low read, arms need "where in the upper net" placement math first. Mirrors
+# GoalieController.arm_reaction_delay. AIActionScoring.open_net_danger gates the
+# goalie's glove/blocker REACH (lateral arm extension + over-the-shoulder cover)
+# on this, while the lateral SLIDE prediction still uses the leg reaction above.
+const DEFAULT_GOALIE_ARM_REACTION_DELAY_S: float = 0.18
 # Goalie's max committed lateral movement speed. Mirrors GoalieController
 # .t_push_speed — the actual translation speed when the goalie commits to
 # a slide (lateral_threshold = 0.3 m). NOT tracking_speed (that's the
