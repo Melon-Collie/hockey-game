@@ -38,6 +38,13 @@ var sprint_held: bool = false
 # wrister aim — LMB is now always a charged wrister, so the quick shot lives on
 # its own button to remove the tap-vs-hold ambiguity.
 var quick_shot_pressed: bool = false
+# BOT-ONLY, runtime, NOT serialized (bots are host-simulated, never sent over
+# the wire). Target wrister power fraction (0..1) a bot commits to at its shot/
+# pass windup; the controller converts it to the equivalent cursor speed
+# (ShotMechanics.wrister_speed_for_power_t) so bots drive the SAME pure-mouse
+# power model deterministically. Humans leave it at the default (unused — they
+# read real cursor speed).
+var bot_wrister_power_t: float = 1.0
 
 func to_array() -> Array:
 	return [

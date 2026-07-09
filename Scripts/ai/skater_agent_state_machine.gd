@@ -2199,6 +2199,9 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# we just need consecutive ticks to differ by a consistent direction.
 	var sweep_dir_3d: Vector3 = (_shoot_aim_target - _shoot_wind_up_start).normalized()
 	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_shoot_charge_tick)
+	# Shot power: full. The controller reads this (not the synthesized sweep
+	# speed) so the bot deterministically fires at the wrister ceiling.
+	input.bot_wrister_power_t = BOT_WRISTER_SHOT_CHARGE_FRACTION
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		# Still charging — keep shoot_held high.
@@ -2407,6 +2410,12 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# direction from screen-pos delta; we fake it from the lerp endpoints.
 	var sweep_dir_3d: Vector3 = (_pass_aim_target - _pass_wind_up_start).normalized()
 	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_pass_charge_tick)
+	# Pass power: the fraction of the bot's own wrister band that hits the
+	# distance-adaptive target speed. The controller reads this directly.
+	input.bot_wrister_power_t = clampf(
+			(_pass_target_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
+			/ maxf(_self_wrister_shot_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, 0.001),
+			0.0, 1.0)
 
 	if _pass_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		input.shoot_held = true

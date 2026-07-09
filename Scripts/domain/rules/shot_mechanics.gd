@@ -98,6 +98,20 @@ static func wrister_power_t(sweep_speed: float, dist_t: float, cfg: WristerConfi
 		t = pow(t, cfg.power_curve)
 	return t
 
+# Inverse of the pure-mouse power model: the cursor speed that yields
+# target_power_t (0..1). Bots commit a target power fraction and the controller
+# feeds this as the sweep_speed, so a bot drives the same wrister_power_t as a
+# human — deterministically hitting any % of the band. Assumes the pure-speed
+# form (snap_power_fraction 1.0, i.e. distance-independent): power_t =
+# (speed/full)^curve, so speed = full · target^(1/curve).
+static func wrister_speed_for_power_t(target_power_t: float, cfg: WristerConfig) -> float:
+	var t: float = clampf(target_power_t, 0.0, 1.0)
+	if cfg.full_sweep_speed <= 0.0:
+		return 0.0
+	if cfg.power_curve > 0.0:
+		t = pow(t, 1.0 / cfg.power_curve)
+	return cfg.full_sweep_speed * t
+
 # Inverse of the power model for a CONSTANT-RATE sweep — the bot gesture.
 # A bot sweeps its synthetic cursor across a chosen distance over a fixed
 # duration, so sweep speed = distance / duration and power is monotonic in

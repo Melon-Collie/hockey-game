@@ -255,6 +255,23 @@ func test_wrister_quick_shot_ignores_sweep_speed() -> void:
 	assert_almost_eq(r.power, cfg.quick_shot_power, 0.01,
 		"quick shot stays at fixed pass power whatever the sweep did")
 
+func test_wrister_speed_for_power_t_round_trip() -> void:
+	# The bot inverse: a target power fraction → a cursor speed that, run forward
+	# through the pure-speed model (snap 1.0), releases at that fraction.
+	var cfg := _wrister_cfg()
+	cfg.snap_power_fraction = 1.0
+	for target: float in [0.0, 0.3, 0.62, 1.0]:
+		var speed: float = ShotMechanics.wrister_speed_for_power_t(target, cfg)
+		var t: float = ShotMechanics.wrister_power_t(speed, 0.0, cfg)  # dist irrelevant at snap 1.0
+		assert_almost_eq(t, target, 0.001, "speed_for_power_t inverts to %.2f" % target)
+
+func test_wrister_speed_for_power_t_clamps() -> void:
+	var cfg := _wrister_cfg()
+	cfg.snap_power_fraction = 1.0
+	assert_almost_eq(ShotMechanics.wrister_speed_for_power_t(0.0, cfg), 0.0, 0.001)
+	assert_almost_eq(ShotMechanics.wrister_speed_for_power_t(1.5, cfg),
+			cfg.full_sweep_speed, 0.001, "over-1 target clamps to the full-speed reference")
+
 func test_wrister_charge_for_power_round_trip() -> void:
 	# The bot inverse: solve the charge distance whose constant-rate sweep
 	# releases at the target power, then run it forward through the model.

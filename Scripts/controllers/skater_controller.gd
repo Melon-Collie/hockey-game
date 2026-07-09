@@ -422,15 +422,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var wrister_max_counted_sweep_speed: float = GameRules.DEFAULT_WRISTER_MAX_COUNTED_SWEEP_SPEED_M_S
 @export var wrister_snap_power_fraction: float = GameRules.DEFAULT_WRISTER_SNAP_POWER_FRACTION
 @export var wrister_power_curve: float = GameRules.DEFAULT_WRISTER_POWER_CURVE
-# ── EXPERIMENT: pure mouse-speed wrister ──
-# When true, power ignores drag distance and the blade entirely: it's a curve
-# over the raw SCREEN-space cursor speed (px/s) — flick fast = hard, sweep slow
-# = soft. Direction is still the drag vector. Flip false to restore the
-# sweep-speed × distance model above.
-# wrister_mouse_speed_full is the cursor speed (px/s) that reads as full power —
-# PER-SETUP: it scales with mouse sensitivity / DPI / resolution, so it needs
-# calibrating against the shot-speed toast on the actual machine.
-@export var wrister_pure_mouse_speed: bool = true
+# ── Pure mouse-speed wrister ──
+# Wrister power is a curve over the raw SCREEN-space cursor speed (px/s) — flick
+# fast = hard, sweep slow = soft — distance-independent. Direction is still the
+# drag vector; power_curve (above) shapes where a flick lands.
+# wrister_mouse_speed_full is the cursor speed (px/s) that reads as full power.
+# It's PER-SETUP (scales with DPI/resolution), so players calibrate via the
+# Shot Power Sensitivity setting rather than this raw reference.
 @export var wrister_mouse_speed_full: float = 2500.0
 @export var wrister_mouse_speed_smoothing: float = 14.0
 # Blade-speed budget ALONG the shot axis during a wrister aim (m/s of blade
@@ -1802,7 +1800,7 @@ func _release_wrister(input: InputState) -> void:
 				_wrister_config(),
 				_get_charge_direction(),
 				false,
-				_wrister_sweep_speed())
+				_wrister_sweep_speed(input))
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
@@ -1814,7 +1812,7 @@ func _release_wrister(input: InputState) -> void:
 	var release_charge_t: float = clampf(
 			_aiming.charge_distance / max_wrister_charge_distance, 0.0, 1.0)
 	var release_power_t: float = ShotMechanics.wrister_power_t(
-			_wrister_sweep_speed(), release_charge_t, _wrister_config())
+			_wrister_sweep_speed(input), release_charge_t, _wrister_config())
 	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0, release_power_t)
 	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
@@ -1920,7 +1918,7 @@ func _update_wrister_charge(input: InputState) -> void:
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level, _aiming.charge_distance,
 			_wrister_config(), _get_charge_direction(), false,
-			_wrister_sweep_speed())
+			_wrister_sweep_speed(input))
 	skater.predicted_shot_velocity = pred.direction * pred.power
 	# The charge ring shows the release-now SPEED, not the raw drag distance:
 	# normalized predicted power over the min→max band. Under the sweep-speed
@@ -2115,28 +2113,19 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 		_cached_wrister_cfg.loft_vy_low = loft_vertical_speed_low
 		_cached_wrister_cfg.loft_vy_high = loft_vertical_speed_high
 		_cached_wrister_cfg.power_curve = wrister_power_curve
-		if _use_mouse_speed():
-			# EXPERIMENT: power is a pure curve over the cursor speed (fed as
-			# sweep_speed by _wrister_sweep_speed) — no distance. snap_fraction
-			# 1.0 flattens the distance/flex term so dist_t drops out, and the
-			# full-speed reference is the cursor-speed one.
-			_cached_wrister_cfg.full_sweep_speed = wrister_mouse_speed_full
-			_cached_wrister_cfg.snap_power_fraction = 1.0
-		else:
-			_cached_wrister_cfg.full_sweep_speed = wrister_full_sweep_speed
-			_cached_wrister_cfg.snap_power_fraction = wrister_snap_power_fraction
+		# Pure-speed model: power is a curve over the cursor speed (fed as
+		# sweep_speed by _wrister_sweep_speed), distance-independent. snap_fraction
+		# 1.0 flattens the flex term so dist_t drops out; the full-speed reference
+		# is the cursor-speed one.
+		_cached_wrister_cfg.full_sweep_speed = wrister_mouse_speed_full
+		_cached_wrister_cfg.snap_power_fraction = 1.0
 	return _cached_wrister_cfg
 
-# True for bot controllers (AIController overrides). Bots synthesize a crude
-# screen cursor, so the pure-mouse-speed experiment must not apply to them —
-# they stay on the blade-speed × distance model (which their gesture + the
-# carry scorer are calibrated to).
+# True for bot controllers (AIController overrides). Bots have no real cursor, so
+# they drive the pure-mouse power model via a committed target fraction
+# (InputState.bot_wrister_power_t) rather than a measured cursor speed.
 func is_ai_controlled() -> bool:
 	return false
-
-# Whether the pure-mouse-speed wrister experiment is active for THIS controller.
-func _use_mouse_speed() -> bool:
-	return wrister_pure_mouse_speed and not is_ai_controlled()
 
 # True only for the local human's own controller (LocalController overrides).
 # Used to gate reading LOCAL player prefs — a host-side RemoteController or a
@@ -2144,12 +2133,14 @@ func _use_mouse_speed() -> bool:
 func uses_local_input_prefs() -> bool:
 	return false
 
-# The speed signal fed to the wrister power model: the raw cursor speed under the
-# pure-mouse experiment (scaled by the player's Shot Power Sensitivity so it's
-# calibrated to their mouse DPI), else the blade's on-axis average sweep speed.
-func _wrister_sweep_speed() -> float:
-	if not _use_mouse_speed():
-		return _aiming.avg_sweep_speed()
+# The speed signal fed to the wrister power model:
+#   - Bots: the cursor speed equivalent to their committed target power fraction
+#     (deterministic — bots have no measured cursor).
+#   - Humans: the raw cursor speed, scaled by the local player's Shot Power
+#     Sensitivity (calibrates the flick-for-power feel to their mouse DPI).
+func _wrister_sweep_speed(input: InputState) -> float:
+	if is_ai_controlled():
+		return ShotMechanics.wrister_speed_for_power_t(input.bot_wrister_power_t, _wrister_config())
 	var sens: float = PlayerPrefs.shot_power_sensitivity if uses_local_input_prefs() else 1.0
 	return _aiming.cursor_speed_ema * sens
 
