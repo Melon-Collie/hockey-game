@@ -48,7 +48,7 @@ extends Node
 # than `reaction_delay` makes close-range top-corner shots score because
 # the arm doesn't even start moving in time. Long shots still allow full
 # extension once the arm clears the delay.
-@export var arm_reaction_delay: float = 0.18
+@export var arm_reaction_delay: float = GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S
 
 # Imminence gate on the reflexive low-shot butterfly drop. The goalie reads and
 # freezes the instant a shot is RELEASED (arm reach + tracking start right

@@ -56,9 +56,9 @@ func test_score_shoot_non_decreasing_in_shot_speed() -> void:
 	var goalie := Vector3(0, 0, goal.z + 1.0)
 	var defenders: Array[Vector3] = [Vector3(0.3, 0, 2.0)]
 	var slow := AIActionScoring.score_shoot(
-			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, defenders, goalie, 16.0)
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, defenders, 16.0)
 	var fast := AIActionScoring.score_shoot(
-			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, defenders, goalie, 28.0)
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, defenders, 28.0)
 	assert_gte(fast, slow,
 			"faster shot should score >= slower shot through the same lane")
 

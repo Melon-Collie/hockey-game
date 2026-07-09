@@ -3,13 +3,15 @@ class_name AIActionScoring
 # Pure-function utility scoring for on-puck actions. Each score is a
 # multiplicative composition of factors in [0, 1].
 #
-# ── Design intent: heuristic xG ──────────────────────────────────────────────
-# `score_shoot` is a hand-coded approximation of expected goals (xG) — the
-# probability that a given shot becomes a goal given its geometry and the
-# defensive context. It is xG-SHAPED (peak in the slot, drops with
-# distance / angle / coverage / pressure / lane traffic) but NOT magnitude-
-# calibrated against real-world data: a clean slot wrister scores ~0.55
-# here; the real-world xG would be closer to 0.30. Treat the outputs as
+# ── Design intent: geometric xG ──────────────────────────────────────────────
+# `score_shoot` approximates expected goals (xG) — the probability a shot beats
+# the goalie given its geometry and the defensive context. It is a GEOMETRIC
+# model, not a curve fit: it scores the best of the seven goalie holes (the net
+# each clears past the goalie's reaction-gated, height-appropriate cover — see
+# the seven-hole block below), then multiplies by lane clearance and forward-cone
+# pressure. Distance, angle, and coverage all EMERGE from that geometry; there
+# are no hand-tuned distance/angle curves. It is xG-SHAPED (peak in the slot,
+# fades with range/angle) but NOT magnitude-calibrated: treat the outputs as
 # RELATIVE shot quality, not actual goal probability.
 #
 # Everything else cascades from xG-shape:
@@ -52,21 +54,16 @@ const PRESSURE_RADIUS_M: float = 4.0
 # lower toward 1 to pressure on a single defender.
 const PRESSURE_MAX_COUNT: int = 2
 
-# Distance scaler for the dist_response curve. Beyond this distance,
-# shot quality from distance alone is 0 — geometrically rooted at the
-# attacking-zone span (blue line to opposing goal line). A shot from
-# the attacking blue line is the longest realistic in-possession shot
-# in hockey; anything from the neutral zone is a dump-in, not a shot.
-# Tracks rink resizes automatically.
-#
-# The dist_response is monotone (closer = always better) and quadratic
-# from goal: 1.0 at the goal mouth, 0.0 at SHOT_RANGE_FALLOFF_M. There
-# is no "ideal distance" peak — the goalie pressure zone (below)
-# penalises shots from inside the goalie's setup line, which is what
-# stops bots from grinding into the crease. The shooter-position
-# projection in carrier.gd (release-pos = current + velocity × charge
-# lookahead) handles the in-motion case. Together those two mechanics
-# replace the bidirectional peak that earlier versions had.
+# Shot-range regime boundary — NOT a scoring falloff. The seven-hole geometry
+# (open_net_danger) already handles distance on its own: a far shot foreshortens
+# the net and the goalie's glove has flight time to reach the corners, so danger
+# fades to ~0 with range without any distance curve. This constant only marks the
+# in/out-of-range REGIME switch for `_score_at`: inside it the bot commits to a
+# real shot (score_shoot alone); outside it the bot prices the position via
+# position_potential instead. Geometrically rooted at the attacking-zone span
+# (blue line to opposing goal line) — a shot from the attacking blue line is the
+# longest realistic in-possession shot; anything from the neutral zone is a
+# dump-in, not a shot. Tracks rink resizes automatically.
 const SHOT_RANGE_FALLOFF_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z
 
 # Position-potential closeness ramp. position_potential is only used
@@ -87,101 +84,119 @@ const SHOT_RANGE_FALLOFF_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_
 # pull bots from further out; down (4 m) tightens the sweet spot.
 const SLOT_RADIUS_M: float = 6.0
 
-# Shot-quality coverage knobs. The two-angle model with reaction-time
-# scaling:
-#   coverage     = coverage_cap(flight) × squareness
-#   coverage_cap = lerp(BASE_COVERAGE, GOALIE_SET_COVERAGE_MAX,
-#                       (flight_time − reaction) / SET_SAVE_WINDOW)
-#   squareness   = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
-# where arc_offset is |puck_arc_angle - goalie_arc_angle| at shot
-# release and flight_time = shot distance / shot speed. arc_offset >=
-# SQUARENESS_OFFSET_RAD = goalie fully exposed (open net). Replaces the
-# legacy shadow-projection openness + linear angle-ramp pair.
+# ── Shot danger: seven-hole open-net model ───────────────────────────────────
+# score_shoot rates a shot by evaluating the seven classic goalie "holes" as
+# separate targets, taking the BEST one. The score is that hole's opening; which
+# hole it is decides the LOFT the bot shoots (best_shot_loft). This is pure
+# geometry from the shooter's eye — distance, angle, and coverage all EMERGE
+# (see _hole_open_angle) — with the goalie a body that occludes part of the net.
 #
-# Why coverage scales with flight time: the live goalie is REACTIVE —
-# a fixed reaction delay, then it blocks what it can track. A shot from
-# range gives a set goalie the whole flight to read and get behind it
-# (the real goalie saves those), while a point-blank release beats the
-# reaction window entirely. The old flat BASE_COVERAGE priced both the
-# same, so a set square goalie only ever cost 28% and bots happily
-# fired from just outside the slot all game. With the cap ramping to
-# GOALIE_SET_COVERAGE_MAX over SET_SAVE_WINDOW of post-reaction flight,
-# range shots into a set goalie collapse, and what beats the goalie in
-# the model is what beats it on the ice: getting close, catching it
-# moving (goalie_unsettled), or catching it off-angle (squareness).
+#   1,2  top corners      → HIGH loft (over the glove/blocker held up in stance)
+#   3,4  bottom corners    → FLAT      (beside the pads)
+#   5    five-hole         → FLAT      (between the legs — opens when he's moving)
+#   6,7  armpits           → LOW loft  (the body-side seam under a raised arm)
 #
-# Tuning: BASE_COVERAGE is the point-blank floor (down → more net-mouth
-# finishing). GOALIE_SET_COVERAGE_MAX down (e.g., 0.55) → bots respect
-# range shots more / shoot from distance more; up (0.8) → almost never.
-# SET_SAVE_WINDOW down (e.g., 0.25) → the "must get inside" radius
-# tightens toward the crease; up (0.5) → even mid-slot shots read as
-# coverable. SQUARENESS_OFFSET down (e.g., 25°) → cross-seam plays
-# score higher (goalie reads as "exposed" sooner); up (40°) → only
-# severe slides expose the goalie.
-const BASE_COVERAGE: float = 0.28
-const GOALIE_SET_COVERAGE_MAX: float = 0.7
-const GOALIE_SET_SAVE_WINDOW_S: float = 0.35
-const SQUARENESS_OFFSET_RAD: float = 0.5235988  # deg_to_rad(30)
+# The goalie FREEZES on the shot (he can't slide into it), so the only thing
+# range buys him is REACTION time to extend the relevant body part to the
+# placement. Each hole reads its own height BAND, and the bands differ in exactly
+# the two ways a real goalie's do — a wider always-covered CORE and a slower
+# REACTION — which is what makes the loft choice fall out of the same geometry:
+#   cover = CORE + EXT × reaction ;  reaction = clamp((flight − DELAY)/DEPLOY,0,1)
+#   openness = the net the hole clears past the goalie's cover, projected onto
+#              the net plane (shadow) so foreshortening at sharp angles is honest
+# Aggressive angle-challenging (the goalie plays OUT for a longer shot) is not a
+# constant — it's just where the goalie actually is, fed in as goalie_pos.
+#
+# The band cores/reaches are grounded, not fitted:
+#  · LOW  — legs/pads, WIDEST core (a set butterfly seals low) + small push,
+#           fast LEG reaction. Low corners open only past the pad, or off a slide.
+#  · HIGH — glove/blocker, NARROWEST core (held up they leave the top corners)
+#           but the longest reach (out to 0.85 m ≈ glove_max_x_outward) on a slow
+#           ARM reaction. In tight the glove can't extend → roof it; at range it
+#           gets there → top corners shut. This is the over-the-shoulder read.
+#  · MID  — torso/armpit seam, between the two.
+# Total HIGH reach (CORE+EXT = 0.85) mirrors the live goalie's glove_max_x_outward.
+const HOLE_BAND_CORE: Array[float] = [0.60, 0.50, 0.40]   # [LOW, MID, HIGH] half-width, always covered
+const HOLE_BAND_EXT: Array[float] = [0.15, 0.20, 0.45]    # reaction-gated extension to the placement
+const HOLE_BAND_DELAY: Array[float] = [                    # per-band reaction delay (legs fast, arms slow)
+		GameRules.DEFAULT_GOALIE_REACTION_DELAY_S,        # LOW  — legs, 0.13
+		0.15,                                             # MID  — torso, between legs and arms
+		GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S,    # HIGH — glove/blocker, 0.18
+]
+const HOLE_BAND_LOFT: Array[int] = [                       # loft the band's hole is shot with
+		ShotMechanics.ELEVATION_FLAT,   # LOW  → flat
+		ShotMechanics.ELEVATION_LOW,    # MID  → medium (saucer height, under a raised arm)
+		ShotMechanics.ELEVATION_HIGH,   # HIGH → roof it
+]
+const GOALIE_ARM_DEPLOY_S: float = 0.20   # reaction ramp width — time to extend to the placement
 
-# Goalie position prediction. Replaces velocity-extrapolation with a
-# react-then-slide model: react delay first, then move toward the
-# puck-at-release X at max lateral speed.
-#
-# GOALIE_REACTION_DELAY_S and GOALIE_MAX_LATERAL_SPEED_MPS both
-# reference GameRules so the AI prediction stays in lockstep with
-# the live goalie. Lateral speed mirrors GoalieController.t_push_speed
-# specifically — that's the goalie's real translation speed when
-# committing to a slide (lateral_threshold = 0.3 m). NOT
-# tracking_speed (the mental-target lerp speed, not body movement)
-# and NOT shuffle_speed (small adjustments, not a recovery slide).
+# Loft choice prefers the LOWEST-risk shot among comparable openings: a flat shot
+# is easier to execute than roofing it (you can sail a high shot over the bar). So
+# best_shot_loft takes the flattest hole whose opening is within this fraction of
+# the widest — only committing to a roof when the top corner is meaningfully the
+# only way in. (The SCORE is still the widest opening; this only picks the loft.)
+const LOFT_TIE_FRAC: float = 0.85
+const HOLE_BAND_LOW: int = 0
+const HOLE_BAND_MID: int = 1
+const HOLE_BAND_HIGH: int = 2
+
+# Hole kinds (how the opening is measured — see _hole_open_angle).
+const HOLE_KIND_CORNER: int = 0   # net-relative post; opening = net cleared past the cover edge
+const HOLE_KIND_FIVE: int = 1     # goalie-relative low-centre gap; opens when he's UNSETTLED
+const HOLE_KIND_ARMPIT: int = 2   # goalie-relative body-side seam; MID band, capped narrow
+
+# The seven holes as parallel arrays (indexed 0..6, no per-call allocation).
+const HOLE_KIND: Array[int] = [
+		HOLE_KIND_CORNER, HOLE_KIND_CORNER,   # 1,2 top corners
+		HOLE_KIND_CORNER, HOLE_KIND_CORNER,   # 3,4 bottom corners
+		HOLE_KIND_FIVE,                       # 5   five-hole
+		HOLE_KIND_ARMPIT, HOLE_KIND_ARMPIT,   # 6,7 armpits
+]
+const HOLE_SIDE: Array[int] = [-1, 1, -1, 1, 0, -1, 1]   # net/goalie side; 0 = centred
+const HOLE_BAND: Array[int] = [
+		HOLE_BAND_HIGH, HOLE_BAND_HIGH,
+		HOLE_BAND_LOW, HOLE_BAND_LOW,
+		HOLE_BAND_LOW,
+		HOLE_BAND_MID, HOLE_BAND_MID,
+]
+const HOLE_COUNT: int = 7
+
+# The body-side seam sits this far off the goalie's centre (just outside the
+# torso). The armpit is the medium-loft option that opens in tight when the arm
+# hasn't filled the seam; capped narrow so it never out-scores a real corner.
+const ARMPIT_OFFSET_M: float = 0.58
+
+# Five-hole: a set goalie seals it (FIVE_BASE ≈ 0), it opens as he's caught
+# moving (the goalie_unsettled_factor). FIVE_MAX_ANGLE is the opening (radians) a
+# fully-splayed goalie leaks between the legs; only counts on a roughly head-on
+# look (centrality falls off past FIVE_CENTER_REF metres of lateral offset — you
+# can't thread the legs from the wall).
+const FIVE_BASE: float = 0.0
+const FIVE_MAX_ANGLE: float = 0.14
+const FIVE_CENTER_REF_M: float = 1.6
+
+# Danger gain: converts the best hole's open angle (radians) into the game's
+# shot-value currency — the ONE feel scalar left. Set so a clean cross-seam
+# one-timer lands ~0.7 and a gaping backdoor net saturates to 1.0.
+const SHOT_DANGER_GAIN: float = 3.0
+
+# Goalie position prediction. React-then-slide: react delay first, then move
+# toward the puck-at-release X at max lateral speed. GOALIE_REACTION_DELAY_S and
+# GOALIE_MAX_LATERAL_SPEED_MPS reference GameRules so the prediction stays in
+# lockstep with the live goalie (lateral speed = GoalieController.t_push_speed).
 const GOALIE_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 const GOALIE_MAX_LATERAL_SPEED_MPS: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
 
-# Shadow half-width used by AIShotAim.compute_open_net_aim for the
-# lane-check aim point. Independent of the new coverage model — it
-# just picks an aim point past the goalie for the segment check.
+# Shadow half-width used by AIShotAim.compute_open_net_aim for the lane-check
+# aim point — picks a point past the goalie for the lane segment check.
 const GOALIE_SHADOW_HALF_M: float = 0.3
 
-# ── Goalie-in-motion penalty (reward forcing the goalie to move) ──────────────
-# The squareness term models the goalie's POSITION at release but not its
-# degraded SAVE while still recovering. The real goalie reads the shot late when
-# caught moving / unset (GoalieController + goalie_behavior_rules) — a weakness
-# the position-only model misses, so the AI under-rates plays that keep the
-# goalie sliding (cross-seam one-timers especially, where the goalie can't
-# re-square inside the pass flight). goalie_unsettled() ramps 0→1 with how
-# mid-slide / just-arrived the predicted goalie is, and score_shoot scales
-# coverage down by GOALIE_MOTION_PENALTY × unsettled — so a shot that catches the
-# goalie moving rates higher, exactly as it does in real play. This imports the
-# goalie's EXISTING weakness into the bot's model; it does not change the goalie.
-#
-# Tuning: PENALTY up → bots hunt moving-goalie looks (cross-seam one-timers)
-# harder; down → closer to the old position-only model (0.0 = identical).
-# SETTLE_REF_S is how long the goalie must sit stopped at its target before the
-# model treats it as fully re-set — longer keeps motion credit alive briefly
-# after the slide, rewarding a quick follow-up.
-const GOALIE_MOTION_PENALTY: float = 0.6
+# goalie_unsettled() settle reference: how long the goalie must sit stopped at
+# its target before the model treats it as fully re-set. A recovering goalie
+# reads the shot late, so score_shoot cuts his glove/blocker reaction by the
+# unsettled fraction (he can't deploy the arms in time) — an off-angle
+# one-timer that leaves him mid-slide beats him more.
 const GOALIE_SETTLE_REF_S: float = 0.20
-
-# Goalie pressure zone — narrow rectangle in front of the goalie's
-# CURRENT (squared-to-puck) position. Penalizes score_shoot when the
-# shooter sits inside it. Models the hockey intuition that shooting
-# from where the goalie is currently set up is hard; extending the
-# goalie laterally with a pass, or backing off the line, creates a
-# better chance.
-#
-# Anchored on the goalie's CURRENT position (not the predicted-at-
-# release one) so a back-door receiver — off-axis from the carrier's
-# lane, which is what the goalie is currently squared to — sits
-# outside the zone and isn't penalized. A carrier driving on-axis
-# toward net is in the same goalie's pressure line → inside zone.
-#
-# Half-width 1 m × depth 3.5 m: covers roughly stick-reach laterally
-# and the close-shot range in depth. Slot (5 m from goal ≈ 4.35 m
-# from goalie) sits just outside the depth, so slot shots aren't
-# penalized; only "drove past slot" carries land in the zone.
-const GOALIE_ZONE_HALF_WIDTH_M: float = 1.0
-const GOALIE_ZONE_DEPTH_M: float = 3.5
-const GOALIE_ZONE_MAX_PENALTY: float = 0.8
 
 # ── Lane interception: closest-approach reachability model ───────────────────
 # A fired puck (shot or pass) travels the straight segment from→to at
@@ -398,144 +413,253 @@ const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
 const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
 
 
-# Returns SHOOT score in [0, 1] using the two-angle coverage model:
-#
-#   shot_quality = dist_response × shot_angle_factor × (1 - coverage)
-#   coverage     = BASE_COVERAGE × squareness
-#   squareness   = max(0, 1 - arc_offset / SQUARENESS_OFFSET_RAD)
-#
-#   dist_response     = monotone quadratic from goal (1.0 at goal mouth, 0.0 at SHOT_RANGE_FALLOFF_M)
-#   shot_angle_factor = 1 - (shot_angle / (PI / 2))²                   (quadratic)
-#   puck_arc_angle    = atan2(shooter.x - goal.x, abs(shooter.z - goal.z))
-#   goalie_arc_angle  = atan2(goalie_at_release.x - goal.x, ...)
-#   arc_offset        = |puck_arc_angle - goalie_arc_angle|
-#
-# `predicted_goalie_pos` is the goalie's predicted position at shot
-# release (use `predict_goalie_pos` to compute). The squareness term
-# makes shots that catch the goalie sliding (cross-seam, late
-# rotation) score above the BASE_COVERAGE penalty — automatic
-# discount for "open net" plays without a separate heuristic.
-#
-# Final score also multiplies by lane clearance and inverse pressure
-# (unchanged from prior implementation).
+# Geometric shot danger in [0, 1]: the best of the seven goalie holes, seen from
+# the shooter's eye, with the goalie a body that occludes part of the net.
+# Distance, angle, squareness, and reaction all emerge from the geometry — no
+# curves. Each hole is scored by _hole_open_angle (its opening in radians); the
+# danger is the widest opening × SHOT_DANGER_GAIN. best_shot_loft returns the
+# same winner's elevation class so the shot's loft matches where it's aimed.
+# He FREEZES on the shot, so reaction is body-part REACH to the placement, not a
+# slide; a longer flight buys the reach, an unsettled goalie loses it.
+static func open_net_danger(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0) -> float:
+	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
+	# Best of the seven holes. Pure value-type math, no allocation — safe to run
+	# per carry candidate at tick rate (see _hole_open_angle).
+	var best_angle: float = 0.0
+	for i: int in HOLE_COUNT:
+		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
+				net_half_width, flight, goalie_unsettled_factor)
+		if a > best_angle:
+			best_angle = a
+	return clampf(best_angle * SHOT_DANGER_GAIN, 0.0, 1.0)
+
+
+# The LOFT the bot should shoot with, from the same seven-hole geometry that
+# open_net_danger scores: the elevation class of the CHOSEN hole (see
+# _choose_shot_hole). A slot shot whose only opening is over the shoulder returns
+# HIGH; a five-hole off a caught-moving goalie returns FLAT; a body-side seam
+# returns LOW. Called once when SHOOT commits, so the re-scan is free.
+static func best_shot_loft(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0) -> int:
+	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
+	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
+			net_half_width, flight, goalie_unsettled_factor)
+	if hole < 0:
+		return ShotMechanics.ELEVATION_FLAT
+	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
+
+
+# The world aim POINT (on the net plane, y = 0) of the CHOSEN hole — the exact
+# target the loft was picked for, so aim and loft always describe the same hole.
+# The state machine locks this as the wrister aim at charge start. Falls back to
+# the goal centre if the goalie leaves nothing (defensive — SHOOT only commits
+# when there's an opening).
+static func best_shot_aim(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0) -> Vector3:
+	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
+	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
+			net_half_width, flight, goalie_unsettled_factor)
+	if hole < 0:
+		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
+	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
+			net_half_width, flight, goalie_unsettled_factor)
+	return Vector3(aim_x, 0.0, attacking_goal.z)
+
+
+# Picks the shot hole the bot commits to: the widest opening, then tie-broken
+# toward the FLATTEST loft within LOFT_TIE_FRAC of it (bury it low if you can,
+# roof it only when the top corner is the real way in), and within that flattest
+# tier the widest opening. Returns the hole index, or -1 if nothing is open. One
+# chooser shared by best_shot_loft and best_shot_aim so they never disagree.
+static func _choose_shot_hole(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, flight: float, unsettled: float) -> int:
+	var best_angle: float = 0.0
+	for i: int in HOLE_COUNT:
+		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
+				net_half_width, flight, unsettled)
+		if a > best_angle:
+			best_angle = a
+	if best_angle <= 0.0:
+		return -1
+	var threshold: float = best_angle * LOFT_TIE_FRAC
+	var chosen: int = -1
+	var chosen_loft: int = ShotMechanics.ELEVATION_HIGH + 1
+	var chosen_angle: float = 0.0
+	for i: int in HOLE_COUNT:
+		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
+				net_half_width, flight, unsettled)
+		if a < threshold:
+			continue
+		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
+		if band_loft < chosen_loft or (band_loft == chosen_loft and a > chosen_angle):
+			chosen_loft = band_loft
+			chosen_angle = a
+			chosen = i
+	return chosen
+
+
+# The net-plane aim x for a chosen hole. Corners aim at the open segment's
+# midpoint biased toward the post (matching AIShotAim's tuned corner bias); the
+# five-hole aims at the goalie's centre (between the legs); an armpit aims at the
+# body-side seam. Reuses the same shadow projection as _hole_open_angle.
+static func _hole_aim_x(
+		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, flight: float, unsettled: float) -> float:
+	var kind: int = HOLE_KIND[i]
+	var side: int = HOLE_SIDE[i]
+	var net_z: float = attacking_goal.z
+	var post_lo_x: float = attacking_goal.x - net_half_width
+	var post_hi_x: float = attacking_goal.x + net_half_width
+
+	if kind == HOLE_KIND_FIVE:
+		return clampf(_shadow_x(shooter, goalie_pos.x, goalie_pos.z, net_z),
+				post_lo_x, post_hi_x)
+	if kind == HOLE_KIND_ARMPIT:
+		return clampf(
+				_shadow_x(shooter, goalie_pos.x + side * ARMPIT_OFFSET_M,
+						goalie_pos.z, net_z),
+				post_lo_x, post_hi_x)
+
+	# Corner: aim at the open segment [post ↔ cover edge] on the hole's side,
+	# midpoint biased toward the post.
+	var band: int = HOLE_BAND[i]
+	var reaction: float = clampf(
+			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
+	reaction *= 1.0 - clampf(unsettled, 0.0, 1.0)
+	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
+	if side < 0:
+		var cov_lo_x: float = clampf(
+				_shadow_x(shooter, goalie_pos.x - cover, goalie_pos.z, net_z),
+				post_lo_x, post_hi_x)
+		var mid_lo: float = (post_lo_x + cov_lo_x) * 0.5
+		return lerpf(mid_lo, post_lo_x, AIShotAim.DEFAULT_CORNER_BIAS)
+	var cov_hi_x: float = clampf(
+			_shadow_x(shooter, goalie_pos.x + cover, goalie_pos.z, net_z),
+			post_lo_x, post_hi_x)
+	var mid_hi: float = (cov_hi_x + post_hi_x) * 0.5
+	return lerpf(mid_hi, post_hi_x, AIShotAim.DEFAULT_CORNER_BIAS)
+
+
+# Projects a point (px at depth pz) onto the net plane (z = net_z) along the
+# sightline from the shooter — the point's "shadow" on the net. Working every
+# opening on the net plane in one frame is what keeps the geometry honest at
+# sharp angles: a wide-angle shooter foreshortens the net AND stretches the
+# goalie's shadow across it, both of which shrink the real opening.
+static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> float:
+	var dz: float = pz - shooter.z
+	if absf(dz) < 0.000001:
+		return px
+	return shooter.x + (net_z - shooter.z) / dz * (px - shooter.x)
+
+
+# Open angle (radians, from the shooter's eye) of hole `i` — 0 if the goalie
+# covers it. Corners measure the net cleared past the reaction-gated cover edge;
+# the five-hole is a central gap that opens with the goalie's unsettle; armpits
+# are a narrow body-side seam. All openings are computed on the net plane so
+# foreshortening is automatic.
+static func _hole_open_angle(
+		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, flight: float, unsettled: float) -> float:
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
+	if forward < 0.001:
+		return 0.0  # on/behind the goal line — no shot in
+	var kind: int = HOLE_KIND[i]
+	var side: int = HOLE_SIDE[i]
+
+	if kind == HOLE_KIND_FIVE:
+		# Between-the-legs gap: a set goalie seals it, a caught-moving one leaks
+		# it. Only a roughly head-on look can thread the legs.
+		var centrality: float = clampf(
+				1.0 - absf(shooter.x - goalie_pos.x) / FIVE_CENTER_REF_M, 0.0, 1.0)
+		return FIVE_MAX_ANGLE * clampf(FIVE_BASE + unsettled, 0.0, 1.0) * centrality
+
+	var band: int = HOLE_BAND[i]
+	var reaction: float = clampf(
+			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
+	reaction *= 1.0 - clampf(unsettled, 0.0, 1.0)
+	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
+
+	# Net posts and the goalie's cover edges, all as bearings on the net plane.
+	var net_z: float = attacking_goal.z
+	var post_lo_x: float = attacking_goal.x - net_half_width
+	var post_hi_x: float = attacking_goal.x + net_half_width
+	var net_lo: float = atan2(post_lo_x - shooter.x, forward)
+	var net_hi: float = atan2(post_hi_x - shooter.x, forward)
+	var cov_lo_x: float = clampf(
+			_shadow_x(shooter, goalie_pos.x - cover, goalie_pos.z, net_z),
+			post_lo_x, post_hi_x)
+	var cov_hi_x: float = clampf(
+			_shadow_x(shooter, goalie_pos.x + cover, goalie_pos.z, net_z),
+			post_lo_x, post_hi_x)
+	var covb_lo: float = atan2(cov_lo_x - shooter.x, forward)
+	var covb_hi: float = atan2(cov_hi_x - shooter.x, forward)
+
+	var openv: float
+	if side < 0:
+		openv = maxf(0.0, minf(covb_lo, net_hi) - net_lo)     # left post → cover's left edge
+	else:
+		openv = maxf(0.0, net_hi - maxf(covb_hi, net_lo))     # cover's right edge → right post
+
+	if kind == HOLE_KIND_ARMPIT:
+		# Cap to the seam between the body core edge and the armpit target, so the
+		# body-side hole stays a narrow medium-loft option, not a stand-in corner.
+		var seam_x: float = clampf(
+				_shadow_x(shooter, goalie_pos.x + side * ARMPIT_OFFSET_M,
+						goalie_pos.z, net_z),
+				post_lo_x, post_hi_x)
+		var seam_b: float = atan2(seam_x - shooter.x, forward)
+		var edge_b: float = covb_hi if side > 0 else covb_lo
+		openv = minf(openv, absf(seam_b - edge_b))
+	return openv
+
+
+# Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance
+# × forward-cone pressure. `predicted_goalie_pos` is the goalie at shot release
+# (use `predict_goalie_pos`); the seven-hole geometry handles "too close" on its
+# own. `shot_speed_m_s` sets the flight time (goalie reaction) and the lane math;
+# `goalie_unsettled_factor` cuts his reaction (a mid-slide goalie reads the shot
+# late).
 static func score_shoot(
 		shooter: Vector3,
 		attacking_goal: Vector3,
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
 		opponents: Array[Vector3],
-		goalie_current_pos: Vector3 = Vector3.INF,
 		shot_speed_m_s: float = WRISTER_SHOT_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0) -> float:
-	# Hard gate: shooter past (or on) the attacking goal line can't
-	# shoot in — wraparound territory, returns 0 immediately.
-	var net_normal_z: float = -signf(attacking_goal.z)
-	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
-	if forward < 0.001:
+	var shot_quality: float = open_net_danger(
+			shooter, attacking_goal, predicted_goalie_pos, net_half_width,
+			shot_speed_m_s, goalie_unsettled_factor)
+	if shot_quality <= 0.0:
 		return 0.0
-
-	# Distance response — monotone quadratic falloff from goal. 1.0 at
-	# the goal mouth, 0.0 at SHOT_RANGE_FALLOFF_M (= attacking blue
-	# line). The "no peak" model relies on two other mechanics to stop
-	# bots from grinding into the crease:
-	#   1. The goalie pressure zone penalty (further down) discounts
-	#      shots from inside the goalie's setup line — that's the
-	#      authoritative "too close" signal.
-	#   2. The carrier scorer (carrier.gd) projects the shooter forward
-	#      by velocity × charge_lookahead before scoring, so a moving
-	#      bot scores its release-pos rather than current pos. This
-	#      lifts in-motion-toward-slot scores naturally.
-	var dist: float = shooter.distance_to(attacking_goal)
-	var dist_norm: float = clampf(dist / SHOT_RANGE_FALLOFF_M, 0.0, 1.0)
-	var dist_response: float = 1.0 - dist_norm * dist_norm
-
-	# Puck arc angle: atan2 of lateral offset over forward distance.
-	# Range [-PI/2, +PI/2] given the forward gate above.
-	#
-	# Quadratic-soften (1 - x²) instead of linear (1 - x): a human reads
-	# slightly off-center as still a great shot — at 30° off-center the
-	# linear curve gave 0.67, quadratic gives 0.89. Truly bad-angle
-	# shots (>= 75°) still fall to ≤ 0.31 so the bot doesn't shoot
-	# from the corners. Ease the curve toward `1 - 0.7 × x²` if bots
-	# start firing wide-angle pucks from distance.
-	var puck_arc_angle: float = atan2(shooter.x - attacking_goal.x, forward)
-	var shot_angle: float = absf(puck_arc_angle)
-	var arc_norm: float = clampf(shot_angle / (PI * 0.5), 0.0, 1.0)
-	var shot_angle_factor: float = 1.0 - arc_norm * arc_norm
-
-	# Goalie arc angle at release. If the goalie ended up behind their
-	# own goal line (degenerate edge — shouldn't happen in normal play),
-	# treat as squared at center.
-	var goalie_forward: float = (predicted_goalie_pos.z - attacking_goal.z) * net_normal_z
-	var goalie_arc_angle: float
-	if goalie_forward < 0.001:
-		goalie_arc_angle = 0.0
-	else:
-		goalie_arc_angle = atan2(predicted_goalie_pos.x - attacking_goal.x, goalie_forward)
-
-	var arc_offset: float = absf(puck_arc_angle - goalie_arc_angle)
-	var squareness: float = maxf(0.0, 1.0 - arc_offset / SQUARENESS_OFFSET_RAD)
-	# Reaction-time coverage cap (see the doc above BASE_COVERAGE): the
-	# longer this shot's flight gives the goalie past its reaction delay,
-	# the more of the net a set goalie takes away. Point-blank shots
-	# (flight <= reaction) keep the BASE_COVERAGE floor.
-	var flight_time: float = dist / maxf(shot_speed_m_s, 1.0)
-	var goalie_readiness: float = clampf(
-			(flight_time - GOALIE_REACTION_DELAY_S) / GOALIE_SET_SAVE_WINDOW_S,
-			0.0, 1.0)
-	var coverage_cap: float = lerpf(
-			BASE_COVERAGE, GOALIE_SET_COVERAGE_MAX, goalie_readiness)
-	# A goalie caught mid-slide / just-arrived saves worse than a set one even at
-	# the same angle (reads the shot late) — scale coverage down by how unsettled
-	# it is. Default 0.0 leaves the position-only model untouched for callers that
-	# don't pass it (existing tests, off-puck role scoring).
-	var coverage: float = (coverage_cap * squareness
-			* (1.0 - GOALIE_MOTION_PENALTY * goalie_unsettled_factor))
-	var shot_quality: float = dist_response * shot_angle_factor * (1.0 - coverage)
-
-	# Lane clear vs the actual aim point ShotAim would pick (past the
-	# goalie's shadow). Defenders close to the shooter (low t along
-	# the shot path) have little reaction time and barely contribute;
-	# defenders mid-line have full intercept weight. Shots travel fast
-	# enough (~30 m/s) that even mid-line defenders only marginally
-	# block — `lane_clear` does the per-defender reaction-window math.
+	# Lane clear vs the aim point ShotAim picks (past the goalie's shadow) —
+	# defenders on the shot line reduce it via the reaction-window model.
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			shooter, predicted_goalie_pos, attacking_goal.z,
 			net_half_width, GOALIE_SHADOW_HALF_M)
 	var lane: float = lane_clear(shooter, aim, opponents, shot_speed_m_s)
-
-	# Directional pressure: only opponents in the forward cone toward
-	# the attacking goal disrupt the shot. Behind/beside ones don't
-	# really stop the release — the threat is bodies between us and
-	# the net.
+	# Forward-cone pressure: bodies between the shooter and the net screen/block
+	# the release (beside/behind don't).
 	var pressure_factor: float = 1.0 - _pressure(shooter, opponents, attacking_goal - shooter)
-
-	# Goalie pressure zone — when the caller provides the goalie's
-	# CURRENT position (squared to the puck holder), penalize shots
-	# from inside the goalie's narrow forward zone. Default sentinel
-	# (Vector3.INF) skips this for backward compat.
-	var goalie_zone_factor: float = 1.0
-	if goalie_current_pos.is_finite():
-		goalie_zone_factor = 1.0 - goalie_zone_penalty(shooter, goalie_current_pos)
-
-	return shot_quality * lane * pressure_factor * goalie_zone_factor
+	return shot_quality * lane * pressure_factor
 
 
-# Quick-shot variant of score_shoot. Identical scoring shape, two
-# parameter swaps:
-#   - predicted_goalie_pos = goalie_now (no charge window means the
-#     goalie has zero reaction time to slide before the puck is gone)
-#   - shot_speed = PASS_SPEED_M_S (quick-shot release speed)
-#
-# Most of the quick-shot's tactical signature falls out of the speed
-# swap inside lane_clear: slower puck → more reaction time for
-# defenders → lanes naturally close at longer range. There's no
-# explicit distance cutoff because the lane math already prices it.
-# Reward for catching a still-squared goalie comes from squareness
-# being measured against the current goalie position (no slide), so
-# arc_offset is small and coverage stays high — unless the bot is
-# off-axis, in which case the still-squared goalie is exposed to
-# them and the score goes up.
+# Quick-shot variant of score_shoot. Two parameter swaps:
+#   - predicted_goalie_pos = goalie_now (no charge window → the goalie hasn't
+#     slid; the geometry sees him where he actually is, still squared to the
+#     carrier, so an off-axis quick shot finds open net past him)
+#   - shot_speed = PASS_SPEED_M_S (quick-shot release speed → shorter flight
+#     gives the goalie even less glove/blocker reaction; slower puck also
+#     closes lanes at range via lane_clear)
 static func score_quick_shot(
 		shooter: Vector3,
 		attacking_goal: Vector3,
@@ -543,28 +667,7 @@ static func score_quick_shot(
 		net_half_width: float,
 		opponents: Array[Vector3]) -> float:
 	return score_shoot(shooter, attacking_goal, goalie_now,
-			net_half_width, opponents, goalie_now, PASS_SPEED_M_S)
-
-
-# Penalty in [0, GOALIE_ZONE_MAX_PENALTY] for a shooter sitting
-# inside the goalie's pressure zone — narrow rectangle anchored on
-# the goalie's CURRENT position, extending toward mid-ice. 0 outside
-# the zone; peaks at the goalie's own position; ramps to 0 at the
-# zone edges. Callers multiply (1 - this) into score_shoot.
-static func goalie_zone_penalty(shooter: Vector3,
-		goalie_current_pos: Vector3) -> float:
-	# Forward direction from goalie toward mid-ice (away from goal
-	# line). For Team 0 defending +Z, goalie at +z, forward is -Z.
-	var forward_sign: float = -signf(goalie_current_pos.z)
-	var forward_component: float = (shooter.z - goalie_current_pos.z) * forward_sign
-	if forward_component <= 0.0 or forward_component >= GOALIE_ZONE_DEPTH_M:
-		return 0.0
-	var lateral: float = absf(shooter.x - goalie_current_pos.x)
-	if lateral >= GOALIE_ZONE_HALF_WIDTH_M:
-		return 0.0
-	var depth_factor: float = 1.0 - forward_component / GOALIE_ZONE_DEPTH_M
-	var lateral_factor: float = 1.0 - lateral / GOALIE_ZONE_HALF_WIDTH_M
-	return GOALIE_ZONE_MAX_PENALTY * depth_factor * lateral_factor
+			net_half_width, opponents, PASS_SPEED_M_S)
 
 
 # Predicts the goalie's position at a future moment (shot release).
@@ -617,9 +720,10 @@ static func predict_goalie_pos(
 #   0 = set and square (already at its arc-match target, no forced motion)
 #   1 = still sliding (positionally behind) or only just arrived — reading late
 # Same react-then-slide kinematics as predict_goalie_pos, so the predicted
-# position and this motion estimate agree. score_shoot folds it into coverage
-# (see GOALIE_MOTION_PENALTY). A fast cross-seam one-timer leaves the goalie
-# mid-slide → near 1; a static shot at a set goalie → 0.
+# position and this motion estimate agree. score_shoot cuts the goalie's
+# glove/blocker reaction by this fraction (a recovering goalie reads the shot
+# late). A fast cross-seam one-timer leaves the goalie mid-slide → near 1; a
+# static shot at a set goalie → 0.
 static func goalie_unsettled(
 		goalie_now: Vector3,
 		attacking_goal: Vector3,
@@ -665,7 +769,6 @@ static func score_pass(
 		predicted_goalie_pos: Vector3,
 		net_half_width: float,
 		opponents: Array[Vector3],
-		goalie_current_pos: Vector3 = Vector3.INF,
 		pass_speed_m_s: float = PASS_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
@@ -683,11 +786,6 @@ static func score_pass(
 	# Receiver's value as a shooter from where they are. Caller is
 	# responsible for predicting the goalie at the receiver's release
 	# time (flight + receiver wrister charge) — see predict_goalie_pos.
-	# goalie_current_pos threads through so the goalie pressure zone
-	# (anchored on the goalie's CURRENT position, squared to the
-	# carrier/puck holder) applies correctly for back-door receivers:
-	# they're off-axis from the carrier's lane → outside zone → no
-	# penalty, preserving back-door as a strong pass option.
 	# goalie_unsettled_factor lets the caller credit a feed that catches the
 	# goalie mid-slide (a cross-seam one-timer to an off-axis receiver) — the
 	# off-puck staging roles pass it so they prize the back-door spot. Default
@@ -695,7 +793,7 @@ static func score_pass(
 	# Receiver shot speed stays the league default (cross-player; no teammate caps).
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
-			goalie_current_pos, WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor)
+			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor)
 	return lane * receiver_shot
 
 
@@ -997,7 +1095,9 @@ static func lane_loss_point(from: Vector3, to: Vector3,
 #
 #   closeness    = 1 at slot, ramps to 0 at goal mouth (inside) and
 #                  to 0 at the rink length (outside).
-#   shot_angle   = 1 - shot_angle / (PI/2)          (linear, 0 at 90° wide)
+#   angle_factor = the goal mouth's projected width from this bearing
+#                  (cos of the angle off the goal normal = forward/dist);
+#                  1 head-on, 0 along the goal line — real foreshortening.
 #   openness     = 1 - skater_pressure (forward-cone, distance-weighted)
 #
 # Used by `_score_at` only when the evaluator is OUTSIDE shooting
@@ -1028,8 +1128,14 @@ static func position_potential(
 		closeness = clampf(
 				1.0 - (dist - SLOT_RADIUS_M) / (rink_length - SLOT_RADIUS_M),
 				0.0, 1.0)
-	var shot_angle: float = absf(atan2(pos.x - attacking_goal.x, forward))
-	var angle_factor: float = clampf(1.0 - shot_angle / (PI * 0.5), 0.0, 1.0)
+	# Angle quality = the goal mouth's PROJECTED width from this bearing. A goal
+	# viewed off its face-normal presents cos(θ) of its width (a door seen at an
+	# angle), and cos(θ) = forward / horizontal_distance — the real foreshortening,
+	# not a hand-picked taper. 1 head-on, → 0 along the goal line. Same projection
+	# geometry the seven-hole shot model reasons in.
+	var lateral: float = pos.x - attacking_goal.x
+	var horiz_dist: float = sqrt(forward * forward + lateral * lateral)
+	var angle_factor: float = forward / horiz_dist
 	var openness: float = 1.0 - _pressure(pos, opponents, attacking_goal - pos)
 	return closeness * angle_factor * openness
 
@@ -1108,7 +1214,7 @@ static func threat_surface_pass(
 	var pass_speed: float = expected_pass_speed(carrier_pos, receiver_pos)
 	var pass_score: float = score_pass(
 			carrier_pos, receiver_pos, our_net, our_goalie_pos,
-			net_half_width, defenders, Vector3.INF, pass_speed)
+			net_half_width, defenders, pass_speed)
 	var lane: float = lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
 	var positional: float = position_potential(receiver_pos, our_net, defenders)
 	return maxf(pass_score, lane * positional)
@@ -1189,27 +1295,7 @@ static func pass_miss_loss_point(from: Vector3, receiver: Vector3) -> Vector3:
 	return Vector3(receiver.x + dx * inv, 0.0, receiver.z + dz * inv)
 
 
-# Omnidirectional poke-threat penalty for CARRY destinations. Returns
-# a multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0]: full safety (1.0)
-# when no opponent's body is within CARRY_POKE_SAFE_RADIUS_M of the
-# carrier's PUCK position, clamped to the floor when an opponent is
-# inside the inner danger radius, linear ramp in between.
-#
-# Layered ON TOP of `score_shoot` / `position_potential`, both of
-# which already penalize defenders — but those use a FORWARD-CONE
-# pressure (defenders behind/beside don't matter for a shot lane).
-# For possession protection, a defender at ANY angle within stick
-# reach of the puck is a poke threat. This penalty captures that
-# gap so carriers pick destinations that are safe to BE AT, not just
-# safe to shoot from.
-#
-# Caller passes the projected PUCK position (carrier body + carry-arm
-# offset toward attacking goal) and projected opponent body positions
-# at the candidate's arrival time. Measuring opp-body → our-puck
-# (rather than body-to-body) captures the asymmetry that a defender
-# in FRONT of the carrier is much more dangerous than one BEHIND,
-# at the same body-to-body distance — because the puck rides forward.
-#
+# ── Possession safety (poke-threat) — physical constants ─────────────────────
 # Radii are derived from the physical poke geometry:
 #   DANGER = STICK_REACH + POKE_RADIUS — opp body this close to our
 #     puck and their stick CAN reach it.
@@ -1227,108 +1313,104 @@ const CARRY_POKE_SAFE_RADIUS_M: float = (
 # with equal shot quality — committed offensive plays still fire,
 # defensive carry candidates still get a real penalty.
 const CARRY_POKE_SAFETY_FLOOR: float = 0.35
+# How far a BEHIND defender must reach around the carrier's body to touch the
+# puck — a physical body-width added to their effective distance. A poke from
+# the defensive side is screened by the carrier, so a backside checker reads as
+# less of a threat than one in front (a discount, not a wall). Grounded in body
+# geometry, not a tuned weight.
+const BODY_SHIELD_M: float = 0.7
+# Reaction window (s) for reading the safety of a STATIC puck spot (a hold, or
+# a carry DESTINATION): how far ahead we look for a closing defender to reach
+# poke range. Long enough that a converging pincer registers before it arrives,
+# short enough that a distant skater isn't a threat yet. A MOVING carry read
+# passes the arrival time instead.
+const SAFETY_WINDOW_S: float = 0.5
 
-static func carry_poke_safety(puck_pos: Vector3, projected_opponents: Array[Vector3]) -> float:
-	var nearest_sq: float = INF
-	for p: Vector3 in projected_opponents:
-		var dx: float = p.x - puck_pos.x
-		var dz: float = p.z - puck_pos.z
-		var d_sq: float = dx * dx + dz * dz
-		if d_sq < nearest_sq:
-			nearest_sq = d_sq
-	if nearest_sq == INF:
+
+# Maps a defender's closest-approach distance to the puck (already body-shield
+# adjusted) to a safety multiplier: FLOOR at/inside the danger radius (stick
+# CAN reach), 1.0 at/outside the safe radius (time to move clear), linear in
+# between. One definition shared by every safety read.
+static func reach_to_safety(reach_dist: float) -> float:
+	if reach_dist >= CARRY_POKE_SAFE_RADIUS_M:
 		return 1.0
-	var d: float = sqrt(nearest_sq)
-	if d >= CARRY_POKE_SAFE_RADIUS_M:
-		return 1.0
-	if d <= CARRY_POKE_DANGER_RADIUS_M:
+	if reach_dist <= CARRY_POKE_DANGER_RADIUS_M:
 		return CARRY_POKE_SAFETY_FLOOR
-	var t: float = (d - CARRY_POKE_DANGER_RADIUS_M) / (
+	var t: float = (reach_dist - CARRY_POKE_DANGER_RADIUS_M) / (
 			CARRY_POKE_SAFE_RADIUS_M - CARRY_POKE_DANGER_RADIUS_M)
 	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, t)
 
 
-# Time-synced interception penalty for CARRY destinations. Returns a
-# multiplier in [CARRY_POKE_SAFETY_FLOOR, 1.0] driven by the worst
-# (closest) defender intercept across the bot's projected path to
-# `candidate`. Unlike carry_poke_safety (which only checks the
-# destination) and path_clearance (which checks whether a projected
-# opponent STANDS on the line), this asks: as the bot skates along
-# its path over [0, local_time], does any defender's projected
-# position pass within poke range of the bot's position AT THE SAME
-# TIME?
+# Unified possession-safety model: how safe the puck is over a short window,
+# given where the defenders are AND where they're going. Replaces the old
+# split of carry_poke_safety (a static snapshot at a spot) and
+# carry_intercept_safety (convergence along a path) with ONE closest-approach:
 #
-# Modeling defender CONVERGENCE on the bot's route lets _best_carry
-# pick lateral candidates earlier — the body bends away from a
-# closing defender before they arrive, instead of driving toward
-# them and relying on the discrete deke at the last moment.
+#   puck(t) = lerp(puck_from, puck_to, t / window)      t in [0, window]
+#   def(t)  = opp + opp_vel * t                         (dead-reckoned)
+#   miss    = min over t of |def(t) - puck(t)|          (closest approach)
 #
-# Math: bot and defender both modeled as constant-velocity over
-# [0, local_time]. |B(t) - D(t)|² is quadratic in t; closest
-# approach has a closed form (perpendicular of relative motion).
-# Clamp t* to [0, local_time] so closest-approach OUTSIDE the
-# window (defender passes through after we've already arrived)
-# doesn't penalize.
+# A STATIC read (hold / carry destination) passes puck_from == puck_to with a
+# reaction window (SAFETY_WINDOW_S); a MOVING read (carry candidate) passes the
+# puck's start and end with the arrival time. Either way it's the defenders'
+# VELOCITY that surfaces a closing pincer — the bot "sees it coming" from the
+# motion, with no separate look-ahead term.
 #
-# Same radii / floor as carry_poke_safety — same poke geometry.
-# Caller responsibility: `opponents_current` and `opponents_at_arrival`
-# must be parallel arrays (i = same defender); a defender's velocity
-# is derived as (at_arrival - current) / local_time.
+# `forward` is the direction the puck is carried (toward the attacking goal). A
+# defender reaching the puck from BEHIND that line is screened by the carrier's
+# body (BODY_SHIELD_M added to its effective distance), so a backside checker
+# reads as less of a poke threat than one in front — the physical front/behind
+# asymmetry, modelled directly. Pass Vector3.ZERO to disable the shield.
 #
-# Edge cases:
-#   - local_time ≈ 0 → bot has no path. Caller should skip (use
-#     carry_poke_safety alone for stand-still candidates).
-#   - |delta_vel|² ≈ 0 (defender and bot moving parallel-and-same-
-#     speed) → t* clamps to 0, result is distance at t=0. Falls
-#     back to "do they start in poke range?" — correct, since a
-#     parallel-pace chase isn't a poke setup, it's a continuous
-#     threat.
-static func carry_intercept_safety(
-		self_pos: Vector3,
-		candidate: Vector3,
-		local_time: float,
-		opponents_current: Array[Vector3],
-		opponents_at_arrival: Array[Vector3]) -> float:
-	if local_time <= 0.0001:
+# Returns the WORST (min) per-defender safety in [FLOOR, 1.0]; 1.0 when there
+# are no defenders. `opponents` and `opponent_vels` must be parallel arrays.
+static func puck_safety(
+		puck_from: Vector3, puck_to: Vector3, window_s: float,
+		forward: Vector3,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> float:
+	var n: int = opponents.size()
+	if n == 0 or opponent_vels.size() != n:
 		return 1.0
-	var n: int = opponents_current.size()
-	if n == 0 or n != opponents_at_arrival.size():
-		return 1.0
-	var inv_t: float = 1.0 / local_time
-	var bot_vx: float = (candidate.x - self_pos.x) * inv_t
-	var bot_vz: float = (candidate.z - self_pos.z) * inv_t
-	var min_d: float = INF
+	var w: float = maxf(window_s, 0.0001)
+	var inv_w: float = 1.0 / w
+	var puck_vx: float = (puck_to.x - puck_from.x) * inv_w
+	var puck_vz: float = (puck_to.z - puck_from.z) * inv_w
+	var fwd_x: float = 0.0
+	var fwd_z: float = 0.0
+	var f_len: float = sqrt(forward.x * forward.x + forward.z * forward.z)
+	if f_len > 0.0001:
+		fwd_x = forward.x / f_len
+		fwd_z = forward.z / f_len
+	var worst: float = 1.0
 	for i: int in n:
-		var opp_now: Vector3 = opponents_current[i]
-		var opp_then: Vector3 = opponents_at_arrival[i]
-		var opp_vx: float = (opp_then.x - opp_now.x) * inv_t
-		var opp_vz: float = (opp_then.z - opp_now.z) * inv_t
-		var dp_x: float = opp_now.x - self_pos.x
-		var dp_z: float = opp_now.z - self_pos.z
-		var dv_x: float = opp_vx - bot_vx
-		var dv_z: float = opp_vz - bot_vz
+		var opp: Vector3 = opponents[i]
+		var vel: Vector3 = opponent_vels[i]
+		var dp_x: float = opp.x - puck_from.x
+		var dp_z: float = opp.z - puck_from.z
+		var dv_x: float = vel.x - puck_vx
+		var dv_z: float = vel.z - puck_vz
 		var dv_sq: float = dv_x * dv_x + dv_z * dv_z
 		var t_star: float
 		if dv_sq < 0.0001:
-			# Parallel-velocity case: relative motion is zero. Distance
-			# is constant across the window; pick t=0.
-			t_star = 0.0
+			t_star = 0.0  # parallel motion: distance constant, sample t=0
 		else:
-			t_star = clampf(
-					-(dp_x * dv_x + dp_z * dv_z) / dv_sq,
-					0.0, local_time)
-		var dx_at_t: float = dp_x + dv_x * t_star
-		var dz_at_t: float = dp_z + dv_z * t_star
-		var d: float = sqrt(dx_at_t * dx_at_t + dz_at_t * dz_at_t)
-		if d < min_d:
-			min_d = d
-	if min_d == INF or min_d >= CARRY_POKE_SAFE_RADIUS_M:
-		return 1.0
-	if min_d <= CARRY_POKE_DANGER_RADIUS_M:
-		return CARRY_POKE_SAFETY_FLOOR
-	var ramp_t: float = (min_d - CARRY_POKE_DANGER_RADIUS_M) / (
-			CARRY_POKE_SAFE_RADIUS_M - CARRY_POKE_DANGER_RADIUS_M)
-	return lerpf(CARRY_POKE_SAFETY_FLOOR, 1.0, ramp_t)
+			t_star = clampf(-(dp_x * dv_x + dp_z * dv_z) / dv_sq, 0.0, w)
+		# Relative position (def - puck) at closest approach.
+		var mx: float = dp_x + dv_x * t_star
+		var mz: float = dp_z + dv_z * t_star
+		var miss: float = sqrt(mx * mx + mz * mz)
+		# Body shield: a defender on the DEFENSIVE side of the puck (miss vector
+		# opposite forward) reaches past the carrier — add effective distance
+		# scaled by how directly behind it is.
+		if miss > 0.0001 and (fwd_x != 0.0 or fwd_z != 0.0):
+			var behind: float = -(mx * fwd_x + mz * fwd_z) / miss
+			if behind > 0.0:
+				miss += BODY_SHIELD_M * behind
+		var s: float = reach_to_safety(miss)
+		if s < worst:
+			worst = s
+	return worst
+
 
 
 # Defender reach for the CARRY-path check below — stick-blade reach plus

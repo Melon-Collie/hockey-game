@@ -49,3 +49,13 @@ var is_one_timer_ready: bool = false
 # agree even if a consumer ignores the flag.
 var commit_check: bool = false
 var check_target: Vector3 = Vector3.ZERO
+
+# Arrive AT SPEED instead of braking to a stop at `target_position`. Off-puck
+# roles normally opt into the arrival brake (station-keeping: stop on the
+# spot). A role that is pacing a MOVING waypoint sets this so the state
+# machine skips the arrival brake — otherwise the bot reads its advancing
+# target as a station it's about to overshoot and brakes, killing momentum.
+# Set by OUTLET when timing its entry to the carrier's rush so it hits the
+# blue line in stride rather than parked. (The body-level offside brake still
+# applies, so arriving at speed never carries the bot offside.)
+var arrive_at_speed: bool = false

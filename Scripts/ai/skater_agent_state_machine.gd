@@ -399,6 +399,13 @@ const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
 # slot mid-windup is worse than not shooting. The carry state can re-
 # evaluate next tick (probably picks PASS or stays in CARRY).
 const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
+# Committed speed (m/s) at charge start below which the wind-up PLANTS (brakes
+# in place) instead of steering to the projected release anchor. A near-still
+# bot has no release spot to skate to, so steering it anywhere just lets the
+# repulsion fields wander the body — the wind-up wobble. Above this it's a rush
+# wrister that should arrive at the locked anchor in stride. Mirrors the plant
+# that PASS_PRESSED already does from a held spot.
+const BOT_WRISTER_PLANT_SPEED_M_S: float = 1.5
 # Lookahead used to score a wrister at COMMIT time — total time
 # from the carrier picking SHOOT to the puck actually leaving the
 # blade. Two phases:
@@ -585,7 +592,7 @@ var _accel_by_peer: Dictionary = {}
 # `_carrier.decide(ctx)` every tick (the carrier internally
 # throttles re-evaluation at PICK_ACTION_PERIOD_TICKS). Mirror
 # fields below (_intended_action, _pass_target_peer_id,
-# _shot_is_elevated, _last_carry_anchor) are populated from
+# _shot_loft_level, _last_carry_anchor) are populated from
 # `_carrier.*` at the top of `_state_carry` so press states +
 # pre-aim convergence keep their existing reading patterns.
 var _carrier := AIRoleCarrier.new()
@@ -615,8 +622,15 @@ var _engagement_cooldown: int = 0
 var _prev_carrier_peer_id: int = -1
 
 # Set when CARRY commits to SHOOT_PRESSED; consumed by _state_shoot_pressed
-# to drive the elevation flag. Mirrored from `_carrier.shot_is_elevated`.
-var _shot_is_elevated: bool = false
+# to drive the release loft (ShotMechanics.ELEVATION_*). Mirrored from
+# `_carrier.shot_loft_level` — the elevation of the best goalie hole aimed at.
+var _shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
+
+# Mirrored from `_carrier.shot_aim_point` — the world aim point of that same best
+# hole. When finite, the wrister locks its aim here at charge start so the shot
+# goes exactly where it was scored (loft + aim from one hole). INF → fall back to
+# the continuous _shot_aim_point geometry.
+var _shot_aim_locked: Vector3 = Vector3.INF
 
 # Debug: print one line at SHOOT commit and one line at wrister
 # release so the user can compare what the projection promised vs.
@@ -655,6 +669,15 @@ var _shoot_aim_target: Vector3 = Vector3.ZERO
 # charge so the swing doesn't flip mid-press if a defender shuffles in
 # and out of stick reach. PASS_PRESSED hardcodes +1 (no backhand passes).
 var _shoot_side_sign: float = 1.0
+# Locked steering destination for the wind-up. Captured ONCE at charge tick 0
+# (projected release position) and held for the charge so the body has a STABLE
+# anchor to settle toward. Recomputing it per tick from live velocity made the
+# steer target self-referential — nothing fixed to settle on, so the repulsion
+# fields wandered the body (the wind-up wobble). Locked exactly like the aim
+# direction / wind-up side above. _shoot_wind_up_moving records whether it was a
+# rush wrister (steer to the anchor) or a near-still one (plant / brake).
+var _shoot_release_anchor: Vector3 = Vector3.ZERO
+var _shoot_wind_up_moving: bool = false
 
 # Handedness perpendicular sign — +1 for right-handed (top hand on right
 # shoulder, blade on left), -1 for left-handed. Set once at setup from
@@ -1206,10 +1229,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
 		# Station-keeping: arrive AT the role destination (arrival brake)
 		# instead of overshooting a spot that stopped moving — EXCEPT on a
-		# body-check commit, which wants maximum closing velocity through
-		# the target.
+		# body-check commit (wants maximum closing velocity through the
+		# target) or when the role is pacing a MOVING waypoint and asks to
+		# arrive at speed (OUTLET timing its rush entry — braking to a stop
+		# at the advancing target would park it short of the line).
 		_apply_steering(input, snapshot, self_pos, decision.target_position,
-				not decision.commit_check)
+				not decision.commit_check and not decision.arrive_at_speed)
 		if decision.commit_check:
 			# Body-check commit: drive THROUGH the carrier at max closing
 			# velocity. Force sprint even at short range — the gap gate would
@@ -1680,7 +1705,8 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
 		_pass_should_saucer = false
-		_shot_is_elevated = false
+		_shot_loft_level = ShotMechanics.ELEVATION_FLAT
+		_shot_aim_locked = Vector3.INF
 		_locked_pre_aim_point = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
 		return
@@ -1703,7 +1729,8 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	_pass_should_charge = _carrier.pass_should_charge
 	_pass_target_speed = _carrier.pass_target_speed
 	_pass_should_saucer = _carrier.pass_should_saucer
-	_shot_is_elevated = _carrier.shot_is_elevated
+	_shot_loft_level = _carrier.shot_loft_level
+	_shot_aim_locked = _carrier.shot_aim_point
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
 	debug_pass_score = _carrier.debug_pass_score
@@ -1730,7 +1757,11 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			# mouse target jump and the bot's stick wiggle.
 			match new_intent:
 				State.SHOOT_PRESSED:
-					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos)
+					# Prefer the carrier's locked hole aim so pre-aim faces the
+					# exact hole the charge will shoot at (no side-flip wiggle).
+					_locked_pre_aim_point = (_shot_aim_locked
+							if _shot_aim_locked.is_finite()
+							else _shot_aim_point(snapshot, self_pos))
 				State.QUICK_SHOT_PRESSED:
 					# No-charge release — score the goalie at his current
 					# position, not the wrister-window projection.
@@ -1997,25 +2028,34 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 		return
 
-	# Steer toward the projected release position so the bot actually
-	# arrives at the spot the carrier scorer assumed. The projection
-	# (current + velocity × wrister_lookahead) is what won SHOOT over
-	# CARRY; if we steered toward _last_carry_anchor instead (often
-	# stand-still = self_pos), the steering would brake the bot back
-	# to current pos and the puck would release ~1-2 m short of the
-	# scored spot. Rush wristers should fire from the projected spot,
-	# not be braked back to commit position.
+	# Lock the steering destination ONCE at charge start. The projected
+	# release position (current + velocity × wrister_lookahead) is the spot
+	# the carrier scorer assumed and what won SHOOT over CARRY, so a rush
+	# wrister should arrive THERE rather than braking back to commit pos.
+	# Capturing it once (not recomputing from live velocity every tick) gives
+	# the body a STABLE anchor for the wind-up — the per-tick recompute was
+	# self-referential (the target moved with the bot's own heading), so the
+	# repulsion fields had nothing fixed to settle against and wandered the
+	# body: the wind-up wobble. See _shoot_release_anchor.
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	var release_target: Vector3 = self_pos
-	if self_state != null:
-		var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
-		release_target = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
-	_apply_steering(input, snapshot, self_pos, release_target)
-	# Elevated shot → HIGH loft (top-corner height). The level is absolute
-	# per input frame (flat default in _zero_input), so just set it on
-	# every charge tick through the release.
-	if _shot_is_elevated:
-		input.elevation_level = ShotMechanics.ELEVATION_HIGH
+	if _shoot_charge_tick == 0:
+		var hv0: Vector3 = Vector3.ZERO
+		if self_state != null:
+			hv0 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
+		_shoot_release_anchor = self_pos + hv0 * BOT_WRISTER_LOOKAHEAD_S
+		_shoot_wind_up_moving = hv0.length() > BOT_WRISTER_PLANT_SPEED_M_S
+	# Moving (rush) wrister: steer to the locked anchor so it fires from the
+	# scored spot in stride. Near-still wrister: plant (brake in place) like a
+	# charged pass — a stationary bot has no release spot to skate to, so any
+	# steering just invites the repulsion-field wobble.
+	if _shoot_wind_up_moving:
+		_apply_steering(input, snapshot, self_pos, _shoot_release_anchor)
+	else:
+		_apply_brake_steering(input, snapshot, self_pos)
+	# Loft the release to the aimed hole's height (FLAT / LOW / HIGH). The level
+	# is absolute per input frame (flat default in _zero_input), so just set it
+	# on every charge tick through the release.
+	input.elevation_level = _shot_loft_level
 
 	# First tick: capture aim, compute wind-up start (forehand side,
 	# behind bot), fire shoot_pressed edge so SkaterStateMachine enters
@@ -2039,13 +2079,19 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# easily missing past the post on a corner shot. Goalie prediction
 		# inside `_shoot_aim_dir` already used the wrister lookahead, so
 		# anchoring the aim_dir lookup on the projected release matches.
-		var release_pos: Vector3 = self_pos
-		if self_state != null:
-			var hv: Vector3 = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
-			release_pos = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
+		# Same projected release the steering anchor uses — captured just above
+		# this tick, so reuse it rather than recomputing the projection.
+		var release_pos: Vector3 = _shoot_release_anchor
 		# Read aim_point directly (not just direction) so we can pass aim
 		# distance into _wind_up_endpoint_offsets for side-offset compensation.
-		var aim_point: Vector3 = _shot_aim_point(snapshot, release_pos)
+		# Prefer the carrier's locked hole aim — the exact hole the shot's score
+		# and loft were picked for — so the shot goes where it was evaluated. The
+		# aim POINT is fixed on the net plane; the direction is still taken from
+		# the current release_pos, so it tracks the bot's own locomotion. Falls
+		# back to the continuous geometry aim if no hole was locked.
+		var aim_point: Vector3 = (_shot_aim_locked
+				if _shot_aim_locked.is_finite()
+				else _shot_aim_point(snapshot, release_pos))
 		var aim_vec: Vector3 = Vector3(aim_point.x - release_pos.x, 0.0, aim_point.z - release_pos.z)
 		var aim_dir_init: Vector3 = aim_vec.normalized() if aim_vec.length_squared() > 0.0001 else Vector3(0.0, 0.0, 1.0)
 		var aim_distance: float = aim_vec.length()

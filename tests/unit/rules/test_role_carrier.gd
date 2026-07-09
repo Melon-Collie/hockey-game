@@ -84,6 +84,36 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
+# ─── pass out of a board pincer (pressure relief) ───────────────────────────
+
+func test_board_pincer_passes_to_lateral_outlet_instead_of_over_carrying() -> void:
+	# Carrier pinned on the right-wall in the neutral zone, two defenders
+	# pincering (one closing off the inside, one sealing the up-ice lane). The
+	# only safe out is a lateral feed to a teammate in the middle — LOW up-ice
+	# value, so without the pass-out-of-pressure relief the carrier rates
+	# carrying (higher position potential up the wall) over the escape pass and
+	# gets stripped. With the relief, getting the puck off the pinned carrier
+	# wins. This is the "see the pincer, move it" read.
+	var self_pos := Vector3(6, 0, 9)                    # right-center, NZ, space ahead
+	var outlet := Vector3(-3, 0, 6)                     # left-center, forward, open
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],                         # us, carrying
+			[2, TEAM_ID, outlet],                           # open outlet
+			[3, 1, Vector3(4, 0, 4), false, Vector3(1.5, 0, 5)],  # inside forechecker closing fast
+			[4, 1, Vector3(9, 0, 5), false, Vector3(-3, 0, 5)],   # outside forechecker closing (pincer)
+	]
+	# The forming pincer registers through the defenders' closing VELOCITY in
+	# puck_safety (they start beyond stick range), so our current strip
+	# probability is high; the grounded pass-relief (expected turnover avoided)
+	# lifts the escape pass over the carry. Without any relief the base model
+	# CARRIES here into the closing box.
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a carrier reading a forming pincer moves the puck instead of over-carrying")
+	assert_eq(c.debug_pass_peer_id, 2, "the escape pass targets the open middle outlet")
+
+
 # ─── breakout: the risky ground-losing backpass loses to keeping the puck ────
 
 func test_risky_backpass_deep_in_own_zone_loses_to_keeping_the_puck() -> void:
@@ -161,15 +191,15 @@ func test_open_carrier_at_blue_line_drives_in_instead_of_freezing() -> void:
 func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:
 	# Carrier wheeling up the weak-side wall with momentum, forecheck set
 	# up through the middle (one opponent pinching the local up-ice steps,
-	# another in the center lane). No teammates → no pass bailout. The
-	# zone-exit wall candidate — a real "skate it out along the boards"
-	# plan — should win the carry argmax over the myopic 3 m steps and
-	# the through-the-middle slot drive.
+	# another sitting in the diagonal slot-drive lane from this wide start).
+	# No teammates → no pass bailout. The zone-exit wall candidate — a real
+	# "skate it out along the boards" plan — should win the carry argmax over
+	# the myopic 3 m steps and the through-the-middle slot drive.
 	var self_pos := Vector3(-10.5, 0, 21)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos, false, Vector3(0, 0, -5)],  # us, skating up-ice
 			[3, 1, Vector3(-7.5, 0, 16.5)],                    # pinching the up-ice step
-			[4, 1, Vector3(0, 0, 13)],                         # center-lane forechecker
+			[4, 1, Vector3(-6.5, 0, 6)],                       # sits in the slot-drive lane
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.self_velocity = Vector3(0, 0, -5)
@@ -177,10 +207,14 @@ func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
 			"nothing to shoot at or pass to — this is a carry read")
-	assert_gt(absf(c.last_carry_anchor.x), 10.0,
-			"the winning carry anchor hugs the boards (wall-exit route)")
-	assert_lt(c.last_carry_anchor.z, GameRules.BLUE_LINE_Z,
-			"the wall-exit anchor sits past our blue line — a completed zone exit")
+	# Hugs the boards on OUR side (away from the clogged middle), heading up-ice
+	# toward the exit. The bot skates the wall out step-by-step (re-picking each
+	# tick) rather than committing to the far exit anchor in one shot — the
+	# near boards step decays less, and it's the same "skate it out" behaviour.
+	assert_lt(c.last_carry_anchor.x, -10.0,
+			"the winning carry anchor hugs our (left) boards, not the clogged middle")
+	assert_lt(c.last_carry_anchor.z, self_pos.z,
+			"…and moves up-ice toward the zone exit, not deeper or across")
 
 
 func test_wall_exit_candidates_absent_in_offensive_half() -> void:
@@ -233,7 +267,7 @@ func test_reset_clears_all_persistent_state() -> void:
 	c.pass_target_peer_id = 42
 	c.pass_should_charge = true
 	c.pass_should_saucer = true
-	c.shot_is_elevated = true
+	c.shot_loft_level = ShotMechanics.ELEVATION_HIGH
 	c.last_carry_anchor = Vector3(5.0, 0.0, -10.0)
 
 	c.reset()
@@ -242,7 +276,7 @@ func test_reset_clears_all_persistent_state() -> void:
 	assert_eq(c.pass_target_peer_id, -1)
 	assert_false(c.pass_should_charge)
 	assert_false(c.pass_should_saucer)
-	assert_false(c.shot_is_elevated)
+	assert_eq(c.shot_loft_level, ShotMechanics.ELEVATION_FLAT)
 	assert_eq(c.last_carry_anchor, Vector3.ZERO)
 
 
@@ -391,9 +425,9 @@ func test_zero_value_fire_does_not_win_in_own_zone() -> void:
 	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 22.0))
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"a zero-value fire must not beat holding the puck deep in our own zone")
-	assert_eq(c.debug_shoot_score, 0.0,
-			"sanity: shoot really is 0 from the own zone (out of range)")
+			"a negligible-value fire must not beat holding the puck deep in our own zone")
+	assert_lt(c.debug_shoot_score, 0.02,
+			"sanity: shoot is negligible from ~48 m (net subtends almost nothing)")
 
 
 func test_positive_shot_scores_above_zero_in_slot() -> void:
@@ -434,7 +468,7 @@ func test_developing_feed_zero_without_brain() -> void:
 	var ctx := _make_ctx(Vector3(4, 0, -18))
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, Vector3.INF), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"no team brain → nothing to wait for")
 
 
@@ -443,14 +477,14 @@ func test_developing_feed_zero_when_finisher_already_ready() -> void:
 	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), true)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0)
+	assert_eq(carrier._best_developing_feed(ctx), 0.0)
 
 
 func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
 	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_gt(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_gt(carrier._best_developing_feed(ctx), 0.0,
 			"a staging cross-seam finisher gives a positive developing feed")
 
 
@@ -467,7 +501,7 @@ func test_developing_feed_zero_for_ghosted_finisher() -> void:
 	ctx.team_brain = brain
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"a ghosted finisher isn't a developing play — nothing to hold for")
 
 
@@ -476,7 +510,7 @@ func test_developing_feed_zero_when_finisher_out_of_offensive_zone() -> void:
 	var ctx := _ctx_with_finisher(Vector3(-3, 0, -5), false)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"a finisher outside the OZ isn't a developing cross-seam")
 
 
@@ -504,7 +538,7 @@ func test_developing_feed_positive_for_outlet_skating_its_route() -> void:
 	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6))
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_gt(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_gt(carrier._best_developing_feed(ctx), 0.0,
 			"an outlet skating up its route is a developing feed worth holding for")
 
 
@@ -514,7 +548,7 @@ func test_developing_feed_zero_for_stationary_outlet() -> void:
 	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3.ZERO)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"a stationary outlet isn't developing anything")
 
 
@@ -522,7 +556,7 @@ func test_developing_feed_zero_for_ghosted_outlet() -> void:
 	var ctx := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6), true)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	assert_eq(carrier._best_developing_feed(ctx, ctx.attacking_goal_pos), 0.0,
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
 			"a ghosted outlet can't receive — no developing feed")
 
 
@@ -534,7 +568,7 @@ func test_developing_outlet_beats_the_spot_it_left_behind() -> void:
 	var moving := _ctx_with_outlet(Vector3(9, 0, 16), Vector3(1.2, 0, -6))
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
-	var developing: float = carrier._best_developing_feed(moving, moving.attacking_goal_pos)
+	var developing: float = carrier._best_developing_feed(moving)
 
 	# The same feed valued AT the outlet's current spot: reuse _pass_ev
 	# directly so both sides run identical pricing.
@@ -548,7 +582,7 @@ func test_developing_outlet_beats_the_spot_it_left_behind() -> void:
 	var stay_put: float = carrier2._pass_ev(
 			moving, spot, pass_speed, flight_t,
 			flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, flight_t,
-			moving.attacking_goal_pos, moving.defending_goal_pos)
+			moving.defending_goal_pos)
 
 	assert_gt(developing, stay_put,
 			"the projected up-ice spot out-values the spot the outlet is leaving")

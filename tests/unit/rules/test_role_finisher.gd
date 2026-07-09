@@ -260,17 +260,66 @@ func test_positioning_does_not_stack_on_carrier_side() -> void:
 	assert_lt(x, 3.0, "FINISHER stages cross-ice from a strong-side carrier, not stacked on it")
 
 
-func test_positioning_stages_past_the_far_post_on_odd_man_rush() -> void:
-	# 2-on-0 read: wide strong-side carrier, no defenders. score_shoot's
-	# angle factor always outweighs its capped goalie-coverage penalty, so
-	# without the hard weak-side line the argmax drifted the FINISHER to
-	# the dead-center slot — crashing the front of the net instead of
-	# staging the far side where the cross-seam feed is a tap-in. The
-	# staging spot must sit at least MIN_CROSS_SEAM_OFFSET_M past center
-	# on the weak side.
+func test_positioning_stages_weak_side_of_a_strong_side_carrier() -> void:
+	# 2-on-0 read: wide strong-side (+X) carrier, no defenders. The weak-side
+	# search-center bias plus the seven-hole feed geometry (a cross-seam one-timer
+	# catches the goalie sliding) should stage the FINISHER on the weak (-X) side,
+	# opposite the carrier — the far-post tap-in, not crowding the puck side.
 	var x: float = _stage_x_for_strong_side(1.0)
-	assert_lte(x, -AIRoleFinisher.MIN_CROSS_SEAM_OFFSET_M,
-			"FINISHER stages past the far post, opposite the carrier; got x=%f" % x)
+	assert_lt(x, 0.0,
+			"FINISHER stages weak-side, opposite the carrier; got x=%f" % x)
+
+
+# ─── RUSH-AWARE STAGING ───────────────────────────────────────────────────
+
+func _rush_ctx(carrier_vel: Vector3) -> RoleContext:
+	# Stationary finisher at center-ice depth; a wide strong-side teammate
+	# carrier with the given velocity. Slow puck so reactive stays off and
+	# positioning runs. strong_x = +1 so the weak side is -X.
+	var carrier_pos := Vector3(6.0, 0.0, -18.0)
+	var ctx: RoleContext = _make_ctx(
+			Vector3(0.0, 0.0, -18.0), Vector3.ZERO,
+			carrier_pos, Vector3.ZERO,
+			[
+				_make_skater(1, TEAM_ID, Vector3(0.0, 0.0, -18.0), false),
+				_make_skater(100, TEAM_ID, carrier_pos, false),
+			])
+	ctx.snapshot.puck_state.carrier_peer_id = 100
+	ctx.snapshot.skater_states[100].velocity = carrier_vel
+	ctx.strong_x = 1.0
+	return ctx
+
+
+func test_rush_factor_zero_for_stationary_carrier() -> void:
+	assert_almost_eq(AIRoleFinisher._rush_factor(_rush_ctx(Vector3.ZERO)), 0.0, 0.001)
+
+
+func test_rush_factor_zero_for_carrier_skating_away_from_net() -> void:
+	# Team 0 attacks -Z; a +Z carrier velocity is away from the opp net,
+	# which is never a rush.
+	assert_almost_eq(
+			AIRoleFinisher._rush_factor(_rush_ctx(Vector3(0.0, 0.0, 8.0))), 0.0, 0.001)
+
+
+func test_rush_factor_one_for_fast_closing_carrier() -> void:
+	# A -Z carrier velocity above RUSH_SPEED_HI_M_S is a full rush.
+	assert_almost_eq(
+			AIRoleFinisher._rush_factor(_rush_ctx(Vector3(0.0, 0.0, -8.0))), 1.0, 0.001)
+
+
+func test_rush_stages_finisher_closer_to_the_net_than_set_cycle() -> void:
+	# Same wide strong-side (+X) carrier; only its velocity differs. The rush
+	# blend pulls the staging DEPTH in (stage_dist: SLOT_DIST_M → RUSH_NET_DRIVE_
+	# DIST_M), so a rushing carrier stages the FINISHER closer to the attacking
+	# net — a second attacker crashing for the rebound/backdoor tap, rather than
+	# parked at the slot on a set cycle.
+	var goal_z: float = OPP_NET_Z
+	var set_pos: Vector3 = AIRoleFinisher.decide(_rush_ctx(Vector3.ZERO)).target_position
+	var rush_pos: Vector3 = AIRoleFinisher.decide(
+			_rush_ctx(Vector3(0.0, 0.0, -8.0))).target_position
+	assert_lt(absf(rush_pos.z - goal_z), absf(set_pos.z - goal_z),
+			"a rushing carrier stages the FINISHER closer to the net (net-crash)")
+	assert_lt(set_pos.x, 0.0, "the set cycle still stages weak-side")
 
 
 func test_reactive_overrides_positioning_when_shot_incoming() -> void:

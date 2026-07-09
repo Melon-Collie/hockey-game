@@ -186,6 +186,46 @@ func test_avoids_defender_camped_on_the_stretch_spot() -> void:
 			% [d.target_position, defender])
 
 
+# ── In-stride rush entry ────────────────────────────────────────────────────
+
+func _rush_skaters(carrier_vel: Vector3) -> Array:
+	# OUTLET on the weak side; carrier just own-side of center with the given
+	# velocity. Team 0 attacks -Z, so a -Z carrier velocity is a rush.
+	return [
+		[1, TEAM_ID, Vector3(-2, 0, -2), Vector3.ZERO],
+		[100, TEAM_ID, Vector3(2, 0, 2), carrier_vel],
+	]
+
+
+func test_rush_sets_arrive_at_speed_but_set_play_does_not() -> void:
+	var moving: RoleDecision = AIRoleOutlet.decide(
+			_make_ctx(Vector3(-2, 0, -2), Vector3.ZERO, 100,
+					_rush_skaters(Vector3(0, 0, -8))))
+	var still: RoleDecision = AIRoleOutlet.decide(
+			_make_ctx(Vector3(-2, 0, -2), Vector3.ZERO, 100,
+					_rush_skaters(Vector3.ZERO)))
+	assert_true(moving.arrive_at_speed,
+			"a live rush arrives at speed (no arrival brake) to hit the line in stride")
+	assert_false(still.arrive_at_speed,
+			"a set play holds the line and brakes to a stop, as before")
+
+
+func test_rush_paces_outlet_behind_the_parked_stretch_spot() -> void:
+	# Same deep carrier; only its velocity differs. Parked (set play) stages
+	# up at the blue line; on a rush the pace cap keeps the OUTLET level with
+	# the carrier's advance — meaningfully further NZ-side (higher z for Team
+	# 0) so it arrives in stride instead of standing at the line.
+	var rush_z: float = AIRoleOutlet.decide(
+			_make_ctx(Vector3(-2, 0, -2), Vector3.ZERO, 100,
+					_rush_skaters(Vector3(0, 0, -8)))).target_position.z
+	var set_z: float = AIRoleOutlet.decide(
+			_make_ctx(Vector3(-2, 0, -2), Vector3.ZERO, 100,
+					_rush_skaters(Vector3.ZERO))).target_position.z
+	assert_gt(rush_z, set_z + 1.0,
+			"rush paces the OUTLET back off the line vs the parked stretch spot; got rush=%f set=%f" \
+			% [rush_z, set_z])
+
+
 # ── Anti-crowding ───────────────────────────────────────────────────────────
 
 func test_anti_crowding_avoids_candidates_near_teammates() -> void:
