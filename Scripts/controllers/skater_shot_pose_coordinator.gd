@@ -186,15 +186,22 @@ func apply_wrister_follow_through() -> void:
 			* _sm.follow_through_power
 	# Blade direction: ease from the release angle onto the shot line (fast
 	# ease-out, so the sweep-through happens in the front half of the timer).
-	# shot_dir is world-space; re-derive its body-local angle each frame so the
+	# The aim eases from the shot line back to the LIVE cursor over the tail of
+	# the timer (follow_through_return_frac) so the finish lands where the mouse
+	# now is — otherwise the blade re-rotates to the cursor once tracking resumes.
+	# aim_world is world-space; re-derive its body-local angle each frame so the
 	# finish stays pointed at the target while the torso uncoils underneath.
-	# Whiffed releases (shot_dir zero) hold the release angle.
+	# Whiffed releases (shot_dir zero → aim_world zero) hold the release angle.
 	var dir_angle: float = _controller._blade_relative_angle
-	var shot_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * _sm.shot_dir
-	shot_local.y = 0.0
-	if shot_local.length_squared() > 0.0001:
-		var sweep: float = 1.0 - (1.0 - t) * (1.0 - t)
-		dir_angle = lerp_angle(dir_angle, atan2(shot_local.x, -shot_local.z), sweep)
+	var cursor_dir: Vector3 = _controller._current_aim_world - _skater.global_position
+	var aim_world: Vector3 = ShotMechanics.follow_through_aim(
+			_sm.shot_dir, cursor_dir, t, _controller.follow_through_return_frac)
+	if aim_world.length_squared() > 0.0001:
+		var shot_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * aim_world
+		shot_local.y = 0.0
+		if shot_local.length_squared() > 0.0001:
+			var sweep: float = 1.0 - (1.0 - t) * (1.0 - t)
+			dir_angle = lerp_angle(dir_angle, atan2(shot_local.x, -shot_local.z), sweep)
 	var local_dir := Vector3(sin(dir_angle), 0.0, -cos(dir_angle))
 	var hand_pos := _skater.shoulder.position
 	# Carry the whole stick FORWARD along the shot line as it climbs — the

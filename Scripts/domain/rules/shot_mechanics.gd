@@ -173,6 +173,36 @@ static func loft_y(power: float, loft_vy: float) -> float:
 		return MAX_LOFT_RATIO
 	return loft_vy / sqrt(power * power - loft_vy * loft_vy)
 
+# Follow-through aim direction (world XZ). The finish choreography sweeps the
+# torso + blade along the SHOT line so the release reads as a genuine follow-
+# through — but by the time the timer ends the cursor has usually kept moving
+# (you dragged THROUGH the shot), so pointing the finish at the frozen shot line
+# leaves the pose to re-rotate to the live cursor once normal tracking resumes:
+# the "follow-through, then a reset back" read. This eases the aim from the shot
+# line toward the current cursor over the TAIL of the timer (the last
+# `return_frac`), so the finish lands on wherever the mouse actually is and the
+# handoff to blade-tracking is seamless. The shot-line follow-through is
+# preserved through the meat of the timer (t below the tail → returns shot_dir
+# unchanged). Returns ZERO when shot_dir is degenerate (whiff) so callers keep
+# their existing whiff fallback; horizontal unit vector otherwise.
+static func follow_through_aim(
+		shot_dir: Vector3, cursor_dir: Vector3, t: float, return_frac: float) -> Vector3:
+	var sd := Vector3(shot_dir.x, 0.0, shot_dir.z)
+	if sd.length_squared() < 0.0001:
+		return Vector3.ZERO
+	sd = sd.normalized()
+	var cd := Vector3(cursor_dir.x, 0.0, cursor_dir.z)
+	if return_frac <= 0.0 or cd.length_squared() < 0.0001:
+		return sd
+	cd = cd.normalized()
+	var tail_start: float = 1.0 - clampf(return_frac, 0.0, 1.0)
+	if t <= tail_start:
+		return sd
+	var rt: float = clampf((t - tail_start) / maxf(1.0 - tail_start, 0.0001), 0.0, 1.0)
+	rt = rt * rt * (3.0 - 2.0 * rt)  # smoothstep
+	var ang: float = lerp_angle(atan2(sd.x, -sd.z), atan2(cd.x, -cd.z), rt)
+	return Vector3(sin(ang), 0.0, -cos(ang))
+
 # Should a blade-in-wall squeeze auto-release the puck? Pure threshold check.
 static func should_release_on_wall_pin(squeeze: float, threshold: float) -> bool:
 	return squeeze > threshold

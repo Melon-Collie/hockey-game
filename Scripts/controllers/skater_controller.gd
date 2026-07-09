@@ -502,6 +502,13 @@ var show_one_timer_indicator: bool = false
 # release pose onto the authored swing (kills the release-instant teleport
 # to a near-rest pose — the "animation played twice" read).
 @export var follow_through_takeover_frac: float = 0.28
+# Last fraction of the wrister/quick/slapper FT spent easing the finish aim (torso
+# twist + blade) from the shot line back to the LIVE cursor, so the pose ends
+# where the mouse actually is and hands off to blade-tracking without re-rotating
+# (the "follow-through, then a reset back" read). 0 keeps the pure shot-line
+# finish. Blends the aim only in the tail so the shot-line follow-through still
+# reads through the meat of the timer.
+@export var follow_through_return_frac: float = 0.4
 @export var wrister_follow_through_min_power: float = 0.55  # amplitude floor at zero charge
 @export var quick_shot_follow_through_power: float = 0.5
 @export var wrister_follow_through_hand_y: float = 0.35
@@ -624,6 +631,12 @@ var _is_host: bool = false
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var _blade_relative_angle: float = 0.0
+# Live cursor world position this tick — stamped in _process_input so the shot
+# follow-through can ease its finish aim back to wherever the mouse currently is
+# (see follow_through_return_frac). Fed from the replayed input during reconcile,
+# so it stays deterministic. Only read by the FOLLOW_THROUGH pose branches, which
+# never run on the faceoff/skate-in cosmetic paths, so a stale value is harmless.
+var _current_aim_world: Vector3 = Vector3.ZERO
 # Per-tick mirror of input.elevation_level (0 flat / 1 low / 2 high) — NOT
 # sticky state: overwritten from the frame every tick, so reconcile replay
 # re-derives it from the replayed inputs with nothing to snap.
@@ -1089,6 +1102,7 @@ func _process_input(input: InputState, delta: float) -> void:
 		skater.set_draw_input_time(input.host_timestamp)
 	_elevation_level = input.elevation_level
 	skater.elevation_level = _elevation_level
+	_current_aim_world = input.mouse_world_pos
 
 	# Stick lift (Q). Voluntary lift is gated on NOT carrying — you can't raise
 	# your own blade off the puck while stickhandling. A forced lift (an opponent
@@ -1581,8 +1595,19 @@ func _transition_to_skating(suppress_lost_flash: bool = false) -> void:
 	else:
 		_sm.set_state(State.SKATING_WITHOUT_PUCK)
 	_sm.shot_dir = Vector3.ZERO
-	_pose.reset_lean_and_lag()
-	skater.set_lower_body_lag(0.0)
+	# Handoff out of the follow-through is CONTINUOUS: the FT branches already
+	# eased the torso twist/lean and the blade onto the live cursor (see
+	# follow_through_return_frac), so zeroing the smoothed pose here would snap
+	# the shoulders square and re-rotate — the exact "reset back" we're killing.
+	# Preserve the pose and seed the blade smoother from the finish position so
+	# the normal dangle continues from where the swing left it. Charge-lost exits
+	# (not FOLLOW_THROUGH) still reset to neutral as before.
+	if prev_state == State.FOLLOW_THROUGH:
+		if not is_replaying:
+			_ik.seed_blade_smoothing(skater.upper_body_to_global(skater.get_blade_position()))
+	else:
+		_pose.reset_lean_and_lag()
+		skater.set_lower_body_lag(0.0)
 	skater.set_slapper_mode(false)
 	skater.set_slapper_zone(false)
 	skater.exit_slapshot_pinning()
