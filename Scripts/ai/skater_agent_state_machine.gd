@@ -592,7 +592,7 @@ var _accel_by_peer: Dictionary = {}
 # `_carrier.decide(ctx)` every tick (the carrier internally
 # throttles re-evaluation at PICK_ACTION_PERIOD_TICKS). Mirror
 # fields below (_intended_action, _pass_target_peer_id,
-# _shot_is_elevated, _last_carry_anchor) are populated from
+# _shot_loft_level, _last_carry_anchor) are populated from
 # `_carrier.*` at the top of `_state_carry` so press states +
 # pre-aim convergence keep their existing reading patterns.
 var _carrier := AIRoleCarrier.new()
@@ -622,8 +622,9 @@ var _engagement_cooldown: int = 0
 var _prev_carrier_peer_id: int = -1
 
 # Set when CARRY commits to SHOOT_PRESSED; consumed by _state_shoot_pressed
-# to drive the elevation flag. Mirrored from `_carrier.shot_is_elevated`.
-var _shot_is_elevated: bool = false
+# to drive the release loft (ShotMechanics.ELEVATION_*). Mirrored from
+# `_carrier.shot_loft_level` — the elevation of the best goalie hole aimed at.
+var _shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 
 # Debug: print one line at SHOOT commit and one line at wrister
 # release so the user can compare what the projection promised vs.
@@ -1698,7 +1699,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
 		_pass_should_saucer = false
-		_shot_is_elevated = false
+		_shot_loft_level = ShotMechanics.ELEVATION_FLAT
 		_locked_pre_aim_point = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
 		return
@@ -1721,7 +1722,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	_pass_should_charge = _carrier.pass_should_charge
 	_pass_target_speed = _carrier.pass_target_speed
 	_pass_should_saucer = _carrier.pass_should_saucer
-	_shot_is_elevated = _carrier.shot_is_elevated
+	_shot_loft_level = _carrier.shot_loft_level
 	debug_shoot_score = _carrier.debug_shoot_score
 	debug_quick_shot_score = _carrier.debug_quick_shot_score
 	debug_pass_score = _carrier.debug_pass_score
@@ -2039,11 +2040,10 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_apply_steering(input, snapshot, self_pos, _shoot_release_anchor)
 	else:
 		_apply_brake_steering(input, snapshot, self_pos)
-	# Elevated shot → HIGH loft (top-corner height). The level is absolute
-	# per input frame (flat default in _zero_input), so just set it on
-	# every charge tick through the release.
-	if _shot_is_elevated:
-		input.elevation_level = ShotMechanics.ELEVATION_HIGH
+	# Loft the release to the aimed hole's height (FLAT / LOW / HIGH). The level
+	# is absolute per input frame (flat default in _zero_input), so just set it
+	# on every charge tick through the release.
+	input.elevation_level = _shot_loft_level
 
 	# First tick: capture aim, compute wind-up start (forehand side,
 	# behind bot), fire shoot_pressed edge so SkaterStateMachine enters

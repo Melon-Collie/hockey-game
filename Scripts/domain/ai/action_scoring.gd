@@ -87,54 +87,101 @@ const SHOT_RANGE_FALLOFF_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_
 # pull bots from further out; down (4 m) tightens the sweet spot.
 const SLOT_RADIUS_M: float = 6.0
 
-# ── Shot danger: geometric open-net model ────────────────────────────────────
-# score_shoot rates a shot by the OPEN NET the shooter can hit — pure geometry
-# from the shooter's eye, with the goalie a body that occludes part of the net.
-# Every constant here is a physical measurement, not a curve shape; distance,
-# angle, and coverage all EMERGE from the geometry (see open_net_danger).
+# ── Shot danger: seven-hole open-net model ───────────────────────────────────
+# score_shoot rates a shot by evaluating the seven classic goalie "holes" as
+# separate targets, taking the BEST one. The score is that hole's opening; which
+# hole it is decides the LOFT the bot shoots (best_shot_loft). This is pure
+# geometry from the shooter's eye — distance, angle, and coverage all EMERGE
+# (see _hole_open_angle) — with the goalie a body that occludes part of the net.
+#
+#   1,2  top corners      → HIGH loft (over the glove/blocker held up in stance)
+#   3,4  bottom corners    → FLAT      (beside the pads)
+#   5    five-hole         → FLAT      (between the legs — opens when he's moving)
+#   6,7  armpits           → LOW loft  (the body-side seam under a raised arm)
 #
 # The goalie FREEZES on the shot (he can't slide into it), so the only thing
-# range buys him is glove/blocker REACTION time to the placement. His lateral
-# reach is his body plus arms, and the arms only count once the flight beats his
-# ARM reaction delay (glove/blocker read slower than legs — see
-# GOALIE_ARM_REACTION_DELAY_S):
-#   cover_half = GOALIE_BODY_HALF_M + GOALIE_ARM_REACH_M × reaction
-#   reaction   = clamp((flight − ARM_REACTION_DELAY) / ARM_DEPLOY, 0, 1)
+# range buys him is REACTION time to extend the relevant body part to the
+# placement. Each hole reads its own height BAND, and the bands differ in exactly
+# the two ways a real goalie's do — a wider always-covered CORE and a slower
+# REACTION — which is what makes the loft choice fall out of the same geometry:
+#   cover = CORE + EXT × reaction ;  reaction = clamp((flight − DELAY)/DEPLOY,0,1)
+#   openness = the net the hole clears past the goalie's cover, projected onto
+#              the net plane (shadow) so foreshortening at sharp angles is honest
 # Aggressive angle-challenging (the goalie plays OUT for a longer shot) is not a
 # constant — it's just where the goalie actually is, fed in as goalie_pos.
 #
-# Total lateral reach (BODY_HALF + ARM_REACH = 0.85 m) mirrors the live goalie's
-# glove_max_x_outward (0.85). The split abstracts the goalie's true collider: the
-# bare torso half-width (~0.26) badly understates a squared butterfly's coverage,
-# so BODY_HALF reads as the reliably-sealed core — pads dropped + body, the band
-# a SET goalie covers low without ever reacting his glove to the placement — and
-# ARM_REACH as the reaction-gated glove/blocker stretch from that core out to the
-# post. This is what keeps a clean slot shot into a set goalie low-percentage:
-# his flight time (~0.16 s at 5 m) is under the arm reaction (0.18 s), so the
-# glove never deploys and the only open net is over the shoulder — but the pad
-# core still walls off the low lateral net.
-const GOALIE_BODY_HALF_M: float = 0.55   # pad+body lateral half-width, always covered
-const GOALIE_ARM_REACH_M: float = 0.30   # extra glove/blocker extension, reaction-gated
-const GOALIE_ARM_DEPLOY_S: float = 0.20  # time after reacting to get the glove/blocker there
-# Arms read the shot slower than legs — the glove/blocker reach AND the
-# over-the-shoulder window gate on this, while the lateral slide prediction
-# (predict_goalie_pos) uses the faster leg reaction. Lockstep with the live
-# goalie via GameRules (GoalieController.arm_reaction_delay).
-const GOALIE_ARM_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S
+# The band cores/reaches are grounded, not fitted:
+#  · LOW  — legs/pads, WIDEST core (a set butterfly seals low) + small push,
+#           fast LEG reaction. Low corners open only past the pad, or off a slide.
+#  · HIGH — glove/blocker, NARROWEST core (held up they leave the top corners)
+#           but the longest reach (out to 0.85 m ≈ glove_max_x_outward) on a slow
+#           ARM reaction. In tight the glove can't extend → roof it; at range it
+#           gets there → top corners shut. This is the over-the-shoulder read.
+#  · MID  — torso/armpit seam, between the two.
+# Total HIGH reach (CORE+EXT = 0.85) mirrors the live goalie's glove_max_x_outward.
+const HOLE_BAND_CORE: Array[float] = [0.60, 0.50, 0.40]   # [LOW, MID, HIGH] half-width, always covered
+const HOLE_BAND_EXT: Array[float] = [0.15, 0.20, 0.45]    # reaction-gated extension to the placement
+const HOLE_BAND_DELAY: Array[float] = [                    # per-band reaction delay (legs fast, arms slow)
+		GameRules.DEFAULT_GOALIE_REACTION_DELAY_S,        # LOW  — legs, 0.13
+		0.15,                                             # MID  — torso, between legs and arms
+		GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S,    # HIGH — glove/blocker, 0.18
+]
+const HOLE_BAND_LOFT: Array[int] = [                       # loft the band's hole is shot with
+		ShotMechanics.ELEVATION_FLAT,   # LOW  → flat
+		ShotMechanics.ELEVATION_LOW,    # MID  → medium (saucer height, under a raised arm)
+		ShotMechanics.ELEVATION_HIGH,   # HIGH → roof it
+]
+const GOALIE_ARM_DEPLOY_S: float = 0.20   # reaction ramp width — time to extend to the placement
 
-# Over-the-shoulder window: a standing goalie doesn't cover the top of the net,
-# so even a laterally-covered shot has a top-corner target (needs elevation +
-# precision to hit). Sized as a fraction of the covered net he leaves open up
-# high:  top_window = TOP_WINDOW_FRAC × (1 − reaction × (1 − TOP_WINDOW_RESIDUAL))
-# A close shot (no reaction) sees the full window; a far one shrinks it as the
-# goalie gets his glove up — but never to zero (a perfect shot beats him).
-const TOP_WINDOW_FRAC: float = 0.15
-const TOP_WINDOW_RESIDUAL: float = 0.30
+# Loft choice prefers the LOWEST-risk shot among comparable openings: a flat shot
+# is easier to execute than roofing it (you can sail a high shot over the bar). So
+# best_shot_loft takes the flattest hole whose opening is within this fraction of
+# the widest — only committing to a roof when the top corner is meaningfully the
+# only way in. (The SCORE is still the widest opening; this only picks the loft.)
+const LOFT_TIE_FRAC: float = 0.85
+const HOLE_BAND_LOW: int = 0
+const HOLE_BAND_MID: int = 1
+const HOLE_BAND_HIGH: int = 2
 
-# Danger gain: converts the open-net angle (radians) into the game's shot-value
-# currency — the ONE feel scalar left. Set so a clean cross-seam one-timer
-# (~12° / 0.21 rad open) lands ~0.6 and a gaping net saturates to 1.0.
-const SHOT_DANGER_GAIN: float = 2.8
+# Hole kinds (how the opening is measured — see _hole_open_angle).
+const HOLE_KIND_CORNER: int = 0   # net-relative post; opening = net cleared past the cover edge
+const HOLE_KIND_FIVE: int = 1     # goalie-relative low-centre gap; opens when he's UNSETTLED
+const HOLE_KIND_ARMPIT: int = 2   # goalie-relative body-side seam; MID band, capped narrow
+
+# The seven holes as parallel arrays (indexed 0..6, no per-call allocation).
+const HOLE_KIND: Array[int] = [
+		HOLE_KIND_CORNER, HOLE_KIND_CORNER,   # 1,2 top corners
+		HOLE_KIND_CORNER, HOLE_KIND_CORNER,   # 3,4 bottom corners
+		HOLE_KIND_FIVE,                       # 5   five-hole
+		HOLE_KIND_ARMPIT, HOLE_KIND_ARMPIT,   # 6,7 armpits
+]
+const HOLE_SIDE: Array[int] = [-1, 1, -1, 1, 0, -1, 1]   # net/goalie side; 0 = centred
+const HOLE_BAND: Array[int] = [
+		HOLE_BAND_HIGH, HOLE_BAND_HIGH,
+		HOLE_BAND_LOW, HOLE_BAND_LOW,
+		HOLE_BAND_LOW,
+		HOLE_BAND_MID, HOLE_BAND_MID,
+]
+const HOLE_COUNT: int = 7
+
+# The body-side seam sits this far off the goalie's centre (just outside the
+# torso). The armpit is the medium-loft option that opens in tight when the arm
+# hasn't filled the seam; capped narrow so it never out-scores a real corner.
+const ARMPIT_OFFSET_M: float = 0.58
+
+# Five-hole: a set goalie seals it (FIVE_BASE ≈ 0), it opens as he's caught
+# moving (the goalie_unsettled_factor). FIVE_MAX_ANGLE is the opening (radians) a
+# fully-splayed goalie leaks between the legs; only counts on a roughly head-on
+# look (centrality falls off past FIVE_CENTER_REF metres of lateral offset — you
+# can't thread the legs from the wall).
+const FIVE_BASE: float = 0.0
+const FIVE_MAX_ANGLE: float = 0.14
+const FIVE_CENTER_REF_M: float = 1.6
+
+# Danger gain: converts the best hole's open angle (radians) into the game's
+# shot-value currency — the ONE feel scalar left. Set so a clean cross-seam
+# one-timer lands ~0.7 and a gaping backdoor net saturates to 1.0.
+const SHOT_DANGER_GAIN: float = 3.0
 
 # Goalie position prediction. React-then-slide: react delay first, then move
 # toward the puck-at-release X at max lateral speed. GOALIE_REACTION_DELAY_S and
@@ -369,55 +416,134 @@ const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
 const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
 
 
-# Geometric shot danger in [0, 1]: the OPEN NET the shooter can hit, seen from
-# their eye, with the goalie a body that occludes part of the net. Distance,
-# angle, squareness, and reaction all emerge from the geometry — no curves.
-#
-#   reaction   = how much of the flight beats the goalie's reaction delay,
-#                cut by how unsettled (recovering) he is. He FREEZES on the
-#                shot, so this is glove/blocker reach, not a body slide.
-#   cover      = body half-width + arm reach × reaction   (lateral occlusion)
-#   open_h     = the net's angular width minus the arc `cover` covers at the
-#                goalie's (frozen, aggressively-challenged) position
-#   top_window = the over-the-shoulder strip a standing goalie can't cover;
-#                full when he can't react high, a residual even when he can
-#   danger     = (open_h + covered_arc × top_window) × SHOT_DANGER_GAIN
+# Geometric shot danger in [0, 1]: the best of the seven goalie holes, seen from
+# the shooter's eye, with the goalie a body that occludes part of the net.
+# Distance, angle, squareness, and reaction all emerge from the geometry — no
+# curves. Each hole is scored by _hole_open_angle (its opening in radians); the
+# danger is the widest opening × SHOT_DANGER_GAIN. best_shot_loft returns the
+# same winner's elevation class so the shot's loft matches where it's aimed.
+# He FREEZES on the shot, so reaction is body-part REACH to the placement, not a
+# slide; a longer flight buys the reach, an unsettled goalie loses it.
 static func open_net_danger(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float,
 		goalie_unsettled_factor: float = 0.0) -> float:
+	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
+	# Best of the seven holes. Pure value-type math, no allocation — safe to run
+	# per carry candidate at tick rate (see _hole_open_angle).
+	var best_angle: float = 0.0
+	for i: int in HOLE_COUNT:
+		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
+				net_half_width, flight, goalie_unsettled_factor)
+		if a > best_angle:
+			best_angle = a
+	return clampf(best_angle * SHOT_DANGER_GAIN, 0.0, 1.0)
+
+
+# The LOFT the bot should shoot with, from the same seven-hole geometry that
+# open_net_danger scores: the elevation class of the BEST hole. A slot shot into
+# a set goalie whose only opening is over the shoulder returns HIGH; a five-hole
+# off a caught-moving goalie returns FLAT; a body-side seam returns LOW. Called
+# once when SHOOT commits (not per candidate), so the re-scan is free.
+static func best_shot_loft(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0) -> int:
+	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
+	var best_angle: float = 0.0
+	for i: int in HOLE_COUNT:
+		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
+				net_half_width, flight, goalie_unsettled_factor)
+		if a > best_angle:
+			best_angle = a
+	if best_angle <= 0.0:
+		return ShotMechanics.ELEVATION_FLAT
+	# The flattest hole that's within LOFT_TIE_FRAC of the widest opening — bury it
+	# low if you can, roof it only when the top corner is the real way in.
+	var threshold: float = best_angle * LOFT_TIE_FRAC
+	var loft: int = ShotMechanics.ELEVATION_HIGH
+	for i: int in HOLE_COUNT:
+		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
+				net_half_width, flight, goalie_unsettled_factor)
+		if a >= threshold:
+			var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
+			if band_loft < loft:
+				loft = band_loft
+	return loft
+
+
+# Projects a point (px at depth pz) onto the net plane (z = net_z) along the
+# sightline from the shooter — the point's "shadow" on the net. Working every
+# opening on the net plane in one frame is what keeps the geometry honest at
+# sharp angles: a wide-angle shooter foreshortens the net AND stretches the
+# goalie's shadow across it, both of which shrink the real opening.
+static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> float:
+	var dz: float = pz - shooter.z
+	if absf(dz) < 0.000001:
+		return px
+	return shooter.x + (net_z - shooter.z) / dz * (px - shooter.x)
+
+
+# Open angle (radians, from the shooter's eye) of hole `i` — 0 if the goalie
+# covers it. Corners measure the net cleared past the reaction-gated cover edge;
+# the five-hole is a central gap that opens with the goalie's unsettle; armpits
+# are a narrow body-side seam. All openings are computed on the net plane so
+# foreshortening is automatic.
+static func _hole_open_angle(
+		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, flight: float, unsettled: float) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
 		return 0.0  # on/behind the goal line — no shot in
-	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
-	# Arm/glove reach (lateral cover + over-the-shoulder window) gates on the
-	# slower ARM reaction — legs seal low fast, but the glove is late to the
-	# placement, which is exactly what a longer shot's flight time buys back.
+	var kind: int = HOLE_KIND[i]
+	var side: int = HOLE_SIDE[i]
+
+	if kind == HOLE_KIND_FIVE:
+		# Between-the-legs gap: a set goalie seals it, a caught-moving one leaks
+		# it. Only a roughly head-on look can thread the legs.
+		var centrality: float = clampf(
+				1.0 - absf(shooter.x - goalie_pos.x) / FIVE_CENTER_REF_M, 0.0, 1.0)
+		return FIVE_MAX_ANGLE * clampf(FIVE_BASE + unsettled, 0.0, 1.0) * centrality
+
+	var band: int = HOLE_BAND[i]
 	var reaction: float = clampf(
-			(flight - GOALIE_ARM_REACTION_DELAY_S) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
-	reaction *= 1.0 - clampf(goalie_unsettled_factor, 0.0, 1.0)
-	var cover: float = GOALIE_BODY_HALF_M + GOALIE_ARM_REACH_M * reaction
-	# Net posts as bearings from the shooter.
-	var post_a: float = atan2(attacking_goal.x - net_half_width - shooter.x, forward)
-	var post_b: float = atan2(attacking_goal.x + net_half_width - shooter.x, forward)
-	var net_lo: float = minf(post_a, post_b)
-	var net_hi: float = maxf(post_a, post_b)
-	var span: float = net_hi - net_lo
-	if span < 0.0001:
-		return 0.0
-	# Goalie body+arms as bearings at his depth. Clamp his forward distance so a
-	# goalie level with / charged past the shooter still yields a wide covering
-	# arc rather than a sign flip.
-	var gfwd: float = maxf((shooter.z - goalie_pos.z) * net_normal_z, 0.05)
-	var cover_a: float = atan2(goalie_pos.x - cover - shooter.x, gfwd)
-	var cover_b: float = atan2(goalie_pos.x + cover - shooter.x, gfwd)
-	var overlap: float = maxf(0.0,
-			minf(net_hi, maxf(cover_a, cover_b)) - maxf(net_lo, minf(cover_a, cover_b)))
-	var open_h: float = maxf(0.0, span - overlap)
-	var top_window: float = TOP_WINDOW_FRAC * (
-			1.0 - reaction * (1.0 - TOP_WINDOW_RESIDUAL))
-	return clampf((open_h + overlap * top_window) * SHOT_DANGER_GAIN, 0.0, 1.0)
+			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
+	reaction *= 1.0 - clampf(unsettled, 0.0, 1.0)
+	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
+
+	# Net posts and the goalie's cover edges, all as bearings on the net plane.
+	var net_z: float = attacking_goal.z
+	var post_lo_x: float = attacking_goal.x - net_half_width
+	var post_hi_x: float = attacking_goal.x + net_half_width
+	var net_lo: float = atan2(post_lo_x - shooter.x, forward)
+	var net_hi: float = atan2(post_hi_x - shooter.x, forward)
+	var cov_lo_x: float = clampf(
+			_shadow_x(shooter, goalie_pos.x - cover, goalie_pos.z, net_z),
+			post_lo_x, post_hi_x)
+	var cov_hi_x: float = clampf(
+			_shadow_x(shooter, goalie_pos.x + cover, goalie_pos.z, net_z),
+			post_lo_x, post_hi_x)
+	var covb_lo: float = atan2(cov_lo_x - shooter.x, forward)
+	var covb_hi: float = atan2(cov_hi_x - shooter.x, forward)
+
+	var openv: float
+	if side < 0:
+		openv = maxf(0.0, minf(covb_lo, net_hi) - net_lo)     # left post → cover's left edge
+	else:
+		openv = maxf(0.0, net_hi - maxf(covb_hi, net_lo))     # cover's right edge → right post
+
+	if kind == HOLE_KIND_ARMPIT:
+		# Cap to the seam between the body core edge and the armpit target, so the
+		# body-side hole stays a narrow medium-loft option, not a stand-in corner.
+		var seam_x: float = clampf(
+				_shadow_x(shooter, goalie_pos.x + side * ARMPIT_OFFSET_M,
+						goalie_pos.z, net_z),
+				post_lo_x, post_hi_x)
+		var seam_b: float = atan2(seam_x - shooter.x, forward)
+		var edge_b: float = covb_hi if side > 0 else covb_lo
+		openv = minf(openv, absf(seam_b - edge_b))
+	return openv
 
 
 # Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance

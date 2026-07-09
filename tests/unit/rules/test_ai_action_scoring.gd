@@ -135,14 +135,17 @@ func test_shoot_score_low_at_extreme_angle() -> void:
 
 
 func test_shoot_score_partial_at_moderate_angle() -> void:
-	# Shooter at ~58° off-axis. shot_angle_factor = 1 - 58°/90° ≈ 0.36.
-	# Combined with the quadratic distance falloff (~9.4 m → 0.82) and
-	# an exposed goalie at this angle (squareness = 0), score ≈ 0.30.
+	# Shooter at ~58° off-axis vs a goalie SQUARED to each shooter (on the
+	# challenge arc toward them, 0.6 m out) — how a real goalie plays it. From the
+	# angle the net foreshortens and the squared goalie covers the near side, so
+	# the off-angle look scores below the straight-on one. (With the goalie pinned
+	# at center the near post would open up — but a goalie doesn't stand still.)
 	var shooter := Vector3(8.0, 0.0, 21.65)
-	var goalie := Vector3(0.0, 0.0, 26.0)
+	var goalie_angle := Vector3(0.96, 0.0, 26.05)   # squared to the 58° shooter
 	var center := Vector3(0.0, 0.0, 21.0)
-	var s_angle: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	var s_center: float = AIActionScoring.score_shoot(center, GOAL, goalie, NET_HW, [])
+	var goalie_center := Vector3(0.0, 0.0, 26.05)   # squared to the center shooter
+	var s_angle: float = AIActionScoring.score_shoot(shooter, GOAL, goalie_angle, NET_HW, [])
+	var s_center: float = AIActionScoring.score_shoot(center, GOAL, goalie_center, NET_HW, [])
 	assert_gt(s_angle, 0.0, "shot from 58° should still score above zero")
 	assert_lt(s_angle, s_center, "shot from 58° should score lower than a center shot")
 
@@ -303,19 +306,28 @@ func test_breakout_pass_not_blocked() -> void:
 	assert_false(AIActionScoring.pass_crosses_own_slot(from, to, GOAL.z))
 
 
-# ── Shot danger: geometric open-net calibration ──────────────────────────────
-# score_shoot rates a shot by the OPEN NET the shooter can hit (open_net_danger):
-# the net's angular width minus the arc the goalie's frozen, angle-challenging
-# body covers, plus a small over-the-shoulder window. These lock the ORDERING
-# the whole AI ranks against — a genuinely open look far outscores firing into a
+# ── Shot danger: seven-hole open-net calibration ─────────────────────────────
+# score_shoot rates a shot by the best of the seven goalie holes (open_net_danger)
+# — top/bottom corners, five-hole, armpits — each scored as the net it clears past
+# the goalie's height-appropriate, reaction-gated cover. These lock the ORDERING
+# the whole AI ranks against: a genuinely open look far outscores firing into a
 # set goalie, distance/angle emerge from the geometry, and a set goalie is
-# beatable but low-percentage. (GOAL at +Z; a lower goalie z = further OUT.)
+# beatable but low-percentage. best_shot_loft returns the winning hole's elevation
+# so the loft matches the aim. (GOAL at +Z; a lower goalie z = further OUT.)
 
 func test_shot_danger_backdoor_tap_in_is_near_certain() -> void:
 	var shooter := Vector3(-0.8, 0.0, 25.5)   # far post
 	var goalie := Vector3(0.85, 0.0, 25.45)   # stranded on the near post
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
 	assert_gt(s, 0.9, "a gaping backdoor net is near-certain")
+
+
+func test_shot_danger_backdoor_tap_in_is_shot_flat() -> void:
+	# A gaping open net low: no reason to elevate — bury it along the ice.
+	var loft: int = AIActionScoring.best_shot_loft(
+			Vector3(-0.8, 0.0, 25.5), GOAL, Vector3(0.85, 0.0, 25.45),
+			NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S)
+	assert_eq(loft, ShotMechanics.ELEVATION_FLAT, "an open net gets buried flat")
 
 
 func test_shot_danger_cross_seam_beats_a_frozen_goalie() -> void:
@@ -328,8 +340,8 @@ func test_shot_danger_cross_seam_beats_a_frozen_goalie() -> void:
 
 
 func test_shot_danger_set_goalie_slot_is_small_but_nonzero() -> void:
-	# Clean slot, goalie SET and squared: laterally covered, only the
-	# over-the-shoulder window is open → small but NOT zero (you can roof it).
+	# Clean slot, goalie SET and squared: laterally covered low, only the
+	# over-the-shoulder (top corner) window is open → small but NOT zero.
 	var shooter := Vector3(0.0, 0.0, 21.65)
 	var goalie := Vector3(0.0, 0.0, 25.05)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
@@ -337,14 +349,27 @@ func test_shot_danger_set_goalie_slot_is_small_but_nonzero() -> void:
 	assert_lt(s, 0.25, "...but a set-goalie slot shot is a low-percentage play")
 
 
-func test_shot_danger_point_blank_over_the_shoulder_beats_the_slot() -> void:
-	# Same set, squared goalie: a point-blank shot has a BIGGER over-the-shoulder
-	# window than a slot shot — no reaction time to throw the glove up.
-	var pb := Vector3(0.0, 0.0, 24.65)          # ~2 m
-	var slot := Vector3(0.0, 0.0, 21.65)        # ~5 m
+func test_shot_danger_set_goalie_slot_is_roofed() -> void:
+	# The slot shot's only opening is over the shoulder — so if the bot shoots it,
+	# it must ELEVATE. This is the loft coupling: the score and the loft come from
+	# the same hole.
+	var loft: int = AIActionScoring.best_shot_loft(
+			Vector3(0.0, 0.0, 21.65), GOAL, Vector3(0.0, 0.0, 25.05),
+			NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S)
+	assert_eq(loft, ShotMechanics.ELEVATION_HIGH, "beat a set goalie over the shoulder")
+
+
+func test_shot_danger_point_blank_into_a_set_goalie_is_smothered() -> void:
+	# Shooting from right on top of a squared, set goalie: his body eclipses the
+	# whole net from that eye — no opening anywhere. You must move off-angle or
+	# deke, not fire into him. (Supersedes the old "over-the-shoulder up close"
+	# read: at 0.5 m the goalie subtends the entire net.)
+	var pb := Vector3(0.0, 0.0, 24.65)                       # 0.5 m off the goalie
+	var slot := Vector3(0.0, 0.0, 21.65)                     # ~5 m
 	var s_pb: float = AIActionScoring.score_shoot(pb, GOAL, Vector3(0.0, 0.0, 25.15), NET_HW, [])
 	var s_slot: float = AIActionScoring.score_shoot(slot, GOAL, Vector3(0.0, 0.0, 25.05), NET_HW, [])
-	assert_gt(s_pb, s_slot, "closer = more over-the-shoulder chance vs a set goalie")
+	assert_lt(s_pb, 0.05, "point-blank into a set goalie is smothered")
+	assert_lt(s_pb, s_slot, "...worse than backing out to the slot for a roof")
 
 
 func test_shot_danger_open_look_dwarfs_firing_into_a_set_goalie() -> void:
@@ -356,13 +381,24 @@ func test_shot_danger_open_look_dwarfs_firing_into_a_set_goalie() -> void:
 
 
 func test_shot_danger_challenged_goalie_kills_the_range_shot() -> void:
-	# 9 m straight-on, goalie challenging OUT (further from his net) → a bigger
-	# wall from the shooter's eye. Worse than the in-tight slot.
+	# 9 m straight-on, goalie challenging OUT (further from his net) → he eclipses
+	# the angle. This is the "launch a long one at the goalie" play — it collapses.
 	var s_far: float = AIActionScoring.score_shoot(
 			Vector3(0.0, 0.0, 17.65), GOAL, Vector3(0.0, 0.0, 24.45), NET_HW, [])
 	var s_slot: float = AIActionScoring.score_shoot(
 			Vector3(0.0, 0.0, 21.65), GOAL, Vector3(0.0, 0.0, 25.05), NET_HW, [])
 	assert_lt(s_far, s_slot, "a challenged goalie makes the range shot worse than the slot")
+
+
+func test_shot_danger_range_closes_the_top_corner() -> void:
+	# The over-the-shoulder window is a CLOSE-RANGE read: further out, the goalie's
+	# glove has flight time to reach the corner, so the same set-goalie top-corner
+	# shrinks. (This is why range doesn't help vs a set goalie — the corners shut.)
+	var near: float = AIActionScoring.score_shoot(
+			Vector3(0.0, 0.0, 23.65), GOAL, Vector3(0.0, 0.0, 25.15), NET_HW, [])   # 3 m
+	var far: float = AIActionScoring.score_shoot(
+			Vector3(0.0, 0.0, 20.65), GOAL, Vector3(0.0, 0.0, 25.15), NET_HW, [])   # 6 m
+	assert_gt(near, far, "in tight the glove can't reach the top corner; at range it does")
 
 
 func test_shot_danger_sharp_angle_is_low() -> void:
@@ -384,6 +420,16 @@ func test_shot_danger_unsettled_goalie_scores_higher() -> void:
 			shooter, GOAL, goalie, NET_HW, [], Vector3.INF,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
 	assert_gt(unsettled, set_s, "a mid-slide goalie reads the shot late → higher danger")
+
+
+func test_shot_danger_caught_moving_goalie_opens_the_five_hole() -> void:
+	# A head-on shot at a goalie caught mid-slide: his legs are splayed, so the
+	# five-hole is the opening — a FLAT shot between the pads, not a roof.
+	var shooter := Vector3(0.0, 0.0, 19.65)
+	var goalie := Vector3(0.0, 0.0, 25.15)
+	var loft: int = AIActionScoring.best_shot_loft(
+			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.9)
+	assert_eq(loft, ShotMechanics.ELEVATION_FLAT, "shoot the five-hole flat on a sliding goalie")
 
 
 # ── position_potential ───────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 #   - intended_action  (INTENT_*)
 #   - last_carry_anchor
 #   - pass_target_peer_id
-#   - shot_is_elevated
+#   - shot_loft_level
 #   - debug_*
 #
 # The state machine translates intended_action back into its own
@@ -97,20 +97,6 @@ const OUTLET_DEVELOP_WINDOW_S: float = 0.7
 # is the spot it's at, and the live pass scoring already prices that.
 const OUTLET_DEVELOP_MIN_SPEED_M_S: float = 1.0
 
-# Elevation gate constants. Reactive: goalie already down → top
-# corners exposed. Proactive: close shot with a clean lane → pick
-# the corner over the goalie's glove/blocker rather than dribbling
-# along the ice. Cleared by the next decision tick.
-const ELEVATE_CLOSE_SHOT_RANGE_M: float = 12.0
-const ELEVATE_SCORE_GATE: float = 0.4
-
-# GoalieController.State values — duplicated here to avoid a
-# domain → controller import. Keep in sync with that enum.
-const _GOALIE_STATE_BUTTERFLY: int = 1
-const _GOALIE_STATE_RECOVERING: int = 2
-const _GOALIE_STATE_SLIDING: int = 6
-const _GOALIE_STATE_COILING: int = 7
-
 # Pre-baked rotations for the 8 polar cardinal carry candidates.
 const _POLAR_ANGLES: Array[float] = [
 		0.0, PI * 0.25, PI * 0.5, PI * 0.75,
@@ -163,9 +149,11 @@ var pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 # entering PASS_PRESSED to set the loft level for the release.
 var pass_should_saucer: bool = false
 
-# Set when intent commits to SHOOT. Consumed by the state machine's
-# press-state handlers to drive the loft level (HIGH when true).
-var shot_is_elevated: bool = false
+# Set when intent commits to SHOOT: the loft (ShotMechanics.ELEVATION_*) of the
+# best goalie hole the shot is aimed at — top corner → HIGH, armpit → LOW,
+# bottom corner / five-hole → FLAT (see AIActionScoring.best_shot_loft).
+# Consumed by the state machine's press-state handlers to drive the release loft.
+var shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 
 # Cached carry destination from the most recent re-eval. Read by the
 # state machine to drive steering during CARRY.
@@ -207,7 +195,7 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 
 # Top-level entry. Throttled at PICK_ACTION_PERIOD_TICKS. Mutates
 # own state; the state machine reads `intended_action`,
-# `pass_target_peer_id`, `shot_is_elevated`, `last_carry_anchor`,
+# `pass_target_peer_id`, `shot_loft_level`, `last_carry_anchor`,
 # and the debug_* fields after this returns.
 #
 # Returns a RoleDecision shaped like the off-puck role behaviors:
@@ -251,7 +239,7 @@ func reset() -> void:
 	pass_should_charge = false
 	pass_target_speed = AIActionScoring.PASS_SPEED_M_S
 	pass_should_saucer = false
-	shot_is_elevated = false
+	shot_loft_level = ShotMechanics.ELEVATION_FLAT
 	last_carry_anchor = Vector3.ZERO
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
@@ -279,7 +267,7 @@ func clear_intent() -> void:
 # carry does not get a hysteresis bonus (stand-still ties with the
 # best fire from the same position by construction). FIRE WINS TIES;
 # CARRY only beats fire on STRICTLY better future-action value.
-# Mutates pass_target_peer_id when PASS wins, shot_is_elevated when
+# Mutates pass_target_peer_id when PASS wins, shot_loft_level when
 # SHOOT wins, last_carry_anchor + intended_action always.
 func _pick_action(ctx: RoleContext) -> void:
 	var snapshot: WorldSnapshot = ctx.snapshot
@@ -499,7 +487,13 @@ func _pick_action(ctx: RoleContext) -> void:
 			# for long passes — see _compute_best_pass).
 			pass_should_saucer = best_pass_saucer
 		elif new_intent == INTENT_SHOOT:
-			shot_is_elevated = _should_elevate_shot(ctx, shoot_score)
+			# Loft from the same seven-hole geometry score_shoot used — the best
+			# hole's elevation class, scored at the projected release. Roofs a set
+			# goalie (top-corner window), stays flat on a five-hole / low corner.
+			shot_loft_level = AIActionScoring.best_shot_loft(
+					wrister_release_pos, attacking_goal, wrister_goalie,
+					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
+					wrister_unsettled)
 	else:
 		# Not firing. Advance the hold clock only while the developing play is the
 		# reason (it out-scores plain carrying); a normal carry resets it so the
@@ -1164,20 +1158,3 @@ func _goalie_unsettled_at(ctx: RoleContext, release_time_s: float,
 			release_time_s, puck_pos_at_release)
 
 
-# Decides whether to elevate the upcoming shot. Reactive: goalie
-# already down → top corners exposed. Proactive: close shot with a
-# clean lane (high score) → pick the corner over the goalie's
-# glove/blocker rather than dribbling along the ice.
-func _should_elevate_shot(ctx: RoleContext, shoot_score: float) -> bool:
-	var opp_team_id: int = 1 - ctx.team_id
-	var opp_goalie: GoalieNetworkState = ctx.snapshot.goalie_states.get(opp_team_id)
-	if opp_goalie == null:
-		return false
-	var s: int = opp_goalie.state_enum
-	if s == _GOALIE_STATE_BUTTERFLY \
-			or s == _GOALIE_STATE_RECOVERING \
-			or s == _GOALIE_STATE_SLIDING \
-			or s == _GOALIE_STATE_COILING:
-		return true
-	var range_to_goal: float = ctx.self_pos.distance_to(ctx.attacking_goal_pos)
-	return range_to_goal <= ELEVATE_CLOSE_SHOT_RANGE_M and shoot_score >= ELEVATE_SCORE_GATE

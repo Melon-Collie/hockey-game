@@ -267,7 +267,7 @@ func test_reset_clears_all_persistent_state() -> void:
 	c.pass_target_peer_id = 42
 	c.pass_should_charge = true
 	c.pass_should_saucer = true
-	c.shot_is_elevated = true
+	c.shot_loft_level = ShotMechanics.ELEVATION_HIGH
 	c.last_carry_anchor = Vector3(5.0, 0.0, -10.0)
 
 	c.reset()
@@ -276,7 +276,7 @@ func test_reset_clears_all_persistent_state() -> void:
 	assert_eq(c.pass_target_peer_id, -1)
 	assert_false(c.pass_should_charge)
 	assert_false(c.pass_should_saucer)
-	assert_false(c.shot_is_elevated)
+	assert_eq(c.shot_loft_level, ShotMechanics.ELEVATION_FLAT)
 	assert_eq(c.last_carry_anchor, Vector3.ZERO)
 
 
