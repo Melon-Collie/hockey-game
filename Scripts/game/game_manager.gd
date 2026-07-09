@@ -90,6 +90,14 @@ var _puck_net_stuck_timer: float = 0.0
 # the first loose-puck tick of a live period (see _check_goal_crossing).
 var _prev_puck_pos: Vector3 = Vector3.ZERO
 var _has_prev_puck_pos: bool = false
+# Carry state of the puck last goal-crossing tick. A loose<->carried transition
+# moves the puck discontinuously (pickup snap to blade / release), so the tracker
+# reseeds across it instead of spanning the jump.
+var _puck_was_carried: bool = false
+# Any single-tick puck travel beyond this (metres) is a reset/reposition, not a
+# real crossing — the tracker reseeds and skips it. Far above any shot or blade
+# speed at 120 Hz (~2 m/tick = 240 m/s); a faceoff/OOB reset jumps much further.
+const _GOAL_MAX_TICK_TRAVEL: float = 2.0
 # Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
 # we don't fire stray vote RPCs outside of the cinematic window.
 var _in_replay_locally: bool = false
@@ -578,22 +586,32 @@ func _update_host_puck_tracking() -> void:
 # stuck-on-net checks so a scored puck flips the phase out of PLAYING first and
 # those checks early-return rather than whistling the goal dead.
 func _check_goal_crossing() -> void:
-	# Only live play with a loose puck can score. A carried puck is frozen to the
-	# blade, and non-PLAYING phases never award goals — reset the tracker so the
-	# next loose tick starts a fresh segment instead of spanning the gap (which
-	# could fabricate a crossing from a stale pre-freeze position).
+	# Non-PLAYING phases never award goals; drills own their own detection. Reset
+	# so the next live tick starts a fresh segment rather than spanning the gap.
 	if _state_machine.current_phase != GamePhase.Phase.PLAYING \
-			or puck.carrier != null \
 			or NetworkManager.is_drill_mode():
 		_has_prev_puck_pos = false
 		return
+	# Both loose AND carried pucks are tracked: the puck is pinned to the carry
+	# target each tick (Puck._physics_process), so a stick tuck-in — the carrier
+	# pushing the puck across the line from the front of the mouth — is a real
+	# crossing. The net exclusion clamp (NetClampRules) is what gates whether the
+	# blade can get there; here we just watch the puck's path.
 	var curr: Vector3 = puck.global_position
-	if not _has_prev_puck_pos:
+	var carried: bool = puck.carrier != null
+	# Reseed on a cold tracker or a loose<->carried transition (pickup snap /
+	# release move the puck discontinuously — spanning that jump could fabricate
+	# a crossing).
+	if not _has_prev_puck_pos or carried != _puck_was_carried:
 		_prev_puck_pos = curr
 		_has_prev_puck_pos = true
+		_puck_was_carried = carried
 		return
-	for goal: HockeyGoal in goals:
-		goal.check_goal_crossing(_prev_puck_pos, curr)
+	# Teleport guard: an implausible jump (loose-puck reset/reposition) is never a
+	# real crossing — reseed and skip.
+	if _prev_puck_pos.distance_to(curr) <= _GOAL_MAX_TICK_TRAVEL:
+		for goal: HockeyGoal in goals:
+			goal.check_goal_crossing(_prev_puck_pos, curr)
 	_prev_puck_pos = curr
 
 

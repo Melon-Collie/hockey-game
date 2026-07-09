@@ -331,45 +331,28 @@ func update_bottom_hand() -> void:
 
 # ── Net Exclusion Clamp ───────────────────────────────────────────────────────
 # Clamps `point` (either the puck contact point or the blade heel during
-# follow-through) out of the net exclusion zone. The zone is NET_HALF_WIDTH +
-# NET_PUCK_BUFFER wide on each side and NET_DEPTH + NET_PUCK_BUFFER deep from
-# the goal line. The buffer applies uniformly to both the side posts and the
-# back board. The point always escapes through the nearest face — never the
-# front mouth.
+# follow-through) out of the net, which NetClampRules treats as a solid object
+# with only its front face (the mouth) open. The point escapes through the
+# nearest solid face — never the front.
+#
+# Tuck-in: while CARRYING, the front face is open, so a blade whose swept path
+# (prev contact → this contact) came IN through the mouth is left unclamped and
+# carries the puck across the line (wraparounds / jams). Entry from a side or the
+# back is still blocked — the stick can't reach through the mesh, no matter where
+# the skater's body is. Because a legal tuck leaves the contact UNCLAMPED, the
+# caller's "clamp moved the contact → auto-release" path (see apply_blade_from_
+# mouse) doesn't fire, so the puck rides in instead of being ejected. Follow-
+# through / non-carry calls pass allow_front = false and behave exactly as before.
 func clamp_blade_from_net(point: Vector3) -> Vector3:
-	if point.y > GameRules.NET_HEIGHT:
-		return point
-	var result: Vector3 = point
-	var gl: float           = GameRules.GOAL_LINE_Z
-	var eff_depth: float    = GameRules.NET_DEPTH + GameRules.NET_PUCK_BUFFER
-	var hw: float           = GameRules.NET_HALF_WIDTH + GameRules.NET_PUCK_BUFFER
-	# +Z net
-	if result.z >= gl and result.z < gl + eff_depth:
-		var local_depth: float = result.z - gl
-		if abs(result.x) < hw:
-			var d_back: float  = eff_depth - local_depth
-			var d_left: float  = result.x + hw
-			var d_right: float = hw - result.x
-			if d_back <= d_left and d_back <= d_right:
-				result.z = gl + eff_depth
-			elif d_left <= d_right:
-				result.x = -hw
-			else:
-				result.x = hw
-	# -Z net
-	elif result.z <= -gl and result.z > -gl - eff_depth:
-		var local_depth: float = -gl - result.z
-		if abs(result.x) < hw:
-			var d_back: float  = eff_depth - local_depth
-			var d_left: float  = result.x + hw
-			var d_right: float = hw - result.x
-			if d_back <= d_left and d_back <= d_right:
-				result.z = -gl - eff_depth
-			elif d_left <= d_right:
-				result.x = -hw
-			else:
-				result.x = hw
-	return result
+	return NetClampRules.clamp_out_of_net(
+			point,
+			_skater.get_prev_blade_contact_global(),
+			GameRules.GOAL_LINE_Z,
+			GameRules.NET_HALF_WIDTH,
+			GameRules.NET_PUCK_BUFFER,
+			GameRules.NET_DEPTH,
+			GameRules.NET_HEIGHT,
+			_controller.has_puck)
 
 # ── Goalie Body / Butterfly Clamp ─────────────────────────────────────────────
 # Pushes blade_world out of every goalie's collision zone and strips the puck
