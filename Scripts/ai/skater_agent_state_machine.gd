@@ -380,10 +380,21 @@ var _blade_reach: float = BLADE_REACH_M
 # ── Wrister charge ───────────────────────────────────────────────────────────
 # SHOOT_PRESSED and the charged PASS_PRESSED variant hold shoot_held
 # for this many ticks while the blade sweeps from wind_up_start to
-# aim_target, then release. ~250 ms (derived from PHYSICS_TICK). Total time is fixed;
-# how much CHARGE accumulates over those ticks is set by the geometry
-# (start→target distance = target charge).
-const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4   # ~250 ms
+# aim_target, then release. Total time is fixed; how much CHARGE accumulates
+# over those ticks is set by the geometry (start→target distance = target
+# charge), so the SWEEP SPEED — the wrister power model's primary signal
+# (ShotMechanics.wrister_power_t) — is distance / this window.
+#
+# ~67 ms is sized so every attribute-scaled charge cap saturates the speed
+# axis: the smallest cap (~0.48 m, high-Shot × short) sweeps at ~7.2 m/s
+# (>= DEFAULT_WRISTER_FULL_SWEEP_SPEED_M_S = 7), the largest (~1.04 m) at
+# ~15.6 m/s (< the counted cap, 18) — a full-distance bot sweep reads as a
+# full-power sweep for every build, matching the carry scorer's max-power
+# assumption. (The old 250 ms window swept ~2.8 m/s, which under the speed
+# model would read as a soft pass.) Sub-max targets (charged passes) sweep
+# proportionally slower across the same window, which the inverse solve in
+# _state_pass_pressed accounts for.
+const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 15   # ~67 ms
 
 # Shot charge fraction of max_wrister_charge_distance: shots aim for full charge
 # (the carry scorer assumes WRISTER_SHOT_SPEED_M_S = DEFAULT_WRISTER_POWER_MAX_M_S,
@@ -414,7 +425,7 @@ const BOT_WRISTER_PLANT_SPEED_M_S: float = 1.5
 #      (_carry_aim_track_fire keeps facing pre-tracked toward the
 #      best fire option during CARRY), this is typically 0-50 ms.
 #      The buffer accounts for typical mouse residual convergence.
-#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / PHYSICS_TICK = 250 ms.
+#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / PHYSICS_TICK ≈ 67 ms.
 #
 # Used both for projecting the shooter's release-pos AND for
 # predicting where the goalie / opponents will be at release.
@@ -877,6 +888,7 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 
 func set_max_wrister_charge_distance(d: float) -> void:
 	_max_wrister_charge_distance = d
+	_cached_wrister_power_cfg = null
 
 
 # True while the bot is aiming a committed SHOT (pre-aim or charge). In those
@@ -914,6 +926,28 @@ func apply_capabilities(caps: AISelfCapabilities) -> void:
 	_self_wrister_shot_speed = caps.wrister_shot_speed
 	_self_weight = caps.self_weight
 	_self_body_check_transfer = caps.self_body_check_transfer
+	_cached_wrister_power_cfg = null
+
+
+# This bot's wrister power-model config for the charged-pass inverse solve
+# (ShotMechanics.wrister_charge_for_power). Per-bot fields come from the two
+# setters above (which invalidate the cache); the model shape (full-sweep
+# reference, snap fraction, curve) rides the league defaults — those knobs are
+# feel tunables, not attribute-scaled. Cached so the pass commit tick doesn't
+# allocate. min power is the league baseline: the controller holds min_wrister
+# at base for every build (the soft-touch floor is universal).
+var _cached_wrister_power_cfg: ShotMechanics.WristerConfig = null
+
+func _wrister_power_cfg() -> ShotMechanics.WristerConfig:
+	if _cached_wrister_power_cfg == null:
+		_cached_wrister_power_cfg = ShotMechanics.WristerConfig.new()
+		_cached_wrister_power_cfg.min_wrister_power = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
+		_cached_wrister_power_cfg.max_wrister_power = _self_wrister_shot_speed
+		_cached_wrister_power_cfg.max_wrister_charge_distance = _max_wrister_charge_distance
+		_cached_wrister_power_cfg.full_sweep_speed = GameRules.DEFAULT_WRISTER_FULL_SWEEP_SPEED_M_S
+		_cached_wrister_power_cfg.snap_power_fraction = GameRules.DEFAULT_WRISTER_SNAP_POWER_FRACTION
+		_cached_wrister_power_cfg.power_curve = GameRules.DEFAULT_WRISTER_POWER_CURVE
+	return _cached_wrister_power_cfg
 
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
@@ -2327,20 +2361,22 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 
 	if _pass_charge_tick == 0:
 		# Capture aim direction toward the receiver and build wind-up endpoint
-		# offsets (same helper as SHOOT_PRESSED). The target charge fraction is
-		# derived from _pass_target_speed: the wrister maps charge linearly from
-		# min→max power, so frac = (target − min) / (max − min). aim_dir is taken
-		# from clean_pass_aim (the receiver's lead) rather than the stepped mouse
-		# so a single-tick mouse residual can't tilt it.
+		# offsets (same helper as SHOOT_PRESSED). The target charge distance is
+		# derived from _pass_target_speed by inverting the wrister power model:
+		# the sweep crosses the chosen distance over the fixed charge window, so
+		# distance sets BOTH the runway and the sweep speed, and
+		# wrister_charge_for_power solves the distance whose constant-rate sweep
+		# releases at the target power. aim_dir is taken from clean_pass_aim
+		# (the receiver's lead) rather than the stepped mouse so a single-tick
+		# mouse residual can't tilt it.
 		var sweep: Vector3 = clean_pass_aim - self_pos
 		sweep.y = 0.0
 		var aim_distance: float = sweep.length()
 		var aim_dir_init: Vector3 = sweep.normalized() if aim_distance > 0.01 else Vector3(0.0, 0.0, 1.0)
-		var charge_frac: float = clampf(
-				(_pass_target_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
-				/ maxf(_self_wrister_shot_speed - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, 0.001),
-				0.0, 1.0)
-		var pass_target_charge: float = _max_wrister_charge_distance * charge_frac
+		var pass_target_charge: float = ShotMechanics.wrister_charge_for_power(
+				_pass_target_speed,
+				float(BOT_WRISTER_CHARGE_TICKS) / float(_PhysicsConstants.PHYSICS_TICK),
+				_wrister_power_cfg())
 		# Pass always sweeps on the forehand side — no defender-aware
 		# side flip like SHOOT_PRESSED (passes don't justify backhand power
 		# penalty trade-offs the same way).
@@ -2416,8 +2452,9 @@ func _state_quick_shot_pressed(input: InputState, snapshot: WorldSnapshot, self_
 #
 # Charge accumulates from mouse_screen_pos motion only; mouse stays
 # locked on the goal aim point, so `update_wrister_charge` accrues
-# almost no charge → release fires at quick-shot speed
-# (PASS_SPEED_M_S). The receiver one-time fires a snap.
+# almost no charge or sweep speed → release fires at the wrister
+# floor (DEFAULT_WRISTER_POWER_MIN_M_S — the soft-touch speed, a bit
+# under the snap pass). The receiver one-time fires a soft redirect.
 func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	# Moving one-timer (Mode A reception): skate to the net-forward anchor while
 	# holding the shot, so the puck arrives on the waiting blade. Once parked,

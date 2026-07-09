@@ -2,7 +2,17 @@ class_name SkaterAimingBehavior
 extends RefCounted
 
 # ── Wrister charge state ──────────────────────────────────────────────────────
+# Cumulative counted sweep distance, UNCLAMPED — consumers normalize against
+# max_wrister_charge_distance at use (release/pred clamp dist_t to 0..1).
+# Keeping the raw total is what keeps avg_sweep_speed() honest when a long
+# hard sweep runs past the charge cap: distance and time keep counting
+# together, so the average doesn't decay just because the bar is full.
 var charge_distance: float = 0.0
+# Seconds the sweep actively spent moving (ChargeTracking adds delta only on
+# counted ticks). charge_distance / sweep_time is the average sweep speed —
+# the wrister power model's primary signal. Saved/restored across reconcile
+# replay alongside charge_distance (LocalController), same shape of problem.
+var sweep_time: float = 0.0
 var wrister_start_blade_local_x: float = 0.0
 # Cursor (intent) position in SCREEN-space, packed into a Vector3 as
 # (screen.x, 0, screen.y). The charge tracker reads its DIRECTION from
@@ -29,6 +39,7 @@ var one_timer_window_timer: float = 0.0
 
 func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Vector3) -> void:
 	charge_distance = 0.0
+	sweep_time = 0.0
 	prev_blade_dir = Vector3.ZERO
 	prev_intent_pos = initial_intent_pos
 	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
@@ -38,15 +49,27 @@ func tick_wrister_charge(
 		intent_pos: Vector3,
 		blade_pos_rel_skater: Vector3,
 		max_charge_direction_variance: float,
-		max_wrister_charge_distance: float) -> void:
+		delta: float,
+		max_counted_sweep_speed: float) -> void:
 	var result: Dictionary = ChargeTracking.accumulate(
 			prev_intent_pos, intent_pos,
 			prev_blade_pos_rel_skater, blade_pos_rel_skater,
-			prev_blade_dir, charge_distance, max_charge_direction_variance)
-	charge_distance = minf(result.charge, max_wrister_charge_distance)
+			prev_blade_dir, charge_distance, max_charge_direction_variance,
+			sweep_time, delta, max_counted_sweep_speed)
+	charge_distance = result.charge
+	sweep_time = result.sweep_time
 	prev_blade_dir = result.direction
 	prev_intent_pos = intent_pos
 	prev_blade_pos_rel_skater = blade_pos_rel_skater
+
+
+# Average on-axis sweep speed (m/s) of the accumulated drag — the wrister
+# power model's speed signal (ShotMechanics.wrister_power_t). Zero until a
+# sweep has actually counted motion.
+func avg_sweep_speed() -> float:
+	if charge_distance <= 0.0 or sweep_time <= 0.0:
+		return 0.0
+	return charge_distance / sweep_time
 
 # ── Slapper ───────────────────────────────────────────────────────────────────
 

@@ -459,6 +459,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# inflates O(N). Save the live values and restore after replay; live tick
 	# state is the truth, replay's pass through the same inputs is discarded.
 	var pre_charge_distance: float = _aiming.charge_distance
+	var pre_charge_sweep_time: float = _aiming.sweep_time
 	var pre_charge_prev_intent_pos: Vector3 = _aiming.prev_intent_pos
 	var pre_charge_prev_blade_pos: Vector3 = _aiming.prev_blade_pos_rel_skater
 	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
@@ -526,6 +527,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.wrister_start_blade_local_x = pre_wrister_start_blade_x
 	_aiming.charge_distance = pre_charge_distance
+	_aiming.sweep_time = pre_charge_sweep_time
 	_aiming.prev_intent_pos = pre_charge_prev_intent_pos
 	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
 	_aiming.prev_blade_dir = pre_charge_prev_blade_dir

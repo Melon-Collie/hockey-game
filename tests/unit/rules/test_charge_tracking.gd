@@ -80,3 +80,48 @@ func test_player_movement_does_not_create_charge() -> void:
 	var result: Dictionary = ChargeTracking.accumulate(
 		prev_relative, curr_relative, prev_relative, curr_relative, Vector3.ZERO, 0.0, VARIANCE_DEG)
 	assert_almost_eq(result.charge, 0.0, 0.001, "skating with held cursor adds no charge")
+
+# ── Sweep time + counted-speed cap (the wrister power model's speed signal) ──
+
+const DT: float = 1.0 / 120.0
+
+func test_sweep_time_accumulates_on_counted_ticks() -> void:
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.5, 0, 0), Vector3.ZERO, Vector3(0.5, 0, 0),
+		Vector3.ZERO, 0.0, VARIANCE_DEG, 0.0, DT, 0.0)
+	assert_almost_eq(result.sweep_time, DT, 0.00001, "counted tick adds delta")
+	assert_almost_eq(result.charge, 0.5, 0.001)
+
+func test_idle_tick_holds_sweep_time() -> void:
+	# Cursor stationary: neither charge nor time advances — "draw, then hold
+	# for the lane" must preserve the loaded average sweep speed.
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(0.5, 0, 0), Vector3(0.5, 0, 0), Vector3(0.5, 0, 0),
+		Vector3(1, 0, 0), 0.7, VARIANCE_DEG, 0.25, DT, 0.0)
+	assert_almost_eq(result.sweep_time, 0.25, 0.00001, "idle tick holds sweep time")
+	assert_almost_eq(result.charge, 0.7, 0.001, "idle tick holds charge")
+
+func test_counted_speed_cap_trims_single_tick_yank() -> void:
+	# A one-tick 0.5 m yank against a 2 m/s cap over a 0.1 s tick counts only
+	# 0.2 m — an instant gesture banks short runway (a snap), not full charge.
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.5, 0, 0), Vector3.ZERO, Vector3(0.5, 0, 0),
+		Vector3.ZERO, 0.0, VARIANCE_DEG, 0.0, 0.1, 2.0)
+	assert_almost_eq(result.charge, 0.2, 0.001, "counted travel capped at speed × delta")
+	assert_almost_eq(result.sweep_time, 0.1, 0.00001, "capped tick still counts its time")
+
+func test_cap_disabled_when_nonpositive() -> void:
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.5, 0, 0), Vector3.ZERO, Vector3(0.5, 0, 0),
+		Vector3.ZERO, 0.0, VARIANCE_DEG, 0.0, 0.001, 0.0)
+	assert_almost_eq(result.charge, 0.5, 0.001, "cap <= 0 counts full travel")
+
+func test_variance_reset_zeroes_sweep_time_with_charge() -> void:
+	# Direction reversal starts a new sweep: both accumulators reset, then the
+	# reversal tick's own motion counts into the fresh sweep.
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(0.3, 0, 0),
+		Vector3(0.5, 0, 0), Vector3(0.3, 0, 0),
+		Vector3(1, 0, 0), 1.0, VARIANCE_DEG, 0.5, DT, 0.0)
+	assert_almost_eq(result.charge, 0.2, 0.001, "charge reset then reversal tick counted")
+	assert_almost_eq(result.sweep_time, DT, 0.00001, "sweep time reset with charge")

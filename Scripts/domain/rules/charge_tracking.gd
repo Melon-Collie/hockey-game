@@ -25,11 +25,31 @@ class_name ChargeTracking
 # by more than max_direction_variance_deg — models the player "setting
 # up" the shot: a straight drag loads charge; zig-zags reset it.
 #
-# Caller owns the per-frame state (prev_intent_pos, prev_blade_pos,
-# prev_direction, charge). Each tick it calls accumulate() with the
-# current positions and stores back the returned values.
+# SWEEP TIME: alongside distance, accumulate() tracks how long the sweep
+# actively spent moving (delta added only on ticks that counted charge).
+# charge / sweep_time is the AVERAGE sweep speed — the primary power
+# signal of the wrister (ShotMechanics.wrister_power_t): a slow deliberate
+# sweep is a soft pass, a ripped sweep is a full shot. Ticks where the
+# cursor holds still add neither charge nor time, so "draw, then hold for
+# the shooting lane" preserves the loaded shot instead of diluting it.
+# A direction-variance reset zeroes time together with charge — a new
+# sweep starts a fresh average.
 #
-# Returns { "charge": float, "direction": Vector3 }.
+# COUNTED-SPEED CAP: per-tick counted blade travel is clamped to
+# max_counted_speed × delta. The blade TARGET the caller measures is the
+# ROM-clamped cursor projection, so a single-tick cursor yank can
+# otherwise traverse the whole reachable arc at once and load full charge
+# with zero runway. The cap is the "the blade can only move so fast"
+# budget for charge counting: a yank still reads as a fast sweep (high
+# average speed) but only banks the capped distance, so instant gestures
+# release as snaps, not full wristers. Pass <= 0.0 to disable (legacy
+# behavior).
+#
+# Caller owns the per-frame state (prev_intent_pos, prev_blade_pos,
+# prev_direction, charge, sweep_time). Each tick it calls accumulate()
+# with the current positions and stores back the returned values.
+#
+# Returns { "charge": float, "direction": Vector3, "sweep_time": float }.
 #   - direction: the most recent meaningful cursor-motion unit vector.
 #     Caller passes this as prev_direction next tick. Vector3.ZERO means
 #     "no direction yet recorded" (first frame or negligible cursor
@@ -41,23 +61,30 @@ static func accumulate(
 		current_blade_pos: Vector3,
 		prev_direction: Vector3,
 		current_charge: float,
-		max_direction_variance_deg: float) -> Dictionary:
+		max_direction_variance_deg: float,
+		current_sweep_time: float = 0.0,
+		delta: float = 0.0,
+		max_counted_speed: float = 0.0) -> Dictionary:
 	var intent_delta := current_intent_pos - prev_intent_pos
 	intent_delta.y = 0.0
 	var intent_dist: float = intent_delta.length()
 	if intent_dist <= 0.001:
-		# Cursor not moving — no drag intent this tick. Hold direction
-		# and charge unchanged regardless of what the blade did
-		# (e.g., locomotion-induced blade motion doesn't pump charge
-		# without intent).
-		return {"charge": current_charge, "direction": prev_direction}
+		# Cursor not moving — no drag intent this tick. Hold direction,
+		# charge, and sweep time unchanged regardless of what the blade
+		# did (e.g., locomotion-induced blade motion doesn't pump charge
+		# without intent). Holding time too is what lets a player draw
+		# the shot and wait for a lane without the average speed decaying.
+		return {"charge": current_charge, "direction": prev_direction,
+				"sweep_time": current_sweep_time}
 
 	var current_dir: Vector3 = intent_delta.normalized()
 	var new_charge: float = current_charge
+	var new_sweep_time: float = current_sweep_time
 	if prev_direction != Vector3.ZERO:
 		var angle_deg: float = rad_to_deg(prev_direction.angle_to(current_dir))
 		if angle_deg > max_direction_variance_deg:
 			new_charge = 0.0
+			new_sweep_time = 0.0
 
 	# Magnitude from blade travel PROJECTED onto the intent direction.
 	# Only motion the player intended counts — tangential blade motion
@@ -68,6 +95,9 @@ static func accumulate(
 	blade_delta.y = 0.0
 	var aligned_magnitude: float = blade_delta.dot(current_dir)
 	if aligned_magnitude > 0.0:
+		if max_counted_speed > 0.0 and delta > 0.0:
+			aligned_magnitude = minf(aligned_magnitude, max_counted_speed * delta)
 		new_charge += aligned_magnitude
+		new_sweep_time += delta
 
-	return {"charge": new_charge, "direction": current_dir}
+	return {"charge": new_charge, "direction": current_dir, "sweep_time": new_sweep_time}

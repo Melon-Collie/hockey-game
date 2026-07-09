@@ -274,14 +274,40 @@ const POKE_RADIUS_M: float = 0.5
 
 # Wrister/slapper/quick-shot puck release speeds. The puck consumes
 # `direction × power` directly as linear velocity (see Puck.release),
-# so "power" IS m/s. Min and max bracket the charge curve.
-const DEFAULT_WRISTER_POWER_MIN_M_S: float = 14.0
-const DEFAULT_WRISTER_POWER_MAX_M_S: float = 24.0
+# so "power" IS m/s. Min and max bracket the wrister power model
+# (ShotMechanics.wrister_power_t — sweep speed × drag distance, feel-curve
+# shaped). The min sits BELOW the quick-shot/pass speed on purpose: a slow
+# deliberate sweep is a soft touch pass, softer than the fixed snap pass.
+# The max is a genuine NHL-weight wrister (~30 m/s ≈ 67 mph) — reception
+# already gates hard shots (deflect_min_speed ~20 m/s needs a squared
+# blade), so the top half of the band is catch-with-care territory.
+const DEFAULT_WRISTER_POWER_MIN_M_S: float = 10.0
+const DEFAULT_WRISTER_POWER_MAX_M_S: float = 30.0
 const DEFAULT_SLAPPER_POWER_MIN_M_S: float = 17.0
 const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 34.0
 # Quick-shot is the no-charge release — also used by AI as the typical
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0
+
+# ── Wrister power-model defaults (ShotMechanics.wrister_power_t) ──────────────
+# Feel tunables — live editor tuning isn't the workflow, but they're @exports
+# on SkaterController; these are the shared defaults so the bot AI's gesture
+# synthesis and inverse power solve stay calibrated to the live shot.
+# Average on-axis blade sweep speed (m/s) that reads as a full-speed sweep.
+const DEFAULT_WRISTER_FULL_SWEEP_SPEED_M_S: float = 7.0
+# Per-tick counted-travel cap for charge accumulation (m/s). The blade
+# target is an ROM-clamped cursor projection, so without this a single-tick
+# cursor yank banks the whole reachable arc as charge; with it, a yank reads
+# as a fast sweep with short runway — a snap shot. Must stay above the
+# fastest legit bot sweep: the largest attribute-scaled charge cap
+# (~1.04 m, low-Shot × tall) swept over BOT_WRISTER_CHARGE_TICKS (~67 ms)
+# is ~15.6 m/s.
+const DEFAULT_WRISTER_MAX_COUNTED_SWEEP_SPEED_M_S: float = 18.0
+# Power fraction a zero-runway sweep can reach — the snap-shot ceiling.
+const DEFAULT_WRISTER_SNAP_POWER_FRACTION: float = 0.62
+# Feel-curve exponent on the combined power parameter (< 1.0 = top-end
+# generous: an ordinary confident flick lands high in the band).
+const DEFAULT_WRISTER_POWER_CURVE: float = 0.85
 
 # ── Goalie Defaults ───────────────────────────────────────────────────────────
 # Shared between GoalieController @export and AIActionScoring's goalie

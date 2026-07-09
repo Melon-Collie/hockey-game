@@ -54,8 +54,11 @@ var _script_target_xz: Vector2 = Vector2.INF
 var _script_aim: Vector3 = Vector3.INF
 var _script_hold: bool = true
 const _SCRIPT_ARRIVAL_RADIUS_M: float = 0.5
-# Charge ticks: wrister matches the bot SM's BOT_WRISTER_CHARGE_TICKS (60 →
-# 250 ms at 120 Hz); slap is longer for a recognisable wind-up.
+# Charge ticks: the scripted wrister holds a STATIC aim while "charging"
+# (no cursor sweep → no charge accumulates), so it releases as a min-power
+# wrister regardless of this window — the ticks only set a readable wind-up
+# pause for tutorial demos. Deliberately longer than the bot SM's
+# BOT_WRISTER_CHARGE_TICKS (~67 ms), which is a real charge sweep.
 const _SCRIPT_WRIST_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4       # 250 ms
 const _SCRIPT_SLAP_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 8    # 375 ms
 # Shot mini-state-machine: 0 idle, 1 press-edge, 2 charging, 3 release-pending.

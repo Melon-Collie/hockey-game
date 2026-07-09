@@ -36,12 +36,14 @@ const ELEVATION_HIGH: int = 2
 # Cap on the pre-normalization Y/XZ ratio of a lofted direction: 1.0 = 45°.
 # This is a degenerate-input guard, not a feel lever — it stops y from running
 # toward vertical as power approaches the level's launch speed. At 45° it
-# binds only below ~6.9 m/s at HIGH loft, which no legit release reaches (the
-# softest is a min-charge backhand wrister ~8.4 m/s), so every real shot gets
-# its full level v_y and steep soft flips (chip over a sprawled goalie, a
-# rainbow flip clear) stay possible. Keeps every legit direction under
-# ShotReleaseRules.MAX_DIRECTION_Y (normalized y at 45° is ~0.707 vs the 0.75
-# clamp) so the host's forged-direction clamp never touches an honest shot.
+# binds only below ~6.9 m/s at HIGH loft. Since the wrister floor dropped to
+# 10 m/s (soft touch passes), the very softest release — a min-power backhand
+# from a low-Hands skater, ~6.4 m/s — can now reach the cap, flattening that
+# flip to 45° instead of running vertical: exactly the intended behavior (a
+# soft chip over a sprawled goalie stays possible, never a straight-up pop).
+# Every other release gets its full level v_y. Keeps every legit direction
+# under ShotReleaseRules.MAX_DIRECTION_Y (normalized y at 45° is ~0.707 vs the
+# 0.75 clamp) so the host's forged-direction clamp never touches an honest shot.
 const MAX_LOFT_RATIO: float = 1.0
 
 class WristerConfig:
@@ -52,6 +54,18 @@ class WristerConfig:
 	var quick_shot_power: float = 0.0
 	var loft_vy_low: float = 0.0                # vertical launch speed (m/s), level 1
 	var loft_vy_high: float = 0.0               # vertical launch speed (m/s), level 2
+	# ── Power model (see wrister_power_t) ──
+	# Average sweep speed (m/s of on-axis blade travel) that reads as a
+	# full-speed sweep. <= 0.0 disables the speed axis (legacy
+	# distance-only power).
+	var full_sweep_speed: float = 0.0
+	# Power fraction a zero-runway sweep can reach: the SNAP SHOT ceiling.
+	# Distance dragged lerps this up to 1.0 — runway loads flex.
+	var snap_power_fraction: float = 0.0
+	# Feel-curve exponent on the combined 0..1 power parameter. < 1.0 is
+	# top-end generous (an ordinary confident flick lands high in the
+	# band); 1.0 is linear. <= 0.0 means linear.
+	var power_curve: float = 0.0
 
 class SlapperConfig:
 	var min_slapper_power: float = 0.0
@@ -60,6 +74,54 @@ class SlapperConfig:
 	var loft_vy_low: float = 0.0
 	var loft_vy_high: float = 0.0
 
+# ── Wrister power model ───────────────────────────────────────────────────────
+# Normalized 0..1 charged-wrister power from the two sweep signals:
+#   - SWEEP SPEED (primary): average on-axis blade speed over the drag
+#     (ChargeTracking charge / sweep_time). The puck leaves the blade at
+#     roughly the blade's speed through contact — a slow deliberate sweep
+#     is a soft touch pass, a ripped sweep is a full shot.
+#   - DISTANCE (the ceiling): runway loads flex. A zero-runway sweep caps
+#     at snap_power_fraction (the SNAP SHOT — quick release, real pace,
+#     not the full bomb); a full drag unlocks 1.0.
+# power_curve then shapes the combined parameter — the feel curve. All
+# three shot shapes fall out of the one model with no extra inputs:
+#   slow sweep, any distance  → soft pass-weight wrister
+#   fast sweep, short runway  → snap shot (~snap_power_fraction)
+#   fast sweep, full runway   → full wrister
+static func wrister_power_t(sweep_speed: float, dist_t: float, cfg: WristerConfig) -> float:
+	var speed_t: float = 1.0
+	if cfg.full_sweep_speed > 0.0:
+		speed_t = clampf(sweep_speed / cfg.full_sweep_speed, 0.0, 1.0)
+	var flex: float = lerpf(cfg.snap_power_fraction, 1.0, clampf(dist_t, 0.0, 1.0))
+	var t: float = speed_t * flex
+	if cfg.power_curve > 0.0:
+		t = pow(t, cfg.power_curve)
+	return t
+
+# Inverse of the power model for a CONSTANT-RATE sweep — the bot gesture.
+# A bot sweeps its synthetic cursor across a chosen distance over a fixed
+# duration, so sweep speed = distance / duration and power is monotonic in
+# distance. Bisection finds the charge distance whose release power (pre-
+# backhand) hits target_power; clamps to the model's reachable range.
+# Decision-time only (once per bot pass commit), never per-tick.
+static func wrister_charge_for_power(
+		target_power: float,
+		sweep_duration_s: float,
+		cfg: WristerConfig) -> float:
+	var duration: float = maxf(sweep_duration_s, 0.001)
+	var lo: float = 0.0
+	var hi: float = cfg.max_wrister_charge_distance
+	for _i in range(24):
+		var mid: float = (lo + hi) * 0.5
+		var t: float = wrister_power_t(
+				mid / duration, mid / cfg.max_wrister_charge_distance, cfg)
+		var power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, t)
+		if power < target_power:
+			lo = mid
+		else:
+			hi = mid
+	return (lo + hi) * 0.5
+
 # Wrister release. HARD BINARY — a quick shot and a charged wrister are two
 # distinct shots, with NO blend between them. Which one fires is decided by the
 # INPUT at the call site (not any threshold in here) and passed in as is_quick_shot:
@@ -67,7 +129,8 @@ class SlapperConfig:
 #     player→blade (the blade tracks the cursor via ROM-clamped IK, so aim is
 #     accurate and can never point behind the player) at the fixed quick/pass power.
 #   - WRISTER (the LMB shoot button, via _release_wrister): aims along the DRAG
-#     (the swept cursor direction) at charged power. The drag direction IS the aim —
+#     (the swept cursor direction) at charged power — the speed × distance model
+#     above (wrister_power_t), fed by sweep_speed. The drag direction IS the aim —
 #     this is the defining mechanic of the shot, so it is never diluted.
 # The two live on separate buttons precisely so there's no tap-vs-hold guess: the
 # old hold-time classifier made an ordinary tap that lingered a few ticks fire a
@@ -88,7 +151,8 @@ static func release_wrister(
 		charge_distance: float,
 		cfg: WristerConfig,
 		charge_direction: Vector3 = Vector3.ZERO,
-		is_quick_shot: bool = false) -> ShotResult:
+		is_quick_shot: bool = false,
+		sweep_speed: float = 0.0) -> ShotResult:
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
 	var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
 
@@ -106,15 +170,17 @@ static func release_wrister(
 				Vector3(tap_dir.x, tap_y, tap_dir.z).normalized(),
 				cfg.quick_shot_power)
 
-	# WRISTER — aim along the drag, power scaling with charge. Falls back to
-	# player→mouse only when no drag direction was recorded.
+	# WRISTER — aim along the drag, power from the sweep-speed × distance model
+	# (wrister_power_t). Falls back to player→mouse only when no drag direction
+	# was recorded.
 	var charge_t: float = clampf(charge_distance / cfg.max_wrister_charge_distance, 0.0, 1.0)
 	var wrister_dir: Vector3
 	if charge_direction.length_squared() > 0.0001:
 		wrister_dir = Vector3(charge_direction.x, 0.0, charge_direction.z).normalized()
 	else:
 		wrister_dir = (target - player_xz).normalized()
-	var power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, charge_t)
+	var power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power,
+			wrister_power_t(sweep_speed, charge_t, cfg))
 	if is_backhand:
 		power *= cfg.backhand_power_coefficient
 

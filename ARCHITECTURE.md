@@ -196,7 +196,7 @@ Blade placement goes through a custom top-hand inverse-kinematics solver (`TopHa
 
 **Quick shot:** Tap left click. Fires blade-direction at `quick_shot_power`. Low skill floor.
 
-**Wrister:** Hold left click, sweep blade to charge (distance-based), release to fire. Direction variance check resets charge if blade changes direction > 55° — prevents charge farming.
+**Wrister:** Hold left click, sweep blade to charge, release to fire. Power is the sweep model (`ShotMechanics.wrister_power_t`): **average sweep speed** (`ChargeTracking` charge ÷ sweep time) is the primary signal — a slow sweep is a soft touch pass below snap speed — while **drag distance** gates the ceiling (short runway caps at `wrister_snap_power_fraction`: the snap shot), shaped by the `wrister_power_curve` feel exponent. A per-tick counted-speed cap stops a single-tick cursor yank from banking full charge. Sweep time only accrues on counted ticks, so draw-then-hold-for-the-lane keeps the loaded shot. Direction variance check (`max_charge_direction_variance`) resets charge + sweep time on a sharp direction change — prevents charge farming. The charge ring shows normalized release-now power (the every-tick predicted release), not raw drag distance.
 
 **Slapshot (with puck):** Hold right click. Blade fixes forehand, skater glides, upper body aims within `slapper_aim_arc`. Time-based charge.
 

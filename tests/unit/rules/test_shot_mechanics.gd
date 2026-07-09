@@ -11,7 +11,13 @@ func _wrister_cfg() -> ShotMechanics.WristerConfig:
 	cfg.quick_shot_power = 12.0
 	cfg.loft_vy_low = 2.2
 	cfg.loft_vy_high = 5.4
+	cfg.full_sweep_speed = 7.0
+	cfg.snap_power_fraction = 0.62
+	cfg.power_curve = 0.85
 	return cfg
+
+# Sweep speed that saturates the power model's speed axis for _wrister_cfg().
+const FULL_SWEEP: float = 10.0
 
 func _slapper_cfg() -> ShotMechanics.SlapperConfig:
 	var cfg := ShotMechanics.SlapperConfig.new()
@@ -53,15 +59,16 @@ func test_wrister_quick_shot_direction_from_blade() -> void:
 
 # ── Wrister: full charge branch ──────────────────────────────────────────────
 
-func test_wrister_full_charge_maxes_power() -> void:
+func test_wrister_full_charge_full_sweep_maxes_power() -> void:
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,
 		Vector3(10, 0, 0),
 		Vector3(0.5, 0, 0),
 		false, 0,
 		5.0,                            # over max_wrister_charge_distance
-		_wrister_cfg())
-	assert_almost_eq(result.power, 25.0, 0.01, "over-full charge clamps to max_wrister_power")
+		_wrister_cfg(),
+		Vector3.ZERO, false, FULL_SWEEP)
+	assert_almost_eq(result.power, 25.0, 0.01, "full-speed over-full sweep clamps to max_wrister_power")
 
 func test_wrister_backhand_penalty() -> void:
 	var cfg := _wrister_cfg()
@@ -181,6 +188,93 @@ func test_wrister_charged_falls_back_to_mouse_when_no_drag_direction() -> void:
 		Vector3.ZERO)           # no drag direction
 	assert_gt(result.direction.x, 0.9, "falls back to player→mouse direction (+X)")
 
+# ── Wrister power model: sweep speed × distance, feel-curve shaped ───────────
+
+func test_wrister_slow_sweep_is_soft_even_at_full_distance() -> void:
+	# A slow deliberate sweep across the full drag distance is a touch pass,
+	# not a full shot — sweep speed is the primary power signal.
+	var cfg := _wrister_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, 3.0, cfg, Vector3(1, 0, 0), false, 1.0)  # 1 m/s sweep
+	var midpoint: float = (cfg.min_wrister_power + cfg.max_wrister_power) * 0.5
+	assert_lt(r.power, midpoint, "slow full-distance sweep stays in the soft half")
+	assert_gt(r.power, cfg.min_wrister_power, "still above the bare floor")
+
+func test_wrister_fast_short_sweep_is_snap_capped() -> void:
+	# Zero runway at full speed = the snap shot: exactly the snap fraction of
+	# the band (curve-shaped), quicker than a full drag but not the full bomb.
+	var cfg := _wrister_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, 0.0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP)
+	var expected: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power,
+			pow(cfg.snap_power_fraction, cfg.power_curve))
+	assert_almost_eq(r.power, expected, 0.01, "zero-runway fast sweep hits the snap ceiling")
+	assert_lt(r.power, cfg.max_wrister_power, "snap is below the full wrister")
+
+func test_wrister_power_monotonic_in_sweep_speed() -> void:
+	var cfg := _wrister_cfg()
+	var prev_power: float = -1.0
+	for sweep: float in [0.0, 2.0, 4.0, 6.0, 8.0]:
+		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+			Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+			false, 0, 3.0, cfg, Vector3(1, 0, 0), false, sweep)
+		assert_gt(r.power, prev_power, "power never decreases as the sweep speeds up")
+		prev_power = r.power
+
+func test_wrister_power_monotonic_in_distance() -> void:
+	var cfg := _wrister_cfg()
+	var prev_power: float = -1.0
+	for charge: float in [0.0, 1.0, 2.0, 3.0]:
+		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+			Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+			false, 0, charge, cfg, Vector3(1, 0, 0), false, FULL_SWEEP)
+		assert_gt(r.power, prev_power, "power never decreases as the runway grows")
+		prev_power = r.power
+
+func test_wrister_zero_full_sweep_speed_disables_speed_axis() -> void:
+	# Legacy/uncalibrated config: full_sweep_speed <= 0 falls back to the
+	# distance-only power curve (speed_t treated as 1.0).
+	var cfg := _wrister_cfg()
+	cfg.full_sweep_speed = 0.0
+	cfg.power_curve = 0.0
+	cfg.snap_power_fraction = 0.0
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, 3.0, cfg, Vector3(1, 0, 0), false, 0.0)
+	assert_almost_eq(r.power, cfg.max_wrister_power, 0.01,
+		"distance-only fallback reaches max without a sweep-speed signal")
+
+func test_wrister_quick_shot_ignores_sweep_speed() -> void:
+	var cfg := _wrister_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, 3.0, cfg, Vector3.ZERO, true, FULL_SWEEP)
+	assert_almost_eq(r.power, cfg.quick_shot_power, 0.01,
+		"quick shot stays at fixed pass power whatever the sweep did")
+
+func test_wrister_charge_for_power_round_trip() -> void:
+	# The bot inverse: solve the charge distance whose constant-rate sweep
+	# releases at the target power, then run it forward through the model.
+	var cfg := _wrister_cfg()
+	var duration: float = 0.067
+	for target: float in [10.0, 14.0, 19.0, 24.0]:
+		var d: float = ShotMechanics.wrister_charge_for_power(target, duration, cfg)
+		var t: float = ShotMechanics.wrister_power_t(
+				d / duration, d / cfg.max_wrister_charge_distance, cfg)
+		var power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power, t)
+		assert_almost_eq(power, target, 0.05,
+			"solved charge releases at the target power (%.1f)" % target)
+
+func test_wrister_charge_for_power_clamps_to_range() -> void:
+	var cfg := _wrister_cfg()
+	assert_almost_eq(ShotMechanics.wrister_charge_for_power(0.0, 0.067, cfg),
+			0.0, 0.001, "below-floor target solves to zero charge")
+	assert_almost_eq(ShotMechanics.wrister_charge_for_power(999.0, 0.067, cfg),
+			cfg.max_wrister_charge_distance, 0.001,
+			"unreachable target solves to the full charge cap")
+
 # ── Slapper ──────────────────────────────────────────────────────────────────
 
 func test_slapper_uses_shot_direction_when_provided() -> void:
@@ -229,7 +323,7 @@ func test_loft_vertical_speed_fixed_across_charge() -> void:
 			Vector3.ZERO, Vector3(0, 0, 10),
 			Vector3(0.5, 0, 0),
 			false, 2, charge, cfg,
-			Vector3(0, 0, 1))
+			Vector3(0, 0, 1), false, FULL_SWEEP)
 		var v_y: float = r.power * r.direction.y
 		assert_almost_eq(v_y, cfg.loft_vy_high, 0.01,
 			"vertical launch speed is the level constant at charge %.1f" % charge)
