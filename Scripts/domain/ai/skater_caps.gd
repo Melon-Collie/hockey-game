@@ -45,6 +45,13 @@ var stick_reach: float = GameRules.DEFAULT_STICK_LENGTH_M
 # (its hardest possible pass) — see AIActionScoring.pass_launch_speed.
 var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 
+# How fast the blade traverses its ROM to chase the aim cursor (Hands, =
+# SkaterController.max_blade_speed). This is the REAL rotation/aim speed the body
+# is clamped to, so a bot slews its synthesized aim cursor at exactly this rate —
+# its aiming looks as fast as its hands actually are, no artificial per-difficulty
+# override. Default mirrors the controller's 10.0.
+var blade_speed: float = 10.0
+
 # Body-check delivery (Size + Physical): the attacker impulse coefficient. The
 # victim impulse is `approach × (attacker_weight / victim_weight) × transfer` (see
 # Skater._resolve_player_collisions) — a high-Size/Physical player predicts harder

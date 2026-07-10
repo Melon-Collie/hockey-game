@@ -940,6 +940,13 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	_self_weight = caps.weight
 	_self_body_check_transfer = caps.body_check_transfer
 	_self_handle_reach = caps.handle_reach
+	# Aim at the bot's REAL blade speed (Hands): the synthesized aim cursor slews
+	# at the same rate the blade is physically clamped to, so aiming looks exactly
+	# as fast as its hands are — no artificial per-difficulty slew. Difficulty comes
+	# from reaction delay / decision cadence / the bot's own build, not a
+	# hands-override. (The cursor tracking the blade keeps pre-aim convergence
+	# honest — "aimed" means the blade is actually there.)
+	_apply_aim_slew(caps.blade_speed)
 
 
 # This bot's target power fraction (0..1) for a charged pass at _pass_target_speed,
@@ -994,21 +1001,28 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 func apply_profile(profile: BotSkillProfile) -> void:
 	if profile == null:
 		return
-	_mouse_max_speed_m_s = profile.mouse_max_speed_m_s
+	# Aim slew is NOT a difficulty knob anymore — it's the bot's real Hands blade
+	# speed, set in apply_capabilities. Difficulty here is reaction/cadence/pace.
 	_dispatch_period_ticks = maxi(1, profile.dispatch_period_ticks)
 	_pursuit_standoff_m = profile.pursuit_standoff_m
 	_pass_speed_scale = profile.pass_speed_scale
 	_check_aggression = profile.check_aggression
 	_defensive_anticipation_scale = profile.defensive_anticipation_scale
+
+
+# Set the aim-cursor slew (and the arc rate + pre-aim timeout derived from it) to
+# `slew` m/s — the bot's real Hands blade speed, so the cursor tracks the blade.
+func _apply_aim_slew(slew: float) -> void:
+	_mouse_max_speed_m_s = slew
 	# Arc rate: lesser of the IK-gate ceiling and the linear slew cap projected
 	# onto the carry ring radius — above either, the arc-step chord-cuts the
 	# back-pass swing or the body-facing lag trips the pose IK gate.
 	_mouse_arc_rate_rad_s = minf(MOUSE_ARC_RATE_RAD_S,
 			_mouse_max_speed_m_s / CARRY_BLADE_AIM_FORWARD_M)
 	# Pre-aim convergence timeout: time for a worst-case 180° swing at the
-	# (possibly reduced) arc rate, plus a fixed margin — never below the
-	# perfect-bot default. Keeps a slow Normal blade from bailing pre-aim early
-	# on a back-pass and firing in the wrong direction.
+	# (possibly reduced) arc rate, plus a fixed margin — never below the perfect-bot
+	# default. Keeps a slow (low-Hands) blade from bailing pre-aim early on a
+	# back-pass and firing in the wrong direction.
 	var swing_ticks: int = int(ceil((PI / _mouse_arc_rate_rad_s) / MOUSE_TICK_DELTA))
 	_intent_max_wait_ticks = maxi(INTENT_MAX_WAIT_TICKS, swing_ticks + 60)
 

@@ -23,6 +23,8 @@ func test_caps_defaults_equal_league_baseline() -> void:
 	assert_almost_eq(caps.body_check_brace, 0.4, 0.001)
 	assert_almost_eq(caps.handle_reach, AIActionScoring.EVADE_CARRY_HANDLE_M, 0.001,
 			"handle reach defaults to the league carry-handle reach")
+	assert_almost_eq(caps.blade_speed, 10.0, 0.001,
+			"blade speed defaults to the controller's league max_blade_speed")
 
 
 func test_role_context_self_speeds_default_to_baseline() -> void:
@@ -97,6 +99,26 @@ func test_apply_capabilities_derives_reach_gates_and_speeds() -> void:
 	assert_almost_eq(sm._self_max_speed, 10.5, 0.001)
 	assert_almost_eq(sm._chase_max_accel, 13.0, 0.001)
 	assert_almost_eq(sm._self_wrister_shot_speed, 27.0, 0.001)
+
+
+func test_apply_capabilities_sets_aim_slew_to_real_blade_speed() -> void:
+	# Aiming is bounded by the bot's own Hands blade speed, not a per-difficulty
+	# slew — the aim cursor slews at exactly caps.blade_speed, and the arc rate +
+	# pre-aim timeout derive from that so a slower (low-Hands) blade still resolves
+	# a back-pass swing before bailing.
+	var sm := SkaterAgentStateMachine.new()
+	var caps := _caps(2.0, 10.5, 13.0, 27.0)
+	caps.blade_speed = 12.0
+	sm.apply_capabilities(caps)
+	assert_almost_eq(sm._mouse_max_speed_m_s, 12.0, 0.001,
+			"the aim cursor slews at the real Hands blade speed")
+	# A slower blade widens the pre-aim timeout (never below the perfect baseline).
+	var slow := _caps(2.0, 10.5, 13.0, 27.0)
+	slow.blade_speed = 5.0
+	var sm_slow := SkaterAgentStateMachine.new()
+	sm_slow.apply_capabilities(slow)
+	assert_gte(sm_slow._intent_max_wait_ticks, sm._intent_max_wait_ticks,
+			"a slower blade gets at least as long to converge a swing")
 
 
 func test_apply_capabilities_null_is_noop() -> void:

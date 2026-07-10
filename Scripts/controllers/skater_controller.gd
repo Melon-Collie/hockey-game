@@ -866,6 +866,7 @@ func build_ai_caps() -> AISkaterCaps:
 	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
 	caps.stick_reach = stick_length
 	caps.wrister_shot_speed = max_wrister_power
+	caps.blade_speed = max_blade_speed
 	# Handle reach scales with the Hands dangle lever: max_blade_speed / its base
 	# is exactly hands_blade_mult(), so a better handler protects the puck further
 	# out. _base is captured on the first apply_attributes (always run before this).

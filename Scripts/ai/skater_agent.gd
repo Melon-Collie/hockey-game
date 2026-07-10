@@ -15,8 +15,9 @@ var _sm: SkaterAgentStateMachine = SkaterAgentStateMachine.new()
 # Lower values add tracking lag: the blade lags slightly behind its target,
 # dekes don't immediately get matched, and aim transitions read as a smooth
 # swing rather than a snap. A second-stage softener on top of the state
-# machine's blade-slew cap (BotSkillProfile.mouse_max_speed_m_s) — that cap
-# does the heavy lifting; this is the exponential polish.
+# machine's aim-cursor slew — which now tracks the bot's REAL Hands blade speed
+# (AISkaterCaps.blade_speed), not an artificial per-tier cap; this is the
+# exponential polish on pass/carry aim.
 #
 # DEFAULT is the perfect-bot baseline (1.0 = snap); the real per-tier value is
 # set from BotSkillProfile in apply_profile(). Difficulty tuning has landed.
