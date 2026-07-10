@@ -326,15 +326,18 @@ func _pick_action(ctx: RoleContext) -> void:
 			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
 			attacking_goal, goalie_now)
 
-	# Goalie prediction at the wrister release time. Pass-receiver and
-	# carry-candidate cases get their own predictions inside
-	# _compute_best_pass / _best_carry. Predicted with the release-pos
-	# puck X so the goalie's slide target matches where the shot
-	# actually leaves the blade.
-	var wrister_goalie: Vector3 = _predict_goalie_at(
-			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
-	var wrister_unsettled: float = _goalie_unsettled_at(
-			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
+	# Goalie SQUARED to the release position — the keeper has tracked us (the current
+	# puck-holder) the whole way, so a shot from where we already are does NOT catch
+	# him moving. This is the SAME model the carry candidates use (goalie_squared_pos)
+	# and for the same reason: the caught-moving credit is a puck-RELOCATION effect (a
+	# pass / one-timer that outruns his tracking — see _compute_best_pass's unsettled
+	# arg), never a shot the goalie reads the whole way. The react-then-slide
+	# predict_goalie_pos here left the keeper a step behind the shooter's angle, which
+	# read as an open near side and drove the bot to fire from wide angles and long
+	# range the keeper is actually square to. Unsettled is 0 for the same reason.
+	var wrister_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			goalie_now, attacking_goal, wrister_release_pos)
+	var wrister_unsettled: float = 0.0
 
 	# Top-level SHOOT. _scratch_opponent_caps is index-matched to _scratch_opponents
 	# (and thus to _scratch_opponents_shoot, built in the same order), so a lane

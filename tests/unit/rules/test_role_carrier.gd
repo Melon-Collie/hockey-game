@@ -356,6 +356,46 @@ func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
 			+ "not by carrying into it")
 
 
+func _squared_goalie(self_pos: Vector3, net: Vector3, depth: float) -> GoalieNetworkState:
+	# Goalie arc-matched to the carrier (as the live keeper is — it tracks the
+	# current puck-holder), sitting `depth` out from the net.
+	var to_sh: Vector3 = self_pos - net
+	to_sh.y = 0.0
+	var g: Vector3 = net + to_sh.normalized() * depth
+	var gs := GoalieNetworkState.new()
+	gs.position_x = g.x
+	gs.position_z = g.z
+	return gs
+
+
+func test_wide_angle_shot_is_not_taken_against_a_squared_goalie() -> void:
+	# A shot from a wide angle (off to the side, out toward the boards) is not a real
+	# chance when the goalie has tracked the carrier and is square — the net is
+	# foreshortened and the keeper covers the near side. The direct shot must be
+	# scored against that SQUARED goalie (he read the carry the whole way), not a
+	# react-then-slide keeper left a step behind — otherwise the bot fires from
+	# nowhere. Wide-angle shoot value must sit below the fire floor while a genuine
+	# slot chance from the same distance clears it comfortably.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var wide := Vector3(9.0, 0.0, -22.0)                  # ~10 m out, sharp angle
+	var wctx := _make_ctx(wide)
+	wctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(wide, net, 1.3)
+	var wc := AIRoleCarrier.new()
+	wc.decide(wctx)
+	assert_lt(wc.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE,
+			"a wide-angle shot vs a squared goalie is below the fire floor; got %f"
+			% wc.debug_shoot_score)
+
+	var slot := Vector3(0.0, 0.0, -22.0)                 # same range, dead slot
+	var sctx := _make_ctx(slot)
+	sctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(slot, net, 1.3)
+	var sc := AIRoleCarrier.new()
+	sc.decide(sctx)
+	assert_gt(sc.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE * 3.0,
+			"a dead-slot chance at the same range still clears the fire floor; got %f"
+			% sc.debug_shoot_score)
+
+
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────
 
 func test_wall_exit_carry_wins_when_middle_is_clogged() -> void:
