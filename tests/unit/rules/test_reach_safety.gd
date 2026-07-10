@@ -85,3 +85,35 @@ func test_seam_points_into_open_space() -> void:
 	var seam: Vector3 = AIActionScoring.best_evade_point(
 			Vector3.ZERO, Vector3(4, 0, 0), opps, vels, HANDLE)
 	assert_lt(seam.z, 0.5, "seam leans away from the defender on the +Z side")
+
+
+# ─── carry_strip_point: WHERE a carry gets stripped ──────────────────────────
+
+func test_strip_point_is_the_tight_midroute_not_the_safe_destination() -> void:
+	# Carry from (0,0) to a clear destination (0,10), but a defender sits right on
+	# the mid-route point (0,5). The strip, if it happens, is mid-route — the cost
+	# must localize there, not at the open destination.
+	var from := Vector3(0, 0, 0)
+	var to := Vector3(0, 0, 10)
+	var opps: Array[Vector3] = [Vector3(0, 0, 5)]     # parked on the midpoint
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var strip: Vector3 = AIActionScoring.carry_strip_point(from, to, 1.4, opps, vels)
+	assert_almost_eq(strip.z, 5.0, 0.01, "strip localizes to the tight mid-route point")
+
+
+func test_strip_point_is_destination_when_that_is_the_tight_end() -> void:
+	# Clear mid-route, but a defender waiting AT the destination. The strip is there.
+	var from := Vector3(0, 0, 0)
+	var to := Vector3(0, 0, 10)
+	var opps: Array[Vector3] = [Vector3(0, 0, 10)]    # waiting at the destination
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var strip: Vector3 = AIActionScoring.carry_strip_point(from, to, 1.4, opps, vels)
+	assert_almost_eq(strip.z, 10.0, 0.01, "strip localizes to the covered destination")
+
+
+func test_strip_point_of_a_stand_is_the_spot_itself() -> void:
+	var spot := Vector3(3, 0, 7)
+	var opps: Array[Vector3] = [Vector3(4, 0, 7)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var strip: Vector3 = AIActionScoring.carry_strip_point(spot, spot, 0.4, opps, vels)
+	assert_eq(strip, spot, "a stand's strip is where it stands")

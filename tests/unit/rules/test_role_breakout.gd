@@ -182,6 +182,11 @@ func test_strong_swings_mid_seam_when_wall_route_is_covered() -> void:
 	# (it's the carrier's own route AND covered), so the outlet must
 	# swing to the mid-seam column and keep presenting up-ice — not hang
 	# deep on the wall next to the carrier ("stuck there with them").
+	# The forechecker sits near the up-ice end of the seam (z≈9), so with
+	# passes now a soft touch on close feeds (more interceptable), the outlet
+	# correctly backs off the spot right on top of him to a slightly deeper,
+	# safer seam spot — still a full ~9 m up-ice of the carrier, still
+	# stretching toward the exit, not hanging back with him.
 	var self_pos := Vector3(10, 0, 18)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],                             # us (STRONG), on the wall
@@ -194,8 +199,10 @@ func test_strong_swings_mid_seam_when_wall_route_is_covered() -> void:
 	assert_lt(d.target_position.x,
 			GameRules.RINK_HALF_WIDTH - AIRoleBreakout.WALL_INSET_M - 1.0,
 			"…but swings off the covered wall into the mid-seam; got x=%f" % d.target_position.x)
-	assert_lt(d.target_position.z, 12.0,
+	assert_lt(d.target_position.z, 15.0,
 			"keeps presenting up-ice toward the exit instead of hanging with the carrier; got z=%f" % d.target_position.z)
+	assert_lt(d.target_position.z, ctx.snapshot.skater_states[100].position.z - 6.0,
+			"…clearly ahead of the carrier, not clumped with him; got z=%f" % d.target_position.z)
 
 
 func test_strong_keeps_skating_route_when_every_lane_is_dead() -> void:

@@ -647,6 +647,57 @@ func test_realization_discount_matches_delay_discount_currency() -> void:
 			expected, 0.0001)
 
 
+# ── Dumping: zone gates, targets, chase race ──────────────────────────────────
+# GOAL is at +Z, so the attacking side of centre is z > 0.
+
+func test_past_center_toward_attack() -> void:
+	assert_true(AIActionScoring.past_center_toward_attack(Vector3(0, 0, 5.0), GOAL))
+	assert_false(AIActionScoring.past_center_toward_attack(Vector3(0, 0, -5.0), GOAL))
+	assert_false(AIActionScoring.past_center_toward_attack(Vector3(0, 0, 0.0), GOAL),
+			"exactly on centre is not past it")
+	# Folds for the other attack direction.
+	var neg_goal := Vector3(0, 0, -26.65)
+	assert_true(AIActionScoring.past_center_toward_attack(Vector3(0, 0, -5.0), neg_goal))
+	assert_false(AIActionScoring.past_center_toward_attack(Vector3(0, 0, 5.0), neg_goal))
+
+
+func test_dump_clear_target_is_nz_strong_side_boards() -> void:
+	# Carrier on the +x wall, deep in our end.
+	var t: Vector3 = AIActionScoring.dump_clear_target(Vector3(8, 0, -22))
+	assert_almost_eq(t.x, GameRules.RINK_HALF_WIDTH - AIActionScoring.DUMP_RINK_INSET_M, 1e-4,
+			"clears up the strong-side (carrier-side) boards")
+	assert_almost_eq(t.z, 0.0, 1e-6, "out to centre ice — clearly out of our zone")
+	# Carrier on the -x wall → mirror.
+	var t2: Vector3 = AIActionScoring.dump_clear_target(Vector3(-8, 0, -22))
+	assert_lt(t2.x, 0.0, "strong side follows the carrier to the -x boards")
+
+
+func test_dump_in_target_is_far_offensive_corner() -> void:
+	# Attacking +Z, carrier on the +x side → far corner is -x, near the +Z goal line.
+	var t: Vector3 = AIActionScoring.dump_in_target(Vector3(6, 0, 4), GOAL)
+	assert_lt(t.x, 0.0, "far corner is opposite the carrier's side")
+	assert_almost_eq(absf(t.x), GameRules.RINK_HALF_WIDTH - AIActionScoring.DUMP_RINK_INSET_M, 1e-4)
+	assert_almost_eq(t.z, GOAL.z - AIActionScoring.DUMP_CORNER_DEPTH_M, 1e-4,
+			"a corner retrieval short of the goal line, not behind the net")
+
+
+func test_chase_recovery_race() -> void:
+	var target := Vector3(10, 0, 20)
+	# No chaser of ours → we never get it; no opponent → uncontested.
+	assert_eq(AIActionScoring.chase_recovery(target, [], [Vector3(9, 0, 20)]), 0.0)
+	assert_eq(AIActionScoring.chase_recovery(target, [Vector3(9, 0, 20)], []), 1.0)
+	# Dead tie → coin flip.
+	var tie: float = AIActionScoring.chase_recovery(
+			target, [Vector3(7, 0, 20)], [Vector3(13, 0, 20)])   # both 3 m out
+	assert_almost_eq(tie, 0.5, 1e-6)
+	# We're a full contest-margin closer → near-certain.
+	var ours: Array[Vector3] = [Vector3(10, 0, 20)]              # 0 m
+	var theirs: Array[Vector3] = [Vector3(10, 0, 24)]           # 4 m = 2× margin
+	assert_gt(AIActionScoring.chase_recovery(target, ours, theirs), 0.99)
+	# They're closer → near-zero.
+	assert_lt(AIActionScoring.chase_recovery(target, theirs, ours), 0.01)
+
+
 # ── time_to_arrive ───────────────────────────────────────────────────────────
 
 func test_time_to_arrive_zero_at_destination() -> void:
@@ -697,15 +748,17 @@ func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
 
 # ─── expected_pass_speed / pass_launch_speed (distance-adaptive) ─────────
 
-func test_pass_launch_speed_short_feed_is_snap_soft() -> void:
-	# At/under the short threshold a pass fires at the soft snap speed — no rocket
-	# on a close feed.
+func test_pass_launch_speed_short_feed_is_a_soft_touch() -> void:
+	# At/under the short threshold a pass fires at the soft touch pace — a gentle
+	# close feed the receiver corrals in tight, not a rocket.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 	assert_almost_eq(
 			AIActionScoring.pass_launch_speed(AIActionScoring.PASS_RAMP_SHORT_DISTANCE_M, maxw),
-			AIActionScoring.PASS_SPEED_M_S, 0.001)
+			AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, 0.001)
 	assert_almost_eq(AIActionScoring.pass_launch_speed(2.0, maxw),
-			AIActionScoring.PASS_SPEED_M_S, 0.001)
+			AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, 0.001)
+	assert_lt(AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, AIActionScoring.PASS_SPEED_M_S,
+			"a soft touch is softer than the old quick-snap floor")
 
 
 func test_pass_launch_speed_ramps_up_with_distance() -> void:
@@ -716,7 +769,8 @@ func test_pass_launch_speed_ramps_up_with_distance() -> void:
 	var far: float = AIActionScoring.pass_launch_speed(24.0, maxw)
 	assert_gt(mid, near, "an 18 m pass must launch harder than a 12 m one")
 	assert_gt(far, mid, "a 24 m pass must launch harder than an 18 m one")
-	assert_gt(near, AIActionScoring.PASS_SPEED_M_S, "a 12 m pass is past the snap floor")
+	assert_gt(near, AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S,
+			"a 12 m pass is harder than the soft close-touch floor")
 
 
 func test_pass_launch_speed_long_pass_reaches_ramp_top() -> void:

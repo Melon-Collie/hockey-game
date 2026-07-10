@@ -266,21 +266,29 @@ const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 
-# Distance ramp for pass LAUNCH speed. Short feeds stay soft (snap speed) so a
-# close pass isn't a rocket the receiver can't corral; longer passes ramp up for
-# pace, shrinking a defender's reaction window. Continuous (smoothstep) rather
-# than the old binary cliff at a single distance.
+# Distance ramp for pass LAUNCH speed. Now that every bot pass is a paced wrister
+# (the #363 mouse-speed model makes soft releases reliable), a close feed is a
+# genuinely soft touch — down toward the wrister floor, well below the old snap
+# speed — so the receiver can corral it in tight; longer passes ramp up for pace,
+# shrinking a defender's reaction window. The hard end stops at the reception
+# deflect threshold (~20 m/s, PASS_RAMP_LONG_SPEED_M_S): a pass above that can
+# tip off a poorly-angled receiving blade, so a "harder for farther" pass stays
+# exactly at the catchable ceiling. Continuous (smoothstep), not a binary cliff.
 #
 # Why a direct distance ramp and not friction/arrival-speed math: the puck
 # sheds little speed over a pass (GameRules.PUCK_ICE_DECEL_M_S2 ≈ 1 m/s² — e.g. a
 # 26 m pass loses only ~1–2 m/s), so arrival speed ≈ launch speed at realistic
 # distances. Backing a launch out of a target arrival speed would therefore
-# collapse to a near-constant ~snap speed and leave long passes too soft to beat
+# collapse to a near-constant speed and leave long passes too soft to beat
 # interception. Distance is the right axis directly: a long pass can be fast
-# because its longer flight gives the receiver time to square up.
-const PASS_RAMP_SHORT_DISTANCE_M: float = 10.0   # ≤ this → soft snap pass
+# because its longer flight gives the receiver time to square up. (Softening the
+# close end is self-regulating — score_pass reads the launch speed into its lane-
+# interception window, so a soft feed scores as more pickable and only wins when
+# the lane is genuinely clear.)
+const PASS_RAMP_SHORT_DISTANCE_M: float = 10.0   # ≤ this → soft touch pass
+const PASS_RAMP_SHORT_SPEED_M_S: float = 11.0    # launch target for a close feed (soft)
 const PASS_RAMP_LONG_DISTANCE_M: float = 26.0    # ≥ this → full long-pass pace
-const PASS_RAMP_LONG_SPEED_M_S: float = 20.0     # launch target for a long pass
+const PASS_RAMP_LONG_SPEED_M_S: float = 20.0     # launch target for a long pass (catchable ceiling)
 
 # Reference charged-pass speed (~mid-ramp). No longer a fixed release target —
 # pass speed is distance-adaptive via pass_launch_speed — but kept as a
@@ -304,8 +312,11 @@ const PASS_CHARGE_SPEED_M_S: float = (
 static func pass_launch_speed(distance: float, max_launch: float,
 		speed_scale: float = 1.0) -> float:
 	var t: float = smoothstep(PASS_RAMP_SHORT_DISTANCE_M, PASS_RAMP_LONG_DISTANCE_M, distance)
-	var target: float = lerpf(PASS_SPEED_M_S, PASS_RAMP_LONG_SPEED_M_S, t)
-	return clampf(target, PASS_SPEED_M_S, max_launch) * speed_scale
+	var target: float = lerpf(PASS_RAMP_SHORT_SPEED_M_S, PASS_RAMP_LONG_SPEED_M_S, t)
+	# Floor at the softest a wrister can throw (not the old snap speed) so a close
+	# feed stays genuinely soft; speed_scale (difficulty) applies after, and can
+	# still drop an easy bot's pass below even that.
+	return clampf(target, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, max_launch) * speed_scale
 
 # ── Saucer pass ──────────────────────────────────────────────────────────────
 # A saucer (elevated) pass lofts the puck off the ice so it flies over a
@@ -653,23 +664,6 @@ static func score_shoot(
 	return shot_quality * lane * pressure_factor
 
 
-# Quick-shot variant of score_shoot. Two parameter swaps:
-#   - predicted_goalie_pos = goalie_now (no charge window → the goalie hasn't
-#     slid; the geometry sees him where he actually is, still squared to the
-#     carrier, so an off-axis quick shot finds open net past him)
-#   - shot_speed = PASS_SPEED_M_S (quick-shot release speed → shorter flight
-#     gives the goalie even less glove/blocker reaction; slower puck also
-#     closes lanes at range via lane_clear)
-static func score_quick_shot(
-		shooter: Vector3,
-		attacking_goal: Vector3,
-		goalie_now: Vector3,
-		net_half_width: float,
-		opponents: Array[Vector3]) -> float:
-	return score_shoot(shooter, attacking_goal, goalie_now,
-			net_half_width, opponents, PASS_SPEED_M_S)
-
-
 # Point-blank jam distance: the closest the puck realistically gets to a set goalie
 # before his body/pads stop it. A physical measurement (skate + pad depth), not a
 # tuning knob — it just keeps the shooter strictly in FRONT of the keeper so the
@@ -694,6 +688,36 @@ static func release_ahead_of_goalie(
 	if release_fwd >= min_fwd:
 		return release
 	return Vector3(release.x, release.y, attacking_goal.z + min_fwd * net_normal_z)
+
+
+# The ARC-MATCHING x a properly squared goalie sits at for a puck at
+# `puck_pos`: since the goalie sits much closer to the goal than the shooter,
+# arc_x = goalie_depth × (puck.x − goal.x) / puck_forward_from_goal. Shared by
+# predict_goalie_pos / goalie_unsettled / goalie_squared_pos so all three agree.
+static func goalie_arc_match_x(
+		goalie_now: Vector3, attacking_goal: Vector3, puck_pos: Vector3) -> float:
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var puck_forward: float = (puck_pos.z - attacking_goal.z) * net_normal_z
+	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
+	if puck_forward < 0.001 or goalie_depth < 0.001:
+		# Degenerate: puck on/behind goal line, or goalie there. Best-effort: puck.x.
+		return puck_pos.x
+	return attacking_goal.x + goalie_depth * (puck_pos.x - attacking_goal.x) / puck_forward
+
+
+# The goalie SQUARED to a puck at `puck_pos` — arc-matched and set, no forced
+# motion. This is the right model for a CARRY destination: the keeper tracks the
+# puck continuously as the bot skates there (gradual move, not a relocation it
+# reacts to from a standstill), so on arrival it is square, full stop. Using the
+# react-then-slide predict_goalie_pos for a carry under-tracks the keeper —
+# especially at a short release lookahead, where it is predicted to fall short of
+# arc-matching a diagonal step and leak the far side, which had the bot chasing an
+# ever-receding "one more cut catches him moving" shot into the crease. The
+# caught-moving credit belongs to puck RELOCATIONS (shots/passes), not carries.
+static func goalie_squared_pos(
+		goalie_now: Vector3, attacking_goal: Vector3, puck_pos: Vector3) -> Vector3:
+	return Vector3(goalie_arc_match_x(goalie_now, attacking_goal, puck_pos),
+			goalie_now.y, goalie_now.z)
 
 
 # Predicts the goalie's position at a future moment (shot release).
@@ -721,16 +745,7 @@ static func predict_goalie_pos(
 		attacking_goal: Vector3,
 		release_time_s: float,
 		puck_pos_at_release: Vector3) -> Vector3:
-	var net_normal_z: float = -signf(attacking_goal.z)
-	var puck_forward: float = (puck_pos_at_release.z - attacking_goal.z) * net_normal_z
-	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
-	var target_x: float
-	if puck_forward < 0.001 or goalie_depth < 0.001:
-		# Degenerate: puck on/behind goal line, or goalie there. Slide
-		# toward puck.x as a best-effort fallback.
-		target_x = puck_pos_at_release.x
-	else:
-		target_x = attacking_goal.x + goalie_depth * (puck_pos_at_release.x - attacking_goal.x) / puck_forward
+	var target_x: float = goalie_arc_match_x(goalie_now, attacking_goal, puck_pos_at_release)
 	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
 	var max_move: float = move_time * GOALIE_MAX_LATERAL_SPEED_MPS
 	var dx: float = target_x - goalie_now.x
@@ -755,14 +770,7 @@ static func goalie_unsettled(
 		attacking_goal: Vector3,
 		release_time_s: float,
 		puck_pos_at_release: Vector3) -> float:
-	var net_normal_z: float = -signf(attacking_goal.z)
-	var puck_forward: float = (puck_pos_at_release.z - attacking_goal.z) * net_normal_z
-	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
-	var target_x: float
-	if puck_forward < 0.001 or goalie_depth < 0.001:
-		target_x = puck_pos_at_release.x
-	else:
-		target_x = attacking_goal.x + goalie_depth * (puck_pos_at_release.x - attacking_goal.x) / puck_forward
+	var target_x: float = goalie_arc_match_x(goalie_now, attacking_goal, puck_pos_at_release)
 	var need: float = absf(target_x - goalie_now.x)
 	if need < 0.001:
 		return 0.0  # already squared — no forced motion, fully set
@@ -1201,6 +1209,77 @@ static func potential_realization_discount(pos: Vector3,
 	return pow(CARRY_DELAY_DISCOUNT_PER_SEC, travel_dist / SKATER_REF_SPEED_M_S)
 
 
+# ── Dumping ───────────────────────────────────────────────────────────────────
+# Dumping is a deliberate LAST-RESORT giveaway at a SAFE location, in two spots:
+#   - DZ clear: pinned in our own end with no play, rim it out to the neutral zone.
+#   - NZ dump-and-chase: past centre (so it isn't icing) but contained before the
+#     blue line with no outlet, flip it into the offensive corner and race for it.
+# It never needs an "if no options" gate — its EV rides the same turnover_cost the
+# rest of the model uses (≈0 for a giveaway in the offensive end, large in front of
+# our net), so it only wins when every real play (carry/pass/shoot) prices worse
+# than conceding at the dump spot. The pieces below are the grounded terms the
+# carrier assembles into that EV (see _best_dump).
+
+# Corner depth from the goal line for a dump-in target (a corner retrieval, not a
+# behind-the-net wrap). Distance a stride's head-start turns a 50/50 loose-puck
+# race into a near-sure recovery — a physical contest band, not a tuning curve.
+const DUMP_CORNER_DEPTH_M: float = 3.0
+const DUMP_RINK_INSET_M: float = 0.5
+const CHASE_CONTEST_MARGIN_M: float = 2.0
+
+
+# True when `pos` is on the attacking side of centre ice (z = 0) — past the red
+# line, where a dump-in to the offensive zone can't be icing.
+static func past_center_toward_attack(pos: Vector3, attacking_goal: Vector3) -> bool:
+	return pos.z * signf(attacking_goal.z) > 0.0
+
+
+# DZ clear target: the neutral-zone strong-side boards (the side the carrier is on),
+# at centre ice — hard rim to get the puck out of our end without crossing into a
+# middle-of-the-ice giveaway. Centre (z = 0) is the neutral zone from either end,
+# so the target keys only off the carrier's side.
+static func dump_clear_target(carrier_pos: Vector3) -> Vector3:
+	var side: float = signf(carrier_pos.x)
+	if side == 0.0:
+		side = 1.0
+	return Vector3(side * (GameRules.RINK_HALF_WIDTH - DUMP_RINK_INSET_M), 0.0, 0.0)
+
+
+# Dump-in target: the FAR offensive corner (opposite the carrier's side), near the
+# goal line — forces the defence to turn and retrieve with their back to the play.
+static func dump_in_target(carrier_pos: Vector3, attacking_goal: Vector3) -> Vector3:
+	var far_side: float = -signf(carrier_pos.x)
+	if far_side == 0.0:
+		far_side = 1.0
+	var goal_dir: float = signf(attacking_goal.z)
+	return Vector3(
+			far_side * (GameRules.RINK_HALF_WIDTH - DUMP_RINK_INSET_M),
+			0.0,
+			attacking_goal.z - goal_dir * DUMP_CORNER_DEPTH_M)
+
+
+# Probability our team wins the race to a dumped puck: a distance race to the dump
+# `target` between our nearest chaser and their nearest, with a contest band around
+# a tie (CHASE_CONTEST_MARGIN_M — a stride's head-start). 1.0 uncontested, 0.0 if
+# we have no chaser. This is what makes a dump-in worth it ONLY when the chase is
+# winnable — outnumbered in a 3v3, it self-suppresses.
+static func chase_recovery(
+		target: Vector3,
+		our_chasers: Array[Vector3],
+		opp_chasers: Array[Vector3]) -> float:
+	if our_chasers.is_empty():
+		return 0.0
+	var our_dist: float = INF
+	for p: Vector3 in our_chasers:
+		our_dist = minf(our_dist, p.distance_to(target))
+	if opp_chasers.is_empty():
+		return 1.0
+	var opp_dist: float = INF
+	for p: Vector3 in opp_chasers:
+		opp_dist = minf(opp_dist, p.distance_to(target))
+	return clampf(0.5 + (opp_dist - our_dist) / (2.0 * CHASE_CONTEST_MARGIN_M), 0.0, 1.0)
+
+
 # "Threat surface" — the value an opp can extract from their current
 # position from a defender's perspective. score_shoot fades to ~0 as the
 # opp gets far from our net (the hole geometry foreshortens); that's fine
@@ -1405,6 +1484,26 @@ static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels)
 	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels)
 	return minf(c_mid, c_end)
+
+
+# WHERE a carry gets stripped, if it does: the EARLIEST covered point on the path.
+# The turnover cost of a carry is priced HERE, not at the destination — a strip
+# surrenders the puck where you were caught, in the traffic you were skating
+# through, not the safe spot you were headed for. Chronological, not tightest: the
+# reach balloons with time (maneuver ∝ time²), so a far destination reads as
+# "more covered", but a puck stripped mid-route never reaches it — the mid-point
+# strip happens first. Mirrors lane_loss_point for passes; from == to is a stand.
+static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> Vector3:
+	var mid: Vector3 = from.lerp(to, 0.5)
+	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents, opponent_vels)
+	if c_mid < 0.0:
+		return mid   # covered mid-route — stripped there, before the destination
+	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels)
+	if c_end < 0.0:
+		return to    # clear mid-route, covered at the destination
+	# Neither covered (a low strip probability anyway): the tighter of the two.
+	return mid if c_mid <= c_end else to
 
 
 # The carrier's best evasion target — the point in his handling envelope (where he

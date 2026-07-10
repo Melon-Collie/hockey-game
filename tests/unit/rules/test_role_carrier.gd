@@ -84,6 +84,27 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
+func test_close_pass_is_a_soft_charged_wrister() -> void:
+	# Every pass is a paced wrister now — no fixed-power quick snap. A short feed to
+	# a close open teammate charges (pass_should_charge) and fires SOFT: the launch
+	# target sits below the old quick-snap floor so the receiver corrals it in tight.
+	var self_pos := Vector3(3, 0, 20)
+	var outlet := Vector3(6, 0, 17)                   # ~4.2 m — a close feed
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet],
+			[3, 1, Vector3(1.5, 0, 18.0)],            # forecheck so PASS beats carry
+			[4, 1, Vector3(3.0, 0, 17.5)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS, "picks the close outlet")
+	assert_eq(c.pass_target_peer_id, 2)
+	assert_true(c.pass_should_charge, "a pass is always a charged wrister now")
+	assert_lt(c.pass_target_speed, AIActionScoring.PASS_SPEED_M_S,
+			"a close feed fires softer than the old quick-snap floor")
+
+
 # ─── pressure: make a safe play, don't drive into the box ───────────────────
 
 func test_board_pincer_makes_a_safe_play_not_a_turnover() -> void:
@@ -162,25 +183,24 @@ func test_risky_backpass_deep_in_own_zone_loses_to_keeping_the_puck() -> void:
 # ─── stand-still pays turnover cost: pressured carrier never freezes ─────────
 
 func test_pressured_carrier_skates_clear_instead_of_freezing() -> void:
-	# Carrier deep in our zone with a forechecker charging straight at it
-	# and flankers denying the easy lateral steps. Stand-still used to be
-	# the only carry candidate that paid NO turnover cost, so in exactly
-	# this spot every escape route went EV-negative while freezing stayed
-	# positive — the bot planted itself and ate the check. With the strip
-	# probability (1 - poke_safety) now feeding turnover_cost, freezing
-	# under a converging forechecker prices its own turnover and loses to
-	# the least-bad skating route.
+	# Carrier deep in our zone with a single forechecker charging straight
+	# at it, the flanks OPEN. Stand-still used to be the only carry candidate
+	# that paid NO turnover cost, so freezing stayed positive while every
+	# escape route went EV-negative — the bot planted itself and ate the
+	# check. With the strip probability (1 - poke_safety) now feeding
+	# turnover_cost, freezing under a converging forechecker prices its own
+	# turnover and loses to the open skating lane; the carrier beats the
+	# forecheck up the wall. (A FULL surround with no open lane is a genuine
+	# pin — that reads as a DUMP, see test_pinned_dz_carrier_dumps_to_clear.)
 	var self_pos := Vector3(2, 0, 21)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
 			[3, 1, Vector3(2, 0, 18), false, Vector3(0, 0, 5)],  # charging forechecker
-			[4, 1, Vector3(6, 0, 19)],                           # right flanker
-			[5, 1, Vector3(-2, 0, 19)],                          # left flanker
 	]
 	var c := AIRoleCarrier.new()
 	c.decide(_make_ctx(self_pos, skaters))
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"nothing worth firing — this is a carry read")
+			"an open lane beats both freezing and dumping — this is a carry read")
 	assert_ne(c.last_carry_anchor, self_pos,
 			"a carrier with a forechecker bearing down must skate clear, not freeze")
 
@@ -318,8 +338,7 @@ func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
 		ctx.snapshot.goalie_states[1 - TEAM_ID] = g
 		var c := AIRoleCarrier.new()
 		c.decide(ctx)
-		if c.intended_action == AIRoleCarrier.INTENT_SHOOT \
-				or c.intended_action == AIRoleCarrier.INTENT_QUICK_SHOT:
+		if c.intended_action == AIRoleCarrier.INTENT_SHOOT:
 			shot_distance = dist
 			break
 	# The first (farthest) commit is the release distance on the drive. It must be
@@ -769,6 +788,104 @@ func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:
 	assert_not_null(d)
 	assert_true(carrier.intended_action == AIRoleCarrier.INTENT_CARRY \
 			or carrier.intended_action == AIRoleCarrier.INTENT_SHOOT \
-			or carrier.intended_action == AIRoleCarrier.INTENT_PASS \
-			or carrier.intended_action == AIRoleCarrier.INTENT_QUICK_SHOT,
+			or carrier.intended_action == AIRoleCarrier.INTENT_PASS,
 			"decide() yields a valid intent with a staging finisher in play")
+
+
+# ─── dumping: last-resort relief in two specific spots ───────────────────────
+
+func test_pinned_dz_carrier_dumps_to_clear() -> void:
+	# Deep in our slot, genuinely pinned: a forechecker charging up the middle
+	# and both flanks sealed — no open skating lane, no pass outlet. The honest
+	# strip-point carry pricing reads every route as a turnover in front of our
+	# own net (raw carry below the safe-giveaway floor), so the DZ clear wins:
+	# fling it off the strong-side boards, out of the zone, and race for it —
+	# a hard flat clear, not a soft flip. This is the "would otherwise stand
+	# there and be stripped" moment the dump exists for.
+	var self_pos := Vector3(6, 0, 24)                      # deep slot, swarmed
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(6, 0, 21), false, Vector3(0, 0, 5)],
+			[4, 1, Vector3(3, 0, 22.5)],
+			[5, 1, Vector3(9, 0, 22.5)],
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"a pinned own-zone carrier clears the puck rather than eat the strip")
+	assert_false(c.dump_is_soft, "a DZ clear is a hard flat fling, not a soft flip")
+	assert_gt(c.dump_target.x, 0.0, "cleared off the strong-side boards (carrier's side)")
+	assert_false(
+			AIActionScoring.in_offensive_zone(c.dump_target, ctx.defending_goal_pos),
+			"the clear takes the puck out of our defensive zone")
+
+
+func test_contained_past_center_with_no_outlet_dumps_in() -> void:
+	# Carrier past centre, walled off short of the blue line with no outlet. Can't
+	# carry in, nothing to pass — dump-and-chase into the far corner.
+	var self_pos := Vector3(2, 0, -4)                      # attacking half (attack -Z), pre-blue
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(2, 0, -5), false, Vector3(0, 0, -4)],  # D stepping up on us
+			[4, 1, Vector3(-1, 0, -5.5)],                      # D sealing the lane across
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"dumps in when the zone entry is walled off")
+	assert_true(c.dump_is_soft, "a dump-in is a soft flip to the corner")
+	assert_true(
+			AIActionScoring.in_offensive_zone(c.dump_target, ctx.attacking_goal_pos),
+			"the dump target is in the offensive zone")
+	assert_lt(c.dump_target.x, 0.0, "the FAR corner, opposite the carrier's side")
+
+
+func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
+	# Same pinned DZ spot, but now a teammate is wide open up the strong wall. A
+	# real breakout out-scores conceding — pass, don't dump.
+	var self_pos := Vector3(8, 0, 20)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(11, 0, 11)],                  # open outlet up the wall
+			[3, 1, Vector3(8, 0, 17), false, Vector3(0, 0, 4)],
+			[4, 1, Vector3(5.5, 0, 19)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"a clean breakout outlet beats a dump")
+
+
+func test_no_dump_in_own_side_neutral_zone() -> void:
+	# Between our own blue line and centre — not our DZ, not past the red line. No
+	# dump applies here even under pressure (it would be icing to fire it in, and
+	# there's no need to clear from mid-ice).
+	var self_pos := Vector3(0, 0, 4)                       # own-side NZ (own net +Z)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(0, 0, 1), false, Vector3(0, 0, 4)],
+			[4, 1, Vector3(3, 0, 2)],
+			[5, 1, Vector3(-3, 0, 2)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"no dump from the own-side neutral zone")
+
+
+func test_no_dump_once_in_the_offensive_zone() -> void:
+	# Already established in the OZ — the valve keeps the puck in, and there's no
+	# dump. Even swarmed, it cycles/holds rather than dumping it away.
+	var self_pos := Vector3(0, 0, -12)                     # in the OZ (attack -Z)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(0, 0, -14), false, Vector3(0, 0, -4)],
+			[4, 1, Vector3(3, 0, -13)],
+			[5, 1, Vector3(-3, 0, -13)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"no dumping once the zone is established")

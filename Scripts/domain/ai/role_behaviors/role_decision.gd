@@ -26,10 +26,9 @@ var lift_blade: bool = false
 # Fire-intent flags. Set by CARRIER (and any role that opportunistically
 # fires, like FINISHER on a tip). Mutually exclusive in practice — the
 # state machine consumes whichever is true to drive its transition into
-# SHOOT_PRESSED / PASS_PRESSED / QUICK_SHOT_PRESSED.
+# SHOOT_PRESSED / PASS_PRESSED.
 var shoot_intent: bool = false
 var pass_intent: bool = false
-var quick_shot_intent: bool = false
 # Receiver peer_id when pass_intent is set; -1 otherwise.
 var pass_target_peer_id: int = -1
 

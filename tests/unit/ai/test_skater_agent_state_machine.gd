@@ -378,8 +378,6 @@ func test_dispatch_throttled_tick_reuses_cached_decision() -> void:
 func test_wants_direct_aim_true_in_shot_states() -> void:
 	sm._state = Agent.State.SHOOT_PRESSED
 	assert_true(sm.wants_direct_aim(), "charging a wrister tracks the cursor directly")
-	sm._state = Agent.State.QUICK_SHOT_PRESSED
-	assert_true(sm.wants_direct_aim(), "quick shot tracks directly")
 	sm._state = Agent.State.ONE_TIMER_PRESSED
 	assert_true(sm.wants_direct_aim(), "one-timer tracks directly")
 
@@ -399,8 +397,8 @@ func test_wants_direct_aim_false_for_carry_and_pass() -> void:
 
 
 # ── Slice 5: press-state handlers + transitions ──────────────────────────────
-# The fire states (SHOOT_PRESSED / QUICK_SHOT_PRESSED / ONE_TIMER_PRESSED /
-# PASS_PRESSED) are entered by the carrier from CARRY, but once entered they run
+# The fire states (SHOOT_PRESSED / ONE_TIMER_PRESSED / PASS_PRESSED) are
+# entered by the carrier from CARRY, but once entered they run
 # to completion off pre-set fields — no carrier needed. They read only the
 # snapshot + this bot's identity, and every helper they touch (steering,
 # shot-aim, goalie prediction) has a headless fallback (empty per-team cache →
@@ -421,29 +419,14 @@ func _self_snap(self_pos: Vector3, have_puck: bool) -> WorldSnapshot:
 	return s
 
 
-# ── QUICK_SHOT_PRESSED (one-tick release) ────────────────────────────────────
-
-func test_quick_shot_fires_and_returns_to_carry() -> void:
-	sm._state = Agent.State.QUICK_SHOT_PRESSED
-	var i := InputState.new()
-	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
-	assert_true(i.quick_shot_pressed, "quick shot fires the dedicated quick-shot edge")
-	assert_eq(sm.get_state(), Agent.State.CARRY, "quick shot is a one-tick press")
-
-
-func test_quick_shot_without_puck_routes_to_lost_state() -> void:
-	sm._state = Agent.State.QUICK_SHOT_PRESSED
-	var s := _self_snap(Vector3.ZERO, false)
-	sm.dispatch(InputState.new(), s)
-	assert_ne(sm.get_state(), Agent.State.QUICK_SHOT_PRESSED, "no puck leaves the fire state")
-	assert_eq(sm.get_state(), sm._post_puck_lost_state(s), "routes to the puck-lost state")
-
+# ── press-state dispatch throttle ────────────────────────────────────────────
 
 func test_press_state_ignores_dispatch_throttle() -> void:
 	# A non-press state with a pending skip counter would reuse its cached
 	# decision; a press state must always dispatch full (charge timing is
-	# tick-sensitive).
-	sm._state = Agent.State.QUICK_SHOT_PRESSED
+	# tick-sensitive). Exercised via the dump's one-tick quick release.
+	sm._state = Agent.State.PASS_PRESSED
+	sm._dump_target = Vector3(12, 0, 0)
 	sm._dispatch_skip_counter = 5
 	var i := InputState.new()
 	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
@@ -624,6 +607,45 @@ func test_pass_pressed_charged_releases_after_windup() -> void:
 	assert_eq(sm._pass_target_peer_id, -1, "release clears the pass target")
 
 
+func test_pass_pressed_dump_clear_chips_high_and_clears() -> void:
+	# A DZ clear-out: dump_target set, not soft. PASS_PRESSED fires a one-tick
+	# quick release aimed at the location, lifted HIGH to chip over sticks into
+	# the neutral zone — never a charged wind-up.
+	sm._state = Agent.State.PASS_PRESSED
+	sm._pass_should_charge = true         # a charge flag must NOT survive a dump
+	sm._dump_target = Vector3(12, 0, 0)   # a location, no receiver
+	sm._dump_is_soft = false
+	var i := InputState.new()
+	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
+	assert_true(i.quick_shot_pressed, "a dump fires the one-tick quick release")
+	assert_eq(i.elevation_level, ShotMechanics.ELEVATION_HIGH, "a clear-out chips HIGH")
+	assert_eq(sm.get_state(), Agent.State.CARRY, "the dump is a one-tick press")
+	assert_false(sm._dump_target.is_finite(), "firing clears the dump target")
+
+
+func test_pass_pressed_dump_in_is_a_soft_low_flip() -> void:
+	# A dump-in past centre: soft flip to the corner → LOW loft, still a one-tick
+	# quick release (no wind-up to be stripped through).
+	sm._state = Agent.State.PASS_PRESSED
+	sm._dump_target = Vector3(-11, 0, -20)
+	sm._dump_is_soft = true
+	var i := InputState.new()
+	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
+	assert_true(i.quick_shot_pressed, "a dump-in fires the one-tick quick release")
+	assert_eq(i.elevation_level, ShotMechanics.ELEVATION_LOW, "a dump-in flips LOW")
+	assert_false(sm._dump_target.is_finite(), "firing clears the dump target")
+
+
+func test_pass_pressed_dump_lost_puck_clears_target() -> void:
+	# Puck knocked loose before the dump fires — bail clears the dump target so a
+	# later PASS/DUMP starts fresh.
+	sm._state = Agent.State.PASS_PRESSED
+	sm._dump_target = Vector3(12, 0, 0)
+	sm.dispatch(InputState.new(), _self_snap(Vector3.ZERO, false))  # no puck
+	assert_ne(sm.get_state(), Agent.State.PASS_PRESSED, "lost puck bails")
+	assert_false(sm._dump_target.is_finite(), "bail clears the dump target")
+
+
 # ── Slice 6: CARRY handler + carrier-driven transitions ──────────────────────
 # _state_carry is the one handler that runs the AIRoleCarrier scoring behavior.
 # We swap in a stub carrier (a subclass that publishes a scripted intent instead
@@ -644,12 +666,16 @@ class _CarrierStub extends AIRoleCarrier:
 	var next_intent: int = AIRoleCarrier.INTENT_CARRY
 	var next_anchor: Vector3 = Vector3.ZERO
 	var next_pass_target: int = -1
+	var next_dump_target: Vector3 = Vector3.INF
+	var next_dump_is_soft: bool = false
 
 	func decide(_ctx: RoleContext) -> RoleDecision:
 		decide_calls += 1
 		intended_action = next_intent
 		last_carry_anchor = next_anchor
 		pass_target_peer_id = next_pass_target
+		dump_target = next_dump_target
+		dump_is_soft = next_dump_is_soft
 		return RoleDecision.new()
 
 	func clear_intent() -> void:
@@ -715,7 +741,7 @@ func test_carry_intent_maps_to_matching_press_state() -> void:
 	# tick budget so the commit fires on the first dispatch regardless of aim
 	# geometry (timeout path), isolating the mapping.
 	var cases := {
-		AIRoleCarrier.INTENT_QUICK_SHOT: Agent.State.QUICK_SHOT_PRESSED,
+		AIRoleCarrier.INTENT_SHOOT: Agent.State.SHOOT_PRESSED,
 		AIRoleCarrier.INTENT_PASS: Agent.State.PASS_PRESSED,
 	}
 	for intent: int in cases:
@@ -734,6 +760,27 @@ func test_carry_intent_maps_to_matching_press_state() -> void:
 				break
 		assert_eq(landed, cases[intent], "intent %d maps to its press state" % intent)
 		assert_eq(stub.clear_intent_calls, 1, "commit forces a carrier re-eval")
+
+
+func test_carry_dump_intent_commits_and_freezes_target() -> void:
+	# INTENT_DUMP maps to PASS_PRESSED (the reused release path) and the dump
+	# target is captured at commit. Force the timeout branch so the commit lands
+	# on the first pre-aim tick, isolating the mapping + freeze from aim geometry.
+	var stub := _stub_carry(AIRoleCarrier.INTENT_CARRY)
+	stub.next_intent = AIRoleCarrier.INTENT_DUMP
+	stub.next_dump_target = Vector3(12, 0, 5)
+	stub.next_dump_is_soft = false
+	sm._intent_max_wait_ticks = 0
+	var s := _self_snap(Vector3.ZERO, true)
+	var landed: int = -1
+	for _n in range(3):
+		sm.dispatch(InputState.new(), s)
+		if sm.get_state() != Agent.State.CARRY:
+			landed = sm.get_state()
+			break
+	assert_eq(landed, Agent.State.PASS_PRESSED, "a dump commits to the PASS_PRESSED release path")
+	assert_eq(sm._dump_target, Vector3(12, 0, 5), "the dump target is frozen at commit")
+	assert_eq(stub.clear_intent_calls, 1, "commit forces a carrier re-eval")
 
 
 func test_carry_holds_intent_against_carrier_flip() -> void:
