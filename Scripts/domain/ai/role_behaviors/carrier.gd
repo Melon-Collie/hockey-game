@@ -61,13 +61,15 @@ const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~3
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
-# Receiver drive-in credit (see _receiver_drive_in_value): how far an OPEN pass
-# receiver is credited with carrying toward the net for a better look, and the
-# closest to the net that drive is allowed to end (don't credit a drive into the
-# crease / the goalie). Feel tunables — "how much a wide-open man improves his
-# chance by stepping in" — not an evaluation curve; the shot value at the driven
-# spot is still the goalie-aware geometric read.
-const RECEIVER_DRIVE_M: float = 3.0
+# Receiver drive-in credit (see _receiver_drive_in_value): the MAX distance an open
+# pass receiver is credited with carrying toward the net (the actual reach is the
+# clear extent of that path — a defender strips it early), and the closest to the net
+# that drive is allowed to end (don't credit a drive into the crease / the goalie).
+# The max is a horizon cap — long enough to carry a NZ/DZ outlet with a clear lane
+# into the zone — kept finite because opponent projections go stale over a long carry.
+# Feel tunables ("how far a wide-open man is trusted to skate it"), not an evaluation
+# curve; the value at the reached spot is still the goalie-aware / potential read.
+const RECEIVER_DRIVE_MAX_M: float = 12.0
 const RECEIVER_DRIVE_MIN_NET_DIST_M: float = 3.0
 
 # (Blade reach cone + facing turn rate now come from the bot's real caps —
@@ -1139,16 +1141,22 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	return maxf(shoot_s, potential_s * realization)
 
 
-# The value of an open pass receiver DRIVING IN: the best shot they can reach with a
-# short carry toward the net, not just a one-timer from where they catch it. Models
-# "a wide-open man walks into a better chance," which the OZ shot-only regime omits.
-# Bounded — ONE drive step, leaf shot, no further passing — so there's no recursion.
-# Gated by an open drive lane (they must actually be able to get there, opponents
-# projected to arrival) and discounted by ONLY the extra drive time (the pass-flight
-# decay is applied to the max() by the caller). Goalie SQUARED to the driven spot —
-# the receiver carries there and the keeper tracks, same model as the carrier's own
-# carry candidates. Returns 0 when the drive is contested or the receiver is already
-# tight to the net (the instant shot already prices that). Reuses _scratch_opponents_pass.
+# The value of an open pass receiver DRIVING IN: the best value they can reach by
+# carrying toward the net, not just a one-timer / potential from where they catch it.
+# Models "a wide-open man walks into a better chance" (OZ) and "an ahead man with a
+# clear path skates it into the zone" (NZ/DZ) — both of which the score_at above
+# omits (OZ is shot-only; a static receiver isn't credited for advancing).
+#
+# The reach is the REACHABLE SET, not a fixed step: the receiver carries toward the
+# net up to RECEIVER_DRIVE_MAX_M, but only as far as the path stays clear — a defender
+# in the way strips it early (carry_strip_point), a very clear lane lets it run the
+# whole way. So a teammate a little farther back with a WIDE-OPEN path is credited
+# for the deep spot they can reach, while a covered one earns nothing. Value =
+# score_at(reached spot) × keep-probability × decay(time to reach it); the pass-flight
+# decay is applied to the max() by the caller. Goalie squared to the reached spot, and
+# the whole thing uses the SAME reach/clearance/score machinery as the carrier's own
+# carry candidates, so both sides of the pass are valued consistently. Bounded — one
+# carry, leaf value, no further passing — so no recursion. Reuses _scratch_opponents_pass.
 func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 		receiver_shot_speed: float, receiver_caps: AISkaterCaps) -> float:
 	var to_net_x: float = ctx.attacking_goal_pos.x - receiver_spot.x
@@ -1157,33 +1165,40 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	# Already tight to the net — no room to improve by driving; instant shot covers it.
 	if d <= RECEIVER_DRIVE_MIN_NET_DIST_M + 0.1:
 		return 0.0
-	var step: float = minf(RECEIVER_DRIVE_M, d - RECEIVER_DRIVE_MIN_NET_DIST_M)
+	var reach: float = minf(RECEIVER_DRIVE_MAX_M, d - RECEIVER_DRIVE_MIN_NET_DIST_M)
 	var inv: float = 1.0 / d
-	var driven := Vector3(
-			receiver_spot.x + to_net_x * inv * step, 0.0,
-			receiver_spot.z + to_net_z * inv * step)
-	if not AIRoleHelpers.is_legal_position(driven):
+	var dir_x: float = to_net_x * inv
+	var dir_z: float = to_net_z * inv
+	var target := Vector3(
+			receiver_spot.x + dir_x * reach, 0.0, receiver_spot.z + dir_z * reach)
+	if not AIRoleHelpers.is_legal_position(target):
 		return 0.0
 	var recv_speed: float = receiver_caps.max_speed if receiver_caps != null \
 			else ctx.self_max_speed
-	var drive_time: float = step / maxf(recv_speed, 1.0)
-	_project_opponents_to(ctx, drive_time, _scratch_opponents_pass)
-	var drive_lane: float = AIActionScoring.path_clearance(
-			receiver_spot, driven, _scratch_opponents_pass)
-	if drive_lane <= 0.0:
+	var reach_time: float = reach / maxf(recv_speed, 1.0)
+	# Reachable-set safety + strip point over the drive, using the SAME current-opponent
+	# reach model the carrier's carry uses (carry_clearance/strip project the defenders
+	# in by their velocity + closing reach). A clear lane keeps ~1 and reaches `target`;
+	# a defender in the way drops keep and pulls the reached spot back to the strip.
+	var keep: float = AIActionScoring.clearance_to_safety(
+			AIActionScoring.carry_clearance(receiver_spot, target, reach_time,
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+	if keep <= 0.0:
 		return 0.0
+	var reached: Vector3 = AIActionScoring.carry_strip_point(
+			receiver_spot, target, reach_time,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
+	var t: float = receiver_spot.distance_to(reached) / maxf(recv_speed, 1.0)
+	_project_opponents_to(ctx, t, _scratch_opponents_pass)
 	var goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			_goalie_now(ctx), ctx.attacking_goal_pos, driven)
-	# _score_at, not score_shoot: in the OZ this is the goalie-aware shot from the
-	# driven spot (the receiver walks into a better look); in the NZ/DZ it's the
-	# position potential of the driven spot (the receiver ADVANCES toward the zone).
-	# So an ahead teammate with a CLEAR forward lane — the gate above — is credited
-	# for continuing the rush, which is why a man ahead with a clearer path to the OZ
-	# out-scores holding it. Same regime the carrier's own carry candidates use.
-	var advanced: float = _score_at(ctx, driven, ctx.self_pos,
+			_goalie_now(ctx), ctx.attacking_goal_pos, reached)
+	# score_at, not score_shoot: OZ → goalie-aware shot from the reached spot; NZ/DZ →
+	# position potential of the reached spot (advanced toward the zone). Same regime
+	# the carrier's own carry candidates use, so the ahead man on the clear path is
+	# credited for continuing the rush exactly as the carrier would credit itself.
+	var advanced: float = _score_at(ctx, reached, ctx.self_pos,
 			_scratch_opponents_pass, goalie, receiver_shot_speed, 0.0)
-	return advanced * drive_lane * pow(
-			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, drive_time)
+	return advanced * keep * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, t)
 
 
 # Value (EV) of the best DEVELOPING feed — a play a teammate is still

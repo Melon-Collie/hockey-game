@@ -133,6 +133,29 @@ func test_neutral_zone_hits_the_ahead_man_with_a_clearer_path() -> void:
 	assert_eq(c.pass_target_peer_id, 2)
 
 
+func test_ahead_man_on_a_blocked_path_is_not_credited_a_deep_drive() -> void:
+	# The drive-in reach is the REACHABLE extent, not a free deep credit: a teammate
+	# ahead but with a defender squarely in their forward path can't skate it in, so
+	# the reach strips early and they earn little — the carrier keeps the puck rather
+	# than dumping it to a covered man. Guards the reachable-set gate.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, 16.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(0.0, 0.0, 10.0)],       # ahead, but…
+			[11, 1, Vector3(0.0, 0.0, 4.0)],             # …a defender squarely in their drive path
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = net.z + 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a man whose path forward is blocked isn't worth a pass over keeping the puck")
+
+
 func test_open_receiver_in_a_poor_spot_is_not_over_credited() -> void:
 	# The drive-in credit must not turn EVERY open teammate into a must-pass: a man
 	# open but in a genuinely poor spot (wide, no drive that improves the look) stays
