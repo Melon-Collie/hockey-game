@@ -696,6 +696,36 @@ static func release_ahead_of_goalie(
 	return Vector3(release.x, release.y, attacking_goal.z + min_fwd * net_normal_z)
 
 
+# The ARC-MATCHING x a properly squared goalie sits at for a puck at
+# `puck_pos`: since the goalie sits much closer to the goal than the shooter,
+# arc_x = goalie_depth × (puck.x − goal.x) / puck_forward_from_goal. Shared by
+# predict_goalie_pos / goalie_unsettled / goalie_squared_pos so all three agree.
+static func goalie_arc_match_x(
+		goalie_now: Vector3, attacking_goal: Vector3, puck_pos: Vector3) -> float:
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var puck_forward: float = (puck_pos.z - attacking_goal.z) * net_normal_z
+	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
+	if puck_forward < 0.001 or goalie_depth < 0.001:
+		# Degenerate: puck on/behind goal line, or goalie there. Best-effort: puck.x.
+		return puck_pos.x
+	return attacking_goal.x + goalie_depth * (puck_pos.x - attacking_goal.x) / puck_forward
+
+
+# The goalie SQUARED to a puck at `puck_pos` — arc-matched and set, no forced
+# motion. This is the right model for a CARRY destination: the keeper tracks the
+# puck continuously as the bot skates there (gradual move, not a relocation it
+# reacts to from a standstill), so on arrival it is square, full stop. Using the
+# react-then-slide predict_goalie_pos for a carry under-tracks the keeper —
+# especially at a short release lookahead, where it is predicted to fall short of
+# arc-matching a diagonal step and leak the far side, which had the bot chasing an
+# ever-receding "one more cut catches him moving" shot into the crease. The
+# caught-moving credit belongs to puck RELOCATIONS (shots/passes), not carries.
+static func goalie_squared_pos(
+		goalie_now: Vector3, attacking_goal: Vector3, puck_pos: Vector3) -> Vector3:
+	return Vector3(goalie_arc_match_x(goalie_now, attacking_goal, puck_pos),
+			goalie_now.y, goalie_now.z)
+
+
 # Predicts the goalie's position at a future moment (shot release).
 # React-then-slide model: a fixed reaction delay, then movement toward
 # the ARC-MATCHING x at max lateral speed.
@@ -721,16 +751,7 @@ static func predict_goalie_pos(
 		attacking_goal: Vector3,
 		release_time_s: float,
 		puck_pos_at_release: Vector3) -> Vector3:
-	var net_normal_z: float = -signf(attacking_goal.z)
-	var puck_forward: float = (puck_pos_at_release.z - attacking_goal.z) * net_normal_z
-	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
-	var target_x: float
-	if puck_forward < 0.001 or goalie_depth < 0.001:
-		# Degenerate: puck on/behind goal line, or goalie there. Slide
-		# toward puck.x as a best-effort fallback.
-		target_x = puck_pos_at_release.x
-	else:
-		target_x = attacking_goal.x + goalie_depth * (puck_pos_at_release.x - attacking_goal.x) / puck_forward
+	var target_x: float = goalie_arc_match_x(goalie_now, attacking_goal, puck_pos_at_release)
 	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
 	var max_move: float = move_time * GOALIE_MAX_LATERAL_SPEED_MPS
 	var dx: float = target_x - goalie_now.x
@@ -755,14 +776,7 @@ static func goalie_unsettled(
 		attacking_goal: Vector3,
 		release_time_s: float,
 		puck_pos_at_release: Vector3) -> float:
-	var net_normal_z: float = -signf(attacking_goal.z)
-	var puck_forward: float = (puck_pos_at_release.z - attacking_goal.z) * net_normal_z
-	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
-	var target_x: float
-	if puck_forward < 0.001 or goalie_depth < 0.001:
-		target_x = puck_pos_at_release.x
-	else:
-		target_x = attacking_goal.x + goalie_depth * (puck_pos_at_release.x - attacking_goal.x) / puck_forward
+	var target_x: float = goalie_arc_match_x(goalie_now, attacking_goal, puck_pos_at_release)
 	var need: float = absf(target_x - goalie_now.x)
 	if need < 0.001:
 		return 0.0  # already squared — no forced motion, fully set

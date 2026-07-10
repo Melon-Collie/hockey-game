@@ -59,6 +59,39 @@ func test_unsettled_ramps_between_moving_and_set() -> void:
 	assert_lt(u, 1.0)
 
 
+# ── goalie_squared_pos (carry destinations) ─────────────────────────────────
+
+func test_squared_pos_arc_matches_the_puck() -> void:
+	# The squared goalie sits at the arc-match x for the puck, at its own depth —
+	# no time term (a carry destination: the keeper has tracked it there and is set).
+	var goalie := _goalie_at(-1.3)                    # anywhere on its line
+	var squared := AIActionScoring.goalie_squared_pos(goalie, GOAL, SHOOTER)
+	assert_almost_eq(squared.x, _arc_match_x(SHOOTER.x), 0.001,
+			"squared goalie sits at the shooter's arc-match x")
+	assert_almost_eq(squared.z, GOALIE_Z, 0.001, "…at its own depth, unchanged")
+
+
+func test_squared_pos_reads_fully_settled_by_construction() -> void:
+	# A goalie AT its squared position has zero forced motion — the carry model's
+	# companion to unsettled=0: a squared keeper is never caught moving.
+	var squared := AIActionScoring.goalie_squared_pos(_goalie_at(0.0), GOAL, SHOOTER)
+	var u := AIActionScoring.goalie_unsettled(squared, GOAL, 0.13, SHOOTER)
+	assert_almost_eq(u, 0.0, 0.001, "a squared goalie is fully settled at any release")
+
+
+func test_squared_pos_ignores_reaction_time_unlike_predict() -> void:
+	# The distinction that fixes the crease-chase: predict_goalie_pos (a shot/pass
+	# the keeper reacts to) falls short of a fast diagonal relocation, but a carry's
+	# squared model tracks it fully. From a standing centre, a quick release leaves
+	# predict short of the arc-match while squared is already there.
+	var centred := _goalie_at(0.0)
+	var predicted := AIActionScoring.predict_goalie_pos(centred, GOAL, 0.14, SHOOTER)
+	var squared := AIActionScoring.goalie_squared_pos(centred, GOAL, SHOOTER)
+	var target: float = _arc_match_x(SHOOTER.x)
+	assert_lt(predicted.x, target - 0.01, "react-then-slide falls short on a quick release")
+	assert_almost_eq(squared.x, target, 0.001, "the squared carry model tracks all the way")
+
+
 # ── score_shoot motion penalty ──────────────────────────────────────────────
 
 func test_moving_goalie_scores_higher_than_set_goalie() -> void:

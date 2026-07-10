@@ -385,12 +385,18 @@ var _blade_reach: float = BLADE_REACH_M
 # cursor speed) — so the geometry is a cosmetic wind-up. BUT the DURATION is not
 # free: it IS the real commit→release delay, and the offensive scorer feeds it
 # forward as BOT_WRISTER_LOOKAHEAD_S to predict where the goalie will be when the
-# shot actually leaves the blade. Keep it a realistic wrister wind-up (~250 ms):
-# shortening it desyncs the goalie prediction from reality and collapses shoot
-# scoring (the goalie is modelled as barely having moved, so every shot reads as
-# already-covered and the bot never commits). 30 ticks is also ample for the
-# charge tracker to classify the forehand/backhand swing chirality.
-const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 4   # ~250 ms
+# shot actually leaves the blade. They shrink TOGETHER (lookahead is derived
+# below), so the prediction stays synced to reality at any duration.
+#
+# Since the #363 pure-mouse-speed model decoupled power from the charge, a bot no
+# longer needs a long wind-up to build pace — so this is a quick-twitch ~125 ms
+# release (was ~250 ms). The scorer predicting a goalie that has "barely moved" is
+# now correct, not a bug: at 125 ms the keeper's reaction (~0.13 s leg / 0.18 s
+# arm) has barely fired, so a set, squared goalie genuinely covers a straight-on
+# range shot (the bot shouldn't fire it) while lateral lag, point-blank arm-deploy
+# gaps, and the seven-hole geometry still open the shots it SHOULD take. 15 ticks
+# still lets the charge tracker accumulate the forehand/backhand swing chirality.
+const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 8   # ~125 ms
 
 # Shot target power fraction (0..1): shots aim for full power (the carry scorer
 # assumes WRISTER_SHOT_SPEED_M_S = DEFAULT_WRISTER_POWER_MAX_M_S, so the bot
@@ -406,8 +412,10 @@ const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
 # fake cursor sweeps from wind-up start to release. Purely COSMETIC now that
 # power rides bot_wrister_power_t (not sweep distance): it sizes the visible
 # blade draw. A full-power shot uses the whole span; a soft pass scales it down
-# so the gesture reads as gentle. Matches the old per-bot charge cap default.
-const BOT_WRISTER_WIND_UP_SPAN_M: float = 0.7
+# so the gesture reads as gentle. A compact quick-twitch draw to match the
+# shortened ~125 ms charge — the pace is in the release, not a big wind-up, so it
+# needs far less ROM than the old power-by-drag gesture did.
+const BOT_WRISTER_WIND_UP_SPAN_M: float = 0.4
 # Mid-charge bail radius. If an opponent gets inside this distance
 # while we're charging, cancel via block_held — getting blasted in the
 # slot mid-windup is worse than not shooting. The carry state can re-
@@ -428,7 +436,7 @@ const BOT_WRISTER_PLANT_SPEED_M_S: float = 1.5
 #      (_carry_aim_track_fire keeps facing pre-tracked toward the
 #      best fire option during CARRY), this is typically 0-50 ms.
 #      The buffer accounts for typical mouse residual convergence.
-#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / PHYSICS_TICK = 250 ms.
+#   2. Wrister charge: BOT_WRISTER_CHARGE_TICKS / PHYSICS_TICK = ~125 ms.
 #
 # Used both for projecting the shooter's release-pos AND for
 # predicting where the goalie / opponents will be at release.

@@ -1033,13 +1033,22 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			self_pos, candidate, _scratch_opponents_path)
 	if lane <= 0.0:
 		return -INF
-	# Predict goalie at candidate-arrival + wrister charge.
-	var cand_release_t: float = local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
-	var cand_goalie: Vector3 = _predict_goalie_at(ctx, cand_release_t, candidate)
-	var cand_unsettled: float = _goalie_unsettled_at(ctx, cand_release_t, candidate)
+	# Score the candidate against a SQUARED goalie — arc-matched and set. The keeper
+	# tracks the puck continuously as the bot skates the candidate (a gradual move,
+	# not a relocation it reacts to from a standstill), so on arrival it is square:
+	# both the predicted position AND the "caught moving" unsettled bonus (0.0)
+	# reflect that. Using the react-then-slide predict_goalie_pos here under-tracked
+	# the keeper — it fell short of arc-matching a diagonal step and leaked the far
+	# side, so the bot chased an ever-receding "one more cut catches him moving" shot
+	# into the crease instead of firing. The caught-moving credit is a puck-
+	# RELOCATION effect (a pass / one-timer that outruns the keeper's tracking — see
+	# score_pass's unsettled arg), never a carry the goalie reads the whole way. The
+	# real shot (shoot-now, scored above) still captures any genuine goalie lag.
+	var cand_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			_goalie_now(ctx), ctx.attacking_goal_pos, candidate)
 	var dest_score: float = _score_at(ctx, candidate, self_pos,
 			_scratch_opponents_path, cand_goalie,
-			ctx.self_wrister_shot_speed, cand_unsettled)
+			ctx.self_wrister_shot_speed, 0.0)
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
