@@ -8,56 +8,54 @@ class_name PuckCollisionRules
 static func can_poke_check(carrier_team_id: int, checker_team_id: int) -> bool:
 	return carrier_team_id != checker_team_id
 
-# Billiard-style reflection off the blade. contact_normal is the blade-to-puck
-# unit vector at overlap time. Returns new horizontal velocity (no Y component).
-# Drives BOTH the natural too-fast-to-catch deflect and the deliberate redirect
-# (hold LMB without the puck) — one model, so they always feel identical.
-#   deflect_blend ∈ [0, 1]: 0 = pure pass-through, 1 = pure reflection
-# Two effects ease with puck speed via one shared 0→1 "hardness" factor
-# (speed / speed_ref, clamped) — a soft puck is steerable, a hard puck glances:
-#   speed_retain → speed_retain_min: energy retained. Hard pucks shed more so
-#       deflections stop pinballing. speed_retain_min < 0 disables the falloff
-#       (flat speed_retain).
-#   max_deflect_deg → max_deflect_deg_min: cap on how far the puck may be turned
-#       off its incoming line. Soft pucks get a sharp, steerable redirect; hard
-#       pucks only a shallow tip (high momentum can't be sharply redirected by a
-#       passive blade). The cap also tames the wild caroms a near-perpendicular /
-#       jittery blade normal produces at higher blend. max_deflect_deg_min < 0
-#       disables the speed falloff (flat max_deflect_deg); max_deflect_deg >= 180
-#       disables the clamp entirely.
+# Passive-blade deflection via a NORMAL/TANGENTIAL decomposition of the incoming
+# velocity against the blade face. contact_normal is the blade face normal
+# (unit, points against the incoming puck). Returns new horizontal velocity (no
+# Y). Drives BOTH the natural too-fast-to-catch deflect and the deliberate
+# redirect (hold LMB without the puck) — one model, so they always feel identical.
+#
+# The incoming velocity is split into the component INTO the face (normal) and the
+# component ALONG the face (tangential). The normal part rebounds with restitution
+# `e`; the tangential part is kept by `tangential_retain`. Two real outcomes fall
+# out of this ONE model, no hand-drawn curve:
+#   - a SQUARE hit (nearly all normal) off a hard puck → low e → the puck dies in
+#     front (the "bobble": knocked down, not held);
+#   - a GLANCING hit (mostly tangential) → the glance survives → the puck keeps its
+#     pace and only its LINE changes (a true tip / redirect).
+# This is why it needs no angle cap: the only way to reverse the puck is a square
+# hit, and a square hard hit is killed by the low restitution — there is no fast
+# carom to clamp.
+#
+# `e` eases from normal_restitution (soft/slow puck) toward normal_restitution_min
+# (hard puck) as speed climbs to speed_ref — a hard puck deadens more head-on, so
+# a squared blade smothers a slapper into a bobble instead of caroming it.
+# normal_restitution_min < 0 disables the falloff (flat e). tangential_retain is
+# flat: a glance keeps its pace regardless of speed (that IS the redirect).
 static func deflect_velocity(
 		incoming_velocity: Vector3,
 		contact_normal: Vector3,
-		deflect_blend: float,
-		speed_retain: float,
-		speed_retain_min: float = -1.0,
-		max_deflect_deg: float = 180.0,
-		max_deflect_deg_min: float = -1.0,
+		normal_restitution: float,
+		normal_restitution_min: float = -1.0,
+		tangential_retain: float = 1.0,
 		speed_ref: float = 0.0) -> Vector3:
 	var horiz := Vector3(incoming_velocity.x, 0.0, incoming_velocity.z)
-	var speed: float = incoming_velocity.length()
-	if horiz.length() < 0.0001:
+	var speed: float = horiz.length()
+	if speed < 0.0001:
 		return Vector3.ZERO
-	# Shared 0→1 "how hard is this puck" factor for both speed-dependent falloffs.
+	var n := Vector3(contact_normal.x, 0.0, contact_normal.z)
+	if n.length() < 0.0001:
+		return horiz  # degenerate normal: nothing to reflect against, pass through
+	n = n.normalized()
+	# Into-face component. horiz·n is negative for an approaching puck (n points
+	# against travel), so v_normal points into the face; flipping it by -e below
+	# sends the rebounded part back out along +n.
+	var v_normal: Vector3 = horiz.dot(n) * n
+	var v_tangent: Vector3 = horiz - v_normal
 	var hard: float = clampf(speed / speed_ref, 0.0, 1.0) if speed_ref > 0.0001 else 0.0
-	var in_dir: Vector3 = horiz.normalized()
-	var reflected: Vector3 = horiz - 2.0 * horiz.dot(contact_normal) * contact_normal
-	var new_dir: Vector3 = in_dir.lerp(reflected.normalized(), deflect_blend).normalized()
-	var cap: float = max_deflect_deg
-	if max_deflect_deg_min >= 0.0:
-		cap = lerpf(max_deflect_deg, max_deflect_deg_min, hard)
-	if cap < 180.0:
-		var turn: float = in_dir.angle_to(new_dir)
-		if turn > deg_to_rad(cap):
-			var axis: Vector3 = in_dir.cross(new_dir)
-			if axis.length() > 0.0001:
-				new_dir = in_dir.rotated(axis.normalized(), deg_to_rad(cap))
-			else:
-				new_dir = in_dir
-	var retain: float = speed_retain
-	if speed_retain_min >= 0.0:
-		retain = lerpf(speed_retain, speed_retain_min, hard)
-	return new_dir * speed * retain
+	var e: float = normal_restitution
+	if normal_restitution_min >= 0.0:
+		e = lerpf(normal_restitution, normal_restitution_min, hard)
+	return v_tangent * tangential_retain - v_normal * e
 
 # Adds upward Y component to a horizontal deflection direction. Used when the
 # deflecting skater is elevated.

@@ -25,22 +25,30 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # See PuckReceptionRules.should_receive.
 @export var deflect_min_speed: float = 20.0
 @export var alignment_receive_bonus: float = 8.0
-# How reflective a deflection is: 0 = pass-through with a nudge, 1 = pure bounce
-# off the blade face. Higher = the puck follows your blade angle more directly,
-# so deliberate redirects are more aim-able (and the angle cap below keeps the
-# near-head-on caroms it would otherwise reintroduce in check).
-@export var deflect_blend: float = 0.75
-# Speed-dependent deflection feel (tune to taste). Both effects ease from their
-# soft-puck value toward their hard-puck value as puck speed climbs to
-# deflect_speed_ref — a soft pass is steerable, a hard shot only glances.
-#   retain: energy kept. Hard pucks shed more so deflections don't pinball.
-@export var deflect_speed_retain: float = 0.7       # soft-puck (low speed)
-@export var deflect_speed_retain_min: float = 0.5   # hard-puck (at/above ref); < 0 disables falloff
-#   angle: cap on how far the puck bends off its incoming line.
-@export var deflect_max_angle_deg: float = 70.0     # soft-puck — sharp, steerable redirect
-@export var deflect_max_angle_deg_min: float = 30.0 # hard-puck — shallow glancing tip; < 0 disables falloff
-@export var deflect_speed_ref: float = 30.0         # speed (m/s) at which both falloffs bottom out
+# Passive-blade deflection via a normal/tangential decomposition (see
+# PuckCollisionRules.deflect_velocity). The component INTO the blade face rebounds
+# with a restitution; the component ALONG the face (a glance) is preserved. From
+# one model this yields both real outcomes: a SQUARE hit off a hard puck dies in
+# front (a bobble — see bobble_speed_threshold), while a GLANCING hit keeps its
+# pace and only bends its line (a true tip/redirect). No angle cap is needed — the
+# only way to reverse the puck is a square hit, and a square hard hit is killed by
+# the low restitution, so there is no fast carom to clamp.
+#   restitution eases from the soft/slow value toward the hard value as puck speed
+#   climbs to deflect_speed_ref, so a squared blade smothers a slapper instead of
+#   pinballing it.
+@export var deflect_normal_restitution: float = 0.6       # soft/slow puck bounces off the face
+@export var deflect_normal_restitution_min: float = 0.15  # hard puck (at/above ref) barely rebounds — it dies; < 0 disables falloff
+@export var deflect_tangential_retain: float = 0.85       # glancing slide is largely kept (a redirect keeps pace)
+@export var deflect_speed_ref: float = 30.0               # speed (m/s) at which restitution bottoms out
 @export var deflect_cooldown: float = 0.3
+# A deflect whose resulting speed lands below this reads as a BOBBLE — the blade
+# smothered the puck (knocked it down) rather than redirecting it. The deflector
+# gets the short bobble_cooldown so they can gather their own knockdown, instead
+# of the full deflect_cooldown lockout; a genuine redirect (faster exit) keeps the
+# lockout. Feedback (game_manager) also reads this threshold so a bobble sounds
+# duller than a live redirect.
+@export var bobble_speed_threshold: float = 11.0
+@export var bobble_cooldown: float = 0.12
 @export var deflect_elevation_angle: float = 35.0
 # Poke exit speed now scales with the blade-contest momentum (see
 # PuckCollisionRules.poke_strip_velocity): a soft poke floors at min, a hard sweep
@@ -242,20 +250,26 @@ func apply_blade_deflect(skater: Skater) -> void:
 	var contact_normal: Vector3 = skater.get_blade_face_normal(linear_velocity)
 
 	var new_vel: Vector3 = PuckCollisionRules.deflect_velocity(
-			linear_velocity, contact_normal, deflect_blend,
-			deflect_speed_retain, deflect_speed_retain_min,
-			deflect_max_angle_deg, deflect_max_angle_deg_min, deflect_speed_ref)
+			linear_velocity, contact_normal,
+			deflect_normal_restitution, deflect_normal_restitution_min,
+			deflect_tangential_retain, deflect_speed_ref)
 
 	# Deliberate-deflect tips ride the loft mode too: half the tip angle at
-	# LOW, full at HIGH — same scaling as the blade-scoop visual.
-	if skater.elevation_level > 0:
+	# LOW, full at HIGH — same scaling as the blade-scoop visual. A dead-square
+	# knockdown collapses to ~zero speed (a bobble drop); skip the elevation there,
+	# its direction is undefined and a smothered puck shouldn't pop into the air.
+	if skater.elevation_level > 0 and new_vel.length() > 0.001:
 		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(
 				new_vel.normalized(),
 				deflect_elevation_angle * float(skater.elevation_level) * 0.5)
 		new_vel = new_dir * new_vel.length()
 
 	linear_velocity = new_vel
-	_set_cooldown(skater, deflect_cooldown)
+	# A low-speed result is a bobble: the blade knocked the puck down instead of
+	# redirecting it. Give the deflector a short window to gather it rather than
+	# the full deflect lockout (which is meant to stop re-touching a live redirect).
+	var is_bobble: bool = new_vel.length() < bobble_speed_threshold
+	_set_cooldown(skater, bobble_cooldown if is_bobble else deflect_cooldown)
 	puck_touched_loose.emit(skater)
 
 func on_body_block(blocker: Skater, dampen_override: float = -1.0) -> void:

@@ -1295,7 +1295,7 @@ func _wire_sound_signals() -> void:
 			_record_replay_audio_event("puck_goal_body", puck.get_puck_position(), spd))
 		puck.puck_touched_loose.connect(func(_s: Skater) -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, puck.get_puck_position(), _puck_speed_volume(spd), 0.06, 1.2)
+			SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, puck.get_puck_position(), _puck_speed_volume(spd), 0.06, _deflection_pitch(spd))
 			NetworkManager.send_deflection_to_all(puck.get_puck_position())
 			_record_replay_audio_event("puck_deflection", puck.get_puck_position(), spd))
 		puck.puck_body_blocked.connect(func(_s: Skater) -> void:
@@ -1349,7 +1349,9 @@ func _wire_sound_signals() -> void:
 	NetworkManager.goal_body_hit_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
 	NetworkManager.deflection_received.connect(
-		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06, 1.2))
+		func(pos: Vector3) -> void:
+			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
+			SoundManager.play_world(SoundManager.Sound.PUCK_DEFLECTION, pos, _puck_speed_volume(spd), 0.06, _deflection_pitch(spd)))
 	NetworkManager.body_block_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_BODY_BLOCK, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.07))
 	NetworkManager.puck_strip_received.connect(
@@ -3528,6 +3530,17 @@ func return_to_free_play() -> void:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 func _puck_speed_volume(speed: float) -> float:
 	return lerpf(-10.0, 0.0, clampf((speed - 1.0) / 20.0, 0.0, 1.0))
+
+
+# Pitch for a blade deflection cue. A low-speed result is a bobble (the blade
+# smothered the puck) and reads duller; a faster exit is a live redirect and reads
+# sharp. Speed-driven off the same replicated puck velocity the volume uses, so
+# host and remote peers classify a given deflect identically. `puck` may be null
+# when a remote cue arrives between spawns — fall back to the redirect pitch.
+func _deflection_pitch(speed: float) -> float:
+	if puck != null and speed < puck.bobble_speed_threshold:
+		return 0.85
+	return 1.2
 
 
 # Drops a carried puck and notifies the remote carrier. Returns the carrier
