@@ -69,6 +69,22 @@ const RINK_Z_INSET: float = 1.0
 # inside the blade ROM during the swing, which removed the need
 # for the old facing-alignment gate.
 const AIM_CONVERGED_DIST_M: float = 0.15
+
+# Commit-then-aim safety margin (Aim-B2). The blade physically reaches anywhere
+# inside the reach cone (_self_reach_cone_half_angle, ROM + torso twist ≈ 157°)
+# from the FROZEN facing, so a shot/pass whose aim already falls inside the cone
+# needs NO body rotation — the bot commits to the charge immediately and the blade
+# swings to the aim while the body holds its heading (WRISTER_AIM freezes facing).
+# Only aims in the narrow back wedge past the cone still pre-rotate the body, and
+# only until the aim swings into the cone. This margin pulls the immediate-commit
+# boundary a little inside the hard cone edge so the wind-up sweep (which draws the
+# blade BACK past the aim before releasing through it) and the torso twist have
+# headroom to develop over the short ~125 ms charge rather than committing on an
+# aim the blade would still be clamping toward at release. A feel/safety knob —
+# widen toward 0 if bots leave easy reachable aims on the table, tighten if a wide
+# aim's blade visibly lags the release. FEEL, so hand-set (not an evaluator curve).
+const AIM_COMMIT_CONE_MARGIN_RAD: float = deg_to_rad(25.0)
+
 # Default / floor for the pre-aim convergence safety timeout (~500 ms).
 # apply_profile() raises _intent_max_wait_ticks above this when a lower
 # blade-slew cap slows a 180° swing, so the back-pass pre-aim always has time
@@ -1928,7 +1944,19 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		var dz: float = _mouse_pos.z - mouse_target.z
 		var aim_dist: float = sqrt(dx * dx + dz * dz)
 		var aim_converged: bool = aim_dist < AIM_CONVERGED_DIST_M
-		if aim_converged or _intent_wait_ticks >= _intent_max_wait_ticks:
+		# Commit-then-aim (Aim-B2): if the aim already sits inside the blade reach
+		# cone of the CURRENT facing, the blade can swing to it with the body frozen
+		# — commit to the charge NOW instead of arcing the mouse (and dragging the
+		# body) all the way around to it. This is what stops the bot pivoting its
+		# whole body toward a reachable lateral pass / off-wing shot. Back-wedge aims
+		# (outside the cone) fail this and fall through to the arc-and-converge path,
+		# which rotates the body just until the aim swings into the cone and then
+		# this fires. self_state guards a rare null snapshot entry (keep old timing).
+		var aim_reachable_no_turn: bool = self_state != null and _aim_needs_no_rotation(
+				self_state.facing,
+				Vector2(mouse_target.x - self_pos.x, mouse_target.z - self_pos.z))
+		if aim_converged or aim_reachable_no_turn \
+				or _intent_wait_ticks >= _intent_max_wait_ticks:
 			# Capture pre-aim duration for the upcoming wrister release log.
 			if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED:
 				_pre_aim_ticks_observed = _agent_tick - _commit_tick_stamp
@@ -1949,6 +1977,20 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			# _intent_max_wait_ticks is sized in physics ticks, so a per-run +1 would
 			# stretch the pre-aim bail timeout by the dispatch period at low tiers.
 			_intent_wait_ticks += _dispatch_period_ticks
+
+
+# True when `aim_dir` (world XZ, from the bot to its aim point) already falls
+# inside the blade reach cone of `facing` MINUS the commit safety margin — i.e.
+# the blade can reach the aim with the body's heading frozen, so no pre-aim body
+# rotation is needed (Aim-B2). Cone + margin are the bot's real, attribute-scaled
+# reach (`_self_reach_cone_half_angle`, threaded from AISkaterCaps) less
+# AIM_COMMIT_CONE_MARGIN_RAD headroom for the wind-up sweep / torso twist. Pure
+# geometry — unit-tested directly.
+func _aim_needs_no_rotation(facing: Vector2, aim_dir: Vector2) -> bool:
+	if facing.length_squared() < 0.0001 or aim_dir.length_squared() < 0.0001:
+		return false
+	var angle: float = abs(facing.angle_to(aim_dir))
+	return angle <= maxf(_self_reach_cone_half_angle - AIM_COMMIT_CONE_MARGIN_RAD, 0.0)
 
 
 # Maps the carrier's INTENT_* enum (intentionally decoupled from
