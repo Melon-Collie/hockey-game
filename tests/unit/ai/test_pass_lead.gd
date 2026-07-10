@@ -124,6 +124,61 @@ func test_lead_point_matches_lead_first_element() -> void:
 	assert_eq(point, full[0], "lead_point must equal lead()[0]")
 
 
+func _caps(max_speed: float, max_accel: float) -> AISkaterCaps:
+	var c := AISkaterCaps.new()
+	c.max_speed = max_speed
+	c.max_accel = max_accel
+	return c
+
+
+func test_lead_caps_projected_speed_to_receiver_top_speed() -> void:
+	# A receiver cruising at 8 m/s up-ice with a strong along-travel accel. A slow
+	# receiver (max_speed 8) can't get past 8, so it's led LESS far than a fast one
+	# (max_speed 12) that keeps accelerating into open ice. Same observed motion —
+	# only the attribute cap differs.
+	var receiver := _receiver(Vector3(0, 0, 6), Vector3(0, 0, 8))
+	var accel := Vector3(0, 0, 6)  # still accelerating up-ice
+	var slow := AIPassLead.lead_point(Vector3.ZERO, receiver, accel, 20.0, 0.6, _caps(8.0, 12.0))
+	var fast := AIPassLead.lead_point(Vector3.ZERO, receiver, accel, 20.0, 0.6, _caps(12.0, 12.0))
+	assert_gt(fast.z, slow.z, "a faster receiver is led further into the open ice")
+
+
+func test_lead_caps_accel_to_receiver_thrust() -> void:
+	# Same observed accel, but a low-Agility receiver can't sustain it — its
+	# along-travel accel is clamped to its real thrust, so it's led less far than a
+	# high-Agility receiver. Speed cap held equal so only the accel cap differs.
+	var receiver := _receiver(Vector3(0, 0, 6), Vector3(0, 0, 3))
+	var accel := Vector3(0, 0, 30)  # a spike well above any real thrust
+	var sluggish := AIPassLead.lead_point(Vector3.ZERO, receiver, accel, 20.0, 0.6, _caps(20.0, 6.0))
+	var quick := AIPassLead.lead_point(Vector3.ZERO, receiver, accel, 20.0, 0.6, _caps(20.0, 14.0))
+	assert_gt(quick.z, sluggish.z, "a more agile receiver accelerates further into the lead")
+
+
+func test_lead_does_not_under_lead_a_sprinting_receiver() -> void:
+	# A receiver already moving above its base max_speed (mid-sprint — sprint
+	# raises the real cap) must NOT be under-led: the speed cap is the LARGER of the
+	# base max_speed and the current speed, so it never brakes observed motion.
+	var receiver := _receiver(Vector3(0, 0, 6), Vector3(0, 0, 11))  # 11 > base 9
+	var over_cap := AIPassLead.lead_point(Vector3.ZERO, receiver, Vector3.ZERO, 22.0, 0.6, _caps(9.0, 12.0))
+	var uncapped := AIPassLead.lead_point(Vector3.ZERO, receiver, Vector3.ZERO, 22.0, 0.6)
+	# With no accel and an already-fast receiver, the base-9 cap must not pull the
+	# lead in short of where the receiver actually skates.
+	assert_gte(over_cap.z, uncapped.z - 0.01,
+			"a sprinting receiver is led to its real speed, not braked to base")
+
+
+func test_lead_null_caps_matches_league_default() -> void:
+	# Back-compat: omitting caps must equal passing a league-baseline caps, so
+	# unwired callers (and every existing test) are byte-for-byte unchanged.
+	var receiver := _receiver(Vector3(1, 0, 5), Vector3(1, 0, 4))
+	var accel := Vector3(0, 0, 2)
+	var no_caps := AIPassLead.lead_point(Vector3.ZERO, receiver, accel, 16.0, 0.6)
+	var league := AIPassLead.lead_point(Vector3.ZERO, receiver, accel, 16.0, 0.6,
+			_caps(GameRules.DEFAULT_SKATER_MAX_SPEED_M_S, GameRules.DEFAULT_SKATER_THRUST_M_S2))
+	assert_almost_eq(no_caps.z, league.z, 0.001)
+	assert_almost_eq(no_caps.x, league.x, 0.001)
+
+
 func test_lead_falls_back_to_body_when_blade_unpopulated() -> void:
 	var s := SkaterNetworkState.new()
 	s.position = Vector3(0, 0, 5)

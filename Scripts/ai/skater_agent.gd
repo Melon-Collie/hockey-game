@@ -15,8 +15,9 @@ var _sm: SkaterAgentStateMachine = SkaterAgentStateMachine.new()
 # Lower values add tracking lag: the blade lags slightly behind its target,
 # dekes don't immediately get matched, and aim transitions read as a smooth
 # swing rather than a snap. A second-stage softener on top of the state
-# machine's blade-slew cap (BotSkillProfile.mouse_max_speed_m_s) — that cap
-# does the heavy lifting; this is the exponential polish.
+# machine's aim-cursor slew — which now tracks the bot's REAL Hands blade speed
+# (AISkaterCaps.blade_speed), not an artificial per-tier cap; this is the
+# exponential polish on pass/carry aim.
 #
 # DEFAULT is the perfect-bot baseline (1.0 = snap); the real per-tier value is
 # set from BotSkillProfile in apply_profile(). Difficulty tuning has landed.
@@ -27,8 +28,8 @@ var _has_prev_mouse: bool = false
 
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
-		is_left_handed: bool) -> void:
-	_sm.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
+		is_left_handed: bool, caps_by_peer: Dictionary = {}) -> void:
+	_sm.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed, caps_by_peer)
 
 
 # Apply a difficulty skill profile. Called by AIController.setup_agent right
@@ -45,7 +46,7 @@ func apply_profile(profile: BotSkillProfile) -> void:
 # Forward this bot's attribute-scaled self-capabilities (speed, accel, reach,
 # shot / pass speed) to the state machine. Called by AIController.apply_attributes
 # on spawn and on free-play picker changes. Null is a no-op (baseline defaults).
-func apply_capabilities(caps: AISelfCapabilities) -> void:
+func apply_capabilities(caps: AISkaterCaps) -> void:
 	_sm.apply_capabilities(caps)
 
 

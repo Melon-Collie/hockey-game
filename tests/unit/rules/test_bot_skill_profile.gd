@@ -20,7 +20,7 @@ func test_unknown_difficulty_falls_back_to_hard() -> void:
 	# Out-of-range index (e.g. a stale pref or a future tier removed) must not
 	# crash — it falls back to the Hard ceiling.
 	var profile: BotSkillProfile = BotSkillProfile.for_difficulty(99)
-	assert_eq(profile.mouse_max_speed_m_s, BotSkillProfile.hard().mouse_max_speed_m_s)
+	assert_eq(profile.carrier_reaction_delay_s, BotSkillProfile.hard().carrier_reaction_delay_s)
 
 
 func test_hard_reaction_is_fast_but_not_instant() -> void:
@@ -30,12 +30,6 @@ func test_hard_reaction_is_fast_but_not_instant() -> void:
 	assert_gt(hard.carrier_reaction_delay_s, 0.0,
 			"even Hard takes a beat to react to a discrete event")
 	assert_lt(hard.carrier_reaction_delay_s, BotSkillProfile.normal().carrier_reaction_delay_s)
-
-
-func test_hard_blade_is_capped_not_teleporting() -> void:
-	# Even Hard no longer snaps the blade to the ideal point — that is the
-	# de-robotising lever. Just below the old perfect-bot 100 m/s baseline.
-	assert_lt(BotSkillProfile.hard().mouse_max_speed_m_s, 100.0)
 
 
 func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
@@ -49,11 +43,7 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal reacts to possession changes later than Hard")
 	assert_gt(easy.carrier_reaction_delay_s, normal.carrier_reaction_delay_s,
 			"Easy reacts to possession changes later than Normal")
-	# Blade slew: slower is softer.
-	assert_lt(normal.mouse_max_speed_m_s, hard.mouse_max_speed_m_s,
-			"Normal's blade slews slower than Hard's")
-	assert_lt(easy.mouse_max_speed_m_s, normal.mouse_max_speed_m_s,
-			"Easy's blade slews slower than Normal's")
+	# (Aim slew is no longer a profile knob — it's the bot's real Hands blade speed.)
 	# Aim lerp: lower lags more.
 	assert_lt(normal.mouse_lerp_factor, hard.mouse_lerp_factor,
 			"Normal's aim lags more than Hard's")

@@ -193,3 +193,36 @@ func test_no_opponents_means_no_exposure_penalty() -> void:
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_true(absf(d.target_position.x) <= GameRules.RINK_HALF_WIDTH)
 	assert_true(absf(d.target_position.z) <= GameRules.GOAL_LINE_Z)
+
+
+func _opp(pos: Vector3) -> SkaterNetworkState:
+	var s := SkaterNetworkState.new()
+	s.position = pos
+	return s
+
+
+func _speed_caps(v: float) -> AISkaterCaps:
+	var c := AISkaterCaps.new()
+	c.max_speed = v
+	return c
+
+
+func test_min_opp_time_home_uses_each_opponents_real_speed() -> void:
+	# One opponent, fixed position. A faster opponent (higher Speed) recovers to
+	# our net in less time — SUPPORT reads a shorter min-time-home.
+	var net := Vector3(0, 0, OUR_NET_Z)
+	var opps: Array[SkaterNetworkState] = [_opp(Vector3(0, 0, 0))]
+	var slow: float = AIRoleSupport._min_opp_time_home(opps, [_speed_caps(6.0)], net)
+	var fast: float = AIRoleSupport._min_opp_time_home(opps, [_speed_caps(14.0)], net)
+	assert_lt(fast, slow, "a faster opponent recovers home sooner")
+
+
+func test_exposure_lower_for_a_faster_defender() -> void:
+	# Same candidate and opponent-recovery time, but a faster ME (Speed) beats the
+	# puck back from that spot more easily → less exposure.
+	var net := Vector3(0, 0, OUR_NET_Z)
+	var candidate := Vector3(0, 0, 0)  # ~26.65 m from our net
+	var min_home: float = 3.0
+	var slow_me: float = AIRoleSupport._exposure(candidate, net, min_home, 6.0)
+	var fast_me: float = AIRoleSupport._exposure(candidate, net, min_home, 14.0)
+	assert_lt(fast_me, slow_me, "a faster defender is less exposed from the same spot")

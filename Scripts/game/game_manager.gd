@@ -1026,8 +1026,8 @@ func _spawn_world() -> void:
 	_wire_subsystems()
 	if NetworkManager.is_host:
 		team_brains = [
-				TeamBrain.new(0, _registry.team_id_by_peer),
-				TeamBrain.new(1, _registry.team_id_by_peer),
+				TeamBrain.new(0, _registry.team_id_by_peer, _registry.caps_by_peer),
+				TeamBrain.new(1, _registry.team_id_by_peer, _registry.caps_by_peer),
 		]
 		_connect_goal_signals()
 
@@ -2123,7 +2123,7 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 		# flickering frame-to-frame.
 		var best_pid: int = AILoosePuckChase.elect(
 				snap.skater_states, ids, puck_pos, puck_vel,
-				_prev_chase_by_team.get(team_id, -1))
+				_prev_chase_by_team.get(team_id, -1), _registry.caps_by_peer)
 		_prev_chase_by_team[team_id] = best_pid
 		snap.closest_to_puck_by_team[team_id] = best_pid
 
@@ -3415,6 +3415,8 @@ func _on_local_attributes_changed(attrs: PlayerAttributes) -> void:
 		return
 	if record.controller != null:
 		(record.controller as SkaterController).apply_attributes(attrs)
+		# Refresh the memoized per-peer caps so bots model this player's new build.
+		_registry.refresh_caps(record.peer_id)
 
 
 # Re-tint home (and possibly away) when the local player picks a new

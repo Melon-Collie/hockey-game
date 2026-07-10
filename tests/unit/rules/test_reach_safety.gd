@@ -23,6 +23,31 @@ func test_no_defenders_is_fully_safe() -> void:
 	assert_eq(_evade(Vector3.ZERO, Vector3(5, 0, 0), [], []), 1.0)
 
 
+func _caps(max_accel: float, blade_span: float) -> AISkaterCaps:
+	var c := AISkaterCaps.new()
+	c.max_accel = max_accel
+	c.blade_span = blade_span
+	return c
+
+
+func test_bigger_more_agile_defender_covers_more() -> void:
+	# Same defender geometry, but its real build sets its reach: Agility (max_accel)
+	# is how far it can lunge off its line, Size (blade_span) how far its stick
+	# touches. A big, agile defender reaches further → LESS clearance for the same
+	# puck point; a small, sluggish one reaches less → more room. Empty caps sits
+	# between them at the league default.
+	var opps: Array[Vector3] = [Vector3(2.0, 0, 0)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var t: float = AIActionScoring.EVADE_HORIZON_S
+	var league: float = AIActionScoring.reach_clearance(Vector3.ZERO, t, opps, vels)
+	var vs_big: float = AIActionScoring.reach_clearance(
+			Vector3.ZERO, t, opps, vels, [_caps(16.0, 2.0)])
+	var vs_small: float = AIActionScoring.reach_clearance(
+			Vector3.ZERO, t, opps, vels, [_caps(6.0, 1.2)])
+	assert_lt(vs_big, league, "a bigger, more agile defender reaches further → less clearance")
+	assert_gt(vs_small, league, "a smaller, slower defender reaches less → more room")
+
+
 func test_angled_hard_charger_is_evadable() -> void:
 	# Defender charging in from front-left at ~8 m/s. His momentum carries his
 	# reach downrange past the carrier, so the space he vacates is open — beat him

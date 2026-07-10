@@ -57,6 +57,29 @@ func test_shoot_score_reduced_by_mid_lane_defender() -> void:
 	assert_lt(blocked, clear, "defender in shot lane with reaction time should reduce shoot score")
 
 
+func test_shot_lane_defender_reach_scales_with_build() -> void:
+	# A defender partially in the shot lane. A longer-reach (Size), faster (Speed)
+	# defender blocks more of a shot; a short, slow one blocks less. Empty caps sits
+	# at the league default between them. (Goalie offset so the open-net aim runs to
+	# a predictable side that the defender contests.)
+	var shooter := Vector3(0, 0, 15)
+	var goalie := Vector3(1.0, 0, 26)
+	var off_lane: Array[Vector3] = [Vector3(0.9, 0, 20)]
+	var league: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, off_lane)
+	var big := AISkaterCaps.new()
+	big.stick_reach = 1.7
+	big.max_speed = 12.0
+	var vs_big: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, off_lane,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [big])
+	var small := AISkaterCaps.new()
+	small.stick_reach = 1.0
+	small.max_speed = 6.0
+	var vs_small: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, off_lane,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [small])
+	assert_lt(vs_big, league, "a longer-reach, faster defender blocks more of the shot")
+	assert_gt(vs_small, league, "a shorter, slower defender blocks less")
+
+
 func test_shoot_blocked_by_close_on_line_defender() -> void:
 	# Lane physics: a defender 2 m in front of the shooter, dead on the
 	# shot line, is a shot-blocker — the puck's path runs straight through
@@ -875,6 +898,29 @@ func test_lane_clear_reduced_by_mid_lane_defender() -> void:
 	var mid_lane: Array[Vector3] = [Vector3(0.2, 0.0, 7.0)]
 	var s: float = AIActionScoring.lane_clear(from, to, mid_lane, AIActionScoring.PASS_SPEED_M_S)
 	assert_lt(s, 1.0, "a defender on the mid-lane reduces clearance")
+
+
+func test_lane_block_scales_with_defender_reach_and_speed() -> void:
+	# A defender 2.5 m off the pass line — a partial block at league reach. A
+	# longer-stick (Size), faster (Speed) defender slides further into the lane and
+	# reaches the puck → blocks more (lower clearance); a short, slow one blocks
+	# less. Empty caps sits at the league default between them.
+	var from := Vector3(0, 0, 0)
+	var to := Vector3(0, 0, 14)
+	var off_lane: Array[Vector3] = [Vector3(2.5, 0, 7)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var pass_speed: float = AIActionScoring.PASS_SPEED_M_S
+	var league: float = AIActionScoring.lane_clear(from, to, off_lane, pass_speed, vels)
+	var big := AISkaterCaps.new()
+	big.stick_reach = 1.6
+	big.max_speed = 12.0
+	var vs_big: float = AIActionScoring.lane_clear(from, to, off_lane, pass_speed, vels, [big])
+	var small := AISkaterCaps.new()
+	small.stick_reach = 1.1
+	small.max_speed = 6.0
+	var vs_small: float = AIActionScoring.lane_clear(from, to, off_lane, pass_speed, vels, [small])
+	assert_lt(vs_big, league, "a longer-reach, faster defender intercepts more of the lane")
+	assert_gt(vs_small, league, "a shorter, slower defender lets more through")
 
 
 func test_lane_clear_blocks_close_on_line_defender() -> void:

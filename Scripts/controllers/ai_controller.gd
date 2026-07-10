@@ -103,17 +103,10 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	super.apply_attributes(attrs)
 	if _agent == null:
 		return
-	var caps := AISelfCapabilities.new()
-	caps.max_speed = max_speed
-	caps.max_accel = thrust
-	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
-	caps.wrister_shot_speed = max_wrister_power
-	# Scaled body-check delivery (set on the skater by super.apply_attributes
-	# above) so AIBodyCheck predicts THIS bot's hit strength.
-	if skater != null:
-		caps.self_weight = skater.weight
-		caps.self_body_check_transfer = skater.body_check_transfer
-	_agent.apply_capabilities(caps)
+	# Push this bot's own scaled capabilities into the agent (the same struct the
+	# registry memoizes per-peer for cross-player modeling). super() has already
+	# written the scaled fields build_ai_caps reads.
+	_agent.apply_capabilities(build_ai_caps())
 
 
 # Bots are spawned by PlayerRegistry.spawn_bot, which knows the bot's
@@ -121,9 +114,9 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 # after spawn to wire the agent. Separate from setup() because setup() is
 # called by ActorSpawner before the registry knows which slot it belongs to.
 func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
-		is_left_handed: bool, profile: BotSkillProfile = null) -> void:
+		is_left_handed: bool, profile: BotSkillProfile = null, caps_by_peer: Dictionary = {}) -> void:
 	if _agent != null:
-		_agent.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed)
+		_agent.setup(peer_id, team_id, brain, team_id_by_peer, is_left_handed, caps_by_peer)
 		# Difficulty knobs (mouse slew / lerp / dispatch cadence). Null leaves
 		# the perfect-bot defaults. Perception delay is applied globally by
 		# GameManager, not here.

@@ -43,6 +43,20 @@ func test_predict_at_zero_lead_returns_input() -> void:
 	assert_eq(lead, pos, "zero lead time should return current position unchanged")
 
 
+func test_predict_at_speed_cap_limits_acceleration() -> void:
+	# Accelerating body, capped at a top speed below where the accel would take it.
+	# Uncapped it reaches vel·t + ½·a·t²; the cap holds the projected speed (and so
+	# the distance) down. Default (0) is uncapped — every non-pass caller.
+	var pos := Vector3.ZERO
+	var vel := Vector3(0, 0, 6)
+	var accel := Vector3(0, 0, 10)
+	var uncapped: Vector3 = AITrajectory.predict_at(pos, vel, 0.6, 6, accel)
+	var capped: Vector3 = AITrajectory.predict_at(pos, vel, 0.6, 6, accel, 6.0)
+	assert_lt(capped.z, uncapped.z, "the speed cap shortens an accelerating lead")
+	# Capped at 6 m/s from a 6 m/s start → ~constant 6 m/s → ~3.6 m over 0.6 s.
+	assert_almost_eq(capped.z, 3.6, 0.2, "capped body holds ~its top speed")
+
+
 func test_zero_velocity_yields_static_trajectory() -> void:
 	var pos := Vector3(1, 0, 2)
 	var traj: Array[Vector3] = AITrajectory.predict(pos, Vector3.ZERO, 3, 0.1)

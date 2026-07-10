@@ -33,12 +33,16 @@ const MIN_SPEED_FOR_PROJECTION: float = 0.5
 
 # Lead a pass to a moving receiver. `launch_speed` is the puck's RELEASE speed;
 # the lead accounts for it bleeding off to ice friction in flight (see
-# effective_flight_speed). Returns [lead_point: Vector3, flight_t: float] — the
-# carrier needs the solved flight time downstream (opponent projection, goalie
-# prediction, time-decay), so it's returned alongside the point rather than
-# recomputed.
+# effective_flight_speed). `receiver_caps` is the receiver's real attribute-scaled
+# build (AISkaterCaps) — its Agility (max_accel) caps how hard it can keep
+# accelerating into the lead, and its Speed (max_speed) caps how far ahead it can
+# actually get. Null falls back to the league baseline (unwired / unit tests), so
+# the lead is unchanged until a real receiver build is passed. Returns
+# [lead_point: Vector3, flight_t: float] — the carrier needs the solved flight
+# time downstream (opponent projection, goalie prediction, time-decay).
 static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
-		accel: Vector3, launch_speed: float, max_lead_s: float) -> Array:
+		accel: Vector3, launch_speed: float, max_lead_s: float,
+		receiver_caps: AISkaterCaps = null) -> Array:
 	var blade_world: Vector3 = receiver.blade_contact_world
 	# Defensive fallback: blade_contact_world is a host-only field that
 	# should always be populated on the host, but aim at body center is
@@ -46,6 +50,21 @@ static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
 	if blade_world == Vector3.ZERO:
 		blade_world = receiver.position
 	var a: Vector3 = along_velocity_component(accel, receiver.velocity)
+	# A receiver can't out-accelerate its own thrust (Agility). Observed accel is
+	# low-passed and can spike above what the body can pull, which over-leads a
+	# low-Agility receiver into ice it can't reach. Cap the along-travel accel at
+	# the receiver's real max_accel.
+	var max_accel: float = receiver_caps.max_accel if receiver_caps != null \
+			else GameRules.DEFAULT_SKATER_THRUST_M_S2
+	if a.length() > max_accel:
+		a = a.normalized() * max_accel
+	# ...and can't be led past its own top speed. Cap at the LARGER of the
+	# receiver's max_speed and its current speed, so a receiver already moving
+	# faster (mid-sprint — sprint raises the real cap) is never under-led, while
+	# the accel term can't push a cruising receiver beyond what it can reach.
+	var speed_cap: float = maxf(
+			_speed_xz(receiver.velocity),
+			receiver_caps.max_speed if receiver_caps != null else GameRules.DEFAULT_SKATER_MAX_SPEED_M_S)
 	# Friction-aware: the intercept solver treats the puck as constant-speed, so
 	# feed it the puck's AVERAGE flight speed rather than the launch speed —
 	# otherwise a long pass under-leads (the puck arrives later than launch/dist
@@ -55,16 +74,21 @@ static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
 			launch_speed, shooter_pos.distance_to(blade_world))
 	var flight_t: float = AITrajectory.intercept_time(
 			shooter_pos, blade_world, receiver.velocity, a,
-			eff_speed, max_lead_s)
+			eff_speed, max_lead_s, 6, speed_cap)
 	var point: Vector3 = AITrajectory.predict_at(
-			blade_world, receiver.velocity, flight_t, 6, a)
+			blade_world, receiver.velocity, flight_t, 6, a, speed_cap)
 	return [point, flight_t]
+
+
+static func _speed_xz(v: Vector3) -> float:
+	return sqrt(v.x * v.x + v.z * v.z)
 
 
 # Convenience for callers that only need the aim point (the firing path).
 static func lead_point(shooter_pos: Vector3, receiver: SkaterNetworkState,
-		accel: Vector3, launch_speed: float, max_lead_s: float) -> Vector3:
-	return lead(shooter_pos, receiver, accel, launch_speed, max_lead_s)[0]
+		accel: Vector3, launch_speed: float, max_lead_s: float,
+		receiver_caps: AISkaterCaps = null) -> Vector3:
+	return lead(shooter_pos, receiver, accel, launch_speed, max_lead_s, receiver_caps)[0]
 
 
 # Average (time-mean) speed of a pass over `distance`, given it launches at

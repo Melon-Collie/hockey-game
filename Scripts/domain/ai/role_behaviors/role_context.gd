@@ -51,13 +51,21 @@ var team_id_by_peer: Dictionary = {}
 # adjustment) — same behaviour as before this field existed.
 var acceleration_by_peer: Dictionary = {}
 
+# Per-peer attribute-scaled capabilities (AISkaterCaps), keyed by peer_id — every
+# player's REAL build (top speed, accel, reach, shot speed, weight/brace), so a
+# bot can model a specific teammate or opponent with what they can actually do
+# instead of the league average. Memoized by PlayerRegistry (rebuilt only on
+# spawn / picker, never per tick) and passed here by live reference, same pattern
+# as team_id_by_peer / acceleration_by_peer. Read `caps_by_peer.get(pid, null)`;
+# a missing entry (unit tests, unwired) means "fall back to the league default",
+# which reproduces the prior behaviour exactly.
+var caps_by_peer: Dictionary = {}
+
 # ── Self capabilities (attribute-scaled, this bot only) ───────────────────────
-# Populated by SkaterAgentStateMachine from its AISelfCapabilities so the
-# carrier scores ITS OWN actions with this bot's real top speed / shot speed
-# instead of league defaults. Defaults equal the baseline, so unwired contexts
-# (unit tests) keep the prior behaviour. Cross-player evaluation (a receiver's
-# shot, an opponent's ETA) deliberately stays on the default constants — see
-# AISelfCapabilities.
+# Populated by SkaterAgentStateMachine from its own AISkaterCaps so the carrier
+# scores ITS OWN actions with this bot's real top speed / shot speed instead of
+# league defaults. Defaults equal the baseline, so unwired contexts (unit tests)
+# keep the prior behaviour. (Cross-player evaluation reads caps_by_peer above.)
 var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # Also the upper clamp on this bot's distance-adaptive pass launch speed.
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
@@ -67,6 +75,16 @@ var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 var self_weight: float = 1.0
 var self_body_check_transfer: float = 0.45
 var self_stagger_timer: float = 0.0
+# This bot's own Hands-scaled carry-handle reach — how tight an evasion seam it
+# can thread (best_evade_point). League default when unwired.
+var self_handle_reach: float = 0.9
+# This bot's blade reach cone half-angle (ROM + torso twist) and Agility-scaled
+# facing turn rate — how the carrier prices the rotation an out-of-cone aim costs
+# (_facing_rotation_time). A shot/pass anywhere inside the cone is free (no body
+# turn); only the narrow back wedge pays, at this turn rate. League defaults when
+# unwired (unit tests) reproduce the prior scoring.
+var self_reach_cone_half_angle: float = deg_to_rad(157.0)
+var self_facing_turn_rate: float = 6.0
 
 # ── Difficulty pace knobs (from BotSkillProfile, this bot only) ───────────────
 # Set by SkaterAgentStateMachine each tick from the applied skill profile.
@@ -99,5 +117,9 @@ var dispatch_period_ticks: int = 1
 # retained array references, so the buffers are free to be overwritten next call.
 var scratch_opp_positions: Array[Vector3] = []
 var scratch_opp_states: Array[SkaterNetworkState] = []
+# AISkaterCaps index-matched to scratch_opp_positions/_states (entries may be
+# null), filled by collect_opponents so defensive ETAs read each opponent's real
+# top speed. A null entry / short buffer means the league default.
+var scratch_opp_caps: Array[AISkaterCaps] = []
 var scratch_teammates: Array[Vector3] = []
 var scratch_opp_receivers: Array[Vector3] = []

@@ -69,6 +69,22 @@ const RINK_Z_INSET: float = 1.0
 # inside the blade ROM during the swing, which removed the need
 # for the old facing-alignment gate.
 const AIM_CONVERGED_DIST_M: float = 0.15
+
+# Commit-then-aim safety margin (Aim-B2). The blade physically reaches anywhere
+# inside the reach cone (_self_reach_cone_half_angle, ROM + torso twist ≈ 157°)
+# from the FROZEN facing, so a shot/pass whose aim already falls inside the cone
+# needs NO body rotation — the bot commits to the charge immediately and the blade
+# swings to the aim while the body holds its heading (WRISTER_AIM freezes facing).
+# Only aims in the narrow back wedge past the cone still pre-rotate the body, and
+# only until the aim swings into the cone. This margin pulls the immediate-commit
+# boundary a little inside the hard cone edge so the wind-up sweep (which draws the
+# blade BACK past the aim before releasing through it) and the torso twist have
+# headroom to develop over the short ~125 ms charge rather than committing on an
+# aim the blade would still be clamping toward at release. A feel/safety knob —
+# widen toward 0 if bots leave easy reachable aims on the table, tighten if a wide
+# aim's blade visibly lags the release. FEEL, so hand-set (not an evaluator curve).
+const AIM_COMMIT_CONE_MARGIN_RAD: float = deg_to_rad(25.0)
+
 # Default / floor for the pre-aim convergence safety timeout (~500 ms).
 # apply_profile() raises _intent_max_wait_ticks above this when a lower
 # blade-slew cap slows a 180° swing, so the back-pass pre-aim always has time
@@ -576,6 +592,10 @@ var _team_brain: TeamBrain = null
 # closest-teammate checks). Used to be a Callable; the
 # Callable.call overhead showed up at the dispatch rate.
 var _team_id_by_peer: Dictionary = {}
+# Live peer -> AISkaterCaps dict owned by PlayerRegistry (memoized, rebuilt only
+# on spawn / picker). Copied by reference onto RoleContext.caps_by_peer each build
+# so roles / scorers can read any player's real build. Empty when unwired.
+var _caps_by_peer: Dictionary = {}
 # Handedness drives the wrister wind-up side: RH winds up on the +X
 # (player-local) side of the aim line, LH on -X. Without this, every
 # bot wrister would register as a backhand half the time and lose
@@ -755,6 +775,13 @@ var _self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # apply_capabilities runs.
 var _self_weight: float = 1.0
 var _self_body_check_transfer: float = 0.45
+var _self_handle_reach: float = 0.9
+# This bot's blade reach cone half-angle (ROM + torso twist) and Agility-scaled
+# facing turn rate, so the carrier prices only genuine body-rotation aims (the
+# narrow back wedge) and at this bot's real turn speed. League baselines until
+# apply_capabilities runs.
+var _self_reach_cone_half_angle: float = deg_to_rad(157.0)
+var _self_facing_turn_rate: float = 6.0
 
 # Sticky state for _carry_aim_track_fire's mode (shot-aim vs carry-
 # aim with stickhandle). Without it, when shoot vs carry scores are
@@ -923,7 +950,7 @@ func wants_direct_aim() -> bool:
 # no-op (keeps the league-baseline defaults). Derives the three reach gates from
 # the single blade span, mirroring how the old constants were built off the
 # default stick + blade lengths.
-func apply_capabilities(caps: AISelfCapabilities) -> void:
+func apply_capabilities(caps: AISkaterCaps) -> void:
 	if caps == null:
 		return
 	_self_max_speed = caps.max_speed
@@ -932,8 +959,18 @@ func apply_capabilities(caps: AISelfCapabilities) -> void:
 	_receive_body_offset = caps.blade_span - RECEIVE_BODY_INSET_M
 	_poke_jab_reach = caps.blade_span + GameRules.POKE_RADIUS_M
 	_self_wrister_shot_speed = caps.wrister_shot_speed
-	_self_weight = caps.self_weight
-	_self_body_check_transfer = caps.self_body_check_transfer
+	_self_weight = caps.weight
+	_self_body_check_transfer = caps.body_check_transfer
+	_self_handle_reach = caps.handle_reach
+	_self_reach_cone_half_angle = caps.reach_cone_half_angle
+	_self_facing_turn_rate = caps.facing_turn_rate
+	# Aim at the bot's REAL blade speed (Hands): the synthesized aim cursor slews
+	# at the same rate the blade is physically clamped to, so aiming looks exactly
+	# as fast as its hands are — no artificial per-difficulty slew. Difficulty comes
+	# from reaction delay / decision cadence / the bot's own build, not a
+	# hands-override. (The cursor tracking the blade keeps pre-aim convergence
+	# honest — "aimed" means the blade is actually there.)
+	_apply_aim_slew(caps.blade_speed)
 
 
 # This bot's target power fraction (0..1) for a charged pass at _pass_target_speed,
@@ -950,7 +987,7 @@ func _pass_power_t() -> float:
 
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
-		is_left_handed: bool) -> void:
+		is_left_handed: bool, caps_by_peer: Dictionary = {}) -> void:
 	if brain == null:
 		push_error("SkaterAgentStateMachine.setup: null TeamBrain for peer_id=%d team_id=%d — bot was spawned before GameManager.team_brains was populated. Bot will run without role assignments." % [peer_id, team_id])
 	_peer_id = peer_id
@@ -961,6 +998,7 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 	_attacking_goal_pos = Vector3(0.0, 0.0, -_own_goal_dir * GameRules.GOAL_LINE_Z)
 	_team_brain = brain
 	_team_id_by_peer = team_id_by_peer
+	_caps_by_peer = caps_by_peer
 	_is_left_handed = is_left_handed
 	# Perpendicular sign derived from handedness — used by _wind_up_endpoint_offsets
 	# to put the wind-up on the bot's forehand side. Must match the codebase's
@@ -987,21 +1025,28 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 func apply_profile(profile: BotSkillProfile) -> void:
 	if profile == null:
 		return
-	_mouse_max_speed_m_s = profile.mouse_max_speed_m_s
+	# Aim slew is NOT a difficulty knob anymore — it's the bot's real Hands blade
+	# speed, set in apply_capabilities. Difficulty here is reaction/cadence/pace.
 	_dispatch_period_ticks = maxi(1, profile.dispatch_period_ticks)
 	_pursuit_standoff_m = profile.pursuit_standoff_m
 	_pass_speed_scale = profile.pass_speed_scale
 	_check_aggression = profile.check_aggression
 	_defensive_anticipation_scale = profile.defensive_anticipation_scale
+
+
+# Set the aim-cursor slew (and the arc rate + pre-aim timeout derived from it) to
+# `slew` m/s — the bot's real Hands blade speed, so the cursor tracks the blade.
+func _apply_aim_slew(slew: float) -> void:
+	_mouse_max_speed_m_s = slew
 	# Arc rate: lesser of the IK-gate ceiling and the linear slew cap projected
 	# onto the carry ring radius — above either, the arc-step chord-cuts the
 	# back-pass swing or the body-facing lag trips the pose IK gate.
 	_mouse_arc_rate_rad_s = minf(MOUSE_ARC_RATE_RAD_S,
 			_mouse_max_speed_m_s / CARRY_BLADE_AIM_FORWARD_M)
 	# Pre-aim convergence timeout: time for a worst-case 180° swing at the
-	# (possibly reduced) arc rate, plus a fixed margin — never below the
-	# perfect-bot default. Keeps a slow Normal blade from bailing pre-aim early
-	# on a back-pass and firing in the wrong direction.
+	# (possibly reduced) arc rate, plus a fixed margin — never below the perfect-bot
+	# default. Keeps a slow (low-Hands) blade from bailing pre-aim early on a
+	# back-pass and firing in the wrong direction.
 	var swing_ticks: int = int(ceil((PI / _mouse_arc_rate_rad_s) / MOUSE_TICK_DELTA))
 	_intent_max_wait_ticks = maxi(INTENT_MAX_WAIT_TICKS, swing_ticks + 60)
 
@@ -1355,12 +1400,16 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.team_brain = _team_brain
 	ctx.team_id_by_peer = _team_id_by_peer
 	ctx.acceleration_by_peer = _accel_by_peer
+	ctx.caps_by_peer = _caps_by_peer
 	# This bot's own attribute-scaled speeds, so the carrier scores ITS shots /
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
+	ctx.self_handle_reach = _self_handle_reach
+	ctx.self_reach_cone_half_angle = _self_reach_cone_half_angle
+	ctx.self_facing_turn_rate = _self_facing_turn_rate
 	ctx.self_stagger_timer = self_state.stagger_timer if self_state != null else 0.0
 	ctx.pursuit_standoff_m = _pursuit_standoff_m
 	ctx.pass_speed_scale = _pass_speed_scale
@@ -1895,7 +1944,19 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		var dz: float = _mouse_pos.z - mouse_target.z
 		var aim_dist: float = sqrt(dx * dx + dz * dz)
 		var aim_converged: bool = aim_dist < AIM_CONVERGED_DIST_M
-		if aim_converged or _intent_wait_ticks >= _intent_max_wait_ticks:
+		# Commit-then-aim (Aim-B2): if the aim already sits inside the blade reach
+		# cone of the CURRENT facing, the blade can swing to it with the body frozen
+		# — commit to the charge NOW instead of arcing the mouse (and dragging the
+		# body) all the way around to it. This is what stops the bot pivoting its
+		# whole body toward a reachable lateral pass / off-wing shot. Back-wedge aims
+		# (outside the cone) fail this and fall through to the arc-and-converge path,
+		# which rotates the body just until the aim swings into the cone and then
+		# this fires. self_state guards a rare null snapshot entry (keep old timing).
+		var aim_reachable_no_turn: bool = self_state != null and _aim_needs_no_rotation(
+				self_state.facing,
+				Vector2(mouse_target.x - self_pos.x, mouse_target.z - self_pos.z))
+		if aim_converged or aim_reachable_no_turn \
+				or _intent_wait_ticks >= _intent_max_wait_ticks:
 			# Capture pre-aim duration for the upcoming wrister release log.
 			if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED:
 				_pre_aim_ticks_observed = _agent_tick - _commit_tick_stamp
@@ -1916,6 +1977,20 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			# _intent_max_wait_ticks is sized in physics ticks, so a per-run +1 would
 			# stretch the pre-aim bail timeout by the dispatch period at low tiers.
 			_intent_wait_ticks += _dispatch_period_ticks
+
+
+# True when `aim_dir` (world XZ, from the bot to its aim point) already falls
+# inside the blade reach cone of `facing` MINUS the commit safety margin — i.e.
+# the blade can reach the aim with the body's heading frozen, so no pre-aim body
+# rotation is needed (Aim-B2). Cone + margin are the bot's real, attribute-scaled
+# reach (`_self_reach_cone_half_angle`, threaded from AISkaterCaps) less
+# AIM_COMMIT_CONE_MARGIN_RAD headroom for the wind-up sweep / torso twist. Pure
+# geometry — unit-tested directly.
+func _aim_needs_no_rotation(facing: Vector2, aim_dir: Vector2) -> bool:
+	if facing.length_squared() < 0.0001 or aim_dir.length_squared() < 0.0001:
+		return false
+	var angle: float = abs(facing.angle_to(aim_dir))
+	return angle <= maxf(_self_reach_cone_half_angle - AIM_COMMIT_CONE_MARGIN_RAD, 0.0)
 
 
 # Maps the carrier's INTENT_* enum (intentionally decoupled from
@@ -2613,10 +2688,12 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# locked in at intent commit (what the controller will actually fire at).
 	var pass_speed: float = _pass_target_speed
 	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
-	# Intercept-aware lead, shared with the carrier's pass scoring so the
-	# fired aim matches the scored one (AIPassLead).
+	# Intercept-aware lead, shared with the carrier's pass scoring so the fired aim
+	# matches the scored one (AIPassLead) — including the receiver's real build, so
+	# the release leads exactly where the score assumed.
+	var receiver_caps: AISkaterCaps = _caps_by_peer.get(_pass_target_peer_id)
 	return AIPassLead.lead_point(
-			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S)
+			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S, receiver_caps)
 
 
 # `arrive` opts into the arrival brake (AISteering.should_arrival_brake):

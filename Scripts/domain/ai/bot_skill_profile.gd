@@ -6,20 +6,23 @@ extends RefCounted
 # point of these levers is that the same situation produces the same bot
 # behaviour at a given difficulty, every time.
 #
-# ── Why these four knobs ──────────────────────────────────────────────────────
+# ── Why these knobs ───────────────────────────────────────────────────────────
 # The "perfect bot" baseline was perfect in two separable ways:
-#   1. Perfect EXECUTION — the blade snapped to the ideal aim point every tick
-#      (mouse_max_speed effectively uncapped, lerp = 1.0), so every shot went
-#      to the exact same corner and dekes were matched on the frame.
+#   1. Perfect EXECUTION — the blade snapped to the ideal aim point every tick,
+#      so every shot went to the exact same corner and dekes were matched on the
+#      frame.
 #   2. Perfect REACTION — the agent recognised DISCRETE events (a pass
 #      released, the puck changing hands) the same physics tick they happened.
 # Both are dialled back here without a single random number:
-#   • mouse_max_speed_m_s — caps blade slew, so the blade TRAILS a moving aim
-#     point. Because the goalie / defenders are moving, a capped blade releases
-#     mid-converge and the actual release point varies WITH THE GEOMETRY — that
-#     is what kills "every shot to the same spot" deterministically.
-#   • mouse_lerp_factor — a mild second-stage tracking lag on top of the slew
-#     cap (see SkaterAgent), so aim transitions read as a swing, not a snap.
+#   • Aim speed is NO LONGER a difficulty knob — a bot slews its aim cursor at its
+#     own REAL Hands blade speed (SkaterController.max_blade_speed, via
+#     AISkaterCaps.blade_speed), so aiming looks exactly as fast as its hands are,
+#     and a lower-Hands build is naturally slower/less precise. This retired the
+#     old artificial mouse_max_speed slew, which capped every bot's blade at a flat
+#     per-difficulty rate regardless of Hands. Execution difficulty now rides the
+#     bot's attribute BUILD, not a hands-override.
+#   • mouse_lerp_factor — a mild second-stage tracking lag (see SkaterAgent), so
+#     aim transitions on passes/carries read as a swing, not a snap.
 #   • carrier_reaction_delay_s — how long the bot keeps acting on its PRIOR
 #     read of who controls the puck before recognising a possession change.
 #     This is the human "you can't react to a pass within a tick" lever. It is
@@ -68,10 +71,10 @@ extends RefCounted
 # stays in lockstep with the live goalie regardless of tier).
 #
 # ── Tick-rate note (these knobs are tuned for PHYSICS_TICK = 120 Hz) ──────────
-# mouse_max_speed_m_s (m/s) and carrier_reaction_delay_s (seconds) are
-# tick-independent — they convert to a per-tick step / countdown against the
-# real tick rate. dispatch_period_ticks and mouse_lerp_factor are NOT: a tick
-# count and a per-tick exponential lerp both change meaning with the tick rate.
+# carrier_reaction_delay_s (seconds) is tick-independent — it converts to a
+# per-tick countdown against the real tick rate. dispatch_period_ticks and
+# mouse_lerp_factor are NOT: a tick count and a per-tick exponential lerp both
+# change meaning with the tick rate.
 # They are calibrated against the current 120 Hz sim. If the sim tick rate ever
 # changes, rescale them to preserve wall-clock feel: a dispatch period scales
 # linearly with the rate, and a lerp factor f maps so that (1 - f') ^ new_rate
@@ -102,11 +105,6 @@ var carrier_reaction_delay_s: float
 # Per-tick exponential — tuned for 120 Hz (see tick-rate note above).
 var mouse_lerp_factor: float
 
-# Blade-slew cap (m/s) passed to SkaterAgentStateMachine. Caps the per-tick
-# mouse step; the agent derives its arc-rate and pre-aim timeout from it.
-# Tick-independent (converts to a per-tick step against the live delta).
-var mouse_max_speed_m_s: float
-
 # Full-dispatch cadence: physics ticks between decision re-evaluations during
 # non-press states (press states always run full-rate). Higher = laggier reads.
 # Tick-denominated — tuned for 120 Hz (see tick-rate note above).
@@ -131,12 +129,11 @@ var defensive_anticipation_scale: float
 
 
 func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
-		p_mouse_max_speed_m_s: float, p_dispatch_period_ticks: int,
+		p_dispatch_period_ticks: int,
 		p_pursuit_standoff_m: float, p_pass_speed_scale: float,
 		p_check_aggression: float, p_defensive_anticipation_scale: float) -> void:
 	carrier_reaction_delay_s = p_carrier_reaction_delay_s
 	mouse_lerp_factor = p_mouse_lerp_factor
-	mouse_max_speed_m_s = p_mouse_max_speed_m_s
 	dispatch_period_ticks = p_dispatch_period_ticks
 	pursuit_standoff_m = p_pursuit_standoff_m
 	pass_speed_scale = p_pass_speed_scale
@@ -146,25 +143,26 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 
 # Hard ≈ today's bot, with a light humanising pass so it reads as a very strong
 # human rather than a frame-perfect robot: a short ~50 ms reaction to possession
-# changes (elite-but-not-instant) and a blade that can no longer teleport, so
-# snipes spray slightly by approach geometry. Dispatch at PHYSICS_TICK/60 = 2
-# ticks matches the engine baseline cadence. Tune mouse_max_speed DOWN toward
-# Normal if Hard still feels robotic; carrier_reaction_delay UP if it still
-# matches passes too readily. Pace knobs all at their no-op baseline (standoff
-# 0.0, pass scale 1.0, check aggression 1.0, anticipation 1.0) — Hard keeps
-# today's tight forecheck, full puck pace, hit-hunting, and anticipating backline.
+# changes (elite-but-not-instant). Its blade aims at its real Hands speed like
+# every bot now (no per-tier slew), so a Hard bot's precision rides its build.
+# Dispatch at PHYSICS_TICK/60 = 2 ticks matches the engine baseline cadence. Tune
+# carrier_reaction_delay UP if it matches passes too readily. Pace knobs all at
+# their no-op baseline (standoff 0.0, pass scale 1.0, check aggression 1.0,
+# anticipation 1.0) — Hard keeps today's tight forecheck, full puck pace,
+# hit-hunting, and anticipating backline.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 0.85, 30.0, 2, 0.0, 1.0, 1.0, 1.0)
+	return BotSkillProfile.new(0.05, 0.85, 2, 0.0, 1.0, 1.0, 1.0)
 
 
 # Normal is the beatable tier, pushed firmly off the Hard ceiling so the gap
 # reads consistently in play: a ~220 ms reaction to possession changes (human-
 # or-slower — it recognises a pass / turnover a clear beat late, no longer
-# matching one-timers), a more trailing blade (lerp 0.5, slew 11) so snipes
-# spray by approach and dangles are slower to strip from, and a slower decision
-# cadence (6 ticks = a third of Hard's re-decide rate, ~50 ms). Tune
-# carrier_reaction_delay DOWN toward 0.18 if it feels a step slow rather than
-# beatable; mouse_max_speed UP toward 14 if its shots feel too wild.
+# matching one-timers), a mild second-stage aim lag (lerp 0.5) so pass/carry aim
+# reads as a swing, and a slower decision cadence (6 ticks = a third of Hard's
+# re-decide rate, ~50 ms). Tune carrier_reaction_delay DOWN toward 0.18 if it
+# feels a step slow rather than beatable. (Aim speed is the bot's real Hands
+# blade speed now — give Normal bots a lower-Hands build if their shots feel too
+# sharp, rather than an artificial slew.)
 #
 # Pace: defenders sag ~1.5 m off the cut-off line, lead the play ~60% as far,
 # the puck moves at 85% pace, and hit-hunting is dialed back (check_aggression
@@ -176,17 +174,17 @@ static func hard() -> BotSkillProfile:
 # pace knobs further (standoff UP, pass scale / anticipation / aggression DOWN)
 # before touching precision.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 0.5, 11.0, 6, 1.5, 0.85, 0.65, 0.6)
+	return BotSkillProfile.new(0.22, 0.5, 6, 1.5, 0.85, 0.65, 0.6)
 
 
 # Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
-# reacts to a pass a beat and a half late — visibly human-slow), a swimmy blade
-# (lerp 0.38, slew 8) so its shots are imprecise and its carried puck is easy to
-# poke off, and a slow decision cadence (9 ticks ≈ 75 ms) so it commits hard to a
-# stale read and can be dragged out of position. Still plays positionally and
-# shoots / passes — a real but soft opponent, not a stationary one. First-pass
-# numbers — tune carrier_reaction_delay / mouse_max_speed against play if a
-# newcomer still can't string possessions together.
+# reacts to a pass a beat and a half late — visibly human-slow), a swimmy
+# second-stage aim lag (lerp 0.38), and a slow decision cadence (9 ticks ≈ 75 ms)
+# so it commits hard to a stale read and can be dragged out of position. Still
+# plays positionally and shoots / passes — a real but soft opponent, not a
+# stationary one. First-pass numbers — tune carrier_reaction_delay against play,
+# or hand Easy bots a lower-Hands build for genuinely softer aim, if a newcomer
+# still can't string possessions together.
 #
 # Pace: defenders sag ~3 m off (lots of room to carry and look up), barely lead
 # the play (anticipation 0.2 → a step behind), the puck moves at 70% pace (slow,
@@ -194,7 +192,7 @@ static func normal() -> BotSkillProfile:
 # 0.0 → pure containment, no getting lined up). Low-energy across the board,
 # which is most of what makes Easy feel easy.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 0.38, 8.0, 9, 3.0, 0.70, 0.0, 0.2)
+	return BotSkillProfile.new(0.34, 0.38, 9, 3.0, 0.70, 0.0, 0.2)
 
 
 static func for_difficulty(difficulty: int) -> BotSkillProfile:

@@ -19,6 +19,29 @@ func _vel_zero(peers: Array) -> Dictionary:
 	return d
 
 
+func _speed_caps(v: float) -> AISkaterCaps:
+	var c := AISkaterCaps.new()
+	c.max_speed = v
+	return c
+
+
+func test_faster_defender_takes_the_more_dangerous_man() -> void:
+	# Two defenders at the same spot; two men equidistant from it (so distance
+	# doesn't decide), one far more dangerous. Speed decides: the FAST defender's
+	# higher reach multiplies the bigger threat value, so it's assigned the
+	# dangerous man and the slow one takes the cheap man.
+	var defenders: Array[int] = [1, 2]
+	var men: Array[int] = [10, 20]
+	var dpos: Dictionary = {1: Vector3(0, 0, 10), 2: Vector3(0, 0, 10)}
+	var mpos: Dictionary = {10: Vector3(-6, 0, 15), 20: Vector3(6, 0, 15)}  # equidistant
+	var mval: Dictionary = {10: 0.1, 20: 0.9}                               # 20 dangerous
+	var caps: Dictionary = {1: _speed_caps(14.0), 2: _speed_caps(6.0)}
+	var out: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), men, mpos, mval, OUR_NET, {}, caps)
+	assert_eq(out[1], 20, "the faster defender covers the more dangerous man")
+	assert_eq(out[2], 10, "the slower defender takes the cheap man")
+
+
 # ── No doubling ───────────────────────────────────────────────────────────────
 
 func test_two_defenders_two_men_distinct() -> void:

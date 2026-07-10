@@ -68,7 +68,8 @@ static func assign(
 		man_pos: Dictionary,
 		man_value: Dictionary,
 		our_net: Vector3,
-		prev: Dictionary) -> Dictionary[int, int]:
+		prev: Dictionary,
+		defender_caps: Dictionary = {}) -> Dictionary[int, int]:
 	var result: Dictionary[int, int] = {}
 	if defenders.is_empty() or men.is_empty():
 		return result
@@ -78,10 +79,15 @@ static func assign(
 	for d: int in defenders:
 		var d_pos: Vector3 = defender_pos.get(d, Vector3.ZERO)
 		var d_vel: Vector3 = defender_vel.get(d, Vector3.ZERO)
+		# This defender covers at ITS real top speed (Speed) — a fast defender
+		# reaches a further man in time, so it's assigned the harder cover.
+		var d_caps: AISkaterCaps = defender_caps.get(d)
+		var d_speed: float = d_caps.max_speed if d_caps != null \
+				else AIActionScoring.SKATER_REF_SPEED_M_S
 		var row: Dictionary = {}
 		for m: int in men:
 			var anchor: Vector3 = cover_anchor(man_pos.get(m, Vector3.ZERO), our_net)
-			var t: float = AIActionScoring.time_to_arrive(d_pos, anchor, d_vel)
+			var t: float = AIActionScoring.time_to_arrive(d_pos, anchor, d_vel, d_speed)
 			var reach: float = 1.0 / (1.0 + maxf(t, 0.0))
 			row[m] = maxf(man_value.get(m, 0.0), 0.0) * reach
 		reward[d] = row

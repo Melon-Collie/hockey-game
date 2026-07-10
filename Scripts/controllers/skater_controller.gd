@@ -857,6 +857,43 @@ var _base_hand_rest_y:                  float = 0.0
 var _base_hand_y_max:                   float = 0.0
 
 
+# Snapshot this body's attribute-scaled capabilities as the bot AI models them —
+# read off the SAME scaled fields the physics drives with (set by
+# apply_attributes), so the AI never disagrees with the body. Used two ways: a
+# bot's self-model (AIController.apply_attributes) and PlayerRegistry's per-peer
+# caps_by_peer (every player, so other bots read real builds). Cheap and
+# allocation-light; called only on apply / spawn, never per tick.
+func build_ai_caps() -> AISkaterCaps:
+	var caps := AISkaterCaps.new()
+	caps.max_speed = max_speed
+	caps.max_accel = thrust
+	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
+	caps.stick_reach = stick_length
+	caps.wrister_shot_speed = max_wrister_power
+	caps.blade_speed = max_blade_speed
+	# Handle reach scales with the Hands dangle lever: max_blade_speed / its base
+	# is exactly hands_blade_mult(), so a better handler protects the puck further
+	# out. _base is captured on the first apply_attributes (always run before this).
+	if _base_max_blade_speed > 0.001:
+		caps.handle_reach = AIActionScoring.EVADE_CARRY_HANDLE_M \
+				* (max_blade_speed / _base_max_blade_speed)
+	# Blade reach cone: the exact IK gate SkaterPoseCoordinator.apply_facing
+	# enforces (ROM backhand + torso twist), so the bot models the same off-facing
+	# reach the body actually has. Fixed geometry — not attribute-scaled.
+	caps.reach_cone_half_angle = deg_to_rad(
+			rom_backhand_angle_max_deg + upper_body_max_twist_deg)
+	# Facing turn rate: the baseline 6.0 rad/s approximation scaled by real Agility.
+	# facing_drag_speed is base × agility_mult, so its ratio to base IS the Agility
+	# multiplier — a nimbler bot turns (and prices a back-wedge aim) faster.
+	if _base_facing_drag_speed > 0.001:
+		caps.facing_turn_rate *= facing_drag_speed / _base_facing_drag_speed
+	if skater != null:
+		caps.weight = skater.weight
+		caps.body_check_transfer = skater.body_check_transfer
+		caps.body_check_brace = skater.body_check_brace_resistance
+	return caps
+
+
 # Modulates the controller and skater tuning fields from a PlayerAttributes
 # resource. Safe to call multiple times — the first call snapshots the
 # shipped @export defaults, every call recomputes live = base × multiplier.

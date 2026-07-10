@@ -61,14 +61,11 @@ const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~3
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
-# Quick-shot blade ROM cone: passes within this half-angle of facing
-# don't pay rotation cost (blade can fire from current facing).
-# Outside the cone, only the OVERSHOOT (angle - ROM) costs time.
-const BOT_BLADE_ROM_HALF_ANGLE_RAD: float = PI * 0.5
-
-# Facing rotation rate used to convert overshoot angle into rotation
-# time during pass scoring.
-const BOT_FACING_ROTATION_RATE_RAD_S: float = 6.0
+# (Blade reach cone + facing turn rate now come from the bot's real caps —
+# RoleContext.self_reach_cone_half_angle / self_facing_turn_rate — so an aim
+# anywhere inside the true ±157° reach cone fires with no body turn, and only the
+# narrow back wedge pays, at the bot's Agility-scaled turn rate. See
+# _facing_rotation_time.)
 
 # Carry candidate generation: 8 polar cardinals at this radius +
 # slot anchor + stand-still.
@@ -174,6 +171,10 @@ var _scratch_opponents: Array[Vector3] = []
 # Velocities index-matched to _scratch_opponents, so the fired-puck lane
 # model can dead-reckon a defender bearing down on a passing lane.
 var _scratch_opponent_vels: Array[Vector3] = []
+# AISkaterCaps index-matched to _scratch_opponents (entries may be null), so the
+# reachable-set model reads each defender's real Agility/Size reach. Filled
+# alongside the positions in _build_action_opponents_lists.
+var _scratch_opponent_caps: Array[AISkaterCaps] = []
 var _scratch_opponents_shoot: Array[Vector3] = []
 var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
@@ -293,10 +294,10 @@ func _pick_action(ctx: RoleContext) -> void:
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var evade_seam: Vector3 = AIActionScoring.best_evade_point(
 			cur_puck_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
-			AIActionScoring.EVADE_CARRY_HANDLE_M)
+			ctx.self_handle_reach, _scratch_opponent_caps)
 	var current_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
-					_scratch_opponents, _scratch_opponent_vels))
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 
 	# Teammate ids — used by every score_at evaluation (top + inner).
@@ -335,11 +336,13 @@ func _pick_action(ctx: RoleContext) -> void:
 	var wrister_unsettled: float = _goalie_unsettled_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
 
-	# Top-level SHOOT.
+	# Top-level SHOOT. _scratch_opponent_caps is index-matched to _scratch_opponents
+	# (and thus to _scratch_opponents_shoot, built in the same order), so a lane
+	# defender's real Size/Speed reach prices the shot lane.
 	var shoot_score: float = AIActionScoring.score_shoot(
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
-			ctx.self_wrister_shot_speed, wrister_unsettled)
+			ctx.self_wrister_shot_speed, wrister_unsettled, _scratch_opponent_caps)
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -519,6 +522,7 @@ func _pick_action(ctx: RoleContext) -> void:
 func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponent_vels.clear()
+	_scratch_opponent_caps.clear()
 	_scratch_opponents_shoot.clear()
 	_scratch_our_defenders.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
@@ -528,6 +532,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id:
 			_scratch_opponents.append(s.position)
 			_scratch_opponent_vels.append(s.velocity)
+			_scratch_opponent_caps.append(ctx.caps_by_peer.get(peer_id))
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
 		else:
@@ -613,9 +618,11 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# Intercept-aware lead, shared with the state machine's firing aim.
 		# flight_t is the SOLVED time (refined against the predicted
 		# intercept), used downstream for opponent/goalie projection and
-		# the time-decay term.
+		# the time-decay term. The receiver's real build (Speed/Agility) bounds
+		# how far it can actually get to — a fast, agile receiver is led further.
+		var receiver_caps: AISkaterCaps = ctx.caps_by_peer.get(peer_id)
 		var lead: Array = AIPassLead.lead(
-				self_pos, receiver_state, receiver_accel, pass_speed, PASS_LEAD_MAX_S)
+				self_pos, receiver_state, receiver_accel, pass_speed, PASS_LEAD_MAX_S, receiver_caps)
 		var receiver: Vector3 = lead[0]
 		var flight_t: float = lead[1]
 		if own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
@@ -632,9 +639,10 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		if not receiver_is_one_timer:
 			receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 		var rotation_time: float = _facing_rotation_time(
-				self_facing_xz, self_pos, receiver)
+				self_facing_xz, self_pos, receiver,
+				ctx.self_reach_cone_half_angle, ctx.self_facing_turn_rate)
 		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
-				receiver_release_t, flight_t + rotation_time, our_goalie)
+				receiver_release_t, flight_t + rotation_time, our_goalie, receiver_caps)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
@@ -692,7 +700,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # league default (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
-		our_goalie: Vector3) -> float:
+		our_goalie: Vector3, receiver_caps: AISkaterCaps = null) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# Hard zeros: net-blocker (segment crosses a net body) and own-DZ
 	# slot crossing (intercepted = goal-against).
@@ -703,7 +711,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		return 0.0
 	var lane: float = AIActionScoring.lane_clear(
 			self_pos, receiver_spot, _scratch_opponents, pass_speed,
-			_scratch_opponent_vels)
+			_scratch_opponent_vels, _scratch_opponent_caps)
 	if lane <= 0.0:
 		return 0.0
 	_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)
@@ -711,9 +719,13 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			ctx, receiver_release_t, receiver_spot)
 	var receiver_unsettled: float = _goalie_unsettled_at(
 			ctx, receiver_release_t, receiver_spot)
+	# Score the receiver's shot at ITS real release speed (Shot) — a high-Shot
+	# teammate one-times harder, beating the goalie more, so it's a better feed.
+	var receiver_shot_speed: float = receiver_caps.wrister_shot_speed if receiver_caps != null \
+			else AIActionScoring.WRISTER_SHOT_SPEED_M_S
 	var receiver_value: float = _score_at(ctx, receiver_spot, self_pos,
 			_scratch_opponents_pass, receiver_goalie,
-			AIActionScoring.WRISTER_SHOT_SPEED_M_S, receiver_unsettled)
+			receiver_shot_speed, receiver_unsettled)
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
@@ -737,13 +749,14 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 
 
 # Rotation time: how long the bot needs to rotate facing to point at
-# `target` before the blade ROM can fire there. Within the blade ROM
-# cone (BOT_BLADE_ROM_HALF_ANGLE_RAD) the bot quick-fires without
-# rotating — rotation_time = 0. Past the cone, only the OVERSHOOT
-# (angle minus ROM) pays rotation cost, so back-passes self-discount
-# but in-cone passes feel snappy.
+# `target` before the blade can fire there. The blade reaches anywhere inside
+# the reach cone (`cone_half_angle` = ROM + torso twist, ~157° — the exact IK
+# gate the pose coordinator enforces), so a shot/pass to ANY in-cone target
+# fires from the current facing with NO body turn (rotation_time = 0). Only aims
+# in the narrow back wedge past the cone pay, and then only for the OVERSHOOT
+# (angle minus cone), rotated at this bot's real Agility-scaled turn rate.
 func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
-		target: Vector3) -> float:
+		target: Vector3, cone_half_angle: float, turn_rate: float) -> float:
 	var to_target_x: float = target.x - self_pos.x
 	var to_target_z: float = target.z - self_pos.z
 	var to_target_len: float = sqrt(
@@ -755,8 +768,8 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 			self_facing_xz.x * to_target_x * inv_len
 			+ self_facing_xz.y * to_target_z * inv_len, -1.0, 1.0)
 	var angular_distance: float = acos(cos_angle)
-	var overshoot: float = maxf(0.0, angular_distance - BOT_BLADE_ROM_HALF_ANGLE_RAD)
-	return overshoot / BOT_FACING_ROTATION_RATE_RAD_S
+	var overshoot: float = maxf(0.0, angular_distance - cone_half_angle)
+	return overshoot / maxf(turn_rate, 0.001)
 
 
 # Returns [best_score, best_pos] across all carry candidates:
@@ -861,7 +874,7 @@ func _best_carry(ctx: RoleContext) -> Array:
 	# it opens is actually worth carrying to.
 	var seam: Vector3 = AIActionScoring.best_evade_point(
 			self_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
-			AIActionScoring.EVADE_CARRY_HANDLE_M)
+			ctx.self_handle_reach, _scratch_opponent_caps)
 	var seam_total: float = _score_move_candidate(ctx, seam, our_goalie)
 	if seam_total > best_score:
 		best_score = seam_total
@@ -890,7 +903,7 @@ func _best_carry(ctx: RoleContext) -> Array:
 	var stand_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
 					AIActionScoring.EVADE_HORIZON_S,
-					_scratch_opponents, _scratch_opponent_vels))
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	var stand_cost: float = AIActionScoring.turnover_cost(
 			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -953,8 +966,10 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 		var nearest_our: float = INF
 		for c: Vector3 in _scratch_our_chasers:
 			nearest_our = minf(nearest_our, c.distance_to(target))
+		# Dump-and-CHASE: we race the dumped puck at our own top speed (Speed) —
+		# a faster chaser reaches it sooner, so the decay bites less.
 		var chase_decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
-				nearest_our / AIActionScoring.SKATER_REF_SPEED_M_S)
+				nearest_our / maxf(ctx.self_max_speed, 0.001))
 		var value: float = AIActionScoring.position_potential(
 				target, attacking_goal, _scratch_opponents)
 		gain = recovery * value * chase_decay
@@ -1026,7 +1041,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
 	var safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(cur_puck_pos, cand_puck_pos, local_time,
-					_scratch_opponents, _scratch_opponent_vels))
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	var benefit: float = dest_score * lane * decay * safety
 	var keep_prob: float = safety
 	# Price the loss where the strip actually happens — the earliest covered point on
@@ -1035,7 +1050,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# not the destination's. This is what keeps a doomed carry honestly negative.
 	var strip_point: Vector3 = AIActionScoring.carry_strip_point(
 			cur_puck_pos, cand_puck_pos, local_time,
-			_scratch_opponents, _scratch_opponent_vels)
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 	var cost: float = AIActionScoring.turnover_cost(
 			strip_point, 1.0 - keep_prob, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -1082,10 +1097,14 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		shot_speed_m_s: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
+	# All the carrier's opponent arrays (path / pass / stand projections) are built
+	# in the same snapshot order as _scratch_opponent_caps, so the defenders in the
+	# shot lane are priced at their real Size/Speed reach. (lane_clear falls back to
+	# league defaults if a count ever mismatches, so this is safe regardless.)
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
-			goalie_unsettled_factor)
+			goalie_unsettled_factor, _scratch_opponent_caps)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
@@ -1154,7 +1173,7 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 					pass_speed, feed_unsettled)
 		elif slot == AIRoleSlots.Slot.BREAKOUT_STRONG \
 				or slot == AIRoleSlots.Slot.OUTLET:
-			feed = _developing_outlet_feed(ctx, tm, our_goalie, self_facing)
+			feed = _developing_outlet_feed(ctx, tm, our_goalie, self_facing, ctx.caps_by_peer.get(pid))
 		if feed > best:
 			best = feed
 	return best
@@ -1176,7 +1195,8 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 # hold exists to avoid forcing. The valve is an escape hatch the live
 # pass scoring prices on its own.
 func _developing_outlet_feed(ctx: RoleContext, tm: SkaterNetworkState,
-		our_goalie: Vector3, self_facing_xz: Vector2) -> float:
+		our_goalie: Vector3, self_facing_xz: Vector2,
+		receiver_caps: AISkaterCaps = null) -> float:
 	if tm.is_ghost:
 		return 0.0
 	var vel: Vector3 = tm.velocity
@@ -1196,9 +1216,10 @@ func _developing_outlet_feed(ctx: RoleContext, tm: SkaterNetworkState,
 	# gets flight + their wrister charge before any shot — same release
 	# model the live pass scoring applies to a non-ready receiver.
 	var release_t: float = flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
-	var rotation_time: float = _facing_rotation_time(self_facing_xz, ctx.self_pos, spot)
+	var rotation_time: float = _facing_rotation_time(self_facing_xz, ctx.self_pos, spot,
+			ctx.self_reach_cone_half_angle, ctx.self_facing_turn_rate)
 	return _pass_ev(ctx, spot, pass_speed, flight_t, release_t,
-			flight_t + rotation_time, our_goalie)
+			flight_t + rotation_time, our_goalie, receiver_caps)
 
 
 # Approximate puck-rest position when the carrier is at `body_pos`.

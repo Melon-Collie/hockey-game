@@ -52,14 +52,20 @@ static func elect(
 		teammate_ids: Array,
 		puck_pos: Vector3,
 		puck_vel: Vector3,
-		prev_elected: int) -> int:
+		prev_elected: int,
+		caps_by_peer: Dictionary = {}) -> int:
 	var best_pid: int = -1
 	var best_t: float = INF
 	for pid: int in teammate_ids:
 		var s: SkaterNetworkState = skater_states.get(pid)
 		if s == null:
 			continue
-		var t: float = _intercept_time(s.position, s.velocity, puck_pos, puck_vel)
+		# Each candidate races at ITS real top speed (Speed) — a fast skater
+		# genuinely reaches a loose puck first. Missing caps → league default.
+		var caps: AISkaterCaps = caps_by_peer.get(pid)
+		var max_speed: float = caps.max_speed if caps != null \
+				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var t: float = _intercept_time(s.position, s.velocity, puck_pos, puck_vel, max_speed)
 		# Incumbent hysteresis: challengers pay HYSTERESIS_S, so the
 		# current chaser keeps the role unless beaten by the margin.
 		if pid != prev_elected:
@@ -75,13 +81,14 @@ static func elect(
 # (its straight-line distance at ref skating speed, capped), then return
 # the bot's momentum-aware time to that predicted point.
 static func _intercept_time(bot_pos: Vector3, bot_vel: Vector3,
-		puck_pos: Vector3, puck_vel: Vector3) -> float:
+		puck_pos: Vector3, puck_vel: Vector3,
+		max_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S) -> float:
 	var dx: float = puck_pos.x - bot_pos.x
 	var dz: float = puck_pos.z - bot_pos.z
 	var rough_dist: float = sqrt(dx * dx + dz * dz)
-	var lead: float = minf(rough_dist / AIActionScoring.SKATER_REF_SPEED_M_S, MAX_LEAD_S)
+	var lead: float = minf(rough_dist / max_speed, MAX_LEAD_S)
 	var predicted := Vector3(
 			puck_pos.x + puck_vel.x * lead,
 			0.0,
 			puck_pos.z + puck_vel.z * lead)
-	return AIActionScoring.time_to_arrive(bot_pos, predicted, bot_vel)
+	return AIActionScoring.time_to_arrive(bot_pos, predicted, bot_vel, max_speed)

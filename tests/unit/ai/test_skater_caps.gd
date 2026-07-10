@@ -1,6 +1,6 @@
 extends GutTest
 
-# AISelfCapabilities + the wiring that pushes a bot's attribute-scaled
+# AISkaterCaps + the wiring that pushes a bot's attribute-scaled
 # capabilities into its state machine. Covers: baseline defaults (so an unwired
 # bot behaves as before), the time_to_arrive ref-speed parameter, score_shoot's
 # shot-speed sensitivity, and that apply_capabilities derives the state
@@ -10,11 +10,27 @@ extends GutTest
 # ── Defaults reproduce the league baseline ──────────────────────────────────
 
 func test_caps_defaults_equal_league_baseline() -> void:
-	var caps := AISelfCapabilities.new()
+	var caps := AISkaterCaps.new()
 	assert_almost_eq(caps.max_speed, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S, 0.001)
 	assert_almost_eq(caps.blade_span,
 			GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M, 0.001)
+	assert_almost_eq(caps.stick_reach, GameRules.DEFAULT_STICK_LENGTH_M, 0.001)
 	assert_almost_eq(caps.wrister_shot_speed, GameRules.DEFAULT_WRISTER_POWER_MAX_M_S, 0.001)
+	# Cross-player fields (used once a peer's real build is read) default to the
+	# league baseline too, so a missing caps_by_peer entry reproduces old behaviour.
+	assert_almost_eq(caps.weight, 1.0, 0.001)
+	assert_almost_eq(caps.body_check_transfer, 0.45, 0.001)
+	assert_almost_eq(caps.body_check_brace, 0.4, 0.001)
+	assert_almost_eq(caps.handle_reach, AIActionScoring.EVADE_CARRY_HANDLE_M, 0.001,
+			"handle reach defaults to the league carry-handle reach")
+	assert_almost_eq(caps.blade_speed, 10.0, 0.001,
+			"blade speed defaults to the controller's league max_blade_speed")
+	# Aim geometry (B1): the ±157° blade reach cone (ROM + torso twist) and the
+	# baseline facing turn rate the carrier prices a body rotation against.
+	assert_almost_eq(caps.reach_cone_half_angle, deg_to_rad(157.0), 0.001,
+			"reach cone defaults to the league ROM (90) + torso twist (67)")
+	assert_almost_eq(caps.facing_turn_rate, 6.0, 0.001,
+			"facing turn rate defaults to the baseline 6.0 rad/s")
 
 
 func test_role_context_self_speeds_default_to_baseline() -> void:
@@ -23,6 +39,8 @@ func test_role_context_self_speeds_default_to_baseline() -> void:
 	var ctx := RoleContext.new()
 	assert_almost_eq(ctx.self_max_speed, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S, 0.001)
 	assert_almost_eq(ctx.self_wrister_shot_speed, GameRules.DEFAULT_WRISTER_POWER_MAX_M_S, 0.001)
+	assert_almost_eq(ctx.self_reach_cone_half_angle, deg_to_rad(157.0), 0.001)
+	assert_almost_eq(ctx.self_facing_turn_rate, 6.0, 0.001)
 
 
 # ── time_to_arrive ref-speed parameter ──────────────────────────────────────
@@ -66,8 +84,8 @@ func test_score_shoot_non_decreasing_in_shot_speed() -> void:
 # ── apply_capabilities wires the state machine ──────────────────────────────
 
 func _caps(span: float, max_speed: float, accel: float,
-		shot: float) -> AISelfCapabilities:
-	var c := AISelfCapabilities.new()
+		shot: float) -> AISkaterCaps:
+	var c := AISkaterCaps.new()
 	c.blade_span = span
 	c.max_speed = max_speed
 	c.max_accel = accel
@@ -89,6 +107,38 @@ func test_apply_capabilities_derives_reach_gates_and_speeds() -> void:
 	assert_almost_eq(sm._self_max_speed, 10.5, 0.001)
 	assert_almost_eq(sm._chase_max_accel, 13.0, 0.001)
 	assert_almost_eq(sm._self_wrister_shot_speed, 27.0, 0.001)
+
+
+func test_apply_capabilities_threads_aim_geometry() -> void:
+	# The reach cone + facing turn rate pass through to the SM so the carrier
+	# prices body rotation against this bot's real ROM and Agility (B1).
+	var sm := SkaterAgentStateMachine.new()
+	var caps := _caps(2.0, 10.5, 13.0, 27.0)
+	caps.reach_cone_half_angle = deg_to_rad(150.0)
+	caps.facing_turn_rate = 7.5
+	sm.apply_capabilities(caps)
+	assert_almost_eq(sm._self_reach_cone_half_angle, deg_to_rad(150.0), 0.001)
+	assert_almost_eq(sm._self_facing_turn_rate, 7.5, 0.001)
+
+
+func test_apply_capabilities_sets_aim_slew_to_real_blade_speed() -> void:
+	# Aiming is bounded by the bot's own Hands blade speed, not a per-difficulty
+	# slew — the aim cursor slews at exactly caps.blade_speed, and the arc rate +
+	# pre-aim timeout derive from that so a slower (low-Hands) blade still resolves
+	# a back-pass swing before bailing.
+	var sm := SkaterAgentStateMachine.new()
+	var caps := _caps(2.0, 10.5, 13.0, 27.0)
+	caps.blade_speed = 12.0
+	sm.apply_capabilities(caps)
+	assert_almost_eq(sm._mouse_max_speed_m_s, 12.0, 0.001,
+			"the aim cursor slews at the real Hands blade speed")
+	# A slower blade widens the pre-aim timeout (never below the perfect baseline).
+	var slow := _caps(2.0, 10.5, 13.0, 27.0)
+	slow.blade_speed = 5.0
+	var sm_slow := SkaterAgentStateMachine.new()
+	sm_slow.apply_capabilities(slow)
+	assert_gte(sm_slow._intent_max_wait_ticks, sm._intent_max_wait_ticks,
+			"a slower blade gets at least as long to converge a swing")
 
 
 func test_apply_capabilities_null_is_noop() -> void:
