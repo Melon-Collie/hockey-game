@@ -266,21 +266,29 @@ const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 
-# Distance ramp for pass LAUNCH speed. Short feeds stay soft (snap speed) so a
-# close pass isn't a rocket the receiver can't corral; longer passes ramp up for
-# pace, shrinking a defender's reaction window. Continuous (smoothstep) rather
-# than the old binary cliff at a single distance.
+# Distance ramp for pass LAUNCH speed. Now that every bot pass is a paced wrister
+# (the #363 mouse-speed model makes soft releases reliable), a close feed is a
+# genuinely soft touch — down toward the wrister floor, well below the old snap
+# speed — so the receiver can corral it in tight; longer passes ramp up for pace,
+# shrinking a defender's reaction window. The hard end stops at the reception
+# deflect threshold (~20 m/s, PASS_RAMP_LONG_SPEED_M_S): a pass above that can
+# tip off a poorly-angled receiving blade, so a "harder for farther" pass stays
+# exactly at the catchable ceiling. Continuous (smoothstep), not a binary cliff.
 #
 # Why a direct distance ramp and not friction/arrival-speed math: the puck
 # sheds little speed over a pass (GameRules.PUCK_ICE_DECEL_M_S2 ≈ 1 m/s² — e.g. a
 # 26 m pass loses only ~1–2 m/s), so arrival speed ≈ launch speed at realistic
 # distances. Backing a launch out of a target arrival speed would therefore
-# collapse to a near-constant ~snap speed and leave long passes too soft to beat
+# collapse to a near-constant speed and leave long passes too soft to beat
 # interception. Distance is the right axis directly: a long pass can be fast
-# because its longer flight gives the receiver time to square up.
-const PASS_RAMP_SHORT_DISTANCE_M: float = 10.0   # ≤ this → soft snap pass
+# because its longer flight gives the receiver time to square up. (Softening the
+# close end is self-regulating — score_pass reads the launch speed into its lane-
+# interception window, so a soft feed scores as more pickable and only wins when
+# the lane is genuinely clear.)
+const PASS_RAMP_SHORT_DISTANCE_M: float = 10.0   # ≤ this → soft touch pass
+const PASS_RAMP_SHORT_SPEED_M_S: float = 11.0    # launch target for a close feed (soft)
 const PASS_RAMP_LONG_DISTANCE_M: float = 26.0    # ≥ this → full long-pass pace
-const PASS_RAMP_LONG_SPEED_M_S: float = 20.0     # launch target for a long pass
+const PASS_RAMP_LONG_SPEED_M_S: float = 20.0     # launch target for a long pass (catchable ceiling)
 
 # Reference charged-pass speed (~mid-ramp). No longer a fixed release target —
 # pass speed is distance-adaptive via pass_launch_speed — but kept as a
@@ -304,8 +312,11 @@ const PASS_CHARGE_SPEED_M_S: float = (
 static func pass_launch_speed(distance: float, max_launch: float,
 		speed_scale: float = 1.0) -> float:
 	var t: float = smoothstep(PASS_RAMP_SHORT_DISTANCE_M, PASS_RAMP_LONG_DISTANCE_M, distance)
-	var target: float = lerpf(PASS_SPEED_M_S, PASS_RAMP_LONG_SPEED_M_S, t)
-	return clampf(target, PASS_SPEED_M_S, max_launch) * speed_scale
+	var target: float = lerpf(PASS_RAMP_SHORT_SPEED_M_S, PASS_RAMP_LONG_SPEED_M_S, t)
+	# Floor at the softest a wrister can throw (not the old snap speed) so a close
+	# feed stays genuinely soft; speed_scale (difficulty) applies after, and can
+	# still drop an easy bot's pass below even that.
+	return clampf(target, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, max_launch) * speed_scale
 
 # ── Saucer pass ──────────────────────────────────────────────────────────────
 # A saucer (elevated) pass lofts the puck off the ice so it flies over a

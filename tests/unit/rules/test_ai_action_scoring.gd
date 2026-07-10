@@ -748,15 +748,17 @@ func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
 
 # ─── expected_pass_speed / pass_launch_speed (distance-adaptive) ─────────
 
-func test_pass_launch_speed_short_feed_is_snap_soft() -> void:
-	# At/under the short threshold a pass fires at the soft snap speed — no rocket
-	# on a close feed.
+func test_pass_launch_speed_short_feed_is_a_soft_touch() -> void:
+	# At/under the short threshold a pass fires at the soft touch pace — a gentle
+	# close feed the receiver corrals in tight, not a rocket.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 	assert_almost_eq(
 			AIActionScoring.pass_launch_speed(AIActionScoring.PASS_RAMP_SHORT_DISTANCE_M, maxw),
-			AIActionScoring.PASS_SPEED_M_S, 0.001)
+			AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, 0.001)
 	assert_almost_eq(AIActionScoring.pass_launch_speed(2.0, maxw),
-			AIActionScoring.PASS_SPEED_M_S, 0.001)
+			AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, 0.001)
+	assert_lt(AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, AIActionScoring.PASS_SPEED_M_S,
+			"a soft touch is softer than the old quick-snap floor")
 
 
 func test_pass_launch_speed_ramps_up_with_distance() -> void:
@@ -767,7 +769,8 @@ func test_pass_launch_speed_ramps_up_with_distance() -> void:
 	var far: float = AIActionScoring.pass_launch_speed(24.0, maxw)
 	assert_gt(mid, near, "an 18 m pass must launch harder than a 12 m one")
 	assert_gt(far, mid, "a 24 m pass must launch harder than an 18 m one")
-	assert_gt(near, AIActionScoring.PASS_SPEED_M_S, "a 12 m pass is past the snap floor")
+	assert_gt(near, AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S,
+			"a 12 m pass is harder than the soft close-touch floor")
 
 
 func test_pass_launch_speed_long_pass_reaches_ramp_top() -> void:

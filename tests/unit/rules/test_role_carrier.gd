@@ -84,6 +84,27 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
+func test_close_pass_is_a_soft_charged_wrister() -> void:
+	# Every pass is a paced wrister now — no fixed-power quick snap. A short feed to
+	# a close open teammate charges (pass_should_charge) and fires SOFT: the launch
+	# target sits below the old quick-snap floor so the receiver corrals it in tight.
+	var self_pos := Vector3(3, 0, 20)
+	var outlet := Vector3(6, 0, 17)                   # ~4.2 m — a close feed
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet],
+			[3, 1, Vector3(1.5, 0, 18.0)],            # forecheck so PASS beats carry
+			[4, 1, Vector3(3.0, 0, 17.5)],
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, skaters))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS, "picks the close outlet")
+	assert_eq(c.pass_target_peer_id, 2)
+	assert_true(c.pass_should_charge, "a pass is always a charged wrister now")
+	assert_lt(c.pass_target_speed, AIActionScoring.PASS_SPEED_M_S,
+			"a close feed fires softer than the old quick-snap floor")
+
+
 # ─── pressure: make a safe play, don't drive into the box ───────────────────
 
 func test_board_pincer_makes_a_safe_play_not_a_turnover() -> void:

@@ -62,11 +62,6 @@ const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~3
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
-# A pass only wrister-charges when its adaptive launch target exceeds the snap
-# floor (PASS_SPEED_M_S) by at least this much; nearer the floor the windup buys
-# too little pace to justify the commit, so the bot quick-releases instead.
-const PASS_CHARGE_MIN_DELTA_M_S: float = 1.0
-
 # Quick-shot blade ROM cone: passes within this half-angle of facing
 # don't pay rotation cost (blade can fire from current facing).
 # Outside the cone, only the OVERSHOOT (angle - ROM) costs time.
@@ -489,10 +484,11 @@ func _pick_action(ctx: RoleContext) -> void:
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
 			pass_target_peer_id = best_pass_peer
-			# Distance-adaptive launch speed: soft for short feeds, harder for
-			# long ones so they still arrive at a comfortable pace (capped at
-			# this bot's own max wrister). Wrister-charge only when the target
-			# is meaningfully above the snap floor; otherwise quick-release.
+			# Every pass is a paced wrister now (the #363 pure-mouse-speed model
+			# makes release pace reliable, so there's no reason to keep the fixed-
+			# power quick snap): distance-adaptive launch speed — a genuinely soft
+			# touch for a close feed, harder (still catchable) for a long one — all
+			# from the one charged release, capped at this bot's own max wrister.
 			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
 			if receiver != null:
 				pass_target_speed = AIActionScoring.pass_launch_speed(
@@ -500,7 +496,7 @@ func _pick_action(ctx: RoleContext) -> void:
 						ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 			else:
 				pass_target_speed = AIActionScoring.PASS_SPEED_M_S * ctx.pass_speed_scale
-			pass_should_charge = pass_target_speed > AIActionScoring.PASS_SPEED_M_S + PASS_CHARGE_MIN_DELTA_M_S
+			pass_should_charge = true
 			# Saucer it over a contested mid-lane defender (only ever true
 			# for long passes — see _compute_best_pass).
 			pass_should_saucer = best_pass_saucer
