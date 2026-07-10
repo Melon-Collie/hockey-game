@@ -41,15 +41,15 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var deflect_tangential_retain: float = 0.85       # glancing slide is largely kept (a redirect keeps pace)
 @export var deflect_speed_ref: float = 30.0               # speed (m/s) at which restitution bottoms out
 @export var deflect_cooldown: float = 0.3
-# Signed per-loft-level redirect angle for a deliberate deflect. The loft level
-# (scroll) chooses the deflection intent, not a monotonic launch height (which
-# would rocket a hard tip over the net): LOW tips UP (a modest angle — a hard tip
-# can still sail, that's the skill/miss), HIGH bats the puck DOWN toward the ice
-# (a knockdown), FLAT stays horizontal. deflect_up_angle is the key feel knob for
-# "tip-in vs sail-over"; where a given tip lands is emergent from retained pace ×
-# this angle, same range read as a shot's arc.
-@export var deflect_up_angle: float = 20.0     # LOW loft — tip up and in
-@export var deflect_down_angle: float = 30.0   # HIGH loft — knock down to the ice
+# Signed per-loft-level redirect for a deliberate deflect, expressed as a fixed
+# VERTICAL LAUNCH SPEED (m/s) — the SAME loft model shots use (ShotMechanics.loft_y),
+# not a fixed angle. Fixed-angle ties the tip's apex to the incoming puck's pace
+# (apex ∝ pace²), so a hard tip sails over the net; a fixed launch speed gives a
+# CONSISTENT apex regardless of pace, and the redirect keeps its horizontal pace
+# minus what's carved into the lift (energy-conserving, like a lofted shot). LOW
+# tips a grounded puck UP, HIGH bats an airborne puck DOWN, FLAT stays horizontal.
+@export var deflect_up_loft_speed: float = 3.8     # LOW — tip up and in (apex ≈ 0.74 m)
+@export var deflect_down_loft_speed: float = 3.5   # HIGH — drive an airborne puck down to the ice
 # A deflect whose resulting speed lands below this reads as a BOBBLE — the blade
 # smothered the puck (knocked it down) rather than redirecting it. The deflector
 # gets the short bobble_cooldown so they can gather their own knockdown, instead
@@ -262,19 +262,26 @@ func apply_blade_deflect(skater: Skater) -> void:
 			deflect_normal_restitution, deflect_normal_restitution_min,
 			deflect_tangential_retain, deflect_speed_ref)
 
-	# Signed per-level redirect: LOW tips the puck UP (+), HIGH bats it DOWN (−),
-	# FLAT stays horizontal. A dead-square knockdown collapses to ~zero speed (a
-	# bobble drop); skip the tilt there — its direction is undefined and a
-	# smothered puck shouldn't pop off the ice.
-	var elev_angle: float = 0.0
+	# Signed per-level redirect as a fixed VERTICAL LAUNCH SPEED (LOW up, HIGH
+	# down, FLAT horizontal), so the tip's apex is consistent regardless of the
+	# incoming puck's pace — a hard tip no longer sails over the net. Reuses the
+	# shot loft solve (ShotMechanics.loft_y): it carves the lift out of the
+	# redirect's horizontal pace (energy-conserving, total speed unchanged), the
+	# same way a lofted shot trades pace for height. A dead-square knockdown
+	# collapses to ~zero speed (a bobble drop); skip the lift there — a smothered
+	# puck shouldn't pop off the ice.
+	var loft_vy: float = 0.0
 	if skater.elevation_level == 1:
-		elev_angle = deflect_up_angle
+		loft_vy = deflect_up_loft_speed
 	elif skater.elevation_level >= 2:
-		elev_angle = -deflect_down_angle
-	if not is_zero_approx(elev_angle) and new_vel.length() > 0.001:
-		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(
-				new_vel.normalized(), elev_angle)
-		new_vel = new_dir * new_vel.length()
+		loft_vy = -deflect_down_loft_speed
+	var horiz_speed: float = new_vel.length()
+	if not is_zero_approx(loft_vy) and horiz_speed > 0.001:
+		# loft_y gives the Y/XZ ratio that yields launch speed |loft_vy| at this
+		# horizontal pace; sign it for an up-tip (+) vs a down-knockdown (−).
+		var y_ratio: float = ShotMechanics.loft_y(horiz_speed, absf(loft_vy)) * signf(loft_vy)
+		var flat_dir: Vector3 = Vector3(new_vel.x, 0.0, new_vel.z).normalized()
+		new_vel = Vector3(flat_dir.x, y_ratio, flat_dir.z).normalized() * horiz_speed
 
 	linear_velocity = new_vel
 	# A low-speed result is a bobble: the blade knocked the puck down instead of

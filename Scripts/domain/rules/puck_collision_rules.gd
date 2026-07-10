@@ -57,16 +57,6 @@ static func deflect_velocity(
 		e = lerpf(normal_restitution, normal_restitution_min, hard)
 	return v_tangent * tangential_retain - v_normal * e
 
-# Adds upward Y component to a horizontal deflection direction. Used when the
-# deflecting skater is elevated.
-static func apply_deflection_elevation(horizontal_dir: Vector3, elevation_angle_deg: float) -> Vector3:
-	var rad: float = deg_to_rad(elevation_angle_deg)
-	return Vector3(
-		horizontal_dir.x * cos(rad),
-		sin(rad),
-		horizontal_dir.z * cos(rad)
-	).normalized()
-
 # Loose puck bouncing off a skater's body (passive body-block). Reflect +
 # dampen. If the reflection collapses to zero, fall back to the contact normal.
 static func body_block_velocity(
