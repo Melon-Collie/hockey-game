@@ -288,8 +288,9 @@ const POKE_RADIUS_M: float = 0.5
 # elite top-of-the-NHL release:
 #   wrister 33 m/s ≈ 74 mph  (L5 ~38.9 ≈ 87 mph, L1 ~27.4 ≈ 61 mph)
 #   slapper 40 m/s ≈ 89 mph  (L5 ~47.2 ≈ 106 mph, L1 ~33.2 ≈ 74 mph)
-# Reception already gates hard shots (deflect_min_speed ~20 m/s needs a
-# squared blade), so most of the wrister band is catch-with-care territory.
+# Reception already gates hard shots (above deflect_min_speed ~22 m/s
+# receiver-relative needs a squared blade), so most of the wrister band is
+# catch-with-care territory.
 # The slapper min is a hurried, barely-wound release — still a heavy shot
 # (~45 mph); one-timers always fire at max regardless of charge.
 const DEFAULT_WRISTER_POWER_MIN_M_S: float = 10.0

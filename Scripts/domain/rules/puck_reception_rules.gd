@@ -3,37 +3,55 @@ class_name PuckReceptionRules
 # Pure decision: when a loose puck overlaps a blade, does the skater receive it
 # (set as carrier) or deflect it (bounce off via PuckCollisionRules)?
 #
-#   pickup_max_speed:    absolute puck speed below which pickup always succeeds
-#   deflect_min_speed:   speed threshold for a poorly-angled blade. Set above
-#                        charged-pass speed (~19 m/s) so any pass is receivable
-#                        at ANY blade angle.
-#   alignment_bonus:     extra m/s tolerated when the blade face is square to the
-#                        incoming puck — the only thing that lets a blade corral a
-#                        hard shot, and it's purely a function of where the blade
-#                        points at contact.
+# The decision reads the puck's speed RELATIVE to the receiver (puck_velocity −
+# receiver_velocity), not its world-frame speed. Catching is momentum
+# absorption, and the momentum the hands must soak is set by the closing speed
+# between blade and puck: a stretch pass leading a streaking receiver arrives
+# gently in their frame (easy catch at any angle), skating hard INTO the same
+# pass steepens it, and retreating with a hard shot cushions it back under the
+# catchable ceiling — "giving with the puck" re-emerges as a skating read
+# instead of a stick gesture.
 #
-# Reception is REACTIVE, not preemptive: it reads the puck's absolute speed and
-# the blade angle at contact, nothing else. There is deliberately no cushion /
-# "give with the puck" term — a moving blade is treated no differently from a
-# static one — because timing a backswing into an incoming pass was fiddly and
-# unintuitive (you had to pre-load it before the puck arrived). Catching a hard
-# shot is now about squaring the blade, not winding up a cushion.
+#   pickup_max_speed:    relative speed below which pickup always succeeds
+#   deflect_min_speed:   relative-speed threshold for a poorly-angled blade
+#   alignment_bonus:     extra m/s tolerated when the blade face is square to
+#                        the incoming line (in the receiver's frame) — squaring
+#                        up is what lets a blade corral a hard puck.
+#
+# Calibration (relative frame, grounded in real reception, not game constants):
+# a catch means the blade isn't blown open while the hands absorb ~m·v²/2d over
+# d ≈ 0.25 m of natural give against the ~150–250 N a wrist-held blade can
+# resist (170 g puck: ~136 N at 22 m/s, ~267 N at 28 — blown open). That force
+# ceiling matches observed hockey: pros routinely handle ~45–50 mph feeds
+# (20–22 m/s) and treat ~60+ mph contact as a knock-down even when squared, and
+# real receivers usually close a few m/s on the pass, so the world-frame
+# anecdotes sit slightly BELOW the relative-frame capability. Hence the
+# defaults: deflect_min 22 (any-angle ceiling ≈ 49 mph closing) + bonus 8
+# (squared ceiling 30 ≈ 67 mph closing).
+#
+# Reception is still REACTIVE: relative speed and blade angle at contact,
+# nothing else — deliberately no blade-velocity / cushion term (a preemptive
+# backswing gesture felt fiddly and unintuitive). The skater's own velocity is
+# a frame correction, not a gesture: it changes what "incoming speed" means,
+# it doesn't reward stick wind-up.
 static func should_receive(
 		puck_velocity: Vector3,
+		receiver_velocity: Vector3,
 		blade_face_normal: Vector3,
 		pickup_max_speed: float,
 		deflect_min_speed: float,
 		alignment_bonus: float) -> bool:
-	var puck_speed: float = puck_velocity.length()
-	if puck_speed <= pickup_max_speed:
+	var relative_velocity: Vector3 = puck_velocity - receiver_velocity
+	var relative_speed: float = relative_velocity.length()
+	if relative_speed <= pickup_max_speed:
 		return true
-	# How head-on the approach is: -puck_dir points from puck toward the blade;
-	# dot with the face normal = squareness. Negative (puck moving away from the
-	# face) clamps to 0, no bonus. puck_speed > pickup_max_speed here, so the
-	# normalize is safe.
-	var alignment: float = maxf(0.0, -puck_velocity.normalized().dot(blade_face_normal))
+	# How head-on the approach is, in the receiver's frame: -relative_dir points
+	# from puck toward the blade; dot with the face normal = squareness. Negative
+	# (puck moving away from the face) clamps to 0, no bonus. relative_speed >
+	# pickup_max_speed here, so the normalize is safe.
+	var alignment: float = maxf(0.0, -relative_velocity.normalized().dot(blade_face_normal))
 	var threshold: float = deflect_min_speed + alignment_bonus * alignment
-	return puck_speed < threshold
+	return relative_speed < threshold
 
 
 # Pure: horizontal unit vector perpendicular to the stick shaft (top_hand →
@@ -42,6 +60,8 @@ static func should_receive(
 # hand and blade are coincident (degenerate). Shared by Skater.get_blade_face_normal
 # (live geometry) and the lag-comp pickup resolver (rewound snapshot geometry) so
 # the catch-vs-deflect decision judges against ONE definition of "blade face".
+# For the receive decision, pass the RELATIVE velocity (puck − receiver) as the
+# reference so the face opposes the approach in the receiver's frame.
 static func blade_face_normal(
 		blade_contact: Vector3,
 		top_hand: Vector3,
