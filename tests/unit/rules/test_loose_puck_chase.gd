@@ -21,6 +21,12 @@ func _states(entries: Dictionary) -> Dictionary:
 	return entries
 
 
+func _caps(max_speed: float) -> AISkaterCaps:
+	var c := AISkaterCaps.new()
+	c.max_speed = max_speed
+	return c
+
+
 func test_stationary_puck_picks_closest() -> void:
 	var states := {
 		100: _skater(Vector3(3, 0, 0)),
@@ -29,6 +35,23 @@ func test_stationary_puck_picks_closest() -> void:
 	var pid: int = AILoosePuckChase.elect(
 			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1)
 	assert_eq(pid, 100, "nearest stationary bot wins when nobody has momentum")
+
+
+func test_faster_skater_wins_the_race_from_further_out() -> void:
+	# A nearer slow skater vs a further fast one, both stationary. With league
+	# speeds the nearer wins; giving the far skater a real top-speed edge (Speed)
+	# flips the race — a burner genuinely gets to a loose puck first.
+	var states := {
+		100: _skater(Vector3(4, 0, 0)),   # nearer
+		200: _skater(Vector3(6.5, 0, 0)), # further
+	}
+	var league: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1)
+	assert_eq(league, 100, "with equal speed the nearer skater wins")
+	var by_build: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1,
+			{100: _caps(6.0), 200: _caps(14.0)})
+	assert_eq(by_build, 200, "a much faster skater wins the race from further out")
 
 
 func test_momentum_beats_raw_distance() -> void:
