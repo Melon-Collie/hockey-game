@@ -270,13 +270,13 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_BLADE_LIFT:
 			return TutorialStep.new(
 				"Blade Lift",
-				"Hold Q to lift your stick blade up off the ice.",
-				"Press and hold Q and your blade pops up. (You can't lift while carrying the puck.)")
+				"Scroll the mouse wheel up to HIGH, then hold Q to raise your blade off the ice.",
+				"Q is Deflect; at HIGH loft the blade lifts. Scroll up, hold Q, and it pops up. (You can't lift while carrying the puck.)")
 		STEP_STICK_LIFT:
 			return TutorialStep.new(
 				"Stick Lift",
-				"Get under the opponent's stick and hold Q to lift it — that pops the puck off their blade and strips it loose.",
-				"Skate your blade beneath their stick, then hold Q to lift it and knock the puck free.")
+				"Scroll up to HIGH, get under the opponent's stick, and hold Q to lift it — that pops the puck off their blade.",
+				"Scroll to HIGH so your blade rides high, slide it beneath their stick, then hold Q to lift and knock the puck free.")
 		STEP_QUICK_SHOT:
 			return TutorialStep.new(
 				"Quick Shot",

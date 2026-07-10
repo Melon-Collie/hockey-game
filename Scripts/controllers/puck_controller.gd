@@ -433,9 +433,12 @@ func _check_interactions() -> void:
 				if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 						or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 					continue
-				# Grounded blade ↔ grounded puck, lifted blade ↔ airborne puck.
-				# A stationary grounded blade lets a saucer pass fly over; a lifted
-				# blade reaches only airborne pucks (and only to tip them).
+				# Reach gate — grounded blade ↔ grounded puck, lifted blade ↔
+				# airborne puck. blade_up already encodes the deflect level's plane
+				# (grounded at FLAT/LOW, lifted only at HIGH), so a committed deflect
+				# and a passive receiver share this one gate: FLAT/LOW play the ice
+				# (a saucer flies over), HIGH plays the air. The loft level changes
+				# the redirect DIRECTION, not which plane it reaches.
 				if not PuckReceptionRules.blade_can_interact(skater.blade_up, puck_airborne):
 					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
@@ -443,17 +446,12 @@ func _check_interactions() -> void:
 				if not PuckInteractionRules.check_pickup(_prev_puck_pos, puck_curr,
 						blade_prev, blade_curr, PICKUP_RADIUS):
 					continue
-				if skater.blade_up:
-					# Lifted blade can only tip an airborne puck — never corral it
-					# onto the stick. Redirect off the blade face and move on.
-					puck.apply_blade_deflect(skater)
-					break
-				# Deliberate deflect: the player is holding LMB without the puck to
-				# commit to a redirect. Force the deflect off the blade face — the
-				# SAME path a too-fast puck takes naturally — bypassing the catch
-				# decision so even an otherwise-catchable (slow) puck is tipped
-				# rather than corralled. Releasing LMB returns to normal reception.
-				if skater.deflect_intent:
+				# A committed deflect (Q held, any reachable level) or a forced-up
+				# blade (opponent stick-lift meeting an airborne puck) tips the puck
+				# off the blade face — the SAME path a too-fast puck takes naturally,
+				# bypassing the catch decision so even an otherwise-catchable puck is
+				# redirected. The loft level signs the redirect (flat / up / down).
+				if skater.deflect_intent or skater.blade_up:
 					puck.apply_blade_deflect(skater)
 					break
 				var puck_vel: Vector3 = puck.get_puck_velocity()

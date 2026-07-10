@@ -62,6 +62,10 @@ static func blade_face_normal(
 # vertical plane. A lifted blade (off the ice) handles airborne pucks; a
 # grounded blade handles grounded pucks. This is what lets a saucer pass fly
 # over a stationary, grounded blade instead of being corralled out of the air,
-# and is what limits a lifted blade to tipping airborne pucks.
+# and is what limits a lifted blade to tipping airborne pucks. Shared by a
+# passive receiver AND a committed deflect (Q held): blade_up already encodes the
+# deflect level's plane — grounded at FLAT/LOW, lifted only at HIGH — so both go
+# through this one gate. The loft level changes the redirect DIRECTION, not the
+# plane (FLAT/LOW play the ice, HIGH plays the air).
 static func blade_can_interact(blade_up: bool, puck_airborne: bool) -> bool:
 	return blade_up == puck_airborne

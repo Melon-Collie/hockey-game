@@ -1090,12 +1090,17 @@ func _on_body_block_hit(body: Node3D) -> void:
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 # Whether this skater is committing to a deliberate deflect this tick. Base
-# behaviour (human players, local and remote-on-host): holding the shoot button
-# without the puck. AIController overrides this to always-false — bots reuse the
-# held shoot button off-puck to set up wrister one-timers (catch + fire), which a
-# deflect would break.
+# behaviour (human players, local and remote-on-host): holding the DEFLECT button
+# (stick_lift / Q) without the puck. The loft level (scroll) then shapes it —
+# FLAT grounded redirect, LOW grounded tip up, HIGH knock an airborne puck down /
+# stick-lift (reach follows blade_can_interact; direction from Puck.apply_blade_deflect).
+# AIController
+# overrides this to always-false — bots don't deliberate-deflect; holding the
+# shoot button off-puck sets up their wrister one-timers instead. Moving deflect
+# off the shoot button (it used to be shoot_held off-puck) also unmasks the
+# human wrister one-timer, which the deflect intent previously suppressed.
 func _wants_deflect(input: InputState) -> bool:
-	return input.shoot_held and not has_puck
+	return input.stick_lift_held and not has_puck
 
 
 func _process_input(input: InputState, delta: float) -> void:
@@ -1126,18 +1131,22 @@ func _process_input(input: InputState, delta: float) -> void:
 	skater.elevation_level = _elevation_level
 	_current_aim_world = input.mouse_world_pos
 
-	# Stick lift (Q). Voluntary lift is gated on NOT carrying — you can't raise
-	# your own blade off the puck while stickhandling. A forced lift (an opponent
-	# hooked under your stick) overrides regardless of possession and is what
-	# dislodges the carried puck.
-	skater.blade_up = (input.stick_lift_held and not has_puck) or skater.is_forced_lift_active()
-
-	# Deliberate-deflect intent (see Skater.deflect_intent). Holding LMB without
-	# the puck commits to redirecting a loose puck off the blade rather than
-	# corralling it; carrying the puck means LMB is a wrister charge instead, so
-	# it's gated on NOT having the puck. The host reads this in
-	# PuckController._check_interactions for every skater it simulates.
+	# Deliberate-deflect intent (see Skater.deflect_intent). Holding the deflect
+	# button (Q) without the puck commits to redirecting a loose puck off the
+	# blade rather than corralling it; carrying means Q is the nudge tap instead,
+	# so it's gated on NOT having the puck. The host reads this in
+	# PuckController._check_interactions for every skater it simulates, and the
+	# loft level shapes the redirect (grounded / up / down).
 	skater.deflect_intent = _wants_deflect(input)
+
+	# Blade lift (off the ice) is now a CONSEQUENCE of deflecting at HIGH loft:
+	# the raised blade reaches higher airborne pucks (to knock them down) and is
+	# what lets a stick-lift hook under an opponent's shaft. FLAT/LOW deflects keep
+	# the blade grounded so they can still meet pucks on the ice (a LOW deflect
+	# tips a grounded shot UP). A forced lift (an opponent hooked under your stick)
+	# overrides regardless of possession and is what dislodges a carried puck.
+	skater.blade_up = (skater.deflect_intent and _elevation_level >= ShotMechanics.ELEVATION_HIGH) \
+			or skater.is_forced_lift_active()
 
 	# Nudge: a stick-lift TAP while carrying pushes the puck off the blade as a
 	# soft self-pass (nutmeg setup). Edge-triggered and gated to plain carry so

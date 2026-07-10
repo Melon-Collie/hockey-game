@@ -25,23 +25,39 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # See PuckReceptionRules.should_receive.
 @export var deflect_min_speed: float = 20.0
 @export var alignment_receive_bonus: float = 8.0
-# How reflective a deflection is: 0 = pass-through with a nudge, 1 = pure bounce
-# off the blade face. Higher = the puck follows your blade angle more directly,
-# so deliberate redirects are more aim-able (and the angle cap below keeps the
-# near-head-on caroms it would otherwise reintroduce in check).
-@export var deflect_blend: float = 0.75
-# Speed-dependent deflection feel (tune to taste). Both effects ease from their
-# soft-puck value toward their hard-puck value as puck speed climbs to
-# deflect_speed_ref — a soft pass is steerable, a hard shot only glances.
-#   retain: energy kept. Hard pucks shed more so deflections don't pinball.
-@export var deflect_speed_retain: float = 0.7       # soft-puck (low speed)
-@export var deflect_speed_retain_min: float = 0.5   # hard-puck (at/above ref); < 0 disables falloff
-#   angle: cap on how far the puck bends off its incoming line.
-@export var deflect_max_angle_deg: float = 70.0     # soft-puck — sharp, steerable redirect
-@export var deflect_max_angle_deg_min: float = 30.0 # hard-puck — shallow glancing tip; < 0 disables falloff
-@export var deflect_speed_ref: float = 30.0         # speed (m/s) at which both falloffs bottom out
+# Passive-blade deflection via a normal/tangential decomposition (see
+# PuckCollisionRules.deflect_velocity). The component INTO the blade face rebounds
+# with a restitution; the component ALONG the face (a glance) is preserved. From
+# one model this yields both real outcomes: a SQUARE hit off a hard puck dies in
+# front (a bobble — see bobble_speed_threshold), while a GLANCING hit keeps its
+# pace and only bends its line (a true tip/redirect). No angle cap is needed — the
+# only way to reverse the puck is a square hit, and a square hard hit is killed by
+# the low restitution, so there is no fast carom to clamp.
+#   restitution eases from the soft/slow value toward the hard value as puck speed
+#   climbs to deflect_speed_ref, so a squared blade smothers a slapper instead of
+#   pinballing it.
+@export var deflect_normal_restitution: float = 0.6       # soft/slow puck bounces off the face
+@export var deflect_normal_restitution_min: float = 0.15  # hard puck (at/above ref) barely rebounds — it dies; < 0 disables falloff
+@export var deflect_tangential_retain: float = 0.85       # glancing slide is largely kept (a redirect keeps pace)
+@export var deflect_speed_ref: float = 30.0               # speed (m/s) at which restitution bottoms out
 @export var deflect_cooldown: float = 0.3
-@export var deflect_elevation_angle: float = 35.0
+# Signed per-loft-level redirect for a deliberate deflect, expressed as a fixed
+# VERTICAL LAUNCH SPEED (m/s) — the SAME loft model shots use (ShotMechanics.loft_y),
+# not a fixed angle. Fixed-angle ties the tip's apex to the incoming puck's pace
+# (apex ∝ pace²), so a hard tip sails over the net; a fixed launch speed gives a
+# CONSISTENT apex regardless of pace, and the redirect keeps its horizontal pace
+# minus what's carved into the lift (energy-conserving, like a lofted shot). LOW
+# tips a grounded puck UP, HIGH bats an airborne puck DOWN, FLAT stays horizontal.
+@export var deflect_up_loft_speed: float = 3.8     # LOW — tip up and in (apex ≈ 0.74 m)
+@export var deflect_down_loft_speed: float = 3.5   # HIGH — drive an airborne puck down to the ice
+# A deflect whose resulting speed lands below this reads as a BOBBLE — the blade
+# smothered the puck (knocked it down) rather than redirecting it. The deflector
+# gets the short bobble_cooldown so they can gather their own knockdown, instead
+# of the full deflect_cooldown lockout; a genuine redirect (faster exit) keeps the
+# lockout. Feedback (game_manager) also reads this threshold so a bobble sounds
+# duller than a live redirect.
+@export var bobble_speed_threshold: float = 11.0
+@export var bobble_cooldown: float = 0.12
 # Poke exit speed now scales with the blade-contest momentum (see
 # PuckCollisionRules.poke_strip_velocity): a soft poke floors at min, a hard sweep
 # squirts the puck up to max. Old behavior was a flat 6.0 regardless of how hard
@@ -242,20 +258,37 @@ func apply_blade_deflect(skater: Skater) -> void:
 	var contact_normal: Vector3 = skater.get_blade_face_normal(linear_velocity)
 
 	var new_vel: Vector3 = PuckCollisionRules.deflect_velocity(
-			linear_velocity, contact_normal, deflect_blend,
-			deflect_speed_retain, deflect_speed_retain_min,
-			deflect_max_angle_deg, deflect_max_angle_deg_min, deflect_speed_ref)
+			linear_velocity, contact_normal,
+			deflect_normal_restitution, deflect_normal_restitution_min,
+			deflect_tangential_retain, deflect_speed_ref)
 
-	# Deliberate-deflect tips ride the loft mode too: half the tip angle at
-	# LOW, full at HIGH — same scaling as the blade-scoop visual.
-	if skater.elevation_level > 0:
-		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(
-				new_vel.normalized(),
-				deflect_elevation_angle * float(skater.elevation_level) * 0.5)
-		new_vel = new_dir * new_vel.length()
+	# Signed per-level redirect as a fixed VERTICAL LAUNCH SPEED (LOW up, HIGH
+	# down, FLAT horizontal), so the tip's apex is consistent regardless of the
+	# incoming puck's pace — a hard tip no longer sails over the net. Reuses the
+	# shot loft solve (ShotMechanics.loft_y): it carves the lift out of the
+	# redirect's horizontal pace (energy-conserving, total speed unchanged), the
+	# same way a lofted shot trades pace for height. A dead-square knockdown
+	# collapses to ~zero speed (a bobble drop); skip the lift there — a smothered
+	# puck shouldn't pop off the ice.
+	var loft_vy: float = 0.0
+	if skater.elevation_level == 1:
+		loft_vy = deflect_up_loft_speed
+	elif skater.elevation_level >= 2:
+		loft_vy = -deflect_down_loft_speed
+	var horiz_speed: float = new_vel.length()
+	if not is_zero_approx(loft_vy) and horiz_speed > 0.001:
+		# loft_y gives the Y/XZ ratio that yields launch speed |loft_vy| at this
+		# horizontal pace; sign it for an up-tip (+) vs a down-knockdown (−).
+		var y_ratio: float = ShotMechanics.loft_y(horiz_speed, absf(loft_vy)) * signf(loft_vy)
+		var flat_dir: Vector3 = Vector3(new_vel.x, 0.0, new_vel.z).normalized()
+		new_vel = Vector3(flat_dir.x, y_ratio, flat_dir.z).normalized() * horiz_speed
 
 	linear_velocity = new_vel
-	_set_cooldown(skater, deflect_cooldown)
+	# A low-speed result is a bobble: the blade knocked the puck down instead of
+	# redirecting it. Give the deflector a short window to gather it rather than
+	# the full deflect lockout (which is meant to stop re-touching a live redirect).
+	var is_bobble: bool = new_vel.length() < bobble_speed_threshold
+	_set_cooldown(skater, bobble_cooldown if is_bobble else deflect_cooldown)
 	puck_touched_loose.emit(skater)
 
 func on_body_block(blocker: Skater, dampen_override: float = -1.0) -> void:

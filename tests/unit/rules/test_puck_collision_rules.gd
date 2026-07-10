@@ -13,99 +13,77 @@ func test_opponents_can_poke() -> void:
 	assert_true(PuckCollisionRules.can_poke_check(1, 0))
 
 # ── deflect_velocity ─────────────────────────────────────────────────────────
+# Normal/tangential decomposition. Args: (incoming, contact_normal,
+# normal_restitution, normal_restitution_min=-1, tangential_retain=1, speed_ref=0).
+# contact_normal points AGAINST the incoming puck (blade face normal).
 
-func test_full_blend_reflects_velocity() -> void:
-	# Puck moving +X, contact normal -X (blade face toward -X, puck bounces back)
-	var velocity := Vector3(10, 0, 0)
-	var normal := Vector3(-1, 0, 0)
-	var result: Vector3 = PuckCollisionRules.deflect_velocity(velocity, normal, 1.0, 1.0)
-	assert_lt(result.x, 0.0, "deflected velocity X should flip sign")
-	assert_almost_eq(result.length(), 10.0, 0.01)
-
-func test_zero_blend_preserves_direction() -> void:
-	# With deflect_blend=0 the result is along the incoming direction
-	var velocity := Vector3(10, 0, 0)
-	var normal := Vector3(-1, 0, 0)
-	var result: Vector3 = PuckCollisionRules.deflect_velocity(velocity, normal, 0.0, 1.0)
-	assert_gt(result.x, 0.0, "zero blend should keep moving in incoming direction")
-
-func test_speed_retain_scales_magnitude() -> void:
-	var velocity := Vector3(10, 0, 0)
-	var normal := Vector3(-1, 0, 0)
-	var result: Vector3 = PuckCollisionRules.deflect_velocity(velocity, normal, 1.0, 0.5)
-	assert_almost_eq(result.length(), 5.0, 0.01)
-
-func test_max_angle_clamps_wild_deflection() -> void:
-	# Puck moving +X, blade normal at 45° fully reflects it to a 90° turn (toward
-	# -Z). A flat 45° cap must pull that back to a 45° turn off the incoming line.
-	# Args: blend, retain, retain_min(-1=off), max_deg, max_deg_min(-1=off), ref.
-	var velocity := Vector3(10, 0, 0)
-	var normal := Vector3(-1, 0, -1).normalized()
-	var clamped: Vector3 = PuckCollisionRules.deflect_velocity(velocity, normal, 1.0, 1.0, -1.0, 45.0)
-	var turn_deg: float = rad_to_deg(Vector3(1, 0, 0).angle_to(clamped.normalized()))
-	assert_almost_eq(turn_deg, 45.0, 0.5, "turn should be clamped to the 45° cap")
-	assert_almost_eq(clamped.length(), 10.0, 0.01, "clamping direction must not change speed")
-
-func test_head_on_full_reflection_degenerates_to_passthrough() -> void:
-	# Exactly antiparallel reflection (head-on, blend 1.0) has no defined rotation
-	# axis for the clamp; the safe fallback is to keep the incoming direction
-	# rather than pick an arbitrary side. (Real contact normals are angled, so
-	# this only guards the math edge.)
+func test_perfect_restitution_square_hit_reflects_fully() -> void:
+	# e=1, t=1, square hit (normal antiparallel to travel) → clean reversal, full
+	# speed. This is the billiard-reflection special case of the general model.
 	var result: Vector3 = PuckCollisionRules.deflect_velocity(
-		Vector3(10, 0, 0), Vector3(-1, 0, 0), 1.0, 1.0, -1.0, 90.0)
-	assert_gt(result.x, 0.0, "degenerate clamp keeps incoming direction")
+		Vector3(10, 0, 0), Vector3(-1, 0, 0), 1.0, -1.0, 1.0)
+	assert_lt(result.x, 0.0, "square hit reverses the puck")
+	assert_almost_eq(result.length(), 10.0, 0.01, "perfect restitution keeps all speed")
 
-func test_max_angle_180_leaves_direction_unclamped() -> void:
-	var velocity := Vector3(10, 0, 0)
-	var normal := Vector3(-1, 0, 0)
-	var capped: Vector3 = PuckCollisionRules.deflect_velocity(velocity, normal, 1.0, 1.0, -1.0, 180.0)
-	var uncapped: Vector3 = PuckCollisionRules.deflect_velocity(velocity, normal, 1.0, 1.0)
-	assert_almost_eq(capped.x, uncapped.x, 0.01, "180° cap is a no-op")
-
-func test_speed_dependent_angle_shallower_for_fast_pucks() -> void:
-	# Blade normal at 45° fully reflects +X to a 90° turn. With the cap easing from
-	# 80° (soft) to 20° (hard) over ref=20, a slow puck keeps a sharp redirect
-	# while a fast one only glances. Args: blend, retain, retain_min, max_deg,
-	# max_deg_min, ref.
-	var normal := Vector3(-1, 0, -1).normalized()
-	var slow: Vector3 = PuckCollisionRules.deflect_velocity(
-		Vector3(5, 0, 0), normal, 1.0, 1.0, -1.0, 80.0, 20.0, 20.0)
-	var fast: Vector3 = PuckCollisionRules.deflect_velocity(
-		Vector3(20, 0, 0), normal, 1.0, 1.0, -1.0, 80.0, 20.0, 20.0)
-	var slow_turn: float = rad_to_deg(Vector3(1, 0, 0).angle_to(slow.normalized()))
-	var fast_turn: float = rad_to_deg(Vector3(1, 0, 0).angle_to(fast.normalized()))
-	assert_almost_eq(slow_turn, 65.0, 0.5, "5/20 hardness=0.25 → cap lerps 80→20 to 65°")
-	assert_almost_eq(fast_turn, 20.0, 0.5, "at ref speed the cap bottoms out at 20°")
-	assert_lt(fast_turn, slow_turn, "fast pucks redirect less than slow ones")
-
-func test_speed_dependent_retain_bleeds_fast_pucks() -> void:
-	var normal := Vector3(-1, 0, 0)
-	# ref=20, retain=0.7 at/below ref, retain_min=0.5 at/above ref.
-	# Slow puck (10 m/s, half the ref) keeps more than a fast one (20 m/s).
-	var slow: Vector3 = PuckCollisionRules.deflect_velocity(
-		Vector3(10, 0, 0), normal, 1.0, 0.7, 0.5, 180.0, -1.0, 20.0)
-	var fast: Vector3 = PuckCollisionRules.deflect_velocity(
-		Vector3(20, 0, 0), normal, 1.0, 0.7, 0.5, 180.0, -1.0, 20.0)
-	assert_almost_eq(slow.length(), 10.0 * 0.6, 0.05, "10/20 ratio → retain lerps to 0.6")
-	assert_almost_eq(fast.length(), 20.0 * 0.5, 0.05, "at the ref speed retain bottoms out at 0.5")
-
-func test_speed_retain_falloff_disabled_when_min_negative() -> void:
+func test_square_hit_low_restitution_dies_bobble() -> void:
+	# A square hit with low restitution (all velocity is normal, little bounces
+	# back) → the puck is smothered: near-dead in front. This is the BOBBLE.
 	var result: Vector3 = PuckCollisionRules.deflect_velocity(
-		Vector3(30, 0, 0), Vector3(-1, 0, 0), 1.0, 0.7, -1.0, 180.0, -1.0, 20.0)
-	assert_almost_eq(result.length(), 30.0 * 0.7, 0.01, "negative min keeps flat retention")
+		Vector3(10, 0, 0), Vector3(-1, 0, 0), 0.15, -1.0, 0.85)
+	assert_almost_eq(result.length(), 10.0 * 0.15, 0.01,
+		"a dead-square hit keeps only the restitution fraction")
+	assert_lt(result.length(), 2.0, "smothered puck drops in front (bobble)")
 
-# ── apply_deflection_elevation ───────────────────────────────────────────────
+func test_glancing_hit_keeps_pace_and_redirects() -> void:
+	# A glancing blade (face nearly parallel to flight → mostly tangential) keeps
+	# most of the puck's pace and bends its LINE. This is the true tip / redirect.
+	# normal ≈ 15° off perpendicular-to-travel → small normal component.
+	var normal := Vector3(-0.26, 0, -0.966).normalized()
+	var result: Vector3 = PuckCollisionRules.deflect_velocity(
+		Vector3(10, 0, 0), normal, 0.15, -1.0, 0.85)
+	assert_gt(result.length(), 7.5, "a glance keeps most of its pace")
+	assert_lt(result.z, 0.0, "the puck's line is redirected off the incoming axis")
 
-func test_elevation_adds_y_component() -> void:
-	var horiz := Vector3(1, 0, 0)
-	var elevated: Vector3 = PuckCollisionRules.apply_deflection_elevation(horiz, 35.0)
-	assert_gt(elevated.y, 0.0)
-	assert_almost_eq(elevated.length(), 1.0, 0.01, "result should still be unit length")
+func test_bobble_vs_redirect_from_one_model() -> void:
+	# The three-way outcome in a single call pair, at a hard shot speed (40 m/s,
+	# ref 30 → restitution bottomed out). A squared blade smothers it into a
+	# bobble; a glancing blade redirects it with pace. Same speed, same tunables —
+	# alignment alone splits the outcome.
+	var square: Vector3 = PuckCollisionRules.deflect_velocity(
+		Vector3(40, 0, 0), Vector3(-1, 0, 0), 0.6, 0.15, 0.85, 30.0)
+	var glance: Vector3 = PuckCollisionRules.deflect_velocity(
+		Vector3(40, 0, 0), Vector3(-0.26, 0, -0.966).normalized(), 0.6, 0.15, 0.85, 30.0)
+	assert_lt(square.length(), 11.0, "squared-up hard shot bobbles (dies in front)")
+	assert_gt(glance.length(), 25.0, "glancing hard shot stays a live redirect")
 
-func test_zero_elevation_no_y_component() -> void:
-	var horiz := Vector3(1, 0, 0)
-	var flat: Vector3 = PuckCollisionRules.apply_deflection_elevation(horiz, 0.0)
-	assert_almost_eq(flat.y, 0.0, 0.01)
+func test_restitution_falloff_deadens_hard_pucks_more() -> void:
+	# Same square hit; a fast puck (≥ ref) rebounds a SMALLER fraction than a slow
+	# one — a hard puck deadens more head-on (feeds the bobble). ref=20, e 0.6→0.15.
+	var normal := Vector3(-1, 0, 0)
+	var slow: Vector3 = PuckCollisionRules.deflect_velocity(
+		Vector3(10, 0, 0), normal, 0.6, 0.15, 0.85, 20.0)
+	var fast: Vector3 = PuckCollisionRules.deflect_velocity(
+		Vector3(20, 0, 0), normal, 0.6, 0.15, 0.85, 20.0)
+	assert_almost_eq(slow.length(), 10.0 * 0.375, 0.05, "10/20 hardness=0.5 → e lerps to 0.375")
+	assert_almost_eq(fast.length(), 20.0 * 0.15, 0.05, "at ref speed e bottoms out at 0.15")
+	assert_lt(fast.length() / 20.0, slow.length() / 10.0, "fast puck keeps a smaller fraction")
+
+func test_restitution_falloff_disabled_when_min_negative() -> void:
+	# normal_restitution_min < 0 → flat restitution regardless of speed.
+	var result: Vector3 = PuckCollisionRules.deflect_velocity(
+		Vector3(30, 0, 0), Vector3(-1, 0, 0), 0.7, -1.0, 0.85, 20.0)
+	assert_almost_eq(result.length(), 30.0 * 0.7, 0.01, "negative min keeps flat restitution")
+
+func test_degenerate_normal_passes_through() -> void:
+	var result: Vector3 = PuckCollisionRules.deflect_velocity(
+		Vector3(10, 0, 0), Vector3.ZERO, 0.6, 0.15, 0.85, 30.0)
+	assert_almost_eq(result, Vector3(10, 0, 0), Vector3(0.01, 0.01, 0.01),
+		"a degenerate contact normal passes the puck through unchanged")
+
+func test_zero_velocity_yields_zero() -> void:
+	var result: Vector3 = PuckCollisionRules.deflect_velocity(
+		Vector3.ZERO, Vector3(-1, 0, 0), 0.6, 0.15, 0.85, 30.0)
+	assert_almost_eq(result.length(), 0.0, 0.001, "no input energy, no output")
 
 # ── body_block_velocity ──────────────────────────────────────────────────────
 

@@ -95,7 +95,10 @@ func test_lifted_blade_ignores_grounded_puck() -> void:
 
 func test_lifted_blade_interacts_with_airborne_puck() -> void:
 	# Lifted blade only reaches airborne pucks (and may only tip them — the
-	# tip-vs-catch restriction is enforced at the call site, not here).
+	# tip-vs-catch restriction is enforced at the call site, not here). A deflect
+	# at HIGH sets blade_up, so this is also the HIGH-deflect (knock-down) reach;
+	# FLAT/LOW deflects keep blade_up false and play the ice through the grounded
+	# cases above.
 	assert_true(PuckReceptionRules.blade_can_interact(true, true))
 
 
