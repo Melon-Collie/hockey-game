@@ -637,18 +637,25 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		var approach: float = (vel_horiz - other_vel_horiz).dot(-normal)
 		if approach <= 0.0:
 			continue
-		# Attacker rebound scales DOWN as the hit hardens: a glancing shoulder bounces
-		# back at body_check_restitution, a squared-up hit drives THROUGH (rebound →
-		# body_check_restitution_floor) so the attacker keeps forward momentum and
-		# arrives on the loose puck. Keyed off the attacker-side impulse (own transfer
-		# × masses × closing speed, brace-independent — driving through reflects the
-		# attacker's commitment, not the victim's defense), so it's deterministic and
-		# runs identically on every machine (not gated), keeping prediction/reconcile
-		# consistent. Value-type math only — hot-path safe.
+		# The impulse the victim ACTUALLY absorbs — closing speed × mass ratio ×
+		# brace-adjusted transfer — is the shared "how hard did it land" magnitude the
+		# victim knockback, stagger, and puck strip all key off. The brace is read from
+		# the REPLICATED brake_intent (not is_braced, which the controller only maintains
+		# for locally-simulated skaters), so this evaluates identically on every machine.
 		var weight_ratio: float = weight / maxf(other.weight, 0.001)
-		var attacker_impulse: float = approach * weight_ratio * body_check_transfer
+		var delivered_impulse: float = BodyCheckRules.delivered_transfer_impulse(
+				approach, weight_ratio, body_check_transfer,
+				other.body_check_brace_resistance, other.brake_intent)
+		# Attacker rebound scales DOWN as that delivered impulse rises: a victim you send
+		# flying drops it toward body_check_restitution_floor so you drive THROUGH onto the
+		# loose puck; a victim who braces and holds their ground (brace cuts the delivered
+		# impulse) keeps the rebound near body_check_restitution, so you peel off in a
+		# battle instead of gluing to them. Keying off the delivered impulse — not the
+		# attacker's brace-independent commitment — is what ties the follow-through to the
+		# hit that actually landed. Deterministic across machines (brake_intent, masses,
+		# transfer all replicated/local), so prediction/reconcile stay consistent.
 		var restitution: float = BodyCheckRules.attacker_restitution(
-				attacker_impulse, body_check_restitution, body_check_restitution_floor,
+				delivered_impulse, body_check_restitution, body_check_restitution_floor,
 				body_check_drive_min_impulse, body_check_drive_ref_impulse)
 		velocity += normal * approach * restitution
 		# Victim-side transfer + emits only when `other` is authoritative on this
@@ -657,12 +664,12 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		# the host snapshot would overwrite anyway. The local victim's predicted
 		# push is preserved here (other.is_local_skater), and reconcile snaps it.
 		if is_host_machine or other.is_local_skater:
-			var effective_transfer: float = body_check_transfer * (other.body_check_brace_resistance if other.is_braced else 1.0)
 			var other_vel_before: Vector3 = other.velocity
-			# This delivered-impulse magnitude (approach × weight_ratio × effective_
-			# transfer) also drives the puck strip, reconstructed from impact_force in
-			# BodyCheckRules.puck_strip_impulse — keep the two in sync if this changes.
-			other.velocity -= normal * approach * weight_ratio * effective_transfer
+			# Same delivered_impulse magnitude computed above (approach × weight_ratio ×
+			# effective_transfer) — the victim's knockback. Also drives the puck strip,
+			# reconstructed from impact_force in BodyCheckRules.puck_strip_impulse; keep
+			# the two in sync if this changes.
+			other.velocity -= normal * delivered_impulse
 			var other_delta: Vector3 = other.velocity - other_vel_before
 			if other_delta.length_squared() > 0.0001:
 				other.body_check_impulse_applied.emit(other_delta)

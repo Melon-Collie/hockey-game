@@ -293,7 +293,7 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 	# hardness measure; see BodyCheckRules.puck_strip_impulse.
 	var strip_impulse: float = BodyCheckRules.puck_strip_impulse(
 			impact_force, checker.body_check_transfer,
-			victim.weight, victim.body_check_brace_resistance, victim.is_braced)
+			victim.weight, victim.body_check_brace_resistance, victim.brake_intent)
 	if strip_impulse < hit_pickup_cooldown_threshold:
 		return
 	# Hard hits temporarily deny the victim a pickup, even if they weren't carrying.

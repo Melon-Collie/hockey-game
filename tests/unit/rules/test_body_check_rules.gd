@@ -125,6 +125,36 @@ func test_restitution_honors_nonzero_floor() -> void:
 			"a full hit eases to the configured floor, not necessarily zero")
 
 
+# ── delivered_transfer_impulse ────────────────────────────────────────────────
+# The shared "how hard did it land on the victim" magnitude — closing speed × mass
+# ratio × brace-adjusted transfer — that the knockback, stagger, strip, and (the
+# point of these cases) the attacker's drive-through vs peel-off rebound all key off.
+
+func test_delivered_impulse_matches_raw_formula() -> void:
+	# approach 8 × weight_ratio 1.0 × transfer 0.45, unbraced.
+	assert_almost_eq(BodyCheckRules.delivered_transfer_impulse(8.0, 1.0, 0.45, 0.4, false),
+			3.6, 0.0001, "unbraced delivered impulse = approach × weight_ratio × transfer")
+
+func test_delivered_impulse_brace_cuts_it() -> void:
+	var open: float = BodyCheckRules.delivered_transfer_impulse(8.0, 1.0, 0.45, 0.4, false)
+	var braced: float = BodyCheckRules.delivered_transfer_impulse(8.0, 1.0, 0.45, 0.4, true)
+	assert_lt(braced, open, "a braced victim absorbs less of the hit")
+	assert_almost_eq(braced, open * 0.4, 0.0001, "brace scales the delivered impulse by brace_resistance")
+
+func test_braced_victim_makes_attacker_peel_off_not_drive_through() -> void:
+	# Regression guard for the "stuck to them" fix: the SAME committed hit (high
+	# closing speed, equal masses) into an open vs a braced victim. The open victim is
+	# sent flying → the attacker's rebound falls toward the floor (drives through onto
+	# the loose puck); the braced victim holds → the brace cuts the delivered impulse,
+	# so the attacker keeps a real rebound and peels off in a battle instead of gluing.
+	var open: float = BodyCheckRules.delivered_transfer_impulse(14.0, 1.2, 0.45, 0.4, false)
+	var braced: float = BodyCheckRules.delivered_transfer_impulse(14.0, 1.2, 0.45, 0.4, true)
+	var rebound_open: float = BodyCheckRules.attacker_restitution(open, 0.25, 0.0, 4.0, 11.0)
+	var rebound_braced: float = BodyCheckRules.attacker_restitution(braced, 0.25, 0.0, 4.0, 11.0)
+	assert_gt(rebound_braced, rebound_open, "braced victim → more attacker rebound (peel off, not drive through)")
+	assert_gt(rebound_braced, 0.0, "a braced hit leaves a real rebound so the bodies separate")
+
+
 # ── puck_strip_impulse ──────────────────────────────────────────────────────────
 # The strip decision must key off the SAME delivered impulse as the stagger, so
 # Physical (transfer), both masses, and closing speed all move it.
