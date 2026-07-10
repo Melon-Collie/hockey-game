@@ -56,3 +56,11 @@ var body_check_transfer: float = 0.45
 # braced victim's absorbed transfer by this; the AI reads it to model how hard a
 # specific OPPONENT is to knock off the puck.
 var body_check_brace: float = 0.4
+
+# How far the carrier holds/protects the puck off its body while HANDLING it —
+# the reach that sets how tight an evasion seam it can thread (best_evade_point).
+# Scaled by Hands via the real dangle lever (max_blade_speed): a faster blade
+# moves the puck further within the evasion window. (This is puck HANDLING, not
+# pass reception — reception has no Hands term in the physics.) Default is the
+# league carry-handle reach (AIActionScoring.EVADE_CARRY_HANDLE_M).
+var handle_reach: float = 0.9

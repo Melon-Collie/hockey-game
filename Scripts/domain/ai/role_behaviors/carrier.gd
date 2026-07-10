@@ -297,7 +297,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var evade_seam: Vector3 = AIActionScoring.best_evade_point(
 			cur_puck_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
-			AIActionScoring.EVADE_CARRY_HANDLE_M, _scratch_opponent_caps)
+			ctx.self_handle_reach, _scratch_opponent_caps)
 	var current_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
@@ -875,7 +875,7 @@ func _best_carry(ctx: RoleContext) -> Array:
 	# it opens is actually worth carrying to.
 	var seam: Vector3 = AIActionScoring.best_evade_point(
 			self_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
-			AIActionScoring.EVADE_CARRY_HANDLE_M, _scratch_opponent_caps)
+			ctx.self_handle_reach, _scratch_opponent_caps)
 	var seam_total: float = _score_move_candidate(ctx, seam, our_goalie)
 	if seam_total > best_score:
 		best_score = seam_total

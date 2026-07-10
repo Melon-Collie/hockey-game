@@ -759,6 +759,7 @@ var _self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # apply_capabilities runs.
 var _self_weight: float = 1.0
 var _self_body_check_transfer: float = 0.45
+var _self_handle_reach: float = 0.9
 
 # Sticky state for _carry_aim_track_fire's mode (shot-aim vs carry-
 # aim with stickhandle). Without it, when shoot vs carry scores are
@@ -938,6 +939,7 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	_self_wrister_shot_speed = caps.wrister_shot_speed
 	_self_weight = caps.weight
 	_self_body_check_transfer = caps.body_check_transfer
+	_self_handle_reach = caps.handle_reach
 
 
 # This bot's target power fraction (0..1) for a charged pass at _pass_target_speed,
@@ -1367,6 +1369,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
+	ctx.self_handle_reach = _self_handle_reach
 	ctx.self_stagger_timer = self_state.stagger_timer if self_state != null else 0.0
 	ctx.pursuit_standoff_m = _pursuit_standoff_m
 	ctx.pass_speed_scale = _pass_speed_scale

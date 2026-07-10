@@ -75,6 +75,9 @@ var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 var self_weight: float = 1.0
 var self_body_check_transfer: float = 0.45
 var self_stagger_timer: float = 0.0
+# This bot's own Hands-scaled carry-handle reach — how tight an evasion seam it
+# can thread (best_evade_point). League default when unwired.
+var self_handle_reach: float = 0.9
 
 # ── Difficulty pace knobs (from BotSkillProfile, this bot only) ───────────────
 # Set by SkaterAgentStateMachine each tick from the applied skill profile.

@@ -21,6 +21,8 @@ func test_caps_defaults_equal_league_baseline() -> void:
 	assert_almost_eq(caps.weight, 1.0, 0.001)
 	assert_almost_eq(caps.body_check_transfer, 0.45, 0.001)
 	assert_almost_eq(caps.body_check_brace, 0.4, 0.001)
+	assert_almost_eq(caps.handle_reach, AIActionScoring.EVADE_CARRY_HANDLE_M, 0.001,
+			"handle reach defaults to the league carry-handle reach")
 
 
 func test_role_context_self_speeds_default_to_baseline() -> void:
