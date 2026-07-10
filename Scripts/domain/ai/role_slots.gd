@@ -7,21 +7,26 @@ class_name AIRoleSlots
 # already in the right place gets the role, which means roles tend
 # to "stick" naturally as long as nothing geometric reshuffles.
 #
-# DZONE uses {PRESSURE, ANCHOR, COVER}: classic in-zone defensive
-# triumvirate — pressurer on the carrier, net-front anchor, weak-
-# side cover. ANCHOR + COVER are partitioned across the carrier's
-# receivers by TeamBrain's threat assignment (a distinct man each).
+# DZONE uses {PRESSURE, MARK×2}: one pressurer on the carrier, two
+# man-markers. The two MARKs are partitioned across the carrier's
+# receivers by TeamBrain's threat assignment (a distinct man each) —
+# which marker sits net-front vs. weak-side is emergent from WHICH man
+# the optimal matcher hands each, not a fixed slot.
 #
-# TRANS_OD uses {CONTAIN, BACKCHECK×2}: defending a rush, CONTAIN plays
+# TRANS_OD uses {CONTAIN, MARK×2}: defending a rush, CONTAIN plays
 # gap control on the carrier (stay goal-side, hold a controlled gap,
 # don't lunge) and goes to the peer best placed to step up — the one
 # CLOSEST to the carrier that's already goal-side (deepest peer as a
-# caught-up-ice fallback). The other two BACKCHECK home to pick up the
+# caught-up-ice fallback). The other two MARK home to pick up the
 # carrier's receivers (a distinct man each, same threat partition). This
-# is the 3v3 "one contains, two backcheck through" structure: exactly
-# ONE peer engages the carrier. Replaces the old PRESSURE+BACKCHECK+
-# CONTAIN triad, where TWO peers engaged the carrier forward (overcommit
-# / bad angle / breakaways) and the backchecker raced to an empty spot.
+# is the 3v3 "one contains, two mark through" structure: exactly ONE
+# peer engages the carrier. Replaces the old PRESSURE+BACKCHECK+CONTAIN
+# triad, where TWO peers engaged the carrier forward (overcommit / bad
+# angle / breakaways) and the backchecker raced to an empty spot.
+#
+# MARK unifies the old DZONE ANCHOR/COVER and TRANS_OD BACKCHECK, which
+# had converged to identical man-marking in the assigned-man path (see
+# AIRoleMark) — one off-puck-marker role, one behavior, in both states.
 #
 # OZONE replaces OUTLET with SUPPORT; OUTLET stays a TRANS_DO-only
 # role. BACKDOOR was renamed to FINISHER (more descriptive of the
@@ -35,16 +40,14 @@ enum Slot {
 	NONE,
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
-	# Defensive: PRESSURE is DZONE (close the carrier; also reused as
-	# FORECHECK's F1). ANCHOR + COVER are DZONE-only (net-front + weak-
-	# side, each covering an assigned man). BACKCHECK + CONTAIN are
-	# TRANS_OD-only — CONTAIN is the closest goal-side peer gap-controlling
-	# the carrier, BACKCHECK the two sprinting home to cover a man each.
+	# Defensive: PRESSURE closes the carrier in DZONE (also reused as
+	# FORECHECK's F1). CONTAIN is TRANS_OD's single carrier-engager (the
+	# closest goal-side peer gap-controlling the carrier). MARK is the
+	# off-puck man-marker shared by DZONE and TRANS_OD — the defenders NOT
+	# on the puck each cover a distinct assigned opponent (threat partition).
 	# NEUTRAL has no carrier and uses CHASE + FLANK_L + FLANK_R below.
 	PRESSURE,   # DZONE: puck pressurer, closes the carrier.
-	ANCHOR,     # DZONE: net-front; covers an assigned man (threat partition).
-	COVER,      # DZONE: weak-side; covers an assigned man (threat partition).
-	BACKCHECK,  # TRANS_OD: sprints home to cover an assigned receiver.
+	MARK,       # DZONE + TRANS_OD: covers an assigned man (threat partition).
 	CONTAIN,    # TRANS_OD: closest goal-side peer; gap control on the carrier.
 	# Offensive roles.
 	FINISHER,   # OZONE: scoring threat near opp net. Roams the slot.
@@ -73,8 +76,8 @@ enum Slot {
 # in tight space, suppressing the role flex that good 3v3 demands.
 const HYSTERESIS_PENALTY_M: float = 1.0
 
-# DZONE: PRESSURE, ANCHOR, COVER all own their positional targets
-# in their role behaviors. No DZONE-specific anchor constants left.
+# DZONE: PRESSURE + MARK own their positional targets in their
+# role behaviors. No DZONE-specific anchor constants left.
 
 # OZONE: FINISHER + SUPPORT now compute their own targets in their
 # role modules (Step 2 of the no-anchors refactor). Anchor formulas
@@ -84,11 +87,11 @@ const HYSTERESIS_PENALTY_M: float = 1.0
 # TRANS_DO: OUTLET + SUPPORT also own their own targets — anchor
 # formulas deleted.
 
-# TRANS_OD: PRESSURE, ANCHOR, COVER all own their positional
+# TRANS_OD: CONTAIN + MARK own their positional
 # targets in their role behaviors. No TRANS_OD-specific anchor
 # constants left.
 
-# NEUTRAL: 1 PRESSURE + N COVERs. Roles own their positional
+# NEUTRAL: CHASE + FLANK_L/R. Roles own their positional
 # targets — no NEUTRAL-specific anchor constants.
 
 
@@ -98,7 +101,7 @@ const HYSTERESIS_PENALTY_M: float = 1.0
 static func slots_for_state(state: int) -> Array[int]:
 	match state:
 		AIPossessionState.State.DZONE:
-			return [Slot.PRESSURE, Slot.ANCHOR, Slot.COVER]
+			return [Slot.PRESSURE, Slot.MARK]
 		AIPossessionState.State.OZONE:
 			return [Slot.CARRIER, Slot.FINISHER, Slot.SUPPORT]
 		AIPossessionState.State.TRANS_DO:
@@ -108,7 +111,7 @@ static func slots_for_state(state: int) -> Array[int]:
 		AIPossessionState.State.FORECHECK:
 			return [Slot.F1_PRESSURE, Slot.F2_MID, Slot.F3_HIGH]
 		AIPossessionState.State.TRANS_OD:
-			return [Slot.CONTAIN, Slot.BACKCHECK]
+			return [Slot.CONTAIN, Slot.MARK]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
@@ -128,17 +131,17 @@ static func slot_anchor(slot: Slot, carrier_pos: Vector3) -> Vector3:
 # Assigns each teammate to a slot. Returns Dictionary[peer_id, Slot].
 #
 # Per-state semantic-query assignment:
-#   DZONE     PRESSURE = closest to puck;  ANCHOR = closest to our net;  COVER = remaining
+#   DZONE     PRESSURE = closest to puck;  MARK = remaining two (a man each)
 #   OZONE     CARRIER fixed;  FINISHER = closest to opp net;  SUPPORT = remaining
 #   TRANS_DO  CARRIER fixed;  OUTLET = closest to opp net;  SUPPORT = remaining
 #   TRANS_OD  CONTAIN = closest-to-carrier goal-side peer (deepest fallback);
-#             BACKCHECK = the remaining two (sprint home, cover a man each)
+#             MARK = the remaining two (sprint home, cover a man each)
 #   NEUTRAL   CHASE = closest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
-# TRANS_OD encodes the 3v3 "one contains, two backcheck through"
+# TRANS_OD encodes the 3v3 "one contains, two mark through"
 # read: CONTAIN goes to the peer best placed to gap the carrier — the
 # closest one that's goal-side (between carrier and our net) — and the
-# other two BACKCHECK home to pick up the carrier's receivers (a distinct
+# other two MARK home to pick up the carrier's receivers (a distinct
 # man each, via TeamBrain's threat partition). Exactly one peer engages
 # the carrier — no double-team.
 #
@@ -184,11 +187,14 @@ static func assign(
 
 	match state:
 		AIPossessionState.State.DZONE:
-			_assign_pair_then_remainder(
+			# PRESSURE = closest to the puck; the other two MARK a man each.
+			# Which marker ends up net-front vs. weak-side is decided by
+			# TeamBrain's threat partition (which man each is assigned), not a
+			# fixed net-front/weak-side slot split.
+			_assign_one_then_remainder(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
 					Slot.PRESSURE, puck_pos,
-					Slot.ANCHOR, our_net,
-					Slot.COVER)
+					Slot.MARK)
 
 		AIPossessionState.State.TRANS_OD:
 			# Defending a rush: CONTAIN gap-controls the carrier — stay
@@ -196,13 +202,13 @@ static func assign(
 			# best placed to step up: the CLOSEST to the carrier that's already
 			# goal-side (between the carrier and our net), with a fallback to the
 			# deepest peer when everyone's caught up-ice (they recover into the
-			# gap fastest). The other two are BACKCHECK: they sprint home and
-			# pick up the carrier's receivers (a distinct man each, via
-			# TeamBrain's threat partition). Replaces the old
-			# PRESSURE+BACKCHECK+CONTAIN triad, where TWO peers engaged the
-			# carrier forward (overcommit / bad angle / breakaways) and the
-			# backchecker raced to an empty slot point instead of a man.
-			_assign_gap_then_backcheck(
+			# gap fastest). The other two MARK: they sprint home and pick up
+			# the carrier's receivers (a distinct man each, via TeamBrain's
+			# threat partition). Replaces the old PRESSURE+BACKCHECK+CONTAIN
+			# triad, where TWO peers engaged the carrier forward (overcommit /
+			# bad angle / breakaways) and the backchecker raced to an empty slot
+			# point instead of a man.
+			_assign_gap_then_mark(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
 					puck_pos, our_net)
 
@@ -319,8 +325,8 @@ static func _assign_pair_then_remainder(
 
 
 # TRANS_OD: CONTAIN to the gap defender (see _pick_gap_defender), remainder to
-# BACKCHECK. Exactly one peer engages the carrier; the rest sprint home to a man.
-static func _assign_gap_then_backcheck(
+# MARK. Exactly one peer engages the carrier; the rest sprint home to a man.
+static func _assign_gap_then_mark(
 		snapshot: WorldSnapshot,
 		teammates: Array,
 		fixed_peers: Dictionary,
@@ -336,7 +342,7 @@ static func _assign_gap_then_backcheck(
 
 	for pid: int in teammates:
 		if not fixed_peers.has(pid):
-			result[pid] = Slot.BACKCHECK
+			result[pid] = Slot.MARK
 
 
 # Picks the gap-control defender for TRANS_OD: the peer CLOSEST to the carrier

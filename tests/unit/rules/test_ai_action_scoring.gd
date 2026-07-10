@@ -776,11 +776,11 @@ func test_pass_launch_speed_short_feed_hits_the_magnet_pace() -> void:
 	# distance is negligible) — crisp, not the old floaty ~11 m/s touch.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 	assert_almost_eq(AIActionScoring.pass_launch_speed(0.0, maxw),
-			AIActionScoring.PASS_TARGET_ARRIVAL_M_S, 0.001)
+			AIActionScoring.PASS_TARGET_CLOSING_M_S, 0.001)
 	assert_lt(absf(AIActionScoring.pass_launch_speed(2.0, maxw)
-			- AIActionScoring.PASS_TARGET_ARRIVAL_M_S), 0.1,
+			- AIActionScoring.PASS_TARGET_CLOSING_M_S), 0.1,
 			"a 2 m feed launches within a whisker of the magnet pace")
-	assert_gt(AIActionScoring.PASS_TARGET_ARRIVAL_M_S, AIActionScoring.PASS_SPEED_M_S,
+	assert_gt(AIActionScoring.PASS_TARGET_CLOSING_M_S, AIActionScoring.PASS_SPEED_M_S,
 			"the magnet pace is crisper than the old quick-snap speed")
 
 
@@ -792,7 +792,7 @@ func test_pass_launch_speed_arrives_at_the_target_after_friction() -> void:
 		var launch: float = AIActionScoring.pass_launch_speed(d, maxw)
 		var arrival: float = sqrt(maxf(
 				launch * launch - 2.0 * GameRules.PUCK_ICE_DECEL_M_S2 * d, 0.0))
-		assert_almost_eq(arrival, AIActionScoring.PASS_TARGET_ARRIVAL_M_S, 0.001,
+		assert_almost_eq(arrival, AIActionScoring.PASS_TARGET_CLOSING_M_S, 0.001,
 				"a %.0f m pass arrives at the magnet pace" % d)
 
 
@@ -803,7 +803,7 @@ func test_pass_launch_speed_rises_slightly_with_distance() -> void:
 	var near: float = AIActionScoring.pass_launch_speed(4.0, maxw)
 	var far: float = AIActionScoring.pass_launch_speed(26.0, maxw)
 	assert_gt(far, near, "a longer pass launches marginally harder (more friction)")
-	assert_lt(far - AIActionScoring.PASS_TARGET_ARRIVAL_M_S, 1.0,
+	assert_lt(far - AIActionScoring.PASS_TARGET_CLOSING_M_S, 1.0,
 			"even a long pass launches within 1 m/s of the magnet target")
 
 
@@ -840,8 +840,42 @@ func test_pass_speed_scale_slows_the_puck_below_the_magnet_pace() -> void:
 	var full: float = AIActionScoring.pass_launch_speed(4.0, maxw, 1.0)
 	var slowed: float = AIActionScoring.pass_launch_speed(4.0, maxw, 0.7)
 	assert_almost_eq(slowed, full * 0.7, 0.001)
-	assert_lt(slowed, AIActionScoring.PASS_TARGET_ARRIVAL_M_S,
+	assert_lt(slowed, AIActionScoring.PASS_TARGET_CLOSING_M_S,
 			"a scaled pass is slower than the magnet pace")
+
+
+func test_pass_launch_speed_fires_harder_onto_a_streaking_receiver() -> void:
+	# Receiver-relative launch (#373): a receiver skating ALONG the pass (onto a
+	# lead feed) closes slower on the puck, so the passer fires harder to keep the
+	# closing pace; one curling BACK toward the passer closes faster, so softer.
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	var dist: float = 15.0
+	var pass_dir := Vector3(1, 0, 0)
+	var static_launch: float = AIActionScoring.pass_launch_speed(dist, maxw)
+	var streaking: float = AIActionScoring.pass_launch_speed(
+			dist, maxw, 1.0, Vector3(6, 0, 0), pass_dir)
+	var curling_back: float = AIActionScoring.pass_launch_speed(
+			dist, maxw, 1.0, Vector3(-6, 0, 0), pass_dir)
+	assert_gt(streaking, static_launch,
+			"fire harder onto a receiver skating away along the pass")
+	assert_lt(curling_back, static_launch,
+			"softer to a receiver curling back toward the passer")
+
+
+func test_pass_launch_speed_lands_at_target_closing_in_receiver_frame() -> void:
+	# The whole point: after friction, the puck's speed in the receiver's frame is
+	# the magnet CLOSING pace regardless of the receiver's (along + lateral) motion.
+	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	var dist: float = 12.0
+	var pass_dir := Vector3(1, 0, 0)
+	var rvel := Vector3(5, 0, 3)   # along + lateral, both under the target
+	var launch: float = AIActionScoring.pass_launch_speed(dist, maxw, 1.0, rvel, pass_dir)
+	# Reconstruct the world arrival velocity after shedding friction over the pass.
+	var arrival_world: float = sqrt(maxf(
+			launch * launch - 2.0 * GameRules.PUCK_ICE_DECEL_M_S2 * dist, 0.0))
+	var closing: float = (pass_dir * arrival_world - rvel).length()
+	assert_almost_eq(closing, AIActionScoring.PASS_TARGET_CLOSING_M_S, 0.1,
+			"the puck lands at the target closing speed in the receiver's frame")
 
 
 # ─── score_pass: speed-aware lane clearance ─────────────────────────────

@@ -504,9 +504,17 @@ func _pick_action(ctx: RoleContext) -> void:
 			# from the one charged release, capped at this bot's own max wrister.
 			var receiver: SkaterNetworkState = ctx.snapshot.skater_states.get(best_pass_peer)
 			if receiver != null:
+				# Receiver-relative launch: fire so the puck lands on the tape at
+				# the magnet CLOSING speed in the receiver's frame (#373) — harder
+				# onto a streaking receiver, softer to one curling back — not a
+				# fixed world speed that arrives hot or soft depending on his motion.
+				var to_receiver: Vector3 = receiver.position - ctx.self_pos
+				to_receiver.y = 0.0
+				var pass_dir: Vector3 = to_receiver.normalized()
 				pass_target_speed = AIActionScoring.pass_launch_speed(
 						ctx.self_pos.distance_to(receiver.position),
-						ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
+						ctx.self_wrister_shot_speed, ctx.pass_speed_scale,
+						receiver.velocity, pass_dir)
 			else:
 				pass_target_speed = AIActionScoring.PASS_SPEED_M_S * ctx.pass_speed_scale
 			pass_should_charge = true

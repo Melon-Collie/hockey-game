@@ -7,7 +7,7 @@ class_name AIRoleForecheck
 #
 #   F2 (is_high = false) — mid-lane read, AGGRESSIVE. Sits in the zone
 #     and takes away the most dangerous breakout PASS the carrier could
-#     make to a teammate. Inverse pass-threat scoring (mirror of COVER),
+#     make to a teammate. Inverse pass-threat scoring, over a
 #     search region biased toward the opp blue line (the breakout
 #     lanes). Stays IN the zone — that's the forecheck; sagging out
 #     would concede it.
@@ -21,7 +21,7 @@ class_name AIRoleForecheck
 # stays in the zone — and keeping it in the zone IS the goal. So F1 and
 # F2 press freely with no offside concern; there's no penalty for being
 # deep here. If the forecheck fails and the puck leaves the zone, the
-# possession state flips to TRANS_OD, whose BACKCHECK/CONTAIN pull
+# possession state flips to TRANS_OD, whose MARK/CONTAIN pull
 # everyone home — any brief delayed-offside ghost self-clears on that
 # retreat (tag up at the line, re-engage). The risk is accepted, not
 # avoided: keeping possession in their end is worth a few bots being
@@ -80,7 +80,7 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 	# We're defending OUR net, but F2's job is to deny the opp's BREAKOUT
 	# pass — a pass that heads toward OUR net / out of their zone. The
 	# threat we minimize is the carrier feeding a teammate up-ice. Score
-	# the same inverse-pass-threat surface COVER uses, with our team (+
+	# the same inverse-pass-threat surface (threat_surface_pass), with our team (+
 	# our candidate) as the defenders, evaluated toward our net.
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
@@ -136,7 +136,7 @@ static func _mid_search_center(ctx: RoleContext, carrier_pos: Vector3) -> Vector
 
 # Highest pass-threat surface the carrier could exploit to any teammate,
 # with our hypothetical defender at `candidate` added to the carrier's
-# "opponents" list. Same primitive COVER uses.
+# "opponents" list. Same primitive PRESSURE uses.
 static func _max_pass_threat(
 		candidate: Vector3,
 		carrier_pos: Vector3,

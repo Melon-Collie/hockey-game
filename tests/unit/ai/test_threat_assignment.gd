@@ -147,6 +147,79 @@ func test_empty_inputs_yield_empty() -> void:
 			0, "no men → empty")
 
 
+# ── Net-front (house) override ─────────────────────────────────────────────
+
+func test_house_override_covers_a_man_pure_matching_would_concede() -> void:
+	# Odd-man: 2 defenders, 3 men. Man 10 is a lethal backdoor (high finish
+	# danger) but a LOW pass value (contested feed lane). Men 20/30 are higher
+	# pass value. Pure value×reach concedes the backdoor; the override pins it.
+	var defenders: Array[int] = [1, 2]
+	var men: Array[int] = [10, 20, 30]
+	var dpos: Dictionary = {1: Vector3(0, 0, 20), 2: Vector3(0, 0, 20)}
+	var mpos: Dictionary = {
+		10: Vector3(0, 0, 25),    # backdoor, right on the net
+		20: Vector3(5, 0, 18),
+		30: Vector3(-5, 0, 18),
+	}
+	var mval: Dictionary = {10: 0.2, 20: 0.8, 30: 0.7}
+
+	# Baseline (no danger supplied): backdoor 10 is conceded.
+	var base: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), men, mpos, mval, OUR_NET, {})
+	assert_false(base.values().has(10),
+			"without the override, the low-value backdoor is conceded")
+
+	# With finish danger on 10 above the bar: it's covered regardless.
+	var mdanger: Dictionary = {10: 0.9, 20: 0.1, 30: 0.1}
+	var out: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), men, mpos, mval, OUR_NET, {}, {}, mdanger)
+	assert_true(out.values().has(10),
+			"the net-front override covers the lethal backdoor man")
+	assert_true(out.values().has(20),
+			"the remaining defender still takes the higher-value perimeter man (20)")
+	assert_false(out.values().has(30),
+			"the lower-value perimeter man (30) is the one conceded now")
+
+
+func test_house_override_off_below_the_danger_bar() -> void:
+	# Same geometry, but no man clears NET_FRONT_DANGER_BAR → the override is a
+	# no-op and the result matches pure value×reach matching.
+	var defenders: Array[int] = [1, 2]
+	var men: Array[int] = [10, 20]
+	var dpos: Dictionary = {1: Vector3(0, 0, 17), 2: Vector3(0, 0, 0)}
+	var mpos: Dictionary = {10: Vector3(-4, 0, 19), 20: Vector3(4, 0, 19)}
+	var mval: Dictionary = {10: 0.1, 20: 0.9}
+	var low_danger: Dictionary = {10: 0.2, 20: 0.3}   # both under 0.45
+	var out: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), men, mpos, mval, OUR_NET, {}, {}, low_danger)
+	assert_eq(out[1], 20, "below the bar, the close defender still takes the high-value man")
+	assert_eq(out[2], 10, "below the bar, the far defender takes the cheap man")
+
+
+func test_house_marker_is_sticky_across_ticks() -> void:
+	# House man 10 (lethal). Defender 1 is closer to his anchor than 2, so a
+	# FRESH pin picks 1. But if 2 covered him last tick, the pin stays on 2 —
+	# no thrash over which body owns the net-front.
+	var defenders: Array[int] = [1, 2]
+	var men: Array[int] = [10, 20]
+	var dpos: Dictionary = {1: Vector3(0, 0, 24), 2: Vector3(0, 0, 8)}
+	var mpos: Dictionary = {10: Vector3(0, 0, 25), 20: Vector3(6, 0, 16)}
+	var mval: Dictionary = {10: 0.3, 20: 0.5}
+	var mdanger: Dictionary = {10: 0.9, 20: 0.1}
+
+	# Fresh (no prev): the closer defender (1) is pinned to the house man.
+	var fresh: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), men, mpos, mval, OUR_NET, {}, {}, mdanger)
+	assert_eq(fresh[1], 10, "fresh pin picks the defender who reaches the net-front soonest")
+
+	# Incumbent 2 held the house last tick → it keeps him despite 1 being closer.
+	var prev: Dictionary = {2: 10, 1: 20}
+	var sticky: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), men, mpos, mval, OUR_NET, prev, {}, mdanger)
+	assert_eq(sticky[2], 10, "the incumbent keeps the net-front man (sticky)")
+	assert_eq(sticky[1], 20, "the other defender takes the remaining man")
+
+
 # ── Cover anchor geometry ──────────────────────────────────────────────────
 
 func test_cover_anchor_is_goal_side_of_man() -> void:

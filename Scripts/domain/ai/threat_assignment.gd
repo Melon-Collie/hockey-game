@@ -50,6 +50,26 @@ const COVER_DEPTH_M: float = 2.2
 # that a genuine threat change re-partitions.
 const HYSTERESIS_MARGIN_FRAC: float = 0.15
 
+# ── Net-front (house) override ───────────────────────────────────────────────
+# The value×reachability matching maximizes EXPECTED covered pass-threat, so it
+# can trade an unreachable-but-lethal net-front man for two reachable perimeter
+# men — leaving the house open. Defense doesn't work that way: conceding a
+# backdoor tap-in is categorically worse than conceding a perimeter shot, so
+# whoever can best get to the most dangerous net-front man is pinned to him
+# FIRST, then the rest optimally match. This is a tactical priority ("protect
+# the house"), but the trigger is a real measurement: a man's FINISH danger if
+# fed — score_shoot from his spot with the goalie where he currently is
+# (tracking the carrier, not this off-puck man), so an off-axis net-front man
+# reads as lethal because the net is open to his side. The lane factor is
+# dropped on purpose: a contested feed still becomes a tap-in if it arrives, so
+# the house is covered by consequence, not by feed-likelihood (that's what makes
+# this add something over man_value, which already folds the lane in).
+#
+# The bar is the finish-danger floor that counts as a genuine house threat —
+# below it, trust the efficiency matching. score_shoot returns 0..1; a real
+# net-front look past a carrier-tracking goalie sits well above this.
+const NET_FRONT_DANGER_BAR: float = 0.45
+
 
 # Returns Dictionary[int, int]: defender_peer_id -> assigned man (opponent)
 # peer_id. Defenders left without a man (more defenders than men) are omitted.
@@ -60,6 +80,8 @@ const HYSTERESIS_MARGIN_FRAC: float = 0.15
 # AIActionScoring so this module stays free of scoring-magnitude coupling).
 # `our_net` anchors the goal-side cover point. `prev` is last tick's
 # defender->man mapping (pass {} on first tick / after a state change).
+# `man_danger` is peer_id -> finish danger if fed (score_shoot from the man's
+# spot); drives the net-front override (empty → override off, pure matching).
 static func assign(
 		defenders: Array[int],
 		defender_pos: Dictionary,
@@ -69,14 +91,36 @@ static func assign(
 		man_value: Dictionary,
 		our_net: Vector3,
 		prev: Dictionary,
-		defender_caps: Dictionary = {}) -> Dictionary[int, int]:
+		defender_caps: Dictionary = {},
+		man_danger: Dictionary = {}) -> Dictionary[int, int]:
 	var result: Dictionary[int, int] = {}
 	if defenders.is_empty() or men.is_empty():
 		return result
 
+	# ── Net-front override: pin the house before the efficiency matching. ──
+	# Whoever can best get to the most dangerous net-front man covers him, then
+	# the remaining defenders optimally match the remaining men. This can't be
+	# folded into the matching reward: a value large enough to guarantee house
+	# coverage would swamp the relative-margin hysteresis and freeze the
+	# perimeter, so the house is a separate pin and the matching runs on the rest.
+	var open_defenders: Array[int] = defenders
+	var open_men: Array[int] = men
+	var house_man: int = _most_dangerous_house_man(men, man_danger)
+	if house_man != -1:
+		var house_def: int = _pick_house_defender(
+				defenders, defender_pos, defender_vel, defender_caps,
+				man_pos.get(house_man, Vector3.ZERO), house_man, our_net, prev)
+		if house_def != -1:
+			result[house_def] = house_man
+			open_defenders = _without(defenders, house_def)
+			open_men = _without(men, house_man)
+
+	if open_defenders.is_empty() or open_men.is_empty():
+		return result
+
 	# reward[d] = { man_peer: reward_value }
 	var reward: Dictionary = {}
-	for d: int in defenders:
+	for d: int in open_defenders:
 		var d_pos: Vector3 = defender_pos.get(d, Vector3.ZERO)
 		var d_vel: Vector3 = defender_vel.get(d, Vector3.ZERO)
 		# This defender covers at ITS real top speed (Speed) — a fast defender
@@ -85,33 +129,105 @@ static func assign(
 		var d_speed: float = d_caps.max_speed if d_caps != null \
 				else AIActionScoring.SKATER_REF_SPEED_M_S
 		var row: Dictionary = {}
-		for m: int in men:
+		for m: int in open_men:
 			var anchor: Vector3 = cover_anchor(man_pos.get(m, Vector3.ZERO), our_net)
 			var t: float = AIActionScoring.time_to_arrive(d_pos, anchor, d_vel, d_speed)
 			var reach: float = 1.0 / (1.0 + maxf(t, 0.0))
 			row[m] = maxf(man_value.get(m, 0.0), 0.0) * reach
 		reward[d] = row
 
-	var best: Array = _best_matching(0, defenders, men, {}, reward)
+	var best: Array = _best_matching(0, open_defenders, open_men, {}, reward)
 	var best_reward: float = best[0]
 	var best_map: Dictionary = best[1]
 
-	# Hysteresis: retain prev if it's still a valid matching of the current
-	# defenders/men and the fresh best doesn't beat it by the margin.
-	var prev_reward: float = _matching_reward(prev, reward)
+	# Hysteresis: retain prev (restricted to the still-open defenders/men) if
+	# it's still a valid matching and the fresh best doesn't beat it by the
+	# margin. The house pin is excluded — its stickiness lives in
+	# _pick_house_defender — so a stable house doesn't freeze the perimeter.
+	var prev_open: Dictionary = _restrict_prev(prev, reward)
+	var prev_reward: float = _matching_reward(prev_open, reward)
 	if prev_reward >= 0.0 \
 			and best_reward <= prev_reward * (1.0 + HYSTERESIS_MARGIN_FRAC):
-		# Re-key prev into a typed result, dropping any stale entries.
-		for d: int in prev:
-			var m: int = prev[d]
-			if reward.has(d) and reward[d].has(m):
-				result[d] = m
-		if not result.is_empty():
+		var kept_any: bool = false
+		for d: int in prev_open:
+			result[d] = prev_open[d]
+			kept_any = true
+		if kept_any:
 			return result
 
 	for d: int in best_map:
 		result[d] = best_map[d]
 	return result
+
+
+# The men peer with the highest finish danger, if it clears NET_FRONT_DANGER_BAR
+# — the net-front man defense must not leave open. -1 when no man is a genuine
+# house threat (or man_danger wasn't supplied), which disables the override.
+static func _most_dangerous_house_man(men: Array[int], man_danger: Dictionary) -> int:
+	var best_man: int = -1
+	var best_danger: float = NET_FRONT_DANGER_BAR
+	for m: int in men:
+		var danger: float = man_danger.get(m, 0.0)
+		if danger >= best_danger:
+			# >= with a rising floor: ties resolve to the lower peer id
+			# (deterministic) since a strictly-greater danger is needed to switch.
+			if danger > best_danger or best_man == -1:
+				best_danger = danger
+				best_man = m
+	return best_man
+
+
+# The defender pinned to the house man. Sticky: the defender that covered him
+# last tick keeps him (no thrash on which body takes the net-front). With no
+# incumbent (new threat / just entered the state), the defender that can reach
+# his goal-side cover anchor soonest — a real reachability read, each at its own
+# top speed.
+static func _pick_house_defender(
+		defenders: Array[int],
+		defender_pos: Dictionary,
+		defender_vel: Dictionary,
+		defender_caps: Dictionary,
+		house_man_pos: Vector3,
+		house_man: int,
+		our_net: Vector3,
+		prev: Dictionary) -> int:
+	for d: int in defenders:
+		if prev.get(d, -1) == house_man:
+			return d
+	var anchor: Vector3 = cover_anchor(house_man_pos, our_net)
+	var best_def: int = -1
+	var best_t: float = INF
+	for d: int in defenders:
+		var d_caps: AISkaterCaps = defender_caps.get(d)
+		var d_speed: float = d_caps.max_speed if d_caps != null \
+				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var t: float = AIActionScoring.time_to_arrive(
+				defender_pos.get(d, Vector3.ZERO), anchor,
+				defender_vel.get(d, Vector3.ZERO), d_speed)
+		if t < best_t or (t == best_t and (best_def == -1 or d < best_def)):
+			best_t = t
+			best_def = d
+	return best_def
+
+
+# Typed copy of `arr` with `exclude` removed.
+static func _without(arr: Array[int], exclude: int) -> Array[int]:
+	var out: Array[int] = []
+	for v: int in arr:
+		if v != exclude:
+			out.append(v)
+	return out
+
+
+# prev entries whose defender AND man both survive in the current reward table —
+# i.e. the previous matching restricted to the still-open (post-pin) sets.
+static func _restrict_prev(prev: Dictionary, reward: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for d: int in prev:
+		var m: int = prev[d]
+		if reward.has(d) and (reward[d] as Dictionary).has(m):
+			out[d] = m
+	return out
 
 
 # Goal-side cover point for a man: a stick into the man→our-net lane. Clamped

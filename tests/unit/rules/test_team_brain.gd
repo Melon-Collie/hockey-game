@@ -80,9 +80,9 @@ func test_natural_cadence_resumes_after_forced_tick() -> void:
 # ── Man-on-threat partition (DZONE) ──────────────────────────────────────────
 
 # 3-on-3 in our DZONE: opp carrier (200) deep with two receivers (210, 220);
-# our three (100/110/120) fill PRESSURE/ANCHOR/COVER. The backline (ANCHOR +
-# COVER) should be partitioned across the two NON-carrier opponents — distinct
-# men, neither assigned the carrier, and PRESSURE left unassigned.
+# our three (100/110/120) fill PRESSURE + MARK×2. The two MARKs should be
+# partitioned across the two NON-carrier opponents — distinct men, neither
+# assigned the carrier, and PRESSURE left unassigned.
 func _make_dzone_3v3() -> WorldSnapshot:
 	var snap := WorldSnapshot.new()
 	for entry: Array in [
@@ -113,7 +113,7 @@ func test_threat_partition_assigns_distinct_men() -> void:
 	brain.tick(0.001, _make_dzone_3v3())
 	assert_eq(brain.state, AIPossessionState.State.DZONE, "opp carrier deep → DZONE")
 
-	# Exactly the two backline defenders (ANCHOR + COVER) get a man.
+	# Exactly the two MARK defenders get a man.
 	assert_eq(brain.threat_assignments.size(), 2,
 			"two backline defenders are assigned; got %s" % str(brain.threat_assignments))
 	var men: Array = brain.threat_assignments.values()
@@ -125,8 +125,8 @@ func test_threat_partition_assigns_distinct_men() -> void:
 	# The covered defenders are exactly the non-PRESSURE backline peers.
 	for pid: int in brain.threat_assignments:
 		var slot: int = brain.get_slot(pid)
-		assert_true(slot == AIRoleSlots.Slot.ANCHOR or slot == AIRoleSlots.Slot.COVER,
-				"assigned peer %d is ANCHOR/COVER, got slot %d" % [pid, slot])
+		assert_eq(slot, AIRoleSlots.Slot.MARK,
+				"assigned peer %d is MARK, got slot %d" % [pid, slot])
 
 
 func test_threat_partition_cleared_when_we_possess() -> void:

@@ -158,20 +158,25 @@ const ACCEL_CLAMP_M_S2: float = 14.0
 
 # A loose puck above this speed is a live pass / stripped puck (not a puck to just
 # skate onto): the chase AIMS the blade along its flight line rather than at a fixed
-# intercept point, so the stick stays on the puck's path. NOT a "soft-hands" cushion
-# — the catch is decided purely by blade squareness + the puck's absolute speed
-# (PuckReceptionRules; a moving blade catches exactly like a static one), so there's
-# no approach-speed term. Cleanly collecting a fast puck is about the blade ANGLE
-# (see _pass_receive_aim_and_steer, which squares up), not the closing speed.
+# intercept point, so the stick stays on the puck's path. The catch is decided by
+# blade squareness + the puck's RELATIVE speed — its speed in the RECEIVER'S frame
+# (puck − skater velocity; #373), the blade's own velocity still ignored. The bot
+# collects a fast puck by settling square on the line (see _pass_receive_aim_and_steer):
+# the arrival brake drops its own velocity to ~0 at contact, so relative ≈ world
+# there and squaring the blade is what collects it. Actively GIVING with the puck
+# (retreating to cut the closing speed under the catch ceiling) is a skating read the
+# relative model now allows but the bot doesn't yet exploit.
 const LOOSE_PUCK_TRACK_SPEED_M_S: float = 8.0
 
 # Pass-receive setup. When a fast loose puck (~pass) is heading near
 # us along a straight trajectory, we stand offset to the SIDE of the
 # puck's path so the stick spans perpendicular to the puck's velocity,
-# putting the blade face square to the incoming puck. That maximizes
-# PuckReceptionRules' alignment bonus (+8 m/s deflect tolerance at
-# perfect head-on), letting bots catch hard passes that would
-# otherwise bounce. See _pass_receive_aim_and_steer.
+# putting the blade face square to the incoming line. Squaring is judged
+# in the RECEIVER's frame (#373), but the arrival brake settles the bot
+# to ~zero velocity at contact, so its frame ≈ the world frame there and
+# squaring to the world line is correct. That maximizes PuckReceptionRules'
+# alignment bonus (up to +8 m/s at head-on), letting bots collect hard
+# feeds that would otherwise bounce. See _pass_receive_aim_and_steer.
 #
 # Trigger threshold matches the deflect threshold: anything slower
 # bot can collect at any angle, so the angle-optimal setup is
@@ -1151,12 +1156,8 @@ func _slot_label(slot: int) -> String:
 			return "Carrier"
 		AIRoleSlots.Slot.PRESSURE:
 			return "Pressure"
-		AIRoleSlots.Slot.ANCHOR:
-			return "Anchor"
-		AIRoleSlots.Slot.COVER:
-			return "Cover"
-		AIRoleSlots.Slot.BACKCHECK:
-			return "Backcheck"
+		AIRoleSlots.Slot.MARK:
+			return "Mark"
 		AIRoleSlots.Slot.CONTAIN:
 			return "Contain"
 		AIRoleSlots.Slot.FINISHER:
@@ -1468,12 +1469,8 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			return AIRoleForecheck.decide(ctx, true)
 		AIRoleSlots.Slot.PRESSURE:
 			return AIRolePressure.decide(ctx)
-		AIRoleSlots.Slot.ANCHOR:
-			return AIRoleAnchor.decide(ctx)
-		AIRoleSlots.Slot.COVER:
-			return AIRoleCover.decide(ctx)
-		AIRoleSlots.Slot.BACKCHECK:
-			return AIRoleBackcheck.decide(ctx)
+		AIRoleSlots.Slot.MARK:
+			return AIRoleMark.decide(ctx)
 		AIRoleSlots.Slot.CONTAIN:
 			return AIRoleContain.decide(ctx)
 		AIRoleSlots.Slot.CHASE:
@@ -1643,10 +1640,12 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	if bot_eta > puck_eta * RECEIVE_TIMING_MARGIN:
 		return false
 	# Commit. Steer to body_anchor with an arrival brake so we SETTLE on the line —
-	# square, off to the side — instead of overshooting it. The catch is decided
-	# purely by blade squareness + the puck's absolute speed (PuckReceptionRules has
-	# no give-with-the-puck term), so there's no approach-speed "cushion" to apply;
-	# this is pure positioning so the squared blade is waiting on the line in time.
+	# square, off to the side — instead of overshooting it. Settling to ~zero
+	# velocity is what keeps the catch honest under the receiver-relative model
+	# (#373): with the bot stopped, the puck's closing speed in our frame ≈ its
+	# world speed, so a magnet-pace feed catches at any angle and squaring the blade
+	# collects a harder one. (Actively giving WITH the puck to cushion one above the
+	# squared ceiling is a skating read we don't yet use — see LOOSE_PUCK_TRACK.)
 	_apply_steering(input, snapshot, self_pos, body_anchor, true)
 	# Aim: blade target tracks the puck along its flight line, one
 	# tick ahead to compensate for IK convergence lag. As the puck
