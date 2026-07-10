@@ -84,6 +84,134 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
+func test_passes_to_a_wide_open_slot_man_over_forcing_a_carry() -> void:
+	# The carrier is at a poor wide angle with a wide-open teammate in the slot. A
+	# one-timer from the slot man's exact spot is only a modest look (a set goalie
+	# covers a ~6.6 m dead-slot shot), so on instant-shot value alone the carrier's
+	# own speculative drive out-scores the pass and the bot ignores the open man. The
+	# receiver drive-in credit fixes that: an open teammate can carry into a better
+	# chance, so the pass to him wins. (Goalie squared to the carrier, as the live
+	# keeper is.)
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(8.0, 0.0, -14.0)             # wide angle, poor look
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(0.0, 0.0, -20.0)],      # wide-open, dead slot, clear lane
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"feeds the wide-open slot man instead of forcing a carry from a bad angle")
+	assert_eq(c.pass_target_peer_id, 2)
+
+
+func test_neutral_zone_hits_the_ahead_man_with_a_clearer_path() -> void:
+	# The carrier's own path up the middle is contested (two defenders clogging the
+	# lane ahead), but a teammate up-ice on the wing has a clear passing lane AND a
+	# clear path to keep advancing. The receiver drive-in credit (in NZ/DZ currency:
+	# position potential of where they'd advance to) makes that ahead man out-score
+	# the carrier's own stalled carry — so the puck moves up to the clearer path.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, 16.0)              # own end / DZ, carrying
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-8.0, 0.0, 6.0)],       # winger ahead, clear lane + path
+			[11, 1, Vector3(-1.0, 0.0, 10.0)],           # clogs the middle carry
+			[12, 1, Vector3(2.0, 0.0, 9.0)],             # clogs the middle carry
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = net.z + 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"moves the puck up to the ahead man on the clearer path")
+	assert_eq(c.pass_target_peer_id, 2)
+
+
+func test_lightly_impeded_carrier_moves_it_to_the_open_man() -> void:
+	# A defender sits in the carrier's forward path — not on the puck, but between it
+	# and the zone, so advancing means beating him. With a genuinely open teammate
+	# available, a pressured carrier should move the puck rather than grind forward,
+	# even conceding a little real estate (the forward-pressure discount). The SAME
+	# defender moved OFF to the side leaves the lane clear and the carry stands — the
+	# discount is directional, not a blanket pass-always.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var carrier := Vector3(0.0, 0.0, 2.0)
+	var mate := Vector3(3.0, 0.0, -3.0)                  # open, reasonable spot
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = net.z + 1.3
+
+	# Defender 7 m ahead, squarely in the path to the zone.
+	var ahead: Array = [
+			[1, TEAM_ID, carrier], [2, TEAM_ID, mate], [11, 1, Vector3(0.0, 0.0, -5.0)]]
+	var ac := _make_ctx(carrier, ahead)
+	ac.snapshot.goalie_states[1 - TEAM_ID] = g
+	var a := AIRoleCarrier.new()
+	a.decide(ac)
+	assert_eq(a.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a carrier impeded on its path forward moves it to the open man")
+
+	# The discount is DIRECTIONAL: the same defender moved off to the side leaves the
+	# forward lane clear, so the carry keeps far more of its value than when the
+	# defender blocks the path ahead.
+	var beside: Array = [
+			[1, TEAM_ID, carrier], [2, TEAM_ID, mate], [11, 1, Vector3(7.0, 0.0, -2.0)]]
+	var bc := _make_ctx(carrier, beside)
+	bc.snapshot.goalie_states[1 - TEAM_ID] = g
+	var b := AIRoleCarrier.new()
+	b.decide(bc)
+	assert_gt(b.debug_carry_score, a.debug_carry_score * 1.3,
+			"a side defender leaves the carry worth much more than a forward one blocking the path")
+
+
+func test_ahead_man_on_a_blocked_path_is_not_credited_a_deep_drive() -> void:
+	# The drive-in reach is the REACHABLE extent, not a free deep credit: a teammate
+	# ahead but with a defender squarely in their forward path can't skate it in, so
+	# the reach strips early and they earn little — the carrier keeps the puck rather
+	# than dumping it to a covered man. Guards the reachable-set gate.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, 16.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(0.0, 0.0, 10.0)],       # ahead, but…
+			[11, 1, Vector3(0.0, 0.0, 4.0)],             # …a defender squarely in their drive path
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = net.z + 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a man whose path forward is blocked isn't worth a pass over keeping the puck")
+
+
+func test_open_receiver_in_a_poor_spot_is_not_over_credited() -> void:
+	# The drive-in credit must not turn EVERY open teammate into a must-pass: a man
+	# open but in a genuinely poor spot (wide, no drive that improves the look) stays
+	# low-value, so the carrier keeps the puck rather than dumping it wide. Guards
+	# against the fix over-passing.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, -12.0)             # decent central carrier
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(9.0, 0.0, -14.0)],      # open but wide/poor angle
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a wide, low-value open man is not worth passing to over keeping the puck")
+
+
 func test_close_pass_is_a_crisp_charged_wrister() -> void:
 	# Every pass is a paced wrister now — no fixed-power quick snap. A short feed to
 	# a close open teammate charges (pass_should_charge) and fires at the MAGNET
@@ -354,6 +482,46 @@ func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
 	assert_gt(shot_distance, goalie_out + 1.0,
 			"a bot driving the net 1-on-1 gets its shot off clear of the goalie, "
 			+ "not by carrying into it")
+
+
+func _squared_goalie(self_pos: Vector3, net: Vector3, depth: float) -> GoalieNetworkState:
+	# Goalie arc-matched to the carrier (as the live keeper is — it tracks the
+	# current puck-holder), sitting `depth` out from the net.
+	var to_sh: Vector3 = self_pos - net
+	to_sh.y = 0.0
+	var g: Vector3 = net + to_sh.normalized() * depth
+	var gs := GoalieNetworkState.new()
+	gs.position_x = g.x
+	gs.position_z = g.z
+	return gs
+
+
+func test_wide_angle_shot_is_not_taken_against_a_squared_goalie() -> void:
+	# A shot from a wide angle (off to the side, out toward the boards) is not a real
+	# chance when the goalie has tracked the carrier and is square — the net is
+	# foreshortened and the keeper covers the near side. The direct shot must be
+	# scored against that SQUARED goalie (he read the carry the whole way), not a
+	# react-then-slide keeper left a step behind — otherwise the bot fires from
+	# nowhere. Wide-angle shoot value must sit below the fire floor while a genuine
+	# slot chance from the same distance clears it comfortably.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var wide := Vector3(9.0, 0.0, -22.0)                  # ~10 m out, sharp angle
+	var wctx := _make_ctx(wide)
+	wctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(wide, net, 1.3)
+	var wc := AIRoleCarrier.new()
+	wc.decide(wctx)
+	assert_lt(wc.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE,
+			"a wide-angle shot vs a squared goalie is below the fire floor; got %f"
+			% wc.debug_shoot_score)
+
+	var slot := Vector3(0.0, 0.0, -22.0)                 # same range, dead slot
+	var sctx := _make_ctx(slot)
+	sctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(slot, net, 1.3)
+	var sc := AIRoleCarrier.new()
+	sc.decide(sctx)
+	assert_gt(sc.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE * 3.0,
+			"a dead-slot chance at the same range still clears the fire floor; got %f"
+			% sc.debug_shoot_score)
 
 
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────

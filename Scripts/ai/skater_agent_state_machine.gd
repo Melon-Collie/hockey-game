@@ -3102,8 +3102,9 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 #   - Opp blade within POKE_EVADE_TRIGGER_REACH_M of our puck.
 #   - Opp in our FRONT hemisphere relative to our velocity (cutting
 #     when defender chases from behind would just help them catch up).
-#   - Opp closing along the line between us ≥ MIN_CLOSING_VEL_M_S
-#     (static opponents don't need a deke).
+#   - RELATIVE closing between us and the opp ≥ MIN_CLOSING_VEL_M_S — the
+#     carrier driving at a waiting defender closes the gap too, so it triggers
+#     the deke (only a defender neither approaching nor being approached is skipped).
 func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	if _poke_evade_active_ticks > 0:
 		_apply_poke_evade_cut(input, snapshot, self_pos)
@@ -3157,8 +3158,13 @@ func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, s
 		var to_opp_norm: Vector3 = to_opp_3d / to_opp_len
 		if to_opp_norm.x * forward.x + to_opp_norm.z * forward.y <= 0.0:
 			continue
-		# Closing velocity along the bot-to-opp line.
-		var closing: float = -opp_state.velocity.dot(to_opp_norm)
+		# RELATIVE closing along the bot-to-opp line — the carrier's OWN approach
+		# counts, not just the defender's. Skating into a stationary / angled defender
+		# closes the gap just as surely as one stepping up, and that's exactly when the
+		# carrier needs to deke past it. The old defender-only closing never fired
+		# against a waiting defender the carrier drove at — the bot skated straight
+		# into the poke instead of cutting around it.
+		var closing: float = (self_state.velocity - opp_state.velocity).dot(to_opp_norm)
 		if closing < POKE_EVADE_MIN_CLOSING_VEL_M_S:
 			continue
 		trigger_threat = opp_state

@@ -61,6 +61,32 @@ const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~3
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
+# Receiver drive-in credit (see _receiver_drive_in_value): the MAX distance an open
+# pass receiver is credited with carrying toward the net (the actual reach is the
+# clear extent of that path — a defender strips it early), and the closest to the net
+# that drive is allowed to end (don't credit a drive into the crease / the goalie).
+# The max is a horizon cap — long enough to carry a NZ/DZ outlet with a clear lane
+# into the zone — kept finite because opponent projections go stale over a long carry.
+# Feel tunables ("how far a wide-open man is trusted to skate it"), not an evaluation
+# curve; the value at the reached spot is still the goalie-aware / potential read.
+const RECEIVER_DRIVE_MAX_M: float = 12.0
+const RECEIVER_DRIVE_MIN_NET_DIST_M: float = 3.0
+
+# Forward-pressure discount on the CARRY (see _carrier_forward_clearance). The model
+# prices the IMMEDIATE strip (a defender right on the puck) but not the IMPENDING
+# contest — a defender sitting in the carrier's path to the objective it will have to
+# beat to advance. So a lightly-pressured carrier reads its own (sidestep) carry as
+# clean and grinds forward instead of moving the puck to an unimpeded teammate. This
+# discounts the carry by how contested the path AHEAD is, so an impeded carrier
+# prefers a clean outlet even at the cost of some real estate — the pass-first read.
+# HORIZON is how far ahead the contest is felt; MIN_SCALE is the most a fully-blocked
+# path discounts the carry (never to zero — a pressured carrier with no outlet still
+# carries). Feel tunables (how pass-first / risk-averse), not an evaluation curve —
+# the clearance itself is the grounded reachable-set read. Applied ONLY to the
+# fire-vs-carry compete, never to the honest raw carry the dump is judged against.
+const FORWARD_PRESSURE_HORIZON_M: float = 9.0
+const FORWARD_PRESSURE_MIN_SCALE: float = 0.55
+
 # (Blade reach cone + facing turn rate now come from the bot's real caps —
 # RoleContext.self_reach_cone_half_angle / self_facing_turn_rate — so an aim
 # anywhere inside the true ±157° reach cone fires with no body turn, and only the
@@ -326,15 +352,18 @@ func _pick_action(ctx: RoleContext) -> void:
 			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
 			attacking_goal, goalie_now)
 
-	# Goalie prediction at the wrister release time. Pass-receiver and
-	# carry-candidate cases get their own predictions inside
-	# _compute_best_pass / _best_carry. Predicted with the release-pos
-	# puck X so the goalie's slide target matches where the shot
-	# actually leaves the blade.
-	var wrister_goalie: Vector3 = _predict_goalie_at(
-			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
-	var wrister_unsettled: float = _goalie_unsettled_at(
-			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
+	# Goalie SQUARED to the release position — the keeper has tracked us (the current
+	# puck-holder) the whole way, so a shot from where we already are does NOT catch
+	# him moving. This is the SAME model the carry candidates use (goalie_squared_pos)
+	# and for the same reason: the caught-moving credit is a puck-RELOCATION effect (a
+	# pass / one-timer that outruns his tracking — see _compute_best_pass's unsettled
+	# arg), never a shot the goalie reads the whole way. The react-then-slide
+	# predict_goalie_pos here left the keeper a step behind the shooter's angle, which
+	# read as an open near side and drove the bot to fire from wide angles and long
+	# range the keeper is actually square to. Unsettled is 0 for the same reason.
+	var wrister_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			goalie_now, attacking_goal, wrister_release_pos)
+	var wrister_unsettled: float = 0.0
 
 	# Top-level SHOOT. _scratch_opponent_caps is index-matched to _scratch_opponents
 	# (and thus to _scratch_opponents_shoot, built in the same order), so a lane
@@ -362,6 +391,11 @@ func _pick_action(ctx: RoleContext) -> void:
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 	var raw_carry_score: float = carry_result[2]
+	# Pass-first under pressure: discount the carry by how contested the path AHEAD is,
+	# so a lightly-impeded carrier moves the puck to an unimpeded teammate rather than
+	# grinding forward (even giving up some real estate). Only the fire-vs-carry
+	# compete sees this — the dump still judges against the honest raw carry.
+	carry_score *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, _carrier_forward_clearance(ctx))
 
 	# Hysteresis on FIRE intents only — prevents flicker between two
 	# close-scoring fire options during pre-aim. Proportional (×(1 +
@@ -726,6 +760,19 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	var receiver_value: float = _score_at(ctx, receiver_spot, self_pos,
 			_scratch_opponents_pass, receiver_goalie,
 			receiver_shot_speed, receiver_unsettled)
+	# An OPEN receiver isn't limited to a one-timer from where they catch it — they
+	# can carry into a better look, exactly like the carrier's own best_carry. In the
+	# offensive zone the plain score_at above is shot-ONLY (xG's domain), so a
+	# wide-open man in a modest spot (e.g. a 6.6 m dead-slot look the set goalie
+	# covers) is under-valued and loses to the carrier's own speculative drive. Credit
+	# the best shot the receiver can REACH with a short drive toward the net, gated by
+	# an open lane (they must actually be able to get there) and time-discounted — so a
+	# wide-open teammate correctly out-scores forcing a carry through a defender.
+	# _score_at already prices "drive to slot" via position_potential OUTSIDE the zone,
+	# so this only bites in the OZ where that's switched off. (Re-projects
+	# _scratch_opponents_pass, now free — the instant value above already consumed it.)
+	receiver_value = maxf(receiver_value, _receiver_drive_in_value(
+			ctx, receiver_spot, receiver_shot_speed, receiver_caps))
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
@@ -1112,6 +1159,91 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	var realization: float = AIActionScoring.potential_realization_discount(
 			pos, attacking_goal)
 	return maxf(shoot_s, potential_s * realization)
+
+
+# The value of an open pass receiver DRIVING IN: the best value they can reach by
+# carrying toward the net, not just a one-timer / potential from where they catch it.
+# Models "a wide-open man walks into a better chance" (OZ) and "an ahead man with a
+# clear path skates it into the zone" (NZ/DZ) — both of which the score_at above
+# omits (OZ is shot-only; a static receiver isn't credited for advancing).
+#
+# The reach is the REACHABLE SET, not a fixed step: the receiver carries toward the
+# net up to RECEIVER_DRIVE_MAX_M, but only as far as the path stays clear — a defender
+# in the way strips it early (carry_strip_point), a very clear lane lets it run the
+# whole way. So a teammate a little farther back with a WIDE-OPEN path is credited
+# for the deep spot they can reach, while a covered one earns nothing. Value =
+# score_at(reached spot) × keep-probability × decay(time to reach it); the pass-flight
+# decay is applied to the max() by the caller. Goalie squared to the reached spot, and
+# the whole thing uses the SAME reach/clearance/score machinery as the carrier's own
+# carry candidates, so both sides of the pass are valued consistently. Bounded — one
+# carry, leaf value, no further passing — so no recursion. Reuses _scratch_opponents_pass.
+func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
+		receiver_shot_speed: float, receiver_caps: AISkaterCaps) -> float:
+	var to_net_x: float = ctx.attacking_goal_pos.x - receiver_spot.x
+	var to_net_z: float = ctx.attacking_goal_pos.z - receiver_spot.z
+	var d: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
+	# Already tight to the net — no room to improve by driving; instant shot covers it.
+	if d <= RECEIVER_DRIVE_MIN_NET_DIST_M + 0.1:
+		return 0.0
+	var reach: float = minf(RECEIVER_DRIVE_MAX_M, d - RECEIVER_DRIVE_MIN_NET_DIST_M)
+	var inv: float = 1.0 / d
+	var dir_x: float = to_net_x * inv
+	var dir_z: float = to_net_z * inv
+	var target := Vector3(
+			receiver_spot.x + dir_x * reach, 0.0, receiver_spot.z + dir_z * reach)
+	if not AIRoleHelpers.is_legal_position(target):
+		return 0.0
+	var recv_speed: float = receiver_caps.max_speed if receiver_caps != null \
+			else ctx.self_max_speed
+	var reach_time: float = reach / maxf(recv_speed, 1.0)
+	# Reachable-set safety + strip point over the drive, using the SAME current-opponent
+	# reach model the carrier's carry uses (carry_clearance/strip project the defenders
+	# in by their velocity + closing reach). A clear lane keeps ~1 and reaches `target`;
+	# a defender in the way drops keep and pulls the reached spot back to the strip.
+	var keep: float = AIActionScoring.clearance_to_safety(
+			AIActionScoring.carry_clearance(receiver_spot, target, reach_time,
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+	if keep <= 0.0:
+		return 0.0
+	var reached: Vector3 = AIActionScoring.carry_strip_point(
+			receiver_spot, target, reach_time,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
+	var t: float = receiver_spot.distance_to(reached) / maxf(recv_speed, 1.0)
+	_project_opponents_to(ctx, t, _scratch_opponents_pass)
+	var goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			_goalie_now(ctx), ctx.attacking_goal_pos, reached)
+	# score_at, not score_shoot: OZ → goalie-aware shot from the reached spot; NZ/DZ →
+	# position potential of the reached spot (advanced toward the zone). Same regime
+	# the carrier's own carry candidates use, so the ahead man on the clear path is
+	# credited for continuing the rush exactly as the carrier would credit itself.
+	var advanced: float = _score_at(ctx, reached, ctx.self_pos,
+			_scratch_opponents_pass, goalie, receiver_shot_speed, 0.0)
+	return advanced * keep * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, t)
+
+
+# How clear the carrier's OWN path toward the attacking objective is — the reachable
+# safety of carrying straight at the net over FORWARD_PRESSURE_HORIZON_M. 1.0 when the
+# lane ahead is open, dropping toward 0 as a defender sits in it. Feeds the carry's
+# pass-first discount (see FORWARD_PRESSURE_*): the model already prices a defender
+# ON the puck, but not one the carrier must still beat to advance — this reads that
+# impending contest with the same reachable-set model the carry candidates use, so a
+# defender only counts when it's genuinely in the forward lane (one off to the side
+# leaves the path clear and the carry undiscounted).
+func _carrier_forward_clearance(ctx: RoleContext) -> float:
+	var to_net_x: float = ctx.attacking_goal_pos.x - ctx.self_pos.x
+	var to_net_z: float = ctx.attacking_goal_pos.z - ctx.self_pos.z
+	var d: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
+	if d < 0.5:
+		return 1.0
+	var reach: float = minf(FORWARD_PRESSURE_HORIZON_M, d)
+	var inv: float = 1.0 / d
+	var target := Vector3(
+			ctx.self_pos.x + to_net_x * inv * reach, 0.0,
+			ctx.self_pos.z + to_net_z * inv * reach)
+	var t: float = reach / maxf(ctx.self_max_speed, 1.0)
+	return AIActionScoring.clearance_to_safety(
+			AIActionScoring.carry_clearance(ctx.self_pos, target, t,
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 
 
 # Value (EV) of the best DEVELOPING feed — a play a teammate is still

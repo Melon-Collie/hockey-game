@@ -951,3 +951,55 @@ func test_degenerate_facing_or_aim_needs_rotation() -> void:
 			"no facing → fall back to the safe (rotate) path")
 	assert_false(sm._aim_needs_no_rotation(Vector2(0, 1), Vector2.ZERO),
 			"no aim direction → fall back to the safe path")
+
+
+# ── Poke-evade deke trigger: relative closing (angled/stationary defender) ──────
+
+func test_poke_evade_fires_driving_at_a_stationary_defender() -> void:
+	# The deke's closing gate is RELATIVE: a carrier skating into a waiting / angled
+	# defender closes the gap, so the deke fires. The old defender-only closing left
+	# the bot skating straight into a static poke without cutting around it.
+	var snap := WorldSnapshot.new()
+	var me := SkaterNetworkState.new()
+	me.position = Vector3(0, 0, 0)
+	me.velocity = Vector3(0, 0, -6)          # skating hard at the defender
+	snap.skater_states[SELF_ID] = me
+	var opp := SkaterNetworkState.new()
+	opp.position = Vector3(0, 0, -3.5)       # ~1.5 m ahead of the puck (2 m forward)
+	opp.velocity = Vector3.ZERO              # stationary — NOT closing on its own
+	opp.blade_contact_world = Vector3(0, 0, -3.5)
+	snap.skater_states[OPP_ID] = opp
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.carrier_peer_id = SELF_ID
+	snap.puck_state.position = me.position
+	sm._poke_evade_active_ticks = 0
+	sm._poke_evade_cooldown_ticks = 0
+	var input := InputState.new()
+	sm._poke_evade_modulate_steering(input, snap, me.position)
+	assert_gt(sm._poke_evade_active_ticks, 0,
+			"driving at a stationary defender within poke reach triggers the deke")
+
+
+func test_poke_evade_skips_a_defender_neither_side_is_closing_on() -> void:
+	# Guard: if the carrier is NOT moving toward the defender (drifting away) and the
+	# defender is static, nothing is closing, so no deke — the relative gate still
+	# filters the genuinely-idle case.
+	var snap := WorldSnapshot.new()
+	var me := SkaterNetworkState.new()
+	me.position = Vector3(0, 0, 0)
+	me.velocity = Vector3(0, 0, 6)           # skating AWAY from the defender ahead
+	snap.skater_states[SELF_ID] = me
+	var opp := SkaterNetworkState.new()
+	opp.position = Vector3(0, 0, -3.0)
+	opp.velocity = Vector3.ZERO
+	opp.blade_contact_world = Vector3(0, 0, -3.0)
+	snap.skater_states[OPP_ID] = opp
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.carrier_peer_id = SELF_ID
+	snap.puck_state.position = me.position
+	sm._poke_evade_active_ticks = 0
+	sm._poke_evade_cooldown_ticks = 0
+	var input := InputState.new()
+	sm._poke_evade_modulate_steering(input, snap, me.position)
+	assert_eq(sm._poke_evade_active_ticks, 0,
+			"a defender behind the direction of travel, neither closing, gets no deke")
