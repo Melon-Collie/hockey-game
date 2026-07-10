@@ -273,10 +273,12 @@ const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 # Target ARRIVAL speed at the receiver — the "magnet" pace a bot aims to hit its
 # teammate at. Crisp enough to beat a defender's reaction and shrink the pass's
 # hang time (which the EV's time-decay penalizes), yet still catchable: reception
-# deflects a poorly-angled blade only above deflect_min_speed + alignment_bonus·
-# alignment (~20 m/s always catches, a squared blade catches to ~28), so a
-# receiver squaring to the incoming line magnets this in. Every bot pass now aims
-# for the SAME crisp arrival speed regardless of distance — the earlier
+# judges RECEIVER-RELATIVE speed (deflects a poorly-angled blade only above
+# deflect_min_speed 22 relative; a squared blade catches to 30), so 21.5 catches
+# a stationary receiver at any angle, and a led receiver skating WITH the pass
+# sees it slower still — only a receiver closing hard on the feed needs to square
+# up. Every bot pass now aims for the SAME crisp arrival speed regardless of
+# distance — the earlier
 # distance-ramp made close feeds far too soft (down toward the ~11 m/s floor),
 # which both looked weak and, via the longer flight time, made the EV under-value
 # passing relative to holding/shooting.

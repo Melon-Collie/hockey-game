@@ -369,8 +369,11 @@ func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector
 				blade_prev, blade_curr, PICKUP_RADIUS):
 			continue
 		var puck_vel: Vector3 = puck.get_puck_velocity()
-		var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
-		if PuckReceptionRules.should_receive(puck_vel, blade_face_normal,
+		# Face normal opposes the approach in the RECEIVER'S frame — same
+		# relative velocity the receive decision judges (see should_receive).
+		var relative_vel: Vector3 = puck_vel - skater.velocity
+		var blade_face_normal: Vector3 = skater.get_blade_face_normal(relative_vel)
+		if PuckReceptionRules.should_receive(puck_vel, skater.velocity, blade_face_normal,
 				puck.pickup_max_speed, puck.deflect_min_speed, puck.alignment_receive_bonus):
 			return skater
 	return null
@@ -455,9 +458,13 @@ func _check_interactions() -> void:
 					puck.apply_blade_deflect(skater)
 					break
 				var puck_vel: Vector3 = puck.get_puck_velocity()
-				var blade_face_normal: Vector3 = skater.get_blade_face_normal(puck_vel)
+				# Face normal opposes the approach in the RECEIVER'S frame — the
+				# same relative velocity the receive decision judges.
+				var relative_vel: Vector3 = puck_vel - skater.velocity
+				var blade_face_normal: Vector3 = skater.get_blade_face_normal(relative_vel)
 				if PuckReceptionRules.should_receive(
 						puck_vel,
+						skater.velocity,
 						blade_face_normal,
 						puck.pickup_max_speed,
 						puck.deflect_min_speed,
@@ -595,7 +602,10 @@ func notify_local_puck_dropped() -> void:
 # only when the host is overwhelmingly likely to GRANT A CATCH: the puck is
 # grounded and slow enough to always be caught (never deflected), we're not in
 # the post-loss reattach lockout, and no other skater is contesting on our
-# rendered view. Visual only — the carry state machine engages on the host's
+# rendered view. The speed gate reads ABSOLUTE puck speed even though the host's
+# receive decision is receiver-relative: worst case the relative speed is
+# absolute + max sprint (~8 + ~12.7), still under deflect_min_speed (22), so
+# "below pickup_max_speed ⇒ host grants" holds at every attribute level. Visual only — the carry state machine engages on the host's
 # confirming notify_local_pickup, not here.
 func try_provisional_pickup(local_skater: Skater) -> void:
 	if is_server or not is_instance_valid(local_skater):

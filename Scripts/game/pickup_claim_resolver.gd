@@ -132,14 +132,17 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 	# but against the rewound snapshot. Without it the claim path granted a
 	# pickup on blade overlap ALONE, so a remote player reaching for a too-fast /
 	# poorly-angled puck caught it magnetically where a local player would have
-	# deflected it. Puck velocity is stored on the snapshot; the blade face normal
-	# comes from the buffered blade/hand world points.
+	# deflected it. Puck velocity is stored on the snapshot; the receiver's
+	# velocity (for the relative-frame decision) and the blade/hand world points
+	# (for the face normal) come from the rewound skater snapshot, so the verdict
+	# judges the same closing speed the claimant saw at send time.
 	var puck_vel: Vector3 = puck_snap.puck_state.velocity
+	var relative_vel: Vector3 = puck_vel - skater_snap.velocity
 	var face_normal: Vector3 = PuckReceptionRules.blade_face_normal(
-			blade_curr, skater_snap.top_hand_world, puck_vel,
+			blade_curr, skater_snap.top_hand_world, relative_vel,
 			Vector3(skater_snap.facing.x, 0.0, skater_snap.facing.y))
 	if not PuckReceptionRules.should_receive(
-			puck_vel, face_normal,
+			puck_vel, skater_snap.velocity, face_normal,
 			puck.pickup_max_speed, puck.deflect_min_speed, puck.alignment_receive_bonus):
 		# Deflect verdict: redirect the puck instead of granting possession. Not a
 		# contested action (no carrier change), so it fires immediately rather than

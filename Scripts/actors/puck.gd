@@ -15,15 +15,19 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var nudge_cooldown: float = 0.30  # short re-grab denial after a self nudge tap
 @export var ice_height: float = 0.0175  # = Puck.tscn cylinder half-height (0.035/2); disc bottom rests on y=0
 @export var pickup_max_speed: float = 8.0
-# ABSOLUTE puck-speed threshold for catch-vs-deflect (world frame — reception
-# deliberately ignores the receiver's own velocity; see CLAUDE.md, "reception
-# is purely reactive"). Sits above every pass-shaped launch (snap 14, AI
-# charged passes ramp to 20, soft-sweep wristers under 20 by gesture) so a
-# pass is receivable at ANY blade angle; the alignment bonus extends the
-# ceiling to 28 m/s for a perfectly squared blade — reaching into the shot
-# bands (wrister max 33 base / slapper 40), which otherwise always deflect.
-# See PuckReceptionRules.should_receive.
-@export var deflect_min_speed: float = 20.0
+# RELATIVE puck-speed threshold for catch-vs-deflect: the puck's speed in the
+# RECEIVER'S frame (puck velocity − skater velocity), so a stretch pass to a
+# streaking receiver arrives soft while charging into the same pass steepens
+# it, and retreating with a hard shot cushions it under the ceiling. Calibrated
+# to real reception, not backwards from game pass speeds (rationale + force
+# math on PuckReceptionRules.should_receive): 22 ≈ 49 mph closing catches at
+# ANY blade angle — every pass-shaped launch (snap 14, AI arrival target 21.5,
+# soft-sweep wristers) catches for a static or retreating receiver, and only
+# sprinting head-on INTO a hard feed pushes past it. The alignment bonus
+# extends the ceiling to 30 m/s (~67 mph closing) for a perfectly squared
+# blade — reaching into the shot bands (wrister max 33 base / slapper 40),
+# which otherwise always deflect.
+@export var deflect_min_speed: float = 22.0
 @export var alignment_receive_bonus: float = 8.0
 # Passive-blade deflection via a normal/tangential decomposition (see
 # PuckCollisionRules.deflect_velocity). The component INTO the blade face rebounds
@@ -35,7 +39,13 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # the low restitution, so there is no fast carom to clamp.
 #   restitution eases from the soft/slow value toward the hard value as puck speed
 #   climbs to deflect_speed_ref, so a squared blade smothers a slapper instead of
-#   pinballing it.
+#   pinballing it. The falloff SHAPE is measured reality: puck COR decreases
+#   roughly linearly with impact speed (0.50 at 15 mph → 0.34 at 85, rigid plate,
+#   room temp) and frozen game-temp pucks plateau near 0.27 (WSU Sports Science
+#   Lab, "Experimental Characterization of Ice Hockey Sticks and Pucks"). This
+#   lerp evaluates to ≈0.27 right at deflect_min_speed — matching the frozen-puck
+#   measurement where natural deflects begin — and bottoms below it because a
+#   hand-held blade absorbs more than the rigid plate the lab measured against.
 @export var deflect_normal_restitution: float = 0.6       # soft/slow puck bounces off the face
 @export var deflect_normal_restitution_min: float = 0.15  # hard puck (at/above ref) barely rebounds — it dies; < 0 disables falloff
 @export var deflect_tangential_retain: float = 0.85       # glancing slide is largely kept (a redirect keeps pace)
