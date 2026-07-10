@@ -433,16 +433,13 @@ func _check_interactions() -> void:
 				if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 						or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 					continue
-				# Reach gate. A DELIBERATE deflect (Q held) reaches per its loft
-				# level (grounded / both / airborne — see deflect_can_reach); an
-				# ordinary (passive) blade uses the on-ice/airborne gate, so a
-				# saucer flies over a grounded receiver and a forced-up blade meets
-				# only airborne pucks.
-				var can_reach: bool = \
-						PuckReceptionRules.deflect_can_reach(skater.elevation_level, puck_airborne) \
-						if skater.deflect_intent \
-						else PuckReceptionRules.blade_can_interact(skater.blade_up, puck_airborne)
-				if not can_reach:
+				# Reach gate — grounded blade ↔ grounded puck, lifted blade ↔
+				# airborne puck. blade_up already encodes the deflect level's plane
+				# (grounded at FLAT/LOW, lifted only at HIGH), so a committed deflect
+				# and a passive receiver share this one gate: FLAT/LOW play the ice
+				# (a saucer flies over), HIGH plays the air. The loft level changes
+				# the redirect DIRECTION, not which plane it reaches.
+				if not PuckReceptionRules.blade_can_interact(skater.blade_up, puck_airborne):
 					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
 				var blade_prev: Vector3 = skater.get_prev_blade_contact_global()

@@ -1088,8 +1088,9 @@ func _on_body_block_hit(body: Node3D) -> void:
 # Whether this skater is committing to a deliberate deflect this tick. Base
 # behaviour (human players, local and remote-on-host): holding the DEFLECT button
 # (stick_lift / Q) without the puck. The loft level (scroll) then shapes it —
-# FLAT grounded redirect, LOW tip up, HIGH knock down / stick-lift (see
-# PuckReceptionRules.deflect_can_reach and Puck.apply_blade_deflect). AIController
+# FLAT grounded redirect, LOW grounded tip up, HIGH knock an airborne puck down /
+# stick-lift (reach follows blade_can_interact; direction from Puck.apply_blade_deflect).
+# AIController
 # overrides this to always-false — bots don't deliberate-deflect; holding the
 # shoot button off-puck sets up their wrister one-timers instead. Moving deflect
 # off the shoot button (it used to be shoot_held off-puck) also unmasks the
