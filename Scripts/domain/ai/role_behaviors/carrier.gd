@@ -711,7 +711,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		return 0.0
 	var lane: float = AIActionScoring.lane_clear(
 			self_pos, receiver_spot, _scratch_opponents, pass_speed,
-			_scratch_opponent_vels)
+			_scratch_opponent_vels, _scratch_opponent_caps)
 	if lane <= 0.0:
 		return 0.0
 	_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)

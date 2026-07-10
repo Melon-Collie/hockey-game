@@ -242,7 +242,11 @@ const GOALIE_SETTLE_REF_S: float = 0.20
 #                 straight-line sprint at it.
 const LANE_DEFENDER_REACH_M: float = GameRules.DEFAULT_STICK_LENGTH_M
 const LANE_REACTION_DELAY_S: float = 0.08
-const LANE_DEFENDER_CLOSE_SPEED_M_S: float = 0.5 * GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+# Fraction of top skating speed a defender covers LATERALLY sliding into a lane
+# (you close a passing lane sideways, not at full straight-line speed). Per-
+# defender close speed is this × the defender's real max_speed (Speed).
+const LANE_LATERAL_FRACTION: float = 0.5
+const LANE_DEFENDER_CLOSE_SPEED_M_S: float = LANE_LATERAL_FRACTION * GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
 # A saucer pass lifts over a grounded stick but NOT a body — it's hard to
 # react a blade up into a puck flying overhead, but you can't fly it
@@ -942,11 +946,15 @@ static func _lane_miss_at(
 # (one full stick inside reach ⇒ certain block). Pure float math.
 static func _lane_block_at(
 		fx: float, fz: float, pvx: float, pvz: float, t: float,
-		px: float, pz: float, vx: float, vz: float) -> float:
+		px: float, pz: float, vx: float, vz: float,
+		stick_reach: float = LANE_DEFENDER_REACH_M,
+		close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S) -> float:
 	var miss: float = _lane_miss_at(fx, fz, pvx, pvz, t, px, pz, vx, vz)
-	var reach: float = LANE_DEFENDER_REACH_M + LANE_DEFENDER_CLOSE_SPEED_M_S \
-			* maxf(0.0, t - LANE_REACTION_DELAY_S)
-	return clampf((reach - miss) / LANE_DEFENDER_REACH_M, 0.0, 1.0)
+	# reach = this defender's stick (Size) + how far it slides into the lane after
+	# its read delay (Speed × the ~0.5 lateral factor); normalised by its own stick
+	# so "one full stick inside reach ⇒ certain block" scales with the defender.
+	var reach: float = stick_reach + close_speed * maxf(0.0, t - LANE_REACTION_DELAY_S)
+	return clampf((reach - miss) / stick_reach, 0.0, 1.0)
 
 
 # Lane-clear factor in [0, 1] for a FIRED puck (shot or pass) — the
@@ -969,7 +977,8 @@ static func _lane_block_at(
 # working; the carrier's pass scoring passes real velocities so a
 # defender bearing down on the lane is priced as the threat they are.
 static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
-		puck_speed_m_s: float, opponent_vels: Array[Vector3] = []) -> float:
+		puck_speed_m_s: float, opponent_vels: Array[Vector3] = [],
+		opponent_caps: Array = []) -> float:
 	var dx: float = to.x - from.x
 	var dz: float = to.z - from.z
 	var line_len_sq: float = dx * dx + dz * dz
@@ -982,6 +991,7 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 	var pvx: float = dx * inv_len * speed
 	var pvz: float = dz * inv_len * speed
 	var vel_count: int = opponent_vels.size()
+	var has_caps: bool = opponent_caps.size() == opponents.size()
 	var max_block: float = 0.0
 	for i: int in opponents.size():
 		var p: Vector3 = opponents[i]
@@ -995,8 +1005,16 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		if t_raw > seg_time:
 			continue  # trailing the play — never closest in flight
 		var t: float = maxf(t_raw, 0.0)
+		# This defender's real stick reach (Size) and lateral close speed (Speed).
+		var stick_reach: float = LANE_DEFENDER_REACH_M
+		var close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opponent_caps[i]
+			if caps != null:
+				stick_reach = caps.stick_reach
+				close_speed = LANE_LATERAL_FRACTION * caps.max_speed
 		var block: float = _lane_block_at(
-				from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
+				from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz, stick_reach, close_speed)
 		if block > max_block:
 			max_block = block
 			if max_block >= 1.0:

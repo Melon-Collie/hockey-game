@@ -877,6 +877,29 @@ func test_lane_clear_reduced_by_mid_lane_defender() -> void:
 	assert_lt(s, 1.0, "a defender on the mid-lane reduces clearance")
 
 
+func test_lane_block_scales_with_defender_reach_and_speed() -> void:
+	# A defender 2.5 m off the pass line — a partial block at league reach. A
+	# longer-stick (Size), faster (Speed) defender slides further into the lane and
+	# reaches the puck → blocks more (lower clearance); a short, slow one blocks
+	# less. Empty caps sits at the league default between them.
+	var from := Vector3(0, 0, 0)
+	var to := Vector3(0, 0, 14)
+	var off_lane: Array[Vector3] = [Vector3(2.5, 0, 7)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var pass_speed: float = AIActionScoring.PASS_SPEED_M_S
+	var league: float = AIActionScoring.lane_clear(from, to, off_lane, pass_speed, vels)
+	var big := AISkaterCaps.new()
+	big.stick_reach = 1.6
+	big.max_speed = 12.0
+	var vs_big: float = AIActionScoring.lane_clear(from, to, off_lane, pass_speed, vels, [big])
+	var small := AISkaterCaps.new()
+	small.stick_reach = 1.1
+	small.max_speed = 6.0
+	var vs_small: float = AIActionScoring.lane_clear(from, to, off_lane, pass_speed, vels, [small])
+	assert_lt(vs_big, league, "a longer-reach, faster defender intercepts more of the lane")
+	assert_gt(vs_small, league, "a shorter, slower defender lets more through")
+
+
 func test_lane_clear_blocks_close_on_line_defender() -> void:
 	# THE breakout-turnover regression. A defender 1 m in front of the
 	# passer, dead on the line — a man in the slot the pass would go
