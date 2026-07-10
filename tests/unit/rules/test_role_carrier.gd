@@ -107,6 +107,32 @@ func test_passes_to_a_wide_open_slot_man_over_forcing_a_carry() -> void:
 	assert_eq(c.pass_target_peer_id, 2)
 
 
+func test_neutral_zone_hits_the_ahead_man_with_a_clearer_path() -> void:
+	# The carrier's own path up the middle is contested (two defenders clogging the
+	# lane ahead), but a teammate up-ice on the wing has a clear passing lane AND a
+	# clear path to keep advancing. The receiver drive-in credit (in NZ/DZ currency:
+	# position potential of where they'd advance to) makes that ahead man out-score
+	# the carrier's own stalled carry — so the puck moves up to the clearer path.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, 16.0)              # own end / DZ, carrying
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-8.0, 0.0, 6.0)],       # winger ahead, clear lane + path
+			[11, 1, Vector3(-1.0, 0.0, 10.0)],           # clogs the middle carry
+			[12, 1, Vector3(2.0, 0.0, 9.0)],             # clogs the middle carry
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = net.z + 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"moves the puck up to the ahead man on the clearer path")
+	assert_eq(c.pass_target_peer_id, 2)
+
+
 func test_open_receiver_in_a_poor_spot_is_not_over_credited() -> void:
 	# The drive-in credit must not turn EVERY open teammate into a must-pass: a man
 	# open but in a genuinely poor spot (wide, no drive that improves the look) stays

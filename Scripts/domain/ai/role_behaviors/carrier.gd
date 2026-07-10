@@ -1174,10 +1174,15 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 		return 0.0
 	var goalie: Vector3 = AIActionScoring.goalie_squared_pos(
 			_goalie_now(ctx), ctx.attacking_goal_pos, driven)
-	var shot: float = AIActionScoring.score_shoot(
-			driven, ctx.attacking_goal_pos, goalie, GameRules.NET_HALF_WIDTH,
-			_scratch_opponents_pass, receiver_shot_speed, 0.0, _scratch_opponent_caps)
-	return shot * drive_lane * pow(
+	# _score_at, not score_shoot: in the OZ this is the goalie-aware shot from the
+	# driven spot (the receiver walks into a better look); in the NZ/DZ it's the
+	# position potential of the driven spot (the receiver ADVANCES toward the zone).
+	# So an ahead teammate with a CLEAR forward lane — the gate above — is credited
+	# for continuing the rush, which is why a man ahead with a clearer path to the OZ
+	# out-scores holding it. Same regime the carrier's own carry candidates use.
+	var advanced: float = _score_at(ctx, driven, ctx.self_pos,
+			_scratch_opponents_pass, goalie, receiver_shot_speed, 0.0)
+	return advanced * drive_lane * pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, drive_time)
 
 
