@@ -61,6 +61,15 @@ const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~3
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
+# Receiver drive-in credit (see _receiver_drive_in_value): how far an OPEN pass
+# receiver is credited with carrying toward the net for a better look, and the
+# closest to the net that drive is allowed to end (don't credit a drive into the
+# crease / the goalie). Feel tunables — "how much a wide-open man improves his
+# chance by stepping in" — not an evaluation curve; the shot value at the driven
+# spot is still the goalie-aware geometric read.
+const RECEIVER_DRIVE_M: float = 3.0
+const RECEIVER_DRIVE_MIN_NET_DIST_M: float = 3.0
+
 # (Blade reach cone + facing turn rate now come from the bot's real caps —
 # RoleContext.self_reach_cone_half_angle / self_facing_turn_rate — so an aim
 # anywhere inside the true ±157° reach cone fires with no body turn, and only the
@@ -729,6 +738,19 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	var receiver_value: float = _score_at(ctx, receiver_spot, self_pos,
 			_scratch_opponents_pass, receiver_goalie,
 			receiver_shot_speed, receiver_unsettled)
+	# An OPEN receiver isn't limited to a one-timer from where they catch it — they
+	# can carry into a better look, exactly like the carrier's own best_carry. In the
+	# offensive zone the plain score_at above is shot-ONLY (xG's domain), so a
+	# wide-open man in a modest spot (e.g. a 6.6 m dead-slot look the set goalie
+	# covers) is under-valued and loses to the carrier's own speculative drive. Credit
+	# the best shot the receiver can REACH with a short drive toward the net, gated by
+	# an open lane (they must actually be able to get there) and time-discounted — so a
+	# wide-open teammate correctly out-scores forcing a carry through a defender.
+	# _score_at already prices "drive to slot" via position_potential OUTSIDE the zone,
+	# so this only bites in the OZ where that's switched off. (Re-projects
+	# _scratch_opponents_pass, now free — the instant value above already consumed it.)
+	receiver_value = maxf(receiver_value, _receiver_drive_in_value(
+			ctx, receiver_spot, receiver_shot_speed, receiver_caps))
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
@@ -1115,6 +1137,48 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	var realization: float = AIActionScoring.potential_realization_discount(
 			pos, attacking_goal)
 	return maxf(shoot_s, potential_s * realization)
+
+
+# The value of an open pass receiver DRIVING IN: the best shot they can reach with a
+# short carry toward the net, not just a one-timer from where they catch it. Models
+# "a wide-open man walks into a better chance," which the OZ shot-only regime omits.
+# Bounded — ONE drive step, leaf shot, no further passing — so there's no recursion.
+# Gated by an open drive lane (they must actually be able to get there, opponents
+# projected to arrival) and discounted by ONLY the extra drive time (the pass-flight
+# decay is applied to the max() by the caller). Goalie SQUARED to the driven spot —
+# the receiver carries there and the keeper tracks, same model as the carrier's own
+# carry candidates. Returns 0 when the drive is contested or the receiver is already
+# tight to the net (the instant shot already prices that). Reuses _scratch_opponents_pass.
+func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
+		receiver_shot_speed: float, receiver_caps: AISkaterCaps) -> float:
+	var to_net_x: float = ctx.attacking_goal_pos.x - receiver_spot.x
+	var to_net_z: float = ctx.attacking_goal_pos.z - receiver_spot.z
+	var d: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
+	# Already tight to the net — no room to improve by driving; instant shot covers it.
+	if d <= RECEIVER_DRIVE_MIN_NET_DIST_M + 0.1:
+		return 0.0
+	var step: float = minf(RECEIVER_DRIVE_M, d - RECEIVER_DRIVE_MIN_NET_DIST_M)
+	var inv: float = 1.0 / d
+	var driven := Vector3(
+			receiver_spot.x + to_net_x * inv * step, 0.0,
+			receiver_spot.z + to_net_z * inv * step)
+	if not AIRoleHelpers.is_legal_position(driven):
+		return 0.0
+	var recv_speed: float = receiver_caps.max_speed if receiver_caps != null \
+			else ctx.self_max_speed
+	var drive_time: float = step / maxf(recv_speed, 1.0)
+	_project_opponents_to(ctx, drive_time, _scratch_opponents_pass)
+	var drive_lane: float = AIActionScoring.path_clearance(
+			receiver_spot, driven, _scratch_opponents_pass)
+	if drive_lane <= 0.0:
+		return 0.0
+	var goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			_goalie_now(ctx), ctx.attacking_goal_pos, driven)
+	var shot: float = AIActionScoring.score_shoot(
+			driven, ctx.attacking_goal_pos, goalie, GameRules.NET_HALF_WIDTH,
+			_scratch_opponents_pass, receiver_shot_speed, 0.0, _scratch_opponent_caps)
+	return shot * drive_lane * pow(
+			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, drive_time)
 
 
 # Value (EV) of the best DEVELOPING feed — a play a teammate is still

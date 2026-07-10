@@ -84,6 +84,48 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
+func test_passes_to_a_wide_open_slot_man_over_forcing_a_carry() -> void:
+	# The carrier is at a poor wide angle with a wide-open teammate in the slot. A
+	# one-timer from the slot man's exact spot is only a modest look (a set goalie
+	# covers a ~6.6 m dead-slot shot), so on instant-shot value alone the carrier's
+	# own speculative drive out-scores the pass and the bot ignores the open man. The
+	# receiver drive-in credit fixes that: an open teammate can carry into a better
+	# chance, so the pass to him wins. (Goalie squared to the carrier, as the live
+	# keeper is.)
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(8.0, 0.0, -14.0)             # wide angle, poor look
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(0.0, 0.0, -20.0)],      # wide-open, dead slot, clear lane
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"feeds the wide-open slot man instead of forcing a carry from a bad angle")
+	assert_eq(c.pass_target_peer_id, 2)
+
+
+func test_open_receiver_in_a_poor_spot_is_not_over_credited() -> void:
+	# The drive-in credit must not turn EVERY open teammate into a must-pass: a man
+	# open but in a genuinely poor spot (wide, no drive that improves the look) stays
+	# low-value, so the carrier keeps the puck rather than dumping it wide. Guards
+	# against the fix over-passing.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, -12.0)             # decent central carrier
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(9.0, 0.0, -14.0)],      # open but wide/poor angle
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a wide, low-value open man is not worth passing to over keeping the puck")
+
+
 func test_close_pass_is_a_crisp_charged_wrister() -> void:
 	# Every pass is a paced wrister now — no fixed-power quick snap. A short feed to
 	# a close open teammate charges (pass_should_charge) and fires at the MAGNET
