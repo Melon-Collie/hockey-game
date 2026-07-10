@@ -33,7 +33,6 @@ const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 const INTENT_CARRY: int = 0
 const INTENT_SHOOT: int = 1
 const INTENT_PASS: int = 3
-const INTENT_QUICK_SHOT: int = 4
 # Last-resort DUMP — fire the puck to a location (no receiver). The state machine
 # maps it onto a PASS_PRESSED release aimed at `dump_target`.
 const INTENT_DUMP: int = 5
@@ -191,7 +190,6 @@ var _scratch_our_chasers: Array[Vector3] = []
 # Populated every re-eval; the state machine forwards these to its
 # own debug_* fields for AIController / floating label.
 var debug_shoot_score: float = 0.0
-var debug_quick_shot_score: float = 0.0
 var debug_pass_score: float = 0.0
 var debug_pass_peer_id: int = 0
 var debug_carry_score: float = 0.0
@@ -233,8 +231,6 @@ func decide(ctx: RoleContext) -> RoleDecision:
 		INTENT_PASS:
 			d.pass_intent = true
 			d.pass_target_peer_id = pass_target_peer_id
-		INTENT_QUICK_SHOT:
-			d.quick_shot_intent = true
 	return d
 
 
@@ -322,8 +318,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	var self_velocity: Vector3 = ctx.self_velocity
 	var horizontal_velocity: Vector3 = Vector3(self_velocity.x, 0.0, self_velocity.z)
 	# Goalie's CURRENT position (squared to whoever currently holds the puck —
-	# that's us as the carrier). This is where the goalie actually is, used by the
-	# QUICK_SHOT scoring below (a no-charge snap gives him no time to slide) and to
+	# that's us as the carrier). This is where the goalie actually is, used to
 	# clamp the wrister release, since the goalie is a body the release can't cross.
 	var goalie_now: Vector3 = _goalie_now(ctx)
 	var wrister_release_pos: Vector3 = AIActionScoring.release_ahead_of_goalie(
@@ -345,17 +340,6 @@ func _pick_action(ctx: RoleContext) -> void:
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
 			ctx.self_wrister_shot_speed, wrister_unsettled)
-
-	# Top-level QUICK_SHOT — snap release at PASS_SPEED, no charge. The
-	# goalie can't slide during a zero-charge release, so a still-squared
-	# goalie that would otherwise drift wide stays in position. Off-axis
-	# bots benefit (their lateral arc against a still-squared goalie is
-	# open); slower puck speed naturally kills long-range attempts via
-	# the existing lane_clear math. Release position = current self_pos
-	# (no charge motion). Opponents at current positions (no projection).
-	var quick_shoot_score: float = AIActionScoring.score_quick_shot(
-			self_pos, attacking_goal, goalie_now,
-			GameRules.NET_HALF_WIDTH, _scratch_opponents)
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -389,8 +373,6 @@ func _pick_action(ctx: RoleContext) -> void:
 	# never fire.
 	if intended_action == INTENT_SHOOT and shoot_score > 0.0:
 		shoot_score *= 1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC
-	elif intended_action == INTENT_QUICK_SHOT and quick_shoot_score > 0.0:
-		quick_shoot_score *= 1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC
 	elif intended_action == INTENT_PASS and best_pass_score > 0.0:
 		best_pass_score *= 1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC
 
@@ -398,23 +380,17 @@ func _pick_action(ctx: RoleContext) -> void:
 	# State machine forwards these to its own debug_* fields; AIController
 	# polls and refreshes only when content changes.
 	debug_shoot_score = shoot_score
-	debug_quick_shot_score = quick_shoot_score
 	debug_pass_score = best_pass_score
 	debug_pass_peer_id = best_pass_peer
 	debug_carry_score = carry_score
 	debug_carry_pos = last_carry_anchor
 
-	# Pick the better shot type first. Wrister wins ties — the
-	# higher-power option is the default. Quick-shot has to beat
-	# wrister by the hysteresis fraction to be chosen, which captures
-	# "only snap-shoot when the no-charge release is distinctly better
-	# than charging." Margin reuse keeps the behaviour consistent with
-	# the other fire-intent stickiness.
+	# The wrister is the only shot type — a paced release covers everything from a
+	# soft in-tight roof to a full-power rip (see #363), so the separate no-charge
+	# quick snap was retired (the fast ~125 ms wrister out-scores it even into a set
+	# goalie point-blank).
 	var best_shot_score: float = shoot_score
 	var best_shot_intent: int = INTENT_SHOOT
-	if quick_shoot_score > shoot_score * (1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC):
-		best_shot_score = quick_shoot_score
-		best_shot_intent = INTENT_QUICK_SHOT
 
 	# Best fire option. No noise-floor threshold against CARRY — a weak
 	# fire loses to any stronger carry candidate on its own (and

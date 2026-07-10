@@ -338,8 +338,7 @@ func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
 		ctx.snapshot.goalie_states[1 - TEAM_ID] = g
 		var c := AIRoleCarrier.new()
 		c.decide(ctx)
-		if c.intended_action == AIRoleCarrier.INTENT_SHOOT \
-				or c.intended_action == AIRoleCarrier.INTENT_QUICK_SHOT:
+		if c.intended_action == AIRoleCarrier.INTENT_SHOOT:
 			shot_distance = dist
 			break
 	# The first (farthest) commit is the release distance on the drive. It must be
@@ -789,8 +788,7 @@ func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:
 	assert_not_null(d)
 	assert_true(carrier.intended_action == AIRoleCarrier.INTENT_CARRY \
 			or carrier.intended_action == AIRoleCarrier.INTENT_SHOOT \
-			or carrier.intended_action == AIRoleCarrier.INTENT_PASS \
-			or carrier.intended_action == AIRoleCarrier.INTENT_QUICK_SHOT,
+			or carrier.intended_action == AIRoleCarrier.INTENT_PASS,
 			"decide() yields a valid intent with a staging finisher in play")
 
 

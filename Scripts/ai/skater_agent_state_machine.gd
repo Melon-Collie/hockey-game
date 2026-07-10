@@ -34,7 +34,6 @@ enum State {
 	CARRY,            # with puck, no committed action — aim at goal
 	SHOOT_PRESSED,    # multi-tick wrister charge aimed at goalie shadow
 	PASS_PRESSED,     # one-tick press window aimed at a teammate's lead position
-	QUICK_SHOT_PRESSED,  # one-tick press window aimed at the goalie shadow — no charge
 	ONE_TIMER_PRESSED,   # off-puck FINISHER fire-on-contact when ready + puck in zone
 }
 
@@ -204,9 +203,9 @@ const RECEIVE_TIMING_MARGIN: float = 0.9
 # Engage gates (else fall through to the normal possession catch):
 #   - incoming puck is a real pass (fast, loose, heading to us) — same geometry
 #     as _pass_receive_aim_and_steer.
-#   - a quick shot from the reception point scores >= SHOT_RECEPTION_SCORE_GATE.
-#     (score_quick_shot already folds in range, angle, lane, goalie — so this
-#     one gate also means "in shooting range with a real look.")
+#   - a redirect from the reception point scores >= SHOT_RECEPTION_SCORE_GATE.
+#     (score_shoot at the soft redirect pace folds in range, angle, lane, goalie —
+#     so this one gate also means "in shooting range with a real look.")
 #
 # Mode A (one-time redirect) vs Mode B (catch-in-stride):
 #   A when the feed is a LATERAL cross-pass on the forehand side, far enough
@@ -894,7 +893,6 @@ var debug_last_decision: String = ""
 # flicker every frame). Slot label and carry direction are computed
 # from the chosen peer / position at the same time.
 var debug_shoot_score: float = 0.0
-var debug_quick_shot_score: float = 0.0
 var debug_pass_score: float = 0.0
 var debug_pass_peer_id: int = 0
 var debug_carry_score: float = 0.0
@@ -912,12 +910,10 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 # swing wants the extra softening). Convergence reads `_mouse_pos`, not the agent
 # output, so this never affects when a shot fires.
 func wants_direct_aim() -> bool:
-	if _state == State.SHOOT_PRESSED or _state == State.QUICK_SHOT_PRESSED \
-			or _state == State.ONE_TIMER_PRESSED:
+	if _state == State.SHOOT_PRESSED or _state == State.ONE_TIMER_PRESSED:
 		return true
 	# Pre-aiming a shot while still in CARRY (intent committed, not yet pressed).
-	return _intended_action == State.SHOOT_PRESSED \
-			or _intended_action == State.QUICK_SHOT_PRESSED
+	return _intended_action == State.SHOOT_PRESSED
 
 
 # Apply this bot's attribute-scaled self-capabilities. Called by
@@ -1029,17 +1025,10 @@ func debug_role() -> String:
 # scored highest on the most recent _pick_action tick. Independent
 # of commit (intent) — purely the live winner.
 func debug_winner() -> String:
-	# Wrister wins ties over quick-shot (matches the carrier's
-	# tie-break logic: quick must beat wrister by the hysteresis
-	# fraction to be chosen).
+	# The wrister is the only shot type now.
 	var best_shot_score: float = debug_shoot_score
-	var best_shot_label: String = "SHOOT"
-	if debug_quick_shot_score > debug_shoot_score \
-			* (1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC):
-		best_shot_score = debug_quick_shot_score
-		best_shot_label = "QUICK"
 	var fire_score: float = best_shot_score if best_shot_score >= debug_pass_score else debug_pass_score
-	var fire_label: String = best_shot_label if best_shot_score >= debug_pass_score else "PASS"
+	var fire_label: String = "SHOOT" if best_shot_score >= debug_pass_score else "PASS"
 	if fire_score == 0.0 and debug_carry_score == 0.0:
 		return "—"
 	if fire_score >= debug_carry_score:
@@ -1054,7 +1043,6 @@ func debug_intent() -> String:
 	match _intended_action:
 		State.SHOOT_PRESSED: return "SHOOT"
 		State.PASS_PRESSED: return "PASS"
-		State.QUICK_SHOT_PRESSED: return "QUICK"
 		_: return "CARRY"
 
 
@@ -1205,7 +1193,6 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	# fresh state always dispatches full on its first tick.
 	var is_press_state: bool = (_state == State.SHOOT_PRESSED
 			or _state == State.PASS_PRESSED
-			or _state == State.QUICK_SHOT_PRESSED
 			or _state == State.ONE_TIMER_PRESSED)
 	if not is_press_state and _dispatch_skip_counter > 0:
 		_dispatch_skip_counter -= 1
@@ -1229,8 +1216,6 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			_state_shoot_pressed(input, snapshot, self_pos, have_puck)
 		State.PASS_PRESSED:
 			_state_pass_pressed(input, snapshot, self_pos, have_puck)
-		State.QUICK_SHOT_PRESSED:
-			_state_quick_shot_pressed(input, snapshot, self_pos, have_puck)
 		State.ONE_TIMER_PRESSED:
 			_state_one_timer_pressed(input, snapshot, self_pos, have_puck)
 
@@ -1659,15 +1644,16 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	perp_off.y = 0.0
 	if perp_off.length() > RECEIVE_TRIGGER_LATERAL_M:
 		return _RECV_NONE
-	# Is a shot from the catch point on? Quick-shot scoring — a fire-on-contact
-	# redirect gives the goalie no slide time. This one gate also encodes "in
-	# shooting range with a real look" (score_quick_shot folds in range / angle
-	# / lane / goalie).
+	# Is a shot from the catch point on? A fire-on-contact redirect gives the goalie
+	# no slide time, so score it at his CURRENT position (goalie_now) and the soft
+	# redirect pace (PASS_SPEED_M_S). This one gate also encodes "in shooting range
+	# with a real look" (score_shoot folds in range / angle / lane / goalie).
 	_gather_opponents(snapshot, _scratch_shot_opponents)
 	var goalie_now: Vector3 = _goalie_now(snapshot)
-	var shot_score: float = AIActionScoring.score_quick_shot(
+	var shot_score: float = AIActionScoring.score_shoot(
 			perp_foot, _attacking_goal_pos, goalie_now,
-			GameRules.NET_HALF_WIDTH, _scratch_shot_opponents)
+			GameRules.NET_HALF_WIDTH, _scratch_shot_opponents,
+			AIActionScoring.PASS_SPEED_M_S)
 	if shot_score < SHOT_RECEPTION_SCORE_GATE:
 		return _RECV_NONE
 	# Net-forward geometry. Anchor = the catch point pulled back one blade-reach
@@ -1788,7 +1774,6 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		else:
 			_dump_target = Vector3.INF
 	debug_shoot_score = _carrier.debug_shoot_score
-	debug_quick_shot_score = _carrier.debug_quick_shot_score
 	debug_pass_score = _carrier.debug_pass_score
 	debug_pass_peer_id = _carrier.debug_pass_peer_id
 	debug_carry_score = _carrier.debug_carry_score
@@ -1818,10 +1803,6 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 					_locked_pre_aim_point = (_shot_aim_locked
 							if _shot_aim_locked.is_finite()
 							else _shot_aim_point(snapshot, self_pos))
-				State.QUICK_SHOT_PRESSED:
-					# No-charge release — score the goalie at his current
-					# position, not the wrister-window projection.
-					_locked_pre_aim_point = _shot_aim_point(snapshot, self_pos, 0.0)
 				State.PASS_PRESSED:
 					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
 			# Debug: capture commit snapshot for SHOOT to compare against
@@ -1949,8 +1930,6 @@ func _state_from_carrier_intent(intent: int) -> State:
 			# A dump is a pass to a LOCATION (no receiver) — reuse the PASS_PRESSED
 			# release path; _dump_target (finite) redirects the aim and the bail.
 			return State.PASS_PRESSED
-		AIRoleCarrier.INTENT_QUICK_SHOT:
-			return State.QUICK_SHOT_PRESSED
 		_:
 			return State.CARRY
 
@@ -1975,11 +1954,6 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 			var target: Vector3 = (_locked_pre_aim_point
 					if _locked_pre_aim_point.is_finite()
 					else _shot_aim_point(snapshot, self_pos))
-			return _aim_2m_toward(self_pos, target)
-		State.QUICK_SHOT_PRESSED:
-			var target: Vector3 = (_locked_pre_aim_point
-					if _locked_pre_aim_point.is_finite()
-					else _shot_aim_point(snapshot, self_pos, 0.0))
 			return _aim_2m_toward(self_pos, target)
 		_:
 			return _carry_mouse_aim(snapshot, self_pos)
@@ -2464,31 +2438,9 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_set_state(State.CARRY)
 
 
-# Quick-shot release at goal. Mechanically identical to PASS_PRESSED
-# (one-tick quick_shot_pressed, controller fires a quick-shot release at
-# PASS_SPEED_M_S) but aimed past the goalie shadow instead of at a receiver.
-# Used when
-# the carrier's `score_quick_shot` beats `score_shoot` by margin —
-# typically against a still-squared goalie at close range where a
-# wrister charge would give the goalie time to slide.
-func _state_quick_shot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	_apply_brake_steering(input, snapshot, self_pos)
-	debug_last_decision = "QUICK"
-	# No-charge shot — score the goalie at his current position
-	# (release_lookahead_s = 0). Fires the instant quick shot via the dedicated
-	# button flag; LMB no longer has a tap-to-quick-shot path.
-	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos, 0.0)
-	input.mouse_world_pos = _step_mouse_toward(clean_aim)
-	input.quick_shot_pressed = true
-	if not have_puck:
-		_set_state(_post_puck_lost_state(snapshot))
-	else:
-		_set_state(State.CARRY)
-
-
 # One-timer fire from off-puck. Entered from OFF_PUCK / CHASE_PUCK
 # when the FINISHER is ready AND the puck enters the one-timer zone.
-# We can't reuse QUICK_SHOT_PRESSED's one-tick pattern because the
+# We can't reuse the one-tick quick-release pattern because the
 # bot doesn't have the puck at press time — the controller picks up
 # the puck mid-flight, and shoot_held has to stay true through the
 # pickup so WRISTER_AIM is the active controller state when the
@@ -2881,12 +2833,8 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 	# that threshold's scale — a fraction of a near-zero score would be
 	# a near-zero band and the blade would wobble at ~30 Hz again.
 	const FIRE_AIM_HYSTERESIS_BAND: float = 0.05
-	# Either wrister OR quick-shot dominance triggers the pre-track —
-	# both aim at the goalie shadow, so the aim direction is close
-	# enough that picking the wrister lookahead (default) for the
-	# pre-track is fine; the press state itself uses the right
-	# lookahead per shot type.
-	var best_shot_score: float = maxf(debug_shoot_score, debug_quick_shot_score)
+	# Wrister dominance triggers the pre-track toward the goalie shadow.
+	var best_shot_score: float = debug_shoot_score
 	# Hysteresis on the tracking-fire decision: once we're tracking
 	# the shot, require the shot score to drop meaningfully below
 	# threshold (or below pass score) before falling back to carry

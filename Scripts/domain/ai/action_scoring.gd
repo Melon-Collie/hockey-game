@@ -664,23 +664,6 @@ static func score_shoot(
 	return shot_quality * lane * pressure_factor
 
 
-# Quick-shot variant of score_shoot. Two parameter swaps:
-#   - predicted_goalie_pos = goalie_now (no charge window → the goalie hasn't
-#     slid; the geometry sees him where he actually is, still squared to the
-#     carrier, so an off-axis quick shot finds open net past him)
-#   - shot_speed = PASS_SPEED_M_S (quick-shot release speed → shorter flight
-#     gives the goalie even less glove/blocker reaction; slower puck also
-#     closes lanes at range via lane_clear)
-static func score_quick_shot(
-		shooter: Vector3,
-		attacking_goal: Vector3,
-		goalie_now: Vector3,
-		net_half_width: float,
-		opponents: Array[Vector3]) -> float:
-	return score_shoot(shooter, attacking_goal, goalie_now,
-			net_half_width, opponents, PASS_SPEED_M_S)
-
-
 # Point-blank jam distance: the closest the puck realistically gets to a set goalie
 # before his body/pads stop it. A physical measurement (skate + pad depth), not a
 # tuning knob — it just keeps the shooter strictly in FRONT of the keeper so the
