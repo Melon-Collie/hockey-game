@@ -769,52 +769,52 @@ func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
 	assert_almost_eq(t, 10.0 / AIActionScoring.MIN_TRAVEL_SPEED_M_S, 0.001)
 
 
-# ─── expected_pass_speed / pass_launch_speed (distance-adaptive) ─────────
+# ─── expected_pass_speed / pass_launch_speed (target-arrival model) ──────
 
-func test_pass_launch_speed_short_feed_is_a_soft_touch() -> void:
-	# At/under the short threshold a pass fires at the soft touch pace — a gentle
-	# close feed the receiver corrals in tight, not a rocket.
+func test_pass_launch_speed_short_feed_hits_the_magnet_pace() -> void:
+	# A close feed launches right at the magnet target (friction over a short
+	# distance is negligible) — crisp, not the old floaty ~11 m/s touch.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-	assert_almost_eq(
-			AIActionScoring.pass_launch_speed(AIActionScoring.PASS_RAMP_SHORT_DISTANCE_M, maxw),
-			AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, 0.001)
-	assert_almost_eq(AIActionScoring.pass_launch_speed(2.0, maxw),
-			AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, 0.001)
-	assert_lt(AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S, AIActionScoring.PASS_SPEED_M_S,
-			"a soft touch is softer than the old quick-snap floor")
+	assert_almost_eq(AIActionScoring.pass_launch_speed(0.0, maxw),
+			AIActionScoring.PASS_TARGET_ARRIVAL_M_S, 0.001)
+	assert_lt(absf(AIActionScoring.pass_launch_speed(2.0, maxw)
+			- AIActionScoring.PASS_TARGET_ARRIVAL_M_S), 0.1,
+			"a 2 m feed launches within a whisker of the magnet pace")
+	assert_gt(AIActionScoring.PASS_TARGET_ARRIVAL_M_S, AIActionScoring.PASS_SPEED_M_S,
+			"the magnet pace is crisper than the old quick-snap speed")
 
 
-func test_pass_launch_speed_ramps_up_with_distance() -> void:
-	# Between the short and long thresholds, launch speed increases monotonically.
+func test_pass_launch_speed_arrives_at_the_target_after_friction() -> void:
+	# The launch is backed out of the target arrival: simulate the puck shedding
+	# ice friction over the distance and it lands on the target speed.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-	var near: float = AIActionScoring.pass_launch_speed(12.0, maxw)
-	var mid: float = AIActionScoring.pass_launch_speed(18.0, maxw)
-	var far: float = AIActionScoring.pass_launch_speed(24.0, maxw)
-	assert_gt(mid, near, "an 18 m pass must launch harder than a 12 m one")
-	assert_gt(far, mid, "a 24 m pass must launch harder than an 18 m one")
-	assert_gt(near, AIActionScoring.PASS_RAMP_SHORT_SPEED_M_S,
-			"a 12 m pass is harder than the soft close-touch floor")
+	for d: float in [4.0, 12.0, 26.0]:
+		var launch: float = AIActionScoring.pass_launch_speed(d, maxw)
+		var arrival: float = sqrt(maxf(
+				launch * launch - 2.0 * GameRules.PUCK_ICE_DECEL_M_S2 * d, 0.0))
+		assert_almost_eq(arrival, AIActionScoring.PASS_TARGET_ARRIVAL_M_S, 0.001,
+				"a %.0f m pass arrives at the magnet pace" % d)
 
 
-func test_pass_launch_speed_long_pass_reaches_ramp_top() -> void:
-	# At/beyond the long threshold a pass fires at the long-pass pace (clamped by
-	# the passer's own max wrister).
+func test_pass_launch_speed_rises_slightly_with_distance() -> void:
+	# Longer passes launch a hair harder to cover the extra friction, but the whole
+	# spread stays tight around the target (< 1 m/s even at 26 m) — no distance ramp.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-	assert_almost_eq(
-			AIActionScoring.pass_launch_speed(AIActionScoring.PASS_RAMP_LONG_DISTANCE_M, maxw),
-			AIActionScoring.PASS_RAMP_LONG_SPEED_M_S, 0.001)
-	assert_almost_eq(AIActionScoring.pass_launch_speed(60.0, maxw),
-			AIActionScoring.PASS_RAMP_LONG_SPEED_M_S, 0.001)
+	var near: float = AIActionScoring.pass_launch_speed(4.0, maxw)
+	var far: float = AIActionScoring.pass_launch_speed(26.0, maxw)
+	assert_gt(far, near, "a longer pass launches marginally harder (more friction)")
+	assert_lt(far - AIActionScoring.PASS_TARGET_ARRIVAL_M_S, 1.0,
+			"even a long pass launches within 1 m/s of the magnet target")
 
 
 func test_pass_launch_speed_clamps_to_passer_max() -> void:
-	# A low-Shot passer (low max wrister) can't reach the long-pass pace — the
-	# launch clamps to its own ceiling.
+	# A low-Shot passer (low max wrister) can't reach the magnet pace — the launch
+	# clamps to its own ceiling.
 	var weak_max: float = 16.0
 	assert_almost_eq(AIActionScoring.pass_launch_speed(40.0, weak_max), weak_max, 0.001)
 
 
-func test_expected_pass_speed_uses_distance_ramp() -> void:
+func test_expected_pass_speed_uses_the_target_model() -> void:
 	# expected_pass_speed is just pass_launch_speed at the league cap.
 	var shooter := Vector3.ZERO
 	var far := Vector3(0.0, 0.0, 18.0)
@@ -833,15 +833,15 @@ func test_pass_speed_scale_defaults_to_unchanged() -> void:
 			AIActionScoring.pass_launch_speed(18.0, maxw))
 
 
-func test_pass_speed_scale_slows_the_puck_below_the_snap_floor() -> void:
-	# The pace knob applies AFTER the clamp, so an easier bot's short feed drops
-	# below the snap floor (PASS_SPEED_M_S) — a slow, readable puck by design.
+func test_pass_speed_scale_slows_the_puck_below_the_magnet_pace() -> void:
+	# The pace knob applies AFTER the clamp, so an easier bot's pass drops below the
+	# magnet pace — a slower, readable puck by design.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 	var full: float = AIActionScoring.pass_launch_speed(4.0, maxw, 1.0)
 	var slowed: float = AIActionScoring.pass_launch_speed(4.0, maxw, 0.7)
 	assert_almost_eq(slowed, full * 0.7, 0.001)
-	assert_lt(slowed, AIActionScoring.PASS_SPEED_M_S,
-			"a scaled short feed is slower than the snap floor")
+	assert_lt(slowed, AIActionScoring.PASS_TARGET_ARRIVAL_M_S,
+			"a scaled pass is slower than the magnet pace")
 
 
 # ─── score_pass: speed-aware lane clearance ─────────────────────────────

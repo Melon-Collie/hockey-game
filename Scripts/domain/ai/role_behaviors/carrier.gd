@@ -126,10 +126,10 @@ var pass_target_peer_id: int = -1
 # between one-tick fire and ~250 ms wrister charge.
 var pass_should_charge: bool = false
 
-# Distance-adaptive LAUNCH speed for the chosen PASS (AIActionScoring.
-# pass_launch_speed): soft for short feeds, harder for long ones so they all
-# arrive at a comfortable pace. The state machine maps this to the wrister
-# charge fraction it winds up to, and leads the pass at this speed.
+# LAUNCH speed for the chosen PASS (AIActionScoring.pass_launch_speed): set so
+# the puck arrives on the teammate's tape at the magnet pace, friction-compensated
+# by distance. The state machine maps this to the wrister charge fraction it winds
+# up to, and leads the pass at this speed.
 var pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 
 # Set alongside pass_target_peer_id when the chosen PASS is a long
