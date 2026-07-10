@@ -156,22 +156,14 @@ const ACCEL_SMOOTH_ALPHA: float = 0.2
 # full-thrust accel.
 const ACCEL_CLAMP_M_S2: float = 14.0
 
-# Soft-hands reception. When closing on a loose puck moving faster
-# than SOFT_HANDS_PUCK_SPEED_MIN_M_S (i.e. an incoming pass / stripped
-# puck), AND we're within SOFT_HANDS_DISTANCE_M of the intercept
-# point, the chase input is scaled by SOFT_HANDS_MOVE_SCALE. The bot
-# arrives at the intercept at a fraction of normal speed instead of
-# plowing into the puck at top speed — gives the blade time to be
-# steady when the puck arrives so it catches rather than deflects.
-# Tuning: raise SOFT_HANDS_PUCK_SPEED_MIN_M_S toward 12 if soft-
-# hands fires on slow loose pucks the bot should just collect at
-# speed; lower toward 5 if it's failing to soften on slow passes.
-# Lower SOFT_HANDS_MOVE_SCALE toward 0.2 for an even stronger catch
-# (risk: opp swoops in); raise toward 0.6 if reception still feels
-# clattery.
-const SOFT_HANDS_PUCK_SPEED_MIN_M_S: float = 8.0
-const SOFT_HANDS_DISTANCE_M: float = 1.5
-const SOFT_HANDS_MOVE_SCALE: float = 0.4
+# A loose puck above this speed is a live pass / stripped puck (not a puck to just
+# skate onto): the chase AIMS the blade along its flight line rather than at a fixed
+# intercept point, so the stick stays on the puck's path. NOT a "soft-hands" cushion
+# — the catch is decided purely by blade squareness + the puck's absolute speed
+# (PuckReceptionRules; a moving blade catches exactly like a static one), so there's
+# no approach-speed term. Cleanly collecting a fast puck is about the blade ANGLE
+# (see _pass_receive_aim_and_steer, which squares up), not the closing speed.
+const LOOSE_PUCK_TRACK_SPEED_M_S: float = 8.0
 
 # Pass-receive setup. When a fast loose puck (~pass) is heading near
 # us along a straight trajectory, we stand offset to the SIDE of the
@@ -1385,7 +1377,11 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# tradeoff — that's another teammate's job and we're committed
 		# to being the trigger.
 		pass
-	elif _should_chase_loose_puck(snapshot, self_pos):
+	elif _should_chase_loose_puck(snapshot, self_pos) \
+			or _incoming_pass_to_me(snapshot, self_pos):
+		# Chase either the loose puck we're closest to, OR a pass released our way —
+		# the latter gets us into the squared reception setup before the fast puck
+		# arrives, rather than reacting only once it's on top of us.
 		_set_state(State.CHASE_PUCK)
 
 
@@ -1531,23 +1527,14 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 				target = _angle_intercept_inside(target, carrier_state.position)
 		_apply_steering(input, snapshot, self_pos, target)
 
-		# Soft-hands: when receiving a fast loose puck (incoming pass) and
-		# we're within SOFT_HANDS_DISTANCE_M of the intercept, scale the
-		# move input down so the bot arrives at low speed instead of
-		# plowing into a 22 m/s puck. A ~10 m/s body collision against a
-		# fast puck deflects it off the blade rather than catching it;
-		# reducing closing speed lets the puck "roll onto" the stick.
-		# Carrier check ensures we're not soft-handing during a stripped-
-		# puck scrum (where opp possession is also -1 in the brief moment
-		# after stripping but the puck is slow). Bot-velocity check
-		# avoids the case where we're not actually moving toward the puck.
+		# No "soft-hands" slow-down here: the catch is decided purely by blade
+		# squareness + the puck's absolute speed (PuckReceptionRules — there is no
+		# give-with-the-puck term, a moving blade catches exactly like a static one),
+		# so easing the approach doesn't help the pickup and only surrenders time on a
+		# race. Getting to the puck fast and on a good blade angle is what matters.
 		var puck_velocity: Vector3 = snapshot.puck_state.velocity
 		var puck_speed_xz: float = sqrt(puck_velocity.x * puck_velocity.x
 				+ puck_velocity.z * puck_velocity.z)
-		if carrier_pid == -1 and puck_speed_xz > SOFT_HANDS_PUCK_SPEED_MIN_M_S:
-			var dist_to_intercept: float = self_pos.distance_to(target)
-			if dist_to_intercept < SOFT_HANDS_DISTANCE_M:
-				input.move_vector *= SOFT_HANDS_MOVE_SCALE
 
 		# Aim: normally blade-on-intercept, but during the engagement cooldown
 		# (just got stripped or just stick-checked someone) pull the blade
@@ -1564,7 +1551,7 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			input.mouse_world_pos = _step_mouse_toward(Vector3(self_pos.x, 0.0, self_pos.z))
 		elif self_pos.distance_to(puck_pos) <= _blade_reach:
 			input.mouse_world_pos = _step_mouse_toward(puck_pos)
-		elif carrier_pid == -1 and puck_speed_xz > SOFT_HANDS_PUCK_SPEED_MIN_M_S:
+		elif carrier_pid == -1 and puck_speed_xz > LOOSE_PUCK_TRACK_SPEED_M_S:
 			input.mouse_world_pos = _step_mouse_toward(puck_pos)
 		else:
 			input.mouse_world_pos = _step_mouse_toward(target)
@@ -1583,7 +1570,11 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		_set_state(State.CARRY)
 	elif _is_one_timer_ready and _puck_in_one_timer_zone(snapshot, self_pos):
 		_set_state(State.ONE_TIMER_PRESSED)
-	elif not _should_chase_loose_puck(snapshot, self_pos):
+	elif not _should_chase_loose_puck(snapshot, self_pos) \
+			and not _incoming_pass_to_me(snapshot, self_pos):
+		# Stay in CHASE while a pass is still heading our way even if we aren't the
+		# closest to the puck's CURRENT spot (it's near the passer early in flight) —
+		# leaving now would drop the reception setup we entered to make.
 		_set_state(State.OFF_PUCK)
 
 
@@ -1651,10 +1642,12 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 			self_pos, body_anchor, self_vel, _self_max_speed)
 	if bot_eta > puck_eta * RECEIVE_TIMING_MARGIN:
 		return false
-	# Commit. Steer body to body_anchor; soft-hands to arrive at rest.
-	_apply_steering(input, snapshot, self_pos, body_anchor)
-	if self_pos.distance_to(body_anchor) < SOFT_HANDS_DISTANCE_M:
-		input.move_vector *= SOFT_HANDS_MOVE_SCALE
+	# Commit. Steer to body_anchor with an arrival brake so we SETTLE on the line —
+	# square, off to the side — instead of overshooting it. The catch is decided
+	# purely by blade squareness + the puck's absolute speed (PuckReceptionRules has
+	# no give-with-the-puck term), so there's no approach-speed "cushion" to apply;
+	# this is pure positioning so the squared blade is waiting on the line in time.
+	_apply_steering(input, snapshot, self_pos, body_anchor, true)
 	# Aim: blade target tracks the puck along its flight line, one
 	# tick ahead to compensate for IK convergence lag. As the puck
 	# approaches perp_foot, the mouse follows it; body sits offset
@@ -1663,6 +1656,49 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	var blade_target: Vector3 = puck_pos + puck_vel * MOUSE_TICK_DELTA
 	blade_target.y = 0.0
 	input.mouse_world_pos = _step_mouse_toward(blade_target)
+	return true
+
+
+# Anticipation: is a fast loose puck (a pass) heading toward us right now? Same
+# geometry as the reception steer — fast, loose, we're AHEAD of it (t > 0) and within
+# the receive lateral of its line. Used to enter (and stay in) CHASE the instant a
+# pass is released our way, instead of waiting to become the closest teammate to the
+# puck as it arrives. At magnet pace that wait leaves no time to step square — the
+# intended receiver reacts late and clatters the catch. Getting into CHASE early lets
+# _pass_receive_aim_and_steer set up the squared, soft-handed reception in time.
+func _incoming_pass_to_me(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	if snapshot == null or snapshot.puck_state == null \
+			or snapshot.puck_state.carrier_peer_id != -1:
+		return false
+	var pv: Vector3 = snapshot.puck_state.velocity
+	var speed_sq: float = pv.x * pv.x + pv.z * pv.z
+	if speed_sq < RECEIVE_TRIGGER_PUCK_SPEED_M_S * RECEIVE_TRIGGER_PUCK_SPEED_M_S:
+		return false
+	var speed: float = sqrt(speed_sq)
+	var dir := Vector3(pv.x / speed, 0.0, pv.z / speed)
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var to_self := Vector3(self_pos.x - puck_pos.x, 0.0, self_pos.z - puck_pos.z)
+	var t: float = to_self.dot(dir)
+	if t <= 0.0:
+		return false
+	var perp_foot: Vector3 = puck_pos + dir * t
+	var perp_dx: float = self_pos.x - perp_foot.x
+	var perp_dz: float = self_pos.z - perp_foot.z
+	var my_d2: float = perp_dx * perp_dx + perp_dz * perp_dz
+	if my_d2 > RECEIVE_TRIGGER_LATERAL_M * RECEIVE_TRIGGER_LATERAL_M:
+		return false
+	# Only the BEST-positioned receiver anticipates — the teammate nearest where the
+	# puck crosses their level. Without this, a fast puck (a shot, or a pass to a
+	# different teammate) flying within the lateral band of several bots would pull
+	# them ALL toward it and out of position. Bounded scan (<= roster).
+	for pid: int in snapshot.skater_states:
+		if pid == _peer_id or _team_id_by_peer.get(pid, -1) != _team_id:
+			continue
+		var tp: Vector3 = snapshot.skater_states[pid].position
+		var dx: float = tp.x - perp_foot.x
+		var dz: float = tp.z - perp_foot.z
+		if dx * dx + dz * dz < my_d2:
+			return false
 	return true
 
 
