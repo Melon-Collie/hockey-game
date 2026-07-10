@@ -853,6 +853,26 @@ var _base_hand_rest_y:                  float = 0.0
 var _base_hand_y_max:                   float = 0.0
 
 
+# Snapshot this body's attribute-scaled capabilities as the bot AI models them —
+# read off the SAME scaled fields the physics drives with (set by
+# apply_attributes), so the AI never disagrees with the body. Used two ways: a
+# bot's self-model (AIController.apply_attributes) and PlayerRegistry's per-peer
+# caps_by_peer (every player, so other bots read real builds). Cheap and
+# allocation-light; called only on apply / spawn, never per tick.
+func build_ai_caps() -> AISkaterCaps:
+	var caps := AISkaterCaps.new()
+	caps.max_speed = max_speed
+	caps.max_accel = thrust
+	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
+	caps.stick_reach = stick_length
+	caps.wrister_shot_speed = max_wrister_power
+	if skater != null:
+		caps.weight = skater.weight
+		caps.body_check_transfer = skater.body_check_transfer
+		caps.body_check_brace = skater.body_check_brace_resistance
+	return caps
+
+
 # Modulates the controller and skater tuning fields from a PlayerAttributes
 # resource. Safe to call multiple times — the first call snapshots the
 # shipped @export defaults, every call recomputes live = base × multiplier.

@@ -3413,6 +3413,8 @@ func _on_local_attributes_changed(attrs: PlayerAttributes) -> void:
 		return
 	if record.controller != null:
 		(record.controller as SkaterController).apply_attributes(attrs)
+		# Refresh the memoized per-peer caps so bots model this player's new build.
+		_registry.refresh_caps(record.peer_id)
 
 
 # Re-tint home (and possibly away) when the local player picks a new

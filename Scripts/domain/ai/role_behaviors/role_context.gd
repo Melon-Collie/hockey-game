@@ -51,13 +51,21 @@ var team_id_by_peer: Dictionary = {}
 # adjustment) — same behaviour as before this field existed.
 var acceleration_by_peer: Dictionary = {}
 
+# Per-peer attribute-scaled capabilities (AISkaterCaps), keyed by peer_id — every
+# player's REAL build (top speed, accel, reach, shot speed, weight/brace), so a
+# bot can model a specific teammate or opponent with what they can actually do
+# instead of the league average. Memoized by PlayerRegistry (rebuilt only on
+# spawn / picker, never per tick) and passed here by live reference, same pattern
+# as team_id_by_peer / acceleration_by_peer. Read `caps_by_peer.get(pid, null)`;
+# a missing entry (unit tests, unwired) means "fall back to the league default",
+# which reproduces the prior behaviour exactly.
+var caps_by_peer: Dictionary = {}
+
 # ── Self capabilities (attribute-scaled, this bot only) ───────────────────────
-# Populated by SkaterAgentStateMachine from its AISelfCapabilities so the
-# carrier scores ITS OWN actions with this bot's real top speed / shot speed
-# instead of league defaults. Defaults equal the baseline, so unwired contexts
-# (unit tests) keep the prior behaviour. Cross-player evaluation (a receiver's
-# shot, an opponent's ETA) deliberately stays on the default constants — see
-# AISelfCapabilities.
+# Populated by SkaterAgentStateMachine from its own AISkaterCaps so the carrier
+# scores ITS OWN actions with this bot's real top speed / shot speed instead of
+# league defaults. Defaults equal the baseline, so unwired contexts (unit tests)
+# keep the prior behaviour. (Cross-player evaluation reads caps_by_peer above.)
 var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # Also the upper clamp on this bot's distance-adaptive pass launch speed.
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S

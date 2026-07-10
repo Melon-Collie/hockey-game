@@ -1,6 +1,6 @@
 extends GutTest
 
-# AISelfCapabilities + the wiring that pushes a bot's attribute-scaled
+# AISkaterCaps + the wiring that pushes a bot's attribute-scaled
 # capabilities into its state machine. Covers: baseline defaults (so an unwired
 # bot behaves as before), the time_to_arrive ref-speed parameter, score_shoot's
 # shot-speed sensitivity, and that apply_capabilities derives the state
@@ -10,11 +10,17 @@ extends GutTest
 # ── Defaults reproduce the league baseline ──────────────────────────────────
 
 func test_caps_defaults_equal_league_baseline() -> void:
-	var caps := AISelfCapabilities.new()
+	var caps := AISkaterCaps.new()
 	assert_almost_eq(caps.max_speed, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S, 0.001)
 	assert_almost_eq(caps.blade_span,
 			GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M, 0.001)
+	assert_almost_eq(caps.stick_reach, GameRules.DEFAULT_STICK_LENGTH_M, 0.001)
 	assert_almost_eq(caps.wrister_shot_speed, GameRules.DEFAULT_WRISTER_POWER_MAX_M_S, 0.001)
+	# Cross-player fields (used once a peer's real build is read) default to the
+	# league baseline too, so a missing caps_by_peer entry reproduces old behaviour.
+	assert_almost_eq(caps.weight, 1.0, 0.001)
+	assert_almost_eq(caps.body_check_transfer, 0.45, 0.001)
+	assert_almost_eq(caps.body_check_brace, 0.4, 0.001)
 
 
 func test_role_context_self_speeds_default_to_baseline() -> void:
@@ -66,8 +72,8 @@ func test_score_shoot_non_decreasing_in_shot_speed() -> void:
 # ── apply_capabilities wires the state machine ──────────────────────────────
 
 func _caps(span: float, max_speed: float, accel: float,
-		shot: float) -> AISelfCapabilities:
-	var c := AISelfCapabilities.new()
+		shot: float) -> AISkaterCaps:
+	var c := AISkaterCaps.new()
 	c.blade_span = span
 	c.max_speed = max_speed
 	c.max_accel = accel

@@ -576,6 +576,10 @@ var _team_brain: TeamBrain = null
 # closest-teammate checks). Used to be a Callable; the
 # Callable.call overhead showed up at the dispatch rate.
 var _team_id_by_peer: Dictionary = {}
+# Live peer -> AISkaterCaps dict owned by PlayerRegistry (memoized, rebuilt only
+# on spawn / picker). Copied by reference onto RoleContext.caps_by_peer each build
+# so roles / scorers can read any player's real build. Empty when unwired.
+var _caps_by_peer: Dictionary = {}
 # Handedness drives the wrister wind-up side: RH winds up on the +X
 # (player-local) side of the aim line, LH on -X. Without this, every
 # bot wrister would register as a backhand half the time and lose
@@ -923,7 +927,7 @@ func wants_direct_aim() -> bool:
 # no-op (keeps the league-baseline defaults). Derives the three reach gates from
 # the single blade span, mirroring how the old constants were built off the
 # default stick + blade lengths.
-func apply_capabilities(caps: AISelfCapabilities) -> void:
+func apply_capabilities(caps: AISkaterCaps) -> void:
 	if caps == null:
 		return
 	_self_max_speed = caps.max_speed
@@ -932,8 +936,8 @@ func apply_capabilities(caps: AISelfCapabilities) -> void:
 	_receive_body_offset = caps.blade_span - RECEIVE_BODY_INSET_M
 	_poke_jab_reach = caps.blade_span + GameRules.POKE_RADIUS_M
 	_self_wrister_shot_speed = caps.wrister_shot_speed
-	_self_weight = caps.self_weight
-	_self_body_check_transfer = caps.self_body_check_transfer
+	_self_weight = caps.weight
+	_self_body_check_transfer = caps.body_check_transfer
 
 
 # This bot's target power fraction (0..1) for a charged pass at _pass_target_speed,
@@ -950,7 +954,7 @@ func _pass_power_t() -> float:
 
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
-		is_left_handed: bool) -> void:
+		is_left_handed: bool, caps_by_peer: Dictionary = {}) -> void:
 	if brain == null:
 		push_error("SkaterAgentStateMachine.setup: null TeamBrain for peer_id=%d team_id=%d — bot was spawned before GameManager.team_brains was populated. Bot will run without role assignments." % [peer_id, team_id])
 	_peer_id = peer_id
@@ -961,6 +965,7 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 	_attacking_goal_pos = Vector3(0.0, 0.0, -_own_goal_dir * GameRules.GOAL_LINE_Z)
 	_team_brain = brain
 	_team_id_by_peer = team_id_by_peer
+	_caps_by_peer = caps_by_peer
 	_is_left_handed = is_left_handed
 	# Perpendicular sign derived from handedness — used by _wind_up_endpoint_offsets
 	# to put the wind-up on the bot's forehand side. Must match the codebase's
@@ -1355,6 +1360,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.team_brain = _team_brain
 	ctx.team_id_by_peer = _team_id_by_peer
 	ctx.acceleration_by_peer = _accel_by_peer
+	ctx.caps_by_peer = _caps_by_peer
 	# This bot's own attribute-scaled speeds, so the carrier scores ITS shots /
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed

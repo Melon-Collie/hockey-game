@@ -36,6 +36,13 @@ var _players: Dictionary[int, PlayerRecord] = {}
 var team_id_by_peer: Dictionary[int, int] = {}
 var team_id_by_skater: Dictionary = {}    # Skater object -> team_id
 var peer_id_by_skater: Dictionary = {}    # Skater object -> peer_id
+# Per-peer attribute-scaled AI capabilities (AISkaterCaps), so bots model every
+# player's REAL build. Same maintenance contract as the tables above — rebuilt
+# only on spawn / remove / attribute re-apply (never per tick, since attributes
+# change only at spawn or an offline picker change), read live by reference. A
+# bot's decision layer looks up caps_by_peer[pid]; a missing entry means the
+# league default (unwired / mid-spawn), which reproduces the prior behaviour.
+var caps_by_peer: Dictionary[int, AISkaterCaps] = {}
 # Flat skater list for the per-tick scan loops (puck interactions, goalie
 # crease-jam checks). Rebuilt on spawn/remove; consumers read the live
 # reference through their skater-getter Callable and must not mutate it.
@@ -144,6 +151,7 @@ func spawn(
 	team_id_by_peer[peer_id] = team.team_id
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
+	refresh_caps(peer_id)
 	# Slot-ring tint by relationship to the local player. Same resolver style as
 	# the team lookup above — reads live so it survives slot swaps.
 	spawned.skater.set_ring_relation_resolver(func() -> int: return ring_relation_for_peer(peer_id))
@@ -217,7 +225,7 @@ func spawn_bot(
 	# by team_id). We're host here (only host runs spawn_bot), so the array
 	# is populated by the time this fires.
 	var brain: TeamBrain = GameManager.team_brains[team.team_id] if team.team_id < GameManager.team_brains.size() else null
-	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, team_id_by_peer, record.is_left_handed, GameManager.bot_skill_profile)
+	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, team_id_by_peer, record.is_left_handed, GameManager.bot_skill_profile, caps_by_peer)
 	# Same resolver-based team lookup as spawn() — see comment there.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
 	spawned.skater.set_player_name(record.player_name)
@@ -233,6 +241,7 @@ func spawn_bot(
 	team_id_by_peer[peer_id] = team.team_id
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
+	refresh_caps(peer_id)
 	# Same slot-ring relationship tint as spawn() — see comment there.
 	spawned.skater.set_ring_relation_resolver(func() -> int: return ring_relation_for_peer(peer_id))
 
@@ -255,6 +264,7 @@ func remove(peer_id: int) -> PlayerRecord:
 	player_removed.emit(record)
 	_players.erase(peer_id)
 	team_id_by_peer.erase(peer_id)
+	caps_by_peer.erase(peer_id)
 	if record.skater != null:
 		team_id_by_skater.erase(record.skater)
 		peer_id_by_skater.erase(record.skater)
@@ -288,6 +298,16 @@ func _rebuild_skaters_cache() -> void:
 	for r: PlayerRecord in _players.values():
 		if r.skater != null:
 			_skaters_cache.append(r.skater)
+
+
+# (Re)build the memoized AI capabilities for one peer from its controller's
+# current scaled values. Called on spawn and whenever attributes re-apply (the
+# offline free-play picker) — never per tick. Bots hold caps_by_peer by live
+# reference, so refreshing an entry is seen without re-wiring.
+func refresh_caps(peer_id: int) -> void:
+	var record: PlayerRecord = _players.get(peer_id)
+	if record != null and record.controller != null:
+		caps_by_peer[peer_id] = record.controller.build_ai_caps()
 
 
 func all() -> Dictionary[int, PlayerRecord]:
