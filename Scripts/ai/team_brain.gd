@@ -57,14 +57,18 @@ var _force_tick_pending: bool = false
 # a Dictionary[int, bool] for O(1) `has()` lookups.
 var _excluded_peers: Dictionary = {}
 var _team_id_by_peer: Dictionary = {}
+# Live per-peer AISkaterCaps from PlayerRegistry (memoized), so man-marking reads
+# each defender's real top speed. Empty when unwired (tests) → league default.
+var _caps_by_peer: Dictionary = {}
 # Cached own-goal Z derived from team_id at construction. Team 0
 # defends +GOAL_LINE_Z, Team 1 defends -GOAL_LINE_Z.
 var _own_goal_z: float = 0.0
 
 
-func _init(t: int, team_id_by_peer: Dictionary) -> void:
+func _init(t: int, team_id_by_peer: Dictionary, caps_by_peer: Dictionary = {}) -> void:
 	team_id = t
 	_team_id_by_peer = team_id_by_peer
+	_caps_by_peer = caps_by_peer
 	_own_goal_z = GameRules.GOAL_LINE_Z if t == 0 else -GameRules.GOAL_LINE_Z
 
 
@@ -183,6 +187,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	var defenders: Array[int] = []
 	var defender_pos: Dictionary = {}
 	var defender_vel: Dictionary = {}
+	var defender_caps: Dictionary = {}
 	for pid: int in slot_assignments:
 		var slot: int = slot_assignments[pid]
 		if slot != AIRoleSlots.Slot.ANCHOR \
@@ -195,6 +200,9 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		defenders.append(pid)
 		defender_pos[pid] = s.position
 		defender_vel[pid] = s.velocity
+		var caps: AISkaterCaps = _caps_by_peer.get(pid)
+		if caps != null:
+			defender_caps[pid] = caps
 	if defenders.is_empty():
 		return empty
 
@@ -221,7 +229,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 
 	return AIThreatAssignment.assign(
 			defenders, defender_pos, defender_vel,
-			men, man_pos, man_value, our_net, prev)
+			men, man_pos, man_value, our_net, prev, defender_caps)
 
 
 # Our goalie's current world position, or the goal mouth as a first-frame
