@@ -339,11 +339,13 @@ func _pick_action(ctx: RoleContext) -> void:
 	var wrister_unsettled: float = _goalie_unsettled_at(
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_release_pos)
 
-	# Top-level SHOOT.
+	# Top-level SHOOT. _scratch_opponent_caps is index-matched to _scratch_opponents
+	# (and thus to _scratch_opponents_shoot, built in the same order), so a lane
+	# defender's real Size/Speed reach prices the shot lane.
 	var shoot_score: float = AIActionScoring.score_shoot(
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
-			ctx.self_wrister_shot_speed, wrister_unsettled)
+			ctx.self_wrister_shot_speed, wrister_unsettled, _scratch_opponent_caps)
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -1096,10 +1098,14 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		shot_speed_m_s: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
+	# All the carrier's opponent arrays (path / pass / stand projections) are built
+	# in the same snapshot order as _scratch_opponent_caps, so the defenders in the
+	# shot lane are priced at their real Size/Speed reach. (lane_clear falls back to
+	# league defaults if a count ever mismatches, so this is safe regardless.)
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
-			goalie_unsettled_factor)
+			goalie_unsettled_factor, _scratch_opponent_caps)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(

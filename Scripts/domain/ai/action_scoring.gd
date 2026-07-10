@@ -645,7 +645,8 @@ static func score_shoot(
 		net_half_width: float,
 		opponents: Array[Vector3],
 		shot_speed_m_s: float = WRISTER_SHOT_SPEED_M_S,
-		goalie_unsettled_factor: float = 0.0) -> float:
+		goalie_unsettled_factor: float = 0.0,
+		opponent_caps: Array = []) -> float:
 	# The puck can't be shot from behind the goalie — clamp the shooter to the jam
 	# distance in front of him. Without this a hard drive's projected release, or a
 	# carry candidate placed in the crease, reads as a phantom open net (keeper
@@ -661,7 +662,7 @@ static func score_shoot(
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			shooter, predicted_goalie_pos, attacking_goal.z,
 			net_half_width, GOALIE_SHADOW_HALF_M)
-	var lane: float = lane_clear(shooter, aim, opponents, shot_speed_m_s)
+	var lane: float = lane_clear(shooter, aim, opponents, shot_speed_m_s, [], opponent_caps)
 	# Forward-cone pressure: bodies between the shooter and the net screen/block
 	# the release (beside/behind don't).
 	var pressure_factor: float = 1.0 - _pressure(shooter, opponents, attacking_goal - shooter)
