@@ -33,13 +33,17 @@ func test_quick_pass_received_at_any_angle() -> void:
 
 
 func test_bot_arrival_pace_received_at_any_angle_when_static() -> void:
-	# The bot pass magnet (PASS_TARGET_ARRIVAL_M_S = 21.5) catches at any angle
-	# for a stationary receiver — 21.5 < 22.
-	var puck_vel := Vector3(21.5, 0, 0)
+	# The bot pass magnet (PASS_TARGET_CLOSING_M_S) is the puck's CLOSING speed in
+	# the receiver's frame; for a stationary receiver that equals its world speed,
+	# and it catches at any angle because the target sits under the any-angle
+	# ceiling (deflect_min 22).
+	var puck_vel := Vector3(AIActionScoring.PASS_TARGET_CLOSING_M_S, 0, 0)
 	var perp_normal := Vector3(0, 0, 1)
 	assert_true(PuckReceptionRules.should_receive(
 		puck_vel, STILL, perp_normal, PICKUP_MAX, DEFLECT_MIN, ALIGN_BONUS),
-		"a 21.5 m/s bot feed should receive on a static receiver at any angle")
+		"a magnet-pace bot feed should receive on a static receiver at any angle")
+	assert_lt(AIActionScoring.PASS_TARGET_CLOSING_M_S, DEFLECT_MIN,
+		"the magnet closing pace sits under the any-angle catch ceiling")
 
 
 func test_hard_shot_glancing_alignment_deflected() -> void:

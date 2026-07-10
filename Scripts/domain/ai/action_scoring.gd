@@ -282,7 +282,16 @@ const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 # distance-ramp made close feeds far too soft (down toward the ~11 m/s floor),
 # which both looked weak and, via the longer flight time, made the EV under-value
 # passing relative to holding/shooting.
-const PASS_TARGET_ARRIVAL_M_S: float = 21.5
+# Target CLOSING speed at reception — the puck's speed in the RECEIVER'S frame
+# when it arrives, which is what PuckReceptionRules judges (#373). Under that
+# model's ceilings (any-angle catch ≤ deflect_min 22, squared ≤ 30), 20 sits
+# comfortably under the any-angle bar, so a magnet-pace feed catches at ANY
+# blade angle with margin — the documented "~20 m/s, always catch" pass. Held
+# constant across distance (friction-compensated below) and, when the receiver's
+# velocity is supplied, across the receiver's motion too: pass_launch_speed
+# solves the world launch so the puck lands on the tape at THIS closing speed
+# whether the receiver is streaking onto a lead feed or curling back to it.
+const PASS_TARGET_CLOSING_M_S: float = 20.0
 
 # Reference charged-pass speed (~mid-ramp). No longer a fixed release target —
 # pass speed is distance-adaptive via pass_launch_speed — but kept as a
@@ -293,16 +302,28 @@ const PASS_CHARGE_SPEED_M_S: float = (
 		+ (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 				- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S) * 0.5)
 
-# Pass LAUNCH speed backed out of the target ARRIVAL speed: fire hard enough that
-# the puck ARRIVES at PASS_TARGET_ARRIVAL_M_S after shedding ice friction over the
-# pass distance. Kinematics (constant decel a = PUCK_ICE_DECEL_M_S2):
-#   v_launch = sqrt(v_arrival² + 2·a·d).
-# Friction is tiny (~0.5 m/s²), so the compensation is well under 1 m/s even on a
-# long pass — launch sits right around the target at every distance. That's the
-# intent: every bot pass is the same crisp magnet pace, arriving on the tape at a
-# catchable-but-quick speed, rather than a distance ramp that left close feeds
-# floaty. Clamped to max_launch — the passer's own max wrister (its hardest
-# possible pass), or the league default for opponent threat modeling.
+# Pass LAUNCH speed backed out of the target CLOSING speed: fire hard enough that
+# the puck arrives on the tape at PASS_TARGET_CLOSING_M_S in the receiver's frame
+# after shedding ice friction over the pass distance.
+#
+# Two corrections stack:
+#   1. Friction (always): v_world_arrival → v_launch = sqrt(v_arrival² + 2·a·d),
+#      constant decel a = PUCK_ICE_DECEL_M_S2. Tiny (~0.5 m/s²), well under 1 m/s
+#      even on a long pass.
+#   2. Receiver motion (when receiver_vel/pass_dir supplied): reception judges the
+#      puck's speed in the RECEIVER'S frame, so the WORLD arrival speed must be set
+#      so |v_arrival·pass_dir − receiver_vel| = PASS_TARGET_CLOSING_M_S. Solving that
+#      quadratic for the world arrival speed w:
+#        w = (pass_dir·receiver_vel) + sqrt(max(0, closing² − |receiver_vel_⊥|²)),
+#      i.e. cancel the receiver's along-pass motion (fire harder onto a streaking
+#      receiver, softer to one curling back) and accept its unavoidable lateral
+#      component. If the lateral speed alone exceeds the target, the discriminant
+#      floors to 0 and w = the along component — the softest catchable feed
+#      possible. With no receiver_vel this reduces to w = PASS_TARGET_CLOSING_M_S
+#      (the static-receiver case), so distance-only callers are unchanged.
+#
+# Clamped to max_launch — the passer's own max wrister (its hardest possible
+# pass), or the league default for opponent threat modeling.
 #
 # speed_scale is the difficulty pace knob (BotSkillProfile.pass_speed_scale),
 # applied AFTER the clamp so an easier bot's passes drop below the magnet pace —
@@ -310,11 +331,22 @@ const PASS_CHARGE_SPEED_M_S: float = (
 # 1.0, so the cross-player threat model (expected_pass_speed) and all unscaled
 # callers see the full magnet pace.
 static func pass_launch_speed(distance: float, max_launch: float,
-		speed_scale: float = 1.0) -> float:
-	var target: float = sqrt(
-			PASS_TARGET_ARRIVAL_M_S * PASS_TARGET_ARRIVAL_M_S
+		speed_scale: float = 1.0,
+		receiver_vel: Vector3 = Vector3.ZERO,
+		pass_dir: Vector3 = Vector3.ZERO) -> float:
+	var world_arrival: float = PASS_TARGET_CLOSING_M_S
+	if pass_dir.length_squared() > 0.0001:
+		var along: float = pass_dir.dot(receiver_vel)
+		var perp_sq: float = maxf(0.0, receiver_vel.length_squared() - along * along)
+		var disc: float = PASS_TARGET_CLOSING_M_S * PASS_TARGET_CLOSING_M_S - perp_sq
+		world_arrival = along + sqrt(maxf(0.0, disc))
+		# A receiver charging the passer harder than the target could drive this
+		# negative/tiny; floor at the soft-pass minimum so we still fire a real pass.
+		world_arrival = maxf(world_arrival, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
+	var launch: float = sqrt(
+			world_arrival * world_arrival
 			+ 2.0 * GameRules.PUCK_ICE_DECEL_M_S2 * maxf(distance, 0.0))
-	return clampf(target, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, max_launch) * speed_scale
+	return clampf(launch, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, max_launch) * speed_scale
 
 # ── Saucer pass ──────────────────────────────────────────────────────────────
 # A saucer (elevated) pass lofts the puck off the ice so it flies over a

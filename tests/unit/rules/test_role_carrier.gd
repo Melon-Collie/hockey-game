@@ -215,10 +215,10 @@ func test_open_receiver_in_a_poor_spot_is_not_over_credited() -> void:
 func test_close_pass_is_a_crisp_charged_wrister() -> void:
 	# Every pass is a paced wrister now — no fixed-power quick snap. A short feed to
 	# a close open teammate charges (pass_should_charge) and fires at the MAGNET
-	# pace (~21.5 m/s arrival), not the old floaty soft touch: crisp enough to be a
-	# real threat and to keep its hang time short, still catchable when the receiver
-	# squares up. NZ carrier with a defender clogging the straight carry/shot lane so
-	# the close lateral feed wins.
+	# pace (~20 m/s closing in the receiver's frame), not the old floaty soft touch:
+	# crisp enough to be a real threat and to keep its hang time short, still
+	# catchable when the receiver squares up. NZ carrier with a defender clogging the
+	# straight carry/shot lane so the close lateral feed wins.
 	var self_pos := Vector3(-4, 0, 2)
 	var outlet := Vector3(1, 0, -1)                   # ~5.8 m — a close feed, up-ice
 	var skaters: Array = [
