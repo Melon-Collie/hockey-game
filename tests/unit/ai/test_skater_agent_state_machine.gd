@@ -1003,3 +1003,55 @@ func test_poke_evade_skips_a_defender_neither_side_is_closing_on() -> void:
 	sm._poke_evade_modulate_steering(input, snap, me.position)
 	assert_eq(sm._poke_evade_active_ticks, 0,
 			"a defender behind the direction of travel, neither closing, gets no deke")
+
+
+# ── Reception: pass anticipation ────────────────────────────────────────────────
+
+func _pass_snap(puck_pos: Vector3, puck_vel: Vector3, carrier: int) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = puck_pos
+	s.puck_state.velocity = puck_vel
+	s.puck_state.carrier_peer_id = carrier
+	return s
+
+
+func test_incoming_pass_to_me_fires_for_a_fast_pass_heading_at_us() -> void:
+	# Loose puck at (0,0,10) ripping toward -Z at magnet pace; self at the origin is
+	# on its line, ahead of it — a pass at us.
+	var s := _pass_snap(Vector3(0, 0, 10), Vector3(0, 0, -21), -1)
+	assert_true(sm._incoming_pass_to_me(s, Vector3.ZERO))
+
+
+func test_incoming_pass_to_me_ignores_slow_carried_or_away_pucks() -> void:
+	# Too slow to be a pass.
+	assert_false(sm._incoming_pass_to_me(
+			_pass_snap(Vector3(0, 0, 10), Vector3(0, 0, -10), -1), Vector3.ZERO),
+			"a slow loose puck isn't a pass to receive")
+	# Carried — not loose.
+	assert_false(sm._incoming_pass_to_me(
+			_pass_snap(Vector3(0, 0, 10), Vector3(0, 0, -21), OPP_ID), Vector3.ZERO),
+			"a carried puck is not an incoming pass")
+	# Heading AWAY (we're behind its travel).
+	assert_false(sm._incoming_pass_to_me(
+			_pass_snap(Vector3(0, 0, 0), Vector3(0, 0, -21), -1), Vector3(0, 0, 10)),
+			"a puck travelling away from us is not incoming")
+	# On the line but too far to the side.
+	assert_false(sm._incoming_pass_to_me(
+			_pass_snap(Vector3(0, 0, 10), Vector3(0, 0, -21), -1),
+			Vector3(Agent.RECEIVE_TRIGGER_LATERAL_M + 2.0, 0, 0)),
+			"a pass whose line runs well wide of us is not ours to receive")
+
+
+func test_incoming_pass_to_me_defers_to_a_closer_teammate() -> void:
+	# A fast puck heading down the line, but a teammate is nearer to where it crosses
+	# our level — they anticipate it, not us, so a shot/pass past several bots doesn't
+	# pull them all out of position.
+	var s := _pass_snap(Vector3(0, 0, 10), Vector3(0, 0, -21), -1)
+	_add_skater(s, SELF_ID, Vector3(3, 0, 0))          # 3 m off the line at our level
+	_add_skater(s, TEAMMATE_ID, Vector3(1, 0, 0))      # closer to the line
+	assert_false(sm._incoming_pass_to_me(s, Vector3(3, 0, 0)),
+			"a teammate nearer the puck's crossing point is the one who receives")
+	# Remove the closer teammate → now it's ours.
+	s.skater_states.erase(TEAMMATE_ID)
+	assert_true(sm._incoming_pass_to_me(s, Vector3(3, 0, 0)))
