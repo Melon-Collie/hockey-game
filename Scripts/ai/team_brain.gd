@@ -211,6 +211,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	var men: Array[int] = []
 	var man_pos: Dictionary = {}
 	var man_value: Dictionary = {}
+	var man_danger: Dictionary = {}
 	for pid: int in snapshot.skater_states:
 		if _team_id_by_peer.get(pid, -1) == team_id:
 			continue
@@ -222,12 +223,19 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		man_value[pid] = AIActionScoring.threat_surface_pass(
 				carrier_pos, mp, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, no_defenders)
+		# Finish danger if fed: shot value from his spot with the goalie where
+		# he is NOW (tracking the carrier, not this off-puck man), no field
+		# defenders — an off-axis net-front man reads lethal because the net is
+		# open to his side. Feeds the net-front override (drops the lane factor
+		# man_value folds in: a contested feed still becomes a tap-in).
+		man_danger[pid] = AIActionScoring.score_shoot(
+				mp, our_net, our_goalie_pos, GameRules.NET_HALF_WIDTH, no_defenders)
 	if men.is_empty():
 		return empty
 
 	return AIThreatAssignment.assign(
 			defenders, defender_pos, defender_vel,
-			men, man_pos, man_value, our_net, prev, defender_caps)
+			men, man_pos, man_value, our_net, prev, defender_caps, man_danger)
 
 
 # Our goalie's current world position, or the goal mouth as a first-frame
