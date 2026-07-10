@@ -25,10 +25,10 @@ func _depth_cfg() -> GoalieBehaviorRules.DepthConfig:
 	cfg.zone_aggressive_z = 8.0
 	cfg.zone_base_z = 12.0
 	cfg.zone_conservative_z = 20.0
-	cfg.depth_aggressive = 1.2
-	cfg.depth_base = 0.6
-	cfg.depth_conservative = 0.3
-	cfg.depth_defensive = 0.1
+	cfg.depth_aggressive = 1.75
+	cfg.depth_base = 1.30
+	cfg.depth_conservative = 0.70
+	cfg.depth_defensive = 0.10
 	return cfg
 
 # ── detect_shot ──────────────────────────────────────────────────────────────
@@ -456,82 +456,90 @@ func test_clear_forward_flips_for_other_goal() -> void:
 		Vector3(0.5, 0, -25.8), 0.0, 1, 1.0, 0.5, 7.0, 0.15, 1.0)
 	assert_gt(vel.z, 0.0)
 
-# ── screen_intensity ──────────────────────────────────────────────────────────
-# Puck at origin, goalie 10m down +Z; sightline is the +Z axis. Defaults:
-# radius 0.6, min_t 0.12, max_t 0.95, proximity_bias 0.5.
+# ── screen_occlusion_delay ────────────────────────────────────────────────────
+# Puck (shooter) at origin, goalie 10m down +Z, shot flying +Z at 10 m/s so a
+# screener's delay = its along-shot distance / 10. Defaults: radius 0.6,
+# min_along 0.6. A screener hides the puck until the puck reaches its along-shot
+# position, so a NET-FRONT (doorstep) body hides longest, a shooter-side body least.
 
 func _screen_cfg() -> GoalieBehaviorRules.ScreenConfig:
 	var cfg := GoalieBehaviorRules.ScreenConfig.new()
 	cfg.screener_radius = 0.6
-	cfg.min_t = 0.12
-	cfg.max_t = 0.95
-	cfg.goalie_proximity_bias = 0.5
+	cfg.min_along = 0.6
 	return cfg
 
 func test_screen_no_bodies_is_clear() -> void:
-	var i: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10), PackedVector3Array(), _screen_cfg())
-	assert_eq(i, 0.0)
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
+		PackedVector3Array(), _screen_cfg())
+	assert_eq(d, 0.0)
 
 func test_screen_dead_on_midway() -> void:
-	# t=0.5, perp=0 → centrality 1, proximity 0.5 + 0.5*0.5 = 0.75.
-	var i: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
+	# Screener 5m along the shot; puck at 10 m/s reaches it — emerges — at 0.5s.
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(0, 0, 5)]), _screen_cfg())
-	assert_almost_eq(i, 0.75, 0.001)
+	assert_almost_eq(d, 0.5, 0.001)
 
 func test_screen_off_to_the_side_clears() -> void:
-	# perp 1.0 > radius 0.6 → not on the sightline.
-	var i: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
+	# perp 1.0 > radius 0.6 → not on the sightline → no occlusion.
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(1.0, 0, 5)]), _screen_cfg())
-	assert_eq(i, 0.0)
+	assert_eq(d, 0.0)
 
 func test_screen_behind_goalie_clears() -> void:
-	var i: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
+	# Body past the goalie (along 12 >= goalie_along 10) can't hide an incoming puck.
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(0, 0, 12)]), _screen_cfg())
-	assert_eq(i, 0.0)
+	assert_eq(d, 0.0)
 
 func test_screen_at_shooter_clears() -> void:
-	# t=0.05 < min_t → the shooter doesn't screen themselves.
-	var i: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
-		PackedVector3Array([Vector3(0, 0, 0.5)]), _screen_cfg())
-	assert_eq(i, 0.0)
+	# along 0.3 < min_along 0.6 → the shooter doesn't screen their own shot.
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 0.3)]), _screen_cfg())
+	assert_eq(d, 0.0)
 
-func test_screen_goalie_side_body_screens_harder() -> void:
-	# Same perp (dead-on), body nearer the goalie covers more net.
-	var near_goalie: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
+func test_screen_net_front_hides_longer_than_shooter_side() -> void:
+	# Doorstep body (near goalie) hides the puck until it's almost in; shooter-side
+	# body is passed early. Net-front screen is the deadly one.
+	var net_front: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(0, 0, 8)]), _screen_cfg())
-	var near_shooter: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
+	var shooter_side: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(0, 0, 2)]), _screen_cfg())
-	assert_gt(near_goalie, near_shooter)
+	assert_almost_eq(net_front, 0.8, 0.001)
+	assert_almost_eq(shooter_side, 0.2, 0.001)
+	assert_gt(net_front, shooter_side)
 
-func test_screen_edge_body_weaker_than_dead_on() -> void:
-	var dead_on: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
-		PackedVector3Array([Vector3(0, 0, 5)]), _screen_cfg())
-	var edge: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
-		PackedVector3Array([Vector3(0.3, 0, 5)]), _screen_cfg())
-	assert_gt(dead_on, edge)
-	assert_gt(edge, 0.0)
+func test_screen_faster_shot_hides_less() -> void:
+	# Same screener; a faster shot reaches (and clears) it sooner → shorter delay.
+	var slow: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 6)]), _screen_cfg())
+	var fast: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 30), Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 6)]), _screen_cfg())
+	assert_almost_eq(slow, 0.6, 0.001)
+	assert_almost_eq(fast, 0.2, 0.001)
 
 func test_screen_takes_worst_of_many() -> void:
-	# One weak edge body + one strong dead-on body → the strong one wins.
-	var i: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
+	# A shooter-side body (short hide) and a net-front body (long hide) → the
+	# longest-hiding screener wins.
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(0.5, 0, 3), Vector3(0, 0, 8)]), _screen_cfg())
-	assert_almost_eq(i, 0.9, 0.001)  # dead-on at t=0.8: 1.0 * (0.5 + 0.5*0.8)
+	assert_almost_eq(d, 0.8, 0.001)
 
-func test_screen_never_exceeds_one() -> void:
-	var i: float = GoalieBehaviorRules.screen_intensity(
-		Vector3.ZERO, Vector3(0, 0, 10),
-		PackedVector3Array([Vector3(0, 0, 9.4)]), _screen_cfg())
-	assert_lte(i, 1.0)
+func test_screen_stationary_puck_no_delay() -> void:
+	# No shot velocity → no trajectory to occlude.
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3.ZERO, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 5)]), _screen_cfg())
+	assert_eq(d, 0.0)
 
 # ── movement_read_penalty ─────────────────────────────────────────────────────
 # A set (stopped) goalie reads at the base delay; a moving / scrambling one reads

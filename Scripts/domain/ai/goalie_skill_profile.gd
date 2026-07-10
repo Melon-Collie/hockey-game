@@ -21,8 +21,10 @@ extends RefCounted
 #     cross-crease race more readily (the 2-on-1 / royal-road one-timer).
 #   • poke_radius_m          — stick-strip reach on a carried puck. Lower → dekes
 #     and in-tight puckhandling get through more often.
-#   • screen_max_extra_delay_s — extra read latency when screened. Higher → point
-#     shots through traffic beat him more.
+#   • screen_max_extra_delay_s — CAP (s) on the grounded screen-occlusion pickup
+#     delay (how long a body hides the puck from the goalie — see GoalieBehavior
+#     Rules.screen_occlusion_delay). Higher → point shots through traffic beat him
+#     more (a weaker goalie loses a screened puck for longer).
 #   • move_read_max_delay_s  — extra read latency when caught moving / unset.
 #     Higher → he is punished harder for shots taken while he is still sliding.
 #
@@ -68,7 +70,8 @@ var arm_reaction_delay_s: float
 var cross_crease_react_delay_s: float
 # Stick-strip reach (m): the goalie pokes a carried puck within this radius.
 var poke_radius_m: float
-# Extra read latency (s) for a fully-screened shot.
+# Cap (s) on the grounded screen-occlusion pickup delay (worst-case time a body
+# can hide the puck from the goalie before the read starts).
 var screen_max_extra_delay_s: float
 # Extra read latency (s) when fully unset / caught moving.
 var move_read_max_delay_s: float
@@ -109,8 +112,8 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 # Hard == the GoalieController @export defaults verbatim. Keep these in sync with
 # the controller so applying Hard is a true no-op (the ceiling we've tuned).
 static func hard() -> GoalieSkillProfile:
-	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.15, 0.12,
-			1.2, 0.6, 2.0, 2.0, 18.0, 14.0)
+	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.30, 0.12,
+			1.75, 1.30, 5.0, 5.0, 18.0, 14.0)
 
 
 # Normal is the middle tier: it keeps Hard's read knobs eased AND takes
@@ -119,8 +122,8 @@ static func hard() -> GoalieSkillProfile:
 # ceiling. First-pass numbers — tune against the bots on a 2-on-1 and an in-tight
 # deke.
 static func normal() -> GoalieSkillProfile:
-	return GoalieSkillProfile.new(0.28, 0.20, 0.16, 0.24, 0.20,
-			1.0, 0.5, 1.65, 1.65, 12.0, 11.0)
+	return GoalieSkillProfile.new(0.28, 0.20, 0.16, 0.42, 0.20,
+			1.45, 1.05, 4.1, 4.1, 12.0, 11.0)
 
 
 # Easy is the newcomer floor: positionally deep (gives up the net), slow arms
@@ -129,8 +132,8 @@ static func normal() -> GoalieSkillProfile:
 # — a real but weak goalie. First-pass numbers — tune against bot offense, since
 # a skilled human scores on any tier and can't feel this one by playing it.
 static func easy() -> GoalieSkillProfile:
-	return GoalieSkillProfile.new(0.36, 0.28, 0.11, 0.32, 0.28,
-			0.8, 0.4, 1.3, 1.3, 6.0, 8.0)
+	return GoalieSkillProfile.new(0.36, 0.28, 0.11, 0.55, 0.28,
+			1.15, 0.80, 3.25, 3.25, 6.0, 8.0)
 
 
 static func for_difficulty(difficulty: int) -> GoalieSkillProfile:

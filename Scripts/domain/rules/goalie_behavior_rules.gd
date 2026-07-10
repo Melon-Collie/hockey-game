@@ -467,52 +467,64 @@ static func is_crease_jam(
 	return nearest_opponent_dist_to_puck <= cfg.opponent_distance
 
 
-# ── Screen detection ─────────────────────────────────────────────────────────
-# A body between the puck and the goalie blocks the goalie's sightline, so they
-# pick up the shot late. Returns 0 (clear look) .. 1 (fully screened); the
-# controller turns it into extra reaction delay. Evaluated in the XZ plane —
-# shots and bodies live on the ice. The geometry self-limits in two ways that
-# make it feel right for free: a screen needs a body BETWEEN puck and goalie, so
-# point-blank shots can't be screened (no room); and a body near the goalie
-# screens harder than one near the shooter (it covers a wider cone of the net —
-# the `goalie_proximity_bias` term).
+# ── Screen occlusion (grounded sightline model) ──────────────────────────────
+# A body between the shooter and the goalie hides the puck: the goalie can't start
+# their read until they SEE the puck leave the shadow of the screener. This returns
+# that pickup delay in SECONDS, built from geometry + shot speed rather than a flat
+# "screened → +X ms" fudge. The grounding: the puck starts at the shooter (behind
+# the screen) and flies toward the net; the goalie can't see it until it passes the
+# screener. A body planted at the NET FRONT (doorstep) hides the puck until it has
+# flown almost the whole way in — the deadly screen — while a body up near the
+# shooter is passed early and barely delays the read. Longer flight to reach the
+# screener = longer the puck is hidden, so the delay is grounded, not a curve.
+#
+# Evaluated in the XZ plane (bodies + shots live on the ice). A screener at S
+# occludes the puck while the puck is still farther from the net than S; the puck
+# emerges — and the goalie picks it up — once it reaches S's along-shot position,
+# so that screener's delay is (release→S along-shot distance) / shot speed. It only
+# counts if S sits ON the sightline (within `screener_radius` of the shot line) and
+# BETWEEN the shooter and the goalie. The worst (longest-hiding) screener wins; the
+# shooter self-excludes (it sits at the release point, along ≈ 0 < min_along). The
+# caller clamps the result to a cap (and to the flight time). Returns 0 for a clean
+# look. No allocation (scalar loop over the caller-owned positions array).
 class ScreenConfig:
-	var screener_radius: float = 0.6        # m — body half-width that blocks sight
-	var min_t: float = 0.12                 # exclude the shooter (puck end of the line)
-	var max_t: float = 0.95                 # exclude bodies basically on top of the goalie
-	var goalie_proximity_bias: float = 0.5  # 0 = position-independent; 1 = only goalie-side bodies screen
+	var screener_radius: float = 0.6   # m — body half-width that blocks the sightline
+	var min_along: float = 0.6         # m — exclude the shooter / bodies right on the puck
 
-# Worst-single-screener intensity. `screener_positions` is every body that could
-# screen (the caller decides who qualifies); the shooter self-excludes via min_t.
-static func screen_intensity(
+static func screen_occlusion_delay(
 		puck_position: Vector3,
+		puck_velocity: Vector3,
 		goalie_position: Vector3,
 		screener_positions: PackedVector3Array,
 		cfg: ScreenConfig) -> float:
-	var px: float = puck_position.x
-	var pz: float = puck_position.z
-	var dx: float = goalie_position.x - px
-	var dz: float = goalie_position.z - pz
-	var len2: float = dx * dx + dz * dz
-	if len2 < 0.0001:
-		return 0.0  # puck on top of the goalie — no meaningful sightline
+	var speed: float = sqrt(puck_velocity.x * puck_velocity.x + puck_velocity.z * puck_velocity.z)
+	if speed < 0.001:
+		return 0.0
+	var vhx: float = puck_velocity.x / speed
+	var vhz: float = puck_velocity.z / speed
 	var radius: float = maxf(cfg.screener_radius, 0.0001)
+	# How far along the shot the goalie sits — a screener must be nearer than this
+	# (a body level with or behind the goalie can't hide an incoming puck).
+	var goalie_along: float = (goalie_position.x - puck_position.x) * vhx \
+			+ (goalie_position.z - puck_position.z) * vhz
+	if goalie_along <= cfg.min_along:
+		return 0.0
 	var worst: float = 0.0
 	for s in screener_positions:
-		# Projection parameter along the puck→goalie segment (0 = puck, 1 = goalie).
-		var t: float = ((s.x - px) * dx + (s.z - pz) * dz) / len2
-		if t <= cfg.min_t or t >= cfg.max_t:
+		var relx: float = s.x - puck_position.x
+		var relz: float = s.z - puck_position.z
+		# Along-shot distance to the screener, and perpendicular distance to the
+		# shot line (perp basis of (vhx, vhz) is (-vhz, vhx)).
+		var along: float = relx * vhx + relz * vhz
+		if along <= cfg.min_along or along >= goalie_along:
 			continue
-		# Perpendicular distance from the body to the sightline.
-		var cx: float = px + t * dx
-		var cz: float = pz + t * dz
-		var perp: float = sqrt((s.x - cx) * (s.x - cx) + (s.z - cz) * (s.z - cz))
+		var perp: float = absf(relx * -vhz + relz * vhx)
 		if perp >= radius:
 			continue
-		var centrality: float = 1.0 - perp / radius            # dead-on the line screens hardest
-		var proximity: float = (1.0 - cfg.goalie_proximity_bias) + cfg.goalie_proximity_bias * t
-		worst = maxf(worst, centrality * proximity)
-	return clampf(worst, 0.0, 1.0)
+		var delay: float = along / speed
+		if delay > worst:
+			worst = delay
+	return worst
 
 
 # ── Movement read penalty ─────────────────────────────────────────────────────
