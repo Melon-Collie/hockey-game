@@ -2,7 +2,7 @@ class_name AIRoleHelpers
 
 # Shared helpers for off-puck role behaviors. Every role that picks
 # a position via candidate-set argmax (SUPPORT, OUTLET, FINISHER, and
-# the upcoming defensive roles PRESSURE / ANCHOR / COVER) uses the
+# the upcoming defensive roles PRESSURE / MARK / CONTAIN) uses the
 # same candidate generation, legality / anti-crowding filters, and
 # context resolution. The role-specific differentiator is the
 # scoring function — everything else lives here.
@@ -129,7 +129,7 @@ static func lead_threat(pos: Vector3, vel: Vector3, scale: float = 1.0) -> Vecto
 const COVER_GOAL_SIDE_TOLERANCE_M: float = 0.5
 
 # Shared "cover this assigned man" target for the backline defenders
-# (ANCHOR / COVER) when TeamBrain's threat partition hands them a specific
+# (MARK) when TeamBrain's threat partition hands them a specific
 # opponent. Picks the position that most deflates the carrier→man pass-threat
 # surface (lane interception × the man's resulting shot), searching a candidate
 # set centered on the threat partition's own cover anchor — a stick into the
@@ -340,7 +340,7 @@ static func resolve_offensive_play_ref(ctx: RoleContext) -> Vector3:
 	return Vector3.INF
 
 
-# Defensive roles (PRESSURE, CONTAIN, COVER): prefer whoever carries the
+# Defensive roles (PRESSURE, CONTAIN, MARK): prefer whoever carries the
 # puck (an opp by definition in their states); else orient off the puck.
 static func resolve_defensive_play_ref(ctx: RoleContext) -> Vector3:
 	var carrier: Vector3 = resolve_any_carrier_pos(ctx)

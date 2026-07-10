@@ -1299,11 +1299,11 @@ static func chase_recovery(
 # for a carrier choosing whether to release, but useless for a defender
 # trying to position relative to a far-but-still-dangerous opp.
 # Falling back to position_potential gives a non-zero gradient over
-# any legal opp position, so ANCHOR/COVER pull toward the opp's
+# any legal opp position, so the MARK defenders pull toward the opp's
 # pressure cone (reducing position_potential.openness) instead of
 # sitting flat at slot when no immediate shot threat exists.
 #
-# Used by ANCHOR for inverse shot-threat scoring across all opps.
+# Used by MARK's recovery fallback for inverse shot-threat scoring across all opps.
 static func threat_surface_shoot(
 		opp_pos: Vector3,
 		our_net: Vector3,
@@ -1323,7 +1323,7 @@ static func threat_surface_shoot(
 # for being in the lane (lane_clear ↓) AND for closing on the
 # receiver (position_potential.openness ↓).
 #
-# Used by COVER for inverse pass-threat scoring across opp teammates.
+# Used by PRESSURE / FORECHECK for inverse pass-threat scoring across opp teammates.
 static func threat_surface_pass(
 		carrier_pos: Vector3,
 		receiver_pos: Vector3,

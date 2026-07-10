@@ -1,13 +1,8 @@
 extends GutTest
 
-# AIRoleSlots is pure-function. Tests cover slot lists per state,
-# anchor formulas (still around for now — used by role behaviors
-# until Step 2 of the no-anchors refactor), and assignment via
-# state-specific semantic queries (closest-to-puck, closest-to-net).
-#
-# Sprinting Through (TRANS_OD ANCHOR criterion = closest to opp net)
-# is documented in the test name + docstring rather than hidden in
-# a pre-pick branch.
+# AIRoleSlots is pure-function. Tests cover slot lists per state and
+# assignment via state-specific semantic queries (closest-to-puck,
+# closest-to-net, goal-side gap defender).
 
 const OUR_NET_Z: float = 26.65
 const TEAM_ID: int = 0
@@ -44,11 +39,10 @@ func _resolver(skaters: Array) -> Dictionary:
 # ─── Slot lists ─────────────────────────────────────────────────────────────
 
 func test_slots_for_dzone() -> void:
+	# One PRESSURE on the carrier, the rest MARK a man each.
 	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.DZONE)
-	assert_eq(slots.size(), 3)
 	assert_true(slots.has(AIRoleSlots.Slot.PRESSURE))
-	assert_true(slots.has(AIRoleSlots.Slot.ANCHOR))
-	assert_true(slots.has(AIRoleSlots.Slot.COVER))
+	assert_true(slots.has(AIRoleSlots.Slot.MARK))
 
 
 func test_slots_for_ozone() -> void:
@@ -76,13 +70,13 @@ func test_slots_for_breakout() -> void:
 
 
 func test_slots_for_trans_od() -> void:
-	# TRANS_OD uses {CONTAIN, BACKCHECK×2}: the deepest peer gap-controls the
-	# carrier (CONTAIN), the other two sprint home to cover a man each
-	# (BACKCHECK). PRESSURE is no longer a transition role — exactly one peer
-	# (CONTAIN) engages the carrier.
+	# TRANS_OD uses {CONTAIN, MARK×2}: the goal-side peer gap-controls the
+	# carrier (CONTAIN), the other two sprint home to cover a man each (MARK).
+	# PRESSURE is no longer a transition role — exactly one peer (CONTAIN)
+	# engages the carrier.
 	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.TRANS_OD)
 	assert_true(slots.has(AIRoleSlots.Slot.CONTAIN))
-	assert_true(slots.has(AIRoleSlots.Slot.BACKCHECK))
+	assert_true(slots.has(AIRoleSlots.Slot.MARK))
 	assert_false(slots.has(AIRoleSlots.Slot.PRESSURE),
 			"PRESSURE is no longer assigned in transition")
 
@@ -107,12 +101,14 @@ func test_slots_for_neutral() -> void:
 
 # ─── assign() ───────────────────────────────────────────────────────────────
 
-func test_assign_dzone_distributes_three_slots() -> void:
-	# Puck at (5, 22) → strong=+1.
+func test_assign_dzone_distributes_slots() -> void:
+	# PRESSURE = closest to the puck; the other two MARK a man each. Which
+	# marker ends up net-front vs. weak-side is decided downstream by the threat
+	# partition, not here — so both non-pressure peers are simply MARK.
 	var skaters: Array = [
-			[100, 0, Vector3(4.5, 0.0, 22.5)],   # near PRESSURE anchor
-			[110, 0, Vector3(0.5, 0.0, 25.65)],  # near ANCHOR (strong-side post)
-			[120, 0, Vector3(-2.0, 0.0, 22.65)], # near COVER (weak-side, mid-slot)
+			[100, 0, Vector3(4.5, 0.0, 22.5)],   # closest to puck → PRESSURE
+			[110, 0, Vector3(0.5, 0.0, 25.65)],
+			[120, 0, Vector3(-2.0, 0.0, 22.65)],
 			[200, 1, Vector3(5.0, 0.0, 22.0)],
 	]
 	var snap := _make_snapshot(skaters, 200)
@@ -120,8 +116,8 @@ func test_assign_dzone_distributes_three_slots() -> void:
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE)
-	assert_eq(assignments[110], AIRoleSlots.Slot.ANCHOR)
-	assert_eq(assignments[120], AIRoleSlots.Slot.COVER)
+	assert_eq(assignments[110], AIRoleSlots.Slot.MARK)
+	assert_eq(assignments[120], AIRoleSlots.Slot.MARK)
 
 
 func test_assign_ozone_carrier_is_fixed() -> void:
@@ -229,9 +225,9 @@ func test_assign_trans_od_gap_is_closest_goal_side_to_carrier() -> void:
 	# and nearest the carrier, so it gaps; the deep peer (120) and the
 	# caught-up-ice peer (100, not goal-side) backcheck to a man each.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -8.0)],  # up-ice, NOT goal-side → BACKCHECK
+			[100, 0, Vector3(0.0, 0.0, -8.0)],  # up-ice, NOT goal-side → MARK
 			[110, 0, Vector3(0.0, 0.0, 5.0)],   # goal-side, closest to carrier → CONTAIN
-			[120, 0, Vector3(0.0, 0.0, 20.0)],  # goal-side but deep → BACKCHECK
+			[120, 0, Vector3(0.0, 0.0, 20.0)],  # goal-side but deep → MARK
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier
 	]
 	var snap := _make_snapshot(skaters, 200)
@@ -240,10 +236,10 @@ func test_assign_trans_od_gap_is_closest_goal_side_to_carrier() -> void:
 			_resolver(skaters), {})
 	assert_eq(assignments[110], AIRoleSlots.Slot.CONTAIN,
 			"closest goal-side peer gaps the carrier as CONTAIN")
-	assert_eq(assignments[100], AIRoleSlots.Slot.BACKCHECK,
-			"caught-up-ice peer backchecks home to a man")
-	assert_eq(assignments[120], AIRoleSlots.Slot.BACKCHECK,
-			"deep peer backchecks (it's not the closest to the carrier)")
+	assert_eq(assignments[100], AIRoleSlots.Slot.MARK,
+			"caught-up-ice peer marks home to a man")
+	assert_eq(assignments[120], AIRoleSlots.Slot.MARK,
+			"deep peer marks (it's not the closest to the carrier)")
 	# Exactly one engager — no double-team.
 	var contain_count: int = 0
 	for pid: int in [100, 110, 120]:
@@ -268,8 +264,8 @@ func test_assign_trans_od_gap_falls_back_to_deepest_when_none_goal_side() -> voi
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.CONTAIN,
 			"no goal-side peer → deepest (nearest our net) recovers as the gapper")
-	assert_eq(assignments[110], AIRoleSlots.Slot.BACKCHECK)
-	assert_eq(assignments[120], AIRoleSlots.Slot.BACKCHECK)
+	assert_eq(assignments[110], AIRoleSlots.Slot.MARK)
+	assert_eq(assignments[120], AIRoleSlots.Slot.MARK)
 
 
 func test_assign_hysteresis_keeps_prev_when_close() -> void:
@@ -287,8 +283,8 @@ func test_assign_hysteresis_keeps_prev_when_close() -> void:
 	var snap := _make_snapshot(skaters, 200)
 	var prev: Dictionary = {
 			100: AIRoleSlots.Slot.PRESSURE,
-			110: AIRoleSlots.Slot.COVER,
-			120: AIRoleSlots.Slot.ANCHOR,
+			110: AIRoleSlots.Slot.MARK,
+			120: AIRoleSlots.Slot.MARK,
 	}
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
@@ -312,8 +308,8 @@ func test_assign_hysteresis_swaps_when_contender_meaningfully_closer() -> void:
 	var snap := _make_snapshot(skaters, 200)
 	var prev: Dictionary = {
 			100: AIRoleSlots.Slot.PRESSURE,
-			110: AIRoleSlots.Slot.COVER,
-			120: AIRoleSlots.Slot.ANCHOR,
+			110: AIRoleSlots.Slot.MARK,
+			120: AIRoleSlots.Slot.MARK,
 	}
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,

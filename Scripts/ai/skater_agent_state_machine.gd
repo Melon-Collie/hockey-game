@@ -1151,12 +1151,8 @@ func _slot_label(slot: int) -> String:
 			return "Carrier"
 		AIRoleSlots.Slot.PRESSURE:
 			return "Pressure"
-		AIRoleSlots.Slot.ANCHOR:
-			return "Anchor"
-		AIRoleSlots.Slot.COVER:
-			return "Cover"
-		AIRoleSlots.Slot.BACKCHECK:
-			return "Backcheck"
+		AIRoleSlots.Slot.MARK:
+			return "Mark"
 		AIRoleSlots.Slot.CONTAIN:
 			return "Contain"
 		AIRoleSlots.Slot.FINISHER:
@@ -1468,12 +1464,8 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			return AIRoleForecheck.decide(ctx, true)
 		AIRoleSlots.Slot.PRESSURE:
 			return AIRolePressure.decide(ctx)
-		AIRoleSlots.Slot.ANCHOR:
-			return AIRoleAnchor.decide(ctx)
-		AIRoleSlots.Slot.COVER:
-			return AIRoleCover.decide(ctx)
-		AIRoleSlots.Slot.BACKCHECK:
-			return AIRoleBackcheck.decide(ctx)
+		AIRoleSlots.Slot.MARK:
+			return AIRoleMark.decide(ctx)
 		AIRoleSlots.Slot.CONTAIN:
 			return AIRoleContain.decide(ctx)
 		AIRoleSlots.Slot.CHASE:

@@ -183,16 +183,14 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		return empty
 	var carrier_pos: Vector3 = snapshot.skater_states[carrier_pid].position
 
-	# Backline defenders (ANCHOR / COVER / BACKCHECK) and their kinematics.
+	# Backline man-markers (MARK, in DZONE and TRANS_OD) and their kinematics.
 	var defenders: Array[int] = []
 	var defender_pos: Dictionary = {}
 	var defender_vel: Dictionary = {}
 	var defender_caps: Dictionary = {}
 	for pid: int in slot_assignments:
 		var slot: int = slot_assignments[pid]
-		if slot != AIRoleSlots.Slot.ANCHOR \
-				and slot != AIRoleSlots.Slot.COVER \
-				and slot != AIRoleSlots.Slot.BACKCHECK:
+		if slot != AIRoleSlots.Slot.MARK:
 			continue
 		if not snapshot.skater_states.has(pid):
 			continue

@@ -31,7 +31,7 @@ var strong_x: float = 1.0
 # from TeamBrain's central threat partition. -1 = unassigned (no brain,
 # offensive/neutral state, or a defender outside the backline) — in that
 # case defensive roles fall back to their legacy all-opponents minimax.
-# Lets ANCHOR / COVER focus on a DISTINCT man so two defenders don't both
+# Lets the MARK defenders focus on a DISTINCT man so two don't both
 # collapse onto the single most dangerous opponent.
 var assigned_threat_peer: int = -1
 # Peer -> team_id lookup for opponent / teammate filtering. Live dict
