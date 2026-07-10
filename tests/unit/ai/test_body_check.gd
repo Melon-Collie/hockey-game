@@ -36,6 +36,20 @@ func test_low_physical_does_not_commit_same_geometry() -> void:
 	assert_false(r.commit, "low-Physical checker won't commit to a soft hit")
 
 
+func test_heavy_victim_bounces_off_a_committing_checker() -> void:
+	# HIGH_TRANSFER commits on a league-weight carrier (9 × 1 × 0.61 ≈ 5.5 ≥ 5).
+	# Against a HEAVY carrier (Size — weight 1.4) the same hit moves it less
+	# (9 × 1/1.4 × 0.61 ≈ 3.9 < 5), so the checker won't leave its feet for it.
+	var vs_league: AIBodyCheck.Result = AIBodyCheck.evaluate(
+			SELF_POS, SELF_SPEED, WEIGHT, HIGH_TRANSFER, 0.0,
+			Vector3(4, 0, 0), Vector3.ZERO)
+	var vs_heavy: AIBodyCheck.Result = AIBodyCheck.evaluate(
+			SELF_POS, SELF_SPEED, WEIGHT, HIGH_TRANSFER, 0.0,
+			Vector3(4, 0, 0), Vector3.ZERO, AIBodyCheck.COMMIT_IMPULSE_M_S, 1.4)
+	assert_true(vs_league.commit, "commits on a league-weight carrier")
+	assert_false(vs_heavy.commit, "bounces off a heavy carrier — no commit")
+
+
 func test_medium_holds_on_stationary_but_commits_when_carrier_closes() -> void:
 	# A medium checker doesn't hunt a stationary carrier head-on
 	# (9 × 0.45 ≈ 4.05 < 5)...

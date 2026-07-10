@@ -221,10 +221,15 @@ static func evaluate_body_check(ctx: RoleContext) -> AIBodyCheck.Result:
 		return AIBodyCheck.Result.new()
 	var commit_threshold: float = AIBodyCheck.COMMIT_IMPULSE_M_S / ctx.check_aggression
 	var carrier: SkaterNetworkState = ctx.snapshot.skater_states[carrier_pid]
+	# The victim's real mass (Size) — don't leave your feet for a hit you'd bounce
+	# off a heavy carrier with. League default when the build isn't wired.
+	var victim_caps: AISkaterCaps = ctx.caps_by_peer.get(carrier_pid)
+	var victim_weight: float = victim_caps.weight if victim_caps != null \
+			else AIBodyCheck.LEAGUE_VICTIM_WEIGHT
 	return AIBodyCheck.evaluate(
 			ctx.self_pos, ctx.self_max_speed, ctx.self_weight,
 			ctx.self_body_check_transfer, ctx.self_stagger_timer,
-			carrier.position, carrier.velocity, commit_threshold)
+			carrier.position, carrier.velocity, commit_threshold, victim_weight)
 
 
 # ── Context resolution ──────────────────────────────────────────────────────

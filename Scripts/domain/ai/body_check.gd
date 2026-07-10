@@ -30,10 +30,11 @@ class_name AIBodyCheck
 # A carrier skating TOWARD the checker raises the closing speed (bigger hit, more
 # likely to commit); one skating away lowers it. No RNG — replay-safe.
 #
-# Victim weight is the league baseline here (opponent attributes aren't modeled
-# yet); the attacker's own weight + transfer — which dominate the hit and ARE
-# known — carry the decision. Opponent modeling can later pass a real victim
-# weight to avoid bouncing off a heavy / braced target.
+# Victim weight is the CARRIER's real mass (Size) when its build is known — a
+# light checker won't leave its feet for a hit it'd bounce off a heavy target
+# with. Defaults to the league baseline when unwired. (The victim's active BRACE
+# — Physical — only bites when the victim is shot-blocking, which a puck carrier
+# rarely is, so it's not modeled in this carrier-check gate.)
 
 # Only hunt a hit when the carrier is this close — beyond it, contain instead.
 const CHECK_RANGE_M: float = 6.0
@@ -73,7 +74,8 @@ static func evaluate(
 		self_stagger_timer: float,
 		carrier_pos: Vector3,
 		carrier_vel: Vector3,
-		commit_impulse_threshold: float = COMMIT_IMPULSE_M_S) -> Result:
+		commit_impulse_threshold: float = COMMIT_IMPULSE_M_S,
+		victim_weight: float = LEAGUE_VICTIM_WEIGHT) -> Result:
 	var r := Result.new()
 
 	# Don't commit while staggered — off-balance, can't deliver a hit.
@@ -99,7 +101,9 @@ static func evaluate(
 	# 3. Real hit. Predict the victim impulse from the closing velocity I'd
 	# bring driving at the intercept, my weight ratio, and my transfer.
 	var approach: float = _predicted_approach(self_pos, self_max_speed, intercept, carrier_vel)
-	var weight_ratio: float = self_weight / maxf(LEAGUE_VICTIM_WEIGHT, 0.001)
+	# Victim's REAL mass (Size): a heavy carrier moves less for the same hit, so a
+	# light checker correctly predicts bouncing off and won't leave its feet for it.
+	var weight_ratio: float = self_weight / maxf(victim_weight, 0.001)
 	var predicted_impulse: float = approach * weight_ratio * self_body_check_transfer
 	if predicted_impulse < commit_impulse_threshold:
 		return r
