@@ -174,6 +174,10 @@ var _scratch_opponents: Array[Vector3] = []
 # Velocities index-matched to _scratch_opponents, so the fired-puck lane
 # model can dead-reckon a defender bearing down on a passing lane.
 var _scratch_opponent_vels: Array[Vector3] = []
+# AISkaterCaps index-matched to _scratch_opponents (entries may be null), so the
+# reachable-set model reads each defender's real Agility/Size reach. Filled
+# alongside the positions in _build_action_opponents_lists.
+var _scratch_opponent_caps: Array[AISkaterCaps] = []
 var _scratch_opponents_shoot: Array[Vector3] = []
 var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
@@ -293,10 +297,10 @@ func _pick_action(ctx: RoleContext) -> void:
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var evade_seam: Vector3 = AIActionScoring.best_evade_point(
 			cur_puck_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
-			AIActionScoring.EVADE_CARRY_HANDLE_M)
+			AIActionScoring.EVADE_CARRY_HANDLE_M, _scratch_opponent_caps)
 	var current_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
-					_scratch_opponents, _scratch_opponent_vels))
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 
 	# Teammate ids — used by every score_at evaluation (top + inner).
@@ -519,6 +523,7 @@ func _pick_action(ctx: RoleContext) -> void:
 func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponent_vels.clear()
+	_scratch_opponent_caps.clear()
 	_scratch_opponents_shoot.clear()
 	_scratch_our_defenders.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
@@ -528,6 +533,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id:
 			_scratch_opponents.append(s.position)
 			_scratch_opponent_vels.append(s.velocity)
+			_scratch_opponent_caps.append(ctx.caps_by_peer.get(peer_id))
 			_scratch_opponents_shoot.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
 		else:
@@ -867,7 +873,7 @@ func _best_carry(ctx: RoleContext) -> Array:
 	# it opens is actually worth carrying to.
 	var seam: Vector3 = AIActionScoring.best_evade_point(
 			self_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
-			AIActionScoring.EVADE_CARRY_HANDLE_M)
+			AIActionScoring.EVADE_CARRY_HANDLE_M, _scratch_opponent_caps)
 	var seam_total: float = _score_move_candidate(ctx, seam, our_goalie)
 	if seam_total > best_score:
 		best_score = seam_total
@@ -896,7 +902,7 @@ func _best_carry(ctx: RoleContext) -> Array:
 	var stand_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
 					AIActionScoring.EVADE_HORIZON_S,
-					_scratch_opponents, _scratch_opponent_vels))
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	var stand_cost: float = AIActionScoring.turnover_cost(
 			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -1032,7 +1038,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
 	var safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(cur_puck_pos, cand_puck_pos, local_time,
-					_scratch_opponents, _scratch_opponent_vels))
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	var benefit: float = dest_score * lane * decay * safety
 	var keep_prob: float = safety
 	# Price the loss where the strip actually happens — the earliest covered point on
@@ -1041,7 +1047,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# not the destination's. This is what keeps a doomed carry honestly negative.
 	var strip_point: Vector3 = AIActionScoring.carry_strip_point(
 			cur_puck_pos, cand_puck_pos, local_time,
-			_scratch_opponents, _scratch_opponent_vels)
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 	var cost: float = AIActionScoring.turnover_cost(
 			strip_point, 1.0 - keep_prob, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)

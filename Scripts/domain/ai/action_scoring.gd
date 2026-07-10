@@ -1442,17 +1442,28 @@ const EVADE_SAMPLE_ANGLES: int = 12
 # term is reaction-gated (they must read the puck's move before redirecting).
 static func reach_clearance(
 		puck_point: Vector3, time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> float:
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = []) -> float:
 	var n: int = opponents.size()
 	if n == 0 or opponent_vels.size() != n:
 		return EVADE_SAFE_MARGIN_M   # nothing to evade — fully clear
-	var maneuver: float = 0.5 * MANEUVER_ACCEL_M_S2 \
-			* pow(maxf(0.0, time - EVADE_REACTION_S), 2.0)
-	var reach: float = maneuver + EVADE_STICK_REACH_M
+	# maneuver = t_factor × accel: how far a defender redirects its stick off its
+	# momentum line by `time`, reaction-gated. Per-opponent when caps are supplied —
+	# a defender's Agility (max_accel) sets how far it can lunge, its Size
+	# (blade_span) how far its stick touches. Empty caps → league constants for all
+	# (every non-attribute caller), reproducing the prior single-reach behaviour.
+	var t_factor: float = 0.5 * pow(maxf(0.0, time - EVADE_REACTION_S), 2.0)
+	var has_caps: bool = opponent_caps.size() == n
+	var default_reach: float = t_factor * MANEUVER_ACCEL_M_S2 + EVADE_STICK_REACH_M
 	var worst: float = INF
 	for i: int in n:
 		var proj_x: float = opponents[i].x + opponent_vels[i].x * time
 		var proj_z: float = opponents[i].z + opponent_vels[i].z * time
+		var reach: float = default_reach
+		if has_caps:
+			var caps: AISkaterCaps = opponent_caps[i]
+			if caps != null:
+				reach = t_factor * caps.max_accel + caps.blade_span
 		var dx: float = puck_point.x - proj_x
 		var dz: float = puck_point.z - proj_z
 		var clear: float = sqrt(dx * dx + dz * dz) - reach
@@ -1479,10 +1490,11 @@ const EVADE_CARRY_HANDLE_M: float = 0.9
 # but threads a defender mid-route is still penalised. from == to gives the
 # static hold read (is this spot clear over the window).
 static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> float:
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = []) -> float:
 	var c_mid: float = reach_clearance(
-			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels)
-	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels)
+			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels, opponent_caps)
+	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels, opponent_caps)
 	return minf(c_mid, c_end)
 
 
@@ -1494,12 +1506,13 @@ static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 # "more covered", but a puck stripped mid-route never reaches it — the mid-point
 # strip happens first. Mirrors lane_loss_point for passes; from == to is a stand.
 static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3]) -> Vector3:
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = []) -> Vector3:
 	var mid: Vector3 = from.lerp(to, 0.5)
-	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents, opponent_vels)
+	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents, opponent_vels, opponent_caps)
 	if c_mid < 0.0:
 		return mid   # covered mid-route — stripped there, before the destination
-	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels)
+	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels, opponent_caps)
 	if c_end < 0.0:
 		return to    # clear mid-route, covered at the destination
 	# Neither covered (a low strip probability anyway): the tighter of the two.
@@ -1515,19 +1528,19 @@ static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 static func best_evade_point(
 		carrier_pos: Vector3, carrier_vel: Vector3,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		handle_reach: float) -> Vector3:
+		handle_reach: float, opponent_caps: Array = []) -> Vector3:
 	var proj_x: float = carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S
 	var proj_z: float = carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S
 	var env: float = 0.5 * MANEUVER_ACCEL_M_S2 * EVADE_HORIZON_S * EVADE_HORIZON_S \
 			+ handle_reach
 	var best: Vector3 = Vector3(proj_x, 0.0, proj_z)
-	var best_clear: float = reach_clearance(best, EVADE_HORIZON_S, opponents, opponent_vels)
+	var best_clear: float = reach_clearance(best, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
 	for ring: float in EVADE_SAMPLE_RINGS:
 		var radius: float = env * ring
 		for k: int in EVADE_SAMPLE_ANGLES:
 			var ang: float = TAU * float(k) / float(EVADE_SAMPLE_ANGLES)
 			var p := Vector3(proj_x + cos(ang) * radius, 0.0, proj_z + sin(ang) * radius)
-			var c: float = reach_clearance(p, EVADE_HORIZON_S, opponents, opponent_vels)
+			var c: float = reach_clearance(p, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
 			if c > best_clear:
 				best_clear = c
 				best = p
