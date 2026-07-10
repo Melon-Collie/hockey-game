@@ -62,6 +62,28 @@ static func blade_face_normal(
 # vertical plane. A lifted blade (off the ice) handles airborne pucks; a
 # grounded blade handles grounded pucks. This is what lets a saucer pass fly
 # over a stationary, grounded blade instead of being corralled out of the air,
-# and is what limits a lifted blade to tipping airborne pucks.
+# and is what limits a lifted blade to tipping airborne pucks. This is the
+# PASSIVE gate — a receiver who isn't deliberately deflecting; see
+# deflect_can_reach for the committed-deflect (Q held) reach.
 static func blade_can_interact(blade_up: bool, puck_airborne: bool) -> bool:
 	return blade_up == puck_airborne
+
+
+# Per-level reach for a DELIBERATE deflect (Q held). The loft level (scroll) sets
+# which pucks the active blade meets, matching its working height:
+#   FLAT (0) — blade on the ice: grounded pucks only (redirect stays low)
+#   LOW  (1) — blade on the ice, gate opened: BOTH grounded and low-airborne
+#              pucks, so a low shot tips up and a low saucer pops (redirect up).
+#              Physical reach (PICKUP_RADIUS off the ice) caps how high it meets.
+#   HIGH (2) — blade lifted: airborne pucks only, knocked down (redirect down);
+#              the raised blade also reaches higher and is what enables stick-lift.
+# Distinct from blade_can_interact (the passive gate) — a committed deflect
+# reaches per its chosen level, not the binary blade_up. The physical
+# segment-distance test still applies on top, so an out-of-reach puck simply
+# isn't met; this only chooses which planes the level is ALLOWED to play.
+static func deflect_can_reach(elevation_level: int, puck_airborne: bool) -> bool:
+	if elevation_level <= 0:
+		return not puck_airborne   # FLAT — grounded only
+	if elevation_level == 1:
+		return true                # LOW — grounded and airborne
+	return puck_airborne           # HIGH — airborne only

@@ -41,6 +41,15 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var deflect_tangential_retain: float = 0.85       # glancing slide is largely kept (a redirect keeps pace)
 @export var deflect_speed_ref: float = 30.0               # speed (m/s) at which restitution bottoms out
 @export var deflect_cooldown: float = 0.3
+# Signed per-loft-level redirect angle for a deliberate deflect. The loft level
+# (scroll) chooses the deflection intent, not a monotonic launch height (which
+# would rocket a hard tip over the net): LOW tips UP (a modest angle — a hard tip
+# can still sail, that's the skill/miss), HIGH bats the puck DOWN toward the ice
+# (a knockdown), FLAT stays horizontal. deflect_up_angle is the key feel knob for
+# "tip-in vs sail-over"; where a given tip lands is emergent from retained pace ×
+# this angle, same range read as a shot's arc.
+@export var deflect_up_angle: float = 20.0     # LOW loft — tip up and in
+@export var deflect_down_angle: float = 30.0   # HIGH loft — knock down to the ice
 # A deflect whose resulting speed lands below this reads as a BOBBLE — the blade
 # smothered the puck (knocked it down) rather than redirecting it. The deflector
 # gets the short bobble_cooldown so they can gather their own knockdown, instead
@@ -49,7 +58,6 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # duller than a live redirect.
 @export var bobble_speed_threshold: float = 11.0
 @export var bobble_cooldown: float = 0.12
-@export var deflect_elevation_angle: float = 35.0
 # Poke exit speed now scales with the blade-contest momentum (see
 # PuckCollisionRules.poke_strip_velocity): a soft poke floors at min, a hard sweep
 # squirts the puck up to max. Old behavior was a flat 6.0 regardless of how hard
@@ -254,14 +262,18 @@ func apply_blade_deflect(skater: Skater) -> void:
 			deflect_normal_restitution, deflect_normal_restitution_min,
 			deflect_tangential_retain, deflect_speed_ref)
 
-	# Deliberate-deflect tips ride the loft mode too: half the tip angle at
-	# LOW, full at HIGH — same scaling as the blade-scoop visual. A dead-square
-	# knockdown collapses to ~zero speed (a bobble drop); skip the elevation there,
-	# its direction is undefined and a smothered puck shouldn't pop into the air.
-	if skater.elevation_level > 0 and new_vel.length() > 0.001:
+	# Signed per-level redirect: LOW tips the puck UP (+), HIGH bats it DOWN (−),
+	# FLAT stays horizontal. A dead-square knockdown collapses to ~zero speed (a
+	# bobble drop); skip the tilt there — its direction is undefined and a
+	# smothered puck shouldn't pop off the ice.
+	var elev_angle: float = 0.0
+	if skater.elevation_level == 1:
+		elev_angle = deflect_up_angle
+	elif skater.elevation_level >= 2:
+		elev_angle = -deflect_down_angle
+	if not is_zero_approx(elev_angle) and new_vel.length() > 0.001:
 		var new_dir: Vector3 = PuckCollisionRules.apply_deflection_elevation(
-				new_vel.normalized(),
-				deflect_elevation_angle * float(skater.elevation_level) * 0.5)
+				new_vel.normalized(), elev_angle)
 		new_vel = new_dir * new_vel.length()
 
 	linear_velocity = new_vel

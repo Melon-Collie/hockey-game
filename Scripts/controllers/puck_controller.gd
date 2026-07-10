@@ -433,27 +433,28 @@ func _check_interactions() -> void:
 				if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 						or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 					continue
-				# Grounded blade ↔ grounded puck, lifted blade ↔ airborne puck.
-				# A stationary grounded blade lets a saucer pass fly over; a lifted
-				# blade reaches only airborne pucks (and only to tip them).
-				if not PuckReceptionRules.blade_can_interact(skater.blade_up, puck_airborne):
+				# Reach gate. A DELIBERATE deflect (Q held) reaches per its loft
+				# level (grounded / both / airborne — see deflect_can_reach); an
+				# ordinary (passive) blade uses the on-ice/airborne gate, so a
+				# saucer flies over a grounded receiver and a forced-up blade meets
+				# only airborne pucks.
+				var can_reach: bool = \
+						PuckReceptionRules.deflect_can_reach(skater.elevation_level, puck_airborne) \
+						if skater.deflect_intent \
+						else PuckReceptionRules.blade_can_interact(skater.blade_up, puck_airborne)
+				if not can_reach:
 					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
 				var blade_prev: Vector3 = skater.get_prev_blade_contact_global()
 				if not PuckInteractionRules.check_pickup(_prev_puck_pos, puck_curr,
 						blade_prev, blade_curr, PICKUP_RADIUS):
 					continue
-				if skater.blade_up:
-					# Lifted blade can only tip an airborne puck — never corral it
-					# onto the stick. Redirect off the blade face and move on.
-					puck.apply_blade_deflect(skater)
-					break
-				# Deliberate deflect: the player is holding LMB without the puck to
-				# commit to a redirect. Force the deflect off the blade face — the
-				# SAME path a too-fast puck takes naturally — bypassing the catch
-				# decision so even an otherwise-catchable (slow) puck is tipped
-				# rather than corralled. Releasing LMB returns to normal reception.
-				if skater.deflect_intent:
+				# A committed deflect (Q held, any reachable level) or a forced-up
+				# blade (opponent stick-lift meeting an airborne puck) tips the puck
+				# off the blade face — the SAME path a too-fast puck takes naturally,
+				# bypassing the catch decision so even an otherwise-catchable puck is
+				# redirected. The loft level signs the redirect (flat / up / down).
+				if skater.deflect_intent or skater.blade_up:
 					puck.apply_blade_deflect(skater)
 					break
 				var puck_vel: Vector3 = puck.get_puck_velocity()

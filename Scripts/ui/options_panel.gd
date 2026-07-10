@@ -101,7 +101,7 @@ const _REBINDABLE_ACTIONS: Array = [
 	{"action": "block",          "label": "Block"},
 	{"action": "elevation_up",   "label": "Elevation Up"},
 	{"action": "elevation_down", "label": "Elevation Down"},
-	{"action": "stick_lift",     "label": "Stick Lift"},
+	{"action": "stick_lift",     "label": "Deflect / Lift"},
 ]
 
 func _ready() -> void:

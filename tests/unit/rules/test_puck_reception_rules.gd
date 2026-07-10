@@ -99,6 +99,25 @@ func test_lifted_blade_interacts_with_airborne_puck() -> void:
 	assert_true(PuckReceptionRules.blade_can_interact(true, true))
 
 
+# ── deflect_can_reach — per-level committed-deflect reach ─────────────────────
+
+func test_flat_deflect_reaches_grounded_only() -> void:
+	# FLAT (0): blade on the ice — grounded pucks only; a saucer flies over.
+	assert_true(PuckReceptionRules.deflect_can_reach(0, false), "FLAT reaches grounded")
+	assert_false(PuckReceptionRules.deflect_can_reach(0, true), "FLAT ignores airborne")
+
+func test_low_deflect_reaches_both() -> void:
+	# LOW (1): the straddle level — tips a grounded shot up OR pops a low saucer.
+	assert_true(PuckReceptionRules.deflect_can_reach(1, false), "LOW reaches grounded")
+	assert_true(PuckReceptionRules.deflect_can_reach(1, true), "LOW reaches airborne")
+
+func test_high_deflect_reaches_airborne_only() -> void:
+	# HIGH (2): blade lifted — knocks airborne pucks down; a grounded puck passes
+	# under the raised blade.
+	assert_false(PuckReceptionRules.deflect_can_reach(2, false), "HIGH ignores grounded")
+	assert_true(PuckReceptionRules.deflect_can_reach(2, true), "HIGH reaches airborne")
+
+
 # ── blade_face_normal ────────────────────────────────────────────────────────
 
 func test_blade_face_normal_opposes_incoming_puck() -> void:

@@ -98,6 +98,13 @@ func test_zero_elevation_no_y_component() -> void:
 	var flat: Vector3 = PuckCollisionRules.apply_deflection_elevation(horiz, 0.0)
 	assert_almost_eq(flat.y, 0.0, 0.01)
 
+func test_negative_elevation_drives_down() -> void:
+	# HIGH-loft knockdown uses a negative angle to bat the puck toward the ice.
+	var horiz := Vector3(1, 0, 0)
+	var down: Vector3 = PuckCollisionRules.apply_deflection_elevation(horiz, -30.0)
+	assert_lt(down.y, 0.0, "negative elevation angle drives the redirect downward")
+	assert_almost_eq(down.length(), 1.0, 0.01, "result is still a unit vector")
+
 # ── body_block_velocity ──────────────────────────────────────────────────────
 
 func test_body_block_reflects_and_dampens() -> void:
