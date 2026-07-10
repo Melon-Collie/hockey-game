@@ -78,6 +78,13 @@ var self_stagger_timer: float = 0.0
 # This bot's own Hands-scaled carry-handle reach — how tight an evasion seam it
 # can thread (best_evade_point). League default when unwired.
 var self_handle_reach: float = 0.9
+# This bot's blade reach cone half-angle (ROM + torso twist) and Agility-scaled
+# facing turn rate — how the carrier prices the rotation an out-of-cone aim costs
+# (_facing_rotation_time). A shot/pass anywhere inside the cone is free (no body
+# turn); only the narrow back wedge pays, at this turn rate. League defaults when
+# unwired (unit tests) reproduce the prior scoring.
+var self_reach_cone_half_angle: float = deg_to_rad(157.0)
+var self_facing_turn_rate: float = 6.0
 
 # ── Difficulty pace knobs (from BotSkillProfile, this bot only) ───────────────
 # Set by SkaterAgentStateMachine each tick from the applied skill profile.

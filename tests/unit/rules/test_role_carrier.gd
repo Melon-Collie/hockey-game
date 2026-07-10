@@ -889,3 +889,60 @@ func test_no_dump_once_in_the_offensive_zone() -> void:
 	c.decide(_make_ctx(self_pos, skaters))
 	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
 			"no dumping once the zone is established")
+
+
+# ─── _facing_rotation_time: the blade reach cone (Aim-B / B1) ────────────────
+# The carrier prices a shot/pass by the body ROTATION it costs. The blade
+# reaches anywhere inside the ±reach-cone (ROM + torso twist, ~157°) from the
+# current facing, so an in-cone aim fires with NO turn; only the narrow back
+# wedge past the cone pays, at the bot's Agility-scaled turn rate. These pin the
+# grounded geometry directly (the recursive pass-EV path can't isolate it).
+
+const _CONE_157: float = deg_to_rad(157.0)
+
+
+func _rot_time(facing_deg: float, target_deg: float, cone: float,
+		rate: float) -> float:
+	# facing/target given as degrees off +Z (CCW in XZ). Self at origin.
+	var c := AIRoleCarrier.new()
+	var f := deg_to_rad(facing_deg)
+	var t := deg_to_rad(target_deg)
+	var facing_xz := Vector2(sin(f), cos(f))
+	var target := Vector3(sin(t) * 10.0, 0.0, cos(t) * 10.0)
+	return c._facing_rotation_time(facing_xz, Vector3.ZERO, target, cone, rate)
+
+
+func test_in_cone_aim_costs_no_rotation() -> void:
+	# A 120° off-facing target is well inside the ±157° reach cone, so the blade
+	# fires from the current facing — zero body-turn cost. Under the OLD ±90° cone
+	# this same aim would have paid; widening the cone is the core of B1.
+	assert_almost_eq(_rot_time(0.0, 120.0, _CONE_157, 6.0), 0.0, 0.0001,
+			"an in-cone (≤157°) aim requires no body rotation")
+	assert_almost_eq(_rot_time(0.0, 155.0, _CONE_157, 6.0), 0.0, 0.0001,
+			"just inside the cone is still free")
+
+
+func test_back_wedge_aim_pays_only_the_overshoot() -> void:
+	# Directly behind (180°) is 23° past the 157° cone, rotated at 6 rad/s.
+	var expected: float = deg_to_rad(180.0 - 157.0) / 6.0
+	assert_almost_eq(_rot_time(0.0, 180.0, _CONE_157, 6.0), expected, 0.0001,
+			"only the overshoot past the cone costs time")
+
+
+func test_nimbler_bot_prices_a_back_wedge_turn_cheaper() -> void:
+	# Same back-wedge geometry, a faster (higher-Agility) turn rate → less time.
+	var slow: float = _rot_time(0.0, 180.0, _CONE_157, 6.0)
+	var fast: float = _rot_time(0.0, 180.0, _CONE_157, 12.0)
+	assert_lt(fast, slow,
+			"a higher facing turn rate resolves the back-wedge turn sooner")
+	assert_almost_eq(fast, slow * 0.5, 0.0001,
+			"double the turn rate halves the rotation cost")
+
+
+func test_wider_cone_frees_a_lateral_aim() -> void:
+	# The same 120° aim: free under the true ±157° cone, penalized under the old
+	# ±90°. This is exactly the behavioural shift B1 introduces.
+	var wide: float = _rot_time(0.0, 120.0, _CONE_157, 6.0)
+	var narrow: float = _rot_time(0.0, 120.0, deg_to_rad(90.0), 6.0)
+	assert_eq(wide, 0.0, "wide cone frees the lateral aim")
+	assert_gt(narrow, 0.0, "the old narrow cone would have penalized it")

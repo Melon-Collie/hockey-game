@@ -25,6 +25,12 @@ func test_caps_defaults_equal_league_baseline() -> void:
 			"handle reach defaults to the league carry-handle reach")
 	assert_almost_eq(caps.blade_speed, 10.0, 0.001,
 			"blade speed defaults to the controller's league max_blade_speed")
+	# Aim geometry (B1): the ±157° blade reach cone (ROM + torso twist) and the
+	# baseline facing turn rate the carrier prices a body rotation against.
+	assert_almost_eq(caps.reach_cone_half_angle, deg_to_rad(157.0), 0.001,
+			"reach cone defaults to the league ROM (90) + torso twist (67)")
+	assert_almost_eq(caps.facing_turn_rate, 6.0, 0.001,
+			"facing turn rate defaults to the baseline 6.0 rad/s")
 
 
 func test_role_context_self_speeds_default_to_baseline() -> void:
@@ -33,6 +39,8 @@ func test_role_context_self_speeds_default_to_baseline() -> void:
 	var ctx := RoleContext.new()
 	assert_almost_eq(ctx.self_max_speed, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S, 0.001)
 	assert_almost_eq(ctx.self_wrister_shot_speed, GameRules.DEFAULT_WRISTER_POWER_MAX_M_S, 0.001)
+	assert_almost_eq(ctx.self_reach_cone_half_angle, deg_to_rad(157.0), 0.001)
+	assert_almost_eq(ctx.self_facing_turn_rate, 6.0, 0.001)
 
 
 # ── time_to_arrive ref-speed parameter ──────────────────────────────────────
@@ -99,6 +107,18 @@ func test_apply_capabilities_derives_reach_gates_and_speeds() -> void:
 	assert_almost_eq(sm._self_max_speed, 10.5, 0.001)
 	assert_almost_eq(sm._chase_max_accel, 13.0, 0.001)
 	assert_almost_eq(sm._self_wrister_shot_speed, 27.0, 0.001)
+
+
+func test_apply_capabilities_threads_aim_geometry() -> void:
+	# The reach cone + facing turn rate pass through to the SM so the carrier
+	# prices body rotation against this bot's real ROM and Agility (B1).
+	var sm := SkaterAgentStateMachine.new()
+	var caps := _caps(2.0, 10.5, 13.0, 27.0)
+	caps.reach_cone_half_angle = deg_to_rad(150.0)
+	caps.facing_turn_rate = 7.5
+	sm.apply_capabilities(caps)
+	assert_almost_eq(sm._self_reach_cone_half_angle, deg_to_rad(150.0), 0.001)
+	assert_almost_eq(sm._self_facing_turn_rate, 7.5, 0.001)
 
 
 func test_apply_capabilities_sets_aim_slew_to_real_blade_speed() -> void:

@@ -760,6 +760,12 @@ var _self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 var _self_weight: float = 1.0
 var _self_body_check_transfer: float = 0.45
 var _self_handle_reach: float = 0.9
+# This bot's blade reach cone half-angle (ROM + torso twist) and Agility-scaled
+# facing turn rate, so the carrier prices only genuine body-rotation aims (the
+# narrow back wedge) and at this bot's real turn speed. League baselines until
+# apply_capabilities runs.
+var _self_reach_cone_half_angle: float = deg_to_rad(157.0)
+var _self_facing_turn_rate: float = 6.0
 
 # Sticky state for _carry_aim_track_fire's mode (shot-aim vs carry-
 # aim with stickhandle). Without it, when shoot vs carry scores are
@@ -940,6 +946,8 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	_self_weight = caps.weight
 	_self_body_check_transfer = caps.body_check_transfer
 	_self_handle_reach = caps.handle_reach
+	_self_reach_cone_half_angle = caps.reach_cone_half_angle
+	_self_facing_turn_rate = caps.facing_turn_rate
 	# Aim at the bot's REAL blade speed (Hands): the synthesized aim cursor slews
 	# at the same rate the blade is physically clamped to, so aiming looks exactly
 	# as fast as its hands are — no artificial per-difficulty slew. Difficulty comes
@@ -1384,6 +1392,8 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
 	ctx.self_handle_reach = _self_handle_reach
+	ctx.self_reach_cone_half_angle = _self_reach_cone_half_angle
+	ctx.self_facing_turn_rate = _self_facing_turn_rate
 	ctx.self_stagger_timer = self_state.stagger_timer if self_state != null else 0.0
 	ctx.pursuit_standoff_m = _pursuit_standoff_m
 	ctx.pass_speed_scale = _pass_speed_scale

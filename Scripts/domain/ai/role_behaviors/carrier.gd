@@ -61,14 +61,11 @@ const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~3
 # stale opponent projections.
 const PASS_LEAD_MAX_S: float = 0.6
 
-# Quick-shot blade ROM cone: passes within this half-angle of facing
-# don't pay rotation cost (blade can fire from current facing).
-# Outside the cone, only the OVERSHOOT (angle - ROM) costs time.
-const BOT_BLADE_ROM_HALF_ANGLE_RAD: float = PI * 0.5
-
-# Facing rotation rate used to convert overshoot angle into rotation
-# time during pass scoring.
-const BOT_FACING_ROTATION_RATE_RAD_S: float = 6.0
+# (Blade reach cone + facing turn rate now come from the bot's real caps —
+# RoleContext.self_reach_cone_half_angle / self_facing_turn_rate — so an aim
+# anywhere inside the true ±157° reach cone fires with no body turn, and only the
+# narrow back wedge pays, at the bot's Agility-scaled turn rate. See
+# _facing_rotation_time.)
 
 # Carry candidate generation: 8 polar cardinals at this radius +
 # slot anchor + stand-still.
@@ -642,7 +639,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		if not receiver_is_one_timer:
 			receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 		var rotation_time: float = _facing_rotation_time(
-				self_facing_xz, self_pos, receiver)
+				self_facing_xz, self_pos, receiver,
+				ctx.self_reach_cone_half_angle, ctx.self_facing_turn_rate)
 		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
 				receiver_release_t, flight_t + rotation_time, our_goalie, receiver_caps)
 		if s > best_pass_score:
@@ -751,13 +749,14 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 
 
 # Rotation time: how long the bot needs to rotate facing to point at
-# `target` before the blade ROM can fire there. Within the blade ROM
-# cone (BOT_BLADE_ROM_HALF_ANGLE_RAD) the bot quick-fires without
-# rotating — rotation_time = 0. Past the cone, only the OVERSHOOT
-# (angle minus ROM) pays rotation cost, so back-passes self-discount
-# but in-cone passes feel snappy.
+# `target` before the blade can fire there. The blade reaches anywhere inside
+# the reach cone (`cone_half_angle` = ROM + torso twist, ~157° — the exact IK
+# gate the pose coordinator enforces), so a shot/pass to ANY in-cone target
+# fires from the current facing with NO body turn (rotation_time = 0). Only aims
+# in the narrow back wedge past the cone pay, and then only for the OVERSHOOT
+# (angle minus cone), rotated at this bot's real Agility-scaled turn rate.
 func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
-		target: Vector3) -> float:
+		target: Vector3, cone_half_angle: float, turn_rate: float) -> float:
 	var to_target_x: float = target.x - self_pos.x
 	var to_target_z: float = target.z - self_pos.z
 	var to_target_len: float = sqrt(
@@ -769,8 +768,8 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 			self_facing_xz.x * to_target_x * inv_len
 			+ self_facing_xz.y * to_target_z * inv_len, -1.0, 1.0)
 	var angular_distance: float = acos(cos_angle)
-	var overshoot: float = maxf(0.0, angular_distance - BOT_BLADE_ROM_HALF_ANGLE_RAD)
-	return overshoot / BOT_FACING_ROTATION_RATE_RAD_S
+	var overshoot: float = maxf(0.0, angular_distance - cone_half_angle)
+	return overshoot / maxf(turn_rate, 0.001)
 
 
 # Returns [best_score, best_pos] across all carry candidates:
@@ -1217,7 +1216,8 @@ func _developing_outlet_feed(ctx: RoleContext, tm: SkaterNetworkState,
 	# gets flight + their wrister charge before any shot — same release
 	# model the live pass scoring applies to a non-ready receiver.
 	var release_t: float = flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
-	var rotation_time: float = _facing_rotation_time(self_facing_xz, ctx.self_pos, spot)
+	var rotation_time: float = _facing_rotation_time(self_facing_xz, ctx.self_pos, spot,
+			ctx.self_reach_cone_half_angle, ctx.self_facing_turn_rate)
 	return _pass_ev(ctx, spot, pass_speed, flight_t, release_t,
 			flight_t + rotation_time, our_goalie, receiver_caps)
 

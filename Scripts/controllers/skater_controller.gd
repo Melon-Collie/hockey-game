@@ -873,6 +873,16 @@ func build_ai_caps() -> AISkaterCaps:
 	if _base_max_blade_speed > 0.001:
 		caps.handle_reach = AIActionScoring.EVADE_CARRY_HANDLE_M \
 				* (max_blade_speed / _base_max_blade_speed)
+	# Blade reach cone: the exact IK gate SkaterPoseCoordinator.apply_facing
+	# enforces (ROM backhand + torso twist), so the bot models the same off-facing
+	# reach the body actually has. Fixed geometry — not attribute-scaled.
+	caps.reach_cone_half_angle = deg_to_rad(
+			rom_backhand_angle_max_deg + upper_body_max_twist_deg)
+	# Facing turn rate: the baseline 6.0 rad/s approximation scaled by real Agility.
+	# facing_drag_speed is base × agility_mult, so its ratio to base IS the Agility
+	# multiplier — a nimbler bot turns (and prices a back-wedge aim) faster.
+	if _base_facing_drag_speed > 0.001:
+		caps.facing_turn_rate *= facing_drag_speed / _base_facing_drag_speed
 	if skater != null:
 		caps.weight = skater.weight
 		caps.body_check_transfer = skater.body_check_transfer

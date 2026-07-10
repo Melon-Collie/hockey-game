@@ -71,3 +71,20 @@ var body_check_brace: float = 0.4
 # pass reception — reception has no Hands term in the physics.) Default is the
 # league carry-handle reach (AIActionScoring.EVADE_CARRY_HANDLE_M).
 var handle_reach: float = 0.9
+
+# Half-angle of the blade's reach cone: how far off its FACING the body can
+# place the blade WITHOUT turning — arm ROM plus torso twist
+# (SkaterController.rom_backhand_angle_max_deg + upper_body_max_twist_deg, the
+# exact gate SkaterPoseCoordinator.apply_facing enforces on the IK). A bot can
+# fire a shot/pass anywhere inside this cone from its current facing, so only aims
+# BEYOND it (the narrow back wedge) cost a body rotation. Fixed equipment/anatomy
+# geometry — not attribute-scaled — but read from the real exports so the bot's
+# model tracks the body's actual reach. Default = deg_to_rad(90 + 67) = ~157°.
+var reach_cone_half_angle: float = deg_to_rad(157.0)
+
+# Effective body-facing turn rate (rad/s) used to price the rotation an out-of-cone
+# aim costs. The real facing is an exponential lerp at facing_drag_speed (Agility-
+# scaled); this is a constant-rate approximation of it whose BASELINE is the
+# long-standing 6.0 rad/s and whose per-bot value scales with the skater's real
+# Agility (a nimbler bot prices a back-wedge turn cheaper). Default = the baseline.
+var facing_turn_rate: float = 6.0
