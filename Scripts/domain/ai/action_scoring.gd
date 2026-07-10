@@ -270,29 +270,17 @@ const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 
-# Distance ramp for pass LAUNCH speed. Now that every bot pass is a paced wrister
-# (the #363 mouse-speed model makes soft releases reliable), a close feed is a
-# genuinely soft touch — down toward the wrister floor, well below the old snap
-# speed — so the receiver can corral it in tight; longer passes ramp up for pace,
-# shrinking a defender's reaction window. The hard end stops at the reception
-# deflect threshold (~20 m/s, PASS_RAMP_LONG_SPEED_M_S): a pass above that can
-# tip off a poorly-angled receiving blade, so a "harder for farther" pass stays
-# exactly at the catchable ceiling. Continuous (smoothstep), not a binary cliff.
-#
-# Why a direct distance ramp and not friction/arrival-speed math: the puck
-# sheds little speed over a pass (GameRules.PUCK_ICE_DECEL_M_S2 ≈ 1 m/s² — e.g. a
-# 26 m pass loses only ~1–2 m/s), so arrival speed ≈ launch speed at realistic
-# distances. Backing a launch out of a target arrival speed would therefore
-# collapse to a near-constant speed and leave long passes too soft to beat
-# interception. Distance is the right axis directly: a long pass can be fast
-# because its longer flight gives the receiver time to square up. (Softening the
-# close end is self-regulating — score_pass reads the launch speed into its lane-
-# interception window, so a soft feed scores as more pickable and only wins when
-# the lane is genuinely clear.)
-const PASS_RAMP_SHORT_DISTANCE_M: float = 10.0   # ≤ this → soft touch pass
-const PASS_RAMP_SHORT_SPEED_M_S: float = 11.0    # launch target for a close feed (soft)
-const PASS_RAMP_LONG_DISTANCE_M: float = 26.0    # ≥ this → full long-pass pace
-const PASS_RAMP_LONG_SPEED_M_S: float = 20.0     # launch target for a long pass (catchable ceiling)
+# Target ARRIVAL speed at the receiver — the "magnet" pace a bot aims to hit its
+# teammate at. Crisp enough to beat a defender's reaction and shrink the pass's
+# hang time (which the EV's time-decay penalizes), yet still catchable: reception
+# deflects a poorly-angled blade only above deflect_min_speed + alignment_bonus·
+# alignment (~20 m/s always catches, a squared blade catches to ~28), so a
+# receiver squaring to the incoming line magnets this in. Every bot pass now aims
+# for the SAME crisp arrival speed regardless of distance — the earlier
+# distance-ramp made close feeds far too soft (down toward the ~11 m/s floor),
+# which both looked weak and, via the longer flight time, made the EV under-value
+# passing relative to holding/shooting.
+const PASS_TARGET_ARRIVAL_M_S: float = 21.5
 
 # Reference charged-pass speed (~mid-ramp). No longer a fixed release target —
 # pass speed is distance-adaptive via pass_launch_speed — but kept as a
@@ -303,23 +291,27 @@ const PASS_CHARGE_SPEED_M_S: float = (
 		+ (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 				- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S) * 0.5)
 
-# Distance-adaptive pass LAUNCH speed: snap-soft for short feeds, ramping to
-# PASS_RAMP_LONG_SPEED_M_S for long passes, smooth between. Clamped to max_launch
-# — the passer's own max wrister (its hardest possible pass), or the league
-# default for opponent threat modeling.
+# Pass LAUNCH speed backed out of the target ARRIVAL speed: fire hard enough that
+# the puck ARRIVES at PASS_TARGET_ARRIVAL_M_S after shedding ice friction over the
+# pass distance. Kinematics (constant decel a = PUCK_ICE_DECEL_M_S2):
+#   v_launch = sqrt(v_arrival² + 2·a·d).
+# Friction is tiny (~0.5 m/s²), so the compensation is well under 1 m/s even on a
+# long pass — launch sits right around the target at every distance. That's the
+# intent: every bot pass is the same crisp magnet pace, arriving on the tape at a
+# catchable-but-quick speed, rather than a distance ramp that left close feeds
+# floaty. Clamped to max_launch — the passer's own max wrister (its hardest
+# possible pass), or the league default for opponent threat modeling.
 #
 # speed_scale is the difficulty pace knob (BotSkillProfile.pass_speed_scale),
-# applied AFTER the clamp so an easier bot's passes can drop below the snap floor
-# — that's the point: a slower puck the human can read and pick off. Defaults to
+# applied AFTER the clamp so an easier bot's passes drop below the magnet pace —
+# that's the point: a slower puck the human can read and pick off. Defaults to
 # 1.0, so the cross-player threat model (expected_pass_speed) and all unscaled
-# callers are byte-for-byte unchanged.
+# callers see the full magnet pace.
 static func pass_launch_speed(distance: float, max_launch: float,
 		speed_scale: float = 1.0) -> float:
-	var t: float = smoothstep(PASS_RAMP_SHORT_DISTANCE_M, PASS_RAMP_LONG_DISTANCE_M, distance)
-	var target: float = lerpf(PASS_RAMP_SHORT_SPEED_M_S, PASS_RAMP_LONG_SPEED_M_S, t)
-	# Floor at the softest a wrister can throw (not the old snap speed) so a close
-	# feed stays genuinely soft; speed_scale (difficulty) applies after, and can
-	# still drop an easy bot's pass below even that.
+	var target: float = sqrt(
+			PASS_TARGET_ARRIVAL_M_S * PASS_TARGET_ARRIVAL_M_S
+			+ 2.0 * GameRules.PUCK_ICE_DECEL_M_S2 * maxf(distance, 0.0))
 	return clampf(target, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, max_launch) * speed_scale
 
 # ── Saucer pass ──────────────────────────────────────────────────────────────
@@ -358,10 +350,10 @@ const SAUCER_SKIP_WHEN_LANE_CLEAR: float = 0.85
 const SAUCER_MIN_DISTANCE_M: float = 10.0
 
 
-# Returns the LAUNCH speed a pass from `shooter` to `receiver` will fire at —
-# distance-adaptive (see pass_launch_speed): soft for short feeds, harder for
-# long passes so they still arrive at a comfortable pace. Capped at the league
-# default max wrister here; the passer's own scoring/execution uses its own max
+# Returns the LAUNCH speed a pass from `shooter` to `receiver` will fire at — set
+# so the puck arrives at the magnet pace (see pass_launch_speed), a hair above the
+# target arrival speed to cover friction. Capped at the league default max wrister
+# here; the passer's own scoring/execution uses its own max
 # (ctx.self_wrister_shot_speed). Used by both offensive scoring (lead / lane
 # math) and defensive scoring (threat_surface_pass assuming opponents play the
 # same way).

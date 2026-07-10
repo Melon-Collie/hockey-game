@@ -84,25 +84,32 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
-func test_close_pass_is_a_soft_charged_wrister() -> void:
+func test_close_pass_is_a_crisp_charged_wrister() -> void:
 	# Every pass is a paced wrister now — no fixed-power quick snap. A short feed to
-	# a close open teammate charges (pass_should_charge) and fires SOFT: the launch
-	# target sits below the old quick-snap floor so the receiver corrals it in tight.
-	var self_pos := Vector3(3, 0, 20)
-	var outlet := Vector3(6, 0, 17)                   # ~4.2 m — a close feed
+	# a close open teammate charges (pass_should_charge) and fires at the MAGNET
+	# pace (~21.5 m/s arrival), not the old floaty soft touch: crisp enough to be a
+	# real threat and to keep its hang time short, still catchable when the receiver
+	# squares up. NZ carrier with a defender clogging the straight carry/shot lane so
+	# the close lateral feed wins.
+	var self_pos := Vector3(-4, 0, 2)
+	var outlet := Vector3(1, 0, -1)                   # ~5.8 m — a close feed, up-ice
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
 			[2, TEAM_ID, outlet],
-			[3, 1, Vector3(1.5, 0, 18.0)],            # forecheck so PASS beats carry
-			[4, 1, Vector3(3.0, 0, 17.5)],
+			[11, 1, Vector3(-4, 0, -2)],              # clogs the straight-ahead carry/shot
 	]
 	var c := AIRoleCarrier.new()
 	c.decide(_make_ctx(self_pos, skaters))
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS, "picks the close outlet")
 	assert_eq(c.pass_target_peer_id, 2)
 	assert_true(c.pass_should_charge, "a pass is always a charged wrister now")
-	assert_lt(c.pass_target_speed, AIActionScoring.PASS_SPEED_M_S,
-			"a close feed fires softer than the old quick-snap floor")
+	assert_gt(c.pass_target_speed, AIActionScoring.PASS_SPEED_M_S,
+			"a close feed now fires crisp — above the old quick-snap floor")
+	# Backs out of the target arrival at this distance (friction-compensated).
+	assert_almost_eq(c.pass_target_speed,
+			AIActionScoring.pass_launch_speed(self_pos.distance_to(outlet),
+					GameRules.DEFAULT_WRISTER_POWER_MAX_M_S), 0.1,
+			"fires at the friction-compensated magnet pace")
 
 
 # ─── pressure: make a safe play, don't drive into the box ───────────────────

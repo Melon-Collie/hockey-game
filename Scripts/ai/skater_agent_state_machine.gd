@@ -891,11 +891,16 @@ var _cached_stick_lift_held: bool = false
 # full dispatch sets a real target.
 var _cached_aim_target: Vector3 = Vector3.ZERO
 var _has_cached_aim_target: bool = false
-# True when the cached target should be arc-stepped (set by
-# _step_mouse_aim), false for direct chord (chase / press). Read by
-# the skipped-tick re-step so the arc keeps walking the body-relative
-# ring every tick instead of only on full-dispatch ticks.
-var _cached_aim_uses_arc: bool = false
+# The cursor-shaping mode that produced the cached target (_STEP_DIRECT / _ARC /
+# _FACE), read by the skipped-tick re-step so it re-shapes the same way every
+# physics frame — the arc keeps walking the body ring, the face clamp keeps
+# re-evaluating against the current facing — instead of only on full-dispatch ticks.
+var _cached_aim_mode: int = _STEP_DIRECT
+# The linear + angular cursor rates that produced the cached target, so the
+# skipped-tick re-step reuses them (a body-facing aim and a blade aim slew the
+# cursor at different rates — see _step_mouse_face vs _step_mouse_aim).
+var _cached_aim_max_speed: float = MOUSE_MAX_SPEED_M_S
+var _cached_aim_arc_rate: float = MOUSE_ARC_RATE_RAD_S
 
 # Captured at the top of each dispatch() so _step_mouse_toward can
 # arc the per-tick mouse target around self_pos without re-threading
@@ -1246,7 +1251,8 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 		input.stick_lift_held = _cached_stick_lift_held
 		if _has_cached_aim_target:
 			input.mouse_world_pos = _step_mouse_internal(
-					_cached_aim_target, _cached_aim_uses_arc)
+					_cached_aim_target, _cached_aim_mode,
+					_cached_aim_max_speed, _cached_aim_arc_rate)
 		return
 	_dispatch_skip_counter = _dispatch_period_ticks - 1
 
@@ -1285,7 +1291,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		_apply_steering(input, snapshot, self_pos, tag_up)
 		# Race back to the blue line to clear the offside as fast as possible.
 		_resolve_sprint(input, self_state, self_pos, tag_up, false, false)
-		input.mouse_world_pos = _step_mouse_aim(_ready_stance_aim(self_pos, tag_up, snapshot))
+		input.mouse_world_pos = _step_mouse_face(_ready_stance_aim(self_pos, tag_up, snapshot))
 		_set_one_timer_ready(false)
 	else:
 		# Role dispatch: each TeamBrain-assigned slot maps to a behavior
@@ -1356,13 +1362,13 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		if not would_be_ready:
 			jab_aim = _poke_jab_aim(snapshot, self_pos)
 		if jab_aim.is_finite():
-			input.mouse_world_pos = _step_mouse_aim(jab_aim)
+			input.mouse_world_pos = _step_mouse_face(jab_aim)
 		elif would_be_ready:
-			input.mouse_world_pos = _step_mouse_aim(_shot_aim_point(snapshot, self_pos, 0.0))
+			input.mouse_world_pos = _step_mouse_face(_shot_aim_point(snapshot, self_pos, 0.0))
 		elif decision.has_aim_override:
-			input.mouse_world_pos = _step_mouse_aim(decision.aim_world_pos)
+			input.mouse_world_pos = _step_mouse_face(decision.aim_world_pos)
 		else:
-			input.mouse_world_pos = _step_mouse_aim(_ready_stance_aim(self_pos, decision.target_position, snapshot))
+			input.mouse_world_pos = _step_mouse_face(_ready_stance_aim(self_pos, decision.target_position, snapshot))
 
 	# Transitions
 	if have_puck:
@@ -2063,7 +2069,7 @@ func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
 # `_step_mouse_toward`'s straight-line lerp tracks this slowly-moving
 # target with sub-tick error, so the mouse describes the same arc.
 func _arc_step_mouse_target(self_pos: Vector3, final_target: Vector3,
-		self_state: SkaterNetworkState) -> Vector3:
+		self_state: SkaterNetworkState, arc_rate: float) -> Vector3:
 	var to_final: Vector3 = final_target - self_pos
 	to_final.y = 0.0
 	if to_final.length_squared() < 0.0001:
@@ -2090,9 +2096,32 @@ func _arc_step_mouse_target(self_pos: Vector3, final_target: Vector3,
 	var current_angle: float = atan2(seed_dir.x, seed_dir.z)
 	var desired_angle: float = atan2(desired_dir.x, desired_dir.z)
 	var diff: float = wrapf(desired_angle - current_angle, -PI, PI)
-	var max_step: float = _mouse_arc_rate_rad_s * MOUSE_TICK_DELTA
+	var max_step: float = arc_rate * MOUSE_TICK_DELTA
 	var stepped_angle: float = current_angle + clampf(diff, -max_step, max_step)
 	return self_pos + Vector3(sin(stepped_angle), 0.0, cos(stepped_angle)) * CARRY_BLADE_AIM_FORWARD_M
+
+
+# FACE-mode cursor placement: a point on the body ring in the direction the bot
+# wants to point, but CLAMPED into the reachable cone (_self_reach_cone_half_angle
+# − FACE_GATE_MARGIN_RAD) of its current facing. Inside the cone the cursor points
+# straight at the target (the body turns to it at facing_drag_speed); in the back
+# wedge it's clamped to the cone edge on the target's side, so facing rotates to
+# that edge without the pose IK gate freezing, the target's relative angle shrinks
+# as the body turns, and the clamp releases — the bot walks all the way around.
+func _clamp_aim_to_reach_cone(self_pos: Vector3, target: Vector3,
+		self_state: SkaterNetworkState) -> Vector3:
+	var to_target := Vector2(target.x - self_pos.x, target.z - self_pos.z)
+	if to_target.length_squared() < 0.0001:
+		return target
+	var target_dir: Vector2 = to_target.normalized()
+	var facing := Vector2(0.0, 1.0)
+	if self_state != null and self_state.facing.length_squared() > 0.0001:
+		facing = self_state.facing.normalized()
+	var ang: float = facing.angle_to(target_dir)
+	var gate: float = maxf(_self_reach_cone_half_angle - FACE_GATE_MARGIN_RAD, 0.0)
+	var out_dir: Vector2 = target_dir if absf(ang) <= gate \
+			else facing.rotated(signf(ang) * gate)
+	return self_pos + Vector3(out_dir.x, 0.0, out_dir.y) * CARRY_BLADE_AIM_FORWARD_M
 
 
 func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -3326,33 +3355,81 @@ var _mouse_pos_initialized: bool = false
 #   chase state (the target may be the actual puck position at
 #   close range, and projecting it onto a 2 m ring would put the
 #   mouse beyond the puck and break pickup).
+# Cursor-shaping modes for _step_mouse_internal:
+#   DIRECT — chord straight toward the target at the slew cap (chase / press).
+#   ARC    — walk the target around the body ring at the blade slew (CARRY / blade
+#            pre-aim), keeping the mouse-body angle inside the IK gate mid-swing.
+#   FACE   — snap the cursor to where the bot wants to point, clamped to the
+#            reachable cone; facing_drag_speed (Agility) is the sole turn limit.
+const _STEP_DIRECT: int = 0
+const _STEP_ARC: int = 1
+const _STEP_FACE: int = 2
+
+# Headroom below the pose IK gate (_self_reach_cone_half_angle) that a FACE-mode
+# cursor is clamped to, so it never sits exactly on the freeze boundary. Only
+# affects a target in the back wedge; the body still walks all the way around to
+# it as facing rotates and the clamp releases.
+const FACE_GATE_MARGIN_RAD: float = deg_to_rad(6.0)
+
+
 func _step_mouse_aim(target: Vector3) -> Vector3:
-	return _step_mouse_internal(target, true)
+	return _step_mouse_internal(target, _STEP_ARC, _mouse_max_speed_m_s, _mouse_arc_rate_rad_s)
+
+
+# Body-FACING aim (off-puck ready stance, tag-up, one-timer/jab pre-aim): places
+# the cursor DIRECTLY at where the bot wants to point — like a human flicking the
+# mouse — with NO slew smoothing. There's no puck on the blade to dangle off-puck,
+# so the cursor is pure pointing intent; the body then turns toward it at
+# facing_drag_speed (Agility) in the pose coordinator, which is the ONE real
+# rotation limit and exactly the limit a human plays under. The only shaping is a
+# clamp to the reachable cone (see _clamp_aim_to_reach_cone): the pose IK gate
+# FREEZES facing if the cursor sits in the back wedge, so a target behind the bot
+# is clamped to the cone edge on its side — facing rotates to that edge at full
+# speed, the target's relative angle shrinks, and the body walks around to it. Any
+# implied blade motion stays clamped to the real max_blade_speed downstream.
+func _step_mouse_face(target: Vector3) -> Vector3:
+	return _step_mouse_internal(target, _STEP_FACE, MOUSE_MAX_SPEED_M_S, MOUSE_ARC_RATE_RAD_S)
 
 
 func _step_mouse_toward(target: Vector3) -> Vector3:
-	return _step_mouse_internal(target, false)
+	return _step_mouse_internal(target, _STEP_DIRECT, _mouse_max_speed_m_s, _mouse_arc_rate_rad_s)
 
 
-func _step_mouse_internal(target: Vector3, do_arc: bool) -> Vector3:
-	# Cache the FINAL un-arced target so the skipped-tick path can
-	# re-arc fresh every physics frame; otherwise the arc would only
-	# advance on full-dispatch ticks (every DISPATCH_PERIOD_TICKS) and
-	# a 180° swing would take 4× longer than intended.
+func _step_mouse_internal(target: Vector3, mode: int,
+		max_speed: float, arc_rate: float) -> Vector3:
+	# Cache the FINAL un-shaped target, mode, and rates so the skipped-tick path can
+	# re-shape fresh every physics frame (the arc must re-walk, and the face clamp
+	# must re-evaluate against the current facing); otherwise shaping would only
+	# advance on full-dispatch ticks and a swing would take DISPATCH_PERIOD_TICKS×
+	# too long.
 	_cached_aim_target = target
 	_has_cached_aim_target = true
-	_cached_aim_uses_arc = do_arc
+	_cached_aim_mode = mode
+	_cached_aim_max_speed = max_speed
+	_cached_aim_arc_rate = arc_rate
 	var step_target: Vector3 = target
-	if do_arc:
+	if mode == _STEP_ARC:
 		step_target = _arc_step_mouse_target(
+				_current_self_pos, target, _current_self_state, arc_rate)
+	elif mode == _STEP_FACE:
+		# Snap the cursor to the clamped point (facing_drag_speed does all the
+		# smoothing), so return straight out without the linear slew below.
+		step_target = _clamp_aim_to_reach_cone(
 				_current_self_pos, target, _current_self_state)
+		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
+		_mouse_pos_initialized = true
+		if MOUSE_NOISE_STD_M == 0.0:
+			return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
+		return Vector3(
+				_mouse_pos.x + _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M, 0.0,
+				_mouse_pos.z + _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M)
 	if not _mouse_pos_initialized:
 		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
 		_mouse_pos_initialized = true
 	var to_target_x: float = step_target.x - _mouse_pos.x
 	var to_target_z: float = step_target.z - _mouse_pos.z
 	var dist: float = sqrt(to_target_x * to_target_x + to_target_z * to_target_z)
-	var max_step: float = _mouse_max_speed_m_s * MOUSE_TICK_DELTA
+	var max_step: float = max_speed * MOUSE_TICK_DELTA
 	if dist > max_step:
 		var inv: float = 1.0 / dist
 		_mouse_pos.x += to_target_x * inv * max_step

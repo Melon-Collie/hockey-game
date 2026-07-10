@@ -140,9 +140,11 @@ func test_strong_drops_back_when_high_lanes_covered() -> void:
 	var covered_skaters: Array = [
 			[1, TEAM_ID, self_pos],
 			[100, TEAM_ID, Vector3(0, 0, carrier_z)],
-			# Parked high in the mid-seam lane; his closing reach also
-			# brushes the high-wall lane, so both high spots are dead.
-			[200, 1, Vector3(5, 0, 9.5)],
+			# Parked up in the mid-seam lane near the blue line; his closing reach
+			# also brushes the high-wall lane, so both high spots are dead. Sits
+			# higher than a soft-pass era would require — a crisp magnet-pace pass
+			# gives him less time, so he has to be genuinely in the lane to kill it.
+			[200, 1, Vector3(6, 0, 13.0)],
 	]
 	var covered_z: float = AIRoleBreakout.decide(
 			_make_ctx(self_pos, 100, covered_skaters, 1.0), true).target_position.z
@@ -182,8 +184,7 @@ func test_strong_swings_mid_seam_when_wall_route_is_covered() -> void:
 	# (it's the carrier's own route AND covered), so the outlet must
 	# swing to the mid-seam column and keep presenting up-ice — not hang
 	# deep on the wall next to the carrier ("stuck there with them").
-	# The forechecker sits near the up-ice end of the seam (z≈9), so with
-	# passes now a soft touch on close feeds (more interceptable), the outlet
+	# The forechecker sits near the up-ice end of the seam (z≈9), so the outlet
 	# correctly backs off the spot right on top of him to a slightly deeper,
 	# safer seam spot — still a full ~9 m up-ice of the carrier, still
 	# stretching toward the exit, not hanging back with him.
