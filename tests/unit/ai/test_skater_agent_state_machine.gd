@@ -197,13 +197,13 @@ const STEP_MAX := Agent.MOUSE_MAX_SPEED_M_S * Agent.MOUSE_TICK_DELTA
 
 func test_arc_step_degenerate_target_returns_target() -> void:
 	# final_target on top of self → no direction to define; return it as-is.
-	assert_eq(sm._arc_step_mouse_target(Vector3.ZERO, Vector3.ZERO, _self_state(Vector2(0, 1))),
+	assert_eq(sm._arc_step_mouse_target(Vector3.ZERO, Vector3.ZERO, _self_state(Vector2(0, 1)), Agent.MOUSE_ARC_RATE_RAD_S),
 			Vector3.ZERO)
 
 
 func test_arc_step_result_lies_on_aim_ring() -> void:
 	sm._mouse_pos_initialized = false
-	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(10, 0, 0), _self_state(Vector2(0, 1)))
+	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(10, 0, 0), _self_state(Vector2(0, 1)), Agent.MOUSE_ARC_RATE_RAD_S)
 	assert_almost_eq(r.distance_to(Vector3.ZERO), Agent.CARRY_BLADE_AIM_FORWARD_M, 0.0001)
 
 
@@ -211,7 +211,7 @@ func test_arc_step_caps_angular_rate() -> void:
 	# Seed from facing +z (bearing 0), desired due east (bearing PI/2):
 	# the step is clamped to one tick of MOUSE_ARC_RATE_RAD_S.
 	sm._mouse_pos_initialized = false
-	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(10, 0, 0), _self_state(Vector2(0, 1)))
+	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(10, 0, 0), _self_state(Vector2(0, 1)), Agent.MOUSE_ARC_RATE_RAD_S)
 	assert_almost_eq(atan2(r.x, r.z), ARC_MAX_STEP, 1e-5)
 
 
@@ -221,7 +221,7 @@ func test_arc_step_seeds_from_mouse_when_initialized() -> void:
 	# from the east seed, proving mouse-offset precedence.
 	sm._mouse_pos = Vector3(2, 0, 0)
 	sm._mouse_pos_initialized = true
-	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(0, 0, 10), _self_state(Vector2(0, 1)))
+	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, Vector3(0, 0, 10), _self_state(Vector2(0, 1)), Agent.MOUSE_ARC_RATE_RAD_S)
 	assert_almost_eq(atan2(r.x, r.z), PI / 2.0 - ARC_MAX_STEP, 1e-5)
 
 
@@ -230,7 +230,7 @@ func test_arc_step_converges_within_cap() -> void:
 	sm._mouse_pos_initialized = false
 	var desired := 0.03  # < ARC_MAX_STEP
 	var ft := Vector3(sin(desired), 0, cos(desired)) * 5.0
-	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, ft, _self_state(Vector2(0, 1)))
+	var r: Vector3 = sm._arc_step_mouse_target(Vector3.ZERO, ft, _self_state(Vector2(0, 1)), Agent.MOUSE_ARC_RATE_RAD_S)
 	assert_almost_eq(atan2(r.x, r.z), desired, 1e-5)
 
 
@@ -269,6 +269,30 @@ func test_step_aim_projects_target_onto_ring() -> void:
 	assert_almost_eq(Vector2(sm._mouse_pos.x, sm._mouse_pos.z).length(),
 			Agent.CARRY_BLADE_AIM_FORWARD_M, 1e-4)
 	assert_true(sm._cached_aim_uses_arc, "_step_mouse_aim is the arc path")
+
+
+func test_body_face_aim_is_decoupled_from_a_low_blade_slew() -> void:
+	# Off-puck body facing must NOT be gated by the bot's Hands blade slew — the
+	# body turns at facing_drag_speed (Agility), and any implied blade motion is
+	# clamped downstream. Apply a low-Hands blade slew and confirm _step_mouse_face
+	# still arcs at the fast facing rate while _step_mouse_aim honours the low one.
+	var slow := AISkaterCaps.new()
+	slow.blade_speed = 5.0            # low Hands → slow blade slew
+	sm.apply_capabilities(slow)
+	sm._current_self_pos = Vector3.ZERO
+	sm._current_self_state = _self_state(Vector2(0, 1))
+	# Blade aim caches the (low) blade rates.
+	sm._step_mouse_aim(Vector3(10, 0, 0))
+	assert_almost_eq(sm._cached_aim_max_speed, 5.0, 1e-5,
+			"blade aim slews at the low Hands blade speed")
+	assert_lt(sm._cached_aim_arc_rate, Agent.MOUSE_ARC_RATE_RAD_S,
+			"a slow blade lowers the blade-aim arc rate below the ceiling")
+	# Body facing ignores it and arcs at the fast ceiling regardless.
+	sm._step_mouse_face(Vector3(10, 0, 0))
+	assert_almost_eq(sm._cached_aim_max_speed, Agent.MOUSE_MAX_SPEED_M_S, 1e-5,
+			"body facing is not capped by the blade slew")
+	assert_almost_eq(sm._cached_aim_arc_rate, Agent.MOUSE_ARC_RATE_RAD_S, 1e-5,
+			"body facing arcs at the fast facing rate (facing_drag_speed is the real limit)")
 
 
 # ── Slice 3: shot wind-up geometry ───────────────────────────────────────────
